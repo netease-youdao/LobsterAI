@@ -1,0 +1,22 @@
+diff --git a/src/agents/system-prompt.ts b/src/agents/system-prompt.ts
+--- a/src/agents/system-prompt.ts
++++ b/src/agents/system-prompt.ts
+@@ -754,8 +754,8 @@ export function buildSystemPrompt(params: BuildSystemPromptParams): string {
+     sessions_yield: "End this turn and wait for spawned sub-agent completion events",
+     subagents:
+       "On-demand list/status visibility for sub-agent runs in this requester session; do not use for wait loops",
+     session_status:
+-      "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
++      "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); must use before answering current-model/model-use questions and answer from the returned status, not from memory or identity; optional per-session model override",
+     skill_workshop:
+       "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
+     image: "Analyze an image with the configured image model",
+@@ -1118,7 +1118,8 @@ export function buildSystemPrompt(params: BuildSystemPromptParams): string {
+         ? params.modelAliasLines.join("\n")
+         : "",
+       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
++      "If the user asks what model is currently being used, or asks any equivalent current-model question, run session_status (📊 session_status) first and answer from that status result.",
+       userTimezone
+         ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
+         : "",
+       "## Workspace",

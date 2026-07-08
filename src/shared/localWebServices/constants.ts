@@ -1,3 +1,5 @@
+import type { ShareDeploymentProjectCandidate } from '../shareDeployment/constants';
+
 export const LocalWebServicesIpc = {
   List: 'localWebServices:list',
 } as const;
@@ -10,6 +12,8 @@ export interface LocalWebService {
   host: string;
   port: number;
   online: boolean;
+  projectDirectory?: string;
+  projectCandidates?: ShareDeploymentProjectCandidate[];
 }
 
 export interface ListLocalWebServicesOptions {

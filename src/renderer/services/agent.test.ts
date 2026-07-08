@@ -1,3 +1,7 @@
+import {
+  AgentLegacyIdentityCleanupSkipReason,
+  AgentLegacyIdentityCleanupStatus,
+} from '@shared/agent';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { store } from '../store';
@@ -128,5 +132,41 @@ describe('agentService.updateAgent', () => {
     await agentService.updateAgent('agent-1', { skillIds: ['docx', 'web-search'] });
 
     expect(store.getState().skill.activeSkillIds).toEqual(['xlsx']);
+  });
+});
+
+describe('agentService.cleanupLegacyIdentityBlock', () => {
+  test('delegates cleanup to the preload agents API', async () => {
+    const cleanupLegacyIdentityBlock = vi.fn().mockResolvedValue({
+      status: AgentLegacyIdentityCleanupStatus.Skipped,
+      reason: AgentLegacyIdentityCleanupSkipReason.NoLegacyBlock,
+    });
+    (globalThis as { window?: unknown }).window = {
+      electron: {
+        agents: {
+          cleanupLegacyIdentityBlock,
+        },
+      },
+    };
+
+    const result = await agentService.cleanupLegacyIdentityBlock('agent-1');
+
+    expect(cleanupLegacyIdentityBlock).toHaveBeenCalledWith('agent-1');
+    expect(result).toEqual({
+      status: AgentLegacyIdentityCleanupStatus.Skipped,
+      reason: AgentLegacyIdentityCleanupSkipReason.NoLegacyBlock,
+    });
+  });
+
+  test('returns failed when cleanup API is unavailable', async () => {
+    (globalThis as { window?: unknown }).window = {
+      electron: {
+        agents: {},
+      },
+    };
+
+    const result = await agentService.cleanupLegacyIdentityBlock('agent-1');
+
+    expect(result.status).toBe(AgentLegacyIdentityCleanupStatus.Failed);
   });
 });

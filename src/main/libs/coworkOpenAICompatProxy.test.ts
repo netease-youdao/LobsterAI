@@ -110,6 +110,27 @@ function runResponsesSequence(sequence: Array<{ event: string; payload: unknown 
   };
 }
 
+// ==================== Upstream error extraction tests ====================
+
+test('extractErrorMessage keeps nested upstream error message', () => {
+  expect(testUtils.extractErrorMessage(
+    '{"type":"error","error":{"type":"proxy_error","message":"本月积分已用完","code":40202}}',
+  )).toBe('本月积分已用完');
+});
+
+test('extractErrorMessage falls back to upstream error code', () => {
+  expect(testUtils.extractErrorMessage('{"error":{"code":40202}}')).toBe(
+    'Upstream API request failed with code 40202',
+  );
+});
+
+test('extractStreamErrorMessage keeps SSE event error payload message', () => {
+  expect(testUtils.extractStreamErrorMessage(
+    'error',
+    '{"type":"error","error":{"type":"proxy_error","message":"免费额度已用完，请升级套餐","code":40201}}',
+  )).toBe('免费额度已用完，请升级套餐');
+});
+
 // ==================== OpenAI Chat Completions stream tests ====================
 
 test('OpenAI stream reasoning_content is emitted as Anthropic thinking deltas', () => {

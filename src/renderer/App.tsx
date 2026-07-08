@@ -10,11 +10,12 @@ import {
   AppUpdateStatus,
   isManualDownloadUrl,
 } from '../shared/appUpdate/constants';
-import { OpenClawProviderId, ProviderName, ProviderRegistry } from '../shared/providers';
+import { ProviderAuthType, ProviderName, ProviderRegistry } from '../shared/providers';
 import { CoworkView } from './components/cowork';
 import { CoworkShortcutDirection, CoworkUiEvent } from './components/cowork/constants';
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
+import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
 import KitsView from './components/kits/KitsView';
 import { McpView } from './components/mcp';
@@ -35,29 +36,21 @@ import { authService } from './services/auth';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
 import { i18nService } from './services/i18n';
+import { LogReporterAction, reportYdAnalyzer } from './services/logReporter';
 import { scheduledTaskService } from './services/scheduledTask';
 import { matchesShortcut } from './services/shortcuts';
 import { themeService } from './services/theme';
+import { applyTypographyPreferences } from './services/typography';
 import { RootState, store } from './store';
 import {
   selectCurrentSessionId,
   selectFirstPendingPermission,
 } from './store/selectors/coworkSelectors';
-import { setDraftKitIds, setDraftPrompt } from './store/slices/coworkSlice';
+import { setDraftCollaborationMode, setDraftKitIds, setDraftPrompt } from './store/slices/coworkSlice';
 import { setActiveKitIds } from './store/slices/kitSlice';
 import { setAvailableModels, setDefaultSelectedModel } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
-import type { CoworkPermissionResult } from './types/cowork';
-
-const getOpenClawProviderIdForConfig = (
-  providerName: string,
-  providerConfig: { authType?: string },
-): string => {
-  if (providerName === ProviderName.OpenAI && providerConfig.authType === 'oauth') {
-    return OpenClawProviderId.OpenAICodex;
-  }
-  return ProviderRegistry.getOpenClawProviderId(providerName);
-};
+import { CoworkCollaborationMode, type CoworkPermissionResult } from './types/cowork';
 
 const AGENT_TASK_SLOT_SHORTCUT_ACTIONS = [
   ShortcutAction.OpenAgentTask1,
@@ -120,6 +113,7 @@ const App: React.FC = () => {
   } | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const hasInitialized = useRef(false);
+  const hasReportedAppStartedRef = useRef(false);
   const previousUpdateStatusRef = useRef<AppUpdateRuntimeState['status']>(AppUpdateStatus.Idle);
   const shouldInstallReadyUpdateRef = useRef(false);
   const dispatch = useDispatch();
@@ -195,6 +189,7 @@ const App: React.FC = () => {
         mark('authService.init done');
 
         const config = await configService.getConfig();
+        applyTypographyPreferences(config);
         const apiConfig: ApiConfig = {
           apiKey: config.api.key,
           baseUrl: config.api.baseUrl,
@@ -205,7 +200,10 @@ const App: React.FC = () => {
         if (config.providers) {
           Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
             if (providerConfig.enabled && providerConfig.models) {
-              const openClawProviderId = getOpenClawProviderIdForConfig(providerName, providerConfig);
+              const openClawProviderId = ProviderRegistry.getOpenClawProviderIdForConfig(providerName, providerConfig);
+              if (providerName === ProviderName.Minimax && providerConfig.authType === ProviderAuthType.OAuth) {
+                mark('MiniMax OAuth provider resolved to OpenClaw minimax-portal');
+              }
               providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
                 providerModels.push({
                   id: model.id,
@@ -236,6 +234,14 @@ const App: React.FC = () => {
 
         setIsInitialized(true);
         mark('shell ready');
+        if (!hasReportedAppStartedRef.current) {
+          hasReportedAppStartedRef.current = true;
+          void reportYdAnalyzer({
+            action: LogReporterAction.AppStarted,
+            providerModelCount: providerModels.length,
+            hasLoggedInUser: !!store.getState().auth.user?.yid,
+          });
+        }
 
         void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch((error) => {
           console.error('[App] initializeApp: scheduledTaskService.init failed:', error);
@@ -263,6 +269,12 @@ const App: React.FC = () => {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (authUser) {
+      void authService.fetchProfileSummary();
+    }
+  }, [authUser]);
 
   // Listen for Copilot token auto-refresh events from the main process
   useEffect(() => {
@@ -346,35 +358,61 @@ const App: React.FC = () => {
     setMainView('kits');
   }, []);
 
-  const handleKitTryAsking = useCallback((text: string, kitId: string) => {
+  const openHomeWithKit = useCallback((kitId: string, text?: string) => {
     dispatch(setActiveKitIds([kitId]));
     coworkService.clearSession({ restoreAgentSkills: true });
     dispatch(clearSelection());
-    // Set the draft prompt and kit selection in store BEFORE switching view, so that when
-    // CoworkPromptInput mounts/updates with draftKey='__home__', it picks up both.
-    dispatch(setDraftPrompt({ sessionId: '__home__', draft: text }));
+    if (text !== undefined) {
+      dispatch(setDraftCollaborationMode({
+        draftKey: '__home__',
+        mode: CoworkCollaborationMode.Default,
+      }));
+      // Set the draft prompt before switching view, so that when CoworkPromptInput
+      // mounts/updates with draftKey='__home__', it picks up the text.
+      dispatch(setDraftPrompt({ sessionId: '__home__', draft: text }));
+    }
     dispatch(setDraftKitIds({ draftKey: '__home__', kitIds: [kitId] }));
     setMainView('cowork');
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
-        detail: { text },
+        // Without text, keep any existing home draft and just focus with the kit selected
+        detail: text !== undefined ? { resetCollaborationMode: true, text } : { clear: false },
       }));
     }, 0);
   }, [dispatch]);
 
+  const handleKitTryAsking = useCallback((text: string, kitId: string) => {
+    openHomeWithKit(kitId, text);
+  }, [openHomeWithKit]);
+
+  const handleKitUse = useCallback((kitId: string) => {
+    openHomeWithKit(kitId);
+  }, [openHomeWithKit]);
+
   const handleToggleSidebar = useCallback(() => {
+    void reportYdAnalyzer({
+      action: LogReporterAction.SidebarAction,
+      source: 'home_sidebar',
+      actionType: isSidebarCollapsed ? 'expand_sidebar' : 'collapse_sidebar',
+      activeView: mainView,
+      isCollapsed: isSidebarCollapsed,
+    });
     setIsSidebarCollapsed((prev) => !prev);
-  }, []);
+  }, [isSidebarCollapsed, mainView]);
 
   const handleNewChat = useCallback(() => {
     // Only clear when already on home (no session) — preserve __home__ draft when returning from a session
     const shouldClearInput = mainView === 'cowork' && !currentSessionId;
     coworkService.clearSession({ restoreAgentSkills: true });
     dispatch(clearSelection());
+    dispatch(setDraftCollaborationMode({
+      draftKey: '__home__',
+      mode: CoworkCollaborationMode.Default,
+    }));
     setMainView('cowork');
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
-        detail: { clear: shouldClearInput },
+        detail: { clear: shouldClearInput, resetCollaborationMode: true },
       }));
     }, 0);
   }, [dispatch, mainView, currentSessionId]);
@@ -383,6 +421,10 @@ const App: React.FC = () => {
     dispatch(setDraftPrompt({ sessionId: '__home__', draft: i18nService.t('skillCreatorPrompt') }));
     coworkService.clearSession();
     dispatch(clearSelection());
+    dispatch(setDraftCollaborationMode({
+      draftKey: '__home__',
+      mode: CoworkCollaborationMode.Default,
+    }));
     setMainView('cowork');
   }, [dispatch]);
 
@@ -537,7 +579,6 @@ const App: React.FC = () => {
     window.electron.window.close();
   }, []);
 
-  const handleWelcomeClose = useCallback(() => setShowWelcome(false), []);
   const handleWelcomeLogin = useCallback(async () => {
     setShowWelcome(false);
     await authService.login();
@@ -564,7 +605,7 @@ const App: React.FC = () => {
       const allModels: { id: string; name: string; provider?: string; providerKey?: string; openClawProviderId?: string; supportsImage?: boolean }[] = [];
       Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
         if (providerConfig.enabled && providerConfig.models) {
-          const openClawProviderId = getOpenClawProviderIdForConfig(providerName, providerConfig);
+          const openClawProviderId = ProviderRegistry.getOpenClawProviderIdForConfig(providerName, providerConfig);
           providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
             allModels.push({
               id: model.id,
@@ -923,20 +964,14 @@ const App: React.FC = () => {
   ) : null;
 
   if (!isInitialized) {
+    // index.html's static splash shows the same startup page until React
+    // mounts; rendering EngineStartupOverlay from the first frame keeps the
+    // whole startup on one continuous screen with no visual handoff.
     return (
       <div className="h-screen overflow-hidden flex flex-col">
         {windowsStandaloneTitleBar}
-        <div className="flex-1 flex items-center justify-center bg-background">
-          <div className="flex flex-col items-center space-y-4">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-primary to-primary-hover flex items-center justify-center shadow-glow-accent animate-pulse">
-              <ChatBubbleLeftRightIcon className="h-8 w-8 text-white" />
-            </div>
-            <div className="w-24 h-1 rounded-full bg-primary/20 overflow-hidden">
-              <div className="h-full w-1/2 rounded-full bg-primary animate-shimmer" />
-            </div>
-            <div className="text-foreground text-xl font-medium">{i18nService.t('loading')}</div>
-          </div>
-        </div>
+        <div className="flex-1 bg-surface" />
+        <EngineStartupOverlay bootstrapping />
       </div>
     );
   }
@@ -1028,6 +1063,7 @@ const App: React.FC = () => {
                 onNewChat={handleNewChat}
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
                 onTryAsking={handleKitTryAsking}
+                onUseKit={handleKitUse}
               />
             ) : mainView === 'mcp' ? (
               <McpView
@@ -1050,6 +1086,11 @@ const App: React.FC = () => {
           </div>
         </div>
       </div>
+
+      <EngineFailureOverlay
+        onRequestAppSettings={privacyAgreed === true && !showWelcome ? handleShowSettings : undefined}
+        suspended={showSettings || showUpdateModal || pendingPermission !== null || privacyAgreed === false || showWelcome}
+      />
 
       {/* 设置窗口显示在所有主内容之上，但不影响主界面的交互 */}
       {showSettings && (
@@ -1086,7 +1127,6 @@ const App: React.FC = () => {
         <WelcomeDialog
           onLogin={handleWelcomeLogin}
           onCustomModel={handleWelcomeCustomModel}
-          onClose={handleWelcomeClose}
         />
       )}
     </div>

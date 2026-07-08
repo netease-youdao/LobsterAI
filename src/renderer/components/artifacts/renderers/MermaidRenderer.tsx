@@ -14,6 +14,26 @@ function initMermaid(isDark: boolean) {
   mermaidInitialized = true;
 }
 
+function cleanupMermaidRenderArtifacts(id: string) {
+  document.getElementById(id)?.remove();
+  document.getElementById(`d${id}`)?.remove();
+  document.getElementById(`i${id}`)?.remove();
+}
+
+function createMermaidRenderContainer(): HTMLDivElement {
+  const container = document.createElement('div');
+  container.setAttribute('data-lobster-mermaid-render-container', 'true');
+  container.style.position = 'absolute';
+  container.style.left = '0';
+  container.style.top = '0';
+  container.style.width = '100%';
+  container.style.visibility = 'hidden';
+  container.style.overflow = 'hidden';
+  container.style.pointerEvents = 'none';
+  document.body.appendChild(container);
+  return container;
+}
+
 interface MermaidRendererProps {
   artifact: Artifact;
 }
@@ -50,22 +70,34 @@ const MermaidRenderer: React.FC<MermaidRendererProps> = ({ artifact }) => {
 
     let cancelled = false;
     const renderDiagram = async () => {
+      const id = `mermaid-${artifact.id.replace(/[^a-zA-Z0-9]/g, '')}`;
+      let renderContainer: HTMLDivElement | null = null;
       try {
-        const id = `mermaid-${artifact.id.replace(/[^a-zA-Z0-9]/g, '')}`;
-        const { svg: rendered } = await mermaid.render(id, artifact.content);
+        cleanupMermaidRenderArtifacts(id);
+        await mermaid.parse(artifact.content);
+        renderContainer = createMermaidRenderContainer();
+        const { svg: rendered } = await mermaid.render(id, artifact.content, renderContainer);
         if (!cancelled) {
           setSvg(rendered);
           setError(null);
         }
       } catch (err) {
         if (!cancelled) {
+          setSvg('');
           setError(err instanceof Error ? err.message : 'Failed to render diagram');
         }
+      } finally {
+        renderContainer?.remove();
+        cleanupMermaidRenderArtifacts(id);
       }
     };
 
     renderDiagram();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      const id = `mermaid-${artifact.id.replace(/[^a-zA-Z0-9]/g, '')}`;
+      cleanupMermaidRenderArtifacts(id);
+    };
   }, [artifact.content, artifact.id]);
 
   if (error) {

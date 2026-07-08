@@ -63,6 +63,7 @@ const COWORK_SYNC_FIELDS = new Set([
   'agentEngine',
   'workingDirectory',
   'skipMissedJobs',
+  'openClawHeartbeatEnabled',
   'embeddingEnabled',
   'embeddingProvider',
   'embeddingModel',

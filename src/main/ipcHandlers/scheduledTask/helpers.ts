@@ -1,4 +1,4 @@
-import { PlatformRegistry } from '../../../shared/platform';
+import { parseImConversationId, PlatformRegistry } from '../../../shared/platform';
 
 export interface ScheduledTaskHelperDeps {
   getIMGatewayManager: () => {
@@ -82,7 +82,9 @@ export function listScheduledTaskChannels(): Array<{
           const accountId = nimAccountId ?? (i.instanceId ?? '').slice(0, 8);
           return {
             accountId,
-            instanceName: i.instanceName || (accountId ?? (i.instanceId ?? '').slice(0, 8)),
+            // Leave unnamed instances empty; the renderer falls back to an
+            // ordinal label instead of exposing an account id fragment.
+            instanceName: (i.instanceName ?? '').trim(),
             filterAccountId: accountId || undefined,
           };
         })
@@ -118,5 +120,137 @@ export function listScheduledTaskChannels(): Array<{
     }
   }
 
+  return result;
+}
+
+/** Minimal subset of a gateway `sessions.list` row used to restore IM delivery targets. */
+interface GatewaySessionRowLike {
+  updatedAt?: unknown;
+  channel?: unknown;
+  lastChannel?: unknown;
+  lastTo?: unknown;
+  lastAccountId?: unknown;
+  deliveryContext?: { channel?: unknown; to?: unknown; accountId?: unknown } | null;
+}
+
+export interface ImDeliveryHints {
+  /** Channel-native target id with its original casing. */
+  to: string;
+  /** Bot account that owns the conversation on the channel side. */
+  accountId?: string;
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+/**
+ * Restores the channel-native delivery target from gateway session rows.
+ *
+ * Conversation ids in `im_session_mappings` derive from OpenClaw session keys,
+ * which are canonicalized to lowercase. Some channels (e.g. weixin) route by
+ * case-sensitive peer ids and echo per-conversation context tokens keyed by
+ * the original id, so a lowercased `delivery.to` is accepted by the provider
+ * but never reaches the user. Session entries keep the original casing in
+ * `lastTo`/`deliveryContext`, so match the peer case-insensitively and return
+ * the stored casing plus the account that owns the conversation.
+ */
+export function resolveImDeliveryHintsFromSessions(params: {
+  sessions: readonly unknown[];
+  channel: string;
+  peerId: string;
+  /** Account segment parsed from the picked conversation id, when present. */
+  preferredAccountId?: string;
+}): ImDeliveryHints | null {
+  const platform = PlatformRegistry.platformOfChannel(params.channel);
+  const peerLower = params.peerId.trim().toLowerCase();
+  if (!platform || !peerLower) return null;
+
+  interface Candidate {
+    to: string;
+    accountId?: string;
+    updatedAt: number;
+  }
+  const candidates: Candidate[] = [];
+  for (const row of params.sessions) {
+    if (!row || typeof row !== 'object') continue;
+    const session = row as GatewaySessionRowLike;
+    const context = session.deliveryContext;
+    const rowChannel =
+      asNonEmptyString(session.lastChannel) ??
+      asNonEmptyString(context?.channel) ??
+      asNonEmptyString(session.channel);
+    if (!rowChannel || PlatformRegistry.platformOfChannel(rowChannel) !== platform) continue;
+    const to = asNonEmptyString(session.lastTo) ?? asNonEmptyString(context?.to);
+    if (!to || to.toLowerCase() !== peerLower) continue;
+    candidates.push({
+      to,
+      accountId: asNonEmptyString(session.lastAccountId) ?? asNonEmptyString(context?.accountId),
+      updatedAt:
+        typeof session.updatedAt === 'number' && Number.isFinite(session.updatedAt)
+          ? session.updatedAt
+          : 0,
+    });
+  }
+  if (candidates.length === 0) return null;
+
+  const preferred = params.preferredAccountId
+    ? candidates.filter(candidate => candidate.accountId === params.preferredAccountId)
+    : [];
+  const pool = preferred.length > 0 ? preferred : candidates;
+  // Inbound activity keeps the live conversation session freshest; sessions
+  // from replaced bot accounts stop updating once the account is gone.
+  pool.sort((a, b) => b.updatedAt - a.updatedAt);
+  const best = pool[0];
+  return { to: best.to, ...(best.accountId ? { accountId: best.accountId } : {}) };
+}
+
+/**
+ * Resolves the agent bound to a delivery-target conversation from IM session
+ * mappings (sorted by lastActiveAt DESC). IM conversations can be bound to a
+ * non-main agent; a scheduled delivery must run under that agent so the
+ * gateway mirrors the result into the same conversation session the LobsterAI
+ * record maps to, instead of a main-agent shadow session.
+ */
+export function resolveConversationAgentIdFromMappings(
+  mappings: ReadonlyArray<{ imConversationId: string; agentId?: string }>,
+  to: string,
+  preferredAccountId?: string,
+): string | null {
+  const peer = parseImConversationId(to).peerId.trim().toLowerCase();
+  if (!peer) return null;
+
+  let firstMatch: string | null = null;
+  for (const mapping of mappings) {
+    const parsed = parseImConversationId(mapping.imConversationId);
+    if (parsed.peerId.trim().toLowerCase() !== peer) continue;
+    const agentId = mapping.agentId?.trim();
+    if (!agentId) continue;
+    if (preferredAccountId && parsed.accountId === preferredAccountId) return agentId;
+    firstMatch = firstMatch ?? agentId;
+  }
+  return firstMatch;
+}
+
+/**
+ * Collapses duplicate peer conversations for the notify-target list: bot
+ * accounts get replaced over time but their mappings persist per account
+ * prefix, and OpenClaw heartbeat pseudo-conversations are not valid delivery
+ * targets. Input must be sorted by lastActiveAt DESC (listSessionMappings
+ * order); the first (most recent) row per peer wins.
+ */
+export function dedupeConversationMappings<T extends { imConversationId: string }>(
+  mappings: readonly T[],
+): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const mapping of mappings) {
+    const parsed = parseImConversationId(mapping.imConversationId);
+    if (parsed.peerId.toLowerCase().endsWith(':heartbeat')) continue;
+    const key = `${parsed.peerKind ?? ''}:${parsed.peerId.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(mapping);
+  }
   return result;
 }

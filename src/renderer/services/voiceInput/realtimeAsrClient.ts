@@ -3,6 +3,7 @@ import {
   AsrLangType,
   type AsrRealtimeEvent,
   AsrRealtimeEventType,
+  type AsrRealtimeSessionData,
 } from '../../../shared/asr/constants';
 import { VOICE_INPUT_TARGET_SAMPLE_RATE } from './constants';
 import { AsrClientError, getFallbackAsrErrorMessage } from './errors';
@@ -19,6 +20,10 @@ export interface RealtimeVoiceInputSession {
   stop: () => Promise<string>;
   cancel: () => void;
   maxSessionSeconds: number;
+  quota: Pick<
+    AsrRealtimeSessionData,
+    'usedSecondsToday' | 'remainingSecondsToday' | 'limitSecondsToday'
+  >;
 }
 
 interface StartRealtimeVoiceInputOptions {
@@ -299,6 +304,11 @@ export const startRealtimeVoiceInput = async ({
 
   return {
     maxSessionSeconds: session.data.maxSessionSeconds,
+    quota: {
+      usedSecondsToday: session.data.usedSecondsToday,
+      remainingSecondsToday: session.data.remainingSecondsToday,
+      limitSecondsToday: session.data.limitSecondsToday,
+    },
     stop: async () => {
       try {
         await recorder?.stop();

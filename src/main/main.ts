@@ -19,10 +19,10 @@ import {
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { Readable } from 'stream';
 import { fileURLToPath, pathToFileURL } from 'url';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
+import { buildGoalSettingMessageMetadata } from '../common/goalCommandDisplay';
 import type { OpenClawSessionPatch } from '../common/openclawSession';
 import { buildSessionTitleFromInput } from '../common/sessionTitle';
 import { buildScheduledTaskEnginePrompt } from '../scheduledTask/enginePrompt';
@@ -30,7 +30,14 @@ import {
   migrateScheduledTaskRunsToOpenclaw,
   migrateScheduledTasksToOpenclaw,
 } from '../scheduledTask/migrate';
-import { AgentId, AgentIpcChannel } from '../shared/agent/constants';
+import {
+  AgentId,
+  AgentIpcChannel,
+  type AgentLegacyIdentityCleanupResult,
+  AgentLegacyIdentityCleanupStatus,
+} from '../shared/agent/constants';
+import { AppIpcChannel } from '../shared/app/constants';
+import { AppSettingsAutoLaunchErrorCode, AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
 import { AuthIpcChannel } from '../shared/auth/constants';
@@ -58,6 +65,7 @@ import {
   formatCoworkImageAttachmentLimit,
   validateCoworkImageAttachmentSize,
 } from '../shared/cowork/imageAttachments';
+import { containsPlanModePrompt } from '../shared/cowork/planMode';
 import {
   type CoworkSelectedTextSnippet,
   normalizeCoworkSelectedTextSnippets,
@@ -72,7 +80,6 @@ import {
   HtmlShareAccessMode,
   type HtmlShareAccessMode as HtmlShareAccessModeValue,
   type HtmlShareConfigurableStatus,
-  HtmlShareErrorCode,
   HtmlShareIpc,
   HtmlShareSourceType,
   HtmlShareStatus,
@@ -87,7 +94,7 @@ import {
   type LocalWebService,
   LocalWebServicesIpc,
 } from '../shared/localWebServices/constants';
-import { canonicalizeMediaModelId, mediaModelDisplayName } from '../shared/mediaModelAliases';
+import { canonicalizeMediaModelId, HAPPYHORSE_1_1_MODEL_ID, mediaModelDisplayName } from '../shared/mediaModelAliases';
 import { normalizeNotificationSettings, type NotificationSettings } from '../shared/notifications/constants';
 import {
   OpenClawEngineIpc,
@@ -95,12 +102,23 @@ import {
 } from '../shared/openclawEngine/constants';
 import { PlatformRegistry } from '../shared/platform';
 import { OpenClawProviderId, ProviderName } from '../shared/providers';
+import {
+  ShareDeploymentCandidateSource,
+  type ShareDeploymentCreateNodeInput,
+  type ShareDeploymentDetectCandidatesInput,
+  type ShareDeploymentGetByLocalServiceInput,
+  ShareDeploymentIpc,
+  ShareDeploymentKind,
+  ShareDeploymentPackageManager,
+  type ShareDeploymentProjectCandidate,
+} from '../shared/shareDeployment/constants';
 import type { ShellOpenFailureReason as ShellOpenFailureReasonType } from '../shared/shell/constants';
-import { ShellOpenFailureReason } from '../shared/shell/constants';
+import { type ShellGetBrowserAppsInput, ShellIpc, ShellOpenFailureReason } from '../shared/shell/constants';
 import { AgentManager } from './agentManager';
 import { APP_NAME, APP_USER_MODEL_ID, DB_FILENAME } from './appConstants';
+import { createLocalFileProtocolResponse } from './artifactLocalFileProtocol';
 import { authQuotaGateStateFromQuota, AuthSubscriptionStatus, createDefaultAuthQuotaGateState, normalizeAuthQuota } from './authQuota';
-import { getAutoLaunchEnabled, isAutoLaunched, setAutoLaunchEnabled } from './autoLaunchManager';
+import { type AutoLaunchStatus, getAutoLaunchStatus, isAutoLaunched, setAutoLaunchEnabled } from './autoLaunchManager';
 import { getRecentComputerUseLogEntries } from './computerUse/computerUseLogs';
 import { type CoworkForkContextMessage, type CoworkMessage, CoworkStore } from './coworkStore';
 import { setLanguage, t } from './i18n';
@@ -136,6 +154,7 @@ import {
   initScheduledTaskHelpers,
   registerScheduledTaskHandlers,
 } from './ipcHandlers/scheduledTask';
+import { registerSessionDiagnosticsHandlers } from './ipcHandlers/sessionDiagnostics';
 import { registerSkillHandlers } from './ipcHandlers/skills';
 import {
   type CoworkAgentEngine,
@@ -225,6 +244,7 @@ import { getKeyfromAttribution, initializeKeyfromAttribution } from './libs/keyf
 import { exportLogsZip } from './libs/logExport';
 import { inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
 import { migrateAgentModelRefs, parsePrimaryModelRef, resolveQualifiedAgentModelRef } from './libs/openclawAgentModels';
+import { cleanupLegacyAgentsMdIdentityBlockInWorkspace } from './libs/openclawAgentsMdIdentityMigration';
 import {
   buildManagedSessionKey,
   DEFAULT_MANAGED_AGENT_ID,
@@ -254,17 +274,31 @@ import {
   migrateSqliteToMemoryMd,
   readBootstrapFile,
   readMemoryEntries,
+  readMemoryFileRaw,
   resolveMemoryFilePath,
   searchMemoryEntries,
   updateMemoryEntry,
   writeBootstrapFile,
+  writeMemoryFileRaw,
 } from './libs/openclawMemoryFile';
 import { collectReferencedEnvVarNames, pickReferencedSecretEnvVars } from './libs/openclawSecretEnv';
 import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
-import { isHiddenUserPluginId } from './libs/pluginManager';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
-import { serializeForLog } from './libs/sanitizeForLog';
+import { sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
+import { packageNodeServiceDeployment } from './libs/shareDeployment/nodeServiceDeploymentPackager';
+import {
+  analyzeNodeServiceProjectDirectory,
+  detectNodeServiceProjectCandidates,
+} from './libs/shareDeployment/nodeServiceProjectAnalyzer';
+import {
+  buildNodeDeploymentClientSourceKey,
+  buildStaticDeploymentClientSourceKey,
+  getNodeDeployment,
+  getNodeDeploymentByLocalService,
+  uploadNodeDeployment,
+  uploadStaticDeployment,
+} from './libs/shareDeployment/shareDeploymentClient';
 import { SqliteBackupTrigger } from './libs/sqliteBackup/constants';
 import { SqliteBackupManager } from './libs/sqliteBackup/sqliteBackupManager';
 import { runStartupCacheWarmup } from './libs/startupCacheWarmup';
@@ -296,8 +330,9 @@ import {
   saveOpenClawSessionPolicyConfig,
 } from './openclawSessionPolicy/store';
 import { registerVoiceInputPermissionHandler } from './permissions/voiceInputPermission';
-import { SkillManager } from './skillManager';
-import { getSkillServiceManager } from './skillServices';
+import { isHiddenUserPluginId } from './plugins/pluginManager';
+import { SkillManager } from './skills/skillManager';
+import { getSkillServiceManager } from './skills/skillServices';
 import { SqliteStore } from './sqliteStore';
 import { StartupProfiler } from './startupProfiler';
 import { SubagentMessageStore } from './subagentMessageStore';
@@ -350,6 +385,10 @@ const IPC_MAX_KEYS = 80;
 const IPC_MAX_ITEMS = 40;
 const MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const MAX_ARTIFACT_SHARE_CONTENT_CHARS = 30 * 1024 * 1024;
+const SHARE_DEPLOYMENT_PROJECT_CANDIDATE_MAX_ITEMS = 24;
+const SHARE_DEPLOYMENT_CANDIDATE_SOURCES = new Set<string>(
+  Object.values(ShareDeploymentCandidateSource),
+);
 const ENGINE_NOT_READY_CODE = 'ENGINE_NOT_READY';
 const LOCAL_WEB_SERVICE_PROBE_TIMEOUT_MS = 700;
 const LOCAL_WEB_SERVICE_TITLE_MAX_LENGTH = 80;
@@ -427,6 +466,11 @@ interface HtmlShareUpdateAccessModeInput {
   accessMode: HtmlShareAccessModeValue;
 }
 
+interface ShareDeploymentAnalyzeProjectDirectoryInput {
+  projectDirectory: string;
+  localServiceUrl?: string;
+}
+
 function sanitizeHtmlShareString(
   value: unknown,
   fieldName: string,
@@ -454,6 +498,22 @@ function sanitizeOptionalHtmlShareString(
   return sanitizeHtmlShareString(value, fieldName, maxLength);
 }
 
+function sanitizeOptionalShareDeploymentCommand(
+  value: unknown,
+  fieldName: string,
+  maxLength = 512,
+): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value !== 'string') {
+    throw new Error(`${fieldName} must be a string.`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > maxLength) {
+    throw new Error(`${fieldName} is too long.`);
+  }
+  return trimmed;
+}
+
 function sanitizeHtmlShareTitle(value: unknown): string {
   return sanitizeHtmlShareString(value, 'title', 255);
 }
@@ -462,9 +522,12 @@ function sanitizeArtifactFileShareSourceType(value: unknown): ArtifactFileShareS
   const sourceType = sanitizeHtmlShareString(value, 'sourceType', 32);
   if (
     sourceType !== HtmlShareSourceType.ImageFile &&
-    sourceType !== HtmlShareSourceType.SvgFile
+    sourceType !== HtmlShareSourceType.SvgFile &&
+    sourceType !== HtmlShareSourceType.DocumentFile &&
+    sourceType !== HtmlShareSourceType.MarkdownFile &&
+    sourceType !== HtmlShareSourceType.MermaidFile
   ) {
-    throw new Error('sourceType must be image_file or svg_file.');
+    throw new Error('sourceType must be image_file, svg_file, document_file, markdown_file, or mermaid_file.');
   }
   return sourceType;
 }
@@ -626,6 +689,188 @@ function sanitizeUpdateHtmlShareAccessModeInput(input: unknown): HtmlShareUpdate
   };
 }
 
+function sanitizeOptionalShareDeploymentCandidateText(
+  value: unknown,
+  fieldName: string,
+  maxLength = 1024,
+): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length > maxLength) {
+    throw new Error(`${fieldName} is too long.`);
+  }
+  return trimmed;
+}
+
+function sanitizeShareDeploymentCandidateSource(
+  value: unknown,
+): ShareDeploymentProjectCandidate['source'] | null {
+  if (typeof value !== 'string') return null;
+  return SHARE_DEPLOYMENT_CANDIDATE_SOURCES.has(value)
+    ? value as ShareDeploymentProjectCandidate['source']
+    : null;
+}
+
+function sanitizeShareDeploymentCandidateConfidence(value: unknown): number {
+  const confidence = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(confidence)) return 0;
+  return Math.max(0, Math.min(100, Math.round(confidence)));
+}
+
+function sanitizeOptionalShareDeploymentCandidateInteger(
+  value: unknown,
+): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const numberValue = typeof value === 'number' ? value : Number(value);
+  return Number.isInteger(numberValue) && numberValue >= 0 ? numberValue : undefined;
+}
+
+function sanitizeShareDeploymentProjectCandidate(
+  value: unknown,
+  index: number,
+): ShareDeploymentProjectCandidate | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const directory = sanitizeOptionalShareDeploymentCandidateText(
+    source.directory,
+    `projectCandidates[${index}].directory`,
+    4096,
+  );
+  if (!directory) return null;
+  const candidateSource = sanitizeShareDeploymentCandidateSource(source.source);
+  if (!candidateSource) return null;
+  const reason = sanitizeOptionalShareDeploymentCandidateText(
+    source.reason,
+    `projectCandidates[${index}].reason`,
+  );
+  const evidence = sanitizeOptionalShareDeploymentCandidateText(
+    source.evidence,
+    `projectCandidates[${index}].evidence`,
+    2048,
+  );
+  const messageId = sanitizeOptionalShareDeploymentCandidateText(
+    source.messageId,
+    `projectCandidates[${index}].messageId`,
+    128,
+  );
+  const artifactId = sanitizeOptionalShareDeploymentCandidateText(
+    source.artifactId,
+    `projectCandidates[${index}].artifactId`,
+    128,
+  );
+  const pid = sanitizeOptionalShareDeploymentCandidateInteger(source.pid);
+  const detectedAt = sanitizeOptionalShareDeploymentCandidateInteger(source.detectedAt);
+  return {
+    directory,
+    source: candidateSource,
+    confidence: sanitizeShareDeploymentCandidateConfidence(source.confidence),
+    ...(reason ? { reason } : {}),
+    ...(evidence ? { evidence } : {}),
+    ...(messageId ? { messageId } : {}),
+    ...(artifactId ? { artifactId } : {}),
+    ...(pid !== undefined ? { pid } : {}),
+    ...(detectedAt !== undefined ? { detectedAt } : {}),
+  };
+}
+
+function sanitizeShareDeploymentProjectCandidates(value: unknown): ShareDeploymentProjectCandidate[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new Error('projectCandidates must be an array.');
+  }
+  return value
+    .slice(0, SHARE_DEPLOYMENT_PROJECT_CANDIDATE_MAX_ITEMS)
+    .map((candidate, index) => sanitizeShareDeploymentProjectCandidate(candidate, index))
+    .filter((candidate): candidate is ShareDeploymentProjectCandidate => Boolean(candidate));
+}
+
+function sanitizeShareDeploymentDetectProjectCandidatesInput(
+  input: unknown,
+): ShareDeploymentDetectCandidatesInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid deployment project detection request.');
+  }
+  const source = input as Record<string, unknown>;
+  return {
+    localServiceUrl: sanitizeHtmlShareString(source.localServiceUrl, 'localServiceUrl', 2048),
+    workingDirectory: sanitizeOptionalHtmlShareString(source.workingDirectory, 'workingDirectory', 4096),
+    projectCandidates: sanitizeShareDeploymentProjectCandidates(source.projectCandidates),
+    cachedProjectDirectory: sanitizeOptionalHtmlShareString(
+      source.cachedProjectDirectory,
+      'cachedProjectDirectory',
+      4096,
+    ),
+  };
+}
+
+function sanitizeShareDeploymentAnalyzeProjectDirectoryInput(
+  input: unknown,
+): ShareDeploymentAnalyzeProjectDirectoryInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid deployment project analysis request.');
+  }
+  const source = input as Record<string, unknown>;
+  return {
+    projectDirectory: sanitizeHtmlShareString(source.projectDirectory, 'projectDirectory', 4096),
+    localServiceUrl: sanitizeOptionalHtmlShareString(source.localServiceUrl, 'localServiceUrl', 2048),
+  };
+}
+
+function sanitizeShareDeploymentPort(value: unknown): number {
+  const port = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error('port must be a valid TCP port.');
+  }
+  return port;
+}
+
+function sanitizeShareDeploymentCreateNodeInput(input: unknown): ShareDeploymentCreateNodeInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid node deployment request.');
+  }
+  const source = input as Record<string, unknown>;
+  return {
+    sessionId: sanitizeHtmlShareString(source.sessionId, 'sessionId', 128),
+    artifactId: sanitizeHtmlShareString(source.artifactId, 'artifactId', 128),
+    title: sanitizeHtmlShareTitle(source.title),
+    localServiceUrl: sanitizeHtmlShareString(source.localServiceUrl, 'localServiceUrl', 2048),
+    projectDirectory: sanitizeHtmlShareString(source.projectDirectory, 'projectDirectory', 4096),
+    accessMode: sanitizeHtmlShareAccessMode(source.accessMode, HtmlShareAccessMode.Code),
+    nodeVersion: sanitizeHtmlShareString(source.nodeVersion, 'nodeVersion', 32),
+    installCommand: sanitizeOptionalShareDeploymentCommand(source.installCommand, 'installCommand'),
+    buildCommand: sanitizeOptionalShareDeploymentCommand(source.buildCommand, 'buildCommand'),
+    startCommand: sanitizeOptionalShareDeploymentCommand(source.startCommand, 'startCommand'),
+    port: sanitizeShareDeploymentPort(source.port),
+  };
+}
+
+function sanitizeShareDeploymentGetByLocalServiceInput(
+  input: unknown,
+): ShareDeploymentGetByLocalServiceInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid deployment lookup request.');
+  }
+  const source = input as Record<string, unknown>;
+  return {
+    sessionId: sanitizeHtmlShareString(source.sessionId, 'sessionId', 128),
+    localServiceUrl: sanitizeHtmlShareString(source.localServiceUrl, 'localServiceUrl', 2048),
+    projectDirectory: sanitizeOptionalHtmlShareString(source.projectDirectory, 'projectDirectory', 4096),
+  };
+}
+
+function sanitizeShellGetBrowserAppsInput(input: unknown): ShellGetBrowserAppsInput {
+  if (input === undefined || input === null) return {};
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid browser app lookup request.');
+  }
+  const source = input as Record<string, unknown>;
+  return {
+    projectDirectory: sanitizeOptionalHtmlShareString(source.projectDirectory, 'projectDirectory', 4096),
+  };
+}
+
 function normalizeHtmlShareSourceFilePath(filePath: string): string {
   let normalized = filePath.trim();
   if (/^file:\/\//i.test(normalized)) {
@@ -722,140 +967,6 @@ const sanitizeLocalWebServicePorts = (ports: unknown): number[] => {
     ),
   );
 };
-const LOCAL_FILE_MIME_BY_EXT: Record<string, string> = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.bmp': 'image/bmp',
-  '.svg': 'image/svg+xml',
-  '.avif': 'image/avif',
-  '.mp4': 'video/mp4',
-  '.webm': 'video/webm',
-  '.mov': 'video/quicktime',
-  '.m4v': 'video/x-m4v',
-  '.mp3': 'audio/mpeg',
-  '.wav': 'audio/wav',
-  '.ogg': 'audio/ogg',
-  '.pdf': 'application/pdf',
-  '.txt': 'text/plain; charset=utf-8',
-  '.md': 'text/markdown; charset=utf-8',
-  '.html': 'text/html; charset=utf-8',
-};
-
-type ByteRange = {
-  start: number;
-  end: number;
-};
-
-function getLocalFileProtocolPath(requestUrl: string): string {
-  const url = new URL(requestUrl);
-  let filePath = decodeURIComponent(url.pathname);
-  if (url.host && process.platform !== 'win32') {
-    filePath = `/${decodeURIComponent(url.host)}${filePath}`;
-  }
-  if (process.platform === 'win32' && /^\/[A-Za-z]:/.test(filePath)) {
-    filePath = filePath.slice(1);
-  }
-  return filePath;
-}
-
-function getLocalFileMimeType(filePath: string): string {
-  return LOCAL_FILE_MIME_BY_EXT[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
-}
-
-function parseByteRange(rangeHeader: string | null, fileSize: number): ByteRange | null {
-  if (!rangeHeader) return null;
-  const match = rangeHeader.match(/^bytes=(\d*)-(\d*)$/);
-  if (!match) return null;
-
-  const [, startText, endText] = match;
-  if (!startText && !endText) return null;
-
-  if (!startText) {
-    const suffixLength = Number(endText);
-    if (!Number.isFinite(suffixLength) || suffixLength <= 0) return null;
-    return {
-      start: Math.max(fileSize - suffixLength, 0),
-      end: Math.max(fileSize - 1, 0),
-    };
-  }
-
-  const start = Number(startText);
-  const end = endText ? Number(endText) : fileSize - 1;
-  if (
-    !Number.isFinite(start) ||
-    !Number.isFinite(end) ||
-    start < 0 ||
-    end < start ||
-    start >= fileSize
-  ) {
-    return null;
-  }
-
-  return {
-    start,
-    end: Math.min(end, fileSize - 1),
-  };
-}
-
-async function createLocalFileProtocolResponse(request: Request): Promise<Response> {
-  try {
-    const filePath = getLocalFileProtocolPath(request.url);
-    const stat = await fs.promises.stat(filePath);
-    if (!stat.isFile()) {
-      return new Response('Not found', { status: 404 });
-    }
-
-    const mimeType = getLocalFileMimeType(filePath);
-    const baseHeaders = {
-      'Accept-Ranges': 'bytes',
-      'Content-Type': mimeType,
-    };
-    const rangeHeader = request.headers.get('range');
-    const range = parseByteRange(rangeHeader, stat.size);
-
-    if (rangeHeader && !range) {
-      return new Response(null, {
-        status: 416,
-        headers: {
-          ...baseHeaders,
-          'Content-Range': `bytes */${stat.size}`,
-        },
-      });
-    }
-
-    if (range) {
-      const contentLength = range.end - range.start + 1;
-      return new Response(
-        Readable.toWeb(fs.createReadStream(filePath, { start: range.start, end: range.end })) as BodyInit,
-        {
-          status: 206,
-          headers: {
-            ...baseHeaders,
-            'Content-Length': String(contentLength),
-            'Content-Range': `bytes ${range.start}-${range.end}/${stat.size}`,
-          },
-        },
-      );
-    }
-
-    return new Response(
-      Readable.toWeb(fs.createReadStream(filePath)) as BodyInit,
-      {
-        status: 200,
-        headers: {
-          ...baseHeaders,
-          'Content-Length': String(stat.size),
-        },
-      },
-    );
-  } catch (error) {
-    console.warn('[ArtifactPreview] local file request failed:', error);
-    return new Response('Not found', { status: 404 });
-  }
-}
 
 function sanitizeOptionalPatchValue(
   value: unknown,
@@ -1458,6 +1569,19 @@ const getOpenClawEngineManager = (): OpenClawEngineManager => {
     openClawEngineManager = new OpenClawEngineManager();
   }
   return openClawEngineManager;
+};
+
+const formatAutoLaunchStatusForLog = (status: AutoLaunchStatus): string => {
+  const launchItems = status.launchItems
+    ?.map(item => `${item.name}:${item.enabled ? 'enabled' : 'disabled'}:${item.args.join(' ') || '(no-args)'}`)
+    .join(',');
+
+  return [
+    `status=${status.status ?? 'unknown'}`,
+    `openAtLogin=${status.openAtLogin}`,
+    `executableWillLaunchAtLogin=${status.executableWillLaunchAtLogin ?? 'unknown'}`,
+    launchItems ? `launchItems=${launchItems}` : null,
+  ].filter(Boolean).join(', ');
 };
 
 const getAppUpdateCoordinator = (): AppUpdateCoordinator => {
@@ -2352,6 +2476,18 @@ const bindCoworkRuntimeForwarder = (): void => {
     });
   });
 
+  runtime.on('goalUpdate', (sessionId: string, goal: unknown) => {
+    const windows = BrowserWindow.getAllWindows();
+    windows.forEach(win => {
+      if (win.isDestroyed()) return;
+      try {
+        win.webContents.send(CoworkIpcChannel.StreamGoal, { sessionId, goal });
+      } catch (error) {
+        console.error('[CoworkRuntime] failed to forward goal update:', error);
+      }
+    });
+  });
+
   runtime.on('contextMaintenance', (sessionId: string, active: boolean) => {
     const windows = BrowserWindow.getAllWindows();
     console.log(
@@ -2433,6 +2569,7 @@ const getCoworkEngineRouter = () => {
         getOpenClawEngineManager(),
         {
           normalizeModelRef: normalizeOpenClawModelRef,
+          onGatewayClientReady: () => getCronJobService().notifyGatewayReady(),
         },
         new SubagentRunStore(getStore().getDatabase()),
         new SubagentMessageStore(getStore().getDatabase()),
@@ -2448,6 +2585,7 @@ const getCoworkEngineRouter = () => {
             getDefaultCwd: (agentId?: string) =>
               resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
             resolveJobName: jobId => getCronJobService().getJobNameSync(jobId),
+            resolveJobDelivery: jobId => getCronJobService().getJobDeliverySync(jobId),
           });
           openClawRuntimeAdapter.setChannelSessionSync(channelSessionSync);
         }
@@ -2744,7 +2882,12 @@ const refreshImSessionWorkingDirectoriesForAgent = (agentId: string): number => 
 };
 
 function mergeCoworkSystemPrompt(systemPrompt?: string): string | undefined {
-  const sections = [buildScheduledTaskEnginePrompt(), systemPrompt?.trim() || ''].filter(Boolean);
+  const scheduledTaskPrompt = buildScheduledTaskEnginePrompt();
+  const normalizedSystemPrompt = systemPrompt?.trim() || '';
+  if (normalizedSystemPrompt && normalizedSystemPrompt.includes(scheduledTaskPrompt)) {
+    return normalizedSystemPrompt;
+  }
+  const sections = [scheduledTaskPrompt, normalizedSystemPrompt].filter(Boolean);
   return sections.length > 0 ? sections.join('\n\n') : undefined;
 }
 
@@ -2774,6 +2917,7 @@ function validateCoworkImageAttachmentsForRuntime(
 }
 
 function buildCoworkUserSelectionMetadata(options: {
+  prompt?: string;
   skillIds?: string[];
   kitIds?: string[];
   kitReferences?: KitReference[];
@@ -2781,7 +2925,9 @@ function buildCoworkUserSelectionMetadata(options: {
   selectedTextSnippets?: CoworkSelectedTextSnippet[];
   imageAttachmentPreviews?: CoworkImageAttachmentPreview[];
 }): Record<string, unknown> | undefined {
-  const metadata: Record<string, unknown> = {};
+  const metadata: Record<string, unknown> = {
+    ...(options.prompt ? buildGoalSettingMessageMetadata(options.prompt) : undefined),
+  };
 
   if (options.skillIds?.length) {
     metadata.skillIds = options.skillIds;
@@ -2884,6 +3030,52 @@ const focusMainWindowForReason = (reason: string): void => {
 
 let isQuitting = false;
 let isDataMigrationRestoreInProgress = false;
+let isHidingMainWindowAfterFullScreen = false;
+
+const hideMainWindowForClose = (win: BrowserWindow): void => {
+  if (win.isDestroyed()) return;
+
+  if (!isMac || !win.isFullScreen()) {
+    console.log(`[Main] hiding main window for close, platform=${process.platform}, fullscreen=${win.isFullScreen()}, maximized=${win.isMaximized()}, visible=${win.isVisible()}`);
+    win.hide();
+    return;
+  }
+
+  if (isHidingMainWindowAfterFullScreen) {
+    console.log('[Main] hide after full-screen close is already pending');
+    return;
+  }
+
+  console.log('[Main] main window close requested while macOS full-screen; leaving full-screen before hiding');
+  isHidingMainWindowAfterFullScreen = true;
+  let settled = false;
+  let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const finish = (source: 'leave-full-screen' | 'timeout') => {
+    if (settled) return;
+    settled = true;
+    isHidingMainWindowAfterFullScreen = false;
+    if (fallbackTimer) {
+      clearTimeout(fallbackTimer);
+      fallbackTimer = null;
+    }
+    if (!win.isDestroyed()) {
+      console.log(`[Main] hiding main window after macOS full-screen exit, source=${source}, fullscreen=${win.isFullScreen()}, visible=${win.isVisible()}`);
+      win.hide();
+    }
+  };
+
+  win.once('leave-full-screen', () => {
+    setTimeout(() => finish('leave-full-screen'), 100);
+  });
+  fallbackTimer = setTimeout(() => finish('timeout'), 1_500);
+  try {
+    win.setFullScreen(false);
+  } catch (error) {
+    console.warn('[Main] failed to leave macOS full-screen before hiding main window:', error);
+    finish('timeout');
+  }
+};
 
 // 存储活跃的流式请求控制器
 const activeStreamControllers = new Map<string, AbortController>();
@@ -2953,6 +3145,109 @@ const mediaModelIdForOutput = (model: unknown, fallback?: string): string => {
   return mediaModelDisplayName(rawModel, rawModel) || 'default';
 };
 
+type HappyHorse11Selection = {
+  type: 't2v' | 'i2v' | 'r2v';
+  upstreamModel: string;
+  reason: string;
+  imageCount: number;
+};
+
+const isHappyHorse11Model = (modelId: string): boolean =>
+  canonicalizeMediaModelId(modelId) === HAPPYHORSE_1_1_MODEL_ID;
+
+const addImageInputValue = (values: Set<string>, value: unknown): void => {
+  if (value == null) return;
+  if (Array.isArray(value)) {
+    value.forEach(item => addImageInputValue(values, item));
+    return;
+  }
+  const text = String(value).trim();
+  if (text) values.add(text);
+};
+
+const nestedMediaUrl = (value: unknown): unknown => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return (value as Record<string, unknown>).url;
+  }
+  return value;
+};
+
+const addImageMediaItems = (values: Set<string>, media: unknown): void => {
+  if (!Array.isArray(media)) return;
+  for (const item of media) {
+    if (typeof item === 'string') {
+      addImageInputValue(values, item);
+      continue;
+    }
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    const mediaType = typeof record.type === 'string' ? record.type.toLowerCase() : '';
+    if (mediaType.includes('video') || mediaType.includes('audio')) continue;
+    addImageInputValue(values, record.url ?? nestedMediaUrl(record.image_url));
+  }
+};
+
+const countVideoImageInputs = (params: Record<string, unknown>): number => {
+  const images = new Set<string>();
+  addImageInputValue(images, params.images);
+  addImageInputValue(images, params.imageUrls);
+  addImageInputValue(images, params.referenceImages);
+  addImageInputValue(images, params.firstFrame);
+  addImageInputValue(images, params.first_frame);
+  addImageInputValue(images, params.firstFrameImage);
+  addImageInputValue(images, params.first_frame_image);
+  addImageInputValue(images, params.image);
+  addImageInputValue(images, params.imageUrl);
+  addImageInputValue(images, params.image_url);
+  addImageInputValue(images, params.referenceImage);
+  addImageInputValue(images, params.lastFrame);
+  addImageInputValue(images, params.last_frame);
+  addImageInputValue(images, params.lastFrameImage);
+  addImageInputValue(images, params.last_frame_image);
+  addImageMediaItems(images, params.media);
+
+  const providerOptions = params.providerOptions;
+  if (providerOptions && typeof providerOptions === 'object' && !Array.isArray(providerOptions)) {
+    addImageMediaItems(images, (providerOptions as Record<string, unknown>).media);
+  }
+  const input = params.input;
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    addImageMediaItems(images, (input as Record<string, unknown>).media);
+  }
+
+  return images.size;
+};
+
+const resolveHappyHorse11Selection = (
+  modelId: string,
+  params: Record<string, unknown>,
+): HappyHorse11Selection | null => {
+  if (!isHappyHorse11Model(modelId)) return null;
+  const imageCount = countVideoImageInputs(params);
+  if (imageCount === 0) {
+    return {
+      type: 't2v',
+      upstreamModel: 'happyhorse-1.1-t2v',
+      reason: '未检测到输入图片，使用文生视频子模型 happyhorse-1.1-t2v',
+      imageCount,
+    };
+  }
+  if (imageCount === 1) {
+    return {
+      type: 'i2v',
+      upstreamModel: 'happyhorse-1.1-i2v',
+      reason: '检测到 1 张输入图片，使用图生视频子模型 happyhorse-1.1-i2v',
+      imageCount,
+    };
+  }
+  return {
+    type: 'r2v',
+    upstreamModel: 'happyhorse-1.1-r2v',
+    reason: `检测到 ${imageCount} 张输入图片，使用参考生视频子模型 happyhorse-1.1-r2v`,
+    imageCount,
+  };
+};
+
 type MediaStatusPollUpdate = {
   sessionId: string;
   toolCallId: string;
@@ -2970,6 +3265,7 @@ type AppConfigSettings = {
   language?: string;
   useSystemProxy?: boolean;
   sqliteAutoBackupEnabled?: boolean;
+  usageAnalyticsEnabled?: boolean;
   notificationSettings?: Partial<NotificationSettings>;
   browserWebAccess?: Partial<BrowserWebAccessConfig>;
 };
@@ -3367,25 +3663,46 @@ if (!gotTheLock) {
   });
 
   // Auto-launch IPC handlers
-  // Use SQLite store as the source of truth for UI state, because
-  // app.getLoginItemSettings() returns unreliable values on macOS and
-  // requires matching args on Windows.
-  ipcMain.handle('app:getAutoLaunch', () => {
+  ipcMain.handle(AppSettingsIpc.GetAutoLaunch, () => {
     const stored = getStore().get<boolean>('auto_launch_enabled');
-    // Fall back to OS API if SQLite has no record yet (e.g. upgraded from older version)
-    const enabled = stored ?? getAutoLaunchEnabled();
-    return { enabled };
+    try {
+      const status = getAutoLaunchStatus();
+      if (stored !== undefined && stored !== status.enabled) {
+        console.warn(
+          `[AutoLaunch] stored state (${stored}) differs from OS state (${status.enabled}); ${formatAutoLaunchStatusForLog(status)}`,
+        );
+        getStore().set('auto_launch_enabled', status.enabled);
+      }
+      return { enabled: status.enabled };
+    } catch (error) {
+      console.error('[AutoLaunch] failed to read OS state; falling back to stored state:', error);
+      return { enabled: stored ?? false };
+    }
   });
 
-  ipcMain.handle('app:setAutoLaunch', (_event, enabled: unknown) => {
+  ipcMain.handle(AppSettingsIpc.SetAutoLaunch, (_event, enabled: unknown) => {
     if (typeof enabled !== 'boolean') {
       return { success: false, error: 'Invalid parameter: enabled must be boolean' };
     }
     try {
       setAutoLaunchEnabled(enabled);
-      getStore().set('auto_launch_enabled', enabled);
-      return { success: true };
+      const status = getAutoLaunchStatus();
+      console.log(
+        `[AutoLaunch] set requested=${enabled}, actual=${status.enabled}; ${formatAutoLaunchStatusForLog(status)}`,
+      );
+      if (status.enabled !== enabled) {
+        return {
+          success: false,
+          enabled: status.enabled,
+          errorCode: status.status === 'requires-approval'
+            ? AppSettingsAutoLaunchErrorCode.RequiresApproval
+            : AppSettingsAutoLaunchErrorCode.UpdateFailed,
+        };
+      }
+      getStore().set('auto_launch_enabled', status.enabled);
+      return { success: true, enabled: status.enabled };
     } catch (error) {
+      console.error('[AutoLaunch] failed to update auto-launch setting:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to set auto-launch',
@@ -3393,12 +3710,12 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('app:getPreventSleep', () => {
+  ipcMain.handle(AppSettingsIpc.GetPreventSleep, () => {
     const enabled = getStore().get<boolean>('prevent_sleep_enabled') ?? false;
     return { enabled };
   });
 
-  ipcMain.handle('app:setPreventSleep', (_event, enabled: unknown) => {
+  ipcMain.handle(AppSettingsIpc.SetPreventSleep, (_event, enabled: unknown) => {
     if (typeof enabled !== 'boolean') {
       return { success: false, error: 'Invalid parameter: enabled must be boolean' };
     }
@@ -3433,7 +3750,8 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.on('window-close', () => {
+  ipcMain.on('window-close', (event) => {
+    console.log(`[Main] window-close IPC received from renderer, url=${event.sender.getURL()}`);
     mainWindow?.close();
   });
 
@@ -3450,6 +3768,7 @@ if (!gotTheLock) {
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('app:getSystemLocale', () => app.getLocale());
+  ipcMain.handle(AppIpcChannel.GetKeyfromAttribution, () => getKeyfromAttribution(getStore()));
 
   // ── Auth IPC handlers ──
 
@@ -3736,6 +4055,13 @@ if (!gotTheLock) {
         const task = body.data!;
         const status = task.status as string;
         const resultUrls = (task.resultUrls as string[]) || [];
+        const outputModel = mediaModelIdForOutput(task.model);
+        const upstreamModel = typeof task.upstreamModel === 'string' && task.upstreamModel.trim()
+          ? task.upstreamModel.trim()
+          : undefined;
+        const modelSelectionReason = typeof task.modelSelectionReason === 'string' && task.modelSelectionReason.trim()
+          ? task.modelSelectionReason.trim()
+          : undefined;
         if (sessionId && TERMINAL_MEDIA_TASK_STATUSES.has(status)) {
           pendingMediaTasks.delete(taskId);
         }
@@ -3775,6 +4101,9 @@ if (!gotTheLock) {
 
         const lines = [
           `Task ID: ${task.upstreamTaskId || task.taskId}`,
+          `Model: ${outputModel}`,
+          ...(upstreamModel ? [`Selected model: ${upstreamModel}`] : []),
+          ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
           `Status: ${status}`,
           ...(task.progress ? [`Progress: ${task.progress}%`] : []),
           ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
@@ -3785,7 +4114,9 @@ if (!gotTheLock) {
           ...(task.upstreamTaskId ? { upstreamTaskId: String(task.upstreamTaskId) } : {}),
           status,
           ...(pollCount > 1 ? { pollCount } : {}),
-          model: mediaModelIdForOutput(task.model),
+          model: outputModel,
+          ...(upstreamModel ? { upstreamModel } : {}),
+          ...(modelSelectionReason ? { modelSelectionReason } : {}),
           mediaType: statusMediaType,
           ...(detailsAssets.length > 0 ? { assets: detailsAssets } : {}),
           ...(task.quotaRemaining != null ? { billing: { quotaRemaining: task.quotaRemaining } } : {}),
@@ -3984,6 +4315,9 @@ if (!gotTheLock) {
 
       const inferVideoGenerationType = (): string => {
         const normalizedModel = selectedModel.toLowerCase();
+        if (normalizedModel.includes('happyhorse-1.1-r2v')) return 'r2v';
+        if (normalizedModel.includes('happyhorse-1.1-t2v')) return 't2v';
+        if (normalizedModel.includes('happyhorse-1.1-i2v')) return 'i2v';
         if (normalizedModel.includes('happyhorse-1.0-r2v')) return 'r2v';
         if (normalizedModel.includes('happyhorse-1.0-t2v')) return 't2v';
         if (normalizedModel.includes('happyhorse-1.0-i2v')) return 'i2v';
@@ -4007,9 +4341,14 @@ if (!gotTheLock) {
         return hasFirstFrame ? 'i2v' : 't2v';
       };
 
+      const happyHorse11Selection = mediaType === 'video'
+        ? resolveHappyHorse11Selection(selectedModel, params)
+        : null;
       const generateReq = {
         model: selectedModel,
-        type: mediaType === 'video' ? inferVideoGenerationType() : mediaType,
+        type: mediaType === 'video'
+          ? (happyHorse11Selection?.type ?? inferVideoGenerationType())
+          : mediaType,
         prompt,
         params,
       };
@@ -4019,6 +4358,11 @@ if (!gotTheLock) {
         mediaType,
         selectedModel,
         selectedModelSource,
+        ...(happyHorse11Selection ? {
+          upstreamModel: happyHorse11Selection.upstreamModel,
+          modelSelectionReason: happyHorse11Selection.reason,
+          inputImageCount: happyHorse11Selection.imageCount,
+        } : {}),
         promptLength: prompt.length,
         promptPreview: prompt.slice(0, 120),
         params: summarizeMediaGenerationParamsForLog(params),
@@ -4060,11 +4404,19 @@ if (!gotTheLock) {
       const status = task.status as string;
       const resultUrls = (task.resultUrls as string[]) || [];
       const outputModel = mediaModelIdForOutput(task.model, selectedModel);
+      const upstreamModel = typeof task.upstreamModel === 'string' && task.upstreamModel.trim()
+        ? task.upstreamModel.trim()
+        : happyHorse11Selection?.upstreamModel;
+      const modelSelectionReason = typeof task.modelSelectionReason === 'string' && task.modelSelectionReason.trim()
+        ? task.modelSelectionReason.trim()
+        : happyHorse11Selection?.reason;
       console.log('[MediaGeneration] server accepted generate request:', serializeForLog({
         mediaType,
         taskId: task.taskId,
         status,
         model: outputModel,
+        upstreamModel,
+        modelSelectionReason,
         resultCount: resultUrls.length,
         quotaRemaining: task.quotaRemaining,
       }));
@@ -4089,6 +4441,8 @@ if (!gotTheLock) {
         `${mediaType === 'image' ? 'Image' : 'Video'} generation task created.`,
         `Task ID: ${task.upstreamTaskId || task.taskId}`,
         `Model: ${outputModel}`,
+        ...(upstreamModel ? [`Selected model: ${upstreamModel}`] : []),
+        ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
         `Status: ${status}`,
         ...(task.quotaRemaining != null ? [`Quota remaining: ${task.quotaRemaining}`] : []),
       ];
@@ -4134,7 +4488,7 @@ if (!gotTheLock) {
             taskId: String(task.taskId),
             sessionId,
             mediaType,
-            model: outputModel,
+            model: upstreamModel || outputModel,
             startedAt: Date.now(),
             pollCount: 0,
             timeoutMs,
@@ -4149,6 +4503,8 @@ if (!gotTheLock) {
           ...(task.upstreamTaskId ? { upstreamTaskId: String(task.upstreamTaskId) } : {}),
           status,
           model: outputModel,
+          ...(upstreamModel ? { upstreamModel } : {}),
+          ...(modelSelectionReason ? { modelSelectionReason } : {}),
           ...(detailsAssets.length > 0 ? { assets: detailsAssets } : {}),
           ...(Object.keys(billing).length > 0 ? { billing } : {}),
         },
@@ -4240,6 +4596,14 @@ if (!gotTheLock) {
         if (TERMINAL_MEDIA_TASK_STATUSES.has(status)) {
           tasksToRemove.push(taskId);
           const resultUrls = (task.resultUrls as string[]) || [];
+          const outputModel = mediaModelIdForOutput(task.model, tracker.model);
+          const upstreamModel = typeof task.upstreamModel === 'string' && task.upstreamModel.trim()
+            ? task.upstreamModel.trim()
+            : undefined;
+          const modelSelectionReason = typeof task.modelSelectionReason === 'string' && task.modelSelectionReason.trim()
+            ? task.modelSelectionReason.trim()
+            : undefined;
+          const displayModel = upstreamModel || outputModel;
           const assets = resultUrls.map(url => ({
             type: tracker.mediaType,
             url,
@@ -4264,7 +4628,8 @@ if (!gotTheLock) {
               emitMediaTaskMessage(tracker.sessionId, [
                 'Image generation succeeded.',
                 `Task ID: ${taskId}`,
-                `Model: ${tracker.model}`,
+                `Model: ${displayModel}`,
+                ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
                 ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
                 ...(task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
               ].join('\n'));
@@ -4275,10 +4640,18 @@ if (!gotTheLock) {
               const fileLines = persistResult.saved.map(asset => `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`);
               emitMediaTaskMessage(
                 tracker.sessionId,
-                `Saved generated ${persistResult.saved.length === 1 ? 'video' : 'videos'}:\n${fileLines.join('\n')}`,
+                [
+                  `Saved generated ${persistResult.saved.length === 1 ? 'video' : 'videos'}:`,
+                  `Model: ${displayModel}`,
+                  ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
+                  fileLines.join('\n'),
+                ].join('\n'),
                 {
                   toolResultDetails: {
                     status: 'succeeded',
+                    model: outputModel,
+                    ...(upstreamModel ? { upstreamModel } : {}),
+                    ...(modelSelectionReason ? { modelSelectionReason } : {}),
                     assets: persistResult.saved,
                   },
                 },
@@ -4288,7 +4661,8 @@ if (!gotTheLock) {
               emitMediaTaskMessage(tracker.sessionId, [
                 'Video generation succeeded.',
                 `Task ID: ${taskId}`,
-                `Model: ${tracker.model}`,
+                `Model: ${displayModel}`,
+                ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
                 ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
                 ...(task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
               ].join('\n'));
@@ -4644,6 +5018,34 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('auth:getActiveClientBanner', async () => {
+    try {
+      const serverBaseUrl = getServerApiBaseUrl();
+      const url = appendKeyfromQuery(`${serverBaseUrl}/api/client-banners/active?placement=desktop_sidebar`);
+      const resp = await net.fetch(url);
+      if (!resp.ok) return { success: false };
+      const body = (await resp.json()) as { code: number; data: Record<string, unknown> | null };
+      if (body.code !== 0) return { success: false };
+      return { success: true, data: body.data ?? null };
+    } catch {
+      return { success: false };
+    }
+  });
+
+  ipcMain.handle('auth:getActiveClientBanners', async () => {
+    try {
+      const serverBaseUrl = getServerApiBaseUrl();
+      const url = appendKeyfromQuery(`${serverBaseUrl}/api/client-banners/active-list?placement=desktop_sidebar`);
+      const resp = await net.fetch(url);
+      if (!resp.ok) return { success: false };
+      const body = (await resp.json()) as { code: number; data: Record<string, unknown>[] | null };
+      if (body.code !== 0) return { success: false };
+      return { success: true, data: Array.isArray(body.data) ? body.data : [] };
+    } catch {
+      return { success: false };
+    }
+  });
+
   ipcMain.handle('auth:logout', async () => {
     try {
       const tokens = getAuthTokens();
@@ -4780,6 +5182,7 @@ if (!gotTheLock) {
           apiFormat: string;
           supportsImage?: boolean;
           supportsThinking?: boolean;
+          explicitContextCache?: boolean;
           contextWindow?: number;
           costMultiplier?: number;
           description?: string;
@@ -4896,9 +5299,6 @@ if (!gotTheLock) {
     let archivePath: string | undefined;
     try {
       const options = sanitizeUpdateFromHtmlFileInput(input);
-      if (options.currentStatus === HtmlShareStatus.Disabled) {
-        return { success: false, code: HtmlShareErrorCode.DisabledCannotUpdate };
-      }
       const clientSourceKey = buildHtmlShareClientSourceKey(options.filePath);
       const packaged = await packageHtmlFile(options.filePath);
       archivePath = packaged.archivePath;
@@ -5024,9 +5424,6 @@ if (!gotTheLock) {
     let archivePath: string | undefined;
     try {
       const options = sanitizeUpdateFromArtifactFileInput(input);
-      if (options.currentStatus === HtmlShareStatus.Disabled) {
-        return { success: false, code: HtmlShareErrorCode.DisabledCannotUpdate };
-      }
       const clientSourceKey = buildArtifactShareClientSourceKey(options);
       const packaged = await packageArtifactFile({
         sourceType: options.sourceType,
@@ -5151,6 +5548,168 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to disable share',
+      };
+    }
+  });
+
+  ipcMain.handle(ShareDeploymentIpc.DetectProjectCandidates, async (_event, input: unknown) => {
+    try {
+      const options = sanitizeShareDeploymentDetectProjectCandidatesInput(input);
+      const candidates = await detectNodeServiceProjectCandidates(options);
+      return {
+        success: true,
+        candidates,
+      };
+    } catch (error) {
+      console.error('[ShareDeployment] failed to detect project candidates:', error);
+      return {
+        success: false,
+        candidates: [],
+        error: error instanceof Error ? error.message : 'Failed to detect project candidates',
+      };
+    }
+  });
+
+  ipcMain.handle(ShareDeploymentIpc.AnalyzeProjectDirectory, async (_event, input: unknown) => {
+    try {
+      const options = sanitizeShareDeploymentAnalyzeProjectDirectoryInput(input);
+      return await analyzeNodeServiceProjectDirectory(options);
+    } catch (error) {
+      console.error('[ShareDeployment] failed to analyze project directory:', error);
+      return {
+        success: false,
+        projectDirectory: '',
+        packageManager: ShareDeploymentPackageManager.Unknown,
+        nodeVersion: '20',
+        installCommand: 'npm install',
+        buildCommand: '',
+        startCommand: '',
+        totalFiles: 0,
+        totalBytes: 0,
+        excludedCount: 0,
+        warnings: [],
+        blockers: [error instanceof Error ? error.message : 'Failed to analyze project directory'],
+      };
+    }
+  });
+
+  ipcMain.handle(ShareDeploymentIpc.CreateNodeDeployment, async (_event, input: unknown) => {
+    let archivePath: string | undefined;
+    try {
+      const options = sanitizeShareDeploymentCreateNodeInput(input);
+      console.debug(
+        `[ShareDeployment] received node deployment request for session ${options.sessionId} and artifact ${options.artifactId}`,
+      );
+      const packaged = await packageNodeServiceDeployment({
+        projectDirectory: options.projectDirectory,
+        localServiceUrl: options.localServiceUrl,
+        installCommand: options.installCommand,
+        buildCommand: options.buildCommand,
+        startCommand: options.startCommand,
+        port: options.port,
+      });
+      archivePath = packaged.archivePath;
+      const isStaticDeployment = packaged.deploymentKind === ShareDeploymentKind.StaticSite;
+      const clientSourceKey = isStaticDeployment
+        ? buildStaticDeploymentClientSourceKey({
+            sessionId: options.sessionId,
+            localServiceUrl: options.localServiceUrl,
+            projectDirectory: options.projectDirectory,
+          })
+        : buildNodeDeploymentClientSourceKey({
+            sessionId: options.sessionId,
+            localServiceUrl: options.localServiceUrl,
+            projectDirectory: options.projectDirectory,
+          });
+      const result = isStaticDeployment
+        ? await uploadStaticDeployment(
+            getServerApiBaseUrl(),
+            getHtmlSharePublicBaseUrl(),
+            fetchWithAuth,
+            {
+              ...options,
+              archivePath: packaged.archivePath,
+              sourceSha256: packaged.sourceSha256,
+              analysis: packaged.analysis,
+              archiveBytes: packaged.archiveBytes,
+              clientSourceKey,
+              deploymentKind: ShareDeploymentKind.StaticSite,
+              entryFile: packaged.entryFile ?? 'index.html',
+              spaFallback: packaged.spaFallback ?? true,
+            },
+          )
+        : await uploadNodeDeployment(
+            getServerApiBaseUrl(),
+            getHtmlSharePublicBaseUrl(),
+            fetchWithAuth,
+            {
+              ...options,
+              archivePath: packaged.archivePath,
+              sourceSha256: packaged.sourceSha256,
+              analysis: packaged.analysis,
+              archiveBytes: packaged.archiveBytes,
+              clientSourceKey,
+              deploymentKind: ShareDeploymentKind.NodeService,
+            },
+          );
+      console.debug(
+        `[ShareDeployment] local service deployment request finished with kind ${packaged.deploymentKind} success ${result.success} and code ${result.code ?? 'none'}`,
+      );
+      return result;
+    } catch (error) {
+      console.error('[ShareDeployment] failed to create node deployment:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to create node deployment',
+      };
+    } finally {
+      if (archivePath) {
+        const archiveDir = path.dirname(archivePath);
+        fs.promises
+          .rm(archiveDir, { recursive: true, force: true })
+          .then(() => {
+            console.debug(`[ShareDeployment] cleaned temporary archive directory ${archiveDir}`);
+          })
+          .catch((cleanupError): undefined => {
+            console.warn('[ShareDeployment] temporary archive cleanup failed:', cleanupError);
+            return undefined;
+          });
+      }
+    }
+  });
+
+  ipcMain.handle(ShareDeploymentIpc.Get, async (_event, deploymentId: unknown) => {
+    try {
+      const id = sanitizeHtmlShareString(deploymentId, 'deploymentId', 128);
+      return await getNodeDeployment(
+        getServerApiBaseUrl(),
+        getHtmlSharePublicBaseUrl(),
+        fetchWithAuth,
+        id,
+      );
+    } catch (error) {
+      console.error('[ShareDeployment] failed to load deployment:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to load deployment',
+      };
+    }
+  });
+
+  ipcMain.handle(ShareDeploymentIpc.GetByLocalService, async (_event, input: unknown) => {
+    try {
+      const options = sanitizeShareDeploymentGetByLocalServiceInput(input);
+      return await getNodeDeploymentByLocalService(
+        getServerApiBaseUrl(),
+        getHtmlSharePublicBaseUrl(),
+        fetchWithAuth,
+        options,
+      );
+    } catch (error) {
+      console.error('[ShareDeployment] failed to load deployment by local service:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to load deployment',
       };
     }
   });
@@ -5691,6 +6250,9 @@ if (!gotTheLock) {
         const coworkStoreInstance = getCoworkStore();
         const config = coworkStoreInstance.getConfig();
         const systemPrompt = mergeCoworkSystemPrompt(options.systemPrompt ?? config.systemPrompt);
+        const persistedSystemPrompt = containsPlanModePrompt(systemPrompt)
+          ? mergeCoworkSystemPrompt(config.systemPrompt)
+          : systemPrompt;
         const selectedTaskDirectory = resolveSessionWorkingDirectory({
           cwd: options.cwd,
           agentId: options.agentId,
@@ -5728,7 +6290,7 @@ if (!gotTheLock) {
         const session = coworkStoreInstance.createSession(
           title,
           taskWorkingDirectory,
-          systemPrompt,
+          persistedSystemPrompt,
           config.executionMode || 'local',
           runtimeSkillIds || [],
           options.agentId || 'main',
@@ -5768,6 +6330,7 @@ if (!gotTheLock) {
         }
         const imageAttachmentPreviews = buildCoworkImageAttachmentPreviews(options.imageAttachments);
         const messageMetadata = buildCoworkUserSelectionMetadata({
+          prompt: options.prompt,
           skillIds: options.activeSkillIds,
           kitIds: options.kitIds,
           kitReferences: options.kitReferences,
@@ -5881,7 +6444,22 @@ if (!gotTheLock) {
         }
 
         const runtime = getCoworkEngineRouter();
-        const existingSession = getCoworkStore().getSession(options.sessionId);
+        const coworkStoreInstance = getCoworkStore();
+        const existingSession = coworkStoreInstance.getSession(options.sessionId);
+        const config = coworkStoreInstance.getConfig();
+        const hasLegacyPersistedPlanMode = containsPlanModePrompt(existingSession?.systemPrompt);
+        const continuationSystemPrompt = mergeCoworkSystemPrompt(
+          options.systemPrompt
+            ?? (hasLegacyPersistedPlanMode ? config.systemPrompt : existingSession?.systemPrompt),
+        );
+        if (hasLegacyPersistedPlanMode) {
+          coworkStoreInstance.updateSession(options.sessionId, {
+            systemPrompt: mergeCoworkSystemPrompt(config.systemPrompt) ?? '',
+          });
+          console.log(
+            `[Cowork] removed a legacy persisted plan mode prompt from session ${options.sessionId}.`,
+          );
+        }
         const selectedTextSnippets = normalizeSelectedTextSnippetsForIpc(options.selectedTextSnippets);
         if (selectedTextSnippets.length > 0) {
           console.log(
@@ -5929,9 +6507,7 @@ if (!gotTheLock) {
         );
         runtime
           .continueSession(options.sessionId, options.prompt, {
-            systemPrompt: mergeCoworkSystemPrompt(
-              options.systemPrompt ?? existingSession?.systemPrompt,
-            ),
+            systemPrompt: continuationSystemPrompt,
             skillIds: options.runtimeSkillIds ?? options.activeSkillIds,
             messageSkillIds: options.activeSkillIds,
             kitIds: options.kitIds,
@@ -5974,6 +6550,47 @@ if (!gotTheLock) {
       }
     },
   );
+
+  ipcMain.handle(CoworkIpcChannel.GoalCommand, async (
+    _event,
+    options: { sessionId: string; command: string },
+  ) => {
+    try {
+      const engineStatus = await ensureOpenClawRunningForCowork();
+      if (engineStatus.phase !== 'running') {
+        return getEngineNotReadyResponse(engineStatus);
+      }
+      const sessionId = typeof options?.sessionId === 'string' ? options.sessionId.trim() : '';
+      const command = typeof options?.command === 'string' ? options.command.trim() : '';
+      if (!sessionId || !command) {
+        return {
+          success: false,
+          error: 'Session id and goal command are required.',
+        };
+      }
+      const runtime = getCoworkEngineRouter();
+      if (!runtime.runGoalCommand) {
+        return {
+          success: false,
+          error: 'Goal commands are not supported by the current runtime.',
+        };
+      }
+      const action = command.split(/\s+/, 2)[1] ?? 'status';
+      console.debug(
+        '[CoworkGoal] goal command IPC received.',
+        `Session ${sessionId}.`,
+        `Action ${action}.`,
+      );
+      const goal = await runtime.runGoalCommand(sessionId, command);
+      return { success: true, goal };
+    } catch (error) {
+      console.error('[CoworkGoal] goal command IPC failed:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to run goal command',
+      };
+    }
+  });
 
   ipcMain.handle('cowork:session:stop', async (_event, sessionId: string) => {
     try {
@@ -6230,16 +6847,28 @@ if (!gotTheLock) {
 
   ipcMain.handle(
     'cowork:session:list',
-    async (_event, options?: { limit?: number; offset?: number; agentId?: string }) => {
+    async (_event, options?: { limit?: number; offset?: number; agentId?: string; searchQuery?: string }) => {
       try {
         const limit = options?.limit ?? COWORK_SESSION_PAGE_SIZE;
         const offset = options?.offset ?? 0;
         const agentId = options?.agentId;
+        const searchQuery = options?.searchQuery?.trim() ?? '';
         const store = getCoworkStore();
-        const sessions = store.listSessions(limit, offset, agentId);
-        const total = store.countSessions(agentId);
+        const startedAt = searchQuery ? Date.now() : 0;
+        const sessions = searchQuery
+          ? store.searchSessions({ query: searchQuery, limit, offset, agentId })
+          : store.listSessions(limit, offset, agentId);
+        const total = searchQuery
+          ? store.countSearchSessions({ query: searchQuery, agentId })
+          : store.countSessions(agentId);
+        if (searchQuery) {
+          console.debug(
+            `[CoworkIPC] searched sessions; query length ${searchQuery.length}, returned ${sessions.length} of ${total} from offset ${offset} in ${Date.now() - startedAt}ms.`,
+          );
+        }
         return { success: true, sessions, hasMore: offset + sessions.length < total };
       } catch (error) {
+        console.error('[CoworkIPC] failed to list sessions:', error);
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to list sessions',
@@ -6268,6 +6897,23 @@ if (!gotTheLock) {
       }
     },
   );
+
+  ipcMain.handle(CoworkIpcChannel.GetSessionMessageRailIndex, async (_event, sessionId: string) => {
+    try {
+      const store = getCoworkStore();
+      const items = store.getSessionMessageRailIndex(sessionId);
+      console.log(
+        `[CoworkIPC] loaded message rail index for session ${sessionId}; returned ${items.length} items.`,
+      );
+      return { success: true, items };
+    } catch (error) {
+      console.error('[CoworkIPC] failed to load message rail index:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get session message rail index',
+      };
+    }
+  });
 
   ipcMain.handle('cowork:session:contextUsage', async (_event, sessionId: string) => {
     try {
@@ -6298,6 +6944,44 @@ if (!gotTheLock) {
       };
     }
   });
+
+  const buildLegacyIdentityCleanupFailure = (
+    error: unknown,
+  ): Extract<AgentLegacyIdentityCleanupResult, { status: typeof AgentLegacyIdentityCleanupStatus.Failed }> => ({
+    status: AgentLegacyIdentityCleanupStatus.Failed,
+    error: error instanceof Error ? error.message : String(error),
+  });
+
+  const resolveAgentWorkspacePath = (agentId: string): string => {
+    const stateDir = getOpenClawEngineManager().getStateDir();
+    return agentId === AgentId.Main
+      ? getMainAgentWorkspacePath(stateDir)
+      : path.join(stateDir, `workspace-${agentId}`);
+  };
+
+  const cleanupLegacyIdentityBlockForAgent = async (agentId: string): Promise<AgentLegacyIdentityCleanupResult> => {
+    if (agentId !== AgentId.Main && getAgentManager().getAgent(agentId) === null) {
+      return buildLegacyIdentityCleanupFailure(`Agent ${agentId} not found`);
+    }
+
+    const syncResult = await syncOpenClawConfig({ reason: 'agent-identity-cleanup-prereq' });
+    if (!syncResult.success) {
+      return buildLegacyIdentityCleanupFailure(syncResult.error || 'OpenClaw config sync failed before cleanup.');
+    }
+
+    const workspacePath = resolveAgentWorkspacePath(agentId);
+    const result = cleanupLegacyAgentsMdIdentityBlockInWorkspace(workspacePath);
+    if (result.status === AgentLegacyIdentityCleanupStatus.Cleaned) {
+      console.log(
+        `[OpenClaw] Cleaned legacy AGENTS.md identity block for agent ${agentId}; backup=${result.backupPath}`,
+      );
+    } else if (result.status === AgentLegacyIdentityCleanupStatus.Failed) {
+      console.warn(
+        `[OpenClaw] Failed to clean legacy AGENTS.md identity block for agent ${agentId}: ${result.error}`,
+      );
+    }
+    return result;
+  };
 
   // ========== Agent IPC Handlers ==========
 
@@ -6378,6 +7062,17 @@ if (!gotTheLock) {
       }
     },
   );
+
+  ipcMain.handle(AgentIpcChannel.CleanupLegacyIdentityBlock, async (_event, id: string) => {
+    try {
+      const result = await cleanupLegacyIdentityBlockForAgent(id);
+      return { success: true, result };
+    } catch (error) {
+      const result = buildLegacyIdentityCleanupFailure(error);
+      console.warn(`[OpenClaw] Failed to clean legacy AGENTS.md identity block for agent ${id}: ${result.error}`);
+      return { success: false, result, error: result.error };
+    }
+  });
 
   ipcMain.handle(AgentIpcChannel.Delete, async (_event, id: string) => {
     try {
@@ -6613,6 +7308,14 @@ if (!gotTheLock) {
     },
   );
 
+  // ── Session diagnostics IPC ────────────────────────────────────────────
+
+  registerSessionDiagnosticsHandlers({
+    getDatabase: () => getStore().getDatabase(),
+    getAppVersion: () => app.getVersion(),
+    getDownloadsPath: () => app.getPath('downloads'),
+  });
+
   // ── Subagent tracking IPC ──────────────────────────────────────────────
 
   registerCoworkSubagentHandlers({
@@ -6743,13 +7446,17 @@ if (!gotTheLock) {
         patch.model = normalizeOpenClawModelRef(patch.model);
       }
       const runtime = getCoworkEngineRouter();
-      await runtime.patchSession(sessionId, patch);
+      const patchResult = await runtime.patchSession(sessionId, patch);
 
       if (patch.model !== undefined) {
+        const modelOverride =
+          patchResult && typeof patchResult.modelOverride === 'string'
+            ? patchResult.modelOverride
+            : patch.model ?? '';
         getCoworkStore().updateSession(
           sessionId,
           {
-            modelOverride: patch.model ?? '',
+            modelOverride,
           },
           { touchUpdatedAt: false },
         );
@@ -6897,6 +7604,36 @@ if (!gotTheLock) {
       }
     },
   );
+  ipcMain.handle(CoworkIpcChannel.MemoryReadRaw, async () => {
+    try {
+      const filePath = resolveMemoryFilePath(
+        getMainAgentWorkspacePath(getOpenClawEngineManager().getStateDir()),
+      );
+      return { success: true, content: readMemoryFileRaw(filePath) };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to read memory file',
+      };
+    }
+  });
+  ipcMain.handle(CoworkIpcChannel.MemoryWriteRaw, async (_event, input: { content: string }) => {
+    try {
+      if (typeof input?.content !== 'string') {
+        return { success: false, error: 'Memory content is required' };
+      }
+      const filePath = resolveMemoryFilePath(
+        getMainAgentWorkspacePath(getOpenClawEngineManager().getStateDir()),
+      );
+      writeMemoryFileRaw(filePath, input.content);
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to write memory file',
+      };
+    }
+  });
   ipcMain.handle('cowork:memory:getStats', async () => {
     try {
       const filePath = resolveMemoryFilePath(
@@ -7052,6 +7789,7 @@ if (!gotTheLock) {
     memoryGuardLevel?: 'strict' | 'standard' | 'relaxed';
     memoryUserMemoriesMaxItems?: number;
     skipMissedJobs?: boolean;
+    openClawHeartbeatEnabled?: boolean;
     embeddingEnabled?: boolean;
     embeddingProvider?: string;
     embeddingModel?: string;
@@ -7092,6 +7830,9 @@ if (!gotTheLock) {
       const normalizedSkipMissedJobs = typeof config.skipMissedJobs === 'boolean'
         ? config.skipMissedJobs
         : undefined;
+      const normalizedOpenClawHeartbeatEnabled = typeof config.openClawHeartbeatEnabled === 'boolean'
+        ? config.openClawHeartbeatEnabled
+        : undefined;
       const normalizedEmbedding = normalizeEmbeddingConfig(config);
       const normalizedConfig: Parameters<CoworkStore['setConfig']>[0] = {
         ...config,
@@ -7103,6 +7844,7 @@ if (!gotTheLock) {
         memoryGuardLevel: normalizedMemoryGuardLevel,
         memoryUserMemoriesMaxItems: normalizedMemoryUserMemoriesMaxItems,
         skipMissedJobs: normalizedSkipMissedJobs,
+        openClawHeartbeatEnabled: normalizedOpenClawHeartbeatEnabled,
         ...normalizedEmbedding,
       };
       const previousConfig = getCoworkStore().getConfig();
@@ -7184,6 +7926,8 @@ if (!gotTheLock) {
         ),
     }),
     getOpenClawRuntimeAdapter: () => openClawRuntimeAdapter,
+    getCoworkSessionTitle: (sessionId: string) =>
+      getCoworkStore().getSession(sessionId, 0)?.title ?? null,
   });
 
   registerNimQrLoginHandlers({
@@ -8360,6 +9104,59 @@ if (!gotTheLock) {
     };
   });
 
+  // xAI (Grok) OAuth handlers — see src/main/libs/xaiAuth.ts.
+  // Browser PKCE against https://auth.x.ai with a loopback callback on
+  // http://127.0.0.1:56121/callback; when that fixed port is taken (e.g. an
+  // OpenClaw CLI login), falls back to the device-code flow and streams the
+  // user code to the renderer via 'xai-oauth:device-code'. The credential is
+  // written into the OpenClaw auth-profiles store, where the runtime's xai
+  // plugin injects and auto-refreshes the Bearer token.
+  ipcMain.handle('xai-oauth:start', async (event) => {
+    const xaiAuth = await import('./libs/xaiAuth');
+    try {
+      let result;
+      try {
+        result = await xaiAuth.startXaiOAuthLogin();
+      } catch (err) {
+        if (!(err instanceof xaiAuth.XaiCallbackPortBusyError)) throw err;
+        result = await xaiAuth.startXaiDeviceCodeLogin((info) => {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send('xai-oauth:device-code', info);
+          }
+        });
+      }
+      // The xai provider entry is only emitted into openclaw.json once a
+      // credential exists — sync now so the change takes effect immediately.
+      void syncOpenClawConfig({ reason: 'xai-oauth-login' });
+      return {
+        success: true as const,
+        email: result.email ?? null,
+        flow: result.flow,
+      };
+    } catch (error) {
+      return {
+        success: false as const,
+        error: error instanceof Error ? error.message : 'xAI login failed',
+      };
+    }
+  });
+
+  ipcMain.handle('xai-oauth:cancel', async () => {
+    const { cancelXaiLogin } = await import('./libs/xaiAuth');
+    cancelXaiLogin();
+  });
+
+  ipcMain.handle('xai-oauth:logout', async () => {
+    const { logoutXai } = await import('./libs/xaiAuth');
+    await logoutXai();
+    void syncOpenClawConfig({ reason: 'xai-oauth-logout' });
+  });
+
+  ipcMain.handle('xai-oauth:status', async () => {
+    const { getXaiOAuthStatus } = await import('./libs/xaiAuth');
+    return getXaiOAuthStatus();
+  });
+
   ipcMain.handle('generate-session-title', async (_event, userInput: string | null) => {
     return generateSessionTitle(userInput, t('coworkDefaultSessionTitle'));
   });
@@ -8730,7 +9527,7 @@ if (!gotTheLock) {
   };
 
   // Shell handlers - 打开文件/文件夹
-  ipcMain.handle('shell:openPath', async (_event, filePath: string) => {
+  ipcMain.handle(ShellIpc.OpenPath, async (_event, filePath: string) => {
     try {
       const normalizedPath = normalizeWindowsShellPath(filePath);
       const result = await shell.openPath(normalizedPath);
@@ -8748,7 +9545,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('shell:showItemInFolder', async (_event, filePath: string) => {
+  ipcMain.handle(ShellIpc.ShowItemInFolder, async (_event, filePath: string) => {
     try {
       const normalizedPath = normalizeWindowsShellPath(filePath);
       try {
@@ -8773,7 +9570,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('shell:openExternal', async (_event, url: string) => {
+  ipcMain.handle(ShellIpc.OpenExternal, async (_event, url: string) => {
     try {
       await shell.openExternal(url);
       return { success: true };
@@ -8782,7 +9579,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('shell:openHtmlInBrowser', async (_event, htmlContent: string) => {
+  ipcMain.handle(ShellIpc.OpenHtmlInBrowser, async (_event, htmlContent: string) => {
     try {
       const tmpDir = path.join(os.tmpdir(), 'lobsterai-preview');
       fs.mkdirSync(tmpDir, { recursive: true });
@@ -8795,7 +9592,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('shell:getAppsForFile', async (_event, filePath: string) => {
+  ipcMain.handle(ShellIpc.GetAppsForFile, async (_event, filePath: string) => {
     try {
       const { getAppsForFile } = await import('./shellApps');
       const apps = await getAppsForFile(filePath);
@@ -8809,7 +9606,22 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('shell:openPathWithApp', async (_event, filePath: string, appPath: string) => {
+  ipcMain.handle(ShellIpc.GetBrowserApps, async (_event, input: unknown) => {
+    try {
+      const options = sanitizeShellGetBrowserAppsInput(input);
+      const { getBrowserApps } = await import('./shellApps');
+      const apps = await getBrowserApps(options);
+      return { success: true, apps };
+    } catch (error) {
+      return {
+        success: false,
+        apps: [],
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  });
+
+  ipcMain.handle(ShellIpc.OpenPathWithApp, async (_event, filePath: string, appPath: string) => {
     const normalizedPath = normalizeWindowsShellPath(filePath);
     try {
       const { openFileWithApp } = await import('./shellApps');
@@ -8821,6 +9633,22 @@ if (!gotTheLock) {
         normalizedPath,
         error instanceof Error ? error.message : 'Unknown error',
       );
+    }
+  });
+
+  ipcMain.handle(ShellIpc.OpenUrlWithApp, async (_event, url: string, appPath: string) => {
+    try {
+      const { openUrlWithApp } = await import('./shellApps');
+      await openUrlWithApp(url, appPath);
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.warn('[Shell] failed to open URL with selected app:', url, appPath, error);
+      return {
+        success: false,
+        error: message,
+        reason: ShellOpenFailureReason.OpenFailed,
+      };
     }
   });
 
@@ -9022,8 +9850,9 @@ if (!gotTheLock) {
         body?: string;
       },
     ) => {
+      const sanitizedUrl = sanitizeUrlForLog(options.url);
       console.log(
-        `[api:fetch] ${options.method} ${options.url}, headers: ${serializeForLog(options.headers)}, body: ${options.body}`,
+        `[api:fetch] ${options.method} ${sanitizedUrl}, headers: ${serializeForLog(options.headers)}, body: ${options.body}`,
       );
 
       const doFetch = async (headers: Record<string, string>) => {
@@ -9056,7 +9885,7 @@ if (!gotTheLock) {
       try {
         let result = await doFetch(options.headers);
         console.log(
-          `[api:fetch] ${options.method} ${options.url} -> ${result.status} ${result.statusText}`,
+          `[api:fetch] ${options.method} ${sanitizedUrl} -> ${result.status} ${result.statusText}`,
           typeof result.data === 'object' ? JSON.stringify(result.data) : result.data,
         );
 
@@ -9078,7 +9907,7 @@ if (!gotTheLock) {
         return result;
       } catch (error) {
         console.error(
-          `[api:fetch] ${options.method} ${options.url} -> ERROR:`,
+          `[api:fetch] ${options.method} ${sanitizedUrl} -> ERROR:`,
           error instanceof Error ? error.message : error,
         );
         return {
@@ -9298,10 +10127,10 @@ if (!gotTheLock) {
           ? `script-src 'self' 'unsafe-inline' http://localhost:${devPort} ws://localhost:${devPort}`
           : "script-src 'self'",
         "style-src 'self' 'unsafe-inline' https:",
-        `img-src 'self' data: https: http: ${ArtifactPreviewProtocol.LocalFile}:`,
+        `img-src 'self' data: blob: https: http: ${ArtifactPreviewProtocol.LocalFile}:`,
         // 允许连接到所有域名，不做限制
         'connect-src *',
-        "font-src 'self' data: https:",
+        "font-src 'self' data: blob: https:",
         `media-src 'self' data: blob: file: https: http: ${ArtifactPreviewProtocol.LocalFile}:`,
         "worker-src 'self' blob:",
         "frame-src 'self' file: http://127.0.0.1:*",
@@ -9468,12 +10297,13 @@ if (!gotTheLock) {
     mainWindow.on('close', (e) => {
       windowStatePersist.cleanup();
       windowStatePersist.persist();
+      console.log(`[Main] main window close event, isQuitting=${isQuitting}, isDev=${isDev}, platform=${process.platform}, fullscreen=${mainWindow?.isFullScreen() ?? false}, visible=${mainWindow?.isVisible() ?? false}`);
 
       // In development, close should actually quit so `npm run electron:dev`
       // restarts from a clean process. In production we keep tray behavior.
       if (mainWindow && !isQuitting && !isDev) {
         e.preventDefault();
-        mainWindow.hide();
+        hideMainWindowForClose(mainWindow);
       }
     });
 
@@ -10333,11 +11163,22 @@ if (!gotTheLock) {
       }
     });
 
-    // 首次启动时默认开启开机自启动（先写标记再设置，避免崩溃后重复设置）
+    // 首次启动时默认开启开机自启动，并以系统登录项的实际状态回写本地标记。
     if (!getStore().get('auto_launch_initialized')) {
       getStore().set('auto_launch_initialized', true);
-      getStore().set('auto_launch_enabled', true);
-      setAutoLaunchEnabled(true);
+      try {
+        setAutoLaunchEnabled(true);
+        const status = getAutoLaunchStatus();
+        getStore().set('auto_launch_enabled', status.enabled);
+        if (!status.enabled) {
+          console.warn(
+            `[AutoLaunch] default enable did not take effect; ${formatAutoLaunchStatusForLog(status)}`,
+          );
+        }
+      } catch (error) {
+        getStore().set('auto_launch_enabled', false);
+        console.error('[AutoLaunch] default enable failed:', error);
+      }
     }
 
     // Restore prevent-sleep setting

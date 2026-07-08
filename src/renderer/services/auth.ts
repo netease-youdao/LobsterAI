@@ -126,6 +126,7 @@ class AuthService {
     // Listen for quota changes (e.g. after cowork session using server model)
     this.unsubQuotaChanged = window.electron.auth.onQuotaChanged(() => {
       this.refreshQuota();
+      void this.fetchProfileSummary();
       this.loadServerModels();
     });
 
@@ -136,6 +137,7 @@ class AuthService {
         if (now - this.lastRefreshTime > 30_000) {
           this.lastRefreshTime = now;
           this.refreshQuota();
+          void this.fetchProfileSummary();
           this.loadServerModels();
         }
       }
@@ -187,6 +189,7 @@ class AuthService {
       if (result.success) {
         store.dispatch(setLoggedIn({ user: result.user, quota: result.quota }));
         await this.loadServerModels();
+        void this.fetchProfileSummary();
         this.refreshQuota();
         return true;
       }
@@ -207,6 +210,7 @@ class AuthService {
       if (result.success && result.user) {
         store.dispatch(setLoggedIn({ user: result.user, quota: result.quota }));
         await this.loadServerModels();
+        void this.fetchProfileSummary();
         return { isLoggedIn: true, user: result.user, quota: result.quota ?? null };
       }
     } catch {
@@ -292,7 +296,7 @@ class AuthService {
     try {
       const modelsResult = await window.electron.auth.getModels();
       if (modelsResult.success && modelsResult.models) {
-        const serverModels: Model[] = modelsResult.models.map((m: { modelId: string; modelName: string; provider: string; apiFormat: string; supportsImage?: boolean; supportsThinking?: boolean; costMultiplier?: number; description?: string; accessible?: boolean; restrictionHint?: string }) => ({
+        const serverModels: Model[] = modelsResult.models.map((m: { modelId: string; modelName: string; provider: string; apiFormat: string; supportsImage?: boolean; supportsThinking?: boolean; contextWindow?: number; explicitContextCache?: boolean; costMultiplier?: number; description?: string; accessible?: boolean; restrictionHint?: string }) => ({
           id: m.modelId,
           name: m.modelName,
           provider: m.provider,
@@ -301,6 +305,8 @@ class AuthService {
           serverApiFormat: m.apiFormat,
           supportsImage: m.supportsImage ?? false,
           supportsThinking: m.supportsThinking ?? false,
+          contextWindow: m.contextWindow,
+          explicitContextCache: m.explicitContextCache ?? false,
           description: m.description,
           costMultiplier: m.costMultiplier,
           accessible: m.accessible ?? true,

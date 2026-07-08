@@ -6,9 +6,6 @@ import {
   type AsrRealtimeSessionData,
   type AsrRealtimeSessionRequest,
   type AsrRealtimeSessionResult,
-  type AsrRecognizeData,
-  type AsrRecognizeRequest,
-  type AsrRecognizeResult,
 } from '../../../shared/asr/constants';
 
 type AuthTokens = {
@@ -50,65 +47,6 @@ export function registerAsrIpcHandlers({
   fetchWithAuth,
   getServerApiBaseUrl,
 }: AsrHandlerDeps): void {
-  ipcMain.handle(
-    AsrIpcChannel.Recognize,
-    async (_event, options?: AsrRecognizeRequest): Promise<AsrRecognizeResult> => {
-      try {
-        const tokens = getAuthTokens();
-        if (!tokens) {
-          console.warn('[ASR] recognition request was rejected because no auth tokens are available');
-          return { success: false, code: AsrApiCode.Unauthorized, error: 'Unauthorized' };
-        }
-        const audioBase64 = typeof options?.audioBase64 === 'string' ? options.audioBase64.trim() : '';
-        if (!audioBase64) {
-          return { success: false, code: AsrApiCode.AudioInvalid, error: 'Missing audio data' };
-        }
-
-        const audioBuffer = Buffer.from(audioBase64, 'base64');
-        console.log(`[ASR] submitting voice input audio (${audioBuffer.length} bytes)`);
-        const form = new FormData();
-        form.append(
-          'file',
-          new Blob([new Uint8Array(audioBuffer)], { type: 'audio/wav' }),
-          options?.fileName || 'voice-input.wav',
-        );
-        if (options?.langType) {
-          form.append('langType', options.langType);
-        }
-
-        const serverBaseUrl = getServerApiBaseUrl();
-        const requestUrl = `${serverBaseUrl}/api/asr/recognize`;
-        console.log(`[ASR] recognition request started for ${requestUrl} with ${audioBuffer.length} bytes`);
-        const resp = await fetchWithAuth(requestUrl, {
-          method: 'POST',
-          body: form,
-        });
-        const body = await readAsrResponseBody(resp);
-
-        if (resp.ok && body?.code === 0 && body.data) {
-          const data = body.data as AsrRecognizeData;
-          console.log(`[ASR] recognition request succeeded; requestId=${data.requestId}, textLength=${data.text.length}, durationSeconds=${data.durationSeconds}`);
-          return { success: true, data };
-        }
-
-        console.warn(`[ASR] recognition request to ${requestUrl} was rejected with code ${body?.code ?? resp.status}, HTTP status ${resp.status}, and message: ${getAsrResponseMessage(body, resp)}`);
-
-        return {
-          success: false,
-          code: body?.code ?? resp.status,
-          error: body?.message || resp.statusText || 'ASR request failed',
-          message: body?.message,
-        };
-      } catch (error) {
-        console.warn('[ASR] recognition request failed:', error);
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : 'ASR request failed',
-        };
-      }
-    },
-  );
-
   ipcMain.handle(
     AsrIpcChannel.CreateRealtimeSession,
     async (_event, options?: AsrRealtimeSessionRequest): Promise<AsrRealtimeSessionResult> => {

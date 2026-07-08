@@ -58,3 +58,4 @@ export const getPortalPricingUrl = (keyfrom?: PortalPricingKeyfrom) => (
 export const getPortalProfileUrl = () => `${getPortalBase()}/profile`;
 export const getPortalRechargeUrl = () => `${getPortalBase()}/`;
 export const getPortalInvitationUrl = () => `${getPortalBase()}/invitation`;
+export const getPortalCreditsResetActivityUrl = () => `${getPortalBase()}/profile?activity=credits_reset`;

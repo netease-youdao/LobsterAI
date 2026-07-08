@@ -330,6 +330,12 @@ const getModelDiscountLabel = (model: MediaModel): string | null => {
   return getClientEstimateConfig(model)?.discountLabel ?? null;
 };
 
+const normalizeModelDescription = (description?: string): string | undefined => {
+  if (!description) return undefined;
+  const normalized = description.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').trim();
+  return normalized || undefined;
+};
+
 const getTokenPricingRows = (model: MediaModel): Array<{ label: string; creditsPerMillion: number }> => {
   const pricing = getPricingConfig(model);
   if (pricing?.billingUnit !== 'per_token' || !pricing.usagePricing) return [];
@@ -605,7 +611,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     const itemRect = event.currentTarget.getBoundingClientRect();
     hoverTimerRef.current = setTimeout(() => {
-      const desc = model.description || model.capabilities || model.pricingDescription;
+      const desc = normalizeModelDescription(model.description || model.capabilities || model.pricingDescription);
       const hasPricingDetails = Boolean(getModelPriceLabel(model)) || getTokenPricingRows(model).length > 0;
       if (!desc && !hasPricingDetails) {
         setHoveredModel(null);
@@ -656,7 +662,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
 
   const renderHoverCard = () => {
     if (!hoveredModel) return null;
-    const desc = hoveredModel.description || hoveredModel.capabilities || hoveredModel.pricingDescription;
+    const desc = normalizeModelDescription(hoveredModel.description || hoveredModel.capabilities || hoveredModel.pricingDescription);
     const unitLabel = hoveredModel.unitLabel || (hoveredModel.mediaType === 'image' ? '张' : '个');
     const pricing = getPricingConfig(hoveredModel);
     const discountLabel = getModelDiscountLabel(hoveredModel);
@@ -709,7 +715,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
           )}
         </div>
         {desc && (
-          <div className="mt-1 text-[11px] text-secondary leading-4">
+          <div className="mt-1 whitespace-pre-line text-[11px] text-secondary leading-4">
             {desc}
           </div>
         )}

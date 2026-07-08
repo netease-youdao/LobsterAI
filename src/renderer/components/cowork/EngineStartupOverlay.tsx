@@ -1,5 +1,5 @@
 import { LightBulbIcon } from '@heroicons/react/24/outline';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
@@ -16,6 +16,29 @@ const TIP_KEYS = [
 
 const TIP_ROTATE_MS = 5000;
 const SLOW_HINT_AFTER_MS = 15000;
+
+// sessionStorage key written by index.html's static splash so the overlay
+// continues from the same tip instead of jumping to a different one.
+const SPLASH_TIP_INDEX_STORAGE_KEY = 'lobster-splash-tip-index';
+
+const readInitialTipIndex = (): number => {
+  try {
+    const raw = sessionStorage.getItem(SPLASH_TIP_INDEX_STORAGE_KEY);
+    const parsed = raw === null ? Number.NaN : Number(raw);
+    if (Number.isInteger(parsed) && parsed >= 0 && parsed < TIP_KEYS.length) {
+      return parsed;
+    }
+  } catch { /* storage unavailable */ }
+  // Default to the first tip so every launch reads in order
+  return 0;
+};
+
+// Module-level so tip position and visibility survive the remount when App
+// switches from the bootstrap tree to the main tree.
+let persistedTipIndex: number | null = null;
+// index.html's static splash shows this same page before React mounts, so the
+// overlay must not fade in on app start — only when it appears mid-session.
+let overlayWasVisible = true;
 
 const resolveEngineStatusText = (status: OpenClawEngineStatus): string => {
   switch (status.phase) {
@@ -35,21 +58,42 @@ const resolveEngineStatusText = (status: OpenClawEngineStatus): string => {
   }
 };
 
+interface EngineStartupOverlayProps {
+  /**
+   * Keep the overlay visible while the renderer is still initializing, before
+   * engine status gating applies. Lets App render it from the very first
+   * frame so startup is one continuous screen.
+   */
+  bootstrapping?: boolean;
+}
+
 /**
  * Global overlay shown when the OpenClaw gateway is starting up.
  * Renders on top of all views (cowork, skills, scheduled tasks, mcp).
  * Styled after WelcomeDialog so first-run flows feel continuous, with
  * rotating feature tips to keep the (10s-2min) wait from feeling idle.
+ * index.html contains a static pre-React replica of this page; keep the
+ * layout in sync so the handoff between the two is invisible.
  */
-const EngineStartupOverlay: React.FC = () => {
-  const [status, setStatus] = useState<OpenClawEngineStatus | null>(null);
-  const [tipIndex, setTipIndex] = useState(() => Math.floor(Math.random() * TIP_KEYS.length));
+const EngineStartupOverlay: React.FC<EngineStartupOverlayProps> = ({ bootstrapping = false }) => {
+  const [status, setStatus] = useState<OpenClawEngineStatus | null>(
+    () => coworkService.getOpenClawEngineStatusSnapshot()
+  );
+  const [tipIndex, setTipIndex] = useState(() => {
+    if (persistedTipIndex === null) {
+      persistedTipIndex = readInitialTipIndex();
+    }
+    return persistedTipIndex;
+  });
   const [showSlowHint, setShowSlowHint] = useState(false);
+  const hasRotatedTipRef = useRef(false);
 
   useEffect(() => {
-    coworkService.getOpenClawEngineStatus().then((s) => {
-      if (s) setStatus(s);
-    });
+    coworkService.getOpenClawEngineStatus()
+      .then((s) => {
+        if (s) setStatus(s);
+      })
+      .catch(() => { /* keep last known status */ });
 
     const unsubscribe = coworkService.onOpenClawEngineStatus((s) => {
       setStatus(s);
@@ -59,36 +103,69 @@ const EngineStartupOverlay: React.FC = () => {
   }, []);
 
   const isStarting = status?.phase === 'starting';
+  const visible = bootstrapping || isStarting;
+
+  // Fade in only when the overlay appears mid-session (e.g. engine restart),
+  // not on app start where the static splash / bootstrap tree already showed it.
+  const wasVisibleRef = useRef(overlayWasVisible);
+  const animateIn = visible && !wasVisibleRef.current;
+  wasVisibleRef.current = visible;
+  overlayWasVisible = visible;
 
   useEffect(() => {
-    if (!isStarting) {
+    if (!visible) {
       setShowSlowHint(false);
       return;
     }
 
-    const tipTimer = setInterval(() => {
-      setTipIndex((prev) => (prev + 1) % TIP_KEYS.length);
-    }, TIP_ROTATE_MS);
     const slowHintTimer = setTimeout(() => {
       setShowSlowHint(true);
     }, SLOW_HINT_AFTER_MS);
 
     return () => {
-      clearInterval(tipTimer);
       clearTimeout(slowHintTimer);
     };
-  }, [isStarting]);
+  }, [visible]);
 
-  if (!status || !isStarting) {
+  // Auto-rotate tips; keyed on tipIndex so a manual dot click resets the timer
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+
+    const tipTimer = setInterval(() => {
+      hasRotatedTipRef.current = true;
+      setTipIndex((prev) => {
+        const next = (prev + 1) % TIP_KEYS.length;
+        persistedTipIndex = next;
+        return next;
+      });
+    }, TIP_ROTATE_MS);
+
+    return () => {
+      clearInterval(tipTimer);
+    };
+  }, [visible, tipIndex]);
+
+  const handleSelectTip = (idx: number) => {
+    if (idx === tipIndex) {
+      return;
+    }
+    hasRotatedTipRef.current = true;
+    persistedTipIndex = idx;
+    setTipIndex(idx);
+  };
+
+  if (!visible) {
     return null;
   }
 
-  const progressPercent = typeof status.progressPercent === 'number'
+  const progressPercent = typeof status?.progressPercent === 'number'
     ? Math.max(0, Math.min(100, Math.round(status.progressPercent)))
     : null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-surface animate-fade-in">
+    <div className={`fixed inset-0 z-[100] flex items-center justify-center bg-surface ${animateIn ? 'animate-fade-in' : ''}`}>
       {/* brand gradient, same as WelcomeDialog */}
       <div
         className="absolute inset-0"
@@ -114,7 +191,7 @@ const EngineStartupOverlay: React.FC = () => {
           {i18nService.t('engineStartingTitle')}
         </h1>
         <p className="text-sm text-secondary mb-8 text-center">
-          {resolveEngineStatusText(status)}
+          {status ? resolveEngineStatusText(status) : i18nService.t('loading')}
         </p>
 
         {/* progress bar with shimmer */}
@@ -149,7 +226,7 @@ const EngineStartupOverlay: React.FC = () => {
 
         {/* rotating feature tips */}
         <div className="mt-10 w-full rounded-xl border border-border-subtle bg-surface-raised/60 px-4 py-3">
-          <div key={tipIndex} className="animate-fade-in-up">
+          <div key={tipIndex} className={hasRotatedTipRef.current ? 'animate-fade-in-up' : ''}>
             <div className="flex items-center gap-1.5 text-xs font-medium text-primary mb-1">
               <LightBulbIcon className="h-3.5 w-3.5" />
               {i18nService.t('engineStartingTipLabel')}
@@ -158,12 +235,15 @@ const EngineStartupOverlay: React.FC = () => {
               {i18nService.t(TIP_KEYS[tipIndex])}
             </p>
           </div>
-          <div className="mt-2 flex justify-center gap-1.5" aria-hidden="true">
+          <div className="mt-2 flex justify-center gap-1.5">
             {TIP_KEYS.map((key, idx) => (
-              <span
+              <button
                 key={key}
-                className={`h-1 rounded-full transition-all duration-300 ${
-                  idx === tipIndex ? 'w-3 bg-primary' : 'w-1 bg-primary/25'
+                type="button"
+                onClick={() => handleSelectTip(idx)}
+                aria-label={`${i18nService.t('engineStartingTipLabel')} ${idx + 1}`}
+                className={`relative h-1 rounded-full transition-all duration-300 cursor-pointer after:content-[''] after:absolute after:-inset-y-1.5 after:-inset-x-0.5 ${
+                  idx === tipIndex ? 'w-3 bg-primary' : 'w-1 bg-primary/25 hover:bg-primary/50'
                 }`}
               />
             ))}

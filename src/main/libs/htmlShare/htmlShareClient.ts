@@ -3,6 +3,7 @@ import fs from 'fs';
 import {
   HtmlShareAccessMode,
   type HtmlShareConfigurableStatus,
+  type HtmlShareDisabledSource,
   HtmlShareSourceType,
   HtmlShareStatus,
   type HtmlShareStatus as HtmlShareStatusValue,
@@ -33,6 +34,8 @@ export interface HtmlShareCreateResult {
   contentUpdatedAt?: string;
   disabledAt?: string | null;
   disabledReason?: string | null;
+  disabledSource?: HtmlShareDisabledSource | null;
+  restoredByUpdate?: boolean;
   error?: string;
   code?: number;
 }
@@ -61,6 +64,8 @@ interface HtmlShareApiResponse {
     contentUpdatedAt?: string;
     disabledAt?: string | null;
     disabledReason?: string | null;
+    disabledSource?: HtmlShareDisabledSource | null;
+    restoredByUpdate?: boolean;
   };
 }
 
@@ -113,6 +118,8 @@ function buildHtmlShareResult(
     contentUpdatedAt: payload.data.contentUpdatedAt,
     disabledAt: payload.data.disabledAt,
     disabledReason: payload.data.disabledReason,
+    disabledSource: payload.data.disabledSource,
+    restoredByUpdate: payload.data.restoredByUpdate,
   };
 }
 

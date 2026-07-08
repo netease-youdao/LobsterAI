@@ -61,6 +61,14 @@ const collectThinkingChunks = (value: unknown): string[] => {
       chunks.push(thinking);
     }
   }
+  for (const key of ['reasoning_content', 'reasoning', 'reasoning_text'] as const) {
+    if (typeof value[key] === 'string') {
+      const thinking = value[key].trim();
+      if (thinking) {
+        chunks.push(thinking);
+      }
+    }
+  }
   if (value.content !== undefined) {
     chunks.push(...collectThinkingChunks(value.content));
   }

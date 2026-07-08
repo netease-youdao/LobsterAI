@@ -9,14 +9,14 @@ import {
   resolveInitialAppWindowState,
 } from './windowState';
 
-test('resolveInitialAppWindowState uses the image-like default size on large displays', () => {
+test('resolveInitialAppWindowState uses the centered default size on large displays', () => {
   const state = resolveInitialAppWindowState(undefined, [
     { x: 0, y: 0, width: 2560, height: 1440 },
   ]);
 
   expect(state).toEqual({
-    x: 768,
-    y: 380,
+    x: 640,
+    y: 320,
     width: DEFAULT_APP_WINDOW_WIDTH,
     height: DEFAULT_APP_WINDOW_HEIGHT,
     isMaximized: false,
@@ -28,10 +28,10 @@ test('resolveInitialAppWindowState scales the default size to fit smaller displa
     { x: 0, y: 0, width: 1000, height: 650 },
   ]);
 
-  expect(state.width).toBe(907);
-  expect(state.height).toBe(602);
-  expect(state.x).toBe(47);
-  expect(state.y).toBe(24);
+  expect(state.width).toBe(952);
+  expect(state.height).toBe(600);
+  expect(state.x).toBe(24);
+  expect(state.y).toBe(25);
 });
 
 test('resolveInitialAppWindowState restores stored bounds on their matching display', () => {

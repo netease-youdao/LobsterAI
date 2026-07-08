@@ -1,0 +1,233 @@
+diff --git a/src/agents/openai-transport-stream.ts b/src/agents/openai-transport-stream.ts
+index b8546c1673..4c58c1fd00 100644
+--- a/src/agents/openai-transport-stream.ts
++++ b/src/agents/openai-transport-stream.ts
+@@ -98,11 +98,193 @@ const OPENAI_COMPAT_EVENT_STREAM_CONTENT_TYPE = "text/event-stream";
+ const OPENAI_COMPAT_EMPTY_SSE_DATA_PREFIX = "data:";
+ const OPENAI_COMPAT_EMPTY_SSE_DATA_FRAME_LIMIT = 120;
+ const OPENAI_COMPAT_SSE_FRAME_BOUNDARIES = ["\r\n\r\n", "\n\n", "\r\r"] as const;
+-const OPENAI_COMPAT_EMPTY_SSE_ERROR =
+-  "Provider stream emitted too many empty SSE data frames.";
++const OPENAI_COMPAT_EMPTY_SSE_ERROR = "Provider stream emitted too many empty SSE data frames.";
++const DEEPSEEK_CACHE_PROBE_LOG_PREFIX = "[DeepSeekCacheProbe]";
++const DEEPSEEK_CACHE_PROBE_MAX_SESSIONS = 100;
+ const log = createSubsystemLogger("openai-transport");
+ const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
+ 
++type DeepSeekCacheProbeSnapshot = {
++  id: string;
++  envelopeHash: string;
++  messageParts: string[];
++  payloadHash: string;
++  toolParts: string[];
++  toolsHash: string;
++  usage?: {
++    cacheRead: number;
++    input: number;
++  };
++};
++
++type DeepSeekCacheProbeHandle = {
++  snapshot: DeepSeekCacheProbeSnapshot;
++};
++
++const deepSeekCacheProbeSnapshots = new Map<string, DeepSeekCacheProbeSnapshot>();
++
++function hashDeepSeekCacheProbeValue(value: string): string {
++  return createHash("sha256").update(value).digest("hex").slice(0, 16);
++}
++
++function serializeDeepSeekCacheProbeValue(value: unknown): string {
++  try {
++    return JSON.stringify(value) ?? "undefined";
++  } catch {
++    return "<unserializable>";
++  }
++}
++
++function isDeepSeekV4CacheProbeModel(model: Model): boolean {
++  const identity = `${model.provider}/${model.id}`.toLowerCase();
++  return /(?:^|[/_.-])deepseek-v4(?:$|[/_.-])/.test(identity);
++}
++
++function buildDeepSeekCacheProbeMessagePart(message: unknown, index: number): string {
++  const serialized = serializeDeepSeekCacheProbeValue(message);
++  const rawRole =
++    message && typeof message === "object" && !Array.isArray(message)
++      ? (message as { role?: unknown }).role
++      : undefined;
++  const role = typeof rawRole === "string" ? rawRole : "unknown";
++  return `${index}:${role}:${Buffer.byteLength(serialized, "utf8")}:${hashDeepSeekCacheProbeValue(serialized)}`;
++}
++
++function buildDeepSeekCacheProbeToolPart(tool: unknown, index: number): string {
++  const serialized = serializeDeepSeekCacheProbeValue(tool);
++  const functionValue =
++    tool && typeof tool === "object" && !Array.isArray(tool)
++      ? (tool as { function?: unknown }).function
++      : undefined;
++  const rawName =
++    functionValue && typeof functionValue === "object" && !Array.isArray(functionValue)
++      ? (functionValue as { name?: unknown }).name
++      : undefined;
++  const name = typeof rawName === "string" ? rawName : "unknown";
++  return `${index}:${name}:${Buffer.byteLength(serialized, "utf8")}:${hashDeepSeekCacheProbeValue(serialized)}`;
++}
++
++function findCommonDeepSeekCacheProbePartCount(
++  previous: readonly string[],
++  current: readonly string[],
++): number {
++  const limit = Math.min(previous.length, current.length);
++  let index = 0;
++  while (index < limit && previous[index] === current[index]) {
++    index += 1;
++  }
++  return index;
++}
++
++function rememberDeepSeekCacheProbeSnapshot(
++  key: string,
++  snapshot: DeepSeekCacheProbeSnapshot,
++): void {
++  deepSeekCacheProbeSnapshots.set(key, snapshot);
++  if (deepSeekCacheProbeSnapshots.size <= DEEPSEEK_CACHE_PROBE_MAX_SESSIONS) {
++    return;
++  }
++  const oldestKey = deepSeekCacheProbeSnapshots.keys().next().value;
++  if (typeof oldestKey === "string") {
++    deepSeekCacheProbeSnapshots.delete(oldestKey);
++  }
++}
++
++function logDeepSeekCacheRequestProbe(params: {
++  model: Model;
++  options: BaseStreamOptions | undefined;
++  payload: unknown;
++}): DeepSeekCacheProbeHandle | undefined {
++  if (!isDeepSeekV4CacheProbeModel(params.model)) {
++    return undefined;
++  }
++
++  const payloadRecord =
++    params.payload && typeof params.payload === "object" && !Array.isArray(params.payload)
++      ? (params.payload as Record<string, unknown>)
++      : {};
++  const messages = Array.isArray(payloadRecord.messages) ? payloadRecord.messages : [];
++  const tools = Array.isArray(payloadRecord.tools) ? payloadRecord.tools : [];
++  const envelope = { ...payloadRecord };
++  delete envelope.messages;
++  delete envelope.tools;
++  const messageParts = messages.map((message, index) =>
++    buildDeepSeekCacheProbeMessagePart(message, index),
++  );
++  const toolParts = tools.map((tool, index) => buildDeepSeekCacheProbeToolPart(tool, index));
++  const messageManifest = messageParts.join(",");
++  const sessionHash = hashDeepSeekCacheProbeValue(params.options?.sessionId ?? "no-session");
++  const key = `${params.model.provider}/${params.model.id}/${sessionHash}`;
++  const previous = deepSeekCacheProbeSnapshots.get(key);
++  const commonMessages = previous
++    ? findCommonDeepSeekCacheProbePartCount(previous.messageParts, messageParts)
++    : 0;
++  const firstDiff = previous && commonMessages < previous.messageParts.length ? commonMessages : -1;
++  const commonTools = previous
++    ? findCommonDeepSeekCacheProbePartCount(previous.toolParts, toolParts)
++    : 0;
++  const firstToolDiff = previous && commonTools < previous.toolParts.length ? commonTools : -1;
++  const snapshot: DeepSeekCacheProbeSnapshot = {
++    id: randomUUID().slice(0, 8),
++    envelopeHash: hashDeepSeekCacheProbeValue(serializeDeepSeekCacheProbeValue(envelope)),
++    messageParts,
++    payloadHash: hashDeepSeekCacheProbeValue(serializeDeepSeekCacheProbeValue(payloadRecord)),
++    toolParts,
++    toolsHash: hashDeepSeekCacheProbeValue(serializeDeepSeekCacheProbeValue(tools)),
++  };
++
++  log.warn(
++    `${DEEPSEEK_CACHE_PROBE_LOG_PREFIX} request id=${snapshot.id} session=${sessionHash} ` +
++      `model=${params.model.provider}/${params.model.id} messages=${messages.length} ` +
++      `tools=${tools.length} payloadHash=${snapshot.payloadHash} ` +
++      `envelopeHash=${snapshot.envelopeHash} toolsHash=${snapshot.toolsHash} ` +
++      `previous=${previous?.id ?? "none"} previousMessages=${previous?.messageParts.length ?? 0} ` +
++      `commonMessages=${commonMessages} firstDiff=${firstDiff} ` +
++      `previousTools=${previous?.toolParts.length ?? 0} commonTools=${commonTools} ` +
++      `firstToolDiff=${firstToolDiff} ` +
++      `previousEnvelopeHash=${previous?.envelopeHash ?? "none"} ` +
++      `previousToolsHash=${previous?.toolsHash ?? "none"} ` +
++      `previousInput=${previous?.usage?.input ?? -1} previousCacheRead=${previous?.usage?.cacheRead ?? -1}`,
++  );
++  log.warn(`${DEEPSEEK_CACHE_PROBE_LOG_PREFIX} messages id=${snapshot.id} ${messageManifest}`);
++  if (previous && firstDiff >= 0) {
++    log.warn(
++      `${DEEPSEEK_CACHE_PROBE_LOG_PREFIX} diff id=${snapshot.id} index=${firstDiff} ` +
++        `previous=${previous.messageParts[firstDiff] ?? "missing"} ` +
++        `current=${messageParts[firstDiff] ?? "missing"}`,
++    );
++  }
++  if (previous && firstToolDiff >= 0) {
++    log.warn(
++      `${DEEPSEEK_CACHE_PROBE_LOG_PREFIX} toolDiff id=${snapshot.id} index=${firstToolDiff} ` +
++        `previous=${previous.toolParts[firstToolDiff] ?? "missing"} ` +
++        `current=${toolParts[firstToolDiff] ?? "missing"}`,
++    );
++  }
++
++  rememberDeepSeekCacheProbeSnapshot(key, snapshot);
++  return { snapshot };
++}
++
++function logDeepSeekCacheProbeResult(
++  handle: DeepSeekCacheProbeHandle | undefined,
++  output: MutableAssistantOutput,
++): void {
++  if (!handle) {
++    return;
++  }
++  const input = output.usage.input ?? 0;
++  const cacheRead = output.usage.cacheRead ?? 0;
++  const promptTokens = input + cacheRead;
++  const hitPercent = promptTokens > 0 ? ((cacheRead / promptTokens) * 100).toFixed(1) : "0.0";
++  handle.snapshot.usage = { input, cacheRead };
++  log.warn(
++    `${DEEPSEEK_CACHE_PROBE_LOG_PREFIX} result id=${handle.snapshot.id} ` +
++      `stopReason=${output.stopReason} input=${input} cacheRead=${cacheRead} ` +
++      `promptTokens=${promptTokens} hitPercent=${hitPercent}`,
++  );
++}
++
+ type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
+ type OpenAIResponsesReasoningReplayMetadata = {
+   v: 1;
+@@ -2829,6 +3011,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
+     const eventStream = createAssistantMessageEventStream();
+     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
+     void (async () => {
++      let cacheProbe: DeepSeekCacheProbeHandle | undefined;
+       const output: MutableAssistantOutput = {
+         role: "assistant" as const,
+         content: [],
+@@ -2869,6 +3052,11 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
+         if (compat.requiresNonEmptyUserOrAssistantMessage) {
+           assertOpenAICompletionsPayloadHasConversationTurn(params, model);
+         }
++        cacheProbe = logDeepSeekCacheRequestProbe({
++          model,
++          options: options as OpenAICompletionsOptions | undefined,
++          payload: params,
++        });
+         const emitReasoning = shouldEmitOpenAICompletionsReasoning(
+           model as OpenAIModeModel,
+           options as OpenAICompletionsOptions | undefined,
+@@ -2885,10 +3073,12 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
+         if (options?.signal?.aborted) {
+           throw new Error("Request was aborted");
+         }
++        logDeepSeekCacheProbeResult(cacheProbe, output);
+         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
+         stream.end();
+       } catch (error) {
+         assignTransportErrorDetails(output, error, options?.signal);
++        logDeepSeekCacheProbeResult(cacheProbe, output);
+         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
+         stream.end();
+       }

@@ -1,8 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { SubagentSessionSummary } from '../../types/cowork';
+import {
+  type CoworkSessionStatus,
+  CoworkSessionStatusValue,
+  type SubagentSessionSummary,
+} from '../../types/cowork';
 
 const POLL_INTERVAL_MS = 5_000;
+export const POST_PARENT_COMPLETION_POLL_MS = 5 * 60_000;
+const POST_PARENT_REFRESH_DELAYS_MS = [1_000, 5_000, 15_000] as const;
+
+export function shouldPollSubagentSessions(options: {
+  parentSessionStatus?: CoworkSessionStatus;
+  hasRunningSubagents: boolean;
+  postParentPollingDeadlineMs: number | null;
+  nowMs: number;
+}): boolean {
+  if (options.parentSessionStatus === CoworkSessionStatusValue.Running) {
+    return true;
+  }
+  return options.hasRunningSubagents
+    && options.postParentPollingDeadlineMs !== null
+    && options.nowMs <= options.postParentPollingDeadlineMs;
+}
 
 /**
  * Fetches and polls subagent sessions for the currently selected session.
@@ -10,13 +30,15 @@ const POLL_INTERVAL_MS = 5_000;
  */
 export const useSubagentSessions = (
   currentSessionId: string | null,
-  currentSessionStatus?: string,
+  currentSessionStatus?: CoworkSessionStatus,
 ) => {
   const [subagentsBySessionId, setSubagentsBySessionId] = useState<
     Record<string, SubagentSessionSummary[]>
   >({});
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastFetchedSessionIdRef = useRef<string | null>(null);
+  const postParentPollingDeadlineRef = useRef<number | null>(null);
+  const terminalRefreshTimeoutsRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+  const runningParentSessionIdRef = useRef<string | null>(null);
 
   const fetchSubagents = useCallback(async (sessionId: string) => {
     try {
@@ -32,6 +54,7 @@ export const useSubagentSessions = (
         parentSessionId: sessionId,
         status: run.status,
         createdAt: run.createdAt,
+        endedAt: run.endedAt,
       }));
 
       setSubagentsBySessionId((prev) => {
@@ -56,6 +79,41 @@ export const useSubagentSessions = (
     });
   }, []);
 
+  const clearTerminalRefreshTimeouts = useCallback(() => {
+    for (const timeout of terminalRefreshTimeoutsRef.current) {
+      clearTimeout(timeout);
+    }
+    terminalRefreshTimeoutsRef.current = [];
+  }, []);
+
+  useEffect(() => {
+    postParentPollingDeadlineRef.current = null;
+    runningParentSessionIdRef.current = null;
+    clearTerminalRefreshTimeouts();
+  }, [clearTerminalRefreshTimeouts, currentSessionId]);
+
+  useEffect(() => {
+    if (!currentSessionId) return;
+
+    if (currentSessionStatus === CoworkSessionStatusValue.Running) {
+      runningParentSessionIdRef.current = currentSessionId;
+      postParentPollingDeadlineRef.current = null;
+      clearTerminalRefreshTimeouts();
+      return;
+    }
+
+    if (runningParentSessionIdRef.current !== currentSessionId) return;
+    runningParentSessionIdRef.current = null;
+    postParentPollingDeadlineRef.current = Date.now() + POST_PARENT_COMPLETION_POLL_MS;
+    clearTerminalRefreshTimeouts();
+
+    terminalRefreshTimeoutsRef.current = POST_PARENT_REFRESH_DELAYS_MS.map((delayMs) => setTimeout(() => {
+      void fetchSubagents(currentSessionId);
+    }, delayMs));
+
+    return clearTerminalRefreshTimeouts;
+  }, [clearTerminalRefreshTimeouts, currentSessionId, currentSessionStatus, fetchSubagents]);
+
   useEffect(() => {
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
@@ -64,13 +122,38 @@ export const useSubagentSessions = (
 
     if (!currentSessionId) return;
 
+    const currentSubagents = subagentsBySessionId[currentSessionId] ?? [];
+    const hasRunningSubagents = currentSubagents.some((subagent) => subagent.status === 'running');
+    if (currentSessionStatus !== CoworkSessionStatusValue.Running) {
+      if (hasRunningSubagents && postParentPollingDeadlineRef.current === null) {
+        postParentPollingDeadlineRef.current = Date.now() + POST_PARENT_COMPLETION_POLL_MS;
+      } else if (!hasRunningSubagents) {
+        postParentPollingDeadlineRef.current = null;
+      }
+    }
+
     // Initial fetch
-    lastFetchedSessionIdRef.current = currentSessionId;
     void fetchSubagents(currentSessionId);
 
-    // Poll while parent session is running
-    if (currentSessionStatus === 'running') {
+    if (shouldPollSubagentSessions({
+      parentSessionStatus: currentSessionStatus,
+      hasRunningSubagents,
+      postParentPollingDeadlineMs: postParentPollingDeadlineRef.current,
+      nowMs: Date.now(),
+    })) {
       pollingRef.current = setInterval(() => {
+        if (!shouldPollSubagentSessions({
+          parentSessionStatus: currentSessionStatus,
+          hasRunningSubagents: true,
+          postParentPollingDeadlineMs: postParentPollingDeadlineRef.current,
+          nowMs: Date.now(),
+        })) {
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+          return;
+        }
         void fetchSubagents(currentSessionId);
       }, POLL_INTERVAL_MS);
     }
@@ -81,7 +164,7 @@ export const useSubagentSessions = (
         pollingRef.current = null;
       }
     };
-  }, [currentSessionId, currentSessionStatus, fetchSubagents]);
+  }, [currentSessionId, currentSessionStatus, fetchSubagents, subagentsBySessionId]);
 
   return { subagentsBySessionId, refetchSubagents: fetchSubagents, removeSubagent };
 };

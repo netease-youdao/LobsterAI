@@ -21,6 +21,7 @@ const LINK_CLASS_NAME = 'text-primary hover:text-primary-hover underline decorat
 const LARGE_MARKDOWN_RENDER_THRESHOLD = 8 * 1024;
 const LARGE_MARKDOWN_PREVIEW_HEAD_LENGTH = 4 * 1024;
 const LARGE_MARKDOWN_PREVIEW_TAIL_LENGTH = 8 * 1024;
+type MarkdownSpacing = 'normal' | 'compact';
 
 export const shouldUseLargeMarkdownPreview = (content: string): boolean =>
   content.length > LARGE_MARKDOWN_RENDER_THRESHOLD;
@@ -373,9 +374,10 @@ const createMarkdownComponents = (
   resolveLocalFilePath?: (href: string, text: string) => string | null,
   showRevealInFolderAction = false,
   onImageClick?: (image: { src: string; alt?: string | null }) => void,
+  spacing: MarkdownSpacing = 'normal',
 ) => ({
   p: ({ node: _node, className: _className, children, ...props }: any) => (
-    <p className="my-3 first:mt-0 last:mb-0 text-foreground/90" {...props}>
+    <p className={`${spacing === 'compact' ? 'my-1' : 'my-3'} first:mt-0 last:mb-0 text-foreground/90`} {...props}>
       {children}
     </p>
   ),
@@ -385,42 +387,42 @@ const createMarkdownComponents = (
     </strong>
   ),
   h1: ({ node: _node, className: _className, children, ...props }: any) => (
-    <h1 className="text-xl font-semibold leading-snug mt-6 mb-3 first:mt-0 text-foreground" {...props}>
+    <h1 className={`${spacing === 'compact' ? 'mt-3 mb-1.5' : 'mt-6 mb-3'} text-xl font-semibold leading-snug first:mt-0 text-foreground`} {...props}>
       {children}
     </h1>
   ),
   h2: ({ node: _node, className: _className, children, ...props }: any) => (
-    <h2 className="text-[17px] font-semibold leading-snug mt-5 mb-2.5 first:mt-0 text-foreground" {...props}>
+    <h2 className={`${spacing === 'compact' ? 'mt-2.5 mb-1' : 'mt-5 mb-2.5'} text-[length:var(--lobster-text-markdownH2)] font-semibold leading-snug first:mt-0 text-foreground`} {...props}>
       {children}
     </h2>
   ),
   h3: ({ node: _node, className: _className, children, ...props }: any) => (
-    <h3 className="text-base font-semibold leading-snug mt-4 mb-2 first:mt-0 text-foreground" {...props}>
+    <h3 className={`${spacing === 'compact' ? 'mt-2 mb-1' : 'mt-4 mb-2'} text-base font-semibold leading-snug first:mt-0 text-foreground`} {...props}>
       {children}
     </h3>
   ),
   h4: ({ node: _node, className: _className, children, ...props }: any) => (
-    <h4 className="text-[15px] font-semibold leading-snug mt-4 mb-1.5 first:mt-0 text-foreground" {...props}>
+    <h4 className={`${spacing === 'compact' ? 'mt-2 mb-1' : 'mt-4 mb-1.5'} text-[length:var(--lobster-text-markdownH4)] font-semibold leading-snug first:mt-0 text-foreground`} {...props}>
       {children}
     </h4>
   ),
   ul: ({ node: _node, className: _className, children, ...props }: any) => (
-    <ul className="list-disc pl-5 my-3 first:mt-0 last:mb-0 [li>&]:my-1.5 marker:text-foreground/40 text-foreground/90" {...props}>
+    <ul className={`${spacing === 'compact' ? 'my-1 [li>&]:my-0.5' : 'my-3 [li>&]:my-1.5'} list-disc pl-5 first:mt-0 last:mb-0 marker:text-foreground/40 text-foreground/90`} {...props}>
       {children}
     </ul>
   ),
   ol: ({ node: _node, className: _className, children, ...props }: any) => (
-    <ol className="list-decimal pl-6 my-3 first:mt-0 last:mb-0 [li>&]:my-1.5 marker:text-foreground/55 text-foreground/90" {...props}>
+    <ol className={`${spacing === 'compact' ? 'my-1 [li>&]:my-0.5' : 'my-3 [li>&]:my-1.5'} list-decimal pl-6 first:mt-0 last:mb-0 marker:text-foreground/55 text-foreground/90`} {...props}>
       {children}
     </ol>
   ),
   li: ({ node: _node, className: _className, children, ...props }: any) => (
-    <li className="my-1.5 pl-1 text-foreground/90" {...props}>
+    <li className={`${spacing === 'compact' ? 'my-0.5' : 'my-1.5'} pl-1 text-foreground/90`} {...props}>
       {children}
     </li>
   ),
   blockquote: ({ node: _node, className: _className, children, ...props }: any) => (
-    <blockquote className="border-l-4 border-primary pl-4 py-1 my-3 bg-surface-raised/30 rounded-r-lg text-foreground/90 overflow-x-auto" {...props}>
+    <blockquote className={`${spacing === 'compact' ? 'my-1.5' : 'my-3'} border-l-4 border-primary pl-4 py-1 bg-surface-raised/30 rounded-r-lg text-foreground/90 overflow-x-auto`} {...props}>
       {children}
     </blockquote>
   ),
@@ -429,7 +431,7 @@ const createMarkdownComponents = (
   ),
   code: CodeBlock,
   table: ({ node: _node, className: _className, children, ...props }: any) => (
-    <div className="my-4 overflow-x-auto rounded-xl border border-border">
+    <div className={`${spacing === 'compact' ? 'my-2' : 'my-4'} overflow-x-auto rounded-xl border border-border`}>
       <table className="border-collapse w-full" {...props}>
         {children}
       </table>
@@ -465,7 +467,7 @@ const createMarkdownComponents = (
     const altText = typeof alt === 'string' ? alt : null;
     return (
       <img
-        className={`max-w-full max-h-96 object-contain rounded-xl my-4${onImageClick ? ' cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
+        className={`max-w-full max-h-96 object-contain rounded-xl ${spacing === 'compact' ? 'my-2' : 'my-4'}${onImageClick ? ' cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
         src={resolvedSrc}
         alt={altText ?? undefined}
         onClick={onImageClick && resolvedSrc ? () => onImageClick({ src: resolvedSrc, alt: altText }) : undefined}
@@ -474,7 +476,7 @@ const createMarkdownComponents = (
     );
   },
   hr: ({ node: _node, ...props }: any) => (
-    <hr className="my-5 border-border" {...props} />
+    <hr className={`${spacing === 'compact' ? 'my-2' : 'my-5'} border-border`} {...props} />
   ),
   a: ({ node: _node, href, className: _className, children, ...props }: any) => {
     if (typeof href === 'string' && href.startsWith('#artifact-')) {
@@ -653,6 +655,7 @@ const createMarkdownComponents = (
 interface MarkdownContentProps {
   content: string;
   className?: string;
+  spacing?: MarkdownSpacing;
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   showRevealInFolderAction?: boolean;
   enableLargePreview?: boolean;
@@ -662,6 +665,7 @@ interface MarkdownContentProps {
 const MarkdownContent: React.FC<MarkdownContentProps> = ({
   content,
   className = '',
+  spacing = 'normal',
   resolveLocalFilePath,
   showRevealInFolderAction = false,
   enableLargePreview = true,
@@ -671,9 +675,10 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
   const canUseLargePreview = enableLargePreview && shouldUseLargeMarkdownPreview(content);
   const useLargePreview = canUseLargePreview && !isExpanded;
   const components = useMemo(
-    () => createMarkdownComponents(resolveLocalFilePath, showRevealInFolderAction, onImageClick),
-    [resolveLocalFilePath, showRevealInFolderAction, onImageClick]
+    () => createMarkdownComponents(resolveLocalFilePath, showRevealInFolderAction, onImageClick, spacing),
+    [resolveLocalFilePath, showRevealInFolderAction, onImageClick, spacing]
   );
+  const markdownTextClassName = spacing === 'compact' ? 'text-markdown-body-compact' : 'text-markdown-body';
   const normalizedContent = useMemo(() => {
     if (useLargePreview) {
       return '';
@@ -683,7 +688,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
 
   if (useLargePreview) {
     return (
-      <div className={`markdown-content min-w-0 max-w-full text-[15px] leading-[1.75] ${className}`}>
+      <div className={`markdown-content min-w-0 max-w-full ${markdownTextClassName} ${className}`}>
         <div className="rounded-lg border border-border bg-surface-raised/60">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2 text-xs text-muted">
             <span>
@@ -697,7 +702,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
               {i18nService.t('expand')}
             </button>
           </div>
-          <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words p-3 text-[13px] leading-5 text-foreground">
+          <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words p-3 text-code text-foreground">
             {getLargeMarkdownPreview(content)}
           </pre>
         </div>
@@ -706,7 +711,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
   }
 
   return (
-    <div className={`markdown-content min-w-0 max-w-full text-[15px] leading-[1.75] ${className}`}>
+    <div className={`markdown-content min-w-0 max-w-full ${markdownTextClassName} ${className}`}>
       {canUseLargePreview && (
         <div className="mb-2 flex justify-end">
           <button

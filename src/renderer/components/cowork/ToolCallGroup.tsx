@@ -6,6 +6,11 @@ import { useSelector } from 'react-redux';
 import mediaGeneratingAnimation from '../../assets/lottie/media-generating.json';
 import { i18nService } from '../../services/i18n';
 import { selectIsStreaming } from '../../store/selectors/coworkSelectors';
+import {
+  bucketLength,
+  getMessageLineCount,
+  reportConversationBlockAction,
+} from './conversationAnalytics';
 import DiffView, { extractDiffFromToolInput } from './DiffView';
 import {
   formatToolInput,
@@ -80,11 +85,13 @@ const ToolCallGroup: React.FC<{
   isLastInSequence?: boolean;
   mapDisplayText?: (value: string) => string;
   retainedMediaPollCounts?: Map<string, number>;
+  footer?: React.ReactNode;
 }> = ({
   group,
   isLastInSequence = true,
   mapDisplayText,
   retainedMediaPollCounts,
+  footer,
 }) => {
   const { toolUse, toolResult } = group;
   const shouldExpandByDefault = isMediaStatusPoll(group);
@@ -101,8 +108,14 @@ const ToolCallGroup: React.FC<{
   const toolInputSummaryRaw = getToolInputSummary(rawToolName, toolInput) ?? toolInputDisplayRaw;
   const toolInputSummary = toolInputSummaryRaw ? mapText(toolInputSummaryRaw) : null;
   const [isExpanded, setIsExpanded] = useState(shouldExpandByDefault);
-  const collapsedToolResult = toolResult ? getToolResultCollapsedDisplay(toolResult) : null;
-  const toolResultDisplayRaw = toolResult && isExpanded ? getToolResultDisplay(toolResult) : '';
+  const collapsedToolResult = useMemo(
+    () => toolResult ? getToolResultCollapsedDisplay(toolResult) : null,
+    [toolResult],
+  );
+  const toolResultDisplayRaw = useMemo(
+    () => toolResult && isExpanded ? getToolResultDisplay(toolResult) : '',
+    [isExpanded, toolResult],
+  );
   const toolResultDisplay = toolResultDisplayRaw ? mapText(toolResultDisplayRaw) : '';
   const hasExpandedToolResultText = hasText(toolResultDisplay);
   const hasToolResultText = isExpanded
@@ -133,6 +146,26 @@ const ToolCallGroup: React.FC<{
     [rawToolName, toolInput],
   );
   const isEditWithDiff = diffDataList !== null && diffDataList.length > 0;
+  const reportToolToggle = (nextExpanded: boolean) => {
+    const resultLength = toolResultDisplayRaw.length || collapsedToolResult?.text?.length || 0;
+    reportConversationBlockAction({
+      actionType: nextExpanded ? 'tool_expand' : 'tool_collapse',
+      blockType: 'tool',
+      params: {
+        toolName: rawToolName,
+        displayToolName: toolName,
+        hasResult: Boolean(toolResult),
+        hasResultText: Boolean(collapsedToolResult?.hasText || hasExpandedToolResultText),
+        isError: isToolError,
+        isStreaming: isSessionStreaming,
+        resultLengthBucket: bucketLength(resultLength),
+        resultLineCount: getMessageLineCount(toolResultDisplayRaw || collapsedToolResult?.text || ''),
+        isBashTool,
+        isTodoWriteTool,
+        isEditWithDiff,
+      },
+    });
+  };
 
   return (
     <div className="relative py-1">
@@ -140,7 +173,11 @@ const ToolCallGroup: React.FC<{
         <div className="absolute left-[3.5px] top-[14px] bottom-[-8px] w-px bg-border" />
       )}
       <button
-        onClick={() => setIsExpanded(!isExpanded)}
+        onClick={() => {
+          const nextExpanded = !isExpanded;
+          reportToolToggle(nextExpanded);
+          setIsExpanded(nextExpanded);
+        }}
         className="w-full flex items-start gap-2 text-left group relative z-10"
       >
         <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
@@ -158,7 +195,7 @@ const ToolCallGroup: React.FC<{
               {toolName}
             </span>
             {toolInputSummary && (
-              <code className="text-xs text-muted font-mono truncate max-w-full">
+              <code className="text-code text-muted font-mono truncate max-w-full">
                 {toolInputSummary}
               </code>
             )}
@@ -183,6 +220,11 @@ const ToolCallGroup: React.FC<{
           )}
         </div>
       </button>
+      {footer && (
+        <div className="ml-4 mt-2">
+          {footer}
+        </div>
+      )}
       {isMediaGenerateRunning(group) && isSessionStreaming && (() => {
         const streamingInfo = parseMediaStreamingInfo(group);
         const pollCount = streamingInfo.pollCount ?? getRetainedMediaPollCount(streamingInfo, retainedMediaPollCounts);
@@ -246,7 +288,7 @@ const ToolCallGroup: React.FC<{
                 <div className="w-2.5 h-2.5 rounded-full bg-green-500" />
                 <span className="ml-2 text-[10px] text-secondary font-medium">Terminal</span>
               </div>
-              <div className="bg-surface-inset px-3 py-3 max-h-72 overflow-y-auto font-mono text-xs">
+              <div className="bg-surface-inset px-3 py-3 max-h-72 overflow-y-auto font-mono text-code">
                 {toolInputDisplay && (
                   <div className="text-foreground">
                     <span className="text-primary select-none">$ </span>
@@ -289,7 +331,7 @@ const ToolCallGroup: React.FC<{
                     {i18nService.t('coworkToolResult')}
                   </div>
                   <div className="max-h-32 overflow-y-auto">
-                    <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
+                    <pre className={`text-code whitespace-pre-wrap break-words font-mono ${
                       isToolError
                         ? 'text-red-500'
                         : hasToolResultText
@@ -310,7 +352,7 @@ const ToolCallGroup: React.FC<{
                     {i18nService.t('coworkToolInput')}
                   </div>
                   <div className="max-h-48 overflow-y-auto">
-                    <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-mono">
+                    <pre className="text-code text-foreground whitespace-pre-wrap break-words font-mono">
                       {toolInputDisplay}
                     </pre>
                   </div>
@@ -322,7 +364,7 @@ const ToolCallGroup: React.FC<{
                     {i18nService.t('coworkToolResult')}
                   </div>
                   <div className="max-h-64 overflow-y-auto">
-                    <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
+                    <pre className={`text-code whitespace-pre-wrap break-words font-mono ${
                       isToolError
                         ? 'text-red-500'
                         : hasToolResultText

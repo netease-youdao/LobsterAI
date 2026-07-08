@@ -86,7 +86,7 @@ function formatBytes(bytes: number | undefined): string {
 const baseTheme = EditorView.theme({
   '&': {
     height: '100%',
-    fontSize: '13px',
+    fontSize: 'var(--lobster-code-font-size)',
   },
   '.cm-scroller': {
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',

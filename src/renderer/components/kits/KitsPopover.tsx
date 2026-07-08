@@ -1,4 +1,4 @@
-import { CheckIcon } from '@heroicons/react/24/outline';
+import { CheckIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -9,8 +9,8 @@ import { RootState } from '../../store';
 import { setInstalledKits, setMarketplaceKits } from '../../store/slices/kitSlice';
 import type { MarketplaceKit } from '../../types/kit';
 import SearchIcon from '../icons/SearchIcon';
-import SidebarKitsIcon from '../icons/SidebarKitsIcon';
 import ExpertKitsEmptyIcon from './ExpertKitsEmptyIcon';
+import KitIcon from './KitIcon';
 
 const MIN_SEARCHABLE_KIT_COUNT = 3;
 
@@ -85,7 +85,8 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
     if (isOpen) {
       if (anchorRef.current) {
         const anchorRect = anchorRef.current.getBoundingClientRect();
-        const availableHeight = anchorRect.top - 120 - 60;
+        // Reserve room above the popover plus the search bar and footer chrome
+        const availableHeight = anchorRect.top - 120 - 104;
         setMaxListHeight(Math.max(120, Math.min(300, availableHeight)));
       }
       if (shouldShowSearch && searchInputRef.current) {
@@ -218,13 +219,12 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
                     : 'hover:bg-surface-raised'
                 }`}
               >
-                <div
-                  className={`mt-[3px] flex h-5 w-5 flex-shrink-0 items-center justify-center ${
-                    isActive ? 'text-foreground' : 'text-secondary'
-                  }`}
-                >
-                  <SidebarKitsIcon className="h-[18px] w-[18px]" />
-                </div>
+                <KitIcon
+                  icon={kit.icon}
+                  className="mt-[3px] h-8 w-8"
+                  fallbackClassName="rounded-lg bg-primary-muted text-primary"
+                  fallbackIconClassName="h-4 w-4"
+                />
                 <div className="flex-1 min-w-0">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <span className="min-w-0 truncate text-[13px] font-semibold leading-5 text-foreground">
@@ -248,6 +248,20 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
           })
         )}
       </div>
+
+      {/* Footer: marketplace entry */}
+      {!isLoading && !shouldShowInstallGuide && (
+        <div className="border-t border-border p-1.5">
+          <button
+            type="button"
+            onClick={handleOpenMarketplace}
+            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] text-secondary transition-colors hover:bg-surface-raised hover:text-foreground"
+          >
+            <Cog6ToothIcon className="h-4 w-4" />
+            {i18nService.t('manageKits')}
+          </button>
+        </div>
+      )}
     </div>
   );
 };

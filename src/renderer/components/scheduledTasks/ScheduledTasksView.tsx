@@ -2,6 +2,7 @@ import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { ScheduledTaskDataStatus } from '../../../scheduledTask/constants';
 import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
@@ -10,10 +11,12 @@ import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
 import AllRunsHistory from './AllRunsHistory';
+import { getTaskAnalyticsParams, reportScheduledTaskAction } from './analytics';
 import DeleteConfirmModal from './DeleteConfirmModal';
 import TaskDetail from './TaskDetail';
 import TaskForm from './TaskForm';
 import TaskList from './TaskList';
+import type { ScheduledTaskTemplate } from './taskTemplates';
 
 interface ScheduledTasksViewProps {
   isSidebarCollapsed?: boolean;
@@ -25,7 +28,14 @@ interface ScheduledTasksViewProps {
 type TabType = 'tasks' | 'history';
 
 const pageGutterClass = 'px-6 sm:px-8 lg:px-10';
-const pageContentClass = 'mx-auto flex w-full max-w-[760px] items-center justify-between';
+const pageContentClass = 'mx-auto w-full max-w-[880px]';
+
+type DeleteTaskInfo = {
+  id: string;
+  name: string;
+  source: string;
+  analyticsParams: Record<string, string | number | boolean | null | undefined>;
+};
 
 const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   isSidebarCollapsed,
@@ -38,9 +48,12 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   const viewMode = useSelector((state: RootState) => state.scheduledTask.viewMode);
   const selectedTaskId = useSelector((state: RootState) => state.scheduledTask.selectedTaskId);
   const tasks = useSelector((state: RootState) => state.scheduledTask.tasks);
+  const taskListStatus = useSelector((state: RootState) => state.scheduledTask.taskListStatus);
+  const availableModels = useSelector((state: RootState) => state.model.availableModels);
   const selectedTask = selectedTaskId ? (tasks.find(t => t.id === selectedTaskId) ?? null) : null;
   const [activeTab, setActiveTab] = useState<TabType>('tasks');
-  const [deleteTaskInfo, setDeleteTaskInfo] = useState<{ id: string; name: string } | null>(null);
+  const [createTemplate, setCreateTemplate] = useState<ScheduledTaskTemplate | null>(null);
+  const [deleteTaskInfo, setDeleteTaskInfo] = useState<DeleteTaskInfo | null>(null);
   const isFormDirtyRef = useRef(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const pendingBackActionRef = useRef<(() => void) | null>(null);
@@ -49,25 +62,61 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
     isFormDirtyRef.current = dirty;
   }, []);
 
-  const handleRequestDelete = useCallback((taskId: string, taskName: string) => {
-    setDeleteTaskInfo({ id: taskId, name: taskName });
-  }, []);
+  const handleRequestDelete = useCallback((taskId: string, taskName: string, source = 'scheduled_tasks_view') => {
+    const task = tasks.find(item => item.id === taskId);
+    const analyticsParams = task ? getTaskAnalyticsParams(task, availableModels) : {};
+    reportScheduledTaskAction('delete_confirm_open', {
+      source,
+      activeTab,
+      viewMode,
+      ...analyticsParams,
+    });
+    setDeleteTaskInfo({ id: taskId, name: taskName, source, analyticsParams });
+  }, [activeTab, availableModels, tasks, viewMode]);
 
   const handleConfirmDelete = useCallback(async () => {
     if (!deleteTaskInfo) return;
     const taskId = deleteTaskInfo.id;
+    const { analyticsParams, source } = deleteTaskInfo;
     setDeleteTaskInfo(null);
-    await scheduledTaskService.deleteTask(taskId);
-    // If we were viewing this task's detail, go back to list
-    if (selectedTaskId === taskId) {
-      dispatch(selectTask(null));
-      dispatch(setViewMode('list'));
+    try {
+      await scheduledTaskService.deleteTask(taskId);
+      reportScheduledTaskAction('delete_success', {
+        source,
+        activeTab,
+        viewMode,
+        result: 'success',
+        ...analyticsParams,
+      });
+      // If we were viewing this task's detail, go back to list
+      if (selectedTaskId === taskId) {
+        dispatch(selectTask(null));
+        dispatch(setViewMode('list'));
+      }
+    } catch (error) {
+      reportScheduledTaskAction('delete_failed', {
+        source,
+        activeTab,
+        viewMode,
+        result: 'failed',
+        errorCode: 'delete_failed',
+        ...analyticsParams,
+      });
+      throw error;
     }
-  }, [deleteTaskInfo, selectedTaskId, dispatch]);
+  }, [activeTab, deleteTaskInfo, selectedTaskId, dispatch, viewMode]);
 
   const handleCancelDelete = useCallback(() => {
+    if (deleteTaskInfo) {
+      reportScheduledTaskAction('delete_confirm_cancel', {
+        source: deleteTaskInfo.source,
+        activeTab,
+        viewMode,
+        ...deleteTaskInfo.analyticsParams,
+      });
+    }
     setDeleteTaskInfo(null);
-  }, []);
+  }, [activeTab, deleteTaskInfo, viewMode]);
 
   useEffect(() => {
     scheduledTaskService.loadTasks();
@@ -75,6 +124,11 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
 
   const requestLeave = useCallback((action: () => void) => {
     if (isFormDirtyRef.current) {
+      reportScheduledTaskAction('form_unsaved_confirm_open', {
+        source: 'scheduled_tasks_view',
+        activeTab,
+        viewMode,
+      });
       pendingBackActionRef.current = () => {
         isFormDirtyRef.current = false;
         action();
@@ -83,10 +137,11 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
     } else {
       action();
     }
-  }, []);
+  }, [activeTab, viewMode]);
 
   const handleBackToList = () => {
     const action = () => {
+      setCreateTemplate(null);
       dispatch(selectTask(null));
       dispatch(setViewMode('list'));
     };
@@ -97,11 +152,41 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
     }
   };
 
+  const handleCreateNew = useCallback(() => {
+    reportScheduledTaskAction('new_task', {
+      source: 'scheduled_tasks_view',
+      activeTab,
+      viewMode,
+    });
+    setCreateTemplate(null);
+    dispatch(setViewMode('create'));
+  }, [activeTab, dispatch, viewMode]);
+
+  const handleCreateFromTemplate = useCallback(
+    (template: ScheduledTaskTemplate) => {
+      reportScheduledTaskAction('new_task_from_template', {
+        source: 'scheduled_tasks_list',
+        templateId: template.id,
+        activeTab,
+        viewMode,
+      });
+      setCreateTemplate(template);
+      dispatch(setViewMode('create'));
+    },
+    [activeTab, dispatch, viewMode],
+  );
+
   const handleEditCancel = useCallback(() => {
     requestLeave(() => dispatch(setViewMode('detail')));
   }, [requestLeave, dispatch]);
 
   const handleTabChange = (tab: TabType) => {
+    reportScheduledTaskAction('tab_change', {
+      source: 'scheduled_tasks_view',
+      activeTab,
+      targetTab: tab,
+      viewMode,
+    });
     setActiveTab(tab);
     if (tab === 'tasks') {
       dispatch(selectTask(null));
@@ -152,46 +237,49 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
         <WindowTitleBar inline />
       </div>
 
-      {/* Tabs + New Task button */}
+      {/* Page header: title + subtitle + tabs + New Task button */}
       {showTabs && (
         <div className="shrink-0">
-          <div className={pageGutterClass}>
+          <div className={`${pageGutterClass} pt-5 pb-1`}>
             <div className={pageContentClass}>
-              <div className="flex">
-                <button
-                  type="button"
-                  onClick={() => handleTabChange('tasks')}
-                  className={`px-4 py-2.5 text-[14px] font-normal leading-5 transition-colors relative ${
-                    activeTab === 'tasks' ? 'text-foreground' : 'text-secondary hover:text-foreground'
-                  }`}
-                >
-                  {i18nService.t('scheduledTasksTabTasks')}
-                  {activeTab === 'tasks' && (
-                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t" />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleTabChange('history')}
-                  className={`px-4 py-2.5 text-[14px] font-normal leading-5 transition-colors relative ${
-                    activeTab === 'history' ? 'text-foreground' : 'text-secondary hover:text-foreground'
-                  }`}
-                >
-                  {i18nService.t('scheduledTasksTabHistory')}
-                  {activeTab === 'history' && (
-                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t" />
-                  )}
-                </button>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <h2 className="text-xl font-semibold text-foreground">
+                    {i18nService.t('scheduledTasksTitle')}
+                  </h2>
+                  <p className="mt-1 text-sm text-secondary">
+                    {i18nService.t('scheduledTasksPageSubtitle')}
+                  </p>
+                </div>
+                {activeTab === 'tasks' && (
+                  <button
+                    type="button"
+                    onClick={handleCreateNew}
+                    disabled={taskListStatus !== ScheduledTaskDataStatus.Ready}
+                    className="shrink-0 rounded-lg bg-primary px-3.5 py-1.5 text-[14px] font-medium leading-5 text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-primary"
+                  >
+                    {i18nService.t('scheduledTasksNewTask')}
+                  </button>
+                )}
               </div>
-              {activeTab === 'tasks' && (
-                <button
-                  type="button"
-                  onClick={() => dispatch(setViewMode('create'))}
-                  className="px-3 py-1 text-[14px] font-normal leading-5 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors"
-                >
-                  {i18nService.t('scheduledTasksNewTask')}
-                </button>
-              )}
+              <div className="mt-4 inline-flex rounded-lg bg-surface-raised p-0.5">
+                {(['tasks', 'history'] as const).map(tab => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => handleTabChange(tab)}
+                    className={`rounded-md px-3.5 py-1 text-[13px] leading-5 transition-colors ${
+                      activeTab === tab
+                        ? 'bg-surface text-foreground shadow-subtle font-medium'
+                        : 'text-secondary hover:text-foreground'
+                    }`}
+                  >
+                    {i18nService.t(
+                      tab === 'tasks' ? 'scheduledTasksTabTasks' : 'scheduledTasksTabHistory',
+                    )}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -205,12 +293,20 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
           <AllRunsHistory />
         ) : (
           <>
-            {viewMode === 'list' && <TaskList onRequestDelete={handleRequestDelete} />}
+            {viewMode === 'list' && (
+              <TaskList
+                onRequestDelete={handleRequestDelete}
+                onCreateNew={handleCreateNew}
+                onCreateFromTemplate={handleCreateFromTemplate}
+              />
+            )}
             {viewMode === 'create' && (
               <TaskForm
                 mode="create"
+                initialTemplate={createTemplate}
                 onCancel={handleBackToList}
                 onSaved={newTaskId => {
+                  setCreateTemplate(null);
                   if (newTaskId) {
                     dispatch(selectTask(newTaskId));
                     dispatch(setViewMode('detail'));
@@ -262,7 +358,14 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
             <div className="flex justify-end gap-3">
               <button
                 type="button"
-                onClick={() => setShowLeaveConfirm(false)}
+                onClick={() => {
+                  reportScheduledTaskAction('form_unsaved_confirm_cancel', {
+                    source: 'scheduled_tasks_view',
+                    activeTab,
+                    viewMode,
+                  });
+                  setShowLeaveConfirm(false);
+                }}
                 className="px-4 py-2 text-sm rounded-lg text-secondary hover:bg-surface-raised transition-colors border border-border"
               >
                 {i18nService.t('taskFormStay')}
@@ -271,6 +374,11 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
                 type="button"
                 onClick={() => {
                   setShowLeaveConfirm(false);
+                  reportScheduledTaskAction('form_unsaved_confirm_submit', {
+                    source: 'scheduled_tasks_view',
+                    activeTab,
+                    viewMode,
+                  });
                   pendingBackActionRef.current?.();
                   pendingBackActionRef.current = null;
                 }}

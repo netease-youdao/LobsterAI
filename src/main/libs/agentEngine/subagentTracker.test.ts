@@ -205,6 +205,42 @@ test('onSessionDeleted removes subagent runs and messages for the parent session
   expect(runStore.getSubagentRun('run-2')).not.toBeNull();
 });
 
+test('getSubTaskHistory preserves persisted message timestamps', async () => {
+  const gatewayClient: GatewayClientLike = {
+    request: vi.fn().mockResolvedValue({ messages: [] }),
+  };
+  const tracker = new SubagentTracker(runStore, messageStore, () => gatewayClient);
+  runStore.insertSubagentRun({
+    id: 'run-1',
+    parentSessionId: 'parent-1',
+    sessionKey: 'agent:main:subagent:run-1',
+    agentId: 'worker',
+    task: 'inspect files',
+    label: 'worker',
+    status: 'done',
+    createdAt: 1000,
+  });
+  messageStore.insertMessages('run-1', [{
+    id: 'message-1',
+    type: 'assistant',
+    content: 'done',
+    timestamp: 1001,
+    sequence: 1,
+  }]);
+  runStore.markMessagesPersisted('run-1');
+
+  const messages = await tracker.getSubTaskHistory('parent-1', 'run-1');
+
+  expect(messages).toEqual([{
+    id: 'message-1',
+    type: 'assistant',
+    content: 'done',
+    timestamp: 1001,
+    metadata: undefined,
+  }]);
+  expect(gatewayClient.request).not.toHaveBeenCalled();
+});
+
 test('deleted subagent run is not reinserted by late spawn results', async () => {
   const tracker = new SubagentTracker(runStore, messageStore, () => null);
   tracker.onToolStart('run-1', {

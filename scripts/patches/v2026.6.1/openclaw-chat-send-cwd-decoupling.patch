@@ -1,0 +1,44 @@
+﻿diff --git a/packages/gateway-protocol/src/index.test.ts b/packages/gateway-protocol/src/index.test.ts
+index 2e293b0711..a2a7a59a83 100644
+--- a/packages/gateway-protocol/src/index.test.ts
++++ b/packages/gateway-protocol/src/index.test.ts
+@@ -85,6 +85,7 @@ describe("lazy protocol validators", () => {
+       validateChatSendParams({
+         sessionKey: "global",
+         agentId: "work",
++        cwd: "/tmp/work",
+         message: "hello",
+         idempotencyKey: "run-global-work",
+       }),
+diff --git a/packages/gateway-protocol/src/schema/logs-chat.ts b/packages/gateway-protocol/src/schema/logs-chat.ts
+index c5e1a75aec..91c0a72b1e 100644
+--- a/packages/gateway-protocol/src/schema/logs-chat.ts
++++ b/packages/gateway-protocol/src/schema/logs-chat.ts
+@@ -66,6 +66,7 @@ export const ChatSendParamsSchema = Type.Object(
+     agentId: Type.Optional(NonEmptyString),
+     sessionId: Type.Optional(NonEmptyString),
+     message: Type.String(),
++    cwd: Type.Optional(Type.String()),
+     thinking: Type.Optional(Type.String()),
+     fastMode: Type.Optional(Type.Boolean()),
+     deliver: Type.Optional(Type.Boolean()),
+diff --git a/src/gateway/server-methods/chat.ts b/src/gateway/server-methods/chat.ts
+index 497024cc3f..4032f16a21 100644
+--- a/src/gateway/server-methods/chat.ts
++++ b/src/gateway/server-methods/chat.ts
+@@ -2891,6 +2891,7 @@ export const chatHandlers: GatewayRequestHandlers = {
+       agentId?: string;
+       sessionId?: string;
+       message: string;
++      cwd?: string;
+       thinking?: string;
+       fastMode?: boolean;
+       deliver?: boolean;
+@@ -3578,6 +3579,7 @@ export const chatHandlers: GatewayRequestHandlers = {
+               abortSignal: activeRunAbort.controller.signal,
+               images: replyOptionImages,
+               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
++              cwd: normalizeOptionalText(p.cwd),
+               thinkingLevelOverride: p.thinking,
+               fastModeOverride: p.fastMode,
+               userTurnTranscriptRecorder: userTurnRecorder,

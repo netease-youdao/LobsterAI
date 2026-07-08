@@ -747,6 +747,10 @@ flowchart TD
 | 运行历史 | `~/.openclaw/cron/runs/{jobId}.jsonl` | `runLog.maxBytes` (2MB) + `runLog.keepLines` (2000) |
 | 隔离会话 | OpenClaw sessions | `sessionRetention` (默认 24h) |
 
+**一次性任务生命周期：** `schedule.kind = at` 在未显式指定时由 OpenClaw 设置
+`deleteAfterRun = true`。任务成功执行后会从 Job 定义中删除，因此不再出现在任务列表；
+对应运行记录仍由独立的运行历史存储保留。执行失败的任务会按策略重试，重试耗尽后禁用并保留，便于排查。
+
 ---
 
 ## 完整生命周期：端到端流程

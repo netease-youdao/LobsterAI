@@ -71,6 +71,41 @@ function getPagedSessionMessages(db: Database, sessionId: string, limit: number,
   );
 }
 
+/** Mirror of getSessionMessageRailIndex(sessionId) */
+function getSessionMessageRailIndex(db: Database, sessionId: string) {
+  const rows = getAll<{ id: string; type: string; content: string; metadata: string | null; message_offset: number }>(
+    db,
+    `SELECT id, type, content, metadata, message_offset
+     FROM (
+       SELECT
+         id,
+         type,
+         content,
+         metadata,
+         sequence,
+         created_at,
+         ROW_NUMBER() OVER (
+           ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, ROWID ASC
+         ) - 1 as message_offset
+       FROM cowork_messages
+       WHERE session_id = ?
+     )
+     WHERE type IN ('user', 'assistant')
+       AND TRIM(content) <> ''
+     ORDER BY message_offset ASC`,
+    [sessionId],
+  );
+  return rows.filter((row) => {
+    if (row.type !== 'assistant' || !row.metadata) return true;
+    try {
+      const metadata = JSON.parse(row.metadata) as { isThinking?: unknown };
+      return metadata.isThinking !== true;
+    } catch {
+      return true;
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Schema setup
 // ---------------------------------------------------------------------------
@@ -306,4 +341,58 @@ test('getPagedSessionMessages: session with 0 messages returns empty array', () 
 test('getPagedSessionMessages: offset beyond total returns empty', () => {
   const msgs = getPagedSessionMessages(db, sessionWithManyMessagesId, 50, 999);
   expect(msgs.length).toBe(0);
+});
+
+test('getSessionMessageRailIndex: messageOffset follows full message order with tool messages', () => {
+  const now = Date.now();
+  const sessionId = uuidv4();
+  db.run(
+    `INSERT INTO cowork_sessions (id, title, status, pinned, cwd, created_at, updated_at)
+     VALUES (?, 'Mixed Rail Session', 'idle', 0, '/tmp', ?, ?)`,
+    [sessionId, now, now],
+  );
+
+  [
+    ['mixed-user-1', 'user', 'First user'],
+    ['mixed-tool-1', 'tool_use', 'Tool call'],
+    ['mixed-assistant-1', 'assistant', 'First assistant'],
+    ['mixed-system-1', 'system', 'System note'],
+    ['mixed-user-2', 'user', 'Second user'],
+  ].forEach(([id, type, content], index) => {
+    db.run(
+      `INSERT INTO cowork_messages (id, session_id, type, content, created_at, sequence)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, sessionId, type, content, now + index, index + 1],
+    );
+  });
+
+  const rail = getSessionMessageRailIndex(db, sessionId);
+  expect(rail.map(item => item.id)).toEqual(['mixed-user-1', 'mixed-assistant-1', 'mixed-user-2']);
+  expect(rail.map(item => item.message_offset)).toEqual([0, 2, 4]);
+});
+
+test('getSessionMessageRailIndex: excludes assistant thinking messages from rail previews', () => {
+  const now = Date.now();
+  const sessionId = uuidv4();
+  db.run(
+    `INSERT INTO cowork_sessions (id, title, status, pinned, cwd, created_at, updated_at)
+     VALUES (?, 'Thinking Rail Session', 'idle', 0, '/tmp', ?, ?)`,
+    [sessionId, now, now],
+  );
+
+  [
+    ['thinking-user-1', 'user', 'Explain rail tooltips', null],
+    ['thinking-assistant-1', 'assistant', 'Internal chain of thought', JSON.stringify({ isThinking: true })],
+    ['thinking-assistant-2', 'assistant', 'Final answer content', null],
+  ].forEach(([id, type, content, metadata], index) => {
+    db.run(
+      `INSERT INTO cowork_messages (id, session_id, type, content, metadata, created_at, sequence)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, sessionId, type, content, metadata, now + index, index + 1],
+    );
+  });
+
+  const rail = getSessionMessageRailIndex(db, sessionId);
+  expect(rail.map(item => item.id)).toEqual(['thinking-user-1', 'thinking-assistant-2']);
+  expect(rail.map(item => item.message_offset)).toEqual([0, 2]);
 });

@@ -56,20 +56,30 @@ export type ShortcutConfig = Record<ShortcutAction, string> & {
   [key: string]: string | undefined;
 };
 
-export const VoiceInputRecognitionMode = {
-  Realtime: 'realtime',
-  Short: 'short',
+export const FontPreferences = {
+  UiFontSizeDefault: 14,
+  UiFontSizeMin: 11,
+  UiFontSizeMax: 16,
+  CodeFontSizeDefault: 12,
+  CodeFontSizeMin: 8,
+  CodeFontSizeMax: 24,
 } as const;
 
-export type VoiceInputRecognitionMode =
-  typeof VoiceInputRecognitionMode[keyof typeof VoiceInputRecognitionMode];
-
-export interface VoiceInputConfig {
-  recognitionMode: VoiceInputRecognitionMode;
-}
-
-export const defaultVoiceInputConfig: VoiceInputConfig = {
-  recognitionMode: VoiceInputRecognitionMode.Realtime,
+export const normalizeFontPreference = (
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number => {
+  const numericValue = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseFloat(value)
+      : Number.NaN;
+  if (!Number.isFinite(numericValue)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, Math.round(numericValue)));
 };
 
 // 配置类型定义
@@ -93,17 +103,22 @@ export interface AppConfig {
   providerModelMigrationVersions?: Record<string, number>;
   // 主题配置
   theme: 'light' | 'dark' | 'system';
+  // UI 字号配置
+  uiFontSize?: number;
+  // 代码字体大小配置
+  codeFontSize?: number;
   // 语言配置
   language: 'zh' | 'en';
   // 是否使用系统代理
   useSystemProxy: boolean;
   // 是否启用 SQLite 自动备份与恢复
   sqliteAutoBackupEnabled?: boolean;
+  // 是否允许发送基础产品使用统计
+  usageAnalyticsEnabled?: boolean;
   // 通知配置
   notificationSettings?: NotificationSettings;
   // 浏览器与网页访问配置
   browserWebAccess: BrowserWebAccessConfig;
-  voiceInput: VoiceInputConfig;
   // 语言初始化标记 (用于判断是否是首次启动)
   language_initialized?: boolean;
   // 应用配置
@@ -149,16 +164,23 @@ export const defaultConfig: AppConfig = {
   },
   providers: buildDefaultProviders(),
   theme: 'system',
+  uiFontSize: FontPreferences.UiFontSizeDefault,
+  codeFontSize: FontPreferences.CodeFontSizeDefault,
   language: 'zh',
   useSystemProxy: false,
   sqliteAutoBackupEnabled: false,
+  usageAnalyticsEnabled: true,
   notificationSettings: defaultNotificationSettings,
   browserWebAccess: defaultBrowserWebAccessConfig,
-  voiceInput: defaultVoiceInputConfig,
   app: {
     port: 3000,
     isDevelopment: process.env.NODE_ENV === 'development',
-    testMode: process.env.NODE_ENV === 'development',
+    // Default to production (official) services. Source-launched dev builds run
+    // with NODE_ENV=development, but must not auto-target the internal-only test
+    // endpoints (*.inner.youdao.com) — external/open-source users can't reach
+    // them. Flip test mode via the hidden switch in Settings → About when the
+    // internal endpoints are actually needed.
+    testMode: false,
   },
   shortcuts: {
     [ShortcutAction.NewChat]: 'CommandOrControl+N',

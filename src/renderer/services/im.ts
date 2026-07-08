@@ -66,12 +66,56 @@ import type {
   WecomInstanceConfig,
   WecomOpenClawConfig,
 } from '../types/im';
+import { LogReporterAction, reportYdAnalyzer } from './logReporter';
 
 type IMConfigUpdateOptions = {
   syncGateway?: boolean;
   restartGatewayIfRunning?: boolean;
   markRestartOnSave?: boolean;
   reloadStatus?: boolean;
+};
+
+const IMAnalyticsSource = {
+  Settings: 'settings_im',
+} as const;
+
+const IM_MULTI_INSTANCE_PLATFORMS = new Set<Platform>([
+  'dingtalk',
+  'feishu',
+  'qq',
+  'email',
+  'nim',
+  'wecom',
+  'telegram',
+  'discord',
+  'popo',
+]);
+
+const getIMGatewayAnalyticsInstances = (platform: Platform) => {
+  const platformConfig = store.getState().im.config[platform as keyof IMGatewayConfig] as { instances?: Array<{ enabled?: boolean }> } | undefined;
+  return Array.isArray(platformConfig?.instances) ? platformConfig.instances : [];
+};
+
+const reportIMGatewayToggled = (
+  platform: Platform,
+  operation: 'start' | 'stop',
+  result: 'success' | 'failed',
+  failureReason?: string,
+): void => {
+  const instances = getIMGatewayAnalyticsInstances(platform);
+  const isMultiInstance = IM_MULTI_INSTANCE_PLATFORMS.has(platform);
+  void reportYdAnalyzer({
+    action: LogReporterAction.ImGatewayToggled,
+    source: IMAnalyticsSource.Settings,
+    platform,
+    operation,
+    result,
+    platformKind: isMultiInstance ? 'multi_instance' : 'single_instance',
+    enabledInstanceCount: isMultiInstance
+      ? instances.filter(instance => instance.enabled === true).length
+      : undefined,
+    failureReason,
+  });
 };
 
 class IMService {
@@ -239,14 +283,17 @@ class IMService {
       const result: IMGatewayResult = await window.electron.im.startGateway(platform);
       if (result.success) {
         await this.loadStatus();
+        reportIMGatewayToggled(platform, 'start', 'success');
         return true;
       } else {
         store.dispatch(setError(result.error || `Failed to start ${platform} gateway`));
+        reportIMGatewayToggled(platform, 'start', 'failed', result.error ? 'gateway_error' : 'unknown');
         return false;
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : `Failed to start ${platform} gateway`;
       store.dispatch(setError(message));
+      reportIMGatewayToggled(platform, 'start', 'failed', 'unknown');
       return false;
     } finally {
       store.dispatch(setLoading(false));
@@ -262,14 +309,17 @@ class IMService {
       const result: IMGatewayResult = await window.electron.im.stopGateway(platform);
       if (result.success) {
         await this.loadStatus();
+        reportIMGatewayToggled(platform, 'stop', 'success');
         return true;
       } else {
         store.dispatch(setError(result.error || `Failed to stop ${platform} gateway`));
+        reportIMGatewayToggled(platform, 'stop', 'failed', result.error ? 'gateway_error' : 'unknown');
         return false;
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : `Failed to stop ${platform} gateway`;
       store.dispatch(setError(message));
+      reportIMGatewayToggled(platform, 'stop', 'failed', 'unknown');
       return false;
     } finally {
       store.dispatch(setLoading(false));

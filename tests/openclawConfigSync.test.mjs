@@ -126,8 +126,10 @@ const createSync = (tmpDir, appConfig, options = {}) => {
     engineManager: {
       getConfigPath: () => path.join(tmpDir, 'state', 'openclaw.json'),
       getStateDir: () => path.join(tmpDir, 'state'),
+      getBaseDir: () => path.join(tmpDir, 'base'),
       getGatewayToken: () => null,
     },
+    isEnterprise: () => false,
     getCoworkConfig: () => ({
       workingDirectory: options.workingDirectory ?? '',
       systemPrompt: options.systemPrompt ?? '',
@@ -138,8 +140,12 @@ const createSync = (tmpDir, appConfig, options = {}) => {
     getQQInstances: () => options.qqInstances ?? [],
     getWecomConfig: () => null,
     getPopoConfig: () => options.popoConfig ?? null,
+    getPopoInstances: () => options.popoInstances ?? [],
     getNimConfig: () => options.nimConfig ?? null,
+    getNeteaseBeeChanConfig: () => null,
+    getWeixinConfig: () => null,
     getSkillsPrompt: () => null,
+    getUserPlugins: () => [],
   });
 };
 
@@ -399,6 +405,160 @@ test('sync disables legacy reminder skills so native IM sessions use built-in cr
   const config = JSON.parse(fs.readFileSync(path.join(tmpDir, 'state', 'openclaw.json'), 'utf8'));
   assert.equal(config.skills.entries['qqbot-cron'].enabled, false);
   assert.equal(config.skills.entries['feishu-cron-reminder'].enabled, false);
+});
+
+test('sync does not use OpenClaw catalog maxTokens when custom provider id does not match', (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-config-sync-anthropic-max-tokens-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  setElectronPaths(tmpDir);
+
+  const appConfig = {
+    model: {
+      defaultModel: 'MiniMax-M3',
+      defaultModelProvider: 'custom_0',
+    },
+    providers: {
+      custom_0: {
+        enabled: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://api.example.com/anthropic',
+        apiFormat: 'anthropic',
+        models: [
+          { id: 'MiniMax-M3', name: 'MiniMax M3', supportsImage: true, supportsThinking: true },
+        ],
+      },
+    },
+  };
+
+  const sync = createSync(tmpDir, appConfig);
+  const result = sync.sync('test-anthropic-max-tokens');
+
+  assert.equal(result.ok, true);
+  assert.equal(result.changed, true);
+
+  const config = JSON.parse(fs.readFileSync(path.join(tmpDir, 'state', 'openclaw.json'), 'utf8'));
+  const model = config.models.providers.custom_0.models[0];
+  assert.equal(config.models.providers.custom_0.api, 'anthropic-messages');
+  assert.equal(model.api, 'anthropic-messages');
+  assert.equal(model.contextWindow, 1000000);
+  assert.equal(model.maxTokens, 8192);
+});
+
+test('sync writes OpenClaw MiniMax maxTokens for inline provider models', (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-config-sync-minimax-max-tokens-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  setElectronPaths(tmpDir);
+
+  const appConfig = {
+    model: {
+      defaultModel: 'MiniMax-M3',
+      defaultModelProvider: 'minimax',
+    },
+    providers: {
+      minimax: {
+        enabled: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://api.minimaxi.com/anthropic',
+        apiFormat: 'anthropic',
+        models: [
+          { id: 'MiniMax-M3', name: 'MiniMax M3', supportsImage: true, supportsThinking: true },
+        ],
+      },
+    },
+  };
+
+  const sync = createSync(tmpDir, appConfig);
+  const result = sync.sync('test-minimax-max-tokens');
+
+  assert.equal(result.ok, true);
+  assert.equal(result.changed, true);
+
+  const config = JSON.parse(fs.readFileSync(path.join(tmpDir, 'state', 'openclaw.json'), 'utf8'));
+  const provider = config.models.providers.minimax;
+  const model = provider.models[0];
+  assert.equal(provider.baseUrl, 'https://api.minimaxi.com/anthropic');
+  assert.equal(provider.api, 'anthropic-messages');
+  assert.equal(model.api, 'anthropic-messages');
+  assert.equal(model.contextWindow, 1000000);
+  assert.equal(model.maxTokens, 131072);
+});
+
+test('sync writes conservative OpenClaw maxTokens for unknown Anthropic-format custom provider models', (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-config-sync-unknown-anthropic-max-tokens-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  setElectronPaths(tmpDir);
+
+  const appConfig = {
+    model: {
+      defaultModel: 'custom-claude-compatible',
+      defaultModelProvider: 'custom_0',
+    },
+    providers: {
+      custom_0: {
+        enabled: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://api.example.com/anthropic',
+        apiFormat: 'anthropic',
+        models: [
+          {
+            id: 'custom-claude-compatible',
+            name: 'Custom Claude Compatible',
+            supportsImage: false,
+            contextWindow: 1_000_000,
+          },
+        ],
+      },
+    },
+  };
+
+  const sync = createSync(tmpDir, appConfig);
+  const result = sync.sync('test-unknown-anthropic-max-tokens');
+
+  assert.equal(result.ok, true);
+  assert.equal(result.changed, true);
+
+  const config = JSON.parse(fs.readFileSync(path.join(tmpDir, 'state', 'openclaw.json'), 'utf8'));
+  const model = config.models.providers.custom_0.models[0];
+  assert.equal(config.models.providers.custom_0.api, 'anthropic-messages');
+  assert.equal(model.api, 'anthropic-messages');
+  assert.equal(model.contextWindow, 1000000);
+  assert.equal(model.maxTokens, 8192);
+});
+
+test('sync does not write generic maxTokens for OpenAI-format custom provider models', (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-config-sync-openai-no-max-tokens-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  setElectronPaths(tmpDir);
+
+  const appConfig = {
+    model: {
+      defaultModel: 'MiniMax-M3',
+      defaultModelProvider: 'custom_0',
+    },
+    providers: {
+      custom_0: {
+        enabled: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://api.example.com/v1',
+        apiFormat: 'openai',
+        models: [
+          { id: 'MiniMax-M3', name: 'MiniMax M3', supportsImage: true, supportsThinking: true },
+        ],
+      },
+    },
+  };
+
+  const sync = createSync(tmpDir, appConfig);
+  const result = sync.sync('test-openai-no-max-tokens');
+
+  assert.equal(result.ok, true);
+  assert.equal(result.changed, true);
+
+  const config = JSON.parse(fs.readFileSync(path.join(tmpDir, 'state', 'openclaw.json'), 'utf8'));
+  const model = config.models.providers.custom_0.models[0];
+  assert.equal(config.models.providers.custom_0.api, 'openai-completions');
+  assert.equal(model.api, 'openai-completions');
+  assert.equal('maxTokens' in model, false);
 });
 
 test('sync writes non-empty placeholder apiKey for providers that do not require auth (e.g. Ollama)', (t) => {

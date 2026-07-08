@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import type { CoworkPermissionRequest, CoworkPermissionResult } from '../../types/cowork';
 import { ExclamationTriangleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import React, { useEffect, useMemo, useState } from 'react';
+
 import { i18nService } from '../../services/i18n';
+import type { CoworkPermissionRequest, CoworkPermissionResult } from '../../types/cowork';
 
 type DangerLevel = 'safe' | 'caution' | 'destructive';
 
@@ -185,7 +186,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   permission,
   onRespond,
 }) => {
-  const toolInput = permission.toolInput ?? {};
+  const toolInput = useMemo(() => permission.toolInput ?? {}, [permission.toolInput]);
 
   const questions = useMemo<QuestionItem[]>(() => {
     if (permission.toolName !== 'AskUserQuestion') return [];
@@ -464,7 +465,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                     {i18nService.t('coworkToolInput')}
                   </label>
                   <div className="px-3 py-2 rounded-lg bg-surface max-h-40 overflow-y-auto">
-                    <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-mono">
+                    <pre className="text-code text-foreground whitespace-pre-wrap break-words font-mono">
                       {requestedCommand}
                     </pre>
                   </div>
@@ -496,7 +497,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                           {i18nService.t('coworkToolInput')}
                         </label>
                         <div className="px-3 py-2 rounded-lg bg-background max-h-40 overflow-y-auto">
-                          <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-mono">
+                          <pre className="text-code text-foreground whitespace-pre-wrap break-words font-mono">
                             {requestedCommand}
                           </pre>
                         </div>
@@ -549,7 +550,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                   {i18nService.t('coworkToolInput')}
                 </label>
                 <div className="px-3 py-2 rounded-lg bg-background">
-                  <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-mono">
+                  <pre className="text-code text-foreground whitespace-pre-wrap break-words font-mono">
                     {formatToolInput(permission.toolInput)}
                   </pre>
                 </div>

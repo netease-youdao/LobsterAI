@@ -2,30 +2,74 @@ import { ArrowPathIcon,XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
-import type { CoworkSession } from '../../types/cowork';
+import type { CoworkMessage, CoworkSession } from '../../types/cowork';
 import AssistantTurnBlock from '../cowork/AssistantTurnBlock';
 import {
   buildConversationTurns,
   buildDisplayItems,
 } from '../cowork/messageDisplayUtils';
 import UserMessageItem from '../cowork/UserMessageItem';
+import { formatDateTime, stripCronMetadataPrefix } from './utils';
 
 interface RunSessionModalProps {
+  /** Task name shown as the modal title instead of the raw session key. */
+  taskName?: string | null;
+  /** ISO start time of the run being viewed, shown under the title. */
+  runStartedAt?: string | null;
   sessionId?: string | null;
   sessionKey?: string | null;
+  runSummary?: string | null;
+  runError?: string | null;
   onClose: () => void;
+}
+
+/**
+ * Display-only cleanup of a cron run transcript: strip the machine-routing
+ * "[cron:...]" prefix from user prompts and drop back-to-back duplicates of
+ * the same prompt (the wake message can be recorded twice by the gateway).
+ */
+function cleanRunMessages(messages: CoworkMessage[]): CoworkMessage[] {
+  const cleaned: CoworkMessage[] = [];
+  let previousUserText: string | null = null;
+  for (const message of messages) {
+    if (message.type !== 'user') {
+      cleaned.push(message);
+      previousUserText = null;
+      continue;
+    }
+    const content = stripCronMetadataPrefix(message.content ?? '');
+    const normalized = content.trim();
+    if (previousUserText !== null && normalized === previousUserText) {
+      continue;
+    }
+    previousUserText = normalized;
+    cleaned.push(content === message.content ? message : { ...message, content });
+  }
+  return cleaned;
 }
 
 const MAX_RETRIES = 5;
 const RETRY_INTERVAL_MS = 3000;
 
-const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey, onClose }) => {
+const RunSessionModal: React.FC<RunSessionModalProps> = ({
+  taskName,
+  runStartedAt,
+  sessionId,
+  sessionKey,
+  runSummary,
+  runError,
+  onClose,
+}) => {
   const [session, setSession] = useState<CoworkSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelledRef = useRef(false);
+  const runFallbackContent = useMemo(
+    () => runSummary?.trim() || runError?.trim() || '',
+    [runError, runSummary],
+  );
 
   const loadSession = useCallback(async (isRetry = false): Promise<boolean> => {
     if (!isRetry) {
@@ -51,7 +95,10 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey
 
       // 2. If not found locally, try resolving via OpenClaw sessionKey
       if (!loadedSession && sessionKey) {
-        const result = await window.electron?.scheduledTasks?.resolveSession(sessionKey);
+        const result = await window.electron?.scheduledTasks?.resolveSession({
+          sessionId,
+          sessionKey,
+        });
         if (result?.success && result.session) {
           const s = result.session;
           loadedSession = {
@@ -70,11 +117,17 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey
         setError(null);
         return true;
       }
+      if (runFallbackContent) {
+        setSession(null);
+        setLoading(false);
+        setError(null);
+        return true;
+      }
       return false;
     } catch {
       return false;
     }
-  }, [sessionId, sessionKey]);
+  }, [runFallbackContent, sessionId, sessionKey]);
 
   useEffect(() => {
     cancelledRef.current = false;
@@ -137,8 +190,18 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey
     }
   };
 
-  const displayItems = useMemo(() => buildDisplayItems(session?.messages ?? []), [session?.messages]);
+  const cleanedMessages = useMemo(
+    () => cleanRunMessages(session?.messages ?? []),
+    [session?.messages],
+  );
+  const displayItems = useMemo(() => buildDisplayItems(cleanedMessages), [cleanedMessages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
+
+  const runTimeLabel = useMemo(() => {
+    if (!runStartedAt) return null;
+    const date = new Date(runStartedAt);
+    return Number.isFinite(date.getTime()) ? formatDateTime(date) : null;
+  }, [runStartedAt]);
 
   return (
     <div
@@ -154,14 +217,21 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-border-subtle bg-surface/50 shrink-0">
-          <h3 className="text-sm font-semibold text-foreground truncate">
-            {session?.title || i18nService.t('scheduledTasksViewSession')}
-          </h3>
+        <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-border-subtle bg-surface/50 shrink-0">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-foreground truncate">
+              {taskName?.trim() || session?.title || i18nService.t('scheduledTasksViewSession')}
+            </h3>
+            {runTimeLabel && (
+              <p className="mt-0.5 text-xs text-secondary">
+                {i18nService.t('scheduledTasksRunAtTime').replace('{time}', runTimeLabel)}
+              </p>
+            )}
+          </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1 rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+            className="shrink-0 p-1 rounded-lg text-secondary hover:bg-surface-raised transition-colors"
           >
             <XMarkIcon className="w-5 h-5" />
           </button>
@@ -197,7 +267,15 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey
             </div>
           )}
 
-          {!loading && !error && turns.length === 0 && (
+          {!loading && !error && turns.length === 0 && runFallbackContent && (
+            <div className="px-10 py-8">
+              <div className="whitespace-pre-wrap break-words text-sm leading-7 text-foreground">
+                {runFallbackContent}
+              </div>
+            </div>
+          )}
+
+          {!loading && !error && turns.length === 0 && !runFallbackContent && (
             <div className="flex items-center justify-center py-16">
               <span className="text-sm text-secondary">
                 {i18nService.t('scheduledTasksNoRuns')}

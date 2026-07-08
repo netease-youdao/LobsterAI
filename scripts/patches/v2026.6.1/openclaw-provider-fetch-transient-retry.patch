@@ -1,0 +1,189 @@
+diff --git a/src/agents/provider-transport-fetch.test.ts b/src/agents/provider-transport-fetch.test.ts
+index e35d2b6ea45..45709899daf 100644
+--- a/src/agents/provider-transport-fetch.test.ts
++++ b/src/agents/provider-transport-fetch.test.ts
+@@ -452,6 +452,65 @@ describe("buildGuardedModelFetch", () => {
+     expect(release).toHaveBeenCalledTimes(1);
+   });
+ 
++  it("retries transient provider transport failures before surfacing them to the SDK", async () => {
++    const transient = new TypeError("fetch failed") as TypeError & {
++      cause?: { name: string; code: string };
++    };
++    transient.cause = { name: "SocketError", code: "UND_ERR_SOCKET" };
++    const release = vi.fn(async () => undefined);
++    fetchWithSsrFGuardMock
++      .mockRejectedValueOnce(transient)
++      .mockResolvedValueOnce({
++        response: new Response('{"ok":true}', {
++          status: 200,
++          headers: { "content-type": "application/json" },
++        }),
++        finalUrl: "https://api.openai.com/v1/chat/completions",
++        release,
++      });
++    const model = {
++      id: "gpt-5.4",
++      provider: "openai",
++      api: "openai-completions",
++      baseUrl: "https://api.openai.com/v1",
++    } as unknown as Model<"openai-completions">;
++
++    const response = await buildGuardedModelFetch(model)(
++      "https://api.openai.com/v1/chat/completions",
++      {
++        method: "POST",
++        headers: { "content-type": "application/json" },
++        body: JSON.stringify({ model: "gpt-5.4", stream: true, messages: [] }),
++      },
++    );
++
++    expect(await response.text()).toContain('"ok":true');
++    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
++  });
++
++  it("does not retry transient transport failures when the request body cannot be replayed", async () => {
++    const transient = new TypeError("fetch failed") as TypeError & {
++      cause?: { name: string; code: string };
++    };
++    transient.cause = { name: "SocketError", code: "UND_ERR_SOCKET" };
++    fetchWithSsrFGuardMock.mockRejectedValue(transient);
++    const model = {
++      id: "gpt-5.4",
++      provider: "openai",
++      api: "openai-completions",
++      baseUrl: "https://api.openai.com/v1",
++    } as unknown as Model<"openai-completions">;
++    const body = new ReadableStream<Uint8Array>();
++
++    await expect(
++      buildGuardedModelFetch(model)("https://api.openai.com/v1/chat/completions", {
++        method: "POST",
++        body,
++      } as RequestInit),
++    ).rejects.toThrow("fetch failed");
++    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
++  });
++
+   it("scopes fake-IP DNS exemptions to the configured provider host", async () => {
+     const model = {
+       id: "gpt-5.4",
+diff --git a/src/agents/provider-transport-fetch.ts b/src/agents/provider-transport-fetch.ts
+index 18c9e0341d3..72bbf7bef0d 100644
+--- a/src/agents/provider-transport-fetch.ts
++++ b/src/agents/provider-transport-fetch.ts
+@@ -38,9 +38,20 @@ import {
+ } from "./provider-request-config.js";
+ 
+ const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
++const TRANSIENT_PROVIDER_FETCH_RETRY_DELAY_MS = 750;
+ const log = createSubsystemLogger("provider-transport-fetch");
+ const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
+ const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
++const TRANSIENT_PROVIDER_FETCH_ERROR_CODES = new Set([
++  "ECONNRESET",
++  "ECONNABORTED",
++  "EPIPE",
++  "ETIMEDOUT",
++  "UND_ERR_BODY_TIMEOUT",
++  "UND_ERR_CONNECT_TIMEOUT",
++  "UND_ERR_HEADERS_TIMEOUT",
++  "UND_ERR_SOCKET",
++]);
+ const RETRY_AFTER_HTTP_DATE_RE =
+   /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
+ const HTTP_DATE_MONTH_INDEX = new Map(
+@@ -536,6 +547,62 @@ function buildModelRequestSignal(
+   return AbortSignal.any([baseSignal, timeoutSignal]);
+ }
+ 
++function readErrorStringField(error: unknown, key: "code" | "message" | "name"): string | undefined {
++  if (!error || typeof error !== "object") {
++    return undefined;
++  }
++  const value = (error as Record<string, unknown>)[key];
++  return typeof value === "string" && value.trim() ? value.trim() : undefined;
++}
++
++function readErrorCause(error: unknown): unknown {
++  return error && typeof error === "object" ? (error as { cause?: unknown }).cause : undefined;
++}
++
++function isTransientProviderFetchTransportError(error: unknown): boolean {
++  const code = readErrorStringField(error, "code") ?? readErrorStringField(readErrorCause(error), "code");
++  if (code && TRANSIENT_PROVIDER_FETCH_ERROR_CODES.has(code)) {
++    return true;
++  }
++
++  const causeName = readErrorStringField(readErrorCause(error), "name");
++  if (causeName === "ConnectTimeoutError" || causeName === "SocketError") {
++    return true;
++  }
++
++  const message = error instanceof Error ? error.message : readErrorStringField(error, "message") ?? "";
++  return /\b(?:socket hang up|connection reset|connection aborted|fetch failed)\b/i.test(message) &&
++    (causeName === "ConnectTimeoutError" || causeName === "SocketError" || Boolean(code));
++}
++
++function isReplayableProviderFetchBody(body: BodyInit | null | undefined): boolean {
++  return (
++    body === undefined ||
++    body === null ||
++    typeof body === "string" ||
++    body instanceof URLSearchParams ||
++    body instanceof Blob ||
++    body instanceof FormData ||
++    body instanceof ArrayBuffer ||
++    ArrayBuffer.isView(body)
++  );
++}
++
++function shouldRetryProviderFetch(error: unknown, init: RequestInit | undefined): boolean {
++  if (init?.signal?.aborted) {
++    return false;
++  }
++  return isReplayableProviderFetchBody(init?.body as BodyInit | null | undefined) &&
++    isTransientProviderFetchTransportError(error);
++}
++
++function delayProviderFetchRetry(): Promise<void> {
++  return new Promise((resolve) => {
++    const timer = setTimeout(resolve, TRANSIENT_PROVIDER_FETCH_RETRY_DELAY_MS);
++    timer.unref?.();
++  });
++}
++
+ function resolveHttpOrigin(value: unknown): string | undefined {
+   if (typeof value !== "string" || !value.trim()) {
+     return undefined;
+@@ -725,11 +792,25 @@ export function buildGuardedModelFetch(
+         baseInit?.headers,
+         localServiceSignal,
+       );
+-      result = await fetchWithSsrFGuard(
+-        useEnvProxy
+-          ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+-          : guardedFetchOptions,
+-      );
++      for (let attempt = 1; ; attempt += 1) {
++        try {
++          result = await fetchWithSsrFGuard(
++            useEnvProxy
++              ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
++              : guardedFetchOptions,
++          );
++          break;
++        } catch (error) {
++          if (attempt >= 2 || !shouldRetryProviderFetch(error, baseInit)) {
++            throw error;
++          }
++          log.warn(
++            `[model-fetch] transient transport failure; retrying provider=${model.provider} ` +
++              `api=${model.api} model=${model.id} attempt=${attempt + 1} ${summarizeError(error)}`,
++          );
++          await delayProviderFetchRetry();
++        }
++      }
+     } catch (error) {
+       log.warn(
+         `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +

@@ -1,0 +1,43 @@
+﻿diff --git a/src/config/types.cron.ts b/src/config/types.cron.ts
+index ecef5dfcf8..e9456cc7c8 100644
+--- a/src/config/types.cron.ts
++++ b/src/config/types.cron.ts
+@@ -30,6 +30,8 @@ export type CronFailureDestinationConfig = {
+ 
+ export type CronConfig = {
+   enabled?: boolean;
++  /** Skip startup catch-up for cron jobs that became due while the gateway was offline. */
++  skipMissedJobs?: boolean;
+   store?: string;
+   maxConcurrentRuns?: number;
+   /** Override default retry policy for one-shot jobs on transient errors. */
+diff --git a/src/config/zod-schema.ts b/src/config/zod-schema.ts
+index fee88ce6c8..343073c008 100644
+--- a/src/config/zod-schema.ts
++++ b/src/config/zod-schema.ts
+@@ -792,6 +792,7 @@ export const OpenClawSchema = z
+     cron: z
+       .object({
+         enabled: z.boolean().optional(),
++        skipMissedJobs: z.boolean().optional(),
+         store: z.string().optional(),
+         maxConcurrentRuns: z.number().int().positive().optional(),
+         retry: z
+diff --git a/src/cron/service/timer.ts b/src/cron/service/timer.ts
+index 28dc6a0b21..4a29c08fe7 100644
+--- a/src/cron/service/timer.ts
++++ b/src/cron/service/timer.ts
+@@ -1124,6 +1124,13 @@ async function planStartupCatchup(
+     state.deps.maxMissedJobsPerRestart ?? DEFAULT_MAX_MISSED_JOBS_PER_RESTART,
+   );
+   return locked(state, async () => {
++    if (state.deps.cronConfig?.skipMissedJobs === true) {
++      state.deps.log.info(
++        { skipMissedJobs: true },
++        "cron: skipping missed jobs after restart",
++      );
++      return { candidates: [], deferredJobs: [] };
++    }
+     await ensureLoaded(state, { skipRecompute: true });
+     if (!state.store) {
+       return { candidates: [], deferredJobs: [] };

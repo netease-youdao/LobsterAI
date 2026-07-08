@@ -21,11 +21,11 @@ export class SubagentRunStore {
     this.db = db;
   }
 
-  insertSubagentRun(run: Omit<SubagentRun, 'endedAt'>): void {
+  insertSubagentRun(run: Omit<SubagentRun, 'endedAt'> & { endedAt?: number | null }): void {
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO subagent_runs (id, parent_session_id, session_key, agent_id, task, label, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO subagent_runs (id, parent_session_id, session_key, agent_id, task, label, status, created_at, ended_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         run.id,
@@ -36,6 +36,7 @@ export class SubagentRunStore {
         run.label ?? null,
         run.status,
         run.createdAt,
+        run.endedAt ?? null,
       );
   }
 

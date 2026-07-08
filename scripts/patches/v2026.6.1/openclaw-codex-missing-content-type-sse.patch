@@ -1,0 +1,122 @@
+diff --git a/src/agents/provider-transport-fetch.test.ts b/src/agents/provider-transport-fetch.test.ts
+index e35d2b6ea45..9f99cf13b9e 100644
+--- a/src/agents/provider-transport-fetch.test.ts
++++ b/src/agents/provider-transport-fetch.test.ts
+@@ -203,6 +203,85 @@ describe("buildGuardedModelFetch", () => {
+     expect(release).toHaveBeenCalled();
+   });
+ 
++  it("synthesizes a missing content-type for openai-chatgpt-responses streamed responses", async () => {
++    const release = vi.fn(async () => undefined);
++    const encoder = new TextEncoder();
++    const model = {
++      id: "gpt-5.5",
++      provider: "openai",
++      api: "openai-chatgpt-responses",
++      baseUrl: "https://chatgpt.com/backend-api/codex",
++    } as unknown as Model<"openai-chatgpt-responses">;
++    fetchWithSsrFGuardMock.mockResolvedValue({
++      // The ChatGPT/Codex backend streams valid SSE with no Content-Type header.
++      response: new Response(
++        new ReadableStream<Uint8Array>({
++          start(controller) {
++            controller.enqueue(
++              encoder.encode('event: response.created\ndata: {"type":"response.created"}\n\n'),
++            );
++            controller.close();
++          },
++        }),
++        { status: 200 },
++      ),
++      finalUrl: "https://chatgpt.com/backend-api/codex/responses",
++      release,
++    });
++
++    const response = await buildGuardedModelFetch(model)(
++      "https://chatgpt.com/backend-api/codex/responses",
++      {
++        method: "POST",
++        headers: { "content-type": "application/json" },
++        body: JSON.stringify({ model: "gpt-5.5", stream: true }),
++      },
++    );
++
++    expect(response.status).toBe(200);
++    expect(response.headers.get("content-type")).toMatch(/text\/event-stream/);
++  });
++
++  it("still rejects a missing content-type for non-codex streamed responses", async () => {
++    const release = vi.fn(async () => undefined);
++    const encoder = new TextEncoder();
++    const model = {
++      id: "private-model",
++      provider: "custom-openai",
++      api: "openai-responses",
++      baseUrl: "https://proxy.example.com",
++    } as unknown as Model<"openai-responses">;
++    fetchWithSsrFGuardMock.mockResolvedValue({
++      response: new Response(
++        new ReadableStream<Uint8Array>({
++          start(controller) {
++            controller.enqueue(encoder.encode("not an sse stream"));
++            controller.close();
++          },
++        }),
++        { status: 200 },
++      ),
++      finalUrl: "https://proxy.example.com/responses",
++      release,
++    });
++
++    let error: unknown;
++    try {
++      await buildGuardedModelFetch(model)("https://proxy.example.com/responses", {
++        method: "POST",
++        headers: { "content-type": "application/json" },
++        body: JSON.stringify({ model: "private-model", stream: true }),
++      });
++    } catch (caught) {
++      error = caught;
++    }
++
++    expect(error).toMatchObject({
++      name: "ProviderHttpError",
++      code: "invalid_provider_content_type",
++    });
++  });
++
+   it("ensures configured local services before the model request", async () => {
+     const release = vi.fn();
+     ensureModelProviderLocalServiceMock.mockResolvedValue({ release });
+diff --git a/src/agents/provider-transport-fetch.ts b/src/agents/provider-transport-fetch.ts
+index 18c9e0341d3..cf7e49c9098 100644
+--- a/src/agents/provider-transport-fetch.ts
++++ b/src/agents/provider-transport-fetch.ts
+@@ -754,6 +754,27 @@ export function buildGuardedModelFetch(
+         headers,
+       });
+     }
++    // The ChatGPT/Codex backend (chatgpt.com/backend-api/codex) streams a valid
++    // SSE response with no Content-Type header. Synthesize it so the content-type
++    // assertion passes and the SSE sanitizer (which drops keepalive/empty frames
++    // the OpenAI SDK cannot parse) runs, instead of failing the stream as
++    // invalid_provider_content_type and surfacing a bogus "network connection error".
++    if (
++      synthesizeJsonAsSse &&
++      options?.sanitizeSse !== false &&
++      model.api === "openai-chatgpt-responses" &&
++      response.ok &&
++      response.body &&
++      (response.headers.get("content-type") ?? "") === ""
++    ) {
++      const headers = new Headers(response.headers);
++      headers.set("content-type", "text/event-stream");
++      response = new Response(response.body, {
++        status: response.status,
++        statusText: response.statusText,
++        headers,
++      });
++    }
+     if (synthesizeJsonAsSse && options?.sanitizeSse !== false) {
+       await assertOpenAISdkStreamContentType({
+         response,

@@ -261,7 +261,7 @@ const DiffView: React.FC<DiffViewProps> = ({ oldStr, newStr, filePath }) => {
       {/* Diff content */}
       <div className="max-h-80 overflow-auto">
         {viewMode === 'unified' ? (
-          <table className="w-full text-xs font-mono border-collapse">
+          <table className="w-full text-code font-mono border-collapse">
             <tbody>
               {diffLines.map((line, idx) => {
                 const colors = LINE_COLORS[line.type];
@@ -285,7 +285,7 @@ const DiffView: React.FC<DiffViewProps> = ({ oldStr, newStr, filePath }) => {
             </tbody>
           </table>
         ) : (
-          <table className="w-full text-xs font-mono border-collapse table-fixed">
+          <table className="w-full text-code font-mono border-collapse table-fixed">
             <tbody>
               {splitPairs.map((pair, idx) => {
                 const leftColors = pair.left ? LINE_COLORS[pair.left.type === 'context' ? 'context' : 'removed'] : LINE_COLORS.context;

@@ -88,6 +88,7 @@ if (!bashExecutable) {
 //    npm, pnpm, etc. are findable inside the bash script even when spawned
 //    through deeply-nested npm/cmd.exe process chains.
 const env = { ...process.env };
+env.CI = env.CI || 'true';
 if (process.platform === 'win32') {
   const nodeDir = path.dirname(process.execPath);
   const pathEntries = Object.entries(env).filter(([k]) => k.toUpperCase() === 'PATH');

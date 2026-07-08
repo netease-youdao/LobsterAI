@@ -9,6 +9,7 @@ interface KitsButtonProps {
   onManageKits: () => void;
   className?: string;
   iconClassName?: string;
+  onOpenChange?: (open: boolean) => void;
 }
 
 const KitsButton: React.FC<KitsButtonProps> = ({
@@ -16,15 +17,21 @@ const KitsButton: React.FC<KitsButtonProps> = ({
   onManageKits,
   className = '',
   iconClassName = 'h-5 w-5',
+  onOpenChange,
 }) => {
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
   const handleButtonClick = () => {
-    setIsPopoverOpen(prev => !prev);
+    setIsPopoverOpen(prev => {
+      const next = !prev;
+      onOpenChange?.(next);
+      return next;
+    });
   };
 
   const handleClosePopover = () => {
+    onOpenChange?.(false);
     setIsPopoverOpen(false);
   };
 

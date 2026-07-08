@@ -1,6 +1,6 @@
 import { expect,test } from 'vitest';
 
-import { classifyErrorKey } from './coworkErrorClassify';
+import { classifyErrorKey, isLobsterAIQuotaExhaustedError } from './coworkErrorClassify';
 
 const classifyError = (error: string) => classifyErrorKey(error) ?? error;
 
@@ -30,8 +30,32 @@ test('auth: HTTP 401', () => {
   expect(classifyError('Request failed with status 401')).toBe('coworkErrorAuthInvalid');
 });
 
+test('auth: remote MCP ApiKey expired or inactive', () => {
+  expect(classifyError('ApiKey is expired, deleted, or user is inactive')).toBe('coworkErrorAuthInvalid');
+});
+
 test('auth: unauthorized', () => {
   expect(classifyError('Unauthorized access')).toBe('coworkErrorAuthInvalid');
+});
+
+test('auth: OAuth token expired', () => {
+  expect(classifyError('token has expired')).toBe('coworkErrorOAuthInvalid');
+});
+
+test('auth: invalid authorization method', () => {
+  expect(classifyError('invalid authorization method')).toBe('coworkErrorOAuthInvalid');
+});
+
+test('auth: provider names containing oauth are not enough to classify auth failure', () => {
+  expect(classifyError('Unknown model: qwen-oauth/qwen3.6-plus')).toBe('Unknown model: qwen-oauth/qwen3.6-plus');
+});
+
+test('auth: provider model access denied', () => {
+  expect(classifyError('403 您无权访问glm-x-preview。')).toBe('coworkErrorModelAccessDenied');
+});
+
+test('auth: auth scope maps to model access denied', () => {
+  expect(classifyError('providerRuntimeFailureKind=auth_scope')).toBe('coworkErrorModelAccessDenied');
 });
 
 // ==================== Billing errors ====================
@@ -45,7 +69,28 @@ test('billing: OpenAI insufficient_quota', () => {
 });
 
 test('billing: LobsterAI free quota exhausted', () => {
-  expect(classifyError('免费额度已用完，请升级套餐')).toBe('coworkErrorFreeQuotaExhausted');
+  expect(classifyError('免费额度已用完，请升级套餐')).toBe('coworkErrorQuotaExhausted');
+});
+
+test('billing: LobsterAI daily free quota code exhausted', () => {
+  expect(classifyError('{"error":{"message":"今日免费额度已用完","code":40200}}')).toBe('coworkErrorQuotaExhausted');
+});
+
+test('billing: LobsterAI free quota code exhausted', () => {
+  expect(classifyError('{"error":{"message":"免费额度已用完，请升级套餐","code":40201}}')).toBe('coworkErrorQuotaExhausted');
+});
+
+test('billing: LobsterAI monthly credits exhausted', () => {
+  expect(classifyError('本月积分已用完')).toBe('coworkErrorQuotaExhausted');
+});
+
+test('billing: LobsterAI monthly quota JSON payload', () => {
+  expect(classifyError('{"type":"error","error":{"type":"proxy_error","message":"本月积分已用完","code":40202}}')).toBe('coworkErrorQuotaExhausted');
+});
+
+test('billing: detects LobsterAI quota exhausted for proxy helpers', () => {
+  expect(isLobsterAIQuotaExhaustedError('monthly credits exhausted')).toBe(true);
+  expect(isLobsterAIQuotaExhaustedError('Request failed with status 402')).toBe(false);
 });
 
 test('billing: OpenRouter insufficient credits', () => {
@@ -208,6 +253,22 @@ test('network: ETIMEDOUT', () => {
 
 test('network: could not connect', () => {
   expect(classifyError('could not connect to server')).toBe('coworkErrorNetworkError');
+});
+
+test('network: MiniMax undici fetch connect timeout', () => {
+  expect(classifyError(
+    '[provider-transport-fetch] [model-fetch] error provider=minimax api=openai-completions '
+    + 'model=MiniMax-M2.7 elapsedMs=10552 name=TypeError code=undefined '
+    + 'causeName=ConnectTimeoutError causeCode=UND_ERR_CONNECT_TIMEOUT message=fetch failed',
+  )).toBe('coworkErrorNetworkError');
+});
+
+test('network: provider network request failed', () => {
+  expect(classifyError('Network request failed while calling provider')).toBe('coworkErrorNetworkError');
+});
+
+test('network: socket hang up', () => {
+  expect(classifyError('request failed: socket hang up')).toBe('coworkErrorNetworkError');
 });
 
 // ==================== Server errors ====================

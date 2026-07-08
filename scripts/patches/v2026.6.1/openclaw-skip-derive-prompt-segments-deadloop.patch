@@ -1,0 +1,18 @@
+diff --git a/src/auto-reply/reply/agent-runner.ts b/src/auto-reply/reply/agent-runner.ts
+index 40caea7ced..cc51c352e6 100644
+--- a/src/auto-reply/reply/agent-runner.ts
++++ b/src/auto-reply/reply/agent-runner.ts
+@@ -2190,9 +2190,10 @@ export async function runReplyAgent(params: {
+         runResult.meta?.requestShaping?.blockStreaming ??
+         normalizeOptionalString(resolvedBlockStreamingBreak),
+     };
+-    const promptSegments =
+-      (runResult.meta?.promptSegments as TracePromptSegmentView[] | undefined) ??
+-      derivePromptSegments(rawUserText);
++    // LobsterAI patch: skip derivePromptSegments fallback. The fallback is only
++    // used for trace/diagnostics prompt segmentation and must not block reply
++    // delivery when raw user text contains media attachment markers.
++    const promptSegments = runResult.meta?.promptSegments as TracePromptSegmentView[] | undefined;
+     const toolSummary = runResult.meta?.toolSummary as TraceToolSummaryView | undefined;
+     const completion =
+       (runResult.meta?.completion as TraceCompletionView | undefined) ??

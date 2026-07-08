@@ -1,0 +1,32 @@
+diff --git a/src/agents/shell-snapshot.ts b/src/agents/shell-snapshot.ts
+--- a/src/agents/shell-snapshot.ts
++++ b/src/agents/shell-snapshot.ts
+@@ -53,6 +53,7 @@ const SECRET_SHELL_STATE_PATTERNS = [
+   /\b(ghp_|github_pat_|sk-[A-Za-z0-9]|xox[baprs]-|ya29\.|AIza[0-9A-Za-z_-]|AKIA[0-9A-Z]{16})/,
+   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+ ] as const;
++const IS_ELECTRON_RUNTIME = Boolean(process.versions.electron);
+ 
+ type ShellSnapshot = {
+   path: string;
+@@ -261,7 +262,7 @@ async function captureShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<str
+     buildAliasCaptureScript(shellName),
+     "(typeset -f 2>/dev/null || declare -f 2>/dev/null || true)",
+     `printf '\\n%s\\n' ${shQuote(ENV_MARKER)}`,
+-    `${shQuote(process.execPath)} -e ${shQuote(ENV_CAPTURE_NODE_SCRIPT)}`,
++    buildEnvCaptureNodeCommand(),
+     `} > ${shQuote(captureOutputPath)}`,
+   ].join("\n");
+ 
+@@ -329,6 +330,11 @@ function buildAliasCaptureScript(shellName: string): string {
+   return shellName === "zsh" ? "alias -L 2>/dev/null || true" : "alias 2>/dev/null || true";
+ }
+ 
++function buildEnvCaptureNodeCommand(): string {
++  const command = `${shQuote(process.execPath)} -e ${shQuote(ENV_CAPTURE_NODE_SCRIPT)}`;
++  return IS_ELECTRON_RUNTIME ? `ELECTRON_RUN_AS_NODE=1 ${command}` : command;
++}
++
+ const ENV_CAPTURE_NODE_SCRIPT = `
+ const safe = new Set(${JSON.stringify([...SAFE_ENV_NAMES].toSorted())});
+ const blocked = ${SECRET_ENV_PATTERN.toString()};

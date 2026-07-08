@@ -1,0 +1,282 @@
+diff --git a/packages/gateway-protocol/src/index.ts b/packages/gateway-protocol/src/index.ts
+index 942ae44d41..f1187c1a43 100644
+--- a/packages/gateway-protocol/src/index.ts
++++ b/packages/gateway-protocol/src/index.ts
+@@ -330,6 +330,8 @@ import {
+   SessionsMessagesSubscribeParamsSchema,
+   type SessionsMessagesUnsubscribeParams,
+   SessionsMessagesUnsubscribeParamsSchema,
++  type SessionsGoalParams,
++  SessionsGoalParamsSchema,
+   type SessionsPatchParams,
+   SessionsPatchParamsSchema,
+   type SessionsPluginPatchParams,
+@@ -619,6 +621,8 @@ export const validateSessionsMessagesUnsubscribeParams =
+   lazyCompile<SessionsMessagesUnsubscribeParams>(SessionsMessagesUnsubscribeParamsSchema);
+ export const validateSessionsAbortParams =
+   lazyCompile<SessionsAbortParams>(SessionsAbortParamsSchema);
++export const validateSessionsGoalParams =
++  lazyCompile<SessionsGoalParams>(SessionsGoalParamsSchema);
+ export const validateSessionsPatchParams =
+   lazyCompile<SessionsPatchParams>(SessionsPatchParamsSchema);
+ export const validateSessionsPluginPatchParams = lazyCompile<SessionsPluginPatchParams>(
+@@ -982,6 +986,7 @@ export {
+   SessionsCreateParamsSchema,
+   SessionsSendParamsSchema,
+   SessionsAbortParamsSchema,
++  SessionsGoalParamsSchema,
+   SessionsPatchParamsSchema,
+   SessionsPluginPatchParamsSchema,
+   SessionsResetParamsSchema,
+diff --git a/packages/gateway-protocol/src/schema/protocol-schemas.ts b/packages/gateway-protocol/src/schema/protocol-schemas.ts
+index 051d6569f2..e5e3f2f00c 100644
+--- a/packages/gateway-protocol/src/schema/protocol-schemas.ts
++++ b/packages/gateway-protocol/src/schema/protocol-schemas.ts
+@@ -261,6 +261,7 @@ import {
+   SessionsListParamsSchema,
+   SessionsMessagesSubscribeParamsSchema,
+   SessionsMessagesUnsubscribeParamsSchema,
++  SessionsGoalParamsSchema,
+   SessionsPatchParamsSchema,
+   SessionsPluginPatchParamsSchema,
+   SessionsPluginPatchResultSchema,
+@@ -364,6 +365,7 @@ export const ProtocolSchemas = {
+   SessionsMessagesSubscribeParams: SessionsMessagesSubscribeParamsSchema,
+   SessionsMessagesUnsubscribeParams: SessionsMessagesUnsubscribeParamsSchema,
+   SessionsAbortParams: SessionsAbortParamsSchema,
++  SessionsGoalParams: SessionsGoalParamsSchema,
+   SessionsPatchParams: SessionsPatchParamsSchema,
+   SessionsPluginPatchParams: SessionsPluginPatchParamsSchema,
+   SessionsPluginPatchResult: SessionsPluginPatchResultSchema,
+diff --git a/packages/gateway-protocol/src/schema/sessions.ts b/packages/gateway-protocol/src/schema/sessions.ts
+index 1ee640782d..9fed10cbc5 100644
+--- a/packages/gateway-protocol/src/schema/sessions.ts
++++ b/packages/gateway-protocol/src/schema/sessions.ts
+@@ -227,6 +227,31 @@ export const SessionsPatchParamsSchema = Type.Object(
+   { additionalProperties: false },
+ );
+ 
++export const SessionsGoalParamsSchema = Type.Object(
++  {
++    key: NonEmptyString,
++    agentId: Type.Optional(NonEmptyString),
++    action: Type.Optional(
++      Type.Union([
++        Type.Literal("block"),
++        Type.Literal("blocked"),
++        Type.Literal("clear"),
++        Type.Literal("complete"),
++        Type.Literal("create"),
++        Type.Literal("done"),
++        Type.Literal("pause"),
++        Type.Literal("resume"),
++        Type.Literal("set"),
++        Type.Literal("start"),
++        Type.Literal("status"),
++      ]),
++    ),
++    text: Type.Optional(Type.String()),
++    tokenBudget: Type.Optional(Type.Integer({ minimum: 1 })),
++  },
++  { additionalProperties: false },
++);
++
+ export const SessionsPluginPatchParamsSchema = Type.Object(
+   {
+     key: NonEmptyString,
+diff --git a/packages/gateway-protocol/src/schema/types.ts b/packages/gateway-protocol/src/schema/types.ts
+index 38e5586e86..7685a8cab5 100644
+--- a/packages/gateway-protocol/src/schema/types.ts
++++ b/packages/gateway-protocol/src/schema/types.ts
+@@ -69,6 +69,7 @@ export type SessionsSendParams = SchemaType<"SessionsSendParams">;
+ export type SessionsMessagesSubscribeParams = SchemaType<"SessionsMessagesSubscribeParams">;
+ export type SessionsMessagesUnsubscribeParams = SchemaType<"SessionsMessagesUnsubscribeParams">;
+ export type SessionsAbortParams = SchemaType<"SessionsAbortParams">;
++export type SessionsGoalParams = SchemaType<"SessionsGoalParams">;
+ export type SessionsPatchParams = SchemaType<"SessionsPatchParams">;
+ export type SessionsPluginPatchParams = SchemaType<"SessionsPluginPatchParams">;
+ export type SessionsPluginPatchResult = SchemaType<"SessionsPluginPatchResult">;
+diff --git a/src/gateway/methods/core-descriptors.ts b/src/gateway/methods/core-descriptors.ts
+index 7950cd1b75..f2b6303dc0 100644
+--- a/src/gateway/methods/core-descriptors.ts
++++ b/src/gateway/methods/core-descriptors.ts
+@@ -149,6 +149,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
+   { name: "sessions.create", scope: "operator.write", startup: true },
+   { name: "sessions.send", scope: "operator.write", startup: true },
+   { name: "sessions.abort", scope: "operator.write", startup: true },
++  { name: "sessions.goal", scope: "operator.write", startup: true },
+   { name: "sessions.patch", scope: "operator.admin" },
+   { name: "sessions.pluginPatch", scope: "operator.admin" },
+   { name: "sessions.cleanup", scope: "operator.admin" },
+diff --git a/src/gateway/server-methods.ts b/src/gateway/server-methods.ts
+index 64abaa9f75..ca7a60568c 100644
+--- a/src/gateway/server-methods.ts
++++ b/src/gateway/server-methods.ts
+@@ -476,6 +476,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
+       "sessions.send",
+       "sessions.steer",
+       "sessions.abort",
++      "sessions.goal",
+       "sessions.patch",
+       "sessions.pluginPatch",
+       "sessions.reset",
+diff --git a/src/gateway/server-methods/sessions.ts b/src/gateway/server-methods/sessions.ts
+index 2bb78aff42..90a166259a 100644
+--- a/src/gateway/server-methods/sessions.ts
++++ b/src/gateway/server-methods/sessions.ts
+@@ -24,6 +24,7 @@ import {
+   validateSessionsListParams,
+   validateSessionsMessagesSubscribeParams,
+   validateSessionsMessagesUnsubscribeParams,
++  validateSessionsGoalParams,
+   validateSessionsPatchParams,
+   validateSessionsPluginPatchParams,
+   validateSessionsPreviewParams,
+@@ -48,8 +49,12 @@ import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+ import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
+ import {
+   loadSessionStore,
++  clearSessionGoal,
++  createSessionGoal,
++  getSessionGoal,
+   runSessionsCleanup,
+   serializeSessionCleanupResult,
++  updateSessionGoalStatus,
+   resolveMainSessionKey,
+   resolveSessionFilePath,
+   resolveSessionFilePathOptions,
+@@ -2168,6 +2173,134 @@ export const sessionsHandlers: GatewayRequestHandlers = {
+       });
+     }
+   },
++  "sessions.goal": async ({ params, respond, context, client, isWebchatConnect }) => {
++    if (!assertValidParams(params, validateSessionsGoalParams, "sessions.goal", respond)) {
++      return;
++    }
++    const p = params;
++    const key = requireSessionKey(p.key, respond);
++    if (!key) {
++      return;
++    }
++    if (rejectWebchatSessionMutation({ action: "patch", client, isWebchatConnect, respond })) {
++      return;
++    }
++
++    const cfg = context.getRuntimeConfig();
++    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
++    if (!requestedAgent.ok) {
++      respond(false, undefined, requestedAgent.error);
++      return;
++    }
++    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
++      agentId: requestedAgent.agentId,
++    });
++    const store = loadSessionStore(storePath);
++    const goalStoreKey = target.storeKeys.find((storeKey) => Boolean(store[storeKey]?.goal));
++    const sessionKey = goalStoreKey ?? target.canonicalKey ?? key;
++    const action = p.action ?? "status";
++    const text = normalizeOptionalString(p.text) ?? "";
++    try {
++      let goal = undefined;
++      switch (action) {
++        case "status": {
++          goal = (await getSessionGoal({ sessionKey, storePath })).goal;
++          break;
++        }
++        case "start":
++        case "create": {
++          if (!text) {
++            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "objective required"));
++            return;
++          }
++          goal = await createSessionGoal({
++            sessionKey,
++            storePath,
++            objective: text,
++            tokenBudget: p.tokenBudget,
++          });
++          break;
++        }
++        case "set": {
++          if (!text) {
++            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "objective required"));
++            return;
++          }
++          await clearSessionGoal({ sessionKey, storePath });
++          goal = await createSessionGoal({
++            sessionKey,
++            storePath,
++            objective: text,
++            tokenBudget: p.tokenBudget,
++          });
++          break;
++        }
++        case "pause": {
++          goal = await updateSessionGoalStatus({
++            sessionKey,
++            storePath,
++            status: "paused",
++            ...(text ? { note: text } : {}),
++          });
++          break;
++        }
++        case "resume": {
++          goal = await updateSessionGoalStatus({
++            sessionKey,
++            storePath,
++            status: "active",
++            ...(text ? { note: text } : {}),
++          });
++          break;
++        }
++        case "complete":
++        case "done": {
++          goal = await updateSessionGoalStatus({
++            sessionKey,
++            storePath,
++            status: "complete",
++            ...(text ? { note: text } : {}),
++          });
++          break;
++        }
++        case "block":
++        case "blocked": {
++          goal = await updateSessionGoalStatus({
++            sessionKey,
++            storePath,
++            status: "blocked",
++            ...(text ? { note: text } : {}),
++          });
++          break;
++        }
++        case "clear": {
++          await clearSessionGoal({ sessionKey, storePath });
++          goal = null;
++          break;
++        }
++        default:
++          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid goal action"));
++          return;
++      }
++      respond(true, { ok: true, goal: goal ?? null }, undefined);
++      emitSessionsChanged(context, {
++        sessionKey,
++        ...(sessionKey === "global" && requestedAgent.agentId
++          ? { agentId: requestedAgent.agentId }
++          : {}),
++        reason: "goal",
++      });
++    } catch (err) {
++      respond(
++        false,
++        undefined,
++        errorShape(
++          ErrorCodes.INVALID_REQUEST,
++          err instanceof Error ? err.message : String(err),
++        ),
++      );
++    }
++  },
+   "sessions.patch": async ({ params, respond, context, client, isWebchatConnect }) => {
+     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
+       return;

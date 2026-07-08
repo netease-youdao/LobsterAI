@@ -12,7 +12,7 @@ interface KitIconProps {
 const KitIcon: React.FC<KitIconProps> = ({
   icon,
   className = 'h-16 w-16',
-  fallbackClassName = 'bg-primary-muted text-primary',
+  fallbackClassName = 'rounded-xl bg-primary-muted text-primary',
   fallbackIconClassName = 'h-1/2 w-1/2',
 }) => {
   const [imageFailed, setImageFailed] = useState(false);
@@ -31,7 +31,7 @@ const KitIcon: React.FC<KitIconProps> = ({
   }
 
   return (
-    <span className={`${className} ${fallbackClassName} inline-flex shrink-0 items-center justify-center rounded-xl`}>
+    <span className={`${className} ${fallbackClassName} inline-flex shrink-0 items-center justify-center`}>
       <SidebarKitsIcon className={fallbackIconClassName} />
     </span>
   );

@@ -92,6 +92,7 @@ export class SqliteStore {
         fork_workspace_path TEXT,
         fork_git_branch TEXT,
         fork_git_base_ref TEXT,
+        goal_json TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -371,6 +372,11 @@ export class SqliteStore {
 
       if (!colNames.includes('fork_git_base_ref')) {
         this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN fork_git_base_ref TEXT;');
+        this.didRunMigration = true;
+      }
+
+      if (!colNames.includes('goal_json')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN goal_json TEXT;');
         this.didRunMigration = true;
       }
 

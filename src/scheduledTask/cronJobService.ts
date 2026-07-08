@@ -131,6 +131,12 @@ interface CronJobServiceDeps {
   ensureGatewayReady: () => Promise<void>;
 }
 
+/** Delivery routing summary cached per job for synchronous lookups. */
+export interface ScheduledTaskJobDelivery {
+  mode: DeliveryModeType;
+  channel?: string;
+}
+
 type InternalScheduledTaskCandidate = {
   description?: string | null;
   payload?: {
@@ -288,15 +294,13 @@ function toGatewayDelivery(delivery?: ScheduledTaskDelivery): GatewayDelivery | 
     return undefined;
   }
   if (delivery.mode === DeliveryMode.None) {
-    // Preserve channel/to even with mode='none' so IM notification target round-trips
-    // through the gateway for the edit form to display.
-    const result: GatewayDelivery = {
-      mode: DeliveryMode.None,
-      ...(delivery.channel ? { channel: delivery.channel } : {}),
-      ...(delivery.to ? { to: delivery.to } : {}),
-    } as GatewayDelivery;
+    // mode='none' means no notification; send a clean { mode: 'none' } patch.
+    // The gateway patch-merges delivery and cannot clear a previously-set
+    // channel/to, but mapGatewayJob strips any residual target on the way back
+    // so the UI never surfaces a notification target for none-mode tasks.
+    const result: GatewayDelivery = { mode: DeliveryMode.None };
     console.log(
-      '[CronJobService][toGatewayDelivery] mode=none with preserved channel/to:',
+      '[CronJobService][toGatewayDelivery] mode=none, cleared channel/to:',
       JSON.stringify(result),
     );
     return result;
@@ -359,15 +363,20 @@ export function mapGatewayTaskState(
   };
 }
 
-export function mapGatewayJob(job: GatewayJob): ScheduledTask {
-  const delivery = job.delivery ?? { mode: DeliveryMode.None };
-
-  // Infer delivery channel/to from sessionKey when the gateway job has no
-  // explicit delivery target (common for agent-initiated cron.add tasks).
+/**
+ * Maps a non-`none` gateway delivery onto the UI model, inferring channel/to
+ * from `sessionKey` when the gateway job has no explicit delivery target
+ * (common for agent-initiated cron.add tasks). Callers must handle
+ * `mode === 'none'` separately so stale gateway-retained targets are stripped.
+ */
+function mapGatewayDeliveryTarget(
+  delivery: GatewayDelivery,
+  sessionKey: string | null | undefined,
+): ScheduledTaskDelivery {
   let inferredChannel: string | undefined;
   let inferredTo: string | undefined;
-  if (!delivery.channel && job.sessionKey) {
-    const parsed = parseChannelSessionKey(job.sessionKey);
+  if (!delivery.channel && sessionKey) {
+    const parsed = parseChannelSessionKey(sessionKey);
     if (parsed) {
       const channelName = PlatformRegistry.channelOf(parsed.platform);
       if (channelName) {
@@ -376,6 +385,31 @@ export function mapGatewayJob(job: GatewayJob): ScheduledTask {
       }
     }
   }
+
+  return {
+    mode: delivery.mode,
+    ...(delivery.channel || inferredChannel
+      ? { channel: delivery.channel ?? inferredChannel }
+      : {}),
+    ...(delivery.to || inferredTo ? { to: delivery.to ?? inferredTo } : {}),
+    ...(delivery.accountId ? { accountId: delivery.accountId } : {}),
+    ...(typeof delivery.bestEffort === 'boolean' ? { bestEffort: delivery.bestEffort } : {}),
+  };
+}
+
+export function mapGatewayJob(job: GatewayJob): ScheduledTask {
+  const delivery = job.delivery ?? { mode: DeliveryMode.None };
+
+  // mode='none' means no notification. The gateway patch-merges delivery on
+  // cron.update and cannot clear a previously-set channel/to, so a job that was
+  // switched to "不通知" still carries the stale target on subsequent reads.
+  // Strip any residual channel/to/accountId here so update/list/get/refresh
+  // all surface a clean { mode: 'none' } to the UI. This is the single
+  // chokepoint for gateway→UI job mapping, so it covers every read path.
+  const mappedDelivery: ScheduledTaskDelivery =
+    delivery.mode === DeliveryMode.None
+      ? { mode: DeliveryMode.None }
+      : mapGatewayDeliveryTarget(delivery, job.sessionKey);
 
   return {
     id: job.id,
@@ -396,15 +430,7 @@ export function mapGatewayJob(job: GatewayJob): ScheduledTask {
               : {}),
             ...(job.payload.model ? { model: job.payload.model } : {}),
           },
-    delivery: {
-      mode: delivery.mode,
-      ...(delivery.channel || inferredChannel
-        ? { channel: delivery.channel ?? inferredChannel }
-        : {}),
-      ...(delivery.to || inferredTo ? { to: delivery.to ?? inferredTo } : {}),
-      ...(delivery.accountId ? { accountId: delivery.accountId } : {}),
-      ...(typeof delivery.bestEffort === 'boolean' ? { bestEffort: delivery.bestEffort } : {}),
-    },
+    delivery: mappedDelivery,
     agentId: job.agentId ?? null,
     sessionKey: job.sessionKey ?? null,
     state: mapGatewayTaskState(job.state, delivery.mode),
@@ -448,6 +474,8 @@ export function mapGatewayRun(entry: GatewayRunLogEntry): ScheduledTaskRun {
         : new Date(safeFiniteNumber(entry.ts, tsMs)).toISOString(),
     durationMs: safeFiniteNumberOrNull(entry.durationMs),
     error: status === TaskStatus.Success ? null : (entry.error ?? null),
+    summary: entry.summary ?? null,
+    deliveryError: entry.deliveryError ?? null,
   };
 }
 
@@ -462,17 +490,28 @@ function extractRunTitle(summary?: string): string | undefined {
 export class CronJobService {
   private readonly getGatewayClient: () => GatewayClientLike | null;
   private readonly ensureGatewayReady: () => Promise<void>;
-  private pollingTimer: ReturnType<typeof setInterval> | null = null;
+  private pollingTimer: ReturnType<typeof setTimeout> | null = null;
   private lastKnownStates: Map<string, string> = new Map();
   private lastKnownRunAtMs: Map<string, number> = new Map();
   private polling = false;
   private firstPollDone = false;
   /** Synchronous jobId → name cache, populated during polling. */
   private jobNameCache: Map<string, string> = new Map();
+  /** Synchronous jobId → delivery routing cache, populated during polling.
+   *  Used by channel session sync to decide whether a cron run needs a local
+   *  "[定时]" session or delivers into an IM conversation instead. */
+  private jobDeliveryCache: Map<string, ScheduledTaskJobDelivery> = new Map();
   /** Job IDs currently running (non-null `runningAtMs`), updated during polling. */
   private runningJobIds: Set<string> = new Set();
+  /** Keep the fast poll cadence until this timestamp (set by manual runs). */
+  private fastPollUntilMs = 0;
 
   private static readonly POLL_INTERVAL_MS = 15_000;
+  /** Faster cadence while a job is running so status changes land quickly. */
+  private static readonly ACTIVE_POLL_INTERVAL_MS = 3_000;
+  /** Fast-poll window after a manual trigger, covering the gap before the
+   *  gateway reports the job as running. */
+  private static readonly MANUAL_RUN_BOOST_MS = 30_000;
 
   constructor(deps: CronJobServiceDeps) {
     this.getGatewayClient = deps.getGatewayClient;
@@ -485,6 +524,24 @@ export class CronJobService {
    */
   getJobNameSync(jobId: string): string | null {
     return this.jobNameCache.get(jobId) ?? null;
+  }
+
+  /**
+   * Look up a job's delivery routing synchronously from the polling cache.
+   * Returns null if the cache hasn't been populated yet.
+   */
+  getJobDeliverySync(jobId: string): ScheduledTaskJobDelivery | null {
+    return this.jobDeliveryCache.get(jobId) ?? null;
+  }
+
+  private cacheJobDelivery(
+    jobId: string,
+    delivery?: { mode: DeliveryModeType; channel?: string } | null,
+  ): void {
+    this.jobDeliveryCache.set(jobId, {
+      mode: delivery?.mode ?? DeliveryMode.None,
+      ...(delivery?.channel ? { channel: delivery.channel } : {}),
+    });
   }
 
   hasRunningJobs(): boolean {
@@ -550,6 +607,7 @@ export class CronJobService {
     });
     const mapped = mapGatewayJob(job);
     this.jobNameCache.set(mapped.id, mapped.name);
+    this.cacheJobDelivery(mapped.id, mapped.delivery);
     console.log('[CronJobService][addJob] created job id:', mapped.id, 'name:', mapped.name);
     return mapped;
   }
@@ -591,6 +649,8 @@ export class CronJobService {
     console.log('[CronJobService][updateJob] final patch:', JSON.stringify(patch, null, 2));
     const job = await client.request<GatewayJob>('cron.update', { id, patch });
     const mapped = mapGatewayJob(job);
+    this.jobNameCache.set(mapped.id, mapped.name);
+    this.cacheJobDelivery(mapped.id, mapped.delivery);
     console.log('[CronJobService][updateJob] updated job id:', mapped.id, 'name:', mapped.name);
     return mapped;
   }
@@ -600,6 +660,8 @@ export class CronJobService {
     await client.request('cron.remove', { id });
     this.lastKnownStates.delete(id);
     this.lastKnownRunAtMs.delete(id);
+    this.jobNameCache.delete(id);
+    this.jobDeliveryCache.delete(id);
   }
 
   async listJobs(): Promise<ScheduledTask[]> {
@@ -634,6 +696,11 @@ export class CronJobService {
   async runJob(id: string): Promise<void> {
     const client = await this.client();
     await client.request('cron.run', { id });
+    // The gateway enqueues the run and returns immediately. Poll right away
+    // and keep a fast cadence briefly so renderers see the running state and
+    // the finished run without waiting for the regular poll interval.
+    this.fastPollUntilMs = Date.now() + CronJobService.MANUAL_RUN_BOOST_MS;
+    void this.pollOnce().finally(() => this.scheduleNextPoll());
   }
 
   async listRuns(
@@ -763,26 +830,51 @@ export class CronJobService {
   startPolling(): void {
     if (this.polling) return;
     this.polling = true;
-    this.pollOnce();
-    this.pollingTimer = setInterval(() => {
-      void this.pollOnce();
-    }, CronJobService.POLL_INTERVAL_MS);
+    void this.pollOnce().finally(() => this.scheduleNextPoll());
+  }
+
+  notifyGatewayReady(): void {
+    if (!this.polling) {
+      this.startPolling();
+      return;
+    }
+    void this.pollOnce(true).finally(() => this.scheduleNextPoll());
   }
 
   stopPolling(): void {
     this.polling = false;
     if (this.pollingTimer) {
-      clearInterval(this.pollingTimer);
+      clearTimeout(this.pollingTimer);
       this.pollingTimer = null;
     }
     this.lastKnownStates.clear();
     this.lastKnownRunAtMs.clear();
     this.jobNameCache.clear();
+    this.jobDeliveryCache.clear();
     this.runningJobIds.clear();
+    this.fastPollUntilMs = 0;
     this.firstPollDone = false;
   }
 
-  private async pollOnce(): Promise<void> {
+  /**
+   * (Re-)arm the poll timer with an adaptive delay: fast while a job is
+   * running or a manual run was just triggered, relaxed otherwise.
+   */
+  private scheduleNextPoll(): void {
+    if (!this.polling) return;
+    if (this.pollingTimer) {
+      clearTimeout(this.pollingTimer);
+    }
+    const fast = this.runningJobIds.size > 0 || Date.now() < this.fastPollUntilMs;
+    const delay = fast
+      ? CronJobService.ACTIVE_POLL_INTERVAL_MS
+      : CronJobService.POLL_INTERVAL_MS;
+    this.pollingTimer = setTimeout(() => {
+      void this.pollOnce().finally(() => this.scheduleNextPoll());
+    }, delay);
+  }
+
+  private async pollOnce(forceFullRefresh = false): Promise<void> {
     if (!this.polling) return;
 
     try {
@@ -797,11 +889,14 @@ export class CronJobService {
       const jobs = Array.isArray(result.jobs) ? result.jobs : [];
       const visibleJobs = jobs.filter(job => !isInternalScheduledTaskJob(job));
 
-      // Refresh jobId → name cache for synchronous lookups (used by session naming).
+      // Refresh jobId → name/delivery caches for synchronous lookups
+      // (used by session naming and cron session routing).
       this.jobNameCache.clear();
+      this.jobDeliveryCache.clear();
       this.runningJobIds.clear();
       for (const job of jobs) {
         this.jobNameCache.set(job.id, job.name);
+        this.cacheJobDelivery(job.id, job.delivery);
         if (job.state.runningAtMs) {
           this.runningJobIds.add(job.id);
         }
@@ -842,7 +937,7 @@ export class CronJobService {
         }
       }
 
-      if (!this.firstPollDone) {
+      if (forceFullRefresh || !this.firstPollDone) {
         this.firstPollDone = true;
         this.emitFullRefresh();
       }

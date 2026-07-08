@@ -18,6 +18,7 @@ const originalProxyEnv: ProxyEnvSnapshot = PROXY_ENV_KEYS.reduce((acc, key) => {
 }, {} as ProxyEnvSnapshot);
 
 let systemProxyEnabled = false;
+let activeSystemProxyUrl: string | null = null;
 
 export const DEFAULT_PROXY_RESOLUTION_TARGETS = [
   'https://api.openai.com',
@@ -75,15 +76,25 @@ export function setSystemProxyEnabled(enabled: boolean): void {
   systemProxyEnabled = enabled;
 }
 
+export function setActiveSystemProxyUrl(proxyUrl: string | null): void {
+  activeSystemProxyUrl = proxyUrl;
+}
+
+export function getActiveSystemProxyUrl(): string | null {
+  return activeSystemProxyUrl;
+}
+
 export function restoreOriginalProxyEnv(): void {
   PROXY_ENV_KEYS.forEach((key) => {
     setEnvValue(key, originalProxyEnv[key]);
   });
+  setActiveSystemProxyUrl(null);
 }
 
 export function applySystemProxyEnv(proxyUrl: string | null): void {
   // Always start from original env so toggling is reversible and predictable.
   restoreOriginalProxyEnv();
+  setActiveSystemProxyUrl(proxyUrl);
   if (!proxyUrl) {
     return;
   }

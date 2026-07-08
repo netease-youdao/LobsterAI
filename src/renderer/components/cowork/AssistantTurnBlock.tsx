@@ -1,9 +1,11 @@
-import { FolderIcon } from '@heroicons/react/24/outline';
-import React, { useEffect, useMemo, useRef } from 'react';
+import { ChevronDownIcon, ChevronUpIcon, FolderIcon } from '@heroicons/react/24/outline';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import { classifyErrorKey } from '../../../common/coworkErrorClassify';
 import { ContextCompactionStatus } from '../../../common/coworkSystemMessages';
 import { getScheduledReminderDisplayText } from '../../../scheduledTask/reminderText';
+import type { CoworkGoal } from '../../../shared/cowork/goal';
+import { dedupeArtifactsForDisplay } from '../../services/artifactParser';
 import { i18nService } from '../../services/i18n';
 import type { Artifact } from '../../types/artifact';
 import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
@@ -31,9 +33,35 @@ import {
   hasText,
   isContextCompactionMessage,
   isDuplicateGeneratedVideoAssistantMessage,
+  type ToolGroupItem,
 } from './messageDisplayUtils';
 import ThinkingBlock from './ThinkingBlock';
 import ToolCallGroup from './ToolCallGroup';
+
+const encodeLocalPathForUrl = (filePath: string): string => {
+  return filePath
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((segment, index) => {
+      if (index === 0 && segment === '') return '';
+      if (/^[A-Za-z]:$/.test(segment)) return segment;
+      return encodeURIComponent(segment);
+    })
+    .join('/');
+};
+
+const toLocalFileSrc = (filePath: string): string => {
+  const normalized = filePath.trim().replace(/^file:\/\//i, '').replace(/^localfile:\/\//i, '');
+  const withoutLeadingDriveSlash = /^\/[A-Za-z]:/.test(normalized) ? normalized.slice(1) : normalized;
+  const encoded = encodeLocalPathForUrl(withoutLeadingDriveSlash);
+  if (/^[A-Za-z]:/.test(withoutLeadingDriveSlash)) {
+    return `localfile:///${encoded}`;
+  }
+  if (encoded.startsWith('/')) {
+    return `localfile://${encoded}`;
+  }
+  return `localfile:///${encoded}`;
+};
 
 // ── ContextCompressionIcon ───────────────────────────────────────────────────
 
@@ -77,7 +105,7 @@ const ContextCompactionDivider: React.FC<{ label: string; active?: boolean }> = 
   >
     <div className="h-px min-w-0 flex-1 bg-border" />
     <div className="flex max-w-[min(100%,360px)] flex-col items-center gap-1.5 bg-background px-2">
-      <div className="inline-flex max-w-full items-center gap-2 text-[14px] font-normal leading-[23px] text-foreground/90">
+      <div className="inline-flex max-w-full items-center gap-2 text-sm font-normal leading-[var(--lobster-leading-promptLarge)] text-foreground/95">
         <ContextCompressionIcon className={`h-3.5 w-3.5 flex-shrink-0 text-foreground/70 ${active ? 'animate-pulse' : ''}`} />
         <span className="truncate">{label}</span>
       </div>
@@ -146,7 +174,7 @@ const MediaImageInline: React.FC<{ artifacts: Artifact[] }> = ({ artifacts }) =>
     <div className="flex flex-wrap gap-2">
       {artifacts.map(artifact => {
         const src = artifact.filePath
-          ? `localfile://${artifact.filePath}`
+          ? toLocalFileSrc(artifact.filePath)
           : artifact.content;
         if (!src) return null;
         return (
@@ -169,22 +197,35 @@ const AssistantTurnBlock: React.FC<{
   artifacts?: Artifact[];
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
+  localServiceDirectory?: string;
   onOpenLocalService?: (artifact: Artifact) => void;
   onOpenHtmlFile?: (artifact: Artifact) => void;
   onForkMessage?: (messageId: string) => void;
+  planConfirmationMessageId?: string | null;
+  onConfirmPlan?: (messageId: string) => void;
+  onAdjustPlan?: (messageId: string) => void;
+  renderToolGroupFooter?: (group: ToolGroupItem) => React.ReactNode;
   showTypingIndicator?: boolean;
   showCopyButtons?: boolean;
+  completedGoal?: CoworkGoal | null;
 }> = ({
   turn,
   artifacts,
   resolveLocalFilePath,
   mapDisplayText,
+  localServiceDirectory,
   onOpenLocalService,
   onOpenHtmlFile,
   onForkMessage,
+  planConfirmationMessageId,
+  onConfirmPlan,
+  onAdjustPlan,
+  renderToolGroupFooter,
   showTypingIndicator = false,
   showCopyButtons = true,
+  completedGoal,
 }) => {
+  const [artifactCardsExpanded, setArtifactCardsExpanded] = useState(false);
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
   const consolidatedItems = useMemo(
     () => consolidateMediaPolling(visibleAssistantItems),
@@ -194,6 +235,19 @@ const AssistantTurnBlock: React.FC<{
     () => getVideoPathArtifacts(artifacts),
     [artifacts],
   );
+  const artifactCards = useMemo(
+    () => artifacts
+      ? dedupeArtifactsForDisplay(
+          artifacts,
+          { defaultProjectDirectory: localServiceDirectory },
+        )
+      : [],
+    [artifacts, localServiceDirectory],
+  );
+  const visibleArtifactCards = useMemo(() => {
+    return artifactCardsExpanded ? artifactCards : artifactCards.slice(0, 3);
+  }, [artifactCards, artifactCardsExpanded]);
+  const hiddenArtifactCardCount = Math.max(0, artifactCards.length - visibleArtifactCards.length);
   const retainedMediaPollCountsRef = useRef<Map<string, number>>(new Map());
   const currentMediaPollCounts = useMemo(
     () => collectMediaPollCounts(consolidatedItems),
@@ -210,6 +264,10 @@ const AssistantTurnBlock: React.FC<{
   useEffect(() => {
     retainedMediaPollCountsRef.current = retainedMediaPollCounts;
   }, [retainedMediaPollCounts]);
+
+  useEffect(() => {
+    setArtifactCardsExpanded(false);
+  }, [turn.id]);
 
   const renderSystemMessage = (message: CoworkMessage) => {
     const isError = !hasText(message.content) && typeof message.metadata?.error === 'string';
@@ -287,7 +345,7 @@ const AssistantTurnBlock: React.FC<{
             )}
             {(hasToolResultText || showNoDetailError) && (
               <div className="mt-2 px-3 py-2 rounded-lg bg-surface-raised max-h-64 overflow-y-auto">
-                <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
+                <pre className={`text-code whitespace-pre-wrap break-words font-mono ${
                   isToolError
                     ? 'text-red-500'
                     : hasToolResultText
@@ -358,6 +416,9 @@ const AssistantTurnBlock: React.FC<{
                   .slice(index + 1)
                   .some(laterItem => laterItem.type === 'tool_group' || laterItem.type === 'media_polling_group');
                 const isLastAssistant = showCopyButtons && !hasToolGroupAfter;
+                const hasAssistantAfter = consolidatedItems
+                  .slice(index + 1)
+                  .some(laterItem => laterItem.type === 'assistant');
 
                 return (
                   <AssistantMessageItem
@@ -368,6 +429,10 @@ const AssistantTurnBlock: React.FC<{
                     showCopyButton={isLastAssistant}
                     onFork={isLastAssistant ? onForkMessage : undefined}
                     turnMetadata={isLastAssistant ? (item.message.metadata as CoworkMessageMetadata) : undefined}
+                    completedGoal={isLastAssistant && !hasAssistantAfter ? completedGoal : null}
+                    planConfirmationMessageId={planConfirmationMessageId}
+                    onConfirmPlan={onConfirmPlan}
+                    onAdjustPlan={onAdjustPlan}
                   />
                 );
               }
@@ -382,6 +447,7 @@ const AssistantTurnBlock: React.FC<{
                     isLastInSequence={isLastInSequence}
                     mapDisplayText={mapDisplayText}
                     retainedMediaPollCounts={retainedMediaPollCounts}
+                    footer={renderToolGroupFooter?.(item.group)}
                   />
                 );
               }
@@ -408,15 +474,41 @@ const AssistantTurnBlock: React.FC<{
             {artifacts && artifacts.length > 0 && (
               <div className="space-y-2 pt-1">
                 <VideoArtifactPathList artifacts={videoPathArtifacts} />
-                <div className="flex flex-wrap gap-2">
-                  {artifacts.map(artifact => (
-                    <ArtifactPreviewCard
-                      key={artifact.id}
-                      artifact={artifact}
-                      onOpenLocalService={onOpenLocalService}
-                      onOpenHtmlFile={onOpenHtmlFile}
-                    />
-                  ))}
+                <div className="artifact-preview-card-group w-full overflow-hidden rounded-lg border border-border">
+                  <div className="divide-y divide-border">
+                    {visibleArtifactCards.map(artifact => (
+                      <ArtifactPreviewCard
+                        key={artifact.id}
+                        artifact={artifact}
+                        localServiceDirectory={localServiceDirectory}
+                        onOpenLocalService={onOpenLocalService}
+                        onOpenHtmlFile={onOpenHtmlFile}
+                      />
+                    ))}
+                  </div>
+                  {(hiddenArtifactCardCount > 0 || (artifactCardsExpanded && artifactCards.length > 3)) && (
+                    <div className="border-t border-border px-4 py-2 text-center">
+                      {hiddenArtifactCardCount > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => setArtifactCardsExpanded(true)}
+                          className="inline-flex items-center justify-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-secondary hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.035] transition-colors"
+                        >
+                          <span>{i18nService.t('artifactPreviewCardShowMore').replace('{count}', String(hiddenArtifactCardCount))}</span>
+                          <ChevronDownIcon className="h-4 w-4" />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setArtifactCardsExpanded(false)}
+                          className="inline-flex items-center justify-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-secondary hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.035] transition-colors"
+                        >
+                          <span>{i18nService.t('artifactPreviewCardShowLess')}</span>
+                          <ChevronUpIcon className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             )}

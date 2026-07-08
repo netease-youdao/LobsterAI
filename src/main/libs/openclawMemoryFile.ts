@@ -4,9 +4,15 @@
  * Reads and writes the curated long-term memory file that OpenClaw's
  * memory_search / memory_get tools index automatically.
  *
- * The file may contain mixed content (headings, prose, bullet lists).
- * Only top-level bullet lines (`- text`) are treated as memory entries.
- * Non-bullet content (## headings, paragraphs, etc.) is preserved on writes.
+ * The file is modelled as an ordered list of segments:
+ *  - `entry` segments: one memory block — a top-level bullet together with
+ *    its indented/lazy continuation lines, or a paragraph of prose lines.
+ *  - `verbatim` segments: everything else (headings, blank lines, fenced
+ *    code blocks). Preserved byte-for-byte on writes.
+ *
+ * `##`+ headings assign a section to the entries that follow them. Write
+ * operations are surgical (append / replace-in-place / remove one block);
+ * untouched segments are never re-serialised.
  */
 
 import crypto from 'crypto';
@@ -22,10 +28,12 @@ const TAG = '[OpenClaw Memory]';
 // ---------------------------------------------------------------------------
 
 export interface OpenClawMemoryEntry {
-  /** SHA-1 of the normalised text – stable across reads. */
+  /** SHA-1 of the normalised block text – stable across reads. */
   id: string;
-  /** Raw text without the leading "- ". */
+  /** Display/edit text: leading bullet marker stripped, other lines verbatim. */
   text: string;
+  /** Nearest preceding `##` (or deeper) heading, when present. */
+  section?: string;
 }
 
 export interface OpenClawMemoryStats {
@@ -76,182 +84,206 @@ function fingerprint(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Bullet-line detection (single dash only: "- text")
-// ---------------------------------------------------------------------------
-
-/** Match a top-level Markdown bullet: exactly one `-` followed by whitespace. */
-const BULLET_RE = /^-\s+(.+)$/;
-
-function isBulletLine(line: string): boolean {
-  return BULLET_RE.test(line.trim());
-}
-
-// ---------------------------------------------------------------------------
-// Parsing & serialisation
+// Block-level parsing
 // ---------------------------------------------------------------------------
 
 const HEADER = '# User Memories';
 
-/**
- * Parse a MEMORY.md file into entries.
- *
- * Recognises lines starting with `- ` (single dash + space).
- * Code blocks are stripped before parsing to avoid false positives.
- */
-export function parseMemoryMd(content: string): OpenClawMemoryEntry[] {
-  const stripped = content.replace(/```[\s\S]*?```/g, ' ');
-  const lines = stripped.split(/\r?\n/);
-  const entries: OpenClawMemoryEntry[] = [];
-  const seen = new Set<string>();
+/** Top-level Markdown bullet at column 0: `- text`. */
+const TOP_BULLET_RE = /^-\s+\S/;
+/** Any bullet line, indented or not; captures the text after the marker. */
+const ANY_BULLET_RE = /^\s*-\s+(.*)$/;
+/** Column-0 ATX heading. */
+const HEADING_RE = /^(#{1,6})\s+(.*\S)\s*$/;
+/** Fenced-code delimiter. */
+const FENCE_RE = /^\s*(```|~~~)/;
+/** Column-0 HTML comment opener (metadata markers, e.g. OpenClaw memory promotion). */
+const HTML_COMMENT_OPEN_RE = /^<!--/;
+
+interface MemorySegment {
+  kind: 'entry' | 'verbatim';
+  lines: string[];
+  entry?: OpenClawMemoryEntry;
+}
+
+interface ParsedMemoryFile {
+  segments: MemorySegment[];
+  /** Section context at end-of-file (where new entries get appended). */
+  trailingSection?: string;
+}
+
+/** Display/edit text for a block: first-line bullet marker stripped, rest verbatim. */
+function blockDisplayText(lines: string[]): string {
+  const [first, ...rest] = lines;
+  const match = first.match(ANY_BULLET_RE);
+  return [match ? match[1] : first, ...rest].join('\n');
+}
+
+function makeEntrySegment(lines: string[], section: string | undefined): MemorySegment {
+  const text = blockDisplayText(lines);
+  return {
+    kind: 'entry',
+    lines,
+    entry: { id: fingerprint(text), text, ...(section ? { section } : {}) },
+  };
+}
+
+function parseMemorySegments(content: string): ParsedMemoryFile {
+  const lines = content.split(/\r?\n/);
+  const segments: MemorySegment[] = [];
+  let verbatim: string[] = [];
+  let block: string[] | null = null;
+  let section: string | undefined;
+  let blockSection: string | undefined;
+  let fence: 'verbatim' | 'block' | null = null;
+  let inComment = false;
+
+  const flushVerbatim = () => {
+    if (verbatim.length > 0) {
+      segments.push({ kind: 'verbatim', lines: verbatim });
+      verbatim = [];
+    }
+  };
+  const closeBlock = () => {
+    if (block) {
+      segments.push(makeEntrySegment(block, blockSection));
+      block = null;
+    }
+  };
+  const openBlock = (line: string) => {
+    closeBlock();
+    flushVerbatim();
+    blockSection = section;
+    block = [line];
+  };
 
   for (const line of lines) {
-    const match = line.trim().match(BULLET_RE);
-    if (!match?.[1]) continue;
-    const text = match[1].replace(/\s+/g, ' ').trim();
-    if (!text) continue;
+    if (fence === 'block') {
+      block!.push(line);
+      if (FENCE_RE.test(line)) fence = null;
+      continue;
+    }
+    if (fence === 'verbatim') {
+      verbatim.push(line);
+      if (FENCE_RE.test(line)) fence = null;
+      continue;
+    }
 
-    const fp = fingerprint(text);
-    if (seen.has(fp)) continue;
-    seen.add(fp);
-    entries.push({ id: fp, text });
+    if (inComment) {
+      verbatim.push(line);
+      if (line.includes('-->')) inComment = false;
+      continue;
+    }
+
+    // Top-level HTML comments are metadata markers, never entries.
+    if (HTML_COMMENT_OPEN_RE.test(line)) {
+      closeBlock();
+      verbatim.push(line);
+      if (!line.includes('-->')) inComment = true;
+      continue;
+    }
+
+    if (FENCE_RE.test(line)) {
+      // An indented fence inside an open block belongs to that block;
+      // a top-level fence is opaque verbatim content.
+      if (block && /^\s/.test(line)) {
+        block.push(line);
+        fence = 'block';
+      } else {
+        closeBlock();
+        verbatim.push(line);
+        fence = 'verbatim';
+      }
+      continue;
+    }
+
+    if (line.trim() === '') {
+      closeBlock();
+      verbatim.push(line);
+      continue;
+    }
+
+    const heading = line.match(HEADING_RE);
+    if (heading) {
+      closeBlock();
+      section = heading[1].length >= 2 ? heading[2].trim() : undefined;
+      verbatim.push(line);
+      continue;
+    }
+
+    if (TOP_BULLET_RE.test(line)) {
+      openBlock(line);
+      continue;
+    }
+
+    if (block) {
+      // Indented children and lazy continuations stay in the open block.
+      block.push(line);
+      continue;
+    }
+
+    // Orphan content line: starts a prose (or indented-bullet) block.
+    openBlock(line);
   }
 
+  closeBlock();
+  flushVerbatim();
+  return { segments, trailingSection: section };
+}
+
+function segmentsToContent(segments: MemorySegment[]): string {
+  const text = segments.flatMap((segment) => segment.lines).join('\n');
+  return text.endsWith('\n') ? text : `${text}\n`;
+}
+
+/**
+ * Parse a MEMORY.md file into entries (deduplicated by fingerprint,
+ * first occurrence wins).
+ */
+export function parseMemoryMd(content: string): OpenClawMemoryEntry[] {
+  const { segments } = parseMemorySegments(content);
+  const seen = new Set<string>();
+  const entries: OpenClawMemoryEntry[] = [];
+  for (const segment of segments) {
+    if (segment.kind !== 'entry' || !segment.entry) continue;
+    if (seen.has(segment.entry.id)) continue;
+    seen.add(segment.entry.id);
+    entries.push(segment.entry);
+  }
   return entries;
 }
 
+// ---------------------------------------------------------------------------
+// Serialisation
+// ---------------------------------------------------------------------------
+
 /**
- * Serialise entries back to MEMORY.md format (standalone, no existing content).
+ * Convert user-entered text into the lines of a single bullet block.
+ * Blank lines are dropped (a blank line would split the block on the next
+ * parse); non-indented continuation lines are indented so they stay inside
+ * the block.
  */
-export function serializeMemoryMd(entries: OpenClawMemoryEntry[]): string {
-  if (entries.length === 0) return `${HEADER}\n`;
-  const lines = entries.map((e) => `- ${e.text}`);
-  return `${HEADER}\n\n${lines.join('\n')}\n`;
+function serializeEntryLines(text: string): string[] {
+  const lines = text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/\s+$/u, ''))
+    .filter((line) => line.trim() !== '');
+  if (lines.length === 0) throw new Error('Memory text is required');
+
+  const first = lines[0].trim();
+  const head = ANY_BULLET_RE.test(first) ? first : `- ${first}`;
+  const rest = lines.slice(1).map((line) => (/^\s/.test(line) ? line : `  ${line}`));
+  return [head, ...rest];
 }
 
 /**
- * Build updated MEMORY.md content by surgically applying a diff between
- * the original bullet entries and the desired entries, while preserving
- * all non-bullet content and the overall document structure.
- *
- * Strategy:
- *   1. Build a map from old fingerprint → new text for modified entries.
- *   2. Build a set of fingerprints that should be removed.
- *   3. Walk original lines:
- *      - Non-bullet lines → keep verbatim (headings, prose, blank lines).
- *      - Bullet lines whose fingerprint is in the removal set → skip.
- *      - Bullet lines whose fingerprint is in the update map → replace in-place.
- *      - Bullet lines not in the new entry set → skip (deleted).
- *      - Other bullet lines → keep as-is.
- *   4. Append genuinely new entries (not present in original) at the end.
+ * Serialise entries to a standalone MEMORY.md document (no existing content).
  */
-function rebuildMemoryMd(
-  originalContent: string,
-  entries: OpenClawMemoryEntry[],
-): string {
-  if (!originalContent.trim()) {
-    return serializeMemoryMd(entries);
-  }
-
-  // Build lookup structures for the desired state
-  const desiredById = new Map<string, string>();
-  for (const e of entries) {
-    desiredById.set(e.id, e.text);
-  }
-
-  // Parse original bullets to know what existed before
-  const originalEntries = parseMemoryMd(originalContent);
-  const originalIds = new Set(originalEntries.map((e) => e.id));
-
-  // Identify new entries (not in original) to append later
-  const newEntries: OpenClawMemoryEntry[] = [];
-  for (const e of entries) {
-    if (!originalIds.has(e.id)) {
-      newEntries.push(e);
-    }
-  }
-
-  const lines = originalContent.split(/\r?\n/);
-  const result: string[] = [];
-  let inCodeBlock = false;
-
-  for (const line of lines) {
-    // Toggle fenced-code-block state (never treat bullets inside as entries)
-    if (line.trimStart().startsWith('```')) {
-      inCodeBlock = !inCodeBlock;
-      result.push(line);
-      continue;
-    }
-    if (inCodeBlock) {
-      result.push(line);
-      continue;
-    }
-
-    if (isBulletLine(line)) {
-      const match = line.trim().match(BULLET_RE);
-      if (match?.[1]) {
-        const text = match[1].replace(/\s+/g, ' ').trim();
-        if (text) {
-          const fp = fingerprint(text);
-
-          if (desiredById.has(fp)) {
-            // Entry still exists (possibly with updated text via id change)
-            // Keep it at its original position
-            const desiredText = desiredById.get(fp)!;
-            // Preserve original indentation
-            const indent = line.match(/^(\s*)/)?.[1] ?? '';
-            result.push(`${indent}- ${desiredText}`);
-            desiredById.delete(fp); // mark as handled
-            continue;
-          }
-
-          // Check if this position's entry was updated (old id removed,
-          // but the entry at this position may have been edited).
-          // Since we can't map old→new by position for edits, entries
-          // not in desiredById are considered deleted → skip this line.
-          continue;
-        }
-      }
-      // Malformed bullet → keep as-is
-      result.push(line);
-      continue;
-    }
-
-    result.push(line);
-  }
-
-  // Append genuinely new entries at the end
-  if (newEntries.length > 0) {
-    // Ensure blank line before new entries
-    const lastLine = result[result.length - 1];
-    if (lastLine !== undefined && lastLine.trim() !== '') {
-      result.push('');
-    }
-    for (const e of newEntries) {
-      result.push(`- ${e.text}`);
-    }
-  }
-
-  // Also append any remaining entries from desiredById that were not
-  // matched to an original bullet (e.g. entries whose text was updated,
-  // producing a new id). These are effectively "updated" entries that
-  // lost their positional anchor.
-  const remaining = [...desiredById.values()].filter((text) => {
-    // Exclude entries that were already appended as newEntries
-    return !newEntries.some((ne) => ne.text === text);
-  });
-  if (remaining.length > 0) {
-    const lastLine = result[result.length - 1];
-    if (lastLine !== undefined && lastLine.trim() !== '') {
-      result.push('');
-    }
-    for (const text of remaining) {
-      result.push(`- ${text}`);
-    }
-  }
-
-  // Ensure trailing newline
-  const text = result.join('\n');
-  return text.endsWith('\n') ? text : text + '\n';
+export function serializeMemoryMd(entries: OpenClawMemoryEntry[]): string {
+  if (entries.length === 0) return `${HEADER}\n`;
+  const blocks = entries.map((entry) => serializeEntryLines(entry.text).join('\n'));
+  return `${HEADER}\n\n${blocks.join('\n')}\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -273,37 +305,64 @@ function readFileOrEmpty(filePath: string): string {
   return '';
 }
 
+/**
+ * One-time safety net: before the first block-aware write touches an existing
+ * file, keep a snapshot next to it. Never overwritten afterwards.
+ */
+function ensureBackup(filePath: string, originalContent: string): void {
+  if (!originalContent.trim()) return;
+  const backupPath = `${filePath}.bak`;
+  try {
+    if (!fs.existsSync(backupPath)) {
+      fs.writeFileSync(backupPath, originalContent, 'utf8');
+      console.log(`${TAG} ensureBackup: snapshot saved to ${backupPath}`);
+    }
+  } catch (error) {
+    console.warn(`${TAG} ensureBackup: failed —`, error instanceof Error ? error.message : error);
+  }
+}
+
+/** Append serialised blocks after the existing content (single blank-line separator). */
+function appendBlocksToContent(original: string, blocks: string[]): string {
+  const body = blocks.join('\n');
+  if (!original.trim()) {
+    return `${HEADER}\n\n${body}\n`;
+  }
+  return `${original.replace(/\s+$/u, '')}\n\n${body}\n`;
+}
+
 // ---------------------------------------------------------------------------
 // CRUD operations
 // ---------------------------------------------------------------------------
 
 export function readMemoryEntries(filePath: string): OpenClawMemoryEntry[] {
-  const entries = parseMemoryMd(readFileOrEmpty(filePath));
-  return entries;
-}
-
-export function writeMemoryEntries(filePath: string, entries: OpenClawMemoryEntry[]): void {
-  ensureDir(filePath);
-  const original = readFileOrEmpty(filePath);
-  fs.writeFileSync(filePath, rebuildMemoryMd(original, entries), 'utf8');
-  console.log(`${TAG} writeMemoryEntries: wrote ${entries.length} entries to ${filePath}`);
+  return parseMemoryMd(readFileOrEmpty(filePath));
 }
 
 export function addMemoryEntry(filePath: string, text: string): OpenClawMemoryEntry {
-  const trimmed = text.replace(/\s+/g, ' ').trim();
-  if (!trimmed) throw new Error('Memory text is required');
+  const blockLines = serializeEntryLines(text);
+  const displayText = blockDisplayText(blockLines);
+  const id = fingerprint(displayText);
 
-  const entries = readMemoryEntries(filePath);
-  const entry: OpenClawMemoryEntry = { id: fingerprint(trimmed), text: trimmed };
+  const original = readFileOrEmpty(filePath);
+  const { segments, trailingSection } = parseMemorySegments(original);
 
-  if (entries.some((e) => e.id === entry.id)) {
-    console.log(`${TAG} addMemoryEntry: duplicate skipped (id=${entry.id.slice(0, 8)}…)`);
-    return entry;
+  const existing = segments.find((segment) => segment.kind === 'entry' && segment.entry?.id === id);
+  if (existing?.entry) {
+    console.log(`${TAG} addMemoryEntry: duplicate skipped (id=${id.slice(0, 8)}…)`);
+    return existing.entry;
   }
 
-  entries.push(entry);
-  writeMemoryEntries(filePath, entries);
-  console.log(`${TAG} addMemoryEntry: added "${trimmed.slice(0, 40)}…" (id=${entry.id.slice(0, 8)}…)`);
+  ensureDir(filePath);
+  ensureBackup(filePath, original);
+  fs.writeFileSync(filePath, appendBlocksToContent(original, [blockLines.join('\n')]), 'utf8');
+
+  const entry: OpenClawMemoryEntry = {
+    id,
+    text: displayText,
+    ...(trailingSection ? { section: trailingSection } : {}),
+  };
+  console.log(`${TAG} addMemoryEntry: added "${displayText.slice(0, 40)}…" (id=${id.slice(0, 8)}…)`);
   return entry;
 }
 
@@ -312,36 +371,68 @@ export function updateMemoryEntry(
   id: string,
   newText: string,
 ): OpenClawMemoryEntry | null {
-  const trimmed = newText.replace(/\s+/g, ' ').trim();
-  if (!trimmed) throw new Error('Memory text is required');
+  const blockLines = serializeEntryLines(newText);
+  const displayText = blockDisplayText(blockLines);
 
-  const entries = readMemoryEntries(filePath);
-  const idx = entries.findIndex((e) => e.id === id);
-  if (idx === -1) {
+  const original = readFileOrEmpty(filePath);
+  const { segments } = parseMemorySegments(original);
+  const index = segments.findIndex((segment) => segment.kind === 'entry' && segment.entry?.id === id);
+  if (index === -1) {
     console.warn(`${TAG} updateMemoryEntry: entry not found (id=${id.slice(0, 8)}…)`);
     return null;
   }
 
+  const target = segments[index];
+  const section = target.entry?.section;
   // Note: ID changes because it's content-based (fingerprint of text)
-  const updated: OpenClawMemoryEntry = { id: fingerprint(trimmed), text: trimmed };
-  const oldText = entries[idx].text;
-  entries[idx] = updated;
-  writeMemoryEntries(filePath, entries);
-  console.log(`${TAG} updateMemoryEntry: "${oldText.slice(0, 30)}…" → "${trimmed.slice(0, 30)}…"`);
+  const updated: OpenClawMemoryEntry = {
+    id: fingerprint(displayText),
+    text: displayText,
+    ...(section ? { section } : {}),
+  };
+
+  if (target.entry?.text === displayText) {
+    return updated;
+  }
+
+  const oldText = target.entry?.text ?? '';
+  segments[index] = { kind: 'entry', lines: blockLines, entry: updated };
+
+  ensureDir(filePath);
+  ensureBackup(filePath, original);
+  fs.writeFileSync(filePath, segmentsToContent(segments), 'utf8');
+  console.log(`${TAG} updateMemoryEntry: "${oldText.slice(0, 30)}…" → "${displayText.slice(0, 30)}…"`);
   return updated;
 }
 
 export function deleteMemoryEntry(filePath: string, id: string): boolean {
-  const entries = readMemoryEntries(filePath);
-  const target = entries.find((e) => e.id === id);
-  const filtered = entries.filter((e) => e.id !== id);
-  if (filtered.length === entries.length) {
+  const original = readFileOrEmpty(filePath);
+  const { segments } = parseMemorySegments(original);
+  const index = segments.findIndex((segment) => segment.kind === 'entry' && segment.entry?.id === id);
+  if (index === -1) {
     console.warn(`${TAG} deleteMemoryEntry: entry not found (id=${id.slice(0, 8)}…)`);
     return false;
   }
 
-  writeMemoryEntries(filePath, filtered);
-  console.log(`${TAG} deleteMemoryEntry: removed "${target?.text.slice(0, 40)}…" (${entries.length} → ${filtered.length})`);
+  const removedText = segments[index].entry?.text;
+  segments.splice(index, 1);
+
+  // Collapse the now-doubled blank separator around the removed block.
+  const prev = index > 0 ? segments[index - 1] : undefined;
+  const next = index < segments.length ? segments[index] : undefined;
+  if (
+    prev?.kind === 'verbatim' &&
+    next?.kind === 'verbatim' &&
+    prev.lines[prev.lines.length - 1]?.trim() === '' &&
+    next.lines[0]?.trim() === ''
+  ) {
+    prev.lines.pop();
+  }
+
+  ensureDir(filePath);
+  ensureBackup(filePath, original);
+  fs.writeFileSync(filePath, segmentsToContent(segments), 'utf8');
+  console.log(`${TAG} deleteMemoryEntry: removed "${removedText?.slice(0, 40)}…"`);
   return true;
 }
 
@@ -352,9 +443,78 @@ export function searchMemoryEntries(
   const q = query.toLowerCase().trim();
   if (!q) return readMemoryEntries(filePath);
   const all = readMemoryEntries(filePath);
-  const results = all.filter((e) => e.text.toLowerCase().includes(q));
+  const results = all.filter(
+    (entry) => entry.text.toLowerCase().includes(q) || entry.section?.toLowerCase().includes(q),
+  );
   console.log(`${TAG} searchMemoryEntries: query="${q}" → ${results.length}/${all.length} matched`);
   return results;
+}
+
+// ---------------------------------------------------------------------------
+// Raw file access (settings "raw" editing mode)
+// ---------------------------------------------------------------------------
+
+export function readMemoryFileRaw(filePath: string): string {
+  return readFileOrEmpty(filePath);
+}
+
+export function writeMemoryFileRaw(filePath: string, content: string): void {
+  ensureDir(filePath);
+  const original = readFileOrEmpty(filePath);
+  ensureBackup(filePath, original);
+  const next = content === '' || content.endsWith('\n') ? content : `${content}\n`;
+  fs.writeFileSync(filePath, next, 'utf8');
+  console.log(`${TAG} writeMemoryFileRaw: wrote ${next.length} chars to ${filePath}`);
+}
+
+// ---------------------------------------------------------------------------
+// Bulk append (migration, workspace sync)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fingerprints already present in the file: block ids plus per-line
+ * fingerprints of entry-block lines, so a single-line text that now lives
+ * inside a larger block is not appended again.
+ */
+function collectExistingFingerprints(segments: MemorySegment[]): Set<string> {
+  const fps = new Set<string>();
+  for (const segment of segments) {
+    if (segment.kind !== 'entry') continue;
+    if (segment.entry) fps.add(segment.entry.id);
+    for (const line of segment.lines) {
+      const match = line.match(ANY_BULLET_RE);
+      const lineText = (match ? match[1] : line).trim();
+      if (lineText) fps.add(fingerprint(lineText));
+    }
+  }
+  return fps;
+}
+
+/** Append the given texts as blocks, skipping ones that already exist. */
+function appendMemoryTexts(filePath: string, texts: string[]): number {
+  const original = readFileOrEmpty(filePath);
+  const { segments } = parseMemorySegments(original);
+  const existing = collectExistingFingerprints(segments);
+
+  const blocks: string[] = [];
+  for (const raw of texts) {
+    let blockLines: string[];
+    try {
+      blockLines = serializeEntryLines(raw);
+    } catch {
+      continue;
+    }
+    const id = fingerprint(blockDisplayText(blockLines));
+    if (existing.has(id)) continue;
+    existing.add(id);
+    blocks.push(blockLines.join('\n'));
+  }
+  if (blocks.length === 0) return 0;
+
+  ensureDir(filePath);
+  ensureBackup(filePath, original);
+  fs.writeFileSync(filePath, appendBlocksToContent(original, blocks), 'utf8');
+  return blocks.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -389,33 +549,9 @@ export function migrateSqliteToMemoryMd(
     return 0;
   }
 
-  console.log(`${TAG} Migration: found ${texts.length} active SQLite memories to migrate`);
-
   try {
-    const existing = readMemoryEntries(filePath);
-    const existingIds = new Set(existing.map((e) => e.id));
-    console.log(`${TAG} Migration: MEMORY.md has ${existing.length} existing entries`);
-
-    let added = 0;
-    let skipped = 0;
-    for (const raw of texts) {
-      const text = raw.replace(/\s+/g, ' ').trim();
-      if (!text || text.length < 1) continue;
-      const id = fingerprint(text);
-      if (existingIds.has(id)) {
-        skipped++;
-        continue;
-      }
-      existing.push({ id, text });
-      existingIds.add(id);
-      added++;
-    }
-
-    if (added > 0) {
-      writeMemoryEntries(filePath, existing);
-    }
-
-    console.log(`${TAG} Migration: completed — added=${added}, skipped(duplicate)=${skipped}, total=${existing.length}`);
+    const added = appendMemoryTexts(filePath, texts);
+    console.log(`${TAG} Migration: completed — added=${added}, skipped(duplicate)=${texts.length - added}`);
     source.markMigrationDone();
     return added;
   } catch (error) {
@@ -531,20 +667,7 @@ export function syncMemoryFileOnWorkspaceChange(
       return { synced: false };
     }
 
-    const newEntries = readMemoryEntries(newPath);
-    const newIds = new Set(newEntries.map((e) => e.id));
-
-    let added = 0;
-    for (const entry of oldEntries) {
-      if (newIds.has(entry.id)) continue;
-      newEntries.push(entry);
-      newIds.add(entry.id);
-      added++;
-    }
-
-    if (added > 0) {
-      writeMemoryEntries(newPath, newEntries);
-    }
+    const added = appendMemoryTexts(newPath, oldEntries.map((entry) => entry.text));
 
     // Ensure memory/ directory exists for OpenClaw daily logs
     const memoryDir = path.join(
@@ -556,7 +679,7 @@ export function syncMemoryFileOnWorkspaceChange(
       fs.mkdirSync(memoryDir, { recursive: true });
     }
 
-    console.log(`${TAG} Workspace sync: done — copied ${added} new entries (old=${oldEntries.length}, new total=${newEntries.length})`);
+    console.log(`${TAG} Workspace sync: done — copied ${added} new entries (old=${oldEntries.length})`);
     return { synced: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';

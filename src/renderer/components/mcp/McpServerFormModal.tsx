@@ -2,8 +2,41 @@ import React, { useEffect,useState } from 'react';
 
 import { McpUrlValidationError, normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
 import { i18nService } from '../../services/i18n';
+import { McpJsonImportErrorCode, McpJsonImportResult, parseMcpServersJson } from '../../services/mcpJsonImport';
 import { McpRegistryEntry,McpServerConfig, McpServerFormData } from '../../types/mcp';
 import Modal from '../common/Modal';
+
+const TRANSPORT_OPTIONS: { value: 'stdio' | 'sse' | 'http'; label: string; descKey: string }[] = [
+  { value: 'stdio', label: 'stdio', descKey: 'mcpTransportStdio' },
+  { value: 'sse', label: 'SSE', descKey: 'mcpTransportSse' },
+  { value: 'http', label: 'HTTP', descKey: 'mcpTransportHttp' },
+];
+
+export const McpFormInputMode = {
+  Form: 'form',
+  Json: 'json',
+} as const;
+export type McpFormInputMode = typeof McpFormInputMode[keyof typeof McpFormInputMode];
+
+const INPUT_MODE_OPTIONS: { value: McpFormInputMode; labelKey: string }[] = [
+  { value: McpFormInputMode.Form, labelKey: 'mcpFormModeForm' },
+  { value: McpFormInputMode.Json, labelKey: 'mcpFormModeJson' },
+];
+
+// Placeholder sample shown in the JSON textarea; code, not user-facing copy.
+const MCP_JSON_EXAMPLE = `{
+  "mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "my-mcp-server"],
+      "env": { "API_KEY": "your-key" }
+    },
+    "remote-server": {
+      "type": "http",
+      "url": "https://example.com/mcp"
+    }
+  }
+}`;
 
 interface McpServerFormModalProps {
   isOpen: boolean;
@@ -12,6 +45,7 @@ interface McpServerFormModalProps {
   existingNames: string[];
   onClose: () => void;
   onSave: (data: McpServerFormData) => void;
+  onImportJson?: (servers: McpServerFormData[]) => Promise<{ success: boolean; error?: string }>;
 }
 
 const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
@@ -21,10 +55,16 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   existingNames,
   onClose,
   onSave,
+  onImportJson,
 }) => {
   const isEdit = !!server;
   const isRegistry = !!registryEntry && !isEdit;
+  // JSON paste mode is only offered when creating from scratch.
+  const supportsJsonMode = !isEdit && !isRegistry && !!onImportJson;
 
+  const [inputMode, setInputMode] = useState<McpFormInputMode>(McpFormInputMode.Form);
+  const [jsonText, setJsonText] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [transportType, setTransportType] = useState<'stdio' | 'sse' | 'http'>('stdio');
@@ -102,6 +142,9 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       setUrl('');
       setHeaderRows([]);
     }
+    setInputMode(McpFormInputMode.Form);
+    setJsonText('');
+    setIsImporting(false);
     setError('');
     setEnvErrors({});
   }, [isOpen, server, registryEntry]);
@@ -184,11 +227,11 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
 
     if (transportType === 'stdio') {
       data.command = command.trim();
-      if (args.length > 0) data.args = args;
-      if (Object.keys(env).length > 0) data.env = env;
+      data.args = args;
+      data.env = env;
     } else {
       data.url = normalizedUrl;
-      if (Object.keys(headers).length > 0) data.headers = headers;
+      data.headers = headers;
     }
 
     // Attach registry metadata if installing from registry
@@ -198,6 +241,48 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
     }
 
     onSave(data);
+  };
+
+  const formatJsonImportError = (result: Extract<McpJsonImportResult, { ok: false }>): string => {
+    switch (result.code) {
+      case McpJsonImportErrorCode.InvalidJson:
+        return i18nService.t('mcpJsonInvalid');
+      case McpJsonImportErrorCode.NoServers:
+        return i18nService.t('mcpJsonNoServers');
+      case McpJsonImportErrorCode.MissingName:
+        return i18nService.t('mcpJsonMissingName');
+      case McpJsonImportErrorCode.DuplicateName:
+        return i18nService.t('mcpJsonDuplicateName').replace('{name}', result.detail ?? '');
+      case McpJsonImportErrorCode.EntryInvalid:
+      default:
+        return i18nService.t('mcpJsonEntryInvalid').replace('{name}', result.detail ?? '');
+    }
+  };
+
+  const handleImportJson = async () => {
+    if (!onImportJson) return;
+    const result = parseMcpServersJson(jsonText);
+    if (!result.ok) {
+      setError(formatJsonImportError(result));
+      return;
+    }
+    const conflicts = result.servers
+      .map(item => item.name)
+      .filter(itemName => existingNames.includes(itemName));
+    if (conflicts.length > 0) {
+      setError(i18nService.t('mcpJsonNameConflict').replace('{name}', conflicts.join(', ')));
+      return;
+    }
+    setError('');
+    setIsImporting(true);
+    try {
+      const importResult = await onImportJson(result.servers);
+      if (!importResult.success) {
+        setError(importResult.error || i18nService.t('mcpCreateFailed'));
+      }
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const handleAddEnvRow = () => {
@@ -246,7 +331,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
 
   if (!isOpen) return null;
 
-  const inputClass = 'w-full px-3 py-2 text-sm rounded-xl bg-background text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary';
+  const inputClass = 'w-full px-3 py-2 text-sm rounded-lg bg-background text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary';
   const readOnlyInputClass = inputClass + ' opacity-60 cursor-not-allowed';
   const labelClass = 'text-xs font-semibold tracking-wide text-secondary';
   const kvInputClass = 'flex-1 px-2 py-1.5 text-sm rounded-lg bg-background text-foreground border border-border focus:outline-none focus:ring-1 focus:ring-primary';
@@ -264,14 +349,52 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
     : i18nService.t('saveMcpServer');
 
   return (
-    <Modal onClose={onClose} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-lg mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6 max-h-[80vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-5">
-          <div className="text-lg font-semibold text-foreground">
+    <Modal onClose={onClose} overlayClassName="fixed inset-0 z-50 flex items-center justify-center modal-backdrop px-4" className="modal-content flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-modal">
+        <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
+          <h2 className="text-base font-semibold text-foreground">
             {modalTitle}
-          </div>
+          </h2>
+          {supportsJsonMode && (
+            <div className="flex flex-shrink-0 rounded-lg bg-surface-raised p-0.5">
+              {INPUT_MODE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => {
+                    setInputMode(opt.value);
+                    setError('');
+                  }}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                    inputMode === opt.value
+                      ? 'bg-surface text-foreground shadow-subtle'
+                      : 'text-secondary hover:text-foreground'
+                  }`}
+                >
+                  {i18nService.t(opt.labelKey)}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
-        <div className="space-y-4">
+        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          {inputMode === McpFormInputMode.Json ? (
+            <div className="space-y-2">
+              <p className="text-xs leading-5 text-secondary">
+                {i18nService.t('mcpJsonImportHint')}
+              </p>
+              <textarea
+                value={jsonText}
+                onChange={(e) => setJsonText(e.target.value)}
+                placeholder={MCP_JSON_EXAMPLE}
+                rows={14}
+                spellCheck={false}
+                autoFocus
+                className={inputClass + ' resize-none font-mono text-xs leading-5'}
+              />
+            </div>
+          ) : (
+          <>
           {/* Name */}
           <div className="space-y-1.5">
             <label className={labelClass}>{i18nService.t('mcpServerName')}<span className="text-red-500 dark:text-red-400 ml-0.5">*</span></label>
@@ -301,16 +424,26 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
           {/* Transport Type */}
           <div className="space-y-1.5">
             <label className={labelClass}>{i18nService.t('mcpTransportType')}</label>
-            <select
-              value={transportType}
-              onChange={(e) => setTransportType(e.target.value as 'stdio' | 'sse' | 'http')}
-              className={isRegistry ? readOnlyInputClass : inputClass}
-              disabled={isRegistry}
-            >
-              <option value="stdio">{i18nService.t('mcpTransportStdio')}</option>
-              <option value="sse">{i18nService.t('mcpTransportSse')}</option>
-              <option value="http">{i18nService.t('mcpTransportHttp')}</option>
-            </select>
+            <div className={`grid grid-cols-3 gap-1 rounded-lg bg-surface-raised p-1 ${isRegistry ? 'opacity-60' : ''}`}>
+              {TRANSPORT_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  disabled={isRegistry}
+                  onClick={() => setTransportType(opt.value)}
+                  className={`rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+                    transportType === opt.value
+                      ? 'bg-surface text-foreground shadow-subtle'
+                      : 'text-secondary hover:text-foreground'
+                  } ${isRegistry ? 'cursor-not-allowed' : ''}`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-secondary">
+              {i18nService.t(TRANSPORT_OPTIONS.find(opt => opt.value === transportType)!.descKey)}
+            </p>
           </div>
 
           {/* stdio fields */}
@@ -463,25 +596,38 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
             </>
           )}
 
-          {error && (
-            <div className="text-xs text-red-500">{error}</div>
+          </>
           )}
+        </div>
 
-          <div className="flex items-center justify-end gap-2 pt-2">
+        <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-4">
+          <p className="min-w-0 flex-1 text-xs text-red-500">{error}</p>
+          <div className="flex flex-shrink-0 items-center gap-2">
             <button
               type="button"
               onClick={onClose}
-              className="px-3 py-1.5 text-xs rounded-lg border border-border text-secondary hover:bg-surface-raised transition-colors"
+              className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
             >
               {i18nService.t('cancel')}
             </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              className="px-3 py-1.5 text-xs rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors"
-            >
-              {saveText}
-            </button>
+            {inputMode === McpFormInputMode.Json ? (
+              <button
+                type="button"
+                onClick={handleImportJson}
+                disabled={isImporting || !jsonText.trim()}
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {i18nService.t('mcpJsonImport')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSave}
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors"
+              >
+                {saveText}
+              </button>
+            )}
           </div>
         </div>
     </Modal>

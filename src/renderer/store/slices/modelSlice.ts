@@ -15,6 +15,7 @@ export interface Model {
   contextWindow?: number;
   isServerModel?: boolean; // 是否为服务端套餐模型
   serverApiFormat?: string; // 服务端模型的 API 格式 ("openai" | "anthropic")
+  explicitContextCache?: boolean; // 是否支持服务端显式上下文缓存
   description?: string; // 模型能力简介
   costMultiplier?: number; // 积分消耗倍率 (1.0=标准)
   accessible?: boolean; // false = 模型可见但用户无权使用（置灰）

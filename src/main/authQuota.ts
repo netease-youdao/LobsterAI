@@ -1,8 +1,6 @@
-export const AuthSubscriptionStatus = {
-  Active: 'active',
-  Free: 'free',
-} as const;
-export type AuthSubscriptionStatus = typeof AuthSubscriptionStatus[keyof typeof AuthSubscriptionStatus];
+import { AuthSubscriptionStatus } from '../shared/auth/constants';
+
+export { AuthSubscriptionStatus };
 
 export type NormalizeAuthQuotaLabels = {
   freePlanName: string;

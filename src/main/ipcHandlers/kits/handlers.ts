@@ -33,7 +33,7 @@ import {
 } from '../../computerUse/computerUseRuntime';
 import { cpRecursiveSync } from '../../fsCompat';
 import { OpenClawConfigImpact } from '../../libs/openclawConfigImpact';
-import type { SkillManager } from '../../skillManager';
+import type { SkillManager } from '../../skills/skillManager';
 import type { SqliteStore } from '../../sqliteStore';
 
 const KITS_INSTALLED_KEY: KitStoreKey = KitStoreKeyValue.Installed;

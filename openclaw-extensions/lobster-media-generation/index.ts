@@ -274,6 +274,7 @@ const plugin = {
         description: [
           'Generate videos using LobsterAI server.',
           'Supports text-to-video, image-to-video, and video editing.',
+          'For HappyHorse-1.1, pass model "HappyHorse-1.1"; the server selects happyhorse-1.1-t2v when no image is provided, happyhorse-1.1-i2v for one input image, and happyhorse-1.1-r2v for multiple input images. Do not pass the HappyHorse-1.1 submodel IDs directly.',
           'IMPORTANT: Different models have different valid parameters and value ranges.',
           'If the system prompt includes a LobsterAI media reference mapping, use mapped file paths or URLs in image/images/firstFrame/referenceImages/video/videos/media arguments and never pass @ media tokens as tool argument values.',
           'WORKFLOW: You MUST follow this three-step process:',

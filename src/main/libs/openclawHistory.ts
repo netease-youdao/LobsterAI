@@ -12,6 +12,12 @@ export interface GatewayHistoryEntry {
   timestamp?: number;
   usage?: { input?: number; output?: number; cacheRead?: number; totalTokens?: number };
   model?: string;
+  mediaAttachments?: GatewayHistoryMediaAttachment[];
+}
+
+export interface GatewayHistoryMediaAttachment {
+  localPath: string;
+  mimeType?: string;
 }
 
 const HEARTBEAT_ACK_RE = /^[`*_~"'“”‘’()[\]{}<>.,!?;:，。！？；：\s-]{0,8}HEARTBEAT_OK[`*_~"'“”‘’()[\]{}<>.,!?;:，。！？；：\s-]{0,8}$/i;
@@ -96,6 +102,45 @@ const extractGatewayTimestamp = (message: Record<string, unknown>): number | und
     ?? parseGatewayTimestamp(message.time);
 };
 
+const getStringArrayField = (message: Record<string, unknown>, keys: string[]): string[] => {
+  for (const key of keys) {
+    const value = message[key];
+    if (typeof value === 'string' && value.trim()) {
+      return [value.trim()];
+    }
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter(Boolean);
+    }
+  }
+  return [];
+};
+
+const extractGatewayMediaAttachments = (message: Record<string, unknown>): GatewayHistoryMediaAttachment[] | undefined => {
+  const paths = getStringArrayField(message, ['MediaPaths', 'mediaPaths', 'MediaPath', 'mediaPath']);
+  if (paths.length === 0) {
+    return undefined;
+  }
+
+  const mimeTypes = getStringArrayField(message, ['MediaTypes', 'mediaTypes', 'MediaType', 'mediaType']);
+  const seen = new Set<string>();
+  const attachments: GatewayHistoryMediaAttachment[] = [];
+  for (let index = 0; index < paths.length; index += 1) {
+    const localPath = paths[index];
+    const key = localPath.replace(/\\/g, '/').toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const mimeType = mimeTypes[index] || mimeTypes[0];
+    attachments.push({
+      localPath,
+      ...(mimeType ? { mimeType } : {}),
+    });
+  }
+
+  return attachments.length > 0 ? attachments : undefined;
+};
+
 export const extractGatewayMessageText = (message: unknown): string => {
   if (typeof message === 'string') {
     return message;
@@ -140,6 +185,14 @@ const collectThinkingChunks = (value: unknown): string[] => {
       chunks.push(thinking);
     }
   }
+  for (const key of ['reasoning_content', 'reasoning', 'reasoning_text'] as const) {
+    if (typeof value[key] === 'string') {
+      const thinking = value[key].trim();
+      if (thinking) {
+        chunks.push(thinking);
+      }
+    }
+  }
   if (value.content !== undefined) {
     chunks.push(...collectThinkingChunks(value.content));
   }
@@ -151,16 +204,7 @@ const collectThinkingChunks = (value: unknown): string[] => {
 
 export const extractGatewayMessageThinking = (message: unknown): string => {
   if (!isRecord(message)) return '';
-  const content = message.content;
-  if (Array.isArray(content)) {
-    const chunks = collectThinkingChunks(content);
-    return chunks.join('\n\n').trim();
-  }
-  if (isRecord(content)) {
-    const chunks = collectThinkingChunks(content);
-    return chunks.join('\n\n').trim();
-  }
-  return '';
+  return collectThinkingChunks(message).join('\n\n').trim();
 };
 
 export const buildScheduledReminderSystemMessage = (text: string): string | null => {
@@ -250,7 +294,8 @@ export const extractGatewayHistoryEntry = (message: unknown): GatewayHistoryEntr
   }
 
   let text = extractGatewayMessageText(message).trim();
-  if (!text) {
+  const mediaAttachments = extractGatewayMediaAttachments(message);
+  if (!text && !(role === 'user' && mediaAttachments?.length)) {
     return null;
   }
   if (role === 'assistant') {
@@ -311,6 +356,7 @@ export const extractGatewayHistoryEntry = (message: unknown): GatewayHistoryEntr
     ...(timestamp != null && { timestamp }),
     ...(usage && { usage }),
     ...(model && { model }),
+    ...(mediaAttachments && { mediaAttachments }),
   };
 };
 

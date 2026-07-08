@@ -87,6 +87,19 @@ export function serializeForLog(value: unknown, maxChars = LOG_PREVIEW_MAX_CHARS
   }
 }
 
+export function sanitizeUrlForLog(value: string): string {
+  try {
+    const url = new URL(value);
+    const hasQuery = Boolean(url.search);
+    const hasHash = Boolean(url.hash);
+    url.search = '';
+    url.hash = '';
+    return `${url.href}${hasQuery ? '?[redacted]' : ''}${hasHash ? '#[redacted]' : ''}`;
+  } catch {
+    return '[invalid-url]';
+  }
+}
+
 export function looksLikeTransportErrorText(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) {

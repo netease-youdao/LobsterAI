@@ -57,7 +57,7 @@ const TOOL_USE_ERROR_TAG_PATTERN = /^<tool_use_error>([\s\S]*?)<\/tool_use_error
 const ANSI_ESCAPE_PATTERN = /\u001B\[[0-?]*[ -/]*[@-~]/g;
 export const MEDIA_TOKEN_DISPLAY_RE = /\n?MEDIA:\s*`?[^`\n]+?`?\s*$/gim;
 const SILENT_TOKEN_RE = /^[`*_~"'""''()[\]{}<>.,!?;:，。！？；：\s-]{0,8}NO_REPLY[`*_~"'""''()[\]{}<>.,!?;:，。！？；：\s-]{0,8}$/i;
-export const TOOL_RESULT_COLLAPSED_FULL_DISPLAY_MAX_CHARS = 64 * 1024;
+export const TOOL_RESULT_COLLAPSED_FULL_DISPLAY_MAX_CHARS = 16 * 1024;
 export const TOOL_RESULT_COLLAPSED_PREVIEW_MAX_CHARS = 4 * 1024;
 export const STRUCTURED_TEXT_FORMAT_MAX_CHARS = 128 * 1024;
 
@@ -389,6 +389,45 @@ export const getToolResultLineCountSummary = (lineCount: number): string => {
 
 export const getLargeToolResultSummary = (sizeLabel: string): string =>
   i18nService.t('coworkToolLargeOutput').replace('{size}', sizeLabel);
+
+const getGenericRunningStatusText = (): string => {
+  const text = i18nService.t('coworkToolRunning');
+  return text.endsWith('...') || text.endsWith('…') ? text : `${text}...`;
+};
+
+export const getStreamingActivityStatusText = (
+  messages: CoworkMessage[],
+  isContextMaintenance = false,
+): string => {
+  if (isContextMaintenance) {
+    return i18nService.t('coworkContextMaintenanceRunning');
+  }
+
+  const toolResultIds = new Set<string>();
+  for (const message of messages) {
+    const id = message.metadata?.toolUseId;
+    if (message.type === 'tool_result' && typeof id === 'string') {
+      toolResultIds.add(id);
+    }
+  }
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.type !== 'tool_use') continue;
+
+    const id = message.metadata?.toolUseId;
+    if (typeof id === 'string' && toolResultIds.has(id)) continue;
+
+    const toolName = typeof message.metadata?.toolName === 'string'
+      ? message.metadata.toolName.trim()
+      : '';
+    return toolName
+      ? `${i18nService.t('coworkToolRunning')} ${toolName}...`
+      : getGenericRunningStatusText();
+  }
+
+  return getGenericRunningStatusText();
+};
 
 export const getToolResultCollapsedDisplay = (message: CoworkMessage): ToolResultCollapsedDisplay => {
   const rawText = getToolResultRawText(message);

@@ -144,7 +144,9 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
   const listClassName = asSubmenu
     ? 'overflow-y-auto px-2 py-1.5'
     : 'overflow-y-auto py-1';
-  const listStyle: React.CSSProperties = { maxHeight: `${maxListHeight}px` };
+  const listStyle: React.CSSProperties = asSubmenu
+    ? { height: `${maxListHeight}px` }
+    : { maxHeight: `${maxListHeight}px` };
   const emptyStateClassName = asSubmenu
     ? 'flex h-[50px] items-center justify-center px-3 text-center text-[13px] leading-5 text-secondary'
     : 'px-4 py-6 text-center text-sm text-secondary';

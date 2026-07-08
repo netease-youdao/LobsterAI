@@ -4,11 +4,17 @@ import type {
   Schedule,
   ScheduleCron,
   ScheduledTask,
+  ScheduledTaskChannelOption,
+  ScheduledTaskConversationOption,
   ScheduledTaskDelivery,
   ScheduledTaskPayload,
-  TaskLastStatus,
 } from '../../../scheduledTask/types';
-import { PlatformRegistry } from '../../../shared/platform';
+import {
+  imConversationDisplayName,
+  ImPeerKind,
+  parseImConversationId,
+  PlatformRegistry,
+} from '../../../shared/platform';
 import { i18nService } from '../../services/i18n';
 
 const WEEKDAY_KEYS = [
@@ -256,11 +262,59 @@ export function formatDateTime(date: Date): string {
   return date.toLocaleString('en-US');
 }
 
+/**
+ * Minute-precision date-time for schedule labels (last/next run). Seconds are
+ * dropped: they are noise for schedules and belong only in run-history rows.
+ */
+export function formatDateTimeMinute(date: Date): string {
+  const lang = i18nService.getLanguage();
+  if (lang === 'zh') {
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  }
+  return date.toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
 export function formatDuration(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms)) return '-';
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
   return `${Math.round(ms / 60_000)}m`;
+}
+
+/**
+ * Live elapsed-time label for a running task, e.g. "42s", "3m 12s", "1h 05m".
+ */
+export function formatElapsedDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '0s';
+  const totalSec = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSec / 3600);
+  const minutes = Math.floor((totalSec % 3600) / 60);
+  const seconds = totalSec % 60;
+  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, '0')}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+/**
+ * Remove the machine-routing "[cron:<id> <name>]" prefix that OpenClaw
+ * prepends to cron prompts before they reach the agent. Display-only.
+ */
+export function stripCronMetadataPrefix(text: string): string {
+  return text.replace(/^\s*\[cron:[^\]\n]*\]\s*/, '');
 }
 
 /**
@@ -313,26 +367,185 @@ function resolveChannelDisplayName(channel: string): string {
   return channel;
 }
 
-export function formatDeliveryLabel(delivery: ScheduledTaskDelivery): string {
-  if (delivery.mode === 'none' && !delivery.channel) {
-    return i18nService.t('scheduledTasksFormDeliveryModeNone');
+/** Localized label for a conversation peer kind ('direct' → 私聊/DM). */
+function conversationPeerKindLabel(peerKind: string | undefined): string {
+  switch (peerKind) {
+    case ImPeerKind.Direct:
+      return i18nService.t('scheduledTasksConvKindDirect');
+    case ImPeerKind.Group:
+      return i18nService.t('scheduledTasksConvKindGroup');
+    case ImPeerKind.Channel:
+      return i18nService.t('scheduledTasksConvKindChannel');
+    default:
+      return '';
   }
+}
 
-  if (delivery.mode === 'none' && delivery.channel) {
-    const channelName = resolveChannelDisplayName(delivery.channel);
-    const toLabel = delivery.to ? ` -> ${delivery.to}` : '';
-    return `${channelName}${toLabel}`;
+/** Dropdown label for a conversation option, e.g. "私聊 · 张三" instead of raw IDs. */
+export function formatConversationOptionLabel(option: ScheduledTaskConversationOption): string {
+  const name = option.displayName?.trim() || imConversationDisplayName(option.conversationId);
+  const kind = conversationPeerKindLabel(
+    option.peerKind ?? parseImConversationId(option.conversationId).peerKind,
+  );
+  return kind ? `${kind} · ${name}` : name;
+}
+
+/** Friendly rendering of a saved delivery target (bare peer id or full conversation id). */
+export function formatDeliveryTarget(to: string): string {
+  const kind = conversationPeerKindLabel(parseImConversationId(to).peerKind);
+  const name = imConversationDisplayName(to);
+  return kind ? `${kind} · ${name}` : name;
+}
+
+/**
+ * Default notify target for a bot instance: the most recent direct (DM)
+ * conversation, falling back to the most recent conversation of any kind.
+ * The input list is already sorted by recency (listSessionMappings orders by
+ * last_active_at DESC).
+ */
+export function pickDefaultConversation(
+  conversations: readonly ScheduledTaskConversationOption[],
+): ScheduledTaskConversationOption | undefined {
+  if (conversations.length === 0) return undefined;
+  const direct = conversations.find(
+    conv =>
+      (conv.peerKind ?? parseImConversationId(conv.conversationId).peerKind) === ImPeerKind.Direct,
+  );
+  return direct ?? conversations[0];
+}
+
+/**
+ * Whether a conversation option refers to a saved delivery target. Saved targets
+ * are normalized to the bare peer id at create time (see
+ * applyAnnounceDeliveryNormalization), so options also match by their peer id
+ * or trailing segment.
+ */
+export function conversationOptionMatchesValue(
+  channel: string,
+  optionConversationId: string,
+  selectedValue: string,
+): boolean {
+  // Compare case-insensitively: conversation ids derive from lowercased
+  // OpenClaw session keys, while saved delivery targets are restored to the
+  // channel-native casing at save time (see applyAnnounceDeliveryNormalization).
+  const optionId = optionConversationId.trim().toLowerCase();
+  const value = selectedValue.trim().toLowerCase();
+  if (!optionId || !value) return false;
+  if (optionId === value) return true;
+  if (parseImConversationId(optionId).peerId === value) return true;
+  if (optionId.endsWith(`:${value}`)) return true;
+
+  const platform = PlatformRegistry.platformOfChannel(channel);
+  if (platform === 'nim' && optionId.endsWith(`|${value}`)) return true;
+
+  return false;
+}
+
+/**
+ * Whether a channel option corresponds to the selected channel/account pair.
+ * Single-instance options carry no accountId and match regardless of the
+ * saved delivery accountId, which save-time normalization may stamp with the
+ * bot account owning the target conversation.
+ */
+export function channelOptionMatchesSelection(
+  option: ScheduledTaskChannelOption,
+  channelValue: string,
+  accountId: string | undefined,
+): boolean {
+  if (option.value !== channelValue) return false;
+  return option.accountId ? option.accountId === accountId : true;
+}
+
+/**
+ * Display label for a channel option. Multi-instance platforms get a
+ * "平台 · 实例名" suffix only when more than one instance of that platform is
+ * present; unnamed instances fall back to an ordinal instead of an account id.
+ */
+export function formatChannelOptionLabel(
+  option: ScheduledTaskChannelOption,
+  allOptions: readonly ScheduledTaskChannelOption[],
+): string {
+  const platform = PlatformRegistry.platformOfChannel(option.value);
+  const platformLabel = platform
+    ? i18nService.t(platform) || PlatformRegistry.get(platform).label
+    : option.label || option.value;
+  if (!option.accountId) return platformLabel;
+
+  const siblings = allOptions.filter(o => o.value === option.value && o.accountId);
+  if (siblings.length <= 1) return platformLabel;
+
+  const ordinal = siblings.findIndex(o => o.accountId === option.accountId) + 1;
+  const instanceName =
+    option.label.trim() || `${i18nService.t('scheduledTasksFormInstanceFallback')} ${ordinal}`;
+  return `${platformLabel} · ${instanceName}`;
+}
+
+/**
+ * Resolve a saved delivery target against known conversations so the label
+ * shows the human-friendly name ("私聊 · 张三") instead of the raw peer id.
+ */
+function resolveDeliveryTargetLabel(
+  channel: string,
+  to: string,
+  conversations?: readonly ScheduledTaskConversationOption[],
+): string {
+  const match = conversations?.find(option =>
+    conversationOptionMatchesValue(channel, option.conversationId, to),
+  );
+  return match ? formatConversationOptionLabel(match) : formatDeliveryTarget(to);
+}
+
+/**
+ * Channel label matching the form picker: platform name plus the instance
+ * name when several instances of that platform exist ("企业微信 · 2 号").
+ */
+function resolveDeliveryChannelLabel(
+  channel: string,
+  accountId: string | undefined,
+  channels?: readonly ScheduledTaskChannelOption[],
+): string {
+  if (channels) {
+    const match = channels.find(option =>
+      channelOptionMatchesSelection(option, channel, accountId),
+    );
+    if (match) return formatChannelOptionLabel(match, channels);
   }
+  return resolveChannelDisplayName(channel);
+}
 
+/** Option lists (as loaded for the form pickers) used to prettify labels. */
+export interface DeliveryLabelContext {
+  conversations?: readonly ScheduledTaskConversationOption[];
+  channels?: readonly ScheduledTaskChannelOption[];
+}
+
+export function formatDeliveryLabel(
+  delivery: ScheduledTaskDelivery,
+  context: DeliveryLabelContext = {},
+): string {
   if (delivery.mode === 'webhook') {
     return delivery.to
       ? `${i18nService.t('scheduledTasksFormDeliveryModeWebhook')} · ${delivery.to}`
       : i18nService.t('scheduledTasksFormDeliveryModeWebhook');
   }
 
-  const channelName = delivery.channel ? resolveChannelDisplayName(delivery.channel) : 'last';
-  const toLabel = delivery.to ? ` -> ${delivery.to}` : '';
-  return `${i18nService.t('scheduledTasksFormDeliveryModeAnnounce')} · ${channelName}${toLabel}`;
+  if (!delivery.channel) {
+    return delivery.mode === 'none'
+      ? i18nService.t('scheduledTasksFormDeliveryModeNone')
+      : i18nService.t('scheduledTasksFormDeliveryModeAnnounce');
+  }
+
+  // Mirror the form picker wording ("channel instance · conversation"); the
+  // internal announce/none delivery mode is jargon to end users.
+  const channelName = resolveDeliveryChannelLabel(
+    delivery.channel,
+    delivery.accountId,
+    context.channels,
+  );
+  const toLabel = delivery.to
+    ? ` · ${resolveDeliveryTargetLabel(delivery.channel, delivery.to, context.conversations)}`
+    : '';
+  return `${channelName}${toLabel}`;
 }
 
 export type PlanType = 'once' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'cron' | 'advanced';
@@ -433,6 +646,14 @@ export function scheduleToPlanInfo(schedule: Schedule): PlanInfo {
   }
 
   // Weekly: M H * * DOW,DOW,... (comma-separated)
+  if (dom && dom.type === 'any' && dow && dow.type === 'list') {
+    const days = [...new Set(dow.values)].sort((a, b) => a - b);
+    if (days.length > 0 && days.every(d => d >= 0 && d <= 6)) {
+      return { ...base, planType: 'weekly', weekday: days[0], weekdays: days };
+    }
+  }
+
+  // Weekly: M H * * DOW,DOW,... (fallback for unsupported comma syntax)
   if (dom && dom.type === 'any' && dow === null) {
     const days = parseCommaSeparated(dowRaw);
     if (days && days.length > 0 && days.every(d => d >= 0 && d <= 6)) {
@@ -452,18 +673,35 @@ export function getTaskPromptText(task: ScheduledTask): string {
   return task.payload.kind === 'systemEvent' ? task.payload.text : task.payload.message;
 }
 
-export function getStatusTone(status: TaskLastStatus): string {
-  if (status === 'success') return 'text-green-500';
-  if (status === 'error') return 'text-red-500';
-  if (status === 'skipped') return 'text-yellow-500';
-  if (status === 'running') return 'text-blue-500';
-  return 'text-secondary';
+/**
+ * User-facing task status combining the enable switch, the live running
+ * flag, and the last run result into one unambiguous label.
+ */
+export const TaskDisplayStatus = {
+  Running: 'running',
+  Paused: 'paused',
+  Success: 'success',
+  Error: 'error',
+  Skipped: 'skipped',
+  Never: 'never',
+} as const;
+export type TaskDisplayStatus = typeof TaskDisplayStatus[keyof typeof TaskDisplayStatus];
+
+export function getTaskDisplayStatus(task: ScheduledTask): TaskDisplayStatus {
+  const { state } = task;
+  if (state.runningAtMs || state.lastStatus === 'running') return TaskDisplayStatus.Running;
+  if (!task.enabled) return TaskDisplayStatus.Paused;
+  if (state.lastStatus === 'success') return TaskDisplayStatus.Success;
+  if (state.lastStatus === 'error') return TaskDisplayStatus.Error;
+  if (state.lastStatus === 'skipped') return TaskDisplayStatus.Skipped;
+  return TaskDisplayStatus.Never;
 }
 
-export function getStatusLabelKey(status: TaskLastStatus): string {
-  if (status === 'success') return 'scheduledTasksStatusSuccess';
-  if (status === 'error') return 'scheduledTasksStatusError';
-  if (status === 'skipped') return 'scheduledTasksStatusSkipped';
-  if (status === 'running') return 'scheduledTasksStatusRunning';
-  return 'scheduledTasksStatusIdle';
-}
+export const taskDisplayStatusLabelKey: Record<TaskDisplayStatus, string> = {
+  [TaskDisplayStatus.Running]: 'scheduledTasksStatusRunning',
+  [TaskDisplayStatus.Paused]: 'scheduledTasksStatusPaused',
+  [TaskDisplayStatus.Success]: 'scheduledTasksStatusSuccess',
+  [TaskDisplayStatus.Error]: 'scheduledTasksStatusError',
+  [TaskDisplayStatus.Skipped]: 'scheduledTasksStatusSkipped',
+  [TaskDisplayStatus.Never]: 'scheduledTasksStatusNever',
+};

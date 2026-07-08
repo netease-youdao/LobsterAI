@@ -1,13 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
-import { AgentIpcChannel } from '../shared/agent/constants';
+import { AgentIpcChannel, AgentLegacyIdentityCleanupStatus } from '../shared/agent/constants';
+import { AppIpcChannel } from '../shared/app/constants';
+import { AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
 import {
   AsrIpcChannel,
   type AsrRealtimeSessionRequest,
-  type AsrRecognizeRequest,
 } from '../shared/asr/constants';
 import { AuthIpcChannel } from '../shared/auth/constants';
 import { BrowserIpc, type BrowserRuntimeProfile } from '../shared/browserWebAccess/constants';
@@ -36,6 +37,14 @@ import { McpIpcChannel } from '../shared/mcp/constants';
 import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
+import {
+  type ShareDeploymentAnalyzeProjectInput,
+  type ShareDeploymentCreateNodeInput,
+  type ShareDeploymentDetectCandidatesInput,
+  type ShareDeploymentGetByLocalServiceInput,
+  ShareDeploymentIpc,
+} from '../shared/shareDeployment/constants';
+import { type ShellGetBrowserAppsInput, ShellIpc } from '../shared/shell/constants';
 import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
 import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
@@ -64,6 +73,12 @@ contextBridge.exposeInMainWorld('electron', {
     getConfig: (skillId: string) => ipcRenderer.invoke('skills:getConfig', skillId),
     setConfig: (skillId: string, config: Record<string, string>) =>
       ipcRenderer.invoke('skills:setConfig', skillId, config),
+    getEmailAccountsConfig: (skillId: string) =>
+      ipcRenderer.invoke('skills:getEmailAccountsConfig', skillId),
+    setEmailAccountsConfig: (skillId: string, config: unknown) =>
+      ipcRenderer.invoke('skills:setEmailAccountsConfig', skillId, config),
+    testEmailAccountConnectivity: (skillId: string, account: unknown) =>
+      ipcRenderer.invoke('skills:testEmailAccountConnectivity', skillId, account),
     testEmailConnectivity: (skillId: string, config: Record<string, string>) =>
       ipcRenderer.invoke('skills:testEmailConnectivity', skillId, config),
     fetchMarketplace: () => ipcRenderer.invoke('skills:fetchMarketplace'),
@@ -81,10 +96,15 @@ contextBridge.exposeInMainWorld('electron', {
     create: (data: any) => ipcRenderer.invoke(McpIpcChannel.Create, data),
     update: (id: string, data: any) => ipcRenderer.invoke(McpIpcChannel.Update, id, data),
     delete: (id: string) => ipcRenderer.invoke(McpIpcChannel.Delete, id),
+    deleteByRegistryId: (registryId: string) =>
+      ipcRenderer.invoke(McpIpcChannel.DeleteByRegistryId, registryId),
     setEnabled: (options: { id: string; enabled: boolean }) =>
       ipcRenderer.invoke(McpIpcChannel.SetEnabled, options),
+    setEnabledByRegistryId: (options: { registryId: string; enabled: boolean }) =>
+      ipcRenderer.invoke(McpIpcChannel.SetEnabledByRegistryId, options),
     retryLaunchResolution: (id: string) => ipcRenderer.invoke(McpIpcChannel.RetryLaunchResolution, id),
     fetchMarketplace: () => ipcRenderer.invoke(McpIpcChannel.FetchMarketplace),
+    connectQichacha: () => ipcRenderer.invoke(McpIpcChannel.ConnectQichacha),
     onChanged: (callback: () => void) => {
       const handler = () => callback();
       ipcRenderer.on(McpIpcChannel.Changed, handler);
@@ -292,6 +312,13 @@ contextBridge.exposeInMainWorld('electron', {
       const result = await ipcRenderer.invoke(AgentIpcChannel.Update, id, updates);
       return result?.success ? result.agent : null;
     },
+    cleanupLegacyIdentityBlock: async (id: string) => {
+      const result = await ipcRenderer.invoke(AgentIpcChannel.CleanupLegacyIdentityBlock, id);
+      return result?.result ?? {
+        status: AgentLegacyIdentityCleanupStatus.Failed,
+        error: result?.error || 'Failed to clean legacy identity block',
+      };
+    },
     delete: async (id: string) => {
       const result = await ipcRenderer.invoke(AgentIpcChannel.Delete, id);
       return result?.success ? result.deleted : false;
@@ -351,6 +378,8 @@ contextBridge.exposeInMainWorld('electron', {
         dataUrl?: string; role?: string;
       }>;
     }) => ipcRenderer.invoke('cowork:session:continue', options),
+    runGoalCommand: (options: { sessionId: string; command: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.GoalCommand, options),
     stopSession: (sessionId: string) => ipcRenderer.invoke('cowork:session:stop', sessionId),
     deleteSession: (sessionId: string) => ipcRenderer.invoke('cowork:session:delete', sessionId),
     deleteSessions: (sessionIds: string[]) =>
@@ -371,10 +400,12 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.OpenSessionFromNotificationReady),
     remoteManaged: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:remoteManaged', sessionId),
-    listSessions: (options?: { limit?: number; offset?: number; agentId?: string }) =>
+    listSessions: (options?: { limit?: number; offset?: number; agentId?: string; searchQuery?: string }) =>
       ipcRenderer.invoke('cowork:session:list', options),
     getSessionMessages: (options: { sessionId: string; limit?: number; offset?: number }) =>
       ipcRenderer.invoke('cowork:session:getMessages', options),
+    getSessionMessageRailIndex: (sessionId: string) =>
+      ipcRenderer.invoke(CoworkIpcChannel.GetSessionMessageRailIndex, sessionId),
     getContextUsage: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:contextUsage', sessionId),
     compactContext: (sessionId: string) =>
@@ -393,6 +424,8 @@ contextBridge.exposeInMainWorld('electron', {
       defaultFileName?: string;
       fileExtension?: string;
     }) => ipcRenderer.invoke('cowork:session:exportText', options),
+    exportSessionDiagnostics: (options: { sessionId: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.ExportSessionDiagnostics, options),
 
     // Subagent tracking
     getSubTaskHistory: (options: {
@@ -425,6 +458,7 @@ contextBridge.exposeInMainWorld('electron', {
       memoryGuardLevel?: 'strict' | 'standard' | 'relaxed';
       memoryUserMemoriesMaxItems?: number;
       skipMissedJobs?: boolean;
+      openClawHeartbeatEnabled?: boolean;
       embeddingEnabled?: boolean;
       embeddingProvider?: string;
       embeddingModel?: string;
@@ -452,6 +486,9 @@ contextBridge.exposeInMainWorld('electron', {
     deleteMemoryEntry: (input: { id: string }) =>
       ipcRenderer.invoke('cowork:memory:deleteEntry', input),
     getMemoryStats: () => ipcRenderer.invoke('cowork:memory:getStats'),
+    readMemoryFileRaw: () => ipcRenderer.invoke(CoworkIpcChannel.MemoryReadRaw),
+    writeMemoryFileRaw: (input: { content: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.MemoryWriteRaw, input),
     getDreamingStatus: () => ipcRenderer.invoke('cowork:dreaming:status'),
     getDreamDiary: () => ipcRenderer.invoke('cowork:dreaming:diary'),
     readBootstrapFile: (filename: string) => ipcRenderer.invoke('cowork:bootstrap:read', filename),
@@ -498,6 +535,11 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on('cowork:stream:contextUsage', handler);
       return () => ipcRenderer.removeListener('cowork:stream:contextUsage', handler);
     },
+    onStreamGoal: (callback: (data: { sessionId: string; goal: any }) => void) => {
+      const handler = (_event: any, data: { sessionId: string; goal: any }) => callback(data);
+      ipcRenderer.on(CoworkIpcChannel.StreamGoal, handler);
+      return () => ipcRenderer.removeListener(CoworkIpcChannel.StreamGoal, handler);
+    },
     onStreamContextMaintenance: (
       callback: (data: { sessionId: string; active: boolean }) => void,
     ) => {
@@ -532,6 +574,13 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = () => callback();
       ipcRenderer.on('cowork:sessions:changed', handler);
       return () => ipcRenderer.removeListener('cowork:sessions:changed', handler);
+    },
+    onSessionModelOverrideChanged: (
+      callback: (data: { sessionId: string; modelOverride: string }) => void,
+    ) => {
+      const handler = (_event: any, data: { sessionId: string; modelOverride: string }) => callback(data);
+      ipcRenderer.on(CoworkIpcChannel.SessionModelOverrideChanged, handler);
+      return () => ipcRenderer.removeListener(CoworkIpcChannel.SessionModelOverrideChanged, handler);
     },
     onOpenSessionFromNotification: (callback: (data: { sessionId: string }) => void) => {
       const handler = (_event: any, data: { sessionId: string }) => callback(data);
@@ -570,14 +619,18 @@ contextBridge.exposeInMainWorld('electron', {
     }) => ipcRenderer.invoke('dialog:showMessageBox', options),
   },
   shell: {
-    openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath),
-    showItemInFolder: (filePath: string) => ipcRenderer.invoke('shell:showItemInFolder', filePath),
-    openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+    openPath: (filePath: string) => ipcRenderer.invoke(ShellIpc.OpenPath, filePath),
+    showItemInFolder: (filePath: string) => ipcRenderer.invoke(ShellIpc.ShowItemInFolder, filePath),
+    openExternal: (url: string) => ipcRenderer.invoke(ShellIpc.OpenExternal, url),
     openHtmlInBrowser: (htmlContent: string) =>
-      ipcRenderer.invoke('shell:openHtmlInBrowser', htmlContent),
-    getAppsForFile: (filePath: string) => ipcRenderer.invoke('shell:getAppsForFile', filePath),
+      ipcRenderer.invoke(ShellIpc.OpenHtmlInBrowser, htmlContent),
+    getAppsForFile: (filePath: string) => ipcRenderer.invoke(ShellIpc.GetAppsForFile, filePath),
+    getBrowserApps: (options?: ShellGetBrowserAppsInput) =>
+      ipcRenderer.invoke(ShellIpc.GetBrowserApps, options),
     openPathWithApp: (filePath: string, appPath: string) =>
-      ipcRenderer.invoke('shell:openPathWithApp', filePath, appPath),
+      ipcRenderer.invoke(ShellIpc.OpenPathWithApp, filePath, appPath),
+    openUrlWithApp: (url: string, appPath: string) =>
+      ipcRenderer.invoke(ShellIpc.OpenUrlWithApp, url, appPath),
   },
   clipboard: {
     writeText: (text: string) =>
@@ -643,9 +696,18 @@ contextBridge.exposeInMainWorld('electron', {
     disable: (shareId: string) => ipcRenderer.invoke(HtmlShareIpc.Disable, shareId),
     get: (shareId: string) => ipcRenderer.invoke(HtmlShareIpc.Get, shareId),
   },
+  shareDeployment: {
+    detectProjectCandidates: (options: ShareDeploymentDetectCandidatesInput) =>
+      ipcRenderer.invoke(ShareDeploymentIpc.DetectProjectCandidates, options),
+    analyzeProjectDirectory: (options: ShareDeploymentAnalyzeProjectInput) =>
+      ipcRenderer.invoke(ShareDeploymentIpc.AnalyzeProjectDirectory, options),
+    createNodeDeployment: (options: ShareDeploymentCreateNodeInput) =>
+      ipcRenderer.invoke(ShareDeploymentIpc.CreateNodeDeployment, options),
+    get: (deploymentId: string) => ipcRenderer.invoke(ShareDeploymentIpc.Get, deploymentId),
+    getByLocalService: (options: ShareDeploymentGetByLocalServiceInput) =>
+      ipcRenderer.invoke(ShareDeploymentIpc.GetByLocalService, options),
+  },
   asr: {
-    recognize: (options: AsrRecognizeRequest) =>
-      ipcRenderer.invoke(AsrIpcChannel.Recognize, options),
     createRealtimeSession: (options: AsrRealtimeSessionRequest) =>
       ipcRenderer.invoke(AsrIpcChannel.CreateRealtimeSession, options),
   },
@@ -684,16 +746,17 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(LocalWebServicesIpc.List, options) as Promise<LocalWebService[]>,
   },
   autoLaunch: {
-    get: () => ipcRenderer.invoke('app:getAutoLaunch'),
-    set: (enabled: boolean) => ipcRenderer.invoke('app:setAutoLaunch', enabled),
+    get: () => ipcRenderer.invoke(AppSettingsIpc.GetAutoLaunch),
+    set: (enabled: boolean) => ipcRenderer.invoke(AppSettingsIpc.SetAutoLaunch, enabled),
   },
   preventSleep: {
-    get: () => ipcRenderer.invoke('app:getPreventSleep'),
-    set: (enabled: boolean) => ipcRenderer.invoke('app:setPreventSleep', enabled),
+    get: () => ipcRenderer.invoke(AppSettingsIpc.GetPreventSleep),
+    set: (enabled: boolean) => ipcRenderer.invoke(AppSettingsIpc.SetPreventSleep, enabled),
   },
   appInfo: {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
     getSystemLocale: () => ipcRenderer.invoke('app:getSystemLocale'),
+    getKeyfromAttribution: () => ipcRenderer.invoke(AppIpcChannel.GetKeyfromAttribution),
     relaunch: () => ipcRenderer.invoke('app:relaunch'),
   },
   appUpdate: {
@@ -904,8 +967,8 @@ contextBridge.exposeInMainWorld('electron', {
     countRuns: (taskId: string) => ipcRenderer.invoke(ScheduledTaskIpc.CountRuns, taskId),
     listAllRuns: (limit?: number, offset?: number, filter?: any) =>
       ipcRenderer.invoke(ScheduledTaskIpc.ListAllRuns, limit, offset, filter),
-    resolveSession: (sessionKey: string) =>
-      ipcRenderer.invoke(ScheduledTaskIpc.ResolveSession, sessionKey),
+    resolveSession: (input: string | { sessionId?: string | null; sessionKey?: string | null }) =>
+      ipcRenderer.invoke(ScheduledTaskIpc.ResolveSession, input),
 
     // Delivery channels
     listChannels: () => ipcRenderer.invoke(ScheduledTaskIpc.ListChannels),
@@ -948,6 +1011,8 @@ contextBridge.exposeInMainWorld('electron', {
     getModels: () => ipcRenderer.invoke('auth:getModels'),
     getPricingCatalog: () => ipcRenderer.invoke(AuthIpcChannel.GetPricingCatalog),
     getProfileSummary: () => ipcRenderer.invoke('auth:getProfileSummary'),
+    getActiveClientBanner: () => ipcRenderer.invoke('auth:getActiveClientBanner'),
+    getActiveClientBanners: () => ipcRenderer.invoke('auth:getActiveClientBanners'),
     getPendingCallback: () => ipcRenderer.invoke(AuthIpcChannel.GetPendingCallback),
     onCallback: (callback: (data: { code: string }) => void) => {
       const handler = (_event: any, data: { code: string }) => callback(data);
@@ -1062,5 +1127,41 @@ contextBridge.exposeInMainWorld('electron', {
         | { loggedIn: true; email: string | null; accountId: string | null; expiresAt: number }
         | { loggedIn: false }
       >,
+  },
+  xaiOAuth: {
+    start: () =>
+      ipcRenderer.invoke('xai-oauth:start') as Promise<
+        | { success: true; email: string | null; flow: 'browser' | 'device-code' }
+        | { success: false; error: string }
+      >,
+    cancel: () => ipcRenderer.invoke('xai-oauth:cancel') as Promise<void>,
+    logout: () => ipcRenderer.invoke('xai-oauth:logout') as Promise<void>,
+    status: () =>
+      ipcRenderer.invoke('xai-oauth:status') as Promise<{
+        loggedIn: boolean;
+        email?: string;
+        displayName?: string;
+        expiresAt?: number;
+      }>,
+    onDeviceCode: (
+      callback: (info: {
+        userCode: string;
+        verificationUri: string;
+        verificationUriComplete?: string;
+        expiresInMs: number;
+      }) => void,
+    ) => {
+      const handler = (
+        _event: unknown,
+        info: {
+          userCode: string;
+          verificationUri: string;
+          verificationUriComplete?: string;
+          expiresInMs: number;
+        },
+      ) => callback(info);
+      ipcRenderer.on('xai-oauth:device-code', handler);
+      return () => ipcRenderer.removeListener('xai-oauth:device-code', handler);
+    },
   },
 });

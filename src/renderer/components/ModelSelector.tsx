@@ -31,6 +31,8 @@ interface ModelSelectorProps {
   portal?: boolean;
   /** Align the dropdown's trailing edge with the trigger's trailing edge. */
   alignDropdownToTriggerEnd?: boolean;
+  /** Override the trigger's max width while keeping the default selector behavior. */
+  triggerMaxWidthClassName?: string;
 }
 
 const DROPDOWN_MAX_HEIGHT = 380; // list max-h-72 plus the tab area and current-model footer
@@ -172,6 +174,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   compact = false,
   portal = false,
   alignDropdownToTriggerEnd = false,
+  triggerMaxWidthClassName,
 }) => {
   const dispatch = useDispatch();
   const [isOpen, setIsOpen] = React.useState(false);
@@ -401,9 +404,10 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       className: `${existingClassName}${MODEL_ICON_CLASS_NAME}`,
     });
   };
+  const triggerMaxWidthClass = triggerMaxWidthClassName ?? (compact ? 'max-w-[220px]' : 'max-w-[280px]');
   const triggerClassName = compact
-    ? 'space-x-1.5 px-2 py-1 rounded-lg max-w-[220px]'
-    : 'space-x-2 px-3 py-1.5 rounded-xl max-w-[280px]';
+    ? `space-x-1.5 px-2 py-1 rounded-lg ${triggerMaxWidthClass}`
+    : `space-x-2 px-3 py-1.5 rounded-xl ${triggerMaxWidthClass}`;
   const triggerTextClassName = compact
     ? 'font-normal text-[13px] leading-5'
     : 'font-medium text-sm';
@@ -625,9 +629,14 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         type="button"
         disabled={disabled}
         onClick={toggleOpen}
-        className={`flex items-center hover:bg-surface-raised text-foreground transition-colors disabled:opacity-70 disabled:cursor-wait ${triggerClassName} ${isOpen ? 'bg-surface-raised' : ''}`}
+        className={`flex min-w-0 items-center overflow-hidden hover:bg-surface-raised text-foreground transition-colors disabled:opacity-70 disabled:cursor-wait ${triggerClassName} ${isOpen ? 'bg-surface-raised' : ''}`}
       >
-        <span className={`${triggerTextClassName} truncate`}>{selectedModel?.name ?? defaultLabel ?? ''}</span>
+        {selectedModel?.isServerModel && (
+          <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center text-secondary">
+            {renderProviderIcon(selectedModel)}
+          </span>
+        )}
+        <span className={`${triggerTextClassName} min-w-0 truncate`}>{selectedModel?.name ?? defaultLabel ?? ''}</span>
         <ChevronDownIcon className={`${triggerIconClassName} shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary`} />
       </button>
 

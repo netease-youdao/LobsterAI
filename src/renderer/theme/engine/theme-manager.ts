@@ -1,5 +1,8 @@
 import type { ThemeDefinition } from '../themes/types';
 
+/** localStorage key read by index.html's pre-React splash to pick light/dark before any JS bundle loads */
+export const THEME_APPEARANCE_STORAGE_KEY = 'lobster-theme-appearance';
+
 export interface ThemeStorage {
   get(key: string): string | null | Promise<string | null>;
   set(key: string, value: string): void | Promise<void>;
@@ -113,6 +116,13 @@ export class ThemeManager {
         root.classList.remove('dark');
         root.classList.add('light');
       }
+
+      // Persist appearance so index.html's splash matches on next launch
+      try {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(THEME_APPEARANCE_STORAGE_KEY, theme.meta.appearance);
+        }
+      } catch { /* storage unavailable */ }
 
       // Electron title-bar sync
       try {

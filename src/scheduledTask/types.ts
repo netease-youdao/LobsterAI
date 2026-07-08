@@ -81,6 +81,8 @@ export interface ScheduledTaskRun {
   finishedAt: string | null;
   durationMs: number | null;
   error: string | null;
+  summary?: string | null;
+  deliveryError?: string | null;
 }
 
 export interface ScheduledTaskRunWithName extends ScheduledTaskRun {
@@ -127,6 +129,11 @@ export interface ScheduledTaskConversationOption {
   platform: string;
   coworkSessionId: string;
   lastActiveAt: number;
+  /** Peer kind parsed from the conversationId, when recognizable. */
+  peerKind?: 'direct' | 'group' | 'channel';
+  /** Human-friendly name: a user-renamed Cowork session title when available,
+   *  otherwise the conversation peer id without routing prefixes/domains. */
+  displayName?: string;
 }
 
 export type ScheduledTaskViewMode = 'list' | 'create' | 'edit' | 'detail';

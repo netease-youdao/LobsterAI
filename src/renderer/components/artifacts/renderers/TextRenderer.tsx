@@ -126,7 +126,7 @@ const TextRenderer: React.FC<TextRendererProps> = ({ artifact, selectedTextConte
             </tbody>
           </table>
         ) : (
-          <pre className={`text-xs font-mono leading-relaxed p-4 m-0 whitespace-pre-wrap break-words min-h-full ${
+          <pre className={`text-code font-mono p-4 m-0 whitespace-pre-wrap break-words min-h-full ${
             isDark ? 'bg-[#282c34] text-[#abb2bf]' : 'bg-[#f0f2f5] text-[#383a42]'
           }`}>
             {lines.map((line, i) => (

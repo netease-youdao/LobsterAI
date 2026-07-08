@@ -2,8 +2,8 @@ import { ipcMain } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
-import type { SkillManager } from '../../skillManager';
 import { updatePluginSkillIdsFromReport } from '../../skills';
+import type { SkillManager } from '../../skills/skillManager';
 
 export interface SkillHandlerDeps {
   getSkillManager: () => SkillManager;
@@ -131,6 +131,22 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
 
   ipcMain.handle('skills:setConfig', (_event, skillId: string, config: Record<string, string>) => {
     return getSkillManager().setSkillConfig(skillId, config);
+  });
+
+  ipcMain.handle('skills:getEmailAccountsConfig', (_event, skillId: string) => {
+    return getSkillManager().getEmailAccountsConfig(skillId);
+  });
+
+  ipcMain.handle('skills:setEmailAccountsConfig', (_event, skillId: string, config: Parameters<SkillManager['setEmailAccountsConfig']>[1]) => {
+    return getSkillManager().setEmailAccountsConfig(skillId, config);
+  });
+
+  ipcMain.handle('skills:testEmailAccountConnectivity', async (
+    _event,
+    skillId: string,
+    account: Parameters<SkillManager['testEmailAccountConnectivity']>[1]
+  ) => {
+    return getSkillManager().testEmailAccountConnectivity(skillId, account);
   });
 
   ipcMain.handle('skills:testEmailConnectivity', async (

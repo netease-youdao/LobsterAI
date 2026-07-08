@@ -62,6 +62,191 @@ if (patchFiles.length === 0) {
 
 console.log(`[apply-openclaw-patches] Applying patches for openclaw ${openclawVersion} (${patchFiles.length} file(s))`);
 
+const strongPatchValidators = {
+  'openclaw-dashscope-context-cache.patch': [
+    {
+      file: 'src/agents/embedded-agent-runner/prompt-cache-retention.ts',
+      snippets: [
+        'contextCacheProvider === "dashscope"',
+        'contextCacheProvider === "anthropic-compatible"',
+        'contextCacheMode === "explicit"',
+        'explicitContextCacheEligible',
+      ],
+    },
+    {
+      file: 'src/llm/providers/openai-completions.ts',
+      snippets: [
+        'getCompatCacheControl(compat, cacheRetention, options)',
+        'options?.contextCacheProvider === "dashscope"',
+        'options?.contextCacheProvider === "anthropic-compatible"',
+        'options?.contextCacheMode === "explicit"',
+        'isOpenAICompatibleExplicitContextCache(options)',
+        'EXPLICIT_CONTEXT_CACHE_LOG_PREFIX = "********************"',
+        '[ExplicitCachePayload]',
+        'hasCacheControl=',
+        'cache_control: cacheControl',
+        'return { type: "ephemeral", ...(ttl ? { ttl } : {}) };',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/extra-params.ts',
+      snippets: [
+        'contextCacheProvider?: "dashscope" | "anthropic-compatible"',
+        'contextCacheMode?: "explicit"',
+        'resolveExplicitContextCacheStreamParams',
+        'EXPLICIT_CONTEXT_CACHE_LOG_PREFIX = "********************"',
+        '[ExplicitCachePassThrough]',
+        '...explicitContextCacheParams',
+      ],
+    },
+    {
+      file: 'src/agents/openai-transport-stream.ts',
+      snippets: [
+        'contextCacheProvider?: string',
+        'contextCacheMode?: string',
+        'isOpenAICompatibleExplicitContextCache',
+        'applyOpenAICompletionsExplicitContextCache',
+        'EXPLICIT_CONTEXT_CACHE_LOG_PREFIX = "********************"',
+        '[ExplicitCachePayload]',
+        'cache_control: cacheControl',
+      ],
+    },
+  ],
+  'openclaw-user-turn-cache-stability.patch': [
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt.llm-boundary.ts',
+      snippets: [
+        'canonicalizeTextOnlyUserContent',
+        'stampUserTextWithMessageTimestamp',
+        'currentUserTimestampOverride',
+      ],
+    },
+    {
+      file: 'src/gateway/server-methods/agent-timestamp.ts',
+      snippets: ['export function buildTimestampPrefix'],
+    },
+    {
+      file: 'src/gateway/server-methods/chat.ts',
+      snippets: ['BodyForAgent: messageForAgent'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts',
+      snippets: ['prompt-cache byte-identity', 'turn1AsCurrent', 'turn1AsHistorical'],
+    },
+  ],
+  'openclaw-live-tool-result-cache-stability.patch': [
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt.ts',
+      snippets: [
+        'truncateOversizedToolResultsInMessages(\n            activeSession.messages,',
+        'promptToolResultMaxChars,\n            null,',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/tool-result-truncation.ts',
+      snippets: [
+        'aggregateMaxCharsOverride?: number | null',
+        'aggregateMaxCharsOverride === null',
+        'Number.POSITIVE_INFINITY',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/tool-result-truncation.test.ts',
+      snippets: ['keeps prompt projections byte-stable as history grows'],
+    },
+  ],
+  'zz-openclaw-deepseek-cache-probe.patch': [
+    {
+      file: 'src/agents/openai-transport-stream.ts',
+      snippets: [
+        'DEEPSEEK_CACHE_PROBE_LOG_PREFIX = "[DeepSeekCacheProbe]"',
+        'logDeepSeekCacheRequestProbe',
+        'logDeepSeekCacheProbeResult',
+        'cacheRead / promptTokens',
+      ],
+    },
+  ],
+  'zz-openclaw-task-cwd-system-prompt.patch': [
+    {
+      file: 'src/agents/system-prompt.ts',
+      snippets: [
+        'runtimeCwd?: string',
+        'const hasSeparateRuntimeCwd =',
+        '"## Directory Roles"',
+        '`Task working directory: ${sanitizedRuntimeCwd}`',
+        '`Agent workspace: ${sanitizedWorkspaceDir}`',
+        'MEMORY.md, and memory/**',
+        'runtimeCwd: sanitizedRuntimeCwd',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/system-prompt.ts',
+      snippets: ['runtimeCwd?: string', 'runtimeCwd: params.runtimeCwd'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt.ts',
+      snippets: ['workspaceDir: effectiveWorkspace,\n        runtimeCwd: effectiveCwd,'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/compact.ts',
+      snippets: ['workspaceDir: effectiveWorkspace,\n        runtimeCwd: effectiveCwd,'],
+    },
+    {
+      file: 'src/agents/system-prompt.test.ts',
+      snippets: [
+        'separates the task working directory from the persistent agent workspace',
+        'preserves workspace guidance when task cwd is not separate',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt.cwd-split.test.ts',
+      snippets: ['expect(promptCall?.runtimeCwd).toBe(taskRepo)'],
+    },
+  ],
+};
+
+function collectMissingStrongPatchSnippets(patchFile) {
+  const validators = strongPatchValidators[patchFile];
+  if (!validators) {
+    return [];
+  }
+
+  const missing = [];
+  for (const validator of validators) {
+    const targetPath = path.join(openclawSrc, validator.file);
+    if (!fs.existsSync(targetPath)) {
+      missing.push(`${validator.file}: file not found`);
+      continue;
+    }
+
+    const source = fs.readFileSync(targetPath, 'utf8');
+    for (const snippet of validator.snippets) {
+      if (!source.includes(snippet)) {
+        missing.push(`${validator.file}: missing ${JSON.stringify(snippet)}`);
+      }
+    }
+  }
+  return missing;
+}
+
+function isStrongPatchApplied(patchFile) {
+  return collectMissingStrongPatchSnippets(patchFile).length === 0;
+}
+
+function assertStrongPatchApplied(patchFile) {
+  const missing = collectMissingStrongPatchSnippets(patchFile);
+  if (missing.length === 0) {
+    return;
+  }
+
+  console.error(`[apply-openclaw-patches] Strong validation failed for ${patchFile}.`);
+  console.error('[apply-openclaw-patches] The patch was not applied to the actual OpenClaw source tree:');
+  for (const item of missing) {
+    console.error(`[apply-openclaw-patches]   - ${item}`);
+  }
+  process.exit(1);
+}
+
 // Reset openclaw source to a clean tag state before applying patches.
 // This removes stale patches left by a different LobsterAI branch that may have
 // applied different patches for the same openclaw version.
@@ -139,6 +324,10 @@ for (const patchFile of patchFiles) {
       const patchDoesNotApply = stderr.includes('patch does not apply');
 
       if (alreadyExists || patchDoesNotApply) {
+        if (strongPatchValidators[patchFile] && !isStrongPatchApplied(patchFile)) {
+          console.error(`[apply-openclaw-patches] Patch check was ambiguous for ${patchFile}, but required source sentinels are missing.`);
+          assertStrongPatchApplied(patchFile);
+        }
         console.log(`[apply-openclaw-patches] Already applied (forward check confirms): ${patchFile}`);
         skipped++;
         continue;
@@ -172,6 +361,10 @@ for (const patchFile of patchFiles) {
       try { fs.unlinkSync(patchPath); } catch {}
     }
   }
+}
+
+for (const patchFile of patchFiles) {
+  assertStrongPatchApplied(patchFile);
 }
 
 console.log(`[apply-openclaw-patches] Done. Applied: ${applied}, Skipped (already applied): ${skipped}`);

@@ -57,7 +57,19 @@ export class SubagentMessageStore {
    */
   getMessages(runId: string): SubagentMessage[] {
     return this.db
-      .prepare('SELECT * FROM subagent_messages WHERE run_id = ? ORDER BY sequence ASC')
+      .prepare(`
+        SELECT
+          id,
+          run_id AS runId,
+          type,
+          content,
+          metadata,
+          created_at AS createdAt,
+          sequence
+        FROM subagent_messages
+        WHERE run_id = ?
+        ORDER BY sequence ASC
+      `)
       .all(runId) as SubagentMessage[];
   }
 

@@ -3,3 +3,4 @@ export { default as ArtifactPanel, type BrowserAnnotationPayload } from './Artif
 export { default as ArtifactPreviewCard } from './ArtifactPreviewCard';
 export { default as ArtifactRenderer } from './ArtifactRenderer';
 export { default as FileDirectoryView } from './FileDirectoryView';
+export { default as SubagentPanelContent } from './SubagentPanelContent';

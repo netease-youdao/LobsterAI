@@ -325,6 +325,7 @@ function runPythonCommand(
     stdio: 'pipe',
     timeout: 60_000,
     env,
+    windowsHide: true,
   });
   if (result.status === 0) {
     return { ok: true };

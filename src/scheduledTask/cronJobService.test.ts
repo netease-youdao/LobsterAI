@@ -173,6 +173,30 @@ describe('CronJobService internal task filtering', () => {
   });
 });
 
+describe('CronJobService gateway readiness', () => {
+  test('polls immediately when the gateway becomes ready after polling started', async () => {
+    let gatewayClient: { request: <T>() => Promise<T> } | null = null;
+    const request = vi.fn(async <T>() => ({ jobs: [] }) as T);
+    const service = new CronJobService({
+      getGatewayClient: () => gatewayClient,
+      ensureGatewayReady: async () => {},
+    });
+
+    service.startPolling();
+    await Promise.resolve();
+    expect(request).not.toHaveBeenCalled();
+
+    gatewayClient = { request };
+    service.notifyGatewayReady();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('cron.list', {
+      includeDisabled: true,
+      limit: 200,
+    }));
+    service.stopPolling();
+  });
+});
+
 describe('CronJobService run history filtering', () => {
   test('filters global runs by application status after reading gateway entries', async () => {
     const job = makeGatewayJob({ id: 'job-1', name: 'User task' });
@@ -247,6 +271,46 @@ describe('CronJobService run history filtering', () => {
   });
 });
 
+describe('CronJobService delivery cache', () => {
+  test('caches delivery routing on add and update for synchronous lookups', async () => {
+    const added = makeGatewayJob({
+      id: 'wx-job',
+      delivery: {
+        mode: DeliveryMode.Announce,
+        channel: 'openclaw-weixin',
+        to: 'o9cq809ZEC25-4jLkdw3AHTKPE9c@im.wechat',
+      },
+    });
+    const updated = makeGatewayJob({ id: 'wx-job', delivery: { mode: DeliveryMode.None } });
+    const service = new CronJobService({
+      getGatewayClient: () => ({
+        request: async <T>(method: string) => (method === 'cron.add' ? added : updated) as T,
+      }),
+      ensureGatewayReady: async () => {},
+    });
+
+    await service.addJob({
+      name: 'WeChat brief',
+      description: '',
+      enabled: true,
+      schedule: { kind: 'cron', expr: '0 13 * * *' },
+      sessionTarget: SessionTarget.Isolated,
+      wakeMode: WakeMode.Now,
+      payload: { kind: PayloadKind.AgentTurn, message: 'brief' },
+      delivery: { mode: DeliveryMode.Announce, channel: 'openclaw-weixin', to: 'x@im.wechat' },
+    });
+    expect(service.getJobDeliverySync('wx-job')).toEqual({
+      mode: DeliveryMode.Announce,
+      channel: 'openclaw-weixin',
+    });
+
+    await service.updateJob('wx-job', { delivery: { mode: DeliveryMode.None } });
+    expect(service.getJobDeliverySync('wx-job')).toEqual({ mode: DeliveryMode.None });
+
+    expect(service.getJobDeliverySync('missing-job')).toBeNull();
+  });
+});
+
 describe('mapGatewayRun', () => {
   const baseEntry = {
     ts: 1700000000000,
@@ -262,6 +326,7 @@ describe('mapGatewayRun', () => {
     const run = mapGatewayRun(baseEntry);
     expect(run.status).toBe(TaskStatus.Success);
     expect(run.error).toBeNull();
+    expect(run.summary).toBe('All good');
   });
 
   test('maps error status to error', () => {
@@ -280,16 +345,19 @@ describe('mapGatewayRun', () => {
   });
 
   test('suppresses delivery-only error to success', () => {
+    const deliveryError = '⚠️ ✉️ Message failed';
     const run = mapGatewayRun({
       ...baseEntry,
       status: GatewayStatus.Error,
-      error: '⚠️ ✉️ Message failed',
+      error: deliveryError,
       deliveryStatus: 'not-delivered',
-      deliveryError: '⚠️ ✉️ Message failed',
+      deliveryError,
       summary: 'Agent produced a valid summary',
     });
     expect(run.status).toBe(TaskStatus.Success);
     expect(run.error).toBeNull();
+    expect(run.summary).toBe('Agent produced a valid summary');
+    expect(run.deliveryError).toBe(deliveryError);
   });
 
   test('does not suppress error when error differs from deliveryError', () => {
@@ -351,6 +419,36 @@ describe('mapGatewayJob', () => {
     expect(job.agentId).toBe('agent-42');
     expect(job.sessionKey).toBe('session-1');
     expect(job.state.lastStatus).toBe('skipped');
+  });
+
+  test('strips stale channel/to when delivery mode is none', () => {
+    // The gateway patch-merges delivery on cron.update and cannot clear a
+    // previously-set channel/to, so a job switched to "不通知" still returns
+    // the old target. mapGatewayJob must drop it so the edit form shows none.
+    const job = mapGatewayJob(
+      makeGatewayJob({
+        delivery: {
+          mode: DeliveryMode.None,
+          channel: 'moltbot-popo',
+          to: 'liucong03@corp.netease.com',
+          accountId: 'acc-1',
+          bestEffort: true,
+        },
+      }),
+    );
+
+    expect(job.delivery).toEqual({ mode: DeliveryMode.None });
+  });
+
+  test('does not infer channel from sessionKey when delivery mode is none', () => {
+    const job = mapGatewayJob(
+      makeGatewayJob({
+        delivery: { mode: DeliveryMode.None },
+        sessionKey: 'popo:ou_someuser',
+      }),
+    );
+
+    expect(job.delivery).toEqual({ mode: DeliveryMode.None });
   });
 });
 

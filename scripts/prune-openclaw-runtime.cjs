@@ -70,7 +70,7 @@ const BUNDLED_EXTENSIONS_TO_KEEP = new Set([
   // --- Providers (LobsterAI may route to these) ---
   'anthropic', 'deepseek', 'google', 'kimi-coding', 'minimax', 'moonshot',
   'ollama', 'openai', 'openrouter', 'qianfan', 'qwen', 'stepfun', 'volcengine',
-  'xiaomi',
+  'xai', 'xiaomi',
   // --- Channels (managed via entries or third-party replacements) ---
   'telegram', 'discord', 'feishu', 'qqbot',
   // --- Core features ---

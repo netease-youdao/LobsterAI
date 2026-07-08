@@ -1,29 +1,9 @@
-import {
-  BellAlertIcon,
-  BriefcaseIcon,
-  CalendarDaysIcon,
-  ChartBarIcon,
-  CodeBracketSquareIcon,
-  NewspaperIcon,
-  XMarkIcon,
-} from '@heroicons/react/24/outline';
+import { XMarkIcon } from '@heroicons/react/24/outline';
 import React from 'react';
 
 import { i18nService } from '../../services/i18n';
 import Modal from '../common/Modal';
-import { type ScheduledTaskTemplate, ScheduledTaskTemplateIcon } from './taskTemplates';
-
-const templateIconComponents: Record<
-  ScheduledTaskTemplateIcon,
-  React.ElementType<{ className?: string }>
-> = {
-  [ScheduledTaskTemplateIcon.Newspaper]: NewspaperIcon,
-  [ScheduledTaskTemplateIcon.Briefcase]: BriefcaseIcon,
-  [ScheduledTaskTemplateIcon.Calendar]: CalendarDaysIcon,
-  [ScheduledTaskTemplateIcon.Report]: ChartBarIcon,
-  [ScheduledTaskTemplateIcon.Code]: CodeBracketSquareIcon,
-  [ScheduledTaskTemplateIcon.Reminder]: BellAlertIcon,
-};
+import { type ScheduledTaskTemplate, templateIconComponents } from './taskTemplates';
 
 interface ScheduledTaskTemplatePickerModalProps {
   templates: readonly ScheduledTaskTemplate[];

@@ -1,0 +1,232 @@
+diff --git a/src/agents/openai-transport-stream.test.ts b/src/agents/openai-transport-stream.test.ts
+index dafce9a199..4f80c3fab3 100644
+--- a/src/agents/openai-transport-stream.test.ts
++++ b/src/agents/openai-transport-stream.test.ts
+@@ -127,6 +127,54 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>)
+ }
+ 
+ describe("openai transport stream", () => {
++  it("drops empty SSE data frames before the OpenAI SDK stream parser sees them", async () => {
++    const response = new Response(
++      [
++        "data:\n\n",
++        'data: {"id":"chatcmpl-test","choices":[]}\n\n',
++        "data: [DONE]\n\n",
++      ].join(""),
++      { headers: { "content-type": "text/event-stream" } },
++    );
++
++    const filtered = testing.filterEmptySseDataFramesFromResponse(
++      response,
++      createDeepSeekCompletionsModel(),
++    );
++
++    await expect(filtered.text()).resolves.toBe(
++      ['data: {"id":"chatcmpl-test","choices":[]}\n\n', "data: [DONE]\n\n"].join(""),
++    );
++  });
++
++  it("fails streams that emit too many consecutive empty SSE data frames", async () => {
++    const response = new Response("data:\n\n".repeat(121), {
++      headers: { "content-type": "text/event-stream" },
++    });
++
++    const filtered = testing.filterEmptySseDataFramesFromResponse(
++      response,
++      createDeepSeekCompletionsModel(),
++    );
++
++    await expect(filtered.text()).rejects.toThrow(
++      "Provider stream emitted too many empty SSE data frames.",
++    );
++  });
++
++  it("does not rewrite non-event-stream responses", async () => {
++    const response = new Response("data:\n\n", {
++      headers: { "content-type": "application/json" },
++    });
++
++    const filtered = testing.filterEmptySseDataFramesFromResponse(
++      response,
++      createDeepSeekCompletionsModel(),
++    );
++
++    expect(filtered).toBe(response);
++  });
++
+   it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
+     const model = createAzureResponsesModel();
+     await expect(
+diff --git a/src/agents/openai-transport-stream.ts b/src/agents/openai-transport-stream.ts
+index d3d0e02327..6df71e1de6 100644
+--- a/src/agents/openai-transport-stream.ts
++++ b/src/agents/openai-transport-stream.ts
+@@ -94,6 +94,12 @@ const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
+ const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
+ const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
+ const OPENAI_CODEX_RESPONSES_PROVIDERS = new Set(["openai"]);
++const OPENAI_COMPAT_EVENT_STREAM_CONTENT_TYPE = "text/event-stream";
++const OPENAI_COMPAT_EMPTY_SSE_DATA_PREFIX = "data:";
++const OPENAI_COMPAT_EMPTY_SSE_DATA_FRAME_LIMIT = 120;
++const OPENAI_COMPAT_SSE_FRAME_BOUNDARIES = ["\r\n\r\n", "\n\n", "\r\r"] as const;
++const OPENAI_COMPAT_EMPTY_SSE_ERROR =
++  "Provider stream emitted too many empty SSE data frames.";
+ const log = createSubsystemLogger("openai-transport");
+ const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
+ 
+@@ -237,6 +243,138 @@ type MutableAssistantOutput = {
+ 
+ export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
+ 
++type SseFrameBoundary = {
++  index: number;
++  length: number;
++};
++
++type EmptySseFrameFilterState = {
++  consecutiveEmptyFrames: number;
++  logged: boolean;
++};
++
++function isOpenAICompatEventStreamResponse(response: Response): boolean {
++  return (
++    response.headers
++      .get("content-type")
++      ?.toLowerCase()
++      .includes(OPENAI_COMPAT_EVENT_STREAM_CONTENT_TYPE) === true
++  );
++}
++
++function findSseFrameBoundary(buffer: string): SseFrameBoundary | null {
++  let result: SseFrameBoundary | null = null;
++  for (const boundary of OPENAI_COMPAT_SSE_FRAME_BOUNDARIES) {
++    const index = buffer.indexOf(boundary);
++    if (index < 0) {
++      continue;
++    }
++    if (!result || index < result.index) {
++      result = { index, length: boundary.length };
++    }
++  }
++  return result;
++}
++
++function shouldSkipEmptySseDataFrame(frame: string): boolean {
++  const dataLines = frame
++    .split(/\r\n|\n|\r/)
++    .filter((line) => line.startsWith(OPENAI_COMPAT_EMPTY_SSE_DATA_PREFIX));
++  return (
++    dataLines.length > 0 &&
++    dataLines.every(
++      (line) => line.slice(OPENAI_COMPAT_EMPTY_SSE_DATA_PREFIX.length).trim().length === 0,
++    )
++  );
++}
++
++function copyResponseWithBody(response: Response, body: ReadableStream<Uint8Array>): Response {
++  return new Response(body, {
++    status: response.status,
++    statusText: response.statusText,
++    headers: response.headers,
++  });
++}
++
++function emitFilteredSseFrames(
++  buffer: string,
++  controller: TransformStreamDefaultController<Uint8Array>,
++  encoder: TextEncoder,
++  state: EmptySseFrameFilterState,
++  model: Model<Api>,
++): string {
++  let remaining = buffer;
++  while (true) {
++    const boundary = findSseFrameBoundary(remaining);
++    if (!boundary) {
++      return remaining;
++    }
++
++    const frame = remaining.slice(0, boundary.index);
++    const delimiter = remaining.slice(boundary.index, boundary.index + boundary.length);
++    remaining = remaining.slice(boundary.index + boundary.length);
++
++    if (shouldSkipEmptySseDataFrame(frame)) {
++      state.consecutiveEmptyFrames += 1;
++      if (state.consecutiveEmptyFrames > OPENAI_COMPAT_EMPTY_SSE_DATA_FRAME_LIMIT) {
++        controller.error(new Error(OPENAI_COMPAT_EMPTY_SSE_ERROR));
++        return "";
++      }
++      if (!state.logged) {
++        state.logged = true;
++        log.debug(`skipped empty SSE data frames from ${model.provider}/${model.id}.`);
++      }
++      continue;
++    }
++
++    state.consecutiveEmptyFrames = 0;
++    controller.enqueue(encoder.encode(frame + delimiter));
++  }
++}
++
++function filterEmptySseDataFramesFromResponse(response: Response, model: Model<Api>): Response {
++  if (!response.body || !isOpenAICompatEventStreamResponse(response)) {
++    return response;
++  }
++
++  const decoder = new TextDecoder();
++  const encoder = new TextEncoder();
++  const state: EmptySseFrameFilterState = {
++    consecutiveEmptyFrames: 0,
++    logged: false,
++  };
++  let buffer = "";
++
++  const body = response.body.pipeThrough(
++    new TransformStream<Uint8Array, Uint8Array>({
++      transform(chunk, controller) {
++        buffer += decoder.decode(chunk, { stream: true });
++        buffer = emitFilteredSseFrames(buffer, controller, encoder, state, model);
++      },
++      flush(controller) {
++        const remainder = decoder.decode();
++        if (remainder) {
++          buffer += remainder;
++        }
++        buffer = emitFilteredSseFrames(buffer, controller, encoder, state, model);
++        if (buffer) {
++          controller.enqueue(encoder.encode(buffer));
++        }
++      },
++    }),
++  );
++
++  return copyResponseWithBody(response, body);
++}
++
++function buildOpenAICompletionsFetch(model: Model<Api>): typeof fetch {
++  const guardedFetch = buildGuardedModelFetch(model);
++  return async (input, init) => {
++    const response = await guardedFetch(input, init);
++    return filterEmptySseDataFramesFromResponse(response, model);
++  };
++}
++
+ function stringifyUnknown(value: unknown, fallback = ""): string {
+   if (typeof value === "string") {
+     return value;
+@@ -2482,7 +2620,7 @@ function createOpenAICompletionsClient(
+     dangerouslyAllowBrowser: true,
+     defaultHeaders: clientConfig.defaultHeaders,
+     defaultQuery: clientConfig.defaultQuery,
+-    fetch: buildGuardedModelFetch(model),
++    fetch: buildOpenAICompletionsFetch(model),
+     ...buildOpenAISdkClientOptions(model),
+   });
+ }
+@@ -4278,6 +4416,7 @@ export const testing = {
+   createOpenAICompletionsClient,
+   createOpenAIResponsesClient,
+   enforceCodeModeResponsesToolSurface,
++  filterEmptySseDataFramesFromResponse,
+   sanitizeOpenAICodexResponsesParams,
+   buildOpenAICompletionsClientConfig,
+   processOpenAICompletionsStream,

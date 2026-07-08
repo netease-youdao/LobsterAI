@@ -2,5 +2,13 @@
   "name": "openclaw-lobster-media-generation",
   "version": "1.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49"
+  }
 }

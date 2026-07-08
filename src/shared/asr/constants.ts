@@ -1,5 +1,4 @@
 export const AsrIpcChannel = {
-  Recognize: 'asr:recognize',
   CreateRealtimeSession: 'asr:realtime:createSession',
 } as const;
 
@@ -28,26 +27,6 @@ export const AsrApiCode = {
 } as const;
 
 export type AsrApiCode = typeof AsrApiCode[keyof typeof AsrApiCode];
-
-export interface AsrRecognizeRequest {
-  audioBase64: string;
-  fileName?: string;
-  langType?: AsrLangType;
-}
-
-export interface AsrRecognizeData {
-  requestId: string;
-  text: string;
-  result: string[];
-  durationSeconds: number;
-  usedSecondsToday: number;
-  remainingSecondsToday: number;
-  limitSecondsToday: number;
-}
-
-export type AsrRecognizeResult =
-  | { success: true; data: AsrRecognizeData }
-  | { success: false; code?: number; error?: string; message?: string };
 
 export interface AsrRealtimeSessionRequest {
   langType?: AsrLangType;

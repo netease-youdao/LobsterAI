@@ -1,8 +1,15 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { describe, expect, test } from 'vitest';
 
 const {
   buildGitEnv,
   buildNpmPackEnv,
+  copyDirRecursive,
+  copyInstalledPluginToCache,
+  findInstalledPluginDir,
   isGitSpec,
   isLocalPathSpec,
   parseGitSpec,
@@ -113,5 +120,100 @@ describe('ensure-openclaw-plugins', () => {
       installSpec: '/tmp/local-plugin',
       pinnedDisplaySpec: '/tmp/local-plugin',
     });
+  });
+
+  test('finds plugins installed in the legacy extensions directory', () => {
+    const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-plugin-layout-'));
+    const pluginDir = path.join(stagingDir, 'extensions', 'actual-plugin-id');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'openclaw.plugin.json'),
+      JSON.stringify({ id: 'actual-plugin-id' }),
+    );
+
+    expect(
+      findInstalledPluginDir(stagingDir, {
+        id: 'actual-plugin-id',
+        npm: '@example/plugin',
+      }),
+    ).toBe(pluginDir);
+
+    fs.rmSync(stagingDir, { recursive: true, force: true });
+  });
+
+  test('finds npm plugins installed in isolated OpenClaw projects', () => {
+    const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-plugin-layout-'));
+    const pluginDir = path.join(
+      stagingDir,
+      'npm',
+      'projects',
+      'example-plugin-123',
+      'node_modules',
+      '@example',
+      'plugin',
+    );
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'openclaw.plugin.json'),
+      JSON.stringify({ id: 'manifest-id-differs' }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, 'package.json'),
+      JSON.stringify({ name: '@example/plugin' }),
+    );
+
+    expect(
+      findInstalledPluginDir(stagingDir, {
+        id: 'configured-plugin-id',
+        npm: '@example/plugin',
+      }),
+    ).toBe(pluginDir);
+
+    fs.rmSync(stagingDir, { recursive: true, force: true });
+  });
+
+  test('does not copy the OpenClaw host peer link into plugin caches', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-plugin-copy-'));
+    const sourceDir = path.join(tempDir, 'source');
+    const targetDir = path.join(tempDir, 'target');
+    const hostDir = path.join(tempDir, 'host-openclaw');
+    fs.mkdirSync(path.join(sourceDir, 'node_modules'), { recursive: true });
+    fs.mkdirSync(hostDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, 'index.js'), 'export {};\n');
+    fs.writeFileSync(path.join(hostDir, 'host.js'), 'export {};\n');
+    fs.symlinkSync(hostDir, path.join(sourceDir, 'node_modules', 'openclaw'), 'junction');
+
+    copyDirRecursive(sourceDir, targetDir);
+
+    expect(fs.existsSync(path.join(targetDir, 'index.js'))).toBe(true);
+    expect(fs.existsSync(path.join(targetDir, 'node_modules', 'openclaw'))).toBe(false);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  test('copies isolated npm project dependencies into plugin caches', () => {
+    const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-plugin-project-'));
+    const projectNodeModulesDir = path.join(stagingDir, 'npm', 'projects', 'example', 'node_modules');
+    const pluginDir = path.join(projectNodeModulesDir, '@example', 'plugin');
+    const dependencyDir = path.join(projectNodeModulesDir, 'image-size');
+    const openclawPeerDir = path.join(stagingDir, 'host-openclaw');
+    const cacheDir = path.join(stagingDir, 'cache');
+
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(dependencyDir, { recursive: true });
+    fs.mkdirSync(openclawPeerDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, 'index.js'), "require('image-size');\n");
+    fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({ name: '@example/plugin' }));
+    fs.writeFileSync(path.join(dependencyDir, 'index.js'), 'module.exports = {};\n');
+    fs.symlinkSync(openclawPeerDir, path.join(projectNodeModulesDir, 'openclaw'), 'junction');
+
+    copyInstalledPluginToCache(pluginDir, cacheDir);
+
+    expect(fs.existsSync(path.join(cacheDir, 'index.js'))).toBe(true);
+    expect(fs.existsSync(path.join(cacheDir, 'node_modules', 'image-size', 'index.js'))).toBe(true);
+    expect(fs.existsSync(path.join(cacheDir, 'node_modules', '@example', 'plugin'))).toBe(false);
+    expect(fs.existsSync(path.join(cacheDir, 'node_modules', 'openclaw'))).toBe(false);
+
+    fs.rmSync(stagingDir, { recursive: true, force: true });
   });
 });

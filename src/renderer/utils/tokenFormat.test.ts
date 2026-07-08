@@ -59,3 +59,8 @@ test('formatMessageDateTime: always shows YYYY/MM/DD + time', () => {
   expect(result).toBe('2026/05/07 17:02');
   vi.useRealTimers();
 });
+
+test('message time formatting returns empty string for invalid timestamps', () => {
+  expect(formatMessageTime(Number.NaN)).toBe('');
+  expect(formatMessageDateTime(Number.NaN)).toBe('');
+});

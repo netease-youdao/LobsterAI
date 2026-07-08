@@ -124,7 +124,10 @@ async function main() {
         format: 'esm',
         target: 'es2023',
         outfile: outFile,
-        packages: 'external',  // All node_modules deps stay external
+        // Locally copied extensions do not carry node_modules. Bundle their
+        // package dependencies into index.js, while installed third-party
+        // plugins with their own node_modules keep package imports external.
+        ...(fs.existsSync(path.join(pluginDir, 'node_modules')) ? { packages: 'external' } : {}),
         external: SDK_EXTERNALS,
         plugins: [openclawInternalsPlugin],
         // Silence warnings about __dirname/__filename in ESM
@@ -136,14 +139,15 @@ async function main() {
         const pkgPath = path.join(pluginDir, 'package.json');
         try {
           const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-          if (Array.isArray(pkg.openclaw?.extensions)) {
-            pkg.openclaw.extensions = pkg.openclaw.extensions.map(e =>
-              e === entry.entryRel ? outRel : e,
-            );
-            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
-          }
+          const openclaw = pkg.openclaw && typeof pkg.openclaw === 'object' ? pkg.openclaw : {};
+          const extensions = Array.isArray(openclaw.extensions) ? openclaw.extensions : [entry.entryRel];
+          pkg.openclaw = {
+            ...openclaw,
+            extensions: extensions.map(e => e === entry.entryRel ? outRel : e),
+          };
+          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
         } catch {
-          // Non-critical — jiti will still find index.js by convention
+          // Non-critical; plugins with explicit package metadata should still be fixed by source manifests.
         }
       }
 

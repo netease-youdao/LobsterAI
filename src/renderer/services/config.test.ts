@@ -1,7 +1,7 @@
 import { ProviderName } from '@shared/providers';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { type AppConfig, CONFIG_KEYS, defaultConfig, ShortcutAction } from '../config';
+import { type AppConfig, CONFIG_KEYS, defaultConfig, FontPreferences, ShortcutAction } from '../config';
 
 const makeLegacyConfigWithoutMiniMaxAddedModels = (): AppConfig => ({
   ...defaultConfig,
@@ -80,6 +80,14 @@ const makeConfigWithCustomContextWindows = (): AppConfig => ({
         { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, contextWindow: 768_000 },
       ],
     },
+    [ProviderName.Volcengine]: {
+      ...defaultConfig.providers![ProviderName.Volcengine],
+      enabled: true,
+      apiKey: 'sk-volcengine',
+      models: [
+        { id: 'ark-code-latest', name: 'Auto', supportsImage: true },
+      ],
+    },
   },
 });
 
@@ -137,6 +145,13 @@ async function loadConfigServiceWithStoredConfig(storedConfig: AppConfig) {
 
   (globalThis as unknown as { window?: unknown }).window = {
     dispatchEvent: vi.fn(),
+    electron: {
+      store: {
+        get: getItem,
+        set: setItem,
+        remove: vi.fn(),
+      },
+    },
   };
 
   const { configService } = await import('./config');
@@ -247,8 +262,8 @@ describe('configService provider migrations', () => {
 
     const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
     expect(savedConfig.providers?.[ProviderName.DeepSeek].models).toEqual([
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, contextWindow: 1_000_000 },
-      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false, contextWindow: 1_000_000 },
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
     ]);
   });
 
@@ -267,8 +282,8 @@ describe('configService provider migrations', () => {
 
     const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
     expect(savedConfig.providers?.[ProviderName.Xiaomi].models).toEqual([
-      { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, contextWindow: 1_000_000 },
-      { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
       { id: 'mimo-v2-pro', name: 'MiMo V2 Pro', supportsImage: false, contextWindow: 128_000 },
       { id: 'mimo-v2-flash', name: 'MiMo V2 Flash', supportsImage: false, contextWindow: 64_000 },
     ]);
@@ -285,10 +300,53 @@ describe('configService provider migrations', () => {
 
     const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
     expect(savedConfig.providers?.[ProviderName.Minimax].models?.find(model => model.id === 'MiniMax-M3')?.contextWindow).toBe(512_000);
+    expect(savedConfig.providers?.[ProviderName.Minimax].models?.find(model => model.id === 'MiniMax-M3')?.supportsThinking).toBe(true);
     expect(savedConfig.providers?.[ProviderName.DeepSeek].models?.find(model => model.id === 'deepseek-v4-flash')?.contextWindow).toBe(256_000);
     expect(savedConfig.providers?.[ProviderName.DeepSeek].models?.find(model => model.id === 'deepseek-v4-pro')?.contextWindow).toBe(384_000);
     expect(savedConfig.providers?.[ProviderName.Xiaomi].models?.find(model => model.id === 'mimo-v2.5-pro')?.contextWindow).toBe(640_000);
     expect(savedConfig.providers?.[ProviderName.Xiaomi].models?.find(model => model.id === 'mimo-v2.5')?.contextWindow).toBe(768_000);
+    expect(savedConfig.providers?.[ProviderName.Volcengine].models?.find(model => model.id === 'ark-code-latest')?.supportsThinking).toBe(true);
+  });
+
+  test('preserves custom model thinking metadata and custom params', async () => {
+    const storedConfig: AppConfig = {
+      ...defaultConfig,
+      providers: {
+        ...defaultConfig.providers,
+        custom_0: {
+          enabled: true,
+          apiKey: 'sk-custom',
+          baseUrl: 'https://custom.example.com/v1',
+          apiFormat: 'openai',
+          models: [
+            {
+              id: 'qwen3.6-plus',
+              name: 'Qwen3.6 Plus',
+              supportsImage: true,
+              supportsThinking: true,
+              customParams: { enable_thinking: true },
+            },
+          ],
+        },
+      },
+    };
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(storedConfig);
+
+    await configService.updateConfig({
+      model: {
+        ...storedConfig.model,
+        defaultModel: 'qwen3.6-plus',
+        defaultModelProvider: 'custom_0',
+      },
+    });
+
+    const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    expect(savedConfig.providers?.custom_0.models?.[0]).toMatchObject({
+      id: 'qwen3.6-plus',
+      supportsImage: true,
+      supportsThinking: true,
+      customParams: { enable_thinking: true },
+    });
   });
 
   test.each(addedProviderMigrationCases)(
@@ -368,6 +426,13 @@ describe('configService provider migrations', () => {
 
     (globalThis as unknown as { window?: unknown }).window = {
       dispatchEvent: vi.fn(),
+      electron: {
+        store: {
+          get: getItem,
+          set: setItem,
+          remove: vi.fn(),
+        },
+      },
     };
 
     const { configService } = await import('./config');
@@ -387,5 +452,32 @@ describe('configService provider migrations', () => {
     const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
     expect(savedConfig.providerModelMigrationVersions?.[ProviderName.Qianfan]).toBe(1);
     expect(savedConfig.providers?.[ProviderName.Qianfan].models?.map(model => model.id)).not.toContain(deletedModelId);
+  });
+
+  test('hydrates font preferences with defaults for legacy configs', async () => {
+    const legacyConfig: AppConfig = {
+      ...defaultConfig,
+      uiFontSize: undefined,
+      codeFontSize: undefined,
+    };
+    const { configService } = await loadConfigServiceWithStoredConfig(legacyConfig);
+
+    await configService.init();
+
+    expect(configService.getConfig().uiFontSize).toBe(FontPreferences.UiFontSizeDefault);
+    expect(configService.getConfig().codeFontSize).toBe(FontPreferences.CodeFontSizeDefault);
+  });
+
+  test('clamps font preferences when saving config updates', async () => {
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(defaultConfig);
+
+    await configService.updateConfig({
+      uiFontSize: 100,
+      codeFontSize: 1,
+    });
+
+    const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    expect(savedConfig.uiFontSize).toBe(FontPreferences.UiFontSizeMax);
+    expect(savedConfig.codeFontSize).toBe(FontPreferences.CodeFontSizeMin);
   });
 });

@@ -165,6 +165,18 @@ describe('OpenClaw config impact classification', () => {
     });
   });
 
+  test('classifies OpenClaw heartbeat changes as sync', () => {
+    const result = classifyCoworkConfigChange(
+      { openClawHeartbeatEnabled: true },
+      { openClawHeartbeatEnabled: false },
+    );
+
+    expect(result).toEqual({
+      impact: OpenClawConfigImpact.Sync,
+      reasons: [OpenClawConfigImpactReason.CoworkOpenClawConfig],
+    });
+  });
+
   test('classifies dreaming changes as restart', () => {
     const result = classifyCoworkConfigChange(
       { dreamingEnabled: false, dreamingFrequency: '0 3 * * *' },

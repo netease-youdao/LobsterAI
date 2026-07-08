@@ -1,3 +1,13 @@
+import {
+  BellAlertIcon,
+  BriefcaseIcon,
+  CalendarDaysIcon,
+  ChartBarIcon,
+  CodeBracketSquareIcon,
+  NewspaperIcon,
+} from '@heroicons/react/24/outline';
+import type React from 'react';
+
 import type { PlanType } from './utils';
 
 export const ScheduledTaskTemplateId = {
@@ -21,6 +31,18 @@ export const ScheduledTaskTemplateIcon = {
 } as const;
 export type ScheduledTaskTemplateIcon =
   typeof ScheduledTaskTemplateIcon[keyof typeof ScheduledTaskTemplateIcon];
+
+export const templateIconComponents: Record<
+  ScheduledTaskTemplateIcon,
+  React.ElementType<{ className?: string }>
+> = {
+  [ScheduledTaskTemplateIcon.Newspaper]: NewspaperIcon,
+  [ScheduledTaskTemplateIcon.Briefcase]: BriefcaseIcon,
+  [ScheduledTaskTemplateIcon.Calendar]: CalendarDaysIcon,
+  [ScheduledTaskTemplateIcon.Report]: ChartBarIcon,
+  [ScheduledTaskTemplateIcon.Code]: CodeBracketSquareIcon,
+  [ScheduledTaskTemplateIcon.Reminder]: BellAlertIcon,
+};
 
 export const ScheduledTaskTemplatePlanType = {
   Daily: 'daily',

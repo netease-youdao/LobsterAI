@@ -1,4 +1,8 @@
-import { AgentId } from '@shared/agent';
+import {
+  AgentId,
+  type AgentLegacyIdentityCleanupResult,
+  AgentLegacyIdentityCleanupStatus,
+} from '@shared/agent';
 
 import { store } from '../store';
 import {
@@ -133,6 +137,25 @@ class AgentService {
     } catch (error) {
       console.error('Failed to update agent:', error);
       return null;
+    }
+  }
+
+  async cleanupLegacyIdentityBlock(id: string): Promise<AgentLegacyIdentityCleanupResult> {
+    try {
+      const api = window.electron?.agents?.cleanupLegacyIdentityBlock;
+      if (!api) {
+        return {
+          status: AgentLegacyIdentityCleanupStatus.Failed,
+          error: 'Agent legacy identity cleanup API is unavailable',
+        };
+      }
+      return await api(id);
+    } catch (error) {
+      console.warn('Failed to clean legacy agent identity block:', error);
+      return {
+        status: AgentLegacyIdentityCleanupStatus.Failed,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 

@@ -2,6 +2,7 @@ import { ArrowPathIcon, ArrowUpCircleIcon, Cog6ToothIcon,PlusIcon, TrashIcon } f
 import { useCallback, useEffect, useImperativeHandle, useRef,useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
+import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
 import PluginConfigPage from './PluginConfigPage';
 
 type PluginSource = 'npm' | 'clawhub' | 'git' | 'local' | 'openclaw';
@@ -46,6 +47,33 @@ export interface PluginsSettingsHandle {
 interface PluginsSettingsProps {
   handleRef?: React.Ref<PluginsSettingsHandle>;
 }
+
+const PLUGINS_ANALYTICS_SOURCE = 'settings_plugins';
+
+const reportPluginAction = (
+  actionType: string,
+  result: 'success' | 'failed',
+  options: {
+    detectedCount?: number;
+    hasRegistry?: boolean;
+    hasVersion?: boolean;
+    installSource?: string;
+    updateCount?: number;
+  } = {},
+): void => {
+  console.debug('[PluginsSettings] reporting plugin action analytics');
+  void reportYdAnalyzer({
+    action: LogReporterAction.PluginAction,
+    source: PLUGINS_ANALYTICS_SOURCE,
+    actionType,
+    result,
+    detectedCount: options.detectedCount,
+    hasRegistry: options.hasRegistry,
+    hasVersion: options.hasVersion,
+    installSource: options.installSource,
+    updateCount: options.updateCount,
+  });
+};
 
 export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
   const [plugins, setPlugins] = useState<PluginListItem[]>([]);
@@ -166,6 +194,9 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
       if (result && result.synced.length > 0) {
         await loadPlugins();
       }
+      reportPluginAction('sync', 'success', {
+        detectedCount: result?.synced?.length ?? 0,
+      });
     } finally {
       setSyncing(false);
       setDetectedPlugins(null);
@@ -179,11 +210,18 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
       const detectResult = await window.electron?.plugins.detect();
       if (detectResult && detectResult.plugins.length > 0) {
         setDiscoverResult(detectResult.plugins);
+        reportPluginAction('detect', 'success', {
+          detectedCount: detectResult.plugins.length,
+        });
       } else {
         setDiscoverResult([]);
+        reportPluginAction('detect', 'success', {
+          detectedCount: 0,
+        });
       }
     } catch {
       setDiscoverResult([]);
+      reportPluginAction('detect', 'failed');
     } finally {
       setSyncing(false);
     }
@@ -257,6 +295,7 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
       });
       initialConfigsRef.current.delete(pluginId);
     }
+    reportPluginAction('uninstall', result?.ok ? 'success' : 'failed');
     setConfirmUninstall(null);
   };
 
@@ -290,8 +329,18 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
       setShowInstallModal(false);
       setForm({ source: 'npm', spec: '', registry: '', version: '' });
       loadPlugins();
+      reportPluginAction('install', 'success', {
+        hasRegistry: form.source === 'npm' ? form.registry.trim().length > 0 : undefined,
+        hasVersion: form.version.trim().length > 0,
+        installSource: form.source,
+      });
     } else {
       setInstallError(result?.error || i18nService.t('pluginsInstallFailed'));
+      reportPluginAction('install', 'failed', {
+        hasRegistry: form.source === 'npm' ? form.registry.trim().length > 0 : undefined,
+        hasVersion: form.version.trim().length > 0,
+        installSource: form.source,
+      });
     }
   };
 
@@ -320,7 +369,14 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
           map.set(info.pluginId, info);
         }
         setUpdateInfos(map);
+        reportPluginAction('check_updates', 'success', {
+          updateCount: result.updates.filter(info => info.hasUpdate).length,
+        });
+      } else {
+        reportPluginAction('check_updates', 'failed');
       }
+    } catch {
+      reportPluginAction('check_updates', 'failed');
     } finally {
       setChecking(false);
     }
@@ -340,6 +396,7 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
       });
       loadPlugins();
     }
+    reportPluginAction('update', result?.ok ? 'success' : 'failed');
   }, [loadPlugins]);
 
   const sourceLabel = (source: PluginSource | 'bundled') => {

@@ -79,14 +79,16 @@ const findLocalExtensionsSourceDir = (): string | null => {
   return null;
 };
 
-export const findBundledExtensionsDir = (): string | null => {
-  const candidates = app.isPackaged
-    ? [path.join(process.resourcesPath, 'cfmind', THIRD_PARTY_EXTENSIONS_DIR)]
+const listRuntimeRootCandidates = (): string[] => (
+  app.isPackaged
+    ? [path.join(process.resourcesPath, 'cfmind')]
     : [
-        path.join(app.getAppPath(), 'vendor', 'openclaw-runtime', 'current', THIRD_PARTY_EXTENSIONS_DIR),
-        path.join(process.cwd(), 'vendor', 'openclaw-runtime', 'current', THIRD_PARTY_EXTENSIONS_DIR),
-      ];
+        path.join(app.getAppPath(), 'vendor', 'openclaw-runtime', 'current'),
+        path.join(process.cwd(), 'vendor', 'openclaw-runtime', 'current'),
+      ]
+);
 
+const firstExistingDir = (candidates: string[]): string | null => {
   for (const candidate of candidates) {
     try {
       if (fs.statSync(candidate).isDirectory()) {
@@ -96,8 +98,28 @@ export const findBundledExtensionsDir = (): string | null => {
       // Ignore missing candidates.
     }
   }
-
   return null;
+};
+
+export const findBundledExtensionsDir = (): string | null => (
+  firstExistingDir(listRuntimeRootCandidates().map(root => path.join(root, THIRD_PARTY_EXTENSIONS_DIR)))
+);
+
+/**
+ * Directory of OpenClaw's own runtime-bundled extensions (dist/extensions/…),
+ * as opposed to the third-party dir above which holds LobsterAI-synced local
+ * plugins. Bundled extensions surviving prune-openclaw-runtime.cjs live here.
+ */
+export const findRuntimeBundledExtensionsDir = (): string | null => (
+  firstExistingDir(listRuntimeRootCandidates().map(root => path.join(root, 'dist', 'extensions')))
+);
+
+export const hasRuntimeBundledOpenClawExtension = (extensionId: string): boolean => {
+  const dir = findRuntimeBundledExtensionsDir();
+  if (!dir) {
+    return false;
+  }
+  return fs.existsSync(path.join(dir, extensionId, 'openclaw.plugin.json'));
 };
 
 export const syncLocalOpenClawExtensionsIntoRuntime = (

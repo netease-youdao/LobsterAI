@@ -1326,6 +1326,50 @@ export function getSkillsRoot(): string {
   return join(app.getAppPath(), 'SKILLs');
 }
 
+function finalizeNodeToolEnv(env: Record<string, string | undefined>): void {
+  if (process.platform === 'win32' || env.LOBSTERAI_NODE_SHIM_ACTIVE === '1') {
+    env.LOBSTERAI_ELECTRON_PATH = getElectronNodeRuntimePath().replace(/\\/g, '/');
+  } else {
+    delete env.LOBSTERAI_ELECTRON_PATH;
+  }
+}
+
+async function injectSystemProxyForSubprocess(env: Record<string, string | undefined>): Promise<void> {
+  // Skip system proxy resolution if proxy env vars already exist.
+  if (env.http_proxy || env.HTTP_PROXY || env.https_proxy || env.HTTPS_PROXY) {
+    return;
+  }
+
+  // User can disable system proxy from settings.
+  if (!isSystemProxyEnabled()) {
+    return;
+  }
+
+  const { proxyUrl, targetUrl } = await resolveSystemProxyUrlForTargets();
+  if (!proxyUrl) return;
+
+  env.http_proxy = proxyUrl;
+  env.https_proxy = proxyUrl;
+  env.HTTP_PROXY = proxyUrl;
+  env.HTTPS_PROXY = proxyUrl;
+  console.log(`[CoworkUtil] Injected system proxy for subprocess via ${targetUrl}:`, proxyUrl);
+}
+
+/**
+ * Build an environment for subprocesses that need Node.js tooling.
+ *
+ * This intentionally avoids model/provider variables from Cowork API config:
+ * deployment packagers and other local tool invocations only need PATH,
+ * bundled node/npm/npx shims, Python helper paths, and proxy settings.
+ */
+export async function getNodeToolEnv(): Promise<Record<string, string | undefined>> {
+  const env = { ...process.env };
+  applyPackagedEnvOverrides(env);
+  finalizeNodeToolEnv(env);
+  await injectSystemProxyForSubprocess(env);
+  return env;
+}
+
 /**
  * Get enhanced environment variables (including proxy configuration)
  * Async function to fetch system proxy and inject into environment variables
@@ -1345,31 +1389,8 @@ export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'):
   const skillsRoot = getSkillsRoot().replace(/\\/g, '/');
   env.SKILLS_ROOT = skillsRoot;
   env.LOBSTERAI_SKILLS_ROOT = skillsRoot; // Alternative name for clarity
-  if (process.platform === 'win32' || env.LOBSTERAI_NODE_SHIM_ACTIVE === '1') {
-    env.LOBSTERAI_ELECTRON_PATH = getElectronNodeRuntimePath().replace(/\\/g, '/');
-  } else {
-    delete env.LOBSTERAI_ELECTRON_PATH;
-  }
-
-  // Skip system proxy resolution if proxy env vars already exist
-  if (env.http_proxy || env.HTTP_PROXY || env.https_proxy || env.HTTPS_PROXY) {
-    return env;
-  }
-
-  // User can disable system proxy from settings.
-  if (!isSystemProxyEnabled()) {
-    return env;
-  }
-
-  // Resolve proxy from system settings
-  const { proxyUrl, targetUrl } = await resolveSystemProxyUrlForTargets();
-  if (proxyUrl) {
-    env.http_proxy = proxyUrl;
-    env.https_proxy = proxyUrl;
-    env.HTTP_PROXY = proxyUrl;
-    env.HTTPS_PROXY = proxyUrl;
-    console.log(`[CoworkUtil] Injected system proxy for subprocess via ${targetUrl}:`, proxyUrl);
-  }
+  finalizeNodeToolEnv(env);
+  await injectSystemProxyForSubprocess(env);
 
   return env;
 }

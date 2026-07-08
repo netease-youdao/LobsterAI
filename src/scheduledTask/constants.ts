@@ -80,6 +80,15 @@ export const TaskStatus = {
 } as const;
 export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];
 
+export const ScheduledTaskDataStatus = {
+  Starting: 'starting',
+  Loading: 'loading',
+  Ready: 'ready',
+  Error: 'error',
+} as const;
+export type ScheduledTaskDataStatus =
+  typeof ScheduledTaskDataStatus[keyof typeof ScheduledTaskDataStatus];
+
 // ─── Gateway Status (OpenClaw wire format) ────────────────────────────────���─
 export const GatewayStatus = {
   Ok: 'ok',

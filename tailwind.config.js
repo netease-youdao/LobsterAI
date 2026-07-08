@@ -6,6 +6,32 @@ export default {
   ],
   darkMode: 'class',
   theme: {
+    fontSize: {
+      xs: ['var(--lobster-text-xs)', { lineHeight: 'var(--lobster-leading-xs)' }],
+      sm: ['var(--lobster-text-sm)', { lineHeight: 'var(--lobster-leading-sm)' }],
+      base: ['var(--lobster-text-base)', { lineHeight: 'var(--lobster-leading-base)' }],
+      lg: ['var(--lobster-text-lg)', { lineHeight: 'var(--lobster-leading-lg)' }],
+      xl: ['var(--lobster-text-xl)', { lineHeight: 'var(--lobster-leading-xl)' }],
+      '2xl': ['var(--lobster-text-2xl)', { lineHeight: 'var(--lobster-leading-2xl)' }],
+      '3xl': ['var(--lobster-text-3xl)', { lineHeight: 'var(--lobster-leading-3xl)' }],
+      '4xl': ['var(--lobster-text-4xl)', { lineHeight: 'var(--lobster-leading-4xl)' }],
+      '5xl': ['calc(var(--lobster-text-4xl) * 1.333)', { lineHeight: '1' }],
+      '6xl': ['calc(var(--lobster-text-4xl) * 1.667)', { lineHeight: '1' }],
+      '7xl': ['calc(var(--lobster-text-4xl) * 2)', { lineHeight: '1' }],
+      '8xl': ['calc(var(--lobster-text-4xl) * 2.667)', { lineHeight: '1' }],
+      '9xl': ['calc(var(--lobster-text-4xl) * 3.556)', { lineHeight: '1' }],
+    },
+    fontWeight: {
+      thin: '100',
+      extralight: '200',
+      light: '300',
+      normal: 'var(--lobster-ui-font-weight-normal, 445)',
+      medium: 'var(--lobster-ui-font-weight-medium, 500)',
+      semibold: '600',
+      bold: '700',
+      extrabold: '800',
+      black: '900',
+    },
     extend: {
       boxShadow: {
         subtle: '0 1px 2px rgba(0,0,0,0.05)',

@@ -6,25 +6,35 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "2026.6.12",
+  "version": "2026.7.7",
   "openclaw": {
-    "version": "v2026.4.14",
+    "version": "v2026.6.1",
     "repo": "https://github.com/openclaw/openclaw.git",
     "plugins": [
       {
         "id": "dingtalk-connector",
         "npm": "@dingtalk-real-ai/dingtalk-connector",
-        "version": "0.8.16"
+        "version": "0.8.23"
       },
       {
         "id": "openclaw-lark",
         "npm": "@larksuite/openclaw-lark",
-        "version": "2026.4.8"
+        "version": "2026.6.10"
+      },
+      {
+        "id": "qqbot",
+        "npm": "@openclaw/qqbot",
+        "version": "2026.6.1"
+      },
+      {
+        "id": "discord",
+        "npm": "@openclaw/discord",
+        "version": "2026.6.1"
       },
       {
         "id": "wecom-openclaw-plugin",
         "npm": "@wecom/wecom-openclaw-plugin",
-        "version": "2026.4.22"
+        "version": "2026.5.25"
       },
       {
         "id": "openclaw-weixin",
@@ -34,7 +44,7 @@
       {
         "id": "moltbot-popo",
         "npm": "moltbot-popo",
-        "version": "2.1.8",
+        "version": "2.1.13",
         "registry": "https://npm.nie.netease.com",
         "optional": true
       },
@@ -58,7 +68,7 @@
   },
   "main": "dist-electron/main.js",
   "engines": {
-    "node": ">=24 <25"
+    "node": ">=24.15.0 <25"
   },
   "scripts": {
     "dev": "vite",
@@ -195,6 +205,7 @@
   "devDependencies": {
     "@commitlint/cli": "^20.5.0",
     "@commitlint/config-conventional": "^20.5.0",
+    "@sinclair/typebox": "0.34.49",
     "@tailwindcss/typography": "^0.5.16",
     "@types/better-sqlite3": "^7.6.13",
     "@types/dompurify": "^3.0.5",

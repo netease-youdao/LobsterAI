@@ -1,6 +1,12 @@
 // MCP Server type definitions
 export type McpTransportType = 'stdio' | 'sse' | 'http';
 
+export const McpRegistryEntryKind = {
+  Server: 'server',
+  Bundle: 'bundle',
+} as const;
+export type McpRegistryEntryKind = typeof McpRegistryEntryKind[keyof typeof McpRegistryEntryKind];
+
 export interface McpServerConfig {
   id: string;
   name: string;
@@ -69,6 +75,9 @@ export interface McpRegistryEntry {
   requiredEnvKeys?: string[];    // env vars the user must fill
   optionalEnvKeys?: string[];    // optional env vars
   argPlaceholders?: string[];    // placeholder hints for args (e.g. path)
+  oauthProvider?: 'qichacha';    // special app-managed OAuth/API key flow
+  kind?: McpRegistryEntryKind;   // defaults to a single-server registry entry
+  marketplacePosition?: number;  // 1-based preferred position; clamps to the available list
 }
 
 // Remote marketplace server entry
@@ -83,6 +92,7 @@ export interface McpMarketplaceServer {
   defaultArgs: string[];
   requiredEnvKeys?: string[];
   optionalEnvKeys?: string[];
+  kind?: McpRegistryEntryKind;
 }
 
 // Dynamic marketplace category from remote

@@ -6,11 +6,11 @@ import {
   AppConfig,
   CONFIG_KEYS,
   defaultConfig,
-  defaultVoiceInputConfig,
+  FontPreferences,
   isCustomProvider,
+  normalizeFontPreference,
   ShortcutAction,
   type ShortcutConfig,
-  VoiceInputRecognitionMode,
 } from '../config';
 import { localStore } from './store';
 
@@ -75,6 +75,11 @@ const normalizeProviderModels = (
     model.id,
     model.contextWindow,
   );
+  const supportsThinking = ProviderRegistry.resolveModelSupportsThinking(
+    providerKey,
+    model.id,
+    model.supportsThinking,
+  );
   return {
     ...model,
     supportsImage: ProviderRegistry.resolveModelSupportsImage(
@@ -82,6 +87,7 @@ const normalizeProviderModels = (
       model.id,
       model.supportsImage,
     ),
+    ...(supportsThinking ? { supportsThinking } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
   };
 });
@@ -149,17 +155,6 @@ const normalizeShortcutsConfig = (storedShortcuts?: AppConfig['shortcuts']): Sho
   });
 
   return shortcuts;
-};
-
-const normalizeVoiceInputConfig = (storedVoiceInput?: AppConfig['voiceInput']): AppConfig['voiceInput'] => {
-  const recognitionMode = storedVoiceInput?.recognitionMode === VoiceInputRecognitionMode.Short
-    ? VoiceInputRecognitionMode.Short
-    : VoiceInputRecognitionMode.Realtime;
-  return {
-    ...defaultVoiceInputConfig,
-    ...(storedVoiceInput ?? {}),
-    recognitionMode,
-  };
 };
 
 const LEGACY_PROVIDER_API_FORMAT_DEFAULTS: Record<string, {
@@ -259,72 +254,72 @@ const ADDED_PROVIDER_MODELS_MIGRATION_VERSION = 1;
 const ADDED_PROVIDER_MODELS: Record<string, { models: ProviderModel[]; position: 'start' | 'end' }> = {
   deepseek: {
     models: [
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false },
-      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false },
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, supportsThinking: true },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false, supportsThinking: true },
     ],
     position: 'start',
   },
   moonshot: {
     models: [
-      { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsImage: true },
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsImage: true, supportsThinking: true },
     ],
     position: 'start',
   },
   minimax: {
     models: [
-      { id: 'MiniMax-M3', name: 'MiniMax M3', supportsImage: true, contextWindow: 1_000_000 },
+      { id: 'MiniMax-M3', name: 'MiniMax M3', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
       { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false },
     ],
     position: 'start',
   },
   zhipu: {
     models: [
-      { id: 'glm-5.1', name: 'GLM 5.1', supportsImage: false },
+      { id: 'glm-5.1', name: 'GLM 5.1', supportsImage: false, supportsThinking: true },
     ],
     position: 'start',
   },
   qianfan: {
     models: [
       { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: false },
-      { id: 'glm-5.1', name: 'GLM 5.1', supportsImage: false },
+      { id: 'glm-5.1', name: 'GLM 5.1', supportsImage: false, supportsThinking: true },
       { id: 'minimax-m2.5', name: 'MiniMax M2.5', supportsImage: false },
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false },
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, supportsThinking: true },
       { id: 'ernie-4.5-turbo-20260402', name: 'ERNIE 4.5 Turbo', supportsImage: false },
     ],
     position: 'start',
   },
   [ProviderName.Xiaomi]: {
     models: [
-      { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, contextWindow: 1_000_000 },
-      { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
     ],
     position: 'start',
   },
   openai: {
     models: [
-      { id: 'gpt-5.4', name: 'GPT-5.4', supportsImage: true },
-      { id: 'gpt-5.5', name: 'GPT-5.5', supportsImage: true },
+      { id: 'gpt-5.4', name: 'GPT-5.4', supportsImage: true, supportsThinking: true },
+      { id: 'gpt-5.5', name: 'GPT-5.5', supportsImage: true, supportsThinking: true },
     ],
     position: 'start',
   },
   gemini: {
     models: [
-      { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', supportsImage: true },
+      { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', supportsImage: true, supportsThinking: true },
     ],
     position: 'end',
   },
   anthropic: {
     models: [
-      { id: 'claude-opus-4-7', name: 'Claude Opus 4.7', supportsImage: true },
+      { id: 'claude-opus-4-7', name: 'Claude Opus 4.7', supportsImage: true, supportsThinking: true },
     ],
     position: 'start',
   },
   openrouter: {
     models: [
-      { id: 'anthropic/claude-sonnet-4.6', name: 'Claude Sonnet 4.6', supportsImage: true },
-      { id: 'anthropic/claude-opus-4.7', name: 'Claude Opus 4.7', supportsImage: true },
-      { id: 'openai/gpt-5.5', name: 'GPT 5.5', supportsImage: true },
-      { id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', supportsImage: true },
+      { id: 'anthropic/claude-sonnet-4.6', name: 'Claude Sonnet 4.6', supportsImage: true, supportsThinking: true },
+      { id: 'anthropic/claude-opus-4.7', name: 'Claude Opus 4.7', supportsImage: true, supportsThinking: true },
+      { id: 'openai/gpt-5.5', name: 'GPT 5.5', supportsImage: true, supportsThinking: true },
+      { id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', supportsImage: true, supportsThinking: true },
     ],
     position: 'start',
   },
@@ -417,7 +412,15 @@ const alignProviderModelOrder = (
   });
 };
 
+const omitLegacyVoiceInputConfig = (config: AppConfig): AppConfig => {
+  const { voiceInput: _legacyVoiceInput, ...nextConfig } = config as AppConfig & {
+    voiceInput?: unknown;
+  };
+  return nextConfig;
+};
+
 const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
+  const storedWithoutLegacyVoiceInput = omitLegacyVoiceInputConfig(storedConfig);
   const providerModelMigrationVersions = {
     ...(storedConfig.providerModelMigrationVersions ?? {}),
   };
@@ -499,7 +502,7 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
 
   return migrateCustomProviders({
     ...defaultConfig,
-    ...storedConfig,
+    ...storedWithoutLegacyVoiceInput,
     api: {
       ...defaultConfig.api,
       ...storedConfig.api,
@@ -512,9 +515,20 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
     shortcuts: normalizeShortcutsConfig(storedConfig.shortcuts),
     providers: mergedProviders as AppConfig['providers'],
     providerModelMigrationVersions,
+    uiFontSize: normalizeFontPreference(
+      storedConfig.uiFontSize,
+      FontPreferences.UiFontSizeDefault,
+      FontPreferences.UiFontSizeMin,
+      FontPreferences.UiFontSizeMax,
+    ),
+    codeFontSize: normalizeFontPreference(
+      storedConfig.codeFontSize,
+      FontPreferences.CodeFontSizeDefault,
+      FontPreferences.CodeFontSizeMin,
+      FontPreferences.CodeFontSizeMax,
+    ),
     browserWebAccess: normalizeBrowserWebAccessConfig(storedConfig.browserWebAccess),
     notificationSettings: normalizeNotificationSettings(storedConfig.notificationSettings),
-    voiceInput: normalizeVoiceInputConfig(storedConfig.voiceInput),
   });
 };
 
@@ -563,21 +577,32 @@ class ConfigService {
     const stored = await localStore.getItem<AppConfig>(CONFIG_KEYS.APP_CONFIG);
     const base = stored ? hydrateStoredConfig(stored) : this.config;
 
-    this.config = {
+    this.config = omitLegacyVoiceInputConfig({
       ...base,
       ...newConfig,
       ...(normalizedProviders ? { providers: normalizedProviders } : {}),
       ...(normalizedProviders
         ? { providerModelMigrationVersions: markCurrentProviderModelMigrationsApplied(base.providerModelMigrationVersions) }
         : {}),
+      uiFontSize: normalizeFontPreference(
+        newConfig.uiFontSize ?? base.uiFontSize,
+        FontPreferences.UiFontSizeDefault,
+        FontPreferences.UiFontSizeMin,
+        FontPreferences.UiFontSizeMax,
+      ),
+      codeFontSize: normalizeFontPreference(
+        newConfig.codeFontSize ?? base.codeFontSize,
+        FontPreferences.CodeFontSizeDefault,
+        FontPreferences.CodeFontSizeMin,
+        FontPreferences.CodeFontSizeMax,
+      ),
       browserWebAccess: normalizeBrowserWebAccessConfig(
         newConfig.browserWebAccess ?? base.browserWebAccess,
       ),
       notificationSettings: normalizeNotificationSettings(
         newConfig.notificationSettings ?? base.notificationSettings,
       ),
-      voiceInput: normalizeVoiceInputConfig(newConfig.voiceInput ?? base.voiceInput),
-    };
+    } as AppConfig);
     await localStore.setItem(CONFIG_KEYS.APP_CONFIG, this.config);
     window.dispatchEvent(new CustomEvent('config-updated'));
   }

@@ -1,10 +1,13 @@
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { stripGoalCommandPrefixForDisplay } from '../../../common/sessionTitle';
+import { type CoworkGoal, CoworkGoalStatus } from '../../../shared/cowork/goal';
 import { i18nService } from '../../services/i18n';
 import type { CoworkSessionStatus, CoworkSessionSummary } from '../../types/cowork';
 import Modal from '../common/Modal';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
+import GoalIcon from '../icons/GoalIcon';
 import ListChecksIcon from '../icons/ListChecksIcon';
 import PencilSquareIcon from '../icons/PencilSquareIcon';
 import PushPinIcon from '../icons/PushPinIcon';
@@ -30,6 +33,23 @@ const statusLabels: Record<CoworkSessionStatus, string> = {
   running: 'coworkStatusRunning',
   completed: 'coworkStatusCompleted',
   error: 'coworkStatusError',
+};
+
+const getGoalStatusLabel = (goal: CoworkGoal): string => {
+  switch (goal.status) {
+    case CoworkGoalStatus.Active:
+      return i18nService.t('coworkGoalStatusActive');
+    case CoworkGoalStatus.Paused:
+      return i18nService.t('coworkGoalStatusPaused');
+    case CoworkGoalStatus.Blocked:
+      return i18nService.t('coworkGoalStatusBlocked');
+    case CoworkGoalStatus.UsageLimited:
+      return i18nService.t('coworkGoalStatusUsageLimited');
+    case CoworkGoalStatus.BudgetLimited:
+      return i18nService.t('coworkGoalStatusBudgetLimited');
+    case CoworkGoalStatus.Complete:
+      return i18nService.t('coworkGoalStatusComplete');
+  }
 };
 
 const formatRelativeTime = (timestamp: number): { compact: string; full: string } => {
@@ -93,14 +113,19 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     }
   }, [isRenaming, session.title]);
 
-  const calculateMenuPosition = (height: number) => {
+  const calculateMenuPosition = useCallback((height: number) => {
     const rect = actionButtonRef.current?.getBoundingClientRect();
     if (!rect) return null;
     const padding = 8;
     const right = Math.max(padding, window.innerWidth - rect.right);
     const y = Math.min(rect.bottom + 8, window.innerHeight - height - padding);
     return { right, y };
-  };
+  }, []);
+
+  const closeMenu = useCallback(() => {
+    setMenuPosition(null);
+    setShowConfirmDelete(false);
+  }, []);
 
   const openMenu = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -117,25 +142,20 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     setShowConfirmDelete(false);
   };
 
-  const closeMenu = () => {
-    setMenuPosition(null);
-    setShowConfirmDelete(false);
-  };
-
-  const handleTogglePin = (e: React.MouseEvent) => {
+  const handleTogglePin = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     onTogglePin(!session.pinned);
     closeMenu();
-  };
+  }, [closeMenu, onTogglePin, session.pinned]);
 
-  const handleRenameClick = (e: React.MouseEvent) => {
+  const handleRenameClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     ignoreNextBlurRef.current = false;
     setIsRenaming(true);
     setShowConfirmDelete(false);
     setRenameValue(session.title);
     setMenuPosition(null);
-  };
+  }, [session.title]);
 
   const handleRenameSave = (e?: React.SyntheticEvent) => {
     e?.stopPropagation();
@@ -162,11 +182,11 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     handleRenameSave(event);
   };
 
-  const handleDeleteClick = (e: React.MouseEvent) => {
+  const handleDeleteClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     setShowConfirmDelete(true);
     setMenuPosition(null);
-  };
+  }, []);
 
   const handleConfirmDelete = () => {
     onDelete();
@@ -178,11 +198,11 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     setShowConfirmDelete(false);
   };
 
-  const handleBatchClick = (e: React.MouseEvent) => {
+  const handleBatchClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     closeMenu();
     onEnterBatchMode();
-  };
+  }, [closeMenu, onEnterBatchMode]);
 
   useEffect(() => {
     if (!menuPosition) return;
@@ -208,7 +228,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
       window.removeEventListener('scroll', handleScroll, true);
       window.removeEventListener('resize', handleScroll);
     };
-  }, [menuPosition]);
+  }, [closeMenu, menuPosition]);
 
   useEffect(() => {
     if (!menuPosition) return;
@@ -217,7 +237,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     if (position && (position.right !== menuPosition.right || position.y !== menuPosition.y)) {
       setMenuPosition(position);
     }
-  }, [menuPosition, showConfirmDelete]);
+  }, [calculateMenuPosition, menuPosition, showBatchOption, showConfirmDelete]);
 
   useEffect(() => {
     if (!isRenaming) return;
@@ -236,7 +256,10 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   const showUnreadIndicator = !showRunningIndicator && hasUnread;
   const showStatusIndicator = showRunningIndicator || showUnreadIndicator;
   const showRelativeTime = !showStatusIndicator;
+  const displayTitle = stripGoalCommandPrefixForDisplay(session.title).trim() || session.title;
   const batchLabel = i18nService.t('batchOperations');
+  const goalStatusLabel = session.goal ? getGoalStatusLabel(session.goal) : null;
+  const goalTitle = session.goal ? `${goalStatusLabel}: ${session.goal.objective}` : undefined;
   const menuItems = useMemo(() => {
     const items = [
       { key: 'rename', label: renameLabel, onClick: handleRenameClick },
@@ -322,11 +345,11 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
               />
             ) : (
               <h3 className="text-sm font-medium text-foreground truncate">
-                {session.title}
+                {displayTitle}
               </h3>
             )}
           </div>
-          <div className="flex items-center gap-2 text-xs text-secondary">
+          <div className="flex min-w-0 items-center gap-2 text-xs text-secondary">
             {showRelativeTime && (
               <span className="whitespace-nowrap" title={relativeTime.full}>
                 {relativeTime.compact}
@@ -335,6 +358,16 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
             <span className="text-[10px] uppercase tracking-wider whitespace-nowrap">
               {i18nService.t(statusLabels[session.status])}
             </span>
+            {session.goal && goalStatusLabel && (
+              <span
+                className="inline-flex min-w-0 items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+                title={goalTitle}
+              >
+                <GoalIcon className="h-3 w-3 shrink-0" />
+                <span className="shrink-0">{goalStatusLabel}</span>
+                <span className="min-w-0 truncate text-primary/75">{session.goal.objective}</span>
+              </span>
+            )}
           </div>
         </div>
       </div>

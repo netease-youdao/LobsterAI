@@ -13,10 +13,12 @@ import {
   deleteMemoryEntry,
   migrateSqliteToMemoryMd,
   parseMemoryMd,
+  readMemoryFileRaw,
   resolveMemoryFilePath,
   searchMemoryEntries,
   serializeMemoryMd,
   updateMemoryEntry,
+  writeMemoryFileRaw,
 } from './openclawMemoryFile';
 
 // ---- helpers ----------------------------------------------------------------
@@ -62,11 +64,14 @@ test('parseMemoryMd: fingerprint is case-insensitive and punctuation-agnostic', 
   expect(entries.length).toBe(1);
 });
 
-test('parseMemoryMd: ignores non-bullet lines (headings, prose)', () => {
-  const md = `# User Memories\n\nSome prose paragraph.\n\n## Section\n\n- only this is a bullet\n`;
+test('parseMemoryMd: headings are not entries; prose paragraphs are', () => {
+  const md = `# User Memories\n\nSome prose paragraph.\n\n## Section\n\n- a bullet entry\n`;
   const entries = parseMemoryMd(md);
-  expect(entries.length).toBe(1);
-  expect(entries[0].text).toBe('only this is a bullet');
+  expect(entries.length).toBe(2);
+  expect(entries[0].text).toBe('Some prose paragraph.');
+  expect(entries[0].section).toBeUndefined();
+  expect(entries[1].text).toBe('a bullet entry');
+  expect(entries[1].section).toBe('Section');
 });
 
 test('parseMemoryMd: skips bullets inside fenced code blocks', () => {
@@ -80,10 +85,18 @@ test('parseMemoryMd: empty string returns empty array', () => {
   expect(parseMemoryMd('')).toEqual([]);
 });
 
-test('parseMemoryMd: normalises internal whitespace in entry text', () => {
-  const md = `- text  with   extra   spaces\n`;
+test('parseMemoryMd: preserves entry text verbatim; fingerprint ignores extra whitespace', () => {
+  const md = `- text  with   extra   spaces\n- text with extra spaces\n`;
   const entries = parseMemoryMd(md);
-  expect(entries[0].text).toBe('text with extra spaces');
+  expect(entries.length).toBe(1);
+  expect(entries[0].text).toBe('text  with   extra   spaces');
+});
+
+test('parseMemoryMd: legacy flat files keep the same content-addressed ids', () => {
+  // The pre-block parser produced sha1(normalized single-line text).
+  // sha1('hello world') pins that the id scheme is unchanged for flat files.
+  const entries = parseMemoryMd('- Hello world\n');
+  expect(entries[0].id).toBe('2aae6c35c94fcfb415dbe95f408b9ce91ee846ed');
 });
 
 // ==================== serializeMemoryMd ====================
@@ -424,6 +437,252 @@ test('migrateSqliteToMemoryMd: empty source marks done without writing file', ()
     const count = migrateSqliteToMemoryMd(filePath, source);
     expect(count).toBe(0);
     expect(done).toBe(true);
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('migrateSqliteToMemoryMd: skips texts that already exist as lines inside a block', () => {
+  const dir = makeTmpDir();
+  try {
+    const filePath = memFilePath(dir);
+    fs.writeFileSync(filePath, '# User Memories\n\n- parent fact:\n  - child detail A\n', 'utf-8');
+
+    const source = {
+      isMigrationDone: () => false,
+      markMigrationDone: () => {},
+      getActiveMemoryTexts: () => ['child detail A', 'brand new fact'],
+    };
+
+    const count = migrateSqliteToMemoryMd(filePath, source);
+    expect(count).toBe(1);
+
+    const content = fs.readFileSync(filePath, 'utf-8');
+    expect(content).toMatch(/brand new fact/);
+    expect(content.match(/child detail A/g)?.length).toBe(1);
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+// ==================== block-level parsing ====================
+
+const NESTED_MD = [
+  '# User Memories',
+  '',
+  'Intro prose kept as an entry.',
+  '',
+  '## Projects',
+  '',
+  '- release flow:',
+  '  - bump the version first',
+  '  - run dist to verify the installer',
+  '',
+  '- commit style uses conventional commits',
+  '',
+  '```',
+  '- not an entry, inside a fence',
+  '```',
+  '',
+].join('\n');
+
+test('parseMemoryMd: nested bullets form a single block entry', () => {
+  const entries = parseMemoryMd(NESTED_MD);
+  expect(entries.length).toBe(3);
+  expect(entries[1].text).toBe(
+    'release flow:\n  - bump the version first\n  - run dist to verify the installer',
+  );
+  expect(entries[1].section).toBe('Projects');
+  expect(entries[2].section).toBe('Projects');
+  expect(entries.every((e) => !e.text.includes('fence'))).toBeTruthy();
+});
+
+test('parseMemoryMd: lazy continuation lines stay in the block', () => {
+  const md = '- first line\nsecond line without indent\n\n- separate entry\n';
+  const entries = parseMemoryMd(md);
+  expect(entries.length).toBe(2);
+  expect(entries[0].text).toBe('first line\nsecond line without indent');
+});
+
+test('parseMemoryMd: top-level HTML comments are metadata, not entries', () => {
+  const md = [
+    '## Promoted From Short-Term Memory (2026-06-28)',
+    '',
+    '<!-- openclaw-memory-promotion:memory:memory/2026-06-23.md:74:74 -->',
+    '- promoted fact; confidence: 0.79',
+    '',
+    '<!-- multi-line comment',
+    'still inside the comment -->',
+    '- another fact',
+    '',
+  ].join('\n');
+  const entries = parseMemoryMd(md);
+  expect(entries.length).toBe(2);
+  expect(entries[0].text).toBe('promoted fact; confidence: 0.79');
+  expect(entries[0].section).toBe('Promoted From Short-Term Memory (2026-06-28)');
+  expect(entries[1].text).toBe('another fact');
+});
+
+test('updateMemoryEntry: HTML comment markers survive edits verbatim', () => {
+  const dir = makeTmpDir();
+  try {
+    const filePath = memFilePath(dir);
+    const md = '<!-- marker -->\n- promoted fact\n';
+    fs.writeFileSync(filePath, md, 'utf-8');
+
+    const entries = parseMemoryMd(md);
+    updateMemoryEntry(filePath, entries[0].id, 'edited fact');
+
+    const content = fs.readFileSync(filePath, 'utf-8');
+    expect(content).toBe('<!-- marker -->\n- edited fact\n');
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('parseMemoryMd: level-1 heading resets the section', () => {
+  const md = '- a\n\n## Sec\n\n- b\n\n# Top\n\n- c\n';
+  const entries = parseMemoryMd(md);
+  expect(entries[0].section).toBeUndefined();
+  expect(entries[1].section).toBe('Sec');
+  expect(entries[2].section).toBeUndefined();
+});
+
+// ==================== surgical writes ====================
+
+test('updateMemoryEntry: replaces the block in place and keeps other lines verbatim', () => {
+  const dir = makeTmpDir();
+  try {
+    const filePath = memFilePath(dir);
+    fs.writeFileSync(filePath, NESTED_MD, 'utf-8');
+
+    const entries = parseMemoryMd(NESTED_MD);
+    const updated = updateMemoryEntry(filePath, entries[2].id, 'commit style: cc only');
+    expect(updated?.section).toBe('Projects');
+
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const expected = NESTED_MD.replace(
+      '- commit style uses conventional commits',
+      '- commit style: cc only',
+    );
+    expect(content).toBe(expected);
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('updateMemoryEntry: no-op when text is unchanged (no write, no backup)', () => {
+  const dir = makeTmpDir();
+  try {
+    const filePath = memFilePath(dir);
+    const entry = addMemoryEntry(filePath, 'stable fact');
+    const before = fs.readFileSync(filePath, 'utf-8');
+
+    const result = updateMemoryEntry(filePath, entry.id, 'stable fact');
+    expect(result?.id).toBe(entry.id);
+    expect(fs.readFileSync(filePath, 'utf-8')).toBe(before);
+    expect(fs.existsSync(`${filePath}.bak`)).toBe(false);
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('deleteMemoryEntry: removes the whole block and collapses the separator', () => {
+  const dir = makeTmpDir();
+  try {
+    const filePath = memFilePath(dir);
+    fs.writeFileSync(filePath, NESTED_MD, 'utf-8');
+
+    const entries = parseMemoryMd(NESTED_MD);
+    expect(deleteMemoryEntry(filePath, entries[1].id)).toBe(true);
+
+    const content = fs.readFileSync(filePath, 'utf-8');
+    expect(content).not.toMatch(/bump the version/);
+    expect(content).not.toMatch(/\n\n\n/);
+    expect(content).toMatch(/- not an entry, inside a fence/);
+    expect(content).toMatch(/Intro prose kept as an entry\./);
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('addMemoryEntry: appends after existing content and inherits the trailing section', () => {
+  const dir = makeTmpDir();
+  try {
+    const filePath = memFilePath(dir);
+    fs.writeFileSync(filePath, NESTED_MD, 'utf-8');
+
+    const entry = addMemoryEntry(filePath, 'a fresh fact');
+    expect(entry.section).toBe('Projects');
+
+    const content = fs.readFileSync(filePath, 'utf-8');
+    expect(content.startsWith(NESTED_MD.replace(/\s+$/, ''))).toBe(true);
+    expect(content).toMatch(/\n\n- a fresh fact\n$/);
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('addMemoryEntry: multi-line input becomes one bullet block', () => {
+  const dir = makeTmpDir();
+  try {
+    const filePath = memFilePath(dir);
+    const entry = addMemoryEntry(filePath, 'release flow:\n- bump version\n\n- run dist\n');
+    expect(entry.text).toBe('release flow:\n  - bump version\n  - run dist');
+
+    const reread = parseMemoryMd(fs.readFileSync(filePath, 'utf-8'));
+    expect(reread.length).toBe(1);
+    expect(reread[0].id).toBe(entry.id);
+    expect(reread[0].text).toBe(entry.text);
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('mutations create MEMORY.md.bak once and never overwrite it', () => {
+  const dir = makeTmpDir();
+  try {
+    const filePath = memFilePath(dir);
+    addMemoryEntry(filePath, 'entry A');
+    expect(fs.existsSync(`${filePath}.bak`)).toBe(false);
+
+    const beforeB = fs.readFileSync(filePath, 'utf-8');
+    addMemoryEntry(filePath, 'entry B');
+    expect(fs.readFileSync(`${filePath}.bak`, 'utf-8')).toBe(beforeB);
+
+    addMemoryEntry(filePath, 'entry C');
+    expect(fs.readFileSync(`${filePath}.bak`, 'utf-8')).toBe(beforeB);
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+// ==================== raw file access ====================
+
+test('writeMemoryFileRaw/readMemoryFileRaw: round-trips and stays parseable', () => {
+  const dir = makeTmpDir();
+  try {
+    const filePath = memFilePath(dir);
+    writeMemoryFileRaw(filePath, '# User Memories\n\n- raw entry');
+    expect(readMemoryFileRaw(filePath)).toBe('# User Memories\n\n- raw entry\n');
+
+    const entries = parseMemoryMd(readMemoryFileRaw(filePath));
+    expect(entries.length).toBe(1);
+    expect(entries[0].text).toBe('raw entry');
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('searchMemoryEntries: matches section names too', () => {
+  const dir = makeTmpDir();
+  try {
+    const filePath = memFilePath(dir);
+    writeMemoryFileRaw(filePath, '## Projects\n\n- ship the release\n\n## Habits\n\n- morning runs\n');
+
+    const results = searchMemoryEntries(filePath, 'projects');
+    expect(results.length).toBe(1);
+    expect(results[0].text).toBe('ship the release');
   } finally {
     cleanupDir(dir);
   }

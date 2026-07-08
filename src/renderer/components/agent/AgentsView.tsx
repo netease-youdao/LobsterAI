@@ -168,7 +168,11 @@ const AgentsView: React.FC<AgentsViewProps> = ({
       </div>
 
       {/* Modals */}
-      <AgentCreateModal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} />
+      <AgentCreateModal
+        isOpen={isCreateOpen}
+        onClose={() => setIsCreateOpen(false)}
+        source="agents_view"
+      />
       <AgentSettingsPanel
         agentId={settingsAgentId}
         onClose={() => setSettingsAgentId(null)}

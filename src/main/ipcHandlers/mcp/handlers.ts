@@ -1,4 +1,4 @@
-import { app, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import https from 'https';
 
 import { McpIpcChannel } from '../../../shared/mcp/constants';
@@ -6,6 +6,7 @@ import { normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
 import { OpenClawConfigImpact } from '../../libs/openclawConfigImpact';
 import type { McpRuntime } from '../../mcp/mcpRuntime';
 import type { McpServerFormData } from '../../mcp/mcpStore';
+import { startQichachaMcpApiKeyLogin } from '../../mcp/qichachaMcpAuth';
 
 export interface McpHandlerDeps {
   getMcpRuntime: () => McpRuntime;
@@ -64,6 +65,62 @@ function normalizeMcpServerInput(data: Partial<McpServerFormData>): Partial<McpS
     return { ...data, url: normalized.url };
   }
   return data;
+}
+
+const QICHACHA_REGISTRY_ID = 'qichacha';
+
+const QICHACHA_MCP_SERVERS: Array<{
+  name: string;
+  description: string;
+  url: string;
+}> = [
+  {
+    name: 'qcc-company',
+    description: 'Qichacha company data MCP server',
+    url: 'https://agent.qcc.com/mcp/company/stream',
+  },
+  {
+    name: 'qcc-risk',
+    description: 'Qichacha risk data MCP server',
+    url: 'https://agent.qcc.com/mcp/risk/stream',
+  },
+  {
+    name: 'qcc-ipr',
+    description: 'Qichacha intellectual property data MCP server',
+    url: 'https://agent.qcc.com/mcp/ipr/stream',
+  },
+  {
+    name: 'qcc-operation',
+    description: 'Qichacha operation data MCP server',
+    url: 'https://agent.qcc.com/mcp/operation/stream',
+  },
+  {
+    name: 'qcc-executive',
+    description: 'Qichacha executive data MCP server',
+    url: 'https://agent.qcc.com/mcp/executive/stream',
+  },
+  {
+    name: 'qcc-history',
+    description: 'Qichacha historical archive data MCP server',
+    url: 'https://agent.qcc.com/mcp/history/stream',
+  },
+];
+
+function buildQichachaServerData(
+  server: typeof QICHACHA_MCP_SERVERS[number],
+  apiKey: string,
+): McpServerFormData {
+  return {
+    name: server.name,
+    description: server.description,
+    transportType: 'http',
+    url: server.url,
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    isBuiltIn: true,
+    registryId: QICHACHA_REGISTRY_ID,
+  };
 }
 
 export function registerMcpHandlers(deps: McpHandlerDeps): void {
@@ -165,6 +222,31 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     }
   });
 
+  ipcMain.handle(McpIpcChannel.DeleteByRegistryId, async (_event, registryId: string) => {
+    try {
+      const normalizedRegistryId = registryId.trim();
+      if (!normalizedRegistryId) {
+        throw new Error('MCP registry id is required');
+      }
+      const mcpRuntime = getMcpRuntime();
+      const store = mcpRuntime.getStore();
+      const matchingServers = store
+        .listServers()
+        .filter(server => server.registryId === normalizedRegistryId);
+      for (const server of matchingServers) {
+        store.deleteServer(server.id);
+      }
+      const servers = store.listServers();
+      syncMcpConfig(syncOpenClawConfig, 'mcp-registry-deleted');
+      return { success: true, servers };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to delete MCP registry servers',
+      };
+    }
+  });
+
   ipcMain.handle(McpIpcChannel.SetEnabled, async (_event, options: { id: string; enabled: boolean }) => {
     try {
       const mcpRuntime = getMcpRuntime();
@@ -183,6 +265,37 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     }
   });
 
+  ipcMain.handle(
+    McpIpcChannel.SetEnabledByRegistryId,
+    async (_event, options: { registryId: string; enabled: boolean }) => {
+      try {
+        const normalizedRegistryId = options.registryId.trim();
+        if (!normalizedRegistryId) {
+          throw new Error('MCP registry id is required');
+        }
+        const mcpRuntime = getMcpRuntime();
+        const store = mcpRuntime.getStore();
+        const matchingServers = store
+          .listServers()
+          .filter(server => server.registryId === normalizedRegistryId);
+        for (const server of matchingServers) {
+          store.setEnabled(server.id, options.enabled);
+          if (options.enabled) {
+            mcpRuntime.ensureLaunchResolution(server.id, 'mcp-registry-enabled');
+          }
+        }
+        const servers = store.listServers();
+        syncMcpConfig(syncOpenClawConfig, 'mcp-registry-toggled');
+        return { success: true, servers };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to update MCP registry servers',
+        };
+      }
+    },
+  );
+
   ipcMain.handle(McpIpcChannel.RetryLaunchResolution, async (_event, id: string) => {
     try {
       const mcpRuntime = getMcpRuntime();
@@ -194,6 +307,38 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to retry MCP launch resolution',
+      };
+    }
+  });
+
+  ipcMain.handle(McpIpcChannel.ConnectQichacha, async (event) => {
+    try {
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+      const apiKey = await startQichachaMcpApiKeyLogin(ownerWindow);
+      const mcpRuntime = getMcpRuntime();
+      const store = mcpRuntime.getStore();
+      const existingServers = store.listServers();
+
+      for (const qichachaServer of QICHACHA_MCP_SERVERS) {
+        const data = buildQichachaServerData(qichachaServer, apiKey);
+        const existing = existingServers.find(server =>
+          server.registryId === QICHACHA_REGISTRY_ID
+          && server.name === qichachaServer.name,
+        );
+        if (existing) {
+          store.updateServer(existing.id, data);
+        } else {
+          store.createServer(data);
+        }
+      }
+
+      const servers = store.listServers();
+      syncMcpConfig(syncOpenClawConfig, 'qichacha-mcp-connected');
+      return { success: true, servers };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to connect Qichacha MCP',
       };
     }
   });

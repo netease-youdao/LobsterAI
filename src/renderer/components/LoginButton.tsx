@@ -3,18 +3,44 @@ import { useSelector } from 'react-redux';
 
 import inviteCreditsIconUrl from '../assets/icons/invite-credits.svg';
 import logoutIconUrl from '../assets/icons/logout.svg';
+import promoSubscriptionIconUrl from '../assets/icons/promo-subscription.svg';
 import rechargeIconUrl from '../assets/icons/recharge.svg';
 import usageOverviewIconUrl from '../assets/icons/usage-overview.svg';
 import { authService } from '../services/auth';
 import {
+  getPortalCreditsResetActivityUrl,
   getPortalInvitationUrl,
   getPortalProfileUrl,
   getPortalRechargeUrl,
 } from '../services/endpoints';
 import { i18nService } from '../services/i18n';
+import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
 import { RootState } from '../store';
 import type { CreditItem } from '../store/slices/authSlice';
 import UserAvatarIcon from './icons/UserAvatarIcon';
+
+const ACCOUNT_MENU_ANALYTICS_SOURCE = 'home_account_menu';
+
+const reportAccountMenuAction = (
+  actionType: string,
+  options: {
+    creditItemCount?: number;
+    hasCredits?: boolean;
+    isLoggedIn?: boolean;
+    result?: 'success' | 'failed';
+  } = {},
+): void => {
+  console.debug('[LoginButton] reporting account menu analytics');
+  void reportYdAnalyzer({
+    action: LogReporterAction.AccountMenuAction,
+    source: ACCOUNT_MENU_ANALYTICS_SOURCE,
+    actionType,
+    result: options.result,
+    isLoggedIn: options.isLoggedIn ?? true,
+    hasCredits: options.hasCredits,
+    creditItemCount: options.creditItemCount,
+  });
+};
 
 const getSubscriptionBadge = (label: string) => {
   // Determine badge style based on label
@@ -158,20 +184,94 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   };
 
   const handleLogout = async () => {
-    await authService.logout();
-    onClose();
+    try {
+      await authService.logout();
+      reportAccountMenuAction('logout', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'success',
+      });
+      onClose();
+    } catch (error) {
+      reportAccountMenuAction('logout', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'failed',
+      });
+      throw error;
+    }
   };
 
   const handleUsageOverview = async () => {
-    await openPortalUrl(getPortalProfileUrl());
+    try {
+      await openPortalUrl(getPortalProfileUrl());
+      reportAccountMenuAction('open_usage_overview', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'success',
+      });
+    } catch (error) {
+      reportAccountMenuAction('open_usage_overview', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'failed',
+      });
+      throw error;
+    }
   };
 
   const handleRecharge = async () => {
-    await openPortalUrl(getPortalRechargeUrl());
+    try {
+      await openPortalUrl(getPortalRechargeUrl());
+      reportAccountMenuAction('open_recharge', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'success',
+      });
+    } catch (error) {
+      reportAccountMenuAction('open_recharge', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'failed',
+      });
+      throw error;
+    }
   };
 
   const handleInvite = async () => {
-    await openPortalUrl(getPortalInvitationUrl());
+    try {
+      await openPortalUrl(getPortalInvitationUrl());
+      reportAccountMenuAction('open_invitation', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'success',
+      });
+    } catch (error) {
+      reportAccountMenuAction('open_invitation', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'failed',
+      });
+      throw error;
+    }
+  };
+
+  const handleCreditsResetActivity = async () => {
+    try {
+      await openPortalUrl(getPortalCreditsResetActivityUrl());
+      reportAccountMenuAction('open_credits_reset_campaign', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'success',
+      });
+    } catch (error) {
+      reportAccountMenuAction('open_credits_reset_campaign', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'failed',
+      });
+      throw error;
+    }
   };
 
   const phoneSuffix = user?.phone ? user.phone.slice(-4) : '';
@@ -179,6 +279,13 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const totalCredits = profileSummary?.totalCreditsRemaining ?? 0;
   const creditItems = profileSummary?.creditItems ?? [];
   const hasCredits = creditItems.length > 0;
+  const availableResetCount = profileSummary?.availableResetCount ?? 0;
+  const availablePromoSubscriptionCount = profileSummary?.availablePromoSubscriptionCount ?? 0;
+  const campaignActionLabel = availableResetCount > 0
+    ? i18nService.t('authCreditsResetAction')
+    : availablePromoSubscriptionCount > 0
+      ? i18nService.t('authPromoSubscriptionAction')
+      : null;
 
   return (
     <div className="absolute bottom-full left-[-0.5rem] mb-1 w-[14.5rem] bg-surface rounded-xl shadow-popover border border-border overflow-hidden z-50 popover-enter">
@@ -198,7 +305,14 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
       <div className="border-b border-border">
         <button
           type="button"
-          onClick={() => setCreditsExpanded(!creditsExpanded)}
+          onClick={() => {
+            const nextExpanded = !creditsExpanded;
+            setCreditsExpanded(nextExpanded);
+            reportAccountMenuAction(nextExpanded ? 'expand_credits' : 'collapse_credits', {
+              creditItemCount: creditItems.length,
+              hasCredits,
+            });
+          }}
           className="w-full px-4 py-2.5 flex items-center justify-between cursor-pointer hover:bg-surface-raised transition-colors"
         >
           <span className="text-xs text-secondary">
@@ -245,6 +359,13 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
       {/* Actions */}
       <div className="py-1">
+        {campaignActionLabel && (
+          <AccountMenuAction
+            icon={<PortalMenuIcon src={promoSubscriptionIconUrl} darkInvert />}
+            label={campaignActionLabel}
+            onClick={handleCreditsResetActivity}
+          />
+        )}
         <AccountMenuAction
           icon={<PortalMenuIcon src={usageOverviewIconUrl} darkInvert />}
           label={i18nService.t('authUsageOverview')}
@@ -271,7 +392,7 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 };
 
 const LoginButton: React.FC = () => {
-  const { isLoggedIn, isLoading, user } = useSelector((state: RootState) => state.auth);
+  const { isLoggedIn, isLoading, profileSummary, user } = useSelector((state: RootState) => state.auth);
   const [showMenu, setShowMenu] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -295,10 +416,29 @@ const LoginButton: React.FC = () => {
 
   const handleClick = async () => {
     if (isLoggedIn) {
-      setShowMenu(!showMenu);
+      const nextShowMenu = !showMenu;
+      setShowMenu(nextShowMenu);
+      const creditItemCount = profileSummary?.creditItems?.length ?? 0;
+      reportAccountMenuAction(nextShowMenu ? 'open_menu' : 'close_menu', {
+        creditItemCount,
+        hasCredits: creditItemCount > 0,
+        isLoggedIn: true,
+      });
       return;
     }
-    await authService.login();
+    try {
+      await authService.login();
+      reportAccountMenuAction('login', {
+        isLoggedIn: false,
+        result: 'success',
+      });
+    } catch (error) {
+      reportAccountMenuAction('login', {
+        isLoggedIn: false,
+        result: 'failed',
+      });
+      throw error;
+    }
   };
 
   return (

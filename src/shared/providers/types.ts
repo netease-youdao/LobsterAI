@@ -9,6 +9,7 @@ export interface ProviderConfig {
     id: string;
     name: string;
     supportsImage?: boolean;
+    supportsThinking?: boolean;
     contextWindow?: number;
     customParams?: Record<string, unknown>;
   }>;

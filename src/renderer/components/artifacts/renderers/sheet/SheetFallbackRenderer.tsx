@@ -45,7 +45,12 @@ const ROW_HEIGHT = 28;
 const COL_HEADER_HEIGHT = 28;
 const ROW_HEADER_WIDTH = 46;
 const MIN_COL_WIDTH = 48;
-const MAX_COL_WIDTH = 520;
+const MAX_COL_WIDTH = 2400;
+const AUTO_FIT_PADDING = 24;
+const AUTO_FIT_HEADER_CHAR_WIDTH = 8;
+const CELL_HORIZONTAL_PADDING = 8;
+const CELL_VERTICAL_PADDING = 4;
+const CELL_LINE_HEIGHT = 18;
 
 interface XlsxColumnInfo {
   wpx?: number;
@@ -143,6 +148,16 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
     return () => { cancelled = true; };
   }, [data, fileName]);
 
+  const activeSheetData = sheets[activeSheet] || sheets[0] || null;
+  const autoFitColWidths = useMemo(
+    () => activeSheetData ? getAutoFitColumnWidths(activeSheetData.rows, activeSheetData.colWidths) : [],
+    [activeSheetData],
+  );
+  const rowHeights = useMemo(
+    () => activeSheetData ? getWrappedRowHeights(activeSheetData.rows, activeSheetData.colWidths, zoomFactor) : [],
+    [activeSheetData, zoomFactor],
+  );
+
   if (error) {
     return (
       <div className="flex h-full items-center justify-center p-4 text-sm text-red-500">
@@ -159,8 +174,8 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
     );
   }
 
-  const currentSheet = sheets[activeSheet] || sheets[0];
-  const rowHeight = scaleSheetSize(ROW_HEIGHT, zoomFactor);
+  const currentSheet = activeSheetData || sheets[0];
+  const defaultRowHeight = scaleSheetSize(ROW_HEIGHT, zoomFactor);
   const colHeaderHeight = scaleSheetSize(COL_HEADER_HEIGHT, zoomFactor);
   const rowHeaderWidth = scaleSheetSize(ROW_HEADER_WIDTH, zoomFactor);
   const totalWidth = rowHeaderWidth + currentSheet.colWidths.reduce((sum, width) => sum + width * zoomFactor, 0);
@@ -191,13 +206,15 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
             rowHeaderWidth={rowHeaderWidth}
             zoomFactor={zoomFactor}
             onColumnResize={handleColumnResize}
+            onColumnAutoFit={handleColumnResize}
+            autoFitColWidths={autoFitColWidths}
           />
           <VirtualRows
-            key={rowHeight}
             rows={currentSheet.rows}
             parentRef={parentRef}
             colWidths={currentSheet.colWidths}
-            rowHeight={rowHeight}
+            rowHeights={rowHeights}
+            defaultRowHeight={defaultRowHeight}
             rowHeaderWidth={rowHeaderWidth}
             zoomFactor={zoomFactor}
           />
@@ -217,12 +234,16 @@ function ColumnHeaders({
   rowHeaderWidth,
   zoomFactor,
   onColumnResize,
+  onColumnAutoFit,
+  autoFitColWidths,
 }: {
   colWidths: number[];
   colHeaderHeight: number;
   rowHeaderWidth: number;
   zoomFactor: number;
   onColumnResize: (columnIndex: number, width: number) => void;
+  onColumnAutoFit: (columnIndex: number, width: number) => void;
+  autoFitColWidths: number[];
 }) {
   return (
     <div className="sticky top-0 z-10 flex border-b border-[#d8d8d8] bg-[#f3f4f6]" style={{ height: colHeaderHeight }}>
@@ -245,6 +266,11 @@ function ColumnHeaders({
             title={t('artifactResizeColumn')}
             className="absolute right-[-4px] top-0 z-10 h-full w-2 cursor-col-resize touch-none select-none hover:bg-[#217346]/20 focus:bg-[#217346]/25 focus:outline-none"
             onPointerDown={event => startColumnResize(event, i, colWidth, zoomFactor, onColumnResize)}
+            onDoubleClick={event => {
+              event.preventDefault();
+              event.stopPropagation();
+              onColumnAutoFit(i, autoFitColWidths[i] ?? colWidth);
+            }}
             onKeyDown={event => handleColumnResizeKeyDown(event, i, colWidth, onColumnResize)}
           />
         </div>
@@ -257,25 +283,27 @@ const VirtualRows: React.FC<{
   rows: CellData[][];
   parentRef: React.RefObject<HTMLDivElement | null>;
   colWidths: number[];
-  rowHeight: number;
+  rowHeights: number[];
+  defaultRowHeight: number;
   rowHeaderWidth: number;
   zoomFactor: number;
-}> = ({ rows, parentRef, colWidths, rowHeight, rowHeaderWidth, zoomFactor }) => {
+}> = ({ rows, parentRef, colWidths, rowHeights, defaultRowHeight, rowHeaderWidth, zoomFactor }) => {
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => rowHeight,
+    estimateSize: index => rowHeights[index] ?? defaultRowHeight,
     overscan: 20,
   });
 
   useEffect(() => {
     rowVirtualizer.measure();
-  }, [rowHeight, rowVirtualizer]);
+  }, [defaultRowHeight, rowHeights, rowVirtualizer]);
 
   return (
     <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
       {rowVirtualizer.getVirtualItems().map(virtualRow => {
         const row = rows[virtualRow.index];
+        const rowHeight = rowHeights[virtualRow.index] ?? defaultRowHeight;
         return (
           <div
             key={virtualRow.index}
@@ -284,7 +312,6 @@ const VirtualRows: React.FC<{
               transform: `translateY(${virtualRow.start}px)`,
               height: rowHeight,
               fontSize: 12 * zoomFactor,
-              lineHeight: `${rowHeight}px`,
             }}
           >
             <div
@@ -300,13 +327,17 @@ const VirtualRows: React.FC<{
               return (
                 <div
                   key={ci}
-                  className="flex shrink-0 items-center truncate border-r border-[#e0e0e0]/50 px-2"
+                  className="flex shrink-0 items-start overflow-hidden whitespace-normal break-words border-r border-[#e0e0e0]/50 px-2 py-1"
                   style={{
                     width: getSpanWidth(colWidths, ci, colSpan, zoomFactor),
-                    height: rowHeight * rowSpan,
-                    lineHeight: `${rowHeight}px`,
-                    paddingLeft: 8 * zoomFactor,
-                    paddingRight: 8 * zoomFactor,
+                    height: getSpanHeight(rowHeights, virtualRow.index, rowSpan, defaultRowHeight),
+                    lineHeight: `${scaleSheetSize(CELL_LINE_HEIGHT, zoomFactor)}px`,
+                    paddingLeft: CELL_HORIZONTAL_PADDING * zoomFactor,
+                    paddingRight: CELL_HORIZONTAL_PADDING * zoomFactor,
+                    paddingTop: CELL_VERTICAL_PADDING * zoomFactor,
+                    paddingBottom: CELL_VERTICAL_PADDING * zoomFactor,
+                    overflowWrap: 'anywhere',
+                    wordBreak: 'break-word',
                     backgroundColor: cell.bgColor || undefined,
                     color: cell.fontColor || (cell.bgColor ? contrastingTextColor(cell.bgColor) : undefined),
                     fontWeight: cell.bold ? 700 : undefined,
@@ -399,12 +430,75 @@ function getDefaultColumnWidth(colCount: number): number {
   return Math.max(90, Math.min(180, Math.floor(900 / Math.max(colCount, 1))));
 }
 
+function getAutoFitColumnWidths(rows: CellData[][], currentWidths: number[]): number[] {
+  return currentWidths.map((currentWidth, columnIndex) => {
+    const headerWidth = estimateTextWidth(columnName(columnIndex), AUTO_FIT_HEADER_CHAR_WIDTH);
+    const contentWidth = rows.reduce((maxWidth, row) => {
+      const cell = row[columnIndex];
+      if (!cell || cell.hidden) return maxWidth;
+      return Math.max(maxWidth, estimateTextWidth(cell.v));
+    }, headerWidth);
+
+    return clampColumnWidth(Math.max(currentWidth, contentWidth + AUTO_FIT_PADDING));
+  });
+}
+
+function getWrappedRowHeights(rows: CellData[][], colWidths: number[], zoomFactor: number): number[] {
+  const defaultRowHeight = scaleSheetSize(ROW_HEIGHT, zoomFactor);
+  const lineHeight = scaleSheetSize(CELL_LINE_HEIGHT, zoomFactor);
+  const verticalPadding = Math.round(CELL_VERTICAL_PADDING * 2 * zoomFactor);
+
+  return rows.map(row => {
+    const maxLineCount = row.reduce((lineCount, cell, columnIndex) => {
+      if (!cell || cell.hidden || !cell.v) return lineCount;
+      const colSpan = cell.colSpan || 1;
+      const availableWidth = Math.max(
+        1,
+        getSpanWidth(colWidths, columnIndex, colSpan, 1) - CELL_HORIZONTAL_PADDING * 2,
+      );
+      return Math.max(lineCount, estimateWrappedLineCount(cell.v, availableWidth));
+    }, 1);
+
+    return Math.max(defaultRowHeight, verticalPadding + lineHeight * maxLineCount);
+  });
+}
+
+function estimateWrappedLineCount(text: string, availableWidth: number): number {
+  return text.split(/\r\n|\r|\n/u).reduce((lineCount, line) => {
+    if (line.length === 0) return lineCount + 1;
+    return lineCount + Math.max(1, Math.ceil(estimateTextWidth(line) / availableWidth));
+  }, 0);
+}
+
+function estimateTextWidth(text: string, fallbackCharWidth = 7): number {
+  let width = 0;
+  for (const char of text) {
+    width += getEstimatedCharacterWidth(char, fallbackCharWidth);
+  }
+  return width;
+}
+
+function getEstimatedCharacterWidth(char: string, fallbackCharWidth: number): number {
+  if (/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/u.test(char)) return 13;
+  if (/[\uff00-\uffef]/u.test(char)) return 12;
+  if (/\s/u.test(char)) return 4;
+  if (/[A-Z0-9]/u.test(char)) return 8;
+  if (/[ilI.,;:|]/u.test(char)) return 4;
+  return fallbackCharWidth;
+}
+
 function clampColumnWidth(width: number): number {
   return Math.max(MIN_COL_WIDTH, Math.min(MAX_COL_WIDTH, Math.round(width)));
 }
 
 function getSpanWidth(colWidths: number[], startColumn: number, colSpan: number, zoomFactor: number): number {
   return colWidths.slice(startColumn, startColumn + colSpan).reduce((sum, width) => sum + width * zoomFactor, 0);
+}
+
+function getSpanHeight(rowHeights: number[], startRow: number, rowSpan: number, defaultRowHeight: number): number {
+  return rowHeights
+    .slice(startRow, startRow + rowSpan)
+    .reduce((sum, height) => sum + (height ?? defaultRowHeight), 0);
 }
 
 function scaleSheetSize(value: number, zoomFactor: number): number {

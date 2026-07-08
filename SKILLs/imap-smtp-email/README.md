@@ -4,7 +4,11 @@ Read and send email via IMAP/SMTP protocol. Works with any IMAP/SMTP server incl
 
 ## Quick Setup
 
-1. **Create `.env` file** with your credentials:
+1. **Configure accounts in LobsterAI Settings > Email.**
+
+LobsterAI writes `accounts.json` for multi-account setups. Existing `.env` files are still read as a legacy single-account fallback.
+
+Optional legacy `.env` format:
 
 ```bash
 # IMAP Configuration (receiving email)
@@ -35,11 +39,32 @@ node scripts/imap.js check
 node scripts/smtp.js test
 ```
 
+## Account Selection
+
+```bash
+# Use the default enabled account
+node scripts/imap.js check
+
+# List account IDs without secrets
+node scripts/imap.js accounts
+node scripts/smtp.js accounts
+
+# Use a specific account
+node scripts/imap.js check --account work
+
+# Fan out to every enabled account for read/list commands
+node scripts/imap.js check --all-accounts
+node scripts/imap.js search --all-accounts --unseen
+node scripts/imap.js list-mailboxes --all-accounts
+```
+
 ## IMAP Commands (Receiving Email)
 
 ### Check for new emails
 ```bash
 node scripts/imap.js check --limit 10
+node scripts/imap.js check --account work --limit 10
+node scripts/imap.js check --all-accounts --limit 10
 node scripts/imap.js check --recent 2h        # Last 2 hours
 node scripts/imap.js check --recent 30m       # Last 30 minutes
 ```
@@ -47,11 +72,13 @@ node scripts/imap.js check --recent 30m       # Last 30 minutes
 ### Fetch specific email
 ```bash
 node scripts/imap.js fetch <uid>
+node scripts/imap.js fetch <uid> --account work
 ```
 
 ### Search emails
 ```bash
 node scripts/imap.js search --unseen
+node scripts/imap.js search --all-accounts --unseen
 node scripts/imap.js search --from "sender@example.com"
 node scripts/imap.js search --subject "important"
 node scripts/imap.js search --recent 24h
@@ -60,12 +87,13 @@ node scripts/imap.js search --recent 24h
 ### Mark as read/unread
 ```bash
 node scripts/imap.js mark-read <uid>
-node scripts/imap.js mark-unread <uid>
+node scripts/imap.js mark-unread <uid> --account work
 ```
 
 ### List mailboxes
 ```bash
 node scripts/imap.js list-mailboxes
+node scripts/imap.js list-mailboxes --all-accounts
 ```
 
 ## SMTP Commands (Sending Email)
@@ -73,22 +101,25 @@ node scripts/imap.js list-mailboxes
 ### Test SMTP connection
 ```bash
 node scripts/smtp.js test
+node scripts/smtp.js test --account work
 ```
 
 ### Send email
 ```bash
 # Simple text email
-node scripts/smtp.js send --to recipient@example.com --subject "Hello" --body "World"
+node scripts/smtp.js send --to recipient@example.com --subject "Hello" --body "World" --confirmed
 
 # HTML email
-node scripts/smtp.js send --to recipient@example.com --subject "Newsletter" --html --body "<h1>Welcome</h1>"
+node scripts/smtp.js send --to recipient@example.com --subject "Newsletter" --html --body "<h1>Welcome</h1>" --confirmed
 
 # Email with attachment
-node scripts/smtp.js send --to recipient@example.com --subject "Report" --body "Please find attached" --attach report.pdf
+node scripts/smtp.js send --to recipient@example.com --subject "Report" --body "Please find attached" --attach report.pdf --confirmed
 
 # Multiple recipients
-node scripts/smtp.js send --to "a@example.com,b@example.com" --cc "c@example.com" --subject "Update" --body "Team update"
+node scripts/smtp.js send --account work --to "a@example.com,b@example.com" --cc "c@example.com" --subject "Update" --body "Team update" --confirmed
 ```
+
+Sending is blocked unless `--confirmed` is passed after the user confirms recipient, subject, sender account, and body.
 
 ## Common Email Servers
 
@@ -128,6 +159,7 @@ node scripts/smtp.js send --to "a@example.com,b@example.com" --cc "c@example.com
 - `SMTP_PASS` - Your password or app-specific password
 - `SMTP_FROM` - Default sender email (optional)
 - `SMTP_REJECT_UNAUTHORIZED` - Accept self-signed certs
+- `EMAIL_REQUIRE_SEND_CONFIRMATION` - Set to `false` only for trusted automation that may send without `--confirmed`
 
 ## Troubleshooting
 
@@ -145,7 +177,8 @@ node scripts/smtp.js send --to "a@example.com,b@example.com" --cc "c@example.com
 ## Files
 
 - `SKILL.md` - Skill documentation
+- `accounts.json` - Multi-account credentials managed by LobsterAI Settings
 - `scripts/imap.js` - IMAP CLI tool
 - `scripts/smtp.js` - SMTP CLI tool
 - `package.json` - Node.js dependencies
-- `.env` - Your credentials (create manually)
+- `.env` - Legacy single-account credentials fallback

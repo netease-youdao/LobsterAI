@@ -20,11 +20,29 @@ export interface UserQuota {
 }
 
 export interface CreditItem {
-  type: 'subscription' | 'boost' | 'free';
+  type: 'subscription' | 'boost' | 'free' | 'bonus' | 'invitation';
   label: string;
   labelEn: string;
   creditsRemaining: number;
   expiresAt: string | null;
+}
+
+export interface CreditsResetCampaignStatus {
+  enabled: boolean;
+  active: boolean;
+  registeredEligible: boolean;
+  participated: boolean;
+  participationType: string | null;
+  identity: 'subscription' | 'free';
+  availableResetCount: number;
+  availablePromoSubscriptionCount: number;
+  promoPlanId: number;
+  promoAmount: number;
+  campaignCode: string;
+  startAt: string;
+  endAt: string;
+  registeredBefore: string;
+  reason: string;
 }
 
 export interface ProfileSummary {
@@ -33,6 +51,9 @@ export interface ProfileSummary {
   avatarUrl: string | null;
   totalCreditsRemaining: number;
   creditItems: CreditItem[];
+  availableResetCount?: number;
+  availablePromoSubscriptionCount?: number;
+  creditsResetCampaign?: CreditsResetCampaignStatus;
 }
 
 interface AuthState {

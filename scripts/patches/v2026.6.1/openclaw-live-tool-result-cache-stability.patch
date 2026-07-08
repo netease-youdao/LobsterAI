@@ -1,0 +1,114 @@
+diff --git a/src/agents/embedded-agent-runner/run/attempt.ts b/src/agents/embedded-agent-runner/run/attempt.ts
+index 077593828b..eae686a64b 100644
+--- a/src/agents/embedded-agent-runner/run/attempt.ts
++++ b/src/agents/embedded-agent-runner/run/attempt.ts
+@@ -542,8 +542,6 @@ export {
+ };
+ 
+ const MAX_BTW_SNAPSHOT_MESSAGES = 100;
+-const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
+-
+ function pluginMetadataSnapshotCoversProvider(
+   snapshot: PluginMetadataSnapshot | undefined,
+   provider: string,
+@@ -4176,17 +4174,14 @@ export async function runEmbeddedAttempt(
+             activeSession.messages,
+             contextTokenBudget,
+             promptToolResultMaxChars,
+-            promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER,
++            null,
+           );
+           if (promptToolResultTruncation.truncatedCount > 0) {
+             promptHistoryMessages = promptToolResultTruncation.messages;
+             log.info(
+               `[tool-result-truncation] Truncated ${promptToolResultTruncation.truncatedCount} ` +
+                 `tool result(s) for prompt history ` +
+-                `(maxChars=${promptToolResultMaxChars} ` +
+-                `aggregateBudgetChars=${
+-                  promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER
+-                }) ` +
++                `(maxChars=${promptToolResultMaxChars}) ` +
+                 `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
+             );
+           }
+@@ -4717,7 +4712,7 @@ export async function runEmbeddedAttempt(
+                     messages,
+                     contextTokenBudget,
+                     promptToolResultMaxChars,
+-                    promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER,
++                    null,
+                   );
+                   return providerPromptHistoryTruncation.truncatedCount > 0
+                     ? providerPromptHistoryTruncation.messages
+diff --git a/src/agents/embedded-agent-runner/tool-result-truncation.test.ts b/src/agents/embedded-agent-runner/tool-result-truncation.test.ts
+index cf9d51c627..db91f7095b 100644
+--- a/src/agents/embedded-agent-runner/tool-result-truncation.test.ts
++++ b/src/agents/embedded-agent-runner/tool-result-truncation.test.ts
+@@ -437,6 +437,34 @@ describe("truncateOversizedToolResultsInMessages", () => {
+       medium.length * 3,
+     );
+   });
++
++  it("keeps prompt projections byte-stable as history grows", () => {
++    const prefix = [
++      makeToolResult("p".repeat(15_000), "prefix_1"),
++      makeToolResult("q".repeat(15_000), "prefix_2"),
++    ];
++    const suffix = [
++      makeToolResult("x".repeat(15_000), "current_1"),
++      makeToolResult("y".repeat(15_000), "current_2"),
++    ];
++    const messages = [...prefix, ...suffix];
++
++    const first = truncateOversizedToolResultsInMessages(messages, 128_000, 12_000, null);
++    const second = truncateOversizedToolResultsInMessages(
++      [...messages, makeToolResult("z".repeat(15_000), "current_3")],
++      128_000,
++      12_000,
++      null,
++    );
++
++    expect(first.truncatedCount).toBe(4);
++    expect(second.truncatedCount).toBe(5);
++    expect(second.messages.slice(0, messages.length)).toEqual(first.messages);
++    expect(second.messages.every((message) => getToolResultTextLength(message) <= 12_000)).toBe(
++      true,
++    );
++    expect(messages).toEqual([...prefix, ...suffix]);
++  });
+ });
+ 
+ describe("truncateOversizedToolResultsInSession", () => {
+diff --git a/src/agents/embedded-agent-runner/tool-result-truncation.ts b/src/agents/embedded-agent-runner/tool-result-truncation.ts
+index 848b3d5f0d..464e27a45b 100644
+--- a/src/agents/embedded-agent-runner/tool-result-truncation.ts
++++ b/src/agents/embedded-agent-runner/tool-result-truncation.ts
+@@ -338,17 +338,22 @@ export function truncateOversizedToolResultsInMessages(
+   messages: AgentMessage[],
+   contextWindowTokens: number,
+   maxCharsOverride?: number,
+-  aggregateMaxCharsOverride?: number,
++  aggregateMaxCharsOverride?: number | null,
+ ): { messages: AgentMessage[]; truncatedCount: number } {
+   const maxChars = Math.max(
+     1,
+     maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
+   );
+-  const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(
+-    contextWindowTokens,
+-    maxChars,
+-    aggregateMaxCharsOverride,
+-  );
++  // Live prompt assembly disables aggregate rewriting so unchanged history stays byte-stable
++  // for provider prefix caches; recovery and persisted-session callers keep the aggregate guard.
++  const aggregateBudgetChars =
++    aggregateMaxCharsOverride === null
++      ? Number.POSITIVE_INFINITY
++      : calculateRecoveryAggregateToolResultChars(
++          contextWindowTokens,
++          maxChars,
++          aggregateMaxCharsOverride,
++        );
+   const branch = messages.map((message, index) => ({
+     id: `message-${index}`,
+     type: "message",

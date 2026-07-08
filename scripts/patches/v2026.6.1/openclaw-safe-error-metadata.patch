@@ -1,0 +1,116 @@
+--- a/src/agents/embedded-agent-subscribe.handlers.lifecycle.ts
++++ b/src/agents/embedded-agent-subscribe.handlers.lifecycle.ts
+@@ -52,6 +52,7 @@
+   const lastAssistant = ctx.state.lastAssistant;
+   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
+   let lifecycleErrorText: string | undefined;
++  let lifecycleErrorMetadata: Record<string, unknown> | undefined;
+   const hasAssistantVisibleText =
+     Array.isArray(ctx.state.assistantTexts) &&
+     ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
+@@ -101,6 +102,12 @@
+         provider: lastAssistant.provider,
+       }).textPreview ?? GENERIC_ASSISTANT_ERROR_TEXT;
+     lifecycleErrorText = safeErrorText;
++    lifecycleErrorMetadata = {
++      failoverReason,
++      model: lastAssistant.model,
++      provider: lastAssistant.provider,
++      ...observedError,
++    };
+     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
+     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
+     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
+@@ -143,6 +150,7 @@
+           phase: "error",
+           error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT,
+           ...terminalMeta,
++          ...(lifecycleErrorMetadata ?? {}),
+           ...(livenessState ? { livenessState } : {}),
+           ...(replayInvalid ? { replayInvalid } : {}),
+           endedAt: Date.now(),
+@@ -154,6 +162,7 @@
+           phase: "error",
+           error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT,
+           ...terminalMeta,
++          ...(lifecycleErrorMetadata ?? {}),
+           ...(livenessState ? { livenessState } : {}),
+           ...(replayInvalid ? { replayInvalid } : {}),
+         },
+--- a/src/gateway/server-chat.ts
++++ b/src/gateway/server-chat.ts
+@@ -45,7 +45,34 @@
+   SessionMessageSubscriberRegistry,
+   ToolEventRecipientRegistry,
+ } from "./server-chat-state.js";
++
++const SAFE_CHAT_ERROR_METADATA_KEYS = [
++  "provider",
++  "model",
++  "failoverReason",
++  "providerRuntimeFailureKind",
++  "providerErrorType",
++  "rawErrorPreview",
++  "rawErrorHash",
++] as const;
++
++function extractSafeChatErrorMetadata(data: unknown): Record<string, unknown> | undefined {
++  if (!data || typeof data !== "object" || Array.isArray(data)) {
++    return undefined;
++  }
++
++  const source = data as Record<string, unknown>;
++  const metadata: Record<string, unknown> = {};
++  for (const key of SAFE_CHAT_ERROR_METADATA_KEYS) {
++    const value = source[key];
++    if (typeof value === "string" && value.trim()) {
++      metadata[key] = value;
++    }
++  }
+ 
++  return Object.keys(metadata).length > 0 ? metadata : undefined;
++}
++
+ function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown }>(payload: T): T {
+   const data = payload.data;
+   if (!data || typeof data !== "object") {
+@@ -478,6 +505,7 @@
+           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
+         const evtErrorKind =
+           readChatErrorKind(evt.data?.errorKind) ?? detectErrorKind(evt.data?.error);
++        const evtErrorMetadata = extractSafeChatErrorMetadata(evt.data);
+         if (chatLink) {
+           const finished = chatRunState.registry.shift(evt.runId);
+           if (!finished) {
+@@ -494,6 +522,7 @@
+               evt.data?.error,
+               evtStopReason,
+               evtErrorKind,
++              evtErrorMetadata,
+               { agentId: finished.agentId, controlUiVisible: isControlUiVisible },
+             );
+           }
+@@ -507,6 +536,7 @@
+             evt.data?.error,
+             evtStopReason,
+             evtErrorKind,
++            evtErrorMetadata,
+             { agentId: sessionAgentId, controlUiVisible: isControlUiVisible },
+           );
+         }
+@@ -738,6 +768,7 @@
+     error?: unknown,
+     stopReason?: string,
+     errorKind?: ErrorKind,
++    errorMetadata?: Record<string, unknown>,
+     opts?: { agentId?: string; controlUiVisible?: boolean },
+   ) => {
+     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
+@@ -781,6 +812,7 @@
+       errorMessage: error ? formatForLog(error) : undefined,
+       message: buildChatErrorMessage(error),
+       ...(errorKind && { errorKind }),
++      ...(errorMetadata ?? {}),
+     };
+     sendChatPayload(sessionKey, payload, opts);
+   };

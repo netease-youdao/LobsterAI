@@ -1,9 +1,10 @@
 import React from 'react';
+
 import { i18nService } from '../../services/i18n';
-import SkillsManager from './SkillsManager';
-import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
+import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
+import SkillsManager from './SkillsManager';
 
 interface SkillsViewProps {
   isSidebarCollapsed?: boolean;
@@ -47,7 +48,7 @@ const SkillsView: React.FC<SkillsViewProps> = ({ isSidebarCollapsed, onToggleSid
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0 [scrollbar-gutter:stable]">
-        <div className="max-w-3xl mx-auto px-4 py-6">
+        <div className="mx-auto w-full max-w-[1120px] px-6 py-6">
           <SkillsManager readOnly={readOnly} onCreateByChat={onCreateSkillByChat} />
         </div>
       </div>

@@ -52,9 +52,20 @@ EXTRACT_DIR="$WORK_DIR/extract"
 mkdir -p "$PACK_DIR" "$EXTRACT_DIR"
 
 cleanup() {
+  if [[ "${OPENCLAW_CHANGELOG_PREPARED:-0}" == "1" && -d "${OPENCLAW_SRC:-}" ]]; then
+    (cd "$OPENCLAW_SRC" && node scripts/package-changelog.mjs restore >/dev/null 2>&1) || true
+  fi
   rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT
+
+restore_openclaw_package_changelog() {
+  if [[ "${OPENCLAW_CHANGELOG_PREPARED:-0}" != "1" ]]; then
+    return
+  fi
+  (cd "$OPENCLAW_SRC" && node scripts/package-changelog.mjs restore)
+  OPENCLAW_CHANGELOG_PREPARED=0
+}
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -116,9 +127,12 @@ try {
 READPH
     )
     if [[ "$BUILT_VERSION" == "$DESIRED_VERSION" && "$BUILT_PATCH_HASH" == "$PATCH_HASH" ]]; then
-      echo "[openclaw-runtime] Already built for $DESIRED_VERSION (target=$TARGET_ID, patchHash=${PATCH_HASH:0:12}…), skipping."
-      echo "[openclaw-runtime] Use OPENCLAW_FORCE_BUILD=1 to force rebuild."
-      exit 0
+      if [[ -d "$OUT_DIR/node_modules" && -f "$OUT_DIR/gateway.asar" && -f "$OUT_DIR/dist/control-ui/index.html" ]]; then
+        echo "[openclaw-runtime] Already built for $DESIRED_VERSION (target=$TARGET_ID, patchHash=${PATCH_HASH:0:12}…), skipping."
+        echo "[openclaw-runtime] Use OPENCLAW_FORCE_BUILD=1 to force rebuild."
+        exit 0
+      fi
+      echo "[openclaw-runtime] Existing build metadata matches, but runtime layout is incomplete; rebuilding."
     fi
     if [[ "$BUILT_VERSION" == "$DESIRED_VERSION" && "$BUILT_PATCH_HASH" != "$PATCH_HASH" ]]; then
       echo "[openclaw-runtime] Patches changed (was=${BUILT_PATCH_HASH:0:12}…, now=${PATCH_HASH:0:12}…), rebuilding."
@@ -132,16 +146,27 @@ pushd "$OPENCLAW_SRC" >/dev/null
 corepack enable >/dev/null 2>&1 || true
 pnpm install --frozen-lockfile
 pnpm build
-pnpm ui:build
 # Skip release:check — it validates the openclaw npm package for publishing and
 # is not relevant for LobsterAI embedded runtime builds.  On Windows it also
 # fails due to spawnSync/execFileSync not finding npm without shell:true, and
 # npm pack producing truncated tarballs.
 echo "[openclaw-runtime] Skipping release:check (not needed for embedded builds)"
 
+echo "[openclaw-runtime] Preparing OpenClaw package metadata"
+node --import tsx --input-type=module - <<'NODE'
+const { writePackageDistInventory } = await import('./src/infra/package-dist-inventory.ts');
+await writePackageDistInventory(process.cwd());
+NODE
+node scripts/test-built-bundled-channel-entry-smoke.mjs
+node scripts/package-changelog.mjs prepare
+OPENCLAW_CHANGELOG_PREPARED=1
+
 echo "[2/7] Packing npm tarball"
-# Skip prepack rebuild — build and ui:build already ran in step [1/7].
-OPENCLAW_PREPACK_PREPARED=1 npm pack --pack-destination "$PACK_DIR"
+# OpenClaw v2026.4.15 removed OPENCLAW_PREPACK_PREPARED support, so running
+# npm lifecycle scripts here would rebuild tsdown through prepack. The metadata
+# and smoke steps that still matter for the embedded tarball are run above.
+npm pack --ignore-scripts --pack-destination "$PACK_DIR"
+restore_openclaw_package_changelog
 TARBALL="$(ls -1t "$PACK_DIR"/openclaw-*.tgz | head -n 1)"
 if [[ -z "$TARBALL" || ! -f "$TARBALL" ]]; then
   echo "Failed to locate packed tarball in $PACK_DIR" >&2

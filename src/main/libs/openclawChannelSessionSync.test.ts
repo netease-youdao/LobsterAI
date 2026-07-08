@@ -1,9 +1,11 @@
 import { expect, test, vi } from 'vitest';
 
+import { DeliveryMode } from '../../scheduledTask/constants';
 import {
   buildChannelDisplayName,
   buildManagedSessionKey,
   DEFAULT_MANAGED_AGENT_ID,
+  isCronSessionKey,
   isManagedSessionKey,
   OpenClawChannelSessionSync,
   parseChannelSessionKey,
@@ -73,6 +75,220 @@ test('channel sync still recognizes real channel session keys', () => {
     conversationId: 'dm:ou_123',
   });
   expect(sync.isChannelSessionKey('agent:main:main')).toBe(true);
+});
+
+test('channel sync recognizes OpenClaw cron run-scoped session keys', () => {
+  const sync = createSync();
+
+  expect(isCronSessionKey('cron:daily-monitor')).toBe(true);
+  expect(isCronSessionKey('agent:ops:cron:daily-monitor')).toBe(true);
+  expect(isCronSessionKey('agent:ops:cron:daily-monitor:run:run-1')).toBe(true);
+  expect(sync.isChannelSessionKey('agent:ops:cron:daily-monitor:run:run-1')).toBe(true);
+  expect(isCronSessionKey('agent:ops:slack:cron:daily-monitor:run:run-1')).toBe(false);
+});
+
+test('channel sync reuses one local session for run-scoped cron session keys', () => {
+  let nextId = 0;
+  const createSession = vi.fn((
+    title: string,
+    cwd: string,
+    systemPrompt: string,
+    executionMode: 'local',
+    activeSkillIds: string[],
+    agentId: string,
+  ) => ({
+    id: `cron-session-${++nextId}`,
+    title,
+    claudeSessionId: null,
+    status: 'idle' as const,
+    pinned: false,
+    cwd,
+    systemPrompt,
+    modelOverride: '',
+    executionMode,
+    activeSkillIds,
+    agentId,
+    messages: [],
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  const getDefaultCwd = vi.fn((agentId?: string) => `/repo/${agentId || 'main'}`);
+  const resolveJobName = vi.fn((jobId: string) =>
+    jobId === 'daily-monitor' ? 'Daily Monitor' : null,
+  );
+  const sync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      getSession: () => null,
+      createSession,
+    },
+    imStore: {
+      getSessionMapping: () => null,
+      updateSessionLastActive: () => {},
+      deleteSessionMapping: () => {},
+      createSessionMapping: () => {},
+    },
+    getDefaultCwd,
+    resolveJobName,
+  });
+
+  expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor:run:run-1')).toBe('cron-session-1');
+  expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor:run:run-2')).toBe('cron-session-1');
+  expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor')).toBe('cron-session-1');
+  expect(sync.resolveSession('agent:ops:cron:daily-monitor:run:run-3')).toBe('cron-session-1');
+
+  expect(createSession).toHaveBeenCalledTimes(1);
+  expect(createSession).toHaveBeenCalledWith(
+    expect.stringContaining('Daily Monitor'),
+    '/repo/ops',
+    '',
+    'local',
+    [],
+    'ops',
+  );
+  expect(getDefaultCwd).toHaveBeenCalledWith('ops');
+  expect(resolveJobName).toHaveBeenCalledWith('daily-monitor');
+});
+
+test('channel sync resolves the conversation record for a delivery target', () => {
+  const knownSessions = new Set(['weixin-live', 'feishu-live']);
+  const mappings = [
+    {
+      imConversationId: '91fcaf18cb3a-im-bot:direct:o9cq809zec25-4jlkdw3ahtkpe9c@im.wechat',
+      platform: 'weixin',
+      coworkSessionId: 'weixin-live',
+      agentId: 'main',
+      openClawSessionKey:
+        'agent:main:openclaw-weixin:91fcaf18cb3a-im-bot:direct:o9cq809zec25-4jlkdw3ahtkpe9c@im.wechat',
+      createdAt: 1,
+      lastActiveAt: 3,
+    },
+    {
+      // Stale mapping from a replaced bot account without a session key.
+      imConversationId: 'direct:o9cq809zec25-4jlkdw3ahtkpe9c@im.wechat',
+      platform: 'weixin',
+      coworkSessionId: 'weixin-old',
+      agentId: 'main',
+      createdAt: 1,
+      lastActiveAt: 2,
+    },
+    {
+      imConversationId: 'd1d2f8d1:direct:ou_c167',
+      platform: 'feishu',
+      coworkSessionId: 'feishu-live',
+      agentId: 'main',
+      openClawSessionKey: 'agent:main:feishu:d1d2f8d1:direct:ou_c167',
+      createdAt: 1,
+      lastActiveAt: 1,
+    },
+  ];
+  const sync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      getSession: (id: string) => (knownSessions.has(id) ? { id } : null),
+      createSession: () => {
+        throw new Error('createSession should not be called in this test');
+      },
+    },
+    imStore: {
+      getSessionMapping: () => null,
+      updateSessionLastActive: () => {},
+      deleteSessionMapping: () => {},
+      createSessionMapping: () => {},
+      listSessionMappings: (platform: string) =>
+        mappings.filter(m => m.platform === platform),
+    },
+    getDefaultCwd: () => '/tmp',
+  });
+
+  // Delivery targets keep the channel-native casing; mappings are lowercase.
+  expect(
+    sync.resolveConversationByDeliveryTarget(
+      'openclaw-weixin',
+      'o9cq809ZEC25-4jLkdw3AHTKPE9c@im.wechat',
+      '91fcaf18cb3a-im-bot',
+    ),
+  ).toEqual({
+    sessionId: 'weixin-live',
+    sessionKey:
+      'agent:main:openclaw-weixin:91fcaf18cb3a-im-bot:direct:o9cq809zec25-4jlkdw3ahtkpe9c@im.wechat',
+  });
+
+  expect(sync.resolveConversationByDeliveryTarget('feishu', 'ou_c167')).toEqual({
+    sessionId: 'feishu-live',
+    sessionKey: 'agent:main:feishu:d1d2f8d1:direct:ou_c167',
+  });
+
+  // Unknown peers and unknown channels resolve to nothing.
+  expect(sync.resolveConversationByDeliveryTarget('feishu', 'ou_unknown')).toBe(null);
+  expect(sync.resolveConversationByDeliveryTarget('not-a-channel', 'ou_c167')).toBe(null);
+});
+
+test('channel sync suppresses local cron sessions for IM-announce jobs', () => {
+  let nextId = 0;
+  const createSession = vi.fn((
+    title: string,
+    cwd: string,
+    systemPrompt: string,
+    executionMode: 'local',
+    activeSkillIds: string[],
+    agentId: string,
+  ) => ({
+    id: `cron-session-${++nextId}`,
+    title,
+    claudeSessionId: null,
+    status: 'idle' as const,
+    pinned: false,
+    cwd,
+    systemPrompt,
+    modelOverride: '',
+    executionMode,
+    activeSkillIds,
+    agentId,
+    messages: [],
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  const sync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      getSession: () => null,
+      createSession,
+    },
+    imStore: {
+      getSessionMapping: () => null,
+      updateSessionLastActive: () => {},
+      deleteSessionMapping: () => {},
+      createSessionMapping: () => {},
+    },
+    getDefaultCwd: () => '/repo/main',
+    resolveJobName: () => 'WeChat brief',
+    resolveJobDelivery: (jobId: string) => {
+      if (jobId === 'wx-job') {
+        return { mode: DeliveryMode.Announce, channel: 'openclaw-weixin' };
+      }
+      if (jobId === 'last-job') {
+        return { mode: DeliveryMode.Announce, channel: 'last' };
+      }
+      if (jobId === 'plain-job') {
+        return { mode: DeliveryMode.None };
+      }
+      return null;
+    },
+  });
+
+  // IM-announce jobs deliver into the IM conversation record instead.
+  expect(sync.resolveOrCreateCronSession('agent:main:cron:wx-job:run:run-1')).toBe(null);
+  expect(createSession).not.toHaveBeenCalled();
+
+  // Non-IM announce targets and delivery-less jobs keep their local session.
+  expect(sync.resolveOrCreateCronSession('agent:main:cron:last-job:run:run-1')).toBe(
+    'cron-session-1',
+  );
+  expect(sync.resolveOrCreateCronSession('agent:main:cron:plain-job:run:run-1')).toBe(
+    'cron-session-2',
+  );
+  // Jobs unknown to the cache (e.g. before the first poll) also keep one.
+  expect(sync.resolveOrCreateCronSession('agent:main:cron:unknown-job:run:run-1')).toBe(
+    'cron-session-3',
+  );
 });
 
 test('channel sync treats stale agent ids as non-current after platform binding changes', () => {

@@ -7,13 +7,13 @@
  *
  * Extracted from McpServerManager for reuse by openclawConfigSync (native MCP migration).
  */
-import { spawnSync } from 'child_process';
 import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
 import type { McpServerRecord } from '../mcp/mcpStore';
 import { getElectronNodeRuntimePath } from './coworkUtil';
+import { findSpawnableSystemNodePath } from './nodeRuntime';
 
 export interface ResolvedStdioCommand {
   command: string;
@@ -97,22 +97,12 @@ export function findSystemNodePath(): string | null {
   if (_systemNodePath !== undefined) {
     return _systemNodePath || null;
   }
-  try {
-    const whichCmd = process.platform === 'win32' ? 'where' : 'which';
-    const result = spawnSync(whichCmd, ['node'], {
-      encoding: 'utf-8',
-      timeout: 5000,
-      windowsHide: true,
-    });
-    if (result.status === 0 && result.stdout) {
-      const resolved = result.stdout.trim().split(/\r?\n/)[0].trim();
-      if (resolved) {
-        _systemNodePath = resolved;
-        log('INFO', `System Node.js found: ${resolved}`);
-        return resolved;
-      }
-    }
-  } catch { /* ignore */ }
+  const resolved = findSpawnableSystemNodePath();
+  if (resolved) {
+    _systemNodePath = resolved;
+    log('INFO', `System Node.js found: ${resolved}`);
+    return resolved;
+  }
   _systemNodePath = false;
   log('INFO', 'System Node.js not found on PATH');
   return null;

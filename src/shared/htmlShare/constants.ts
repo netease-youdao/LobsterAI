@@ -17,6 +17,11 @@ export const HtmlShareSourceType = {
   HtmlFile: 'html_file',
   ImageFile: 'image_file',
   SvgFile: 'svg_file',
+  DocumentFile: 'document_file',
+  MarkdownFile: 'markdown_file',
+  MermaidFile: 'mermaid_file',
+  NodeServiceDeployment: 'node_service_deployment',
+  StaticServiceDeployment: 'static_service_deployment',
 } as const;
 
 export type HtmlShareSourceType = (typeof HtmlShareSourceType)[keyof typeof HtmlShareSourceType];
@@ -38,6 +43,17 @@ export type HtmlShareStatus = (typeof HtmlShareStatus)[keyof typeof HtmlShareSta
 export type HtmlShareConfigurableStatus =
   | typeof HtmlShareStatus.Live
   | typeof HtmlShareStatus.Disabled;
+
+export const HtmlShareDisabledSource = {
+  User: 'user',
+  Admin: 'admin',
+  Moderation: 'moderation',
+  ActiveLimit: 'active_limit',
+  System: 'system',
+} as const;
+
+export type HtmlShareDisabledSource =
+  (typeof HtmlShareDisabledSource)[keyof typeof HtmlShareDisabledSource];
 
 export const HtmlShareErrorCode = {
   ReopenUnavailable: 41304,

@@ -5,6 +5,12 @@ import { i18nService } from '../../services/i18n';
 import { resolveLocalizedText } from '../../services/skill';
 import { RootState } from '../../store';
 import { toggleActiveKit } from '../../store/slices/kitSlice';
+import {
+  ACTIVE_CONTEXT_BADGE_BUTTON_CLASS,
+  ACTIVE_CONTEXT_BADGE_ICON_CLASS,
+  ACTIVE_CONTEXT_BADGE_ICON_WRAP_CLASS,
+  ACTIVE_CONTEXT_BADGE_REMOVE_ICON_CLASS,
+} from '../common/activeContextBadgeStyles';
 import SidebarKitsIcon from '../icons/SidebarKitsIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 
@@ -31,12 +37,12 @@ const ActiveKitBadge: React.FC = () => {
           type="button"
           key={kit.id}
           onClick={(e) => handleRemoveKit(e, kit.id)}
-          className="group inline-flex h-7 max-w-[240px] items-center gap-1.5 rounded-md bg-primary-muted px-2.5 text-[13px] font-normal leading-none text-foreground transition-all hover:bg-primary/15 hover:ring-1 hover:ring-primary/30"
+          className={ACTIVE_CONTEXT_BADGE_BUTTON_CLASS}
           title={i18nService.t('clearKit')}
         >
-          <span className="relative flex h-4 w-4 shrink-0 items-center justify-center rounded-sm transition-colors group-hover:bg-primary/15">
-            <SidebarKitsIcon className="h-3.5 w-3.5 text-primary transition-opacity group-hover:opacity-0" />
-            <XMarkIcon className="absolute h-3 w-3 text-primary opacity-0 transition-opacity group-hover:opacity-100" />
+          <span className={ACTIVE_CONTEXT_BADGE_ICON_WRAP_CLASS}>
+            <SidebarKitsIcon className={ACTIVE_CONTEXT_BADGE_ICON_CLASS} />
+            <XMarkIcon className={ACTIVE_CONTEXT_BADGE_REMOVE_ICON_CLASS} />
           </span>
           <span className="min-w-0 truncate">
             {resolveLocalizedText(kit.name)}

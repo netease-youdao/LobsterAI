@@ -29,6 +29,8 @@ pre {
   padding: 1em !important;
   margin: 1em 0 !important;
   overflow-x: auto !important;
+  font-size: var(--lobster-code-font-size);
+  font-weight: 400;
 }
 
 /* CodeMirror: reset global pre/code overrides inside CM editor */
@@ -45,6 +47,8 @@ pre {
 
 code {
   font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, 'Courier New', monospace;
+  font-size: var(--lobster-code-font-size);
+  font-weight: 400;
 }
 
 /* Improve table styles */
@@ -80,15 +84,89 @@ blockquote {
   contain-intrinsic-size: 500px;
 }
 
+.artifact-preview-card-group {
+  background-color: #ffffff;
+}
+
+.dark .artifact-preview-card-group {
+  background-color: color-mix(in srgb, var(--lobster-surface) 55%, var(--lobster-background));
+}
+
+.artifact-preview-card-row {
+  background-color: transparent;
+}
+
+.artifact-preview-card-row:hover {
+  background-color: #fbfbfb;
+}
+
+.dark .artifact-preview-card-row:hover {
+  background-color: rgba(255, 255, 255, 0.035);
+}
+
 :root {
+  --lobster-ui-font-size: 14px;
+  --lobster-code-font-size: 12px;
+  /* 445 mirrors Codex/VS Code body weight (--vscode-font-weight: 445): between
+     Regular and Medium on variable system fonts (SF Pro, modern PingFang SC);
+     falls back to the nearest static face (e.g. 400 for Microsoft YaHei). */
+  --lobster-ui-font-weight-normal: 445;
+  --lobster-ui-font-weight-medium: 500;
+  --lobster-text-xs: 12px;
+  --lobster-text-sm: 14px;
+  --lobster-text-base: 16px;
+  --lobster-text-lg: 18px;
+  --lobster-text-xl: 20px;
+  --lobster-text-2xl: 24px;
+  --lobster-text-3xl: 30px;
+  --lobster-text-4xl: 36px;
+  --lobster-text-markdown: 15px;
+  --lobster-text-markdownH2: 17px;
+  --lobster-text-markdownH4: 15px;
+  --lobster-text-promptLarge: 15px;
+  --lobster-text-sidebarCompact: 13px;
+  --lobster-leading-xs: 16px;
+  --lobster-leading-sm: 20px;
+  --lobster-leading-base: 24px;
+  --lobster-leading-lg: 28px;
+  --lobster-leading-xl: 28px;
+  --lobster-leading-2xl: 32px;
+  --lobster-leading-3xl: 36px;
+  --lobster-leading-4xl: 40px;
+  --lobster-leading-markdown: 26px;
+  --lobster-leading-markdownCompact: 23px;
+  --lobster-leading-prompt: 22px;
+  --lobster-leading-promptLarge: 23px;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Helvetica Neue', 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.6;
-  font-weight: 400;
+  font-weight: var(--lobster-ui-font-weight-normal);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+pre,
+kbd,
+samp {
+  font-weight: 400;
+}
+
+.text-code {
+  font-size: var(--lobster-code-font-size);
+  line-height: calc(var(--lobster-code-font-size) + 8px);
+  font-weight: 400;
+}
+
+.text-markdown-body {
+  font-size: var(--lobster-text-markdown);
+  line-height: var(--lobster-leading-markdown);
+}
+
+.text-markdown-body-compact {
+  font-size: var(--lobster-text-markdown);
+  line-height: var(--lobster-leading-markdownCompact);
 }
 
 /* Theme colors are driven by CSS variables from themes.css.
@@ -595,6 +673,22 @@ select::-ms-expand {
 @keyframes streaming-slide {
   0% { left: -40%; }
   100% { left: 100%; }
+}
+
+.voice-input-wave-bar {
+  height: 7px;
+  animation: voice-input-wave 850ms ease-in-out infinite;
+}
+
+@keyframes voice-input-wave {
+  0%, 100% {
+    height: 5px;
+    opacity: 0.65;
+  }
+  50% {
+    height: 17px;
+    opacity: 1;
+  }
 }
 
 /* Respect reduced-motion preference */

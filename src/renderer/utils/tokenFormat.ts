@@ -1,5 +1,9 @@
+const isValidDate = (date: Date): boolean => Number.isFinite(date.getTime());
+
 export function formatMessageTime(timestamp: number): string {
   const date = new Date(timestamp);
+  if (!isValidDate(date)) return '';
+
   const now = new Date();
   const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
@@ -18,6 +22,8 @@ export function formatMessageTime(timestamp: number): string {
 
 export function formatMessageDateTime(timestamp: number): string {
   const date = new Date(timestamp);
+  if (!isValidDate(date)) return '';
+
   const pad = (value: number): string => String(value).padStart(2, '0');
 
   return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;

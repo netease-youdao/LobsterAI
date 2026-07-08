@@ -44,14 +44,18 @@ export function resolveOpenClawModelRef<T extends ModelRefInput>(
     const providerId = normalizedRef.slice(0, slashIndex);
     const modelId = normalizedRef.slice(slashIndex + 1);
 
-    // OpenAI → OpenAICodex provider migration compatibility
-    if (providerId === OpenClawProviderId.OpenAI) {
-      const codexMatch = availableModels.find((model) => (
+    // OpenAI OAuth provider migration compatibility between older
+    // `openai-codex/*` refs and the current `openai/*` refs.
+    if (providerId === OpenClawProviderId.OpenAI || providerId === OpenClawProviderId.OpenAICodex) {
+      const migratedProviderId = providerId === OpenClawProviderId.OpenAICodex
+        ? OpenClawProviderId.OpenAI
+        : OpenClawProviderId.OpenAICodex;
+      const migratedMatch = availableModels.find((model) => (
         model.id === modelId
         && model.providerKey === ProviderName.OpenAI
-        && resolveModelOpenClawProviderId(model) === OpenClawProviderId.OpenAICodex
+        && resolveModelOpenClawProviderId(model) === migratedProviderId
       )) ?? null;
-      if (codexMatch) return codexMatch;
+      if (migratedMatch) return migratedMatch;
     }
 
     // Generic provider fallback: match by model ID if unique

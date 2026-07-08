@@ -1,237 +1,403 @@
 # AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file gives coding agents the current working model for this repository.
+Treat source code and `package.json` as the authority when something here
+appears stale.
 
-## Build and Development Commands
+## Instruction Scope
+
+This root `AGENTS.md` is repository-level guidance for LobsterAI. Codex may also
+load more specific `AGENTS.md` or `AGENTS.override.md` files from subdirectories
+when the current working directory is inside those subtrees. More specific
+instructions override broader ones.
+
+Do not treat generated runtime workspaces, bundled OpenClaw output, or old
+Claude memory notes as authoritative project instructions. Use them only as
+historical context and verify against the current source.
+
+## Project Snapshot
+
+LobsterAI is an Electron + React desktop application. Its core user-facing
+product is a desktop agent experience that can work with local projects,
+files, browser previews, IM channels, skills, MCP servers, scheduled tasks,
+and rich artifacts.
+
+### Cowork vs OpenClaw
+
+`Cowork` is LobsterAI's product/session layer. The name is historical: it
+started as a Claude Code-like in-house coding assistant, but in the current
+codebase it means the LobsterAI layer that owns sessions, messages,
+permissions, UI state, local persistence, context usage, artifacts, and IPC
+contracts.
+
+`OpenClaw` is the only agent runtime/gateway. `CoworkAgentEngine` is currently
+`'openclaw'` only. Legacy names such as `cowork:*` IPC channels,
+`claude_session_id`, and some "cowork" filenames are compatibility/history
+names, not evidence of another active runtime.
+
+Do not reintroduce or design around `yd_cowork`; it has been removed as a
+runtime. If old docs mention it as switchable, verify against current source
+before acting.
+
+## Commands
 
 ```bash
-# Development - starts Vite dev server (port 5175) + Electron app with hot reload
-npm run electron:dev
-
-# Development with OpenClaw engine (clones/builds OpenClaw on first run)
+# First development run: build/sync the pinned OpenClaw runtime, then start app
 npm run electron:dev:openclaw
 
-# Build production bundle (TypeScript + Vite)
+# Daily development after runtime exists: Vite on port 5175 + Electron
+npm run electron:dev
+
+# Production renderer bundle
 npm run build
 
-# Lint with ESLint
-npm run lint
-
-# Run memory extractor tests (Node.js built-in test runner)
-npm run test:memory
-
-# Compile Electron main process only
+# Electron main/preload TypeScript build
 npm run compile:electron
 
-# Package for distribution (platform-specific)
-npm run dist:mac        # macOS (.dmg)
-npm run dist:win        # Windows (.exe)
-npm run dist:linux      # Linux (.AppImage)
+# Full ESLint across src; may fail on existing legacy debt
+npm run lint
 
-# Build OpenClaw runtime manually
-npm run openclaw:runtime:host   # current platform
+# CI-equivalent lint for touched TypeScript files
+npx eslint --ext ts,tsx --report-unused-disable-directives --max-warnings 0 <files>
+
+# Official test entry used by GitHub CI
+npm test
+
+# Filter Vitest tests
+npm test -- logger
+npm test -- cowork
+
+# Package for distribution
+npm run dist:mac
+npm run dist:win
+npm run dist:linux
+
+# Build current-platform OpenClaw runtime manually
+npm run openclaw:runtime:host
 ```
 
-**Requirements**: Node.js >=24 <25. Windows builds require PortableGit (see README.md for setup).
+Requirements:
+- Node.js `>=24.15.0 <25`.
+- Windows builds may need bundled/portable Git setup: `npm run setup:mingit`.
+- Windows packaging also sets up the Python runtime via
+  `npm run setup:python-runtime`.
 
-**OpenClaw env vars**: `OPENCLAW_SRC` (default `../openclaw`), `OPENCLAW_FORCE_BUILD=1` (force rebuild), `OPENCLAW_SKIP_ENSURE=1` (skip version checkout).
+OpenClaw environment variables:
+- `OPENCLAW_SRC`: override the OpenClaw source checkout path. Default is
+  `../openclaw` relative to this repo.
+- `OPENCLAW_SKIP_ENSURE=1`: skip automatic OpenClaw tag checkout. Use this only
+  when intentionally developing OpenClaw locally.
+- `OPENCLAW_FORCE_BUILD=1`: force runtime rebuild where supported by scripts.
 
-## Architecture Overview
+## Testing
 
-LobsterAI is an Electron + React desktop application with two primary modes:
-1. **Cowork Mode** - AI-assisted coding sessions powered by OpenClaw as the primary agent engine
-2. **Artifacts System** - Rich preview of code outputs (HTML, SVG, React, Mermaid)
+The current official test path is Vitest:
+- `package.json` defines `npm test` as `vitest run`.
+- `vitest.config.ts` includes `src/**/*.test.ts` and `tests/**/*.test.ts`.
+- GitHub CI runs `npm test`.
 
-Uses strict process isolation with IPC communication.
+Prefer new tests as `.test.ts` files colocated with the source they cover.
+Import from Vitest:
 
-### Authentication Flow
-
-1. **登录：** 打开系统浏览器 → Portal 登录页 → URS 登录成功 → deep link `lobsterai://auth/callback?code=<authCode>`
-2. **换取令牌：** `POST /api/auth/exchange` 消费一次性 authCode → 返回 `accessToken`(2h) + `refreshToken`(30d)
-3. **持久化：** SQLite kv store `auth_tokens` 存储双 token，应用重启后自动恢复登录态
-4. **请求认证：** `fetchWithAuth()` 在每个 API 请求附加 `Authorization: Bearer <accessToken>`
-5. **被动刷新：** 收到 HTTP 401 → 使用 refreshToken 调用 `POST /api/auth/refresh` → 获取新 accessToken → 重试原请求
-6. **主动刷新：** 定期检查 accessToken 距 exp < 5 分钟 → 后台静默刷新，避免请求失败
-7. **滚动续期：** 每次 refresh 签发新 refreshToken（新 30 天有效期），连续使用不掉线
-8. **退出条件：** 连续 30 天不使用（refreshToken 过期）→ 清除本地 token → 用户需重新登录
-
-**关键文件：**
-- Token 存储与请求：`src/renderer/services/api.ts`（`fetchWithAuth()`、token 管理）
-- 登录流程：`src/main/main.ts`（deep link 处理 `lobsterai://` 协议）
-- 持久化：`src/main/sqliteStore.ts`（kv 表存储 `auth_tokens`）
-
-### Process Model
-
-**Main Process** (`src/main/main.ts`):
-- Window lifecycle management
-- SQLite storage via `better-sqlite3` (`src/main/sqliteStore.ts`)
-- Agent engine routing (`src/main/libs/agentEngine/coworkEngineRouter.ts`) - dispatches to `openclawRuntimeAdapter.ts` (OpenClaw)
-- IM gateways (`src/main/im/`) - WeChat, WeCom, DingTalk, Feishu, QQ, Telegram, Discord, NetEase IM, NetEase Bee, POPO
-- Skill management (`src/main/skillManager.ts`)
-- IPC handlers for store, cowork, and API operations (40+ channels)
-- Security: context isolation enabled, node integration disabled, sandbox enabled
-
-**Preload Script** (`src/main/preload.ts`):
-- Exposes `window.electron` API via `contextBridge`
-- Includes `cowork` namespace for session management and streaming events
-
-**Renderer Process** (React in `src/renderer/`):
-- All UI and business logic
-- Communicates with main process exclusively through IPC
-
-### Key Directories
-
-```
-src/main/
-├── main.ts              # Entry point, IPC handlers
-├── sqliteStore.ts       # SQLite database (kv + cowork tables)
-├── coworkStore.ts       # Cowork session/message CRUD operations
-├── skillManager.ts      # Skill loading and management
-├── im/                  # IM gateway integrations (WeChat/WeCom/DingTalk/Feishu/QQ/Telegram/Discord/POPO)
-└── libs/
-    ├── agentEngine/
-    │   ├── coworkEngineRouter.ts    # Routes to OpenClaw runtime
-    │   └── openclawRuntimeAdapter.ts # OpenClaw gateway adapter
-    ├── openclawEngineManager.ts # OpenClaw runtime lifecycle (install/start/status)
-    ├── openclawConfigSync.ts    # Syncs cowork config → OpenClaw config files
-
-src/renderer/
-├── types/cowork.ts      # Cowork type definitions
-├── store/slices/
-│   ├── coworkSlice.ts   # Cowork sessions and streaming state
-│   └── artifactSlice.ts # Artifacts state
-├── services/
-│   ├── cowork.ts        # Cowork service (IPC wrapper, Redux integration)
-│   ├── api.ts           # LLM API with SSE streaming
-│   └── artifactParser.ts # Artifact detection and parsing
-├── components/
-│   ├── cowork/          # Cowork UI components
-│   │   ├── CoworkView.tsx          # Main cowork interface
-│   │   ├── CoworkSessionList.tsx   # Session sidebar
-│   │   ├── CoworkSessionDetail.tsx # Message display
-│   │   └── CoworkPermissionModal.tsx # Tool permission UI
-│   └── artifacts/       # Artifact renderers
-
-SKILLs/                  # Custom skill definitions for cowork sessions
-├── skills.config.json   # Skill enable/order configuration
-├── docx/                # Word document generation skill
-├── xlsx/                # Excel skill
-├── pptx/                # PowerPoint skill
-└── ...
+```ts
+import { describe, expect, test } from 'vitest';
 ```
 
-### Data Flow
+There are legacy `tests/*.test.mjs` files that use Node's built-in
+`node:test`. They are not part of the default `npm test` run. Only run them
+explicitly, e.g. `node --test tests/<file>.test.mjs`, when touching that
+legacy coverage.
 
-1. **Initialization**: `src/renderer/App.tsx` → `coworkService.init()` → loads config/sessions via IPC → sets up stream listeners
-2. **Cowork Session**: User sends prompt → `coworkService.startSession()` → IPC to main → `CoworkEngineRouter` → OpenClaw gateway (primary) → streaming events back to renderer via IPC → Redux updates
-3. **Tool Permissions**: Agent requests tool use → `CoworkEngineRouter` emits `permissionRequest` → UI shows `CoworkPermissionModal` → user approves/denies → result sent back to engine
-4. **Persistence**: Cowork sessions stored in SQLite (`cowork_sessions`, `cowork_messages` tables)
+Avoid importing Electron-only APIs such as `electron-log` directly in tests.
+Inline or extract pure logic instead.
 
-### Cowork System
+For UI/Electron behavior, manually validate with `npm run electron:dev` or
+`npm run electron:dev:openclaw` when the OpenClaw runtime is involved.
 
-The Cowork feature provides AI-assisted coding sessions:
+## Quality Gates
 
-**Execution Modes** (`CoworkExecutionMode`):
-- `auto` - Automatically choose based on context
-- `local` - Run tools directly on the local machine
+GitHub CI lints changed TypeScript files only. The repository has existing
+legacy lint debt; do not attempt a broad lint cleanup unless the user explicitly
+asks for it.
 
-**Agent Engine** (configured via `agentEngine` in cowork config):
-- `openclaw` - OpenClaw gateway (`openclawRuntimeAdapter.ts`); requires the bundled OpenClaw runtime to be running. Engine lifecycle managed by `OpenClawEngineManager` with states: `not_installed → ready → starting → running | error`
+When adding or modifying TypeScript/TSX files, leave every touched file free of
+ESLint errors and warnings under the same rules CI uses:
 
-The `CoworkEngineRouter` exposes stream events to the renderer, which is engine-agnostic. Engine-specific IPC: `openclaw:engine:*` channels manage runtime lifecycle separately from `cowork:*` session channels.
+```bash
+npx eslint --ext ts,tsx --report-unused-disable-directives --max-warnings 0 <files>
+```
 
-**Memory System**: File-based persistent memory stored in the OpenClaw working directory:
-- `MEMORY.md` - Durable facts, preferences, and decisions; loaded automatically at every session start.
-- `memory/YYYY-MM-DD.md` - Daily notes for recent context.
-- `USER.md` / `SOUL.md` - User profile and agent personality files read at session startup.
-- Writes happen via the agent's `write` tool when the user issues an explicit "remember" instruction or the agent self-records important findings. No background extraction or confidence scoring.
-- GUI in Settings panel allows manual add/edit/delete of `MEMORY.md` entries.
+If full `npm run lint` fails because of unrelated legacy files, report that
+clearly and include the changed-file lint result. Do not use broad
+`eslint-disable` comments to bypass new issues; use narrow disables only when
+there is a specific technical reason.
 
-**Stream Events** (IPC from main to renderer):
-- `message` - New message added to session
-- `messageUpdate` - Streaming content update for existing message
-- `permissionRequest` - Tool needs user approval
-- `complete` - Session execution finished
-- `error` - Session encountered an error
+Verification expectations:
+- Docs-only changes: no test run is required; state that tests were not run
+  because only documentation changed.
+- Renderer/UI changes: run relevant Vitest coverage when available and manually
+  validate with `npm run electron:dev` for behavior that tests cannot cover.
+- Main process, IPC, runtime, or preload changes: run targeted tests plus
+  `npm run compile:electron` or `npm run build` as appropriate.
+- OpenClaw integration changes: verify runtime startup, config sync, gateway
+  behavior, and relevant logs.
+- Before handing off, review the diff for unrelated churn, risky broad
+  refactors, generated files, and user-visible string/i18n mistakes.
 
-**Key IPC Channels**:
-- `cowork:startSession`, `cowork:continueSession`, `cowork:stopSession`
-- `cowork:getSession`, `cowork:listSessions`, `cowork:deleteSession`
-- `cowork:respondToPermission`, `cowork:getConfig`, `cowork:setConfig`
+## OpenClaw Integration
 
-### Key Patterns
+The pinned OpenClaw version and plugin list live in `package.json` under
+`openclaw`. The current runtime is built under `vendor/openclaw-runtime/`;
+`vendor/openclaw-runtime/current` points to the platform runtime. Packaged apps
+bundle the runtime under `Resources/cfmind`.
 
-- **Streaming responses**: `apiService.chat()` uses SSE with `onProgress` callback for real-time message updates
-- **Cowork streaming**: Uses IPC event listeners (`onStreamMessage`, `onStreamMessageUpdate`, etc.) for bidirectional communication
-- **Markdown rendering**: `react-markdown` with `remark-gfm`, `remark-math`, `rehype-katex` for GitHub markdown and LaTeX
-- **Theme system**: Class-based Tailwind dark mode, applies `dark` class to `<html>` element
-- **i18n**: Simple key-value translation in `services/i18n.ts`, supports Chinese (default) and English. Language auto-detected from system locale on first run.
-- **Path alias**: `@` maps to `src/renderer/` in Vite config for imports.
-- **Skills**: Custom skill definitions in `SKILLs/` directory, configured via `skills.config.json`
+Main integration points:
+- `scripts/ensure-openclaw-version.cjs`: clone/fetch/checkout the pinned
+  OpenClaw tag.
+- `scripts/apply-openclaw-patches.cjs`: apply version-scoped patches.
+- `scripts/run-build-openclaw-runtime.cjs`: build a platform runtime.
+- `scripts/sync-openclaw-runtime-current.cjs`: point `current` at the built
+  runtime.
+- `scripts/bundle-openclaw-gateway.cjs`: create the gateway bundle.
+- `scripts/ensure-openclaw-plugins.cjs`: install third-party OpenClaw plugins.
+- `scripts/sync-local-openclaw-extensions.cjs`: sync local extensions.
+- `scripts/precompile-openclaw-extensions.cjs`: precompile extensions.
+- `scripts/install-openclaw-channel-deps.cjs`: install channel dependencies.
+- `scripts/prune-openclaw-runtime.cjs`: remove unused runtime/plugin content.
 
-### Artifacts System
+### Patch Policy
 
-The Artifacts feature provides rich preview of code outputs similar to Claude's artifacts:
+When changing OpenClaw-related behavior, first look for a LobsterAI-side
+integration point: adapter code, config sync, plugin configuration, runtime
+packaging, UI handling, or local data-layer handling. Prefer changing
+LobsterAI when the behavior is product-specific or can be expressed cleanly at
+the integration boundary.
 
-**Supported Types**:
-- `html` - Full HTML pages rendered in sandboxed iframe
-- `svg` - SVG graphics with DOMPurify sanitization and zoom controls
-- `mermaid` - Flowcharts, sequence diagrams, class diagrams via Mermaid.js
-- `react` - React/JSX components compiled with Babel in isolated iframe
-- `code` - Syntax highlighted code with line numbers
+Use version-scoped OpenClaw patches only when the required behavior is inside
+OpenClaw and there is no clean LobsterAI-side hook. Do not avoid a patch by
+adding brittle or contorted LobsterAI workarounds.
 
-**Detection Methods**:
-1. Explicit markers: ` ```artifact:html title="My Page" `
-2. Heuristic detection: Analyzes code block language and content patterns
+Patches live under `scripts/patches/<openclaw.version>/` and are applied by
+`npm run openclaw:patch`. Do not leave manual edits in the sibling OpenClaw
+source tree as the final state; convert them into a small, documented patch
+tied to the pinned version.
 
-**UI Components**:
-- Right-side panel (300-800px resizable width)
-- Header with type icon, title, copy/download/close buttons
-- Artifact badges in messages to switch between artifacts
+## Architecture Map
 
-**Security**:
-- HTML: `sandbox="allow-scripts"` with no `allow-same-origin`
-- SVG: DOMPurify removes all script content
-- React: Completely isolated iframe with no network access
-- Mermaid: `securityLevel: 'strict'` configuration
+### Main Process
 
-### Configuration
+`src/main/main.ts` wires Electron lifecycle, IPC, auth, logging, OpenClaw
+startup, Cowork routing, IM gateways, scheduled tasks, skills, MCP, updates,
+artifact preview/share handlers, and shell/dialog bridges.
 
-- App config stored in SQLite `kv` table
-- Cowork config stored in `cowork_config` table (workingDirectory, systemPrompt, executionMode, **agentEngine**)
-- Cowork sessions and messages stored in `cowork_sessions` and `cowork_messages` tables
-- Scheduled task metadata stored in `scheduled_task_meta` table (origin and binding info); task definitions are managed by OpenClaw
-- Database file: `lobsterai.sqlite` in user data directory
-- OpenClaw pinned version declared in `package.json` under `"openclaw": { "version": "...", "repo": "..." }`; update the version field and re-run to upgrade
+Key modules:
+- `src/main/libs/openclawEngineManager.ts`: manages the bundled OpenClaw
+  gateway process, state directory, config path, ports, tokens, gateway logs,
+  restart/repair behavior, and runtime readiness.
+- `src/main/libs/openclawConfigSync.ts`: renders LobsterAI state into
+  OpenClaw config: providers/models, agents, IM bindings, plugins, MCP servers,
+  skills extra dirs, sandbox mode, and managed workspace `AGENTS.md` sections.
+- `src/main/libs/agentEngine/openclawRuntimeAdapter.ts`: translates between
+  OpenClaw gateway events and Cowork stream events.
+- `src/main/libs/agentEngine/coworkEngineRouter.ts`: Cowork-facing runtime
+  router. It currently routes to OpenClaw only.
+- `src/main/coworkStore.ts`: Cowork sessions, messages, config, agents, memory
+  metadata, and related CRUD over SQLite.
+- `src/main/sqliteStore.ts`: database initialization and migrations.
+- `src/main/agentManager.ts`: agent CRUD and preset installation wrapper.
+- `src/main/skillManager.ts`: bundled/user skill sync, install/upgrade,
+  security scan, enable state, and routing prompt support.
+- `src/main/im/`: IM gateway config, status, delivery, session mapping, media,
+  pairing, and platform-specific handling.
+- `src/scheduledTask/`: scheduled task model, cron gateway service, policies,
+  migrations, and local metadata.
+- `src/main/mcp/`: MCP server storage, runtime, marketplace, and launch
+  resolution.
 
-### TypeScript Configuration
+Security model:
+- Renderer uses `src/main/preload.ts` and `contextBridge`.
+- `contextIsolation` is enabled, `nodeIntegration` is disabled, and sandboxing
+  is enabled for renderer windows.
+- Renderer-to-main communication must go through IPC bridge APIs.
 
-- `tsconfig.json`: React/renderer code (ES2020, ESNext modules)
-- `electron-tsconfig.json`: Electron main process (CommonJS output to `dist-electron/`)
+### Renderer
 
-### Key Dependencies
+The renderer is React + Redux Toolkit + Tailwind.
 
-- OpenClaw (bundled runtime under `Resources/cfmind`) - Primary agent engine for cowork sessions
-- `better-sqlite3` - SQLite database for persistence
-- `react-markdown`, `remark-gfm`, `rehype-katex` - Markdown rendering with math support
-- `mermaid` - Diagram rendering
-- `dompurify` - SVG/HTML sanitization
+Main areas:
+- `src/renderer/App.tsx`: top-level app state and view routing.
+- `src/renderer/services/cowork.ts`: Cowork IPC wrapper, Redux integration, and
+  stream listener orchestration.
+- `src/renderer/store/slices/coworkSlice.ts`: Cowork session and streaming
+  state.
+- `src/renderer/store/slices/agentSlice.ts`: agent state.
+- `src/renderer/store/slices/artifactSlice.ts`: artifact state.
+- `src/renderer/components/cowork/`: main Cowork UI, prompt input, session
+  detail, permissions, thinking/tool display, context usage, forks, media, and
+  voice input.
+- `src/renderer/components/agent/`: agent creation and settings UI.
+- `src/renderer/components/agentSidebar/`: agent/session tree and subagent
+  session UI.
+- `src/renderer/components/artifacts/`: artifact panel, badges, preview cards,
+  renderers, and file directory view.
+- `src/renderer/components/scheduledTasks/`: scheduled task list, form, detail,
+  run history, and template UI.
+- `src/renderer/components/im/`: IM platform settings and multi-instance UI.
+- `src/renderer/components/skills/`: skill management UI.
+- `src/renderer/components/mcp/`: MCP management UI.
+- `src/renderer/services/i18n.ts`: renderer i18n dictionary and `t()` helper.
 
-## Coding Style & Naming Conventions
+### Shared Code
 
-- Use TypeScript, functional React components, and Hooks; keep logic in `src/renderer/services/` when it is not UI-specific.
-- Match existing formatting: 2-space indentation, single quotes, and semicolons.
-- Naming: `PascalCase` for components (e.g., `Chat.tsx`), `camelCase` for functions/vars, and `*Slice.ts` for Redux slices.
-- Tailwind CSS is the primary styling approach; prefer utility classes over bespoke CSS.
+Use `src/shared/*/constants.ts` for cross-process constants such as IPC channel
+names, status values, discriminants, protocols, and stable string IDs. Prefer
+shared constants over duplicated string literals.
 
-## String Literal Constants
+Useful shared areas:
+- `src/shared/agent/`
+- `src/shared/auth/`
+- `src/shared/cowork/`
+- `src/shared/artifactPreview/`
+- `src/shared/mcp/`
+- `src/shared/providers/`
+- `src/shared/platform/`
+- `src/scheduledTask/constants.ts`
 
-**Never use bare string literals** for values that act as discriminants, status codes, IPC channel names, mode selectors, or any string compared/switched against in multiple places. Instead, define a centralized `as const` object and derive the type from it.
+## Data Model
 
-### Pattern
+SQLite lives in Electron `app.getPath('userData')` as `lobsterai.sqlite`.
 
-```typescript
-// In constants.ts (one per module, e.g. src/scheduledTask/constants.ts)
+Important tables:
+- `kv`: app-wide JSON values, including auth/config flags.
+- `cowork_sessions`: local Cowork session records. Some column names are
+  historical, e.g. `claude_session_id`.
+- `cowork_messages`: local session messages.
+- `cowork_session_capsules`: continuity/context capsules for sessions.
+- `cowork_config`: Cowork settings such as working directory, execution mode,
+  agent engine, memory, dreaming, embedding, and related options.
+- `agents`: custom/preset agents, model, identity, skill IDs, per-agent working
+  directory, enable state, and pinning.
+- `user_memories`, `user_memory_sources`: legacy/local memory tracking used for
+  migration and source metadata.
+- `im_config`: IM platform configuration.
+- `im_session_mappings`: IM conversation to Cowork/OpenClaw session mapping,
+  including agent ID and OpenClaw session key.
+- `mcp_servers`, `mcp_launch_resolutions`: MCP server configuration and resolved
+  launch metadata.
+- `user_plugins`: user-installed OpenClaw plugins and enabled/config state.
+- `subagent_runs`, `subagent_messages`: subagent run tracking and fetched
+  conversation history.
+- `scheduled_task_meta`: local origin/binding metadata for OpenClaw cron jobs.
+  Actual scheduled task definitions and run history are managed through
+  OpenClaw cron APIs/state.
+
+Migrations are mostly ad-hoc `PRAGMA table_info()` checks in
+`src/main/sqliteStore.ts` and feature-specific migration modules.
+
+## OpenClaw State, Workspaces, And Memory
+
+OpenClaw runtime state is under Electron `userData/openclaw`.
+
+Important paths:
+- `%APPDATA%/LobsterAI/openclaw/state/openclaw.json` on Windows: generated
+  OpenClaw config.
+- `%APPDATA%/LobsterAI/openclaw/state/workspace-main`: main agent workspace.
+- `%APPDATA%/LobsterAI/openclaw/state/workspace-{agentId}`: non-main agent
+  workspaces.
+
+The main workspace path is resolved by `getMainAgentWorkspacePath()`.
+Non-main agent workspaces follow OpenClaw's state-dir fallback and are synced by
+`openclawConfigSync.ts`.
+
+Workspace files include:
+- `AGENTS.md`: OpenClaw workspace instructions with a LobsterAI-managed section.
+- `MEMORY.md`: durable memory facts.
+- `memory/YYYY-MM-DD.md`: daily notes.
+- `USER.md`: user profile/context.
+- `SOUL.md`: agent/system prompt.
+- `IDENTITY.md`: agent identity.
+
+The user-visible working directory is the session cwd. Do not confuse it with
+the OpenClaw agent workspace.
+
+## Logs
+
+Main process logging uses `electron-log` via `src/main/logger.ts`, which
+intercepts `console.*`.
+
+Main logs:
+- Windows: `%APPDATA%/LobsterAI/logs/main-YYYY-MM-DD.log`
+- macOS: `~/Library/Logs/LobsterAI/main-YYYY-MM-DD.log`
+- Linux: `~/.config/LobsterAI/logs/main-YYYY-MM-DD.log`
+
+Main log retention is 7 days. Max file size is 80 MB; overflow rotates to
+`.old.log`.
+
+OpenClaw gateway capture logs:
+- Windows: `%APPDATA%/LobsterAI/openclaw/logs/gateway-YYYY-MM-DD.log`
+- Retention is 3 days.
+
+OpenClaw's own daily logs may also exist in a temp directory. On Windows,
+`openclawEngineManager.getOpenClawDailyLogDir()` prefers the runtime drive's
+`D:/tmp/openclaw` style path when present, otherwise the system temp fallback.
+
+Logs can be large. Use `rg`, `Select-String`, `Get-Content -Tail`, or targeted
+filters instead of reading entire log files.
+
+Logging rules:
+- Use `console.error` for failures that need investigation. Pass the caught
+  error object last.
+- Use `console.warn` for unexpected but recoverable situations.
+- Use `console.log` for meaningful lifecycle events.
+- Use `console.debug` for high-frequency or diagnostic detail.
+- Do not add info-level logs inside polling loops, per-message hot paths, or
+  routine function entries.
+- Log messages should be English, concise, and start with a module tag such as
+  `[OpenClaw]`.
+
+## Coding Style
+
+- TypeScript is the default.
+- React components are functional components with hooks.
+- Use 2-space indentation, single quotes, and semicolons.
+- Use `PascalCase` for components, `camelCase` for functions/variables, and
+  `*Slice.ts` for Redux slices.
+- Tailwind is the primary styling approach; prefer existing utility patterns
+  before adding bespoke CSS.
+- Keep business logic in `src/renderer/services/`, `src/main/libs/`, or domain
+  modules rather than embedding it in UI components.
+- Prefer existing local helpers and patterns over new abstractions.
+
+## Legacy Debt And Large Files
+
+This repository contains oversized legacy files. Do not perform broad
+file-splitting or architectural cleanup as drive-by work.
+
+When a requested change touches a very large file, keep the immediate change
+scoped. If the change would add meaningful complexity to that file, first
+suggest a focused extraction/refactor plan to the developer instead of doing the
+refactor directly.
+
+A useful proposal should name:
+- the feature or responsibility being extracted;
+- the candidate new module/file boundaries;
+- the public functions/types that would move;
+- the migration and test steps;
+- risks or behavior that must remain unchanged.
+
+Proceed with the refactor only after the developer confirms. Avoid sweeping
+renames, formatting churn, or unrelated cleanup while making the original
+change.
+
+## String Constants
+
+Do not use bare string literals for values that act as discriminants, status
+codes, IPC channel names, mode selectors, protocol names, or strings compared
+or switched against in multiple places.
+
+Use a centralized `as const` object and derive the type:
+
+```ts
 export const SessionTarget = {
   Main: 'main',
   Isolated: 'isolated',
@@ -239,123 +405,113 @@ export const SessionTarget = {
 export type SessionTarget = typeof SessionTarget[keyof typeof SessionTarget];
 ```
 
-### Rules
+Rules:
+- One source of truth per module.
+- Consumers import both the value object and type.
+- IPC channel names must be constants when adding or touching a channel.
+- Tests should use the same constants.
+- Discriminated union interface fields may keep literal `kind` declarations.
 
-1. **One source of truth per module.** Each module that owns a set of string constants must have a `constants.ts` file. Consumer modules import both the value object and the type.
-2. **Value construction and comparison must use constants.** Write `SessionTarget.Main`, not `'main'`. This applies to source files, test files, and any other TypeScript that references these values.
-3. **Discriminant `kind` fields in interface definitions remain literal.** The `kind: 'at'` in `interface ScheduleAt` defines the discriminated union shape and must stay as a literal. The constant should match this value; consumers use the constant object for comparisons and construction.
-4. **IPC channel names must be constants.** All `ipcMain.handle()` registrations and `ipcRenderer.invoke()` calls must reference an `IpcChannel` constant, never a bare string.
-5. **Tests use constants too.** Test files must import and use the same constants — this is the primary defense against "modified the constant but forgot to update the test" drift.
+Do not constantize one-off error messages, CSS class names, HTML attributes, or
+external platform IDs passed through from user/platform config unless the code
+compares them in multiple places.
 
-### What NOT to constantize
+## Internationalization
 
-- Platform-specific identifiers passed through from external sources (e.g., `'telegram'`, `'feishu'` as IM platform names from user config).
-- One-off strings used in a single location with no comparison logic (e.g., error messages, log tags).
-- CSS class names, HTML attributes, and other UI-layer strings managed by Tailwind/React.
+Do not hardcode user-visible UI strings.
 
-### Existing reference
+Renderer:
+- Use `t('key')` from `src/renderer/services/i18n.ts`.
+- Add both `zh` and `en` translations.
 
-`src/scheduledTask/constants.ts` is the canonical example of this pattern, covering schedule kinds, payload kinds, delivery modes, session targets, wake modes, origin kinds, binding kinds, task status, IPC channels, and migration keys.
+Main process:
+- Use `t('key')` from `src/main/i18n.ts` for user-visible tray/menu/session
+  titles/notifications.
+- Add both `zh` and `en` translations.
 
-## Logging Guidelines
+Developer-only logs and DevTools-only diagnostics are exempt.
 
-The main process uses `electron-log` via `src/main/logger.ts`, which intercepts all `console.*` calls and writes them to daily-rotated log files. **No additional logging library is needed** — use the standard `console` API everywhere in `src/main/`.
+## Artifacts
 
-### Log Levels
+Artifacts are parsed by `src/renderer/services/artifactParser.ts` and rendered
+under `src/renderer/components/artifacts/`.
 
-Choose the level that matches the **significance** of the event:
+Current previewable artifact types include:
+- `html`
+- `svg`
+- `image`
+- `video`
+- `mermaid`
+- `code`
+- `markdown`
+- `text`
+- `document`
+- `local-service`
 
-| Level | API | When to use |
-|-------|-----|-------------|
-| Error | `console.error` | Unrecoverable failures that need investigation — caught exceptions, broken invariants, data corruption |
-| Warn | `console.warn` | Unexpected but recoverable situations — missing optional config, fallback behavior, degraded service |
-| Info | `console.log` | Key lifecycle events worth keeping in production logs — service started/stopped, connection established/lost, session created/destroyed, configuration changed |
-| Debug | `console.debug` | Development-time detail useful only when actively debugging — intermediate state, request/response payloads, loop iterations, sync cursors |
+HTML file artifacts use a local preview server for fidelity. Inline HTML uses
+an iframe sandbox. SVG and file previews must remain sanitized/isolated.
+Document/office-style renderers live under `components/artifacts/renderers/`.
 
-### Message Format
+## IM, Agents, MCP, And Scheduled Tasks
 
-Log messages must read as **plain English sentences**, not as variable dumps.
+Agents:
+- Main agent ID is `main`.
+- Agents can be custom or preset.
+- Agent data includes identity, system prompt, model, skill IDs, icon, enabled
+  state, pinning, and optional working directory.
+- IM channels can bind to specific agents.
 
-**Tag**: Every message starts with a bracketed module tag: `[ModuleName]`.
+IM:
+- IM config is stored in SQLite and synced into OpenClaw config where the
+  channel is OpenClaw-backed.
+- Multi-instance platforms include DingTalk, Feishu/Lark, QQ, Telegram,
+  Discord, WeCom, NIM, POPO, and email.
+- Weixin and NetEase Bee have single-instance style config.
+- IM session mappings preserve conversation/session/agent relationships.
 
-```typescript
-// Good — describes what happened in natural language
-console.log('[ChannelSync] discovered 3 new channel sessions, notified 2 windows');
-console.warn('[ChannelSync] session list returned unexpected type, skipping');
-console.error('[ChannelSync] polling failed:', error);
+MCP:
+- User-configured MCP servers live in `mcp_servers`.
+- Resolved launch metadata lives in `mcp_launch_resolutions`.
+- OpenClaw config sync writes enabled servers into native `mcp.servers`.
 
-// Bad — dumps variable names and raw values
-console.log('[ChannelSync] pollChannelSessions: got', sessions.length, 'sessions, keys:', sessions.map(s => s?.key).join(', '));
-console.log('[Debug:syncChannelUserMessages] cursor:', cursor, 'history entries:', historyEntries.length);
-```
+Scheduled tasks:
+- The UI and local policy code live in `src/scheduledTask/` and
+  `src/renderer/components/scheduledTasks/`.
+- Execution uses OpenClaw cron APIs through `CronJobService`.
+- `scheduled_task_meta` stores only local origin/binding data that OpenClaw cron
+  jobs do not support as custom fields.
 
-### Rules
+## Branches, Commits, And PRs
 
-- **No per-tick logging at info level.** Polling loops, sync cycles, and heartbeats that fire every few seconds must use `console.debug` or be removed entirely. A single summary line at info level is acceptable only when something meaningful changed (e.g. new session discovered, messages synced).
-- **No function-entry logging.** Do not log "function X called with args Y" unless it is a rare or important operation. Routine calls (per-poll, per-message) must not produce info-level output.
-- **No variable-name labels.** Write `received 5 messages` not `historyMessages: 5`. Write `session not found` not `sessionId: null`.
-- **Include context only when useful.** An error log should include the relevant identifier (session ID, channel key) so the issue can be traced. A routine success log should not list every parameter.
-- **Keep messages concise.** One line per event. Do not spread a single log across multiple `console.log` calls.
-- **Errors must include the error object.** Always pass the caught error as the last argument: `console.error('[Module] operation failed:', error)`.
-- **Use English for all log messages.** No Chinese or other non-ASCII text in logs.
+Use branch names like `feat/...` or `fix/...`. Do not use a `codex/...` prefix
+unless the user explicitly asks for it.
 
-### Before Submitting
+Do not create commits until the user has tested and confirmed, unless they
+explicitly asked you to commit.
 
-When adding or modifying log statements, verify:
-1. No new `console.log` calls inside hot loops or polling callbacks — use `console.debug` instead.
-2. Messages read as natural English, not as stringified code.
-3. Error/warn logs include enough context to diagnose without a debugger.
+Commit messages must follow Conventional Commits and be written in English:
 
-## Testing Guidelines
-
-- Unit tests use [Vitest](https://vitest.dev/) and are **co-located** with the source files they cover.
-- Test files must use the `.test.ts` extension and be placed next to the source file (e.g. `src/main/foo.ts` → `src/main/foo.test.ts`).
-- Import test utilities from `vitest`: `import { test, expect } from 'vitest';`
-- **Never** use `.test.mjs` or any other extension — `.test.ts` is the only accepted format.
-- Run all tests: `npm test`. Filter by module: `npm test -- <name>` (e.g. `npm test -- logger`).
-- Avoid importing Electron-only APIs (e.g. `electron-log`) in tests — inline any logic that depends on them.
-- Validate UI changes manually by running `npm run electron:dev` and exercising key flows:
-  - Cowork: start session, send prompts, approve/deny tool permissions, stop session
-  - Artifacts: preview HTML, SVG, Mermaid diagrams, React components
-  - Settings: theme switching, language switching
-- Keep console warnings/errors clean; lint via `npm run lint` before submitting.
-
-## Internationalization (i18n)
-
-- **Never hardcode user-visible strings.** All UI text, labels, messages, and titles must go through the i18n system.
-- **Renderer process**: use `t('key')` from `src/renderer/services/i18n.ts`. Add new keys to both the `zh` and `en` sections in that file.
-- **Main process** (tray menu, session titles, notifications, etc.): use `t('key')` from `src/main/i18n.ts`. Add new keys to both the `zh` and `en` sections in that file.
-- When adding a new key, always provide translations for **both** languages. If unsure of a translation, leave a comment like `// TODO: translate` rather than omitting the key.
-- Error messages shown only in DevTools/logs (not visible to users) are exempt.
-
-## Commit & Pull Request Guidelines
-
-**All commit messages must follow the [Conventional Commits](https://www.conventionalcommits.org/) spec and be written in English.**
-
-### Commit Message Format
-
-```
-type(scope): short imperative summary
-
-Optional body in English markdown explaining *why* (not what).
-
-Optional footer: BREAKING CHANGE: ..., Closes #123, etc.
-```
-
-**Types**: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `perf`, `style`, `ci`, `build`, `revert`
-
-**Rules**:
-- Subject line: lowercase, imperative mood, no trailing period, ≤72 chars
-- Scope (optional): the affected area, e.g. `feat(cowork):`, `fix(im):`
-- Body and footer must be in English markdown
-- Breaking changes: add `!` after type/scope (`feat!:`) **and** a `BREAKING CHANGE:` footer
-
-**Examples**:
-```
+```text
 feat(cowork): add streaming progress indicator
 fix(sqlite): prevent duplicate session insert on retry
-chore: bump version to 2026.3.18
+chore: bump version to 2026.6.18
 ```
 
-- PRs should include a concise description, linked issue if applicable, and screenshots for UI changes.
-- Call out any Electron-specific behavior changes (IPC, storage, windowing) in the PR description.
+Do not add `Co-Authored-By` trailers unless explicitly requested.
+
+For PRs, include a concise description, linked issue when relevant, screenshots
+for UI changes, and call out Electron-specific behavior changes such as IPC,
+storage, runtime, windowing, or OpenClaw config/restart behavior.
+
+## Practical Guidance
+
+- Prefer `rg` for search.
+- Verify historical notes against current source before acting.
+- Ignore stale docs that conflict with `package.json`, `src/main`, `src/shared`,
+  and current tests.
+- Do not edit bundled runtime output or generated vendor files unless the task
+  is explicitly about packaging/runtime generation.
+- Keep changes scoped. Avoid opportunistic refactors when fixing product bugs.
+- For oversized files, propose a scoped extraction plan before doing structural
+  refactors.
+- If a file has unrelated user changes, work around them and do not revert them.

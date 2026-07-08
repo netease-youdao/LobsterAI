@@ -227,6 +227,33 @@ export class SubagentTracker {
   }
 
   /**
+   * Child session lifecycle events use the subagent's own sessionKey, not the
+   * parent announce runId. Mark the matching parent run terminal before the
+   * adapter drops the event as an unknown local session.
+   */
+  tryMarkTerminalFromSessionKey(
+    sessionKey: string,
+    status: 'done' | 'error',
+  ): boolean {
+    if (!sessionKey) return false;
+    for (const [toolCallId, childSessionKey] of this.subagentSessionKeys) {
+      if (childSessionKey !== sessionKey) continue;
+      const currentStatus = this.subagentStatus.get(toolCallId);
+      if (currentStatus === 'done' && status === 'error') {
+        return true;
+      }
+      if (currentStatus !== status) {
+        this.subagentStatus.set(toolCallId, status);
+        this.store.updateSubagentRunStatus(toolCallId, status, Date.now());
+        console.log('[SubagentTracker] marked subagent as terminal via session key:', toolCallId, status);
+        this.tryPersistCachedMessages(toolCallId);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * Clears all in-memory subagent tracking state and removes persisted messages.
    */
   onSessionDeleted(parentSessionId?: string): void {
@@ -288,6 +315,7 @@ export class SubagentTracker {
     sessionKey: string | null;
     status: 'running' | 'done' | 'error';
     createdAt: number;
+    endedAt: number | null;
   }> {
     const runs = this.store.listSubagentRuns(parentSessionId);
     return runs.map((run) => {
@@ -297,7 +325,8 @@ export class SubagentTracker {
       // Stale 'running' record from a previous session: no in-memory tracking means
       // it was never committed in this app lifecycle → mark as error and persist.
       if (run.status === 'running' && !memoryStatus && !this.pendingSpawnInfo.has(run.id)) {
-        this.store.updateSubagentRunStatus(run.id, 'error', Date.now());
+        const endedAt = Date.now();
+        this.store.updateSubagentRunStatus(run.id, 'error', endedAt);
         return {
           id: run.id,
           agentId: run.agentId,
@@ -306,6 +335,7 @@ export class SubagentTracker {
           sessionKey: memorySessionKey ?? run.sessionKey,
           status: 'error' as const,
           createdAt: run.createdAt,
+          endedAt,
         };
       }
 
@@ -317,6 +347,7 @@ export class SubagentTracker {
         sessionKey: memorySessionKey ?? run.sessionKey,
         status: memoryStatus ?? run.status,
         createdAt: run.createdAt,
+        endedAt: run.endedAt,
       };
     });
   }
@@ -421,6 +452,7 @@ export class SubagentTracker {
         label: pending.label,
         status,
         createdAt: pending.createdAt,
+        endedAt: isError ? Date.now() : null,
       });
       this.pendingSpawnInfo.delete(toolCallId);
       console.log('[SubagentTracker] committed spawn result:', toolCallId, status,

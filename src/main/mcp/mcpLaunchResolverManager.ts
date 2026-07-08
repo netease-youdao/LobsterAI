@@ -4,10 +4,9 @@ import fs from 'fs';
 import path from 'path';
 
 import {
-  ensureElectronNodeShim,
-  getElectronNodeRuntimePath,
-} from '../libs/coworkUtil';
-import { findSystemNodePath } from '../libs/resolveStdioCommand';
+  resolveNodePackageCliCommand,
+  resolveNodeRuntimeForSpawn,
+} from '../libs/nodeRuntime';
 import {
   createMcpLaunchSourceFingerprint,
   isNpxMcpServer,
@@ -32,7 +31,8 @@ type RunResult = {
 type NpmCommand = {
   command: string;
   baseArgs: string[];
-  env: Record<string, string>;
+  env: NodeJS.ProcessEnv;
+  shell: boolean;
 };
 
 type ParsedNpxSpec = {
@@ -164,6 +164,14 @@ export function isStaleInstallingResolution(
   );
 }
 
+export function isRecoverableNodeRuntimeResolutionError(
+  resolution: McpLaunchResolution | undefined,
+): boolean {
+  if (resolution?.status !== McpLaunchResolutionStatus.Failed) return false;
+  const error = resolution.error || '';
+  return /spawn\s+.*cowork[\\/]+bin[\\/]+node\s+ENOENT/i.test(error);
+}
+
 function resolvePackageBin(packageRoot: string, packageName: string): string {
   const packageJsonPath = path.join(packageRoot, 'package.json');
   const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as {
@@ -192,6 +200,7 @@ async function runCommand(
   options: {
     cwd?: string;
     env?: Record<string, string>;
+    shell?: boolean;
     timeoutMs: number;
   },
 ): Promise<RunResult> {
@@ -204,6 +213,7 @@ async function runCommand(
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: childEnv,
+      shell: options.shell || false,
       windowsHide: true,
     });
     let stdout = '';
@@ -231,62 +241,12 @@ async function runCommand(
 }
 
 function resolveNpmCommand(): NpmCommand {
-  const electronNode = getElectronNodeRuntimePath();
-  const npmCliCandidates = [
-    app.isPackaged
-      ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin', 'npm-cli.js')
-      : '',
-    path.join(app.getAppPath(), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-    path.join(process.cwd(), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-  ].filter(Boolean);
-
-  const systemNode = findSystemNodePath();
-  if (systemNode) {
-    const systemNodeDir = path.dirname(systemNode);
-    const systemNpmCli = path.join(path.dirname(systemNode), 'node_modules', 'npm', 'bin', 'npm-cli.js');
-    if (fs.existsSync(systemNpmCli)) {
-      return {
-        command: systemNode,
-        baseArgs: [systemNpmCli],
-        env: prependPathEntries({}, [systemNodeDir]),
-      };
-    }
-  }
-
-  const bundledNpmCli = npmCliCandidates.find(candidate => fs.existsSync(candidate));
-  if (bundledNpmCli) {
-    const npmBinDir = path.dirname(bundledNpmCli);
-    const shimDir = ensureElectronNodeShim(electronNode, npmBinDir);
-    return {
-      command: systemNode || electronNode,
-      baseArgs: [bundledNpmCli],
-      env: prependPathEntries(
-        systemNode
-          ? {}
-          : {
-            ELECTRON_RUN_AS_NODE: '1',
-            LOBSTERAI_ELECTRON_PATH: electronNode,
-            LOBSTERAI_NPM_BIN_DIR: npmBinDir,
-          },
-        [systemNode ? path.dirname(systemNode) : '', shimDir || ''],
-      ),
-    };
-  }
-
-  return {
-    command: process.platform === 'win32' ? 'npm.cmd' : 'npm',
-    baseArgs: [],
-    env: {},
-  };
+  return resolveNodePackageCliCommand('npm');
 }
 
 function resolveNodeCommand(): { command: string; env: Record<string, string> } {
-  const systemNode = findSystemNodePath();
-  if (systemNode) return { command: systemNode, env: {} };
-  return {
-    command: getElectronNodeRuntimePath(),
-    env: { ELECTRON_RUN_AS_NODE: '1' },
-  };
+  const runtime = resolveNodeRuntimeForSpawn();
+  return { command: runtime.command, env: runtime.env as Record<string, string> };
 }
 
 export class McpLaunchResolverManager {
@@ -312,7 +272,17 @@ export class McpLaunchResolverManager {
   }
 
   shouldStartResolution(server: McpServerRecord, status: McpLaunchResolutionStatus): boolean {
-    if (status === McpLaunchResolutionStatus.Failed) return false;
+    if (status === McpLaunchResolutionStatus.Failed) {
+      const resolution = this.store.getLaunchResolution(server.id);
+      if (
+        resolution?.sourceFingerprint === createMcpLaunchSourceFingerprint(server)
+        && isRecoverableNodeRuntimeResolutionError(resolution)
+      ) {
+        log('WARN', `retrying recoverable Node runtime resolution failure for server "${server.name}"`);
+        return true;
+      }
+      return false;
+    }
     if (status !== McpLaunchResolutionStatus.Installing) return true;
     if (this.inFlight.has(server.id)) return false;
 
@@ -421,7 +391,7 @@ export class McpLaunchResolverManager {
       const viewResult = await runCommand(
         npm.command,
         [...npm.baseArgs, 'view', parsed.installSpec, 'version', '--json'],
-        { env: npm.env, timeoutMs: NPM_VIEW_TIMEOUT_MS },
+        { env: npm.env, shell: npm.shell, timeoutMs: NPM_VIEW_TIMEOUT_MS },
       );
       log(
         'INFO',
@@ -444,7 +414,7 @@ export class McpLaunchResolverManager {
           '--no-fund',
           parsed.installSpec,
         ],
-        { env: npm.env, timeoutMs: INSTALL_TIMEOUT_MS },
+        { env: npm.env, shell: npm.shell, timeoutMs: INSTALL_TIMEOUT_MS },
       );
       log(
         'INFO',
@@ -503,3 +473,8 @@ export class McpLaunchResolverManager {
     }
   }
 }
+
+export const __mcpLaunchResolverTestUtils = {
+  resolveNpmCommand,
+  resolveNodeCommand,
+};

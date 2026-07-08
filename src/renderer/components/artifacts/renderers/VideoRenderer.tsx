@@ -12,6 +12,12 @@ const t = (key: string) => i18nService.t(key);
 
 function normalizeLocalPath(filePath: string): string {
   let normalized = filePath.trim();
+  const mediaMatch = normalized.match(/(?:^|\/)MEDIA:\s*(.+)$/i);
+  if (mediaMatch) {
+    normalized = mediaMatch[1].trim();
+  } else {
+    normalized = normalized.replace(/^MEDIA:\s*/i, '').trim();
+  }
   if (normalized.startsWith('file:///')) {
     normalized = normalized.slice(7);
   } else if (normalized.startsWith('file://')) {
@@ -75,11 +81,13 @@ const VideoRenderer: React.FC<VideoRendererProps> = ({ artifact }) => {
   );
   const [activeSourceIndex, setActiveSourceIndex] = useState(0);
   const [error, setError] = useState(false);
+  const [videoAspectRatio, setVideoAspectRatio] = useState<string | undefined>();
   const src = sources[activeSourceIndex] || '';
 
   useEffect(() => {
     setActiveSourceIndex(0);
     setError(false);
+    setVideoAspectRatio(undefined);
   }, [sources]);
 
   if (!src) {
@@ -99,13 +107,21 @@ const VideoRenderer: React.FC<VideoRendererProps> = ({ artifact }) => {
   }
 
   return (
-    <div className="flex items-center justify-center w-full h-full p-4">
+    <div className="flex items-center justify-center w-full h-full overflow-hidden p-4">
       <video
         key={src}
         src={src}
         controls
+        playsInline
         preload="metadata"
-        className="max-w-full max-h-full rounded bg-black"
+        className="block max-w-full max-h-full rounded bg-black object-contain"
+        style={videoAspectRatio ? { aspectRatio: videoAspectRatio } : undefined}
+        onLoadedMetadata={(event) => {
+          const { videoHeight, videoWidth } = event.currentTarget;
+          if (videoWidth > 0 && videoHeight > 0) {
+            setVideoAspectRatio(`${videoWidth} / ${videoHeight}`);
+          }
+        }}
         onError={() => {
           if (activeSourceIndex < sources.length - 1) {
             setActiveSourceIndex(index => index + 1);

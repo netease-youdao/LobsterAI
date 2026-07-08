@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 
 import {
   HtmlShareAccessMode,
+  HtmlShareDisabledSource,
   HtmlShareSourceType,
   HtmlShareStatus,
 } from '../../../shared/htmlShare/constants';
@@ -150,6 +151,7 @@ describe('htmlShareClient', () => {
               url: 'https://lobsterai-server.youdao.com/s/shr_test/',
               accessMode: HtmlShareAccessMode.Code,
               status: HtmlShareStatus.Live,
+              restoredByUpdate: true,
             },
           }),
           {
@@ -177,6 +179,7 @@ describe('htmlShareClient', () => {
     expect(requestedForm!.get('accessMode')).toBe(HtmlShareAccessMode.Code);
     expect(result.success).toBe(true);
     expect(result.url).toBe('https://lobsterai-server.youdao.com/s/shr_test/');
+    expect(result.restoredByUpdate).toBe(true);
   });
 
   test('updates an artifact image share with source type and access mode', async () => {
@@ -334,7 +337,9 @@ describe('htmlShareClient', () => {
               shareId: 'shr_test',
               accessMode: HtmlShareAccessMode.Code,
               shareCode: 'K7Q9P2',
-              status: HtmlShareStatus.Live,
+              status: HtmlShareStatus.Disabled,
+              disabledReason: 'active share limit exceeded',
+              disabledSource: HtmlShareDisabledSource.ActiveLimit,
             },
           }),
           {
@@ -353,6 +358,8 @@ describe('htmlShareClient', () => {
     expect(result.success).toBe(true);
     expect(result.share?.url).toBe('https://lobsterai-server.inner.youdao.com/s/shr_test/');
     expect(result.share?.shareCode).toBe('K7Q9P2');
+    expect(result.share?.status).toBe(HtmlShareStatus.Disabled);
+    expect(result.share?.disabledSource).toBe(HtmlShareDisabledSource.ActiveLimit);
   });
 
   test('falls back to my shares when source lookup omits a disabled share', async () => {

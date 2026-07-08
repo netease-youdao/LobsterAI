@@ -404,21 +404,64 @@ function extractErrorMessage(raw: string): string {
 
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const errorObj = parsed.error;
-    if (errorObj && typeof errorObj === 'object' && !Array.isArray(errorObj)) {
-      const message = (errorObj as Record<string, unknown>).message;
-      if (typeof message === 'string' && message) {
-        return message;
-      }
-    }
-    if (typeof parsed.message === 'string' && parsed.message) {
-      return parsed.message;
+    const parsedMessage = extractErrorMessageFromObject(parsed);
+    if (parsedMessage) {
+      return parsedMessage;
     }
   } catch {
     // noop
   }
 
   return raw;
+}
+
+function extractErrorMessageFromObject(parsed: Record<string, unknown>): string | null {
+  const errorObj = parsed.error;
+  let code: string | number | undefined;
+
+  if (errorObj && typeof errorObj === 'object' && !Array.isArray(errorObj)) {
+    const nested = errorObj as Record<string, unknown>;
+    const message = nested.message;
+    if (typeof nested.code === 'string' || typeof nested.code === 'number') {
+      code = nested.code;
+    }
+    if (typeof message === 'string' && message) {
+      return message;
+    }
+  }
+
+  if (typeof parsed.code === 'string' || typeof parsed.code === 'number') {
+    code = parsed.code;
+  }
+  if (typeof parsed.message === 'string' && parsed.message) {
+    return parsed.message;
+  }
+  if (code !== undefined) {
+    return `Upstream API request failed with code ${code}`;
+  }
+
+  return null;
+}
+
+function extractStreamErrorMessage(event: string, payload: string): string | null {
+  if (!payload || payload === '[DONE]') {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(payload) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    const parsedObj = parsed as Record<string, unknown>;
+    const isErrorPayload = event === 'error' || parsedObj.type === 'error' || parsedObj.error != null;
+    if (!isErrorPayload) {
+      return null;
+    }
+    return extractErrorMessageFromObject(parsedObj) ?? payload;
+  } catch {
+    return event === 'error' ? payload : null;
+  }
 }
 
 function estimateTokenCountForText(text: string): number {
@@ -2091,6 +2134,7 @@ async function handleResponsesStreamResponse(
 
   let buffer = '';
   let sawDoneMarker = false;
+  let sawStreamError = false;
 
   const flushDone = () => {
     if (!state.hasMessageStart) {
@@ -2131,6 +2175,14 @@ async function handleResponsesStreamResponse(
         break;
       }
 
+      const streamErrorMessage = extractStreamErrorMessage(parsedPacket.event, payload);
+      if (streamErrorMessage) {
+        lastProxyError = streamErrorMessage;
+        emitSSE(res, 'error', createAnthropicErrorBody(streamErrorMessage));
+        sawStreamError = true;
+        break;
+      }
+
       try {
         const parsed = JSON.parse(payload) as Record<string, unknown>;
         processResponsesStreamEvent(res, state, context, parsedPacket.event, parsed);
@@ -2141,12 +2193,12 @@ async function handleResponsesStreamResponse(
       boundary = findSSEPacketBoundary(buffer);
     }
 
-    if (sawDoneMarker) {
+    if (sawDoneMarker || sawStreamError) {
       break;
     }
   }
 
-  if (sawDoneMarker) {
+  if (sawDoneMarker || sawStreamError) {
     try {
       await reader.cancel();
     } catch {
@@ -2154,7 +2206,9 @@ async function handleResponsesStreamResponse(
     }
   }
 
-  flushDone();
+  if (!sawStreamError) {
+    flushDone();
+  }
   res.end();
 }
 
@@ -2181,6 +2235,7 @@ async function handleChatCompletionsStreamResponse(
 
   let buffer = '';
   let sawDoneMarker = false;
+  let sawStreamError = false;
   let chunkCount = 0;
 
   const flushDone = () => {
@@ -2214,16 +2269,8 @@ async function handleChatCompletionsStreamResponse(
       const packet = buffer.slice(0, boundary.index);
       buffer = buffer.slice(boundary.index + boundary.separatorLength);
 
-      const lines = packet.split(/\r?\n/);
-      const dataLines: string[] = [];
-
-      for (const line of lines) {
-        if (line.startsWith('data:')) {
-          dataLines.push(line.slice(5).trimStart());
-        }
-      }
-
-      const payload = dataLines.join('\n');
+      const parsedPacket = parseSSEPacket(packet);
+      const payload = parsedPacket.payload;
       if (!payload) {
         boundary = findSSEPacketBoundary(buffer);
         continue;
@@ -2232,6 +2279,14 @@ async function handleChatCompletionsStreamResponse(
       if (payload === '[DONE]') {
         flushDone();
         sawDoneMarker = true;
+        break;
+      }
+
+      const streamErrorMessage = extractStreamErrorMessage(parsedPacket.event, payload);
+      if (streamErrorMessage) {
+        lastProxyError = streamErrorMessage;
+        emitSSE(res, 'error', createAnthropicErrorBody(streamErrorMessage));
+        sawStreamError = true;
         break;
       }
 
@@ -2245,12 +2300,12 @@ async function handleChatCompletionsStreamResponse(
       boundary = findSSEPacketBoundary(buffer);
     }
 
-    if (sawDoneMarker) {
+    if (sawDoneMarker || sawStreamError) {
       break;
     }
   }
 
-  if (sawDoneMarker) {
+  if (sawDoneMarker || sawStreamError) {
     try {
       await reader.cancel();
     } catch {
@@ -2258,7 +2313,9 @@ async function handleChatCompletionsStreamResponse(
     }
   }
 
-  flushDone();
+  if (!sawStreamError) {
+    flushDone();
+  }
   res.end();
 }
 
@@ -2827,6 +2884,8 @@ export const __openAICompatProxyTestUtils = {
   createStreamState,
   createResponsesStreamContext,
   findSSEPacketBoundary,
+  extractErrorMessage,
+  extractStreamErrorMessage,
   processOpenAIChunk,
   processResponsesStreamEvent,
   convertChatCompletionsRequestToResponsesRequest,

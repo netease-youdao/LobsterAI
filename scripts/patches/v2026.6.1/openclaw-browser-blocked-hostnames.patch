@@ -1,0 +1,245 @@
+diff --git a/extensions/browser/src/browser/config.test.ts b/extensions/browser/src/browser/config.test.ts
+index e0f5d0cfd6..017d2d00a9 100644
+--- a/extensions/browser/src/browser/config.test.ts
++++ b/extensions/browser/src/browser/config.test.ts
+@@ -845,12 +845,14 @@ describe("browser config", () => {
+         allowPrivateNetwork: true,
+         allowedHostnames: [" localhost ", ""],
+         hostnameAllowlist: [" *.trusted.example ", " "],
++        blockedHostnames: [" www.baidu.com ", ""],
+       },
+     } as unknown as BrowserConfig);
+     expect(resolved.ssrfPolicy).toEqual({
+       dangerouslyAllowPrivateNetwork: true,
+       allowedHostnames: ["localhost"],
+       hostnameAllowlist: ["*.trusted.example"],
++      blockedHostnames: ["www.baidu.com"],
+     });
+   });
+ 
+@@ -882,11 +884,13 @@ describe("browser config", () => {
+       ssrfPolicy: {
+         allowedHostnames: ["example.com"],
+         hostnameAllowlist: ["*.example.com"],
++        blockedHostnames: ["tracking.example.com"],
+       },
+     } as unknown as BrowserConfig);
+     expect(resolved.ssrfPolicy).toEqual({
+       allowedHostnames: ["example.com"],
+       hostnameAllowlist: ["*.example.com"],
++      blockedHostnames: ["tracking.example.com"],
+     });
+   });
+ 
+diff --git a/extensions/browser/src/browser/config.ts b/extensions/browser/src/browser/config.ts
+index 396e6d25f7..3206bf7e4b 100644
+--- a/extensions/browser/src/browser/config.ts
++++ b/extensions/browser/src/browser/config.ts
+@@ -52,6 +52,7 @@ type BrowserSsrFPolicyCompat = NonNullable<BrowserConfig["ssrfPolicy"]> & {
+    * still accepting old user files until doctor rewrites them.
+    */
+   allowPrivateNetwork?: boolean;
++  blockedHostnames?: string[];
+ };
+ 
+ export type ResolvedBrowserConfig = {
+@@ -273,6 +274,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy |
+   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
+   const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
+   const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);
++  const blockedHostnames = normalizeStringList(rawPolicy?.blockedHostnames);
+   const hasExplicitPrivateSetting =
+     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
+   const resolvedAllowPrivateNetwork =
+@@ -282,7 +284,8 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy |
+     !resolvedAllowPrivateNetwork &&
+     !hasExplicitPrivateSetting &&
+     !allowedHostnames &&
+-    !hostnameAllowlist
++    !hostnameAllowlist &&
++    !blockedHostnames
+   ) {
+     // Keep the default policy object present so CDP guards still enforce
+     // fail-closed private-network checks on unconfigured installs.
+@@ -297,6 +300,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy |
+       : {}),
+     ...(allowedHostnames ? { allowedHostnames } : {}),
+     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
++    ...(blockedHostnames ? { blockedHostnames } : {}),
+   };
+ }
+ 
+diff --git a/src/config/schema.help.ts b/src/config/schema.help.ts
+index c0178e8215..01b2b87d70 100644
+--- a/src/config/schema.help.ts
++++ b/src/config/schema.help.ts
+@@ -387,6 +387,8 @@ export const FIELD_HELP: Record<string, string> = {
+     "Explicit hostname allowlist exceptions for SSRF policy checks on browser/network requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
+   "browser.ssrfPolicy.hostnameAllowlist":
+     "Legacy/alternate hostname allowlist field used by SSRF policy consumers for explicit host exceptions. Use stable exact hostnames and avoid wildcard-like broad patterns.",
++  "browser.ssrfPolicy.blockedHostnames":
++    'Hostname blocklist patterns for browser navigation, supporting exact hosts and "*.example.com" wildcard subdomains.',
+   "browser.remoteCdpTimeoutMs":
+     "Timeout in milliseconds for connecting to a remote CDP endpoint before failing the browser attach attempt. Increase for high-latency tunnels, or lower for faster failure detection.",
+   "browser.remoteCdpHandshakeTimeoutMs":
+diff --git a/src/config/schema.labels.ts b/src/config/schema.labels.ts
+index 475738d12b..1789e7738c 100644
+--- a/src/config/schema.labels.ts
++++ b/src/config/schema.labels.ts
+@@ -796,6 +796,7 @@ export const FIELD_LABELS: Record<string, string> = {
+   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork": "Browser Dangerously Allow Private Network",
+   "browser.ssrfPolicy.allowedHostnames": "Browser Allowed Hostnames",
+   "browser.ssrfPolicy.hostnameAllowlist": "Browser Hostname Allowlist",
++  "browser.ssrfPolicy.blockedHostnames": "Browser Blocked Hostnames",
+   "browser.remoteCdpTimeoutMs": "Remote CDP Timeout (ms)",
+   "browser.remoteCdpHandshakeTimeoutMs": "Remote CDP Handshake Timeout (ms)",
+   session: "Session",
+diff --git a/src/config/types.browser.ts b/src/config/types.browser.ts
+index 75a471054b..233976e1b6 100644
+--- a/src/config/types.browser.ts
++++ b/src/config/types.browser.ts
+@@ -47,6 +47,11 @@ export type BrowserSsrFPolicyConfig = {
+    * Supports exact hosts and "*.example.com" wildcard subdomains.
+    */
+   hostnameAllowlist?: string[];
++  /**
++   * Hostnames blocked for browser navigation.
++   * Supports exact hosts and "*.example.com" wildcard subdomains.
++   */
++  blockedHostnames?: string[];
+ };
+ export type BrowserConfig = {
+   enabled?: boolean;
+diff --git a/src/config/zod-schema.ts b/src/config/zod-schema.ts
+index fee88ce6c8..1b83dd362c 100644
+--- a/src/config/zod-schema.ts
++++ b/src/config/zod-schema.ts
+@@ -620,6 +620,7 @@ export const OpenClawSchema = z
+             dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+             allowedHostnames: z.array(z.string()).optional(),
+             hostnameAllowlist: z.array(z.string()).optional(),
++            blockedHostnames: z.array(z.string()).optional(),
+           })
+           .strict()
+           .optional(),
+diff --git a/src/infra/net/ssrf.pinning.test.ts b/src/infra/net/ssrf.pinning.test.ts
+index f60824904e..d20aed4382 100644
+--- a/src/infra/net/ssrf.pinning.test.ts
++++ b/src/infra/net/ssrf.pinning.test.ts
+@@ -168,6 +168,30 @@ describe("ssrf pinning", () => {
+     expect(lookup).not.toHaveBeenCalled();
+   });
+ 
++  it("blocks configured hostnames before DNS lookup", async () => {
++    const lookup = createPublicLookupMock();
++
++    await expect(
++      resolvePinnedHostnameWithPolicy("www.baidu.com", {
++        lookupFn: lookup,
++        policy: { blockedHostnames: ["www.baidu.com"] },
++      }),
++    ).rejects.toThrow(/blocked hostname/i);
++    expect(lookup).not.toHaveBeenCalled();
++  });
++
++  it("supports wildcard hostname blocklist patterns", async () => {
++    const lookup = createPublicLookupMock();
++
++    await expect(
++      resolvePinnedHostnameWithPolicy("ads.example.com", {
++        lookupFn: lookup,
++        policy: { blockedHostnames: ["*.example.com"] },
++      }),
++    ).rejects.toThrow(/blocked hostname/i);
++    expect(lookup).not.toHaveBeenCalled();
++  });
++
+   it("supports wildcard hostname allowlist patterns", async () => {
+     const lookup = vi.fn(async () => [
+       { address: "93.184.216.34", family: 4 },
+diff --git a/src/infra/net/ssrf.test.ts b/src/infra/net/ssrf.test.ts
+index 476387f096..22b006edc5 100644
+--- a/src/infra/net/ssrf.test.ts
++++ b/src/infra/net/ssrf.test.ts
+@@ -343,6 +343,7 @@ describe("isSameSsrFPolicy", () => {
+           allowedOrigins: ["https://A.example.com/v1", "https://b.example.com"],
+           allowedHostnames: ["b.example.com", "A.example.com"],
+           hostnameAllowlist: ["*.example.com", "api.example.com"],
++          blockedHostnames: ["tracker.example.com", "*.ads.example.com"],
+         },
+         {
+           allowPrivateNetwork: true,
+@@ -350,10 +351,18 @@ describe("isSameSsrFPolicy", () => {
+           allowedOrigins: ["https://b.example.com", "https://a.example.com/other"],
+           allowedHostnames: ["a.example.com", "B.EXAMPLE.COM"],
+           hostnameAllowlist: ["api.example.com", "*.example.com"],
++          blockedHostnames: ["*.ads.example.com", "TRACKER.example.com"],
+         },
+       ),
+     ).toBe(true);
+ 
++    expect(
++      isSameSsrFPolicy(
++        { blockedHostnames: ["tracker.example.com"] },
++        { blockedHostnames: ["analytics.example.com"] },
++      ),
++    ).toBe(false);
++
+     expect(
+       isSameSsrFPolicy(
+         { dangerouslyAllowPrivateNetwork: true },
+diff --git a/src/infra/net/ssrf.ts b/src/infra/net/ssrf.ts
+index 9c1d1794ba..78daff12eb 100644
+--- a/src/infra/net/ssrf.ts
++++ b/src/infra/net/ssrf.ts
+@@ -60,6 +60,7 @@ export type SsrFPolicy = {
+    */
+   allowedOrigins?: string[];
+   hostnameAllowlist?: string[];
++  blockedHostnames?: string[];
+ };
+ 
+ function normalizeSsrFPolicyHostnames(values?: string[]): string[] {
+@@ -82,6 +83,7 @@ function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
+     allowedHostnames: normalizeSsrFPolicyHostnames(policy.allowedHostnames),
+     allowedOrigins: normalizeSsrFPolicyOrigins(policy.allowedOrigins),
+     hostnameAllowlist: [...normalizeHostnameAllowlist(policy.hostnameAllowlist)].toSorted(),
++    blockedHostnames: [...normalizeHostnameAllowlist(policy.blockedHostnames)].toSorted(),
+   };
+ }
+ 
+@@ -127,6 +129,11 @@ export function mergeSsrFPolicies(
+         new Set([...(merged.hostnameAllowlist ?? []), ...policy.hostnameAllowlist]),
+       );
+     }
++    if (policy.blockedHostnames?.length) {
++      merged.blockedHostnames = Array.from(
++        new Set([...(merged.blockedHostnames ?? []), ...policy.blockedHostnames]),
++      );
++    }
+   }
+   return Object.keys(merged).length > 0 ? merged : undefined;
+ }
+@@ -229,6 +236,11 @@ function shouldSkipPrivateNetworkChecks(hostname: string, policy?: SsrFPolicy):
+   );
+ }
+ 
++function isHostnameBlockedByPolicy(hostname: string, policy?: SsrFPolicy): boolean {
++  const blockedHostnames = normalizeHostnameAllowlist(policy?.blockedHostnames);
++  return blockedHostnames.length > 0 && matchesHostnameAllowlist(hostname, blockedHostnames);
++}
++
+ export function resolveSsrFPolicyForUrl(url: URL, policy?: SsrFPolicy): SsrFPolicy | undefined {
+   if (!policy?.allowedOrigins?.length) {
+     return policy;
+@@ -380,6 +392,10 @@ function resolveHostnamePolicyChecks(
+   const hostnameAllowlist = normalizeHostnameAllowlist(policy?.hostnameAllowlist);
+   const skipPrivateNetworkChecks = shouldSkipPrivateNetworkChecks(normalized, policy);
+ 
++  if (isHostnameBlockedByPolicy(normalized, policy)) {
++    throw new SsrFBlockedError(`Blocked hostname (configured blocklist): ${hostname}`);
++  }
++
+   if (!matchesHostnameAllowlist(normalized, hostnameAllowlist)) {
+     throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
+   }

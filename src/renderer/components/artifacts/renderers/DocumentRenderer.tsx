@@ -4,6 +4,7 @@ import { i18nService } from '@/services/i18n';
 import type { Artifact } from '@/types/artifact';
 import { openLocalPathWithToast } from '@/utils/localFileActions';
 
+import { getDocxExpectedPageCount, repaginateDocx, waitForDocxLayout } from './docxPagination';
 import {
   type OfficePreviewZoomControlsConfig,
   useRegisterOfficePreviewZoomControls,
@@ -28,6 +29,23 @@ function dataUrlToArrayBuffer(dataUrl: string): ArrayBuffer {
   return bytes.buffer;
 }
 
+function normalizeLocalFilePath(filePath: string): string {
+  let normalized = filePath;
+  if (normalized.startsWith('file:///')) {
+    normalized = normalized.slice(7);
+  } else if (normalized.startsWith('file://')) {
+    normalized = normalized.slice(7);
+  } else if (normalized.startsWith('file:/')) {
+    normalized = normalized.slice(5);
+  }
+
+  if (/^\/[A-Za-z]:/.test(normalized)) {
+    normalized = normalized.slice(1);
+  }
+
+  return normalized;
+}
+
 function useFileContent(artifact: Artifact): { data: ArrayBuffer | null; loading: boolean; error: string | null } {
   const [data, setData] = useState<ArrayBuffer | null>(null);
   const [loading, setLoading] = useState(true);
@@ -48,18 +66,7 @@ function useFileContent(artifact: Artifact): { data: ArrayBuffer | null; loading
       }
 
       if (artifact.filePath && window.electron?.dialog?.readFileAsDataUrl) {
-        let filePath = artifact.filePath;
-        if (filePath.startsWith('file:///')) {
-          filePath = filePath.slice(7);
-        } else if (filePath.startsWith('file://')) {
-          filePath = filePath.slice(7);
-        } else if (filePath.startsWith('file:/')) {
-          filePath = filePath.slice(5);
-        }
-        // Strip leading / before Windows drive letter
-        if (/^\/[A-Za-z]:/.test(filePath)) {
-          filePath = filePath.slice(1);
-        }
+        const filePath = normalizeLocalFilePath(artifact.filePath);
         try {
           const result = await window.electron.dialog.readFileAsDataUrl(filePath);
           if (cancelled) return;
@@ -126,7 +133,7 @@ const DocxSubRenderer: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
         setRendered(false);
         setPageCount(0);
         containerRef.current.innerHTML = '';
-        await renderAsync(data, containerRef.current, undefined, {
+        const wordDocument = await renderAsync(data, containerRef.current, undefined, {
           className: 'docx-preview',
           inWrapper: true,
           breakPages: true,
@@ -139,7 +146,13 @@ const DocxSubRenderer: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
           renderEndnotes: true,
         });
 
-        const renderedPageCount = supplementDocxPageNumbers(containerRef.current);
+        await waitForDocxLayout(containerRef.current);
+        if (cancelled || !containerRef.current) return;
+
+        const paginationResult = repaginateDocx(containerRef.current, {
+          expectedPageCount: getDocxExpectedPageCount(wordDocument),
+        });
+        const renderedPageCount = supplementDocxPageNumbers(containerRef.current) || paginationResult.pageCount;
         if (!cancelled) {
           setPageCount(renderedPageCount);
           setRendered(true);
@@ -190,7 +203,7 @@ const DocxSubRenderer: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
   }
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-[#f5f5f5]">
+    <div className="relative h-full flex flex-col overflow-hidden bg-[#f5f5f5]">
       {rendered && pageCount > 0 && (
         <div className="shrink-0 border-b border-[#e0e0e0] px-3 py-1.5 text-xs text-[#999]">
           <span>{pageCount} {t('artifactPdfPageCount')}</span>
@@ -215,6 +228,10 @@ const DocxSubRenderer: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
           align-items: center !important;
           width: max-content !important;
           min-width: 100% !important;
+          font-family: initial !important;
+          font-size: initial !important;
+          line-height: normal !important;
+          letter-spacing: normal !important;
         }
         .docx-container section.docx-preview {
           background: white !important;
@@ -223,6 +240,23 @@ const DocxSubRenderer: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
           margin: 0 auto 16px !important;
           border-radius: 2px;
           box-sizing: border-box;
+          font-family: initial !important;
+          font-size: initial !important;
+          line-height: normal !important;
+          letter-spacing: normal !important;
+        }
+        .docx-container .docx-preview table {
+          width: auto;
+          margin: 0;
+        }
+        .docx-container .docx-preview th,
+        .docx-container .docx-preview td {
+          padding: 0;
+          border-color: currentColor;
+        }
+        .docx-container .docx-preview th {
+          background-color: transparent;
+          opacity: 1;
         }
       `}</style>
     </div>
@@ -274,7 +308,15 @@ function supplementDocxPageNumberText(text: string, pageNumber: number, totalPag
 
 const PDF_PAGE_GAP = 16;
 
-const PdfSubRenderer: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
+function getPdfJsAssetUrl(assetPath: string): string {
+  if (import.meta.env.DEV) {
+    return new URL(`/pdfjs/${assetPath}`, window.location.origin).href;
+  }
+
+  return new URL(`../pdfjs/${assetPath}`, import.meta.url).href;
+}
+
+const PdfCanvasSubRenderer: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
   const { data, loading, error: loadError } = useFileContent(artifact);
   const [pageCount, setPageCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -330,7 +372,14 @@ const PdfSubRenderer: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
         const pdfjsLib = await import('pdfjs-dist');
         pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).href;
 
-        const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(data) }).promise;
+        const pdf = await pdfjsLib.getDocument({
+          data: new Uint8Array(data),
+          cMapUrl: getPdfJsAssetUrl('cmaps/'),
+          cMapPacked: true,
+          standardFontDataUrl: getPdfJsAssetUrl('standard_fonts/'),
+          disableFontFace: false,
+          useSystemFonts: true,
+        }).promise;
         if (cancelled) return;
 
         setPdfDoc(pdf);
@@ -364,7 +413,7 @@ const PdfSubRenderer: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
   const zoomedRenderWidth = Math.max(120, Math.floor(renderWidth * zoomFactor));
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-[#f5f5f5]">
+    <div className="relative h-full flex flex-col overflow-hidden bg-[#f5f5f5]">
       <div className="shrink-0 border-b border-[#e0e0e0] px-3 py-1.5 text-xs text-[#999]">
         <span>{pageCount} {t('artifactPdfPageCount')}</span>
       </div>
@@ -448,6 +497,94 @@ const PdfPageCanvas: React.FC<{
       style={{ minHeight: height || 200 }}
     />
   );
+};
+
+const NativePdfSubRenderer: React.FC<{ artifact: Artifact; onFallback: () => void }> = ({ artifact, onFallback }) => {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useRegisterOfficePreviewZoomControls(null);
+
+  useEffect(() => {
+    if (!artifact.filePath || !window.electron?.artifact?.createPreviewSession) {
+      onFallback();
+      return;
+    }
+
+    let cancelled = false;
+    let sessionId: string | null = null;
+
+    const createSession = async () => {
+      try {
+        setLoading(true);
+        const filePath = normalizeLocalFilePath(artifact.filePath!);
+        const result = await window.electron?.artifact?.createPreviewSession(filePath);
+        if (cancelled) {
+          if (result?.success && result.sessionId) {
+            void window.electron?.artifact?.destroyPreviewSession(result.sessionId);
+          }
+          return;
+        }
+
+        if (!result?.success || !result.url || !result.sessionId) {
+          throw new Error(result?.error || t('artifactDocumentError'));
+        }
+
+        sessionId = result.sessionId;
+        setPreviewUrl(`${result.url}#toolbar=0&navpanes=0`);
+        setLoading(false);
+      } catch {
+        if (!cancelled) {
+          onFallback();
+        }
+      }
+    };
+
+    createSession();
+
+    return () => {
+      cancelled = true;
+      if (sessionId) {
+        void window.electron?.artifact?.destroyPreviewSession(sessionId);
+      }
+    };
+  }, [artifact.contentVersion, artifact.filePath, onFallback]);
+
+  return (
+    <div className="relative h-full flex flex-col overflow-hidden bg-[#f5f5f5]">
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center text-muted text-sm">
+          {t('artifactDocumentLoading')}
+        </div>
+      )}
+      {previewUrl && (
+        <iframe
+          src={previewUrl}
+          className="w-full h-full border-0"
+          title={artifact.title || artifact.fileName || t('artifactDocumentPreviewTitle')}
+          onError={onFallback}
+        />
+      )}
+    </div>
+  );
+};
+
+const PdfSubRenderer: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
+  const [useCanvasFallback, setUseCanvasFallback] = useState(false);
+
+  useEffect(() => {
+    setUseCanvasFallback(false);
+  }, [artifact.contentVersion, artifact.filePath]);
+
+  const handleFallback = useCallback(() => {
+    setUseCanvasFallback(true);
+  }, []);
+
+  if (!artifact.filePath || artifact.content || useCanvasFallback) {
+    return <PdfCanvasSubRenderer artifact={artifact} />;
+  }
+
+  return <NativePdfSubRenderer artifact={artifact} onFallback={handleFallback} />;
 };
 
 // --- Pptx Sub-Renderer ---

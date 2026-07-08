@@ -4,6 +4,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+import type { ShellGetBrowserAppsInput } from '../shared/shell/constants';
+
 export interface AppInfo {
   name: string;
   path: string;
@@ -52,7 +54,61 @@ export async function getAppsForFile(filePath: string): Promise<AppInfo[]> {
   return apps;
 }
 
+export async function getBrowserApps(input: ShellGetBrowserAppsInput = {}): Promise<AppInfo[]> {
+  await ensureBrowserProbeFile();
+  const browserProbeFile = await findProjectHtmlProbeFile(input.projectDirectory) ?? BROWSER_APPS_PROBE_FILE;
+  const apps = await getAppsForFile(browserProbeFile);
+  const fallbackApps = await discoverBrowserApps();
+  const byPath = new Map<string, AppInfo>();
+  for (const appInfo of [...apps, ...fallbackApps]) {
+    byPath.set(appInfo.path, {
+      ...appInfo,
+      isDefault: appInfo.isDefault || byPath.get(appInfo.path)?.isDefault || false,
+    });
+  }
+  const result = curateBrowserApps(Array.from(byPath.values()));
+  await fetchIcons(result);
+  for (const appInfo of result) {
+    delete appInfo.iconPath;
+  }
+  return result;
+}
+
 const MAX_APPS_IN_LIST = 5;
+const HTML_EXTENSIONS = new Set(['.html', '.htm']);
+const BROWSER_APPS_PROBE_FILE = path.join(os.tmpdir(), 'lobsterai-browser-probe.html');
+const HTML_PROBE_MAX_DEPTH = 4;
+const HTML_PROBE_MAX_ENTRIES = 1200;
+const HTML_PROBE_EXCLUDED_DIRECTORIES = new Set([
+  '.git',
+  '.hg',
+  '.svn',
+  'node_modules',
+  'vendor',
+  '.next',
+  '.nuxt',
+  '.cache',
+  'coverage',
+]);
+const PREFERRED_HTML_PROBE_NAMES = new Set([
+  'index.html',
+  'index.htm',
+  'app.html',
+  'main.html',
+]);
+const MACOS_BROWSER_CANDIDATES: Array<{ name: string; bundleId: string; relativePath: string }> = [
+  { name: 'Google Chrome', bundleId: 'com.google.Chrome', relativePath: 'Google Chrome.app' },
+  { name: 'Safari', bundleId: 'com.apple.Safari', relativePath: 'Safari.app' },
+  { name: 'Firefox', bundleId: 'org.mozilla.firefox', relativePath: 'Firefox.app' },
+  { name: 'Microsoft Edge', bundleId: 'com.microsoft.edgemac', relativePath: 'Microsoft Edge.app' },
+  { name: 'Brave Browser', bundleId: 'com.brave.Browser', relativePath: 'Brave Browser.app' },
+  { name: 'Arc', bundleId: 'company.thebrowser.Browser', relativePath: 'Arc.app' },
+  { name: 'Dia', bundleId: 'company.thebrowser.dia', relativePath: 'Dia.app' },
+  { name: 'Opera', bundleId: 'com.operasoftware.Opera', relativePath: 'Opera.app' },
+  { name: 'Vivaldi', bundleId: 'com.vivaldi.Vivaldi', relativePath: 'Vivaldi.app' },
+  { name: 'Chromium', bundleId: 'org.chromium.Chromium', relativePath: 'Chromium.app' },
+  { name: '豆包浏览器', bundleId: 'com.bytedance.macos.doubao.browser', relativePath: '豆包浏览器.app' },
+];
 
 // Bundle IDs / name fragments that are rarely useful for opening documents.
 const EXCLUDED_BUNDLE_IDS = new Set<string>([
@@ -72,6 +128,39 @@ const EXCLUDED_BUNDLE_IDS = new Set<string>([
 const EXCLUDED_NAME_PATTERNS = [
   /chrome/i, /chromium/i, /safari/i, /firefox/i, /edge$/i, /brave/i,
   /doubao/i, /browser$/i,
+];
+
+const BROWSER_BUNDLE_IDS = new Set<string>([
+  'com.google.Chrome',
+  'com.google.Chrome.canary',
+  'com.google.chrome.for.testing',
+  'org.chromium.Chromium',
+  'com.apple.Safari',
+  'org.mozilla.firefox',
+  'com.microsoft.edgemac',
+  'com.brave.Browser',
+  'company.thebrowser.Browser',
+  'company.thebrowser.dia',
+  'com.operasoftware.Opera',
+  'com.vivaldi.Vivaldi',
+  'com.360.Chrome',
+  'com.tencent.LemonBrowser',
+  'com.bytedance.macos.doubao.browser',
+]);
+const BROWSER_NAME_PATTERNS = [
+  /chrome/i,
+  /chromium/i,
+  /safari/i,
+  /firefox/i,
+  /microsoft edge/i,
+  /^edge$/i,
+  /brave/i,
+  /^arc$/i,
+  /\bdia\b/i,
+  /opera/i,
+  /vivaldi/i,
+  /browser/i,
+  /浏览器/i,
 ];
 
 // Office-class keywords grouped by file family.
@@ -123,6 +212,10 @@ const EDITOR_KEYWORDS = [
 ];
 
 function curateApps(apps: AppInfo[], ext: string): AppInfo[] {
+  if (HTML_EXTENSIONS.has(ext)) {
+    return curateBrowserApps(apps);
+  }
+
   const officeKeywords = EXT_OFFICE_KEYWORDS[ext] ?? [];
 
   const filtered = apps.filter(a => {
@@ -153,6 +246,168 @@ function curateApps(apps: AppInfo[], ext: string): AppInfo[] {
   return filtered.slice(0, MAX_APPS_IN_LIST);
 }
 
+function curateBrowserApps(apps: AppInfo[]): AppInfo[] {
+  const filtered = apps.filter(a => {
+    if (a.bundleId && BROWSER_BUNDLE_IDS.has(a.bundleId)) return true;
+    if (BROWSER_NAME_PATTERNS.some(re => re.test(a.name))) return true;
+    return BROWSER_NAME_PATTERNS.some(re => re.test(a.path));
+  });
+
+  filtered.sort((a, b) => {
+    if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  return filtered.slice(0, MAX_APPS_IN_LIST);
+}
+
+async function ensureBrowserProbeFile(): Promise<void> {
+  try {
+    await fs.promises.writeFile(
+      BROWSER_APPS_PROBE_FILE,
+      '<!doctype html><meta charset="utf-8"><title>LobsterAI browser probe</title>',
+      'utf8',
+    );
+  } catch {
+    // Best effort only. Browser fallback discovery does not depend on this file.
+  }
+}
+
+async function findProjectHtmlProbeFile(projectDirectory?: string): Promise<string | undefined> {
+  const root = projectDirectory?.trim();
+  if (!root) return undefined;
+
+  let rootStat: fs.Stats;
+  try {
+    rootStat = await fs.promises.stat(root);
+  } catch {
+    return undefined;
+  }
+  if (!rootStat.isDirectory()) return undefined;
+
+  const queue: Array<{ directory: string; depth: number }> = [{ directory: root, depth: 0 }];
+  let visitedEntries = 0;
+  let firstHtmlFile: string | undefined;
+
+  while (queue.length > 0 && visitedEntries < HTML_PROBE_MAX_ENTRIES) {
+    const current = queue.shift()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(current.directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    entries.sort((left, right) => {
+      const leftPreferred = PREFERRED_HTML_PROBE_NAMES.has(left.name.toLowerCase()) ? 0 : 1;
+      const rightPreferred = PREFERRED_HTML_PROBE_NAMES.has(right.name.toLowerCase()) ? 0 : 1;
+      if (leftPreferred !== rightPreferred) return leftPreferred - rightPreferred;
+      if (left.isDirectory() !== right.isDirectory()) return left.isDirectory() ? 1 : -1;
+      return left.name.localeCompare(right.name);
+    });
+
+    for (const entry of entries) {
+      visitedEntries += 1;
+      if (visitedEntries > HTML_PROBE_MAX_ENTRIES) break;
+
+      const absolutePath = path.join(current.directory, entry.name);
+      if (entry.isFile() && HTML_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+        if (PREFERRED_HTML_PROBE_NAMES.has(entry.name.toLowerCase())) {
+          return absolutePath;
+        }
+        firstHtmlFile ??= absolutePath;
+        continue;
+      }
+
+      if (
+        entry.isDirectory() &&
+        current.depth < HTML_PROBE_MAX_DEPTH &&
+        !HTML_PROBE_EXCLUDED_DIRECTORIES.has(entry.name)
+      ) {
+        queue.push({ directory: absolutePath, depth: current.depth + 1 });
+      }
+    }
+  }
+
+  return firstHtmlFile;
+}
+
+async function discoverBrowserApps(): Promise<AppInfo[]> {
+  switch (process.platform) {
+    case 'darwin':
+      return await discoverBrowserApps_macOS();
+    case 'win32':
+      return await getApps_windows('.html');
+    case 'linux':
+      return await getApps_linux(BROWSER_APPS_PROBE_FILE);
+    default:
+      return [];
+  }
+}
+
+async function getDefaultBrowserPath_macOS(): Promise<string> {
+  const script = `
+ObjC.import("AppKit");
+ObjC.import("Foundation");
+var url = $.NSURL.URLWithString("http://localhost/");
+var appURL = $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL(url);
+appURL ? ObjC.unwrap(appURL.path) : "";`;
+  try {
+    return (await execFileAsync('osascript', ['-l', 'JavaScript', '-e', script], 5000)).trim();
+  } catch {
+    return '';
+  }
+}
+
+async function discoverBrowserApps_macOS(): Promise<AppInfo[]> {
+  const defaultPath = await getDefaultBrowserPath_macOS();
+  const searchRoots = [
+    '/Applications',
+    '/System/Applications',
+    path.join(os.homedir(), 'Applications'),
+  ];
+  const results: AppInfo[] = [];
+
+  for (const candidate of MACOS_BROWSER_CANDIDATES) {
+    for (const root of searchRoots) {
+      const appPath = path.join(root, candidate.relativePath);
+      if (!fs.existsSync(appPath)) continue;
+      results.push({
+        name: candidate.name,
+        path: appPath,
+        bundleId: candidate.bundleId,
+        isDefault: appPath === defaultPath,
+        iconPath: findMacOSAppIconPath(appPath),
+      });
+      break;
+    }
+  }
+
+  return results;
+}
+
+function findMacOSAppIconPath(appPath: string): string | undefined {
+  const resourcesDir = path.join(appPath, 'Contents', 'Resources');
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(resourcesDir);
+  } catch {
+    return undefined;
+  }
+
+  for (const preferredName of ['AppIcon.icns', 'app.icns']) {
+    if (entries.includes(preferredName)) {
+      return path.join(resourcesDir, preferredName);
+    }
+  }
+
+  const iconFile = entries.find(entry =>
+    entry.toLowerCase().endsWith('.icns') &&
+    !/document|file|toolbar/i.test(entry)
+  );
+  return iconFile ? path.join(resourcesDir, iconFile) : undefined;
+}
+
 export async function openFileWithApp(filePath: string, appPath: string): Promise<void> {
   switch (process.platform) {
     case 'darwin':
@@ -172,6 +427,28 @@ export async function openFileWithApp(filePath: string, appPath: string): Promis
       break;
     default:
       await shell.openPath(filePath);
+  }
+}
+
+export async function openUrlWithApp(url: string, appPath: string): Promise<void> {
+  switch (process.platform) {
+    case 'darwin':
+      await execFileAsync('open', ['-a', appPath, url], 5000);
+      break;
+    case 'win32':
+      spawn(appPath, [url], { detached: true, stdio: 'ignore' }).unref();
+      break;
+    case 'linux':
+      if (appPath.endsWith('.desktop')) {
+        await execFileAsync('gtk-launch', [appPath, url], 5000).catch(() =>
+          execFileAsync('gio', ['launch', appPath, url], 5000)
+        );
+      } else {
+        spawn(appPath, [url], { detached: true, stdio: 'ignore' }).unref();
+      }
+      break;
+    default:
+      await shell.openExternal(url);
   }
 }
 
@@ -442,8 +719,11 @@ async function fetchIcons(apps: AppInfo[]): Promise<void> {
 
 async function extractIcon(appInfo: AppInfo): Promise<string | null> {
   // macOS: use sips to convert .icns → PNG → data URL
-  if (process.platform === 'darwin' && appInfo.iconPath && fs.existsSync(appInfo.iconPath)) {
-    const png = await icnsToPng(appInfo.iconPath);
+  const macOSIconPath = process.platform === 'darwin'
+    ? appInfo.iconPath || findMacOSAppIconPath(appInfo.path)
+    : undefined;
+  if (macOSIconPath && fs.existsSync(macOSIconPath)) {
+    const png = await icnsToPng(macOSIconPath);
     if (png) return png;
   }
   // Fallback (mainly Windows): use Electron's app.getFileIcon

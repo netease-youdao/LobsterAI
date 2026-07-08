@@ -1,4 +1,4 @@
-import { McpRegistryEntry } from '../types/mcp';
+import { McpRegistryEntry, McpRegistryEntryKind } from '../types/mcp';
 
 /**
  * Built-in MCP server registry.
@@ -159,6 +159,19 @@ export const mcpRegistry: McpRegistryEntry[] = [
     command: 'npx',
     defaultArgs: ['-y', 'firecrawl-mcp@latest'],
     requiredEnvKeys: ['FIRECRAWL_API_KEY'],
+  },
+  {
+    id: 'qichacha',
+    name: '企查查',
+    descriptionKey: 'mcpDesc_qichacha',
+    category: 'data-api',
+    categoryKey: 'mcpCategoryDataApi',
+    transportType: 'http',
+    command: 'https://agent.qcc.com/mcp',
+    defaultArgs: ['6 servers'],
+    oauthProvider: 'qichacha',
+    kind: McpRegistryEntryKind.Bundle,
+    marketplacePosition: 4,
   },
 ];
 

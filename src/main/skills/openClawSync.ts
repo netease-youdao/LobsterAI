@@ -1,6 +1,6 @@
 import path from 'path';
 
-import type { SkillManager } from '../skillManager';
+import type { SkillManager } from './skillManager';
 
 /** Narrow type for the OpenClaw skills.status report used by IPC handlers */
 export interface OpenClawSkillReport {

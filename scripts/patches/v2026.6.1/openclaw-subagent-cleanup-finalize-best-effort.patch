@@ -1,0 +1,124 @@
+diff --git a/src/agents/subagent-registry-lifecycle.ts b/src/agents/subagent-registry-lifecycle.ts
+index 878ee7c712..e337f56b36 100644
+--- a/src/agents/subagent-registry-lifecycle.ts
++++ b/src/agents/subagent-registry-lifecycle.ts
+@@ -498,6 +498,26 @@ export function createSubagentRegistryLifecycleController(params: {
+     }
+   };
+ 
++  const emitCompletionEndedHookBestEffort = async (
++    entry: SubagentRunRecord,
++    reason: SubagentLifecycleEndedReason,
++    phase:
++      | "announced-cleanup-finalize"
++      | "deferred-announce-give-up"
++      | "resumed-announce-give-up",
++  ) => {
++    try {
++      await emitCompletionEndedHookIfNeeded(entry, reason);
++    } catch (error) {
++      params.warn("failed to emit subagent ended hook during cleanup", {
++        error: buildSafeLifecycleErrorMeta(error),
++        runId: maskRunId(entry.runId),
++        childSessionKey: maskSessionKey(entry.childSessionKey),
++        phase,
++      });
++    }
++  };
++
+   const clearPendingFinalDelivery = (entry: SubagentRunRecord) => {
+     const delivery = ensureDeliveryState(entry);
+     delivery.payload = undefined;
+@@ -661,7 +681,11 @@ export function createSubagentRegistryLifecycleController(params: {
+       cleanup: giveUpParams.entry.cleanup,
+       completedAt: Date.now(),
+     });
+-    await emitCompletionEndedHookIfNeeded(giveUpParams.entry, completionReason);
++    await emitCompletionEndedHookBestEffort(
++      giveUpParams.entry,
++      completionReason,
++      "resumed-announce-give-up",
++    );
+   };
+ 
+   const beginSubagentCleanup = (runId: string) => {
+@@ -854,7 +878,11 @@ export function createSubagentRegistryLifecycleController(params: {
+       completion.fallbackResultText = undefined;
+       completion.fallbackCapturedAt = undefined;
+       const completionReason = resolveCleanupCompletionReason(entry);
+-      await emitCompletionEndedHookIfNeeded(entry, completionReason);
++      await emitCompletionEndedHookBestEffort(
++        entry,
++        completionReason,
++        "announced-cleanup-finalize",
++      );
+       const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+       if (shouldDeleteAttachments) {
+         await safeRemoveAttachmentsDir(entry);
+@@ -941,7 +969,7 @@ export function createSubagentRegistryLifecycleController(params: {
+         cleanup,
+         completedAt: now,
+       });
+-      await emitCompletionEndedHookIfNeeded(entry, completionReason);
++      await emitCompletionEndedHookBestEffort(entry, completionReason, "deferred-announce-give-up");
+       return;
+     }
+ 
+diff --git a/src/shared/runtime-import.test.ts b/src/shared/runtime-import.test.ts
+index 16e1959108..60c6fbb375 100644
+--- a/src/shared/runtime-import.test.ts
++++ b/src/shared/runtime-import.test.ts
+@@ -44,6 +44,16 @@ describe("runtime-import", () => {
+     ).toBe("file:///C:/Users/alice/openclaw/dist/subagent-registry.runtime.js");
+   });
+ 
++  it("resolves runtime modules under dist when the base module is the gateway bundle", () => {
++    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
++
++    expect(
++      resolveRuntimeImportSpecifier("file:///C:/Users/alice/openclaw/gateway-bundle.mjs", [
++        "./subagent-registry.runtime.js",
++      ]),
++    ).toBe("file:///C:/Users/alice/openclaw/dist/subagent-registry.runtime.js");
++  });
++
+   it("resolves absolute Windows runtime import parts directly", () => {
+     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+ 
+diff --git a/src/shared/runtime-import.ts b/src/shared/runtime-import.ts
+index 2141b69d65..22c7a5c409 100644
+--- a/src/shared/runtime-import.ts
++++ b/src/shared/runtime-import.ts
+@@ -1,7 +1,12 @@
++import path from "node:path";
++import { fileURLToPath } from "node:url";
++
+ import { toSafeImportPath } from "./import-specifier.js";
+ 
+ export { toSafeImportPath as toSafeRuntimeImportPath } from "./import-specifier.js";
+ 
++const GATEWAY_BUNDLE_BASENAME = "gateway-bundle.mjs";
++
+ /** Resolves a runtime import part against a base URL/path after platform-safe normalization. */
+ export function resolveRuntimeImportSpecifier(baseUrl: string, parts: readonly string[]): string {
+   const joined = parts.join("");
+@@ -9,7 +14,18 @@ export function resolveRuntimeImportSpecifier(baseUrl: string, parts: readonly s
+   if (safeJoined !== joined) {
+     return safeJoined;
+   }
+-  return new URL(joined, toSafeImportPath(baseUrl)).href;
++  const safeBase = toSafeImportPath(baseUrl);
++  if (joined.startsWith("./")) {
++    try {
++      const basePath = fileURLToPath(safeBase);
++      if (path.basename(basePath) === GATEWAY_BUNDLE_BASENAME) {
++        return new URL(`./dist/${joined.slice(2)}`, safeBase).href;
++      }
++    } catch {
++      // Keep default URL resolution for non-file URLs and malformed bases.
++    }
++  }
++  return new URL(joined, safeBase).href;
+ }
+ 
+ /** Imports a lazy runtime module through the normalized runtime specifier. */

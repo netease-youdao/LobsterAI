@@ -10,7 +10,14 @@ const Imap = require('imap');
 const { simpleParser } = require('mailparser');
 const path = require('path');
 const fs = require('fs');
-require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+const {
+  createImapConfig,
+  getTargetAccounts,
+  listAccountsConfig,
+  redactAccount,
+  redactEmail,
+  withAccountResult,
+} = require('./config');
 
 // IMAP ID information for 163.com compatibility
 const IMAP_ID = {
@@ -19,8 +26,10 @@ const IMAP_ID = {
   vendor: 'netease',
   'support-email': 'kefu@188.com'
 };
-
-const DEFAULT_MAILBOX = process.env.IMAP_MAILBOX || 'INBOX';
+const IMAP_OPERATION_TIMEOUT_MS = Math.max(
+  1000,
+  parseInt(process.env.EMAIL_IMAP_OPERATION_TIMEOUT_MS || '30000', 10) || 30000
+);
 
 // Parse command-line arguments
 function parseArgs() {
@@ -44,31 +53,26 @@ function parseArgs() {
   return { command, options, positional };
 }
 
-// Create IMAP connection config
-function createImapConfig() {
-  const config = {
-    user: process.env.IMAP_USER,
-    password: process.env.IMAP_PASS,
-    host: process.env.IMAP_HOST || '127.0.0.1',
-    port: parseInt(process.env.IMAP_PORT) || 1143,
-    tls: process.env.IMAP_TLS === 'true',
-    tlsOptions: {
-      rejectUnauthorized: process.env.IMAP_REJECT_UNAUTHORIZED !== 'false',
-    },
-    connTimeout: 10000,
-    authTimeout: 10000,
-  };
-  console.error(`[imap-debug] Config: host=${config.host}, port=${config.port}, user=${config.user}, tls=${config.tls}, rejectUnauthorized=${config.tlsOptions.rejectUnauthorized}, hasPassword=${!!config.password}`);
-  return config;
+function withTimeout(promise, label, timeoutMs = IMAP_OPERATION_TIMEOUT_MS) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
 }
 
 // Connect to IMAP server with ID support
-async function connect() {
-  const config = createImapConfig();
-
-  if (!config.user || !config.password) {
-    throw new Error('Missing IMAP_USER or IMAP_PASS environment variables');
-  }
+async function connect(account) {
+  const config = createImapConfig(account);
+  console.error(`[imap-debug] Account: ${JSON.stringify(redactAccount(account))}`);
+  console.error(`[imap-debug] Config: host=${config.host}, port=${config.port}, user=${redactEmail(config.user)}, tls=${config.tls}, rejectUnauthorized=${config.tlsOptions.rejectUnauthorized}, hasPassword=${!!config.password}`);
 
   return new Promise((resolve, reject) => {
     const imap = new Imap(config);
@@ -113,7 +117,7 @@ function openBox(imap, mailbox, readOnly = false) {
 }
 
 // Search for messages
-function searchMessages(imap, criteria, fetchOptions) {
+function searchMessages(imap, criteria, fetchOptions, maxResults = null) {
   return new Promise((resolve, reject) => {
     imap.search(criteria, (err, results) => {
       if (err) {
@@ -126,7 +130,13 @@ function searchMessages(imap, criteria, fetchOptions) {
         return;
       }
 
-      const fetch = imap.fetch(results, fetchOptions);
+      // IMAP search results are returned in ascending message order by common
+      // servers. Fetch only the newest candidates to avoid downloading a large
+      // mailbox when the user asks for a small list.
+      const fetchTargets = maxResults && results.length > maxResults
+        ? results.slice(-maxResults)
+        : results;
+      const fetch = imap.fetch(fetchTargets, fetchOptions);
       const messages = [];
 
       fetch.on('message', (msg) => {
@@ -183,10 +193,12 @@ async function parseEmail(bodyStr, { includeAttachments = false, summaryOnly = f
   if (parsed.date) {
     try {
       const d = parsed.date;
-      console.error(`[imap-debug] date raw: ${d}`);
-      console.error(`[imap-debug] date ISO(UTC): ${d.toISOString()}`);
-      console.error(`[imap-debug] date toString(local): ${d.toString()}`);
-      console.error(`[imap-debug] date timezoneOffset: ${d.getTimezoneOffset()} min`);
+      if (process.env.EMAIL_DEBUG_DATES === '1') {
+        console.error(`[imap-debug] date raw: ${d}`);
+        console.error(`[imap-debug] date ISO(UTC): ${d.toISOString()}`);
+        console.error(`[imap-debug] date toString(local): ${d.toString()}`);
+        console.error(`[imap-debug] date timezoneOffset: ${d.getTimezoneOffset()} min`);
+      }
       const pad = (n) => String(n).padStart(2, '0');
       const tzOffset = -d.getTimezoneOffset();
       const sign = tzOffset >= 0 ? '+' : '-';
@@ -195,7 +207,9 @@ async function parseEmail(bodyStr, { includeAttachments = false, summaryOnly = f
       dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
         + `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
         + `${sign}${tzHours}:${tzMinutes}`;
-      console.error(`[imap-debug] date formatted: ${dateStr}`);
+      if (process.env.EMAIL_DEBUG_DATES === '1') {
+        console.error(`[imap-debug] date formatted: ${dateStr}`);
+      }
     } catch (e) {
       dateStr = parsed.date.toISOString();
     }
@@ -226,11 +240,11 @@ async function parseEmail(bodyStr, { includeAttachments = false, summaryOnly = f
 }
 
 // Check for new/unread emails
-async function checkEmails(mailbox = DEFAULT_MAILBOX, limit = 10, recentTime = null, unreadOnly = false) {
-  const imap = await connect();
+async function checkEmails(account, mailbox = account.mailbox || 'INBOX', limit = 10, recentTime = null, unreadOnly = false) {
+  const imap = await connect(account);
 
   try {
-    await openBox(imap, mailbox);
+    await withTimeout(openBox(imap, mailbox), `Opening mailbox "${mailbox}"`);
 
     // Build search criteria
     const searchCriteria = unreadOnly ? ['UNSEEN'] : ['ALL'];
@@ -246,7 +260,10 @@ async function checkEmails(mailbox = DEFAULT_MAILBOX, limit = 10, recentTime = n
       markSeen: false,
     };
 
-    const messages = await searchMessages(imap, searchCriteria, fetchOptions);
+    const messages = await withTimeout(
+      searchMessages(imap, searchCriteria, fetchOptions, limit),
+      `Checking mailbox "${mailbox}"`
+    );
 
     // Sort by date (newest first) - parse from message attributes
     const sortedMessages = messages.sort((a, b) => {
@@ -275,11 +292,11 @@ async function checkEmails(mailbox = DEFAULT_MAILBOX, limit = 10, recentTime = n
 }
 
 // Fetch full email by UID
-async function fetchEmail(uid, mailbox = DEFAULT_MAILBOX) {
-  const imap = await connect();
+async function fetchEmail(account, uid, mailbox = account.mailbox || 'INBOX') {
+  const imap = await connect(account);
 
   try {
-    await openBox(imap, mailbox);
+    await withTimeout(openBox(imap, mailbox), `Opening mailbox "${mailbox}"`);
 
     const searchCriteria = [['UID', uid]];
     const fetchOptions = {
@@ -287,7 +304,10 @@ async function fetchEmail(uid, mailbox = DEFAULT_MAILBOX) {
       markSeen: false,
     };
 
-    const messages = await searchMessages(imap, searchCriteria, fetchOptions);
+    const messages = await withTimeout(
+      searchMessages(imap, searchCriteria, fetchOptions, 1),
+      `Fetching message UID ${uid}`
+    );
 
     if (messages.length === 0) {
       throw new Error(`Message UID ${uid} not found`);
@@ -307,11 +327,11 @@ async function fetchEmail(uid, mailbox = DEFAULT_MAILBOX) {
 }
 
 // Download attachments from email
-async function downloadAttachments(uid, mailbox = DEFAULT_MAILBOX, outputDir = '.', specificFilename = null) {
-  const imap = await connect();
+async function downloadAttachments(account, uid, mailbox = account.mailbox || 'INBOX', outputDir = '.', specificFilename = null) {
+  const imap = await connect(account);
 
   try {
-    await openBox(imap, mailbox);
+    await withTimeout(openBox(imap, mailbox), `Opening mailbox "${mailbox}"`);
 
     const searchCriteria = [['UID', uid]];
     const fetchOptions = {
@@ -319,7 +339,10 @@ async function downloadAttachments(uid, mailbox = DEFAULT_MAILBOX, outputDir = '
       markSeen: false,
     };
 
-    const messages = await searchMessages(imap, searchCriteria, fetchOptions);
+    const messages = await withTimeout(
+      searchMessages(imap, searchCriteria, fetchOptions, 1),
+      `Fetching message UID ${uid}`
+    );
 
     if (messages.length === 0) {
       throw new Error(`Message UID ${uid} not found`);
@@ -349,7 +372,11 @@ async function downloadAttachments(uid, mailbox = DEFAULT_MAILBOX, outputDir = '
         continue;
       }
       if (attachment.content) {
-        const filePath = path.join(outputDir, attachment.filename);
+        const accountOutputDir = path.join(outputDir, account.id, String(uid));
+        if (!fs.existsSync(accountOutputDir)) {
+          fs.mkdirSync(accountOutputDir, { recursive: true });
+        }
+        const filePath = path.join(accountOutputDir, attachment.filename);
         fs.writeFileSync(filePath, attachment.content);
         downloaded.push({
           filename: attachment.filename,
@@ -403,12 +430,12 @@ function parseRelativeTime(timeStr) {
 }
 
 // Search emails with criteria
-async function searchEmails(options) {
-  const imap = await connect();
+async function searchEmails(account, options) {
+  const imap = await connect(account);
 
   try {
-    const mailbox = options.mailbox || DEFAULT_MAILBOX;
-    await openBox(imap, mailbox);
+    const mailbox = options.mailbox || account.mailbox || 'INBOX';
+    await withTimeout(openBox(imap, mailbox), `Opening mailbox "${mailbox}"`);
 
     const criteria = [];
 
@@ -435,8 +462,11 @@ async function searchEmails(options) {
       markSeen: false,
     };
 
-    const messages = await searchMessages(imap, criteria, fetchOptions);
     const limit = parseInt(options.limit) || 20;
+    const messages = await withTimeout(
+      searchMessages(imap, criteria, fetchOptions, limit),
+      `Searching mailbox "${mailbox}"`
+    );
     const results = [];
 
     // Sort by date (newest first)
@@ -462,52 +492,52 @@ async function searchEmails(options) {
 }
 
 // Mark message(s) as read
-async function markAsRead(uids, mailbox = DEFAULT_MAILBOX) {
-  const imap = await connect();
+async function markAsRead(account, uids, mailbox = account.mailbox || 'INBOX') {
+  const imap = await connect(account);
 
   try {
-    await openBox(imap, mailbox);
+    await withTimeout(openBox(imap, mailbox), `Opening mailbox "${mailbox}"`);
 
-    return new Promise((resolve, reject) => {
+    return await withTimeout(new Promise((resolve, reject) => {
       imap.addFlags(uids, '\\Seen', (err) => {
         if (err) reject(err);
         else resolve({ success: true, uids, action: 'marked as read' });
       });
-    });
+    }), `Marking message(s) as read in "${mailbox}"`);
   } finally {
     imap.end();
   }
 }
 
 // Mark message(s) as unread
-async function markAsUnread(uids, mailbox = DEFAULT_MAILBOX) {
-  const imap = await connect();
+async function markAsUnread(account, uids, mailbox = account.mailbox || 'INBOX') {
+  const imap = await connect(account);
 
   try {
-    await openBox(imap, mailbox);
+    await withTimeout(openBox(imap, mailbox), `Opening mailbox "${mailbox}"`);
 
-    return new Promise((resolve, reject) => {
+    return await withTimeout(new Promise((resolve, reject) => {
       imap.delFlags(uids, '\\Seen', (err) => {
         if (err) reject(err);
         else resolve({ success: true, uids, action: 'marked as unread' });
       });
-    });
+    }), `Marking message(s) as unread in "${mailbox}"`);
   } finally {
     imap.end();
   }
 }
 
 // List all mailboxes
-async function listMailboxes() {
-  const imap = await connect();
+async function listMailboxes(account) {
+  const imap = await connect(account);
 
   try {
-    return new Promise((resolve, reject) => {
+    return await withTimeout(new Promise((resolve, reject) => {
       imap.getBoxes((err, boxes) => {
         if (err) reject(err);
         else resolve(formatMailboxTree(boxes));
       });
-    });
+    }), 'Listing mailboxes');
   } finally {
     imap.end();
   }
@@ -531,6 +561,45 @@ function formatMailboxTree(boxes, prefix = '') {
   return result;
 }
 
+function formatCommandResult(account, command, payload, metadata = {}) {
+  return withAccountResult(account, {
+    success: true,
+    command,
+    ...metadata,
+    ...payload,
+  });
+}
+
+async function runForAccounts(options, operation, formatter = null) {
+  const { accounts, allAccounts } = getTargetAccounts(options);
+  if (!allAccounts) {
+    const result = await operation(accounts[0]);
+    return formatter ? formatter(accounts[0], result) : result;
+  }
+
+  const results = [];
+  for (const account of accounts) {
+    try {
+      const result = await operation(account);
+      results.push(formatter
+        ? formatter(account, result)
+        : withAccountResult(account, { success: true, result }));
+    } catch (error) {
+      results.push(withAccountResult(account, {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+
+  const successCount = results.filter(result => result.success).length;
+  return {
+    success: successCount === results.length,
+    partial: successCount > 0 && successCount < results.length,
+    results,
+  };
+}
+
 // Main CLI handler
 async function main() {
   const { command, options, positional } = parseArgs();
@@ -539,54 +608,94 @@ async function main() {
     let result;
 
     switch (command) {
+      case 'accounts':
+        result = listAccountsConfig();
+        break;
+
       case 'check':
-        result = await checkEmails(
-          options.mailbox || DEFAULT_MAILBOX,
+        result = await runForAccounts(options, account => checkEmails(
+          account,
+          options.mailbox || account.mailbox || 'INBOX',
           parseInt(options.limit) || 10,
           options.recent || null,
-          options.unseen === 'true' // if --unseen is set, only get unread messages
-        );
-        break;
-
-      case 'fetch':
-        if (!positional[0]) {
-          throw new Error('UID required: node imap.js fetch <uid>');
-        }
-        result = await fetchEmail(positional[0], options.mailbox);
-        break;
-
-      case 'download':
-        if (!positional[0]) {
-          throw new Error('UID required: node imap.js download <uid>');
-        }
-        result = await downloadAttachments(positional[0], options.mailbox, options.dir || '.', options.file || null);
+          options.unseen === true || options.unseen === 'true'
+        ), (account, messages) => formatCommandResult(account, 'check', {
+          count: messages.length,
+          messages,
+        }, {
+          mailbox: options.mailbox || account.mailbox || 'INBOX',
+        }));
         break;
 
       case 'search':
-        result = await searchEmails(options);
-        break;
-
-      case 'mark-read':
-        if (positional.length === 0) {
-          throw new Error('UID(s) required: node imap.js mark-read <uid> [uid2...]');
-        }
-        result = await markAsRead(positional, options.mailbox);
-        break;
-
-      case 'mark-unread':
-        if (positional.length === 0) {
-          throw new Error('UID(s) required: node imap.js mark-unread <uid> [uid2...]');
-        }
-        result = await markAsUnread(positional, options.mailbox);
+        result = await runForAccounts(options, account => searchEmails(account, options), (account, messages) => formatCommandResult(account, 'search', {
+          count: messages.length,
+          messages,
+        }, {
+          mailbox: options.mailbox || account.mailbox || 'INBOX',
+        }));
         break;
 
       case 'list-mailboxes':
-        result = await listMailboxes();
+        result = await runForAccounts(options, account => listMailboxes(account), (account, mailboxes) => formatCommandResult(account, 'list-mailboxes', {
+          count: mailboxes.length,
+          mailboxes,
+        }));
+        break;
+
+      case 'fetch': {
+        if (options['all-accounts']) {
+          throw new Error('--all-accounts is not supported for fetch; pass --account <id>');
+        }
+        if (!positional[0]) {
+          throw new Error('UID required: node imap.js fetch <uid>');
+        }
+        const { accounts } = getTargetAccounts(options);
+        result = await fetchEmail(accounts[0], positional[0], options.mailbox);
+        break;
+      }
+
+      case 'download': {
+        if (options['all-accounts']) {
+          throw new Error('--all-accounts is not supported for download; pass --account <id>');
+        }
+        if (!positional[0]) {
+          throw new Error('UID required: node imap.js download <uid>');
+        }
+        const { accounts } = getTargetAccounts(options);
+        result = await downloadAttachments(
+          accounts[0],
+          positional[0],
+          options.mailbox,
+          options.dir || '.',
+          options.file || null
+        );
+        break;
+      }
+
+      case 'mark-read':
+        if (options['all-accounts']) {
+          throw new Error('--all-accounts is not supported for mark-read; pass --account <id>');
+        }
+        if (positional.length === 0) {
+          throw new Error('UID(s) required: node imap.js mark-read <uid> [uid2...]');
+        }
+        result = await markAsRead(getTargetAccounts(options).accounts[0], positional, options.mailbox);
+        break;
+
+      case 'mark-unread':
+        if (options['all-accounts']) {
+          throw new Error('--all-accounts is not supported for mark-unread; pass --account <id>');
+        }
+        if (positional.length === 0) {
+          throw new Error('UID(s) required: node imap.js mark-unread <uid> [uid2...]');
+        }
+        result = await markAsUnread(getTargetAccounts(options).accounts[0], positional, options.mailbox);
         break;
 
       default:
         console.error('Unknown command:', command);
-        console.error('Available commands: check, fetch, download, search, mark-read, mark-unread, list-mailboxes');
+        console.error('Available commands: accounts, check, fetch, download, search, mark-read, mark-unread, list-mailboxes');
         process.exit(1);
     }
 

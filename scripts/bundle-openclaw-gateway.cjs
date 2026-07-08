@@ -16,6 +16,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const { ensureOpenClawWorkerShims } = require('./openclaw-worker-shims.cjs');
+
 const rootDir = path.resolve(__dirname, '..');
 const runtimeDir = process.argv[2]
   ? path.resolve(process.argv[2])
@@ -35,12 +37,31 @@ if (!fs.existsSync(entryPath)) {
   process.exit(1);
 }
 
+function ensureWorkerShims() {
+  const result = ensureOpenClawWorkerShims(runtimeDir);
+  const changedCount = result.created.length + result.updated.length;
+  if (changedCount > 0) {
+    console.log(`[bundle-openclaw-gateway] Ensured ${changedCount} worker shim(s).`);
+  }
+  if (result.missingTargets.length > 0) {
+    console.warn(
+      `[bundle-openclaw-gateway] Skipped ${result.missingTargets.length} worker shim(s) because target files are missing.`,
+    );
+  }
+  if (result.protectedExisting.length > 0) {
+    console.warn(
+      `[bundle-openclaw-gateway] Skipped ${result.protectedExisting.length} worker shim(s) because existing files are not LobsterAI shims.`,
+    );
+  }
+}
+
 // Skip if bundle is already up-to-date (newer than the entry point).
 if (fs.existsSync(bundleOutPath)) {
   const bundleStat = fs.statSync(bundleOutPath);
   const entryStat = fs.statSync(entryPath);
   if (bundleStat.mtimeMs > entryStat.mtimeMs) {
     console.log(`[bundle-openclaw-gateway] Bundle is up-to-date, skipping.`);
+    ensureWorkerShims();
     process.exit(0);
   }
 }
@@ -118,6 +139,7 @@ esbuild
       `[bundle-openclaw-gateway] Done in ${elapsed}ms (${sizeKB} KB)` +
         (result.warnings.length ? `, ${result.warnings.length} warnings` : ''),
     );
+    ensureWorkerShims();
   })
   .catch((err) => {
     console.error('[bundle-openclaw-gateway] esbuild failed:', err.message || err);

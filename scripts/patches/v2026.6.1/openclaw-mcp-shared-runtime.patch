@@ -1,0 +1,350 @@
+diff --git a/src/agents/agent-bundle-mcp-runtime.test.ts b/src/agents/agent-bundle-mcp-runtime.test.ts
+index 028ec14c81..f219371e3d 100644
+--- a/src/agents/agent-bundle-mcp-runtime.test.ts
++++ b/src/agents/agent-bundle-mcp-runtime.test.ts
+@@ -1359,6 +1359,105 @@ process.on("SIGINT", shutdown);`,
+     expect(manager.listSessionIds()).not.toContain("session-a");
+   });
+
++  it("shares MCP runtimes across sessions with identical MCP config fingerprints", async () => {
++    const created: string[] = [];
++    const disposed: string[] = [];
++    const createRuntime: RuntimeFactory = (params) => {
++      const runtime = makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]);
++      created.push(params.sessionId);
++      return {
++        ...runtime,
++        sessionId: params.sessionId,
++        sessionKey: params.sessionKey,
++        workspaceDir: params.workspaceDir,
++        configFingerprint: params.configFingerprint ?? "fingerprint",
++        dispose: async () => {
++          disposed.push(params.sessionId);
++        },
++      };
++    };
++    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
++
++    const runtimeA = await manager.getOrCreate({
++      sessionId: "session-a",
++      sessionKey: "agent:test:session-a",
++      workspaceDir: "/workspace",
++      cfg: { mcp: { servers: { sharedProbe: { command: "node", args: ["server.mjs"] } } } },
++    });
++    const runtimeB = await manager.getOrCreate({
++      sessionId: "session-b",
++      sessionKey: "agent:test:session-b",
++      workspaceDir: "/workspace",
++      cfg: { mcp: { servers: { sharedProbe: { command: "node", args: ["server.mjs"] } } } },
++    });
++
++    expect(runtimeA).toBe(runtimeB);
++    expect(created).toEqual(["session-a"]);
++    expect(manager.peekSession({ sessionId: "session-a" })).toBe(runtimeA);
++    expect(manager.peekSession({ sessionId: "session-b" })).toBe(runtimeA);
++    expect(manager.peekSession({ sessionKey: "agent:test:session-b" })).toBe(runtimeA);
++    expect(manager.listSessionIds().toSorted()).toEqual(["session-a", "session-b"]);
++
++    await manager.disposeSession("session-a");
++
++    expect(disposed).toEqual([]);
++    expect(manager.peekSession({ sessionId: "session-a" })).toBeUndefined();
++    expect(manager.peekSession({ sessionId: "session-b" })).toBe(runtimeA);
++    expect(manager.listSessionIds()).toEqual(["session-b"]);
++
++    await manager.disposeSession("session-b");
++
++    expect(disposed).toEqual(["session-a"]);
++    expect(manager.listSessionIds()).toEqual([]);
++  });
++
++  it("releases the old shared runtime when a session moves to a new MCP fingerprint", async () => {
++    const disposed: string[] = [];
++    const createRuntime: RuntimeFactory = (params) => ({
++      ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
++      sessionId: params.sessionId,
++      sessionKey: params.sessionKey,
++      workspaceDir: params.workspaceDir,
++      configFingerprint: params.configFingerprint ?? "fingerprint",
++      dispose: async () => {
++        disposed.push(params.sessionId);
++      },
++    });
++    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
++
++    const runtimeA = await manager.getOrCreate({
++      sessionId: "session-a",
++      sessionKey: "agent:test:session-a",
++      workspaceDir: "/workspace",
++      cfg: { mcp: { servers: { sharedProbe: { command: "node", args: ["server-a.mjs"] } } } },
++    });
++    const runtimeB = await manager.getOrCreate({
++      sessionId: "session-b",
++      sessionKey: "agent:test:session-b",
++      workspaceDir: "/workspace",
++      cfg: { mcp: { servers: { sharedProbe: { command: "node", args: ["server-a.mjs"] } } } },
++    });
++
++    expect(runtimeA).toBe(runtimeB);
++
++    const runtimeC = await manager.getOrCreate({
++      sessionId: "session-b",
++      sessionKey: "agent:test:session-b",
++      workspaceDir: "/workspace",
++      cfg: { mcp: { servers: { sharedProbe: { command: "node", args: ["server-b.mjs"] } } } },
++    });
++
++    expect(runtimeC).not.toBe(runtimeA);
++    expect(disposed).toEqual([]);
++    expect(manager.peekSession({ sessionId: "session-a" })).toBe(runtimeA);
++    expect(manager.peekSession({ sessionId: "session-b" })).toBe(runtimeC);
++
++    await manager.disposeSession("session-a");
++
++    expect(disposed).toEqual(["session-a"]);
++    expect(manager.peekSession({ sessionId: "session-b" })).toBe(runtimeC);
++  });
++
+   it("peeks existing runtimes and populated catalogs without creating new runtimes", async () => {
+     let catalogReady = false;
+     const createRuntime: RuntimeFactory = (params) => {
+diff --git a/src/agents/agent-bundle-mcp-runtime.ts b/src/agents/agent-bundle-mcp-runtime.ts
+index 54f96536ea..9f820cf9d1 100644
+--- a/src/agents/agent-bundle-mcp-runtime.ts
++++ b/src/agents/agent-bundle-mcp-runtime.ts
+@@ -868,9 +868,11 @@ function createSessionMcpRuntimeManager(
+     idleSweepIntervalMs?: number;
+   } = {},
+ ): SessionMcpRuntimeManager {
+-  const runtimesBySessionId = new Map<string, SessionMcpRuntime>();
++  const runtimesByFingerprint = new Map<string, SessionMcpRuntime>();
++  const refsByFingerprint = new Map<string, Set<string>>();
++  const fingerprintBySessionId = new Map<string, string>();
+   const sessionIdBySessionKey = new Map<string, string>();
+-  const idleTtlMsBySessionId = new Map<string, number>();
++  const idleTtlMsByFingerprint = new Map<string, number>();
+   const createRuntime = opts.createRuntime ?? createSessionMcpRuntime;
+   const now = opts.now ?? Date.now;
+   const createInFlight = new Map<
+@@ -893,21 +895,58 @@ function createSessionMcpRuntimeManager(
+     }
+   };
+
++  const buildRuntimeKey = (workspaceDir: string, fingerprint: string): string =>
++    `${workspaceDir}\0${fingerprint}`;
++
++  const addRuntimeRef = (runtimeKey: string, sessionId: string, idleTtlMs: number) => {
++    let refs = refsByFingerprint.get(runtimeKey);
++    if (!refs) {
++      refs = new Set<string>();
++      refsByFingerprint.set(runtimeKey, refs);
++    }
++    refs.add(sessionId);
++    fingerprintBySessionId.set(sessionId, runtimeKey);
++    idleTtlMsByFingerprint.set(runtimeKey, idleTtlMs);
++  };
++
++  const removeRuntimeRef = (runtimeKey: string, sessionId: string): boolean => {
++    const refs = refsByFingerprint.get(runtimeKey);
++    refs?.delete(sessionId);
++    fingerprintBySessionId.delete(sessionId);
++    if (!refs || refs.size === 0) {
++      refsByFingerprint.delete(runtimeKey);
++      idleTtlMsByFingerprint.delete(runtimeKey);
++      return true;
++    }
++    return false;
++  };
++
++  const forgetRuntimeRefs = (runtimeKey: string) => {
++    const refs = refsByFingerprint.get(runtimeKey);
++    if (refs) {
++      for (const sessionId of refs) {
++        fingerprintBySessionId.delete(sessionId);
++        forgetSessionKeysForSessionId(sessionId);
++      }
++    }
++    refsByFingerprint.delete(runtimeKey);
++    idleTtlMsByFingerprint.delete(runtimeKey);
++  };
++
+   const sweepIdleRuntimes = async (): Promise<number> => {
+     const nowMs = now();
+     const expired: SessionMcpRuntime[] = [];
+-    for (const [sessionId, runtime] of runtimesBySessionId.entries()) {
++    for (const [runtimeKey, runtime] of runtimesByFingerprint.entries()) {
+       const idleTtlMs =
+-        idleTtlMsBySessionId.get(sessionId) ?? DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
++        idleTtlMsByFingerprint.get(runtimeKey) ?? DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
+       if (idleTtlMs <= 0 || (runtime.activeLeases ?? 0) > 0) {
+         continue;
+       }
+       if (nowMs - runtime.lastUsedAt < idleTtlMs) {
+         continue;
+       }
+-      runtimesBySessionId.delete(sessionId);
+-      idleTtlMsBySessionId.delete(sessionId);
+-      forgetSessionKeysForSessionId(sessionId);
++      runtimesByFingerprint.delete(runtimeKey);
++      forgetRuntimeRefs(runtimeKey);
+       expired.push(runtime);
+     }
+     await Promise.allSettled(expired.map((runtime) => runtime.dispose()));
+@@ -947,9 +986,6 @@ function createSessionMcpRuntimeManager(
+   return {
+     async getOrCreate(params) {
+       const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(params.cfg);
+-      if (runtimesBySessionId.has(params.sessionId)) {
+-        idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
+-      }
+       await sweepIdleRuntimes();
+       if (idleTtlMs > 0) {
+         ensureIdleSweepTimer();
+@@ -962,33 +998,36 @@ function createSessionMcpRuntimeManager(
+         cfg: params.cfg,
+         logDiagnostics: false,
+       });
+-      const existing = runtimesBySessionId.get(params.sessionId);
+-      if (existing) {
+-        if (
+-          existing.workspaceDir !== params.workspaceDir ||
+-          existing.configFingerprint !== nextFingerprint
+-        ) {
+-          runtimesBySessionId.delete(params.sessionId);
+-          await existing.dispose();
+-        } else {
++      const nextRuntimeKey = buildRuntimeKey(params.workspaceDir, nextFingerprint);
++      const previousRuntimeKey = fingerprintBySessionId.get(params.sessionId);
++      if (previousRuntimeKey) {
++        const existing = runtimesByFingerprint.get(previousRuntimeKey);
++        if (previousRuntimeKey === nextRuntimeKey && existing) {
+           existing.markUsed();
+-          idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
++          addRuntimeRef(nextRuntimeKey, params.sessionId, idleTtlMs);
+           return existing;
+         }
++        const isLastRef = removeRuntimeRef(previousRuntimeKey, params.sessionId);
++        if (isLastRef) {
++          const staleRuntime = runtimesByFingerprint.get(previousRuntimeKey);
++          runtimesByFingerprint.delete(previousRuntimeKey);
++          await staleRuntime?.dispose();
++        }
+       }
+-      const inFlight = createInFlight.get(params.sessionId);
++
++      const shared = runtimesByFingerprint.get(nextRuntimeKey);
++      if (shared) {
++        shared.markUsed();
++        addRuntimeRef(nextRuntimeKey, params.sessionId, idleTtlMs);
++        return shared;
++      }
++
++      const inFlight = createInFlight.get(nextRuntimeKey);
+       if (inFlight) {
+-        if (
+-          inFlight.workspaceDir === params.workspaceDir &&
+-          inFlight.configFingerprint === nextFingerprint
+-        ) {
+-          return inFlight.promise;
+-        }
+-        createInFlight.delete(params.sessionId);
+-        const staleRuntime = await inFlight.promise.catch(() => undefined);
+-        runtimesBySessionId.delete(params.sessionId);
+-        idleTtlMsBySessionId.delete(params.sessionId);
+-        await staleRuntime?.dispose();
++        const runtime = await inFlight.promise;
++        runtime.markUsed();
++        addRuntimeRef(nextRuntimeKey, params.sessionId, idleTtlMs);
++        return runtime;
+       }
+       const created = Promise.resolve(
+         createRuntime({
+@@ -1000,19 +1039,20 @@ function createSessionMcpRuntimeManager(
+         }),
+       ).then((runtime) => {
+         runtime.markUsed();
+-        runtimesBySessionId.set(params.sessionId, runtime);
+-        idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
++        runtimesByFingerprint.set(nextRuntimeKey, runtime);
+         return runtime;
+       });
+-      createInFlight.set(params.sessionId, {
++      createInFlight.set(nextRuntimeKey, {
+         promise: created,
+         workspaceDir: params.workspaceDir,
+         configFingerprint: nextFingerprint,
+       });
+       try {
+-        return await created;
++        const runtime = await created;
++        addRuntimeRef(nextRuntimeKey, params.sessionId, idleTtlMs);
++        return runtime;
+       } finally {
+-        createInFlight.delete(params.sessionId);
++        createInFlight.delete(nextRuntimeKey);
+       }
+     },
+     bindSessionKey(sessionKey, sessionId) {
+@@ -1026,32 +1066,38 @@ function createSessionMcpRuntimeManager(
+       const sessionId =
+         params.sessionId ??
+         (params.sessionKey ? sessionIdBySessionKey.get(params.sessionKey) : undefined);
+-      return sessionId ? runtimesBySessionId.get(sessionId) : undefined;
++      const runtimeKey = sessionId ? fingerprintBySessionId.get(sessionId) : undefined;
++      return runtimeKey ? runtimesByFingerprint.get(runtimeKey) : undefined;
+     },
+     async disposeSession(sessionId) {
+-      const inFlight = createInFlight.get(sessionId);
+-      createInFlight.delete(sessionId);
+-      let runtime = runtimesBySessionId.get(sessionId);
+-      if (!runtime && inFlight) {
+-        runtime = await inFlight.promise.catch(() => undefined);
++      const runtimeKey = fingerprintBySessionId.get(sessionId);
++      forgetSessionKeysForSessionId(sessionId);
++      if (!runtimeKey) {
++        return;
+       }
+-      runtimesBySessionId.delete(sessionId);
+-      idleTtlMsBySessionId.delete(sessionId);
+-      if (!runtime) {
+-        forgetSessionKeysForSessionId(sessionId);
++      const isLastRef = removeRuntimeRef(runtimeKey, sessionId);
++      if (!isLastRef) {
+         return;
+       }
+-      forgetSessionKeysForSessionId(sessionId);
+-      await runtime.dispose();
++      const inFlight = createInFlight.get(runtimeKey);
++      createInFlight.delete(runtimeKey);
++      let runtime = runtimesByFingerprint.get(runtimeKey);
++      if (!runtime && inFlight) {
++        runtime = await inFlight.promise.catch(() => undefined);
++      }
++      runtimesByFingerprint.delete(runtimeKey);
++      await runtime?.dispose();
+     },
+     async disposeAll() {
+       clearIdleSweepTimer();
+       const inFlightRuntimes = Array.from(createInFlight.values());
+       createInFlight.clear();
+-      const runtimes = Array.from(runtimesBySessionId.values());
+-      runtimesBySessionId.clear();
++      const runtimes = Array.from(runtimesByFingerprint.values());
++      runtimesByFingerprint.clear();
+       sessionIdBySessionKey.clear();
+-      idleTtlMsBySessionId.clear();
++      refsByFingerprint.clear();
++      fingerprintBySessionId.clear();
++      idleTtlMsByFingerprint.clear();
+       const lateRuntimes = await Promise.all(
+         inFlightRuntimes.map(async ({ promise }) => await promise.catch(() => undefined)),
+       );
+@@ -1065,7 +1111,7 @@ function createSessionMcpRuntimeManager(
+     },
+     sweepIdleRuntimes,
+     listSessionIds() {
+-      return Array.from(runtimesBySessionId.keys());
++      return Array.from(fingerprintBySessionId.keys());
+     },
+   };
+ }

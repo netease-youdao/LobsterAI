@@ -1,0 +1,523 @@
+diff --git a/src/agents/embedded-agent-runner/replay-history.ts b/src/agents/embedded-agent-runner/replay-history.ts
+index 6cc8088fe6..565668573b 100644
+--- a/src/agents/embedded-agent-runner/replay-history.ts
++++ b/src/agents/embedded-agent-runner/replay-history.ts
+@@ -33,7 +33,11 @@ import {
+ } from "../session-transcript-repair.js";
+ import type { SessionManager } from "../sessions/index.js";
+ import { STREAM_ERROR_FALLBACK_TEXT } from "../stream-message-shared.js";
+-import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
++import {
++  extractToolCallsFromAssistant,
++  extractToolResultId,
++  sanitizeToolCallIdsForCloudCodeAssist,
++} from "../tool-call-id.js";
+ import type { TranscriptPolicy } from "../transcript-policy.js";
+ import {
+   providerRequiresSignedThinking,
+@@ -55,6 +59,9 @@ import {
+ } from "./thinking.js";
+ 
+ const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
++const MAX_PRESERVED_ABORTED_TOOL_HISTORY_PAIRS = 3;
++const ABORTED_TOOL_HISTORY_TEXT_RE =
++  /^(?:aborted|operation (?:was )?aborted|request was aborted|cancelled|canceled)$/i;
+ type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
+ type ModelSnapshotEntry = {
+   timestamp: number;
+@@ -625,6 +632,143 @@ function createProviderReplaySessionState(
+   };
+ }
+ 
++function getMessageRole(message: AgentMessage | undefined): string | undefined {
++  if (!message || typeof message !== "object") {
++    return undefined;
++  }
++  return (message as { role?: unknown }).role as string | undefined;
++}
++
++function getTextFromContent(content: unknown): string {
++  if (typeof content === "string") {
++    return content;
++  }
++  if (!Array.isArray(content)) {
++    return "";
++  }
++  return content
++    .map((block) => {
++      if (typeof block === "string") {
++        return block;
++      }
++      if (!block || typeof block !== "object") {
++        return "";
++      }
++      const text = (block as { text?: unknown }).text;
++      return typeof text === "string" ? text : "";
++    })
++    .join("\n")
++    .trim();
++}
++
++function hasAssistantVisibleText(message: Extract<AgentMessage, { role: "assistant" }>): boolean {
++  return getTextFromContent((message as { content?: unknown }).content).trim().length > 0;
++}
++
++function getToolOnlyAssistantCallIds(message: AgentMessage): Set<string> | null {
++  if (getMessageRole(message) !== "assistant") {
++    return null;
++  }
++  const assistant = message as Extract<AgentMessage, { role: "assistant" }>;
++  if (hasAssistantVisibleText(assistant)) {
++    return null;
++  }
++  const toolCalls = extractToolCallsFromAssistant(assistant);
++  if (toolCalls.length === 0) {
++    return null;
++  }
++  return new Set(toolCalls.map((call) => call.id).filter(Boolean));
++}
++
++function extractReplayToolResultId(message: AgentMessage): string | null {
++  if (getMessageRole(message) === "toolResult") {
++    return extractToolResultId(message as Extract<AgentMessage, { role: "toolResult" }>);
++  }
++  const record = message as unknown as Record<string, unknown>;
++  for (const value of [
++    record.toolUseId,
++    record.toolCallId,
++    record.tool_use_id,
++    record.tool_call_id,
++    record.callId,
++    record.call_id,
++  ]) {
++    if (typeof value === "string" && value.trim()) {
++      return value.trim();
++    }
++  }
++  return null;
++}
++
++function isAbortedToolResultMessage(message: AgentMessage): boolean {
++  const role = getMessageRole(message);
++  if (role !== "toolResult" && role !== "tool") {
++    return false;
++  }
++  return ABORTED_TOOL_HISTORY_TEXT_RE.test(
++    getTextFromContent((message as { content?: unknown }).content).trim(),
++  );
++}
++
++function sanitizeAbortedToolLoopHistory(messages: AgentMessage[]): AgentMessage[] {
++  const pairs: Array<{ start: number; endExclusive: number }> = [];
++
++  for (let index = 0; index < messages.length; index += 1) {
++    const message = messages[index];
++    if (!message) {
++      continue;
++    }
++    const expectedIds = getToolOnlyAssistantCallIds(message);
++    if (!expectedIds || expectedIds.size === 0) {
++      continue;
++    }
++
++    const seenIds = new Set<string>();
++    let nextIndex = index + 1;
++    let toolResultCount = 0;
++    let allResultsAborted = true;
++    while (nextIndex < messages.length) {
++      const candidate = messages[nextIndex];
++      if (!candidate) {
++        break;
++      }
++      const role = getMessageRole(candidate);
++      if (role !== "toolResult" && role !== "tool") {
++        break;
++      }
++      toolResultCount += 1;
++      if (!isAbortedToolResultMessage(candidate)) {
++        allResultsAborted = false;
++        break;
++      }
++      const toolResultId = extractReplayToolResultId(candidate);
++      if (toolResultId) {
++        seenIds.add(toolResultId);
++      }
++      nextIndex += 1;
++    }
++
++    const allExpectedIdsSeen = [...expectedIds].every((id) => seenIds.has(id));
++    if (toolResultCount > 0 && allResultsAborted && allExpectedIdsSeen) {
++      pairs.push({ start: index, endExclusive: nextIndex });
++      index = nextIndex - 1;
++    }
++  }
++
++  if (pairs.length <= MAX_PRESERVED_ABORTED_TOOL_HISTORY_PAIRS) {
++    return messages;
++  }
++
++  const dropIndexes = new Set<number>();
++  for (const pair of pairs.slice(0, -MAX_PRESERVED_ABORTED_TOOL_HISTORY_PAIRS)) {
++    for (let index = pair.start; index < pair.endExclusive; index += 1) {
++      dropIndexes.add(index);
++    }
++  }
++
++  return messages.filter((_, index) => !dropIndexes.has(index));
++}
++
+ function readLastModelSnapshot(sessionManager: SessionManager): ModelSnapshotEntry | null {
+   try {
+     const entries = sessionManager.getEntries();
+@@ -714,8 +858,9 @@ export async function sanitizeSessionHistory(params: {
+       })
+     : false;
+   const normalizedAssistantReplay = normalizeAssistantReplayContent(withInterSessionMarkers);
++  const sanitizedAbortedToolLoops = sanitizeAbortedToolLoopHistory(normalizedAssistantReplay);
+   const sanitizedImages = await sanitizeSessionMessagesImages(
+-    normalizedAssistantReplay,
++    sanitizedAbortedToolLoops,
+     "session:history",
+     {
+       sanitizeMode: policy.sanitizeMode,
+diff --git a/src/agents/embedded-agent-runner/sanitize-session-history.tool-result-details.test.ts b/src/agents/embedded-agent-runner/sanitize-session-history.tool-result-details.test.ts
+index 4268d39dcc..72ec885852 100644
+--- a/src/agents/embedded-agent-runner/sanitize-session-history.tool-result-details.test.ts
++++ b/src/agents/embedded-agent-runner/sanitize-session-history.tool-result-details.test.ts
+@@ -16,6 +16,54 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
+ }));
+ 
+ describe("sanitizeSessionHistory toolResult details stripping", () => {
++  it("drops old aborted tool-only turns while preserving recent diagnostic pairs", async () => {
++    const sm = SessionManager.inMemory();
++
++    const messages: AgentMessage[] = [];
++    for (let i = 0; i < 10; i += 1) {
++      messages.push(
++        makeAgentAssistantMessage({
++          content: [
++            { type: "toolCall", id: `call_${i}`, name: "exec", arguments: { command: "dir" } },
++          ],
++          model: "gpt-5.4",
++          stopReason: "toolUse",
++          timestamp: i * 2,
++        }),
++        {
++          role: "toolResult",
++          toolCallId: `call_${i}`,
++          toolName: "exec",
++          isError: true,
++          content: [{ type: "text", text: "Aborted" }],
++          timestamp: i * 2 + 1,
++        } as AgentMessage,
++      );
++    }
++    messages.push({
++      role: "user",
++      content: "continue",
++      timestamp: 30,
++    } satisfies UserMessage);
++
++    const sanitized = await sanitizeSessionHistory({
++      messages,
++      modelApi: "anthropic-messages",
++      provider: "anthropic",
++      modelId: "claude-opus-4-6",
++      sessionManager: sm,
++      sessionId: "test",
++    });
++
++    expect(sanitized).toHaveLength(7);
++    const serialized = JSON.stringify(sanitized);
++    expect(serialized).not.toContain("call_0");
++    expect(serialized).not.toContain("call_6");
++    expect(serialized).toContain("call7");
++    expect(serialized).toContain("call8");
++    expect(serialized).toContain("call9");
++  });
++
+   it("strips toolResult.details so untrusted payloads are not fed back to the model", async () => {
+     const sm = SessionManager.inMemory();
+ 
+diff --git a/src/agents/tool-loop-detection.test.ts b/src/agents/tool-loop-detection.test.ts
+index 87efbd2c57..e2ba741478 100644
+--- a/src/agents/tool-loop-detection.test.ts
++++ b/src/agents/tool-loop-detection.test.ts
+@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
+ import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+ import type { SessionState } from "../logging/diagnostic-session-state.js";
+ import {
++  ABORTED_TOOL_LOOP_CRITICAL_THRESHOLD,
++  ABORTED_TOOL_LOOP_TOTAL_THRESHOLD,
+   CRITICAL_THRESHOLD,
+   GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+   TOOL_CALL_HISTORY_SIZE,
+@@ -104,6 +106,17 @@ function createReadNoProgressFixture() {
+   } as const;
+ }
+ 
++function createAbortedExecFixture() {
++  return {
++    toolName: "exec",
++    params: { command: "dir" },
++    result: {
++      content: [{ type: "text", text: "Aborted" }],
++      details: { ok: false },
++    },
++  } as const;
++}
++
+ function createPingPongFixture() {
+   return {
+     state: createState(),
+@@ -420,6 +433,54 @@ describe("tool-loop-detection", () => {
+       }
+     });
+ 
++    it("blocks repeated aborted tool results before the generic critical threshold", () => {
++      const fixture = createAbortedExecFixture();
++      const loopResult = detectLoopAfterRepeatedCalls({
++        toolName: fixture.toolName,
++        toolParams: fixture.params,
++        result: fixture.result,
++        count: ABORTED_TOOL_LOOP_CRITICAL_THRESHOLD,
++      });
++
++      expect(loopResult.stuck).toBe(true);
++      if (loopResult.stuck) {
++        expect(loopResult.level).toBe("critical");
++        expect(loopResult.detector).toBe("aborted_tool_loop");
++        expect(loopResult.message).toContain("aborted outcomes");
++      }
++    });
++
++    it("blocks excessive aborted results across different signatures", () => {
++      const state = createState();
++
++      for (let index = 0; index < ABORTED_TOOL_LOOP_TOTAL_THRESHOLD; index += 1) {
++        recordSuccessfulCall(
++          state,
++          "exec",
++          { command: `dir ${index}` },
++          {
++            content: [{ type: "text", text: "Operation aborted" }],
++            details: { ok: false },
++          },
++          index,
++        );
++      }
++
++      const loopResult = detectToolCallLoop(
++        state,
++        "exec",
++        { command: "dir final" },
++        enabledLoopDetectionConfig,
++      );
++
++      expect(loopResult.stuck).toBe(true);
++      if (loopResult.stuck) {
++        expect(loopResult.level).toBe("critical");
++        expect(loopResult.detector).toBe("aborted_tool_loop");
++        expect(loopResult.message).toContain("aborted outcomes");
++      }
++    });
++
+     it("applies custom thresholds when detection is enabled", () => {
+       const state = createState();
+       const { params, result } = createNoProgressPollFixture("sess-custom");
+diff --git a/src/agents/tool-loop-detection.ts b/src/agents/tool-loop-detection.ts
+index ce7a8e1e53..7833fcb73f 100644
+--- a/src/agents/tool-loop-detection.ts
++++ b/src/agents/tool-loop-detection.ts
+@@ -15,6 +15,7 @@ type LoopDetectorKind =
+   | "generic_repeat"
+   | "unknown_tool_repeat"
+   | "known_poll_no_progress"
++  | "aborted_tool_loop"
+   | "global_circuit_breaker"
+   | "ping_pong";
+ 
+@@ -35,6 +36,11 @@ export const WARNING_THRESHOLD = 10;
+ export const UNKNOWN_TOOL_THRESHOLD = 10;
+ export const CRITICAL_THRESHOLD = 20;
+ export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
++export const ABORTED_TOOL_LOOP_WARNING_THRESHOLD = 5;
++export const ABORTED_TOOL_LOOP_CRITICAL_THRESHOLD = 8;
++export const ABORTED_TOOL_LOOP_TOTAL_THRESHOLD = 20;
++const ABORTED_OUTCOME_RE =
++  /\b(?:aborterror|aborted|operation aborted|request was aborted|operation was aborted|cancelled|canceled)\b/i;
+ const DEFAULT_LOOP_DETECTION_CONFIG = {
+   enabled: false,
+   historySize: TOOL_CALL_HISTORY_SIZE,
+@@ -175,6 +181,18 @@ function formatErrorForHash(error: unknown): string {
+   return stableStringify(error);
+ }
+ 
++function normalizeAbortedOutcomeText(text: string): string | undefined {
++  const normalized = text.replace(/\s+/g, " ").trim();
++  if (!normalized || !ABORTED_OUTCOME_RE.test(normalized)) {
++    return undefined;
++  }
++  return "aborted";
++}
++
++function isAbortedOutcomeHash(resultHash?: string): boolean {
++  return typeof resultHash === "string" && resultHash.startsWith("aborted:");
++}
++
+ function extractUnknownToolName(error: unknown): string | undefined {
+   const raw = formatErrorForHash(error).trim();
+   if (!raw) {
+@@ -234,17 +252,32 @@ function hashToolOutcome(
+ ): { resultHash?: string; unknownToolName?: string } {
+   if (error !== undefined) {
+     const unknownToolName = extractUnknownToolName(error);
++    const errorText = formatErrorForHash(error);
++    const abortedOutcome = normalizeAbortedOutcomeText(errorText);
+     return {
+-      resultHash: `error:${digestStable(formatErrorForHash(error))}`,
++      resultHash: abortedOutcome ? `aborted:${abortedOutcome}` : `error:${digestStable(errorText)}`,
+       unknownToolName,
+     };
+   }
+   if (!isPlainObject(result)) {
+-    return { resultHash: result === undefined ? undefined : digestStable(result) };
++    if (result === undefined) {
++      return { resultHash: undefined };
++    }
++    if (typeof result === "string") {
++      const abortedOutcome = normalizeAbortedOutcomeText(result);
++      if (abortedOutcome) {
++        return { resultHash: `aborted:${abortedOutcome}` };
++      }
++    }
++    return { resultHash: digestStable(result) };
+   }
+ 
+   const details = isPlainObject(result.details) ? result.details : {};
+   const text = extractTextContent(result);
++  const abortedOutcome = normalizeAbortedOutcomeText(text);
++  if (abortedOutcome) {
++    return { resultHash: `aborted:${abortedOutcome}` };
++  }
+   if (toolName === "exec") {
+     const execHash = hashExecToolOutcome(details, text);
+     if (execHash) {
+@@ -345,6 +378,36 @@ function getNoProgressStreak(
+   return { count: streak, latestResultHash };
+ }
+ 
++function getAbortedToolLoopStats(
++  history: Array<{ toolName: string; argsHash: string; resultHash?: string }>,
++  toolName: string,
++  argsHash: string,
++): { signatureStreak: number; total: number } {
++  let signatureStreak = 0;
++  let total = 0;
++  let signatureStreakOpen = true;
++
++  for (let i = history.length - 1; i >= 0; i -= 1) {
++    const record = history[i];
++    if (!record) {
++      continue;
++    }
++    const aborted = isAbortedOutcomeHash(record.resultHash);
++    if (aborted) {
++      total += 1;
++    }
++    if (signatureStreakOpen && record.toolName === toolName && record.argsHash === argsHash) {
++      if (!aborted) {
++        signatureStreakOpen = false;
++      } else {
++        signatureStreak += 1;
++      }
++    }
++  }
++
++  return { signatureStreak, total };
++}
++
+ function getPingPongStreak(
+   history: Array<{ toolName: string; argsHash: string; resultHash?: string }>,
+   currentSignature: string,
+@@ -472,6 +535,7 @@ export function detectToolCallLoop(
+   const noProgress = getNoProgressStreak(history, toolName, currentHash);
+   const noProgressStreak = noProgress.count;
+   const knownPollTool = isKnownPollToolCall(toolName, params);
++  const abortedLoop = getAbortedToolLoopStats(history, toolName, currentHash);
+   const pingPong = getPingPongStreak(history, currentHash);
+ 
+   if (unknownToolStreak.count >= resolvedConfig.unknownToolThreshold) {
+@@ -499,6 +563,48 @@ export function detectToolCallLoop(
+     };
+   }
+ 
++  if (abortedLoop.total >= ABORTED_TOOL_LOOP_TOTAL_THRESHOLD) {
++    log.error(
++      `Aborted tool loop breaker triggered: ${abortedLoop.total} aborted tool outcomes recorded`,
++    );
++    return {
++      stuck: true,
++      level: "critical",
++      detector: "aborted_tool_loop",
++      count: abortedLoop.total,
++      message: `CRITICAL: tool calls have returned aborted outcomes ${abortedLoop.total} times. Session execution blocked to prevent runaway retry loops.`,
++      warningKey: `aborted-total:${abortedLoop.total}`,
++    };
++  }
++
++  if (abortedLoop.signatureStreak >= ABORTED_TOOL_LOOP_CRITICAL_THRESHOLD) {
++    log.error(
++      `Critical aborted tool loop detected: ${toolName} repeated ${abortedLoop.signatureStreak} times`,
++    );
++    return {
++      stuck: true,
++      level: "critical",
++      detector: "aborted_tool_loop",
++      count: abortedLoop.signatureStreak,
++      message: `CRITICAL: ${toolName} has returned aborted outcomes ${abortedLoop.signatureStreak} times for identical arguments. Session execution blocked to prevent runaway retry loops.`,
++      warningKey: `aborted:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "aborted"}`,
++    };
++  }
++
++  if (abortedLoop.signatureStreak >= ABORTED_TOOL_LOOP_WARNING_THRESHOLD) {
++    log.warn(
++      `Aborted tool loop warning: ${toolName} repeated ${abortedLoop.signatureStreak} times`,
++    );
++    return {
++      stuck: true,
++      level: "warning",
++      detector: "aborted_tool_loop",
++      count: abortedLoop.signatureStreak,
++      message: `WARNING: ${toolName} has returned aborted outcomes ${abortedLoop.signatureStreak} times for identical arguments. Stop retrying the same call and choose a different approach or report the task as failed.`,
++      warningKey: `aborted:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "aborted"}`,
++    };
++  }
++
+   if (
+     knownPollTool &&
+     resolvedConfig.detectors.knownPollNoProgress &&
+diff --git a/src/infra/diagnostic-events.ts b/src/infra/diagnostic-events.ts
+index 21529feb89..eb87abc471 100644
+--- a/src/infra/diagnostic-events.ts
++++ b/src/infra/diagnostic-events.ts
+@@ -360,6 +360,7 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
+     | "generic_repeat"
+     | "unknown_tool_repeat"
+     | "known_poll_no_progress"
++    | "aborted_tool_loop"
+     | "global_circuit_breaker"
+     | "ping_pong";
+   count: number;
+diff --git a/src/logging/diagnostic.ts b/src/logging/diagnostic.ts
+index f7a6555e25..2830c09943 100644
+--- a/src/logging/diagnostic.ts
++++ b/src/logging/diagnostic.ts
+@@ -1106,6 +1106,7 @@ export function logToolLoopAction(
+       | "generic_repeat"
+       | "unknown_tool_repeat"
+       | "known_poll_no_progress"
++      | "aborted_tool_loop"
+       | "global_circuit_breaker"
+       | "ping_pong";
+     count: number;

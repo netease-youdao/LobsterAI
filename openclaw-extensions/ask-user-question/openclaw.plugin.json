@@ -2,6 +2,11 @@
   "id": "ask-user-question",
   "name": "AskUserQuestion",
   "description": "Structured user confirmation tool for LobsterAI desktop.",
+  "contracts": {
+    "tools": [
+      "AskUserQuestion"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

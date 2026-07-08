@@ -1,4 +1,5 @@
 import { McpCategory, McpMarketplaceCategoryInfo, McpMarketplaceServer,McpRegistryEntry, McpServerConfig, McpServerFormData } from '../types/mcp';
+import { LogReporterAction, reportYdAnalyzer } from './logReporter';
 
 /**
  * Convert remote marketplace server data to McpRegistryEntry format.
@@ -19,7 +20,14 @@ function convertMarketplaceToRegistry(
     defaultArgs: s.defaultArgs,
     requiredEnvKeys: s.requiredEnvKeys,
     optionalEnvKeys: s.optionalEnvKeys,
+    kind: s.kind,
   }));
+}
+
+function getMcpAnalyticsSource(server: McpServerConfig): string {
+  if (server.isBuiltIn) return 'built_in';
+  if (server.registryId) return 'marketplace';
+  return 'custom';
 }
 
 class McpService {
@@ -90,16 +98,57 @@ class McpService {
     }
   }
 
+  async deleteByRegistryId(registryId: string): Promise<{ success: boolean; servers?: McpServerConfig[]; error?: string }> {
+    try {
+      const result = await window.electron.mcp.deleteByRegistryId(registryId);
+      if (result.success && result.servers) {
+        this.servers = result.servers;
+      }
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete MCP registry servers';
+      console.error('Failed to delete MCP registry servers:', error);
+      return { success: false, error: message };
+    }
+  }
+
   async setServerEnabled(id: string, enabled: boolean): Promise<McpServerConfig[]> {
     try {
+      const previousServer = this.servers.find(server => server.id === id);
       const result = await window.electron.mcp.setEnabled({ id, enabled });
       if (result.success && result.servers) {
         this.servers = result.servers;
+        const updatedServer = this.servers.find(server => server.id === id) ?? previousServer;
+        if (enabled && previousServer?.enabled !== true && updatedServer) {
+          void reportYdAnalyzer({
+            action: LogReporterAction.McpEnabled,
+            mcpId: updatedServer.id,
+            mcpName: updatedServer.name,
+            mcpSource: getMcpAnalyticsSource(updatedServer),
+            registryId: updatedServer.registryId,
+            transportType: updatedServer.transportType,
+            isBuiltIn: updatedServer.isBuiltIn,
+          });
+        }
         return this.servers;
       }
       throw new Error(result.error || 'Failed to update MCP server');
     } catch (error) {
       console.error('Failed to update MCP server:', error);
+      throw error;
+    }
+  }
+
+  async setRegistryEnabled(registryId: string, enabled: boolean): Promise<McpServerConfig[]> {
+    try {
+      const result = await window.electron.mcp.setEnabledByRegistryId({ registryId, enabled });
+      if (result.success && result.servers) {
+        this.servers = result.servers;
+        return this.servers;
+      }
+      throw new Error(result.error || 'Failed to update MCP registry servers');
+    } catch (error) {
+      console.error('Failed to update MCP registry servers:', error);
       throw error;
     }
   }
@@ -114,6 +163,20 @@ class McpService {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to retry MCP launch resolution';
       console.error('Failed to retry MCP launch resolution:', error);
+      return { success: false, error: message };
+    }
+  }
+
+  async connectQichacha(): Promise<{ success: boolean; servers?: McpServerConfig[]; error?: string }> {
+    try {
+      const result = await window.electron.mcp.connectQichacha();
+      if (result.success && result.servers) {
+        this.servers = result.servers;
+      }
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to connect Qichacha MCP';
+      console.error('Failed to connect Qichacha MCP:', error);
       return { success: false, error: message };
     }
   }

@@ -20,7 +20,7 @@ export function registerPluginHandlers(deps: PluginHandlerDeps): void {
 
   ipcMain.handle('plugins:list', async () => {
     try {
-      const { PluginManager } = await import('../../libs/pluginManager');
+      const { PluginManager } = await import('../../plugins/pluginManager');
       const manager = new PluginManager(getCoworkStore());
       return { success: true, plugins: await manager.listPlugins() };
     } catch (error) {
@@ -30,7 +30,7 @@ export function registerPluginHandlers(deps: PluginHandlerDeps): void {
 
   ipcMain.handle('plugins:sync', async () => {
     try {
-      const { PluginManager } = await import('../../libs/pluginManager');
+      const { PluginManager } = await import('../../plugins/pluginManager');
       const manager = new PluginManager(getCoworkStore());
       const result = await manager.syncPluginsFromOpenClaw();
       return result;
@@ -42,7 +42,7 @@ export function registerPluginHandlers(deps: PluginHandlerDeps): void {
 
   ipcMain.handle('plugins:detect', async () => {
     try {
-      const { PluginManager } = await import('../../libs/pluginManager');
+      const { PluginManager } = await import('../../plugins/pluginManager');
       const manager = new PluginManager(getCoworkStore());
       const result = manager.detectPluginsFromOpenClaw();
       return result;
@@ -59,7 +59,7 @@ export function registerPluginHandlers(deps: PluginHandlerDeps): void {
     version?: string;
   }) => {
     try {
-      const { PluginManager } = await import('../../libs/pluginManager');
+      const { PluginManager } = await import('../../plugins/pluginManager');
       const manager = new PluginManager(getCoworkStore());
       const sender = event.sender;
       const sendLog = (line: string) => {
@@ -83,7 +83,7 @@ export function registerPluginHandlers(deps: PluginHandlerDeps): void {
 
   ipcMain.handle('plugins:uninstall', async (_event, pluginId: string) => {
     try {
-      const { PluginManager } = await import('../../libs/pluginManager');
+      const { PluginManager } = await import('../../plugins/pluginManager');
       const manager = new PluginManager(getCoworkStore());
       const result = await manager.uninstallPlugin(pluginId);
       if (result.ok) {
@@ -101,7 +101,7 @@ export function registerPluginHandlers(deps: PluginHandlerDeps): void {
 
   ipcMain.handle('plugins:set-enabled', async (_event, pluginId: string, enabled: boolean) => {
     try {
-      const { PluginManager } = await import('../../libs/pluginManager');
+      const { PluginManager } = await import('../../plugins/pluginManager');
       const manager = new PluginManager(getCoworkStore());
       manager.setPluginEnabled(pluginId, enabled);
       const impactDecision = classifyPluginConfigChange(OpenClawPluginChangeAction.Toggle);
@@ -117,7 +117,7 @@ export function registerPluginHandlers(deps: PluginHandlerDeps): void {
 
   ipcMain.handle('plugins:get-config-schema', async (_event, pluginId: string) => {
     try {
-      const { PluginManager } = await import('../../libs/pluginManager');
+      const { PluginManager } = await import('../../plugins/pluginManager');
       const manager = new PluginManager(getCoworkStore());
       const schema = manager.getPluginConfigSchema(pluginId);
       const config = manager.getPluginConfig(pluginId);
@@ -129,7 +129,7 @@ export function registerPluginHandlers(deps: PluginHandlerDeps): void {
 
   ipcMain.handle('plugins:save-config', async (_event, pluginId: string, config: Record<string, unknown>) => {
     try {
-      const { PluginManager } = await import('../../libs/pluginManager');
+      const { PluginManager } = await import('../../plugins/pluginManager');
       const manager = new PluginManager(getCoworkStore());
       manager.savePluginConfig(pluginId, config);
       const impactDecision = classifyPluginConfigChange(OpenClawPluginChangeAction.Config);
@@ -148,7 +148,7 @@ export function registerPluginHandlers(deps: PluginHandlerDeps): void {
     configs?: Array<{ pluginId: string; config: Record<string, unknown> }>;
   }) => {
     try {
-      const { PluginManager } = await import('../../libs/pluginManager');
+      const { PluginManager } = await import('../../plugins/pluginManager');
       const manager = new PluginManager(getCoworkStore());
       for (const { pluginId, enabled } of changes.toggles ?? []) {
         manager.setPluginEnabled(pluginId, enabled);
@@ -171,7 +171,7 @@ export function registerPluginHandlers(deps: PluginHandlerDeps): void {
 
   ipcMain.handle('plugins:check-updates', async (_event, pluginIds?: string[]) => {
     try {
-      const { PluginManager } = await import('../../libs/pluginManager');
+      const { PluginManager } = await import('../../plugins/pluginManager');
       const manager = new PluginManager(getCoworkStore());
       const updates = await manager.checkPluginUpdates(pluginIds);
       return { success: true, updates };
@@ -182,7 +182,7 @@ export function registerPluginHandlers(deps: PluginHandlerDeps): void {
 
   ipcMain.handle('plugins:update', async (event, pluginId: string) => {
     try {
-      const { PluginManager } = await import('../../libs/pluginManager');
+      const { PluginManager } = await import('../../plugins/pluginManager');
       const manager = new PluginManager(getCoworkStore());
 
       // Find plugin info to determine source/spec/registry

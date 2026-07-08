@@ -1,7 +1,15 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
+import type { CoworkGoal } from '../../../shared/cowork/goal';
+import {
+  COWORK_RAIL_TOOLTIP_PREVIEW_MAX_LENGTH,
+  type CoworkMessageRailIndexItem,
+  getCoworkRailPreview,
+} from '../../../shared/cowork/rail';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
 import {
+  CoworkCollaborationMode,
+  type CoworkCollaborationMode as CoworkCollaborationModeType,
   type CoworkConfig,
   type CoworkContextUsage,
   type CoworkMessage,
@@ -21,6 +29,20 @@ export interface DraftAttachment {
   dataUrl?: string;
 }
 
+export const PlanConfirmationState = {
+  Awaiting: 'awaiting',
+  Handled: 'handled',
+} as const;
+export type PlanConfirmationState = typeof PlanConfirmationState[keyof typeof PlanConfirmationState];
+
+export interface PlanConfirmationStatus {
+  sessionId: string;
+  messageId: string;
+  planTextHash: string;
+  state: PlanConfirmationState;
+  updatedAt: number;
+}
+
 interface CoworkState {
   sessions: CoworkSessionSummary[];
   /** Whether more sessions exist on the server beyond what is currently loaded. */
@@ -36,6 +58,10 @@ interface CoworkState {
   draftKitIds: Record<string, string[]>;
   /** Keyed by draftKey, stores active skill IDs per draft so they survive view switches */
   draftSkillIds: Record<string, string[]>;
+  /** Keyed by draftKey, stores the active collaboration mode for the draft/session. */
+  draftCollaborationModes: Record<string, CoworkCollaborationModeType>;
+  /** Keyed by sessionId, stores the latest proposed plan confirmation UI state. */
+  planConfirmations: Record<string, PlanConfirmationStatus>;
   unreadSessionIds: string[];
   isCoworkActive: boolean;
   isStreaming: boolean;
@@ -43,6 +69,8 @@ interface CoworkState {
   compactingSessionIds: string[];
   contextMaintenanceSessionIds: string[];
   notifiedCompactionBySessionId: Record<string, number>;
+  messageRailIndexBySessionId: Record<string, CoworkMessageRailIndexItem[]>;
+  messageRailIndexLoadingBySessionId: Record<string, boolean>;
   remoteManaged: boolean;
   pendingPermissions: CoworkPermissionRequest[];
   config: CoworkConfig;
@@ -63,6 +91,8 @@ const initialState: CoworkState = {
   draftSelectedTextSnippets: {},
   draftKitIds: {},
   draftSkillIds: {},
+  draftCollaborationModes: {},
+  planConfirmations: {},
   unreadSessionIds: [],
   isCoworkActive: false,
   isStreaming: false,
@@ -70,6 +100,8 @@ const initialState: CoworkState = {
   compactingSessionIds: [],
   contextMaintenanceSessionIds: [],
   notifiedCompactionBySessionId: {},
+  messageRailIndexBySessionId: {},
+  messageRailIndexLoadingBySessionId: {},
   remoteManaged: false,
   pendingPermissions: [],
   config: {
@@ -83,6 +115,7 @@ const initialState: CoworkState = {
     memoryGuardLevel: 'strict',
     memoryUserMemoriesMaxItems: 12,
     skipMissedJobs: true,
+    openClawHeartbeatEnabled: true,
     embeddingEnabled: false,
     embeddingProvider: 'openai',
     embeddingModel: '',
@@ -112,6 +145,82 @@ const markSessionUnread = (state: CoworkState, sessionId: string) => {
   if (state.currentSessionId === sessionId) return;
   if (state.unreadSessionIds.includes(sessionId)) return;
   state.unreadSessionIds.push(sessionId);
+};
+
+const buildRailIndexItemFromMessage = (
+  message: CoworkMessage,
+  messageOffset: number,
+  fallbackLabelIndex: number,
+): CoworkMessageRailIndexItem | null => {
+  if ((message.type !== 'user' && message.type !== 'assistant') || !message.content.trim()) {
+    return null;
+  }
+
+  return {
+    messageId: message.id,
+    type: message.type,
+    sequence: null,
+    messageOffset,
+    timestamp: message.timestamp,
+    preview: getCoworkRailPreview(
+      message.content,
+      message.type === 'user' ? `Turn ${fallbackLabelIndex + 1}` : 'LobsterAI',
+      COWORK_RAIL_TOOLTIP_PREVIEW_MAX_LENGTH,
+    ),
+    contentLen: message.content.length,
+  };
+};
+
+const resolveRailMessageOffset = (
+  state: CoworkState,
+  sessionId: string,
+  message: CoworkMessage,
+  fallbackOffset: number,
+): number => {
+  if (state.currentSession?.id !== sessionId) {
+    return fallbackOffset;
+  }
+  const messageIndex = state.currentSession.messages.findIndex(item => item.id === message.id);
+  return messageIndex >= 0
+    ? state.currentSession.messagesOffset + messageIndex
+    : fallbackOffset;
+};
+
+const upsertRailIndexItem = (
+  state: CoworkState,
+  sessionId: string,
+  message: CoworkMessage,
+): void => {
+  const existingItems = state.messageRailIndexBySessionId[sessionId];
+  if (!existingItems) return;
+
+  const existingIndex = existingItems.findIndex(item => item.messageId === message.id);
+  const existingItem = existingIndex >= 0 ? existingItems[existingIndex] : null;
+  const fallbackOffset = existingItem?.messageOffset ?? existingItems.length;
+  const messageOffset = resolveRailMessageOffset(state, sessionId, message, fallbackOffset);
+  const item = buildRailIndexItemFromMessage(
+    message,
+    messageOffset,
+    existingIndex >= 0 ? existingIndex : existingItems.length,
+  );
+  if (!item) {
+    if (existingIndex >= 0) {
+      existingItems.splice(existingIndex, 1);
+    }
+    return;
+  }
+
+  if (existingIndex >= 0) {
+    existingItems[existingIndex] = {
+      ...existingItems[existingIndex],
+      ...item,
+      sequence: existingItems[existingIndex].sequence,
+      messageOffset: existingItems[existingIndex].messageOffset,
+    };
+    return;
+  }
+
+  existingItems.push(item);
 };
 
 const MediaGenerationToolName = {
@@ -263,6 +372,7 @@ const toSessionSummary = (session: CoworkSession): CoworkSessionSummary => ({
   parentSessionId: session.parentSessionId ?? null,
   forkedAt: session.forkedAt ?? null,
   forkMode: session.forkMode,
+  goal: session.goal ?? null,
   createdAt: session.createdAt,
   updatedAt: session.updatedAt,
 });
@@ -357,17 +467,23 @@ const coworkSlice = createSlice({
     updateSessionStatus(state, action: PayloadAction<{ sessionId: string; status: CoworkSessionStatus }>) {
       const { sessionId, status } = action.payload;
 
-      // Update in sessions list
+      // updatedAt drives session list ordering and only moves on a real
+      // transition: stream handlers re-dispatch 'running' on every event, and
+      // those no-op writes must not make concurrent runs fight over the top.
       const sessionIndex = state.sessions.findIndex(s => s.id === sessionId);
       if (sessionIndex !== -1) {
+        if (state.sessions[sessionIndex].status !== status) {
+          state.sessions[sessionIndex].updatedAt = Date.now();
+        }
         state.sessions[sessionIndex].status = status;
-        state.sessions[sessionIndex].updatedAt = Date.now();
       }
 
       // Update current session if applicable
       if (state.currentSession?.id === sessionId) {
+        if (state.currentSession.status !== status) {
+          state.currentSession.updatedAt = Date.now();
+        }
         state.currentSession.status = status;
-        state.currentSession.updatedAt = Date.now();
         // Streaming state is tied to the currently opened session only
         state.isStreaming = status === CoworkSessionStatusValue.Running;
       }
@@ -377,12 +493,65 @@ const coworkSlice = createSlice({
       }
     },
 
+    updateSessionGoal(state, action: PayloadAction<{ sessionId: string; goal: CoworkGoal | null }>) {
+      const { sessionId, goal } = action.payload;
+      const sessionIndex = state.sessions.findIndex(s => s.id === sessionId);
+      if (sessionIndex !== -1) {
+        state.sessions[sessionIndex].goal = goal;
+      }
+      if (state.currentSession?.id === sessionId) {
+        state.currentSession.goal = goal;
+      }
+    },
+
     deleteSession(state, action: PayloadAction<string>) {
       removeSessionFromState(state, action.payload);
+      delete state.planConfirmations[action.payload];
+      delete state.messageRailIndexBySessionId[action.payload];
+      delete state.messageRailIndexLoadingBySessionId[action.payload];
     },
 
     deleteSessions(state, action: PayloadAction<string[]>) {
       removeSessionsFromState(state, action.payload);
+      for (const sessionId of action.payload) {
+        delete state.planConfirmations[sessionId];
+        delete state.messageRailIndexBySessionId[sessionId];
+        delete state.messageRailIndexLoadingBySessionId[sessionId];
+      }
+    },
+
+    setMessageRailIndexLoading(state, action: PayloadAction<{ sessionId: string; loading: boolean }>) {
+      const { sessionId, loading } = action.payload;
+      if (loading) {
+        state.messageRailIndexLoadingBySessionId[sessionId] = true;
+      } else {
+        delete state.messageRailIndexLoadingBySessionId[sessionId];
+      }
+    },
+
+    setMessageRailIndex(state, action: PayloadAction<{ sessionId: string; items: CoworkMessageRailIndexItem[] }>) {
+      const { sessionId, items } = action.payload;
+      state.messageRailIndexBySessionId[sessionId] = items;
+      delete state.messageRailIndexLoadingBySessionId[sessionId];
+    },
+
+    setMessageWindow(
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        messages: CoworkMessage[];
+        messagesOffset: number;
+        totalMessages: number;
+      }>,
+    ) {
+      const { sessionId, messages, messagesOffset, totalMessages } = action.payload;
+      if (state.currentSession?.id !== sessionId) return;
+      state.currentSession.messages = messages;
+      state.currentSession.messagesOffset = messagesOffset;
+      state.currentSession.totalMessages = totalMessages;
+      for (const message of state.currentSession.messages) {
+        applyPendingMediaStatusUpdates(state, sessionId, message);
+      }
     },
 
     addMessage(state, action: PayloadAction<{ sessionId: string; message: CoworkMessage; beforeMessageId?: string }>) {
@@ -406,14 +575,18 @@ const coworkSlice = createSlice({
             state.currentSession.messages.push(message);
           }
           applyPendingMediaStatusUpdates(state, sessionId, message);
-          state.currentSession.updatedAt = message.timestamp;
+          if (message.type === 'user') {
+            state.currentSession.updatedAt = message.timestamp;
+          }
           state.currentSession.totalMessages += 1;
         }
       }
+      upsertRailIndexItem(state, sessionId, message);
 
-      // Update session in list
+      // List ordering follows user activity: streamed assistant/tool messages
+      // must not move updatedAt or concurrent runs keep swapping positions.
       const sessionIndex = state.sessions.findIndex(s => s.id === sessionId);
-      if (sessionIndex !== -1) {
+      if (sessionIndex !== -1 && message.type === 'user') {
         state.sessions[sessionIndex].updatedAt = message.timestamp;
       }
 
@@ -429,11 +602,15 @@ const coworkSlice = createSlice({
       const toInsert = messages.filter(m => !existingIds.has(m.id));
       state.currentSession.messages = [...toInsert, ...state.currentSession.messages];
       state.currentSession.messagesOffset = newOffset;
+      for (const message of toInsert) {
+        applyPendingMediaStatusUpdates(state, sessionId, message);
+      }
     },
 
+    // Runs on every streaming delta, so it intentionally leaves session
+    // updatedAt untouched to keep the list order stable during runs.
     updateMessageContent(state, action: PayloadAction<{ sessionId: string; messageId: string; content: string; metadata?: Record<string, unknown> }>) {
       const { sessionId, messageId, content, metadata } = action.payload;
-      const updatedAt = Date.now();
 
       if (state.currentSession?.id === sessionId) {
         const messageIndex = state.currentSession.messages.findIndex(m => m.id === messageId);
@@ -451,21 +628,16 @@ const coworkSlice = createSlice({
                 : {}),
             };
           }
-          state.currentSession.updatedAt = updatedAt;
+          upsertRailIndexItem(state, sessionId, state.currentSession.messages[messageIndex]);
         }
-      }
-
-      const sessionIndex = state.sessions.findIndex(s => s.id === sessionId);
-      if (sessionIndex !== -1) {
-        state.sessions[sessionIndex].updatedAt = updatedAt;
       }
 
       markSessionUnread(state, sessionId);
     },
 
+    // High-frequency media polling updates; must not move session updatedAt.
     updateToolUseMediaStatus(state, action: PayloadAction<{ sessionId: string; toolCallId: string; details: Record<string, unknown> }>) {
       const { sessionId, toolCallId, details } = action.payload;
-      const updatedAt = Date.now();
       const retainedDetails = retainMediaStatusUpdate(state, sessionId, toolCallId, details);
 
       if (state.currentSession?.id === sessionId) {
@@ -474,13 +646,7 @@ const coworkSlice = createSlice({
         ));
         if (message) {
           mergeMediaStatusDetailsIntoMessage(message, retainedDetails);
-          state.currentSession.updatedAt = updatedAt;
         }
-      }
-
-      const sessionIndex = state.sessions.findIndex(s => s.id === sessionId);
-      if (sessionIndex !== -1) {
-        state.sessions[sessionIndex].updatedAt = updatedAt;
       }
     },
 
@@ -588,6 +754,48 @@ const coworkSlice = createSlice({
       state.remoteManaged = false;
     },
 
+    setPlanConfirmationAwaiting(
+      state,
+      action: PayloadAction<{ sessionId: string; messageId: string; planTextHash: string }>,
+    ) {
+      const { sessionId, messageId, planTextHash } = action.payload;
+      const existing = state.planConfirmations[sessionId];
+      if (
+        existing?.messageId === messageId
+        && existing.planTextHash === planTextHash
+        && existing.state === PlanConfirmationState.Awaiting
+      ) {
+        return;
+      }
+      state.planConfirmations[sessionId] = {
+        sessionId,
+        messageId,
+        planTextHash,
+        state: PlanConfirmationState.Awaiting,
+        updatedAt: Date.now(),
+      };
+    },
+
+    setPlanConfirmationHandled(
+      state,
+      action: PayloadAction<{ sessionId: string; messageId?: string; planTextHash?: string }>,
+    ) {
+      const { sessionId, messageId, planTextHash } = action.payload;
+      const existing = state.planConfirmations[sessionId];
+      if (!existing) return;
+      if (messageId && existing.messageId !== messageId) return;
+      state.planConfirmations[sessionId] = {
+        ...existing,
+        ...(planTextHash ? { planTextHash } : {}),
+        state: PlanConfirmationState.Handled,
+        updatedAt: Date.now(),
+      };
+    },
+
+    clearPlanConfirmation(state, action: PayloadAction<string>) {
+      delete state.planConfirmations[action.payload];
+    },
+
     setDraftAttachments(state, action: PayloadAction<{ draftKey: string; attachments: DraftAttachment[] }>) {
       const { draftKey, attachments } = action.payload;
       if (attachments.length === 0) {
@@ -656,6 +864,15 @@ const coworkSlice = createSlice({
       }
     },
 
+    setDraftCollaborationMode(state, action: PayloadAction<{ draftKey: string; mode: CoworkCollaborationModeType }>) {
+      const { draftKey, mode } = action.payload;
+      if (mode === CoworkCollaborationMode.Default) {
+        delete state.draftCollaborationModes[draftKey];
+      } else {
+        state.draftCollaborationModes[draftKey] = mode;
+      }
+    },
+
     setMediaModels(state, action: PayloadAction<{ image: MediaModel[]; video: MediaModel[] }>) {
       state.mediaModels = action.payload;
     },
@@ -688,8 +905,12 @@ export const {
   clearDraftSelectedTextSnippets,
   addSession,
   updateSessionStatus,
+  updateSessionGoal,
   deleteSession,
   deleteSessions,
+  setMessageRailIndexLoading,
+  setMessageRailIndex,
+  setMessageWindow,
   addMessage,
   prependMessages,
   updateMessageContent,
@@ -709,8 +930,12 @@ export const {
   setConfig,
   updateConfig,
   clearCurrentSession,
+  setPlanConfirmationAwaiting,
+  setPlanConfirmationHandled,
+  clearPlanConfirmation,
   setDraftKitIds,
   setDraftSkillIds,
+  setDraftCollaborationMode,
   setMediaModels,
   setMediaSelection,
 } = coworkSlice.actions;

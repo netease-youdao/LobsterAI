@@ -219,6 +219,23 @@ export class McpStore {
     return JSON.stringify(config);
   }
 
+  private normalizeTransportConfig(data: McpServerFormData): McpServerFormData {
+    if (data.transportType === 'stdio') {
+      return {
+        ...data,
+        url: undefined,
+        headers: undefined,
+      };
+    }
+
+    return {
+      ...data,
+      command: undefined,
+      args: undefined,
+      env: undefined,
+    };
+  }
+
   listServers(): McpServerRecord[] {
     const rows = this.db
       .prepare(
@@ -241,14 +258,15 @@ export class McpStore {
   createServer(data: McpServerFormData): McpServerRecord {
     const id = crypto.randomUUID();
     const now = Date.now();
-    const configJson = this.serializeConfig(data);
+    const normalized = this.normalizeTransportConfig(data);
+    const configJson = this.serializeConfig(normalized);
 
     this.db
       .prepare(
         `INSERT INTO mcp_servers (id, name, description, enabled, transport_type, config_json, created_at, updated_at)
        VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
       )
-      .run(id, data.name, data.description, data.transportType, configJson, now, now);
+      .run(id, normalized.name, normalized.description, normalized.transportType, configJson, now, now);
 
     return this.getServer(id)!;
   }
@@ -258,7 +276,7 @@ export class McpStore {
     if (!existing) return null;
 
     const now = Date.now();
-    const merged: McpServerFormData = {
+    const merged = this.normalizeTransportConfig({
       name: data.name ?? existing.name,
       description: data.description ?? existing.description,
       transportType: data.transportType ?? existing.transportType,
@@ -270,7 +288,7 @@ export class McpStore {
       isBuiltIn: data.isBuiltIn !== undefined ? data.isBuiltIn : existing.isBuiltIn,
       githubUrl: data.githubUrl !== undefined ? data.githubUrl : existing.githubUrl,
       registryId: data.registryId !== undefined ? data.registryId : existing.registryId,
-    };
+    });
 
     const configJson = this.serializeConfig(merged);
 

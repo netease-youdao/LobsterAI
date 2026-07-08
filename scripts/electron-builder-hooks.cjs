@@ -126,8 +126,23 @@ function verifyPreinstalledPlugins(runtimeRoot, buildHint) {
 
 function hasCompiledLocalExtension(runtimeRoot, extensionId) {
   const pluginDir = path.join(runtimeRoot, 'third-party-extensions', extensionId);
-  return existsSync(path.join(pluginDir, 'openclaw.plugin.json'))
-    && existsSync(path.join(pluginDir, 'index.js'));
+  if (!existsSync(path.join(pluginDir, 'openclaw.plugin.json'))
+    || !existsSync(path.join(pluginDir, 'index.js'))) {
+    return false;
+  }
+
+  const packageJsonPath = path.join(pluginDir, 'package.json');
+  if (!existsSync(packageJsonPath)) {
+    return false;
+  }
+
+  try {
+    const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+    return Array.isArray(pkg.openclaw?.extensions)
+      && pkg.openclaw.extensions.includes('./index.js');
+  } catch {
+    return false;
+  }
 }
 
 function precompileLocalExtensions(runtimeRoot, buildHint) {
@@ -146,7 +161,7 @@ function precompileLocalExtensions(runtimeRoot, buildHint) {
 }
 
 function ensureBundledLocalExtensions(runtimeRoot, buildHint) {
-  const requiredLocalExtensions = ['mcp-bridge', 'ask-user-question'];
+  const requiredLocalExtensions = ['mcp-bridge', 'ask-user-question', 'lobster-media-generation'];
   const missingCompiledExtensions = requiredLocalExtensions.filter(
     (extensionId) => !hasCompiledLocalExtension(runtimeRoot, extensionId),
   );

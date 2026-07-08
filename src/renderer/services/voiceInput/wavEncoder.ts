@@ -76,11 +76,3 @@ export const buildPcm16WavHeader = (
   return new Uint8Array(buffer);
 };
 
-export const encodePcm16Wav = (samples: Float32Array, sampleRate: number): Blob => {
-  const pcmBytes = encodePcm16Bytes(samples);
-  const header = buildPcm16WavHeader(sampleRate, pcmBytes.byteLength);
-  const buffer = new Uint8Array(header.byteLength + pcmBytes.byteLength);
-  buffer.set(header, 0);
-  buffer.set(pcmBytes, header.byteLength);
-  return new Blob([buffer], { type: 'audio/wav' });
-};

@@ -1,5 +1,6 @@
 import { LocalizedText, LocalSkillInfo, MarketplaceSkill, MarketTag, Skill } from '../types/skill';
 import { i18nService } from './i18n';
+import { LogReporterAction, reportYdAnalyzer } from './logReporter';
 
 export function resolveLocalizedText(text: string | LocalizedText): string {
   if (!text) return '';
@@ -20,6 +21,12 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+function getSkillAnalyticsSource(skill: Skill): string {
+  if (skill.isBuiltIn) return 'built_in';
+  if (skill.isOfficial) return 'official';
+  return 'custom';
+}
+
 type EmailConnectivityCheck = {
   code: 'imap_connection' | 'smtp_connection';
   level: 'pass' | 'fail';
@@ -31,6 +38,32 @@ type EmailConnectivityTestResult = {
   testedAt: number;
   verdict: 'pass' | 'fail';
   checks: EmailConnectivityCheck[];
+};
+
+export type EmailSkillAccountConfig = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  provider?: string;
+  email: string;
+  password?: string;
+  imapHost?: string;
+  imapPort?: number;
+  imapTls?: boolean;
+  imapRejectUnauthorized?: boolean;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: boolean;
+  smtpRejectUnauthorized?: boolean;
+  smtpFrom?: string;
+  mailbox?: string;
+  requireSendConfirmation?: boolean;
+};
+
+export type EmailSkillAccountsConfig = {
+  version: 1;
+  defaultAccountId: string;
+  accounts: EmailSkillAccountConfig[];
 };
 
 class SkillService {
@@ -67,9 +100,22 @@ class SkillService {
 
   async setSkillEnabled(id: string, enabled: boolean): Promise<Skill[]> {
     try {
+      const previousSkill = this.skills.find(skill => skill.id === id);
       const result = await window.electron.skills.setEnabled({ id, enabled });
       if (result.success && result.skills) {
         this.skills = result.skills;
+        const updatedSkill = this.skills.find(skill => skill.id === id) ?? previousSkill;
+        if (enabled && previousSkill?.enabled !== true && updatedSkill) {
+          void reportYdAnalyzer({
+            action: LogReporterAction.SkillEnabled,
+            skillId: updatedSkill.id,
+            skillName: updatedSkill.name,
+            skillSource: getSkillAnalyticsSource(updatedSkill),
+            isBuiltIn: updatedSkill.isBuiltIn,
+            isOfficial: updatedSkill.isOfficial,
+            version: updatedSkill.version,
+          });
+        }
         return this.skills;
       }
       throw new Error(result.error || 'Failed to update skill');
@@ -214,6 +260,83 @@ class SkillService {
       return null;
     } catch (error) {
       console.error('Failed to test email connectivity:', error);
+      return null;
+    }
+  }
+
+  async getEmailAccountsConfig(skillId: string): Promise<EmailSkillAccountsConfig> {
+    try {
+      console.debug('[EmailSkill] loading email accounts config', { skillId });
+      const result = await window.electron.skills.getEmailAccountsConfig(skillId);
+      if (result.success && result.config) {
+        console.debug('[EmailSkill] loaded email accounts config', {
+          skillId,
+          accountCount: result.config.accounts.length,
+          enabledAccountCount: result.config.accounts.filter(account => account.enabled).length,
+          defaultAccountId: result.config.defaultAccountId,
+        });
+        return result.config;
+      }
+      console.warn('[EmailSkill] failed to load email accounts config', { skillId, error: result.error });
+      return { version: 1, defaultAccountId: '', accounts: [] };
+    } catch (error) {
+      console.error('Failed to get email accounts config:', error);
+      return { version: 1, defaultAccountId: '', accounts: [] };
+    }
+  }
+
+  async setEmailAccountsConfig(
+    skillId: string,
+    config: EmailSkillAccountsConfig,
+  ): Promise<boolean> {
+    try {
+      console.debug('[EmailSkill] saving email accounts config', {
+        skillId,
+        accountCount: config.accounts.length,
+        enabledAccountCount: config.accounts.filter(account => account.enabled).length,
+        defaultAccountId: config.defaultAccountId,
+      });
+      const result = await window.electron.skills.setEmailAccountsConfig(skillId, config);
+      if (!result.success) {
+        console.warn('[EmailSkill] failed to save email accounts config', { skillId, error: result.error });
+      }
+      return result.success;
+    } catch (error) {
+      console.error('Failed to set email accounts config:', error);
+      return false;
+    }
+  }
+
+  async testEmailAccountConnectivity(
+    skillId: string,
+    account: EmailSkillAccountConfig,
+  ): Promise<EmailConnectivityTestResult | null> {
+    try {
+      console.debug('[EmailSkill] testing email account connectivity', {
+        skillId,
+        accountId: account.id,
+        hasEmail: Boolean(account.email),
+        hasPassword: Boolean(account.password),
+        hasImapHost: Boolean(account.imapHost),
+        hasSmtpHost: Boolean(account.smtpHost),
+      });
+      const result = await window.electron.skills.testEmailAccountConnectivity(skillId, account);
+      if (result.success && result.result) {
+        console.debug('[EmailSkill] email account connectivity test completed', {
+          skillId,
+          accountId: account.id,
+          verdict: result.result.verdict,
+        });
+        return result.result;
+      }
+      console.warn('[EmailSkill] email account connectivity test failed', {
+        skillId,
+        accountId: account.id,
+        error: result.error,
+      });
+      return null;
+    } catch (error) {
+      console.error('Failed to test email account connectivity:', error);
       return null;
     }
   }

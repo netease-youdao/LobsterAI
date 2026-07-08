@@ -1,0 +1,814 @@
+diff --git a/src/agents/embedded-agent-runner-extraparams.test.ts b/src/agents/embedded-agent-runner-extraparams.test.ts
+index 13834104ef0..dfb44d9bdb0 100644
+--- a/src/agents/embedded-agent-runner-extraparams.test.ts
++++ b/src/agents/embedded-agent-runner-extraparams.test.ts
+@@ -2692,6 +2692,123 @@ describe("applyExtraParamsToAgent", () => {
+     expect(calls[0]?.sessionId).toBe("session-81281");
+   });
+ 
++  it("passes through explicit context cache params for Claude OpenAI-compatible providers", () => {
++    const { calls, agent } = createOptionsCaptureAgent();
++    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
++    const cfg = buildModelConfig("lobsterai-server/claude-sonnet-4-6-YoudaoInner", {
++      cacheRetention: "short",
++      contextCacheProvider: "anthropic-compatible",
++      contextCacheMode: "explicit",
++    });
++
++    try {
++      applyExtraParamsToAgent(
++        agent,
++        cfg,
++        "lobsterai-server",
++        "claude-sonnet-4-6-YoudaoInner",
++      );
++
++      const model = {
++        api: "openai-completions",
++        provider: "lobsterai-server",
++        id: "claude-sonnet-4-6-YoudaoInner",
++      } as Model<"openai-completions">;
++      const context: Context = { messages: [] };
++
++      void agent.streamFn?.(model, context, {});
++
++      const captured = calls[0] as Record<string, unknown> | undefined;
++      expect(calls).toHaveLength(1);
++      expect(captured?.cacheRetention).toBe("short");
++      expect(captured?.contextCacheProvider).toBe("anthropic-compatible");
++      expect(captured?.contextCacheMode).toBe("explicit");
++      expect(infoSpy).toHaveBeenCalledWith(
++        "******************** [ExplicitCachePassThrough] provider=lobsterai-server model=claude-sonnet-4-6-YoudaoInner api=openai-completions cacheRetention=short contextCacheProvider=anthropic-compatible contextCacheMode=explicit",
++      );
++    } finally {
++      infoSpy.mockRestore();
++    }
++  });
++
++  it("passes through explicit context cache params for Qwen OpenAI-compatible providers", () => {
++    const { calls, agent } = createOptionsCaptureAgent();
++    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
++    const cfg = buildModelConfig("lobsterai-server/qwen3.6-coder", {
++      cacheRetention: "short",
++      contextCacheProvider: "dashscope",
++      contextCacheMode: "explicit",
++    });
++
++    try {
++      applyExtraParamsToAgent(agent, cfg, "lobsterai-server", "qwen3.6-coder");
++
++      const model = {
++        api: "openai-completions",
++        provider: "lobsterai-server",
++        id: "qwen3.6-coder",
++      } as Model<"openai-completions">;
++      const context: Context = { messages: [] };
++
++      void agent.streamFn?.(model, context, {});
++
++      const captured = calls[0] as Record<string, unknown> | undefined;
++      expect(calls).toHaveLength(1);
++      expect(captured?.cacheRetention).toBe("short");
++      expect(captured?.contextCacheProvider).toBe("dashscope");
++      expect(captured?.contextCacheMode).toBe("explicit");
++      expect(infoSpy).toHaveBeenCalledWith(
++        "******************** [ExplicitCachePassThrough] provider=lobsterai-server model=qwen3.6-coder api=openai-completions cacheRetention=short contextCacheProvider=dashscope contextCacheMode=explicit",
++      );
++    } finally {
++      infoSpy.mockRestore();
++    }
++  });
++
++  it("does not pass context cache params through without explicit mode or allowed provider", () => {
++    const missingMode = createOptionsCaptureAgent();
++    const invalidProvider = createOptionsCaptureAgent();
++
++    applyExtraParamsToAgent(
++      missingMode.agent,
++      buildModelConfig("lobsterai-server/claude-sonnet-4-6-YoudaoInner", {
++        cacheRetention: "short",
++        contextCacheProvider: "anthropic-compatible",
++      }),
++      "lobsterai-server",
++      "claude-sonnet-4-6-YoudaoInner",
++    );
++    applyExtraParamsToAgent(
++      invalidProvider.agent,
++      buildModelConfig("lobsterai-server/claude-sonnet-4-6-YoudaoInner", {
++        cacheRetention: "short",
++        contextCacheProvider: "other-compatible",
++        contextCacheMode: "explicit",
++      }),
++      "lobsterai-server",
++      "claude-sonnet-4-6-YoudaoInner",
++    );
++
++    const model = {
++      api: "openai-completions",
++      provider: "lobsterai-server",
++      id: "claude-sonnet-4-6-YoudaoInner",
++    } as Model<"openai-completions">;
++    const context: Context = { messages: [] };
++
++    void missingMode.agent.streamFn?.(model, context, {});
++    void invalidProvider.agent.streamFn?.(model, context, {});
++
++    const missingModeOptions = missingMode.calls[0] as Record<string, unknown> | undefined;
++    const invalidProviderOptions = invalidProvider.calls[0] as Record<string, unknown> | undefined;
++    expect(missingMode.calls).toHaveLength(1);
++    expect(invalidProvider.calls).toHaveLength(1);
++    expect(missingModeOptions?.contextCacheProvider).toBeUndefined();
++    expect(missingModeOptions?.contextCacheMode).toBeUndefined();
++    expect(invalidProviderOptions?.contextCacheProvider).toBeUndefined();
++    expect(invalidProviderOptions?.contextCacheMode).toBeUndefined();
++  });
++
+   it("keeps explicit cacheRetention off openai-completions providers without prompt-cache-key support", () => {
+     const { calls, agent } = createOptionsCaptureAgent();
+     const cfg = buildModelConfig("omlx-local/local_model", {
+diff --git a/src/agents/embedded-agent-runner/extra-params.ts b/src/agents/embedded-agent-runner/extra-params.ts
+index 0e1d5913d38..1b0d38c8fda 100644
+--- a/src/agents/embedded-agent-runner/extra-params.ts
++++ b/src/agents/embedded-agent-runner/extra-params.ts
+@@ -152,6 +152,8 @@ export function resolveExtraParams(params: {
+ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
+   cacheRetention?: "none" | "short" | "long";
+   cachedContent?: string;
++  contextCacheProvider?: "dashscope" | "anthropic-compatible";
++  contextCacheMode?: "explicit";
+   topP?: number;
+   responseFormat?: Record<string, unknown>;
+   frequencyPenalty?: number;
+@@ -161,10 +163,31 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
+ };
+ export type SupportedTransport = AgentRuntimeTransport;
+ 
++const EXPLICIT_CONTEXT_CACHE_LOG_PREFIX = "********************";
++
+ function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
+   return value === "sse" || value === "websocket" || value === "auto" ? value : undefined;
+ }
+ 
++function resolveExplicitContextCacheStreamParams(
++  extraParams: Record<string, unknown>,
++  modelApi: string | undefined,
++): Pick<CacheRetentionStreamOptions, "contextCacheProvider" | "contextCacheMode"> | undefined {
++  const contextCacheProvider = extraParams.contextCacheProvider;
++  if (
++    modelApi !== "openai-completions" ||
++    extraParams.contextCacheMode !== "explicit" ||
++    (contextCacheProvider !== "dashscope" && contextCacheProvider !== "anthropic-compatible")
++  ) {
++    return undefined;
++  }
++
++  return {
++    contextCacheProvider,
++    contextCacheMode: "explicit",
++  };
++}
++
+ function hasExplicitTransportSetting(settings: { transport?: unknown }): boolean {
+   return Object.hasOwn(settings, "transport");
+ }
+@@ -526,10 +549,22 @@ function createStreamFnWithExtraParams(
+     typeof model?.id === "string" ? model.id : undefined,
+     readSupportsPromptCacheKey(model),
+   );
+-  if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
++  const initialExplicitContextCacheParams = resolveExplicitContextCacheStreamParams(
++    extraParams,
++    typeof model?.api === "string" ? model.api : undefined,
++  );
++  if (
++    Object.keys(streamParams).length > 0 ||
++    initialCacheRetention ||
++    initialExplicitContextCacheParams
++  ) {
+     const debugParams = initialCacheRetention
+-      ? { ...streamParams, cacheRetention: initialCacheRetention }
+-      : streamParams;
++      ? {
++          ...streamParams,
++          ...initialExplicitContextCacheParams,
++          cacheRetention: initialCacheRetention,
++        }
++      : { ...streamParams, ...initialExplicitContextCacheParams };
+     log.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
+   }
+ 
+@@ -542,13 +577,25 @@ function createStreamFnWithExtraParams(
+       typeof callModel.id === "string" ? callModel.id : undefined,
+       readSupportsPromptCacheKey(callModel),
+     );
+-    const hasStreamParams = Object.keys(streamParams).length > 0 || cacheRetention;
++    const explicitContextCacheParams = resolveExplicitContextCacheStreamParams(
++      extraParams,
++      typeof callModel.api === "string" ? callModel.api : undefined,
++    );
++    const hasStreamParams =
++      Object.keys(streamParams).length > 0 || cacheRetention || explicitContextCacheParams;
+     if (!hasStreamParams) {
+       return underlying(callModel, context, options);
+     }
+ 
++    if (explicitContextCacheParams) {
++      console.info(
++        `${EXPLICIT_CONTEXT_CACHE_LOG_PREFIX} [ExplicitCachePassThrough] provider=${provider} model=${callModel.id} api=${callModel.api} cacheRetention=${cacheRetention ?? "default"} contextCacheProvider=${explicitContextCacheParams.contextCacheProvider} contextCacheMode=${explicitContextCacheParams.contextCacheMode}`,
++      );
++    }
++
+     return underlying(callModel, context, {
+       ...streamParams,
++      ...explicitContextCacheParams,
+       ...(cacheRetention ? { cacheRetention } : {}),
+       ...options,
+     });
+diff --git a/src/agents/embedded-agent-runner/prompt-cache-retention.test.ts b/src/agents/embedded-agent-runner/prompt-cache-retention.test.ts
+index 9f80e39184f..d8a9fd5abdf 100644
+--- a/src/agents/embedded-agent-runner/prompt-cache-retention.test.ts
++++ b/src/agents/embedded-agent-runner/prompt-cache-retention.test.ts
+@@ -65,6 +65,60 @@ describe("prompt cache retention", () => {
+     ).toBe("none");
+   });
+ 
++  it("passes explicit context cache params through for supported openai-completions providers", () => {
++    // DashScope and Anthropic-compatible explicit context cache use Anthropic-style
++    // cache_control markers on an OpenAI-compatible Chat Completions payload,
++    // not OpenAI prompt_cache_key.
++    expect(
++      resolveCacheRetention(
++        {
++          cacheRetention: "short",
++          contextCacheProvider: "dashscope",
++          contextCacheMode: "explicit",
++        },
++        "lobsterai-server",
++        "openai-completions",
++        "qwen3.6-plus-YoudaoInner",
++      ),
++    ).toBe("short");
++
++    expect(
++      resolveCacheRetention(
++        {
++          cacheRetention: "short",
++          contextCacheProvider: "anthropic-compatible",
++          contextCacheMode: "explicit",
++        },
++        "lobsterai-server",
++        "openai-completions",
++        "claude-sonnet-4-6",
++      ),
++    ).toBe("short");
++
++    expect(
++      resolveCacheRetention(
++        {
++          contextCacheProvider: "dashscope",
++          contextCacheMode: "explicit",
++        },
++        "lobsterai-server",
++        "openai-completions",
++        "qwen3.5-plus-YoudaoInner",
++      ),
++    ).toBe("short");
++  });
++
++  it("does not honor explicit context cache params without explicit mode", () => {
++    expect(
++      resolveCacheRetention(
++        { cacheRetention: "short", contextCacheProvider: "dashscope" },
++        "lobsterai-server",
++        "openai-completions",
++        "qwen3.6-plus-YoudaoInner",
++      ),
++    ).toBeUndefined();
++  });
++
+   it("does not honor explicit cacheRetention for openai-completions without supportsPromptCacheKey", () => {
+     // Providers that route via openai-completions but do not advertise prompt
+     // caching (e.g. amazon-bedrock proxying amazon.* nova models) must keep
+diff --git a/src/agents/embedded-agent-runner/prompt-cache-retention.ts b/src/agents/embedded-agent-runner/prompt-cache-retention.ts
+index 91253263abe..d538f42fd9f 100644
+--- a/src/agents/embedded-agent-runner/prompt-cache-retention.ts
++++ b/src/agents/embedded-agent-runner/prompt-cache-retention.ts
+@@ -14,6 +14,18 @@ export function isGooglePromptCacheEligible(params: {
+   return normalizedModelId.startsWith("gemini-2.5") || normalizedModelId.startsWith("gemini-3");
+ }
+ 
++function isExplicitContextCacheEligible(params: {
++  extraParams: Record<string, unknown> | undefined;
++  modelApi?: string;
++}): boolean {
++  const contextCacheProvider = params.extraParams?.contextCacheProvider;
++  return (
++    params.modelApi === "openai-completions" &&
++    (contextCacheProvider === "dashscope" || contextCacheProvider === "anthropic-compatible") &&
++    params.extraParams?.contextCacheMode === "explicit"
++  );
++}
++
+ export function resolveCacheRetention(
+   extraParams: Record<string, unknown> | undefined,
+   provider: string,
+@@ -38,8 +50,12 @@ export function resolveCacheRetention(
+   // openai-completions wire (amazon-bedrock + amazon.* nova models) leave
+   // the flag unset, so the existing family gate still applies to them.
+   const cacheKeyEligible = supportsPromptCacheKey === true;
++  const explicitContextCacheEligible = isExplicitContextCacheEligible({
++    extraParams,
++    modelApi,
++  });
+ 
+-  if (!family && !googleEligible && !cacheKeyEligible) {
++  if (!family && !googleEligible && !cacheKeyEligible && !explicitContextCacheEligible) {
+     return undefined;
+   }
+ 
+@@ -56,5 +72,5 @@ export function resolveCacheRetention(
+     return "long";
+   }
+ 
+-  return family === "anthropic-direct" ? "short" : undefined;
++  return family === "anthropic-direct" || explicitContextCacheEligible ? "short" : undefined;
+ }
+diff --git a/src/agents/openai-transport-stream.test.ts b/src/agents/openai-transport-stream.test.ts
+index dafce9a199f..8a322282160 100644
+--- a/src/agents/openai-transport-stream.test.ts
++++ b/src/agents/openai-transport-stream.test.ts
+@@ -5604,6 +5652,81 @@ describe("openai transport stream", () => {
+     expect(params.prompt_cache_key).toBe("cron-cache-key");
+   });
+ 
++  it("adds cache_control markers for explicit OpenAI-compatible context cache", () => {
++    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
++    try {
++      const params = buildOpenAICompletionsParams(
++        {
++          id: "claude-sonnet-4-6-YoudaoInner",
++          name: "Claude Sonnet 4.6",
++          api: "openai-completions",
++          provider: "lobsterai-server",
++          baseUrl: "http://127.0.0.1:17890/v1",
++          reasoning: false,
++          input: ["text"],
++          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++          contextWindow: 200_000,
++          maxTokens: 8192,
++        } satisfies Model<"openai-completions">,
++        {
++          systemPrompt: "stable instructions",
++          messages: [{ role: "user", content: "cache this", timestamp: 1 }],
++          tools: [
++            { name: "read", description: "Read a file", parameters: { type: "object" } },
++          ],
++        } as never,
++        {
++          cacheRetention: "short",
++          contextCacheProvider: "anthropic-compatible",
++          contextCacheMode: "explicit",
++        },
++      ) as {
++        messages?: Array<{ role?: string; content?: Array<Record<string, unknown>> }>;
++        tools?: Array<Record<string, unknown>>;
++      };
++
++      const systemMessage = params.messages?.find((message) => message.role === "system");
++      const userMessage = params.messages?.find((message) => message.role === "user");
++      expect(systemMessage?.content?.[0]?.cache_control).toEqual({ type: "ephemeral" });
++      expect(userMessage?.content?.[0]?.cache_control).toEqual({ type: "ephemeral" });
++      expect(params.tools?.at(-1)?.cache_control).toEqual({ type: "ephemeral" });
++      expect(infoSpy).toHaveBeenCalledWith(
++        "******************** [ExplicitCachePayload] model=claude-sonnet-4-6-YoudaoInner provider=anthropic-compatible retention=short markers=system,tool,conversation hasCacheControl=true",
++      );
++    } finally {
++      infoSpy.mockRestore();
++    }
++  });
++
++  it("does not add cache_control for non-whitelisted OpenAI-compatible context cache providers", () => {
++    const params = buildOpenAICompletionsParams(
++      {
++        id: "custom-model",
++        name: "Custom Model",
++        api: "openai-completions",
++        provider: "custom-cpa",
++        baseUrl: "https://proxy.example.com/v1",
++        reasoning: false,
++        input: ["text"],
++        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++        contextWindow: 32768,
++        maxTokens: 8192,
++      } satisfies Model<"openai-completions">,
++      {
++        systemPrompt: "system",
++        messages: [{ role: "user", content: "hello", timestamp: 1 }],
++        tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
++      } as never,
++      {
++        cacheRetention: "short",
++        contextCacheProvider: "other-compatible",
++        contextCacheMode: "explicit",
++      },
++    );
++
++    expect(JSON.stringify(params)).not.toContain("cache_control");
++  });
++
+   it("omits prompt_cache_key for completions when caching is disabled or not opted in", () => {
+     const baseModel = {
+       id: "custom-model",
+diff --git a/src/agents/openai-transport-stream.ts b/src/agents/openai-transport-stream.ts
+index d3d0e02327b..b8546c1673c 100644
+--- a/src/agents/openai-transport-stream.ts
++++ b/src/agents/openai-transport-stream.ts
+@@ -124,6 +130,8 @@ type BaseStreamOptions = {
+   cacheRetention?: "none" | "short" | "long";
+   sessionId?: string;
+   promptCacheKey?: string;
++  contextCacheProvider?: string;
++  contextCacheMode?: string;
+   authProfileId?: string;
+   onPayload?: (payload: unknown, model: Model) => unknown;
+   headers?: Record<string, string>;
+@@ -203,6 +211,18 @@ type OpenAICompletionsOptions = BaseStreamOptions & {
+   reasoningEffort?: OpenAIReasoningEffort;
+ };
+ 
++type OpenAICompatibleCacheControl = {
++  type: "ephemeral";
++};
++
++type ExplicitContextCacheMarkers = {
++  system: boolean;
++  tool: boolean;
++  conversation: boolean;
++};
++
++const EXPLICIT_CONTEXT_CACHE_LOG_PREFIX = "********************";
++
+ type OpenAIModeCompatInput = Omit<ModelCompatConfig, "thinkingFormat"> & {
+   thinkingFormat?: string;
+ };
+@@ -2003,6 +2155,135 @@ function getPromptCacheRetention(
+   return baseUrl?.includes("api.openai.com") ? "24h" : undefined;
+ }
+ 
++function isOpenAICompatibleExplicitContextCache(
++  options: OpenAICompletionsOptions | undefined,
++): boolean {
++  return (
++    (options?.contextCacheProvider === "dashscope" ||
++      options?.contextCacheProvider === "anthropic-compatible") &&
++    options?.contextCacheMode === "explicit"
++  );
++}
++
++function addCacheControlToInstructionMessage(
++  messages: unknown,
++  cacheControl: OpenAICompatibleCacheControl,
++): boolean {
++  if (!Array.isArray(messages)) {
++    return false;
++  }
++
++  for (const message of messages) {
++    if (!isRecord(message)) {
++      continue;
++    }
++    if (message.role === "system" || message.role === "developer") {
++      return addCacheControlToMessageContent(message, cacheControl);
++    }
++  }
++  return false;
++}
++
++function addCacheControlToLastConversationMessage(
++  messages: unknown,
++  cacheControl: OpenAICompatibleCacheControl,
++): boolean {
++  if (!Array.isArray(messages)) {
++    return false;
++  }
++
++  for (let i = messages.length - 1; i >= 0; i -= 1) {
++    const message = messages[i];
++    if (!isRecord(message)) {
++      continue;
++    }
++    if (
++      (message.role === "user" || message.role === "assistant") &&
++      addCacheControlToMessageContent(message, cacheControl)
++    ) {
++      return true;
++    }
++  }
++  return false;
++}
++
++function addCacheControlToLastTool(
++  tools: unknown,
++  cacheControl: OpenAICompatibleCacheControl,
++): boolean {
++  if (!Array.isArray(tools) || tools.length === 0) {
++    return false;
++  }
++
++  const lastTool = tools[tools.length - 1];
++  if (!isRecord(lastTool)) {
++    return false;
++  }
++  lastTool.cache_control = cacheControl;
++  return true;
++}
++
++function addCacheControlToMessageContent(
++  message: Record<string, unknown>,
++  cacheControl: OpenAICompatibleCacheControl,
++): boolean {
++  const content = message.content;
++  if (typeof content === "string") {
++    if (content.length === 0) {
++      return false;
++    }
++    message.content = [{ type: "text", text: content, cache_control: cacheControl }];
++    return true;
++  }
++
++  if (!Array.isArray(content)) {
++    return false;
++  }
++
++  for (let i = content.length - 1; i >= 0; i -= 1) {
++    const block = content[i];
++    if (isRecord(block) && block.type === "text") {
++      block.cache_control = cacheControl;
++      return true;
++    }
++  }
++  return false;
++}
++
++function applyOpenAICompletionsExplicitContextCache(params: {
++  model: OpenAIModeModel;
++  payload: Record<string, unknown>;
++  options: OpenAICompletionsOptions | undefined;
++  cacheRetention: "short" | "long" | "none";
++}): void {
++  if (!isOpenAICompatibleExplicitContextCache(params.options)) {
++    return;
++  }
++
++  if (params.cacheRetention === "none") {
++    console.info(
++      `${EXPLICIT_CONTEXT_CACHE_LOG_PREFIX} [ExplicitCachePayload] model=${params.model.id} provider=${params.options?.contextCacheProvider ?? "unknown"} retention=${params.cacheRetention} markers=none hasCacheControl=false reason=cacheRetention-none`,
++    );
++    return;
++  }
++
++  const cacheControl = { type: "ephemeral" } satisfies OpenAICompatibleCacheControl;
++  const markers: ExplicitContextCacheMarkers = {
++    system: addCacheControlToInstructionMessage(params.payload.messages, cacheControl),
++    tool: addCacheControlToLastTool(params.payload.tools, cacheControl),
++    conversation: addCacheControlToLastConversationMessage(params.payload.messages, cacheControl),
++  };
++  const appliedMarkers = [
++    markers.system ? "system" : undefined,
++    markers.tool ? "tool" : undefined,
++    markers.conversation ? "conversation" : undefined,
++  ].filter(Boolean);
++
++  console.info(
++    `${EXPLICIT_CONTEXT_CACHE_LOG_PREFIX} [ExplicitCachePayload] model=${params.model.id} provider=${params.options?.contextCacheProvider ?? "unknown"} retention=${params.cacheRetention} markers=${appliedMarkers.join(",") || "none"} hasCacheControl=${appliedMarkers.length > 0}`,
++  );
++}
++
+ function resolveOpenAIReasoningEffort(
+   options: OpenAIResponsesOptions | undefined,
+ ): OpenAIApiReasoningEffort {
+@@ -4123,6 +4404,12 @@ export function buildOpenAICompletionsParams(
+       delete params.tool_choice;
+     }
+   }
++  applyOpenAICompletionsExplicitContextCache({
++    model,
++    payload: params,
++    options,
++    cacheRetention,
++  });
+   {
+     const maxTokenBudget = resolveOpenAICompletionsMaxTokens(model, options);
+     const effectiveMaxTokens = maxTokenBudget.maxTokens;
+diff --git a/src/llm/providers/openai-completions.test.ts b/src/llm/providers/openai-completions.test.ts
+index ec4e8d75f01..4b11f4d690a 100644
+--- a/src/llm/providers/openai-completions.test.ts
++++ b/src/llm/providers/openai-completions.test.ts
+@@ -204,6 +204,53 @@ describe("OpenAI-compatible completions params", () => {
+     expect(capturedRetention).toBeUndefined();
+   });
+ 
++  it("adds Anthropic cache_control markers for OpenAI-compatible explicit context cache", async () => {
++    let capturedMessages: unknown;
++    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
++    try {
++      const stream = streamOpenAICompletions(
++        {
++          ...createModel(32_000),
++        },
++        {
++          systemPrompt: "stable instructions",
++          messages: [{ role: "user", content: "cache this", timestamp: 1 }],
++        } satisfies Context,
++        {
++          apiKey: "sk-test",
++          cacheRetention: "short",
++          contextCacheProvider: "anthropic-compatible",
++          contextCacheMode: "explicit",
++          onPayload(payload) {
++            capturedMessages = (payload as { messages?: unknown }).messages;
++            throw new Error("stop before network");
++          },
++        },
++      );
++
++      const result = await stream.result();
++
++      expect(result.stopReason).toBe("error");
++      expect(capturedMessages).toEqual([
++        {
++          role: "system",
++          content: [
++            { type: "text", text: "stable instructions", cache_control: { type: "ephemeral" } },
++          ],
++        },
++        {
++          role: "user",
++          content: [{ type: "text", text: "cache this", cache_control: { type: "ephemeral" } }],
++        },
++      ]);
++      expect(infoSpy).toHaveBeenCalledWith(
++        "******************** [ExplicitCachePayload] model=custom-model provider=anthropic-compatible retention=short markers=system,conversation hasCacheControl=true",
++      );
++    } finally {
++      infoSpy.mockRestore();
++    }
++  });
++
+   it("keeps OpenAI long retention even when no cache key is available", async () => {
+     let capturedCacheKey: unknown;
+     let capturedRetention: unknown;
+diff --git a/src/llm/providers/openai-completions.ts b/src/llm/providers/openai-completions.ts
+index a2e77c2f2f1..a39bf079d1a 100644
+--- a/src/llm/providers/openai-completions.ts
++++ b/src/llm/providers/openai-completions.ts
+@@ -79,6 +79,8 @@ function isImageContentBlock(block: { type: string }): block is ImageContent {
+ export interface OpenAICompletionsOptions extends StreamOptions {
+   toolChoice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
+   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
++  contextCacheProvider?: string;
++  contextCacheMode?: string;
+ }
+ 
+ interface OpenAICompatCacheControl {
+@@ -105,6 +107,8 @@ type ChatCompletionToolWithCacheControl = OpenAI.Chat.Completions.ChatCompletion
+   cache_control?: OpenAICompatCacheControl;
+ };
+ 
++const EXPLICIT_CONTEXT_CACHE_LOG_PREFIX = "********************";
++
+ function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
+   if (cacheRetention) {
+     return cacheRetention;
+@@ -585,7 +589,8 @@ function buildParams(
+   cacheRetention: CacheRetention = resolveCacheRetention(options?.cacheRetention),
+ ) {
+   const messages = convertMessages(model, context, compat);
+-  const cacheControl = getCompatCacheControl(compat, cacheRetention);
++  const cacheControl = getCompatCacheControl(compat, cacheRetention, options);
++  const explicitContextCache = isOpenAICompatibleExplicitContextCache(options);
+ 
+   type ChatCompletionRequestParams = Omit<
+     OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
+@@ -657,7 +662,21 @@ function buildParams(
+   }
+ 
+   if (cacheControl) {
+-    applyAnthropicCacheControl(messages, params.tools, cacheControl);
++    const cacheControlApplication = applyAnthropicCacheControl(messages, params.tools, cacheControl);
++    if (explicitContextCache) {
++      const markers = [
++        cacheControlApplication.system ? "system" : undefined,
++        cacheControlApplication.tool ? "tool" : undefined,
++        cacheControlApplication.conversation ? "conversation" : undefined,
++      ].filter(Boolean);
++      console.info(
++        `${EXPLICIT_CONTEXT_CACHE_LOG_PREFIX} [ExplicitCachePayload] model=${model.id} provider=${options?.contextCacheProvider ?? "unknown"} retention=${cacheRetention} markers=${markers.join(",") || "none"} hasCacheControl=${markers.length > 0}`,
++      );
++    }
++  } else if (explicitContextCache) {
++    console.info(
++      `${EXPLICIT_CONTEXT_CACHE_LOG_PREFIX} [ExplicitCachePayload] model=${model.id} provider=${options?.contextCacheProvider ?? "unknown"} retention=${cacheRetention} markers=none hasCacheControl=false reason=no-cache-control`,
++    );
+   }
+ 
+   if (options?.toolChoice) {
+@@ -749,61 +768,85 @@ function clampOpenAICompletionsMaxTokens(
+ function getCompatCacheControl(
+   compat: ResolvedOpenAICompletionsCompat,
+   cacheRetention: CacheRetention,
++  options?: OpenAICompletionsOptions,
+ ): OpenAICompatCacheControl | undefined {
+-  if (compat.cacheControlFormat !== "anthropic" || cacheRetention === "none") {
++  const usesAnthropicCacheControl =
++    compat.cacheControlFormat === "anthropic" || isOpenAICompatibleExplicitContextCache(options);
++
++  if (!usesAnthropicCacheControl || cacheRetention === "none") {
+     return undefined;
+   }
+ 
+-  const ttl = cacheRetention === "long" && compat.supportsLongCacheRetention ? "1h" : undefined;
++  const supportsLongCacheRetention =
++    compat.cacheControlFormat === "anthropic" && compat.supportsLongCacheRetention;
++  const ttl = cacheRetention === "long" && supportsLongCacheRetention ? "1h" : undefined;
+   return { type: "ephemeral", ...(ttl ? { ttl } : {}) };
+ }
+ 
++function isOpenAICompatibleExplicitContextCache(options?: OpenAICompletionsOptions): boolean {
++  return (
++    (options?.contextCacheProvider === "dashscope" ||
++      options?.contextCacheProvider === "anthropic-compatible") &&
++    options?.contextCacheMode === "explicit"
++  );
++}
++
++type CacheControlApplication = {
++  system: boolean;
++  tool: boolean;
++  conversation: boolean;
++};
++
+ function applyAnthropicCacheControl(
+   messages: ChatCompletionMessageParam[],
+   tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
+   cacheControl: OpenAICompatCacheControl,
+-): void {
+-  addCacheControlToSystemPrompt(messages, cacheControl);
+-  addCacheControlToLastTool(tools, cacheControl);
+-  addCacheControlToLastConversationMessage(messages, cacheControl);
++): CacheControlApplication {
++  return {
++    system: addCacheControlToSystemPrompt(messages, cacheControl),
++    tool: addCacheControlToLastTool(tools, cacheControl),
++    conversation: addCacheControlToLastConversationMessage(messages, cacheControl),
++  };
+ }
+ 
+ function addCacheControlToSystemPrompt(
+   messages: ChatCompletionMessageParam[],
+   cacheControl: OpenAICompatCacheControl,
+-): void {
++): boolean {
+   for (const message of messages) {
+     if (message.role === "system" || message.role === "developer") {
+-      addCacheControlToInstructionMessage(message, cacheControl);
+-      return;
++      return addCacheControlToInstructionMessage(message, cacheControl);
+     }
+   }
++  return false;
+ }
+ 
+ function addCacheControlToLastConversationMessage(
+   messages: ChatCompletionMessageParam[],
+   cacheControl: OpenAICompatCacheControl,
+-): void {
++): boolean {
+   for (let i = messages.length - 1; i >= 0; i--) {
+     const message = messages[i];
+     if (message.role === "user" || message.role === "assistant") {
+       if (addCacheControlToMessage(message, cacheControl)) {
+-        return;
++        return true;
+       }
+     }
+   }
++  return false;
+ }
+ 
+ function addCacheControlToLastTool(
+   tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
+   cacheControl: OpenAICompatCacheControl,
+-): void {
++): boolean {
+   if (!tools || tools.length === 0) {
+-    return;
++    return false;
+   }
+ 
+   const lastTool = tools[tools.length - 1] as ChatCompletionToolWithCacheControl;
+   lastTool.cache_control = cacheControl;
++  return true;
+ }
+ 
+ function addCacheControlToInstructionMessage(

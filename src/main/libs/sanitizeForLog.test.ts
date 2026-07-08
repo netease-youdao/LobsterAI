@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { SENSITIVE_LOG_KEY_PATTERN, serializeForLog } from './sanitizeForLog';
+import { sanitizeUrlForLog, SENSITIVE_LOG_KEY_PATTERN, serializeForLog } from './sanitizeForLog';
 
 // ---------------------------------------------------------------------------
 // SENSITIVE_LOG_KEY_PATTERN — make sure every expected key variant matches
@@ -136,5 +136,21 @@ describe('serializeForLog', () => {
     expect(result).toContain('42');
     expect(result).toContain('true');
     expect(result).toContain('null');
+  });
+});
+
+describe('sanitizeUrlForLog', () => {
+  test('removes query values and fragments from valid URLs', () => {
+    const result = sanitizeUrlForLog(
+      'https://rlogs.youdao.com/rlog.php?action=lobsterai_app_started&log_Usid=user-1#result',
+    );
+
+    expect(result).toBe('https://rlogs.youdao.com/rlog.php?[redacted]#[redacted]');
+    expect(result).not.toContain('user-1');
+    expect(result).not.toContain('lobsterai_app_started');
+  });
+
+  test('returns a safe marker for invalid URLs', () => {
+    expect(sanitizeUrlForLog('not a URL')).toBe('[invalid-url]');
   });
 });

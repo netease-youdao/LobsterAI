@@ -1,3 +1,4 @@
+import { ScheduledTaskDataStatus } from '../../scheduledTask/constants';
 import type {
   RunFilter,
   ScheduledTask,
@@ -13,11 +14,15 @@ import {
   addTask,
   appendAllRuns,
   appendRuns,
+  markTaskRunning,
   removeTask,
   setAllRuns,
+  setAllRunsError,
+  setAllRunsStatus,
   setError,
-  setLoading,
   setRuns,
+  setTaskListError,
+  setTaskListStatus,
   setTasks,
   updateTask,
   updateTaskState,
@@ -54,11 +59,13 @@ function checkTasksForAnomalies(tasks: ScheduledTask[]): void {
   showToast(msg);
 }
 
-class ScheduledTaskService {
+export class ScheduledTaskService {
   private cleanupFns: (() => void)[] = [];
   private initialized = false;
+  private taskListRequestId = 0;
   private allRunsRequestId = 0;
   private runRequestIds = new Map<string, number>();
+  private lastAllRunsRequest: { limit?: number; filter?: RunFilter } | null = null;
 
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -95,7 +102,14 @@ class ScheduledTaskService {
 
     // Listen for full refresh events (e.g., after first poll or migration)
     const cleanupRefresh = api.onRefresh(() => {
-      this.loadTasks();
+      void this.loadTasks();
+      if (this.lastAllRunsRequest) {
+        void this.loadAllRuns(
+          this.lastAllRunsRequest.limit,
+          0,
+          this.lastAllRunsRequest.filter,
+        );
+      }
     });
     this.cleanupFns.push(cleanupRefresh);
   }
@@ -104,17 +118,28 @@ class ScheduledTaskService {
     const api = window.electron?.scheduledTasks;
     if (!api) return;
 
-    store.dispatch(setLoading(true));
+    const requestId = this.taskListRequestId + 1;
+    this.taskListRequestId = requestId;
+    store.dispatch(setTaskListStatus(ScheduledTaskDataStatus.Loading));
     try {
       const result = await api.list();
+      if (this.taskListRequestId !== requestId) return;
+      if (result.ready === false) {
+        store.dispatch(setTaskListStatus(ScheduledTaskDataStatus.Starting));
+        return;
+      }
       if (result.success && result.tasks) {
         checkTasksForAnomalies(result.tasks);
         store.dispatch(setTasks(result.tasks));
+      } else {
+        const message = result.error || 'Failed to load scheduled tasks';
+        store.dispatch(setTaskListError(message));
       }
     } catch (err: unknown) {
-      store.dispatch(setError(err instanceof Error ? err.message : String(err)));
-    } finally {
-      store.dispatch(setLoading(false));
+      if (this.taskListRequestId !== requestId) return;
+      const message = err instanceof Error ? err.message : String(err);
+      store.dispatch(setTaskListError(message));
+      store.dispatch(setError(message));
     }
   }
 
@@ -167,11 +192,14 @@ class ScheduledTaskService {
 
     try {
       const result = await api.delete(id);
-      if (result.success) {
-        store.dispatch(removeTask(id));
+      if (!result?.success) {
+        throw new Error(result?.error || 'Failed to delete task');
       }
+      store.dispatch(removeTask(id));
     } catch (err: unknown) {
-      store.dispatch(setError(err instanceof Error ? err.message : String(err)));
+      const message = err instanceof Error ? err.message : String(err);
+      showToast(`${i18nService.t('scheduledTasksDeleteFailed')}: ${message}`);
+      store.dispatch(setError(message));
       throw err;
     }
   }
@@ -180,14 +208,28 @@ class ScheduledTaskService {
     const api = window.electron?.scheduledTasks;
     if (!api) return null;
 
+    const previous = store.getState().scheduledTask.tasks.find(t => t.id === id);
+    // Optimistic: flip the switch immediately so it reacts to the tap, then
+    // reconcile with the authoritative task (or roll back) once the call lands.
+    if (previous) {
+      store.dispatch(updateTask({ ...previous, enabled }));
+    }
     try {
       const result = await api.toggle(id, enabled);
-      if (result.success && result.task) {
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to toggle task');
+      }
+      if (result.task) {
         store.dispatch(updateTask(result.task));
       }
       return result.warning ?? null;
     } catch (err: unknown) {
-      store.dispatch(setError(err instanceof Error ? err.message : String(err)));
+      if (previous) {
+        store.dispatch(updateTask(previous));
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      showToast(`${i18nService.t('scheduledTasksToggleFailed')}: ${message}`);
+      store.dispatch(setError(message));
       throw err;
     }
   }
@@ -196,10 +238,27 @@ class ScheduledTaskService {
     const api = window.electron?.scheduledTasks;
     if (!api) return;
 
+    const task = store.getState().scheduledTask.tasks.find(t => t.id === id);
+    // Optimistic: flip the task to "running" right away so the button/status
+    // react instantly instead of waiting for the next gateway status poll.
+    store.dispatch(markTaskRunning(id));
     try {
-      await api.runManually(id);
+      const result = await api.runManually(id);
+      if (!result?.success) {
+        throw new Error(result?.error || 'Failed to run task');
+      }
+      const name = task?.name?.trim();
+      showToast(
+        name
+          ? i18nService.t('scheduledTasksRunStartedToast').replace('{name}', name)
+          : i18nService.t('scheduledTasksRunStartedToastGeneric'),
+      );
     } catch (err: unknown) {
-      store.dispatch(setError(err instanceof Error ? err.message : String(err)));
+      const message = err instanceof Error ? err.message : String(err);
+      showToast(`${i18nService.t('scheduledTasksRunFailed')}: ${message}`);
+      store.dispatch(setError(message));
+      // Roll back the optimistic running state.
+      void this.loadTasks();
       throw err;
     }
   }
@@ -243,11 +302,20 @@ class ScheduledTaskService {
     const api = window.electron?.scheduledTasks;
     if (!api) return;
 
+    const isInitialRequest = !offset || offset <= 0;
+    if (isInitialRequest) {
+      this.lastAllRunsRequest = { limit, filter };
+      store.dispatch(setAllRunsStatus(ScheduledTaskDataStatus.Loading));
+    }
     const requestId = this.allRunsRequestId + 1;
     this.allRunsRequestId = requestId;
     try {
       const result = await api.listAllRuns(limit, offset, filter);
       if (this.allRunsRequestId !== requestId) return;
+      if (result.ready === false) {
+        store.dispatch(setAllRunsStatus(ScheduledTaskDataStatus.Starting));
+        return;
+      }
       if (result.success && result.runs) {
         const hasMore = (result.runs as unknown[]).length >= (limit ?? 50);
         if (offset && offset > 0) {
@@ -255,10 +323,16 @@ class ScheduledTaskService {
         } else {
           store.dispatch(setAllRuns({ runs: result.runs, hasMore }));
         }
+      } else if (isInitialRequest) {
+        store.dispatch(setAllRunsError(result.error || 'Failed to load scheduled task history'));
       }
     } catch (err: unknown) {
       if (this.allRunsRequestId !== requestId) return;
-      store.dispatch(setError(err instanceof Error ? err.message : String(err)));
+      const message = err instanceof Error ? err.message : String(err);
+      if (isInitialRequest) {
+        store.dispatch(setAllRunsError(message));
+      }
+      store.dispatch(setError(message));
     }
   }
 

@@ -1,0 +1,1607 @@
+diff --git a/src/agents/command/attempt-execution.cli.test.ts b/src/agents/command/attempt-execution.cli.test.ts
+index ddf98a1a57..585c2b53b3 100644
+--- a/src/agents/command/attempt-execution.cli.test.ts
++++ b/src/agents/command/attempt-execution.cli.test.ts
+@@ -168,6 +168,7 @@ describe("CLI attempt execution", () => {
+   });
+ 
+   afterEach(async () => {
++    vi.useRealTimers();
+     if (ORIGINAL_HOME === undefined) {
+       delete process.env.HOME;
+     } else {
+@@ -1137,6 +1138,53 @@ describe("CLI attempt execution", () => {
+     });
+   });
+ 
++  it("stamps CLI prompts with current timestamp context", async () => {
++    vi.useFakeTimers();
++    vi.setSystemTime(new Date("2024-06-05T15:30:00Z"));
++    const sessionKey = "agent:main:direct:claude-timestamp";
++    const sessionEntry: SessionEntry = {
++      sessionId: "openclaw-session-cli-timestamp",
++      updatedAt: Date.now(),
++    };
++    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
++    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
++    runCliAgentMock.mockResolvedValueOnce(makeCliResult("timestamped cli"));
++
++    await runAgentAttempt({
++      providerOverride: "claude-cli",
++      originalProvider: "claude-cli",
++      modelOverride: "opus",
++      cfg: { agents: { defaults: { userTimezone: "UTC" } } } as OpenClawConfig,
++      sessionEntry,
++      sessionId: sessionEntry.sessionId,
++      sessionKey,
++      sessionAgentId: "main",
++      sessionFile: path.join(tmpDir, "session.jsonl"),
++      workspaceDir: tmpDir,
++      body: "what time is it?",
++      isFallbackRetry: false,
++      resolvedThinkLevel: "medium",
++      timeoutMs: 1_000,
++      runId: "run-cli-timestamp",
++      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
++      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
++      spawnedBy: undefined,
++      messageChannel: "discord",
++      skillsSnapshot: undefined,
++      resolvedVerboseLevel: undefined,
++      agentDir: tmpDir,
++      onAgentEvent: vi.fn(),
++      authProfileProvider: "claude-cli",
++      sessionStore,
++      storePath,
++      sessionHasHistory: false,
++    });
++
++    expectMockArgFields(runCliAgentMock, {
++      prompt: "[Wed 2024-06-05 15:30 UTC] what time is it?",
++    });
++  });
++
+   it("routes canonical Anthropic models through the configured Claude CLI runtime", async () => {
+     const sessionKey = "agent:main:direct:canonical-claude-cli";
+     const sessionEntry: SessionEntry = {
+diff --git a/src/agents/command/attempt-execution.ts b/src/agents/command/attempt-execution.ts
+index 7d84059634..b8abaae966 100644
+--- a/src/agents/command/attempt-execution.ts
++++ b/src/agents/command/attempt-execution.ts
+@@ -10,6 +10,10 @@ import {
+ } from "../../config/sessions/transcript.js";
+ import type { SessionEntry } from "../../config/sessions/types.js";
+ import type { OpenClawConfig } from "../../config/types.openclaw.js";
++import {
++  injectTimestamp,
++  timestampOptsFromConfig,
++} from "../../gateway/server-methods/agent-timestamp.js";
+ import { emitAgentEvent } from "../../infra/agent-events.js";
+ import { readErrorName } from "../../infra/errors.js";
+ import { redactSensitiveText } from "../../logging/redact.js";
+@@ -520,6 +524,10 @@ export function runAgentAttempt(params: {
+   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
+     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
+     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
++    const cliPrompt =
++      params.opts.inputProvenance?.kind === "inter_session"
++        ? effectivePrompt
++        : injectTimestamp(effectivePrompt, timestampOptsFromConfig(params.cfg));
+     const mutableCliSessionStore =
+       params.sessionKey && params.sessionStore && params.storePath
+         ? {
+@@ -568,7 +576,7 @@ export function runAgentAttempt(params: {
+         workspaceDir: params.workspaceDir,
+         cwd: params.cwd,
+         config: params.cfg,
+-        prompt: effectivePrompt,
++        prompt: cliPrompt,
+         provider: cliExecutionProvider,
+         model: params.modelOverride,
+         thinkLevel: params.resolvedThinkLevel,
+diff --git a/src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts b/src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts
+new file mode 100644
+index 0000000000..2910da3e8c
+--- /dev/null
++++ b/src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts
+@@ -0,0 +1,208 @@
++/**
++ * Cache-stability gate for the prompt-cache bust fix (issue #3658).
++ *
++ * Design under test: SINGLE-SOURCE stamping at the LLM boundary.
++ *   - The gateway no longer stamps the live turn; storage is BARE.
++ *   - normalizeMessagesForLlmBoundary stamps EVERY user message (active AND
++ *     historical) from that message's OWN `timestamp` field, using the
++ *     configured timezone — never wall-clock "now".
++ *   - Single-text-block content arrays collapse to plain strings so the form
++ *     matches the stored (string) historical form.
++ *
++ * THE REAL ASYMMETRY (what build #1's test missed): on the wire the SAME user
++ * message arrives BARE + as an array when it is the CURRENT turn (agent message
++ * state / BodyForAgent), but BARE + as a stored string once it has aged into
++ * HISTORY. Both must serialize BYTE-IDENTICALLY after the boundary, both stamped
++ * from msg.timestamp. This test feeds the bare-current scenario explicitly.
++ *
++ * Self-contained: no gateway, no provider, no live session.
++ */
++import { describe, expect, it } from "vitest";
++import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
++import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
++import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
++
++// ---------------------------------------------------------------------------
++// Helpers
++// ---------------------------------------------------------------------------
++
++type AgentMsg = Parameters<typeof normalizeMessagesForLlmBoundary>[0][number];
++
++const TZ = "UTC";
++
++/** A user message as it sits in the JSONL transcript: BARE string + timestamp. */
++function storedUserMsg(content: string, timestamp: number): AgentMsg {
++  return { role: "user", content, timestamp } as AgentMsg;
++}
++
++/**
++ * A user message exactly as it arrives in agent message state on the CURRENT
++ * turn: BARE text wrapped in a single text block (the SDK's native array form)
++ * plus the arrival `timestamp`. No stamp — the gateway no longer adds one.
++ */
++function currentUserMsg(text: string, timestamp: number): AgentMsg {
++  return {
++    role: "user",
++    content: [{ type: "text", text }],
++    timestamp,
++  } as AgentMsg;
++}
++
++const ASSISTANT_MSG: AgentMsg = {
++  role: "assistant",
++  content: [{ type: "text", text: "I understand." }],
++  timestamp: 500,
++} as AgentMsg;
++
++const TS_TURN1 = 1717570800000; // fixed arrival time for turn 1
++const TS_TURN2 = 1717570860000; // turn 2 (a minute later — crosses minute boundary)
++
++const EXPECTED_PREFIX_TURN1 = buildTimestampPrefix(new Date(TS_TURN1), { timezone: TZ });
++
++// ---------------------------------------------------------------------------
++// THE GATE: bare-current vs bare-historical byte identity
++// ---------------------------------------------------------------------------
++
++describe("prompt-cache byte-identity (issue #3658)", () => {
++  it("bare current-turn message == same message aged to history (byte-identical, both stamped from msg.timestamp)", () => {
++    // This is THE gate. It models the REAL wire asymmetry that the live capture
++    // proved: turn 1 sent BARE+array when current, BARE+string when historical.
++    //
++    // CURRENT send: turn 1 IS the last user message, arriving as an array block
++    // with NO stamp (gateway no longer stamps the live turn).
++    const rawText = "Post-fix cache test ping 1 of 2";
++    const asCurrent: AgentMsg[] = [currentUserMsg(rawText, TS_TURN1)];
++
++    // HISTORICAL send: a new turn 2 has arrived; turn 1 has aged to a stored
++    // bare string. Turn 2 itself is the new (bare) current turn.
++    const asHistorical: AgentMsg[] = [
++      storedUserMsg(rawText, TS_TURN1),
++      ASSISTANT_MSG,
++      currentUserMsg("Post-fix cache test ping 2 of 2", TS_TURN2),
++    ];
++
++    const normalizedCurrent = normalizeMessagesForLlmBoundary(asCurrent, {
++      timezone: TZ,
++    }) as unknown as Array<{ content?: unknown }>;
++    const normalizedHistorical = normalizeMessagesForLlmBoundary(asHistorical, {
++      timezone: TZ,
++    }) as unknown as Array<{ content?: unknown }>;
++
++    const turn1AsCurrent = JSON.stringify(normalizedCurrent[0]?.content);
++    const turn1AsHistorical = JSON.stringify(normalizedHistorical[0]?.content);
++
++    // THE CORE ASSERTION — byte-identical serialization of turn 1 in both sends.
++    expect(turn1AsCurrent).toBe(turn1AsHistorical);
++
++    // Both must be the SAME plain stamped string (string form, stamped from
++    // turn 1's OWN timestamp), not a bare array and not "now".
++    const expected = `${EXPECTED_PREFIX_TURN1}${rawText}`;
++    expect(normalizedCurrent[0]?.content).toBe(expected);
++    expect(normalizedHistorical[0]?.content).toBe(expected);
++    expect(typeof normalizedCurrent[0]?.content).toBe("string");
++    expect(typeof normalizedHistorical[0]?.content).toBe("string");
++  });
++
++  it("stamp derives from message timestamp, not wall-clock — repeated calls are byte-stable", () => {
++    // Same message object (fixed timestamp) → identical serialization regardless
++    // of when normalize is called. Guards against any "now"-based drift.
++    const msg: AgentMsg[] = [storedUserMsg("Cache test message", TS_TURN1)];
++
++    const call1 = JSON.stringify(normalizeMessagesForLlmBoundary(msg, { timezone: TZ }));
++    const call2 = JSON.stringify(normalizeMessagesForLlmBoundary(msg, { timezone: TZ }));
++
++    expect(call1).toBe(call2);
++    // And it is in fact stamped from this message's timestamp.
++    const out = normalizeMessagesForLlmBoundary(msg, { timezone: TZ }) as unknown as Array<{
++      content?: unknown;
++    }>;
++    expect(out[0]?.content).toBe(`${EXPECTED_PREFIX_TURN1}Cache test message`);
++  });
++
++  it("attachment (multi-block) turn stays as array; first text block is stamped", () => {
++    // Turns with non-text blocks must NOT collapse to a string (would drop the
++    // attachment). The leading text block still gets the per-message stamp.
++    const attachmentMsg: AgentMsg = {
++      role: "user",
++      content: [
++        { type: "text", text: "look at this image" },
++        {
++          type: "image",
++          source: { type: "base64", mediaType: "image/png", data: "aGVsbG8=" },
++        },
++      ],
++      timestamp: TS_TURN1,
++    } as AgentMsg;
++    const currentFollowup = currentUserMsg("follow up", TS_TURN2);
++
++    const input: AgentMsg[] = [attachmentMsg, ASSISTANT_MSG, currentFollowup];
++    const output = normalizeMessagesForLlmBoundary(input, { timezone: TZ }) as unknown as Array<{
++      content?: unknown;
++    }>;
++
++    // Attachment turn stays an array of 2 blocks.
++    expect(Array.isArray(output[0]?.content)).toBe(true);
++    const blocks = output[0]?.content as Array<{ type?: string; text?: string }>;
++    expect(blocks.length).toBe(2);
++    // First text block stamped from the message's own timestamp.
++    expect(blocks[0]?.text).toBe(`${EXPECTED_PREFIX_TURN1}look at this image`);
++    // Image block untouched.
++    expect(blocks[1]?.type).toBe("image");
++    // Plain-text current collapses to a stamped string.
++    expect(output[2]?.content).toBe(
++      `${buildTimestampPrefix(new Date(TS_TURN2), { timezone: TZ })}follow up`,
++    );
++  });
++
++  it("does not double-stamp a message that already carries a timestamp envelope", () => {
++    // Channel messages (Discord, Telegram) already carry an envelope like
++    // `[Sat 2026-06-05 10:30 UTC+8] message`. The boundary guard must skip them
++    // so they never grow a second `[…]` prefix.
++    const alreadyStamped = "[Sat 2026-06-05 10:30 UTC+8] Hello from Discord";
++    const input: AgentMsg[] = [
++      storedUserMsg(alreadyStamped, TS_TURN1),
++      ASSISTANT_MSG,
++      currentUserMsg("current turn", TS_TURN2),
++    ];
++
++    const output = normalizeMessagesForLlmBoundary(input, { timezone: TZ }) as unknown as Array<{
++      content?: unknown;
++    }>;
++
++    const historicalContent = output[0]?.content as string;
++    expect(historicalContent).toBe(alreadyStamped);
++    expect(historicalContent.match(/^\[/g)?.length ?? 0).toBe(1);
++  });
++
++  it("does not stamp a cron message (Current time: marker)", () => {
++    const cron = "Current time: 2026-06-05 10:30. Run the scheduled job.";
++    const input: AgentMsg[] = [storedUserMsg(cron, TS_TURN1)];
++    const output = normalizeMessagesForLlmBoundary(input, { timezone: TZ }) as unknown as Array<{
++      content?: unknown;
++    }>;
++    expect(output[0]?.content).toBe(cron);
++  });
++
++  it("historical inbound metadata is stripped (UI-clean) before the timestamp is applied", () => {
++    // Historical user turns get their inbound-metadata blocks stripped (same as
++    // the original boundary behaviour), then stamped. The current turn keeps its
++    // metadata. We only assert the historical strip+stamp here.
++    const metaBlock =
++      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord"}\n```\n\n';
++    const userText = "What is 2+2?";
++    const stored = `${metaBlock}${userText}`;
++
++    const input: AgentMsg[] = [
++      storedUserMsg(stored, TS_TURN1),
++      ASSISTANT_MSG,
++      currentUserMsg("next", TS_TURN2),
++    ];
++    const output = normalizeMessagesForLlmBoundary(input, { timezone: TZ }) as unknown as Array<{
++      content?: unknown;
++    }>;
++
++    // Metadata stripped, then stamped from the message's own timestamp.
++    const expectedStrippedBare = stripInboundMetadata(stored); // "What is 2+2?"
++    expect(output[0]?.content).toBe(`${EXPECTED_PREFIX_TURN1}${expectedStrippedBare}`);
++  });
++});
+diff --git a/src/agents/embedded-agent-runner/run/attempt.llm-boundary.test.ts b/src/agents/embedded-agent-runner/run/attempt.llm-boundary.test.ts
+index 9783d24092..f8e6e9c98f 100644
+--- a/src/agents/embedded-agent-runner/run/attempt.llm-boundary.test.ts
++++ b/src/agents/embedded-agent-runner/run/attempt.llm-boundary.test.ts
+@@ -1,7 +1,9 @@
+ import { describe, expect, it } from "vitest";
++import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
+ import {
+   installModelPromptTransform,
+   insertRuntimeContextMessageForPrompt,
++  normalizeCurrentPromptTextForLlmBoundary,
+   normalizeMessagesForLlmBoundary,
+ } from "./attempt.llm-boundary.js";
+ 
+@@ -31,10 +33,16 @@ describe("normalizeMessagesForLlmBoundary", () => {
+ 
+     const output = normalizeMessagesForLlmBoundary(
+       input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+-    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
+-
+-    expect(output[0]?.content?.[0]?.text).toBe("Actual historical ask");
+-    expect(output[2]?.content?.[0]?.text).toContain(
++    ) as unknown as Array<{ content?: unknown }>;
++
++    // Historical single-text-block messages are form-canonicalized to a plain
++    // string after metadata stripping (cache-bust fix — issue #3658).
++    expect(output[0]?.content).toBe("Actual historical ask");
++    // Current turn: single-text-block array collapsed to plain string; metadata
++    // blocks preserved for the LLM.
++    const currentContent = output[2]?.content;
++    expect(typeof currentContent).toBe("string");
++    expect(currentContent).toContain(
+       "Reply target of current user message (untrusted, for context):",
+     );
+     expect(JSON.stringify(input)).toContain("Conversation info");
+@@ -62,6 +70,191 @@ describe("normalizeMessagesForLlmBoundary", () => {
+     expect(output[0]?.content).toBe("Plain historical ask");
+   });
+ 
++  it("stamps every user message from its OWN timestamp when a timezone is supplied (single-source cache-bust fix)", () => {
++    // Single-source design (issue #3658): storage is BARE. The boundary is the
++    // ONLY stamping site and derives the prefix from each message's own
++    // `timestamp` using the supplied timezone — so the same message is
++    // byte-identical whether sent current or replayed historical.
++    const historicalBareWithMeta =
++      'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram"}\n```\n\nOld ask';
++    const input = [
++      {
++        role: "user",
++        content: historicalBareWithMeta,
++        timestamp: 1717570800000,
++      },
++      {
++        role: "assistant",
++        content: [{ type: "text", text: "Historical answer" }],
++        timestamp: 2,
++      },
++      {
++        role: "user",
++        content: [{ type: "text", text: "Current ask" }],
++        timestamp: 1717570860000,
++      },
++    ];
++
++    const output = normalizeMessagesForLlmBoundary(
++      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
++      { timezone: "UTC" },
++    ) as unknown as Array<{ content?: string }>;
++
++    // Historical: inbound metadata stripped, then stamped from its OWN timestamp.
++    const expectedHistoricalPrefix = buildTimestampPrefix(new Date(1717570800000), {
++      timezone: "UTC",
++    });
++    expect(output[0]?.content).toBe(`${expectedHistoricalPrefix}Old ask`);
++    // Current: stamped from its own (different) timestamp.
++    const expectedCurrentPrefix = buildTimestampPrefix(new Date(1717570860000), {
++      timezone: "UTC",
++    });
++    expect(output[2]?.content).toBe(`${expectedCurrentPrefix}Current ask`);
++  });
++
++  it("stamps the current turn from the prepared persisted timestamp when supplied", () => {
++    const preparedTimestamp = 1717570800000;
++    const runtimeTimestamp = 1717574460000;
++    const input = [
++      {
++        role: "user",
++        content: [{ type: "text", text: "Current ask" }],
++        timestamp: runtimeTimestamp,
++      },
++    ];
++
++    const output = normalizeMessagesForLlmBoundary(
++      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
++      {
++        timezone: "UTC",
++        currentUserTimestampOverride: {
++          timestamp: preparedTimestamp,
++          text: "Current ask",
++        },
++      },
++    ) as unknown as Array<{ content?: string }>;
++
++    const expectedPrefix = buildTimestampPrefix(new Date(preparedTimestamp), {
++      timezone: "UTC",
++    });
++    expect(output[0]?.content).toBe(`${expectedPrefix}Current ask`);
++  });
++
++  it("normalizes current prompt text for pre-prompt token pressure", () => {
++    const preparedTimestamp = 1717570800000;
++    const output = normalizeCurrentPromptTextForLlmBoundary({
++      prompt: "Current ask",
++      timezone: "UTC",
++      currentUserTimestamp: preparedTimestamp,
++    });
++    const expectedPrefix = buildTimestampPrefix(new Date(preparedTimestamp), {
++      timezone: "UTC",
++    });
++    expect(output).toBe(`${expectedPrefix}Current ask`);
++  });
++
++  it("does not apply the prepared timestamp override to later queued turns", () => {
++    const preparedTimestamp = 1717570800000;
++    const queuedTimestamp = 1717574460000;
++    const input = [
++      {
++        role: "user",
++        content: [{ type: "text", text: "queued ask" }],
++        timestamp: queuedTimestamp,
++      },
++    ];
++
++    const output = normalizeMessagesForLlmBoundary(
++      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
++      {
++        timezone: "UTC",
++        currentUserTimestampOverride: {
++          timestamp: preparedTimestamp,
++          text: "initial ask",
++        },
++      },
++    ) as unknown as Array<{ content?: string }>;
++
++    const expectedPrefix = buildTimestampPrefix(new Date(queuedTimestamp), {
++      timezone: "UTC",
++    });
++    expect(output[0]?.content).toBe(`${expectedPrefix}queued ask`);
++  });
++
++  it("does not apply the prepared timestamp override to repeated queued text", () => {
++    const preparedTimestamp = 1717570800000;
++    const firstRuntimeTimestamp = 1717570805000;
++    const queuedTimestamp = 1717574460000;
++    const options = {
++      timezone: "UTC",
++      currentUserTimestampOverride: {
++        timestamp: preparedTimestamp,
++        text: "same ask",
++      },
++    };
++    const firstOutput = normalizeMessagesForLlmBoundary(
++      [
++        {
++          role: "user",
++          content: [{ type: "text", text: "same ask" }],
++          timestamp: firstRuntimeTimestamp,
++        },
++      ] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
++      options,
++    ) as unknown as Array<{ content?: string }>;
++    const queuedOutput = normalizeMessagesForLlmBoundary(
++      [
++        {
++          role: "user",
++          content: [{ type: "text", text: "same ask" }],
++          timestamp: queuedTimestamp,
++        },
++      ] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
++      options,
++    ) as unknown as Array<{ content?: string }>;
++
++    const preparedPrefix = buildTimestampPrefix(new Date(preparedTimestamp), {
++      timezone: "UTC",
++    });
++    const queuedPrefix = buildTimestampPrefix(new Date(queuedTimestamp), {
++      timezone: "UTC",
++    });
++    expect(firstOutput[0]?.content).toBe(`${preparedPrefix}same ask`);
++    expect(queuedOutput[0]?.content).toBe(`${queuedPrefix}same ask`);
++  });
++
++  it("does not stamp when no timezone is supplied (form/metadata normalization only)", () => {
++    const input = [
++      {
++        role: "user",
++        content: [{ type: "text", text: "bare ask" }],
++        timestamp: 1717570800000,
++      },
++    ];
++    const output = normalizeMessagesForLlmBoundary(
++      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
++    ) as unknown as Array<{ content?: string }>;
++    expect(output[0]?.content).toBe("bare ask");
++  });
++
++  it("keeps inter-session provenance headers before timestamp context", () => {
++    const input = [
++      {
++        role: "user",
++        content: "[Inter-session message] sourceTool=sessions_send isUser=false\nforwarded ask",
++        timestamp: 1717570800000,
++      },
++    ];
++    const output = normalizeMessagesForLlmBoundary(
++      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
++      { timezone: "UTC" },
++    ) as unknown as Array<{ content?: string }>;
++
++    expect(output[0]?.content).toBe(
++      "[Inter-session message] sourceTool=sessions_send isUser=false\nforwarded ask",
++    );
++  });
++
+   it("preserves inbound metadata on the current user turn", () => {
+     const historicalEnvelope =
+       'Conversation info (untrusted metadata):\n```json\n{"channel":"discord"}\n```\n\nOld ask';
+@@ -87,13 +280,17 @@ describe("normalizeMessagesForLlmBoundary", () => {
+ 
+     const output = normalizeMessagesForLlmBoundary(
+       input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+-    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
+-
+-    expect(output[0]?.content?.[0]?.text).toBe("Old ask");
+-    expect(output[2]?.content?.[0]?.text).toContain(
++    ) as unknown as Array<{ content?: unknown }>;
++
++    // Historical: form-canonicalized to plain string after metadata strip.
++    expect(output[0]?.content).toBe("Old ask");
++    // Current: form-canonicalized to plain string; metadata blocks preserved.
++    const currentContent = output[2]?.content;
++    expect(typeof currentContent).toBe("string");
++    expect(currentContent).toContain(
+       "Reply target of current user message (untrusted, for context):",
+     );
+-    expect(output[2]?.content?.[0]?.text).toContain("quoted status body");
++    expect(currentContent).toContain("quoted status body");
+   });
+ 
+   it("preserves current user inbound metadata through tool-result continuation", () => {
+@@ -121,12 +318,16 @@ describe("normalizeMessagesForLlmBoundary", () => {
+ 
+     const output = normalizeMessagesForLlmBoundary(
+       input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+-    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
++    ) as unknown as Array<{ content?: unknown }>;
+ 
+-    expect(output[0]?.content?.[0]?.text).toContain(
++    // Current turn (only user message): form-canonicalized to plain string;
++    // metadata blocks preserved for the LLM.
++    const currentContent = output[0]?.content;
++    expect(typeof currentContent).toBe("string");
++    expect(currentContent).toContain(
+       "Reply target of current user message (untrusted, for context):",
+     );
+-    expect(output[0]?.content?.[0]?.text).toContain("quoted status body");
++    expect(currentContent).toContain("quoted status body");
+   });
+ 
+   it("strips tool result details before provider conversion", () => {
+@@ -151,6 +352,69 @@ describe("normalizeMessagesForLlmBoundary", () => {
+     expect(input[0]).toHaveProperty("details");
+   });
+ 
++  it("collapses single-text-block user content arrays to plain strings", () => {
++    // Both current and historical single-text-block user messages must
++    // serialize identically — this is the form-canonicalization half of the
++    // cache-bust fix (issue #3658).
++    const input = [
++      {
++        role: "user",
++        content: [{ type: "text", text: "old ask" }],
++        timestamp: 0,
++      },
++      {
++        role: "assistant",
++        content: [{ type: "text", text: "old answer" }],
++        timestamp: 1,
++      },
++      {
++        role: "user",
++        content: [{ type: "text", text: "current ask" }],
++        timestamp: 2,
++      },
++    ];
++
++    const output = normalizeMessagesForLlmBoundary(
++      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
++    ) as unknown as Array<{ content?: unknown }>;
++
++    expect(output[0]?.content).toBe("old ask");
++    expect(output[2]?.content).toBe("current ask");
++  });
++
++  it("preserves multi-block (attachment) user content as arrays", () => {
++    // Turns with image or document blocks must NOT be collapsed to a string.
++    const input = [
++      {
++        role: "user",
++        content: [
++          { type: "text", text: "look at this" },
++          { type: "image", source: { type: "base64", mediaType: "image/png", data: "abc" } },
++        ],
++        timestamp: 0,
++      },
++      {
++        role: "assistant",
++        content: [{ type: "text", text: "nice" }],
++        timestamp: 1,
++      },
++      {
++        role: "user",
++        content: [{ type: "text", text: "current ask" }],
++        timestamp: 2,
++      },
++    ];
++
++    const output = normalizeMessagesForLlmBoundary(
++      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
++    ) as unknown as Array<{ content?: unknown }>;
++
++    // Multi-block historical stays as array.
++    expect(Array.isArray(output[0]?.content)).toBe(true);
++    // Single-block current collapses to string.
++    expect(output[2]?.content).toBe("current ask");
++  });
++
+   it("keeps only pre-user current-turn runtime context at the LLM boundary", () => {
+     const input = [
+       {
+@@ -199,6 +463,11 @@ describe("normalizeMessagesForLlmBoundary", () => {
+     expect(output.some((item) => item.content === "current secret runtime context")).toBe(true);
+     expect(output.some((item) => item.content === "post-user stale runtime context")).toBe(false);
+     expect(output.some((item) => item.customType === "other-extension-context")).toBe(true);
++    // User messages (both historical and current) are form-canonicalized.
++    expect(output.some((item) => item.role === "user" && item.content === "old ask")).toBe(true);
++    expect(output.some((item) => item.role === "user" && item.content === "visible ask")).toBe(
++      true,
++    );
+   });
+ 
+   it("keeps overflow retry runtime context immediately before the active user", () => {
+@@ -247,7 +516,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
+       customType: "openclaw.runtime-context",
+       content: "retry runtime context",
+     });
+-    expect(retryInput[3]?.content).toEqual([{ type: "text", text: "retry ask" }]);
++    // User messages are form-canonicalized from array to plain string.
++    expect(retryInput[0]?.content).toBe("old ask");
++    expect(retryInput[3]?.content).toBe("retry ask");
+   });
+ 
+   it("keeps prompt-local runtime context before the active user in existing sessions", () => {
+@@ -290,7 +561,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
+       customType: "openclaw.runtime-context",
+       content: "current runtime context",
+     });
+-    expect(modelInput[3]?.content).toEqual([{ type: "text", text: "visible ask" }]);
++    // User messages are form-canonicalized from array to plain string.
++    expect(modelInput[0]?.content).toBe("old ask");
++    expect(modelInput[3]?.content).toBe("visible ask");
+   });
+ 
+   it("keeps only safe blocked metadata at the LLM boundary", () => {
+@@ -319,12 +592,10 @@ describe("normalizeMessagesForLlmBoundary", () => {
+       input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+     ) as unknown as Array<Record<string, unknown>>;
+ 
+-    expect(output[0]?.content).toEqual([
+-      {
+-        type: "text",
+-        text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+-      },
+-    ]);
++    // Single-text-block user message is form-canonicalized to a plain string.
++    expect(output[0]?.content).toBe(
++      "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
++    );
+     expect(output[0]).toHaveProperty("__openclaw.beforeAgentRunBlocked");
+     expect(output[0]).not.toHaveProperty("__openclaw.beforeAgentRunBlocked.reason");
+     expect(JSON.stringify(output)).not.toContain("secret prompt");
+diff --git a/src/agents/embedded-agent-runner/run/attempt.llm-boundary.ts b/src/agents/embedded-agent-runner/run/attempt.llm-boundary.ts
+index ebd4ef0318..2b80f92cc2 100644
+--- a/src/agents/embedded-agent-runner/run/attempt.llm-boundary.ts
++++ b/src/agents/embedded-agent-runner/run/attempt.llm-boundary.ts
+@@ -1,4 +1,6 @@
+ import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
++import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
++import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
+ import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
+ import type { AgentMessage } from "../../runtime/index.js";
+ import { stripToolResultDetails } from "../../session-transcript-repair.js";
+@@ -6,25 +8,78 @@ import { normalizeAssistantReplayContent } from "../replay-history.js";
+ import { markTranscriptPromptText } from "../tool-result-context-guard.js";
+ import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
+ 
+-export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
++type LlmBoundaryOptions = {
++  timezone?: string;
++  currentUserTimestampOverride?: {
++    timestamp: number;
++    text: string;
++    alternateText?: string;
++    runtimeTimestamp?: number;
++  };
++};
++
++/**
++ * Matches a leading `[... YYYY-MM-DD HH:MM ...]` timestamp envelope — either
++ * from a channel plugin envelope or from a previous boundary stamp. Mirrors
++ * TIMESTAMP_ENVELOPE_PATTERN in agent-timestamp.ts. Used to avoid
++ * double-stamping a user message that already carries a timestamp.
++ */
++const BOUNDARY_TIMESTAMP_ENVELOPE_RE = /^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}/;
++const BOUNDARY_CRON_TIME_MARKER = "Current time: ";
++
++/**
++ * Captures a full leading `[DOW YYYY-MM-DD HH:MM ...] ` envelope (channel
++ * plugin envelope or a previously-applied stamp), including the trailing
++ * space(s). Mirrors LEADING_TIMESTAMP_PREFIX_RE in strip-inbound-meta.ts.
++ */
++const BOUNDARY_LEADING_ENVELOPE_CAPTURE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
++
++export function normalizeMessagesForLlmBoundary(
++  messages: AgentMessage[],
++  options?: LlmBoundaryOptions,
++): AgentMessage[] {
+   const normalized = stripUnsafeBlockedRunMetadata(
+     stripToolResultDetails(normalizeAssistantReplayContent(messages)),
+   );
+-  const withoutHistoricalInboundMetadata =
+-    stripHistoricalInboundMetadataFromUserMessages(normalized);
++  const withoutHistoricalInboundMetadata = stripHistoricalInboundMetadataFromUserMessages(
++    normalized,
++    options,
++  );
+   return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
+ }
+ 
+ export function normalizeMessagesForCurrentPromptBoundary(params: {
+   messages: AgentMessage[];
+   prompt: string;
++  timezone?: string;
++  currentUserTimestamp?: number;
+ }): AgentMessage[] {
+   const promptMessage = {
+     role: "user" as const,
+     content: [{ type: "text" as const, text: params.prompt }],
+-    timestamp: Date.now(),
++    timestamp: params.currentUserTimestamp ?? Date.now(),
++  };
++  const boundaryOptions = params.timezone ? { timezone: params.timezone } : undefined;
++  return normalizeMessagesForLlmBoundary(
++    [...params.messages, promptMessage],
++    boundaryOptions,
++  ).slice(0, -1);
++}
++
++export function normalizeCurrentPromptTextForLlmBoundary(params: {
++  prompt: string;
++  timezone?: string;
++  currentUserTimestamp?: number;
++}): string {
++  const promptMessage = {
++    role: "user" as const,
++    content: [{ type: "text" as const, text: params.prompt }],
++    timestamp: params.currentUserTimestamp ?? Date.now(),
+   };
+-  return normalizeMessagesForLlmBoundary([...params.messages, promptMessage]).slice(0, -1);
++  const boundaryOptions = params.timezone ? { timezone: params.timezone } : undefined;
++  const [normalized] = normalizeMessagesForLlmBoundary([promptMessage], boundaryOptions);
++  const content = (normalized as { content?: unknown } | undefined)?.content;
++  return typeof content === "string" ? content : params.prompt;
+ }
+ 
+ export function installRuntimeContextMessageForPrompt(params: {
+@@ -239,26 +294,208 @@ export function installModelPromptTransform(params: {
+   };
+ }
+ 
+-function stripHistoricalInboundMetadataFromUserMessages(messages: AgentMessage[]): AgentMessage[] {
++/**
++ * Collapse a single-text-block content array to a plain string.
++ *
++ * Full-resend transports (anthropic-messages, openai-completions) re-send the
++ * entire message history every turn.  The CURRENT user turn arrives as an
++ * array `[{type:"text", text:"…"}]` (the SDK's native format), while
++ * historical turns are loaded from the JSONL transcript as a plain string.
++ * This form flip alone busts the prompt cache even when the text is identical.
++ *
++ * Collapsing single-text-block arrays to strings makes the serialized bytes
++ * identical whether a message is current or historical.
++ *
++ * Turns with attachments (image / document blocks) must remain as arrays and
++ * are NOT collapsed.
++ *
++ * @see https://github.com/openclaw/openclaw/issues/3658
++ */
++function canonicalizeTextOnlyUserContent(content: unknown): unknown {
++  if (!Array.isArray(content)) {
++    return content;
++  }
++  // Only collapse when there is exactly one block and it is a text block.
++  if (content.length !== 1) {
++    return content;
++  }
++  const block = content[0];
++  if (!block || typeof block !== "object") {
++    return content;
++  }
++  const textBlock = block as { type?: unknown; text?: unknown };
++  if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
++    return content;
++  }
++  // Attachment turns legitimately need block arrays — if there is any
++  // non-text block alongside this one, keep the array form.  (Single-element
++  // check above already handles the common case; this guard is for safety.)
++  return textBlock.text;
++}
++
++/**
++ * Stamp a bare text string with this message's own timestamp prefix.
++ *
++ * SINGLE SOURCE OF TRUTH for the per-message `[DOW YYYY-MM-DD HH:MM TZ]`
++ * prefix (issue #3658). The gateway no longer stamps the live turn, and
++ * storage is bare — so every user message (current AND historical) is stamped
++ * HERE from its OWN `timestamp` field. Because the stamp derives from the
++ * message's fixed timestamp (NOT wall-clock `now`), the SAME message produces
++ * byte-identical bytes whether it is sent as the current turn or replayed as
++ * history. That stability is what lets full-resend transports cache the prefix.
++ *
++ * Guards (return text unchanged):
++ *  - empty / whitespace-only text;
++ *  - text already carrying a `[... YYYY-MM-DD HH:MM ...]` envelope (channel
++ *    plugin envelope or an already-applied stamp);
++ *  - cron messages carrying the "Current time: " marker.
++ */
++function stampUserTextWithMessageTimestamp(
++  text: string,
++  timestamp: unknown,
++  timezone: string | undefined,
++): string {
++  // Stamping is opt-in: only the LLM-boundary call sites that pass a resolved
++  // timezone (via resolveUserTimezone) stamp messages. When no timezone is
++  // supplied, the boundary performs form/metadata normalization only — leaving
++  // content bare (this also keeps non-stamping callers and unit fixtures clean).
++  if (!timezone) {
++    return text;
++  }
++  if (!text.trim()) {
++    return text;
++  }
++  if (BOUNDARY_TIMESTAMP_ENVELOPE_RE.test(text) || text.includes(BOUNDARY_CRON_TIME_MARKER)) {
++    return text;
++  }
++  if (text.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE)) {
++    return text;
++  }
++  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
++    return text;
++  }
++  const prefix = buildTimestampPrefix(new Date(timestamp), { timezone });
++  if (!prefix) {
++    return text;
++  }
++  return `${prefix}${text}`;
++}
++
++function messageContentMatchesCurrentUserText(
++  content: unknown,
++  override: NonNullable<LlmBoundaryOptions["currentUserTimestampOverride"]>,
++): boolean {
++  const matchesText = (text: string): boolean =>
++    text === override.text || text === override.alternateText;
++  if (typeof content === "string") {
++    return matchesText(content);
++  }
++  if (!Array.isArray(content)) {
++    return false;
++  }
++  const firstTextBlock = content.find((block): block is { text: string; type?: unknown } => {
++    if (!block || typeof block !== "object") {
++      return false;
++    }
++    const typedBlock = block as { type?: unknown; text?: unknown };
++    return typedBlock.type === "text" && typeof typedBlock.text === "string";
++  });
++  return firstTextBlock ? matchesText(firstTextBlock.text) : false;
++}
++
++function messageRuntimeTimestampMatchesCurrentUserOverride(
++  runtimeTimestamp: unknown,
++  override: NonNullable<LlmBoundaryOptions["currentUserTimestampOverride"]>,
++): boolean {
++  if (typeof override.runtimeTimestamp === "number") {
++    return runtimeTimestamp === override.runtimeTimestamp;
++  }
++  if (typeof runtimeTimestamp === "number" && Number.isFinite(runtimeTimestamp)) {
++    override.runtimeTimestamp = runtimeTimestamp;
++  }
++  return true;
++}
++
++function stripHistoricalInboundMetadataFromUserMessages(
++  messages: AgentMessage[],
++  options: LlmBoundaryOptions | undefined,
++): AgentMessage[] {
+   const activeUserMessageIndex = findActiveUserMessageIndex(messages);
+   let changed = false;
+   const nextMessages = messages.map((message, index) => {
+-    if (message.role !== "user" || index === activeUserMessageIndex) {
++    if (message.role !== "user") {
+       return message;
+     }
+     const content = (message as { content?: unknown }).content;
++    const isActive = index === activeUserMessageIndex;
++    const override = options?.currentUserTimestampOverride;
++    const runtimeTimestamp = (message as { timestamp?: unknown }).timestamp;
++    const useCurrentUserTimestampOverride =
++      isActive &&
++      override !== undefined &&
++      messageContentMatchesCurrentUserText(content, override) &&
++      messageRuntimeTimestampMatchesCurrentUserOverride(runtimeTimestamp, override);
++    const messageTimestamp = useCurrentUserTimestampOverride
++      ? override.timestamp
++      : runtimeTimestamp;
++
++    // Historical turns strip inbound metadata blocks (Conversation info, Sender
++    // info, etc.); the active turn keeps its metadata for the current request.
++    // BOTH then get form-canonicalized and stamped from their own timestamp, so
++    // the SAME message serializes identically whether current or historical.
++    //
++    // Channel-envelope preservation: a message that already carries its OWN
++    // leading `[DOW YYYY-MM-DD HH:MM ...] ` envelope (Discord/Telegram, or a
++    // cron "Current time:" marker) keeps it verbatim — we strip metadata from
++    // the body but NEVER drop or replace the envelope, and never re-stamp. This
++    // keeps such messages byte-stable across current↔historical (the envelope is
++    // present in both forms) and avoids double-stamping.
++    const transformText = (raw: string): string => {
++      const envelopeMatch = raw.match(BOUNDARY_LEADING_ENVELOPE_CAPTURE);
++      if (envelopeMatch || raw.includes(BOUNDARY_CRON_TIME_MARKER)) {
++        if (isActive) {
++          return raw;
++        }
++        const envelope = envelopeMatch ? envelopeMatch[0] : "";
++        const body = envelope ? raw.slice(envelope.length) : raw;
++        // Strip metadata from the body but re-attach the original envelope.
++        return `${envelope}${stripInboundMetadata(body)}`;
++      }
++      const stripped = isActive ? raw : stripInboundMetadata(raw);
++      return stampUserTextWithMessageTimestamp(stripped, messageTimestamp, options?.timezone);
++    };
++
+     if (typeof content === "string") {
+-      const stripped = stripInboundMetadata(content);
+-      if (stripped === content) {
++      const next = transformText(content);
++      if (next === content) {
+         return message;
+       }
+       changed = true;
+-      return { ...message, content: stripped } as AgentMessage;
++      return { ...message, content: next } as AgentMessage;
+     }
++
+     if (!Array.isArray(content)) {
+       return message;
+     }
++
++    // Collapse a single-text-block array to a plain string first so text-only
++    // turns serialize identically to their stored (string) historical form;
++    // attachment/multi-block turns stay arrays and are stamped in-block.
++    const canonical = canonicalizeTextOnlyUserContent(content);
++    if (typeof canonical === "string") {
++      // The array→string collapse alone is a content change, so this message
++      // is always rewritten (text additionally stripped/stamped via transformText).
++      changed = true;
++      return { ...message, content: transformText(canonical) } as AgentMessage;
++    }
++
++    // Multi-block / non-text content (attachment turns): the FIRST text block is
++    // strip+stamped via transformText (envelope-aware, like the string path);
++    // any subsequent text blocks are only metadata-stripped (historical) so a
++    // single stamp labels the turn. Non-text blocks (images, documents) are
++    // preserved untouched so attachment turns keep their array form.
+     let contentChanged = false;
++    let processedFirstText = false;
+     const nextContent = content.map((block) => {
+       if (!block || typeof block !== "object") {
+         return block;
+@@ -267,12 +504,18 @@ function stripHistoricalInboundMetadataFromUserMessages(messages: AgentMessage[]
+       if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
+         return block;
+       }
+-      const stripped = stripInboundMetadata(textBlock.text);
+-      if (stripped === textBlock.text) {
++      let nextText: string;
++      if (!processedFirstText) {
++        nextText = transformText(textBlock.text);
++        processedFirstText = true;
++      } else {
++        nextText = isActive ? textBlock.text : stripInboundMetadata(textBlock.text);
++      }
++      if (nextText === textBlock.text) {
+         return block;
+       }
+       contentChanged = true;
+-      return Object.assign({}, block, { text: stripped });
++      return Object.assign({}, block, { text: nextText });
+     });
+     if (!contentChanged) {
+       return message;
+diff --git a/src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts b/src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
+index 27077856cb..7b9cd708ac 100644
+--- a/src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
++++ b/src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
+@@ -1815,9 +1815,36 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
+     const lastCall = hoisted.preemptiveCompactionCalls.at(-1);
+     expect(lastCall).toHaveProperty("unwindowedMessages");
+     const unwindowed = (lastCall as { unwindowedMessages?: AgentMessage[] }).unwindowedMessages;
+-    // The snapshot must reflect the true pre-assembly state, not the in-place
+-    // windowed array that assemble mutated.
+-    expect(unwindowed).toEqual([preassemblyMarker]);
++    // The snapshot must reflect the true pre-assembly state after LLM-boundary
++    // stamping, not the in-place windowed array that assemble mutated.
++    expect(unwindowed).toHaveLength(1);
++    const [unwindowedMessage] = unwindowed ?? [];
++    expect(unwindowedMessage).toMatchObject({ role: "user", timestamp: 1 });
++    const unwindowedContent = (unwindowedMessage as { content?: unknown } | undefined)?.content;
++    expect(unwindowedContent).toEqual(
++      expect.stringMatching(/^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2} [^\]]+\] /),
++    );
++    expect(unwindowedContent).toContain(hugeHistory);
++    expect(unwindowedContent).not.toContain("windowed");
++  });
++
++  it("passes the boundary-stamped current prompt to llm_input hooks", async () => {
++    const runLlmInput = vi.fn(async () => {});
++    hoisted.getGlobalHookRunnerMock.mockReturnValue({
++      hasHooks: vi.fn((name: string) => name === "llm_input"),
++      runLlmInput,
++    });
++
++    await createContextEngineAttemptRunner({
++      contextEngine: createContextEngineBootstrapAndAssemble(),
++      sessionKey,
++      tempPaths,
++    });
++
++    const params = mockParams(runLlmInput as MockCallSource, 0, "llm_input params");
++    expect(params.prompt).toEqual(
++      expect.stringMatching(/^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2} [^\]]+\] hello$/),
++    );
+   });
+ 
+   it("keeps gateway model runs independent from agent context and session history", async () => {
+diff --git a/src/agents/embedded-agent-runner/run/attempt.ts b/src/agents/embedded-agent-runner/run/attempt.ts
+index 3ee794cd41..bf7938c040 100644
+--- a/src/agents/embedded-agent-runner/run/attempt.ts
++++ b/src/agents/embedded-agent-runner/run/attempt.ts
+@@ -316,6 +316,7 @@ import {
+   remapInjectedContextFilesToWorkspace,
+ } from "./attempt.bootstrap-context.js";
+ export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
++import { resolveUserTimezone } from "../../date-time.js";
+ import {
+   rotateTranscriptAfterCompaction,
+   shouldRotateCompactionTranscript,
+@@ -343,6 +344,7 @@ import {
+ import {
+   installModelPromptTransform,
+   installRuntimeContextMessageForPrompt,
++  normalizeCurrentPromptTextForLlmBoundary,
+   normalizeMessagesForCurrentPromptBoundary,
+   normalizeMessagesForLlmBoundary,
+ } from "./attempt.llm-boundary.js";
+@@ -447,6 +449,7 @@ import {
+ import {
+   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+   buildPrePromptContextBudgetStatus,
++  estimateLlmBoundaryTokenPressure,
+   formatPrePromptPrecheckLog,
+   shouldPreemptivelyCompactBeforePrompt,
+ } from "./preemptive-compaction.js";
+@@ -2267,10 +2270,28 @@ export async function runEmbeddedAttempt(
+         activeSession.agent.reset();
+         setActiveSessionSystemPrompt("");
+       }
++      // Single source for the per-message timestamp prefix (issue #3658):
++      // normal embedded runs stamp every user message from its own timestamp.
++      // Raw model probes must keep the requested prompt text exact.
++      const boundaryTimezone = isRawModelRun
++        ? undefined
++        : resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
++      let currentUserTimestampOverride:
++        | { timestamp: number; text: string; alternateText?: string }
++        | undefined;
++      const buildBoundaryOptions = () => {
++        if (isRawModelRun) {
++          return undefined;
++        }
++        return {
++          ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
++          ...(currentUserTimestampOverride ? { currentUserTimestampOverride } : {}),
++        };
++      };
+       if (typeof activeSession.agent.convertToLlm === "function") {
+         const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
+         activeSession.agent.convertToLlm = async (messages) =>
+-          await baseConvertToLlm(normalizeMessagesForLlmBoundary(messages));
++          await baseConvertToLlm(normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions()));
+       }
+       let prePromptMessageCount = activeSession.messages.length;
+       let contextEngineAfterTurnCheckpoint: number | null = null;
+@@ -3806,6 +3827,14 @@ export async function runEmbeddedAttempt(
+             context: params.currentInboundContext,
+             prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
+           });
++          currentUserTimestampOverride =
++            !isRawModelRun && typeof preparedUserTurnMessage?.timestamp === "number"
++              ? {
++                  timestamp: preparedUserTurnMessage.timestamp,
++                  text: promptForSession,
++                  ...(promptForModel !== promptForSession ? { alternateText: promptForModel } : {}),
++                }
++              : undefined;
+           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
+           if (promptSubmission.runtimeOnly && runtimeSystemContext) {
+             const runtimeSystemPrompt = composeSystemPromptWithHookContext({
+@@ -3827,6 +3856,10 @@ export async function runEmbeddedAttempt(
+           const hookMessagesForCurrentPrompt = normalizeMessagesForCurrentPromptBoundary({
+             messages: messagesForCurrentPrompt,
+             prompt: promptForModel,
++            ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
++            ...(typeof preparedUserTurnMessage?.timestamp === "number"
++              ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
++              : {}),
+           });
+           if (systemPromptReport) {
+             systemPromptReport.currentTurn = {
+@@ -4100,6 +4133,14 @@ export async function runEmbeddedAttempt(
+             );
+           }
+ 
++          const llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
++            prompt: promptForModel,
++            ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
++            ...(typeof preparedUserTurnMessage?.timestamp === "number"
++              ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
++              : {}),
++          });
++
+           if (!skipPromptSubmission && !isRawModelRun && hookRunner?.hasHooks("llm_input")) {
+             hookRunner
+               .runLlmInput(
+@@ -4109,7 +4150,7 @@ export async function runEmbeddedAttempt(
+                   provider: params.provider,
+                   model: params.modelId,
+                   systemPrompt: systemPromptForHook,
+-                  prompt: promptForModel,
++                  prompt: llmBoundaryPromptForPrecheck,
+                   historyMessages: cloneHookMessages(hookMessagesForCurrentPrompt),
+                   imagesCount: imageResult.images.length,
+                   tools,
+@@ -4130,18 +4171,39 @@ export async function runEmbeddedAttempt(
+               });
+           }
+ 
++          const llmBoundaryOptionsForPrecheck = boundaryTimezone
++            ? { timezone: boundaryTimezone }
++            : undefined;
++          const unwindowedLlmBoundaryMessagesForPrecheck =
++            contextEnginePromptAuthority === "preassembly_may_overflow" &&
++            unwindowedContextEngineMessagesForPrecheck
++              ? normalizeMessagesForLlmBoundary(
++                  unwindowedContextEngineMessagesForPrecheck,
++                  llmBoundaryOptionsForPrecheck,
++                )
++              : undefined;
++          const llmBoundaryTokenPressure = estimateLlmBoundaryTokenPressure({
++            messages: hookMessagesForCurrentPrompt,
++            systemPrompt: systemPromptForHook,
++            prompt: llmBoundaryPromptForPrecheck,
++          });
+           const preemptiveCompaction = skipPromptSubmission
+             ? null
+             : shouldPreemptivelyCompactBeforePrompt({
+-                messages: messagesForCurrentPrompt,
+-                ...(contextEnginePromptAuthority === "preassembly_may_overflow"
+-                  ? { unwindowedMessages: unwindowedContextEngineMessagesForPrecheck }
++                messages: hookMessagesForCurrentPrompt,
++                ...(unwindowedLlmBoundaryMessagesForPrecheck
++                  ? { unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck }
+                   : {}),
+                 systemPrompt: systemPromptForHook,
+-                prompt: promptForModel,
++                prompt: llmBoundaryPromptForPrecheck,
+                 contextTokenBudget,
+                 reserveTokens,
+                 toolResultMaxChars: promptToolResultMaxChars,
++                llmBoundaryTokenPressure: {
++                  estimatedPromptTokens: llmBoundaryTokenPressure,
++                  source: "llm_boundary_normalized_prompt",
++                  renderedChars: llmBoundaryPromptForPrecheck.length,
++                },
+               });
+           if (preemptiveCompaction) {
+             contextBudgetStatus = buildPrePromptContextBudgetStatus({
+diff --git a/src/auto-reply/reply/get-reply-run.media-only.test.ts b/src/auto-reply/reply/get-reply-run.media-only.test.ts
+index 42d23636cd..bc43312dd8 100644
+--- a/src/auto-reply/reply/get-reply-run.media-only.test.ts
++++ b/src/auto-reply/reply/get-reply-run.media-only.test.ts
+@@ -1052,6 +1052,37 @@ describe("runPreparedReply media-only handling", () => {
+     expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPaths");
+   });
+ 
++  it("normalizes second-based inbound timestamps before preparing user turns", async () => {
++    await runPreparedReply(
++      baseParams({
++        ctx: {
++          Body: "timestamped followup",
++          RawBody: "timestamped followup",
++          CommandBody: "timestamped followup",
++          OriginatingChannel: "whatsapp",
++          OriginatingTo: "+15550001",
++          ChatType: "direct",
++          Timestamp: 1_710_000_000,
++        },
++        sessionCtx: {
++          Body: "timestamped followup",
++          BodyStripped: "timestamped followup",
++          Provider: "whatsapp",
++          OriginatingChannel: "whatsapp",
++          OriginatingTo: "+15550001",
++          ChatType: "direct",
++        },
++      }),
++    );
++
++    const call = requireRunReplyAgentCall();
++    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
++      role: "user",
++      content: "timestamped followup",
++      timestamp: 1_710_000_000_000,
++    });
++  });
++
+   it("does not rehydrate current MediaPaths after image understanding enriched the prompt", async () => {
+     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
+     cleanupPaths.push(tmpDir);
+diff --git a/src/auto-reply/reply/get-reply-run.ts b/src/auto-reply/reply/get-reply-run.ts
+index 4d21c347c0..76073b06b3 100644
+--- a/src/auto-reply/reply/get-reply-run.ts
++++ b/src/auto-reply/reply/get-reply-run.ts
+@@ -1,5 +1,6 @@
+ import crypto from "node:crypto";
+ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
++import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+ import {
+   clearAutoFallbackPrimaryProbeSelection,
+@@ -121,6 +122,7 @@ type InternalGetReplyOptions = GetReplyOptions & {
+ 
+ type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
+ type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
++const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
+ 
+ function hasResolvedThinkingCatalogEntry(params: {
+   catalog?: readonly ThinkingCatalogEntry[];
+@@ -149,6 +151,16 @@ function routeThreadIdsMatch(
+   return String(activeThreadId) === String(currentThreadId);
+ }
+ 
++function normalizeMessageTimestampMs(value: unknown): number | undefined {
++  const timestamp = typeof value === "number" && Number.isFinite(value) ? value : undefined;
++  if (timestamp === undefined || timestamp <= 0) {
++    return undefined;
++  }
++  const timestampMs =
++    timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1000) : timestamp;
++  return asDateTimestampMs(timestampMs);
++}
++
+ function isSlackDirectRoutedThreadTurn(ctx: MsgContext): boolean {
+   if (normalizeChatType(ctx.ChatType) !== "direct") {
+     return false;
+@@ -1183,6 +1195,7 @@ export async function runPreparedReply(
+       : undefined;
+   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
+   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
++  const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
+   const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
+     hasMedia: userTurnMediaForPersistence.length > 0,
+   });
+@@ -1197,6 +1210,12 @@ export async function runPreparedReply(
+                 mediaOnlyText: "[User sent media without caption]",
+               }
+             : {}),
++          // Persist the message's own arrival timestamp so the single
++          // LLM-boundary stamping site (normalizeMessagesForLlmBoundary) can
++          // derive a stable per-message `[DOW YYYY-MM-DD HH:MM TZ]` prefix that
++          // is identical whether this turn is sent as the current turn or
++          // replayed as history. See: https://github.com/openclaw/openclaw/issues/3658
++          ...(userTurnTimestamp ? { timestamp: userTurnTimestamp } : {}),
+         }
+       : undefined;
+   const userTurnTranscriptRecorder =
+diff --git a/src/gateway/server-methods/agent-timestamp.ts b/src/gateway/server-methods/agent-timestamp.ts
+index 0039f12be4..4f271d2ca7 100644
+--- a/src/gateway/server-methods/agent-timestamp.ts
++++ b/src/gateway/server-methods/agent-timestamp.ts
+@@ -21,15 +21,46 @@ export interface TimestampInjectionOptions {
+   now?: Date;
+ }
+ 
++/**
++ * Build a `[DOW YYYY-MM-DD HH:MM TZ] ` prefix string from an explicit date.
++ *
++ * Returns undefined if formatting fails (malformed timezone etc.).
++ * Does NOT guard against TIMESTAMP_ENVELOPE_PATTERN or CRON_TIME_MARKER —
++ * callers that need those guards should use {@link injectTimestamp} instead.
++ *
++ * This is the primitive used by the persistence path to stamp each stored
++ * message with ITS OWN arrival timestamp (not the current wall-clock time),
++ * so historical messages carry a stable, immutable prefix.
++ */
++export function buildTimestampPrefix(
++  date: Date,
++  opts?: Pick<TimestampInjectionOptions, "timezone">,
++): string | undefined {
++  const timezone = opts?.timezone ?? "UTC";
++  const formatted = formatZonedTimestamp(date, { timeZone: timezone });
++  if (!formatted) {
++    return undefined;
++  }
++  // 3-letter DOW: small models (8B) can't reliably derive day-of-week from
++  // a date, and may treat a bare "Wed" as a typo. Costs ~1 token.
++  const dow = new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short" }).format(
++    date,
++  );
++  return `[${dow} ${formatted}] `;
++}
++
+ /**
+  * Injects a compact timestamp prefix into a message if one isn't already
+  * present. Uses the same `YYYY-MM-DD HH:MM TZ` format as channel envelope
+  * timestamps ({@link formatZonedTimestamp}), keeping token cost low (~7
+  * tokens) and format consistent across all agent contexts.
+  *
+- * Used by the gateway `agent` and `chat.send` handlers to give TUI, web,
+- * spawned subagents, `sessions_send`, and heartbeat wake events date/time
+- * awareness — without modifying the system prompt (which is cached).
++ * NOTE: The standard user-turn path no longer calls this. Per-message stamps
++ * are now applied once at the LLM boundary (normalizeMessagesForLlmBoundary)
++ * from each message's own timestamp, so storage stays bare and the current and
++ * historical sends are byte-identical — eliminating the prompt-cache bust
++ * described in issue #3658. This helper is retained only for any remaining
++ * non-user-turn callers and as the shared prefix primitive's wrapper.
+  *
+  * Channel messages (Discord, Telegram, etc.) already have timestamps via
+  * envelope formatting and take a separate code path — they never reach
+@@ -54,20 +85,12 @@ export function injectTimestamp(message: string, opts?: TimestampInjectionOption
+   }
+ 
+   const now = opts?.now ?? new Date();
+-  const timezone = opts?.timezone ?? "UTC";
+-
+-  const formatted = formatZonedTimestamp(now, { timeZone: timezone });
+-  if (!formatted) {
++  const prefix = buildTimestampPrefix(now, opts);
++  if (!prefix) {
+     return message;
+   }
+ 
+-  // 3-letter DOW: small models (8B) can't reliably derive day-of-week from
+-  // a date, and may treat a bare "Wed" as a typo. Costs ~1 token.
+-  const dow = new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short" }).format(
+-    now,
+-  );
+-
+-  return `[${dow} ${formatted}] ${message}`;
++  return `${prefix}${message}`;
+ }
+ 
+ /**
+diff --git a/src/gateway/server-methods/agent.test.ts b/src/gateway/server-methods/agent.test.ts
+index 0dc0e184d7..9bbd48be5f 100644
+--- a/src/gateway/server-methods/agent.test.ts
++++ b/src/gateway/server-methods/agent.test.ts
+@@ -1716,7 +1716,7 @@ describe("gateway agent handler", () => {
+     expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({ dropIfSlow: true });
+   });
+ 
+-  it("injects a timestamp into the message passed to agentCommand", async () => {
++  it("passes the raw user message to agentCommand for LLM-boundary timestamping", async () => {
+     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
+ 
+     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+@@ -1732,7 +1732,7 @@ describe("gateway agent handler", () => {
+     );
+ 
+     const callArgs = await waitForAgentCommandCall<{ message?: string }>();
+-    expect(callArgs.message).toBe("[Wed 2026-01-28 20:30 EST] Is it the weekend?");
++    expect(callArgs.message).toBe("Is it the weekend?");
+ 
+     resetTimeConfig();
+   });
+@@ -4708,7 +4708,7 @@ describe("gateway agent handler", () => {
+     expect(result.meta?.agentMeta?.sessionId).toBe("global-work-reset-session");
+   });
+ 
+-  it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {
++  it("uses /reset suffix as the post-reset message for LLM-boundary timestamping", async () => {
+     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
+     mockSessionResetSuccess({ reason: "reset" });
+     mocks.performGatewaySessionReset.mockClear();
+@@ -4729,7 +4729,7 @@ describe("gateway agent handler", () => {
+       },
+     );
+ 
+-    const call = await expectResetCall("[Wed 2026-01-28 20:30 EST] check status");
++    const call = await expectResetCall("check status");
+     expect(call?.sessionId).toBe("reset-session-id");
+ 
+     resetTimeConfig();
+diff --git a/src/gateway/server-methods/agent.ts b/src/gateway/server-methods/agent.ts
+index 16838c20ad..a8c483afc7 100644
+--- a/src/gateway/server-methods/agent.ts
++++ b/src/gateway/server-methods/agent.ts
+@@ -144,7 +144,6 @@ import {
+ } from "../session-utils.js";
+ import { formatForLog } from "../ws-log.js";
+ import { waitForAgentJob } from "./agent-job.js";
+-import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
+ import {
+   readTerminalSnapshotFromGatewayDedupe,
+   setGatewayDedupeEntry,
+@@ -1589,13 +1588,13 @@ export const agentHandlers: GatewayRequestHandlers = {
+         }
+       }
+ 
+-      // Inject timestamp into user-authored messages that don't already have one.
+-      // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
+-      // formatting in a separate code path — they never reach this handler.
++      // The per-message timestamp prefix is now applied at the single LLM
++      // boundary (normalizeMessagesForLlmBoundary), derived from each message's
++      // own timestamp, so the current turn and all historical turns carry
++      // identical bytes on the wire. The transient gateway injectTimestamp call
++      // is removed — stamping the live turn here would diverge from the bare
++      // stored history and bust the prompt cache.
+       // See: https://github.com/openclaw/openclaw/issues/3658
+-      if (!isRawModelRun && inputProvenance?.kind !== "inter_session") {
+-        message = injectTimestamp(message, timestampOptsFromConfig(cfg));
+-      }
+ 
+       if (requestedSessionKey) {
+         const sessionLoadOptions = {
+diff --git a/src/gateway/server-methods/chat.ts b/src/gateway/server-methods/chat.ts
+index 4032f16a21..1c92ba7a77 100644
+--- a/src/gateway/server-methods/chat.ts
++++ b/src/gateway/server-methods/chat.ts
+@@ -149,7 +149,6 @@ import {
+   resolveSessionStoreKey,
+ } from "../session-utils.js";
+ import { formatForLog } from "../ws-log.js";
+-import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
+ import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
+ import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+ import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
+@@ -3318,14 +3317,16 @@ export const chatHandlers: GatewayRequestHandlers = {
+         messageThreadId,
+         explicitDeliverRoute,
+       } = originatingRoute;
+-      // Inject timestamp so agents know the current date/time.
+-      // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
+-      // See: https://github.com/moltbot/moltbot/issues/3658
+-      const stampedMessage = injectTimestamp(messageForAgent, timestampOptsFromConfig(cfg));
+-
++      // The per-message timestamp prefix is now applied at the single LLM
++      // boundary (normalizeMessagesForLlmBoundary), derived from each message's
++      // own timestamp, so the current turn and all historical turns carry
++      // identical bytes on the wire. BodyForAgent uses the same bare text as
++      // Body; the transient gateway stamp is removed (stamping the live turn
++      // here would diverge from bare stored history and bust the prompt cache).
++      // See: https://github.com/openclaw/openclaw/issues/3658
+       const ctx: MsgContext = {
+         Body: messageForAgent,
+-        BodyForAgent: stampedMessage,
++        BodyForAgent: messageForAgent,
+         BodyForCommands: commandBody,
+         RawBody: parsedMessage,
+         CommandBody: commandBody,
+diff --git a/src/gateway/server-restart-sentinel.test.ts b/src/gateway/server-restart-sentinel.test.ts
+index 24631fea07..4b3c239342 100644
+--- a/src/gateway/server-restart-sentinel.test.ts
++++ b/src/gateway/server-restart-sentinel.test.ts
+@@ -599,7 +599,7 @@ describe("scheduleRestartSentinelWake", () => {
+       },
+       {
+         Body: "Reply with exactly: Yay! I did it!",
+-        BodyForAgent: "stamped:Reply with exactly: Yay! I did it!",
++        BodyForAgent: "Reply with exactly: Yay! I did it!",
+         BodyForCommands: "",
+         CommandBody: "",
+         CommandAuthorized: true,
+diff --git a/src/gateway/server-restart-sentinel.ts b/src/gateway/server-restart-sentinel.ts
+index 0d14988a97..7a79125ce3 100644
+--- a/src/gateway/server-restart-sentinel.ts
++++ b/src/gateway/server-restart-sentinel.ts
+@@ -45,7 +45,6 @@ import {
+   mergeDeliveryContext,
+ } from "../utils/delivery-context.shared.js";
+ import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+-import { injectTimestamp, timestampOptsFromConfig } from "./server-methods/agent-timestamp.js";
+ import { loadSessionEntry } from "./session-utils.js";
+ import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
+ 
+@@ -278,8 +277,12 @@ async function deliverQueuedSessionDelivery(params: {
+   let dispatchError: unknown;
+   const ctxPayload = finalizeInboundContext(
+     {
++      // The per-message timestamp prefix is applied at the single LLM boundary
++      // (normalizeMessagesForLlmBoundary) from each message's own timestamp, so
++      // the current turn and historical turns carry identical bytes on the wire.
++      // See: https://github.com/openclaw/openclaw/issues/3658
+       Body: userMessage,
+-      BodyForAgent: injectTimestamp(userMessage, timestampOptsFromConfig(cfg)),
++      BodyForAgent: userMessage,
+       BodyForCommands: "",
+       RawBody: userMessage,
+       CommandBody: "",
+diff --git a/src/sessions/user-turn-transcript.ts b/src/sessions/user-turn-transcript.ts
+index 9e693ac8d4..23b41f19e3 100644
+--- a/src/sessions/user-turn-transcript.ts
++++ b/src/sessions/user-turn-transcript.ts
+@@ -290,7 +290,14 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
+   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
+   const hasMedia = Boolean(mediaFields.MediaPath);
+   const text = normalizeTranscriptText(params.text);
++  // Storage is BARE (no timestamp prefix). The per-message timestamp is added
++  // at the single LLM-boundary stamping site (normalizeMessagesForLlmBoundary),
++  // derived from each message's own `timestamp` field, so the current turn and
++  // every historical turn serialize identically on the wire. Persisting a stamp
++  // here would NOT match the bare-current arrival (the gateway no longer stamps
++  // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
+   const content = text || (hasMedia ? (params.mediaOnlyText ?? "") : "");
++
+   const message = {
+     role: "user",
+     content,
+diff --git a/src/tui/embedded-backend.ts b/src/tui/embedded-backend.ts
+index 8ed4993119..ef88875178 100644
+--- a/src/tui/embedded-backend.ts
++++ b/src/tui/embedded-backend.ts
+@@ -34,10 +34,6 @@ import {
+   shouldSuppressAssistantEventForLiveChat,
+ } from "../gateway/live-chat-projector.js";
+ import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
+-import {
+-  injectTimestamp,
+-  timestampOptsFromConfig,
+-} from "../gateway/server-methods/agent-timestamp.js";
+ import {
+   augmentChatHistoryWithCanvasBlocks,
+   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
+@@ -982,10 +978,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
+         }
+       }
+       const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
+-      const { cfg, canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
++      const { canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
+       const result = await agentCommandFromIngress(
+         {
+-          message: injectTimestamp(params.message, timestampOptsFromConfig(cfg)),
++          // The per-message timestamp prefix is applied at the single LLM
++          // boundary (normalizeMessagesForLlmBoundary) from each message's own
++          // timestamp, so the current turn and historical turns carry identical
++          // bytes on the wire. See: https://github.com/openclaw/openclaw/issues/3658
++          message: params.message,
+           sessionKey: canonicalKey,
+           ...(params.agentId ? { agentId: params.agentId } : {}),
+           ...(entry?.sessionId ? { sessionId: entry.sessionId } : {}),

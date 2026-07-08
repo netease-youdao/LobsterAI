@@ -242,6 +242,17 @@ export class McpRuntime {
             ? server.launchResolution.status
             : McpLaunchResolutionStatus.Pending;
           if (
+            status === McpLaunchResolutionStatus.Failed
+            && launchResolver.shouldStartResolution(server, status)
+          ) {
+            skippedCount++;
+            console.log(
+              `[MCP] retrying stdio server "${server.name}" after recoverable managed launch resolution failure`,
+            );
+            this.ensureLaunchResolution(server.id, 'config-sync:recoverable-failed');
+            continue;
+          }
+          if (
             status === McpLaunchResolutionStatus.Unsupported
             || status === McpLaunchResolutionStatus.Failed
           ) {

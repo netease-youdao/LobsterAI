@@ -1,6 +1,13 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
-import { dedupeArtifactsForDisplay, normalizeFilePathForDedup, normalizeLocalServiceUrlForDedup } from '../../services/artifactParser';
+import {
+  dedupeArtifactsForDisplay,
+  dedupeArtifactsWithinMessages,
+  getLocalServicePortIdentityKey,
+  normalizeFilePathForDedup,
+  resolveArtifactIdForDisplay,
+  shouldPreferArtifactForDisplay,
+} from '../../services/artifactParser';
 import { type Artifact, ArtifactTypeValue } from '../../types/artifact';
 import type { RootState } from '../index';
 
@@ -17,6 +24,7 @@ export type ArtifactContentView = typeof ArtifactContentView[keyof typeof Artifa
 export const ArtifactSpecialTab = {
   FileList: 'fileList',
   Browser: 'browser',
+  Subagents: 'subagents',
 } as const;
 export type ArtifactSpecialTab = typeof ArtifactSpecialTab[keyof typeof ArtifactSpecialTab];
 
@@ -27,6 +35,12 @@ export interface ArtifactPreviewTab {
   artifactId: string;
   contentView: ArtifactContentView;
   openedAt: number;
+}
+
+interface AddArtifactPayload {
+  sessionId: string;
+  artifact: Artifact;
+  defaultProjectDirectory?: string;
 }
 
 interface ArtifactState {
@@ -54,6 +68,9 @@ const getPreviewTabId = (artifactId: string): string => `artifact:${artifactId}`
 const isMediaArtifact = (artifact: Artifact): boolean => (
   artifact.type === 'image' || artifact.type === 'video'
 );
+
+const isSameMessageArtifact = (left: Artifact, right: Artifact): boolean =>
+  left.messageId === right.messageId;
 
 const findArtifactSessionId = (state: ArtifactState, artifactId: string): string | null => {
   for (const [sessionId, artifacts] of Object.entries(state.artifactsBySession)) {
@@ -89,12 +106,16 @@ const openPreviewTab = (state: ArtifactState, sessionId: string, artifactId: str
     state.previewTabsBySession[sessionId] = [];
   }
 
-  const tabId = getPreviewTabId(artifactId);
+  const displayArtifactId = resolveArtifactIdForDisplay(
+    state.artifactsBySession[sessionId] ?? [],
+    artifactId,
+  );
+  const tabId = getPreviewTabId(displayArtifactId);
   const existing = state.previewTabsBySession[sessionId].find(tab => tab.id === tabId);
   if (!existing) {
     state.previewTabsBySession[sessionId].push({
       id: tabId,
-      artifactId,
+      artifactId: displayArtifactId,
       contentView: ArtifactContentView.Preview,
       openedAt: Date.now(),
     });
@@ -132,7 +153,7 @@ const artifactSlice = createSlice({
   initialState,
   reducers: {
     setSessionArtifacts(state, action: PayloadAction<{ sessionId: string; artifacts: Artifact[] }>) {
-      const artifacts = dedupeArtifactsForDisplay(action.payload.artifacts);
+      const artifacts = dedupeArtifactsWithinMessages(action.payload.artifacts);
       state.artifactsBySession[action.payload.sessionId] = artifacts;
       const knownIds = new Set(artifacts.map(artifact => artifact.id));
       const tabs = state.previewTabsBySession[action.payload.sessionId] ?? [];
@@ -147,8 +168,8 @@ const artifactSlice = createSlice({
       }
     },
 
-    addArtifact(state, action: PayloadAction<{ sessionId: string; artifact: Artifact }>) {
-      const { sessionId, artifact } = action.payload;
+    addArtifact(state, action: PayloadAction<AddArtifactPayload>) {
+      const { sessionId, artifact, defaultProjectDirectory } = action.payload;
       if (!state.artifactsBySession[sessionId]) {
         state.artifactsBySession[sessionId] = [];
       }
@@ -160,24 +181,30 @@ const artifactSlice = createSlice({
         }
       } else {
         if (artifact.type === ArtifactTypeValue.LocalService) {
-          const normalizedUrl = normalizeLocalServiceUrlForDedup(artifact.url || artifact.content);
+          const localServicePortKey = getLocalServicePortIdentityKey(artifact.url || artifact.content);
           const dupIndex = state.artifactsBySession[sessionId].findIndex(
-            a => a.type === ArtifactTypeValue.LocalService &&
-              normalizeLocalServiceUrlForDedup(a.url || a.content) === normalizedUrl
+            a => isSameMessageArtifact(a, artifact) &&
+              a.type === ArtifactTypeValue.LocalService &&
+              getLocalServicePortIdentityKey(a.url || a.content) === localServicePortKey
           );
           if (dupIndex >= 0) {
             const old = state.artifactsBySession[sessionId][dupIndex];
-            state.artifactsBySession[sessionId][dupIndex] = artifact;
-            replacePreviewTabArtifactId(state, sessionId, old.id, artifact.id);
+            if (shouldPreferArtifactForDisplay(artifact, old, { defaultProjectDirectory })) {
+              state.artifactsBySession[sessionId][dupIndex] = artifact;
+              replacePreviewTabArtifactId(state, sessionId, old.id, artifact.id);
+            }
             return;
           }
         }
 
-        // Deduplicate by filePath: if another artifact with same filePath already exists, update it
+        // Deduplicate by filePath only within the same message. The conversation
+        // stream intentionally keeps repeated resources in later replies visible.
         if (artifact.filePath) {
           const normalizedPath = normalizeFilePathForDedup(artifact.filePath);
           const dupIndex = state.artifactsBySession[sessionId].findIndex(
-            a => a.filePath && normalizeFilePathForDedup(a.filePath) === normalizedPath
+            a => isSameMessageArtifact(a, artifact) &&
+              a.filePath &&
+              normalizeFilePathForDedup(a.filePath) === normalizedPath
           );
           if (dupIndex >= 0) {
             const old = state.artifactsBySession[sessionId][dupIndex];
@@ -190,20 +217,31 @@ const artifactSlice = createSlice({
         }
         if (artifact.filePath && artifact.remoteUrl && isMediaArtifact(artifact)) {
           const dupIndex = state.artifactsBySession[sessionId].findIndex(
-            a => !a.filePath && a.type === artifact.type && a.content === artifact.remoteUrl
+            a => isSameMessageArtifact(a, artifact) &&
+              !a.filePath &&
+              a.type === artifact.type &&
+              a.content === artifact.remoteUrl
           );
           if (dupIndex >= 0) {
+            const old = state.artifactsBySession[sessionId][dupIndex];
             state.artifactsBySession[sessionId][dupIndex] = artifact;
+            replacePreviewTabArtifactId(state, sessionId, old.id, artifact.id);
             return;
           }
         }
         if (!artifact.filePath && isMediaArtifact(artifact) && artifact.content) {
           const localExists = state.artifactsBySession[sessionId].some(
-            a => a.type === artifact.type && a.filePath && a.remoteUrl === artifact.content
+            a => isSameMessageArtifact(a, artifact) &&
+              a.type === artifact.type &&
+              a.filePath &&
+              a.remoteUrl === artifact.content
           );
           if (localExists) return;
           const dupIndex = state.artifactsBySession[sessionId].findIndex(
-            a => !a.filePath && a.type === artifact.type && a.content === artifact.content
+            a => isSameMessageArtifact(a, artifact) &&
+              !a.filePath &&
+              a.type === artifact.type &&
+              a.content === artifact.content
           );
           if (dupIndex >= 0) {
             const old = state.artifactsBySession[sessionId][dupIndex];
@@ -245,6 +283,11 @@ const artifactSlice = createSlice({
     },
 
     activateArtifactBrowserTab(state, action: PayloadAction<{ sessionId: string }>) {
+      activatePreviewTab(state, action.payload.sessionId, null);
+      setPanelOpen(state, action.payload.sessionId, true);
+    },
+
+    activateArtifactSubagentTab(state, action: PayloadAction<{ sessionId: string }>) {
       activatePreviewTab(state, action.payload.sessionId, null);
       setPanelOpen(state, action.payload.sessionId, true);
     },
@@ -314,6 +357,7 @@ export const {
   selectArtifact,
   openArtifactPreviewTab,
   activateArtifactBrowserTab,
+  activateArtifactSubagentTab,
   activateArtifactPreviewTab,
   activateArtifactFileListTab,
   closeArtifactPreviewTab,

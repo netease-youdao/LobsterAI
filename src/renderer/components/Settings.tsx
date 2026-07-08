@@ -1,7 +1,8 @@
-import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, ExclamationTriangleIcon, GlobeAltIcon, InformationCircleIcon, MagnifyingGlassIcon, SunIcon, TrashIcon, WrenchScrewdriverIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, ExclamationTriangleIcon, GlobeAltIcon, InformationCircleIcon, MagnifyingGlassIcon, SignalIcon, SunIcon, TrashIcon, WrenchScrewdriverIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { AppSettingsAutoLaunchErrorCode } from '../../shared/appSettings/constants';
 import { type AppUpdateInfo,type AppUpdateRuntimeState,AppUpdateSource,AppUpdateStatus } from '../../shared/appUpdate/constants';
 import {
   type BrowserWebAccessConfig,
@@ -12,7 +13,7 @@ import { DataMigrationRestoreStatus } from '../../shared/dataMigration/constants
 import { normalizeNotificationSettings } from '../../shared/notifications/constants';
 import { OpenClawEnginePhase, OpenClawGatewayRepairErrorCode } from '../../shared/openclawEngine/constants';
 import { ProviderAuthType, ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
-import { type AppConfig, defaultConfig, defaultVoiceInputConfig, getProviderDisplayName, getVisibleProviders, ShortcutAction, type ShortcutConfig, VoiceInputRecognitionMode, type VoiceInputRecognitionMode as VoiceInputRecognitionModeType } from '../config';
+import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, normalizeFontPreference, ShortcutAction, type ShortcutConfig } from '../config';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import { apiService } from '../services/api';
 import { configService } from '../services/config';
@@ -20,8 +21,10 @@ import { coworkService } from '../services/cowork';
 import { decryptSecret, decryptWithPassword, EncryptedPayload, encryptWithPassword, PasswordEncryptedPayload } from '../services/encryption';
 import { i18nService, LanguageType } from '../services/i18n';
 import { imService } from '../services/im';
+import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
 import { formatShortcutForDisplay, getShortcutConflictSignature, matchesShortcut } from '../services/shortcuts';
 import { themeService } from '../services/theme';
+import { applyTypographyPreferences } from '../services/typography';
 import type { RootState } from '../store';
 import { selectCoworkConfig } from '../store/selectors/coworkSelectors';
 import { setAvailableModels } from '../store/slices/modelSlice';
@@ -44,7 +47,7 @@ import MessageCopyIcon from './icons/MessageCopyIcon';
 import PlugIcon from './icons/PlugIcon';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import IMSettings from './im/IMSettings';
-import PluginsSettings, { type PluginsSettingsHandle } from './plugins/PluginsSettings';
+import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle } from './plugins/PluginsSettings';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
 import {
   buildOpenAICompatibleChatCompletionsUrl,
@@ -69,7 +72,7 @@ import {
   shouldUseMaxCompletionTokensForOpenAI,
   shouldUseOpenAIResponsesForProvider,
 } from './settings/modelProviderUtils';
-import ModelSettingsSection, { ModelEditorDialog } from './settings/ModelSettingsSection';
+import ModelSettingsSection, { DeleteProviderConfirmDialog, ModelEditorDialog } from './settings/ModelSettingsSection';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import ThemedSelect from './ui/ThemedSelect';
 
@@ -80,6 +83,16 @@ const waitForNextPaint = (): Promise<void> => new Promise(resolve => {
     window.requestAnimationFrame(() => resolve());
   });
 });
+
+const getAutoLaunchErrorMessage = (errorCode?: string): string => {
+  if (errorCode === AppSettingsAutoLaunchErrorCode.RequiresApproval) {
+    return i18nService.t('autoLaunchRequiresApproval');
+  }
+  if (errorCode === AppSettingsAutoLaunchErrorCode.UpdateFailed) {
+    return i18nService.t('autoLaunchUpdateFailed');
+  }
+  return i18nService.t('autoLaunchUpdateFailed');
+};
 
 const formatBackupSize = (sizeBytes?: number): string => {
   if (!Number.isFinite(sizeBytes) || !sizeBytes || sizeBytes <= 0) return '';
@@ -146,6 +159,568 @@ const SETTINGS_TAB_SHORTCUT_ACTIONS: Partial<Record<ShortcutAction, TabType>> = 
   [ShortcutAction.OpenSettingsPlugins]: 'plugins',
   [ShortcutAction.OpenSettingsShortcuts]: 'shortcuts',
   [ShortcutAction.OpenSettingsAbout]: 'about',
+};
+
+const SettingsAnalyticsSource = {
+  AgentEngine: 'settings_agent_engine',
+  Appearance: 'settings_appearance',
+  Browser: 'settings_browser',
+  Dreaming: 'settings_dreaming',
+  General: 'settings_general',
+  Memory: 'settings_memory',
+  Model: 'settings_model',
+  Plugins: 'settings_plugins',
+  Shortcuts: 'settings_shortcuts',
+  About: 'settings_about',
+} as const;
+
+type SettingsAnalyticsValue = string | boolean | number;
+type ProviderAnalyticsKind = 'builtin' | 'custom' | 'local';
+
+type MemorySettingAnalyticsSummary = {
+  changedKeys: string;
+  embeddingEnabled: boolean;
+  embeddingProvider: string;
+  embeddingVectorWeight: number;
+  hasEmbeddingApiKey: boolean;
+  hasEmbeddingBaseUrl: boolean;
+  hasEmbeddingModel: boolean;
+  memoryEnabled: boolean;
+  memoryLlmJudgeEnabled: boolean;
+};
+
+type DreamingSettingAnalyticsSummary = {
+  changedKeys: string;
+  dreamingEnabled: boolean;
+  frequencyType: 'preset' | 'custom';
+};
+
+type ShortcutSettingAnalyticsSummary = {
+  changedCount: number;
+  configuredCount: number;
+  disabledCount: number;
+  resetToDefault: boolean;
+};
+
+type PluginSettingsAnalyticsSummary = {
+  changedKeys: string;
+  configCount: number;
+  disabledToggleCount: number;
+  enabledToggleCount: number;
+  toggleCount: number;
+};
+
+const DREAMING_FREQUENCY_PRESETS_FOR_ANALYTICS = new Set([
+  '0 3 * * *',
+  '0 0 * * *',
+  '0 0,12 * * *',
+  '0 */6 * * *',
+  '0 3 * * 0',
+]);
+
+type CustomModelSettingsAnalyticsSummary = {
+  changedKeys: string;
+  changedProviderCount: number;
+  customProviderCount: number;
+  customProviderModelCount: number;
+  enabledCustomProviderCount: number;
+  enabledProviderCount: number;
+  hasCodingPlanEnabled: boolean;
+  hasLocalProviderEnabled: boolean;
+  modelCount: number;
+};
+
+const isCustomProviderKey = (providerKey: string): boolean => (
+  (CUSTOM_PROVIDER_KEYS as readonly string[]).includes(providerKey)
+);
+
+const isLocalProviderKey = (providerKey: string): boolean => (
+  providerKey === ProviderName.Ollama || providerKey === ProviderName.LmStudio
+);
+
+const resolveProviderAnalyticsKind = (providerKey: string): ProviderAnalyticsKind => {
+  if (isCustomProviderKey(providerKey)) {
+    return 'custom';
+  }
+  if (isLocalProviderKey(providerKey)) {
+    return 'local';
+  }
+  return 'builtin';
+};
+
+const countProviderModels = (providerConfig?: ProviderConfig): number => (
+  Array.isArray(providerConfig?.models) ? providerConfig.models.length : 0
+);
+
+const sortAnalyticsObject = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map(sortAnalyticsObject);
+  }
+  if (value && typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>)
+      .sort()
+      .reduce<Record<string, unknown>>((sorted, key) => {
+        sorted[key] = sortAnalyticsObject((value as Record<string, unknown>)[key]);
+        return sorted;
+      }, {});
+  }
+  return value;
+};
+
+const serializeProviderModelsForAnalyticsDiff = (providerConfig?: ProviderConfig): string => (
+  JSON.stringify((providerConfig?.models ?? []).map(model => ({
+    contextWindow: model.contextWindow,
+    customParams: sortAnalyticsObject(model.customParams),
+    id: model.id,
+    name: model.name,
+    supportsImage: model.supportsImage === true,
+    supportsThinking: model.supportsThinking === true,
+  })))
+);
+
+const getProviderAuthTypeForAnalytics = (providerConfig?: ProviderConfig): string => (
+  providerConfig?.authType || ProviderAuthType.ApiKey
+);
+
+const getProviderApiFormatForAnalytics = (providerKey: string, providerConfig?: ProviderConfig): string => (
+  getEffectiveApiFormat(providerKey, providerConfig?.apiFormat)
+);
+
+const buildCustomModelSettingsAnalyticsSummary = (
+  previousProviders: ProvidersConfig,
+  nextProviders: ProvidersConfig,
+): CustomModelSettingsAnalyticsSummary | null => {
+  const changedKeys = new Set<string>();
+  const changedProviders = new Set<string>();
+  const providerKeysForDiff = new Set([
+    ...Object.keys(previousProviders),
+    ...Object.keys(nextProviders),
+  ]);
+
+  providerKeysForDiff.forEach(providerKey => {
+    const previousProvider = previousProviders[providerKey];
+    const nextProvider = nextProviders[providerKey];
+
+    if (!previousProvider || !nextProvider) {
+      changedKeys.add('provider_count');
+      changedProviders.add(providerKey);
+      return;
+    }
+
+    let providerChanged = false;
+    if ((previousProvider.enabled === true) !== (nextProvider.enabled === true)) {
+      changedKeys.add('provider_enabled');
+      providerChanged = true;
+    }
+    if (getProviderApiFormatForAnalytics(providerKey, previousProvider) !== getProviderApiFormatForAnalytics(providerKey, nextProvider)) {
+      changedKeys.add('api_format');
+      providerChanged = true;
+    }
+    if (((previousProvider as ProviderConfig).codingPlanEnabled === true) !== ((nextProvider as ProviderConfig).codingPlanEnabled === true)) {
+      changedKeys.add('coding_plan');
+      providerChanged = true;
+    }
+    if (getProviderAuthTypeForAnalytics(previousProvider) !== getProviderAuthTypeForAnalytics(nextProvider)) {
+      changedKeys.add('auth_type');
+      providerChanged = true;
+    }
+    if (countProviderModels(previousProvider) !== countProviderModels(nextProvider)) {
+      changedKeys.add('model_count');
+      providerChanged = true;
+    }
+    if (serializeProviderModelsForAnalyticsDiff(previousProvider) !== serializeProviderModelsForAnalyticsDiff(nextProvider)) {
+      changedKeys.add('model_config');
+      providerChanged = true;
+    }
+
+    if (providerChanged) {
+      changedProviders.add(providerKey);
+    }
+  });
+
+  if (changedKeys.size === 0) {
+    return null;
+  }
+
+  const nextProviderEntries = Object.entries(nextProviders);
+  return {
+    changedKeys: Array.from(changedKeys).sort().join(','),
+    changedProviderCount: changedProviders.size,
+    customProviderCount: nextProviderEntries.filter(([providerKey]) => isCustomProviderKey(providerKey)).length,
+    customProviderModelCount: nextProviderEntries
+      .filter(([providerKey]) => isCustomProviderKey(providerKey))
+      .reduce((count, [, providerConfig]) => count + countProviderModels(providerConfig), 0),
+    enabledCustomProviderCount: nextProviderEntries
+      .filter(([providerKey, providerConfig]) => isCustomProviderKey(providerKey) && providerConfig.enabled === true)
+      .length,
+    enabledProviderCount: nextProviderEntries.filter(([, providerConfig]) => providerConfig.enabled === true).length,
+    hasCodingPlanEnabled: nextProviderEntries.some(([, providerConfig]) => (providerConfig as ProviderConfig).codingPlanEnabled === true),
+    hasLocalProviderEnabled: nextProviderEntries.some(([providerKey, providerConfig]) => (
+      isLocalProviderKey(providerKey) && providerConfig.enabled === true
+    )),
+    modelCount: nextProviderEntries.reduce((count, [, providerConfig]) => count + countProviderModels(providerConfig), 0),
+  };
+};
+
+const buildBrowserSettingAnalyticsParams = (
+  previousConfig: BrowserWebAccessConfig,
+  nextConfig: BrowserWebAccessConfig,
+): {
+  blockedHostnameCount: number;
+  changedKeys: string;
+  networkMode: string;
+  previousBlockedHostnameCount?: number;
+} | null => {
+  const changedKeys = new Set<string>();
+  if (previousConfig.networkMode !== nextConfig.networkMode) {
+    changedKeys.add('network_mode');
+  }
+  if (previousConfig.blockedHostnames.length !== nextConfig.blockedHostnames.length) {
+    changedKeys.add('blocked_hostnames');
+  }
+
+  if (changedKeys.size === 0) {
+    return null;
+  }
+
+  return {
+    blockedHostnameCount: nextConfig.blockedHostnames.length,
+    changedKeys: Array.from(changedKeys).sort().join(','),
+    networkMode: nextConfig.networkMode,
+    previousBlockedHostnameCount: previousConfig.blockedHostnames.length,
+  };
+};
+
+const buildMemorySettingAnalyticsSummary = (
+  previousConfig: {
+    embeddingEnabled: boolean;
+    embeddingModel: string;
+    embeddingProvider: string;
+    embeddingRemoteApiKey: string;
+    embeddingRemoteBaseUrl: string;
+    embeddingVectorWeight: number;
+    memoryEnabled: boolean;
+    memoryLlmJudgeEnabled: boolean;
+  },
+  nextConfig: {
+    embeddingEnabled: boolean;
+    embeddingModel: string;
+    embeddingProvider: string;
+    embeddingRemoteApiKey: string;
+    embeddingRemoteBaseUrl: string;
+    embeddingVectorWeight: number;
+    memoryEnabled: boolean;
+    memoryLlmJudgeEnabled: boolean;
+  },
+): MemorySettingAnalyticsSummary | null => {
+  const changedKeys = new Set<string>();
+  if (previousConfig.memoryEnabled !== nextConfig.memoryEnabled) {
+    changedKeys.add('memory_enabled');
+  }
+  if (previousConfig.memoryLlmJudgeEnabled !== nextConfig.memoryLlmJudgeEnabled) {
+    changedKeys.add('llm_judge_enabled');
+  }
+  if (previousConfig.embeddingEnabled !== nextConfig.embeddingEnabled) {
+    changedKeys.add('embedding_enabled');
+  }
+  if (previousConfig.embeddingProvider !== nextConfig.embeddingProvider) {
+    changedKeys.add('embedding_provider');
+  }
+  if (previousConfig.embeddingModel !== nextConfig.embeddingModel) {
+    changedKeys.add('embedding_model');
+  }
+  if (previousConfig.embeddingRemoteBaseUrl !== nextConfig.embeddingRemoteBaseUrl) {
+    changedKeys.add('embedding_base_url');
+  }
+  if (previousConfig.embeddingRemoteApiKey !== nextConfig.embeddingRemoteApiKey) {
+    changedKeys.add('embedding_api_key');
+  }
+  if (previousConfig.embeddingVectorWeight !== nextConfig.embeddingVectorWeight) {
+    changedKeys.add('embedding_vector_weight');
+  }
+
+  if (changedKeys.size === 0) {
+    return null;
+  }
+
+  return {
+    changedKeys: Array.from(changedKeys).sort().join(','),
+    embeddingEnabled: nextConfig.embeddingEnabled,
+    embeddingProvider: nextConfig.embeddingProvider,
+    embeddingVectorWeight: nextConfig.embeddingVectorWeight,
+    hasEmbeddingApiKey: nextConfig.embeddingRemoteApiKey.trim().length > 0,
+    hasEmbeddingBaseUrl: nextConfig.embeddingRemoteBaseUrl.trim().length > 0,
+    hasEmbeddingModel: nextConfig.embeddingModel.trim().length > 0,
+    memoryEnabled: nextConfig.memoryEnabled,
+    memoryLlmJudgeEnabled: nextConfig.memoryLlmJudgeEnabled,
+  };
+};
+
+const resolveDreamingFrequencyType = (frequency: string): 'preset' | 'custom' => (
+  DREAMING_FREQUENCY_PRESETS_FOR_ANALYTICS.has(frequency) ? 'preset' : 'custom'
+);
+
+const buildDreamingSettingAnalyticsSummary = (
+  previousConfig: {
+    dreamingEnabled: boolean;
+    dreamingFrequency: string;
+  },
+  nextConfig: {
+    dreamingEnabled: boolean;
+    dreamingFrequency: string;
+  },
+): DreamingSettingAnalyticsSummary | null => {
+  const changedKeys = new Set<string>();
+  if (previousConfig.dreamingEnabled !== nextConfig.dreamingEnabled) {
+    changedKeys.add('dreaming_enabled');
+  }
+  if (previousConfig.dreamingFrequency !== nextConfig.dreamingFrequency) {
+    changedKeys.add('dreaming_frequency');
+  }
+
+  if (changedKeys.size === 0) {
+    return null;
+  }
+
+  return {
+    changedKeys: Array.from(changedKeys).sort().join(','),
+    dreamingEnabled: nextConfig.dreamingEnabled,
+    frequencyType: resolveDreamingFrequencyType(nextConfig.dreamingFrequency),
+  };
+};
+
+const countConfiguredShortcuts = (shortcutConfig: ShortcutConfig): number => (
+  Object.values(shortcutConfig).filter(value => String(value || '').trim().length > 0).length
+);
+
+const buildShortcutSettingAnalyticsSummary = (
+  previousShortcuts: ShortcutConfig,
+  nextShortcuts: ShortcutConfig,
+): ShortcutSettingAnalyticsSummary | null => {
+  const keys = new Set([
+    ...Object.keys(previousShortcuts),
+    ...Object.keys(nextShortcuts),
+    ...Object.keys(defaultConfig.shortcuts || {}),
+  ]);
+  let changedCount = 0;
+  keys.forEach(key => {
+    if ((previousShortcuts[key as ShortcutAction] || '') !== (nextShortcuts[key as ShortcutAction] || '')) {
+      changedCount += 1;
+    }
+  });
+
+  if (changedCount === 0) {
+    return null;
+  }
+
+  const defaultShortcuts: ShortcutConfig = { ...defaultConfig.shortcuts! };
+  const resetToDefault = Array.from(keys).every(key => (
+    (nextShortcuts[key as ShortcutAction] || '') === (defaultShortcuts[key as ShortcutAction] || '')
+  ));
+
+  return {
+    changedCount,
+    configuredCount: countConfiguredShortcuts(nextShortcuts),
+    disabledCount: Array.from(keys).filter(key => !String(nextShortcuts[key as ShortcutAction] || '').trim()).length,
+    resetToDefault,
+  };
+};
+
+const buildPluginSettingsAnalyticsSummary = (
+  pendingChanges: PluginPendingChanges | null,
+): PluginSettingsAnalyticsSummary | null => {
+  if (!pendingChanges) {
+    return null;
+  }
+  const toggleCount = pendingChanges.toggles.length;
+  const configCount = pendingChanges.configs.length;
+  if (toggleCount === 0 && configCount === 0) {
+    return null;
+  }
+  const changedKeys = [
+    ...(toggleCount > 0 ? ['toggle'] : []),
+    ...(configCount > 0 ? ['config'] : []),
+  ].join(',');
+
+  return {
+    changedKeys,
+    configCount,
+    disabledToggleCount: pendingChanges.toggles.filter(change => !change.enabled).length,
+    enabledToggleCount: pendingChanges.toggles.filter(change => change.enabled).length,
+    toggleCount,
+  };
+};
+
+const reportGeneralSettingChanged = (
+  settingKey: string,
+  settingValue: SettingsAnalyticsValue,
+  previousValue?: SettingsAnalyticsValue,
+): void => {
+  void reportYdAnalyzer({
+    action: LogReporterAction.GeneralSettingChanged,
+    settingKey,
+    settingValue,
+    previousValue,
+    source: SettingsAnalyticsSource.General,
+  });
+};
+
+const reportAppearanceSettingChanged = (
+  settingKey: string,
+  settingValue: SettingsAnalyticsValue,
+  previousValue?: SettingsAnalyticsValue,
+): void => {
+  void reportYdAnalyzer({
+    action: LogReporterAction.AppearanceSettingChanged,
+    settingKey,
+    settingValue,
+    previousValue,
+    source: SettingsAnalyticsSource.Appearance,
+  });
+};
+
+const reportBrowserSettingChanged = (
+  params: {
+    blockedHostnameCount: number;
+    changedKeys: string;
+    networkMode: string;
+    previousBlockedHostnameCount?: number;
+  },
+): void => {
+  void reportYdAnalyzer({
+    action: LogReporterAction.BrowserSettingChanged,
+    source: SettingsAnalyticsSource.Browser,
+    ...params,
+  });
+};
+
+const reportMemorySettingChanged = (
+  summary: MemorySettingAnalyticsSummary,
+): void => {
+  console.debug('[Settings] reporting memory setting analytics');
+  void reportYdAnalyzer({
+    action: LogReporterAction.MemorySettingChanged,
+    source: SettingsAnalyticsSource.Memory,
+    ...summary,
+  });
+};
+
+const reportMemoryEntryChanged = (
+  operation: 'created' | 'updated' | 'deleted',
+  entryCount?: number,
+): void => {
+  console.debug('[Settings] reporting memory entry analytics');
+  void reportYdAnalyzer({
+    action: LogReporterAction.MemoryEntryChanged,
+    source: SettingsAnalyticsSource.Memory,
+    operation,
+    entryCount,
+  });
+};
+
+const reportDreamingSettingChanged = (
+  summary: DreamingSettingAnalyticsSummary,
+): void => {
+  console.debug('[Settings] reporting dreaming setting analytics');
+  void reportYdAnalyzer({
+    action: LogReporterAction.DreamingSettingChanged,
+    source: SettingsAnalyticsSource.Dreaming,
+    ...summary,
+  });
+};
+
+const reportPluginSettingsSaved = (
+  summary: PluginSettingsAnalyticsSummary,
+): void => {
+  console.debug('[Settings] reporting plugin settings analytics');
+  void reportYdAnalyzer({
+    action: LogReporterAction.PluginSettingsSaved,
+    source: SettingsAnalyticsSource.Plugins,
+    ...summary,
+  });
+};
+
+const reportShortcutSettingChanged = (
+  summary: ShortcutSettingAnalyticsSummary,
+): void => {
+  console.debug('[Settings] reporting shortcut setting analytics');
+  void reportYdAnalyzer({
+    action: LogReporterAction.ShortcutSettingChanged,
+    source: SettingsAnalyticsSource.Shortcuts,
+    ...summary,
+  });
+};
+
+const reportAboutAction = (
+  actionType: string,
+  result: string,
+  options: { missingEntryCount?: number } = {},
+): void => {
+  console.debug('[Settings] reporting about action analytics');
+  void reportYdAnalyzer({
+    action: LogReporterAction.AboutAction,
+    source: SettingsAnalyticsSource.About,
+    actionType,
+    result,
+    missingEntryCount: options.missingEntryCount,
+  });
+};
+
+const reportAgentEngineSettingChanged = (
+  settingKey: string,
+  settingValue: SettingsAnalyticsValue,
+  previousValue?: SettingsAnalyticsValue,
+): void => {
+  void reportYdAnalyzer({
+    action: LogReporterAction.AgentEngineSettingChanged,
+    settingKey,
+    settingValue,
+    previousValue,
+    source: SettingsAnalyticsSource.AgentEngine,
+  });
+};
+
+const reportAgentEngineMaintenanceAction = (
+  actionType: string,
+  result: string,
+  options: { errorCode?: string; sizeBytes?: number } = {},
+): void => {
+  void reportYdAnalyzer({
+    action: LogReporterAction.AgentEngineMaintenanceAction,
+    actionType,
+    result,
+    errorCode: options.errorCode,
+    sizeBytes: options.sizeBytes,
+    source: SettingsAnalyticsSource.AgentEngine,
+  });
+};
+
+const reportCustomModelSettingsSaved = (
+  summary: CustomModelSettingsAnalyticsSummary,
+): void => {
+  void reportYdAnalyzer({
+    action: LogReporterAction.CustomModelSettingsSaved,
+    source: SettingsAnalyticsSource.Model,
+    ...summary,
+  });
+};
+
+const reportCustomModelConnectionTested = (
+  providerKey: ProviderType,
+  apiFormat: string,
+  result: 'success' | 'failed',
+  options: { failureReason?: string; statusCode?: number } = {},
+): void => {
+  void reportYdAnalyzer({
+    action: LogReporterAction.CustomModelConnectionTested,
+    source: SettingsAnalyticsSource.Model,
+    providerKey,
+    providerKind: resolveProviderAnalyticsKind(providerKey),
+    apiFormat,
+    result,
+    failureReason: options.failureReason,
+    statusCode: options.statusCode,
+  });
 };
 
 const AGENT_TASK_SLOT_COMMANDS: ShortcutCommandDefinition[] = [
@@ -704,6 +1279,45 @@ const SettingsToggleRow: React.FC<{
   </div>
 );
 
+const SettingsNumberInputRow: React.FC<{
+  id: string;
+  title: string;
+  description: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (value: number) => void;
+}> = ({ id, title, description, value, min, max, onChange }) => (
+  <div className="flex items-center justify-between gap-4">
+    <div className="min-w-0 flex-1">
+      <label htmlFor={id} className="block text-sm font-medium text-foreground">
+        {title}
+      </label>
+      <p className="mt-1 text-sm text-secondary">
+        {description}
+      </p>
+    </div>
+    <div className="flex shrink-0 items-center gap-2">
+      <input
+        id={id}
+        type="number"
+        min={min}
+        max={max}
+        step={1}
+        value={value}
+        onChange={(event) => {
+          onChange(normalizeFontPreference(event.currentTarget.value, value, min, max));
+        }}
+        onBlur={(event) => {
+          onChange(normalizeFontPreference(event.currentTarget.value, value, min, max));
+        }}
+        className="h-8 w-16 rounded-lg border border-border bg-surface px-2 text-center text-sm text-foreground outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20"
+      />
+      <span className="text-sm text-secondary">px</span>
+    </div>
+  </div>
+);
+
 const Settings: React.FC<SettingsProps> = ({
   onClose,
   initialTab,
@@ -719,14 +1333,14 @@ const Settings: React.FC<SettingsProps> = ({
   const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [themeId, setThemeId] = useState<string>(themeService.getThemeId());
+  const [uiFontSize, setUiFontSize] = useState<number>(FontPreferences.UiFontSizeDefault);
+  const [codeFontSize, setCodeFontSize] = useState<number>(FontPreferences.CodeFontSizeDefault);
   const [language, setLanguage] = useState<LanguageType>('zh');
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
   const [sqliteAutoBackupEnabled, setSqliteAutoBackupEnabled] = useState(false);
+  const [usageAnalyticsEnabled, setUsageAnalyticsEnabled] = useState(true);
   const [taskCompletionNotificationsEnabled, setTaskCompletionNotificationsEnabled] = useState(true);
-  const [voiceInputRecognitionMode, setVoiceInputRecognitionMode] = useState<VoiceInputRecognitionModeType>(
-    defaultVoiceInputConfig.recognitionMode,
-  );
   const [browserWebAccess, setBrowserWebAccess] = useState<BrowserWebAccessConfig>(() => ({
     ...defaultBrowserWebAccessConfig,
     webFetch: { ...defaultBrowserWebAccessConfig.webFetch },
@@ -753,6 +1367,8 @@ const Settings: React.FC<SettingsProps> = ({
   const [isExportingProviders, setIsExportingProviders] = useState(false);
   const initialThemeRef = useRef<'light' | 'dark' | 'system'>(themeService.getTheme());
   const initialThemeIdRef = useRef<string>(themeService.getThemeId());
+  const initialUiFontSizeRef = useRef<number>(FontPreferences.UiFontSizeDefault);
+  const initialCodeFontSizeRef = useRef<number>(FontPreferences.CodeFontSizeDefault);
   const initialLanguageRef = useRef<LanguageType>(i18nService.getLanguage());
   const didSaveRef = useRef(false);
 
@@ -781,6 +1397,20 @@ const Settings: React.FC<SettingsProps> = ({
     { loggedIn: false } | { loggedIn: true; email?: string } | null
   >(null);
 
+  // xAI (Grok) OAuth state
+  type XaiOAuthPhase =
+    | { kind: 'idle' }
+    | { kind: 'pending' }
+    | { kind: 'device_code'; userCode: string; verificationUri: string }
+    | { kind: 'success'; email?: string }
+    | { kind: 'error'; message: string };
+  const [xaiOAuthPhase, setXaiOAuthPhase] = useState<XaiOAuthPhase>({ kind: 'idle' });
+  // Mirrors the OpenClaw auth-profiles store on disk; refreshed whenever the
+  // xAI provider tab becomes active and after login/logout. `null` = not yet checked.
+  const [xaiOAuthStatus, setXaiOAuthStatus] = useState<
+    { loggedIn: false } | { loggedIn: true; email?: string } | null
+  >(null);
+
   // Add state for providers configuration
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
 
@@ -789,10 +1419,14 @@ const Settings: React.FC<SettingsProps> = ({
   const minimaxIsOAuthMode = providers.minimax.authType !== 'apikey';
   // OpenAI defaults to API key mode unless the user explicitly opts in to OAuth
   const openaiIsOAuthMode = providers.openai.authType === 'oauth';
-  const isBaseUrlLocked = (activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled) || (activeProvider === 'qianfan' && providers.qianfan.codingPlanEnabled) || (activeProvider === 'xiaomi' && providers.xiaomi.codingPlanEnabled) || (activeProvider === 'minimax' && minimaxIsOAuthMode) || (activeProvider === 'openai' && openaiIsOAuthMode);
+  // xAI likewise defaults to API key mode; OAuth is an explicit opt-in
+  const xaiIsOAuthMode = providers.xai.authType === 'oauth';
+  const isBaseUrlLocked = (activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled) || (activeProvider === 'qianfan' && providers.qianfan.codingPlanEnabled) || (activeProvider === 'xiaomi' && providers.xiaomi.codingPlanEnabled) || (activeProvider === 'minimax' && minimaxIsOAuthMode) || (activeProvider === 'openai' && openaiIsOAuthMode) || (activeProvider === 'xai' && xaiIsOAuthMode);
 
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
+  // 内容区下方仍有未滚出的内容时，在底部按钮区上方显示渐隐遮罩
+  const [footerFadeVisible, setFooterFadeVisible] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const emailCopiedTimerRef = useRef<number | null>(null);
   const openClawGatewayCopiedTimerRef = useRef<number | null>(null);
@@ -816,6 +1450,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [newModelName, setNewModelName] = useState('');
   const [newModelId, setNewModelId] = useState('');
   const [newModelSupportsImage, setNewModelSupportsImage] = useState(false);
+  const [newModelSupportsThinking, setNewModelSupportsThinking] = useState(false);
   const [newModelContextWindow, setNewModelContextWindow] = useState<number | undefined>(undefined);
   const [newModelCustomParams, setNewModelCustomParams] = useState<string>('');
   const [modelFormError, setModelFormError] = useState<string | null>(null);
@@ -877,6 +1512,7 @@ const Settings: React.FC<SettingsProps> = ({
 
   const handleCopyContactEmail = useCallback(async () => {
     const copied = await copyTextToClipboard(ABOUT_CONTACT_EMAIL);
+    reportAboutAction('copy_contact_email', copied ? 'success' : 'failed');
     if (copied) {
       setEmailCopied(true);
       if (emailCopiedTimerRef.current != null) {
@@ -902,6 +1538,7 @@ const Settings: React.FC<SettingsProps> = ({
 
       if (!result.updateFound) {
         setUpdateCheckStatus('upToDate');
+        reportAboutAction('check_update', 'up_to_date');
         if (updateCheckTimerRef.current != null) {
           window.clearTimeout(updateCheckTimerRef.current);
         }
@@ -914,16 +1551,20 @@ const Settings: React.FC<SettingsProps> = ({
 
       if (result.state.status === AppUpdateStatus.Ready) {
         setUpdateCheckStatus('ready');
+        reportAboutAction('check_update', 'ready');
       } else if (result.state.status === AppUpdateStatus.Downloading) {
         setUpdateCheckStatus('downloading');
+        reportAboutAction('check_update', 'downloading');
       } else {
         setUpdateCheckStatus('idle');
+        reportAboutAction('check_update', 'update_found');
       }
 
       if (result.state.info) {
         onUpdateFound?.(result.state.info);
       }
     } catch {
+      reportAboutAction('check_update', 'failed');
       setUpdateCheckStatus('error');
       if (updateCheckTimerRef.current != null) {
         window.clearTimeout(updateCheckTimerRef.current);
@@ -952,14 +1593,17 @@ const Settings: React.FC<SettingsProps> = ({
   }, [appUpdateState?.progress?.percent, updateCheckStatus]);
 
   const handleOpenUserManual = useCallback(() => {
+    reportAboutAction('open_user_manual', 'success');
     void window.electron.shell.openExternal(ABOUT_USER_MANUAL_URL);
   }, []);
 
   const handleOpenUserCommunity = useCallback(() => {
+    reportAboutAction('open_user_community', 'success');
     void window.electron.shell.openExternal(ABOUT_USER_COMMUNITY_URL);
   }, []);
 
   const handleOpenServiceTerms = useCallback(() => {
+    reportAboutAction('open_service_terms', 'success');
     void window.electron.shell.openExternal(ABOUT_SERVICE_TERMS_URL);
   }, []);
 
@@ -975,9 +1619,11 @@ const Settings: React.FC<SettingsProps> = ({
       const result = await window.electron.log.exportZip();
       if (!result.success) {
         setError(result.error || i18nService.t('aboutExportLogsFailed'));
+        reportAboutAction('export_logs', 'failed');
         return;
       }
       if (result.canceled) {
+        reportAboutAction('export_logs', 'canceled');
         return;
       }
 
@@ -991,8 +1637,12 @@ const Settings: React.FC<SettingsProps> = ({
       } else {
         setNoticeMessage(i18nService.t('aboutExportLogsSuccess'));
       }
+      reportAboutAction('export_logs', 'success', {
+        missingEntryCount: result.missingEntries?.length ?? 0,
+      });
     } catch (exportError) {
       setError(exportError instanceof Error ? exportError.message : i18nService.t('aboutExportLogsFailed'));
+      reportAboutAction('export_logs', 'failed');
     } finally {
       setIsExportingLogs(false);
     }
@@ -1004,6 +1654,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
   const [skipMissedJobs, setSkipMissedJobs] = useState<boolean>(coworkConfig.skipMissedJobs ?? true);
+  const [openClawHeartbeatEnabled, setOpenClawHeartbeatEnabled] = useState<boolean>(coworkConfig.openClawHeartbeatEnabled ?? true);
   const [embeddingEnabled, setEmbeddingEnabled] = useState<boolean>(coworkConfig.embeddingEnabled ?? false);
   const [embeddingProvider, setEmbeddingProvider] = useState<string>(coworkConfig.embeddingProvider ?? 'openai');
   const [embeddingModel, setEmbeddingModel] = useState<string>(coworkConfig.embeddingModel ?? '');
@@ -1026,6 +1677,10 @@ const Settings: React.FC<SettingsProps> = ({
   const [coworkMemoryEditingId, setCoworkMemoryEditingId] = useState<string | null>(null);
   const [coworkMemoryDraftText, setCoworkMemoryDraftText] = useState<string>('');
   const [showMemoryModal, setShowMemoryModal] = useState<boolean>(false);
+  const [coworkMemoryRawMode, setCoworkMemoryRawMode] = useState<boolean>(false);
+  const [coworkMemoryRawText, setCoworkMemoryRawText] = useState<string>('');
+  const [coworkMemoryRawSaving, setCoworkMemoryRawSaving] = useState<boolean>(false);
+  const [coworkMemoryExpandedIds, setCoworkMemoryExpandedIds] = useState<Set<string>>(new Set());
   const [openClawEngineStatus, setOpenClawEngineStatus] = useState<OpenClawEngineStatus | null>(null);
   const [showOpenClawRepairConfirm, setShowOpenClawRepairConfirm] = useState<boolean>(false);
   const [isRepairingOpenClaw, setIsRepairingOpenClaw] = useState<boolean>(false);
@@ -1041,6 +1696,7 @@ const Settings: React.FC<SettingsProps> = ({
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
     setSkipMissedJobs(coworkConfig.skipMissedJobs ?? true);
+    setOpenClawHeartbeatEnabled(coworkConfig.openClawHeartbeatEnabled ?? true);
     setEmbeddingEnabled(coworkConfig.embeddingEnabled ?? false);
     setEmbeddingProvider(coworkConfig.embeddingProvider ?? 'openai');
     setEmbeddingModel(coworkConfig.embeddingModel ?? '');
@@ -1059,6 +1715,7 @@ const Settings: React.FC<SettingsProps> = ({
     coworkConfig.memoryLlmJudgeEnabled,
     coworkConfig.openClawSessionPolicy?.keepAlive,
     coworkConfig.skipMissedJobs,
+    coworkConfig.openClawHeartbeatEnabled,
     coworkConfig.embeddingEnabled,
     coworkConfig.embeddingProvider,
     coworkConfig.embeddingModel,
@@ -1126,18 +1783,32 @@ const Settings: React.FC<SettingsProps> = ({
       const config = configService.getConfig();
 
       // Set general settings
+      const resolvedUiFontSize = normalizeFontPreference(
+        config.uiFontSize,
+        FontPreferences.UiFontSizeDefault,
+        FontPreferences.UiFontSizeMin,
+        FontPreferences.UiFontSizeMax,
+      );
+      const resolvedCodeFontSize = normalizeFontPreference(
+        config.codeFontSize,
+        FontPreferences.CodeFontSizeDefault,
+        FontPreferences.CodeFontSizeMin,
+        FontPreferences.CodeFontSizeMax,
+      );
       initialThemeRef.current = config.theme;
+      initialUiFontSizeRef.current = resolvedUiFontSize;
+      initialCodeFontSizeRef.current = resolvedCodeFontSize;
       initialLanguageRef.current = config.language;
       setTheme(config.theme);
+      setUiFontSize(resolvedUiFontSize);
+      setCodeFontSize(resolvedCodeFontSize);
       setLanguage(config.language);
       setUseSystemProxy(config.useSystemProxy ?? false);
       setSqliteAutoBackupEnabled(config.sqliteAutoBackupEnabled === true);
+      setUsageAnalyticsEnabled(config.usageAnalyticsEnabled !== false);
       setTaskCompletionNotificationsEnabled(
         normalizeNotificationSettings(config.notificationSettings).taskCompletionNotificationsEnabled,
       );
-      setVoiceInputRecognitionMode(config.voiceInput?.recognitionMode === VoiceInputRecognitionMode.Short
-        ? VoiceInputRecognitionMode.Short
-        : VoiceInputRecognitionMode.Realtime);
       setBrowserWebAccess(normalizeBrowserWebAccessConfig(config.browserWebAccess));
       const savedTestMode = config.app?.testMode ?? false;
       setTestMode(savedTestMode);
@@ -1145,6 +1816,7 @@ const Settings: React.FC<SettingsProps> = ({
 
       // Load auto-launch setting
       window.electron.autoLaunch.get().then(({ enabled }) => {
+        console.log(`[Renderer][Settings] loaded auto-launch setting: enabled=${enabled}`);
         setAutoLaunchState(enabled);
       }).catch(err => {
         console.error('Failed to load auto-launch setting:', err);
@@ -1374,12 +2046,18 @@ const Settings: React.FC<SettingsProps> = ({
   useEffect(() => {
     const initialThemeId = initialThemeIdRef.current;
     const initialTheme = initialThemeRef.current;
+    const initialUiFontSize = initialUiFontSizeRef.current;
+    const initialCodeFontSize = initialCodeFontSizeRef.current;
     const initialLanguage = initialLanguageRef.current;
     return () => {
       if (didSaveRef.current) {
         return;
       }
       themeService.restoreTheme(initialThemeId, initialTheme);
+      applyTypographyPreferences({
+        uiFontSize: initialUiFontSize,
+        codeFontSize: initialCodeFontSize,
+      });
       i18nService.setLanguage(initialLanguage, { persist: false });
     };
   }, []);
@@ -1390,6 +2068,33 @@ const Settings: React.FC<SettingsProps> = ({
       contentRef.current.scrollTop = 0;
     }
   }, [activeTab]);
+
+  // 跟踪内容区滚动/尺寸/内容变化，决定底部渐隐遮罩是否显示
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      setFooterFadeVisible(el.scrollHeight - el.scrollTop - el.clientHeight > 1);
+    };
+    const scheduleUpdate = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(update);
+    };
+    scheduleUpdate();
+    el.addEventListener('scroll', scheduleUpdate, { passive: true });
+    const resizeObserver = new ResizeObserver(scheduleUpdate);
+    resizeObserver.observe(el);
+    const mutationObserver = new MutationObserver(scheduleUpdate);
+    mutationObserver.observe(el, { childList: true, subtree: true });
+    return () => {
+      el.removeEventListener('scroll', scheduleUpdate);
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, []);
 
   useEffect(() => {
     setNoticeMessage(buildNoticeMessage());
@@ -1475,25 +2180,42 @@ const Settings: React.FC<SettingsProps> = ({
     setPendingDeleteProvider(key);
   };
 
-  const confirmDeleteCustomProvider = () => {
+  const confirmDeleteCustomProvider = async () => {
     const key = pendingDeleteProvider;
     if (!key) return;
     setPendingDeleteProvider(null);
+    const currentConfig = configService.getConfig();
     setProviders(prev => {
       const next = { ...prev };
       delete next[key];
       return next;
     });
-    // Persist the deletion immediately so it survives window close
-    const currentConfig = configService.getConfig();
-    const updatedProviders = { ...currentConfig.providers };
-    delete updatedProviders[key];
-    configService.updateConfig({ providers: updatedProviders as AppConfig['providers'] });
-    // If the deleted provider was active, switch to first visible
+    // If the deleted provider was active, switch to first visible BEFORE the
+    // await below. Otherwise the intermediate render triggered while awaiting
+    // would still have activeProvider pointing at the just-deleted key, and the
+    // model settings render accesses providers[activeProvider].* without guards,
+    // crashing the whole view (white screen).
     if (activeProvider === key) {
       const visibleKeys = Object.keys(visibleProviders).filter(k => k !== key) as ProviderType[];
       const firstEnabled = visibleKeys.find(k => visibleProviders[k]?.enabled);
       setActiveProvider(firstEnabled ?? visibleKeys[0] ?? providerKeys[0]);
+    }
+    // Persist the deletion immediately so it survives window close
+    const updatedProviders = { ...currentConfig.providers };
+    delete updatedProviders[key];
+    try {
+      await configService.updateConfig({ providers: updatedProviders as AppConfig['providers'] });
+      if (usageAnalyticsEnabled) {
+        const customModelSettingsSummary = buildCustomModelSettingsAnalyticsSummary(
+          (currentConfig.providers ?? providers) as ProvidersConfig,
+          updatedProviders as ProvidersConfig,
+        );
+        if (customModelSettingsSummary) {
+          reportCustomModelSettingsSaved(customModelSettingsSummary);
+        }
+      }
+    } catch (deleteError) {
+      console.warn('[Settings] failed to persist custom provider deletion:', deleteError);
     }
   };
 
@@ -1760,9 +2482,9 @@ const Settings: React.FC<SettingsProps> = ({
     return () => { cancelled = true; };
   }, [activeProvider]);
 
-  const persistOpenAIProvidersConfigInBackground = useCallback((nextProviders: ProvidersConfig) => {
+  const persistProviderAuthConfigInBackground = useCallback((nextProviders: ProvidersConfig) => {
     void configService.updateConfig({ providers: nextProviders }).catch((saveError) => {
-      console.error('[Settings] failed to save OpenAI OAuth provider state:', saveError);
+      console.error('[Settings] failed to save provider auth state:', saveError);
       setError(i18nService.t('failedToSaveSettings'));
     });
   }, []);
@@ -1786,7 +2508,7 @@ const Settings: React.FC<SettingsProps> = ({
       setProviders(nextProviders);
       setOpenaiOAuthStatus({ loggedIn: true, email: result.email ?? undefined });
       setOpenaiOAuthPhase({ kind: 'success', email: result.email ?? undefined });
-      persistOpenAIProvidersConfigInBackground(nextProviders);
+      persistProviderAuthConfigInBackground(nextProviders);
       setTimeout(() => setOpenaiOAuthPhase({ kind: 'idle' }), 1500);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1818,7 +2540,7 @@ const Settings: React.FC<SettingsProps> = ({
     setProviders(nextProviders);
     setOpenaiOAuthStatus({ loggedIn: false });
     setOpenaiOAuthPhase({ kind: 'idle' });
-    persistOpenAIProvidersConfigInBackground(nextProviders);
+    persistProviderAuthConfigInBackground(nextProviders);
     try {
       await window.electron.openaiCodexOAuth.logout();
     } catch {
@@ -1826,10 +2548,105 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
+  // Sync the persisted xAI login state (OpenClaw auth-profiles store) into
+  // local UI state whenever the xAI provider tab becomes active. Also
+  // reconciles stale providers config (e.g. credential removed externally).
+  useEffect(() => {
+    let cancelled = false;
+    if (activeProvider !== 'xai') return;
+    void window.electron.xaiOAuth.status().then((status) => {
+      if (cancelled) return;
+      if (status.loggedIn) {
+        setXaiOAuthStatus({ loggedIn: true, email: status.email });
+      } else {
+        setXaiOAuthStatus({ loggedIn: false });
+        setProviders(prev => {
+          if (prev.xai.authType !== 'oauth') return prev;
+          return { ...prev, xai: { ...prev.xai, authType: 'apikey' } };
+        });
+      }
+    }).catch(() => {
+      if (!cancelled) setXaiOAuthStatus({ loggedIn: false });
+    });
+    return () => { cancelled = true; };
+  }, [activeProvider]);
+
+  const handleXaiOAuthLogin = async () => {
+    setXaiOAuthPhase({ kind: 'pending' });
+    // The main process falls back to the device-code flow when the loopback
+    // callback port is taken — surface the user code as soon as it arrives.
+    const unsubscribeDeviceCode = window.electron.xaiOAuth.onDeviceCode((info) => {
+      setXaiOAuthPhase({
+        kind: 'device_code',
+        userCode: info.userCode,
+        verificationUri: info.verificationUriComplete ?? info.verificationUri,
+      });
+    });
+    try {
+      const result = await window.electron.xaiOAuth.start();
+      if (!result.success) {
+        if (/cancelled/i.test(result.error)) {
+          setXaiOAuthPhase({ kind: 'idle' });
+        } else {
+          setXaiOAuthPhase({ kind: 'error', message: result.error });
+        }
+        return;
+      }
+      const nextProviders: ProvidersConfig = {
+        ...providers,
+        xai: {
+          ...providers.xai,
+          enabled: true,
+          authType: 'oauth',
+        },
+      };
+      setProviders(nextProviders);
+      setXaiOAuthStatus({ loggedIn: true, email: result.email ?? undefined });
+      setXaiOAuthPhase({ kind: 'success', email: result.email ?? undefined });
+      persistProviderAuthConfigInBackground(nextProviders);
+      setTimeout(() => setXaiOAuthPhase({ kind: 'idle' }), 1500);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setXaiOAuthPhase({ kind: 'error', message });
+    } finally {
+      unsubscribeDeviceCode();
+    }
+  };
+
+  const handleCancelXaiOAuthLogin = async () => {
+    try {
+      await window.electron.xaiOAuth.cancel();
+    } catch {
+      /* ignore — we still want to reset the UI */
+    }
+    setXaiOAuthPhase({ kind: 'idle' });
+  };
+
+  const handleXaiOAuthLogout = async () => {
+    const nextProviders: ProvidersConfig = {
+      ...providers,
+      xai: {
+        ...providers.xai,
+        enabled: providers.xai.apiKey.trim().length > 0,
+        authType: 'apikey' as const,
+      },
+    };
+    setProviders(nextProviders);
+    setXaiOAuthStatus({ loggedIn: false });
+    setXaiOAuthPhase({ kind: 'idle' });
+    persistProviderAuthConfigInBackground(nextProviders);
+    try {
+      await window.electron.xaiOAuth.logout();
+    } catch {
+      /* ignore — credential may already be gone */
+    }
+  };
+
   const hasCoworkConfigChanges = coworkAgentEngine !== coworkConfig.agentEngine
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled
     || skipMissedJobs !== (coworkConfig.skipMissedJobs ?? true)
+    || openClawHeartbeatEnabled !== (coworkConfig.openClawHeartbeatEnabled ?? true)
     || openClawSessionKeepAlive !== (coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays)
     || embeddingEnabled !== (coworkConfig.embeddingEnabled ?? false)
     || embeddingProvider !== (coworkConfig.embeddingProvider ?? 'openai')
@@ -1979,11 +2796,17 @@ const Settings: React.FC<SettingsProps> = ({
     try {
       const result = await coworkService.repairOpenClawGatewayState();
       setOpenClawRepairResult(result);
+      reportAgentEngineMaintenanceAction(
+        'repair_gateway_state',
+        result.success ? 'success' : 'failed',
+        result.success ? {} : { errorCode: result.errorCode ?? 'unknown' },
+      );
     } catch (repairError) {
       setOpenClawRepairResult({
         success: false,
         error: repairError instanceof Error ? repairError.message : i18nService.t('openClawRepairFailed'),
       });
+      reportAgentEngineMaintenanceAction('repair_gateway_state', 'failed', { errorCode: 'unknown' });
     } finally {
       setIsRepairingOpenClaw(false);
     }
@@ -2039,6 +2862,7 @@ const Settings: React.FC<SettingsProps> = ({
       const result = await window.electron.openclaw.dataMigration.backup();
       if (!result.success) {
         setError(result.error || i18nService.t('openClawDataBackupFailed'));
+        reportAgentEngineMaintenanceAction('backup_data', 'failed', { errorCode: 'unknown' });
         return;
       }
       if (result.canceled) {
@@ -2048,8 +2872,12 @@ const Settings: React.FC<SettingsProps> = ({
         setOpenClawDataBackupResult({ path: result.path, sizeBytes: result.sizeBytes });
       }
       setNoticeMessage(i18nService.t('openClawDataBackupSuccess'));
+      reportAgentEngineMaintenanceAction('backup_data', 'success', {
+        sizeBytes: result.sizeBytes,
+      });
     } catch (backupError) {
       setError(backupError instanceof Error ? backupError.message : i18nService.t('openClawDataBackupFailed'));
+      reportAgentEngineMaintenanceAction('backup_data', 'failed', { errorCode: 'unknown' });
     } finally {
       setIsBackingUpOpenClawData(false);
     }
@@ -2067,6 +2895,7 @@ const Settings: React.FC<SettingsProps> = ({
       const result = await window.electron.openclaw.dataMigration.restore();
       if (!result.success) {
         setError(result.error || i18nService.t('openClawDataMigrationFailed'));
+        reportAgentEngineMaintenanceAction('restore_data', 'failed', { errorCode: 'unknown' });
         return;
       }
       if (result.canceled) {
@@ -2076,8 +2905,10 @@ const Settings: React.FC<SettingsProps> = ({
         keepLoadingUntilRestart = true;
         setNoticeMessage(i18nService.t('openClawDataMigrationRestarting'));
       }
+      reportAgentEngineMaintenanceAction('restore_data', 'success');
     } catch (restoreError) {
       setError(restoreError instanceof Error ? restoreError.message : i18nService.t('openClawDataMigrationFailed'));
+      reportAgentEngineMaintenanceAction('restore_data', 'failed', { errorCode: 'unknown' });
     } finally {
       if (!keepLoadingUntilRestart) {
         setIsRestoringOpenClawData(false);
@@ -2124,6 +2955,7 @@ const Settings: React.FC<SettingsProps> = ({
 
     setCoworkMemoryListLoading(true);
     try {
+      const operation = coworkMemoryEditingId ? 'updated' : 'created';
       if (coworkMemoryEditingId) {
         await coworkService.updateMemoryEntry({
           id: coworkMemoryEditingId,
@@ -2136,6 +2968,12 @@ const Settings: React.FC<SettingsProps> = ({
       }
       resetCoworkMemoryEditor();
       await loadCoworkMemoryData();
+      reportMemoryEntryChanged(
+        operation,
+        operation === 'created'
+          ? (coworkMemoryStats?.total ?? coworkMemoryEntries.length) + 1
+          : coworkMemoryStats?.total,
+      );
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : i18nService.t('coworkMemoryCrudSaveFailed'));
     } finally {
@@ -2157,6 +2995,10 @@ const Settings: React.FC<SettingsProps> = ({
         resetCoworkMemoryEditor();
       }
       await loadCoworkMemoryData();
+      reportMemoryEntryChanged(
+        'deleted',
+        Math.max(0, (coworkMemoryStats?.total ?? coworkMemoryEntries.length) - 1),
+      );
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : i18nService.t('coworkMemoryCrudDeleteFailed'));
     } finally {
@@ -2167,6 +3009,46 @@ const Settings: React.FC<SettingsProps> = ({
   const handleOpenCoworkMemoryModal = () => {
     resetCoworkMemoryEditor();
     setShowMemoryModal(true);
+  };
+
+  const handleEnterCoworkMemoryRawMode = async () => {
+    setError(null);
+    const content = await coworkService.readMemoryFileRaw();
+    if (content === null) {
+      setError(i18nService.t('coworkMemoryRawLoadFailed'));
+      return;
+    }
+    setCoworkMemoryRawText(content);
+    setCoworkMemoryRawMode(true);
+  };
+
+  const handleSaveCoworkMemoryRaw = async () => {
+    if (coworkMemoryRawSaving) return;
+    setError(null);
+    setCoworkMemoryRawSaving(true);
+    try {
+      const result = await coworkService.writeMemoryFileRaw(coworkMemoryRawText);
+      if (!result.success) {
+        setError(result.error || i18nService.t('coworkMemoryRawSaveFailed'));
+        return;
+      }
+      setCoworkMemoryRawMode(false);
+      await loadCoworkMemoryData();
+    } finally {
+      setCoworkMemoryRawSaving(false);
+    }
+  };
+
+  const toggleCoworkMemoryExpandedId = (id: string) => {
+    setCoworkMemoryExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
   };
 
   // Toggle provider enabled status
@@ -2314,6 +3196,65 @@ const Settings: React.FC<SettingsProps> = ({
         extraArgs: [],
         webFetch: defaultBrowserWebAccessConfig.webFetch,
       });
+      const previousConfig = configService.getConfig();
+      const previousBrowserWebAccess = normalizeBrowserWebAccessConfig(previousConfig.browserWebAccess);
+      const previousShortcuts: ShortcutConfig = {
+        ...defaultConfig.shortcuts!,
+        ...(previousConfig.shortcuts || {}),
+      };
+      const previousProviders = previousConfig.providers
+        ? normalizeProvidersForSettingsSave(previousConfig.providers as ProvidersConfig)
+        : normalizedProviders;
+      const previousSkipMissedJobs = coworkConfig.skipMissedJobs ?? true;
+      const previousOpenClawHeartbeatEnabled = coworkConfig.openClawHeartbeatEnabled ?? true;
+      const previousAgentEngine = coworkConfig.agentEngine || 'openclaw';
+      const previousOpenClawSessionKeepAlive = coworkConfig.openClawSessionPolicy?.keepAlive
+        || OpenClawSessionKeepAliveValues.ThirtyDays;
+      const previousMemorySettings = {
+        embeddingEnabled: coworkConfig.embeddingEnabled ?? false,
+        embeddingModel: coworkConfig.embeddingModel ?? '',
+        embeddingProvider: coworkConfig.embeddingProvider ?? 'openai',
+        embeddingRemoteApiKey: coworkConfig.embeddingRemoteApiKey ?? '',
+        embeddingRemoteBaseUrl: coworkConfig.embeddingRemoteBaseUrl ?? '',
+        embeddingVectorWeight: coworkConfig.embeddingVectorWeight ?? 0.7,
+        memoryEnabled: coworkConfig.memoryEnabled ?? true,
+        memoryLlmJudgeEnabled: coworkConfig.memoryLlmJudgeEnabled ?? false,
+      };
+      const nextMemorySettings = {
+        embeddingEnabled,
+        embeddingModel,
+        embeddingProvider,
+        embeddingRemoteApiKey,
+        embeddingRemoteBaseUrl,
+        embeddingVectorWeight,
+        memoryEnabled: coworkMemoryEnabled,
+        memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
+      };
+      const previousDreamingSettings = {
+        dreamingEnabled: coworkConfig.dreamingEnabled ?? false,
+        dreamingFrequency: coworkConfig.dreamingFrequency ?? '0 3 * * *',
+      };
+      const nextDreamingSettings = {
+        dreamingEnabled,
+        dreamingFrequency,
+      };
+      const previousTaskCompletionNotificationsEnabled = normalizeNotificationSettings(
+        previousConfig.notificationSettings,
+      ).taskCompletionNotificationsEnabled;
+      const previousThemeId = initialThemeIdRef.current;
+      const previousUiFontSize = normalizeFontPreference(
+        previousConfig.uiFontSize,
+        FontPreferences.UiFontSizeDefault,
+        FontPreferences.UiFontSizeMin,
+        FontPreferences.UiFontSizeMax,
+      );
+      const previousCodeFontSize = normalizeFontPreference(
+        previousConfig.codeFontSize,
+        FontPreferences.CodeFontSizeDefault,
+        FontPreferences.CodeFontSizeMin,
+        FontPreferences.CodeFontSizeMax,
+      );
+      let savedPluginPendingChanges: PluginPendingChanges | null = null;
 
       await configService.updateConfig({
         api: {
@@ -2322,25 +3263,26 @@ const Settings: React.FC<SettingsProps> = ({
         },
         providers: normalizedProviders, // Save all providers configuration
         theme,
+        uiFontSize,
+        codeFontSize,
         language,
         useSystemProxy,
         sqliteAutoBackupEnabled,
+        usageAnalyticsEnabled,
         notificationSettings: {
           taskCompletionNotificationsEnabled,
-        },
-        voiceInput: {
-          recognitionMode: voiceInputRecognitionMode,
         },
         browserWebAccess: normalizedBrowserWebAccess,
         shortcuts,
         app: {
-          ...configService.getConfig().app,
+          ...previousConfig.app,
           testMode,
         },
       });
 
       // 应用主题
       themeService.setTheme(theme);
+      applyTypographyPreferences({ uiFontSize, codeFontSize });
 
       // 应用语言
       i18nService.setLanguage(language, { persist: false });
@@ -2380,6 +3322,7 @@ const Settings: React.FC<SettingsProps> = ({
           memoryEnabled: coworkMemoryEnabled,
           memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
           skipMissedJobs,
+          openClawHeartbeatEnabled,
           embeddingEnabled,
           embeddingProvider,
           embeddingModel,
@@ -2416,7 +3359,108 @@ const Settings: React.FC<SettingsProps> = ({
         const pendingChanges = pluginsSettingsRef.current.getPendingChanges();
         if (pendingChanges) {
           await window.electron?.plugins.batchSave(pendingChanges);
+          savedPluginPendingChanges = pendingChanges;
           pluginsSettingsRef.current.resetDirty();
+        }
+      }
+
+      if (usageAnalyticsEnabled) {
+        if (previousConfig.language !== language) {
+          reportGeneralSettingChanged('language', language, previousConfig.language);
+        }
+        if ((previousConfig.useSystemProxy ?? false) !== useSystemProxy) {
+          reportGeneralSettingChanged('useSystemProxy', useSystemProxy, previousConfig.useSystemProxy ?? false);
+        }
+        if ((previousConfig.sqliteAutoBackupEnabled === true) !== sqliteAutoBackupEnabled) {
+          reportGeneralSettingChanged(
+            'sqliteAutoBackupEnabled',
+            sqliteAutoBackupEnabled,
+            previousConfig.sqliteAutoBackupEnabled === true,
+          );
+        }
+        if (previousTaskCompletionNotificationsEnabled !== taskCompletionNotificationsEnabled) {
+          reportGeneralSettingChanged(
+            'taskCompletionNotificationsEnabled',
+            taskCompletionNotificationsEnabled,
+            previousTaskCompletionNotificationsEnabled,
+          );
+        }
+        if (previousSkipMissedJobs !== skipMissedJobs) {
+          reportGeneralSettingChanged('skipMissedJobs', skipMissedJobs, previousSkipMissedJobs);
+        }
+        if (previousConfig.theme !== theme) {
+          reportAppearanceSettingChanged('theme', theme, previousConfig.theme);
+        }
+        if (previousThemeId !== themeId) {
+          reportAppearanceSettingChanged('themeId', themeId, previousThemeId);
+        }
+        if (previousUiFontSize !== uiFontSize) {
+          reportAppearanceSettingChanged('uiFontSize', uiFontSize, previousUiFontSize);
+        }
+        if (previousCodeFontSize !== codeFontSize) {
+          reportAppearanceSettingChanged('codeFontSize', codeFontSize, previousCodeFontSize);
+        }
+        const browserSettingParams = buildBrowserSettingAnalyticsParams(
+          previousBrowserWebAccess,
+          normalizedBrowserWebAccess,
+        );
+        if (browserSettingParams) {
+          reportBrowserSettingChanged(browserSettingParams);
+        }
+        if (previousAgentEngine !== coworkAgentEngine) {
+          reportAgentEngineSettingChanged('agentEngine', coworkAgentEngine, previousAgentEngine);
+        }
+        if (previousOpenClawHeartbeatEnabled !== openClawHeartbeatEnabled) {
+          reportAgentEngineSettingChanged(
+            'openClawHeartbeatEnabled',
+            openClawHeartbeatEnabled,
+            previousOpenClawHeartbeatEnabled,
+          );
+        }
+        if (previousOpenClawSessionKeepAlive !== openClawSessionKeepAlive) {
+          reportAgentEngineSettingChanged(
+            'openClawSessionKeepAlive',
+            openClawSessionKeepAlive,
+            previousOpenClawSessionKeepAlive,
+          );
+        }
+        const memorySettingsSummary = buildMemorySettingAnalyticsSummary(
+          previousMemorySettings,
+          nextMemorySettings,
+        );
+        if (memorySettingsSummary) {
+          reportMemorySettingChanged(memorySettingsSummary);
+        }
+        const dreamingSettingsSummary = buildDreamingSettingAnalyticsSummary(
+          previousDreamingSettings,
+          nextDreamingSettings,
+        );
+        if (dreamingSettingsSummary) {
+          reportDreamingSettingChanged(dreamingSettingsSummary);
+        }
+        const shortcutSettingsSummary = buildShortcutSettingAnalyticsSummary(
+          previousShortcuts,
+          shortcuts,
+        );
+        if (shortcutSettingsSummary) {
+          reportShortcutSettingChanged(shortcutSettingsSummary);
+        }
+        const pluginSettingsSummary = buildPluginSettingsAnalyticsSummary(savedPluginPendingChanges);
+        if (pluginSettingsSummary) {
+          reportPluginSettingsSaved(pluginSettingsSummary);
+        }
+        const customModelSettingsSummary = buildCustomModelSettingsAnalyticsSummary(
+          previousProviders,
+          normalizedProviders,
+        );
+        if (customModelSettingsSummary) {
+          reportCustomModelSettingsSaved(customModelSettingsSummary);
+        }
+        if (previousConfig.usageAnalyticsEnabled === false) {
+          void reportYdAnalyzer({
+            action: LogReporterAction.UsageAnalyticsEnabled,
+            source: SettingsAnalyticsSource.General,
+          });
         }
       }
 
@@ -2532,18 +3576,20 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelName('');
     setNewModelId('');
     setNewModelSupportsImage(false);
+    setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
     setNewModelCustomParams('');
     setModelFormError(null);
   };
 
-  const handleEditModel = (modelId: string, modelName: string, supportsImage?: boolean, contextWindow?: number, customParams?: Record<string, unknown>) => {
+  const handleEditModel = (modelId: string, modelName: string, supportsImage?: boolean, supportsThinking?: boolean, contextWindow?: number, customParams?: Record<string, unknown>) => {
     setIsAddingModel(false);
     setIsEditingModel(true);
     setEditingModelId(modelId);
     setNewModelName(modelName);
     setNewModelId(modelId);
     setNewModelSupportsImage(!!supportsImage);
+    setNewModelSupportsThinking(!!supportsThinking);
     setNewModelContextWindow(contextWindow);
     setNewModelCustomParams(
       customParams && Object.keys(customParams).length > 0
@@ -2624,6 +3670,11 @@ const Settings: React.FC<SettingsProps> = ({
         modelId,
         newModelSupportsImage,
       ),
+      ...(ProviderRegistry.resolveModelSupportsThinking(
+        activeProvider,
+        modelId,
+        newModelSupportsThinking,
+      ) ? { supportsThinking: true } : {}),
       ...(newModelContextWindow !== undefined ? { contextWindow: newModelContextWindow } : {}),
       ...(parsedCustomParams && Object.keys(parsedCustomParams).length > 0
         ? { customParams: parsedCustomParams }
@@ -2647,6 +3698,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelName('');
     setNewModelId('');
     setNewModelSupportsImage(false);
+    setNewModelSupportsThinking(false);
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -2658,6 +3710,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelName('');
     setNewModelId('');
     setNewModelSupportsImage(false);
+    setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
     setNewModelCustomParams('');
     setModelFormError(null);
@@ -2690,6 +3743,7 @@ const Settings: React.FC<SettingsProps> = ({
   const handleTestConnection = async () => {
     const testingProvider = activeProvider;
     const providerConfig = providers[testingProvider];
+    const testingApiFormat = getEffectiveApiFormat(testingProvider, providerConfig.apiFormat);
     setIsTesting(true);
     setIsTestResultModalOpen(false);
     setTestResult(null);
@@ -2698,6 +3752,9 @@ const Settings: React.FC<SettingsProps> = ({
 
 
     if (providerRequiresApiKey(testingProvider) && !hasValidAuth) {
+      reportCustomModelConnectionTested(testingProvider, testingApiFormat, 'failed', {
+        failureReason: 'missing_api_key',
+      });
       showTestResultModal({ success: false, message: i18nService.t('apiKeyRequired') }, testingProvider);
       setIsTesting(false);
       return;
@@ -2706,6 +3763,9 @@ const Settings: React.FC<SettingsProps> = ({
     // 获取第一个可用模型 - use a shallow copy to avoid mutating state
     const originalModel = providerConfig.models?.[0];
     if (!originalModel) {
+      reportCustomModelConnectionTested(testingProvider, testingApiFormat, 'failed', {
+        failureReason: 'missing_model',
+      });
       showTestResultModal({ success: false, message: i18nService.t('noModelsConfigured') }, testingProvider);
       setIsTesting(false);
       return;
@@ -2716,8 +3776,8 @@ const Settings: React.FC<SettingsProps> = ({
     try {
       let response: Awaited<ReturnType<typeof window.electron.api.fetch>>;
       // Apply Coding Plan endpoint switch
-      let effectiveBaseUrl = resolveBaseUrl(testingProvider, providerConfig.baseUrl, getEffectiveApiFormat(testingProvider, providerConfig.apiFormat));
-      let effectiveApiFormat = getEffectiveApiFormat(testingProvider, providerConfig.apiFormat);
+      let effectiveBaseUrl = resolveBaseUrl(testingProvider, providerConfig.baseUrl, testingApiFormat);
+      let effectiveApiFormat = testingApiFormat;
 
       // Handle Coding Plan endpoint switch for supported providers
       if ((providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled && (effectiveApiFormat === 'anthropic' || effectiveApiFormat === 'openai')) {
@@ -2734,6 +3794,9 @@ const Settings: React.FC<SettingsProps> = ({
       if (testingProvider === ProviderName.Copilot) {
         const result = await window.electron.githubCopilot.refreshToken();
         if (!result.success || !result.token) {
+          reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'failed', {
+            failureReason: 'unknown',
+          });
           showTestResultModal({
             success: false,
             message: result.error || i18nService.t('apiKeyRequired'),
@@ -2833,6 +3896,7 @@ const Settings: React.FC<SettingsProps> = ({
 
       if (response.ok) {
         enableProvider(testingProvider);
+        reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'success');
         showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
       } else {
         const data = response.data || {};
@@ -2840,12 +3904,20 @@ const Settings: React.FC<SettingsProps> = ({
         const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
         if (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('model output limit was reached')) {
           enableProvider(testingProvider);
+          reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'success');
           showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
           return;
         }
+        reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'failed', {
+          failureReason: 'http_error',
+          statusCode: response.status,
+        });
         showTestResultModal({ success: false, message: errorMessage }, testingProvider);
       }
     } catch (err) {
+      reportCustomModelConnectionTested(testingProvider, testingApiFormat, 'failed', {
+        failureReason: 'network_error',
+      });
       showTestResultModal({
         success: false,
         message: err instanceof Error ? err.message : i18nService.t('connectionFailed'),
@@ -3201,6 +4273,22 @@ const Settings: React.FC<SettingsProps> = ({
     return () => document.removeEventListener('keydown', handleSettingsTabShortcut);
   }, [shortcuts, sidebarTabs, handleTabChange]);
 
+  const handleUiFontSizeChange = useCallback((nextValue: number) => {
+    setUiFontSize(nextValue);
+    applyTypographyPreferences({
+      uiFontSize: nextValue,
+      codeFontSize,
+    });
+  }, [codeFontSize]);
+
+  const handleCodeFontSizeChange = useCallback((nextValue: number) => {
+    setCodeFontSize(nextValue);
+    applyTypographyPreferences({
+      uiFontSize,
+      codeFontSize: nextValue,
+    });
+  }, [uiFontSize]);
+
   const renderAppearanceSettings = () => (
     <div className="space-y-8">
       <div>
@@ -3364,6 +4452,31 @@ const Settings: React.FC<SettingsProps> = ({
             </>
           );
         })()}
+
+        <div className="mt-5 divide-y divide-border rounded-xl border border-border bg-surface">
+          <div className="px-4 py-3">
+            <SettingsNumberInputRow
+              id="ui-font-size"
+              title={i18nService.t('uiFontSize')}
+              description={i18nService.t('uiFontSizeDescription')}
+              value={uiFontSize}
+              min={FontPreferences.UiFontSizeMin}
+              max={FontPreferences.UiFontSizeMax}
+              onChange={handleUiFontSizeChange}
+            />
+          </div>
+          <div className="px-4 py-3">
+            <SettingsNumberInputRow
+              id="code-font-size"
+              title={i18nService.t('codeFontSize')}
+              description={i18nService.t('codeFontSizeDescription')}
+              value={codeFontSize}
+              min={FontPreferences.CodeFontSizeMin}
+              max={FontPreferences.CodeFontSizeMax}
+              onChange={handleCodeFontSizeChange}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -3405,15 +4518,25 @@ const Settings: React.FC<SettingsProps> = ({
                 const next = !autoLaunch;
                 setIsUpdatingAutoLaunch(true);
                 try {
+                  console.log(`[Renderer][Settings] updating auto-launch setting: requested=${next}`);
                   const result = await window.electron.autoLaunch.set(next);
+                  console.log(
+                    `[Renderer][Settings] auto-launch update result: success=${result.success}, enabled=${result.enabled ?? 'unknown'}, error=${result.error ?? 'none'}`,
+                  );
                   if (result.success) {
-                    setAutoLaunchState(next);
+                    const previous = autoLaunch;
+                    const actualEnabled = result.enabled ?? next;
+                    setAutoLaunchState(actualEnabled);
+                    reportGeneralSettingChanged('autoLaunch', actualEnabled, previous);
                   } else {
-                    setError(result.error || 'Failed to update auto-launch setting');
+                    if (typeof result.enabled === 'boolean') {
+                      setAutoLaunchState(result.enabled);
+                    }
+                    setError(getAutoLaunchErrorMessage(result.errorCode));
                   }
                 } catch (err) {
                   console.error('Failed to set auto-launch:', err);
-                  setError('Failed to update auto-launch setting');
+                  setError(i18nService.t('autoLaunchUpdateFailed'));
                 } finally {
                   setIsUpdatingAutoLaunch(false);
                 }
@@ -3432,7 +4555,9 @@ const Settings: React.FC<SettingsProps> = ({
                 try {
                   const result = await window.electron.preventSleep.set(next);
                   if (result.success) {
+                    const previous = preventSleep;
                     setPreventSleepState(next);
+                    reportGeneralSettingChanged('preventSleep', next, previous);
                   } else {
                     setError(result.error || 'Failed to update prevent-sleep setting');
                   }
@@ -3472,46 +4597,21 @@ const Settings: React.FC<SettingsProps> = ({
               }}
             />
 
-            <div>
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <h4 className="text-sm font-medium text-foreground">
-                    {i18nService.t('voiceInputRecognitionMode')}
-                  </h4>
-                  <p className="mt-3 text-sm text-secondary">
-                    {i18nService.t('voiceInputRecognitionModeDescription')}
-                  </p>
-                </div>
-                <div className="w-[180px] shrink-0">
-                  <ThemedSelect
-                    id="voiceInputRecognitionMode"
-                    value={voiceInputRecognitionMode}
-                    onChange={(value) => {
-                      setVoiceInputRecognitionMode(value === VoiceInputRecognitionMode.Short
-                        ? VoiceInputRecognitionMode.Short
-                        : VoiceInputRecognitionMode.Realtime);
-                    }}
-                    options={[
-                      {
-                        value: VoiceInputRecognitionMode.Realtime,
-                        label: i18nService.t('voiceInputRecognitionModeRealtime'),
-                      },
-                      {
-                        value: VoiceInputRecognitionMode.Short,
-                        label: i18nService.t('voiceInputRecognitionModeShort'),
-                      },
-                    ]}
-                  />
-                </div>
-              </div>
-            </div>
-
             <SettingsToggleRow
               title={i18nService.t('skipMissedJobs')}
               description={i18nService.t('skipMissedJobsDescription')}
               checked={skipMissedJobs}
               onToggle={() => {
                 setSkipMissedJobs((prev) => !prev);
+              }}
+            />
+
+            <SettingsToggleRow
+              title={i18nService.t('usageAnalyticsEnabled')}
+              description={i18nService.t('usageAnalyticsEnabledDescription')}
+              checked={usageAnalyticsEnabled}
+              onToggle={() => {
+                setUsageAnalyticsEnabled((prev) => !prev);
               }}
             />
 
@@ -3593,6 +4693,43 @@ const Settings: React.FC<SettingsProps> = ({
                             </div>
                           </div>
                         )}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="space-y-3">
+                  <h4 className="text-sm font-medium text-foreground">
+                    {i18nService.t('openClawBackgroundRuntimeTitle')}
+                  </h4>
+
+                  <div className="rounded-xl border border-border bg-surface p-4">
+                    <div className="flex items-start gap-3.5">
+                      <span
+                        className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors ${
+                          openClawHeartbeatEnabled
+                            ? 'bg-primary-muted text-primary'
+                            : 'bg-surface-raised text-secondary'
+                        }`}
+                      >
+                        <SignalIcon className="h-5 w-5" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-3">
+                          <h4 className="min-w-0 text-sm font-medium leading-5 text-foreground">
+                            {i18nService.t('openClawHeartbeatEnabled')}
+                          </h4>
+                          <SettingsSwitch
+                            checked={openClawHeartbeatEnabled}
+                            label={i18nService.t('openClawHeartbeatEnabled')}
+                            onClick={() => {
+                              setOpenClawHeartbeatEnabled((prev) => !prev);
+                            }}
+                          />
+                        </div>
+                        <p className="mt-1.5 text-[13px] leading-5 text-secondary">
+                          {i18nService.t('openClawHeartbeatEnabledDescription')}
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -3764,10 +4901,19 @@ const Settings: React.FC<SettingsProps> = ({
           { key: 'entries' as const, titleKey: 'coworkMemoryTabEntries' },
           { key: 'embedding' as const, titleKey: 'coworkMemoryTabEmbedding' },
         ];
+        const coworkMemoryGroups: Array<{ section?: string; entries: CoworkUserMemoryEntry[] }> = [];
+        for (const entry of coworkMemoryEntries) {
+          const lastGroup = coworkMemoryGroups[coworkMemoryGroups.length - 1];
+          if (lastGroup && (lastGroup.section ?? '') === (entry.section ?? '')) {
+            lastGroup.entries.push(entry);
+          } else {
+            coworkMemoryGroups.push({ section: entry.section, entries: [entry] });
+          }
+        }
         return (
           <div className="flex flex-col h-full space-y-4">
             <div
-              className="flex flex-wrap gap-2 border-b border-border pb-3 shrink-0"
+              className="flex gap-6 border-b border-border shrink-0"
               role="tablist"
               aria-label={i18nService.t('coworkMemoryTitle')}
             >
@@ -3778,10 +4924,10 @@ const Settings: React.FC<SettingsProps> = ({
                   role="tab"
                   aria-selected={memoryTab === tab.key}
                   onClick={() => setMemoryTab(tab.key)}
-                  className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                  className={`-mb-px border-b-2 px-0.5 pb-2.5 text-sm font-medium transition-colors ${
                     memoryTab === tab.key
-                      ? 'bg-primary-muted text-primary'
-                      : 'text-secondary hover:text-foreground hover:bg-surface-raised'
+                      ? 'border-primary text-primary'
+                      : 'border-transparent text-secondary hover:text-foreground'
                   }`}
                 >
                   {i18nService.t(tab.titleKey)}
@@ -3791,7 +4937,7 @@ const Settings: React.FC<SettingsProps> = ({
             <div className="flex-1 min-h-0 overflow-y-auto">
               {memoryTab === 'entries' && (
                 <div className="space-y-4 rounded-xl border px-4 py-4 border-border">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <div className="space-y-1">
                       <div className="text-sm font-medium text-foreground">
                         {i18nService.t('coworkMemoryCrudTitle')}
@@ -3800,72 +4946,169 @@ const Settings: React.FC<SettingsProps> = ({
                         {i18nService.t('coworkMemoryManageHint')}
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={handleOpenCoworkMemoryModal}
-                      className="inline-flex items-center justify-center px-3 py-1.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm transition-colors active:scale-[0.98]"
-                    >
-                      <PlusCircleIcon className="h-4 w-4 mr-1.5" />
-                      {i18nService.t('coworkMemoryCrudCreate')}
-                    </button>
-                  </div>
-
-                  {coworkMemoryStats && (
-                    <div className="text-xs text-secondary">
-                      {`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.total}`}
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => { void handleEnterCoworkMemoryRawMode(); }}
+                          disabled={coworkMemoryListLoading}
+                          className="inline-flex items-center justify-center px-3 py-1.5 rounded-lg border border-border text-sm text-foreground hover:bg-surface-raised disabled:opacity-60 transition-colors"
+                        >
+                          {i18nService.t('coworkMemoryRawButton')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleOpenCoworkMemoryModal}
+                          className="inline-flex items-center justify-center px-3 py-1.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm transition-colors active:scale-[0.98]"
+                        >
+                          <PlusCircleIcon className="h-4 w-4 mr-1.5" />
+                          {i18nService.t('coworkMemoryCrudCreate')}
+                        </button>
                     </div>
-                  )}
-
-                  <input
-                    type="text"
-                    value={coworkMemoryQuery}
-                    onChange={(event) => setCoworkMemoryQuery(event.target.value)}
-                    placeholder={i18nService.t('coworkMemorySearchPlaceholder')}
-                    className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface"
-                  />
-
-                  <div className="rounded-lg border border-border">
-                    {coworkMemoryListLoading ? (
-                      <div className="px-3 py-3 text-xs text-secondary">
-                        {i18nService.t('loading')}
-                      </div>
-                    ) : coworkMemoryEntries.length === 0 ? (
-                      <div className="px-3 py-3 text-xs text-secondary">
-                        {i18nService.t('coworkMemoryEmpty')}
-                      </div>
-                    ) : (
-                      <div className="divide-y divide-border">
-                        {coworkMemoryEntries.map((entry) => (
-                          <div key={entry.id} className="px-3 py-3 text-xs hover:bg-surface-raised transition-colors">
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="flex-1 min-w-0">
-                                <div className="font-medium text-foreground break-words">
-                                  {entry.text}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1 flex-shrink-0">
-                                <button
-                                  type="button"
-                                  onClick={() => handleEditCoworkMemoryEntry(entry)}
-                                  className="rounded border px-2 py-1 border-border text-foreground hover:bg-surface-raised transition-colors"
-                                >
-                                  {i18nService.t('edit')}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => { void handleDeleteCoworkMemoryEntry(entry); }}
-                                  className="rounded border px-2 py-1 text-red-500 border-border hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-60 transition-colors"
-                                  disabled={coworkMemoryListLoading}
-                                >
-                                  {i18nService.t('delete')}
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
                   </div>
+
+                    <>
+                      {coworkMemoryStats && (
+                        <div className="text-xs text-secondary">
+                          {`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.total}`}
+                        </div>
+                      )}
+
+                      <input
+                        type="text"
+                        value={coworkMemoryQuery}
+                        onChange={(event) => setCoworkMemoryQuery(event.target.value)}
+                        placeholder={i18nService.t('coworkMemorySearchPlaceholder')}
+                        className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface"
+                      />
+
+                      <div className="rounded-lg border border-border">
+                        {coworkMemoryListLoading ? (
+                          <div className="px-3 py-3 text-xs text-secondary">
+                            {i18nService.t('loading')}
+                          </div>
+                        ) : coworkMemoryEntries.length === 0 ? (
+                          <div className="px-3 py-3 text-xs text-secondary">
+                            {i18nService.t('coworkMemoryEmpty')}
+                          </div>
+                        ) : (
+                          <div className="divide-y divide-border">
+                            {coworkMemoryGroups.map((group, groupIndex) => (
+                              <React.Fragment key={group.section ?? `ungrouped-${groupIndex}`}>
+                                {group.section && (
+                                  <div className="flex items-baseline gap-1.5 px-3 pb-1.5 pt-3 text-[11px] font-medium text-secondary">
+                                    <span className="truncate">{group.section}</span>
+                                    <span className="font-normal opacity-70">{group.entries.length}</span>
+                                  </div>
+                                )}
+                                {group.entries.map((entry) => {
+                                  const isLongMemoryText =
+                                    entry.text.split('\n').length > 3 || entry.text.length > 240;
+                                  const isMemoryTextExpanded = coworkMemoryExpandedIds.has(entry.id);
+                                  return (
+                                    <div key={entry.id} className="group px-3 py-3 text-xs transition-colors hover:bg-surface-raised/60">
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div className="flex-1 min-w-0">
+                                          <div
+                                            className={`text-foreground break-words whitespace-pre-wrap leading-relaxed ${
+                                              isLongMemoryText && !isMemoryTextExpanded ? 'line-clamp-3' : ''
+                                            }`}
+                                          >
+                                            {entry.text}
+                                          </div>
+                                          {isLongMemoryText && (
+                                            <button
+                                              type="button"
+                                              onClick={() => toggleCoworkMemoryExpandedId(entry.id)}
+                                              className="mt-1.5 text-[11px] text-primary hover:underline"
+                                            >
+                                              {i18nService.t(isMemoryTextExpanded ? 'coworkMemoryCollapse' : 'coworkMemoryExpand')}
+                                            </button>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleEditCoworkMemoryEntry(entry)}
+                                            title={i18nService.t('edit')}
+                                            aria-label={i18nService.t('edit')}
+                                            className="rounded-md p-1.5 text-secondary hover:text-foreground hover:bg-surface-raised transition-colors"
+                                          >
+                                            <EditIcon className="h-4 w-4" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => { void handleDeleteCoworkMemoryEntry(entry); }}
+                                            title={i18nService.t('delete')}
+                                            aria-label={i18nService.t('delete')}
+                                            className="rounded-md p-1.5 text-secondary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-60 transition-colors"
+                                            disabled={coworkMemoryListLoading}
+                                          >
+                                            <TrashIcon className="h-4 w-4" />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </>
+
+                  {coworkMemoryRawMode && (
+                    <Modal
+                      isOpen
+                      onClose={() => setCoworkMemoryRawMode(false)}
+                      overlayClassName="fixed inset-0 z-[60] flex items-center justify-center bg-black/10 dark:bg-black/50 p-6"
+                      className="flex h-[min(720px,calc(100vh-48px))] w-[min(960px,calc(100vw-48px))] flex-col overflow-hidden rounded-xl border border-surface bg-surface shadow-[0_12px_40px_rgba(0,0,0,0.16)]"
+                    >
+                      <div className="flex shrink-0 items-start justify-between gap-3 px-5 py-4">
+                        <div className="min-w-0">
+                          <h2 className="text-lg font-semibold text-foreground">
+                            {i18nService.t('coworkMemoryRawButton')}
+                          </h2>
+                          <p className="mt-0.5 text-sm text-secondary">
+                            {i18nService.t('coworkMemoryRawHint')}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setCoworkMemoryRawMode(false)}
+                          title={i18nService.t('close')}
+                          aria-label={i18nService.t('close')}
+                          className="p-2 rounded-lg hover:bg-surface-raised transition-colors"
+                        >
+                          <XMarkIcon className="h-5 w-5 text-secondary" />
+                        </button>
+                      </div>
+                      <textarea
+                        value={coworkMemoryRawText}
+                        onChange={(event) => setCoworkMemoryRawText(event.target.value)}
+                        spellCheck={false}
+                        autoFocus
+                        className="min-h-0 w-full flex-1 resize-none bg-transparent px-5 pt-1 pb-4 text-xs font-mono leading-relaxed text-foreground focus:outline-none"
+                      />
+                      <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 px-5 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setCoworkMemoryRawMode(false)}
+                          className="px-3.5 py-1.5 text-sm text-foreground hover:bg-surface-raised rounded-lg border border-border transition-colors"
+                        >
+                          {i18nService.t('cancel')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { void handleSaveCoworkMemoryRaw(); }}
+                          disabled={coworkMemoryRawSaving}
+                          className="px-3.5 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-lg disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                        >
+                          {i18nService.t('save')}
+                        </button>
+                      </div>
+                    </Modal>
+                  )}
                 </div>
               )}
 
@@ -3931,6 +5174,10 @@ const Settings: React.FC<SettingsProps> = ({
             openaiOAuthPhase={openaiOAuthPhase}
             setOpenaiOAuthPhase={setOpenaiOAuthPhase}
             openaiOAuthStatus={openaiOAuthStatus}
+            xaiIsOAuthMode={xaiIsOAuthMode}
+            xaiOAuthPhase={xaiOAuthPhase}
+            setXaiOAuthPhase={setXaiOAuthPhase}
+            xaiOAuthStatus={xaiOAuthStatus}
             copilotAuthStatus={copilotAuthStatus}
             copilotUserCode={copilotUserCode}
             copilotVerificationUri={copilotVerificationUri}
@@ -3940,8 +5187,6 @@ const Settings: React.FC<SettingsProps> = ({
             testResult={testResult}
             isTestResultModalOpen={isTestResultModalOpen}
             setIsTestResultModalOpen={setIsTestResultModalOpen}
-            pendingDeleteProvider={pendingDeleteProvider}
-            setPendingDeleteProvider={setPendingDeleteProvider}
             importInputRef={importInputRef}
             handleImportProvidersClick={handleImportProvidersClick}
             handleExportProviders={handleExportProviders}
@@ -3950,7 +5195,6 @@ const Settings: React.FC<SettingsProps> = ({
             toggleProviderEnabled={toggleProviderEnabled}
             handleAddCustomProvider={handleAddCustomProvider}
             handleDeleteCustomProvider={handleDeleteCustomProvider}
-            confirmDeleteCustomProvider={confirmDeleteCustomProvider}
             handleProviderConfigChange={handleProviderConfigChange}
             setProviders={setProviders}
             handleMiniMaxDeviceLogin={handleMiniMaxDeviceLogin}
@@ -3959,6 +5203,9 @@ const Settings: React.FC<SettingsProps> = ({
             handleOpenAIOAuthLogin={handleOpenAIOAuthLogin}
             handleCancelOpenAIOAuthLogin={handleCancelOpenAIOAuthLogin}
             handleOpenAIOAuthLogout={handleOpenAIOAuthLogout}
+            handleXaiOAuthLogin={handleXaiOAuthLogin}
+            handleCancelXaiOAuthLogin={handleCancelXaiOAuthLogin}
+            handleXaiOAuthLogout={handleXaiOAuthLogout}
             handleCopilotSignIn={handleCopilotSignIn}
             handleCopilotSignOut={handleCopilotSignOut}
             handleCopilotCancelAuth={handleCopilotCancelAuth}
@@ -4138,19 +5385,6 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 border-b border-border">
-                <span className="shrink-0 text-sm text-foreground">{i18nService.t('aboutUserManual')}</span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleOpenUserManual();
-                  }}
-                  className="min-w-0 break-all text-right text-sm text-secondary hover:text-primary dark:hover:text-primary bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer focus:outline-none hover:bg-surface-raised transition-colors"
-                >
-                  {ABOUT_USER_MANUAL_URL}
-                </button>
-              </div>
-              <div className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3${testModeUnlocked ? ' border-b border-border' : ''}`}>
                 <span className="shrink-0 text-sm text-foreground">{i18nService.t('aboutUserCommunity')}</span>
                 <button
                   type="button"
@@ -4161,6 +5395,19 @@ const Settings: React.FC<SettingsProps> = ({
                   className="min-w-0 break-all text-right text-sm text-secondary hover:text-primary dark:hover:text-primary bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer focus:outline-none hover:bg-surface-raised transition-colors"
                 >
                   {ABOUT_USER_COMMUNITY_URL}
+                </button>
+              </div>
+              <div className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3${testModeUnlocked ? ' border-b border-border' : ''}`}>
+                <span className="shrink-0 text-sm text-foreground">{i18nService.t('aboutUserManual')}</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleOpenUserManual();
+                  }}
+                  className="min-w-0 break-all text-right text-sm text-secondary hover:text-primary dark:hover:text-primary bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer focus:outline-none hover:bg-surface-raised transition-colors"
+                >
+                  {ABOUT_USER_MANUAL_URL}
                 </button>
               </div>
               {testModeUnlocked && (
@@ -4302,21 +5549,29 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
 
             {/* Footer buttons */}
-            <div className="flex justify-end space-x-4 p-4 border-border border-t bg-background shrink-0">
-              <button
-                type="button"
-                onClick={guardedClose}
-                className="px-4 py-2 rounded-xl transition-colors text-sm font-medium border border-border text-foreground hover:bg-surface-raised active:scale-[0.98]"
-              >
-                {i18nService.t('cancel')}
-              </button>
-              <button
-                type="submit"
-                disabled={isSaving}
-                className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
-              >
-                {isSaving ? i18nService.t('saving') : i18nService.t('save')}
-              </button>
+            <div className="relative shrink-0">
+              <div
+                aria-hidden="true"
+                className={`pointer-events-none absolute inset-x-0 bottom-full h-10 bg-gradient-to-t from-background to-transparent transition-opacity duration-200 ${
+                  footerFadeVisible ? 'opacity-100' : 'opacity-0'
+                }`}
+              />
+              <div className="flex justify-end space-x-4 px-6 pb-5 pt-3 bg-background">
+                <button
+                  type="button"
+                  onClick={guardedClose}
+                  className="px-4 py-2 rounded-xl transition-colors text-sm font-medium border border-border text-foreground hover:bg-surface-raised active:scale-[0.98]"
+                >
+                  {i18nService.t('cancel')}
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSaving}
+                  className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
+                >
+                  {isSaving ? i18nService.t('saving') : i18nService.t('save')}
+                </button>
+              </div>
             </div>
           </form>
 
@@ -4332,6 +5587,8 @@ const Settings: React.FC<SettingsProps> = ({
           setNewModelId={setNewModelId}
           newModelSupportsImage={newModelSupportsImage}
           setNewModelSupportsImage={setNewModelSupportsImage}
+          newModelSupportsThinking={newModelSupportsThinking}
+          setNewModelSupportsThinking={setNewModelSupportsThinking}
           newModelContextWindow={newModelContextWindow}
           setNewModelContextWindow={setNewModelContextWindow}
           newModelCustomParams={newModelCustomParams}
@@ -4341,6 +5598,13 @@ const Settings: React.FC<SettingsProps> = ({
           handleSaveNewModel={handleSaveNewModel}
           handleCancelModelEdit={handleCancelModelEdit}
           handleModelDialogKeyDown={handleModelDialogKeyDown}
+        />
+
+        <DeleteProviderConfirmDialog
+          pendingDeleteProvider={pendingDeleteProvider}
+          providers={providers}
+          onCancel={() => setPendingDeleteProvider(null)}
+          onConfirm={confirmDeleteCustomProvider}
         />
 
           {showOpenClawRepairConfirm && (
@@ -4484,22 +5748,22 @@ const Settings: React.FC<SettingsProps> = ({
               onClick={resetCoworkMemoryEditor}
             >
               <div
-                className="bg-surface border-border border rounded-2xl shadow-xl w-full max-w-md"
+                className="bg-surface border-border border rounded-2xl shadow-xl w-full max-w-lg"
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="px-5 pt-5 pb-4 border-b border-border">
+                <div className="flex items-center gap-2.5 px-5 pt-5 pb-3">
                   <h3 className="text-base font-semibold text-foreground">
                     {coworkMemoryEditingId ? i18nService.t('coworkMemoryCrudUpdate') : i18nService.t('coworkMemoryCrudCreate')}
                   </h3>
+                  {coworkMemoryEditingId && (
+                    <span className="inline-flex items-center rounded-md bg-primary-muted px-2 py-0.5 text-[11px] text-primary">
+                      {i18nService.t('coworkMemoryEditingTag')}
+                    </span>
+                  )}
                 </div>
 
-                <div className="px-5 py-4 space-y-4">
-                  {coworkMemoryEditingId && (
-                    <div className="rounded-lg border px-2 py-1 text-xs border-border text-secondary">
-                      {i18nService.t('coworkMemoryEditingTag')}
-                    </div>
-                  )}
-                  <label className="block text-xs font-medium text-secondary mb-1">
+                <div className="px-5 pb-1">
+                  <label className="block text-xs font-medium text-secondary mb-1.5">
                     {i18nService.t('coworkMemoryCrudContentLabel')}<span className="text-red-500 dark:text-red-400 ml-0.5">*</span>
                   </label>
                   <textarea
@@ -4507,15 +5771,18 @@ const Settings: React.FC<SettingsProps> = ({
                     onChange={(event) => setCoworkMemoryDraftText(event.target.value)}
                     placeholder={i18nService.t('coworkMemoryCrudTextPlaceholder')}
                     autoFocus
-                    className="min-h-[200px] w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface text-foreground focus:border-primary focus:ring-1 focus:ring-primary/30"
+                    className="min-h-[220px] w-full resize-y rounded-lg border px-3.5 py-3 text-sm leading-relaxed border-border bg-surface text-foreground focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/30"
                   />
+                  <div className="mt-1.5 text-[11px] leading-relaxed text-secondary">
+                    {i18nService.t('coworkMemoryCrudMultilineHint')}
+                  </div>
                 </div>
 
-                <div className="flex justify-end space-x-2 px-5 pb-5">
+                <div className="flex justify-end space-x-2 px-5 py-4">
                   <button
                     type="button"
                     onClick={resetCoworkMemoryEditor}
-                    className="px-3 py-1.5 text-sm text-foreground hover:bg-surface-raised rounded-xl border border-border transition-colors"
+                    className="px-3.5 py-1.5 text-sm text-foreground hover:bg-surface-raised rounded-lg border border-border transition-colors"
                   >
                     {i18nService.t('cancel')}
                   </button>
@@ -4523,7 +5790,7 @@ const Settings: React.FC<SettingsProps> = ({
                     type="button"
                     onClick={() => { void handleSaveCoworkMemoryEntry(); }}
                     disabled={!coworkMemoryDraftText.trim() || coworkMemoryListLoading}
-                    className="px-3 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-xl disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                    className="px-3.5 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-lg disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
                   >
                     {coworkMemoryEditingId ? i18nService.t('save') : i18nService.t('coworkMemoryCrudCreate')}
                   </button>

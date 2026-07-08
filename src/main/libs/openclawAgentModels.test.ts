@@ -38,14 +38,14 @@ describe('buildAgentEntry', () => {
     });
   });
 
-  test('rewrites stale explicit model.primary when available providers moved it', () => {
+  test('rewrites stale OpenAI Codex model.primary when available providers moved it', () => {
     const result = buildAgentEntry({
       id: 'main',
       name: 'main',
       description: '',
       systemPrompt: '',
       identity: '',
-      model: 'openai/gpt-5.3-codex',
+      model: 'openai-codex/gpt-5.3-codex',
       workingDirectory: '',
       icon: '',
       skillIds: [],
@@ -57,13 +57,13 @@ describe('buildAgentEntry', () => {
       updatedAt: 0,
     }, 'deepseek/deepseek-v4-flash', {
       availableProviders: {
-        'openai-codex': { models: [{ id: 'gpt-5.3-codex' }] },
+        openai: { models: [{ id: 'gpt-5.3-codex' }] },
       },
     });
 
     expect(result).toMatchObject({
       id: 'main',
-      model: { primary: 'openai-codex/gpt-5.3-codex' },
+      model: { primary: 'openai/gpt-5.3-codex' },
     });
   });
 
@@ -363,15 +363,27 @@ describe('resolveQualifiedAgentModelRef', () => {
     });
   });
 
-  test('rewrites legacy qualified refs when the model moved to one provider', () => {
+  test('rewrites legacy OpenAI Codex qualified refs when the model moved to one provider', () => {
     expect(resolveQualifiedAgentModelRef({
-      agentModel: 'openai/gpt-5.3-codex',
+      agentModel: 'openai-codex/gpt-5.3-codex',
       availableProviders: {
-        'openai-codex': { models: [{ id: 'gpt-5.3-codex' }] },
+        openai: { models: [{ id: 'gpt-5.3-codex' }] },
       },
     })).toEqual({
       status: 'qualified',
-      primaryModel: 'openai-codex/gpt-5.3-codex',
+      primaryModel: 'openai/gpt-5.3-codex',
+    });
+  });
+
+  test('rewrites MiniMax API refs to the portal provider when OAuth provider is configured', () => {
+    expect(resolveQualifiedAgentModelRef({
+      agentModel: 'minimax/MiniMax-M3',
+      availableProviders: {
+        'minimax-portal': { models: [{ id: 'MiniMax-M3' }] },
+      },
+    })).toEqual({
+      status: 'qualified',
+      primaryModel: 'minimax-portal/MiniMax-M3',
     });
   });
 
