@@ -117,7 +117,7 @@ export async function prepareCoworkPromptPayload(
       }
     }
 
-    if (!attachment.isImage || !imageDataUrl) continue;
+    if (!options.modelSupportsImage || !attachment.isImage || !imageDataUrl) continue;
     const extracted = extractBase64FromDataUrl(imageDataUrl);
     if (!extracted) continue;
 

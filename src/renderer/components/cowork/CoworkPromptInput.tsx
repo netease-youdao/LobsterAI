@@ -21,6 +21,8 @@ import {
 } from '../../../shared/cowork/goal';
 import {
   formatCoworkImageAttachmentLimit,
+  isCoworkImagePath as isImagePath,
+  shouldShowCoworkImageVisionHint,
 } from '../../../shared/cowork/imageAttachments';
 import { isPlanImplementationApproval } from '../../../shared/cowork/planMode';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
@@ -256,15 +258,6 @@ const reportModelSelected = (
 // CoworkAttachment is aliased from the Redux-persisted DraftAttachment type
 // so that attachment state survives view switches (cowork ↔ skills, etc.)
 type CoworkAttachment = DraftAttachment;
-
-const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.tiff', '.tif', '.ico', '.avif']);
-
-const isImagePath = (filePath: string): boolean => {
-  const dotIndex = filePath.lastIndexOf('.');
-  if (dotIndex === -1) return false;
-  const ext = filePath.slice(dotIndex).toLowerCase();
-  return IMAGE_EXTENSIONS.has(ext);
-};
 
 const isImageMimeType = (mimeType: string): boolean => {
   return mimeType.startsWith('image/');
@@ -671,6 +664,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     globalSelectedModel: currentAgentSelectedModel,
   });
   const modelSupportsImage = !!effectiveSelectedModel?.supportsImage;
+  const shouldShowImageVisionHint = shouldShowCoworkImageVisionHint(
+    attachments,
+    modelSupportsImage,
+  );
 
   const resolveSubmitModelAccessPrompt = useCallback((): ModelAccessPromptKind | null => {
     const hasAccessibleUserModel = availableModels.some(
@@ -1058,6 +1055,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     draftStartedAnalyticsRef.current = false;
   }, [sessionId]);
 
+  useEffect(() => {
+    setImageVisionHint(shouldShowImageVisionHint);
+  }, [shouldShowImageVisionHint]);
+
   // Sync value from draft when sessionId changes
   useEffect(() => {
     setValue(draftPrompt);
@@ -1065,8 +1066,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     setSteerInputActive(false);
     setIsTemplateHeightLocked(false);
     // Re-derive imageVisionHint from the new session's draft attachments
-    const hasImageWithoutVision = !modelSupportsImage && attachments.some(a => a.isImage || isImagePath(a.path));
-    setImageVisionHint(hasImageWithoutVision);
+    setImageVisionHint(shouldShowImageVisionHint);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey]); // intentionally omit other deps to only trigger on session switch
 

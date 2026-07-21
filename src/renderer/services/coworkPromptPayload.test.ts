@@ -95,4 +95,29 @@ describe('prepareCoworkPromptPayload', () => {
       },
     });
   });
+
+  test('ignores a stale image data URL after switching to a non-vision model', async () => {
+    const result = await prepareCoworkPromptPayload({
+      basePrompt: 'inspect',
+      attachments: [
+        {
+          path: '/tmp/image.png',
+          name: 'image.png',
+          isImage: true,
+          dataUrl: 'data:image/png;base64,YWJj',
+        },
+      ],
+      selectedTextSnippets: [],
+      modelSupportsImage: false,
+      fileLabel: 'File',
+      folderLabel: 'Folder',
+    });
+
+    expect(result).toEqual({
+      success: true,
+      payload: {
+        finalPrompt: 'inspect\n\nFile: /tmp/image.png',
+      },
+    });
+  });
 });
