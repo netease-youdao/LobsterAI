@@ -6,6 +6,7 @@ import {
   COWORK_IMAGE_ATTACHMENT_PREVIEW_FALLBACK_MAX_BYTES,
   estimateBase64DecodedBytes,
   formatCoworkImageAttachmentLimit,
+  shouldShowCoworkImageVisionHint,
   validateCoworkImageAttachmentSize,
 } from './imageAttachments';
 
@@ -18,6 +19,14 @@ test('estimateBase64DecodedBytes handles padding and data URL prefixes', () => {
 
 test('formatCoworkImageAttachmentLimit uses a locale-neutral MB label', () => {
   expect(formatCoworkImageAttachmentLimit()).toBe('30MB');
+});
+
+test('shouldShowCoworkImageVisionHint follows the current model capability', () => {
+  const attachments = [{ path: '/tmp/image.png' }];
+
+  expect(shouldShowCoworkImageVisionHint(attachments, false)).toBe(true);
+  expect(shouldShowCoworkImageVisionHint(attachments, true)).toBe(false);
+  expect(shouldShowCoworkImageVisionHint([{ path: '/tmp/notes.txt' }], false)).toBe(false);
 });
 
 test('validateCoworkImageAttachmentSize accepts exactly the 30MB limit', () => {

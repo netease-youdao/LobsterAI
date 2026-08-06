@@ -1,6 +1,36 @@
 export const COWORK_IMAGE_ATTACHMENT_MAX_BYTES = 30 * 1000 * 1000;
 export const COWORK_IMAGE_ATTACHMENT_PREVIEW_FALLBACK_MAX_BYTES = 512 * 1024;
 
+const COWORK_IMAGE_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.bmp',
+  '.svg',
+  '.tiff',
+  '.tif',
+  '.ico',
+  '.avif',
+]);
+
+export function isCoworkImagePath(filePath: string): boolean {
+  const dotIndex = filePath.lastIndexOf('.');
+  if (dotIndex === -1) return false;
+  return COWORK_IMAGE_EXTENSIONS.has(filePath.slice(dotIndex).toLowerCase());
+}
+
+export function shouldShowCoworkImageVisionHint(
+  attachments: Array<{ path: string; isImage?: boolean }>,
+  modelSupportsImage: boolean,
+): boolean {
+  return (
+    !modelSupportsImage &&
+    attachments.some(attachment => attachment.isImage || isCoworkImagePath(attachment.path))
+  );
+}
+
 export type CoworkImageAttachmentPayload = {
   name: string;
   mimeType: string;
