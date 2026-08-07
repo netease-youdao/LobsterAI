@@ -1818,6 +1818,7 @@ function createPatchAdapter(options?: {
   isChannelSession?: boolean;
   persistedSessionKey?: string | null;
   scheduledTaskId?: string | null;
+  patchResponse?: unknown;
 }) {
   const session = {
     id: 'session-1',
@@ -1856,7 +1857,7 @@ function createPatchAdapter(options?: {
     stop: () => {},
     request: async (method: string, params?: unknown) => {
       requests.push({ method, params: params as Record<string, unknown> });
-      return {};
+      return method === 'sessions.patch' ? options?.patchResponse ?? {} : {};
     },
   };
   adapter.gatewayClientVersion = 'test-version';
@@ -2160,6 +2161,22 @@ test('cron session routing retains only the latest real gateway run key per job'
   expect(adapter.getSessionKeysForSession(session.id)).not.toContain(
     'agent:ops:cron:daily-monitor',
   );
+});
+
+test('patchSession preserves the provider for model IDs containing slashes', async () => {
+  const modelRef = 'custom_0/deepseek-ai/DeepSeek-V4-Flash';
+  const { adapter } = createPatchAdapter({
+    patchResponse: {
+      entry: {
+        providerOverride: 'custom_0',
+        modelOverride: 'deepseek-ai/DeepSeek-V4-Flash',
+      },
+    },
+  });
+
+  await expect(adapter.patchSession('session-1', { model: modelRef })).resolves.toEqual({
+    modelOverride: modelRef,
+  });
 });
 
 test('pollChannelSessions syncs channel row model into the local session override', async () => {
