@@ -19,20 +19,8 @@ function resolveBashExecutable(rootDir) {
   // WSL bash (WindowsApps\bash.exe) runs in a separate Linux environment and
   // cannot access Windows-installed node, npm, pnpm, etc.
 
-  // 1. Check all bash locations, prefer Git Bash over WSL bash.
-  try {
-    const result = spawnSync('where', ['bash'], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    if (result.status === 0 && result.stdout) {
-      const paths = result.stdout.trim().split(/\r?\n/).map(p => p.trim()).filter(Boolean);
-      const gitBash = paths.find(p => !p.toLowerCase().includes('windowsapps'));
-      if (gitBash) return gitBash;
-    }
-  } catch {}
 
-  // 2. Derive bash path from git installation.
+  // 1. Derive bash path from git installation.
   try {
     const gitResult = spawnSync('where', ['git'], {
       encoding: 'utf-8',
@@ -51,7 +39,7 @@ function resolveBashExecutable(rootDir) {
     }
   } catch {}
 
-  // 3. Bundled mingit bash.
+  // 2. Bundled mingit bash.
   const candidates = [
     path.join(rootDir, 'resources', 'mingit', 'bin', 'bash.exe'),
     path.join(rootDir, 'resources', 'mingit', 'usr', 'bin', 'bash.exe'),
