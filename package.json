@@ -163,7 +163,7 @@
     "jszip": "^3.10.1",
     "katex": "^0.16.21",
     "lottie-react": "^2.4.1",
-    "mermaid": "^10.9.5",
+    "mermaid": "^11.16.1",
     "nim-web-sdk-ng": "10.9.77-alpha.4",
     "npm": "^11.11.0",
     "pdfjs-dist": "^4.10.38",
