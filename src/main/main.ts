@@ -412,6 +412,7 @@ import {
   type MediaSelectionState,
   resolveMediaGenerationGate,
 } from './mediaGenerationPolicy';
+import { calculatePerSecondIoCredits, type MediaPricingConfig } from './mediaGenerationPricing';
 import {
   applyMediaReferencesToGenerationParams,
   type MediaAttachmentRefMain,
@@ -5055,48 +5056,6 @@ if (!gotTheLock) {
       const mediaType = tool === MediaGenerationTool.Image ? 'image' : 'video';
       const endpoint = mediaType === 'image' ? '/api/media/images/generate' : '/api/media/videos/generate';
 
-      // Video generation confirmation: inform user about cost and duration
-      if (mediaType === 'video') {
-        const durationSec = typeof args.durationSeconds === 'number' ? args.durationSeconds : null;
-        const costPoints = durationSec ? durationSec * 100 : null;
-        const portalTasksUrl = getPortalTasksUrl();
-        const subtitle = costPoints
-          ? `本次生成大约预计消耗 **${costPoints}** 积分`
-          : '费用约为 **100** 积分/秒';
-        const questionText = [
-          '请确认当前描述无误，提交后将无法取消。',
-          '视频生成任务耗时较长，请耐心等待。',
-          '',
-          `生成后请妥善保存视频，若误删可在[「个人主页-用量详情-生成任务」](${portalTasksUrl})中下载`,
-          '~~（链接有时效性，请尽快下载）~~',
-        ].join('\n');
-        const confirmResponse = await getMcpRuntime().askUserInternal(
-          [{
-            question: questionText,
-            title: '确认生成视频？',
-            subtitle,
-            options: [
-              { label: '确认生成', description: '开始视频生成任务' },
-              { label: '取消', description: '暂不生成' },
-            ],
-          }],
-          undefined,
-          { sessionKey: request.context.sessionKey },
-        );
-
-        const userCancelled = confirmResponse?.behavior === 'deny'
-          || confirmResponse?.answers?.[questionText] === '取消';
-
-        if (userCancelled) {
-          console.log('[MediaGeneration] user cancelled video generation confirmation.');
-          return {
-            content: [{ type: 'text', text: 'Video generation cancelled by user.' }],
-            isError: true,
-            details: { status: 'cancelled', reason: 'USER_CANCELLED' },
-          };
-        }
-      }
-
       let params: Record<string, unknown> = {};
       if (args.image) {
         const existing = (args.images as string[]) || [];
@@ -5116,6 +5075,9 @@ if (!gotTheLock) {
         params.videos = args.videos;
       }
       if (args.videoRoles) params.videoRoles = args.videoRoles;
+      if (args.audios) params.audios = args.audios;
+      if (args.audioRoles) params.audioRoles = args.audioRoles;
+      if (args.referenceAudios) params.referenceAudios = args.referenceAudios;
       if (args.aspectRatio) params.aspectRatio = args.aspectRatio;
       if (args.resolution) params.resolution = args.resolution;
       if (args.size) params.size = args.size;
@@ -5160,6 +5122,7 @@ if (!gotTheLock) {
         '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
         '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
         '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
+        '.wav': 'audio/wav', '.mp3': 'audio/mpeg',
       };
       const resolveRef = async (ref: string): Promise<string> => {
         if (!ref || ref.startsWith('http') || ref.startsWith('oss://') || ref.startsWith('data:')) return ref;
@@ -5209,8 +5172,73 @@ if (!gotTheLock) {
       if (Array.isArray(params.videos)) {
         params.videos = await Promise.all((params.videos as string[]).map(resolveRef));
       }
+      await resolveStringArrayParam('referenceAudios');
+      if (Array.isArray(params.audios)) {
+        params.audios = await Promise.all((params.audios as string[]).map(resolveRef));
+      }
       if (Array.isArray(params.media)) {
         params.media = await Promise.all((params.media as unknown[]).map(resolveMediaItem));
+      }
+
+      // Confirm only after references have been normalized so MiniMax-H3 can show the same
+      // conservative pre-deduction estimate as the server (including reference media inputs).
+      if (mediaType === 'video') {
+        let costPoints: number | undefined;
+        try {
+          const modelsResponse = await fetchWithAuth(`${serverBaseUrl}/api/media/videos/models`);
+          const modelsBody = await modelsResponse.json() as {
+            code: number;
+            data?: Array<{ modelId?: string; pricing?: MediaPricingConfig }>;
+          };
+          const selectedPricing = modelsBody.code === 0
+            ? modelsBody.data?.find(model => canonicalizeMediaModelId(model.modelId) === selectedModel)?.pricing
+            : undefined;
+          costPoints = calculatePerSecondIoCredits(selectedPricing, params);
+        } catch (error) {
+          console.warn('[MediaGeneration] failed to load model pricing for confirmation:', error);
+        }
+
+        const durationSec = typeof args.durationSeconds === 'number' ? args.durationSeconds : null;
+        const fallbackCostPoints = selectedModel.toLowerCase() === 'minimax-h3'
+          ? null
+          : durationSec ? durationSec * 100 : null;
+        const estimatedPoints = costPoints ?? fallbackCostPoints;
+        const portalTasksUrl = getPortalTasksUrl();
+        const subtitle = estimatedPoints != null
+          ? `本次生成预计预扣 **${Math.round(estimatedPoints)}** 积分`
+          : '费用以服务端模型定价和实际输入素材为准';
+        const questionText = [
+          '请确认当前描述无误；任务进入处理后将无法取消。',
+          '视频生成任务耗时较长，请耐心等待。',
+          '',
+          `生成后请妥善保存视频，若误删可在[「个人主页-用量详情-生成任务」](${portalTasksUrl})中下载`,
+          '~~（链接有时效性，请尽快下载）~~',
+        ].join('\n');
+        const confirmResponse = await getMcpRuntime().askUserInternal(
+          [{
+            question: questionText,
+            title: '确认生成视频？',
+            subtitle,
+            options: [
+              { label: '确认生成', description: '开始视频生成任务' },
+              { label: '取消', description: '暂不生成' },
+            ],
+          }],
+          undefined,
+          { sessionKey: request.context.sessionKey },
+        );
+
+        const userCancelled = confirmResponse?.behavior === 'deny'
+          || confirmResponse?.answers?.[questionText] === '取消';
+
+        if (userCancelled) {
+          console.log('[MediaGeneration] user cancelled video generation confirmation.');
+          return {
+            content: [{ type: 'text', text: 'Video generation cancelled by user.' }],
+            isError: true,
+            details: { status: 'cancelled', reason: 'USER_CANCELLED' },
+          };
+        }
       }
 
       const inferVideoGenerationType = (): string => {
@@ -5232,7 +5260,10 @@ if (!gotTheLock) {
         const hasReferenceImage = (Array.isArray(params.referenceImages) && (params.referenceImages as unknown[]).length > 0)
           || imageRoles.some(role => role === 'reference_image' || role === 'reference')
           || mediaTypes.some(type => type === 'reference_image');
-        if (hasReferenceImage) return 'r2v';
+        const hasReferenceVideo = Array.isArray(params.videos) && (params.videos as unknown[]).length > 0;
+        const hasReferenceAudio = (Array.isArray(params.audios) && (params.audios as unknown[]).length > 0)
+          || (Array.isArray(params.referenceAudios) && (params.referenceAudios as unknown[]).length > 0);
+        if (hasReferenceImage || hasReferenceVideo || hasReferenceAudio) return 'r2v';
 
         const hasFirstFrame = typeof params.firstFrame === 'string'
           || imageRoles.some(role => role === 'first_frame' || role === 'firstframe')

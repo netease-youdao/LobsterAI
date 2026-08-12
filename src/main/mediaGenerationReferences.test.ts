@@ -35,6 +35,19 @@ const makeVideoRef = (overrides: Partial<MediaAttachmentRefMain>): MediaAttachme
   role: overrides.role,
 });
 
+const makeAudioRef = (overrides: Partial<MediaAttachmentRefMain>): MediaAttachmentRefMain => ({
+  token: overrides.token ?? '@音频1',
+  mediaType: MediaAttachmentKind.Audio,
+  index: overrides.index ?? 1,
+  fileId: overrides.fileId ?? '/tmp/voice.mp3',
+  fileName: overrides.fileName ?? 'voice.mp3',
+  mimeType: overrides.mimeType ?? 'audio/mpeg',
+  localPath: overrides.localPath,
+  remoteUrl: overrides.remoteUrl,
+  dataUrl: overrides.dataUrl,
+  role: overrides.role,
+});
+
 describe('applyMediaReferencesToGenerationParams', () => {
   test('replaces a single image token with the referenced file path', () => {
     const params = applyMediaReferencesToGenerationParams({
@@ -194,6 +207,17 @@ describe('applyMediaReferencesToGenerationParams', () => {
     });
 
     expect(params.images).toEqual([dataUrl]);
+  });
+
+  test('maps referenced audio for multimodal video generation', () => {
+    const params = applyMediaReferencesToGenerationParams({
+      mediaType: MediaGenerationRequestType.Video,
+      params: {},
+      refs: [makeAudioRef({ localPath: '/tmp/voice.mp3' })],
+    });
+
+    expect(params.audios).toEqual(['/tmp/voice.mp3']);
+    expect(params.audioRoles).toEqual([MediaAttachmentRole.ReferenceAudio]);
   });
 });
 

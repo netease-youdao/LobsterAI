@@ -145,6 +145,7 @@ export const applyMediaReferencesToGenerationParams = ({
 
   const imageRefs = resolvedRefs.filter(item => item.ref.mediaType === MediaAttachmentKind.Image);
   const videoRefs = resolvedRefs.filter(item => item.ref.mediaType === MediaAttachmentKind.Video);
+  const audioRefs = resolvedRefs.filter(item => item.ref.mediaType === MediaAttachmentKind.Audio);
 
   if (imageRefs.length > 0) {
     removeConflictingImageInputs(next);
@@ -172,6 +173,17 @@ export const applyMediaReferencesToGenerationParams = ({
       ...videoRefs.map(item => item.ref.role || MediaAttachmentRole.ReferenceVideo),
       ...existingVideoRoles,
     ].slice(0, (next.videos as string[]).length);
+  }
+
+  if (audioRefs.length > 0) {
+    const referencedAudios = audioRefs.map(item => item.value);
+    const existingAudios = getStringArray(next.audios);
+    const existingAudioRoles = getStringArray(next.audioRoles);
+    next.audios = dedupeValues([...referencedAudios, ...existingAudios]);
+    next.audioRoles = [
+      ...audioRefs.map(item => item.ref.role || MediaAttachmentRole.ReferenceAudio),
+      ...existingAudioRoles,
+    ].slice(0, (next.audios as string[]).length);
   }
 
   return next;
