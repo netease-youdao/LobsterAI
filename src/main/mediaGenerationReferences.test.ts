@@ -167,6 +167,21 @@ describe('applyMediaReferencesToGenerationParams', () => {
     ]);
   });
 
+  test('uses reference image roles when video attachments are present', () => {
+    const params = applyMediaReferencesToGenerationParams({
+      mediaType: MediaGenerationRequestType.Video,
+      params: {},
+      refs: [
+        makeImageRef({ token: '@图片1', localPath: '/tmp/image.png' }),
+        makeVideoRef({ token: '@视频1', localPath: '/tmp/video.mp4' }),
+      ],
+    });
+
+    expect(params.images).toEqual(['/tmp/image.png']);
+    expect(params.imageRoles).toEqual([MediaAttachmentRole.ReferenceImage]);
+    expect(params.videos).toEqual(['/tmp/video.mp4']);
+  });
+
   test('replaces media tokens inside providerOptions media urls', () => {
     const params = applyMediaReferencesToGenerationParams({
       mediaType: MediaGenerationRequestType.Video,

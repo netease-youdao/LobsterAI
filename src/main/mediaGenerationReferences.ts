@@ -103,9 +103,16 @@ const dedupeValues = (values: string[]): string[] => {
   return result;
 };
 
-const normalizeVideoImageRole = (role: string | undefined, isPrimary: boolean): MediaAttachmentRole => {
+const normalizeVideoImageRole = (
+  role: string | undefined,
+  isPrimary: boolean,
+  hasNonImageReference: boolean,
+): MediaAttachmentRole => {
   if (role === MediaAttachmentRole.FirstFrame || role === MediaAttachmentRole.LastFrame) {
     return role;
+  }
+  if (hasNonImageReference) {
+    return MediaAttachmentRole.ReferenceImage;
   }
   return isPrimary ? MediaAttachmentRole.FirstFrame : MediaAttachmentRole.ReferenceImage;
 };
@@ -152,7 +159,10 @@ export const applyMediaReferencesToGenerationParams = ({
 
     if (mediaType === MediaGenerationRequestType.Video) {
       const referencedImages = dedupeValues(imageRefs.map(item => item.value));
-      const referencedRoles = imageRefs.map((item, index) => normalizeVideoImageRole(item.ref.role, index === 0));
+      const hasNonImageReference = videoRefs.length > 0 || audioRefs.length > 0;
+      const referencedRoles = imageRefs.map((item, index) => (
+        normalizeVideoImageRole(item.ref.role, index === 0, hasNonImageReference)
+      ));
 
       next.images = referencedImages;
       next.imageRoles = referencedRoles.slice(0, referencedImages.length);

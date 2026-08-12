@@ -19,7 +19,7 @@ import {
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { fileURLToPath, pathToFileURL } from 'url';
+import { pathToFileURL } from 'url';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
 import { buildGoalSettingMessageMetadata } from '../common/goalCommandDisplay';
@@ -419,6 +419,12 @@ import {
   MediaGenerationRequestType,
   summarizeMediaGenerationParamsForLog,
 } from './mediaGenerationReferences';
+import {
+  resolveLegacyMediaGenerationReferences,
+  uploadMinimaxH3MediaParams,
+  usesMinimaxH3NosUpload,
+  validateMinimaxH3MediaParams,
+} from './mediaGenerationUpload';
 import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 import {
@@ -5117,67 +5123,12 @@ if (!gotTheLock) {
         refs,
       });
 
-      // Convert local file paths to data URLs
-      const MEDIA_MIME: Record<string, string> = {
-        '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-        '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
-        '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
-        '.wav': 'audio/wav', '.mp3': 'audio/mpeg',
-      };
-      const resolveRef = async (ref: string): Promise<string> => {
-        if (!ref || ref.startsWith('http') || ref.startsWith('oss://') || ref.startsWith('data:')) return ref;
-        const filePath = ref.startsWith('file://') ? fileURLToPath(ref) : path.resolve(ref);
-        const buf = await fs.promises.readFile(filePath);
-        const mime = MEDIA_MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
-        return `data:${mime};base64,${buf.toString('base64')}`;
-      };
-      const resolveStringParam = async (name: string) => {
-        if (typeof params[name] === 'string') {
-          params[name] = await resolveRef(params[name] as string);
-        }
-      };
-      const resolveStringArrayParam = async (name: string) => {
-        if (Array.isArray(params[name])) {
-          params[name] = await Promise.all((params[name] as string[]).map(resolveRef));
-        }
-      };
-      const resolveMediaItem = async (item: unknown): Promise<unknown> => {
-        if (typeof item === 'string') {
-          return resolveRef(item);
-        }
-        if (!item || typeof item !== 'object' || Array.isArray(item)) {
-          return item;
-        }
-        const next: Record<string, unknown> = { ...(item as Record<string, unknown>) };
-        if (typeof next.url === 'string') {
-          next.url = await resolveRef(next.url);
-        }
-        for (const key of ['image_url', 'video_url', 'audio_url']) {
-          const nested = next[key];
-          if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
-            const nestedRecord = nested as Record<string, unknown>;
-            if (typeof nestedRecord.url === 'string') {
-              next[key] = { ...nestedRecord, url: await resolveRef(nestedRecord.url) };
-            }
-          }
-        }
-        return next;
-      };
-      if (Array.isArray(params.images)) {
-        params.images = await Promise.all((params.images as string[]).map(resolveRef));
-      }
-      await resolveStringParam('firstFrame');
-      await resolveStringParam('lastFrame');
-      await resolveStringArrayParam('referenceImages');
-      if (Array.isArray(params.videos)) {
-        params.videos = await Promise.all((params.videos as string[]).map(resolveRef));
-      }
-      await resolveStringArrayParam('referenceAudios');
-      if (Array.isArray(params.audios)) {
-        params.audios = await Promise.all((params.audios as string[]).map(resolveRef));
-      }
-      if (Array.isArray(params.media)) {
-        params.media = await Promise.all((params.media as unknown[]).map(resolveMediaItem));
+      const useMinimaxH3NosUpload = usesMinimaxH3NosUpload(selectedModel);
+      if (useMinimaxH3NosUpload) {
+        // Validate before confirmation so invalid or oversized files never reach NOS.
+        await validateMinimaxH3MediaParams(params);
+      } else {
+        params = await resolveLegacyMediaGenerationReferences(params);
       }
 
       // Confirm only after references have been normalized so MiniMax-H3 can show the same
@@ -5239,6 +5190,13 @@ if (!gotTheLock) {
             details: { status: 'cancelled', reason: 'USER_CANCELLED' },
           };
         }
+      }
+
+      if (useMinimaxH3NosUpload) {
+        params = await uploadMinimaxH3MediaParams(params, {
+          serverBaseUrl,
+          fetchWithAuth,
+        });
       }
 
       const inferVideoGenerationType = (): string => {
