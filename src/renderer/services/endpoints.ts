@@ -41,6 +41,8 @@ export const getLoginOvermindUrl = () => isTestModeEnabled()
 // Portal 页面
 const PORTAL_BASE_TEST = 'https://lobsterai.inner.youdao.com/portal#';
 const PORTAL_BASE_PROD = 'https://lobsterai.youdao.com/portal#';
+const PORTAL_BASE_ENTERPRISE_STAGING =
+  'https://c.youdao.com/dict/hardware/octopus/lobsterai-portal-subscription.html#';
 
 const getPortalBase = () => isTestModeEnabled() ? PORTAL_BASE_TEST : PORTAL_BASE_PROD;
 
@@ -51,11 +53,11 @@ export const PortalPricingKeyfrom = {
 export type PortalPricingKeyfrom =
   (typeof PortalPricingKeyfrom)[keyof typeof PortalPricingKeyfrom];
 
-export const getPortalLoginUrl = () => `${getPortalBase()}/login`;
+export const getPortalLoginUrl = () => `${PORTAL_BASE_ENTERPRISE_STAGING}/login`;
 export const getPortalPricingUrl = (keyfrom?: PortalPricingKeyfrom) => (
   `${getPortalBase()}/pricing${keyfrom ? `?keyfrom=${encodeURIComponent(keyfrom)}` : ''}`
 );
-export const getPortalProfileUrl = () => `${getPortalBase()}/profile`;
+export const getPortalProfileUrl = () => `${PORTAL_BASE_ENTERPRISE_STAGING}/profile`;
 export const getPortalCreditsDetailUrl = () => `${getPortalBase()}/profile/detail`;
 export const getPortalRechargeUrl = () => `${getPortalBase()}/`;
 export const getPortalInvitationUrl = () => `${getPortalBase()}/invitation`;
@@ -64,7 +66,7 @@ export const getPortalCreditsResetActivityUrl = (campaignCode?: string) => (
 );
 
 export const getEnterpriseMemberProfileUrl = (enterpriseId: number) => (
-  `${getPortalBase()}/enterprise/profile/${encodeURIComponent(String(enterpriseId))}`
+  `${PORTAL_BASE_ENTERPRISE_STAGING}/enterprise/profile/${encodeURIComponent(String(enterpriseId))}`
 );
 
 const getEnterpriseConsoleBaseUrl = (enterpriseId: number) => (

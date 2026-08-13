@@ -10,6 +10,7 @@ import {
   getPortalCreditsDetailUrl,
   getPortalCreditsResetActivityUrl,
   getPortalInvitationUrl,
+  getPortalLoginUrl,
   getPortalPricingUrl,
   getPortalProfileUrl,
   getPortalRechargeUrl,
@@ -29,7 +30,12 @@ afterEach(() => {
 test('portal account urls use production base when test mode is disabled', () => {
   mockTestMode(false);
 
-  expect(getPortalProfileUrl()).toBe('https://lobsterai.youdao.com/portal#/profile');
+  expect(getPortalLoginUrl()).toBe(
+    'https://c.youdao.com/dict/hardware/octopus/lobsterai-portal-subscription.html#/login',
+  );
+  expect(getPortalProfileUrl()).toBe(
+    'https://c.youdao.com/dict/hardware/octopus/lobsterai-portal-subscription.html#/profile',
+  );
   expect(getPortalCreditsDetailUrl()).toBe('https://lobsterai.youdao.com/portal#/profile/detail');
   expect(getPortalRechargeUrl()).toBe('https://lobsterai.youdao.com/portal#/');
   expect(getPortalInvitationUrl()).toBe('https://lobsterai.youdao.com/portal#/invitation');
@@ -42,7 +48,12 @@ test('portal account urls use production base when test mode is disabled', () =>
 test('portal account urls use test base when test mode is enabled', () => {
   mockTestMode(true);
 
-  expect(getPortalProfileUrl()).toBe('https://lobsterai.inner.youdao.com/portal#/profile');
+  expect(getPortalLoginUrl()).toBe(
+    'https://c.youdao.com/dict/hardware/octopus/lobsterai-portal-subscription.html#/login',
+  );
+  expect(getPortalProfileUrl()).toBe(
+    'https://c.youdao.com/dict/hardware/octopus/lobsterai-portal-subscription.html#/profile',
+  );
   expect(getPortalCreditsDetailUrl()).toBe('https://lobsterai.inner.youdao.com/portal#/profile/detail');
   expect(getPortalRechargeUrl()).toBe('https://lobsterai.inner.youdao.com/portal#/');
   expect(getPortalInvitationUrl()).toBe('https://lobsterai.inner.youdao.com/portal#/invitation');
@@ -61,7 +72,7 @@ test('enterprise console urls use the selected enterprise context', () => {
   mockTestMode(false);
 
   expect(getEnterpriseMemberProfileUrl(1001)).toBe(
-    'https://lobsterai.youdao.com/portal#/enterprise/profile/1001',
+    'https://c.youdao.com/dict/hardware/octopus/lobsterai-portal-subscription.html#/enterprise/profile/1001',
   );
   expect(getEnterpriseOverviewUrl(1001)).toBe(
     'https://lobsterai.youdao.com/portal#/enterprise/console/1001/overview',

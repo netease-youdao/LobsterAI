@@ -285,7 +285,9 @@ describe('login diagnostics', () => {
 
     await expect(authService.login()).resolves.toEqual(loginResult);
 
-    expect(login).toHaveBeenCalledWith('https://lobsterai.youdao.com/portal#/login');
+    expect(login).toHaveBeenCalledWith(
+      'https://c.youdao.com/dict/hardware/octopus/lobsterai-portal-subscription.html#/login',
+    );
     expect(fromRenderer).toHaveBeenCalledWith(
       'info',
       'AuthService',

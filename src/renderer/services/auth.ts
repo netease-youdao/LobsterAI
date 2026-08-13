@@ -401,30 +401,11 @@ class AuthService {
   }
 
   /**
-   * Fetch login URL from overmind, fallback to Portal login page.
+   * Use the enterprise staging Portal for release regression login.
    */
   private async fetchLoginUrl(): Promise<string> {
-    const { getLoginOvermindUrl } = await import('./endpoints');
-    const url = getLoginOvermindUrl();
-    try {
-      const response = await window.electron.api.fetch({
-        url,
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-      });
-      if (response.ok && typeof response.data === 'object' && response.data !== null) {
-        const value = (response.data as any)?.data?.value;
-        if (typeof value === 'string' && value.trim()) {
-          writeAuthRendererLog('debug', 'resolved login URL from overmind');
-          return value.trim();
-        }
-      }
-    } catch (e) {
-      writeAuthRendererLog('warn', 'failed to resolve login URL from overmind', e);
-    }
-    // Fallback: use Portal login page directly
     const { getPortalLoginUrl } = await import('./endpoints');
-    writeAuthRendererLog('info', 'using fallback portal login URL');
+    writeAuthRendererLog('info', 'using enterprise staging portal login URL');
     return getPortalLoginUrl();
   }
 
