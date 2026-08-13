@@ -19,6 +19,7 @@ export type MediaSelectionMode = typeof MediaSelectionMode[keyof typeof MediaSel
 
 export const MediaGenerationGateReason = {
   MediaNotEnabled: 'MEDIA_NOT_ENABLED',
+  SelectedModelMissing: 'SELECTED_MODEL_MISSING',
   WrongMediaType: 'WRONG_MEDIA_TYPE',
 } as const;
 export type MediaGenerationGateReason = typeof MediaGenerationGateReason[keyof typeof MediaGenerationGateReason];
@@ -65,6 +66,24 @@ export const resolveMediaGenerationGate = (input: {
       allowed: false,
       reason: MediaGenerationGateReason.WrongMediaType,
       message: 'Image generation is not available. The user selected a video generation model for this turn.',
+    };
+  }
+
+  let selectedModelId: string | undefined;
+  if (input.tool === MediaGenerationTool.Image) {
+    selectedModelId = input.selection.mode === MediaSelectionMode.Auto
+      ? input.selection.imageModelId
+      : input.selection.imageModelId || input.selection.modelId;
+  } else {
+    selectedModelId = input.selection.mode === MediaSelectionMode.Auto
+      ? input.selection.videoModelId
+      : input.selection.videoModelId || input.selection.modelId;
+  }
+  if (!selectedModelId?.trim()) {
+    return {
+      allowed: false,
+      reason: MediaGenerationGateReason.SelectedModelMissing,
+      message: 'Generation blocked: The user-selected model ID is missing for this media type. Do not use a model supplied by the Agent or switch models automatically. Ask the user to manually select the model again in the LobsterAI model picker.',
     };
   }
 

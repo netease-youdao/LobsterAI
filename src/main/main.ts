@@ -3657,6 +3657,7 @@ interface MediaTaskTracker {
   sessionId: string;
   mediaType: 'image' | 'video';
   model: string;
+  selectedModel: string;
   startedAt: number;
   pollCount: number;
   timeoutMs: number;
@@ -3675,6 +3676,22 @@ const MEDIA_POLL_SLOW_COUNT = 18;
 const MEDIA_POLL_MEDIUM_COUNT = 10;
 const MEDIA_TASK_DEFAULT_TIMEOUT_MS = 172_800_000;
 const TERMINAL_MEDIA_TASK_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
+
+const MediaGenerationFailureReason = {
+  SelectedModelFailed: 'SELECTED_MEDIA_MODEL_FAILED',
+  SelectedModelUnavailable: 'SELECTED_MEDIA_MODEL_UNAVAILABLE',
+  SubscriptionRequired: 'MEDIA_SUBSCRIPTION_REQUIRED',
+  QuotaExhausted: 'MEDIA_QUOTA_EXHAUSTED',
+  RequestFailed: 'MEDIA_GENERATION_REQUEST_FAILED',
+} as const;
+
+const MEDIA_MODEL_UNAVAILABLE_SERVER_CODES = new Set([40300, 40301]);
+
+const MediaGenerationUserAction = {
+  SelectMediaModel: 'select_media_model',
+  Subscribe: 'subscribe',
+  ReviewQuota: 'review_quota',
+} as const;
 
 const normalizeOptionalMediaModelId = (modelId: string | undefined): string | undefined => {
   const canonicalModelId = canonicalizeMediaModelId(modelId);
@@ -4873,6 +4890,12 @@ if (!gotTheLock) {
       selectedModel = resolvedModelFromSelection;
       selectedModelSource = 'selection-override';
     }
+    const modelAuditDetails = {
+      ...(explicitModel ? { agentRequestedModel: explicitModel } : {}),
+      ...(resolvedModelFromSelection ? { userSelectedModel: resolvedModelFromSelection } : {}),
+      effectiveModel: selectedModel,
+      allowAutomaticFallback: false,
+    };
     console.log('[MediaGeneration] received tool request:', serializeForLog({
       tool,
       action,
@@ -4891,13 +4914,21 @@ if (!gotTheLock) {
       if (gate.allowed === false) {
         if (gate.reason === MediaGenerationGateReason.MediaNotEnabled) {
           console.warn('[MediaGeneration] blocked generate request because no media model was selected for this turn.');
+        } else if (gate.reason === MediaGenerationGateReason.SelectedModelMissing) {
+          console.warn('[MediaGeneration] blocked generate request because the user-selected model ID was missing.');
         } else {
           console.warn('[MediaGeneration] blocked generate request because the selected turn model has a different media type.');
         }
         return {
           content: [{ type: 'text', text: gate.message }],
           isError: true,
-          details: { status: 'failed', warnings: [gate.reason] },
+          details: {
+            status: 'failed',
+            reasonCode: gate.reason,
+            userActionRequired: MediaGenerationUserAction.SelectMediaModel,
+            ...modelAuditDetails,
+            warnings: [gate.reason],
+          },
         };
       }
     }
@@ -4933,7 +4964,7 @@ if (!gotTheLock) {
             }).join('\n\n')}`
           : `No ${mediaType} models available.`;
         if (resolvedModelFromSelection) {
-          text += `\n\n---\n**Note:** The user has already selected model "${resolvedModelFromSelection}" for this session. You MUST use this model for the generate action. Do NOT choose a different model.`;
+          text += `\n\n---\n**Note:** The user has already selected model "${resolvedModelFromSelection}" for this session. You MUST use this model for the generate action. Do NOT choose a different model. If it is unavailable or absent from this list, stop, explain why it cannot be used, and ask the user to manually change the LobsterAI model picker.`;
         }
         return { content: [{ type: 'text', text }], details: { status: 'succeeded', models } };
       }
@@ -5002,6 +5033,9 @@ if (!gotTheLock) {
             : resultUrls.map(url => `  - ${url}`);
         }
 
+        const taskErrorMessage = typeof task.errorMessage === 'string' && task.errorMessage.trim()
+          ? task.errorMessage.trim()
+          : 'The generation task failed.';
         const lines = [
           `Task ID: ${task.upstreamTaskId || task.taskId}`,
           `Model: ${outputModel}`,
@@ -5011,6 +5045,9 @@ if (!gotTheLock) {
           ...(task.progress ? [`Progress: ${task.progress}%`] : []),
           ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
           ...(task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
+          ...(status === 'failed' ? [
+            'Do not retry or switch models automatically. Explain the failure reason and ask the user to manually select another model in the LobsterAI model picker before trying again.',
+          ] : []),
         ];
         const details = {
           taskId: String(task.taskId),
@@ -5018,6 +5055,12 @@ if (!gotTheLock) {
           status,
           ...(pollCount > 1 ? { pollCount } : {}),
           model: outputModel,
+          ...modelAuditDetails,
+          ...(status === 'failed' ? {
+            reasonCode: MediaGenerationFailureReason.SelectedModelFailed,
+            userActionRequired: MediaGenerationUserAction.SelectMediaModel,
+            warnings: [taskErrorMessage],
+          } : {}),
           ...(upstreamModel ? { upstreamModel } : {}),
           ...(modelSelectionReason ? { modelSelectionReason } : {}),
           mediaType: statusMediaType,
@@ -5034,6 +5077,7 @@ if (!gotTheLock) {
 
         return {
           content: [{ type: 'text', text: lines.join('\n') }],
+          ...(status === 'failed' ? { isError: true } : {}),
           details,
         };
       }
@@ -5269,7 +5313,13 @@ if (!gotTheLock) {
         return {
           content: [{ type: 'text', text: 'Media generation requires an active subscription. Please subscribe to use this feature.' }],
           isError: true,
-          details: { status: 'failed', warnings: ['MEDIA_SUBSCRIPTION_REQUIRED'] },
+          details: {
+            status: 'failed',
+            reasonCode: MediaGenerationFailureReason.SubscriptionRequired,
+            userActionRequired: MediaGenerationUserAction.Subscribe,
+            ...modelAuditDetails,
+            warnings: [MediaGenerationFailureReason.SubscriptionRequired],
+          },
         };
       }
       if (body.code === 40204) {
@@ -5277,15 +5327,41 @@ if (!gotTheLock) {
         return {
           content: [{ type: 'text', text: 'Media generation quota exhausted for this period. Please wait for quota reset or upgrade your plan.' }],
           isError: true,
-          details: { status: 'failed', warnings: ['MEDIA_QUOTA_EXHAUSTED'] },
+          details: {
+            status: 'failed',
+            reasonCode: MediaGenerationFailureReason.QuotaExhausted,
+            userActionRequired: MediaGenerationUserAction.ReviewQuota,
+            ...modelAuditDetails,
+            warnings: [MediaGenerationFailureReason.QuotaExhausted],
+          },
         };
       }
       if (body.code !== 0) {
-        console.warn('[MediaGeneration] server rejected generate request:', serializeForLog({ mediaType, selectedModel, code: body.code, message: body.message }));
+        const failureReason = body.message?.trim() || 'The server rejected the generation request.';
+        const selectedModelName = mediaModelDisplayName(selectedModel, selectedModel);
+        const selectedModelUnavailable = MEDIA_MODEL_UNAVAILABLE_SERVER_CODES.has(body.code);
+        const nextStep = selectedModelUnavailable
+          ? 'Explain the reason and ask the user to manually select another model in the LobsterAI model picker before trying again.'
+          : 'Explain the reason and wait for the user to decide whether to retry later or manually select another model.';
+        console.warn('[MediaGeneration] server rejected generate request:', serializeForLog({ mediaType, selectedModel, code: body.code, message: failureReason }));
         return {
-          content: [{ type: 'text', text: body.message || 'Media generation request failed.' }],
+          content: [{
+            type: 'text',
+            text: `Generation with the selected ${mediaType} model "${selectedModelName}" failed: ${failureReason} Do not retry or switch models automatically. ${nextStep}`,
+          }],
           isError: true,
-          details: { status: 'failed', warnings: [body.message || 'Unknown error'] },
+          details: {
+            status: 'failed',
+            reasonCode: selectedModelUnavailable
+              ? MediaGenerationFailureReason.SelectedModelUnavailable
+              : MediaGenerationFailureReason.SelectedModelFailed,
+            ...(selectedModelUnavailable ? {
+              userActionRequired: MediaGenerationUserAction.SelectMediaModel,
+            } : {}),
+            serverCode: body.code,
+            ...modelAuditDetails,
+            warnings: [failureReason],
+          },
         };
       }
 
@@ -5334,6 +5410,10 @@ if (!gotTheLock) {
         ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
         `Status: ${status}`,
         ...(task.quotaRemaining != null ? [`Quota remaining: ${task.quotaRemaining}`] : []),
+        ...(status === 'failed' && task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
+        ...(status === 'failed' ? [
+          'Do not retry or switch models automatically. Explain the failure reason and ask the user to manually select another model in the LobsterAI model picker before trying again.',
+        ] : []),
       ];
 
       if (status === 'succeeded' && mediaType === 'image' && sessionId) {
@@ -5378,6 +5458,7 @@ if (!gotTheLock) {
             sessionId,
             mediaType,
             model: upstreamModel || outputModel,
+            selectedModel,
             startedAt: Date.now(),
             pollCount: 0,
             timeoutMs,
@@ -5387,11 +5468,20 @@ if (!gotTheLock) {
 
       return {
         content: [{ type: 'text', text: lines.join('\n') }],
+        ...(status === 'failed' ? { isError: true } : {}),
         details: {
           taskId: String(task.taskId),
           ...(task.upstreamTaskId ? { upstreamTaskId: String(task.upstreamTaskId) } : {}),
           status,
           model: outputModel,
+          ...modelAuditDetails,
+          ...(status === 'failed' ? {
+            reasonCode: MediaGenerationFailureReason.SelectedModelFailed,
+            userActionRequired: MediaGenerationUserAction.SelectMediaModel,
+            warnings: [typeof task.errorMessage === 'string' && task.errorMessage.trim()
+              ? task.errorMessage.trim()
+              : 'The generation task failed.'],
+          } : {}),
           ...(upstreamModel ? { upstreamModel } : {}),
           ...(modelSelectionReason ? { modelSelectionReason } : {}),
           ...(detailsAssets.length > 0 ? { assets: detailsAssets } : {}),
@@ -5405,7 +5495,23 @@ if (!gotTheLock) {
         return { content: [{ type: 'text', text: 'Not logged in. Please log in to use media generation.' }], isError: true };
       }
       console.error('[MediaGeneration] media generation request failed:', error);
-      return { content: [{ type: 'text', text: `Media generation error: ${msg}` }], isError: true };
+      if (action !== 'generate') {
+        return { content: [{ type: 'text', text: `Media generation error: ${msg}` }], isError: true };
+      }
+      const selectedModelName = mediaModelDisplayName(selectedModel, selectedModel);
+      return {
+        content: [{
+          type: 'text',
+          text: `Generation with the selected model "${selectedModelName}" failed: ${msg} Do not retry or switch models automatically. Explain the reason and wait for the user to decide whether to retry later or manually select another model.`,
+        }],
+        isError: true,
+        details: {
+          status: 'failed',
+          reasonCode: MediaGenerationFailureReason.RequestFailed,
+          ...modelAuditDetails,
+          warnings: [msg],
+        },
+      };
     }
   };
 
@@ -5563,11 +5669,33 @@ if (!gotTheLock) {
             const lines = [
               `${tracker.mediaType === 'video' ? 'Video' : 'Image'} generation ${status}.`,
               `Task ID: ${taskId}`,
-              `Model: ${tracker.model}`,
+              `Model: ${tracker.selectedModel}`,
               ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
               ...(task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
+              ...(status === 'failed' ? [
+                'Do not retry or switch models automatically. Manually select another model in the LobsterAI model picker before trying again.',
+              ] : []),
             ];
-            emitMediaTaskMessage(tracker.sessionId, lines.join('\n'));
+            const taskErrorMessage = typeof task.errorMessage === 'string' && task.errorMessage.trim()
+              ? task.errorMessage.trim()
+              : 'The generation task failed.';
+            emitMediaTaskMessage(
+              tracker.sessionId,
+              lines.join('\n'),
+              status === 'failed'
+                ? {
+                    toolResultDetails: {
+                      status,
+                      model: tracker.selectedModel,
+                      effectiveModel: tracker.selectedModel,
+                      allowAutomaticFallback: false,
+                      reasonCode: MediaGenerationFailureReason.SelectedModelFailed,
+                      userActionRequired: MediaGenerationUserAction.SelectMediaModel,
+                      warnings: [taskErrorMessage],
+                    },
+                  }
+                : undefined,
+            );
           }
           BrowserWindow.getAllWindows().forEach(win => {
             if (!win.isDestroyed()) win.webContents.send(AuthIpcChannel.QuotaChanged);

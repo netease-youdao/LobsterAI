@@ -12,7 +12,7 @@ import { i18nService } from '../../services/i18n';
 import { localStore } from '../../services/store';
 import { RootState } from '../../store';
 import { setMediaModels, setMediaSelection } from '../../store/slices/coworkSlice';
-import type { MediaGenerationMode, MediaModel } from '../../types/mediaGeneration';
+import type { MediaGenerationMode, MediaGenerationSelection, MediaModel } from '../../types/mediaGeneration';
 import MagicIcon from '../icons/MagicIcon';
 import mediaGenAnimation from '../icons/MediaGenIcon.json';
 
@@ -52,6 +52,56 @@ const normalizeSavedMediaSelection = (saved: SavedMediaSelection | null | undefi
     ...(image ? { image } : {}),
     ...(video ? { video } : {}),
   };
+};
+
+const savedMediaSelectionFromState = (
+  selection: MediaGenerationSelection | undefined,
+  models: { image: MediaModel[]; video: MediaModel[] },
+): SavedMediaSelection => {
+  const entryFor = (mode: 'image' | 'video'): { modelId: string; modelName: string } | undefined => {
+    const modelId = canonicalizeMediaModelId(
+      mode === 'image'
+        ? selection?.imageModelId ?? (selection?.mode === 'image' ? selection.modelId : undefined)
+        : selection?.videoModelId ?? (selection?.mode === 'video' ? selection.modelId : undefined),
+    );
+    if (!modelId) return undefined;
+    const model = models[mode].find(item => item.modelId === modelId);
+    const fallbackName = selection?.mode === mode ? selection.modelName : undefined;
+    return {
+      modelId,
+      modelName: model?.displayName || fallbackName || modelId,
+    };
+  };
+
+  const image = entryFor('image');
+  const video = entryFor('video');
+  return {
+    ...(image ? { image } : {}),
+    ...(video ? { video } : {}),
+  };
+};
+
+const mediaSelectionFromSaved = (
+  saved: SavedMediaSelection,
+  preferredMode: 'image' | 'video',
+): MediaGenerationSelection => {
+  if (saved.image && saved.video) {
+    const preferred = saved[preferredMode] || saved.image;
+    return {
+      mode: 'auto',
+      modelId: preferred.modelId,
+      modelName: preferred.modelName,
+      imageModelId: saved.image.modelId,
+      videoModelId: saved.video.modelId,
+    };
+  }
+  if (saved.image) {
+    return { mode: 'image', modelId: saved.image.modelId, modelName: saved.image.modelName };
+  }
+  if (saved.video) {
+    return { mode: 'video', modelId: saved.video.modelId, modelName: saved.video.modelName };
+  }
+  return { mode: 'none' };
 };
 
 const isSameSavedMediaSelection = (
@@ -571,6 +621,35 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
 
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
+  const selectionPersistenceRef = useRef<Promise<void>>(Promise.resolve());
+
+  const applySelection = useCallback((nextSelection: MediaGenerationSelection) => {
+    selectionRef.current = nextSelection;
+    dispatch(setMediaSelection({ draftKey, selection: nextSelection }));
+  }, [dispatch, draftKey]);
+
+  const persistSelectionUpdate = useCallback((
+    mode: 'image' | 'video',
+    entry: { modelId: string; modelName: string } | undefined,
+  ) => {
+    const persist = async () => {
+      const current = normalizeSavedMediaSelection(
+        await localStore.getItem<SavedMediaSelection>(MEDIA_SELECTION_KV_KEY),
+      );
+      if (entry) {
+        current[mode] = entry;
+      } else {
+        delete current[mode];
+      }
+      await localStore.setItem(MEDIA_SELECTION_KV_KEY, current);
+    };
+    selectionPersistenceRef.current = selectionPersistenceRef.current
+      .catch(() => undefined)
+      .then(persist)
+      .catch(error => {
+        console.error('[MediaModelPicker] Failed to persist media selection:', error);
+      });
+  }, []);
 
   const fetchModels = useCallback(async () => {
     const hasCachedModels = mediaModels.image.length > 0 || mediaModels.video.length > 0;
@@ -597,32 +676,21 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
         if (!isSameSavedMediaSelection(rawSaved, saved)) {
           localStore.setItem(MEDIA_SELECTION_KV_KEY, saved);
         }
-        const imageEntry = saved?.image;
-        const videoEntry = saved?.video;
+        if (selectionRef.current && selectionRef.current.mode !== 'none') return;
+        const imageEntry = saved.image;
+        const videoEntry = saved.video;
         const imageValid = imageEntry && imageModels.some(m => m.modelId === imageEntry.modelId);
         const videoValid = videoEntry && videoModels.some(m => m.modelId === videoEntry.modelId);
 
-        if (imageValid && videoValid) {
-          dispatch(setMediaSelection({
-            draftKey,
-            selection: {
-              mode: 'auto',
-              modelId: imageEntry.modelId,
-              modelName: imageEntry.modelName,
-              imageModelId: imageEntry.modelId,
-              videoModelId: videoEntry!.modelId,
-            },
-          }));
-        } else if (imageValid) {
-          dispatch(setMediaSelection({
-            draftKey,
-            selection: { mode: 'image', modelId: imageEntry.modelId, modelName: imageEntry.modelName },
-          }));
-        } else if (videoValid) {
-          dispatch(setMediaSelection({
-            draftKey,
-            selection: { mode: 'video', modelId: videoEntry!.modelId, modelName: videoEntry!.modelName },
-          }));
+        const validatedSaved: SavedMediaSelection = {
+          ...(imageValid ? { image: imageEntry } : {}),
+          ...(videoValid ? { video: videoEntry } : {}),
+        };
+        const restoredSelection = mediaSelectionFromSaved(validatedSaved, 'image');
+        if (restoredSelection.mode !== 'none') {
+          applySelection(restoredSelection);
+        }
+        if (!imageValid && videoValid) {
           setActiveTab('video');
         }
       }
@@ -631,7 +699,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     } finally {
       setIsLoading(false);
     }
-  }, [dispatch, draftKey, mediaModels.image.length, mediaModels.video.length]);
+  }, [applySelection, dispatch, mediaModels.image.length, mediaModels.video.length]);
 
   useEffect(() => {
     if (isOpen && canUseMediaGeneration) {
@@ -653,7 +721,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
   }, [isOpen]);
 
   useEffect(() => {
-    if (selection && selection.mode !== 'none') return;
+    if (selectionRef.current && selectionRef.current.mode !== 'none') return;
 
     let cancelled = false;
     (async () => {
@@ -662,78 +730,37 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
       if (!isSameSavedMediaSelection(rawSaved, saved)) {
         localStore.setItem(MEDIA_SELECTION_KV_KEY, saved);
       }
-      if (cancelled) return;
-      const imageEntry = saved?.image;
-      const videoEntry = saved?.video;
-      if (imageEntry && videoEntry) {
-        dispatch(setMediaSelection({
-          draftKey,
-          selection: {
-            mode: 'auto',
-            modelId: imageEntry.modelId,
-            modelName: imageEntry.modelName,
-            imageModelId: imageEntry.modelId,
-            videoModelId: videoEntry.modelId,
-          },
-        }));
-      } else if (imageEntry) {
-        dispatch(setMediaSelection({
-          draftKey,
-          selection: { mode: 'image', modelId: imageEntry.modelId, modelName: imageEntry.modelName },
-        }));
-      } else if (videoEntry) {
-        dispatch(setMediaSelection({
-          draftKey,
-          selection: { mode: 'video', modelId: videoEntry.modelId, modelName: videoEntry.modelName },
-        }));
+      if (cancelled || (selectionRef.current && selectionRef.current.mode !== 'none')) return;
+      const restoredSelection = mediaSelectionFromSaved(saved, 'image');
+      if (restoredSelection.mode !== 'none') {
+        applySelection(restoredSelection);
+      }
+      if (!saved.image && saved.video) {
         setActiveTab('video');
       }
     })();
     return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftKey, dispatch]);
+  }, [applySelection]);
 
-  const handleSelect = async (mode: MediaGenerationMode, model?: MediaModel) => {
-    const saved = normalizeSavedMediaSelection(await localStore.getItem<SavedMediaSelection>(MEDIA_SELECTION_KV_KEY));
+  const handleSelect = (mode: MediaGenerationMode, model?: MediaModel) => {
+    if (mode !== 'image' && mode !== 'video') return;
+    const currentSelection = selectionRef.current;
+    const saved = savedMediaSelectionFromState(currentSelection, mediaModels);
     const currentModelId = mode === 'image'
-      ? canonicalizeMediaModelId(selection?.imageModelId ?? (selection?.mode === 'image' ? selection?.modelId : undefined))
-      : canonicalizeMediaModelId(selection?.videoModelId ?? (selection?.mode === 'video' ? selection?.modelId : undefined));
+      ? canonicalizeMediaModelId(currentSelection?.imageModelId ?? (currentSelection?.mode === 'image' ? currentSelection.modelId : undefined))
+      : canonicalizeMediaModelId(currentSelection?.videoModelId ?? (currentSelection?.mode === 'video' ? currentSelection.modelId : undefined));
     const isDeselect = model && currentModelId === model.modelId;
 
     if (isDeselect) {
-      delete saved[mode as 'image' | 'video'];
+      delete saved[mode];
     } else if (model) {
-      saved[mode as 'image' | 'video'] = { modelId: model.modelId, modelName: model.displayName };
+      saved[mode] = { modelId: model.modelId, modelName: model.displayName };
     }
-    localStore.setItem(MEDIA_SELECTION_KV_KEY, saved);
-
-    const hasImage = !!saved.image;
-    const hasVideo = !!saved.video;
-
-    if (hasImage && hasVideo) {
-      dispatch(setMediaSelection({
-        draftKey,
-        selection: {
-          mode: 'auto',
-          modelId: saved[mode as 'image' | 'video']?.modelId,
-          modelName: saved[mode as 'image' | 'video']?.modelName,
-          imageModelId: saved.image!.modelId,
-          videoModelId: saved.video!.modelId,
-        },
-      }));
-    } else if (hasImage) {
-      dispatch(setMediaSelection({
-        draftKey,
-        selection: { mode: 'image', modelId: saved.image!.modelId, modelName: saved.image!.modelName },
-      }));
-    } else if (hasVideo) {
-      dispatch(setMediaSelection({
-        draftKey,
-        selection: { mode: 'video', modelId: saved.video!.modelId, modelName: saved.video!.modelName },
-      }));
-    } else {
-      dispatch(setMediaSelection({ draftKey, selection: { mode: 'none' } }));
-    }
+    const nextSelection = mediaSelectionFromSaved(saved, mode);
+    applySelection(nextSelection);
+    persistSelectionUpdate(mode, isDeselect || !model
+      ? undefined
+      : { modelId: model.modelId, modelName: model.displayName });
   };
 
   const handleLogin = async () => {

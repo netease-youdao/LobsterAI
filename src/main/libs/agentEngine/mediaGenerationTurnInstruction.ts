@@ -71,9 +71,12 @@ export const buildMediaGenerationTurnInstruction = (
   const lines = [
     '[LobsterAI media generation turn instruction]',
     'The user selected a LobsterAI media generation model for this turn.',
+    'The selected model is locked for this turn and only the user may change it in the LobsterAI model picker.',
     'IMPORTANT: Do NOT read or use the "seedance" or "seedream" skills for this request.',
     'The LobsterAI media generation tools (lobsterai_image_generate / lobsterai_video_generate) replace those skills when a media model is selected.',
     'Do not run any skill scripts for image or video generation. Use only the lobsterai_* tools specified below.',
+    'If generation fails or a status result reports failure, stop immediately. Do not retry generation, call action="list" to choose another model, switch models, or use another media tool or skill.',
+    'Explain the failure reason and wait for the user. If the selected model is unavailable, disabled, or denied, ask the user to manually select a different model in the LobsterAI model picker before trying again.',
   ];
 
   if (selection.mode === 'image') {
@@ -105,7 +108,7 @@ export const buildMediaGenerationTurnInstruction = (
   }
 
   if (!selection.imageModelId && !selection.videoModelId && selection.modelId?.trim()) {
-    lines.push(`You MUST use model "${selection.modelId.trim()}" for media generation. Do NOT use a different model unless the user explicitly requests a different LobsterAI media model by name.`);
+    lines.push(`You MUST use model "${selection.modelId.trim()}" for media generation. Do NOT use a different model; the user must change the model in the LobsterAI model picker.`);
   }
 
   return lines.join('\n');
