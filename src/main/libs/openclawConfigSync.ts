@@ -3697,7 +3697,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
     const skills = this.getSkillsList?.() ?? [];
     const entries: Record<string, { enabled: boolean }> = {};
     for (const skill of skills) {
-      entries[skill.id] = { enabled: skill.enabled };
+      entries[skill.name] = { enabled: skill.enabled };
     }
     return entries;
   }

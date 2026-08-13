@@ -202,6 +202,31 @@ describe('OpenClawConfigSync runtime config output', () => {
     } as never);
   };
 
+  test('keys OpenClaw skill entries by frontmatter name', async () => {
+    const sync = await createSync({
+      getSkillsList: () => [{
+        id: 'technology-news-search',
+        name: 'technology-search',
+        description: 'Technology news search',
+        enabled: false,
+        isOfficial: true,
+        isBuiltIn: true,
+        updatedAt: 0,
+        prompt: '',
+        skillPath: '/skills/technology-news-search/SKILL.md',
+      }],
+    });
+
+    const result = sync.sync('skill-entry-key');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.skills.entries).toMatchObject({
+      'technology-search': { enabled: false },
+    });
+    expect(config.skills.entries).not.toHaveProperty('technology-news-search');
+  });
+
   test('writes OpenClaw config fields required by LobsterAI patches', async () => {
     const legacyWorkingDirectory = path.join(tmpDir, 'legacy-working-directory');
     const mainAgentWorkingDirectory = path.join(tmpDir, 'main-agent-working-directory');
