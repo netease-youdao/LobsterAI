@@ -17,11 +17,28 @@ describe('ProviderName constants', () => {
 });
 
 describe('ProviderRegistry', () => {
-  test('providerIds returns 18 providers (no custom)', () => {
+  test('providerIds returns 19 providers (no custom)', () => {
     const ids = ProviderRegistry.providerIds;
-    expect(ids.length).toBe(18);
+    expect(ids.length).toBe(19);
     expect(ids).not.toContain(ProviderName.Custom);
     expect(ids).not.toContain(ProviderName.LobsteraiServer);
+  });
+
+  test('orcarouter mirrors openrouter as a namespaced-model gateway', () => {
+    const orca = ProviderRegistry.get(ProviderName.OrcaRouter);
+    expect(orca?.defaultBaseUrl).toBe('https://api.orcarouter.ai');
+    expect(orca?.switchableBaseUrls).toEqual({
+      anthropic: 'https://api.orcarouter.ai',
+      openai: 'https://api.orcarouter.ai/v1',
+    });
+    expect(orca?.openClawProviderId).toBe(OpenClawProviderId.OpenRouter);
+    expect(orca?.defaultModels[0]).toEqual({
+      id: 'anthropic/claude-sonnet-5',
+      name: 'Claude Sonnet 5',
+      supportsImage: true,
+      supportsThinking: true,
+      contextWindow: 1_000_000,
+    });
   });
 
   test('get returns definition for known provider', () => {
@@ -212,14 +229,15 @@ describe('ProviderRegistry', () => {
     expect(china).not.toContain(ProviderName.OpenAI);
   });
 
-  test('idsByRegion global returns 6 providers', () => {
+  test('idsByRegion global returns 7 providers', () => {
     const global = ProviderRegistry.idsByRegion('global');
-    expect(global.length).toBe(6);
+    expect(global.length).toBe(7);
     expect(global).toContain(ProviderName.OpenAI);
     expect(global).toContain(ProviderName.Gemini);
     expect(global).toContain(ProviderName.Xai);
     expect(global).toContain(ProviderName.Anthropic);
     expect(global).toContain(ProviderName.OpenRouter);
+    expect(global).toContain(ProviderName.OrcaRouter);
     expect(global).toContain(ProviderName.Copilot);
   });
 

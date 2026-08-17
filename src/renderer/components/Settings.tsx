@@ -2113,6 +2113,17 @@ const Settings: React.FC<SettingsProps> = ({
               baseUrl: config.api.baseUrl
             }
           }));
+        } else if (normalizedApiBaseUrl.includes('orcarouter.ai')) {
+          setActiveProvider('orcarouter');
+          setProviders(prev => ({
+            ...prev,
+            orcarouter: {
+              ...prev.orcarouter,
+              enabled: true,
+              apiKey: config.api.key,
+              baseUrl: config.api.baseUrl
+            }
+          }));
         } else if (normalizedApiBaseUrl.includes('googleapis')) {
           setActiveProvider('gemini');
           setProviders(prev => ({
