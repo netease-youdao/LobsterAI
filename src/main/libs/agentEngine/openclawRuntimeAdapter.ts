@@ -222,7 +222,10 @@ const FORK_COMPACTION_SUMMARY_MAX_CHARS = 40_000;
 // The GatewayClient auto-reconnects and typically succeeds on the second
 // attempt.  Keep a broad timeout to accommodate plugin loading and runtime
 // warmup on slow machines.
-const GATEWAY_READY_TIMEOUT_MS = 60_000;
+// Kept clear of the 60s timeouts plugins commonly use for their own child
+// processes: a plugin stalling the gateway event loop for exactly 60s used to
+// blow this handshake by milliseconds and trigger a needless gateway restart.
+const GATEWAY_READY_TIMEOUT_MS = 90_000;
 const FINAL_HISTORY_SYNC_LIMIT = 50;
 const CHANNEL_SESSION_DISCOVERY_LIMIT = 200;
 export const OPENCLAW_CHAT_SEND_PAYLOAD_LIMIT_BYTES = 30 * 1000 * 1000;

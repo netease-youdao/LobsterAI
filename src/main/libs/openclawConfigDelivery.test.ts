@@ -169,15 +169,60 @@ describe('deliverOpenClawConfigToGateway', () => {
     expect(scheduleDeferredRestart).not.toHaveBeenCalled();
   });
 
-  test('unavailable gateway client falls back with a scheduled restart', async () => {
+  test('unavailable gateway client falls back with a scheduled restart after retrying', async () => {
     const scheduleDeferredRestart = vi.fn();
+    const ensureRpcClient = vi.fn(async () => null as OpenClawConfigRpcClient | null);
     const result = await deliverOpenClawConfigToGateway(baseInput({
-      ensureRpcClient: async () => null,
+      ensureRpcClient,
       scheduleDeferredRestart,
     }));
 
+    expect(ensureRpcClient).toHaveBeenCalledTimes(2);
     expect(result.mode).toBe(OpenClawConfigDeliveryMode.Fallback);
     expect(result.restartScheduled).toBe(true);
+  });
+
+  // A gateway stalling its event loop blows the handshake window and then
+  // connects moments later; the retry must catch that instead of restarting it.
+  test('client that only connects on the retry delivers without scheduling a restart', async () => {
+    const { client, calls } = createClient({});
+    const scheduleDeferredRestart = vi.fn();
+    let attempts = 0;
+    const ensureRpcClient = vi.fn(async (): Promise<OpenClawConfigRpcClient | null> => {
+      attempts += 1;
+      return attempts === 1 ? null : client;
+    });
+
+    const result = await deliverOpenClawConfigToGateway(baseInput({
+      ensureRpcClient,
+      scheduleDeferredRestart,
+    }));
+
+    expect(ensureRpcClient).toHaveBeenCalledTimes(2);
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
+    expect(scheduleDeferredRestart).not.toHaveBeenCalled();
+    expect(calls.map((call) => call.method)).toEqual(['config.get', 'config.set']);
+  });
+
+  test('client rejection on the first attempt is retried before degrading', async () => {
+    const { client } = createClient({});
+    const scheduleDeferredRestart = vi.fn();
+    let attempts = 0;
+    const ensureRpcClient = vi.fn(async (): Promise<OpenClawConfigRpcClient | null> => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error('OpenClaw gateway client connect timeout after 60000ms.');
+      }
+      return client;
+    });
+
+    const result = await deliverOpenClawConfigToGateway(baseInput({
+      ensureRpcClient,
+      scheduleDeferredRestart,
+    }));
+
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
+    expect(scheduleDeferredRestart).not.toHaveBeenCalled();
   });
 
   test('config file read failure and empty content degrade to fallback', async () => {

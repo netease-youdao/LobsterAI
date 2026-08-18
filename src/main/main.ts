@@ -2460,9 +2460,53 @@ const waitForOpenClawConfigApply = async (context: string): Promise<OpenClawEngi
 
 const DEFERRED_SYNC_REASON_PREFIX = 'deferred:';
 
+/**
+ * Re-attempt the RPC config delivery that a fallback restart was scheduled to
+ * work around, using only an already-connected client.
+ *
+ * The fallback fires whenever the gateway is unreachable for the handshake
+ * window, which a stalled gateway event loop (e.g. a plugin running a
+ * synchronous child process on the start path) trivially exceeds. The client
+ * usually reconnects moments later — field logs show a handshake succeeding
+ * 645ms after the delivery gave up — and by the time the deferred restart runs,
+ * the config is already convergeable over RPC. Killing a healthy, reconnected
+ * gateway at that point interrupts the user for nothing and, when the stall is
+ * reproducible at startup, feeds a restart loop.
+ *
+ * Returns true when the config was acked and the restart is therefore moot.
+ */
+const retryFallbackConfigDeliveryOverRpc = async (reason: string): Promise<boolean> => {
+  const client = openClawRuntimeAdapter?.getGatewayClient() ?? null;
+  if (!client) {
+    return false;
+  }
+  const manager = getOpenClawEngineManager();
+  const delivery = await deliverOpenClawConfigToGateway({
+    reason: `deferred-recheck:${reason}`,
+    gatewayPhase: manager.getStatus().phase,
+    readConfigFile: () => fs.readFileSync(manager.getConfigPath(), 'utf8'),
+    // Reuse the live client only. Waiting on a fresh handshake here would
+    // reintroduce the very stall this recheck exists to survive.
+    ensureRpcClient: async () => client,
+    // The restart below is already the fallback; never arm a second one.
+    scheduleDeferredRestart: () => {},
+  });
+  return delivery.mode === OpenClawConfigDeliveryMode.Rpc;
+};
+
 const executeDeferredGatewayRestart = async (reason: string) => {
   clearDeferredRestart();
   deferredRestartReason = null;
+
+  if (reason.startsWith(CONFIG_DELIVERY_FALLBACK_REASON_PREFIX)
+    && await retryFallbackConfigDeliveryOverRpc(reason)) {
+    console.log(
+      `${gwDiagTs()} executeDeferredGatewayRestart: gateway reachable again and config.set acked`
+      + ` — restart cancelled (reason: ${reason})`,
+    );
+    return;
+  }
+
   console.log(
     `${gwDiagTs()} executeDeferredGatewayRestart: performing deferred restart (reason: ${reason})`,
   );

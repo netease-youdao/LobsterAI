@@ -136,6 +136,25 @@ const describeError = (error: unknown): string => {
   return message.slice(0, 200);
 };
 
+type RpcClientAttempt = {
+  client: OpenClawConfigRpcClient | null;
+  error: unknown;
+};
+
+/**
+ * One `ensureRpcClient` attempt, with a rejection reported as data rather than
+ * thrown, so the caller can retry either failure shape uniformly.
+ */
+async function attemptRpcClient(
+  ensureRpcClient: OpenClawConfigDeliveryInput['ensureRpcClient'],
+): Promise<RpcClientAttempt> {
+  try {
+    return { client: await ensureRpcClient(), error: null };
+  } catch (error) {
+    return { client: null, error };
+  }
+}
+
 async function requestConfigSet(
   client: OpenClawConfigRpcClient,
   raw: string,
@@ -222,14 +241,24 @@ export async function deliverOpenClawConfigToGateway(
   }
   raw = stripPluginIndexManagedKeysFromRawConfig(raw);
 
-  let client: OpenClawConfigRpcClient | null = null;
-  try {
-    client = await input.ensureRpcClient();
-  } catch (error) {
-    return fallback(`gateway client unavailable: ${describeError(error)}`);
+  // Retry once before degrading. `ensureRpcClient` gives up after a fixed
+  // handshake window, and a gateway that stalls its event loop (e.g. a plugin
+  // running a synchronous child process on the start path) blows straight
+  // through it — field logs show the handshake completing 645ms after the wait
+  // was abandoned. Once the client is connected the retry resolves immediately
+  // off the adapter's already-settled ready promise, and when the gateway is
+  // genuinely still stalled, waiting beats a restart that only replays it.
+  let attempt = await attemptRpcClient(input.ensureRpcClient);
+  if (!attempt.client) {
+    attempt = await attemptRpcClient(input.ensureRpcClient);
   }
+  const client = attempt.client;
   if (!client) {
-    return fallback('gateway client unavailable');
+    return fallback(
+      attempt.error === null
+        ? 'gateway client unavailable after retry'
+        : `gateway client unavailable after retry: ${describeError(attempt.error)}`,
+    );
   }
 
   try {

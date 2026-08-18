@@ -26,6 +26,7 @@ import { mergeNoProxyValue } from './noProxyEnv';
 import { getCodexHomeDir } from './openaiCodexAuth';
 import { migrateLegacyCronStorageWithDoctor } from './openclawCronLegacyMigration';
 import { cleanupStaleGatewayLocks, GatewayLockCleanupAction } from './openclawGatewayLock';
+import { describeOpenClawGatewayStall, parseOpenClawGatewayStall } from './openclawGatewayStall';
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
 import { ensureOpenClawWorkerShims } from './openclawWorkerShims';
@@ -1727,10 +1728,25 @@ export class OpenClawEngineManager extends EventEmitter {
       }
     };
 
+    // A gateway whose event loop is blocked is indistinguishable from a dead
+    // one at the socket level: health polls hang, the RPC handshake times out,
+    // and the recovery path restarts a process that was never broken. The
+    // gateway reports these windows itself — surface them under one greppable
+    // tag instead of leaving them to be reconstructed from log timestamps.
+    const reportGatewayStalls = (text: string) => {
+      for (const line of text.split(/\r?\n/)) {
+        const stall = parseOpenClawGatewayStall(line);
+        if (stall) {
+          console.warn(`[OpenClawStall] ${describeOpenClawGatewayStall(stall)}`);
+        }
+      }
+    };
+
     child.stdout?.on('data', (chunk) => {
       appendLog(chunk, 'stdout');
       const text = typeof chunk === 'string' ? chunk : chunk.toString();
       logStartupMilestone(text);
+      reportGatewayStalls(text);
       console.log(`[OpenClaw stdout] ${OpenClawEngineManager.rewriteUtcTimestamps(text)}`);
     });
     child.stderr?.on('data', (chunk) => {
