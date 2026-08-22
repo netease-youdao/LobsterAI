@@ -9170,6 +9170,14 @@ if (!gotTheLock) {
     try {
       getCoworkEngineRouter().stopSession(sessionId);
       const coworkStoreInstance = getCoworkStore();
+      // Abort any active run before deleting, so the gateway stops
+      // tool execution and token consumption.  stopSession() is a
+      // no-op when no active turn exists for this session.
+      try {
+        getCoworkEngineRouter().stopSession(sessionId);
+      } catch {
+        // Router may not be initialised yet; safe to ignore.
+      }
       coworkStoreInstance.deleteSession(sessionId);
       mediaSelectionBySession.delete(sessionId);
       mediaTurnAccountScopeBySession.delete(sessionId);
@@ -9212,8 +9220,17 @@ if (!gotTheLock) {
         runtime.stopSession(sessionId);
       });
       const coworkStoreInstance = getCoworkStore();
-      coworkStoreInstance.deleteSessions(sessionIds);
       const router = getCoworkEngineRouter();
+      // Abort any active runs before deleting so the gateway stops
+      // tool execution and token consumption.
+      for (const sessionId of sessionIds) {
+        try {
+          router.stopSession(sessionId);
+        } catch {
+          // Router may not be initialised yet; safe to ignore.
+        }
+      }
+      coworkStoreInstance.deleteSessions(sessionIds);
       for (const sessionId of sessionIds) {
         skinRuntimeController?.handleSessionDeleted(sessionId);
         getDesktopNotificationManager().handleSessionDeleted(sessionId);
