@@ -73,6 +73,8 @@ function pdfJsStaticAssetsPlugin(): Plugin {
   };
 }
 
+const isProduction = process.env.NODE_ENV === 'production';
+
 export default defineConfig({
   define: {
     // KaTeX ESM bundle references this compile-time constant.
@@ -89,7 +91,7 @@ export default defineConfig({
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
-            minify: false,
+            minify: isProduction,
             rollupOptions: {
               external: (id) => {
                 const staticExternals = ['better-sqlite3', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'node-nim', 'nim-web-sdk-ng'];
@@ -116,7 +118,7 @@ export default defineConfig({
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
-            minify: false,
+            minify: isProduction,
           },
         },
         onstart() {},
@@ -147,7 +149,6 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: true,
-    minify: false,
   },
   server: {
     port: devPort,
