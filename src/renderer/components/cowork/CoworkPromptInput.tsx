@@ -136,7 +136,10 @@ import {
 import AttachmentCard from './AttachmentCard';
 import BrowserAnnotationAttachmentBadge from './BrowserAnnotationAttachmentBadge';
 import { getClipboardAttachmentFiles } from './clipboardAttachments';
-import { CoworkUiEvent } from './constants';
+import {
+  type CoworkPrepareImageEditDraftEventDetail,
+  CoworkUiEvent,
+} from './constants';
 import FolderSelectorPopover from './FolderSelectorPopover';
 import { getCaretPixelPosition } from './getCaretPosition';
 import MediaMentionPicker from './MediaMentionPicker';
@@ -554,6 +557,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const [isTemplateHeightLocked, setIsTemplateHeightLocked] = useState(false);
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const valueRef = useRef(value);
+    valueRef.current = value;
     const draftKeyRef = useRef(draftKey);
     draftKeyRef.current = draftKey;
     const addMenuButtonRef = useRef<HTMLButtonElement>(null);
@@ -955,6 +960,27 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       if (skillSubmenuCloseTimerRef.current) clearTimeout(skillSubmenuCloseTimerRef.current);
     };
   }, [dispatch, draftKey]);
+
+  useEffect(() => {
+    const handlePrepareImageEditDraft = (event: Event) => {
+      const detail = (event as CustomEvent<CoworkPrepareImageEditDraftEventDetail>).detail;
+      if (!detail || detail.draftKey !== draftKeyRef.current) return;
+
+      const currentPrompt = valueRef.current.trim();
+      const nextPrompt = currentPrompt ? `${currentPrompt}\n\n${detail.prompt}` : detail.prompt;
+      detail.handled = true;
+      valueRef.current = nextPrompt;
+      setValue(nextPrompt);
+      setIsTemplateHeightLocked(false);
+      dispatch(setDraftPrompt({ sessionId: detail.draftKey, draft: nextPrompt }));
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+
+    window.addEventListener(CoworkUiEvent.PrepareImageEditDraft, handlePrepareImageEditDraft);
+    return () => {
+      window.removeEventListener(CoworkUiEvent.PrepareImageEditDraft, handlePrepareImageEditDraft);
+    };
+  }, [dispatch]);
 
   useEffect(() => {
     if (workingDirectory?.trim()) {

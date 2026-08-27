@@ -313,7 +313,10 @@ const VideoArtifactPathList: React.FC<{ artifacts: Artifact[] }> = ({ artifacts 
 
 // ── MediaImageInline ────────────────────────────────────────────────────────
 
-const MediaImageInline: React.FC<{ artifacts: Artifact[] }> = ({ artifacts }) => {
+const MediaImageInline: React.FC<{
+  artifacts: Artifact[];
+  onOpenArtifactPreview?: (artifact: Artifact) => void;
+}> = ({ artifacts, onOpenArtifactPreview }) => {
   if (artifacts.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-2">
@@ -323,12 +326,22 @@ const MediaImageInline: React.FC<{ artifacts: Artifact[] }> = ({ artifacts }) =>
           : artifact.content;
         if (!src) return null;
         return (
-          <img
+          <button
             key={artifact.id}
-            src={src}
-            alt={artifact.title || ''}
-            className="max-w-[320px] max-h-[240px] rounded-lg border border-border object-contain"
-          />
+            type="button"
+            onClick={() => onOpenArtifactPreview?.(artifact)}
+            className={`overflow-hidden rounded-lg border border-border bg-surface transition-colors ${
+              onOpenArtifactPreview ? 'cursor-pointer hover:border-primary' : 'cursor-default'
+            }`}
+            title={onOpenArtifactPreview ? i18nService.t('imageEditorOpen') : artifact.title}
+          >
+            <img
+              src={src}
+              alt={artifact.title || ''}
+              className="max-h-[240px] max-w-[320px] object-contain"
+              draggable={false}
+            />
+          </button>
         );
       })}
     </div>
@@ -623,7 +636,11 @@ const AssistantTurnBlock: React.FC<{
       );
       if (imageArtifacts && imageArtifacts.length > 0 && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) {
         return (
-          <MediaImageInline key={item.message.id} artifacts={imageArtifacts} />
+          <MediaImageInline
+            key={item.message.id}
+            artifacts={imageArtifacts}
+            onOpenArtifactPreview={onOpenArtifactPreview}
+          />
         );
       }
 

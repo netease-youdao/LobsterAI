@@ -2,6 +2,7 @@ export const CoworkUiEvent = {
   OpenShareOptions: 'cowork:open-share-options',
   SelectSubagent: 'cowork:select-subagent',
   FocusInput: 'cowork:focus-input',
+  PrepareImageEditDraft: 'cowork:prepare-image-edit-draft',
   ShortcutSearch: 'cowork:shortcut:search',
   ShortcutConversationSearch: 'cowork:shortcut:conversation-search',
   ShortcutNewSession: 'cowork:shortcut:new-session',
@@ -39,6 +40,12 @@ export type CoworkShortcutDirection =
 
 export interface CoworkOpenShareOptionsEventDetail {
   sessionId: string;
+}
+
+export interface CoworkPrepareImageEditDraftEventDetail {
+  draftKey: string;
+  prompt: string;
+  handled: boolean;
 }
 
 export type CoworkSwitchAgentEventDetail = {
