@@ -679,7 +679,7 @@ interface MarkdownContentProps {
   onImageClick?: (image: { src: string; alt?: string | null }) => void;
 }
 
-const MarkdownContent: React.FC<MarkdownContentProps> = ({
+const MarkdownContent: React.FC<MarkdownContentProps> = React.memo(({
   content,
   className = '',
   spacing = 'normal',
@@ -750,6 +750,8 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
       </ReactMarkdown>
     </div>
   );
-};
+});
+
+MarkdownContent.displayName = 'MarkdownContent';
 
 export default MarkdownContent;
