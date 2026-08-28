@@ -13260,8 +13260,14 @@ if (!gotTheLock) {
     mainWindow.once('ready-to-show', () => {
       clearTimeout(showFallbackTimer);
       // 开机自启时不显示窗口，仅显示托盘图标
-      if (!isAutoLaunched()) {
-        mainWindow?.show();
+      if (!isAutoLaunched() && mainWindow) {
+        mainWindow.show();
+        // Windows 11 has strict foreground window policy, need extra steps to bring window to front
+        if (isWindows) {
+          mainWindow.setAlwaysOnTop(true);
+          mainWindow.setAlwaysOnTop(false);
+        }
+        mainWindow.focus();
       }
       markFirstFrameRendered('ready-to-show');
       // Initialize main-process i18n from stored language before creating UI elements.
