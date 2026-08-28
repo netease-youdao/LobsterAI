@@ -276,7 +276,8 @@ export class IMChatHandler {
   }
 
   /**
-   * Process message with streaming (for AI cards)
+   * Process message with streaming support
+   * Yields content chunks as they arrive from the LLM
    */
   async *processMessageStream(
     message: IMMessage
@@ -298,9 +299,209 @@ export class IMChatHandler {
       }
     }
 
-    // For now, use non-streaming and yield once
-    // TODO: Implement actual streaming for better UX
-    const response = await this.callLLM(llmConfig, message.content, systemPrompt);
-    yield { content: response, done: true };
+    // Append IM media sending instruction
+    const mediaInstruction = buildIMMediaInstruction(this.options.imSettings);
+    if (mediaInstruction) {
+      systemPrompt = systemPrompt
+        ? `${systemPrompt}\n\n${mediaInstruction}`
+        : mediaInstruction;
+    }
+
+    const provider = this.detectProvider(llmConfig);
+
+    if (provider === 'anthropic') {
+      yield* this.streamAnthropicAPI(llmConfig, message.content, systemPrompt);
+    } else {
+      yield* this.streamOpenAICompatibleAPI(llmConfig, message.content, systemPrompt);
+    }
+  }
+
+  /**
+   * Stream from Anthropic API using SSE
+   */
+  private async *streamAnthropicAPI(
+    config: LLMConfig,
+    userMessage: string,
+    systemPrompt?: string
+  ): AsyncGenerator<{ content: string; done: boolean }> {
+    const url = `${config.baseUrl.replace(/\/$/, '')}/v1/messages`;
+
+    const body: any = {
+      model: config.model || 'claude-3-5-sonnet-20241022',
+      max_tokens: 4096,
+      messages: [{ role: 'user', content: userMessage }],
+      stream: true,
+    };
+
+    if (systemPrompt) {
+      body.system = systemPrompt;
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'x-api-key': config.apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Anthropic API error: ${response.status} ${errorText}`);
+    }
+
+    if (!response.body) {
+      throw new Error('No response body from Anthropic API');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') {
+            yield { content: '', done: true };
+            return;
+          }
+
+          try {
+            const parsed = JSON.parse(data);
+            // Handle content_block_delta events
+            if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+              const text = parsed.delta.text || '';
+              if (text) {
+                yield { content: text, done: false };
+              }
+            }
+            // Handle message_stop event
+            if (parsed.type === 'message_stop') {
+              yield { content: '', done: true };
+              return;
+            }
+          } catch {
+            // Skip unparseable lines
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    yield { content: '', done: true };
+  }
+
+  /**
+   * Stream from OpenAI-compatible API using SSE
+   */
+  private async *streamOpenAICompatibleAPI(
+    config: LLMConfig,
+    userMessage: string,
+    systemPrompt?: string
+  ): AsyncGenerator<{ content: string; done: boolean }> {
+    // OpenAI Responses API does not support streaming in the same way, fall back to non-streaming
+    if (this.shouldUseOpenAIResponsesApi(config)) {
+      const response = await this.callOpenAICompatibleAPI(config, userMessage, systemPrompt);
+      yield { content: response, done: true };
+      return;
+    }
+
+    const url = this.buildOpenAICompatibleChatCompletionsUrl(config);
+
+    const messages: Array<{ role: string; content: string }> = [];
+    if (systemPrompt) {
+      messages.push({ role: 'system', content: systemPrompt });
+    }
+    messages.push({ role: 'user', content: userMessage });
+
+    const body: Record<string, unknown> = {
+      model: config.model || 'gpt-4o',
+      messages,
+      stream: true,
+    };
+
+    if (this.shouldUseMaxCompletionTokens(config)) {
+      body.max_completion_tokens = 4096;
+    } else {
+      body.max_tokens = 4096;
+    }
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (config.apiKey) {
+      headers.Authorization = `Bearer ${config.apiKey}`;
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenAI API error: ${response.status} ${errorText}`);
+    }
+
+    if (!response.body) {
+      throw new Error('No response body from OpenAI API');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') {
+            yield { content: '', done: true };
+            return;
+          }
+
+          try {
+            const parsed = JSON.parse(data);
+            const content = parsed.choices?.[0]?.delta?.content;
+            if (content) {
+              yield { content, done: false };
+            }
+            // Check for finish_reason
+            if (parsed.choices?.[0]?.finish_reason) {
+              yield { content: '', done: true };
+              return;
+            }
+          } catch {
+            // Skip unparseable lines
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    yield { content: '', done: true };
   }
 }
