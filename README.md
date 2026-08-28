@@ -137,6 +137,9 @@ The renderer dev server runs at `http://localhost:5175`.
 
 ```bash
 # Production renderer bundle
+
+[![Listed on TakoAPI](https://takoapi.com/api/badge/netease-youdao-lobsterai)](https://takoapi.com/agents/netease-youdao-lobsterai)
+
 npm run build
 
 # Electron main/preload TypeScript build
