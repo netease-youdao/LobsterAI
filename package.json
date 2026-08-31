@@ -183,7 +183,7 @@
     "@tanstack/react-virtual": "^3.13.24",
     "@uiw/react-codemirror": "^4.25.9",
     "@wecom/wecom-aibot-sdk": "^0.1.0",
-    "better-sqlite3": "^12.8.0",
+    "better-sqlite3": "^13.0.3",
     "bufferutil": "^4.1.0",
     "cheerio": "^1.2.0",
     "cronstrue": "^3.14.0",
