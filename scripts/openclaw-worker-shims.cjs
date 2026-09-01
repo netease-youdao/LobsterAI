@@ -23,6 +23,38 @@ const OPENCLAW_WORKER_SHIM_TARGETS = [
     shimFile: 'sqlite-readonly-location.worker.mjs',
     targetFile: path.join('dist', 'infra', 'sqlite-readonly-location.worker.js'),
   },
+  {
+    shimFile: 'prepared-model-catalog.worker.mjs',
+    targetFile: path.join('dist', 'agents', 'prepared-model-catalog.worker.js'),
+  },
+  {
+    shimFile: 'session-accessor.sqlite-archive.worker.mjs',
+    targetFile: path.join('dist', 'config', 'sessions', 'session-accessor.sqlite-archive.worker.js'),
+  },
+  {
+    shimFile: 'session-transcript-reconcile.worker.mjs',
+    targetFile: path.join('dist', 'config', 'sessions', 'session-transcript-reconcile.worker.js'),
+  },
+  {
+    shimFile: 'tailscale-route-owner.worker.mjs',
+    targetFile: path.join('dist', 'infra', 'tailscale-route-owner.worker.js'),
+  },
+  {
+    shimFile: 'service-child-relay.mjs',
+    targetFile: path.join('dist', 'process', 'supervisor', 'service-child-relay.js'),
+  },
+  {
+    shimFile: 'service-child-windows-job-anchor.mjs',
+    targetFile: path.join('dist', 'process', 'supervisor', 'service-child-windows-job-anchor.js'),
+  },
+  {
+    shimFile: 'openclaw-database-verify.worker.mjs',
+    targetFile: path.join('dist', 'state', 'openclaw-database-verify.worker.js'),
+  },
+  {
+    shimFile: 'setup-inference-detection.worker.mjs',
+    targetFile: path.join('dist', 'system-agent', 'setup-inference-detection.worker.js'),
+  },
 ];
 
 function toImportPath(filePath) {

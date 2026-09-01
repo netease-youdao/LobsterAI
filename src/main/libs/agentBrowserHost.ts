@@ -251,6 +251,8 @@ export class AgentBrowserHost {
   private activeSessionId: string | undefined;
   private lastError: string | undefined;
   private proxyReady: Promise<void> = Promise.resolve();
+  private browserToolBootstrapPagePromise: Promise<BrowserPage> | null = null;
+  private reusableBrowserToolBootstrapPageId: number | undefined;
 
   constructor(private readonly deps: AgentBrowserHostDeps) {
     this.windowVisible = Boolean(this.deps.getMainWindow()?.isVisible());
@@ -365,6 +367,7 @@ export class AgentBrowserHost {
     this.assertCredentialLoginInactive();
     if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
     const page = this.getSelectedPage() ?? await this.createPage(DEFAULT_PAGE_URL);
+    this.markBrowserToolBootstrapPageUsed(page.pageId);
     await this.navigatePage(page, normalizeAddress(url), DEFAULT_OPERATION_TIMEOUT_MS);
     return this.getState();
   }
@@ -414,6 +417,7 @@ export class AgentBrowserHost {
   closePage(pageId: number): AgentBrowserHostState {
     this.assertCredentialLoginInactive();
     const page = this.requirePage(pageId);
+    this.markBrowserToolBootstrapPageUsed(pageId);
     this.manualCredentialCapture.clearPage(pageId);
     this.detachPage(pageId);
     if (page.view.webContents.debugger.isAttached()) {
@@ -489,9 +493,25 @@ export class AgentBrowserHost {
   private async dispatchTool(tool: string, args: Record<string, unknown>): Promise<BrowserToolResponse> {
     switch (tool) {
       case BrowserMcpTool.ListPages:
+        await this.ensureBrowserToolPageBaseline();
         return this.pagesResult();
       case BrowserMcpTool.NewPage: {
-        await this.createPage(normalizeAddress(readString(args.url) || DEFAULT_PAGE_URL), readTimeout(args.timeout));
+        if (this.browserToolBootstrapPagePromise) {
+          await this.browserToolBootstrapPagePromise;
+        }
+        const url = normalizeAddress(readString(args.url) || DEFAULT_PAGE_URL);
+        const timeoutMs = readTimeout(args.timeout);
+        const bootstrapPage = this.takeReusableBrowserToolBootstrapPage();
+        if (bootstrapPage) {
+          this.selectedPageId = bootstrapPage.pageId;
+          if ((bootstrapPage.view.webContents.getURL() || DEFAULT_PAGE_URL) !== url) {
+            await this.navigatePage(bootstrapPage, url, timeoutMs);
+          }
+          this.syncAttachment();
+          this.emitState();
+        } else {
+          await this.createPage(url, timeoutMs);
+        }
         return this.pagesResult();
       }
       case BrowserMcpTool.SelectPage:
@@ -502,6 +522,7 @@ export class AgentBrowserHost {
         return this.pagesResult();
       case BrowserMcpTool.NavigatePage: {
         const page = this.requirePage(this.requirePageId(args.pageId));
+        this.markBrowserToolBootstrapPageUsed(page.pageId);
         await this.navigatePage(page, normalizeAddress(readString(args.url)), readTimeout(args.timeout));
         return textResult('Page navigated.', { message: 'Page navigated.' });
       }
@@ -659,6 +680,7 @@ export class AgentBrowserHost {
       emit();
     });
     webContents.on('destroyed', () => {
+      this.markBrowserToolBootstrapPageUsed(page.pageId);
       this.manualCredentialCapture.clearPage(page.pageId);
       this.pages.delete(page.pageId);
       if (this.selectedPageId === page.pageId) {
@@ -720,6 +742,59 @@ export class AgentBrowserHost {
       .catch(error => {
         console.warn('[AgentBrowserHost] Failed to configure proxy:', error);
       });
+  }
+
+  /**
+   * OpenClaw 2026.8.1 refuses to create the first page for an existing-session
+   * profile without a CDP endpoint. LobsterAI intentionally uses its authenticated
+   * MCP bridge instead of exposing Electron CDP, so provide one blank baseline page
+   * before list_pages returns. Concurrent probes share the same initialization.
+   */
+  private async ensureBrowserToolPageBaseline(): Promise<void> {
+    if (this.browserToolBootstrapPagePromise) {
+      await this.browserToolBootstrapPagePromise;
+      return;
+    }
+    if (this.pages.size > 0) return;
+
+    const pendingPage = this.createPage(DEFAULT_PAGE_URL);
+    this.browserToolBootstrapPagePromise = pendingPage;
+    try {
+      const page = await pendingPage;
+      if (
+        this.pages.get(page.pageId) === page
+        && !page.view.webContents.isDestroyed()
+        && (page.view.webContents.getURL() || DEFAULT_PAGE_URL) === DEFAULT_PAGE_URL
+      ) {
+        this.reusableBrowserToolBootstrapPageId = page.pageId;
+      }
+    } finally {
+      if (this.browserToolBootstrapPagePromise === pendingPage) {
+        this.browserToolBootstrapPagePromise = null;
+      }
+    }
+  }
+
+  private takeReusableBrowserToolBootstrapPage(): BrowserPage | undefined {
+    const pageId = this.reusableBrowserToolBootstrapPageId;
+    this.reusableBrowserToolBootstrapPageId = undefined;
+    if (!pageId) return undefined;
+
+    const page = this.pages.get(pageId);
+    if (
+      !page
+      || page.view.webContents.isDestroyed()
+      || (page.view.webContents.getURL() || DEFAULT_PAGE_URL) !== DEFAULT_PAGE_URL
+    ) {
+      return undefined;
+    }
+    return page;
+  }
+
+  private markBrowserToolBootstrapPageUsed(pageId: number): void {
+    if (this.reusableBrowserToolBootstrapPageId === pageId) {
+      this.reusableBrowserToolBootstrapPageId = undefined;
+    }
   }
 
   private pagesResult(): BrowserToolResponse {

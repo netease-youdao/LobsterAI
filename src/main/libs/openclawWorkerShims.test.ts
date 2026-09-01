@@ -78,6 +78,45 @@ test('includes the OpenClaw SQLite read-only worker introduced in v2026.8.1', ()
   });
 });
 
+test('includes all root-relative worker entries used by the v2026.8.1 gateway bundle', () => {
+  expect(OPENCLAW_WORKER_SHIM_TARGETS).toEqual(
+    expect.arrayContaining([
+      {
+        shimFile: 'prepared-model-catalog.worker.mjs',
+        targetFile: path.join('dist', 'agents', 'prepared-model-catalog.worker.js'),
+      },
+      {
+        shimFile: 'session-accessor.sqlite-archive.worker.mjs',
+        targetFile: path.join('dist', 'config', 'sessions', 'session-accessor.sqlite-archive.worker.js'),
+      },
+      {
+        shimFile: 'session-transcript-reconcile.worker.mjs',
+        targetFile: path.join('dist', 'config', 'sessions', 'session-transcript-reconcile.worker.js'),
+      },
+      {
+        shimFile: 'tailscale-route-owner.worker.mjs',
+        targetFile: path.join('dist', 'infra', 'tailscale-route-owner.worker.js'),
+      },
+      {
+        shimFile: 'service-child-relay.mjs',
+        targetFile: path.join('dist', 'process', 'supervisor', 'service-child-relay.js'),
+      },
+      {
+        shimFile: 'service-child-windows-job-anchor.mjs',
+        targetFile: path.join('dist', 'process', 'supervisor', 'service-child-windows-job-anchor.js'),
+      },
+      {
+        shimFile: 'openclaw-database-verify.worker.mjs',
+        targetFile: path.join('dist', 'state', 'openclaw-database-verify.worker.js'),
+      },
+      {
+        shimFile: 'setup-inference-detection.worker.mjs',
+        targetFile: path.join('dist', 'system-agent', 'setup-inference-detection.worker.js'),
+      },
+    ]),
+  );
+});
+
 test('updates existing generated shims', () => {
   const runtimeRoot = makeRuntimeRoot();
   writeGatewayBundle(runtimeRoot);
@@ -123,6 +162,7 @@ test('reports missing worker targets without creating shims', () => {
 });
 
 test('keeps the build script helper aligned with the TypeScript helper', () => {
+  expect(cjsWorkerShims.OPENCLAW_WORKER_SHIM_TARGETS).toEqual(OPENCLAW_WORKER_SHIM_TARGETS);
   for (const target of OPENCLAW_WORKER_SHIM_TARGETS) {
     expect(cjsWorkerShims.buildOpenClawWorkerShimContent(target.targetFile)).toBe(
       buildOpenClawWorkerShimContent(target.targetFile),
