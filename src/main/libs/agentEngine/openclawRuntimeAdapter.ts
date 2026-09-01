@@ -220,6 +220,9 @@ const OpenClawGatewayMethod = {
   ChatSend: 'chat.send',
   SessionsSubscribe: 'sessions.subscribe',
 } as const;
+const OpenClawChatQueueMode = {
+  Steer: 'steer',
+} as const;
 const BRIDGE_MAX_MESSAGES = 20;
 const BRIDGE_MAX_MESSAGE_CHARS = 1200;
 const FORK_COMPACTION_SUMMARY_MAX_CHARS = 40_000;
@@ -521,10 +524,9 @@ type OpenClawSessionPatchGatewayResult = {
   resolved?: unknown;
 };
 
-type OpenClawQueueSteerResult = {
-  queued?: boolean;
-  reason?: string;
-  errorMessage?: string;
+type OpenClawChatSendSteerResult = {
+  runId?: string;
+  status?: string;
 };
 
 type PendingBtwRun = {
@@ -4764,18 +4766,20 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     try {
       const client = this.requireGatewayClient();
-      const result = await client.request<OpenClawQueueSteerResult>(
-        'sessions.queueSteer',
+      const result = await client.request<OpenClawChatSendSteerResult>(
+        OpenClawGatewayMethod.ChatSend,
         {
-          key: turn.sessionKey,
+          sessionKey: turn.sessionKey,
           message: trimmedText,
+          queueMode: OpenClawChatQueueMode.Steer,
+          deliver: false,
           idempotencyKey: clientSteerId,
         },
         { timeoutMs: OpenClawRuntimeAdapter.SESSION_PATCH_TIMEOUT_MS },
       );
-      if (result?.queued === true) {
+      if (result?.runId) {
         console.debug(
-          '[OpenClawRuntime] steer accepted by active-run queue.',
+          '[OpenClawRuntime] steer accepted by native chat queue.',
           `Session ${sessionId}.`,
           `Client steer ${clientSteerId}.`,
           `OpenClaw key ${turn.sessionKey}.`,
@@ -4787,19 +4791,18 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         };
       }
 
-      const rejectedReason = this.mapOpenClawSteerRejectReason(result?.reason);
       console.warn(
-        '[OpenClawRuntime] steer rejected by active-run queue.',
+        '[OpenClawRuntime] native chat queue returned an invalid steer acknowledgement.',
         `Session ${sessionId}.`,
         `Client steer ${clientSteerId}.`,
-        `Reason ${result?.reason ?? 'unknown'}.`,
+        `Status ${result?.status ?? 'unknown'}.`,
       );
       return {
         success: false,
         status: CoworkSteerStatus.Rejected,
         clientSteerId,
-        reason: rejectedReason,
-        error: result?.errorMessage ?? `Steer was rejected by OpenClaw (${result?.reason ?? 'unknown'}).`,
+        reason: CoworkSteerRejectReason.RuntimeRejected,
+        error: 'OpenClaw returned an invalid steer acknowledgement.',
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -4819,24 +4822,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         clientSteerId,
         reason,
         error: reason === CoworkSteerRejectReason.RuntimeUnsupported
-          ? 'The current OpenClaw runtime does not expose same-turn steering yet. Rebuild the pinned runtime with LobsterAI patches.'
+          ? 'The current OpenClaw runtime does not support native same-turn steering.'
           : message,
       };
-    }
-  }
-
-  private mapOpenClawSteerRejectReason(reason: string | undefined): CoworkSteerRejectReason {
-    switch (reason) {
-      case 'no_active_run':
-        return CoworkSteerRejectReason.NoActiveTurn;
-      case 'not_streaming':
-        return CoworkSteerRejectReason.NotStreaming;
-      case 'compacting':
-        return CoworkSteerRejectReason.ContextMaintenance;
-      case 'runtime_rejected':
-        return CoworkSteerRejectReason.RuntimeRejected;
-      default:
-        return CoworkSteerRejectReason.Unknown;
     }
   }
 

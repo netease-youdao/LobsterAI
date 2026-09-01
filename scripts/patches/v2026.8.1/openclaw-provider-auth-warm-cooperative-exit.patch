@@ -1,0 +1,39 @@
+diff --git a/src/agents/model-provider-auth.ts b/src/agents/model-provider-auth.ts
+index bafd41f2..809635ab 100644
+--- a/src/agents/model-provider-auth.ts
++++ b/src/agents/model-provider-auth.ts
+@@ -82,6 +82,8 @@ type ProviderAuthWarmWorkerRunner = (params: {
+
+ const PROVIDER_AUTH_WARM_WORKER_TIMEOUT_MS = 120_000;
+ const PROVIDER_AUTH_WARM_CANCEL_POLL_MS = 25;
++// Give Electron-hosted workers time to exit cooperatively after posting a result.
++const PROVIDER_AUTH_WARM_EXIT_GRACE_MS = 2_000;
+
+ const configFingerprintCache = new WeakMap<OpenClawConfig, string>();
+ /** Clears process-current warmed provider auth state. */
+@@ -653,7 +655,13 @@ function runProviderAuthWarmWorker(params: {
+     }, PROVIDER_AUTH_WARM_CANCEL_POLL_MS);
+     cancelTimer.unref?.();
+     worker.once("message", (message: unknown) => {
+-      void worker.terminate();
++      const terminateFallback = setTimeout(() => {
++        void worker.terminate();
++      }, PROVIDER_AUTH_WARM_EXIT_GRACE_MS);
++      terminateFallback.unref?.();
++      worker.once("exit", () => {
++        clearTimeout(terminateFallback);
++      });
+       finish(() => {
+         if (handle.cancelled) {
+           resolve({ agents: [] });
+diff --git a/src/agents/model-provider-auth.worker.ts b/src/agents/model-provider-auth.worker.ts
+index 686aad85..e01e3734 100644
+--- a/src/agents/model-provider-auth.worker.ts
++++ b/src/agents/model-provider-auth.worker.ts
+@@ -88,4 +88,6 @@ if (parentPort) {
+   const sendToParent: (message: ProviderAuthWarmWorkerResult) => void =
+     parentPort.postMessage.bind(parentPort);
+   sendToParent(await runProviderAuthWarmWorkerInput(workerData));
++  // Avoid an Electron worker-isolate teardown race caused by immediate parent termination.
++  process.exit(0);
+ }

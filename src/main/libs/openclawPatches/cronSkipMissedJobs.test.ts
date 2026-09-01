@@ -23,7 +23,7 @@ describe('openclaw-cron-skip-missed-jobs.patch', () => {
       'fastForwardMissedRecurringJobs',
       'recomputeJobNextRunAtMs',
       '.filter((job) => job.schedule.kind !== "at")',
-      'skipJobIds: new Set([...(opts?.skipJobIds ?? []), ...fastForwardedJobIds])',
+      'skipJobIds = new Set([...(skipJobIds ?? []), ...fastForwardedJobIds])',
     ]);
   });
 
@@ -39,15 +39,16 @@ describe('openclaw-cron-skip-missed-jobs.patch', () => {
   test.skipIf(!isOpenClawSourceAvailable())('is applied to the local OpenClaw source tree', () => {
     expectOpenClawSourceContains([
       {
-        file: 'src/cron/service/timer.ts',
+        file: 'src/cron/service/timer-catchup.ts',
         snippets: [
           'fastForwardMissedRecurringJobs',
+          'recomputeJobNextRunAtMs',
           'cron: skipping missed jobs after restart',
         ],
       },
       {
-        file: 'src/cron/service/jobs.ts',
-        snippets: ['export function recomputeJobNextRunAtMs'],
+        file: 'src/cron/service/timer.skip-missed-jobs.test.ts',
+        snippets: ['fast-forwards missed recurring jobs instead of replaying them'],
       },
     ]);
   });

@@ -1,20 +1,25 @@
-import { describe, expect, test } from 'vitest';
+import { describe, test } from 'vitest';
 
-import { readCurrentOpenClawPatch } from './patchTestUtils';
+import {
+  expectCurrentOpenClawPatchMissing,
+  expectOpenClawSourceContains,
+  isOpenClawSourceAvailable,
+} from './patchTestUtils';
 
-describe('OpenClaw DeepSeek tool-result cache stability patch', () => {
-  test('keeps existing live prompt history byte-stable as tool results grow', () => {
-    const patch = readCurrentOpenClawPatch('openclaw-live-tool-result-cache-stability.patch');
+describe('OpenClaw live tool-result cache stability patch decisions', () => {
+  test('drops the v2026.6.1 backport in favor of native frozen-history projection', () => {
+    expectCurrentOpenClawPatchMissing('openclaw-live-tool-result-cache-stability.patch');
+  });
 
-    expect(patch).toContain('+            null,');
-    expect(patch).toContain('+                    null,');
-    expect(patch).toContain('+  aggregateMaxCharsOverride?: number | null');
-    expect(patch).toContain('+    aggregateMaxCharsOverride === null');
-    expect(patch).toContain('+      ? Number.POSITIVE_INFINITY');
-    expect(patch).toContain('keeps prompt projections byte-stable as history grows');
-    expect(patch).toContain('second.messages.slice(0, messages.length)');
-    expect(patch).not.toContain(
-      'keeps aggregate-bounded prompt projections byte-stable across retry and fallback',
-    );
+  test.skipIf(!isOpenClawSourceAvailable())('keeps native cache-stability regression coverage', () => {
+    expectOpenClawSourceContains([
+      {
+        file: 'src/agents/embedded-agent-runner/tool-result-truncation.test.ts',
+        snippets: [
+          'keeps prompt projections stable while enforcing aggregate recovery as history grows',
+          'allows aggregate overflow rather than rewriting frozen history',
+        ],
+      },
+    ]);
   });
 });

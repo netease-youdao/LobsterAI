@@ -33,6 +33,7 @@ import {
   CoworkBtwStatus,
 } from '../../../shared/cowork/btw';
 import { CoworkSelectedTextSource } from '../../../shared/cowork/selectedText';
+import { CoworkSteerRejectReason, CoworkSteerStatus } from '../../../shared/cowork/steer';
 import { OpenClawTranscriptSafetyLimit } from '../../../shared/openclawTranscript/constants';
 import { t } from '../../i18n';
 import { OpenClawChannelSessionSync } from '../openclawChannelSessionSync';
@@ -4085,6 +4086,55 @@ function createActiveTurn(sessionId: string, sessionKey: string, runId: string) 
     bufferedAgentPayloads: [],
   };
 }
+
+test('submitSteer uses the native chat.send steer queue in OpenClaw v2026.8.1', async () => {
+  const { session, store } = createReconcileStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const request = vi.fn(async () => ({ runId: 'client-steer-1', status: 'started' }));
+  adapter.gatewayClient = { start: () => {}, stop: () => {}, request };
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-active'));
+
+  const result = await adapter.submitSteer(session.id, '  continue with this  ', 'client-steer-1');
+
+  expect(result).toEqual({
+    success: true,
+    status: CoworkSteerStatus.Accepted,
+    clientSteerId: 'client-steer-1',
+  });
+  expect(request).toHaveBeenCalledWith(
+    'chat.send',
+    {
+      sessionKey,
+      message: 'continue with this',
+      queueMode: 'steer',
+      deliver: false,
+      idempotencyKey: 'client-steer-1',
+    },
+    { timeoutMs: 30_000 },
+  );
+});
+
+test('submitSteer reports an unsupported native chat queue without patch-specific guidance', async () => {
+  const { session, store } = createReconcileStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const request = vi.fn(async () => {
+    throw new Error('unknown method chat.send');
+  });
+  adapter.gatewayClient = { start: () => {}, stop: () => {}, request };
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-active'));
+
+  const result = await adapter.submitSteer(session.id, 'continue', 'client-steer-2');
+
+  expect(result).toEqual({
+    success: false,
+    status: CoworkSteerStatus.Rejected,
+    clientSteerId: 'client-steer-2',
+    reason: CoworkSteerRejectReason.RuntimeUnsupported,
+    error: 'The current OpenClaw runtime does not support native same-turn steering.',
+  });
+});
 
 test('incomplete plan mode output requests one hidden completion retry', async () => {
   vi.useFakeTimers();

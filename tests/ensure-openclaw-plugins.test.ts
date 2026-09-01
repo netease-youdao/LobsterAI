@@ -5,6 +5,7 @@ import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 const {
+  buildOpenClawPluginInstallArgs,
   buildGitEnv,
   buildNpmPackInvocation,
   buildNpmPackEnv,
@@ -20,6 +21,16 @@ const {
 } = require('../scripts/ensure-openclaw-plugins.cjs');
 
 describe('ensure-openclaw-plugins', () => {
+  test('accepts capabilities for reviewed pinned build-time plugins', () => {
+    expect(buildOpenClawPluginInstallArgs('C:\\staging\\plugin.tgz')).toEqual([
+      'plugins',
+      'install',
+      'C:\\staging\\plugin.tgz',
+      '--force',
+      '--accept-capabilities',
+    ]);
+  });
+
   test('detects local path specs', () => {
     expect(isLocalPathSpec('/tmp/openclaw-nim-channel')).toBe(true);
     expect(isLocalPathSpec('./plugins/openclaw-nim-channel')).toBe(true);

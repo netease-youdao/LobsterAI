@@ -1,14 +1,14 @@
 import crypto from 'crypto';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 
 /**
  * Stale OpenClaw gateway lock cleanup.
  *
  * OpenClaw's gateway holds a single-instance lock file at
- * `<tmpdir>/openclaw[-<uid>]/gateway.<sha256(configPath)[:8]>.lock` (see
- * OpenClaw v2026.6.1 src/infra/gateway-lock.ts). The payload is JSON:
+ * `<stateDir>/tmp/openclaw[-<uid>]/gateway.<sha256(configPath)[:8]>.lock` and
+ * `gateway.state.lock` (see OpenClaw v2026.8.1 src/infra/gateway-lock.ts).
+ * The payload is JSON:
  * `{ pid, createdAt, configPath, startTime? }`.
  *
  * When LobsterAI force-kills the gateway (Windows SIGTERM is
@@ -43,21 +43,31 @@ export type GatewayLockCleanupResult = {
   ownerPid?: number;
 };
 
-const GATEWAY_LOCK_FILE_RE = /^gateway\.[0-9a-f]{8}\.lock$/;
+const GATEWAY_LOCK_FILE_RE = /^(?:gateway\.[0-9a-f]{8}\.lock|gateway\.state\.lock)$/;
 
-/** Mirrors OpenClaw v2026.6.1 resolveGatewayLockDir(). */
-export function resolveGatewayLockDir(): string {
+/** Mirrors OpenClaw v2026.8.1 resolveGatewayLockDir(). */
+export function resolveGatewayLockDir(stateDir: string): string {
   const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
   const suffix = uid != null ? `openclaw-${uid}` : 'openclaw';
-  return path.join(os.tmpdir(), suffix);
+  const resolvedStateDir = path.resolve(stateDir);
+  let normalizedStateDir = resolvedStateDir;
+  try {
+    normalizedStateDir = fs.realpathSync.native(resolvedStateDir);
+  } catch {
+    // Missing paths have no filesystem identity yet; resolution is the safe fallback.
+  }
+  return path.join(normalizedStateDir, 'tmp', suffix);
 }
 
 /**
- * Mirrors OpenClaw v2026.6.1 resolveGatewayLockPath(): the gateway resolves
+ * Mirrors OpenClaw v2026.8.1 config lock hashing: the gateway resolves
  * OPENCLAW_CONFIG_PATH through resolveUserPath() which is path.resolve() for
  * absolute paths, then hashes the resolved string.
  */
-export function resolveGatewayLockPathForConfig(configPath: string, lockDir = resolveGatewayLockDir()): string {
+export function resolveGatewayLockPathForConfig(
+  configPath: string,
+  lockDir = resolveGatewayLockDir(path.dirname(path.resolve(configPath.trim()))),
+): string {
   const resolved = path.resolve(configPath.trim());
   const hash = crypto.createHash('sha256').update(resolved).digest('hex').slice(0, 8);
   return path.join(lockDir, `gateway.${hash}.lock`);
@@ -100,6 +110,8 @@ function isPidAlive(pid: number): boolean {
 
 type CleanupOptions = {
   configPath: string;
+  /** OpenClaw state directory; defaults to the config file's parent directory. */
+  stateDir?: string;
   /** Override for tests; defaults to the OpenClaw lock directory. */
   lockDir?: string;
   /** Override for tests. */
@@ -128,19 +140,25 @@ function removeLockFile(
  * is never touched.
  *
  * Two matching strategies:
- * - The exact lock path for our configPath (hash replica). An unreadable
- *   payload here is reclaimed: only our own gateway can legitimately own it,
- *   and the caller guarantees no such process is starting right now.
+ * - The exact config and state lock paths for our state tree. An unreadable
+ *   payload here is reclaimed: only our managed state tree can legitimately
+ *   own it, and the caller guarantees no such process is starting right now.
  * - Any other `gateway.*.lock` in the directory whose readable payload points
  *   at our configPath with a dead owner (guards against hash-input drift).
  *   Unreadable payloads under other hashes are left alone — they may belong
  *   to a user-run OpenClaw CLI with a different config.
  */
 export function cleanupStaleGatewayLocks(options: CleanupOptions): GatewayLockCleanupResult[] {
-  const lockDir = options.lockDir ?? resolveGatewayLockDir();
+  const stateDir = options.stateDir?.trim()
+    ? path.resolve(options.stateDir.trim())
+    : path.dirname(path.resolve(options.configPath.trim()));
+  const lockDir = options.lockDir ?? resolveGatewayLockDir(stateDir);
   const pidAlive = options.isPidAliveFn ?? isPidAlive;
   const results: GatewayLockCleanupResult[] = [];
-  const ownLockPath = resolveGatewayLockPathForConfig(options.configPath, lockDir);
+  const ownLockPaths = new Set([
+    resolveGatewayLockPathForConfig(options.configPath, lockDir),
+    path.join(lockDir, 'gateway.state.lock'),
+  ]);
   const ownConfigKey = normalizePathForCompare(options.configPath);
 
   let entries: string[];
@@ -155,7 +173,7 @@ export function cleanupStaleGatewayLocks(options: CleanupOptions): GatewayLockCl
       continue;
     }
     const lockPath = path.join(lockDir, entry);
-    const isOwnLock = lockPath === ownLockPath;
+    const isOwnLock = ownLockPaths.has(lockPath);
 
     let raw: string | null = null;
     try {

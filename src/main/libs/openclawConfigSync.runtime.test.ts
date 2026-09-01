@@ -869,11 +869,13 @@ describe('OpenClawConfigSync runtime config output', () => {
         id: 'qwen3.5-plus-YoudaoInner',
         api: 'openai-completions',
         input: ['text', 'image'],
+        compat: expect.objectContaining({ cacheControlFormat: 'anthropic' }),
       }),
       expect.objectContaining({
         id: 'qwen3.6-plus-YoudaoInner',
         api: 'openai-completions',
         input: ['text', 'image'],
+        compat: expect.objectContaining({ cacheControlFormat: 'anthropic' }),
       }),
       expect.objectContaining({
         id: 'claude-sonnet-4-6-YoudaoInner',
@@ -894,6 +896,7 @@ describe('OpenClawConfigSync runtime config output', () => {
         input: ['text', 'image'],
         reasoning: true,
         contextWindow: 1_000_000,
+        compat: expect.objectContaining({ cacheControlFormat: 'anthropic' }),
       }),
       expect.objectContaining({
         id: 'glm-5.1-YoudaoInner',
@@ -908,21 +911,17 @@ describe('OpenClawConfigSync runtime config output', () => {
       }),
     ]));
     expect(provider.models).toHaveLength(7);
-    expect(JSON.stringify(provider.models)).not.toContain('cacheControlFormat');
+    expect(JSON.stringify(provider.models)).toContain('cacheControlFormat');
     expect(JSON.stringify(provider.models)).not.toContain('supportsLongCacheRetention');
     expect(config.agents.defaults.models).toEqual(expect.objectContaining({
       'lobsterai-server/qwen3.5-plus-YoudaoInner': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'dashscope',
-          contextCacheMode: 'explicit',
         },
       },
       'lobsterai-server/qwen3.6-plus-YoudaoInner': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'dashscope',
-          contextCacheMode: 'explicit',
         },
       },
       'lobsterai-server/claude-sonnet-4-6-YoudaoInner': {
@@ -938,8 +937,6 @@ describe('OpenClawConfigSync runtime config output', () => {
       'lobsterai-server/claude-sonnet-4-6': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'anthropic-compatible',
-          contextCacheMode: 'explicit',
         },
       },
     }));
@@ -974,14 +971,13 @@ describe('OpenClawConfigSync runtime config output', () => {
       expect.objectContaining({
         id: 'claude-sonnet-4-6',
         api: 'openai-completions',
+        compat: expect.objectContaining({ cacheControlFormat: 'anthropic' }),
       }),
     ]));
     expect(config.agents.defaults.models).toEqual(expect.objectContaining({
       'lobsterai-server/claude-sonnet-4-6': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'anthropic-compatible',
-          contextCacheMode: 'explicit',
         },
       },
     }));
@@ -1062,15 +1058,11 @@ describe('OpenClawConfigSync runtime config output', () => {
       'qwen/qwen3.5-plus': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'dashscope',
-          contextCacheMode: 'explicit',
         },
       },
       'qwen/qwen3.6-plus': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'dashscope',
-          contextCacheMode: 'explicit',
         },
       },
       'qwen/qwen3.7-plus': {},
@@ -1087,8 +1079,6 @@ describe('OpenClawConfigSync runtime config output', () => {
       'custom_0/claude-opus-4-6': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'anthropic-compatible',
-          contextCacheMode: 'explicit',
           extra_body: {
             metadata: 'custom-cache',
           },
@@ -1097,27 +1087,39 @@ describe('OpenClawConfigSync runtime config output', () => {
       'custom_0/anthropic/claude-sonnet-4-6': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'anthropic-compatible',
-          contextCacheMode: 'explicit',
         },
       },
       'custom_0/qwen3.5-plus': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'dashscope',
-          contextCacheMode: 'explicit',
         },
       },
       'custom_0/qwen3.6-plus': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'dashscope',
-          contextCacheMode: 'explicit',
         },
       },
       'custom_0/deepseek-v4-pro': {},
       'custom_0/gpt-5.5-2026-04-24': {},
     }));
+
+    const qwenModels = config.models.providers.qwen.models;
+    const customModels = config.models.providers.custom_0.models;
+    for (const modelId of ['qwen3.5-plus', 'qwen3.6-plus']) {
+      expect(qwenModels.find((model: { id: string }) => model.id === modelId)?.compat).toEqual(
+        expect.objectContaining({ cacheControlFormat: 'anthropic' }),
+      );
+      expect(customModels.find((model: { id: string }) => model.id === modelId)?.compat).toEqual(
+        expect.objectContaining({ cacheControlFormat: 'anthropic' }),
+      );
+    }
+    for (const modelId of ['claude-opus-4-6', 'anthropic/claude-sonnet-4-6']) {
+      expect(customModels.find((model: { id: string }) => model.id === modelId)?.compat).toEqual(
+        expect.objectContaining({ cacheControlFormat: 'anthropic' }),
+      );
+    }
+    expect(qwenModels.find((model: { id: string }) => model.id === 'qwen3.7-plus')?.compat).toBeUndefined();
+    expect(customModels.find((model: { id: string }) => model.id === 'deepseek-v4-pro')?.compat).toBeUndefined();
   });
 
   test('writes a complete agent model allowlist when any model has custom params', async () => {

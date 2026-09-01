@@ -1,0 +1,256 @@
+diff --git a/src/agents/embedded-agent-runner/model.inline-provider.test.ts b/src/agents/embedded-agent-runner/model.inline-provider.test.ts
+index ebdb9be2..a5199d74 100644
+--- a/src/agents/embedded-agent-runner/model.inline-provider.test.ts
++++ b/src/agents/embedded-agent-runner/model.inline-provider.test.ts
+@@ -143,6 +143,26 @@ describe("buildInlineProviderModels", () => {
+     ]);
+   });
+
++  it("keeps a provider API owner out of model transport resolution", () => {
++    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
++      custom: {
++        baseUrl: "https://gateway.example.com/v1",
++        api: "lobsterai-model-compat",
++        models: [
++          { ...makeModel("kimi-k3"), api: "openai-completions" },
++          makeModel("missing-transport"),
++        ],
++      },
++    };
++
++    const result = buildInlineProviderModels(providers);
++
++    expect(result.map((model) => ({ id: model.id, api: model.api }))).toEqual([
++      { id: "kimi-k3", api: "openai-completions" },
++      { id: "missing-transport", api: undefined },
++    ]);
++  });
++
+   it("inherits both baseUrl and api from provider config", () => {
+     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+       custom: {
+diff --git a/src/agents/embedded-agent-runner/model.inline-provider.ts b/src/agents/embedded-agent-runner/model.inline-provider.ts
+index a70be8c3..fe34d497 100644
+--- a/src/agents/embedded-agent-runner/model.inline-provider.ts
++++ b/src/agents/embedded-agent-runner/model.inline-provider.ts
+@@ -28,7 +28,7 @@ export type InlineModelEntry = Omit<ModelDefinitionConfig, "api" | "contextWindo
+
+ export type InlineProviderConfig = {
+   baseUrl?: string;
+-  api?: ModelDefinitionConfig["api"];
++  api?: ModelProviderConfig["api"];
+   models?: ModelDefinitionConfig[];
+   maxTokens?: ModelProviderConfig["maxTokens"];
+   params?: ModelProviderConfig["params"];
+@@ -127,7 +127,7 @@ export function resolveProviderModelInput(params: {
+   return normalizedInput.length > 0 ? normalizedInput : ["text"];
+ }
+
+-function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: string }): {
++function resolveInlineProviderTransport(params: { api?: unknown; baseUrl?: string }): {
+   api?: Api;
+   baseUrl?: string;
+ } {
+diff --git a/src/agents/embedded-agent-runner/model.configured-overrides.ts b/src/agents/embedded-agent-runner/model.configured-overrides.ts
+index d7ca3491..85697b43 100644
+--- a/src/agents/embedded-agent-runner/model.configured-overrides.ts
++++ b/src/agents/embedded-agent-runner/model.configured-overrides.ts
+@@ -466,6 +466,7 @@ export function applyConfiguredModelOverrides(params: {
+     workspaceDir: params.workspaceDir,
+     runtimeHooks: params.runtimeHooks,
+   });
++  const providerConfiguredApi = normalizeResolvedTransportApi(providerConfig.api);
+   const metadataOverrideBaseUrl = normalizeTransportBaseUrl(metadataOverrideModel?.baseUrl);
+   const providerConfiguredBaseUrl = normalizeTransportBaseUrl(providerConfig.baseUrl);
+   const discoveredBaseUrl = normalizeTransportBaseUrl(discoveredModel.baseUrl);
+@@ -477,11 +478,11 @@ export function applyConfiguredModelOverrides(params: {
+   const resolvedTransportApi = preferDiscoveredTransport
+     ? (discoveredModel.api ??
+       metadataOverrideModel?.api ??
+-      providerConfig.api ??
++      providerConfiguredApi ??
+       configuredStaticCatalogModel?.api ??
+       providerDefaultApi)
+     : (metadataOverrideModel?.api ??
+-      providerConfig.api ??
++      providerConfiguredApi ??
+       manifestAliasTransport?.api ??
+       discoveredModel.api ??
+       configuredStaticCatalogModel?.api ??
+diff --git a/src/agents/embedded-agent-runner/model.manifest-alias.ts b/src/agents/embedded-agent-runner/model.manifest-alias.ts
+index 06707788..224be340 100644
+--- a/src/agents/embedded-agent-runner/model.manifest-alias.ts
++++ b/src/agents/embedded-agent-runner/model.manifest-alias.ts
+@@ -13,6 +13,7 @@ import {
+   loadPluginManifestRegistryCore,
+   type PluginManifestRecord,
+ } from "../../plugins/manifest-registry.js";
++import { normalizeResolvedTransportApi } from "./model.inline-provider.js";
+ import { staticModelIdMatches } from "./model.static-id.js";
+
+ function hasModelCatalogAliasTransportOverride(alias: ModelCatalogAlias): boolean {
+@@ -82,7 +83,7 @@ function resolveConfiguredModelCatalogProviderApi(params: {
+           staticModelIdMatches({ candidateId: candidate.id, provider, modelId }),
+         )
+       : undefined;
+-  return model?.api ?? config?.api;
++  return model?.api ?? normalizeResolvedTransportApi(config?.api);
+ }
+
+ function hasUnconditionalManifestModelCatalogSuppression(params: {
+diff --git a/src/config/types.models.ts b/src/config/types.models.ts
+index a83c5885..faf1cb5f 100644
+--- a/src/config/types.models.ts
++++ b/src/config/types.models.ts
+@@ -11,7 +11,9 @@ import type { ConfiguredModelProviderRequest } from "./types.provider-request.js
+ import type { SecretInput } from "./types.secrets.js";
+
+ /** Provider API adapter ids accepted by model/provider config and schema generation. */
+-export const MODEL_APIS = [
++export const LOBSTERAI_MODEL_COMPAT_API = "lobsterai-model-compat";
++
++export const MODEL_TRANSPORT_APIS = [
+   "openai-completions",
+   "openai-responses",
+   "openai-chatgpt-responses",
+@@ -24,6 +26,9 @@ export const MODEL_APIS = [
+   "azure-openai-responses",
+ ] as const;
+
++export const MODEL_APIS = [...MODEL_TRANSPORT_APIS, LOBSTERAI_MODEL_COMPAT_API] as const;
++
++export type ModelTransportApi = (typeof MODEL_TRANSPORT_APIS)[number];
+ export type ModelApi = (typeof MODEL_APIS)[number];
+
+ type SupportedOpenAICompatFields = Pick<
+@@ -158,7 +163,7 @@ export type ModelDefinitionConfig = {
+   /** Human-readable display name. */
+   name: string;
+   /** Optional API adapter override for this model. */
+-  api?: ModelApi;
++  api?: ModelTransportApi;
+   /** Optional base URL override for this model. */
+   baseUrl?: string;
+   /** Whether the model supports reasoning/thinking controls. */
+diff --git a/src/config/zod-schema.core.ts b/src/config/zod-schema.core.ts
+index 76de9719..108a615e 100644
+--- a/src/config/zod-schema.core.ts
++++ b/src/config/zod-schema.core.ts
+@@ -13,7 +13,7 @@ import {
+ } from "../secrets/ref-contract.js";
+ import { isBuiltInModelProviderOverlayId } from "./model-provider-config.js";
+ import type { ModelCompatConfig } from "./types.models.js";
+-import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
++import { MODEL_APIS, MODEL_THINKING_FORMATS, MODEL_TRANSPORT_APIS } from "./types.models.js";
+ import { ENV_SECRET_REF_ID_RE } from "./types.secrets.js";
+ import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
+ import { sensitive } from "./zod-schema.sensitive.js";
+@@ -263,6 +263,7 @@ const ModelApiSchema = z.enum(MODEL_APIS, {
+       ? `"${LEGACY_OPENAI_CODEX_RESPONSES_API}" is a removed api id; use "${OPENAI_CHATGPT_RESPONSES_API}"`
+       : undefined,
+ });
++const ModelTransportApiSchema = z.enum(MODEL_TRANSPORT_APIS);
+
+ const RoutingPercentileCutoffsSchema = z
+   .object({
+@@ -480,7 +481,7 @@ const ModelDefinitionSchema = z
+   .object({
+     id: z.string().min(1),
+     name: z.string().min(1),
+-    api: ModelApiSchema.optional(),
++    api: ModelTransportApiSchema.optional(),
+     baseUrl: z.string().min(1).optional(),
+     reasoning: z.boolean().optional(),
+     input: z
+diff --git a/src/config/zod-schema.model-api-owner.test.ts b/src/config/zod-schema.model-api-owner.test.ts
+new file mode 100644
+index 00000000..7cbe4795
+--- /dev/null
++++ b/src/config/zod-schema.model-api-owner.test.ts
+@@ -0,0 +1,51 @@
++import { describe, expect, it } from "vitest";
++import { ModelsConfigSchema } from "./zod-schema.core.js";
++
++describe("ModelsConfigSchema provider API owners", () => {
++  it("accepts the LobsterAI owner while models keep explicit transports", () => {
++    const result = ModelsConfigSchema.safeParse({
++      providers: {
++        custom_0: {
++          baseUrl: "https://gateway.example.com/v1",
++          api: "lobsterai-model-compat",
++          models: [
++            { id: "kimi-k3", name: "Kimi K3", api: "openai-completions" },
++            { id: "plain-model", name: "Plain Model", api: "anthropic-messages" },
++          ],
++        },
++      },
++    });
++
++    expect(result.success).toBe(true);
++  });
++
++  it("rejects arbitrary provider API owner strings", () => {
++    const result = ModelsConfigSchema.safeParse({
++      providers: {
++        custom_0: {
++          baseUrl: "https://gateway.example.com/v1",
++          api: "arbitrary-plugin-owner",
++          models: [{ id: "model", name: "Model", api: "openai-completions" }],
++        },
++      },
++    });
++
++    expect(result.success).toBe(false);
++  });
++
++  it("rejects compatibility ownership at model level", () => {
++    const result = ModelsConfigSchema.safeParse({
++      providers: {
++        custom_0: {
++          baseUrl: "https://gateway.example.com/v1",
++          api: "lobsterai-model-compat",
++          models: [
++            { id: "kimi-k3", name: "Kimi K3", api: "lobsterai-model-compat" },
++          ],
++        },
++      },
++    });
++
++    expect(result.success).toBe(false);
++  });
++});
+diff --git a/src/plugins/provider-config-owner.test.ts b/src/plugins/provider-config-owner.test.ts
+new file mode 100644
+index 00000000..f9092b50
+--- /dev/null
++++ b/src/plugins/provider-config-owner.test.ts
+@@ -0,0 +1,29 @@
++import { describe, expect, it } from "vitest";
++import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
++
++describe("resolveProviderConfigApiOwnerHint", () => {
++  it("routes the LobsterAI compatibility owner without changing model transports", () => {
++    const config = {
++      models: {
++        providers: {
++          custom_0: {
++            baseUrl: "https://gateway.example.com/v1",
++            api: "lobsterai-model-compat",
++            models: [
++              { id: "kimi-k3", name: "Kimi K3", api: "openai-completions" },
++              { id: "plain-model", name: "Plain Model", api: "anthropic-messages" },
++            ],
++          },
++        },
++      },
++    };
++
++    expect(
++      resolveProviderConfigApiOwnerHint({ provider: "custom_0", config: config as never }),
++    ).toBe("lobsterai-model-compat");
++    expect(config.models.providers.custom_0.models.map((model) => model.api)).toEqual([
++      "openai-completions",
++      "anthropic-messages",
++    ]);
++  });
++});

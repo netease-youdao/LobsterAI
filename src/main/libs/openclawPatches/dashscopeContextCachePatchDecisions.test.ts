@@ -2,6 +2,7 @@ import { describe, test } from 'vitest';
 
 import {
   expectBundledOpenClawRuntimeContains,
+  expectCurrentOpenClawPatchMissing,
   expectOpenClawSourceContains,
   expectPatchContains,
   isBundledOpenClawRuntimeAvailable,
@@ -9,67 +10,36 @@ import {
 } from './patchTestUtils';
 
 describe('OpenAI-compatible explicit context cache OpenClaw patch decisions', () => {
-  test('keeps explicit context cache eligibility and payload coverage', () => {
-    expectPatchContains('openclaw-dashscope-context-cache.patch', [
-      'contextCacheProvider: "dashscope"',
-      'contextCacheProvider: "anthropic-compatible"',
-      'contextCacheMode: "explicit"',
-      'resolveCacheRetention',
-      'resolveExplicitContextCacheStreamParams',
-      'applyOpenAICompletionsExplicitContextCache',
-      '[ExplicitCachePassThrough]',
-      '[ExplicitCachePayload]',
-      '********************',
-      'adds Anthropic cache_control markers for OpenAI-compatible explicit context cache',
-      'cache_control: { type: "ephemeral" }',
-      'not OpenAI prompt_cache_key',
+  test('uses the standard model compat flag instead of LobsterAI-only runtime params', () => {
+    expectCurrentOpenClawPatchMissing('openclaw-dashscope-context-cache.patch');
+    expectPatchContains('openclaw-openai-compatible-cache-control.patch', [
+      'compat: { cacheControlFormat: "anthropic" }',
+      'resolveAnthropicCacheControl',
+      'applyAnthropicCacheControl',
+      'splitSystemPromptCacheBoundary',
+      'preserveSystemPromptCacheBoundary: cacheControl !== undefined',
+      'cache_control: cacheControl',
+      'adds Anthropic cache-control markers for opted-in compatible providers',
     ]);
   });
 
   test.skipIf(!isOpenClawSourceAvailable())('is applied to the local OpenClaw source tree', () => {
     expectOpenClawSourceContains([
       {
-        file: 'src/agents/embedded-agent-runner/prompt-cache-retention.ts',
+        file: 'packages/ai/src/transports/openai-completions-params.ts',
         snippets: [
-          'contextCacheProvider === "dashscope"',
-          'contextCacheProvider === "anthropic-compatible"',
-          'contextCacheMode === "explicit"',
-          'explicitContextCacheEligible',
+          'compat.cacheControlFormat !== "anthropic"',
+          'resolveAnthropicCacheControl',
+          'applyAnthropicCacheControl',
+          'preserveSystemPromptCacheBoundary: cacheControl !== undefined',
+          'cache_control = cacheControl',
         ],
       },
       {
-        file: 'src/llm/providers/openai-completions.ts',
+        file: 'packages/ai/src/transports/openai-completions-params.cache-and-compat.test.ts',
         snippets: [
-          'getCompatCacheControl(compat, cacheRetention, options)',
-          'options?.contextCacheProvider === "dashscope"',
-          'options?.contextCacheProvider === "anthropic-compatible"',
-          'options?.contextCacheMode === "explicit"',
-          'isOpenAICompatibleExplicitContextCache(options)',
-          '[ExplicitCachePayload]',
-          'hasCacheControl=',
-          'cache_control: cacheControl',
-          'return { type: "ephemeral", ...(ttl ? { ttl } : {}) };',
-        ],
-      },
-      {
-        file: 'src/agents/embedded-agent-runner/extra-params.ts',
-        snippets: [
-          'contextCacheProvider?: "dashscope" | "anthropic-compatible"',
-          'contextCacheMode?: "explicit"',
-          'resolveExplicitContextCacheStreamParams',
-          '[ExplicitCachePassThrough]',
-          '...explicitContextCacheParams',
-        ],
-      },
-      {
-        file: 'src/agents/openai-transport-stream.ts',
-        snippets: [
-          'contextCacheProvider?: string',
-          'contextCacheMode?: string',
-          'isOpenAICompatibleExplicitContextCache',
-          'applyOpenAICompletionsExplicitContextCache',
-          '[ExplicitCachePayload]',
-          'cache_control: cacheControl',
+          'adds Anthropic cache-control markers for opted-in compatible providers',
+          'cacheControlFormat: "anthropic"',
         ],
       },
     ]);
@@ -77,13 +47,9 @@ describe('OpenAI-compatible explicit context cache OpenClaw patch decisions', ()
 
   test.skipIf(!isBundledOpenClawRuntimeAvailable())('is applied to the bundled OpenClaw runtime', () => {
     expectBundledOpenClawRuntimeContains([
-      '********************',
-      '[ExplicitCachePassThrough]',
-      '[ExplicitCachePayload]',
-      'reason=cacheRetention-none',
+      'cacheControlFormat',
+      'preserveSystemPromptCacheBoundary',
       'cache_control',
-      'contextCacheProvider',
-      'contextCacheMode',
     ]);
   });
 });

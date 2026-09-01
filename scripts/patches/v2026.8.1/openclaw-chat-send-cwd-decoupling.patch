@@ -1,0 +1,56 @@
+diff --git a/packages/gateway-protocol/src/index.test.ts b/packages/gateway-protocol/src/index.test.ts
+index 18aabbc3..2ee13c8c 100644
+--- a/packages/gateway-protocol/src/index.test.ts
++++ b/packages/gateway-protocol/src/index.test.ts
+@@ -377,6 +377,7 @@ describe("lazy protocol validators", () => {
+         agentId: "work",
+         sessionId: "session-work",
+         message: "hello",
++        cwd: "/tmp/work",
+         idempotencyKey: "run-global-work",
+       },
+     ]);
+diff --git a/packages/gateway-protocol/src/schema/logs-chat.ts b/packages/gateway-protocol/src/schema/logs-chat.ts
+index 3aa09529..7ed5786e 100644
+--- a/packages/gateway-protocol/src/schema/logs-chat.ts
++++ b/packages/gateway-protocol/src/schema/logs-chat.ts
+@@ -179,6 +179,7 @@ export const ChatSendParamsSchema = closedObject({
+   agentId: Type.Optional(NonEmptyString),
+   sessionId: Type.Optional(NonEmptyString),
+   message: Type.String(),
++  cwd: Type.Optional(Type.String()),
+   intent: Type.Optional(ChatSendIntentSchema),
+   thinking: Type.Optional(Type.String()),
+   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+diff --git a/src/gateway/server-methods/chat-send-agent-dispatch.ts b/src/gateway/server-methods/chat-send-agent-dispatch.ts
+index efe64878..4acef61c 100644
+--- a/src/gateway/server-methods/chat-send-agent-dispatch.ts
++++ b/src/gateway/server-methods/chat-send-agent-dispatch.ts
+@@ -43,6 +43,7 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
+ import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
+ import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
+ import { applyChatSendManagedMedia, type prepareChatSendUserTurn } from "./chat-send-user-turn.js";
++import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
+ import {
+   emitOperatorChatSendServerTiming,
+   roundedChatSendTimingMs,
+@@ -324,6 +325,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
+                 images: replyOptionImages,
+                 imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
+                 media: replyOptionMedia,
++                cwd: normalizeOptionalText(p.cwd),
+                 thinkingLevelOverride: p.thinking,
+                 fastModeOverride: p.fastMode,
+                 queueModeOverride: p.queueMode,
+diff --git a/src/gateway/server-methods/chat-send-request.ts b/src/gateway/server-methods/chat-send-request.ts
+index b39e0d24..62c4983f 100644
+--- a/src/gateway/server-methods/chat-send-request.ts
++++ b/src/gateway/server-methods/chat-send-request.ts
+@@ -37,6 +37,7 @@ type ChatSendRequestParams = {
+   agentId?: string;
+   sessionId?: string;
+   message: string;
++  cwd?: string;
+   intent?: ChatSendIntent;
+   thinking?: string;
+   fastMode?: FastMode;

@@ -8,7 +8,7 @@
   "license": "MIT",
   "version": "2026.8.28",
   "openclaw": {
-    "version": "v2026.6.1",
+    "version": "v2026.8.1",
     "repo": "https://github.com/openclaw/openclaw.git",
     "plugins": [
       {
@@ -19,17 +19,17 @@
       {
         "id": "openclaw-lark",
         "npm": "@larksuite/openclaw-lark",
-        "version": "2026.6.10"
+        "version": "2026.7.16"
       },
       {
         "id": "qqbot",
         "npm": "@openclaw/qqbot",
-        "version": "2026.6.1"
+        "version": "2026.7.1"
       },
       {
         "id": "discord",
         "npm": "@openclaw/discord",
-        "version": "2026.6.1"
+        "version": "2026.8.1"
       },
       {
         "id": "wecom-openclaw-plugin",

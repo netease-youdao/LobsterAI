@@ -44,12 +44,12 @@ describe('OpenClaw task cwd system prompt patch', () => {
         snippets: ['runtimeCwd?: string', 'runtimeCwd: params.runtimeCwd'],
       },
       {
-        file: 'src/agents/embedded-agent-runner/run/attempt.ts',
-        snippets: ['workspaceDir: effectiveWorkspace,\n        runtimeCwd: effectiveCwd,'],
+        file: 'src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts',
+        snippets: ['runtimeCwd: params.effectiveCwd'],
       },
       {
-        file: 'src/agents/embedded-agent-runner/compact.ts',
-        snippets: ['workspaceDir: effectiveWorkspace,\n        runtimeCwd: effectiveCwd,'],
+        file: 'src/agents/embedded-agent-runner/prepared-compaction-runtime.ts',
+        snippets: ['runtimeCwd: effectiveCwd'],
       },
     ]);
   });

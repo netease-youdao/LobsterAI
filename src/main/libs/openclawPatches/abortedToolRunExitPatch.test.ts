@@ -1,16 +1,26 @@
 import { describe, test } from 'vitest';
 
-import { expectPatchContains } from './patchTestUtils';
+import {
+  expectCurrentOpenClawPatchMissing,
+  expectOpenClawSourceContains,
+  isOpenClawSourceAvailable,
+} from './patchTestUtils';
 
 describe('OpenClaw aborted tool run exit patch', () => {
-  test('carries upstream #94412 while the pinned version predates v2026.6.11', () => {
-    expectPatchContains('openclaw-stop-loop-after-aborted-tool-run.patch', [
-      'const stopIfAborted = async (): Promise<boolean> => {',
-      'new Error("Agent run aborted")',
-      'await emit({ type: "turn_end", message: abortedMessage, toolResults: [] });',
-      'does not request another model turn after a tool aborts the run',
-      'does not request another model turn when an async turn hook aborts the run',
-      'expect(streamCalls).toBe(1)',
+  test('drops the old backport because v2026.8.1 includes stopIfAborted upstream', () => {
+    expectCurrentOpenClawPatchMissing('openclaw-stop-loop-after-aborted-tool-run.patch');
+  });
+
+  test.skipIf(!isOpenClawSourceAvailable())('keeps the upstream abort guards in the pinned source', () => {
+    expectOpenClawSourceContains([
+      {
+        file: 'packages/agent-core/src/agent-loop.ts',
+        snippets: ['const stopIfAborted = async (): Promise<boolean> => {', 'if (await stopIfAborted())'],
+      },
+      {
+        file: 'packages/agent-core/src/agent-loop.test.ts',
+        snippets: ['does not request another model turn after a tool aborts the run'],
+      },
     ]);
   });
 });

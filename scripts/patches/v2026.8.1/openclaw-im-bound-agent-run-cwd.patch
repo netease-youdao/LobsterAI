@@ -1,0 +1,222 @@
+diff --git a/src/agents/agent-scope-config.ts b/src/agents/agent-scope-config.ts
+index df91c92a..a6567063 100644
+--- a/src/agents/agent-scope-config.ts
++++ b/src/agents/agent-scope-config.ts
+@@ -56,6 +56,7 @@ export class AgentSelectionRequiredError extends Error {
+ export type ResolvedAgentConfig = {
+   name?: string;
+   workspace?: string;
++  cwd?: string;
+   agentDir?: string;
+   model?: AgentEntry["model"];
+   models?: AgentEntry["models"];
+@@ -340,6 +341,7 @@ export function resolveAgentConfig(
+   return {
+     name: readStringValue(entry.name),
+     workspace: readStringValue(entry.workspace),
++    cwd: readStringValue(entry.cwd),
+     agentDir: readStringValue(entry.agentDir),
+     model:
+       typeof entry.model === "string" || (entry.model && typeof entry.model === "object")
+@@ -384,6 +386,23 @@ export function resolveAgentConfig(
+   };
+ }
+
++/** Resolves the invocation cwd without coupling it to the agent's managed workspace. */
++export function resolveAgentRunCwd(
++  cfg: OpenClawConfig,
++  agentId: string,
++  overrideCwd?: unknown,
++  env: NodeJS.ProcessEnv = process.env,
++): string | undefined {
++  const explicit = readStringValue(overrideCwd)?.trim();
++  if (explicit) {
++    return stripNullBytes(resolveUserPath(explicit, env));
++  }
++  const configured = resolveAgentConfig(cfg, normalizeAgentId(agentId))?.cwd?.trim();
++  const fallback = cfg.agents?.defaults?.cwd?.trim();
++  const resolved = configured || fallback;
++  return resolved ? stripNullBytes(resolveUserPath(resolved, env)) : undefined;
++}
++
+ export function resolveAgentContextLimits(
+   cfg: OpenClawConfig | undefined,
+   agentId?: string | null,
+diff --git a/src/agents/agent-scope.ts b/src/agents/agent-scope.ts
+index c5535400..56133a2c 100644
+--- a/src/agents/agent-scope.ts
++++ b/src/agents/agent-scope.ts
+@@ -44,6 +44,7 @@ export {
+   resolveAgentContextLimits,
+   resolveAgentDir,
+   resolveDefaultAgentDir,
++  resolveAgentRunCwd,
+   resolveAgentWorkspaceDir,
+   resolveAgentWorkspaceProvisioning,
+   tryResolveConfiguredAgentWorkspaceDir,
+diff --git a/src/auto-reply/get-reply-options.types.ts b/src/auto-reply/get-reply-options.types.ts
+index dd07c3cb..9a090283 100644
+--- a/src/auto-reply/get-reply-options.types.ts
++++ b/src/auto-reply/get-reply-options.types.ts
+@@ -141,6 +141,8 @@ export type GetReplyOptions = {
+   promptCacheKey?: string;
+   /** Abort signal for the underlying agent run. */
+   abortSignal?: AbortSignal;
++  /** Override the working directory for this agent run. */
++  cwd?: string;
+   /** Optional inbound images (used for webchat attachments). */
+   images?: ImageContent[];
+   /** Original inline/offloaded attachment order for inbound images. */
+diff --git a/src/auto-reply/reply/get-reply-run-context.ts b/src/auto-reply/reply/get-reply-run-context.ts
+index 287941d6..1394b464 100644
+--- a/src/auto-reply/reply/get-reply-run-context.ts
++++ b/src/auto-reply/reply/get-reply-run-context.ts
+@@ -84,6 +84,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
+     sessionKey,
+     storePath,
+     workspaceDir: configuredWorkspaceDir,
++    cwd: configuredCwd,
+     sessionEntryHandle,
+     sessionStore,
+   } = params;
+@@ -469,6 +470,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
+     startupContextPrelude,
+     softResetTail,
+     workspaceDir,
++    cwd: configuredCwd,
+     skillsWorkspaceDir: configuredWorkspaceDir,
+     baseBodyFinal,
+     hasUserBody,
+diff --git a/src/auto-reply/reply/get-reply-run-execute.ts b/src/auto-reply/reply/get-reply-run-execute.ts
+index 71232265..e190f807 100644
+--- a/src/auto-reply/reply/get-reply-run-execute.ts
++++ b/src/auto-reply/reply/get-reply-run-execute.ts
+@@ -103,6 +103,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission)
+     effectiveResetTriggered,
+     isBareSessionReset,
+     workspaceDir,
++    cwd,
+     hasUserBody,
+     shouldInjectGroupIntro,
+     typingMode,
+@@ -326,7 +326,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission)
+             ...(sessionStore ? { sessionStore } : {}),
+             ...(storePath ? { storePath } : {}),
+             agentId,
+-            cwd: workspaceDir,
++            cwd:
++              normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ??
++              cwd ??
++              workspaceDir,
+             config: cfg,
+           }),
+           errorContext: "reply user turn transcript",
+@@ -436,7 +440,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission)
+       approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
+       sessionFile: preparedSessionState.sessionFile,
+       workspaceDir,
+-      cwd: normalizeOptionalString(state.sessionEntry?.spawnedCwd),
++      cwd:
++        normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ?? cwd,
+       permissionMode: preparedSessionState.sessionEntry?.permissionMode,
+       sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
+       config: cfg,
+diff --git a/src/auto-reply/reply/get-reply-run.types.ts b/src/auto-reply/reply/get-reply-run.types.ts
+index 89a10f8c..f5e549c4 100644
+--- a/src/auto-reply/reply/get-reply-run.types.ts
++++ b/src/auto-reply/reply/get-reply-run.types.ts
+@@ -100,6 +100,7 @@ export type RunPreparedReplyParams = {
+   sessionId?: string;
+   storePath?: string;
+   workspaceDir: string;
++  cwd?: string;
+   abortedLastRun: boolean;
+   explicitSkillSelections?: ExplicitSkillSelection[];
+   autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
+diff --git a/src/auto-reply/reply/get-reply.ts b/src/auto-reply/reply/get-reply.ts
+index ff8ba4b1..7d873e35 100644
+--- a/src/auto-reply/reply/get-reply.ts
++++ b/src/auto-reply/reply/get-reply.ts
+@@ -7,6 +7,7 @@ import {
+   resolveAutoFallbackPrimaryProbe,
+   resolveAgentConfig,
+   resolveAgentDir,
++  resolveAgentRunCwd,
+   resolveAgentWorkspaceDir,
+   resolveSessionAgentId,
+   resolveAgentSkillsFilter,
+@@ -544,6 +545,8 @@ export async function getReplyFromConfig(
+         }),
+   );
+   const workspaceDir = workspace.dir;
++  const runCwd =
++    resolveAgentRunCwd(cfg, agentId, optsWithCommandQueueOverride?.cwd) ?? workspaceDir;
+
+   if (
+     !isFastTestEnv &&
+@@ -979,6 +981,7 @@ export async function getReplyFromConfig(
+         sessionId,
+         storePath,
+         workspaceDir,
++        cwd: runCwd,
+         abortedLastRun,
+         autoFallbackPrimaryProbe,
+       }),
+@@ -1328,6 +1331,7 @@ export async function getReplyFromConfig(
+       sessionId,
+       storePath,
+       workspaceDir,
++      cwd: runCwd,
+       abortedLastRun,
+       explicitSkillSelections,
+       autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
+diff --git a/src/config/types.agent-defaults.ts b/src/config/types.agent-defaults.ts
+index 4c48b4a8..f7d19365 100644
+--- a/src/config/types.agent-defaults.ts
++++ b/src/config/types.agent-defaults.ts
+@@ -160,6 +160,8 @@ export type AgentDefaultsConfig = {
+   modelPolicy?: AgentModelPolicyConfig;
+   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
+   workspace?: string;
++  /** Agent run working directory. Defaults to workspace when unset. */
++  cwd?: string;
+   /** Optional default allowlist of skills for agents that do not set agents.entries.*.skills. */
+   skills?: string[];
+   /** Silent-reply policy by conversation type. */
+diff --git a/src/config/types.agents.ts b/src/config/types.agents.ts
+index e154217a..90645a96 100644
+--- a/src/config/types.agents.ts
++++ b/src/config/types.agents.ts
+@@ -89,6 +89,8 @@ export type AgentConfig = {
+   /** Optional human-authored agent description. */
+   description?: string;
+   workspace?: string;
++  /** Optional run working directory for this agent. */
++  cwd?: string;
+   agentDir?: string;
+   model?: AgentModelConfig;
+   /** Optional per-agent model for short internal tasks such as generated session titles. */
+diff --git a/src/config/zod-schema.agent-defaults.ts b/src/config/zod-schema.agent-defaults.ts
+index 296eb58d..93e20288 100644
+--- a/src/config/zod-schema.agent-defaults.ts
++++ b/src/config/zod-schema.agent-defaults.ts
+@@ -82,6 +82,7 @@ export const AgentDefaultsSchema = z
+     models: AgentModelMapSchema.optional(),
+     modelPolicy: AgentModelPolicySchema.optional(),
+     workspace: z.string().optional(),
++    cwd: z.string().optional(),
+     skills: z.array(z.string()).optional(),
+     silentReply: SilentReplyPolicyConfigSchema.optional(),
+     repoRoot: z.string().optional(),
+diff --git a/src/config/zod-schema.agent-runtime.ts b/src/config/zod-schema.agent-runtime.ts
+index b252091b..44bf38b0 100644
+--- a/src/config/zod-schema.agent-runtime.ts
++++ b/src/config/zod-schema.agent-runtime.ts
+@@ -925,6 +925,7 @@ export const AgentEntrySchema = z
+     name: z.string().optional(),
+     description: z.string().optional(),
+     workspace: z.string().optional(),
++    cwd: z.string().optional(),
+     agentDir: z.string().optional(),
+     model: AgentModelSchema.optional(),
+     utilityModel: z.string().optional(),

@@ -188,15 +188,6 @@ export const OPENCLAW_BINDING_ANY_ACCOUNT_ID = '*';
 const OPENCLAW_DEFAULT_MODEL_MAX_TOKENS = 8192;
 const CHROME_PROXY_SERVER_ARG_PREFIX = '--proxy-server=';
 
-const OpenClawContextCacheProvider = {
-  DashScope: 'dashscope',
-  AnthropicCompatible: 'anthropic-compatible',
-} as const;
-
-const OpenClawContextCacheMode = {
-  Explicit: 'explicit',
-} as const;
-
 const EXPLICIT_CONTEXT_CACHE_LOG_PREFIX = '********************';
 const CUSTOM_PROVIDER_NAME_PATTERN = /^custom_[0-9]+$/;
 
@@ -668,6 +659,7 @@ type OpenClawThinkingLevelMap = Partial<Record<
 >>;
 
 type OpenClawModelCompat = {
+  cacheControlFormat?: 'anthropic';
   maxTokensField?: 'max_completion_tokens' | 'max_tokens';
   supportsUsageInStreaming?: boolean;
   requiresStringContent?: boolean;
@@ -755,16 +747,12 @@ type OpenClawAgentModelDefault = {
 const DASHSCOPE_EXPLICIT_CONTEXT_CACHE_PARAMS: OpenClawAgentModelDefault = {
   params: {
     cacheRetention: 'short',
-    contextCacheProvider: OpenClawContextCacheProvider.DashScope,
-    contextCacheMode: OpenClawContextCacheMode.Explicit,
   },
 };
 
 const ANTHROPIC_COMPATIBLE_EXPLICIT_CONTEXT_CACHE_PARAMS: OpenClawAgentModelDefault = {
   params: {
     cacheRetention: 'short',
-    contextCacheProvider: OpenClawContextCacheProvider.AnthropicCompatible,
-    contextCacheMode: OpenClawContextCacheMode.Explicit,
   },
 };
 
@@ -1680,6 +1668,13 @@ const addExplicitContextCacheDefault = (
     explicitContextCache: source.explicitContextCache,
   });
   if (!contextCacheDefault) return;
+
+  if (model.api === OpenClawApiConst.OpenAICompletions) {
+    model.compat = {
+      ...model.compat,
+      cacheControlFormat: 'anthropic',
+    };
+  }
 
   const modelKey = `${selection.providerId}/${selection.sessionModelId}`;
   defaults[modelKey] = mergeAgentModelDefault(defaults[modelKey], contextCacheDefault);

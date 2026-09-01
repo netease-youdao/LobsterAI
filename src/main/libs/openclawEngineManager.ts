@@ -418,7 +418,10 @@ export class OpenClawEngineManager extends EventEmitter {
       return;
     }
     try {
-      const results = cleanupStaleGatewayLocks({ configPath: this.configPath });
+      const results = cleanupStaleGatewayLocks({
+        configPath: this.configPath,
+        stateDir: this.stateDir,
+      });
       for (const result of results) {
         const owner = result.ownerPid != null ? ` ownerPid=${result.ownerPid}` : '';
         if (result.action === GatewayLockCleanupAction.KeptAliveOwner) {

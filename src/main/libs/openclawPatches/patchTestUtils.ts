@@ -43,7 +43,14 @@ export function getOpenClawSourceDir(): string {
 }
 
 export function isOpenClawSourceAvailable(): boolean {
-  return fs.existsSync(path.join(getOpenClawSourceDir(), 'package.json'));
+  const packagePath = path.join(getOpenClawSourceDir(), 'package.json');
+  if (!fs.existsSync(packagePath)) return false;
+  try {
+    const sourcePackage = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    return `v${sourcePackage.version}` === getCurrentOpenClawVersion();
+  } catch {
+    return false;
+  }
 }
 
 export function expectOpenClawSourceContains(checks: Array<{
@@ -79,7 +86,16 @@ export function findBundledOpenClawRuntimeBundlePath(): string | null {
 }
 
 export function isBundledOpenClawRuntimeAvailable(): boolean {
-  return findBundledOpenClawRuntimeBundlePath() !== null;
+  const runtimePath = findBundledOpenClawRuntimeBundlePath();
+  if (!runtimePath) return false;
+  const buildInfoPath = path.join(path.dirname(runtimePath), 'runtime-build-info.json');
+  if (!fs.existsSync(buildInfoPath)) return false;
+  try {
+    const buildInfo = JSON.parse(fs.readFileSync(buildInfoPath, 'utf8'));
+    return buildInfo.openclawVersion === getCurrentOpenClawVersion();
+  } catch {
+    return false;
+  }
 }
 
 export function expectBundledOpenClawRuntimeContains(snippets: string[]): void {
