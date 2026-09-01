@@ -9,9 +9,8 @@
 // directory picker lost its dialog worker and started failing with "win32
 // folder dialog worker exited before reporting a result".
 //
-// The behaviour differs per binary (plain Node 24.19 does not follow; Electron
-// 40's Node 24.11 does), so this check is only meaningful when it runs under
-// the same runtime the app uses:
+// The behaviour has differed between plain Node and Electron runtimes, so this
+// check is only meaningful when it runs under the same runtime the app uses:
 //
 //   ELECTRON_RUN_AS_NODE=1 <electron> scripts/verify-dsh-remove-tree.cjs
 //

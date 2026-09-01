@@ -28,6 +28,7 @@ import { migrateLegacyCronStorageWithDoctor } from './openclawCronLegacyMigratio
 import { cleanupStaleGatewayLocks, GatewayLockCleanupAction } from './openclawGatewayLock';
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
+import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
 import { ensureOpenClawWorkerShims } from './openclawWorkerShims';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 
@@ -747,6 +748,34 @@ export class OpenClawEngineManager extends EventEmitter {
       electronNodeRuntimePath,
       env,
     });
+
+    const legacySessionMigration = await migrateLegacySessionStorageWithDoctor({
+      stateDir: this.stateDir,
+      configPath: this.configPath,
+      runtimeRoot: runtime.root,
+      electronNodeRuntimePath,
+      env,
+    });
+    if (legacySessionMigration.status === 'failed') {
+      this.setStatus({
+        phase: 'error',
+        version: runtime.version,
+        message: legacySessionMigration.error,
+        canRetry: true,
+      });
+      return this.getStatus();
+    }
+    if (legacySessionMigration.status === 'skipped'
+      && legacySessionMigration.reason === 'missing-openclaw-cli') {
+      this.setStatus({
+        phase: 'error',
+        version: runtime.version,
+        message: 'OpenClaw legacy sessions require migration, but the bundled CLI is missing.',
+        errorCode: OpenClawEngineErrorCode.RuntimeEntryMissing,
+        canRetry: true,
+      });
+      return this.getStatus();
+    }
 
     await migrateAllFtsOnlyMemoryIndexes({
       stateDir: this.stateDir,

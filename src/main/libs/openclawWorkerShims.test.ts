@@ -55,7 +55,7 @@ test('skips shim creation when gateway bundle is absent', () => {
   }
 });
 
-test('creates root worker shims that import dist agent workers', () => {
+test('creates root worker shims that import their dist worker targets', () => {
   const runtimeRoot = makeRuntimeRoot();
   writeGatewayBundle(runtimeRoot);
   writeAllWorkerTargets(runtimeRoot);
@@ -69,6 +69,13 @@ test('creates root worker shims that import dist agent workers', () => {
     const shimPath = path.join(runtimeRoot, target.shimFile);
     expect(fs.readFileSync(shimPath, 'utf8')).toBe(buildOpenClawWorkerShimContent(target.targetFile));
   }
+});
+
+test('includes the OpenClaw SQLite read-only worker introduced in v2026.8.1', () => {
+  expect(OPENCLAW_WORKER_SHIM_TARGETS).toContainEqual({
+    shimFile: 'sqlite-readonly-location.worker.mjs',
+    targetFile: path.join('dist', 'infra', 'sqlite-readonly-location.worker.js'),
+  });
 });
 
 test('updates existing generated shims', () => {

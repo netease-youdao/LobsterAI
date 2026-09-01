@@ -256,7 +256,7 @@
     "deleteAppDataOnUninstall": false,
     "include": "scripts/nsis-installer.nsh"
   },
-  "electronVersion": "40.2.1",
+  "electronVersion": "43.5.0",
   "asarUnpack": [
     "node_modules/@img/**",
     "node_modules/better-sqlite3/**",

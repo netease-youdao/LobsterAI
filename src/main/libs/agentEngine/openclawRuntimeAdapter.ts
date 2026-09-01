@@ -5908,6 +5908,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       caps: [OPENCLAW_GATEWAY_TOOL_EVENTS_CAP],
       role: 'operator',
       scopes: ['operator.admin'],
+      // LobsterAI connects to its own loopback gateway with an explicit shared
+      // token. Avoid loading OpenClaw's ambient ~/.openclaw device identity,
+      // which belongs to a separate standalone OpenClaw installation.
+      deviceIdentity: null,
       onHelloOk: () => {
         if (clientGeneration !== this.gatewayClientGeneration) {
           console.debug('[ChannelSync] ignored hello from a stale gateway client generation');

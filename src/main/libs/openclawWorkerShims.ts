@@ -17,6 +17,10 @@ export const OPENCLAW_WORKER_SHIM_TARGETS = [
     shimFile: 'compaction-planning.worker.mjs',
     targetFile: path.join('dist', 'agents', 'compaction-planning.worker.js'),
   },
+  {
+    shimFile: 'sqlite-readonly-location.worker.mjs',
+    targetFile: path.join('dist', 'infra', 'sqlite-readonly-location.worker.js'),
+  },
 ] as const;
 
 export interface OpenClawWorkerShimResult {

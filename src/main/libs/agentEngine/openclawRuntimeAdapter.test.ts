@@ -1983,6 +1983,7 @@ test('a successful gateway hello clears reconnect suppression on the normal ensu
   });
   await adapter.gatewayReadyPromise;
 
+  expect(callbacks.deviceIdentity).toBeNull();
   expect(adapter.gatewayReconnectSuppressed).toBe(false);
   expect(adapter.gatewayReconnectAttempt).toBe(0);
   adapter.disconnectGatewayClient();
