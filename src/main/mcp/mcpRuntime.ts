@@ -231,14 +231,20 @@ export class McpRuntime {
       return shimEnv;
     };
     const pushRawStdioServer = async (server: typeof enabledServers[number]): Promise<void> => {
-      const r = await resolveStdioCommand(server);
-      resolved.push({
-        name: server.name,
-        transportType: 'stdio',
-        command: r.command,
-        args: r.args,
-        env: { ...buildShimEnv(), ...(r.env || {}) },
-      });
+      try {
+        const r = await resolveStdioCommand(server);
+        resolved.push({
+          name: server.name,
+          transportType: 'stdio',
+          command: r.command,
+          args: r.args,
+          env: { ...buildShimEnv(), ...(r.env || {}) },
+        });
+      } catch (error) {
+        console.warn(
+          `[MCP] skipped raw stdio server "${server.name}": ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     };
 
     for (const server of enabledServers) {

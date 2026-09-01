@@ -183,6 +183,7 @@ import {
 } from '../shared/shareDeployment/constants';
 import type { ShellOpenFailureReason as ShellOpenFailureReasonType } from '../shared/shell/constants';
 import { type ShellGetBrowserAppsInput, ShellIpc, ShellOpenFailureReason } from '../shared/shell/constants';
+import { openExternalSafe } from '../shared/shell/externalUrl';
 import { AgentManager } from './agentManager';
 import { APP_NAME, APP_USER_MODEL_ID, DB_FILENAME } from './appConstants';
 import { createLocalFileProtocolResponse } from './artifactLocalFileProtocol';
@@ -12312,8 +12313,13 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(ShellIpc.OpenExternal, async (_event, url: string) => {
+    const safeUrl = openExternalSafe(url);
+    if (!safeUrl.ok) {
+      console.warn('[Shell] blocked external URL with unsupported protocol:', url);
+      return { success: false, error: 'Unsupported URL protocol' };
+    }
     try {
-      await shell.openExternal(url);
+      await shell.openExternal(safeUrl.url);
       return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
@@ -13027,7 +13033,12 @@ if (!gotTheLock) {
 
     // 处理 window.open 请求（企微 SDK 授权弹窗等）
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-      if (isWecomAuthUrl(url)) {
+      const safeUrl = openExternalSafe(url);
+      if (!safeUrl.ok) {
+        console.warn('[Shell] blocked window.open URL with unsupported protocol:', url);
+        return { action: 'deny' };
+      }
+      if (isWecomAuthUrl(safeUrl.url)) {
         return {
           action: 'allow',
           overrideBrowserWindowOptions: {
@@ -13043,7 +13054,7 @@ if (!gotTheLock) {
           },
         };
       }
-      shell.openExternal(url);
+      shell.openExternal(safeUrl.url);
       return { action: 'deny' };
     });
 
