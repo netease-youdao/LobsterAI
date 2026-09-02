@@ -13,6 +13,7 @@ ELECTRON_ROOT="${ELECTRON_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 OPENCLAW_SRC="${OPENCLAW_SRC:-$ELECTRON_ROOT/../openclaw}"
 OUT_DIR="${OUT_DIR:-$ELECTRON_ROOT/vendor/openclaw-runtime/$TARGET_ID}"
 MISTRAL_OTEL_API_VERSION="1.9.1"
+PNPM_FETCH_TIMEOUT_MS="${OPENCLAW_PNPM_FETCH_TIMEOUT_MS:-600000}"
 
 TARGET_PLATFORM="${TARGET_ID%%-*}"
 TARGET_ARCH="${TARGET_ID#*-}"
@@ -145,7 +146,18 @@ fi
 echo "[1/7] Building OpenClaw from source: $OPENCLAW_SRC"
 pushd "$OPENCLAW_SRC" >/dev/null
 corepack enable >/dev/null 2>&1 || true
-pnpm install --frozen-lockfile
+echo "[openclaw-runtime] Installing source dependencies (fetch timeout=${PNPM_FETCH_TIMEOUT_MS}ms)"
+PNPM_INSTALL_LOG="$WORK_DIR/pnpm-install.log"
+if ! pnpm install --frozen-lockfile --fetch-timeout "$PNPM_FETCH_TIMEOUT_MS" 2>&1 | tee "$PNPM_INSTALL_LOG"; then
+  if grep -Fq 'Broken lockfile: missing snapshot' "$PNPM_INSTALL_LOG" \
+    && [[ -f node_modules/.pnpm/lock.yaml || -f node_modules/.modules.yaml ]]; then
+    echo "[openclaw-runtime] Detected stale pnpm virtual-store metadata; rebuilding dependency links"
+    rm -f node_modules/.pnpm/lock.yaml node_modules/.modules.yaml
+    pnpm install --frozen-lockfile --fetch-timeout "$PNPM_FETCH_TIMEOUT_MS"
+  else
+    exit 1
+  fi
+fi
 pnpm build
 # Skip release:check — it validates the openclaw npm package for publishing and
 # is not relevant for LobsterAI embedded runtime builds.  On Windows it also

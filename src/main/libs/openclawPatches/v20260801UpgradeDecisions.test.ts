@@ -15,6 +15,7 @@ const RETAINED_PATCHES = [
   'openclaw-cli-startup-metadata-windows-timeout.patch',
   'openclaw-cron-skip-missed-jobs.patch',
   'openclaw-im-bound-agent-run-cwd.patch',
+  'openclaw-lancedb-optional-transformers.patch',
   'openclaw-lobsterai-model-compat-api.patch',
   'openclaw-openai-compatible-cache-control.patch',
   'openclaw-plugin-archive-windows-timeout.patch',
@@ -26,6 +27,7 @@ const RETAINED_PATCHES = [
   'openclaw-shell-snapshot-electron-node-env.patch',
   'openclaw-skip-derive-prompt-segments-deadloop.patch',
   'openclaw-subagent-cleanup-finalize-best-effort.patch',
+  'openclaw-windows-file-path-redaction.patch',
   'zz-openclaw-task-cwd-system-prompt.patch',
 ] as const;
 
@@ -46,7 +48,7 @@ const RETIRED_PATCHES = [
 ] as const;
 
 describe('OpenClaw v2026.8.1 upgrade decisions', () => {
-  test('ships exactly the reviewed 18-patch set', () => {
+  test('ships exactly the reviewed 20-patch set', () => {
     const patchFiles = fs.readdirSync(getCurrentOpenClawPatchDir())
       .filter((file) => file.endsWith('.patch'))
       .sort();
@@ -58,6 +60,10 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
   });
 
   test('keeps LobsterAI-specific reliability and Goal compatibility surfaces', () => {
+    expectPatchContains('openclaw-lancedb-optional-transformers.patch', [
+      '"@lancedb/lancedb>@huggingface/transformers": "-"',
+      '-  onnxruntime-node@1.19.2:',
+    ]);
     expectPatchContains('openclaw-cli-startup-metadata-windows-timeout.patch', [
       'process.platform === "win32" ? 300_000 : 120_000',
     ]);
@@ -111,6 +117,18 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       'pnpm --config.ignore-scripts=true pack --pack-destination "$PACK_DIR"',
     );
     expect(buildScript).toContain('MISTRAL_OTEL_API_VERSION="1.9.1"');
+    expect(buildScript).toContain(
+      'PNPM_FETCH_TIMEOUT_MS="${OPENCLAW_PNPM_FETCH_TIMEOUT_MS:-600000}"',
+    );
+    expect(buildScript).toContain(
+      'if ! pnpm install --frozen-lockfile --fetch-timeout "$PNPM_FETCH_TIMEOUT_MS"',
+    );
+    expect(buildScript).toContain(
+      "grep -Fq 'Broken lockfile: missing snapshot' \"$PNPM_INSTALL_LOG\"",
+    );
+    expect(buildScript).toContain(
+      'rm -f node_modules/.pnpm/lock.yaml node_modules/.modules.yaml',
+    );
     expect(buildScript).toContain(
       '"@opentelemetry/api@$MISTRAL_OTEL_API_VERSION"',
     );

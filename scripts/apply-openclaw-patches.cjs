@@ -510,6 +510,20 @@ const v20260801StrongPatchValidators = {
       snippets: ['cwd: z.string().optional()'],
     },
   ],
+  'openclaw-lancedb-optional-transformers.patch': [
+    {
+      file: 'pnpm-workspace.yaml',
+      snippets: ['"@lancedb/lancedb>@huggingface/transformers": "-"'],
+    },
+    {
+      file: 'pnpm-lock.yaml',
+      snippets: ["'@lancedb/lancedb>@huggingface/transformers': '-'"],
+      forbiddenSnippets: [
+        "'@huggingface/transformers@3.0.2':",
+        'onnxruntime-node@1.19.2:',
+      ],
+    },
+  ],
   'openclaw-lobsterai-model-compat-api.patch': [
     {
       file: 'src/config/types.models.ts',
@@ -671,6 +685,18 @@ const v20260801StrongPatchValidators = {
     {
       file: 'src/agents/subagents/registry/subagent-registry-lifecycle.test.ts',
       snippets: ['does not reject cleanup after bookkeeping when the ended hook throws'],
+    },
+  ],
+  'openclaw-windows-file-path-redaction.patch': [
+    {
+      file: 'src/logging/redact-patterns.ts',
+      snippets: [
+        'const AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY = String.raw`(^|[^A-Za-z0-9/+=_])(?<!;base64,[A-Za-z0-9+/=]*)(?<![A-Za-z]:)`;',
+      ],
+    },
+    {
+      file: 'src/logging/redact.test.ts',
+      snippets: ['const windowsPath = "C:/Users/tester/lobsterai/project/chinajoy-ppt/deck.pptx"'],
     },
   ],
   'zz-openclaw-task-cwd-system-prompt.patch': [
