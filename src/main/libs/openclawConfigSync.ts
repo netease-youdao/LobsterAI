@@ -313,27 +313,11 @@ const MANAGED_OWNER_ALLOW_FROM = [
 ];
 
 const MANAGED_TOOL_DENY = ['web_search'] as const;
-// knownPollNoProgress is off: polling a live background process that stays
-// quiet (builds, installs, downloads) legitimately repeats identical calls
-// with identical output, and the detector killed such runs after 10 polls
-// (~5 min). Runaway polling is still bounded by the global circuit breaker,
-// which applies regardless of detector flags. Aborted-tool protection is
-// unaffected: those detectors use their own hardcoded thresholds.
-// historySize must stay comfortably above globalCircuitBreakerThreshold or
-// interleaved tool calls push streak entries out of the window and the
-// breaker becomes unreachable.
+// OpenClaw 2026.8.1 owns detector selection and thresholds. Only the public
+// enable flag remains configurable; emitting the retired tuning keys makes
+// the complete config invalid and prevents gateway hot reloads.
 const MANAGED_TOOL_LOOP_DETECTION = {
   enabled: true,
-  historySize: 48,
-  warningThreshold: 6,
-  unknownToolThreshold: 6,
-  criticalThreshold: 10,
-  globalCircuitBreakerThreshold: 30,
-  detectors: {
-    genericRepeat: true,
-    knownPollNoProgress: false,
-    pingPong: true,
-  },
 } as const;
 const EMAIL_PLUGIN_ID = 'email';
 const NIM_CHANNEL_PLUGIN_ID = 'nimsuite-openclaw-nim-channel';
@@ -1948,7 +1932,6 @@ export class OpenClawConfigSync {
       ...config,
       meta: {
         ...(version ? { lastTouchedVersion: version } : {}),
-        lastTouchedAt: new Date().toISOString(),
       },
     };
   }
@@ -1994,7 +1977,6 @@ export class OpenClawConfigSync {
             [BrowserRuntimeProfile.InApp]: {
               driver: 'existing-session',
               attachOnly: true,
-              color: '#D7A514',
               mcpCommand,
               mcpArgs: [`--lobster-bridge-url=${callbackUrl}`],
             },
@@ -2027,10 +2009,8 @@ export class OpenClawConfigSync {
     };
 
     return {
-      deny: [
-        ...MANAGED_TOOL_DENY
-      ],
-loopDetection: MANAGED_TOOL_LOOP_DETECTION,
+      deny: [...MANAGED_TOOL_DENY],
+      loopDetection: MANAGED_TOOL_LOOP_DETECTION,
       web: {
         search: {
           enabled: false,
@@ -2432,8 +2412,33 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
       },
       models: {
         mode: 'replace',
-        pricing: { enabled: false },
         providers: allProvidersMap,
+      },
+      memory: {
+        search: {
+          enabled: true,
+          provider: coworkConfig.embeddingEnabled
+            ? (['openai', 'gemini', 'voyage', 'mistral', 'ollama'].includes(coworkConfig.embeddingProvider)
+              ? coworkConfig.embeddingProvider
+              : 'openai')
+            : 'none',
+          ...(coworkConfig.embeddingEnabled && coworkConfig.embeddingModel ? { model: coworkConfig.embeddingModel } : {}),
+          ...(coworkConfig.embeddingEnabled ? {
+            remote: {
+              ...(coworkConfig.embeddingRemoteBaseUrl ? { baseUrl: coworkConfig.embeddingRemoteBaseUrl } : {}),
+              ...(coworkConfig.embeddingRemoteApiKey ? { apiKey: coworkConfig.embeddingRemoteApiKey } : {}),
+            },
+          } : {
+            fallback: 'none',
+          }),
+          store: {
+            // Use trigram tokenizer for FTS5 — unicode61 (the OpenClaw default)
+            // cannot tokenize CJK characters, so Chinese/Japanese/Korean memory
+            // content is invisible to keyword search.
+            fts: { tokenizer: 'trigram' },
+            ...(!coworkConfig.embeddingEnabled ? { vector: { enabled: false } } : {}),
+          },
+        },
       },
       agents: {
         defaults: {
@@ -2447,39 +2452,9 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
           workspace: path.resolve(mainWorkspacePath),
           mediaMaxMb: 30,
           compaction: {
-            truncateAfterCompaction: true,
             maxActiveTranscriptBytes: OpenClawTranscriptSafetyLimit.SoftConfigValue,
           },
           ...(taskWorkingDirectory ? { cwd: path.resolve(taskWorkingDirectory) } : {}),
-          memorySearch: {
-            enabled: true,
-            provider: coworkConfig.embeddingEnabled
-              ? (['openai', 'gemini', 'voyage', 'mistral', 'ollama'].includes(coworkConfig.embeddingProvider)
-                ? coworkConfig.embeddingProvider
-                : 'openai')
-              : 'none',
-            ...(coworkConfig.embeddingEnabled && coworkConfig.embeddingModel ? { model: coworkConfig.embeddingModel } : {}),
-            ...(coworkConfig.embeddingEnabled ? {
-              remote: {
-                ...(coworkConfig.embeddingRemoteBaseUrl ? { baseUrl: coworkConfig.embeddingRemoteBaseUrl } : {}),
-                ...(coworkConfig.embeddingRemoteApiKey ? { apiKey: coworkConfig.embeddingRemoteApiKey } : {}),
-              },
-              query: {
-                hybrid: {
-                  vectorWeight: coworkConfig.embeddingVectorWeight ?? 0.7,
-                },
-              },
-            } : {
-              fallback: 'none',
-            }),
-            store: {
-              // Use trigram tokenizer for FTS5 — unicode61 (the openclaw default)
-              // cannot tokenize CJK characters, so Chinese/Japanese/Korean memory
-              // content is invisible to keyword search.
-              fts: { tokenizer: 'trigram' },
-              ...(!coworkConfig.embeddingEnabled ? { vector: { enabled: false } } : {}),
-            },
-          },
           heartbeat: {
             every: coworkConfig.openClawHeartbeatEnabled === true
               ? OPENCLAW_HEARTBEAT_EVERY_ENABLED
@@ -2487,7 +2462,6 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
             target: 'none',
             lightContext: true,
             isolatedSession: true,
-            skipWhenBusy: true,
           },
           ...(Object.keys(agentModelDefaults).length > 0
             ? { models: agentModelDefaults }
@@ -2514,9 +2488,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
       },
       cron: {
         enabled: true,
-        store: path.join(this.engineManager.getStateDir(), 'cron', 'jobs.json'),
         skipMissedJobs: coworkConfig.skipMissedJobs === true,
-        maxConcurrentRuns: 3,
         sessionRetention: '7d',
       },
       ...((() => {
