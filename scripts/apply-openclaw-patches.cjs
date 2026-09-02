@@ -659,6 +659,32 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-skip-disabled-web-search-discovery.patch': [
+    {
+      file: 'src/secrets/runtime-web-tools.ts',
+      snippets: [
+        'const searchEnabled = search?.enabled !== false',
+        'searchEnabled && hasPluginWebSearchConfig',
+        'searchEnabled && (search || hasPluginWebSearchConfig)',
+      ],
+      forbiddenSnippets: ['if (search || hasPluginWebSearchConfig)'],
+    },
+    {
+      file: 'src/secrets/runtime-fast-path.ts',
+      snippets: [
+        'const searchExplicitlyDisabled = web?.search?.enabled === false',
+        '"search" in webRecord && !searchExplicitlyDisabled',
+      ],
+    },
+    {
+      file: 'src/secrets/runtime-web-tools.test.ts',
+      snippets: ['skips provider discovery when web search is explicitly disabled'],
+    },
+    {
+      file: 'src/secrets/runtime.fast-path.test.ts',
+      snippets: ['uses the fast path when web %s is explicitly disabled'],
+    },
+  ],
   'openclaw-skip-derive-prompt-segments-deadloop.patch': [
     {
       file: 'src/auto-reply/reply/agent-runner-result-complete.ts',

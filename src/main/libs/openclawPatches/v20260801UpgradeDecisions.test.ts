@@ -25,6 +25,7 @@ const RETAINED_PATCHES = [
   'openclaw-safe-error-metadata.patch',
   'openclaw-session-goal-rpc.patch',
   'openclaw-shell-snapshot-electron-node-env.patch',
+  'openclaw-skip-disabled-web-search-discovery.patch',
   'openclaw-skip-derive-prompt-segments-deadloop.patch',
   'openclaw-subagent-cleanup-finalize-best-effort.patch',
   'openclaw-windows-file-path-redaction.patch',
@@ -48,7 +49,7 @@ const RETIRED_PATCHES = [
 ] as const;
 
 describe('OpenClaw v2026.8.1 upgrade decisions', () => {
-  test('ships exactly the reviewed 20-patch set', () => {
+  test('ships exactly the reviewed 21-patch set', () => {
     const patchFiles = fs.readdirSync(getCurrentOpenClawPatchDir())
       .filter((file) => file.endsWith('.patch'))
       .sort();
@@ -89,6 +90,11 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
     ]);
     expectPatchContains('openclaw-shell-snapshot-electron-node-env.patch', [
       'ELECTRON_RUN_AS_NODE=1',
+    ]);
+    expectPatchContains('openclaw-skip-disabled-web-search-discovery.patch', [
+      'const searchEnabled = search?.enabled !== false',
+      'searchEnabled && (search || hasPluginWebSearchConfig)',
+      'uses the fast path when web %s is explicitly disabled',
     ]);
   });
 
