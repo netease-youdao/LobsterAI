@@ -26,6 +26,15 @@ export const PayloadKind = {
 } as const;
 export type PayloadKind = typeof PayloadKind[keyof typeof PayloadKind];
 
+// OpenClaw owns these payload kinds and creates their cron jobs internally.
+// They must not be exposed as editable LobsterAI scheduled tasks.
+export const OpenClawSystemPayloadKind = {
+  Heartbeat: 'heartbeat',
+  SkillCollectionReview: 'skillCollectionReview',
+} as const;
+export type OpenClawSystemPayloadKind =
+  typeof OpenClawSystemPayloadKind[keyof typeof OpenClawSystemPayloadKind];
+
 // ─── Delivery Mode ──────────────────────────────────────────────────────────
 export const DeliveryMode = {
   None: 'none',
