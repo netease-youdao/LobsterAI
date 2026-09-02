@@ -694,6 +694,7 @@ describe('Windows installer hardening contracts', () => {
     expect(unpackScript).toContain('missingDirs === 0');
     expect(unpackScript).toContain('required resources missing after extraction');
     expect(unpackScript).toContain("name: 'cfmind-entry'");
+    expect(unpackScript).toContain("name: 'cfmind-bundle-assets'");
     expect(unpackScript).toContain("name: 'skills-content'");
     expect(unpackScript).toContain("name: 'python-entry'");
     expect(unpackScript).toContain('phase=sentinel-written');
@@ -728,19 +729,23 @@ describe('Windows installer hardening contracts', () => {
     expect(branch).toContain('will not commit a partial application');
   });
 
-  test('requires OpenClaw, Skills, and Python before committing an installation', () => {
+  test('requires complete OpenClaw bundle assets, Skills, and Python before committing an installation', () => {
     const extractVerifyStart = installerInclude.indexOf('TarExtractVerify:');
     const extractVerifyEnd = installerInclude.indexOf('TarExtractProcessFailed:', extractVerifyStart);
     const extractVerify = installerInclude.slice(extractVerifyStart, extractVerifyEnd);
+    expect(extractVerify).toContain('TarExtractVerifyBundleAssets:');
+    expect(extractVerify).toContain(String.raw`resources\cfmind\web-tree-sitter.wasm`);
     expect(extractVerify).toContain('TarExtractVerifySkills:');
     expect(extractVerify).toContain(String.raw`resources\SKILLs\*.*`);
     expect(extractVerify).toContain(String.raw`resources\python-win\python.exe`);
     expect(extractVerify).toContain(String.raw`resources\python-win\python3.exe`);
     expect(extractVerify).toContain('TarExtractRequiredResourceMissing:');
 
-    const prevalidateStart = installerInclude.indexOf('NewInstallPrevalidateSkills:');
+    const prevalidateStart = installerInclude.indexOf('NewInstallPrevalidateBundleAssets:');
     const prevalidateEnd = installerInclude.indexOf('NewInstallPrevalidateSucceeded:', prevalidateStart);
     const prevalidate = installerInclude.slice(prevalidateStart, prevalidateEnd);
+    expect(prevalidate).toContain('NewInstallPrevalidateBundleAssets:');
+    expect(prevalidate).toContain(String.raw`resources\cfmind\web-tree-sitter.wasm`);
     expect(prevalidate).toContain(String.raw`resources\SKILLs\*.*`);
     expect(prevalidate).toContain(String.raw`resources\python-win\python.exe`);
     expect(prevalidate).toContain(String.raw`resources\python-win\python3.exe`);
