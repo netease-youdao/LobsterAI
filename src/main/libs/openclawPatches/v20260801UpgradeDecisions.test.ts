@@ -28,6 +28,7 @@ const RETAINED_PATCHES = [
   'openclaw-skip-disabled-web-search-discovery.patch',
   'openclaw-skip-derive-prompt-segments-deadloop.patch',
   'openclaw-subagent-cleanup-finalize-best-effort.patch',
+  'openclaw-view-image-task-cwd.patch',
   'openclaw-windows-file-path-redaction.patch',
   'zz-openclaw-task-cwd-system-prompt.patch',
 ] as const;
@@ -49,7 +50,7 @@ const RETIRED_PATCHES = [
 ] as const;
 
 describe('OpenClaw v2026.8.1 upgrade decisions', () => {
-  test('ships exactly the reviewed 21-patch set', () => {
+  test('ships exactly the reviewed 22-patch set', () => {
     const patchFiles = fs.readdirSync(getCurrentOpenClawPatchDir())
       .filter((file) => file.endsWith('.patch'))
       .sort();

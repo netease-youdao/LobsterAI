@@ -713,6 +713,31 @@ const v20260801StrongPatchValidators = {
       snippets: ['does not reject cleanup after bookkeeping when the ended hook throws'],
     },
   ],
+  'openclaw-view-image-task-cwd.patch': [
+    {
+      file: 'src/agents/openclaw-tools.ts',
+      snippets: ['cwd: options?.cwd'],
+    },
+    {
+      file: 'src/agents/tools/image-tool.ts',
+      snippets: [
+        'const runtimeCwd = options?.cwd?.trim() || options?.workspaceDir',
+        'return resolve(runtimeCwd, normalizedRef)',
+        'containmentRoot: sandboxConfig ? undefined : (options?.fsPolicy?.root ?? runtimeCwd)',
+      ],
+    },
+    {
+      file: 'src/agents/tools/media-tool-shared.ts',
+      snippets: [
+        'containmentRoot?: string',
+        'return containmentRoot ? [containmentRoot] : workspaceDir ? [workspaceDir] : []',
+      ],
+    },
+    {
+      file: 'src/agents/tools/image-tool.test.ts',
+      snippets: ['resolves and authorizes local image paths against the runtime cwd'],
+    },
+  ],
   'openclaw-windows-file-path-redaction.patch': [
     {
       file: 'src/logging/redact-patterns.ts',
