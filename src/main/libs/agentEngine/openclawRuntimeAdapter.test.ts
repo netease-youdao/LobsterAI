@@ -2135,6 +2135,98 @@ test('interactive RPCs use the managed key for an idle scheduled session and its
   expect(requests.at(-1)?.params.key).toBe(cronRunKey);
 });
 
+test('pollChannelSessions coalesces overlapping background reconciliations', async () => {
+  const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+  let signalRequestStarted: (() => void) | undefined;
+  const requestStarted = new Promise<void>((resolve) => {
+    signalRequestStarted = resolve;
+  });
+  let releaseRequest: (() => void) | undefined;
+  const requestBlocked = new Promise<void>((resolve) => {
+    releaseRequest = resolve;
+  });
+  const request = vi.fn(async () => {
+    signalRequestStarted?.();
+    await requestBlocked;
+    return { sessions: [] };
+  });
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request,
+  };
+  adapter.channelSessionSync = {} as never;
+
+  const firstPoll = adapter.pollChannelSessions();
+  await requestStarted;
+  const secondPoll = adapter.pollChannelSessions();
+
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(secondPoll).toBe(firstPoll);
+
+  releaseRequest?.();
+  await Promise.all([firstPoll, secondPoll]);
+  expect(adapter.channelSessionPollInFlight).toBeNull();
+});
+
+test('background sessions.list timeout backs off without degrading foreground session RPCs', async () => {
+  const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+  const timeoutError = new Error('gateway request timeout for sessions.list after 5000ms');
+  const request = vi.fn(async () => {
+    if (request.mock.calls.length === 1) {
+      throw timeoutError;
+    }
+    return { sessions: [] };
+  });
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request,
+  };
+  adapter.channelSessionSync = {} as never;
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  try {
+    await adapter.pollChannelSessions();
+
+    expect(adapter.gatewayRpcHealth.consecutiveTimeouts).toBe(0);
+    expect(adapter.channelPollingTimeoutCount).toBe(1);
+    expect(adapter.channelPollingBackoffUntil).toBeGreaterThan(Date.now());
+
+    await adapter.pollChannelSessions();
+    expect(request).toHaveBeenCalledTimes(1);
+
+    await adapter.listGatewaySessionsForUsage({ limit: 1 });
+    expect(request).toHaveBeenCalledTimes(2);
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test('sessions.changed debounces an early channel reconciliation while periodic polling remains active', async () => {
+  vi.useFakeTimers();
+  const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+  const request = vi.fn(async () => ({ sessions: [] }));
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request,
+  };
+  adapter.channelSessionSync = {} as never;
+  adapter.channelPollingTimer = setInterval(() => {}, 10_000);
+
+  try {
+    adapter.handleGatewayEvent({ event: 'sessions.changed', payload: {} });
+    adapter.handleGatewayEvent({ event: 'sessions.changed', payload: {} });
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(request).toHaveBeenCalledTimes(1);
+  } finally {
+    adapter.stopChannelPolling();
+    vi.useRealTimers();
+  }
+});
+
 test('pollChannelSessions recovers a missed cron event without retaining run-scoped keys', async () => {
   const sessionKey = 'agent:ops:cron:daily-monitor:run:run-42';
   const { session, store } = createReconcileStore([], {

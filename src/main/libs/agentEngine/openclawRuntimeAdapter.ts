@@ -2526,8 +2526,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly channelLifecycleRunBySessionKey = new Map<string, ChannelSessionLifecycleRun>();
   private readonly reportedChannelPromptRunIds = new Set<string>();
   private channelPollingTimer: ReturnType<typeof setInterval> | null = null;
+  private channelEventReconcileTimer: ReturnType<typeof setTimeout> | null = null;
+  private channelSessionPollInFlight: Promise<void> | null = null;
+  private channelPollingTimeoutCount = 0;
+  private channelPollingBackoffUntil = 0;
 
   private static readonly CHANNEL_POLL_INTERVAL_MS = 10_000;
+  private static readonly CHANNEL_POLL_MAX_BACKOFF_MS = 60_000;
+  private static readonly CHANNEL_EVENT_RECONCILE_DELAY_MS = 250;
   private static readonly CHANNEL_LIFECYCLE_RUN_GRACE_MS = 60_000;
   private static readonly REPORTED_CHANNEL_PROMPT_RUN_ID_LIMIT = 2_000;
   private static readonly GATEWAY_SESSION_SUBSCRIBE_TIMEOUT_MS = 5_000;
@@ -4250,27 +4256,85 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       clearInterval(this.channelPollingTimer);
       this.channelPollingTimer = null;
     }
+    if (this.channelEventReconcileTimer) {
+      clearTimeout(this.channelEventReconcileTimer);
+      this.channelEventReconcileTimer = null;
+    }
+    // An in-flight request cannot be cancelled through the gateway client API.
+    // Detach it so a newly connected client can start its own reconciliation;
+    // performChannelSessionPoll ignores results from a superseded client.
+    this.channelSessionPollInFlight = null;
+    this.resetChannelPollingBackoff();
   }
 
-  private async pollChannelSessions(): Promise<void> {
+  private scheduleChannelSessionReconciliation(): void {
+    if (!this.channelPollingTimer || this.channelEventReconcileTimer) {
+      return;
+    }
+    this.channelEventReconcileTimer = setTimeout(() => {
+      this.channelEventReconcileTimer = null;
+      void this.pollChannelSessions();
+    }, OpenClawRuntimeAdapter.CHANNEL_EVENT_RECONCILE_DELAY_MS);
+  }
+
+  private resetChannelPollingBackoff(): void {
+    this.channelPollingTimeoutCount = 0;
+    this.channelPollingBackoffUntil = 0;
+  }
+
+  private markChannelPollingTimeout(): number {
+    this.channelPollingTimeoutCount += 1;
+    const backoffMs = Math.min(
+      OpenClawRuntimeAdapter.CHANNEL_POLL_INTERVAL_MS
+        * (2 ** Math.max(0, this.channelPollingTimeoutCount - 1)),
+      OpenClawRuntimeAdapter.CHANNEL_POLL_MAX_BACKOFF_MS,
+    );
+    this.channelPollingBackoffUntil = Date.now() + backoffMs;
+    return backoffMs;
+  }
+
+  private pollChannelSessions(): Promise<void> {
+    if (this.channelSessionPollInFlight) {
+      console.debug('[ChannelSync] channel session polling already in flight; reusing the current poll.');
+      return this.channelSessionPollInFlight;
+    }
+    if (this.channelPollingBackoffUntil > Date.now()) {
+      console.debug('[ChannelSync] skipped channel session polling during timeout backoff.');
+      return Promise.resolve();
+    }
+
+    const poll: Promise<void> = this.performChannelSessionPoll().finally(() => {
+      if (this.channelSessionPollInFlight === poll) {
+        this.channelSessionPollInFlight = null;
+      }
+    });
+    this.channelSessionPollInFlight = poll;
+    return poll;
+  }
+
+  private async performChannelSessionPoll(): Promise<void> {
     if (!this.gatewayClient || !this.channelSessionSync) {
       console.warn('[ChannelSync] pollChannelSessions: skipped — gatewayClient:', !!this.gatewayClient, 'channelSessionSync:', !!this.channelSessionSync);
       return;
     }
+    const client = this.gatewayClient;
     // Reuse the existing poll cadence for marker cleanup instead of creating
     // one timer per IM run. This bounds memory even if both a terminal event
     // and the corresponding terminal sessions.list row are lost.
     this.pruneStaleChannelLifecycleRuns();
     if (this.isGatewayRpcDegraded()) {
-      console.debug('[ChannelSync] skipped channel session polling because gateway session RPCs are degraded.');
+      console.debug('[ChannelSync] skipped background polling while foreground session RPCs are degraded.');
       return;
     }
     try {
       const params = { activeMinutes: 60, limit: CHANNEL_SESSION_DISCOVERY_LIMIT };
-      const result = await this.gatewayClient.request('sessions.list', params, {
+      const result = await client.request('sessions.list', params, {
         timeoutMs: OpenClawRuntimeAdapter.CONTEXT_USAGE_LIST_TIMEOUT_MS,
       });
-      this.markGatewayRpcSuccess();
+      if (this.gatewayClient !== client) {
+        return;
+      }
+      this.resetChannelPollingBackoff();
       const sessions = (result as Record<string, unknown>)?.sessions;
       if (!Array.isArray(sessions)) {
         console.warn('[ChannelSync] pollChannelSessions: sessions.list returned non-array sessions:', typeof sessions, 'full result keys:', Object.keys(result as Record<string, unknown>));
@@ -4386,9 +4450,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         }
       }
     } catch (error) {
-      this.recordGatewayRpcFailure('sessions.list', error);
+      if (this.gatewayClient !== client) {
+        return;
+      }
       if (this.isGatewayRequestTimeout(error, 'sessions.list')) {
-        console.warn('[ChannelSync] channel session polling timed out; polling will back off temporarily:', error);
+        const backoffMs = this.markChannelPollingTimeout();
+        console.warn(`[ChannelSync] channel session polling timed out; retrying after ${backoffMs}ms:`, error);
         return;
       }
       console.error('[ChannelSync] pollChannelSessions: error during polling:', error);
@@ -7143,6 +7210,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (event.event === OpenClawGatewayEvent.SessionsChanged) {
       try {
         this.handleChannelSessionLifecycleEvent(event.payload);
+        this.scheduleChannelSessionReconciliation();
       } catch (error) {
         // Channel parsing and mapping may touch plugin-provided identifiers and
         // local persistence. Keep a malformed event isolated from the gateway

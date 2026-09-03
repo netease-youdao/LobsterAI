@@ -5,6 +5,142 @@ const path = require('path');
 
 const { readJsonFile, writeJsonFile } = require('./common.cjs');
 
+const WEIXIN_PLUGIN_VERSION = '2.4.3';
+const WEIXIN_LAZY_OUTBOUND_HOOKS_MARKER = 'lobster_weixin_lazy_outbound_hooks';
+const WEIXIN_LAZY_INBOUND_SDK_MARKER = 'lobster_weixin_lazy_inbound_sdk';
+
+function assertWeixinPluginVersion(pluginDir) {
+  if (!fs.existsSync(pluginDir)) {
+    return false;
+  }
+
+  const packageJson = readJsonFile(path.join(pluginDir, 'package.json'));
+  if (packageJson?.version !== WEIXIN_PLUGIN_VERSION) {
+    throw new Error(
+      `openclaw-weixin startup patch expects ${WEIXIN_PLUGIN_VERSION}, found ${packageJson?.version ?? 'unknown'}`,
+    );
+  }
+  return true;
+}
+
+function patchWeixinNarrowSdkImports(filePath, label, log) {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+
+  const original = fs.readFileSync(filePath, 'utf8');
+  let src = original.replace(
+    /import \{([^}]*)\} from "openclaw\/plugin-sdk\/infra-runtime";/g,
+    (statement, importedNames) => {
+      const hasFileLock = importedNames.includes('withFileLock');
+      const hasTempPath = importedNames.includes('resolvePreferredOpenClawTmpDir');
+      if (hasFileLock === hasTempPath) {
+        return statement;
+      }
+      return statement.replace(
+        'openclaw/plugin-sdk/infra-runtime',
+        hasFileLock ? 'openclaw/plugin-sdk/file-lock' : 'openclaw/plugin-sdk/temp-path',
+      );
+    },
+  );
+  src = src.replaceAll(
+    'openclaw/plugin-sdk/channel-runtime',
+    'openclaw/plugin-sdk/channel-reply-pipeline',
+  );
+
+  if (src !== original) {
+    fs.writeFileSync(filePath, src);
+    log(`Patched ${label}: replaced broad OpenClaw SDK imports with narrow entry points`);
+  }
+}
+
+function buildLazyOutboundHooksHelpers(relativeImport, isTypeScript) {
+  const applyParams = isTypeScript
+    ? `params: {\n  to: string;\n  text: string;\n  accountId?: string;\n  mediaUrl?: string;\n}`
+    : 'params';
+  const emitParams = isTypeScript
+    ? `params: {\n  to: string;\n  content: string;\n  success: boolean;\n  error?: string;\n  accountId?: string;\n}`
+    : 'params';
+  const promiseDeclaration = isTypeScript
+    ? `let weixinOutboundHooksPromise: Promise<typeof import("${relativeImport}")> | null = null;`
+    : 'let weixinOutboundHooksPromise = null;';
+
+  return `// ${WEIXIN_LAZY_OUTBOUND_HOOKS_MARKER}: hooks are not needed for registration or QR login.\n${promiseDeclaration}\nfunction loadWeixinOutboundHooks() {\n  weixinOutboundHooksPromise ??= import("${relativeImport}");\n  return weixinOutboundHooksPromise;\n}\n\nasync function applyWeixinMessageSendingHook(${applyParams}) {\n  try {\n    const hooks = await loadWeixinOutboundHooks();\n    return hooks.applyWeixinMessageSendingHook(params);\n  } catch (error) {\n    logger.warn(\`message_sending hook load error, proceeding with send: \${String(error)}\`);\n    return { cancelled: false, text: params.text };\n  }\n}\n\nfunction emitWeixinMessageSent(${emitParams}) {\n  void loadWeixinOutboundHooks()\n    .then((hooks) => hooks.emitWeixinMessageSent(params))\n    .catch((error) => logger.warn(\`message_sent hook load error: \${String(error)}\`));\n}\n\n`;
+}
+
+function patchWeixinLazyOutboundHooks(filePath, label, relativeImport, insertionMarker, log) {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+
+  let src = fs.readFileSync(filePath, 'utf8');
+  if (src.includes(WEIXIN_LAZY_OUTBOUND_HOOKS_MARKER)) {
+    log(`${label} outbound hooks already load lazily, skipping patch`);
+    return;
+  }
+
+  const staticImport = new RegExp(
+    `import \\{\\s*applyWeixinMessageSendingHook,\\s*emitWeixinMessageSent[,]?\\s*\\} from "${relativeImport.replaceAll('.', '\\.')}";\\r?\\n`,
+  );
+  if (!staticImport.test(src)) {
+    throw new Error(`${label}: expected outbound hooks import was not found`);
+  }
+  src = src.replace(staticImport, '');
+  src = src.replace(
+    /\/\/ Lazy-imported inside startAccount to avoid pulling in the monitor -> process-message ->\r?\n\/\/ command-auth chain during plugin registration, which can re-enter plugin\/provider registry\r?\n\/\/ resolution before the account actually starts\.\r?\n/,
+    '',
+  );
+
+  const markerIndex = src.indexOf(insertionMarker);
+  if (markerIndex === -1) {
+    throw new Error(`${label}: lazy outbound hooks insertion marker was not found`);
+  }
+  const helpers = buildLazyOutboundHooksHelpers(relativeImport, filePath.endsWith('.ts'));
+  src = src.slice(0, markerIndex) + helpers + src.slice(markerIndex);
+  fs.writeFileSync(filePath, src);
+  log(`Patched ${label}: deferred outbound hook runtime until the first send`);
+}
+
+function patchWeixinLazyInboundSdk(processMessagePath, label, log) {
+  if (!fs.existsSync(processMessagePath)) {
+    return;
+  }
+
+  let src = fs.readFileSync(processMessagePath, 'utf8');
+  if (src.includes(WEIXIN_LAZY_INBOUND_SDK_MARKER)) {
+    log(`${label} inbound SDK already loads lazily, skipping patch`);
+    return;
+  }
+
+  const typingImport = /import \{ createTypingCallbacks \} from "openclaw\/plugin-sdk\/channel-reply-pipeline";\r?\n/;
+  const commandAuthImport = /import \{\s*resolveSenderCommandAuthorizationWithRuntime,\s*resolveDirectDmAuthorizationOutcome,?\s*\} from "openclaw\/plugin-sdk\/command-auth";\r?\n/;
+  if (!typingImport.test(src) || !commandAuthImport.test(src)) {
+    throw new Error(`${label}: expected eager inbound SDK imports were not found`);
+  }
+  src = src.replace(typingImport, '').replace(commandAuthImport, '');
+
+  const authorizationCall = /^(\s*)const \{ senderAllowedForCommands, commandAuthorized \} =/m;
+  if (!authorizationCall.test(src)) {
+    throw new Error(`${label}: command authorization call was not found`);
+  }
+  src = src.replace(
+    authorizationCall,
+    `$1// ${WEIXIN_LAZY_INBOUND_SDK_MARKER}: load command processing only for an inbound message.\n$1const {\n$1  resolveSenderCommandAuthorizationWithRuntime,\n$1  resolveDirectDmAuthorizationOutcome,\n$1} = await import("openclaw/plugin-sdk/command-auth");\n$1const { senderAllowedForCommands, commandAuthorized } =`,
+  );
+
+  const typingCall = /^(\s*)const typingCallbacks = createTypingCallbacks\(/m;
+  if (!typingCall.test(src)) {
+    throw new Error(`${label}: typing callback call was not found`);
+  }
+  src = src.replace(
+    typingCall,
+    '$1const { createTypingCallbacks } = await import("openclaw/plugin-sdk/channel-reply-pipeline");\n$1const typingCallbacks = createTypingCallbacks(',
+  );
+
+  fs.writeFileSync(processMessagePath, src);
+  log(`Patched ${label}: deferred command and typing SDK imports until the first inbound message`);
+}
+
 function patchWeixinGatewayMethods(channelPath, label, log) {
   if (!fs.existsSync(channelPath)) {
     return;
@@ -110,44 +246,112 @@ function patchWeixinAllowFromWildcard(processMsgPath, label, log) {
 }
 
 function patchWeixin({ runtimeExtensionsDir, log }) {
+  const pluginDir = path.join(runtimeExtensionsDir, 'openclaw-weixin');
+  if (!assertWeixinPluginVersion(pluginDir)) {
+    return;
+  }
+
+  const sdkImportFiles = [
+    path.join(pluginDir, 'index.js'),
+    path.join(pluginDir, 'src', 'channel.ts'),
+    path.join(pluginDir, 'dist', 'src', 'channel.js'),
+    path.join(pluginDir, 'src', 'auth', 'pairing.ts'),
+    path.join(pluginDir, 'dist', 'src', 'auth', 'pairing.js'),
+    path.join(pluginDir, 'src', 'util', 'logger.ts'),
+    path.join(pluginDir, 'dist', 'src', 'util', 'logger.js'),
+    path.join(pluginDir, 'src', 'messaging', 'process-message.ts'),
+    path.join(pluginDir, 'dist', 'src', 'messaging', 'process-message.js'),
+  ];
+  for (const filePath of sdkImportFiles) {
+    patchWeixinNarrowSdkImports(
+      filePath,
+      `openclaw-weixin/${path.relative(pluginDir, filePath).replaceAll('\\', '/')}`,
+      log,
+    );
+  }
+
+  patchWeixinLazyOutboundHooks(
+    path.join(pluginDir, 'src', 'channel.ts'),
+    'openclaw-weixin/src/channel.ts',
+    './messaging/outbound-hooks.js',
+    '/** Returns true when mediaUrl refers to a local filesystem path (absolute or relative). */',
+    log,
+  );
+  patchWeixinLazyOutboundHooks(
+    path.join(pluginDir, 'dist', 'src', 'channel.js'),
+    'openclaw-weixin/dist/src/channel.js',
+    './messaging/outbound-hooks.js',
+    '/** Returns true when mediaUrl refers to a local filesystem path (absolute or relative). */',
+    log,
+  );
+  patchWeixinLazyOutboundHooks(
+    path.join(pluginDir, 'src', 'messaging', 'process-message.ts'),
+    'openclaw-weixin/src/messaging/process-message.ts',
+    './outbound-hooks.js',
+    'const MEDIA_OUTBOUND_TEMP_DIR',
+    log,
+  );
+  patchWeixinLazyOutboundHooks(
+    path.join(pluginDir, 'dist', 'src', 'messaging', 'process-message.js'),
+    'openclaw-weixin/dist/src/messaging/process-message.js',
+    './outbound-hooks.js',
+    'const MEDIA_OUTBOUND_TEMP_DIR',
+    log,
+  );
+
+  patchWeixinLazyInboundSdk(
+    path.join(pluginDir, 'src', 'messaging', 'process-message.ts'),
+    'openclaw-weixin/src/messaging/process-message.ts',
+    log,
+  );
+  patchWeixinLazyInboundSdk(
+    path.join(pluginDir, 'dist', 'src', 'messaging', 'process-message.js'),
+    'openclaw-weixin/dist/src/messaging/process-message.js',
+    log,
+  );
+
   patchWeixinGatewayMethods(
-    path.join(runtimeExtensionsDir, 'openclaw-weixin', 'src', 'channel.ts'),
+    path.join(pluginDir, 'src', 'channel.ts'),
     'openclaw-weixin/src/channel.ts',
     log
   );
   patchWeixinGatewayMethods(
-    path.join(runtimeExtensionsDir, 'openclaw-weixin', 'dist', 'src', 'channel.js'),
+    path.join(pluginDir, 'dist', 'src', 'channel.js'),
     'openclaw-weixin/dist/src/channel.js',
     log
   );
 
   patchWeixinStartupActivation(
-    path.join(runtimeExtensionsDir, 'openclaw-weixin', 'openclaw.plugin.json'),
+    path.join(pluginDir, 'openclaw.plugin.json'),
     log
   );
 
   patchWeixinDmPolicy(
-    path.join(runtimeExtensionsDir, 'openclaw-weixin', 'src', 'messaging', 'process-message.ts'),
+    path.join(pluginDir, 'src', 'messaging', 'process-message.ts'),
     'openclaw-weixin/src/messaging/process-message.ts',
     log
   );
   patchWeixinAllowFromWildcard(
-    path.join(runtimeExtensionsDir, 'openclaw-weixin', 'src', 'messaging', 'process-message.ts'),
+    path.join(pluginDir, 'src', 'messaging', 'process-message.ts'),
     'openclaw-weixin/src/messaging/process-message.ts',
     log
   );
   patchWeixinDmPolicy(
-    path.join(runtimeExtensionsDir, 'openclaw-weixin', 'dist', 'src', 'messaging', 'process-message.js'),
+    path.join(pluginDir, 'dist', 'src', 'messaging', 'process-message.js'),
     'openclaw-weixin/dist/src/messaging/process-message.js',
     log
   );
   patchWeixinAllowFromWildcard(
-    path.join(runtimeExtensionsDir, 'openclaw-weixin', 'dist', 'src', 'messaging', 'process-message.js'),
+    path.join(pluginDir, 'dist', 'src', 'messaging', 'process-message.js'),
     'openclaw-weixin/dist/src/messaging/process-message.js',
     log
   );
 }
 
 module.exports = {
+  assertWeixinPluginVersion,
   patchWeixin,
+  patchWeixinLazyInboundSdk,
+  patchWeixinLazyOutboundHooks,
+  patchWeixinNarrowSdkImports,
 };
