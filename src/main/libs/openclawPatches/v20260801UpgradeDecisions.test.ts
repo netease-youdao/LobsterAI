@@ -19,6 +19,7 @@ const RETAINED_PATCHES = [
   'openclaw-lobsterai-model-compat-api.patch',
   'openclaw-openai-compatible-cache-control.patch',
   'openclaw-plugin-archive-windows-timeout.patch',
+  'openclaw-project-memory-negative-probe.patch',
   'openclaw-provider-auth-warm-cooperative-exit.patch',
   'openclaw-provider-fetch-transient-retry.patch',
   'openclaw-run-failure-detail.patch',
@@ -50,7 +51,7 @@ const RETIRED_PATCHES = [
 ] as const;
 
 describe('OpenClaw v2026.8.1 upgrade decisions', () => {
-  test('ships exactly the reviewed 22-patch set', () => {
+  test('ships exactly the reviewed 23-patch set', () => {
     const patchFiles = fs.readdirSync(getCurrentOpenClawPatchDir())
       .filter((file) => file.endsWith('.patch'))
       .sort();
@@ -73,6 +74,11 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       'DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS',
       'process.platform === "win32" ? 900_000 : 120_000',
       'params.timeoutMs ?? DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS',
+    ]);
+    expectPatchContains('openclaw-project-memory-negative-probe.patch', [
+      'probeProjectMemoryPresence',
+      'if (presence === "none")',
+      'return "unknown"',
     ]);
     expectPatchContains('openclaw-provider-auth-warm-cooperative-exit.patch', [
       'PROVIDER_AUTH_WARM_EXIT_GRACE_MS',
