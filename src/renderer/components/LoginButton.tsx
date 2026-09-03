@@ -41,6 +41,7 @@ import CreditsFinalRewardModal from './CreditsFinalRewardModal';
 import { DailyCheckInAccountMenuEntry } from './DailyCheckInActivity';
 import { getDailyCheckInAuthScopeKey } from './dailyCheckInActivityState';
 import UserAvatarIcon from './icons/UserAvatarIcon';
+import LowCreditPurchaseOfferCard from './LowCreditPurchaseOfferCard';
 import {
   type StartupCreditCampaignEntry,
   useStartupCreditCampaignEntry,
@@ -666,6 +667,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({
     isLoading,
     ownerAccountKey,
     profileSummary,
+    purchaseOffer,
     user,
   } = useSelector((state: RootState) => state.auth);
   const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
@@ -678,6 +680,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({
   const [menuDailyCheckInSnapshot, setMenuDailyCheckInSnapshot] = useState<DailyCheckInSnapshot | null>(null);
   const [selectedFinalRewardCode, setSelectedFinalRewardCode] = useState<string | null>(null);
   const [finalRewardLoading, setFinalRewardLoading] = useState(false);
+  const [dismissedOfferWindowKey, setDismissedOfferWindowKey] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const menuOpenRequestRef = useRef(0);
   const mountedRef = useRef(true);
@@ -856,9 +859,22 @@ const LoginButton: React.FC<LoginButtonProps> = ({
   };
 
   const useSidebarPromoLogin = !isLoggedIn && loggedOutVariant === 'sidebarPromo';
+  const offerWindowKey = purchaseOffer?.offerToken
+    ? `${purchaseOffer.offerToken}:${purchaseOffer.windowCount ?? 1}`
+    : null;
 
   return (
     <div ref={containerRef} className="relative">
+      {isLoggedIn
+        && !enterpriseAccountContext
+        && purchaseOffer?.offerToken
+        && offerWindowKey !== dismissedOfferWindowKey
+        && (
+          <LowCreditPurchaseOfferCard
+            offer={purchaseOffer}
+            onClose={() => setDismissedOfferWindowKey(offerWindowKey)}
+          />
+        )}
       <button
         type="button"
         onClick={handleClick}

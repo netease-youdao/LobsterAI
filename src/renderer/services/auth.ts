@@ -26,12 +26,14 @@ import { store } from '../store';
 import {
   clearProfileSummary,
   invalidateAuthAccountContext,
+  type LowCreditPurchaseOffer,
   setAuthExpired,
   setAuthLoading,
   setAuthTemporarilyUnavailable,
   setLoggedIn,
   setLoggedOut,
   setProfileSummary,
+  updatePurchaseOffer,
   updateQuota,
   type UserProfile,
   type UserQuota,
@@ -302,6 +304,7 @@ class AuthService {
   private applyAuthenticatedState(
     user: UserProfile,
     quota: UserQuota | null | undefined,
+    purchaseOffer: LowCreditPurchaseOffer | null | undefined,
     enterpriseContext: EnterpriseAccountContext | null | undefined,
   ): void {
     const isEnterpriseAccount = (
@@ -337,6 +340,7 @@ class AuthService {
     store.dispatch(setLoggedIn({
       user,
       quota: quota ?? null,
+      purchaseOffer: purchaseOffer ?? null,
       ownerAccountKey,
     }));
     void reportPendingPublishingSubscriptionObserved(quota?.subscriptionStatus);
@@ -414,7 +418,7 @@ class AuthService {
           ? Date.parse(enterpriseContext.memberQuota.periodEndExclusive)
           : Number.NaN;
         const quotaBoundaryReached = Number.isFinite(periodEnd) && now >= periodEnd;
-        if (quotaBoundaryReached || now - this.lastRefreshTime > 30_000) {
+        if (quotaBoundaryReached || store.getState().auth.purchaseOffer || now - this.lastRefreshTime > 30_000) {
           this.lastRefreshTime = now;
           void this.checkQuota();
         }
@@ -486,6 +490,7 @@ class AuthService {
         this.applyAuthenticatedState(
           result.user,
           result.quota,
+          result.purchaseOffer,
           result.enterpriseContext,
         );
         await this.loadServerModels();
@@ -546,7 +551,7 @@ class AuthService {
             enterpriseContext: store.getState().enterpriseAccount.context,
           };
         }
-        this.applyAuthenticatedState(result.user, result.quota, enterpriseContext);
+        this.applyAuthenticatedState(result.user, result.quota, result.purchaseOffer, enterpriseContext);
         await this.loadServerModels();
         void this.fetchProfileSummary();
         if (options.reportLifecycle) {
@@ -643,6 +648,7 @@ class AuthService {
           store.dispatch(updateQuota(result.quota));
           void reportPendingPublishingSubscriptionObserved(result.quota.subscriptionStatus);
         }
+        store.dispatch(updatePurchaseOffer(result.purchaseOffer ?? null));
         if (result.enterpriseContext !== undefined) {
           const context = applyEnterpriseAccountContext(result.enterpriseContext);
           this.scheduleEnterpriseQuotaBoundary(context);

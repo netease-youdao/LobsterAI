@@ -54,6 +54,8 @@ export type PortalPricingKeyfrom =
 
 export interface PortalPricingUrlOptions {
   traceId?: string;
+  offerToken?: string;
+  tab?: 'subscription' | 'boost';
 }
 
 export const getPortalLoginUrl = () => `${getPortalBase()}/login`;
@@ -64,6 +66,8 @@ export const getPortalPricingUrl = (
   const query = new URLSearchParams();
   if (keyfrom) query.set('keyfrom', keyfrom);
   if (options.traceId) query.set('trace_id', options.traceId);
+  if (options.offerToken) query.set('offerToken', options.offerToken);
+  if (options.tab) query.set('tab', options.tab);
   const queryString = query.toString();
   const suffix = queryString ? `?${queryString}` : '';
   return `${getPortalBase()}/pricing${suffix}`;

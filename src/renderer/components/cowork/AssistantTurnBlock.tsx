@@ -1,5 +1,6 @@
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
 
 import { classifyErrorKey, CoworkErrorI18nKey } from '../../../common/coworkErrorClassify';
 import { ContextCompactionStatus } from '../../../common/coworkSystemMessages';
@@ -14,6 +15,13 @@ import type { CoworkGoal } from '../../../shared/cowork/goal';
 import { dedupeArtifactsForDisplay } from '../../services/artifactParser';
 import { getPortalPricingUrl } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
+import {
+  formatPurchaseOfferCountdown,
+  getPurchaseOfferPortalTab,
+  getPurchaseOfferRemainingMs,
+  isPurchaseOfferActive,
+} from '../../services/lowCreditPurchaseOffer';
+import type { RootState } from '../../store';
 import type { Artifact } from '../../types/artifact';
 import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
 import { revealLocalPathWithToast } from '../../utils/localFileActions';
@@ -251,8 +259,23 @@ const logCreditQuotaBannerEvent = (
 };
 
 const CreditQuotaExhaustedBanner: React.FC = () => {
+  const offer = useSelector((state: RootState) => state.auth.purchaseOffer);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!offer || !isPurchaseOfferActive(offer, Date.now())) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [offer]);
+  const hasOffer = isPurchaseOfferActive(offer, now);
+  const remaining = offer ? getPurchaseOfferRemainingMs(offer, now) : 0;
+  const discount = Math.round((offer?.discountRate ?? 1) * 10);
   const handlePurchase = async () => {
-    const pricingUrl = getPortalPricingUrl();
+    const pricingUrl = hasOffer && offer?.offerToken
+      ? getPortalPricingUrl(undefined, {
+        offerToken: offer.offerToken,
+        tab: getPurchaseOfferPortalTab(offer),
+      })
+      : getPortalPricingUrl();
     logCreditQuotaBannerEvent('debug', 'purchase action clicked');
     try {
       const result = await window.electron?.shell?.openExternal(pricingUrl);
@@ -275,10 +298,18 @@ const CreditQuotaExhaustedBanner: React.FC = () => {
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold leading-5 text-foreground">
-            {i18nService.t('coworkCreditQuotaBannerTitle')}
+            {hasOffer
+              ? (offer?.offerType === 'first_purchase'
+                ? i18nService.t('lowCreditOfferTaskFirstTitle').replace('{discount}', String(discount))
+                : i18nService.t('lowCreditOfferTaskReturningTitle').replace('{discount}', String(discount)))
+              : i18nService.t('coworkCreditQuotaBannerTitle')}
           </div>
           <div className="mt-1 text-xs leading-5 text-secondary">
-            {i18nService.t('coworkCreditQuotaBannerDescription')}
+            {hasOffer && offer
+              ? i18nService.t('lowCreditOfferTaskDescription').replace(
+                '{time}', formatPurchaseOfferCountdown(remaining),
+              )
+              : i18nService.t('coworkCreditQuotaBannerDescription')}
           </div>
         </div>
         <button

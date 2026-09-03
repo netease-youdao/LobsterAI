@@ -29,6 +29,25 @@ export interface UserQuota {
   enterpriseId?: number;
 }
 
+export interface LowCreditPurchaseOffer {
+  status: 'active' | 'expired' | 'redeemed' | 'ineligible' | 'disabled';
+  reason?: string | null;
+  offerToken?: string | null;
+  offerType?: 'first_purchase' | 'returning_purchase' | null;
+  campaignCode?: string | null;
+  discountRate?: number | null;
+  eligibleProducts?: Array<'subscription' | 'boost_pack'>;
+  defaultTab?: 'subscription' | 'boost_pack' | null;
+  creditsRemaining?: number | null;
+  thresholdCredits?: number | null;
+  triggerStage?: 'low_balance' | 'exhausted' | null;
+  windowCount?: 1 | 2 | null;
+  serverTimeEpochMs: number;
+  startsAtEpochMs?: number | null;
+  expiresAtEpochMs?: number | null;
+  receivedAtEpochMs: number;
+}
+
 export interface CreditItem {
   type: 'subscription' | 'boost' | 'free' | 'bonus' | 'invitation' | 'campaign';
   label: string;
@@ -98,6 +117,7 @@ interface AuthState {
   sessionStatus: AuthSessionStatusValue;
   user: UserProfile | null;
   quota: UserQuota | null;
+  purchaseOffer: LowCreditPurchaseOffer | null;
   profileSummary: ProfileSummary | null;
   ownerAccountKey: string | null;
   accountGeneration: number;
@@ -109,6 +129,7 @@ const initialState: AuthState = {
   sessionStatus: AuthSessionStatus.Unauthenticated,
   user: null,
   quota: null,
+  purchaseOffer: null,
   profileSummary: null,
   ownerAccountKey: null,
   accountGeneration: 0,
@@ -124,17 +145,22 @@ const authSlice = createSlice({
     setLoggedIn(state, action: PayloadAction<{
       user: UserProfile;
       quota: UserQuota | null;
+      purchaseOffer?: LowCreditPurchaseOffer | null;
       ownerAccountKey: string;
     }>) {
       if (state.ownerAccountKey !== action.payload.ownerAccountKey) {
         state.accountGeneration += 1;
         state.profileSummary = null;
+        state.purchaseOffer = null;
       }
       state.isLoggedIn = true;
       state.isLoading = false;
       state.sessionStatus = AuthSessionStatus.Authenticated;
       state.user = action.payload.user;
       state.quota = action.payload.quota;
+      if (action.payload.purchaseOffer !== undefined) {
+        state.purchaseOffer = action.payload.purchaseOffer;
+      }
       state.ownerAccountKey = action.payload.ownerAccountKey;
     },
     setLoggedOut(state) {
@@ -146,12 +172,14 @@ const authSlice = createSlice({
       state.sessionStatus = AuthSessionStatus.Unauthenticated;
       state.user = null;
       state.quota = null;
+      state.purchaseOffer = null;
       state.profileSummary = null;
       state.ownerAccountKey = null;
     },
     invalidateAuthAccountContext(state) {
       state.accountGeneration += 1;
       state.quota = null;
+      state.purchaseOffer = null;
       state.profileSummary = null;
     },
     setAuthExpired(state) {
@@ -163,6 +191,7 @@ const authSlice = createSlice({
       state.sessionStatus = AuthSessionStatus.Expired;
       state.user = null;
       state.quota = null;
+      state.purchaseOffer = null;
       state.profileSummary = null;
       state.ownerAccountKey = null;
     },
@@ -185,6 +214,9 @@ const authSlice = createSlice({
     updateQuota(state, action: PayloadAction<UserQuota>) {
       state.quota = action.payload;
     },
+    updatePurchaseOffer(state, action: PayloadAction<LowCreditPurchaseOffer | null>) {
+      state.purchaseOffer = action.payload;
+    },
     setProfileSummary(state, action: PayloadAction<ProfileSummary>) {
       state.profileSummary = action.payload;
     },
@@ -204,5 +236,6 @@ export const {
   setLoggedOut,
   setProfileSummary,
   updateQuota,
+  updatePurchaseOffer,
 } = authSlice.actions;
 export default authSlice.reducer;
