@@ -2269,6 +2269,93 @@ test('pollChannelSessions recovers a missed cron event without retaining run-sco
   expect(requests.map(request => request.method)).toEqual(['sessions.list', 'chat.history']);
 });
 
+test('pollChannelSessions does not materialize an empty OpenClaw main routing session', async () => {
+  const sessionKey = 'agent:main:main';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'main-session-1',
+  });
+  const createSession = vi.fn(() => session);
+  const adapter = new OpenClawRuntimeAdapter({ ...store, createSession } as never, {});
+  const requests: Array<{ method: string; params?: unknown }> = [];
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (method: string, params?: unknown) => {
+      requests.push({ method, params });
+      if (method === 'sessions.list') {
+        return {
+          sessions: [{
+            key: sessionKey,
+            sessionId: 'gateway-main-1',
+            updatedAt: 100,
+            createdVia: 'channel',
+          }],
+        };
+      }
+      return { messages: [] };
+    },
+  };
+  adapter.channelSessionSync = new OpenClawChannelSessionSync({
+    coworkStore: { ...store, createSession } as never,
+    imStore: {} as never,
+    getDefaultCwd: () => '/repo/main',
+  });
+
+  await adapter.pollChannelSessions();
+  await adapter.pollChannelSessions();
+
+  expect(createSession).not.toHaveBeenCalled();
+  expect(requests.map(request => request.method)).toEqual([
+    'sessions.list',
+    'chat.history',
+    'sessions.list',
+  ]);
+});
+
+test('pollChannelSessions still recovers a main session once meaningful history exists', async () => {
+  const sessionKey = 'agent:main:main';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'main-session-1',
+  });
+  const createSession = vi.fn(() => session);
+  const gatewayMessages = [
+    { role: 'user', content: [{ type: 'text', text: 'hello from OpenClaw' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+  ];
+  const adapter = new OpenClawRuntimeAdapter({ ...store, createSession } as never, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (method: string) => {
+      if (method === 'sessions.list') {
+        return {
+          sessions: [{
+            key: sessionKey,
+            sessionId: 'gateway-main-1',
+            updatedAt: 101,
+          }],
+        };
+      }
+      return { messages: gatewayMessages };
+    },
+  };
+  adapter.channelSessionSync = new OpenClawChannelSessionSync({
+    coworkStore: { ...store, createSession } as never,
+    imStore: {} as never,
+    getDefaultCwd: () => '/repo/main',
+  });
+
+  await adapter.pollChannelSessions();
+
+  expect(createSession).toHaveBeenCalledOnce();
+  expect(adapter.sessionIdBySessionKey.get(sessionKey)).toBe(session.id);
+  expect(adapter.knownChannelSessionIds.has(session.id)).toBe(true);
+  expect(session.messages.map(message => [message.type, message.content])).toEqual([
+    ['user', 'hello from OpenClaw'],
+    ['assistant', 'hello'],
+  ]);
+});
+
 test('cron session routing retains only the latest real gateway run key per job', () => {
   const { session, store } = createReconcileStore([], {
     sessionId: 'cron-session-1',

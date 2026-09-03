@@ -2519,6 +2519,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   /** Session keys whose origin is "heartbeat" — discovered via polling, used to filter real-time events. */
   private readonly heartbeatSessionKeys = new Set<string>();
   /**
+   * Empty main-route rows are metadata used by OpenClaw channel routing, not
+   * conversations. Cache their gateway revision so the 10s recovery poll does
+   * not repeatedly request the same empty history.
+   */
+  private readonly emptyPolledMainSessionSignatures = new Map<string, string>();
+  /**
    * Native IM runs are not represented by the gateway's `hasActiveRun` flag.
    * Track explicit `sessions.changed` lifecycle starts so the polling fallback
    * cannot immediately overwrite their loading state with `completed`.
@@ -2536,6 +2542,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private static readonly CHANNEL_EVENT_RECONCILE_DELAY_MS = 250;
   private static readonly CHANNEL_LIFECYCLE_RUN_GRACE_MS = 60_000;
   private static readonly REPORTED_CHANNEL_PROMPT_RUN_ID_LIMIT = 2_000;
+  private static readonly EMPTY_POLLED_MAIN_SESSION_CACHE_LIMIT = 64;
   private static readonly GATEWAY_SESSION_SUBSCRIBE_TIMEOUT_MS = 5_000;
   /** Delay before pulling a cron delivery mirror into the mapped conversation,
    *  giving the gateway time to flush the transcript append. */
@@ -4264,7 +4271,68 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     // Detach it so a newly connected client can start its own reconciliation;
     // performChannelSessionPoll ignores results from a superseded client.
     this.channelSessionPollInFlight = null;
+    this.emptyPolledMainSessionSignatures.clear();
     this.resetChannelPollingBackoff();
+  }
+
+  private getPolledMainSessionSignature(row: Record<string, unknown>): string {
+    return JSON.stringify([
+      row.sessionId,
+      row.updatedAt,
+      row.lastInteractionAt,
+      row.lastActivityAt,
+      row.lastRunId,
+      row.status,
+      row.hasActiveRun,
+    ]);
+  }
+
+  private rememberEmptyPolledMainSession(sessionKey: string, signature: string): void {
+    this.emptyPolledMainSessionSignatures.delete(sessionKey);
+    this.emptyPolledMainSessionSignatures.set(sessionKey, signature);
+    while (
+      this.emptyPolledMainSessionSignatures.size
+      > OpenClawRuntimeAdapter.EMPTY_POLLED_MAIN_SESSION_CACHE_LIMIT
+    ) {
+      const oldestKey = this.emptyPolledMainSessionSignatures.keys().next().value;
+      if (typeof oldestKey !== 'string') break;
+      this.emptyPolledMainSessionSignatures.delete(oldestKey);
+    }
+  }
+
+  private async hasMeaningfulPolledMainSessionHistory(
+    client: GatewayClientLike,
+    sessionKey: string,
+    row: Record<string, unknown>,
+  ): Promise<boolean> {
+    const signature = this.getPolledMainSessionSignature(row);
+    if (this.emptyPolledMainSessionSignatures.get(sessionKey) === signature) {
+      return false;
+    }
+    try {
+      const history = await client.request<{ messages?: unknown[] }>('chat.history', {
+        sessionKey,
+        limit: OpenClawRuntimeAdapter.FULL_HISTORY_SYNC_LIMIT,
+      }, { timeoutMs: 10_000 });
+      if (this.gatewayClient !== client) {
+        return false;
+      }
+      const messages = Array.isArray(history?.messages) ? history.messages : [];
+      const meaningfulEntries = this.collectChannelHistoryEntries(messages, false, false);
+      if (meaningfulEntries.length > 0) {
+        this.emptyPolledMainSessionSignatures.delete(sessionKey);
+        return true;
+      }
+      this.rememberEmptyPolledMainSession(sessionKey, signature);
+      return false;
+    } catch (error) {
+      console.warn(
+        '[ChannelSync] deferred main session discovery because history could not be read:',
+        sessionKey,
+        error,
+      );
+      return false;
+    }
   }
 
   private scheduleChannelSessionReconciliation(): void {
@@ -4376,10 +4444,16 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         // was missed. Resolve every supported key kind here; cron run keys must
         // use their stable job cache so unique run ids never enter the channel
         // rejected-key set or accumulate in sessionIdBySessionKey.
-        const sessionId = isCronSessionKey(key)
+        let sessionId = isCronSessionKey(key)
           ? this.channelSessionSync.resolveOrCreateCronSession(key)
-          : this.channelSessionSync.resolveOrCreateSession(key)
-            ?? this.channelSessionSync.resolveOrCreateMainAgentSession(key);
+          : this.channelSessionSync.resolveOrCreateSession(key);
+        if (
+          !sessionId
+          && isRecord(row)
+          && await this.hasMeaningfulPolledMainSessionHistory(client, key, row)
+        ) {
+          sessionId = this.channelSessionSync.resolveOrCreateMainAgentSession(key);
+        }
         if (sessionId && isRecord(row)) {
           this.syncChannelSessionRunStatus({
             coworkSessionId: sessionId,
@@ -7789,6 +7863,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   private resolveOrCreateChannelSession(sessionKey: string): string | null {
     if (!this.channelSessionSync) return null;
+    this.emptyPolledMainSessionSignatures.delete(sessionKey);
     if (isCronSessionKey(sessionKey)) {
       return this.channelSessionSync.resolveOrCreateCronSession(sessionKey) ?? null;
     }

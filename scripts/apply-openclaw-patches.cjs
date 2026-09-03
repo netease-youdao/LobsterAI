@@ -570,6 +570,43 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-project-memory-negative-probe.patch': [
+    {
+      file: 'src/agents/project-memory-bootstrap.ts',
+      snippets: [
+        'runtime.probeProjectMemoryPresence',
+        'if (presence === "none")',
+        'Any uncertainty preserves the existing',
+      ],
+    },
+    {
+      file: 'extensions/memory-core/src/project-memory-probe.ts',
+      snippets: [
+        'PROJECT_MEMORY_SOURCE_MAX_BYTES',
+        'The bootstrap consumer only admits curated candidates',
+        'return probeProjectMemorySource(path.join(workspaceDir, "MEMORY.md"))',
+      ],
+    },
+    {
+      file: 'src/plugin-sdk/agent-scope-runtime.ts',
+      snippets: ['resolveAgentWorkspaceDir'],
+    },
+    {
+      file: 'extensions/memory-core/src/project-memory-probe.test.ts',
+      snippets: [
+        'proves absence when the canonical source does not exist',
+        'reports possible project memory without duplicating candidate filtering',
+        'fails open when the canonical source cannot be safely inspected',
+      ],
+    },
+    {
+      file: 'src/agents/project-memory-bootstrap.test.ts',
+      snippets: [
+        'skips full manager initialization when the runtime proves project memory is absent',
+        'fails open to the existing manager path when the project-memory probe throws',
+      ],
+    },
+  ],
   'openclaw-provider-auth-warm-cooperative-exit.patch': [
     {
       file: 'src/agents/model-provider-auth.ts',
