@@ -16,6 +16,7 @@ import {
   buildOpenClawGatewayExecArgv,
   isOpenClawConfigStartupFailure,
   isOpenClawGatewayHeapOutOfMemory,
+  probeOpenClawGatewayStartup,
 } from './openclawEngineManager';
 
 describe('buildOpenClawCompileCacheEnv', () => {
@@ -42,6 +43,61 @@ describe('buildOpenClawGatewayExecArgv', () => {
 
   test('respects an existing max old space setting with space syntax', () => {
     expect(buildOpenClawGatewayExecArgv('--max-old-space-size 8192 --trace-warnings')).toEqual([]);
+  });
+});
+
+describe('probeOpenClawGatewayStartup', () => {
+  test('does not admit a listening gateway while startup is still pending', async () => {
+    const fetcher = vi.fn(async () => new Response(
+      JSON.stringify({ ok: false, status: 'starting', pendingReason: 'startup-sidecars' }),
+      { status: 503, headers: { 'content-type': 'application/json' } },
+    ));
+
+    const result = await probeOpenClawGatewayStartup(18789, 25, fetcher);
+
+    expect(result).toEqual({
+      ready: false,
+      detail: '/startupz → HTTP 503, status=starting',
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:18789/startupz', 25);
+  });
+
+  test('admits the gateway only after startupz explicitly reports started', async () => {
+    const fetcher = vi.fn(async () => new Response(
+      JSON.stringify({ ok: true, status: 'started' }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ));
+
+    await expect(probeOpenClawGatewayStartup(18789, 25, fetcher)).resolves.toMatchObject({
+      ready: true,
+    });
+  });
+
+  test('rejects a successful HTTP response without the startup contract', async () => {
+    const fetcher = vi.fn(async () => new Response(
+      JSON.stringify({ ok: true, status: 'live' }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ));
+
+    await expect(probeOpenClawGatewayStartup(18789, 25, fetcher)).resolves.toMatchObject({
+      ready: false,
+    });
+  });
+
+  test('falls back to the legacy ready contract only when startupz is unavailable', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response('{}', { status: 404 }))
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({ ready: true, failing: [] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ));
+
+    const result = await probeOpenClawGatewayStartup(18789, 25, fetcher);
+
+    expect(result.ready).toBe(true);
+    expect(fetcher).toHaveBeenNthCalledWith(1, 'http://127.0.0.1:18789/startupz', 25);
+    expect(fetcher).toHaveBeenNthCalledWith(2, 'http://127.0.0.1:18789/ready', 25);
   });
 });
 

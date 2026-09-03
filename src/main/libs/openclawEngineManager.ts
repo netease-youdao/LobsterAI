@@ -58,6 +58,15 @@ const OPENCLAW_GATEWAY_MAX_OLD_SPACE_MB = 4096;
 const OPENCLAW_GATEWAY_MAX_OLD_SPACE_OPTION = `--max-old-space-size=${OPENCLAW_GATEWAY_MAX_OLD_SPACE_MB}`;
 const NODE_MAX_OLD_SPACE_RE = /(?:^|\s)--max-old-space-size(?:=|\s|$)/;
 const GATEWAY_RECENT_OUTPUT_LINE_LIMIT = 80;
+const GATEWAY_PROBE_PATH = {
+  Health: '/health',
+  Healthz: '/healthz',
+  LegacyReady: '/ready',
+  Startup: '/startupz',
+} as const;
+const GATEWAY_STARTUP_STATUS = {
+  Started: 'started',
+} as const;
 const OPENCLAW_CONFIG_STARTUP_FAILURE_PATTERNS = [
   /invalid config(?:\s+at|:|\s)/i,
   /config validation failed:/i,
@@ -197,6 +206,68 @@ const fetchWithTimeout = async (url: string, timeoutMs: number): Promise<Respons
     });
   } finally {
     clearTimeout(timeout);
+  }
+};
+
+type GatewayProbeFetcher = (url: string, timeoutMs: number) => Promise<Response>;
+
+export interface OpenClawGatewayStartupProbeResult {
+  ready: boolean;
+  detail: string;
+}
+
+const readGatewayProbePayload = async (response: Response): Promise<Record<string, unknown> | null> => {
+  try {
+    const payload: unknown = await response.json();
+    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+      return payload as Record<string, unknown>;
+    }
+  } catch {
+    // A successful status with a malformed payload is not startup-ready.
+  }
+  return null;
+};
+
+/**
+ * Probe OpenClaw's traffic-admission state. A bound port or a live process is
+ * intentionally insufficient: /startupz stays at 503 until startup sidecars
+ * have completed. Older runtimes may not expose /startupz, so only a 404 falls
+ * back to the legacy /ready contract.
+ */
+export const probeOpenClawGatewayStartup = async (
+  port: number,
+  timeoutMs = 1500,
+  fetcher: GatewayProbeFetcher = fetchWithTimeout,
+): Promise<OpenClawGatewayStartupProbeResult> => {
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const startupUrl = `${baseUrl}${GATEWAY_PROBE_PATH.Startup}`;
+
+  try {
+    const response = await fetcher(startupUrl, timeoutMs);
+    if (response.status !== 404) {
+      const payload = await readGatewayProbePayload(response);
+      const ready = response.ok
+        && payload?.ok === true
+        && payload.status === GATEWAY_STARTUP_STATUS.Started;
+      const status = typeof payload?.status === 'string' ? `, status=${payload.status}` : '';
+      return {
+        ready,
+        detail: `${GATEWAY_PROBE_PATH.Startup} → HTTP ${response.status}${status}`,
+      };
+    }
+
+    const legacyUrl = `${baseUrl}${GATEWAY_PROBE_PATH.LegacyReady}`;
+    const legacyResponse = await fetcher(legacyUrl, timeoutMs);
+    const legacyPayload = await readGatewayProbePayload(legacyResponse);
+    return {
+      ready: legacyResponse.ok && legacyPayload?.ready === true,
+      detail: `${GATEWAY_PROBE_PATH.Startup} → HTTP 404; ${GATEWAY_PROBE_PATH.LegacyReady} → HTTP ${legacyResponse.status}`,
+    };
+  } catch (error) {
+    return {
+      ready: false,
+      detail: `${GATEWAY_PROBE_PATH.Startup} → ${(error as Error).message || String(error)}`,
+    };
   }
 };
 
@@ -579,21 +650,49 @@ export class OpenClawEngineManager extends EventEmitter {
       }
       const port = this.gatewayPort ?? this.readGatewayPort();
       if (port) {
-        const healthy = await this.isGatewayHealthy(port);
-        console.log(`[OpenClaw] startGateway: existing process health check (${elapsed()}), healthy=${healthy}`);
-        if (healthy) {
-          this.gatewayPort = port;
+        this.gatewayPort = port;
+        const startupReady = await this.isGatewayStartupReady(port);
+        console.log(`[OpenClaw] startGateway: existing process startup check (${elapsed()}), ready=${startupReady}`);
+        if (startupReady) {
           if (this.status.phase !== 'running') {
             this.setStatus({
               phase: 'running',
               version: this.desiredVersion,
+              progressPercent: 100,
               message: `OpenClaw gateway is running on loopback:${port}.`,
               canRetry: false,
             });
           }
           return this.getStatus();
         }
-        console.warn(`${gwDiagTs()} startGateway: existing process unhealthy on port=${port}, stopping it (${elapsed()})`);
+
+        const live = await this.isGatewayLive(port);
+        console.log(`[OpenClaw] startGateway: existing process liveness check (${elapsed()}), live=${live}`);
+        if (live) {
+          this.setStatus({
+            phase: 'starting',
+            version: this.desiredVersion,
+            progressPercent: 10,
+            message: 'Starting OpenClaw gateway...',
+            canRetry: false,
+          });
+          const ready = await this.waitForGatewayReady(port, GATEWAY_BOOT_TIMEOUT_MS);
+          console.log(`[OpenClaw] startGateway: existing process startup wait (${elapsed()}), ready=${ready}`);
+          if (ready) {
+            this.setStatus({
+              phase: 'running',
+              version: this.desiredVersion,
+              progressPercent: 100,
+              message: `OpenClaw gateway is running on loopback:${port}.`,
+              canRetry: false,
+            });
+            return this.getStatus();
+          }
+          console.warn(`${gwDiagTs()} startGateway: existing process did not finish startup on port=${port}, stopping it (${elapsed()})`);
+        }
+        if (!live) {
+          console.warn(`${gwDiagTs()} startGateway: existing process is not live on port=${port}, stopping it (${elapsed()})`);
+        }
       } else {
         console.warn(`${gwDiagTs()} startGateway: existing process alive but port unknown, stopping it (${elapsed()})`);
       }
@@ -1559,12 +1658,11 @@ export class OpenClawEngineManager extends EventEmitter {
     throw new Error('No available loopback port for OpenClaw gateway.');
   }
 
-  private async isGatewayHealthy(port: number, verbose = false): Promise<boolean> {
+  /** Process supervision only. This must never be used to admit conversations. */
+  private async isGatewayLive(port: number, verbose = false): Promise<boolean> {
     const probeUrls = [
-      `http://127.0.0.1:${port}/health`,
-      `http://127.0.0.1:${port}/healthz`,
-      `http://127.0.0.1:${port}/ready`,
-      `http://127.0.0.1:${port}/`,
+      `http://127.0.0.1:${port}${GATEWAY_PROBE_PATH.Health}`,
+      `http://127.0.0.1:${port}${GATEWAY_PROBE_PATH.Healthz}`,
     ];
 
     // Run all HTTP probes in parallel and resolve as soon as any succeeds.
@@ -1574,7 +1672,7 @@ export class OpenClawEngineManager extends EventEmitter {
       try {
         const response = await fetchWithTimeout(url, 1500);
         if (verbose) httpResults[i] = `${url} → ${response.status}`;
-        if (response.status < 500) return true;
+        if (response.ok) return true;
       } catch (err) {
         if (verbose) httpResults[i] = `${url} → ${(err as Error).message || err}`;
       }
@@ -1585,12 +1683,20 @@ export class OpenClawEngineManager extends EventEmitter {
     const tcpProbe = isPortReachable('127.0.0.1', port, 1500);
 
     const results = await Promise.all([...httpProbes, tcpProbe]);
-    const healthy = results.some(Boolean);
-    if (verbose && !healthy) {
+    const live = results.some(Boolean);
+    if (verbose && !live) {
       const tcpResult = results[results.length - 1] ? 'reachable' : 'unreachable';
-      console.log(`[OpenClaw] health probe details: tcp=${tcpResult}, ${httpResults.join(', ')}`);
+      console.log(`[OpenClaw] liveness probe details: tcp=${tcpResult}, ${httpResults.join(', ')}`);
     }
-    return healthy;
+    return live;
+  }
+
+  private async isGatewayStartupReady(port: number, verbose = false): Promise<boolean> {
+    const result = await probeOpenClawGatewayStartup(port);
+    if (verbose && !result.ready) {
+      console.log(`[OpenClaw] startup probe details: ${result.detail}`);
+    }
+    return result.ready;
   }
 
   private waitForGatewayReady(port: number, timeoutMs: number): Promise<boolean> {
@@ -1613,11 +1719,11 @@ export class OpenClawEngineManager extends EventEmitter {
         pollCount += 1;
         const elapsedMs = Date.now() - startedAt;
 
-        // Log verbose probe details every 10 polls (~6s) to diagnose health check failures.
+        // Log verbose probe details every 10 polls (~6s) to diagnose startup delays.
         const verboseProbe = pollCount % 10 === 0;
-        const healthy = await this.isGatewayHealthy(port, verboseProbe);
-        if (healthy) {
-          console.log(`[OpenClaw] waitForGatewayReady: gateway healthy after ${elapsedMs}ms (${pollCount} polls)`);
+        const ready = await this.isGatewayStartupReady(port, verboseProbe);
+        if (ready) {
+          console.log(`[OpenClaw] waitForGatewayReady: gateway startup complete after ${elapsedMs}ms (${pollCount} polls)`);
           resolve(true);
           return;
         }
