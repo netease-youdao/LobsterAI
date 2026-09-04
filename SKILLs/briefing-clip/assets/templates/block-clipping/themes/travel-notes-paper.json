@@ -1,0 +1,19 @@
+{
+  "preset": "travel-notes-paper",
+  "tokens": {
+    "color": {
+      "pageBg": "#ccb08b",
+      "pageBgAlt": "#d8bf9a",
+      "surface": "#f7f0de",
+      "surfaceSoft": "#f4e7c0",
+      "ink": "#2d251f",
+      "muted": "#7f6855",
+      "accent": "#a96333",
+      "accentSoft": "#edd9be",
+      "line": "#c9b090",
+      "chipNeutral": "#8b572f",
+      "chipAccent": "#b06d35",
+      "chipPositive": "#6c8f52"
+    }
+  }
+}

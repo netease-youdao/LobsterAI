@@ -1,0 +1,23 @@
+{
+  "preset": "curator-mosaic-soft",
+  "tokens": {
+    "color": {
+      "pageBg": "#f4eee8",
+      "pageBgAlt": "#fbf8f4",
+      "surface": "#fffdfb",
+      "surfaceSoft": "#f7f0ea",
+      "ink": "#2f2724",
+      "muted": "#786c65",
+      "accent": "#d06a5f",
+      "accentSoft": "#f7d9d4",
+      "line": "#dfd1c8",
+      "chipNeutral": "#7e8fb0",
+      "chipAccent": "#d06a5f",
+      "chipPositive": "#4f9e8f"
+    },
+    "radius": {
+      "card": "24px",
+      "chip": "999px"
+    }
+  }
+}
