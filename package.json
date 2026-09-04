@@ -177,7 +177,7 @@
     "@larksuiteoapi/node-sdk": "^1.58.0",
     "@lezer/highlight": "^1.2.3",
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "@nodesecure/js-x-ray": "^14.2.0",
+    "@nodesecure/js-x-ray": "^16.0.0",
     "@reduxjs/toolkit": "^2.2.1",
     "@replit/codemirror-indentation-markers": "^6.5.3",
     "@tanstack/react-virtual": "^3.13.24",
