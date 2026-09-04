@@ -903,6 +903,9 @@ interface IElectronAPI {
       stopHost: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
       selectHostPage: (request: AgentBrowserHostPageRequest) => Promise<AgentBrowserHostResponse>;
       closeHostPage: (request: AgentBrowserHostPageRequest) => Promise<AgentBrowserHostResponse>;
+      dismissCredentialLoginStatus: (
+        request?: AgentBrowserHostRequest,
+      ) => Promise<AgentBrowserHostResponse>;
       resolveCredentialSavePrompt: (
         request: AgentBrowserCredentialSavePromptRequest,
       ) => Promise<AgentBrowserHostResponse>;

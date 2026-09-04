@@ -84,6 +84,7 @@ export const BrowserIpc = {
   StopHost: 'openclaw:browser:stopHost',
   SelectHostPage: 'openclaw:browser:selectHostPage',
   CloseHostPage: 'openclaw:browser:closeHostPage',
+  DismissCredentialLoginStatus: 'openclaw:browser:dismissCredentialLoginStatus',
   ResolveCredentialSavePrompt: 'openclaw:browser:resolveCredentialSavePrompt',
   HostState: 'openclaw:browser:hostState',
 } as const;

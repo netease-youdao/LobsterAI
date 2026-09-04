@@ -81,8 +81,11 @@ const BrowserCredentialSettings: React.FC = () => {
     setError('');
   };
 
-  const saveCredential = async (event: React.FormEvent) => {
+  const saveCredential = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    // The dialog is rendered through a portal, but React submit events still
+    // bubble through the component tree to the settings form.
+    event.stopPropagation();
     if (!origin.trim() || !username.trim() || !password) return;
     setSaving(true);
     setError('');

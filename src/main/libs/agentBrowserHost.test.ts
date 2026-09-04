@@ -16,6 +16,10 @@ vi.mock('electron', () => ({
   WebContentsView: class {},
 }));
 
+import {
+  type BrowserCredentialLoginState,
+  BrowserCredentialLoginStatus,
+} from '../../shared/browserCredentials/constants';
 import { AgentBrowserPartition } from '../../shared/browserWebAccess/constants';
 import { AgentBrowserHost } from './agentBrowserHost';
 
@@ -29,7 +33,7 @@ const createHost = (): AgentBrowserHost => new AgentBrowserHost({
   resolveSessionKey: () => undefined,
 });
 
-describe('AgentBrowserHost persistent storage', () => {
+describe('AgentBrowserHost', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     electronMocks.flushStore.mockResolvedValue();
@@ -76,5 +80,23 @@ describe('AgentBrowserHost persistent storage', () => {
     await disposePromise;
 
     expect(disposed).toBe(true);
+  });
+
+  test('dismisses a completed saved-credential login status', () => {
+    const host = createHost();
+    const hostState = host as unknown as {
+      credentialLoginState?: BrowserCredentialLoginState;
+    };
+    hostState.credentialLoginState = {
+      status: BrowserCredentialLoginStatus.Failed,
+      origin: 'https://example.com',
+    };
+
+    expect(host.getState().credentialLogin).toBeDefined();
+
+    const state = host.dismissCredentialLoginStatus();
+
+    expect(state.credentialLogin).toBeUndefined();
+    expect(host.getState().credentialLogin).toBeUndefined();
   });
 });

@@ -8781,6 +8781,12 @@ if (!gotTheLock) {
   );
 
   ipcMain.handle(
+    BrowserIpc.DismissCredentialLoginStatus,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().dismissCredentialLoginStatus(request?.sessionId)),
+  );
+
+  ipcMain.handle(
     BrowserIpc.ResolveCredentialSavePrompt,
     (_event, request?: AgentBrowserCredentialSavePromptRequest): Promise<AgentBrowserHostResponse> =>
       runBrowserHostAction(() => {

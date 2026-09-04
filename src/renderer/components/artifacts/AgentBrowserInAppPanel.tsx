@@ -179,6 +179,12 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
     }
   };
 
+  const dismissCredentialLoginStatus = () => {
+    void runAction(() => window.electron.openclaw.browser.dismissCredentialLoginStatus({
+      sessionId,
+    })).catch(() => {});
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col bg-background">
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border px-2">
@@ -314,8 +320,19 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
       ) : null}
 
       {credentialLoginStatusKey ? (
-        <div className="shrink-0 border-b border-primary/20 bg-primary/10 px-3 py-1 text-[11px] text-primary">
-          {i18nService.t(credentialLoginStatusKey)}
+        <div className="flex shrink-0 items-center gap-2 border-b border-primary/20 bg-primary/10 px-3 py-1 text-[11px] text-primary">
+          <span className="min-w-0 flex-1">{i18nService.t(credentialLoginStatusKey)}</span>
+          {!credentialLoginBusy ? (
+            <button
+              type="button"
+              onClick={dismissCredentialLoginStatus}
+              className="shrink-0 rounded p-0.5 text-primary/70 transition-colors hover:bg-primary/10 hover:text-primary"
+              title={i18nService.t('close')}
+              aria-label={i18nService.t('close')}
+            >
+              <XMarkIcon className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
         </div>
       ) : null}
 

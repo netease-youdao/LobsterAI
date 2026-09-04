@@ -241,6 +241,7 @@ export class AgentBrowserHost {
   private credentialLoginView: WebContentsView | null = null;
   private credentialLoginViewAttached = false;
   private credentialLoginState: BrowserCredentialLoginState | undefined;
+  private preserveCredentialLoginStatusForNavigationPageId: number | undefined;
   private readonly credentialLogin: AgentBrowserCredentialLogin;
   private credentialSavePrompt: BrowserCredentialSavePrompt | undefined;
   private readonly manualCredentialCapture: ManualCredentialCaptureService;
@@ -371,6 +372,7 @@ export class AgentBrowserHost {
 
   goBack(): AgentBrowserHostState {
     this.assertCredentialLoginInactive();
+    this.clearCredentialLoginStatus();
     const page = this.requireSelectedPage();
     if (page.view.webContents.navigationHistory.canGoBack()) {
       page.view.webContents.navigationHistory.goBack();
@@ -380,6 +382,7 @@ export class AgentBrowserHost {
 
   goForward(): AgentBrowserHostState {
     this.assertCredentialLoginInactive();
+    this.clearCredentialLoginStatus();
     const page = this.requireSelectedPage();
     if (page.view.webContents.navigationHistory.canGoForward()) {
       page.view.webContents.navigationHistory.goForward();
@@ -389,6 +392,7 @@ export class AgentBrowserHost {
 
   reload(): AgentBrowserHostState {
     this.assertCredentialLoginInactive();
+    this.clearCredentialLoginStatus();
     this.requireSelectedPage().view.webContents.reload();
     return this.getState();
   }
@@ -405,6 +409,7 @@ export class AgentBrowserHost {
       throw new Error(`Browser page ${pageId} does not exist.`);
     }
     if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
+    if (pageId !== this.selectedPageId) this.clearCredentialLoginStatus();
     this.selectedPageId = pageId;
     this.syncAttachment();
     this.emitState(sessionId);
@@ -413,6 +418,7 @@ export class AgentBrowserHost {
 
   closePage(pageId: number): AgentBrowserHostState {
     this.assertCredentialLoginInactive();
+    this.clearCredentialLoginStatus();
     const page = this.requirePage(pageId);
     this.manualCredentialCapture.clearPage(pageId);
     this.detachPage(pageId);
@@ -425,6 +431,14 @@ export class AgentBrowserHost {
       this.selectedPageId = this.pages.keys().next().value as number | undefined;
     }
     this.syncAttachment();
+    this.emitState();
+    return this.getState();
+  }
+
+  dismissCredentialLoginStatus(sessionId?: string): AgentBrowserHostState {
+    this.assertCredentialLoginInactive();
+    if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
+    this.clearCredentialLoginStatus();
     this.emitState();
     return this.getState();
   }
@@ -558,6 +572,7 @@ export class AgentBrowserHost {
           || result.outcome === BrowserCredentialLoginOutcome.NeedsMfa
           || result.outcome === BrowserCredentialLoginOutcome.NeedsCaptcha
         ) {
+          this.preserveCredentialLoginStatusForNavigationPageId = page.pageId;
           page.view.webContents.reload();
         }
         return {
@@ -626,11 +641,24 @@ export class AgentBrowserHost {
     });
     webContents.on('did-stop-loading', () => {
       page.loading = false;
+      if (this.preserveCredentialLoginStatusForNavigationPageId === page.pageId) {
+        this.preserveCredentialLoginStatusForNavigationPageId = undefined;
+      }
       emit();
     });
     webContents.on('page-title-updated', emit);
-    webContents.on('did-navigate', emit);
-    webContents.on('did-navigate-in-page', emit);
+    webContents.on('did-navigate', () => {
+      if (this.preserveCredentialLoginStatusForNavigationPageId !== page.pageId) {
+        this.clearCredentialLoginStatus();
+      }
+      emit();
+    });
+    webContents.on('did-navigate-in-page', () => {
+      if (this.preserveCredentialLoginStatusForNavigationPageId !== page.pageId) {
+        this.clearCredentialLoginStatus();
+      }
+      emit();
+    });
     webContents.on('ipc-message', (_event, channel, ...args) => {
       if (channel !== ManualCredentialCaptureChannel.Event) return;
       const captureEvent = parseManualCredentialCaptureEvent(args[0]);
@@ -691,6 +719,7 @@ export class AgentBrowserHost {
     if (!this.isAllowedUrl(url)) {
       throw new Error('Navigation was blocked by the LobsterAI browser access policy.');
     }
+    this.clearCredentialLoginStatus();
     this.lastError = undefined;
     await this.proxyReady;
     const loadPromise = page.view.webContents.loadURL(url);
@@ -1146,6 +1175,12 @@ export class AgentBrowserHost {
     if (this.credentialLogin.isActive) {
       throw new Error('A secure saved-credential sign-in is in progress.');
     }
+  }
+
+  private clearCredentialLoginStatus(): void {
+    if (!this.credentialLoginState || this.credentialLogin.isActive) return;
+    this.credentialLoginState = undefined;
+    this.preserveCredentialLoginStatusForNavigationPageId = undefined;
   }
 
   private emitState(sessionId = this.activeSessionId): void {

@@ -391,6 +391,10 @@ contextBridge.exposeInMainWorld('electron', {
         ipcRenderer.invoke(BrowserIpc.SelectHostPage, request),
       closeHostPage: (request: AgentBrowserHostPageRequest): Promise<AgentBrowserHostResponse> =>
         ipcRenderer.invoke(BrowserIpc.CloseHostPage, request),
+      dismissCredentialLoginStatus: (
+        request?: AgentBrowserHostRequest,
+      ): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.DismissCredentialLoginStatus, request),
       resolveCredentialSavePrompt: (
         request: AgentBrowserCredentialSavePromptRequest,
       ): Promise<AgentBrowserHostResponse> =>
