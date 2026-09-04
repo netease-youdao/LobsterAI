@@ -58,12 +58,16 @@ import {
 } from '../shared/auth/constants';
 import {
   type AgentBrowserCredentialSavePromptRequest,
+  AgentBrowserHostMenuAction,
+  type AgentBrowserHostMenuRequest,
+  type AgentBrowserHostMenuResponse,
   type AgentBrowserHostNavigateRequest,
   type AgentBrowserHostPageRequest,
   type AgentBrowserHostRequest,
   type AgentBrowserHostResponse,
   type AgentBrowserHostSetViewRequest,
   type AgentBrowserHostZoomRequest,
+  AgentBrowserZoom,
   type BrowserDiagnosticResultStep,
   BrowserDiagnosticStatus,
   BrowserDiagnosticStep,
@@ -275,6 +279,7 @@ import { LibraryIndexService } from './library/libraryIndexService';
 import { registerLibraryIpcHandlers } from './library/libraryIpc';
 import { LibraryLocalStore } from './library/libraryLocalStore';
 import { AgentBrowserHost } from './libs/agentBrowserHost';
+import { showAgentBrowserHostMenu } from './libs/agentBrowserHostMenu';
 import {
   type CoworkAgentEngine,
   CoworkEngineRouter,
@@ -8709,6 +8714,7 @@ if (!gotTheLock) {
     try {
       return { success: true, state: await action() };
     } catch (error) {
+      console.error('[AgentBrowserHost] In-app browser action failed:', error);
       const message = error instanceof Error ? error.message : 'LobsterAI in-app browser action failed.';
       return {
         success: false,
@@ -8788,12 +8794,51 @@ if (!gotTheLock) {
   );
 
   ipcMain.handle(
+    BrowserIpc.ShowHostMenu,
+    (event, request?: AgentBrowserHostMenuRequest): Promise<AgentBrowserHostMenuResponse> => {
+      const targetWindow = BrowserWindow.fromWebContents(event.sender);
+      if (!targetWindow || targetWindow.isDestroyed()) {
+        return Promise.resolve({
+          success: false,
+          error: t('agentBrowserMenuUnavailable'),
+        });
+      }
+
+      const hostState = getAgentBrowserHost().getState();
+      const selectedTab = hostState.tabs.find(tab => tab.pageId === hostState.selectedPageId);
+      return showAgentBrowserHostMenu({
+        targetWindow,
+        position: request,
+        hasPage: Boolean(selectedTab),
+        zoomFactor: selectedTab?.zoomFactor,
+        darkMode: request?.darkMode,
+        onZoomAction: async action => {
+          const host = getAgentBrowserHost();
+          const currentState = host.getState();
+          const currentTab = currentState.tabs.find(tab => tab.pageId === currentState.selectedPageId);
+          if (!currentTab) throw new Error('No LobsterAI browser page is open.');
+          const nextFactor = action === AgentBrowserHostMenuAction.ZoomOut
+            ? currentTab.zoomFactor - AgentBrowserZoom.Step
+            : action === AgentBrowserHostMenuAction.ZoomIn
+              ? currentTab.zoomFactor + AgentBrowserZoom.Step
+              : AgentBrowserZoom.Default;
+          const nextState = host.setZoomFactor(nextFactor, request?.sessionId);
+          return nextState.tabs.find(tab => tab.pageId === nextState.selectedPageId)?.zoomFactor
+            ?? AgentBrowserZoom.Default;
+        },
+      });
+    },
+  );
+
+  ipcMain.handle(
     BrowserIpc.CaptureHostScreenshot,
     (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
       runBrowserHostAction(async () => {
         const host = getAgentBrowserHost();
+        console.debug('[AgentBrowserHost] Capturing the selected page for the clipboard.');
         const image = await host.captureScreenshot(request?.sessionId);
         clipboard.writeImage(image);
+        console.debug('[AgentBrowserHost] Browser screenshot copied to the clipboard.');
         return host.getState();
       }),
   );

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 const electronMocks = vi.hoisted(() => ({
   clearCache: vi.fn<() => Promise<void>>(),
   clearStorageData: vi.fn<() => Promise<void>>(),
+  createImageFromBuffer: vi.fn(),
   flushStorageData: vi.fn(),
   flushStore: vi.fn<() => Promise<void>>(),
   fromPartition: vi.fn(),
@@ -12,6 +13,9 @@ const electronMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({
+  nativeImage: {
+    createFromBuffer: electronMocks.createImageFromBuffer,
+  },
   session: {
     fromPartition: electronMocks.fromPartition,
   },
@@ -40,6 +44,7 @@ describe('AgentBrowserHost', () => {
     vi.clearAllMocks();
     electronMocks.clearCache.mockResolvedValue();
     electronMocks.clearStorageData.mockResolvedValue();
+    electronMocks.createImageFromBuffer.mockReset();
     electronMocks.flushStore.mockResolvedValue();
     electronMocks.setProxy.mockResolvedValue();
     electronMocks.fromPartition.mockReturnValue({
@@ -158,14 +163,21 @@ describe('AgentBrowserHost', () => {
 
   test('captures the selected page for clipboard export', async () => {
     const image = { isEmpty: () => false };
-    const capturePage = vi.fn().mockResolvedValue(image);
+    const sendCommand = vi.fn(async (method: string) => (
+      method === 'Page.captureScreenshot' ? { data: Buffer.from('image').toString('base64') } : {}
+    ));
+    electronMocks.createImageFromBuffer.mockReturnValue(image);
     const page = {
       pageId: 1,
       loading: false,
       refs: new Map(),
       view: {
         webContents: {
-          capturePage,
+          debugger: {
+            attach: vi.fn(),
+            isAttached: () => false,
+            sendCommand,
+          },
         },
       },
     };
@@ -178,7 +190,12 @@ describe('AgentBrowserHost', () => {
     hostState.selectedPageId = page.pageId;
 
     await expect(host.captureScreenshot()).resolves.toBe(image);
-    expect(capturePage).toHaveBeenCalledOnce();
+    expect(sendCommand).toHaveBeenCalledWith('Page.captureScreenshot', {
+      format: 'png',
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    expect(electronMocks.createImageFromBuffer).toHaveBeenCalledWith(Buffer.from('image'));
   });
 
   test('selects the adjacent page when closing the active tab', () => {

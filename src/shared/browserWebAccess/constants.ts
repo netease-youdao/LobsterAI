@@ -42,6 +42,19 @@ export const AgentBrowserZoom = {
   Default: 1,
 } as const;
 
+export const AgentBrowserHostMenuAction = {
+  CaptureScreenshot: 'capture-screenshot',
+  NewBlankPage: 'new-blank-page',
+  ZoomOut: 'zoom-out',
+  ResetZoom: 'reset-zoom',
+  ZoomIn: 'zoom-in',
+  ClearCookies: 'clear-cookies',
+  ClearCache: 'clear-cache',
+} as const;
+
+export type AgentBrowserHostMenuAction =
+  typeof AgentBrowserHostMenuAction[keyof typeof AgentBrowserHostMenuAction];
+
 export const BrowserDisplayMode = {
   InApp: 'in-app',
   External: 'external',
@@ -96,6 +109,7 @@ export const BrowserIpc = {
   CreateHostPage: 'openclaw:browser:createHostPage',
   SelectHostPage: 'openclaw:browser:selectHostPage',
   CloseHostPage: 'openclaw:browser:closeHostPage',
+  ShowHostMenu: 'openclaw:browser:showHostMenu',
   CaptureHostScreenshot: 'openclaw:browser:captureHostScreenshot',
   SetHostZoom: 'openclaw:browser:setHostZoom',
   ClearHostCookies: 'openclaw:browser:clearHostCookies',
@@ -229,6 +243,19 @@ export interface AgentBrowserHostPageRequest extends AgentBrowserHostRequest {
 
 export interface AgentBrowserHostZoomRequest extends AgentBrowserHostRequest {
   factor: number;
+}
+
+export interface AgentBrowserHostMenuRequest extends AgentBrowserHostRequest {
+  x: number;
+  y: number;
+  darkMode: boolean;
+}
+
+export interface AgentBrowserHostMenuResponse {
+  success: boolean;
+  action?: AgentBrowserHostMenuAction;
+  zoomFactor?: number;
+  error?: string;
 }
 
 export interface AgentBrowserCredentialSavePromptRequest extends AgentBrowserHostRequest {

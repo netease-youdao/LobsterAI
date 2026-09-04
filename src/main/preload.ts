@@ -31,6 +31,8 @@ import {
 } from '../shared/browserCredentials/constants';
 import {
   type AgentBrowserCredentialSavePromptRequest,
+  type AgentBrowserHostMenuRequest,
+  type AgentBrowserHostMenuResponse,
   type AgentBrowserHostNavigateRequest,
   type AgentBrowserHostPageRequest,
   type AgentBrowserHostRequest,
@@ -394,6 +396,8 @@ contextBridge.exposeInMainWorld('electron', {
         ipcRenderer.invoke(BrowserIpc.SelectHostPage, request),
       closeHostPage: (request: AgentBrowserHostPageRequest): Promise<AgentBrowserHostResponse> =>
         ipcRenderer.invoke(BrowserIpc.CloseHostPage, request),
+      showHostMenu: (request: AgentBrowserHostMenuRequest): Promise<AgentBrowserHostMenuResponse> =>
+        ipcRenderer.invoke(BrowserIpc.ShowHostMenu, request),
       captureHostScreenshot: (request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
         ipcRenderer.invoke(BrowserIpc.CaptureHostScreenshot, request),
       setHostZoom: (request: AgentBrowserHostZoomRequest): Promise<AgentBrowserHostResponse> =>

@@ -1,6 +1,7 @@
 import {
   type BrowserWindow,
   type NativeImage,
+  nativeImage,
   type Session,
   session,
   WebContentsView,
@@ -69,6 +70,7 @@ const BrowserMcpTool = {
 
 const DEFAULT_PAGE_URL = AgentBrowserPageUrl.Blank;
 const DEFAULT_OPERATION_TIMEOUT_MS = 30_000;
+const SCREENSHOT_CAPTURE_TIMEOUT_MS = 10_000;
 const MAX_OPERATION_TIMEOUT_MS = 60_000;
 const MAX_SNAPSHOT_NODES = 2_000;
 
@@ -417,7 +419,27 @@ export class AgentBrowserHost {
   async captureScreenshot(sessionId?: string): Promise<NativeImage> {
     this.assertCredentialLoginInactive();
     if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
-    const image = await this.requireSelectedPage().view.webContents.capturePage();
+    const page = this.requireSelectedPage();
+    await this.ensureDebugger(page);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      page.view.webContents.debugger.sendCommand('Page.captureScreenshot', {
+        format: 'png',
+        fromSurface: true,
+        captureBeyondViewport: false,
+      }) as Promise<{ data?: string }>,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`In-app browser screenshot timed out after ${SCREENSHOT_CAPTURE_TIMEOUT_MS}ms.`));
+        }, SCREENSHOT_CAPTURE_TIMEOUT_MS);
+      }),
+    ]).finally(() => {
+      if (timeout) clearTimeout(timeout);
+    });
+    if (!result.data) {
+      throw new Error('The in-app browser screenshot did not contain image data.');
+    }
+    const image = nativeImage.createFromBuffer(Buffer.from(result.data, 'base64'));
     if (image.isEmpty()) {
       throw new Error('The in-app browser screenshot is empty.');
     }

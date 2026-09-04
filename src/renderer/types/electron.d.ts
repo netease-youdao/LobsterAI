@@ -29,6 +29,8 @@ import type {
 } from '../../shared/browserCredentials/constants';
 import type {
   AgentBrowserCredentialSavePromptRequest,
+  AgentBrowserHostMenuRequest,
+  AgentBrowserHostMenuResponse,
   AgentBrowserHostNavigateRequest,
   AgentBrowserHostPageRequest,
   AgentBrowserHostRequest,
@@ -905,6 +907,7 @@ interface IElectronAPI {
       createHostPage: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
       selectHostPage: (request: AgentBrowserHostPageRequest) => Promise<AgentBrowserHostResponse>;
       closeHostPage: (request: AgentBrowserHostPageRequest) => Promise<AgentBrowserHostResponse>;
+      showHostMenu: (request: AgentBrowserHostMenuRequest) => Promise<AgentBrowserHostMenuResponse>;
       captureHostScreenshot: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
       setHostZoom: (request: AgentBrowserHostZoomRequest) => Promise<AgentBrowserHostResponse>;
       clearHostCookies: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
