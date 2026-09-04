@@ -3153,6 +3153,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     artifactAutoPreviewEnabledDescription: 'AI 生成支持预览的文件后，自动打开右侧预览面板',
     useSystemProxy: '使用系统代理',
     useSystemProxyDescription: '开启后网络请求将跟随系统代理（保存后生效）',
+    hideAdBanner: '隐藏广告横幅',
+    hideAdBannerDescription: '开启后将永久隐藏左下角的推广横幅（保存后生效）',
     browserWebAccessTab: '浏览器',
     browserWebAccessTitle: '浏览器',
     browserWebAccessDescription: '配置 Agent 浏览器的显示方式和网页访问规则。',
@@ -7123,6 +7125,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     useSystemProxy: 'Use System Proxy',
     useSystemProxyDescription:
       'When enabled, network requests follow system proxy settings (applies after Save)',
+    hideAdBanner: 'Hide Ad Banner',
+    hideAdBannerDescription: 'Permanently hide the promotional banner in the bottom-left corner (applies after Save)',
     browserWebAccessTab: 'Browser',
     browserWebAccessTitle: 'Browser',
     browserWebAccessDescription: 'Configure how the Agent Browser is displayed and manage page access rules.',

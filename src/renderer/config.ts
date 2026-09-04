@@ -147,6 +147,8 @@ export interface AppConfig {
     port: number;
     isDevelopment: boolean;
     testMode?: boolean;
+    /** Whether to permanently hide the sidebar ad banner */
+    adBannerHidden?: boolean;
   };
   // 快捷键配置
   shortcuts?: ShortcutConfig;
@@ -205,6 +207,7 @@ export const defaultConfig: AppConfig = {
     // them. Flip test mode via the hidden switch in Settings → About when the
     // internal endpoints are actually needed.
     testMode: false,
+    adBannerHidden: false,
   },
   shortcuts: {
     [ShortcutAction.NewChat]: 'CommandOrControl+N',
