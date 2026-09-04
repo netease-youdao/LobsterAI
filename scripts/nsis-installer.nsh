@@ -471,6 +471,34 @@ FunctionEnd
   ; welcome/finish sidebar bitmap to the scaled control, so layout is kept.
   ManifestDPIAware true
 
+  ; NSIS ships its CJK language files with the dialog font pinned to the
+  ; Windows XP-era UI fonts: SimpChinese.nlf = SimSun 9pt, TradChinese.nlf =
+  ; PMingLiU 9pt, Japanese.nlf = MS PGothic 9pt, Korean.nlf = Gulim 9pt. Those
+  ; fonts carry embedded bitmap strikes for 12-16 px, which GDI draws as-is
+  ; with no anti-aliasing, so at 9pt every label, button, the branding text
+  ; and the bold MUI header (CreateFont from $(^Font)) come out jagged --
+  ; and with the installer DPI-aware the pixels are no longer even blurred
+  ; away by bitmap scaling. English and the other Latin languages keep the
+  ; language-file default ("-" = MS Shell Dlg), an outline font that is
+  ; unaffected. Override each CJK language with the font Windows 10+ itself
+  ; uses for that locale's UI. SetFont /LANG replaces the language file's
+  ; font for the per-language dialog templates and for $(^Font)/$(^FontSize),
+  ; and LANG_* is only defined once addLangs has run, which is why this lives
+  ; in customHeader (inserted after addLangs). Guarded so a narrowed
+  ; installerLanguages list still compiles.
+  !ifdef LANG_SIMPCHINESE
+    SetFont /LANG=${LANG_SIMPCHINESE} "Microsoft YaHei UI" 9
+  !endif
+  !ifdef LANG_TRADCHINESE
+    SetFont /LANG=${LANG_TRADCHINESE} "Microsoft JhengHei UI" 9
+  !endif
+  !ifdef LANG_JAPANESE
+    SetFont /LANG=${LANG_JAPANESE} "Yu Gothic UI" 9
+  !endif
+  !ifdef LANG_KOREAN
+    SetFont /LANG=${LANG_KOREAN} "Malgun Gothic" 9
+  !endif
+
   ; Keep only the progress bar visible. The details box stays hidden and
   ; NSIS/electron-builder retains the default status text behavior.
   ShowInstDetails nevershow

@@ -1222,6 +1222,43 @@ describe('Windows installer hardening contracts', () => {
     expect(afterUninstallerGuard).toContain('ManifestDPIAware true');
   });
 
+  test('replaces the bitmap-strike CJK fonts pinned by the NSIS language files', () => {
+    // NSIS's SimpChinese/TradChinese/Japanese/Korean .nlf files set the dialog
+    // font to SimSun/PMingLiU/MS PGothic/Gulim 9pt. GDI draws those from their
+    // embedded bitmap strikes with no anti-aliasing, so every label on the
+    // Chinese wizard is jagged. SetFont /LANG is a file-scope attribute and
+    // LANG_* only exists once addLangs has run, so the overrides must live in
+    // customHeader (inserted after addLangs) and outside the BUILD_UNINSTALLER
+    // guard so the uninstaller dialogs get them too.
+    const addLangs = rootInstallerTemplate.indexOf('!insertmacro addLangs');
+    expect(addLangs).toBeGreaterThan(-1);
+    expect(rootInstallerTemplate.indexOf('!insertmacro customHeader')).toBeGreaterThan(addLangs);
+
+    const headerStart = installerInclude.indexOf('!macro customHeader');
+    const header = installerInclude.slice(
+      headerStart,
+      installerInclude.indexOf('!macroend', headerStart),
+    );
+    const afterUninstallerGuard = header.slice(header.indexOf('!endif'));
+    const overrides: Array<[string, string]> = [
+      ['SIMPCHINESE', 'Microsoft YaHei UI'],
+      ['TRADCHINESE', 'Microsoft JhengHei UI'],
+      ['JAPANESE', 'Yu Gothic UI'],
+      ['KOREAN', 'Malgun Gothic'],
+    ];
+    for (const [lang, font] of overrides) {
+      expect(afterUninstallerGuard).toMatch(
+        new RegExp(
+          `!ifdef LANG_${lang}\\s+SetFont /LANG=\\$\\{LANG_${lang}\\} "${font}" 9\\s+!endif`,
+        ),
+      );
+    }
+    // Per-language only: a global SetFont would restyle every language and
+    // take precedence over all /LANG overrides.
+    expect(installerInclude.match(/^\s*SetFont\b/gm)?.length).toBe(overrides.length);
+    expect(installerInclude).not.toMatch(/^\s*SetFont\s+"/m);
+  });
+
   test('stages the embedded package through a selectable staging directory', () => {
     // Template contract: default init -> selection hook -> materialize hook ->
     // File materialize, all against $appPackageStagingDir, so the preflight
