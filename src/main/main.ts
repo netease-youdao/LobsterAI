@@ -63,6 +63,7 @@ import {
   type AgentBrowserHostRequest,
   type AgentBrowserHostResponse,
   type AgentBrowserHostSetViewRequest,
+  type AgentBrowserHostZoomRequest,
   type BrowserDiagnosticResultStep,
   BrowserDiagnosticStatus,
   BrowserDiagnosticStep,
@@ -8766,6 +8767,12 @@ if (!gotTheLock) {
   );
 
   ipcMain.handle(
+    BrowserIpc.CreateHostPage,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().newPage(request?.sessionId)),
+  );
+
+  ipcMain.handle(
     BrowserIpc.SelectHostPage,
     (_event, request?: AgentBrowserHostPageRequest): Promise<AgentBrowserHostResponse> =>
       runBrowserHostAction(() => getAgentBrowserHost().selectPage(
@@ -8778,6 +8785,38 @@ if (!gotTheLock) {
     BrowserIpc.CloseHostPage,
     (_event, request?: AgentBrowserHostPageRequest): Promise<AgentBrowserHostResponse> =>
       runBrowserHostAction(() => getAgentBrowserHost().closePage(request?.pageId ?? 0)),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.CaptureHostScreenshot,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(async () => {
+        const host = getAgentBrowserHost();
+        const image = await host.captureScreenshot(request?.sessionId);
+        clipboard.writeImage(image);
+        return host.getState();
+      }),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.SetHostZoom,
+    (_event, request?: AgentBrowserHostZoomRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().setZoomFactor(
+        request?.factor ?? Number.NaN,
+        request?.sessionId,
+      )),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.ClearHostCookies,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().clearCookies(request?.sessionId)),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.ClearHostCache,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().clearCache(request?.sessionId)),
   );
 
   ipcMain.handle(

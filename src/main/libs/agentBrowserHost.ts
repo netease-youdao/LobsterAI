@@ -1,5 +1,6 @@
 import {
   type BrowserWindow,
+  type NativeImage,
   type Session,
   session,
   WebContentsView,
@@ -17,8 +18,10 @@ import {
 import {
   type AgentBrowserHostState,
   type AgentBrowserHostStateEvent,
+  AgentBrowserPageUrl,
   AgentBrowserPartition,
   type AgentBrowserToolEvent,
+  AgentBrowserZoom,
   BrowserDisplayMode,
   type BrowserWebAccessConfig,
   normalizeBrowserHostnamePolicyList,
@@ -64,7 +67,7 @@ const BrowserMcpTool = {
   LoginWithSavedCredential: BrowserCredentialLoginTool.Name,
 } as const;
 
-const DEFAULT_PAGE_URL = 'about:blank';
+const DEFAULT_PAGE_URL = AgentBrowserPageUrl.Blank;
 const DEFAULT_OPERATION_TIMEOUT_MS = 30_000;
 const MAX_OPERATION_TIMEOUT_MS = 60_000;
 const MAX_SNAPSHOT_NODES = 2_000;
@@ -303,6 +306,7 @@ export class AgentBrowserHost {
         loading: page.loading,
         canGoBack: navigationHistory.canGoBack(),
         canGoForward: navigationHistory.canGoForward(),
+        zoomFactor: webContents.getZoomFactor(),
       };
     });
     return {
@@ -403,6 +407,53 @@ export class AgentBrowserHost {
     return this.getState();
   }
 
+  async newPage(sessionId?: string): Promise<AgentBrowserHostState> {
+    this.assertCredentialLoginInactive();
+    if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
+    await this.createPage(DEFAULT_PAGE_URL);
+    return this.getState();
+  }
+
+  async captureScreenshot(sessionId?: string): Promise<NativeImage> {
+    this.assertCredentialLoginInactive();
+    if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
+    const image = await this.requireSelectedPage().view.webContents.capturePage();
+    if (image.isEmpty()) {
+      throw new Error('The in-app browser screenshot is empty.');
+    }
+    return image;
+  }
+
+  setZoomFactor(factor: number, sessionId?: string): AgentBrowserHostState {
+    this.assertCredentialLoginInactive();
+    if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
+    if (!Number.isFinite(factor)) {
+      throw new Error('A valid browser zoom factor is required.');
+    }
+    const normalizedFactor = Math.min(
+      AgentBrowserZoom.Max,
+      Math.max(AgentBrowserZoom.Min, Number(factor.toFixed(2))),
+    );
+    this.requireSelectedPage().view.webContents.setZoomFactor(normalizedFactor);
+    this.emitState();
+    return this.getState();
+  }
+
+  async clearCookies(sessionId?: string): Promise<AgentBrowserHostState> {
+    this.assertCredentialLoginInactive();
+    if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
+    await this.browserSession.clearStorageData({ storages: ['cookies'] });
+    await this.browserSession.cookies.flushStore();
+    return this.getState();
+  }
+
+  async clearCache(sessionId?: string): Promise<AgentBrowserHostState> {
+    this.assertCredentialLoginInactive();
+    if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
+    await this.browserSession.clearCache();
+    return this.getState();
+  }
+
   selectPage(pageId: number, sessionId?: string): AgentBrowserHostState {
     this.assertCredentialLoginInactive();
     if (!this.pages.has(pageId)) {
@@ -420,16 +471,17 @@ export class AgentBrowserHost {
     this.assertCredentialLoginInactive();
     this.clearCredentialLoginStatus();
     const page = this.requirePage(pageId);
+    const fallbackPageId = this.getAdjacentPageId(pageId);
     this.manualCredentialCapture.clearPage(pageId);
     this.detachPage(pageId);
     if (page.view.webContents.debugger.isAttached()) {
       page.view.webContents.debugger.detach();
     }
-    page.view.webContents.close();
     this.pages.delete(pageId);
     if (this.selectedPageId === pageId) {
-      this.selectedPageId = this.pages.keys().next().value as number | undefined;
+      this.selectedPageId = fallbackPageId;
     }
+    page.view.webContents.close();
     this.syncAttachment();
     this.emitState();
     return this.getState();
@@ -688,9 +740,10 @@ export class AgentBrowserHost {
     });
     webContents.on('destroyed', () => {
       this.manualCredentialCapture.clearPage(page.pageId);
+      const fallbackPageId = this.getAdjacentPageId(page.pageId);
       this.pages.delete(page.pageId);
       if (this.selectedPageId === page.pageId) {
-        this.selectedPageId = this.pages.keys().next().value as number | undefined;
+        this.selectedPageId = fallbackPageId;
       }
       if (this.attachedPageId === page.pageId) this.attachedPageId = undefined;
       this.syncAttachment();
@@ -1175,6 +1228,13 @@ export class AgentBrowserHost {
     if (this.credentialLogin.isActive) {
       throw new Error('A secure saved-credential sign-in is in progress.');
     }
+  }
+
+  private getAdjacentPageId(pageId: number): number | undefined {
+    const pageIds = Array.from(this.pages.keys());
+    const pageIndex = pageIds.indexOf(pageId);
+    if (pageIndex < 0) return undefined;
+    return pageIds[pageIndex + 1] ?? pageIds[pageIndex - 1];
   }
 
   private clearCredentialLoginStatus(): void {

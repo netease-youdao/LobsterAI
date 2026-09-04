@@ -31,6 +31,17 @@ export const AgentBrowserPartition = {
 export type AgentBrowserPartition =
   typeof AgentBrowserPartition[keyof typeof AgentBrowserPartition];
 
+export const AgentBrowserPageUrl = {
+  Blank: 'about:blank',
+} as const;
+
+export const AgentBrowserZoom = {
+  Min: 0.25,
+  Max: 3,
+  Step: 0.1,
+  Default: 1,
+} as const;
+
 export const BrowserDisplayMode = {
   InApp: 'in-app',
   External: 'external',
@@ -82,8 +93,13 @@ export const BrowserIpc = {
   GoForwardHost: 'openclaw:browser:goForwardHost',
   ReloadHost: 'openclaw:browser:reloadHost',
   StopHost: 'openclaw:browser:stopHost',
+  CreateHostPage: 'openclaw:browser:createHostPage',
   SelectHostPage: 'openclaw:browser:selectHostPage',
   CloseHostPage: 'openclaw:browser:closeHostPage',
+  CaptureHostScreenshot: 'openclaw:browser:captureHostScreenshot',
+  SetHostZoom: 'openclaw:browser:setHostZoom',
+  ClearHostCookies: 'openclaw:browser:clearHostCookies',
+  ClearHostCache: 'openclaw:browser:clearHostCache',
   DismissCredentialLoginStatus: 'openclaw:browser:dismissCredentialLoginStatus',
   ResolveCredentialSavePrompt: 'openclaw:browser:resolveCredentialSavePrompt',
   HostState: 'openclaw:browser:hostState',
@@ -171,6 +187,7 @@ export interface AgentBrowserHostTab {
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
+  zoomFactor: number;
 }
 
 export interface AgentBrowserHostState {
@@ -208,6 +225,10 @@ export interface AgentBrowserHostNavigateRequest extends AgentBrowserHostRequest
 
 export interface AgentBrowserHostPageRequest extends AgentBrowserHostRequest {
   pageId: number;
+}
+
+export interface AgentBrowserHostZoomRequest extends AgentBrowserHostRequest {
+  factor: number;
 }
 
 export interface AgentBrowserCredentialSavePromptRequest extends AgentBrowserHostRequest {

@@ -35,6 +35,7 @@ import type {
   AgentBrowserHostResponse,
   AgentBrowserHostSetViewRequest,
   AgentBrowserHostStateEvent,
+  AgentBrowserHostZoomRequest,
   BrowserDiagnosticResult,
   BrowserRuntimeProfile,
 } from '../../shared/browserWebAccess/constants';
@@ -901,8 +902,13 @@ interface IElectronAPI {
       goForwardHost: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
       reloadHost: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
       stopHost: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
+      createHostPage: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
       selectHostPage: (request: AgentBrowserHostPageRequest) => Promise<AgentBrowserHostResponse>;
       closeHostPage: (request: AgentBrowserHostPageRequest) => Promise<AgentBrowserHostResponse>;
+      captureHostScreenshot: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
+      setHostZoom: (request: AgentBrowserHostZoomRequest) => Promise<AgentBrowserHostResponse>;
+      clearHostCookies: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
+      clearHostCache: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
       dismissCredentialLoginStatus: (
         request?: AgentBrowserHostRequest,
       ) => Promise<AgentBrowserHostResponse>;
