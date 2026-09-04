@@ -3,6 +3,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { Artifact } from '@/types/artifact';
 
+import { executeMermaidRender } from './mermaidRenderTask';
+
 let mermaidInitialized = false;
 
 function initMermaid(isDark: boolean) {
@@ -12,12 +14,6 @@ function initMermaid(isDark: boolean) {
     theme: isDark ? 'dark' : 'default',
   });
   mermaidInitialized = true;
-}
-
-function cleanupMermaidRenderArtifacts(id: string) {
-  document.getElementById(id)?.remove();
-  document.getElementById(`d${id}`)?.remove();
-  document.getElementById(`i${id}`)?.remove();
 }
 
 function createMermaidRenderContainer(): HTMLDivElement {
@@ -68,35 +64,25 @@ const MermaidRenderer: React.FC<MermaidRendererProps> = ({ artifact }) => {
       initMermaid(isDark);
     }
 
-    let cancelled = false;
-    const renderDiagram = async () => {
-      const id = `mermaid-${artifact.id.replace(/[^a-zA-Z0-9]/g, '')}`;
-      let renderContainer: HTMLDivElement | null = null;
-      try {
-        cleanupMermaidRenderArtifacts(id);
-        await mermaid.parse(artifact.content);
-        renderContainer = createMermaidRenderContainer();
-        const { svg: rendered } = await mermaid.render(id, artifact.content, renderContainer);
-        if (!cancelled) {
-          setSvg(rendered);
-          setError(null);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setSvg('');
-          setError(err instanceof Error ? err.message : 'Failed to render diagram');
-        }
-      } finally {
-        renderContainer?.remove();
-        cleanupMermaidRenderArtifacts(id);
-      }
-    };
+    const controller = new AbortController();
+    void executeMermaidRender({
+      artifactId: artifact.id,
+      content: artifact.content,
+      signal: controller.signal,
+      createContainer: createMermaidRenderContainer,
+      render: (id, content, container) => mermaid.render(id, content, container),
+      onSuccess: rendered => {
+        setSvg(rendered);
+        setError(null);
+      },
+      onError: err => {
+        setSvg('');
+        setError(err instanceof Error ? err.message : 'Failed to render diagram');
+      },
+    });
 
-    renderDiagram();
     return () => {
-      cancelled = true;
-      const id = `mermaid-${artifact.id.replace(/[^a-zA-Z0-9]/g, '')}`;
-      cleanupMermaidRenderArtifacts(id);
+      controller.abort();
     };
   }, [artifact.content, artifact.id]);
 
