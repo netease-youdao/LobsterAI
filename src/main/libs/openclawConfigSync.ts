@@ -19,6 +19,10 @@ import {
 } from '../../shared/browserWebAccess/constants';
 import { COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
 import { CoworkErrorModelSource } from '../../shared/cowork/errorDetail';
+import {
+  getStdioCommandValidationMessage,
+  validateStdioCommand,
+} from '../../shared/mcp/stdio';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
 import { OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS } from '../../shared/openclawEngine/constants';
 import { OpenClawTranscriptSafetyLimit } from '../../shared/openclawTranscript/constants';
@@ -1784,11 +1788,19 @@ function buildOpenClawMcpServers(
     }
 
     switch (server.transportType) {
-      case 'stdio':
-        if (server.command) entry.command = server.command;
+      case 'stdio': {
+        const stdioValidation = validateStdioCommand(server.command, server.args);
+        if (!stdioValidation.ok) {
+          console.warn(
+            `[OpenClawConfigSync] skipped MCP server "${server.name}" because its stdio command is invalid: ${getStdioCommandValidationMessage(stdioValidation)}`,
+          );
+          continue;
+        }
+        entry.command = stdioValidation.command;
         if (server.args?.length) entry.args = server.args;
         if (server.env && Object.keys(server.env).length > 0) entry.env = server.env;
         break;
+      }
       case 'sse':
         entry.url = normalizedRemoteUrl;
         if (server.headers && Object.keys(server.headers).length > 0)

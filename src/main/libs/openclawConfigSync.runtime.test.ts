@@ -3082,6 +3082,35 @@ describe('OpenClawConfigSync runtime config output', () => {
       },
     });
   });
+
+  test('skips invalid stdio MCP servers while keeping valid ones', async () => {
+    const sync = await createSync({
+      getResolvedMcpServers: () => [
+        {
+          name: 'Evil',
+          transportType: 'stdio',
+          command: 'npx -y evil',
+          args: [],
+        },
+        {
+          name: 'Tavily',
+          transportType: 'stdio',
+          command: 'node',
+          args: ['server.js'],
+        },
+      ],
+    });
+
+    const result = sync.sync('mcp-server-updated');
+
+    expect(result.ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.mcp.servers.Tavily).toMatchObject({
+      command: 'node',
+      args: ['server.js'],
+    });
+    expect(config.mcp.servers.Evil).toBeUndefined();
+  });
 });
 
 describe('resolveModelSourceForOpenClawProvider', () => {
