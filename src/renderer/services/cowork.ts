@@ -1604,19 +1604,35 @@ class CoworkService {
 
   async renameSession(sessionId: string, title: string): Promise<boolean> {
     const cowork = window.electron?.cowork;
-    if (!cowork?.renameSession) return false;
+    const showRenameFailedToast = () => {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkRenameFailed'),
+      }));
+    };
+
+    if (!cowork?.renameSession) {
+      showRenameFailedToast();
+      return false;
+    }
 
     const normalizedTitle = title.trim();
     if (!normalizedTitle) return false;
 
-    const result = await cowork.renameSession({ sessionId, title: normalizedTitle });
-    if (result.success) {
-      store.dispatch(updateSessionTitle({ sessionId, title: normalizedTitle }));
-      return true;
-    }
+    try {
+      const result = await cowork.renameSession({ sessionId, title: normalizedTitle });
+      if (result.success) {
+        store.dispatch(updateSessionTitle({ sessionId, title: normalizedTitle }));
+        return true;
+      }
 
-    console.error('Failed to rename session:', result.error);
-    return false;
+      console.error('Failed to rename session:', result.error);
+      showRenameFailedToast();
+      return false;
+    } catch (error) {
+      console.error('Failed to rename session:', error);
+      showRenameFailedToast();
+      return false;
+    }
   }
 
   async forkSession(options: CoworkForkSessionOptions): Promise<{ session: CoworkSession | null; error?: string }> {
