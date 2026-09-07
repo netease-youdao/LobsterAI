@@ -778,8 +778,8 @@ export class OpenClawEngineManager extends EventEmitter {
       // unnecessary and its watchdog can flood stderr with re-advertise
       // warnings on Windows.  See openclaw/openclaw#33609, #63153.
       OPENCLAW_DISABLE_BONJOUR: '1',
-      // Enable debug-level logging so gateway emits phase-level detail during startup.
-      OPENCLAW_LOG_LEVEL: 'debug',
+      // Keep diagnostic detail; per-frame WebSocket traces require --verbose separately.
+      OPENCLAW_LOG_LEVEL: process.env.OPENCLAW_LOG_LEVEL || 'debug',
       // Enable V8 compile cache for both CJS and ESM modules.
       // This env var works for import() (ESM), unlike enableCompileCache() which is CJS-only.
       ...buildOpenClawCompileCacheEnv(compileCacheDir),
@@ -884,7 +884,8 @@ export class OpenClawEngineManager extends EventEmitter {
       env,
     });
 
-    const forkArgs = ['gateway', '--bind', 'loopback', '--port', String(port), '--token', token, '--verbose'];
+    // Verbose mode logs every streamed WebSocket event, including thinking deltas.
+    const forkArgs = ['gateway', '--bind', 'loopback', '--port', String(port), '--token', token];
     const gatewayExecArgv = buildOpenClawGatewayExecArgv(process.env.NODE_OPTIONS);
     if (gatewayExecArgv.length > 0) {
       console.log(`[OpenClaw] gateway V8 old-space limit set to ${OPENCLAW_GATEWAY_MAX_OLD_SPACE_MB}MB`);

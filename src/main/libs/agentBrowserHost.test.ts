@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { runInNewContext } from 'node:vm';
+
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const electronMocks = vi.hoisted(() => {
   const createWebContents = () => {
@@ -14,6 +16,7 @@ const electronMocks = vi.hoisted(() => {
         sendCommand: vi.fn(),
       },
       executeJavaScript: vi.fn(),
+      emit: (event: string, ...args: unknown[]) => listeners.get(event)?.(...args),
       focus: vi.fn(),
       getTitle: vi.fn(() => ''),
       getURL: vi.fn(() => currentUrl),
@@ -86,9 +89,11 @@ import {
   AgentBrowserPartition,
   BrowserDisplayMode,
 } from '../../shared/browserWebAccess/constants';
-import { AgentBrowserHost, BrowserMcpTool } from './agentBrowserHost';
+import { AgentBrowserHost, BrowserCdpCommand, BrowserMcpTool } from './agentBrowserHost';
 
-const createHost = (): AgentBrowserHost => new AgentBrowserHost({
+const createHost = (
+  overrides: Partial<ConstructorParameters<typeof AgentBrowserHost>[0]> = {},
+): AgentBrowserHost => new AgentBrowserHost({
   getMainWindow: () => null,
   getBrowserConfig: () => ({ displayMode: BrowserDisplayMode.InApp }),
   useSystemProxy: () => false,
@@ -96,6 +101,7 @@ const createHost = (): AgentBrowserHost => new AgentBrowserHost({
   credentialService: {} as never,
   credentialApprovalService: {} as never,
   resolveSessionKey: () => undefined,
+  ...overrides,
 });
 
 beforeEach(() => {
@@ -117,6 +123,10 @@ beforeEach(() => {
     setPermissionRequestHandler: electronMocks.setPermissionRequestHandler,
     setProxy: electronMocks.setProxy,
   });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('AgentBrowserHost', () => {
@@ -416,5 +426,233 @@ describe('AgentBrowserHost OpenClaw browser baseline', () => {
     expect(reopened.structuredContent).toEqual({
       pages: [{ id: 4, url: AgentBrowserPageUrl.Blank, selected: true }],
     });
+  });
+});
+
+describe('AgentBrowserHost script evaluation', () => {
+  const scrollFunction = '(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }';
+
+  const setupPage = async (overrides: Parameters<typeof createHost>[0] = {}) => {
+    const host = createHost(overrides);
+    await host.newPage();
+    const webContents = electronMocks.webContentsInstances[0];
+    const sendCommand = webContents.debugger.sendCommand;
+    const nodes = [
+      { nodeId: 'root', backendDOMNodeId: 100, childIds: ['first', 'second'], role: { value: 'RootWebArea' } },
+      { nodeId: 'first', parentId: 'root', backendDOMNodeId: 101, role: { value: 'button' } },
+      { nodeId: 'second', parentId: 'root', backendDOMNodeId: 102, role: { value: 'button' } },
+    ];
+    const evaluation: { response: Record<string, unknown> } = { response: { result: { value: true } } };
+    sendCommand.mockImplementation(async (command: string, params?: Record<string, unknown>) => {
+      switch (command) {
+        case BrowserCdpCommand.GetFullAXTree:
+          return { nodes };
+        case BrowserCdpCommand.ResolveNode:
+          return { object: { objectId: `element-${params?.backendNodeId}` } };
+        case BrowserCdpCommand.CallFunctionOn:
+        case BrowserCdpCommand.Evaluate:
+          return evaluation.response;
+        default:
+          return {};
+      }
+    });
+    const snapshot = await host.handleToolRequest({ tool: BrowserMcpTool.TakeSnapshot, args: { pageId: 1 } });
+    const refs = (snapshot.structuredContent?.snapshot as { children: Array<{ id: string }> })
+      .children.map(node => node.id);
+    const evaluate = (source = scrollFunction, args: unknown[] = [refs[0]]) => host.handleToolRequest({
+      tool: BrowserMcpTool.EvaluateScript,
+      args: { pageId: 1, function: source, args },
+    });
+    return { host, webContents, sendCommand, nodes, evaluation, refs, evaluate };
+  };
+
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  test('passes snapshot refs as DOM objects for the OpenClaw scroll action', async () => {
+    const { sendCommand, evaluate } = await setupPage();
+
+    const response = await evaluate();
+
+    expect(response).toMatchObject({ content: [{ text: 'true' }] });
+    expect(response.isError).not.toBe(true);
+    expect(sendCommand).toHaveBeenCalledWith(BrowserCdpCommand.ResolveNode, {
+      backendNodeId: 101,
+      objectGroup: expect.any(String),
+    });
+    const call = sendCommand.mock.calls.find(([command]) => command === BrowserCdpCommand.CallFunctionOn)?.[1];
+    expect(call).toMatchObject({
+      objectId: 'element-101',
+      arguments: [{ objectId: 'element-101' }],
+      awaitPromise: true,
+      returnByValue: true,
+      userGesture: true,
+    });
+    const scrollIntoView = vi.fn();
+    expect(runInNewContext(`(${call.functionDeclaration})`)({ scrollIntoView })).toBe(true);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center', inline: 'center' });
+    expect(sendCommand).toHaveBeenCalledWith(BrowserCdpCommand.ReleaseObjectGroup, { objectGroup: call.objectGroup });
+  });
+
+  test('preserves literal arguments when no DOM refs are supplied', async () => {
+    const { sendCommand, evaluate, evaluation } = await setupPage();
+    const args = ['plain text', 42, null, true, { nested: ['value'] }];
+    evaluation.response = { result: { value: args } };
+
+    const response = await evaluate('async (...values) => values', args);
+
+    const call = sendCommand.mock.calls.find(([command]) => command === BrowserCdpCommand.Evaluate)?.[1];
+    await expect(runInNewContext(call.expression)).resolves.toEqual(args);
+    expect(response.structuredContent?.message).toBe(JSON.stringify(args));
+    expect(sendCommand.mock.calls.some(([command]) => command === BrowserCdpCommand.ResolveNode)).toBe(false);
+    expect(sendCommand).toHaveBeenCalledWith(BrowserCdpCommand.ReleaseObjectGroup, { objectGroup: call.objectGroup });
+  });
+
+  test('preserves argument order with multiple DOM refs and literal values', async () => {
+    const { sendCommand, refs, evaluate } = await setupPage();
+
+    await evaluate('(...values) => values.length', [7, refs[1], 'label', refs[0], { enabled: true }]);
+
+    expect(sendCommand).toHaveBeenCalledWith(BrowserCdpCommand.CallFunctionOn, expect.objectContaining({
+      objectId: 'element-102',
+      arguments: [
+        { value: 7 },
+        { objectId: 'element-102' },
+        { value: 'label' },
+        { objectId: 'element-101' },
+        { value: { enabled: true } },
+      ],
+    }));
+    const groups = sendCommand.mock.calls
+      .filter(([command]) => command === BrowserCdpCommand.ResolveNode)
+      .map(([, params]) => params.objectGroup);
+    expect(groups).toHaveLength(2);
+    expect(new Set(groups).size).toBe(1);
+  });
+
+  test.each([false, true])('rejects stale refs after invalidation (navigation: %s)', async navigation => {
+    const { host, webContents, nodes, refs, sendCommand, evaluate } = await setupPage();
+    if (navigation) {
+      webContents.emit('did-navigate');
+    } else {
+      nodes.splice(1);
+      await host.handleToolRequest({ tool: BrowserMcpTool.TakeSnapshot, args: { pageId: 1 } });
+    }
+
+    const response = await evaluate();
+
+    expect(response).toMatchObject({
+      isError: true,
+      content: [{ text: `Browser element ${refs[0]} is stale. Take a new snapshot and try again.` }],
+    });
+    expect(sendCommand.mock.calls.some(([command]) => command === BrowserCdpCommand.CallFunctionOn)).toBe(false);
+    expect(sendCommand.mock.calls.some(([command]) => command === BrowserCdpCommand.Evaluate)).toBe(false);
+  });
+
+  test.each([
+    {
+      response: { exceptionDetails: { text: 'Uncaught', exception: { description: 'TypeError: detailed failure' } } },
+      message: 'TypeError: detailed failure',
+    },
+    {
+      response: { result: { description: 'Error: remote failure' }, exceptionDetails: { text: 'Uncaught' } },
+      message: 'Error: remote failure',
+    },
+    {
+      response: { exceptionDetails: { text: 'Uncaught', exception: { value: 'Thrown string' } } },
+      message: 'Thrown string',
+    },
+    {
+      response: { exceptionDetails: { text: 'Evaluation context unavailable' } },
+      message: 'Evaluation context unavailable',
+    },
+  ])('returns actionable exception details: $message', async ({ response, message }) => {
+    const { evaluate, evaluation, sendCommand, host } = await setupPage();
+    evaluation.response = response;
+
+    expect(await evaluate()).toMatchObject({ isError: true, content: [{ text: message }] });
+    expect(sendCommand).toHaveBeenLastCalledWith(BrowserCdpCommand.ReleaseObjectGroup, { objectGroup: expect.any(String) });
+    expect(host.getState().error).toBeUndefined();
+  });
+
+  test('releases already resolved DOM objects if a later ref cannot be resolved', async () => {
+    const { sendCommand, refs, evaluate } = await setupPage();
+    const implementation = sendCommand.getMockImplementation()!;
+    sendCommand.mockImplementation(async (command, params) => {
+      if (command === BrowserCdpCommand.ResolveNode && params.backendNodeId === 102) {
+        throw new Error('DOM node is no longer available');
+      }
+      return implementation(command, params);
+    });
+
+    expect(await evaluate('(first, second) => true', refs)).toMatchObject({
+      isError: true,
+      content: [{ text: 'DOM node is no longer available' }],
+    });
+    const group = sendCommand.mock.calls.find(([command]) => command === BrowserCdpCommand.ResolveNode)?.[1].objectGroup;
+    expect(sendCommand).toHaveBeenLastCalledWith(BrowserCdpCommand.ReleaseObjectGroup, { objectGroup: group });
+  });
+
+  test('does not replace the operation result when navigation interrupts object cleanup', async () => {
+    const { sendCommand, evaluate, evaluation } = await setupPage();
+    const implementation = sendCommand.getMockImplementation()!;
+    sendCommand.mockImplementation(async (command, params) => {
+      if (command === BrowserCdpCommand.ReleaseObjectGroup) throw new Error('Execution context destroyed');
+      return implementation(command, params);
+    });
+
+    expect((await evaluate()).isError).not.toBe(true);
+    evaluation.response = { exceptionDetails: { text: 'Original failure' } };
+    expect(await evaluate()).toMatchObject({ isError: true, content: [{ text: 'Original failure' }] });
+  });
+
+  test('keeps the native view attached and free of stale banners after a tool failure', async () => {
+    const removeChildView = vi.fn();
+    const { host, evaluate, evaluation, webContents } = await setupPage({
+      getMainWindow: () => ({
+        isVisible: () => true,
+        isDestroyed: () => false,
+        getContentBounds: () => ({ width: 800, height: 600 }),
+        contentView: { addChildView: vi.fn(), removeChildView },
+      }) as never,
+    });
+    host.setView({ visible: true, bounds: { x: 0, y: 80, width: 800, height: 520 } });
+    evaluation.response = { exceptionDetails: { text: 'Uncaught', exception: { description: 'Error: tool failure' } } };
+
+    expect((await evaluate()).isError).toBe(true);
+    expect(host.getState()).toMatchObject({ visible: true, selectedPageId: 1 });
+    expect(host.getState().error).toBeUndefined();
+    evaluation.response = { result: { value: true } };
+    expect((await evaluate()).isError).not.toBe(true);
+    expect(host.getState().error).toBeUndefined();
+    expect(removeChildView).not.toHaveBeenCalled();
+    expect(webContents.close).not.toHaveBeenCalled();
+  });
+
+  test('keeps page load errors separate from subsequent tool successes and failures', async () => {
+    const { host, webContents, evaluation, evaluate } = await setupPage();
+    webContents.emit('did-fail-load', {}, -2, 'ERR_FAILED', 'https://example.com', true);
+    const pageError = host.getState().error;
+    expect(pageError).toBe('ERR_FAILED (https://example.com)');
+
+    expect((await evaluate()).isError).not.toBe(true);
+    expect(host.getState().error).toBe(pageError);
+    evaluation.response = { exceptionDetails: { text: 'Uncaught' } };
+    expect((await evaluate()).isError).toBe(true);
+    expect(host.getState().error).toBe(pageError);
+
+    webContents.emit('did-start-loading');
+    expect(host.getState().error).toBeUndefined();
+  });
+
+  test('honors the script evaluation setting for DOM ref arguments', async () => {
+    const { evaluate, sendCommand } = await setupPage({
+      getBrowserConfig: () => ({ displayMode: BrowserDisplayMode.InApp, evaluateEnabled: false }),
+    });
+    sendCommand.mockClear();
+
+    expect((await evaluate()).isError).toBe(true);
+    expect(sendCommand).not.toHaveBeenCalled();
   });
 });
