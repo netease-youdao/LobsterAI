@@ -220,6 +220,9 @@ const OpenClawGatewayMethod = {
   ChatSend: 'chat.send',
   SessionsSubscribe: 'sessions.subscribe',
 } as const;
+const OpenClawChatQueueMode = {
+  Steer: 'steer',
+} as const;
 const BRIDGE_MAX_MESSAGES = 20;
 const BRIDGE_MAX_MESSAGE_CHARS = 1200;
 const FORK_COMPACTION_SUMMARY_MAX_CHARS = 40_000;
@@ -521,10 +524,9 @@ type OpenClawSessionPatchGatewayResult = {
   resolved?: unknown;
 };
 
-type OpenClawQueueSteerResult = {
-  queued?: boolean;
-  reason?: string;
-  errorMessage?: string;
+type OpenClawChatSendSteerResult = {
+  runId?: string;
+  status?: string;
 };
 
 type PendingBtwRun = {
@@ -2517,6 +2519,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   /** Session keys whose origin is "heartbeat" — discovered via polling, used to filter real-time events. */
   private readonly heartbeatSessionKeys = new Set<string>();
   /**
+   * Empty main-route rows are metadata used by OpenClaw channel routing, not
+   * conversations. Cache their gateway revision so the 10s recovery poll does
+   * not repeatedly request the same empty history.
+   */
+  private readonly emptyPolledMainSessionSignatures = new Map<string, string>();
+  /**
    * Native IM runs are not represented by the gateway's `hasActiveRun` flag.
    * Track explicit `sessions.changed` lifecycle starts so the polling fallback
    * cannot immediately overwrite their loading state with `completed`.
@@ -2524,10 +2532,17 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly channelLifecycleRunBySessionKey = new Map<string, ChannelSessionLifecycleRun>();
   private readonly reportedChannelPromptRunIds = new Set<string>();
   private channelPollingTimer: ReturnType<typeof setInterval> | null = null;
+  private channelEventReconcileTimer: ReturnType<typeof setTimeout> | null = null;
+  private channelSessionPollInFlight: Promise<void> | null = null;
+  private channelPollingTimeoutCount = 0;
+  private channelPollingBackoffUntil = 0;
 
   private static readonly CHANNEL_POLL_INTERVAL_MS = 10_000;
+  private static readonly CHANNEL_POLL_MAX_BACKOFF_MS = 60_000;
+  private static readonly CHANNEL_EVENT_RECONCILE_DELAY_MS = 250;
   private static readonly CHANNEL_LIFECYCLE_RUN_GRACE_MS = 60_000;
   private static readonly REPORTED_CHANNEL_PROMPT_RUN_ID_LIMIT = 2_000;
+  private static readonly EMPTY_POLLED_MAIN_SESSION_CACHE_LIMIT = 64;
   private static readonly GATEWAY_SESSION_SUBSCRIBE_TIMEOUT_MS = 5_000;
   /** Delay before pulling a cron delivery mirror into the mapped conversation,
    *  giving the gateway time to flush the transcript append. */
@@ -4248,27 +4263,146 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       clearInterval(this.channelPollingTimer);
       this.channelPollingTimer = null;
     }
+    if (this.channelEventReconcileTimer) {
+      clearTimeout(this.channelEventReconcileTimer);
+      this.channelEventReconcileTimer = null;
+    }
+    // An in-flight request cannot be cancelled through the gateway client API.
+    // Detach it so a newly connected client can start its own reconciliation;
+    // performChannelSessionPoll ignores results from a superseded client.
+    this.channelSessionPollInFlight = null;
+    this.emptyPolledMainSessionSignatures.clear();
+    this.resetChannelPollingBackoff();
   }
 
-  private async pollChannelSessions(): Promise<void> {
+  private getPolledMainSessionSignature(row: Record<string, unknown>): string {
+    return JSON.stringify([
+      row.sessionId,
+      row.updatedAt,
+      row.lastInteractionAt,
+      row.lastActivityAt,
+      row.lastRunId,
+      row.status,
+      row.hasActiveRun,
+    ]);
+  }
+
+  private rememberEmptyPolledMainSession(sessionKey: string, signature: string): void {
+    this.emptyPolledMainSessionSignatures.delete(sessionKey);
+    this.emptyPolledMainSessionSignatures.set(sessionKey, signature);
+    while (
+      this.emptyPolledMainSessionSignatures.size
+      > OpenClawRuntimeAdapter.EMPTY_POLLED_MAIN_SESSION_CACHE_LIMIT
+    ) {
+      const oldestKey = this.emptyPolledMainSessionSignatures.keys().next().value;
+      if (typeof oldestKey !== 'string') break;
+      this.emptyPolledMainSessionSignatures.delete(oldestKey);
+    }
+  }
+
+  private async hasMeaningfulPolledMainSessionHistory(
+    client: GatewayClientLike,
+    sessionKey: string,
+    row: Record<string, unknown>,
+  ): Promise<boolean> {
+    const signature = this.getPolledMainSessionSignature(row);
+    if (this.emptyPolledMainSessionSignatures.get(sessionKey) === signature) {
+      return false;
+    }
+    try {
+      const history = await client.request<{ messages?: unknown[] }>('chat.history', {
+        sessionKey,
+        limit: OpenClawRuntimeAdapter.FULL_HISTORY_SYNC_LIMIT,
+      }, { timeoutMs: 10_000 });
+      if (this.gatewayClient !== client) {
+        return false;
+      }
+      const messages = Array.isArray(history?.messages) ? history.messages : [];
+      const meaningfulEntries = this.collectChannelHistoryEntries(messages, false, false);
+      if (meaningfulEntries.length > 0) {
+        this.emptyPolledMainSessionSignatures.delete(sessionKey);
+        return true;
+      }
+      this.rememberEmptyPolledMainSession(sessionKey, signature);
+      return false;
+    } catch (error) {
+      console.warn(
+        '[ChannelSync] deferred main session discovery because history could not be read:',
+        sessionKey,
+        error,
+      );
+      return false;
+    }
+  }
+
+  private scheduleChannelSessionReconciliation(): void {
+    if (!this.channelPollingTimer || this.channelEventReconcileTimer) {
+      return;
+    }
+    this.channelEventReconcileTimer = setTimeout(() => {
+      this.channelEventReconcileTimer = null;
+      void this.pollChannelSessions();
+    }, OpenClawRuntimeAdapter.CHANNEL_EVENT_RECONCILE_DELAY_MS);
+  }
+
+  private resetChannelPollingBackoff(): void {
+    this.channelPollingTimeoutCount = 0;
+    this.channelPollingBackoffUntil = 0;
+  }
+
+  private markChannelPollingTimeout(): number {
+    this.channelPollingTimeoutCount += 1;
+    const backoffMs = Math.min(
+      OpenClawRuntimeAdapter.CHANNEL_POLL_INTERVAL_MS
+        * (2 ** Math.max(0, this.channelPollingTimeoutCount - 1)),
+      OpenClawRuntimeAdapter.CHANNEL_POLL_MAX_BACKOFF_MS,
+    );
+    this.channelPollingBackoffUntil = Date.now() + backoffMs;
+    return backoffMs;
+  }
+
+  private pollChannelSessions(): Promise<void> {
+    if (this.channelSessionPollInFlight) {
+      console.debug('[ChannelSync] channel session polling already in flight; reusing the current poll.');
+      return this.channelSessionPollInFlight;
+    }
+    if (this.channelPollingBackoffUntil > Date.now()) {
+      console.debug('[ChannelSync] skipped channel session polling during timeout backoff.');
+      return Promise.resolve();
+    }
+
+    const poll: Promise<void> = this.performChannelSessionPoll().finally(() => {
+      if (this.channelSessionPollInFlight === poll) {
+        this.channelSessionPollInFlight = null;
+      }
+    });
+    this.channelSessionPollInFlight = poll;
+    return poll;
+  }
+
+  private async performChannelSessionPoll(): Promise<void> {
     if (!this.gatewayClient || !this.channelSessionSync) {
       console.warn('[ChannelSync] pollChannelSessions: skipped — gatewayClient:', !!this.gatewayClient, 'channelSessionSync:', !!this.channelSessionSync);
       return;
     }
+    const client = this.gatewayClient;
     // Reuse the existing poll cadence for marker cleanup instead of creating
     // one timer per IM run. This bounds memory even if both a terminal event
     // and the corresponding terminal sessions.list row are lost.
     this.pruneStaleChannelLifecycleRuns();
     if (this.isGatewayRpcDegraded()) {
-      console.debug('[ChannelSync] skipped channel session polling because gateway session RPCs are degraded.');
+      console.debug('[ChannelSync] skipped background polling while foreground session RPCs are degraded.');
       return;
     }
     try {
       const params = { activeMinutes: 60, limit: CHANNEL_SESSION_DISCOVERY_LIMIT };
-      const result = await this.gatewayClient.request('sessions.list', params, {
+      const result = await client.request('sessions.list', params, {
         timeoutMs: OpenClawRuntimeAdapter.CONTEXT_USAGE_LIST_TIMEOUT_MS,
       });
-      this.markGatewayRpcSuccess();
+      if (this.gatewayClient !== client) {
+        return;
+      }
+      this.resetChannelPollingBackoff();
       const sessions = (result as Record<string, unknown>)?.sessions;
       if (!Array.isArray(sessions)) {
         console.warn('[ChannelSync] pollChannelSessions: sessions.list returned non-array sessions:', typeof sessions, 'full result keys:', Object.keys(result as Record<string, unknown>));
@@ -4310,10 +4444,16 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         // was missed. Resolve every supported key kind here; cron run keys must
         // use their stable job cache so unique run ids never enter the channel
         // rejected-key set or accumulate in sessionIdBySessionKey.
-        const sessionId = isCronSessionKey(key)
+        let sessionId = isCronSessionKey(key)
           ? this.channelSessionSync.resolveOrCreateCronSession(key)
-          : this.channelSessionSync.resolveOrCreateSession(key)
-            ?? this.channelSessionSync.resolveOrCreateMainAgentSession(key);
+          : this.channelSessionSync.resolveOrCreateSession(key);
+        if (
+          !sessionId
+          && isRecord(row)
+          && await this.hasMeaningfulPolledMainSessionHistory(client, key, row)
+        ) {
+          sessionId = this.channelSessionSync.resolveOrCreateMainAgentSession(key);
+        }
         if (sessionId && isRecord(row)) {
           this.syncChannelSessionRunStatus({
             coworkSessionId: sessionId,
@@ -4384,9 +4524,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         }
       }
     } catch (error) {
-      this.recordGatewayRpcFailure('sessions.list', error);
+      if (this.gatewayClient !== client) {
+        return;
+      }
       if (this.isGatewayRequestTimeout(error, 'sessions.list')) {
-        console.warn('[ChannelSync] channel session polling timed out; polling will back off temporarily:', error);
+        const backoffMs = this.markChannelPollingTimeout();
+        console.warn(`[ChannelSync] channel session polling timed out; retrying after ${backoffMs}ms:`, error);
         return;
       }
       console.error('[ChannelSync] pollChannelSessions: error during polling:', error);
@@ -4764,18 +4907,20 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     try {
       const client = this.requireGatewayClient();
-      const result = await client.request<OpenClawQueueSteerResult>(
-        'sessions.queueSteer',
+      const result = await client.request<OpenClawChatSendSteerResult>(
+        OpenClawGatewayMethod.ChatSend,
         {
-          key: turn.sessionKey,
+          sessionKey: turn.sessionKey,
           message: trimmedText,
+          queueMode: OpenClawChatQueueMode.Steer,
+          deliver: false,
           idempotencyKey: clientSteerId,
         },
         { timeoutMs: OpenClawRuntimeAdapter.SESSION_PATCH_TIMEOUT_MS },
       );
-      if (result?.queued === true) {
+      if (result?.runId) {
         console.debug(
-          '[OpenClawRuntime] steer accepted by active-run queue.',
+          '[OpenClawRuntime] steer accepted by native chat queue.',
           `Session ${sessionId}.`,
           `Client steer ${clientSteerId}.`,
           `OpenClaw key ${turn.sessionKey}.`,
@@ -4787,19 +4932,18 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         };
       }
 
-      const rejectedReason = this.mapOpenClawSteerRejectReason(result?.reason);
       console.warn(
-        '[OpenClawRuntime] steer rejected by active-run queue.',
+        '[OpenClawRuntime] native chat queue returned an invalid steer acknowledgement.',
         `Session ${sessionId}.`,
         `Client steer ${clientSteerId}.`,
-        `Reason ${result?.reason ?? 'unknown'}.`,
+        `Status ${result?.status ?? 'unknown'}.`,
       );
       return {
         success: false,
         status: CoworkSteerStatus.Rejected,
         clientSteerId,
-        reason: rejectedReason,
-        error: result?.errorMessage ?? `Steer was rejected by OpenClaw (${result?.reason ?? 'unknown'}).`,
+        reason: CoworkSteerRejectReason.RuntimeRejected,
+        error: 'OpenClaw returned an invalid steer acknowledgement.',
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -4819,24 +4963,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         clientSteerId,
         reason,
         error: reason === CoworkSteerRejectReason.RuntimeUnsupported
-          ? 'The current OpenClaw runtime does not expose same-turn steering yet. Rebuild the pinned runtime with LobsterAI patches.'
+          ? 'The current OpenClaw runtime does not support native same-turn steering.'
           : message,
       };
-    }
-  }
-
-  private mapOpenClawSteerRejectReason(reason: string | undefined): CoworkSteerRejectReason {
-    switch (reason) {
-      case 'no_active_run':
-        return CoworkSteerRejectReason.NoActiveTurn;
-      case 'not_streaming':
-        return CoworkSteerRejectReason.NotStreaming;
-      case 'compacting':
-        return CoworkSteerRejectReason.ContextMaintenance;
-      case 'runtime_rejected':
-        return CoworkSteerRejectReason.RuntimeRejected;
-      default:
-        return CoworkSteerRejectReason.Unknown;
     }
   }
 
@@ -5920,6 +6049,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       caps: [OPENCLAW_GATEWAY_TOOL_EVENTS_CAP],
       role: 'operator',
       scopes: ['operator.admin'],
+      // LobsterAI connects to its own loopback gateway with an explicit shared
+      // token. Avoid loading OpenClaw's ambient ~/.openclaw device identity,
+      // which belongs to a separate standalone OpenClaw installation.
+      deviceIdentity: null,
       onHelloOk: () => {
         if (clientGeneration !== this.gatewayClientGeneration) {
           console.debug('[ChannelSync] ignored hello from a stale gateway client generation');
@@ -7151,6 +7284,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (event.event === OpenClawGatewayEvent.SessionsChanged) {
       try {
         this.handleChannelSessionLifecycleEvent(event.payload);
+        this.scheduleChannelSessionReconciliation();
       } catch (error) {
         // Channel parsing and mapping may touch plugin-provided identifiers and
         // local persistence. Keep a malformed event isolated from the gateway
@@ -7729,6 +7863,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   private resolveOrCreateChannelSession(sessionKey: string): string | null {
     if (!this.channelSessionSync) return null;
+    this.emptyPolledMainSessionSignatures.delete(sessionKey);
     if (isCronSessionKey(sessionKey)) {
       return this.channelSessionSync.resolveOrCreateCronSession(sessionKey) ?? null;
     }

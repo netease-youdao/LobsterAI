@@ -40,6 +40,10 @@ const {
 const { prepareHostPeerPackage } = require('./openclaw-plugin-preparers/host-peer.cjs');
 const { pruneHostPeerLeftovers } = require('./openclaw-plugin-host-peer-leftovers.cjs');
 
+const OPENCLAW_PLUGIN_INSTALL_TIMEOUT_MS = process.platform === 'win32'
+  ? 20 * 60 * 1000
+  : 5 * 60 * 1000;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -602,6 +606,13 @@ function buildPluginInstallEnv(plugin) {
   return env;
 }
 
+function buildOpenClawPluginInstallArgs(installSpec) {
+  // This script installs only the exact plugin versions reviewed and pinned in
+  // LobsterAI's package.json, so the build itself is the capability-consent
+  // boundary required by OpenClaw v2026.8.1.
+  return ['plugins', 'install', installSpec, '--force', '--accept-capabilities'];
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -696,7 +707,7 @@ function main() {
         }
 
         if (id === BEE_PACKAGE_NAME || npmSpec === BEE_PACKAGE_NAME) {
-          log('  Preparing NetEase Bee package for OpenClaw 2026.6 runtime install.');
+          log('  Preparing NetEase Bee package for the bundled OpenClaw runtime.');
           if (!fs.existsSync(installSpec) || fs.statSync(installSpec).isDirectory()) {
             installSpec = npmPack(`${BEE_PACKAGE_NAME}@${version}`, plugin.registry, stagingDir);
           }
@@ -704,7 +715,7 @@ function main() {
         }
 
         if (id === NIM_PLUGIN_PACKAGE_ID) {
-          log('  Preparing NIM package for OpenClaw 2026.6 runtime install.');
+          log('  Preparing NIM package for the bundled OpenClaw runtime.');
           installSpec = prepareOpenClawNimPackage(installSpec, stagingDir, { log });
         }
 
@@ -723,13 +734,17 @@ function main() {
         }
 
         runOpenClawCli(
-          ['plugins', 'install', installSpec, '--force', '--dangerously-force-unsafe-install'],
+          buildOpenClawPluginInstallArgs(installSpec),
           {
             env: {
               OPENCLAW_STATE_DIR: stagingDir,
               ...installEnv,
             },
             stdio: 'inherit',
+            // OpenClaw scans and extracts large signed plugin archives before
+            // dependency installation; keep the Windows wrapper above the
+            // runtime's extended archive budget so cleanup is not interrupted.
+            timeout: OPENCLAW_PLUGIN_INSTALL_TIMEOUT_MS,
           }
         );
 
@@ -828,6 +843,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildOpenClawPluginInstallArgs,
   buildNpmPackInvocation,
   buildPluginInstallEnv,
   buildNpmPackEnv,

@@ -2481,9 +2481,14 @@ FunctionEnd
   TarExtractVerify:
   ; Success requires every large bundled resource to be usable -- an exit code
   ; alone must never trigger deletion of the only recovery source.
-  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" TarExtractVerifySkills
+  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" TarExtractVerifyBundleAssets
   IfFileExists "$INSTDIR\resources\cfmind\openclaw.mjs" TarExtractVerifySkills
   StrCpy $R5 "runtime-entry-missing"
+  Goto TarExtractRequiredResourceMissing
+
+  TarExtractVerifyBundleAssets:
+  IfFileExists "$INSTDIR\resources\cfmind\web-tree-sitter.wasm" TarExtractVerifySkills
+  StrCpy $R5 "runtime-bundle-assets-missing"
   Goto TarExtractRequiredResourceMissing
 
   TarExtractVerifySkills:
@@ -2859,10 +2864,15 @@ FunctionEnd
   StrCpy $lobsterNewInstallValidationReason "app-asar-missing"
   IfFileExists "$INSTDIR\resources\app.asar" 0 NewInstallPrevalidateFailed
 
-  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" NewInstallPrevalidateSkills
+  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" NewInstallPrevalidateBundleAssets
   IfFileExists "$INSTDIR\resources\cfmind\openclaw.mjs" NewInstallPrevalidateSkills
   StrCpy $lobsterNewInstallValidationReason "runtime-entry-missing"
   Goto NewInstallPrevalidateFailed
+
+  NewInstallPrevalidateBundleAssets:
+    StrCpy $lobsterNewInstallValidationReason "runtime-bundle-assets-missing"
+    IfFileExists "$INSTDIR\resources\cfmind\web-tree-sitter.wasm" NewInstallPrevalidateSkills
+    Goto NewInstallPrevalidateFailed
 
   NewInstallPrevalidateSkills:
     StrCpy $lobsterNewInstallValidationReason "skills-content-missing"

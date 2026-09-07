@@ -1,26 +1,29 @@
 import { describe, test } from 'vitest';
 
-import { expectPatchContains } from './patchTestUtils';
+import {
+  expectCurrentOpenClawPatchMissing,
+  expectOpenClawSourceContains,
+  isOpenClawSourceAvailable,
+} from './patchTestUtils';
 
-describe('openclaw-empty-sse-data.patch', () => {
-  test('filters empty OpenAI-compatible SSE data frames before SDK parsing', () => {
-    expectPatchContains('openclaw-empty-sse-data.patch', [
-      'diff --git a/src/agents/openai-transport-stream.ts',
-      'OPENAI_COMPAT_EMPTY_SSE_DATA_FRAME_LIMIT',
-      'filterEmptySseDataFramesFromResponse',
-      'buildOpenAICompletionsFetch',
-      'fetch: buildOpenAICompletionsFetch(model)',
-      'Provider stream emitted too many empty SSE data frames.',
-    ]);
+describe('OpenClaw empty SSE data patch decisions', () => {
+  test('drops the old patch because v2026.8.1 sanitizes unreadable SSE frames upstream', () => {
+    expectCurrentOpenClawPatchMissing('openclaw-empty-sse-data.patch');
   });
 
-  test('adds OpenClaw coverage for filtering and runaway empty-frame streams', () => {
-    expectPatchContains('openclaw-empty-sse-data.patch', [
-      'diff --git a/src/agents/openai-transport-stream.test.ts',
-      'drops empty SSE data frames before the OpenAI SDK stream parser sees them',
-      'fails streams that emit too many consecutive empty SSE data frames',
-      'does not rewrite non-event-stream responses',
-      'data: [DONE]',
+  test.skipIf(!isOpenClawSourceAvailable())('keeps the generalized upstream sanitizer and coverage', () => {
+    expectOpenClawSourceContains([
+      {
+        file: 'src/agents/provider-transport-fetch.ts',
+        snippets: ['function hasReadableSseData', 'SSE_SANITIZE_BUFFER_MAX_CHARS'],
+      },
+      {
+        file: 'src/agents/provider-transport-fetch.test.ts',
+        snippets: [
+          'drops event-only SSE frames before the OpenAI SDK stream parser sees them',
+          'drops whitespace-only SSE data frames with CRLF delimiters',
+        ],
+      },
     ]);
   });
 });

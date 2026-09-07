@@ -1,0 +1,236 @@
+diff --git a/src/agents/embedded-agent-runner/prepared-compaction-runtime.ts b/src/agents/embedded-agent-runner/prepared-compaction-runtime.ts
+index c5b63be9..ddf5719f 100644
+--- a/src/agents/embedded-agent-runner/prepared-compaction-runtime.ts
++++ b/src/agents/embedded-agent-runner/prepared-compaction-runtime.ts
+@@ -607,6 +607,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
+         config: params.config,
+         agentId: sessionAgentId,
+         workspaceDir: effectiveWorkspace,
++        runtimeCwd: effectiveCwd,
+         defaultThinkLevel,
+         reasoningLevel: params.reasoningLevel ?? "off",
+         extraSystemPrompt: params.extraSystemPrompt,
+diff --git a/src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts b/src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts
+index 3558a832..af11b305 100644
+--- a/src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts
+@@ -226,6 +226,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
+       config: attempt.config,
+       agentId: params.sessionAgentId,
+       workspaceDir: params.effectiveWorkspace,
++      runtimeCwd: params.effectiveCwd,
+       defaultThinkLevel: attempt.thinkLevel,
+       reasoningLevel: attempt.reasoningLevel ?? "off",
+       extraSystemPrompt,
+diff --git a/src/agents/embedded-agent-runner/run/attempt.cwd-split.test.ts b/src/agents/embedded-agent-runner/run/attempt.cwd-split.test.ts
+index 8332917a..5ca0cdbf 100644
+--- a/src/agents/embedded-agent-runner/run/attempt.cwd-split.test.ts
++++ b/src/agents/embedded-agent-runner/run/attempt.cwd-split.test.ts
+@@ -59,6 +59,12 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
+     expect(toolsCall?.workspaceDir).toBe(bootstrapCall?.workspaceDir);
+     expect(toolsCall?.spawnWorkspaceDir).toBe(bootstrapCall?.workspaceDir);
+
++    const promptCall = hoisted.embeddedSystemPromptInputs[0] as
++      | { runtimeCwd?: string; workspaceDir?: string }
++      | undefined;
++    expect(promptCall?.runtimeCwd).toBe(taskRepo);
++    expect(promptCall?.workspaceDir).toBe(bootstrapCall?.workspaceDir);
++
+     const resourceLoaderInit = hoisted.defaultResourceLoaderInitMock.mock.calls[0]?.[0] as
+       | { cwd?: string }
+       | undefined;
+diff --git a/src/agents/embedded-agent-runner/system-prompt.test.ts b/src/agents/embedded-agent-runner/system-prompt.test.ts
+index 38d6fbc3..97fc6b68 100644
+--- a/src/agents/embedded-agent-runner/system-prompt.test.ts
++++ b/src/agents/embedded-agent-runner/system-prompt.test.ts
+@@ -33,6 +33,27 @@ describe("buildEmbeddedSystemPrompt", () => {
+     clearMemoryPluginState();
+   });
+
++  it("forwards a separate runtime cwd into directory role guidance", () => {
++    const prompt = buildEmbeddedSystemPrompt({
++      workspaceDir: "/tmp/openclaw-agent",
++      runtimeCwd: "/tmp/user-project",
++      reasoningTagHint: false,
++      runtimeInfo: {
++        host: "local",
++        os: "darwin",
++        arch: "arm64",
++        node: "24",
++        model: "test",
++      },
++      tools: [],
++      userTimezone: "UTC",
++      userDate: "2026-01-05",
++    });
++
++    expect(prompt).toContain("Task working directory: /tmp/user-project");
++    expect(prompt).toContain("Agent workspace: /tmp/openclaw-agent");
++  });
++
+   it("forwards provider prompt contributions into the embedded prompt", () => {
+     const prompt = buildEmbeddedSystemPrompt({
+       workspaceDir: "/tmp/openclaw",
+diff --git a/src/agents/embedded-agent-runner/system-prompt.ts b/src/agents/embedded-agent-runner/system-prompt.ts
+index 27344de3..9ad6395d 100644
+--- a/src/agents/embedded-agent-runner/system-prompt.ts
++++ b/src/agents/embedded-agent-runner/system-prompt.ts
+@@ -24,6 +24,7 @@ export function buildEmbeddedSystemPrompt(params: {
+   config?: OpenClawConfig;
+   agentId?: string;
+   workspaceDir: string;
++  runtimeCwd?: string;
+   defaultThinkLevel?: ThinkLevel;
+   reasoningLevel?: ReasoningLevel;
+   extraSystemPrompt?: string;
+@@ -93,6 +94,7 @@ export function buildEmbeddedSystemPrompt(params: {
+     config: params.config,
+     agentId: params.agentId ?? params.runtimeInfo.agentId,
+     workspaceDir: params.workspaceDir,
++    runtimeCwd: params.runtimeCwd,
+     defaultThinkLevel: params.defaultThinkLevel,
+     reasoningLevel: params.reasoningLevel,
+     extraSystemPrompt: params.extraSystemPrompt,
+diff --git a/src/agents/system-prompt.test.ts b/src/agents/system-prompt.test.ts
+index 30fcc796..6eb69476 100644
+--- a/src/agents/system-prompt.test.ts
++++ b/src/agents/system-prompt.test.ts
+@@ -1057,6 +1057,31 @@ describe("buildAgentSystemPrompt", () => {
+     expect(prompt).toContain("Reminder: commit your changes in this workspace after edits.");
+   });
+
++  it("separates the task working directory from the persistent agent workspace", () => {
++    const prompt = buildAgentSystemPrompt({
++      workspaceDir: "/tmp/openclaw-agent",
++      runtimeCwd: "/tmp/user-project",
++      workspaceNotes: ["Reminder: commit your changes in this workspace after edits."],
++    });
++
++    expect(prompt).toContain("## Directory Roles");
++    expect(prompt).toContain("Task working directory: /tmp/user-project");
++    expect(prompt).toContain("Agent workspace: /tmp/openclaw-agent");
++    expect(prompt).toContain("generated documents, images, build intermediates");
++    expect(prompt).toContain("MEMORY.md, and memory/**");
++    expect(prompt).toContain("commit task changes in the task working directory");
++    expect(prompt).not.toContain("\n## Workspace\n");
++  });
++
++  it("preserves workspace guidance when task cwd is not separate", () => {
++    const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw" });
++
++    expect(prompt).toContain("## Workspace");
++    expect(prompt).toContain("Working directory: /tmp/openclaw");
++    expect(prompt).toContain("Single global file workspace");
++    expect(prompt).not.toContain("## Directory Roles");
++  });
++
+   it("includes bootstrap instructions in system prompt when bootstrap is pending", () => {
+     const prompt = buildAgentSystemPrompt({
+       workspaceDir: "/tmp/openclaw",
+@@ -2108,6 +2133,7 @@ describe("buildAgentSystemPrompt", () => {
+   it("describes sandboxed runtime and elevated when allowed", () => {
+     const prompt = buildAgentSystemPrompt({
+       workspaceDir: "/tmp/openclaw",
++      runtimeCwd: "/tmp/user-project",
+       toolNames: ["exec"],
+       sandboxInfo: {
+         enabled: true,
+@@ -2120,6 +2146,7 @@ describe("buildAgentSystemPrompt", () => {
+     });
+
+     expect(prompt).toContain("Working directory: /workspace");
++    expect(prompt).not.toContain("## Directory Roles");
+     expect(prompt).toContain(
+       "File tools use host workspace /tmp/openclaw. exec uses container /workspace or relative workdir paths; never host paths.",
+     );
+diff --git a/src/agents/system-prompt.ts b/src/agents/system-prompt.ts
+index f673d212..a966df54 100644
+--- a/src/agents/system-prompt.ts
++++ b/src/agents/system-prompt.ts
+@@ -782,6 +782,8 @@ export function appendModelIdentitySystemPrompt(params: {
+
+ export function buildAgentSystemPrompt(params: {
+   workspaceDir: string;
++  /** Runtime cwd for user task files. Defaults to workspaceDir. */
++  runtimeCwd?: string;
+   defaultThinkLevel?: ThinkLevel;
+   reasoningLevel?: ReasoningLevel;
+   extraSystemPrompt?: string;
+@@ -1081,6 +1083,7 @@ export function buildAgentSystemPrompt(params: {
+     : (params.silentReplyPromptMode ?? "generic");
+   const sandboxContainerWorkspace = params.sandboxInfo?.containerWorkspaceDir?.trim();
+   const sanitizedWorkspaceDir = sanitizeForPromptLiteral(params.workspaceDir);
++  const sanitizedRuntimeCwd = sanitizeForPromptLiteral(params.runtimeCwd ?? params.workspaceDir);
+   const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
+     ? sanitizeForPromptLiteral(sandboxContainerWorkspace)
+     : "";
+@@ -1097,10 +1100,25 @@ export function buildAgentSystemPrompt(params: {
+     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
+       ? `File tools use host workspace ${sanitizedWorkspaceDir}.${hasExec ? ` exec uses container ${sanitizedSandboxContainerWorkspace} or relative workdir paths; never host paths. Prefer relative paths for both.` : ""}`
+       : "Single global file workspace unless explicitly told otherwise.";
++  const hasSeparateRuntimeCwd =
++    params.sandboxInfo?.enabled !== true && sanitizedRuntimeCwd !== sanitizedWorkspaceDir;
+   const workspaceOnlyGuidance =
+     params.fsWorkspaceOnly === true
+-      ? "tools.fs.workspaceOnly ON: file-tool scratch/temp/meta stays in workspace, preferably `.openclaw/tmp/`. If file tools need it later, never exec-write `/tmp`; use workspace path."
++      ? hasSeparateRuntimeCwd
++        ? "tools.fs.workspaceOnly ON: file-tool scratch/temp/meta stays in the task working directory, preferably `.openclaw/tmp/`. If file tools need it later, never exec-write `/tmp`; use a task working directory path."
++        : "tools.fs.workspaceOnly ON: file-tool scratch/temp/meta stays in workspace, preferably `.openclaw/tmp/`. If file tools need it later, never exec-write `/tmp`; use workspace path."
+       : "";
++  const directorySection = hasSeparateRuntimeCwd
++    ? [
++        "## Directory Roles",
++        `Task working directory: ${sanitizedRuntimeCwd}`,
++        `Agent workspace: ${sanitizedWorkspaceDir}`,
++        "Use the task working directory for user-requested files, source code, generated documents, images, build intermediates, temporary files, and final deliverables.",
++        "Use the agent workspace only for OpenClaw persistent agent files: AGENTS.md, SOUL.md, IDENTITY.md, USER.md, TOOLS.md, HEARTBEAT.md, MEMORY.md, and memory/**.",
++        "Relative paths used by normal file and shell tools resolve against the task working directory. For persistent agent files, use their absolute path under the agent workspace.",
++        "Never use the agent workspace as a scratch, build, export, or deliverables directory unless the user explicitly requests it.",
++      ]
++    : ["## Workspace", `Working directory: ${displayWorkspaceDir}`, workspaceGuidance];
+   const safetySection = [
+     "## Safety",
+     "No independent goals, self-preservation, replication, resource acquisition, power-seeking, or plans beyond user request.",
+@@ -1150,6 +1168,15 @@ export function buildAgentSystemPrompt(params: {
+     hasGateway,
+   });
+   const workspaceNotes = normalizeStringEntries(params.workspaceNotes);
++  if (hasSeparateRuntimeCwd) {
++    const commitReminderIndex = workspaceNotes.indexOf(
++      "Reminder: commit your changes in this workspace after edits.",
++    );
++    if (commitReminderIndex >= 0) {
++      workspaceNotes[commitReminderIndex] =
++        "Reminder: commit task changes in the task working directory after edits. If you edit persistent agent files, commit those changes in the agent workspace.";
++    }
++  }
+
+   const contextFiles = sortContextFilesForPrompt(
+     filterProjectScopedCuratedContextFiles({
+@@ -1164,6 +1191,7 @@ export function buildAgentSystemPrompt(params: {
+   });
+   const stablePrefixCacheKey = hashStablePromptInput({
+     workspaceDir: params.workspaceDir,
++    runtimeCwd: sanitizedRuntimeCwd,
+     promptMode,
+     promptSurface,
+     toolLines,
+@@ -1190,6 +1218,7 @@ export function buildAgentSystemPrompt(params: {
+     displayWorkspaceDir,
+     workspaceGuidance,
+     workspaceOnlyGuidance,
++    directorySection,
+     workspaceNotes,
+     bootstrapMode: params.bootstrapMode,
+     bootstrapSystemPromptSections,
+@@ -1342,9 +1371,7 @@ export function buildAgentSystemPrompt(params: {
+         ? params.modelAliasLines.join("\n")
+         : "",
+       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
+-      "## Workspace",
+-      `Working directory: ${displayWorkspaceDir}`,
+-      workspaceGuidance,
++      ...directorySection,
+       workspaceOnlyGuidance,
+       ...workspaceNotes,
+       "",

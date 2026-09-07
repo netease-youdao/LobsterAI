@@ -1,16 +1,63 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-const electronMocks = vi.hoisted(() => ({
-  clearCache: vi.fn<() => Promise<void>>(),
-  clearStorageData: vi.fn<() => Promise<void>>(),
-  createImageFromBuffer: vi.fn(),
-  flushStorageData: vi.fn(),
-  flushStore: vi.fn<() => Promise<void>>(),
-  fromPartition: vi.fn(),
-  setPermissionCheckHandler: vi.fn(),
-  setPermissionRequestHandler: vi.fn(),
-  setProxy: vi.fn<() => Promise<void>>(),
-}));
+const electronMocks = vi.hoisted(() => {
+  const createWebContents = () => {
+    let currentUrl = '';
+    let zoomFactor = 1;
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const webContents = {
+      close: vi.fn(),
+      debugger: {
+        attach: vi.fn(),
+        detach: vi.fn(),
+        isAttached: vi.fn(() => false),
+        sendCommand: vi.fn(),
+      },
+      executeJavaScript: vi.fn(),
+      focus: vi.fn(),
+      getTitle: vi.fn(() => ''),
+      getURL: vi.fn(() => currentUrl),
+      getZoomFactor: vi.fn(() => zoomFactor),
+      isDestroyed: vi.fn(() => false),
+      loadURL: vi.fn<(url: string) => Promise<void>>(async url => {
+        currentUrl = url;
+      }),
+      navigationHistory: {
+        canGoBack: vi.fn(() => false),
+        canGoForward: vi.fn(() => false),
+        goBack: vi.fn(),
+        goForward: vi.fn(),
+      },
+      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+        listeners.set(event, listener);
+        return webContents;
+      }),
+      reload: vi.fn(),
+      sendInputEvent: vi.fn(),
+      setWindowOpenHandler: vi.fn(),
+      setZoomFactor: vi.fn((factor: number) => {
+        zoomFactor = factor;
+      }),
+      stop: vi.fn(),
+    };
+    return webContents;
+  };
+  const webContentsInstances: Array<ReturnType<typeof createWebContents>> = [];
+
+  return {
+    clearCache: vi.fn<() => Promise<void>>(),
+    clearStorageData: vi.fn<() => Promise<void>>(),
+    createImageFromBuffer: vi.fn(),
+    createWebContents,
+    flushStorageData: vi.fn(),
+    flushStore: vi.fn<() => Promise<void>>(),
+    fromPartition: vi.fn(),
+    setPermissionCheckHandler: vi.fn(),
+    setPermissionRequestHandler: vi.fn(),
+    setProxy: vi.fn<() => Promise<void>>(),
+    webContentsInstances,
+  };
+});
 
 vi.mock('electron', () => ({
   nativeImage: {
@@ -19,19 +66,31 @@ vi.mock('electron', () => ({
   session: {
     fromPartition: electronMocks.fromPartition,
   },
-  WebContentsView: class {},
+  WebContentsView: class {
+    readonly webContents = electronMocks.createWebContents();
+    readonly setBackgroundColor = vi.fn();
+    readonly setBounds = vi.fn();
+
+    constructor() {
+      electronMocks.webContentsInstances.push(this.webContents);
+    }
+  },
 }));
 
 import {
   type BrowserCredentialLoginState,
   BrowserCredentialLoginStatus,
 } from '../../shared/browserCredentials/constants';
-import { AgentBrowserPartition } from '../../shared/browserWebAccess/constants';
-import { AgentBrowserHost } from './agentBrowserHost';
+import {
+  AgentBrowserPageUrl,
+  AgentBrowserPartition,
+  BrowserDisplayMode,
+} from '../../shared/browserWebAccess/constants';
+import { AgentBrowserHost, BrowserMcpTool } from './agentBrowserHost';
 
 const createHost = (): AgentBrowserHost => new AgentBrowserHost({
   getMainWindow: () => null,
-  getBrowserConfig: () => undefined,
+  getBrowserConfig: () => ({ displayMode: BrowserDisplayMode.InApp }),
   useSystemProxy: () => false,
   emitState: vi.fn(),
   credentialService: {} as never,
@@ -39,27 +98,28 @@ const createHost = (): AgentBrowserHost => new AgentBrowserHost({
   resolveSessionKey: () => undefined,
 });
 
-describe('AgentBrowserHost', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    electronMocks.clearCache.mockResolvedValue();
-    electronMocks.clearStorageData.mockResolvedValue();
-    electronMocks.createImageFromBuffer.mockReset();
-    electronMocks.flushStore.mockResolvedValue();
-    electronMocks.setProxy.mockResolvedValue();
-    electronMocks.fromPartition.mockReturnValue({
-      cookies: {
-        flushStore: electronMocks.flushStore,
-      },
-      clearCache: electronMocks.clearCache,
-      clearStorageData: electronMocks.clearStorageData,
-      flushStorageData: electronMocks.flushStorageData,
-      setPermissionCheckHandler: electronMocks.setPermissionCheckHandler,
-      setPermissionRequestHandler: electronMocks.setPermissionRequestHandler,
-      setProxy: electronMocks.setProxy,
-    });
+beforeEach(() => {
+  vi.clearAllMocks();
+  electronMocks.webContentsInstances.length = 0;
+  electronMocks.clearCache.mockResolvedValue();
+  electronMocks.clearStorageData.mockResolvedValue();
+  electronMocks.createImageFromBuffer.mockReset();
+  electronMocks.flushStore.mockResolvedValue();
+  electronMocks.setProxy.mockResolvedValue();
+  electronMocks.fromPartition.mockReturnValue({
+    cookies: {
+      flushStore: electronMocks.flushStore,
+    },
+    clearCache: electronMocks.clearCache,
+    clearStorageData: electronMocks.clearStorageData,
+    flushStorageData: electronMocks.flushStorageData,
+    setPermissionCheckHandler: electronMocks.setPermissionCheckHandler,
+    setPermissionRequestHandler: electronMocks.setPermissionRequestHandler,
+    setProxy: electronMocks.setProxy,
   });
+});
 
+describe('AgentBrowserHost', () => {
   test('uses a persistent Electron partition for in-app pages', () => {
     createHost();
 
@@ -235,5 +295,126 @@ describe('AgentBrowserHost', () => {
 
     expect(stateAfterMiddleClose.selectedPageId).toBe(3);
     expect(stateAfterRightClose.selectedPageId).toBe(1);
+  });
+});
+
+describe('AgentBrowserHost OpenClaw browser baseline', () => {
+  test('serializes concurrent cold list requests into one blank page', async () => {
+    const host = createHost();
+
+    const results = await Promise.all([
+      host.handleToolRequest({ tool: BrowserMcpTool.ListPages, args: {} }),
+      host.handleToolRequest({ tool: BrowserMcpTool.ListPages, args: {} }),
+      host.handleToolRequest({ tool: BrowserMcpTool.ListPages, args: {} }),
+    ]);
+
+    expect(electronMocks.webContentsInstances).toHaveLength(1);
+    expect(electronMocks.webContentsInstances[0].loadURL).toHaveBeenCalledOnce();
+    expect(electronMocks.webContentsInstances[0].loadURL).toHaveBeenCalledWith(AgentBrowserPageUrl.Blank);
+    for (const result of results) {
+      expect(result.structuredContent).toEqual({
+        pages: [{ id: 1, url: AgentBrowserPageUrl.Blank, selected: true }],
+      });
+    }
+  });
+
+  test('reuses the cold-start page once for the OpenClaw new-page sequence', async () => {
+    const host = createHost();
+    await host.handleToolRequest({ tool: BrowserMcpTool.ListPages, args: {} });
+
+    const opened = await host.handleToolRequest({
+      tool: BrowserMcpTool.NewPage,
+      args: { url: AgentBrowserPageUrl.Blank },
+    });
+    const navigated = await host.handleToolRequest({
+      tool: BrowserMcpTool.NavigatePage,
+      args: { pageId: 1, url: 'https://example.com/?lobsterai_in_app_regression=1' },
+    });
+
+    expect(electronMocks.webContentsInstances).toHaveLength(1);
+    expect(opened.structuredContent).toEqual({
+      pages: [{ id: 1, url: AgentBrowserPageUrl.Blank, selected: true }],
+    });
+    expect(navigated.isError).not.toBe(true);
+    expect(electronMocks.webContentsInstances[0].loadURL).toHaveBeenNthCalledWith(
+      2,
+      'https://example.com/?lobsterai_in_app_regression=1',
+    );
+    expect(host.getState().tabs).toEqual([
+      expect.objectContaining({
+        pageId: 1,
+        url: 'https://example.com/?lobsterai_in_app_regression=1',
+        selected: true,
+      }),
+    ]);
+
+    await host.handleToolRequest({
+      tool: BrowserMcpTool.NewPage,
+      args: { url: AgentBrowserPageUrl.Blank },
+    });
+    expect(electronMocks.webContentsInstances).toHaveLength(2);
+  });
+
+  test('creates a separate tab for a user blank-page action after OpenClaw initialization', async () => {
+    const host = createHost();
+    await host.handleToolRequest({ tool: BrowserMcpTool.ListPages, args: {} });
+
+    const state = await host.newPage();
+
+    expect(state.selectedPageId).toBe(2);
+    expect(state.tabs).toEqual([
+      expect.objectContaining({ pageId: 1, url: AgentBrowserPageUrl.Blank, selected: false }),
+      expect.objectContaining({ pageId: 2, url: AgentBrowserPageUrl.Blank, selected: true }),
+    ]);
+    expect(electronMocks.webContentsInstances).toHaveLength(2);
+    expect(electronMocks.webContentsInstances[0].loadURL).toHaveBeenCalledOnce();
+  });
+
+  test('preserves the current page and its zoom when the user opens and closes a blank tab', async () => {
+    const host = createHost();
+    await host.handleToolRequest({ tool: BrowserMcpTool.ListPages, args: {} });
+    await host.navigate('https://example.com/original');
+    host.setZoomFactor(1.2);
+
+    const newPageState = await host.newPage();
+
+    expect(newPageState.tabs).toEqual([
+      expect.objectContaining({
+        pageId: 1,
+        url: 'https://example.com/original',
+        selected: false,
+        zoomFactor: 1.2,
+      }),
+      expect.objectContaining({ pageId: 2, url: AgentBrowserPageUrl.Blank, selected: true }),
+    ]);
+    const closedState = host.closePage(2);
+    expect(closedState.selectedPageId).toBe(1);
+    expect(closedState.tabs).toHaveLength(1);
+    expect(closedState.tabs[0].zoomFactor).toBe(1.2);
+  });
+
+  test('does not reuse the bootstrap page after the user navigates it or closes it', async () => {
+    const host = createHost();
+    await host.handleToolRequest({ tool: BrowserMcpTool.ListPages, args: {} });
+    await host.navigate(AgentBrowserPageUrl.Blank);
+
+    const opened = await host.handleToolRequest({
+      tool: BrowserMcpTool.NewPage,
+      args: { url: AgentBrowserPageUrl.Blank },
+    });
+    expect(opened.isError).not.toBe(true);
+    expect(host.getState().tabs).toHaveLength(2);
+
+    host.closePage(2);
+    host.closePage(1);
+    await host.handleToolRequest({ tool: BrowserMcpTool.ListPages, args: {} });
+    host.closePage(3);
+    const reopened = await host.handleToolRequest({
+      tool: BrowserMcpTool.NewPage,
+      args: { url: AgentBrowserPageUrl.Blank },
+    });
+    expect(reopened.structuredContent).toEqual({
+      pages: [{ id: 4, url: AgentBrowserPageUrl.Blank, selected: true }],
+    });
   });
 });

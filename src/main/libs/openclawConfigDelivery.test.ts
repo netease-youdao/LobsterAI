@@ -9,7 +9,7 @@ import {
   stripPluginIndexManagedKeysFromRawConfig,
 } from './openclawConfigDelivery';
 
-const FILE_CONTENT = '{"models":{"providers":{"p":{"models":[{"id":"m-b"}]}}},"meta":{"lastTouchedAt":"t1"}}\n';
+const FILE_CONTENT = '{"models":{"providers":{"p":{"models":[{"id":"m-b"}]}}},"meta":{"lastTouchedVersion":"2026.8.1"}}\n';
 
 type RpcCall = { method: string; params: unknown };
 
@@ -217,7 +217,7 @@ describe('deliverOpenClawConfigToGateway', () => {
         allow: ['xai'],
         installs: { xai: { version: '1.0.0' } },
       },
-      meta: { lastTouchedAt: 't1' },
+      meta: { lastTouchedVersion: '2026.8.1' },
     });
     const { client, calls } = createClient({});
     const result = await deliverOpenClawConfigToGateway(baseInput({
@@ -234,7 +234,7 @@ describe('deliverOpenClawConfigToGateway', () => {
     expect(sent.plugins.installs).toBeUndefined();
     expect(sent.plugins.entries).toEqual({ xai: { enabled: true } });
     expect(sent.plugins.allow).toEqual(['xai']);
-    expect(sent.meta).toEqual({ lastTouchedAt: 't1' });
+    expect(sent.meta).toEqual({ lastTouchedVersion: '2026.8.1' });
   });
 
   test('invalid-config rejection reports rejected mode and never schedules a restart', async () => {

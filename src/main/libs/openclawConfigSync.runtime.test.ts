@@ -1,3 +1,4 @@
+import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -276,20 +277,54 @@ describe('OpenClawConfigSync runtime config output', () => {
     const mainEntry = config.agents.list.find((entry: { id?: string }) => entry.id === 'main');
 
     expect(config.cron.skipMissedJobs).toBe(true);
-    expect(config.cron.store).toBe(path.join(stateDir, 'cron', 'jobs.json'));
+    expect(config.cron.store).toBeUndefined();
+    expect(config.cron.maxConcurrentRuns).toBeUndefined();
     expect(config.agents.defaults.cwd).toBe(path.resolve(mainAgentWorkingDirectory));
     expect(mainEntry.cwd).toBe(path.resolve(mainAgentWorkingDirectory));
   });
 
-  test('disables OpenClaw remote model pricing refresh in generated config', async () => {
+  test('omits retired OpenClaw model pricing config', async () => {
     const sync = await createSync();
 
     const result = sync.sync('disable-model-pricing');
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.models.pricing).toEqual({ enabled: false });
+    expect(config.models.pricing).toBeUndefined();
+    expect(config.meta.lastTouchedAt).toBeUndefined();
   });
+
+  test.runIf(fs.existsSync(path.resolve('vendor/openclaw-runtime/current/openclaw.mjs')))(
+    'passes validation from the pinned OpenClaw runtime',
+    async () => {
+      const sync = await createSync();
+      const result = sync.sync('pinned-runtime-schema-validation');
+      expect(result.ok).toBe(true);
+
+      const runtimeRoot = path.resolve('vendor/openclaw-runtime/current');
+      const validation = spawnSync(
+        process.execPath,
+        [path.join(runtimeRoot, 'openclaw.mjs'), 'config', 'validate'],
+        {
+          cwd: runtimeRoot,
+          env: {
+            ...process.env,
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_HOME: tmpDir,
+            OPENCLAW_GATEWAY_TOKEN: 'gateway-token',
+          },
+          encoding: 'utf8',
+          timeout: 60_000,
+        },
+      );
+
+      const validationOutput = `${validation.stdout ?? ''}\n${validation.stderr ?? ''}`;
+      expect(validation.error, validationOutput).toBeUndefined();
+      expect(validation.status, validationOutput).toBe(0);
+    },
+    90_000,
+  );
 
   test('strips plugin-index-managed plugins.installs while preserving other plugins keys', async () => {
     // A leaked plugins.installs on disk poisons config.set hot delivery
@@ -344,7 +379,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.agents.defaults.memorySearch).toMatchObject({
+    expect(config.memory.search).toMatchObject({
       enabled: true,
       provider: 'none',
       fallback: 'none',
@@ -353,7 +388,8 @@ describe('OpenClawConfigSync runtime config output', () => {
         vector: { enabled: false },
       },
     });
-    expect(config.agents.defaults.memorySearch.remote).toBeUndefined();
+    expect(config.memory.search.remote).toBeUndefined();
+    expect(config.agents.defaults.memorySearch).toBeUndefined();
   });
 
   test('configures OpenClaw chat image attachment limit to 30MB', async () => {
@@ -366,7 +402,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.agents.defaults.mediaMaxMb).toBe(30);
   });
 
-  test('enables physical transcript rotation with a managed size threshold', async () => {
+  test('uses the OpenClaw 2026.8.1 active transcript compaction threshold', async () => {
     const sync = await createSync();
 
     const result = sync.sync('transcript-rotation');
@@ -374,9 +410,9 @@ describe('OpenClawConfigSync runtime config output', () => {
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.agents.defaults.compaction).toEqual({
-      truncateAfterCompaction: true,
       maxActiveTranscriptBytes: '32mb',
     });
+    expect(config.session.maintenance.rotateBytes).toBeUndefined();
   });
 
   test('disables optimized OpenClaw heartbeat by default', async () => {
@@ -391,7 +427,6 @@ describe('OpenClawConfigSync runtime config output', () => {
       target: 'none',
       lightContext: true,
       isolatedSession: true,
-      skipWhenBusy: true,
     });
   });
 
@@ -421,7 +456,6 @@ describe('OpenClawConfigSync runtime config output', () => {
       target: 'none',
       lightContext: true,
       isolatedSession: true,
-      skipWhenBusy: true,
     });
   });
 
@@ -869,11 +903,13 @@ describe('OpenClawConfigSync runtime config output', () => {
         id: 'qwen3.5-plus-YoudaoInner',
         api: 'openai-completions',
         input: ['text', 'image'],
+        compat: expect.objectContaining({ cacheControlFormat: 'anthropic' }),
       }),
       expect.objectContaining({
         id: 'qwen3.6-plus-YoudaoInner',
         api: 'openai-completions',
         input: ['text', 'image'],
+        compat: expect.objectContaining({ cacheControlFormat: 'anthropic' }),
       }),
       expect.objectContaining({
         id: 'claude-sonnet-4-6-YoudaoInner',
@@ -894,6 +930,7 @@ describe('OpenClawConfigSync runtime config output', () => {
         input: ['text', 'image'],
         reasoning: true,
         contextWindow: 1_000_000,
+        compat: expect.objectContaining({ cacheControlFormat: 'anthropic' }),
       }),
       expect.objectContaining({
         id: 'glm-5.1-YoudaoInner',
@@ -908,21 +945,17 @@ describe('OpenClawConfigSync runtime config output', () => {
       }),
     ]));
     expect(provider.models).toHaveLength(7);
-    expect(JSON.stringify(provider.models)).not.toContain('cacheControlFormat');
+    expect(JSON.stringify(provider.models)).toContain('cacheControlFormat');
     expect(JSON.stringify(provider.models)).not.toContain('supportsLongCacheRetention');
     expect(config.agents.defaults.models).toEqual(expect.objectContaining({
       'lobsterai-server/qwen3.5-plus-YoudaoInner': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'dashscope',
-          contextCacheMode: 'explicit',
         },
       },
       'lobsterai-server/qwen3.6-plus-YoudaoInner': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'dashscope',
-          contextCacheMode: 'explicit',
         },
       },
       'lobsterai-server/claude-sonnet-4-6-YoudaoInner': {
@@ -938,8 +971,6 @@ describe('OpenClawConfigSync runtime config output', () => {
       'lobsterai-server/claude-sonnet-4-6': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'anthropic-compatible',
-          contextCacheMode: 'explicit',
         },
       },
     }));
@@ -974,14 +1005,13 @@ describe('OpenClawConfigSync runtime config output', () => {
       expect.objectContaining({
         id: 'claude-sonnet-4-6',
         api: 'openai-completions',
+        compat: expect.objectContaining({ cacheControlFormat: 'anthropic' }),
       }),
     ]));
     expect(config.agents.defaults.models).toEqual(expect.objectContaining({
       'lobsterai-server/claude-sonnet-4-6': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'anthropic-compatible',
-          contextCacheMode: 'explicit',
         },
       },
     }));
@@ -1062,15 +1092,11 @@ describe('OpenClawConfigSync runtime config output', () => {
       'qwen/qwen3.5-plus': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'dashscope',
-          contextCacheMode: 'explicit',
         },
       },
       'qwen/qwen3.6-plus': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'dashscope',
-          contextCacheMode: 'explicit',
         },
       },
       'qwen/qwen3.7-plus': {},
@@ -1087,8 +1113,6 @@ describe('OpenClawConfigSync runtime config output', () => {
       'custom_0/claude-opus-4-6': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'anthropic-compatible',
-          contextCacheMode: 'explicit',
           extra_body: {
             metadata: 'custom-cache',
           },
@@ -1097,27 +1121,39 @@ describe('OpenClawConfigSync runtime config output', () => {
       'custom_0/anthropic/claude-sonnet-4-6': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'anthropic-compatible',
-          contextCacheMode: 'explicit',
         },
       },
       'custom_0/qwen3.5-plus': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'dashscope',
-          contextCacheMode: 'explicit',
         },
       },
       'custom_0/qwen3.6-plus': {
         params: {
           cacheRetention: 'short',
-          contextCacheProvider: 'dashscope',
-          contextCacheMode: 'explicit',
         },
       },
       'custom_0/deepseek-v4-pro': {},
       'custom_0/gpt-5.5-2026-04-24': {},
     }));
+
+    const qwenModels = config.models.providers.qwen.models;
+    const customModels = config.models.providers.custom_0.models;
+    for (const modelId of ['qwen3.5-plus', 'qwen3.6-plus']) {
+      expect(qwenModels.find((model: { id: string }) => model.id === modelId)?.compat).toEqual(
+        expect.objectContaining({ cacheControlFormat: 'anthropic' }),
+      );
+      expect(customModels.find((model: { id: string }) => model.id === modelId)?.compat).toEqual(
+        expect.objectContaining({ cacheControlFormat: 'anthropic' }),
+      );
+    }
+    for (const modelId of ['claude-opus-4-6', 'anthropic/claude-sonnet-4-6']) {
+      expect(customModels.find((model: { id: string }) => model.id === modelId)?.compat).toEqual(
+        expect.objectContaining({ cacheControlFormat: 'anthropic' }),
+      );
+    }
+    expect(qwenModels.find((model: { id: string }) => model.id === 'qwen3.7-plus')?.compat).toBeUndefined();
+    expect(customModels.find((model: { id: string }) => model.id === 'deepseek-v4-pro')?.compat).toBeUndefined();
   });
 
   test('writes a complete agent model allowlist when any model has custom params', async () => {
@@ -2825,16 +2861,6 @@ describe('OpenClawConfigSync runtime config output', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.tools.loopDetection).toEqual({
       enabled: true,
-      historySize: 48,
-      warningThreshold: 6,
-      unknownToolThreshold: 6,
-      criticalThreshold: 10,
-      globalCircuitBreakerThreshold: 30,
-      detectors: {
-        genericRepeat: true,
-        knownPollNoProgress: false,
-        pingPong: true,
-      },
     });
   });
 
@@ -3007,6 +3033,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     });
     expect(inAppConfig.browser.headless).toBeUndefined();
     expect(inAppConfig.browser.extraArgs).toBeUndefined();
+    expect(inAppConfig.browser.profiles[BrowserRuntimeProfile.InApp].color).toBeUndefined();
     expect(inAppConfig.mcp.servers[BrowserCredentialMcpServer.Name]).toEqual({
       command: 'C:/LobsterAI/LobsterAI.exe',
       args: [

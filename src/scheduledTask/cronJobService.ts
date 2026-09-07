@@ -13,6 +13,7 @@ import {
   GatewayStatus,
   InternalTaskMarker,
   IpcChannel,
+  OpenClawSystemPayloadKind,
   PayloadKind,
   ScheduleKind,
   TaskStatus,
@@ -59,15 +60,21 @@ type GatewaySchedule = GatewayScheduleAt | GatewayScheduleEvery | GatewaySchedul
 
 type GatewayPayload =
   | {
-      kind: 'agentTurn';
+      kind: typeof PayloadKind.AgentTurn;
       message: string;
       timeoutSeconds?: number;
       model?: string;
       thinking?: string;
     }
   | {
-      kind: 'systemEvent';
+      kind: typeof PayloadKind.SystemEvent;
       text: string;
+    }
+  | {
+      kind: typeof OpenClawSystemPayloadKind.Heartbeat;
+    }
+  | {
+      kind: typeof OpenClawSystemPayloadKind.SkillCollectionReview;
     };
 
 interface GatewayDelivery {
@@ -188,6 +195,13 @@ export function isInternalScheduledTaskJob(job: InternalScheduledTaskCandidate):
   }
 
   const payload = job.payload;
+  if (
+    payload?.kind === OpenClawSystemPayloadKind.Heartbeat ||
+    payload?.kind === OpenClawSystemPayloadKind.SkillCollectionReview
+  ) {
+    return true;
+  }
+
   let payloadText: string | undefined;
   if (payload?.kind === PayloadKind.SystemEvent) {
     payloadText = payload.text;
@@ -432,6 +446,26 @@ function mapGatewayDeliveryTarget(
   };
 }
 
+function mapGatewayPayload(payload: GatewayPayload): ScheduledTaskPayload {
+  if (payload.kind === PayloadKind.SystemEvent) {
+    return { kind: PayloadKind.SystemEvent, text: payload.text };
+  }
+  if (payload.kind === PayloadKind.AgentTurn) {
+    return {
+      kind: PayloadKind.AgentTurn,
+      message: payload.message,
+      ...(typeof payload.timeoutSeconds === 'number'
+        ? { timeoutSeconds: payload.timeoutSeconds }
+        : {}),
+      ...(payload.model ? { model: payload.model } : {}),
+    };
+  }
+
+  // OpenClaw-owned cron jobs are filtered before mapping. Keep this fallback
+  // non-throwing so unexpected gateway data cannot unmount the scheduled-task UI.
+  return { kind: PayloadKind.SystemEvent, text: '' };
+}
+
 export function mapGatewayJob(job: GatewayJob): ScheduledTask {
   const delivery = job.delivery ?? { mode: DeliveryMode.None };
 
@@ -454,17 +488,7 @@ export function mapGatewayJob(job: GatewayJob): ScheduledTask {
     schedule: mapGatewaySchedule(job.schedule),
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
-    payload:
-      job.payload.kind === PayloadKind.SystemEvent
-        ? { kind: PayloadKind.SystemEvent, text: job.payload.text }
-        : {
-            kind: PayloadKind.AgentTurn,
-            message: job.payload.message,
-            ...(typeof job.payload.timeoutSeconds === 'number'
-              ? { timeoutSeconds: job.payload.timeoutSeconds }
-              : {}),
-            ...(job.payload.model ? { model: job.payload.model } : {}),
-          },
+    payload: mapGatewayPayload(job.payload),
     delivery: mappedDelivery,
     agentId: job.agentId ?? null,
     sessionKey: job.sessionKey ?? null,

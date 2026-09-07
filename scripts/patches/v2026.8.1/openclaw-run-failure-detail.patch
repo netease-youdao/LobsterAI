@@ -1,0 +1,41 @@
+diff --git a/src/auto-reply/reply/agent-runner-failure-reply.test.ts b/src/auto-reply/reply/agent-runner-failure-reply.test.ts
+index 23ac4ebb..efe08e1b 100644
+--- a/src/auto-reply/reply/agent-runner-failure-reply.test.ts
++++ b/src/auto-reply/reply/agent-runner-failure-reply.test.ts
+@@ -2,12 +2,21 @@ import { describe, expect, it } from "vitest";
+ import { SILENT_REPLY_TOKEN } from "../tokens.js";
+ import {
+   buildEmptyInteractiveReplyPayload,
++  buildExternalRunFailureReply,
+   buildPreflightCompactionFailureText,
+ } from "./agent-runner-failure-reply.js";
+
+ const EMPTY_INTERACTIVE_REPLY_TEXT =
+   "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.";
+
++describe("buildExternalRunFailureReply", () => {
++  it("forwards sanitized failure detail even when verbose details are not requested", () => {
++    expect(buildExternalRunFailureReply("INVALID_ARGUMENT: some other failure").text).toBe(
++      "⚠️ Agent failed before reply: INVALID_ARGUMENT: some other failure. Please try again, or use /new to start a fresh session.",
++    );
++  });
++});
++
+ describe("buildEmptyInteractiveReplyPayload", () => {
+   const baseParams = {
+     isInteractive: true,
+diff --git a/src/auto-reply/reply/agent-runner-failure-reply.ts b/src/auto-reply/reply/agent-runner-failure-reply.ts
+index 31978ee3..986f6483 100644
+--- a/src/auto-reply/reply/agent-runner-failure-reply.ts
++++ b/src/auto-reply/reply/agent-runner-failure-reply.ts
+@@ -302,9 +302,7 @@ export function buildExternalRunFailureReply(
+     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
+   }
+   return {
+-    text: options?.includeDetails
+-      ? formatForwardedExternalRunFailureText(normalizedMessage)
+-      : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
++    text: formatForwardedExternalRunFailureText(normalizedMessage),
+     isGenericRunnerFailure: true,
+   };
+ }

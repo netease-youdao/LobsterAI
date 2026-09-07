@@ -1,0 +1,385 @@
+diff --git a/extensions/memory-core/index.test.ts b/extensions/memory-core/index.test.ts
+index cc8508d9084..201f1fa578c 100644
+--- a/extensions/memory-core/index.test.ts
++++ b/extensions/memory-core/index.test.ts
+@@ -12,6 +12,7 @@ import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
+ const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
+ const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => null));
+ const authorizeSearchHitsMock = vi.hoisted(() => vi.fn(async ({ hits }) => hits));
++const probeProjectMemoryPresenceMock = vi.hoisted(() => vi.fn(async () => "none" as const));
+ const createMemoryRuntimeMock = vi.hoisted(() =>
+   vi.fn((_host: MemoryCoreRuntimeHost = {}) => ({
+     authorizeSearchHits: authorizeSearchHitsMock,
+@@ -30,6 +31,10 @@ vi.mock("./src/runtime-provider.js", () => ({
+   },
+ }));
+ 
++vi.mock("./src/project-memory-probe.js", () => ({
++  probeProjectMemoryPresence: probeProjectMemoryPresenceMock,
++}));
++
+ import plugin from "./index.js";
+ 
+ const hostRuntime = {
+@@ -370,6 +375,19 @@ describe("memory-core plugin runtime registration", () => {
+     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+   });
+ 
++  it("probes project memory without loading the full manager runtime", async () => {
++    const runtime = registerMemoryCoreRuntime();
++    const cfg = {} as OpenClawConfig;
++
++    await expect(runtime.probeProjectMemoryPresence?.({ cfg, agentId: "main" })).resolves.toBe(
++      "none",
++    );
++
++    expect(probeProjectMemoryPresenceMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
++    expect(createMemoryRuntimeMock).not.toHaveBeenCalled();
++    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
++  });
++
+   it("wires scoped memory search cleanup through the lazy runtime", async () => {
+     const runtime = registerMemoryCoreRuntime();
+     const cfg = {} as OpenClawConfig;
+diff --git a/extensions/memory-core/index.ts b/extensions/memory-core/index.ts
+index 15425c464b3..23a45bdaf43 100644
+--- a/extensions/memory-core/index.ts
++++ b/extensions/memory-core/index.ts
+@@ -42,6 +42,9 @@ const loadStandingIntentToolModule = createLazyRuntimeModule(
+ const loadRuntimeProviderModule = createLazyRuntimeModule(
+   () => import("./src/runtime-provider.js"),
+ );
++const loadProjectMemoryProbeModule = createLazyRuntimeModule(
++  () => import("./src/project-memory-probe.js"),
++);
+ 
+ function createLazyMemoryTool(params: {
+   options: MemoryToolOptions;
+@@ -189,6 +192,10 @@ function resolveMemoryToolOptions(
+ 
+ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRuntime {
+   return {
++    async probeProjectMemoryPresence(params) {
++      const { probeProjectMemoryPresence } = await loadProjectMemoryProbeModule();
++      return await probeProjectMemoryPresence(params);
++    },
+     async getMemorySearchManager(params) {
+       const { createMemoryRuntime } = await loadRuntimeProviderModule();
+       return await createMemoryRuntime(host).getMemorySearchManager(params);
+diff --git a/extensions/memory-core/src/runtime-provider.test.ts b/extensions/memory-core/src/runtime-provider.test.ts
+index 0321b623dc1..724b6c55770 100644
+--- a/extensions/memory-core/src/runtime-provider.test.ts
++++ b/extensions/memory-core/src/runtime-provider.test.ts
+@@ -18,6 +18,7 @@ const getMemorySearchManagerMock = vi.hoisted(() =>
+ );
+ const filterMemorySearchHitsBySessionVisibilityMock = vi.hoisted(() => vi.fn());
+ const configureMemoryCoreDreamingStateMock = vi.hoisted(() => vi.fn());
++const probeProjectMemoryPresenceMock = vi.hoisted(() => vi.fn(async () => "none" as const));
+ 
+ vi.mock("./memory/index.js", () => ({
+   closeAllMemorySearchManagers: vi.fn(async () => {}),
+@@ -33,9 +34,23 @@ vi.mock("./dreaming-state.js", () => ({
+   configureMemoryCoreDreamingState: configureMemoryCoreDreamingStateMock,
+ }));
+ 
++vi.mock("./project-memory-probe.js", () => ({
++  probeProjectMemoryPresence: probeProjectMemoryPresenceMock,
++}));
++
+ import { createMemoryRuntime, memoryRuntime } from "./runtime-provider.js";
+ 
+ describe("memoryRuntime", () => {
++  it("exposes the lightweight project-memory probe", async () => {
++    const cfg = {} as OpenClawConfig;
++
++    await expect(
++      memoryRuntime.probeProjectMemoryPresence?.({ cfg, agentId: "main" }),
++    ).resolves.toBe("none");
++    expect(probeProjectMemoryPresenceMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
++    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
++  });
++
+   it("preserves manager debug metadata", async () => {
+     const cfg = {} as OpenClawConfig;
+ 
+diff --git a/extensions/memory-core/src/runtime-provider.ts b/extensions/memory-core/src/runtime-provider.ts
+index b0b5f38b7d9..d11ce814638 100644
+--- a/extensions/memory-core/src/runtime-provider.ts
++++ b/extensions/memory-core/src/runtime-provider.ts
+@@ -8,6 +8,7 @@ import {
+   getMemorySearchManager,
+ } from "./memory/index.js";
+ import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
++import { probeProjectMemoryPresence } from "./project-memory-probe.js";
+ import { classifyWorkspaceMemoryPaths } from "./workspace-path-classifier.js";
+ 
+ export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}): MemoryPluginRuntime {
+@@ -16,6 +17,7 @@ export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}): MemoryPlu
+   }
+ 
+   return {
++    probeProjectMemoryPresence,
+     async getMemorySearchManager(params) {
+       const { manager, debug, error } = await getMemorySearchManager({
+         ...params,
+diff --git a/src/agents/project-memory-bootstrap.test.ts b/src/agents/project-memory-bootstrap.test.ts
+index 53dd49e249b..ce644663dec 100644
+--- a/src/agents/project-memory-bootstrap.test.ts
++++ b/src/agents/project-memory-bootstrap.test.ts
+@@ -9,17 +9,22 @@ import {
+ const runtimeMocks = vi.hoisted(() => ({
+   getManager: vi.fn(),
+   listCurated: vi.fn(),
++  probeProjectMemoryPresence: vi.fn(),
+   search: vi.fn(),
+ }));
+ 
+ vi.mock("../plugins/memory-state.js", () => ({
+-  getMemoryRuntime: () => ({ getMemorySearchManager: runtimeMocks.getManager }),
++  getMemoryRuntime: () => ({
++    getMemorySearchManager: runtimeMocks.getManager,
++    probeProjectMemoryPresence: runtimeMocks.probeProjectMemoryPresence,
++  }),
+ }));
+ 
+ describe("project memory bootstrap", () => {
+   beforeEach(() => {
+     runtimeMocks.getManager.mockReset();
+     runtimeMocks.listCurated.mockReset();
++    runtimeMocks.probeProjectMemoryPresence.mockReset();
+     runtimeMocks.search.mockReset();
+   });
+ 
+@@ -132,6 +137,45 @@ describe("project memory bootstrap", () => {
+     expect(buildProjectMemoryWriteInstruction(undefined)).toBe("");
+   });
+ 
++  it("skips full manager initialization when the runtime proves project memory is absent", async () => {
++    runtimeMocks.probeProjectMemoryPresence.mockResolvedValue("none");
++
++    await expect(
++      prepareProjectMemoryBootstrap({
++        cfg: {},
++        agentId: "main",
++        activeProjectKeys: ["github.com/OpenClaw/OpenClaw"],
++      }),
++    ).resolves.toEqual([]);
++
++    expect(runtimeMocks.probeProjectMemoryPresence).toHaveBeenCalledWith({
++      cfg: {},
++      agentId: "main",
++    });
++    expect(runtimeMocks.getManager).not.toHaveBeenCalled();
++  });
++
++  it.each(["present", "unknown"])(
++    "keeps the existing manager path when the project-memory probe returns %s",
++    async (presence) => {
++      runtimeMocks.probeProjectMemoryPresence.mockResolvedValue(presence);
++
++      const rendered = (await prepareEntries([entries[0]!])).join("\n");
++
++      expect(rendered).toContain("Use the release helper.");
++      expect(runtimeMocks.getManager).toHaveBeenCalledOnce();
++    },
++  );
++
++  it("fails open to the existing manager path when the project-memory probe throws", async () => {
++    runtimeMocks.probeProjectMemoryPresence.mockRejectedValue(new Error("source unavailable"));
++
++    const rendered = (await prepareEntries([entries[0]!])).join("\n");
++
++    expect(rendered).toContain("Use the release helper.");
++    expect(runtimeMocks.getManager).toHaveBeenCalledOnce();
++  });
++
+   it("filters tagged raw entries fail-closed with the all-keys rule", () => {
+     const contextFiles = [
+       {
+diff --git a/src/agents/project-memory-bootstrap.ts b/src/agents/project-memory-bootstrap.ts
+index 3dc6f582e56..ac7a52ff253 100644
+--- a/src/agents/project-memory-bootstrap.ts
++++ b/src/agents/project-memory-bootstrap.ts
+@@ -131,6 +131,20 @@ export async function prepareProjectMemoryBootstrap(params: {
+   if (!runtime) {
+     return [];
+   }
++  if (runtime.probeProjectMemoryPresence) {
++    try {
++      const presence = await runtime.probeProjectMemoryPresence({
++        cfg: params.cfg,
++        agentId: params.agentId,
++      });
++      if (presence === "none") {
++        return [];
++      }
++    } catch {
++      // A probe may only prove absence. Any uncertainty preserves the existing
++      // manager path so schema repair, indexing, and provenance checks still run.
++    }
++  }
+   try {
+     const lookup = await runtime.getMemorySearchManager({
+       cfg: params.cfg,
+diff --git a/src/plugin-sdk/agent-scope-runtime.ts b/src/plugin-sdk/agent-scope-runtime.ts
+index 62adbba5f2b..ba2319d0a2f 100644
+--- a/src/plugin-sdk/agent-scope-runtime.ts
++++ b/src/plugin-sdk/agent-scope-runtime.ts
+@@ -15,6 +15,7 @@ export {
+   listAgentIds,
+   resolveAgentConfig,
+   resolveAgentDir,
++  resolveAgentWorkspaceDir,
+   resolveDefaultAgentId,
+   tryResolveDefaultAgentId,
+ } from "../agents/agent-scope.js";
+diff --git a/src/plugin-sdk/memory-core-host-runtime-core.ts b/src/plugin-sdk/memory-core-host-runtime-core.ts
+index a8160021c08..c0dc9a181e7 100644
+--- a/src/plugin-sdk/memory-core-host-runtime-core.ts
++++ b/src/plugin-sdk/memory-core-host-runtime-core.ts
+@@ -31,6 +31,7 @@ export type { MemoryCitationsMode } from "../config/types.memory.js";
+ export type {
+   MemoryCorpusSearchResult,
+   MemoryFlushPlan,
++  MemoryProjectPresence,
+   MemoryPluginRuntime,
+   MemoryPromptSectionBuilder,
+ } from "../plugins/memory-state.js";
+diff --git a/src/plugins/memory-state.ts b/src/plugins/memory-state.ts
+index 913d731b243..cda0644b7f5 100644
+--- a/src/plugins/memory-state.ts
++++ b/src/plugins/memory-state.ts
+@@ -32,6 +32,7 @@ export type {
+   MemoryPluginCapability,
+   MemoryPluginPublicArtifact,
+   MemoryPluginPublicArtifactsProvider,
++  MemoryProjectPresence,
+   MemoryPluginRuntime,
+   MemoryPromptSectionBuilder,
+   MemoryPromptSectionParams,
+diff --git a/src/plugins/registry-contribution-types.ts b/src/plugins/registry-contribution-types.ts
+index ba8242819f5..59ffa878a00 100644
+--- a/src/plugins/registry-contribution-types.ts
++++ b/src/plugins/registry-contribution-types.ts
+@@ -220,7 +220,18 @@ export type RegisteredMemorySearchManager = Omit<MemorySearchManager, "readFile"
+ 
+ type MemoryRuntimeBackendConfig = { backend: "builtin" };
+ 
++export type MemoryProjectPresence = "none" | "present" | "unknown";
++
+ export type MemoryPluginRuntime = {
++  /**
++   * Cheap, conservative probe used before project-memory bootstrap. Returning
++   * `none` must prove that no project memory can be injected; `unknown` keeps
++   * the existing full-manager path.
++   */
++  probeProjectMemoryPresence?(params: {
++    cfg: OpenClawConfig;
++    agentId: string;
++  }): Promise<MemoryProjectPresence>;
+   getMemorySearchManager(params: {
+     cfg: OpenClawConfig;
+     agentId: string;
+diff --git a/extensions/memory-core/src/project-memory-probe.ts b/extensions/memory-core/src/project-memory-probe.ts
+new file mode 100644
+index 00000000000..80012a0bbd8
+--- /dev/null
++++ b/extensions/memory-core/src/project-memory-probe.ts
+@@ -0,0 +1,40 @@
++import fs from "node:fs";
++import path from "node:path";
++import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-scope-runtime";
++import type {
++  MemoryProjectPresence,
++  OpenClawConfig,
++} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
++
++const PROJECT_MEMORY_SOURCE_MAX_BYTES = 4 * 1024 * 1024;
++const PROJECT_ANNOTATION_MARKER_RE = /<!--\s*project\s*:/iu;
++
++function probeProjectMemorySource(filePath: string): MemoryProjectPresence {
++  try {
++    const stats = fs.statSync(filePath);
++    if (!stats.isFile() || stats.size > PROJECT_MEMORY_SOURCE_MAX_BYTES) {
++      return "unknown";
++    }
++    return PROJECT_ANNOTATION_MARKER_RE.test(fs.readFileSync(filePath, "utf8"))
++      ? "present"
++      : "none";
++  } catch (error) {
++    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "none" : "unknown";
++  }
++}
++
++export async function probeProjectMemoryPresence(params: {
++  cfg: OpenClawConfig;
++  agentId: string;
++}): Promise<MemoryProjectPresence> {
++  try {
++    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
++    // The bootstrap consumer only admits curated candidates from the canonical
++    // root MEMORY.md. Reading that source is both cheaper and more conservative
++    // than interpreting the memory index: no annotation marker means no valid
++    // indexed project candidate can exist, regardless of schema or index state.
++    return probeProjectMemorySource(path.join(workspaceDir, "MEMORY.md"));
++  } catch {
++    return "unknown";
++  }
++}
+diff --git a/extensions/memory-core/src/project-memory-probe.test.ts b/extensions/memory-core/src/project-memory-probe.test.ts
+new file mode 100644
+index 00000000000..94a1400fb3d
+--- /dev/null
++++ b/extensions/memory-core/src/project-memory-probe.test.ts
+@@ -0,0 +1,51 @@
++import fs from "node:fs/promises";
++import os from "node:os";
++import path from "node:path";
++import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
++import { afterEach, beforeEach, describe, expect, it } from "vitest";
++import { probeProjectMemoryPresence } from "./project-memory-probe.js";
++
++describe("project memory negative probe", () => {
++  let workspaceDir: string;
++  let cfg: OpenClawConfig;
++
++  beforeEach(async () => {
++    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-project-memory-probe-"));
++    cfg = {
++      agents: {
++        entries: {
++          main: { workspace: workspaceDir },
++        },
++      },
++    };
++  });
++
++  afterEach(async () => {
++    await fs.rm(workspaceDir, { recursive: true, force: true });
++  });
++
++  it("proves absence when the canonical source does not exist", async () => {
++    await expect(probeProjectMemoryPresence({ cfg, agentId: "main" })).resolves.toBe("none");
++  });
++
++  it("proves absence when the canonical source has no project marker", async () => {
++    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "- A global preference.\n");
++
++    await expect(probeProjectMemoryPresence({ cfg, agentId: "main" })).resolves.toBe("none");
++  });
++
++  it("reports possible project memory without duplicating candidate filtering", async () => {
++    await fs.writeFile(
++      path.join(workspaceDir, "MEMORY.md"),
++      "- A repository preference. <!-- project: github.com/openclaw/openclaw -->\n",
++    );
++
++    await expect(probeProjectMemoryPresence({ cfg, agentId: "main" })).resolves.toBe("present");
++  });
++
++  it("fails open when the canonical source cannot be safely inspected", async () => {
++    await fs.mkdir(path.join(workspaceDir, "MEMORY.md"));
++
++    await expect(probeProjectMemoryPresence({ cfg, agentId: "main" })).resolves.toBe("unknown");
++  });
++});

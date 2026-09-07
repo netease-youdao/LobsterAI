@@ -416,6 +416,11 @@ import {
 } from './libs/lobsterBrowserMcpServer';
 import { exportLogsZip } from './libs/logExport';
 import { MainLogReporter } from './libs/mainLogReporter';
+import {
+  createDevelopmentMainWindowLoadRecovery,
+  type DevelopmentMainWindowLoadRecovery,
+  MainWindowLoadErrorCode,
+} from './libs/mainWindowLoadRecovery';
 import { inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
 import {
   migrateAgentModelRefs,
@@ -1976,6 +1981,11 @@ const isLinux = process.platform === 'linux';
 const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
 const DEV_SERVER_URL = process.env.ELECTRON_START_URL || 'http://localhost:5175';
+const shouldOpenDevTools =
+  isDev && (
+    process.env.ELECTRON_OPEN_DEVTOOLS === '1'
+    || process.env.ELECTRON_OPEN_DEVTOOLS === 'true'
+  );
 const enableVerboseLogging =
   process.env.ELECTRON_ENABLE_LOGGING === '1' || process.env.ELECTRON_ENABLE_LOGGING === 'true';
 const disableGpu =
@@ -13597,6 +13607,7 @@ if (!gotTheLock) {
       autoHideMenuBar: true,
       enableLargerThanScreen: false,
     });
+    const createdMainWindow = mainWindow;
 
     // 设置 macOS Dock 图标（开发模式下 Electron 默认图标不是应用 Logo）
     if (isMac && isDev) {
@@ -13677,9 +13688,9 @@ if (!gotTheLock) {
       }
     };
 
-    // 窗口加载看门狗。一次性 30s 超时救不回被杀软扫描拖慢的首启动(现场案例:
-    // 首次加载超 30s,唯一一次 reload 后再无人接管,窗口永久空白),改为按退避
-    // 重试,封顶后停手保留现场。
+    // Packaged builds keep the bounded watchdog for first launches delayed by
+    // antivirus scanning. Development uses an explicit-failure retry controller
+    // below so an actively loading Vite page is never cancelled by the watchdog.
     const LOAD_WATCHDOG_DELAYS_MS = [30_000, 45_000, 60_000, 90_000];
     let loadRecoveryAttempts = 0;
     let loadWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
@@ -13699,6 +13710,7 @@ if (!gotTheLock) {
       loadWatchdogTimer = setTimeout(() => {
         loadWatchdogTimer = null;
         if (!mainWindow || mainWindow.isDestroyed()) return;
+        if (hasRenderedFirstFrame) return;
         if (!mainWindow.webContents.isLoadingMainFrame()) return;
         if (loadRecoveryAttempts >= LOAD_WATCHDOG_DELAYS_MS.length) {
           console.error(
@@ -13714,7 +13726,9 @@ if (!gotTheLock) {
         scheduleLoadWatchdog();
       }, delay);
     };
-    scheduleLoadWatchdog();
+    if (!isDev) {
+      scheduleLoadWatchdog();
+    }
 
     // 兜底显示:首帧迟迟不来时,宁可让用户看到纯背景色的窗口,也不能看起来
     // "应用没打开"。开机自启保持仅托盘,不弹窗。
@@ -13730,10 +13744,30 @@ if (!gotTheLock) {
       mainWindow.show();
     }, SHOW_FALLBACK_DELAY_MS);
 
+    let hasOpenedDevelopmentTools = false;
+    const developmentLoadRecovery: DevelopmentMainWindowLoadRecovery | null = isDev
+      ? createDevelopmentMainWindowLoadRecovery({
+          isTargetAvailable: () => !createdMainWindow.isDestroyed(),
+          loadDevelopmentUrl: () => createdMainWindow.loadURL(DEV_SERVER_URL),
+          loadErrorPage: () => createdMainWindow.loadFile(
+            path.join(__dirname, '../resources/error.html'),
+          ),
+        })
+      : null;
+
     mainWindow.webContents.on('did-finish-load', () => {
+      developmentLoadRecovery?.handleDidFinishLoad();
       clearLoadWatchdog();
       loadRecoveryAttempts = 0;
       markFirstFrameRendered('did-finish-load');
+      if (
+        shouldOpenDevTools
+        && !hasOpenedDevelopmentTools
+        && !createdMainWindow.isDestroyed()
+      ) {
+        hasOpenedDevelopmentTools = true;
+        createdMainWindow.webContents.openDevTools({ mode: 'detach', activate: false });
+      }
       windowStatePersist.emitState();
       if (openClawEngineManager && !mainWindow?.isDestroyed()) {
         mainWindow.webContents.send(
@@ -13772,49 +13806,31 @@ if (!gotTheLock) {
       scheduleReload('webContents-crashed');
     });
 
-    if (isDev) {
-      // 开发环境
-      const maxRetries = 3;
-      let retryCount = 0;
-
-      const tryLoadURL = () => {
-        mainWindow?.loadURL(DEV_SERVER_URL).catch(err => {
-          console.error('Failed to load URL:', err);
-          retryCount++;
-
-          if (retryCount < maxRetries) {
-            console.log(`Retrying to load URL (${retryCount}/${maxRetries})...`);
-            setTimeout(tryLoadURL, 3000);
-          } else {
-            console.error('Failed to load URL after maximum retries');
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.loadFile(path.join(__dirname, '../resources/error.html'));
-            }
-          }
-        });
-      };
-
-      tryLoadURL();
-
-      // 打开开发者工具
-      mainWindow.webContents.openDevTools();
-    } else {
-      // 生产环境
-      mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
-    }
-
-    // 添加错误处理
+    // Register failure handling before the first navigation. In development,
+    // the controller deduplicates the event and loadURL promise rejection.
     mainWindow.webContents.on(
       'did-fail-load',
       (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
         if (!isMainFrame) return;
-        console.error('Page failed to load:', errorCode, errorDescription);
-        // 如果加载失败，尝试重新加载
+        if (errorCode === MainWindowLoadErrorCode.Aborted) {
+          developmentLoadRecovery?.handleDidFailLoad({
+            errorCode,
+            errorDescription,
+            isMainFrame,
+            validatedUrl: validatedURL,
+          });
+          return;
+        }
         if (isDev) {
-          setTimeout(() => {
-            scheduleReload('did-fail-load');
-          }, 3000);
-        } else if (loadRecoveryAttempts < LOAD_WATCHDOG_DELAYS_MS.length) {
+          developmentLoadRecovery?.handleDidFailLoad({
+            errorCode,
+            errorDescription,
+            isMainFrame,
+            validatedUrl: validatedURL,
+          });
+        } else {
+          console.error('Page failed to load:', errorCode, errorDescription);
+          if (loadRecoveryAttempts >= LOAD_WATCHDOG_DELAYS_MS.length) return;
           loadRecoveryAttempts++;
           console.warn(
             `[Main] retrying window load after failure (attempt ${loadRecoveryAttempts}/${LOAD_WATCHDOG_DELAYS_MS.length})`,
@@ -13826,6 +13842,10 @@ if (!gotTheLock) {
         }
       },
     );
+    mainWindow.once('ready-to-show', () => {
+      developmentLoadRecovery?.handleFirstPaint();
+      clearLoadWatchdog();
+    });
     mainWindow.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
       if (isMainFrame && !isInPlace) {
         isOpenSessionFromNotificationReady = false;
@@ -13833,8 +13853,17 @@ if (!gotTheLock) {
       authCallbackRouter.handleNavigationStarted({ isMainFrame, isInPlace });
     });
 
+    if (isDev) {
+      developmentLoadRecovery?.start();
+    } else {
+      void createdMainWindow.loadFile(path.join(__dirname, '../dist/index.html')).catch(error => {
+        console.error('[Main] failed to start loading the packaged renderer:', error);
+      });
+    }
+
     // 当窗口关闭时，清除引用
     mainWindow.on('closed', () => {
+      developmentLoadRecovery?.dispose();
       clearLoadWatchdog();
       clearTimeout(showFallbackTimer);
       windowStatePersist.cleanup();

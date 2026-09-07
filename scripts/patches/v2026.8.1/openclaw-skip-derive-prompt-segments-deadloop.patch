@@ -1,0 +1,25 @@
+diff --git a/src/auto-reply/reply/agent-runner-result-complete.ts b/src/auto-reply/reply/agent-runner-result-complete.ts
+index a9e77b00..40803dae 100644
+--- a/src/auto-reply/reply/agent-runner-result-complete.ts
++++ b/src/auto-reply/reply/agent-runner-result-complete.ts
+@@ -21,7 +21,6 @@ import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js"
+ import {
+   accumulateSessionUsageFromTranscript,
+   buildInlineRawTracePayload,
+-  derivePromptSegments,
+   type TraceCompletionView,
+   type TraceContextManagementView,
+   type TracePromptSegmentView,
+@@ -166,9 +165,9 @@ export async function completeReplyAgentRun(input: {
+       runResult.meta?.requestShaping?.blockStreaming ??
+       normalizeOptionalString(resolvedBlockStreamingBreak),
+   };
+-  const promptSegments =
+-    (runResult.meta?.promptSegments as TracePromptSegmentView[] | undefined) ??
+-    derivePromptSegments(rawUserText);
++  // Prompt segmentation is trace-only. Deriving a fallback here can loop on
++  // media attachment markers and must never block reply delivery.
++  const promptSegments = runResult.meta?.promptSegments as TracePromptSegmentView[] | undefined;
+   const toolSummary = runResult.meta?.toolSummary as TraceToolSummaryView | undefined;
+   const completion =
+     (runResult.meta?.completion as TraceCompletionView | undefined) ??

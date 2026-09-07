@@ -1,0 +1,314 @@
+diff --git a/packages/gateway-protocol/src/schema/protocol-schema-fragment-sessions-lifecycle.ts b/packages/gateway-protocol/src/schema/protocol-schema-fragment-sessions-lifecycle.ts
+index d13f7248..d3ae1adb 100644
+--- a/packages/gateway-protocol/src/schema/protocol-schema-fragment-sessions-lifecycle.ts
++++ b/packages/gateway-protocol/src/schema/protocol-schema-fragment-sessions-lifecycle.ts
+@@ -2,6 +2,7 @@ import * as viewerPresence from "./sessions-viewer-presence.js";
+ import * as sessions from "./sessions.js";
+
+ export const SessionLifecycleProtocolSchemas = {
++  SessionsGoalCompatParams: sessions.SessionsGoalCompatParamsSchema,
+   SessionsGoalUpdateParams: sessions.SessionsGoalUpdateParamsSchema,
+   SessionsGoalClearParams: sessions.SessionsGoalClearParamsSchema,
+   SessionsGoalMutationResult: sessions.SessionsGoalMutationResultSchema,
+diff --git a/packages/gateway-protocol/src/schema/sessions-goal.ts b/packages/gateway-protocol/src/schema/sessions-goal.ts
+index cd5fd4bc..e30f2c0c 100644
+--- a/packages/gateway-protocol/src/schema/sessions-goal.ts
++++ b/packages/gateway-protocol/src/schema/sessions-goal.ts
+@@ -82,3 +82,27 @@ export const SessionsGoalMutationResultSchema = closedObject({
+ export type SessionsGoalUpdateParams = Static<typeof SessionsGoalUpdateParamsSchema>;
+ export type SessionsGoalClearParams = Static<typeof SessionsGoalClearParamsSchema>;
+ export type SessionsGoalMutationResult = Static<typeof SessionsGoalMutationResultSchema>;
++
++/** LobsterAI compatibility request for the pre-2026.8 Goal control surface. */
++export const SessionsGoalCompatParamsSchema = closedObject({
++  key: NonEmptyString,
++  agentId: Type.Optional(NonEmptyString),
++  action: Type.Optional(
++    Type.Union([
++      Type.Literal("block"),
++      Type.Literal("blocked"),
++      Type.Literal("clear"),
++      Type.Literal("complete"),
++      Type.Literal("create"),
++      Type.Literal("done"),
++      Type.Literal("pause"),
++      Type.Literal("resume"),
++      Type.Literal("set"),
++      Type.Literal("start"),
++      Type.Literal("status"),
++    ]),
++  ),
++  text: Type.Optional(Type.String()),
++  tokenBudget: Type.Optional(Type.Integer({ minimum: 1 })),
++});
++export type SessionsGoalCompatParams = Static<typeof SessionsGoalCompatParamsSchema>;
+diff --git a/packages/gateway-protocol/src/validator-registry.ts b/packages/gateway-protocol/src/validator-registry.ts
+index a65e355d..a3e2a8fa 100644
+--- a/packages/gateway-protocol/src/validator-registry.ts
++++ b/packages/gateway-protocol/src/validator-registry.ts
+@@ -263,6 +263,7 @@ export const validateSessionsViewerPresenceSetParams = compile(
+ );
+ export const validateSessionsAbortParams = compile(S.SessionsAbortParamsSchema);
+ export const validateSessionsPatchParams = compile(S.SessionsPatchParamsSchema);
++export const validateSessionsGoalCompatParams = compile(S.SessionsGoalCompatParamsSchema);
+ export const validateSessionsGoalUpdateParams = compile(S.SessionsGoalUpdateParamsSchema);
+ export const validateSessionsGoalClearParams = compile(S.SessionsGoalClearParamsSchema);
+ export const validateSessionsPatchManyParams = compile(S.SessionsPatchManyParamsSchema);
+diff --git a/src/gateway/methods/core-descriptors.ts b/src/gateway/methods/core-descriptors.ts
+index c04a0b8b..80fa6697 100644
+--- a/src/gateway/methods/core-descriptors.ts
++++ b/src/gateway/methods/core-descriptors.ts
+@@ -287,6 +287,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
+   // in shared/session-method-scopes.ts. The admin-only sticky configured-default
+   // persistence guard lives in server-methods/sessions-mutations.ts.
+   ["sessions.patch", "sessions-mutations", "dynamic", "<=2026.7"],
++  ["sessions.goal", "sessions-goal", "operator.write", "2026.8"],
+   ["sessions.goal.update", "sessions-goal", "operator.write", "2026.8"],
+   ["sessions.goal.clear", "sessions-goal", "operator.write", "2026.8"],
+   ["sessions.pluginPatch", "sessions-mutations", "operator.admin", "<=2026.7"],
+diff --git a/src/gateway/server-methods/sessions-goal.test.ts b/src/gateway/server-methods/sessions-goal.test.ts
+index 54a71156..86317751 100644
+--- a/src/gateway/server-methods/sessions-goal.test.ts
++++ b/src/gateway/server-methods/sessions-goal.test.ts
+@@ -89,7 +89,7 @@ function operation(action: string, extra: Record<string, unknown> = {}) {
+ async function invoke(
+   request: Record<string, unknown>,
+   options: {
+-    method?: "sessions.goal.update" | "sessions.goal.clear";
++    method?: "sessions.goal" | "sessions.goal.update" | "sessions.goal.clear";
+     client?: GatewayClient;
+     commitGuard?: () => void;
+   } = {},
+@@ -124,6 +124,31 @@ afterEach(() => {
+ });
+
+ describe("typed Goal management RPCs", () => {
++  it("keeps the LobsterAI compatibility RPC as a mutation-only Goal surface", async () => {
++    await withOpenClawTestState({ scenario: "minimal" }, async () => {
++      await seedSession();
++      const result = await invoke(
++        { key: sessionKey, action: "resume", text: "continue carefully" },
++        { method: "sessions.goal" },
++      );
++
++      expect(result).toHaveBeenCalledWith(
++        true,
++        expect.objectContaining({
++          ok: true,
++          goal: expect.objectContaining({
++            id: "original-goal",
++            status: "active",
++            lastStatusNote: "continue carefully",
++          }),
++        }),
++        undefined,
++      );
++      expect(loadSessionEntry({ agentId: "main", sessionKey })?.goal?.status).toBe("active");
++      expect(resumeChat).not.toHaveBeenCalled();
++    });
++  });
++
+   it("edits literal objectives without chat rows and rejects a changed retry", async () => {
+     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+       await seedSession();
+diff --git a/src/gateway/server-methods/sessions-goal.ts b/src/gateway/server-methods/sessions-goal.ts
+index 77eb3dc4..91c7a371 100644
+--- a/src/gateway/server-methods/sessions-goal.ts
++++ b/src/gateway/server-methods/sessions-goal.ts
+@@ -1,11 +1,19 @@
+ import {
+   ErrorCodes,
+   errorShape,
++  validateSessionsGoalCompatParams,
+   validateSessionsGoalClearParams,
+   validateSessionsGoalUpdateParams,
+   type SessionsGoalClearParams,
++  type SessionsGoalCompatParams,
+   type SessionsGoalUpdateParams,
+ } from "../../../packages/gateway-protocol/src/index.js";
++import {
++  clearSessionGoal,
++  createSessionGoal,
++  getSessionGoal,
++  updateSessionGoalStatus,
++} from "../../config/sessions/goals.js";
+ import {
+   mutateSessionGoal,
+   SessionGoalOperationError,
+@@ -183,7 +191,156 @@ async function handleSessionGoalMutation(
+   }
+ }
+
++async function handleSessionGoalCompat(
++  options: GatewayRequestHandlerOptions,
++  request: SessionsGoalCompatParams,
++): Promise<void> {
++  const { client, context, respond } = options;
++  try {
++    const authorization = options.sessionMutationAuthorization
++      ? { authorization: options.sessionMutationAuthorization, error: null }
++      : resolveSessionMutationAuthorization({
++          client,
++          method: "sessions.goal",
++          requestParams: request,
++          context,
++        });
++    if (authorization.error) {
++      respond(false, undefined, authorization.error);
++      return;
++    }
++    const cfg = context.getRuntimeConfig();
++    const requestedAgent = resolveRequestedSessionAgentId(cfg, request.key, request.agentId);
++    if (!requestedAgent.ok) {
++      respond(false, undefined, requestedAgent.error);
++      return;
++    }
++    const target = resolveSessionSharingTarget({
++      cfg,
++      sessionKey: request.key,
++      agentId: requestedAgent.agentId,
++    });
++    if (!target) {
++      respond(
++        false,
++        undefined,
++        errorShape(ErrorCodes.INVALID_REQUEST, "Session changed or was removed; refresh its Goal."),
++      );
++      return;
++    }
++    const assertCurrent = () => {
++      options.sessionMutationCommitGuard?.();
++      authorization.authorization?.assertCurrent();
++    };
++    assertCurrent();
++    const text = request.text?.trim() ?? "";
++    const action = request.action ?? "status";
++    const goalOptions = {
++      sessionKey: target.storeKey,
++      storePath: target.storePath,
++      agentId: target.agentId,
++      actor: gatewayClientSessionCreator(client),
++    };
++    let goal: unknown;
++    let mutated = false;
++    switch (action) {
++      case "status":
++        goal = (await getSessionGoal(goalOptions)).goal;
++        break;
++      case "start":
++      case "create":
++        if (!text) {
++          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "objective required"));
++          return;
++        }
++        goal = await createSessionGoal({
++          ...goalOptions,
++          objective: text,
++          tokenBudget: request.tokenBudget,
++        });
++        mutated = true;
++        break;
++      case "set":
++        if (!text) {
++          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "objective required"));
++          return;
++        }
++        await clearSessionGoal(goalOptions);
++        goal = await createSessionGoal({
++          ...goalOptions,
++          objective: text,
++          tokenBudget: request.tokenBudget,
++        });
++        mutated = true;
++        break;
++      case "pause":
++        goal = await updateSessionGoalStatus({
++          ...goalOptions,
++          status: "paused",
++          ...(text ? { note: text } : {}),
++        });
++        mutated = true;
++        break;
++      case "resume":
++        goal = await updateSessionGoalStatus({
++          ...goalOptions,
++          status: "active",
++          ...(text ? { note: text } : {}),
++        });
++        mutated = true;
++        break;
++      case "complete":
++      case "done":
++        goal = await updateSessionGoalStatus({
++          ...goalOptions,
++          status: "complete",
++          ...(text ? { note: text } : {}),
++        });
++        mutated = true;
++        break;
++      case "block":
++      case "blocked":
++        goal = await updateSessionGoalStatus({
++          ...goalOptions,
++          status: "blocked",
++          ...(text ? { note: text } : {}),
++        });
++        mutated = true;
++        break;
++      case "clear":
++        await clearSessionGoal(goalOptions);
++        goal = null;
++        mutated = true;
++        break;
++    }
++    if (mutated) {
++      emitSessionsChanged(context, {
++        sessionKey: target.canonicalKey,
++        agentId: target.agentId,
++        reason: "goal",
++      });
++    }
++    respond(true, { ok: true, goal: goal ?? null }, undefined);
++  } catch (error) {
++    context.logGateway.warn(`Goal compatibility update failed: ${String(error)}`);
++    respond(
++      false,
++      undefined,
++      errorShape(
++        ErrorCodes.INVALID_REQUEST,
++        error instanceof Error ? error.message : String(error),
++      ),
++    );
++  }
++}
++
+ export const sessionGoalHandlers: GatewayRequestHandlers = {
++  "sessions.goal": async (options) => {
++    const { params, respond } = options;
++    if (assertValidParams(params, validateSessionsGoalCompatParams, "sessions.goal", respond)) {
++      await handleSessionGoalCompat(options, params);
++    }
++  },
+   "sessions.goal.update": async (options) => {
+     const { params, respond } = options;
+     if (
+diff --git a/src/gateway/session-sharing-target-input.ts b/src/gateway/session-sharing-target-input.ts
+index 3d16fd80..b853981e 100644
+--- a/src/gateway/session-sharing-target-input.ts
++++ b/src/gateway/session-sharing-target-input.ts
+@@ -48,6 +48,7 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
+   ["sessions.github.publish", ["sessionKey"]],
+   ["sessions.fork", ["sessionKey"]],
+   ["sessions.patch", ["key"]],
++  ["sessions.goal", ["key"]],
+   ["sessions.goal.update", ["sessionKey"]],
+   ["sessions.goal.clear", ["sessionKey"]],
+   ["sessions.pluginPatch", ["key"]],
+@@ -104,6 +105,7 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
+   "sessions.groups.update",
+   "sessions.github.publish",
+   "sessions.patch",
++  "sessions.goal",
+   "sessions.goal.update",
+   "sessions.goal.clear",
+   "sessions.pluginPatch",

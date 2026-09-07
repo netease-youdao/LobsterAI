@@ -5,7 +5,7 @@
 // dsh materialises its profile as links into the runtime install
 // (`<DSH_HOME>/profiles/**` -> `<runtime>/node_modules/<pkg>`, `<runtime>/config`),
 // and on Windows those links are directory *junctions*. Electron's Node
-// (24.11 as of Electron 40) walks straight through a junction in
+// Electron's embedded Node runtime walks straight through a junction in
 // `fs.rmSync(dir, { recursive: true })` and deletes the runtime's own files —
 // which leaves a runtime that still boots but has lost, say, the directory
 // picker's dialog worker. Plain Node 24.19 does not follow them, so the same

@@ -1,0 +1,164 @@
+diff --git a/src/agents/openclaw-tools.ts b/src/agents/openclaw-tools.ts
+index d485d828312..ccdd9a4fa67 100644
+--- a/src/agents/openclaw-tools.ts
++++ b/src/agents/openclaw-tools.ts
+@@ -166,6 +166,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
+           preparedModelRuntime: options?.preparedModelRuntime,
+           authProfileStore: options?.authProfileStore,
+           workspaceDir,
++          cwd: options?.cwd,
+           sandbox,
+           fsPolicy: options?.fsPolicy,
+           agentChannel: options?.agentChannel,
+diff --git a/src/agents/tools/image-tool.test.ts b/src/agents/tools/image-tool.test.ts
+index 4d5d7a40672..526fa18adc8 100644
+--- a/src/agents/tools/image-tool.test.ts
++++ b/src/agents/tools/image-tool.test.ts
+@@ -2351,6 +2351,65 @@ describe("image tool implicit imageModel config", () => {
+     });
+   });
+
++  it("resolves and authorizes local image paths against the runtime cwd", async () => {
++    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-cwd-"));
++    try {
++      const workspaceDirRaw = path.join(rootDir, "workspace");
++      const cwdRaw = path.join(rootDir, "project");
++      const outsideDirRaw = path.join(rootDir, "outside");
++      await Promise.all(
++        [workspaceDirRaw, cwdRaw, outsideDirRaw].map((dir) => fs.mkdir(dir, { recursive: true })),
++      );
++      const [workspaceDir, cwd, outsideDir] = await Promise.all(
++        [workspaceDirRaw, cwdRaw, outsideDirRaw].map((dir) => fs.realpath(dir)),
++      );
++      const slidesDir = path.join(cwd, "slides");
++      await fs.mkdir(slidesDir, { recursive: true });
++      const imagePath = path.join(slidesDir, "slide.png");
++      const outsideImage = path.join(outsideDir, "secret.png");
++      await Promise.all(
++        [imagePath, outsideImage].map((filePath) =>
++          fs.writeFile(filePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64")),
++        ),
++      );
++
++      const fetch = stubMinimaxOkFetch();
++      await withTempAgentDir(async (agentDir) => {
++        const tool = createRequiredImageTool({
++          config: createMinimaxImageConfig(),
++          agentDir,
++          workspaceDir,
++          cwd,
++          fsPolicy: { workspaceOnly: false },
++        });
++
++        await expectImageToolExecOk(tool, "slides/slide.png");
++        await expectImageToolExecOk(tool, imagePath);
++        await expect(
++          tool.execute("outside", { prompt: "Describe.", path: outsideImage }),
++        ).rejects.toThrow(/not under an allowed directory/i);
++
++        const workspaceOnlyTool = createRequiredImageTool({
++          config: createMinimaxImageConfig(),
++          agentDir,
++          workspaceDir,
++          cwd,
++          fsPolicy: { workspaceOnly: true },
++        });
++        await expectImageToolExecOk(workspaceOnlyTool, imagePath);
++        await expect(
++          workspaceOnlyTool.execute("workspace-only-outside", {
++            prompt: "Describe.",
++            path: outsideImage,
++          }),
++        ).rejects.toThrow(/not under an allowed directory/i);
++        expect(fetch).toHaveBeenCalledTimes(3);
++      });
++    } finally {
++      await fs.rm(rootDir, { recursive: true, force: true });
++    }
++  });
++
+   it("passes web_fetch SSRF policy to remote image references", async () => {
+     const fetch = vi.fn(async (input: RequestInfo | URL) => {
+       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+diff --git a/src/agents/tools/image-tool.ts b/src/agents/tools/image-tool.ts
+index f7513c5145e..4ebc99fde84 100644
+--- a/src/agents/tools/image-tool.ts
++++ b/src/agents/tools/image-tool.ts
+@@ -829,6 +829,8 @@ export function createImageTool(options?: {
+   agentDir?: string;
+   authProfileStore?: AuthProfileStore;
+   workspaceDir?: string;
++  /** Current runtime directory used to resolve and authorize task-local images. */
++  cwd?: string;
+   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+   sandbox?: ImageSandboxConfig;
+   fsPolicy?: ToolFsPolicy;
+@@ -844,6 +846,7 @@ export function createImageTool(options?: {
+   deferAutoModelResolution?: boolean;
+ }): AnyAgentTool | null {
+   const agentDir = options?.agentDir?.trim();
++  const runtimeCwd = options?.cwd?.trim() || options?.workspaceDir;
+   const modelHasVision = options?.modelHasVision === true;
+   const explicit = coerceImageModelConfig(options?.config);
+   if (!agentDir) {
+@@ -1045,9 +1048,8 @@ export function createImageTool(options?: {
+           if (normalizedRef.startsWith("~")) {
+             return resolveUserPath(normalizedRef);
+           }
+-          // Resolve relative paths against workspaceDir so agents can reference
+-          // workspace-relative paths (e.g. "inbox/photo.png") without needing to
+-          // know the absolute workspace location — matching the read tool behaviour.
++          // Resolve relative paths against the runtime cwd, matching the read tool.
++          // Fall back to workspaceDir for callers that do not provide a separate cwd.
+           if (
+             !isDataUrl &&
+             !isFileUrl &&
+@@ -1055,9 +1057,9 @@ export function createImageTool(options?: {
+             !isMediaStoreUrl &&
+             !refInfo.looksLikeWindowsDrivePath &&
+             !isAbsolute(normalizedRef) &&
+-            options?.workspaceDir
++            runtimeCwd
+           ) {
+-            return resolve(options.workspaceDir, normalizedRef);
++            return resolve(runtimeCwd, normalizedRef);
+           }
+           return normalizedRef;
+         })();
+@@ -1071,6 +1073,7 @@ export function createImageTool(options?: {
+           workspaceDir: options?.workspaceDir,
+           sandbox: sandboxConfig,
+           rootOptions: {
++            containmentRoot: sandboxConfig ? undefined : (options?.fsPolicy?.root ?? runtimeCwd),
+             workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+             cfg: options?.config,
+             channelId: options?.agentChannel ?? options?.currentChannelId,
+diff --git a/src/agents/tools/media-tool-shared.ts b/src/agents/tools/media-tool-shared.ts
+index d9290b119e3..17a70eb60fd 100644
+--- a/src/agents/tools/media-tool-shared.ts
++++ b/src/agents/tools/media-tool-shared.ts
+@@ -88,6 +88,7 @@ type TaskRunDetailHandle = {
+
+ type MediaToolLocalRootOptions = {
+   workspaceOnly?: boolean;
++  containmentRoot?: string;
+   cfg?: OpenClawConfig;
+   channelId?: string | null;
+   accountId?: string | null;
+@@ -549,13 +550,14 @@ function resolveMediaToolLocalRoots(
+   options?: MediaToolLocalRootOptions,
+ ): string[] {
+   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
++  const containmentRoot = normalizeWorkspaceDir(options?.containmentRoot);
+   if (options?.workspaceOnly) {
+-    return workspaceDir ? [workspaceDir] : [];
++    return containmentRoot ? [containmentRoot] : workspaceDir ? [workspaceDir] : [];
+   }
+   // Channel inbound attachment roots stay separate: those paths are scoped to inbound media
+   // access, not broad host-local file reads.
+   const roots = getDefaultLocalRootsCore();
+-  return uniqueStrings([...roots, ...(workspaceDir ? [workspaceDir] : [])]);
++  return uniqueStrings(roots.concat(workspaceDir ?? [], containmentRoot ?? []));
+ }
+
+ /**

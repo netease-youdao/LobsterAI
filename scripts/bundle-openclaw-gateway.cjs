@@ -16,6 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 
+const { ensureOpenClawBundleAssets } = require('./openclaw-bundle-assets.cjs');
 const { ensureOpenClawWorkerShims } = require('./openclaw-worker-shims.cjs');
 
 const rootDir = path.resolve(__dirname, '..');
@@ -37,7 +38,18 @@ if (!fs.existsSync(entryPath)) {
   process.exit(1);
 }
 
-function ensureWorkerShims() {
+function ensureBundleSupportFiles() {
+  const assetResult = ensureOpenClawBundleAssets(runtimeDir);
+  if (assetResult.missingSources.length > 0) {
+    throw new Error(
+      `Required bundle asset source(s) are missing: ${assetResult.missingSources.join(', ')}`,
+    );
+  }
+  const changedAssetCount = assetResult.created.length + assetResult.updated.length;
+  if (changedAssetCount > 0) {
+    console.log(`[bundle-openclaw-gateway] Ensured ${changedAssetCount} root bundle asset(s).`);
+  }
+
   const result = ensureOpenClawWorkerShims(runtimeDir);
   const changedCount = result.created.length + result.updated.length;
   if (changedCount > 0) {
@@ -61,7 +73,12 @@ if (fs.existsSync(bundleOutPath)) {
   const entryStat = fs.statSync(entryPath);
   if (bundleStat.mtimeMs > entryStat.mtimeMs) {
     console.log(`[bundle-openclaw-gateway] Bundle is up-to-date, skipping.`);
-    ensureWorkerShims();
+    try {
+      ensureBundleSupportFiles();
+    } catch (error) {
+      console.error(`[bundle-openclaw-gateway] ${error.message || error}`);
+      process.exit(1);
+    }
     process.exit(0);
   }
 }
@@ -139,9 +156,9 @@ esbuild
       `[bundle-openclaw-gateway] Done in ${elapsed}ms (${sizeKB} KB)` +
         (result.warnings.length ? `, ${result.warnings.length} warnings` : ''),
     );
-    ensureWorkerShims();
+    ensureBundleSupportFiles();
   })
   .catch((err) => {
-    console.error('[bundle-openclaw-gateway] esbuild failed:', err.message || err);
+    console.error('[bundle-openclaw-gateway] Failed:', err.message || err);
     process.exit(1);
   });

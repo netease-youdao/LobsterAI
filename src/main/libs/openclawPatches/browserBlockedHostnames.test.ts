@@ -7,7 +7,7 @@ describe('openclaw-browser-blocked-hostnames.patch', () => {
     expectPatchContains('openclaw-browser-blocked-hostnames.patch', [
       'diff --git a/src/config/types.browser.ts',
       'blockedHostnames?: string[];',
-      'diff --git a/src/config/zod-schema.ts',
+      'diff --git a/src/config/zod-schema.root-shape.ts',
       'blockedHostnames: z.array(z.string()).optional()',
       'diff --git a/extensions/browser/src/browser/config.ts',
       'normalizeStringList(rawPolicy?.blockedHostnames)',

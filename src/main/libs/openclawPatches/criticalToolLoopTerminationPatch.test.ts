@@ -1,18 +1,30 @@
 import { describe, test } from 'vitest';
 
-import { expectPatchContains } from './patchTestUtils';
+import {
+  expectCurrentOpenClawPatchMissing,
+  expectOpenClawSourceContains,
+  isOpenClawSourceAvailable,
+} from './patchTestUtils';
 
-describe('OpenClaw critical tool-loop termination patch', () => {
-  test('backports the dual-layer termination from upstream #106297', () => {
-    expectPatchContains('openclaw-terminate-run-on-critical-tool-loop.patch', [
-      'const terminateRun = deniedReason === "tool-loop";',
-      '...(terminateRun ? { terminate: true } : {})',
-      'shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext)',
-      'shouldStopAfterTurn: this.shouldStopAfterTurn',
-      'details?.deniedReason === "tool-loop"',
-      'stops a mixed parallel batch after normal sibling tools finish',
-      'expect(providerTurns).toBe(1)',
-      'keeps %s vetoes non-terminating',
+describe('OpenClaw critical tool-loop termination patch decisions', () => {
+  test('drops the v2026.6.1 termination and soft-veto backports', () => {
+    expectCurrentOpenClawPatchMissing('openclaw-terminate-run-on-critical-tool-loop.patch');
+    expectCurrentOpenClawPatchMissing('zz-openclaw-tool-loop-soft-vetoes.patch');
+  });
+
+  test.skipIf(!isOpenClawSourceAvailable())('uses the richer v2026.8.1 native recovery contract', () => {
+    expectOpenClawSourceContains([
+      {
+        file: 'packages/agent-core/src/agent-loop.ts',
+        snippets: [
+          'Critical tool-loop recovery failed because another critical loop was detected',
+          'terminateRun: params.terminal',
+        ],
+      },
+      {
+        file: 'src/agents/embedded-agent-runner/run/tool-loop-recovery.ts',
+        snippets: ['kind: "critical-tool-loop"', 'tool-loop batch admission failed'],
+      },
     ]);
   });
 });

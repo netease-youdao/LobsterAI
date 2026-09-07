@@ -1,0 +1,204 @@
+diff --git a/src/secrets/runtime-fast-path.ts b/src/secrets/runtime-fast-path.ts
+index 42b75390ffc..fa4dd1cf1cd 100644
+--- a/src/secrets/runtime-fast-path.ts
++++ b/src/secrets/runtime-fast-path.ts
+@@ -150,15 +150,11 @@ function hasActiveRuntimeWebFetchProviderSurface(
+ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
+   const web = config.tools?.web;
+   const defaults = config.secrets?.defaults;
+-  const fetchExplicitlyDisabled =
+-    web &&
+-    typeof web === "object" &&
+-    !Array.isArray(web) &&
+-    typeof (web as Record<string, unknown>).fetch === "object" &&
+-    (web as { fetch?: { enabled?: unknown } }).fetch?.enabled === false;
++  const searchExplicitlyDisabled = web?.search?.enabled === false;
++  const fetchExplicitlyDisabled = web?.fetch?.enabled === false;
+   if (web && typeof web === "object" && !Array.isArray(web)) {
+     const webRecord = web as Record<string, unknown>;
+-    if ("search" in webRecord) {
++    if ("search" in webRecord && !searchExplicitlyDisabled) {
+       return true;
+     }
+     if (
+diff --git a/src/secrets/runtime-web-tools.test.ts b/src/secrets/runtime-web-tools.test.ts
+index 131b81d995e..cbe4a0f9db4 100644
+--- a/src/secrets/runtime-web-tools.test.ts
++++ b/src/secrets/runtime-web-tools.test.ts
+@@ -1517,14 +1517,23 @@ describe("runtime web tools resolution", () => {
+     expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
+   });
+
+-  it("keeps configured provider metadata and inactive warnings when search is disabled", async () => {
+-    const { metadata, context } = await runRuntimeWebTools({
++  it("skips provider discovery when web search is explicitly disabled", async () => {
++    loadInstalledPluginIndexInstallRecordsSyncMock.mockReturnValue({
++      "external-search": {
++        source: "npm",
++        spec: "@openclaw/external-search",
++      },
++    });
++
++    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+       config: asConfig({
+         tools: {
+           web: {
+             search: {
+               enabled: false,
+-              provider: "gemini",
++            },
++            fetch: {
++              provider: "firecrawl",
+             },
+           },
+         },
+@@ -1538,51 +1547,36 @@ describe("runtime web tools resolution", () => {
+                 },
+               },
+             },
+-          },
+-        },
+-      }),
+-    });
+-
+-    expect(metadata.search.providerConfigured).toBe("gemini");
+-    expect(metadata.search.providerSource).toBe("configured");
+-    expectDiagnostic(context.warnings, {
+-      code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+-      path: "plugins.entries.google.config.webSearch.apiKey",
+-    });
+-  });
+-
+-  it("emits inactive warnings for configured and lower-priority web-search providers when search is disabled", async () => {
+-    const { context } = await runRuntimeWebTools({
+-      config: asConfig({
+-        tools: {
+-          web: {
+-            search: {
+-              enabled: false,
+-            },
+-          },
+-        },
+-        plugins: {
+-          entries: {
+-            google: {
++            firecrawl: {
+               config: {
+-                webSearch: {
+-                  apiKey: {
+-                    source: "env",
+-                    provider: "default",
+-                    id: "DISABLED_WEB_SEARCH_GEMINI_API_KEY",
+-                  },
++                webFetch: {
++                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+                 },
+               },
+             },
+           },
+         },
+       }),
++      env: {
++        FIRECRAWL_API_KEY: "firecrawl-runtime-key", // pragma: allowlist secret
++      },
+     });
+
+-    expectDiagnostic(context.warnings, {
+-      code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+-      path: "plugins.entries.google.config.webSearch.apiKey",
+-    });
++    expect(metadata.search.providerSource).toBe("none");
++    expect(metadata.search.selectedProvider).toBeUndefined();
++    expect(metadata.fetch.selectedProvider).toBe("firecrawl");
++    expect(metadata.fetch.selectedProviderKeySource).toBe("secretRef");
++    expect(
++      (
++        resolvedConfig.plugins?.entries?.firecrawl?.config as
++          | { webFetch?: { apiKey?: unknown } }
++          | undefined
++      )?.webFetch?.apiKey,
++    ).toBe("firecrawl-runtime-key");
++    expect(context.warnings).toStrictEqual([]);
++    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
++    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
++    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+   });
+
+   it("does not auto-enable search when tools.web.search is absent", async () => {
+diff --git a/src/secrets/runtime-web-tools.ts b/src/secrets/runtime-web-tools.ts
+index c343726fa5e..a2a63f615ba 100644
+--- a/src/secrets/runtime-web-tools.ts
++++ b/src/secrets/runtime-web-tools.ts
+@@ -831,8 +831,9 @@ export async function resolveRuntimeWebTools(params: {
+     });
+   }
+   const rawProvider = normalizeLowercaseStringOrEmpty(search?.provider);
++  const searchEnabled = search?.enabled !== false;
+   let configuredBundledWebSearchPluginIdHint: string | undefined;
+-  if (hasPluginWebSearchConfig && !(await getHasCustomWebSearchRisk())) {
++  if (searchEnabled && hasPluginWebSearchConfig && !(await getHasCustomWebSearchRisk())) {
+     if (rawProvider) {
+       configuredBundledWebSearchPluginIdHint = inferExactBundledPluginScopedWebToolConfigOwner({
+         config: params.sourceConfig,
+@@ -849,7 +850,7 @@ export async function resolveRuntimeWebTools(params: {
+     providerSource: "none",
+     diagnostics: [],
+   };
+-  if (search || hasPluginWebSearchConfig) {
++  if (searchEnabled && (search || hasPluginWebSearchConfig)) {
+     const searchSurface = await resolveRuntimeWebProviderSurface({
+       contract: "webSearchProviders",
+       rawProvider,
+diff --git a/src/secrets/runtime.fast-path.test.ts b/src/secrets/runtime.fast-path.test.ts
+index 2781f454978..dcbcd350a12 100644
+--- a/src/secrets/runtime.fast-path.test.ts
++++ b/src/secrets/runtime.fast-path.test.ts
+@@ -172,28 +172,30 @@ describe("secrets runtime fast path", () => {
+     expect(snapshot.webTools.fetch.providerSource).toBe("none");
+   });
+
+-  it("uses the fast path when web fetch is explicitly disabled", async () => {
+-    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
++  it.each(["search", "fetch"] as const)(
++    "uses the fast path when web %s is explicitly disabled",
++    async (surface) => {
++      const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
+
+-    await prepareSecretsRuntimeSnapshot({
+-      config: asConfig({
+-        ...explicitMainRoster(),
+-        tools: {
+-          web: {
+-            fetch: {
+-              enabled: false,
+-              maxChars: 200_000,
++      await prepareSecretsRuntimeSnapshot({
++        config: asConfig({
++          ...explicitMainRoster(),
++          tools: {
++            web: {
++              [surface]: {
++                enabled: false,
++              },
+             },
+           },
+-        },
+-      }),
+-      env: {},
+-      agentDirs: ["/tmp/openclaw-agent-main"],
+-      loadAuthStore: emptyAuthStore,
+-    });
++        }),
++        env: {},
++        agentDirs: ["/tmp/openclaw-agent-main"],
++        loadAuthStore: emptyAuthStore,
++      });
+
+-    expect(runtimePrepareImportMock).not.toHaveBeenCalled();
+-  });
++      expect(runtimePrepareImportMock).not.toHaveBeenCalled();
++    },
++  );
+
+   it("uses the resolver path when an auth profile store contains a SecretRef", async () => {
+     const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");

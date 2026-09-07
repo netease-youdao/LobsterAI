@@ -33,6 +33,7 @@ import {
   CoworkBtwStatus,
 } from '../../../shared/cowork/btw';
 import { CoworkSelectedTextSource } from '../../../shared/cowork/selectedText';
+import { CoworkSteerRejectReason, CoworkSteerStatus } from '../../../shared/cowork/steer';
 import { OpenClawTranscriptSafetyLimit } from '../../../shared/openclawTranscript/constants';
 import { t } from '../../i18n';
 import { OpenClawChannelSessionSync } from '../openclawChannelSessionSync';
@@ -1982,6 +1983,7 @@ test('a successful gateway hello clears reconnect suppression on the normal ensu
   });
   await adapter.gatewayReadyPromise;
 
+  expect(callbacks.deviceIdentity).toBeNull();
   expect(adapter.gatewayReconnectSuppressed).toBe(false);
   expect(adapter.gatewayReconnectAttempt).toBe(0);
   adapter.disconnectGatewayClient();
@@ -2133,6 +2135,98 @@ test('interactive RPCs use the managed key for an idle scheduled session and its
   expect(requests.at(-1)?.params.key).toBe(cronRunKey);
 });
 
+test('pollChannelSessions coalesces overlapping background reconciliations', async () => {
+  const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+  let signalRequestStarted: (() => void) | undefined;
+  const requestStarted = new Promise<void>((resolve) => {
+    signalRequestStarted = resolve;
+  });
+  let releaseRequest: (() => void) | undefined;
+  const requestBlocked = new Promise<void>((resolve) => {
+    releaseRequest = resolve;
+  });
+  const request = vi.fn(async () => {
+    signalRequestStarted?.();
+    await requestBlocked;
+    return { sessions: [] };
+  });
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request,
+  };
+  adapter.channelSessionSync = {} as never;
+
+  const firstPoll = adapter.pollChannelSessions();
+  await requestStarted;
+  const secondPoll = adapter.pollChannelSessions();
+
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(secondPoll).toBe(firstPoll);
+
+  releaseRequest?.();
+  await Promise.all([firstPoll, secondPoll]);
+  expect(adapter.channelSessionPollInFlight).toBeNull();
+});
+
+test('background sessions.list timeout backs off without degrading foreground session RPCs', async () => {
+  const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+  const timeoutError = new Error('gateway request timeout for sessions.list after 5000ms');
+  const request = vi.fn(async () => {
+    if (request.mock.calls.length === 1) {
+      throw timeoutError;
+    }
+    return { sessions: [] };
+  });
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request,
+  };
+  adapter.channelSessionSync = {} as never;
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  try {
+    await adapter.pollChannelSessions();
+
+    expect(adapter.gatewayRpcHealth.consecutiveTimeouts).toBe(0);
+    expect(adapter.channelPollingTimeoutCount).toBe(1);
+    expect(adapter.channelPollingBackoffUntil).toBeGreaterThan(Date.now());
+
+    await adapter.pollChannelSessions();
+    expect(request).toHaveBeenCalledTimes(1);
+
+    await adapter.listGatewaySessionsForUsage({ limit: 1 });
+    expect(request).toHaveBeenCalledTimes(2);
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test('sessions.changed debounces an early channel reconciliation while periodic polling remains active', async () => {
+  vi.useFakeTimers();
+  const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+  const request = vi.fn(async () => ({ sessions: [] }));
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request,
+  };
+  adapter.channelSessionSync = {} as never;
+  adapter.channelPollingTimer = setInterval(() => {}, 10_000);
+
+  try {
+    adapter.handleGatewayEvent({ event: 'sessions.changed', payload: {} });
+    adapter.handleGatewayEvent({ event: 'sessions.changed', payload: {} });
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(request).toHaveBeenCalledTimes(1);
+  } finally {
+    adapter.stopChannelPolling();
+    vi.useRealTimers();
+  }
+});
+
 test('pollChannelSessions recovers a missed cron event without retaining run-scoped keys', async () => {
   const sessionKey = 'agent:ops:cron:daily-monitor:run:run-42';
   const { session, store } = createReconcileStore([], {
@@ -2173,6 +2267,93 @@ test('pollChannelSessions recovers a missed cron event without retaining run-sco
   expect(adapter.sessionIdBySessionKey.get(sessionKey)).toBe(session.id);
   expect(adapter.latestCronSessionKeyByCacheKey.get('agent:ops:cron:daily-monitor')).toBe(sessionKey);
   expect(requests.map(request => request.method)).toEqual(['sessions.list', 'chat.history']);
+});
+
+test('pollChannelSessions does not materialize an empty OpenClaw main routing session', async () => {
+  const sessionKey = 'agent:main:main';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'main-session-1',
+  });
+  const createSession = vi.fn(() => session);
+  const adapter = new OpenClawRuntimeAdapter({ ...store, createSession } as never, {});
+  const requests: Array<{ method: string; params?: unknown }> = [];
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (method: string, params?: unknown) => {
+      requests.push({ method, params });
+      if (method === 'sessions.list') {
+        return {
+          sessions: [{
+            key: sessionKey,
+            sessionId: 'gateway-main-1',
+            updatedAt: 100,
+            createdVia: 'channel',
+          }],
+        };
+      }
+      return { messages: [] };
+    },
+  };
+  adapter.channelSessionSync = new OpenClawChannelSessionSync({
+    coworkStore: { ...store, createSession } as never,
+    imStore: {} as never,
+    getDefaultCwd: () => '/repo/main',
+  });
+
+  await adapter.pollChannelSessions();
+  await adapter.pollChannelSessions();
+
+  expect(createSession).not.toHaveBeenCalled();
+  expect(requests.map(request => request.method)).toEqual([
+    'sessions.list',
+    'chat.history',
+    'sessions.list',
+  ]);
+});
+
+test('pollChannelSessions still recovers a main session once meaningful history exists', async () => {
+  const sessionKey = 'agent:main:main';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'main-session-1',
+  });
+  const createSession = vi.fn(() => session);
+  const gatewayMessages = [
+    { role: 'user', content: [{ type: 'text', text: 'hello from OpenClaw' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+  ];
+  const adapter = new OpenClawRuntimeAdapter({ ...store, createSession } as never, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (method: string) => {
+      if (method === 'sessions.list') {
+        return {
+          sessions: [{
+            key: sessionKey,
+            sessionId: 'gateway-main-1',
+            updatedAt: 101,
+          }],
+        };
+      }
+      return { messages: gatewayMessages };
+    },
+  };
+  adapter.channelSessionSync = new OpenClawChannelSessionSync({
+    coworkStore: { ...store, createSession } as never,
+    imStore: {} as never,
+    getDefaultCwd: () => '/repo/main',
+  });
+
+  await adapter.pollChannelSessions();
+
+  expect(createSession).toHaveBeenCalledOnce();
+  expect(adapter.sessionIdBySessionKey.get(sessionKey)).toBe(session.id);
+  expect(adapter.knownChannelSessionIds.has(session.id)).toBe(true);
+  expect(session.messages.map(message => [message.type, message.content])).toEqual([
+    ['user', 'hello from OpenClaw'],
+    ['assistant', 'hello'],
+  ]);
 });
 
 test('cron session routing retains only the latest real gateway run key per job', () => {
@@ -4085,6 +4266,55 @@ function createActiveTurn(sessionId: string, sessionKey: string, runId: string) 
     bufferedAgentPayloads: [],
   };
 }
+
+test('submitSteer uses the native chat.send steer queue in OpenClaw v2026.8.1', async () => {
+  const { session, store } = createReconcileStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const request = vi.fn(async () => ({ runId: 'client-steer-1', status: 'started' }));
+  adapter.gatewayClient = { start: () => {}, stop: () => {}, request };
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-active'));
+
+  const result = await adapter.submitSteer(session.id, '  continue with this  ', 'client-steer-1');
+
+  expect(result).toEqual({
+    success: true,
+    status: CoworkSteerStatus.Accepted,
+    clientSteerId: 'client-steer-1',
+  });
+  expect(request).toHaveBeenCalledWith(
+    'chat.send',
+    {
+      sessionKey,
+      message: 'continue with this',
+      queueMode: 'steer',
+      deliver: false,
+      idempotencyKey: 'client-steer-1',
+    },
+    { timeoutMs: 30_000 },
+  );
+});
+
+test('submitSteer reports an unsupported native chat queue without patch-specific guidance', async () => {
+  const { session, store } = createReconcileStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const request = vi.fn(async () => {
+    throw new Error('unknown method chat.send');
+  });
+  adapter.gatewayClient = { start: () => {}, stop: () => {}, request };
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-active'));
+
+  const result = await adapter.submitSteer(session.id, 'continue', 'client-steer-2');
+
+  expect(result).toEqual({
+    success: false,
+    status: CoworkSteerStatus.Rejected,
+    clientSteerId: 'client-steer-2',
+    reason: CoworkSteerRejectReason.RuntimeUnsupported,
+    error: 'The current OpenClaw runtime does not support native same-turn steering.',
+  });
+});
 
 test('incomplete plan mode output requests one hidden completion retry', async () => {
   vi.useFakeTimers();

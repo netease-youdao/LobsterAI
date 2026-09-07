@@ -104,10 +104,8 @@ export default defineConfig({
             },
           },
         },
-        onstart() {
-          // Signal that the main process bundle is ready for electron to load
-          fs.writeFileSync('dist-electron/.electron-ready', '');
-        },
+        // package.json starts Electron after all five output files stabilize.
+        onstart() {},
       },
       {
         // 预加载脚本入口文件

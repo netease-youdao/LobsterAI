@@ -1,7 +1,7 @@
 import { PlatformRegistry } from '@shared/platform';
 import { ProviderName } from '@shared/providers/constants';
 
-import { ScheduleKind } from '../../../scheduledTask/constants';
+import { PayloadKind, ScheduleKind } from '../../../scheduledTask/constants';
 import type {
   RunFilter,
   Schedule,
@@ -134,7 +134,9 @@ export function getScheduleAnalyticsParams(schedule: Schedule): AnalyticsParams 
 }
 
 export function getPayloadAnalyticsParams(payload: ScheduledTaskPayload): AnalyticsParams {
-  const text = payload.kind === 'systemEvent' ? payload.text : payload.message;
+  const payloadText =
+    payload.kind === PayloadKind.SystemEvent ? payload.text : payload.message;
+  const text = typeof payloadText === 'string' ? payloadText : '';
   return {
     payloadKind: payload.kind,
     payloadTextLength: text.length,

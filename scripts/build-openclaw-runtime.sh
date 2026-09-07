@@ -12,6 +12,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ELECTRON_ROOT="${ELECTRON_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 OPENCLAW_SRC="${OPENCLAW_SRC:-$ELECTRON_ROOT/../openclaw}"
 OUT_DIR="${OUT_DIR:-$ELECTRON_ROOT/vendor/openclaw-runtime/$TARGET_ID}"
+MISTRAL_OTEL_API_VERSION="1.9.1"
+PNPM_FETCH_TIMEOUT_MS="${OPENCLAW_PNPM_FETCH_TIMEOUT_MS:-600000}"
 
 TARGET_PLATFORM="${TARGET_ID%%-*}"
 TARGET_ARCH="${TARGET_ID#*-}"
@@ -144,7 +146,18 @@ fi
 echo "[1/7] Building OpenClaw from source: $OPENCLAW_SRC"
 pushd "$OPENCLAW_SRC" >/dev/null
 corepack enable >/dev/null 2>&1 || true
-pnpm install --frozen-lockfile
+echo "[openclaw-runtime] Installing source dependencies (fetch timeout=${PNPM_FETCH_TIMEOUT_MS}ms)"
+PNPM_INSTALL_LOG="$WORK_DIR/pnpm-install.log"
+if ! pnpm install --frozen-lockfile --fetch-timeout "$PNPM_FETCH_TIMEOUT_MS" 2>&1 | tee "$PNPM_INSTALL_LOG"; then
+  if grep -Fq 'Broken lockfile: missing snapshot' "$PNPM_INSTALL_LOG" \
+    && [[ -f node_modules/.pnpm/lock.yaml || -f node_modules/.modules.yaml ]]; then
+    echo "[openclaw-runtime] Detected stale pnpm virtual-store metadata; rebuilding dependency links"
+    rm -f node_modules/.pnpm/lock.yaml node_modules/.modules.yaml
+    pnpm install --frozen-lockfile --fetch-timeout "$PNPM_FETCH_TIMEOUT_MS"
+  else
+    exit 1
+  fi
+fi
 pnpm build
 # Skip release:check — it validates the openclaw npm package for publishing and
 # is not relevant for LobsterAI embedded runtime builds.  On Windows it also
@@ -153,19 +166,18 @@ pnpm build
 echo "[openclaw-runtime] Skipping release:check (not needed for embedded builds)"
 
 echo "[openclaw-runtime] Preparing OpenClaw package metadata"
-node --import tsx --input-type=module - <<'NODE'
-const { writePackageDistInventory } = await import('./src/infra/package-dist-inventory.ts');
-await writePackageDistInventory(process.cwd());
-NODE
-node scripts/test-built-bundled-channel-entry-smoke.mjs
+node --import ./scripts/tsx.mjs scripts/write-package-dist-inventory.ts
+node --import ./scripts/tsx.mjs scripts/test-built-bundled-channel-entry-smoke.mts
 node scripts/package-changelog.mjs prepare
 OPENCLAW_CHANGELOG_PREPARED=1
 
 echo "[2/7] Packing npm tarball"
 # OpenClaw v2026.4.15 removed OPENCLAW_PREPACK_PREPARED support, so running
-# npm lifecycle scripts here would rebuild tsdown through prepack. The metadata
-# and smoke steps that still matter for the embedded tarball are run above.
-npm pack --ignore-scripts --pack-destination "$PACK_DIR"
+# lifecycle scripts here would rebuild tsdown through prepack. The metadata and
+# smoke steps that still matter for the embedded tarball are run above. pnpm's
+# packer is required so v2026.8.1 workspace:* runtime dependencies are rewritten
+# to publishable versions; npm pack leaves them unresolved.
+pnpm --config.ignore-scripts=true pack --pack-destination "$PACK_DIR"
 restore_openclaw_package_changelog
 TARBALL="$(ls -1t "$PACK_DIR"/openclaw-*.tgz | head -n 1)"
 if [[ -z "$TARBALL" || ! -f "$TARBALL" ]]; then
@@ -234,10 +246,16 @@ rm -rf node_modules package-lock.json
 npm pkg delete devDependencies >/dev/null 2>&1 || true
 
 echo "[openclaw-runtime] npm target platform=$NPM_TARGET_PLATFORM arch=$NPM_TARGET_ARCH"
+# @mistralai/mistralai@2.6.4 treats the OpenTelemetry API as an optional peer,
+# but its request path imports the no-op API eagerly. OpenClaw's source install
+# receives it from dev tooling; the production tarball does not. Keep the small
+# pure-JS API in LobsterAI's embedded runtime so the gateway bundle and Mistral
+# provider both remain loadable without enabling the optional OTLP exporters.
 NPM_CONFIG_LEGACY_PEER_DEPS=true \
 npm_config_platform="$NPM_TARGET_PLATFORM" \
 npm_config_arch="$NPM_TARGET_ARCH" \
-npm install --omit=dev --no-audit --no-fund
+npm install --omit=dev --no-audit --no-fund --save-exact \
+  "@opentelemetry/api@$MISTRAL_OTEL_API_VERSION"
 
 # Runtime sanity checks before packing gateway.asar
 [[ -f "openclaw.mjs" ]]

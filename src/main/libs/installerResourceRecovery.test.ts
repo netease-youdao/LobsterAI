@@ -18,12 +18,14 @@ describe('installerResourceRecovery', () => {
   const tarPath = () => path.join(resourcesDir, INSTALLER_RESOURCES_TAR);
   const markerPath = () => path.join(resourcesDir, INSTALLER_RESOURCES_MARKER);
   const entryPath = () => path.join(resourcesDir, 'cfmind', 'gateway-bundle.mjs');
+  const bundleAssetPath = () => path.join(resourcesDir, 'cfmind', 'web-tree-sitter.wasm');
 
   const createInstallerTar = async (): Promise<void> => {
     const stagingDir = path.join(workDir, 'staging');
     fs.mkdirSync(path.join(stagingDir, 'cfmind'), { recursive: true });
     fs.mkdirSync(path.join(stagingDir, 'python-win'), { recursive: true });
     fs.writeFileSync(path.join(stagingDir, 'cfmind', 'gateway-bundle.mjs'), 'export const ok = true;\n');
+    fs.writeFileSync(path.join(stagingDir, 'cfmind', 'web-tree-sitter.wasm'), 'fake-wasm');
     fs.writeFileSync(path.join(stagingDir, 'python-win', 'python.exe'), 'fake-binary');
     await tar.create({ file: tarPath(), cwd: stagingDir }, ['cfmind', 'python-win']);
   };
@@ -54,6 +56,7 @@ describe('installerResourceRecovery', () => {
     expect(result.entries).toBeGreaterThan(0);
     expect(hasBundledRuntimeEntry(resourcesDir)).toBe(true);
     expect(fs.existsSync(entryPath())).toBe(true);
+    expect(fs.existsSync(bundleAssetPath())).toBe(true);
     expect(fs.existsSync(path.join(resourcesDir, 'python-win', 'python.exe'))).toBe(true);
     // Mirrors the installer success path: marker stamped, archive removed.
     expect(fs.existsSync(markerPath())).toBe(true);
@@ -65,12 +68,26 @@ describe('installerResourceRecovery', () => {
   test('is a no-op when the runtime entry is already present', async () => {
     await createInstallerTar();
     fs.writeFileSync(entryPath(), 'export const ok = true;\n');
+    fs.writeFileSync(bundleAssetPath(), 'fake-wasm');
 
     const result = await recoverInstallerResourcesFromTar(resourcesDir, 'test');
 
     expect(result.attempted).toBe(false);
     expect(result.success).toBe(true);
     expect(fs.existsSync(tarPath())).toBe(true);
+  });
+
+  test('recovers when the gateway bundle exists without its required root asset', async () => {
+    await createInstallerTar();
+    fs.writeFileSync(entryPath(), 'export const incomplete = true;\n');
+    expect(hasBundledRuntimeEntry(resourcesDir)).toBe(false);
+
+    const result = await recoverInstallerResourcesFromTar(resourcesDir, 'test');
+
+    expect(result.attempted).toBe(true);
+    expect(result.success).toBe(true);
+    expect(hasBundledRuntimeEntry(resourcesDir)).toBe(true);
+    expect(fs.readFileSync(bundleAssetPath(), 'utf8')).toBe('fake-wasm');
   });
 
   test('reports failure when no tar is left to recover from', async () => {

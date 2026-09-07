@@ -1,0 +1,180 @@
+diff --git a/src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts b/src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts
+index 12764d83..17949812 100644
+--- a/src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts
++++ b/src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts
+@@ -56,6 +56,28 @@ const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) =>
+   entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
+   entry.execution.outcome?.status === "ok";
+
++const emitCompletionEndedHookBestEffort = async (
++  context: SubagentLifecycleAnnounceCleanupContext,
++  entry: SubagentRunRecord,
++  reason: Parameters<typeof emitCompletionEndedHookIfNeeded>[2],
++  phase:
++    | "announced-cleanup-finalize"
++    | "deferred-announce-give-up"
++    | "resumed-announce-give-up",
++  isCurrent?: () => boolean,
++) => {
++  try {
++    await emitCompletionEndedHookIfNeeded(context.options, entry, reason, isCurrent);
++  } catch (error) {
++    context.options.warn("failed to emit subagent ended hook during cleanup", {
++      error: buildSafeLifecycleErrorMeta(error),
++      runId: maskLifecycleIdentifier(entry.runId, "run"),
++      childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
++      phase,
++    });
++  }
++};
++
+ export const finalizeResumedAnnounceGiveUp = async (
+   context: SubagentLifecycleAnnounceCleanupContext,
+   giveUpParams: {
+@@ -123,10 +145,11 @@ export const finalizeResumedAnnounceGiveUp = async (
+     completedAt: completedAt ?? Date.now(),
+   });
+   if (!shouldSuppressSubagentRecoverySessionEffects(entry)) {
+-    await emitCompletionEndedHookIfNeeded(
+-      params,
++    await emitCompletionEndedHookBestEffort(
++      context,
+       entry,
+       completionReason,
++      "resumed-announce-give-up",
+       () =>
+         context.isEndedHookOwnerCurrent(runId, entry) &&
+         !shouldSuppressSubagentRecoverySessionEffects(entry),
+@@ -227,10 +250,11 @@ const finalizeSubagentCleanup = async (
+       skipRequesterSettleWake: skipRequesterDelivery,
+     });
+     if (!shouldSuppressSubagentRecoverySessionEffects(entry)) {
+-      await emitCompletionEndedHookIfNeeded(
+-        params,
++      await emitCompletionEndedHookBestEffort(
++        context,
+         entry,
+         resolveCleanupCompletionReason(entry),
++        "deferred-announce-give-up",
+         () =>
+           context.isEndedHookOwnerCurrent(runId, entry) &&
+           !shouldSuppressSubagentRecoverySessionEffects(entry),
+@@ -310,10 +334,11 @@ const finalizeSubagentCleanup = async (
+     // Hook loading is best-effort; durable delivery and cleanup must already
+     // be terminal before plugin code can fail or stall.
+     if (!shouldSuppressSubagentRecoverySessionEffects(entry)) {
+-      await emitCompletionEndedHookIfNeeded(
+-        params,
++      await emitCompletionEndedHookBestEffort(
++        context,
+         entry,
+         completionReason,
++        "announced-cleanup-finalize",
+         () =>
+           context.isEndedHookOwnerCurrent(runId, entry) &&
+           !shouldSuppressSubagentRecoverySessionEffects(entry),
+diff --git a/src/agents/subagents/registry/subagent-registry-lifecycle.test.ts b/src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
+index 488b91ae..ef7faa60 100644
+--- a/src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
++++ b/src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
+@@ -2858,6 +2858,43 @@ describe("subagent registry lifecycle hardening", () => {
+     expect(persistOrThrow).toHaveBeenCalled();
+   });
+
++  it("does not reject cleanup after bookkeeping when the ended hook throws", async () => {
++    const warn = vi.fn();
++    const entry = createRunEntry({
++      endedAt: 4_000,
++      expectsCompletionMessage: false,
++      retainAttachmentsOnKeep: true,
++    });
++    const emitSubagentEndedHookForRun = vi.fn(async () => {
++      throw new Error("ended hook boom");
++    });
++    const controller = createLifecycleController({
++      entry,
++      warn,
++      shouldEmitEndedHookForRun: () => true,
++      emitSubagentEndedHookForRun,
++    });
++
++    await expect(
++      controller.finalizeResumedAnnounceGiveUp({
++        runId: entry.runId,
++        entry,
++        reason: "expiry",
++      }),
++    ).resolves.toBeUndefined();
++
++    expect(entry.cleanupCompletedAt).toBeTypeOf("number");
++    expect(warn).toHaveBeenCalledWith(
++      "failed to emit subagent ended hook during cleanup",
++      expect.objectContaining({
++        error: { name: "Error", message: "ended hook boom" },
++        runId: "***",
++        childSessionKey: "agent:main:…",
++        phase: "resumed-announce-give-up",
++      }),
++    );
++  });
++
+   it("cleans up tracked browser sessions before subagent cleanup flow", async () => {
+     const persist = vi.fn();
+     const entry = createRunEntry({
+diff --git a/src/shared/runtime-import.test.ts b/src/shared/runtime-import.test.ts
+index cf2002a0..0ca65aaa 100644
+--- a/src/shared/runtime-import.test.ts
++++ b/src/shared/runtime-import.test.ts
+@@ -50,6 +50,16 @@ describe("runtime-import", () => {
+     ).toBe("file:///C:/Users/alice/openclaw/dist/subagent-registry.runtime.js");
+   });
+
++  it("resolves runtime modules under dist when the base module is the gateway bundle", async () => {
++    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
++
++    expect(
++      await captureRuntimeImportSpecifier("file:///C:/Users/alice/openclaw/gateway-bundle.mjs", [
++        "./subagent-registry.runtime.js",
++      ]),
++    ).toBe("file:///C:/Users/alice/openclaw/dist/subagent-registry.runtime.js");
++  });
++
+   it("resolves absolute Windows runtime import parts directly", async () => {
+     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+diff --git a/src/shared/runtime-import.ts b/src/shared/runtime-import.ts
+index aeb60f9a..556871e8 100644
+--- a/src/shared/runtime-import.ts
++++ b/src/shared/runtime-import.ts
+@@ -2,8 +2,12 @@
+  * Runtime import helpers for lazy modules that may be loaded from file URLs or platform paths.
+  * Windows paths need normalization before Node's ESM loader can import them safely.
+  */
++import path from "node:path";
++import { fileURLToPath } from "node:url";
+ import { toSafeImportPath } from "./import-specifier.js";
+
++const GATEWAY_BUNDLE_BASENAME = "gateway-bundle.mjs";
++
+ /**
+  * Resolves lazy runtime import parts against the caller's module URL or path.
+  * Absolute normalized paths stay standalone; relative parts resolve against the normalized base.
+@@ -16,7 +20,17 @@ function resolveRuntimeImportSpecifier(baseUrl: string, parts: readonly string[]
+   if (safeJoined !== joined) {
+     return safeJoined;
+   }
+-  return new URL(joined, toSafeImportPath(baseUrl)).href;
++  const safeBase = toSafeImportPath(baseUrl);
++  if (joined.startsWith("./")) {
++    try {
++      if (path.basename(fileURLToPath(safeBase)) === GATEWAY_BUNDLE_BASENAME) {
++        return new URL(`./dist/${joined.slice(2)}`, safeBase).href;
++      }
++    } catch {
++      // Keep default URL resolution for non-file URLs and malformed bases.
++    }
++  }
++  return new URL(joined, safeBase).href;
+ }
+
+ /**

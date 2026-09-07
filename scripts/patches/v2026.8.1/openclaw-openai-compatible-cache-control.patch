@@ -1,0 +1,189 @@
+diff --git a/packages/ai/src/transports/openai-completions-params.cache-and-compat.test.ts b/packages/ai/src/transports/openai-completions-params.cache-and-compat.test.ts
+index 4dd78e4d..ee254531 100644
+--- a/packages/ai/src/transports/openai-completions-params.cache-and-compat.test.ts
++++ b/packages/ai/src/transports/openai-completions-params.cache-and-compat.test.ts
+@@ -231,6 +231,33 @@ describe("openai completions params", () => {
+     expect(defaultRetention).not.toHaveProperty("prompt_cache_retention");
+   });
+
++  it("adds Anthropic cache-control markers for opted-in compatible providers", () => {
++    const params = buildOpenAICompletionsParams(
++      makeCompletionsModel({
++        provider: "lobsterai-server",
++        baseUrl: "http://127.0.0.1:17890/v1",
++        compat: { cacheControlFormat: "anthropic" },
++      }),
++      {
++        systemPrompt: "stable instructions",
++        messages: [{ role: "user", content: "cache this", timestamp: 1 }],
++        tools: [
++          { name: "read", description: "Read a file", parameters: { type: "object" } },
++        ],
++      } as never,
++      { cacheRetention: "short" },
++    ) as {
++      messages?: Array<{ role?: string; content?: Array<Record<string, unknown>> }>;
++      tools?: Array<Record<string, unknown>>;
++    };
++
++    const systemMessage = params.messages?.find((message) => message.role === "system");
++    const userMessage = params.messages?.find((message) => message.role === "user");
++    expect(systemMessage?.content?.[0]?.cache_control).toEqual({ type: "ephemeral" });
++    expect(userMessage?.content?.[0]?.cache_control).toEqual({ type: "ephemeral" });
++    expect(params.tools?.at(-1)?.cache_control).toEqual({ type: "ephemeral" });
++  });
++
+   it("keeps Mistral prompt cache keys without unsupported long retention", () => {
+     const model = {
+       id: "mistral-large-latest",
+diff --git a/packages/ai/src/transports/openai-completions-params.ts b/packages/ai/src/transports/openai-completions-params.ts
+index 540c155a..3678f026 100644
+--- a/packages/ai/src/transports/openai-completions-params.ts
++++ b/packages/ai/src/transports/openai-completions-params.ts
+@@ -18,7 +18,10 @@ import {
+   reconcileOpenAICompletionsToolChoice,
+ } from "../providers/openai-tool-projection.js";
+ import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
+-import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
++import {
++  splitSystemPromptCacheBoundary,
++  stripSystemPromptCacheBoundary,
++} from "../utils/system-prompt-cache-boundary.js";
+ import { resolveOpenAIStrictToolSetting, resolveProviderEndpoint } from "./host-policy.js";
+ import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
+ import { emitModelTransportDebug } from "./model-transport-debug.js";
+@@ -289,6 +292,97 @@ function convertTools(
+   };
+ }
+
++type OpenAICompatCacheControl = {
++  type: "ephemeral";
++  ttl?: "1h";
++};
++
++function resolveAnthropicCacheControl(
++  compat: ReturnType<typeof getCompat>,
++  cacheRetention: ReturnType<typeof resolveCacheRetention>,
++): OpenAICompatCacheControl | undefined {
++  if (compat.cacheControlFormat !== "anthropic" || cacheRetention === "none") {
++    return undefined;
++  }
++  return {
++    type: "ephemeral",
++    ...(cacheRetention === "long" && compat.supportsLongCacheRetention ? { ttl: "1h" } : {}),
++  };
++}
++
++function addCacheControlToTextContent(
++  message: Record<string, unknown>,
++  cacheControl: OpenAICompatCacheControl,
++): boolean {
++  const content = message.content;
++  if (typeof content === "string") {
++    if (content.length === 0) {
++      return false;
++    }
++    const split = splitSystemPromptCacheBoundary(content);
++    message.content = split
++      ? [
++          ...(split.stablePrefix
++            ? [{ type: "text", text: split.stablePrefix, cache_control: cacheControl }]
++            : []),
++          ...(split.dynamicSuffix ? [{ type: "text", text: split.dynamicSuffix }] : []),
++        ]
++      : [{ type: "text", text: content, cache_control: cacheControl }];
++    return true;
++  }
++  if (!Array.isArray(content)) {
++    return false;
++  }
++  for (let i = content.length - 1; i >= 0; i--) {
++    const part = content[i];
++    if (part && typeof part === "object" && "type" in part && part.type === "text") {
++      (part as Record<string, unknown>).cache_control = cacheControl;
++      return true;
++    }
++  }
++  return false;
++}
++
++function applyAnthropicCacheControl(
++  messages: unknown,
++  tools: unknown,
++  cacheControl: OpenAICompatCacheControl,
++  cacheOptOutIndexes: ReadonlySet<number>,
++): void {
++  if (Array.isArray(messages)) {
++    for (const message of messages) {
++      if (
++        message &&
++        typeof message === "object" &&
++        "role" in message &&
++        (message.role === "system" || message.role === "developer")
++      ) {
++        addCacheControlToTextContent(message as Record<string, unknown>, cacheControl);
++        break;
++      }
++    }
++    for (let i = messages.length - 1; i >= 0; i--) {
++      const message = messages[i];
++      if (
++        !cacheOptOutIndexes.has(i) &&
++        message &&
++        typeof message === "object" &&
++        "role" in message &&
++        (message.role === "user" || message.role === "assistant") &&
++        addCacheControlToTextContent(message as Record<string, unknown>, cacheControl)
++      ) {
++        break;
++      }
++    }
++  }
++  if (Array.isArray(tools)) {
++    const lastTool = tools.at(-1);
++    if (lastTool && typeof lastTool === "object") {
++      (lastTool as Record<string, unknown>).cache_control = cacheControl;
++    }
++  }
++}
++
+ export function buildOpenAICompletionsParams(
+   model: OpenAIModeModel,
+   context: Context,
+@@ -296,18 +390,23 @@ export function buildOpenAICompletionsParams(
+ ) {
+   const compat = getCompat(model);
+   const compatDetection = detectOpenAICompletionsCompat(model);
+-  const completionsContext = context.systemPrompt
++  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
++  const cacheControl = resolveAnthropicCacheControl(compat, cacheRetention);
++  const cacheOptOutIndexes = new Set<number>();
++  const completionsContext = context.systemPrompt && !cacheControl
+     ? {
+         ...context,
+         systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
+       }
+     : context;
+-  let messages = convertMessages(model as never, completionsContext, compat as never);
++  let messages = convertMessages(model as never, completionsContext, compat as never, {
++    cacheOptOutIndexes,
++    preserveSystemPromptCacheBoundary: cacheControl !== undefined,
++  });
+   applyCompletionsReplay(messages as unknown[], context, model, compat);
+   if (compat.strictMessageKeys) {
+     messages = stripCompletionMessagesToRoleContent(messages) as typeof messages;
+   }
+-  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+   const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
+   const params: Record<string, unknown> = {
+     model: model.id,
+@@ -402,6 +501,9 @@ export function buildOpenAICompletionsParams(
+       delete params.tool_choice;
+     }
+   }
++  if (cacheControl) {
++    applyAnthropicCacheControl(params.messages, params.tools, cacheControl, cacheOptOutIndexes);
++  }
+   {
+     const maxTokenBudget = resolveOpenAICompletionsMaxTokens(model, options);
+     const effectiveMaxTokens = maxTokenBudget.maxTokens;

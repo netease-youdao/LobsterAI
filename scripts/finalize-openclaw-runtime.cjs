@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createRequire } = require('module');
+const { OPENCLAW_BUNDLE_ASSET_TARGETS } = require('./openclaw-bundle-assets.cjs');
 const {
   DIST_CONTROL_UI_INDEX,
   DIST_DIFFS_EXTENSION_DIR,
@@ -46,6 +47,12 @@ if (!fs.existsSync(path.join(runtimeRoot, DIST_ENTRY_JS)) && !fs.existsSync(path
 }
 if (!fs.existsSync(bundlePath)) {
   fail(`Missing gateway bundle before finalize: ${bundlePath}`);
+}
+for (const target of OPENCLAW_BUNDLE_ASSET_TARGETS) {
+  const assetPath = path.join(runtimeRoot, target.targetFile);
+  if (!fs.existsSync(assetPath)) {
+    fail(`Missing required gateway bundle asset before finalize: ${assetPath}`);
+  }
 }
 
 const requireFromRoot = createRequire(path.join(rootDir, 'package.json'));

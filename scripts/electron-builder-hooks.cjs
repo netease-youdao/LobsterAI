@@ -4,6 +4,7 @@ const path = require('path');
 const { existsSync, readdirSync, statSync, mkdirSync, readFileSync, rmSync, cpSync, lstatSync, writeFileSync } = require('fs');
 const { spawnSync } = require('child_process');
 const asar = require('@electron/asar');
+const { OPENCLAW_BUNDLE_ASSET_TARGETS } = require('./openclaw-bundle-assets.cjs');
 const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-python-runtime.js');
 const { syncLocalOpenClawExtensions } = require('./sync-local-openclaw-extensions.cjs');
 const { packMultipleSources } = require('./pack-openclaw-tar.cjs');
@@ -268,6 +269,17 @@ function ensureBundledOpenClawRuntime(context) {
       '[electron-builder-hooks] gateway-bundle.mjs is suspiciously small ('
       + gatewayBundleStat.size
       + ' bytes, expected ~27MB). Rebuild with: `npm run openclaw:bundle`.',
+    );
+  }
+
+  const missingBundleAssets = OPENCLAW_BUNDLE_ASSET_TARGETS
+    .map((target) => path.join(runtimeRoot, target.targetFile))
+    .filter((candidate) => !existsSync(candidate));
+  if (missingBundleAssets.length > 0) {
+    throw new Error(
+      '[electron-builder-hooks] Bundled OpenClaw runtime is missing gateway bundle assets: '
+      + missingBundleAssets.join(', ')
+      + '. Run `npm run openclaw:bundle` before packaging.',
     );
   }
 
