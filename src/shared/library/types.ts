@@ -4,6 +4,7 @@ import type {
   HtmlShareSourceType,
   HtmlShareStatus,
 } from '../htmlShare/constants';
+import type { PublishingSubscriptionRecoveryMode } from '../publishing/constants';
 import type { SiteKind, SiteStatus } from '../site/constants';
 import type {
   LibraryArtifactType,
@@ -87,10 +88,11 @@ export interface SharedFileItem extends LibraryItemBase {
   shareCodeUnavailable?: boolean;
   updatedAt?: string;
   contentUpdatedAt?: string;
-  accessExpiresAt?: number;
+  accessExpiresAt?: number | null;
   effectiveAvailable?: boolean;
-  effectiveExpiresAt?: number;
+  effectiveExpiresAt?: number | null;
   effectiveUnavailableReason?: LibraryCloudUnavailableReason;
+  subscriptionRecoveryMode?: PublishingSubscriptionRecoveryMode;
 }
 
 export interface DeployedSiteItem extends LibraryItemBase {
@@ -106,10 +108,11 @@ export interface DeployedSiteItem extends LibraryItemBase {
   clientSourceKey?: string;
   artifactId?: string;
   updatedAt?: string;
-  accessExpiresAt?: number;
+  accessExpiresAt?: number | null;
   effectiveAvailable?: boolean;
-  effectiveExpiresAt?: number;
+  effectiveExpiresAt?: number | null;
   effectiveUnavailableReason?: LibraryCloudUnavailableReason;
+  subscriptionRecoveryMode?: PublishingSubscriptionRecoveryMode;
 }
 
 export type LibraryItem = LocalArtifactItem | SharedFileItem | DeployedSiteItem;

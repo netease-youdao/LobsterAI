@@ -93,6 +93,14 @@ export function formatHtmlShareFailure(failure?: HtmlShareFailureDescriptor | nu
       return i18nService.t('htmlShareDisabledCannotUpdate');
     case HtmlShareErrorCode.UnsafeSvg:
       return i18nService.t('artifactShareSvgRejected');
+    case HtmlShareErrorCode.VideoTaskNotFound:
+      return i18nService.t('htmlShareVideoTaskNotFound');
+    case HtmlShareErrorCode.VideoSourceUnavailable:
+      return i18nService.t('htmlShareVideoSourceUnavailable');
+    case HtmlShareErrorCode.VideoPrepareFailed:
+      return i18nService.t('htmlShareVideoPrepareFailed');
+    case HtmlShareErrorCode.VideoUnsupported:
+      return i18nService.t('htmlShareVideoUnsupported');
     default:
       return i18nService.t('htmlShareErrorGeneric');
   }

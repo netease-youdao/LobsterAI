@@ -43,7 +43,7 @@ import {
 } from '../shared/analytics/constants';
 import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode, AppSettingsIpc } from '../shared/appSettings/constants';
-import { AppUpdateIpc } from '../shared/appUpdate/constants';
+import { type AppUpdateActiveWorkloads, AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
 import { createAccountOwnerKey } from '../shared/auth/accountOwner';
 import {
@@ -280,6 +280,12 @@ import {
   OpenClawRuntimeAdapter,
   type PermissionResult,
 } from './libs/agentEngine';
+import {
+  appQuitConfirmationGate,
+  AppQuitRequestVerdict,
+  quitAppWithoutConfirmation,
+  showAppQuitConfirmation,
+} from './libs/appQuitConfirmation';
 import { AppUpdateCoordinator, INSTALLATION_UUID_KEY } from './libs/appUpdateCoordinator';
 import { AuthCallbackRouter } from './libs/authCallbackRouter';
 import {
@@ -371,11 +377,14 @@ import {
   packageArtifactFile,
 } from './libs/htmlShare/artifactFileSharePackager';
 import {
+  createGeneratedVideoShare,
   deleteHtmlSharePermanently,
+  getGeneratedVideoShareSource,
   getHtmlShareAnalytics,
   getHtmlShareBySource,
   getHtmlShareQuota,
   getPublishingTrialPolicy,
+  resolveLegacyGeneratedVideoSource,
   updateHtmlShare,
   updateHtmlShareAccessMode,
   updateHtmlShareStatus,
@@ -679,6 +688,24 @@ interface HtmlShareGetByArtifactFileInput {
   filePath?: string;
 }
 
+interface HtmlShareCreateFromGeneratedVideoInput {
+  taskId: string;
+  outputIndex: number;
+  sessionId: string;
+  artifactId: string;
+  title: string;
+  accessMode?: HtmlShareAccessModeValue;
+}
+
+interface HtmlShareGetGeneratedVideoSourceInput {
+  taskId: string;
+  outputIndex: number;
+}
+
+interface HtmlShareResolveLegacyGeneratedVideoSourceInput {
+  resultUrl: string;
+}
+
 interface HtmlShareGetBySourceInput {
   sourceType: HtmlShareSourceTypeValue;
   clientSourceKey: string;
@@ -911,6 +938,71 @@ function sanitizeGetByArtifactFileInput(input: unknown): HtmlShareGetByArtifactF
     throw new Error('Artifact share lookup source is required.');
   }
   return options;
+}
+
+function sanitizeGeneratedVideoTaskId(value: unknown): string {
+  const taskId = sanitizeHtmlShareString(value, 'taskId', 19);
+  if (!/^[1-9]\d*$/.test(taskId)) {
+    throw new Error('taskId must be a positive decimal identifier.');
+  }
+  return taskId;
+}
+
+function sanitizeGeneratedVideoOutputIndex(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 9999) {
+    throw new Error('outputIndex must be a non-negative integer.');
+  }
+  return value;
+}
+
+function sanitizeCreateFromGeneratedVideoInput(
+  input: unknown,
+): HtmlShareCreateFromGeneratedVideoInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid generated video share request.');
+  }
+  const source = input as Record<string, unknown>;
+  return {
+    taskId: sanitizeGeneratedVideoTaskId(source.taskId),
+    outputIndex: sanitizeGeneratedVideoOutputIndex(source.outputIndex),
+    sessionId: sanitizeHtmlShareString(source.sessionId, 'sessionId', 128),
+    artifactId: sanitizeHtmlShareString(source.artifactId, 'artifactId', 128),
+    title: sanitizeHtmlShareTitle(source.title),
+    accessMode: sanitizeHtmlShareAccessMode(source.accessMode, HtmlShareAccessMode.Code),
+  };
+}
+
+function sanitizeGetGeneratedVideoSourceInput(
+  input: unknown,
+): HtmlShareGetGeneratedVideoSourceInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid generated video share lookup request.');
+  }
+  const source = input as Record<string, unknown>;
+  return {
+    taskId: sanitizeGeneratedVideoTaskId(source.taskId),
+    outputIndex: sanitizeGeneratedVideoOutputIndex(source.outputIndex),
+  };
+}
+
+function sanitizeResolveLegacyGeneratedVideoSourceInput(
+  input: unknown,
+): HtmlShareResolveLegacyGeneratedVideoSourceInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid generated video source resolution request.');
+  }
+  const source = input as Record<string, unknown>;
+  const resultUrl = sanitizeHtmlShareString(source.resultUrl, 'resultUrl', 4096);
+  let parsed: URL;
+  try {
+    parsed = new URL(resultUrl);
+  } catch {
+    throw new Error('resultUrl must be a valid HTTPS URL.');
+  }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+    throw new Error('resultUrl must be a valid HTTPS URL.');
+  }
+  return { resultUrl };
 }
 
 function sanitizeGetHtmlShareBySourceInput(input: unknown): HtmlShareGetBySourceInput {
@@ -4886,7 +4978,7 @@ if (!gotTheLock) {
   ipcMain.handle('app:relaunch', () => {
     console.log('[Main] app:relaunch requested, scheduling restart...');
     app.relaunch();
-    app.quit();
+    quitAppWithoutConfirmation('app:relaunch');
   });
 
   // Window control IPC handlers
@@ -5859,9 +5951,10 @@ if (!gotTheLock) {
             taskId,
           );
         }
-        const assets = resultUrls.map(url => ({
+        const assets = resultUrls.map((url, outputIndex) => ({
           type: statusMediaType,
           url,
+          outputIndex,
           mimeType: resolveGeneratedMediaAssetMimeType(statusMediaType, url),
         }));
 
@@ -6279,9 +6372,10 @@ if (!gotTheLock) {
         resultCount: resultUrls.length,
         quotaRemaining: task.quotaRemaining,
       }));
-      const assets = resultUrls.map(url => ({
+      const assets = resultUrls.map((url, outputIndex) => ({
         type: mediaType,
         url,
+        outputIndex,
         mimeType: resolveGeneratedMediaAssetMimeType(mediaType, url),
         ...(args.filename ? { filename: args.filename as string } : {}),
       }));
@@ -6369,6 +6463,7 @@ if (!gotTheLock) {
           model: outputModel,
           ...(upstreamModel ? { upstreamModel } : {}),
           ...(modelSelectionReason ? { modelSelectionReason } : {}),
+          mediaType,
           ...(detailsAssets.length > 0 ? { assets: detailsAssets } : {}),
           ...(Object.keys(billing).length > 0 ? { billing } : {}),
         },
@@ -6509,9 +6604,10 @@ if (!gotTheLock) {
             ? task.modelSelectionReason.trim()
             : undefined;
           const displayModel = upstreamModel || outputModel;
-          const assets = resultUrls.map(url => ({
+          const assets = resultUrls.map((url, outputIndex) => ({
             type: tracker.mediaType,
             url,
+            outputIndex,
             mimeType: resolveGeneratedMediaAssetMimeType(tracker.mediaType, url),
           }));
           if (status === 'succeeded' && tracker.mediaType === 'image') {
@@ -6526,7 +6622,9 @@ if (!gotTheLock) {
                 `Saved generated ${persistResult.saved.length === 1 ? 'image' : 'images'}:\n${fileLines.join('\n')}`,
                 {
                   toolResultDetails: {
+                    taskId,
                     status: 'succeeded',
+                    mediaType: 'image',
                     assets: persistResult.saved,
                   },
                 },
@@ -6559,7 +6657,9 @@ if (!gotTheLock) {
                 ].join('\n'),
                 {
                   toolResultDetails: {
+                    taskId,
                     status: 'succeeded',
+                    mediaType: 'video',
                     model: outputModel,
                     ...(upstreamModel ? { upstreamModel } : {}),
                     ...(modelSelectionReason ? { modelSelectionReason } : {}),
@@ -6569,14 +6669,25 @@ if (!gotTheLock) {
               );
             } else {
               const resultLines = resultUrls.map(url => `  - ${url}`);
-              emitMediaTaskMessage(tracker.sessionId, [
-                'Video generation succeeded.',
-                `Task ID: ${taskId}`,
-                `Model: ${displayModel}`,
-                ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
-                ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
-                ...(task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
-              ].join('\n'));
+              emitMediaTaskMessage(
+                tracker.sessionId,
+                [
+                  'Video generation succeeded.',
+                  `Task ID: ${taskId}`,
+                  `Model: ${displayModel}`,
+                  ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
+                  ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
+                  ...(task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
+                ].join('\n'),
+                {
+                  toolResultDetails: {
+                    taskId,
+                    status: 'succeeded',
+                    mediaType: 'video',
+                    assets,
+                  },
+                },
+              );
             }
           } else {
             const resultLines = tracker.mediaType === 'image'
@@ -7658,6 +7769,58 @@ if (!gotTheLock) {
     } catch (error) {
       console.error('[HtmlShare] failed to look up share from artifact file:', error);
       return serializeHtmlShareFailure(error, 'Failed to load share');
+    }
+  });
+
+  ipcMain.handle(HtmlShareIpc.CreateFromGeneratedVideo, async (_event, input: unknown) => {
+    try {
+      const { scopedFetch } = capturePublishingRequest();
+      const options = sanitizeCreateFromGeneratedVideoInput(input);
+      return await createGeneratedVideoShare(
+        getServerApiBaseUrl(),
+        getHtmlSharePublicBaseUrl(),
+        scopedFetch,
+        options,
+      );
+    } catch (error) {
+      console.error('[HtmlShare] failed to create share from generated video:', error);
+      return serializeHtmlShareFailure(error, 'Failed to create generated video share');
+    }
+  });
+
+  ipcMain.handle(HtmlShareIpc.GetGeneratedVideoSource, async (_event, input: unknown) => {
+    try {
+      const { scopedFetch } = capturePublishingRequest();
+      const options = sanitizeGetGeneratedVideoSourceInput(input);
+      return await getGeneratedVideoShareSource(
+        getServerApiBaseUrl(),
+        getHtmlSharePublicBaseUrl(),
+        scopedFetch,
+        options.taskId,
+        options.outputIndex,
+      );
+    } catch (error) {
+      console.error('[HtmlShare] failed to look up generated video share:', error);
+      return serializeHtmlShareFailure(error, 'Failed to load generated video share');
+    }
+  });
+
+  ipcMain.handle(HtmlShareIpc.ResolveLegacyGeneratedVideoSource, async (_event, input: unknown) => {
+    try {
+      const { scopedFetch } = capturePublishingRequest();
+      const options = sanitizeResolveLegacyGeneratedVideoSourceInput(input);
+      const resultUrlSha256 = crypto
+        .createHash('sha256')
+        .update(options.resultUrl, 'utf8')
+        .digest('hex');
+      return await resolveLegacyGeneratedVideoSource(
+        getServerApiBaseUrl(),
+        scopedFetch,
+        resultUrlSha256,
+      );
+    } catch (error) {
+      console.error('[HtmlShare] failed to resolve legacy generated video source:', error);
+      return serializeHtmlShareFailure(error, 'Failed to verify generated video source');
     }
   });
 
@@ -8812,7 +8975,6 @@ if (!gotTheLock) {
       return app.getPath('home');
     },
     getWorkbenchTitle: () => t('dshWorkbenchTitle'),
-    syncOpenClawConfig,
   });
 
 
@@ -12948,17 +13110,18 @@ if (!gotTheLock) {
     return { success: true, state };
   });
 
-  ipcMain.handle(AppUpdateIpc.CancelDownload, async () => {
-    const state = getAppUpdateCoordinator().cancelDownload();
-    return { success: true, state };
-  });
-
   ipcMain.handle(AppUpdateIpc.InstallReady, async () => {
     return getAppUpdateCoordinator().installReadyUpdate();
   });
 
   ipcMain.handle(AppUpdateIpc.GetCompletedUpdate, async () => {
     return { version: getAppUpdateCoordinator().consumeCompletedUpdateVersion() };
+  });
+
+  // Installing quits the app, so the renderer asks before interrupting a
+  // running agent turn or scheduled task.
+  ipcMain.handle(AppUpdateIpc.GetActiveWorkloads, async (): Promise<AppUpdateActiveWorkloads> => {
+    return { hasActiveWorkloads: hasActiveGatewayWorkloads() };
   });
 
   // Helper: detect if a URL belongs to GitHub Copilot and apply token refresh on 401.
@@ -13945,6 +14108,21 @@ if (!gotTheLock) {
   // kill — and that zombie is what the installer later has to hunt down.
   const APP_CLEANUP_WATCHDOG_MS = 10_000;
 
+  // While the quit confirmation is open on macOS, the parentless alert runs a
+  // nested native loop: app.exit() only stops that modal session and the main
+  // loop never quits, leaving a process that ignores every later exit call
+  // (process.exit is mapped to app.exit in Electron's main process, so it is
+  // no escape either). Cleanup has already run by the time this is called, so
+  // killing the process outright is safe; electron-log writes synchronously.
+  const exitAppProcess = (code: number) => {
+    if (isMac && appQuitConfirmationGate.isPromptOpen()) {
+      console.warn(`[Main] quit confirmation prompt still open, killing process instead of app.exit(${code})`);
+      process.kill(process.pid, 'SIGKILL');
+      return;
+    }
+    app.exit(code);
+  };
+
   const runAppCleanupAndExit = (trigger: string) => {
     isCleanupInProgress = true;
     isQuitting = true;
@@ -13953,7 +14131,7 @@ if (!gotTheLock) {
       console.error(
         `[Main] App cleanup did not finish within ${APP_CLEANUP_WATCHDOG_MS}ms (trigger=${trigger}, stuck at step: ${currentAppCleanupStep}), forcing exit`,
       );
-      app.exit(1);
+      exitAppProcess(1);
     }, APP_CLEANUP_WATCHDOG_MS);
 
     void runAppCleanup()
@@ -13964,7 +14142,7 @@ if (!gotTheLock) {
         clearTimeout(watchdog);
         isCleanupFinished = true;
         isCleanupInProgress = false;
-        app.exit(0);
+        exitAppProcess(0);
       });
   };
 
@@ -13976,7 +14154,34 @@ if (!gotTheLock) {
       return;
     }
 
-    runAppCleanupAndExit('before-quit');
+    const verdict = appQuitConfirmationGate.resolveQuitRequest();
+    if (verdict === AppQuitRequestVerdict.Ignore) {
+      return;
+    }
+    if (verdict === AppQuitRequestVerdict.Bypass) {
+      runAppCleanupAndExit('before-quit');
+      return;
+    }
+
+    // User-initiated quit (Cmd+Q, app menu, Dock, tray): scheduled tasks and
+    // IM replies stop with the app, so ask first.
+    void showAppQuitConfirmation()
+      .then(
+        confirmed => confirmed,
+        error => {
+          // Honor the quit rather than trap the user in a process that cannot
+          // exit because its confirmation prompt is broken.
+          console.error('[Main] quit confirmation prompt failed, quitting without it:', error);
+          return true;
+        },
+      )
+      .then(confirmed => {
+        if (appQuitConfirmationGate.finishPrompt(confirmed)) {
+          runAppCleanupAndExit('before-quit');
+        } else {
+          console.log('[Main] quit cancelled at the confirmation prompt');
+        }
+      });
   });
 
   const handleTerminationSignal = (signal: NodeJS.Signals) => {
@@ -14490,6 +14695,17 @@ if (!gotTheLock) {
       }
     });
 
+    // macOS posts this for logout, restart, and shutdown right before it asks
+    // the app to terminate. The OS already decided the quit, so do not hold
+    // the logout at the confirmation prompt. Windows session end never reaches
+    // `before-quit`, and on Linux a listener would add a logind inhibitor.
+    if (isMac) {
+      powerMonitor.on('shutdown', () => {
+        console.log('[Main] OS logout/shutdown announced, skipping quit confirmation');
+        appQuitConfirmationGate.armBypass();
+      });
+    }
+
     // 首次启动时默认开启开机自启动，并以系统登录项的实际状态回写本地标记。
     if (!getStore().get('auto_launch_initialized')) {
       getStore().set('auto_launch_initialized', true);
@@ -14599,7 +14815,9 @@ if (!gotTheLock) {
       return;
     }
     if (process.platform !== 'darwin') {
-      app.quit();
+      // Only reachable in development (production closes hide to the tray),
+      // and the window is already gone, so there is nothing to cancel back to.
+      quitAppWithoutConfirmation('window-all-closed');
     }
   });
 }

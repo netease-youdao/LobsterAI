@@ -27,6 +27,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     trayCompletedTaskTooltip: 'LobsterAI - {count} 个任务已完成',
     traySettings: '设置',
     trayQuit: '退出',
+
+    // Quit confirmation (native dialog shown on user-initiated quit)
+    appQuitConfirmTitle: '退出 LobsterAI？',
+    appQuitConfirmDetail: 'LobsterAI 关闭期间，定时任务不会运行，也无法回复 IM 消息。',
+    appQuitConfirmQuit: '退出',
+    appQuitConfirmCancel: '取消',
     taskCompletionNotificationTitle: '任务已完成',
     taskCompletionNotificationBody: '有任务已完成，点击查看结果',
     taskCompletionOverlayDescription: '有任务已完成',
@@ -375,6 +381,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     trayCompletedTaskTooltip: 'LobsterAI - {count} completed task(s)',
     traySettings: 'Settings',
     trayQuit: 'Quit',
+
+    // Quit confirmation (native dialog shown on user-initiated quit)
+    appQuitConfirmTitle: 'Quit LobsterAI?',
+    appQuitConfirmDetail: 'While LobsterAI is closed, scheduled tasks will not run and IM messages will not be answered.',
+    appQuitConfirmQuit: 'Quit',
+    appQuitConfirmCancel: 'Cancel',
     taskCompletionNotificationTitle: 'Task Complete',
     taskCompletionNotificationBody: 'A task has finished. Click to view the result.',
     taskCompletionOverlayDescription: 'Task complete',

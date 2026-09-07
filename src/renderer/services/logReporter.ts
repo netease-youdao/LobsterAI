@@ -75,6 +75,15 @@ interface PendingAnalyticsEvent {
   timestamp: number;
 }
 
+export interface ReportYdAnalyzerOptions {
+  /**
+   * Identity at the product touchpoint being attributed. This is intentionally
+   * narrow: user/session identity and all other common fields still come from
+   * the reporter's trusted event-time snapshot.
+   */
+  touchpointIdentityType?: PublishingIdentityType;
+}
+
 const PendingAnalyticsQueueLimit = 500;
 const PendingAnalyticsRetryDelayMs = 1_000;
 const pendingAnalyticsEvents: PendingAnalyticsEvent[] = [];
@@ -227,12 +236,20 @@ export const buildLogUrl = (
   return url.href;
 };
 
-const createPendingEvent = (params: LogEventParams): PendingAnalyticsEvent => ({
-  params: { ...params },
-  identity: getAnalyticsIdentitySnapshot(),
-  eventId: createEventId(),
-  timestamp: Date.now(),
-});
+const createPendingEvent = (
+  params: LogEventParams,
+  options: ReportYdAnalyzerOptions,
+): PendingAnalyticsEvent => {
+  const identity = getAnalyticsIdentitySnapshot();
+  return {
+    params: { ...params },
+    identity: options.touchpointIdentityType
+      ? { ...identity, identityType: options.touchpointIdentityType }
+      : identity,
+    eventId: createEventId(),
+    timestamp: Date.now(),
+  };
+};
 
 const sendPendingEvent = async (
   event: PendingAnalyticsEvent,
@@ -314,7 +331,10 @@ const flushPendingAnalyticsEvents = async (): Promise<void> => {
   return pendingAnalyticsFlushPromise;
 };
 
-export const reportYdAnalyzer = async (params: LogEventParams): Promise<boolean> => {
+export const reportYdAnalyzer = async (
+  params: LogEventParams,
+  options: ReportYdAnalyzerOptions = {},
+): Promise<boolean> => {
   if (configService.getConfig().usageAnalyticsEnabled === false) {
     writeReporterLog('debug', `skipped event ${params.action} because usage analytics is disabled`);
     return false;
@@ -330,7 +350,7 @@ export const reportYdAnalyzer = async (params: LogEventParams): Promise<boolean>
     return false;
   }
 
-  const event = createPendingEvent(params);
+  const event = createPendingEvent(params, options);
   const result = await sendPendingEvent(event);
   if (result === 'uuid_unavailable') {
     enqueuePendingAnalyticsEvent(event);

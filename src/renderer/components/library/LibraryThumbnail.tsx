@@ -6,13 +6,13 @@ import {
 import React, { useEffect, useRef, useState } from 'react';
 
 import {
-  LibraryThumbnailRequestPriority,
-  type LibraryThumbnailRequestPriorityType,
-} from '../../../shared/library/thumbnail';
-import {
   LibraryCategory,
   LibraryItemKind,
 } from '../../../shared/library/constants';
+import {
+  LibraryThumbnailRequestPriority,
+  type LibraryThumbnailRequestPriorityType,
+} from '../../../shared/library/thumbnail';
 import type { LibraryItem } from '../../../shared/library/types';
 import { i18nService } from '../../services/i18n';
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
@@ -26,10 +26,10 @@ import {
   getCachedLibraryThumbnail,
 } from './libraryThumbnailCache';
 import {
-  LibraryThumbnailLoadStatus,
   type LibraryThumbnailLoadState,
-  type LibraryThumbnailSubscription,
+  LibraryThumbnailLoadStatus,
   libraryThumbnailScheduler,
+  type LibraryThumbnailSubscription,
 } from './libraryThumbnailScheduler';
 
 const LoadingStatuses = new Set<LibraryThumbnailLoadState['status']>([
@@ -110,6 +110,7 @@ const LibraryThumbnail: React.FC<{ item: LibraryItem }> = ({ item }) => {
   const subscriptionRef = useRef<LibraryThumbnailSubscription>();
   const [isNearViewport, setIsNearViewport] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
+  const isVisibleRef = useRef(isVisible);
   const [thumbnail, setThumbnail] = useState<{
     cacheKey: string;
     dataUrl: string;
@@ -154,11 +155,23 @@ const LibraryThumbnail: React.FC<{ item: LibraryItem }> = ({ item }) => {
   }, [cacheKey]);
 
   useEffect(() => {
+    // Sync the ref before the subscribe effect below runs (effects run in
+    // declaration order) so a fresh subscription starts with the current
+    // priority without re-subscribing on every visibility change, which
+    // would cancel in-flight thumbnail renders.
+    isVisibleRef.current = isVisible;
+    const priority: LibraryThumbnailRequestPriorityType = isVisible
+      ? LibraryThumbnailRequestPriority.Visible
+      : LibraryThumbnailRequestPriority.NearViewport;
+    subscriptionRef.current?.updatePriority(priority);
+  }, [isVisible]);
+
+  useEffect(() => {
     if (!localItem || !cacheKey || !isNearViewport || dataUrl) return undefined;
     const requestedCacheKey = cacheKey;
     const subscription = libraryThumbnailScheduler.subscribe({
       key: requestedCacheKey,
-      priority: isVisible
+      priority: isVisibleRef.current
         ? LibraryThumbnailRequestPriority.Visible
         : LibraryThumbnailRequestPriority.NearViewport,
       load: (requestId, priority) => window.electron.dialog.generateThumbnail({
@@ -182,13 +195,6 @@ const LibraryThumbnail: React.FC<{ item: LibraryItem }> = ({ item }) => {
       if (subscriptionRef.current === subscription) subscriptionRef.current = undefined;
     };
   }, [cacheKey, dataUrl, isNearViewport, localItem]);
-
-  useEffect(() => {
-    const priority: LibraryThumbnailRequestPriorityType = isVisible
-      ? LibraryThumbnailRequestPriority.Visible
-      : LibraryThumbnailRequestPriority.NearViewport;
-    subscriptionRef.current?.updatePriority(priority);
-  }, [isVisible]);
 
   return (
     <div ref={containerRef} className="h-full w-full">

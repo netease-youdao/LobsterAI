@@ -91,6 +91,7 @@ import {
   shouldReloadCurrentSessionForChange,
 } from './coworkSessionRefreshPolicy';
 import { i18nService } from './i18n';
+import { reportOnboardingAction } from './onboardingAnalytics';
 
 const STREAM_ERROR_DUPLICATE_WINDOW_MS = 10_000;
 
@@ -828,6 +829,10 @@ class CoworkService {
       'debug',
       `starting new user welcome task stream animation; session=${session.id}; chars=${characters.length}.`,
     );
+    reportOnboardingAction('welcome_stream_start', {
+      source: 'new_user_welcome_task',
+      charCount: characters.length,
+    });
 
     this.newUserWelcomeAnimationTimer = setInterval(() => {
       visibleCount = Math.min(
@@ -852,6 +857,10 @@ class CoworkService {
           'debug',
           `completed new user welcome task stream animation; session=${session.id}.`,
         );
+        reportOnboardingAction('welcome_stream_complete', {
+          source: 'new_user_welcome_task',
+          charCount: characters.length,
+        });
       }
     }, NEW_USER_WELCOME_STREAM_INTERVAL_MS);
   }
@@ -861,7 +870,7 @@ class CoworkService {
     store.dispatch(existsInSessionList ? setCurrentSession(session) : addSession(session));
   }
 
-  async seedNewUserWelcomeTask(): Promise<{ session: CoworkSession | null; error?: string }> {
+  async seedNewUserWelcomeTask(): Promise<{ session: CoworkSession | null; created?: boolean; error?: string }> {
     const cowork = window.electron?.cowork;
     if (!cowork?.seedNewUserWelcomeTask) {
       this.logDiagnostic('warn', 'new user welcome task seed IPC is unavailable.');
@@ -918,7 +927,7 @@ class CoworkService {
         `new user welcome task ready; session=${result.session.id}; `
         + `created=${Boolean(result.created)}; animated=${Boolean(welcomeMessage)}.`,
       );
-      return { session: result.session };
+      return { session: result.session, created: result.created === true };
     } catch (error) {
       this.logDiagnostic(
         'warn',

@@ -16,6 +16,7 @@ import {
   buildNodeDeploymentClientSourceKey,
   buildStaticDeploymentClientSourceKey,
   downloadDeploymentPersistenceArchive,
+  getNodeDeployment,
   uploadNodeDeployment,
 } from './shareDeploymentClient';
 
@@ -89,6 +90,27 @@ describe('buildStaticDeploymentClientSourceKey', () => {
       localServiceUrl: 'http://localhost:3000/login',
       projectDirectory: '/Users/admin/project/fanren-vote',
     }));
+  });
+});
+
+describe('deployment response normalization', () => {
+  test('preserves missing and explicit null deployment expiry fields', async () => {
+    const lookup = (data: Record<string, unknown>) => getNodeDeployment(
+      'https://server.test',
+      'https://server.test/s',
+      async () => new Response(
+        JSON.stringify({ code: 0, data }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+      String(data.deploymentId),
+    );
+
+    const missingResult = await lookup({ deploymentId: 'dep_missing_expiry' });
+    const nullResult = await lookup({ deploymentId: 'dep_null_expiry', expiresAt: null });
+
+    expect(Object.prototype.hasOwnProperty.call(missingResult.deployment, 'expiresAt')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(nullResult.deployment, 'expiresAt')).toBe(true);
+    expect(nullResult.deployment?.expiresAt).toBeNull();
   });
 });
 

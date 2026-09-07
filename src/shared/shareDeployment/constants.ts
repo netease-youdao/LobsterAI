@@ -4,6 +4,7 @@ import type {
   HtmlShareDisabledSource,
   HtmlShareStatus,
 } from '../htmlShare/constants';
+import type { PublishingSubscriptionRecoveryMode } from '../publishing/constants';
 
 export const ShareDeploymentIpc = {
   DetectProjectCandidates: 'shareDeployment:detectProjectCandidates',
@@ -276,7 +277,8 @@ export interface ShareDeploymentRecord {
   providerEndpoint?: string;
   persistence?: ShareDeploymentPersistence;
   deployedAt?: string;
-  expiresAt?: string;
+  expiresAt?: string | null;
+  subscriptionRecoveryMode?: PublishingSubscriptionRecoveryMode;
   lastAccessedAt?: string;
   errorCode?: ShareDeploymentFailureCode;
   errorMessage?: string;

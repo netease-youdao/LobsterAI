@@ -21,10 +21,10 @@ export const AppUpdateIpc = {
   GetState: 'appUpdate:getState',
   CheckNow: 'appUpdate:checkNow',
   RetryDownload: 'appUpdate:retryDownload',
-  CancelDownload: 'appUpdate:cancelDownload',
   InstallReady: 'appUpdate:installReady',
   StateChanged: 'appUpdate:stateChanged',
   GetCompletedUpdate: 'appUpdate:getCompletedUpdate',
+  GetActiveWorkloads: 'appUpdate:getActiveWorkloads',
 } as const;
 
 /**
@@ -80,6 +80,15 @@ export interface AppUpdateCheckResult {
   state: AppUpdateRuntimeState;
   updateFound: boolean;
   error?: string;
+}
+
+/**
+ * Whether the runtime still has work that installing an update would cut
+ * short: an agent turn streaming in any session (IM-driven ones included) or a
+ * scheduled task run in progress.
+ */
+export interface AppUpdateActiveWorkloads {
+  hasActiveWorkloads: boolean;
 }
 
 export const APP_UPDATE_POLL_INTERVAL_MS = 2 * 60 * 60 * 1000;

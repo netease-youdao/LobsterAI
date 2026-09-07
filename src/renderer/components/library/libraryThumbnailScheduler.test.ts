@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
   LibraryThumbnailFailureCode,
-  LibraryThumbnailRequestPriority,
   type LibraryThumbnailGenerateResponse,
+  LibraryThumbnailRequestPriority,
 } from '../../../shared/library/thumbnail';
 import {
   LibraryThumbnailLoadStatus,

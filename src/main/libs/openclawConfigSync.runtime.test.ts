@@ -2849,6 +2849,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     const agentsMd = fs.readFileSync(agentsMdPath, 'utf8');
     expect(agentsMd).toContain('LobsterAI does not support sandbox browser execution in this version.');
     expect(agentsMd).toContain('For every `browser` tool call, set `target="host"` explicitly.');
+    expect(agentsMd).toContain('never tell the user to enable Chrome remote debugging');
   });
 
   test('enables managed OpenClaw tool loop detection', async () => {

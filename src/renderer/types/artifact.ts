@@ -16,6 +16,16 @@ export const ArtifactTypeValue = {
 export type ArtifactSource = 'inline' | 'tool' | 'file';
 export type ArtifactType = typeof ArtifactTypeValue[keyof typeof ArtifactTypeValue];
 
+export const ArtifactMediaOriginType = {
+  GeneratedVideo: 'generated_video',
+} as const;
+
+export interface GeneratedVideoArtifactOrigin {
+  type: typeof ArtifactMediaOriginType.GeneratedVideo;
+  taskId: string;
+  outputIndex: number;
+}
+
 export interface LocalServiceArtifactMetadata {
   url: string;
   origin: string;
@@ -49,6 +59,8 @@ export interface Artifact {
   localService?: LocalServiceArtifactMetadata;
   contentVersion?: number;
   remoteUrl?: string;
+  mediaOrigin?: GeneratedVideoArtifactOrigin;
+  legacyGeneratedVideoCandidate?: boolean;
   source?: ArtifactSource;
   createdAt: number;
 }

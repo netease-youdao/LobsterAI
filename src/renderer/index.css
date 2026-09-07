@@ -743,6 +743,16 @@ select::-ms-expand {
   filter: blur(0.42rem) saturate(1.18);
 }
 
+.chat-login-experience-action::before {
+  bottom: -14%;
+  height: 12%;
+  filter: blur(0.36rem);
+}
+
+.dark .chat-login-experience-action::before {
+  filter: blur(0.32rem) saturate(1.18);
+}
+
 @keyframes sidebar-login-rainbow {
   0% {
     background-position: 0% 50%;

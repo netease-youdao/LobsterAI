@@ -2,13 +2,13 @@
 
 > 日期：2026-08-17
 >
-> 最近更新：2026-08-26
+> 最近更新：2026-09-04
 >
-> 涉及仓库：`LobsterAI`、`lobsterai-server`、`lobsterai-admin`
+> 涉及仓库：`LobsterAI`、`lobsterai-server`、`lobsterai-admin`；2026-09-04 的订阅恢复入口增量只涉及前两者，`lobsterai-portal` 与 `lobsterai-admin` 无必改项
 >
 > 数据库兼容：MySQL 5.7
 >
-> 合同状态：云端列表与 lineage 为现有联调合同；分享文件永久删除已完成三端代码实现，待 NOS 物理删除消费闭环验证后才能正式开放；本文的分享文件 owner analytics 状态保持原合同说明
+> 合同状态：云端列表与 lineage 为现有联调合同；分享文件永久删除已完成三端代码实现，待 NOS 物理删除消费闭环验证后才能正式开放；本文的分享文件访问分析（owner analytics API）状态保持原合同说明；免费过期资源的恢复能力字段、CTA、客户端转化埋点和订阅返回刷新已完成客户端与服务端实现
 
 ## 范围与数据边界
 
@@ -19,9 +19,13 @@
 - 收藏全部保存在客户端 SQLite，服务端不新增收藏表或收藏接口；
 - 服务端不新增本地产物主表，也不判断本地文件是否存在。
 
-本期服务端已有云端列表只读聚合接口，并补齐现有分享更新接口对最新 `sessionId/artifactId` 的持久化；分享文件永久删除接口、客户端交互和管理员后台 `deleted` 隔离已完成实现。删除复用现有 `html_shares` 墓碑和 NOS 删除队列表，不新增核心 DDL。分享文件 owner analytics 的状态沿用下文说明。
+本期服务端已有以只读投影为主的云端聚合接口，并补齐现有分享更新接口对最新 `sessionId/artifactId` 的持久化；唯一受控副作用是有效个人订阅请求无 cursor 第一页时调用既有幂等恢复兜底，带 cursor 续页不触发。分享文件永久删除接口、客户端交互和管理员后台 `deleted` 隔离已完成实现。删除复用现有 `html_shares` 墓碑和 NOS 删除队列表，不新增核心 DDL。分享文件访问分析（owner analytics API）的状态沿用下文说明，与恢复 CTA 客户端转化埋点是两套不同数据。
+
+2026-09-04 增量只为现有分享/站点所有者响应增加可选恢复能力投影，并在 Electron 中增加套餐入口与恢复后的权威刷新。它不新增写接口、不改变分享状态机、不新增数据库表/列/索引，也不要求 Portal 或 Admin 改造。
 
 ## 发布顺序
+
+### 既有资料库、分析与永久删除基线
 
 1. 先发布包含云端列表、分享 owner analytics、永久删除接口、deleted 查询隔离和 lineage 修复的 `lobsterai-server`；旧 `DELETE /api/html-shares/{shareId}` 必须继续表示停止分享；
 2. 发布 `lobsterai-admin`，确认默认列表不显示 deleted，显式“已删除”筛选只能查看最小审计信息；
@@ -30,6 +34,13 @@
 5. 发布带资料库入口的 Electron 客户端；旧客户端继续使用现有分享与站点接口，不受影响；
 6. 分享分析入口通过客户端功能开关在 owner analytics 上线后开放；接口 404/`FEATURE_UNAVAILABLE` 时只隐藏分析入口，不回退调用 Admin 接口；
 7. 新客户端连接尚未升级的服务端时，本地产物仍可使用，云端区域显示来源级错误和重试入口。
+
+### 2026-09-04 订阅恢复入口增量
+
+1. 先发布返回可选 `subscriptionRecoveryMode`、补齐 Library/Site 投影列和公网暂停文案的服务端；旧客户端会忽略新增 JSON 字段；
+2. 再发布透传恢复模式、展示浅色黑底白字/深色白底黑字的高对比 CTA、上报恢复入口转化埋点、强制首个回焦订阅检查和账号级恢复协调器的 Electron 客户端；
+3. 服务端回滚后，新客户端将缺失、`null` 或未知模式按 `none` 处理并隐藏入口；客户端回滚后，服务端无需撤销字段；
+4. 本增量没有数据库发布步骤，V77 `access_expires_at` 属于已经落地的额度/过期基线，不在本次修改或重复执行。
 
 ## 鉴权与账号归属
 
@@ -66,6 +77,8 @@ Authorization: Bearer <token>
   "code": 0,
   "message": "success",
   "data": {
+    "serverNow": 1786933200000,
+    "recoveryPending": false,
     "list": [],
     "nextCursor": null,
     "hasMore": false,
@@ -81,6 +94,8 @@ Authorization: Bearer <token>
   }
 }
 ```
+
+`serverNow` 与 `recoveryPending` 均为向后兼容字段。`serverNow` 是本次响应生成时的 Unix epoch 毫秒；`recoveryPending` 只供有效个人订阅账号在无 cursor 第一页触发恢复兜底后做 3/10/30 秒有界重试，已停止 Node 服务不计入 pending。旧服务端缺失时客户端不得猜测。
 
 `counts` 应用当前 `category` 和 `keyword`，但不应用 `kind`，用于同一查询条件下展示“分享文件/部署站点”来源数量。
 
@@ -101,6 +116,11 @@ Authorization: Bearer <token>
   "status": "live",
   "disabledSource": null,
   "moderationStatus": "approved",
+  "accessExpiresAt": 1786939800000,
+  "effectiveAvailable": true,
+  "effectiveExpiresAt": 1786939800000,
+  "effectiveUnavailableReason": null,
+  "subscriptionRecoveryMode": "automatic",
   "totalFiles": 1,
   "totalBytes": 102400,
   "sessionId": "local-session-id",
@@ -124,7 +144,7 @@ markdown_file
 mermaid_file
 ```
 
-普通分享列表只返回 `live` 和 `disabled` 两种可管理状态；`failed`、`deleted` 不进入资料库分享文件页。`disabledSource` 可能为 `user \| admin \| moderation \| active_limit \| system`，客户端据此判断是否允许重新打开。分享没有过期状态或过期时间字段。
+普通分享列表只返回 `live` 和 `disabled` 两种原始可管理状态；`failed`、`deleted` 不进入资料库分享文件页。服务端不新增独立的原始 `expired` 状态，而是通过 `accessExpiresAt`、`effectiveAvailable`、`effectiveExpiresAt`、`effectiveUnavailableReason` 和列表级 `serverNow` 表达期限及当前可访问性。`disabledSource` 可能为 `user \| admin \| moderation \| active_limit \| system`，但它只描述关闭来源：`system` 不能单独证明资源可通过订阅恢复，CTA 必须使用 `subscriptionRecoveryMode`。
 
 ### 部署站点项
 
@@ -140,10 +160,16 @@ mermaid_file
   "accessMode": "public",
   "status": "live",
   "shareStatus": "live",
+  "disabledSource": null,
   "siteKind": "static_site",
   "siteStatus": "online",
   "deploymentId": "deployment-id",
   "deploymentStatus": "live",
+  "accessExpiresAt": 1786939800000,
+  "effectiveAvailable": true,
+  "effectiveExpiresAt": 1786939800000,
+  "effectiveUnavailableReason": null,
+  "subscriptionRecoveryMode": "automatic",
   "sessionId": "local-session-id",
   "artifactId": "session-artifact-id",
   "clientSourceKey": "sha256-key",
@@ -154,6 +180,53 @@ mermaid_file
 ```
 
 站点状态计算复用 `SiteMapper.siteStatusExpression`，必须与现有 `/api/sites` 列表保持一致。每个 `shareId` 只选择一条最新部署记录，优先级为 `active DESC, created_at DESC, id DESC`。
+
+### 有效状态与订阅恢复能力
+
+所有者接口新增可选字段：
+
+```text
+subscriptionRecoveryMode: automatic | redeploy_required | none
+```
+
+新服务端在 owner 响应中固定输出三种小写值之一；字段只因滚动发布、旧服务端和回滚场景而保持可选。
+
+它描述“当前 owner 的订阅生效后，该资源如何恢复”，不替代 `effective*`，也不是“已经过期”标记。安全白名单内的固定时限资源在到期前可以预先返回 `automatic/redeploy_required`，使页面停留跨过截止时间时无需请求服务端也能出现入口。客户端只有同时满足以下条件才展示购买 CTA：
+
+1. 当前发布账号为个人普通账号；
+2. 固定截止时间按 `serverNow + monotonic elapsed` 已到且资源当前不可访问；
+3. 模式为 `automatic` 或 `redeploy_required`。
+
+恢复矩阵：
+
+| 资源状态 | 模式 |
+| --- | --- |
+| 固定时限文件仍为 `live`，或仅因 `free access expired` 关闭 | `automatic` |
+| 固定时限网站的分享与最新 deployment 均仍 `live/active` | `automatic` |
+| 固定时限静态网站的分享仍为 `live` 或仅因免费到期关闭，且最新 deployment 为 stopped/expired inactive、静态来源仍完整 | `automatic` |
+| 固定时限 Node 的分享仍为 `live` 或仅因免费到期关闭，且最新 deployment 为 stopped/expired inactive；无论截止时间是否已到 | `redeploy_required` |
+| 用户、管理员、审核、活跃额度或未知原因关闭；`failed/deleted`；企业资源；`entitlement_grace_expired` | `none` |
+
+站点必须先分类最新 deployment 类型、`status/active` 与分享关闭状态，不能因为 `shareStatus=live` 就把已经停止的 Node 误报为 `automatic`。`automatic` 与自动恢复候选一一对应；stopped Node 只返回 `redeploy_required`，到期前仍沿用既有免费重新部署操作、不展示订阅 CTA。`subscriptionRecoveryMode` 的服务端 resolver 应与候选共用常量和测试矩阵；Library 聚合 SQL 一次性 SELECT 所需的 `disabled_reason/access_expires_at/deployment status/active`，禁止为每条记录补查形成 N+1。本变化只扩展 SELECT 和 DTO，不增加 DDL。
+
+客户端收到字段缺失、`null` 或未来未知枚举时按 `none`。Library 类型、Main/Preload 传输和详情合并必须保留显式 `null`：文件与云端项的 `accessExpiresAt: null`、部署详情的 `expiresAt: null` 都要清除旧过期快照，不能用 `newValue ?? oldValue` 留住旧值。
+
+CTA 点击后继续打开现有 Portal `#/pricing`：文件使用 `keyfrom=html_share`，网站使用 `keyfrom=site_deployment`，可选 `trace_id` 放在 hash 查询内。返回 Electron 后，由不依赖 Library 页面挂载的账号级协调器执行一次不受 30 秒节流限制的订阅检查；同一 owner 成为 active，或冷启动时已经 active 但资源仍为 `automatic`，均请求云端无 cursor 第一页。`recoveryPending=true` 时只按 3/10/30 秒重试，每轮刷新目标详情并使 owner 对应的 Library 查询失效，直到服务端返回权威可访问状态及对应期限字段为 `null`。目标页面离开只移除该详情刷新订阅，不终止同 owner 的 cloud 恢复批次；账号切换、登出、恢复完成或重试耗尽才清理账号级协调器。
+
+### 客户端恢复 CTA 转化埋点
+
+这里的埋点是在 Electron 客户端产生、通过 `reportYdAnalyzer` 上传到分析服务端的产品事件，不是 `lobsterai-server` 进程日志，也不是分享访问分析 API。它沿用现有客户端上报链路，不需要新增 `lobsterai-server` 业务接口或数据库字段。完整五 surface 合同见 [`2026-08-20-publishing-quota-expiration.md`](./2026-08-20-publishing-quota-expiration.md)；本 Library 联调需保证：
+
+- 列表、文件详情和站点详情分别使用 `recoverySurface=library_cloud_list/library_file_detail/library_site_detail`，上报 `lobsterai_publishing_recovery_cta_exposure` 与 `lobsterai_publishing_recovery_cta_action`；
+- 列表使用 `source=library_list, entryPoint=subscription_recovery_cta`，两个详情使用 `source=library_preview, entryPoint=library_settings`；新 `recoverySurface` 不覆盖旧 `surface`；
+- 共同字段固定 `interactionType=recovery_cta`、`operationType=subscription_recovery`、`identityType=free`，并带 `subscriptionRecoveryMode`、`feature/resourceKind`、`attemptId/exposureId`；点击固定 `ctaId=primary`、`target=pricing` 并生成 `operationId`；
+- 同一曝光周期的 `attemptId` 必须等于 Portal `trace_id`，并被七天 last-touch 与既有 `lobsterai_publishing_subscription_observed` 继续回传；
+- 列表行进入可视区才产生曝光，倒计时、查询刷新、有界轮询和虚拟列表重挂载不得重复上报；
+- owner/resource key 只在本地归因 envelope 中用于隔离和去重，上报 payload 必须按白名单构造，禁止整体展开本地记录；不上传 `ownerAccountKey`、`resourceKey`、`itemId/shareId/siteId/deploymentId`、文件名、路径、URL、分享码、任务标题、搜索词或资源内容；
+- `subscription_observed` 只表示七天 last-touch 内同一 personal owner 被客户端权威 auth/quota 快照观察为 `subscriptionStatus=active` 且事件上传成功，不代表 Portal 订单支付成功，也不代表 Library 资源已恢复；
+- 恢复结果单独上报 `lobsterai_publishing_recovery_result`；`automatic` 只在权威响应已可访问且期限为 `null` 时记 `outcome=restored`，`redeploy_required` 订阅生效后记 `outcome=redeploy_ready`。
+
+所有事件遵守 `usageAnalyticsEnabled`，上报失败不阻断打开套餐页。
 
 ### 排序和游标
 
@@ -415,10 +488,11 @@ mermaid_file
 - 永久删除返回 `41316`：保留资源并刷新权威详情/列表，不自动重试写操作；
 - 永久删除成功：退出详情、清理该资源的本地收藏和缓存、更新可见计数并刷新云端第一页；本地文件和任务不变；
 - 新客户端遇到没有 `/permanent` 路由的旧服务端：不得乐观移除本地列表项，应保留资源并提示服务端版本不支持。
+- 旧服务端不返回 `subscriptionRecoveryMode/serverNow/recoveryPending/effective*`：客户端保持既有展示并隐藏恢复 CTA，不能从 `disabledSource` 或中文/英文原因猜测；未知恢复枚举同样按 `none`。
 
 ## 数据库与上线核对
 
-本期不执行迁移 SQL，也不新增索引。上线前应在 MySQL 5.7 测试库完成：
+本期不执行迁移 SQL，也不新增索引；2026-09-04 恢复入口增量同样没有 DDL。上线前应在 MySQL 5.7 测试库完成：
 
 1. 个人、企业账号各准备普通分享和两种部署站点；
 2. 校验普通分享与站点互斥、已删除记录不可见；
@@ -433,5 +507,11 @@ mermaid_file
 11. 用免费账号验证 10/10 删除后仍为 10/10，9/10 删除后仍为 9/10；可见列表计数应减少，但累计创建配额不减少；
 12. 跟踪 `shared_file_deleted` 队列到成功终态并确认 NOS 对象不存在；消费者、重试或告警未验证时阻止正式开放；
 13. 只有在真实数据量证明必要时另行评审索引，不能在本功能中直接增加未经验证的生产索引。
+14. 校验 Library/Site 一次查询即可取得恢复投影所需列，分页不会产生 N+1；人工关闭、审核关闭、额度关闭和权益宽限结束均返回 `none`。
+15. 校验旧客户端忽略新增字段，新客户端面对字段缺失/`null`/未知值隐藏 CTA；恢复完成时 `accessExpiresAt/expiresAt` 的显式 `null` 能清除客户端旧状态。
 
-服务端自动化测试因部分测试依赖 Redis 和外部发布服务，本次按约定不执行测试套件；已使用 JDK 17 完成 `compileJava`、`compileTestJava`，并校验全部改动 Mapper XML 的语法。客户端永久删除 API/列表状态目标测试、changed-file ESLint、Electron 编译和生产构建已通过；管理员后台类型检查、目标 ESLint 和生产构建已通过。MySQL 5.7 实库事务、配额和 NOS 消费验证仍按上述清单执行。
+客户端转化埋点另行联调：三个 Library surface 的曝光/点击字段正确，`attemptId=trace_id`，rerender/轮询/虚拟列表重挂载不重复曝光，同 owner 七天订阅观察只成功上报一次；换账号、关闭使用分析和隐私 payload 检查通过。该联调不连接或改写数据库。
+
+前序永久删除实现的历史验证记录为：服务端曾使用 JDK 17 完成 `compileJava`、`compileTestJava` 与 Mapper XML 语法校验；客户端永久删除目标测试、changed-file ESLint、Electron 编译和生产构建曾通过；管理员后台类型检查、目标 ESLint 和生产构建曾通过。MySQL 5.7 实库事务、配额和 NOS 消费验证仍按上述清单执行。
+
+2026-09-04 订阅恢复入口增量已完成客户端与服务端实现。客户端目标 ESLint、目标 Vitest、`npm run build` 和 `npm run compile:electron` 已通过；服务端 `compileJava`、`compileTestJava`、Mapper XML 语法检查及差异格式检查已通过。按约定未运行依赖 Redis/外部发布服务的完整服务端测试套件，未连接数据库；Electron 手工 UI 和真实测试环境定向联调尚未执行。

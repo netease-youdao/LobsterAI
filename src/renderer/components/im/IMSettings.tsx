@@ -125,6 +125,10 @@ const IM_CREDENTIAL_FIELDS = [
   'webhookSecret',
 ] as const;
 
+const MULTI_INSTANCE_CARD_GRID_COLUMNS =
+  'repeat(auto-fit, minmax(min(100%, max(260px, calc((100% - 0.75rem) / 2))), 1fr))';
+const EMPTY_MULTI_INSTANCE_CARD_GRID_COLUMNS = 'minmax(min(100%, 260px), 320px)';
+
 const getIMPlatformKind = (platform: Platform): IMAnalyticsPlatformKind => (
   MULTI_INSTANCE_PLATFORMS.has(platform) ? 'multi_instance' : 'single_instance'
 );
@@ -1880,7 +1884,14 @@ const IMSettings: React.FC = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(154px,1fr))] gap-3">
+        <div
+          className="grid w-full gap-3"
+          style={{
+            gridTemplateColumns: instances.length > 0
+              ? MULTI_INSTANCE_CARD_GRID_COLUMNS
+              : EMPTY_MULTI_INSTANCE_CARD_GRID_COLUMNS,
+          }}
+        >
           {instances.map((instance) => {
             const instanceStatus = instanceStatuses.find((item) => item.instanceId === instance.instanceId);
             const connected = !!instanceStatus?.connected;
@@ -1899,7 +1910,7 @@ const IMSettings: React.FC = () => {
                     setActiveInstanceForPlatform(platform, instance.instanceId);
                   }
                 }}
-                className="group relative flex min-h-[82px] flex-col rounded-lg border border-border-subtle bg-surface p-3 text-left transition-colors hover:border-primary/40 hover:bg-surface-raised"
+                className="group relative flex min-h-[82px] flex-col justify-center rounded-lg border border-border-subtle bg-surface p-3 text-left transition-colors hover:border-primary/40 hover:bg-surface-raised"
               >
                 {isMenuOpen && (
                   <div

@@ -72,7 +72,11 @@ jobs:
             if [ -f "$skill/package.json" ]; then
               echo ""
               echo "=== Auditing $skill ==="
-              (cd "$skill" && npm install --package-lock-only 2>/dev/null && npm audit --audit-level=moderate 2>/dev/null) || echo "⚠ Audit issues found in $skill (non-blocking)"
+              (
+                cd "$skill" &&
+                npm install --package-lock-only --ignore-scripts --no-audit &&
+                timeout 90s npm audit --audit-level=moderate
+              ) || echo "⚠ Audit issues found in $skill (non-blocking)"
             fi
           done
           

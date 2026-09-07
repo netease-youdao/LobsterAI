@@ -46,6 +46,10 @@ import { loadDetectedFileArtifact } from '../../services/artifactDetection';
 import { copyTextToClipboard } from '../../services/clipboard';
 import { i18nService } from '../../services/i18n';
 import { startLibraryBackfill } from '../../services/libraryBackfill';
+import {
+  PublishingSubscriptionRecoveryCoordinatorEvent,
+  reconcilePublishingSubscriptionRecovery,
+} from '../../services/publishingSubscriptionRecovery';
 import type { RootState } from '../../store';
 import {
   ArtifactPreviewActionSource,
@@ -172,8 +176,6 @@ const LIBRARY_GRID_CLASSNAME = 'grid justify-start gap-3';
 const LIBRARY_GRID_STYLE: React.CSSProperties = {
   gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 240px), 264px))',
 };
-const LIBRARY_CLOUD_RECOVERY_RETRY_DELAYS_MS = [3_000, 10_000, 30_000] as const;
-
 const EMPTY_LOCAL: LibraryLocalListData = {
   list: [],
   hasMore: false,
@@ -356,6 +358,9 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
 }) => {
   const artifactFileShare = useOptionalArtifactFileShare();
   const ownerAccountKey = useSelector((state: RootState) => state.auth.ownerAccountKey);
+  const subscriptionStatus = useSelector(
+    (state: RootState) => state.auth.quota?.subscriptionStatus,
+  );
   const showFreeShareDeleteQuotaNotice = useSelector((state: RootState) => (
     shouldShowFreePublishingDeleteQuotaNotice(state.auth.quota?.subscriptionStatus)
   ));
@@ -412,10 +417,6 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
   const scrollContainerRef = useRef<HTMLElement>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
   const localSearchInputRef = useRef<HTMLInputElement>(null);
-  const cloudRecoveryTimerRef = useRef<number | undefined>(undefined);
-  const cloudRecoveryAttemptRef = useRef(0);
-  const cloudRecoveryContextRef = useRef('');
-  const cloudRecoveryLoadRef = useRef<() => Promise<void>>(async () => undefined);
   const pageExposureReportedRef = useRef(false);
   const lastListResultSignatureRef = useRef('');
   const lastReportedKeywordRef = useRef('');
@@ -985,46 +986,48 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
   }, [analyticsContext, loadData, refreshLocalWindow, wantsLocal]);
 
   useEffect(() => {
-    cloudRecoveryLoadRef.current = () => loadData(
-      LibraryLoadIntent.Refresh,
-      LibraryLoadCause.BackgroundRefresh,
+    const handleRecoveryInvalidation = (event: Event): void => {
+      const ownerAccountKey = (event as CustomEvent<{ ownerAccountKey?: string }>).detail
+        ?.ownerAccountKey;
+      if (
+        !wantsCloud
+        || !isAuthenticated
+        || !favoriteOwnerScope
+        || ownerAccountKey !== favoriteOwnerScope
+      ) {
+        return;
+      }
+      void loadData(LibraryLoadIntent.Refresh, LibraryLoadCause.BackgroundRefresh);
+    };
+    window.addEventListener(
+      PublishingSubscriptionRecoveryCoordinatorEvent.LibraryInvalidated,
+      handleRecoveryInvalidation,
     );
-  }, [loadData]);
+    return () => {
+      window.removeEventListener(
+        PublishingSubscriptionRecoveryCoordinatorEvent.LibraryInvalidated,
+        handleRecoveryInvalidation,
+      );
+    };
+  }, [favoriteOwnerScope, isAuthenticated, loadData, wantsCloud]);
 
   useEffect(() => {
-    if (cloudRecoveryTimerRef.current !== undefined) {
-      window.clearTimeout(cloudRecoveryTimerRef.current);
-      cloudRecoveryTimerRef.current = undefined;
-    }
-    const recoveryContext = `${wantsCloud ? 'cloud' : 'local'}:${favoriteOwnerScope ?? ''}`;
-    if (cloudRecoveryContextRef.current !== recoveryContext) {
-      cloudRecoveryContextRef.current = recoveryContext;
-      cloudRecoveryAttemptRef.current = 0;
-    }
     if (
-      !wantsCloud
-      || !isAuthenticated
-      || !favoriteOwnerScope
-      || !hasResolvedCurrentQuery
-      || !visibleCloudData.recoveryPending
+      wantsCloud
+      && isAuthenticated
+      && favoriteOwnerScope
+      && hasResolvedCurrentQuery
+      && visibleCloudData.recoveryPending === true
     ) {
-      cloudRecoveryAttemptRef.current = 0;
-      return undefined;
+      reconcilePublishingSubscriptionRecovery(favoriteOwnerScope);
     }
-    const attempt = cloudRecoveryAttemptRef.current;
-    if (attempt >= LIBRARY_CLOUD_RECOVERY_RETRY_DELAYS_MS.length) return undefined;
-    cloudRecoveryTimerRef.current = window.setTimeout(() => {
-      cloudRecoveryTimerRef.current = undefined;
-      cloudRecoveryAttemptRef.current = attempt + 1;
-      void cloudRecoveryLoadRef.current();
-    }, LIBRARY_CLOUD_RECOVERY_RETRY_DELAYS_MS[attempt]);
-    return () => {
-      if (cloudRecoveryTimerRef.current !== undefined) {
-        window.clearTimeout(cloudRecoveryTimerRef.current);
-        cloudRecoveryTimerRef.current = undefined;
-      }
-    };
-  }, [favoriteOwnerScope, hasResolvedCurrentQuery, isAuthenticated, visibleCloudData, wantsCloud]);
+  }, [
+    favoriteOwnerScope,
+    hasResolvedCurrentQuery,
+    isAuthenticated,
+    visibleCloudData.recoveryPending,
+    wantsCloud,
+  ]);
 
   useLayoutEffect(() => {
     const queryIdentity: LibraryQueryIdentity = {
@@ -1600,6 +1603,8 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
                 ? i18nService.t('libraryResultsNotUpdated').replace('{message}', cloudError)
                 : cloudError}
               isAuthenticated={isAuthenticated}
+              ownerAccountKey={ownerAccountKey}
+              subscriptionStatus={subscriptionStatus}
               showFreeShareDeleteQuotaNotice={showFreeShareDeleteQuotaNotice}
               category={category}
               status={cloudAvailability}

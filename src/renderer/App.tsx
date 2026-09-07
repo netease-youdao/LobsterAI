@@ -51,12 +51,14 @@ import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateBlockingPanel from './components/update/AppUpdateBlockingPanel';
 import AppUpdateCard from './components/update/AppUpdateCard';
 import { formatAppUpdateError } from './components/update/appUpdateErrorText';
+import AppUpdateInstallConfirmDialog from './components/update/AppUpdateInstallConfirmDialog';
 import AppUpdateInteractionOverlay from './components/update/AppUpdateInteractionOverlay';
 import {
   isAppUpdateInteractionBlockingStatus,
   shouldBlockAppInteractionForUpdate,
 } from './components/update/appUpdateInteractionState';
 import AppUpdateModal from './components/update/AppUpdateModal';
+import { shouldShowAppUpdateNotice } from './components/update/appUpdateNoticeState';
 import WindowsAppTitleBar from './components/window/WindowsAppTitleBar';
 import { defaultConfig, getProviderDisplayName, ShortcutAction } from './config';
 import { selectIsEnterpriseAccount } from './features/enterpriseAccount/selectors';
@@ -73,6 +75,7 @@ import {
   isLatestAsyncRequest,
 } from './services/latestAsyncRequest';
 import { LogReporterAction, reportYdAnalyzer } from './services/logReporter';
+import { getOnboardingErrorCode, reportOnboardingAction } from './services/onboardingAnalytics';
 import { scheduledTaskService } from './services/scheduledTask';
 import { isTextEditingSafeShortcut, matchesShortcut } from './services/shortcuts';
 import { themeService } from './services/theme';
@@ -81,6 +84,7 @@ import { RootState, store } from './store';
 import {
   selectCurrentSessionId,
   selectFirstCurrentSessionPendingPermission,
+  selectHasRunningCoworkSessions,
   selectPendingPermissions,
 } from './store/selectors/coworkSelectors';
 import { openArtifactPreviewTab } from './store/slices/artifactSlice';
@@ -229,8 +233,12 @@ const App: React.FC = () => {
   const [isTaskFilterActive, setIsTaskFilterActive] = useState(false);
   const [hasUnreadCompletedTasks, setHasUnreadCompletedTasks] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(244);
+  const initialOpenClawEngineStatusRef = useRef(coworkService.getOpenClawEngineStatusSnapshot());
   const [isEngineStartupOverlayVisible, setIsEngineStartupOverlayVisible] = useState(
-    () => coworkService.getOpenClawEngineStatusSnapshot()?.phase === OpenClawEnginePhase.Starting,
+    () => initialOpenClawEngineStatusRef.current?.phase === OpenClawEnginePhase.Starting,
+  );
+  const [hasResolvedEngineStartupOverlayState, setHasResolvedEngineStartupOverlayState] = useState(
+    () => initialOpenClawEngineStatusRef.current !== null,
   );
   const [appUpdateState, setAppUpdateState] = useState<AppUpdateRuntimeState>({
     status: AppUpdateStatus.Idle,
@@ -242,6 +250,7 @@ const App: React.FC = () => {
     errorMessage: null,
   });
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [showUpdateInstallConfirm, setShowUpdateInstallConfirm] = useState(false);
   const [isUpdateCardExpanded, setIsUpdateCardExpanded] = useState(false);
   const [isUserInitiatedUpdateFlowActive, setIsUserInitiatedUpdateFlowActive] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
@@ -269,8 +278,6 @@ const App: React.FC = () => {
   const pendingNewUserWelcomeAfterLoginSawStartupRef = useRef(false);
   const pendingNewUserWelcomeAfterLoginWaitingLoggedRef = useRef(false);
   const pendingNewUserWelcomeAuthCallbackAtRef = useRef(0);
-  const previousUpdateStatusRef = useRef<AppUpdateRuntimeState['status']>(AppUpdateStatus.Idle);
-  const shouldInstallReadyUpdateRef = useRef(false);
   const isUserInitiatedUpdateFlowActiveRef = useRef(false);
   const dispatch = useDispatch();
   const defaultSelectedModel = useSelector((state: RootState) => state.model.defaultSelectedModel);
@@ -292,11 +299,17 @@ const App: React.FC = () => {
   const shouldShowNewUserOnboarding =
     privacyAgreed === false
     && !isNewUserOnboardingDismissed
+    && hasResolvedEngineStartupOverlayState
+    && !isEngineStartupOverlayVisible
     && !isUpdateInteractionBlocked;
 
   useEffect(() => {
     if (!shouldShowNewUserOnboarding) return;
     console.log(`[Onboarding] showing new user onboarding step=${newUserOnboardingStep}`);
+    reportOnboardingAction('guide_exposure', {
+      source: 'first_run_gate',
+      step: newUserOnboardingStep,
+    });
     setMainView('cowork');
     setIsSidebarCollapsed(false);
   }, [newUserOnboardingStep, shouldShowNewUserOnboarding]);
@@ -310,13 +323,18 @@ const App: React.FC = () => {
       .then((status) => {
         if (!isCurrent) return;
         setIsEngineStartupOverlayVisible(resolveOverlayVisible(status?.phase));
+        setHasResolvedEngineStartupOverlayState(true);
       })
       .catch((error) => {
         console.debug('[App] failed to refresh OpenClaw engine status for sidebar promo timing:', error);
+        if (isCurrent) {
+          setHasResolvedEngineStartupOverlayState(true);
+        }
       });
 
     const unsubscribe = coworkService.onOpenClawEngineStatus((status) => {
       setIsEngineStartupOverlayVisible(resolveOverlayVisible(status.phase));
+      setHasResolvedEngineStartupOverlayState(true);
     });
 
     return () => {
@@ -949,7 +967,6 @@ const App: React.FC = () => {
         const state = await window.electron.appUpdate.getState();
         if (mounted) {
           setAppUpdateState(state);
-          previousUpdateStatusRef.current = state.status;
           // A previous install attempt quit the app without completing
           // (e.g. the installer never launched) — re-prompt the user.
           if (state.status === AppUpdateStatus.Ready && state.installIncomplete) {
@@ -970,49 +987,12 @@ const App: React.FC = () => {
     void loadInitialUpdateState();
 
     const unsubscribe = window.electron.appUpdate.onStateChanged((state) => {
-      const previousStatus = previousUpdateStatusRef.current;
-      previousUpdateStatusRef.current = state.status;
       setAppUpdateState(state);
 
+      // Downloads finish silently into the sidebar card; the interaction lock
+      // only spans the install the user explicitly confirmed.
       if (!isAppUpdateInteractionBlockingStatus(state.status)) {
-        shouldInstallReadyUpdateRef.current = false;
         stopUserInitiatedUpdateFlow(`state=${state.status}`);
-      }
-
-      if (
-        state.status === AppUpdateStatus.Ready
-        && previousStatus !== AppUpdateStatus.Ready
-        && shouldInstallReadyUpdateRef.current
-      ) {
-        shouldInstallReadyUpdateRef.current = false;
-        if (state.readyFilePath) {
-          logAppUpdateRendererLifecycle(
-            `download ready; starting install version=${state.info?.latestVersion ?? 'unknown'}`,
-          );
-          void window.electron.appUpdate.installReady()
-            .then((installResult) => {
-              if (!installResult.success) {
-                stopUserInitiatedUpdateFlow('install-result-failed');
-                showToast(
-                  installResult.error
-                    ? formatAppUpdateError(installResult.error)
-                    : i18nService.t('updateInstallFailed'),
-                );
-              }
-            })
-            .catch((error) => {
-              stopUserInitiatedUpdateFlow('install-ipc-failed');
-              console.error('[AppUpdate] failed to install downloaded update:', error);
-              showToast(i18nService.t('updateInstallFailed'));
-            });
-        } else {
-          stopUserInitiatedUpdateFlow('ready-file-missing');
-          logAppUpdateRendererLifecycle(
-            `ready update is missing its installer path version=${state.info?.latestVersion ?? 'unknown'}`,
-            'warn',
-          );
-          showToast(i18nService.t('updateInstallFailed'));
-        }
       }
     });
 
@@ -1055,66 +1035,62 @@ const App: React.FC = () => {
     setShowUpdateModal(true);
   }, []);
 
+  const installReadyUpdate = useCallback(async () => {
+    if (!updateInfo) return;
+
+    setShowUpdateInstallConfirm(false);
+    setShowUpdateModal(false);
+    startUserInitiatedUpdateFlow(
+      `install-ready version=${updateInfo.latestVersion}`,
+    );
+    try {
+      const installResult = await window.electron.appUpdate.installReady();
+      if (!installResult.success) {
+        stopUserInitiatedUpdateFlow('install-result-failed');
+        showToast(
+          installResult.error
+            ? formatAppUpdateError(installResult.error)
+            : i18nService.t('updateInstallFailed'),
+        );
+      }
+    } catch (error) {
+      stopUserInitiatedUpdateFlow('install-ipc-failed');
+      console.error('[AppUpdate] failed to install ready update:', error);
+      showToast(i18nService.t('updateInstallFailed'));
+    }
+  }, [showToast, startUserInitiatedUpdateFlow, stopUserInitiatedUpdateFlow, updateInfo]);
+
+  // Installing quits the app, which cuts short every running turn and
+  // scheduled task. The renderer only knows the sessions it has loaded, so the
+  // main process is also asked about IM-driven sessions and cron runs.
+  const requestInstallReadyUpdate = useCallback(async () => {
+    let hasActiveWorkloads = selectHasRunningCoworkSessions(store.getState());
+    if (!hasActiveWorkloads) {
+      try {
+        const result = await window.electron.appUpdate.getActiveWorkloads?.();
+        hasActiveWorkloads = result?.hasActiveWorkloads === true;
+      } catch (error) {
+        console.warn('[AppUpdate] failed to query active workloads before install:', error);
+      }
+    }
+    if (hasActiveWorkloads) {
+      logAppUpdateRendererLifecycle('install needs confirmation: tasks are still running');
+      setShowUpdateModal(false);
+      setShowUpdateInstallConfirm(true);
+      return;
+    }
+    await installReadyUpdate();
+  }, [installReadyUpdate]);
+
   const handleConfirmUpdate = useCallback(async () => {
     if (!updateInfo) return;
 
     if (appUpdateState.readyFilePath) {
-      setShowUpdateModal(false);
-      shouldInstallReadyUpdateRef.current = false;
-      startUserInitiatedUpdateFlow(
-        `install-ready version=${updateInfo.latestVersion}`,
-      );
-      try {
-        const installResult = await window.electron.appUpdate.installReady();
-        if (!installResult.success) {
-          stopUserInitiatedUpdateFlow('install-result-failed');
-          showToast(
-            installResult.error
-              ? formatAppUpdateError(installResult.error)
-              : i18nService.t('updateInstallFailed'),
-          );
-        }
-      } catch (error) {
-        stopUserInitiatedUpdateFlow('install-ipc-failed');
-        console.error('[AppUpdate] failed to install ready update:', error);
-        showToast(i18nService.t('updateInstallFailed'));
-      }
+      await requestInstallReadyUpdate();
       return;
     }
 
-    if (appUpdateState.status === AppUpdateStatus.Error || appUpdateState.status === AppUpdateStatus.Available) {
-      if (!isManualDownloadUrl(updateInfo.url)) {
-        setShowUpdateModal(false);
-        // The user explicitly asked to update (or retry), so finish the whole
-        // flow in one click: install and restart as soon as the download lands.
-        shouldInstallReadyUpdateRef.current = true;
-        startUserInitiatedUpdateFlow(
-          `download-and-install version=${updateInfo.latestVersion}`,
-        );
-        try {
-          const retryResult = await window.electron.appUpdate.retryDownload();
-          if (
-            !retryResult.success
-            || retryResult.state.status !== AppUpdateStatus.Downloading
-          ) {
-            stopUserInitiatedUpdateFlow(
-              `download-not-started state=${retryResult.state.status}`,
-            );
-            shouldInstallReadyUpdateRef.current = false;
-            showToast(i18nService.t('updateDownloadFailed'));
-          }
-        } catch (error) {
-          stopUserInitiatedUpdateFlow('download-ipc-failed');
-          shouldInstallReadyUpdateRef.current = false;
-          console.error('[AppUpdate] failed to start update download:', error);
-          showToast(i18nService.t('updateDownloadFailed'));
-        }
-        return;
-      }
-    }
-
     if (isManualDownloadUrl(updateInfo.url)) {
-      shouldInstallReadyUpdateRef.current = false;
       setShowUpdateModal(false);
       try {
         const result = await window.electron.shell.openExternal(updateInfo.url);
@@ -1127,31 +1103,37 @@ const App: React.FC = () => {
       }
       return;
     }
+
+    if (appUpdateState.status === AppUpdateStatus.Error || appUpdateState.status === AppUpdateStatus.Available) {
+      // The download runs silently in the background; the sidebar card comes
+      // back as "ready" once the installer has been verified.
+      setShowUpdateModal(false);
+      try {
+        const retryResult = await window.electron.appUpdate.retryDownload();
+        if (
+          !retryResult.success
+          || retryResult.state.status !== AppUpdateStatus.Downloading
+        ) {
+          logAppUpdateRendererLifecycle(
+            `background download did not start state=${retryResult.state.status}`,
+            'warn',
+          );
+          showToast(i18nService.t('updateDownloadFailed'));
+          return;
+        }
+        showToast(i18nService.t('updateDownloadStartedToast'));
+      } catch (error) {
+        console.error('[AppUpdate] failed to start update download:', error);
+        showToast(i18nService.t('updateDownloadFailed'));
+      }
+    }
   }, [
     appUpdateState.readyFilePath,
     appUpdateState.status,
+    requestInstallReadyUpdate,
     showToast,
-    startUserInitiatedUpdateFlow,
-    stopUserInitiatedUpdateFlow,
     updateInfo,
   ]);
-
-  const handleCancelDownload = useCallback(async () => {
-    shouldInstallReadyUpdateRef.current = false;
-    stopUserInitiatedUpdateFlow('download-cancel-requested');
-    try {
-      const cancelResult = await window.electron.appUpdate.cancelDownload();
-      if (cancelResult.state.status === AppUpdateStatus.Downloading) {
-        logAppUpdateRendererLifecycle(
-          'download cancel request completed but the update is still downloading',
-          'warn',
-        );
-      }
-    } catch (error) {
-      console.error('[AppUpdate] failed to cancel update download:', error);
-      showToast(i18nService.t('updateDownloadFailed'));
-    }
-  }, [showToast, stopUserInitiatedUpdateFlow]);
 
   const handleRetryUpdate = useCallback(async () => {
     await handleConfirmUpdate();
@@ -1202,15 +1184,30 @@ const App: React.FC = () => {
             `[Onboarding] new user welcome task seed returned no session source=${source}: `
             + `${result.error ?? 'unknown error'}`,
           );
+          reportOnboardingAction('welcome_task_open_result', {
+            source,
+            result: 'failed',
+            errorCode: result.error ? 'seed_failed' : 'unknown',
+          });
           showToast(i18nService.t('newUserWelcomeTaskCreateFailed'));
           return;
         }
         console.log(
           `[Onboarding] new user welcome task opened source=${source} session=${result.session.id}`,
         );
+        reportOnboardingAction('welcome_task_open_result', {
+          source,
+          result: 'success',
+          created: result.created === true,
+        });
       })
       .catch((error) => {
         console.warn(`[Onboarding] failed to open new user welcome task source=${source}:`, error);
+        reportOnboardingAction('welcome_task_open_result', {
+          source,
+          result: 'failed',
+          errorCode: getOnboardingErrorCode(error),
+        });
         showToast(i18nService.t('newUserWelcomeTaskCreateFailed'));
       });
   }, [showToast]);
@@ -1220,6 +1217,9 @@ const App: React.FC = () => {
       pendingNewUserWelcomeAuthCallbackAtRef.current = Date.now();
       if (hasNewUserWelcomeAfterLoginPending()) {
         console.log('[Onboarding] auth callback observed during new user login handoff');
+        reportOnboardingAction('auth_callback_observed', {
+          source: 'new_user_onboarding',
+        });
       }
     });
 
@@ -1246,6 +1246,10 @@ const App: React.FC = () => {
           '[Onboarding] login callback detected; waiting for OpenClaw startup before opening '
           + `new user welcome task phase=${snapshotPhase ?? 'unknown'}`,
         );
+        reportOnboardingAction('login_success_wait_gateway', {
+          source: 'new_user_onboarding',
+          phase: snapshotPhase ?? 'unknown',
+        });
         pendingNewUserWelcomeAfterLoginWaitingLoggedRef.current = true;
       }
       return;
@@ -1281,6 +1285,11 @@ const App: React.FC = () => {
         '[Onboarding] OpenClaw startup settled; opening pending new user welcome task '
         + `phase=${latestPhase ?? 'unknown'} sawStartup=${pendingNewUserWelcomeAfterLoginSawStartupRef.current}`,
       );
+      reportOnboardingAction('login_success_gateway_settled', {
+        source: 'new_user_onboarding',
+        phase: latestPhase ?? 'unknown',
+        sawStartup: pendingNewUserWelcomeAfterLoginSawStartupRef.current,
+      });
       pendingNewUserWelcomeAfterLoginSawStartupRef.current = false;
       pendingNewUserWelcomeAfterLoginWaitingLoggedRef.current = false;
       setIsNewUserOnboardingDismissed(true);
@@ -1339,6 +1348,10 @@ const App: React.FC = () => {
           '[Onboarding] login handoff returned without authenticated callback; opening '
           + `new user welcome task source=${source}`,
         );
+        reportOnboardingAction('login_return_without_auth', {
+          source,
+          pendingAge: Math.round(getNewUserWelcomeAfterLoginPendingAgeMs() ?? 0),
+        });
         pendingNewUserWelcomeAfterLoginSawStartupRef.current = false;
         pendingNewUserWelcomeAfterLoginWaitingLoggedRef.current = false;
         setIsNewUserOnboardingDismissed(true);
@@ -1372,15 +1385,24 @@ const App: React.FC = () => {
   }, [authUser, openNewUserWelcomeTask]);
 
   const handleNewUserOnboardingSkip = useCallback(() => {
+    reportOnboardingAction('guide_skip_click', {
+      source: 'new_user_onboarding',
+      step: newUserOnboardingStep,
+    });
     finishNewUserOnboarding('skip');
     if (privacyAgreed !== false) return;
 
     openNewUserWelcomeTask('skip');
-  }, [finishNewUserOnboarding, openNewUserWelcomeTask, privacyAgreed]);
+  }, [finishNewUserOnboarding, newUserOnboardingStep, openNewUserWelcomeTask, privacyAgreed]);
 
   const handleNewUserOnboardingNext = useCallback(() => {
     if (newUserOnboardingStep === NewUserOnboardingStep.NewTask) {
       console.log('[Onboarding] advancing new user onboarding step=new-task next=prompt-input');
+      reportOnboardingAction('guide_next_click', {
+        source: 'new_user_onboarding',
+        step: newUserOnboardingStep,
+        nextStep: NewUserOnboardingStep.PromptInput,
+      });
       setNewUserOnboardingStep(NewUserOnboardingStep.PromptInput);
       return;
     }
@@ -1389,6 +1411,10 @@ const App: React.FC = () => {
 
   const handleNewUserOnboardingStartExperience = useCallback(() => {
     console.log('[Onboarding] start experience clicked; starting login handoff');
+    reportOnboardingAction('guide_start_experience_click', {
+      source: 'new_user_onboarding',
+      step: newUserOnboardingStep,
+    });
     setNewUserWelcomeAfterLoginPending();
     setNewUserWelcomeAfterLoginSignal((value) => value + 1);
     finishNewUserOnboarding('start_experience');
@@ -1398,19 +1424,33 @@ const App: React.FC = () => {
           console.warn(
             `[Onboarding] login handoff from new user onboarding failed: ${result.error ?? 'unknown error'}`,
           );
+          reportOnboardingAction('login_redirect_result', {
+            source: 'new_user_onboarding',
+            result: 'failed',
+            errorCode: result.error ? 'login_redirect_failed' : 'unknown',
+          });
           consumeNewUserWelcomeAfterLoginPending();
           showToast(i18nService.t('welcomeLoginFailed'));
           return;
         }
         console.log('[Onboarding] login handoff from new user onboarding succeeded');
+        reportOnboardingAction('login_redirect_result', {
+          source: 'new_user_onboarding',
+          result: 'success',
+        });
         setNewUserWelcomeAfterLoginSignal((value) => value + 1);
       })
       .catch((error) => {
         console.warn('[Onboarding] failed to start login from new user onboarding:', error);
+        reportOnboardingAction('login_redirect_result', {
+          source: 'new_user_onboarding',
+          result: 'failed',
+          errorCode: getOnboardingErrorCode(error),
+        });
         consumeNewUserWelcomeAfterLoginPending();
         showToast(i18nService.t('welcomeLoginFailed'));
       });
-  }, [finishNewUserOnboarding, showToast]);
+  }, [finishNewUserOnboarding, newUserOnboardingStep, showToast]);
 
   const handlePermissionResponse = useCallback(async (result: CoworkPermissionResult) => {
     if (!pendingPermission) return;
@@ -1911,26 +1951,24 @@ const App: React.FC = () => {
 
   const isOverlayActive = showSettings
     || showUpdateModal
+    || showUpdateInstallConfirm
     || isPermissionModalOpen
     || isUpdateInteractionBlocked
     || shouldShowNewUserOnboarding;
-  // Keep the badge visible while downloading so the collapsed-sidebar layouts
-  // still surface progress; only a plain re-check hides nothing new.
-  const shouldShowUpdateBadge = updateInfo && appUpdateState.status !== AppUpdateStatus.Checking;
-  const updateBadge = shouldShowUpdateBadge ? (
+  // Downloads stay silent: the badge and sidebar card only appear once the
+  // installer is ready or the update needs the user's attention.
+  const shouldShowUpdateNotice = shouldShowAppUpdateNotice(appUpdateState);
+  const updateBadge = shouldShowUpdateNotice ? (
     <AppUpdateBadge
-      latestVersion={updateInfo.latestVersion}
-      status={appUpdateState.status}
-      progress={appUpdateState.progress?.percent}
+      updateState={appUpdateState}
       onClick={handleOpenUpdateModal}
     />
   ) : null;
-  const updateCard = updateInfo ? (
+  const updateCard = shouldShowUpdateNotice ? (
     <AppUpdateCard
       updateState={appUpdateState}
       onUpdate={handleConfirmUpdate}
       onShowDetails={handleOpenUpdateModal}
-      onCancelDownload={handleCancelDownload}
       onExpandedChange={setIsUpdateCardExpanded}
     />
   ) : null;
@@ -2135,10 +2173,7 @@ const App: React.FC = () => {
         </div>
         {isUpdateInteractionBlocked && (
           <AppUpdateInteractionOverlay>
-            <AppUpdateBlockingPanel
-              updateState={appUpdateState}
-              onCancelDownload={handleCancelDownload}
-            />
+            <AppUpdateBlockingPanel updateState={appUpdateState} />
           </AppUpdateInteractionOverlay>
         )}
         {shouldShowNewUserOnboarding && (
@@ -2153,7 +2188,7 @@ const App: React.FC = () => {
 
       <EngineFailureOverlay
         onRequestAppSettings={handleShowSettings}
-        suspended={showSettings || showUpdateModal || isPermissionModalOpen}
+        suspended={showSettings || showUpdateModal || showUpdateInstallConfirm || isPermissionModalOpen}
       />
 
       {/* 设置窗口显示在所有主内容之上，但不影响主界面的交互 */}
@@ -2172,13 +2207,18 @@ const App: React.FC = () => {
         <AppUpdateModal
           updateState={appUpdateState}
           onCancel={() => {
-            if (appUpdateState.status !== AppUpdateStatus.Downloading && appUpdateState.status !== AppUpdateStatus.Installing) {
+            if (appUpdateState.status !== AppUpdateStatus.Installing) {
               setShowUpdateModal(false);
             }
           }}
           onConfirm={handleConfirmUpdate}
-          onCancelDownload={handleCancelDownload}
           onRetry={handleRetryUpdate}
+        />
+      )}
+      {showUpdateInstallConfirm && (
+        <AppUpdateInstallConfirmDialog
+          onCancel={() => setShowUpdateInstallConfirm(false)}
+          onConfirm={() => void installReadyUpdate()}
         />
       )}
       {permissionModal}

@@ -5,9 +5,8 @@
 //   (the shape a per-file CDN hands out) -> install into a fresh base
 //   -> render LobsterAI provider settings -> boot the INSTALLED runtime
 //   -> load a profile-local external ESM plugin through the production launcher
-//   -> RPC-assert the provider/model are live (form A surface)
-//   -> boot again with a mock OpenAI upstream and drive the dsh_code_task MCP
-//      server through a real MCP client (form B delegation loop)
+//   -> RPC-assert the provider/model are live (the workbench surface)
+//   -> boot again through the production launcher and keep that host live
 //   -> open the native directory picker and assert the OS dialog really shows
 //      (win32 only) -> tear the home down and assert the runtime survived it.
 // Every step is a hard assertion; exit 0 means the whole flow works.
@@ -55,8 +54,8 @@ function resolveHostTargetId() {
   return null;
 }
 
-// Minimal OpenAI-compatible chat-completions upstream. Streams a fixed answer
-// so the delegated dsh agent completes a real turn with zero external calls.
+// Minimal OpenAI-compatible chat-completions upstream. It backs the rendered
+// provider so the boot below has a reachable endpoint with zero external calls.
 function startMockLlmServer(answerText) {
   const server = http.createServer((request, response) => {
     if (!request.url || !request.url.includes('/chat/completions')) {
@@ -323,10 +322,10 @@ async function main() {
   const targetId = resolveHostTargetId();
   if (!targetId) fail(`Unsupported host platform: ${process.platform}`);
 
-  // [1/9] Fresh compiled modules — installer/client/MCP server run from dist-electron.
+  // [1/8] Fresh compiled modules — installer/client run from dist-electron.
   step('compile electron main', 'npm', ['run', 'compile:electron']);
 
-  // [2/9] Build (idempotent via runtime-build-info cache) and pack when stale.
+  // [2/8] Build (idempotent via runtime-build-info cache) and pack when stale.
   step(`build runtime ${targetId}`, process.execPath, [path.join(rootDir, 'scripts', 'build-dsh-runtime.cjs'), targetId]);
 
   const buildInfo = JSON.parse(
@@ -350,7 +349,7 @@ async function main() {
     log(`>> pack skipped (manifest current: ${manifestName})`);
   }
 
-  // [3/9] Install exactly like a shipped app does: one absolute URL plus the
+  // [3/8] Install exactly like a shipped app does: one absolute URL plus the
   // digest the app itself carries, verified before extraction.
   const { installDshRuntime, resolveDshArtifactFromConfig, resolveDshArtifactFromManifest } = require(
     path.join(rootDir, 'dist-electron', 'main', 'libs', 'dshRuntimeInstaller.js')
@@ -416,9 +415,9 @@ async function main() {
   const fromManifest = resolveDshArtifactFromManifest(distDir, manifestName);
   if (fromManifest.sha256 !== artifact.sha256) fail('manifest and config descriptors disagree');
 
-  // [4/9] Start the mock LLM upstream, then render a LobsterAI provider that
+  // [4/8] Start the mock LLM upstream, then render a LobsterAI provider that
   // points at it — settings.yaml on disk, the API key only in the child env.
-  const ANSWER = 'E2E delegation OK: the mock coding agent finished the task.';
+  const ANSWER = 'E2E mock upstream answer.';
   const mock = await startMockLlmServer(ANSWER);
   log(`>> mock OpenAI upstream at 127.0.0.1:${mock.port}`);
 
@@ -448,7 +447,7 @@ async function main() {
   const written = await writeDshManagedSettings(dshHome, managed);
   log(`>> provider settings rendered at ${written.settingsPath}`);
 
-  // [5/9] Boot the installed runtime and assert provider + model over RPC.
+  // [5/8] Boot the installed runtime and assert provider + model over RPC.
   step(
     'boot installed runtime (web smoke + provider RPC assertions)',
     process.execPath,
@@ -467,11 +466,11 @@ async function main() {
   );
   assertExternalPluginMarker(externalPluginMarker, 'runtime smoke launcher');
 
-  // [6/9] Boot again through the production launcher for the delegation loop
-  // (the verify step owns its own child and exits; the MCP test needs a live
-  // host). Requiring a fresh marker proves this second child loaded the plugin.
+  // [6/8] Boot again through the production launcher (the verify step owns
+  // its own child and exits; the picker step needs a live host). Requiring a
+  // fresh marker proves this second child loaded the plugin.
   fs.rmSync(externalPluginMarker, { force: true });
-  log('>> boot installed runtime for form-B delegation');
+  log('>> boot installed runtime through the production launcher');
   const booted = await bootDsh(installed.root, dshHome, {
     ...managed.envVars,
     DSH_E2E_PLUGIN_MARKER: externalPluginMarker,
@@ -483,50 +482,7 @@ async function main() {
   assertExternalPluginMarker(externalPluginMarker, 'production launcher');
   log(`   dsh live at ${booted.url}`);
 
-  // [7/9] Drive the dsh_code_task MCP server through a real MCP client.
-  const { DshCodeMcpServer } = require(path.join(rootDir, 'dist-electron', 'main', 'libs', 'dshCodeMcpServer.js'));
-  const taskCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-e2e-task-'));
-  const mcpServer = new DshCodeMcpServer({
-    ensureEngineReady: async () => booted.url,
-    getDefaultCwd: () => taskCwd,
-    getDefaultModel: () => ({ provider: 'lobsterai-e2e-fake', model: 'e2e-model' }),
-  });
-  const mcpUrl = await mcpServer.start();
-  log(`>> dsh-code MCP server at ${mcpUrl}`);
-
-  const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
-  const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
-  const mcpClient = new Client({ name: 'e2e-client', version: '1.0.0' });
-  await mcpClient.connect(new StreamableHTTPClientTransport(new URL(mcpUrl)));
-
-  const toolList = await mcpClient.listTools();
-  const toolNames = (toolList.tools ?? []).map((tool) => tool.name);
-  if (!toolNames.includes('dsh_code_task')) {
-    fail(`dsh_code_task missing from MCP tools: ${toolNames.join(', ')}`);
-  }
-  log(`   tools/list OK: ${toolNames.join(', ')}`);
-
-  log('   calling dsh_code_task (delegated turn through mock LLM)...');
-  const callResult = await mcpClient.callTool({
-    name: 'dsh_code_task',
-    arguments: { prompt: 'Reply with the fixed acknowledgement.', timeout_s: 120 },
-  });
-  const resultText = (callResult.content ?? [])
-    .filter((block) => block.type === 'text')
-    .map((block) => block.text)
-    .join('\n');
-  if (callResult.isError) {
-    fail(`dsh_code_task returned isError. Text: ${resultText.slice(0, 800)}`);
-  }
-  if (!resultText.includes('E2E delegation OK')) {
-    fail(`dsh_code_task text missing mock answer. Got: ${resultText.slice(0, 800)}`);
-  }
-  if (!resultText.includes('[dsh session:')) {
-    fail(`dsh_code_task text missing session footer. Got: ${resultText.slice(0, 800)}`);
-  }
-  log('   dsh_code_task delegation loop OK (mock answer + session footer present)');
-
-  // [8/9] Native workspace picker. Only win32 drives a spawned dialog worker;
+  // [7/8] Native workspace picker. Only win32 drives a spawned dialog worker;
   // the mac/linux backends shell out to osascript/zenity, which this step does
   // not cover.
   if (process.platform === 'win32') {
@@ -552,9 +508,7 @@ async function main() {
     path.join(rootDir, 'scripts', 'verify-dsh-remove-tree.cjs'),
   ], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
 
-  // [9/9] Cleanup.
-  await mcpClient.close();
-  await mcpServer.stop();
+  // [8/8] Cleanup.
   booted.child.kill('SIGTERM');
   await new Promise((resolve) => {
     booted.child.once('exit', resolve);
@@ -583,8 +537,7 @@ async function main() {
   log(`   home teardown left the runtime intact (${runtimeFilesAfter} files)`);
 
   removeTree(installBase);
-  removeTree(taskCwd);
-  log('E2E foundation + delegation flow passed.');
+  log('E2E foundation flow passed.');
   process.exit(0);
 }
 

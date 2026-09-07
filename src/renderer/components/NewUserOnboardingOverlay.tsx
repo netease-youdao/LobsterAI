@@ -20,6 +20,7 @@ const POPOVER_GAP = 28;
 const POPOVER_WIDTH = 308;
 const POPOVER_MARGIN = 16;
 const POPOVER_ARROW_WIDTH = 14;
+const POPOVER_ARROW_CARD_OVERLAP = 2;
 const POPOVER_ARROW_HALF_HEIGHT = 12;
 const PROMPT_TEXTAREA_SELECTOR = '[data-onboarding-target="home-prompt-textarea"]';
 const PROMPT_SEND_BUTTON_SELECTOR = '[data-onboarding-target="home-prompt-send"]';
@@ -27,14 +28,14 @@ const PROMPT_TEXTAREA_PADDING_LEFT = 16;
 const PROMPT_TEXTAREA_PADDING_TOP = 12;
 const SEND_EFFECT_SIZE = 48;
 const TYPEWRITER_INTERVAL_MS = 90;
-const PROMPT_RESULT_POPOVER_DELAY_MS = 1280;
+const PROMPT_RESULT_POPOVER_DELAY_MS = 600;
 const PROMPT_RESULT_POPOVER_DEFAULT_HEIGHT = 246;
 const PROMPT_RESULT_POPOVER_MIN_HEIGHT = 226;
 const PROMPT_RESULT_POPOVER_MIN_WIDTH = 560;
 const PROMPT_RESULT_POPOVER_MAX_WIDTH = 720;
 const PROMPT_RESULT_POPOVER_GAP = 24;
-const PROMPT_RESULT_POPOVER_ARROW_WIDTH = 36;
-const PROMPT_RESULT_POPOVER_ARROW_HEIGHT = 20;
+const PROMPT_RESULT_POPOVER_ARROW_WIDTH = 28;
+const PROMPT_RESULT_POPOVER_ARROW_HEIGHT = 16;
 const PROMPT_LOADING_STEP_DURATION_MS = 1500;
 const PROMPT_LOADING_RESET_PAUSE_MS = 650;
 
@@ -57,6 +58,71 @@ interface NewUserOnboardingOverlayProps {
   onSkip: () => void;
   onStartExperience: () => void;
 }
+
+const OnboardingCursorIcon: React.FC<React.SVGProps<SVGSVGElement>> = ({
+  className,
+  ...props
+}) => (
+  <svg
+    className={className}
+    viewBox="13.5 13.5 21 23"
+    fill="none"
+    aria-hidden="true"
+    focusable="false"
+    {...props}
+  >
+    <path
+      d="M15.0502 17.4398C14.6729 15.7408 16.4955 14.4039 18.0027 15.2743L32.5432 23.6706C34.1315 24.5878 33.7507 26.9807 31.9561 27.3595L26.7512 28.4581C26.2442 28.5652 25.7984 28.8649 25.508 29.2941L22.2182 34.155C21.2346 35.6083 18.9898 35.1807 18.6094 33.4676L15.0502 17.4398Z"
+      fill="#090002"
+    />
+    <path
+      d="M16.0261 17.2227C15.8379 16.3733 16.7492 15.7055 17.5027 16.1406L32.0427 24.5361C32.8368 24.9947 32.6469 26.1913 31.7498 26.3809L26.5447 27.4795C25.7841 27.64 25.1151 28.0896 24.6794 28.7334L21.3904 33.5947C20.8986 34.3213 19.776 34.1074 19.5857 33.251L16.0261 17.2227Z"
+      stroke="white"
+      strokeWidth="2"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const LeftPopoverArrow: React.FC<React.SVGProps<SVGSVGElement>> = ({
+  className,
+  ...props
+}) => (
+  <svg
+    className={className}
+    viewBox="0 0 14 24"
+    fill="none"
+    aria-hidden="true"
+    focusable="false"
+    preserveAspectRatio="none"
+    {...props}
+  >
+    <path
+      d="M14 0V24L1.7 13.45C0.62 12.52 0.62 11.48 1.7 10.55L14 0Z"
+      fill="currentColor"
+    />
+  </svg>
+);
+
+const TopPopoverArrow: React.FC<React.SVGProps<SVGSVGElement>> = ({
+  className,
+  ...props
+}) => (
+  <svg
+    className={className}
+    viewBox="0 0 36 20"
+    fill="none"
+    aria-hidden="true"
+    focusable="false"
+    preserveAspectRatio="none"
+    {...props}
+  >
+    <path
+      d="M0 20H36L20.2 2.35C18.94 0.94 17.06 0.94 15.8 2.35L0 20Z"
+      fill="currentColor"
+    />
+  </svg>
+);
 
 const clamp = (value: number, min: number, max: number): number => (
   Math.min(Math.max(value, min), max)
@@ -86,7 +152,7 @@ const readTargetRect = (step: NewUserOnboardingStep): TargetRect | null => {
 };
 
 const NewUserOnboardingHeroAnimation: React.FC = () => (
-  <div className="relative h-[116px] overflow-hidden rounded-lg bg-[#eef3ff]" aria-hidden="true">
+  <div className="relative h-[116px] overflow-hidden rounded-lg bg-[#eef3ff] dark:bg-surface" aria-hidden="true">
     <style>
       {`
         @keyframes lobster-onboarding-create-frame {
@@ -187,32 +253,32 @@ const NewUserOnboardingHeroAnimation: React.FC = () => (
         }
       `}
     </style>
-    <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_35%,rgba(255,255,255,0.78),rgba(238,243,255,0)_58%)]" />
-    <div className="lobster-onboarding-create-frame absolute left-1/2 top-[35px] flex h-8 w-[198px] items-center justify-center rounded-lg bg-white text-xs font-medium text-foreground shadow-[0_8px_22px_rgba(35,56,109,0.12)]">
+    <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_35%,rgba(255,255,255,0.78),rgba(238,243,255,0)_58%)] dark:bg-[radial-gradient(circle_at_50%_35%,rgba(255,255,255,0.1),rgba(255,255,255,0)_58%)]" />
+    <div className="lobster-onboarding-create-frame absolute left-1/2 top-[35px] flex h-8 w-[198px] items-center justify-center rounded-lg bg-white text-xs font-medium text-foreground shadow-[0_8px_22px_rgba(35,56,109,0.12)] dark:bg-surface-raised dark:shadow-[0_8px_22px_rgba(0,0,0,0.28)]">
       {i18nService.t('newChat')}
     </div>
     <div className="lobster-onboarding-result-frame absolute inset-0">
-      <div className="lobster-onboarding-card-doc absolute h-[62px] w-[54px] rounded-lg border border-white/90 bg-white/90 shadow-[0_10px_24px_rgba(53,83,139,0.14)]">
+      <div className="lobster-onboarding-card-doc absolute h-[62px] w-[54px] rounded-lg border border-white/90 bg-white/90 shadow-[0_10px_24px_rgba(53,83,139,0.14)] dark:border-border dark:bg-surface-raised/90 dark:shadow-[0_10px_24px_rgba(0,0,0,0.26)]">
         <div className="absolute left-[-9px] top-3 rounded bg-[#6f9cf7] px-1.5 py-0.5 text-[13px] font-semibold leading-4 text-white shadow-sm">
           DOC
         </div>
         <div className="absolute left-5 top-8 h-1.5 w-6 rounded-full bg-[#9dbdf8]" />
         <div className="absolute left-5 top-[44px] h-1.5 w-4 rounded-full bg-[#c1d3fb]" />
       </div>
-      <div className="lobster-onboarding-card-image absolute h-[66px] w-[64px] rounded-lg border-[3px] border-white bg-[#dfeaff] shadow-[0_11px_26px_rgba(53,83,139,0.17)]">
+      <div className="lobster-onboarding-card-image absolute h-[66px] w-[64px] rounded-lg border-[3px] border-white bg-[#dfeaff] shadow-[0_11px_26px_rgba(53,83,139,0.17)] dark:border-border dark:bg-[#223047] dark:shadow-[0_11px_26px_rgba(0,0,0,0.28)]">
         <div className="absolute left-4 top-4 h-3.5 w-3.5 rounded-full bg-[#ffdf69]" />
         <div className="absolute bottom-2.5 left-2.5 h-8 w-10 rounded-[9px] bg-[#b7d5f4]" />
         <div className="absolute bottom-2.5 right-1.5 h-10 w-9 rounded-[10px] bg-[#c7ddf8]" />
       </div>
-      <div className="lobster-onboarding-card-pdf absolute h-[68px] w-[65px] rounded-lg border border-white/90 bg-white/95 shadow-[0_11px_26px_rgba(53,83,139,0.16)]">
+      <div className="lobster-onboarding-card-pdf absolute h-[68px] w-[65px] rounded-lg border border-white/90 bg-white/95 shadow-[0_11px_26px_rgba(53,83,139,0.16)] dark:border-border dark:bg-surface-raised/95 dark:shadow-[0_11px_26px_rgba(0,0,0,0.28)]">
         <div className="absolute left-2.5 top-[-8px] rounded bg-[#ff7e9f] px-2 py-0.5 text-[15px] font-semibold leading-5 text-white shadow-sm">
           PDF
         </div>
-        <div className="absolute left-4 top-9 h-9 w-9 rounded-full bg-[#e1dddf]" />
-        <div className="absolute left-[35px] top-9 h-[18px] w-[19px] rounded-bl-[8px] bg-white/80" />
+        <div className="absolute left-[17px] top-7 h-8 w-8 rounded-full bg-[#e1dddf]" />
+        <div className="absolute left-[34px] top-7 h-4 w-[17px] rounded-bl-[7px] bg-white/80 dark:bg-surface-raised/85" />
       </div>
     </div>
-    <div className="lobster-onboarding-cursor absolute left-0 top-0 h-0 w-0 border-b-[18px] border-l-[8px] border-r-[8px] border-b-black border-l-transparent border-r-transparent drop-shadow-[0_5px_5px_rgba(0,0,0,0.25)]" />
+    <OnboardingCursorIcon className="lobster-onboarding-cursor absolute left-0 top-0 h-7 w-7 drop-shadow-[0_5px_5px_rgba(0,0,0,0.25)]" />
   </div>
 );
 
@@ -382,7 +448,7 @@ const TypewriterPromptPreview: React.FC<{
       </div>
       {isTypingStarted && (
         <div
-          className={`lobster-onboarding-send-active absolute z-10 flex items-center justify-center rounded-full bg-neutral-950 text-white shadow-subtle dark:bg-white dark:text-neutral-950 ${showSendEffect ? 'lobster-onboarding-send-press' : ''}`}
+          className={`lobster-onboarding-send-active absolute z-10 flex items-center justify-center rounded-full bg-foreground text-background shadow-subtle ${showSendEffect ? 'lobster-onboarding-send-press' : ''}`}
           style={{
             top: sendRect.top,
             left: sendRect.left,
@@ -410,30 +476,20 @@ const TypewriterPromptPreview: React.FC<{
       >
         {showSendEffect && (
           <>
-            <div className="lobster-onboarding-send-flash absolute inset-2 rounded-full bg-neutral-950" />
-            <div className="lobster-onboarding-send-pulse absolute inset-0 rounded-full border-2 border-white/95 bg-white/25 shadow-[0_0_0_1px_rgba(0,0,0,0.06)]" />
-            <div className="lobster-onboarding-send-pulse lobster-onboarding-send-pulse-delayed absolute inset-0 rounded-full border border-white/80 bg-white/15" />
+            <div className="lobster-onboarding-send-flash absolute inset-2 rounded-full bg-foreground" />
+            <div className="lobster-onboarding-send-pulse absolute inset-0 rounded-full border-2 border-background/95 bg-background/25 shadow-[0_0_0_1px_rgba(0,0,0,0.06)]" />
+            <div className="lobster-onboarding-send-pulse lobster-onboarding-send-pulse-delayed absolute inset-0 rounded-full border border-background/80 bg-background/15" />
           </>
         )}
       </div>
       {showSendEffect && (
-        <svg
-          className="lobster-onboarding-send-cursor absolute z-30 h-8 w-8 text-neutral-950 drop-shadow-[0_6px_7px_rgba(0,0,0,0.3)]"
-          viewBox="0 0 24 24"
-          fill="none"
+        <OnboardingCursorIcon
+          className="lobster-onboarding-send-cursor absolute z-30 h-7 w-7 drop-shadow-[0_6px_7px_rgba(0,0,0,0.3)]"
           style={{
             top: sendCenterY - 3,
             left: sendCenterX - 3,
           }}
-        >
-          <path
-            d="M5.1 3.8 18.6 16a1 1 0 0 1-.75 1.73l-5.02-.4-2.68 4.23a1 1 0 0 1-1.82-.35L5.1 3.8Z"
-            fill="currentColor"
-            stroke="white"
-            strokeWidth="1.35"
-            strokeLinejoin="round"
-          />
-        </svg>
+        />
       )}
     </div>
   );
@@ -513,17 +569,17 @@ const PromptLoadingSequence: React.FC = () => {
 
           return (
             <div key={`${cycleIndex}-${messageKey}`} className="lobster-onboarding-loading-row flex items-start gap-2">
-              <span className="mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-neutral-100">
-                <span className={`h-1.5 w-1.5 rounded-full ${isActive ? 'lobster-onboarding-loading-dot bg-neutral-400' : 'bg-neutral-300'}`} />
+              <span className="mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-surface-raised dark:bg-surface">
+                <span className={`h-1.5 w-1.5 rounded-full ${isActive ? 'lobster-onboarding-loading-dot bg-secondary' : 'bg-tertiary'}`} />
               </span>
               <span className="min-w-0">
-                <span className="block text-[13px] leading-[18px] text-neutral-500">
+                <span className="block text-[13px] leading-[18px] text-secondary">
                   {i18nService.t(messageKey)}
                 </span>
-                <span className="mt-1 block h-1 w-[136px] overflow-hidden rounded-full bg-neutral-100">
+                <span className="mt-1 block h-1 w-[136px] overflow-hidden rounded-full bg-surface-raised dark:bg-surface">
                   <span
                     key={progressKey}
-                    className={`block h-full rounded-full bg-neutral-300 ${isActive ? 'lobster-onboarding-loading-progress' : ''}`}
+                    className={`block h-full rounded-full bg-tertiary ${isActive ? 'lobster-onboarding-loading-progress' : ''}`}
                     style={{ width: '100%' }}
                   />
                 </span>
@@ -580,7 +636,7 @@ const PromptResultPopover: React.FC<{
 
   return (
     <section
-      className="lobster-onboarding-result-popover absolute rounded-[22px] bg-white p-6 text-neutral-950 shadow-[0_18px_52px_rgba(0,0,0,0.18)]"
+      className="lobster-onboarding-result-popover absolute rounded-xl bg-background p-6 text-foreground shadow-[0_18px_52px_rgba(0,0,0,0.18)] ring-1 ring-border/0 dark:bg-surface-raised dark:ring-border/70 dark:shadow-[0_18px_52px_rgba(0,0,0,0.44)]"
       style={{
         top: popoverTop,
         left: popoverLeft,
@@ -591,12 +647,15 @@ const PromptResultPopover: React.FC<{
       <style>
         {`
         @keyframes lobster-onboarding-result-popover {
-          0% { opacity: 0; transform: translateY(10px) scale(0.985); }
+          0% { opacity: 0; transform: translateY(8px) scale(0.99); }
+          72% { opacity: 1; transform: translateY(-1px) scale(1); }
           100% { opacity: 1; transform: translateY(0) scale(1); }
         }
 
         .lobster-onboarding-result-popover {
-          animation: lobster-onboarding-result-popover 0.22s ease-out both;
+          animation: lobster-onboarding-result-popover 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+          transform-origin: top center;
+          will-change: opacity, transform;
         }
 
         @media (prefers-reduced-motion: reduce) {
@@ -606,46 +665,55 @@ const PromptResultPopover: React.FC<{
         }
       `}
       </style>
-      <div
-        className="absolute h-0 w-0 border-x-[18px] border-b-[20px] border-x-transparent border-b-white"
+      <TopPopoverArrow
+        className="absolute text-background dark:text-surface-raised"
         style={{
           top: -PROMPT_RESULT_POPOVER_ARROW_HEIGHT + 1,
           left: arrowLeft,
+          width: PROMPT_RESULT_POPOVER_ARROW_WIDTH,
+          height: PROMPT_RESULT_POPOVER_ARROW_HEIGHT,
         }}
       />
-      <div
-        className={
-          useCompactActionLayout
-            ? 'relative flex h-full flex-col gap-3'
-            : 'relative grid h-full grid-cols-[minmax(0,1fr)_172px] gap-6'
-        }
-      >
+      <div className="relative flex h-full flex-col gap-2">
         <div className="min-w-0">
-          <h2 className="text-[22px] font-semibold leading-7 text-neutral-950">
+          <h2 className="text-[22px] font-semibold leading-7 text-foreground">
             {i18nService.t('newUserOnboardingPromptResultTitle')}
           </h2>
-          <p className="mt-1.5 text-base leading-6 text-neutral-500">
+          <p
+            className={
+              `mt-1.5 text-base leading-6 text-secondary ${
+                useCompactActionLayout ? '' : 'whitespace-nowrap'
+              }`
+            }
+          >
             {i18nService.t('newUserOnboardingPromptResultDescription')}
           </p>
-          <PromptLoadingSequence />
         </div>
-        <div className={`flex items-end justify-end gap-7 ${useCompactActionLayout ? 'mt-auto' : 'h-full pb-3'}`}>
-          <button
-            type="button"
-            onClick={onSkip}
-            className="flex h-10 items-center whitespace-nowrap rounded-md px-2 text-xs font-medium text-tertiary transition-colors hover:bg-surface-raised hover:text-secondary"
-          >
-            {i18nService.t('newUserOnboardingSkip')}
-          </button>
-          <div className="relative">
-            <div className="pointer-events-none absolute inset-x-2 bottom-0 h-4 translate-y-1/2 rounded-full bg-[linear-gradient(90deg,#14f195,#7c3aed,#ff4fd8)] opacity-65 blur-md" />
+        <div
+          className={
+            useCompactActionLayout
+              ? 'flex min-h-0 flex-1 flex-col'
+              : 'grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_172px] gap-6'
+          }
+        >
+          <PromptLoadingSequence />
+          <div className={`flex items-end justify-end gap-7 ${useCompactActionLayout ? 'mt-auto' : 'h-full pb-3'}`}>
             <button
               type="button"
-              onClick={onStartExperience}
-              className="relative whitespace-nowrap rounded-xl bg-neutral-950 px-6 py-2.5 text-[15px] font-medium leading-5 text-white shadow-[0_10px_24px_rgba(0,0,0,0.22)] transition-transform hover:scale-[1.02] active:scale-[0.98]"
+              onClick={onSkip}
+              className="flex h-10 items-center whitespace-nowrap rounded-md px-2 text-xs font-medium text-muted transition-colors hover:bg-surface-raised/40 hover:text-secondary"
             >
-              {i18nService.t('newUserOnboardingStartExperience')}
+              {i18nService.t('newUserOnboardingSkip')}
             </button>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={onStartExperience}
+                className="sidebar-login-rainbow chat-login-experience-action relative inline-flex h-9 w-[8.5rem] items-center justify-center whitespace-nowrap rounded-lg px-5 text-base font-medium leading-none transition-[filter,transform]"
+              >
+                {i18nService.t('newUserOnboardingStartExperience')}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -667,25 +735,29 @@ const NewUserOnboardingOverlay: React.FC<NewUserOnboardingOverlayProps> = ({
   const animationFrameRef = useRef<number | null>(null);
   const promptResultTimerRef = useRef<number | null>(null);
 
+  const measureTargetRect = useCallback(() => {
+    setTargetRect(readTargetRect(step));
+    setPromptTextareaRect(
+      step === NewUserOnboardingStep.PromptInput
+        ? readElementRect(PROMPT_TEXTAREA_SELECTOR)
+        : null,
+    );
+    setPromptSendButtonRect(
+      step === NewUserOnboardingStep.PromptInput
+        ? readElementRect(PROMPT_SEND_BUTTON_SELECTOR)
+        : null,
+    );
+  }, [step]);
+
   const updateTargetRect = useCallback(() => {
     if (animationFrameRef.current !== null) {
       window.cancelAnimationFrame(animationFrameRef.current);
     }
     animationFrameRef.current = window.requestAnimationFrame(() => {
       animationFrameRef.current = null;
-      setTargetRect(readTargetRect(step));
-      setPromptTextareaRect(
-        step === NewUserOnboardingStep.PromptInput
-          ? readElementRect(PROMPT_TEXTAREA_SELECTOR)
-          : null,
-      );
-      setPromptSendButtonRect(
-        step === NewUserOnboardingStep.PromptInput
-          ? readElementRect(PROMPT_SEND_BUTTON_SELECTOR)
-          : null,
-      );
+      measureTargetRect();
     });
-  }, [step]);
+  }, [measureTargetRect]);
 
   const handlePromptTypingComplete = useCallback(() => {
     setIsPromptTypingComplete(true);
@@ -705,7 +777,11 @@ const NewUserOnboardingOverlay: React.FC<NewUserOnboardingOverlayProps> = ({
       window.clearTimeout(promptResultTimerRef.current);
       promptResultTimerRef.current = null;
     }
-    updateTargetRect();
+    if (animationFrameRef.current !== null) {
+      window.cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    measureTargetRect();
     window.addEventListener('resize', updateTargetRect);
     window.addEventListener('scroll', updateTargetRect, true);
 
@@ -741,7 +817,7 @@ const NewUserOnboardingOverlay: React.FC<NewUserOnboardingOverlayProps> = ({
         promptResultTimerRef.current = null;
       }
     };
-  }, [step, updateTargetRect]);
+  }, [measureTargetRect, step, updateTargetRect]);
 
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
@@ -807,14 +883,16 @@ const NewUserOnboardingOverlay: React.FC<NewUserOnboardingOverlayProps> = ({
       )}
       {step === NewUserOnboardingStep.NewTask && (
         <section
-          className="absolute w-[308px] rounded-xl bg-background p-3 shadow-[0_18px_55px_rgba(0,0,0,0.24)]"
+          className="absolute w-[308px] rounded-xl bg-background p-3 shadow-[0_18px_55px_rgba(0,0,0,0.24)] ring-1 ring-border/0 dark:bg-surface-raised dark:ring-border/70 dark:shadow-[0_18px_55px_rgba(0,0,0,0.44)]"
           style={{ top: popoverTop, left: popoverLeft }}
         >
-          <div
-            className="absolute h-0 w-0 border-y-[12px] border-r-[14px] border-y-transparent border-r-background"
+          <LeftPopoverArrow
+            className="absolute text-background dark:text-surface-raised"
             style={{
               top: arrowTop,
-              left: -POPOVER_ARROW_WIDTH,
+              left: -POPOVER_ARROW_WIDTH + POPOVER_ARROW_CARD_OVERLAP,
+              width: POPOVER_ARROW_WIDTH,
+              height: POPOVER_ARROW_HALF_HEIGHT * 2,
             }}
           />
           <NewUserOnboardingHeroAnimation />
@@ -829,7 +907,7 @@ const NewUserOnboardingOverlay: React.FC<NewUserOnboardingOverlayProps> = ({
               <button
                 type="button"
                 onClick={onSkip}
-                className="rounded-md px-2 py-1 text-xs font-medium text-tertiary transition-colors hover:bg-surface-raised hover:text-secondary"
+                className="rounded-md px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-surface-raised/40 hover:text-secondary"
               >
                 {i18nService.t('newUserOnboardingSkip')}
               </button>

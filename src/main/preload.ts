@@ -892,6 +892,18 @@ contextBridge.exposeInMainWorld('electron', {
       artifactId?: string;
       filePath?: string;
     }) => ipcRenderer.invoke(HtmlShareIpc.GetByArtifactFile, options),
+    createFromGeneratedVideo: (options: {
+      taskId: string;
+      outputIndex: number;
+      sessionId: string;
+      artifactId: string;
+      title: string;
+      accessMode?: HtmlShareAccessMode;
+    }) => ipcRenderer.invoke(HtmlShareIpc.CreateFromGeneratedVideo, options),
+    getGeneratedVideoSource: (options: { taskId: string; outputIndex: number }) =>
+      ipcRenderer.invoke(HtmlShareIpc.GetGeneratedVideoSource, options),
+    resolveLegacyGeneratedVideoSource: (options: { resultUrl: string }) =>
+      ipcRenderer.invoke(HtmlShareIpc.ResolveLegacyGeneratedVideoSource, options),
     getBySource: (options: {
       sourceType: HtmlShareSourceType;
       clientSourceKey: string;
@@ -1049,9 +1061,9 @@ contextBridge.exposeInMainWorld('electron', {
     checkNow: (options?: { manual?: boolean; userId?: string | null }) =>
       ipcRenderer.invoke(AppUpdateIpc.CheckNow, options),
     retryDownload: () => ipcRenderer.invoke(AppUpdateIpc.RetryDownload),
-    cancelDownload: () => ipcRenderer.invoke(AppUpdateIpc.CancelDownload),
     installReady: () => ipcRenderer.invoke(AppUpdateIpc.InstallReady),
     getCompletedUpdate: () => ipcRenderer.invoke(AppUpdateIpc.GetCompletedUpdate),
+    getActiveWorkloads: () => ipcRenderer.invoke(AppUpdateIpc.GetActiveWorkloads),
     onStateChanged: (callback: (data: any) => void) => {
       const handler = (_event: any, data: any) => callback(data);
       ipcRenderer.on(AppUpdateIpc.StateChanged, handler);

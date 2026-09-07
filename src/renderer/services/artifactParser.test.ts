@@ -236,11 +236,11 @@ describe('parseToolResultMediaArtifacts', () => {
     expect(artifacts[0].filePath).toBeUndefined();
   });
 
-  test('skips remote-only video assets because video preview requires a local file', () => {
+  test('keeps remote-only video assets as legacy generated-video candidates', () => {
     const toolResultMsg = {
       id: 'result1',
       type: 'tool_result' as const,
-      content: 'Generated video',
+      content: 'Saved generated video:',
       timestamp: Date.now(),
       metadata: {
         toolResultDetails: {
@@ -255,8 +255,34 @@ describe('parseToolResultMediaArtifacts', () => {
       },
     };
     const artifacts = parseToolResultMediaArtifacts(toolResultMsg, 'sess1');
-    expect(artifacts).toHaveLength(0);
-    expect(hasToolResultMediaAssets(toolResultMsg)).toBe(false);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].remoteUrl).toBe('https://example.com/generated.mp4?signature=temporary');
+    expect(artifacts[0].legacyGeneratedVideoCandidate).toBe(true);
+    expect(hasToolResultMediaAssets(toolResultMsg)).toBe(true);
+  });
+
+  test('does not mark arbitrary tool video output as a generated-video share candidate', () => {
+    const toolResultMsg = {
+      id: 'result1',
+      type: 'tool_result' as const,
+      content: 'Video processing complete',
+      timestamp: Date.now(),
+      metadata: {
+        toolResultDetails: {
+          assets: [
+            {
+              type: 'video',
+              url: 'https://example.com/processed.mp4',
+              mimeType: 'video/mp4',
+            },
+          ],
+        },
+      },
+    };
+
+    const artifacts = parseToolResultMediaArtifacts(toolResultMsg, 'sess1');
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].legacyGeneratedVideoCandidate).toBeUndefined();
   });
 
   test('prefers local filePath for persisted generated videos', () => {
@@ -267,6 +293,7 @@ describe('parseToolResultMediaArtifacts', () => {
       timestamp: Date.now(),
       metadata: {
         toolResultDetails: {
+          taskId: '321',
           assets: [
             {
               type: 'video',
@@ -274,6 +301,7 @@ describe('parseToolResultMediaArtifacts', () => {
               filePath: '/home/user/project/generated-video.mp4',
               mimeType: 'video/mp4',
               filename: 'generated-video.mp4',
+              outputIndex: 4,
             },
           ],
         },
@@ -285,6 +313,11 @@ describe('parseToolResultMediaArtifacts', () => {
     expect(artifacts[0].content).toBe('');
     expect(artifacts[0].remoteUrl).toBe('https://example.com/generated.mp4?signature=temporary');
     expect(artifacts[0].filePath).toBe('/home/user/project/generated-video.mp4');
+    expect(artifacts[0].mediaOrigin).toEqual({
+      type: 'generated_video',
+      taskId: '321',
+      outputIndex: 4,
+    });
   });
 
   test('detects media assets in tool result metadata', () => {
@@ -341,6 +374,46 @@ describe('dedupeArtifactsForDisplay', () => {
     expect(artifacts).toHaveLength(1);
     expect(artifacts[0].id).toBe(metadataArtifacts[0].id);
     expect(artifacts[0].remoteUrl).toBe('https://example.com/generated.mp4?signature=temporary');
+  });
+
+  test('preserves generated-video provenance when a later assistant file link has the same path', () => {
+    const metadataArtifacts = parseToolResultMediaArtifacts({
+      id: 'system-result',
+      type: 'system' as const,
+      content: 'Saved generated video',
+      timestamp: 1,
+      metadata: {
+        toolResultDetails: {
+          taskId: '206',
+          mediaType: 'video',
+          assets: [
+            {
+              type: 'video',
+              url: 'https://example.com/generated.mp4?signature=temporary',
+              filePath: '/home/user/project/generated-video.mp4',
+              filename: 'generated-video.mp4',
+              outputIndex: 0,
+            },
+          ],
+        },
+      },
+    }, 'sess1');
+    const linkArtifacts = parseFileLinksFromMessage(
+      '[generated-video.mp4](file:///home/user/project/generated-video.mp4)',
+      'assistant-result',
+      'sess1',
+    ).map(artifact => ({ ...artifact, createdAt: 2 }));
+
+    const artifacts = dedupeArtifactsForDisplay([...metadataArtifacts, ...linkArtifacts]);
+
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].id).toBe(metadataArtifacts[0].id);
+    expect(artifacts[0].remoteUrl).toBe('https://example.com/generated.mp4?signature=temporary');
+    expect(artifacts[0].mediaOrigin).toEqual({
+      type: 'generated_video',
+      taskId: '206',
+      outputIndex: 0,
+    });
   });
 
   test('replaces remote media artifact with local persisted version sharing the same url', () => {

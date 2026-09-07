@@ -9,6 +9,7 @@ const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-pyt
 const { syncLocalOpenClawExtensions } = require('./sync-local-openclaw-extensions.cjs');
 const { packMultipleSources } = require('./pack-openclaw-tar.cjs');
 const { DIST_DIFFS_EXTENSION_DIR, DIST_EXTENSIONS_DIR, summarizeGatewayAsarEntries } = require('./openclaw-runtime-packaging.cjs');
+const { collectHostPeerLeftovers, measureDirectorySize } = require('./openclaw-plugin-host-peer-leftovers.cjs');
 
 function isWindowsTarget(context) {
   return context?.electronPlatformName === 'win32';
@@ -122,7 +123,47 @@ function verifyPreinstalledPlugins(runtimeRoot, buildHint) {
     );
   }
 
+  verifyNoHostPeerLeftovers(extensionsDir, plugins);
+
   console.log(`[electron-builder-hooks] Verified ${plugins.length} preinstalled OpenClaw plugin(s).`);
+}
+
+// A plugin whose node_modules still carries the openclaw peer dependency tree
+// adds hundreds of MB to the installer (see openclaw-plugin-host-peer-leftovers.cjs).
+// openclaw:prune removes it; anything left here means the runtime was not
+// rebuilt through the normal chain, so fail instead of shipping it silently.
+const PLUGIN_SIZE_WARN_BYTES = 100 * 1024 * 1024;
+
+function verifyNoHostPeerLeftovers(extensionsDir, plugins) {
+  const problems = [];
+  for (const plugin of plugins) {
+    if (!plugin.id) continue;
+    const pluginDir = path.join(extensionsDir, plugin.id);
+    if (!existsSync(pluginDir)) continue;
+
+    const leftovers = collectHostPeerLeftovers(pluginDir);
+    if (leftovers.length > 0) {
+      const preview = leftovers.slice(0, 3).map((item) => item.location).join(', ');
+      const more = leftovers.length > 3 ? ` and ${leftovers.length - 3} more` : '';
+      problems.push(`${plugin.id}: ${preview}${more}`);
+    }
+
+    const sizeBytes = measureDirectorySize(pluginDir);
+    if (sizeBytes > PLUGIN_SIZE_WARN_BYTES) {
+      console.warn(
+        `[electron-builder-hooks] Preinstalled OpenClaw plugin ${plugin.id} is `
+        + `${(sizeBytes / 1024 / 1024).toFixed(1)} MB; check its node_modules before shipping.`,
+      );
+    }
+  }
+
+  if (problems.length > 0) {
+    throw new Error(
+      '[electron-builder-hooks] Preinstalled OpenClaw plugins still contain openclaw peer dependency trees: '
+      + problems.join('; ')
+      + '. Run `npm run openclaw:prune`, or delete vendor/openclaw-plugins/<id> and re-run `npm run openclaw:plugins`.',
+    );
+  }
 }
 
 function hasCompiledLocalExtension(runtimeRoot, extensionId) {

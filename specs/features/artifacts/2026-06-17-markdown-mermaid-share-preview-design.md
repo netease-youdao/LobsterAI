@@ -1,5 +1,9 @@
 # Markdown/Mermaid 分享预览设计文档
 
+> 后续设计（2026-09-03，待实施）：[Markdown 文件分享渲染一致性](./2026-09-03-markdown-share-rendering-parity-design.md)；[跨系统详细方案](../../../../lobsterai-server/docs/specs/html-share/feature-2026-09-03-markdown-share-rendering-parity.md)。
+>
+> 本文保留 2026-06-17 历史基线。后续方案实施后，Markdown 内核、全文展示、图片快照与构建交付按新版执行；独立 Mermaid、分享访问和审核仍遵循现有链路。远程图片扩展仅发生在发布时打包，公开页不直接加载远程图片。
+
 ## 1. 背景
 
 LobsterAI 已经基于 `lobsterai-server` 的 HTML 分享系统支持 HTML、图片、SVG、Office/PDF 文件分享。现有链路为：

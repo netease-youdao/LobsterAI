@@ -208,6 +208,7 @@ describe('mediaAssetPersistence', () => {
         {
           type: 'video',
           url: 'https://example.com/generated.mp4?signature=temporary',
+          outputIndex: 3,
           mimeType: 'video/mp4',
         },
       ],
@@ -217,6 +218,7 @@ describe('mediaAssetPersistence', () => {
     expect(result.failed).toHaveLength(0);
     expect(result.saved).toHaveLength(1);
     expect(result.saved[0].filename).toBe('generated-video-20260514-115032-1.mp4');
+    expect(result.saved[0].outputIndex).toBe(3);
     expect(result.saved[0].filePath).toBe(path.join(cwd, 'generated-video-20260514-115032-1.mp4'));
     expect(await fs.promises.readFile(result.saved[0].filePath)).toEqual(mp4Buffer);
   });

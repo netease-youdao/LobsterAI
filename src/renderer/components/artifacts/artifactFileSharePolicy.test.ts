@@ -1,7 +1,7 @@
 import { HtmlShareAccessMode, HtmlShareSourceType } from '@shared/htmlShare/constants';
 import { describe, expect, test } from 'vitest';
 
-import { type Artifact, ArtifactTypeValue } from '@/types/artifact';
+import { type Artifact, ArtifactMediaOriginType, ArtifactTypeValue } from '@/types/artifact';
 
 import {
   ArtifactFileShareRequestSource,
@@ -151,7 +151,6 @@ describe('artifactFileSharePolicy', () => {
     ArtifactTypeValue.LocalService,
     ArtifactTypeValue.Code,
     ArtifactTypeValue.Text,
-    ArtifactTypeValue.Video,
   ])('never shares unsupported %s artifacts', artifactType => {
     const artifact = makeArtifact(artifactType, {
       filePath: '/tmp/source.bin',
@@ -162,6 +161,54 @@ describe('artifactFileSharePolicy', () => {
     expect(getArtifactFileShareSourceType(artifact)).toBeNull();
     expect(isArtifactFileShareable(artifact)).toBe(false);
     expect(buildArtifactFileShareRequest(artifact, 'fallback-session', 'Share')).toBeNull();
+  });
+
+  test('does not share a local video without model-generation provenance', () => {
+    const artifact = makeArtifact(ArtifactTypeValue.Video, {
+      filePath: '/tmp/local-video.mp4',
+      source: 'file',
+    });
+
+    expect(getArtifactFileShareSourceType(artifact)).toBeNull();
+    expect(isArtifactFileShareable(artifact)).toBe(false);
+  });
+
+  test('builds a generated video request without a local path or URL', () => {
+    const artifact = makeArtifact(ArtifactTypeValue.Video, {
+      filePath: '/tmp/generated-video.mp4',
+      remoteUrl: 'https://provider.example/video.mp4?token=temporary',
+      mediaOrigin: {
+        type: ArtifactMediaOriginType.GeneratedVideo,
+        taskId: '123',
+        outputIndex: 2,
+      },
+      source: 'tool',
+    });
+
+    expect(buildArtifactFileShareRequest(artifact, 'fallback-session', 'Share')).toEqual({
+      source: ArtifactFileShareRequestSource.GeneratedVideo,
+      sourceType: HtmlShareSourceType.GeneratedVideoFile,
+      sessionId: 'session-1',
+      artifactId: 'artifact-1',
+      lookupKey: 'generated_video_file:task:123:2',
+      title: 'Artifact title',
+      accessMode: HtmlShareAccessMode.Code,
+      taskId: '123',
+      outputIndex: 2,
+    });
+  });
+
+  test('allows only tool-marked legacy HTTPS video results to enter source resolution', () => {
+    const artifact = makeArtifact(ArtifactTypeValue.Video, {
+      remoteUrl: 'https://provider.example/video.mp4?token=temporary',
+      legacyGeneratedVideoCandidate: true,
+      source: 'tool',
+    });
+    const request = buildArtifactFileShareRequest(artifact, 'fallback-session', 'Share');
+
+    expect(request?.source).toBe(ArtifactFileShareRequestSource.GeneratedVideo);
+    expect(request?.taskId).toBeUndefined();
+    expect(request?.legacyResultUrl).toBe(artifact.remoteUrl);
   });
 
   test('rejects missing and whitespace-only inline sources', () => {

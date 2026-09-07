@@ -382,6 +382,7 @@ const MANAGED_BROWSER_POLICY_PROMPT = [
   '- For every `browser` tool call, set `target="host"` explicitly.',
   '- Do not use `target="sandbox"` or `target="node"` unless a future LobsterAI version explicitly enables it.',
   '- If a browser call fails because the sandbox browser is unavailable, retry the same action with `target="host"`.',
+  '- The `lobster-in-app` profile is LobsterAI\'s own browser bridge. If it is unavailable, report an internal LobsterAI browser startup failure; never tell the user to enable Chrome remote debugging or launch Chrome with debugging flags.',
   `- When a page requires a password and \`${BrowserCredentialMcpServer.ModelToolName}\` is available, call it before asking the user to sign in manually. The tool can use an encrypted saved login without revealing its password to you.`,
   '- If no saved login is available, ask the user to sign in directly in the visible LobsterAI browser. Never ask the user to send a password in chat, and never search files, memory, or logs for passwords.',
 ].join('\n');

@@ -1,11 +1,19 @@
 import {
+  PublishingRecoveryAnalyticsInteractionType,
+  type PublishingRecoveryAnalyticsOutcome,
+  type PublishingRecoveryAnalyticsSurface,
+} from '@shared/analytics/constants';
+import {
   PublishingIdentityType,
   type PublishingQuotaErrorData,
   PublishingResourceKind,
+  PublishingSubscriptionRecoveryMode,
 } from '@shared/publishing/constants';
 
+import { configService } from '@/services/config';
 import { LogReporterAction, reportYdAnalyzer } from '@/services/logReporter';
 import { rememberPublishingConversionAttribution } from '@/services/publishingConversionAttribution';
+import { store } from '@/store';
 
 import {
   type ArtifactPreviewActionSource,
@@ -19,6 +27,7 @@ import {
 
 export const PublishingAnalyticsEventVersion = 2;
 export const PublishingAnalyticsDialogVersion = 2;
+export const PublishingRecoveryAnalyticsEventVersion = 1;
 
 export const PublishingAnalyticsOperationType = {
   Create: 'create',
@@ -26,6 +35,7 @@ export const PublishingAnalyticsOperationType = {
   UpdateContent: 'update_content',
   UpdatePermission: 'update_permission',
   Redeploy: 'redeploy',
+  SubscriptionRecovery: 'subscription_recovery',
   Unknown: 'unknown',
 } as const;
 
@@ -142,12 +152,93 @@ export interface PublishingAnalyticsDialogContext {
   trialAccessTtlSeconds?: number;
 }
 
+export type PublishingRecoveryAnalyticsMode =
+  | typeof PublishingSubscriptionRecoveryMode.Automatic
+  | typeof PublishingSubscriptionRecoveryMode.RedeployRequired;
+
+export interface PublishingRecoveryAnalyticsContext {
+  attemptId: string;
+  exposureId: string;
+  exposedAt: number;
+  feature: ArtifactSubscriptionFeatureValue;
+  resourceKind: typeof PublishingResourceKind.File | typeof PublishingResourceKind.Site;
+  source: ArtifactPreviewActionSource;
+  entryPoint: ArtifactPublishEntryPoint;
+  surface?: string;
+  recoverySurface: PublishingRecoveryAnalyticsSurface;
+  pageViewId?: string;
+  subscriptionRecoveryMode: PublishingRecoveryAnalyticsMode;
+  /** Local-only owner scope. Never include this field in an analytics payload. */
+  ownerAccountKey: string;
+  /** Local-only stable resource key. Never include this field in an analytics payload. */
+  resourceKey: string;
+}
+
+export interface CreatePublishingRecoveryAnalyticsContextInput {
+  attemptId?: string;
+  feature: ArtifactSubscriptionFeatureValue;
+  resourceKind: typeof PublishingResourceKind.File | typeof PublishingResourceKind.Site;
+  source: ArtifactPreviewActionSource;
+  entryPoint: ArtifactPublishEntryPoint;
+  surface?: string;
+  recoverySurface: PublishingRecoveryAnalyticsSurface;
+  pageViewId?: string;
+  subscriptionRecoveryMode: PublishingRecoveryAnalyticsMode;
+  ownerAccountKey: string;
+  resourceKey: string;
+}
+
+export interface CreatePublishingRecoveryAnalyticsContextFromAttemptInput {
+  surface?: string;
+  recoverySurface: PublishingRecoveryAnalyticsSurface;
+  subscriptionRecoveryMode: PublishingRecoveryAnalyticsMode;
+  ownerAccountKey: string;
+  resourceKey: string;
+}
+
 const createId = (): string => (
   globalThis.crypto?.randomUUID?.()
   ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
 );
 
 export const createPublishingAnalyticsOperationId = createId;
+
+export const createPublishingRecoveryAnalyticsContext = (
+  input: CreatePublishingRecoveryAnalyticsContextInput,
+  now = Date.now(),
+): PublishingRecoveryAnalyticsContext => ({
+  attemptId: input.attemptId ?? createId(),
+  exposureId: createId(),
+  exposedAt: now,
+  feature: input.feature,
+  resourceKind: input.resourceKind,
+  source: input.source,
+  entryPoint: input.entryPoint,
+  surface: input.surface,
+  recoverySurface: input.recoverySurface,
+  pageViewId: input.pageViewId,
+  subscriptionRecoveryMode: input.subscriptionRecoveryMode,
+  ownerAccountKey: input.ownerAccountKey,
+  resourceKey: input.resourceKey,
+});
+
+export const createPublishingRecoveryAnalyticsContextFromAttempt = (
+  attempt: PublishingAnalyticsAttemptContext,
+  input: CreatePublishingRecoveryAnalyticsContextFromAttemptInput,
+  now = Date.now(),
+): PublishingRecoveryAnalyticsContext => createPublishingRecoveryAnalyticsContext({
+  attemptId: attempt.attemptId,
+  feature: attempt.feature,
+  resourceKind: attempt.resourceKind,
+  source: attempt.source,
+  entryPoint: attempt.entryPoint,
+  surface: input.surface ?? attempt.surface,
+  recoverySurface: input.recoverySurface,
+  pageViewId: attempt.pageViewId,
+  subscriptionRecoveryMode: input.subscriptionRecoveryMode,
+  ownerAccountKey: input.ownerAccountKey,
+  resourceKey: input.resourceKey,
+}, now);
 
 export const createPublishingAnalyticsAttempt = (
   input: Omit<PublishingAnalyticsAttemptContext, 'attemptId'>,
@@ -228,6 +319,262 @@ const getDialogParams = (
   trialAccessTtlSeconds: context.trialAccessTtlSeconds,
 });
 
+const getRecoveryParams = (
+  context: PublishingRecoveryAnalyticsContext,
+): Record<string, string | number | boolean | undefined> => ({
+  eventVersion: PublishingRecoveryAnalyticsEventVersion,
+  attemptId: context.attemptId,
+  exposureId: context.exposureId,
+  interactionType: PublishingRecoveryAnalyticsInteractionType.RecoveryCta,
+  feature: context.feature,
+  resourceKind: context.resourceKind,
+  operationType: PublishingAnalyticsOperationType.SubscriptionRecovery,
+  source: context.source,
+  entryPoint: context.entryPoint,
+  surface: context.surface,
+  recoverySurface: context.recoverySurface,
+  pageViewId: context.pageViewId,
+  hasExistingResource: true,
+  identityType: PublishingIdentityType.Free,
+  subscriptionRecoveryMode: context.subscriptionRecoveryMode,
+});
+
+const PublishingRecoveryExposureDedupLimit = 2_000;
+interface PublishingRecoveryExposureRecord {
+  exposureId: string;
+  exposedAt: number;
+}
+const publishingRecoveryExposures = new Map<string, PublishingRecoveryExposureRecord>();
+
+const getPublishingRecoveryLocalKey = (
+  ownerAccountKey: string,
+  resourceKey: string,
+): string => JSON.stringify([ownerAccountKey, resourceKey]);
+
+const getPublishingRecoveryExposureKey = (
+  context: PublishingRecoveryAnalyticsContext,
+): string => JSON.stringify([
+  context.ownerAccountKey,
+  context.pageViewId ?? context.attemptId,
+  context.resourceKey,
+  context.recoverySurface,
+  context.subscriptionRecoveryMode,
+]);
+
+const rememberPublishingRecoveryExposure = (
+  key: string,
+  record: PublishingRecoveryExposureRecord,
+): void => {
+  if (publishingRecoveryExposures.size >= PublishingRecoveryExposureDedupLimit) {
+    const oldestKey = publishingRecoveryExposures.keys().next().value;
+    if (typeof oldestKey === 'string') publishingRecoveryExposures.delete(oldestKey);
+  }
+  publishingRecoveryExposures.set(key, record);
+};
+
+export const reportPublishingRecoveryCtaExposure = (
+  context: PublishingRecoveryAnalyticsContext,
+  now = Date.now(),
+): boolean => {
+  if (configService.getConfig().usageAnalyticsEnabled === false) return false;
+  const exposureKey = getPublishingRecoveryExposureKey(context);
+  const existingExposure = publishingRecoveryExposures.get(exposureKey);
+  if (existingExposure) {
+    context.exposureId = existingExposure.exposureId;
+    context.exposedAt = existingExposure.exposedAt;
+    return false;
+  }
+  context.exposedAt = now;
+  rememberPublishingRecoveryExposure(exposureKey, {
+    exposureId: context.exposureId,
+    exposedAt: context.exposedAt,
+  });
+  void reportYdAnalyzer({
+    action: LogReporterAction.PublishingRecoveryCtaExposure,
+    actionType: 'exposure',
+    ...getRecoveryParams(context),
+  }, {
+    touchpointIdentityType: PublishingIdentityType.Free,
+  });
+  return true;
+};
+
+/** Call when a CTA becomes hidden while its page/dialog lifecycle stays alive. */
+export const resetPublishingRecoveryCtaExposure = (
+  context: PublishingRecoveryAnalyticsContext,
+  now = Date.now(),
+): PublishingRecoveryAnalyticsContext => {
+  publishingRecoveryExposures.delete(getPublishingRecoveryExposureKey(context));
+  context.exposureId = createId();
+  context.exposedAt = now;
+  return context;
+};
+
+interface PublishingRecoveryResultCorrelation {
+  context: PublishingRecoveryAnalyticsContext;
+  operationId: string;
+  clickedAt: number;
+}
+
+const publishingRecoveryResultCorrelations =
+  new Map<string, PublishingRecoveryResultCorrelation>();
+interface PendingPublishingRecoveryResultReport {
+  operationId: string;
+  promise: Promise<boolean>;
+}
+const pendingPublishingRecoveryResultReports =
+  new Map<string, PendingPublishingRecoveryResultReport>();
+
+export interface ReportPublishingRecoveryCtaActionOptions {
+  operationId?: string;
+  now?: number;
+}
+
+export const reportPublishingRecoveryCtaAction = (
+  context: PublishingRecoveryAnalyticsContext,
+  options: ReportPublishingRecoveryCtaActionOptions = {},
+): string => {
+  const clickedAt = options.now ?? Date.now();
+  const operationId = options.operationId ?? createPublishingAnalyticsOperationId();
+  const exposureToClickMs = Math.max(0, clickedAt - context.exposedAt);
+  const analyticsEnabled = configService.getConfig().usageAnalyticsEnabled !== false;
+
+  if (analyticsEnabled && context.ownerAccountKey.trim() && context.resourceKey.trim()) {
+    rememberPublishingConversionAttribution({
+      ownerAccountKey: context.ownerAccountKey,
+      resourceKey: context.resourceKey,
+      attemptId: context.attemptId,
+      operationId,
+      interactionType: PublishingRecoveryAnalyticsInteractionType.RecoveryCta,
+      feature: context.feature,
+      resourceKind: context.resourceKind,
+      operationType: PublishingAnalyticsOperationType.SubscriptionRecovery,
+      source: context.source,
+      entryPoint: context.entryPoint,
+      surface: context.surface,
+      recoverySurface: context.recoverySurface,
+      pageViewId: context.pageViewId,
+      hasExistingResource: true,
+      subscriptionRecoveryMode: context.subscriptionRecoveryMode,
+      exposureId: context.exposureId,
+      identityType: PublishingIdentityType.Free,
+      ctaId: PublishingAnalyticsCtaId.Primary,
+      target: PublishingAnalyticsTarget.Pricing,
+      exposureToClickMs,
+    }, clickedAt);
+    publishingRecoveryResultCorrelations.set(
+      getPublishingRecoveryLocalKey(context.ownerAccountKey, context.resourceKey),
+      { context: { ...context }, operationId, clickedAt },
+    );
+  }
+
+  void reportYdAnalyzer({
+    action: LogReporterAction.PublishingRecoveryCtaAction,
+    ...getRecoveryParams(context),
+    actionType: PublishingAnalyticsActionType.Click,
+    ctaId: PublishingAnalyticsCtaId.Primary,
+    target: PublishingAnalyticsTarget.Pricing,
+    operationId,
+    exposureToClickMs,
+  }, {
+    touchpointIdentityType: PublishingIdentityType.Free,
+  });
+  return operationId;
+};
+
+export interface PublishingRecoveryResultLookup {
+  ownerAccountKey: string;
+  resourceKey: string;
+}
+
+export interface ReportPublishingRecoveryResultOptions
+  extends PublishingRecoveryResultLookup {
+  outcome: PublishingRecoveryAnalyticsOutcome;
+  now?: number;
+}
+
+export const getPendingPublishingRecoveryResultOperationId = (
+  lookup: PublishingRecoveryResultLookup,
+): string | null => (
+  publishingRecoveryResultCorrelations.get(
+    getPublishingRecoveryLocalKey(lookup.ownerAccountKey, lookup.resourceKey),
+  )?.operationId ?? null
+);
+
+export const reportPublishingRecoveryResult = async (
+  options: ReportPublishingRecoveryResultOptions,
+): Promise<boolean> => {
+  const localKey = getPublishingRecoveryLocalKey(
+    options.ownerAccountKey,
+    options.resourceKey,
+  );
+  const correlation = publishingRecoveryResultCorrelations.get(localKey);
+  if (!correlation) return false;
+  const pendingReport = pendingPublishingRecoveryResultReports.get(localKey);
+  if (pendingReport?.operationId === correlation.operationId) return pendingReport.promise;
+  if (configService.getConfig().usageAnalyticsEnabled === false) {
+    publishingRecoveryResultCorrelations.delete(localKey);
+    return false;
+  }
+
+  const report = reportYdAnalyzer({
+    action: LogReporterAction.PublishingRecoveryResult,
+    ...getRecoveryParams(correlation.context),
+    operationId: correlation.operationId,
+    outcome: options.outcome,
+    durationMs: Math.max(0, (options.now ?? Date.now()) - correlation.clickedAt),
+  }, {
+    touchpointIdentityType: PublishingIdentityType.Free,
+  }).then(success => {
+    const current = publishingRecoveryResultCorrelations.get(localKey);
+    if (success && current?.operationId === correlation.operationId) {
+      publishingRecoveryResultCorrelations.delete(localKey);
+    }
+    return success;
+  }).finally(() => {
+    if (pendingPublishingRecoveryResultReports.get(localKey)?.promise === report) {
+      pendingPublishingRecoveryResultReports.delete(localKey);
+    }
+  });
+  pendingPublishingRecoveryResultReports.set(localKey, {
+    operationId: correlation.operationId,
+    promise: report,
+  });
+  return report;
+};
+
+export const clearPublishingRecoveryAnalyticsState = (
+  ownerAccountKey?: string,
+): void => {
+  if (!ownerAccountKey) {
+    publishingRecoveryExposures.clear();
+    publishingRecoveryResultCorrelations.clear();
+    pendingPublishingRecoveryResultReports.clear();
+    return;
+  }
+  publishingRecoveryResultCorrelations.forEach((correlation, key) => {
+    if (correlation.context.ownerAccountKey === ownerAccountKey) {
+      publishingRecoveryResultCorrelations.delete(key);
+    }
+  });
+  [...publishingRecoveryExposures.keys()].forEach(key => {
+    try {
+      const [keyOwner] = JSON.parse(key) as unknown[];
+      if (keyOwner === ownerAccountKey) publishingRecoveryExposures.delete(key);
+    } catch {
+      publishingRecoveryExposures.delete(key);
+    }
+  });
+  [...pendingPublishingRecoveryResultReports.keys()].forEach(key => {
+    try {
+      const [keyOwner] = JSON.parse(key) as unknown[];
+      if (keyOwner === ownerAccountKey) pendingPublishingRecoveryResultReports.delete(key);
+    } catch {
+      pendingPublishingRecoveryResultReports.delete(key);
+    }
+  });
+};
+
 export const reportPublishingEntryAction = (
   attempt: PublishingAnalyticsAttemptContext,
 ): void => {
@@ -269,29 +616,33 @@ export const reportPublishingDialogAction = (
       || options.target === PublishingAnalyticsTarget.LearnBenefits
     )
   ) {
-    rememberPublishingConversionAttribution({
-      attemptId: context.attempt.attemptId,
-      feature: context.attempt.feature,
-      resourceKind: context.attempt.resourceKind,
-      operationType: context.attempt.operationType,
-      source: context.attempt.source,
-      entryPoint: context.attempt.entryPoint,
-      surface: context.attempt.surface,
-      pageViewId: context.attempt.pageViewId,
-      hasExistingResource: context.attempt.hasExistingResource,
-      dialogType: context.dialogType,
-      exposureId: context.exposureId,
-      identityType: context.quota?.identityType,
-      countMode: context.quota?.countMode,
-      quotaUsed: context.quota?.used,
-      quotaLimit: context.quota?.limit,
-      canReleaseByClosing: context.quota?.canReleaseByClosing,
-      trialAccessTtlSeconds: context.trialAccessTtlSeconds,
-      ctaId: options.ctaId,
-      target: options.target,
-      operationId,
-      dialogVisibleMs,
-    });
+    const ownerAccountKey = store.getState().auth.ownerAccountKey;
+    if (ownerAccountKey) {
+      rememberPublishingConversionAttribution({
+        ownerAccountKey,
+        attemptId: context.attempt.attemptId,
+        feature: context.attempt.feature,
+        resourceKind: context.attempt.resourceKind,
+        operationType: context.attempt.operationType,
+        source: context.attempt.source,
+        entryPoint: context.attempt.entryPoint,
+        surface: context.attempt.surface,
+        pageViewId: context.attempt.pageViewId,
+        hasExistingResource: context.attempt.hasExistingResource,
+        dialogType: context.dialogType,
+        exposureId: context.exposureId,
+        identityType: context.quota?.identityType,
+        countMode: context.quota?.countMode,
+        quotaUsed: context.quota?.used,
+        quotaLimit: context.quota?.limit,
+        canReleaseByClosing: context.quota?.canReleaseByClosing,
+        trialAccessTtlSeconds: context.trialAccessTtlSeconds,
+        ctaId: options.ctaId,
+        target: options.target,
+        operationId,
+        dialogVisibleMs,
+      });
+    }
   }
   void reportYdAnalyzer({
     action: LogReporterAction.PublishingDialogAction,

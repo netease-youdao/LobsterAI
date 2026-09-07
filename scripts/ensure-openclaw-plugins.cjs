@@ -10,8 +10,13 @@
  *
  * Flow per plugin:
  *   1. Checks a local cache in vendor/openclaw-plugins/{id}/
- *   2. Installs via `openclaw plugins install` if not cached at the right version
- *   3. Copies the plugin into vendor/openclaw-runtime/current/extensions/{id}/
+ *   2. Packs the pinned package and marks its `openclaw` peerDependency
+ *      optional so npm does not download the host package
+ *      (see openclaw-plugin-preparers/host-peer.cjs)
+ *   3. Installs via `openclaw plugins install` if not cached at the right version
+ *   4. Removes any dependency tree that only served the openclaw peer, then
+ *      caches the plugin
+ *   5. Copies the plugin into vendor/openclaw-runtime/current/third-party-extensions/{id}/
  *
  * Environment variables:
  *   OPENCLAW_SKIP_PLUGINS          – Set to "1" to skip this script entirely
@@ -32,6 +37,8 @@ const {
   NIM_PLUGIN_PACKAGE_ID,
   prepareOpenClawNimPackage,
 } = require('./openclaw-plugin-preparers/nim-channel.cjs');
+const { prepareHostPeerPackage } = require('./openclaw-plugin-preparers/host-peer.cjs');
+const { pruneHostPeerLeftovers } = require('./openclaw-plugin-host-peer-leftovers.cjs');
 
 const OPENCLAW_PLUGIN_INSTALL_TIMEOUT_MS = process.platform === 'win32'
   ? 20 * 60 * 1000
@@ -584,9 +591,10 @@ function resolvePluginInstallSource(plugin) {
 }
 
 function buildPluginInstallEnv(plugin) {
-  const env = {
-    npm_config_legacy_peer_deps: 'true',
-  };
+  // Peer handling is not controlled through npm env here: OpenClaw's npm env
+  // builder drops npm_config_legacy_peer_deps before spawning npm. The host
+  // peer is neutralised in the packed manifest instead (prepareHostPeerPackage).
+  const env = {};
 
   // npm 12 blocks transitive Git dependencies by default. NetEase Bee's
   // pinned SDK currently depends on libsignal from GitHub, so opt in only for
@@ -711,6 +719,15 @@ function main() {
           installSpec = prepareOpenClawNimPackage(installSpec, stagingDir, { log });
         }
 
+        if (fs.existsSync(installSpec) && fs.statSync(installSpec).isFile()) {
+          installSpec = prepareHostPeerPackage(installSpec, stagingDir, {
+            log,
+            packageLabel: npmSpec,
+          });
+        } else {
+          log('  Skipping openclaw peer normalization for a directory install source.');
+        }
+
         const installEnv = buildPluginInstallEnv(plugin);
         if (installEnv.npm_config_allow_git === 'all') {
           log('  Allowing Git dependencies for this NetEase Bee installation only.');
@@ -721,11 +738,6 @@ function main() {
           {
             env: {
               OPENCLAW_STATE_DIR: stagingDir,
-              // Prevent npm from auto-installing peerDependencies (npm v7+).
-              // Channel plugins declare openclaw as a peerDep, but the host
-              // gateway already provides the SDK at runtime.  Without this,
-              // npm installs the full openclaw SDK + transitive deps (~738 MB)
-              // into each plugin's node_modules.
               ...installEnv,
             },
             stdio: 'inherit',
@@ -748,6 +760,16 @@ function main() {
         ensureDir(path.dirname(cacheDir));
         copyInstalledPluginToCache(installedDir, cacheDir);
         fixBinSymlinks(cacheDir);
+
+        // Safety net: if npm still materialised the openclaw peer tree (for
+        // example through a nested dependency), drop it before caching.
+        const hostPeerPrune = pruneHostPeerLeftovers(cacheDir);
+        if (hostPeerPrune.removed.length > 0) {
+          log(
+            `  Removed ${hostPeerPrune.removed.length} openclaw peer leftover package(s) ` +
+            `(${(hostPeerPrune.bytesFreed / 1024 / 1024).toFixed(1)} MB) from ${id}.`
+          );
+        }
 
         // Write install info for cache validation
         fs.writeFileSync(

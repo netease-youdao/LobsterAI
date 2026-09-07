@@ -1,3 +1,4 @@
+import type { PublishingSubscriptionRecoveryMode } from '@shared/publishing/constants';
 import type { RefObject } from 'react';
 
 import { i18nService } from '@/services/i18n';
@@ -15,10 +16,15 @@ import {
   type ArtifactFileSharePermission as ArtifactFileSharePermissionValue,
 } from './artifactFileSharePermission';
 import ArtifactPreviewIdentity from './ArtifactPreviewIdentity';
+import type { PublishingRecoveryAnalyticsContext } from './publishingAnalytics';
+import { getPublishingRecoveryFooterActions } from './publishingRecoveryFooterModel';
+import PublishingSubscriptionRecoveryButton from './PublishingSubscriptionRecoveryButton';
+import { shouldShowPublishingSubscriptionRecovery } from './publishingSubscriptionRecoveryPolicy';
 import {
   PublishingTrialStatus,
   usePublishingTrialStatus,
 } from './PublishingTrialStatus';
+import { usePublishingRecoveryExposureLifecycle } from './usePublishingRecoveryExposureLifecycle';
 
 const t = (key: string) => i18nService.t(key);
 
@@ -71,10 +77,16 @@ interface ArtifactFileShareDialogProps {
   error?: string;
   shareCodeUnavailable?: boolean;
   accessExpiresAt?: string | null;
+  ownerAccountKey?: string | null;
+  subscriptionStatus?: string | null;
+  recoveryMode?: PublishingSubscriptionRecoveryMode;
+  recoveryAnalyticsContext?: PublishingRecoveryAnalyticsContext | null;
+  recoveryExposureKey?: string;
   canRetry: boolean;
   canCreate: boolean;
   canSubmitPermission: boolean;
   canCopy: boolean;
+  showUpdateFile?: boolean;
   canUpdateFile: boolean;
   copyStatus: ArtifactFileShareCopyStatus;
   updateStatus: ArtifactFileShareUpdateStatus;
@@ -86,6 +98,8 @@ interface ArtifactFileShareDialogProps {
   onSubmitPermission: () => void;
   onUpdateFile: () => void;
   onCopy: () => void;
+  onRecoveryExposure?: () => void;
+  onRecoveryClick?: () => void;
 }
 
 const CloseIcon = () => (
@@ -143,10 +157,16 @@ const ArtifactFileShareDialog = ({
   error,
   shareCodeUnavailable = false,
   accessExpiresAt,
+  ownerAccountKey,
+  subscriptionStatus,
+  recoveryMode,
+  recoveryAnalyticsContext,
+  recoveryExposureKey,
   canRetry,
   canCreate,
   canSubmitPermission,
   canCopy,
+  showUpdateFile = true,
   canUpdateFile,
   copyStatus,
   updateStatus,
@@ -158,6 +178,8 @@ const ArtifactFileShareDialog = ({
   onSubmitPermission,
   onUpdateFile,
   onCopy,
+  onRecoveryExposure,
+  onRecoveryClick,
 }: ArtifactFileShareDialogProps) => {
   const trialStatus = usePublishingTrialStatus(accessExpiresAt);
   const isPreparing = phase === ArtifactFileSharePhase.Preparing;
@@ -186,6 +208,34 @@ const ArtifactFileShareDialog = ({
     : updateStatus === ArtifactFileShareUpdateStatus.Updated
       ? t('htmlShareUpdateComplete')
       : t('htmlShareUpdateFile');
+  const showSubscriptionRecovery = Boolean(
+    isReady
+    && intent === ArtifactFileShareIntent.Manage
+    && recoveryMode
+    && onRecoveryClick
+    && shouldShowPublishingSubscriptionRecovery({
+      ownerAccountKey,
+      subscriptionStatus,
+      recoveryMode,
+      isExpired: trialStatus.isExpired,
+      isAvailable: !trialStatus.isExpired
+        && committedPermission !== ArtifactFileSharePermission.Stopped,
+    }),
+  );
+  usePublishingRecoveryExposureLifecycle(
+    recoveryAnalyticsContext,
+    showSubscriptionRecovery,
+  );
+  const footerActions = getPublishingRecoveryFooterActions({
+    showRecovery: showSubscriptionRecovery,
+    canCopy: canCopy && !operation,
+    showCopyInStandardFooter: primaryAction === ArtifactFileSharePrimaryAction.Copy,
+  });
+  const copyActionClassName = footerActions.showRecovery
+    ? 'border border-border bg-background text-secondary hover:bg-surface hover:text-foreground'
+    : copyStatus === ArtifactFileShareCopyStatus.Failed
+      ? 'bg-red-500 text-white hover:bg-red-500/90'
+      : 'bg-primary text-primary-foreground hover:bg-primary-hover';
 
   return (
     <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/35 px-4">
@@ -303,67 +353,75 @@ const ArtifactFileShareDialog = ({
         </div>
 
         <div className="mt-8 flex flex-wrap items-center justify-end gap-3">
-          {phase === ArtifactFileSharePhase.Error && canRetry && (
-            <button
-              type="button"
-              onClick={onRetry}
-              className="inline-flex h-10 min-w-[88px] items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover"
-            >
-              {t('artifactFileShareRetry')}
-            </button>
-          )}
-          {isReady && intent === ArtifactFileShareIntent.Manage && (
-            <button
-              type="button"
-              onClick={onUpdateFile}
-              disabled={!canUpdateFile || Boolean(operation) || trialStatus.isExpired}
-              title={
-                committedPermission === ArtifactFileSharePermission.Stopped
-                  ? t('htmlShareDisabledCannotUpdate')
-                  : undefined
-              }
-              className="inline-flex h-10 min-w-[96px] items-center justify-center rounded-lg border border-border bg-background px-4 text-sm font-medium text-secondary transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {updateButtonLabel}
-            </button>
-          )}
-          {primaryAction === ArtifactFileSharePrimaryAction.Create && (
-            <button
-              type="button"
-              onClick={onCreate}
-              disabled={!canCreate || Boolean(operation)}
-              className="inline-flex h-10 min-w-[104px] items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isCreating
-                ? t('artifactFileShareCreating')
-                : t('artifactFileShareCreateAction')}
-            </button>
-          )}
-          {primaryAction === ArtifactFileSharePrimaryAction.UpdatePermission && (
-            <button
-              type="button"
-              onClick={onSubmitPermission}
-              disabled={!canSubmitPermission || Boolean(operation) || trialStatus.isExpired}
-              className="inline-flex h-10 min-w-[128px] items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isPermissionUpdating
-                ? t('artifactFileSharePermissionUpdating')
-                : t('artifactFileShareUpdatePermissionAction')}
-            </button>
-          )}
-          {primaryAction === ArtifactFileSharePrimaryAction.Copy && (
+          {footerActions.showStandardActions
+            && phase === ArtifactFileSharePhase.Error && canRetry && (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="inline-flex h-10 min-w-[88px] items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover"
+              >
+                {t('artifactFileShareRetry')}
+              </button>
+            )}
+          {footerActions.showStandardActions
+            && isReady && intent === ArtifactFileShareIntent.Manage && showUpdateFile && (
+              <button
+                type="button"
+                onClick={onUpdateFile}
+                disabled={!canUpdateFile || Boolean(operation) || trialStatus.isExpired}
+                title={
+                  committedPermission === ArtifactFileSharePermission.Stopped
+                    ? t('htmlShareDisabledCannotUpdate')
+                    : undefined
+                }
+                className="inline-flex h-10 min-w-[96px] items-center justify-center rounded-lg border border-border bg-background px-4 text-sm font-medium text-secondary transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {updateButtonLabel}
+              </button>
+            )}
+          {footerActions.showStandardActions
+            && primaryAction === ArtifactFileSharePrimaryAction.Create && (
+              <button
+                type="button"
+                onClick={onCreate}
+                disabled={!canCreate || Boolean(operation)}
+                className="inline-flex h-10 min-w-[104px] items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isCreating
+                  ? t('artifactFileShareCreating')
+                  : t('artifactFileShareCreateAction')}
+              </button>
+            )}
+          {footerActions.showStandardActions
+            && primaryAction === ArtifactFileSharePrimaryAction.UpdatePermission && (
+              <button
+                type="button"
+                onClick={onSubmitPermission}
+                disabled={!canSubmitPermission || Boolean(operation) || trialStatus.isExpired}
+                className="inline-flex h-10 min-w-[128px] items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isPermissionUpdating
+                  ? t('artifactFileSharePermissionUpdating')
+                  : t('artifactFileShareUpdatePermissionAction')}
+              </button>
+            )}
+          {footerActions.showCopy && (
             <button
               type="button"
               onClick={onCopy}
-              disabled={!canCopy || Boolean(operation)}
-              className={`inline-flex h-10 min-w-[104px] items-center justify-center rounded-lg px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                copyStatus === ArtifactFileShareCopyStatus.Failed
-                  ? 'bg-red-500 text-white hover:bg-red-500/90'
-                  : 'bg-primary text-primary-foreground hover:bg-primary-hover'
-              }`}
+              disabled={footerActions.isCopyDisabled}
+              className={`inline-flex h-10 min-w-[104px] items-center justify-center rounded-lg px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${copyActionClassName}`}
             >
               {copyButtonLabel}
             </button>
+          )}
+          {footerActions.showRecovery && recoveryMode && onRecoveryClick && (
+            <PublishingSubscriptionRecoveryButton
+              recoveryMode={recoveryMode}
+              exposureKey={recoveryExposureKey}
+              onExposure={onRecoveryExposure}
+              onClick={onRecoveryClick}
+            />
           )}
         </div>
       </div>

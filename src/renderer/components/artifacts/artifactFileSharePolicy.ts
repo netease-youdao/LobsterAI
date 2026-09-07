@@ -4,11 +4,17 @@ import {
   HtmlShareSourceType,
 } from '@shared/htmlShare/constants';
 
-import { type Artifact, type ArtifactType, ArtifactTypeValue } from '@/types/artifact';
+import {
+  type Artifact,
+  ArtifactMediaOriginType,
+  type ArtifactType,
+  ArtifactTypeValue,
+} from '@/types/artifact';
 
 export const ArtifactFileShareRequestSource = {
   HtmlFile: 'htmlFile',
   ArtifactFile: 'artifactFile',
+  GeneratedVideo: 'generatedVideo',
 } as const;
 
 export type ArtifactFileShareRequestSource =
@@ -20,7 +26,8 @@ export type ArtifactFileShareSourceType =
   | typeof HtmlShareSourceType.SvgFile
   | typeof HtmlShareSourceType.DocumentFile
   | typeof HtmlShareSourceType.MarkdownFile
-  | typeof HtmlShareSourceType.MermaidFile;
+  | typeof HtmlShareSourceType.MermaidFile
+  | typeof HtmlShareSourceType.GeneratedVideoFile;
 
 export interface ArtifactFileShareRequest {
   source: ArtifactFileShareRequestSource;
@@ -34,6 +41,9 @@ export interface ArtifactFileShareRequest {
   filePath?: string;
   content?: string;
   remoteUrl?: string;
+  taskId?: string;
+  outputIndex?: number;
+  legacyResultUrl?: string;
 }
 
 const ARTIFACT_FILE_SHARE_SOURCE_TYPES: Partial<Record<ArtifactType, ArtifactFileShareSourceType>> =
@@ -49,10 +59,29 @@ const ARTIFACT_FILE_SHARE_SOURCE_TYPES: Partial<Record<ArtifactType, ArtifactFil
 export function getArtifactFileShareSourceType(
   artifact: Artifact,
 ): ArtifactFileShareSourceType | null {
+  if (
+    artifact.type === ArtifactTypeValue.Video
+    && (
+      artifact.mediaOrigin?.type === ArtifactMediaOriginType.GeneratedVideo
+      || (
+        artifact.legacyGeneratedVideoCandidate
+        && /^https:\/\//i.test(artifact.remoteUrl?.trim() || '')
+      )
+    )
+  ) {
+    return HtmlShareSourceType.GeneratedVideoFile;
+  }
   return ARTIFACT_FILE_SHARE_SOURCE_TYPES[artifact.type] ?? null;
 }
 
 function hasShareableSource(artifact: Artifact, sourceType: ArtifactFileShareSourceType): boolean {
+  if (sourceType === HtmlShareSourceType.GeneratedVideoFile) {
+    return artifact.mediaOrigin?.type === ArtifactMediaOriginType.GeneratedVideo
+      || Boolean(
+        artifact.legacyGeneratedVideoCandidate
+        && /^https:\/\//i.test(artifact.remoteUrl?.trim() || ''),
+      );
+  }
   if (sourceType === HtmlShareSourceType.HtmlFile) {
     return Boolean(artifact.filePath);
   }
@@ -92,6 +121,12 @@ export function buildArtifactFileShareLookupKey(
   sourceType: ArtifactFileShareSourceType,
   fallbackSessionId = '',
 ): string {
+  if (sourceType === HtmlShareSourceType.GeneratedVideoFile) {
+    if (artifact.mediaOrigin?.type === ArtifactMediaOriginType.GeneratedVideo) {
+      return `${sourceType}:task:${artifact.mediaOrigin.taskId}:${artifact.mediaOrigin.outputIndex}`;
+    }
+    return `${sourceType}:legacy:${artifact.sessionId || fallbackSessionId}:${artifact.id}`;
+  }
   if (artifact.filePath) {
     return `${sourceType}:file:${normalizeArtifactFileShareLookupPath(artifact.filePath)}`;
   }
@@ -109,6 +144,24 @@ export function buildArtifactFileShareRequest(
   const sessionId = artifact.sessionId || fallbackSessionId;
   const title = artifact.title || artifact.fileName || fallbackTitle;
   const lookupKey = buildArtifactFileShareLookupKey(artifact, sourceType, fallbackSessionId);
+
+  if (sourceType === HtmlShareSourceType.GeneratedVideoFile) {
+    return {
+      source: ArtifactFileShareRequestSource.GeneratedVideo,
+      sourceType,
+      sessionId,
+      artifactId: artifact.id,
+      lookupKey,
+      title,
+      accessMode: HtmlShareAccessMode.Code,
+      ...(artifact.mediaOrigin?.type === ArtifactMediaOriginType.GeneratedVideo
+        ? {
+            taskId: artifact.mediaOrigin.taskId,
+            outputIndex: artifact.mediaOrigin.outputIndex,
+          }
+        : { legacyResultUrl: artifact.remoteUrl?.trim() }),
+    };
+  }
 
   if (sourceType === HtmlShareSourceType.HtmlFile) {
     if (!artifact.filePath) return null;

@@ -1,3 +1,4 @@
+import { PublishingRecoveryAnalyticsSurface } from '@shared/analytics/constants';
 import {
   HtmlShareAccessMode,
   type HtmlShareAccessMode as HtmlShareAccessModeValue,
@@ -13,6 +14,8 @@ import { LibraryNavigationEvent } from '@shared/library/constants';
 import {
   type PublishingQuotaErrorData,
   PublishingResourceKind,
+  PublishingSubscriptionRecoveryMode,
+  type PublishingSubscriptionRecoveryMode as PublishingSubscriptionRecoveryModeValue,
 } from '@shared/publishing/constants';
 import {
   createContext,
@@ -31,6 +34,12 @@ import { authService } from '@/services/auth';
 import { copyTextToClipboard } from '@/services/clipboard';
 import { getPortalPricingUrl, PortalPricingKeyfrom } from '@/services/endpoints';
 import { i18nService } from '@/services/i18n';
+import {
+  armPublishingSubscriptionRecovery,
+  PublishingSubscriptionRecoveryRefreshOutcome,
+  registerPublishingSubscriptionRecoveryTarget,
+  resolvePublishingSubscriptionRecoveryRefreshOutcome,
+} from '@/services/publishingSubscriptionRecovery';
 import type { RootState } from '@/store';
 import type { Artifact } from '@/types/artifact';
 
@@ -80,6 +89,7 @@ import {
   createPublishingAnalyticsAttempt,
   createPublishingAnalyticsDialog,
   createPublishingAnalyticsOperationId,
+  createPublishingRecoveryAnalyticsContextFromAttempt,
   getPublishingErrorCategory,
   PublishingAnalyticsActionType,
   type PublishingAnalyticsAttemptContext,
@@ -90,11 +100,14 @@ import {
   PublishingAnalyticsOperationType,
   PublishingAnalyticsResult,
   PublishingAnalyticsTarget,
+  type PublishingRecoveryAnalyticsContext,
   reportPublishingCopyShareLink,
   reportPublishingDialogAction,
   reportPublishingDialogExposure,
   reportPublishingEntryAction,
   reportPublishingOperationResult,
+  reportPublishingRecoveryCtaAction,
+  reportPublishingRecoveryCtaExposure,
   reportPublishingShareResult,
   updatePublishingAnalyticsAttempt,
 } from './publishingAnalytics';
@@ -113,6 +126,7 @@ interface ArtifactFileShareRecord {
   status: HtmlShareStatusValue;
   disabledSource?: HtmlShareDisabledSourceValue | null;
   accessExpiresAt?: string | null;
+  subscriptionRecoveryMode?: PublishingSubscriptionRecoveryModeValue;
 }
 
 interface ArtifactFileShareDialogState {
@@ -219,6 +233,7 @@ function getShareRecord(
         status?: HtmlShareStatusValue;
         disabledSource?: HtmlShareDisabledSourceValue | null;
         accessExpiresAt?: string | null;
+        subscriptionRecoveryMode?: PublishingSubscriptionRecoveryModeValue;
       }
     | null
     | undefined,
@@ -248,7 +263,11 @@ function getShareRecord(
       status === HtmlShareStatus.Disabled
         ? (value?.disabledSource ?? previous?.disabledSource)
         : undefined,
-    accessExpiresAt: value?.accessExpiresAt ?? previous?.accessExpiresAt,
+    accessExpiresAt: value && Object.prototype.hasOwnProperty.call(value, 'accessExpiresAt')
+      ? value.accessExpiresAt
+      : previous?.accessExpiresAt,
+    subscriptionRecoveryMode: value?.subscriptionRecoveryMode
+      ?? previous?.subscriptionRecoveryMode,
   };
 }
 
@@ -283,6 +302,19 @@ async function createShare(
       accessMode,
     });
   }
+  if (request.source === ArtifactFileShareRequestSource.GeneratedVideo) {
+    if (!request.taskId || request.outputIndex === undefined) {
+      return { success: false, code: HtmlShareErrorCode.VideoTaskNotFound };
+    }
+    return api.createFromGeneratedVideo({
+      taskId: request.taskId,
+      outputIndex: request.outputIndex,
+      sessionId: request.sessionId,
+      artifactId: request.artifactId,
+      title: request.title,
+      accessMode,
+    });
+  }
   return api.createFromArtifactFile({
     sourceType: request.sourceType,
     sessionId: request.sessionId,
@@ -310,6 +342,19 @@ async function updateShareFile(
       filePath: request.filePath || '',
       title: request.title,
       currentStatus: share.status,
+      accessMode,
+    });
+  }
+  if (request.source === ArtifactFileShareRequestSource.GeneratedVideo) {
+    if (!request.taskId || request.outputIndex === undefined) {
+      return { success: false, code: HtmlShareErrorCode.VideoTaskNotFound };
+    }
+    return api.createFromGeneratedVideo({
+      taskId: request.taskId,
+      outputIndex: request.outputIndex,
+      sessionId: request.sessionId,
+      artifactId: request.artifactId,
+      title: request.title,
       accessMode,
     });
   }
@@ -357,6 +402,8 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
   const [updateStatus, setUpdateStatus] = useState<ArtifactFileShareUpdateStatus>(
     ArtifactFileShareUpdateStatus.Idle,
   );
+  const dialogRef = useRef<ArtifactFileShareDialogState | null>(dialog);
+  dialogRef.current = dialog;
   const generationRef = useRef(0);
   const mutationBarriersRef = useRef(new Map<string, Promise<void>>());
   const preparationPromisesRef = useRef(new Map<string, Promise<PreparedArtifactFileShare>>());
@@ -529,9 +576,19 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
   }, [authState.isLoggedIn, authState.quota, authState.user?.accountMode]);
 
   const lookupShare = useCallback(async (api: HtmlShareApi, request: ArtifactFileShareRequest) => {
-    return request.source === ArtifactFileShareRequestSource.HtmlFile
-      ? api.getByHtmlFile({ filePath: request.filePath || '' })
-      : api.getByArtifactFile({
+    if (request.source === ArtifactFileShareRequestSource.HtmlFile) {
+      return api.getByHtmlFile({ filePath: request.filePath || '' });
+    }
+    if (request.source === ArtifactFileShareRequestSource.GeneratedVideo) {
+      if (!request.taskId || request.outputIndex === undefined) {
+        return { success: false, code: HtmlShareErrorCode.VideoTaskNotFound };
+      }
+      return api.getGeneratedVideoSource({
+        taskId: request.taskId,
+        outputIndex: request.outputIndex,
+      });
+    }
+    return api.getByArtifactFile({
           sourceType: request.sourceType,
           sessionId: request.sessionId,
           artifactId: request.artifactId,
@@ -588,6 +645,7 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
   const initializeShare = useCallback(
     async (artifact: Artifact, request: ArtifactFileShareRequest): Promise<void> => {
       const api = window.electron?.htmlShare;
+      let resolvedRequest = request;
       const runId = generationRef.current + 1;
       generationRef.current = runId;
       resetFeedback();
@@ -626,11 +684,39 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
           });
         }
 
-        const mutationBarrier = mutationBarriersRef.current.get(request.lookupKey);
+        if (
+          resolvedRequest.source === ArtifactFileShareRequestSource.GeneratedVideo
+          && !resolvedRequest.taskId
+        ) {
+          if (!resolvedRequest.legacyResultUrl) {
+            throw new ArtifactFileShareRequestError({
+              code: HtmlShareErrorCode.VideoTaskNotFound,
+            });
+          }
+          const resolution = await api.resolveLegacyGeneratedVideoSource({
+            resultUrl: resolvedRequest.legacyResultUrl,
+          });
+          if (!resolution.success || !resolution.taskId
+              || resolution.outputIndex === undefined) {
+            throw new ArtifactFileShareRequestError(getFailureDescriptor(resolution));
+          }
+          resolvedRequest = {
+            ...resolvedRequest,
+            taskId: resolution.taskId,
+            outputIndex: resolution.outputIndex,
+            legacyResultUrl: undefined,
+            lookupKey: `${resolvedRequest.sourceType}:task:${resolution.taskId}:${resolution.outputIndex}`,
+          };
+          setDialog(previous => previous
+            ? { ...previous, request: resolvedRequest }
+            : previous);
+        }
+
+        const mutationBarrier = mutationBarriersRef.current.get(resolvedRequest.lookupKey);
         if (mutationBarrier) await mutationBarrier;
         if (generationRef.current !== runId) return;
 
-        const prepared = await loadShare(api, request);
+        const prepared = await loadShare(api, resolvedRequest);
         if (generationRef.current !== runId) return;
         if (analyticsAttemptRef.current) {
           analyticsAttemptRef.current = updatePublishingAnalyticsAttempt(
@@ -670,7 +756,7 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
             setDialog(null);
             setTrialNotice({
               artifact,
-              request,
+              request: resolvedRequest,
               quota: quotaResult.data,
             });
             return;
@@ -684,7 +770,7 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
           : ArtifactFileSharePermission.Code;
         setDialog({
           artifact,
-          request,
+          request: resolvedRequest,
           phase: ArtifactFileSharePhase.Ready,
           intent,
           share: prepared.share,
@@ -986,6 +1072,20 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
     ) {
       return;
     }
+    const orderedPermissionPlan =
+      snapshot.request.source === ArtifactFileShareRequestSource.GeneratedVideo
+      && permissionPlan.some(
+        step => step.action === ArtifactFileSharePermissionChangeAction.RestoreActiveLimit,
+      )
+        ? [
+            ...permissionPlan.filter(
+              step => step.action === ArtifactFileSharePermissionChangeAction.RestoreActiveLimit,
+            ),
+            ...permissionPlan.filter(
+              step => step.action !== ArtifactFileSharePermissionChangeAction.RestoreActiveLimit,
+            ),
+          ]
+        : permissionPlan;
 
     const api = window.electron?.htmlShare;
     if (!api) return;
@@ -1023,7 +1123,7 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
     let lastConfirmedShare = originalShare;
     try {
       let nextShare = originalShare;
-      for (const step of permissionPlan) {
+      for (const step of orderedPermissionPlan) {
         if (step.action === ArtifactFileSharePermissionChangeAction.UpdateAccess) {
           nextShare = requireShareRecord(
             await api.updateAccessMode({
@@ -1042,7 +1142,12 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
           );
         } else if (step.action === ArtifactFileSharePermissionChangeAction.RestoreActiveLimit) {
           nextShare = requireShareRecord(
-            await updateShareFile(api, snapshot.request, nextShare, nextShare.accessMode),
+            snapshot.request.source === ArtifactFileShareRequestSource.GeneratedVideo
+              ? await api.updateStatus({
+                  shareId: nextShare.shareId,
+                  status: HtmlShareStatus.Live,
+                })
+              : await updateShareFile(api, snapshot.request, nextShare, nextShare.accessMode),
             nextShare,
           );
         }
@@ -1341,6 +1446,102 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
     closeTrialNotice();
   }, [closeTrialNotice]);
 
+  const share = dialog?.share;
+  const recoveryAnalyticsContext = useMemo<PublishingRecoveryAnalyticsContext | null>(() => {
+    const analyticsAttempt = analyticsAttemptRef.current;
+    if (
+      !analyticsAttempt
+      || !authState.ownerAccountKey
+      || !share?.shareId
+      || share.subscriptionRecoveryMode !== PublishingSubscriptionRecoveryMode.Automatic
+    ) {
+      return null;
+    }
+    return createPublishingRecoveryAnalyticsContextFromAttempt(analyticsAttempt, {
+      ownerAccountKey: authState.ownerAccountKey,
+      resourceKey: share.shareId,
+      recoverySurface: PublishingRecoveryAnalyticsSurface.TaskFileShareDialog,
+      subscriptionRecoveryMode: share.subscriptionRecoveryMode,
+    });
+  }, [
+    authState.ownerAccountKey,
+    share?.shareId,
+    share?.subscriptionRecoveryMode,
+  ]);
+
+  useEffect(() => {
+    const ownerAccountKey = authState.ownerAccountKey;
+    const request = dialog?.request;
+    const recoveryMode = share?.subscriptionRecoveryMode;
+    if (
+      !ownerAccountKey
+      || !request
+      || !share?.shareId
+      || recoveryMode !== PublishingSubscriptionRecoveryMode.Automatic
+    ) {
+      return undefined;
+    }
+    return registerPublishingSubscriptionRecoveryTarget({
+      ownerAccountKey,
+      resourceKind: PublishingResourceKind.File,
+      resourceKey: share.shareId,
+      recoveryMode,
+      traceId: recoveryAnalyticsContext?.attemptId
+        ?? analyticsAttemptRef.current?.attemptId
+        ?? createPublishingAnalyticsOperationId(),
+      refresh: async () => {
+        const currentDialog = dialogRef.current;
+        const fallback = currentDialog?.share;
+        const api = window.electron?.htmlShare;
+        if (!api || !fallback || currentDialog?.request?.lookupKey !== request.lookupKey) {
+          return PublishingSubscriptionRecoveryRefreshOutcome.ResourceUnavailable;
+        }
+        const result = await lookupShare(api, request).catch(() => null);
+        if (!result?.success) return PublishingSubscriptionRecoveryRefreshOutcome.Pending;
+        const refreshedShare = getShareRecord(result.share, fallback);
+        if (!refreshedShare) {
+          return PublishingSubscriptionRecoveryRefreshOutcome.ResourceUnavailable;
+        }
+        setDialog(current => current?.request?.lookupKey === request.lookupKey
+          ? {
+              ...current,
+              share: refreshedShare,
+              selectedPermission: deriveArtifactFileSharePermission(refreshedShare),
+            }
+          : current);
+        return resolvePublishingSubscriptionRecoveryRefreshOutcome({
+          expectedMode: recoveryMode,
+          currentMode: refreshedShare.subscriptionRecoveryMode,
+          isRestored: refreshedShare.status === HtmlShareStatus.Live
+            && refreshedShare.accessExpiresAt === null,
+        });
+      },
+    });
+  }, [
+    authState.ownerAccountKey,
+    dialog?.request,
+    lookupShare,
+    recoveryAnalyticsContext?.attemptId,
+    share?.shareId,
+    share?.subscriptionRecoveryMode,
+  ]);
+
+  const openRecoverySubscriptionPage = useCallback(() => {
+    if (!recoveryAnalyticsContext) return;
+    reportPublishingRecoveryCtaAction(recoveryAnalyticsContext);
+    armPublishingSubscriptionRecovery({
+      ownerAccountKey: recoveryAnalyticsContext.ownerAccountKey,
+      resourceKind: recoveryAnalyticsContext.resourceKind,
+      resourceKey: recoveryAnalyticsContext.resourceKey,
+      recoveryMode: recoveryAnalyticsContext.subscriptionRecoveryMode,
+      traceId: recoveryAnalyticsContext.attemptId,
+    });
+    void window.electron?.shell?.openExternal(getPortalPricingUrl(
+      PortalPricingKeyfrom.HtmlShare,
+      { traceId: recoveryAnalyticsContext.attemptId },
+    ));
+  }, [recoveryAnalyticsContext]);
+
   const contextValue = useMemo<ArtifactFileShareControllerValue>(
     () => ({
       isOverlayOpen:
@@ -1353,7 +1554,6 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
     [isDialogOpen, openShare, publishingQuota, subscriptionPrompt, trialNotice],
   );
 
-  const share = dialog?.share;
   const committedPermission = share
     ? deriveArtifactFileSharePermission(share)
     : undefined;
@@ -1439,6 +1639,8 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
     share.status !== HtmlShareStatus.Disabled &&
     share.status !== HtmlShareStatus.Failed,
   );
+  const showUpdateFile =
+    dialog?.request?.source !== ArtifactFileShareRequestSource.GeneratedVideo;
 
   const dialogPortal =
     dialog && typeof document !== 'undefined'
@@ -1461,10 +1663,16 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
               (share.shareCodeUnavailable || !share.shareCode),
             )}
             accessExpiresAt={share?.accessExpiresAt}
+            ownerAccountKey={authState.ownerAccountKey}
+            subscriptionStatus={authState.quota?.subscriptionStatus}
+            recoveryMode={share?.subscriptionRecoveryMode}
+            recoveryAnalyticsContext={recoveryAnalyticsContext}
+            recoveryExposureKey={recoveryAnalyticsContext?.exposureId}
             canRetry={Boolean(dialog.request)}
             canCreate={canCreate}
             canSubmitPermission={canSubmitPermission}
             canCopy={canCopy}
+            showUpdateFile={showUpdateFile}
             canUpdateFile={canUpdateFile}
             copyStatus={copyStatus}
             updateStatus={updateStatus}
@@ -1476,6 +1684,12 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
             onSubmitPermission={() => void submitPermissionChange()}
             onUpdateFile={() => void updateFile()}
             onCopy={() => void copyShare()}
+            onRecoveryExposure={recoveryAnalyticsContext
+              ? () => reportPublishingRecoveryCtaExposure(recoveryAnalyticsContext)
+              : undefined}
+            onRecoveryClick={recoveryAnalyticsContext
+              ? openRecoverySubscriptionPage
+              : undefined}
           />,
           document.body,
         )

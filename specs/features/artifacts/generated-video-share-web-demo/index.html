@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="LobsterAI 模型生成视频分享页本地交互 Demo"
+    />
+    <meta name="color-scheme" content="light" />
+    <title>generated-video-20260901-143047-1.mp4 · LobsterAI 视频分享</title>
+    <link rel="icon" href="./lobster.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./demo.js" defer></script>
+  </head>
+  <body data-view="public">
+    <header class="share-header">
+      <a class="brand" href="#" aria-label="LobsterAI 首页" data-demo-link>
+        <span class="brand-mark" aria-hidden="true">
+          <img src="./lobster.svg" alt="" />
+        </span>
+        <span class="brand-name">LobsterAI</span>
+      </a>
+
+      <div class="file-meta" data-content-only title="generated-video-20260901-143047-1.mp4">
+        <strong class="file-name">generated-video-20260901-143047-1.mp4</strong>
+        <span class="file-detail">
+          <span id="video-size">读取大小…</span>
+        </span>
+      </div>
+
+      <div class="header-actions">
+        <a
+          class="icon-button"
+          href="./demo-video.mp4"
+          download="generated-video-20260901-143047-1.mp4"
+          aria-label="下载当前视频"
+          title="下载当前视频"
+          data-content-only
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <path d="m7 10 5 5 5-5" />
+            <path d="M12 15V3" />
+          </svg>
+        </a>
+        <span class="action-divider" data-content-only aria-hidden="true"></span>
+        <a class="download-app" href="#" data-demo-link>下载 LobsterAI</a>
+      </div>
+    </header>
+
+    <main class="video-view" aria-label="视频分享内容">
+      <section class="video-stage" aria-labelledby="shared-video-title">
+        <h1 id="shared-video-title" class="sr-only">generated-video-20260901-143047-1.mp4</h1>
+        <div class="player-wrap">
+          <video
+            id="shared-video"
+            controls
+            playsinline
+            preload="metadata"
+            poster="./poster.jpg"
+            src="./demo-video.mp4"
+          >
+            当前浏览器不支持视频播放，请下载后查看。
+          </video>
+        </div>
+        <p class="share-note">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3 5 6v5c0 4.6 2.9 8.2 7 10 4.1-1.8 7-5.4 7-10V6l-7-3Z" />
+            <path d="m9.2 12 1.8 1.8 3.9-4" />
+          </svg>
+          视频由 LobsterAI 安全分享
+        </p>
+      </section>
+    </main>
+
+    <main class="gate-view" aria-labelledby="gate-title">
+      <section class="state-card gate-card">
+        <div class="state-icon lock-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <rect x="5" y="10" width="14" height="11" rx="3" />
+            <path d="M8.5 10V7.5a3.5 3.5 0 0 1 7 0V10" />
+            <path d="M12 14v3" />
+          </svg>
+        </div>
+        <h1 id="gate-title">请输入分享码</h1>
+        <p>此分享需要输入分享码后查看。</p>
+        <form id="access-form" novalidate>
+          <label for="access-code">分享码</label>
+          <input
+            id="access-code"
+            name="code"
+            inputmode="text"
+            autocomplete="off"
+            autocapitalize="characters"
+            spellcheck="false"
+            maxlength="16"
+            placeholder="请输入分享码"
+            aria-describedby="access-error demo-code-hint"
+          />
+          <p id="access-error" class="form-error" role="alert"></p>
+          <button class="primary-button" type="submit">查看分享</button>
+        </form>
+        <p id="demo-code-hint" class="demo-hint">Demo 分享码：LOBSTER</p>
+      </section>
+    </main>
+
+    <main class="closed-view" aria-labelledby="closed-title">
+      <section class="state-card closed-card">
+        <div class="state-icon closed-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="9" />
+            <path d="m8.5 8.5 7 7" />
+          </svg>
+        </div>
+        <h1 id="closed-title">分享已关闭</h1>
+        <p>该分享已关闭或访问期限已结束，无法继续访问。</p>
+      </section>
+    </main>
+
+    <aside class="demo-controller" aria-label="Demo 页面状态">
+      <div class="demo-controller-heading">
+        <span class="demo-badge">DEMO</span>
+        <span>切换访问状态</span>
+      </div>
+      <div class="state-switch" role="group" aria-label="选择分享页状态">
+        <button type="button" data-state="public" aria-pressed="true">公开分享</button>
+        <button type="button" data-state="code" aria-pressed="false">分享码</button>
+        <button type="button" data-state="closed" aria-pressed="false">已关闭</button>
+      </div>
+      <p>右下角控制器仅用于方案演示，正式页面不展示。</p>
+    </aside>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

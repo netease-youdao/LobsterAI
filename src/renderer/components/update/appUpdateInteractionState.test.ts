@@ -8,10 +8,9 @@ import {
 
 describe('app update interaction state', () => {
   test.each([
-    AppUpdateStatus.Downloading,
     AppUpdateStatus.Ready,
     AppUpdateStatus.Installing,
-  ])('blocks an active user-initiated flow while status is %s', (status) => {
+  ])('blocks an active user-initiated install while status is %s', (status) => {
     expect(shouldBlockAppInteractionForUpdate(true, status)).toBe(true);
   });
 
@@ -19,8 +18,9 @@ describe('app update interaction state', () => {
     AppUpdateStatus.Idle,
     AppUpdateStatus.Checking,
     AppUpdateStatus.Available,
+    AppUpdateStatus.Downloading,
     AppUpdateStatus.Error,
-  ])('does not block after the flow reaches %s', (status) => {
+  ])('does not block while status is %s', (status) => {
     expect(isAppUpdateInteractionBlockingStatus(status)).toBe(false);
     expect(shouldBlockAppInteractionForUpdate(true, status)).toBe(false);
   });
@@ -33,4 +33,3 @@ describe('app update interaction state', () => {
     expect(shouldBlockAppInteractionForUpdate(false, status)).toBe(false);
   });
 });
-

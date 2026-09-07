@@ -2,7 +2,10 @@ import type {
   HtmlShareAccessMode,
   HtmlShareConfigurableStatus,
 } from '../../../shared/htmlShare/constants';
-import { normalizePublishingQuotaErrorData } from '../../../shared/publishing/constants';
+import {
+  normalizePublishingQuotaErrorData,
+  normalizePublishingSubscriptionRecoveryMode,
+} from '../../../shared/publishing/constants';
 import type {
   SiteAnalytics,
   SiteAnalyticsOptions,
@@ -10,6 +13,7 @@ import type {
   SiteDeploymentQuotaOptions,
   SiteDetail,
   SiteListData,
+  SiteListItem,
   SiteListOptions,
   SiteQuotaReservation,
   SiteQuotaReservationInput,
@@ -60,7 +64,26 @@ const jsonOptions = (method: string, body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
-export const listSites = (
+const normalizeSiteRecoveryMode = <T extends SiteListItem>(site: T): T => {
+  const subscriptionRecoveryMode = normalizePublishingSubscriptionRecoveryMode(
+    (site as SiteListItem).subscriptionRecoveryMode,
+  );
+  const normalized = { ...site };
+  if (subscriptionRecoveryMode === undefined) {
+    delete normalized.subscriptionRecoveryMode;
+  } else {
+    normalized.subscriptionRecoveryMode = subscriptionRecoveryMode;
+  }
+  return normalized;
+};
+
+const normalizeSiteResult = <T extends SiteListItem>(result: SiteResult<T>): SiteResult<T> => (
+  result.success && result.data
+    ? { ...result, data: normalizeSiteRecoveryMode(result.data) }
+    : result
+);
+
+export const listSites = async (
   serverBaseUrl: string,
   fetchWithAuth: FetchWithAuth,
   options: SiteListOptions,
@@ -73,54 +96,61 @@ export const listSites = (
   if (options.siteStatus) query.set('siteStatus', options.siteStatus);
   if (options.accessMode) query.set('accessMode', options.accessMode);
   if (options.siteKind) query.set('siteKind', options.siteKind);
-  return request(serverBaseUrl, fetchWithAuth, `/api/sites?${query.toString()}`);
+  const result = await request<SiteListData>(
+    serverBaseUrl,
+    fetchWithAuth,
+    `/api/sites?${query.toString()}`,
+  );
+  return result.success && result.data
+    ? { ...result, data: { ...result.data, list: result.data.list.map(normalizeSiteRecoveryMode) } }
+    : result;
 };
 
-export const getSite = (
+export const getSite = async (
   serverBaseUrl: string,
   fetchWithAuth: FetchWithAuth,
   shareId: string,
-): Promise<SiteResult<SiteDetail>> =>
-  request(serverBaseUrl, fetchWithAuth, `/api/sites/${encodeURIComponent(shareId)}`);
+): Promise<SiteResult<SiteDetail>> => normalizeSiteResult(await request(
+  serverBaseUrl,
+  fetchWithAuth,
+  `/api/sites/${encodeURIComponent(shareId)}`,
+));
 
-export const updateSiteTitle = (
+export const updateSiteTitle = async (
   serverBaseUrl: string,
   fetchWithAuth: FetchWithAuth,
   shareId: string,
   title: string,
-): Promise<SiteResult<SiteDetail>> =>
-  request(
+): Promise<SiteResult<SiteDetail>> => normalizeSiteResult(await request(
     serverBaseUrl,
     fetchWithAuth,
     `/api/sites/${encodeURIComponent(shareId)}`,
     jsonOptions('PATCH', { title }),
-  );
+  ));
 
-export const updateSiteAccessMode = (
+export const updateSiteAccessMode = async (
   serverBaseUrl: string,
   fetchWithAuth: FetchWithAuth,
   shareId: string,
   accessMode: HtmlShareAccessMode,
-): Promise<SiteResult<SiteDetail>> =>
-  request(
+): Promise<SiteResult<SiteDetail>> => normalizeSiteResult(await request(
     serverBaseUrl,
     fetchWithAuth,
     `/api/sites/${encodeURIComponent(shareId)}/access-mode`,
     jsonOptions('PUT', { accessMode }),
-  );
+  ));
 
-export const updateSiteAccessStatus = (
+export const updateSiteAccessStatus = async (
   serverBaseUrl: string,
   fetchWithAuth: FetchWithAuth,
   shareId: string,
   status: HtmlShareConfigurableStatus,
-): Promise<SiteResult<SiteDetail>> =>
-  request(
+): Promise<SiteResult<SiteDetail>> => normalizeSiteResult(await request(
     serverBaseUrl,
     fetchWithAuth,
     `/api/sites/${encodeURIComponent(shareId)}/access-status`,
     jsonOptions('PATCH', { status }),
-  );
+  ));
 
 export const deleteSite = (
   serverBaseUrl: string,

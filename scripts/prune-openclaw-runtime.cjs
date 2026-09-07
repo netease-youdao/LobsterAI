@@ -12,6 +12,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const { pruneHostPeerLeftovers } = require('./openclaw-plugin-host-peer-leftovers.cjs');
+
 // ─── Strategy 1: File cleanup patterns ───
 
 const PATTERNS_TO_DELETE = [
@@ -337,27 +339,27 @@ function main() {
   }
 
   // Step 2c: Remove openclaw SDK duplicates from third-party-extensions.
-  // Plugins like openclaw-qqbot declare openclaw as a peerDependency, and
-  // npm v7+ auto-installs it into the plugin's own node_modules (~226 MB).
-  // At runtime the host gateway already provides the SDK on the module path,
-  // so this copy is redundant and safe to remove.
+  // Plugins that declare openclaw as a required peerDependency get it
+  // auto-installed by npm v7+ into their own node_modules, together with its
+  // whole dependency tree (openclaw@2026.8.x pulls a 300+ MB claude-agent-sdk
+  // binary). The install script now marks that peer optional, but caches
+  // created before that fix still carry the tree, and openclaw >= 2026.8
+  // hoists it next to the plugin's real dependencies. At runtime the host
+  // gateway provides the SDK, so everything only reachable through it goes.
   if (fs.existsSync(thirdPartyDir)) {
     try {
       for (const plugin of fs.readdirSync(thirdPartyDir, { withFileTypes: true })) {
         if (!plugin.isDirectory()) continue;
-        const dupeOC = path.join(thirdPartyDir, plugin.name, 'node_modules', 'openclaw');
-        if (fs.existsSync(dupeOC)) {
-          const size = getDirSize(dupeOC);
-          fs.rmSync(dupeOC, { recursive: true, force: true });
-          stats.bytesFreed += size;
-          stats.dirsRemoved++;
-          console.log(
-            `[prune-openclaw-runtime] Removed duplicate openclaw SDK from ${plugin.name} (${(size / 1024 / 1024).toFixed(1)} MB)`
-          );
-        }
+        const pruned = pruneHostPeerLeftovers(path.join(thirdPartyDir, plugin.name));
+        if (pruned.removed.length === 0) continue;
+        stats.bytesFreed += pruned.bytesFreed;
+        stats.dirsRemoved += pruned.removed.length;
+        console.log(
+          `[prune-openclaw-runtime] Removed ${pruned.removed.length} openclaw peer leftover package(s) from ${plugin.name} (${(pruned.bytesFreed / 1024 / 1024).toFixed(1)} MB)`
+        );
       }
     } catch (err) {
-      console.warn(`[prune-openclaw-runtime] Failed to prune openclaw from third-party-extensions: ${err.message}`);
+      console.warn(`[prune-openclaw-runtime] Failed to prune openclaw peer leftovers from third-party-extensions: ${err.message}`);
     }
   }
 

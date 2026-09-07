@@ -6,7 +6,7 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "2026.8.28",
+  "version": "2026.9.4",
   "openclaw": {
     "version": "v2026.8.1",
     "repo": "https://github.com/openclaw/openclaw.git",
@@ -62,7 +62,7 @@
       {
         "id": "clawemail-email",
         "npm": "@clawemail/email",
-        "version": "0.9.12"
+        "version": "0.9.16"
       }
     ]
   },

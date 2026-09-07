@@ -112,6 +112,7 @@ Requirements:
 
 - Node.js `>=24.15.0 <25`
 - npm
+- git and pnpm, needed on the first run to build the pinned OpenClaw runtime from the sibling `../openclaw` checkout
 
 ```bash
 git clone https://github.com/netease-youdao/LobsterAI.git
@@ -181,7 +182,7 @@ npm run dsh:runtime:host
 # Boot it once and assert the web UI answers
 npm run dsh:runtime:verify
 
-# Full gate: build, pack, install over HTTP, boot, delegate a coding task
+# Full gate: build, pack, install over HTTP, boot, assert provider/model over RPC
 npm run dsh:e2e
 ```
 
@@ -236,21 +237,54 @@ Known gap: existing users keep the runtime they already installed. `ensureRuntim
 <details>
 <summary>Build desktop installers</summary>
 
+The CI workflow builds each installer on its own OS (macOS, Windows, Linux). Do the same locally: native modules are compiled for the host, and the `dist:*` scripts build the OpenClaw runtime for the requested target only.
+
+Build machine prerequisites:
+
+- Node.js `>=24.15.0 <25`. `.npmrc` sets `engine-strict`, so npm refuses other versions.
+- git and pnpm, used to build the pinned OpenClaw runtime from the sibling `../openclaw` checkout (override with `OPENCLAW_SRC`).
+- Windows: Git for Windows. The runtime build runs in its Git Bash. Without it, run `npm run setup:mingit` once to prepare a portable Git under `resources/mingit`.
+
+Clean build:
+
 ```bash
-# macOS
-npm run dist:mac
+# 1. Install dependencies exactly as pinned in package-lock.json.
+#    npm ci removes node_modules itself, so do not delete it by hand and do not
+#    run npm install first: that installs everything twice and may rewrite the
+#    lock file. postinstall applies patches/ and rebuilds native modules
+#    against Electron.
+npm ci
+
+# 2. Remove stale build output. dist-electron is compiled by tsc, which keeps
+#    files whose sources were deleted.
+npx rimraf dist dist-electron
+
+# 3. Build the installer. Output goes to release/.
+npm run dist:mac            # macOS, host architecture
 npm run dist:mac:x64
 npm run dist:mac:arm64
 npm run dist:mac:universal
-
-# Windows
-npm run dist:win
-
-# Linux
+npm run dist:win            # Windows x64
 npm run dist:linux
 ```
 
-Packaging bundles the OpenClaw runtime under `Resources/cfmind`. Windows builds also bundle a portable Python runtime under `resources/python-win`, so end users do not need to install Python manually.
+`vendor/` does not need to be deleted between builds. The OpenClaw runtime under `vendor/openclaw-runtime/<target>` is cached by pinned version and patch hash and is rebuilt automatically when either changes. Set `OPENCLAW_FORCE_BUILD=1` to rebuild it after changing the build scripts themselves, and `OPENCLAW_FORCE_PLUGIN_INSTALL=1` to re-download the bundled plugins. Optional plugins (POPO, NIM) are skipped with a warning when their registry is unreachable, so check the build log before shipping.
+
+The `dist:*` scripts also run these steps for you:
+
+- `openclaw:runtime:<target>`: build, patch, bundle, and prune the OpenClaw runtime, shipped under `Resources/cfmind`.
+- Windows only, `verify:installer-patches`: re-applies `patches/app-builder-lib+*.patch` to `node_modules` and runs the installer contract tests. It fails when `node_modules` still carries an older version of the patch, for example after `git pull` without reinstalling; run `npm ci` and retry. Never ship an installer from a tree where it fails.
+- Windows only, `setup:python-runtime`: prepares a portable Python under `resources/python-win`, so end users do not need to install Python. cfmind, `SKILLs`, and python-win are shipped as a single `win-resources.tar` and extracted after install.
+
+Windows channel and web-installer builds wrap the same `dist:win` chain:
+
+```bash
+# Full installer for a distribution channel
+npm run dist:win:channel -- --keyfrom <channel> [--silent]
+
+# Web installer: a small stub that downloads the package from your CDN
+npm run dist:win:web -- --keyfrom <channel> [--silent] [--pkg-base-url <cdn-dir> | --pkg-url <package-url>]
+```
 
 Offline or private-source packaging can use:
 
@@ -259,6 +293,8 @@ Offline or private-source packaging can use:
 - `LOBSTERAI_WINDOWS_EMBED_PYTHON_VERSION`
 - `LOBSTERAI_WINDOWS_EMBED_PYTHON_URL`
 - `LOBSTERAI_WINDOWS_GET_PIP_URL`
+- `LOBSTERAI_PORTABLE_GIT_ARCHIVE`
+- `LOBSTERAI_PORTABLE_GIT_URL`
 
 </details>
 

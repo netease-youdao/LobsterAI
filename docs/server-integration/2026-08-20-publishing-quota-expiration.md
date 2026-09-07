@@ -1,18 +1,18 @@
 # 分享与部署额度、过期联调说明
 
-日期：2026-08-20
+日期：2026-08-20（最近更新：2026-09-04）
 
-状态：额度、过期能力及“普通用户升级订阅后恢复限时资源”均已实现；2026-08-24 完成客户端与服务端联调合同更新。
+状态：额度、过期能力、“普通用户升级订阅后恢复限时资源”、订阅恢复入口、恢复动作投影和公网暂停页均已完成客户端与服务端实现；Electron 手工 UI 与真实测试环境联调待执行。
 
 ## 涉及项目
 
-- 客户端：`LobsterAI`
-- 服务端：`lobsterai-server`
+- 客户端：`LobsterAI`（恢复按钮、订阅跳转和返回刷新）
+- 服务端：`lobsterai-server`（恢复动作投影和公网暂停页）
 - `lobsterai-portal`、`lobsterai-admin`：本期不改
 
 ## 数据库变更
 
-上线前执行服务端迁移：
+V1.6 额度/过期基线上线前曾执行服务端迁移：
 
 ```text
 lobsterai-server/sql/V77__publishing_quota_expiration.sql
@@ -27,6 +27,8 @@ lobsterai-server/sql/V77__publishing_quota_expiration.sql
 - 现有 `share_deployments` 状态对静态网站自动恢复和 Node 服务用户主动重新部署做并发抢占；自动检查不得启动 Node 服务。
 
 恢复成功后清空 `access_expires_at`，资源自然退出候选集合；这同时构成幂等标记。不得为本场景增加升级批次表、恢复任务表或已处理标志列。
+
+2026-09-04 的“订阅恢复”入口增量不增加任何 SQL、表、字段或索引，也不修改 V77。它只读取现有截止时间、分享关闭原因和 deployment 状态并返回动作投影，继续兼容 MySQL 5.7。
 
 ## 服务端配置
 
@@ -141,7 +143,10 @@ Electron 主进程会保留该结构，渲染进程不得解析中文错误文�
   - `effectiveUnavailableReason?: share_not_live | site_not_online | free_access_expired | entitlement_grace_expired`。
 - Library 云端列表顶层新增 `serverNow`（Unix epoch 毫秒）。
 - Library 云端列表可选返回 `recoveryPending: boolean`；仅表示当前订阅账号仍有普通用户限时静态网站正在自动恢复或存在可立即自动处理的候选。已停止且等待用户重新部署的 Node 服务不计入 pending；旧客户端忽略该字段。
+- 分享创建/状态/详情、站点列表/详情和 Library 云端条目新增可选 `subscriptionRecoveryMode: automatic | redeploy_required | none`。该字段只描述所有者下一步动作，不替代 `effective*` 的当前可访问性。
 - 旧服务端不返回这些字段时，新客户端保持原展示且不猜测截止时间。
+
+升级后的服务端在这些 owner 响应中固定返回三种小写 mode 之一；“可选”只用于滚动发布、旧服务端和回滚兼容。客户端不得把 `null` 或未知值当作可恢复。
 
 示例：订阅身份失效超过宽限期、但尚未发生公开访问关闭时，数据库原始 `status` 仍可能为 `live`，列表会返回：
 
@@ -157,7 +162,23 @@ Electron 主进程会保留该结构，渲染进程不得解析中文错误文�
 
 客户端状态、可访问筛选、打开链接按钮及云端详情操作必须使用 `effective*` 投影和 `serverNow`，不能仅使用数据库原始 `status`。`effectiveExpiresAt` 允许页面停留期间在宽限期边界自动切换为不可访问，无需轮询服务端。
 
-普通用户分享与部署详情弹窗根据服务端返回的 `accessExpiresAt/expiresAt` 显示“限时体验”和实际剩余时间。到期后客户端立即显示“链接已过期”并禁用权限更新和文件更新；复制链接仍可保留，最终访问结果由服务端判断。若账号后来升级为有效订阅，已停止 Node 服务应显示“需要重新部署”并重新启用用户主动重新部署入口，但不能由列表检查自动提交部署。
+普通用户分享与部署详情弹窗根据服务端返回的 `accessExpiresAt/expiresAt` 显示“限时体验”和实际剩余时间。到期后客户端立即显示“链接已过期”并禁用权限更新和文件更新；恢复 CTA 实际可见时，任务内分享/部署弹窗的底部业务操作只保留“复制链接”和恢复 CTA，复制条件不满足时按钮保留但禁用。若账号后来升级为有效订阅，已停止 Node 服务应显示“需要重新部署”并重新启用用户主动重新部署入口，但不能由列表检查自动提交部署。
+
+恢复动作计算由服务端集中 resolver 完成；`automatic` 必须与自动恢复候选保持一致，`redeploy_required` 则明确描述自动恢复排除的 Node 状态：
+
+| 资源状态 | `subscriptionRecoveryMode` |
+| --- | --- |
+| 免费固定时限文件仍为 live，或只因 `free access expired` 关闭；未到期时表示潜在转换能力 | `automatic` |
+| 分享与最新 deployment 均 live/active 的固定时限 Node/静态网站；或分享仍 live/仅因免费到期关闭、deployment 为 stopped/expired inactive 且来源完整的静态网站 | `automatic` |
+| 分享仍为 live 或仅因免费到期关闭，且最新 deployment 为 stopped/expired inactive 的固定时限 Node 服务；无论截止时间是否已到 | `redeploy_required` |
+| 用户、管理员、审核、活跃额度、未知原因关闭，或 `failed/deleted` | `none` |
+| `accessExpiresAt = null` 的权益宽限期结束资源 | `none` |
+
+`subscriptionRecoveryMode` 是恢复能力投影，不是“已经过期”标记。符合安全条件的固定时限资源在未到期时可以预先返回 `automatic/redeploy_required`；客户端只有在该 surface 对应的 `accessExpiresAt` 或 `expiresAt` 已到、资源当前不可访问、账号仍为个人普通账号时才显示购买入口。到期前的 stopped Node 沿用已有免费重新部署操作。这样倒计时在本地跨过到期边界时无需发网络请求即可出现 CTA。
+
+时间基准不扩大本次服务端合同：Library 列表/详情继续使用列表级 `serverNow + monotonic elapsed`；任务分享/部署弹窗与 Sites owner 详情当前没有 `serverNow`，沿用既有 ISO 截止时间和客户端展示时钟，最终访问与写权限仍以服务端判断为准。
+
+客户端不能直接使用 `disabledSource=system`、`effectiveUnavailableReason=share_not_live` 或通用“已过期”判断恢复入口。新客户端收到字段缺失、`null` 或未知枚举时按 `none` 处理；服务端不新增 `disabledSource`，也不改变 `effectiveUnavailableReason` 的既有语义。
 
 客户端基于 `serverNow` 加单调时钟流逝量计算剩余时间，整个页面共用一个低频计时器；不轮询服务端、不逐行创建定时器。到期后立即在本地显示不可访问并禁用打开，最终权限仍由服务端校验。
 
@@ -224,23 +245,121 @@ Electron 主进程会保留该结构，渲染进程不得解析中文错误文�
 #### 客户端刷新
 
 - 客户端订阅/额度变更事件只清理当前发布账号的云端查询缓存并重拉，不乐观改状态。
-- 第一页响应为 `recoveryPending=true` 时，客户端最多在 3 秒、10 秒和 30 秒各重拉一次；页面离开、账号切换、恢复完成或次数用尽即停止。
+- 第一页响应为 `recoveryPending=true` 时，客户端最多在 3 秒、10 秒和 30 秒各重拉一次；目标弹窗/页面离开只移除该目标的详情刷新订阅，不取消同 owner 已启动的 cloud 恢复批次；账号切换、退出登录、恢复完成或次数用尽才停止账号级协调器。
 - 重拉按稳定资源 ID 原位合并，保留类型、状态、关键词、收藏筛选和滚动位置。
 - 资源是否可访问始终使用服务端 `effective*` 和 `serverNow`，不能因客户端发现订阅成功就直接展示可访问。
 
-#### 日志与指标
+### 订阅恢复入口（2026-09-04 增量）
+
+#### 展示位置
+
+| 界面 | 展示位置 | 行为 |
+| --- | --- | --- |
+| 任务内文件分享弹窗 | 底部操作区 | 恢复态只保留“复制链接”和“订阅恢复” |
+| 任务内网站部署弹窗 | 底部操作区 | 恢复态只保留“复制链接”和恢复 CTA；`automatic` 显示“订阅恢复”，`redeploy_required` 显示“订阅后重新部署” |
+| “我的文件 > 云端”列表 | 状态列右侧的无标题独立列 | 180px 状态列继续独立、居中展示状态和有效期；紧凑按钮单独占列并阻止行点击冒泡，最右“操作”列保持不变 |
+| 云端文件详情 | 标题元信息行、不可访问状态之后 | 替换免费到期的泛化系统关闭说明 |
+| 云端站点详情 | 站点标题元信息行 | 与文件详情复用同一模式和跳转 |
+
+恢复 CTA 使用固定高对比反色方案：浅色主题为黑底白字，深色主题为白底黑字；不再跟随主题强调色。按钮保留 hover、active、focus-visible、键盘激活和中英文不换行。任务弹窗的“双按钮”约束只作用于 CTA 实际可见的恢复态；顶部关闭按钮、权限与期限说明保持不变，CTA 不可见后恢复原有创建、更新、部署、重试和权限操作。
+
+按钮只在固定截止时间已到、资源当前不可访问、当前账号为个人普通账号且模式为 `automatic/redeploy_required` 时展示。有效个人订阅观察到 `automatic` 时不再展示购买按钮，而是启动权威刷新；企业账号、未到期资源、`none`、字段缺失和未知值都不展示。
+
+恢复按钮不得回退到主题强调色；固定使用浅色黑底白字、深色白底黑字。所有新增标题、按钮和说明必须同时提供中英文 i18n。
+
+#### 订阅页跳转
+
+继续通过系统浏览器打开现有 Portal 套餐页：
+
+```text
+文件：#/pricing?keyfrom=html_share[&trace_id=...]
+网站：#/pricing?keyfrom=site_deployment[&trace_id=...]
+```
+
+查询参数必须位于 hash 路由内部。不要跳 `/subscription`，该路由是账单分区；不要追加 `source=electron`，该参数会改变现有 Portal 登录流程。Portal 和 Admin 不需要接口或页面改动。Electron 客户端的七天 last-touch 订阅观察归因属于本次；Portal 当前不把 `keyfrom/trace_id` 传入订单，订单支付级精确归因如有需要另立需求。
+
+#### 返回客户端后的刷新闭环
+
+1. 点击恢复入口时按 owner 记录内存级等待意图和一次性强制聚焦检查标记，打开外部浏览器后保持当前资源上下文。
+2. 窗口重新聚焦时，如果强制检查仍为 armed，则立即刷新订阅快照一次，不受普通 30 秒聚焦节流限制并消费本次标记；后续恢复普通节流，再次点击 CTA 才重新 armed。
+3. 账号仍为 `free` 时保持现状；同一 owner 变为 `active` 后，使当前资源详情和云端无 cursor 第一页缓存失效并重拉。
+4. 客户端冷启动或恢复登录时，如果账号已为 `active` 且打开的资源仍返回 `automatic`，也必须触发一次无 cursor 第一页兜底，不能只依赖进程内观测到 `free -> active`。
+5. 第一页 `recoveryPending=true` 时复用 3/10/30 秒有界刷新；换账号、退出登录、恢复完成或次数耗尽后停止。
+6. 无 cursor 第一页调用及有界重试由账号级共享恢复协调器负责，不依赖 Library 页面是否挂载。从任务弹窗返回时也能完成兜底；每轮 cloud 响应后刷新目标分享/站点详情，并使当前 owner 的 Library 查询失效。
+7. 恢复成功按 surface 判断：文件 owner 响应要求 `status=live && accessExpiresAt=null`；Library 要求 `effectiveAvailable=true && accessExpiresAt=null`；站点/部署要求分享 live、站点或 deployment online/live 且对应的 `accessExpiresAt/expiresAt=null`。随后模式应收敛为 `none`；客户端不根据订阅状态乐观恢复。
+8. 响应合并必须区分字段缺失与显式 `null`。文件/Library 的 `accessExpiresAt: null` 和任务部署/Sites 的 `expiresAt: null` 都要清除旧过期快照，不能用 `newValue ?? oldValue` 保留旧值；对应 TypeScript 字段应显式允许 `null`。
+
+#### 客户端产品与订阅转化埋点
+
+本节专指在 Electron 客户端产生、通过现有 `reportYdAnalyzer` 上传到分析服务端的产品事件，不是下文 `lobsterai-server` 进程运行日志，也不是分享访问量 owner analytics。内存等待意图和 `trace_id` 本身不等于已完成埋点。
+
+| 客户端事件 | 触发条件 |
+| --- | --- |
+| `lobsterai_publishing_recovery_cta_exposure` | CTA 首次实际可见；列表行进入可视区、页面停留跨过到期边界时同样触发 |
+| `lobsterai_publishing_recovery_cta_action` | 鼠标/键盘激活被接受后，在记录等待意图及 `openExternal()` 之前 |
+| `lobsterai_publishing_subscription_observed` | 复用既有事件；同 owner 的 auth/quota 权威快照在有效 last-touch 内观察到有效订阅 |
+| `lobsterai_publishing_recovery_result` | 订阅观察后，资源权威响应收敛或有界重试用尽 |
+
+三个新增 recovery 事件使用独立 `PublishingRecoveryAnalyticsEventVersion=1` 和独立参数 builder，不直接复用会写入 v2 的旧 publishing builder。共同字段为 `attemptId/exposureId/interactionType/feature/resourceKind/operationType/source/entryPoint/surface/recoverySurface/pageViewId/hasExistingResource/identityType/subscriptionRecoveryMode`；固定 `interactionType=recovery_cta`、`operationType=subscription_recovery`、`hasExistingResource=true`、`identityType=free`。点击另带 `actionType=click`、`ctaId=primary`、`target=pricing`、`operationId` 和 `exposureToClickMs`。`recoverySurface` 是新维度，不覆盖旧 `surface`。
+
+| `recoverySurface` | `source` | `entryPoint` |
+| --- | --- | --- |
+| `task_file_share_dialog` | 继承文件弹窗原 attempt | 继承原 attempt |
+| `task_site_deployment_dialog` | 继承部署弹窗原 attempt | 继承原 attempt |
+| `library_cloud_list` | `library_list` | 新增 `subscription_recovery_cta` |
+| `library_file_detail` | `library_preview` | `library_settings` |
+| `library_site_detail` | `library_preview` | `library_settings` |
+
+任务弹窗只从原 attempt 派生 recovery context，不突变原对象；恢复 CTA 只报新 recovery 事件，不再双报旧 `PublishingDialogAction/DeploymentStatusAction`。同一可见周期的 `attemptId` 贯穿曝光、点击、订阅观察和恢复结果，并必须与套餐 URL 的 `trace_id` 相同；每次真实点击生成新 `operationId`。曝光以 owner、页面/弹窗生命周期、本地资源 key、surface 和 mode 在客户端去重；倒计时 rerender、刷新、轮询和虚拟列表重挂载不重复曝光。`exposureToClickMs` 从本次曝光创建时计时，不扣除中间离开可视区的时间。
+
+点击复用现有七天 `rememberPublishingConversionAttribution`，last-touch 覆盖前一未过期触点。旧 input 的 `dialogType/dialogVisibleMs` 对 `interactionType=recovery_cta` 改为可选，内联 CTA 使用 `exposureToClickMs`。归因存储使用“本地 envelope + 显式上报 allowlist”：`ownerAccountKey/resourceKey` 可仅本地保存，禁止把 `...attribution` 整体展开到 `reportYdAnalyzer`。storage 升级版本，无 owner scope 的旧记录丢弃。
+
+`reportPendingPublishingSubscriptionObserved` 改为接收当前权威 `ownerAccountKey + accountMode + subscriptionStatus`，`auth.ts` 的初始化/刷新调用点都传入完整快照；owner 不一致时清理且不上报。恢复 CTA 归因只接受同 personal owner 的 `subscriptionStatus=active`，既有其他发布 CTA 对 enterprise 的旧规则不变。换账号、登出、关闭 `usageAnalyticsEnabled`、7 天过期或 observed 成功上报后清理；普通网络/HTTP 失败时保留 attribution，后续 auth/quota 刷新重试可生成新 `eventId`，以不变的 `operationId/exposureId` 去重。网站恢复入口必须直接接入共用 attribution writer，不得靠双报 generic dialog action 补偿。
+
+`subscription_observed` 只表示同 personal owner 已观察到 `active` 且事件上传成功，不得命名为 `payment_success`，不代表资源已恢复。`recovery_result.outcome` 只允许 `restored/redeploy_ready/retry_exhausted/resource_unavailable`，并携带最新点击 `operationId` 以及从该点击到终态的 `durationMs`。`automatic` 权威可访问且期限为 `null` 才记 `restored`；`redeploy_required` 订阅后记 `redeploy_ready`，真实重部署继续使用既有 deployment result；同 owner 已为 active 但有界重试不收敛才记 `retry_exhausted`。协调器另存 in-flight analytics context；observed 成功只清 last-touch，不清结果关联。多次点击只保留最新 `operationId` 的终态，取消购买、仍为 free 或浏览器账号不一致不记转化失败。
+
+埋点失败不阻断打开套餐页。payload 必须经显式 allowlist 生成，不得包含 `ownerAccountKey/resourceKey`、`shareId/siteId/deploymentId`、文件名、本地路径、URL、分享码、任务标题、搜索词或资源内容。
+
+#### 公网暂停页
+
+公网访问者不是资源所有者，不展示购买按钮：
+
+- `automatic`：文件和静态网站显示“该分享已暂停 / 分享者订阅后，该分享将自动恢复”，网站使用对应网站文案；
+- Node 免费到期或 `redeploy_required`：统一保守显示“分享者订阅并重新部署后可恢复访问”，避免公开访问排队异步停止 deployment 时错误承诺自动恢复；
+- `none`：保留现有人工关闭、管理员关闭、安全审核、额度关闭或通用不可访问文案。
+
+本增量不改变公网响应的既有 HTTP 状态码、缓存头、访问码、管理员预览或安全判断顺序。
+
+#### 实现边界
+
+- 服务端建议新增集中 `SubscriptionRecoveryModeResolver`，由 `HtmlShareCreateResponse`、`HtmlShareStatusResponse`、`ShareDeploymentResponse`、`SiteListItem`（详情继承）和 `LibraryCloudItem` 统一消费；Library/Site Mapper 一次性返回计算所需的关闭原因、固定截止时间和最新 deployment `status/active`，禁止逐项补查。
+- 客户端在现有 `src/shared/publishing/constants.ts` 增加 mode 常量和 fail-closed normalizer；`htmlShareClient`、`shareDeploymentClient`、`libraryCloudClient` 与 Site 类型只做白名单解析/透传，Main/Preload 不新增恢复写 IPC。
+- 共享恢复按钮与展示策略供 `ArtifactFileShareDialog`、`ArtifactPanel`、`LibrarySharedFilesView` 和 `SitesView` 使用；账号级恢复协调器放 Renderer service，不放在任一页面组件生命周期内。
+- 套餐 URL 复用 `src/renderer/services/endpoints.ts` 的 `getPortalPricingUrl`/`PortalPricingKeyfrom`；IDE 当前打开的 `src/main/libs/endpoints.ts` 不属于本需求，不修改。
+- 客户端埋点在 `src/shared/analytics/constants.ts`、`src/renderer/components/artifacts/publishingAnalytics.ts` 和 `src/renderer/services/publishingConversionAttribution.ts` 扩展，统一恢复 CTA helper 同时支持弹窗和内联入口，不新增 `lobsterai-server` 埋点接口。
+
+#### 服务端运行日志与监控指标（非客户端转化埋点）
 
 服务端日志统一使用 `[PublishingRecovery]`，记录触发来源、用户 ID、候选数、文件恢复数、在线网站转换数、静态网站恢复数、跳过数、是否仍有待处理候选和耗时；不得记录文件名、URL、分享码或本地路径。已停止 Node 服务在候选 SQL 中被排除，不计为失败或积压。
 
 ## 上线顺序
 
+### V1.6 额度、过期与自动恢复基线（历史，已完成）
+
 1. 备份并执行 V77 数据库迁移。
 2. 发布包含新配置、额度校验和访问守卫的服务端。
 3. 发布服务端订阅提交后事件、恢复服务和 Library 第一页兜底；确认自动检查始终不会启动已停止 Node 服务。
 4. 验证额度接口、Library `effective*` 与可选 `recoveryPending`。
-5. 发布支持 3/10/30 秒有界刷新和订阅事件失效缓存的客户端。
 
-回滚服务端时可保留可空字段。不要先发布依赖新字段的服务端代码再执行迁移。
+历史基线回滚时可以保留可空字段。V1.7 不重复执行或修改 V77。
+
+### V1.7 订阅恢复入口（本次）
+
+1. 发布集中恢复 mode resolver、可选 `subscriptionRecoveryMode`、必要投影列和公网暂停页分支的服务端；确认旧客户端忽略新增字段，既有 API 路径、请求参数、错误码和 HTTP 行为不变。
+2. 发布支持恢复入口、首次回焦强制刷新、两种期限字段显式 null 清理、冷启动兜底和账号级 3/10/30 秒有界刷新的客户端。
+3. 客户端分析平台观察分 surface/mode 的 CTA 曝光、点击、`subscription_observed` 和恢复结果；服务端单独观察模式分布、自动恢复、pending、耗时及 Node 重新部署结果，两类数据达标后全量。
+
+V1.7 没有数据库步骤。服务端先行、客户端后发；服务端回滚后新客户端把字段缺失视为 `none`，客户端回滚后旧客户端忽略新增 JSON 字段。公网文案可以独立回滚，不影响恢复数据。
 
 ## 验证重点
 
@@ -256,3 +375,22 @@ Electron 主进程会保留该结构，渲染进程不得解析中文错误文�
 - 已停止静态网站只有自动恢复成功后可访问；失败或来源缺失保持不可访问。已停止 Node 服务在自动检查后仍不可访问，且没有部署请求；用户主动重新部署成功后才恢复。
 - 订阅激活成功不受恢复失败影响；用户首次进入云端页会再次自动检查。
 - 恢复方案没有新增表或 DDL，候选 SQL 与条件更新通过 MySQL 5.7 验证。
+- 个人普通账号只有在 `subscriptionRecoveryMode=automatic/redeploy_required` 时显示对应入口；用户/管理员/审核/额度关闭、权益宽限期结束和未知值均不显示。
+- 文件和网站分别跳转 `keyfrom=html_share/site_deployment`，可选 `trace_id` 正确编码；不跳账单页、不添加 `source=electron`。
+- 列表按钮位于状态列右侧收紧后的 120px 独立无标题列并在列内左对齐，同时向状态方向利用留白紧邻展示；不改变 180px 状态列内状态/有效期的原有居中排版且不触发行点击。所有恢复 CTA 在浅色主题为黑底白字、深色主题为白底黑字，并具备可见 hover/active/focus 状态。
+- 任务内分享与部署弹窗仅在恢复 CTA 实际可见时把底部操作裁剪为“复制链接 + 恢复 CTA”；复制不可用时仍保留禁用按钮，CTA 消失后原动作集完整恢复。
+- 点击后未购买、取消购买或浏览器账号不一致时不改变资源；同一 owner 订阅生效、客户端冷启动或重新聚焦后均可通过权威重拉收敛。
+- 文件/Library 显式返回 `accessExpiresAt=null`、部署/Sites 返回 `expiresAt=null` 后，各自清除过期标记并按 surface 的权威状态收敛；目标页面离开不终止同 owner 的账号级恢复批次，`recoveryPending` 重试不会无限运行。
+- 公网文件/网站准确区分自动恢复、重新部署和不可恢复文案，同时保持既有 HTTP、缓存和安全行为。
+- 新客户端连接旧服务端、收到 `null` 或未知恢复枚举时保持稳定并隐藏入口；旧客户端连接新服务端行为不变。
+- 五个 surface 的曝光/点击字段、mode 和 `attemptId=trace_id` 正确；网站弹窗能写入 last-touch 且不双报。
+- 倒计时跨界会生成一次曝光，rerender、轮询和虚拟列表重挂载不重复；重新打开/新 page view 可以生成新曝光。
+- 同 owner 七天内观察到有效订阅只成功上报一次 `subscription_observed`；换账号、过期、关闭使用分析不误记，上报失败会保留重试。
+- 客户端埋点 payload 不含 owner/resource ID、文件名、路径、URL、分享码、任务标题、搜索词或资源内容，上报失败不阻断订阅页跳转。
+
+## 实施验证（2026-09-04）
+
+- 客户端目标 ESLint、目标 Vitest（本轮 UI 收口复跑 8 个文件、110 项）、`npm run build` 和 `npm run compile:electron` 已通过。
+- 服务端 `compileJava`、`compileTestJava`、Mapper XML 语法检查及差异格式检查已通过。
+- 按约定未运行依赖 Redis/外部发布服务的服务端测试套件；未连接或修改测试数据库。
+- Electron 手工 UI、套餐页真实返回链路及测试环境端到端联调尚未执行。

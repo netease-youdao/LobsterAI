@@ -1,12 +1,12 @@
 # 资料库功能详细设计文档
 
 > 创建日期：2026-08-17
-> 最近更新：2026-08-26
-> 状态：资料库基础能力及「本地产物 / 云端」双页签 UI 已实现；云端页统一管理分享文件与部署站点，并已完成测试环境列表基础验证；零有效任务关系的本地产物隐藏、有效任务回退及关系写入竞态保护已在客户端实现；分享文件访问分析已完成详细设计，客户端与 owner 接口待实现；分享文件永久删除已完成客户端、服务端与管理员后台实现，数据库内容清理和 NOS 删除意图已可靠落库，NOS 对象物理删除消费者仍是正式发布阻断项；订阅升级后的普通用户限时资源恢复已按无新增表方案完成客户端与服务端实现；Windows 首次进入本地产物时的回填闪屏修复已完成客户端实现，待 Windows 大数据集压力验证；来源页签、收藏、筛选和搜索切换时的线条加载态闪烁已完成客户端详细设计，待实现与回归
+> 最近更新：2026-09-04
+> 状态：资料库基础能力及「本地产物 / 云端」双页签 UI 已实现；云端页统一管理分享文件与部署站点，并已完成测试环境列表基础验证；零有效任务关系的本地产物隐藏、有效任务回退及关系写入竞态保护已在客户端实现；分享文件访问分析已完成详细设计，客户端与 owner 接口待实现；分享文件永久删除已完成客户端、服务端与管理员后台实现，数据库内容清理和 NOS 删除意图已可靠落库，NOS 对象物理删除消费者仍是正式发布阻断项；订阅升级后的普通用户限时资源恢复已按无新增表方案完成客户端与服务端实现；免费过期资源“订阅恢复”入口、恢复能力投影、公网页和客户端转化埋点已完成客户端与服务端实现；Windows 首次进入本地产物时的回填闪屏修复已完成客户端实现，待 Windows 大数据集压力验证；来源页签、收藏、筛选和搜索切换时的线条加载态闪烁已完成客户端详细设计，待实现与回归
 > 涉及仓库：`LobsterAI`、`lobsterai-server`、`lobsterai-admin`；`lobsterai-portal` 经核对无需改动
 > 产品入口：LobsterAI 左侧栏「我的文件」（内部功能名仍为 Library）
 
-## 0. 实施状态（2026-08-26）
+## 0. 实施状态（2026-09-04）
 
 资料库基础方案已在客户端与服务端两个仓库完成首期实现；表中单独标为“待实现”的增量不包含在该结论中：
 
@@ -26,10 +26,11 @@
 | 分享文件访问分析 | 复用现有 V52 访问统计表与采集链路；owner 只读接口、客户端分析页和跨内容版本汇总待实现，不新增 DDL |
 | 分享文件永久删除 | 已完成客户端、服务端与管理员后台实现：仅允许当前 owner 永久删除已停止的普通分享，主记录保留最小 `deleted` 墓碑，同事务清理文件/统计/敏感审核内容并先记录 NOS 删除意图，免费用户历史创建名额不释放；NOS 对象物理删除消费者仍待确认或补齐 |
 | 订阅升级自动恢复 | 已实现且不新增表；复用 `html_shares.access_expires_at` 识别普通用户限时资源，订阅生效后主动恢复，无 cursor 云端第一页兜底检查；分享文件和在线网站直接转换，已停止静态网站恢复现有静态发布状态，已停止 Node 服务须由用户主动重新部署 |
+| 订阅恢复入口 | 已完成客户端与服务端实现；服务端新增可选恢复能力投影和公网暂停文案，客户端在任务弹窗、云端列表及详情增加黑白反色 CTA、转化埋点和账号级协调器，订阅返回后执行权威刷新；无数据库变更，Portal/Admin 无改动 |
 | lineage | 分享更新接口新增可选 `sessionId/artifactId`，旧客户端缺失参数时保留原值 |
 | 联调合同 | 新增 `docs/server-integration/2026-08-17-library-cloud-items.md` |
 
-已完成的自动校验包括客户端 TypeScript、changed-file ESLint、目标 Vitest、Renderer/Main/Preload 生产构建，以及服务端在 JDK 17 下的 `compileJava`、`compileTestJava` 和 Mapper XML 语法检查。管理员后台已通过 `vue-tsc`、目标 ESLint 和生产构建。按需求未运行依赖 Redis/外部服务的服务端测试套件。
+前序已实现功能的历史自动校验包括客户端 TypeScript、changed-file ESLint、目标 Vitest、Renderer/Main/Preload 生产构建，以及服务端在 JDK 17 下的 `compileJava`、`compileTestJava` 和 Mapper XML 语法检查。管理员后台历史上已通过 `vue-tsc`、目标 ESLint 和生产构建。2026-09-04 订阅恢复入口增量已通过客户端目标 ESLint、目标 Vitest、`npm run build`、`npm run compile:electron`，以及服务端 `compileJava`、`compileTestJava` 和 Mapper XML 语法检查；按约定未运行依赖 Redis/外部发布服务的服务端测试套件，未连接数据库，也未执行 Electron 手工 UI 或真实测试环境联调。
 
 本次永久删除实施落点：
 
@@ -302,7 +303,7 @@ LibraryItem
 
 **When** 用户进入「云端」并组合切换可访问性、资源类型和关键词。
 
-**Then** 客户端把普通分享和部署站点按统一游标混排为扁平四列管理列表，将原始状态归一为「可访问 / 不可访问」，不按本机会话分组，也不显示访问量、文件大小或更新时间。
+**Then** 客户端把普通分享和部署站点按统一游标混排为扁平管理列表，保留资源、状态、访问权限和操作四个有标题语义列，并在状态与访问权限之间设置无标题恢复入口列；将原始状态归一为「可访问 / 不可访问」，不按本机会话分组，也不显示访问量、文件大小或更新时间。
 
 ### 场景 12：修改分享设置
 
@@ -486,14 +487,17 @@ LibraryItem
 
 本地产物空状态区分资料库为空和查询无结果：类型为「全部」、搜索为空且未启用「我的收藏」时，显示「还没有本地产物」并说明任务中生成的可预览文件会自动出现；只要启用了类型、搜索或收藏筛选，则显示「没有符合条件的本地产物」，引导更换关键词或调整筛选。基础空态不能错误提示用户调整尚未启用的筛选条件。仅存在零有效任务关系的内部索引记录时，页面仍属于「还没有本地产物」，这些记录不计入可见结果。本地产物和云端搜索框在输入非空时都显示尾部清空按钮；点击后立即清空输入与生效关键词、重新查询默认结果并把键盘焦点留在搜索框，按钮提供本地化 Tooltip 和 `aria-label`。
 
-云端页不复用本地产物的卡片或会话组样式，而使用四列、单行的统一管理列表：
+云端页不复用本地产物的卡片或会话组样式，而使用单行统一管理列表。列表保留四个有标题语义列，并在状态列右侧增加一个无标题恢复入口列：
 
 | 列 | 内容 | 明确不显示 |
 | --- | --- | --- |
 | 云端资源 | 文件类型/站点图标 + 名称；第二行统一显示按客户端语言格式化的 `sortTime`，不附加「最后修改」标签 | 域名、“分享文件/部署站点”来源标签、文件大小、创建时间 |
 | 状态 | `可访问` 或 `不可访问`，文字与状态样式同时表达 | 访问量、原始部署/分享状态 |
+| （无标题恢复入口） | 仅对符合订阅恢复策略的行显示紧凑 CTA；不符合条件的行保留空占位以维持列对齐 | 其他状态操作、说明文案 |
 | 访问权限 | `公开访问` 或 `分享码` | 分享码明文 |
 | 操作 | 仅一个「更多」按钮 | 常驻星标、打开、复制或状态按钮 |
+
+状态列保持 180px 并独立居中展示，状态文字与有效期仍为上下布局；恢复入口不得并入状态单元的纵向或横向 flex。恢复入口列位于状态和访问权限之间，无可见表头，列宽收紧为 120px；按钮在列内单行左对齐，并向状态列方向利用 48px 空白，使按钮紧邻状态/有效期但不重叠。入口列显式允许横向可见溢出，保证较长英文按钮不被裁切，同时必须与访问权限列保持空隙。列表采用 `320px/180px/120px/120px/44px` 的最小列轨道和至少 900px 的总宽度；窗口不足时由既有滚动容器横向承载，不把 CTA 折回状态下方。
 
 云端列表不显示访问量和文件大小；文件与网站名称下方统一以元信息字号显示最近更新时间，不显示说明性前缀，网站也不显示域名。域名仍可参与搜索，并保留在设置页和链接操作中。分享/网站设置页只展示完成管理决策所需的分享时间、最后修改时间和原始状态；文件大小仅在本地产物详情等确有文件操作价值的场景出现，不能回填到云端列表或分享设置形成第二套信息密度。列表不提供网格切换，也不按会话或日期插入组头。
 
@@ -606,6 +610,8 @@ LibraryItem
 - `admin/moderation/active_limit/system`：不允许客户端直接恢复，状态开关禁用，并显示经过 i18n 的原因；
 - 未知值：按不可恢复处理，避免越权恢复。
 
+`disabledSource` 只描述关闭来源，不描述“购买订阅后是否能恢复”。尤其 `system` 不是订阅到期的同义词，不能单独决定订阅 CTA。服务端通过可选 `subscriptionRecoveryMode` 返回恢复能力；客户端仍使用 `accessExpiresAt/effective* + serverNow` 判断当前是否已过期和不可访问。`free_access_expired` 与 `entitlement_grace_expired` 属于两条状态机，后者不得显示自动恢复承诺。字段缺失、`null` 或未知恢复枚举一律按 `none`。
+
 #### FR-11.4 条目点击与更多菜单
 
 单击分享文件行或按 Enter 进入分享设置页；单击站点进入网站设置页，网站分析通过设置页标题栏的独立入口进入。「更多」按钮只打开菜单，不触发行点击。菜单共享打开、复制、收藏和可选相关任务动作，并按类型增加一个主管理动作：
@@ -622,6 +628,8 @@ LibraryItem
 - `删除分享记录`：永久删除只放在分享设置页底部危险区域，避免列表误触；现有 `DELETE /api/html-shares/{shareId}` 仍是旧版关闭接口，不能用于永久删除；
 - `复制路径`、`在文件夹中显示`、`用系统应用打开`：这些是本地文件动作，不适用于云端分享记录。
 
+“订阅恢复”是内联套餐导航，不是直接调用分享状态恢复接口，也不是“更多”菜单动作；它按 FR-11.9 显示在状态列右侧的无标题独立列，但不改变“列表菜单不提供重新打开”的规则。点击紧凑按钮必须阻止行点击冒泡。
+
 云端页在工具栏展示「仅看收藏」图标按钮，但不在列表中增加收藏列或单行常驻星标。收藏状态写本地 SQLite 并按发布账号 scope 隔离，不改变云端资源生命周期。
 
 #### FR-11.5 分享设置页
@@ -633,6 +641,8 @@ LibraryItem
 3. 右侧图标动作依次为 `打开链接`、`数据分析`、`添加收藏 / 取消收藏`，以及存在本地关系时的 `相关任务`；每个图标提供 Tooltip、`aria-label` 和键盘焦点；
 4. 主体依次为「访问设置」「基本信息」两个轻量区块，页面最底部为独立「危险区域」，不使用左右不对称卡片布局；
 5. 标题栏不显示复制按钮和空的更多菜单；复制动作只保留在访问地址区域，避免重复入口。
+
+免费固定时限到期且 `subscriptionRecoveryMode = automatic` 时，标题元信息行在“不可访问 / 已过期”后显示“订阅恢复”；`redeploy_required` 的站点显示“订阅后重新部署”。免费到期说明替换泛化的“系统策略关闭”文案，其他用户/管理员/审核/活跃额度/未知关闭原因保持既有说明。该入口不改变危险区域、永久删除或复制链接的既有规则。
 
 各区域要求：
 
@@ -735,6 +745,117 @@ LibraryItem
 - 不处理企业账号、已删除记录、用户主动关闭、管理员关闭、审核拒绝、活跃额度关闭或未知安全状态；
 - 不新增恢复表、升级批次表、任务表或 MySQL DDL。
 
+##### 订阅恢复入口合同（2026-09-04 增量）
+
+自动恢复能力已经存在，但客户端不能从 `system`、数据库英文原因或通用“已过期”猜测它。服务端在分享创建/状态/详情、站点列表/详情和 Library 云端条目增加可选恢复能力投影；客户端集中定义并严格归一化：
+
+```ts
+export const PublishingSubscriptionRecoveryMode = {
+  Automatic: 'automatic',
+  RedeployRequired: 'redeploy_required',
+  None: 'none',
+} as const;
+
+export type PublishingSubscriptionRecoveryMode =
+  typeof PublishingSubscriptionRecoveryMode[keyof typeof PublishingSubscriptionRecoveryMode];
+```
+
+响应字段：
+
+```ts
+subscriptionRecoveryMode?: PublishingSubscriptionRecoveryMode;
+```
+
+这是“资源在订阅生效后如何恢复”的能力快照，不是“此刻已经过期”的状态。符合安全白名单的固定时限资源在未到期时也可预先返回 `automatic/redeploy_required`，使页面停留跨过期边界时无需新增网络轮询也能出现 CTA。客户端展示购买入口必须同时满足：
+
+1. 当前发布账号为个人普通账号；
+2. 该 surface 的固定截止时间已到，且资源当前投影为不可访问；Library 使用 `accessExpiresAt <= serverNow + monotonicElapsed`，任务弹窗与 Sites 详情沿用现有 ISO `accessExpiresAt/expiresAt` 和客户端展示时钟，服务端仍是最终权限边界；
+3. 恢复模式为 `automatic` 或 `redeploy_required`。
+
+恢复模式矩阵：
+
+| 资源与状态 | 模式 |
+| --- | --- |
+| 个人固定时限文件仍为 live，或只因 `free access expired` 关闭 | `automatic` |
+| 分享仍为 live 且最新 deployment 仍 live/active 的个人固定时限 Node/静态网站 | `automatic` |
+| 个人固定时限静态网站的分享仍为 live 或只因免费到期关闭，且最新 deployment 为 stopped/expired inactive、静态来源完整 | `automatic` |
+| 个人固定时限 Node 的分享仍为 live 或只因免费到期关闭，且最新 deployment 为 stopped/expired inactive，无论截止时间是否已到 | `redeploy_required` |
+| 用户、管理员、审核、活跃额度、未知原因关闭 | `none` |
+| 企业资源、`failed/deleted`、`entitlement_grace_expired` | `none` |
+
+站点先按最新 deployment 状态分类，再应用分享状态白名单，不能让通用 `shareStatus=live` 覆盖停止 Node。`automatic` 与实际恢复候选一一对应；`redeploy_required` 使用相同分享白名单，但描述自动恢复明确排除的 stopped/expired Node。到期前仍沿用既有免费重新部署操作，不展示订阅 CTA。服务端 mode projector 使用集中常量并与恢复候选 SQL 共享测试矩阵，不把 `free access expired` 裸字符串复制到 Controller。Library/Site 聚合查询应一次性 SELECT 计算所需的关闭原因、固定截止时间和 deployment active/status，禁止按条目补查形成 N+1；这是内部 SELECT/DTO 增量，不是数据库 DDL。
+
+入口位置：
+
+| 界面 | 位置与行为 |
+| --- | --- |
+| 任务内文件分享弹窗 | 恢复态底部只保留“复制链接”和“订阅恢复” |
+| 任务内网站部署弹窗 | 恢复态底部只保留“复制链接”和恢复 CTA；自动模式显示“订阅恢复”，停止 Node 显示“订阅后重新部署” |
+| 云端列表 | 180px 状态列继续独立显示状态/有效期；其右侧 120px 无标题独立列左对齐显示紧凑 CTA，并向状态方向利用空白紧邻展示；空行保留占位，点击 `preventDefault/stopPropagation`，不打开详情 |
+| 云端文件详情 | 标题元信息行中紧邻不可访问/已过期状态 |
+| 云端站点详情 | 嵌入式站点标题元信息行复用同一策略 |
+
+文件类入口统一通过 `ArtifactFileShareController` 覆盖 HTML、图片、SVG、文档、Markdown、Mermaid 和生成视频，不为旧内联 HTML 分享逻辑再建一套判断。恢复按钮采用固定高对比反色方案：浅色主题黑底白字，深色主题白底黑字；普通和紧凑尺寸都必须具备 hover、active、focus-visible、键盘激活和中英文 i18n。任务内分享/部署弹窗只在恢复 CTA 实际可见时使用互斥 footer 分支，仅保留“复制链接 + 恢复 CTA”；复制不可用时按钮保持可见但禁用，CTA 消失后恢复原动作集。该规则不改变详情页复制入口或危险区域。
+
+订阅跳转继续使用 Renderer 现有 URL helper 和系统浏览器：文件传 `keyfrom=html_share`，网站传 `keyfrom=site_deployment`，有发布尝试 ID 时附加编码后的 `trace_id`。参数位于 hash 路由内部，不跳账单页 `/subscription`，不添加会改变登录流程的 `source=electron`。Portal/Admin 无必改项；客户端七天 last-touch 订阅观察归因属于本增量，Portal 订单支付级精确归因不属于本增量。
+
+Portal 没有支付完成后回跳 Electron 的 deep link，因此客户端使用账号级共享恢复协调器：
+
+```text
+点击 CTA
+  -> 记录 owner/resource/surface/traceId 和一次性聚焦强刷标记
+  -> 系统浏览器打开套餐页
+  -> 首次回焦强制刷新订阅快照并消费强刷标记
+  -> 同一 owner 为 active
+  -> 请求云端无 cursor 第一页触发服务端幂等兜底
+  -> recoveryPending 时按 3s/10s/30s 有界重试
+  -> 每轮刷新目标分享/站点详情并失效该 owner 的 Library 查询
+  -> 服务端按 surface 返回可访问且 accessExpiresAt/expiresAt=null 后更新 UI
+```
+
+协调器不能放在 Library 页面生命周期内，否则用户从任务弹窗购买且未打开 Library 时无法补偿订阅事件失败或多于 64 条的恢复批次。客户端冷启动/恢复登录时，如果账号已为 active 而打开的资源仍返回 `automatic`，也触发一次相同兜底，不能只依赖进程内观测 `free -> active`。仍为 free、取消支付或浏览器购买了其他账号时保持原状态；再次点击 CTA 才重新 armed，后续普通聚焦继续使用原 30 秒节流。目标弹窗或页面卸载只移除该目标的详情刷新订阅，不取消同 owner 已启动的 cloud 恢复批次；换账号、登出、恢复完成或重试耗尽才清理账号级协调器状态。
+
+客户端不乐观改为 live。恢复成功按 surface 判断：文件 owner 响应为 `status=live && accessExpiresAt=null`；Library 为 `effectiveAvailable=true && accessExpiresAt=null`；站点/部署为分享 live、站点或 deployment online/live 且对应 `accessExpiresAt/expiresAt=null`，模式随后收敛为 `none`。响应合并必须区分字段缺失和显式 `null`；文件/Library 的 `accessExpiresAt: null` 与任务部署/Sites 的 `expiresAt: null` 都必须覆盖旧过期值，不能用 `newValue ?? oldValue` 留下过期快照，对应 TypeScript 类型必须显式允许 `null`。
+
+##### 客户端产品与订阅转化埋点
+
+本节的“埋点”专指在 Electron Renderer 产生、通过现有 `reportYdAnalyzer` 通道上传到分析服务端的客户端产品事件，用于恢复入口漏斗和订阅转化归因；不是 `lobsterai-server` 进程打印的运行日志，也不是分享访问 UV/PV 的 owner analytics API。恢复协调器内存中的 owner/resource 等待意图只用于刷新业务，不等于埋点，也不代表这些字段可以上传。
+
+恢复 CTA 跨越弹窗、列表和详情，不把非弹窗界面伪装成 `PublishingDialogExposure/Action`。新增统一客户端事件，但复用既有发布埋点的 attempt/exposure/operation 关联模型和七天 last-touch 逻辑：
+
+| 客户端事件 | 触发时机 | 用途 |
+| --- | --- | --- |
+| `lobsterai_publishing_recovery_cta_exposure` | CTA 首次实际可见；列表项要进入可视区，页面停留跨过到期边界后出现也要上报 | 恢复入口曝光分母 |
+| `lobsterai_publishing_recovery_cta_action` | 鼠标点击或键盘激活被接受后，在 armed 协调器和 `openExternal()` 之前 | CTA 点击与订阅归因起点 |
+| `lobsterai_publishing_subscription_observed` | 复用既有事件；对恢复 CTA 只在同一个人 owner 的权威 auth/quota 快照由 `free` 收敛为 `active` 时上报 | 客户端订阅转化终点 |
+| `lobsterai_publishing_recovery_result` | 订阅观察后，客户端取得资源权威响应或有界重试用尽 | 区分“订阅已观察”和“资源已恢复” |
+
+三个新增 recovery 事件使用独立 `PublishingRecoveryAnalyticsEventVersion=1` 和独立参数 builder，不直接复用会写入 `PublishingAnalyticsEventVersion=2` 的旧 `getAttemptParams`。共同字段为 `attemptId/exposureId/interactionType/feature/resourceKind/operationType/source/entryPoint/surface/recoverySurface/pageViewId/hasExistingResource/identityType/subscriptionRecoveryMode`，固定 `interactionType=recovery_cta`、`operationType=subscription_recovery`、`hasExistingResource=true`、`identityType=free`。点击事件另带 `actionType=click`、`ctaId=primary`、`target=pricing`、每次真实点击生成的 `operationId` 和 `exposureToClickMs`。`recoverySurface` 是新维度，不覆盖或改变旧 `surface` 语义；`operationType`、事件名、mode 与 surface 都必须集中定义常量，不在五个界面使用裸字符串。
+
+`recoverySurface` 、source 和 entry point 矩阵固定为：
+
+| `recoverySurface` | `source` | `entryPoint` |
+| --- | --- | --- |
+| `task_file_share_dialog` | 继承打开当前文件分享弹窗的 attempt | 继承原 attempt |
+| `task_site_deployment_dialog` | 继承打开当前网站部署弹窗的 attempt | 继承原 attempt |
+| `library_cloud_list` | `library_list` | 新增 `subscription_recovery_cta` |
+| `library_file_detail` | `library_preview` | `library_settings` |
+| `library_site_detail` | `library_preview` | `library_settings` |
+
+任务内弹窗从原 attempt 创建派生 recovery context，只复用 `attemptId/source/entryPoint/pageViewId`，不回写或突变原 share/deployment attempt，避免后续复制链接、更新或部署事件被误标成 `subscription_recovery`。两个任务弹窗的恢复 CTA 只上报新 recovery 事件，不同时上报旧 `PublishingDialogAction/DeploymentStatusAction`。`pageViewId` 在 Library surface 为可选页面生命周期标识。一次 CTA 可见周期内 `attemptId` 贯穿曝光、点击、后续订阅观察与恢复结果，并原样作为套餐 URL 的 `trace_id`；每次被接受的真实点击另生成新 `operationId`。
+
+曝光以“当前 owner + 页面/弹窗生命周期 + 本地稳定资源 key + recoverySurface + mode”在客户端去重；倒计时 rerender、3/10/30 秒刷新和虚拟列表重挂载不得重复上报。CTA 曾隐藏后再次满足、重新打开弹窗或新 page view 才生成新 `exposureId`。`exposureToClickMs` 是本次曝光创建到点击的墙上耗时，不尝试扣除列表离开可视区的时间。分析端曝光按 `exposureId`、点击/转化按 `operationId` 去重。安装 UUID 尚未可用时，现有 reporter 入队并复用同一 `eventId`；普通 HTTP/网络失败不保证复用 `eventId`，后续 `subscription_observed` 重试依赖不变的 `operationId/exposureId` 做业务去重。
+
+点击后复用 `rememberPublishingConversionAttribution`，每次点击覆盖上一个未过期触点，归因窗口保持 7 天。现有强制 `dialogType/dialogVisibleMs` 的 attribution input 改为支持 `interactionType=recovery_cta`：`dialogType/dialogVisibleMs` 对内联 CTA 可选，使用 `exposureToClickMs`。归因必须按 owner 隔离：本地 attribution envelope 可保存 `ownerAccountKey` 和本地 resource key，但上报时必须由显式 allowlist 序列化分析字段，严禁对本地记录使用 `...attribution` 整体展开。现有 attribution storage 版本升级，缺少 owner scope 的旧待处理记录直接丢弃。
+
+`reportPendingPublishingSubscriptionObserved` 改为接收当前权威 `ownerAccountKey + accountMode + subscriptionStatus`，`auth.ts` 初始化和刷新两个调用点都必须传入同一快照。当前 owner 与本地 attribution envelope 不一致时立即清理且不上报。恢复 CTA 点击前已证明个人普通账号，因此 attribution 固定写入 `identityType=free`，并只将同一 personal owner 后续观察到 `subscriptionStatus=active` 计为恢复转化；既有其他发布 CTA 对 `enterprise` 的旧规则不变。换账号、登出、关闭使用分析、7 天过期或 `subscription_observed` 成功上报后清理归因；上报失败保留归因，并在后续 auth/quota 刷新重试，每次尝试可生成新 `eventId`，分析端以 `operationId` 去重。当前 `reportDeploymentDialogAction()` 不会写入 last-touch，统一恢复 CTA helper 必须直接复用公共 attribution writer，不能为网站入口再双报 generic dialog action。
+
+客户端转化成功的口径只是：同 personal owner 在有效 last-touch 后 7 天内被权威 auth/quota 快照观察为 `subscriptionStatus=active`，且 `lobsterai_publishing_subscription_observed` 上传成功。它不可命名为 `payment_success`，也不代表资源恢复成功；报表统计该转化时固定筛选 `interactionType=recovery_cta && subscriptionStatus=active && confidence=known_free`。`automatic` 只有在资源权威响应已可访问且期限为 `null` 时才上报 `outcome=restored`；`redeploy_required` 在订阅后只能上报 `outcome=redeploy_ready`，真实重新部署结果继续使用现有 deployment result 事件。`recovery_result.outcome` 只允许 `restored/redeploy_ready/retry_exhausted/resource_unavailable`，并附带原点击 `operationId` 和从该次点击到终态的 `durationMs`；`retry_exhausted` 只在同 owner 已观察到 `active` 但有界恢复重试仍未收敛时上报。恢复协调器另存不上传 owner/resource key 的 in-flight analytics context；`subscription_observed` 上报成功只清理 last-touch，不清理该结果关联。同 owner 多次真实点击时只保留最新 `operationId` 的终态关联，旧操作不再上报 result。取消购买、仍为 free 或浏览器中买了其他账号不记为转化或恢复失败。
+
+埋点失败不得阻断打开套餐页。所有事件遵守 `usageAnalyticsEnabled`，不上传 `ownerAccountKey`、`shareId/siteId/deploymentId`、文件名、本地路径、URL、分享码、任务标题、搜索词或资源内容。
+
+公网访问者不是所有者，不展示购买按钮。文件和静态网站可自动恢复时显示“该分享已暂停 / 分享者订阅后，该分享将自动恢复”；Node 免费到期因公开访问会异步停止 deployment，统一保守显示“分享者订阅并重新部署后可恢复访问”。其他关闭原因保持既有页面。本增量只改人类可读文案，不改 HTTP 状态码、缓存头、访问码、管理员预览和安全判断顺序。
+
 ##### 现有字段即恢复标记
 
 `html_shares.access_expires_at` 同时承担以下语义：
@@ -805,35 +926,45 @@ Node 服务的手动重新部署继续复用现有部署接口和状态机。接
 
 ##### 云端接口与客户端行为
 
-首期不新增公开恢复 API。现有 `GET /api/library/cloud-items` 在满足“有效个人订阅 + 无 cursor 的第一页”时调用恢复服务，然后查询列表。接口可增加可选顶层字段：
+本增量不新增恢复写接口或新 endpoint。现有 `GET /api/library/cloud-items` 在满足“有效个人订阅 + 无 cursor 的第一页”时调用恢复服务，然后查询列表；现有 owner/Library 响应只增加可选恢复能力字段。接口顶层继续返回：
 
 ```json
 {
   "recoveryPending": true,
   "serverNow": 1787558400000,
-  "items": []
+  "list": [
+    {
+      "itemKind": "shared_file",
+      "accessExpiresAt": 1787558400000,
+      "effectiveAvailable": false,
+      "effectiveUnavailableReason": "share_not_live",
+      "subscriptionRecoveryMode": "automatic"
+    }
+  ]
 }
 ```
 
 - 数据库内可立即恢复的分享文件和在线网站应在本次响应中返回新状态；
 - `recoveryPending = true` 只表示仍有自动恢复中的静态网站或可立即自动处理的候选，不承诺全部成功；已停止且等待用户重新部署的 Node 服务不计入 pending，避免客户端无意义轮询；旧服务端不返回时客户端按 `false` 处理；
-- 客户端收到 `recoveryPending` 后最多在 3 秒、10 秒、30 秒各重拉一次当前第一页，成功、页面离开、账号变化或三次用尽即停止；不得无限轮询；
+- 账号级共享恢复协调器收到 `recoveryPending` 后最多在 3 秒、10 秒、30 秒各重拉一次无 cursor 第一页，成功、账号变化或三次用尽即停止；不得无限轮询，也不得依赖 Library 页面是否挂载；
 - 已有订阅/额度变更事件只负责清理相同账号的云端 query cache 并触发重拉，不直接把行乐观改为「可访问」；
 - 刷新与恢复期间保留当前类型、状态、关键词、收藏筛选、选中资源和滚动锚点；按稳定 `itemKind:itemId` 原位合并，不能跳回列表顶部。
 
-##### 并发、失败与可观测性
+##### 服务端恢复事务与运维可观测性
 
 1. 所有分享状态更新均使用条件更新；用户主动停止、管理员/审核关闭和删除操作优先于自动恢复。
 2. 订阅回调只在事务提交后投递恢复，不把第三方部署延迟引入订阅接口。
 3. 同一批次在一个事务内收敛；分享与静态 deployment 配对更新不一致时整体回滚，避免半恢复状态。Node 服务需要用户操作不视为恢复失败。
 4. 订阅提交后事件和页面兜底都按至少一次触发设计，业务结果依赖非空到期标记和条件更新幂等收敛。
-5. 日志使用 `[PublishingRecovery]` 模块前缀，记录 `trigger/userId/candidateCount/fileRestored/onlineSiteConverted/staticSiteRestored/skipped/pending/durationMs`；不得记录文件名、URL、分享码、任务标题或本地路径。
+5. 以下为 `lobsterai-server` 运行日志，不是客户端转化埋点：日志使用 `[PublishingRecovery]` 模块前缀，记录 `trigger/userId/candidateCount/fileRestored/onlineSiteConverted/staticSiteRestored/skipped/pending/durationMs`；不得记录文件名、URL、分享码、任务标题或本地路径。
 
 ##### 灰度与回滚
 
-- 发布顺序为服务端恢复合同在前、支持 `recoveryPending` 有界刷新客户端在后；旧客户端可忽略新增响应字段。
+- 发布顺序为服务端可选恢复能力字段和公网文案在前、支持主题 CTA 与账号级 `recoveryPending` 有界刷新的客户端在后；旧客户端可忽略新增响应字段。
+- 新客户端遇到旧服务端字段缺失、`null` 或未来未知枚举时按 `none` 并隐藏 CTA；不修改接口路径、请求参数、错误码、HTTP 状态、`disabledSource` 或 `effectiveUnavailableReason` 旧语义。
 - 历史已经升级的订阅用户不需要数据回填脚本；进入云端第一页会自然发现非空到期标记。
 - 回滚代码时，已经成功清空的到期时间属于订阅资源的正确状态，不回写旧截止时间；未成功资源仍保留标记，可在恢复能力重新上线后继续处理。
+- 本增量无 SQL/DDL；服务端或客户端任一侧单独回滚都不会触发错误恢复。新客户端在服务端回滚后隐藏入口，旧客户端在客户端回滚后忽略服务端新增 JSON 字段。
 
 #### FR-11.10 分享文件永久删除
 
@@ -1109,7 +1240,7 @@ const LibraryLoadingTiming = {
 当前空白行配合全宽分隔线的实现必须移除。新的加载视觉遵循：
 
 - 本地列表骨架模拟“32～36px 文件图标块 + 一条标题块 + 可选任务组头块”，行之间使用 8～12px 空隙，不使用 `border-y`、`divide-y` 或贯穿内容区的横线。
-- 云端骨架保留四列宽度，资源列显示图标与两条短文本块，状态和权限列各显示短圆角块，操作列显示小圆块；不得只渲染六个空白 `h-16` 行。
+- 云端骨架保留五个列轨道，资源列显示图标与两条短文本块，状态和权限列各显示短圆角块，无标题恢复入口列留空，操作列显示小圆块；不得只渲染六个空白 `h-16` 行。
 - 网格骨架继续使用圆角卡片和内容块，但去掉会形成整齐闪线的连续外框；骨架数量按首屏可容纳数量确定，不因请求时间重复挂载。
 - 骨架背景、占位块和进度图标全部使用现有主题 token；浅色、深色和系统主题下均不能让边框成为唯一可见元素。
 - 动画只作用于占位块透明度，不作用于容器尺寸、边框或整页位置；`prefers-reduced-motion` 下关闭脉冲动画。
@@ -1622,10 +1753,15 @@ interface SharedFileItem extends LibraryItemBase {
   sourceType: HtmlShareSourceType;
   accessMode: HtmlShareAccessMode;
   status: HtmlShareStatus;
-  disabledSource?: HtmlShareDisabledSource;
+  disabledSource?: HtmlShareDisabledSource | null;
   entryFile?: string;
   totalBytes?: number;
   clientSourceKey?: string;
+  accessExpiresAt?: number | null;
+  effectiveAvailable?: boolean;
+  effectiveExpiresAt?: number | null;
+  effectiveUnavailableReason?: LibraryCloudUnavailableReason;
+  subscriptionRecoveryMode?: PublishingSubscriptionRecoveryMode;
 }
 
 interface DeployedSiteItem extends LibraryItemBase {
@@ -1634,15 +1770,22 @@ interface DeployedSiteItem extends LibraryItemBase {
   url: string;
   siteKind: SiteKind;
   siteStatus: SiteStatus;
+  shareStatus: HtmlShareStatus;
+  disabledSource?: HtmlShareDisabledSource | null;
   accessMode: HtmlShareAccessMode;
   deploymentId?: string;
   deploymentStatus?: string;
+  accessExpiresAt?: number | null;
+  effectiveAvailable?: boolean;
+  effectiveExpiresAt?: number | null;
+  effectiveUnavailableReason?: LibraryCloudUnavailableReason;
+  subscriptionRecoveryMode?: PublishingSubscriptionRecoveryMode;
 }
 ```
 
 `LocalArtifactItem.latestSession` 在本地产物响应中是必填字段，`relatedSessionCount` 必须大于等于 1；基础类型保留可选仅为了兼容不保证本地任务关系的云端项。Main 若无法为某个内部索引解析出有效任务，不得把它序列化为 `LocalArtifactItem`。Renderer 仍需做防御性校验，但不能把缺失关系的响应渲染成用户可见兜底分组。
 
-绝对 `filePath` 只存在于本地 IPC 返回，不得被拼入云端 DTO 或埋点。
+绝对 `filePath` 只存在于本地 IPC 返回，不得被拼入云端 DTO 或埋点。Library 联合类型使用 epoch 毫秒的 `accessExpiresAt`；任务网站弹窗和 Sites 详情沿用 `ShareDeploymentRecord/SiteDetail` 的 ISO `expiresAt?: string | null`。两条链路都必须保留显式 `null`，以便恢复后清除旧期限。
 
 云端列表可访问性单独建模，不能覆盖本地产物可用性、分享原始状态或站点原始状态：
 
@@ -2421,7 +2564,7 @@ OpenClaw/Cowork 消息
 1. 用户进入「云端」，客户端以 `kind=all`、当前 `category/keyword/availability` 请求 Main；
 2. Main 把界面中的「网站」类型转换为 `kind=deployed_site`，把其他具体类型转换为 `kind=shared_file`，并从聚合接口读取稳定游标页；
 3. Main 将普通分享和部署站点归一为「可访问 / 不可访问」；服务端尚无统一 availability 参数时，有界读取后续页直到填满一页、来源耗尽或达到安全上限；
-4. Renderer 直接渲染统一四列扁平列表，不执行会话分组；
+4. Renderer 直接渲染统一扁平列表：四个有标题语义列加状态右侧的无标题恢复入口列，不执行会话分组；
 5. 用户点击分享条目后先用列表快照进入设置页并请求分享详情；点击站点条目进入网站设置页，分析作为标题栏独立动作；
 6. 分享设置修改访问权限或状态时调用既有写接口，成功后刷新当前云端查询，失败时回滚；
 7. 打开/复制链接统一使用服务端生成的当前公共 URL；
@@ -2524,7 +2667,7 @@ OpenClaw/Cowork 消息
 - 单个分享 30 天内 100 万条 IP 日聚合记录的 `COUNT(DISTINCT)` 查询计划与延迟；
 - Windows 10/11 和 macOS；Windows 验证包含 Defender 开启、NTFS 普通目录及 UNC/网络盘不可用时的降级场景。
 
-### 12.4 日志与可观测性
+### 12.4 诊断日志与性能可观测性（非恢复转化埋点）
 
 日志使用英文模块标签：
 
@@ -2555,7 +2698,7 @@ OpenClaw/Cowork 消息
 
 不在每个文件事件、每张卡片、每次 `stat` 打 info 日志。
 
-以上刷新日志默认使用 debug；只在发生请求失败、协调器队列无法收敛、出现一次以上 `contentToSkeletonTransitions/falseEmptyTransitions`、已显示骨架短于 200ms 或定向 IPC 降级为全量校验时记录 warn。数量必须分桶或聚合，不记录 `itemId`、文件名、路径、任务标题、关键词或滚动位置。若接入产品埋点，只允许上报相同非敏感聚合字段，并复用现有客户端到服务端的可靠上报通道；不能把 Renderer `console` 当作线上性能数据源。
+以上刷新日志默认使用 debug；只在发生请求失败、协调器队列无法收敛、出现一次以上 `contentToSkeletonTransitions/falseEmptyTransitions`、已显示骨架短于 200ms 或定向 IPC 降级为全量校验时记录 warn。数量必须分桶或聚合，不记录 `itemId`、文件名、路径、任务标题、关键词或滚动位置。这些性能数据若另行接入产品埋点，只允许上报相同非敏感聚合字段，并复用现有可靠上报通道；不能把 Renderer `console` 当作线上性能数据源。FR-11.9 的恢复 CTA 转化埋点则是本次明确必做项，以其独立事件合同为准。
 
 ## 13. 涉及文件与模块边界
 
@@ -2574,12 +2717,17 @@ OpenClaw/Cowork 消息
 | `src/renderer/components/library/libraryRefreshCoordinator.ts` | 单订阅事件合并、300ms/1,000ms 调度、单请求与单尾随约束；保持为可注入时钟的纯 TypeScript 模块 |
 | `src/renderer/components/library/libraryLocalQueryState.ts` | 当前本地查询匹配、稳定 ID upsert、不可用项移除、排序窗口与游标边界纯函数；不访问 IPC 或 DOM |
 | `src/renderer/components/library/libraryQueryTransitionState.ts`（建议新增） | 本地/云端共用的 `initial/transitioning/settled/refreshing/appending` reducer、query 快照 LRU、迟到响应保护和显现时序纯逻辑；不访问 IPC、DOM 或 i18n |
-| `src/renderer/components/library/LibraryQuerySkeleton.tsx`（建议新增） | 本地列表、本地网格和云端四列的结构化、无分隔线骨架；统一 reduced-motion、ARIA 和主题 token |
+| `src/renderer/components/library/LibraryQuerySkeleton.tsx`（建议新增） | 本地列表、本地网格和云端五轨（含留空的无标题恢复入口列）的结构化、无分隔线骨架；统一 reduced-motion、ARIA 和主题 token |
 | `src/renderer/components/library/LibrarySharedFilesView.tsx` | 云端类型/可访问性筛选、分享与站点联合列表、分享设置/分析子路由、永久删除危险区域、自动续页和空态；消费拆分后的查询状态，不自行绘制空白线条骨架（文件名保留为渐进迁移兼容） |
 | `src/renderer/components/library/LibraryPreviewModal.tsx` | 本地产物沉浸式预览与统一动作菜单 |
 | `src/renderer/components/library/HtmlShareAnalyticsView.tsx` | 分享文件摘要指标、日期范围、趋势、空态和错误重试；不承载 owner 校验或原始 IP 数据 |
 | `src/renderer/components/library/HtmlShareDeleteDialog.tsx`（建议新增） | 删除影响说明、完整文件名确认、提交锁定和错误展示；只负责交互，不拼接接口或缓存逻辑 |
 | `src/renderer/components/analytics/AccessAnalyticsChart.tsx`（可选提取） | 分享与网站共用的纯展示折线图，指标名称和序列由调用方传入 |
+| `src/renderer/services/publishingSubscriptionRecoveryCoordinator.ts`（建议新增） | 账号级 CTA 等待意图、一次性回焦强刷、冷启动兜底、无 cursor 第一页和 3/10/30 秒有界重试；生命周期独立于 Library 页面 |
+| `src/renderer/components/artifacts/PublishingSubscriptionRecoveryButton.tsx` | 普通/紧凑两种尺寸的浅色黑底白字、深色白底黑字 CTA；接收已经归一化的 mode 与埋点上下文，不自行判断服务端关闭原因 |
+| `src/shared/analytics/constants.ts`、`src/renderer/components/artifacts/publishingAnalytics.ts` | 增加 recovery exposure/action/result 事件、`subscription_recovery` operation 和五个 surface 常量；抽取弹窗/内联 CTA 共用的上报与 last-touch writer |
+| `src/renderer/services/publishingConversionAttribution.ts` | 归因记录扩展 mode/surface，增加仅本地保存的 owner scope 并升级 storage version；继续复用七天 `subscription_observed` 逻辑 |
+| `src/renderer/components/artifacts/publishingAnalytics.test.ts`、`src/renderer/services/publishingConversionAttribution.test.ts`、恢复 CTA 组件测试 | 覆盖五 surface 字段、曝光去重、`attemptId=trace_id`、owner 隔离、网站归因、失败重试和隐私白名单 |
 | `src/shared/library/cloudAvailability.ts` | 分享/站点到「可访问 / 不可访问」的共享纯函数 |
 | `src/renderer/components/library/*` | 本地产物卡片、日期/任务分组、动作策略、空态和缩略图缓存；不渲染未关联任务兜底组 |
 
@@ -2599,9 +2747,17 @@ OpenClaw/Cowork 消息
 | `src/renderer/components/library/libraryItemActionPolicy.ts` | 为分享文件固定设置/链接/会话动作；列表菜单继续不放状态切换或永久删除，删除只在设置页危险区域 |
 | `src/renderer/services/i18n.ts` | 中英文资料库文案；补永久删除影响、输入确认、需先停止、能力不可用和错误文案 |
 | `src/renderer/components/sites/SitesView.tsx` | 接收 `shareId` 深链并复用既有站点详情、分析和设置 |
-| `src/shared/htmlShare/constants.ts` | 新增集中定义的 analytics 与 `DeletePermanently` IPC、范围和响应类型，不复用 `SiteAnalytics` 业务类型 |
-| `src/main/libs/htmlShare/htmlShareClient.ts` | 调用 owner analytics 与 `/permanent` 删除接口，只传白名单参数并归一化响应 |
-| `src/main/main.ts`、`src/main/preload.ts`、`src/renderer/types/electron.d.ts` | 注册并暴露最小 analytics/永久删除 bridge；Main 校验 shareId/日期范围，不接受 Renderer 传 owner 或文件路径 |
+| `src/shared/publishing/constants.ts` | 在现有发布常量文件增加 `PublishingSubscriptionRecoveryMode` 和 fail-closed normalizer；缺失、`null`、未知值统一为 `none` |
+| `src/shared/library/types.ts`、`src/shared/shareDeployment/constants.ts` | Library 补可选 mode 与可空 `accessExpiresAt/effectiveExpiresAt`；部署记录把 `expiresAt` 收紧为 `string \| null`，显式 null 可覆盖旧值 |
+| `src/main/library/libraryCloudClient.ts`、`src/main/libs/htmlShare/htmlShareClient.ts`、`src/main/libs/shareDeployment/shareDeploymentClient.ts` | 白名单解析并透传 mode；保留期限字段的 missing 与 null 差异，不解析服务端文案 |
+| `src/main/preload.ts`、`src/renderer/types/electron.d.ts` | 在既有 bridge 上透传新增可选字段，不新增恢复写 IPC |
+| `src/renderer/components/artifacts/ArtifactFileShareController.tsx`、`ArtifactFileShareDialog.tsx`、`ArtifactPanel.tsx` | 文件/网站任务弹窗接入共用 CTA；修正当前 `??` 合并造成的期限 null 无法清理问题 |
+| `src/renderer/components/library/LibrarySharedFilesView.tsx`、`src/renderer/components/sites/SitesView.tsx` | 列表与两类详情接入同一展示策略；列表恢复按钮位于 180px 状态列右侧的无标题独立列，阻止冒泡并按各自权威响应刷新 |
+| `src/renderer/services/auth.ts` | 复用现有 30 秒窗口聚焦刷新，在协调器 armed 时允许且只允许一次绕过节流，并把结果交给账号级协调器 |
+| `src/renderer/services/endpoints.ts` | 复用现有 `getPortalPricingUrl` 与 `PortalPricingKeyfrom`，文件/网站传不同 keyfrom 和可选 trace；`src/main/libs/endpoints.ts` 不修改 |
+| `src/shared/htmlShare/constants.ts` | 新增集中定义的分享访问 analytics API 与 `DeletePermanently` IPC、范围和响应类型，不复用 `SiteAnalytics` 业务类型；与客户端转化埋点无关 |
+| `src/main/libs/htmlShare/htmlShareClient.ts` | 调用 owner 访问 analytics 与 `/permanent` 删除接口，只传白名单参数并归一化响应 |
+| `src/main/main.ts`、`src/main/preload.ts`、`src/renderer/types/electron.d.ts` | 注册并暴露最小访问 analytics/永久删除 bridge；Main 校验 shareId/日期范围，不接受 Renderer 传 owner 或文件路径 |
 | 网站分析图表现有组件 | 仅在视觉复用收益明确时提取 `AccessAnalyticsChart`，保持网站 `pageViews/topPages` 与文件 `accesses` 的领域类型独立 |
 
 `App.tsx`、`main.ts`、`sqliteStore.ts` 和当前 `LibraryView.tsx` 都是大型文件。云端管理增量不得继续堆入 `LibraryView.tsx`：联合列表与分享设置保留独立组件，容器只保留来源路由、查询协调和共享错误边界；不顺手拆分本地产物索引或做大范围格式化。
@@ -2642,6 +2798,9 @@ OpenClaw/Cowork 消息
 | `LibraryService.java` | 校验 kind/status 组合并组装 `sharedStatusCounts` |
 | `LibraryMapper.java/xml` | 普通分享只查询 live/disabled，增加服务端状态过滤和 MySQL 5.7 条件聚合 facet |
 | `LibraryCloudListResponse.java` | 增加分享状态 counts DTO |
+| `SubscriptionRecoveryModeResolver.java`（建议新增） | 集中计算固定小写的 `automatic/redeploy_required/none`，与实际恢复候选共享常量和矩阵；Controller 不比较裸关闭原因 |
+| `HtmlShareCreateResponse` / `HtmlShareStatusResponse` / `ShareDeploymentResponse` / `SiteListItem` / `LibraryCloudItem` | 新增可选/可空 wire 字段并统一调用 resolver；旧字段、路径、参数、错误码和 HTTP 语义不变 |
+| `LibraryMapper.java/xml` / `SiteMapper.java/xml` | 一次性选择 `disabled_reason/access_expires_at` 与最新 deployment `status/active` 等内部投影列，禁止逐条补查形成 N+1；不增加表、列或索引 |
 | `PublishingSubscriptionRecoveryService.java`（已新增） | 统一 64 条候选锁定、文件/在线网站条件恢复、停止静态网站状态恢复和 Node 待用户重部署分类；由订阅提交后事件与云端第一页复用 |
 | `PublishingSubscriptionActivatedEvent.java` / `PublishingSubscriptionRecoveryListener.java`（已新增） | 订阅事务提交后异步触发恢复，隔离订阅主事务耗时与失败 |
 | `HtmlShareMapper.java/xml` | 增加按 owner + `access_expires_at IS NOT NULL` 的 MySQL 5.7 游标查询，以及仅针对普通用户固定到期原因的条件恢复语句 |
@@ -2652,6 +2811,7 @@ OpenClaw/Cowork 消息
 | `ShareDeploymentMapper.java/xml` / `ShareDeploymentService.java` | 在线网站清除 deployment 到期时间；停止静态网站条件恢复现有 deployment；Node 用户主动重新部署沿用现有状态机，自动链路不得启动 Node 服务 |
 | `SubscriptionService.java` | 订阅激活事务提交后异步触发恢复；恢复失败不得回滚订阅 |
 | `LibraryService.java` / `LibraryCloudListResponse.java` | 有效个人订阅的无 cursor 第一页执行兜底检查，并可返回向后兼容的 `recoveryPending` |
+| `HtmlShareStaticController.java` / `ShareDeploymentServiceHostFilter.java` | 免费固定期限关闭时输出暂停/恢复说明；Node 始终使用“订阅并重新部署”的保守文案，不改变状态码、缓存和安全校验顺序 |
 | `SiteListItem`/映射（可选） | 若资料库直接复用站点 DTO，则补 lineage/key；推荐独立 Library DTO |
 | `sql/Vxx__*.sql`（条件） | 分享管理与永久删除首期不新增核心 DDL；仅当本仓库实现队列消费者且现有状态不足以原子抢占时，单独评审兼容迁移 |
 
@@ -2716,7 +2876,7 @@ OpenClaw/Cowork 消息
 2. **原子化查询切换**：把来源、类型、收藏、可访问性和已防抖关键词统一接到 `QUERY_CHANGED` action；删除“控件先渲染、被动 effect 下一帧再进入 initial”的状态间隙。网络请求仍由 effect 执行，但 effect 不再决定展示 phase。
 3. **接入页面级快照 LRU**：按 6.2.3 的 query/scope 规则保存最多 8 个快照；先覆盖本地与云端来源切换，再覆盖同来源筛选。登出和 owner scope 变化必须先通过自动测试证明不会短暂泄露旧账号数据。
 4. **拆分加载派生值**：以 `showInitialSkeleton/isTransitioning/isRefreshing/isAppending/isQueryBusy/ariaBusy` 替换跨组件共用的 `loading`；列表替换只依赖延迟后的 `showInitialSkeleton`，工具栏进度依赖 `isTransitioning || isRefreshing`，刷新按钮禁用依赖 `isQueryBusy`，加载更多只依赖 `isAppending`。
-5. **替换线条骨架**：新增本地列表、本地网格和云端四列结构化骨架；移除 loading 分支中的 `border-y/divide-y/row border-b`，保留正式列表自身的分隔线。补浅色、深色和 reduced-motion 快照/组件断言。
+5. **替换线条骨架**：新增本地列表、本地网格和云端五轨结构化骨架，其中无标题恢复入口列留空；移除 loading 分支中的 `border-y/divide-y/row border-b`，保留正式列表自身的分隔线。补浅色、深色和 reduced-motion 快照/组件断言。
 6. **补错误和可访问性反馈**：过渡快照设为只读、`aria-busy`，慢请求只播报一次本地化加载文本；有旧快照的失败态明确说明当前显示的是上次结果，无快照时进入来源级错误，不经过空态。
 7. **加入无敏感数据观测**：聚合记录 query 来源、是否快照命中、是否在 150ms 内完成、骨架是否显现、可见时长和迟到响应数量；不记录关键词、文件名、路径、资源 ID 或 owner 标识。
 8. **最后进行 Electron 录屏回归**：分别以快速 IPC、500ms 延迟和失败响应覆盖 Tab、收藏、类型、状态、搜索、刷新与续页；在 60fps 录屏中逐帧确认没有整行横线、错误空态和跨账号旧内容。
@@ -2737,7 +2897,19 @@ OpenClaw/Cowork 消息
 10. 账号 scope 收藏；
 11. 离线、降级和错误态。
 12. 增加订阅升级恢复：订阅事务提交后主动触发、云端第一页兜底、分享文件与在线网站条件恢复、静态网站 CAS 自动恢复、Node 服务手动重新部署和可选 `recoveryPending` 有界刷新；不新增 DDL。
-13. 增加分享文件永久删除：先完成服务端事务、deleted 查询过滤、免费历史配额回归和迟到写保护，再完成管理员后台兼容、NOS 消费者验证，最后开放客户端危险区域与文件名确认。
+13. 增加订阅恢复入口：服务端先返回兼容 mode 投影和公网暂停文案，客户端后接任务弹窗、云端列表/详情、订阅跳转和账号级恢复协调器；不新增恢复写接口或 DDL。
+14. 增加分享文件永久删除：先完成服务端事务、deleted 查询过滤、免费历史配额回归和迟到写保护，再完成管理员后台兼容、NOS 消费者验证，最后开放客户端危险区域与文件名确认。
+
+### 本次订阅恢复入口增量的落地顺序
+
+1. **冻结服务端矩阵**：先为文件、在线 Node/静态站点、停止静态站点、停止 Node、人工/管理员/审核/额度关闭、权益宽限结束和未知数据建立 resolver 单测；`automatic` 与实际恢复候选一致，stopped Node 只返回 `redeploy_required`。
+2. **扩展兼容响应**：把 mode 接到分享创建/状态/详情、部署响应、Site 列表/详情和 Library 条目；Library/Site 查询一次性补全内部投影列并检查查询次数，不引入 N+1 或数据库迁移。
+3. **更新公网暂停页**：文件/静态网站输出分享者订阅后自动恢复说明；Node 一律保守说明订阅后需重新部署；验证人工关闭、审核、访问码、管理员预览、状态码和缓存头不回归。
+4. **打通客户端模型**：先在 shared constants 中实现 fail-closed normalizer，再依次透传 HtmlShare、ShareDeployment、Site 和 Library；修复 `accessExpiresAt/expiresAt` 显式 null 合并，旧服务端/未知枚举必须隐藏 CTA。
+5. **接入共享 CTA**：在任务文件弹窗、任务网站弹窗、云端列表、文件详情和站点详情接入同一策略和主题按钮；云端列表在 180px 状态列右侧使用无标题独立恢复入口列，不把 CTA 放入状态单元，列表按钮阻止冒泡；所有文案补中英文，复用 Renderer pricing helper，明确不修改 Main `endpoints.ts`。
+6. **实现账号级恢复协调器**：点击时记录 owner/resource/surface/trace 与一次性 armed 标记；首次回焦绕过现有 30 秒节流一次；同 owner active 或 active 冷启动时请求 cloud 无 cursor 第一页，并按 `recoveryPending` 做 3/10/30 秒有界重试。
+7. **按 surface 收敛**：每轮 cloud 响应后刷新仍订阅中的目标详情并使 owner 的 Library 查询失效；页面卸载只移除目标订阅，不终止账号级批次；仅在文件、Library、站点/部署各自权威状态和期限字段均恢复后更新 UI。
+8. **灰度与回滚**：服务端先发、客户端后发。服务端字段回滚时新客户端 fail closed，客户端回滚时旧版本忽略新字段；公网文案可独立回滚。V1.7 不重复执行或修改 V77。
 
 ### 阶段 4：迁移和灰度
 
@@ -2780,6 +2952,10 @@ OpenClaw/Cowork 消息
 - 定向合并覆盖新增项、字段更新、跨排序边界、失去展示资格、超过 100 个 ID 分片和旧 bridge 无 ID 降级；
 - 批量 `getLocalItems` 拒绝空数组、超过 100 个 ID、重复/非法 ID 和任何文件路径输入；
 - 云端可访问性归一化、类型到 `kind/category` 的映射、queryKey 隔离和游标重置；
+- 恢复 mode normalizer 对 `automatic/redeploy_required/none` 原样接受，对缺失、`null`、大小写变体和未来未知值统一 fail closed 为 `none`；
+- CTA 展示策略同时校验个人普通账号、surface 截止时间已到、当前不可访问和允许模式；预先返回 mode 的未到期资源不显示按钮，倒计时跨边界后无需网络请求即可显示；
+- 响应合并分别覆盖 `accessExpiresAt: null` 与 `expiresAt: null`，确保显式 null 清理旧值而字段缺失保持兼容；
+- 账号级恢复协调器覆盖 armed 首次回焦、未购买保持 free、同 owner active、active 冷启动、3/10/30 秒重试、目标卸载、账号切换和重试耗尽，确保最多一个 owner 批次且不依赖 Library mount；
 - 分享列表菜单动作策略不出现「重新打开」「删除分享记录」和本地文件动作；永久删除只能从设置页危险区域进入；
 - 分享设置写操作成功同步列表缓存、失败回滚；
 - 永久删除要求 disabled 和完整文件名精确匹配；live、空白、大小写或 Unicode 不一致均不能提交；
@@ -2804,11 +2980,13 @@ OpenClaw/Cowork 消息
 ### 15.3 Renderer 测试
 
 - 来源和分类切换；
-- 云端使用分享文件与部署站点混排的扁平四列表格，不生成日期或会话组头；
+- 云端使用分享文件与部署站点混排的扁平表格，包含四个有标题语义列和状态右侧的无标题恢复入口列，不生成日期或会话组头；
 - 可访问性、资源类型、关键词组合筛选及迟到响应丢弃；
-- 云端行只显示资源、统一状态、访问权限和更多操作；站点可补充域名，不显示访问量、文件大小或更新时间；
+- 云端行只显示资源、统一状态、条件恢复入口、访问权限和更多操作；状态列保持 180px 独立上下布局，无恢复入口的行保留空列占位；站点可补充域名，不显示访问量、文件大小或更新时间；
 - 点击分享行进入分享设置，更多按钮不触发行跳转；
 - 分享设置页加载详情、修改访问权限/状态、锁定 disabledSource、错误回滚；
+- 任务文件/网站弹窗、云端列表、文件详情和站点详情对同一恢复状态显示一致 CTA；列表按钮点击/键盘激活不触发行详情，`automatic` 与 `redeploy_required` 使用正确文案；
+- 恢复 CTA 仅使用主题 `primary/primary-foreground/primary-hover`，覆盖浅色、深色和非默认主题；文件与网站分别生成 `html_share/site_deployment` keyfrom，并正确编码可选 trace；
 - 分享设置标题栏显示独立分析入口；设置页与分析页互相返回时不丢失未提交草稿；
 - 分享分析默认 7 天、可切换 30 天，摘要/趋势/零数据/局部错误正确，且不渲染热门页面或访客明细；
 - 停止访问的分享仍可进入分析并查看历史数据；
@@ -2824,7 +3002,7 @@ OpenClaw/Cowork 消息
 - 来源、类型、收藏、可访问性和搜索切换时，有快照不挂载整页骨架；无目标来源快照时也不显示上一来源内容、错误空态或线条骨架；
 - 首屏内容出现后，任意 `recorded/file_changed/repair/session_deleted` 事件都不会重新渲染整页骨架；
 - 慢请求中的同来源旧快照设置 `aria-busy` 且条目动作不可用，筛选工具栏仍可继续操作；失败后明确标识上次结果，无快照失败直接进入来源级错误；
-- loading 分支中不出现 `border-y/divide-y/row border-b` 组合；本地列表、网格和云端四列骨架均有结构化占位块，并覆盖 reduced-motion；
+- loading 分支中不出现 `border-y/divide-y/row border-b` 组合；本地列表、网格和云端五轨骨架均有结构化占位块，无标题恢复入口列留空，并覆盖 reduced-motion；
 - 100 个事件风暴只形成一次批量 React 状态提交；请求进行中追加事件只形成一个尾随批次；
 - 回填从空索引开始时只发生“初始占位或空态 → 列表”的单向转换，不发生“列表 → 骨架”；
 - 在列表中部滚动、打开更多菜单或预览时注入回填和 watcher 事件，滚动锚点、筛选、菜单及预览保持不变；
@@ -2876,6 +3054,9 @@ OpenClaw/Cowork 消息
 - 尚在线网站可直接转换为订阅资源；已停止静态网站只有自动恢复成功后才变为可访问；已停止 Node 服务不会被任何自动检查启动，列表提示用户重新部署；
 - 候选查询、条件更新和游标分页兼容 MySQL 5.7，成功恢复后 `access_expires_at IS NULL` 且不再命中候选；
 - 订阅恢复失败不影响订阅激活事务，下一次云端第一页可继续恢复。
+- 恢复 mode resolver 覆盖未到期/已到期文件、在线网站、停止静态、停止 Node、分享关闭来源与 deployment `status/active` 笛卡尔关键组合；stopped Node 在到期前后均为 `redeploy_required`，但永不进入自动候选或 pending；
+- `HtmlShareCreateResponse/HtmlShareStatusResponse/ShareDeploymentResponse/SiteListItem/LibraryCloudItem` 只增加可选字段，旧请求路径、参数、错误码与序列化字段保持；Library/Site 投影不得产生逐条查询；
+- 公网文件/静态页面对免费过期显示自动恢复说明，Node 即使异步停止尚未完成也使用重新部署说明；人工/管理员/审核/额度关闭、访问码和 Admin preview 保持原行为；
 
 服务端部分测试依赖 Redis 或外部发布服务时，可以只运行不依赖外部服务的单元/Mapper 测试；本设计阶段不执行服务端测试。
 
@@ -2908,6 +3089,12 @@ OpenClaw/Cowork 消息
 25. 在测试环境跟踪 `shared_file_deleted` 队列到 NOS 实际对象不存在，模拟删除失败后可重试并产生告警；消费者未验证时阻止正式发布。
 26. 对本地/云端列表分别注入 `<150ms`、约 500ms、失败和乱序响应，以 60fps 录制并逐帧切换来源、收藏、类型、可访问性和搜索；确认快速请求无加载态，慢请求无全宽横线，错误不经过空态，只有最后一次 query 提交。
 27. 在个人账号 A、企业账号 B 和登出状态间切换，确认云端快照不跨 scope 短暂出现；随后切回本地产物，确认本地快照不因登录变化丢失。
+28. 在五个指定 surface 分别准备过期文件、在线站点、停止静态和停止 Node，确认 CTA 位置、文案、浅色黑底白字/深色白底黑字、焦点样式与列表阻止冒泡均符合设计；云端列表状态列保持 180px 和状态/有效期上下布局，CTA 在其右侧 120px 无标题独立列内左对齐并紧邻状态，无 CTA 行仍保持列对齐；在中英文及 900px 最小宽度下确认状态、按钮及焦点环互不重叠，英文按钮不被裁切且不接触访问权限列；两个任务弹窗恢复态只出现复制和恢复两个底部业务按钮，人工/管理员/审核/额度关闭不显示。
+29. 文件与网站 CTA 分别打开现有 Portal 套餐页并携带正确 keyfrom；切回客户端但未购买时状态不变，首次回焦只强刷一次，后续回焦恢复 30 秒节流。
+30. 同一 owner 订阅生效后，在未打开 Library、关闭目标弹窗以及客户端冷启动三种路径下验证账号级 cloud 首页面兜底均可运行；目标卸载不终止批次，切换账号或登出立即停止。
+31. 恢复完成后分别验证文件/Library 的 `accessExpiresAt=null` 与部署/Sites 的 `expiresAt=null` 清除旧倒计时，状态以各 surface 权威响应收敛；模拟旧服务端、null 和未知 mode 时稳定隐藏入口。
+32. 访问公网过期链接，文件/静态网站提示分享者订阅后自动恢复，Node 提示订阅并重新部署；确认 HTTP 状态码、缓存、访问码和管理员预览不变。
+33. 开启客户端使用分析后，在五个 recovery surface 分别验证曝光、点击、`subscription_observed` 和恢复结果事件；倒计时、rerender、轮询和虚拟列表重挂载不重复曝光，`attemptId=trace_id`且全链路关联一致。随后验证换账号、7 天过期、上报失败重试和关闭使用分析，并检查 payload 不包含 owner/resource ID、文件名、路径、URL、分享码、任务标题和搜索词。
 
 ## 16. 边界情况
 
@@ -3014,11 +3201,11 @@ OpenClaw/Cowork 消息
 - [ ] 本地产物使用日期/任务分组列表或网格；云端使用分享文件与部署站点混排的扁平管理列表。
 - [ ] 本地产物支持分类、搜索、收藏、排序和网格/列表；云端支持类型、可访问性、搜索、本地收藏筛选和刷新。
 - [ ] 宽屏紧凑列表使用单列，不出现超长单项和大面积右侧空白。
-- [ ] 本地产物列表项只常驻图标、标题和更多操作，时间显示在任务组头；云端行只常驻资源、统一状态、访问权限和更多操作。
+- [ ] 本地产物列表项只常驻图标、标题和更多操作，时间显示在任务组头；云端行只常驻资源、统一状态、条件恢复入口、访问权限和更多操作，恢复入口使用状态右侧无标题独立列。
 - [ ] 单击本地产物直接打开沉浸式预览；单击分享文件进入分享设置，单击站点进入网站设置；「更多」只打开操作菜单。
 - [ ] 本地产物条目菜单与预览使用同一动作集；条目菜单包含分享、收藏、系统应用打开和文件夹定位，不展示相关任务。
 - [ ] 本地产物预览标题栏只显示图标、文件名、最后修改时间、分享和收藏；系统应用打开和文件夹定位进入「更多」浮层，不占用主体预览区域。
-- [ ] 云端列表只显示资源、统一可访问状态、访问权限和更多操作，不显示访问量、文件大小、创建时间或最近更新时间。
+- [ ] 云端列表只显示资源、统一可访问状态、条件恢复入口、访问权限和更多操作，不显示访问量、文件大小、创建时间或最近更新时间；状态列保持 180px 独立上下布局，无 CTA 行保留恢复入口列空占位。
 - [ ] 分享文件列表菜单使用「分享设置 / 打开链接 / 复制链接 / 可选相关会话」，不出现「重新打开」「删除分享记录」或本地路径动作。
 - [ ] 分享设置页仅在一处显示资源状态；可查看链接、权限、分享时间、最后修改时间及可选相关任务，不显示文件大小、访问量或无服务端能力支撑的「允许下载」。
 - [ ] 分享设置页底部有独立危险区域；live 必须先停止，disabled 需完整文件名确认；影响说明明确区分云端内容、本地原件和免费名额。
@@ -3062,12 +3249,15 @@ OpenClaw/Cowork 消息
 - [ ] 现有分享、站点和旧列表接口保持兼容。
 - [ ] SQL 在 MySQL 5.7 执行，不使用 MySQL 8 专属能力。
 - [ ] 索引变更只在 EXPLAIN/压测证明必要后上线。
-- [ ] 普通用户升级为有效订阅后，所有仍带固定到期时间的个人分享文件和网站会被自动检查；分享文件与在线网站无需逐条操作，已停止 Node 服务明确提示用户重新部署。
-- [ ] 尚未到期资源清空旧截止时间；已到期分享仅在系统固定时限到期原因下自动恢复；访问 URL、权限模式、分享码、内容版本和 lineage 保持不变。
+- [x] 普通用户升级为有效订阅后，所有仍带固定到期时间的个人分享文件和网站会被自动检查；分享文件与在线网站无需逐条操作，已停止 Node 服务明确提示用户重新部署。
+- [x] 尚未到期资源清空旧截止时间；已到期分享仅在系统固定时限到期原因下自动恢复；访问 URL、权限模式、分享码、内容版本和 lineage 保持不变。
 - [x] 已停止静态网站只有条件恢复成功后才显示可访问；已停止 Node 服务不会被订阅事件或云端页启动，只有用户主动重新部署成功后才显示可访问。
-- [ ] 用户、管理员、审核、配额、删除和未知安全状态不会被自动恢复覆盖。
+- [x] 用户、管理员、审核、配额、删除和未知安全状态不会被自动恢复覆盖。
 - [x] 订阅生效事件和云端无 cursor 第一页共用同一幂等恢复服务；并发触发不重复恢复静态网站、不启动 Node 服务，失败不回滚订阅且可由云端页继续重试。
 - [x] 自动恢复不新增数据库表；候选和幂等性复用 `access_expires_at` 与现有 deployment 状态，SQL 兼容 MySQL 5.7。
+- [x] 五个恢复入口使用统一客户端曝光/点击事件和七天 last-touch，`attemptId` 与套餐页 `trace_id` 一致，网站入口不遗漏归因也不双报。
+- [x] 曝光、点击、订阅观察和恢复结果可按 `recoverySurface/subscriptionRecoveryMode` 分析；关闭使用分析或切换 owner 时不上报错误转化。
+- [x] 客户端转化埋点不上传 owner/resource ID、文件名、路径、URL、分享码、任务标题、搜索词或资源内容。
 
 ### 17.6 质量门槛
 
@@ -3097,7 +3287,7 @@ OpenClaw/Cowork 消息
 7. 收藏是按设备/账号 scope 隔离的本地逻辑，不同步。
 8. 服务端不建资料库主表或订阅恢复表；云端聚合门面除返回元数据外，仅在订阅恢复场景调用既有资源状态机，成功后通过现有字段自然幂等。
 9. MySQL 查询使用派生表、`UNION ALL`、相关子查询和显式游标谓词，兼容 5.7。
-10. UI 采用 LobsterAI 主题和管理页布局：1120px 有界内容区、本地产物单列分组、云端四列扁平管理列表、详情承载高级信息。
+10. UI 采用 LobsterAI 主题和管理页布局：1120px 有界内容区、本地产物单列分组、云端四个有标题语义列加无标题恢复入口列的扁平管理列表、详情承载高级信息。
 11. 云端默认不按会话分组；分享和站点混排，状态统一为「可访问 / 不可访问」，列表不展示访问量、文件大小或更新时间。
 12. 分享条目进入分享设置，站点条目进入网站设置；两类分析均由设置页标题栏进入，云端列表菜单不直接切换状态或删除。普通分享的永久删除只位于分享设置页危险区域，必须先停止并输入完整文件名确认。
 13. 当前数据库足以支持统一云端管理页首期方案；「允许下载」在服务端提供字段和强制校验前不进入正式客户端。

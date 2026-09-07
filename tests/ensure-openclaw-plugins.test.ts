@@ -167,16 +167,13 @@ describe('ensure-openclaw-plugins', () => {
       id: 'netease-bee-alias',
       npm: 'openclaw-netease-bee',
     })).toEqual({
-      npm_config_legacy_peer_deps: 'true',
       npm_config_allow_git: 'all',
     });
 
     expect(buildPluginInstallEnv({
       id: 'openclaw-weixin',
       npm: '@tencent-weixin/openclaw-weixin',
-    })).toEqual({
-      npm_config_legacy_peer_deps: 'true',
-    });
+    })).toEqual({});
   });
 
   test('finds plugins installed in the legacy extensions directory', () => {

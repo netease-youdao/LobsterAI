@@ -1,3 +1,4 @@
+import { SparklesIcon } from '@heroicons/react/24/outline';
 import React, { useEffect } from 'react';
 
 import { type AppUpdateRuntimeState, AppUpdateStatus } from '../../../shared/appUpdate/constants';
@@ -5,21 +6,7 @@ import { i18nService } from '../../services/i18n';
 
 interface AppUpdateBlockingPanelProps {
   updateState: AppUpdateRuntimeState;
-  onCancelDownload: () => Promise<void> | void;
 }
-
-const Spinner: React.FC = () => (
-  <svg
-    className="h-5 w-5 animate-spin"
-    xmlns="http://www.w3.org/2000/svg"
-    fill="none"
-    viewBox="0 0 24 24"
-    aria-hidden="true"
-  >
-    <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-    <path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V1C5.925 1 1 5.925 1 12h3z" />
-  </svg>
-);
 
 const logBlockingPanelStatus = (status: string, version: string): void => {
   const message = `blocking panel rendered status=${status} version=${version}`;
@@ -31,27 +18,27 @@ const logBlockingPanelStatus = (status: string, version: string): void => {
   }
 };
 
-const AppUpdateBlockingPanel: React.FC<AppUpdateBlockingPanelProps> = ({
-  updateState,
-  onCancelDownload,
-}) => {
+/**
+ * Full-screen panel shown from the moment the user confirms an install until
+ * the app quits for the installer. Styled after EngineStartupOverlay so the
+ * update screen and the relaunch splash that follows it read as one flow.
+ */
+const AppUpdateBlockingPanel: React.FC<AppUpdateBlockingPanelProps> = ({ updateState }) => {
   const updateInfo = updateState.info;
-  const isDownloading = updateState.status === AppUpdateStatus.Downloading;
   const isInstalling = updateState.status === AppUpdateStatus.Installing;
-  const title = isDownloading
-    ? i18nService.t('updateDownloading')
-    : isInstalling
-      ? i18nService.t('updateInstalling')
-      : i18nService.t('updateReadyCardTitle');
-  const rawPercent = updateState.progress?.percent;
-  const percent = typeof rawPercent === 'number' && Number.isFinite(rawPercent)
-    ? Math.min(100, Math.max(0, Math.round(rawPercent * 100)))
-    : null;
+  const title = isInstalling
+    ? i18nService.t('updateInstallingTitle')
+    : i18nService.t('updateReadyCardTitle');
+  const hint = i18nService.t('updateInstallingHint');
   const currentLog = updateInfo?.changeLog?.[i18nService.getLanguage()];
   const releaseNotes = (currentLog?.content ?? []).filter(
     (item): item is string => typeof item === 'string' && item.trim().length > 0,
   );
+  const notesLabel = currentLog?.title?.trim() || i18nService.t('updateReleaseNotesLabel');
   const version = updateInfo?.latestVersion ?? 'unknown';
+  const versionText = updateInfo
+    ? `v${updateInfo.latestVersion}${updateInfo.date ? ` · ${updateInfo.date}` : ''}`
+    : null;
 
   useEffect(() => {
     logBlockingPanelStatus(updateState.status, version);
@@ -59,40 +46,56 @@ const AppUpdateBlockingPanel: React.FC<AppUpdateBlockingPanelProps> = ({
 
   return (
     <section
-      className="flex max-h-full min-h-0 w-full animate-fade-in-up flex-col overflow-hidden rounded-2xl border border-border bg-surface px-6 py-5 shadow-elevated"
+      className="mx-auto flex max-h-full w-full max-w-[420px] animate-fade-in-up flex-col items-center"
       aria-label={updateInfo ? `${title} v${updateInfo.latestVersion}` : title}
       aria-busy="true"
       aria-modal="true"
       role="dialog"
     >
-      <div className="flex shrink-0 items-center gap-3">
-        <span
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary"
-          aria-hidden="true"
-        >
-          <Spinner />
-        </span>
-        <div className="min-w-0 flex-1">
-          <h2 className="text-base font-semibold text-foreground">{title}</h2>
-          {updateInfo && (
-            <p className="mt-0.5 text-xs text-secondary">
-              v{updateInfo.latestVersion}{updateInfo.date ? ` · ${updateInfo.date}` : ''}
-            </p>
-          )}
+      {/* logo with breathing glow, same as EngineStartupOverlay */}
+      <div className="relative mb-5 shrink-0">
+        <div className="absolute -inset-2 animate-pulse rounded-3xl bg-primary/20 blur-xl" aria-hidden="true" />
+        <img
+          src="logo.png"
+          alt="LobsterAI"
+          width={72}
+          height={72}
+          className="relative select-none rounded-2xl"
+          draggable={false}
+        />
+      </div>
+
+      <h2 className="shrink-0 text-center text-2xl font-bold text-foreground">{title}</h2>
+      <p className="mt-2 shrink-0 text-balance text-center text-sm leading-relaxed text-secondary">{hint}</p>
+
+      {/* indeterminate shimmer: the installer takes over from here */}
+      <div className="mt-8 h-1.5 w-full shrink-0 overflow-hidden rounded-full bg-primary/15">
+        <div className="relative h-full overflow-hidden">
+          <div
+            className="absolute inset-0 animate-shimmer bg-gradient-to-r from-transparent via-primary to-transparent"
+            aria-hidden="true"
+          />
         </div>
       </div>
 
-      {(currentLog?.title || releaseNotes.length > 0) && (
-        <div className="mt-5 flex min-h-0 flex-1 flex-col border-t border-border-subtle pt-4">
-          {currentLog?.title && (
-            <p className="shrink-0 text-sm font-medium text-foreground">{currentLog.title}</p>
-          )}
+      {/* release notes, styled like the startup tips card */}
+      {updateInfo && (
+        <div className="mt-8 flex min-h-0 w-full flex-col rounded-xl border border-border-subtle bg-surface-raised/60 px-4 py-3">
+          <div className="flex shrink-0 items-center justify-between gap-3">
+            <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-primary">
+              <SparklesIcon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span className="truncate">{notesLabel}</span>
+            </span>
+            {versionText && (
+              <span className="shrink-0 text-xs tabular-nums text-muted">{versionText}</span>
+            )}
+          </div>
           {releaseNotes.length > 0 && (
-            <ul className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto pr-2">
+            <ul className="mt-2 min-h-0 space-y-1.5 overflow-y-auto pr-1">
               {releaseNotes.map((item, index) => (
-                <li key={index} className="flex items-start gap-2.5 text-sm leading-5 text-secondary">
+                <li key={index} className="flex items-start gap-2 text-sm leading-relaxed text-secondary">
                   <span
-                    className="mt-2 h-1 w-1 shrink-0 rounded-full bg-primary/60"
+                    className="mt-[9px] h-1 w-1 shrink-0 rounded-full bg-primary/60"
                     aria-hidden="true"
                   />
                   <span className="min-w-0 break-words">{item}</span>
@@ -100,31 +103,6 @@ const AppUpdateBlockingPanel: React.FC<AppUpdateBlockingPanelProps> = ({
               ))}
             </ul>
           )}
-        </div>
-      )}
-
-      {isDownloading && (
-        <div className="mt-5 shrink-0 border-t border-border-subtle pt-4">
-          <div className="h-1.5 overflow-hidden rounded-full bg-primary/15">
-            {percent != null ? (
-              <div
-                className="h-full rounded-full bg-primary transition-all duration-300"
-                style={{ width: `${percent}%` }}
-              />
-            ) : (
-              <div className="h-full w-full animate-pulse rounded-full bg-primary/60" />
-            )}
-          </div>
-          <div className="mt-2 flex items-center justify-between gap-4 text-xs text-secondary">
-            <span>{percent != null ? `${percent}%` : i18nService.t('updateDownloadingPill')}</span>
-            <button
-              type="button"
-              onClick={() => void onCancelDownload()}
-              className="shrink-0 rounded-md px-2 py-1 transition-colors hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.06]"
-            >
-              {i18nService.t('updateDownloadCancel')}
-            </button>
-          </div>
         </div>
       )}
     </section>

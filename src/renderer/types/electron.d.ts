@@ -8,7 +8,7 @@ import type {
   ActivityResult,
   ActivitySlotResponse,
 } from '../../shared/activity/constants';
-import type { AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
+import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
 import type {
   AsrRealtimeSessionRequest,
   AsrRealtimeSessionResult,
@@ -120,6 +120,7 @@ import type {
 import type {
   PublishingQuota,
   PublishingQuotaErrorData,
+  PublishingSubscriptionRecoveryMode,
   PublishingTrialPolicy,
 } from '../../shared/publishing/constants';
 import type {
@@ -624,6 +625,7 @@ interface HtmlShareResult {
   updatedAt?: string;
   contentUpdatedAt?: string;
   accessExpiresAt?: string | null;
+  subscriptionRecoveryMode?: PublishingSubscriptionRecoveryMode;
   disabledAt?: string | null;
   disabledReason?: string | null;
   disabledSource?: HtmlShareDisabledSource | null;
@@ -1394,6 +1396,36 @@ interface IElectronAPI {
       artifactId?: string;
       filePath?: string;
     }) => Promise<{ success: boolean; share?: HtmlShareResult | null; error?: string; code?: number }>;
+    createFromGeneratedVideo: (options: {
+      taskId: string;
+      outputIndex: number;
+      sessionId: string;
+      artifactId: string;
+      title: string;
+      accessMode?: HtmlShareAccessMode;
+    }) => Promise<HtmlShareResult>;
+    getGeneratedVideoSource: (options: {
+      taskId: string;
+      outputIndex: number;
+    }) => Promise<{
+      success: boolean;
+      share?: HtmlShareResult | null;
+      state?: string;
+      assetStatus?: string;
+      retryAfterMs?: number;
+      failureReason?: string;
+      error?: string;
+      code?: number;
+    }>;
+    resolveLegacyGeneratedVideoSource: (options: {
+      resultUrl: string;
+    }) => Promise<{
+      success: boolean;
+      taskId?: string;
+      outputIndex?: number;
+      error?: string;
+      code?: number;
+    }>;
     getBySource: (options: {
       sourceType: HtmlShareSourceType;
       clientSourceKey: string;
@@ -1563,9 +1595,9 @@ interface IElectronAPI {
       userId?: string | null;
     }) => Promise<AppUpdateCheckResult>;
     retryDownload: () => Promise<{ success: boolean; state: AppUpdateRuntimeState }>;
-    cancelDownload: () => Promise<{ success: boolean; state: AppUpdateRuntimeState }>;
     installReady: () => Promise<{ success: boolean; state: AppUpdateRuntimeState; error?: string }>;
     getCompletedUpdate: () => Promise<{ version: string | null }>;
+    getActiveWorkloads: () => Promise<AppUpdateActiveWorkloads>;
     onStateChanged: (callback: (data: AppUpdateRuntimeState) => void) => () => void;
   };
   log: {

@@ -347,23 +347,6 @@ export class AppUpdateCoordinator {
     return this.getState();
   }
 
-  cancelDownload(): AppUpdateRuntimeState {
-    const cancelled = cancelActiveDownload();
-    if (!cancelled) {
-      return this.getState();
-    }
-    this.clearStoredReadyFile(this.state.source);
-    return this.setState({
-      status: AppUpdateStatus.Available,
-      source: this.state.source,
-      info: this.state.info,
-      progress: null,
-      readyFilePath: null,
-      readyFileHash: null,
-      errorMessage: null,
-    });
-  }
-
   async installReadyUpdate(): Promise<{
     success: boolean;
     state: AppUpdateRuntimeState;

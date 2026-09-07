@@ -9,6 +9,7 @@ import {
   APP_UPDATE_ELEVATION_DECLINED_ERROR,
   type AppUpdateSource,
 } from '../../shared/appUpdate/constants';
+import { quitAppWithoutConfirmation } from './appQuitConfirmation';
 import {
   AppUpdateUrlUntrustedError,
   assertTrustedWindowsInstallerUrl,
@@ -885,7 +886,7 @@ async function installMacDmg(dmgPath: string): Promise<void> {
       console.log('[AppUpdate] Relaunching (default)');
       app.relaunch();
     }
-    app.quit();
+    quitAppWithoutConfirmation('macOS update install');
   } catch (error) {
     console.error('[AppUpdate] macOS install error:', error);
     // Never leave the image attached on failure: a stale attachment poisons
@@ -1137,7 +1138,7 @@ async function installWindowsNsis(
     console.log(
       `[AppUpdate] Installer launched, invocation_source=app-update launcher_fallback=${WindowsInstallerLauncherFallback.None} updated_flag=true ui_mode=interactive`,
     );
-    app.quit();
+    quitAppWithoutConfirmation('Windows update install');
     return;
   }
 
@@ -1169,5 +1170,5 @@ async function installWindowsNsis(
   }
 
   console.log('[AppUpdate] Installer launched interactively, quitting app');
-  app.quit();
+  quitAppWithoutConfirmation('Windows update installer wizard');
 }

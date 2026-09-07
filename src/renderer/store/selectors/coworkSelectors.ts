@@ -1,7 +1,7 @@
 import { createSelector } from '@reduxjs/toolkit';
 
 import { SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../../shared/cowork/constants';
-import type { CoworkMessage } from '../../types/cowork';
+import { type CoworkMessage, CoworkSessionStatusValue } from '../../types/cowork';
 import type { RootState } from '../index';
 
 const EMPTY_COWORK_MESSAGES: CoworkMessage[] = [];
@@ -106,4 +106,21 @@ export const selectFirstCurrentSessionPendingPermission = createSelector(
 export const selectPendingPermissionSessionIds = createSelector(
   selectPendingPermissions,
   (permissions) => permissions.map((permission) => permission.sessionId),
+);
+
+/**
+ * True while any loaded session is mid-turn. Sessions load per Agent, so this
+ * mirrors what the sidebar shows rather than every session in the database;
+ * callers that need the full picture combine it with the main-process
+ * workload check.
+ */
+export const selectHasRunningCoworkSessions = createSelector(
+  selectCoworkSessions,
+  selectCurrentSession,
+  selectIsStreaming,
+  (sessions, currentSession, isStreaming) => (
+    isStreaming
+    || currentSession?.status === CoworkSessionStatusValue.Running
+    || sessions.some((session) => session.status === CoworkSessionStatusValue.Running)
+  ),
 );

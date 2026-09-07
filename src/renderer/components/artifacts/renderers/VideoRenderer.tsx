@@ -61,12 +61,20 @@ function buildFileUrlSrc(filePath: string): string {
 
 function buildVideoSources(
   filePath: string | undefined,
+  remoteUrl: string | undefined,
+  content: string,
   createdAt: number,
 ): string[] {
   const sources: string[] = [];
   if (filePath) {
     sources.push(buildLocalFileSrc(filePath, createdAt));
     sources.push(buildFileUrlSrc(filePath));
+  }
+  for (const candidate of [remoteUrl, content]) {
+    const value = candidate?.trim();
+    if (value && /^https:\/\//i.test(value) && !sources.includes(value)) {
+      sources.push(value);
+    }
   }
   return sources;
 }
@@ -75,9 +83,11 @@ const VideoRenderer: React.FC<VideoRendererProps> = ({ artifact }) => {
   const sources = useMemo(
     () => buildVideoSources(
       artifact.filePath,
+      artifact.remoteUrl,
+      artifact.content,
       artifact.createdAt,
     ),
-    [artifact.createdAt, artifact.filePath],
+    [artifact.content, artifact.createdAt, artifact.filePath, artifact.remoteUrl],
   );
   const [activeSourceIndex, setActiveSourceIndex] = useState(0);
   const [error, setError] = useState(false);

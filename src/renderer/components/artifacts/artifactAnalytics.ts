@@ -21,6 +21,7 @@ export const ArtifactPublishEntryPoint = {
   LibraryMenu: 'library_menu',
   LibrarySettings: 'library_settings',
   LibraryToolbar: 'library_toolbar',
+  SubscriptionRecoveryCta: 'subscription_recovery_cta',
 } as const;
 
 export type ArtifactPublishEntryPoint =

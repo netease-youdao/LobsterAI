@@ -27,6 +27,33 @@ export interface LobsterBrowserMcpStdioLaunch {
 const MCP_SERVER_SOURCE = String.raw`import fs from 'node:fs/promises';
 import readline from 'node:readline';
 
+function formatDiagnosticError(error) {
+  const message = error instanceof Error ? error.stack || error.message : String(error);
+  return message.replace(/\s+/g, ' ').slice(0, 2000);
+}
+
+function writeDiagnostic(message) {
+  process.stderr.write('[LobsterBrowserMcp] ' + message + '\n');
+}
+
+function formatBridgeEndpoint(value) {
+  if (!value) return '<missing>';
+  try {
+    const endpoint = new URL(value);
+    return endpoint.protocol + '//' + endpoint.host + endpoint.pathname;
+  } catch {
+    return '<invalid>';
+  }
+}
+
+process.on('uncaughtExceptionMonitor', (error, origin) => {
+  writeDiagnostic(
+    'uncaught-exception origin=' + JSON.stringify(origin)
+    + ' error=' + JSON.stringify(formatDiagnosticError(error)),
+  );
+});
+
+let runtimeConfigState = 'loaded';
 const runtimeConfig = await fs.readFile(
   new URL('./${RUNTIME_CONFIG_FILE_NAME}', import.meta.url),
   'utf8',
@@ -37,10 +64,15 @@ const runtimeConfig = await fs.readFile(
     || typeof parsed.bridgeUrl !== 'string'
     || typeof parsed.bridgeSecret !== 'string'
   ) {
+    runtimeConfigState = 'invalid';
     return null;
   }
   return parsed;
-}).catch(() => null);
+}).catch((error) => {
+  runtimeConfigState = 'read-error';
+  writeDiagnostic('runtime-config-error error=' + JSON.stringify(formatDiagnosticError(error)));
+  return null;
+});
 
 const bridgeUrlArg = process.argv.find((arg) => arg.startsWith('--lobster-bridge-url='));
 const bridgeUrl = bridgeUrlArg
@@ -49,6 +81,18 @@ const bridgeUrl = bridgeUrlArg
 const bridgeSecret = runtimeConfig?.bridgeSecret || '';
 
 const credentialOnly = process.argv.includes('${BrowserCredentialMcpServer.ToolSetArgument}');
+writeDiagnostic(
+  'startup pid=' + process.pid
+  + ' platform=' + process.platform
+  + ' arch=' + process.arch
+  + ' node=' + process.version
+  + ' electronRunAsNode=' + (process.env.ELECTRON_RUN_AS_NODE === '1')
+  + ' runtimeConfig=' + runtimeConfigState
+  + ' bridge=' + formatBridgeEndpoint(bridgeUrl)
+  + ' bridgeUrlArg=' + Boolean(bridgeUrlArg)
+  + ' bridgeSecretConfigured=' + Boolean(bridgeSecret)
+  + ' credentialOnly=' + credentialOnly,
+);
 const toolDefinitions = [
   ['list_pages', {}],
   ['new_page', { url: { type: 'string' }, timeout: { type: 'number' } }],
@@ -95,21 +139,49 @@ function errorResult(message) {
 
 async function callBridge(name, args) {
   if (!bridgeUrl || !bridgeSecret) {
+    writeDiagnostic(
+      'bridge-unavailable tool=' + JSON.stringify(name)
+      + ' bridge=' + formatBridgeEndpoint(bridgeUrl)
+      + ' bridgeSecretConfigured=' + Boolean(bridgeSecret),
+    );
     return errorResult('LobsterAI browser bridge is not configured.');
   }
-  const response = await fetch(bridgeUrl, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-mcp-bridge-secret': bridgeSecret,
-    },
-    body: JSON.stringify({ tool: name, args: args || {} }),
-  });
+  let response;
+  try {
+    response = await fetch(bridgeUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-mcp-bridge-secret': bridgeSecret,
+      },
+      body: JSON.stringify({ tool: name, args: args || {} }),
+    });
+  } catch (error) {
+    writeDiagnostic(
+      'bridge-request-failed tool=' + JSON.stringify(name)
+      + ' bridge=' + formatBridgeEndpoint(bridgeUrl)
+      + ' error=' + JSON.stringify(formatDiagnosticError(error)),
+    );
+    throw error;
+  }
   const payload = await response.json().catch(() => null);
+  if (!payload) {
+    writeDiagnostic(
+      'bridge-invalid-json tool=' + JSON.stringify(name)
+      + ' bridge=' + formatBridgeEndpoint(bridgeUrl)
+      + ' status=' + response.status,
+    );
+  }
   if (!response.ok) {
     const message = payload && typeof payload.error === 'string'
       ? payload.error
       : 'LobsterAI browser bridge returned HTTP ' + response.status + '.';
+    writeDiagnostic(
+      'bridge-http-error tool=' + JSON.stringify(name)
+      + ' bridge=' + formatBridgeEndpoint(bridgeUrl)
+      + ' status=' + response.status
+      + ' error=' + JSON.stringify(formatDiagnosticError(message)),
+    );
     return errorResult(message);
   }
   return payload;
@@ -177,6 +249,11 @@ input.on('line', (line) => {
   try {
     const message = JSON.parse(trimmed);
     void handleRequest(message).catch((error) => {
+      writeDiagnostic(
+        'request-failed method=' + JSON.stringify(message.method)
+        + ' tool=' + JSON.stringify(message.params?.name || '')
+        + ' error=' + JSON.stringify(formatDiagnosticError(error)),
+      );
       if (message.id !== undefined) {
         writeMessage({
           jsonrpc: '2.0',
@@ -186,17 +263,30 @@ input.on('line', (line) => {
       }
     });
   } catch (error) {
-    process.stderr.write('[LobsterBrowserMcp] Invalid JSON-RPC message: ' + String(error) + '\n');
+    writeDiagnostic('invalid-json-rpc error=' + JSON.stringify(formatDiagnosticError(error)));
   }
 });
 `;
+
+const formatBridgeEndpointForLog = (bridgeUrl: string): string => {
+  try {
+    const endpoint = new URL(bridgeUrl);
+    return `${endpoint.protocol}//${endpoint.host}${endpoint.pathname}`;
+  } catch {
+    return '<invalid>';
+  }
+};
 
 const escapeWindowsBatchValue = (value: string): string => value.replace(/%/g, '%%');
 
 const quotePosixShellValue = (value: string): string => `'${value.replace(/'/g, `'"'"'`)}'`;
 
+// cmd.exe decodes batch files with the active console code page. Keep the
+// bootstrap lines ASCII and switch to UTF-8 before it reads the literal
+// Electron path, which may contain characters such as a Chinese install dir.
 const buildWindowsLauncherSource = (electronNodeRuntimePath: string): string => [
   '@echo off',
+  'chcp 65001 >nul 2>&1',
   'setlocal DisableDelayedExpansion',
   'set "ELECTRON_RUN_AS_NODE=1"',
   `"${escapeWindowsBatchValue(electronNodeRuntimePath)}" "%~dp0${SERVER_FILE_NAME}" %*`,
@@ -276,6 +366,14 @@ export const resolveLobsterBrowserMcpCommand = (
       buildWindowsLauncherSource(options.electronNodeRuntimePath),
       0o700,
     );
+    console.log('[LobsterBrowserMcp] Prepared browser MCP launcher', {
+      platform: options.platform ?? process.platform,
+      launcherPath,
+      launcherExists: fs.existsSync(launcherPath),
+      electronNodeRuntimePath: options.electronNodeRuntimePath,
+      electronNodeRuntimeExists: fs.existsSync(options.electronNodeRuntimePath),
+      bridgeEndpoint: formatBridgeEndpointForLog(options.bridgeUrl),
+    });
     return launcherPath;
   }
 
@@ -285,6 +383,14 @@ export const resolveLobsterBrowserMcpCommand = (
     buildPosixLauncherSource(options.electronNodeRuntimePath),
     0o700,
   );
+  console.log('[LobsterBrowserMcp] Prepared browser MCP launcher', {
+    platform: options.platform ?? process.platform,
+    launcherPath,
+    launcherExists: fs.existsSync(launcherPath),
+    electronNodeRuntimePath: options.electronNodeRuntimePath,
+    electronNodeRuntimeExists: fs.existsSync(options.electronNodeRuntimePath),
+    bridgeEndpoint: formatBridgeEndpointForLog(options.bridgeUrl),
+  });
   return launcherPath;
 };
 
@@ -293,6 +399,14 @@ export const resolveLobsterBrowserMcpStdioLaunch = (
   options: LobsterBrowserMcpLaunchOptions,
 ): LobsterBrowserMcpStdioLaunch => {
   const { serverPath } = prepareLobsterBrowserMcpRuntime(baseDir, options);
+  console.log('[LobsterBrowserMcp] Prepared browser MCP stdio launch', {
+    platform: options.platform ?? process.platform,
+    serverPath,
+    serverExists: fs.existsSync(serverPath),
+    electronNodeRuntimePath: options.electronNodeRuntimePath,
+    electronNodeRuntimeExists: fs.existsSync(options.electronNodeRuntimePath),
+    bridgeEndpoint: formatBridgeEndpointForLog(options.bridgeUrl),
+  });
   return {
     command: options.electronNodeRuntimePath,
     args: [serverPath],

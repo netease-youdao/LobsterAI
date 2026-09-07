@@ -246,11 +246,27 @@ index f5470bf..56c07cb 100644
      Quit
  
    RetryExtract7za:
+diff --git a/node_modules/app-builder-lib/templates/nsis/include/installUtil.nsh b/node_modules/app-builder-lib/templates/nsis/include/installUtil.nsh
+index 4736774..9797651 100644
+--- a/node_modules/app-builder-lib/templates/nsis/include/installUtil.nsh
++++ b/node_modules/app-builder-lib/templates/nsis/include/installUtil.nsh
+@@ -126,7 +126,10 @@ Function handleUninstallResult
+   Return
+ 
+   ${if} $R0 != 0
+-    MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0"
++    # /S is a zero-UI contract: NSIS shows MessageBox even in silent mode
++    # unless a silent default is declared, so silent channel installs must
++    # fail through SetErrorLevel alone instead of a stuck dialog.
++    MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0" /SD IDOK
+     DetailPrint `Uninstall was not successful. Uninstaller error code: $R0.`
+     SetErrorLevel 2
+     Quit
 diff --git a/node_modules/app-builder-lib/templates/nsis/include/installer.nsh b/node_modules/app-builder-lib/templates/nsis/include/installer.nsh
-index 34e91df..3f7969e 100644
+index 34e91df..968f2a1 100644
 --- a/node_modules/app-builder-lib/templates/nsis/include/installer.nsh
 +++ b/node_modules/app-builder-lib/templates/nsis/include/installer.nsh
-@@ -11,86 +11,52 @@
+@@ -11,86 +11,62 @@
      File /r "${APP_BUILD_DIR}\*.*"
    !else
      !ifdef APP_PACKAGE_URL
@@ -313,13 +329,23 @@ index 34e91df..3f7969e 100644
 -      ${endIf}
 -
 -      !insertmacro downloadApplicationFiles
-+      # $packageFile was resolved and verified by acquireWebPackage at the top
-+      # of the install section, before anything destructive ran.
-+      !insertmacro extractUsing7za "$packageFile"
- 
+-
 -      fun_extract:
 -        !insertmacro extractUsing7za "$packageFile"
--
++      # $packageFile was resolved and verified by acquireWebPackage at the top
++      # of the install section, before anything destructive ran.
++
++      # The extraction below stages the tree in $appPackageStagingDir\7z-out
++      # (see extractUsing7za) even though no embedded package is materialized,
++      # so run the same staging-drive preflight as the offline installer:
++      # relocate staging to the install drive or stop before a full temp
++      # drive lets Nsis7z silently truncate the staged tree.
++      StrCpy $appPackageStagingDir "$PLUGINSDIR"
++      !ifmacrodef customSelectAppPackageStagingDir
++        !insertmacro customSelectAppPackageStagingDir
++      !endif
++      !insertmacro extractUsing7za "$packageFile"
+ 
 -        # electron always uses per user app data
 -        ${if} $installMode == "all"
 -          SetShellVarContext current
@@ -372,7 +398,7 @@ index 34e91df..3f7969e 100644
        ${if} $installMode == "all"
          SetShellVarContext all
        ${endif}
-@@ -138,9 +104,18 @@
+@@ -138,9 +114,18 @@
  
    # allow user to define ESTIMATED_SIZE to avoid GetSize call
    !ifdef ESTIMATED_SIZE

@@ -5,6 +5,9 @@ export const HtmlShareIpc = {
   CreateFromArtifactFile: 'htmlShare:createFromArtifactFile',
   UpdateFromArtifactFile: 'htmlShare:updateFromArtifactFile',
   GetByArtifactFile: 'htmlShare:getByArtifactFile',
+  CreateFromGeneratedVideo: 'htmlShare:createFromGeneratedVideo',
+  GetGeneratedVideoSource: 'htmlShare:getGeneratedVideoSource',
+  ResolveLegacyGeneratedVideoSource: 'htmlShare:resolveLegacyGeneratedVideoSource',
   GetBySource: 'htmlShare:getBySource',
   UpdateStatus: 'htmlShare:updateStatus',
   UpdateAccessMode: 'htmlShare:updateAccessMode',
@@ -25,6 +28,7 @@ export const HtmlShareSourceType = {
   DocumentFile: 'document_file',
   MarkdownFile: 'markdown_file',
   MermaidFile: 'mermaid_file',
+  GeneratedVideoFile: 'generated_video_file',
   NodeServiceDeployment: 'node_service_deployment',
   StaticServiceDeployment: 'static_service_deployment',
 } as const;
@@ -120,6 +124,10 @@ export const HtmlShareErrorCode = {
   QuotaConfigInvalid: 41314,
   DeleteRequiresDisabled: 41315,
   ActionConflict: 41316,
+  VideoTaskNotFound: 41317,
+  VideoSourceUnavailable: 41318,
+  VideoPrepareFailed: 41319,
+  VideoUnsupported: 41320,
   FeatureUnavailable: 49001,
   DisabledCannotUpdate: 49002,
 } as const;

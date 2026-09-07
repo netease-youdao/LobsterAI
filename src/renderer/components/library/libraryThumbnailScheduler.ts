@@ -1,7 +1,7 @@
 import {
   LibraryThumbnailFailureCode,
-  LibraryThumbnailRequestPriority,
   type LibraryThumbnailGenerateResponse,
+  LibraryThumbnailRequestPriority,
   type LibraryThumbnailRequestPriorityType,
 } from '../../../shared/library/thumbnail';
 
