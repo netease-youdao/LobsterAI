@@ -31,6 +31,30 @@ export const AgentBrowserPartition = {
 export type AgentBrowserPartition =
   typeof AgentBrowserPartition[keyof typeof AgentBrowserPartition];
 
+export const AgentBrowserPageUrl = {
+  Blank: 'about:blank',
+} as const;
+
+export const AgentBrowserZoom = {
+  Min: 0.25,
+  Max: 3,
+  Step: 0.1,
+  Default: 1,
+} as const;
+
+export const AgentBrowserHostMenuAction = {
+  CaptureScreenshot: 'capture-screenshot',
+  NewBlankPage: 'new-blank-page',
+  ZoomOut: 'zoom-out',
+  ResetZoom: 'reset-zoom',
+  ZoomIn: 'zoom-in',
+  ClearCookies: 'clear-cookies',
+  ClearCache: 'clear-cache',
+} as const;
+
+export type AgentBrowserHostMenuAction =
+  typeof AgentBrowserHostMenuAction[keyof typeof AgentBrowserHostMenuAction];
+
 export const BrowserDisplayMode = {
   InApp: 'in-app',
   External: 'external',
@@ -82,8 +106,15 @@ export const BrowserIpc = {
   GoForwardHost: 'openclaw:browser:goForwardHost',
   ReloadHost: 'openclaw:browser:reloadHost',
   StopHost: 'openclaw:browser:stopHost',
+  CreateHostPage: 'openclaw:browser:createHostPage',
   SelectHostPage: 'openclaw:browser:selectHostPage',
   CloseHostPage: 'openclaw:browser:closeHostPage',
+  ShowHostMenu: 'openclaw:browser:showHostMenu',
+  CaptureHostScreenshot: 'openclaw:browser:captureHostScreenshot',
+  SetHostZoom: 'openclaw:browser:setHostZoom',
+  ClearHostCookies: 'openclaw:browser:clearHostCookies',
+  ClearHostCache: 'openclaw:browser:clearHostCache',
+  DismissCredentialLoginStatus: 'openclaw:browser:dismissCredentialLoginStatus',
   ResolveCredentialSavePrompt: 'openclaw:browser:resolveCredentialSavePrompt',
   HostState: 'openclaw:browser:hostState',
 } as const;
@@ -170,6 +201,7 @@ export interface AgentBrowserHostTab {
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
+  zoomFactor: number;
 }
 
 export interface AgentBrowserHostState {
@@ -207,6 +239,23 @@ export interface AgentBrowserHostNavigateRequest extends AgentBrowserHostRequest
 
 export interface AgentBrowserHostPageRequest extends AgentBrowserHostRequest {
   pageId: number;
+}
+
+export interface AgentBrowserHostZoomRequest extends AgentBrowserHostRequest {
+  factor: number;
+}
+
+export interface AgentBrowserHostMenuRequest extends AgentBrowserHostRequest {
+  x: number;
+  y: number;
+  darkMode: boolean;
+}
+
+export interface AgentBrowserHostMenuResponse {
+  success: boolean;
+  action?: AgentBrowserHostMenuAction;
+  zoomFactor?: number;
+  error?: string;
 }
 
 export interface AgentBrowserCredentialSavePromptRequest extends AgentBrowserHostRequest {

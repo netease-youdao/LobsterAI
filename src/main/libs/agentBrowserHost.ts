@@ -1,5 +1,7 @@
 import {
   type BrowserWindow,
+  type NativeImage,
+  nativeImage,
   type Session,
   session,
   WebContentsView,
@@ -17,8 +19,10 @@ import {
 import {
   type AgentBrowserHostState,
   type AgentBrowserHostStateEvent,
+  AgentBrowserPageUrl,
   AgentBrowserPartition,
   type AgentBrowserToolEvent,
+  AgentBrowserZoom,
   BrowserDisplayMode,
   type BrowserWebAccessConfig,
   normalizeBrowserHostnamePolicyList,
@@ -42,7 +46,7 @@ import type {
   BrowserToolResponse,
 } from './mcpBridgeServer';
 
-const BrowserMcpTool = {
+export const BrowserMcpTool = {
   ListPages: 'list_pages',
   NewPage: 'new_page',
   SelectPage: 'select_page',
@@ -64,8 +68,9 @@ const BrowserMcpTool = {
   LoginWithSavedCredential: BrowserCredentialLoginTool.Name,
 } as const;
 
-const DEFAULT_PAGE_URL = 'about:blank';
+const DEFAULT_PAGE_URL = AgentBrowserPageUrl.Blank;
 const DEFAULT_OPERATION_TIMEOUT_MS = 30_000;
+const SCREENSHOT_CAPTURE_TIMEOUT_MS = 10_000;
 const MAX_OPERATION_TIMEOUT_MS = 60_000;
 const MAX_SNAPSHOT_NODES = 2_000;
 
@@ -241,6 +246,7 @@ export class AgentBrowserHost {
   private credentialLoginView: WebContentsView | null = null;
   private credentialLoginViewAttached = false;
   private credentialLoginState: BrowserCredentialLoginState | undefined;
+  private preserveCredentialLoginStatusForNavigationPageId: number | undefined;
   private readonly credentialLogin: AgentBrowserCredentialLogin;
   private credentialSavePrompt: BrowserCredentialSavePrompt | undefined;
   private readonly manualCredentialCapture: ManualCredentialCaptureService;
@@ -304,6 +310,7 @@ export class AgentBrowserHost {
         loading: page.loading,
         canGoBack: navigationHistory.canGoBack(),
         canGoForward: navigationHistory.canGoForward(),
+        zoomFactor: webContents.getZoomFactor(),
       };
     });
     return {
@@ -374,6 +381,7 @@ export class AgentBrowserHost {
 
   goBack(): AgentBrowserHostState {
     this.assertCredentialLoginInactive();
+    this.clearCredentialLoginStatus();
     const page = this.requireSelectedPage();
     if (page.view.webContents.navigationHistory.canGoBack()) {
       page.view.webContents.navigationHistory.goBack();
@@ -383,6 +391,7 @@ export class AgentBrowserHost {
 
   goForward(): AgentBrowserHostState {
     this.assertCredentialLoginInactive();
+    this.clearCredentialLoginStatus();
     const page = this.requireSelectedPage();
     if (page.view.webContents.navigationHistory.canGoForward()) {
       page.view.webContents.navigationHistory.goForward();
@@ -392,6 +401,7 @@ export class AgentBrowserHost {
 
   reload(): AgentBrowserHostState {
     this.assertCredentialLoginInactive();
+    this.clearCredentialLoginStatus();
     this.requireSelectedPage().view.webContents.reload();
     return this.getState();
   }
@@ -402,12 +412,80 @@ export class AgentBrowserHost {
     return this.getState();
   }
 
+  async newPage(sessionId?: string): Promise<AgentBrowserHostState> {
+    this.assertCredentialLoginInactive();
+    if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
+    await this.createPage(DEFAULT_PAGE_URL);
+    return this.getState();
+  }
+
+  async captureScreenshot(sessionId?: string): Promise<NativeImage> {
+    this.assertCredentialLoginInactive();
+    if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
+    const page = this.requireSelectedPage();
+    await this.ensureDebugger(page);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      page.view.webContents.debugger.sendCommand('Page.captureScreenshot', {
+        format: 'png',
+        fromSurface: true,
+        captureBeyondViewport: false,
+      }) as Promise<{ data?: string }>,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`In-app browser screenshot timed out after ${SCREENSHOT_CAPTURE_TIMEOUT_MS}ms.`));
+        }, SCREENSHOT_CAPTURE_TIMEOUT_MS);
+      }),
+    ]).finally(() => {
+      if (timeout) clearTimeout(timeout);
+    });
+    if (!result.data) {
+      throw new Error('The in-app browser screenshot did not contain image data.');
+    }
+    const image = nativeImage.createFromBuffer(Buffer.from(result.data, 'base64'));
+    if (image.isEmpty()) {
+      throw new Error('The in-app browser screenshot is empty.');
+    }
+    return image;
+  }
+
+  setZoomFactor(factor: number, sessionId?: string): AgentBrowserHostState {
+    this.assertCredentialLoginInactive();
+    if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
+    if (!Number.isFinite(factor)) {
+      throw new Error('A valid browser zoom factor is required.');
+    }
+    const normalizedFactor = Math.min(
+      AgentBrowserZoom.Max,
+      Math.max(AgentBrowserZoom.Min, Number(factor.toFixed(2))),
+    );
+    this.requireSelectedPage().view.webContents.setZoomFactor(normalizedFactor);
+    this.emitState();
+    return this.getState();
+  }
+
+  async clearCookies(sessionId?: string): Promise<AgentBrowserHostState> {
+    this.assertCredentialLoginInactive();
+    if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
+    await this.browserSession.clearStorageData({ storages: ['cookies'] });
+    await this.browserSession.cookies.flushStore();
+    return this.getState();
+  }
+
+  async clearCache(sessionId?: string): Promise<AgentBrowserHostState> {
+    this.assertCredentialLoginInactive();
+    if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
+    await this.browserSession.clearCache();
+    return this.getState();
+  }
+
   selectPage(pageId: number, sessionId?: string): AgentBrowserHostState {
     this.assertCredentialLoginInactive();
     if (!this.pages.has(pageId)) {
       throw new Error(`Browser page ${pageId} does not exist.`);
     }
     if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
+    if (pageId !== this.selectedPageId) this.clearCredentialLoginStatus();
     this.selectedPageId = pageId;
     this.syncAttachment();
     this.emitState(sessionId);
@@ -416,19 +494,29 @@ export class AgentBrowserHost {
 
   closePage(pageId: number): AgentBrowserHostState {
     this.assertCredentialLoginInactive();
+    this.clearCredentialLoginStatus();
     const page = this.requirePage(pageId);
+    const fallbackPageId = this.getAdjacentPageId(pageId);
     this.markBrowserToolBootstrapPageUsed(pageId);
     this.manualCredentialCapture.clearPage(pageId);
     this.detachPage(pageId);
     if (page.view.webContents.debugger.isAttached()) {
       page.view.webContents.debugger.detach();
     }
-    page.view.webContents.close();
     this.pages.delete(pageId);
     if (this.selectedPageId === pageId) {
-      this.selectedPageId = this.pages.keys().next().value as number | undefined;
+      this.selectedPageId = fallbackPageId;
     }
+    page.view.webContents.close();
     this.syncAttachment();
+    this.emitState();
+    return this.getState();
+  }
+
+  dismissCredentialLoginStatus(sessionId?: string): AgentBrowserHostState {
+    this.assertCredentialLoginInactive();
+    if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
+    this.clearCredentialLoginStatus();
     this.emitState();
     return this.getState();
   }
@@ -579,6 +667,7 @@ export class AgentBrowserHost {
           || result.outcome === BrowserCredentialLoginOutcome.NeedsMfa
           || result.outcome === BrowserCredentialLoginOutcome.NeedsCaptcha
         ) {
+          this.preserveCredentialLoginStatusForNavigationPageId = page.pageId;
           page.view.webContents.reload();
         }
         return {
@@ -647,11 +736,24 @@ export class AgentBrowserHost {
     });
     webContents.on('did-stop-loading', () => {
       page.loading = false;
+      if (this.preserveCredentialLoginStatusForNavigationPageId === page.pageId) {
+        this.preserveCredentialLoginStatusForNavigationPageId = undefined;
+      }
       emit();
     });
     webContents.on('page-title-updated', emit);
-    webContents.on('did-navigate', emit);
-    webContents.on('did-navigate-in-page', emit);
+    webContents.on('did-navigate', () => {
+      if (this.preserveCredentialLoginStatusForNavigationPageId !== page.pageId) {
+        this.clearCredentialLoginStatus();
+      }
+      emit();
+    });
+    webContents.on('did-navigate-in-page', () => {
+      if (this.preserveCredentialLoginStatusForNavigationPageId !== page.pageId) {
+        this.clearCredentialLoginStatus();
+      }
+      emit();
+    });
     webContents.on('ipc-message', (_event, channel, ...args) => {
       if (channel !== ManualCredentialCaptureChannel.Event) return;
       const captureEvent = parseManualCredentialCaptureEvent(args[0]);
@@ -682,9 +784,10 @@ export class AgentBrowserHost {
     webContents.on('destroyed', () => {
       this.markBrowserToolBootstrapPageUsed(page.pageId);
       this.manualCredentialCapture.clearPage(page.pageId);
+      const fallbackPageId = this.getAdjacentPageId(page.pageId);
       this.pages.delete(page.pageId);
       if (this.selectedPageId === page.pageId) {
-        this.selectedPageId = this.pages.keys().next().value as number | undefined;
+        this.selectedPageId = fallbackPageId;
       }
       if (this.attachedPageId === page.pageId) this.attachedPageId = undefined;
       this.syncAttachment();
@@ -713,6 +816,7 @@ export class AgentBrowserHost {
     if (!this.isAllowedUrl(url)) {
       throw new Error('Navigation was blocked by the LobsterAI browser access policy.');
     }
+    this.clearCredentialLoginStatus();
     this.lastError = undefined;
     await this.proxyReady;
     const loadPromise = page.view.webContents.loadURL(url);
@@ -1221,6 +1325,19 @@ export class AgentBrowserHost {
     if (this.credentialLogin.isActive) {
       throw new Error('A secure saved-credential sign-in is in progress.');
     }
+  }
+
+  private getAdjacentPageId(pageId: number): number | undefined {
+    const pageIds = Array.from(this.pages.keys());
+    const pageIndex = pageIds.indexOf(pageId);
+    if (pageIndex < 0) return undefined;
+    return pageIds[pageIndex + 1] ?? pageIds[pageIndex - 1];
+  }
+
+  private clearCredentialLoginStatus(): void {
+    if (!this.credentialLoginState || this.credentialLogin.isActive) return;
+    this.credentialLoginState = undefined;
+    this.preserveCredentialLoginStatusForNavigationPageId = undefined;
   }
 
   private emitState(sessionId = this.activeSessionId): void {

@@ -3,6 +3,7 @@ import {
   ArrowPathIcon,
   ArrowRightIcon,
   ComputerDesktopIcon,
+  EllipsisVerticalIcon,
   KeyIcon,
   StopIcon,
   XMarkIcon,
@@ -11,24 +12,34 @@ import {
   BrowserCredentialLoginStatus,
   BrowserCredentialSaveDecision,
 } from '@shared/browserCredentials/constants';
-import type {
-  AgentBrowserHostResponse,
-  AgentBrowserHostState,
+import {
+  AgentBrowserHostMenuAction,
+  type AgentBrowserHostResponse,
+  type AgentBrowserHostState,
+  AgentBrowserPageUrl,
 } from '@shared/browserWebAccess/constants';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18nService } from '@/services/i18n';
+
+import AgentBrowserTabStrip from './AgentBrowserTabStrip';
 
 interface AgentBrowserInAppPanelProps {
   sessionId: string;
   visible: boolean;
 }
 
+const AGENT_BROWSER_MENU_ESTIMATED_WIDTH = 224;
+
 const applyResponseState = (
   response: AgentBrowserHostResponse,
   setState: React.Dispatch<React.SetStateAction<AgentBrowserHostState | null>>,
 ): void => {
   if (response.state) setState(response.state);
+};
+
+const showToast = (message: string): void => {
+  window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
 };
 
 const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
@@ -39,13 +50,16 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
   const [address, setAddress] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [resolvingCredentialSave, setResolvingCredentialSave] = useState(false);
+  const [browserMenuActionPending, setBrowserMenuActionPending] = useState(false);
   const browserViewportRef = useRef<HTMLDivElement>(null);
   const addressFocusedRef = useRef(false);
   const syncFrameRef = useRef<number | null>(null);
+  const browserMenuButtonRef = useRef<HTMLButtonElement>(null);
 
   const selectedTab = state?.tabs.find(tab => tab.pageId === state.selectedPageId);
   const credentialLoginBusy = state?.credentialLogin?.status === BrowserCredentialLoginStatus.AwaitingApproval
     || state?.credentialLogin?.status === BrowserCredentialLoginStatus.SigningIn;
+  const browserControlsBusy = credentialLoginBusy || browserMenuActionPending;
   const credentialLoginStatusKey = state?.credentialLogin
     ? {
         [BrowserCredentialLoginStatus.AwaitingApproval]: 'agentBrowserCredentialAwaitingApproval',
@@ -61,7 +75,7 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
 
   useEffect(() => {
     if (!addressFocusedRef.current) {
-      setAddress(selectedTab?.url === 'about:blank' ? '' : selectedTab?.url ?? '');
+      setAddress(selectedTab?.url === AgentBrowserPageUrl.Blank ? '' : selectedTab?.url ?? '');
     }
   }, [selectedTab?.url]);
 
@@ -81,7 +95,7 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
     };
   }, [sessionId]);
 
-  const syncNativeView = useCallback(() => {
+  const syncNativeView = useCallback(async (): Promise<void> => {
     const browserApi = window.electron?.openclaw?.browser;
     const element = browserViewportRef.current;
     if (!browserApi || !element) return;
@@ -94,27 +108,32 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
       && rect.width >= 2
       && rect.height >= 2
       && unobscured;
-    void browserApi.setHostView({
-      sessionId,
-      visible: shouldShow,
-      ...(shouldShow
-        ? {
-            bounds: {
-              x: rect.left,
-              y: rect.top,
-              width: rect.width,
-              height: rect.height,
-            },
-          }
-        : {}),
-    }).then(response => applyResponseState(response, setState)).catch(() => {});
+    try {
+      const response = await browserApi.setHostView({
+        sessionId,
+        visible: shouldShow,
+        ...(shouldShow
+          ? {
+              bounds: {
+                x: rect.left,
+                y: rect.top,
+                width: rect.width,
+                height: rect.height,
+              },
+            }
+          : {}),
+      });
+      applyResponseState(response, setState);
+    } catch {
+      // The native view may be unavailable while the Electron window is closing.
+    }
   }, [sessionId, visible]);
 
   const scheduleNativeViewSync = useCallback(() => {
     if (syncFrameRef.current !== null) window.cancelAnimationFrame(syncFrameRef.current);
     syncFrameRef.current = window.requestAnimationFrame(() => {
       syncFrameRef.current = null;
-      syncNativeView();
+      void syncNativeView();
     });
   }, [syncNativeView]);
 
@@ -146,6 +165,7 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
   ) => {
     const response = await action();
     applyResponseState(response, setState);
+    return response;
   }, []);
 
   const handleNavigate = async (event: React.FormEvent) => {
@@ -179,12 +199,97 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
     }
   };
 
+  const dismissCredentialLoginStatus = () => {
+    void runAction(() => window.electron.openclaw.browser.dismissCredentialLoginStatus({
+      sessionId,
+    })).catch(() => {});
+  };
+
+  const handleBrowserMenu = async (): Promise<void> => {
+    const button = browserMenuButtonRef.current;
+    if (!button || browserMenuActionPending) return;
+
+    const rect = button.getBoundingClientRect();
+    setBrowserMenuActionPending(true);
+    try {
+      const menuResponse = await window.electron.openclaw.browser.showHostMenu({
+        sessionId,
+        x: Math.max(0, rect.right - AGENT_BROWSER_MENU_ESTIMATED_WIDTH),
+        y: rect.bottom,
+        darkMode: document.documentElement.classList.contains('dark'),
+      });
+      if (!menuResponse.success) {
+        showToast(menuResponse.error || i18nService.t('agentBrowserMenuFailed'));
+        return;
+      }
+
+      let response: AgentBrowserHostResponse | undefined;
+      let successMessage: string | undefined;
+      let failureMessage = i18nService.t('agentBrowserActionFailed');
+      switch (menuResponse.action) {
+        case AgentBrowserHostMenuAction.CaptureScreenshot:
+          response = await runAction(() => window.electron.openclaw.browser.captureHostScreenshot({ sessionId }));
+          successMessage = i18nService.t('artifactBrowserScreenshotCopied');
+          failureMessage = i18nService.t('artifactBrowserScreenshotFailed');
+          break;
+        case AgentBrowserHostMenuAction.NewBlankPage:
+          response = await runAction(() => window.electron.openclaw.browser.createHostPage({ sessionId }));
+          break;
+        case AgentBrowserHostMenuAction.ClearCookies:
+          response = await runAction(() => window.electron.openclaw.browser.clearHostCookies({ sessionId }));
+          successMessage = i18nService.t('artifactBrowserCookiesCleared');
+          failureMessage = i18nService.t('artifactBrowserClearCookiesFailed');
+          break;
+        case AgentBrowserHostMenuAction.ClearCache:
+          response = await runAction(() => window.electron.openclaw.browser.clearHostCache({ sessionId }));
+          successMessage = i18nService.t('artifactBrowserCacheCleared');
+          failureMessage = i18nService.t('artifactBrowserClearCacheFailed');
+          break;
+        default:
+          return;
+      }
+
+      if (!response.success) {
+        showToast(response.error || failureMessage);
+      } else if (successMessage) {
+        showToast(successMessage);
+      }
+    } catch {
+      showToast(i18nService.t('agentBrowserActionFailed'));
+    } finally {
+      setBrowserMenuActionPending(false);
+    }
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col bg-background">
+      <AgentBrowserTabStrip
+        tabs={state?.tabs ?? []}
+        selectedPageId={state?.selectedPageId}
+        disabled={browserControlsBusy}
+        onSelect={pageId => {
+          void runAction(() => window.electron.openclaw.browser.selectHostPage({
+            sessionId,
+            pageId,
+          })).catch(() => {});
+        }}
+        onClose={pageId => {
+          void runAction(() => window.electron.openclaw.browser.closeHostPage({
+            sessionId,
+            pageId,
+          })).catch(() => {});
+        }}
+        onCreate={() => {
+          void runAction(() => window.electron.openclaw.browser.createHostPage({
+            sessionId,
+          })).catch(() => {});
+        }}
+      />
+
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border px-2">
         <button
           type="button"
-          disabled={credentialLoginBusy || !selectedTab?.canGoBack}
+          disabled={browserControlsBusy || !selectedTab?.canGoBack}
           onClick={() => void runAction(() => window.electron.openclaw.browser.goBackHost({ sessionId }))}
           className="inline-flex h-7 w-7 items-center justify-center rounded-md text-secondary hover:bg-surface-raised hover:text-foreground disabled:opacity-35"
           title={i18nService.t('agentBrowserBack')}
@@ -194,7 +299,7 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
         </button>
         <button
           type="button"
-          disabled={credentialLoginBusy || !selectedTab?.canGoForward}
+          disabled={browserControlsBusy || !selectedTab?.canGoForward}
           onClick={() => void runAction(() => window.electron.openclaw.browser.goForwardHost({ sessionId }))}
           className="inline-flex h-7 w-7 items-center justify-center rounded-md text-secondary hover:bg-surface-raised hover:text-foreground disabled:opacity-35"
           title={i18nService.t('agentBrowserForward')}
@@ -204,7 +309,7 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
         </button>
         <button
           type="button"
-          disabled={credentialLoginBusy || !selectedTab}
+          disabled={browserControlsBusy || !selectedTab}
           onClick={() => void runAction(() => selectedTab?.loading
             ? window.electron.openclaw.browser.stopHost({ sessionId })
             : window.electron.openclaw.browser.reloadHost({ sessionId }))}
@@ -223,48 +328,23 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
             onFocus={() => { addressFocusedRef.current = true; }}
             onBlur={() => { addressFocusedRef.current = false; }}
             placeholder={i18nService.t('agentBrowserAddressPlaceholder')}
-            disabled={submitting || credentialLoginBusy}
+            disabled={submitting || browserControlsBusy}
             className="h-7 w-full rounded-md border border-border bg-surface px-2.5 text-xs text-foreground outline-none placeholder:text-muted focus:border-primary"
           />
         </form>
-        <span className="hidden shrink-0 text-[11px] text-muted xl:inline">
-          {i18nService.t('agentBrowserInteractive')}
-        </span>
+        <button
+          ref={browserMenuButtonRef}
+          type="button"
+          disabled={browserControlsBusy}
+          onClick={() => void handleBrowserMenu()}
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-surface-raised hover:text-foreground disabled:opacity-35"
+          title={i18nService.t('artifactBrowserMenu')}
+          aria-label={i18nService.t('artifactBrowserMenu')}
+          aria-haspopup="menu"
+        >
+          <EllipsisVerticalIcon className="h-4 w-4" />
+        </button>
       </div>
-
-      {state?.tabs.length ? (
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface px-2">
-          <select
-            value={state.selectedPageId ?? ''}
-            disabled={credentialLoginBusy}
-            onChange={event => void runAction(() => window.electron.openclaw.browser.selectHostPage({
-              sessionId,
-              pageId: Number(event.target.value),
-            }))}
-            className="min-w-0 flex-1 truncate rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus:border-primary"
-          >
-            {state.tabs.map(tab => (
-              <option key={tab.pageId} value={tab.pageId}>
-                {tab.title || tab.url || `#${tab.pageId}`}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            disabled={credentialLoginBusy || !state.selectedPageId}
-            onClick={() => state.selectedPageId && void runAction(() =>
-              window.electron.openclaw.browser.closeHostPage({
-                sessionId,
-                pageId: state.selectedPageId!,
-              }))}
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-secondary hover:bg-surface-raised hover:text-foreground disabled:opacity-35"
-            title={i18nService.t('agentBrowserCloseTab')}
-            aria-label={i18nService.t('agentBrowserCloseTab')}
-          >
-            <XMarkIcon className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ) : null}
 
       {state?.error ? (
         <div className="shrink-0 truncate border-b border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[11px] text-amber-700 dark:text-amber-300" title={state.error}>
@@ -314,8 +394,19 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
       ) : null}
 
       {credentialLoginStatusKey ? (
-        <div className="shrink-0 border-b border-primary/20 bg-primary/10 px-3 py-1 text-[11px] text-primary">
-          {i18nService.t(credentialLoginStatusKey)}
+        <div className="flex shrink-0 items-center gap-2 border-b border-primary/20 bg-primary/10 px-3 py-1 text-[11px] text-primary">
+          <span className="min-w-0 flex-1">{i18nService.t(credentialLoginStatusKey)}</span>
+          {!credentialLoginBusy ? (
+            <button
+              type="button"
+              onClick={dismissCredentialLoginStatus}
+              className="shrink-0 rounded p-0.5 text-primary/70 transition-colors hover:bg-primary/10 hover:text-primary"
+              title={i18nService.t('close')}
+              aria-label={i18nService.t('close')}
+            >
+              <XMarkIcon className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
         </div>
       ) : null}
 
