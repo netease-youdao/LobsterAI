@@ -55,12 +55,14 @@ function hasCommandInEnv(command: string, env: Record<string, string | undefined
 let cachedElectronNodeRuntimePath: string | null = null;
 
 function resolveElectronNodeRuntimePath(): string {
-  if (!app.isPackaged || process.platform !== 'darwin') {
+  if (process.platform !== 'darwin') {
     return process.execPath;
   }
 
   try {
-    const appName = app.getName();
+    // Development keeps Electron's bundle names; its LSUIElement helper also
+    // prevents Node-mode gateway and worker processes from appearing in the Dock.
+    const appName = app.isPackaged ? app.getName() : 'Electron';
     const frameworksDir = join(process.resourcesPath, '..', 'Frameworks');
     if (!existsSync(frameworksDir)) {
       return process.execPath;

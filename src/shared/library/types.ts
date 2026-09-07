@@ -15,8 +15,11 @@ import type {
   LibraryCloudKind,
   LibraryCloudUnavailableReason,
   LibraryErrorCode,
+  LibraryGridProtocol,
   LibraryIndexPhase,
   LibraryItemKind,
+  LibraryLocalProtocol,
+  LibraryLocalSort,
   LibraryOrigin,
   LibraryRelationKind,
   LibrarySharedStatusFilter,
@@ -40,6 +43,8 @@ export interface LibrarySessionRef {
   sessionId: string;
   title: string;
   agentId: string;
+  createdAt: number;
+  updatedAt: number;
   lastRelatedAt: number;
   lastMessageId?: string;
   sessionArtifactId?: string;
@@ -123,7 +128,7 @@ export interface LibraryLocalListOptions {
   keyword?: string;
   cursor?: string;
   pageSize?: number;
-  sort?: LibrarySort;
+  sort?: LibraryLocalSort;
   favoritesOnly?: boolean;
 }
 
@@ -134,6 +139,8 @@ export interface LibraryLocalCounts {
 }
 
 export interface LibraryLocalListData {
+  protocolVersion: typeof LibraryLocalProtocol.Version;
+  sort: typeof LibraryLocalSort.RecentTask;
   list: LocalArtifactItem[];
   nextCursor?: string;
   hasMore: boolean;
@@ -142,6 +149,48 @@ export interface LibraryLocalListData {
 
 export interface LibraryGetLocalItemsInput {
   itemIds: string[];
+}
+
+export interface LibraryLocalTaskFilters {
+  category?: LibraryCategory;
+  keyword?: string;
+  favoritesOnly?: boolean;
+}
+
+export interface LibraryLocalTaskGroupsOptions extends LibraryLocalTaskFilters {
+  taskCursor?: string;
+  taskPageSize?: number;
+}
+
+export interface LibraryLocalTaskGroup {
+  session: LibrarySessionRef;
+  matchedFileCount: number;
+  previewItems: LocalArtifactItem[];
+}
+
+export interface LibraryLocalTaskGroupsData {
+  protocolVersion: typeof LibraryGridProtocol.Version;
+  sort: typeof LibraryLocalSort.RecentTask;
+  groups: LibraryLocalTaskGroup[];
+  nextTaskCursor?: string;
+  hasMoreTasks: boolean;
+  counts: LibraryLocalCounts;
+}
+
+export interface LibraryLocalTaskItemsOptions extends LibraryLocalTaskFilters {
+  sessionId: string;
+  itemCursor?: string;
+  pageSize?: number;
+}
+
+export interface LibraryLocalTaskItemsData {
+  protocolVersion: typeof LibraryGridProtocol.Version;
+  sort: typeof LibraryLocalSort.RecentTask;
+  session: LibrarySessionRef;
+  matchedFileCount: number;
+  items: LocalArtifactItem[];
+  nextItemCursor?: string;
+  hasMoreItems: boolean;
 }
 
 export interface LibraryGetLocalItemsData {
@@ -244,5 +293,7 @@ export interface LibraryBackfillState {
 
 export interface LibraryChangedPayload {
   reason: LibraryChangeReason;
+  itemKind?: LibraryItemKind;
   itemIds?: string[];
+  sessionIds?: string[];
 }

@@ -11,6 +11,7 @@ import {
   LIBRARY_INDEX_POLICY_VERSION,
   LibraryArtifactType,
   LibraryAvailability,
+  LibraryChangeReason,
   LibraryIndexPhase,
   LibraryLimits,
   LibraryOrigin,
@@ -28,6 +29,7 @@ import {
   buildArtifactFileClientSourceKey,
   buildHtmlShareClientSourceKey,
 } from '../libs/htmlShare/htmlShareSourceKey';
+import type { SessionProjectionChanges } from '../libs/sessionProjectionNotifications';
 import {
   type LibraryIndexedFile,
   LibraryLocalStore,
@@ -286,6 +288,20 @@ export class LibraryIndexService {
 
   notifyChange(payload: LibraryChangedPayload): void {
     this.onChanged(payload);
+  }
+
+  notifySessionProjectionChanges(changes: SessionProjectionChanges): void {
+    const sessionIds = this.store.listSessionIdsWithArtifactRelations(changes.changedSessionIds);
+    if (sessionIds.length > 0) {
+      this.notifyChange({ reason: LibraryChangeReason.SessionProjectionChanged, sessionIds });
+    }
+    if (changes.affectedArtifactIds.length > 0) {
+      this.notifyChange({
+        reason: LibraryChangeReason.SessionDeleted,
+        sessionIds: changes.deletedSessionIds,
+        itemIds: changes.affectedArtifactIds,
+      });
+    }
   }
 
   private async indexCandidate(candidate: LibraryArtifactCandidate): Promise<LocalArtifactItem | null> {

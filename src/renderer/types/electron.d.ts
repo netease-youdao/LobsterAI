@@ -108,6 +108,10 @@ import type {
   LibraryLocalDetailData,
   LibraryLocalListData,
   LibraryLocalListOptions,
+  LibraryLocalTaskGroupsData,
+  LibraryLocalTaskGroupsOptions,
+  LibraryLocalTaskItemsData,
+  LibraryLocalTaskItemsOptions,
   LibraryRecordCandidatesData,
   LibraryResult,
 } from '../../shared/library/types';
@@ -1510,6 +1514,12 @@ interface IElectronAPI {
     listLocal: (
       options?: LibraryLocalListOptions,
     ) => Promise<LibraryResult<LibraryLocalListData>>;
+    listLocalTaskGroups: (
+      options?: LibraryLocalTaskGroupsOptions,
+    ) => Promise<LibraryResult<LibraryLocalTaskGroupsData>>;
+    listLocalTaskItems: (
+      options: LibraryLocalTaskItemsOptions,
+    ) => Promise<LibraryResult<LibraryLocalTaskItemsData>>;
     listCloud: (
       options?: LibraryCloudListOptions,
     ) => Promise<LibraryResult<LibraryCloudListData>>;

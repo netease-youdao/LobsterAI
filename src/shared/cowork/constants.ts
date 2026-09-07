@@ -61,6 +61,8 @@ export const CoworkIpcChannel = {
   GetMediaModels: 'media:getModels',
   MediaStatusPollUpdate: 'cowork:media:statusPollUpdate',
   ForkSession: 'cowork:session:fork',
+  DeleteSession: 'cowork:session:delete',
+  DeleteSessions: 'cowork:session:deleteBatch',
   StopSession: 'cowork:session:stop',
   SubTaskHistory: 'cowork:subTask:history',
   SubagentList: 'cowork:subagent:list',

@@ -1,7 +1,8 @@
 import {
+  LibraryAvailability,
   LibraryCategory,
-  LibraryLimits,
 } from '../../../shared/library/constants';
+import { compareLibraryLocalItems } from '../../../shared/library/localOrdering';
 import type {
   LibraryLocalListData,
   LocalArtifactItem,
@@ -54,55 +55,88 @@ export interface LibraryLocalItemChangeResult {
   requiresAuthoritativeRefresh: boolean;
 }
 
-export const compareLibraryLocalItems = (
-  left: LocalArtifactItem,
-  right: LocalArtifactItem,
-): number => (
-  right.sortTime - left.sortTime || right.itemId.localeCompare(left.itemId)
+export { compareLibraryLocalItems } from '../../../shared/library/localOrdering';
+
+export interface LibraryLocalItemChangeContext {
+  dirty?: boolean;
+  inFlight?: boolean;
+}
+
+// SQLite's built-in NOCASE folds ASCII only, not locale-dependent Unicode case.
+const normalizeSearchText = (value: string): string => (
+  value.replace(/[A-Z]/g, character => character.toLowerCase())
 );
 
 export const matchesLibraryLocalQuery = (
   item: LocalArtifactItem,
   query: LibraryLocalQuery,
 ): boolean => {
+  if (item.availability === LibraryAvailability.Missing || item.relatedSessionCount < 1) return false;
   if (query.category !== LibraryCategory.All && item.category !== query.category) return false;
   if (query.favoritesOnly && !item.isFavorite) return false;
-  const keyword = query.keyword.trim().toLocaleLowerCase();
+  const keyword = normalizeSearchText(query.keyword.trim());
   if (!keyword) return true;
-  return item.title.toLocaleLowerCase().includes(keyword)
-    || item.extension.toLocaleLowerCase().includes(keyword);
+  return normalizeSearchText(item.title).includes(keyword)
+    || normalizeSearchText(item.extension).includes(keyword);
 };
 
 export const applyLibraryLocalItemChanges = (
   current: LibraryLocalListData,
   changes: LibraryLocalItemChanges,
   query: LibraryLocalQuery,
+  context: LibraryLocalItemChangeContext = {},
 ): LibraryLocalItemChangeResult => {
-  const unavailable = new Set(changes.unavailableItemIds);
-  const nextById = new Map(
-    current.list
-      .filter(item => !unavailable.has(item.itemId))
-      .map(item => [item.itemId, item]),
-  );
-  const currentItemIds = new Set(current.list.map(item => item.itemId));
+  const refresh = (): LibraryLocalItemChangeResult => ({
+    data: current,
+    requiresAuthoritativeRefresh: true,
+  });
+  if (context.dirty || context.inFlight) return refresh();
+  // getLocalItems cannot distinguish a deleted relation from a newly missing
+  // file. Re-read counts as well as membership instead of guessing missing.
+  if (changes.unavailableItemIds.length > 0) return refresh();
+
+  const nextById = new Map(current.list.map(item => [item.itemId, item]));
   const currentTail = current.list[current.list.length - 1];
 
   for (const item of changes.items) {
+    const previous = nextById.get(item.itemId);
     if (!matchesLibraryLocalQuery(item, query)) {
-      nextById.delete(item.itemId);
+      if (previous) return refresh();
       continue;
     }
-    const isAlreadyLoaded = currentItemIds.has(item.itemId);
-    const isInsideLoadedWindow = !current.hasMore
-      || !currentTail
-      || compareLibraryLocalItems(item, currentTail) <= 0;
-    if (isAlreadyLoaded || isInsideLoadedWindow) nextById.set(item.itemId, item);
+    if (!previous) {
+      if (!current.hasMore || !currentTail || compareLibraryLocalItems(item, currentTail) <= 0) {
+        return refresh();
+      }
+      continue;
+    }
+    const oldSession = previous.latestSession;
+    const newSession = item.latestSession;
+    if (
+      oldSession.sessionId !== newSession.sessionId
+      || oldSession.createdAt !== newSession.createdAt
+      || oldSession.updatedAt !== newSession.updatedAt
+      || oldSession.title !== newSession.title
+      || oldSession.agentId !== newSession.agentId
+      || (current.hasMore && compareLibraryLocalItems(previous, item) !== 0)
+    ) return refresh();
+    nextById.set(item.itemId, item);
   }
 
   const list = [...nextById.values()].sort(compareLibraryLocalItems);
+  const countAvailable = (items: LocalArtifactItem[]): number => items.filter(
+    item => item.availability === LibraryAvailability.Available,
+  ).length;
   return {
-    data: { ...current, list },
-    requiresAuthoritativeRefresh: list.length > LibraryLimits.MaxPageSize,
+    data: {
+      ...current,
+      list,
+      counts: {
+        ...current.counts,
+        available: current.counts.available + countAvailable(list) - countAvailable(current.list),
+      },
+    },
+    requiresAuthoritativeRefresh: false,
   };
 };
 

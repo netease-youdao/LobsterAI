@@ -30,6 +30,7 @@ import {
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
+import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1356,4 +1357,160 @@ test('backfillEmptyAgentModels assigns the current default model to empty agents
     ['stockexpert', 'qwen3.5-plus'],
     ['writer', 'deepseek-v3.2'],
   ]);
+});
+
+test('session projection notifications cover creation, fork and listener disposal after commit', () => {
+  const events: SessionProjectionChanges[] = [];
+  const unsubscribe = store.onSessionProjectionChanges(changes => {
+    expect(db.inTransaction).toBe(false);
+    events.push(changes);
+  });
+  const source = store.createSession('Source', '/tmp');
+  const fork = store.forkSession({ sourceSessionId: source.id });
+  expect(events.map(event => event.changedSessionIds)).toEqual([[source.id], [fork.id]]);
+  unsubscribe();
+  store.updateSession(source.id, { title: 'After unsubscribe' });
+  expect(events).toHaveLength(2);
+});
+
+test('projection notifications follow actual changes, including forced touches and backward user times', () => {
+  insertSession('projection', 'main', 'Original', 1000);
+  const events: SessionProjectionChanges[] = [];
+  store.onSessionProjectionChanges(changes => events.push(changes));
+  store.updateSession('projection', { status: 'idle' });
+  store.updateSession('projection', { modelOverride: 'other' });
+  store.addMessage('projection', { type: 'assistant', content: 'stream' });
+  store.addMessage('projection', { type: 'tool_use', content: 'tool' });
+  store.setSessionPinned('projection', true);
+  expect(events).toHaveLength(0);
+  store.updateSession('projection', { title: 'Renamed' });
+  expect(store.getSession('projection')?.updatedAt).toBe(1000);
+  store.updateSession('projection', {}, { touchUpdatedAt: true });
+  store.addMessage('projection', { type: 'user', content: 'backwards' }, 500.25);
+  expect(store.getSession('projection')?.updatedAt).toBe(500.25);
+  store.updateSession('projection', { status: 'completed' });
+  expect(events.map(event => event.changedSessionIds)).toEqual(
+    Array.from({ length: 4 }, () => ['projection']),
+  );
+});
+
+test.each([true, false])('insertMessageBeforeId notifies once with existing target=%s', existing => {
+  insertSession('insert-projection', 'main', 'Original', 1000);
+  if (existing) insertMessage('target', 'insert-projection', 'assistant', 'reply', null, 1);
+  const listener = vi.fn();
+  store.onSessionProjectionChanges(listener);
+  store.insertMessageBeforeId('insert-projection', 'target', { type: 'user', content: 'prompt' });
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect(listener.mock.calls[0][0].changedSessionIds).toEqual(['insert-projection']);
+});
+
+test.each([true, false])('history replacement only notifies newer fractional user times (conversation=%s)', conversation => {
+  insertSession('history-projection', 'main', 'Original', 5000);
+  const listener = vi.fn();
+  store.onSessionProjectionChanges(listener);
+  const replace = (timestamp: number) => {
+    if (conversation) {
+      store.replaceConversationMessages('history-projection', [{ role: 'user', text: 'prompt', timestamp }]);
+    } else {
+      store.replaceSessionMessages('history-projection', [{ type: 'user', content: 'prompt', timestamp }]);
+    }
+  };
+  replace(3000.25);
+  expect(listener).not.toHaveBeenCalled();
+  replace(6000.75);
+  expect(store.getSession('history-projection')?.updatedAt).toBe(6000.75);
+  expect(listener).toHaveBeenCalledTimes(1);
+});
+
+test('resetRunningSessions batches changed projections and leaves no-op reset silent', () => {
+  insertSession('reset-a', 'main', 'A', 1);
+  insertSession('reset-b', 'main', 'B', 1);
+  db.prepare("UPDATE cowork_sessions SET status = 'running'").run();
+  const listener = vi.fn();
+  store.onSessionProjectionChanges(listener);
+  expect(store.resetRunningSessions()).toBe(2);
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect(listener.mock.calls[0][0].changedSessionIds.sort()).toEqual(['reset-a', 'reset-b']);
+  expect(store.resetRunningSessions()).toBe(0);
+  expect(listener).toHaveBeenCalledTimes(1);
+});
+
+test('subagent upsert notifies creation and actual repeated running timestamp writes', () => {
+  insertSession('parent-projection');
+  const listener = vi.fn();
+  store.onSessionProjectionChanges(listener);
+  const options = {
+    id: 'child-projection',
+    parentSessionId: 'parent-projection',
+    childSessionKey: 'child-key',
+    title: 'Child',
+    agentId: 'main',
+  };
+  store.upsertSubagentChildSession(options);
+  db.prepare('UPDATE cowork_sessions SET updated_at = 1 WHERE id = ?').run(options.id);
+  store.upsertSubagentChildSession(options);
+  expect(listener).toHaveBeenCalledTimes(2);
+  expect(listener.mock.calls.map(call => call[0].changedSessionIds)).toEqual([[options.id], [options.id]]);
+});
+
+test('outer session transaction publishes final values once and drops rollback or reverted writes', () => {
+  insertSession('transaction-projection', 'main', 'Original', 1000);
+  const listener = vi.fn();
+  store.onSessionProjectionChanges(listener);
+  store.runSessionTransaction(() => {
+    store.updateSession('transaction-projection', { title: 'Temporary' });
+    store.runSessionTransaction(() => store.updateSession('transaction-projection', { title: 'Original' }));
+    expect(listener).not.toHaveBeenCalled();
+  });
+  expect(listener).not.toHaveBeenCalled();
+  expect(() => store.runSessionTransaction(() => {
+    store.updateSession('transaction-projection', { title: 'Rolled back' });
+    throw new Error('rollback');
+  })).toThrow('rollback');
+  expect(store.getSession('transaction-projection')?.title).toBe('Original');
+  expect(listener).not.toHaveBeenCalled();
+  store.runSessionTransaction(() => {
+    store.updateSession('transaction-projection', { title: 'Committed' });
+    store.addMessage('transaction-projection', { type: 'user', content: 'New' }, 2000);
+    expect(listener).not.toHaveBeenCalled();
+  });
+  expect(listener).toHaveBeenCalledTimes(1);
+});
+
+test.each([false, true])('single and batch deletions publish unique artifact/session IDs once (batch=%s)', batch => {
+  insertSession('delete-a');
+  insertSession('delete-b');
+  db.prepare('INSERT INTO library_artifact_sessions (artifact_id, session_id) VALUES (?, ?)').run('shared-file', 'delete-a');
+  db.prepare('INSERT INTO library_artifact_sessions (artifact_id, session_id) VALUES (?, ?)').run('shared-file', 'delete-b');
+  const listener = vi.fn();
+  store.onSessionProjectionChanges(listener);
+  if (batch) store.deleteSessions(['delete-a', 'delete-a', 'delete-b']);
+  else store.deleteSession('delete-a');
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect(listener.mock.calls[0][0]).toEqual({
+    changedSessionIds: [],
+    deletedSessionIds: batch ? ['delete-a', 'delete-b'] : ['delete-a'],
+    affectedArtifactIds: ['shared-file'],
+  });
+});
+
+test.each([false, true])('agent transaction preserves deleted artifact IDs (orphan cleanup=%s)', orphanCleanup => {
+  if (!orphanCleanup) store.createAgent({ id: 'projection-agent', name: 'Agent' });
+  insertSession('agent-session', 'projection-agent');
+  db.prepare('INSERT INTO library_artifact_sessions (artifact_id, session_id) VALUES (?, ?)').run('agent-file', 'agent-session');
+  const listener = vi.fn(changes => {
+    expect(db.inTransaction).toBe(false);
+    expect(store.getSession('agent-session')).toBeNull();
+    expect(Boolean(store.getAgent('projection-agent'))).toBe(orphanCleanup);
+    return changes;
+  });
+  store.onSessionProjectionChanges(listener);
+  if (orphanCleanup) store.createAgent({ id: 'projection-agent', name: 'Agent' });
+  else expect(store.deleteAgent('projection-agent')).toBe(true);
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect(listener.mock.calls[0][0]).toEqual({
+    changedSessionIds: [],
+    deletedSessionIds: ['agent-session'],
+    affectedArtifactIds: ['agent-file'],
+  });
 });

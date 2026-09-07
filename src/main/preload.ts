@@ -86,6 +86,8 @@ import type {
   LibraryFavoriteInput,
   LibraryGetLocalItemsInput,
   LibraryLocalListOptions,
+  LibraryLocalTaskGroupsOptions,
+  LibraryLocalTaskItemsOptions,
 } from '../shared/library/types';
 import {
   type ListLocalWebServicesOptions,
@@ -568,9 +570,9 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.GoalCommand, options),
     stopSession: (sessionId: string) =>
       ipcRenderer.invoke(CoworkIpcChannel.StopSession, sessionId),
-    deleteSession: (sessionId: string) => ipcRenderer.invoke('cowork:session:delete', sessionId),
+    deleteSession: (sessionId: string) => ipcRenderer.invoke(CoworkIpcChannel.DeleteSession, sessionId),
     deleteSessions: (sessionIds: string[]) =>
-      ipcRenderer.invoke('cowork:session:deleteBatch', sessionIds),
+      ipcRenderer.invoke(CoworkIpcChannel.DeleteSessions, sessionIds),
     setSessionPinned: (options: { sessionId: string; pinned: boolean }) =>
       ipcRenderer.invoke('cowork:session:pin', options),
     renameSession: (options: { sessionId: string; title: string }) =>
@@ -978,6 +980,10 @@ contextBridge.exposeInMainWorld('electron', {
   library: {
     listLocal: (options: LibraryLocalListOptions = {}) =>
       ipcRenderer.invoke(LibraryIpc.ListLocal, options),
+    listLocalTaskGroups: (options: LibraryLocalTaskGroupsOptions = {}) =>
+      ipcRenderer.invoke(LibraryIpc.ListLocalTaskGroups, options),
+    listLocalTaskItems: (options: LibraryLocalTaskItemsOptions) =>
+      ipcRenderer.invoke(LibraryIpc.ListLocalTaskItems, options),
     listCloud: (options: LibraryCloudListOptions = {}) =>
       ipcRenderer.invoke(LibraryIpc.ListCloud, options),
     getLocalItems: (input: LibraryGetLocalItemsInput) =>

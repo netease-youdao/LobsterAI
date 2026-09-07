@@ -156,7 +156,7 @@ import type {
   ResolvedKitCapabilities,
 } from '../shared/kit/constants';
 import { KitStoreKey } from '../shared/kit/constants';
-import { LibraryChangeReason, LibraryIpc } from '../shared/library/constants';
+import { LibraryIpc } from '../shared/library/constants';
 import {
   getLibraryThumbnailFailureDetails,
   isLibraryThumbnailFailureRetryable,
@@ -2134,6 +2134,7 @@ let preventSleepBlockerId: number | null = null;
 let appUpdateCoordinator: AppUpdateCoordinator | null = null;
 let mainLogReporter: MainLogReporter | null = null;
 let libraryIndexService: LibraryIndexService | null = null;
+let unsubscribeLibrarySessionChanges: (() => void) | null = null;
 
 function setPreventSleepBlockerEnabled(enabled: boolean): void {
   if (enabled) {
@@ -9893,17 +9894,11 @@ if (!gotTheLock) {
     return { success: true };
   });
 
-  ipcMain.handle('cowork:session:delete', async (_event, sessionId: string) => {
+  ipcMain.handle(CoworkIpcChannel.DeleteSession, async (_event, sessionId: string) => {
     try {
       getCoworkEngineRouter().stopSession(sessionId);
       const coworkStoreInstance = getCoworkStore();
-      const affectedArtifactIds = coworkStoreInstance.deleteSession(sessionId);
-      if (affectedArtifactIds.length > 0) {
-        libraryIndexService?.notifyChange({
-          reason: LibraryChangeReason.SessionDeleted,
-          itemIds: affectedArtifactIds,
-        });
-      }
+      coworkStoreInstance.deleteSession(sessionId);
       mediaSelectionBySession.delete(sessionId);
       mediaTurnAccountScopeBySession.delete(sessionId);
       skinRuntimeController?.handleSessionDeleted(sessionId);
@@ -9938,20 +9933,14 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:session:deleteBatch', async (_event, sessionIds: string[]) => {
+  ipcMain.handle(CoworkIpcChannel.DeleteSessions, async (_event, sessionIds: string[]) => {
     try {
       const runtime = getCoworkEngineRouter();
       sessionIds.forEach(sessionId => {
         runtime.stopSession(sessionId);
       });
       const coworkStoreInstance = getCoworkStore();
-      const affectedArtifactIds = coworkStoreInstance.deleteSessions(sessionIds);
-      if (affectedArtifactIds.length > 0) {
-        libraryIndexService?.notifyChange({
-          reason: LibraryChangeReason.SessionDeleted,
-          itemIds: affectedArtifactIds,
-        });
-      }
+      coworkStoreInstance.deleteSessions(sessionIds);
       const router = getCoworkEngineRouter();
       for (const sessionId of sessionIds) {
         skinRuntimeController?.handleSessionDeleted(sessionId);
@@ -14149,6 +14138,8 @@ if (!gotTheLock) {
     }
 
     sqliteBackupManager?.stopPeriodicBackupLoop();
+    unsubscribeLibrarySessionChanges?.();
+    unsubscribeLibrarySessionChanges = null;
     libraryIndexService?.stop();
     libraryThumbnailRenderer.dispose();
 
@@ -14302,6 +14293,10 @@ if (!gotTheLock) {
       onChanged: emitLibraryChanged,
       getMetadata: key => store?.get(key),
       setMetadata: (key, value) => store?.set(key, value),
+    });
+    unsubscribeLibrarySessionChanges?.();
+    unsubscribeLibrarySessionChanges = getCoworkStore().onSessionProjectionChanges(changes => {
+      libraryIndexService?.notifySessionProjectionChanges(changes);
     });
     registerLibraryIpcHandlers({
       localStore: libraryLocalStore,

@@ -54,6 +54,11 @@ import {
   ContinuityCapsuleSource,
   type CoworkContinuityCapsule,
 } from './libs/agentEngine/coworkContinuityCapsule';
+import {
+  type SessionProjection,
+  type SessionProjectionChanges,
+  SessionProjectionNotifications,
+} from './libs/sessionProjectionNotifications';
 
 
 // Default working directory for new users
@@ -779,11 +784,38 @@ export interface CreateCoworkSessionOptions {
 
 export class CoworkStore {
   private db: Database.Database;
+  private readonly sessionProjectionNotifications: SessionProjectionNotifications;
   private readonly knownIMPlatforms = new Set<string>(PlatformRegistry.platforms);
 
   constructor(db: Database.Database) {
     this.db = db;
+    this.sessionProjectionNotifications = new SessionProjectionNotifications({
+      runTransaction: operation => this.db.transaction(operation)(),
+      isInTransaction: () => this.db.inTransaction,
+      readProjection: sessionId => this.getOne<SessionProjection>(
+        `SELECT title, agent_id AS agentId,
+          created_at AS createdAt, updated_at AS updatedAt
+         FROM cowork_sessions WHERE id = ?`,
+        [sessionId],
+      ),
+    });
     this.ensureContinuityCapsuleTable();
+  }
+
+  onSessionProjectionChanges(listener: (changes: SessionProjectionChanges) => void): () => void {
+    return this.sessionProjectionNotifications.subscribe(listener);
+  }
+
+  /** All outer transactions containing session writes must use this boundary. */
+  runSessionTransaction<T>(operation: () => T): T {
+    return this.sessionProjectionNotifications.transaction(operation);
+  }
+
+  private writeSessionProjections<T>(sessionIds: readonly string[], operation: () => T): T {
+    return this.runSessionTransaction(() => {
+      this.sessionProjectionNotifications.capture(sessionIds);
+      return operation();
+    });
   }
 
   private ensureContinuityCapsuleTable(): void {
@@ -928,27 +960,29 @@ export class CoworkStore {
     const scheduledTaskId = options.scheduledTaskId?.trim() || null;
     const thinkingLevel = options.thinkingLevel ?? '';
 
-    this.db
-      .prepare(
-        `
-      INSERT INTO cowork_sessions (id, title, claude_session_id, scheduled_task_id, status, cwd, system_prompt, model_override, thinking_level, execution_mode, active_skill_ids, agent_id, pinned, created_at, updated_at)
-      VALUES (?, ?, NULL, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-    `,
-      )
-      .run(
-        id,
-        title,
-        scheduledTaskId,
-        cwd,
-        systemPrompt,
-        modelOverride,
-        thinkingLevel,
-        executionMode,
-        JSON.stringify(activeSkillIds),
-        agentId,
-        now,
-        now,
-      );
+    this.writeSessionProjections([id], () => {
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_sessions (id, title, claude_session_id, scheduled_task_id, status, cwd, system_prompt, model_override, thinking_level, execution_mode, active_skill_ids, agent_id, pinned, created_at, updated_at)
+        VALUES (?, ?, NULL, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      `,
+        )
+        .run(
+          id,
+          title,
+          scheduledTaskId,
+          cwd,
+          systemPrompt,
+          modelOverride,
+          thinkingLevel,
+          executionMode,
+          JSON.stringify(activeSkillIds),
+          agentId,
+          now,
+          now,
+        );
+    });
 
     return {
       id,
@@ -1238,7 +1272,7 @@ export class CoworkStore {
     `,
     );
 
-    this.db.transaction(() => {
+    this.writeSessionProjections([id], () => {
       insertSession.run(
         id,
         title,
@@ -1291,7 +1325,7 @@ export class CoworkStore {
       }
 
       this.copyContinuityCapsuleToFork(options.sourceSessionId, id, now);
-    })();
+    });
 
     const forked = this.getSession(id);
     if (!forked) {
@@ -1509,15 +1543,17 @@ export class CoworkStore {
     if (setClauses.length === 0) return;
 
     values.push(id);
-    this.db
-      .prepare(
-        `
-      UPDATE cowork_sessions
-      SET ${setClauses.join(', ')}
-      WHERE id = ?
-    `,
-      )
-      .run(...values);
+    this.writeSessionProjections([id], () => {
+      this.db
+        .prepare(
+          `
+        UPDATE cowork_sessions
+        SET ${setClauses.join(', ')}
+        WHERE id = ?
+      `,
+        )
+        .run(...values);
+    });
   }
 
   listSessionIdsByAgent(agentId: string): string[] {
@@ -1530,6 +1566,7 @@ export class CoworkStore {
 
   private deleteSessionRows(ids: string[]): string[] {
     if (ids.length === 0) return [];
+    this.sessionProjectionNotifications.capture(ids);
     const placeholders = ids.map(() => '?').join(',');
     const affectedArtifactRows = this.getAll<{ artifact_id: string }>(
       `SELECT DISTINCT artifact_id
@@ -1541,7 +1578,9 @@ export class CoworkStore {
     this.db.prepare(`DELETE FROM cowork_session_capsules WHERE session_id IN (${placeholders})`).run(...ids);
     this.db.prepare(`DELETE FROM cowork_messages WHERE session_id IN (${placeholders})`).run(...ids);
     this.db.prepare(`DELETE FROM cowork_sessions WHERE id IN (${placeholders})`).run(...ids);
-    return affectedArtifactRows.map(row => row.artifact_id);
+    const affectedArtifactIds = affectedArtifactRows.map(row => row.artifact_id);
+    this.sessionProjectionNotifications.recordDeletion(ids, affectedArtifactIds);
+    return affectedArtifactIds;
   }
 
   private deleteSessionsForAgent(agentId: string): string[] {
@@ -1554,11 +1593,10 @@ export class CoworkStore {
   }
 
   deleteSession(id: string): string[] {
-    const deleteSession = this.db.transaction((sessionId: string) => {
-      this.markMemorySourcesInactiveBySession(sessionId);
-      return this.deleteSessionRows([sessionId]);
+    const affectedArtifactIds = this.runSessionTransaction(() => {
+      this.markMemorySourcesInactiveBySession(id);
+      return this.deleteSessionRows([id]);
     });
-    const affectedArtifactIds = deleteSession(id);
     this.markOrphanImplicitMemoriesStale();
     return affectedArtifactIds;
   }
@@ -1567,13 +1605,12 @@ export class CoworkStore {
     const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
     if (uniqueIds.length === 0) return [];
 
-    const deleteSessions = this.db.transaction((sessionIds: string[]) => {
-      for (const id of sessionIds) {
+    const affectedArtifactIds = this.runSessionTransaction(() => {
+      for (const id of uniqueIds) {
         this.markMemorySourcesInactiveBySession(id);
       }
-      return this.deleteSessionRows(sessionIds);
+      return this.deleteSessionRows(uniqueIds);
     });
-    const affectedArtifactIds = deleteSessions(uniqueIds);
     this.markOrphanImplicitMemoriesStale();
     return affectedArtifactIds;
   }
@@ -1732,16 +1769,22 @@ export class CoworkStore {
 
   resetRunningSessions(): number {
     const now = Date.now();
-    const result = this.db
-      .prepare(
-        `
-      UPDATE cowork_sessions
-      SET status = 'idle', updated_at = ?
-      WHERE status = 'running'
-    `,
-      )
-      .run(now);
-    return result.changes;
+    return this.runSessionTransaction(() => {
+      const sessionIds = this.getAll<{ id: string }>(
+        "SELECT id FROM cowork_sessions WHERE status = 'running'",
+      ).map(row => row.id);
+      this.sessionProjectionNotifications.capture(sessionIds);
+      const result = this.db
+        .prepare(
+          `
+        UPDATE cowork_sessions
+        SET status = 'idle', updated_at = ?
+        WHERE status = 'running'
+      `,
+        )
+        .run(now);
+      return result.changes;
+    });
   }
 
   listRecentCwds(limit: number = 8): string[] {
@@ -2156,28 +2199,30 @@ export class CoworkStore {
       .get(sessionId) as { next_seq: number } | undefined;
     const sequence = seqRow?.next_seq ?? 1;
 
-    this.db
-      .prepare(
-        `
-      INSERT INTO cowork_messages (id, session_id, type, content, metadata, created_at, sequence)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `,
-      )
-      .run(
-        id,
-        sessionId,
-        message.type,
-        message.content,
-        message.metadata ? JSON.stringify(message.metadata) : null,
-        now,
-        sequence,
-      );
+    this.writeSessionProjections([sessionId], () => {
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_messages (id, session_id, type, content, metadata, created_at, sequence)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+        )
+        .run(
+          id,
+          sessionId,
+          message.type,
+          message.content,
+          message.metadata ? JSON.stringify(message.metadata) : null,
+          now,
+          sequence,
+        );
 
-    // updated_at drives session list ordering: only user messages may move it,
-    // otherwise concurrent streaming runs keep reordering the list.
-    if (message.type === 'user') {
-      this.db.prepare('UPDATE cowork_sessions SET updated_at = ? WHERE id = ?').run(now, sessionId);
-    }
+      // updated_at drives session list ordering: only user messages may move it,
+      // otherwise concurrent streaming runs keep reordering the list.
+      if (message.type === 'user') {
+        this.db.prepare('UPDATE cowork_sessions SET updated_at = ? WHERE id = ?').run(now, sessionId);
+      }
+    });
 
     return {
       id,
@@ -2212,7 +2257,7 @@ export class CoworkStore {
       return this.addMessage(sessionId, message);
     }
 
-    this.db.transaction(() => {
+    this.writeSessionProjections([sessionId], () => {
       // Shift all messages with sequence >= target up by 1
       this.db
         .prepare(
@@ -2241,7 +2286,7 @@ export class CoworkStore {
       if (message.type === 'user') {
         this.db.prepare('UPDATE cowork_sessions SET updated_at = ? WHERE id = ?').run(now, sessionId);
       }
-    })();
+    });
 
     return {
       id,
@@ -2274,7 +2319,7 @@ export class CoworkStore {
   ): void {
     const now = Date.now();
 
-    this.db.transaction(() => {
+    this.writeSessionProjections([sessionId], () => {
       const existingRows = this.db
         .prepare(
           `
@@ -2353,7 +2398,7 @@ export class CoworkStore {
           .prepare('UPDATE cowork_sessions SET updated_at = MAX(updated_at, ?) WHERE id = ?')
           .run(lastUserMessageAt, sessionId);
       }
-    })();
+    });
   }
 
   replaceSessionMessages(
@@ -2362,7 +2407,7 @@ export class CoworkStore {
   ): void {
     const now = Date.now();
 
-    this.db.transaction(() => {
+    this.writeSessionProjections([sessionId], () => {
       this.db
         .prepare(
           "DELETE FROM cowork_messages WHERE session_id = ? AND type IN ('user', 'assistant', 'tool_use', 'tool_result')",
@@ -2402,7 +2447,7 @@ export class CoworkStore {
           .prepare('UPDATE cowork_sessions SET updated_at = MAX(updated_at, ?) WHERE id = ?')
           .run(lastUserMessageAt, sessionId);
       }
-    })();
+    });
   }
 
   updateMessage(
@@ -3248,7 +3293,7 @@ export class CoworkStore {
     }
 
     let removedOrphanSessionCount = 0;
-    const createAgent = this.db.transaction(() => {
+    this.runSessionTransaction(() => {
       removedOrphanSessionCount = this.deleteSessionsForAgent(id).length;
 
       this.db
@@ -3277,7 +3322,6 @@ export class CoworkStore {
           now,
         );
     });
-    createAgent();
     if (removedOrphanSessionCount > 0) {
       this.markOrphanImplicitMemoriesStale();
     }
@@ -3400,17 +3444,16 @@ export class CoworkStore {
   deleteAgent(id: string): boolean {
     if (id === AgentId.Main) return false; // Cannot delete default agent
 
-    const deleteAgent = this.db.transaction((agentId: string): boolean => {
-      const result = this.db.prepare('DELETE FROM agents WHERE id = ? AND is_default = 0').run(agentId);
+    const deleted = this.runSessionTransaction((): boolean => {
+      const result = this.db.prepare('DELETE FROM agents WHERE id = ? AND is_default = 0').run(id);
       if (result.changes === 0) {
         return false;
       }
 
-      this.deleteSessionsForAgent(agentId);
+      this.deleteSessionsForAgent(id);
       return true;
     });
 
-    const deleted = deleteAgent(id);
     if (deleted) {
       this.markOrphanImplicitMemoriesStale();
     }
@@ -3507,67 +3550,69 @@ export class CoworkStore {
     const activeSkillIds = agent?.skillIds ?? [];
     const status = options.status ?? 'running';
 
-    if (existing) {
-      this.db
-        .prepare(
-          `
-          UPDATE cowork_sessions
-          SET title = ?,
-              claude_session_id = ?,
-              status = ?,
-              cwd = ?,
-              system_prompt = ?,
-              model_override = ?,
-              execution_mode = ?,
-              active_skill_ids = ?,
-              agent_id = ?,
-              parent_session_id = ?,
-              updated_at = ?
-          WHERE id = ?
-        `,
-        )
-        .run(
-          title,
-          options.childSessionKey,
-          status,
-          cwd,
-          systemPrompt,
-          modelOverride,
-          executionMode,
-          JSON.stringify(activeSkillIds),
-          options.agentId,
-          options.parentSessionId,
-          now,
-          options.id,
-        );
-    } else {
-      this.db
-        .prepare(
-          `
-          INSERT INTO cowork_sessions (
-            id, title, claude_session_id, status, cwd, system_prompt, model_override,
-            execution_mode, active_skill_ids, agent_id, pinned, pin_order,
-            parent_session_id, created_at, updated_at
+    this.writeSessionProjections([options.id], () => {
+      if (existing) {
+        this.db
+          .prepare(
+            `
+            UPDATE cowork_sessions
+            SET title = ?,
+                claude_session_id = ?,
+                status = ?,
+                cwd = ?,
+                system_prompt = ?,
+                model_override = ?,
+                execution_mode = ?,
+                active_skill_ids = ?,
+                agent_id = ?,
+                parent_session_id = ?,
+                updated_at = ?
+            WHERE id = ?
+          `,
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
-        `,
-        )
-        .run(
-          options.id,
-          title,
-          options.childSessionKey,
-          status,
-          cwd,
-          systemPrompt,
-          modelOverride,
-          executionMode,
-          JSON.stringify(activeSkillIds),
-          options.agentId,
-          options.parentSessionId,
-          createdAt,
-          now,
-        );
-    }
+          .run(
+            title,
+            options.childSessionKey,
+            status,
+            cwd,
+            systemPrompt,
+            modelOverride,
+            executionMode,
+            JSON.stringify(activeSkillIds),
+            options.agentId,
+            options.parentSessionId,
+            now,
+            options.id,
+          );
+      } else {
+        this.db
+          .prepare(
+            `
+            INSERT INTO cowork_sessions (
+              id, title, claude_session_id, status, cwd, system_prompt, model_override,
+              execution_mode, active_skill_ids, agent_id, pinned, pin_order,
+              parent_session_id, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+          `,
+          )
+          .run(
+            options.id,
+            title,
+            options.childSessionKey,
+            status,
+            cwd,
+            systemPrompt,
+            modelOverride,
+            executionMode,
+            JSON.stringify(activeSkillIds),
+            options.agentId,
+            options.parentSessionId,
+            createdAt,
+            now,
+          );
+      }
+    });
 
     const session = this.getSession(options.id, 0);
     if (!session) {

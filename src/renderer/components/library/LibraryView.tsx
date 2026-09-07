@@ -28,12 +28,16 @@ import {
   LibraryChangeReason,
   LibraryCloudAvailabilityFilter,
   LibraryCloudKind,
+  LibraryErrorCode,
   LibraryItemKind,
   LibraryLimits,
+  LibraryLocalProtocol,
+  LibraryLocalSort,
   LibrarySourceFilter,
   LibraryViewMode,
 } from '../../../shared/library/constants';
 import type {
+  LibraryChangedPayload,
   LibraryCloudItem,
   LibraryCloudListData,
   LibraryItem,
@@ -92,11 +96,10 @@ import {
 import LibraryCategoryDropdown from './LibraryCategoryDropdown';
 import {
   formatLibraryDateGroupTitle,
-  groupLibraryItemsByDateAndSession,
+  getLibraryDateGroupKey,
 } from './libraryDateGrouping';
 import {
   getLibraryCardActionIds,
-  getLibraryPreviewActionIds,
   LibraryItemAction,
   type LibraryItemAction as LibraryItemActionValue,
 } from './libraryItemActionPolicy';
@@ -111,7 +114,6 @@ import {
   applyLibraryFavoriteState,
   removeLibraryCloudItem,
   restoreLibraryFavoriteState,
-  sanitizeLibraryLocalListData,
 } from './libraryListState';
 import {
   LibraryLoadingIndicator,
@@ -125,7 +127,6 @@ import {
   shouldResetLibraryScrollOnCommit,
 } from './libraryLoadingPresentation';
 import {
-  applyLibraryLocalItemChanges,
   getLibraryQueryLoadIntent,
   isLibraryBusyPhase,
   LibraryLoadIntent,
@@ -135,13 +136,24 @@ import LibraryPreviewModal from './LibraryPreviewModal';
 import {
   type LibraryRefreshBatch,
   LibraryRefreshCoordinator,
+  LibraryRefreshOutcome,
 } from './libraryRefreshCoordinator';
+import { getLibrarySessionAnchorKey, type LibraryScrollAnchor } from './libraryScrollAnchor';
 import LibraryCloudView from './LibrarySharedFilesView';
+import { groupLibraryItemsByTask } from './libraryTaskGrouping';
 import LibraryThumbnail from './LibraryThumbnail';
 import LibraryVirtualizedGroups, {
   type LibraryDateGroup,
 } from './LibraryVirtualizedGroups';
+import {
+  LibraryWindowRefreshStatus,
+  readLibraryLocalWindow,
+  validateLibraryLocalAppend,
+  validateLibraryLocalPage,
+} from './libraryWindowRefresh';
 import { useLibraryLoadingFeedback } from './useLibraryLoadingFeedback';
+import { useLibraryScrollAnchor } from './useLibraryScrollAnchor';
+import { useLibraryTaskGrid } from './useLibraryTaskGrid';
 
 interface LibraryViewProps {
   isAuthenticated: boolean;
@@ -177,6 +189,8 @@ const LIBRARY_GRID_STYLE: React.CSSProperties = {
   gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 240px), 264px))',
 };
 const EMPTY_LOCAL: LibraryLocalListData = {
+  protocolVersion: LibraryLocalProtocol.Version,
+  sort: LibraryLocalSort.RecentTask,
   list: [],
   hasMore: false,
   counts: { total: 0, available: 0, missing: 0 },
@@ -211,11 +225,12 @@ const SOURCE_FILTERS = [
   LibrarySourceFilter.Cloud,
 ] as const;
 
-const getLibrarySessionKey = (item: LibraryItem): string => {
-  if (item.itemKind === LibraryItemKind.LocalArtifact) {
-    return `session:${item.latestSession.sessionId}`;
+const getLocalLibraryError = (code?: LibraryErrorCode, fallback?: string): string => {
+  if (code === LibraryErrorCode.ProtocolMismatch) return i18nService.t('libraryRestartForUpdate');
+  if (code === LibraryErrorCode.InvalidCursor || code === LibraryErrorCode.InvalidLocalData) {
+    return i18nService.t('libraryInvalidLocalData');
   }
-  return item.latestSession ? `session:${item.latestSession.sessionId}` : 'cloud';
+  return fallback ?? i18nService.t('unknownError');
 };
 
 const formatLibrarySessionTime = (value: number): string => new Intl.DateTimeFormat(
@@ -374,7 +389,7 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
   const [cloudAvailability, setCloudAvailability] = useState<LibraryCloudAvailabilityFilter>(
     LibraryCloudAvailabilityFilter.All,
   );
-  const [viewMode, setViewMode] = useState<LibraryViewMode>(LibraryViewMode.List);
+  const [viewMode, setViewMode] = useState<LibraryViewMode>(LibraryViewMode.Grid);
   const [localData, setLocalData] = useState<LibraryLocalListData>(EMPTY_LOCAL);
   const [cloudData, setCloudData] = useState<LibraryCloudListData>(EMPTY_CLOUD);
   const [loadActivity, setLoadActivity] = useState<{
@@ -389,6 +404,7 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
   const [localResolvedQueryKey, setLocalResolvedQueryKey] = useState('');
   const [cloudResolvedQuery, setCloudResolvedQuery] = useState<LibraryCloudResolvedQuery>();
   const [error, setError] = useState<string>();
+  const [localNotice, setLocalNotice] = useState<string>();
   const [cloudError, setCloudError] = useState<string>();
   const [activeItem, setActiveItem] = useState<LibraryItem>();
   const [localDetail, setLocalDetail] = useState<LibraryLocalDetailData | null>(null);
@@ -396,23 +412,27 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
   const [cardDetailStates, setCardDetailStates] = useState<Record<string, CardDetailLoadState>>({});
   const requestIdRef = useRef(0);
   const mountedRef = useRef(true);
+  const localEpochRef = useRef(0);
+  const localDirtyRef = useRef(false);
+  const localCursorValidRef = useRef(false);
+  const browseDepthRef = useRef<number>(LibraryLimits.DefaultPageSize);
   const localDataRef = useRef(localData);
-  const localQueryKeyRef = useRef('');
+  const gridInvalidateRef = useRef<(payload?: LibraryChangedPayload) => void>(() => undefined);
+  const gridAnchorSessionIdsRef = useRef(new Map<string, string>());
+  const gridLoadCauseRef = useRef<LibraryLoadCauseValue>(LibraryLoadCause.Initial);
+  const gridManualRefreshRef = useRef(false);
   const currentQueryKeyRef = useRef('');
   const queryIdentityRef = useRef<LibraryQueryIdentity>();
   const pendingLocalRefreshCauseRef = useRef<LibraryLoadCauseValue>(
     LibraryLoadCause.BackgroundRefresh,
   );
-  const pendingScrollAnchorRef = useRef<{
-    candidates: Array<{ itemKey: string; offsetTop: number }>;
-  } | undefined>(undefined);
   const refreshCoordinatorRef = useRef<LibraryRefreshCoordinator | undefined>(undefined);
-  const refreshBatchHandlerRef = useRef<(batch: LibraryRefreshBatch) => Promise<void>>(
-    async () => undefined,
+  const refreshBatchHandlerRef = useRef<(batch: LibraryRefreshBatch) => Promise<LibraryRefreshOutcome>>(
+    async () => LibraryRefreshOutcome.Stopped,
   );
   const refreshLocalWindowRef = useRef<
-    (cause?: LibraryLoadCauseValue) => Promise<void>
-  >(async () => undefined);
+    (cause?: LibraryLoadCauseValue, retryAvailable?: boolean) => Promise<LibraryRefreshOutcome>
+  >(async () => LibraryRefreshOutcome.Stopped);
   const cardDetailRequestIdsRef = useRef(new Set<string>());
   const scrollContainerRef = useRef<HTMLElement>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
@@ -426,6 +446,7 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
     phase: LibraryLoadPhase,
     cause: LibraryLoadCauseValue,
   ): void => {
+    refreshCoordinatorRef.current?.setBusy(true);
     setLoadActivity(current => ({
       phase,
       cause,
@@ -439,6 +460,7 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
         ? current
         : { ...current, phase: LibraryLoadPhase.Settled }
     ));
+    refreshCoordinatorRef.current?.setBusy(false);
   }, []);
 
   useEffect(() => {
@@ -451,6 +473,8 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
   }, [keywordInput]);
 
   const wantsLocal = source === LibrarySourceFilter.Local;
+  const wantsLocalGrid = wantsLocal && viewMode === LibraryViewMode.Grid;
+  const wantsLocalList = wantsLocal && !wantsLocalGrid;
   const wantsCloud = source === LibrarySourceFilter.Cloud;
   const hasActiveLocalFilter = category !== LibraryCategory.All
     || keyword.length > 0
@@ -482,68 +506,90 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
   const activeCloudResolvedQuery = cloudResolvedQuery?.scopeKey === cloudScopeKey
     ? cloudResolvedQuery
     : undefined;
-  const hasResolvedSnapshot = wantsLocal
-    ? localResolvedQueryKey.length > 0
-    : activeCloudResolvedQuery !== undefined;
-  const hasResolvedCurrentQuery = wantsLocal
-    ? localResolvedQueryKey === localQueryKey
-    : activeCloudResolvedQuery?.queryKey === cloudQueryKey;
   const visibleCloudData = activeCloudResolvedQuery ? cloudData : EMPTY_CLOUD;
   const cloudDisplayAvailability = activeCloudResolvedQuery?.availability ?? cloudAvailability;
-  localQueryKeyRef.current = localQueryKey;
   currentQueryKeyRef.current = queryKey;
+  const notifyPositionChanged = useCallback(() => {
+    setLocalNotice(i18nService.t('libraryPositionChanged'));
+  }, []);
+  const {
+    capture: captureScrollAnchor,
+    captureSession: captureSessionAnchor,
+    pauseAppend,
+    isAppendArmed,
+    restore: restoreScrollAnchor,
+    restoration,
+    finish: finishScrollRestoration,
+    appendArmed,
+  } = useLibraryScrollAnchor(scrollContainerRef, queryKey, notifyPositionChanged, viewMode);
+
+  const beforeGridLayoutChange = useCallback((sessionId?: string, collapse?: boolean, manual?: boolean) => {
+    const anchor = collapse && sessionId ? captureSessionAnchor(sessionId) : captureScrollAnchor();
+    pauseAppend();
+    return manual ? { ...anchor, candidates: [], scrollTop: 0 } : anchor;
+  }, [captureScrollAnchor, captureSessionAnchor, pauseAppend]);
+  const afterGridLayoutChange = useCallback((anchor: unknown, isCurrent: () => boolean) => {
+    restoreScrollAnchor(anchor as LibraryScrollAnchor, isCurrent);
+  }, [restoreScrollAnchor]);
+  const getGridAnchorSessionIds = useCallback(() => captureScrollAnchor().candidates
+    .map(candidate => gridAnchorSessionIdsRef.current.get(candidate.itemKey))
+    .filter((sessionId): sessionId is string => sessionId !== undefined), [captureScrollAnchor]);
+  const taskGrid = useLibraryTaskGrid({
+    active: wantsLocalGrid,
+    category,
+    keyword,
+    favoritesOnly,
+    onBeforeLayoutChange: beforeGridLayoutChange,
+    onAfterLayoutChange: afterGridLayoutChange,
+    getAnchorSessionIds: getGridAnchorSessionIds,
+  });
+  const {
+    refresh: refreshTaskGrid,
+    loadMoreTasks,
+    expand: expandTask,
+    loadMoreItems: loadMoreTaskItems,
+    collapse: collapseTask,
+  } = taskGrid;
+  gridInvalidateRef.current = taskGrid.invalidate;
+  const hasResolvedSnapshot = wantsLocalGrid
+    ? taskGrid.hasResolvedSnapshot
+    : wantsLocal ? localResolvedQueryKey.length > 0 : activeCloudResolvedQuery !== undefined;
+  const hasResolvedCurrentQuery = wantsLocalGrid
+    ? taskGrid.hasResolvedCurrentQuery
+    : wantsLocal ? localResolvedQueryKey === localQueryKey : activeCloudResolvedQuery?.queryKey === cloudQueryKey;
+  const gridLoadPhase = taskGrid.loading
+    ? LibraryLoadPhase.Initial
+    : taskGrid.loadingMore ? LibraryLoadPhase.Appending
+      : taskGrid.refreshing ? LibraryLoadPhase.Refreshing : LibraryLoadPhase.Settled;
+  const loadPhase = wantsLocalGrid ? gridLoadPhase : loadActivity.phase;
   const loadingFeedback = useLibraryLoadingFeedback({
-    activityId: loadActivity.id,
-    phase: loadActivity.phase,
-    cause: loadActivity.cause,
+    activityId: wantsLocalGrid ? taskGrid.activityId : loadActivity.id,
+    phase: loadPhase,
+    cause: wantsLocalGrid
+      ? taskGrid.loadingMore ? LibraryLoadCause.Append
+        : taskGrid.refreshing
+          ? gridManualRefreshRef.current ? LibraryLoadCause.ManualRefresh : LibraryLoadCause.BackgroundRefresh
+          : gridLoadCauseRef.current
+      : loadActivity.cause,
     hasResolvedSnapshot,
   });
   const loading = loadingFeedback.showInitialSkeleton;
-  const loadingMore = loadActivity.phase === LibraryLoadPhase.Appending;
-  const loadPhase = loadActivity.phase;
+  const loadingMore = loadPhase === LibraryLoadPhase.Appending;
   const isBusy = isLibraryBusyPhase(loadPhase);
-
-  const captureScrollAnchor = useCallback((): void => {
-    const root = scrollContainerRef.current;
-    if (!root) return;
-    const rootTop = root.getBoundingClientRect().top;
-    const candidates: Array<{ itemKey: string; offsetTop: number }> = [];
-    for (const element of root.querySelectorAll<HTMLElement>('[data-library-item-key]')) {
-      const rect = element.getBoundingClientRect();
-      if (rect.bottom < rootTop || !element.dataset.libraryItemKey) continue;
-      candidates.push({
-        itemKey: element.dataset.libraryItemKey,
-        offsetTop: rect.top - rootTop,
-      });
-      if (candidates.length >= 8) break;
-    }
-    if (candidates.length === 0) return;
-    pendingScrollAnchorRef.current = {
-      candidates,
-    };
-  }, []);
+  const localDisplayError = wantsLocalGrid
+    ? error ?? (taskGrid.errorCode === LibraryErrorCode.ProtocolMismatch ? getLocalLibraryError(taskGrid.errorCode)
+      : taskGrid.needsManualRefresh ? i18nService.t('libraryGridRefreshFromTop')
+      : taskGrid.error ? getLocalLibraryError(taskGrid.errorCode, i18nService.t('libraryGridTaskLoadFailed')) : undefined)
+    : error;
+  const localDisplayNotice = wantsLocalGrid && taskGrid.needsManualRefresh
+    ? i18nService.t('libraryGridRefreshFromTop') : localNotice;
 
   useLayoutEffect(() => {
-    const anchor = pendingScrollAnchorRef.current;
-    const root = scrollContainerRef.current;
-    if (!anchor || !root) return;
-    pendingScrollAnchorRef.current = undefined;
-    const elementsByKey = new Map(
-      [...root.querySelectorAll<HTMLElement>('[data-library-item-key]')]
-        .flatMap(element => element.dataset.libraryItemKey
-          ? [[element.dataset.libraryItemKey, element] as const]
-          : []),
-    );
-    const survivingAnchor = anchor.candidates.find(candidate => (
-      elementsByKey.has(candidate.itemKey)
-    ));
-    if (!survivingAnchor) return;
-    const anchoredElement = elementsByKey.get(survivingAnchor.itemKey);
-    if (!anchoredElement) return;
-    const nextOffset = anchoredElement.getBoundingClientRect().top
-      - root.getBoundingClientRect().top;
-    root.scrollTop += nextOffset - survivingAnchor.offsetTop;
-  }, [localData.list]);
+    if (restoration && (wantsLocalGrid ? taskGrid.groups.length === 0 : localData.list.length === 0)) {
+      if (restoration.isCurrent() && scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
+      finishScrollRestoration(restoration.id, false);
+    }
+  }, [finishScrollRestoration, localData.list.length, restoration, taskGrid.groups.length, wantsLocalGrid]);
   const analyticsContext = useMemo<LibraryAnalyticsContext>(() => ({
     pageViewId: analyticsPageViewId,
     librarySource: source,
@@ -698,8 +744,11 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
     intent: LibraryLoadIntent,
     cause: LibraryLoadCauseValue,
   ) => {
+    if (wantsLocalGrid) return;
     const append = intent === LibraryLoadIntent.Append;
+    if (wantsLocal && append && (!localCursorValidRef.current || localDirtyRef.current || restoration)) return;
     const requestId = ++requestIdRef.current;
+    const requestEpoch = localEpochRef.current;
     let appliedActiveResult = false;
     const requestLocalQueryKey = localQueryKey;
     const requestCloudQueryKey = cloudQueryKey;
@@ -724,7 +773,9 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
           keyword,
           favoritesOnly,
           pageSize: LibraryLimits.DefaultPageSize,
-          ...(append && localData.nextCursor ? { cursor: localData.nextCursor } : {}),
+          ...(append && localData.nextCursor
+            ? { cursor: localData.nextCursor, sort: LibraryLocalSort.RecentTask }
+            : {}),
         })
       : Promise.resolve(null);
     const cloudKind = sitesHidden
@@ -748,39 +799,56 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
       try {
         const localResult = await localPromise;
         if (requestId !== requestIdRef.current) return;
+        if (requestEpoch !== localEpochRef.current) return;
         if (localResult?.success) {
-          const sanitizedResult = sanitizeLibraryLocalListData(localResult.data);
+          const validation = append
+            ? validateLibraryLocalAppend(localDataRef.current, localResult.data, {
+                pageSize: LibraryLimits.DefaultPageSize,
+                requestCursor: localData.nextCursor,
+              })
+            : validateLibraryLocalPage(localResult.data, { pageSize: LibraryLimits.DefaultPageSize });
+          if (validation.status !== LibraryWindowRefreshStatus.Success) {
+            localDirtyRef.current = true;
+            localCursorValidRef.current = false;
+            if (validation.status === LibraryWindowRefreshStatus.Invalidated) {
+              localEpochRef.current += 1;
+              refreshCoordinatorRef.current?.consumeImmediateRetry();
+              refreshCoordinatorRef.current?.enqueue({ reason: LibraryChangeReason.Repair });
+            } else setError(getLocalLibraryError(validation.code, validation.error));
+            return;
+          }
+          const nextData = {
+            ...localResult.data,
+            list: append ? [...localDataRef.current.list, ...localResult.data.list] : localResult.data.list,
+          };
           if (!append) {
             reportListResult(
               LibraryAnalyticsResult.Success,
-              sanitizedResult.data.list.length,
-              sanitizedResult.data.hasMore,
+              nextData.list.length,
+              nextData.hasMore,
             );
           }
-          if (sanitizedResult.ignoredCount > 0) {
-            console.warn(
-              '[Library] Ignored local artifacts without a valid task relation.',
-              { count: sanitizedResult.ignoredCount },
-            );
-          }
-          setLocalData(current => {
-            if (append) {
-              return {
-                ...sanitizedResult.data,
-                list: appendUniqueItems(current.list, sanitizedResult.data.list),
-              };
-            }
-            return sanitizedResult.data;
-          });
+          localDataRef.current = nextData;
+          browseDepthRef.current = Math.max(LibraryLimits.DefaultPageSize, nextData.list.length);
+          localDirtyRef.current = false;
+          localCursorValidRef.current = true;
+          setLocalData(nextData);
           if (!append) setLocalResolvedQueryKey(requestLocalQueryKey);
           appliedActiveResult = true;
         } else if (localResult) {
           if (!append) reportListResult(LibraryAnalyticsResult.Failure);
-          setError(localResult.error);
+          localDirtyRef.current = true;
+          localCursorValidRef.current = false;
+          if (localResult.code === LibraryErrorCode.InvalidCursor) {
+            refreshCoordinatorRef.current?.consumeImmediateRetry();
+            refreshCoordinatorRef.current?.enqueue({ reason: LibraryChangeReason.Repair });
+          } else setError(getLocalLibraryError(localResult.code, localResult.error));
         }
       } catch (loadError) {
         if (requestId === requestIdRef.current) {
           if (!append) reportListResult(LibraryAnalyticsResult.Failure);
+          localDirtyRef.current = true;
+          localCursorValidRef.current = false;
           setError(loadError instanceof Error ? loadError.message : i18nService.t('unknownError'));
         }
       }
@@ -859,75 +927,75 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
     localQueryKey,
     cloudAvailability,
     reportListResult,
+    restoration,
     settleLibraryLoad,
     sitesHidden,
     visibleCloudData.hasMore,
     visibleCloudData.nextCursor,
     wantsCloud,
     wantsLocal,
+    wantsLocalGrid,
   ]);
 
   const refreshLocalWindow = useCallback(async (
     cause: LibraryLoadCauseValue = LibraryLoadCause.BackgroundRefresh,
-  ): Promise<void> => {
-    if (!mountedRef.current) return;
+    retryAvailable = true,
+  ): Promise<LibraryRefreshOutcome> => {
+    if (!mountedRef.current || !wantsLocalList) return LibraryRefreshOutcome.Stopped;
     const requestId = ++requestIdRef.current;
     const requestQueryKey = queryKey;
     const requestLocalQueryKey = localQueryKey;
-    const desiredItemCount = Math.max(
-      localDataRef.current.list.length,
-      LibraryLimits.DefaultPageSize,
-    );
+    const requestEpoch = localEpochRef.current;
+    const manual = cause === LibraryLoadCause.ManualRefresh;
+    if (manual) browseDepthRef.current = LibraryLimits.DefaultPageSize;
+    const isCurrent = (): boolean => requestId === requestIdRef.current
+      && mountedRef.current && requestQueryKey === currentQueryKeyRef.current;
+    localDirtyRef.current = true;
+    localCursorValidRef.current = false;
     beginLibraryLoad(LibraryLoadPhase.Refreshing, cause);
     setError(undefined);
     try {
-      let cursor: string | undefined;
-      let hasMore = true;
-      let counts = localDataRef.current.counts;
-      let list: LocalArtifactItem[] = [];
-      do {
-        const result = await window.electron.library.listLocal({
-          category,
-          keyword,
-          favoritesOnly,
-          pageSize: Math.min(
-            LibraryLimits.MaxPageSize,
-            Math.max(1, desiredItemCount - list.length),
-          ),
-          ...(cursor ? { cursor } : {}),
-        });
-        if (
-          requestId !== requestIdRef.current
-          || !mountedRef.current
-          || requestQueryKey !== currentQueryKeyRef.current
-        ) {
-          return;
+      const result = await readLibraryLocalWindow({
+        readPage: options => window.electron.library.listLocal(options),
+        query: { category, keyword, favoritesOnly },
+        browseDepth: browseDepthRef.current,
+        getAnchorKeys: () => manual ? [] : captureScrollAnchor().candidates.map(candidate => candidate.itemKey),
+        isCurrent,
+        getDataEpoch: () => localEpochRef.current,
+      });
+      if (!isCurrent()) return LibraryRefreshOutcome.Stopped;
+      if (result.status === LibraryWindowRefreshStatus.Invalidated) {
+        if (result.code === LibraryErrorCode.InvalidCursor && !retryAvailable) {
+          setError(getLocalLibraryError(result.code));
+          return LibraryRefreshOutcome.Stopped;
         }
-        if (!result.success) throw new Error(result.error);
-        const sanitizedResult = sanitizeLibraryLocalListData(result.data);
-        if (sanitizedResult.ignoredCount > 0) {
-          console.warn(
-            '[Library] Ignored local artifacts without a valid task relation.',
-            { count: sanitizedResult.ignoredCount },
-          );
-        }
-        list = appendUniqueItems(list, sanitizedResult.data.list);
-        counts = sanitizedResult.data.counts;
-        hasMore = sanitizedResult.data.hasMore;
-        cursor = sanitizedResult.data.nextCursor;
-      } while (hasMore && cursor && list.length < desiredItemCount);
-
-      const nextData: LibraryLocalListData = {
-        list,
-        counts,
-        hasMore,
-        ...(hasMore && cursor ? { nextCursor: cursor } : {}),
-      };
-      captureScrollAnchor();
+        return LibraryRefreshOutcome.Invalidated;
+      }
+      if (result.status === LibraryWindowRefreshStatus.BudgetExceeded) {
+        setError(i18nService.t('libraryRefreshFromTop'));
+        return LibraryRefreshOutcome.Stopped;
+      }
+      if (result.status === LibraryWindowRefreshStatus.Failure) {
+        setError(getLocalLibraryError(result.code, result.error));
+        return LibraryRefreshOutcome.Stopped;
+      }
+      if (requestEpoch !== localEpochRef.current) return LibraryRefreshOutcome.Invalidated;
+      const nextData = result.data;
+      const anchor = captureScrollAnchor();
+      restoreScrollAnchor(manual ? { ...anchor, candidates: [], scrollTop: 0 } : anchor,
+        () => isCurrent() && requestEpoch === localEpochRef.current);
       localDataRef.current = nextData;
+      localDirtyRef.current = false;
+      localCursorValidRef.current = true;
       setLocalData(nextData);
       setLocalResolvedQueryKey(requestLocalQueryKey);
-      reportListResult(LibraryAnalyticsResult.Success, list.length, hasMore);
+      setLocalNotice(undefined);
+      setCardDetailStates({});
+      setActiveItem(current => current?.itemKind === LibraryItemKind.LocalArtifact
+        ? nextData.list.find(item => item.itemId === current.itemId) ?? current
+        : current);
+      reportListResult(LibraryAnalyticsResult.Success, nextData.list.length, nextData.hasMore);
+      return LibraryRefreshOutcome.Committed;
     } catch (refreshError) {
       if (
         requestId === requestIdRef.current
@@ -941,6 +1009,7 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
             : i18nService.t('unknownError'),
         );
       }
+      return LibraryRefreshOutcome.Stopped;
     } finally {
       if (
         requestId === requestIdRef.current
@@ -959,7 +1028,9 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
     localQueryKey,
     queryKey,
     reportListResult,
+    restoreScrollAnchor,
     settleLibraryLoad,
+    wantsLocalList,
   ]);
   refreshLocalWindowRef.current = refreshLocalWindow;
 
@@ -971,10 +1042,22 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
       operationId,
       eventPhase: LibraryAnalyticsEventPhase.Start,
     });
+    if (wantsLocalGrid) {
+      setError(undefined);
+      setLocalNotice(undefined);
+      gridManualRefreshRef.current = true;
+      gridLoadCauseRef.current = LibraryLoadCause.ManualRefresh;
+      refreshTaskGrid({ manual: true });
+      return;
+    }
     if (wantsLocal) {
+      localEpochRef.current += 1;
+      localDirtyRef.current = true;
+      localCursorValidRef.current = false;
       pendingLocalRefreshCauseRef.current = LibraryLoadCause.ManualRefresh;
       const coordinator = refreshCoordinatorRef.current;
       if (coordinator) {
+        coordinator.resetPending();
         coordinator.enqueue({ reason: LibraryChangeReason.Repair });
         coordinator.flushNow();
       } else {
@@ -983,7 +1066,7 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
       return;
     }
     void loadData(LibraryLoadIntent.Refresh, LibraryLoadCause.ManualRefresh);
-  }, [analyticsContext, loadData, refreshLocalWindow, wantsLocal]);
+  }, [analyticsContext, loadData, refreshLocalWindow, refreshTaskGrid, wantsLocal, wantsLocalGrid]);
 
   useEffect(() => {
     const handleRecoveryInvalidation = (event: Event): void => {
@@ -1039,7 +1122,31 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
       availability: cloudAvailability,
     };
     const cause = getLibraryQueryLoadCause(queryIdentityRef.current, queryIdentity);
+    const sameQuery = queryIdentityRef.current !== undefined
+      && JSON.stringify(queryIdentityRef.current) === JSON.stringify(queryIdentity);
     queryIdentityRef.current = queryIdentity;
+    requestIdRef.current += 1;
+    refreshCoordinatorRef.current?.resetPending();
+    refreshCoordinatorRef.current?.resetRetries();
+    pendingLocalRefreshCauseRef.current = LibraryLoadCause.BackgroundRefresh;
+    if (!sameQuery) {
+      browseDepthRef.current = LibraryLimits.DefaultPageSize;
+      localCursorValidRef.current = false;
+    }
+    setError(undefined);
+    setLocalNotice(undefined);
+    if (wantsLocalGrid) {
+      gridLoadCauseRef.current = cause;
+      gridManualRefreshRef.current = false;
+      settleLibraryLoad();
+      return;
+    }
+    if (wantsLocalList && sameQuery && localResolvedQueryKey === localQueryKey) {
+      if (localDirtyRef.current || !localCursorValidRef.current) {
+        void refreshLocalWindow(LibraryLoadCause.BackgroundRefresh);
+      } else settleLibraryLoad();
+      return;
+    }
     void loadData(getLibraryQueryLoadIntent(hasResolvedSnapshot), cause);
   // Cursor changes are outputs of this request and must not trigger a new first page.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1050,71 +1157,18 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
     keyword,
     cloudAvailability,
     source,
+    viewMode,
   ]);
 
   refreshBatchHandlerRef.current = async batch => {
-    if (!mountedRef.current) return;
+    if (!mountedRef.current) return LibraryRefreshOutcome.Stopped;
     const refreshCause = pendingLocalRefreshCauseRef.current;
-    pendingLocalRefreshCauseRef.current = LibraryLoadCause.BackgroundRefresh;
-    if (batch.requiresAuthoritativeRefresh || batch.itemIds.length === 0) {
-      await refreshLocalWindowRef.current(refreshCause);
-      return;
+    const outcome = await refreshLocalWindowRef.current(refreshCause, batch.immediateRetryAvailable);
+    if (outcome !== LibraryRefreshOutcome.Invalidated
+      && pendingLocalRefreshCauseRef.current === refreshCause) {
+      pendingLocalRefreshCauseRef.current = LibraryLoadCause.BackgroundRefresh;
     }
-    const requestQueryKey = currentQueryKeyRef.current;
-    const requestLocalQueryKey = localQueryKeyRef.current;
-    beginLibraryLoad(LibraryLoadPhase.Refreshing, refreshCause);
-    try {
-      const items: LocalArtifactItem[] = [];
-      const unavailableItemIds: string[] = [];
-      for (
-        let index = 0;
-        index < batch.itemIds.length;
-        index += LibraryLimits.MaxTargetItemIds
-      ) {
-        const result = await window.electron.library.getLocalItems({
-          itemIds: batch.itemIds.slice(index, index + LibraryLimits.MaxTargetItemIds),
-        });
-        if (!result.success) throw new Error(result.error);
-        items.push(...result.data.items);
-        unavailableItemIds.push(...result.data.unavailableItemIds);
-      }
-      if (
-        requestQueryKey !== currentQueryKeyRef.current
-        || !mountedRef.current
-        || requestLocalQueryKey !== localQueryKeyRef.current
-      ) {
-        return;
-      }
-      const applied = applyLibraryLocalItemChanges(
-        localDataRef.current,
-        { items, unavailableItemIds },
-        { category, keyword, favoritesOnly },
-      );
-      captureScrollAnchor();
-      localDataRef.current = applied.data;
-      setLocalData(applied.data);
-      setActiveItem(current => {
-        if (current?.itemKind !== LibraryItemKind.LocalArtifact) return current;
-        return items.find(item => item.itemId === current.itemId) ?? current;
-      });
-      if (applied.requiresAuthoritativeRefresh) {
-        console.warn('[LibraryRefresh] Targeted merge exceeded the local window; revalidating.');
-        await refreshLocalWindowRef.current(refreshCause);
-      }
-    } catch (refreshError) {
-      console.warn(
-        '[LibraryRefresh] Targeted refresh failed; revalidating the loaded window.',
-        refreshError,
-      );
-      await refreshLocalWindowRef.current(refreshCause);
-    } finally {
-      if (
-        mountedRef.current
-        && requestQueryKey === currentQueryKeyRef.current
-      ) {
-        settleLibraryLoad();
-      }
-    }
+    return outcome;
   };
 
   useEffect(() => {
@@ -1126,7 +1180,16 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
       },
     });
     refreshCoordinatorRef.current = coordinator;
-    const unsubscribe = window.electron.library.onChanged(payload => coordinator.enqueue(payload));
+    const unsubscribe = window.electron.library.onChanged(payload => {
+      if (payload.itemKind && payload.itemKind !== LibraryItemKind.LocalArtifact) return;
+      // Invalidation cannot wait for coalescing, including during an append.
+      localEpochRef.current += 1;
+      localDirtyRef.current = true;
+      localCursorValidRef.current = false;
+      setCardDetailStates({});
+      gridInvalidateRef.current(payload);
+      coordinator.enqueue(payload);
+    });
     return () => {
       mountedRef.current = false;
       requestIdRef.current += 1;
@@ -1140,51 +1203,92 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
 
   useEffect(() => {
     refreshCoordinatorRef.current?.setActive(
-      wantsLocal && loadPhase === LibraryLoadPhase.Settled,
+      wantsLocalList,
     );
-  }, [loadPhase, wantsLocal]);
+    refreshCoordinatorRef.current?.setBusy(isBusy);
+  }, [isBusy, wantsLocalList]);
 
   useEffect(() => {
     void startLibraryBackfill();
   }, []);
 
+  const localPreviewSnapshot = wantsLocalGrid ? taskGrid.dataRevision : localData;
   useEffect(() => {
     let active = true;
     setLocalDetail(null);
-    const hasRelatedSessionsAction = activeItem
-      ? getLibraryPreviewActionIds(activeItem).includes(LibraryItemAction.RelatedSessions)
-      : false;
-    if (
-      activeItem?.itemKind !== LibraryItemKind.LocalArtifact
-      || !hasRelatedSessionsAction
-    ) {
+    if (activeItem?.itemKind !== LibraryItemKind.LocalArtifact) {
       setDetailLoading(false);
       return () => { active = false; };
     }
     setDetailLoading(true);
     void window.electron.library.getLocalDetail(activeItem.itemId).then(result => {
-      if (active && result.success) setLocalDetail(result.data);
+      if (active && result.success) {
+        const validation = validateLibraryLocalPage({
+          ...EMPTY_LOCAL,
+          list: [result.data.item],
+          counts: { total: 1, available: 1, missing: 0 },
+        });
+        if (validation.status === LibraryWindowRefreshStatus.Success) {
+          setLocalDetail(result.data);
+          setActiveItem(current => current?.itemKind === LibraryItemKind.LocalArtifact
+            && current.itemId === result.data.item.itemId ? result.data.item : current);
+        } else if (validation.status === LibraryWindowRefreshStatus.Failure) {
+          setError(getLocalLibraryError(validation.code, validation.error));
+        }
+      } else if (active && !result.success && result.code === LibraryErrorCode.NotFound) {
+        setActiveItem(undefined);
+      }
+      if (active) setDetailLoading(false);
+    }).catch(() => {
       if (active) setDetailLoading(false);
     });
     return () => { active = false; };
-  }, [activeItem]);
-
-  const items = useMemo<LibraryItem[]>(() => (
-    [...localData.list].sort((left, right) => (
-      right.sortTime - left.sortTime
-      || right.itemKind.localeCompare(left.itemKind)
-      || right.itemId.localeCompare(left.itemId)
-    ))
-  ), [localData.list]);
+  }, [activeItem?.itemId, activeItem?.itemKind, localPreviewSnapshot]);
 
   const dateGroups = useMemo<LibraryDateGroup[]>(() => {
     const now = Date.now();
     const locale = i18nService.getLanguage() === 'zh' ? 'zh-CN' : 'en-US';
-    return groupLibraryItemsByDateAndSession(
-      items,
-      item => item.sortTime,
-      getLibrarySessionKey,
-    ).map(dateBucket => {
+    if (wantsLocalGrid) {
+      const dates = new Map<string, LibraryDateGroup>();
+      for (const group of taskGrid.groups) {
+        const sessionId = group.session.sessionId;
+        const dateKey = getLibraryDateGroupKey(group.session.updatedAt);
+        let date = dates.get(dateKey);
+        if (!date) {
+          date = {
+            key: dateKey,
+            title: formatLibraryDateGroupTitle(group.session.updatedAt, {
+              locale,
+              todayLabel: i18nService.t('libraryTime_today'),
+              yesterdayLabel: i18nService.t('libraryTime_yesterday'),
+              now,
+            }),
+            sessionGroups: [],
+          };
+          dates.set(dateKey, date);
+        }
+        date.sessionGroups.push({
+          key: sessionId,
+          session: group.session,
+          title: group.session.title,
+          sortTime: group.session.updatedAt,
+          items: group.items,
+          disclosure: {
+            expanded: group.expanded,
+            matchedFileCount: group.matchedFileCount,
+            loading: group.loading,
+            disabled: !group.canLoadMoreItems,
+            error: group.error ? i18nService.t('libraryGridTaskLoadFailed') : undefined,
+            onExpand: () => { pauseAppend(); void expandTask(sessionId); },
+            onLoadMore: () => { pauseAppend(); void loadMoreTaskItems(sessionId); },
+            onCollapse: () => { pauseAppend(); collapseTask(sessionId); },
+            onRetry: () => { pauseAppend(); void loadMoreTaskItems(sessionId); },
+          },
+        });
+      }
+      return [...dates.values()];
+    }
+    return groupLibraryItemsByTask(localData.list).map(dateBucket => {
       const sessionGroups = dateBucket.sessionBuckets.map(sessionBucket => {
         const firstItem = sessionBucket.items[0];
         const session = firstItem.latestSession;
@@ -1207,7 +1311,22 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
         sessionGroups,
       };
     });
-  }, [items]);
+  }, [localData.list, taskGrid.groups, expandTask, loadMoreTaskItems, collapseTask, pauseAppend, wantsLocalGrid]);
+
+  gridAnchorSessionIdsRef.current = new Map(taskGrid.groups.flatMap(group => [
+    [getLibrarySessionAnchorKey(group.session.sessionId), group.session.sessionId],
+    ...group.items.map(item => [`${item.itemKind}:${item.itemId}`, group.session.sessionId]),
+  ] as Array<[string, string]>));
+
+  useEffect(() => {
+    if (!wantsLocalGrid || isBusy) return;
+    gridManualRefreshRef.current = false;
+    if (taskGrid.error) reportListResult(LibraryAnalyticsResult.Failure);
+    else if (taskGrid.hasResolvedCurrentQuery) {
+      reportListResult(LibraryAnalyticsResult.Success,
+        taskGrid.groups.reduce((sum, group) => sum + group.items.length, 0), taskGrid.hasMoreTasks);
+    }
+  }, [isBusy, reportListResult, taskGrid.error, taskGrid.groups, taskGrid.hasMoreTasks, taskGrid.hasResolvedCurrentQuery, wantsLocalGrid]);
 
   const updateFavorite = async (item: LibraryItem): Promise<void> => {
     const next = !item.isFavorite;
@@ -1221,6 +1340,10 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
       eventPhase: LibraryAnalyticsEventPhase.Start,
     });
     if (item.itemKind === LibraryItemKind.LocalArtifact) {
+      taskGrid.invalidate();
+      localEpochRef.current += 1;
+      localDirtyRef.current = true;
+      localCursorValidRef.current = false;
       setLocalData(current => ({
         ...current,
         list: applyLibraryFavoriteState(current.list, item, next, favoritesOnly),
@@ -1238,7 +1361,15 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
       itemKind: item.itemKind,
       itemId: item.itemId,
       favorite: next,
-    });
+    }).catch(() => ({
+      success: false as const,
+      code: LibraryErrorCode.Internal,
+      error: i18nService.t('unknownError'),
+    }));
+    if (item.itemKind === LibraryItemKind.LocalArtifact) {
+      taskGrid.invalidate({ reason: LibraryChangeReason.Favorite, itemIds: [item.itemId] });
+      refreshCoordinatorRef.current?.enqueue({ reason: LibraryChangeReason.Favorite, itemIds: [item.itemId] });
+    }
     reportLibraryAction(analyticsContext, {
       actionType: LibraryAnalyticsActionType.FavoriteChange,
       itemKind: item.itemKind,
@@ -1325,6 +1456,7 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
   };
 
   const loadCardDetail = (item: LocalArtifactItem): void => {
+    const requestEpoch = localEpochRef.current;
     const knownSessionCount = item.latestSession ? 1 : 0;
     if (
       item.relatedSessionCount <= knownSessionCount
@@ -1339,6 +1471,7 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
       [item.itemId]: { status: CardDetailLoadStatus.Loading },
     }));
     void window.electron.library.getLocalDetail(item.itemId).then(result => {
+      if (requestEpoch !== localEpochRef.current || !mountedRef.current) return;
       if (result.success) {
         setCardDetailStates(current => ({
           ...current,
@@ -1351,6 +1484,7 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
         }));
       }
     }).catch(() => {
+      if (requestEpoch !== localEpochRef.current || !mountedRef.current) return;
       setCardDetailStates(current => ({
         ...current,
         [item.itemId]: { status: CardDetailLoadStatus.Error },
@@ -1520,7 +1654,8 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
   );
 
   const hasMore = hasResolvedCurrentQuery && (
-    (wantsLocal && localData.hasMore) || (wantsCloud && visibleCloudData.hasMore)
+    (wantsLocalGrid ? taskGrid.hasMoreTasks : wantsLocal && localData.hasMore)
+    || (wantsCloud && visibleCloudData.hasMore)
   );
 
   useEffect(() => {
@@ -1531,8 +1666,11 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
       || !sentinel
       || isBusy
       || !hasMore
-      || error
+      || localDisplayError
       || cloudError
+      || (wantsLocal && (restoration || !appendArmed))
+      || (wantsLocalGrid && !taskGrid.cursorValid)
+      || (wantsLocalList && (!localCursorValidRef.current || localDirtyRef.current))
       || typeof IntersectionObserver === 'undefined'
     ) {
       return undefined;
@@ -1541,16 +1679,19 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
     let requested = false;
     const observer = new IntersectionObserver(entries => {
       if (requested || !entries.some(entry => entry.isIntersecting)) return;
+      if (wantsLocal && !isAppendArmed()) return;
+      if (wantsLocalList && (!localCursorValidRef.current || localDirtyRef.current)) return;
       requested = true;
       observer.disconnect();
-      void loadData(LibraryLoadIntent.Append, LibraryLoadCause.Append);
+      if (wantsLocalGrid) void loadMoreTasks();
+      else void loadData(LibraryLoadIntent.Append, LibraryLoadCause.Append);
     }, {
       root,
       rootMargin: '0px 0px 320px 0px',
     });
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [cloudError, error, hasMore, isBusy, loadData]);
+  }, [appendArmed, cloudError, localDisplayError, hasMore, isBusy, isAppendArmed, loadData, restoration, taskGrid.cursorValid, loadMoreTasks, wantsLocal, wantsLocalGrid, wantsLocalList]);
 
   const isMac = window.electron.platform === 'darwin';
   const isWindows = window.electron.platform === 'win32';
@@ -1709,13 +1850,17 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
             </div>
           </div>
 
-          {error && (
+          {localDisplayError && (
             <div className="mt-4 flex items-center justify-between rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-              <span>{localResolvedQueryKey
-                ? i18nService.t('libraryResultsNotUpdated').replace('{message}', error)
-                : error}</span>
+              <span>{hasResolvedSnapshot
+                ? i18nService.t('libraryResultsNotUpdated').replace('{message}', localDisplayError)
+                : localDisplayError}</span>
               <button type="button" onClick={handleRefresh} className="ml-3 inline-flex items-center gap-1"><ArrowPathIcon className="h-3.5 w-3.5" />{i18nService.t('retry')}</button>
             </div>
+          )}
+
+          {localDisplayNotice && !localDisplayError && (
+            <p role="status" className="mt-4 text-xs text-secondary">{localDisplayNotice}</p>
           )}
 
           {!isAuthenticated && wantsCloud && (
@@ -1748,7 +1893,7 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
               ) : (
                 <div aria-hidden="true" className="mt-6 min-h-96" />
               )
-            ) : error && !localResolvedQueryKey ? (
+            ) : localDisplayError && !hasResolvedSnapshot ? (
               <div aria-hidden="true" className="mt-6 min-h-64" />
             ) : dateGroups.length === 0 ? (
               <div className="mt-12 rounded-2xl border border-dashed border-border py-16 text-center">
@@ -1769,6 +1914,8 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
                 dateGroups={dateGroups}
                 viewMode={viewMode}
                 scrollContainerRef={scrollContainerRef}
+                restoration={restoration}
+                onRestored={finishScrollRestoration}
                 onOpenSession={onOpenSession}
                 formatSessionTime={formatLibrarySessionTime}
                 renderItem={item => (
@@ -1799,6 +1946,13 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
                     <ArrowPathIcon className="h-4 w-4 text-tertiary motion-safe:animate-spin" aria-hidden="true" />
                     <span className="sr-only">{i18nService.t('loading')}</span>
                   </>
+                )}
+                {!loadingMore && wantsLocalGrid && (
+                  <button type="button" onClick={() => { void loadMoreTasks(); }}
+                    disabled={!taskGrid.cursorValid || isBusy || Boolean(restoration)}
+                    className="rounded-lg px-3 py-1 text-xs text-secondary hover:bg-surface-raised disabled:opacity-50">
+                    {i18nService.t('libraryLoadMore')}
+                  </button>
                 )}
               </div>
             )}
