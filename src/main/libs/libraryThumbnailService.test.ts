@@ -142,6 +142,9 @@ describe('LibraryThumbnailService', () => {
   });
 
   test('promotes a visible request ahead of queued near-viewport work', async () => {
+    const runningPath = path.resolve(os.tmpdir(), 'running.pdf');
+    const nearPath = path.resolve(os.tmpdir(), 'near.pdf');
+    const visiblePath = path.resolve(os.tmpdir(), 'visible.pdf');
     const started: string[] = [];
     const releases: Array<() => void> = [];
     const service = new LibraryThumbnailService({
@@ -154,28 +157,29 @@ describe('LibraryThumbnailService', () => {
       },
     });
 
-    const running = service.generate('/tmp/running.pdf', {
+    const running = service.generate(runningPath, {
       requestId: 'running',
       priority: LibraryThumbnailRequestPriority.NearViewport,
     });
-    const near = service.generate('/tmp/near.pdf', {
+    const near = service.generate(nearPath, {
       requestId: 'near',
       priority: LibraryThumbnailRequestPriority.NearViewport,
     });
-    const visible = service.generate('/tmp/visible.pdf', {
+    const visible = service.generate(visiblePath, {
       requestId: 'visible',
       priority: LibraryThumbnailRequestPriority.Visible,
     });
     await flushTasks();
-    expect(started).toEqual(['/tmp/running.pdf']);
+    expect(started).toEqual([runningPath]);
 
     releases.shift()?.();
     await flushTasks();
-    expect(started).toEqual(['/tmp/running.pdf', '/tmp/visible.pdf']);
+    expect(started).toEqual([runningPath, visiblePath]);
     releases.shift()?.();
     await flushTasks();
     releases.shift()?.();
     await Promise.all([running, near, visible]);
+    expect(started).toEqual([runningPath, visiblePath, nearPath]);
   });
 
   test('cancels a queued request before renderer work starts', async () => {
