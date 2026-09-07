@@ -58,11 +58,18 @@ import {
 } from '../shared/auth/constants';
 import {
   type AgentBrowserCredentialSavePromptRequest,
+  AgentBrowserHostMenuAction,
+  type AgentBrowserHostMenuRequest,
+  type AgentBrowserHostMenuResponse,
   type AgentBrowserHostNavigateRequest,
   type AgentBrowserHostPageRequest,
   type AgentBrowserHostRequest,
   type AgentBrowserHostResponse,
   type AgentBrowserHostSetViewRequest,
+  type AgentBrowserHostZoomRequest,
+  AgentBrowserZoom,
+  type BrowserControlGatewayRequest,
+  BrowserControlRequestMethod,
   type BrowserDiagnosticResultStep,
   BrowserDiagnosticStatus,
   BrowserDiagnosticStep,
@@ -274,6 +281,7 @@ import { LibraryIndexService } from './library/libraryIndexService';
 import { registerLibraryIpcHandlers } from './library/libraryIpc';
 import { LibraryLocalStore } from './library/libraryLocalStore';
 import { AgentBrowserHost } from './libs/agentBrowserHost';
+import { showAgentBrowserHostMenu } from './libs/agentBrowserHostMenu';
 import {
   type CoworkAgentEngine,
   CoworkEngineRouter,
@@ -8662,49 +8670,18 @@ if (!gotTheLock) {
     }
   });
 
-  const getBrowserControlBaseUrl = (): string => {
-    const info = getOpenClawEngineManager().getGatewayConnectionInfo();
-    if (!info.port) {
-      throw new Error('OpenClaw gateway port is unavailable.');
-    }
-    return `http://127.0.0.1:${info.port + 2}`;
-  };
-
-  const fetchBrowserControlJson = async <T,>(
-    path: string,
-    options: RequestInit & { timeoutMs?: number } = {},
+  const requestBrowserControl = async <T,>(
+    request: BrowserControlGatewayRequest,
   ): Promise<T> => {
-    const { timeoutMs = 5000, ...requestOptions } = options;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetch(`${getBrowserControlBaseUrl()}${path}`, {
-        ...requestOptions,
-        signal: controller.signal,
-      });
-      const text = await response.text();
-      let payload: unknown = null;
-      if (text) {
-        try {
-          payload = JSON.parse(text);
-        } catch {
-          payload = { error: text };
-        }
-      }
-      if (!response.ok) {
-        const errorMessage = payload && typeof payload === 'object' && 'error' in payload
-          ? String((payload as { error?: unknown }).error)
-          : `HTTP ${response.status}`;
-        throw new Error(errorMessage);
-      }
-      return payload as T;
-    } finally {
-      clearTimeout(timer);
+    getCoworkEngineRouter();
+    if (!openClawRuntimeAdapter) {
+      throw new Error(t('agentBrowserRuntimeUnavailable'));
     }
+    return await openClawRuntimeAdapter.requestBrowserControl(request) as T;
   };
 
-  const buildBrowserProfileQuery = (profile?: string): string => (
-    profile ? `?profile=${encodeURIComponent(profile)}` : ''
+  const buildBrowserProfileQuery = (profile?: BrowserRuntimeProfile): Record<string, string> | undefined => (
+    profile ? { profile } : undefined
   );
 
   registerBrowserCredentialHandlers({
@@ -8718,6 +8695,7 @@ if (!gotTheLock) {
     try {
       return { success: true, state: await action() };
     } catch (error) {
+      console.error('[AgentBrowserHost] In-app browser action failed:', error);
       const message = error instanceof Error ? error.message : 'LobsterAI in-app browser action failed.';
       return {
         success: false,
@@ -8776,6 +8754,12 @@ if (!gotTheLock) {
   );
 
   ipcMain.handle(
+    BrowserIpc.CreateHostPage,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().newPage(request?.sessionId)),
+  );
+
+  ipcMain.handle(
     BrowserIpc.SelectHostPage,
     (_event, request?: AgentBrowserHostPageRequest): Promise<AgentBrowserHostResponse> =>
       runBrowserHostAction(() => getAgentBrowserHost().selectPage(
@@ -8788,6 +8772,83 @@ if (!gotTheLock) {
     BrowserIpc.CloseHostPage,
     (_event, request?: AgentBrowserHostPageRequest): Promise<AgentBrowserHostResponse> =>
       runBrowserHostAction(() => getAgentBrowserHost().closePage(request?.pageId ?? 0)),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.ShowHostMenu,
+    (event, request?: AgentBrowserHostMenuRequest): Promise<AgentBrowserHostMenuResponse> => {
+      const targetWindow = BrowserWindow.fromWebContents(event.sender);
+      if (!targetWindow || targetWindow.isDestroyed()) {
+        return Promise.resolve({
+          success: false,
+          error: t('agentBrowserMenuUnavailable'),
+        });
+      }
+
+      const hostState = getAgentBrowserHost().getState();
+      const selectedTab = hostState.tabs.find(tab => tab.pageId === hostState.selectedPageId);
+      return showAgentBrowserHostMenu({
+        targetWindow,
+        position: request,
+        hasPage: Boolean(selectedTab),
+        zoomFactor: selectedTab?.zoomFactor,
+        darkMode: request?.darkMode,
+        onZoomAction: async action => {
+          const host = getAgentBrowserHost();
+          const currentState = host.getState();
+          const currentTab = currentState.tabs.find(tab => tab.pageId === currentState.selectedPageId);
+          if (!currentTab) throw new Error('No LobsterAI browser page is open.');
+          const nextFactor = action === AgentBrowserHostMenuAction.ZoomOut
+            ? currentTab.zoomFactor - AgentBrowserZoom.Step
+            : action === AgentBrowserHostMenuAction.ZoomIn
+              ? currentTab.zoomFactor + AgentBrowserZoom.Step
+              : AgentBrowserZoom.Default;
+          const nextState = host.setZoomFactor(nextFactor, request?.sessionId);
+          return nextState.tabs.find(tab => tab.pageId === nextState.selectedPageId)?.zoomFactor
+            ?? AgentBrowserZoom.Default;
+        },
+      });
+    },
+  );
+
+  ipcMain.handle(
+    BrowserIpc.CaptureHostScreenshot,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(async () => {
+        const host = getAgentBrowserHost();
+        console.debug('[AgentBrowserHost] Capturing the selected page for the clipboard.');
+        const image = await host.captureScreenshot(request?.sessionId);
+        clipboard.writeImage(image);
+        console.debug('[AgentBrowserHost] Browser screenshot copied to the clipboard.');
+        return host.getState();
+      }),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.SetHostZoom,
+    (_event, request?: AgentBrowserHostZoomRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().setZoomFactor(
+        request?.factor ?? Number.NaN,
+        request?.sessionId,
+      )),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.ClearHostCookies,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().clearCookies(request?.sessionId)),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.ClearHostCache,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().clearCache(request?.sessionId)),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.DismissCredentialLoginStatus,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().dismissCredentialLoginStatus(request?.sessionId)),
   );
 
   ipcMain.handle(
@@ -8806,10 +8867,11 @@ if (!gotTheLock) {
 
   ipcMain.handle(BrowserIpc.GetStatus, async (_event, options?: { profile?: BrowserRuntimeProfile }) => {
     try {
-      const status = await fetchBrowserControlJson<Record<string, unknown>>(
-        `/${buildBrowserProfileQuery(options?.profile)}`,
-        { timeoutMs: 3000 },
-      );
+      const status = await requestBrowserControl<Record<string, unknown>>({
+        method: BrowserControlRequestMethod.Get,
+        path: '/',
+        query: buildBrowserProfileQuery(options?.profile),
+      });
       return { success: true, status };
     } catch (error) {
       return {
@@ -8821,10 +8883,10 @@ if (!gotTheLock) {
 
   ipcMain.handle(BrowserIpc.ListProfiles, async () => {
     try {
-      const result = await fetchBrowserControlJson<{ profiles?: unknown[] }>(
-        '/profiles',
-        { timeoutMs: 5000 },
-      );
+      const result = await requestBrowserControl<{ profiles?: unknown[] }>({
+        method: BrowserControlRequestMethod.Get,
+        path: '/profiles',
+      });
       return { success: true, profiles: result.profiles ?? [] };
     } catch (error) {
       return {
@@ -8837,10 +8899,12 @@ if (!gotTheLock) {
   ipcMain.handle(BrowserIpc.ResetProfile, async (_event, options?: { profile?: BrowserRuntimeProfile }) => {
     try {
       const profile = options?.profile || BrowserRuntimeProfile.Managed;
-      const result = await fetchBrowserControlJson<Record<string, unknown>>(
-        `/reset-profile${buildBrowserProfileQuery(profile)}`,
-        { method: 'POST', timeoutMs: 20000 },
-      );
+      const result = await requestBrowserControl<Record<string, unknown>>({
+        method: BrowserControlRequestMethod.Post,
+        path: '/reset-profile',
+        query: buildBrowserProfileQuery(profile),
+        timeoutMs: 20000,
+      });
       return { success: true, result };
     } catch (error) {
       return {
@@ -8871,10 +8935,10 @@ if (!gotTheLock) {
       addStep(BrowserDiagnosticStep.GatewayStatus, BrowserDiagnosticStatus.Success, 'browserDiagnosticGatewayReady');
 
       try {
-        const profiles = await fetchBrowserControlJson<{ profiles?: unknown[] }>(
-          '/profiles',
-          { timeoutMs: 5000 },
-        );
+        const profiles = await requestBrowserControl<{ profiles?: unknown[] }>({
+          method: BrowserControlRequestMethod.Get,
+          path: '/profiles',
+        });
         addStep(BrowserDiagnosticStep.Profiles, BrowserDiagnosticStatus.Success, 'browserDiagnosticProfilesReady', `${profiles.profiles?.length ?? 0}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -8883,10 +8947,11 @@ if (!gotTheLock) {
       }
 
       try {
-        await fetchBrowserControlJson<Record<string, unknown>>(
-          `/${buildBrowserProfileQuery(profile)}`,
-          { timeoutMs: 5000 },
-        );
+        await requestBrowserControl<Record<string, unknown>>({
+          method: BrowserControlRequestMethod.Get,
+          path: '/',
+          query: buildBrowserProfileQuery(profile),
+        });
         addStep(BrowserDiagnosticStep.BrowserStatus, BrowserDiagnosticStatus.Success, 'browserDiagnosticStatusReady');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -8894,10 +8959,12 @@ if (!gotTheLock) {
       }
 
       try {
-        await fetchBrowserControlJson<Record<string, unknown>>(
-          `/start${buildBrowserProfileQuery(profile)}`,
-          { method: 'POST', timeoutMs: 20000 },
-        );
+        await requestBrowserControl<Record<string, unknown>>({
+          method: BrowserControlRequestMethod.Post,
+          path: '/start',
+          query: buildBrowserProfileQuery(profile),
+          timeoutMs: 20000,
+        });
         addStep(BrowserDiagnosticStep.BrowserStart, BrowserDiagnosticStatus.Success, 'browserDiagnosticStartReady');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -8906,15 +8973,13 @@ if (!gotTheLock) {
       }
 
       try {
-        await fetchBrowserControlJson<Record<string, unknown>>(
-          `/tabs/open${buildBrowserProfileQuery(profile)}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: 'https://example.com' }),
-            timeoutMs: 20000,
-          },
-        );
+        await requestBrowserControl<Record<string, unknown>>({
+          method: BrowserControlRequestMethod.Post,
+          path: '/tabs/open',
+          query: buildBrowserProfileQuery(profile),
+          body: { url: 'https://example.com' },
+          timeoutMs: 20000,
+        });
         addStep(BrowserDiagnosticStep.OpenTestPage, BrowserDiagnosticStatus.Success, 'browserDiagnosticOpenPageReady');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

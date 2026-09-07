@@ -232,7 +232,8 @@ const FORK_COMPACTION_SUMMARY_MAX_CHARS = 40_000;
 // attempt.  Keep a broad timeout to accommodate plugin loading and runtime
 // warmup on slow machines.
 const GATEWAY_READY_TIMEOUT_MS = 60_000;
-const BROWSER_GATEWAY_REQUEST_TIMEOUT_MS = 15_000;
+// The first browser RPC also loads the browser plugin and initializes its service.
+const BROWSER_GATEWAY_REQUEST_TIMEOUT_MS = 30_000;
 const BROWSER_GATEWAY_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 const FINAL_HISTORY_SYNC_LIMIT = 50;
 const CHANNEL_SESSION_DISCOVERY_LIMIT = 200;
