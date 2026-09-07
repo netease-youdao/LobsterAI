@@ -92,6 +92,36 @@ test('browser control requests use the embedded gateway RPC', async () => {
   );
 });
 
+test('browser control requests tolerate a slow first browser service initialization', async () => {
+  vi.useFakeTimers();
+  try {
+    const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+    const request = vi.fn((
+      _method: string,
+      _params: unknown,
+      options?: { timeoutMs?: number },
+    ) => new Promise(resolve => {
+      const deadline = setTimeout(() => resolve({ error: 'request deadline exceeded' }), options?.timeoutMs);
+      // Observed cold browser service initialization can take more than 20 seconds.
+      setTimeout(() => {
+        clearTimeout(deadline);
+        resolve({ profiles: [] });
+      }, 21_000);
+    }));
+    adapter.gatewayClient = { start: () => {}, stop: () => {}, request };
+
+    const result = adapter.requestBrowserControl({
+      method: BrowserControlRequestMethod.Get,
+      path: '/profiles',
+    });
+    await vi.advanceTimersByTimeAsync(21_000);
+
+    await expect(result).resolves.toEqual({ profiles: [] });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test('plan mode allows read-only shell inspection on macOS and Windows', () => {
   expect(isPlanModeSafeExecCommand('rg --files src')).toBe(true);
   expect(isPlanModeSafeExecCommand('git status --short')).toBe(true);

@@ -67,6 +67,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentBrowserMenuClearCookies: '清除 Cookie',
     agentBrowserMenuClearCache: '清除缓存',
     agentBrowserMenuUnavailable: '浏览器窗口当前不可用。',
+    agentBrowserRuntimeUnavailable: 'Agent 浏览器暂不可用，请稍后重试。',
     agentBrowserMenuOpenFailed: '无法打开浏览器菜单。',
     agentBrowserZoomFailed: '调整浏览器缩放失败。',
 
@@ -432,6 +433,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentBrowserMenuClearCookies: 'Clear Cookie',
     agentBrowserMenuClearCache: 'Clear cache',
     agentBrowserMenuUnavailable: 'The browser window is unavailable.',
+    agentBrowserRuntimeUnavailable: 'The Agent browser is temporarily unavailable. Try again later.',
     agentBrowserMenuOpenFailed: 'Failed to open the browser menu.',
     agentBrowserZoomFailed: 'Failed to adjust browser zoom.',
 

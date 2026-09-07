@@ -68,6 +68,8 @@ import {
   type AgentBrowserHostSetViewRequest,
   type AgentBrowserHostZoomRequest,
   AgentBrowserZoom,
+  type BrowserControlGatewayRequest,
+  BrowserControlRequestMethod,
   type BrowserDiagnosticResultStep,
   BrowserDiagnosticStatus,
   BrowserDiagnosticStep,
@@ -8668,49 +8670,18 @@ if (!gotTheLock) {
     }
   });
 
-  const getBrowserControlBaseUrl = (): string => {
-    const info = getOpenClawEngineManager().getGatewayConnectionInfo();
-    if (!info.port) {
-      throw new Error('OpenClaw gateway port is unavailable.');
-    }
-    return `http://127.0.0.1:${info.port + 2}`;
-  };
-
-  const fetchBrowserControlJson = async <T,>(
-    path: string,
-    options: RequestInit & { timeoutMs?: number } = {},
+  const requestBrowserControl = async <T,>(
+    request: BrowserControlGatewayRequest,
   ): Promise<T> => {
-    const { timeoutMs = 5000, ...requestOptions } = options;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetch(`${getBrowserControlBaseUrl()}${path}`, {
-        ...requestOptions,
-        signal: controller.signal,
-      });
-      const text = await response.text();
-      let payload: unknown = null;
-      if (text) {
-        try {
-          payload = JSON.parse(text);
-        } catch {
-          payload = { error: text };
-        }
-      }
-      if (!response.ok) {
-        const errorMessage = payload && typeof payload === 'object' && 'error' in payload
-          ? String((payload as { error?: unknown }).error)
-          : `HTTP ${response.status}`;
-        throw new Error(errorMessage);
-      }
-      return payload as T;
-    } finally {
-      clearTimeout(timer);
+    getCoworkEngineRouter();
+    if (!openClawRuntimeAdapter) {
+      throw new Error(t('agentBrowserRuntimeUnavailable'));
     }
+    return await openClawRuntimeAdapter.requestBrowserControl(request) as T;
   };
 
-  const buildBrowserProfileQuery = (profile?: string): string => (
-    profile ? `?profile=${encodeURIComponent(profile)}` : ''
+  const buildBrowserProfileQuery = (profile?: BrowserRuntimeProfile): Record<string, string> | undefined => (
+    profile ? { profile } : undefined
   );
 
   registerBrowserCredentialHandlers({
@@ -8896,10 +8867,11 @@ if (!gotTheLock) {
 
   ipcMain.handle(BrowserIpc.GetStatus, async (_event, options?: { profile?: BrowserRuntimeProfile }) => {
     try {
-      const status = await fetchBrowserControlJson<Record<string, unknown>>(
-        `/${buildBrowserProfileQuery(options?.profile)}`,
-        { timeoutMs: 3000 },
-      );
+      const status = await requestBrowserControl<Record<string, unknown>>({
+        method: BrowserControlRequestMethod.Get,
+        path: '/',
+        query: buildBrowserProfileQuery(options?.profile),
+      });
       return { success: true, status };
     } catch (error) {
       return {
@@ -8911,10 +8883,10 @@ if (!gotTheLock) {
 
   ipcMain.handle(BrowserIpc.ListProfiles, async () => {
     try {
-      const result = await fetchBrowserControlJson<{ profiles?: unknown[] }>(
-        '/profiles',
-        { timeoutMs: 5000 },
-      );
+      const result = await requestBrowserControl<{ profiles?: unknown[] }>({
+        method: BrowserControlRequestMethod.Get,
+        path: '/profiles',
+      });
       return { success: true, profiles: result.profiles ?? [] };
     } catch (error) {
       return {
@@ -8927,10 +8899,12 @@ if (!gotTheLock) {
   ipcMain.handle(BrowserIpc.ResetProfile, async (_event, options?: { profile?: BrowserRuntimeProfile }) => {
     try {
       const profile = options?.profile || BrowserRuntimeProfile.Managed;
-      const result = await fetchBrowserControlJson<Record<string, unknown>>(
-        `/reset-profile${buildBrowserProfileQuery(profile)}`,
-        { method: 'POST', timeoutMs: 20000 },
-      );
+      const result = await requestBrowserControl<Record<string, unknown>>({
+        method: BrowserControlRequestMethod.Post,
+        path: '/reset-profile',
+        query: buildBrowserProfileQuery(profile),
+        timeoutMs: 20000,
+      });
       return { success: true, result };
     } catch (error) {
       return {
@@ -8961,10 +8935,10 @@ if (!gotTheLock) {
       addStep(BrowserDiagnosticStep.GatewayStatus, BrowserDiagnosticStatus.Success, 'browserDiagnosticGatewayReady');
 
       try {
-        const profiles = await fetchBrowserControlJson<{ profiles?: unknown[] }>(
-          '/profiles',
-          { timeoutMs: 5000 },
-        );
+        const profiles = await requestBrowserControl<{ profiles?: unknown[] }>({
+          method: BrowserControlRequestMethod.Get,
+          path: '/profiles',
+        });
         addStep(BrowserDiagnosticStep.Profiles, BrowserDiagnosticStatus.Success, 'browserDiagnosticProfilesReady', `${profiles.profiles?.length ?? 0}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -8973,10 +8947,11 @@ if (!gotTheLock) {
       }
 
       try {
-        await fetchBrowserControlJson<Record<string, unknown>>(
-          `/${buildBrowserProfileQuery(profile)}`,
-          { timeoutMs: 5000 },
-        );
+        await requestBrowserControl<Record<string, unknown>>({
+          method: BrowserControlRequestMethod.Get,
+          path: '/',
+          query: buildBrowserProfileQuery(profile),
+        });
         addStep(BrowserDiagnosticStep.BrowserStatus, BrowserDiagnosticStatus.Success, 'browserDiagnosticStatusReady');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -8984,10 +8959,12 @@ if (!gotTheLock) {
       }
 
       try {
-        await fetchBrowserControlJson<Record<string, unknown>>(
-          `/start${buildBrowserProfileQuery(profile)}`,
-          { method: 'POST', timeoutMs: 20000 },
-        );
+        await requestBrowserControl<Record<string, unknown>>({
+          method: BrowserControlRequestMethod.Post,
+          path: '/start',
+          query: buildBrowserProfileQuery(profile),
+          timeoutMs: 20000,
+        });
         addStep(BrowserDiagnosticStep.BrowserStart, BrowserDiagnosticStatus.Success, 'browserDiagnosticStartReady');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -8996,15 +8973,13 @@ if (!gotTheLock) {
       }
 
       try {
-        await fetchBrowserControlJson<Record<string, unknown>>(
-          `/tabs/open${buildBrowserProfileQuery(profile)}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: 'https://example.com' }),
-            timeoutMs: 20000,
-          },
-        );
+        await requestBrowserControl<Record<string, unknown>>({
+          method: BrowserControlRequestMethod.Post,
+          path: '/tabs/open',
+          query: buildBrowserProfileQuery(profile),
+          body: { url: 'https://example.com' },
+          timeoutMs: 20000,
+        });
         addStep(BrowserDiagnosticStep.OpenTestPage, BrowserDiagnosticStatus.Success, 'browserDiagnosticOpenPageReady');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
