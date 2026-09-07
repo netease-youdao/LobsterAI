@@ -19,6 +19,22 @@ const cpMocks = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
 
+const pathMocks = vi.hoisted(() => ({ usePosix: false }));
+
+vi.mock('path', async (importOriginal) => {
+  const actual = await importOriginal<{ default: typeof path }>();
+  return {
+    ...actual,
+    // Stubbing process.platform does not change Node's native path implementation.
+    // Keep the override local to these imports so Vitest's own paths are unaffected.
+    default: new Proxy(actual.default, {
+      get(target, key) {
+        return Reflect.get(pathMocks.usePosix ? target.posix : target, key);
+      },
+    }),
+  };
+});
+
 vi.mock('electron', () => ({
   app: {
     getPath: mocks.getPath,
@@ -530,6 +546,14 @@ describe('hdiutil plist parsing', () => {
 });
 
 describe('mac swap builders', () => {
+  beforeEach(() => {
+    pathMocks.usePosix = true;
+  });
+
+  afterEach(() => {
+    pathMocks.usePosix = false;
+  });
+
   test('places staging and backup next to the target app, hidden and not .app-suffixed', () => {
     const swapPaths = buildMacSwapPaths('/Applications/Lobster AI.app', 1234);
 
@@ -662,6 +686,7 @@ describe('macOS DMG install', () => {
     cpMocks.spawn.mockReset();
 
     Object.defineProperty(process, 'platform', { value: 'darwin' });
+    pathMocks.usePosix = true;
     Object.defineProperty(process, 'resourcesPath', {
       value: `${TARGET_APP}/Contents/Resources`,
       configurable: true,
@@ -732,6 +757,7 @@ describe('macOS DMG install', () => {
 
   afterEach(() => {
     Object.defineProperty(process, 'platform', { value: originalPlatform });
+    pathMocks.usePosix = false;
     Object.defineProperty(process, 'resourcesPath', {
       value: originalResourcesPath,
       configurable: true,
@@ -771,7 +797,9 @@ describe('macOS DMG install', () => {
     expect(detachCommands[0]).toContain('/Volumes/LobsterAI');
     expect(fs.promises.unlink).toHaveBeenCalledWith(DMG_PATH);
     expect(cpMocks.execFile).not.toHaveBeenCalled();
-    expect(mocks.relaunch).toHaveBeenCalledOnce();
+    expect(mocks.relaunch).toHaveBeenCalledExactlyOnceWith({
+      execPath: `${TARGET_APP}/Contents/MacOS/LobsterAI`,
+    });
     expect(mocks.quit).toHaveBeenCalledOnce();
     expect(mocks.openPath).not.toHaveBeenCalled();
     expect(fs.promises.mkdir).not.toHaveBeenCalled();
