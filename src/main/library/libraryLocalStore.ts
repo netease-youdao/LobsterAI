@@ -5,12 +5,23 @@ import {
   type LibraryArtifactType,
   LibraryAvailability,
   LibraryCategory,
+  LibraryErrorCode,
   LibraryFavoriteScope,
   LibraryItemKind,
   LibraryLimits,
+  LibraryLocalProtocol,
+  LibraryLocalSort,
   LibraryOrigin,
   LibraryRelationKind,
 } from '../../shared/library/constants';
+import {
+  getLibraryLocalOrderKey,
+  isLibraryIdentifier,
+  isLibraryLocalOrderKey,
+  isLibraryTimestamp,
+  LibraryLocalDataError,
+  type LibraryLocalOrderKey,
+} from '../../shared/library/localOrdering';
 import type {
   LibraryArtifactCandidate,
   LibraryFavoriteInput,
@@ -19,10 +30,15 @@ import type {
   LibraryLocalDetailData,
   LibraryLocalListData,
   LibraryLocalListOptions,
+  LibraryLocalTaskGroupsData,
+  LibraryLocalTaskGroupsOptions,
+  LibraryLocalTaskItemsData,
+  LibraryLocalTaskItemsOptions,
   LibrarySessionRef,
   LibrarySessionRelation,
   LocalArtifactItem,
 } from '../../shared/library/types';
+import { listLibraryLocalTaskGroups, listLibraryLocalTaskItems } from './libraryLocalTaskQuery';
 
 interface LocalArtifactRow {
   id: string;
@@ -53,11 +69,14 @@ interface RelationRow {
   title: string;
   agent_id: string | null;
   session_updated_at: number;
+  session_created_at: number;
 }
 
-interface LocalCursor {
-  sortTime: number;
-  itemId: string;
+interface OwnedLocalArtifactRow extends LocalArtifactRow, RelationRow {}
+
+export interface LibraryLocalCursor extends LibraryLocalOrderKey {
+  version: typeof LibraryLocalProtocol.Version;
+  sort: typeof LibraryLocalSort.RecentTask;
 }
 
 export interface LibraryIndexedFile {
@@ -102,19 +121,41 @@ const VISIBLE_TASK_RELATION_PREDICATE = `EXISTS (
 
 const escapeLike = (value: string): string => value.replace(/[\\%_]/g, match => `\\${match}`);
 
-export const encodeLibraryLocalCursor = (cursor: LocalCursor): string => (
-  Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url')
-);
+const RELATION_OWNER_ORDER = 'r.last_related_at DESC, s.updated_at DESC, r.session_id COLLATE BINARY DESC';
 
-export const decodeLibraryLocalCursor = (cursor?: string): LocalCursor | null => {
+const requireIdentifier = (value: unknown): void => {
+  if (!isLibraryIdentifier(value)) {
+    throw new LibraryLocalDataError(LibraryErrorCode.InvalidInput, 'Invalid library identifier.');
+  }
+};
+
+const requireTimestamp = (value: unknown): void => {
+  if (!isLibraryTimestamp(value)) {
+    throw new LibraryLocalDataError(LibraryErrorCode.InvalidLocalData, 'Invalid local library timestamp.');
+  }
+};
+
+export const encodeLibraryLocalCursor = (key: LibraryLocalOrderKey): string => {
+  if (!isLibraryLocalOrderKey(key)) {
+    throw new LibraryLocalDataError(LibraryErrorCode.InvalidLocalData, 'Invalid local library ordering data.');
+  }
+  const cursor: LibraryLocalCursor = {
+    ...key,
+    version: LibraryLocalProtocol.Version,
+    sort: LibraryLocalSort.RecentTask,
+  };
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+};
+
+export const decodeLibraryLocalCursor = (cursor?: string): LibraryLocalCursor | null => {
   if (!cursor) return null;
+  if (cursor.length > LibraryLimits.MaxLocalCursorLength || !/^[A-Za-z0-9_-]+$/.test(cursor)) return null;
   try {
     const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    const value = parsed as Record<string, unknown>;
-    if (!Number.isSafeInteger(value.sortTime) || typeof value.itemId !== 'string') return null;
-    if (!value.itemId || value.itemId.length > 200) return null;
-    return { sortTime: value.sortTime as number, itemId: value.itemId };
+    if (!isLibraryLocalOrderKey(parsed)) return null;
+    const value = parsed as LibraryLocalCursor;
+    if (value.version !== LibraryLocalProtocol.Version || value.sort !== LibraryLocalSort.RecentTask) return null;
+    return value;
   } catch {
     return null;
   }
@@ -123,13 +164,27 @@ export const decodeLibraryLocalCursor = (cursor?: string): LocalCursor | null =>
 export class LibraryLocalStore {
   constructor(private readonly db: Database.Database) {}
 
+  listTaskGroups(options: LibraryLocalTaskGroupsOptions = {}): LibraryLocalTaskGroupsData {
+    return listLibraryLocalTaskGroups(this.db, options, itemIds => this.getVisibleItems(itemIds).items);
+  }
+
+  listTaskItems(options: LibraryLocalTaskItemsOptions): LibraryLocalTaskItemsData {
+    return listLibraryLocalTaskItems(this.db, options, itemIds => this.getVisibleItems(itemIds).items);
+  }
+
   list(options: LibraryLocalListOptions = {}): LibraryLocalListData {
+    if (options.sort !== undefined && options.sort !== LibraryLocalSort.RecentTask) {
+      throw new LibraryLocalDataError(LibraryErrorCode.InvalidInput, 'Invalid local library sort.');
+    }
     const pageSize = Math.max(
       1,
       Math.min(options.pageSize ?? LibraryLimits.DefaultPageSize, LibraryLimits.MaxPageSize),
     );
     const keyword = options.keyword?.trim().slice(0, LibraryLimits.MaxKeywordLength) ?? '';
     const cursor = decodeLibraryLocalCursor(options.cursor);
+    if (options.cursor !== undefined && !cursor) {
+      throw new LibraryLocalDataError(LibraryErrorCode.InvalidCursor, 'Invalid local library cursor.');
+    }
     const where: string[] = [VISIBLE_TASK_RELATION_PREDICATE];
     const params: Array<string | number> = [];
 
@@ -176,22 +231,59 @@ export class LibraryLocalStore {
     const pageParams = [...params];
     pageWhere.push('a.availability <> ?');
     pageParams.push(LibraryAvailability.Missing);
-    if (cursor) {
-      pageWhere.push('(a.sort_time_ms < ? OR (a.sort_time_ms = ? AND a.id < ?))');
-      pageParams.push(cursor.sortTime, cursor.sortTime, cursor.itemId);
-    }
     const pageWhereSql = pageWhere.length > 0 ? `WHERE ${pageWhere.join(' AND ')}` : '';
+    const cursorWhere = cursor ? `WHERE
+      session_updated_at < ?
+      OR (session_updated_at = ? AND session_created_at < ?)
+      OR (session_updated_at = ? AND session_created_at = ? AND session_id COLLATE BINARY < ?)
+      OR (session_updated_at = ? AND session_created_at = ? AND session_id COLLATE BINARY = ? AND sort_time_ms < ?)
+      OR (session_updated_at = ? AND session_created_at = ? AND session_id COLLATE BINARY = ? AND sort_time_ms = ? AND id COLLATE BINARY < ?)
+    ` : '';
+    if (cursor) {
+      const { sessionUpdatedAt: updatedAt, sessionCreatedAt: createdAt, sessionId, artifactSortTime, itemId } = cursor;
+      pageParams.push(
+        updatedAt,
+        updatedAt, createdAt,
+        updatedAt, createdAt, sessionId,
+        updatedAt, createdAt, sessionId, artifactSortTime,
+        updatedAt, createdAt, sessionId, artifactSortTime, itemId,
+      );
+    }
     const rows = this.db.prepare(`
-      SELECT a.*
-      FROM library_local_artifacts a
-      ${pageWhereSql}
-      ORDER BY a.sort_time_ms DESC, a.id DESC
+      WITH filtered_artifacts AS (
+        SELECT a.* FROM library_local_artifacts a ${pageWhereSql}
+      ), ranked_relations AS (
+        SELECT r.artifact_id, r.session_id, r.relation_kind, r.first_related_at,
+          r.last_related_at, r.last_message_id, r.session_artifact_id,
+          s.title, s.agent_id, s.created_at AS session_created_at,
+          s.updated_at AS session_updated_at,
+          ROW_NUMBER() OVER (
+            PARTITION BY r.artifact_id ORDER BY ${RELATION_OWNER_ORDER}
+          ) AS relation_rank
+        FROM filtered_artifacts fa
+        JOIN library_artifact_sessions r ON r.artifact_id = fa.id
+        JOIN cowork_sessions s ON s.id = r.session_id
+      ), owned_items AS (
+        SELECT fa.*, rr.* FROM filtered_artifacts fa
+        JOIN ranked_relations rr ON rr.artifact_id = fa.id AND rr.relation_rank = 1
+      )
+      SELECT * FROM owned_items
+      ${cursorWhere}
+      ORDER BY session_updated_at DESC, session_created_at DESC,
+        session_id COLLATE BINARY DESC, sort_time_ms DESC, id COLLATE BINARY DESC
       LIMIT ?
-    `).all(...pageParams, pageSize + 1) as LocalArtifactRow[];
+    `).all(...pageParams, pageSize + 1) as OwnedLocalArtifactRow[];
+    for (const row of rows) {
+      requireTimestamp(row.sort_time_ms);
+      this.toSessionRef(row);
+      if (!isLibraryIdentifier(row.id)) {
+        throw new LibraryLocalDataError(LibraryErrorCode.InvalidLocalData, 'Invalid local library ordering identifier.');
+      }
+    }
     const hasMore = rows.length > pageSize;
     const pageRows = hasMore ? rows.slice(0, pageSize) : rows;
-    const list = this.hydrateVisibleRows(pageRows);
-    const last = pageRows[pageRows.length - 1];
+    const list = this.hydrateVisibleRows(pageRows, pageRows);
+    const last = list[list.length - 1];
 
     const counts: LibraryLocalCounts = {
       total: Number(countRow.total),
@@ -199,16 +291,19 @@ export class LibraryLocalStore {
       missing: Number(countRow.missing),
     };
     return {
+      protocolVersion: LibraryLocalProtocol.Version,
+      sort: LibraryLocalSort.RecentTask,
       list,
       hasMore,
       counts,
       ...(hasMore && last
-        ? { nextCursor: encodeLibraryLocalCursor({ sortTime: last.sort_time_ms, itemId: last.id }) }
+        ? { nextCursor: encodeLibraryLocalCursor(getLibraryLocalOrderKey(last)) }
         : {}),
     };
   }
 
   getDetail(itemId: string): LibraryLocalDetailData | null {
+    requireIdentifier(itemId);
     const row = this.db.prepare(`
       SELECT a.*
       FROM library_local_artifacts a
@@ -224,6 +319,7 @@ export class LibraryLocalStore {
   }
 
   getVisibleItem(itemId: string): LocalArtifactItem | null {
+    requireIdentifier(itemId);
     const row = this.db.prepare(`
       SELECT a.*
       FROM library_local_artifacts a
@@ -237,6 +333,7 @@ export class LibraryLocalStore {
 
   getVisibleItems(itemIds: string[]): LibraryGetLocalItemsData {
     if (itemIds.length === 0) return { items: [], unavailableItemIds: [] };
+    itemIds.forEach(requireIdentifier);
     const placeholders = itemIds.map(() => '?').join(',');
     const rows = this.db.prepare(`
       SELECT a.*
@@ -269,6 +366,21 @@ export class LibraryLocalStore {
     return Boolean(this.db.prepare('SELECT 1 FROM cowork_sessions WHERE id = ?').get(sessionId));
   }
 
+  listSessionIdsWithArtifactRelations(sessionIds: string[]): string[] {
+    const result: string[] = [];
+    const uniqueIds = [...new Set(sessionIds)];
+    for (let offset = 0; offset < uniqueIds.length; offset += LibraryLimits.MaxTargetItemIds) {
+      const batch = uniqueIds.slice(offset, offset + LibraryLimits.MaxTargetItemIds);
+      const placeholders = batch.map(() => '?').join(',');
+      const rows = this.db.prepare(`
+        SELECT DISTINCT session_id FROM library_artifact_sessions
+        WHERE session_id IN (${placeholders})
+      `).all(...batch) as Array<{ session_id: string }>;
+      result.push(...rows.map(row => row.session_id));
+    }
+    return result;
+  }
+
   getSessionCwd(sessionId: string): string | null {
     const row = this.db.prepare('SELECT cwd FROM cowork_sessions WHERE id = ?').get(sessionId) as {
       cwd: string;
@@ -282,18 +394,26 @@ export class LibraryLocalStore {
   ): LibrarySessionRef | undefined {
     if (sessionId) {
       const session = this.db.prepare(`
-        SELECT id, title, agent_id, updated_at FROM cowork_sessions WHERE id = ?
+        SELECT id, title, agent_id, created_at, updated_at FROM cowork_sessions WHERE id = ?
       `).get(sessionId) as {
         id: string;
         title: string;
         agent_id: string | null;
+        created_at: number;
         updated_at: number;
       } | undefined;
       if (session) {
+        requireTimestamp(session.created_at);
+        requireTimestamp(session.updated_at);
+        if (!isLibraryIdentifier(session.id)) {
+          throw new LibraryLocalDataError(LibraryErrorCode.InvalidLocalData, 'Invalid local library session identifier.');
+        }
         return {
           sessionId: session.id,
           title: session.title,
           agentId: session.agent_id ?? 'main',
+          createdAt: session.created_at,
+          updatedAt: session.updated_at,
           lastRelatedAt: session.updated_at,
         };
       }
@@ -319,6 +439,7 @@ export class LibraryLocalStore {
     file: LibraryIndexedFile,
     candidate?: LibraryArtifactCandidate,
   ): LibraryStoredLocalArtifact | LocalArtifactItem | null {
+    if (candidate) requireIdentifier(candidate.sessionId);
     const now = Date.now();
     const existing = this.db.prepare(
       'SELECT id, first_seen_at FROM library_local_artifacts WHERE path_key = ?',
@@ -711,25 +832,23 @@ export class LibraryLocalStore {
     };
   }
 
-  private hydrateVisibleRows(rows: LocalArtifactRow[]): LocalArtifactItem[] {
-    const items = this.hydrateRows(rows);
+  private hydrateVisibleRows(rows: LocalArtifactRow[], owners?: RelationRow[]): LocalArtifactItem[] {
+    const items = this.hydrateRows(rows, owners);
     const visibleItems = items.filter((item): item is LocalArtifactItem => (
       Boolean(item.latestSession) && item.relatedSessionCount > 0
     ));
     if (visibleItems.length !== items.length) {
-      console.warn(
-        '[Library] Ignored local artifacts without a valid task relation.',
-        { count: items.length - visibleItems.length },
-      );
+      throw new LibraryLocalDataError(LibraryErrorCode.InvalidLocalData, 'Local library owner projection is unavailable.');
     }
     return visibleItems;
   }
 
-  private hydrateRows(rows: LocalArtifactRow[]): LibraryStoredLocalArtifact[] {
+  private hydrateRows(rows: LocalArtifactRow[], owners?: RelationRow[]): LibraryStoredLocalArtifact[] {
     if (rows.length === 0) return [];
     const itemIds = rows.map(row => row.id);
     const relationRows = this.readRelations(itemIds);
     const latestByArtifact = new Map<string, LibrarySessionRef>();
+    for (const owner of owners ?? []) latestByArtifact.set(owner.artifact_id, this.toSessionRef(owner));
     const relationCountByArtifact = new Map<string, number>();
     for (const relation of relationRows) {
       relationCountByArtifact.set(
@@ -740,30 +859,40 @@ export class LibraryLocalStore {
         latestByArtifact.set(relation.artifact_id, this.toSessionRef(relation));
       }
     }
-    const favoriteIds = this.getFavoriteIds(
-      LibraryFavoriteScope.LocalDevice,
-      [LibraryItemKind.LocalArtifact],
-    );
+    const placeholders = itemIds.map(() => '?').join(',');
+    const favoriteIds = new Set((this.db.prepare(`
+      SELECT item_id FROM library_favorites
+      WHERE owner_scope = ? AND item_kind = ? AND item_id IN (${placeholders})
+    `).all(LibraryFavoriteScope.LocalDevice, LibraryItemKind.LocalArtifact, ...itemIds) as Array<{
+      item_id: string;
+    }>).map(row => row.item_id));
 
-    return rows.map(row => ({
-      itemKind: LibraryItemKind.LocalArtifact,
-      itemId: row.id,
-      title: row.file_name,
-      category: row.category,
-      sortTime: row.sort_time_ms,
-      createdAt: row.created_at,
-      isFavorite: favoriteIds.has(`${LibraryItemKind.LocalArtifact}:${row.id}`),
-      ...(latestByArtifact.get(row.id) ? { latestSession: latestByArtifact.get(row.id) } : {}),
-      filePath: row.file_path,
-      artifactType: row.artifact_type,
-      extension: row.extension,
-      ...(row.size_bytes === null ? {} : { sizeBytes: row.size_bytes }),
-      ...(row.file_mtime_ms === null ? {} : { fileMtimeMs: row.file_mtime_ms }),
-      availability: row.availability,
-      origin: row.origin,
-      relatedSessionCount: relationCountByArtifact.get(row.id) ?? 0,
-      ...(row.client_source_key ? { clientSourceKey: row.client_source_key } : {}),
-    }));
+    return rows.map(row => {
+      requireTimestamp(row.sort_time_ms);
+      requireTimestamp(row.created_at);
+      if (!isLibraryIdentifier(row.id)) {
+        throw new LibraryLocalDataError(LibraryErrorCode.InvalidLocalData, 'Invalid local library item identifier.');
+      }
+      return {
+        itemKind: LibraryItemKind.LocalArtifact,
+        itemId: row.id,
+        title: row.file_name,
+        category: row.category,
+        sortTime: row.sort_time_ms,
+        createdAt: row.created_at,
+        isFavorite: favoriteIds.has(row.id),
+        ...(latestByArtifact.get(row.id) ? { latestSession: latestByArtifact.get(row.id) } : {}),
+        filePath: row.file_path,
+        artifactType: row.artifact_type,
+        extension: row.extension,
+        ...(row.size_bytes === null ? {} : { sizeBytes: row.size_bytes }),
+        ...(row.file_mtime_ms === null ? {} : { fileMtimeMs: row.file_mtime_ms }),
+        availability: row.availability,
+        origin: row.origin,
+        relatedSessionCount: relationCountByArtifact.get(row.id) ?? 0,
+        ...(row.client_source_key ? { clientSourceKey: row.client_source_key } : {}),
+      };
+    });
   }
 
   private readRelations(itemIds: string[]): RelationRow[] {
@@ -780,19 +909,28 @@ export class LibraryLocalStore {
         r.session_artifact_id,
         s.title,
         s.agent_id,
+        s.created_at AS session_created_at,
         s.updated_at AS session_updated_at
       FROM library_artifact_sessions r
       JOIN cowork_sessions s ON s.id = r.session_id
       WHERE r.artifact_id IN (${placeholders})
-      ORDER BY r.artifact_id, r.last_related_at DESC, s.updated_at DESC, r.session_id DESC
+      ORDER BY r.artifact_id, ${RELATION_OWNER_ORDER}
     `).all(...itemIds) as RelationRow[];
   }
 
   private toSessionRef(row: RelationRow): LibrarySessionRef {
+    requireTimestamp(row.session_created_at);
+    requireTimestamp(row.session_updated_at);
+    requireTimestamp(row.last_related_at);
+    if (!isLibraryIdentifier(row.session_id)) {
+      throw new LibraryLocalDataError(LibraryErrorCode.InvalidLocalData, 'Invalid local library session identifier.');
+    }
     return {
       sessionId: row.session_id,
       title: row.title,
       agentId: row.agent_id ?? 'main',
+      createdAt: row.session_created_at,
+      updatedAt: row.session_updated_at,
       lastRelatedAt: row.last_related_at,
       ...(row.last_message_id ? { lastMessageId: row.last_message_id } : {}),
       ...(row.session_artifact_id ? { sessionArtifactId: row.session_artifact_id } : {}),

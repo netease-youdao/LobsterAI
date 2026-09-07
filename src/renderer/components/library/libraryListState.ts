@@ -1,12 +1,10 @@
 import { HtmlShareStatus } from '../../../shared/htmlShare/constants';
 import {
-  LibraryChangeReason,
   LibraryItemKind,
   LibrarySharedStatusFilter,
   type LibrarySharedStatusFilter as LibrarySharedStatusFilterValue,
 } from '../../../shared/library/constants';
 import type {
-  LibraryChangedPayload,
   LibraryCloudItem,
   LibraryCloudListData,
   LibraryItem,
@@ -19,10 +17,6 @@ const isSameLibraryItem = (
   left: Pick<LibraryItem, 'itemId' | 'itemKind'>,
   right: Pick<LibraryItem, 'itemId' | 'itemKind'>,
 ): boolean => left.itemId === right.itemId && left.itemKind === right.itemKind;
-
-export const shouldReloadLibraryAfterChange = (
-  payload: LibraryChangedPayload,
-): boolean => payload.reason !== LibraryChangeReason.Favorite;
 
 export const applyLibraryFavoriteState = <T extends LibraryItem>(
   items: T[],
@@ -77,22 +71,12 @@ export const matchesLibrarySharedStatus = (
 export const hideLibraryLocalItems = (
   data: LibraryLocalListData,
 ): LibraryLocalListData => ({
+  ...data,
   list: [],
   hasMore: false,
+  nextCursor: undefined,
   counts: data.counts,
 });
-
-export const sanitizeLibraryLocalListData = (
-  data: LibraryLocalListData,
-): { data: LibraryLocalListData; ignoredCount: number } => {
-  const list = data.list.filter(item => (
-    Boolean(item.latestSession) && item.relatedSessionCount > 0
-  ));
-  return {
-    data: list.length === data.list.length ? data : { ...data, list },
-    ignoredCount: data.list.length - list.length,
-  };
-};
 
 export const hideLibraryCloudItems = (
   data: LibraryCloudListData,

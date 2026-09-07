@@ -2,8 +2,9 @@ import { describe, expect, test } from 'vitest';
 
 import { HtmlShareStatus } from '../../../shared/htmlShare/constants';
 import {
-  LibraryChangeReason,
   LibraryItemKind,
+  LibraryLocalProtocol,
+  LibraryLocalSort,
   LibrarySharedStatusFilter,
 } from '../../../shared/library/constants';
 import type { LocalArtifactItem, SharedFileItem } from '../../../shared/library/types';
@@ -15,8 +16,6 @@ import {
   matchesLibrarySharedStatus,
   removeLibraryCloudItem,
   restoreLibraryFavoriteState,
-  sanitizeLibraryLocalListData,
-  shouldReloadLibraryAfterChange,
 } from './libraryListState';
 
 const makeLocalItem = (itemId: string, isFavorite: boolean): LocalArtifactItem => ({
@@ -31,6 +30,8 @@ const makeLocalItem = (itemId: string, isFavorite: boolean): LocalArtifactItem =
     sessionId: 'session-1',
     title: 'Task',
     agentId: 'main',
+    createdAt: 1,
+    updatedAt: 1,
     lastRelatedAt: 1,
   },
   filePath: `/tmp/${itemId}.pdf`,
@@ -42,17 +43,6 @@ const makeLocalItem = (itemId: string, isFavorite: boolean): LocalArtifactItem =
 });
 
 describe('library list state', () => {
-  test('does not reload the list for an optimistically applied favorite event', () => {
-    expect(shouldReloadLibraryAfterChange({
-      reason: LibraryChangeReason.Favorite,
-      itemIds: ['item-1'],
-    })).toBe(false);
-    expect(shouldReloadLibraryAfterChange({
-      reason: LibraryChangeReason.FileChanged,
-      itemIds: ['item-1'],
-    })).toBe(true);
-  });
-
   test('updates favorite state in place and removes an unfavorited filtered item', () => {
     const first = makeLocalItem('first', false);
     const second = makeLocalItem('second', true);
@@ -71,33 +61,19 @@ describe('library list state', () => {
 
   test('hides local items without clearing the source count', () => {
     expect(hideLibraryLocalItems({
+      protocolVersion: LibraryLocalProtocol.Version,
+      sort: LibraryLocalSort.RecentTask,
       list: [],
       nextCursor: 'local-next',
       hasMore: true,
       counts: { total: 12, available: 10, missing: 2 },
     })).toEqual({
+      protocolVersion: LibraryLocalProtocol.Version,
+      sort: LibraryLocalSort.RecentTask,
       list: [],
       hasMore: false,
       counts: { total: 12, available: 10, missing: 2 },
     });
-  });
-
-  test('defensively ignores malformed local items without a valid task relation', () => {
-    const valid = makeLocalItem('valid', false);
-    const missingTask = {
-      ...makeLocalItem('missing-task', false),
-      latestSession: undefined,
-      relatedSessionCount: 0,
-    } as unknown as LocalArtifactItem;
-    const result = sanitizeLibraryLocalListData({
-      list: [valid, missingTask],
-      hasMore: false,
-      counts: { total: 2, available: 2, missing: 0 },
-    });
-
-    expect(result.ignoredCount).toBe(1);
-    expect(result.data.list).toEqual([valid]);
-    expect(result.data.counts.total).toBe(2);
   });
 
   test('hides cloud items without clearing share and site counts', () => {
