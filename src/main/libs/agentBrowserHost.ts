@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import {
   type BrowserWindow,
   type NativeImage,
@@ -68,11 +69,28 @@ export const BrowserMcpTool = {
   LoginWithSavedCredential: BrowserCredentialLoginTool.Name,
 } as const;
 
+export const BrowserCdpCommand = {
+  GetFullAXTree: 'Accessibility.getFullAXTree',
+  ResolveNode: 'DOM.resolveNode',
+  Evaluate: 'Runtime.evaluate',
+  CallFunctionOn: 'Runtime.callFunctionOn',
+  ReleaseObjectGroup: 'Runtime.releaseObjectGroup',
+} as const;
+
 const DEFAULT_PAGE_URL = AgentBrowserPageUrl.Blank;
 const DEFAULT_OPERATION_TIMEOUT_MS = 30_000;
 const SCREENSHOT_CAPTURE_TIMEOUT_MS = 10_000;
 const MAX_OPERATION_TIMEOUT_MS = 60_000;
 const MAX_SNAPSHOT_NODES = 2_000;
+const SNAPSHOT_REF_PREFIX = 'ax-';
+
+type BrowserEvaluationResult = {
+  result?: { value?: unknown; description?: string };
+  exceptionDetails?: {
+    text?: string;
+    exception?: { value?: unknown; description?: string };
+  };
+};
 
 type AxValue = {
   value?: unknown;
@@ -547,8 +565,8 @@ export class AgentBrowserHost {
       return await this.dispatchTool(request.tool, request.args);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.lastError = message;
-      this.emitState();
+      // Tool failures belong to the tool result, not the page's navigation state.
+      console.warn('[AgentBrowserHost] Browser tool failed:', request.tool, error);
       return errorResult(message);
     }
   }
@@ -743,6 +761,7 @@ export class AgentBrowserHost {
     });
     webContents.on('page-title-updated', emit);
     webContents.on('did-navigate', () => {
+      page.refs.clear();
       if (this.preserveCredentialLoginStatusForNavigationPageId !== page.pageId) {
         this.clearCredentialLoginStatus();
       }
@@ -781,7 +800,15 @@ export class AgentBrowserHost {
       this.lastError = `${errorDescription} (${validatedURL})`;
       emit();
     });
+    webContents.on('render-process-gone', (_event, details) => {
+      console.error('[AgentBrowserHost] Browser renderer exited:', {
+        pageId: page.pageId,
+        reason: details.reason,
+        exitCode: details.exitCode,
+      });
+    });
     webContents.on('destroyed', () => {
+      console.debug('[AgentBrowserHost] Browser page destroyed:', page.pageId);
       this.markBrowserToolBootstrapPageUsed(page.pageId);
       this.manualCredentialCapture.clearPage(page.pageId);
       const fallbackPageId = this.getAdjacentPageId(page.pageId);
@@ -912,7 +939,7 @@ export class AgentBrowserHost {
 
   private async takeSnapshot(page: BrowserPage): Promise<BrowserToolResponse> {
     await this.ensureDebugger(page);
-    const result = await page.view.webContents.debugger.sendCommand('Accessibility.getFullAXTree') as {
+    const result = await page.view.webContents.debugger.sendCommand(BrowserCdpCommand.GetFullAXTree) as {
       nodes?: AxNode[];
     };
     const nodes = (result.nodes ?? [])
@@ -924,7 +951,7 @@ export class AgentBrowserHost {
     const buildNode = (node: AxNode, ancestors: Set<string>): SnapshotNode | null => {
       if (ancestors.has(node.nodeId)) return null;
       const nextAncestors = new Set(ancestors).add(node.nodeId);
-      const ref = `ax-${page.pageId}-${node.nodeId}`;
+      const ref = `${SNAPSHOT_REF_PREFIX}${page.pageId}-${node.nodeId}`;
       if (typeof node.backendDOMNodeId === 'number') {
         page.refs.set(ref, node.backendDOMNodeId);
       }
@@ -983,7 +1010,7 @@ export class AgentBrowserHost {
     page.view.webContents.focus();
     const debuggerApi = page.view.webContents.debugger;
     const objectId = await this.resolveObjectId(page, backendNodeId);
-    await debuggerApi.sendCommand('Runtime.callFunctionOn', {
+    await debuggerApi.sendCommand(BrowserCdpCommand.CallFunctionOn, {
       objectId,
       functionDeclaration: `function(shouldDoubleClick) {
         this.focus();
@@ -1009,7 +1036,7 @@ export class AgentBrowserHost {
     const debuggerApi = page.view.webContents.debugger;
     page.view.webContents.focus();
     const objectId = await this.resolveObjectId(page, backendNodeId);
-    await debuggerApi.sendCommand('Runtime.callFunctionOn', {
+    await debuggerApi.sendCommand(BrowserCdpCommand.CallFunctionOn, {
       objectId,
       functionDeclaration: `function(nextValue) {
         this.focus();
@@ -1118,21 +1145,51 @@ export class AgentBrowserHost {
     if (!source) throw new Error('Browser evaluation function is missing.');
     const functionArgs = Array.isArray(rawArgs) ? rawArgs : [];
     await this.ensureDebugger(page);
-    const expression = `Promise.resolve((${source})(...${JSON.stringify(functionArgs)}))`;
-    const result = await page.view.webContents.debugger.sendCommand('Runtime.evaluate', {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-      userGesture: true,
-    }) as {
-      result?: { value?: unknown; description?: string };
-      exceptionDetails?: { text?: string };
-    };
-    if (result.exceptionDetails) {
-      throw new Error(result.exceptionDetails.text || result.result?.description || 'Browser evaluation failed.');
+    const debuggerApi = page.view.webContents.debugger;
+    const objectGroup = `lobster-browser-evaluation-${randomUUID()}`;
+    try {
+      const callArgs: Array<{ objectId?: string; value?: unknown }> = [];
+      for (const value of functionArgs) {
+        if (typeof value === 'string' && value.startsWith(SNAPSHOT_REF_PREFIX)) {
+          const backendNodeId = this.requireBackendNodeId(page, value);
+          callArgs.push({ objectId: await this.resolveObjectId(page, backendNodeId, objectGroup) });
+        } else {
+          callArgs.push({ value });
+        }
+      }
+      const receiver = callArgs.find(arg => arg.objectId);
+      const result = await debuggerApi.sendCommand(
+        receiver ? BrowserCdpCommand.CallFunctionOn : BrowserCdpCommand.Evaluate,
+        {
+          ...(receiver
+            ? {
+                objectId: receiver.objectId,
+                functionDeclaration: `function(...args) { return (${source})(...args); }`,
+                arguments: callArgs,
+              }
+            : { expression: `Promise.resolve((${source})(...${JSON.stringify(functionArgs)}))` }),
+          objectGroup,
+          awaitPromise: true,
+          returnByValue: true,
+          userGesture: true,
+        },
+      ) as BrowserEvaluationResult;
+      if (result.exceptionDetails) {
+        const exception = result.exceptionDetails.exception;
+        throw new Error(
+          exception?.description
+          || result.result?.description
+          || (exception?.value !== undefined ? String(exception.value) : '')
+          || result.exceptionDetails.text
+          || 'Browser evaluation failed.',
+        );
+      }
+      const message = JSON.stringify(result.result?.value ?? null);
+      return textResult(message, { message });
+    } finally {
+      // Navigation can destroy the execution context before cleanup runs.
+      await debuggerApi.sendCommand(BrowserCdpCommand.ReleaseObjectGroup, { objectGroup }).catch(() => {});
     }
-    const message = JSON.stringify(result.result?.value ?? null);
-    return textResult(message, { message });
   }
 
   private async waitForText(page: BrowserPage, text: string, timeoutMs: number): Promise<void> {
@@ -1196,9 +1253,10 @@ export class AgentBrowserHost {
     return backendNodeId;
   }
 
-  private async resolveObjectId(page: BrowserPage, backendNodeId: number): Promise<string> {
-    const resolved = await page.view.webContents.debugger.sendCommand('DOM.resolveNode', {
+  private async resolveObjectId(page: BrowserPage, backendNodeId: number, objectGroup?: string): Promise<string> {
+    const resolved = await page.view.webContents.debugger.sendCommand(BrowserCdpCommand.ResolveNode, {
       backendNodeId,
+      ...(objectGroup ? { objectGroup } : {}),
     }) as { object?: { objectId?: string } };
     const objectId = resolved.object?.objectId;
     if (!objectId) throw new Error('Browser element could not be resolved.');
@@ -1283,6 +1341,7 @@ export class AgentBrowserHost {
       const page = this.requirePage(this.selectedPageId!);
       mainWindow.contentView.addChildView(page.view);
       this.attachedPageId = page.pageId;
+      console.debug('[AgentBrowserHost] Browser view attached:', page.pageId);
     }
     this.pages.get(this.attachedPageId!)?.view.setBounds(this.normalizeBounds(this.bounds));
   }
@@ -1298,7 +1357,15 @@ export class AgentBrowserHost {
         // The view may already have been detached while the window was closing.
       }
     }
-    if (this.attachedPageId === pageId) this.attachedPageId = undefined;
+    if (this.attachedPageId === pageId) {
+      this.attachedPageId = undefined;
+      console.debug('[AgentBrowserHost] Browser view detached:', {
+        pageId,
+        desiredVisible: this.desiredVisible,
+        windowVisible: this.windowVisible,
+        selectedPageId: this.selectedPageId,
+      });
+    }
   }
 
   private setCredentialLoginView(view: WebContentsView | null): void {
