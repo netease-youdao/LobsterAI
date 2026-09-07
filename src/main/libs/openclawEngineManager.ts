@@ -1,6 +1,6 @@
-import { type ChildProcess, spawn } from 'child_process';
+import { type ChildProcess } from 'child_process';
 import crypto from 'crypto';
-import { app, type UtilityProcess, utilityProcess } from 'electron';
+import { app } from 'electron';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import net from 'net';
@@ -26,6 +26,7 @@ import { mergeNoProxyValue } from './noProxyEnv';
 import { getCodexHomeDir } from './openaiCodexAuth';
 import { migrateLegacyCronStorageWithDoctor } from './openclawCronLegacyMigration';
 import { cleanupStaleGatewayLocks, GatewayLockCleanupAction } from './openclawGatewayLock';
+import { spawnOpenClawGatewayProcess } from './openclawGatewayProcess';
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
@@ -42,7 +43,7 @@ const gwDiagTs = (): string => {
 };
 import { isSystemProxyEnabled, resolveSystemProxyUrlForTargets, setActiveSystemProxyUrl } from './systemProxy';
 
-type GatewayProcess = UtilityProcess | ChildProcess;
+type GatewayProcess = ChildProcess;
 
 const DEFAULT_OPENCLAW_VERSION = '2026.2.23';
 const DEFAULT_GATEWAY_PORT = 18789;
@@ -893,35 +894,15 @@ export class OpenClawEngineManager extends EventEmitter {
     }
     console.log(`[OpenClaw] forking gateway: entry=${openclawEntry}, cwd=${runtime.root}, port=${port}, args=${JSON.stringify(forkArgs)}`);
 
-    // On Windows, use child_process.spawn with ELECTRON_RUN_AS_NODE=1 instead of
-    // utilityProcess.fork(). Benchmark shows utilityProcess has ~5x overhead for
-    // cold ESM compilation on Windows (163s vs 34s for a 28MB bundle).
-    let child: GatewayProcess;
-    if (process.platform === 'win32') {
-      child = spawn(
-        process.execPath,
-        [...gatewayExecArgv, openclawEntry, ...forkArgs],
-        {
-          cwd: runtime.root,
-          env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
-          stdio: ['ignore', 'pipe', 'pipe'],
-          windowsHide: true,
-        },
-      );
-    } else {
-      child = utilityProcess.fork(
-        openclawEntry,
-        forkArgs,
-        {
-          cwd: runtime.root,
-          execArgv: gatewayExecArgv,
-          env,
-          stdio: 'pipe',
-          serviceName: 'OpenClaw Gateway',
-        },
-      );
-    }
-    console.log(`[OpenClaw] startGateway: gateway process created (${elapsed()}), platform=${process.platform}, launcher=${process.platform === 'win32' ? 'spawn' : 'utilityProcess'}`);
+    const child = spawnOpenClawGatewayProcess({
+      executablePath: electronNodeRuntimePath,
+      entryPath: openclawEntry,
+      args: forkArgs,
+      execArgv: gatewayExecArgv,
+      cwd: runtime.root,
+      env,
+    });
+    console.log(`[OpenClaw] startGateway: gateway process created (${elapsed()}), platform=${process.platform}, launcher=spawn`);
 
     this.gatewayProcess = child;
     this.gatewayGeneration += 1;
@@ -1779,7 +1760,7 @@ export class OpenClawEngineManager extends EventEmitter {
         resolve();
       };
 
-      // Listen for exit (ChildProcess) or exit (UtilityProcess).
+      // Wait for the gateway process to exit before completing shutdown.
       child.once('exit', done);
 
       // First attempt: graceful kill.
