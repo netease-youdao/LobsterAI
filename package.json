@@ -12,6 +12,46 @@
     "repo": "https://github.com/openclaw/openclaw.git",
     "plugins": [
       {
+        "id": "qwen",
+        "npm": "@openclaw/qwen-provider",
+        "version": "2026.8.1"
+      },
+      {
+        "id": "deepseek",
+        "npm": "@openclaw/deepseek-provider",
+        "version": "2026.8.1"
+      },
+      {
+        "id": "moonshot",
+        "npm": "@openclaw/moonshot-provider",
+        "version": "2026.8.1"
+      },
+      {
+        "id": "qianfan",
+        "npm": "@openclaw/qianfan-provider",
+        "version": "2026.8.1"
+      },
+      {
+        "id": "stepfun",
+        "npm": "@openclaw/stepfun-provider",
+        "version": "2026.8.1"
+      },
+      {
+        "id": "zai",
+        "npm": "@openclaw/zai-provider",
+        "version": "2026.8.1"
+      },
+      {
+        "id": "xiaomi",
+        "npm": "@openclaw/xiaomi-provider",
+        "version": "2026.8.1"
+      },
+      {
+        "id": "volcengine",
+        "npm": "@openclaw/volcengine-provider",
+        "version": "2026.8.1"
+      },
+      {
         "id": "dingtalk-connector",
         "npm": "@dingtalk-real-ai/dingtalk-connector",
         "version": "0.8.23"
