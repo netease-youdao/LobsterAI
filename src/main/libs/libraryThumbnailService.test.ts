@@ -1,9 +1,14 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
-import { LibraryThumbnailRequestPriority } from '../../shared/library/thumbnail';
+import {
+  LibraryThumbnailError,
+  LibraryThumbnailFailureCode,
+  LibraryThumbnailRequestPriority,
+} from '../../shared/library/thumbnail';
 import {
   getLibraryThumbnailCacheVersion,
   LibraryThumbnailCacheVersion,
@@ -42,6 +47,18 @@ describe('LibraryThumbnailService', () => {
     expect(getLibraryThumbnailCacheVersion('/tmp/vector.svg')).toBe(
       LibraryThumbnailCacheVersion.DirectCanvas,
     );
+    expect(getLibraryThumbnailCacheVersion('/tmp/document.docx')).toBe(
+      LibraryThumbnailCacheVersion.PresentedFrame,
+    );
+  });
+
+  test.each(['/tmp/index.html', '/tmp/页面.HTM', 'C:\\project\\index.HTML'])('gives HTML its own cache generation for %s', filePath => {
+    expect(getLibraryThumbnailCacheVersion(filePath)).toBe(LibraryThumbnailCacheVersion.HtmlPresentedFrame);
+    expect(getLibraryThumbnailCacheVersion(filePath)).not.toBe(LibraryThumbnailCacheVersion.PresentedFrame);
+  });
+
+  test.each(['/tmp/.html', '/tmp/page.html/document.docx', '/tmp/page.htm.png'])('does not mistake another file type for HTML: %s', filePath => {
+    expect(getLibraryThumbnailCacheVersion(filePath)).not.toBe(LibraryThumbnailCacheVersion.HtmlPresentedFrame);
   });
 
   test('uses a fixed cross-platform 16:9 thumbnail size', async () => {
@@ -244,6 +261,69 @@ describe('LibraryThumbnailService', () => {
       await expect(secondService.generate('/tmp/cached.pdf')).resolves.toBe(PNG_DATA_URL);
       expect(regenerated).toBe(1);
       expect(await fs.promises.readdir(cacheDirectory)).toEqual([cacheFile]);
+    } finally {
+      await fs.promises.rm(cacheDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test.each(['html', 'HTM'])('ignores legacy %s PNGs while reusing unchanged non-HTML disk cache', async extension => {
+    const cacheDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'library-html-cache-'));
+    const htmlPath = path.resolve('/tmp/library-versioned.' + extension);
+    const docxPath = path.resolve('/tmp/library-unchanged.docx');
+    const oldCachePath = (filePath: string): string => {
+      const key = [LibraryThumbnailCacheVersion.PresentedFrame, filePath, 100, 10].join('\0');
+      return path.join(cacheDirectory, `${crypto.createHash('sha256').update(key).digest('hex')}.png`);
+    };
+    try {
+      await fs.promises.writeFile(oldCachePath(htmlPath), PNG_BYTES);
+      await fs.promises.writeFile(oldCachePath(docxPath), PNG_BYTES);
+      const regeneratedPng = Buffer.concat([PNG_BYTES, Buffer.from([2])]);
+      const regeneratedUrl = `data:image/png;base64,${regeneratedPng.toString('base64')}`;
+      const createThumbnail = vi.fn(async () => regeneratedPng);
+      const service = new LibraryThumbnailService({
+        getCacheDirectory: () => cacheDirectory,
+        statFile: async () => createStat(100),
+        createThumbnail,
+      });
+
+      await expect(service.generate(htmlPath)).resolves.toBe(regeneratedUrl);
+      await expect(service.generate(docxPath)).resolves.toBe(PNG_DATA_URL);
+      await expect(service.generate(htmlPath)).resolves.toBe(regeneratedUrl);
+      expect(createThumbnail).toHaveBeenCalledTimes(1);
+      expect(createThumbnail).toHaveBeenCalledWith(htmlPath, { width: 480, height: 270 });
+      expect(await fs.promises.readFile(oldCachePath(htmlPath))).toEqual(PNG_BYTES);
+
+      const restartedRenderer = vi.fn(async () => { throw new Error('Should reuse validated disk cache'); });
+      const restartedService = new LibraryThumbnailService({
+        getCacheDirectory: () => cacheDirectory,
+        statFile: async () => createStat(100),
+        createThumbnail: restartedRenderer,
+      });
+      await expect(restartedService.generate(htmlPath)).resolves.toBe(regeneratedUrl);
+      await expect(restartedService.generate(docxPath)).resolves.toBe(PNG_DATA_URL);
+      expect(restartedRenderer).not.toHaveBeenCalled();
+    } finally {
+      await fs.promises.rm(cacheDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test('does not cache rejected native HTML output in memory or on disk', async () => {
+    const cacheDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'library-html-failure-'));
+    try {
+      const createThumbnail = vi.fn(async () => {
+        throw new LibraryThumbnailError(LibraryThumbnailFailureCode.NativeThumbnailBlank, 'Native thumbnail is visually blank');
+      });
+      const service = new LibraryThumbnailService({
+        getCacheDirectory: () => cacheDirectory,
+        statFile: async () => createStat(100),
+        createThumbnail,
+      });
+
+      await expect(service.generate('/tmp/rejected.html')).rejects.toMatchObject({ code: LibraryThumbnailFailureCode.NativeThumbnailBlank });
+      await flushTasks();
+      await expect(service.generate('/tmp/rejected.html')).rejects.toMatchObject({ code: LibraryThumbnailFailureCode.NativeThumbnailBlank });
+      expect(createThumbnail).toHaveBeenCalledTimes(2);
+      expect(await fs.promises.readdir(cacheDirectory)).toEqual([]);
     } finally {
       await fs.promises.rm(cacheDirectory, { recursive: true, force: true });
     }

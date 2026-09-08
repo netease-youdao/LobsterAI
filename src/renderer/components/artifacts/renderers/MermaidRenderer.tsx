@@ -3,6 +3,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { Artifact } from '@/types/artifact';
 
+import { i18nService } from '../../../services/i18n';
+import { startMermaidRender } from './mermaidRenderLifecycle';
+
 let mermaidInitialized = false;
 
 function initMermaid(isDark: boolean) {
@@ -12,12 +15,6 @@ function initMermaid(isDark: boolean) {
     theme: isDark ? 'dark' : 'default',
   });
   mermaidInitialized = true;
-}
-
-function cleanupMermaidRenderArtifacts(id: string) {
-  document.getElementById(id)?.remove();
-  document.getElementById(`d${id}`)?.remove();
-  document.getElementById(`i${id}`)?.remove();
 }
 
 function createMermaidRenderContainer(): HTMLDivElement {
@@ -68,57 +65,41 @@ const MermaidRenderer: React.FC<MermaidRendererProps> = ({ artifact }) => {
       initMermaid(isDark);
     }
 
-    let cancelled = false;
-    const renderDiagram = async () => {
-      const id = `mermaid-${artifact.id.replace(/[^a-zA-Z0-9]/g, '')}`;
-      let renderContainer: HTMLDivElement | null = null;
-      try {
-        cleanupMermaidRenderArtifacts(id);
-        await mermaid.parse(artifact.content);
-        renderContainer = createMermaidRenderContainer();
-        const { svg: rendered } = await mermaid.render(id, artifact.content, renderContainer);
-        if (!cancelled) {
-          setSvg(rendered);
-          setError(null);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setSvg('');
-          setError(err instanceof Error ? err.message : 'Failed to render diagram');
-        }
-      } finally {
-        renderContainer?.remove();
-        cleanupMermaidRenderArtifacts(id);
-      }
-    };
-
-    renderDiagram();
-    return () => {
-      cancelled = true;
-      const id = `mermaid-${artifact.id.replace(/[^a-zA-Z0-9]/g, '')}`;
-      cleanupMermaidRenderArtifacts(id);
-    };
+    const task = startMermaidRender({
+      source: artifact.content,
+      api: mermaid,
+      createContainer: createMermaidRenderContainer,
+      onSuccess: rendered => {
+        setSvg(rendered);
+        setError(null);
+      },
+      onError: error => {
+        setSvg('');
+        setError(error instanceof Error && error.message
+          ? error.message
+          : i18nService.t('artifactMermaidRenderFailed'));
+      },
+    });
+    return task.cancel;
   }, [artifact.content, artifact.id]);
-
-  if (error) {
-    return (
-      <div className="p-4 text-sm text-red-500">
-        <p className="font-medium">Mermaid render error</p>
-        <pre className="mt-2 text-xs whitespace-pre-wrap">{error}</pre>
-      </div>
-    );
-  }
 
   return (
     <div className="relative w-full h-full">
       <div className="w-full h-full overflow-auto" ref={containerRef}>
-        <div
-          className="flex items-center justify-center min-h-full p-4"
-          style={{ transform: `scale(${scale})`, transformOrigin: 'center center' }}
-          dangerouslySetInnerHTML={{ __html: svg }}
-        />
+        {error ? (
+          <div role="alert" className="p-4 text-sm text-red-500">
+            <p className="font-medium">{i18nService.t('artifactMermaidRenderError')}</p>
+            <pre className="mt-2 text-xs whitespace-pre-wrap">{error}</pre>
+          </div>
+        ) : (
+          <div
+            className="flex items-center justify-center min-h-full p-4"
+            style={{ transform: `scale(${scale})`, transformOrigin: 'center center' }}
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+        )}
       </div>
-      <div className="absolute bottom-3 right-3 flex items-center gap-1">
+      {!error && <div className="absolute bottom-3 right-3 flex items-center gap-1">
         <button
           onClick={zoomOut}
           disabled={scale <= 0.1}
@@ -139,7 +120,7 @@ const MermaidRenderer: React.FC<MermaidRendererProps> = ({ artifact }) => {
         >
           +
         </button>
-      </div>
+      </div>}
     </div>
   );
 };

@@ -5,6 +5,7 @@ import {
   clearLibraryThumbnailCache,
   createLibraryThumbnailCacheKey,
   getCachedLibraryThumbnail,
+  LibraryHtmlThumbnailClientCacheVersion,
   LibraryThumbnailClientCacheVersion,
   shouldApplyLibraryThumbnailResult,
 } from './libraryThumbnailCache';
@@ -30,6 +31,47 @@ describe('library thumbnail cache', () => {
     expect(createLibraryThumbnailCacheKey('/tmp/report.pdf', 100)).toContain(
       `${LibraryThumbnailClientCacheVersion}\0`,
     );
+  });
+
+  test.each([
+    '/tmp/index.html',
+    '/tmp/页面.HTM',
+    'C:\\project\\index.HTML',
+    '\\\\server\\share\\index.HtMl',
+    'index.htm',
+  ])('uses the HTML-specific version for %s without rewriting the path', filePath => {
+    expect(createLibraryThumbnailCacheKey(filePath, 100, 20)).toBe([
+      LibraryHtmlThumbnailClientCacheVersion,
+      filePath,
+      100,
+      20,
+    ].join('\0'));
+  });
+
+  test.each([
+    '/tmp/.html',
+    'C:\\project\\.htm',
+    '/tmp/page.html/document.docx',
+    'C:\\page.htm\\image.png',
+    '/tmp/page.html.txt',
+    '/tmp/report.pdf',
+    '/tmp/slides.pptx',
+  ])('preserves the existing version for other paths: %s', filePath => {
+    expect(createLibraryThumbnailCacheKey(filePath, 100, 20)).toBe([
+      LibraryThumbnailClientCacheVersion,
+      filePath,
+      100,
+      20,
+    ].join('\0'));
+  });
+
+  test('cannot reuse an HTML thumbnail stored under the previous client version', () => {
+    const filePath = '/tmp/index.html';
+    const oldKey = [LibraryThumbnailClientCacheVersion, filePath, 100, 20].join('\0');
+    cacheLibraryThumbnail(oldKey, 'data:image/png;base64,b2xk');
+
+    expect(getCachedLibraryThumbnail(createLibraryThumbnailCacheKey(filePath, 100, 20))).toBeUndefined();
+    expect(getCachedLibraryThumbnail(oldKey)).toBe('data:image/png;base64,b2xk');
   });
 
   test('rejects a completed request after the card identity changes', () => {
