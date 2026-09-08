@@ -13,6 +13,10 @@ type BuildManagedAgentEntriesInput = {
 
 export type ProviderModelCatalog = Record<string, { models: Array<{ id: string }> }>;
 
+export const OpenClawAgentOwnership = {
+  Explicit: 'explicit',
+} as const;
+
 export type ManagedSessionModelTarget = {
   providerId: string;
   modelId: string;
@@ -360,7 +364,6 @@ export function buildAgentEntry(
 
   return {
     id: agent.id,
-    ...(agent.isDefault ? { default: true } : {}),
     ...(agent.name ? { name: agent.name } : {}),
     ...(agent.name || legacyIcon ? {
       identity: {

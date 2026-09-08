@@ -1267,7 +1267,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkOpenClawStarting: 'AI 引擎正在启动网关...',
     coworkOpenClawRunning: 'AI 引擎已就绪',
     engineStartingTitle: 'AI 引擎启动中',
-    engineStartingSlowHint: '首次启动需要准备运行环境，可能耗时 1-2 分钟，请稍候',
+    engineStartingSlowHint: '正在准备运行环境或恢复网关，首次启动和升级后可能需要较长时间，请稍候',
     engineStartingTipLabel: '小提示',
     engineStartingTip1: '让 AI 生成 HTML、SVG 或 Mermaid 图表，右侧面板会实时预览效果',
     engineStartingTip2: '在「技能」中开启 Word、Excel、PPT 技能，AI 可以直接为你生成办公文档',
@@ -1275,7 +1275,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     engineStartingTip4: '接入微信、飞书、钉钉等聊天工具，在 IM 里随时召唤 AI',
     engineStartingTip5: '对 AI 说"记住……"，重要信息会写入长期记忆，下次对话自动生效',
     engineStartingTip6: 'AI 执行敏感操作前会先请求你的确认，可以放心交给它',
-    coworkOpenClawError: 'AI 引擎网关未能在规定时间内启动成功。',
+    coworkOpenClawError: 'AI 引擎网关启动失败。',
     coworkOpenClawQuickRepair: '一键修复',
     coworkOpenClawErrorRepairHint:
       '推荐使用一键修复：自动备份并重建 OpenClaw 配置后重新启动网关，可解决大多数启动失败问题；不会删除聊天记录、模型配置、技能或工作区文件。',
@@ -5125,7 +5125,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkOpenClawRunning: 'AI engine is ready',
     engineStartingTitle: 'Starting AI engine',
     engineStartingSlowHint:
-      'First launch prepares the runtime environment and may take 1-2 minutes',
+      'Preparing the runtime or recovering the gateway. First launch and upgrades may take longer.',
     engineStartingTipLabel: 'Tip',
     engineStartingTip1:
       'Ask AI for HTML, SVG, or Mermaid diagrams — the side panel previews them live',
@@ -5139,7 +5139,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Tell AI to "remember..." and it saves key facts to long-term memory for future chats',
     engineStartingTip6:
       'AI asks for your approval before sensitive operations, so you stay in control',
-    coworkOpenClawError: 'The AI engine gateway failed to become healthy in time.',
+    coworkOpenClawError: 'The AI engine gateway failed to start.',
     coworkOpenClawQuickRepair: 'Quick Repair',
     coworkOpenClawErrorRepairHint:
       'Quick Repair backs up and rebuilds the OpenClaw config, then restarts the gateway. It resolves most startup failures and keeps chats, model settings, skills, and workspace files.',

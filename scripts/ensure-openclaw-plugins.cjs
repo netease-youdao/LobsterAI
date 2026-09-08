@@ -38,6 +38,7 @@ const {
   prepareOpenClawNimPackage,
 } = require('./openclaw-plugin-preparers/nim-channel.cjs');
 const { prepareHostPeerPackage } = require('./openclaw-plugin-preparers/host-peer.cjs');
+const { QQ_PACKAGE_NAME, configureQQRuntimeEntry, prepareQQPackage } = require('./openclaw-plugin-preparers/qqbot.cjs');
 const { pruneHostPeerLeftovers } = require('./openclaw-plugin-host-peer-leftovers.cjs');
 
 const OPENCLAW_PLUGIN_INSTALL_TIMEOUT_MS = process.platform === 'win32'
@@ -719,6 +720,10 @@ function main() {
           installSpec = prepareOpenClawNimPackage(installSpec, stagingDir, { log });
         }
 
+        if (npmSpec === QQ_PACKAGE_NAME) {
+          installSpec = prepareQQPackage(installSpec, stagingDir);
+        }
+
         if (fs.existsSync(installSpec) && fs.statSync(installSpec).isFile()) {
           installSpec = prepareHostPeerPackage(installSpec, stagingDir, {
             log,
@@ -817,6 +822,8 @@ function main() {
       }
       die(`Plugin cache directory missing after install: ${cacheDir}`);
     }
+
+    if (npmSpec === QQ_PACKAGE_NAME) configureQQRuntimeEntry(cacheDir);
 
     // Remove existing target and copy fresh
     if (fs.existsSync(targetDir)) {

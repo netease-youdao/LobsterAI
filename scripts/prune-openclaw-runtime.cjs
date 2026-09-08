@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { pruneHostPeerLeftovers } = require('./openclaw-plugin-host-peer-leftovers.cjs');
+const { ensureOpenClawPluginSdkBridge } = require('./openclaw-plugin-sdk-bridge.cjs');
 
 // ─── Strategy 1: File cleanup patterns ───
 
@@ -379,6 +380,13 @@ function main() {
       }
     } catch { /* ignore */ }
   }
+
+  // Plugins still need native Node SDK resolution after their private host
+  // copies/links are removed, including imports made later by doctor hooks.
+  const sdkBridge = ensureOpenClawPluginSdkBridge(runtimeRoot);
+  console.log(
+    `[prune-openclaw-runtime] SDK bridge: ${sdkBridge.exportCount} exports, ${sdkBridge.bytes} bytes, changed=${sdkBridge.changed}`
+  );
 
   const mbFreed = (stats.bytesFreed / 1024 / 1024).toFixed(1);
   if (stats.extensionsPruned.length > 0) {

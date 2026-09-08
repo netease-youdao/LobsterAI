@@ -9,6 +9,9 @@ import {
   BrowserCredentialMcpServer,
 } from '../../shared/browserCredentials/constants';
 import { ProviderName } from '../../shared/providers';
+import { DEFAULT_QQ_CONFIG } from '../im/types';
+import { OpenClawAgentOwnership } from './openclawAgentModels';
+import { OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
 
 vi.mock('electron', () => ({
   app: {
@@ -116,6 +119,7 @@ vi.mock('./openclawLocalExtensions', () => ({
   hasRuntimeBundledOpenClawExtension: (id: string) => id === 'xai',
   resolveOpenClawExtensionPluginId: (id: string) => {
     const manifestIds: Record<string, string> = {
+      qqbot: 'openclaw-qqbot',
       'clawemail-email': 'email',
       'openclaw-nim-channel': 'nimsuite-openclaw-nim-channel',
     };
@@ -207,6 +211,58 @@ describe('OpenClawConfigSync runtime config output', () => {
     } as never);
   };
 
+  test('emits stable explicit ownership after an upgrade and preserves channel routing', async () => {
+    fs.writeFileSync(configPath, JSON.stringify({ agents: {
+      ownership: OpenClawAgentOwnership.Explicit,
+      list: [{ id: 'main', default: true }, { id: 'worker' }],
+    } }));
+    const sync = await createSync({
+      getAgents: () => ['main', 'worker', 'disabled'].map(id => ({
+        id, name: id, enabled: id !== 'disabled', isDefault: id === 'main',
+        model: '', workingDirectory: '', description: '', systemPrompt: '', identity: '',
+        icon: '', skillIds: [], source: 'custom', presetId: '', createdAt: 0, updatedAt: 0,
+      })),
+      getQQInstances: () => ['account1-long', 'account2-long'].map(instanceId => ({
+        ...DEFAULT_QQ_CONFIG, enabled: true, appId: instanceId, instanceId, instanceName: instanceId,
+      })),
+      getIMSettings: () => ({ platformAgentBindings: { qq: 'worker', 'qq:account1-long': 'main' } }),
+    });
+    expect(sync.sync('upgrade-roster').ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.agents.ownership).toBe(OpenClawAgentOwnership.Explicit);
+    expect(config.agents).not.toHaveProperty('list');
+    expect(Object.keys(config.agents.entries)).toEqual(['main', 'worker']);
+    expect(config.agents.entries.main).not.toHaveProperty('default');
+    expect(config.agents.entries.main).not.toHaveProperty('id');
+    expect(config.agents.entries.main.workspace).toBe(path.join(stateDir, 'workspace-main'));
+    expect(config.agents.entries.worker.workspace).toBe(path.join(stateDir, 'workspace-worker'));
+    expect(config.agents.defaults).toMatchObject({
+      systemAgent: { agentId: 'main' }, authInheritance: { agentId: 'main' },
+      sessionStore: { agentId: 'main' }, heartbeat: { agentId: 'main' },
+    });
+    expect(config.talk.agentId).toBe('main');
+    expect(config.bindings).toEqual([
+      { agentId: 'main', match: { channel: OpenClawQQPlugin.Channel, accountId: 'account1' } },
+      { agentId: 'worker', match: { channel: OpenClawQQPlugin.Channel, accountId: '*' } },
+      { agentId: 'main', match: { channel: 'openclaw-weixin', accountId: '*' } },
+    ]);
+    expect(config.channels.qqbot.allowFrom).toEqual([QQ_APPROVALS_DISABLED]);
+    expect(config.channels.qqbot.accounts.account1).toMatchObject({
+      dmPolicy: 'open', allowFrom: [QQ_APPROVALS_DISABLED], clientSecret: '${LOBSTER_QQ_CLIENT_SECRET}',
+    });
+    expect(config.channels.qqbot.accounts.account2.clientSecret).toBe('${LOBSTER_QQ_CLIENT_SECRET_1}');
+    expect(sync.sync('repeat-roster')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test('routes unbound channels to main without platform binding settings', async () => {
+    const sync = await createSync({
+      getQQInstances: () => [{ ...DEFAULT_QQ_CONFIG, enabled: true, appId: '123', instanceId: 'account1', instanceName: 'QA' }],
+    });
+    expect(sync.sync('unbound-channel').ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.bindings).toContainEqual({ agentId: 'main', match: { channel: OpenClawQQPlugin.Channel, accountId: '*' } });
+  });
+
   test('keys OpenClaw skill entries by frontmatter name, not directory id', async () => {
     const sync = await createSync({
       // Mirrors bundled skills whose SKILL.md frontmatter name differs from
@@ -274,7 +330,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const mainEntry = config.agents.list.find((entry: { id?: string }) => entry.id === 'main');
+    const mainEntry = config.agents.entries.main;
 
     expect(config.cron.skipMissedJobs).toBe(true);
     expect(config.cron.store).toBeUndefined();
@@ -423,6 +479,7 @@ describe('OpenClawConfigSync runtime config output', () => {
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.agents.defaults.heartbeat).toEqual({
+      agentId: 'main',
       every: '0m',
       target: 'none',
       lightContext: true,
@@ -452,6 +509,7 @@ describe('OpenClawConfigSync runtime config output', () => {
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.agents.defaults.heartbeat).toEqual({
+      agentId: 'main',
       every: '1h',
       target: 'none',
       lightContext: true,
@@ -712,7 +770,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const mainEntry = config.agents.list.find((entry: { id?: string }) => entry.id === 'main');
+    const mainEntry = config.agents.entries.main;
 
     expect(config.agents.defaults.workspace).toBe(path.join(stateDir, 'workspace-main'));
     expect(config.agents.defaults.cwd).toBe(path.resolve(mainAgentWorkingDirectory));
@@ -2415,6 +2473,8 @@ describe('OpenClawConfigSync runtime config output', () => {
           accountId: 'b8a32c47',
         },
       },
+      { agentId: 'main', match: { channel: 'dingtalk-connector', accountId: '*' } },
+      { agentId: 'main', match: { channel: 'openclaw-weixin', accountId: '*' } },
     ]);
   });
 
@@ -2543,7 +2603,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     ]);
   });
 
-  test('prefers external lark for feishu without stale feishu entry and keeps bundled qqbot entry', async () => {
+  test('uses installed Lark and Tencent QQ plugin IDs and removes retired entries', async () => {
     const { OpenClawConfigSync } = await import('./openclawConfigSync');
 
     fs.writeFileSync(configPath, JSON.stringify({
@@ -2624,12 +2684,13 @@ describe('OpenClawConfigSync runtime config output', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.plugins.entries['openclaw-lark']).toEqual({ enabled: true });
     expect(config.plugins.entries).not.toHaveProperty('feishu');
-    expect(config.plugins.entries.qqbot).toEqual({ enabled: true });
+    expect(config.plugins.entries['openclaw-qqbot']).toEqual({ enabled: true });
     expect(config.plugins.entries.discord).toEqual({ enabled: false });
     expect(config.plugins.entries.browser).toEqual({ enabled: true });
-    expect(config.plugins.entries).not.toHaveProperty('openclaw-qqbot');
+    expect(config.plugins.entries).not.toHaveProperty('qqbot');
     expect(config.plugins.allow).toContain('browser');
-    expect(config.plugins.allow).toContain('qqbot');
+    expect(config.plugins.allow).toContain('openclaw-qqbot');
+    expect(config.plugins.allow).not.toContain('qqbot');
     expect(config.plugins.allow).toContain('discord');
   });
 

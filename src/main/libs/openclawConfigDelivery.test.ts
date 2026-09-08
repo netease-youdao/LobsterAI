@@ -281,6 +281,31 @@ describe('deliverOpenClawConfigToGateway', () => {
     expect(fellBack.restartScheduled).toBe(true);
     expect(scheduleDeferredRestart).toHaveBeenCalledTimes(1);
   });
+
+  test.each([false, true])('rejects QA ownership validation failures without restarting (hash retry=%s)', async (retry) => {
+    const cause = 'UNAVAILABLE: Config validation failed: agents.ownership: '
+      + 'agents.ownership=explicit cannot be combined with a legacy default=true marker: '
+      + 'code=CONFIG_VALIDATION_FAILED';
+    const { client, calls } = createClient({
+      set: (_params, callIndex) => {
+        if (retry && callIndex === 1) {
+          throw new Error('INVALID_REQUEST: config changed since last load');
+        }
+        throw new Error(cause);
+      },
+    });
+    const scheduleDeferredRestart = vi.fn();
+    const result = await deliverOpenClawConfigToGateway(baseInput({
+      ensureRpcClient: async () => client,
+      scheduleDeferredRestart,
+    }));
+
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rejected);
+    expect(result.restartScheduled).toBe(false);
+    expect(result.detail).toContain('agents.ownership');
+    expect(scheduleDeferredRestart).not.toHaveBeenCalled();
+    expect(calls.filter(call => call.method === 'config.set')).toHaveLength(retry ? 2 : 1);
+  });
 });
 
 describe('stripPluginIndexManagedKeysFromRawConfig', () => {

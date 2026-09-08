@@ -3,6 +3,8 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { OpenClawAgentOwnership } from './openclawAgentModels';
+
 const electronPaths = vi.hoisted(() => ({
   userData: '',
   home: '',
@@ -43,6 +45,30 @@ describe('enterpriseConfigSync', () => {
     expect(typeof mod.resolveEnterpriseConfigPath).toBe('function');
     expect(typeof mod.syncEnterpriseConfig).toBe('function');
     expect(typeof mod.mergeOpenClawConfigs).toBe('function');
+  });
+
+  test('merges legacy enterprise agents without restoring default markers', async () => {
+    const { mergeOpenClawConfigs } = await import('./enterpriseConfigSync');
+    const enterprise = { agents: { list: [
+      { id: 'main', default: true, identity: { name: 'Enterprise Main' } },
+      { id: 'worker', default: false, skills: ['enterprise-skill'] },
+    ] } };
+    const merged = mergeOpenClawConfigs({ agents: {
+      ownership: OpenClawAgentOwnership.Explicit,
+      defaults: { systemAgent: { agentId: 'main' } },
+      entries: { main: { workspace: '/state/workspace-main' }, worker: { workspace: '/state/workspace-worker' } },
+    } }, enterprise);
+    expect(merged.agents).toEqual({
+      ownership: OpenClawAgentOwnership.Explicit,
+      defaults: { systemAgent: { agentId: 'main' } },
+      entries: {
+        main: { workspace: '/state/workspace-main', identity: { name: 'Enterprise Main' } },
+        worker: { workspace: '/state/workspace-worker', skills: ['enterprise-skill'] },
+      },
+    });
+    expect(enterprise.agents.list[0].default).toBe(true);
+    expect(() => mergeOpenClawConfigs(merged, { agents: { list: [{ default: true }] } }))
+      .toThrow('Invalid legacy agent roster');
   });
 
   test('manifest with all sync disabled parses correctly', () => {

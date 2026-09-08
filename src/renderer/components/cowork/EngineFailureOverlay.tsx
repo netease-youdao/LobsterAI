@@ -1,7 +1,7 @@
 import { ArrowPathIcon, ChevronDownIcon, ExclamationTriangleIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useState } from 'react';
 
-import { OpenClawEngineErrorCode, OpenClawGatewayRepairErrorCode } from '../../../shared/openclawEngine/constants';
+import { OpenClawEngineErrorCode, OpenClawEnginePhase, OpenClawGatewayRepairErrorCode } from '../../../shared/openclawEngine/constants';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
@@ -48,10 +48,10 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
   }, []);
 
   useEffect(() => {
-    if (status?.phase === 'running') {
+    if (status?.phase === OpenClawEnginePhase.Running) {
       setGatewayRepairError(null);
     }
-    if (status?.phase !== 'error') {
+    if (status?.phase !== OpenClawEnginePhase.Error) {
       setIsDeferred(false);
     }
   }, [status?.phase]);
@@ -103,7 +103,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
     }
   };
 
-  if (suspended || status?.phase !== 'error') {
+  if (suspended || status?.phase !== OpenClawEnginePhase.Error) {
     return null;
   }
 
@@ -161,14 +161,9 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
           <p className="mt-2 text-[13px] leading-5 text-secondary">
             {i18nService.t(isRuntimeMissing ? 'coworkOpenClawRuntimeMissingRepairHint' : 'coworkOpenClawErrorRepairHint')}
           </p>
-          {isRuntimeMissing && status.message && (
-            <p className="mt-2 max-w-full break-all text-xs leading-4 text-secondary/80">
-              {status.message}
-            </p>
-          )}
-          {gatewayRepairError && (
-            <p className="mt-2 text-[13px] leading-5 text-red-600 dark:text-red-400">
-              {gatewayRepairError}
+          {(gatewayRepairError || status.message) && (
+            <p className="mt-2 max-h-36 max-w-full overflow-y-auto whitespace-pre-wrap break-words text-left text-xs leading-5 text-red-600 dark:text-red-400 [overflow-wrap:anywhere]">
+              {gatewayRepairError || status.message}
             </p>
           )}
         </div>

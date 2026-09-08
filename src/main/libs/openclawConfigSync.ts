@@ -63,11 +63,13 @@ import type { LobsterBrowserMcpStdioLaunch } from './lobsterBrowserMcpServer';
 import {
   buildAgentEntry,
   buildManagedAgentEntries,
+  OpenClawAgentOwnership,
   parsePrimaryModelRef,
   resolveManagedSessionModelTarget,
   resolveQualifiedAgentModelRef,
 } from './openclawAgentModels';
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
+import { logOpenClawConfigLockDiagnostics } from './openclawConfigDiagnostics';
 import { OpenClawConfigImpact } from './openclawConfigImpact';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { repairHeartbeatFile, stripProactiveHeartbeatSection } from './openclawHeartbeatRepair';
@@ -83,6 +85,7 @@ const gwDiagTs = (): string => {
   return `[GW-RESTART-DIAG] ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}${sign}${p(Math.floor(abs / 60))}:${p(abs % 60)}`;
 };
 import { findBundledExtensionsDir, findThirdPartyExtensionsDir, hasBundledOpenClawExtension, hasRuntimeBundledOpenClawExtension, resolveOpenClawExtensionPluginId } from './openclawLocalExtensions';
+import { buildQQAccountConfig, OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
 import { getOpenClawTokenProxyPort } from './openclawTokenProxy';
 import { getActiveSystemProxyUrl, isSystemProxyEnabled } from './systemProxy';
 
@@ -2377,13 +2380,9 @@ export class OpenClawConfigSync {
 
     const hasAnyChannel = hasDingTalkOpenClaw;
 
-    // Pre-compute bindings and detect changes so we can signal a hard restart
-    // when only bindings change (channel plugins don't hot-reload bindings).
+    // Start with explicit bindings; configured channels receive a fallback
+    // below before binding changes are compared.
     this.currentBindingsObj = this.buildBindings();
-    const bindingsJson = JSON.stringify(this.currentBindingsObj);
-    const bindingsChanged = this.previousBindingsJson !== undefined
-      && bindingsJson !== this.previousBindingsJson;
-    this.previousBindingsJson = bindingsJson;
 
     this.canUseMediaGeneration();
 
@@ -2442,7 +2441,11 @@ export class OpenClawConfigSync {
         },
       },
       agents: {
+        ownership: OpenClawAgentOwnership.Explicit,
         defaults: {
+          systemAgent: { agentId: AgentId.Main },
+          authInheritance: { agentId: AgentId.Main },
+          sessionStore: { agentId: AgentId.Main },
           timeoutSeconds: OPENCLAW_AGENT_TIMEOUT_SECONDS,
           model: {
             primary: primaryModel,
@@ -2457,6 +2460,7 @@ export class OpenClawConfigSync {
           },
           ...(taskWorkingDirectory ? { cwd: path.resolve(taskWorkingDirectory) } : {}),
           heartbeat: {
+            agentId: AgentId.Main,
             every: coworkConfig.openClawHeartbeatEnabled === true
               ? OPENCLAW_HEARTBEAT_EVERY_ENABLED
               : OPENCLAW_HEARTBEAT_EVERY_DISABLED,
@@ -2468,8 +2472,9 @@ export class OpenClawConfigSync {
             ? { models: agentModelDefaults }
             : {}),
         },
-        ...this.buildAgentsList(primaryModel, this.engineManager.getStateDir(), availableProviders, agents),
+        ...this.buildAgentsConfig(primaryModel, this.engineManager.getStateDir(), availableProviders, agents),
       },
+      talk: { agentId: AgentId.Main },
       ...this.currentBindingsObj,
       session: this.buildSessionConfig(),
       commands: {
@@ -2505,7 +2510,7 @@ export class OpenClawConfigSync {
           'openclaw-nim-channel',
           'clawemail-email',
           'qwen-portal-auth',
-          'openclaw-qqbot',
+          'qqbot',
           ...packageAliasPluginIds,
         ];
         const transientPluginIds = [
@@ -2527,7 +2532,6 @@ export class OpenClawConfigSync {
           // config rewrites.  Our managed entries below override stale values.
           ...cleanedExistingEntries,
           [BUNDLED_BROWSER_PLUGIN_ID]: { enabled: true },
-          qqbot: { enabled: qqbotPluginEnabled },
           ...Object.fromEntries(
             preinstalledPlugins.map(plugin => {
               // Sync plugin enabled state with the corresponding channel config.
@@ -2537,7 +2541,7 @@ export class OpenClawConfigSync {
                 if (pluginMatches(plugin, DINGTALK_OPENCLAW_CHANNEL, 'dingtalk')) return dingTalkInstances.some(i => i.enabled && i.clientId);
                 if (pluginMatches(plugin, 'openclaw-lark', 'feishu-openclaw-plugin'))
                   return feishuInstances.some(i => i.enabled && i.appId);
-                if (pluginMatches(plugin, 'openclaw-qqbot', 'qqbot')) return qqbotPluginEnabled;
+                if (pluginMatches(plugin, OpenClawQQPlugin.Id, OpenClawQQPlugin.PackageId)) return qqbotPluginEnabled;
                 if (pluginMatches(plugin, 'discord')) return discordPluginEnabled;
                 if (pluginMatches(plugin, 'wecom-openclaw-plugin')) return wecomInstances.some(i => i.enabled && i.botId);
                 if (pluginMatches(plugin, 'moltbot-popo')) return popoInstances.some(i => i.enabled && i.appKey);
@@ -2933,33 +2937,9 @@ export class OpenClawConfigSync {
       };
     }
 
-    // Sync QQ OpenClaw channel config (via qqbot plugin) — multi-instance via accounts
+    // Tencent QQBot 2.0 separates open chat access from native approvals.
     const enabledQQInstances = qqInstances.filter(i => i.enabled && i.appId);
     if (enabledQQInstances.length > 0) {
-      const buildQQAccountConfig = (
-        inst: (typeof enabledQQInstances)[0],
-        secretEnvVar: string,
-      ): Record<string, unknown> => {
-        const account: Record<string, unknown> = {
-          enabled: true,
-          name: inst.instanceName,
-          appId: inst.appId,
-          clientSecret: `\${${secretEnvVar}}`,
-          // v2026.4.8 schema removed dmPolicy/groupPolicy/groupAllowFrom/historyLimit.
-          // Only allowFrom and markdownSupport remain as valid account properties.
-          allowFrom: (() => {
-            const ids = inst.allowFrom?.length ? [...inst.allowFrom] : [];
-            if (inst.dmPolicy === 'open' && !ids.includes('*')) ids.push('*');
-            return ids;
-          })(),
-          markdownSupport: inst.markdownSupport ?? true,
-        };
-        if (inst.imageServerBaseUrl) {
-          account.imageServerBaseUrl = inst.imageServerBaseUrl;
-        }
-        return account;
-      };
-
       // All instances go into `accounts` dict
       const accounts: Record<string, unknown> = {};
       for (let idx = 0; idx < enabledQQInstances.length; idx++) {
@@ -2969,7 +2949,10 @@ export class OpenClawConfigSync {
         accounts[inst.instanceId.slice(0, 8)] = buildQQAccountConfig(inst, secretVar);
       }
 
-      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), qqbot: { enabled: true, accounts } };
+      managedConfig.channels = {
+        ...(managedConfig.channels as Record<string, unknown> || {}),
+        [OpenClawQQPlugin.Channel]: { enabled: true, allowFrom: [QQ_APPROVALS_DISABLED], accounts },
+      };
     }
 
     // Sync WeCom OpenClaw channel config (via wecom-openclaw-plugin) — multi-instance via accounts
@@ -3193,7 +3176,25 @@ export class OpenClawConfigSync {
       };
     }
 
-    // Binding changes are detected via bindingsChanged (line ~1035) which
+    // Explicit ownership has no global default agent. Preserve the former
+    // main-agent fallback for every configured channel, after specific routes.
+    const bindings = this.currentBindingsObj.bindings ?? [];
+    for (const channel of Object.keys((managedConfig.channels as Record<string, unknown>) ?? {})) {
+      const hasChannelOwner = bindings.some(binding => {
+        const match = binding.match as Record<string, unknown>;
+        return match.channel === channel && match.accountId === OPENCLAW_BINDING_ANY_ACCOUNT_ID;
+      });
+      if (!hasChannelOwner) {
+        bindings.push({ agentId: AgentId.Main, match: { channel, accountId: OPENCLAW_BINDING_ANY_ACCOUNT_ID } });
+      }
+    }
+    if (bindings.length > 0) managedConfig.bindings = bindings;
+    const bindingsJson = JSON.stringify(bindings);
+    const bindingsChanged = this.previousBindingsJson !== undefined
+      && bindingsJson !== this.previousBindingsJson;
+    this.previousBindingsJson = bindingsJson;
+
+    // Binding changes are detected via bindingsChanged which
     // triggers a hard gateway restart in the caller.  We no longer inject
     // _agentBinding into channel configs because OpenClaw plugins using
     // additionalProperties:false reject the extra field and crash.
@@ -3279,6 +3280,8 @@ export class OpenClawConfigSync {
         ensureDir(path.dirname(configPath));
         const stampedContent = `${JSON.stringify(this.stampConfigMeta(managedConfig), null, 2)}\n`;
         const tmpPath = `${configPath}.tmp-${Date.now()}`;
+        logOpenClawConfigLockDiagnostics(configPath, `managed-config-write:${reason}`, true);
+        console.debug(`[OpenClawConfigSync] Writing managed config: reason=${reason} pid=${process.pid} path=${configPath}`);
         fs.writeFileSync(tmpPath, stampedContent, 'utf8');
         fs.renameSync(tmpPath, configPath);
       } catch (error) {
@@ -3833,32 +3836,31 @@ export class OpenClawConfigSync {
   }
 
   /**
-   * Build the `agents.list` config array for openclaw.json.
+   * Build keyed `agents.entries` for openclaw.json. Ownership is explicit;
+   * legacy default markers must not be sent back after runtime migration.
    *
-   * The main agent uses the user's configured workspace directory (via
-   * `agents.defaults.workspace`).  Non-main agents omit `workspace` so
-   * OpenClaw falls back to its default: `{STATE_DIR}/workspace-{agentId}/`.
-   * This keeps custom agent workspaces under the openclaw state directory
-   * rather than coupling them to the user's working directory.
+   * Each agent retains its workspace under the OpenClaw state directory.
+   * Explicit paths keep the main workspace independent of entry ordering.
    *
    * Per-agent `identity` (name, emoji) is set from the agent database so
    * OpenClaw picks it up natively.
    */
-  private buildAgentsList(
+  private buildAgentsConfig(
     defaultPrimaryModel: string,
     stateDir?: string,
     availableProviders?: Record<string, { models: Array<{ id: string }> }>,
     agentsOverride?: Agent[],
-  ): { list?: Array<Record<string, unknown>> } {
+  ): { entries: Record<string, Record<string, unknown>> } {
     const agents = agentsOverride ?? this.getAgents?.() ?? [];
     const mainAgent = agents.find(agent => agent.id === AgentId.Main);
+    const workspace = stateDir ? getMainAgentWorkspacePath(stateDir) : undefined;
 
     const list: Array<Record<string, unknown>> = [
       mainAgent
-        ? buildAgentEntry(mainAgent, defaultPrimaryModel, { availableProviders })
+        ? buildAgentEntry(mainAgent, defaultPrimaryModel, { availableProviders, workspace })
         : {
             id: AgentId.Main,
-            default: true,
+            ...(workspace ? { workspace } : {}),
             identity: {
               name: DefaultAgentProfile.Name,
             },
@@ -3874,15 +3876,15 @@ export class OpenClawConfigSync {
       }),
     ];
 
-    return list.length > 0 ? { list } : {};
+    return { entries: Object.fromEntries(list.map(({ id, ...entry }) => [String(id), entry])) };
   }
 
   /**
    * Build the `bindings` config array for openclaw.json.
    *
    * Each IM platform can be independently bound to a different agent via
-   * `IMSettings.platformAgentBindings`.  Only channels with an explicit
-   * non-main binding produce an entry.
+   * `IMSettings.platformAgentBindings`. Account-specific main bindings must
+   * also override a platform binding to a custom agent.
    */
   private buildBindings(): { bindings?: Array<Record<string, unknown>> } {
     const imSettings = this.getIMSettings?.();
@@ -3913,9 +3915,9 @@ export class OpenClawConfigSync {
           // Check for per-instance binding: `platform:instanceId`
           const bindingKey = `${platform}:${inst.instanceId}`;
           const agentId = platformBindings[bindingKey];
-          if (!agentId || agentId === 'main') continue;
+          if (!agentId) continue;
           const targetAgent = agents.find(a => a.id === agentId && a.enabled);
-          if (!targetAgent) continue;
+          if (agentId !== AgentId.Main && !targetAgent) continue;
           const accountId = platform === 'nim'
             ? deriveNimAccountId(inst as NimInstanceConfig)
             : inst.instanceId.slice(0, 8);
