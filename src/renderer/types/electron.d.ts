@@ -1272,6 +1272,7 @@ interface IElectronAPI {
       callback: (data: { sessionId: string; request: CoworkPermissionRequest }) => void,
     ) => () => void;
     onStreamPermissionDismiss: (callback: (data: { requestId: string }) => void) => () => void;
+    getPendingQuestions?: () => Promise<CoworkPermissionRequest[]>;
     onStreamComplete: (
       callback: (data: { sessionId: string; claudeSessionId: string | null }) => void,
     ) => () => void;

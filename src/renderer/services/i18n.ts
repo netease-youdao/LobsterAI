@@ -6,6 +6,9 @@ export type LanguageType = 'zh' | 'en';
 // 语言文本映射
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    coworkNativeQuestionOther: '其他回答',
+    coworkNativeQuestionAnswer: '请输入你的回答',
+    coworkNativeQuestionSubmitFailed: '回答未能提交，请重试。',
     // 通用
     save: '保存',
     cancel: '取消',
@@ -3784,6 +3787,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     emailDeleting: '删除中...',
   },
   en: {
+    coworkNativeQuestionOther: 'Other answer',
+    coworkNativeQuestionAnswer: 'Enter your answer',
+    coworkNativeQuestionSubmitFailed: 'Your answer could not be submitted. Please try again.',
     // Common
     save: 'Save',
     cancel: 'Cancel',

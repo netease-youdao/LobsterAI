@@ -56,6 +56,7 @@ import {
   validateCoworkImageAttachmentSize,
 } from '../../../shared/cowork/imageAttachments';
 import { parseOpenClawCronSessionKey } from '../../../shared/cowork/openclawCronSessionKey';
+import { OpenClawQuestion } from '../../../shared/cowork/openclawQuestion';
 import {
   containsPlanModePrompt,
   isPlanImplementationApproval,
@@ -161,6 +162,7 @@ import {
   findCronRunHistoryLocalMatch,
   shouldReplaceLocalConversationWithCronHistory,
 } from './openclawCronRunHistorySync';
+import { OpenClawQuestionController } from './openclawQuestionController';
 import {
   buildOpenClawTranscriptOversizedError,
   inspectOpenClawTranscriptSafety,
@@ -2579,6 +2581,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly subagentTracker: SubagentTracker;
   private readonly subagentSessionMaterializer: SubagentSessionMaterializer;
   private readonly approvalController: OpenClawApprovalController;
+  private readonly questionController: OpenClawQuestionController;
   private readonly thinkingController: OpenClawThinkingController;
   private readonly turnHistorySync: OpenClawTurnHistorySync;
 
@@ -3690,6 +3693,20 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       handleBackfillHistory: (sessionId, messages) => {
         this.handleIncrementalBackfillHistory(sessionId, messages);
       },
+    });
+    this.questionController = new OpenClawQuestionController({
+      getGatewayClient: () => this.gatewayClient,
+      resolveSessionId: (sessionKey, runId) => {
+        // Leave channel questions to their native delivery UI; never fall back to the active task.
+        if (parseChannelSessionKey(sessionKey)) return undefined;
+        const sessionId = this.resolveSessionIdBySessionKey(sessionKey)
+          ?? (runId ? this.sessionIdByRunId.get(runId) : undefined);
+        return sessionId && this.getSessionConfirmationMode(sessionId) !== 'text' ? sessionId : undefined;
+      },
+      isSessionStopped: (sessionId, sessionKey) => this.isSessionInStopCooldown(sessionId)
+        || (this.manuallyStoppedSessions.has(sessionId) && isManagedSessionKey(sessionKey)),
+      emitPermissionRequest: (sessionId, request) => this.emit('permissionRequest', sessionId, request),
+      emitPermissionResolved: (sessionId, requestId) => this.emit('permissionResolved', sessionId, requestId),
     });
     this.approvalController = new OpenClawApprovalController({
       getGatewayClient: () => this.gatewayClient,
@@ -5171,6 +5188,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     this.cleanupSessionTurn(sessionId);
     this.approvalController.clearBySession(sessionId);
+    this.questionController.cancelBySession(sessionId);
     this.store.updateSession(sessionId, { status: 'idle' });
     this.emitSessionStatus(sessionId, 'idle');
     this.emit('sessionStopped', sessionId);
@@ -5202,8 +5220,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     });
   }
 
-  respondToPermission(requestId: string, result: PermissionResult): void {
+  respondToPermission(requestId: string, result: PermissionResult): void | Promise<void> {
+    if (this.questionController.handlesRequest(requestId)) {
+      return this.questionController.respond(requestId, result);
+    }
     this.approvalController.respondToPermission(requestId, result);
+  }
+
+  getPendingQuestions() {
+    return this.questionController.getPendingQuestions();
   }
 
   isSessionActive(sessionId: string): boolean {
@@ -6070,6 +6095,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         this.gatewayReconnectAttempt = 0;
         this.resetGatewayRpcHealth();
         this.subscribeToGatewaySessionEvents(client);
+        void this.questionController.restorePending();
         settleResolve();
         try {
           this.options.onGatewayClientReady?.();
@@ -6186,6 +6212,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   private stopGatewayClient(): void {
     this.gatewayStoppingIntentionally = true;
+    this.questionController.disconnect();
     this.failAllPendingBtwRuns(t('coworkBtwDisconnected'), 'gateway stopped');
     this.gatewayClientGeneration += 1;
     this.stopChannelPolling();
@@ -7320,6 +7347,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       // handleAgentEvent may enqueue events when sessionId mapping isn't ready.
       this.processAgentAssistantText(event.payload);
       this.handleAgentEvent(event.payload, event.seq);
+      return;
+    }
+
+    if (event.event === OpenClawQuestion.Requested) {
+      this.questionController.handleRequested(event.payload);
+      return;
+    }
+    if (event.event === OpenClawQuestion.Resolved) {
+      this.questionController.handleResolved(event.payload);
       return;
     }
 
@@ -11732,6 +11768,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     // Clean up pending approvals, bridged state, confirmation mode
     this.approvalController.clearBySession(sessionId);
+    this.questionController.cancelBySession(sessionId);
     this.bridgedSessions.delete(sessionId);
     this.continuityFullBridgeCompactedAtBySession.delete(sessionId);
     this.workspaceRehydrationBridgeCompactedAtBySession.delete(sessionId);

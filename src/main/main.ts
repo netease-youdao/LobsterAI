@@ -115,6 +115,7 @@ import {
   formatCoworkImageAttachmentLimit,
   validateCoworkImageAttachmentSize,
 } from '../shared/cowork/imageAttachments';
+import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import { containsPlanModePrompt } from '../shared/cowork/planMode';
 import type { CoworkSearchMessageCursor } from '../shared/cowork/search';
 import {
@@ -3440,6 +3441,13 @@ const bindCoworkRuntimeForwarder = (): void => {
 
   runtime.on('permissionResolved', (_sessionId: string, requestId: string) => {
     getDesktopNotificationManager().handlePermissionResolved(requestId);
+    if (requestId.startsWith(OpenClawQuestion.RequestIdPrefix)) {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(CoworkIpcChannel.StreamPermissionDismiss, { requestId });
+        }
+      }
+    }
   });
 
   runtime.on('sessionStopped', (sessionId: string) => {
@@ -10472,11 +10480,17 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:permission:respond', async (_event, options: {
+  ipcMain.handle(CoworkIpcChannel.GetPendingQuestions, () => getCoworkEngineRouter().getPendingQuestions());
+
+  ipcMain.handle(CoworkIpcChannel.PermissionRespond, async (_event, options: {
     requestId: string;
     result: PermissionResult;
   }) => {
     try {
+      if (options.requestId?.startsWith(OpenClawQuestion.RequestIdPrefix)) {
+        await getCoworkEngineRouter().respondToPermission(options.requestId, options.result);
+        return { success: true };
+      }
       // Dual-dispatch pattern: permission responses arrive through one IPC channel
       // but may target either of two independent subsystems.
       //

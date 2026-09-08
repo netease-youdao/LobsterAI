@@ -42,6 +42,7 @@ import {
   type CoworkSelectedTextValidationError,
   normalizeCoworkSelectedTextSnippets,
 } from '../../../shared/cowork/selectedText';
+import { classifyWaitingNotificationKind, WaitingNotificationKind } from '../../../shared/notifications/constants';
 import { ShareDeploymentCandidateSource } from '../../../shared/shareDeployment/constants';
 import { resolveArtifactAutoPreviewEnabled } from '../../config';
 import { EnterpriseQuotaPrompt } from '../../features/enterpriseAccount/components/EnterpriseQuotaPrompt';
@@ -315,7 +316,7 @@ const RAIL_TARGET_SCROLL_RETRY_LIMIT = 6;
 
 const getPermissionPreviewText = (permission: CoworkPermissionRequest): string => {
   const toolInput = permission.toolInput ?? {};
-  if (permission.toolName === 'AskUserQuestion') {
+  if (classifyWaitingNotificationKind(permission.toolName) === WaitingNotificationKind.Question) {
     const rawQuestions = (toolInput as Record<string, unknown>).questions;
     if (Array.isArray(rawQuestions)) {
       const firstQuestion = rawQuestions.find((question): question is Record<string, unknown> => (
@@ -1485,7 +1486,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     : '';
   // AskUserQuestion is the agent asking for input, not a risky action awaiting
   // approval — style it neutrally instead of as an amber warning.
-  const isMinimizedQuestionPermission = minimizedPermission?.toolName === 'AskUserQuestion';
+  const isMinimizedQuestionPermission = classifyWaitingNotificationKind(minimizedPermission?.toolName) === WaitingNotificationKind.Question;
   const handleDenyMinimizedPermission = useCallback(() => {
     onRespondToPermission?.({
       behavior: 'deny',

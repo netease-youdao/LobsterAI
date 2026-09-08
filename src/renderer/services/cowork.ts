@@ -91,6 +91,7 @@ import {
   shouldReloadCurrentSessionForChange,
 } from './coworkSessionRefreshPolicy';
 import { i18nService } from './i18n';
+import { restoreNativeQuestionPermissions } from './nativeQuestionRecovery';
 import { reportOnboardingAction } from './onboardingAnalytics';
 
 const STREAM_ERROR_DUPLICATE_WINDOW_MS = 10_000;
@@ -438,6 +439,9 @@ class CoworkService {
       store.dispatch(dequeuePendingPermission({ requestId }));
     });
     this.streamListenerCleanups.push(permissionDismissCleanup);
+    this.streamListenerCleanups.push(restoreNativeQuestionPermissions(cowork, (request) => {
+      store.dispatch(enqueuePendingPermission(request));
+    }));
 
     // Complete listener
     const completeCleanup = cowork.onStreamComplete(({ sessionId }) => {

@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../../shared/cowork/constants';
 import { i18nService } from '../../services/i18n';
 import type { CoworkPermissionRequest, CoworkPermissionResult } from '../../types/cowork';
+import { stripQuestionRecommendation } from './questionOptionLabel';
 
 type DangerLevel = 'safe' | 'caution' | 'destructive';
 
@@ -612,14 +613,14 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
             onClick={isConfirmMode && confirmModeButtons ? () => handleConfirmModeSelect(confirmModeButtons.secondary.label) : handleDeny}
             className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
           >
-            {isConfirmMode && confirmModeButtons ? confirmModeButtons.secondary.label : denyButtonLabel}
+            {isConfirmMode && confirmModeButtons ? stripQuestionRecommendation(confirmModeButtons.secondary.label) : denyButtonLabel}
           </button>
           <button
             onClick={handleApprove}
             disabled={!isComplete}
             className="px-4 py-2 text-sm font-medium rounded-lg bg-primary hover:bg-primary-hover text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isConfirmMode && confirmModeButtons ? confirmModeButtons.primary.label : approveButtonLabel}
+            {isConfirmMode && confirmModeButtons ? stripQuestionRecommendation(confirmModeButtons.primary.label) : approveButtonLabel}
           </button>
         </div>
       </div>
