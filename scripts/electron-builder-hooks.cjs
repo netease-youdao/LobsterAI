@@ -11,6 +11,7 @@ const { packMultipleSources } = require('./pack-openclaw-tar.cjs');
 const { DIST_DIFFS_EXTENSION_DIR, DIST_EXTENSIONS_DIR, summarizeGatewayAsarEntries } = require('./openclaw-runtime-packaging.cjs');
 const { collectHostPeerLeftovers, measureDirectorySize } = require('./openclaw-plugin-host-peer-leftovers.cjs');
 const { verifyOpenClawPluginSdkBridge } = require('./openclaw-plugin-sdk-bridge.cjs');
+const { createOpenClawWindowsPayload } = require('./openclaw-windows-payload.cjs');
 
 function isWindowsTarget(context) {
   return context?.electronPlatformName === 'win32';
@@ -695,11 +696,13 @@ async function beforePack(context) {
     mkdirSync(buildTarDir, { recursive: true });
 
     const outputTar = path.join(buildTarDir, 'win-resources.tar');
+    const runtimeRoot = path.join(__dirname, '..', 'vendor', 'openclaw-runtime', 'current');
     const sources = [
       {
         label: 'OpenClaw runtime',
-        dir: path.join(__dirname, '..', 'vendor', 'openclaw-runtime', 'current'),
+        dir: runtimeRoot,
         prefix: 'cfmind',
+        ...createOpenClawWindowsPayload(runtimeRoot, resolveOpenClawRuntimeTargetId(context)),
       },
       {
         label: 'SKILLs',
