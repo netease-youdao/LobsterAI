@@ -8,7 +8,7 @@ import {
   BrowserCredentialLoginTool,
   BrowserCredentialMcpServer,
 } from '../../shared/browserCredentials/constants';
-import { ProviderName } from '../../shared/providers';
+import { OpenClawProviderId, ProviderName } from '../../shared/providers';
 import { DEFAULT_QQ_CONFIG } from '../im/types';
 import { OpenClawAgentOwnership } from './openclawAgentModels';
 import { OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
@@ -1862,6 +1862,51 @@ describe('OpenClawConfigSync runtime config output', () => {
     });
     expect(config.tools.deny).not.toContain('image_generate');
     expect(config.tools.deny).not.toContain('video_generate');
+  });
+
+  test.each([
+    [ProviderName.Qwen, OpenClawProviderId.Qwen],
+    [ProviderName.DeepSeek, OpenClawProviderId.DeepSeek],
+    [ProviderName.Moonshot, OpenClawProviderId.Moonshot],
+    [ProviderName.Qianfan, OpenClawProviderId.Qianfan],
+    [ProviderName.StepFun, OpenClawProviderId.StepFun],
+    [ProviderName.Zhipu, OpenClawProviderId.Zai],
+    [ProviderName.Xiaomi, OpenClawProviderId.Xiaomi],
+    [ProviderName.Volcengine, OpenClawProviderId.Volcengine],
+  ])('enables the preinstalled plugin when adding %s without changing the primary model', async (providerName, pluginId) => {
+    const { openclaw } = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+    const declaration = openclaw.plugins.find((plugin: { id: string }) => plugin.id === pluginId);
+    expect(declaration).toMatchObject({
+      npm: `@openclaw/${pluginId}-provider`,
+      version: openclaw.version.replace(/^v/, ''),
+    });
+    expect(declaration.optional).not.toBe(true);
+
+    const sync = await createSync();
+    expect(sync.sync('before-provider-added').ok).toBe(true);
+    const before = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+    // A previous runtime may have left this plugin disabled or off the allowlist.
+    before.plugins.entries[pluginId] = { enabled: false };
+    before.plugins.allow = before.plugins.allow.filter((id: string) => id !== pluginId);
+    fs.writeFileSync(configPath, JSON.stringify(before));
+    mockRuntimeState.enabledProviders = [{
+      providerName,
+      baseURL: 'https://provider.example/v1',
+      apiKey: 'sk-provider-test',
+      apiType: 'openai',
+      codingPlanEnabled: false,
+      models: [{ id: 'provider-test', name: 'Provider Test' }],
+    }];
+
+    expect(sync.sync('provider-added').ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.models.providers[pluginId]).toBeDefined();
+    expect(config.agents.defaults.model.primary).toBe(before.agents.defaults.model.primary);
+    expect(config.plugins.entries[pluginId]).toEqual({ enabled: true });
+    expect(config.plugins.allow).toContain(pluginId);
+    expect(config.plugins.entries).not.toHaveProperty('qwen-portal-auth');
+    expect(sync.sync('provider-added-again').changed).toBe(false);
   });
 
   test('declares and allowlists the bundled xai plugin so its compat hooks load', async () => {
