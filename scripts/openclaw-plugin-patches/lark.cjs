@@ -5,7 +5,7 @@ const path = require('path');
 
 const { readJsonFile, writeJsonFile } = require('./common.cjs');
 
-function patchSdkImports(larkPluginDir, log) {
+function patchSdkCompatibility(larkPluginDir, log) {
   // OpenClaw 2026.8.1 removed the SDK root and channel-runtime barrels.
   // Keep the plugin on the host's public SDK modules and shared runtime state.
   const replacements = [
@@ -14,6 +14,12 @@ function patchSdkImports(larkPluginDir, log) {
     // Session-store helpers moved out of config-runtime. Without this change,
     // the plugin catches the missing-function error and ignores /verbose state.
     [path.join('src', 'card', 'tool-use-config.js'), '"openclaw/plugin-sdk/config-runtime"', '"openclaw/plugin-sdk/session-store-runtime"'],
+    // Activated plugins read the current runtime snapshot in 2026.8.1.
+    // The monitor getter runs on inbound events; the client helper also serves tools.
+    ...[
+      path.join('src', 'channel', 'monitor.js'),
+      path.join('src', 'core', 'lark-client.js'),
+    ].map(file => [file, 'LarkClient.runtime.config.loadConfig()', 'LarkClient.runtime.config.current()']),
   ];
   for (const [relativePath, before, after] of replacements) {
     const file = path.join(larkPluginDir, relativePath);
@@ -22,7 +28,7 @@ function patchSdkImports(larkPluginDir, log) {
     const patched = source.replaceAll(before, after);
     if (patched !== source) {
       fs.writeFileSync(file, patched);
-      log(`Patched openclaw-lark/${relativePath}: use public OpenClaw SDK subpaths`);
+      log(`Patched openclaw-lark/${relativePath}: OpenClaw SDK/runtime compatibility`);
     }
   }
 }
@@ -277,7 +283,7 @@ function ${patchMarker}(name) {
 
 function patchLark({ runtimeExtensionsDir, log }) {
   const larkPluginDir = path.join(runtimeExtensionsDir, 'openclaw-lark');
-  patchSdkImports(larkPluginDir, log);
+  patchSdkCompatibility(larkPluginDir, log);
   patchDeferredStartup(larkPluginDir, log);
   patchToolContracts(larkPluginDir, log);
   patchFilenameEncoding(larkPluginDir, log);

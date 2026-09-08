@@ -139,6 +139,48 @@ describe('DingTalk and Lark OpenClaw SDK compatibility', () => {
     expect(plugin.verbose('missing')).toBeUndefined();
   });
 
+  test('reads current Lark config on inbound events and tool calls after snapshot changes', () => {
+    const root = createRuntime();
+    const pluginDir = path.join(root, 'openclaw-lark');
+    const clientFile = writeFile(pluginDir, 'src/core/lark-client.js', [
+      'const LarkClient = { runtime: null };',
+      'exports.LarkClient = LarkClient;',
+      'exports.getResolvedConfig = (fallback) => {',
+      '  try {',
+      '    const live = LarkClient.runtime.config.loadConfig();',
+      '    if (live?.channels?.feishu) return live;',
+      '    if (fallback?.channels?.feishu) return fallback;',
+      '    return live;',
+      '  } catch { return fallback; }',
+      '};',
+    ].join('\n'));
+    const monitorFile = writeFile(pluginDir, 'src/channel/monitor.js', [
+      'const lark_client_1 = require("../core/lark-client.js");',
+      'exports.context = { get cfg() { return lark_client_1.LarkClient.runtime.config.loadConfig(); } };',
+    ].join('\n'));
+    const context = { runtimeExtensionsDir: root, log: () => {} };
+    patchLark(context);
+    const firstPass = [clientFile, monitorFile].map(file => fs.readFileSync(file, 'utf8'));
+    patchLark(context);
+    expect([clientFile, monitorFile].map(file => fs.readFileSync(file, 'utf8'))).toEqual(firstPass);
+
+    const pluginRequire = createRequire(clientFile);
+    const client = pluginRequire(clientFile);
+    const monitor = pluginRequire(monitorFile);
+    const stale = { channels: { feishu: { marker: 'stale' } } };
+    let current: object = { channels: { feishu: { marker: 'current' } } };
+    client.LarkClient.runtime = { config: { current: () => current } };
+    expect(monitor.context.cfg).toBe(current);
+    expect(client.getResolvedConfig(stale)).toBe(current);
+    current = { channels: { feishu: { marker: 'reloaded' } } };
+    expect(monitor.context.cfg).toBe(current);
+    expect(client.getResolvedConfig(stale)).toBe(current);
+    current = {};
+    expect(client.getResolvedConfig(stale)).toBe(stale);
+    client.LarkClient.runtime = null;
+    expect(client.getResolvedConfig(stale)).toBe(stale);
+  });
+
   test('skips SDK compatibility changes when the two plugins are absent', () => {
     const root = createRuntime();
     const before = fs.readdirSync(root);

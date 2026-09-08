@@ -6,6 +6,8 @@
   [PR #2628](https://github.com/netease-youdao/LobsterAI/pull/2628)。
 - 云信、网易 Bee：基线 `72367d3b0`（已包含上述修复），分支 `fix/openclaw-nim-bee-compat`，
   [PR #2629](https://github.com/netease-youdao/LobsterAI/pull/2629)。
+- 钉钉、飞书对话复查：基线 `d19a8ad20`（上述两个 PR 均已合入），
+  分支 `fix/openclaw-dingtalk-lark-message-runtime`，详见本文末节。
 
 在独立 worktree 中复制现有 Windows runtime 进行验证。运行时版本为
 `v2026.8.1`（构建记录中的上游提交为 `ea806575e6450e4d1efdfc72c19f04be982a1b9b`）。
@@ -13,7 +15,7 @@
 
 ## 已修复
 
-### 钉钉：`@dingtalk-real-ai/dingtalk-connector@0.8.23`
+### 钉钉首轮：`@dingtalk-real-ai/dingtalk-connector@0.8.23`
 
 1. `dist/index.mjs` 的重复加载检测使用了
    `typeof import.meta` 和 `import.meta?.url`。当前 Windows 插件加载路径进入
@@ -57,7 +59,7 @@
 四个插件的修复分别位于 `scripts/openclaw-plugin-patches/dingtalk.cjs`、`lark.cjs`
 和 `nim-bee.cjs`，接入现有 `applyOpenClawPluginPatches`，由 `ensure-openclaw-plugins.cjs`
 在复制插件到 runtime 后执行。补丁可重复运行，覆盖已有预编译缓存和新准备的包，
-无需强制下载插件。修复限定在这四个插件的安装补丁层。
+这些入口补丁无需强制下载插件。后续钉钉升级到 `0.8.26` 会按版本变化重新安装，见末节。
 上游加载行为参见 [v2026.8.1 插件加载器](https://github.com/openclaw/openclaw/blob/v2026.8.1/src/plugins/loader-module-runtime.ts)。
 
 ## 其它 IM：仅检查，未修改
@@ -94,7 +96,7 @@
 
 ## 验证和范围
 
-### 钉钉与飞书
+### 钉钉与飞书（首轮，钉钉 0.8.23）
 
 - Vitest：3 个测试文件、24 项测试通过，包括新增的 SDK 导出边界、延迟导入、路径迁移、
   会话 verbose、幂等及不影响其它插件的回归用例。
@@ -143,3 +145,73 @@
 `load-before.log`、`load-after.log`、`deferred-smoke.log`、`gateway-smoke.log`、
 `other-im-load.log`、`other-im-load-extra.log`、`nim-bee-load-after.log`、
 `nim-bee-runtime-smoke.log` 和 `nim-bee-gateway-smoke.log`。
+
+## 对话异常复查与上游版本调研
+
+### 本地日志与原因
+
+2026-09-08 18:11（UTC+8）的 `%APPDATA%/LobsterAI/openclaw/logs/gateway-2026-09-08.log`
+表明两个插件已经成功加载并收到消息，后续处理仍失败：
+
+| 时间 | 插件 | 异常 | 原因 |
+| --- | --- | --- | --- |
+| 18:11:26 | 飞书 | `LarkClient.runtime.config.loadConfig is not a function` | 当前 `PluginRuntime.config` 提供 `current()`，已移除 `loadConfig()` |
+| 18:11:43 | 钉钉 | `SDK dispatch 失败: DingTalk runtime not initialized` | 0.8.23 的 runtime 保存在模块内；Jiti 注册入口与原生 ESM 延迟消息模块读取了不同实例 |
+
+首轮验证覆盖入口和延迟模块的加载，没有执行实际消息处理函数，因此未发现这两个后续调用问题。
+本轮已用隔离的真实 runtime 复现它们。
+
+### 已发布版本核验与选择
+
+核验日期：2026-09-08。检查 npm `dist-tags`、官方发布说明、GitHub PR，以及实际 npm tarball。
+
+| 插件 | 项目原版本 | 最新稳定版 | 其它候选 | 选择 |
+| --- | --- | --- | --- | --- |
+| `@dingtalk-real-ai/dingtalk-connector` | `0.8.23` | `0.8.26` | `0.8.26-beta.1` | 升级并固定为正式版 `0.8.26` |
+| `@larksuite/openclaw-lark` | `2026.7.16` | `2026.7.16` | `2026.8.5-beta.0` | 保持稳定版，补齐运行时 API 兼容 |
+
+钉钉 [0.8.26 发布说明](https://github.com/DingTalk-Real-AI/dingtalk-openclaw-connector/releases/tag/v0.8.26)
+明确要求 OpenClaw `>=2026.8.1`。实际发布包已经：
+
+- 使用 `api.source` / `api.rootDir` 获取加载路径，避免入口中的 Windows `import.meta` 转换问题。
+- 迁移到公开 SDK 子路径，消息处理不再依赖已移除的 `channel-runtime`。
+- 使用 `createPluginRuntimeStore({ pluginId: 'dingtalk-connector', ... })`，
+  让入口和延迟模块共享宿主 runtime，解决本次对话异常。
+- 使用宿主 agent 路由与工作目录解析，发送失败直接抛错。
+
+因此本轮只修改 `package.json` 的钉钉版本，不新增 runtime-store 替换补丁。
+现有 Windows 图片 `file:///` 修复在新包上仍生效；旧 SDK、路由、工作目录和发送失败补丁
+在相应旧模式不存在时跳过。新包与 0.8.23 的直接依赖及其声明版本相同。
+
+飞书 beta 的实际发布包仍包含 SDK 根入口、`channel-runtime`、旧会话存储导入和
+上述两处 `runtime.config.loadConfig()`；未修改的 beta 在当前完整 loader 中仍报
+`ERR_PACKAGE_PATH_NOT_EXPORTED`，升级无法解决本次问题。
+官方仓库 [issue #627](https://github.com/larksuite/openclaw-lark/issues/627) 也报告稳定版与 beta
+在 OpenClaw 2026.8.1 上加载失败；[适配 PR #626](https://github.com/larksuite/openclaw-lark/pull/626)
+经 GitHub API 核验为已关闭、未合入，尚不能作为已发布修复使用。
+
+在现有 `lark.cjs` 中将 `src/channel/monitor.js` 和 `src/core/lark-client.js` 的
+`LarkClient.runtime.config.loadConfig()` 改为 `LarkClient.runtime.config.current()`。
+前者恢复入站事件配置读取；后者让工具调用使用最新配置，避免捕获异常后退回旧配置。
+回归用例覆盖配置更新、原有 fallback 和重复应用补丁。
+
+### 本轮验证与复测
+
+- 在隔离 worktree 中调用项目现有安装脚本，仅选择钉钉，成功下载、安装、缓存 `0.8.26`
+  并应用现有补丁；没有替换原工作区 runtime。
+- 两个相关 Vitest 文件共 9 项测试通过；修改的测试文件通过 CI ESLint 规则；
+  `npm --ignore-scripts run compile:electron` 通过。
+- 实际宿主 loader / SDK 的 6 项离线检查通过：钉钉跨加载器 runtime 共享及重新注册、
+  两插件调用的 24 个 runtime 方法、钉钉文本入站到 agent 分发、飞书实时配置、
+  飞书文本解析/权限判断/路由到 agent 分发、飞书 monitor 事件配置读取。
+  agent 生成回复和外部发送均未执行，不能代替真实机器人往返验证。
+- 升级后的隔离 Electron gateway 启动成功，`/healthz` 返回 HTTP 200，
+  没有插件加载或配置错误；测试结束后已停止该 gateway。
+
+实际开发环境需同步本轮代码后执行 `npm run openclaw:plugins`，确认 runtime 内钉钉
+`package.json` 为 `0.8.26`，再重启 gateway 复测两个平台的私聊、群聊及卡片回复。
+单独重启不会升级已安装插件或应用新的飞书补丁。
+
+本轮详细输出同样保存在 `.work/im-compat/`：`message-runtime-before.log`、
+`upstream-dingtalk-load.log`、`upstream-lark-beta-load.log`、`install-dingtalk-upgrade.log`、
+`message-runtime-upgraded.log` 和 `message-runtime-gateway-smoke.log`。
