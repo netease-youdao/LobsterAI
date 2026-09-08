@@ -10,6 +10,7 @@ import {
   AppUpdateStatus,
   isManualDownloadUrl,
 } from '../shared/appUpdate/constants';
+import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import {
   LibraryNavigationEvent,
   LibrarySourceFilter,
@@ -29,6 +30,7 @@ import {
   ConversationSearchShortcutTarget,
   resolveConversationSearchShortcutTarget,
 } from './components/cowork/conversationSearchShortcut';
+import CoworkNativeQuestionModal from './components/cowork/CoworkNativeQuestionModal';
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
@@ -1453,8 +1455,8 @@ const App: React.FC = () => {
   }, [finishNewUserOnboarding, newUserOnboardingStep, showToast]);
 
   const handlePermissionResponse = useCallback(async (result: CoworkPermissionResult) => {
-    if (!pendingPermission) return;
-    await coworkService.respondToPermission(pendingPermission.requestId, result);
+    if (!pendingPermission) return false;
+    return coworkService.respondToPermission(pendingPermission.requestId, result);
   }, [pendingPermission]);
 
   const handleMinimizePermission = useCallback(() => {
@@ -1917,6 +1919,18 @@ const App: React.FC = () => {
   // 避免重新展开后丢失用户已选择/已输入的内容；key 按 requestId 隔离不同请求的状态。
   const permissionModal = useMemo(() => {
     if (!pendingPermission) return null;
+
+    if (pendingPermission.toolName === OpenClawQuestion.ToolName) {
+      return (
+        <CoworkNativeQuestionModal
+          key={pendingPermission.requestId}
+          permission={pendingPermission}
+          onRespond={handlePermissionResponse}
+          onMinimize={handleMinimizePermission}
+          hidden={isPendingPermissionMinimized}
+        />
+      );
+    }
 
     // 检查是否为 AskUserQuestion 且有多个问题 -> 使用向导式组件
     const isQuestionTool = pendingPermission.toolName === 'AskUserQuestion';
