@@ -2992,6 +2992,7 @@ const _syncOpenClawConfigImpl = async (
       reason: options.reason,
       gatewayPhase: deliveryManager.getStatus().phase,
       readConfigFile: () => fs.readFileSync(deliveryManager.getConfigPath(), 'utf8'),
+      configPath: deliveryManager.getConfigPath(),
       ensureRpcClient: async () => (
         openClawRuntimeAdapter ? openClawRuntimeAdapter.ensureGatewayRpcClient() : null
       ),

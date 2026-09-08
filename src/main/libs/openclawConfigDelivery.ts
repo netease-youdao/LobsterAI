@@ -2,6 +2,7 @@ import {
   OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS,
   OpenClawEnginePhase,
 } from '../../shared/openclawEngine/constants';
+import { logOpenClawConfigLockDiagnostics } from './openclawConfigDiagnostics';
 
 /**
  * Reliable delivery of openclaw.json changes to a RUNNING gateway.
@@ -59,6 +60,8 @@ export type OpenClawConfigDeliveryInput = {
   gatewayPhase: OpenClawEnginePhase;
   /** Final on-disk config content (post enterprise merge). */
   readConfigFile: () => string;
+  /** Used only for read-only diagnostics when config.set reports lock contention. */
+  configPath?: string;
   /**
    * Resolve a connected gateway RPC client, waiting for a starting gateway to
    * come up. Must resolve to null (not throw) when unavailable.
@@ -94,7 +97,9 @@ const isBaseHashConflict = (error: unknown): boolean => {
 
 const isConfigValidationRejection = (error: unknown): boolean => {
   const message = error instanceof Error ? error.message : String(error);
-  return /invalid config|INVALID_REQUEST/i.test(message);
+  // v2026.8.1 can wrap validation failures in an UNAVAILABLE RPC error.
+  // Restarting cannot repair the rejected payload, regardless of the wrapper.
+  return /invalid config|config validation failed|CONFIG_VALIDATION_FAILED|INVALID_REQUEST/i.test(message);
 };
 
 /**
@@ -201,6 +206,13 @@ export async function deliverOpenClawConfigToGateway(
     return finish(OpenClawConfigDeliveryMode.Fallback, detail, true);
   };
 
+  const diagnoseLockFailure = (error: unknown): void => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (input.configPath && /file[_ ]lock[_ ]timeout/i.test(message)) {
+      logOpenClawConfigLockDiagnostics(input.configPath, `config-delivery:${input.reason}`);
+    }
+  };
+
   if (
     input.gatewayPhase !== OpenClawEnginePhase.Running
     && input.gatewayPhase !== OpenClawEnginePhase.Starting
@@ -236,6 +248,7 @@ export async function deliverOpenClawConfigToGateway(
     await requestConfigSet(client, raw);
     return finish(OpenClawConfigDeliveryMode.Rpc, 'config.set acked');
   } catch (error) {
+    diagnoseLockFailure(error);
     if (!isBaseHashConflict(error)) {
       if (isConfigValidationRejection(error)) {
         return finish(
@@ -251,6 +264,7 @@ export async function deliverOpenClawConfigToGateway(
       await requestConfigSet(client, raw);
       return finish(OpenClawConfigDeliveryMode.Rpc, 'config.set acked after hash retry');
     } catch (retryError) {
+      diagnoseLockFailure(retryError);
       if (!isBaseHashConflict(retryError) && isConfigValidationRejection(retryError)) {
         return finish(
           OpenClawConfigDeliveryMode.Rejected,

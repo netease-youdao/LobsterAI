@@ -87,8 +87,10 @@ describe('openclawSessionLegacyMigration', () => {
     expect(args).toEqual([
       path.join(runtimeRoot, 'openclaw.mjs'),
       'doctor',
-      '--non-interactive',
-      '--fix',
+      '--session-sqlite',
+      'import',
+      '--session-sqlite-all-agents',
+      '--json',
     ]);
     expect(options.cwd).toBe(runtimeRoot);
     expect(options.env.EXISTING).toBe('1');
@@ -139,12 +141,56 @@ describe('openclawSessionLegacyMigration', () => {
     });
   });
 
+  test.each(['│', '|'])('reports wrapped stdout validation errors with %s borders', async (border) => {
+    writeFile(path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json'));
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const runner = vi.fn<LegacySessionMigrationRunner>().mockResolvedValue({
+      code: 1,
+      stderr: 'Config clobber snapshot cap reached: rotating oldest snapshots.\n',
+      stdout: [
+        '│ Doctor could not apply config fixes: the repaired config still fails │',
+        '│ validation. │',
+        "│ - channels.qqbot.allowFrom: invalid config for plugin qqbot: must have │",
+        "│   required property 'allowFrom' │",
+        '│ - channels.qqbot.accounts: invalid config for plugin qqbot: must not │',
+        '│   be valid │',
+        '│ No config changes were written. │',
+      ].join('\n').replaceAll('│', border),
+    });
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+    });
+    expect(result).toMatchObject({
+      status: 'failed', code: 1,
+      error: expect.stringContaining("channels.qqbot.allowFrom: invalid config for plugin qqbot: must have required property 'allowFrom'"),
+    });
+    if (!('error' in result)) throw new Error('Expected migration failure');
+    expect(result.error).not.toContain('snapshot');
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining('rotating oldest snapshots'));
+  });
+
+  test('surfaces structured session import issues', async () => {
+    writeFile(path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const runner = vi.fn<LegacySessionMigrationRunner>().mockResolvedValue({
+      code: 1, stderr: '',
+      stdout: JSON.stringify({ targets: [{ agentId: 'main', issues: [{ message: 'Transcript validation failed' }] }] }),
+    });
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+    });
+    expect(result).toMatchObject({
+      status: 'failed', error: expect.stringContaining('main: Transcript validation failed'),
+    });
+  });
+
   test('fails closed when doctor exits successfully but leaves the legacy store', async () => {
     const legacyPath = path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json');
     writeFile(legacyPath);
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => {});
     const runner = vi.fn<LegacySessionMigrationRunner>().mockResolvedValue({
       code: 0,
-      stdout: '',
+      stdout: 'A legacy store was retained by doctor.',
       stderr: '',
     });
 
@@ -162,6 +208,29 @@ describe('openclawSessionLegacyMigration', () => {
       code: 0,
       error: 'OpenClaw doctor completed but 1 legacy session store(s) remain.',
     });
+    expect(fs.existsSync(legacyPath)).toBe(true);
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining(JSON.stringify(legacyPath)));
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining('modifiedAt'));
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining('A legacy store was retained by doctor.'));
+  });
+
+  test('records lock owner and residual stores when doctor reports contention', async () => {
+    const legacyPath = path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json');
+    writeFile(legacyPath);
+    const lockPayload = JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() });
+    writeFile(`${configPath}.lock`, lockPayload);
+    const logWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const runner = vi.fn<LegacySessionMigrationRunner>().mockResolvedValue({
+      code: 1, stdout: '', stderr: `file lock timeout for ${configPath}`,
+    });
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+    });
+    expect(result).toMatchObject({ status: 'failed', error: expect.stringContaining('file lock timeout') });
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining(`"ownerPid":${process.pid}`));
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining('"ownerAlive":true'));
+    expect(fs.readFileSync(`${configPath}.lock`, 'utf8')).toBe(lockPayload);
+    expect(fs.existsSync(legacyPath)).toBe(true);
   });
 
   test('does not run when the bundled OpenClaw CLI is missing', async () => {
