@@ -180,6 +180,7 @@ import {
 } from '../shared/notifications/constants';
 import {
   OpenClawEngineIpc,
+  OpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
 } from '../shared/openclawEngine/constants';
 import { PlatformRegistry } from '../shared/platform';
@@ -2351,21 +2352,27 @@ const bootstrapOpenClawEngine = async (
         console.log(
           `${gwDiagTs()} bootstrap: forceReinstall requested, stopping gateway before reinstall`,
         );
-        await manager.stopGateway();
+        await manager.stopGateway({ restarting: true });
         console.log(`[OpenClaw] bootstrap: stopGateway done (${elapsed()})`);
       }
       const ensuredStatus = await manager.ensureReady();
       console.log(
         `[OpenClaw] bootstrap: ensureReady done (${elapsed()}), phase=${ensuredStatus.phase}`,
       );
-      if (ensuredStatus.phase !== 'ready' && ensuredStatus.phase !== 'running') {
+      if (ensuredStatus.phase !== OpenClawEnginePhase.Ready
+        && ensuredStatus.phase !== OpenClawEnginePhase.Running
+        && ensuredStatus.phase !== OpenClawEnginePhase.Starting) {
         return ensuredStatus;
       }
+      if (isQuitting || isDataMigrationRestoreInProgress) return manager.getStatus();
       const result = await manager.startGateway(`bootstrap:${reason}`);
       console.log(`[OpenClaw] bootstrap completed (${elapsed()}), phase=${result.phase}`);
       return result;
     } catch (error) {
       console.error(`[OpenClaw] bootstrap failed (${reason}, ${elapsed()}):`, error);
+      if (manager.getStatus().phase === OpenClawEnginePhase.Starting) {
+        return manager.setExternalError(error instanceof Error ? error.message : 'OpenClaw startup failed.');
+      }
       return manager.getStatus();
     }
   };
@@ -3049,6 +3056,9 @@ const _syncOpenClawConfigImpl = async (
     };
   }
 
+  if (isQuitting || isDataMigrationRestoreInProgress) {
+    return { success: false, changed: true, status: manager.getStatus() };
+  }
   console.log(
     `${D()} ──── HARD RESTART EXECUTING. reason=${options.reason}, phase=${status.phase}, port=${status.message?.match(/loopback:(\d+)/)?.[1] ?? 'unknown'}`,
   );
@@ -3056,8 +3066,7 @@ const _syncOpenClawConfigImpl = async (
     openClawRuntimeAdapter.disconnectGatewayClient();
   }
 
-  await manager.stopGateway();
-  const restarted = await manager.startGateway(`config-sync:${options.reason}`);
+  const restarted = await manager.restartGateway(`config-sync:${options.reason}`);
   if (restarted.phase !== 'running') {
     return {
       success: false,
@@ -3237,7 +3246,7 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
         openClawRuntimeAdapter.disconnectGatewayClient();
       }
 
-      await manager.stopGateway();
+      await manager.stopGateway({ restarting: true });
       const backupResult = backupOpenClawConfig(originalPath);
       if (backupResult.backupPath) {
         console.log(`[OpenClawRepair] backed up OpenClaw config to ${backupResult.backupPath}.`);
@@ -3265,11 +3274,12 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
       };
     } catch (error) {
       console.error('[OpenClawRepair] gateway state repair failed:', error);
+      const message = error instanceof Error ? error.message : 'Failed to repair OpenClaw gateway state.';
       return {
         success: false,
-        status: manager.getStatus(),
+        status: manager.setExternalError(message),
         originalPath,
-        error: error instanceof Error ? error.message : 'Failed to repair OpenClaw gateway state.',
+        error: message,
       };
     }
   })().finally(() => {
@@ -8606,7 +8616,7 @@ if (!gotTheLock) {
       await releaseRendererWindowsForDataMigrationRestore();
       rendererReleased = true;
       await showDataMigrationRestoreProgressWindow();
-      await runAppCleanup('data migration restore');
+      await runAppCleanup('data migration restore', { requireGatewayStopped: true });
       isCleanupFinished = true;
       isCleanupInProgress = false;
 
@@ -14063,7 +14073,10 @@ if (!gotTheLock) {
   // it had to force-exit.
   let currentAppCleanupStep = 'not-started';
 
-  const runAppCleanup = async (reason = 'quit'): Promise<void> => {
+  const runAppCleanup = async (
+    reason = 'quit',
+    options: { requireGatewayStopped?: boolean } = {},
+  ): Promise<void> => {
     const cleanupStartedAt = Date.now();
     console.log(`[Main] App cleanup started for ${reason}`);
     currentAppCleanupStep = 'sync-teardown';
@@ -14114,6 +14127,9 @@ if (!gotTheLock) {
       currentAppCleanupStep = 'openclaw-gateway';
       await openClawEngineManager.stopGateway().catch(error => {
         console.error('[OpenClaw] Failed to stop gateway on quit:', error);
+        // A restore replaces gateway state. Never write over it while an old
+        // process still owns it, even if ordinary app exit is best-effort.
+        if (options.requireGatewayStopped) throw error;
       });
     }
 

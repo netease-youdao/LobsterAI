@@ -95,7 +95,48 @@ describe('openclawSessionLegacyMigration', () => {
     expect(options.env.OPENCLAW_HOME).toBe(path.dirname(stateDir));
     expect(options.env.OPENCLAW_STATE_DIR).toBe(stateDir);
     expect(options.env.OPENCLAW_CONFIG_PATH).toBe(configPath);
+    expect(options.env.OPENCLAW_SERVICE_REPAIR_POLICY).toBe('external');
     expect(options.env.ELECTRON_RUN_AS_NODE).toBe('1');
+  });
+
+  test('surfaces the doctor cause before long config warnings without hiding diagnostic logs', async () => {
+    writeFile(path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json'));
+    const warning = `[config] warnings: ${'duplicate plugin id; '.repeat(300)}`;
+    const cause = "Cannot find package 'openclaw' imported from /runtime/discord/dist/owner-access.js";
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const runner = vi.fn<LegacySessionMigrationRunner>().mockResolvedValue({
+      code: 1,
+      stdout: 'Earlier memory migration completed.',
+      stderr: `${warning}\n${cause}\n    at packageResolve (node:internal/modules/esm/resolve:762:9)\n`,
+    });
+
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+    });
+
+    expect(result).toMatchObject({ code: 1, error: expect.stringContaining(cause) });
+    if (!('error' in result)) throw new Error('Expected migration failure');
+    expect(result.error.slice(0, 500)).toContain(cause);
+    expect(result.error).not.toContain('duplicate plugin id');
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining('duplicate plugin id'));
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining('Earlier memory migration completed.'));
+  });
+
+  test('keeps a useful failure when doctor emits only warnings', async () => {
+    writeFile(path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const runner = vi.fn<LegacySessionMigrationRunner>().mockResolvedValue({
+      code: 1, stdout: '', stderr: '[config] warnings: duplicate plugin id\n',
+    });
+
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+    });
+
+    expect(result).toMatchObject({
+      code: 1,
+      error: 'OpenClaw legacy session migration failed with exit code 1.',
+    });
   });
 
   test('fails closed when doctor exits successfully but leaves the legacy store', async () => {

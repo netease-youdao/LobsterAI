@@ -58,6 +58,16 @@ function tailLog(text: string): string {
   return text.length <= LOG_TAIL_LIMIT ? text : text.slice(-LOG_TAIL_LIMIT);
 }
 
+function summarizeDoctorFailure(stderr: string): string | undefined {
+  const lines = stderr.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('[config] warnings:'));
+  // A long config warning can precede the actual failure. Keep the cause at
+  // the front of the status message, which is bounded before reaching the UI.
+  return lines.find((line) => /^(?:\w*Error\b|Cannot\b|Failed\b|Fatal\b|ERR_)/i.test(line))
+    ?? lines.find((line) => !line.startsWith('at '));
+}
+
 export function runLegacySessionMigrationProcess(
   command: string,
   args: string[],
@@ -125,6 +135,9 @@ export async function migrateLegacySessionStorageWithDoctor(params: {
     OPENCLAW_HOME: path.dirname(params.stateDir),
     OPENCLAW_STATE_DIR: params.stateDir,
     OPENCLAW_CONFIG_PATH: params.configPath,
+    // Electron owns the gateway lifecycle; doctor must not install/start a
+    // separate system service while migrating the app's data.
+    OPENCLAW_SERVICE_REPAIR_POLICY: 'external',
     ELECTRON_RUN_AS_NODE: '1',
   };
   const args = [openclawCliPath, 'doctor', '--non-interactive', '--fix'];
@@ -142,13 +155,15 @@ export async function migrateLegacySessionStorageWithDoctor(params: {
     });
 
     if (result.code !== 0) {
+      const failure = `OpenClaw legacy session migration failed with exit code ${result.code}.`;
       const details = [
-        `OpenClaw legacy session migration failed with exit code ${result.code}.`,
+        failure,
         result.stderr ? `stderr tail:\n${tailLog(result.stderr)}` : '',
         result.stdout ? `stdout tail:\n${tailLog(result.stdout)}` : '',
       ].filter(Boolean).join('\n');
-      console.warn(`[OpenClaw] ${details}`);
-      return { status: 'failed', code: result.code, error: details };
+      console.error(`[OpenClaw] ${details}`);
+      const cause = summarizeDoctorFailure(result.stderr);
+      return { status: 'failed', code: result.code, error: cause ? `${cause}\n${failure}` : failure };
     }
 
     const remainingPaths = legacyPaths.filter(fileExists);
