@@ -54,7 +54,7 @@
       {
         "id": "dingtalk-connector",
         "npm": "@dingtalk-real-ai/dingtalk-connector",
-        "version": "0.8.23"
+        "version": "0.8.26"
       },
       {
         "id": "openclaw-lark",
