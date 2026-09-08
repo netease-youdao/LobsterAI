@@ -10,6 +10,7 @@ const { syncLocalOpenClawExtensions } = require('./sync-local-openclaw-extension
 const { packMultipleSources } = require('./pack-openclaw-tar.cjs');
 const { DIST_DIFFS_EXTENSION_DIR, DIST_EXTENSIONS_DIR, summarizeGatewayAsarEntries } = require('./openclaw-runtime-packaging.cjs');
 const { collectHostPeerLeftovers, measureDirectorySize } = require('./openclaw-plugin-host-peer-leftovers.cjs');
+const { verifyOpenClawPluginSdkBridge } = require('./openclaw-plugin-sdk-bridge.cjs');
 
 function isWindowsTarget(context) {
   return context?.electronPlatformName === 'win32';
@@ -251,6 +252,7 @@ function ensureBundledOpenClawRuntime(context) {
 
   // Verify preinstalled plugins are present in the runtime extensions directory
   verifyPreinstalledPlugins(runtimeRoot, buildHint);
+  verifyOpenClawPluginSdkBridge(runtimeRoot);
 
   // Verify gateway-bundle.mjs exists and is reasonably sized.
   // Without it, Windows first-launch falls back to loading ~1100 ESM modules
