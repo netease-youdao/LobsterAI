@@ -1,7 +1,11 @@
 # OpenClaw 2026.8.1 IM 插件兼容性排查
 
-日期：2026-09-08。基线：远端 `feat/openclaw-v2026.8.1` 的 `eb931315a`。
-修复分支：`fix/openclaw-dingtalk-lark-compat`。
+日期：2026-09-08。目标分支：`feat/openclaw-v2026.8.1`。
+
+- 钉钉、飞书：基线 `eb931315a`，修复分支 `fix/openclaw-dingtalk-lark-compat`，
+  [PR #2628](https://github.com/netease-youdao/LobsterAI/pull/2628)。
+- 云信、网易 Bee：基线 `72367d3b0`（已包含上述修复），分支 `fix/openclaw-nim-bee-compat`，
+  [PR #2629](https://github.com/netease-youdao/LobsterAI/pull/2629)。
 
 在独立 worktree 中复制现有 Windows runtime 进行验证。运行时版本为
 `v2026.8.1`（构建记录中的上游提交为 `ea806575e6450e4d1efdfc72c19f04be982a1b9b`）。
@@ -33,9 +37,27 @@
 `resolveSessionStoreEntry` 已移出 `config-runtime` 而进入 catch，静默忽略会话设置。
 2026.8.1 的 `session-store-runtime` 仍公开兼容这组调用；已用真实 SQLite 会话数据验证。
 
-修复位于现有 `scripts/openclaw-plugin-patches/dingtalk.cjs` 和 `lark.cjs`，
-由 `ensure-openclaw-plugins.cjs` 在复制插件到 runtime 后执行。补丁可重复运行。
-没有修改全局 SDK bridge、OpenClaw loader、插件版本或其它 IM 的补丁。
+### 云信 NIM 与网易 Bee
+
+两个插件的预编译 `index.mjs` 都从已移除的 `openclaw/plugin-sdk` 根入口导入
+`emptyPluginConfigSchema`，在当前完整插件加载器中均抛出 `ERR_PACKAGE_PATH_NOT_EXPORTED`。
+
+| IM | 安装目录 | 真实插件 ID |
+| --- | --- | --- |
+| 云信 NIM | `openclaw-nim-channel` | `nimsuite-openclaw-nim-channel` |
+| 网易 Bee | `openclaw-netease-bee` | `openclaw-netease-bee` |
+
+新增 `scripts/openclaw-plugin-patches/nim-bee.cjs`，将两个插件的入口导入迁移到
+`openclaw/plugin-sdk/plugin-entry`，同时修补 `index.ts` 和 `index.mjs`。
+该子路径也导出入口源码所用的 `OpenClawPluginApi` 类型；其余源码中的历史类型导入
+不参与运行时加载，本次未调整。
+
+### 补丁应用方式
+
+四个插件的修复分别位于 `scripts/openclaw-plugin-patches/dingtalk.cjs`、`lark.cjs`
+和 `nim-bee.cjs`，接入现有 `applyOpenClawPluginPatches`，由 `ensure-openclaw-plugins.cjs`
+在复制插件到 runtime 后执行。补丁可重复运行，覆盖已有预编译缓存和新准备的包，
+无需强制下载插件。修复限定在这四个插件的安装补丁层。
 上游加载行为参见 [v2026.8.1 插件加载器](https://github.com/openclaw/openclaw/blob/v2026.8.1/src/plugins/loader-module-runtime.ts)。
 
 ## 其它 IM：仅检查，未修改
@@ -45,8 +67,6 @@
 
 | IM | 真实插件 ID | 检查结果 |
 | --- | --- | --- |
-| 云信 NIM | `nimsuite-openclaw-nim-channel` | **复现同类错误**：`index.mjs` 引用 SDK 根入口，抛出 `ERR_PACKAGE_PATH_NOT_EXPORTED` |
-| 网易 Bee | `openclaw-netease-bee` | **复现同类错误**：`index.mjs` 引用 SDK 根入口，抛出 `ERR_PACKAGE_PATH_NOT_EXPORTED` |
 | QQ | `openclaw-qqbot` | 模块加载、频道注册通过 |
 | 企业微信 | `wecom-openclaw-plugin` | 模块加载、频道注册通过；其媒体 SDK 探测有 fallback，未判定为导出错误 |
 | 微信 | `openclaw-weixin` | 当前 `dist/index.js` 加载、频道注册通过 |
@@ -55,9 +75,14 @@
 | Discord | `discord` | 模块加载、频道注册通过 |
 | Telegram | `telegram` | bundled 插件加载、频道注册通过 |
 
-另外记录，均未修改：
+## 遗留问题
 
-- NIM、Bee 的 manifest 缺少 `channelConfigs`，新 loader 提示配置/设置界面能力可能受限。
+- NIM、Bee 的 manifest 缺少 `channelConfigs`，新 loader 提示配置/设置界面能力可能受限，
+  但实测未阻止插件注册及已有账号配置的启动。本次未复制或重写配置 schema。
+- 云信在完全没有 `channels.nim` 配置、却仍被显式加载时，健康检查会触发
+  `expected object.keys(account summaries) entry at 0 to be defined`。
+  该错误出现在清除频道配置的 `OPENCLAW_SKIP_CHANNELS=1` 场景，保留账号配置时未出现。
+  本次未修改云信的空账号健康状态逻辑。
 - 企业微信在本次最小配置下有 `before_prompt_build` hook 被拦截的提示，原因是未设置
   `plugins.entries.wecom-openclaw-plugin.hooks.allowConversationAccess=true`。
   这是 hook 权限迁移问题，不是本次的入口导出错误；需要结合产品实际权限意图另行确认。
@@ -69,25 +94,52 @@
 
 ## 验证和范围
 
+### 钉钉与飞书
+
 - Vitest：3 个测试文件、24 项测试通过，包括新增的 SDK 导出边界、延迟导入、路径迁移、
   会话 verbose、幂等及不影响其它插件的回归用例。
-- 新增 TypeScript 测试文件通过 CI 规则的 ESLint，0 warning。
-- `compile:electron` 通过。
 - 实际 OpenClaw loader：修复前复现两条 QA 错误，修复后两个插件均为 `loaded`，
   `diagnostics` 为空；飞书注册 29 个工具。
 - 实际 Jiti 2.7.0：钉钉入口注册和延迟消息处理模块均成功加载，注册 13 个 gateway 方法。
 - 实际 SDK + SQLite：飞书读取已保存的 `verboseLevel=full` 成功；内联 `/verbose off` 仍优先。
 - Electron 43.5.0 / Node 24.19.0 启动隔离 gateway，日志包含钉钉、飞书，`/healthz` 返回 HTTP 200。
-  使用 `OPENCLAW_SKIP_CHANNELS=1` 跳过真实连接，测试进程结束后已停止。
+  使用 `OPENCLAW_SKIP_CHANNELS=1` 跳过真实连接。
+
+### 云信与网易 Bee
+
+- Vitest：4 个测试文件、25 项测试通过。新增 5 项用例覆盖两个插件的新包准备流程、
+  只有预编译文件的缓存、重复执行、不修改其它插件及缺失可选插件。
+  新包用例先复现旧导入失败，再通过真实 Node 模块导入验证补丁后的频道注册。
+- 当前 Windows runtime 的完整加载器将两个插件均标记为 `loaded`，
+  注册频道 `nim`、`netease-bee`，没有插件加载 error。
+- 静态检查两个插件实际运行时的 SDK 命名导入，没有发现其它缺失的 SDK 导出；
+  新增补丁脚本及补丁入口的语法检查通过。
+- 使用当前真实 `PluginRuntime` 验证了收消息代码涉及的 11 个 API 的可用性、账号解析和路由：
+  云信两个账号分别解析成功，相同发送人在不同账号下得到不同 session key；
+  Bee 默认账号及路由解析成功。
+- 隔离 Electron gateway 在两插件启用、跳过连接的模式下加载成功并返回 HTTP 200。
+  `OPENCLAW_SKIP_CHANNELS=1` 会清除运行时的频道配置，因此另用保留账号配置、
+  将账号/频道设为禁用的模式验证配置与健康检查，HTTP 200 且没有初始健康刷新错误。
+
+### 共同检查与后续 QA
+
+两批新增 TypeScript 测试文件均通过 CI 规则的 ESLint，0 warning；`compile:electron` 通过。
+所有隔离测试 gateway 均已停止。
 
 使用原工作区的 `node_modules` junction 运行测试和编译，因此以 `npm --ignore-scripts`
 跳过会重建共享 `better-sqlite3` 的生命周期脚本，避免影响用户正在运行的 Electron。
 没有运行完整测试集，也没有用真实账号验证机器人连接、消息往返、群聊和卡片展示。
 
 隔离 worktree 的 `vendor/openclaw-runtime/current` 已指向应用补丁后的 runtime，可用于后续人工 QA。
-常规 `npm run openclaw:plugins` / runtime 构建流程会自动应用这两个补丁；
+常规 `npm run openclaw:plugins` / runtime 构建流程会自动应用上述补丁；
 已存在的其它工作区 runtime 需要重新应用补丁后重启 gateway，单独重启不会修改已安装插件文件。
+
+云信与网易 Bee 后续重点 QA：
+
+1. 云信单账号和双账号连接、私聊、群聊、同一发送人的账号隔离。
+2. 网易 Bee 连接、接收文本、回复文本和重新连接。
 
 本地详细验证输出位于 worktree 的 `.work/im-compat/`（不纳入 Git）：
 `load-before.log`、`load-after.log`、`deferred-smoke.log`、`gateway-smoke.log`、
-`other-im-load.log` 和 `other-im-load-extra.log`。
+`other-im-load.log`、`other-im-load-extra.log`、`nim-bee-load-after.log`、
+`nim-bee-runtime-smoke.log` 和 `nim-bee-gateway-smoke.log`。
