@@ -3,6 +3,11 @@ import fs from 'fs';
 import path from 'path';
 
 import {
+  HtmlThumbnailLayout,
+  HtmlThumbnailLimits,
+  isLibraryHtmlThumbnailExtension,
+} from '../../shared/library/htmlThumbnail';
+import {
   createLibraryThumbnailRenderRequest,
   getLibraryThumbnailFailureDetails,
   isLibraryDirectPngThumbnailExtension,
@@ -16,7 +21,11 @@ import {
   type LibraryThumbnailRenderResult,
   withLibraryThumbnailErrorMetrics,
 } from '../../shared/library/thumbnail';
-import { waitForCommittedThumbnailPresentation } from './libraryThumbnailPresentation';
+import {
+  hasLibraryThumbnailPresentationStamp,
+  type LibraryThumbnailPresentationExpectation,
+  waitForCommittedThumbnailPresentation,
+} from './libraryThumbnailPresentation';
 import { isLikelyBlankThumbnailBitmap } from './libraryThumbnailValidation';
 
 interface ThumbnailSize {
@@ -169,7 +178,8 @@ export class LibraryThumbnailRenderer {
         { sourceSizeBytes: stat.size },
       );
     }
-    const windowHeight = size.height + LibraryThumbnailPresentationStamp.Height;
+    const windowHeight = size.height + LibraryThumbnailPresentationStamp.Height
+      + (isLibraryHtmlThumbnailExtension(request.extension) ? HtmlThumbnailLayout.ChildStampHeight : 0);
     const [currentWidth, currentHeight] = rendererWindow.getContentSize();
     if (currentWidth !== size.width || currentHeight !== windowHeight) {
       rendererWindow.setContentSize(size.width, windowHeight, false);
@@ -257,16 +267,18 @@ export class LibraryThumbnailRenderer {
     metrics?: LibraryThumbnailRenderMetrics,
   ): Promise<Buffer> {
     let image: NativeImage;
+    const expectation: LibraryThumbnailPresentationExpectation = {
+      width: size.width,
+      height: size.height,
+      renderGeneration,
+      html: isLibraryHtmlThumbnailExtension(extension),
+    };
     if (this.platform === 'win32') {
       try {
         const presentedImage = await waitForCommittedThumbnailPresentation(
           rendererWindow.webContents,
           this.presentationTimeoutMs,
-          {
-            width: size.width,
-            height: size.height,
-            renderGeneration,
-          },
+          expectation,
         );
         image = presentedImage.crop({
           x: 0,
@@ -274,6 +286,18 @@ export class LibraryThumbnailRenderer {
           width: size.width,
           height: size.height,
         });
+      } catch (error) {
+        throw withLibraryThumbnailErrorMetrics(
+          error,
+          LibraryThumbnailFailureCode.PresentationFailed,
+          metrics ?? {},
+        );
+      }
+    } else if (expectation.html) {
+      try {
+        // Validate and crop the very same image; a second capture would reintroduce the race.
+        const presentedImage = await this.captureHtmlPresentation(rendererWindow, expectation);
+        image = presentedImage.crop({ x: 0, y: 0, width: size.width, height: size.height });
       } catch (error) {
         throw withLibraryThumbnailErrorMetrics(
           error,
@@ -341,6 +365,36 @@ export class LibraryThumbnailRenderer {
       );
     }
     return png;
+  }
+
+  private async captureHtmlPresentation(
+    rendererWindow: BrowserWindow,
+    expectation: LibraryThumbnailPresentationExpectation,
+  ): Promise<NativeImage> {
+    const deadline = Date.now() + this.presentationTimeoutMs;
+    while (Date.now() < deadline) {
+      rendererWindow.webContents.invalidate();
+      const image = await this.withTimeout(
+        rendererWindow.webContents.capturePage({
+          x: 0,
+          y: 0,
+          width: expectation.width,
+          height: expectation.height + HtmlThumbnailLayout.ChildStampHeight + LibraryThumbnailPresentationStamp.Height,
+        }, { stayHidden: true, stayAwake: true }),
+        Math.max(1, Math.min(this.captureTimeoutMs, deadline - Date.now())),
+        LibraryThumbnailFailureCode.PresentationTimeout,
+        'HTML thumbnail presentation timed out',
+      );
+      if (hasLibraryThumbnailPresentationStamp(image, expectation)) return image;
+      const remaining = deadline - Date.now();
+      if (remaining > 0) {
+        await new Promise(resolve => setTimeout(resolve, Math.min(HtmlThumbnailLimits.CaptureIntervalMs, remaining)));
+      }
+    }
+    throw new LibraryThumbnailError(
+      LibraryThumbnailFailureCode.PresentationTimeout,
+      'HTML thumbnail presentation timed out',
+    );
   }
 
   private decodeDirectPng(

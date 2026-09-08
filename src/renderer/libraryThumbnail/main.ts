@@ -1,6 +1,7 @@
 import DOMPurify from 'dompurify';
 
 import { LibraryArtifactType } from '../../shared/library/constants';
+import { HtmlThumbnailLayout, isLibraryHtmlThumbnailExtension } from '../../shared/library/htmlThumbnail';
 import {
   getLibraryThumbnailFailureDetails,
   getLibraryThumbnailPresentationStampColor,
@@ -12,6 +13,7 @@ import {
   type LibraryThumbnailRenderResult,
   withLibraryThumbnailErrorMetrics,
 } from '../../shared/library/thumbnail';
+import { renderHtmlThumbnail } from './htmlThumbnailRenderer';
 import {
   renderPptxFirstSlide,
   waitForPptxSlideLayout,
@@ -81,15 +83,17 @@ const waitForStableLayout = async (): Promise<void> => {
 };
 
 const configureDocument = (request: LibraryThumbnailRenderRequest): void => {
-  const documentHeight = request.height + LibraryThumbnailPresentationStamp.Height;
+  const contentHeight = request.height + (isLibraryHtmlThumbnailExtension(request.extension)
+    ? HtmlThumbnailLayout.ChildStampHeight : 0);
+  const documentHeight = contentHeight + LibraryThumbnailPresentationStamp.Height;
   document.documentElement.style.width = `${request.width}px`;
   document.documentElement.style.height = `${documentHeight}px`;
   document.body.style.width = `${request.width}px`;
   document.body.style.height = `${documentHeight}px`;
   root.style.width = `${request.width}px`;
-  root.style.height = `${request.height}px`;
+  root.style.height = `${contentHeight}px`;
   const stampColor = getLibraryThumbnailPresentationStampColor(request.renderGeneration);
-  presentationStamp.style.top = `${request.height}px`;
+  presentationStamp.style.top = `${contentHeight}px`;
   presentationStamp.style.width = `${request.width}px`;
   presentationStamp.style.height = `${LibraryThumbnailPresentationStamp.Height}px`;
   presentationStamp.style.backgroundColor = `rgb(${stampColor.red}, ${stampColor.green}, ${stampColor.blue})`;
@@ -415,32 +419,6 @@ const renderPptx = async (
   }
 };
 
-const renderHtml = async (
-  request: LibraryThumbnailRenderRequest,
-  bytes: Uint8Array,
-): Promise<void> => {
-  const source = new TextDecoder('utf-8').decode(bytes);
-  const sanitized = DOMPurify.sanitize(source, {
-    WHOLE_DOCUMENT: true,
-    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'link', 'meta', 'base'],
-  });
-  const iframe = document.createElement('iframe');
-  iframe.setAttribute('sandbox', '');
-  iframe.srcdoc = sanitized;
-  iframe.className = 'thumbnail-html-frame';
-  iframe.style.width = `${request.width * 2}px`;
-  iframe.style.height = `${request.height * 2}px`;
-  iframe.style.transform = 'scale(0.5)';
-  root.appendChild(iframe);
-  await new Promise<void>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error('HTML preview timed out')), 3_000);
-    iframe.addEventListener('load', () => {
-      window.clearTimeout(timer);
-      resolve();
-    }, { once: true });
-  });
-};
-
 const renderMermaid = async (
   request: LibraryThumbnailRenderRequest,
   bytes: Uint8Array,
@@ -548,7 +526,7 @@ const renderRequest = async (
     return { pngBase64: await renderVideo(request, bytes) };
   }
   if (request.artifactType === LibraryArtifactType.Html) {
-    await renderHtml(request, bytes);
+    await renderHtmlThumbnail(root, request, bytes);
     return {};
   }
   if (request.artifactType === LibraryArtifactType.Mermaid) {

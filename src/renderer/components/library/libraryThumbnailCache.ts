@@ -1,5 +1,8 @@
+import { isLibraryHtmlThumbnailExtension } from '../../../shared/library/htmlThumbnail';
+
 const MAX_CACHE_ENTRIES = 128;
 export const LibraryThumbnailClientCacheVersion = 'viewport-scheduler-v4';
+export const LibraryHtmlThumbnailClientCacheVersion = 'html-child-presentation-stamp-v1';
 
 const thumbnailCache = new Map<string, string>();
 
@@ -8,7 +11,9 @@ export const createLibraryThumbnailCacheKey = (
   fileMtimeMs?: number,
   fileSizeBytes?: number,
 ): string => [
-  LibraryThumbnailClientCacheVersion,
+  isLibraryHtmlThumbnailExtension(filePath.match(/[^/\\](\.[^./\\\s]+)$/)?.[1] ?? '')
+    ? LibraryHtmlThumbnailClientCacheVersion
+    : LibraryThumbnailClientCacheVersion,
   filePath,
   fileMtimeMs ?? 'unknown-mtime',
   fileSizeBytes ?? 'unknown-size',

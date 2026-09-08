@@ -1,3 +1,5 @@
+import { isLibraryHtmlThumbnailExtension } from '../../shared/library/htmlThumbnail';
+
 export const LibraryThumbnailVisualThreshold = {
   MaxSamples: 4_096,
   UniformLuminanceRange: 4,
@@ -46,4 +48,28 @@ export const isLikelyBlankThumbnailBitmap = (bitmap: Uint8Array): boolean => {
 
   const nonLightRatio = 1 - (lightSamples / visibleSamples);
   return nonLightRatio <= LibraryThumbnailVisualThreshold.MaxNonLightRatio;
+};
+
+interface NativeLibraryThumbnailValidationOptions {
+  extension: string;
+  platform: NodeJS.Platform;
+  rendererConfirmedIntentionalBlank: boolean;
+  getBitmap: () => Uint8Array;
+}
+
+/** Native fallback has no HTML child-frame proof, so uniform output is suspect. */
+export const shouldRejectNativeLibraryThumbnail = ({
+  extension,
+  platform,
+  rendererConfirmedIntentionalBlank,
+  getBitmap,
+}: NativeLibraryThumbnailValidationOptions): boolean => {
+  const normalizedExtension = extension.toLowerCase();
+  const shouldValidate = isLibraryHtmlThumbnailExtension(normalizedExtension)
+    || (
+      platform === 'win32'
+      && normalizedExtension === '.pptx'
+      && !rendererConfirmedIntentionalBlank
+    );
+  return shouldValidate && isLikelyBlankThumbnailBitmap(getBitmap());
 };

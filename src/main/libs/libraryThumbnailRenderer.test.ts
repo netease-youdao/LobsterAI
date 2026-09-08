@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { getLibraryHtmlThumbnailStampColor, HtmlThumbnailLayout } from '../../shared/library/htmlThumbnail';
 import type {
   LibraryThumbnailRenderRequest,
   LibraryThumbnailRenderResult,
@@ -26,6 +27,7 @@ const electronMocks = vi.hoisted(() => {
     toBitmap: () => Buffer;
     toPNG: () => Buffer;
   }> = [];
+  const captureFrames: typeof presentationFrames = [];
   const windows: Array<{
     destroy: ReturnType<typeof vi.fn>;
     isDestroyed: () => boolean;
@@ -51,7 +53,7 @@ const electronMocks = vi.hoisted(() => {
       ) => {
         frameCallback = callback;
       }),
-      capturePage: vi.fn(),
+      capturePage: vi.fn(() => Promise.resolve(captureFrames.shift())),
       endFrameSubscription: vi.fn(),
       executeJavaScript: vi.fn((script: string) => {
         if (script.includes('typeof window.renderLibraryThumbnail')) return Promise.resolve(true);
@@ -84,7 +86,7 @@ const electronMocks = vi.hoisted(() => {
     return instance;
   });
 
-  return { BrowserWindow, presentationFrames, renderResponses, windows };
+  return { BrowserWindow, presentationFrames, captureFrames, renderResponses, windows };
 });
 
 vi.mock('electron', () => ({ BrowserWindow: electronMocks.BrowserWindow }));
@@ -101,6 +103,7 @@ let renderer: LibraryThumbnailRenderer | undefined;
 beforeEach(async () => {
   electronMocks.renderResponses.length = 0;
   electronMocks.presentationFrames.length = 0;
+  electronMocks.captureFrames.length = 0;
   electronMocks.windows.length = 0;
   electronMocks.BrowserWindow.mockClear();
   testDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'library-thumbnail-renderer-'));
@@ -135,14 +138,25 @@ const createFrame = (
   png: Buffer,
   contentBitmap = Buffer.alloc(480 * 270 * 4),
   renderGeneration = 1,
+  html = false,
+  childGeneration: number | null = renderGeneration,
 ) => {
-  const frameHeight = 270 + LibraryThumbnailPresentationStamp.Height;
+  const childHeight = html ? HtmlThumbnailLayout.ChildStampHeight : 0;
+  const frameHeight = 270 + childHeight + LibraryThumbnailPresentationStamp.Height;
   const frameBitmap = Buffer.alloc(480 * frameHeight * 4);
   contentBitmap.copy(frameBitmap, 0, 0, 480 * 270 * 4);
   const color = getLibraryThumbnailPresentationStampColor(renderGeneration);
-  for (let y = 270; y < frameHeight; y += 1) {
+  for (let y = 270 + childHeight; y < frameHeight; y += 1) {
     for (let x = 0; x < 480; x += 1) {
       frameBitmap.set([color.blue, color.green, color.red, 255], ((y * 480) + x) * 4);
+    }
+  }
+  if (html && childGeneration !== null) {
+    const childColor = getLibraryHtmlThumbnailStampColor(childGeneration);
+    for (let y = 270; y < 270 + childHeight; y += 1) {
+      for (let x = 0; x < 480; x += 1) {
+        frameBitmap.set([childColor.blue, childColor.green, childColor.red, 255], ((y * 480) + x) * 4);
+      }
     }
   }
   const croppedImage = {
@@ -180,6 +194,54 @@ const successfulDirectResponse = (
 });
 
 describe('LibraryThumbnailRenderer', () => {
+  test.each(['darwin', 'linux'] as const)('waits for the HTML child on %s and crops the validated image', async platform => {
+    const unpainted = createFrame(Buffer.from('blank'), undefined, 1, true, null);
+    const current = createFrame(PNG_BYTES, Buffer.alloc(480 * 270 * 4, 255), 1, true);
+    electronMocks.captureFrames.push(unpainted, current);
+    electronMocks.renderResponses.push(request => ({ success: true, renderGeneration: request.renderGeneration }));
+    renderer = new LibraryThumbnailRenderer({ platform, productionHtmlPath: '/tmp/thumbnail.html' });
+
+    await expect(renderer.render(await writeRasterFile('page.html'), { width: 480, height: 270 })).resolves.toEqual(PNG_BYTES);
+    const contents = electronMocks.windows[0]!.webContents;
+    expect(contents.capturePage).toHaveBeenCalledTimes(2);
+    expect(contents.capturePage).toHaveBeenCalledWith(
+      { x: 0, y: 0, width: 480, height: 274 },
+      { stayHidden: true, stayAwake: true },
+    );
+    expect(unpainted.crop).not.toHaveBeenCalled();
+    expect(current.crop).toHaveBeenCalledExactlyOnceWith({ x: 0, y: 0, width: 480, height: 270 });
+    expect(contents.beginFrameSubscription).not.toHaveBeenCalled();
+  });
+
+  test('waits for both HTML stamps on Windows and accepts intentional white content', async () => {
+    const oldChild = createFrame(Buffer.from('old'), undefined, 1, true, 0);
+    const current = createFrame(PNG_BYTES, Buffer.alloc(480 * 270 * 4, 255), 1, true);
+    electronMocks.presentationFrames.push(oldChild, current);
+    electronMocks.renderResponses.push(request => ({ success: true, renderGeneration: request.renderGeneration }));
+    renderer = new LibraryThumbnailRenderer({ platform: 'win32', productionHtmlPath: '/tmp/thumbnail.html' });
+    await expect(renderer.render(await writeRasterFile('page.htm'), { width: 480, height: 270 })).resolves.toEqual(PNG_BYTES);
+    expect(oldChild.crop).not.toHaveBeenCalled();
+    expect(current.crop).toHaveBeenCalledTimes(1);
+    expect(electronMocks.windows[0]!.webContents.capturePage).not.toHaveBeenCalled();
+    expect(electronMocks.windows[0]!.webContents.endFrameSubscription).toHaveBeenCalledTimes(1);
+  });
+
+  test('bounds HTML capture waiting and retries in a fresh window without returning unpainted output', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    electronMocks.captureFrames.push(
+      createFrame(PNG_BYTES, undefined, 1, true, null),
+      createFrame(PNG_BYTES, undefined, 2, true, null),
+    );
+    const success = (request: LibraryThumbnailRenderRequest) => ({ success: true, renderGeneration: request.renderGeneration });
+    electronMocks.renderResponses.push(success, success);
+    renderer = new LibraryThumbnailRenderer({ platform: 'darwin', presentationTimeoutMs: 10, productionHtmlPath: '/tmp/thumbnail.html' });
+    await expect(renderer.render(await writeRasterFile('page.html'), { width: 480, height: 270 })).rejects.toMatchObject({
+      code: LibraryThumbnailFailureCode.PresentationTimeout,
+    });
+    expect(electronMocks.windows).toHaveLength(2);
+    expect(electronMocks.windows.every(window => window.isDestroyed())).toBe(true);
+  });
+
   test('returns direct raster PNG output without capturing the shared window', async () => {
     electronMocks.renderResponses.push(successfulDirectResponse);
     renderer = new LibraryThumbnailRenderer({ productionHtmlPath: '/tmp/thumbnail.html' });

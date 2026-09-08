@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
+import { isLibraryHtmlThumbnailExtension } from '../../shared/library/htmlThumbnail';
 import {
   isLibraryDirectPngThumbnailExtension,
   isLibraryRasterThumbnailExtension,
@@ -54,6 +55,7 @@ export const LibraryThumbnailCacheVersion = {
   RasterCanvas: 'raster-canvas-v1',
   DirectCanvas: 'direct-canvas-v1',
   PresentedFrame: 'presentation-stamp-v3',
+  HtmlPresentedFrame: 'html-child-presentation-stamp-v1',
   PptxFirstSlidePresentedFrame: 'pptx-source-aware-presentation-stamp-v5',
 } as const;
 const DEFAULT_THUMBNAIL_SIZE = { width: 480, height: 270 };
@@ -69,6 +71,9 @@ const isValidPngBuffer = (buffer: Buffer): boolean => (
 
 export const getLibraryThumbnailCacheVersion = (filePath: string): string => {
   const extension = path.extname(filePath).toLowerCase();
+  if (isLibraryHtmlThumbnailExtension(extension)) {
+    return LibraryThumbnailCacheVersion.HtmlPresentedFrame;
+  }
   if (extension === '.pptx') {
     return LibraryThumbnailCacheVersion.PptxFirstSlidePresentedFrame;
   }

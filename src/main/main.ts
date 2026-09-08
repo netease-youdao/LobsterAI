@@ -411,7 +411,7 @@ import {
 import { getKeyfromAttribution, initializeKeyfromAttribution } from './libs/keyfromAttribution';
 import { LibraryThumbnailRenderer } from './libs/libraryThumbnailRenderer';
 import { LibraryThumbnailService } from './libs/libraryThumbnailService';
-import { isLikelyBlankThumbnailBitmap } from './libs/libraryThumbnailValidation';
+import { shouldRejectNativeLibraryThumbnail } from './libs/libraryThumbnailValidation';
 import {
   resolveLobsterBrowserMcpCommand,
   resolveLobsterBrowserMcpStdioLaunch,
@@ -12699,15 +12699,15 @@ if (!gotTheLock) {
             rendererFailure.metrics?.sourceHasVisualContent === false
             && rendererFailure.metrics?.domHasVisualContent === false
           );
-          if (
-            process.platform === 'win32'
-            && extension === '.pptx'
-            && !rendererConfirmedIntentionalBlank
-            && isLikelyBlankThumbnailBitmap(image.toBitmap())
-          ) {
+          if (shouldRejectNativeLibraryThumbnail({
+            extension,
+            platform: process.platform,
+            rendererConfirmedIntentionalBlank,
+            getBitmap: () => image.toBitmap(),
+          })) {
             throw new LibraryThumbnailError(
               LibraryThumbnailFailureCode.NativeThumbnailBlank,
-              'Native PPTX thumbnail is visually blank',
+              'Native thumbnail is visually blank',
             );
           }
           return image.toPNG();
