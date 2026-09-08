@@ -3,6 +3,31 @@
 const fs = require('fs');
 const path = require('path');
 
+function patchDingtalkSdkCompatibility(pluginDir, log) {
+  // Jiti rewrites import.meta.url, but leaves bare/optional import.meta in
+  // its CommonJS output. The published ESM entry always has a module URL.
+  const loadPathExpression = 'typeof import.meta !== "undefined" && import.meta?.url ? String(import.meta.url) : "<unknown>"';
+  const replacements = [
+    [path.join(pluginDir, 'index.ts'), loadPathExpression, 'String(import.meta.url)'],
+    [path.join(pluginDir, 'dist', 'index.mjs'), loadPathExpression, 'String(import.meta.url)'],
+    // OpenClaw 2026.8.1 removed channel-runtime; channel-outbound exports
+    // the reply-prefix, typing callbacks and typing-failure helpers we use.
+    ...[
+      path.join(pluginDir, 'src', 'reply-dispatcher.ts'),
+      ...findDingtalkDistMessageHandlers(pluginDir),
+    ].map(file => [file, '"openclaw/plugin-sdk/channel-runtime"', '"openclaw/plugin-sdk/channel-outbound"']),
+  ];
+  for (const [file, before, after] of replacements) {
+    if (!fs.existsSync(file)) continue;
+    const source = fs.readFileSync(file, 'utf8');
+    const patched = source.replaceAll(before, after);
+    if (patched !== source) {
+      fs.writeFileSync(file, patched);
+      log(`Patched dingtalk-connector/${path.relative(pluginDir, file)}: OpenClaw SDK/module compatibility`);
+    }
+  }
+}
+
 function patchMessageHandler(dingtalkMsgHandlerPath, log) {
   if (!fs.existsSync(dingtalkMsgHandlerPath)) {
     log(`${path.basename(dingtalkMsgHandlerPath)} not found, skipping file:// URL patch`);
@@ -211,6 +236,7 @@ function patchDingtalkAgentWorkspaceResolver(resolverPath, label, log) {
 
 function patchDingtalk({ runtimeExtensionsDir, log }) {
   const pluginDir = path.join(runtimeExtensionsDir, 'dingtalk-connector');
+  patchDingtalkSdkCompatibility(pluginDir, log);
   const messageHandlerPaths = [
     path.join(pluginDir, 'src', 'core', 'message-handler.ts'),
     ...findDingtalkDistMessageHandlers(pluginDir),

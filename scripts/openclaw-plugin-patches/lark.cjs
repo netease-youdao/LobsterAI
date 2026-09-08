@@ -5,6 +5,28 @@ const path = require('path');
 
 const { readJsonFile, writeJsonFile } = require('./common.cjs');
 
+function patchSdkImports(larkPluginDir, log) {
+  // OpenClaw 2026.8.1 removed the SDK root and channel-runtime barrels.
+  // Keep the plugin on the host's public SDK modules and shared runtime state.
+  const replacements = [
+    ['index.js', '"openclaw/plugin-sdk"', '"openclaw/plugin-sdk/plugin-entry"'],
+    [path.join('src', 'card', 'reply-dispatcher.js'), '"openclaw/plugin-sdk/channel-runtime"', '"openclaw/plugin-sdk/channel-reply-pipeline"'],
+    // Session-store helpers moved out of config-runtime. Without this change,
+    // the plugin catches the missing-function error and ignores /verbose state.
+    [path.join('src', 'card', 'tool-use-config.js'), '"openclaw/plugin-sdk/config-runtime"', '"openclaw/plugin-sdk/session-store-runtime"'],
+  ];
+  for (const [relativePath, before, after] of replacements) {
+    const file = path.join(larkPluginDir, relativePath);
+    if (!fs.existsSync(file)) continue;
+    const source = fs.readFileSync(file, 'utf8');
+    const patched = source.replaceAll(before, after);
+    if (patched !== source) {
+      fs.writeFileSync(file, patched);
+      log(`Patched openclaw-lark/${relativePath}: use public OpenClaw SDK subpaths`);
+    }
+  }
+}
+
 const larkToolContracts = [
   'feishu_ask_user_question',
   'feishu_auth',
@@ -255,6 +277,7 @@ function ${patchMarker}(name) {
 
 function patchLark({ runtimeExtensionsDir, log }) {
   const larkPluginDir = path.join(runtimeExtensionsDir, 'openclaw-lark');
+  patchSdkImports(larkPluginDir, log);
   patchDeferredStartup(larkPluginDir, log);
   patchToolContracts(larkPluginDir, log);
   patchFilenameEncoding(larkPluginDir, log);
