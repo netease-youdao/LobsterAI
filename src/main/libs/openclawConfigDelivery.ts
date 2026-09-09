@@ -14,17 +14,16 @@ import { logOpenClawConfigLockDiagnostics } from './openclawConfigDiagnostics';
  * on sessions.patch) until the next restart.
  *
  * This module pushes the already-written file content through the gateway's
- * `config.set` RPC instead. The gateway's reload evaluation diffs against its
- * LIVE (last-applied) config — not the file — so re-sending content that is
- * already on disk still hot-applies exactly what the live config is missing,
- * and is a harmless no-op when the watcher already caught up. The RPC response
- * is a positive ack: the reload evaluation completes before `ok` is returned.
+ * `config.set` RPC instead. This acknowledges the gateway-managed write and
+ * schedules its reload follow-up even when the file watcher missed our write.
+ * In v2026.8.1 config.get can retain an old hash until the watcher commits, so
+ * hash conflicts need bounded backoff instead of an immediate retry/restart.
  *
  * See specs/bugfixes/openclaw-config-hot-reload-delivery/.
  */
 
 export const OpenClawConfigDeliveryMode = {
-  /** Gateway acked config.set — the live config now matches the file. */
+  /** Gateway accepted config.set and owns its reload follow-up. */
   Rpc: 'rpc',
   /** Gateway not running; the file on disk will be read at next start. */
   Skipped: 'skipped',
@@ -46,6 +45,26 @@ export type OpenClawConfigDeliveryMode =
  * gateway self-restart satisfies them without a supervisor respawn.
  */
 export const CONFIG_DELIVERY_FALLBACK_REASON_PREFIX = 'config-delivery-fallback:';
+export const DEFERRED_SYNC_REASON_PREFIX = 'deferred:';
+
+export const OpenClawConfigRpcMethod = {
+  Get: 'config.get',
+  Set: 'config.set',
+} as const;
+
+export function isConfigDeliveryFallbackReason(reason: string): boolean {
+  const originalReason = reason.startsWith(DEFERRED_SYNC_REASON_PREFIX)
+    ? reason.slice(DEFERRED_SYNC_REASON_PREFIX.length)
+    : reason;
+  return originalReason.startsWith(CONFIG_DELIVERY_FALLBACK_REASON_PREFIX);
+}
+
+/** A later env/IM/plugin restart must survive a successful delivery retry. */
+export function mergeDeferredGatewayRestartReason(current: string | null, incoming: string): string {
+  return !current || (isConfigDeliveryFallbackReason(current) && !isConfigDeliveryFallbackReason(incoming))
+    ? incoming
+    : current;
+}
 
 export type OpenClawConfigRpcClient = {
   request: <T = Record<string, unknown>>(
@@ -67,8 +86,8 @@ export type OpenClawConfigDeliveryInput = {
    * come up. Must resolve to null (not throw) when unavailable.
    */
   ensureRpcClient: () => Promise<OpenClawConfigRpcClient | null>;
-  /** Schedule the existing workload-aware deferred gateway restart. */
-  scheduleDeferredRestart: (reason: string) => void;
+  /** Omit when rechecking a queued restart; the caller owns the final fallback. */
+  scheduleDeferredRestart?: (reason: string) => void;
   nowMs?: () => number;
 };
 
@@ -81,6 +100,9 @@ export type OpenClawConfigDeliveryResult = {
 
 const CONFIG_GET_TIMEOUT_MS = 10_000;
 const CONFIG_SET_TIMEOUT_MS = 15_000;
+// config.get is cached until the watcher accepts the file change. Allow both
+// its debounce and slower Windows reloads to finish before falling back.
+const CONFIG_HASH_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000, 4_000] as const;
 /** Rate limit for fallback-triggered auto restarts, guarding against loops. */
 const FALLBACK_RESTART_MIN_INTERVAL_MS = 10 * 60 * 1000;
 
@@ -143,19 +165,25 @@ const describeError = (error: unknown): string => {
 
 async function requestConfigSet(
   client: OpenClawConfigRpcClient,
-  raw: string,
+  readConfigFile: () => string,
 ): Promise<void> {
   const snapshot = await client.request<{ hash?: unknown }>(
-    'config.get',
+    OpenClawConfigRpcMethod.Get,
     {},
     { timeoutMs: CONFIG_GET_TIMEOUT_MS },
   );
   const baseHash = typeof snapshot?.hash === 'string' && snapshot.hash.trim()
     ? snapshot.hash.trim()
     : undefined;
+  // A watcher migration or another writer may have changed the file while we
+  // awaited the hash. Never replay the payload captured before a retry wait.
+  const raw = readConfigFile();
+  if (!raw.trim()) {
+    throw new Error('config file is empty');
+  }
   await client.request(
-    'config.set',
-    { raw, ...(baseHash ? { baseHash } : {}) },
+    OpenClawConfigRpcMethod.Set,
+    { raw: stripPluginIndexManagedKeysFromRawConfig(raw), ...(baseHash ? { baseHash } : {}) },
     { timeoutMs: CONFIG_SET_TIMEOUT_MS },
   );
 }
@@ -193,6 +221,9 @@ export async function deliverOpenClawConfigToGateway(
   };
 
   const fallback = (detail: string): OpenClawConfigDeliveryResult => {
+    if (!input.scheduleDeferredRestart) {
+      return finish(OpenClawConfigDeliveryMode.Fallback, detail);
+    }
     const sinceLast = now() - lastFallbackRestartAtMs;
     if (sinceLast < FALLBACK_RESTART_MIN_INTERVAL_MS) {
       return finish(
@@ -232,8 +263,6 @@ export async function deliverOpenClawConfigToGateway(
   if (!raw.trim()) {
     return fallback('config file is empty');
   }
-  raw = stripPluginIndexManagedKeysFromRawConfig(raw);
-
   let client: OpenClawConfigRpcClient | null = null;
   try {
     client = await input.ensureRpcClient();
@@ -244,34 +273,28 @@ export async function deliverOpenClawConfigToGateway(
     return fallback('gateway client unavailable');
   }
 
-  try {
-    await requestConfigSet(client, raw);
-    return finish(OpenClawConfigDeliveryMode.Rpc, 'config.set acked');
-  } catch (error) {
-    diagnoseLockFailure(error);
-    if (!isBaseHashConflict(error)) {
-      if (isConfigValidationRejection(error)) {
-        return finish(
-          OpenClawConfigDeliveryMode.Rejected,
-          `config.set rejected payload: ${describeError(error)}; restart skipped`,
-        );
-      }
-      return fallback(`config.set failed: ${describeError(error)}`);
-    }
-    // Another writer (e.g. the gateway itself) touched the file between our
-    // hash read and the set. Re-read the hash once and retry.
+  for (let attempt = 0; ; attempt += 1) {
     try {
-      await requestConfigSet(client, raw);
-      return finish(OpenClawConfigDeliveryMode.Rpc, 'config.set acked after hash retry');
-    } catch (retryError) {
-      diagnoseLockFailure(retryError);
-      if (!isBaseHashConflict(retryError) && isConfigValidationRejection(retryError)) {
-        return finish(
-          OpenClawConfigDeliveryMode.Rejected,
-          `config.set rejected payload: ${describeError(retryError)}; restart skipped`,
-        );
+      await requestConfigSet(client, input.readConfigFile);
+      return finish(
+        OpenClawConfigDeliveryMode.Rpc,
+        attempt === 0 ? 'config.set acked' : `config.set acked after hash retry (${attempt} retries)`,
+      );
+    } catch (error) {
+      diagnoseLockFailure(error);
+      if (!isBaseHashConflict(error)) {
+        if (isConfigValidationRejection(error)) {
+          return finish(
+            OpenClawConfigDeliveryMode.Rejected,
+            `config.set rejected payload: ${describeError(error)}; restart skipped`,
+          );
+        }
+        return fallback(`config.set failed: ${describeError(error)}`);
       }
-      return fallback(`config.set retry failed: ${describeError(retryError)}`);
+      if (attempt >= CONFIG_HASH_RETRY_DELAYS_MS.length) {
+        return fallback(`config.set hash retries exhausted: ${describeError(error)}`);
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, CONFIG_HASH_RETRY_DELAYS_MS[attempt]));
     }
   }
 }
