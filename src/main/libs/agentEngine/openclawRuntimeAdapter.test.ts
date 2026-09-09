@@ -2020,6 +2020,97 @@ test('a successful gateway hello clears reconnect suppression on the normal ensu
   adapter.disconnectGatewayClient();
 });
 
+test.each(['ensureReady', 'ensureGatewayRpcClient', 'connectGatewayIfNeeded'] as const)(
+  '%s restores QQ history sync after a gateway restart',
+  async (connectMethod) => {
+    vi.useFakeTimers();
+    const sessionKey = 'agent:main:qqbot:account-1:direct:peer-1';
+    const { session, store } = createReconcileStore([]);
+    const history = [{ role: 'user', content: 'Before logout', timestamp: 1 }];
+    const rpc = {
+      List: 'sessions.list',
+      History: 'chat.history',
+      Subscribe: 'sessions.subscribe',
+    } as const;
+    const request = vi.fn(async (method: string) => {
+      if (method === rpc.List) return { sessions: [{ key: sessionKey, hasActiveRun: false }] };
+      if (method === rpc.History) return { messages: [...history] };
+      if (method === rpc.Subscribe) return { subscribed: true };
+      return {};
+    });
+    let callbacks: Record<string, unknown> = {};
+    class TestGatewayClient {
+      constructor(options: Record<string, unknown>) {
+        callbacks = options;
+      }
+      start() { (callbacks.onHelloOk as () => void)(); }
+      stop() {}
+      request = request;
+    }
+    const adapter = new OpenClawRuntimeAdapter(store, {
+      startGateway: async () => ({ phase: 'running' }),
+      getGatewayConnectionInfo: () => ({
+        url: 'ws://127.0.0.1:9999',
+        token: 'test-token',
+        version: 'test-version',
+        clientEntryPath: '/tmp/openclaw-gateway-client.js',
+      }),
+    } as never);
+    adapter.loadGatewayClientCtor = async () => TestGatewayClient as never;
+    adapter.setChannelSessionSync({
+      clearCache: () => {},
+      isChannelSessionKey: (key: string) => key === sessionKey,
+      isCurrentBindingKey: () => true,
+      resolveOrCreateSession: () => session.id,
+    } as never);
+    const sessionsChanged = vi.spyOn(adapter, 'notifySessionsChanged');
+    const localContents = () => session.messages.map(message => message.content);
+
+    try {
+      await adapter.connectGatewayIfNeeded();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(localContents()).toEqual(['Before logout']);
+
+      adapter.disconnectGatewayClient();
+      history.push({ role: 'assistant', content: 'Reply while disconnected', timestamp: 2 });
+      sessionsChanged.mockClear();
+      await adapter[connectMethod]();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(localContents()).toEqual(['Before logout', 'Reply while disconnected']);
+      expect(sessionsChanged).toHaveBeenCalled();
+
+      // A lifecycle notification must still trigger history reconciliation.
+      history.push({ role: 'user', content: 'After reconnect', timestamp: 3 });
+      (callbacks.onEvent as (event: unknown) => void)({ event: 'sessions.changed', payload: {} });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(localContents()).toContain('After reconnect');
+
+      // A client created by another RPC must also restore stopped polling,
+      // without opening another socket or installing duplicate timers.
+      const client = adapter.getGatewayClient();
+      adapter.stopChannelPolling();
+      history.push({ role: 'assistant', content: 'Reply before polling resumes', timestamp: 4 });
+      await adapter.connectGatewayIfNeeded();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(localContents()).toHaveLength(4);
+      expect(localContents()).toContain('Reply before polling resumes');
+      const timer = adapter.channelPollingTimer;
+      await adapter.connectGatewayIfNeeded();
+      expect(adapter.getGatewayClient()).toBe(client);
+      expect(adapter.channelPollingTimer).toBe(timer);
+      expect(request.mock.calls.filter(([method]) => method === rpc.Subscribe)).toHaveLength(2);
+
+      // Periodic polling also catches messages whose lifecycle event was lost.
+      history.push({ role: 'assistant', content: 'Reply without an event', timestamp: 5 });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(localContents()).toEqual(history.map(message => message.content));
+    } finally {
+      adapter.disconnectGatewayClient();
+      vi.useRealTimers();
+    }
+  },
+);
+
 test('gateway close reports a recent process heap OOM instead of a generic disconnect', async () => {
   let callbacks: Record<string, unknown> = {};
   class TestGatewayClient {
