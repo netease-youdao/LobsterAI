@@ -383,6 +383,7 @@ export class OpenClawChannelSessionSync {
   private createChannelSession(
     parsed: { platform: Platform; conversationId: string },
     agentId: string,
+    accountId?: string,
   ): CoworkSession {
     const titlePrefix = getChannelTitlePrefix(parsed.platform);
     const title = `${titlePrefix} ${buildChannelDisplayName(parsed.conversationId)}`;
@@ -396,7 +397,7 @@ export class OpenClawChannelSessionSync {
       agentId,
     );
 
-    const session = this.coworkStore.createSession(title, cwd, '', 'local', [], agentId);
+    const session = this.coworkStore.createSession(title, cwd, '', 'local', [], agentId, '', { owner: this.coworkStore.remote.sourceOwner(`im:${parsed.platform}:${accountId || 'default'}`), ownershipSource: 'bound_automation' });
     console.log(
       `[ChannelSessionSync] Created session for ${parsed.platform} conversation ${parsed.conversationId}: ${session.id}`,
     );
@@ -507,6 +508,8 @@ export class OpenClawChannelSessionSync {
             'local',
             [],
             currentAgentId,
+            '',
+            { owner: this.coworkStore.remote.sourceOwner(`im:${parsed.platform}:${extractAccountIdFromKey(sessionKey) || 'default'}`), ownershipSource: 'bound_automation' },
           );
           console.log('[ChannelSessionSync] created new session for agent change:', newSession.id);
           this.imStore.updateSessionMappingTarget(
@@ -557,7 +560,7 @@ export class OpenClawChannelSessionSync {
     }
 
     // 5. Create new Cowork session
-    const session = this.createChannelSession(parsed, agentId);
+    const session = this.createChannelSession(parsed, agentId, extractAccountIdFromKey(sessionKey));
 
     // 6. Persist mapping
     this.imStore.createSessionMapping(parsed.conversationId, parsed.platform, session.id, agentId, sessionKey);
@@ -866,7 +869,7 @@ export class OpenClawChannelSessionSync {
       [],
       agentId,
       '',
-      { scheduledTaskId: jobId },
+      { scheduledTaskId: jobId, owner: this.coworkStore.remote.sourceOwner(`cron:${jobId}`), ownershipSource: 'bound_automation' },
     );
     console.log('[ChannelSessionSync] created cron session:', session.id);
 

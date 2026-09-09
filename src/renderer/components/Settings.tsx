@@ -1,4 +1,4 @@
-import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, ExclamationTriangleIcon, GlobeAltIcon, InformationCircleIcon, MagnifyingGlassIcon, SignalIcon, SunIcon, TrashIcon, WrenchScrewdriverIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChipIcon, CubeIcon, DevicePhoneMobileIcon, EnvelopeIcon, ExclamationTriangleIcon, GlobeAltIcon, InformationCircleIcon, MagnifyingGlassIcon, SignalIcon, SunIcon, TrashIcon, WrenchScrewdriverIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -26,10 +26,12 @@ import {
   resolveCodingPlanBaseUrl,
   resolveModelRuntimeProfile,
 } from '../../shared/providers';
+import type { RemoteSettingsState } from '../../shared/remote/constants';
 import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, isCustomProvider, normalizeFontPreference, resolveArtifactAutoPreviewEnabled, ShortcutAction, type ShortcutConfig } from '../config';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import { useSkin } from '../providers/SkinProvider';
 import { apiService } from '../services/api';
+import { authService } from '../services/auth';
 import { configService } from '../services/config';
 import { coworkService } from '../services/cowork';
 import { decryptSecret, decryptWithPassword, EncryptedPayload, encryptWithPassword, PasswordEncryptedPayload } from '../services/encryption';
@@ -70,6 +72,7 @@ import PlugIcon from './icons/PlugIcon';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import IMSettings from './im/IMSettings';
 import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle } from './plugins/PluginsSettings';
+import { RemoteControlSettings } from './RemoteControlSettings';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
 import {
   buildOpenAICompatibleChatCompletionsUrl,
@@ -96,13 +99,15 @@ import {
   shouldUseOpenAIResponsesForProvider,
 } from './settings/modelProviderUtils';
 import ModelSettingsSection, { DeleteProviderConfirmDialog, ModelEditorDialog } from './settings/ModelSettingsSection';
+import { isNewRemoteState, reconcileRemoteSettingsDraft, type RemoteSettingsDraft, saveRemoteSettingsDraft } from './settings/remoteControlState';
 import { resolveSettingsEscapeAction, SettingsEscapeAction } from './settings/settingsEscape';
+import SettingsSwitch from './settings/SettingsSwitch';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import SkinPresentationScope from './skin/SkinPresentationScope';
 import SkinSettingsSection from './skin/SkinSettingsSection';
 import ThemedSelect from './ui/ThemedSelect';
 
-type TabType = 'general' | 'appearance' | 'coworkAgentEngine' | 'model' | 'browserWebAccess' | 'coworkMemory' | 'coworkDreaming' | 'shortcuts' | 'im' | 'email' | 'plugins' | 'experimental' | 'about';
+type TabType = 'general' | 'appearance' | 'coworkAgentEngine' | 'model' | 'browserWebAccess' | 'coworkMemory' | 'coworkDreaming' | 'shortcuts' | 'im' | 'remoteControl' | 'email' | 'plugins' | 'experimental' | 'about';
 
 const waitForNextPaint = (): Promise<void> => new Promise(resolve => {
   window.requestAnimationFrame(() => {
@@ -1256,37 +1261,6 @@ const SendShortcutSelect: React.FC<{ value: string; onChange: (v: string) => voi
   );
 };
 
-const SettingsSwitch: React.FC<{
-  checked: boolean;
-  label: string;
-  disabled?: boolean;
-  onClick: () => void | Promise<void>;
-}> = ({ checked, label, disabled, onClick }) => (
-  <button
-    type="button"
-    role="switch"
-    aria-checked={checked}
-    aria-label={label}
-    onClick={() => {
-      void onClick();
-    }}
-    disabled={disabled}
-    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
-      disabled ? 'opacity-50 cursor-not-allowed' : ''
-    } ${
-      checked
-        ? 'bg-primary'
-        : 'bg-gray-300 dark:bg-gray-600'
-    }`}
-  >
-    <span
-      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-        checked ? 'translate-x-6' : 'translate-x-1'
-      }`}
-    />
-  </button>
-);
-
 const SettingsToggleRow: React.FC<{
   title: string;
   description: string;
@@ -1413,8 +1387,6 @@ const Settings: React.FC<SettingsProps> = ({
     webFetch: { ...defaultBrowserWebAccessConfig.webFetch },
   }));
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
-  const [preventSleep, setPreventSleepState] = useState(false);
-  const [isUpdatingPreventSleep, setIsUpdatingPreventSleep] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const buildNoticeMessage = useCallback((): string | null => {
@@ -1457,6 +1429,20 @@ const Settings: React.FC<SettingsProps> = ({
 
   // Plugin settings handle (deferred save)
   const pluginsSettingsRef = useRef<PluginsSettingsHandle>(null);
+  const [remoteSettingsDraft, setRemoteSettingsDraft] = useState<RemoteSettingsDraft | null>(null);
+  const remoteSettingsStateRef = useRef<RemoteSettingsState | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const accept = (incoming: RemoteSettingsState) => {
+      if (!active || !isNewRemoteState(remoteSettingsStateRef.current, incoming)) return;
+      remoteSettingsStateRef.current = incoming;
+      setRemoteSettingsDraft(draft => reconcileRemoteSettingsDraft(draft, incoming));
+    };
+    const unsubscribe = window.electron.remote.onChanged(accept);
+    void window.electron.remote.state().then(accept).catch(() => { /* The remote settings page reports read failures. */ });
+    return () => { active = false; unsubscribe(); };
+  }, []);
 
   // Add state for active provider
   const [activeProvider, setActiveProvider] = useState<ProviderType>(getDefaultActiveProvider());
@@ -2005,13 +1991,6 @@ const Settings: React.FC<SettingsProps> = ({
         setAutoLaunchState(enabled);
       }).catch(err => {
         console.error('Failed to load auto-launch setting:', err);
-      });
-
-      // Load prevent-sleep setting
-      window.electron.preventSleep.get().then(({ enabled }) => {
-        setPreventSleepState(enabled);
-      }).catch(err => {
-        console.error('Failed to load prevent-sleep setting:', err);
       });
 
       // Set up providers based on saved config
@@ -3691,6 +3670,9 @@ const Settings: React.FC<SettingsProps> = ({
         }
       }
 
+      try { await saveRemoteSettingsDraft(remoteSettingsDraft, window.electron.remote); }
+      catch (remoteError) { throw new Error(i18nService.t(remoteError instanceof Error ? remoteError.message : 'remoteSaveFailed')); }
+      setRemoteSettingsDraft(draft => draft === remoteSettingsDraft ? null : draft);
       didSaveRef.current = true;
       onClose();
     } catch (error) {
@@ -3725,12 +3707,12 @@ const Settings: React.FC<SettingsProps> = ({
 
   // Guarded close: check plugin dirty state before closing
   const guardedClose = useCallback(() => {
-    if (isBackingUpOpenClawData || isRestoringOpenClawData) return;
+    if (isSaving || isBackingUpOpenClawData || isRestoringOpenClawData) return;
     if (activeTab === 'plugins' && pluginsSettingsRef.current?.guardLeave(() => onClose())) {
       return;
     }
     onClose();
-  }, [activeTab, isBackingUpOpenClawData, isRestoringOpenClawData, onClose]);
+  }, [activeTab, isSaving, isBackingUpOpenClawData, isRestoringOpenClawData, onClose]);
 
   const shortcutCommandMap = useMemo(
     () => new Map(SHORTCUT_COMMANDS.map(command => [command.key, command])),
@@ -4543,6 +4525,7 @@ const Settings: React.FC<SettingsProps> = ({
       { key: 'coworkAgentEngine' as TabType, label: i18nService.t('coworkAgentEngine'), icon: <CpuChipIcon className="h-5 w-5" /> },
       { key: 'model' as TabType,          label: i18nService.t('settingsCustomModel'), icon: <CubeIcon className="h-5 w-5" /> },
       { key: 'im' as TabType,             label: i18nService.t('imBot'),          icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
+      { key: 'remoteControl' as TabType, label: i18nService.t('remoteTitle'), icon: <DevicePhoneMobileIcon className="h-5 w-5" /> },
       { key: 'browserWebAccess' as TabType, label: i18nService.t('browserWebAccessTab'), icon: <GlobeAltIcon className="h-5 w-5" /> },
       { key: 'email' as TabType,          label: i18nService.t('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
       { key: 'coworkMemory' as TabType,   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
@@ -4815,6 +4798,11 @@ const Settings: React.FC<SettingsProps> = ({
 
   const renderTabContent = () => {
     switch(activeTab) {
+      case 'remoteControl':
+        return <RemoteControlSettings draft={remoteSettingsDraft} onDraftChange={setRemoteSettingsDraft} saving={isSaving} onLogin={async () => {
+          const result = await authService.login();
+          if (!result.success) throw new Error(i18nService.t('remoteLoginFailed'));
+        }} />;
       case 'experimental':
         return <DshExperimentalSettings />;
       case 'general':
@@ -4888,35 +4876,6 @@ const Settings: React.FC<SettingsProps> = ({
                       setError(i18nService.t('autoLaunchUpdateFailed'));
                     } finally {
                       setIsUpdatingAutoLaunch(false);
-                    }
-                  }}
-                />
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('preventSleep')}
-                  description={i18nService.t('preventSleepDescription')}
-                  checked={preventSleep}
-                  disabled={isUpdatingPreventSleep}
-                  onToggle={async () => {
-                    if (isUpdatingPreventSleep) return;
-                    const next = !preventSleep;
-                    setIsUpdatingPreventSleep(true);
-                    try {
-                      const result = await window.electron.preventSleep.set(next);
-                      if (result.success) {
-                        const previous = preventSleep;
-                        setPreventSleepState(next);
-                        reportGeneralSettingChanged('preventSleep', next, previous);
-                      } else {
-                        setError(result.error || 'Failed to update prevent-sleep setting');
-                      }
-                    } catch (err) {
-                      console.error('Failed to set prevent-sleep:', err);
-                      setError('Failed to update prevent-sleep setting');
-                    } finally {
-                      setIsUpdatingPreventSleep(false);
                     }
                   }}
                 />
@@ -6030,6 +5989,7 @@ const Settings: React.FC<SettingsProps> = ({
                 <button
                   type="button"
                   onClick={guardedClose}
+                  disabled={isSaving}
                   className="px-4 py-2 rounded-xl transition-colors text-sm font-medium border border-border text-foreground hover:bg-surface-raised active:scale-[0.98]"
                 >
                   {i18nService.t('cancel')}

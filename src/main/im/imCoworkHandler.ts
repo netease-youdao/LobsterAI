@@ -349,7 +349,9 @@ export class IMCoworkHandler extends EventEmitter {
       systemPrompt,
       config.executionMode || 'local',
       [],
-      agentId
+      agentId,
+      '',
+      { owner: this.coworkStore.remote.sourceOwner(`im:${platform}:default`), ownershipSource: 'bound_automation' }
     );
 
     // Save mapping

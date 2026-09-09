@@ -54,6 +54,7 @@ export interface CoworkRuntimeEvents {
   complete: (sessionId: string, claudeSessionId: string | null) => void;
   error: (sessionId: string, error: string) => void;
   sessionStopped: (sessionId: string) => void;
+  runTermination: (sessionId: string, gatewayRunId: string, status: 'cancelled') => void;
 }
 
 export type CoworkContextUsage = {
@@ -166,6 +167,8 @@ export interface CoworkRuntime {
   compactContext?(sessionId: string): Promise<{ compacted: boolean; reason?: string; usage?: CoworkContextUsage | null }>;
   getForkCompactionSummary?(sessionId: string, beforeCreatedAt?: number): Promise<CoworkForkCompactionSummary | null>;
   stopSession(sessionId: string): void;
+  cancelSessionConfirmed?(sessionId: string): Promise<boolean>;
+  respondToPermissionConfirmed?(requestId: string, result: PermissionResult): Promise<void>;
   stopAllSessions(): void;
   respondToPermission(requestId: string, result: PermissionResult): void;
   isSessionActive(sessionId: string): boolean;

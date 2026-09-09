@@ -130,6 +130,7 @@ import type {
   PublishingSubscriptionRecoveryMode,
   PublishingTrialPolicy,
 } from '../../shared/publishing/constants';
+import type { RemoteSettingsApi } from '../../shared/remote/constants';
 import type {
   ShareDeploymentAnalyzeProjectInput,
   ShareDeploymentCreateNodeInput,
@@ -646,6 +647,7 @@ interface HtmlShareResult {
 }
 
 interface IElectronAPI {
+  remote: RemoteSettingsApi;
   platform: string;
   arch: string;
   store: {

@@ -23,6 +23,7 @@ import {
   type Platform,
   PlatformRegistry,
 } from '../../../shared/platform';
+import type { RemoteOwner } from '../../../shared/remote/constants';
 import {
   dedupeConversationMappings,
   filterConversationMappingsForSelectedAccount,
@@ -92,6 +93,9 @@ function normalizeImAnnounceDeliveryTo(
 }
 
 export interface ScheduledTaskHandlerDeps {
+  captureRemoteOwner?: () => RemoteOwner | null;
+  assertRemoteTaskOwner?: (jobId: string) => void;
+  recordRemoteTaskOwner?: (jobId: string, owner: RemoteOwner | null) => void;
   getCronJobService: () => CronJobService;
   getIMGatewayManager: () => {
     getIMStore: () =>
@@ -583,6 +587,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   });
 
   ipcMain.handle(ScheduledTaskIpc.Create, async (_event, input: any) => {
+    const remoteOwner = deps.captureRemoteOwner?.() || null;
     try {
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
       console.debug('[ScheduledTask] create input:', JSON.stringify(normalizedInput, null, 2));
@@ -592,6 +597,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
       });
 
       const task = await getCronJobService().addJob(normalizedInput);
+      if (task?.id) deps.recordRemoteTaskOwner?.(task.id, remoteOwner);
       console.log('[IPC][scheduledTask:create] result task id:', task?.id, 'name:', task?.name);
       return { success: true, task };
     } catch (error) {
@@ -604,6 +610,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
 
   ipcMain.handle(ScheduledTaskIpc.Update, async (_event, id: string, input: any) => {
     try {
+      deps.assertRemoteTaskOwner?.(id);
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
       console.debug(
         '[ScheduledTask] update input id:',
@@ -628,6 +635,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
 
   ipcMain.handle(ScheduledTaskIpc.Delete, async (_event, id: string) => {
     try {
+      deps.assertRemoteTaskOwner?.(id);
       await getCronJobService().removeJob(id);
       return { success: true, result: true };
     } catch (error) {
@@ -640,6 +648,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
 
   ipcMain.handle(ScheduledTaskIpc.Toggle, async (_event, id: string, enabled: boolean) => {
     try {
+      deps.assertRemoteTaskOwner?.(id);
       const task = await getCronJobService().toggleJob(id, enabled);
       return { success: true, task };
     } catch (error) {
@@ -652,6 +661,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
 
   ipcMain.handle(ScheduledTaskIpc.RunManually, async (_event, id: string) => {
     try {
+      deps.assertRemoteTaskOwner?.(id);
       const cronJobService = getCronJobService();
       const task = await cronJobService.getJob(id);
       if (task) {

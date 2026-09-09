@@ -190,6 +190,7 @@ import {
   parseModelThinkingLevel,
   ProviderName,
 } from '../shared/providers';
+import { type RemoteConfigureRequest, RemoteIpc, type RemoteOwner, type RemoteSettingsState } from '../shared/remote/constants';
 import {
   ShareDeploymentCandidateSource,
   type ShareDeploymentCreateNodeInput,
@@ -563,6 +564,13 @@ import {
 } from './openclawSessionPolicy/store';
 import { registerVoiceInputPermissionHandler } from './permissions/voiceInputPermission';
 import { isHiddenUserPluginId } from './plugins/pluginManager';
+import { fenceCronJobs,filterOwnedInstances } from './remote/automationOwnership';
+import { sameOwner } from './remote/canonical';
+import { prepareDefaultWorkspace } from './remote/defaultWorkspace';
+import { createRemoteDatabaseFence,loadRemoteIdentity } from './remote/installationIdentity';
+import { RemoteBridge } from './remote/remoteBridge';
+import { PREVENT_SLEEP_STORE_KEY, RemoteSettingsController } from './remote/remoteSettingsController';
+import { assertRemoteExecutionPermit,currentRemoteExecution, SessionCommandService } from './remote/sessionCommandService';
 import { SkillManager } from './skills/skillManager';
 import { getSkillServiceManager } from './skills/skillServices';
 import {
@@ -2131,6 +2139,7 @@ let openClawStatusForwarderBound = false;
 let coworkRuntimeForwarderBound = false;
 let memoryMigrationDone = false;
 let preventSleepBlockerId: number | null = null;
+let remoteSettingsController: RemoteSettingsController | null = null;
 let appUpdateCoordinator: AppUpdateCoordinator | null = null;
 let mainLogReporter: MainLogReporter | null = null;
 let libraryIndexService: LibraryIndexService | null = null;
@@ -2384,6 +2393,7 @@ const bootstrapOpenClawEngine = async (
 let waitForPendingTokenRefresh: () => Promise<void> = async () => {};
 
 const ensureOpenClawRunningForCowork = async () => {
+  await remoteAccountTransition;
   const configApplyStatus = await waitForOpenClawConfigApply('cowork engine startup');
   if (configApplyStatus) {
     return configApplyStatus;
@@ -2494,6 +2504,9 @@ const resolveCoworkAgentEngine = (): CoworkAgentEngine => {
   return 'openclaw';
 };
 
+let remoteAccountTransition: Promise<void> = Promise.resolve();
+let remoteCredentialsAllowed = true;
+
 const getOpenClawConfigSync = (): OpenClawConfigSync => {
   if (!openClawConfigSync) {
     openClawConfigSync = new OpenClawConfigSync({
@@ -2508,56 +2521,57 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
           .map(s => ({ id: s.id, name: s.name, enabled: s.enabled })),
       getTelegramInstances: () => {
         try {
-          return getIMGatewayManager().getIMStore().getTelegramInstances();
+          return filterOwnedInstances(getIMGatewayManager().getIMStore().getTelegramInstances(), 'telegram', getCoworkStore().remote, getCoworkStore().remoteCreationOwner());
         } catch {
           return [];
         }
       },
       getDingTalkInstances: () => {
         try {
-          return getIMGatewayManager().getIMStore().getDingTalkInstances();
+          return filterOwnedInstances(getIMGatewayManager().getIMStore().getDingTalkInstances(), 'dingtalk', getCoworkStore().remote, getCoworkStore().remoteCreationOwner());
         } catch {
           return [];
         }
       },
       getFeishuInstances: () => {
         try {
-          return getIMGatewayManager().getIMStore().getFeishuInstances();
+          return filterOwnedInstances(getIMGatewayManager().getIMStore().getFeishuInstances(), 'feishu', getCoworkStore().remote, getCoworkStore().remoteCreationOwner());
         } catch {
           return [];
         }
       },
       getQQInstances: () => {
         try {
-          return getIMGatewayManager().getIMStore().getQQInstances();
+          return filterOwnedInstances(getIMGatewayManager().getIMStore().getQQInstances(), 'qq', getCoworkStore().remote, getCoworkStore().remoteCreationOwner());
         } catch {
           return [];
         }
       },
       getWecomInstances: () => {
         try {
-          return getIMGatewayManager().getIMStore().getWecomInstances();
+          return filterOwnedInstances(getIMGatewayManager().getIMStore().getWecomInstances(), 'wecom', getCoworkStore().remote, getCoworkStore().remoteCreationOwner());
         } catch {
           return [];
         }
       },
       getPopoInstances: () => {
         try {
-          return getIMGatewayManager().getIMStore().getPopoInstances();
+          return filterOwnedInstances(getIMGatewayManager().getIMStore().getPopoInstances(), 'popo', getCoworkStore().remote, getCoworkStore().remoteCreationOwner());
         } catch {
           return [];
         }
       },
       getEmailOpenClawConfig: () => {
         try {
-          return getIMGatewayManager().getIMStore().getEmailConfig();
+          const config = getIMGatewayManager().getIMStore().getEmailConfig();
+          return { ...config, instances: filterOwnedInstances(config.instances, 'email', getCoworkStore().remote, getCoworkStore().remoteCreationOwner()) };
         } catch {
           return { instances: [] };
         }
       },
       getNimInstances: () => {
         try {
-          return getIMGatewayManager().getIMStore().getNimInstances();
+          return filterOwnedInstances(getIMGatewayManager().getIMStore().getNimInstances(), 'nim', getCoworkStore().remote, getCoworkStore().remoteCreationOwner());
         } catch {
           return [];
         }
@@ -2585,7 +2599,7 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
       },
       getDiscordInstances: () => {
         try {
-          return getIMGatewayManager()?.getIMStore()?.getDiscordInstances() ?? [];
+          return filterOwnedInstances(getIMGatewayManager()?.getIMStore()?.getDiscordInstances() ?? [], 'discord', getCoworkStore().remote, getCoworkStore().remoteCreationOwner());
         } catch {
           return [];
         }
@@ -2834,6 +2848,7 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
 const _syncOpenClawConfigImpl = async (
   options: SyncOpenClawConfigOptions = { reason: 'unknown' },
 ): Promise<SyncOpenClawConfigResult> => {
+  await remoteAccountTransition;
   const D = gwDiagTs;
   console.log(
     `${D()} ──── syncOpenClawConfig START reason=${options.reason} restartIfRunning=${!!options.restartGatewayIfRunning} expectedImpact=${options.expectedImpact ?? OpenClawConfigImpact.None}`,
@@ -2875,6 +2890,7 @@ const _syncOpenClawConfigImpl = async (
     getMcpRuntime().clearResolvedServersCache();
   }
 
+  await remoteAccountTransition;
   const syncResult = configSync.sync(options.reason);
   console.log(
     `${D()} sync() ok=${syncResult.ok} changed=${syncResult.changed} bindingsChanged=${!!syncResult.bindingsChanged} restartImpact=${syncResult.restartImpact ?? OpenClawConfigImpact.None}`,
@@ -3545,6 +3561,7 @@ const getCoworkEngineRouter = () => {
     coworkEngineRouter = new CoworkEngineRouter({
       getCurrentEngine: resolveCoworkAgentEngine,
       openclawRuntime: openClawRuntimeAdapter,
+      assertSessionAccess: sessionId => getCoworkStore().remote.assertActor(sessionId, currentRemoteExecution()?.owner ?? getCoworkStore().remoteCreationOwner()),
     });
   }
   return coworkEngineRouter;
@@ -4964,7 +4981,7 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(AppSettingsIpc.GetPreventSleep, () => {
-    const enabled = getStore().get<boolean>('prevent_sleep_enabled') ?? false;
+    const enabled = remoteSettingsController?.state().keepAwakeEnabled ?? false;
     return { enabled };
   });
 
@@ -4973,9 +4990,10 @@ if (!gotTheLock) {
       return { success: false, error: 'Invalid parameter: enabled must be boolean' };
     }
     try {
-      setPreventSleepBlockerEnabled(enabled);
-      getStore().set('prevent_sleep_enabled', enabled);
-      return { success: true };
+      if (!remoteSettingsController) throw new Error('Remote settings are not initialized');
+      if (!getCurrentRemoteOwner()) throw new Error('Sign in before configuring remote access');
+      const state = remoteSettingsController.setKeepAwake(enabled);
+      return { success: !state.keepAwakeError, error: state.keepAwakeError };
     } catch (error) {
       return {
         success: false,
@@ -5048,6 +5066,8 @@ if (!gotTheLock) {
 
   // ── Auth IPC handlers ──
 
+  let remoteBridge: RemoteBridge | null = null;
+  let remoteSessionCommands: SessionCommandService | null = null;
   let authAccountGeneration = 0;
   let authExchangeIntentSequence = 0;
   let activeAuthExchangeIntent: AuthExchangeIntentSnapshot | null = null;
@@ -5133,6 +5153,18 @@ if (!gotTheLock) {
     }
   };
   resolveCurrentMediaAccountScope = getCurrentMediaAccountScope;
+  const getCurrentRemoteOwner = (): RemoteOwner | null => {
+    if (!getAuthTokens()) return null;
+    const user = getAuthUser();
+    const value = user?.userId ?? user?.id;
+    // Server users.id only: yid and display-name fallbacks are deliberately forbidden.
+    if ((typeof value !== 'string' && typeof value !== 'number') || !/^[1-9]\d*$/.test(String(value))) return null;
+    if (typeof value === 'number' && !Number.isSafeInteger(value)) return null;
+    const enterprise = getPersistedEnterpriseAccountContext(getStore());
+    if (!enterprise && user?.accountMode === EnterpriseAccountMode.Enterprise) return null;
+    return { userId: String(value), scopeKey: enterprise ? `enterprise:${enterprise.enterpriseId}` : 'personal' };
+  };
+
 
   const captureEnterpriseAuthSessionSnapshot = (
     accountScope = getCurrentMediaAccountScope(),
@@ -5403,6 +5435,118 @@ if (!gotTheLock) {
     }
     return response;
   };
+
+  const initializeRemoteBridge = (): RemoteBridge => {
+    if (remoteBridge) return remoteBridge;
+    const identity = loadRemoteIdentity(app.getPath('appData'), app.getPath('userData'), safeStorage);
+    const fence = createRemoteDatabaseFence(app.getPath('appData'), app.getPath('userData'), safeStorage, identity);
+    getCoworkStore().remote.validateDatabaseInstance(identity.databaseId, fence.checkpoint, fence.advance);
+    remoteBridge = new RemoteBridge({
+      store: getCoworkStore().remote, identity, getOwner: getCurrentRemoteOwner, getApiBaseUrl: getServerApiBaseUrl,
+      metadata: { name: os.hostname(), hostName: os.hostname(), instanceLabel: path.basename(app.getPath('userData')),
+        platform: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux', appVersion: app.getVersion() },
+      request: async (owner, pathname, init) => {
+        if (!sameOwner(owner, getCurrentRemoteOwner())) throw new Error('Account changed');
+        return fetchWithAuth(`${getServerApiBaseUrl()}${pathname}`, { ...init, headers: { ...getEnterpriseAccountHeaders(), ...init.headers } });
+      },
+      getDefaultWorkspace: async () => {
+        const candidate = path.resolve(resolveAgentDefaultWorkingDirectory());
+        try {
+          return { ...await prepareDefaultWorkspace(candidate, path.join(os.homedir(), 'lobsterai', 'project')), available: true };
+        } catch {
+          return { path: candidate, name: path.basename(candidate) || os.hostname(), available: false };
+        }
+      },
+      onStateChange: () => remoteSettingsController?.notify(),
+      prepare: (command, owner, workspace) => remoteSessionCommands!.prepare(command, owner, workspace),
+      execute: (entry, stillPermitted) => remoteSessionCommands!.execute(entry, stillPermitted),
+      onAccountChange: (previous, current) => remoteSessionCommands!.accountChanged(previous, current),
+    });
+    remoteBridge.start();
+    return remoteBridge;
+  };
+  const readRemoteState = (): RemoteSettingsState => {
+    const owner = getCurrentRemoteOwner();
+    if (remoteBridge && owner) {
+      const state = remoteBridge.state();
+      if (sameOwner(owner, state.owner)) return state;
+    }
+    const saved = owner ? getCoworkStore().remote.get<{ enabled?: boolean }>(`settings:${owner.userId}:${owner.scopeKey}`) : null;
+    return { enabled: Boolean(owner) && (saved?.enabled ?? true), connected: false, name: os.hostname(), hostName: os.hostname(),
+      owner, workspaces: [], accessRequests: [], error: owner ? t('remoteSecureStorageUnavailable') : undefined };
+  };
+  ipcMain.handle(RemoteIpc.State, () => remoteSettingsController?.state() ?? readRemoteState());
+  ipcMain.handle(RemoteIpc.Configure, async (_event, input: RemoteConfigureRequest) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid remote settings');
+    if (input.enabled !== undefined && typeof input.enabled !== 'boolean') throw new Error('Invalid remote enabled setting');
+    if (input.retry !== undefined && typeof input.retry !== 'boolean') throw new Error('Invalid retry setting');
+    if (!getCurrentRemoteOwner()) throw new Error('Sign in before configuring remote access');
+    if (!remoteSettingsController) throw new Error('Remote settings are not initialized');
+    if (input.keepAwakeEnabled !== undefined) remoteSettingsController.setKeepAwake(input.keepAwakeEnabled);
+    if (input.retry) remoteSettingsController.restoreKeepAwake();
+    if (input.keepAwakeEnabled !== undefined && input.enabled === undefined && input.name === undefined
+      && !input.retry && !input.addWorkspace && !input.removeWorkspaceId) return remoteSettingsController.state();
+    let workspace: { name: string; path: string } | undefined;
+    if (input.addWorkspace) {
+      const selection = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+      if (!selection.canceled && selection.filePaths[0]) workspace = { name: path.basename(selection.filePaths[0]), path: fs.realpathSync(selection.filePaths[0]) };
+    }
+    if (getCurrentRemoteOwner()) {
+      await initializeRemoteBridge().configure({ enabled: input.enabled, name: input.name, workspace,
+        removeWorkspaceId: input.removeWorkspaceId, retry: input.retry });
+    } else if (input.enabled !== undefined || input.name !== undefined || input.addWorkspace || input.removeWorkspaceId) {
+      throw new Error('Sign in before configuring remote access');
+    }
+    remoteSettingsController.notify();
+    return remoteSettingsController.state();
+  });
+  ipcMain.handle(RemoteIpc.Decide, (_event, requestId: string, decision: 'approve' | 'deny') => {
+    if (typeof requestId !== 'string' || !['approve', 'deny'].includes(decision)) throw new Error('Invalid access decision');
+    return initializeRemoteBridge().decide(requestId, decision).then(() => remoteSettingsController?.state() ?? readRemoteState());
+  });
+  const initializeRemoteControl = (): void => {
+    // Store-backed services and listeners must wait for initApp's database initialization.
+    getCoworkStore().remoteCreationOwner = getCurrentRemoteOwner;
+    remoteSessionCommands = new SessionCommandService(getCoworkStore(), getCoworkEngineRouter(), getCurrentRemoteOwner);
+    remoteSessionCommands.configure(submitStart, submitContinue);
+    remoteSettingsController = new RemoteSettingsController({
+      getRemoteState: readRemoteState,
+      getKeepAwakePreference: () => getStore().get<boolean>(PREVENT_SLEEP_STORE_KEY),
+      saveKeepAwakePreference: enabled => getStore().set(PREVENT_SLEEP_STORE_KEY, enabled),
+      applyKeepAwake: setPreventSleepBlockerEnabled,
+      isKeepAwakeActive: () => preventSleepBlockerId !== null && powerSaveBlocker.isStarted(preventSleepBlockerId),
+      publish: state => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(RemoteIpc.Changed, state);
+        }
+      },
+    });
+    remoteSettingsController.restoreKeepAwake();
+    try { initializeRemoteBridge(); } catch { /* Ownership is recorded even while secure remote credentials are unavailable. */ }
+    let previousRemoteOwner = getCurrentRemoteOwner();
+    for (const key of ['auth_tokens', LogReporterStoreKey.AuthUser, 'enterprise_account_context']) {
+      getStore().onDidChange(key, () => {
+        const next = getCurrentRemoteOwner();
+        try {
+          remoteSessionCommands?.accountChanged(previousRemoteOwner, next);
+          if (previousRemoteOwner && !sameOwner(previousRemoteOwner, next)) {
+            remoteCredentialsAllowed = false;
+            remoteAccountTransition = remoteAccountTransition.then(async () => {
+              await getOpenClawEngineManager().stopGateway();
+              fenceCronJobs(getOpenClawEngineManager().getStateDir(), getCoworkStore().remote, getCurrentRemoteOwner());
+              remoteCredentialsAllowed = true;
+            });
+            remoteAccountTransition.catch(() => { /* Fail closed: config/start await this rejected barrier. */ });
+          }
+        } finally {
+          previousRemoteOwner = next;
+          try { remoteBridge?.accountChanged(); }
+          finally { remoteSettingsController?.restoreKeepAwake(); }
+        }
+      });
+    }
+  };
+
 
   type AvailableServerModel = ServerModelMetadataInput & {
     modelId: string;
@@ -6903,6 +7047,8 @@ if (!gotTheLock) {
     reason: AuthSessionChangeReason;
     notifyRenderer: boolean;
   }): void => {
+    remoteSessionCommands?.accountChanged(getCurrentRemoteOwner(), null);
+    remoteBridge?.accountChanged();
     const previousAccountScope = getCurrentMediaAccountScope();
     const previousQuotaGateState = getAuthQuotaGateState();
     authExchangeIntentSequence += 1;
@@ -9045,10 +9191,7 @@ if (!gotTheLock) {
 
 
   // Cowork IPC handlers
-  ipcMain.handle(
-    'cowork:session:start',
-    async (
-      _event,
+  const startCoworkSession = async (
       options: {
         prompt: string;
         cwd?: string;
@@ -9157,7 +9300,9 @@ if (!gotTheLock) {
           );
         }
 
-        const session = coworkStoreInstance.createSession(
+        const execution = currentRemoteExecution();
+        if (execution?.owner && !sameOwner(execution.owner, getCurrentRemoteOwner())) throw new Error('Account changed');
+        const session = (execution?.preparedSessionId ? coworkStoreInstance.getSession(execution.preparedSessionId, 0) : null) || coworkStoreInstance.createSession(
           title,
           taskWorkingDirectory,
           persistedSystemPrompt,
@@ -9165,7 +9310,7 @@ if (!gotTheLock) {
           runtimeSkillIds || [],
           options.agentId || 'main',
           options.modelOverride || '',
-          { thinkingLevel: thinkingLevel || '' },
+          { thinkingLevel: thinkingLevel || '', owner: execution?.owner ?? null },
         );
 
         if (options.modelOverride) {
@@ -9228,10 +9373,11 @@ if (!gotTheLock) {
           browserAnnotations,
           imageAttachmentPreviews,
         });
+        if (!execution?.runId) coworkStoreInstance.remote.beginRun(session.id);
         coworkStoreInstance.addMessage(session.id, {
           type: 'user',
           content: prompt,
-          metadata: messageMetadata,
+          metadata: { ...messageMetadata, remoteRunId: coworkStoreInstance.remote.run(session.id)?.runId, remoteCommandId: execution?.commandId },
         });
 
         coworkStoreInstance.updateSession(session.id, { status: 'running' });
@@ -9242,6 +9388,8 @@ if (!gotTheLock) {
           `Session ${session.id}.`,
           `Elapsed ${Date.now() - ipcStartedAtMs}ms.`,
         );
+        assertRemoteExecutionPermit();
+        coworkStoreInstance.remote.markRunDispatched(session.id);
         runtime
           .startSession(session.id, prompt, {
             skipInitialUserMessage: true,
@@ -9294,13 +9442,9 @@ if (!gotTheLock) {
           error: error instanceof Error ? error.message : 'Failed to start session',
         };
       }
-    },
-  );
+    };
 
-  ipcMain.handle(
-    'cowork:session:continue',
-    async (
-      _event,
+  const continueCoworkSession = async (
       options: {
         sessionId: string;
         prompt: string;
@@ -9355,6 +9499,10 @@ if (!gotTheLock) {
         const runtime = getCoworkEngineRouter();
         const coworkStoreInstance = getCoworkStore();
         const existingSession = coworkStoreInstance.getSession(options.sessionId);
+        const execution = currentRemoteExecution();
+        coworkStoreInstance.remote.assertActor(options.sessionId, execution?.owner ?? null);
+        if (execution?.owner && !sameOwner(execution.owner, getCurrentRemoteOwner())) throw new Error('Account changed');
+        if (!execution?.runId) coworkStoreInstance.remote.beginRun(options.sessionId);
         const config = coworkStoreInstance.getConfig();
         const hasLegacyPersistedPlanMode = containsPlanModePrompt(existingSession?.systemPrompt);
         const continuationSystemPrompt = mergeCoworkSystemPrompt(
@@ -9433,6 +9581,8 @@ if (!gotTheLock) {
           `Session ${options.sessionId}.`,
           `Elapsed ${Date.now() - ipcStartedAtMs}ms.`,
         );
+        assertRemoteExecutionPermit();
+        coworkStoreInstance.remote.markRunDispatched(options.sessionId);
         runtime
           .continueSession(options.sessionId, options.prompt, {
             systemPrompt: continuationSystemPrompt,
@@ -9478,8 +9628,12 @@ if (!gotTheLock) {
           error: error instanceof Error ? error.message : 'Failed to continue session',
         };
       }
-    },
-  );
+    };
+
+  const submitStart = (options: Parameters<typeof startCoworkSession>[0]) => remoteSessionCommands!.submit(options, true, startCoworkSession);
+  const submitContinue = (options: Parameters<typeof continueCoworkSession>[0]) => remoteSessionCommands!.submit(options, false, continueCoworkSession);
+  ipcMain.handle('cowork:session:start', (_event, options) => submitStart(options));
+  ipcMain.handle('cowork:session:continue', (_event, options) => submitContinue(options));
 
   ipcMain.handle(CoworkIpcChannel.SubmitBtw, async (
     _event,
@@ -9773,6 +9927,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(CoworkIpcChannel.StopSession, async (_event, sessionId: string) => {
     try {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       const runtime = getCoworkEngineRouter();
       runtime.stopSession(sessionId);
       return { success: true };
@@ -9833,6 +9988,7 @@ if (!gotTheLock) {
           const coworkStoreInstance = getCoworkStore();
           const existingSession = coworkStoreInstance.getSession(existingSessionId);
           if (existingSession) {
+            coworkStoreInstance.remote.assertActor(existingSessionId, getCurrentRemoteOwner());
             if (existingSession.title !== title) {
               coworkStoreInstance.updateSession(existingSessionId, { title }, { touchUpdatedAt: false });
             }
@@ -9858,6 +10014,7 @@ if (!gotTheLock) {
           [],
           'main',
           '',
+          { owner: getCurrentRemoteOwner() },
         );
         coworkStoreInstance.addMessage(session.id, {
           type: 'assistant',
@@ -9936,6 +10093,7 @@ if (!gotTheLock) {
   ipcMain.handle(CoworkIpcChannel.DeleteSessions, async (_event, sessionIds: string[]) => {
     try {
       const runtime = getCoworkEngineRouter();
+      sessionIds.forEach(sessionId => getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner()));
       sessionIds.forEach(sessionId => {
         runtime.stopSession(sessionId);
       });
@@ -9970,6 +10128,7 @@ if (!gotTheLock) {
     async (_event, options: { sessionId: string; pinned: boolean }) => {
       try {
         const coworkStoreInstance = getCoworkStore();
+        coworkStoreInstance.remote.assertActor(options.sessionId, getCurrentRemoteOwner());
         const pinOrder = coworkStoreInstance.setSessionPinned(options.sessionId, options.pinned);
         return { success: true, pinOrder };
       } catch (error) {
@@ -9990,6 +10149,7 @@ if (!gotTheLock) {
           return { success: false, error: 'Title is required' };
         }
         const coworkStoreInstance = getCoworkStore();
+        coworkStoreInstance.remote.assertActor(options.sessionId, getCurrentRemoteOwner());
         coworkStoreInstance.updateSession(options.sessionId, { title }, { touchUpdatedAt: false });
         return { success: true };
       } catch (error) {
@@ -10019,6 +10179,7 @@ if (!gotTheLock) {
 
         const runtime = getCoworkEngineRouter();
         const coworkStoreInstance = getCoworkStore();
+        coworkStoreInstance.remote.assertActor(sessionId, getCurrentRemoteOwner());
         const sourceSession = coworkStoreInstance.getSession(sessionId);
         if (!sourceSession) {
           console.warn('[CoworkFork] fork request referenced a missing session');
@@ -11074,6 +11235,12 @@ if (!gotTheLock) {
     }),
   });
   const scheduledTaskHandlerDeps = {
+    captureRemoteOwner: getCurrentRemoteOwner,
+    recordRemoteTaskOwner: (jobId: string, owner: RemoteOwner | null) => getCoworkStore().remote.bindSource(`cron:${jobId}`, owner),
+    assertRemoteTaskOwner: (jobId: string) => {
+      const owner = getCoworkStore().remote.sourceOwner(`cron:${jobId}`);
+      if (owner && !sameOwner(owner, getCurrentRemoteOwner())) throw new Error('Task belongs to another account');
+    },
     getCronJobService,
     getIMGatewayManager: () => ({
       getIMStore: () => ({
@@ -11428,6 +11595,7 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('im:popo:instance:add', async (_event, name: string) => {
+    const instanceOwner = getCurrentRemoteOwner();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_POPO_CONFIG: defaults } = await import('./im/types');
@@ -11437,6 +11605,7 @@ if (!gotTheLock) {
         instanceName: name || 'POPO Bot',
       };
       getIMGatewayManager().getIMStore().setPopoInstanceConfig(instanceId, instance);
+      getCoworkStore().remote.bindSource(`im:popo:${instanceId}`, instanceOwner);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -11642,6 +11811,7 @@ if (!gotTheLock) {
 
   // DingTalk Multi-Instance handlers
   ipcMain.handle('im:dingtalk:instance:add', async (_event, name: string) => {
+    const instanceOwner = getCurrentRemoteOwner();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_DINGTALK_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -11651,6 +11821,7 @@ if (!gotTheLock) {
         instanceName: name || 'DingTalk Bot',
       };
       getIMGatewayManager().getIMStore().setDingTalkInstanceConfig(instanceId, instance);
+      getCoworkStore().remote.bindSource(`im:dingtalk:${instanceId}`, instanceOwner);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -11700,6 +11871,7 @@ if (!gotTheLock) {
 
   // NIM Multi-Instance handlers
   ipcMain.handle('im:nim:instance:add', async (_event, name: string) => {
+    const instanceOwner = getCurrentRemoteOwner();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_NIM_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -11709,6 +11881,7 @@ if (!gotTheLock) {
         instanceName: name || 'NIM Bot',
       };
       getIMGatewayManager().getIMStore().setNimInstanceConfig(instanceId, instance);
+      getCoworkStore().remote.bindSource(`im:nim:${instanceId}`, instanceOwner);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -11758,6 +11931,7 @@ if (!gotTheLock) {
 
   // QQ Multi-Instance handlers
   ipcMain.handle('im:qq:instance:add', async (_event, name: string) => {
+    const instanceOwner = getCurrentRemoteOwner();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_QQ_CONFIG: defaults } = await import('./im/types');
@@ -11767,6 +11941,7 @@ if (!gotTheLock) {
         instanceName: name || 'QQ Bot',
       };
       getIMGatewayManager().getIMStore().setQQInstanceConfig(instanceId, instance);
+      getCoworkStore().remote.bindSource(`im:qq:${instanceId}`, instanceOwner);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -11816,6 +11991,7 @@ if (!gotTheLock) {
 
   // Feishu Multi-Instance handlers
   ipcMain.handle('im:feishu:instance:add', async (_event, name: string) => {
+    const instanceOwner = getCurrentRemoteOwner();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_FEISHU_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -11825,6 +12001,7 @@ if (!gotTheLock) {
         instanceName: name || 'Feishu Bot',
       };
       getIMGatewayManager().getIMStore().setFeishuInstanceConfig(instanceId, instance);
+      getCoworkStore().remote.bindSource(`im:feishu:${instanceId}`, instanceOwner);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -11874,6 +12051,7 @@ if (!gotTheLock) {
 
   // Email Multi-Instance handlers
   ipcMain.handle('im:email:instance:add', async (_event, name: string) => {
+    const instanceOwner = getCurrentRemoteOwner();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_EMAIL_INSTANCE_CONFIG: defaults } = await import('./im/types');
@@ -11885,6 +12063,7 @@ if (!gotTheLock) {
         agentId: 'main',
       };
       getIMGatewayManager().getIMStore().setEmailInstanceConfig(instanceId, instance);
+      getCoworkStore().remote.bindSource(`im:email:${instanceId}`, instanceOwner);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -11896,6 +12075,7 @@ if (!gotTheLock) {
 
   // WeCom Multi-Instance handlers
   ipcMain.handle('im:wecom:instance:add', async (_event, name: string) => {
+    const instanceOwner = getCurrentRemoteOwner();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_WECOM_CONFIG: defaults } = await import('./im/types');
@@ -11905,6 +12085,7 @@ if (!gotTheLock) {
         instanceName: name || 'WeCom Bot',
       };
       getIMGatewayManager().getIMStore().setWecomInstanceConfig(instanceId, instance);
+      getCoworkStore().remote.bindSource(`im:wecom:${instanceId}`, instanceOwner);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -11992,6 +12173,7 @@ if (!gotTheLock) {
 
   // Telegram Multi-Instance handlers
   ipcMain.handle('im:telegram:instance:add', async (_event, name: string) => {
+    const instanceOwner = getCurrentRemoteOwner();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_TELEGRAM_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -12001,6 +12183,7 @@ if (!gotTheLock) {
         instanceName: name || 'Telegram Bot',
       };
       getIMGatewayManager().getIMStore().setTelegramInstanceConfig(instanceId, instance);
+      getCoworkStore().remote.bindSource(`im:telegram:${instanceId}`, instanceOwner);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -12050,6 +12233,7 @@ if (!gotTheLock) {
 
   // Discord Multi-Instance handlers
   ipcMain.handle('im:discord:instance:add', async (_event, name: string) => {
+    const instanceOwner = getCurrentRemoteOwner();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_DISCORD_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -12059,6 +12243,7 @@ if (!gotTheLock) {
         instanceName: name || 'Discord Bot',
       };
       getIMGatewayManager().getIMStore().setDiscordInstanceConfig(instanceId, instance);
+      getCoworkStore().remote.bindSource(`im:discord:${instanceId}`, instanceOwner);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -14067,6 +14252,8 @@ if (!gotTheLock) {
     const cleanupStartedAt = Date.now();
     console.log(`[Main] App cleanup started for ${reason}`);
     currentAppCleanupStep = 'sync-teardown';
+    remoteBridge?.stop();
+    remoteSettingsController?.dispose();
     skillManager?.stopWatching();
     stopMediaPollTimer();
     pendingMediaTasks.clear();
@@ -14320,6 +14507,7 @@ if (!gotTheLock) {
 
     initializeKeyfromAttribution(store);
     refreshEndpointsTestMode(store);
+    initializeRemoteControl();
     sqliteBackupManager = new SqliteBackupManager(app.getPath('userData'));
 
     const startSqliteBackupLoop = async (): Promise<void> => {
@@ -14421,7 +14609,7 @@ if (!gotTheLock) {
     profiler.mark('openClawTokenProxy');
     try {
       await startOpenClawTokenProxy({
-        getAuthTokens,
+        getAuthTokens: () => remoteCredentialsAllowed ? getAuthTokens() : null,
         refreshToken: reason => authSessionManager.refresh(reason),
         getServerBaseUrl: getServerApiBaseUrl,
         getAccountContextHeaders: getEnterpriseAccountHeaders,
@@ -14750,10 +14938,18 @@ if (!gotTheLock) {
 
     // Reconnect OpenClaw gateway WS after system wake from sleep/suspend
     powerMonitor.on('resume', () => {
+      remoteSettingsController?.restoreKeepAwake();
+      remoteBridge?.start();
       if (openClawRuntimeAdapter) {
         openClawRuntimeAdapter.onSystemResume();
       }
     });
+
+    powerMonitor.on('suspend', () => remoteBridge?.stop());
+    if (process.platform === 'darwin' || process.platform === 'win32') {
+      powerMonitor.on('lock-screen', () => remoteSettingsController?.setScreenLocked(true));
+      powerMonitor.on('unlock-screen', () => remoteSettingsController?.setScreenLocked(false));
+    }
 
     // macOS posts this for logout, restart, and shutdown right before it asks
     // the app to terminate. The OS already decided the quit, so do not hold
@@ -14781,16 +14977,6 @@ if (!gotTheLock) {
       } catch (error) {
         getStore().set('auto_launch_enabled', false);
         console.error('[AutoLaunch] default enable failed:', error);
-      }
-    }
-
-    // Restore prevent-sleep setting
-    const preventSleepEnabled = getStore().get<boolean>('prevent_sleep_enabled');
-    if (preventSleepEnabled) {
-      try {
-        setPreventSleepBlockerEnabled(true);
-      } catch (err) {
-        console.error('[Main] Failed to start prevent-sleep blocker:', err);
       }
     }
 

@@ -37,6 +37,16 @@ export class OpenClawApprovalController {
 
   constructor(private readonly options: OpenClawApprovalControllerOptions) {}
 
+  async respondToPermissionConfirmed(requestId: string, result: PermissionResult): Promise<void> {
+    const pending = this.pendingApprovals.get(requestId);
+    const client = this.options.getGatewayClient();
+    if (!pending || !client) throw new Error('Approval is no longer available');
+    const decision = resolveApprovalDecision(pending, result);
+    await client.request(getApprovalResolveMethod(pending), { id: requestId, decision });
+    this.pendingApprovals.delete(requestId);
+    this.options.emitPermissionResolved(pending.sessionId, requestId);
+  }
+
   respondToPermission(requestId: string, result: PermissionResult): void {
     const pending = this.pendingApprovals.get(requestId);
     if (!pending) {

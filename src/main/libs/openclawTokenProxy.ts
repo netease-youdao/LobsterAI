@@ -219,6 +219,10 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     const upstreamPath = `/api/proxy${req.url || '/'}`;
     const upstreamUrl = `${serverBaseUrl}${upstreamPath}`;
 
+    if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter) || !tokenGetter?.()) {
+      writeAuthSessionChanged(res);
+      return;
+    }
     const clientVersion = clientVersionGetter?.() ?? '';
     let result = await forwardRequest(
       upstreamUrl,

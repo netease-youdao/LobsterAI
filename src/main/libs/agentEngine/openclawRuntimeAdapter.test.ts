@@ -9441,3 +9441,49 @@ test('getSessionKeysForSession prefers channel keys before managed fallback', ()
     'agent:main:lobsterai:session-1',
   ]);
 });
+
+
+test('remote cancellation waits for matching aborted evidence instead of the chat.abort RPC acknowledgment', async () => {
+  const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
+  const turn = createActiveTurn('remote-stop-session', 'agent:main:remote-stop', 'gateway-run');
+  adapter.activeTurns.set('remote-stop-session', turn as never);
+  adapter.gatewayClient = { start: () => {}, stop: () => {}, request: vi.fn(async () => ({ aborted: true })) };
+  adapter.isRecentlyClosedRunId = () => true;
+  const termination = vi.fn(); adapter.on('runTermination', termination);
+  let settled = false;
+  const pending = adapter.cancelSessionConfirmed('remote-stop-session').then(result => { settled = true; return result; });
+  await Promise.resolve(); expect(settled).toBe(false);
+  adapter.handleChatEvent({ state: 'aborted', runId: 'unrelated-run' }); expect(settled).toBe(false);
+  adapter.handleChatEvent({ state: 'aborted', runId: 'gateway-run' });
+  await expect(pending).resolves.toBe(true);
+  expect(termination).toHaveBeenCalledWith('remote-stop-session', 'gateway-run', 'cancelled');
+});
+
+test('late aborted evidence after legacy local stop is emitted before closed-run filtering', () => {
+  const adapter = new OpenClawRuntimeAdapter({ updateSession: vi.fn() } as never, {} as never);
+  adapter.activeTurns.set('local-stop-session', createActiveTurn('local-stop-session', 'agent:main:local-stop', 'old-run') as never);
+  adapter.gatewayClient = { start: () => {}, stop: () => {}, request: vi.fn(async () => ({})) };
+  adapter.finalizeStoppedStreamingMessages = vi.fn(); adapter.cleanupSessionTurn = vi.fn(); adapter.resolveTurn = vi.fn();
+  adapter.isRecentlyClosedRunId = () => true;
+  const termination = vi.fn(); adapter.on('runTermination', termination);
+  adapter.stopSession('local-stop-session'); adapter.activeTurns.clear();
+  expect(termination).not.toHaveBeenCalled();
+  adapter.handleChatEvent({ state: 'aborted', runId: 'old-run' });
+  expect(termination).toHaveBeenCalledWith('local-stop-session', 'old-run', 'cancelled');
+});
+
+
+test('persists gateway bindings only for a current active remote run after closed-run filtering', () => {
+  const remote = { run: vi.fn(() => ({ runId: 'remote-current' })), put: vi.fn() };
+  const adapter = new OpenClawRuntimeAdapter({ remote } as never, {} as never);
+  adapter.flushPendingAgentEvents = vi.fn();
+  adapter.activeTurns.set('s', { ...createActiveTurn('s', 'key', 'current'), remoteRunId: 'remote-current' } as never);
+  adapter.isRecentlyClosedRunId = vi.fn(() => true);
+  adapter.bindRunIdToTurn('s', 'closed-old'); expect(remote.put).not.toHaveBeenCalled();
+  adapter.isRecentlyClosedRunId = () => false;
+  adapter.bindRunIdToTurn('s', 'current');
+  expect(remote.put).toHaveBeenCalledWith('gatewayRun:s', { runId: 'current', remoteRunId: 'remote-current' });
+  remote.put.mockClear(); remote.run.mockReturnValue({ runId: 'reserved-next' });
+  adapter.bindRunIdToTurn('s', 'late-alias'); expect(remote.put).not.toHaveBeenCalled();
+  adapter.activeTurns.clear(); adapter.bindRunIdToTurn('s', 'no-turn'); expect(remote.put).not.toHaveBeenCalled();
+});

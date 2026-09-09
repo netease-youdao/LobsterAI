@@ -16,6 +16,10 @@ export type LanguageType = 'zh' | 'en';
 
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    remoteExecutionFailed: '任务执行异常，请在电脑查看详情。',
+    remotePermissionRequired: '需要操作确认',
+    remoteReviewOnDesktop: '请在电脑端查看并确认此操作。',
+    remoteSecureStorageUnavailable: '系统安全存储不可用，暂时无法启用手机远程控制。',
     // DeepSeek Harness (experimental)
     dshWorkbenchTitle: 'DeepSeek Harness 工作台（实验）',
     dshPlanProviderName: '套餐',
@@ -382,6 +386,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    remoteExecutionFailed: 'Task execution failed; see the desktop for details.',
+    remotePermissionRequired: 'Permission required',
+    remoteReviewOnDesktop: 'Review this operation on the desktop.',
+    remoteSecureStorageUnavailable: 'Secure system storage is unavailable. Remote control cannot be enabled.',
     // DeepSeek Harness (experimental)
     dshWorkbenchTitle: 'DeepSeek Harness Workbench (Experimental)',
     dshPlanProviderName: 'Plan',

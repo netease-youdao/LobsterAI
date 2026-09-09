@@ -50,6 +50,7 @@ import {
   type ModelThinkingLevel,
   parseModelThinkingLevel,
 } from '../shared/providers/modelThinking';
+import type { RemoteOwner } from '../shared/remote/constants';
 import {
   ContinuityCapsuleSource,
   type CoworkContinuityCapsule,
@@ -59,6 +60,7 @@ import {
   type SessionProjectionChanges,
   SessionProjectionNotifications,
 } from './libs/sessionProjectionNotifications';
+import { RemoteStore } from './remote/remoteStore';
 
 
 // Default working directory for new users
@@ -778,19 +780,26 @@ interface CoworkSessionSearchOptions {
 }
 
 export interface CreateCoworkSessionOptions {
+  /** Only explicit authenticated creation/bound automation may provide an owner. */
+  owner?: RemoteOwner | null;
+  ownershipSource?: string;
+  id?: string;
   scheduledTaskId?: string | null;
   thinkingLevel?: ModelThinkingLevel | '';
 }
 
 export class CoworkStore {
   private db: Database.Database;
+  readonly remote: RemoteStore;
+  remoteCreationOwner: () => RemoteOwner | null = () => null;
   private readonly sessionProjectionNotifications: SessionProjectionNotifications;
   private readonly knownIMPlatforms = new Set<string>(PlatformRegistry.platforms);
 
   constructor(db: Database.Database) {
     this.db = db;
+    this.remote = new RemoteStore(db);
     this.sessionProjectionNotifications = new SessionProjectionNotifications({
-      runTransaction: operation => this.db.transaction(operation)(),
+      runTransaction: operation => this.remote.transaction(operation),
       isInTransaction: () => this.db.inTransaction,
       readProjection: sessionId => this.getOne<SessionProjection>(
         `SELECT title, agent_id AS agentId,
@@ -955,7 +964,7 @@ export class CoworkStore {
     modelOverride: string = '',
     options: CreateCoworkSessionOptions = {},
   ): CoworkSession {
-    const id = uuidv4();
+    const id = options.id || uuidv4();
     const now = Date.now();
     const scheduledTaskId = options.scheduledTaskId?.trim() || null;
     const thinkingLevel = options.thinkingLevel ?? '';
@@ -982,6 +991,7 @@ export class CoworkStore {
           now,
           now,
         );
+      this.remote.assignNew(id, options.owner ?? null, options.ownershipSource || 'local_create');
     });
 
     return {
@@ -1273,6 +1283,7 @@ export class CoworkStore {
     );
 
     this.writeSessionProjections([id], () => {
+      this.remote.inheritNew(id, options.sourceSessionId);
       insertSession.run(
         id,
         title,
@@ -1616,6 +1627,7 @@ export class CoworkStore {
   }
 
   setSessionPinned(id: string, pinned: boolean): number | null {
+    return this.remote.transaction(() => {
     if (!pinned) {
       this.db.prepare('UPDATE cowork_sessions SET pinned = 0, pin_order = NULL WHERE id = ?').run(id);
       return null;
@@ -1643,6 +1655,7 @@ export class CoworkStore {
       .prepare('UPDATE cowork_sessions SET pinned = 1, pin_order = ? WHERE id = ?')
       .run(pinOrder, id);
     return pinOrder;
+    });
   }
 
   countSessions(agentId?: string): number {
@@ -2191,6 +2204,9 @@ export class CoworkStore {
   addMessage(sessionId: string, message: Omit<CoworkMessage, 'id' | 'timestamp'>, timestamp?: number): CoworkMessage {
     const id = uuidv4();
     const now = timestamp ?? Date.now();
+    const run = this.remote.run(sessionId);
+    if (run) message = { ...message, metadata: { ...message.metadata, remoteRunId: run.runId,
+      remoteCommandId: message.type === 'user' ? this.remote.get<string>(`runCommand:${sessionId}`) : null } };
 
     const seqRow = this.db
       .prepare(
@@ -2302,10 +2318,12 @@ export class CoworkStore {
    * Used by reconciliation to remove duplicate or spurious messages.
    */
   deleteMessage(sessionId: string, messageId: string): boolean {
+    return this.remote.transaction(() => {
     const result = this.db
       .prepare('DELETE FROM cowork_messages WHERE id = ? AND session_id = ?')
       .run(messageId, sessionId);
     return result.changes > 0;
+    });
   }
 
   /**
@@ -2455,6 +2473,7 @@ export class CoworkStore {
     messageId: string,
     updates: { content?: string; metadata?: CoworkMessageMetadata },
   ): void {
+    return this.remote.transaction(() => {
     const setClauses: string[] = [];
     const values: (string | number | null)[] = [];
 
@@ -2463,8 +2482,11 @@ export class CoworkStore {
       values.push(updates.content);
     }
     if (updates.metadata !== undefined) {
+      const original = this.db.prepare('SELECT metadata FROM cowork_messages WHERE id=? AND session_id=?').get(messageId, sessionId) as { metadata?: string } | undefined;
+      let attribution: Record<string, unknown> = {};
+      try { const metadata = JSON.parse(original?.metadata || '{}'); attribution = { remoteRunId: metadata.remoteRunId, remoteCommandId: metadata.remoteCommandId }; } catch { /* Keep malformed legacy attribution unowned. */ }
       setClauses.push('metadata = ?');
-      values.push(updates.metadata ? JSON.stringify(updates.metadata) : null);
+      values.push(JSON.stringify({ ...updates.metadata, ...attribution }));
     }
 
     if (setClauses.length === 0) return;
@@ -2482,6 +2504,7 @@ export class CoworkStore {
     `,
       )
       .run(...values);
+    });
   }
 
   // Config operations
@@ -3551,6 +3574,7 @@ export class CoworkStore {
     const status = options.status ?? 'running';
 
     this.writeSessionProjections([options.id], () => {
+      if (!existing) this.remote.inheritNew(options.id, options.parentSessionId);
       if (existing) {
         this.db
           .prepare(

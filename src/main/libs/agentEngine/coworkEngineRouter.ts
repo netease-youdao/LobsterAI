@@ -22,6 +22,7 @@ import { ENGINE_SWITCHED_CODE } from './types';
 
 type RouterDeps = {
   getCurrentEngine: () => CoworkAgentEngine;
+  assertSessionAccess?: (sessionId: string) => void;
   openclawRuntime: CoworkRuntime;
 };
 
@@ -32,9 +33,11 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   private readonly requestEngine = new Map<string, CoworkAgentEngine>();
   private readonly requestSession = new Map<string, string>();
   private currentEngine: CoworkAgentEngine;
+  private readonly assertSessionAccess: (sessionId: string) => void;
 
   constructor(deps: RouterDeps) {
     super();
+    this.assertSessionAccess = deps.assertSessionAccess || (() => undefined);
     this.getCurrentEngine = deps.getCurrentEngine;
     this.runtime = deps.openclawRuntime;
     this.currentEngine = this.safeResolveEngine();
@@ -57,6 +60,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   async startSession(sessionId: string, prompt: string, options: CoworkStartOptions = {}): Promise<void> {
+    this.assertSessionAccess(sessionId);
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
     try {
@@ -69,6 +73,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   async continueSession(sessionId: string, prompt: string, options: CoworkContinueOptions = {}): Promise<void> {
+    this.assertSessionAccess(sessionId);
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
     try {
@@ -81,6 +86,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   async submitSteer(sessionId: string, text: string, clientSteerId: string): Promise<CoworkSteerResponse> {
+    this.assertSessionAccess(sessionId);
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
     if (!this.runtime.submitSteer) {
@@ -90,6 +96,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   async submitBtw(sessionId: string, question: string, runId: string): Promise<CoworkBtwSubmitResponse> {
+    this.assertSessionAccess(sessionId);
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
     if (!this.runtime.submitBtw) {
@@ -99,6 +106,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   async abortBtw(sessionId: string, runId: string): Promise<CoworkBtwAbortResponse> {
+    this.assertSessionAccess(sessionId);
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
     if (!this.runtime.abortBtw) {
@@ -108,6 +116,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   async runGoalCommand(sessionId: string, command: string): Promise<CoworkGoal | null> {
+    this.assertSessionAccess(sessionId);
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
     if (!this.runtime.runGoalCommand) {
@@ -117,6 +126,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   async patchSession(sessionId: string, patch: OpenClawSessionPatch): Promise<CoworkSessionPatchResult | void> {
+    this.assertSessionAccess(sessionId);
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
     if (!this.runtime.patchSession) {
@@ -133,6 +143,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   async compactContext(sessionId: string): Promise<{ compacted: boolean; reason?: string; usage?: CoworkContextUsage | null }> {
+    this.assertSessionAccess(sessionId);
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
     if (!this.runtime.compactContext) {
@@ -146,6 +157,19 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       return null;
     }
     return this.runtime.getForkCompactionSummary(sessionId, beforeCreatedAt);
+  }
+
+  async cancelSessionConfirmed(sessionId: string): Promise<boolean> {
+    this.assertSessionAccess(sessionId);
+    if (!this.runtime.cancelSessionConfirmed) return false;
+    return this.runtime.cancelSessionConfirmed(sessionId);
+  }
+
+  async respondToPermissionConfirmed(requestId: string, result: PermissionResult): Promise<void> {
+    const sessionId = this.requestSession.get(requestId);
+    if (sessionId) this.assertSessionAccess(sessionId);
+    if (!this.runtime.respondToPermissionConfirmed) throw new Error('Confirmed approval unavailable');
+    await this.runtime.respondToPermissionConfirmed(requestId, result);
   }
 
   stopSession(sessionId: string): void {
@@ -162,6 +186,8 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   respondToPermission(requestId: string, result: PermissionResult): void {
+    const sessionId = this.requestSession.get(requestId);
+    if (sessionId) this.assertSessionAccess(sessionId);
     const engine = this.requestEngine.get(requestId);
     if (engine) {
       this.runtime.respondToPermission(requestId, result);
@@ -274,6 +300,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       this.emit('error', sessionId, error);
     });
 
+    runtime.on('runTermination', (sessionId, gatewayRunId, status) => this.emit('runTermination', sessionId, gatewayRunId, status));
     runtime.on('sessionStopped', (sessionId) => {
       this.emit('sessionStopped', sessionId);
     });

@@ -98,6 +98,7 @@ import { McpIpcChannel } from '../shared/mcp/constants';
 import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
+import { type RemoteConfigureRequest, RemoteIpc, type RemoteSettingsState } from '../shared/remote/constants';
 import {
   type ShareDeploymentAnalyzeProjectInput,
   type ShareDeploymentCreateNodeInput,
@@ -133,6 +134,16 @@ import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
+  remote: {
+    state: () => ipcRenderer.invoke(RemoteIpc.State),
+    onChanged: (listener: (state: RemoteSettingsState) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: RemoteSettingsState) => listener(state);
+      ipcRenderer.on(RemoteIpc.Changed, handler);
+      return () => ipcRenderer.removeListener(RemoteIpc.Changed, handler);
+    },
+    configure: (input: RemoteConfigureRequest) => ipcRenderer.invoke(RemoteIpc.Configure, input),
+    decide: (requestId: string, decision: 'approve' | 'deny') => ipcRenderer.invoke(RemoteIpc.Decide, requestId, decision),
+  },
   platform: process.platform,
   arch: process.arch,
   store: {

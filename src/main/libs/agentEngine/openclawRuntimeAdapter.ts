@@ -681,6 +681,7 @@ const OpenClawHistoryRole = {
 
 type ActiveTurn = {
   sessionId: string;
+  remoteRunId?: string;
   sessionKey: string;
   runId: string;
   model: string;
@@ -5142,9 +5143,39 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       : {};
   }
 
+  private readonly stoppedRunEvidence = new Map<string, { sessionId: string; at: number }>();
+  private readonly confirmedRemoteStops = new Map<string, { runId: string; resolve: (confirmed: boolean) => void }>();
+
+  async cancelSessionConfirmed(sessionId: string): Promise<boolean> {
+    const turn = this.activeTurns.get(sessionId);
+    const client = this.gatewayClient;
+    if (!turn || !client) return false;
+    const runId = turn.runId;
+    this.stoppedRunEvidence.set(runId, { sessionId, at: Date.now() });
+    turn.stopRequested = true;
+    // Keep ActiveTurn until a matching terminal gateway event arrives.
+    return new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.confirmedRemoteStops.delete(sessionId);
+        resolve(false);
+      }, 15000);
+      this.confirmedRemoteStops.set(sessionId, { runId, resolve: confirmed => {
+        clearTimeout(timeout); this.confirmedRemoteStops.delete(sessionId); resolve(confirmed);
+      } });
+      void client.request('chat.abort', { sessionKey: turn.sessionKey, runId }).catch(() => {
+        this.confirmedRemoteStops.get(sessionId)?.resolve(false);
+      });
+    });
+  }
+
+  async respondToPermissionConfirmed(requestId: string, result: PermissionResult): Promise<void> {
+    await this.approvalController.respondToPermissionConfirmed(requestId, result);
+  }
+
   stopSession(sessionId: string): void {
     const turn = this.activeTurns.get(sessionId);
     if (turn) {
+      this.stoppedRunEvidence.set(turn.runId, { sessionId, at: Date.now() });
       turn.stopRequested = true;
       this.manuallyStoppedSessions.add(sessionId);
       this.finalizeStoppedStreamingMessages(sessionId, turn);
@@ -5636,6 +5667,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     });
     this.activeTurns.set(sessionId, {
       sessionId,
+      remoteRunId: this.store.remote?.run(sessionId)?.runId,
       sessionKey,
       runId,
       model: currentModel,
@@ -5669,6 +5701,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       bufferedChatPayloads: [],
       bufferedAgentPayloads: [],
     });
+    this.bindRunIdToTurn(sessionId, runId);
     this.sessionIdByRunId.set(runId, sessionId);
 
     // Start client-side timeout watchdog.
@@ -8747,6 +8780,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const state = chatPayload.state;
     if (!state) return;
     const runId = typeof chatPayload.runId === 'string' ? chatPayload.runId.trim() : '';
+    const stopped = this.stoppedRunEvidence.get(runId);
+    if (state === 'aborted' && stopped) {
+      this.stoppedRunEvidence.delete(runId);
+      this.emit('runTermination', stopped.sessionId, runId, 'cancelled');
+      const pending = this.confirmedRemoteStops.get(stopped.sessionId);
+      if (pending?.runId === runId) pending.resolve(true);
+    }
+    for (const [id, evidence] of this.stoppedRunEvidence) if (Date.now() - evidence.at > 15 * 60000) this.stoppedRunEvidence.delete(id);
+
     logThinkingDiagnostic(
       'chat-event',
       `seq=${seq ?? '-'}`,
@@ -8874,6 +8916,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
 
     if (state === 'aborted') {
+      const pendingStop = this.confirmedRemoteStops.get(sessionId);
+      if (pendingStop?.runId === turn.runId) pendingStop.resolve(true);
       const elapsedSec = ((Date.now() - turn.startedAtMs) / 1000).toFixed(1);
       console.warn(
         `[AbortDiag] chat aborted event received`,
@@ -11868,6 +11912,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
     this.store.updateSession(sessionId, { status: 'running' });
     this.emitSessionStatus(sessionId, 'running');
+    activeTurn.remoteRunId = this.store.remote?.run(sessionId)?.runId;
+    this.bindRunIdToTurn(sessionId, turnRunId);
     this.startTurnTimeoutWatchdog(sessionId);
 
     // For channel sessions, prefetch user messages before streaming starts
@@ -12061,6 +12107,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
     const turn = this.activeTurns.get(sessionId);
     if (!turn) return;
+    if (turn.remoteRunId && turn.remoteRunId === this.store.remote?.run(sessionId)?.runId) {
+      this.store.remote.put(`gatewayRun:${sessionId}`, { runId: normalizedRunId, remoteRunId: turn.remoteRunId });
+    }
     turn.knownRunIds.add(normalizedRunId);
     this.sessionIdByRunId.set(normalizedRunId, sessionId);
     this.flushPendingAgentEvents(sessionId, normalizedRunId);
