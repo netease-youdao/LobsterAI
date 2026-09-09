@@ -810,6 +810,26 @@ const v20260801StrongPatchValidators = {
       snippets: ['expect(promptCall?.runtimeCwd).toBe(taskRepo)'],
     },
   ],
+  'openclaw-omit-default-model-from-system-prompt.patch': [
+    {
+      file: 'src/agents/system-prompt.ts',
+      snippets: ['runtimeInfo?.model ?'],
+      forbiddenSnippets: ['default_model='],
+    },
+    {
+      file: 'src/auto-reply/reply/session-reset-prompt.ts',
+      snippets: ['Execute your Session Startup sequence now'],
+      forbiddenSnippets: ['default_model'],
+    },
+    {
+      file: 'src/agents/system-prompt-default-model.test.ts',
+      snippets: [
+        'provider requests stable when another session changes the default model',
+        'expect(payload).toEqual(originalPayload)',
+        'still reports a change to the actual running model',
+      ],
+    },
+  ],
 };
 
 const strongPatchValidators = openclawVersion === 'v2026.8.1'
