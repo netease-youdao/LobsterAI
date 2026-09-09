@@ -322,6 +322,69 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(sync.sync('repeat-roster')).toMatchObject({ ok: true, changed: false });
   });
 
+  test.each([undefined, 'agent', 'global'])(
+    'keeps model selection session-scoped when replacing legacy scope %s and changing agent defaults',
+    async (legacyScope) => {
+      const { OPENCLAW_MODEL_SELECTION_SCOPE } = await import('./openclawConfigSync');
+      const originalModel = 'openai/gpt-test';
+      const nextModel = 'openai/gpt-next';
+      let mainModel = originalModel;
+      mockRuntimeState.enabledProviders = [{
+        providerName: ProviderName.OpenAI,
+        baseURL: 'https://api.openai.com/v1',
+        apiKey: 'sk-test',
+        apiType: 'openai',
+        codingPlanEnabled: false,
+        models: [{ id: 'gpt-test', name: 'GPT Test' }, { id: 'gpt-next', name: 'GPT Next' }],
+      }];
+      const sync = await createSync({
+        getAgents: () => ['main', 'worker'].map(id => ({
+          id, name: id, enabled: true, isDefault: id === 'main',
+          model: id === 'main' ? mainModel : originalModel,
+          workingDirectory: '', description: '', systemPrompt: '', identity: '',
+          icon: '', skillIds: [], source: 'custom', presetId: '', createdAt: 0, updatedAt: 0,
+        })),
+      });
+      const readConfig = () => JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+      expect(sync.sync('first-model-scope')).toMatchObject({ ok: true, changed: true });
+      const initial = readConfig();
+      expect(initial.agents.defaults.modelSelectionScope).toBe(OPENCLAW_MODEL_SELECTION_SCOPE);
+      expect(initial.agents.entries.main.model.primary).toBe(originalModel);
+
+      const legacy = readConfig();
+      legacy.agents.defaults.modelSelectionScope = legacyScope;
+      legacy.agents.entries.main.model.primary = nextModel;
+      fs.writeFileSync(configPath, JSON.stringify(legacy));
+
+      expect(sync.sync('upgrade-model-scope')).toMatchObject({ ok: true, changed: true });
+      const upgraded = readConfig();
+      expect(upgraded.agents.defaults.modelSelectionScope).toBe(OPENCLAW_MODEL_SELECTION_SCOPE);
+      expect(upgraded.agents.entries.main.model.primary).toBe(originalModel);
+      expect(upgraded.agents.entries.worker.model.primary).toBe(originalModel);
+      expect(sync.sync('repeat-model-scope')).toMatchObject({ ok: true, changed: false });
+
+      mainModel = nextModel;
+      expect(sync.sync('explicit-agent-model-change')).toMatchObject({ ok: true, changed: true });
+      const changed = readConfig();
+      expect(changed.agents.defaults.modelSelectionScope).toBe(OPENCLAW_MODEL_SELECTION_SCOPE);
+      expect(changed.agents.entries.main.model.primary).toBe(nextModel);
+      expect(changed.agents.entries.worker.model.primary).toBe(originalModel);
+      expect(changed.agents.defaults.model).toEqual(initial.agents.defaults.model);
+      expect(sync.sync('repeat-agent-model')).toMatchObject({ ok: true, changed: false });
+
+      mockRuntimeState.rawApiConfig.config = {
+        baseURL: 'https://api.openai.com/v1', apiKey: 'sk-test', apiType: 'openai', model: 'gpt-next',
+      };
+      expect(sync.sync('explicit-default-model-change')).toMatchObject({ ok: true, changed: true });
+      const changedDefault = readConfig();
+      expect(changedDefault.agents.defaults.modelSelectionScope).toBe(OPENCLAW_MODEL_SELECTION_SCOPE);
+      expect(changedDefault.agents.defaults.model.primary).toBe(nextModel);
+      expect(changedDefault.agents.entries.worker.model.primary).toBe(originalModel);
+      expect(sync.sync('repeat-default-model')).toMatchObject({ ok: true, changed: false });
+    },
+  );
+
   test('routes unbound channels to main without platform binding settings', async () => {
     const sync = await createSync({
       getQQInstances: () => [{ ...DEFAULT_QQ_CONFIG, enabled: true, appId: '123', instanceId: 'account1', instanceName: 'QA' }],

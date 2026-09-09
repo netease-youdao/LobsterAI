@@ -137,6 +137,7 @@ export function omitPluginIndexManagedKeys(plugins: unknown): Record<string, unk
  */
 export const OPENCLAW_AGENT_TIMEOUT_SECONDS = 3600;
 export const OPENCLAW_LOBSTERAI_MODEL_TIMEOUT_SECONDS = 330;
+export const OPENCLAW_MODEL_SELECTION_SCOPE = 'session';
 export const OPENCLAW_HEARTBEAT_EVERY_ENABLED = '1h';
 export const OPENCLAW_HEARTBEAT_EVERY_DISABLED = '0m';
 const DINGTALK_OPENCLAW_CHANNEL = 'dingtalk-connector';
@@ -2447,6 +2448,8 @@ export class OpenClawConfigSync {
           authInheritance: { agentId: AgentId.Main },
           sessionStore: { agentId: AgentId.Main },
           timeoutSeconds: OPENCLAW_AGENT_TIMEOUT_SECONDS,
+          // Session switches stay local; LobsterAI explicitly syncs agent defaults.
+          modelSelectionScope: OPENCLAW_MODEL_SELECTION_SCOPE,
           model: {
             primary: primaryModel,
           },
