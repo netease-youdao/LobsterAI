@@ -69,7 +69,8 @@
       {
         "id": "discord",
         "npm": "@openclaw/discord",
-        "version": "2026.8.1"
+        "version": "2026.8.1",
+        "runtimeBundled": true
       },
       {
         "id": "wecom-openclaw-plugin",

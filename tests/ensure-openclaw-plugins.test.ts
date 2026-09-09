@@ -12,6 +12,7 @@ const {
   buildPluginInstallEnv,
   copyDirRecursive,
   copyInstalledPluginToCache,
+  copyPreinstalledPluginToRuntime,
   findInstalledPluginDir,
   isGitSpec,
   isLocalPathSpec,
@@ -21,6 +22,58 @@ const {
 } = require('../scripts/ensure-openclaw-plugins.cjs');
 
 describe('ensure-openclaw-plugins', () => {
+  test('ships official Discord in the trusted root and removes the old config-origin copy', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-discord-layout-'));
+    try {
+      const cache = path.join(root, 'cache');
+      const runtime = path.join(root, 'runtime');
+      const declaration = { id: 'discord', npm: '@openclaw/discord', version: '2026.8.1', runtimeBundled: true };
+      fs.mkdirSync(path.join(cache, 'dist'), { recursive: true });
+      fs.writeFileSync(path.join(cache, 'package.json'), JSON.stringify({
+        name: declaration.npm,
+        version: declaration.version,
+        openclaw: { runtimeExtensions: ['./dist/index.js'] },
+      }));
+      fs.writeFileSync(path.join(cache, 'openclaw.plugin.json'), JSON.stringify({ id: declaration.id }));
+      fs.writeFileSync(path.join(cache, 'dist', 'index.js'), 'export default {};');
+      fs.writeFileSync(path.join(cache, 'plugin-install-info.json'), '{}');
+      const oldCopy = path.join(runtime, 'third-party-extensions', declaration.id);
+      fs.mkdirSync(oldCopy, { recursive: true });
+      fs.writeFileSync(path.join(oldCopy, 'stale.js'), '');
+      const otherPlugin = path.join(runtime, 'third-party-extensions', 'other-plugin');
+      fs.mkdirSync(otherPlugin);
+      fs.writeFileSync(path.join(otherPlugin, 'index.js'), 'preserve');
+
+      const installed = copyPreinstalledPluginToRuntime(cache, runtime, declaration);
+      // A repeated cached build must also keep the native bundled layout.
+      copyPreinstalledPluginToRuntime(cache, runtime, declaration);
+
+      expect(installed).toBe(path.join(runtime, 'dist', 'extensions', declaration.id));
+      expect(fs.lstatSync(installed).isSymbolicLink()).toBe(false);
+      expect(fs.readFileSync(path.join(installed, 'dist', 'index.js'), 'utf8')).toBe('export default {};');
+      expect(fs.existsSync(oldCopy)).toBe(false);
+      expect(fs.existsSync(path.join(installed, 'plugin-install-info.json'))).toBe(false);
+      expect(fs.readFileSync(path.join(otherPlugin, 'index.js'), 'utf8')).toBe('preserve');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('keeps ordinary preinstalled plugins outside the trusted bundled root', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-plugin-layout-'));
+    try {
+      const cache = path.join(root, 'cache');
+      fs.mkdirSync(cache);
+      fs.writeFileSync(path.join(cache, 'index.js'), 'plugin');
+      const runtime = path.join(root, 'runtime');
+      const target = copyPreinstalledPluginToRuntime(cache, runtime, { id: 'other-plugin', npm: 'other-plugin' });
+      expect(target).toBe(path.join(runtime, 'third-party-extensions', 'other-plugin'));
+      expect(fs.existsSync(path.join(runtime, 'dist', 'extensions', 'other-plugin'))).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('accepts capabilities for reviewed pinned build-time plugins', () => {
     expect(buildOpenClawPluginInstallArgs('C:\\staging\\plugin.tgz')).toEqual([
       'plugins',
