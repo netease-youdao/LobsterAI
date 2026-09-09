@@ -55,7 +55,10 @@ import {
   formatCoworkImageAttachmentLimit,
   validateCoworkImageAttachmentSize,
 } from '../../../shared/cowork/imageAttachments';
-import { parseOpenClawCronSessionKey } from '../../../shared/cowork/openclawCronSessionKey';
+import {
+  parseOpenClawCronSessionKey,
+  resolveOpenClawCronRunHistoryKey,
+} from '../../../shared/cowork/openclawCronSessionKey';
 import { OpenClawQuestion } from '../../../shared/cowork/openclawQuestion';
 import {
   containsPlanModePrompt,
@@ -2468,7 +2471,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly sessionModelPatchStateBySession = new Map<string, SessionModelPatchState>();
   private readonly sessionModelPatchQueue = new Map<string, Promise<void>>();
   private readonly gatewayHistoryCountBySession = new Map<string, number>();
-  private readonly gatewayHistoryCountByCronSessionKey = new Map<string, number>();
+  // Keep one cursor per local cron conversation, even when its base alias advances.
+  private readonly cronHistoryCursorBySession = new Map<string, { runHistoryKey: string; count: number }>();
   private readonly latestTurnTokenBySession = new Map<string, number>();
 
   /**
@@ -3938,7 +3942,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       }
     }
     this.latestCronSessionKeyByCacheKey.clear();
-    this.gatewayHistoryCountByCronSessionKey.clear();
+    this.cronHistoryCursorBySession.clear();
   }
 
   /**
@@ -7886,7 +7890,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const previousRawKey = this.latestCronSessionKeyByCacheKey.get(cronKey.cacheKey);
       if (previousRawKey && previousRawKey !== normalizedSessionKey) {
         this.sessionIdBySessionKey.delete(previousRawKey);
-        this.gatewayHistoryCountByCronSessionKey.delete(previousRawKey);
       }
       this.latestCronSessionKeyByCacheKey.set(cronKey.cacheKey, normalizedSessionKey);
     }
@@ -10621,27 +10624,33 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
 
     try {
-      const history = await client.request<{ messages?: unknown[] }>('chat.history', {
+      const history = await client.request<{ sessionId?: string; messages?: unknown[] }>('chat.history', {
         sessionKey,
         limit: FINAL_HISTORY_SYNC_LIMIT,
       }, { timeoutMs: 10_000 });
+      const runHistoryKey = resolveOpenClawCronRunHistoryKey(sessionKey, history?.sessionId);
+      if (!runHistoryKey) {
+        console.debug('[CronHistorySync] awaiting transcript identity - sessionKey:', sessionKey);
+        return;
+      }
       if (!Array.isArray(history?.messages) || history.messages.length === 0) {
         console.log('[CronHistorySync] empty history - sessionId:', sessionId);
-        this.gatewayHistoryCountByCronSessionKey.set(sessionKey, 0);
+        this.cronHistoryCursorBySession.set(sessionId, { runHistoryKey, count: 0 });
         this.channelSyncCursor.set(sessionId, 0);
         return;
       }
 
-      const previousHistoryCountKnown = this.gatewayHistoryCountByCronSessionKey.has(sessionKey);
-      const previousHistoryCount = this.gatewayHistoryCountByCronSessionKey.get(sessionKey) ?? 0;
-      this.gatewayHistoryCountByCronSessionKey.set(sessionKey, history.messages.length);
+      const previousCursor = this.cronHistoryCursorBySession.get(sessionId);
+      const previousHistoryCountKnown = previousCursor?.runHistoryKey === runHistoryKey;
+      const previousHistoryCount = previousHistoryCountKnown ? previousCursor.count : 0;
+      this.cronHistoryCursorBySession.set(sessionId, { runHistoryKey, count: history.messages.length });
       this.syncSystemMessagesFromHistory(sessionId, history.messages, {
         previousCountKnown: previousHistoryCountKnown,
         previousCount: previousHistoryCount,
         recordSessionHistoryCount: false,
       });
 
-      const authoritativeEntries = buildCronRunHistoryEntries(history.messages, sessionKey);
+      const authoritativeEntries = buildCronRunHistoryEntries(history.messages, runHistoryKey);
       if (authoritativeEntries.length === 0) {
         console.log('[CronHistorySync] no user/assistant entries in history - sessionId:', sessionId);
         this.channelSyncCursor.set(sessionId, 0);
@@ -10652,7 +10661,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       if (!session) return;
 
       const localEntries = buildCronRunLocalHistoryEntries(session.messages);
-      if (shouldReplaceLocalConversationWithCronHistory(localEntries, authoritativeEntries, sessionKey)) {
+      if (shouldReplaceLocalConversationWithCronHistory(localEntries, authoritativeEntries, runHistoryKey)) {
         this.store.replaceConversationMessages(
           sessionId,
           applyLocalTimestampsToEntries(authoritativeEntries, localEntries),
@@ -10669,7 +10678,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           authoritative,
           localEntries,
           usedLocalMessageIds,
-          sessionKey,
+          runHistoryKey,
         );
         if (indexedLocal) {
           usedLocalMessageIds.add(indexedLocal.id);
@@ -10694,7 +10703,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           authoritative,
           localEntries,
           usedLocalMessageIds,
-          sessionKey,
+          runHistoryKey,
         );
 
         if (matchingLocal) {
@@ -11721,13 +11730,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    */
   onSessionDeleted(sessionId: string): void {
     this.discardPendingBtwRunsForSession(sessionId);
+    this.cronHistoryCursorBySession.delete(sessionId);
 
     // Remove sessionIdBySessionKey entries pointing to this session
     const removedKeys: string[] = [];
     for (const [key, id] of this.sessionIdBySessionKey.entries()) {
       if (id === sessionId) {
         this.sessionIdBySessionKey.delete(key);
-        this.gatewayHistoryCountByCronSessionKey.delete(key);
         const cronKey = parseOpenClawCronSessionKey(key);
         if (cronKey && this.latestCronSessionKeyByCacheKey.get(cronKey.cacheKey) === key) {
           this.latestCronSessionKeyByCacheKey.delete(cronKey.cacheKey);

@@ -32,6 +32,7 @@ import {
   COWORK_BTW_RESULT_MAX_CHARS,
   CoworkBtwStatus,
 } from '../../../shared/cowork/btw';
+import { OpenClawCronRunMetadataKey } from '../../../shared/cowork/openclawCronSessionKey';
 import { CoworkSelectedTextSource } from '../../../shared/cowork/selectedText';
 import { CoworkSteerRejectReason, CoworkSteerStatus } from '../../../shared/cowork/steer';
 import { OpenClawTranscriptSafetyLimit } from '../../../shared/openclawTranscript/constants';
@@ -9067,7 +9068,106 @@ test('syncFullChannelHistory: cron run history backfills initial run without los
   ]);
 });
 
-test('cron run system history tracks equal-length runs by raw session key', async () => {
+test('cron history deduplicates a prefetched run discovered again through its base key', async () => {
+  const baseKey = 'agent:main:cron:daily-monitor';
+  const runKey = `${baseKey}:run:run-1`;
+  const { session, store } = createReconcileStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (method: string) => method === 'sessions.list'
+      ? { sessions: [{ key: baseKey, sessionId: 'run-1' }] }
+      : { sessionId: 'run-1', messages: [{ role: 'user', content: 'Daily report' }] },
+  };
+  adapter.channelSessionSync = new OpenClawChannelSessionSync({
+    coworkStore: { ...store, getSessionIdByScheduledTaskId: () => session.id } as never,
+    imStore: {} as never,
+    getDefaultCwd: () => '/repo',
+  });
+
+  // Match the observed order: lifecycle prefetch, first discovery, final sync.
+  await adapter.prefetchChannelUserMessages(session.id, runKey);
+  await adapter.pollChannelSessions();
+  await adapter.syncSessionHistoryFromGateway(session.id, runKey);
+
+  expect(session.messages.map(message => [message.type, message.content])).toEqual([
+    ['user', 'Daily report'],
+  ]);
+  expect(session.messages[0].metadata).toMatchObject({
+    [OpenClawCronRunMetadataKey.SessionKey]: runKey,
+  });
+});
+
+test.each([false, true])('cron history preserves identical separate runs through base aliases (mixed keys: %s)', async (mixedKeys) => {
+  const baseKey = 'agent:main:cron:daily-monitor';
+  const { session, store } = createReconcileStore([]);
+  let actualRunId = 'run-1';
+  const client = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      sessionId: actualRunId,
+      messages: [
+        { role: 'user', content: 'Daily report' },
+        { role: 'assistant', content: 'No changes' },
+        { role: 'system', content: `Reminder for ${actualRunId}` },
+      ],
+    }),
+  };
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = client;
+
+  await adapter.syncSessionHistoryFromGateway(session.id, mixedKeys ? `${baseKey}:run:run-1` : baseKey);
+  // The base key can move to another transcript between sessions.list and chat.history.
+  actualRunId = 'run-2';
+  await adapter.syncSessionHistoryFromGateway(session.id, baseKey);
+  await adapter.syncSessionHistoryFromGateway(session.id, mixedKeys ? `${baseKey}:run:run-2` : baseKey);
+
+  // Reopening the app must deduplicate from persisted metadata, without an alias cache.
+  const reopened = new OpenClawRuntimeAdapter(store, {});
+  reopened.gatewayClient = client;
+  await reopened.syncSessionHistoryFromGateway(session.id, baseKey);
+
+  const conversation = session.messages.filter(message => message.type !== 'system');
+  expect(conversation.map(message => [message.type, message.content])).toEqual([
+    ['user', 'Daily report'], ['assistant', 'No changes'],
+    ['user', 'Daily report'], ['assistant', 'No changes'],
+  ]);
+  expect(conversation.map(message => message.metadata[OpenClawCronRunMetadataKey.SessionKey])).toEqual([
+    `${baseKey}:run:run-1`, `${baseKey}:run:run-1`,
+    `${baseKey}:run:run-2`, `${baseKey}:run:run-2`,
+  ]);
+  expect(getSystemMessages(session).map(message => message.content)).toEqual([
+    'Reminder for run-1', 'Reminder for run-2',
+  ]);
+});
+
+test('cron history defers a base alias without transcript identity until it can be resolved', async () => {
+  const baseKey = 'agent:main:cron:daily-monitor';
+  const { session, store } = createReconcileStore([]);
+  let actualRunId: string | undefined;
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      sessionId: actualRunId,
+      messages: [{ role: 'user', content: 'Daily report' }],
+    }),
+  };
+
+  await adapter.syncSessionHistoryFromGateway(session.id, baseKey);
+  expect(session.messages).toEqual([]);
+  actualRunId = 'run-1';
+  await adapter.syncSessionHistoryFromGateway(session.id, baseKey);
+  expect(session.messages).toHaveLength(1);
+  expect(session.messages[0].metadata).toMatchObject({
+    [OpenClawCronRunMetadataKey.SessionKey]: `${baseKey}:run:run-1`,
+  });
+});
+
+test('cron run system history resets its bounded cursor between distinct runs', async () => {
   const firstRunKey = 'agent:main:cron:drink-water:run:run-1';
   const secondRunKey = 'agent:main:cron:drink-water:run:run-2';
   const historyBySessionKey = new Map<string, unknown[]>([
@@ -9095,8 +9195,11 @@ test('cron run system history tracks equal-length runs by raw session key', asyn
     'Second run reminder',
   ]);
   expect(adapter.gatewayHistoryCountBySession.has(session.id)).toBe(false);
-  expect(adapter.gatewayHistoryCountByCronSessionKey.has(firstRunKey)).toBe(false);
-  expect(adapter.gatewayHistoryCountByCronSessionKey.get(secondRunKey)).toBe(1);
+  expect(adapter.cronHistoryCursorBySession.size).toBe(1);
+  expect(adapter.cronHistoryCursorBySession.get(session.id)).toEqual({
+    runHistoryKey: secondRunKey,
+    count: 1,
+  });
 });
 
 test('syncFullChannelHistory: cron run history does not replace follow-up messages', async () => {

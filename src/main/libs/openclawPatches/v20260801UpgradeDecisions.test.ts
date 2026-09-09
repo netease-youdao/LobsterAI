@@ -13,6 +13,7 @@ const RETAINED_PATCHES = [
   'openclaw-browser-blocked-hostnames.patch',
   'openclaw-chat-send-cwd-decoupling.patch',
   'openclaw-cli-startup-metadata-windows-timeout.patch',
+  'openclaw-cron-preparation-failure-state.patch',
   'openclaw-cron-skip-missed-jobs.patch',
   'openclaw-im-bound-agent-run-cwd.patch',
   'openclaw-lancedb-optional-transformers.patch',
@@ -31,6 +32,7 @@ const RETAINED_PATCHES = [
   'openclaw-subagent-cleanup-finalize-best-effort.patch',
   'openclaw-view-image-task-cwd.patch',
   'openclaw-windows-file-path-redaction.patch',
+  'openclaw-windows-process-identity.patch',
   'zz-openclaw-task-cwd-system-prompt.patch',
 ] as const;
 
@@ -51,7 +53,7 @@ const RETIRED_PATCHES = [
 ] as const;
 
 describe('OpenClaw v2026.8.1 upgrade decisions', () => {
-  test('ships exactly the reviewed 23-patch set', () => {
+  test('ships exactly the reviewed patch set', () => {
     const patchFiles = fs.readdirSync(getCurrentOpenClawPatchDir())
       .filter((file) => file.endsWith('.patch'))
       .sort();

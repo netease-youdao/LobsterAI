@@ -1,0 +1,592 @@
+LobsterAI version-scoped fix for OpenClaw v2026.8.1.
+Persist receipt-preparation failures before finished events at the shared admission boundary.
+Guard against concurrent owners; preserve manual force cadence and existing automatic retry policy.
+No upstream commit yet: retire when the equivalent upstream fix passes these regressions.
+
+diff --git a/src/cron/service/ops-run-preparation.ts b/src/cron/service/ops-run-preparation.ts
+index 4f5bf29d4d6..820bfb26a9f 100644
+--- a/src/cron/service/ops-run-preparation.ts
++++ b/src/cron/service/ops-run-preparation.ts
+@@ -376,6 +376,12 @@ export async function prepareManualRun(
+       candidates: [job],
+       ...(isImmediateCronRunMode(mode) ? { immediateJobIds: new Set([job.id]) } : {}),
+       reservedAtMs: reservationAt,
++      scheduleOwnershipAtMs: opts?.scheduleOwnershipAtMs,
++      onPreparationFailure: (event, error) => {
++        emitCronRunFinished(state, { ...event, runId: opts?.runId }, opts?.terminalTracker);
++        armTimer(state);
++        throw error;
++      },
+     });
+     if (!reserved) {
+       return { ok: true, ran: false, reason: "already-running" as const };
+diff --git a/src/cron/service/run-admission.ts b/src/cron/service/run-admission.ts
+index f23fa636bec..84c86660219 100644
+--- a/src/cron/service/run-admission.ts
++++ b/src/cron/service/run-admission.ts
+@@ -17,6 +17,10 @@ import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
+ import { recomputeJobNextRunAtMs } from "./jobs-scheduling.js";
+ import { locked } from "./locked.js";
+ import { runWithCronAdmission } from "./run-admission-capacity.js";
++import {
++  finishCronRunPreparationFailure,
++  type CronPreparationFailureHandler,
++} from "./run-admission-failure.js";
+ import {
+   activateServiceCronRunReceiptInDatabase,
+   claimServiceCronRunReceiptInDatabase,
+@@ -227,18 +231,35 @@ export async function persistQueuedCronRunReservations(params: {
+   candidates: readonly CronJob[];
+   immediateJobIds?: ReadonlySet<string>;
+   reservedAtMs: number;
++  scheduleOwnershipAtMs?: number;
++  onPreparationFailure?: CronPreparationFailureHandler;
+ }): Promise<Array<{ job: CronJob; runReceipt: CronRunReceiptHandle }>> {
+   const pendingJobs = new Map(params.candidates.map((job) => [job.id, structuredClone(job)]));
+-  const preparedClaims = new Map(
+-    [...pendingJobs].map(([jobId, job]) => [
+-      jobId,
+-      prepareServiceCronRunReceiptClaim({
++  const lifecycleGeneration = params.state.lifecycleGeneration;
++  const preparedClaims = new Map<string, ReturnType<typeof prepareServiceCronRunReceiptClaim>>();
++  for (const [jobId, job] of pendingJobs) {
++    try {
++      preparedClaims.set(
++        jobId,
++        prepareServiceCronRunReceiptClaim({
++          state: params.state,
++          job,
++          startedAtMs: params.reservedAtMs,
++        }),
++      );
++    } catch (error) {
++      pendingJobs.delete(jobId);
++      finishCronRunPreparationFailure({
+         state: params.state,
+         job,
+-        startedAtMs: params.reservedAtMs,
+-      }),
+-    ]),
+-  );
++        error,
++        lifecycleGeneration,
++        scheduleMode: params.immediateJobIds?.has(jobId) ? "preserve" : "advance",
++        scheduleOwnershipAtMs: params.scheduleOwnershipAtMs ?? params.reservedAtMs,
++        onFailure: params.onPreparationFailure,
++      });
++    }
++  }
+   while (pendingJobs.size > 0) {
+     const replacedReceipts: CronRunReceiptHandle[] = [];
+     try {
+diff --git a/src/cron/service/run-admission-failure.ts b/src/cron/service/run-admission-failure.ts
+new file mode 100644
+--- /dev/null
++++ b/src/cron/service/run-admission-failure.ts
+@@ -0,0 +1,126 @@
++import { resolveCronJobConfigRevision } from "../config-revision.js";
++import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
++import { findActiveCronRunReceiptInDatabase } from "../store/run-receipt-store.js";
++import type { CronJob } from "../types.js";
++import { normalizeCronRunErrorText } from "./execution-errors.js";
++import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
++import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
++import {
++  emit,
++  type CronEvent,
++  type CronServiceState,
++  type DeferredCronNotifications,
++} from "./state.js";
++import { runPostPersistCronNotifications } from "./store.js";
++import { tryFinishCronTaskRun } from "./task-runs.js";
++import { applyJobResult } from "./timer-outcomes.js";
++
++export type CronPreparationFailureHandler = (
++  event: CronEvent & { action: "finished" },
++  error: unknown,
++) => void;
++
++/** A preparation failure owns no receipt; it may settle only an unchanged, unclaimed job. */
++export function finishCronRunPreparationFailure(params: {
++  state: CronServiceState;
++  job: CronJob;
++  error: unknown;
++  lifecycleGeneration: number;
++  scheduleMode: "advance" | "preserve";
++  scheduleOwnershipAtMs: number;
++  onFailure?: CronPreparationFailureHandler;
++}): void {
++  const { state, job } = params;
++  const finishedAt = state.deps.nowMs();
++  const errorText = normalizeCronRunErrorText(params.error);
++  const result = {
++    status: "error" as const,
++    completionStatus: "failed" as const,
++    error: errorText,
++    diagnostics: createCronRunDiagnosticsFromError("cron-preflight", errorText, {
++      nowMs: state.deps.nowMs,
++    }),
++    executionStarted: false,
++    deliveryAttempted: false,
++    startedAt: finishedAt,
++    endedAt: finishedAt,
++  };
++  const notifications: DeferredCronNotifications = [];
++  let committed: CronJob | undefined;
++  try {
++    committed = commitCronRuntimeRows({
++      state,
++      jobIds: [job.id],
++      operationLabel: "cron.preparation-failure",
++      mutate: ({ database, jobs }) => {
++        const current = jobs.get(job.id);
++        if (
++          !current ||
++          state.stopped ||
++          state.lifecycleGeneration !== params.lifecycleGeneration ||
++          state.queuedRunReservationsByJobId.has(job.id) ||
++          current.state.queuedAtMs !== undefined ||
++          current.state.runningAtMs !== undefined ||
++          current.updatedAtMs !== job.updatedAtMs ||
++          current.state.nextRunAtMs !== job.state.nextRunAtMs ||
++          current.state.scheduleActivatedAtMs !== job.state.scheduleActivatedAtMs ||
++          current.state.streamSourceIdentity !== job.state.streamSourceIdentity ||
++          current.state.lastRunAtMs !== job.state.lastRunAtMs ||
++          current.state.lastRunStatus !== job.state.lastRunStatus ||
++          current.state.lastStatus !== job.state.lastStatus ||
++          resolveCronJobConfigRevision(current) !== resolveCronJobConfigRevision(job) ||
++          findActiveCronRunReceiptInDatabase({
++            database,
++            storePath: state.deps.storePath,
++            jobId: job.id,
++          })
++        ) {
++          return { value: undefined };
++        }
++        applyJobResult(state, current, result, {
++          scheduleMode: params.scheduleMode,
++          scheduleOwnershipAtMs: params.scheduleOwnershipAtMs,
++          deferredNotifications: notifications,
++        });
++        return { value: current, upsertJobIds: [current.id] };
++      },
++    });
++  } catch (persistError) {
++    throw new AggregateError(
++      [params.error, persistError],
++      `${errorText}; failed to persist cron preparation failure: ${normalizeCronRunErrorText(persistError)}`,
++      { cause: persistError },
++    );
++  }
++  if (committed) {
++    applyCronRuntimeRowsToState(state, [committed]);
++    runPostPersistCronNotifications(state, notifications);
++  } else if (!params.onFailure) {
++    // A newer owner controls automatic scheduling. Manual callers still owe
++    // their accepted request a terminal event, without rewriting that owner's row.
++    return;
++  }
++  const event: CronEvent & { action: "finished" } = {
++    jobId: job.id,
++    action: "finished",
++    job: committed ?? job,
++    status: result.status,
++    completionStatus: result.completionStatus,
++    error: errorText,
++    diagnostics: result.diagnostics,
++    runAtMs: finishedAt,
++    durationMs: 0,
++    nextRunAtMs: committed?.state.nextRunAtMs,
++    deliveryStatus: committed?.state.lastDeliveryStatus,
++    deliveryError: committed?.state.lastDeliveryError,
++    failureNotificationDelivery: committed
++      ? failureNotificationDeliveryFromJobState(committed)
++      : undefined,
++  };
++  if (params.onFailure) {
++    params.onFailure(event, params.error);
++  } else {
++    tryFinishCronTaskRun(state, { job: committed, event });
++    emit(state, event);
++  }
++}
+diff --git a/src/cron/service/run-admission-failure.test.ts b/src/cron/service/run-admission-failure.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/cron/service/run-admission-failure.test.ts
+@@ -0,0 +1,375 @@
++import { afterEach, describe, expect, it, vi } from "vitest";
++import {
++  createDueIsolatedJob,
++  noopLogger,
++  setupCronRegressionFixtures,
++} from "../../../test/helpers/cron/service-regression-fixtures.js";
++import * as pidAlive from "../../shared/pid-alive.js";
++import {
++  openOpenClawStateDatabase,
++  runOpenClawStateWriteTransaction,
++} from "../../state/openclaw-state-db.js";
++import { loadCronStore, saveCronStore } from "../store.js";
++import { cronStoreKey } from "../store/key.js";
++import {
++  claimCronRunReceiptInDatabase,
++  finishCronRunReceipt,
++  inspectActiveCronRunReceipt,
++  prepareCronRunReceiptClaim,
++} from "../store/run-receipt-store.js";
++import { readCronTaskRunHistoryPage } from "../task-run-history.js";
++import type { CronJob } from "../types.js";
++import { stop } from "./ops-lifecycle.js";
++import { list } from "./ops-read.js";
++import { enqueueRun, run } from "./ops-run.js";
++import { persistQueuedCronRunReservations } from "./run-admission.js";
++import { commitCronRuntimeRows } from "./runtime-store.js";
++import { createCronServiceState, type CronEvent, type CronServiceState } from "./state.js";
++import { runMissedJobs } from "./timer-catchup.js";
++import { onTimer } from "./timer.test-support.js";
++
++const fixtures = setupCronRegressionFixtures({ prefix: "cron-preparation-failure-" });
++const now = Date.parse("2026-02-06T10:05:00.000Z");
++const states: CronServiceState[] = [];
++
++afterEach(() => {
++  for (const state of states.splice(0)) {
++    stop(state);
++  }
++});
++
++function makeState(storePath: string, onEvent = vi.fn<(event: CronEvent) => void>()) {
++  const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
++  const state = createCronServiceState({
++    cronEnabled: true,
++    storePath,
++    log: noopLogger,
++    nowMs: () => now,
++    enqueueSystemEvent: vi.fn(),
++    requestHeartbeat: vi.fn(),
++    runIsolatedAgentJob,
++    onEvent,
++  });
++  states.push(state);
++  return { state, onEvent, runIsolatedAgentJob };
++}
++
++function makeJob(id: string, nextRunAtMs = now): CronJob {
++  return createDueIsolatedJob({ id, nowMs: now, nextRunAtMs });
++}
++
++function history(storePath: string, jobId: string) {
++  return readCronTaskRunHistoryPage({ storeKey: cronStoreKey(storePath), jobId }).entries;
++}
++
++describe("cron preparation failure settlement", () => {
++  it.each([undefined, "ok"] as const)(
++    "persists an enqueued failure over prior %s status before its single finished event",
++    async (priorStatus) => {
++      const { storePath } = fixtures.makeStorePath();
++      const job = makeJob(`enqueued-${priorStatus ?? "never"}`, now + 60_000);
++      if (priorStatus) {
++        job.state.lastRunAtMs = now - 60_000;
++        job.state.lastRunStatus = priorStatus;
++        job.state.lastStatus = priorStatus;
++      }
++      await saveCronStore(storePath, { version: 1, jobs: [job] });
++      const stateAtEvent: unknown[] = [];
++      const onEvent = vi.fn((event: CronEvent) => {
++        if (event.action === "finished") {
++          const row = openOpenClawStateDatabase()
++            .db.prepare("SELECT state_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
++            .get(cronStoreKey(storePath), job.id) as { state_json: string };
++          stateAtEvent.push(JSON.parse(row.state_json));
++        }
++      });
++      const { state, runIsolatedAgentJob } = makeState(storePath, onEvent);
++      vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(null);
++
++      const ack = await enqueueRun(state, job.id, "force");
++      await vi.waitFor(() =>
++        expect(onEvent).toHaveBeenCalledWith(
++          expect.objectContaining({ action: "finished", status: "error" }),
++        ),
++      );
++
++      const finished = onEvent.mock.calls
++        .map(([event]) => event)
++        .filter((event) => event.action === "finished");
++      expect(finished).toHaveLength(1);
++      expect(stateAtEvent).toEqual([
++        expect.objectContaining({ lastRunStatus: "error", lastRunAtMs: now }),
++      ]);
++      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
++      expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
++      const reloaded = await list(makeState(storePath).state, { includeDisabled: true });
++      expect(reloaded[0]?.state).toMatchObject({
++        lastRunStatus: "error",
++        lastStatus: "error",
++        lastDurationMs: 0,
++      });
++      expect(reloaded[0]?.state.runningAtMs).toBeUndefined();
++      expect(reloaded[0]?.state.queuedAtMs).toBeUndefined();
++      expect(history(storePath, job.id)).toEqual([
++        expect.objectContaining({
++          status: "error",
++          runId: "runId" in ack ? ack.runId : undefined,
++          durationMs: 0,
++        }),
++      ]);
++    },
++  );
++
++  it.each(["at", "every"] as const)(
++    "preserves the future %s schedule for failed force runs",
++    async (kind) => {
++      const { storePath } = fixtures.makeStorePath();
++      const job = makeJob(`forced-${kind}`, now + 60_000);
++      if (kind === "every") {
++        job.schedule = { kind, everyMs: 60_000, anchorMs: now };
++      }
++      await saveCronStore(storePath, { version: 1, jobs: [job] });
++      const { state, onEvent } = makeState(storePath);
++      vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(null);
++
++      await expect(run(state, job.id, "force")).rejects.toThrow("without process start identity");
++
++      expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
++        enabled: true,
++        state: { lastRunStatus: "error", nextRunAtMs: now + 60_000, consecutiveErrors: 1 },
++      });
++      expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(1);
++    },
++  );
++
++  it.each(["timer", "catchup"] as const)(
++    "records a failed %s attempt and schedules recurring backoff",
++    async (entry) => {
++      const { storePath } = fixtures.makeStorePath();
++      const job = makeJob(`scheduled-${entry}`);
++      job.schedule = { kind: "every", everyMs: 10_000, anchorMs: now - 10_000 };
++      await saveCronStore(storePath, { version: 1, jobs: [job] });
++      const { state, runIsolatedAgentJob } = makeState(storePath);
++      vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(null);
++
++      await (entry === "timer" ? onTimer(state) : runMissedJobs(state));
++
++      const persisted = (await loadCronStore(storePath)).jobs[0];
++      expect(persisted?.state).toMatchObject({ lastRunStatus: "error", consecutiveErrors: 1 });
++      expect(persisted?.state.nextRunAtMs).toBeGreaterThan(now);
++      expect(state.runAdmission.active).toBe(0);
++      expect(state.queuedRunReservationsByJobId.size).toBe(0);
++      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
++      expect(history(storePath, job.id)).toHaveLength(1);
++    },
++  );
++
++  it("does not strand another due job when only one preparation fails", async () => {
++    const { storePath } = fixtures.makeStorePath();
++    const failed = makeJob("failed-first");
++    const sibling = makeJob("successful-sibling");
++    await saveCronStore(storePath, { version: 1, jobs: [failed, sibling] });
++    const { state, runIsolatedAgentJob } = makeState(storePath);
++    vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValueOnce(null);
++
++    await onTimer(state);
++
++    expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
++    expect(history(storePath, failed.id)[0]?.status).toBe("error");
++    expect(history(storePath, sibling.id)[0]?.status).toBe("ok");
++    expect(state.runAdmission.active).toBe(0);
++  });
++
++  it.each([
++    "edited",
++    "deleted",
++    "finalized",
++    "queued",
++    "running",
++    "reactivated",
++    "replaced-source",
++  ] as const)(
++    "does not overwrite concurrent %s state with a stale preparation failure",
++    async (change) => {
++      const { storePath } = fixtures.makeStorePath();
++      const job = makeJob(`stale-${change}`);
++      await saveCronStore(storePath, { version: 1, jobs: [job] });
++      const { state, onEvent } = makeState(storePath);
++      await list(state);
++      vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementationOnce(() => {
++        commitCronRuntimeRows({
++          state,
++          jobIds: [job.id],
++          operationLabel: "test.concurrent-job-change",
++          mutate: ({ jobs }) => {
++            const current = jobs.get(job.id)!;
++            if (change === "deleted") {
++              return { value: undefined, deleteJobIds: [job.id] };
++            }
++            if (change === "edited") {
++              current.name = "new owner definition";
++            }
++            if (change === "finalized") {
++              current.state.lastRunAtMs = now + 1;
++              current.state.lastRunStatus = "ok";
++            }
++            if (change === "queued") {
++              current.state.queuedAtMs = now + 1;
++            }
++            if (change === "running") {
++              current.state.runningAtMs = now + 1;
++            }
++            if (change === "reactivated") {
++              current.state.scheduleActivatedAtMs = now + 1;
++            }
++            if (change === "replaced-source") {
++              current.state.streamSourceIdentity = "successor-source";
++            }
++            return { value: undefined, upsertJobIds: [job.id] };
++          },
++        });
++        return null;
++      });
++
++      await expect(
++        persistQueuedCronRunReservations({ state, candidates: [job], reservedAtMs: now }),
++      ).resolves.toEqual([]);
++
++      const persisted = (await loadCronStore(storePath)).jobs[0];
++      if (change === "deleted") {
++        expect(persisted).toBeUndefined();
++      }
++      if (change === "edited") {
++        expect(persisted?.name).toBe("new owner definition");
++      }
++      if (change === "finalized") {
++        expect(persisted?.state.lastRunStatus).toBe("ok");
++      }
++      if (change === "queued") {
++        expect(persisted?.state.queuedAtMs).toBe(now + 1);
++      }
++      if (change === "running") {
++        expect(persisted?.state.runningAtMs).toBe(now + 1);
++      }
++      if (change === "reactivated") {
++        expect(persisted?.state.scheduleActivatedAtMs).toBe(now + 1);
++      }
++      if (change === "replaced-source") {
++        expect(persisted?.state.streamSourceIdentity).toBe("successor-source");
++      }
++      expect(persisted?.state.lastError).toBeUndefined();
++      expect(onEvent).not.toHaveBeenCalled();
++      expect(history(storePath, job.id)).toEqual([]);
++    },
++  );
++
++  it("preserves an active durable receipt even when its job has no runtime marker", async () => {
++    const { storePath } = fixtures.makeStorePath();
++    const job = makeJob("receipt-without-marker");
++    await saveCronStore(storePath, { version: 1, jobs: [job] });
++    const { state, onEvent } = makeState(storePath);
++    await list(state);
++    const prepared = prepareCronRunReceiptClaim({
++      storePath,
++      job,
++      agentId: "main",
++      startedAtMs: now,
++    });
++    const receipt = runOpenClawStateWriteTransaction(({ db }) =>
++      claimCronRunReceiptInDatabase({
++        database: db,
++        prepared,
++        resolveAgentId: () => "main",
++      }),
++    );
++    vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(null);
++
++    try {
++      await expect(
++        persistQueuedCronRunReservations({ state, candidates: [job], reservedAtMs: now }),
++      ).resolves.toEqual([]);
++      expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })?.receiptId).toBe(
++        receipt.receiptId,
++      );
++      expect((await loadCronStore(storePath)).jobs[0]?.state.lastRunStatus).toBeUndefined();
++      expect(onEvent).not.toHaveBeenCalled();
++    } finally {
++      finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: now + 1 });
++    }
++  });
++
++  it.each(["edited", "deleted"] as const)(
++    "still records the accepted manual attempt when its job is %s",
++    async (change) => {
++      const { storePath } = fixtures.makeStorePath();
++      const job = makeJob(`manual-stale-${change}`, now + 60_000);
++      await saveCronStore(storePath, { version: 1, jobs: [job] });
++      const { state, onEvent } = makeState(storePath);
++      vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementationOnce(() => {
++        commitCronRuntimeRows({
++          state,
++          jobIds: [job.id],
++          operationLabel: "test.manual-concurrent-change",
++          mutate: ({ jobs }) => {
++            const current = jobs.get(job.id)!;
++            current.name = "edited while preparing";
++            return {
++              value: undefined,
++              ...(change === "deleted" ? { deleteJobIds: [job.id] } : { upsertJobIds: [job.id] }),
++            };
++          },
++        });
++        return null;
++      });
++
++      const ack = await enqueueRun(state, job.id, "force");
++      await vi.waitFor(() =>
++        expect(onEvent).toHaveBeenCalledWith(
++          expect.objectContaining({ action: "finished", status: "error" }),
++        ),
++      );
++
++      expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(1);
++      expect(history(storePath, job.id)).toEqual([
++        expect.objectContaining({
++          status: "error",
++          runId: "runId" in ack ? ack.runId : undefined,
++        }),
++      ]);
++      const persisted = (await loadCronStore(storePath)).jobs[0];
++      if (change === "deleted") {
++        expect(persisted).toBeUndefined();
++      } else {
++        expect(persisted).toMatchObject({ name: "edited while preparing" });
++      }
++      expect(persisted?.state.lastRunStatus).toBeUndefined();
++    },
++  );
++
++  it("preserves both causes when the failed preparation cannot be persisted", async () => {
++    const { storePath } = fixtures.makeStorePath();
++    const job = makeJob("failure-write-rejected", now + 60_000);
++    await saveCronStore(storePath, { version: 1, jobs: [job] });
++    const { state, onEvent } = makeState(storePath);
++    const database = openOpenClawStateDatabase().db;
++    vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementationOnce(() => {
++      database.exec(`CREATE TEMP TRIGGER reject_preparation_failure
++        BEFORE UPDATE OF state_json ON cron_jobs
++        BEGIN SELECT RAISE(ABORT, 'injected state write failure'); END;`);
++      return null;
++    });
++
++    try {
++      const failure = await run(state, job.id, "force").catch((error: unknown) => error);
++      expect(failure).toBeInstanceOf(AggregateError);
++      expect((failure as AggregateError).message).toContain("without process start identity");
++      expect((failure as AggregateError).message).toContain("injected state write failure");
++      expect((failure as AggregateError).cause).toBe((failure as AggregateError).errors[1]);
++      expect((await loadCronStore(storePath)).jobs[0]?.state.lastRunStatus).toBeUndefined();
++      expect(onEvent).not.toHaveBeenCalled();
++      expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
++    } finally {
++      database.exec("DROP TRIGGER IF EXISTS reject_preparation_failure");
++    }
++  });
++});
