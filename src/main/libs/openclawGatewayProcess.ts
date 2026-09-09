@@ -1,5 +1,7 @@
 import { type ChildProcess, spawn } from 'child_process';
 
+import { OpenClawGatewayProcessControl } from '../../shared/openclawEngine/constants';
+
 interface OpenClawGatewaySpawnOptions {
   executablePath: string;
   entryPath: string;
@@ -11,6 +13,38 @@ interface OpenClawGatewaySpawnOptions {
 
 const GATEWAY_STOP_GRACE_MS = 6_000;
 const GATEWAY_STOP_FORCE_MS = 2_000;
+
+export const OpenClawGatewaySignal = {
+  Interrupt: 'SIGINT',
+  Terminate: 'SIGTERM',
+  Kill: 'SIGKILL',
+} as const;
+
+/** Installed before the Windows launcher imports OpenClaw's entry point. */
+export function buildOpenClawGatewayShutdownBridge(): string {
+  return `(() => {
+  if (typeof process.send !== 'function') return;
+  const shutdownType = ${JSON.stringify(OpenClawGatewayProcessControl.Shutdown)};
+  const shutdownSignal = ${JSON.stringify(OpenClawGatewaySignal.Interrupt)};
+  let requested = false;
+  let delivered = false;
+  const deliver = () => {
+    if (!requested || delivered || process.listenerCount(shutdownSignal) === 0) return;
+    delivered = true;
+    process.removeListener('newListener', onNewListener);
+    process.emit(shutdownSignal);
+  };
+  const onNewListener = (event) => {
+    if (event === shutdownSignal && requested) queueMicrotask(deliver);
+  };
+  process.on('newListener', onNewListener);
+  process.on('message', (message) => {
+    if (!message || message.type !== shutdownType) return;
+    requested = true;
+    deliver();
+  });
+})();\n`;
+}
 
 export function stopOpenClawGatewayProcess(child: ChildProcess): Promise<void> {
   // A signal exit has a null exitCode. A failed spawn has no PID and cannot
@@ -56,9 +90,22 @@ export function stopOpenClawGatewayProcess(child: ChildProcess): Promise<void> {
           + (lastError ? ` ${lastError.message}` : ''),
         ));
       }, GATEWAY_STOP_FORCE_MS);
-      sendSignal('SIGKILL');
+      sendSignal(OpenClawGatewaySignal.Kill);
     }, GATEWAY_STOP_GRACE_MS);
-    sendSignal('SIGTERM');
+    if (child.connected && child.send) {
+      // Windows kill(SIGTERM) is TerminateProcess: no shutdown handlers run.
+      // The launcher delivers SIGINT inside the child so OpenClaw closes its
+      // channels, releases locks, and completes its boot lifecycle record.
+      try {
+        child.send({ type: OpenClawGatewayProcessControl.Shutdown }, (error) => {
+          if (error) lastError = error;
+        });
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+    } else {
+      sendSignal(OpenClawGatewaySignal.Terminate);
+    }
   });
 }
 
@@ -72,7 +119,9 @@ export function spawnOpenClawGatewayProcess(options: OpenClawGatewaySpawnOptions
     {
       cwd: options.cwd,
       env: { ...options.env, ELECTRON_RUN_AS_NODE: '1' },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: process.platform === 'win32'
+        ? ['ignore', 'pipe', 'pipe', 'ipc']
+        : ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     },
   );

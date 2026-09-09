@@ -1,11 +1,18 @@
 import { type ChildProcess } from 'child_process';
-import { EventEmitter } from 'events';
+import { EventEmitter, once } from 'events';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { runInNewContext } from 'vm';
 
-import { spawnOpenClawGatewayProcess, stopOpenClawGatewayProcess } from './openclawGatewayProcess';
+import { OpenClawGatewayProcessControl } from '../../shared/openclawEngine/constants';
+import {
+  buildOpenClawGatewayShutdownBridge,
+  OpenClawGatewaySignal,
+  spawnOpenClawGatewayProcess,
+  stopOpenClawGatewayProcess,
+} from './openclawGatewayProcess';
 
 const tempDirs: string[] = [];
 
@@ -55,7 +62,7 @@ describe('stopOpenClawGatewayProcess', () => {
     const pending = stopOpenClawGatewayProcess(child).then(stopped);
 
     await vi.advanceTimersByTimeAsync(5_300);
-    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith(OpenClawGatewaySignal.Terminate);
     expect(stopped).not.toHaveBeenCalled();
     child.emit('exit', 0, null);
     await pending;
@@ -71,9 +78,9 @@ describe('stopOpenClawGatewayProcess', () => {
     const pending = stopOpenClawGatewayProcess(child).then(stopped);
 
     await vi.advanceTimersByTimeAsync(6_000);
-    expect(child.kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
+    expect(child.kill).toHaveBeenNthCalledWith(2, OpenClawGatewaySignal.Kill);
     expect(stopped).not.toHaveBeenCalled();
-    child.emit('exit', null, 'SIGKILL');
+    child.emit('exit', null, OpenClawGatewaySignal.Kill);
     await pending;
     expect(stopped).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
@@ -113,9 +120,103 @@ describe('stopOpenClawGatewayProcess', () => {
 
   test('recognizes an already completed signal exit', async () => {
     const child = makeChild();
-    child.signalCode = 'SIGTERM';
+    child.signalCode = OpenClawGatewaySignal.Terminate;
     await stopOpenClawGatewayProcess(child);
     expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  test('requests shutdown over IPC and waits for actual exit before completing', async () => {
+    vi.useFakeTimers();
+    const child = Object.assign(makeChild(), { connected: true, send: vi.fn() });
+    const stopped = vi.fn();
+    const pending = stopOpenClawGatewayProcess(child).then(stopped);
+
+    expect(child.send).toHaveBeenCalledExactlyOnceWith(
+      { type: OpenClawGatewayProcessControl.Shutdown }, expect.any(Function),
+    );
+    await vi.advanceTimersByTimeAsync(5_300);
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(stopped).not.toHaveBeenCalled();
+    child.emit('exit', 0, null);
+    await pending;
+    expect(stopped).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test.each([false, true])('forces shutdown when IPC fails (throws: %s)', async (throws) => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ipcError = new Error('IPC channel closed');
+    const child = Object.assign(makeChild(), {
+      connected: true,
+      send: vi.fn((_message, callback: (error: Error) => void) => {
+        if (throws) throw ipcError;
+        callback(ipcError);
+        return false;
+      }),
+    });
+    const pending = stopOpenClawGatewayProcess(child);
+    const rejected = expect(pending).rejects.toThrow(ipcError.message);
+    expect(child.kill).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith(OpenClawGatewaySignal.Kill);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await rejected;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('Windows gateway shutdown bridge', () => {
+  test('buffers shutdown until the gateway installs its handler and delivers it once', async () => {
+    const childProcess = Object.assign(new EventEmitter(), { send: vi.fn() });
+    runInNewContext(buildOpenClawGatewayShutdownBridge(), { process: childProcess, queueMicrotask });
+    childProcess.emit('message', { type: OpenClawGatewayProcessControl.Shutdown });
+    const shutdown = vi.fn();
+    childProcess.on(OpenClawGatewaySignal.Interrupt, shutdown);
+    await Promise.resolve();
+    expect(shutdown).toHaveBeenCalledOnce();
+    childProcess.emit('message', { type: OpenClawGatewayProcessControl.Shutdown });
+    expect(shutdown).toHaveBeenCalledOnce();
+    expect(childProcess.listenerCount('newListener')).toBe(0);
+  });
+
+  test('ignores unrelated messages and remains inert without a parent IPC channel', () => {
+    const childProcess = Object.assign(new EventEmitter(), { send: vi.fn() });
+    const shutdown = vi.fn();
+    childProcess.on(OpenClawGatewaySignal.Interrupt, shutdown);
+    runInNewContext(buildOpenClawGatewayShutdownBridge(), { process: childProcess, queueMicrotask });
+    for (const message of [null, {}, { type: 'other' }]) childProcess.emit('message', message);
+    expect(shutdown).not.toHaveBeenCalled();
+    childProcess.emit('message', { type: OpenClawGatewayProcessControl.Shutdown });
+    expect(shutdown).toHaveBeenCalledOnce();
+
+    const standalone = new EventEmitter();
+    runInNewContext(buildOpenClawGatewayShutdownBridge(), { process: standalone, queueMicrotask });
+    expect(standalone.eventNames()).toEqual([]);
+  });
+
+  test.skipIf(process.platform !== 'win32')('lets a real Windows child complete asynchronous cleanup', async () => {
+    const entry = makeEntry(buildOpenClawGatewayShutdownBridge() + `
+      process.on(${JSON.stringify(OpenClawGatewaySignal.Interrupt)}, () => {
+        setTimeout(() => {
+          console.log('cleanup completed');
+          process.exit(0);
+        }, 50);
+      });
+      process.send('ready');
+    `);
+    const child = spawnOpenClawGatewayProcess({
+      executablePath: process.execPath, ...entry, args: [], execArgv: [], env: process.env,
+    });
+    const result = readResult(child);
+    try {
+      await once(child, 'message');
+      await stopOpenClawGatewayProcess(child);
+      expect(await result).toEqual({ code: 0, stdout: 'cleanup completed\n', stderr: '' });
+      expect(child.signalCode).toBeNull();
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill(OpenClawGatewaySignal.Kill);
+    }
   });
 });
 

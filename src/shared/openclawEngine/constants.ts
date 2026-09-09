@@ -10,6 +10,10 @@ export const OpenClawEngineIpc = {
 export type OpenClawEngineIpc =
   typeof OpenClawEngineIpc[keyof typeof OpenClawEngineIpc];
 
+export const OpenClawGatewayProcessControl = {
+  Shutdown: 'lobsterai:gateway:shutdown',
+} as const;
+
 export const OpenClawEnginePhase = {
   NotInstalled: 'not_installed',
   Installing: 'installing',
