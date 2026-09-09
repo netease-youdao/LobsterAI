@@ -253,6 +253,7 @@ function ensureBundledOpenClawRuntime(context) {
 
   const requiredExternalPaths = [
     path.join(runtimeRoot, 'node_modules'),
+    path.join(runtimeRoot, 'openclaw-workspace-state-migration.mjs'),
   ];
   const missingExternal = requiredExternalPaths.filter((candidate) => !existsSync(candidate));
   if (missingExternal.length > 0) {
