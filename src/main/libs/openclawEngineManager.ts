@@ -13,6 +13,8 @@ import {
   OpenClawGatewayFailureKind,
   type OpenClawGatewayFailureSnapshot,
 } from '../../shared/openclawEngine/constants';
+import { OpenClawWorkspaceMigrationStatus } from '../../shared/openclawEngine/workspaceMigration';
+import { t } from '../i18n';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath, getSkillsRoot } from './coworkUtil';
 import {
   formatGatewayLogDateKey,
@@ -31,6 +33,7 @@ import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtension
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
 import { ensureOpenClawWorkerShims } from './openclawWorkerShims';
+import { migrateLegacyWorkspaceStateBeforeStartup } from './openclawWorkspaceStateMigration';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 
 const gwDiagTs = (): string => {
@@ -918,6 +921,24 @@ export class OpenClawEngineManager extends EventEmitter {
         version: runtime.version,
         message: 'OpenClaw legacy sessions require migration, but the bundled CLI is missing.',
         errorCode: OpenClawEngineErrorCode.RuntimeEntryMissing,
+        canRetry: true,
+      });
+      return this.getStatus();
+    }
+
+    const workspaceMigration = await migrateLegacyWorkspaceStateBeforeStartup({
+      stateDir: this.stateDir,
+      configPath: this.configPath,
+      runtimeRoot: runtime.root,
+      electronNodeRuntimePath,
+      env,
+    });
+    if (this.shutdownRequested) return this.getStatus();
+    if (workspaceMigration.status === OpenClawWorkspaceMigrationStatus.Failed) {
+      this.setStatus({
+        phase: OpenClawEnginePhase.Error,
+        version: runtime.version,
+        message: t('openClawWorkspaceMigrationFailed', { error: workspaceMigration.error ?? '' }),
         canRetry: true,
       });
       return this.getStatus();

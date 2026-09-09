@@ -178,7 +178,7 @@
     "verify:installer-patches": "node scripts/verify-installer-patches.cjs",
     "openclaw:plugins": "node scripts/ensure-openclaw-plugins.cjs",
     "openclaw:extensions:local": "node scripts/sync-local-openclaw-extensions.cjs",
-    "openclaw:bundle": "node scripts/bundle-openclaw-gateway.cjs",
+    "openclaw:bundle": "node scripts/bundle-openclaw-workspace-migration.cjs && node scripts/bundle-openclaw-gateway.cjs",
     "openclaw:precompile": "node scripts/precompile-openclaw-extensions.cjs",
     "openclaw:channel-deps": "node scripts/install-openclaw-channel-deps.cjs",
     "openclaw:prune": "node scripts/prune-openclaw-runtime.cjs",
