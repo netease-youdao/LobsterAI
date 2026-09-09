@@ -9,7 +9,7 @@ import {
   BrowserCredentialMcpServer,
 } from '../../shared/browserCredentials/constants';
 import { OpenClawProviderId, ProviderName } from '../../shared/providers';
-import { DEFAULT_QQ_CONFIG } from '../im/types';
+import { DEFAULT_DISCORD_OPENCLAW_CONFIG, DEFAULT_QQ_CONFIG, DiscordDmPolicy } from '../im/types';
 import { OpenClawAgentOwnership } from './openclawAgentModels';
 import { OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
 
@@ -26,6 +26,7 @@ vi.mock('electron', () => ({
 
 const mockRuntimeState = vi.hoisted(() => ({
   proxyPort: null as number | null,
+  thirdPartyExtensionsDir: null as string | null,
   modelCompatPluginAvailable: true,
   serverModels: [] as Array<{
     modelId: string;
@@ -111,7 +112,7 @@ vi.mock('./claudeSettings', () => ({
 
 vi.mock('./openclawLocalExtensions', () => ({
   findBundledExtensionsDir: () => null,
-  findThirdPartyExtensionsDir: () => null,
+  findThirdPartyExtensionsDir: () => mockRuntimeState.thirdPartyExtensionsDir,
   hasBundledOpenClawExtension: (id: string) => (
     id !== 'qwen-portal-auth'
     && (id !== 'lobsterai-model-compat' || mockRuntimeState.modelCompatPluginAvailable)
@@ -139,6 +140,7 @@ describe('OpenClawConfigSync runtime config output', () => {
 
   beforeEach(() => {
     mockRuntimeState.proxyPort = null;
+    mockRuntimeState.thirdPartyExtensionsDir = null;
     mockRuntimeState.modelCompatPluginAvailable = true;
     mockRuntimeState.serverModels = [];
     mockRuntimeState.enabledProviders = [];
@@ -350,14 +352,22 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.meta.lastTouchedAt).toBeUndefined();
   });
 
-  test.runIf(fs.existsSync(path.resolve('vendor/openclaw-runtime/current/openclaw.mjs')))(
-    'passes validation from the pinned OpenClaw runtime',
-    async () => {
-      const sync = await createSync();
+  test.runIf(fs.existsSync(path.resolve('vendor/openclaw-runtime/current/openclaw.mjs'))).each([false, true])(
+    'passes validation from the pinned OpenClaw runtime (Discord enabled: %s)',
+    async (discordEnabled) => {
+      const runtimeRoot = path.resolve('vendor/openclaw-runtime/current');
+      if (discordEnabled) {
+        mockRuntimeState.thirdPartyExtensionsDir = path.join(runtimeRoot, 'third-party-extensions');
+      }
+      const sync = await createSync({
+        getDiscordInstances: () => discordEnabled ? [{
+          ...DEFAULT_DISCORD_OPENCLAW_CONFIG,
+          enabled: true, botToken: 'discord-test-token', instanceId: 'discord1', instanceName: 'Discord',
+        }] : [],
+      });
       const result = sync.sync('pinned-runtime-schema-validation');
       expect(result.ok).toBe(true);
 
-      const runtimeRoot = path.resolve('vendor/openclaw-runtime/current');
       const validation = spawnSync(
         process.execPath,
         [path.join(runtimeRoot, 'openclaw.mjs'), 'config', 'validate'],
@@ -369,6 +379,7 @@ describe('OpenClawConfigSync runtime config output', () => {
             OPENCLAW_STATE_DIR: stateDir,
             OPENCLAW_HOME: tmpDir,
             OPENCLAW_GATEWAY_TOKEN: 'gateway-token',
+            ...sync.collectSecretEnvVars(),
           },
           encoding: 'utf8',
           timeout: 60_000,
@@ -381,6 +392,62 @@ describe('OpenClawConfigSync runtime config output', () => {
     },
     90_000,
   );
+
+  test.each([
+    { dmPolicy: undefined, allowFrom: [], expectedPolicy: DiscordDmPolicy.Open, expectedAllowFrom: ['*'] },
+    { dmPolicy: DiscordDmPolicy.Open, allowFrom: ['123'], expectedPolicy: DiscordDmPolicy.Open, expectedAllowFrom: ['123', '*'] },
+    { dmPolicy: DiscordDmPolicy.Open, allowFrom: ['*'], expectedPolicy: DiscordDmPolicy.Open, expectedAllowFrom: ['*'] },
+    { dmPolicy: DiscordDmPolicy.Allowlist, allowFrom: ['123'], expectedPolicy: DiscordDmPolicy.Allowlist, expectedAllowFrom: ['123'] },
+    { dmPolicy: DiscordDmPolicy.Pairing, allowFrom: [], expectedPolicy: DiscordDmPolicy.Pairing, expectedAllowFrom: [] },
+    { dmPolicy: DiscordDmPolicy.Disabled, allowFrom: [], expectedPolicy: DiscordDmPolicy.Disabled, expectedAllowFrom: [] },
+  ])('writes Discord account DM policy without legacy aliases: $dmPolicy / $allowFrom', async ({
+    dmPolicy, allowFrom, expectedPolicy, expectedAllowFrom,
+  }) => {
+    const originalAllowFrom = [...allowFrom];
+    const sync = await createSync({
+      getDiscordInstances: () => [{
+        ...DEFAULT_DISCORD_OPENCLAW_CONFIG,
+        enabled: true, botToken: 'discord-test-token', instanceId: 'discord1', instanceName: 'Discord',
+        dmPolicy, allowFrom,
+      }],
+    });
+    expect(sync.sync('discord-dm-policy').ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.channels.discord.accounts.discord1).toMatchObject({
+      dmPolicy: expectedPolicy, allowFrom: expectedAllowFrom,
+    });
+    expect(config.channels.discord.accounts.discord1).not.toHaveProperty('dm');
+    expect(allowFrom).toEqual(originalAllowFrom);
+  });
+
+  test('replaces legacy Discord DM config for every enabled account on upgrade and resync', async () => {
+    const instances = ['discord1-long', 'discord2-long', 'disabled-long'].map((instanceId, index) => ({
+      ...DEFAULT_DISCORD_OPENCLAW_CONFIG,
+      enabled: index < 2, botToken: `discord-test-token-${index}`, instanceId, instanceName: instanceId,
+      dmPolicy: DiscordDmPolicy.Allowlist, allowFrom: [String(123 + index)],
+    }));
+    fs.writeFileSync(configPath, JSON.stringify({ channels: { discord: { accounts: {
+      discord1: { dm: { policy: DiscordDmPolicy.Open, allowFrom: ['*'] } },
+      discord2: { dm: { policy: DiscordDmPolicy.Open, allowFrom: ['*'] } },
+      disabled: { dm: { policy: DiscordDmPolicy.Open, allowFrom: ['*'] } },
+    } } } }));
+    const sync = await createSync({ getDiscordInstances: () => instances });
+    expect(sync.sync('discord-upgrade')).toMatchObject({ ok: true, changed: true });
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(Object.keys(config.channels.discord.accounts)).toEqual(['discord1', 'discord2']);
+    for (const [index, account] of Object.values(config.channels.discord.accounts).entries()) {
+      expect(account).toMatchObject({
+        name: instances[index].instanceName, dmPolicy: DiscordDmPolicy.Allowlist, allowFrom: instances[index].allowFrom,
+        guilds: DEFAULT_DISCORD_OPENCLAW_CONFIG.guilds,
+        token: index === 0 ? '${LOBSTER_DC_BOT_TOKEN}' : '${LOBSTER_DC_BOT_TOKEN_1}',
+      });
+      expect(account).not.toHaveProperty('dm');
+    }
+    expect(sync.collectSecretEnvVars()).toMatchObject({
+      LOBSTER_DC_BOT_TOKEN: instances[0].botToken, LOBSTER_DC_BOT_TOKEN_1: instances[1].botToken,
+    });
+    expect(sync.sync('discord-resync')).toMatchObject({ ok: true, changed: false });
+  });
 
   test('strips plugin-index-managed plugins.installs while preserving other plugins keys', async () => {
     // A leaked plugins.installs on disk poisons config.set hot delivery
