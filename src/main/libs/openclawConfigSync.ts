@@ -46,6 +46,7 @@ import type { ModelThinkingConfig } from '../../shared/providers/modelThinking';
 import type { Agent, CoworkConfig, CoworkExecutionMode } from '../coworkStore';
 import type { DiscordInstanceConfig, IMSettings, TelegramInstanceConfig } from '../im/types';
 import type { DingTalkInstanceConfig, EmailMultiInstanceConfig, FeishuInstanceConfig, NeteaseBeeChanConfig, NimInstanceConfig, PopoInstanceConfig, QQInstanceConfig, WecomInstanceConfig, WeixinOpenClawConfig } from '../im/types';
+import { DiscordDmPolicy } from '../im/types';
 import { OpenClawSessionKeepAlive } from '../openclawSessionPolicy/constants';
 import { buildOpenClawSessionConfig } from '../openclawSessionPolicy/store';
 import {
@@ -2795,18 +2796,19 @@ export class OpenClawConfigSync {
       for (let idx = 0; idx < enabledDiscordInstances.length; idx++) {
         const inst = enabledDiscordInstances[idx];
         const tokenVar = idx === 0 ? 'LOBSTER_DC_BOT_TOKEN' : `LOBSTER_DC_BOT_TOKEN_${idx}`;
+        const dmPolicy = inst.dmPolicy || DiscordDmPolicy.Open;
         const account: Record<string, unknown> = {
           enabled: true,
           name: inst.instanceName,
           token: `\${${tokenVar}}`,
-          dm: {
-            policy: inst.dmPolicy || 'open',
-            allowFrom: (() => {
-              const ids = inst.allowFrom?.length ? [...inst.allowFrom] : [];
-              if (inst.dmPolicy === 'open' && !ids.includes('*')) ids.push('*');
-              return ids;
-            })(),
-          },
+          // v2026.8.1 validates the published plugin schema before doctor can
+          // normalize legacy dm.policy/dm.allowFrom aliases.
+          dmPolicy,
+          allowFrom: (() => {
+            const ids = inst.allowFrom?.length ? [...inst.allowFrom] : [];
+            if (dmPolicy === DiscordDmPolicy.Open && !ids.includes('*')) ids.push('*');
+            return ids;
+          })(),
           groupPolicy: inst.groupPolicy || 'allowlist',
           guilds: (() => {
             const guilds: Record<string, unknown> = {};

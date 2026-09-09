@@ -192,10 +192,18 @@ export interface DiscordOpenClawGuildConfig {
   systemPrompt?: string;
 }
 
+export const DiscordDmPolicy = {
+  Pairing: 'pairing',
+  Allowlist: 'allowlist',
+  Open: 'open',
+  Disabled: 'disabled',
+} as const;
+export type DiscordDmPolicy = typeof DiscordDmPolicy[keyof typeof DiscordDmPolicy];
+
 export interface DiscordOpenClawConfig {
   enabled: boolean;
   botToken: string;
-  dmPolicy: 'pairing' | 'allowlist' | 'open' | 'disabled';
+  dmPolicy: DiscordDmPolicy;
   allowFrom: string[];
   groupPolicy: 'allowlist' | 'open' | 'disabled';
   groupAllowFrom: string[];
@@ -769,7 +777,7 @@ export const DEFAULT_FEISHU_OPENCLAW_CONFIG: FeishuOpenClawConfig = {
 export const DEFAULT_DISCORD_OPENCLAW_CONFIG: DiscordOpenClawConfig = {
   enabled: false,
   botToken: '',
-  dmPolicy: 'open',
+  dmPolicy: DiscordDmPolicy.Open,
   allowFrom: [],
   groupPolicy: 'allowlist',
   groupAllowFrom: [],
