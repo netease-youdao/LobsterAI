@@ -1661,7 +1661,7 @@ const Settings: React.FC<SettingsProps> = ({
     }
   }, [appVersion, authUser, updateCheckStatus, onUpdateFound]);
 
-  const updateButtonLabel = useMemo(() => {
+  const updateButtonLabel = (() => {
     if (
       updateCheckStatus === 'downloading' &&
       appUpdateState?.progress?.percent != null &&
@@ -1675,7 +1675,7 @@ const Settings: React.FC<SettingsProps> = ({
     if (updateCheckStatus === 'upToDate') return i18nService.t('updateUpToDate');
     if (updateCheckStatus === 'error') return i18nService.t('updateCheckFailed');
     return i18nService.t('checkForUpdate');
-  }, [appUpdateState?.progress?.percent, updateCheckStatus]);
+  })();
 
   const handleOpenUserManual = useCallback(() => {
     reportAboutAction('open_user_manual', 'success');
