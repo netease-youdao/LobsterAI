@@ -3077,6 +3077,11 @@ const _syncOpenClawConfigImpl = async (
       error: restarted.message || 'Failed to restart OpenClaw gateway after config sync.',
     };
   }
+  // Restore desktop IM sync even when the next message arrives only on mobile.
+  // Config-driven restarts intentionally suppress the client's auto-reconnect.
+  if (openClawRuntimeAdapter && !isQuitting && !isDataMigrationRestoreInProgress) {
+    await openClawRuntimeAdapter.connectGatewayIfNeeded();
+  }
   return {
     success: true,
     changed: true,

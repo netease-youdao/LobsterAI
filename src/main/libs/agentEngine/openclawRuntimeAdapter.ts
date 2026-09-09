@@ -4197,7 +4197,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   async connectGatewayIfNeeded(): Promise<void> {
     this.gatewayReconnectSuppressed = false;
     if (this.gatewayClient) {
-      console.log('[ChannelSync] connectGatewayIfNeeded: gateway client already exists, skipping');
+      // Another RPC may have established the socket after a gateway restart.
+      // A connected client does not imply that channel polling is running.
+      this.startChannelPolling();
       return;
     }
     console.log('[ChannelSync] connectGatewayIfNeeded: no gateway client, initializing...');
@@ -4270,7 +4272,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       return;
     }
     // Already running
-    if (this.channelPollingTimer) { console.log('[ChannelSync] startChannelPolling: already running, skipping'); return; }
+    if (this.channelPollingTimer) return;
 
     console.log('[ChannelSync] startChannelPolling: starting periodic channel session discovery');
     // Run once immediately, then at interval
@@ -6099,6 +6101,11 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         this.gatewayReconnectAttempt = 0;
         this.resetGatewayRpcHealth();
         this.subscribeToGatewaySessionEvents(client);
+        // All connection paths must resume history sync, including model
+        // switches and config RPCs that bypass connectGatewayIfNeeded().
+        if (this.channelSessionSync) {
+          this.startChannelPolling();
+        }
         void this.questionController.restorePending();
         settleResolve();
         try {
