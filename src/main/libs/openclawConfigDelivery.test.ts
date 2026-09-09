@@ -1,11 +1,16 @@
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import {
   __resetOpenClawConfigDeliveryStateForTests,
+  CONFIG_DELIVERY_FALLBACK_REASON_PREFIX,
+  DEFERRED_SYNC_REASON_PREFIX,
   deliverOpenClawConfigToGateway,
+  isConfigDeliveryFallbackReason,
+  mergeDeferredGatewayRestartReason,
   OpenClawConfigDeliveryMode,
   type OpenClawConfigRpcClient,
+  OpenClawConfigRpcMethod,
   stripPluginIndexManagedKeysFromRawConfig,
 } from './openclawConfigDelivery';
 
@@ -22,10 +27,10 @@ function createClient(handlers: {
   const client: OpenClawConfigRpcClient = {
     request: async <T,>(method: string, params?: unknown): Promise<T> => {
       calls.push({ method, params });
-      if (method === 'config.get') {
+      if (method === OpenClawConfigRpcMethod.Get) {
         return { hash: handlers.hash ? handlers.hash() : 'hash-1' } as T;
       }
-      if (method === 'config.set') {
+      if (method === OpenClawConfigRpcMethod.Set) {
         setCalls += 1;
         return (handlers.set ? handlers.set(params, setCalls) : { ok: true }) as T;
       }
@@ -50,6 +55,10 @@ beforeEach(() => {
   __resetOpenClawConfigDeliveryStateForTests();
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('deliverOpenClawConfigToGateway', () => {
   test('running gateway with healthy rpc acks via config.set and schedules no restart', async () => {
     const { client, calls } = createClient({});
@@ -62,13 +71,14 @@ describe('deliverOpenClawConfigToGateway', () => {
     expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
     expect(result.restartScheduled).toBe(false);
     expect(scheduleDeferredRestart).not.toHaveBeenCalled();
-    expect(calls.map((call) => call.method)).toEqual(['config.get', 'config.set']);
+    expect(calls.map((call) => call.method)).toEqual([OpenClawConfigRpcMethod.Get, OpenClawConfigRpcMethod.Set]);
     const setParams = calls[1].params as { raw: string; baseHash?: string };
     expect(setParams.raw).toBe(FILE_CONTENT);
     expect(setParams.baseHash).toBe('hash-1');
   });
 
   test('base hash conflict retries once with a fresh hash and succeeds', async () => {
+    vi.useFakeTimers();
     let hashCalls = 0;
     const { client, calls } = createClient({
       hash: () => {
@@ -83,21 +93,148 @@ describe('deliverOpenClawConfigToGateway', () => {
       },
     });
     const scheduleDeferredRestart = vi.fn();
-    const result = await deliverOpenClawConfigToGateway(baseInput({
+    const resultPromise = deliverOpenClawConfigToGateway(baseInput({
       ensureRpcClient: async () => client,
       scheduleDeferredRestart,
     }));
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
 
     expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
     expect(calls.map((call) => call.method)).toEqual([
-      'config.get',
-      'config.set',
-      'config.get',
-      'config.set',
+      OpenClawConfigRpcMethod.Get,
+      OpenClawConfigRpcMethod.Set,
+      OpenClawConfigRpcMethod.Get,
+      OpenClawConfigRpcMethod.Set,
     ]);
     const retryParams = calls[3].params as { baseHash?: string };
     expect(retryParams.baseHash).toBe('hash-2');
     expect(scheduleDeferredRestart).not.toHaveBeenCalled();
+  });
+
+  test('waits for the watcher-owned hash cache to refresh during a slow Windows reload', async () => {
+    vi.useFakeTimers();
+    let cachedHash = 'before-model-switch';
+    const { client, calls } = createClient({
+      hash: () => cachedHash,
+      set: (params) => {
+        if ((params as { baseHash: string }).baseHash !== 'after-model-switch') {
+          throw new Error('config changed since last load; re-run config.get and retry');
+        }
+        return { ok: true };
+      },
+    });
+    const scheduleDeferredRestart = vi.fn();
+    setTimeout(() => { cachedHash = 'after-model-switch'; }, 6_000);
+    const resultPromise = deliverOpenClawConfigToGateway(baseInput({
+      reason: 'agent-updated',
+      ensureRpcClient: async () => client,
+      scheduleDeferredRestart,
+    }));
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(6_000);
+    expect(result.restartScheduled).toBe(false);
+    expect(scheduleDeferredRestart).not.toHaveBeenCalled();
+    const writes = calls.filter(call => call.method === OpenClawConfigRpcMethod.Set);
+    expect(writes.length).toBeGreaterThan(2);
+    expect(writes.at(-1)?.params).toMatchObject({ baseHash: 'after-model-switch' });
+  });
+
+  test('hash retries reread the file and preserve changes made during watcher migration', async () => {
+    vi.useFakeTimers();
+    let raw = FILE_CONTENT;
+    const migrated = JSON.stringify({
+      ...JSON.parse(FILE_CONTENT),
+      agents: { entries: { main: { model: { primary: 'p/m-b' } } } },
+      plugins: { entries: { browser: { enabled: true } }, installs: { browser: {} } },
+    });
+    const { client, calls } = createClient({
+      hash: () => raw === FILE_CONTENT ? 'before-migration' : 'after-migration',
+      set: (_params, callIndex) => {
+        if (callIndex === 1) {
+          raw = migrated;
+          throw new Error('config changed since last load');
+        }
+        return { ok: true };
+      },
+    });
+    const resultPromise = deliverOpenClawConfigToGateway(baseInput({
+      readConfigFile: () => raw,
+      ensureRpcClient: async () => client,
+    }));
+    await vi.runAllTimersAsync();
+
+    expect((await resultPromise).mode).toBe(OpenClawConfigDeliveryMode.Rpc);
+    const lastWrite = calls.filter(call => call.method === OpenClawConfigRpcMethod.Set).at(-1);
+    expect(lastWrite?.params).toEqual({
+      raw: stripPluginIndexManagedKeysFromRawConfig(migrated),
+      baseHash: 'after-migration',
+    });
+  });
+
+  test('persistent hash conflicts exhaust a bounded wait and schedule one fallback', async () => {
+    vi.useFakeTimers();
+    const { client } = createClient({
+      set: () => { throw new Error('config changed since last load'); },
+    });
+    const scheduleDeferredRestart = vi.fn();
+    const resultPromise = deliverOpenClawConfigToGateway(baseInput({
+      ensureRpcClient: async () => client,
+      scheduleDeferredRestart,
+    }));
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Fallback);
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(6_000);
+    expect(result.elapsedMs).toBeLessThanOrEqual(12_000);
+    expect(result.restartScheduled).toBe(true);
+    expect(scheduleDeferredRestart).toHaveBeenCalledExactlyOnceWith(
+      `${CONFIG_DELIVERY_FALLBACK_REASON_PREFIX}server-models-updated`,
+    );
+  });
+
+  test('a queued fallback can be satisfied by retrying delivery after the watcher catches up', async () => {
+    vi.useFakeTimers();
+    let watcherCaughtUp = false;
+    const { client } = createClient({
+      hash: () => watcherCaughtUp ? 'new-hash' : 'old-hash',
+      set: () => {
+        if (!watcherCaughtUp) throw new Error('config changed since last load');
+        return { ok: true };
+      },
+    });
+    const scheduleDeferredRestart = vi.fn();
+    const firstPromise = deliverOpenClawConfigToGateway(baseInput({
+      ensureRpcClient: async () => client,
+      scheduleDeferredRestart,
+    }));
+    await vi.runAllTimersAsync();
+    expect((await firstPromise).restartScheduled).toBe(true);
+
+    watcherCaughtUp = true;
+    const recheck = await deliverOpenClawConfigToGateway(baseInput({
+      reason: `${DEFERRED_SYNC_REASON_PREFIX}${CONFIG_DELIVERY_FALLBACK_REASON_PREFIX}server-models-updated`,
+      ensureRpcClient: async () => client,
+      scheduleDeferredRestart: undefined,
+    }));
+    expect(recheck.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
+    expect(recheck.restartScheduled).toBe(false);
+    expect(scheduleDeferredRestart).toHaveBeenCalledTimes(1);
+  });
+
+  test('a failed restart recheck does not requeue itself or consume the restart rate limit', async () => {
+    const recheck = await deliverOpenClawConfigToGateway(baseInput({ scheduleDeferredRestart: undefined }));
+    expect(recheck.mode).toBe(OpenClawConfigDeliveryMode.Fallback);
+    expect(recheck.restartScheduled).toBe(false);
+
+    const scheduleDeferredRestart = vi.fn();
+    const next = await deliverOpenClawConfigToGateway(baseInput({ scheduleDeferredRestart }));
+    expect(next.restartScheduled).toBe(true);
+    expect(scheduleDeferredRestart).toHaveBeenCalledTimes(1);
   });
 
   test('non-hash rpc failure falls back to the deferred restart', async () => {
@@ -152,7 +289,7 @@ describe('deliverOpenClawConfigToGateway', () => {
 
     expect(ensureRpcClient).toHaveBeenCalledTimes(1);
     expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
-    expect(calls.map((call) => call.method)).toEqual(['config.get', 'config.set']);
+    expect(calls.map((call) => call.method)).toEqual([OpenClawConfigRpcMethod.Get, OpenClawConfigRpcMethod.Set]);
   });
 
   test('stopped gateway skips delivery without touching the rpc client', async () => {
@@ -205,7 +342,7 @@ describe('deliverOpenClawConfigToGateway', () => {
       ensureRpcClient: async () => client,
     }));
 
-    const setParams = calls.find((call) => call.method === 'config.set')?.params as { raw: string };
+    const setParams = calls.find((call) => call.method === OpenClawConfigRpcMethod.Set)?.params as { raw: string };
     expect(setParams.raw).toBe(FILE_CONTENT);
     expect(setParams.raw).not.toContain('__OPENCLAW_REDACTED__');
   });
@@ -226,7 +363,7 @@ describe('deliverOpenClawConfigToGateway', () => {
     }));
 
     expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
-    const setParams = calls.find((call) => call.method === 'config.set')?.params as { raw: string };
+    const setParams = calls.find((call) => call.method === OpenClawConfigRpcMethod.Set)?.params as { raw: string };
     const sent = JSON.parse(setParams.raw) as {
       plugins: Record<string, unknown>;
       meta: Record<string, unknown>;
@@ -283,6 +420,7 @@ describe('deliverOpenClawConfigToGateway', () => {
   });
 
   test.each([false, true])('rejects QA ownership validation failures without restarting (hash retry=%s)', async (retry) => {
+    vi.useFakeTimers();
     const cause = 'UNAVAILABLE: Config validation failed: agents.ownership: '
       + 'agents.ownership=explicit cannot be combined with a legacy default=true marker: '
       + 'code=CONFIG_VALIDATION_FAILED';
@@ -295,16 +433,40 @@ describe('deliverOpenClawConfigToGateway', () => {
       },
     });
     const scheduleDeferredRestart = vi.fn();
-    const result = await deliverOpenClawConfigToGateway(baseInput({
+    const resultPromise = deliverOpenClawConfigToGateway(baseInput({
       ensureRpcClient: async () => client,
       scheduleDeferredRestart,
     }));
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
 
     expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rejected);
     expect(result.restartScheduled).toBe(false);
     expect(result.detail).toContain('agents.ownership');
     expect(scheduleDeferredRestart).not.toHaveBeenCalled();
-    expect(calls.filter(call => call.method === 'config.set')).toHaveLength(retry ? 2 : 1);
+    expect(calls.filter(call => call.method === OpenClawConfigRpcMethod.Set)).toHaveLength(retry ? 2 : 1);
+  });
+});
+
+describe('deferred gateway restart reasons', () => {
+  const fallback = `${CONFIG_DELIVERY_FALLBACK_REASON_PREFIX}agent-updated`;
+  const deferredFallback = `${DEFERRED_SYNC_REASON_PREFIX}${fallback}`;
+  const imRestart = 'im-config-updated';
+
+  test.each([fallback, deferredFallback])('recognizes only delivery fallback reasons: %s', (reason) => {
+    expect(isConfigDeliveryFallbackReason(reason)).toBe(true);
+    expect(isConfigDeliveryFallbackReason(imRestart)).toBe(false);
+    expect(isConfigDeliveryFallbackReason(`${DEFERRED_SYNC_REASON_PREFIX}${imRestart}`)).toBe(false);
+  });
+
+  test.each([fallback, deferredFallback])('keeps a later required restart when delivery originally failed: %s', (reason) => {
+    expect(mergeDeferredGatewayRestartReason(reason, imRestart)).toBe(imRestart);
+    expect(mergeDeferredGatewayRestartReason(imRestart, reason)).toBe(imRestart);
+  });
+
+  test('keeps the original required restart when more changes arrive', () => {
+    expect(mergeDeferredGatewayRestartReason(null, fallback)).toBe(fallback);
+    expect(mergeDeferredGatewayRestartReason(imRestart, 'plugin-installed')).toBe(imRestart);
   });
 });
 

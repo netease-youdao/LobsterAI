@@ -442,7 +442,10 @@ import {
 } from './libs/openclawChannelSessionSync';
 import {
   CONFIG_DELIVERY_FALLBACK_REASON_PREFIX,
+  DEFERRED_SYNC_REASON_PREFIX,
   deliverOpenClawConfigToGateway,
+  isConfigDeliveryFallbackReason,
+  mergeDeferredGatewayRestartReason,
   OpenClawConfigDeliveryMode,
 } from './libs/openclawConfigDelivery';
 import {
@@ -2743,8 +2746,6 @@ const waitForOpenClawConfigApply = async (context: string): Promise<OpenClawEngi
   return null;
 };
 
-const DEFERRED_SYNC_REASON_PREFIX = 'deferred:';
-
 const executeDeferredGatewayRestart = async (reason: string) => {
   clearDeferredRestart();
   deferredRestartReason = null;
@@ -2800,11 +2801,12 @@ const selfRestartSatisfiesSync = (
 };
 
 const scheduleDeferredGatewayRestart = (reason: string) => {
+  deferredRestartReason = mergeDeferredGatewayRestartReason(deferredRestartReason, reason);
   // If already scheduled, the latest config is already on disk — just let
   // the existing timer handle the restart.
   if (deferredRestartTimer) {
     console.log(
-      `${gwDiagTs()} scheduleDeferredGatewayRestart: already scheduled, skipping (reason: ${reason})`,
+      `${gwDiagTs()} scheduleDeferredGatewayRestart: already scheduled, keeping reason=${deferredRestartReason}`,
     );
     return;
   }
@@ -2812,11 +2814,10 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
   console.log(
     `${gwDiagTs()} scheduleDeferredGatewayRestart: scheduling deferred restart, polling every ${DEFERRED_RESTART_POLL_MS}ms, overdue threshold ${DEFERRED_RESTART_OVERDUE_MS}ms (reason: ${reason})`,
   );
-  deferredRestartReason = reason;
   deferredRestartOverdue = false;
   deferredRestartTimer = setInterval(() => {
     if (!hasActiveGatewayWorkloads()) {
-      void executeDeferredGatewayRestart(reason);
+      void executeDeferredGatewayRestart(deferredRestartReason ?? reason);
     }
   }, DEFERRED_RESTART_POLL_MS);
 
@@ -2828,14 +2829,14 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
     if (hasActiveGatewayWorkloads()) {
       deferredRestartOverdue = true;
       console.warn(
-        `${gwDiagTs()} scheduleDeferredGatewayRestart: overdue while workloads remain active; restart stays queued until the first idle poll (reason: ${reason})`,
+        `${gwDiagTs()} scheduleDeferredGatewayRestart: overdue while workloads remain active; restart stays queued until the first idle poll (reason: ${deferredRestartReason ?? reason})`,
       );
       return;
     }
     console.warn(
-      `${gwDiagTs()} scheduleDeferredGatewayRestart: overdue threshold reached after workloads drained; applying queued restart (reason: ${reason})`,
+      `${gwDiagTs()} scheduleDeferredGatewayRestart: overdue threshold reached after workloads drained; applying queued restart (reason: ${deferredRestartReason ?? reason})`,
     );
-    void executeDeferredGatewayRestart(reason);
+    void executeDeferredGatewayRestart(deferredRestartReason ?? reason);
   }, DEFERRED_RESTART_OVERDUE_MS);
 };
 
@@ -2976,8 +2977,13 @@ const _syncOpenClawConfigImpl = async (
     `${D()} needsHardRestart=${needsHardRestart} (envChanged=${secretEnvVarsChanged} bindingsChanged=${!!syncResult.bindingsChanged} configChanged=${effectiveConfigChanged} restartImpact=${syncResult.restartImpact ?? OpenClawConfigImpact.None} expectedRestart=${expectedRestartImpact} restartFlag=${!!options.restartGatewayIfRunning})`,
   );
 
-  if (!needsHardRestart) {
-    if (!effectiveConfigChanged) {
+  const retryDeferredDelivery = options.reason.startsWith(DEFERRED_SYNC_REASON_PREFIX)
+    && isConfigDeliveryFallbackReason(options.reason)
+    && !secretEnvVarsChanged
+    && !syncResult.bindingsChanged
+    && !syncRestartImpact;
+  if (!needsHardRestart || retryDeferredDelivery) {
+    if (!effectiveConfigChanged && !retryDeferredDelivery) {
       console.log(`${D()} ──── NO RESTART, config unchanged. reason=${options.reason}`);
       return {
         success: true,
@@ -2997,11 +3003,8 @@ const _syncOpenClawConfigImpl = async (
       ensureRpcClient: async () => (
         openClawRuntimeAdapter ? openClawRuntimeAdapter.ensureGatewayRpcClient() : null
       ),
-      scheduleDeferredRestart: scheduleDeferredGatewayRestart,
+      scheduleDeferredRestart: retryDeferredDelivery ? undefined : scheduleDeferredGatewayRestart,
     });
-    console.log(
-      `${D()} ──── NO RESTART, hot delivery mode=${delivery.mode} restartScheduled=${delivery.restartScheduled}. reason=${options.reason}`,
-    );
     if (delivery.mode === OpenClawConfigDeliveryMode.Rejected) {
       return {
         success: false,
@@ -3010,10 +3013,16 @@ const _syncOpenClawConfigImpl = async (
         error: delivery.detail,
       };
     }
-    return {
-      success: true,
-      changed: true,
-    };
+    if (!retryDeferredDelivery || delivery.mode !== OpenClawConfigDeliveryMode.Fallback) {
+      console.log(
+        `${D()} ──── NO RESTART, hot delivery mode=${delivery.mode} restartScheduled=${delivery.restartScheduled}. reason=${options.reason}`,
+      );
+      return {
+        success: true,
+        changed: true,
+      };
+    }
+    console.warn(`${D()} deferred config delivery still failed; retaining queued restart. reason=${options.reason}`);
   }
 
   const status = manager.getStatus();
