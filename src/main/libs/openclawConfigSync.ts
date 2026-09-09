@@ -2053,9 +2053,8 @@ export class OpenClawConfigSync {
           '[OpenClawConfigSync] enterprise mode: no API config resolved, generating full config with empty providers (enterprise merge will supply them)',
         );
       } else {
-        // No API/model configured yet (fresh install).
-        // Write a minimal config so the gateway can start — it just won't have
-        // any model provider until the user configures one.
+        // This also happens during logout or before server models finish
+        // loading. Keep existing non-provider state so IM stays configured.
         const result = this.writeMinimalConfig(configPath, reason);
         // Still sync AGENTS.md even when API is not configured — skills/systemPrompt
         // may already be set and should be available when the user configures a model.
@@ -4065,9 +4064,8 @@ export class OpenClawConfigSync {
   }
 
   /**
-   * Write a minimal openclaw.json that lets the gateway start without any
-   * model/provider configured.  The full config will be synced once the
-   * user sets up a model in the UI.
+   * Start fresh installs without a provider, or remove unavailable providers
+   * from an existing config while preserving IM and other runtime state.
    */
   private writeMinimalConfig(configPath: string, _reason: string): OpenClawConfigSyncResult {
     const baseMinimalConfig: Record<string, unknown> = {
@@ -4087,8 +4085,8 @@ export class OpenClawConfigSync {
       currentContent = '';
     }
 
-    // Build the config to write: start from the base minimal config, then
-    // selectively preserve non-provider sections from the existing file.
+    // Preserve all non-provider sections, including channel accounts, agent
+    // bindings, and gateway auth. Losing them on logout tears down live IM.
     // Critically, we do NOT preserve existing.models — it may contain
     // ${LOBSTER_APIKEY_X} placeholders for providers that are no longer
     // configured, causing the gateway to fail to start because those env
@@ -4096,20 +4094,16 @@ export class OpenClawConfigSync {
     let mergedConfig: Record<string, unknown> = { ...baseMinimalConfig };
     if (currentContent) {
       try {
-        const existing = JSON.parse(currentContent);
+        const existing = asConfigRecord(JSON.parse(currentContent));
+        mergedConfig = { ...baseMinimalConfig, ...existing };
+        delete mergedConfig.models;
         // Preserve IM channel plugin entries — these reference their own env
         // vars (${LOBSTER_TG_BOT_TOKEN} etc.) that are still injected when
         // the corresponding IM channels remain enabled. Plugin-index-managed
         // keys (`installs`) are filtered out — see omitPluginIndexManagedKeys.
-        if (existing.plugins) {
+        if (existing?.plugins) {
           mergedConfig.plugins = omitPluginIndexManagedKeys(existing.plugins);
         }
-        // Preserve non-default gateway settings (e.g. custom port).
-        if (existing.gateway && existing.gateway.mode !== 'local') {
-          mergedConfig.gateway = existing.gateway;
-        }
-        // existing.models is intentionally NOT preserved — it references
-        // ${LOBSTER_APIKEY_*} env vars that may no longer be set.
       } catch {
         // Malformed JSON — overwrite with base minimal config.
       }

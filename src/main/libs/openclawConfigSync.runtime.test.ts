@@ -85,7 +85,7 @@ const mockRuntimeState = vi.hoisted(() => ({
       apiKey: string;
       model: string;
       apiType: 'anthropic' | 'openai';
-    };
+    } | null;
     providerMetadata: {
       providerName: string;
       authType?: 'apikey' | 'oauth';
@@ -210,6 +210,72 @@ describe('OpenClawConfigSync runtime config output', () => {
       ...overrides,
     } as never);
   };
+
+  test('preserves IM, routing, and gateway auth while models are unavailable and after recovery', async () => {
+    const sync = await createSync({
+      getAgents: () => ['main', 'worker'].map(id => ({
+        id, name: id, enabled: true, isDefault: id === 'main',
+        model: '', workingDirectory: '', description: '', systemPrompt: '', identity: '',
+        icon: '', skillIds: [], source: 'custom', presetId: '', createdAt: 0, updatedAt: 0,
+      })),
+      getQQInstances: () => [{
+        ...DEFAULT_QQ_CONFIG, enabled: true, appId: '123', appSecret: 'qq-secret',
+        instanceId: 'account1', instanceName: 'QA',
+      }],
+      getIMSettings: () => ({ platformAgentBindings: { qq: 'worker' } }),
+    });
+    expect(sync.sync('configured')).toMatchObject({ ok: true, changed: true });
+    const configured = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(configured.channels.qqbot.accounts.account1).toBeDefined();
+    expect(configured.bindings).toContainEqual({
+      agentId: 'worker', match: { channel: OpenClawQQPlugin.Channel, accountId: '*' },
+    });
+    expect(configured.gateway.auth.token).toBe('${OPENCLAW_GATEWAY_TOKEN}');
+    expect(configured.models.providers).not.toEqual({});
+
+    const apiConfig = mockRuntimeState.rawApiConfig.config;
+    mockRuntimeState.rawApiConfig.config = null;
+    expect(sync.sync('logout')).toMatchObject({ ok: true, changed: true });
+    const unavailable = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const { models: _models, meta: _beforeMeta, ...before } = configured;
+    const { meta: _afterMeta, ...after } = unavailable;
+    expect(after).toEqual(before);
+    expect(unavailable).not.toHaveProperty('models');
+    expect(sync.collectSecretEnvVars().LOBSTER_QQ_CLIENT_SECRET).toBe('qq-secret');
+    expect(sync.sync('waiting-for-models')).toMatchObject({ ok: true, changed: false });
+
+    mockRuntimeState.rawApiConfig.config = apiConfig;
+    expect(sync.sync('models-recovered')).toMatchObject({ ok: true, changed: true });
+    const recovered = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(recovered.models).toEqual(configured.models);
+    expect(recovered.channels).toEqual(configured.channels);
+    expect(recovered.bindings).toEqual(configured.bindings);
+    expect(recovered.agents).toEqual(configured.agents);
+    expect(recovered.gateway).toEqual(configured.gateway);
+  });
+
+  test('keeps a fresh installation minimal when no model has been configured', async () => {
+    mockRuntimeState.rawApiConfig.config = null;
+    const sync = await createSync();
+    expect(sync.sync('first-start')).toMatchObject({ ok: true, changed: true });
+    const { meta: _meta, ...config } = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config).toEqual({ gateway: { mode: 'local' } });
+    expect(sync.sync('repeat-start')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test('still removes plugin-index-managed installs when no model is available', async () => {
+    const plugins = { entries: { [OpenClawQQPlugin.Id]: { enabled: true } } };
+    fs.writeFileSync(configPath, JSON.stringify({
+      gateway: { mode: 'remote', remote: { url: 'wss://gateway.example.test' } },
+      plugins: { ...plugins, installs: { [OpenClawQQPlugin.Id]: { source: 'npm' } } },
+    }));
+    mockRuntimeState.rawApiConfig.config = null;
+    const sync = await createSync();
+    expect(sync.sync('no-model')).toMatchObject({ ok: true, changed: true });
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins).toEqual(plugins);
+    expect(config.gateway).toEqual({ mode: 'remote', remote: { url: 'wss://gateway.example.test' } });
+  });
 
   test('emits stable explicit ownership after an upgrade and preserves channel routing', async () => {
     fs.writeFileSync(configPath, JSON.stringify({ agents: {

@@ -26,7 +26,7 @@ import { mergeNoProxyValue } from './noProxyEnv';
 import { getCodexHomeDir } from './openaiCodexAuth';
 import { migrateLegacyCronStorageWithDoctor } from './openclawCronLegacyMigration';
 import { cleanupStaleGatewayLocks, GatewayLockCleanupAction } from './openclawGatewayLock';
-import { spawnOpenClawGatewayProcess, stopOpenClawGatewayProcess } from './openclawGatewayProcess';
+import { buildOpenClawGatewayShutdownBridge, spawnOpenClawGatewayProcess, stopOpenClawGatewayProcess } from './openclawGatewayProcess';
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
@@ -1028,8 +1028,7 @@ export class OpenClawEngineManager extends EventEmitter {
       await this.stopGatewayProcess(this.gatewayProcess);
       console.log('[OpenClaw] gateway process stopped');
       this.gatewayProcess = null;
-      // On Windows the kill is TerminateProcess — the gateway had no chance
-      // to release its single-instance lock, so reclaim it now.
+      // A forced shutdown may leave the single-instance lock behind.
       this.cleanupStaleGatewayLocksSafely('post-stop');
     }
 
@@ -1402,6 +1401,7 @@ export class OpenClawEngineManager extends EventEmitter {
       `// Auto-generated CJS wrapper for Windows ESM compatibility.\n` +
       `// On Windows, load the ESM gateway through file:// URLs so drive letters\n` +
       `// (e.g. "D:") are not misinterpreted as URL schemes.\n` +
+      buildOpenClawGatewayShutdownBridge() +
       `const { pathToFileURL } = require('node:url');\n` +
       `const path = require('node:path');\n` +
       `const fs = require('node:fs');\n` +
@@ -1510,6 +1510,7 @@ export class OpenClawEngineManager extends EventEmitter {
     const expectedContent =
       `// Auto-generated CJS launcher for Windows — bundle-only mode.\n` +
       `// Loads gateway-bundle.mjs directly without dist/ fallback.\n` +
+      buildOpenClawGatewayShutdownBridge() +
       `const { pathToFileURL } = require('node:url');\n` +
       `const path = require('node:path');\n` +
       `const fs = require('node:fs');\n` +
@@ -1828,7 +1829,7 @@ export class OpenClawEngineManager extends EventEmitter {
 
   private async stopGatewayProcess(child: GatewayProcess): Promise<void> {
     const pid = 'pid' in child ? child.pid : undefined;
-    console.log(`${gwDiagTs()} stopGatewayProcess: sending graceful kill to pid=${pid}`);
+    console.log(`${gwDiagTs()} stopGatewayProcess: requesting graceful shutdown for pid=${pid}`);
     this.expectedGatewayExits.add(child);
     try {
       await stopOpenClawGatewayProcess(child);
