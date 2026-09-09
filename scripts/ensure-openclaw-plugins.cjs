@@ -16,7 +16,8 @@
  *   3. Installs via `openclaw plugins install` if not cached at the right version
  *   4. Removes any dependency tree that only served the openclaw peer, then
  *      caches the plugin
- *   5. Copies the plugin into vendor/openclaw-runtime/current/third-party-extensions/{id}/
+ *   5. Copies into third-party-extensions/{id}, or dist/extensions/{id} for
+ *      explicitly reviewed official runtimeBundled packages
  *
  * Environment variables:
  *   OPENCLAW_SKIP_PLUGINS          – Set to "1" to skip this script entirely
@@ -40,6 +41,7 @@ const {
 const { prepareHostPeerPackage } = require('./openclaw-plugin-preparers/host-peer.cjs');
 const { QQ_PACKAGE_NAME, configureQQRuntimeEntry, prepareQQPackage } = require('./openclaw-plugin-preparers/qqbot.cjs');
 const { pruneHostPeerLeftovers } = require('./openclaw-plugin-host-peer-leftovers.cjs');
+const { resolvePreinstalledPluginDir, verifyRuntimeBundledPlugin } = require('./openclaw-runtime-packaging.cjs');
 
 const OPENCLAW_PLUGIN_INSTALL_TIMEOUT_MS = process.platform === 'win32'
   ? 20 * 60 * 1000
@@ -618,6 +620,22 @@ function buildOpenClawPluginInstallArgs(installSpec) {
 // Main
 // ---------------------------------------------------------------------------
 
+function copyPreinstalledPluginToRuntime(cacheDir, runtimeRoot, plugin) {
+  const targetDir = resolvePreinstalledPluginDir(runtimeRoot, plugin);
+  fs.rmSync(targetDir, { recursive: true, force: true });
+  copyDirRecursive(cacheDir, targetDir);
+  fs.rmSync(path.join(targetDir, 'plugin-install-info.json'), { force: true });
+
+  if (plugin.runtimeBundled === true) {
+    // Remove the previous layout as well: plugins.load.paths would discover it
+    // first and Discord would still fail the openKeyedStore trust check.
+    fs.rmSync(path.join(runtimeRoot, 'third-party-extensions', plugin.id), { recursive: true, force: true });
+    pruneHostPeerLeftovers(targetDir);
+    verifyRuntimeBundledPlugin(runtimeRoot, plugin);
+  }
+  return targetDir;
+}
+
 function main() {
   if (process.env.OPENCLAW_SKIP_PLUGINS === '1') {
     log('Skipped (OPENCLAW_SKIP_PLUGINS=1).');
@@ -654,6 +672,9 @@ function main() {
   // and wasted ~30s on serial load failures.  `third-party-extensions/` is discovered
   // solely via `plugins.load.paths` (origin="config"), bypassing the bundled contract.
   // See openclaw/openclaw#60196.
+  // Official Discord 2026.8.1 satisfies that contract and needs bundled trust
+  // for its Activities stores. Its runtimeBundled declaration opts it into
+  // dist/extensions; all other preinstalls keep the layout above.
   const runtimeExtensionsDir = path.join(runtimeCurrentDir, 'third-party-extensions');
 
   ensureDir(runtimeExtensionsDir);
@@ -665,7 +686,6 @@ function main() {
     const { id, npm: npmSpec, version, optional } = plugin;
     const cacheDir = path.join(pluginCacheBase, id);
     const installInfoPath = path.join(cacheDir, 'plugin-install-info.json');
-    const targetDir = path.join(runtimeExtensionsDir, id);
 
     log(`--- Plugin: ${id} (${npmSpec}@${version}) ---`);
 
@@ -825,17 +845,7 @@ function main() {
 
     if (npmSpec === QQ_PACKAGE_NAME) configureQQRuntimeEntry(cacheDir);
 
-    // Remove existing target and copy fresh
-    if (fs.existsSync(targetDir)) {
-      fs.rmSync(targetDir, { recursive: true, force: true });
-    }
-    copyDirRecursive(cacheDir, targetDir);
-
-    // Remove the plugin-install-info.json from the target (it's cache metadata only)
-    const targetInfoPath = path.join(targetDir, 'plugin-install-info.json');
-    if (fs.existsSync(targetInfoPath)) {
-      fs.unlinkSync(targetInfoPath);
-    }
+    const targetDir = copyPreinstalledPluginToRuntime(cacheDir, runtimeCurrentDir, plugin);
 
     log(`Installed ${id} -> ${path.relative(rootDir, targetDir)}`);
   }
@@ -857,6 +867,7 @@ module.exports = {
   buildGitEnv,
   copyDirRecursive,
   copyInstalledPluginToCache,
+  copyPreinstalledPluginToRuntime,
   findInstalledPluginDir,
   gitCloneAndPack,
   isGitSpec,

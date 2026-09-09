@@ -8,7 +8,13 @@ const { OPENCLAW_BUNDLE_ASSET_TARGETS } = require('./openclaw-bundle-assets.cjs'
 const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-python-runtime.js');
 const { syncLocalOpenClawExtensions } = require('./sync-local-openclaw-extensions.cjs');
 const { packMultipleSources } = require('./pack-openclaw-tar.cjs');
-const { DIST_DIFFS_EXTENSION_DIR, DIST_EXTENSIONS_DIR, summarizeGatewayAsarEntries } = require('./openclaw-runtime-packaging.cjs');
+const {
+  DIST_DIFFS_EXTENSION_DIR,
+  DIST_EXTENSIONS_DIR,
+  resolvePreinstalledPluginDir,
+  summarizeGatewayAsarEntries,
+  verifyRuntimeBundledPlugin,
+} = require('./openclaw-runtime-packaging.cjs');
 const { collectHostPeerLeftovers, measureDirectorySize } = require('./openclaw-plugin-host-peer-leftovers.cjs');
 const { verifyOpenClawPluginSdkBridge } = require('./openclaw-plugin-sdk-bridge.cjs');
 const { createOpenClawWindowsPayload } = require('./openclaw-windows-payload.cjs');
@@ -111,9 +117,11 @@ function verifyPreinstalledPlugins(runtimeRoot, buildHint) {
 
   for (const plugin of plugins) {
     if (!plugin.id) continue;
-    const pluginDir = path.join(extensionsDir, plugin.id);
+    const pluginDir = resolvePreinstalledPluginDir(runtimeRoot, plugin);
     if (!existsSync(pluginDir)) {
       missing.push(plugin.id);
+    } else {
+      verifyRuntimeBundledPlugin(runtimeRoot, plugin);
     }
   }
 
@@ -125,7 +133,11 @@ function verifyPreinstalledPlugins(runtimeRoot, buildHint) {
     );
   }
 
-  verifyNoHostPeerLeftovers(extensionsDir, plugins);
+  verifyNoHostPeerLeftovers(extensionsDir, plugins.filter(plugin => plugin.runtimeBundled !== true));
+  verifyNoHostPeerLeftovers(
+    path.join(runtimeRoot, DIST_EXTENSIONS_DIR),
+    plugins.filter(plugin => plugin.runtimeBundled === true),
+  );
 
   console.log(`[electron-builder-hooks] Verified ${plugins.length} preinstalled OpenClaw plugin(s).`);
 }
