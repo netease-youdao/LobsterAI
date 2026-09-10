@@ -138,4 +138,49 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw workspace migration', () => {
     expect((await migrate()).report.status).toBe(OpenClawWorkspaceMigrationStatus.Skipped);
     expect(fs.existsSync(path.join(stateDir, 'state/openclaw.sqlite'))).toBe(false);
   });
+
+  test.each([0, 59])('quarantines a %i-byte zero-filled attestation without changing workspace/config', async (size) => {
+    const workspace = fs.realpathSync.native(workspaces[0]);
+    const marker = path.join(stateDir, 'workspace-attestations',
+      createHash('sha256').update(workspace).digest('hex') + '.attested');
+    fs.mkdirSync(path.dirname(marker), { recursive: true });
+    const bytes = Buffer.alloc(size);
+    fs.writeFileSync(marker, bytes);
+    const mtimeMs = fs.statSync(marker).mtimeMs;
+    const protectedFiles = [configPath, ...workspaces.flatMap(directory =>
+      ['AGENTS.md', 'SOUL.md', 'USER.md', 'IDENTITY.md', 'MEMORY.md'].map(name => path.join(directory, name)))];
+    const before = protectedFiles.map(digest);
+    const result = await migrate();
+    expect(result).toMatchObject({
+      code: 0,
+      report: { status: OpenClawWorkspaceMigrationStatus.Migrated, sourceCount: 1, warnings: [], remainingPaths: [] },
+    });
+    const quarantine = path.join(stateDir, 'workspace-attestation-quarantine');
+    const backups = fs.readdirSync(quarantine).filter(name => name.endsWith('.attested'));
+    expect(backups).toHaveLength(1);
+    const backupPath = path.join(quarantine, backups[0]);
+    expect(fs.readFileSync(backupPath)).toEqual(bytes);
+    const metadata = JSON.parse(fs.readFileSync(backupPath.replace(/\.attested$/, '.json'), 'utf8'));
+    expect(metadata).toMatchObject({ sourcePath: marker, size, mtimeMs, sha256: digest(backupPath) });
+    expect(result.report.changes.join('\n')).toContain(backupPath);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(protectedFiles.map(digest)).toEqual(before);
+    expect((await migrate()).report.status).toBe(OpenClawWorkspaceMigrationStatus.Skipped);
+    expect(fs.readdirSync(quarantine).filter(name => name.endsWith('.attested'))).toEqual(backups);
+  });
+
+  test('keeps a full-NUL attestation when the backup cannot be written', async () => {
+    const marker = path.join(stateDir, 'workspace-attestations',
+      createHash('sha256').update(fs.realpathSync.native(workspaces[0])).digest('hex') + '.attested');
+    fs.mkdirSync(path.dirname(marker), { recursive: true });
+    fs.writeFileSync(marker, Buffer.alloc(59));
+    fs.writeFileSync(path.join(stateDir, 'workspace-attestation-quarantine'), 'unrelated existing file');
+    const result = await migrate();
+    expect(result.code).toBe(1);
+    expect(result.report.status).toBe(OpenClawWorkspaceMigrationStatus.Failed);
+    expect(result.report.warnings.join('\n')).toContain('Failed quarantining');
+    expect(result.report.remainingPaths).toContain(marker);
+    expect(fs.readFileSync(marker)).toEqual(Buffer.alloc(59));
+    expect(fs.existsSync(marker + '.doctor-importing')).toBe(false);
+  });
 });

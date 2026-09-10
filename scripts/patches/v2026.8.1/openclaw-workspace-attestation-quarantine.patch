@@ -1,0 +1,483 @@
+OpenClaw v2026.8.1: quarantine empty and all-NUL workspace attestations before migration.
+
+Based on the source-claim recovery approach in upstream PR #134641:
+https://github.com/openclaw/openclaw/pull/134641
+Base: ea806575e6450e4d1efdfc72c19f04be982a1b9b.
+
+Extend zero-byte handling to the observed 59-byte all-NUL Windows marker.
+Require a configured hashed marker and surviving workspace content. Preserve
+the exact bytes plus metadata in workspace-attestation-quarantine before
+verified cleanup, under the existing maintenance lock and source claim.
+Other malformed/linked/unconfigured sources and receipt conflicts still block.
+No synthetic attestation, setup state, or migration receipt is imported.
+
+diff --git a/src/infra/state-migrations.workspace-attestation-recovery.test.ts b/src/infra/state-migrations.workspace-attestation-recovery.test.ts
+new file mode 100644
+index 00000000000..15f95197b9a
+--- /dev/null
++++ b/src/infra/state-migrations.workspace-attestation-recovery.test.ts
+@@ -0,0 +1,262 @@
++import fs from "node:fs";
++import path from "node:path";
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
++import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
++import { acquireGatewayLock } from "./gateway-lock.js";
++import * as recovery from "./state-migrations.workspace-attestation-recovery.js";
++import { migrateLegacyWorkspaceState } from "./state-migrations.workspace-setup.js";
++import { useWorkspaceMigrationTestFixture } from "./state-migrations.workspace-setup.test-support.js";
++
++const VALID_MARKER = "openclaw-workspace-attestation:v1\n2026-09-01T01:02:03.000Z\n";
++const CLAIM_SUFFIX = ".doctor-importing";
++
++describe("corrupt workspace attestation quarantine", () => {
++  const { setup, detect, migrate } = useWorkspaceMigrationTestFixture();
++  afterEach(() => vi.restoreAllMocks());
++
++  function fixture(bytes = Buffer.alloc(59)) {
++    const context = setup();
++    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
++    const marker = path.join(
++      context.stateDir,
++      "workspace-attestations",
++      identity.workspaceKey + ".attested",
++    );
++    const quarantine = path.join(
++      context.stateDir,
++      recovery.WORKSPACE_ATTESTATION_QUARANTINE_DIRNAME,
++    );
++    fs.mkdirSync(path.dirname(marker), { recursive: true });
++    fs.writeFileSync(marker, bytes);
++    fs.writeFileSync(
++      path.join(context.workspaceDir, "USER.md"),
++      "# Existing user\nKeep this content.\n",
++    );
++    return { ...context, marker, quarantine, bytes };
++  }
++
++  function backups(context: ReturnType<typeof fixture>) {
++    return fs.readdirSync(context.quarantine).filter((file) => file.endsWith(".attested"));
++  }
++
++  it.each([0, 59])(
++    "backs up all %i zero bytes, preserves setup, and converges on retry",
++    async (size) => {
++      const context = fixture(Buffer.alloc(size));
++      const setupPath = path.join(context.workspaceDir, "openclaw-workspace-state.json");
++      const completedAt = "2026-09-01T01:02:03.000Z";
++      fs.writeFileSync(setupPath, JSON.stringify({ version: 1, setupCompletedAt: completedAt }));
++      const mtimeMs = fs.statSync(context.marker).mtimeMs;
++      const result = await migrate(context);
++      expect(result.warnings).toEqual([]);
++      expect(result.changes.join("\n")).toContain("backup: ");
++      expect(detect(context).hasLegacy).toBe(false);
++      const files = backups(context);
++      expect(files).toHaveLength(1);
++      expect(fs.readFileSync(path.join(context.quarantine, files[0]))).toEqual(context.bytes);
++      const metadata = JSON.parse(
++        fs.readFileSync(
++          path.join(context.quarantine, files[0].replace(".attested", ".json")),
++          "utf8",
++        ),
++      );
++      expect(metadata).toMatchObject({ sourcePath: context.marker, size, mtimeMs });
++      const state = readWorkspaceStateSnapshot(context.workspaceDir, { env: context.env });
++      expect(state.setup.setupCompletedAt).toBe(completedAt);
++      expect(state.attestation).toBeUndefined();
++      expect(fs.readFileSync(path.join(context.workspaceDir, "USER.md"), "utf8")).toContain(
++        "Keep this content.",
++      );
++      expect((await migrate(context)).changes).toEqual([]);
++      expect(backups(context)).toEqual(files);
++    },
++  );
++
++  it("resumes a claim interrupted before backup", async () => {
++    const context = fixture();
++    fs.renameSync(context.marker, context.marker + CLAIM_SUFFIX);
++    expect((await migrate(context)).warnings).toEqual([]);
++    expect(detect(context).hasLegacy).toBe(false);
++    expect(fs.readFileSync(path.join(context.quarantine, backups(context)[0]))).toEqual(
++      context.bytes,
++    );
++  });
++
++  it.each([
++    Buffer.from("bad header"),
++    Buffer.from(" "),
++    Buffer.from([0xef, 0xbb, 0xbf]),
++    Buffer.from([0xef, 0xbb, 0xbf, 0]),
++    Buffer.from(VALID_MARKER + "\0"),
++    Buffer.from([0xff]),
++    Buffer.alloc(2049),
++  ])("retains other malformed or oversized input %#", async (bytes) => {
++    const context = fixture(bytes);
++    expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++    expect(fs.readFileSync(context.marker)).toEqual(bytes);
++    expect(fs.existsSync(context.quarantine)).toBe(false);
++  });
++
++  it.each([false, true])(
++    "retains a marker when its workspace is empty or missing: %s",
++    async (missing) => {
++      const context = fixture();
++      fs.unlinkSync(path.join(context.workspaceDir, "USER.md"));
++      if (missing) {
++        fs.rmdirSync(context.workspaceDir);
++      }
++      expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++      expect(fs.readFileSync(context.marker)).toEqual(context.bytes);
++      expect(fs.existsSync(context.quarantine)).toBe(false);
++    },
++  );
++
++  it("leaves unconfigured and unrelated sibling markers intact", async () => {
++    const context = fixture();
++    const orphan = path.join(path.dirname(context.marker), "f".repeat(64) + ".attested");
++    const sibling = context.workspaceDir + ".attested";
++    fs.renameSync(context.marker, orphan);
++    fs.writeFileSync(sibling, context.bytes);
++    expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++    expect(fs.readFileSync(orphan)).toEqual(context.bytes);
++    expect(fs.readFileSync(sibling)).toEqual(context.bytes);
++    expect(fs.existsSync(context.quarantine)).toBe(false);
++  });
++
++  it("does not recover a zero-filled setup JSON source", async () => {
++    const context = fixture();
++    fs.renameSync(context.marker, path.join(context.workspaceDir, "openclaw-workspace-state.json"));
++    expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++    expect(fs.existsSync(context.quarantine)).toBe(false);
++  });
++
++  it("rejects a hardlinked marker", async () => {
++    const context = fixture();
++    const link = path.join(context.homeDir, "hardlink");
++    fs.linkSync(context.marker, link);
++    expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++    expect(fs.readFileSync(context.marker)).toEqual(context.bytes);
++    expect(fs.readFileSync(link)).toEqual(context.bytes);
++    expect(fs.existsSync(context.quarantine)).toBe(false);
++  });
++
++  it("restores a source replaced before claim and imports the replacement on retry", async () => {
++    const context = fixture();
++    const result = await migrateLegacyWorkspaceState({
++      detected: detect(context),
++      stateDir: context.stateDir,
++      env: context.env,
++      beforeClaim: () => fs.writeFileSync(context.marker, VALID_MARKER),
++    });
++    expect(result.warnings.join(" ")).toContain("changed before");
++    expect(fs.readFileSync(context.marker, "utf8")).toBe(VALID_MARKER);
++    expect(fs.existsSync(context.quarantine)).toBe(false);
++    expect((await migrate(context)).warnings).toEqual([]);
++    expect(
++      readWorkspaceStateSnapshot(context.workspaceDir, { env: context.env }).attestation,
++    ).toBeDefined();
++  });
++
++  it("restores the source after backup failure and can retry", async () => {
++    const context = fixture();
++    fs.writeFileSync(context.quarantine, "block directory creation");
++    expect((await migrate(context)).warnings.join(" ")).toContain("Failed quarantining");
++    expect(fs.readFileSync(context.marker)).toEqual(context.bytes);
++    expect(fs.existsSync(context.marker + CLAIM_SUFFIX)).toBe(false);
++    fs.unlinkSync(context.quarantine);
++    expect((await migrate(context)).warnings).toEqual([]);
++    expect(detect(context).hasLegacy).toBe(false);
++  });
++
++  it("keeps the backup and restores the source when cleanup fails", async () => {
++    const context = fixture();
++    const result = await migrateLegacyWorkspaceState({
++      detected: detect(context),
++      stateDir: context.stateDir,
++      env: context.env,
++      removeSource: () => {
++        throw new Error("injected cleanup failure");
++      },
++    });
++    expect(result.warnings.join(" ")).toContain("injected cleanup failure");
++    expect(result.warnings.join(" ")).toContain("backup: ");
++    expect(fs.readFileSync(context.marker)).toEqual(context.bytes);
++    expect(backups(context)).toHaveLength(1);
++    expect((await migrate(context)).warnings).toEqual([]);
++    expect(detect(context).hasLegacy).toBe(false);
++  });
++
++  it("preserves a claim changed while the backup is written", async () => {
++    const context = fixture();
++    const backup = recovery.backupCorruptWorkspaceAttestation;
++    vi.spyOn(recovery, "backupCorruptWorkspaceAttestation").mockImplementationOnce(
++      async (params) => {
++        const backupPath = await backup(params);
++        fs.writeFileSync(context.marker + CLAIM_SUFFIX, VALID_MARKER);
++        return backupPath;
++      },
++    );
++    expect((await migrate(context)).warnings.join(" ")).toContain("claim changed");
++    expect(fs.readFileSync(context.marker, "utf8")).toBe(VALID_MARKER);
++    expect(fs.readFileSync(path.join(context.quarantine, backups(context)[0]))).toEqual(
++      context.bytes,
++    );
++  });
++
++  it("retains both paths when a source and an interrupted claim coexist", async () => {
++    const context = fixture();
++    fs.writeFileSync(context.marker + CLAIM_SUFFIX, context.bytes);
++    expect((await migrate(context)).warnings.join(" ")).toContain("both exist");
++    expect(fs.readFileSync(context.marker)).toEqual(context.bytes);
++    expect(fs.readFileSync(context.marker + CLAIM_SUFFIX)).toEqual(context.bytes);
++    expect(fs.existsSync(context.quarantine)).toBe(false);
++  });
++
++  it("rejects a symlinked marker and a symlinked backup directory", async () => {
++    const context = fixture();
++    const target = path.join(context.homeDir, "original.attested");
++    fs.renameSync(context.marker, target);
++    fs.symlinkSync(target, context.marker);
++    expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++    expect(fs.readFileSync(target)).toEqual(context.bytes);
++    fs.unlinkSync(context.marker);
++    fs.renameSync(target, context.marker);
++    const outside = path.join(context.homeDir, "outside");
++    fs.mkdirSync(outside);
++    fs.symlinkSync(outside, context.quarantine, process.platform === "win32" ? "junction" : "dir");
++    expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++    expect(fs.readFileSync(context.marker)).toEqual(context.bytes);
++    expect(fs.readdirSync(outside)).toEqual([]);
++  });
++
++  it("restores the marker if workspace content disappears during backup", async () => {
++    const context = fixture();
++    const backup = recovery.backupCorruptWorkspaceAttestation;
++    vi.spyOn(recovery, "backupCorruptWorkspaceAttestation").mockImplementationOnce(
++      async (params) => {
++        const backupPath = await backup(params);
++        fs.unlinkSync(path.join(context.workspaceDir, "USER.md"));
++        return backupPath;
++      },
++    );
++    expect((await migrate(context)).warnings.join(" ")).toContain(
++      "requires existing workspace content",
++    );
++    expect(fs.readFileSync(context.marker)).toEqual(context.bytes);
++    expect(backups(context)).toHaveLength(1);
++  });
++
++  it("leaves the source untouched while another gateway owns the state", async () => {
++    const context = fixture();
++    const lock = await acquireGatewayLock({ env: context.env, allowInTests: true });
++    expect(lock).toBeDefined();
++    try {
++      expect((await migrate(context)).warnings.join(" ")).toContain("owns this state directory");
++      expect(fs.readFileSync(context.marker)).toEqual(context.bytes);
++      expect(fs.existsSync(context.quarantine)).toBe(false);
++    } finally {
++      await lock?.release();
++    }
++  });
++});
+diff --git a/src/infra/state-migrations.workspace-attestation-recovery.ts b/src/infra/state-migrations.workspace-attestation-recovery.ts
+new file mode 100644
+index 00000000000..14dd8bea01d
+--- /dev/null
++++ b/src/infra/state-migrations.workspace-attestation-recovery.ts
+@@ -0,0 +1,99 @@
++import { createHash, randomUUID } from "node:crypto";
++import path from "node:path";
++import { root, type Root } from "@openclaw/fs-safe";
++import { LEGACY_WORKSPACE_ATTESTATION_DIRNAME } from "../agents/workspace-legacy-state.js";
++import type { SourceSnapshot } from "./state-migrations.workspace-setup-store.js";
++import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
++
++export const WORKSPACE_ATTESTATION_QUARANTINE_DIRNAME = "workspace-attestation-quarantine";
++const WORKSPACE_CONTENT_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "IDENTITY.md", "MEMORY.md"];
++
++export function isRecoverableWorkspaceAttestation(
++  source: LegacyWorkspaceStateSource,
++  snapshot: SourceSnapshot,
++): boolean {
++  if (source.kind !== "attestation" || !source.workspaceDir || !source.workspaceAliasPath) {
++    return false;
++  }
++  const keys = [
++    source.workspaceKey,
++    createHash("sha256").update(source.workspaceAliasPath).digest("hex"),
++  ];
++  // Only configured, reserved markers with no usable bytes qualify. Checking
++  // byte length also rejects a BOM that TextDecoder would otherwise strip.
++  return (
++    keys.some(
++      (key) =>
++        source.relativePath === path.join(LEGACY_WORKSPACE_ATTESTATION_DIRNAME, key + ".attested"),
++    ) &&
++    snapshot.size === snapshot.raw.length &&
++    /^\0*$/.test(snapshot.raw)
++  );
++}
++
++export async function assertWorkspaceAttestationRecoverySafe(
++  source: LegacyWorkspaceStateSource,
++): Promise<void> {
++  if (!source.workspaceDir) {
++    throw new Error("attestation recovery requires a configured workspace");
++  }
++  const workspace = await root(source.workspaceDir, { hardlinks: "reject", symlinks: "reject" });
++  for (const filename of WORKSPACE_CONTENT_FILES) {
++    if (!(await workspace.exists(filename))) {
++      continue;
++    }
++    const opened = await workspace.open(filename);
++    try {
++      if (opened.stat.isFile() && opened.stat.size > 0) {
++        return;
++      }
++    } finally {
++      await opened[Symbol.asyncDispose]();
++    }
++  }
++  // Losing an attestation must not turn a missing/empty workspace into a fresh
++  // bootstrap. Runtime keeps its canonical setup and disappearance checks too.
++  throw new Error(
++    "attestation recovery requires existing workspace content at " + source.workspaceDir,
++  );
++}
++
++export async function backupCorruptWorkspaceAttestation(params: {
++  sourceRoot: Root;
++  source: LegacyWorkspaceStateSource;
++  snapshot: SourceSnapshot;
++}): Promise<string> {
++  const { sourceRoot, source, snapshot } = params;
++  const relativeBase = path.join(WORKSPACE_ATTESTATION_QUARANTINE_DIRNAME, randomUUID());
++  const relativePath = relativeBase + ".attested";
++  const bytes = Buffer.from(snapshot.raw, "utf8");
++  const metadata =
++    JSON.stringify(
++      {
++        version: 1,
++        sourcePath: source.sourcePath,
++        workspaceDir: source.workspaceDir,
++        workspaceKey: source.workspaceKey,
++        size: snapshot.size,
++        sha256: snapshot.sha256,
++        mtimeMs: snapshot.mtimeMs,
++        quarantinedAt: new Date().toISOString(),
++        reason: "empty-or-nul-attestation",
++      },
++      null,
++      2,
++    ) + "\n";
++  // Atomic, no-clobber writes outside discovery precede source cleanup. A failed
++  // backup or verification leaves the claim available for restore/retry.
++  await sourceRoot.create(relativePath, bytes, { mode: 0o600 });
++  await sourceRoot.create(relativeBase + ".json", metadata, { mode: 0o600 });
++  const saved = await sourceRoot.readBytes(relativePath, { maxBytes: snapshot.size });
++  if (
++    saved.length !== snapshot.size ||
++    createHash("sha256").update(saved).digest("hex") !== snapshot.sha256 ||
++    (await sourceRoot.readText(relativeBase + ".json")) !== metadata
++  ) {
++    throw new Error("workspace attestation backup verification failed");
++  }
++  return path.join(source.rootDir, relativePath);
++}
+diff --git a/src/infra/state-migrations.workspace-setup.ts b/src/infra/state-migrations.workspace-setup.ts
+index 56aa339666d..0c9fdd97888 100644
+--- a/src/infra/state-migrations.workspace-setup.ts
++++ b/src/infra/state-migrations.workspace-setup.ts
+@@ -26,6 +26,11 @@ import {
+   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
+ } from "./state-migrations.source-snapshot.js";
+ import type { MigrationMessages } from "./state-migrations.types.js";
++import {
++  assertWorkspaceAttestationRecoverySafe,
++  backupCorruptWorkspaceAttestation,
++  isRecoverableWorkspaceAttestation,
++} from "./state-migrations.workspace-attestation-recovery.js";
+ import {
+   markLegacyMigrationSourceRemoved,
+   readReceipt,
+@@ -457,9 +462,10 @@ async function migrateOneSource(params: {
+   removeSource?: (sourcePath: string) => Promise<void> | void;
+ }): Promise<MigrationMessages> {
+   let sourceClaim: LegacyMigrationSourceClaim<SourceSnapshot>;
++  let sourceRoot: Root;
+   try {
+     assertConfiguredWorkspaceIdentity(params.source);
+-    const sourceRoot = await root(params.source.rootDir, {
++    sourceRoot = await root(params.source.rootDir, {
+       hardlinks: "reject",
+       symlinks: "reject",
+     });
+@@ -507,11 +513,15 @@ async function migrateOneSource(params: {
+   }
+
+   let snapshot: SourceSnapshot;
+-  let parsed: ParsedSource;
++  let parsed: ParsedSource | undefined;
+   let claimedByThisRun = false;
+   try {
+     snapshot = await sourceClaim.read(!hasSource);
+-    parsed = parseSource(params.source, snapshot);
++    if (isRecoverableWorkspaceAttestation(params.source, snapshot)) {
++      await assertWorkspaceAttestationRecoverySafe(params.source);
++    } else {
++      parsed = parseSource(params.source, snapshot);
++    }
+   } catch (error) {
+     return {
+       changes: [],
+@@ -541,6 +551,50 @@ async function migrateOneSource(params: {
+     }
+   }
+
++  if (!parsed) {
++    let backupPath: string | undefined;
++    try {
++      assertConfiguredWorkspaceIdentity(params.source);
++      backupPath = await backupCorruptWorkspaceAttestation({
++        sourceRoot,
++        source: params.source,
++        snapshot,
++      });
++      await assertWorkspaceAttestationRecoverySafe(params.source);
++      if (!snapshotsMatch(snapshot, await sourceClaim.read(true))) {
++        throw new Error("legacy workspace claim changed before quarantine cleanup");
++      }
++      assertConfiguredWorkspaceIdentity(params.source);
++      await sourceClaim.remove({
++        removeSource: params.removeSource,
++        remainingMessage: "legacy workspace source remains after quarantine cleanup",
++      });
++      return {
++        changes: [
++          "Quarantined corrupt workspace attestation at " +
++            params.source.sourcePath +
++            "; backup: " +
++            backupPath +
++            ".",
++        ],
++        warnings: [],
++      };
++    } catch (error) {
++      const restoreError = claimedByThisRun ? await sourceClaim.restore() : null;
++      return {
++        changes: [],
++        warnings: [
++          "Failed quarantining workspace attestation at " +
++            params.source.sourcePath +
++            ": " +
++            formatErrorMessage(error) +
++            (backupPath ? "; backup: " + backupPath : "") +
++            (restoreError ? "; restore failure: " + restoreError : ""),
++        ],
++      };
++    }
++  }
++
+   let result: ReturnType<typeof importAndRecordReceipt>;
+   try {
+     assertConfiguredWorkspaceIdentity(params.source);

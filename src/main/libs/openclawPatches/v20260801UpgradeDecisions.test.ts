@@ -35,6 +35,7 @@ const RETAINED_PATCHES = [
   'openclaw-view-image-task-cwd.patch',
   'openclaw-windows-file-path-redaction.patch',
   'openclaw-windows-process-identity.patch',
+  'openclaw-workspace-attestation-quarantine.patch',
   'zz-openclaw-task-cwd-system-prompt.patch',
 ] as const;
 

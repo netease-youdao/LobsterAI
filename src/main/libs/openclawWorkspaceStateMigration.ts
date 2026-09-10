@@ -79,6 +79,10 @@ export async function migrateLegacyWorkspaceStateBeforeStartup(params: {
       timeoutMs: WORKSPACE_MIGRATION_TIMEOUT_MS,
     });
     const report = parseReport(result.stdout);
+    // Keep backup locations visible even when another source blocks this run.
+    for (const change of report?.changes ?? []) {
+      console.log('[OpenClaw] Workspace state migration: ' + change);
+    }
     if (result.code !== 0 || !report || report.status === OpenClawWorkspaceMigrationStatus.Failed
       || report.warnings.length > 0 || report.remainingPaths.length > 0) {
       const detail = report
@@ -87,7 +91,7 @@ export async function migrateLegacyWorkspaceStateBeforeStartup(params: {
       throw new Error(detail || `Workspace migration did not report verified completion (exit code ${result.code}).`);
     }
     if (report.status === OpenClawWorkspaceMigrationStatus.Migrated) {
-      console.log(`[OpenClaw] Migrated ${report.sourceCount} legacy workspace state source(s) to SQLite.`);
+      console.log(`[OpenClaw] Processed ${report.sourceCount} legacy workspace state source(s).`);
     }
     return { status: report.status };
   } catch (error) {
