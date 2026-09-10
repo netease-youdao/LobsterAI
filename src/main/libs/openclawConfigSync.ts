@@ -3327,7 +3327,9 @@ export class OpenClawConfigSync {
       configPath,
       ...(bindingsChanged ? { bindingsChanged } : {}),
       ...(changedTopLevelKeys.length > 0 ? { changedTopLevelKeys } : {}),
-      ...(changedTopLevelKeys.includes('mcp') || modelCompatRestartRequired
+      // Native MCP config reload disposes affected runtimes; server edits do
+      // not require respawning the gateway. Keep model compatibility restarts.
+      ...(modelCompatRestartRequired
         ? { restartImpact: OpenClawConfigImpact.Restart }
         : {}),
       ...(agentsMdWarning ? { agentsMdWarning } : {}),

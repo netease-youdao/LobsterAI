@@ -155,7 +155,6 @@ export const removeImpactDecisionReasons = (
       reason === OpenClawConfigImpactReason.AppUseSystemProxy
       || reason === OpenClawConfigImpactReason.AppProviderSecret
       || reason === OpenClawConfigImpactReason.CoworkDreamingConfig
-      || reason === OpenClawConfigImpactReason.ImConfig
       || reason === OpenClawConfigImpactReason.ImForceRestart
       || reason === OpenClawConfigImpactReason.PluginInstall
       || reason === OpenClawConfigImpactReason.PluginUninstall
@@ -294,7 +293,11 @@ export const classifyImOpenClawConfigChange = (
   if (previousFingerprint === null || previousFingerprint === nextFingerprint) {
     return noImpact();
   }
-  return decision(OpenClawConfigImpact.Restart, OpenClawConfigImpactReason.ImConfig);
+  // Ordinary IM edits only request config delivery. The sync layer still
+  // restarts for changed bindings or process secrets, while OpenClaw reloads
+  // channel config. A queued IM save must not force another restart after an
+  // earlier sync has already applied the same edit.
+  return decision(OpenClawConfigImpact.Sync, OpenClawConfigImpactReason.ImConfig);
 };
 
 export const classifyPluginConfigChange = (

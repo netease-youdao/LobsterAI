@@ -2747,6 +2747,12 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
     expect(result.bindingsChanged).toBe(true);
 
+    // Agent saving can queue this after bootstrap-updated already consumed
+    // the binding edit. Only the first sync should request a binding restart.
+    const imSave = sync.sync('im-config-change');
+    expect(imSave).toMatchObject({ ok: true, changed: false });
+    expect(imSave.bindingsChanged).toBeUndefined();
+
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.channels['dingtalk-connector']).not.toHaveProperty('_agentBinding');
     expect(config.channels).not.toHaveProperty('dingtalk');
@@ -3408,23 +3414,42 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(leaveInAppConfig.mcp).toBeUndefined();
   });
 
-  test('marks MCP server config changes as restart impact', async () => {
-    const { OpenClawConfigImpact } = await import('./openclawConfigImpact');
-    const sync = await createSync({
-      getResolvedMcpServers: () => [{
-        name: 'Tavily',
-        transportType: 'stdio',
-        command: 'node',
-        args: ['server.js'],
-        env: { TAVILY_API_KEY: '${LOBSTER_TAVILY_API_KEY}' },
-      }],
-    });
+  test('adds, updates, and removes MCP servers without requesting a gateway restart', async () => {
+    let servers: import('./openclawConfigSync').ResolvedMcpServer[] = [];
+    const sync = await createSync({ getResolvedMcpServers: () => servers });
+    expect(sync.sync('baseline').ok).toBe(true);
 
-    const result = sync.sync('mcp-server-toggled');
+    const server = {
+      name: 'Tavily',
+      transportType: 'stdio' as const,
+      command: 'node',
+      args: ['server.js'],
+      env: { TAVILY_API_KEY: 'first-key' },
+    };
+    for (const nextServers of [
+      [server],
+      [{ ...server, args: ['installed-server.js'], env: { TAVILY_API_KEY: 'updated-key' } }],
+      [],
+    ]) {
+      servers = nextServers;
+      const result = sync.sync('mcp-server-updated');
 
-    expect(result.ok).toBe(true);
-    expect(result.changedTopLevelKeys).toContain('mcp');
-    expect(result.restartImpact).toBe(OpenClawConfigImpact.Restart);
+      expect(result).toMatchObject({ ok: true, changed: true });
+      expect(result.changedTopLevelKeys).toContain('mcp');
+      expect(result.restartImpact).toBeUndefined();
+      expect(result.bindingsChanged).toBeUndefined();
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (servers.length > 0) {
+        expect(config.mcp.servers.Tavily).toMatchObject({
+          command: servers[0].command,
+          args: servers[0].args,
+          env: servers[0].env,
+        });
+      } else {
+        expect(config.mcp?.servers?.Tavily).toBeUndefined();
+      }
+      expect(sync.sync('mcp-launch-ready:Tavily')).toMatchObject({ ok: true, changed: false });
+    }
   });
 
   test('writes all remote MCP headers to openclaw config', async () => {
