@@ -4,7 +4,10 @@ import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import {
+  LEGACY_SESSION_SQLITE_IMPORT_MODE,
   type LegacySessionMigrationRunner,
+  type LegacySessionMigrationRunResult,
+  LegacySessionMigrationWarningCode,
   listLegacySessionStorePaths,
   migrateLegacySessionStorageWithDoctor,
 } from './openclawSessionLegacyMigration';
@@ -17,6 +20,33 @@ let configPath = '';
 function writeFile(filePath: string, content = '{}\n'): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content, 'utf8');
+}
+
+function createWarningImportFixture() {
+  const legacyPath = path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json');
+  const archivePath = path.join(stateDir, 'archives', 'sessions.json.imported');
+  writeFile(legacyPath);
+  return {
+    legacyPath,
+    archivePath,
+    report: {
+      mode: LEGACY_SESSION_SQLITE_IMPORT_MODE as string,
+      totals: { issues: 2, targets: 1 },
+      migrationRun: { manifestPath: path.join(stateDir, 'session-sqlite-migration-runs', 'run.json') },
+      targets: [{
+        agentId: 'main', storePath: legacyPath, archivedLegacyStoreFiles: [archivePath],
+        issues: [
+          { code: LegacySessionMigrationWarningCode.EntryInvalid as string, message: 'Session entry is missing a valid sessionId.' },
+          { code: LegacySessionMigrationWarningCode.TranscriptMissing as string, message: 'Historical transcript is missing.' },
+        ],
+      }],
+    },
+  };
+}
+
+function archiveWarningFixture(fixture: ReturnType<typeof createWarningImportFixture>): void {
+  fs.mkdirSync(path.dirname(fixture.archivePath), { recursive: true });
+  fs.renameSync(fixture.legacyPath, fixture.archivePath);
 }
 
 describe('openclawSessionLegacyMigration', () => {
@@ -183,6 +213,111 @@ describe('openclawSessionLegacyMigration', () => {
       status: 'failed', error: expect.stringContaining('main: Transcript validation failed'),
     });
   });
+
+  test('continues after warning-only import only when every discovered store has an existing archive', async () => {
+    const fixture = createWarningImportFixture();
+    const workerPath = path.join(stateDir, 'agents', 'worker', 'sessions', 'sessions.json');
+    const workerArchive = path.join(stateDir, 'archives', 'worker-sessions.json.imported');
+    writeFile(workerPath);
+    fixture.report.targets.push({ agentId: 'worker', storePath: workerPath, archivedLegacyStoreFiles: [workerArchive], issues: [] });
+    fixture.report.totals.targets += 1;
+    const logWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const logInfo = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const runner = vi.fn<LegacySessionMigrationRunner>().mockImplementation(async () => {
+      archiveWarningFixture(fixture);
+      fs.renameSync(workerPath, workerArchive);
+      return { code: 1, stdout: JSON.stringify(fixture.report), stderr: '' };
+    });
+
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+    });
+
+    expect(result).toEqual({ status: 'migrated', code: 1, migratedPaths: [fixture.legacyPath, workerPath] });
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining('completed with warnings'));
+    expect(logInfo).toHaveBeenCalledWith(expect.stringContaining(JSON.stringify(fixture.report.migrationRun.manifestPath)));
+    expect(fs.readFileSync(fixture.archivePath, 'utf8')).toBe('{}\n');
+  });
+
+  test('shows a blocking issue from a later target before an invalid-entry warning and logs issue counts', async () => {
+    const fixture = createWarningImportFixture();
+    const blockerCode = 'sqlite_transcript_count_mismatch';
+    const sessionKey = 'agent:worker:historical-session';
+    const logInfo = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const stdout = JSON.stringify({
+      ...fixture.report,
+      totals: { issues: 3, targets: 2 },
+      targets: [...fixture.report.targets, {
+        agentId: 'worker', storePath: path.join(stateDir, 'agents', 'worker', 'sessions', 'sessions.json'),
+        issues: [{ code: blockerCode, message: 'SQLite transcript has 8 events; source has 9.', sessionKey }],
+      }],
+    });
+    const runner = vi.fn<LegacySessionMigrationRunner>().mockResolvedValue({ code: 1, stdout, stderr: '' });
+
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+    });
+
+    expect(result).toMatchObject({ status: 'failed', error: expect.stringContaining(`worker: [${blockerCode}]`) });
+    if (!('error' in result)) throw new Error('Expected migration failure');
+    expect(result.error).toContain(sessionKey);
+    expect(result.error).not.toContain('missing a valid sessionId');
+    expect(logInfo).toHaveBeenCalledWith(expect.stringContaining(`"${blockerCode}":1`));
+    expect(logInfo).toHaveBeenCalledWith(expect.stringContaining(JSON.stringify(fixture.report.migrationRun.manifestPath)));
+  });
+
+  const rejectedWarningImports: Array<{
+    name: string;
+    mutate: (fixture: ReturnType<typeof createWarningImportFixture>, result: LegacySessionMigrationRunResult) => void;
+  }> = [
+    { name: 'terminated process', mutate: (_fixture, result) => { result.code = null; } },
+    { name: 'unexpected exit code', mutate: (_fixture, result) => { result.code = 2; } },
+    { name: 'exception after report', mutate: (_fixture, result) => { result.stderr = 'Error: SQLite finalization failed'; } },
+    { name: 'different doctor mode', mutate: (fixture) => { fixture.report.mode = 'validate'; } },
+    { name: 'mismatched issue total', mutate: (fixture) => { fixture.report.totals.issues += 1; } },
+    { name: 'mismatched target total', mutate: (fixture) => { fixture.report.totals.targets += 1; } },
+    { name: 'unknown issue code', mutate: (fixture) => { fixture.report.targets[0].issues[0].code = 'future_blocking_issue'; } },
+    { name: 'unreported archive', mutate: (fixture) => { fixture.report.targets[0].archivedLegacyStoreFiles = []; } },
+    { name: 'missing archive file', mutate: (fixture) => { fs.unlinkSync(fixture.archivePath); } },
+    { name: 'uncovered source store', mutate: (fixture) => { fixture.report.targets[0].storePath = path.join(stateDir, 'other.json'); } },
+    { name: 'remaining source store', mutate: (fixture) => { fs.copyFileSync(fixture.archivePath, fixture.legacyPath); } },
+    { name: 'newly created source store', mutate: () => { writeFile(path.join(stateDir, 'agents', 'new', 'sessions', 'sessions.json')); } },
+  ];
+
+  test.each(rejectedWarningImports)('rejects warning-only completion with $name', async ({ mutate }) => {
+    const fixture = createWarningImportFixture();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const runner = vi.fn<LegacySessionMigrationRunner>().mockImplementation(async () => {
+      archiveWarningFixture(fixture);
+      const result: LegacySessionMigrationRunResult = { code: 1, stdout: '', stderr: '' };
+      mutate(fixture, result);
+      result.stdout = JSON.stringify(fixture.report);
+      return result;
+    });
+
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+    });
+
+    expect(result.status).toBe('failed');
+  });
+
+  test.each(['', 'not JSON', '{"mode":"import","targets":null}', '{"mode":"import","targets":[]}'])(
+    'does not infer success from missing stores with an incomplete report: %s', async (stdout) => {
+      const fixture = createWarningImportFixture();
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const runner = vi.fn<LegacySessionMigrationRunner>().mockImplementation(async () => {
+        archiveWarningFixture(fixture);
+        return { code: 1, stdout, stderr: '' };
+      });
+      const result = await migrateLegacySessionStorageWithDoctor({
+        stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+      });
+      expect(result.status).toBe('failed');
+    },
+  );
 
   test('fails closed when doctor exits successfully but leaves the legacy store', async () => {
     const legacyPath = path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json');

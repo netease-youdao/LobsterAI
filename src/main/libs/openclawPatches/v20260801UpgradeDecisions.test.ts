@@ -27,6 +27,7 @@ const RETAINED_PATCHES = [
   'openclaw-run-failure-detail.patch',
   'openclaw-safe-error-metadata.patch',
   'openclaw-session-goal-rpc.patch',
+  'openclaw-session-migration-duplicate-headers.patch',
   'openclaw-shell-snapshot-electron-node-env.patch',
   'openclaw-skip-disabled-web-search-discovery.patch',
   'openclaw-skip-derive-prompt-segments-deadloop.patch',
