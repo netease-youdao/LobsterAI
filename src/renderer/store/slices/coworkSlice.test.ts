@@ -88,6 +88,7 @@ test('defaults hidden OpenClaw session policy to thirty days', () => {
   expect(state.config.skipMissedJobs).toBe(true);
   expect(state.config.openClawHeartbeatEnabled).toBe(false);
   expect(state.config.openClawSkillReviewEnabled).toBe(false);
+  expect(state.config.openClawMemoryFlushEnabled).toBe(false);
 });
 
 test('clears account-scoped media models and selections together', () => {
@@ -188,6 +189,7 @@ test('setConfig preserves loaded OpenClaw session policy', () => {
     skipMissedJobs: false,
     openClawHeartbeatEnabled: false,
     openClawSkillReviewEnabled: true,
+    openClawMemoryFlushEnabled: true,
     embeddingEnabled: false,
     embeddingProvider: 'openai',
     embeddingModel: '',
@@ -207,6 +209,7 @@ test('setConfig preserves loaded OpenClaw session policy', () => {
   expect(state.config.openClawSessionPolicy.keepAlive).toBe('365d');
   expect(state.config.openClawHeartbeatEnabled).toBe(false);
   expect(state.config.openClawSkillReviewEnabled).toBe(true);
+  expect(state.config.openClawMemoryFlushEnabled).toBe(true);
 });
 
 test('updateCurrentSessionModelOverride only patches the active session', () => {

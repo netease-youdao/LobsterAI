@@ -1241,6 +1241,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawSkillReviewEnabled: '启用技能自动复盘',
     openClawSkillReviewEnabledDescription:
       '开启后，Agent 会在复杂任务结束后于后台复盘，提炼经验并创建或改进技能，供后续任务复用。复盘会额外调用模型，长对话可能产生较多 token 消耗，默认关闭。',
+    openClawMemoryFlushEnabled: '启用压缩前记忆保存',
+    openClawMemoryFlushEnabledDescription:
+      '开启后，Agent 会在长对话整理上下文前，自动提取重要信息并保存为长期记忆，供后续对话使用。保存过程会额外调用模型，长对话可能产生较多 token 消耗，默认关闭。',
     openClawGatewayAddress: '网关地址',
     openClawStartupProgressLabel: '启动进度',
     openClawStatusBadgeReady: '已就绪',
@@ -5101,6 +5104,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawSkillReviewEnabled: 'Enable automatic skill review',
     openClawSkillReviewEnabledDescription:
       'When on, the agent reviews complex tasks in the background after they end, turning lessons into new or improved skills for future tasks. Reviews require extra model calls and may use substantial tokens for long conversations. Off by default.',
+    openClawMemoryFlushEnabled: 'Save memory before context compaction',
+    openClawMemoryFlushEnabledDescription:
+      'When on, the agent extracts important information from long conversations and saves it to long-term memory before context compaction for use in future conversations. Saving requires extra model calls and may use substantial tokens for long conversations. Off by default.',
     openClawGatewayAddress: 'Gateway address',
     openClawStartupProgressLabel: 'Startup progress',
     openClawStatusBadgeReady: 'Ready',

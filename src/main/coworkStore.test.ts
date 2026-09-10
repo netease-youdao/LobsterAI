@@ -1363,6 +1363,31 @@ test('persists skill review opt-in and opt-out independently of other settings',
   });
 });
 
+test('defaults memory flush to disabled for users without the setting', () => {
+  store.setConfig({ openClawHeartbeatEnabled: true, openClawSkillReviewEnabled: true });
+
+  expect(store.getConfig().openClawMemoryFlushEnabled).toBe(false);
+});
+
+test('persists memory flush opt-in and opt-out independently of other maintenance settings', () => {
+  store.setConfig({ openClawMemoryFlushEnabled: true });
+  store.setConfig({ openClawHeartbeatEnabled: true, openClawSkillReviewEnabled: true });
+  const reloadedStore = new CoworkStore(db);
+
+  expect(reloadedStore.getConfig()).toMatchObject({
+    openClawMemoryFlushEnabled: true,
+    openClawHeartbeatEnabled: true,
+    openClawSkillReviewEnabled: true,
+  });
+
+  reloadedStore.setConfig({ openClawMemoryFlushEnabled: false });
+  expect(new CoworkStore(db).getConfig()).toMatchObject({
+    openClawMemoryFlushEnabled: false,
+    openClawHeartbeatEnabled: true,
+    openClawSkillReviewEnabled: true,
+  });
+});
+
 test('backfillEmptyAgentModels assigns the current default model to empty agents only', () => {
   const now = Date.now();
   db.prepare(
