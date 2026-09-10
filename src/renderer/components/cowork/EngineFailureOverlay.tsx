@@ -115,7 +115,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
   if (isDeferred) {
     return (
       <div className="pointer-events-none fixed inset-x-0 top-4 z-[90] flex justify-center px-4">
-        <div className="pointer-events-auto flex max-w-[calc(100vw-2rem)] items-center gap-1.5 rounded-full border border-red-200 bg-surface py-1 pl-3 pr-1 shadow-lg animate-fade-in-down dark:border-red-900/60">
+        <div className="non-draggable pointer-events-auto flex max-w-[calc(100vw-2rem)] items-center gap-1.5 rounded-full border border-red-200 bg-surface py-1 pl-3 pr-1 shadow-lg animate-fade-in-down dark:border-red-900/60">
           <button
             type="button"
             onClick={() => setIsDeferred(false)}
