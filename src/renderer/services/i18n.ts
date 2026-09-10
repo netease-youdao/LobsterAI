@@ -1238,6 +1238,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawHeartbeatEnabled: '启用后台心跳',
     openClawHeartbeatEnabledDescription:
       '开启后，Agent 每小时在后台自动巡检一次你交办的持续关注事项，有进展即主动提醒；关闭后仅在你发起对话时响应，可降低空闲时的 token 消耗。',
+    openClawSkillReviewEnabled: '启用技能自动复盘',
+    openClawSkillReviewEnabledDescription:
+      '开启后，Agent 会在复杂任务结束后于后台复盘，提炼经验并创建或改进技能，供后续任务复用。复盘会额外调用模型，长对话可能产生较多 token 消耗，默认关闭。',
     openClawGatewayAddress: '网关地址',
     openClawStartupProgressLabel: '启动进度',
     openClawStatusBadgeReady: '已就绪',
@@ -5095,6 +5098,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawHeartbeatEnabled: 'Enable background heartbeat',
     openClawHeartbeatEnabledDescription:
       'When on, the agent runs an hourly background sweep of the items you asked it to keep watching and reaches out the moment there is an update. When off, it responds only when you start a conversation, which lowers idle token usage.',
+    openClawSkillReviewEnabled: 'Enable automatic skill review',
+    openClawSkillReviewEnabledDescription:
+      'When on, the agent reviews complex tasks in the background after they end, turning lessons into new or improved skills for future tasks. Reviews require extra model calls and may use substantial tokens for long conversations. Off by default.',
     openClawGatewayAddress: 'Gateway address',
     openClawStartupProgressLabel: 'Startup progress',
     openClawStatusBadgeReady: 'Ready',

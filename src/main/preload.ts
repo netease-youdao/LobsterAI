@@ -662,6 +662,7 @@ contextBridge.exposeInMainWorld('electron', {
       memoryUserMemoriesMaxItems?: number;
       skipMissedJobs?: boolean;
       openClawHeartbeatEnabled?: boolean;
+      openClawSkillReviewEnabled?: boolean;
       embeddingEnabled?: boolean;
       embeddingProvider?: string;
       embeddingModel?: string;
@@ -669,7 +670,7 @@ contextBridge.exposeInMainWorld('electron', {
       embeddingVectorWeight?: number;
       embeddingRemoteBaseUrl?: string;
       embeddingRemoteApiKey?: string;
-    }) => ipcRenderer.invoke('cowork:config:set', config),
+    }) => ipcRenderer.invoke(CoworkIpcChannel.ConfigSet, config),
 
     // Session temp storage (.cowork-temp) maintenance
     getTempStorageUsage: () => ipcRenderer.invoke(CoworkIpcChannel.TempStorageUsage),
