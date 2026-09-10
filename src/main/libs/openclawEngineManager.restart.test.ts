@@ -21,9 +21,12 @@ interface SupervisorInternals {
   gatewayRestartAttempt: number;
   gatewayRestartTimer: ReturnType<typeof setTimeout> | null;
   startGatewayPromise: Promise<OpenClawEngineStatus> | null;
+  shutdownRequested: boolean;
   attachGatewayExitHandlers: (child: ChildProcess) => void;
   waitForGatewayReady: (port: number, timeoutMs: number) => Promise<boolean>;
   isGatewayStartupReady: (port: number) => Promise<boolean>;
+  isGatewayLive: (port: number) => Promise<boolean>;
+  stopGatewayProcess: (child: ChildProcess) => Promise<void>;
   setStatus: (status: OpenClawEngineStatus) => void;
   doStartGateway: () => Promise<OpenClawEngineStatus>;
   resolveRuntimeMetadata: () => { root: string | null; version: string | null };
@@ -72,6 +75,7 @@ function makeSupervisor() {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.spyOn(console, 'debug').mockImplementation(() => {});
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -83,6 +87,75 @@ afterEach(() => {
 });
 
 describe('OpenClaw gateway restart supervision', () => {
+  test('waits through transient readiness failures without showing startup for a running process', async () => {
+    const { manager, internals, child, phases } = makeSupervisor();
+    let ready = false;
+    vi.spyOn(internals, 'isGatewayStartupReady').mockImplementation(async () => ready);
+    vi.spyOn(internals, 'isGatewayLive').mockResolvedValue(true);
+    const stop = vi.spyOn(internals, 'stopGatewayProcess');
+    const settled = vi.fn();
+    const starting = manager.startGateway('config-delivery').then(status => { settled(); return status; });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(settled).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+    expect(phases).toEqual([]);
+    expect(manager.getStatus().phase).toBe(OpenClawEnginePhase.Running);
+
+    ready = true;
+    await vi.advanceTimersByTimeAsync(600);
+    await expect(starting).resolves.toMatchObject({ phase: OpenClawEnginePhase.Running });
+    expect(phases).not.toContain(OpenClawEnginePhase.Starting);
+    expect(internals.gatewayProcess).toBe(child);
+    expect(stop).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test('still shows startup and waits for explicit readiness for a process that has never been ready', async () => {
+    const { manager, internals, phases } = makeSupervisor();
+    internals.setStatus({ phase: OpenClawEnginePhase.Ready, version: '2026.8.1', canRetry: false });
+    phases.length = 0;
+    let ready = false;
+    vi.spyOn(internals, 'isGatewayStartupReady').mockImplementation(async () => ready);
+    vi.spyOn(internals, 'isGatewayLive').mockResolvedValue(true);
+    const settled = vi.fn();
+    const starting = manager.startGateway('initial-start').then(status => { settled(); return status; });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(settled).not.toHaveBeenCalled();
+    expect(manager.getStatus().phase).toBe(OpenClawEnginePhase.Starting);
+    expect(phases.length).toBeGreaterThan(1);
+    expect(phases).not.toContain(OpenClawEnginePhase.Running);
+
+    ready = true;
+    await vi.advanceTimersByTimeAsync(600);
+    await expect(starting).resolves.toMatchObject({ phase: OpenClawEnginePhase.Running });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test('shows startup only when a persistently unresponsive running process will actually be replaced', async () => {
+    const { manager, internals, child, phases } = makeSupervisor();
+    vi.spyOn(internals, 'isGatewayStartupReady').mockResolvedValue(false);
+    vi.spyOn(internals, 'isGatewayLive').mockResolvedValue(true);
+    const stop = vi.spyOn(internals, 'stopGatewayProcess').mockImplementation(async () => {
+      expect(manager.getStatus().phase).toBe(OpenClawEnginePhase.Starting);
+      // Cancel after confirming the replacement decision; do not spawn a real process.
+      internals.shutdownRequested = true;
+    });
+    const starting = manager.startGateway('config-delivery');
+
+    await vi.advanceTimersByTimeAsync(299_400);
+    expect(stop).not.toHaveBeenCalled();
+    expect(phases).toEqual([]);
+    expect(manager.getStatus().phase).toBe(OpenClawEnginePhase.Running);
+
+    await vi.advanceTimersByTimeAsync(600);
+    await starting;
+    expect(stop).toHaveBeenCalledExactlyOnceWith(child);
+    expect(phases).toEqual([OpenClawEnginePhase.Starting]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   test('keeps one startup screen and never starts the replacement before the old process exits', async () => {
     const { manager, internals, child, phases } = makeSupervisor();
     const start = vi.spyOn(manager, 'startGateway').mockImplementation(async () => {
