@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { getLibraryHtmlThumbnailStampColor, HtmlThumbnailLayout } from '../../shared/library/htmlThumbnail';
+import { getLibraryHtmlThumbnailStampColor, HtmlThumbnailLayout, HtmlThumbnailLimits } from '../../shared/library/htmlThumbnail';
 import type {
   LibraryThumbnailRenderRequest,
   LibraryThumbnailRenderResult,
@@ -226,15 +226,17 @@ describe('LibraryThumbnailRenderer', () => {
     expect(electronMocks.windows[0]!.webContents.endFrameSubscription).toHaveBeenCalledTimes(1);
   });
 
-  test('bounds HTML capture waiting and retries in a fresh window without returning unpainted output', async () => {
+  test.each([10, HtmlThumbnailLimits.CaptureIntervalMs * 2])('bounds HTML capture waiting at %i ms and retries in a fresh window without returning unpainted output', async presentationTimeoutMs => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    electronMocks.captureFrames.push(
-      createFrame(PNG_BYTES, undefined, 1, true, null),
-      createFrame(PNG_BYTES, undefined, 2, true, null),
-    );
-    const success = (request: LibraryThumbnailRenderRequest) => ({ success: true, renderGeneration: request.renderGeneration });
+    const success = (request: LibraryThumbnailRenderRequest) => {
+      // Every poll must see an unpainted child, even if an attempt captures more than once.
+      electronMocks.windows.at(-1)!.webContents.capturePage.mockResolvedValue(
+        createFrame(PNG_BYTES, undefined, request.renderGeneration, true, null),
+      );
+      return { success: true, renderGeneration: request.renderGeneration };
+    };
     electronMocks.renderResponses.push(success, success);
-    renderer = new LibraryThumbnailRenderer({ platform: 'darwin', presentationTimeoutMs: 10, productionHtmlPath: '/tmp/thumbnail.html' });
+    renderer = new LibraryThumbnailRenderer({ platform: 'darwin', presentationTimeoutMs, productionHtmlPath: '/tmp/thumbnail.html' });
     await expect(renderer.render(await writeRasterFile('page.html'), { width: 480, height: 270 })).rejects.toMatchObject({
       code: LibraryThumbnailFailureCode.PresentationTimeout,
     });
