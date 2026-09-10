@@ -96,7 +96,8 @@ function setupDb(): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS cowork_config (
       key TEXT PRIMARY KEY,
-      value TEXT
+      value TEXT,
+      updated_at INTEGER NOT NULL DEFAULT 0
     );
   `);
 
@@ -1337,6 +1338,29 @@ test('getConfig defaults OpenClaw heartbeat to disabled when config is missing',
   const config = store.getConfig();
 
   expect(config.openClawHeartbeatEnabled).toBe(false);
+});
+
+test('defaults automatic skill review to disabled for users without the setting', () => {
+  store.setConfig({ openClawHeartbeatEnabled: true });
+
+  expect(store.getConfig().openClawSkillReviewEnabled).toBe(false);
+});
+
+test('persists skill review opt-in and opt-out independently of other settings', () => {
+  store.setConfig({ openClawSkillReviewEnabled: true });
+  store.setConfig({ openClawHeartbeatEnabled: true });
+  const reloadedStore = new CoworkStore(db);
+
+  expect(reloadedStore.getConfig()).toMatchObject({
+    openClawSkillReviewEnabled: true,
+    openClawHeartbeatEnabled: true,
+  });
+
+  reloadedStore.setConfig({ openClawSkillReviewEnabled: false });
+  expect(new CoworkStore(db).getConfig()).toMatchObject({
+    openClawSkillReviewEnabled: false,
+    openClawHeartbeatEnabled: true,
+  });
 });
 
 test('backfillEmptyAgentModels assigns the current default model to empty agents only', () => {

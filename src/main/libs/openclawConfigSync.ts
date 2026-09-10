@@ -20,7 +20,7 @@ import {
 import { COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
 import { CoworkErrorModelSource } from '../../shared/cowork/errorDetail';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
-import { OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS } from '../../shared/openclawEngine/constants';
+import { OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS, OpenClawSkillReviewMode } from '../../shared/openclawEngine/constants';
 import { OpenClawTranscriptSafetyLimit } from '../../shared/openclawTranscript/constants';
 import type {
   ModelRuntimeProfile as ModelRuntimeProfileType,
@@ -2029,6 +2029,10 @@ export class OpenClawConfigSync {
   sync(reason: string): OpenClawConfigSyncResult {
     const configPath = this.engineManager.getConfigPath();
     const coworkConfig = this.getCoworkConfig();
+    // OpenClaw defaults to automatic review; require an explicit user opt-in.
+    const skillReviewMode = coworkConfig.openClawSkillReviewEnabled === true
+      ? OpenClawSkillReviewMode.Auto
+      : OpenClawSkillReviewMode.Off;
     const browserWebAccess = normalizeBrowserWebAccessConfig(this.getBrowserWebAccessConfig());
     const serverModels = getAllServerModelMetadata();
     const invalidKimiK3Transports = findInvalidKimiK3ServerTransports(serverModels);
@@ -2057,7 +2061,7 @@ export class OpenClawConfigSync {
       } else {
         // This also happens during logout or before server models finish
         // loading. Keep existing non-provider state so IM stays configured.
-        const result = this.writeMinimalConfig(configPath, reason);
+        const result = this.writeMinimalConfig(configPath, reason, skillReviewMode);
         // Still sync AGENTS.md even when API is not configured — skills/systemPrompt
         // may already be set and should be available when the user configures a model.
         const mainWorkspacePath = getMainAgentWorkspacePath(this.engineManager.getStateDir());
@@ -2486,6 +2490,9 @@ export class OpenClawConfigSync {
       tools: this.buildWebToolsConfig(browserWebAccess),
       browser: this.buildBrowserConfig(browserWebAccess),
       skills: {
+        workshop: {
+          autonomous: { mode: skillReviewMode },
+        },
         entries: {
           ...this.buildSkillEntries(),
           ...MANAGED_SKILL_ENTRY_OVERRIDES,
@@ -4072,7 +4079,11 @@ export class OpenClawConfigSync {
    * Start fresh installs without a provider, or remove unavailable providers
    * from an existing config while preserving IM and other runtime state.
    */
-  private writeMinimalConfig(configPath: string, _reason: string): OpenClawConfigSyncResult {
+  private writeMinimalConfig(
+    configPath: string,
+    _reason: string,
+    skillReviewMode: OpenClawSkillReviewMode,
+  ): OpenClawConfigSyncResult {
     const baseMinimalConfig: Record<string, unknown> = {
       gateway: {
         mode: 'local',
@@ -4113,6 +4124,20 @@ export class OpenClawConfigSync {
         // Malformed JSON — overwrite with base minimal config.
       }
     }
+
+    // Apply the review preference even before models load or after logout.
+    const skills = asConfigRecord(mergedConfig.skills);
+    const workshop = asConfigRecord(skills?.workshop);
+    mergedConfig.skills = {
+      ...skills,
+      workshop: {
+        ...workshop,
+        autonomous: {
+          ...asConfigRecord(workshop?.autonomous),
+          mode: skillReviewMode,
+        },
+      },
+    };
 
     const nextContent = `${JSON.stringify(mergedConfig, null, 2)}\n`;
 

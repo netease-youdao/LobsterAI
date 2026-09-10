@@ -177,6 +177,18 @@ describe('OpenClaw config impact classification', () => {
     });
   });
 
+  test.each([true, false])('syncs skill review changes without a gateway restart (enabled: %s)', (enabled) => {
+    const result = classifyCoworkConfigChange(
+      { openClawSkillReviewEnabled: !enabled },
+      { openClawSkillReviewEnabled: enabled },
+    );
+
+    expect(result).toEqual({
+      impact: OpenClawConfigImpact.Sync,
+      reasons: [OpenClawConfigImpactReason.CoworkOpenClawConfig],
+    });
+  });
+
   test('classifies dreaming changes as restart', () => {
     const result = classifyCoworkConfigChange(
       { dreamingEnabled: false, dreamingFrequency: '0 3 * * *' },

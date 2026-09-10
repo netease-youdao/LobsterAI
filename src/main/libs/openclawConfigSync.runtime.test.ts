@@ -8,6 +8,7 @@ import {
   BrowserCredentialLoginTool,
   BrowserCredentialMcpServer,
 } from '../../shared/browserCredentials/constants';
+import { OpenClawSkillReviewMode } from '../../shared/openclawEngine/constants';
 import { OpenClawProviderId, ProviderName } from '../../shared/providers';
 import { DEFAULT_DISCORD_OPENCLAW_CONFIG, DEFAULT_QQ_CONFIG, DiscordDmPolicy } from '../im/types';
 import { OpenClawAgentOwnership } from './openclawAgentModels';
@@ -261,7 +262,10 @@ describe('OpenClawConfigSync runtime config output', () => {
     const sync = await createSync();
     expect(sync.sync('first-start')).toMatchObject({ ok: true, changed: true });
     const { meta: _meta, ...config } = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config).toEqual({ gateway: { mode: 'local' } });
+    expect(config).toEqual({
+      gateway: { mode: 'local' },
+      skills: { workshop: { autonomous: { mode: OpenClawSkillReviewMode.Off } } },
+    });
     expect(sync.sync('repeat-start')).toMatchObject({ ok: true, changed: false });
   });
 
@@ -711,6 +715,46 @@ describe('OpenClawConfigSync runtime config output', () => {
       lightContext: true,
       isolatedSession: true,
     });
+  });
+
+  test.each([true, false])('disables existing automatic reviews without opt-in (model available: %s)', async (modelAvailable) => {
+    if (!modelAvailable) mockRuntimeState.rawApiConfig.config = null;
+    fs.writeFileSync(configPath, JSON.stringify({
+      skills: { workshop: { autonomous: { mode: OpenClawSkillReviewMode.Auto } } },
+    }), 'utf8');
+    const sync = await createSync();
+
+    expect(sync.sync('skill-review-default')).toMatchObject({ ok: true, changed: true });
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.skills.workshop.autonomous.mode).toBe(OpenClawSkillReviewMode.Off);
+    expect(sync.sync('skill-review-default-repeat')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test.each([true, false])('applies skill review opt-in and opt-out (model available: %s)', async (modelAvailable) => {
+    if (!modelAvailable) mockRuntimeState.rawApiConfig.config = null;
+    let enabled = true;
+    const sync = await createSync({
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: '',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        openClawSkillReviewEnabled: enabled,
+      }),
+    });
+
+    expect(sync.sync('skill-review-enabled')).toMatchObject({ ok: true, changed: true });
+    const enabledConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(enabledConfig.skills.workshop.autonomous.mode).toBe(OpenClawSkillReviewMode.Auto);
+    expect(sync.sync('skill-review-enabled-repeat')).toMatchObject({ ok: true, changed: false });
+
+    enabled = false;
+    expect(sync.sync('skill-review-disabled')).toMatchObject({ ok: true, changed: true });
+    const disabledConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(disabledConfig.skills.workshop.autonomous.mode).toBe(OpenClawSkillReviewMode.Off);
+    expect(disabledConfig.skills.entries).toEqual(enabledConfig.skills.entries);
+    expect(disabledConfig.agents).toEqual(enabledConfig.agents);
+    expect(sync.sync('skill-review-disabled-repeat')).toMatchObject({ ok: true, changed: false });
   });
 
   test('writes model provider env-proxy transport when system proxy is enabled', async () => {

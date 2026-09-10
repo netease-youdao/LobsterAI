@@ -26,6 +26,15 @@ export const OpenClawEnginePhase = {
 export type OpenClawEnginePhase =
   typeof OpenClawEnginePhase[keyof typeof OpenClawEnginePhase];
 
+/** Native Skill Workshop modes exposed by the automatic skill review setting. */
+export const OpenClawSkillReviewMode = {
+  Off: 'off',
+  Auto: 'auto',
+} as const;
+
+export type OpenClawSkillReviewMode =
+  typeof OpenClawSkillReviewMode[keyof typeof OpenClawSkillReviewMode];
+
 export const OpenClawGatewayRepairErrorCode = {
   Busy: 'busy',
   ConfigApplyPending: 'config_apply_pending',
