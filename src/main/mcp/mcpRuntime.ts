@@ -72,7 +72,7 @@ export class McpRuntime {
         reason => {
           this.deps.syncOpenClawConfig({
             reason,
-            expectedImpact: OpenClawConfigImpact.Restart,
+            expectedImpact: OpenClawConfigImpact.Sync,
           }).catch(err =>
             console.error('[MCP] config sync error after launch resolution:', err),
           );

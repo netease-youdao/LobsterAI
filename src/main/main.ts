@@ -463,6 +463,7 @@ import {
   backupOpenClawConfig,
   getOpenClawGatewayRepairBusyError,
 } from './libs/openclawGatewayRepair';
+import { OpenClawImConfigRestartTracker } from './libs/openclawImConfigRestart';
 import {
   getCoworkParentSessionId,
   resolveCoworkSessionIdByOpenClawSessionKey,
@@ -2685,6 +2686,8 @@ type SyncOpenClawConfigOptions = {
   reason: string;
   restartGatewayIfRunning?: boolean;
   expectedImpact?: OpenClawConfigImpact;
+  /** Only ordinary IM saves can reuse a completed restart of this exact config. */
+  imConfigRestartFingerprint?: string;
 };
 
 type SyncOpenClawConfigResult = {
@@ -2705,6 +2708,10 @@ let openClawConfigApplyQueue: Promise<void> = Promise.resolve();
 let openClawConfigApplyState: GatewayConfigApplyState | null = null;
 let openClawConfigApplyGeneration = 0;
 let deferredRestartReason: string | null = null;
+const imConfigRestartTracker = new OpenClawImConfigRestartTracker({
+  getImConfigFingerprint: () => createStableConfigFingerprint(getIMGatewayManager().getConfig()),
+  getGatewayGeneration: () => getOpenClawEngineManager().getGatewayConnectionInfo().generation,
+});
 
 const buildConfigApplyPendingStatus = (message: string): OpenClawEngineStatus => {
   const current = getOpenClawEngineManager().getStatus();
@@ -2884,6 +2891,7 @@ const _syncOpenClawConfigImpl = async (
     getMcpRuntime().clearResolvedServersCache();
   }
 
+  const imConfigFingerprint = imConfigRestartTracker.captureConfig();
   const syncResult = configSync.sync(options.reason);
   console.log(
     `${D()} sync() ok=${syncResult.ok} changed=${syncResult.changed} bindingsChanged=${!!syncResult.bindingsChanged} restartImpact=${syncResult.restartImpact ?? OpenClawConfigImpact.None}`,
@@ -2966,12 +2974,20 @@ const _syncOpenClawConfigImpl = async (
     && options.expectedImpact === OpenClawConfigImpact.Restart;
   const syncRestartImpact =
     syncResult.restartImpact === OpenClawConfigImpact.Restart;
+  const imRestartSatisfied = imConfigRestartTracker.isRestartSatisfied(
+    options.imConfigRestartFingerprint,
+    effectiveConfigChanged,
+  );
   const needsHardRestart =
     secretEnvVarsChanged ||
     syncResult.bindingsChanged === true ||
     syncRestartImpact ||
     expectedRestartImpact ||
-    options.restartGatewayIfRunning === true;
+    (options.restartGatewayIfRunning === true && !imRestartSatisfied);
+
+  if (imRestartSatisfied && !needsHardRestart) {
+    console.log('[OpenClawConfigSync] IM config already loaded by a completed gateway restart; skipping duplicate restart.');
+  }
 
   console.log(
     `${D()} needsHardRestart=${needsHardRestart} (envChanged=${secretEnvVarsChanged} bindingsChanged=${!!syncResult.bindingsChanged} configChanged=${effectiveConfigChanged} restartImpact=${syncResult.restartImpact ?? OpenClawConfigImpact.None} expectedRestart=${expectedRestartImpact} restartFlag=${!!options.restartGatewayIfRunning})`,
@@ -3077,7 +3093,10 @@ const _syncOpenClawConfigImpl = async (
     openClawRuntimeAdapter.disconnectGatewayClient();
   }
 
-  const restarted = await manager.restartGateway(`config-sync:${options.reason}`);
+  const restarted = await imConfigRestartTracker.restartGateway(
+    imConfigFingerprint,
+    () => manager.restartGateway(`config-sync:${options.reason}`),
+  );
   if (restarted.phase !== 'running') {
     return {
       success: false,
@@ -11203,7 +11222,8 @@ if (!gotTheLock) {
   let imConfigSyncTimer: ReturnType<typeof setTimeout> | null = null;
   let imConfigSyncRunning = false;
   let imConfigSyncPending = false;
-  let imConfigSyncRestartGatewayIfRunning = false;
+  // Explicit restart demands (including out-of-config login state) cannot be deduplicated.
+  let imConfigSyncForceRestart = false;
   let lastSyncedImOpenClawConfigFingerprint: string | null = null;
   const IM_CONFIG_SYNC_DEBOUNCE_MS = 600;
   type IMConfigSyncOptions = {
@@ -11233,12 +11253,15 @@ if (!gotTheLock) {
 
   const doImConfigSync = async (): Promise<IMConfigSyncResult> => {
     imConfigSyncRunning = true;
-    const restartGatewayIfRunning = imConfigSyncRestartGatewayIfRunning;
-    imConfigSyncRestartGatewayIfRunning = false;
+    const forceRestart = imConfigSyncForceRestart;
+    imConfigSyncForceRestart = false;
     try {
       const syncResult = await syncOpenClawConfig({
         reason: 'im-config-change',
-        restartGatewayIfRunning,
+        restartGatewayIfRunning: true,
+        ...(forceRestart ? {} : {
+          imConfigRestartFingerprint: getCurrentImOpenClawConfigFingerprint(),
+        }),
       });
       if (!syncResult.success) {
         throw new Error(syncResult.error || 'OpenClaw config sync failed.');
@@ -11264,7 +11287,7 @@ if (!gotTheLock) {
     } finally {
       imConfigSyncRunning = false;
       if (imConfigSyncPending) {
-        const restartPendingGatewayIfRunning = imConfigSyncRestartGatewayIfRunning;
+        const restartPendingGatewayIfRunning = imConfigSyncForceRestart;
         imConfigSyncPending = false;
         scheduleImConfigSync({
           restartGatewayIfRunning: restartPendingGatewayIfRunning,
@@ -11275,7 +11298,7 @@ if (!gotTheLock) {
 
   const scheduleImConfigSync = (options: IMConfigSyncOptions = {}) => {
     if (options.restartGatewayIfRunning) {
-      imConfigSyncRestartGatewayIfRunning = true;
+      imConfigSyncForceRestart = true;
     }
     if (imConfigSyncRunning) {
       // A sync is already in progress; mark pending so it re-runs after completion.
@@ -11291,7 +11314,7 @@ if (!gotTheLock) {
 
   const runImConfigSyncNow = async (options: IMConfigSyncOptions = {}): Promise<IMConfigSyncResult> => {
     if (options.restartGatewayIfRunning) {
-      imConfigSyncRestartGatewayIfRunning = true;
+      imConfigSyncForceRestart = true;
     }
     if (imConfigSyncTimer) {
       clearTimeout(imConfigSyncTimer);
@@ -11322,9 +11345,7 @@ if (!gotTheLock) {
 
     if (options.syncGateway) {
       scheduleImConfigSync({
-        restartGatewayIfRunning:
-          options.restartGatewayIfRunning === true
-          || impactDecision.impact === OpenClawConfigImpact.Restart,
+        restartGatewayIfRunning: options.restartGatewayIfRunning === true,
       });
     }
   };
@@ -11375,7 +11396,7 @@ if (!gotTheLock) {
         return { success: true, skipped: true };
       }
       const syncResult = await runImConfigSyncNow({
-        restartGatewayIfRunning: impactDecision.impact === OpenClawConfigImpact.Restart,
+        restartGatewayIfRunning: imConfigRestartOnNextSettingsSave,
       });
       if (!syncResult.success) {
         return { success: false, error: syncResult.error };

@@ -257,6 +257,20 @@ describe('OpenClaw config impact classification', () => {
     });
   });
 
+  test('keeps IM binding saves as restart when removing an unrelated restart reason', () => {
+    const imDecision = classifyImOpenClawConfigChange(
+      createStableConfigFingerprint({ settings: { platformAgentBindings: {} } }),
+      createStableConfigFingerprint({ settings: { platformAgentBindings: { qq: 'worker' } } }),
+    );
+    const combined = mergeImpactDecision(imDecision, {
+      impact: OpenClawConfigImpact.Restart,
+      reasons: [OpenClawConfigImpactReason.AppUseSystemProxy],
+    });
+
+    expect(removeImpactDecisionReasons(combined, [OpenClawConfigImpactReason.AppUseSystemProxy]))
+      .toEqual({ impact: OpenClawConfigImpact.Restart, reasons: [OpenClawConfigImpactReason.ImConfig] });
+  });
+
   test('classifies forced IM sync as restart even without fingerprint diff', () => {
     const fingerprint = createStableConfigFingerprint({ weixin: { accountId: 'wxid' } });
 
