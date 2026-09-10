@@ -16,7 +16,7 @@ export type LanguageType = 'zh' | 'en';
 
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
-    openClawWorkspaceMigrationFailed: 'AI 引擎工作区状态升级失败：{error}',
+    openClawStartupMigrationFailed: 'AI 引擎状态升级失败：{error}',
     // DeepSeek Harness (experimental)
     dshWorkbenchTitle: 'DeepSeek Harness 工作台（实验）',
     dshPlanProviderName: '套餐',
@@ -383,7 +383,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
-    openClawWorkspaceMigrationFailed: 'AI engine workspace state migration failed: {error}',
+    openClawStartupMigrationFailed: 'AI engine state migration failed: {error}',
     // DeepSeek Harness (experimental)
     dshWorkbenchTitle: 'DeepSeek Harness Workbench (Experimental)',
     dshPlanProviderName: 'Plan',

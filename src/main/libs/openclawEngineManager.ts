@@ -13,7 +13,7 @@ import {
   OpenClawGatewayFailureKind,
   type OpenClawGatewayFailureSnapshot,
 } from '../../shared/openclawEngine/constants';
-import { OpenClawWorkspaceMigrationStatus } from '../../shared/openclawEngine/workspaceMigration';
+import { OpenClawStartupMigrationStatus } from '../../shared/openclawEngine/startupMigration';
 import { t } from '../i18n';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath, getSkillsRoot } from './coworkUtil';
 import {
@@ -32,8 +32,8 @@ import { buildOpenClawGatewayShutdownBridge, spawnOpenClawGatewayProcess, stopOp
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
+import { migrateLegacyStateBeforeStartup } from './openclawStartupStateMigration';
 import { ensureOpenClawWorkerShims } from './openclawWorkerShims';
-import { migrateLegacyWorkspaceStateBeforeStartup } from './openclawWorkspaceStateMigration';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 
 const gwDiagTs = (): string => {
@@ -938,7 +938,7 @@ export class OpenClawEngineManager extends EventEmitter {
       return this.getStatus();
     }
 
-    const workspaceMigration = await migrateLegacyWorkspaceStateBeforeStartup({
+    const startupMigration = await migrateLegacyStateBeforeStartup({
       stateDir: this.stateDir,
       configPath: this.configPath,
       runtimeRoot: runtime.root,
@@ -946,11 +946,11 @@ export class OpenClawEngineManager extends EventEmitter {
       env,
     });
     if (this.shutdownRequested) return this.getStatus();
-    if (workspaceMigration.status === OpenClawWorkspaceMigrationStatus.Failed) {
+    if (startupMigration.status === OpenClawStartupMigrationStatus.Failed) {
       this.setStatus({
         phase: OpenClawEnginePhase.Error,
         version: runtime.version,
-        message: t('openClawWorkspaceMigrationFailed', { error: workspaceMigration.error ?? '' }),
+        message: t('openClawStartupMigrationFailed', { error: startupMigration.error ?? '' }),
         canRetry: true,
       });
       return this.getStatus();
