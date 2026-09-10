@@ -18,6 +18,7 @@ const RETAINED_PATCHES = [
   'openclaw-im-bound-agent-run-cwd.patch',
   'openclaw-lancedb-optional-transformers.patch',
   'openclaw-lobsterai-model-compat-api.patch',
+  'openclaw-omit-default-model-from-system-prompt.patch',
   'openclaw-openai-compatible-cache-control.patch',
   'openclaw-plugin-archive-windows-timeout.patch',
   'openclaw-project-memory-negative-probe.patch',
