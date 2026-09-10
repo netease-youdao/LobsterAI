@@ -69,6 +69,21 @@ describe('workspace state migration before gateway startup', () => {
     expect(console.log).not.toHaveBeenCalled();
   });
 
+  test('logs the quarantine backup when another source prevents startup', async () => {
+    const change = 'Quarantined corrupt workspace attestation; backup: /state/workspace-attestation-quarantine/copy.attested.';
+    const runner = vi.fn(async () => ({
+      code: 1,
+      stdout: report({
+        status: OpenClawWorkspaceMigrationStatus.Failed,
+        changes: [change], warnings: ['Another source is invalid'], remainingPaths: ['/state/other-source'],
+      }),
+      stderr: '',
+    }));
+    expect((await migrateLegacyWorkspaceStateBeforeStartup({ ...options(), runner })).status)
+      .toBe(OpenClawWorkspaceMigrationStatus.Failed);
+    expect(console.log).toHaveBeenCalledWith('[OpenClaw] Workspace state migration: ' + change);
+  });
+
   test.each([
     { code: 0, stdout: report({ remainingPaths: ['/workspace/.openclaw/workspace-state.json'] }), stderr: '', expected: 'Unmigrated workspace state' },
     { code: 0, stdout: report({ warnings: ['Gateway owns this state directory'] }), stderr: '', expected: 'Gateway owns this state directory' },

@@ -830,6 +830,25 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-workspace-attestation-quarantine.patch': [
+    {
+      file: 'src/infra/state-migrations.workspace-setup.ts',
+      snippets: [
+        'isRecoverableWorkspaceAttestation(params.source, snapshot)',
+        'backupCorruptWorkspaceAttestation({',
+        'remainingMessage: "legacy workspace source remains after quarantine cleanup"',
+      ],
+    },
+    {
+      file: 'src/infra/state-migrations.workspace-attestation-recovery.ts',
+      snippets: [
+        'snapshot.size === snapshot.raw.length',
+        'await sourceRoot.create(relativePath, bytes, { mode: 0o600 })',
+        'workspace attestation backup verification failed',
+        'attestation recovery requires existing workspace content',
+      ],
+    },
+  ],
 };
 
 const strongPatchValidators = openclawVersion === 'v2026.8.1'
