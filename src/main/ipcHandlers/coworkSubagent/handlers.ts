@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron';
 
 import { CoworkIpcChannel } from '../../../shared/cowork/constants';
+import type { RemoteOwner } from '../../../shared/remote/constants';
 
 export interface CoworkSubagentRuntimeAdapter {
   getSubTaskHistory: (
@@ -13,6 +14,7 @@ export interface CoworkSubagentRuntimeAdapter {
     agentId: string,
     limit: number,
     offset: number,
+    actor?: RemoteOwner | null,
   ) => { runs: unknown[]; hasMore: boolean };
 }
 
@@ -21,6 +23,10 @@ export interface CoworkSubagentEngineRouter {
 }
 
 export interface CoworkSubagentHandlerDeps {
+  getOwner: () => RemoteOwner | null;
+  assertSessionAccess: (sessionId: string) => void;
+  assertAgentAccess: (agentId: string) => void;
+  assertRunAccess: (parentSessionId: string, runId: string, sessionKey?: string) => void;
   getOpenClawRuntimeAdapter: () => CoworkSubagentRuntimeAdapter | null;
   getCoworkEngineRouter: () => CoworkSubagentEngineRouter;
 }
@@ -43,11 +49,14 @@ export function registerCoworkSubagentHandlers(deps: CoworkSubagentHandlerDeps):
         return { success: false, error: 'Runtime adapter not available' };
       }
       try {
+        deps.assertSessionAccess(options.parentSessionId);
+        deps.assertRunAccess(options.parentSessionId, options.agentId, options.sessionKey);
         const messages = await adapter.getSubTaskHistory(
           options.parentSessionId,
           options.agentId,
           options.sessionKey,
         );
+        deps.assertSessionAccess(options.parentSessionId);
         return { success: true, messages };
       } catch (error) {
         return {
@@ -61,8 +70,13 @@ export function registerCoworkSubagentHandlers(deps: CoworkSubagentHandlerDeps):
   ipcMain.handle(CoworkIpcChannel.SubagentList, async (_event, options: { parentSessionId: string }) => {
     const adapter = getOpenClawRuntimeAdapter();
     if (!adapter) return { success: true, runs: [] };
-    const runs = adapter.listSubagentRuns(options.parentSessionId);
-    return { success: true, runs };
+    try {
+      deps.assertSessionAccess(options.parentSessionId);
+      const runs = adapter.listSubagentRuns(options.parentSessionId);
+      return { success: true, runs };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Session unavailable' };
+    }
   });
 
   ipcMain.handle(
@@ -70,12 +84,18 @@ export function registerCoworkSubagentHandlers(deps: CoworkSubagentHandlerDeps):
     async (_event, options: { agentId: string; limit?: number; offset?: number }) => {
       const adapter = getOpenClawRuntimeAdapter();
       if (!adapter) return { success: true, runs: [], hasMore: false };
-      const result = adapter.listSubagentRunsByAgent(
+      try {
+        deps.assertAgentAccess(options.agentId);
+        const result = adapter.listSubagentRunsByAgent(
         options.agentId,
         options.limit ?? 20,
         options.offset ?? 0,
+        deps.getOwner(),
       );
       return { success: true, ...result };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Agent unavailable' };
+      }
     },
   );
 
@@ -87,6 +107,8 @@ export function registerCoworkSubagentHandlers(deps: CoworkSubagentHandlerDeps):
         return { success: false, error: 'Runtime adapter not available' };
       }
       try {
+        deps.assertSessionAccess(options.parentSessionId);
+        deps.assertRunAccess(options.parentSessionId, options.runId);
         const deleted = await getCoworkEngineRouter().deleteSubagentSession(
           options.parentSessionId,
           options.runId,

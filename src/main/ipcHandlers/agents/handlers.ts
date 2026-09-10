@@ -1,12 +1,14 @@
 import { ipcMain } from 'electron';
 
 import {
+  AgentAccessErrorCode,
   AgentId,
   AgentIpcChannel,
   type AgentLegacyIdentityCleanupResult,
   AgentLegacyIdentityCleanupStatus,
 } from '../../../shared/agent/constants';
 import type { AgentManager } from '../../agentManager';
+import { AgentAccessError } from '../../agentOwnership';
 import type { CoworkStore, CreateAgentRequest, UpdateAgentRequest } from '../../coworkStore';
 import type { IMGatewayManager } from '../../im';
 import type { CoworkEngineRouter } from '../../libs/agentEngine';
@@ -46,15 +48,17 @@ async function cleanupLegacyIdentityBlockForAgent(
     'getAgentManager' | 'resolveAgentWorkspacePath' | 'syncOpenClawConfig'
   >,
 ): Promise<AgentLegacyIdentityCleanupResult> {
-  if (agentId !== AgentId.Main && deps.getAgentManager().getAgent(agentId) === null) {
-    return buildLegacyIdentityCleanupFailure(`Agent ${agentId} not found`);
-  }
+  const manager = deps.getAgentManager();
+  const owner = manager.captureOwner();
+  manager.assertAgentAccess(agentId);
 
   const syncResult = await deps.syncOpenClawConfig({ reason: 'agent-identity-cleanup-prereq' });
   if (!syncResult.success) {
     return buildLegacyIdentityCleanupFailure(syncResult.error || 'OpenClaw config sync failed before cleanup.');
   }
 
+  manager.assertCurrentOwner(owner);
+  manager.assertAgentAccess(agentId);
   const workspacePath = deps.resolveAgentWorkspacePath(agentId);
   const result = cleanupLegacyAgentsMdIdentityBlockInWorkspace(workspacePath);
   if (result.status === AgentLegacyIdentityCleanupStatus.Cleaned) {
@@ -185,12 +189,14 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     try {
       const agentExists = id !== AgentId.Main && getAgentManager().getAgent(id) !== null;
       const deletedSessionIds = agentExists ? getCoworkStore().listSessionIdsByAgent(id) : [];
+      // Runtime evidence can outlive a persisted status transition. Never stop work as part of deletion.
       const router = getCoworkEngineRouter();
-      for (const sessionId of deletedSessionIds) {
-        router.stopSession(sessionId);
+      if (deletedSessionIds.some(sessionId => router.isSessionActive(sessionId))) {
+        throw new AgentAccessError(AgentAccessErrorCode.Busy);
       }
-
+      // The transactional delete rechecks ownership and persisted in-flight evidence before cleanup.
       const result = getAgentManager().deleteAgent(id);
+      if (!result) return { success: true, deleted: false, deletedSessionIds: [] };
 
       try {
         const imStore = getIMGatewayManager()?.getIMStore();

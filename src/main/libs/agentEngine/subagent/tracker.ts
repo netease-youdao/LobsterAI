@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 
+import type { RemoteOwner } from '../../../../shared/remote/constants';
 import type { SubagentMessageStore } from '../../../subagentMessageStore';
 import type { SubagentRunStore, SubagentRunWithParent } from '../../../subagentRunStore';
 import {
@@ -357,10 +358,11 @@ export class SubagentTracker {
     agentId: string,
     limit: number,
     offset: number,
+    actor?: RemoteOwner | null,
   ): { runs: SubagentRunWithParent[]; hasMore: boolean } {
     const normalizedLimit = Math.max(1, Math.min(100, Math.floor(limit)));
     const normalizedOffset = Math.max(0, Math.floor(offset));
-    const runs = this.store.listSubagentRunsByAgent(agentId, normalizedLimit, normalizedOffset)
+    const runs = this.store.listSubagentRunsByAgent(agentId, normalizedLimit, normalizedOffset, actor)
       .map((run) => {
         const memoryStatus = this.subagentStatus.get(run.id);
         const memorySessionKey = this.subagentSessionKeys.get(run.id);
@@ -380,7 +382,7 @@ export class SubagentTracker {
           sessionKey: memorySessionKey ?? run.sessionKey,
         };
       });
-    const total = this.store.countSubagentRunsByAgent(agentId);
+    const total = this.store.countSubagentRunsByAgent(agentId, actor);
     return {
       runs,
       hasMore: normalizedOffset + runs.length < total,

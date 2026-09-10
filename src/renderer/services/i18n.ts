@@ -6,6 +6,7 @@ export type LanguageType = 'zh' | 'en';
 // 语言文本映射
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    accountSessionChanged: '账号已切换，请重试。',
     remoteTitle: '手机控制电脑',
     remoteDescription: '在手机上连接这台电脑，继续对话、发起任务，并实时查看执行进度。',
     remoteLoginRequired: '登录后生效',
@@ -3843,6 +3844,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     emailDeleting: '删除中...',
   },
   en: {
+    accountSessionChanged: 'The account changed. Please try again.',
     remoteTitle: 'Mobile control',
     remoteDescription: 'Connect to this computer from your phone to continue conversations, start tasks, and follow progress in real time.',
     remoteLoginRequired: 'Available after sign-in',

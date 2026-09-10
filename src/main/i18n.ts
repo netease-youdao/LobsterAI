@@ -16,6 +16,12 @@ export type LanguageType = 'zh' | 'en';
 
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    agentAccessUnavailable: '当前账号无法访问此 Agent。',
+    agentIdentityReused: '此 Agent 标识已使用，请重新创建。',
+    agentDefaultProtected: '默认 Agent 无法删除。',
+    agentForeignSessions: '此 Agent 关联其他账号或归属待确认的任务，无法删除。',
+    agentDeleteBusy: '此 Agent 仍有运行中任务或待核对的操作，请结束并完成同步后再删除。',
+    agentAccountChanged: '账号已切换，请重新操作。',
     remoteExecutionFailed: '任务执行异常，请在电脑查看详情。',
     remotePermissionRequired: '需要操作确认',
     remoteReviewOnDesktop: '请在电脑端查看并确认此操作。',
@@ -386,6 +392,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    agentAccessUnavailable: 'This Agent is unavailable for the current account.',
+    agentIdentityReused: 'This Agent ID has already been used. Create a new Agent.',
+    agentDefaultProtected: 'The default Agent cannot be deleted.',
+    agentForeignSessions: 'This Agent has tasks belonging to another account or awaiting ownership verification.',
+    agentDeleteBusy: 'This Agent has active tasks or unresolved operations. Finish and synchronize them before deleting.',
+    agentAccountChanged: 'The account has changed. Please try again.',
     remoteExecutionFailed: 'Task execution failed; see the desktop for details.',
     remotePermissionRequired: 'Permission required',
     remoteReviewOnDesktop: 'Review this operation on the desktop.',

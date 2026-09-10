@@ -1,5 +1,8 @@
 import Database from 'better-sqlite3';
 
+import type { RemoteOwner } from '../shared/remote/constants';
+import { sessionVisibilitySql } from './agentOwnership';
+
 export type SubagentRunStatus = 'running' | 'done' | 'error';
 
 export interface SubagentRun {
@@ -112,7 +115,7 @@ export class SubagentRunStore {
     }));
   }
 
-  listSubagentRunsByAgent(agentId: string, limit: number, offset: number): SubagentRunWithParent[] {
+  listSubagentRunsByAgent(agentId: string, limit: number, offset: number, actor?: RemoteOwner | null): SubagentRunWithParent[] {
     interface Row {
       id: string;
       parent_session_id: string;
@@ -129,6 +132,7 @@ export class SubagentRunStore {
       parent_updated_at: number | null;
     }
 
+    const access = sessionVisibilitySql(actor, 'cs');
     const rows = this.db
       .prepare(`
         SELECT
@@ -139,10 +143,11 @@ export class SubagentRunStore {
         FROM subagent_runs sr
         LEFT JOIN cowork_sessions cs ON cs.id = sr.parent_session_id
         WHERE COALESCE(NULLIF(TRIM(sr.agent_id), ''), 'main') = ?
+          AND ${actor === undefined ? '1=1' : 'cs.id IS NOT NULL'} AND ${access.sql}
         ORDER BY sr.created_at DESC
         LIMIT ? OFFSET ?
       `)
-      .all(agentId, limit, offset) as Row[];
+      .all(agentId, ...access.parameters, limit, offset) as Row[];
 
     return rows.map((row) => ({
       id: row.id,
@@ -161,14 +166,16 @@ export class SubagentRunStore {
     }));
   }
 
-  countSubagentRunsByAgent(agentId: string): number {
+  countSubagentRunsByAgent(agentId: string, actor?: RemoteOwner | null): number {
+    const access = sessionVisibilitySql(actor, 'cs');
     const row = this.db
       .prepare(`
         SELECT COUNT(*) AS count
-        FROM subagent_runs
-        WHERE COALESCE(NULLIF(TRIM(agent_id), ''), 'main') = ?
+        FROM subagent_runs sr LEFT JOIN cowork_sessions cs ON cs.id = sr.parent_session_id
+        WHERE COALESCE(NULLIF(TRIM(sr.agent_id), ''), 'main') = ?
+          AND ${actor === undefined ? '1=1' : 'cs.id IS NOT NULL'} AND ${access.sql}
       `)
-      .get(agentId) as { count: number } | undefined;
+      .get(agentId, ...access.parameters) as { count: number } | undefined;
     return row?.count ?? 0;
   }
 

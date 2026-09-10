@@ -47,3 +47,28 @@ describe('Library session projection notifications', () => {
     });
   });
 });
+
+test('candidate indexing rechecks the captured account after asynchronous file resolution', async () => {
+  const upsertFile = vi.fn();
+  const store = { sessionExists: () => true, getSessionCwd: () => '/work', upsertFile };
+  const service = new LibraryIndexService({
+    store: store as unknown as LibraryLocalStore, userDataPath: '/tmp', onChanged: vi.fn(),
+    getMetadata: () => undefined, setMetadata: () => undefined,
+  });
+  let release!: (value: unknown) => void;
+  const resolution = new Promise(resolve => { release = resolve; });
+  vi.spyOn(service as unknown as { resolveIndexedFile: () => Promise<unknown> }, 'resolveIndexedFile')
+    .mockReturnValue(resolution);
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  let switched = false;
+  const pending = service.recordCandidates([{
+    sessionId: 'a-task', filePath: 'result.md', detectedType: 'markdown', relationKind: 'created', relatedAt: 1,
+  }], { userId: '1001', scopeKey: 'personal' }, () => {
+    if (switched) throw new Error('Account changed');
+  });
+  switched = true;
+  release({ filePath: '/work/result.md' });
+  await pending;
+  expect(upsertFile).not.toHaveBeenCalled();
+  warning.mockRestore();
+});

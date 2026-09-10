@@ -570,7 +570,7 @@ import { prepareDefaultWorkspace } from './remote/defaultWorkspace';
 import { createRemoteDatabaseFence,loadRemoteIdentity } from './remote/installationIdentity';
 import { RemoteBridge } from './remote/remoteBridge';
 import { PREVENT_SLEEP_STORE_KEY, RemoteSettingsController } from './remote/remoteSettingsController';
-import { assertRemoteExecutionPermit,currentRemoteExecution, SessionCommandService } from './remote/sessionCommandService';
+import { assertRemoteExecutionPermit,currentRemoteExecution, markRemoteExecutionDispatched, SessionCommandService } from './remote/sessionCommandService';
 import { SkillManager } from './skills/skillManager';
 import { getSkillServiceManager } from './skills/skillServices';
 import {
@@ -2447,7 +2447,7 @@ const getCoworkStore = () => {
 let agentManager: AgentManager | null = null;
 const getAgentManager = () => {
   if (!agentManager) {
-    agentManager = new AgentManager(getCoworkStore());
+    agentManager = new AgentManager(getCoworkStore(), () => getCoworkStore().remoteCreationOwner());
   }
   return agentManager;
 };
@@ -3298,11 +3298,24 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
   return promise;
 };
 
+const coworkPermissionSessions = new Map<string, string>();
+
+const canViewCoworkSession = (sessionId: string): boolean => {
+  try {
+    const store = getCoworkStore();
+    store.remote.assertActor(sessionId, store.remoteCreationOwner());
+    return store.getSession(sessionId, 0) !== null;
+  } catch {
+    return false;
+  }
+};
+
 const bindCoworkRuntimeForwarder = (): void => {
   if (coworkRuntimeForwarderBound) return;
   const runtime = getCoworkEngineRouter();
 
   runtime.on('message', (sessionId: string, message: unknown, beforeMessageId?: string) => {
+    if (!canViewCoworkSession(sessionId)) return;
     const safeMessage = sanitizeCoworkMessageForIpc(message);
     const windows = BrowserWindow.getAllWindows();
     const messageType = typeof message === 'object' && message && 'type' in message
@@ -3315,7 +3328,7 @@ const bindCoworkRuntimeForwarder = (): void => {
     windows.forEach((win) => {
       if (win.isDestroyed()) return;
       try {
-        win.webContents.send('cowork:stream:message', { sessionId, message: safeMessage, beforeMessageId });
+        win.webContents.send(CoworkIpcChannel.StreamMessage, { sessionId, message: safeMessage, beforeMessageId });
       } catch (error) {
         console.error('Failed to forward cowork message:', error);
       }
@@ -3325,12 +3338,13 @@ const bindCoworkRuntimeForwarder = (): void => {
   runtime.on(
     'messageUpdate',
     (sessionId: string, messageId: string, content: string, metadata?: Record<string, unknown>) => {
+      if (!canViewCoworkSession(sessionId)) return;
       const safeContent = truncateIpcString(content, IPC_UPDATE_CONTENT_MAX_CHARS);
       const windows = BrowserWindow.getAllWindows();
       windows.forEach(win => {
         if (win.isDestroyed()) return;
         try {
-          win.webContents.send('cowork:stream:messageUpdate', {
+          win.webContents.send(CoworkIpcChannel.StreamMessageUpdate, {
             sessionId,
             messageId,
             content: safeContent,
@@ -3344,11 +3358,12 @@ const bindCoworkRuntimeForwarder = (): void => {
   );
 
   runtime.on('sessionStatus', (sessionId: string, status: string) => {
+    if (!canViewCoworkSession(sessionId)) return;
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(win => {
       if (win.isDestroyed()) return;
       try {
-        win.webContents.send('cowork:stream:sessionStatus', { sessionId, status });
+        win.webContents.send(CoworkIpcChannel.StreamSessionStatus, { sessionId, status });
       } catch (error) {
         console.error('[CoworkRuntime] failed to forward session status:', error);
       }
@@ -3356,6 +3371,7 @@ const bindCoworkRuntimeForwarder = (): void => {
   });
 
   runtime.on('btwResult', (sessionId: string, result: CoworkBtwEntry) => {
+    if (!canViewCoworkSession(sessionId)) return;
     const safeResult: CoworkBtwEntry = {
       ...result,
       sessionId,
@@ -3382,11 +3398,12 @@ const bindCoworkRuntimeForwarder = (): void => {
   });
 
   runtime.on('contextUsageUpdate', (sessionId: string, usage: unknown) => {
+    if (!canViewCoworkSession(sessionId)) return;
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(win => {
       if (win.isDestroyed()) return;
       try {
-        win.webContents.send('cowork:stream:contextUsage', { sessionId, usage });
+        win.webContents.send(CoworkIpcChannel.StreamContextUsage, { sessionId, usage });
       } catch (error) {
         console.error('[CoworkRuntime] failed to forward context usage:', error);
       }
@@ -3394,6 +3411,7 @@ const bindCoworkRuntimeForwarder = (): void => {
   });
 
   runtime.on('goalUpdate', (sessionId: string, goal: unknown) => {
+    if (!canViewCoworkSession(sessionId)) return;
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(win => {
       if (win.isDestroyed()) return;
@@ -3406,6 +3424,7 @@ const bindCoworkRuntimeForwarder = (): void => {
   });
 
   runtime.on('contextMaintenance', (sessionId: string, active: boolean) => {
+    if (!canViewCoworkSession(sessionId)) return;
     const windows = BrowserWindow.getAllWindows();
     console.log(
       `[CoworkRuntime] forwarding context maintenance ${active ? 'start' : 'end'} for session ${sessionId} to ${windows.length} windows.`,
@@ -3413,7 +3432,7 @@ const bindCoworkRuntimeForwarder = (): void => {
     windows.forEach(win => {
       if (win.isDestroyed()) return;
       try {
-        win.webContents.send('cowork:stream:contextMaintenance', { sessionId, active });
+        win.webContents.send(CoworkIpcChannel.StreamContextMaintenance, { sessionId, active });
       } catch (error) {
         console.error('[CoworkRuntime] failed to forward context maintenance status:', error);
       }
@@ -3421,6 +3440,9 @@ const bindCoworkRuntimeForwarder = (): void => {
   });
 
   runtime.on('permissionRequest', (sessionId: string, request: unknown) => {
+    const incomingId = (request as { requestId?: unknown } | null)?.requestId;
+    if (typeof incomingId === 'string') coworkPermissionSessions.set(incomingId, sessionId);
+    if (!canViewCoworkSession(sessionId)) return;
     if (runtime.getSessionConfirmationMode(sessionId) === 'text') {
       return;
     }
@@ -3429,7 +3451,7 @@ const bindCoworkRuntimeForwarder = (): void => {
     windows.forEach(win => {
       if (win.isDestroyed()) return;
       try {
-        win.webContents.send('cowork:stream:permission', { sessionId, request: safeRequest });
+        win.webContents.send(CoworkIpcChannel.StreamPermission, { sessionId, request: safeRequest });
       } catch (error) {
         console.error('Failed to forward cowork permission request:', error);
       }
@@ -3444,10 +3466,15 @@ const bindCoworkRuntimeForwarder = (): void => {
   });
 
   runtime.on('permissionResolved', (_sessionId: string, requestId: string) => {
+    coworkPermissionSessions.delete(requestId);
     getDesktopNotificationManager().handlePermissionResolved(requestId);
   });
 
   runtime.on('sessionStopped', (sessionId: string) => {
+    for (const [requestId, ownerSessionId] of coworkPermissionSessions) {
+      if (ownerSessionId === sessionId) coworkPermissionSessions.delete(requestId);
+    }
+    if (!canViewCoworkSession(sessionId)) return;
     getDesktopNotificationManager().handleSessionStopped(sessionId);
   });
 
@@ -3456,11 +3483,12 @@ const bindCoworkRuntimeForwarder = (): void => {
     mediaTurnAccountScopeBySession.delete(sessionId);
     skinRuntimeController?.handleRuntimeComplete(sessionId);
     mediaReferencesBySession.delete(sessionId);
+    if (!canViewCoworkSession(sessionId)) return;
     getDesktopNotificationManager().handleComplete(sessionId);
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(win => {
       if (win.isDestroyed()) return;
-      win.webContents.send('cowork:stream:complete', { sessionId, claudeSessionId });
+      win.webContents.send(CoworkIpcChannel.StreamComplete, { sessionId, claudeSessionId });
     });
     // If this session used a server model, notify renderer to refresh quota.
     try {
@@ -3487,10 +3515,11 @@ const bindCoworkRuntimeForwarder = (): void => {
     } catch {
       /* ignore */
     }
+    if (!canViewCoworkSession(sessionId)) return;
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(win => {
       if (win.isDestroyed()) return;
-      win.webContents.send('cowork:stream:error', { sessionId, error });
+      win.webContents.send(CoworkIpcChannel.StreamError, { sessionId, error });
     });
     try {
       if (shouldRefreshServerQuotaForSession(sessionId)) {
@@ -3515,6 +3544,7 @@ const getCoworkEngineRouter = () => {
         getCoworkStore(),
         getOpenClawEngineManager(),
         {
+          beforeExecutionDispatch: markRemoteExecutionDispatched,
           normalizeModelRef: normalizeOpenClawModelRef,
           onChannelPromptSubmit: event => {
             void getMainLogReporter().report({
@@ -3528,6 +3558,7 @@ const getCoworkEngineRouter = () => {
             handleGatewaySelfRestartSettled();
           },
           onBrowserToolEvent: event => {
+            if (!canViewCoworkSession(event.sessionId)) return;
             const displayMode = normalizeBrowserWebAccessConfig(
               getStore().get<AppConfigSettings>('app_config')?.browserWebAccess,
             ).displayMode;
@@ -3595,6 +3626,7 @@ const getDesktopNotificationManager = (): DesktopNotificationManager => {
       getNotificationSettings: () =>
         getStore().get<AppConfigSettings>('app_config')?.notificationSettings,
       getSessionTitle: (sessionId: string) => {
+        if (!canViewCoworkSession(sessionId)) return null;
         try {
           return getCoworkStore().getSession(sessionId, 0)?.title ?? null;
         } catch {
@@ -4013,6 +4045,7 @@ const flushOpenSessionFromNotification = (): void => {
   const sessionId = pendingOpenSessionFromNotificationId;
   pendingOpenSessionFromNotificationId = null;
   console.log(`[DesktopNotification] opening session ${sessionId} from notification`);
+  if (!canViewCoworkSession(sessionId)) return;
   mainWindow.webContents.send(CoworkIpcChannel.OpenSessionFromNotification, { sessionId });
 };
 
@@ -5442,12 +5475,26 @@ if (!gotTheLock) {
     const fence = createRemoteDatabaseFence(app.getPath('appData'), app.getPath('userData'), safeStorage, identity);
     getCoworkStore().remote.validateDatabaseInstance(identity.databaseId, fence.checkpoint, fence.advance);
     remoteBridge = new RemoteBridge({
+      agentOwnership: getCoworkStore().agentOwnership,
       store: getCoworkStore().remote, identity, getOwner: getCurrentRemoteOwner, getApiBaseUrl: getServerApiBaseUrl,
       metadata: { name: os.hostname(), hostName: os.hostname(), instanceLabel: path.basename(app.getPath('userData')),
         platform: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux', appVersion: app.getVersion() },
       request: async (owner, pathname, init) => {
         if (!sameOwner(owner, getCurrentRemoteOwner())) throw new Error('Account changed');
         return fetchWithAuth(`${getServerApiBaseUrl()}${pathname}`, { ...init, headers: { ...getEnterpriseAccountHeaders(), ...init.headers } });
+      },
+      getAgentWorkspace: async agentId => {
+        const agent = getCoworkStore().getVisibleAgent(agentId, getCurrentRemoteOwner());
+        const configured = agent?.workingDirectory?.trim() || getCoworkStore().getConfig().workingDirectory.trim();
+        const candidate = configured ? path.resolve(configured) : '';
+        try {
+          if (!agent || !candidate || !(await fs.promises.stat(candidate)).isDirectory()) throw new Error('Workspace unavailable');
+          await fs.promises.access(candidate, fs.constants.R_OK | fs.constants.W_OK);
+          const canonicalPath = await fs.promises.realpath(candidate);
+          return { path: canonicalPath, name: path.basename(canonicalPath) || os.hostname(), available: true };
+        } catch {
+          return { path: candidate, name: path.basename(candidate) || os.hostname(), available: false };
+        }
       },
       getDefaultWorkspace: async () => {
         const candidate = path.resolve(resolveAgentDefaultWorkingDirectory());
@@ -6905,9 +6952,10 @@ if (!gotTheLock) {
     } catch {
       // Session may have been deleted
     }
+    if (!canViewCoworkSession(sessionId)) return;
     BrowserWindow.getAllWindows().forEach(win => {
       if (!win.isDestroyed()) {
-        win.webContents.send('cowork:stream:message', { sessionId, message });
+        win.webContents.send(CoworkIpcChannel.StreamMessage, { sessionId, message });
       }
     });
   };
@@ -9219,6 +9267,7 @@ if (!gotTheLock) {
       },
     ) => {
       try {
+        assertRemoteExecutionPermit();
         const ipcStartedAtMs = Date.now();
         const requestAccountScope = getCurrentMediaAccountScope();
         console.log(
@@ -9412,13 +9461,14 @@ if (!gotTheLock) {
           .catch(error => {
             console.error('[Cowork] session error:', error);
             try {
+              if (!canViewCoworkSession(session.id)) return;
               const existing = coworkStoreInstance.getSession(session.id);
               if (existing?.status === 'error') return;
               const errorMessage = error instanceof Error ? error.message : String(error);
               const windows = BrowserWindow.getAllWindows();
               windows.forEach(win => {
                 if (win.isDestroyed()) return;
-                win.webContents.send('cowork:stream:error', {
+                win.webContents.send(CoworkIpcChannel.StreamError, {
                   sessionId: session.id,
                   error: errorMessage,
                 });
@@ -9468,6 +9518,7 @@ if (!gotTheLock) {
       },
     ) => {
       try {
+        assertRemoteExecutionPermit();
         const ipcStartedAtMs = Date.now();
         const requestAccountScope = getCurrentMediaAccountScope();
         console.log(
@@ -9601,13 +9652,14 @@ if (!gotTheLock) {
           .catch(error => {
             console.error('[Cowork] continue error:', error);
             try {
+              if (!canViewCoworkSession(options.sessionId)) return;
               const existing = getCoworkStore().getSession(options.sessionId);
               if (existing?.status === 'error') return;
               const errorMessage = error instanceof Error ? error.message : String(error);
               const windows = BrowserWindow.getAllWindows();
               windows.forEach(win => {
                 if (win.isDestroyed()) return;
-                win.webContents.send('cowork:stream:error', {
+                win.webContents.send(CoworkIpcChannel.StreamError, {
                   sessionId: options.sessionId,
                   error: errorMessage,
                 });
@@ -9941,6 +9993,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(CoworkIpcChannel.MarkSessionViewed, async (_event, sessionId: string) => {
     try {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       getDesktopNotificationManager().markSessionViewed(sessionId);
       return { success: true };
     } catch (error) {
@@ -9957,6 +10010,7 @@ if (!gotTheLock) {
       return { success: false, error: 'Unknown renderer' };
     }
     try {
+      if (sessionId) getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       getDesktopNotificationManager().setActiveSession(
         typeof sessionId === 'string' && sessionId ? sessionId : null,
       );
@@ -9987,7 +10041,7 @@ if (!gotTheLock) {
         if (existingSessionId) {
           const coworkStoreInstance = getCoworkStore();
           const existingSession = coworkStoreInstance.getSession(existingSessionId);
-          if (existingSession) {
+          if (existingSession && canViewCoworkSession(existingSessionId)) {
             coworkStoreInstance.remote.assertActor(existingSessionId, getCurrentRemoteOwner());
             if (existingSession.title !== title) {
               coworkStoreInstance.updateSession(existingSessionId, { title }, { touchUpdatedAt: false });
@@ -10053,6 +10107,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(CoworkIpcChannel.DeleteSession, async (_event, sessionId: string) => {
     try {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       getCoworkEngineRouter().stopSession(sessionId);
       const coworkStoreInstance = getCoworkStore();
       coworkStoreInstance.deleteSession(sessionId);
@@ -10199,6 +10254,7 @@ if (!gotTheLock) {
           sessionId,
           forkedFromTimestamp ?? undefined,
         );
+        coworkStoreInstance.remote.assertActor(sessionId, getCurrentRemoteOwner());
         if (compactionSummary) {
           forkContextMessages.push({
             content: compactionSummary.summary,
@@ -10237,8 +10293,9 @@ if (!gotTheLock) {
     },
   );
 
-  ipcMain.handle('cowork:session:get', async (_event, sessionId: string) => {
+  ipcMain.handle(CoworkIpcChannel.GetSession, async (_event, sessionId: string) => {
     try {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       const session = getCoworkStore().getSession(sessionId);
       if (session) {
         console.log(
@@ -10256,8 +10313,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:session:remoteManaged', async (_event, sessionId: string) => {
+  ipcMain.handle(CoworkIpcChannel.IsSessionRemoteManaged, async (_event, sessionId: string) => {
     try {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       const mapping = getIMGatewayManager()
         ?.getIMStore()
         ?.getSessionMappingByCoworkSessionId(sessionId);
@@ -10282,11 +10340,11 @@ if (!gotTheLock) {
         const store = getCoworkStore();
         const startedAt = searchQuery ? Date.now() : 0;
         const sessions = searchQuery
-          ? store.searchSessions({ query: searchQuery, limit, offset, agentId })
-          : store.listSessions(limit, offset, agentId);
+          ? store.searchSessions({ query: searchQuery, limit, offset, agentId }, getCurrentRemoteOwner())
+          : store.listSessions(limit, offset, agentId, getCurrentRemoteOwner());
         const total = searchQuery
-          ? store.countSearchSessions({ query: searchQuery, agentId })
-          : store.countSessions(agentId);
+          ? store.countSearchSessions({ query: searchQuery, agentId }, getCurrentRemoteOwner())
+          : store.countSessions(agentId, getCurrentRemoteOwner());
         if (searchQuery) {
           console.debug(
             `[CoworkIPC] searched sessions; query length ${searchQuery.length}, returned ${sessions.length} of ${total} from offset ${offset} in ${Date.now() - startedAt}ms.`,
@@ -10304,13 +10362,14 @@ if (!gotTheLock) {
   );
 
   ipcMain.handle(
-    'cowork:session:getMessages',
+    CoworkIpcChannel.GetSessionMessages,
     async (_event, options: {
       sessionId: string;
       limit?: number;
       offset?: number;
     }) => {
       try {
+        getCoworkStore().remote.assertActor(options.sessionId, getCurrentRemoteOwner());
         const { sessionId, limit = COWORK_MESSAGE_PAGE_SIZE, offset = 0 } = options;
         const store = getCoworkStore();
         const total = store.countSessionMessages(sessionId);
@@ -10338,6 +10397,7 @@ if (!gotTheLock) {
       knownTotal?: number;
     }) => {
       try {
+        getCoworkStore().remote.assertActor(options.sessionId, getCurrentRemoteOwner());
         const requestedLimit = options?.limit ?? COWORK_SEARCH_MESSAGE_PAGE_SIZE;
         const limit = Number.isFinite(requestedLimit)
           ? Math.max(1, Math.min(COWORK_SEARCH_MESSAGE_PAGE_MAX_SIZE, Math.floor(requestedLimit)))
@@ -10371,6 +10431,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(CoworkIpcChannel.GetSessionMessageRailIndex, async (_event, sessionId: string) => {
     try {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       const store = getCoworkStore();
       const items = store.getSessionMessageRailIndex(sessionId);
       console.log(
@@ -10386,9 +10447,13 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:session:contextUsage', async (_event, sessionId: string) => {
+  ipcMain.handle(CoworkIpcChannel.GetSessionContextUsage, async (_event, sessionId: string) => {
     try {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
+      const actor = getCurrentRemoteOwner();
       const usage = await getCoworkEngineRouter().getContextUsage(sessionId);
+      if (actor !== null && !sameOwner(actor, getCurrentRemoteOwner())) throw new Error('Account changed');
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       return {
         success: true,
         usage,
@@ -10403,8 +10468,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:session:compactContext', async (_event, sessionId: string) => {
+  ipcMain.handle(CoworkIpcChannel.CompactSessionContext, async (_event, sessionId: string) => {
     try {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       const result = await getCoworkEngineRouter().compactContext(sessionId);
       return { success: true, ...result };
     } catch (error) {
@@ -10578,6 +10644,7 @@ if (!gotTheLock) {
   // ── Session diagnostics IPC ────────────────────────────────────────────
 
   registerSessionDiagnosticsHandlers({
+    assertSessionAccess: sessionId => getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner()),
     getDatabase: () => getStore().getDatabase(),
     getAppVersion: () => app.getVersion(),
     getDownloadsPath: () => app.getPath('downloads'),
@@ -10586,6 +10653,18 @@ if (!gotTheLock) {
   // ── Subagent tracking IPC ──────────────────────────────────────────────
 
   registerCoworkSubagentHandlers({
+    getOwner: getCurrentRemoteOwner,
+    assertSessionAccess: sessionId => getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner()),
+    assertAgentAccess: agentId => getCoworkStore().assertAgentAccess(agentId, getCurrentRemoteOwner()),
+    assertRunAccess: (parentSessionId, runId, sessionKey) => {
+      const run = getStore().getDatabase().prepare(
+        'SELECT parent_session_id,session_key FROM subagent_runs WHERE id=?',
+      ).get(runId) as { parent_session_id: string; session_key: string | null } | undefined;
+      if (!run || run.parent_session_id !== parentSessionId
+        || (sessionKey !== undefined && sessionKey !== run.session_key)) {
+        throw new Error(t('agentAccessUnavailable'));
+      }
+    },
     getOpenClawRuntimeAdapter: () => openClawRuntimeAdapter,
     getCoworkEngineRouter,
   });
@@ -10627,6 +10706,8 @@ if (!gotTheLock) {
     result: PermissionResult;
   }) => {
     try {
+      const sessionId = coworkPermissionSessions.get(options.requestId);
+      if (!sessionId || !canViewCoworkSession(sessionId)) throw new Error(t('agentAccessUnavailable'));
       // Dual-dispatch pattern: permission responses arrive through one IPC channel
       // but may target either of two independent subsystems.
       //
@@ -10662,6 +10743,7 @@ if (!gotTheLock) {
         // Close the desktop notification for this request regardless of which
         // subsystem handled it (runtime approvals emit permissionResolved on
         // their own; AskUserQuestion bridge requests do not).
+        coworkPermissionSessions.delete(options.requestId);
         getDesktopNotificationManager().handlePermissionResolved(options.requestId);
         return { success: true };
       } catch (error) {
@@ -10756,12 +10838,14 @@ if (!gotTheLock) {
         throw new Error('Session ID is required.');
       }
 
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       const patch = sanitizeOpenClawSessionPatch(request.patch);
       if (patch.model) {
         patch.model = normalizeOpenClawModelRef(patch.model);
       }
       const runtime = getCoworkEngineRouter();
       const patchResult = await runtime.patchSession(sessionId, patch);
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
 
       if (patch.model !== undefined || patch.thinkingLevel !== undefined) {
         const sessionUpdates: {
@@ -12526,7 +12610,7 @@ if (!gotTheLock) {
 
   ipcMain.handle('get-recent-cwds', async (_event, limit?: number) => {
     const boundedLimit = limit ? Math.min(Math.max(limit, 1), 20) : 8;
-    return getCoworkStore().listRecentCwds(boundedLimit);
+    return getCoworkStore().listRecentCwds(boundedLimit, getCurrentRemoteOwner());
   });
 
   ipcMain.handle('get-api-config', async () => {
@@ -14487,6 +14571,7 @@ if (!gotTheLock) {
     });
     registerLibraryIpcHandlers({
       localStore: libraryLocalStore,
+      getOwner: getCurrentRemoteOwner,
       indexService: libraryIndexService,
       getServerApiBaseUrl,
       fetchWithAuth: (url, options) => {

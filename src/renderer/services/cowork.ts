@@ -85,6 +85,7 @@ import type {
   OpenClawSessionPolicyConfig,
 } from '../types/cowork';
 import { CoworkSessionStatusValue } from '../types/cowork';
+import { accountBoundRequest } from './accountBoundRequest';
 import { CoworkQueuedFollowUpCoordinator } from './coworkQueuedFollowUpCoordinator';
 import {
   getPreservedMessageWindow,
@@ -652,7 +653,7 @@ class CoworkService {
     let request: Promise<CoworkContextUsage | null>;
     request = (async (): Promise<CoworkContextUsage | null> => {
       try {
-        const result = await cowork.getContextUsage(sessionId);
+        const result = await accountBoundRequest(async () => cowork.getContextUsage(sessionId));
         if (result?.success && result.usage) {
           this.contextUsageBackoffUntil.delete(sessionId);
           this.clearAutomaticContextUsageSuppression(sessionId);
@@ -704,7 +705,7 @@ class CoworkService {
       this.contextCompactionWatchdogs.delete(sessionId);
     }, MANUAL_CONTEXT_COMPACTION_WATCHDOG_MS));
     try {
-      const result = await cowork.compactContext(sessionId);
+      const result = await accountBoundRequest(async () => cowork.compactContext(sessionId));
       if (result.success) {
         console.log(`[CoworkService] manual context compaction completed for session ${sessionId}, compacted=${result.compacted === true}.`);
         if (result.usage) {
@@ -793,7 +794,7 @@ class CoworkService {
 
   async loadSessions(agentId?: string): Promise<void> {
     const requestId = ++this.latestLoadSessionsRequestId;
-    const result = await window.electron?.cowork?.listSessions({ limit: COWORK_SESSION_PAGE_SIZE, offset: 0, agentId });
+    const result = await accountBoundRequest(async () => window.electron?.cowork?.listSessions({ limit: COWORK_SESSION_PAGE_SIZE, offset: 0, agentId }));
     if (result?.success && result.sessions) {
       // High-frequency IM traffic can trigger overlapping list refreshes.
       // Ignore stale responses so an older snapshot does not hide newer sessions.
@@ -878,10 +879,10 @@ class CoworkService {
     }
 
     try {
-      const result = await cowork.seedNewUserWelcomeTask({
+      const result = await accountBoundRequest(async () => cowork.seedNewUserWelcomeTask({
         title: i18nService.t('newUserWelcomeTaskTitle'),
         content: i18nService.t('newUserWelcomeTaskContent'),
-      });
+      }));
 
       if (!result.success || !result.session) {
         const error = result.error || 'Failed to seed new user welcome task';
@@ -947,7 +948,7 @@ class CoworkService {
     offset: number,
   ): Promise<CoworkSessionListResult> {
     try {
-      const result = await window.electron?.cowork?.listSessions({ limit, offset, agentId });
+      const result = await accountBoundRequest(async () => window.electron?.cowork?.listSessions({ limit, offset, agentId }));
       const resolved = result ?? { success: false, error: 'Cowork IPC is unavailable' };
       if (!resolved.success) {
         this.logDiagnostic(
@@ -984,11 +985,11 @@ class CoworkService {
     });
 
     try {
-      const result = await window.electron?.cowork?.listSessions({
+      const result = await accountBoundRequest(async () => window.electron?.cowork?.listSessions({
         limit,
         offset,
         ...(trimmedQuery ? { searchQuery: trimmedQuery } : {}),
-      });
+      }));
       const resolved = result ?? { success: false, error: 'Cowork IPC is unavailable' };
       console.debug('[CoworkSearch] task session request finished', {
         success: resolved.success,
@@ -1011,7 +1012,7 @@ class CoworkService {
     if (!state.hasMoreSessions) return false;
 
     const offset = state.sessions.length;
-    const result = await window.electron?.cowork?.listSessions({ limit: COWORK_SESSION_PAGE_SIZE, offset });
+    const result = await accountBoundRequest(async () => window.electron?.cowork?.listSessions({ limit: COWORK_SESSION_PAGE_SIZE, offset }));
     if (result?.success && result.sessions) {
       store.dispatch(appendSessions({ sessions: result.sessions, hasMore: result.hasMore ?? false }));
       return true;
@@ -1063,7 +1064,7 @@ class CoworkService {
 
     store.dispatch(setStreaming(true));
 
-    const result = await cowork.startSession(options);
+    const result = await accountBoundRequest(async () => cowork.startSession(options));
     if (result.success && result.session) {
       store.dispatch(addSession(result.session));
       if (result.session.status !== 'running') {
@@ -1108,7 +1109,7 @@ class CoworkService {
     this.setCurrentSessionStreaming(options.sessionId, true, 'continue_session_requested');
     store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'running' }));
 
-    const result = await cowork.continueSession({
+    const result = await accountBoundRequest(async () => cowork.continueSession({
       sessionId: options.sessionId,
       prompt: options.prompt,
       systemPrompt: options.systemPrompt,
@@ -1122,7 +1123,7 @@ class CoworkService {
       mediaReferences: options.mediaReferences,
       selectedTextSnippets: options.selectedTextSnippets,
       browserAnnotations: options.browserAnnotations,
-    });
+    }));
     if (!result.success) {
       this.setCurrentSessionStreaming(options.sessionId, false, 'continue_session_failed');
       if (result.engineStatus) {
@@ -1198,10 +1199,10 @@ class CoworkService {
     );
 
     try {
-      const result = await cowork.submitSteer({
+      const result = await accountBoundRequest(async () => cowork.submitSteer({
         ...options,
         text,
-      });
+      }));
       const currentAuthState = store.getState().auth;
       if (
         currentAuthState.ownerAccountKey !== authStateAtStart.ownerAccountKey
@@ -1324,11 +1325,11 @@ class CoworkService {
     );
 
     try {
-      const result = await cowork.submitBtw({
+      const result = await accountBoundRequest(async () => cowork.submitBtw({
         sessionId: options.sessionId,
         runId: options.runId,
         question,
-      });
+      }));
       if (result.success) {
         return true;
       }
@@ -1414,7 +1415,7 @@ class CoworkService {
       `[CoworkBtw] stopping run ${options.runId} for session ${options.sessionId}`,
     );
     try {
-      const result = await cowork.abortBtw(options);
+      const result = await accountBoundRequest(async () => cowork.abortBtw(options));
       if (!result.success) {
         const message = result.error
           ? classifyError(result.error)
@@ -1488,10 +1489,10 @@ class CoworkService {
       this.setCurrentSessionStreaming(options.sessionId, true, 'goal_command_requested');
       store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'running' }));
     }
-    const result = await cowork.runGoalCommand({
+    const result = await accountBoundRequest(async () => cowork.runGoalCommand({
       sessionId: options.sessionId,
       command,
-    });
+    }));
     if (!result.success) {
       if (mayStartRun) {
         this.setCurrentSessionStreaming(options.sessionId, false, 'goal_command_failed');
@@ -1531,7 +1532,7 @@ class CoworkService {
     if (!cowork) return false;
 
     this.logDiagnostic('info', `stop requested for session ${sessionId}.`);
-    const result = await cowork.stopSession(sessionId);
+    const result = await accountBoundRequest(async () => cowork.stopSession(sessionId));
     if (result.success) {
       this.setCurrentSessionStreaming(sessionId, false, 'stop_session_completed');
       store.dispatch(updateSessionStatus({ sessionId, status: 'idle' }));
@@ -1548,7 +1549,7 @@ class CoworkService {
     const cowork = window.electron?.cowork;
     if (!cowork) return false;
 
-    const result = await cowork.deleteSession(sessionId);
+    const result = await accountBoundRequest(async () => cowork.deleteSession(sessionId));
     if (result.success) {
       this.queuedFollowUpCoordinator.clearSession(sessionId);
       store.dispatch(deleteSessionAction(sessionId));
@@ -1563,7 +1564,7 @@ class CoworkService {
     const cowork = window.electron?.cowork;
     if (!cowork) return false;
 
-    const result = await cowork.deleteSessions(sessionIds);
+    const result = await accountBoundRequest(async () => cowork.deleteSessions(sessionIds));
     if (result.success) {
       sessionIds.forEach(sessionId => this.queuedFollowUpCoordinator.clearSession(sessionId));
       store.dispatch(deleteSessionsAction(sessionIds));
@@ -1578,7 +1579,7 @@ class CoworkService {
     const cowork = window.electron?.cowork;
     if (!cowork?.deleteSubagentSession) return false;
 
-    const result = await cowork.deleteSubagentSession({ parentSessionId, runId });
+    const result = await accountBoundRequest(async () => cowork.deleteSubagentSession({ parentSessionId, runId }));
     if (result.success) {
       return result.deleted ?? true;
     }
@@ -1591,7 +1592,7 @@ class CoworkService {
     const cowork = window.electron?.cowork;
     if (!cowork?.setSessionPinned) return { success: false, pinOrder: null };
 
-    const result = await cowork.setSessionPinned({ sessionId, pinned });
+    const result = await accountBoundRequest(async () => cowork.setSessionPinned({ sessionId, pinned }));
     if (result.success) {
       const pinOrder = result.pinOrder ?? null;
       store.dispatch(updateSessionPinned({ sessionId, pinned, pinOrder }));
@@ -1609,7 +1610,7 @@ class CoworkService {
     const normalizedTitle = title.trim();
     if (!normalizedTitle) return false;
 
-    const result = await cowork.renameSession({ sessionId, title: normalizedTitle });
+    const result = await accountBoundRequest(async () => cowork.renameSession({ sessionId, title: normalizedTitle }));
     if (result.success) {
       store.dispatch(updateSessionTitle({ sessionId, title: normalizedTitle }));
       return true;
@@ -1628,7 +1629,7 @@ class CoworkService {
 
     console.log(`[CoworkFork] requesting a local conversation fork for session ${options.sessionId}`);
     try {
-      const result = await cowork.forkSession(options);
+      const result = await accountBoundRequest(async () => cowork.forkSession(options));
       if (result.success && result.session) {
         store.dispatch(addSession(result.session));
         this.setCurrentSessionStreaming(result.session.id, false, 'fork_session_created');
@@ -1661,7 +1662,7 @@ class CoworkService {
     }
 
     try {
-      const result = await cowork.exportResultImage(options);
+      const result = await accountBoundRequest(async () => cowork.exportResultImage(options));
       return result ?? { success: false, error: 'Failed to export session image' };
     } catch (error) {
       return {
@@ -1680,7 +1681,7 @@ class CoworkService {
     }
 
     try {
-      const result = await cowork.captureImageChunk(options);
+      const result = await accountBoundRequest(async () => cowork.captureImageChunk(options));
       return result ?? { success: false, error: 'Failed to capture session image chunk' };
     } catch (error) {
       return {
@@ -1700,7 +1701,7 @@ class CoworkService {
     }
 
     try {
-      const result = await cowork.saveResultImage(options);
+      const result = await accountBoundRequest(async () => cowork.saveResultImage(options));
       return result ?? { success: false, error: 'Failed to save session image' };
     } catch (error) {
       return {
@@ -1719,7 +1720,7 @@ class CoworkService {
     }
 
     try {
-      const result = await cowork.exportSessionDiagnostics(options);
+      const result = await accountBoundRequest(async () => cowork.exportSessionDiagnostics(options));
       return result ?? { success: false, error: 'Failed to export session diagnostics' };
     } catch (error) {
       return {
@@ -1739,7 +1740,7 @@ class CoworkService {
       const requestId = ++this.latestLoadSessionRequestId;
       const previouslyLoadedSession = store.getState().cowork.currentSession;
 
-      const result = await cowork.getSession(sessionId);
+      const result = await accountBoundRequest(async () => cowork.getSession(sessionId));
       if (result.success && result.session) {
         this.logDiagnostic(
           'info',
@@ -1764,10 +1765,10 @@ class CoworkService {
           if (preservedWindow) {
             let pageResult;
             try {
-              pageResult = await cowork.getSessionMessages({
+              pageResult = await accountBoundRequest(async () => cowork.getSessionMessages({
                 sessionId,
                 ...preservedWindow,
-              });
+              }));
             } catch (error) {
               this.logDiagnostic(
                 'warn',
@@ -1826,7 +1827,7 @@ class CoworkService {
           console.warn('[CoworkService] failed to mark session viewed:', error);
         });
 
-        const imResult = await cowork.remoteManaged(sessionId);
+        const imResult = await accountBoundRequest(async () => cowork.remoteManaged(sessionId));
         if (requestId === this.latestLoadSessionRequestId) {
           store.dispatch(setRemoteManaged(imResult?.remoteManaged ?? false));
         }
@@ -1852,7 +1853,7 @@ class CoworkService {
 
     store.dispatch(setMessageRailIndexLoading({ sessionId, loading: true }));
     try {
-      const result = await cowork.getSessionMessageRailIndex(sessionId);
+      const result = await accountBoundRequest(async () => cowork.getSessionMessageRailIndex(sessionId));
       if (result.success && result.items) {
         store.dispatch(setMessageRailIndex({ sessionId, items: result.items }));
         this.logDiagnostic(
@@ -1903,7 +1904,7 @@ class CoworkService {
       `loading message window for session ${sessionId}; absoluteIndex=${safeAbsoluteIndex}, offset=${offset}, limit=${boundedPageSize}.`,
     );
 
-    const result = await cowork.getSessionMessages({ sessionId, limit: boundedPageSize, offset });
+    const result = await accountBoundRequest(async () => cowork.getSessionMessages({ sessionId, limit: boundedPageSize, offset }));
     if (result.success && result.messages && result.messages.length > 0) {
       if (
         store.getState().cowork.currentSession?.id !== sessionId
@@ -1966,7 +1967,7 @@ class CoworkService {
       `loading older messages for session ${sessionId}; current view has ${currentMessageCount} of ${totalMessages} messages from offset ${currentOffset}.`,
     );
 
-    const result = await cowork.getSessionMessages({ sessionId, limit, offset: newOffset });
+    const result = await accountBoundRequest(async () => cowork.getSessionMessages({ sessionId, limit, offset: newOffset }));
     if (result.success && result.messages && result.messages.length > 0) {
       const latestSession = store.getState().cowork.currentSession;
       const latestFirstMessageId = latestSession?.messages[0]?.id ?? null;
@@ -2019,7 +2020,7 @@ class CoworkService {
       `loading newer messages for session ${sessionId}; current view has ${currentMessageCount} of ${totalMessages} messages from offset ${currentOffset}.`,
     );
 
-    const result = await cowork.getSessionMessages({ sessionId, limit, offset: nextOffset });
+    const result = await accountBoundRequest(async () => cowork.getSessionMessages({ sessionId, limit, offset: nextOffset }));
     if (result.success && result.messages && result.messages.length > 0) {
       const latestSession = store.getState().cowork.currentSession;
       const latestLastMessageId = latestSession
@@ -2159,7 +2160,7 @@ class CoworkService {
       return null;
     }
 
-    const result = await sessionApi.patch({ sessionId, patch });
+    const result = await accountBoundRequest(() => sessionApi.patch({ sessionId, patch }));
     if (result.success && result.session) {
       const currentSessionId = store.getState().cowork.currentSessionId;
       if (currentSessionId === sessionId) {
@@ -2178,7 +2179,7 @@ class CoworkService {
     const cowork = window.electron?.cowork;
     if (!cowork) return false;
 
-    const response = await cowork.respondToPermission({ requestId, result });
+    const response = await accountBoundRequest(async () => cowork.respondToPermission({ requestId, result }));
     if (response.success) {
       store.dispatch(dequeuePendingPermission({ requestId }));
       return true;
@@ -2195,7 +2196,7 @@ class CoworkService {
     const currentConfig = store.getState().cowork.config;
     const engineChanged = config.agentEngine !== undefined
       && config.agentEngine !== currentConfig.agentEngine;
-    const result = await cowork.setConfig(config);
+    const result = await accountBoundRequest(async () => cowork.setConfig(config));
     if (result.success) {
       store.dispatch(setConfig({ ...currentConfig, ...config }));
       if (engineChanged) {
@@ -2255,7 +2256,7 @@ class CoworkService {
   }): Promise<CoworkUserMemoryEntry[]> {
     const api = window.electron?.cowork?.listMemoryEntries;
     if (!api) return [];
-    const result = await api(input);
+    const result = await accountBoundRequest(() => api(input));
     if (!result?.success || !result.entries) return [];
     return result.entries;
   }
@@ -2265,7 +2266,7 @@ class CoworkService {
   }): Promise<CoworkUserMemoryEntry | null> {
     const api = window.electron?.cowork?.createMemoryEntry;
     if (!api) return null;
-    const result = await api(input);
+    const result = await accountBoundRequest(() => api(input));
     if (!result?.success || !result.entry) return null;
     return result.entry;
   }
@@ -2276,7 +2277,7 @@ class CoworkService {
   }): Promise<CoworkUserMemoryEntry | null> {
     const api = window.electron?.cowork?.updateMemoryEntry;
     if (!api) return null;
-    const result = await api(input);
+    const result = await accountBoundRequest(() => api(input));
     if (!result?.success || !result.entry) return null;
     return result.entry;
   }
@@ -2284,14 +2285,14 @@ class CoworkService {
   async deleteMemoryEntry(input: { id: string }): Promise<boolean> {
     const api = window.electron?.cowork?.deleteMemoryEntry;
     if (!api) return false;
-    const result = await api(input);
+    const result = await accountBoundRequest(() => api(input));
     return Boolean(result?.success);
   }
 
   async getMemoryStats(): Promise<CoworkMemoryStats | null> {
     const api = window.electron?.cowork?.getMemoryStats;
     if (!api) return null;
-    const result = await api();
+    const result = await accountBoundRequest(() => api());
     if (!result?.success || !result.stats) return null;
     return result.stats;
   }
@@ -2299,7 +2300,7 @@ class CoworkService {
   async readMemoryFileRaw(): Promise<string | null> {
     const api = window.electron?.cowork?.readMemoryFileRaw;
     if (!api) return null;
-    const result = await api();
+    const result = await accountBoundRequest(() => api());
     if (!result?.success) return null;
     return result.content ?? '';
   }
@@ -2307,14 +2308,14 @@ class CoworkService {
   async writeMemoryFileRaw(content: string): Promise<{ success: boolean; error?: string }> {
     const api = window.electron?.cowork?.writeMemoryFileRaw;
     if (!api) return { success: false, error: 'Memory raw API unavailable' };
-    const result = await api({ content });
+    const result = await accountBoundRequest(() => api({ content }));
     return result ?? { success: false };
   }
 
   async readBootstrapFile(filename: string, options?: { agentId?: string }): Promise<string> {
     const api = window.electron?.cowork?.readBootstrapFile;
     if (!api) return '';
-    const result = await api(filename, options);
+    const result = await accountBoundRequest(() => api(filename, options));
     if (!result?.success) {
       console.warn(`[CoworkService] readBootstrapFile: failed to read ${filename}`, result?.error);
       return '';
@@ -2325,7 +2326,7 @@ class CoworkService {
   async writeBootstrapFile(filename: string, content: string, options?: { agentId?: string }): Promise<boolean> {
     const api = window.electron?.cowork?.writeBootstrapFile;
     if (!api) return false;
-    const result = await api(filename, content, options);
+    const result = await accountBoundRequest(() => api(filename, content, options));
     return Boolean(result?.success);
   }
 
@@ -2432,6 +2433,19 @@ class CoworkService {
 
   finishSessionNavigation(sessionId: string): void {
     store.dispatch(finishSessionNavigationAction(sessionId));
+  }
+
+  accountChanged(): void {
+    this.latestLoadSessionsRequestId += 1;
+    this.latestLoadSessionRequestId += 1;
+    this.clearNewUserWelcomeAnimation();
+    this.contextCompactionWatchdogs.forEach(timer => clearTimeout(timer));
+    this.contextCompactionWatchdogs.clear();
+    this.cleanupListeners();
+    if (this.initialized) {
+      this.setupStreamListeners();
+      this.setupOpenClawEngineListeners();
+    }
   }
 
   destroy(): void {

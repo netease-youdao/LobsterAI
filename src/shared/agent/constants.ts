@@ -59,3 +59,21 @@ export const LegacyAgentName = {
 export const DefaultAgentProfile = {
   Name: 'LobsterAI',
 } as const;
+
+export const AgentOwnerKind = {
+  Default: 'default',
+  Owned: 'owned',
+  Anonymous: 'anonymous',
+  Quarantined: 'quarantined',
+} as const;
+export type AgentOwnerKind = typeof AgentOwnerKind[keyof typeof AgentOwnerKind];
+
+export const AgentAccessErrorCode = {
+  Unavailable: 'agentAccessUnavailable',
+  IdentityReused: 'agentIdentityReused',
+  DefaultProtected: 'agentDefaultProtected',
+  ForeignSessions: 'agentForeignSessions',
+  Busy: 'agentDeleteBusy',
+  AccountChanged: 'agentAccountChanged',
+} as const;
+export type AgentAccessErrorCode = typeof AgentAccessErrorCode[keyof typeof AgentAccessErrorCode];

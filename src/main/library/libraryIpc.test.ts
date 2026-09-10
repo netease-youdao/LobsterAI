@@ -70,4 +70,26 @@ describe('library IPC validation', () => {
     expect(listTaskGroups).toHaveBeenCalledTimes(1);
     expect(listTaskItems).toHaveBeenCalledTimes(1);
   });
+
+  test('rejects forged private-session candidates before indexing and passes trusted actors to paths', async () => {
+    vi.mocked(ipcMain.handle).mockClear();
+    const owner = { userId: '1001', scopeKey: 'personal' };
+    const recordCandidates = vi.fn();
+    const sessionExists = vi.fn(() => false);
+    const resolvePath = vi.fn(() => null);
+    registerLibraryIpcHandlers({ getOwner: () => owner,
+      localStore: { sessionExists, resolvePath }, indexService: { recordCandidates },
+    } as unknown as LibraryIpcDependencies);
+    const handler = (channel: string) => vi.mocked(ipcMain.handle).mock.calls.find(([name]) => name === channel)![1];
+    const event = {} as Electron.IpcMainInvokeEvent;
+    const result = await handler(LibraryIpc.RecordCandidates)(event, [{
+      sessionId: 'private', filePath: '/private/path.md', detectedType: 'markdown', relationKind: 'created', relatedAt: 1,
+    }]);
+    expect(result).toMatchObject({ success: false, code: LibraryErrorCode.NotFound });
+    expect(recordCandidates).not.toHaveBeenCalled();
+    expect(sessionExists).toHaveBeenCalledWith('private', owner);
+    await handler(LibraryIpc.OpenLocal)(event, 'private-file');
+    expect(resolvePath).toHaveBeenCalledWith('private-file', owner);
+  });
+
 });

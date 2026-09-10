@@ -271,4 +271,42 @@ describe('local library task grid queries', () => {
     expect(() => store.listTaskGroups()).toThrow(expect.objectContaining({ code: LibraryErrorCode.InvalidLocalData }));
     expect(() => store.listTaskItems({ sessionId: 'task' })).toThrow(expect.objectContaining({ code: LibraryErrorCode.InvalidLocalData }));
   });
+
+  test('actor filters relations before ranking, counts and paging and protects detail/path lookups', () => {
+    const actor = { userId: '1001', scopeKey: 'personal' };
+    db.exec(`CREATE TABLE cowork_session_ownership(session_id TEXT PRIMARY KEY,owner_user_id TEXT,owner_scope_key TEXT,ownership_status TEXT)`);
+    session('anonymous', 10);
+    session('mine', 20);
+    session('other', 30);
+    session('quarantined', 40);
+    const anonymous = files('anonymous', 1)[0];
+    const mine = files('mine', 1)[0];
+    const other = files('other', 1)[0];
+    const quarantined = files('quarantined', 1)[0];
+    relation(mine, 'other', 200);
+    db.prepare('INSERT INTO cowork_session_ownership VALUES(?,?,?,?)').run('mine', actor.userId, actor.scopeKey, 'confirmed');
+    db.prepare('INSERT INTO cowork_session_ownership VALUES(?,?,?,?)').run('other', '1002', actor.scopeKey, 'confirmed');
+    db.prepare('INSERT INTO cowork_session_ownership VALUES(?,?,?,?)').run('quarantined', actor.userId, actor.scopeKey, 'quarantined');
+    const first = store.listTaskGroups({ taskPageSize: 1 }, actor);
+    expect(first.counts.total).toBe(2);
+    expect(first.groups[0].session.sessionId).toBe('mine');
+    const next = store.listTaskGroups({ taskPageSize: 1, taskCursor: first.nextTaskCursor }, actor);
+    expect(next.groups[0].session.sessionId).toBe('anonymous');
+    expect(next.hasMoreTasks).toBe(false);
+    const flat = store.list({ pageSize: 1 }, actor);
+    expect(flat.list[0].latestSession.sessionId).toBe('mine');
+    expect(flat.counts.total).toBe(2);
+    expect(store.list({ cursor: flat.nextCursor, pageSize: 1 }, actor).list[0].itemId).toBe(anonymous);
+    expect(store.listTaskGroups({}, null).groups.map(group => group.session.sessionId)).toEqual(['anonymous']);
+    expect(() => store.listTaskItems({ sessionId: 'other' }, actor)).toThrow(expect.objectContaining({ code: LibraryErrorCode.NotFound }));
+    expect(store.getDetail(mine, actor)?.sessions.map(item => item.sessionId)).toEqual(['mine']);
+    expect(store.getDetail(mine, actor)?.item.relatedSessionCount).toBe(1);
+    expect(store.getDetail(other, actor)).toBeNull();
+    expect(store.getVisibleItems([mine, other, quarantined], actor).items.map(item => item.itemId)).toEqual([mine]);
+    expect(store.resolvePath(other, actor)).toBeNull();
+    expect(store.resolveCloudSession('other', undefined, actor)).toBeUndefined();
+    expect(store.resolvePath(mine, actor)).toBe(`/files/${mine}.pdf`);
+    expect(store.getItem(other)).not.toBeNull();
+  });
+
 });

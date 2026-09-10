@@ -3110,6 +3110,7 @@ test('malformed IM lifecycle mapping errors stay isolated from the gateway event
 });
 
 function createRunTurnAdapter(options: {
+  beforeExecutionDispatch?: () => void;
   sessionModelOverride?: string;
   agentModel?: string;
   cachedModel?: string;
@@ -3196,7 +3197,7 @@ function createRunTurnAdapter(options: {
       clientEntryPath: '/tmp/openclaw-gateway-client.js',
     }),
   };
-  const adapter = new OpenClawRuntimeAdapter(store as never, engineManager as never);
+  const adapter = new OpenClawRuntimeAdapter(store as never, engineManager as never, { beforeExecutionDispatch: options.beforeExecutionDispatch });
   adapter.gatewayClient = {
     start: () => {},
     stop: () => {},
@@ -4134,6 +4135,8 @@ function createReconcileStore(
     getLastReplaceSessionArgs: () => lastReplaceSessionArgs,
     getUpdateSessionCalls: () => updateSessionCalls,
     store: {
+      remoteCreationOwner: () => null,
+      canReadSession: (sessionId: string) => sessionId === session.id,
       getSession: (sessionId: string) => {
         if (sessionId !== session.id) return null;
         if (options.sessionMessageLimit == null) return session;
@@ -9486,4 +9489,22 @@ test('persists gateway bindings only for a current active remote run after close
   remote.put.mockClear(); remote.run.mockReturnValue({ runId: 'reserved-next' });
   adapter.bindRunIdToTurn('s', 'late-alias'); expect(remote.put).not.toHaveBeenCalled();
   adapter.activeTurns.clear(); adapter.bindRunIdToTurn('s', 'no-turn'); expect(remote.put).not.toHaveBeenCalled();
+});
+
+
+test('an execution target invalidated during async preparation never reaches chat.send', async () => {
+  let permitted = true;
+  const { adapter, requests, firstModelPatchStarted, releaseFirstModelPatch } = createRunTurnAdapter({
+    sessionModelOverride: 'lobsterai-server/qwen3.6-plus-YoudaoInner',
+    holdFirstModelPatch: true,
+    beforeExecutionDispatch: () => { if (!permitted) throw new Error('Agent version changed'); },
+  });
+  adapter.on('error', () => undefined);
+  const pending = adapter.continueSession('session-1', 'hello');
+  const rejected = expect(pending).rejects.toThrow('Agent version changed');
+  await firstModelPatchStarted;
+  permitted = false;
+  releaseFirstModelPatch();
+  await rejected;
+  expect(requests.some(request => request.method === 'chat.send')).toBe(false);
 });

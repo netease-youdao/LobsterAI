@@ -6,6 +6,7 @@ import type { ModelThinkingConfig } from '@shared/providers/modelThinking';
 
 import { defaultConfig, getProviderDisplayName } from '../../config';
 import { resolveOpenClawModelRef } from '../../utils/openclawModelRef';
+import { resetAccountSessionData } from '../accountSessionBoundary';
 
 export interface Model {
   id: string;
@@ -219,6 +220,9 @@ const modelSlice = createSlice({
       // 同步 per-agent 选中模型
       syncSelectedModelByAgent(state.selectedModelByAgent, state.availableModels);
     },
+  },
+  extraReducers: builder => {
+    builder.addCase(resetAccountSessionData, state => { state.selectedModelByAgent = {}; });
   },
 });
 

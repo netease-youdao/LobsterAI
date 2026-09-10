@@ -38,6 +38,8 @@ import type {
   LibrarySessionRelation,
   LocalArtifactItem,
 } from '../../shared/library/types';
+import type { RemoteOwner } from '../../shared/remote/constants';
+import { sessionVisibilitySql } from '../agentOwnership';
 import { listLibraryLocalTaskGroups, listLibraryLocalTaskItems } from './libraryLocalTaskQuery';
 
 interface LocalArtifactRow {
@@ -112,12 +114,14 @@ export type LibraryStoredLocalArtifact = Omit<LocalArtifactItem, 'latestSession'
   latestSession?: LibrarySessionRef;
 };
 
-const VISIBLE_TASK_RELATION_PREDICATE = `EXISTS (
-  SELECT 1
-  FROM library_artifact_sessions visible_relation
-  JOIN cowork_sessions visible_session ON visible_session.id = visible_relation.session_id
-  WHERE visible_relation.artifact_id = a.id
-)`;
+const visibleTaskRelation = (actor: RemoteOwner | null | undefined) => {
+  const access = sessionVisibilitySql(actor, 'visible_session');
+  return { sql: `EXISTS (
+    SELECT 1 FROM library_artifact_sessions visible_relation
+    JOIN cowork_sessions visible_session ON visible_session.id=visible_relation.session_id
+    WHERE visible_relation.artifact_id=a.id AND (${access.sql})
+  )`, parameters: access.parameters };
+};
 
 const escapeLike = (value: string): string => value.replace(/[\\%_]/g, match => `\\${match}`);
 
@@ -164,15 +168,15 @@ export const decodeLibraryLocalCursor = (cursor?: string): LibraryLocalCursor | 
 export class LibraryLocalStore {
   constructor(private readonly db: Database.Database) {}
 
-  listTaskGroups(options: LibraryLocalTaskGroupsOptions = {}): LibraryLocalTaskGroupsData {
-    return listLibraryLocalTaskGroups(this.db, options, itemIds => this.getVisibleItems(itemIds).items);
+  listTaskGroups(options: LibraryLocalTaskGroupsOptions = {}, actor?: RemoteOwner | null): LibraryLocalTaskGroupsData {
+    return listLibraryLocalTaskGroups(this.db, options, itemIds => this.getVisibleItems(itemIds, actor).items, actor);
   }
 
-  listTaskItems(options: LibraryLocalTaskItemsOptions): LibraryLocalTaskItemsData {
-    return listLibraryLocalTaskItems(this.db, options, itemIds => this.getVisibleItems(itemIds).items);
+  listTaskItems(options: LibraryLocalTaskItemsOptions, actor?: RemoteOwner | null): LibraryLocalTaskItemsData {
+    return listLibraryLocalTaskItems(this.db, options, itemIds => this.getVisibleItems(itemIds, actor).items, actor);
   }
 
-  list(options: LibraryLocalListOptions = {}): LibraryLocalListData {
+  list(options: LibraryLocalListOptions = {}, actor?: RemoteOwner | null): LibraryLocalListData {
     if (options.sort !== undefined && options.sort !== LibraryLocalSort.RecentTask) {
       throw new LibraryLocalDataError(LibraryErrorCode.InvalidInput, 'Invalid local library sort.');
     }
@@ -185,8 +189,10 @@ export class LibraryLocalStore {
     if (options.cursor !== undefined && !cursor) {
       throw new LibraryLocalDataError(LibraryErrorCode.InvalidCursor, 'Invalid local library cursor.');
     }
-    const where: string[] = [VISIBLE_TASK_RELATION_PREDICATE];
-    const params: Array<string | number> = [];
+    const visible = visibleTaskRelation(actor);
+    const access = sessionVisibilitySql(actor);
+    const where: string[] = [visible.sql];
+    const params: Array<string | number> = [...visible.parameters];
 
     if (options.category && options.category !== LibraryCategory.All) {
       where.push('a.category = ?');
@@ -239,6 +245,7 @@ export class LibraryLocalStore {
       OR (session_updated_at = ? AND session_created_at = ? AND session_id COLLATE BINARY = ? AND sort_time_ms < ?)
       OR (session_updated_at = ? AND session_created_at = ? AND session_id COLLATE BINARY = ? AND sort_time_ms = ? AND id COLLATE BINARY < ?)
     ` : '';
+    pageParams.push(...access.parameters);
     if (cursor) {
       const { sessionUpdatedAt: updatedAt, sessionCreatedAt: createdAt, sessionId, artifactSortTime, itemId } = cursor;
       pageParams.push(
@@ -263,6 +270,7 @@ export class LibraryLocalStore {
         FROM filtered_artifacts fa
         JOIN library_artifact_sessions r ON r.artifact_id = fa.id
         JOIN cowork_sessions s ON s.id = r.session_id
+        WHERE ${access.sql}
       ), owned_items AS (
         SELECT fa.*, rr.* FROM filtered_artifacts fa
         JOIN ranked_relations rr ON rr.artifact_id = fa.id AND rr.relation_rank = 1
@@ -282,7 +290,7 @@ export class LibraryLocalStore {
     }
     const hasMore = rows.length > pageSize;
     const pageRows = hasMore ? rows.slice(0, pageSize) : rows;
-    const list = this.hydrateVisibleRows(pageRows, pageRows);
+    const list = this.hydrateVisibleRows(pageRows, pageRows, actor);
     const last = list[list.length - 1];
 
     const counts: LibraryLocalCounts = {
@@ -302,36 +310,39 @@ export class LibraryLocalStore {
     };
   }
 
-  getDetail(itemId: string): LibraryLocalDetailData | null {
+  getDetail(itemId: string, actor?: RemoteOwner | null): LibraryLocalDetailData | null {
+    const visible = visibleTaskRelation(actor);
     requireIdentifier(itemId);
     const row = this.db.prepare(`
       SELECT a.*
       FROM library_local_artifacts a
       WHERE a.id = ?
         AND a.availability <> ?
-        AND ${VISIBLE_TASK_RELATION_PREDICATE}
-    `).get(itemId, LibraryAvailability.Missing) as LocalArtifactRow | undefined;
+        AND ${visible.sql}
+    `).get(itemId, LibraryAvailability.Missing, ...visible.parameters) as LocalArtifactRow | undefined;
     if (!row) return null;
-    const item = this.hydrateVisibleRows([row])[0];
+    const item = this.hydrateVisibleRows([row], undefined, actor)[0];
     if (!item) return null;
-    const sessions = this.readRelations([itemId]).map(this.toSessionRelation);
+    const sessions = this.readRelations([itemId], actor).map(this.toSessionRelation);
     return { item, sessions };
   }
 
-  getVisibleItem(itemId: string): LocalArtifactItem | null {
+  getVisibleItem(itemId: string, actor?: RemoteOwner | null): LocalArtifactItem | null {
+    const visible = visibleTaskRelation(actor);
     requireIdentifier(itemId);
     const row = this.db.prepare(`
       SELECT a.*
       FROM library_local_artifacts a
       WHERE a.id = ?
         AND a.availability <> ?
-        AND ${VISIBLE_TASK_RELATION_PREDICATE}
-    `).get(itemId, LibraryAvailability.Missing) as LocalArtifactRow | undefined;
+        AND ${visible.sql}
+    `).get(itemId, LibraryAvailability.Missing, ...visible.parameters) as LocalArtifactRow | undefined;
     if (!row) return null;
-    return this.hydrateVisibleRows([row])[0] ?? null;
+    return this.hydrateVisibleRows([row], undefined, actor)[0] ?? null;
   }
 
-  getVisibleItems(itemIds: string[]): LibraryGetLocalItemsData {
+  getVisibleItems(itemIds: string[], actor?: RemoteOwner | null): LibraryGetLocalItemsData {
+    const visible = visibleTaskRelation(actor);
     if (itemIds.length === 0) return { items: [], unavailableItemIds: [] };
     itemIds.forEach(requireIdentifier);
     const placeholders = itemIds.map(() => '?').join(',');
@@ -340,9 +351,9 @@ export class LibraryLocalStore {
       FROM library_local_artifacts a
       WHERE a.id IN (${placeholders})
         AND a.availability <> ?
-        AND ${VISIBLE_TASK_RELATION_PREDICATE}
-    `).all(...itemIds, LibraryAvailability.Missing) as LocalArtifactRow[];
-    const items = this.hydrateVisibleRows(rows);
+        AND ${visible.sql}
+    `).all(...itemIds, LibraryAvailability.Missing, ...visible.parameters) as LocalArtifactRow[];
+    const items = this.hydrateVisibleRows(rows, undefined, actor);
     const visibleItemIds = new Set(items.map(item => item.itemId));
     return {
       items,
@@ -356,14 +367,16 @@ export class LibraryLocalStore {
     return row ? this.hydrateRows([row])[0] : null;
   }
 
-  resolvePath(itemId: string): string | null {
+  resolvePath(itemId: string, actor?: RemoteOwner | null): string | null {
+    if (actor !== undefined) return this.getVisibleItem(itemId, actor)?.filePath ?? null;
     const row = this.db.prepare('SELECT file_path FROM library_local_artifacts WHERE id = ?')
       .get(itemId) as { file_path: string } | undefined;
     return row?.file_path ?? null;
   }
 
-  sessionExists(sessionId: string): boolean {
-    return Boolean(this.db.prepare('SELECT 1 FROM cowork_sessions WHERE id = ?').get(sessionId));
+  sessionExists(sessionId: string, actor?: RemoteOwner | null): boolean {
+    const access = sessionVisibilitySql(actor);
+    return Boolean(this.db.prepare(`SELECT 1 FROM cowork_sessions s WHERE s.id = ? AND (${access.sql})`).get(sessionId, ...access.parameters));
   }
 
   listSessionIdsWithArtifactRelations(sessionIds: string[]): string[] {
@@ -391,11 +404,13 @@ export class LibraryLocalStore {
   resolveCloudSession(
     sessionId?: string,
     clientSourceKey?: string,
+    actor?: RemoteOwner | null,
   ): LibrarySessionRef | undefined {
+    const access = sessionVisibilitySql(actor);
     if (sessionId) {
       const session = this.db.prepare(`
-        SELECT id, title, agent_id, created_at, updated_at FROM cowork_sessions WHERE id = ?
-      `).get(sessionId) as {
+        SELECT id, title, agent_id, created_at, updated_at FROM cowork_sessions s WHERE id = ? AND (${access.sql})
+      `).get(sessionId, ...access.parameters) as {
         id: string;
         title: string;
         agent_id: string | null;
@@ -426,7 +441,7 @@ export class LibraryLocalStore {
       LIMIT 1
     `).get(clientSourceKey) as { id: string } | undefined;
     if (!artifact) return undefined;
-    const relation = this.readRelations([artifact.id])[0];
+    const relation = this.readRelations([artifact.id], actor)[0];
     return relation ? this.toSessionRef(relation) : undefined;
   }
 
@@ -832,8 +847,8 @@ export class LibraryLocalStore {
     };
   }
 
-  private hydrateVisibleRows(rows: LocalArtifactRow[], owners?: RelationRow[]): LocalArtifactItem[] {
-    const items = this.hydrateRows(rows, owners);
+  private hydrateVisibleRows(rows: LocalArtifactRow[], owners?: RelationRow[], actor?: RemoteOwner | null): LocalArtifactItem[] {
+    const items = this.hydrateRows(rows, owners, actor);
     const visibleItems = items.filter((item): item is LocalArtifactItem => (
       Boolean(item.latestSession) && item.relatedSessionCount > 0
     ));
@@ -843,10 +858,10 @@ export class LibraryLocalStore {
     return visibleItems;
   }
 
-  private hydrateRows(rows: LocalArtifactRow[], owners?: RelationRow[]): LibraryStoredLocalArtifact[] {
+  private hydrateRows(rows: LocalArtifactRow[], owners?: RelationRow[], actor?: RemoteOwner | null): LibraryStoredLocalArtifact[] {
     if (rows.length === 0) return [];
     const itemIds = rows.map(row => row.id);
-    const relationRows = this.readRelations(itemIds);
+    const relationRows = this.readRelations(itemIds, actor);
     const latestByArtifact = new Map<string, LibrarySessionRef>();
     for (const owner of owners ?? []) latestByArtifact.set(owner.artifact_id, this.toSessionRef(owner));
     const relationCountByArtifact = new Map<string, number>();
@@ -895,7 +910,8 @@ export class LibraryLocalStore {
     });
   }
 
-  private readRelations(itemIds: string[]): RelationRow[] {
+  private readRelations(itemIds: string[], actor?: RemoteOwner | null): RelationRow[] {
+    const access = sessionVisibilitySql(actor);
     if (itemIds.length === 0) return [];
     const placeholders = itemIds.map(() => '?').join(',');
     return this.db.prepare(`
@@ -913,9 +929,9 @@ export class LibraryLocalStore {
         s.updated_at AS session_updated_at
       FROM library_artifact_sessions r
       JOIN cowork_sessions s ON s.id = r.session_id
-      WHERE r.artifact_id IN (${placeholders})
+      WHERE r.artifact_id IN (${placeholders}) AND (${access.sql})
       ORDER BY r.artifact_id, ${RELATION_OWNER_ORDER}
-    `).all(...itemIds) as RelationRow[];
+    `).all(...itemIds, ...access.parameters) as RelationRow[];
   }
 
   private toSessionRef(row: RelationRow): LibrarySessionRef {

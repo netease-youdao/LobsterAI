@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { ipcMain, shell } from 'electron';
 
+import { AgentAccessErrorCode } from '../../shared/agent/constants';
 import {
   isLibraryArtifactType,
   isLibraryCategory,
@@ -29,12 +30,15 @@ import type {
   LibraryLocalListOptions,
   LibraryResult,
 } from '../../shared/library/types';
+import type { RemoteOwner } from '../../shared/remote/constants';
+import { AgentAccessError, sameAgentOwner } from '../agentOwnership';
 import { listLibraryCloudItems } from './libraryCloudClient';
 import { LibraryIndexService } from './libraryIndexService';
 import { decodeLibraryLocalCursor, LibraryLocalStore } from './libraryLocalStore';
 import { normalizeLibraryTaskGroupsOptions, normalizeLibraryTaskItemsOptions } from './libraryLocalTaskQuery';
 
 export interface LibraryIpcDependencies {
+  getOwner: () => RemoteOwner | null;
   localStore: LibraryLocalStore;
   indexService: LibraryIndexService;
   getServerApiBaseUrl: () => string;
@@ -224,10 +228,18 @@ export const registerLibraryIpcHandlers = ({
   indexService,
   getServerApiBaseUrl,
   fetchWithAuth,
+  getOwner = () => null,
 }: LibraryIpcDependencies): void => {
+  const captureAccess = () => {
+    const owner = getOwner();
+    const actor = owner ? { ...owner } : null;
+    return { actor, assertCurrentOwner: () => {
+      if (!sameAgentOwner(actor, getOwner())) throw new AgentAccessError(AgentAccessErrorCode.AccountChanged);
+    } };
+  };
   ipcMain.handle(LibraryIpc.ListLocalTaskGroups, (_event, input: unknown) => {
     try {
-      return success(localStore.listTaskGroups(normalizeLibraryTaskGroupsOptions(input)));
+      return success(localStore.listTaskGroups(normalizeLibraryTaskGroupsOptions(input), getOwner()));
     } catch (error) {
       return failure(
         error instanceof LibraryLocalDataError ? error.code : LibraryErrorCode.Internal,
@@ -238,7 +250,7 @@ export const registerLibraryIpcHandlers = ({
 
   ipcMain.handle(LibraryIpc.ListLocalTaskItems, (_event, input: unknown) => {
     try {
-      return success(localStore.listTaskItems(normalizeLibraryTaskItemsOptions(input)));
+      return success(localStore.listTaskItems(normalizeLibraryTaskItemsOptions(input), getOwner()));
     } catch (error) {
       return failure(
         error instanceof LibraryLocalDataError ? error.code : LibraryErrorCode.Internal,
@@ -249,7 +261,7 @@ export const registerLibraryIpcHandlers = ({
 
   ipcMain.handle(LibraryIpc.ListLocal, (_event, input: unknown) => {
     try {
-      return success(localStore.list(normalizeLocalListOptions(input)));
+      return success(localStore.list(normalizeLocalListOptions(input), getOwner()));
     } catch (error) {
       return failure(
         error instanceof LibraryLocalDataError ? error.code : LibraryErrorCode.InvalidInput,
@@ -265,13 +277,17 @@ export const registerLibraryIpcHandlers = ({
       if (!ownerScope) {
         return failure(LibraryErrorCode.NotAuthenticated, 'Sign in to view cloud library items.');
       }
-      return await listLibraryCloudItems(
+      const access = captureAccess();
+      const result = await listLibraryCloudItems(
         getServerApiBaseUrl(),
         fetchWithAuth,
         localStore,
         ownerScope,
         options,
+        access.actor,
       );
+      access.assertCurrentOwner();
+      return result;
     } catch (error) {
       return failure(
         LibraryErrorCode.InvalidInput,
@@ -282,7 +298,7 @@ export const registerLibraryIpcHandlers = ({
 
   ipcMain.handle(LibraryIpc.GetLocalItems, (_event, input: unknown) => {
     try {
-      return success(localStore.getVisibleItems(normalizeLibraryTargetItemIds(input)));
+      return success(localStore.getVisibleItems(normalizeLibraryTargetItemIds(input), getOwner()));
     } catch (error) {
       return failure(
         error instanceof LibraryLocalDataError ? error.code : LibraryErrorCode.InvalidInput,
@@ -293,7 +309,7 @@ export const registerLibraryIpcHandlers = ({
 
   ipcMain.handle(LibraryIpc.GetLocalDetail, (_event, itemId: unknown) => {
     try {
-      const detail = localStore.getDetail(requireItemId(itemId));
+      const detail = localStore.getDetail(requireItemId(itemId), getOwner());
       return detail
         ? success(detail)
         : failure(LibraryErrorCode.NotFound, 'Library item was not found.');
@@ -307,7 +323,14 @@ export const registerLibraryIpcHandlers = ({
 
   ipcMain.handle(LibraryIpc.RecordCandidates, async (_event, input: unknown) => {
     try {
-      return success(await indexService.recordCandidates(normalizeCandidates(input)));
+      const access = captureAccess();
+      const candidates = normalizeCandidates(input);
+      if (candidates.some(candidate => !localStore.sessionExists(candidate.sessionId, access.actor))) {
+        return failure(LibraryErrorCode.NotFound, 'Library task was not found.');
+      }
+      const result = await indexService.recordCandidates(candidates, access.actor, access.assertCurrentOwner);
+      access.assertCurrentOwner();
+      return success(result);
     } catch (error) {
       return failure(
         LibraryErrorCode.InvalidInput,
@@ -331,7 +354,10 @@ export const registerLibraryIpcHandlers = ({
         }
         return value.trim();
       });
-      return success(await indexService.addLocalFiles(paths));
+      const access = captureAccess();
+      const result = await indexService.addLocalFiles(paths, access.actor, access.assertCurrentOwner);
+      access.assertCurrentOwner();
+      return success(result);
     } catch (error) {
       return failure(
         LibraryErrorCode.InvalidInput,
@@ -354,7 +380,7 @@ export const registerLibraryIpcHandlers = ({
         ? LibraryFavoriteScope.LocalDevice
         : normalizeCloudOwnerScope(input.ownerScope);
       if (!ownerScope) throw new Error('Cloud favorite requires an account scope.');
-      if (input.itemKind === LibraryItemKind.LocalArtifact && !localStore.getItem(itemId)) {
+      if (input.itemKind === LibraryItemKind.LocalArtifact && !localStore.getVisibleItem(itemId, getOwner())) {
         return failure(LibraryErrorCode.NotFound, 'Library item was not found.');
       }
       localStore.setFavorite({
@@ -379,7 +405,7 @@ export const registerLibraryIpcHandlers = ({
 
   ipcMain.handle(LibraryIpc.OpenLocal, async (_event, value: unknown) => {
     try {
-      const filePath = localStore.resolvePath(requireItemId(value));
+      const filePath = localStore.resolvePath(requireItemId(value), getOwner());
       if (!filePath) return failure(LibraryErrorCode.NotFound, 'Library item was not found.');
       const error = await shell.openPath(filePath);
       return error ? failure(LibraryErrorCode.NotAvailable, error) : success(null);
@@ -393,7 +419,7 @@ export const registerLibraryIpcHandlers = ({
 
   ipcMain.handle(LibraryIpc.RevealLocal, (_event, value: unknown) => {
     try {
-      const filePath = localStore.resolvePath(requireItemId(value));
+      const filePath = localStore.resolvePath(requireItemId(value), getOwner());
       if (!filePath) return failure(LibraryErrorCode.NotFound, 'Library item was not found.');
       shell.showItemInFolder(filePath);
       return success(null);

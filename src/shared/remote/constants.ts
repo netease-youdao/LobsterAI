@@ -13,7 +13,7 @@ export const RemoteRunStatus = {
 export type RemoteRunStatusValue = typeof RemoteRunStatus[keyof typeof RemoteRunStatus];
 export interface RemoteOwner { userId: string; scopeKey: string }
 export interface RemoteWorkspace { workspaceId: string; name: string; available: boolean }
-export const RemoteCapability = { CreateSession: 'session.create', SameAccountAccess: 'same_account_access' } as const;
+export const RemoteCapability = { CreateSession: 'session.create', SameAccountAccess: 'same_account_access', SessionAgent: 'session_agent_v1', AgentCatalog: 'agent_catalog_v1', AgentSelection: 'agent_selection_v1' } as const;
 export const RemoteConnectionStatus = { Online: 'online', Offline: 'offline' } as const;
 export const RemoteConnectionReason = {
   Connecting: 'connecting', Reconnecting: 'reconnecting', Disabled: 'disabled', SignedOut: 'signed_out',
@@ -39,4 +39,18 @@ export interface RemoteSettingsApi {
   state(): Promise<RemoteSettingsState>;
   configure(input: RemoteConfigureRequest): Promise<RemoteSettingsState>;
   decide(requestId: string, decision: 'approve' | 'deny'): Promise<RemoteSettingsState>;
+}
+
+export const RemoteAgentState = { Available: 'available', Disabled: 'disabled', Deleted: 'deleted', Unknown: 'unknown' } as const;
+export const RemoteAgentReason = { Disabled: 'AGENT_DISABLED', WorkspaceUnavailable: 'WORKSPACE_UNAVAILABLE' } as const;
+export const REMOTE_AGENT_CATALOG_ITEMS = 200;
+export const REMOTE_AGENT_CATALOG_BYTES = 256 * 1024;
+export interface RemoteAgentSummary {
+  agentId: string; name: string; icon: string | null; kind: 'default' | 'owned' | 'anonymous';
+  version: string; state: typeof RemoteAgentState[keyof typeof RemoteAgentState];
+}
+export interface RemoteAgentCatalogItem {
+  agentId: string; name: string; icon: string | null; kind: 'default' | 'owned'; version: string;
+  enabled: boolean; defaultWorkspaceId: string | null; workspaceAvailable: boolean;
+  unavailableReason: typeof RemoteAgentReason[keyof typeof RemoteAgentReason] | null;
 }

@@ -24,6 +24,7 @@ import type {
   SharedFileItem,
 } from '../../shared/library/types';
 import { normalizePublishingSubscriptionRecoveryMode } from '../../shared/publishing/constants';
+import type { RemoteOwner } from '../../shared/remote/constants';
 import { SiteKind, SiteStatus } from '../../shared/site/constants';
 import { LibraryLocalStore } from './libraryLocalStore';
 
@@ -123,6 +124,7 @@ const normalizeCloudItem = (
   input: LibraryCloudApiItem,
   favorites: Set<string>,
   localStore: LibraryLocalStore,
+  actor?: RemoteOwner | null,
 ): LibraryCloudItem | null => {
   const itemId = readString(input.itemId);
   const title = readString(input.title);
@@ -134,7 +136,7 @@ const normalizeCloudItem = (
   if (input.category === LibraryCategory.All) return null;
   const sessionId = readString(input.sessionId);
   const clientSourceKey = readString(input.clientSourceKey);
-  const latestSession = localStore.resolveCloudSession(sessionId, clientSourceKey);
+  const latestSession = localStore.resolveCloudSession(sessionId, clientSourceKey, actor);
   const createdAt = readTimestamp(input.createdAt, sortTime);
   const accessExpiresAt = readNullableTimestamp(input.accessExpiresAt);
   const effectiveAvailable = readBoolean(input.effectiveAvailable);
@@ -268,6 +270,7 @@ export const listLibraryCloudItems = async (
   localStore: LibraryLocalStore,
   ownerScope: string,
   options: LibraryCloudListOptions,
+  actor?: RemoteOwner | null,
 ): Promise<LibraryResult<LibraryCloudListData>> => {
   const pageSize = Math.max(
     1,
@@ -333,7 +336,7 @@ export const listLibraryCloudItems = async (
       serverNow = readOptionalTimestamp(body.data.serverNow) ?? serverNow;
       recoveryPending = recoveryPending || readBoolean(body.data.recoveryPending) === true;
       for (const input of body.data.list ?? []) {
-        const item = normalizeCloudItem(input, favorites, localStore);
+        const item = normalizeCloudItem(input, favorites, localStore, actor);
         if (
           !item
           || (options.favoritesOnly && !item.isFavorite)

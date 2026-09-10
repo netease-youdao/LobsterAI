@@ -1,7 +1,9 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { RemoteCapability } from '../../shared/remote/constants';
 import { payloadHash } from './canonical';
+import { RemoteAgentError } from './remoteAgentCatalog';
 import { type InboxEntry, RemoteApiError,RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
 
@@ -149,5 +151,56 @@ describe('temporary rollout unavailability', () => {
       expect(store.get<any>('inbox:retained')).toEqual({ state: 'unknown' });
       expect(bridge.owner).toEqual(owner);
     } finally { bridge.stop(); vi.useRealTimers(); }
+  });
+});
+
+describe('Agent protocol negotiation and lost claim recovery', () => {
+  it('declares selection before the first catalog is ready and preserves protocol support when admission flags close', async () => {
+    const { bridge, store, requestApi } = fixture();
+    let capabilities = [RemoteCapability.SameAccountAccess, RemoteCapability.SessionAgent, RemoteCapability.AgentCatalog, RemoteCapability.AgentSelection];
+    requestApi.mockImplementation(async () => new Response(JSON.stringify({ code: 0, data: {
+      enabled: true, protocolVersions: [1], capabilities, limits: { maxAgentCatalogItems: 200, maxAgentCatalogBytes: 262144 },
+    } })));
+    const extended: any = new RemoteBridge({ ...bridge.deps, agentOwnership: { subscribe: vi.fn() }, getAgentWorkspace: () => ({ path: '/private/tmp', name: 'Workspace' }) });
+    extended.owner = owner; extended.registration = bridge.registration;
+    await extended.refreshCapabilities();
+    expect(extended.advertisedCapabilities(false)).toEqual(expect.arrayContaining([RemoteCapability.CreateSession, RemoteCapability.AgentSelection]));
+    expect(store.entries('agentCatalog:')).toHaveLength(0);
+    store.put('controlQueue:10001:personal', []);
+    capabilities = [RemoteCapability.SameAccountAccess];
+    await extended.refreshCapabilities();
+    expect(extended.agentCapabilities).toEqual([]);
+    expect(extended.advertisedCapabilities()).toContain(RemoteCapability.AgentSelection);
+    expect(store.get('controlQueue:10001:personal')).toEqual([]);
+    extended.stop(); bridge.stop();
+  });
+  for (const grantPermit of [false, true]) it(`recovers a lost claim with an invalid Agent using not-started evidence (new permit: ${grantPermit})`, async () => {
+    const { bridge, store, envelope, execute, requestApi } = fixture();
+    (envelope as any).currentClaimId = 'lost-claim';
+    delete (envelope as any).claimToken;
+    vi.spyOn(bridge, 'commandWorkspace').mockImplementation(() => { throw new RemoteAgentError(47029, 'AGENT_VERSION_CONFLICT', 'VERSION_CHANGED'); });
+    const original = requestApi.getMockImplementation()!;
+    requestApi.mockImplementation(async (...args) => {
+      const [, pathname, init] = args;
+      if (pathname.endsWith('/reconcile')) {
+        const body = JSON.parse(String(init.body));
+        expect(body.observedExecution).toBe('not_started');
+        expect(body.claimToken).toBeUndefined();
+        expect(body.localEvidence.executionNeverStarted).toBe(true);
+        const error = { code: 47029, reason: 'AGENT_VERSION_CONFLICT', message: 'Changed', retryable: false, reasonDetail: null, retryAfterMs: null };
+        const command = { ...envelope.command, status: grantPermit ? 'claimed' : 'rejected', statusVersion: '4', error };
+        return new Response(JSON.stringify({ code: 0, data: { command, executionPermit: grantPermit ? {
+          claimId: 'new-claim', claimToken: 'new-token', claimUntil: new Date(Date.now() + 15000).toISOString(), statusVersion: '4',
+        } : null } }));
+      }
+      return original(...args);
+    });
+    await bridge.reconcile();
+    expect(execute).not.toHaveBeenCalled();
+    expect(store.get<any>('inbox:command-1')).toMatchObject({ state: 'rejected', localSessionId: null, command: { status: 'rejected' } });
+    const acknowledgements = requestApi.mock.calls.filter(([, pathname]) => pathname.endsWith('/ack'));
+    if (grantPermit) expect(JSON.parse(String(acknowledgements[0][2].body))).toMatchObject({ status: 'rejected', claimId: 'new-claim', claimToken: 'new-token' });
+    else expect(acknowledgements).toHaveLength(0);
+    bridge.stop();
   });
 });

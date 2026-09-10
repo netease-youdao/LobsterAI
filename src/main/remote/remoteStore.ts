@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 
-import { REMOTE_MESSAGE_BYTES, type RemoteOwner, type RemoteRunStatusValue } from '../../shared/remote/constants';
+import { REMOTE_MESSAGE_BYTES, type RemoteAgentSummary, type RemoteOwner, type RemoteRunStatusValue } from '../../shared/remote/constants';
 import { payloadHash, remoteError, sameOwner, stableJson } from './canonical';
 
 export interface ProjectionRecord { eventType: string; payload: Record<string, any> }
@@ -33,6 +33,7 @@ export class RemoteStore {
   private advanceCheckpoint: (() => number) | null = null;
   private enabledOwner: RemoteOwner | null = null;
   private wake: () => void = () => undefined;
+  private agentSummary: ((sessionId: string, owner: RemoteOwner) => RemoteAgentSummary | null) | null = null;
 
   constructor(readonly db: Database.Database) {
     // Set outside transactions. FULL makes inbox receipts/outbox ACK cleanup durable at COMMIT.
@@ -46,6 +47,7 @@ export class RemoteStore {
         session_id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, owner_scope_key TEXT NOT NULL,
         ownership_status TEXT NOT NULL, source TEXT NOT NULL, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS remote_dirty (session_id TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS remote_content_dirty (session_id TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS remote_sync (
         local_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, device_id TEXT NOT NULL DEFAULT '',
         source_seq INTEGER NOT NULL DEFAULT 0, ack_seq INTEGER NOT NULL DEFAULT 0,
@@ -62,7 +64,9 @@ export class RemoteStore {
       const sid = table === 'cowork_sessions' ? 'id' : 'session_id';
       for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
         const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
-        db.exec(`CREATE TRIGGER IF NOT EXISTS remote_${table}_${operation.toLowerCase()}
+        db.exec(`CREATE TRIGGER IF NOT EXISTS remote_content_${table}_${operation.toLowerCase()}
+          AFTER ${operation} ON ${table} BEGIN INSERT OR IGNORE INTO remote_content_dirty VALUES (${ref}.${sid}); END;
+          CREATE TRIGGER IF NOT EXISTS remote_${table}_${operation.toLowerCase()}
           AFTER ${operation} ON ${table} BEGIN
           INSERT OR IGNORE INTO remote_dirty VALUES (${ref}.${sid});
           UPDATE cowork_session_ownership SET ownership_status='quarantined'
@@ -74,7 +78,12 @@ export class RemoteStore {
     if (this.artifactTracking) {
       for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
         const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
-        db.exec(`CREATE TRIGGER IF NOT EXISTS remote_library_relation_${operation.toLowerCase()}
+        db.exec(`CREATE TRIGGER IF NOT EXISTS remote_content_library_relation_${operation.toLowerCase()}
+          AFTER ${operation} ON library_artifact_sessions BEGIN INSERT OR IGNORE INTO remote_content_dirty VALUES (${ref}.session_id); END;
+          CREATE TRIGGER IF NOT EXISTS remote_content_library_artifact_${operation.toLowerCase()}
+          AFTER ${operation} ON library_local_artifacts BEGIN
+          INSERT OR IGNORE INTO remote_content_dirty SELECT session_id FROM library_artifact_sessions WHERE artifact_id=${ref}.id; END;
+          CREATE TRIGGER IF NOT EXISTS remote_library_relation_${operation.toLowerCase()}
           AFTER ${operation} ON library_artifact_sessions BEGIN
           INSERT OR IGNORE INTO remote_dirty SELECT ${ref}.session_id WHERE EXISTS
             (SELECT 1 FROM cowork_session_ownership WHERE session_id=${ref}.session_id AND ownership_status='confirmed'); END;
@@ -95,6 +104,11 @@ export class RemoteStore {
 
   setWake(listener: () => void): void { this.wake = listener; }
   setEnabledOwner(owner: RemoteOwner | null): void { this.enabledOwner = owner; }
+  setAgentSummaryResolver(resolver: ((sessionId: string, owner: RemoteOwner) => RemoteAgentSummary | null) | null): void {
+    if (Boolean(this.agentSummary) === Boolean(resolver)) { this.agentSummary = resolver; return; }
+    this.agentSummary = resolver;
+    if (resolver) this.db.prepare(`INSERT OR IGNORE INTO remote_dirty SELECT session_id FROM cowork_session_ownership WHERE ownership_status='confirmed'`).run();
+  }
   get<T>(key: string): T | null {
     const row = this.db.prepare('SELECT value FROM remote_state WHERE key=?').get(key) as { value: string } | undefined;
     return row ? JSON.parse(row.value) as T : null;
@@ -256,9 +270,13 @@ export class RemoteStore {
           this.requireSnapshot(id);
           continue;
         }
-        this.project(id);
+        const hasAgentChanges = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_ownership_dirty'").get();
+        const summaryOnly = Boolean(hasAgentChanges && this.db.prepare(`SELECT 1 FROM cowork_sessions s JOIN agent_ownership_dirty a ON a.agent_id=s.agent_id
+          WHERE s.id=? AND NOT EXISTS (SELECT 1 FROM remote_content_dirty c WHERE c.session_id=s.id)`).get(id));
+        this.project(id, summaryOnly);
       }
       this.db.prepare('DELETE FROM remote_dirty').run();
+      this.db.prepare('DELETE FROM remote_content_dirty').run();
     } finally { this.publishing = false; }
   }
   private record(sessionId: string, key: string, record: ProjectionRecord): void {
@@ -301,18 +319,21 @@ export class RemoteStore {
       this.db.prepare('DELETE FROM remote_outbox WHERE session_id=?').run(sessionId);
     }
   }
-  project(sessionId: string): void {
+  project(sessionId: string, summaryOnly = false): void {
     const s = this.db.prepare('SELECT * FROM cowork_sessions WHERE id=?').get(sessionId) as any;
     if (!s) { if (!this.get<string>(`deletedAt:${sessionId}`)) this.requireSnapshot(sessionId); const deletedAt = this.get<string>(`deletedAt:${sessionId}`) || iso(Date.now()); this.put(`deletedAt:${sessionId}`, deletedAt); this.record(sessionId, 'deleted', { eventType: 'session.deleted', payload: { deletedAt } }); return; }
     const storedRun = this.run(sessionId);
     const run = storedRun && this.get<boolean>(`runPublished:${storedRun.runId}`) !== false ? storedRun : null;
-    const messages = this.db.prepare('SELECT * FROM cowork_messages WHERE session_id=? ORDER BY sequence,created_at,id').all(sessionId) as any[];
+    const previous = summaryOnly ? this.db.prepare("SELECT record_json FROM remote_projection WHERE session_id=? AND object_key='session'").get(sessionId) as { record_json: string } | undefined : undefined;
+    summaryOnly = summaryOnly && Boolean(previous);
+    const messages = summaryOnly ? [] : this.db.prepare('SELECT * FROM cowork_messages WHERE session_id=? ORDER BY sequence,created_at,id').all(sessionId) as any[];
     const visible = messages.filter(publicMessage);
     const latestText = visible.filter(m => ['user', 'assistant'].includes(m.type)).at(-1)?.content || '';
     this.record(sessionId, 'session', { eventType: 'session.upsert', payload: { session: {
       sessionId: this.sync(sessionId)?.session_id, title: shortName(publicText(s.title)), origin: this.get(`origin:${sessionId}`) || 'desktop',
-      workspaceId: this.get(`workspace:${sessionId}`), preview: preview(publicText(latestText)), createdAt: iso(s.created_at), updatedAt: iso(s.updated_at),
+      workspaceId: this.get(`workspace:${sessionId}`), preview: summaryOnly ? JSON.parse(previous!.record_json).payload.session.preview : preview(publicText(latestText)), createdAt: iso(s.created_at), updatedAt: iso(s.updated_at),
       localStatus: s.status, controlVersion: this.controlVersion(sessionId), run,
+      ...(this.agentSummary && this.owner(sessionId) ? { agent: this.agentSummary(sessionId, this.owner(sessionId)!) } : {}),
     } } });
     for (const { value: historicalRun } of this.entries<RemoteRun>(`runHistory:${sessionId}:`)) {
       const projectedRun = historicalRun.runId === run?.runId ? run : historicalRun;
@@ -322,6 +343,8 @@ export class RemoteStore {
       const { pendingDecision: _pending, ...safe } = approval;
       this.record(sessionId, `approval:${safe.approvalId}`, { eventType: 'approval.updated', payload: { approval: safe, controlVersion: this.controlVersion(sessionId) } });
     }
+    // Agent metadata changes reuse the committed preview and never scan/re-upload conversation messages.
+    if (summaryOnly) return;
     const liveKeys = new Set<string>();
     const tools = new Map<string, ProjectionRecord>();
     // Read catalog metadata only; never enumerate files or select file_path/path_key.

@@ -38,6 +38,7 @@ import {
   type CoworkSessionSummary,
 } from '../../types/cowork';
 import type { MediaGenerationSelection, MediaModel } from '../../types/mediaGeneration';
+import { resetAccountSessionData } from '../accountSessionBoundary';
 import { removeSessionFromState, removeSessionsFromState } from './coworkDeleteState';
 
 export interface DraftAttachment {
@@ -1508,6 +1509,9 @@ const coworkSlice = createSlice({
       state.pendingSteers = {};
       state.rejectedSteers = {};
     },
+  },
+  extraReducers: builder => {
+    builder.addCase(resetAccountSessionData, state => ({ ...initialState, config: state.config, isCoworkActive: state.isCoworkActive }));
   },
 });
 

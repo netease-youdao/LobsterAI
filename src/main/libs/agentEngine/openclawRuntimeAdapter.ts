@@ -84,6 +84,7 @@ import type {
 import { OpenClawGatewayFailureKind } from '../../../shared/openclawEngine/constants';
 import { OpenClawTranscriptSafetyStatus } from '../../../shared/openclawTranscript/constants';
 import { ProviderName } from '../../../shared/providers';
+import type { RemoteOwner } from '../../../shared/remote/constants';
 import type { Agent, CoworkExecutionMode, CoworkMessage, CoworkMessageMetadata, CoworkSession, CoworkSessionStatus, CoworkStore } from '../../coworkStore';
 import { t } from '../../i18n';
 import { MediaGenerationTool } from '../../mediaGenerationPolicy';
@@ -483,6 +484,7 @@ type ChannelSessionLifecycleRun = {
 };
 
 type OpenClawRuntimeAdapterOptions = {
+  beforeExecutionDispatch?: () => void;
   normalizeModelRef?: (modelRef: string) => string;
   onChannelPromptSubmit?: (event: {
     agentId: string;
@@ -3743,9 +3745,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         .map(sessionId => sessionId.trim())
         .filter(Boolean),
     ));
-    if (normalizedSessionIds.length === 0) return;
+    const visibleSessionIds = normalizedSessionIds.filter(id => this.store.canReadSession(id, this.store.remoteCreationOwner()));
+    if (visibleSessionIds.length === 0) return;
 
-    const payload: CoworkSessionsChangedPayload = { sessionIds: normalizedSessionIds };
+    const payload: CoworkSessionsChangedPayload = { sessionIds: visibleSessionIds };
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
         win.webContents.send(CoworkIpcChannel.SessionsChanged, payload);
@@ -3760,6 +3763,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   private notifySessionModelOverrideChanged(sessionId: string, modelOverride: string): void {
+    if (!this.store.canReadSession(sessionId, this.store.remoteCreationOwner())) return;
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
         win.webContents.send(CoworkIpcChannel.SessionModelOverrideChanged, {
@@ -5744,6 +5748,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       assertOpenClawChatSendPayloadWithinLimit(sessionId, chatSendParams, attachments);
       const chatSendStartMs = Date.now();
       firstResponseTiming.chatSendStartedAtMs = chatSendStartMs;
+      this.options.beforeExecutionDispatch?.();
       const sendResult = await client.request<Record<string, unknown>>(
         OpenClawGatewayMethod.ChatSend,
         chatSendParams,
@@ -11706,8 +11711,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     return this.subagentTracker.listSubagentRuns(parentSessionId);
   }
 
-  listSubagentRunsByAgent(agentId: string, limit: number, offset: number) {
-    return this.subagentTracker.listSubagentRunsByAgent(agentId, limit, offset);
+  listSubagentRunsByAgent(agentId: string, limit: number, offset: number, actor?: RemoteOwner | null) {
+    return this.subagentTracker.listSubagentRunsByAgent(agentId, limit, offset, actor);
   }
 
   async getSubTaskHistory(

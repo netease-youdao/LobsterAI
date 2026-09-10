@@ -2,9 +2,11 @@ import { randomUUID } from 'crypto';
 import { statSync } from 'fs';
 import { resolve } from 'path';
 
-import { REMOTE_PROTOCOL_VERSION, REMOTE_TEXT_BYTES, RemoteCapability, RemoteConnectionReason, type RemoteConnectionReasonValue, RemoteConnectionStatus, type RemoteOwner, type RemoteSettingsState, RemoteSyncStatus, type RemoteWorkspace } from '../../shared/remote/constants';
+import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, REMOTE_PROTOCOL_VERSION, REMOTE_TEXT_BYTES, RemoteCapability, RemoteConnectionReason, type RemoteConnectionReasonValue, RemoteConnectionStatus, type RemoteOwner, type RemoteSettingsState, RemoteSyncStatus, type RemoteWorkspace } from '../../shared/remote/constants';
+import type { AgentOwnerStore } from '../agentOwnership';
 import { payloadHash, remoteError, sameOwner, stableJson } from './canonical';
 import type { RemoteIdentity } from './installationIdentity';
+import { type AgentWorkspace,RemoteAgentCatalog, RemoteAgentError } from './remoteAgentCatalog';
 import { type ProjectionRecord, RemoteStore, type SyncRow } from './remoteStore';
 
 export interface RemoteCommand {
@@ -13,7 +15,7 @@ export interface RemoteCommand {
 }
 export interface InboxEntry {
   command: RemoteCommand; owner: RemoteOwner; localSessionId: string | null; remoteSessionId: string | null;
-  runId: string | null; state: 'prepared' | 'executing' | 'applied' | 'rejected' | 'unknown'; result: any;
+  runId: string | null; state: 'prepared' | 'executing' | 'applied' | 'rejected' | 'unknown'; result: any; preparationError?: any;
 }
 interface Registration { deviceId: string; userId: string; scopeKey: string; metadataVersion: string }
 interface LocalSettings { createSessionAvailable?: boolean; enabled: boolean; name: string; workspaces: Array<RemoteWorkspace & { path: string }>; settingsVersion: string }
@@ -21,6 +23,8 @@ interface ControlIntent { createSessionAvailable?: boolean; id: string; enabled:
 interface SavedImport { importId: string; sessionId: string; baseSourceSeq: string; snapshotEpoch: number; expectedSourceSeq: string; expectedServerSeq: string; beginConfirmed?: boolean; manifest: any; parts: any[]; stateVersion?: string }
 export interface BridgeDependencies {
   store: RemoteStore; identity: RemoteIdentity;
+  agentOwnership?: AgentOwnerStore;
+  getAgentWorkspace?(agentId: string): AgentWorkspace | Promise<AgentWorkspace>;
   getDefaultWorkspace?(): { path: string; name: string; available?: boolean } | Promise<{ path: string; name: string; available?: boolean }>;
   onStateChange?(): void;
   getOwner(): RemoteOwner | null;
@@ -38,6 +42,7 @@ const capabilities = ['session.read', RemoteCapability.CreateSession, 'session.c
 const SocketFailureCode = { Transport: 1006, Protocol: 1002, PayloadTooLarge: 1009, HeartbeatTimeout: 4408 } as const;
 export class RemoteBridge {
   private owner: RemoteOwner | null = null;
+  private accountGeneration = 0;
   private registration: Registration | null = null;
   private registrationPending: Promise<void> | null = null;
   private socket: WebSocket | null = null;
@@ -62,7 +67,20 @@ export class RemoteBridge {
   private retryAfter = 0;
   private sameAccountAccess = false;
   private workspaceUnavailable = false;
-  constructor(private readonly deps: BridgeDependencies) { deps.store.setWake(() => this.schedule(1000)); }
+  private readonly agentCatalog: RemoteAgentCatalog | null;
+  private agentCapabilities: string[] = [];
+  private declaredAgentCapabilities: string[] = [];
+  private agentCatalogRevision = 0;
+  private publishedCatalogRevision = -1;
+  private lastAgentCatalogCheck = 0;
+  private lastCatalogConnection: string | null = null;
+  private agentLimits = { items: REMOTE_AGENT_CATALOG_ITEMS, bytes: REMOTE_AGENT_CATALOG_BYTES };
+  private lastCapabilityCheck = 0;
+  constructor(private readonly deps: BridgeDependencies) {
+    deps.store.setWake(() => this.schedule(1000));
+    this.agentCatalog = deps.agentOwnership && deps.getAgentWorkspace ? new RemoteAgentCatalog(deps.store, deps.agentOwnership, deps.getAgentWorkspace) : null;
+    deps.agentOwnership?.subscribe(() => { this.agentCatalogRevision++; this.schedule(300); });
+  }
   start(): void { this.stopped = false; this.accountChanged(); }
   stop(): void { this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null; this.disconnect(); }
   accountChanged(): void { this.ensureAccount(); this.schedule(0); }
@@ -133,8 +151,10 @@ export class RemoteBridge {
     const current = this.deps.getOwner();
     if ((current === null && this.owner === null) || sameOwner(current, this.owner)) return;
     const previous = this.owner;
+    this.accountGeneration++;
     this.owner = current; this.registration = null; this.registrationPending = null;
     this.retryAfter = 0; this.suspended = false; this.accesses = [];
+    this.agentCapabilities = []; this.declaredAgentCapabilities = []; this.lastCatalogConnection = null; this.publishedCatalogRevision = -1; this.lastCapabilityCheck = 0; this.deps.store.setAgentSummaryResolver(null);
     this.sameAccountAccess = false; this.workspaceUnavailable = false; this.error = undefined; this.errorCode = undefined;
     this.connectionReason = RemoteConnectionReason.Connecting;
     this.deps.store.setEnabledOwner(null); this.disconnect();
@@ -150,8 +170,9 @@ export class RemoteBridge {
   private async ensureDefaultWorkspace(): Promise<void> {
     if (!this.deps.getDefaultWorkspace) return;
     const owner = this.owner;
+    const accountGeneration = this.accountGeneration;
     const directory = await this.deps.getDefaultWorkspace();
-    if (!sameOwner(owner, this.owner) || !sameOwner(owner, this.deps.getOwner())) return;
+    if (accountGeneration !== this.accountGeneration || !sameOwner(owner, this.owner) || !sameOwner(owner, this.deps.getOwner())) return;
     const settings = this.settings();
     const previous = stableJson(settings.workspaces);
     const couldCreate = settings.createSessionAvailable !== false;
@@ -196,6 +217,7 @@ export class RemoteBridge {
     this.running = true;
     this.ensureAccount();
     const owner = this.owner;
+    const accountGeneration = this.accountGeneration;
     try {
       if (!owner || this.suspended) { this.backoff = 5000; return; }
       if (Date.now() < this.retryAfter) { this.backoff = this.retryAfter - Date.now(); return; }
@@ -205,6 +227,7 @@ export class RemoteBridge {
         catch { this.workspaceUnavailable = true; }
       }
       await this.ensureRegistration();
+      if (this.agentCatalog && Date.now() - this.lastCapabilityCheck > 45000) await this.refreshCapabilities();
       await this.writeSettings();
       if (!sameOwner(owner, this.owner) || !sameOwner(owner, this.deps.getOwner())) return;
       if (!this.settings().enabled) { this.backoff = 30000; return; }
@@ -218,6 +241,20 @@ export class RemoteBridge {
         catch (error) {
           if (error instanceof RemoteApiError && ![47022, 47011].includes(error.code)) throw error;
           this.recordConnectionFailure(error);
+        }
+      }
+      if (this.generation && this.agentCatalog && this.agentCapabilities.includes(RemoteCapability.AgentCatalog)
+        && (this.agentCatalogRevision !== this.publishedCatalogRevision || this.lastCatalogConnection !== this.generation || Date.now() - this.lastAgentCatalogCheck > 45000)) {
+        const revision = this.agentCatalogRevision;
+        const connection = this.generation;
+        try { await this.agentCatalog.publish(owner, this.registration!.deviceId, this.generation,
+          (path, method, body) => this.api(path, method, body), () => accountGeneration === this.accountGeneration && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner()), this.agentLimits);
+          this.publishedCatalogRevision = revision; this.lastCatalogConnection = connection; this.lastAgentCatalogCheck = Date.now(); }
+        catch (error) {
+          if (!sameOwner(owner, this.deps.getOwner())) return;
+          // Directory failure must not block old main commands or conversation synchronization.
+          this.error = 'Agent list synchronization is temporarily unavailable';
+          this.errorCode = error instanceof RemoteApiError || error instanceof RemoteAgentError ? error.code : undefined;
         }
       }
       await this.reconcile();
@@ -254,6 +291,7 @@ export class RemoteBridge {
   }
   private async api(pathname: string, method = 'GET', body?: unknown, registrationRequired = true): Promise<any> {
     const owner = this.owner;
+    const accountGeneration = this.accountGeneration;
     if (!owner || !sameOwner(owner, this.deps.getOwner())) throw new Error('Account changed');
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (registrationRequired) {
@@ -261,9 +299,9 @@ export class RemoteBridge {
       headers['X-Remote-Device-Credential'] = `${this.registration.deviceId}.${this.deps.identity.deviceKey}`;
     }
     const response = await this.deps.request(owner, `/api/remote/v1${pathname}`, { method, headers, body: body === undefined ? undefined : stableJson(body), signal: AbortSignal.timeout(20000) });
-    if (!sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) throw new Error('Account changed during remote request');
+    if (accountGeneration !== this.accountGeneration || !sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) throw new Error('Account changed during remote request');
     const text = await response.text();
-    if (!sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) throw new Error('Account changed during remote response');
+    if (accountGeneration !== this.accountGeneration || !sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) throw new Error('Account changed during remote response');
     if (Buffer.byteLength(text) > 2 * 1024 * 1024) throw new Error('Remote response is too large');
     let result: any;
     try { result = JSON.parse(text); } catch { throw new RemoteApiError(response.status, 'Invalid remote response'); }
@@ -271,8 +309,8 @@ export class RemoteBridge {
     return result.data;
   }
   private advertisedCapabilities(createSessionAvailable = true): string[] {
-    const supported = createSessionAvailable && this.settings().createSessionAvailable !== false ? capabilities : capabilities.filter(value => value !== RemoteCapability.CreateSession);
-    return this.sameAccountAccess ? [...supported, RemoteCapability.SameAccountAccess] : supported;
+    const supported = this.declaredAgentCapabilities.includes(RemoteCapability.AgentSelection) || createSessionAvailable && this.settings().createSessionAvailable !== false ? capabilities : capabilities.filter(value => value !== RemoteCapability.CreateSession);
+    return [...(this.sameAccountAccess ? [...supported, RemoteCapability.SameAccountAccess] : supported), ...this.declaredAgentCapabilities];
   }
   private async ensureRegistration(): Promise<void> {
     if (this.registration) return;
@@ -280,7 +318,7 @@ export class RemoteBridge {
     const pending = this.register(); this.registrationPending = pending;
     try { await pending; } finally { if (this.registrationPending === pending) this.registrationPending = null; }
   }
-  private async register(): Promise<void> {
+  private async refreshCapabilities(): Promise<void> {
     const support = await this.api('/capabilities', 'GET', undefined, false);
     if (!support.enabled || !support.protocolVersions?.includes(REMOTE_PROTOCOL_VERSION)) throw new RemoteApiError(47000, 'Remote control is unavailable');
     this.sameAccountAccess = support.capabilities?.includes(RemoteCapability.SameAccountAccess) === true;
@@ -289,6 +327,30 @@ export class RemoteBridge {
       // Legacy servers still receive a saved disable; never announce an unsupported capability to them.
       if (!this.controls().some(intent => !intent.enabled)) throw new RemoteApiError(47000, 'Server upgrade required for same-account remote access');
     }
+    const previous = stableJson(this.declaredAgentCapabilities);
+    const supported = Array.isArray(support.capabilities) ? support.capabilities : [];
+    this.agentCapabilities = this.agentCatalog && supported.includes(RemoteCapability.SessionAgent) ? [RemoteCapability.SessionAgent] : [];
+    if (this.agentCapabilities.length && supported.includes(RemoteCapability.AgentCatalog)
+      && Number.isInteger(support.limits?.maxAgentCatalogItems) && Number.isInteger(support.limits?.maxAgentCatalogBytes)
+      && support.limits.maxAgentCatalogItems > 0 && support.limits.maxAgentCatalogBytes > 0) {
+      this.agentLimits = { items: Math.min(REMOTE_AGENT_CATALOG_ITEMS, support.limits.maxAgentCatalogItems), bytes: Math.min(REMOTE_AGENT_CATALOG_BYTES, support.limits.maxAgentCatalogBytes) };
+      this.agentCapabilities.push(RemoteCapability.AgentCatalog);
+      if (supported.includes(RemoteCapability.AgentSelection)) this.agentCapabilities.push(RemoteCapability.AgentSelection);
+    }
+    this.deps.store.setAgentSummaryResolver(this.agentCapabilities.includes(RemoteCapability.SessionAgent)
+      ? (sessionId, actor) => this.agentCatalog!.summary(sessionId, actor) : null);
+    // Admission flags may turn off while accepted extended commands still need recovery.
+    // Device protocol support is persistent; only new production uses the current intersection.
+    const declarationKey = `agentCapabilities:${this.owner!.userId}:${this.owner!.scopeKey}`;
+    const saved = this.deps.store.get<string[]>(declarationKey) || [];
+    const implemented: string[] = [RemoteCapability.SessionAgent, RemoteCapability.AgentCatalog, RemoteCapability.AgentSelection];
+    this.declaredAgentCapabilities = this.agentCatalog ? [...new Set([...saved, ...this.agentCapabilities])].filter(value => implemented.includes(value)).sort() : [];
+    this.deps.store.put(declarationKey, this.declaredAgentCapabilities);
+    this.lastCapabilityCheck = Date.now();
+    if (this.registration && previous !== stableJson(this.declaredAgentCapabilities)) this.queueControl(this.settings());
+  }
+  private async register(): Promise<void> {
+    await this.refreshCapabilities();
     const result: Registration = await this.api('/devices/register', 'POST', { ...this.deps.metadata, name: this.settings().name,
       installationId: this.deps.identity.installationId, deviceKey: this.deps.identity.deviceKey,
       kind: 'desktop', protocolVersion: REMOTE_PROTOCOL_VERSION, capabilities: this.advertisedCapabilities() }, false);
@@ -532,6 +594,22 @@ export class RemoteBridge {
     }
     this.deps.store.put(`commandFailure:${entry.command.commandId}`, { code: (error as RemoteApiError).code });
   }
+  private commandWorkspace(command: RemoteCommand): string | null {
+    if (command.type !== 'create_session') return null;
+    const payload = command.request?.payload;
+    const explicit = payload?.agentId !== undefined || payload?.expectedAgentVersion !== undefined;
+    if (explicit) {
+      if (!this.agentCatalog || typeof payload.agentId !== 'string' || !/^[1-9]\d*$/u.test(payload.expectedAgentVersion)
+        || typeof payload.workspaceId !== 'string') throw new RemoteAgentError(47019, 'COMMAND_INVALID', 'INVALID_AGENT_TARGET');
+      // Already accepted extended commands remain recoverable when admission flags are disabled.
+      return this.agentCatalog.resolve(this.owner!, this.registration!.deviceId, payload.agentId, payload.expectedAgentVersion, payload.workspaceId);
+    }
+    const settings = this.settings();
+    if (settings.createSessionAvailable === false) throw new Error('Workspace unavailable');
+    const workspace = payload?.workspaceId ? settings.workspaces.find(w => w.workspaceId === payload.workspaceId) : settings.workspaces[0];
+    if (!workspace?.available) throw new Error('Workspace unavailable');
+    return workspace.path;
+  }
   private async claim(): Promise<void> {
     const generation = this.generation;
     if (!generation) return;
@@ -547,10 +625,9 @@ export class RemoteBridge {
         if (!request || request.commandId !== command.commandId || request.type !== command.type || payloadHash(request) !== command.requestHash) throw new Error('Invalid claimed command');
         const text = request.payload?.text;
         if (['create_session', 'send_message'].includes(command.type) && (typeof text !== 'string' || !text.trim() || Buffer.byteLength(text) > REMOTE_TEXT_BYTES)) throw new Error('Invalid remote text');
-        const workspace = this.settings().workspaces.find(w => w.available && (!request.payload?.workspaceId || w.workspaceId === request.payload.workspaceId));
-        if (command.type === 'create_session' && !workspace) throw new Error('Workspace unavailable');
+        const workspace = this.commandWorkspace(command);
         entry = this.deps.store.transaction(() => {
-          const prepared = this.deps.prepare(command, this.owner!, workspace?.path || null);
+          const prepared = this.deps.prepare(command, this.owner!, workspace);
           this.deps.store.bindRemote(prepared.localSessionId, prepared.remoteSessionId, this.registration!.deviceId);
           const value: InboxEntry = { command, owner: this.owner!, ...prepared, state: 'prepared', result: null };
           this.deps.store.put(`inbox:${command.commandId}`, value);
@@ -558,7 +635,7 @@ export class RemoteBridge {
         });
       } catch (error) {
         entry = { command, owner: this.owner!, localSessionId: null, remoteSessionId: command.sessionId || null,
-          runId: command.runId || null, state: 'rejected', result: remoteError(47019, 'COMMAND_INVALID', error instanceof Error ? error.message : 'Invalid command') };
+          runId: command.runId || null, state: 'rejected', result: error instanceof RemoteAgentError ? { ...remoteError(error.code, error.reason, error.message), reasonDetail: error.reasonDetail } : remoteError(47019, 'COMMAND_INVALID', error instanceof Error ? error.message : 'Invalid command') };
         this.deps.store.put(`inbox:${command.commandId}`, entry);
       }
       try { await this.applyEntry(entry, generation); } catch (error) { await this.reportCommandError(entry, error); }
@@ -571,6 +648,7 @@ export class RemoteBridge {
       result: status === 'applied' ? entry.result : null, error: status === 'rejected' ? entry.result : null });
   }
   private async applyEntry(entry: InboxEntry, generation: string): Promise<void> {
+    const accountGeneration = this.accountGeneration;
     if (entry.state === 'rejected') { const result = await this.ack(entry, 'rejected'); entry.command = { ...entry.command, ...result }; this.deps.store.put(`inbox:${entry.command.commandId}`, entry); return; }
     const receipt = await this.ack(entry, 'received');
     entry.command = { ...entry.command, ...receipt };
@@ -580,16 +658,21 @@ export class RemoteBridge {
       this.deps.store.put(`inbox:${entry.command.commandId}`, entry); return;
     }
     this.deps.store.put(`inbox:${entry.command.commandId}`, entry);
-    if (this.generation !== generation || !sameOwner(entry.owner, this.deps.getOwner())
+    if (accountGeneration !== this.accountGeneration || this.generation !== generation || !sameOwner(entry.owner, this.deps.getOwner())
       || Date.now() + 1000 >= Date.parse(entry.command.claimUntil || '') || Date.now() >= Date.parse(entry.command.expiresAt)) return;
     // COMMIT before invoking any runner. A crash from this point is unknown, never auto-replayed.
     entry.state = 'executing'; this.deps.store.put(`inbox:${entry.command.commandId}`, entry);
-    try { entry.result = await this.deps.execute(entry, () => this.generation === generation
+    try { entry.result = await this.deps.execute(entry, () => accountGeneration === this.accountGeneration && this.generation === generation
       && sameOwner(entry.owner, this.deps.getOwner()) && this.settings().enabled
       && Date.now() + 250 < Date.parse(entry.command.claimUntil || '') && Date.now() < Date.parse(entry.command.expiresAt)); entry.state = 'applied'; }
-    catch { entry.state = 'unknown'; entry.result = null; }
+    catch (error) {
+      entry.state = error instanceof RemoteAgentError ? 'rejected' : 'unknown';
+      entry.result = error instanceof RemoteAgentError ? { ...remoteError(error.code, error.reason, error.message), reasonDetail: error.reasonDetail } : null;
+      if (entry.state === 'rejected' && entry.localSessionId && entry.runId
+        && this.deps.store.get<boolean>(`runPublished:${entry.runId}`) === false) this.deps.store.updateRun(entry.localSessionId, 'failed');
+    }
     this.deps.store.put(`inbox:${entry.command.commandId}`, entry);
-    if (entry.state === 'applied') { const result = await this.ack(entry, 'applied'); entry.command = { ...entry.command, ...result }; this.deps.store.put(`inbox:${entry.command.commandId}`, entry); }
+    if (entry.state === 'applied' || entry.state === 'rejected') { const result = await this.ack(entry, entry.state); entry.command = { ...entry.command, ...result }; this.deps.store.put(`inbox:${entry.command.commandId}`, entry); }
   }
   private async reconcile(): Promise<void> {
     let cursor: string | null = null;
@@ -603,15 +686,25 @@ export class RemoteBridge {
         if (!entry && envelope.currentClaimId && this.deps.store.hasCompleteExecutionHistory()
           && payloadHash(command.request) === command.requestHash
           && !this.deps.store.entries<any>('run:').some(row => row.value.runId === command.runId)) {
-          const workspace = this.settings().workspaces.find(w => w.available && (!command.request.payload?.workspaceId || w.workspaceId === command.request.payload.workspaceId));
           try {
+            const workspace = this.commandWorkspace(command);
             entry = this.deps.store.transaction(() => {
-              const prepared = this.deps.prepare(command, this.owner!, workspace?.path || null);
+              const prepared = this.deps.prepare(command, this.owner!, workspace);
               this.deps.store.bindRemote(prepared.localSessionId, prepared.remoteSessionId, this.registration!.deviceId);
               const value: InboxEntry = { owner: this.owner!, command: { ...command, claimId: envelope.currentClaimId }, ...prepared, state: 'prepared', result: null };
               this.deps.store.put(`inbox:${command.commandId}`, value); return value;
             });
-          } catch { /* No trustworthy pre-execution reconstruction; report unknown below. */ }
+          } catch (error) {
+            if (error instanceof RemoteAgentError) {
+              // Complete local history and no matching run prove this lost claim never started.
+              // Persist not-started evidence without inventing the lost claim token. A fresh
+              // permit is needed to ACK local rejection if the server still considers it valid.
+              entry = { owner: this.owner!, command: { ...command, claimId: envelope.currentClaimId }, localSessionId: null,
+                remoteSessionId: command.sessionId || null, runId: command.runId || null, state: 'prepared', result: null,
+                preparationError: { ...remoteError(error.code, error.reason, error.message), reasonDetail: error.reasonDetail } };
+              this.deps.store.put(`inbox:${command.commandId}`, entry);
+            }
+          }
         }
         if (!entry) {
           if (command.status !== 'accepted') await this.api(`/commands/${command.commandId}/reconcile`, 'POST', {
@@ -630,9 +723,18 @@ export class RemoteBridge {
           error: entry.state === 'rejected' ? entry.result : null,
           localEvidence: observedExecution === 'not_started' ? { databaseHealthy: this.deps.store.hasCompleteExecutionHistory(), historyComplete: this.deps.store.hasCompleteExecutionHistory(), inboxPersisted: true, executionNeverStarted: true } : null, requestExecutionPermit: observedExecution === 'not_started' && !!this.generation });
         entry.command = { ...entry.command, ...reconciled.command };
+        if (['applied', 'rejected', 'expired'].includes(entry.command.status)) {
+          entry.state = entry.command.status === 'applied' ? 'applied' : 'rejected';
+          entry.result = reconciled.command.result || reconciled.command.error || entry.result;
+          if (entry.state === 'rejected' && entry.localSessionId && entry.runId
+            && this.deps.store.get<boolean>(`runPublished:${entry.runId}`) === false) this.deps.store.updateRun(entry.localSessionId, 'failed');
+        }
         if (reconciled.executionPermit) entry.command = { ...entry.command, ...reconciled.executionPermit };
         this.deps.store.put(`inbox:${command.commandId}`, entry);
-        if (reconciled.executionPermit && this.generation) await this.applyEntry(entry, this.generation);
+        if (reconciled.executionPermit && this.generation && !['applied', 'rejected', 'expired'].includes(entry.command.status)) {
+          if (entry.preparationError) { entry.state = 'rejected'; entry.result = entry.preparationError; this.deps.store.put(`inbox:${command.commandId}`, entry); }
+          await this.applyEntry(entry, this.generation);
+        }
         } catch (error) { await this.reportCommandError(entry, error); }
       }
       cursor = result.nextCursor || null;

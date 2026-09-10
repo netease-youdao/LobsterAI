@@ -57,6 +57,20 @@ export const COWORK_TEMP_DIR_NAME = '.cowork-temp';
 export const COWORK_TEMP_ATTACHMENTS_DIR_NAME = 'attachments';
 
 export const CoworkIpcChannel = {
+  StreamMessage: 'cowork:stream:message',
+  StreamMessageUpdate: 'cowork:stream:messageUpdate',
+  StreamSessionStatus: 'cowork:stream:sessionStatus',
+  StreamContextUsage: 'cowork:stream:contextUsage',
+  StreamContextMaintenance: 'cowork:stream:contextMaintenance',
+  StreamPermission: 'cowork:stream:permission',
+  StreamComplete: 'cowork:stream:complete',
+  StreamError: 'cowork:stream:error',
+  GetSession: 'cowork:session:get',
+  GetSessionMessages: 'cowork:session:getMessages',
+  GetSessionContextUsage: 'cowork:session:contextUsage',
+  CompactSessionContext: 'cowork:session:compactContext',
+  IsSessionRemoteManaged: 'cowork:session:remoteManaged',
+
   CancelMediaTask: 'cowork:media:cancel',
   GetMediaModels: 'media:getModels',
   MediaStatusPollUpdate: 'cowork:media:statusPollUpdate',

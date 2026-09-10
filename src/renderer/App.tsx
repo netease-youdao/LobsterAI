@@ -63,6 +63,7 @@ import WindowsAppTitleBar from './components/window/WindowsAppTitleBar';
 import { defaultConfig, getProviderDisplayName, ShortcutAction } from './config';
 import { selectIsEnterpriseAccount } from './features/enterpriseAccount/selectors';
 import { SkinProvider } from './providers/SkinProvider';
+import { agentService } from './services/agent';
 import type { ApiConfig } from './services/api';
 import { apiService } from './services/api';
 import { authService } from './services/auth';
@@ -285,6 +286,7 @@ const App: React.FC = () => {
   const pendingPermission = useSelector(selectFirstCurrentSessionPendingPermission);
   const pendingPermissions = useSelector(selectPendingPermissions);
   const authUser = useSelector((state: RootState) => state.auth.user);
+  const accountGeneration = useSelector((state: RootState) => state.auth.accountGeneration);
   const isEnterpriseAccount = useSelector(selectIsEnterpriseAccount);
   const isWindows = window.electron.platform === 'win32';
   const [minimizedPermissionIds, setMinimizedPermissionIds] = useState<string[]>([]);
@@ -678,6 +680,14 @@ const App: React.FC = () => {
       void authService.fetchProfileSummary();
     }
   }, [authUser]);
+
+  useEffect(() => {
+    coworkService.accountChanged();
+    if (!hasInitialized.current) return;
+    void Promise.all([agentService.loadAgents(), coworkService.loadSessions()]).catch(error => {
+      console.warn('[App] failed to reload account task views:', error);
+    });
+  }, [accountGeneration]);
 
   // Listen for Copilot token auto-refresh events from the main process
   useEffect(() => {
@@ -2084,6 +2094,7 @@ const App: React.FC = () => {
         aria-busy={isUpdateInteractionBlocked}
       >
         <Sidebar
+          key={accountGeneration}
           onShowLogin={handleShowLogin}
           onShowSettings={handleShowSettings}
           activeView={mainView}
@@ -2107,6 +2118,7 @@ const App: React.FC = () => {
         />
         <div className={`flex-1 min-w-0 transition-[padding] duration-200 ease-out ${isSidebarCollapsed ? 'pl-1.5' : ''}`}>
           <div
+            key={accountGeneration}
             data-skin-cowork-frame={mainView === 'cowork' ? 'true' : undefined}
             data-skin-management-frame={mainView !== 'cowork' ? 'true' : undefined}
             className="relative h-full min-h-0 rounded-xl border border-border bg-background overflow-hidden"

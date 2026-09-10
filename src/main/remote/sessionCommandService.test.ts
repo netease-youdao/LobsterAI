@@ -5,29 +5,33 @@ import { afterEach, expect, it, vi } from 'vitest';
 import type { CoworkStore } from '../coworkStore';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
 import { RemoteStore } from './remoteStore';
-import { SessionCommandService } from './sessionCommandService';
+import { assertRemoteExecutionPermit, markRemoteExecutionDispatched, SessionCommandService } from './sessionCommandService';
 
 const owner = { userId: '10001', scopeKey: 'personal' };
 const databases: Database.Database[] = [];
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
-function fixture() {
+function fixture(agentId = 'main', explicit = false, workingPath = '/work') {
+  let version = '1';
+  let enabled = true;
+  let persistedAgent = agentId;
   const db = new Database(':memory:'); databases.push(db);
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT);
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
   const remote = new RemoteStore(db);
-  const store = { remote, getConfig: () => ({ systemPrompt: '' }), getSession: () => ({ cwd: '/work' }),
+  const store = { remote, getConfig: () => ({ systemPrompt: '' }), getSession: () => ({ cwd: workingPath, agentId: persistedAgent }),
+    assertAgentAccess: vi.fn(), getAgent: () => ({ enabled }), agentOwnership: { get: () => ({ version, ownerKind: agentId === 'main' ? 'default' : 'owned', deletedAt: null }) },
     createSession: (_title: string, _cwd: string, _prompt: string, _mode: string, _skills: string[], _agent: string, _model: string, options: any) => {
-      db.prepare("INSERT INTO cowork_sessions VALUES ('local','new',1,1,'idle')").run(); remote.assignNew('local', options.owner, options.ownershipSource); return { id: 'local' };
+      persistedAgent = _agent; db.prepare("INSERT INTO cowork_sessions VALUES ('local','new',1,1,'idle')").run(); remote.assignNew('local', options.owner, options.ownershipSource); return { id: 'local' };
     },
   };
   const runtime = Object.assign(new EventEmitter(), { stopSession: vi.fn(), cancelSessionConfirmed: vi.fn(async () => true), respondToPermissionConfirmed: vi.fn(async () => undefined) });
   const service = new SessionCommandService(store as unknown as CoworkStore, runtime as unknown as CoworkRuntime, () => owner);
   service.configure(async () => ({ success: true }), async () => ({ success: true }));
-  const request = { commandId: 'cmd', type: 'create_session', payload: { text: 'hello' } };
+  const request = { commandId: 'cmd', type: 'create_session', payload: { text: 'hello', ...(explicit ? { agentId, expectedAgentVersion: version, workspaceId: 'fixed-workspace' } : {}) } };
   const command = { commandId: 'cmd', type: 'create_session', sessionId: 'server-session', runId: 'server-run', status: 'claimed', statusVersion: '2', expiresAt: new Date(Date.now() + 60000).toISOString(), request, requestHash: 'hash' };
-  const prepared = remote.transaction(() => service.prepare(command, owner, '/work'));
+  const prepared = remote.transaction(() => service.prepare(command, owner, workingPath));
   const entry = { command, owner, ...prepared, state: 'executing' as const, result: null };
-  return { service, runtime, remote, prepared, entry };
+  return { service, runtime, remote, prepared, entry, changeAgent: () => { version = String(Number(version) + 1); }, disableAgent: () => { enabled = false; } };
 }
 it('uses immutable server session/run mappings and the exact started outcome contract', async () => {
   const { service, remote, prepared, entry } = fixture();
@@ -115,4 +119,57 @@ it('preserves an expired approval after desktop confirmation and only resumes it
   runtime.emit('permissionResolved', 'local', 'expired-local');
   expect(remote.run('local')).toEqual(next);
   expect(remote.get('approval:local:expired-local')).toEqual(expired);
+});
+
+it('executes the persisted non-main Agent and workspace instead of the foreground selection', async () => {
+  const { service, entry } = fixture('report-agent', true, '/private/tmp');
+  const start = vi.fn(async () => ({ success: true })); service.configure(start, vi.fn());
+  await expect(service.execute(entry, () => true)).resolves.toEqual({ outcome: 'started' });
+  expect(start).toHaveBeenCalledWith({ prompt: 'hello', agentId: 'report-agent', cwd: '/private/tmp' });
+});
+it('rejects a changed Agent before starting and rechecks after asynchronous startup preparation', async () => {
+  const first = fixture('report-agent', true, '/private/tmp');
+  const start = vi.fn(async () => ({ success: true })); first.service.configure(start, vi.fn());
+  first.changeAgent();
+  await expect(first.service.execute(first.entry, () => true)).rejects.toThrow('AGENT_VERSION_CONFLICT');
+  expect(start).not.toHaveBeenCalled();
+  const next = fixture('report-agent', true, '/private/tmp');
+  let release!: () => void;
+  const sideEffect = vi.fn();
+  next.service.configure(async () => { await new Promise<void>(done => { release = done; }); assertRemoteExecutionPermit(); sideEffect(); return { success: true }; }, vi.fn());
+  const running = next.service.execute(next.entry, () => true);
+  next.changeAgent(); release();
+  await expect(running).rejects.toThrow('AGENT_VERSION_CONFLICT');
+  expect(sideEffect).not.toHaveBeenCalled();
+});
+it('does not start a disabled Agent, while cancellation of its already running task remains allowed', async () => {
+  const { service, entry, disableAgent, runtime } = fixture('report-agent', true, '/private/tmp');
+  disableAgent();
+  await expect(service.execute(entry, () => true)).rejects.toThrow('AGENT_UNAVAILABLE');
+  const cancel = { ...entry, command: { ...entry.command, type: 'cancel_run', request: { payload: { runId: entry.runId } } } };
+  await expect(service.execute(cancel, () => true)).resolves.toEqual({ outcome: 'cancel_requested' });
+  expect(runtime.cancelSessionConfirmed).toHaveBeenCalledOnce();
+});
+
+it('consumes only the initial dispatch guards while preserving the task execution identity', async () => {
+  const { service, entry, changeAgent } = fixture('report-agent', true, '/private/tmp');
+  let permitted = true;
+  service.configure(async () => {
+    markRemoteExecutionDispatched();
+    permitted = false; changeAgent();
+    await Promise.resolve();
+    expect(() => assertRemoteExecutionPermit()).not.toThrow();
+    return { success: true };
+  }, vi.fn());
+  await expect(service.execute(entry, () => permitted)).resolves.toEqual({ outcome: 'started' });
+});
+
+it('retains a definitive Agent rejection when the main handler returns an error response', async () => {
+  const { service, entry, changeAgent } = fixture('report-agent', true, '/private/tmp');
+  service.configure(async () => {
+    await Promise.resolve(); changeAgent();
+    try { assertRemoteExecutionPermit(); return { success: true }; }
+    catch (error) { return { success: false, error: String(error) }; }
+  }, vi.fn());
+  await expect(service.execute(entry, () => true)).rejects.toMatchObject({ code: 47029, reason: 'AGENT_VERSION_CONFLICT' });
 });

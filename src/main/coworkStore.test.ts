@@ -1249,11 +1249,11 @@ test('deleteAgent removes its task history before an agent with the same name is
   expect(messageCount.count).toBe(0);
 
   const recreated = store.createAgent({ name: 'Docs Agent' });
-  expect(recreated.id).toBe(agent.id);
+  expect(recreated.id).not.toBe(agent.id);
   expect(store.listSessions(20, 0, recreated.id)).toEqual([]);
 });
 
-test('createAgent clears orphaned task history left by legacy agent deletion', () => {
+test('createAgent preserves orphaned task history left by legacy agent deletion', () => {
   const agent = store.createAgent({ name: 'Legacy Deleted Agent' });
   const session = store.createSession('Legacy Orphan Task', '/tmp/docs-project', '', 'local', [], agent.id);
   insertMessage('msg-legacy-orphan', session.id, 'assistant', 'legacy result', '{}', 1);
@@ -1261,12 +1261,14 @@ test('createAgent clears orphaned task history left by legacy agent deletion', (
 
   const recreated = store.createAgent({ name: 'Legacy Deleted Agent' });
 
-  expect(recreated.id).toBe(agent.id);
+  expect(recreated.id).not.toBe(agent.id);
   expect(store.listSessions(20, 0, recreated.id)).toEqual([]);
   const messageCount = db
     .prepare('SELECT COUNT(*) AS count FROM cowork_messages WHERE session_id = ?')
     .get(session.id) as { count: number };
-  expect(messageCount.count).toBe(0);
+  expect(messageCount.count).toBe(1);
+  expect(store.getSession(session.id)).not.toBeNull();
+  expect(() => store.createAgent({ id: agent.id, name: 'Reuse' })).toThrow();
 });
 
 test('agent CRUD normalizes legacy icons to the default svg avatar', () => {
@@ -1494,23 +1496,50 @@ test.each([false, true])('single and batch deletions publish unique artifact/ses
   });
 });
 
-test.each([false, true])('agent transaction preserves deleted artifact IDs (orphan cleanup=%s)', orphanCleanup => {
-  if (!orphanCleanup) store.createAgent({ id: 'projection-agent', name: 'Agent' });
+test('agent transaction preserves deleted artifact IDs after commit', () => {
+  store.createAgent({ id: 'projection-agent', name: 'Agent' });
   insertSession('agent-session', 'projection-agent');
   db.prepare('INSERT INTO library_artifact_sessions (artifact_id, session_id) VALUES (?, ?)').run('agent-file', 'agent-session');
   const listener = vi.fn(changes => {
     expect(db.inTransaction).toBe(false);
     expect(store.getSession('agent-session')).toBeNull();
-    expect(Boolean(store.getAgent('projection-agent'))).toBe(orphanCleanup);
+    expect(store.getAgent('projection-agent')).toBeNull();
     return changes;
   });
   store.onSessionProjectionChanges(listener);
-  if (orphanCleanup) store.createAgent({ id: 'projection-agent', name: 'Agent' });
-  else expect(store.deleteAgent('projection-agent')).toBe(true);
+  expect(store.deleteAgent('projection-agent')).toBe(true);
   expect(listener).toHaveBeenCalledTimes(1);
   expect(listener.mock.calls[0][0]).toEqual({
     changedSessionIds: [],
     deletedSessionIds: ['agent-session'],
     affectedArtifactIds: ['agent-file'],
   });
+});
+
+
+test('session visibility is applied before pagination, counts, search and recent directories', () => {
+  const owner = { userId: 'a', scopeKey: 'personal' };
+  insertSession('anonymous', 'main', 'query anonymous', 1);
+  insertSession('mine', 'main', 'query mine', 2);
+  insertSession('other', 'main', 'query other', 3);
+  insertSession('quarantined', 'main', 'query quarantine', 4);
+  store.remote.transaction(() => {
+    store.remote.assignNew('mine', owner, 'local_create');
+    store.remote.assignNew('other', { userId: 'b', scopeKey: 'personal' }, 'local_create');
+    store.remote.assignNew('quarantined', owner, 'local_create');
+  });
+  db.prepare("UPDATE cowork_session_ownership SET ownership_status='quarantined' WHERE session_id='quarantined'").run();
+  expect(store.countSessions(undefined, owner)).toBe(2);
+  expect(store.countSessions(undefined, null)).toBe(1);
+  expect(store.countSessions()).toBe(4);
+  expect(store.listSessions(1, 0, undefined, owner).map(row => row.id)).toEqual(['mine']);
+  expect(store.listSessions(1, 1, undefined, owner).map(row => row.id)).toEqual(['anonymous']);
+  expect(store.countSearchSessions({ query: 'query' }, owner)).toBe(2);
+  expect(store.searchSessions({ query: 'query', limit: 1 }, owner).map(row => row.id)).toEqual(['mine']);
+  store.remote.transaction(() => {
+    db.prepare("UPDATE cowork_sessions SET cwd='/mine' WHERE id='mine'").run();
+    db.prepare("UPDATE cowork_sessions SET cwd='/private' WHERE id='other'").run();
+  });
+  expect(store.listRecentCwds(8, owner)).toEqual(['/mine', '/tmp']);
+  expect(store.canReadSession('quarantined', owner)).toBe(false);
 });
