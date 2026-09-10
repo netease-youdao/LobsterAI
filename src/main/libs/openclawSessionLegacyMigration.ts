@@ -2,11 +2,37 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { stripVTControlCharacters } from 'util';
+import { z } from 'zod';
 
 import { inspectOpenClawPath, logOpenClawConfigLockDiagnostics } from './openclawConfigDiagnostics';
 
 const LEGACY_SESSION_DOCTOR_TIMEOUT_MS = 300_000;
 const LOG_TAIL_LIMIT = 4_000;
+export const LEGACY_SESSION_SQLITE_IMPORT_MODE = 'import';
+// OpenClaw v2026.8.1 doctor-session-sqlite-types.ts. Unknown codes remain blocking.
+export const LegacySessionMigrationWarningCode = {
+  EntryInvalid: 'entry_invalid',
+  TranscriptArchiveFailed: 'transcript_archive_failed',
+  TranscriptMalformed: 'transcript_malformed',
+  TranscriptMissing: 'transcript_missing',
+  UnreferencedJsonlArchiveFailed: 'unreferenced_jsonl_archive_failed',
+} as const;
+const WARNING_ISSUE_CODES = new Set<string>(Object.values(LegacySessionMigrationWarningCode));
+const DOCTOR_EXCEPTION_LINE = /^(?:\w*Error\b|Cannot\b|Failed\b|Fatal\b|ERR_|file lock timeout|Config validation failed)/i;
+const doctorReportSchema = z.object({
+  mode: z.string().optional(),
+  totals: z.object({ issues: z.number().int().nonnegative(), targets: z.number().int().nonnegative() }).optional(),
+  migrationRun: z.object({ manifestPath: z.string() }).optional(),
+  targets: z.array(z.object({
+    agentId: z.string().optional(),
+    storePath: z.string().optional(),
+    archivedLegacyStoreFiles: z.array(z.string().min(1)).optional(),
+    issues: z.array(z.object({
+      code: z.string().optional(), message: z.string(), sessionKey: z.string().optional(),
+    })),
+  })),
+});
+type DoctorReport = z.infer<typeof doctorReportSchema>;
 
 export type LegacySessionMigrationRunResult = {
   code: number | null;
@@ -61,22 +87,50 @@ function tailLog(text: string): string {
   return text.length <= LOG_TAIL_LIMIT ? text : text.slice(-LOG_TAIL_LIMIT);
 }
 
-function summarizeDoctorFailure(stderr: string, stdout: string): string | undefined {
-  const cleanLines = (text: string) => stripVTControlCharacters(text).split(/\r?\n/)
+function parseDoctorReport(stdout: string): DoctorReport | undefined {
+  try {
+    const result = doctorReportSchema.safeParse(JSON.parse(stdout));
+    return result.success ? result.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasArchivedWarningOnlyImport(report: DoctorReport | undefined, legacyPaths: string[]): boolean {
+  if (!report || report.mode !== LEGACY_SESSION_SQLITE_IMPORT_MODE) return false;
+  const issues = report.targets.flatMap(target => target.issues);
+  if (issues.length === 0 || report.totals?.issues !== issues.length
+    || report.totals.targets !== report.targets.length
+    || issues.some(issue => !WARNING_ISSUE_CODES.has(issue.code ?? ''))) return false;
+
+  const normalizePath = (filePath: string) => {
+    const resolved = path.resolve(filePath);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  const archivedStores = new Set(report.targets
+    .filter(target => target.storePath && target.archivedLegacyStoreFiles?.some(fileExists))
+    .map(target => normalizePath(target.storePath!)));
+  return legacyPaths.every(filePath => archivedStores.has(normalizePath(filePath)));
+}
+
+function cleanDoctorLines(text: string): string[] {
+  return stripVTControlCharacters(text).split(/\r?\n/)
     .map(line => line.trim().replace(/^[│┃|]\s*/, '').replace(/\s*[│┃|]$/, '').trim());
-  const stderrLines = cleanLines(stderr);
-  const lines = [...stderrLines, ...cleanLines(stdout)];
+}
+
+function summarizeDoctorFailure(stderr: string, stdout: string, report?: DoctorReport): string | undefined {
+  const stderrLines = cleanDoctorLines(stderr);
+  const lines = [...stderrLines, ...cleanDoctorLines(stdout)];
   // Doctor writes boxed, wrapped validation errors to stdout. Prefer those
   // and actual exceptions over stderr warnings such as snapshot rotation.
-  const exception = lines.find(line => /^(?:\w*Error\b|Cannot\b|Failed\b|Fatal\b|ERR_|file lock timeout|Config validation failed)/i.test(line));
+  const exception = lines.find(line => DOCTOR_EXCEPTION_LINE.test(line));
   if (exception) return exception;
-  try {
-    const report = JSON.parse(stdout) as { targets?: Array<{ agentId?: string; issues?: Array<{ message?: string }> }> };
-    const target = report.targets?.find(target => target.issues?.some(issue => typeof issue.message === 'string'));
-    const issue = target?.issues?.find(issue => typeof issue.message === 'string');
-    if (issue?.message) return `${target?.agentId ?? 'session'}: ${issue.message}`.slice(0, 1_000);
-  } catch {
-    // Generic doctor failures can still use boxed text instead of JSON.
+  const issues = report?.targets.flatMap(target => target.issues.map(issue => ({ ...issue, agentId: target.agentId })));
+  const issue = issues?.find(item => !WARNING_ISSUE_CODES.has(item.code ?? '')) ?? issues?.[0];
+  if (issue) {
+    const code = issue.code ? `[${issue.code}] ` : '';
+    const session = issue.sessionKey ? ` (${issue.sessionKey})` : '';
+    return `${issue.agentId ?? 'session'}: ${code}${issue.message}${session}`.slice(0, 1_000);
   }
   const issueIndex = lines.findIndex(line => /^-?\s*[\w.[\]-]+:\s*invalid config\b/i.test(line));
   if (issueIndex >= 0) {
@@ -169,7 +223,7 @@ export async function migrateLegacySessionStorageWithDoctor(params: {
   // Session import validates and archives legacy data itself. Generic
   // `doctor --fix` also rewrites IM config; in v2026.8.1 its generic QQ
   // repairs conflict with the official QQ 2.0 schema and abort migration.
-  const args = [openclawCliPath, 'doctor', '--session-sqlite', 'import', '--session-sqlite-all-agents', '--json'];
+  const args = [openclawCliPath, 'doctor', '--session-sqlite', LEGACY_SESSION_SQLITE_IMPORT_MODE, '--session-sqlite-all-agents', '--json'];
   const runner = params.runner ?? runLegacySessionMigrationProcess;
 
   console.log(
@@ -198,7 +252,23 @@ export async function migrateLegacySessionStorageWithDoctor(params: {
     });
     console.log(`[OpenClaw] Legacy session doctor exited: code=${result.code} elapsedMs=${Date.now() - startedAt}`);
 
-    if (result.code !== 0) {
+    const report = parseDoctorReport(result.stdout);
+    // A fresh scan also catches a legacy store created after the initial discovery.
+    const remainingPaths = listLegacySessionStorePaths(params.stateDir);
+    const completedWithWarnings = result.code === 1 && remainingPaths.length === 0
+      && !cleanDoctorLines(result.stderr).some(line => DOCTOR_EXCEPTION_LINE.test(line))
+      && hasArchivedWarningOnlyImport(report, legacyPaths);
+    if (report) {
+      const issueCounts: Record<string, number> = {};
+      for (const issue of report.targets.flatMap(target => target.issues)) {
+        const code = issue.code ?? 'unknown';
+        issueCounts[code] = (issueCounts[code] ?? 0) + 1;
+      }
+      console.log(`[OpenClaw] Legacy session migration report: ${JSON.stringify({
+        code: result.code, issueCounts, manifestPath: report.migrationRun?.manifestPath, remainingPaths,
+      })}`);
+    }
+    if (result.code !== 0 && !completedWithWarnings) {
       const failure = `OpenClaw legacy session migration failed with exit code ${result.code}.`;
       const details = [
         failure,
@@ -207,11 +277,10 @@ export async function migrateLegacySessionStorageWithDoctor(params: {
       ].filter(Boolean).join('\n');
       console.error(`[OpenClaw] ${details}`);
       logFailureDiagnostics();
-      const cause = summarizeDoctorFailure(result.stderr, result.stdout);
+      const cause = summarizeDoctorFailure(result.stderr, result.stdout, report);
       return { status: 'failed', code: result.code, error: cause ? `${cause}\n${failure}` : failure };
     }
 
-    const remainingPaths = legacyPaths.filter(fileExists);
     if (remainingPaths.length > 0) {
       const error = `OpenClaw doctor completed but ${remainingPaths.length} legacy session store(s) remain.`;
       console.warn(`[OpenClaw] ${error}`);
@@ -221,6 +290,9 @@ export async function migrateLegacySessionStorageWithDoctor(params: {
       return { status: 'failed', code: result.code, error };
     }
 
+    if (completedWithWarnings) {
+      console.warn('[OpenClaw] Legacy session migration completed with warnings; all legacy stores were archived.');
+    }
     console.log(
       `[OpenClaw] Legacy session doctor migration completed for ${legacyPaths.length} store(s).`,
     );
