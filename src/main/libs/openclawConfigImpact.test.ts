@@ -234,18 +234,18 @@ describe('OpenClaw config impact classification', () => {
     });
   });
 
-  test('delivers IM config edits without forcing another gateway restart', () => {
+  test('classifies IM fingerprint changes as restart and identical fingerprints as none', () => {
     const previous = createStableConfigFingerprint({ telegram: { enabled: false } });
     const next = createStableConfigFingerprint({ telegram: { enabled: true } });
 
     expect(classifyImOpenClawConfigChange(previous, previous).impact).toBe(OpenClawConfigImpact.None);
     expect(classifyImOpenClawConfigChange(previous, next)).toEqual({
-      impact: OpenClawConfigImpact.Sync,
+      impact: OpenClawConfigImpact.Restart,
       reasons: [OpenClawConfigImpactReason.ImConfig],
     });
   });
 
-  test('keeps IM binding saves as sync when removing an unrelated restart reason', () => {
+  test('keeps IM binding saves as restart when removing an unrelated restart reason', () => {
     const imDecision = classifyImOpenClawConfigChange(
       createStableConfigFingerprint({ settings: { platformAgentBindings: {} } }),
       createStableConfigFingerprint({ settings: { platformAgentBindings: { qq: 'worker' } } }),
@@ -256,7 +256,7 @@ describe('OpenClaw config impact classification', () => {
     });
 
     expect(removeImpactDecisionReasons(combined, [OpenClawConfigImpactReason.AppUseSystemProxy]))
-      .toEqual({ impact: OpenClawConfigImpact.Sync, reasons: [OpenClawConfigImpactReason.ImConfig] });
+      .toEqual({ impact: OpenClawConfigImpact.Restart, reasons: [OpenClawConfigImpactReason.ImConfig] });
   });
 
   test('classifies forced IM sync as restart even without fingerprint diff', () => {
