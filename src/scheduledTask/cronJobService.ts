@@ -18,6 +18,7 @@ import {
   ScheduleKind,
   TaskStatus,
 } from './constants';
+import { createRunFilter } from './runFilter';
 import type {
   RunFilter,
   Schedule,
@@ -241,11 +242,6 @@ function mapGatewayResultStatus(
   if (status === GatewayStatus.Error) return TaskStatus.Error;
   if (status === GatewayStatus.Skipped) return TaskStatus.Skipped;
   return null;
-}
-
-function matchesRunFilter(run: ScheduledTaskRun, filter?: RunFilter): boolean {
-  if (filter?.status && run.status !== filter.status) return false;
-  return true;
 }
 
 /**
@@ -781,7 +777,10 @@ export class CronJobService {
     let rawOffset = 0;
     const pageSize = getGatewayRunPageSize(visibleLimit);
     logGatewayRunPageClamp('job', visibleLimit, visibleOffset, pageSize);
+    const matchesFilter = createRunFilter(filter);
 
+    // cron.runs has no date-range parameters. Filter before counting visible
+    // offsets, and keep scanning: its completion-time order is not start order.
     while (visibleRuns.length < visibleLimit) {
       const requestLimit = getGatewayRunRequestLimit(pageSize, visibleLimit - visibleRuns.length);
       const result = await client.request<{ entries?: GatewayRunLogEntry[] }>('cron.runs', {
@@ -790,15 +789,13 @@ export class CronJobService {
         limit: requestLimit,
         offset: rawOffset,
         sortDir: 'desc',
-        ...(filter?.startDate && { startMs: new Date(filter.startDate + 'T00:00:00').getTime() }),
-        ...(filter?.endDate && { endMs: new Date(filter.endDate + 'T23:59:59').getTime() }),
       });
       const entries = Array.isArray(result.entries) ? result.entries : [];
       if (entries.length === 0) break;
 
       for (const entry of entries) {
         const run = mapGatewayRun(entry);
-        if (!matchesRunFilter(run, filter)) continue;
+        if (!matchesFilter(run)) continue;
         if (skippedVisible < visibleOffset) {
           skippedVisible += 1;
           continue;
@@ -853,7 +850,9 @@ export class CronJobService {
     let rawOffset = 0;
     const pageSize = getGatewayRunPageSize(visibleLimit);
     logGatewayRunPageClamp('all', visibleLimit, visibleOffset, pageSize);
+    const matchesFilter = createRunFilter(filter);
 
+    // As with job history, apply dates locally before visible pagination.
     while (visibleRuns.length < visibleLimit) {
       const requestLimit = getGatewayRunRequestLimit(pageSize, visibleLimit - visibleRuns.length);
       const result = await client.request<{ entries?: GatewayRunLogEntry[] }>('cron.runs', {
@@ -861,8 +860,6 @@ export class CronJobService {
         limit: requestLimit,
         offset: rawOffset,
         sortDir: 'desc',
-        ...(filter?.startDate && { startMs: new Date(filter.startDate + 'T00:00:00').getTime() }),
-        ...(filter?.endDate && { endMs: new Date(filter.endDate + 'T23:59:59').getTime() }),
       });
       const entries = Array.isArray(result.entries) ? result.entries : [];
       if (entries.length === 0) break;
@@ -870,7 +867,7 @@ export class CronJobService {
       for (const entry of entries) {
         if (internalJobIds.has(entry.jobId)) continue;
         const run = mapGatewayRun(entry);
-        if (!matchesRunFilter(run, filter)) continue;
+        if (!matchesFilter(run)) continue;
         if (skippedVisible < visibleOffset) {
           skippedVisible += 1;
           continue;
