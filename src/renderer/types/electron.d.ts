@@ -276,6 +276,7 @@ interface CoworkConfig {
   skipMissedJobs: boolean;
   openClawHeartbeatEnabled: boolean;
   openClawSkillReviewEnabled: boolean;
+  openClawMemoryFlushEnabled: boolean;
   embeddingEnabled: boolean;
   embeddingProvider: string;
   embeddingModel: string;
@@ -300,6 +301,7 @@ type CoworkConfigUpdate = Partial<
     | 'skipMissedJobs'
     | 'openClawHeartbeatEnabled'
     | 'openClawSkillReviewEnabled'
+    | 'openClawMemoryFlushEnabled'
     | 'embeddingEnabled'
     | 'embeddingProvider'
     | 'embeddingModel'

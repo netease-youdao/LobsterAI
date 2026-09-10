@@ -10998,6 +10998,7 @@ if (!gotTheLock) {
     skipMissedJobs?: boolean;
     openClawHeartbeatEnabled?: boolean;
     openClawSkillReviewEnabled?: boolean;
+    openClawMemoryFlushEnabled?: boolean;
     embeddingEnabled?: boolean;
     embeddingProvider?: string;
     embeddingModel?: string;
@@ -11044,6 +11045,9 @@ if (!gotTheLock) {
       const normalizedOpenClawSkillReviewEnabled = typeof config.openClawSkillReviewEnabled === 'boolean'
         ? config.openClawSkillReviewEnabled
         : undefined;
+      const normalizedOpenClawMemoryFlushEnabled = typeof config.openClawMemoryFlushEnabled === 'boolean'
+        ? config.openClawMemoryFlushEnabled
+        : undefined;
       const normalizedEmbedding = normalizeEmbeddingConfig(config);
       const normalizedConfig: Parameters<CoworkStore['setConfig']>[0] = {
         ...config,
@@ -11057,6 +11061,7 @@ if (!gotTheLock) {
         skipMissedJobs: normalizedSkipMissedJobs,
         openClawHeartbeatEnabled: normalizedOpenClawHeartbeatEnabled,
         openClawSkillReviewEnabled: normalizedOpenClawSkillReviewEnabled,
+        openClawMemoryFlushEnabled: normalizedOpenClawMemoryFlushEnabled,
         ...normalizedEmbedding,
       };
       const previousConfig = getCoworkStore().getConfig();
@@ -11085,6 +11090,14 @@ if (!gotTheLock) {
       ) {
         console.log(
           `[Cowork] OpenClaw skill review setting changed: enabled=${nextConfig.openClawSkillReviewEnabled}, previous=${previousConfig.openClawSkillReviewEnabled}, impact=${impactDecision.impact}`,
+        );
+      }
+      if (
+        normalizedConfig.openClawMemoryFlushEnabled !== undefined
+        && previousConfig.openClawMemoryFlushEnabled !== nextConfig.openClawMemoryFlushEnabled
+      ) {
+        console.log(
+          `[Cowork] OpenClaw memory flush setting changed: enabled=${nextConfig.openClawMemoryFlushEnabled}, previous=${previousConfig.openClawMemoryFlushEnabled}, impact=${impactDecision.impact}`,
         );
       }
       if (impactDecision.impact !== OpenClawConfigImpact.None) {

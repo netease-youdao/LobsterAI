@@ -265,6 +265,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config).toEqual({
       gateway: { mode: 'local' },
       skills: { workshop: { autonomous: { mode: OpenClawSkillReviewMode.Off } } },
+      agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
     });
     expect(sync.sync('repeat-start')).toMatchObject({ ok: true, changed: false });
   });
@@ -667,6 +668,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.agents.defaults.compaction).toEqual({
       maxActiveTranscriptBytes: '32mb',
+      memoryFlush: { enabled: false },
     });
     expect(config.session.maintenance.rotateBytes).toBeUndefined();
   });
@@ -755,6 +757,79 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(disabledConfig.skills.entries).toEqual(enabledConfig.skills.entries);
     expect(disabledConfig.agents).toEqual(enabledConfig.agents);
     expect(sync.sync('skill-review-disabled-repeat')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test.each([true, false])('disables existing memory flush without opt-in (model available: %s)', async (modelAvailable) => {
+    if (!modelAvailable) mockRuntimeState.rawApiConfig.config = null;
+    fs.writeFileSync(configPath, JSON.stringify({
+      agents: { defaults: { compaction: { memoryFlush: { enabled: true } } } },
+    }), 'utf8');
+    const sync = await createSync();
+
+    expect(sync.sync('memory-flush-default')).toMatchObject({ ok: true, changed: true });
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.agents.defaults.compaction.memoryFlush.enabled).toBe(false);
+    expect(sync.sync('memory-flush-default-repeat')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test.each([true, false])('applies memory flush opt-in and opt-out independently (model available: %s)', async (modelAvailable) => {
+    if (!modelAvailable) mockRuntimeState.rawApiConfig.config = null;
+    let enabled = true;
+    const sync = await createSync({
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: '',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        openClawMemoryFlushEnabled: enabled,
+        openClawSkillReviewEnabled: true,
+        openClawHeartbeatEnabled: true,
+      }),
+    });
+
+    expect(sync.sync('memory-flush-enabled')).toMatchObject({ ok: true, changed: true });
+    const enabledConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(enabledConfig.agents.defaults.compaction.memoryFlush.enabled).toBe(true);
+    expect(sync.sync('memory-flush-enabled-repeat')).toMatchObject({ ok: true, changed: false });
+
+    enabled = false;
+    expect(sync.sync('memory-flush-disabled')).toMatchObject({ ok: true, changed: true });
+    const disabledConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(disabledConfig.agents.defaults.compaction).toEqual({
+      ...enabledConfig.agents.defaults.compaction,
+      memoryFlush: { enabled: false },
+    });
+    expect(disabledConfig.agents.defaults.heartbeat).toEqual(enabledConfig.agents.defaults.heartbeat);
+    expect(disabledConfig.memory).toEqual(enabledConfig.memory);
+    expect(disabledConfig.plugins).toEqual(enabledConfig.plugins);
+    expect(disabledConfig.skills).toEqual(enabledConfig.skills);
+    expect(disabledConfig.skills.workshop.autonomous.mode).toBe(OpenClawSkillReviewMode.Auto);
+    expect(sync.sync('memory-flush-disabled-repeat')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test('preserves compaction and memory settings while disabling flush without a model', async () => {
+    mockRuntimeState.rawApiConfig.config = null;
+    const compaction = {
+      mode: 'safeguard',
+      maxActiveTranscriptBytes: '32mb',
+      reserveTokens: 20000,
+      memoryFlush: { enabled: true, softThresholdTokens: 4000, forceFlushTranscriptBytes: '2mb' },
+    };
+    const agents = { defaults: { workspace: tmpDir, compaction }, list: [{ id: 'main' }] };
+    const memory = { search: { enabled: true, provider: 'none' } };
+    fs.writeFileSync(configPath, JSON.stringify({ agents, memory }), 'utf8');
+    const sync = await createSync();
+
+    expect(sync.sync('memory-flush-no-model')).toMatchObject({ ok: true, changed: true });
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.agents).toEqual({
+      ...agents,
+      defaults: {
+        ...agents.defaults,
+        compaction: { ...compaction, memoryFlush: { ...compaction.memoryFlush, enabled: false } },
+      },
+    });
+    expect(config.memory).toEqual(memory);
   });
 
   test('writes model provider env-proxy transport when system proxy is enabled', async () => {

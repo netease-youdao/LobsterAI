@@ -65,6 +65,7 @@ const COWORK_SYNC_FIELDS = new Set([
   'skipMissedJobs',
   'openClawHeartbeatEnabled',
   'openClawSkillReviewEnabled',
+  'openClawMemoryFlushEnabled',
   'embeddingEnabled',
   'embeddingProvider',
   'embeddingModel',

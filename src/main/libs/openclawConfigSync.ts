@@ -2033,6 +2033,8 @@ export class OpenClawConfigSync {
     const skillReviewMode = coworkConfig.openClawSkillReviewEnabled === true
       ? OpenClawSkillReviewMode.Auto
       : OpenClawSkillReviewMode.Off;
+    // Native memory flush is enabled by default and can issue costly background calls.
+    const memoryFlushEnabled = coworkConfig.openClawMemoryFlushEnabled === true;
     const browserWebAccess = normalizeBrowserWebAccessConfig(this.getBrowserWebAccessConfig());
     const serverModels = getAllServerModelMetadata();
     const invalidKimiK3Transports = findInvalidKimiK3ServerTransports(serverModels);
@@ -2061,7 +2063,7 @@ export class OpenClawConfigSync {
       } else {
         // This also happens during logout or before server models finish
         // loading. Keep existing non-provider state so IM stays configured.
-        const result = this.writeMinimalConfig(configPath, reason, skillReviewMode);
+        const result = this.writeMinimalConfig(configPath, reason, skillReviewMode, memoryFlushEnabled);
         // Still sync AGENTS.md even when API is not configured — skills/systemPrompt
         // may already be set and should be available when the user configures a model.
         const mainWorkspacePath = getMainAgentWorkspacePath(this.engineManager.getStateDir());
@@ -2464,6 +2466,7 @@ export class OpenClawConfigSync {
           mediaMaxMb: 30,
           compaction: {
             maxActiveTranscriptBytes: OpenClawTranscriptSafetyLimit.SoftConfigValue,
+            memoryFlush: { enabled: memoryFlushEnabled },
           },
           ...(taskWorkingDirectory ? { cwd: path.resolve(taskWorkingDirectory) } : {}),
           heartbeat: {
@@ -4083,6 +4086,7 @@ export class OpenClawConfigSync {
     configPath: string,
     _reason: string,
     skillReviewMode: OpenClawSkillReviewMode,
+    memoryFlushEnabled: boolean,
   ): OpenClawConfigSyncResult {
     const baseMinimalConfig: Record<string, unknown> = {
       gateway: {
@@ -4125,7 +4129,25 @@ export class OpenClawConfigSync {
       }
     }
 
-    // Apply the review preference even before models load or after logout.
+    // Apply maintenance preferences even before models load or after logout.
+    // Preserve the rest of compaction and memory settings when disabling only flush.
+    const agents = asConfigRecord(mergedConfig.agents);
+    const agentDefaults = asConfigRecord(agents?.defaults);
+    const compaction = asConfigRecord(agentDefaults?.compaction);
+    mergedConfig.agents = {
+      ...agents,
+      defaults: {
+        ...agentDefaults,
+        compaction: {
+          ...compaction,
+          memoryFlush: {
+            ...asConfigRecord(compaction?.memoryFlush),
+            enabled: memoryFlushEnabled,
+          },
+        },
+      },
+    };
+
     const skills = asConfigRecord(mergedConfig.skills);
     const workshop = asConfigRecord(skills?.workshop);
     mergedConfig.skills = {

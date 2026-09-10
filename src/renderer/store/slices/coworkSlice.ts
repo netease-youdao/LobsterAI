@@ -163,6 +163,7 @@ const initialState: CoworkState = {
     skipMissedJobs: true,
     openClawHeartbeatEnabled: false,
     openClawSkillReviewEnabled: false,
+    openClawMemoryFlushEnabled: false,
     embeddingEnabled: false,
     embeddingProvider: 'openai',
     embeddingModel: '',

@@ -177,6 +177,18 @@ describe('OpenClaw config impact classification', () => {
     });
   });
 
+  test.each([true, false])('syncs memory flush changes without a gateway restart (enabled: %s)', (enabled) => {
+    const result = classifyCoworkConfigChange(
+      { openClawMemoryFlushEnabled: !enabled },
+      { openClawMemoryFlushEnabled: enabled },
+    );
+
+    expect(result).toEqual({
+      impact: OpenClawConfigImpact.Sync,
+      reasons: [OpenClawConfigImpactReason.CoworkOpenClawConfig],
+    });
+  });
+
   test.each([true, false])('syncs skill review changes without a gateway restart (enabled: %s)', (enabled) => {
     const result = classifyCoworkConfigChange(
       { openClawSkillReviewEnabled: !enabled },

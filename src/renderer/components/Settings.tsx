@@ -1749,6 +1749,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [showTempCleanConfirm, setShowTempCleanConfirm] = useState<boolean>(false);
   const [openClawHeartbeatEnabled, setOpenClawHeartbeatEnabled] = useState<boolean>(coworkConfig.openClawHeartbeatEnabled ?? false);
   const [openClawSkillReviewEnabled, setOpenClawSkillReviewEnabled] = useState<boolean>(coworkConfig.openClawSkillReviewEnabled ?? false);
+  const [openClawMemoryFlushEnabled, setOpenClawMemoryFlushEnabled] = useState<boolean>(coworkConfig.openClawMemoryFlushEnabled ?? false);
   const [embeddingEnabled, setEmbeddingEnabled] = useState<boolean>(coworkConfig.embeddingEnabled ?? false);
   const [embeddingProvider, setEmbeddingProvider] = useState<string>(coworkConfig.embeddingProvider ?? 'openai');
   const [embeddingModel, setEmbeddingModel] = useState<string>(coworkConfig.embeddingModel ?? '');
@@ -1792,6 +1793,7 @@ const Settings: React.FC<SettingsProps> = ({
     setSkipMissedJobs(coworkConfig.skipMissedJobs ?? true);
     setOpenClawHeartbeatEnabled(coworkConfig.openClawHeartbeatEnabled ?? false);
     setOpenClawSkillReviewEnabled(coworkConfig.openClawSkillReviewEnabled ?? false);
+    setOpenClawMemoryFlushEnabled(coworkConfig.openClawMemoryFlushEnabled ?? false);
     setEmbeddingEnabled(coworkConfig.embeddingEnabled ?? false);
     setEmbeddingProvider(coworkConfig.embeddingProvider ?? 'openai');
     setEmbeddingModel(coworkConfig.embeddingModel ?? '');
@@ -1812,6 +1814,7 @@ const Settings: React.FC<SettingsProps> = ({
     coworkConfig.skipMissedJobs,
     coworkConfig.openClawHeartbeatEnabled,
     coworkConfig.openClawSkillReviewEnabled,
+    coworkConfig.openClawMemoryFlushEnabled,
     coworkConfig.embeddingEnabled,
     coworkConfig.embeddingProvider,
     coworkConfig.embeddingModel,
@@ -2836,6 +2839,7 @@ const Settings: React.FC<SettingsProps> = ({
     || skipMissedJobs !== (coworkConfig.skipMissedJobs ?? true)
     || openClawHeartbeatEnabled !== (coworkConfig.openClawHeartbeatEnabled ?? false)
     || openClawSkillReviewEnabled !== (coworkConfig.openClawSkillReviewEnabled ?? false)
+    || openClawMemoryFlushEnabled !== (coworkConfig.openClawMemoryFlushEnabled ?? false)
     || openClawSessionKeepAlive !== (coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays)
     || embeddingEnabled !== (coworkConfig.embeddingEnabled ?? false)
     || embeddingProvider !== (coworkConfig.embeddingProvider ?? 'openai')
@@ -3398,6 +3402,7 @@ const Settings: React.FC<SettingsProps> = ({
       const previousSkipMissedJobs = coworkConfig.skipMissedJobs ?? true;
       const previousOpenClawHeartbeatEnabled = coworkConfig.openClawHeartbeatEnabled ?? false;
       const previousOpenClawSkillReviewEnabled = coworkConfig.openClawSkillReviewEnabled ?? false;
+      const previousOpenClawMemoryFlushEnabled = coworkConfig.openClawMemoryFlushEnabled ?? false;
       const previousAgentEngine = coworkConfig.agentEngine || 'openclaw';
       const previousOpenClawSessionKeepAlive = coworkConfig.openClawSessionPolicy?.keepAlive
         || OpenClawSessionKeepAliveValues.ThirtyDays;
@@ -3533,6 +3538,11 @@ const Settings: React.FC<SettingsProps> = ({
             `[Settings] updating OpenClaw skill review: enabled=${openClawSkillReviewEnabled}, previous=${previousOpenClawSkillReviewEnabled}`,
           );
         }
+        if (previousOpenClawMemoryFlushEnabled !== openClawMemoryFlushEnabled) {
+          console.log(
+            `[Settings] updating OpenClaw memory flush: enabled=${openClawMemoryFlushEnabled}, previous=${previousOpenClawMemoryFlushEnabled}`,
+          );
+        }
         const updated = await coworkService.updateConfig({
           agentEngine: coworkAgentEngine,
           memoryEnabled: coworkMemoryEnabled,
@@ -3540,6 +3550,7 @@ const Settings: React.FC<SettingsProps> = ({
           skipMissedJobs,
           openClawHeartbeatEnabled,
           openClawSkillReviewEnabled,
+          openClawMemoryFlushEnabled,
           embeddingEnabled,
           embeddingProvider,
           embeddingModel,
@@ -3667,6 +3678,13 @@ const Settings: React.FC<SettingsProps> = ({
             'openClawSessionKeepAlive',
             openClawSessionKeepAlive,
             previousOpenClawSessionKeepAlive,
+          );
+        }
+        if (previousOpenClawMemoryFlushEnabled !== openClawMemoryFlushEnabled) {
+          reportAgentEngineSettingChanged(
+            'openClawMemoryFlushEnabled',
+            openClawMemoryFlushEnabled,
+            previousOpenClawMemoryFlushEnabled,
           );
         }
         const memorySettingsSummary = buildMemorySettingAnalyticsSummary(
@@ -5244,6 +5262,37 @@ const Settings: React.FC<SettingsProps> = ({
                         </div>
                         <p className="mt-1.5 text-[13px] leading-5 text-secondary">
                           {i18nService.t('openClawSkillReviewEnabledDescription')}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-border bg-surface p-4">
+                    <div className="flex items-start gap-3.5">
+                      <span
+                        className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors ${
+                          openClawMemoryFlushEnabled
+                            ? 'bg-primary-muted text-primary'
+                            : 'bg-surface-raised text-secondary'
+                        }`}
+                      >
+                        <BrainIcon className="h-5 w-5" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-3">
+                          <h4 className="min-w-0 text-sm font-medium leading-5 text-foreground">
+                            {i18nService.t('openClawMemoryFlushEnabled')}
+                          </h4>
+                          <SettingsSwitch
+                            checked={openClawMemoryFlushEnabled}
+                            label={i18nService.t('openClawMemoryFlushEnabled')}
+                            onClick={() => {
+                              setOpenClawMemoryFlushEnabled((prev) => !prev);
+                            }}
+                          />
+                        </div>
+                        <p className="mt-1.5 text-[13px] leading-5 text-secondary">
+                          {i18nService.t('openClawMemoryFlushEnabledDescription')}
                         </p>
                       </div>
                     </div>

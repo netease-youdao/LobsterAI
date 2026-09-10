@@ -663,6 +663,7 @@ contextBridge.exposeInMainWorld('electron', {
       skipMissedJobs?: boolean;
       openClawHeartbeatEnabled?: boolean;
       openClawSkillReviewEnabled?: boolean;
+      openClawMemoryFlushEnabled?: boolean;
       embeddingEnabled?: boolean;
       embeddingProvider?: string;
       embeddingModel?: string;
