@@ -691,14 +691,14 @@ export class OpenClawEngineManager extends EventEmitter {
       const port = this.gatewayPort ?? this.readGatewayPort();
       if (port) {
         this.gatewayPort = port;
-        const startupReady = await this.isGatewayStartupReady(port);
+        const startupReady = await this.isGatewayStartupReady(port, true);
         if (this.shutdownRequested || this.gatewayProcess !== existingChild) return this.getStatus();
         console.log(`[OpenClaw] startGateway: existing process startup check (${elapsed()}), ready=${startupReady}`);
         if (startupReady) {
           this.clearScheduledGatewayRestart();
-          if (this.status.phase !== 'running') {
+          if (this.status.phase !== OpenClawEnginePhase.Running) {
             this.setStatus({
-              phase: 'running',
+              phase: OpenClawEnginePhase.Running,
               version: this.desiredVersion,
               progressPercent: 100,
               message: `OpenClaw gateway is running on loopback:${port}.`,
@@ -712,20 +712,25 @@ export class OpenClawEngineManager extends EventEmitter {
         if (this.shutdownRequested || this.gatewayProcess !== existingChild) return this.getStatus();
         console.log(`[OpenClaw] startGateway: existing process liveness check (${elapsed()}), live=${live}`);
         if (live) {
-          this.setStatus({
-            phase: 'starting',
-            version: this.desiredVersion,
-            progressPercent: 10,
-            message: 'Starting OpenClaw gateway...',
-            canRetry: false,
-          });
+          // A slow probe during config reload is not a new process lifecycle.
+          // Keep awaiting readiness, but do not reopen the startup overlay for
+          // a generation that was already running.
+          if (this.status.phase !== OpenClawEnginePhase.Running) {
+            this.setStatus({
+              phase: OpenClawEnginePhase.Starting,
+              version: this.desiredVersion,
+              progressPercent: 10,
+              message: 'Starting OpenClaw gateway...',
+              canRetry: false,
+            });
+          }
           const ready = await this.waitForGatewayReady(port, GATEWAY_BOOT_TIMEOUT_MS);
           if (this.shutdownRequested || this.gatewayProcess !== existingChild) return this.getStatus();
-          console.log(`[OpenClaw] startGateway: existing process startup wait (${elapsed()}), ready=${ready}`);
+          console.log(`[OpenClaw] startGateway: existing process readiness wait (${elapsed()}), ready=${ready}`);
           if (ready) {
             this.clearScheduledGatewayRestart();
             this.setStatus({
-              phase: 'running',
+              phase: OpenClawEnginePhase.Running,
               version: this.desiredVersion,
               progressPercent: 100,
               message: `OpenClaw gateway is running on loopback:${port}.`,
@@ -733,7 +738,7 @@ export class OpenClawEngineManager extends EventEmitter {
             });
             return this.getStatus();
           }
-          console.warn(`${gwDiagTs()} startGateway: existing process did not finish startup on port=${port}, stopping it (${elapsed()})`);
+          console.warn(`${gwDiagTs()} startGateway: existing process did not become ready on port=${port}, stopping it (${elapsed()})`);
         }
         if (!live) {
           console.warn(`${gwDiagTs()} startGateway: existing process is not live on port=${port}, stopping it (${elapsed()})`);
@@ -742,6 +747,13 @@ export class OpenClawEngineManager extends EventEmitter {
         console.warn(`${gwDiagTs()} startGateway: existing process alive but port unknown, stopping it (${elapsed()})`);
       }
 
+      this.setStatus({
+        phase: OpenClawEnginePhase.Starting,
+        version: this.desiredVersion,
+        progressPercent: 10,
+        message: 'Starting OpenClaw gateway...',
+        canRetry: false,
+      });
       await this.stopGatewayProcess(existingChild);
       if (this.shutdownRequested) return this.getStatus();
       if (this.gatewayProcess === existingChild) this.gatewayProcess = null;
@@ -1825,18 +1837,21 @@ export class OpenClawEngineManager extends EventEmitter {
           return;
         }
 
-        // Update progress from 10% → 90% during the wait, so the UI shows meaningful feedback.
+        // Progress belongs to a startup/restart, not a running process whose
+        // HTTP endpoint is temporarily slow. Readiness still gates the caller.
         const progress = Math.min(90, 10 + Math.round((elapsedMs / timeoutMs) * 80));
-        this.setStatus({
-          phase: 'starting',
-          version: this.status.version,
-          progressPercent: progress,
-          message: `Starting OpenClaw gateway... (${Math.round(elapsedMs / 1000)}s)`,
-          canRetry: false,
-        });
+        if (this.status.phase === OpenClawEnginePhase.Starting) {
+          this.setStatus({
+            phase: OpenClawEnginePhase.Starting,
+            version: this.status.version,
+            progressPercent: progress,
+            message: `Starting OpenClaw gateway... (${Math.round(elapsedMs / 1000)}s)`,
+            canRetry: false,
+          });
+        }
 
         if (pollCount % 5 === 0) {
-          console.log(`[OpenClaw] waitForGatewayReady: poll #${pollCount}, elapsed=${elapsedMs}ms, progress=${progress}%`);
+          console.debug(`[OpenClaw] waitForGatewayReady: poll #${pollCount}, elapsed=${elapsedMs}ms, phase=${this.status.phase}`);
         }
 
         setTimeout(() => {

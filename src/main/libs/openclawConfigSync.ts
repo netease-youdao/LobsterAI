@@ -87,6 +87,7 @@ const gwDiagTs = (): string => {
 };
 import { findBundledExtensionsDir, findThirdPartyExtensionsDir, hasBundledOpenClawExtension, hasRuntimeBundledOpenClawExtension, resolveOpenClawExtensionPluginId } from './openclawLocalExtensions';
 import { buildQQAccountConfig, OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
+import { withRequiredOpenClawSessionStoreOwner } from './openclawSessionStoreOwner';
 import { getOpenClawTokenProxyPort } from './openclawTokenProxy';
 import { getActiveSystemProxyUrl, isSystemProxyEnabled } from './systemProxy';
 
@@ -2350,9 +2351,11 @@ export class OpenClawConfigSync {
     // See: openclaw/openclaw#58678, #33310, #61613
     let existingGateway: Record<string, unknown> = {};
     let existingPlugins: Record<string, unknown> = {};
+    let existingSessionStoreOwner: unknown;
     try {
       const existing = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       existingGateway = (existing.gateway ?? {}) as Record<string, unknown>;
+      existingSessionStoreOwner = existing.agents?.defaults?.sessionStore;
       // Filtered: plugin-index-managed keys (e.g. `installs`) must never be
       // preserved back into the file — they poison config.set hot delivery.
       existingPlugins = omitPluginIndexManagedKeys(existing.plugins);
@@ -2393,7 +2396,7 @@ export class OpenClawConfigSync {
 
     this.canUseMediaGeneration();
 
-    const managedConfig: Record<string, unknown> = {
+    let managedConfig: Record<string, unknown> = {
       gateway: {
         // Preserve ALL existing gateway fields so runtime-seeded values
         // survive config rewrites.  Our managed fields below override
@@ -2452,7 +2455,6 @@ export class OpenClawConfigSync {
         defaults: {
           systemAgent: { agentId: AgentId.Main },
           authInheritance: { agentId: AgentId.Main },
-          sessionStore: { agentId: AgentId.Main },
           timeoutSeconds: OPENCLAW_AGENT_TIMEOUT_SECONDS,
           // Session switches stay local; LobsterAI explicitly syncs agent defaults.
           modelSelectionScope: OPENCLAW_MODEL_SELECTION_SCOPE,
@@ -3213,6 +3215,10 @@ export class OpenClawConfigSync {
     // _agentBinding into channel configs because OpenClaw plugins using
     // additionalProperties:false reject the extra field and crash.
 
+    managedConfig = withRequiredOpenClawSessionStoreOwner(managedConfig, {
+      stateDir: this.engineManager.getStateDir(),
+      legacyOwner: existingSessionStoreOwner,
+    });
     const nextContent = `${JSON.stringify(managedConfig, null, 2)}\n`;
     console.log('[OpenClawConfigSync] sync() managedConfig key fields:', {
       providers: (managedConfig.models as Record<string, unknown>)?.providers,
@@ -4161,6 +4167,9 @@ export class OpenClawConfigSync {
       },
     };
 
+    mergedConfig = withRequiredOpenClawSessionStoreOwner(mergedConfig, {
+      stateDir: this.engineManager.getStateDir(),
+    });
     const nextContent = `${JSON.stringify(mergedConfig, null, 2)}\n`;
 
     // Compare ignoring `meta` timestamps to avoid unnecessary writes.

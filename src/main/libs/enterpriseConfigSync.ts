@@ -7,6 +7,7 @@ import type { IMStore } from '../im/imStore';
 import type { PopoInstanceConfig } from '../im/types';
 import type { SqliteStore } from '../sqliteStore';
 import { OpenClawAgentOwnership } from './openclawAgentModels';
+import { withRequiredOpenClawSessionStoreOwner } from './openclawSessionStoreOwner';
 import { safelyReplaceTextFileSync } from './safeFileReplace';
 
 export type EnterpriseUIAction = 'hide' | 'disable' | 'readonly';
@@ -1126,9 +1127,9 @@ export function mergeOpenClawConfigs(
     normalizedEnterpriseConfig.channels = normalizedChannels;
   }
 
-  const merged = stripMergedChannelTopLevelAccountCredentialFields(
+  const merged = withRequiredOpenClawSessionStoreOwner(stripMergedChannelTopLevelAccountCredentialFields(
     deepMerge(runtimeConfig, normalizedEnterpriseConfig),
-  );
+  ));
 
   const mergedPluginLoadPaths = Array.from(new Set([
     ...readPluginLoadPaths(runtimeConfig),

@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { AgentId } from '../../shared/agent/constants';
 import {
   BrowserCredentialLoginTool,
   BrowserCredentialMcpServer,
@@ -311,8 +312,9 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.agents.entries.worker.workspace).toBe(path.join(stateDir, 'workspace-worker'));
     expect(config.agents.defaults).toMatchObject({
       systemAgent: { agentId: 'main' }, authInheritance: { agentId: 'main' },
-      sessionStore: { agentId: 'main' }, heartbeat: { agentId: 'main' },
+      heartbeat: { agentId: 'main' },
     });
+    expect(config.agents.defaults).not.toHaveProperty('sessionStore');
     expect(config.talk.agentId).toBe('main');
     expect(config.bindings).toEqual([
       { agentId: 'main', match: { channel: OpenClawQQPlugin.Channel, accountId: 'account1' } },
@@ -325,6 +327,81 @@ describe('OpenClawConfigSync runtime config output', () => {
     });
     expect(config.channels.qqbot.accounts.account2.clientSecret).toBe('${LOBSTER_QQ_CLIENT_SECRET_1}');
     expect(sync.sync('repeat-roster')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test('converges after an older config pinned a legacy owner for per-agent session stores', async () => {
+    const sync = await createSync();
+    expect(sync.sync('initial-config')).toMatchObject({ ok: true, changed: true });
+    const readConfig = () => JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const legacy = readConfig();
+    legacy.agents.defaults.sessionStore = { agentId: AgentId.Main };
+    fs.writeFileSync(configPath, JSON.stringify(legacy));
+
+    expect(sync.sync('upgrade-session-owner')).toMatchObject({ ok: true, changed: true });
+    const upgraded = readConfig();
+    expect(upgraded.session).not.toHaveProperty('store');
+    expect(upgraded.agents.defaults).not.toHaveProperty('sessionStore');
+    expect(upgraded.agents.defaults.systemAgent).toEqual(legacy.agents.defaults.systemAgent);
+    expect(upgraded.agents.defaults.authInheritance).toEqual(legacy.agents.defaults.authInheritance);
+    expect(upgraded.agents.entries).toEqual(legacy.agents.entries);
+    expect(sync.sync('skills-changed')).toMatchObject({ ok: true, changed: false });
+    expect(sync.sync('agent-updated')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test('retains shared legacy ownership through migration and stops writing it after archival', async () => {
+    const source = path.join(stateDir, 'sessions', 'sessions.json');
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    const legacyHistory = JSON.stringify({
+      'agent:main:main': { sessionId: 'main-history' },
+      'agent:worker:main': { sessionId: 'worker-history' },
+      'voice:ambiguous': { sessionId: 'legacy-history' },
+    });
+    fs.writeFileSync(source, legacyHistory);
+    const sync = await createSync({
+      getAgents: () => ['main', 'worker'].map(id => ({
+        id, name: id, enabled: true, model: '', workingDirectory: '', description: '', systemPrompt: '', identity: '',
+        icon: '', skillIds: [], source: 'custom', presetId: '', createdAt: 0, updatedAt: 0,
+      })),
+    });
+    const readConfig = () => JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+    expect(sync.sync('before-doctor')).toMatchObject({ ok: true, changed: true });
+    expect(readConfig().agents.defaults.sessionStore).toEqual({ agentId: AgentId.Main });
+    expect(Object.keys(readConfig().agents.entries)).toEqual(['main', 'worker']);
+    expect(fs.readFileSync(source, 'utf8')).toBe(legacyHistory);
+    expect(sync.sync('migration-not-finished')).toMatchObject({ ok: true, changed: false });
+    expect(readConfig().agents.defaults.sessionStore).toEqual({ agentId: AgentId.Main });
+
+    fs.renameSync(source, `${source}.migrated`);
+    expect(sync.sync('after-doctor')).toMatchObject({ ok: true, changed: true });
+    expect(readConfig().agents.defaults).not.toHaveProperty('sessionStore');
+    expect(sync.sync('skills-changed')).toMatchObject({ ok: true, changed: false });
+    expect(sync.sync('agent-updated')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test('keeps an existing named owner while the shared migration source remains', async () => {
+    fs.mkdirSync(path.join(stateDir, 'sessions'));
+    fs.writeFileSync(path.join(stateDir, 'sessions', 'sessions.json'), '{}');
+    fs.writeFileSync(configPath, JSON.stringify({ agents: { defaults: { sessionStore: { agentId: 'worker' } } } }));
+    const sync = await createSync();
+    expect(sync.sync('preserve-legacy-owner').ok).toBe(true);
+    expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).agents.defaults.sessionStore).toEqual({ agentId: 'worker' });
+  });
+
+  test('supplies shared migration ownership while model configuration is unavailable', async () => {
+    mockRuntimeState.rawApiConfig.config = null;
+    fs.mkdirSync(path.join(stateDir, 'sessions'));
+    fs.writeFileSync(path.join(stateDir, 'sessions', 'sessions.json'), '{}');
+    fs.writeFileSync(configPath, JSON.stringify({ agents: {
+      ownership: OpenClawAgentOwnership.Explicit, entries: { main: {}, worker: {} },
+    } }));
+    const sync = await createSync();
+    expect(sync.sync('before-models-load')).toMatchObject({ ok: true, changed: true });
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.agents.defaults.sessionStore).toEqual({ agentId: AgentId.Main });
+    expect(Object.keys(config.agents.entries)).toEqual(['main', 'worker']);
+    expect(config).not.toHaveProperty('models');
+    expect(sync.sync('still-waiting-for-models')).toMatchObject({ ok: true, changed: false });
   });
 
   test.each([undefined, 'agent', 'global'])(
