@@ -41,6 +41,7 @@ import type {
   BrowserDiagnosticResult,
   BrowserRuntimeProfile,
 } from '../../shared/browserWebAccess/constants';
+import type { ApprovalDecisionOutcome, ApprovalState } from '../../shared/cowork/approval';
 import type {
   BrowserAnnotationRect,
   BrowserAnnotationScreenshotRef,
@@ -351,6 +352,7 @@ interface CoworkPermissionRequest {
   toolInput: Record<string, unknown>;
   requestId: string;
   toolUseId?: string | null;
+  approval?: ApprovalState;
 }
 
 interface CoworkApiConfig {
@@ -1202,10 +1204,14 @@ interface IElectronAPI {
       parentSessionId: string;
       runId: string;
     }) => Promise<{ success: boolean; deleted?: boolean; error?: string }>;
+    listPendingPermissions?: () => Promise<{ success: boolean; items: Array<{ sessionId: string; request: CoworkPermissionRequest }> }>;
     respondToPermission: (options: {
       requestId: string;
       result: CoworkPermissionResult;
-    }) => Promise<{ success: boolean; error?: string }>;
+      submissionId?: string;
+      expectedVersion?: string;
+      operationDigest?: string;
+    }) => Promise<{ success: boolean; outcome?: ApprovalDecisionOutcome | { kind: 'question_resolved' }; error?: string }>;
     getConfig: () => Promise<{ success: boolean; config?: CoworkConfig; error?: string }>;
     setConfig: (config: CoworkConfigUpdate) => Promise<{ success: boolean; error?: string }>;
     getTempStorageUsage: () => Promise<CoworkTempStorageUsageResult>;
@@ -1273,6 +1279,7 @@ interface IElectronAPI {
     onStreamPermission: (
       callback: (data: { sessionId: string; request: CoworkPermissionRequest }) => void,
     ) => () => void;
+    onStreamPermissionState?: (callback: (data: { sessionId: string; state: ApprovalState }) => void) => () => void;
     onStreamPermissionDismiss: (callback: (data: { requestId: string }) => void) => () => void;
     onStreamComplete: (
       callback: (data: { sessionId: string; claudeSessionId: string | null }) => void,

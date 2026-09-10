@@ -25,6 +25,7 @@ import {
   type BrowserControlGatewayRequest,
   OpenClawBrowserGatewayMethod,
 } from '../../../shared/browserWebAccess/constants';
+import { type ApprovalDecisionOptions, type ApprovalDecisionOutcome, type ApprovalReconcileOptions, type ApprovalState, type DualApprovalConfiguration, OPENCLAW_DESKTOP_GATEWAY_CAPS } from '../../../shared/cowork/approval';
 import {
   buildBrowserAnnotationPromptSection,
   type CoworkBrowserAnnotationMessageBatch,
@@ -125,6 +126,7 @@ import {
 import { buildOpenClawLocalTimeContextPrompt } from '../openclawLocalTimeContextPrompt';
 import { resolveOpenClawThinkingLevelForModel } from '../openclawModelThinkingLevels';
 import { consumeRecentOpenClawTokenProxyQuotaError } from '../openclawTokenProxy';
+import { assertApprovalContinuationAllowed } from './approvalContinuationContext';
 import {
   findRedundantFinalPrefixMessageId,
   findReusableCommittedAssistantMessageId,
@@ -207,10 +209,10 @@ import type {
   CoworkRuntimeEvents,
   CoworkSessionPatchResult,
   CoworkStartOptions,
+  PermissionRequest,
   PermissionResult,
 } from './types';
 
-const OPENCLAW_GATEWAY_TOOL_EVENTS_CAP = 'tool-events';
 const OPENCLAW_BTW_SESSION_KEY_MAX_CHARS = 4_096;
 const OpenClawGatewayEvent = {
   ChatSideResult: 'chat.side_result',
@@ -3695,6 +3697,18 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       },
     });
     this.approvalController = new OpenClawApprovalController({
+      persistence: this.store.remote,
+      getBinding: (sessionId) => {
+        const session = this.store.getSession(sessionId);
+        if (!session) return null;
+        const runId = this.store.remote.run(sessionId)?.runId ?? null;
+        return { runId, identity: { sessionId, owner: this.store.remote.owner(sessionId), agentId: session.agentId ?? 'main', cwd: session.cwd } };
+      },
+      getWorkspace: (sessionId) => {
+        const session = this.store.getSession(sessionId);
+        return session?.cwd ? { cwd: session.cwd, name: path.basename(session.cwd) || '当前工作区' } : null;
+      },
+      emitPermissionState: (sessionId, state) => this.emit('permissionState', sessionId, state),
       getGatewayClient: () => this.gatewayClient,
       resolveSessionId: (sessionKey) => this.resolveApprovalSessionId(sessionKey),
       isSessionInStopCooldown: (sessionId) => this.isSessionInStopCooldown(sessionId),
@@ -3703,6 +3717,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       ),
       sessionExists: (sessionId) => Boolean(this.store.getSession(sessionId)),
       isSessionActive: (sessionId) => this.isSessionActive(sessionId),
+      canContinue: (sessionId) => !this.manuallyStoppedSessions.has(sessionId) && this.store.canReadSession(sessionId, this.store.remoteCreationOwner()),
       continueSession: (sessionId, prompt) => this.continueSession(sessionId, prompt),
       emitPermissionRequest: (sessionId, request) => this.emit('permissionRequest', sessionId, request),
       emitPermissionResolved: (sessionId, requestId) => this.emit('permissionResolved', sessionId, requestId),
@@ -5172,9 +5187,17 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     });
   }
 
-  async respondToPermissionConfirmed(requestId: string, result: PermissionResult): Promise<void> {
-    await this.approvalController.respondToPermissionConfirmed(requestId, result);
+  respondToPermissionConfirmed(requestId: string, result: PermissionResult, options?: ApprovalDecisionOptions): Promise<ApprovalDecisionOutcome> {
+    return this.approvalController.respondToPermissionConfirmed(requestId, result, options);
   }
+  getPermissionState(id: string): ApprovalState | null { return this.approvalController.getPermissionState(id); }
+  getApprovalSubmission(id: string): ApprovalDecisionOutcome | null { return this.approvalController.getApprovalSubmission(id); }
+  reconcileApprovalSubmission(id: string, options?: ApprovalReconcileOptions): Promise<ApprovalDecisionOutcome | null> { return this.approvalController.reconcileApprovalSubmission(id, options); }
+  configureDualApproval(configuration: DualApprovalConfiguration): void { this.approvalController.configureDualApproval(configuration); }
+  supportsDualApproval(): boolean { return this.approvalController.supportsDualApproval(); }
+  expirePermissions(now?: number): void { this.approvalController.expirePermissions(now); }
+  closeSessionPermissions(id: string, runId: string | null, status?: 'cancelled' | 'expired' | 'superseded'): void { this.approvalController.closeSessionPermissions(id, runId, status); }
+  listPendingPermissions(): Array<{ sessionId: string; request: PermissionRequest }> { return this.approvalController.listPendingPermissions(); }
 
   stopSession(sessionId: string): void {
     const turn = this.activeTurns.get(sessionId);
@@ -5748,6 +5771,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       assertOpenClawChatSendPayloadWithinLimit(sessionId, chatSendParams, attachments);
       const chatSendStartMs = Date.now();
       firstResponseTiming.chatSendStartedAtMs = chatSendStartMs;
+      assertApprovalContinuationAllowed();
       this.options.beforeExecutionDispatch?.();
       const sendResult = await client.request<Record<string, unknown>>(
         OpenClawGatewayMethod.ChatSend,
@@ -6085,14 +6109,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       clientDisplayName: 'LobsterAI',
       clientVersion: app.getVersion(),
       mode: 'backend',
-      caps: [OPENCLAW_GATEWAY_TOOL_EVENTS_CAP],
+      caps: [...OPENCLAW_DESKTOP_GATEWAY_CAPS],
       role: 'operator',
       scopes: ['operator.admin'],
       // LobsterAI connects to its own loopback gateway with an explicit shared
       // token. Avoid loading OpenClaw's ambient ~/.openclaw device identity,
       // which belongs to a separate standalone OpenClaw installation.
       deviceIdentity: null,
-      onHelloOk: () => {
+      onHelloOk: (hello: { server?: { version?: string; bootId?: string }; features?: { methods?: string[] } }) => {
         if (clientGeneration !== this.gatewayClientGeneration) {
           console.debug('[ChannelSync] ignored hello from a stale gateway client generation');
           return;
@@ -6103,6 +6127,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         // request frames before the connect frame, causing 1008 rejection.
         this.gatewayClient = client;
         this.gatewayClientVersion = connection.version;
+        this.approvalController.setGatewayContract({ version: hello?.server?.version ?? '', bootId: hello?.server?.bootId ?? '', methods: hello?.features?.methods ?? [] });
         this.gatewayClientEntryPath = connection.clientEntryPath;
         this.gatewayReconnectSuppressed = false;
         this.gatewayReconnectAttempt = 0;
@@ -6156,6 +6181,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           return;
         }
 
+        this.approvalController.setGatewayContract(null);
         console.warn('[OpenClawRuntime] gateway WS disconnected — code:', _code, 'reason:', reason);
         if (_code === WebSocketCloseCode.ServiceRestart) {
           // The gateway is restarting itself after a config reload. Flag the
@@ -6237,6 +6263,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       console.warn('[OpenClawRuntime] Failed to stop gateway client:', error);
     }
     this.gatewayClient = null;
+    this.approvalController.setGatewayContract(null);
+    this.approvalController.dispose();
     this.pendingGatewayClient = null;
     this.gatewayClientVersion = null;
     this.gatewayClientEntryPath = null;

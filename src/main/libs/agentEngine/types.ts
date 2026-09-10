@@ -1,4 +1,5 @@
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
+import type { ApprovalDecisionOptions, ApprovalDecisionOutcome, ApprovalReconcileOptions, ApprovalState, DualApprovalConfiguration } from '../../../shared/cowork/approval';
 import type { CoworkBrowserAnnotationMessageBatch } from '../../../shared/cowork/browserAnnotations';
 import type {
   CoworkBtwAbortResponse,
@@ -39,6 +40,7 @@ export interface PermissionRequest {
   toolName: string;
   toolInput: Record<string, unknown>;
   toolUseId?: string | null;
+  approval?: ApprovalState;
 }
 
 export interface CoworkRuntimeEvents {
@@ -51,6 +53,7 @@ export interface CoworkRuntimeEvents {
   contextMaintenance: (sessionId: string, active: boolean) => void;
   permissionRequest: (sessionId: string, request: PermissionRequest) => void;
   permissionResolved: (sessionId: string, requestId: string) => void;
+  permissionState: (sessionId: string, state: ApprovalState) => void;
   complete: (sessionId: string, claudeSessionId: string | null) => void;
   error: (sessionId: string, error: string) => void;
   sessionStopped: (sessionId: string) => void;
@@ -168,7 +171,15 @@ export interface CoworkRuntime {
   getForkCompactionSummary?(sessionId: string, beforeCreatedAt?: number): Promise<CoworkForkCompactionSummary | null>;
   stopSession(sessionId: string): void;
   cancelSessionConfirmed?(sessionId: string): Promise<boolean>;
-  respondToPermissionConfirmed?(requestId: string, result: PermissionResult): Promise<void>;
+  respondToPermissionConfirmed?(requestId: string, result: PermissionResult, options?: ApprovalDecisionOptions): Promise<ApprovalDecisionOutcome>;
+  getPermissionState?(requestId: string): ApprovalState | null;
+  listPendingPermissions?(): Array<{ sessionId: string; request: PermissionRequest }>;
+  getApprovalSubmission?(submissionId: string): ApprovalDecisionOutcome | null;
+  reconcileApprovalSubmission?(submissionId: string, options?: ApprovalReconcileOptions): Promise<ApprovalDecisionOutcome | null>;
+  configureDualApproval?(configuration: DualApprovalConfiguration): void;
+  supportsDualApproval?(): boolean;
+  expirePermissions?(now?: number): void;
+  closeSessionPermissions?(sessionId: string, runId: string | null, status?: 'cancelled' | 'expired' | 'superseded'): void;
   stopAllSessions(): void;
   respondToPermission(requestId: string, result: PermissionResult): void;
   isSessionActive(sessionId: string): boolean;

@@ -1,6 +1,9 @@
+import { randomUUID } from 'node:crypto';
+
 import { EventEmitter } from 'events';
 
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
+import type { ApprovalDecisionOptions, ApprovalDecisionOutcome, ApprovalReconcileOptions, ApprovalState, DualApprovalConfiguration } from '../../../shared/cowork/approval';
 import type {
   CoworkBtwAbortResponse,
   CoworkBtwSubmitResponse,
@@ -16,6 +19,7 @@ import type {
   CoworkRuntimeEvents,
   CoworkSessionPatchResult,
   CoworkStartOptions,
+  PermissionRequest,
   PermissionResult,
 } from './types';
 import { ENGINE_SWITCHED_CODE } from './types';
@@ -165,12 +169,27 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     return this.runtime.cancelSessionConfirmed(sessionId);
   }
 
-  async respondToPermissionConfirmed(requestId: string, result: PermissionResult): Promise<void> {
-    const sessionId = this.requestSession.get(requestId);
-    if (sessionId) this.assertSessionAccess(sessionId);
+  async respondToPermissionConfirmed(requestId: string, result: PermissionResult, options?: ApprovalDecisionOptions): Promise<ApprovalDecisionOutcome> {
+    const sessionId = this.runtime.getPermissionState?.(requestId)?.sessionId ?? this.requestSession.get(requestId);
+    if (!sessionId) return { kind: 'known_not_applied', reason: 'APPROVAL_STALE' };
+    this.assertSessionAccess(sessionId);
     if (!this.runtime.respondToPermissionConfirmed) throw new Error('Confirmed approval unavailable');
-    await this.runtime.respondToPermissionConfirmed(requestId, result);
+    const actual = options ?? { submissionId: randomUUID(), source: 'desktop' as const };
+    return this.runtime.respondToPermissionConfirmed(requestId, result, { ...actual, beforeDispatch: async () => {
+      this.assertSessionAccess(sessionId);
+      await actual.beforeDispatch?.();
+      this.assertSessionAccess(sessionId);
+    } });
   }
+
+  getPermissionState(id: string): ApprovalState | null { return this.runtime.getPermissionState?.(id) ?? null; }
+  getApprovalSubmission(id: string): ApprovalDecisionOutcome | null { return this.runtime.getApprovalSubmission?.(id) ?? null; }
+  reconcileApprovalSubmission(id: string, options?: ApprovalReconcileOptions): Promise<ApprovalDecisionOutcome | null> { return this.runtime.reconcileApprovalSubmission?.(id, options) ?? Promise.resolve(null); }
+  configureDualApproval(configuration: DualApprovalConfiguration): void { this.runtime.configureDualApproval?.(configuration); }
+  supportsDualApproval(): boolean { return this.runtime.supportsDualApproval?.() ?? false; }
+  expirePermissions(now?: number): void { this.runtime.expirePermissions?.(now); }
+  closeSessionPermissions(id: string, runId: string | null, status?: 'cancelled' | 'expired' | 'superseded'): void { this.runtime.closeSessionPermissions?.(id, runId, status); }
+  listPendingPermissions(): Array<{ sessionId: string; request: PermissionRequest }> { return this.runtime.listPendingPermissions?.() ?? []; }
 
   stopSession(sessionId: string): void {
     this.runtime.stopSession(sessionId);
@@ -186,19 +205,10 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   respondToPermission(requestId: string, result: PermissionResult): void {
-    const sessionId = this.requestSession.get(requestId);
-    if (sessionId) this.assertSessionAccess(sessionId);
-    const engine = this.requestEngine.get(requestId);
-    if (engine) {
-      this.runtime.respondToPermission(requestId, result);
-      if (result.behavior === 'allow' || result.behavior === 'deny') {
-        this.requestEngine.delete(requestId);
-        this.requestSession.delete(requestId);
-      }
-      return;
-    }
-
-    this.runtime.respondToPermission(requestId, result);
+    void this.respondToPermissionConfirmed(requestId, result).catch(error => {
+      const state = this.runtime.getPermissionState?.(requestId);
+      if (state) this.emit('error', state.sessionId, error instanceof Error ? error.message : String(error));
+    });
   }
 
   isSessionActive(sessionId: string): boolean {
@@ -281,6 +291,8 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       this.requestSession.set(request.requestId, sessionId);
       this.emit('permissionRequest', sessionId, request);
     });
+
+    runtime.on('permissionState', (sessionId, state) => this.emit('permissionState', sessionId, state));
 
     runtime.on('permissionResolved', (sessionId, requestId) => {
       this.requestEngine.delete(requestId);

@@ -81,6 +81,7 @@ import {
   normalizeBrowserWebAccessConfig,
 } from '../shared/browserWebAccess/constants';
 import { ClipboardIpc } from '../shared/clipboard/constants';
+import type { ApprovalState } from '../shared/cowork/approval';
 import {
   type CoworkBrowserAnnotationMessageBatch,
   normalizeBrowserAnnotationBatches,
@@ -217,6 +218,7 @@ import { type AutoLaunchStatus, getAutoLaunchStatus, isAutoLaunched, setAutoLaun
 import { BrowserCredentialApprovalService } from './browserCredentials/browserCredentialApprovalService';
 import { BrowserCredentialService } from './browserCredentials/browserCredentialService';
 import { getRecentComputerUseLogEntries } from './computerUse/computerUseLogs';
+import { type CoworkPermissionSubmission,submitCoworkPermission } from './coworkPermissionIpc';
 import { type CoworkForkContextMessage, type CoworkMessage, CoworkStore } from './coworkStore';
 import {
   buildEnterpriseAccountRequestHeaders,
@@ -287,7 +289,6 @@ import {
   type CoworkAgentEngine,
   CoworkEngineRouter,
   OpenClawRuntimeAdapter,
-  type PermissionResult,
 } from './libs/agentEngine';
 import {
   appQuitConfirmationGate,
@@ -3299,6 +3300,7 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
 };
 
 const coworkPermissionSessions = new Map<string, string>();
+const coworkRuntimePermissionIds = new Set<string>();
 
 const canViewCoworkSession = (sessionId: string): boolean => {
   try {
@@ -3441,7 +3443,10 @@ const bindCoworkRuntimeForwarder = (): void => {
 
   runtime.on('permissionRequest', (sessionId: string, request: unknown) => {
     const incomingId = (request as { requestId?: unknown } | null)?.requestId;
-    if (typeof incomingId === 'string') coworkPermissionSessions.set(incomingId, sessionId);
+    if (typeof incomingId === 'string') {
+      coworkPermissionSessions.set(incomingId, sessionId);
+      coworkRuntimePermissionIds.add(incomingId);
+    }
     if (!canViewCoworkSession(sessionId)) return;
     if (runtime.getSessionConfirmationMode(sessionId) === 'text') {
       return;
@@ -3465,14 +3470,43 @@ const bindCoworkRuntimeForwarder = (): void => {
     }
   });
 
-  runtime.on('permissionResolved', (_sessionId: string, requestId: string) => {
+  runtime.on('permissionState', (sessionId: string, state: ApprovalState) => {
+    if (state.status === 'pending') {
+      coworkPermissionSessions.set(state.requestId, sessionId);
+      coworkRuntimePermissionIds.add(state.requestId);
+    }
+    if (!canViewCoworkSession(sessionId)) return;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(CoworkIpcChannel.StreamPermissionState, { sessionId, state });
+      } catch (error) {
+        console.warn('[CoworkApproval] Failed to forward approval state:', error);
+      }
+    }
+  });
+
+  runtime.on('permissionResolved', (sessionId: string, requestId: string) => {
     coworkPermissionSessions.delete(requestId);
+    coworkRuntimePermissionIds.delete(requestId);
     getDesktopNotificationManager().handlePermissionResolved(requestId);
+    if (!canViewCoworkSession(sessionId)) return;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(CoworkIpcChannel.StreamPermissionDismiss, { requestId });
+      } catch (error) {
+        console.warn('[CoworkApproval] Failed to dismiss approval:', error);
+      }
+    }
   });
 
   runtime.on('sessionStopped', (sessionId: string) => {
     for (const [requestId, ownerSessionId] of coworkPermissionSessions) {
-      if (ownerSessionId === sessionId) coworkPermissionSessions.delete(requestId);
+      if (ownerSessionId === sessionId) {
+        coworkPermissionSessions.delete(requestId);
+        coworkRuntimePermissionIds.delete(requestId);
+      }
     }
     if (!canViewCoworkSession(sessionId)) return;
     getDesktopNotificationManager().handleSessionStopped(sessionId);
@@ -5507,6 +5541,9 @@ if (!gotTheLock) {
       onStateChange: () => remoteSettingsController?.notify(),
       prepare: (command, owner, workspace) => remoteSessionCommands!.prepare(command, owner, workspace),
       execute: (entry, stillPermitted) => remoteSessionCommands!.execute(entry, stillPermitted),
+      supportsDualApproval: () => getCoworkEngineRouter().supportsDualApproval?.() === true,
+      configureDualApproval: options => getCoworkEngineRouter().configureDualApproval?.(options),
+      reconcileApproval: entry => remoteSessionCommands!.reconcileApproval(entry),
       onAccountChange: (previous, current) => remoteSessionCommands!.accountChanged(previous, current),
     });
     remoteBridge.start();
@@ -10701,59 +10738,42 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:permission:respond', async (_event, options: {
-    requestId: string;
-    result: PermissionResult;
-  }) => {
+  ipcMain.handle(CoworkIpcChannel.PermissionList, () => {
+    const runtime = getCoworkEngineRouter();
+    const items = (runtime.listPendingPermissions?.() ?? [])
+      .filter(item => canViewCoworkSession(item.sessionId) && runtime.getSessionConfirmationMode(item.sessionId) !== 'text')
+      .map(item => ({ sessionId: item.sessionId, request: sanitizePermissionRequestForIpc(item.request) }));
+    return { success: true, items };
+  });
+
+  ipcMain.handle(CoworkIpcChannel.PermissionRespond, async (_event, options: CoworkPermissionSubmission) => {
     try {
-      const sessionId = coworkPermissionSessions.get(options.requestId);
-      if (!sessionId || !canViewCoworkSession(sessionId)) throw new Error(t('agentAccessUnavailable'));
-      // Dual-dispatch pattern: permission responses arrive through one IPC channel
-      // but may target either of two independent subsystems.
-      //
-      // - resolveAskUser() handles AskUserQuestion plugin requests routed through
-      //   the McpBridgeServer HTTP callback. It is a no-op when the requestId does
-      //   not match a pending bridge request (i.e. for normal SDK permission requests).
-      //
-      // - respondToPermission() handles standard Claude Agent SDK permission requests
-      //   managed by the CoworkEngineRouter. It is a no-op when the requestId does
-      //   not match a pending SDK permission (i.e. for bridge plugin requests).
-      //
-      // Both calls are safe to invoke unconditionally; exactly one will match.
-
-        // AskUserQuestion plugin responses go to the bridge server, not the runtime
-        if (options.requestId) {
-          const result = options.result;
-          const askUserResponse: AskUserResponse = {
-            behavior: result.behavior === 'allow' ? 'allow' : 'deny',
-            answers:
-              result.behavior === 'allow' &&
-              result.updatedInput &&
-              typeof result.updatedInput === 'object'
-                ? ((result.updatedInput as Record<string, unknown>).answers as
-                    | Record<string, string>
-                    | undefined)
-                : undefined,
+      const outcome = await submitCoworkPermission(options, {
+        runtime: getCoworkEngineRouter(),
+        sessionForRequest: requestId => coworkPermissionSessions.get(requestId),
+        isRuntimeRequest: requestId => coworkRuntimePermissionIds.has(requestId),
+        canAccessSession: canViewCoworkSession,
+        accountKey: () => JSON.stringify(getCurrentRemoteOwner()),
+        resolveQuestion: (requestId, result) => {
+          const response: AskUserResponse = {
+            behavior: result.behavior,
+            answers: result.behavior === 'allow'
+              ? result.updatedInput?.answers as Record<string, string> | undefined : undefined,
           };
-          getMcpRuntime().resolveAskUser(options.requestId, askUserResponse);
-        }
-
-        const runtime = getCoworkEngineRouter();
-        runtime.respondToPermission(options.requestId, options.result);
-        // Close the desktop notification for this request regardless of which
-        // subsystem handled it (runtime approvals emit permissionResolved on
-        // their own; AskUserQuestion bridge requests do not).
-        coworkPermissionSessions.delete(options.requestId);
-        getDesktopNotificationManager().handlePermissionResolved(options.requestId);
-        return { success: true };
-      } catch (error) {
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : 'Failed to respond to permission',
-        };
-      }
-    },
-  );
+          getMcpRuntime().resolveAskUser(requestId, response);
+          coworkPermissionSessions.delete(requestId);
+          getDesktopNotificationManager().handlePermissionResolved(requestId);
+          for (const win of BrowserWindow.getAllWindows()) {
+            if (!win.isDestroyed()) win.webContents.send(CoworkIpcChannel.StreamPermissionDismiss, { requestId });
+          }
+        },
+      });
+      return { success: outcome.kind === 'confirmed' || outcome.kind === 'question_resolved', outcome,
+        error: outcome.kind === 'unknown' || outcome.kind === 'known_not_applied' ? outcome.reason : undefined };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to respond to permission' };
+    }
+  });
 
   ipcMain.handle('cowork:config:get', async () => {
     try {

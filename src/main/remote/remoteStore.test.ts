@@ -165,3 +165,96 @@ describe('canonical hashes and installation identity', () => {
     expect(() => loadRemoteIdentity(dir, profile, { ...cipher, isEncryptionAvailable: () => false })).toThrow();
   });
 });
+
+describe('approval projection compatibility', () => {
+  function approval(overrides: Record<string, any> = {}): any {
+    return { approvalId: 'approval', runId: 'run', approvalVersion: '1', title: 'Execute', summary: 'Public action',
+      operationDigest: 'digest', remoteAllowed: true, requiresLocalAction: false, expiresAt: new Date(Date.now() + 60000).toISOString(),
+      status: 'pending', resolvedAt: null, resolution: { phase: 'idle', source: null, confirmedDecision: null, confirmedAt: null }, ...overrides };
+  }
+  it('omits extended fields and remote execution for legacy servers, leaving assigned events immutable', () => {
+    const store = fixture(); store.setEnabledOwner(owner); create(store, 's'); store.beginRun('s', 'run');
+    store.updateApproval('s', approval({ pendingDecision: 'approved' }));
+    const original = store.pending('s').find(event => event.eventType === 'approval.updated')!;
+    expect(original.payload.approval.resolution).toBeUndefined();
+    expect(original.payload.approval.pendingDecision).toBeUndefined();
+    expect(original.payload.approval.remoteAllowed).toBe(false);
+    store.setApprovalProjectionSupported(true);
+    store.updateApproval('s', approval({ approvalVersion: '2' }));
+    const events = store.pending('s').filter(event => event.eventType === 'approval.updated');
+    expect(events[0]).toEqual(original);
+    expect(events[1].payload.approval).toMatchObject({ approvalVersion: '2', remoteAllowed: true, resolution: { phase: 'idle' } });
+  });
+  it('keeps newer and closed approvals monotonic while retaining late confirmed history', () => {
+    const store = fixture(); store.setEnabledOwner(owner); create(store, 's'); store.beginRun('s', 'run');
+    const resolvedAt = new Date().toISOString();
+    store.updateApproval('s', approval({ approvalVersion: '2', status: 'cancelled', remoteAllowed: false, resolvedAt,
+      resolution: { phase: 'finished', source: 'system', confirmedDecision: null, confirmedAt: null } }));
+    store.updateRun('s', 'cancelled');
+    store.updateApproval('s', approval({ approvalVersion: '1' }));
+    store.updateApproval('s', approval({ approvalVersion: '3' }));
+    expect(store.get<any>('approval:s:approval')?.status).toBe('cancelled');
+    const before = store.run('s');
+    store.updateApproval('s', approval({ approvalVersion: '3', status: 'cancelled', remoteAllowed: false, resolvedAt,
+      resolution: { phase: 'finished', source: 'unknown', confirmedDecision: 'approve', confirmedAt: new Date().toISOString() } }));
+    expect(store.get<any>('approval:s:approval')?.resolution.confirmedDecision).toBe('approve');
+    expect(store.get<any>('approval:s:approval')?.resolvedAt).toBe(resolvedAt);
+    expect(store.run('s')).toEqual(before);
+  });
+  it('does not let wall clock expiry overwrite a dispatched unknown decision', () => {
+    const store = fixture(); store.setEnabledOwner(owner); create(store, 's'); store.beginRun('s', 'run');
+    store.updateApproval('s', approval({ remoteAllowed: false, resolution: { phase: 'unknown', source: 'mobile', confirmedDecision: null, confirmedAt: null } }));
+    store.expireApprovals(Date.now() + 3600000);
+    expect(store.get<any>('approval:s:approval')?.status).toBe('pending');
+    expect(store.run('s')?.status).toBe('reconciling');
+  });
+});
+
+it('sends exact approval closure before a published run terminal even when each event is a separate HTTP batch', () => {
+  const store = fixture(); store.setEnabledOwner(owner); store.setApprovalProjectionSupported(true);
+  create(store, 's'); store.beginRun('s', 'run');
+  const approval = { approvalId: 'approval', runId: 'run', approvalVersion: '1', title: 'Execute', summary: 'Safe action',
+    operationDigest: 'digest', remoteAllowed: true, requiresLocalAction: false, expiresAt: new Date(Date.now() + 60000).toISOString(),
+    status: 'pending', resolvedAt: null, resolution: { phase: 'idle', source: null, confirmedDecision: null, confirmedAt: null } };
+  store.updateApproval('s', approval);
+  const initial = store.pending('s');
+  const boundary = Number(initial.at(-1)!.sourceSeq);
+  const resolvedAt = '2026-09-10T01:02:03.000Z';
+  const closed = { ...approval, approvalVersion: '2', status: 'cancelled', remoteAllowed: false, resolvedAt,
+    resolution: { phase: 'finished', source: 'system', confirmedDecision: null, confirmedAt: null } };
+  store.transaction(() => { store.updateApproval('s', closed); store.updateRun('s', 'cancelled'); });
+  const finishing = store.pending('s').filter(event => Number(event.sourceSeq) > boundary);
+  const approvalAt = finishing.findIndex(event => event.eventType === 'approval.updated');
+  const runAt = finishing.findIndex(event => event.eventType === 'run.updated');
+  const summaryAt = finishing.findIndex(event => event.eventType === 'session.upsert');
+  expect(approvalAt).toBeGreaterThanOrEqual(0); expect(approvalAt).toBeLessThan(runAt); expect(approvalAt).toBeLessThan(summaryAt);
+  // Model the previous server's stronger per-event cancellation behavior. Splitting into
+  // one-event batches must never create a server-clock resolvedAt competing with our v2.
+  let serverApproval: any = null;
+  let synthesized = 0;
+  for (const event of [...initial, ...finishing]) {
+    if (event.eventType === 'approval.updated') {
+      const incoming = event.payload.approval;
+      if (serverApproval?.approvalVersion === incoming.approvalVersion) expect(incoming).toEqual(serverApproval);
+      serverApproval = incoming;
+    } else if (event.eventType === 'run.updated' && event.payload.run.status === 'cancelled' && serverApproval?.status === 'pending') {
+      synthesized++;
+      serverApproval = { ...serverApproval, status: 'cancelled', approvalVersion: String(BigInt(serverApproval.approvalVersion) + 1n), resolvedAt: '2026-09-10T02:00:00.000Z' };
+    }
+  }
+  expect(synthesized).toBe(0); expect(serverApproval).toEqual(closed);
+});
+it('does not retrofit resolution into an already published legacy approval at the same version', () => {
+  const store = fixture(); store.setEnabledOwner(owner); create(store, 's'); store.beginRun('s', 'run');
+  const resolvedAt = new Date().toISOString();
+  const closed = { approvalId: 'approval', runId: 'run', approvalVersion: '2', title: 'Execute', summary: 'Action', operationDigest: 'digest',
+    remoteAllowed: false, requiresLocalAction: false, expiresAt: resolvedAt, status: 'cancelled', resolvedAt,
+    resolution: { phase: 'finished', source: 'system', confirmedDecision: null, confirmedAt: null } };
+  store.updateApproval('s', closed);
+  const initial = store.pending('s').find(event => event.eventType === 'approval.updated')!;
+  store.setApprovalProjectionSupported(true); store.snapshot('s');
+  expect(store.pending('s').filter(event => event.eventType === 'approval.updated')).toEqual([initial]);
+  store.updateApproval('s', { ...closed, approvalVersion: '3', resolution: { ...closed.resolution, source: 'unknown', confirmedDecision: 'approve', confirmedAt: resolvedAt } });
+  const events = store.pending('s').filter(event => event.eventType === 'approval.updated');
+  expect(events.at(-1)?.payload.approval).toMatchObject({ approvalVersion: '3', resolution: { confirmedDecision: 'approve' } });
+});

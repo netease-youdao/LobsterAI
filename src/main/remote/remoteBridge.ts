@@ -2,11 +2,13 @@ import { randomUUID } from 'crypto';
 import { statSync } from 'fs';
 import { resolve } from 'path';
 
+import type { ApprovalDecisionOutcome } from '../../shared/cowork/approval';
 import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, REMOTE_PROTOCOL_VERSION, REMOTE_TEXT_BYTES, RemoteCapability, RemoteConnectionReason, type RemoteConnectionReasonValue, RemoteConnectionStatus, type RemoteOwner, type RemoteSettingsState, RemoteSyncStatus, type RemoteWorkspace } from '../../shared/remote/constants';
 import type { AgentOwnerStore } from '../agentOwnership';
 import { payloadHash, remoteError, sameOwner, stableJson } from './canonical';
 import type { RemoteIdentity } from './installationIdentity';
 import { type AgentWorkspace,RemoteAgentCatalog, RemoteAgentError } from './remoteAgentCatalog';
+import { approvalCommandError, RemoteApprovalError } from './remoteApproval';
 import { type ProjectionRecord, RemoteStore, type SyncRow } from './remoteStore';
 
 export interface RemoteCommand {
@@ -24,6 +26,9 @@ interface SavedImport { importId: string; sessionId: string; baseSourceSeq: stri
 export interface BridgeDependencies {
   store: RemoteStore; identity: RemoteIdentity;
   agentOwnership?: AgentOwnerStore;
+  supportsDualApproval?(): boolean;
+  configureDualApproval?(options: { enabled: boolean; projectionSupported: boolean }): void;
+  reconcileApproval?(entry: InboxEntry): Promise<ApprovalDecisionOutcome | null>;
   getAgentWorkspace?(agentId: string): AgentWorkspace | Promise<AgentWorkspace>;
   getDefaultWorkspace?(): { path: string; name: string; available?: boolean } | Promise<{ path: string; name: string; available?: boolean }>;
   onStateChange?(): void;
@@ -69,6 +74,7 @@ export class RemoteBridge {
   private workspaceUnavailable = false;
   private readonly agentCatalog: RemoteAgentCatalog | null;
   private agentCapabilities: string[] = [];
+  private declaredDualApproval = false;
   private declaredAgentCapabilities: string[] = [];
   private agentCatalogRevision = 0;
   private publishedCatalogRevision = -1;
@@ -158,6 +164,8 @@ export class RemoteBridge {
     this.sameAccountAccess = false; this.workspaceUnavailable = false; this.error = undefined; this.errorCode = undefined;
     this.connectionReason = RemoteConnectionReason.Connecting;
     this.deps.store.setEnabledOwner(null); this.disconnect();
+    this.declaredDualApproval = false; this.deps.store.setApprovalProjectionSupported(false);
+    this.deps.configureDualApproval?.({ enabled: false, projectionSupported: false });
     this.deps.onAccountChange(previous, current); this.changed();
   }
   private queueControl(settings: LocalSettings): void {
@@ -227,7 +235,7 @@ export class RemoteBridge {
         catch { this.workspaceUnavailable = true; }
       }
       await this.ensureRegistration();
-      if (this.agentCatalog && Date.now() - this.lastCapabilityCheck > 45000) await this.refreshCapabilities();
+      if ((this.agentCatalog || this.deps.supportsDualApproval) && Date.now() - this.lastCapabilityCheck > 45000) await this.refreshCapabilities();
       await this.writeSettings();
       if (!sameOwner(owner, this.owner) || !sameOwner(owner, this.deps.getOwner())) return;
       if (!this.settings().enabled) { this.backoff = 30000; return; }
@@ -310,7 +318,7 @@ export class RemoteBridge {
   }
   private advertisedCapabilities(createSessionAvailable = true): string[] {
     const supported = this.declaredAgentCapabilities.includes(RemoteCapability.AgentSelection) || createSessionAvailable && this.settings().createSessionAvailable !== false ? capabilities : capabilities.filter(value => value !== RemoteCapability.CreateSession);
-    return [...(this.sameAccountAccess ? [...supported, RemoteCapability.SameAccountAccess] : supported), ...this.declaredAgentCapabilities];
+    return [...(this.sameAccountAccess ? [...supported, RemoteCapability.SameAccountAccess] : supported), ...this.declaredAgentCapabilities, ...(this.declaredDualApproval ? [RemoteCapability.DualApproval] : [])];
   }
   private async ensureRegistration(): Promise<void> {
     if (this.registration) return;
@@ -327,7 +335,7 @@ export class RemoteBridge {
       // Legacy servers still receive a saved disable; never announce an unsupported capability to them.
       if (!this.controls().some(intent => !intent.enabled)) throw new RemoteApiError(47000, 'Server upgrade required for same-account remote access');
     }
-    const previous = stableJson(this.declaredAgentCapabilities);
+    const previous = stableJson([this.declaredAgentCapabilities, this.declaredDualApproval]);
     const supported = Array.isArray(support.capabilities) ? support.capabilities : [];
     this.agentCapabilities = this.agentCatalog && supported.includes(RemoteCapability.SessionAgent) ? [RemoteCapability.SessionAgent] : [];
     if (this.agentCapabilities.length && supported.includes(RemoteCapability.AgentCatalog)
@@ -346,8 +354,15 @@ export class RemoteBridge {
     const implemented: string[] = [RemoteCapability.SessionAgent, RemoteCapability.AgentCatalog, RemoteCapability.AgentSelection];
     this.declaredAgentCapabilities = this.agentCatalog ? [...new Set([...saved, ...this.agentCapabilities])].filter(value => implemented.includes(value)).sort() : [];
     this.deps.store.put(declarationKey, this.declaredAgentCapabilities);
+    const dualKey = `dualApprovalCapability:${this.owner!.userId}:${this.owner!.scopeKey}`;
+    const dualEnabled = this.deps.supportsDualApproval?.() === true && supported.includes(RemoteCapability.DualApproval);
+    // This is a protocol declaration, not an admission flag. Never erase in-flight extended state.
+    this.declaredDualApproval = this.deps.store.get<boolean>(dualKey) === true || dualEnabled;
+    if (this.declaredDualApproval) this.deps.store.put(dualKey, true);
+    this.deps.store.setApprovalProjectionSupported(this.declaredDualApproval);
+    this.deps.configureDualApproval?.({ enabled: dualEnabled, projectionSupported: this.declaredDualApproval });
     this.lastCapabilityCheck = Date.now();
-    if (this.registration && previous !== stableJson(this.declaredAgentCapabilities)) this.queueControl(this.settings());
+    if (this.registration && previous !== stableJson([this.declaredAgentCapabilities, this.declaredDualApproval])) this.queueControl(this.settings());
   }
   private async register(): Promise<void> {
     await this.refreshCapabilities();
@@ -668,11 +683,21 @@ export class RemoteBridge {
     catch (error) {
       entry.state = error instanceof RemoteAgentError ? 'rejected' : 'unknown';
       entry.result = error instanceof RemoteAgentError ? { ...remoteError(error.code, error.reason, error.message), reasonDetail: error.reasonDetail } : null;
-      if (entry.state === 'rejected' && entry.localSessionId && entry.runId
+      if (error instanceof RemoteApprovalError) this.mergeApprovalOutcome(entry, error.outcome);
+      if (['create_session', 'send_message'].includes(entry.command.type) && entry.state === 'rejected' && entry.localSessionId && entry.runId
         && this.deps.store.get<boolean>(`runPublished:${entry.runId}`) === false) this.deps.store.updateRun(entry.localSessionId, 'failed');
     }
     this.deps.store.put(`inbox:${entry.command.commandId}`, entry);
     if (entry.state === 'applied' || entry.state === 'rejected') { const result = await this.ack(entry, entry.state); entry.command = { ...entry.command, ...result }; this.deps.store.put(`inbox:${entry.command.commandId}`, entry); }
+  }
+  private mergeApprovalOutcome(entry: InboxEntry, outcome: ApprovalDecisionOutcome): void {
+    if (outcome.kind === 'confirmed') {
+      entry.state = 'applied'; entry.result = { outcome: 'approval_applied' };
+    } else if (outcome.kind === 'known_not_applied') {
+      entry.state = 'rejected'; entry.result = approvalCommandError(outcome.reason);
+    } else if (!['applied', 'rejected'].includes(entry.state)) {
+      entry.state = 'unknown'; entry.result = null;
+    }
   }
   private async reconcile(): Promise<void> {
     let cursor: string | null = null;
@@ -683,7 +708,7 @@ export class RemoteBridge {
         delete (command as any).command;
         let entry = this.deps.store.get<InboxEntry>(`inbox:${command.commandId}`);
         if (entry && !sameOwner(entry.owner, this.owner)) continue;
-        if (!entry && envelope.currentClaimId && this.deps.store.hasCompleteExecutionHistory()
+        if (!entry && command.type !== 'approval_response' && envelope.currentClaimId && this.deps.store.hasCompleteExecutionHistory()
           && payloadHash(command.request) === command.requestHash
           && !this.deps.store.entries<any>('run:').some(row => row.value.runId === command.runId)) {
           try {
@@ -714,8 +739,12 @@ export class RemoteBridge {
           continue;
         }
         try {
+        if (entry.command.type === 'approval_response' && this.deps.reconcileApproval) {
+          const outcome = await this.deps.reconcileApproval(entry);
+          if (outcome) { this.mergeApprovalOutcome(entry, outcome); this.deps.store.put(`inbox:${entry.command.commandId}`, entry); }
+        }
         const observedExecution = entry.state === 'applied' ? 'applied' : entry.state === 'rejected' ? 'not_applied'
-          : entry.state === 'prepared' && this.deps.store.hasCompleteExecutionHistory()
+          : entry.command.type !== 'approval_response' && entry.state === 'prepared' && this.deps.store.hasCompleteExecutionHistory()
             && (!entry.runId || this.deps.store.get<boolean>(`runPublished:${entry.runId}`) !== true) ? 'not_started' : 'unknown';
         const reconciled = await this.api(`/commands/${command.commandId}/reconcile`, 'POST', { ...this.transport(),
           expectedStatusVersion: command.statusVersion, claimId: entry.command.claimId, ...(entry.command.claimToken ? { claimToken: entry.command.claimToken } : {}),
@@ -726,12 +755,12 @@ export class RemoteBridge {
         if (['applied', 'rejected', 'expired'].includes(entry.command.status)) {
           entry.state = entry.command.status === 'applied' ? 'applied' : 'rejected';
           entry.result = reconciled.command.result || reconciled.command.error || entry.result;
-          if (entry.state === 'rejected' && entry.localSessionId && entry.runId
+          if (['create_session', 'send_message'].includes(entry.command.type) && entry.state === 'rejected' && entry.localSessionId && entry.runId
             && this.deps.store.get<boolean>(`runPublished:${entry.runId}`) === false) this.deps.store.updateRun(entry.localSessionId, 'failed');
         }
         if (reconciled.executionPermit) entry.command = { ...entry.command, ...reconciled.executionPermit };
         this.deps.store.put(`inbox:${command.commandId}`, entry);
-        if (reconciled.executionPermit && this.generation && !['applied', 'rejected', 'expired'].includes(entry.command.status)) {
+        if (entry.command.type !== 'approval_response' && reconciled.executionPermit && this.generation && !['applied', 'rejected', 'expired'].includes(entry.command.status)) {
           if (entry.preparationError) { entry.state = 'rejected'; entry.result = entry.preparationError; this.deps.store.put(`inbox:${command.commandId}`, entry); }
           await this.applyEntry(entry, this.generation);
         }

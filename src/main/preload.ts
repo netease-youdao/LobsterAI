@@ -44,6 +44,7 @@ import {
   type BrowserRuntimeProfile,
 } from '../shared/browserWebAccess/constants';
 import { ClipboardIpc } from '../shared/clipboard/constants';
+import type { ApprovalState } from '../shared/cowork/approval';
 import type { CoworkBrowserAnnotationMessageBatch } from '../shared/cowork/browserAnnotations';
 import type {
   CoworkBtwAbortRequest,
@@ -657,8 +658,9 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.CancelMediaTask, taskId),
 
     // Permission handling
-    respondToPermission: (options: { requestId: string; result: any }) =>
-      ipcRenderer.invoke('cowork:permission:respond', options),
+    listPendingPermissions: () => ipcRenderer.invoke(CoworkIpcChannel.PermissionList),
+    respondToPermission: (options: { requestId: string; result: any; submissionId?: string; expectedVersion?: string; operationDigest?: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.PermissionRespond, options),
 
     // Configuration
     getConfig: () => ipcRenderer.invoke('cowork:config:get'),
@@ -781,6 +783,11 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_event: any, data: { sessionId: string; request: any }) => callback(data);
       ipcRenderer.on('cowork:stream:permission', handler);
       return () => ipcRenderer.removeListener('cowork:stream:permission', handler);
+    },
+    onStreamPermissionState: (callback: (data: { sessionId: string; state: ApprovalState }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string; state: ApprovalState }) => callback(data);
+      ipcRenderer.on(CoworkIpcChannel.StreamPermissionState, handler);
+      return () => ipcRenderer.removeListener(CoworkIpcChannel.StreamPermissionState, handler);
     },
     onStreamPermissionDismiss: (callback: (data: { requestId: string }) => void) => {
       const handler = (_event: any, data: { requestId: string }) => callback(data);

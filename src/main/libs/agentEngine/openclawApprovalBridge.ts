@@ -13,7 +13,8 @@ export type PendingApprovalEntry = {
   allowAlways?: boolean;
 };
 
-type ExecApprovalRequest = {
+export type ExecApprovalRequest = {
+  [key: string]: unknown;
   command?: string;
   cwd?: string | null;
   host?: string | null;
@@ -27,9 +28,12 @@ type ExecApprovalRequest = {
 type ExecApprovalRequestedPayload = {
   id?: string;
   request?: ExecApprovalRequest;
+  createdAtMs?: number;
+  expiresAtMs?: number;
 };
 
-type PluginApprovalRequest = {
+export type PluginApprovalRequest = {
+  [key: string]: unknown;
   pluginId?: string | null;
   title?: string;
   description?: string;
@@ -44,10 +48,14 @@ type PluginApprovalRequest = {
 type PluginApprovalRequestedPayload = {
   id?: string;
   request?: PluginApprovalRequest;
+  createdAtMs?: number;
+  expiresAtMs?: number;
 };
 
 export type ParsedExecApprovalRequest = {
   requestId: string;
+  createdAtMs: number | null;
+  expiresAtMs: number | null;
   request: ExecApprovalRequest;
   sessionKey: string;
   command: string;
@@ -56,6 +64,8 @@ export type ParsedExecApprovalRequest = {
 
 export type ParsedPluginApprovalRequest = {
   requestId: string;
+  createdAtMs: number | null;
+  expiresAtMs: number | null;
   request: PluginApprovalRequest;
   sessionKey: string;
   allowedDecisions?: ApprovalDecision[];
@@ -92,6 +102,8 @@ export const parseExecApprovalRequestedPayload = (payload: unknown): ParsedExecA
   const command = typeof request.command === 'string' ? request.command : '';
   return {
     requestId,
+    createdAtMs: validTime(typedPayload.createdAtMs),
+    expiresAtMs: validTime(typedPayload.expiresAtMs),
     request,
     sessionKey,
     command,
@@ -110,16 +122,24 @@ export const parsePluginApprovalRequestedPayload = (payload: unknown): ParsedPlu
   const sessionKey = typeof request.sessionKey === 'string' ? request.sessionKey.trim() : '';
   return {
     requestId,
+    createdAtMs: validTime(typedPayload.createdAtMs),
+    expiresAtMs: validTime(typedPayload.expiresAtMs),
     request,
     sessionKey,
     allowedDecisions: normalizeApprovalDecisions(request.allowedDecisions),
   };
 };
 
-export const parseApprovalResolvedPayload = (payload: unknown): string | null => {
+const validTime = (value: unknown): number | null => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 8640000000000000 ? value : null;
+
+export const parseApprovalResolvedPayload = (payload: unknown): {
+  requestId: string; decision: ApprovalDecision | null; ts: number | null; request: Record<string, unknown> | null;
+} | null => {
   if (!isRecord(payload)) return null;
   const requestId = typeof payload.id === 'string' ? payload.id.trim() : '';
-  return requestId || null;
+  if (!requestId) return null;
+  return { requestId, decision: isApprovalDecision(payload.decision) ? payload.decision : null,
+    ts: validTime(payload.ts), request: isRecord(payload.request) ? payload.request : null };
 };
 
 export const buildExecApprovalPermissionRequest = (

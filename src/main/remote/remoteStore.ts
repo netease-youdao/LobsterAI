@@ -30,6 +30,8 @@ export class RemoteStore {
   private changeVersion = 0;
   private publishing = false;
   private artifactTracking = false;
+  private approvalProjectionSupported = false;
+  private approvalLifecycle: { expire(now: number): void; close(sessionId: string, runId: string, status: string): void } | null = null;
   private advanceCheckpoint: (() => number) | null = null;
   private enabledOwner: RemoteOwner | null = null;
   private wake: () => void = () => undefined;
@@ -104,6 +106,42 @@ export class RemoteStore {
 
   setWake(listener: () => void): void { this.wake = listener; }
   setEnabledOwner(owner: RemoteOwner | null): void { this.enabledOwner = owner; }
+  setApprovalProjectionSupported(supported: boolean): void { this.approvalProjectionSupported = supported; }
+  setApprovalLifecycle(lifecycle: { expire(now: number): void; close(sessionId: string, runId: string, status: string): void }): void { this.approvalLifecycle = lifecycle; }
+  /** Private runtime decisions and their public event are committed in the same SQLite transaction. */
+  updateApproval(sessionId: string, approval: Record<string, any>): void {
+    this.transaction(() => {
+      const key = `approval:${sessionId}:${approval.approvalId}`;
+      const previous = this.get<any>(key);
+      if (previous && (BigInt(previous.approvalVersion) >= BigInt(approval.approvalVersion))) return;
+      if (previous && previous.status !== 'pending' && approval.status === 'pending') return;
+      this.put(key, approval);
+      const controlChanged = !previous || ['status', 'remoteAllowed', 'requiresLocalAction'].some(field => previous[field] !== approval[field])
+        || previous.resolution?.phase !== approval.resolution?.phase;
+      if (controlChanged) this.bumpControl(sessionId);
+      this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId);
+      this.refreshApprovalRunState(sessionId);
+    });
+  }
+  updateLocalApprovalBlocker(sessionId: string, requestId: string, runId: string | null, pending: boolean): void {
+    this.transaction(() => {
+      const key = `localApprovalBlocker:${sessionId}:${requestId}`;
+      if (pending) this.put(key, { runId, status: 'pending', requiresLocalAction: true });
+      else this.remove(key);
+      this.refreshApprovalRunState(sessionId);
+    });
+  }
+  /** Approval completion alone never proves the engine has resumed its run. */
+  refreshApprovalRunState(sessionId: string, engineRunning = false): void {
+    const run = this.run(sessionId);
+    if (!run || terminal.has(run.status)) return;
+    const pending = [...this.entries<any>(`approval:${sessionId}:`), ...this.entries<any>(`localApprovalBlocker:${sessionId}:`)].map(row => row.value)
+      .filter(approval => approval.runId === run.runId && approval.status === 'pending');
+    const status = pending.some(approval => approval.resolution?.phase === 'unknown') ? 'reconciling'
+      : pending.some(approval => approval.requiresLocalAction && (!approval.resolution || approval.resolution.phase === 'idle')) ? 'waiting_local'
+      : pending.length ? 'waiting_approval' : engineRunning ? 'running' : null;
+    if (status) this.updateRun(sessionId, status);
+  }
   setAgentSummaryResolver(resolver: ((sessionId: string, owner: RemoteOwner) => RemoteAgentSummary | null) | null): void {
     if (Boolean(this.agentSummary) === Boolean(resolver)) { this.agentSummary = resolver; return; }
     this.agentSummary = resolver;
@@ -231,8 +269,12 @@ export class RemoteStore {
       this.put(`run:${sessionId}`, { ...previous, status, statusVersion: String(BigInt(previous.statusVersion) + 1n),
         finishedAt: terminal.has(status) ? iso(Date.now()) : null,
         error: error ? remoteError(47019, 'EXECUTION_FAILED', error) : null });
-      if (terminal.has(status)) for (const { key, value: approval } of this.entries<any>(`approval:${sessionId}:`)) {
-        if (approval.status === 'pending') this.put(key, { ...approval, status: 'cancelled', approvalVersion: String(BigInt(approval.approvalVersion) + 1n), resolvedAt: iso(Date.now()) });
+      if (terminal.has(status)) {
+        this.approvalLifecycle?.close(sessionId, previous.runId, status);
+        // Legacy records have no private decision service; never invent a decision from resolution alone.
+        for (const { key, value: approval } of this.entries<any>(`approval:${sessionId}:`)) {
+          if (approval.runId === previous.runId && approval.status === 'pending' && !approval.resolution) this.put(key, { ...approval, remoteAllowed: false, status: 'cancelled', approvalVersion: String(BigInt(approval.approvalVersion) + 1n), resolvedAt: iso(Date.now()) });
+        }
       }
       this.put(`runHistory:${sessionId}:${previous.runId}`, this.run(sessionId));
       this.bumpControl(sessionId);
@@ -240,14 +282,15 @@ export class RemoteStore {
     });
   }
   expireApprovals(now = Date.now()): void {
-    const expired = this.entries<any>('approval:').filter(row => row.value.status === 'pending' && Date.parse(row.value.expiresAt) <= now);
+    this.approvalLifecycle?.expire(now);
+    const expired = this.entries<any>('approval:').filter(row => row.value.status === 'pending' && !row.value.resolution && Date.parse(row.value.expiresAt) <= now);
     if (!expired.length) return;
     this.transaction(() => {
       for (const { key, value: approval } of expired) {
         const sessionId = key.slice('approval:'.length, key.indexOf(':', 'approval:'.length));
-        this.put(key, { ...approval, status: 'expired', resolvedAt: iso(now), approvalVersion: String(BigInt(approval.approvalVersion) + 1n) });
+        this.put(key, { ...approval, remoteAllowed: false, status: 'expired', resolvedAt: iso(now), approvalVersion: String(BigInt(approval.approvalVersion) + 1n) });
         this.bumpControl(sessionId);
-        if (this.run(sessionId)?.status === 'waiting_approval') this.updateRun(sessionId, 'waiting_local');
+        this.refreshApprovalRunState(sessionId);
         this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId);
       }
     });
@@ -319,6 +362,16 @@ export class RemoteStore {
       this.db.prepare('DELETE FROM remote_outbox WHERE session_id=?').run(sessionId);
     }
   }
+  private projectApproval(sessionId: string, approval: Record<string, any>): void {
+    const { pendingDecision: _pending, resolution, ...legacy } = approval;
+    let safe: Record<string, any> = this.approvalProjectionSupported ? { ...legacy, ...(resolution ? { resolution } : {}) } : { ...legacy, remoteAllowed: false };
+    const prior = this.db.prepare('SELECT record_json FROM remote_projection WHERE session_id=? AND object_key=?').get(sessionId, `approval:${approval.approvalId}`) as { record_json: string } | undefined;
+    const priorApproval = prior ? JSON.parse(prior.record_json).payload.approval : null;
+    // Capability negotiation alone cannot change the immutable content of an already
+    // published approval version (including a closed legacy item or an active reservation).
+    if (priorApproval?.approvalVersion === approval.approvalVersion) safe = priorApproval;
+    this.record(sessionId, `approval:${safe.approvalId}`, { eventType: 'approval.updated', payload: { approval: safe, controlVersion: this.controlVersion(sessionId) } });
+  }
   project(sessionId: string, summaryOnly = false): void {
     const s = this.db.prepare('SELECT * FROM cowork_sessions WHERE id=?').get(sessionId) as any;
     if (!s) { if (!this.get<string>(`deletedAt:${sessionId}`)) this.requireSnapshot(sessionId); const deletedAt = this.get<string>(`deletedAt:${sessionId}`) || iso(Date.now()); this.put(`deletedAt:${sessionId}`, deletedAt); this.record(sessionId, 'deleted', { eventType: 'session.deleted', payload: { deletedAt } }); return; }
@@ -329,6 +382,12 @@ export class RemoteStore {
     const messages = summaryOnly ? [] : this.db.prepare('SELECT * FROM cowork_messages WHERE session_id=? ORDER BY sequence,created_at,id').all(sessionId) as any[];
     const visible = messages.filter(publicMessage);
     const latestText = visible.filter(m => ['user', 'assistant'].includes(m.type)).at(-1)?.content || '';
+    const approvals = this.entries<any>(`approval:${sessionId}:`).map(row => row.value);
+    const publishedRunIds = new Set((this.db.prepare("SELECT object_key FROM remote_projection WHERE session_id=? AND object_key LIKE 'run:%'").all(sessionId) as Array<{ object_key: string }>).map(row => row.object_key.slice(4)));
+    // A run terminal event may be the last event in an HTTP batch. Publish the executor's
+    // exact approval closure first, so the server does not invent a competing cancellation.
+    // Initial projections still begin with session.upsert and introduce the run normally.
+    for (const approval of approvals) if (approval.status !== 'pending' && publishedRunIds.has(approval.runId)) this.projectApproval(sessionId, approval);
     this.record(sessionId, 'session', { eventType: 'session.upsert', payload: { session: {
       sessionId: this.sync(sessionId)?.session_id, title: shortName(publicText(s.title)), origin: this.get(`origin:${sessionId}`) || 'desktop',
       workspaceId: this.get(`workspace:${sessionId}`), preview: summaryOnly ? JSON.parse(previous!.record_json).payload.session.preview : preview(publicText(latestText)), createdAt: iso(s.created_at), updatedAt: iso(s.updated_at),
@@ -339,10 +398,7 @@ export class RemoteStore {
       const projectedRun = historicalRun.runId === run?.runId ? run : historicalRun;
       if (this.get<boolean>(`runPublished:${historicalRun.runId}`) !== false) this.record(sessionId, `run:${historicalRun.runId}`, { eventType: 'run.updated', payload: { run: projectedRun, controlVersion: this.controlVersion(sessionId) } });
     }
-    for (const { value: approval } of this.entries<any>(`approval:${sessionId}:`)) {
-      const { pendingDecision: _pending, ...safe } = approval;
-      this.record(sessionId, `approval:${safe.approvalId}`, { eventType: 'approval.updated', payload: { approval: safe, controlVersion: this.controlVersion(sessionId) } });
-    }
+    for (const approval of approvals) this.projectApproval(sessionId, approval);
     // Agent metadata changes reuse the committed preview and never scan/re-upload conversation messages.
     if (summaryOnly) return;
     const liveKeys = new Set<string>();

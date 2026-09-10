@@ -1,5 +1,6 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
+import type { ApprovalState } from '../../../shared/cowork/approval';
 import type { CoworkBrowserAnnotationBatch } from '../../../shared/cowork/browserAnnotations';
 import {
   COWORK_BTW_EPHEMERAL_THREAD_LIMIT,
@@ -110,6 +111,7 @@ interface CoworkState {
   detachedTailMessagesBySessionId: Record<string, CoworkMessage[]>;
   remoteManaged: boolean;
   pendingPermissions: CoworkPermissionRequest[];
+  permissionStates: Record<string, ApprovalState>;
   config: CoworkConfig;
   /** Media generation models fetched from server */
   mediaModels: { image: MediaModel[]; video: MediaModel[] };
@@ -118,6 +120,27 @@ interface CoworkState {
   /** Media generation mode selection per draft key */
   mediaSelection: Record<string, MediaGenerationSelection>;
   pendingMediaStatusUpdates: Record<string, Array<{ toolCallId: string; details: Record<string, unknown> }>>;
+}
+
+// State can arrive before its modal request or after a local IPC reply. Keep the
+// versioned terminal entry so a delayed pending request cannot reopen a dialog.
+function mergePermissionState(state: CoworkState, incoming: ApprovalState): void {
+  if (!/^[1-9]\d*$/u.test(incoming.approvalVersion)) return;
+  const previous = state.permissionStates[incoming.requestId];
+  if (previous && (previous.sessionId !== incoming.sessionId || previous.runId !== incoming.runId
+    || BigInt(previous.approvalVersion) >= BigInt(incoming.approvalVersion)
+    || previous.status !== 'pending' && previous.status !== incoming.status)) return;
+  state.permissionStates[incoming.requestId] = incoming;
+  if (incoming.status !== 'pending') {
+    state.pendingPermissions = state.pendingPermissions.filter(item => item.requestId !== incoming.requestId);
+    return;
+  }
+  const item = state.pendingPermissions.find(item => item.requestId === incoming.requestId);
+  if (item && item.sessionId === incoming.sessionId) {
+    item.approval = incoming;
+    item.submissionState = undefined;
+    item.submissionError = undefined;
+  }
 }
 
 const initialState: CoworkState = {
@@ -151,6 +174,7 @@ const initialState: CoworkState = {
   detachedTailMessagesBySessionId: {},
   remoteManaged: false,
   pendingPermissions: [],
+  permissionStates: {},
   config: {
     workingDirectory: '',
     systemPrompt: '',
@@ -1280,11 +1304,25 @@ const coworkSlice = createSlice({
     },
 
     enqueuePendingPermission(state, action: PayloadAction<CoworkPermissionRequest>) {
-      const alreadyQueued = state.pendingPermissions.some(
-        (permission) => permission.requestId === action.payload.requestId
-      );
-      if (alreadyQueued) return;
-      state.pendingPermissions.push(action.payload);
+      if (action.payload.approval) mergePermissionState(state, action.payload.approval);
+      const latest = state.permissionStates[action.payload.requestId];
+      if (latest && (latest.status !== 'pending' || latest.sessionId !== action.payload.sessionId)) return;
+      if (state.pendingPermissions.some(item => item.requestId === action.payload.requestId)) return;
+      state.pendingPermissions.push({ ...action.payload, approval: latest ?? action.payload.approval });
+    },
+
+    updatePendingPermissionState(state, action: PayloadAction<ApprovalState>) {
+      mergePermissionState(state, action.payload);
+    },
+
+    setPermissionSubmissionState(state, action: PayloadAction<{
+      requestId: string; phase?: 'submitting' | 'unknown'; error?: string;
+    }>) {
+      const item = state.pendingPermissions.find(item => item.requestId === action.payload.requestId);
+      if (item) {
+        item.submissionState = action.payload.phase;
+        item.submissionError = action.payload.error;
+      }
     },
 
     dequeuePendingPermission(state, action: PayloadAction<{ requestId?: string } | undefined>) {
@@ -1300,6 +1338,7 @@ const coworkSlice = createSlice({
 
     clearPendingPermissions(state) {
       state.pendingPermissions = [];
+      state.permissionStates = {};
     },
 
     setConfig(state, action: PayloadAction<CoworkConfig>) {
@@ -1574,6 +1613,8 @@ export const {
   updateSessionTitle,
   updateCurrentSessionModelOverride,
   enqueuePendingPermission,
+  updatePendingPermissionState,
+  setPermissionSubmissionState,
   dequeuePendingPermission,
   clearPendingPermissions,
   setConfig,

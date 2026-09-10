@@ -3,12 +3,14 @@ import { statSync } from 'fs';
 import { resolve } from 'path';
 
 import { AgentId, AgentOwnerKind } from '../../shared/agent/constants';
+import type { ApprovalDecisionOutcome, ApprovalState } from '../../shared/cowork/approval';
 import type { RemoteOwner } from '../../shared/remote/constants';
 import type { CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkRuntime, PermissionRequest } from '../libs/agentEngine/types';
-import { payloadHash,sameOwner } from './canonical';
+import { payloadHash, sameOwner } from './canonical';
 import { RemoteAgentError, remoteAgentFailure } from './remoteAgentCatalog';
+import { RemoteApprovalError } from './remoteApproval';
 import type { InboxEntry, RemoteCommand } from './remoteBridge';
 
 interface ExecutionContext { owner: RemoteOwner | null; preparedSessionId?: string; runId?: string; commandId?: string; stillPermitted?: () => boolean; assertAgentBinding?: () => void }
@@ -34,10 +36,11 @@ export class SessionCommandService {
   private continueHandler: ((options: any) => Promise<any>) | null = null;
   constructor(private readonly store: CoworkStore, private readonly runtime: CoworkRuntime, private readonly getOwner: () => RemoteOwner | null) {
     runtime.on('sessionStatus', (id, status) => {
-      if (status !== 'running' || !store.remote.owner(id)) return;
+      if (status !== 'running') return;
+      // Anonymous tasks also need per-run approval identity; ownership still controls upload.
       const run = store.remote.run(id);
       if (!run || terminal.has(run.status)) store.remote.beginRun(id);
-      store.remote.updateRun(id, 'running');
+      store.remote.refreshApprovalRunState(id, true);
     });
     runtime.on('complete', id => store.remote.updateRun(id, 'succeeded'));
     runtime.on('error', (id, error) => store.remote.updateRun(id, /disconnect|gateway|connection|socket/i.test(error) ? 'reconciling' : 'failed', t('remoteExecutionFailed')));
@@ -47,19 +50,20 @@ export class SessionCommandService {
       const mapping = store.remote.get<{ runId: string; remoteRunId: string }>(`gatewayRun:${id}`);
       if (mapping?.runId === gatewayRunId && mapping.remoteRunId === store.remote.run(id)?.runId) store.remote.updateRun(id, status);
     });
-    runtime.on('permissionRequest', (id, request) => this.permission(id, request));
-    runtime.on('permissionResolved', (id, requestId) => {
-      const key = `approval:${id}:${requestId}`;
-      const approval = store.remote.get<any>(key);
-      if (!approval) return;
-      store.remote.transaction(() => {
-        // Resolution alone cannot prove which decision won (another desktop may have answered).
-        if (approval.status === 'pending') {
-          store.remote.put(key, { ...approval, approvalVersion: String(BigInt(approval.approvalVersion) + 1n), status: approval.pendingDecision || 'superseded', resolvedAt: new Date().toISOString() });
-        }
-        if (approval.runId === store.remote.run(id)?.runId) store.remote.updateRun(id, 'running');
-      });
+    store.remote.setApprovalLifecycle({
+      expire: now => runtime.expirePermissions?.(now),
+      close: (sessionId, runId) => runtime.closeSessionPermissions?.(sessionId, runId, 'cancelled'),
     });
+    runtime.on('permissionRequest', (id, request) => this.permission(id, request));
+    runtime.on('permissionState', (id, state) => this.permissionState(id, state));
+    // A legacy ID-only event proves neither the winning decision nor that the engine resumed.
+    runtime.on('permissionResolved', (id, requestId) => {
+      const state = runtime.getPermissionState?.(requestId);
+      if (state) this.permissionState(id, state);
+      else store.remote.updateLocalApprovalBlocker(id, requestId, null, false);
+    });
+    // The runtime may have reconstructed dispatching -> unknown before these listeners existed.
+    for (const pending of runtime.listPendingPermissions?.() || []) this.permission(pending.sessionId, pending.request);
   }
   configure(start: (options: any) => Promise<any>, resume: (options: any) => Promise<any>): void { this.startHandler = start; this.continueHandler = resume; }
   async submit(options: any, create: boolean, handler: (options: any) => Promise<any>): Promise<any> {
@@ -187,17 +191,28 @@ export class SessionCommandService {
         return { success: true };
       }
       if (entry.command.type === 'approval_response') {
-        const key = `approval:${localId}:${request.payload.approvalId}`;
-        const approval = this.store.remote.get<any>(key);
-        if (!approval || approval.status !== 'pending' || !approval.remoteAllowed || approval.approvalVersion !== request.payload.approvalVersion
-          || approval.operationDigest !== request.payload.operationDigest || approval.runId !== entry.runId
-          || approval.requiresLocalAction || Date.parse(approval.expiresAt) <= Date.now()
-          || this.store.remote.run(localId)?.runId !== entry.runId) throw new Error('Approval stale or requires desktop');
-        this.store.remote.put(key, { ...approval, pendingDecision: request.payload.decision === 'approve' ? 'approved' : 'denied' });
-        if (!this.runtime.respondToPermissionConfirmed) throw new Error('Confirmed approval is unavailable');
-        assertRemoteExecutionPermit();
-        await this.runtime.respondToPermissionConfirmed(approval.approvalId, request.payload.decision === 'approve'
-          ? { behavior: 'allow', updatedInput: {} } : { behavior: 'deny', message: 'Denied from mobile' });
+        const payload = request.payload;
+        const state = this.runtime.getPermissionState?.(payload.approvalId);
+        // The runtime owns CAS, versions and dispatch evidence. Do not mutate the original command
+        // to match its incremented reservation version or infer a decision from an attempted click.
+        if (!state || state.sessionId !== localId || state.runId !== entry.runId || !this.runtime.respondToPermissionConfirmed) {
+          throw new RemoteApprovalError({ kind: 'known_not_applied', reason: 'APPROVAL_STALE' });
+        }
+        const outcome = await this.runtime.respondToPermissionConfirmed(payload.approvalId, payload.decision === 'approve'
+          ? { behavior: 'allow', updatedInput: {} } : { behavior: 'deny', message: 'Denied from mobile' }, {
+          submissionId: entry.command.commandId, source: 'mobile', expectedVersion: payload.approvalVersion,
+          operationDigest: payload.operationDigest, onDispatch: markRemoteExecutionDispatched,
+          beforeDispatch: () => {
+            assertRemoteExecutionPermit();
+            this.store.remote.assertActor(localId, entry.owner);
+            if (!sameOwner(this.getOwner(), entry.owner) || !sameOwner(this.store.remote.owner(localId), entry.owner)
+              || this.store.remote.run(localId)?.runId !== entry.runId) throw new Error('Approval owner or run changed');
+            const current = this.store.getSession(localId, 0);
+            if (!current || current.agentId !== session?.agentId || current.cwd !== session?.cwd) throw new Error('Approval binding changed');
+            this.store.assertAgentAccess(current.agentId || AgentId.Main, entry.owner);
+          },
+        });
+        if (!outcome || outcome.kind !== 'confirmed') throw new RemoteApprovalError(outcome || { kind: 'unknown', reason: 'RESULT_UNKNOWN' });
         return { success: true };
       }
       throw new Error('Unsupported command');
@@ -207,23 +222,46 @@ export class SessionCommandService {
       : entry.command.type === 'cancel_run' ? (result.alreadyTerminal ? 'already_terminal' : 'cancel_requested') : 'approval_applied' };
   }
   private permission(sessionId: string, request: PermissionRequest): void {
-    const run = this.store.remote.run(sessionId);
-    if (!run) return;
-    // Arbitrary shell commands and plugin descriptions can contain secrets. v1 safely requires desktop review.
-    const safeRemote = request.toolInput.approvalKind === 'plugin'
-      && request.toolInput.remoteSafe === true && typeof request.toolInput.publicSummary === 'string'
-      && typeof request.toolInput.expiresAt === 'string' && Date.parse(request.toolInput.expiresAt) > Date.now()
-      && Array.isArray(request.toolInput.allowedDecisions) && request.toolInput.allowedDecisions.includes('allow-once');
-    this.store.remote.transaction(() => {
-      this.store.remote.put(`approval:${sessionId}:${request.requestId}`, {
-        approvalId: request.requestId, runId: run.runId, approvalVersion: '1', title: t('remotePermissionRequired'),
-        summary: safeRemote ? String(request.toolInput.publicSummary).slice(0, 1000) : t('remoteReviewOnDesktop'),
-        operationDigest: payloadHash({ runId: run.runId, request: JSON.parse(JSON.stringify(request)) }), remoteAllowed: safeRemote,
-        requiresLocalAction: !safeRemote, expiresAt: typeof request.toolInput.expiresAt === 'string' && Number.isFinite(Date.parse(request.toolInput.expiresAt))
-          ? new Date(request.toolInput.expiresAt).toISOString() : new Date(Date.now() + 15 * 60000).toISOString(), status: 'pending', resolvedAt: null,
-      });
-      this.store.remote.updateRun(sessionId, safeRemote ? 'waiting_approval' : 'waiting_local');
+    const state = request.approval || this.runtime.getPermissionState?.(request.requestId);
+    if (state) this.permissionState(sessionId, state);
+    else {
+      // Unknown request kinds (including question forms) remain local; arbitrary toolInput
+      // remoteSafe/publicSummary values are never an authorization adapter.
+      this.store.remote.updateLocalApprovalBlocker(sessionId, request.requestId, this.store.remote.run(sessionId)?.runId || null, true);
+    }
+  }
+  private permissionState(sessionId: string, state: ApprovalState): void {
+    if (state.sessionId !== sessionId || !state.runId) return;
+    if (!state.expiresAt || !Number.isFinite(Date.parse(state.expiresAt))) {
+      this.store.remote.updateLocalApprovalBlocker(sessionId, state.requestId, state.runId, state.status === 'pending');
+      return; // The v1 DTO requires a real deadline; never invent one for an unverified request.
+    }
+    this.store.remote.updateApproval(sessionId, {
+      approvalId: state.requestId, runId: state.runId, approvalVersion: state.approvalVersion,
+      title: state.title, summary: state.summary, operationDigest: state.operationDigest,
+      remoteAllowed: state.remoteAllowed, requiresLocalAction: state.requiresLocalAction,
+      expiresAt: state.expiresAt, status: state.status, resolvedAt: state.resolvedAt, resolution: state.resolution,
     });
+  }
+  async reconcileApproval(entry: InboxEntry): Promise<ApprovalDecisionOutcome | null> {
+    if (entry.command.type !== 'approval_response' || !entry.localSessionId) return null;
+    // Receipt proof belongs to this exact original request/claim. A running task proves
+    // nothing about whether one of its approvals has already been sent to the Gateway.
+    const persisted = this.store.remote.get<InboxEntry>(`inbox:${entry.command.commandId}`);
+    const canProveNeverDispatched = Boolean(persisted && entry.command.claimId && entry.command.claimToken
+      && payloadHash(entry.command.request) === entry.command.requestHash
+      && persisted.command.requestHash === entry.command.requestHash
+      && persisted.command.claimId === entry.command.claimId && persisted.command.claimToken === entry.command.claimToken
+      && persisted.localSessionId === entry.localSessionId && persisted.runId === entry.runId
+      && sameOwner(persisted.owner, entry.owner) && this.store.remote.hasCompleteExecutionHistory());
+    const outcome = await this.runtime.reconcileApprovalSubmission?.(entry.command.commandId, { canProveNeverDispatched })
+      || this.runtime.getApprovalSubmission?.(entry.command.commandId) || null;
+    if (!outcome && canProveNeverDispatched && persisted?.state === 'prepared') {
+      // This inbox has never crossed the durable executing marker, so no local reservation
+      // or Gateway send was possible. Close the original command instead of renewing its permit.
+      return { kind: 'known_not_applied', reason: 'NEVER_DISPATCHED' };
+    }
+    return outcome;
   }
   accountChanged(previous: RemoteOwner | null, current: RemoteOwner | null): void {
     if (!previous || sameOwner(previous, current)) return;

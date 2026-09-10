@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RemoteCapability } from '../../shared/remote/constants';
 import { payloadHash } from './canonical';
 import { RemoteAgentError } from './remoteAgentCatalog';
+import { RemoteApprovalError } from './remoteApproval';
 import { type InboxEntry, RemoteApiError,RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
 
@@ -203,4 +204,112 @@ describe('Agent protocol negotiation and lost claim recovery', () => {
     else expect(acknowledgements).toHaveLength(0);
     bridge.stop();
   });
+});
+
+function approvalFixture() {
+  const result = fixture();
+  const envelope: any = result.envelope;
+  envelope.command.type = 'approval_response';
+  envelope.request = { ...envelope.request, type: 'approval_response', sessionId: 'remote', payload: {
+    runId: 'server-run', approvalId: 'approval', approvalVersion: '1', operationDigest: 'digest', decision: 'approve',
+  } };
+  envelope.requestHash = payloadHash(envelope.request);
+  const original = result.requestApi.getMockImplementation()!;
+  result.requestApi.mockImplementation(async (ownerArg, pathname, init) => {
+    const body = init.body ? JSON.parse(String(init.body)) : null;
+    if (pathname.endsWith('/ack') && body.status === 'applied') {
+      expect(body.result).toEqual({ outcome: 'approval_applied' });
+      return new Response(JSON.stringify({ code: 0, data: { ...envelope.command, status: 'applied', statusVersion: '4' } }));
+    }
+    return original(ownerArg, pathname, init);
+  });
+  return result;
+}
+describe('dual approval command evidence', () => {
+  it('maps a definitely rejected pre-dispatch decision to rejected while preserving the original claim', async () => {
+    const { bridge, execute, store, requestApi } = approvalFixture();
+    execute.mockRejectedValue(new RemoteApprovalError({ kind: 'known_not_applied', reason: 'NEVER_DISPATCHED' }));
+    await bridge.claim();
+    expect(store.get<InboxEntry>('inbox:command-1')).toMatchObject({ state: 'rejected', command: { claimId: 'claim', claimToken: 'secret' } });
+    expect(requestApi.mock.calls.filter(call => call[1].endsWith('/ack')).map(call => JSON.parse(String(call[2].body)).status)).toEqual(['received', 'rejected']);
+    bridge.stop();
+  });
+  it('keeps a dispatched timeout unknown and recovers a late confirmed result without another execute', async () => {
+    const { bridge, execute, store, requestApi } = approvalFixture();
+    execute.mockRejectedValue(new RemoteApprovalError({ kind: 'unknown', reason: 'RPC_TIMEOUT' }));
+    await bridge.claim();
+    expect(store.get<InboxEntry>('inbox:command-1')?.state).toBe('unknown');
+    bridge.deps.reconcileApproval = vi.fn(async () => ({ kind: 'confirmed', decision: 'approve' }));
+    await bridge.reconcile();
+    const body = JSON.parse(String(requestApi.mock.calls.find(call => call[1].endsWith('/reconcile'))![2].body));
+    expect(body).toMatchObject({ observedExecution: 'applied', claimId: 'claim', claimToken: 'secret',
+      result: { outcome: 'approval_applied' }, requestExecutionPermit: false });
+    expect(execute).toHaveBeenCalledTimes(1); bridge.stop();
+  });
+  it('does not infer approval not_started from the containing run and never requests a replacement permit', async () => {
+    const { bridge, disconnect, store, execute, requestApi } = approvalFixture(); disconnect();
+    await bridge.claim();
+    store.put('runPublished:server-run', false);
+    bridge.deps.reconcileApproval = vi.fn(async () => null);
+    await bridge.reconcile();
+    const body = JSON.parse(String(requestApi.mock.calls.find(call => call[1].endsWith('/reconcile'))![2].body));
+    expect(body).toMatchObject({ observedExecution: 'unknown', requestExecutionPermit: false, localEvidence: null });
+    expect(execute).not.toHaveBeenCalled(); bridge.stop();
+  });
+  it('reports a safely released reservation as not_applied on the original claim even when the run was published', async () => {
+    const { bridge, execute, store, requestApi } = approvalFixture();
+    execute.mockRejectedValue(new RemoteApprovalError({ kind: 'unknown', reason: 'RESULT_UNKNOWN' }));
+    await bridge.claim(); store.put('runPublished:server-run', true);
+    bridge.deps.reconcileApproval = vi.fn(async () => ({ kind: 'known_not_applied', reason: 'NEVER_DISPATCHED' }));
+    await bridge.reconcile();
+    const body = JSON.parse(String(requestApi.mock.calls.find(call => call[1].endsWith('/reconcile'))![2].body));
+    expect(body).toMatchObject({ observedExecution: 'not_applied', requestExecutionPermit: false, claimToken: 'secret',
+      error: { code: 47007, reasonDetail: 'NEVER_DISPATCHED' } });
+    expect(execute).toHaveBeenCalledTimes(1); bridge.stop();
+  });
+});
+it('advertises verified dual approval support once and preserves projection/recovery when admission turns off', async () => {
+  const { bridge, requestApi, store } = fixture();
+  let enabled = true;
+  bridge.deps.supportsDualApproval = () => true;
+  bridge.deps.configureDualApproval = vi.fn();
+  requestApi.mockImplementation(async () => new Response(JSON.stringify({ code: 0, data: {
+    enabled: true, protocolVersions: [1], capabilities: [RemoteCapability.SameAccountAccess, ...(enabled ? [RemoteCapability.DualApproval] : [])],
+  } })));
+  await bridge.refreshCapabilities();
+  expect(bridge.advertisedCapabilities()).toContain(RemoteCapability.DualApproval);
+  expect(bridge.deps.configureDualApproval).toHaveBeenLastCalledWith({ enabled: true, projectionSupported: true });
+  store.put('controlQueue:10001:personal', []);
+  await bridge.refreshCapabilities();
+  expect(store.get<any[]>('controlQueue:10001:personal')).toEqual([]);
+  enabled = false; await bridge.refreshCapabilities();
+  expect(bridge.advertisedCapabilities()).toContain(RemoteCapability.DualApproval);
+  expect(bridge.deps.configureDualApproval).toHaveBeenLastCalledWith({ enabled: false, projectionSupported: true });
+  expect(store.get<any[]>('controlQueue:10001:personal')).toEqual([]);
+  bridge.stop();
+});
+it('waits for verified Gateway readiness and discovers it automatically without an Agent catalog', async () => {
+  const { bridge, requestApi } = fixture();
+  let ready = false;
+  bridge.deps.supportsDualApproval = () => ready;
+  bridge.deps.configureDualApproval = vi.fn();
+  requestApi.mockImplementation(async () => new Response(JSON.stringify({ code: 0, data: {
+    enabled: true, protocolVersions: [1], capabilities: [RemoteCapability.SameAccountAccess, RemoteCapability.DualApproval],
+  } })));
+  await bridge.refreshCapabilities();
+  expect(bridge.advertisedCapabilities()).not.toContain(RemoteCapability.DualApproval);
+  expect(bridge.deps.configureDualApproval).toHaveBeenLastCalledWith({ enabled: false, projectionSupported: false });
+  bridge.writeSettings = vi.fn(async () => {}); bridge.reconcile = vi.fn(async () => {});
+  bridge.syncSessions = vi.fn(async () => {}); bridge.claim = vi.fn(async () => {});
+  bridge.socket = { close: vi.fn() };
+  ready = true; bridge.lastCapabilityCheck = Date.now() - 45001;
+  await bridge.tick();
+  expect(bridge.advertisedCapabilities()).toContain(RemoteCapability.DualApproval);
+  expect(bridge.deps.configureDualApproval).toHaveBeenLastCalledWith({ enabled: true, projectionSupported: true });
+  // A lost Gateway can stop admission without falsely withdrawing implemented protocol support.
+  ready = false; bridge.lastCapabilityCheck = Date.now() - 45001;
+  await bridge.tick();
+  expect(bridge.advertisedCapabilities()).toContain(RemoteCapability.DualApproval);
+  expect(bridge.deps.configureDualApproval).toHaveBeenLastCalledWith({ enabled: false, projectionSupported: true });
+  bridge.stop();
 });

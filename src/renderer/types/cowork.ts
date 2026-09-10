@@ -1,3 +1,4 @@
+import type { ApprovalState } from '../../shared/cowork/approval';
 import type { CoworkBrowserAnnotationMessageBatch } from '../../shared/cowork/browserAnnotations';
 import type {
   CoworkContextUsageFailureReason,
@@ -293,6 +294,9 @@ export interface CoworkPermissionRequest {
   toolInput: Record<string, unknown>;
   requestId: string;
   toolUseId?: string | null;
+  approval?: ApprovalState;
+  submissionState?: 'submitting' | 'unknown';
+  submissionError?: string;
 }
 
 export type CoworkPermissionResult =

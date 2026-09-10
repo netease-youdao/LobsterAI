@@ -27,6 +27,7 @@ import {
   CoworkSteerStatus,
 } from '../../shared/cowork/steer';
 import { store } from '../store';
+import { sameAccountContext } from '../store/accountSessionBoundary';
 import {
   addMessage,
   addPendingSteer,
@@ -54,12 +55,14 @@ import {
   setMessageRailIndex,
   setMessageRailIndexLoading,
   setMessageWindow,
+  setPermissionSubmissionState,
   setRemoteManaged,
   setSessions,
   setStreaming,
   settleBtwEntry,
   updateCurrentSessionModelOverride,
   updateMessageContent,
+  updatePendingPermissionState,
   updateSessionGoal,
   updateSessionPinned,
   updateSessionStatus,
@@ -430,9 +433,35 @@ class CoworkService {
         toolInput: request.toolInput,
         requestId: request.requestId,
         toolUseId: request.toolUseId ?? null,
+        approval: request.approval,
       }));
     });
     this.streamListenerCleanups.push(permissionCleanup);
+
+    const permissionStateCleanup = cowork.onStreamPermissionState?.(({ state: approval }) => {
+      store.dispatch(updatePendingPermissionState(approval));
+    });
+    if (permissionStateCleanup) this.streamListenerCleanups.push(permissionStateCleanup);
+
+    // Restore after renderer reload/account changes. Versioned state rejects a
+    // stale list response if a decision finished while this request was in flight.
+    const hydratePermissions = async (): Promise<void> => {
+      if (!cowork.listPendingPermissions) return;
+      try {
+        const result = await accountBoundRequest(() => cowork.listPendingPermissions!());
+        if (result.success) for (const item of result.items) {
+          store.dispatch(enqueuePendingPermission({ ...item.request, sessionId: item.sessionId }));
+        }
+      } catch { /* A switched account or unavailable runtime must not restore old dialogs. */ }
+    };
+    void hydratePermissions();
+    let permissionAccount = store.getState().auth;
+    this.streamListenerCleanups.push(store.subscribe(() => {
+      const current = store.getState().auth;
+      if (sameAccountContext(permissionAccount, current)) return;
+      permissionAccount = current;
+      void hydratePermissions();
+    }));
 
     // Permission dismiss listener (timeout or server-side resolution)
     const permissionDismissCleanup = cowork.onStreamPermissionDismiss(({ requestId }) => {
@@ -2177,16 +2206,36 @@ class CoworkService {
 
   async respondToPermission(requestId: string, result: CoworkPermissionResult): Promise<boolean> {
     const cowork = window.electron?.cowork;
-    if (!cowork) return false;
-
-    const response = await accountBoundRequest(async () => cowork.respondToPermission({ requestId, result }));
-    if (response.success) {
-      store.dispatch(dequeuePendingPermission({ requestId }));
-      return true;
+    const permission = store.getState().cowork.pendingPermissions.find(item => item.requestId === requestId);
+    if (!cowork || !permission || permission.submissionState) return false;
+    const approval = permission.approval;
+    if (approval && (approval.status !== 'pending' || approval.resolution.phase !== 'idle'
+      || approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now())) return false;
+    const account = store.getState().auth;
+    const metadata = approval ? { submissionId: crypto.randomUUID(), expectedVersion: approval.approvalVersion,
+      operationDigest: approval.operationDigest } : {};
+    store.dispatch(setPermissionSubmissionState({ requestId, phase: 'submitting' }));
+    try {
+      const response = await accountBoundRequest(() => cowork.respondToPermission({ requestId, result, ...metadata }));
+      if (response.outcome && 'state' in response.outcome && response.outcome.state) {
+        store.dispatch(updatePendingPermissionState(response.outcome.state));
+      }
+      if (response.success && (!approval || response.outcome?.kind === 'confirmed')) {
+        store.dispatch(dequeuePendingPermission({ requestId }));
+        return true;
+      }
+      store.dispatch(setPermissionSubmissionState({ requestId,
+        phase: !approval || response.outcome?.kind === 'known_not_applied' ? undefined : 'unknown',
+        error: i18nService.t(response.outcome?.kind === 'known_not_applied' ? 'coworkApprovalNotApplied' : 'coworkApprovalUnknown'),
+      }));
+      return false;
+    } catch {
+      // IPC cancellation/disconnect is not evidence that the runtime did not apply it.
+      if (!sameAccountContext(account, store.getState().auth)) return false;
+      store.dispatch(setPermissionSubmissionState({ requestId, phase: approval ? 'unknown' : undefined,
+        error: i18nService.t(approval ? 'coworkApprovalUnknown' : 'coworkApprovalNotApplied') }));
+      return false;
     }
-
-    console.error('Failed to respond to permission:', response.error);
-    return false;
   }
 
   async updateConfig(config: CoworkConfigUpdate): Promise<boolean> {

@@ -13,7 +13,7 @@ export const RemoteRunStatus = {
 export type RemoteRunStatusValue = typeof RemoteRunStatus[keyof typeof RemoteRunStatus];
 export interface RemoteOwner { userId: string; scopeKey: string }
 export interface RemoteWorkspace { workspaceId: string; name: string; available: boolean }
-export const RemoteCapability = { CreateSession: 'session.create', SameAccountAccess: 'same_account_access', SessionAgent: 'session_agent_v1', AgentCatalog: 'agent_catalog_v1', AgentSelection: 'agent_selection_v1' } as const;
+export const RemoteCapability = { DualApproval: 'approval_dual_control_v1', CreateSession: 'session.create', SameAccountAccess: 'same_account_access', SessionAgent: 'session_agent_v1', AgentCatalog: 'agent_catalog_v1', AgentSelection: 'agent_selection_v1' } as const;
 export const RemoteConnectionStatus = { Online: 'online', Offline: 'offline' } as const;
 export const RemoteConnectionReason = {
   Connecting: 'connecting', Reconnecting: 'reconnecting', Disabled: 'disabled', SignedOut: 'signed_out',

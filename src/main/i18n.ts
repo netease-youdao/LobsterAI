@@ -175,6 +175,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Exec approval continuation
     execApprovalApproved: '用户已确认执行该命令，请检查执行结果并继续。',
     execApprovalDenied: '用户已拒绝执行该命令。',
+    execApprovalsResolved: '操作审批已处理，请检查每项实际审批决定和工具结果后继续，不要重复执行已完成的操作。',
+    approvalRequiresUpgrade: '审批记录由新版应用创建，请升级后处理。',
+    approvalSubmitFailed: '审批提交失败：{message}',
 
     // Skill manager errors
     skillErrNoSkillMd: '来源中未找到 SKILL.md',
@@ -570,6 +573,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     execApprovalApproved:
       'The user approved the command execution. Please check the result and continue.',
     execApprovalDenied: 'The user denied the command execution.',
+    execApprovalsResolved: 'Operation approvals have been handled. Check each actual approval decision and tool result before continuing; do not repeat completed operations.',
+    approvalRequiresUpgrade: 'These approval records require a newer app version. Please update.',
+    approvalSubmitFailed: 'Approval submission failed: {message}',
 
     // Skill manager errors
     skillErrNoSkillMd: 'No SKILL.md found in source',
