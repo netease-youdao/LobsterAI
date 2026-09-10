@@ -114,9 +114,9 @@ Normal runtime builds apply this patch before bundling the workspace migration
 helper. For a focused local helper rebuild using an already patched source:
 
 ```powershell
-node scripts/bundle-openclaw-workspace-migration.cjs <runtime-dir> <patched-openclaw-source>
-$env:OPENCLAW_WORKSPACE_MIGRATION_RUNTIME = '<runtime-dir>'
-npm test -- openclawWorkspaceStateMigration v20260801UpgradeDecisions
+node scripts/bundle-openclaw-startup-migration.cjs <runtime-dir> <patched-openclaw-source>
+$env:OPENCLAW_STARTUP_MIGRATION_RUNTIME = '<runtime-dir>'
+npm test -- openclawStartupStateMigration v20260801UpgradeDecisions
 ```
 
 The initial corruption event remains unknown. This change recovers the observed
