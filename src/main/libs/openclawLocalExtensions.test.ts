@@ -18,6 +18,7 @@ import {
   listBundledOpenClawExtensionManifests,
   resolveOpenClawExtensionPluginId,
 } from './openclawLocalExtensions';
+import { removeTreeNoFollowSync } from './removeTreeNoFollow';
 
 describe('runtime-bundled preinstalled extensions', () => {
   const originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
@@ -44,7 +45,7 @@ describe('runtime-bundled preinstalled extensions', () => {
     vi.restoreAllMocks();
     if (originalResourcesPath) Object.defineProperty(process, 'resourcesPath', originalResourcesPath);
     else Reflect.deleteProperty(process, 'resourcesPath');
-    fs.rmSync(root, { recursive: true, force: true });
+    removeTreeNoFollowSync(root);
   });
 
   function writeManifest(base: string, directoryId: string, pluginId = directoryId): string {
@@ -79,5 +80,34 @@ describe('runtime-bundled preinstalled extensions', () => {
     expect(fs.existsSync(core)).toBe(true);
     expect(fs.existsSync(legacyDiscord)).toBe(false);
     expect(fs.existsSync(ordinary)).toBe(false);
+  });
+
+  test.each(['nested', 'root', 'dangling'])('removes a stale plugin with a %s junction without touching its target', (kind) => {
+    const sentinel = writeManifest('dist/extensions', 'openai');
+    const sentinelFile = path.join(sentinel, 'worker.js');
+    fs.writeFileSync(sentinelFile, 'runtime worker must survive');
+    const stale = path.join(runtime, 'extensions', 'ordinary-plugin');
+    const link = kind === 'nested' ? path.join(stale, 'node_modules', 'openclaw') : stale;
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(kind === 'dangling' ? path.join(root, 'absent') : sentinel, link, 'junction');
+
+    expect(cleanupStaleThirdPartyPluginsFromBundledDir(runtime, ['ordinary-plugin']))
+      .toEqual(['ordinary-plugin']);
+    expect(fs.lstatSync(stale, { throwIfNoEntry: false })).toBeUndefined();
+    expect(fs.readFileSync(sentinelFile, 'utf8')).toBe('runtime worker must survive');
+  });
+
+  test('reports cleanup failure without reporting a removal and can retry', () => {
+    const stale = writeManifest('extensions', 'ordinary-plugin');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const originalRmdir = fs.rmdirSync;
+    const removal = vi.spyOn(fs, 'rmdirSync').mockImplementation((target, options) => {
+      if (target === stale) throw Object.assign(new Error('locked'), { code: 'EPERM' });
+      return originalRmdir(target, options);
+    });
+    expect(cleanupStaleThirdPartyPluginsFromBundledDir(runtime, ['ordinary-plugin'])).toEqual([]);
+    expect(warn).toHaveBeenCalledOnce();
+    removal.mockRestore();
+    expect(cleanupStaleThirdPartyPluginsFromBundledDir(runtime, ['ordinary-plugin'])).toEqual(['ordinary-plugin']);
   });
 });

@@ -111,6 +111,11 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
   // config cannot help. Quick repair still retries recovery from leftover
   // installer resources, but the honest fix is allowlist + reinstall.
   const isRuntimeMissing = status.errorCode === OpenClawEngineErrorCode.RuntimeEntryMissing;
+  const isRuntimeDamaged = status.errorCode === OpenClawEngineErrorCode.RuntimeFilesMissing;
+  const titleKey = isRuntimeDamaged ? 'coworkOpenClawRuntimeDamagedError'
+    : isRuntimeMissing ? 'coworkOpenClawRuntimeMissingError' : 'coworkOpenClawError';
+  const hintKey = isRuntimeDamaged ? 'coworkOpenClawRuntimeDamagedRepairHint'
+    : isRuntimeMissing ? 'coworkOpenClawRuntimeMissingRepairHint' : 'coworkOpenClawErrorRepairHint';
 
   if (isDeferred) {
     return (
@@ -125,7 +130,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
             <span className="truncate">{i18nService.t('coworkOpenClawErrorShort')}</span>
             <ChevronDownIcon className="h-3 w-3 shrink-0 text-secondary" />
           </button>
-          <button
+          {!isRuntimeDamaged && <button
             type="button"
             onClick={handleQuickRepairGateway}
             disabled={isRepairingGateway || isRestartingGateway}
@@ -137,7 +142,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
             {isRepairingGateway
               ? i18nService.t('openClawRepairRunning')
               : i18nService.t('coworkOpenClawQuickRepair')}
-          </button>
+          </button>}
         </div>
       </div>
     );
@@ -156,10 +161,10 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
             <ExclamationTriangleIcon className="h-6 w-6" />
           </span>
           <h3 id="openclaw-gateway-failure-title" className="mt-3 text-base font-semibold text-foreground">
-            {i18nService.t(isRuntimeMissing ? 'coworkOpenClawRuntimeMissingError' : 'coworkOpenClawError')}
+            {i18nService.t(titleKey)}
           </h3>
           <p className="mt-2 text-[13px] leading-5 text-secondary">
-            {i18nService.t(isRuntimeMissing ? 'coworkOpenClawRuntimeMissingRepairHint' : 'coworkOpenClawErrorRepairHint')}
+            {i18nService.t(hintKey)}
           </p>
           {(gatewayRepairError || status.message) && (
             <p className="mt-2 max-h-36 max-w-full overflow-y-auto whitespace-pre-wrap break-words text-left text-xs leading-5 text-red-600 dark:text-red-400 [overflow-wrap:anywhere]">
@@ -167,7 +172,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
             </p>
           )}
         </div>
-        <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+        {!isRuntimeDamaged && <div className="mt-5 flex flex-col gap-2 sm:flex-row">
           <button
             type="button"
             onClick={handleRestartGateway}
@@ -192,7 +197,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
               ? i18nService.t('openClawRepairRunning')
               : i18nService.t('coworkOpenClawQuickRepair')}
           </button>
-        </div>
+        </div>}
         <div className="mt-4 flex items-center justify-between gap-4">
           {onRequestAppSettings ? (
             <button

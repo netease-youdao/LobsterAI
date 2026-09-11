@@ -1289,6 +1289,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkOpenClawErrorRepairHint:
       '推荐使用一键修复：自动备份并重建 OpenClaw 配置后重新启动网关，可解决大多数启动失败问题；不会删除聊天记录、模型配置、技能或工作区文件。',
     coworkOpenClawRuntimeMissingError: 'AI 引擎运行时文件缺失，安装未完成。',
+    coworkOpenClawRuntimeDamagedError: 'AI 引擎运行文件损坏，无法启动。',
+    coworkOpenClawRuntimeDamagedRepairHint:
+      '请退出应用，使用包含修复的最新安装包覆盖安装。覆盖安装会恢复引擎文件，并保留聊天记录、模型配置与工作区文件。',
     coworkOpenClawRuntimeMissingRepairHint:
       '常见原因是安装过程被安全软件拦截或中途退出。可先尝试一键修复（会从安装包残留资源自动恢复运行时）；若修复无效，请将安装目录加入安全软件信任区后，重新下载安装包覆盖安装。聊天记录、模型配置与工作区文件不会丢失。',
     coworkOpenClawErrorShort: '网关启动失败',
@@ -5163,6 +5166,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Quick Repair backs up and rebuilds the OpenClaw config, then restarts the gateway. It resolves most startup failures and keeps chats, model settings, skills, and workspace files.',
     coworkOpenClawRuntimeMissingError:
       'AI engine runtime files are missing — the installation did not complete.',
+    coworkOpenClawRuntimeDamagedError: 'AI engine runtime files are damaged. Startup has stopped.',
+    coworkOpenClawRuntimeDamagedRepairHint:
+      'Quit the app and reinstall using the latest installer containing the fix. Reinstalling restores the engine files and preserves chats, model settings, and workspace files.',
     coworkOpenClawRuntimeMissingRepairHint:
       'This usually happens when security software blocks the installer or it exits early. Try Quick Repair first — it restores the runtime from leftover installer resources. If that fails, add the install directory to your security software allowlist, then download the installer again and reinstall. Chats, model settings, and workspace files are preserved.',
     coworkOpenClawErrorShort: 'Gateway failed to start',
