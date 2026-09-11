@@ -5,6 +5,11 @@ LobsterAI's Windows installer carries OpenClaw in `win-resources.tar` under
 electron-builder's `beforePack` and the `pack-openclaw-tar.cjs --win-combined`
 command. Other tar sources keep their existing filters.
 
+The guarded policy is shared in `scripts/openclaw-runtime-payload.cjs`.
+`scripts/openclaw-windows-payload.cjs` retains the Windows-only entry point.
+macOS uses the same policy on its copied app resources; see
+[macOS runtime payload](mac-runtime-payload.md).
+
 The policy currently covers **win-x64 / OpenClaw 2026.8.1**. Other targets and
 unreviewed OpenClaw versions retain their original payload. An unreviewed
 OpenClaw or Claude SDK version emits a build warning instead of silently
