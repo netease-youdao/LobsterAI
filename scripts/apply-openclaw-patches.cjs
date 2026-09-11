@@ -830,6 +830,30 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-memory-sidecar-archive-generations.patch': [
+    {
+      file: 'extensions/memory-core/src/migration/doctor-memory-sidecar.ts',
+      snippets: [
+        'archiveRoot = await root(path.dirname(params.source.legacyPath)',
+        'archiveSuffix = generation === 1 ? ".migrated" : `.migrated.${generation}`',
+        'await fs.lstat(`${params.source.legacyPath}${suffix}${archiveSuffix}`)',
+        'await archiveRoot.move(path.basename(sourcePath), path.basename(archivedPath))',
+        'path.basename(entry.archivedPath),',
+        'path.basename(entry.sourcePath),',
+      ],
+      forbiddenSnippets: [
+        'Left migrated Memory Core legacy memory index sidecar in place because',
+      ],
+    },
+    {
+      file: 'extensions/memory-core/doctor-contract-api.test.ts',
+      snippets: [
+        'archives a conflicting sidecar despite an existing archive and converges on retry',
+        'preserves the SQLite journal family across archive and retry',
+        'does not overwrite an archive created after generation selection',
+      ],
+    },
+  ],
   'openclaw-workspace-attestation-quarantine.patch': [
     {
       file: 'src/infra/state-migrations.workspace-setup.ts',
