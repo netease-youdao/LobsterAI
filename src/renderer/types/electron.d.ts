@@ -529,6 +529,7 @@ interface McpMarketplaceData {
 import type { AgentLegacyIdentityCleanupResult } from '@shared/agent';
 import type { Platform } from '@shared/platform';
 
+import type { IMPairingListResult } from '../../shared/im/pairing';
 import type { Agent, PresetAgent } from './agent';
 
 interface CreditItem {
@@ -1772,25 +1773,16 @@ interface IElectronAPI {
       options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
     ) => Promise<{ success: boolean; error?: string }>;
 
-    listPairingRequests: (platform: string) => Promise<{
-      success: boolean;
-      requests: Array<{
-        id: string;
-        code: string;
-        createdAt: string;
-        lastSeenAt: string;
-        meta?: Record<string, string>;
-      }>;
-      allowFrom: string[];
-      error?: string;
-    }>;
+    listPairingRequests: (platform: string, accountId?: string) => Promise<IMPairingListResult>;
     approvePairingCode: (
       platform: string,
       code: string,
+      accountId?: string,
     ) => Promise<{ success: boolean; error?: string }>;
     rejectPairingRequest: (
       platform: string,
       code: string,
+      accountId?: string,
     ) => Promise<{ success: boolean; error?: string }>;
     nimQrLoginStart: () => Promise<{
       uuid: string;

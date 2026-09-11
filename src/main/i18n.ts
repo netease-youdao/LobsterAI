@@ -16,6 +16,12 @@ export type LanguageType = 'zh' | 'en';
 
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    imPairingGatewayUnavailable: 'AI 引擎尚未连接，请待网关启动后重试。',
+    imPairingInvalidTarget: '配对平台或机器人账号无效。',
+    imPairingRequestNotFound: '配对码不存在、已过期或已处理，请核对机器人账号和配对码。',
+    imPairingCodeAmbiguous: '该配对码对应多个请求，请在具体机器人账号下操作。',
+    imPairingInvalidResponse: 'AI 引擎配对接口返回异常，请确认已更新内置引擎。',
+    imPairingOperationFailed: '无法确认配对操作是否完成，请稍后重试：{error}',
     openClawStartupMigrationFailed: 'AI 引擎状态升级失败：{error}',
     // DeepSeek Harness (experimental)
     dshWorkbenchTitle: 'DeepSeek Harness 工作台（实验）',
@@ -383,6 +389,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    imPairingGatewayUnavailable: 'The AI engine is not connected. Retry after the gateway starts.',
+    imPairingInvalidTarget: 'Invalid pairing platform or bot account.',
+    imPairingRequestNotFound: 'The pairing code is missing, expired, or already handled. Check the bot account and code.',
+    imPairingCodeAmbiguous: 'Multiple requests match this code. Select the specific bot account.',
+    imPairingInvalidResponse: 'Unexpected pairing response. Check that the bundled AI engine is up to date.',
+    imPairingOperationFailed: 'Could not confirm whether the pairing operation completed. Try again later: {error}',
     openClawStartupMigrationFailed: 'AI engine state migration failed: {error}',
     // DeepSeek Harness (experimental)
     dshWorkbenchTitle: 'DeepSeek Harness Workbench (Experimental)',

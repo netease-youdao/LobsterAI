@@ -706,13 +706,14 @@ const IMSettings: React.FC = () => {
   const [pairingCodeInput, setPairingCodeInput] = useState<Record<string, string>>({});
   const [pairingStatus, setPairingStatus] = useState<Record<string, { type: 'success' | 'error'; message: string } | null>>({});
 
-  const handleApprovePairing = async (platform: string, code: string) => {
-    setPairingStatus((prev) => ({ ...prev, [platform]: null }));
-    const result = await imService.approvePairingCode(platform, code);
+  const handleApprovePairing = async (platform: string, code: string, accountId: string) => {
+    const pairingKey = `${platform}:${accountId}`;
+    setPairingStatus((prev) => ({ ...prev, [pairingKey]: null }));
+    const result = await imService.approvePairingCode(platform, code, accountId);
     if (result.success) {
-      setPairingStatus((prev) => ({ ...prev, [platform]: { type: 'success', message: i18nService.t('imPairingCodeApproved').replace('{code}', code) } }));
+      setPairingStatus((prev) => ({ ...prev, [pairingKey]: { type: 'success', message: i18nService.t('imPairingCodeApproved').replace('{code}', code) } }));
     } else {
-      setPairingStatus((prev) => ({ ...prev, [platform]: { type: 'error', message: result.error || i18nService.t('imPairingCodeInvalid') } }));
+      setPairingStatus((prev) => ({ ...prev, [pairingKey]: { type: 'error', message: result.error || i18nService.t('imPairingCodeInvalid') } }));
     }
   };
   // Telegram multi-instance config alias
@@ -1556,56 +1557,59 @@ const IMSettings: React.FC = () => {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [connectivityModalPlatform]);
 
-  const renderPairingSection = (platform: string) => (
-    <div className="space-y-2">
-      <label className="block text-xs font-medium text-secondary">
-        {i18nService.t('imPairingApproval')}
-      </label>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={pairingCodeInput[platform] || ''}
-          onChange={(e) => {
-            setPairingCodeInput((prev) => ({ ...prev, [platform]: e.target.value.toUpperCase() }));
-            if (pairingStatus[platform]) setPairingStatus((prev) => ({ ...prev, [platform]: null }));
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              const code = (pairingCodeInput[platform] || '').trim();
+  const renderPairingSection = (platform: string, accountId: string) => {
+    const pairingKey = `${platform}:${accountId}`;
+    return (
+      <div className="space-y-2">
+        <label className="block text-xs font-medium text-secondary">
+          {i18nService.t('imPairingApproval')}
+        </label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={pairingCodeInput[pairingKey] || ''}
+            onChange={(e) => {
+              setPairingCodeInput((prev) => ({ ...prev, [pairingKey]: e.target.value.toUpperCase() }));
+              if (pairingStatus[pairingKey]) setPairingStatus((prev) => ({ ...prev, [pairingKey]: null }));
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                const code = (pairingCodeInput[pairingKey] || '').trim();
+                if (code) {
+                  void handleApprovePairing(platform, code, accountId).then(() => {
+                    setPairingCodeInput((prev) => ({ ...prev, [pairingKey]: '' }));
+                  });
+                }
+              }
+            }}
+            className="block flex-1 rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm font-mono uppercase tracking-widest transition-colors"
+            placeholder={i18nService.t('imPairingCodePlaceholder')}
+            maxLength={8}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              const code = (pairingCodeInput[pairingKey] || '').trim();
               if (code) {
-                void handleApprovePairing(platform, code).then(() => {
-                  setPairingCodeInput((prev) => ({ ...prev, [platform]: '' }));
+                void handleApprovePairing(platform, code, accountId).then(() => {
+                  setPairingCodeInput((prev) => ({ ...prev, [pairingKey]: '' }));
                 });
               }
-            }
-          }}
-          className="block flex-1 rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm font-mono uppercase tracking-widest transition-colors"
-          placeholder={i18nService.t('imPairingCodePlaceholder')}
-          maxLength={8}
-        />
-        <button
-          type="button"
-          onClick={() => {
-            const code = (pairingCodeInput[platform] || '').trim();
-            if (code) {
-              void handleApprovePairing(platform, code).then(() => {
-                setPairingCodeInput((prev) => ({ ...prev, [platform]: '' }));
-              });
-            }
-          }}
-          className="px-3 py-2 rounded-lg text-xs font-medium bg-green-500/15 text-green-600 dark:text-green-400 hover:bg-green-500/25 transition-colors"
-        >
-          {i18nService.t('imPairingApprove')}
-        </button>
+            }}
+            className="px-3 py-2 rounded-lg text-xs font-medium bg-green-500/15 text-green-600 dark:text-green-400 hover:bg-green-500/25 transition-colors"
+          >
+            {i18nService.t('imPairingApprove')}
+          </button>
+        </div>
+        {pairingStatus[pairingKey] && (
+          <p className={`text-xs ${pairingStatus[pairingKey]!.type === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+            {pairingStatus[pairingKey]!.type === 'success' ? '\u2713' : '\u2717'} {pairingStatus[pairingKey]!.message}
+          </p>
+        )}
       </div>
-      {pairingStatus[platform] && (
-        <p className={`text-xs ${pairingStatus[platform]!.type === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-          {pairingStatus[platform]!.type === 'success' ? '\u2713' : '\u2717'} {pairingStatus[platform]!.message}
-        </p>
-      )}
-    </div>
-  );
+    );
+  };
 
   const isMultiInstancePlatform = (platform: Platform) => MULTI_INSTANCE_PLATFORMS.has(platform);
 

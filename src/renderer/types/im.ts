@@ -695,20 +695,7 @@ export interface IMConnectivityTestResponse {
 
 // ==================== Pairing Types ====================
 
-export interface PairingRequest {
-  id: string;
-  code: string;
-  createdAt: string;
-  lastSeenAt: string;
-  meta?: Record<string, string>;
-}
-
-export interface PairingListResult {
-  success: boolean;
-  requests: PairingRequest[];
-  allowFrom: string[];
-  error?: string;
-}
+export type { IMPairingListResult as PairingListResult, IMPairingRequest as PairingRequest } from '../../shared/im/pairing';
 
 // ==================== Default Configurations ====================
 

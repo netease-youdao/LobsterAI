@@ -72,6 +72,7 @@ import {
   type HtmlShareSourceType,
   type HtmlShareStatus,
 } from '../shared/htmlShare/constants';
+import { IMPairingIpc } from '../shared/im/pairing';
 import type {
   KitReference,
   KitSkillMetadata,
@@ -1175,11 +1176,11 @@ contextBridge.exposeInMainWorld('electron', {
     ) => ipcRenderer.invoke('im:popo:instance:config:set', instanceId, config, options),
 
     // Pairing
-    listPairingRequests: (platform: string) => ipcRenderer.invoke('im:pairing:list', platform),
-    approvePairingCode: (platform: string, code: string) =>
-      ipcRenderer.invoke('im:pairing:approve', platform, code),
-    rejectPairingRequest: (platform: string, code: string) =>
-      ipcRenderer.invoke('im:pairing:reject', platform, code),
+    listPairingRequests: (platform: string, accountId?: string) => ipcRenderer.invoke(IMPairingIpc.List, platform, accountId),
+    approvePairingCode: (platform: string, code: string, accountId?: string) =>
+      ipcRenderer.invoke(IMPairingIpc.Approve, platform, code, accountId),
+    rejectPairingRequest: (platform: string, code: string, accountId?: string) =>
+      ipcRenderer.invoke(IMPairingIpc.Reject, platform, code, accountId),
 
     // DingTalk Multi-Instance
     addDingTalkInstance: (name: string) => ipcRenderer.invoke('im:dingtalk:instance:add', name),

@@ -1,0 +1,6 @@
+{
+  "name": "im-pairing-fixture",
+  "private": true,
+  "main": "index.cjs",
+  "openclaw": { "extensions": ["./index.cjs"] }
+}

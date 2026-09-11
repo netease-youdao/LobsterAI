@@ -381,22 +381,22 @@ class IMService {
   /**
    * List pending pairing requests and approved allowFrom for a platform
    */
-  async listPairingRequests(platform: string) {
-    return window.electron.im.listPairingRequests(platform);
+  async listPairingRequests(platform: string, accountId?: string) {
+    return window.electron.im.listPairingRequests(platform, accountId);
   }
 
   /**
    * Approve a pairing code
    */
-  async approvePairingCode(platform: string, code: string) {
-    return window.electron.im.approvePairingCode(platform, code);
+  async approvePairingCode(platform: string, code: string, accountId?: string) {
+    return window.electron.im.approvePairingCode(platform, code, accountId);
   }
 
   /**
    * Reject a pairing request
    */
-  async rejectPairingRequest(platform: string, code: string) {
-    return window.electron.im.rejectPairingRequest(platform, code);
+  async rejectPairingRequest(platform: string, code: string, accountId?: string) {
+    return window.electron.im.rejectPairingRequest(platform, code, accountId);
   }
 
   /**

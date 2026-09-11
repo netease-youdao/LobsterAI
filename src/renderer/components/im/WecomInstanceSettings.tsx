@@ -24,7 +24,7 @@ interface WecomInstanceSettingsProps {
   testingPlatform: string | null;
   connectivityResults: Record<string, IMConnectivityTestResult>;
   language: 'zh' | 'en';
-  renderPairingSection: (platform: string) => React.ReactNode;
+  renderPairingSection: (platform: string, accountId: string) => React.ReactNode;
   headerLeading?: React.ReactNode;
 }
 
@@ -271,7 +271,7 @@ const WecomInstanceSettings: React.FC<WecomInstanceSettingsProps> = ({
           </div>
 
           {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
-          {instance.dmPolicy === 'pairing' && renderPairingSection('wecom')}
+          {instance.dmPolicy === 'pairing' && renderPairingSection('wecom', instance.instanceId.slice(0, 8))}
 
           {/* Allow From */}
           <div className="space-y-1.5">

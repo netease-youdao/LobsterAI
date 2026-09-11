@@ -1,0 +1,9 @@
+{
+  "id": "im-pairing-fixture",
+  "activation": { "onStartup": true },
+  "channels": ["email"],
+  "channelConfigs": {
+    "email": { "schema": { "type": "object", "additionalProperties": false, "properties": {} } }
+  },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

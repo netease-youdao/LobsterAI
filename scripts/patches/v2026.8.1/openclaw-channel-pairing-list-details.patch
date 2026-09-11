@@ -1,0 +1,189 @@
+OpenClaw v2026.8.1: opt-in pairing codes and account-scoped allowlists for desktop management.
+
+The default RPC response and operator.pairing permission remain unchanged. Approve/dismiss continue to use the official request identity and SQLite transaction.
+Base: ea806575e6450e4d1efdfc72c19f04be982a1b9b.
+
+diff --git a/packages/gateway-protocol/src/schema/channel-pairing.ts b/packages/gateway-protocol/src/schema/channel-pairing.ts
+index 38b7c6ac792..4bd9b50fde6 100644
+--- a/packages/gateway-protocol/src/schema/channel-pairing.ts
++++ b/packages/gateway-protocol/src/schema/channel-pairing.ts
+@@ -10,10 +10,12 @@ const ChannelPairingAccountSchema = closedObject({
+   accountId: NonEmptyString,
+   accountLabel: Type.Optional(NonEmptyString),
+   notifySupported: Type.Boolean(),
++  allowFrom: Type.Optional(Type.Array(Type.String())),
+ });
+
+ const ChannelPairingRequestSchema = closedObject({
+   requestId: NonEmptyString,
++  code: Type.Optional(NonEmptyString),
+   channel: NonEmptyString,
+   channelLabel: NonEmptyString,
+   accountId: NonEmptyString,
+@@ -31,6 +33,8 @@ const ChannelPairingRequestSchema = closedObject({
+ export const ChannelsPairingListParamsSchema = closedObject({
+   channel: Type.Optional(NonEmptyString),
+   accountId: Type.Optional(NonEmptyString),
++  includeCodes: Type.Optional(Type.Boolean()),
++  includeAllowFrom: Type.Optional(Type.Boolean()),
+ });
+
+ export const ChannelsPairingListResultSchema = closedObject({
+diff --git a/src/gateway/server-methods/channel-pairing.test.ts b/src/gateway/server-methods/channel-pairing.test.ts
+index 4afd10cbb92..20c4e7e3a83 100644
+--- a/src/gateway/server-methods/channel-pairing.test.ts
++++ b/src/gateway/server-methods/channel-pairing.test.ts
+@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
+   listPlugins: vi.fn(),
+   listRequests: vi.fn(),
+   notify: vi.fn(),
++  readAllowFrom: vi.fn(),
+ }));
+
+ vi.mock("../../channels/plugins/index.js", () => ({
+@@ -29,6 +30,7 @@ vi.mock("../../pairing/pairing-store.js", () => ({
+   CHANNEL_PAIRING_PENDING_TTL_MS: 3_600_000,
+   dismissChannelPairingRequest: mocks.dismiss,
+   listChannelPairingRequests: mocks.listRequests,
++  readChannelAllowFromStore: mocks.readAllowFrom,
+   resolveChannelPairingRequestId: vi.fn(() => "opaque-request-id"),
+ }));
+ vi.mock("../runtime-plugin-config.js", () => ({
+@@ -90,10 +92,59 @@ beforeEach(() => {
+   mocks.listPlugins.mockReturnValue([pairingPlugin]);
+   mocks.hasOwners.mockReturnValue(false);
+   mocks.listRequests.mockResolvedValue([]);
++  mocks.readAllowFrom.mockResolvedValue([]);
+   mocks.bootstrapOwner.mockResolvedValue({ ownerEntry: "whatsapp:+1555", status: "configured" });
+ });
+
+ describe("channel DM pairing gateway handlers", () => {
++  it("returns codes and account-scoped approvals only when explicitly requested", async () => {
++    mocks.listRequests.mockResolvedValue([
++      {
++        id: "sender-fixture",
++        code: "FIXTURE1",
++        createdAt: "2026-07-20T10:00:00.000Z",
++        lastSeenAt: "2026-07-20T10:00:00.000Z",
++        meta: { accountId: "personal" },
++      },
++    ]);
++    mocks.readAllowFrom.mockResolvedValue(["approved-fixture"]);
++
++    const respond = await invoke("channels.pairing.list", {
++      channel: "whatsapp",
++      accountId: "personal",
++      includeCodes: true,
++      includeAllowFrom: true,
++    });
++
++    expect(respond).toHaveBeenCalledWith(
++      true,
++      expect.objectContaining({
++        accounts: [
++          expect.objectContaining({ accountId: "personal", allowFrom: ["approved-fixture"] }),
++        ],
++        requests: [expect.objectContaining({ requestId: "opaque-request-id", code: "FIXTURE1" })],
++      }),
++      undefined,
++    );
++    expect(mocks.readAllowFrom).toHaveBeenCalledWith("whatsapp", process.env, "personal");
++    expect(mocks.approve).not.toHaveBeenCalled();
++  });
++
++  it("does not expose codes when only the allowlist was requested", async () => {
++    mocks.listRequests.mockResolvedValue([
++      {
++        id: "sender-fixture",
++        code: "FIXTURE1",
++        createdAt: "2026-07-20T10:00:00.000Z",
++        lastSeenAt: "2026-07-20T10:00:00.000Z",
++      },
++    ]);
++    const respond = await invoke("channels.pairing.list", { includeAllowFrom: true });
++    expect(respond.mock.calls[0]?.[0]).toBe(true);
++    expect(JSON.stringify(respond.mock.calls)).not.toContain("FIXTURE1");
++    expect(mocks.readAllowFrom).toHaveBeenCalledTimes(1);
++  });
++
+   it("lists only pairing-policy accounts without exposing the human code", async () => {
+     mocks.listRequests.mockResolvedValue([
+       {
+@@ -143,6 +194,7 @@ describe("channel DM pairing gateway handlers", () => {
+       undefined,
+     );
+     expect(JSON.stringify(respond.mock.calls)).not.toContain("SECRET12");
++    expect(mocks.readAllowFrom).not.toHaveBeenCalled();
+   });
+
+   it("approves access even when the optional notification fails", async () => {
+diff --git a/src/gateway/server-methods/channel-pairing.ts b/src/gateway/server-methods/channel-pairing.ts
+index 41463f42a22..e10c7bf3879 100644
+--- a/src/gateway/server-methods/channel-pairing.ts
++++ b/src/gateway/server-methods/channel-pairing.ts
+@@ -26,6 +26,7 @@ import {
+   CHANNEL_PAIRING_PENDING_TTL_MS,
+   dismissChannelPairingRequest,
+   listChannelPairingRequests,
++  readChannelAllowFromStore,
+   resolveChannelPairingRequestId,
+ } from "../../pairing/pairing-store.js";
+ import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
+@@ -142,6 +143,7 @@ function publicAccount(account: PairingAccount) {
+ function publicRequest(params: {
+   account: PairingAccount;
+   request: Awaited<ReturnType<typeof listChannelPairingRequests>>[number];
++  includeCode?: boolean;
+ }): ChannelsPairingRequest {
+   const adapter = params.account.plugin.pairing;
+   if (!adapter) {
+@@ -158,6 +160,7 @@ function publicRequest(params: {
+   const senderId = params.request.meta?.senderId ?? params.request.id;
+   return {
+     requestId: resolveChannelPairingRequestId(params.account.plugin.id, params.request),
++    ...(params.includeCode ? { code: params.request.code } : {}),
+     channel: params.account.plugin.id,
+     channelLabel: params.account.plugin.meta.label,
+     accountId: params.account.accountId,
+@@ -217,18 +220,39 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
+         ...(parsed.accountId ? { accountId: parsed.accountId } : {}),
+       });
+       const requests: ChannelsPairingRequest[] = [];
++      const publicAccounts = [];
+       for (const account of accounts) {
+         const pending = await listChannelPairingRequests(
+           account.plugin.id,
+           process.env,
+           account.accountId,
+         );
+-        requests.push(...pending.map((request) => publicRequest({ account, request })));
++        requests.push(
++          ...pending.map((request) =>
++            publicRequest({
++              account,
++              request,
++              includeCode: parsed.includeCodes,
++            }),
++          ),
++        );
++        publicAccounts.push({
++          ...publicAccount(account),
++          ...(parsed.includeAllowFrom
++            ? {
++                allowFrom: await readChannelAllowFromStore(
++                  account.plugin.id,
++                  process.env,
++                  account.accountId,
++                ),
++              }
++            : {}),
++        });
+       }
+       respond(
+         true,
+         {
+-          accounts: accounts.map(publicAccount),
++          accounts: publicAccounts,
+           requests,
+           commandOwnerConfigured: hasConfiguredCommandOwners(cfg),
+           limits: {

@@ -1,186 +1,91 @@
-/**
- * IM Pairing Store
- *
- * Reads and writes OpenClaw pairing JSON files directly from the main process.
- * Compatible with the OpenClaw SDK pairing-store format.
- *
- * File formats:
- *   credentials/<channel>-pairing.json            → { version: 1, requests: PairingRequest[] }
- *   credentials/<channel>-allowFrom.json           → { version: 1, allowFrom: string[] }
- *   credentials/<channel>-<accountId>-allowFrom.json → (account-scoped variant)
- */
+import { z } from 'zod';
 
-import * as fs from 'fs';
-import * as path from 'path';
+import {
+  IMPairingFailure,
+  type IMPairingListResult,
+  OpenClawPairingMethod,
+} from '../../shared/im/pairing';
+import { PlatformRegistry } from '../../shared/platform';
 
-// ---------- Types ----------
-
-export interface PairingRequest {
-  id: string;
-  code: string;
-  createdAt: string;
-  lastSeenAt: string;
-  meta?: Record<string, string>;
-}
-
-interface PairingFileV1 {
-  version: number;
-  requests: PairingRequest[];
-}
-
-interface AllowFromFileV1 {
-  version: number;
-  allowFrom: string[];
-}
-
-// ---------- Constants (match OpenClaw SDK) ----------
-
-const PAIRING_PENDING_TTL_MS = 3600 * 1000; // 1 hour
-
-// ---------- Path helpers ----------
-
-function safeChannelKey(channel: string): string {
-  const raw = channel.trim().toLowerCase();
-  if (!raw) throw new Error('invalid pairing channel');
-  const safe = raw.replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_');
-  if (!safe || safe === '_') throw new Error('invalid pairing channel');
-  return safe;
-}
-
-function resolveCredentialsDir(stateDir: string): string {
-  return path.join(stateDir, 'credentials');
-}
-
-function resolvePairingPath(channel: string, stateDir: string): string {
-  return path.join(resolveCredentialsDir(stateDir), `${safeChannelKey(channel)}-pairing.json`);
-}
-
-function resolveAllowFromPath(channel: string, stateDir: string, accountId?: string): string {
-  const base = safeChannelKey(channel);
-  const normalized = typeof accountId === 'string' ? accountId.trim().toLowerCase() : '';
-  if (!normalized || normalized === 'default') {
-    return path.join(resolveCredentialsDir(stateDir), `${base}-allowFrom.json`);
-  }
-  const safeAccount = normalized.replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_');
-  return path.join(resolveCredentialsDir(stateDir), `${base}-${safeAccount}-allowFrom.json`);
-}
-
-// ---------- JSON helpers ----------
-
-function readJsonFileSync<T>(filePath: string, fallback: T): T {
-  try {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(content) as T;
-  } catch {
-    return fallback;
+export class IMPairingError extends Error {
+  constructor(readonly code: IMPairingFailure) {
+    super(code);
   }
 }
 
-function writeJsonFileSync(filePath: string, data: unknown): void {
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+export interface PairingGatewayClient {
+  request<T>(method: string, params: unknown, options?: { timeoutMs?: number }): Promise<T>;
+}
+
+const RPC_TIMEOUT_MS = 10_000;
+const gatewayListSchema = z.object({
+  accounts: z.array(z.object({
+    channel: z.string().min(1), accountId: z.string().min(1), allowFrom: z.array(z.string()),
+  })),
+  requests: z.array(z.object({
+    requestId: z.string().min(1), channel: z.string().min(1), accountId: z.string().min(1),
+    senderId: z.string().min(1), code: z.string().min(1),
+    createdAt: z.string(), lastSeenAt: z.string(), metadata: z.record(z.string(), z.string()).optional(),
+  })),
+});
+
+/** Read the Gateway's current pairing state, never a parallel JSON/SQLite store. */
+export async function listPairingRequests(
+  client: PairingGatewayClient | null,
+  platform: string,
+  accountId?: string,
+): Promise<Omit<IMPairingListResult, 'success' | 'error'>> {
+  if (!client) throw new IMPairingError(IMPairingFailure.Unavailable);
+  const platformId = PlatformRegistry.platforms.find(value => value === platform);
+  if (!platformId
+    || (accountId !== undefined && (typeof accountId !== 'string' || !accountId.trim()))) {
+    throw new IMPairingError(IMPairingFailure.InvalidTarget);
   }
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', 'utf-8');
+  const channel = PlatformRegistry.channelOf(platformId);
+  const account = accountId?.trim().toLowerCase();
+  const result = gatewayListSchema.safeParse(await client.request(OpenClawPairingMethod.List, {
+    channel, ...(account ? { accountId: account } : {}), includeCodes: true, includeAllowFrom: true,
+  }, { timeoutMs: RPC_TIMEOUT_MS }));
+  if (!result.success) throw new IMPairingError(IMPairingFailure.InvalidResponse);
+  const { accounts, requests } = result.data;
+  // Reject an unexpected scope instead of approving a code from another bot.
+  if ([...accounts, ...requests].some(item => item.channel !== channel || (account && item.accountId !== account))
+    || requests.some(request => !accounts.some(item => item.accountId === request.accountId))) {
+    throw new IMPairingError(IMPairingFailure.InvalidResponse);
+  }
+  return {
+    accounts,
+    requests: requests.map(request => ({
+      id: request.senderId, requestId: request.requestId, channel: request.channel, accountId: request.accountId,
+      code: request.code, createdAt: request.createdAt, lastSeenAt: request.lastSeenAt,
+      meta: { ...request.metadata, accountId: request.accountId },
+    })),
+    allowFrom: [...new Set(accounts.flatMap(item => item.allowFrom))],
+  };
 }
 
-// ---------- Internal readers ----------
-
-function readPairingFile(channel: string, stateDir: string): PairingRequest[] {
-  const filePath = resolvePairingPath(channel, stateDir);
-  const file = readJsonFileSync<PairingFileV1>(filePath, { version: 1, requests: [] });
-  return Array.isArray(file.requests) ? file.requests : [];
-}
-
-function writePairingFile(channel: string, stateDir: string, requests: PairingRequest[]): void {
-  const filePath = resolvePairingPath(channel, stateDir);
-  writeJsonFileSync(filePath, { version: 1, requests });
-}
-
-function readAllowFromFile(channel: string, stateDir: string, accountId?: string): string[] {
-  const filePath = resolveAllowFromPath(channel, stateDir, accountId);
-  const file = readJsonFileSync<AllowFromFileV1>(filePath, { version: 1, allowFrom: [] });
-  return Array.isArray(file.allowFrom) ? file.allowFrom : [];
-}
-
-function writeAllowFromFile(channel: string, stateDir: string, allowFrom: string[], accountId?: string): void {
-  const filePath = resolveAllowFromPath(channel, stateDir, accountId);
-  writeJsonFileSync(filePath, { version: 1, allowFrom });
-}
-
-// ---------- Public API ----------
-
-/**
- * List pending pairing requests for a channel, filtering out expired ones.
- */
-export function listPairingRequests(channel: string, stateDir: string): PairingRequest[] {
-  const requests = readPairingFile(channel, stateDir);
-  const now = Date.now();
-  return requests.filter((r) => {
-    const createdAt = new Date(r.createdAt).getTime();
-    return !isNaN(createdAt) && now - createdAt < PAIRING_PENDING_TTL_MS;
-  });
-}
-
-/**
- * Read the allowFrom store (approved sender IDs) for a channel.
- */
-export function readAllowFromStore(channel: string, stateDir: string): string[] {
-  return readAllowFromFile(channel, stateDir);
-}
-
-/**
- * Approve a pairing request by code.
- * Removes the request from the pairing file and adds the sender ID to allowFrom.
- * Returns the approved request, or null if the code was not found.
- */
-export function approvePairingCode(
-  channel: string,
+async function resolvePairingCode(
+  client: PairingGatewayClient | null,
+  platform: string,
   code: string,
-  stateDir: string,
-): PairingRequest | null {
-  const requests = readPairingFile(channel, stateDir);
-
-  const upperCode = code.toUpperCase().trim();
-  const idx = requests.findIndex((r) => r.code === upperCode);
-  if (idx === -1) return null;
-
-  const [approved] = requests.splice(idx, 1);
-
-  // Write back remaining requests (versioned format)
-  writePairingFile(channel, stateDir, requests);
-
-  // Resolve accountId from request meta (default account uses simple path)
-  const accountId = approved.meta?.accountId;
-
-  // Add to allowFrom
-  const allowFrom = readAllowFromFile(channel, stateDir, accountId);
-  if (!allowFrom.includes(approved.id)) {
-    allowFrom.push(approved.id);
-    writeAllowFromFile(channel, stateDir, allowFrom, accountId);
-  }
-
-  return approved;
+  method: typeof OpenClawPairingMethod.Approve | typeof OpenClawPairingMethod.Dismiss,
+  accountId?: string,
+): Promise<void> {
+  if (typeof code !== 'string' || !code.trim()) throw new IMPairingError(IMPairingFailure.NotFound);
+  const state = await listPairingRequests(client, platform, accountId);
+  const matches = state.requests.filter(request => request.code.toUpperCase() === code.trim().toUpperCase());
+  if (!matches.length) throw new IMPairingError(IMPairingFailure.NotFound);
+  if (matches.length !== 1) throw new IMPairingError(IMPairingFailure.Ambiguous);
+  const { channel, accountId: requestAccount, requestId } = matches[0];
+  // The official transaction rechecks expiry and identity after this lookup.
+  // Do not bootstrap command ownership, notify a sender, or rewrite config.
+  await client!.request(method, { channel, accountId: requestAccount, requestId }, { timeoutMs: RPC_TIMEOUT_MS });
 }
 
-/**
- * Reject a pairing request by code.
- * Removes the request from the pairing file without adding to allowFrom.
- * Returns the rejected request, or null if the code was not found.
- */
-export function rejectPairingRequest(
-  channel: string,
-  code: string,
-  stateDir: string,
-): PairingRequest | null {
-  const requests = readPairingFile(channel, stateDir);
+export function approvePairingCode(client: PairingGatewayClient | null, platform: string, code: string, accountId?: string) {
+  return resolvePairingCode(client, platform, code, OpenClawPairingMethod.Approve, accountId);
+}
 
-  const upperCode = code.toUpperCase().trim();
-  const idx = requests.findIndex((r) => r.code === upperCode);
-  if (idx === -1) return null;
-
-  const [rejected] = requests.splice(idx, 1);
-  writePairingFile(channel, stateDir, requests);
-
-  return rejected;
+export function rejectPairingRequest(client: PairingGatewayClient | null, platform: string, code: string, accountId?: string) {
+  return resolvePairingCode(client, platform, code, OpenClawPairingMethod.Dismiss, accountId);
 }

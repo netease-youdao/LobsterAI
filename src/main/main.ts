@@ -151,6 +151,7 @@ import {
   HtmlShareStatus,
   type HtmlShareStatus as HtmlShareStatusValue,
 } from '../shared/htmlShare/constants';
+import { IMPairingIpc } from '../shared/im/pairing';
 import type {
   InstalledKitRecord,
   KitReference,
@@ -241,8 +242,8 @@ import { setLanguage, t } from './i18n';
 import { IMGatewayConfig, IMGatewayManager } from './im';
 import {
   approvePairingCode,
+  IMPairingError,
   listPairingRequests,
-  readAllowFromStore,
   rejectPairingRequest,
 } from './im/imPairingStore';
 import { pollNimQrLogin, startNimQrLogin } from './im/nimQrLoginService';
@@ -11675,53 +11676,50 @@ if (!gotTheLock) {
 
   // ---- Pairing IPC handlers ----
 
-  ipcMain.handle('im:pairing:list', async (_event, platform: string) => {
+  ipcMain.handle(IMPairingIpc.List, async (_event, platform: string, accountId?: string) => {
     try {
-      const stateDir = getOpenClawEngineManager().getStateDir();
-      const requests = listPairingRequests(platform, stateDir);
-      const allowFrom = readAllowFromStore(platform, stateDir);
-      return { success: true, requests, allowFrom };
+      const result = await listPairingRequests(openClawRuntimeAdapter?.getGatewayClient() ?? null, platform, accountId);
+      return { success: true, ...result };
     } catch (error) {
+      console.error('[IMPairing] Failed to list requests:', error);
       return {
         success: false,
         requests: [],
+        accounts: [],
         allowFrom: [],
-        error: error instanceof Error ? error.message : 'Failed to list pairing requests',
+        error: t(error instanceof IMPairingError ? error.code : 'imPairingOperationFailed', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
       };
     }
   });
 
-  ipcMain.handle('im:pairing:approve', async (_event, platform: string, code: string) => {
+  ipcMain.handle(IMPairingIpc.Approve, async (_event, platform: string, code: string, accountId?: string) => {
     try {
-      const stateDir = getOpenClawEngineManager().getStateDir();
-      const approved = approvePairingCode(platform, code, stateDir);
-      if (!approved) {
-        return { success: false, error: 'Pairing code not found or expired' };
-      }
-      await syncOpenClawConfig({
-        reason: `im-pairing-approval:${platform}`,
-      });
+      await approvePairingCode(openClawRuntimeAdapter?.getGatewayClient() ?? null, platform, code, accountId);
       return { success: true };
     } catch (error) {
+      console.error('[IMPairing] Failed to approve request:', error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to approve pairing code',
+        error: t(error instanceof IMPairingError ? error.code : 'imPairingOperationFailed', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
       };
     }
   });
 
-  ipcMain.handle('im:pairing:reject', async (_event, platform: string, code: string) => {
+  ipcMain.handle(IMPairingIpc.Reject, async (_event, platform: string, code: string, accountId?: string) => {
     try {
-      const stateDir = getOpenClawEngineManager().getStateDir();
-      const rejected = rejectPairingRequest(platform, code, stateDir);
-      if (!rejected) {
-        return { success: false, error: 'Pairing code not found or expired' };
-      }
+      await rejectPairingRequest(openClawRuntimeAdapter?.getGatewayClient() ?? null, platform, code, accountId);
       return { success: true };
     } catch (error) {
+      console.error('[IMPairing] Failed to dismiss request:', error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to reject pairing request',
+        error: t(error instanceof IMPairingError ? error.code : 'imPairingOperationFailed', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
       };
     }
   });

@@ -55,14 +55,15 @@ const PlatformGuide: React.FC<{
 // Pairing section component
 const PairingSection: React.FC<{
   platform: string;
-}> = ({ platform }) => {
+  accountId: string;
+}> = ({ platform, accountId }) => {
   const [pairingCodeInput, setPairingCodeInput] = useState('');
   const [pairingStatus, setPairingStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const handleApprovePairing = async (code: string) => {
     setPairingStatus(null);
     try {
-      const result = await window.electron.im.approvePairingCode(platform, code);
+      const result = await window.electron.im.approvePairingCode(platform, code, accountId);
       if (result.success) {
         setPairingStatus({ type: 'success', message: i18nService.t('imPairingCodeApproved').replace('{code}', code) });
       } else {
@@ -442,7 +443,7 @@ const DingTalkInstanceSettings: React.FC<DingTalkInstanceSettingsProps> = ({
 
           {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
           {instance.dmPolicy === 'pairing' && (
-            <PairingSection platform="dingtalk" />
+            <PairingSection platform="dingtalk" accountId={instance.instanceId.slice(0, 8)} />
           )}
 
           {/* Allow From (User IDs) */}
