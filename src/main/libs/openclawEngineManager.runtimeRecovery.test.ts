@@ -4,6 +4,8 @@ import path from 'path';
 import * as tar from 'tar';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { OpenClawEngineErrorCode, OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
+
 const electronState = vi.hoisted(() => ({
   appPath: process.cwd(),
   isPackaged: true,
@@ -25,6 +27,13 @@ vi.mock('electron', () => ({
 
 import { INSTALLER_RESOURCES_TAR } from './installerResourceRecovery';
 import { OpenClawEngineManager } from './openclawEngineManager';
+import { spawnOpenClawGatewayProcess } from './openclawGatewayProcess';
+import { OPENCLAW_WORKER_SHIM_TARGETS } from './openclawWorkerShims';
+
+vi.mock('./openclawGatewayProcess', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./openclawGatewayProcess')>(),
+  spawnOpenClawGatewayProcess: vi.fn(),
+}));
 import {
   migrateLegacyOpenClawPluginInstalls,
   OpenClawPluginInstallMigrationStatus,
@@ -139,5 +148,28 @@ describe('OpenClawEngineManager startup runtime recovery', () => {
 
     expect(fs.existsSync(path.join(resourcesDir, 'cfmind', 'openclaw.mjs'))).toBe(false);
     expect(fs.existsSync(tarPath)).toBe(true);
+  });
+
+  test('blocks a damaged bundled runtime before migrations or spawning and retains the cause on retry', async () => {
+    const runtimeRoot = path.join(resourcesDir, 'cfmind');
+    fs.writeFileSync(path.join(runtimeRoot, 'gateway-bundle.mjs'), 'export {};\n');
+    // Root shims can survive while every dist worker has been deleted.
+    for (const { shimFile } of OPENCLAW_WORKER_SHIM_TARGETS) {
+      fs.writeFileSync(path.join(runtimeRoot, shimFile), 'import "./dist/missing.js";\n');
+    }
+    const manager = new OpenClawEngineManager();
+    const originalConfig = '{"gateway":{"mode":"local"}}\n';
+    fs.writeFileSync(manager.getConfigPath(), originalConfig);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await expect(manager.startGateway('worker-integrity-test')).resolves.toMatchObject({
+        phase: OpenClawEnginePhase.Error,
+        errorCode: OpenClawEngineErrorCode.RuntimeFilesMissing,
+        canRetry: false,
+      });
+    }
+    expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
+    expect(fs.readFileSync(manager.getConfigPath(), 'utf8')).toBe(originalConfig);
+    expect(fs.existsSync(path.join(manager.getStateDir(), 'gateway-token'))).toBe(false);
   });
 });

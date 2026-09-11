@@ -34,7 +34,7 @@ import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtension
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
 import { migrateLegacyStateBeforeStartup } from './openclawStartupStateMigration';
-import { ensureOpenClawWorkerShims } from './openclawWorkerShims';
+import { ensureOpenClawWorkerShims, getMissingOpenClawWorkerTargets } from './openclawWorkerShims';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 
 const gwDiagTs = (): string => {
@@ -798,6 +798,18 @@ export class OpenClawEngineManager extends EventEmitter {
 
     this.ensureBareEntryFiles(runtime.root);
     console.log(`[OpenClaw] startGateway: ensureBareEntryFiles done (${elapsed()})`);
+    const missingWorkers = getMissingOpenClawWorkerTargets(runtime.root);
+    if (missingWorkers.length > 0) {
+      console.error(`[OpenClaw] Runtime worker files missing or unreadable in ${runtime.root}: ${missingWorkers.join(', ')}`);
+      this.setStatus({
+        phase: OpenClawEnginePhase.Error,
+        version: runtime.version,
+        message: t('openClawRuntimeFilesMissing'),
+        errorCode: OpenClawEngineErrorCode.RuntimeFilesMissing,
+        canRetry: false,
+      });
+      return this.getStatus();
+    }
     const openclawEntry = this.resolveOpenClawEntry(runtime.root);
     console.log(`[OpenClaw] startGateway: resolveOpenClawEntry done (${elapsed()}), entry=${openclawEntry}`);
     if (!openclawEntry) {
@@ -1257,7 +1269,7 @@ export class OpenClawEngineManager extends EventEmitter {
     const t0 = Date.now();
 
     // Fast path: if gateway-bundle.mjs exists, skip full dist extraction.
-    // The bundle is the primary entry; dist/ modules are only needed as fallback.
+    // Workers still need their dist/ modules; startup checks them before spawning.
     const bundlePath = path.join(runtimeRoot, 'gateway-bundle.mjs');
     if (fs.existsSync(bundlePath)) {
       console.log('[OpenClaw] ensureBareEntryFiles: bundle exists, skipping dist extraction');

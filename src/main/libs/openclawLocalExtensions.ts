@@ -2,6 +2,8 @@ import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
+import { removeTreeNoFollowSync } from './removeTreeNoFollow';
+
 const LOCAL_EXTENSIONS_DIR = 'openclaw-extensions';
 const THIRD_PARTY_EXTENSIONS_DIR = 'third-party-extensions';
 
@@ -277,12 +279,15 @@ export const cleanupStaleThirdPartyPluginsFromBundledDir = (
       if (baseDir === runtimeBundledDir && runtimeBundledIds.has(id)) continue;
       const staleDir = path.join(baseDir, id);
       try {
-        if (fs.statSync(staleDir).isDirectory()) {
-          fs.rmSync(staleDir, { recursive: true, force: true });
+        const stats = fs.lstatSync(staleDir);
+        if (stats.isDirectory() || stats.isSymbolicLink()) {
+          removeTreeNoFollowSync(staleDir);
           removed.push(id);
         }
-      } catch {
-        // Directory doesn't exist or can't be accessed — nothing to clean up.
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.warn(`[OpenClaw] Failed to clean stale plugin directory: ${staleDir}`, error);
+        }
       }
     }
   }
