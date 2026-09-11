@@ -6,6 +6,7 @@ import fs from 'fs';
 import net from 'net';
 import os from 'os';
 import path from 'path';
+import { stripVTControlCharacters } from 'util';
 
 import {
   OpenClawEngineErrorCode,
@@ -62,6 +63,8 @@ const OPENCLAW_GATEWAY_MAX_OLD_SPACE_MB = 4096;
 const OPENCLAW_GATEWAY_MAX_OLD_SPACE_OPTION = `--max-old-space-size=${OPENCLAW_GATEWAY_MAX_OLD_SPACE_MB}`;
 const NODE_MAX_OLD_SPACE_RE = /(?:^|\s)--max-old-space-size(?:=|\s|$)/;
 const GATEWAY_RECENT_OUTPUT_LINE_LIMIT = 80;
+const OPENCLAW_PLUGIN_VERIFICATION_FAILURE = 'OpenClaw plugin verification failed; refusing to report the gateway ready.';
+const OPENCLAW_PLUGIN_VERIFICATION_DETAIL_LIMIT = 400;
 const GATEWAY_PROBE_PATH = {
   Health: '/health',
   Healthz: '/healthz',
@@ -110,6 +113,28 @@ export interface OpenClawGatewayConnectionInfo {
 export const isOpenClawConfigStartupFailure = (text: string | null | undefined): boolean => {
   if (!text) return false;
   return OPENCLAW_CONFIG_STARTUP_FAILURE_PATTERNS.some((pattern) => pattern.test(text));
+};
+
+export const extractOpenClawPluginVerificationFailure = (
+  text: string | null | undefined,
+): string | null => {
+  if (!text) return null;
+  const lines = stripVTControlCharacters(text).split(/\r?\n/)
+    .map(line => line.trim().replace(/^(?:\[[^\]\r\n]*\]\s*)+/, ''));
+  const failureIndex = lines.lastIndexOf(OPENCLAW_PLUGIN_VERIFICATION_FAILURE);
+  if (failureIndex < 0) return null;
+
+  // Only include this terminal failure's diagnostic bullets, not unrelated
+  // warnings or a prior process's log tail.
+  const details = [lines[failureIndex]];
+  for (const line of lines.slice(failureIndex + 1)) {
+    if (!line.startsWith('- ')) break;
+    details.push(line);
+  }
+  const detail = details.join('\n');
+  return detail.length > OPENCLAW_PLUGIN_VERIFICATION_DETAIL_LIMIT
+    ? `${detail.slice(0, OPENCLAW_PLUGIN_VERIFICATION_DETAIL_LIMIT - 1)}…`
+    : detail;
 };
 
 export const isOpenClawGatewayHeapOutOfMemory = (
@@ -2021,6 +2046,20 @@ export class OpenClawEngineManager extends EventEmitter {
       if (processFailure) {
         this.gatewayFailureByProcess.set(child, processFailure);
         this.lastGatewayFailure = processFailure;
+      }
+
+      const pluginVerificationFailure = extractOpenClawPluginVerificationFailure(recentOutput);
+      if (pluginVerificationFailure) {
+        console.error(`${gwDiagTs()} gateway plugin verification failed; auto-restart suppressed`);
+        this.gatewayRestartAttempt = 0;
+        this.clearScheduledGatewayRestart();
+        this.setStatus({
+          phase: OpenClawEnginePhase.Error,
+          version: this.status.version,
+          message: t('openClawPluginVerificationFailed', { error: pluginVerificationFailure }),
+          canRetry: true,
+        });
+        return;
       }
 
       if (isOpenClawConfigStartupFailure(tail)) {

@@ -17,6 +17,7 @@ export type LanguageType = 'zh' | 'en';
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
     openClawStartupMigrationFailed: 'AI 引擎状态升级失败：{error}',
+    openClawPluginVerificationFailed: 'AI 引擎插件校验失败，已停止自动重启。请处理以下插件错误后重试：\n{error}',
     // DeepSeek Harness (experimental)
     dshWorkbenchTitle: 'DeepSeek Harness 工作台（实验）',
     dshPlanProviderName: '套餐',
@@ -384,6 +385,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
   },
   en: {
     openClawStartupMigrationFailed: 'AI engine state migration failed: {error}',
+    openClawPluginVerificationFailed: 'AI engine plugin verification failed. Automatic restarts stopped. Fix the plugin error and retry:\n{error}',
     // DeepSeek Harness (experimental)
     dshWorkbenchTitle: 'DeepSeek Harness Workbench (Experimental)',
     dshPlanProviderName: 'Plan',
