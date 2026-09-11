@@ -12,6 +12,10 @@ const require = createRequire(import.meta.url);
 const asar = require('@electron/asar');
 const tar = require('tar');
 const { createOpenClawWindowsPayload } = require('../scripts/openclaw-windows-payload.cjs');
+const { createOpenClawRuntimePayload, OpenClawPayloadTarget } = require('../scripts/openclaw-runtime-payload.cjs');
+const { pruneOpenClawMacPayload } = require('../scripts/openclaw-mac-payload.cjs');
+const { afterPack } = require('../scripts/electron-builder-hooks.cjs');
+const { Arch } = require('builder-util');
 const { ensureOpenClawPluginSdkBridge, verifyOpenClawPluginSdkBridge } = require('../scripts/openclaw-plugin-sdk-bridge.cjs');
 const { packSingleSource, packMultipleSources } = require('../scripts/pack-openclaw-tar.cjs');
 const tempDirs: string[] = [];
@@ -19,6 +23,10 @@ const nativeRoots = ['dist/native', 'node_modules/@openclaw/fs-safe/dist/native'
 const sdkName = '@anthropic-ai/claude-agent-sdk';
 const cuaName = '@trycua/cua-driver';
 const controlUiManifest = 'dist/control-ui/asset-manifest.json';
+const macTargets = [
+  { target: OpenClawPayloadTarget.MacArm64, arch: Arch.arm64, native: 'darwin-arm64', otherNative: 'darwin-x64' },
+  { target: OpenClawPayloadTarget.MacX64, arch: Arch.x64, native: 'darwin-x64', otherNative: 'darwin-arm64' },
+];
 
 function createOpenClawWindowsPayloadFilter(root: string, target: string | undefined) {
   return createOpenClawWindowsPayload(root, target).filter;
@@ -40,14 +48,14 @@ function manifest(root: string, relative: string, value: object): void {
   write(root, relative, JSON.stringify(value));
 }
 
-async function fixture(): Promise<string> {
+async function fixture(target: string = OpenClawPayloadTarget.WindowsX64): Promise<string> {
   const parent = tempDir();
   const root = path.join(parent, 'runtime');
   manifest(root, 'package.json', {
     name: 'openclaw', version: '2026.8.1', type: 'module',
     exports: { './plugin-sdk/core': './dist/plugin-sdk/core.js' },
   });
-  manifest(root, 'runtime-build-info.json', { target: 'win-x64' });
+  manifest(root, 'runtime-build-info.json', { target });
   const bareFiles = {
     'openclaw.mjs': 'import "./dist/entry.js";',
     'dist/entry.js': 'export {};',
@@ -80,13 +88,14 @@ async function fixture(): Promise<string> {
     generation: createHash('sha256').update(assets.map(asset => `${asset.path}\0${asset.size}\0${asset.sha256}\n`).join('')).digest('hex'),
   });
   for (const nativeRoot of nativeRoots) {
-    for (const target of ['win32-x64-msvc', 'darwin-arm64', 'linux-x64-gnu']) {
-      write(root, `${nativeRoot}/${target}/fs-safe-native.node`);
+    for (const native of ['win32-x64-msvc', 'darwin-arm64', 'darwin-x64', 'linux-x64-gnu']) {
+      write(root, `${nativeRoot}/${native}/fs-safe-native.node`);
     }
     write(root, `${nativeRoot}/metadata.json`, '{}');
   }
+  const macNative = macTargets.find(item => item.target === target)?.native;
   for (const [name, version, nativeSuffix] of [
-    [sdkName, '0.3.239', 'win32-x64'], [cuaName, '0.21.0', 'win32-x64-msvc'],
+    [sdkName, '0.3.239', macNative || 'win32-x64'], [cuaName, '0.21.0', macNative || 'win32-x64-msvc'],
   ]) {
     manifest(root, `node_modules/${name}/package.json`, {
       name, version, optionalDependencies: { [`${name}-${nativeSuffix}`]: version },
@@ -99,6 +108,10 @@ async function fixture(): Promise<string> {
   write(root, 'node_modules/@trycua/unrelated/index.js');
   write(root, 'node_modules/@koromix/unrelated/index.js');
   write(root, 'node_modules/@koromix/koffi-win32-x64/native.node');
+  for (const { native } of macTargets) {
+    write(root, `node_modules/@koromix/koffi-${native}/native.node`);
+    write(root, `node_modules/@img/sharp-${native}/lib/sharp.node`);
+  }
   for (const [file, format] of [['index.js', 'CJS'], ['index.mjs', 'ESM']]) {
     write(root, `node_modules/koffi/${file}`, `// Stub (${format}): this package is not needed for headless gateway operation.\n`);
   }
@@ -179,7 +192,7 @@ test.each(['single', 'combined'])('slims the %s tar while preserving native SDK 
 });
 
 test.each([
-  'openclaw.mjs', 'dist/entry.js', 'dist/plugin-sdk/core.js', 'dist/control-ui/index.html',
+  'openclaw.mjs', 'gateway-bundle.mjs', 'dist/entry.js', 'dist/plugin-sdk/core.js', 'dist/control-ui/index.html',
   'dist/worker/worker.mjs', 'web-tree-sitter.wasm',
   controlUiManifest,
   ...nativeRoots.map(root => `${root}/win32-x64-msvc/fs-safe-native.node`),
@@ -251,4 +264,177 @@ test('rejects tar overrides outside their owned staging directory', () => {
   const output = path.join(tempDir(), 'payload.tar');
   expect(() => packSingleSource(root, output, 'cfmind', { overrides: { '../outside.js': 'unexpected' } })).toThrow('Invalid payload override path');
   expect(fs.existsSync(path.join(path.dirname(output), 'outside.js'))).toBe(false);
+});
+
+function snapshot(root: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  function walk(dir: string) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else files[path.relative(root, file)] = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    }
+  }
+  walk(root);
+  return files;
+}
+
+test.each(macTargets)('trims the $target app copy and preserves runtime imports and the source cache', async ({ target, native, otherNative }) => {
+  const root = await fixture(target);
+  const original = snapshot(root);
+  const app = path.join(tempDir(), '安装目录 with spaces #', 'LobsterAI.app');
+  const installed = path.join(app, 'Contents', 'Resources', 'cfmind');
+  fs.cpSync(root, installed, { recursive: true });
+  // electron-builder uses hard links for resource files on CI.
+  fs.unlinkSync(path.join(installed, controlUiManifest));
+  fs.linkSync(path.join(root, controlUiManifest), path.join(installed, controlUiManifest));
+  const resources = path.dirname(installed);
+  write(resources, 'SKILLs/gateway.asar');
+  fs.chmodSync(path.join(installed, 'openclaw.mjs'), 0o755);
+  const beforeSize = measureSize(installed);
+
+  const stats = pruneOpenClawMacPayload(app, target);
+  expect(stats.bytesFreed).toBe(beforeSize - measureSize(installed));
+  expect(stats.bytesFreed).toBeGreaterThan(0);
+  expect(snapshot(root)).toEqual(original);
+  for (const removed of [
+    'gateway.asar', 'gateway-bundle.mjs', `node_modules/${sdkName}-${native}/native.bin`,
+    `node_modules/${cuaName}/sdk.mjs`, `node_modules/${cuaName}-${native}/native.bin`,
+    'dist/control-ui/assets/app.js.br', 'dist/control-ui/assets/app.js.gz',
+    ...macTargets.map(item => `node_modules/@koromix/koffi-${item.native}/native.node`),
+    ...nativeRoots.flatMap(dir => [otherNative, 'win32-x64-msvc', 'linux-x64-gnu'].map(arch => `${dir}/${arch}/fs-safe-native.node`)),
+  ]) expect(fs.existsSync(path.join(installed, removed)), removed).toBe(false);
+  for (const kept of [
+    'openclaw.mjs', 'dist/worker/worker.mjs',
+    `node_modules/${sdkName}/sdk.mjs`, 'node_modules/@anthropic-ai/sdk/index.mjs', 'dist/extensions/anthropic/index.js',
+    'dist/control-ui/assets/app.js', 'dist/control-ui/assets/compressed-only.gz',
+    `node_modules/@img/sharp-${native}/lib/sharp.node`,
+    ...nativeRoots.map(dir => `${dir}/${native}/fs-safe-native.node`),
+  ]) expect(fs.readFileSync(path.join(installed, kept))).toEqual(fs.readFileSync(path.join(root, kept)));
+  expect(fs.readFileSync(path.join(resources, 'SKILLs/gateway.asar'), 'utf8')).toBe('fixture');
+  if (process.platform !== 'win32') expect(fs.statSync(path.join(installed, 'openclaw.mjs')).mode & 0o777).toBe(0o755);
+
+  const ui = JSON.parse(fs.readFileSync(path.join(installed, controlUiManifest), 'utf8'));
+  expect(ui.assets).toHaveLength(1);
+  const asset = ui.assets[0];
+  expect(asset.path).toBe('assets/app.js');
+  expect(ui.generation).toBe(createHash('sha256').update(`${asset.path}\0${asset.size}\0${asset.sha256}\n`).digest('hex'));
+  fs.renameSync(root, `${root}-old`);
+  verifyOpenClawPluginSdkBridge(installed);
+  const probe = spawnSync(process.execPath, [path.join(installed, 'third-party-extensions/discord/probe.mjs')], {
+    cwd: installed, env: { ...process.env, NODE_PATH: '', NODE_OPTIONS: '' }, encoding: 'utf8', timeout: 15000,
+  });
+  expect(probe.stderr).toBe('');
+  expect(probe.status).toBe(0);
+  expect(probe.stdout.trim()).toBe('relocated-sdk-ok');
+  const trimmed = snapshot(installed);
+  expect(pruneOpenClawMacPayload(app, target)).toEqual({ filesRemoved: 0, bytesFreed: 0 });
+  expect(snapshot(installed)).toEqual(trimmed);
+});
+
+function measureSize(root: string): number {
+  return fs.readdirSync(root, { withFileTypes: true }).reduce((size, entry) => {
+    const file = path.join(root, entry.name);
+    return size + (entry.isDirectory() ? measureSize(file) : fs.lstatSync(file).size);
+  }, 0);
+}
+
+test.each(macTargets)('rejects incomplete $target native payloads before deleting files', async ({ target, native }) => {
+  const root = await fixture(target);
+  for (const nativeRoot of nativeRoots) {
+    const app = path.join(tempDir(), 'LobsterAI.app');
+    const installed = path.join(app, 'Contents', 'Resources', 'cfmind');
+    fs.cpSync(root, installed, { recursive: true });
+    fs.unlinkSync(path.join(installed, nativeRoot, native, 'fs-safe-native.node'));
+    const before = snapshot(installed);
+    expect(() => pruneOpenClawMacPayload(app, target)).toThrow('Missing bare runtime file');
+    expect(snapshot(installed)).toEqual(before);
+  }
+});
+
+test.each(macTargets)('preserves unreviewed SDK packages and restored native consumers on $target', async ({ target, native }) => {
+  const root = await fixture(target);
+  manifest(root, `node_modules/${sdkName}/package.json`, {
+    name: sdkName, version: '0.4.0', optionalDependencies: { [`${sdkName}-${native}`]: '0.4.0' },
+  });
+  write(root, 'third-party-extensions/cua-computer/index.js');
+  write(root, 'node_modules/koffi/index.mjs', 'export default {};');
+  const { filter } = createOpenClawRuntimePayload(root, target);
+  for (const kept of [
+    `node_modules/${sdkName}-${native}/native.bin`, `node_modules/${cuaName}/sdk.mjs`,
+    `node_modules/${cuaName}-${native}/native.bin`, `node_modules/@koromix/koffi-${native}/native.node`,
+  ]) expect(filter(kept)).toBe(true);
+});
+
+test.each(macTargets)('leaves unreviewed OpenClaw versions untouched on $target', async ({ target }) => {
+  const root = await fixture(target);
+  const host = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  manifest(root, 'package.json', { ...host, version: '2026.8.2' });
+  const app = path.join(tempDir(), 'LobsterAI.app');
+  const installed = path.join(app, 'Contents', 'Resources', 'cfmind');
+  fs.cpSync(root, installed, { recursive: true });
+  const before = snapshot(installed);
+  expect(pruneOpenClawMacPayload(app, target)).toEqual({ filesRemoved: 0, bytesFreed: 0 });
+  expect(snapshot(installed)).toEqual(before);
+});
+
+test.each([
+  { name: 'missing bare CLI', corrupt: (root: string) => fs.unlinkSync(path.join(root, 'openclaw.mjs')) },
+  { name: 'missing worker', corrupt: (root: string) => fs.unlinkSync(path.join(root, 'dist/worker/worker.mjs')) },
+  { name: 'stale bare file', corrupt: (root: string) => write(root, 'dist/entry.js', 'stale code') },
+  { name: 'target mismatch', corrupt: (root: string) => manifest(root, 'runtime-build-info.json', { target: OpenClawPayloadTarget.MacX64 }) },
+  { name: 'invalid manifest', corrupt: (root: string) => manifest(root, controlUiManifest, { version: 2 }) },
+])('aborts macOS pruning without partial deletion on $name', async ({ corrupt }) => {
+  const target = OpenClawPayloadTarget.MacArm64;
+  const root = await fixture(target);
+  const app = path.join(tempDir(), 'LobsterAI.app');
+  const installed = path.join(app, 'Contents', 'Resources', 'cfmind');
+  fs.cpSync(root, installed, { recursive: true });
+  corrupt(installed);
+  const before = snapshot(installed);
+  expect(() => pruneOpenClawMacPayload(app, target)).toThrow();
+  expect(snapshot(installed)).toEqual(before);
+});
+
+test('refuses to prune a linked build cache as a packaged macOS runtime', async () => {
+  const root = await fixture(OpenClawPayloadTarget.MacArm64);
+  const app = path.join(tempDir(), 'LobsterAI.app');
+  const installed = path.join(app, 'Contents', 'Resources', 'cfmind');
+  fs.mkdirSync(path.dirname(installed), { recursive: true });
+  fs.symlinkSync(root, installed, process.platform === 'win32' ? 'junction' : 'dir');
+  const before = snapshot(root);
+  expect(() => pruneOpenClawMacPayload(app, OpenClawPayloadTarget.MacArm64)).toThrow('not a link to the build cache');
+  expect(snapshot(root)).toEqual(before);
+});
+
+test.each(macTargets)('runs $target payload pruning from the real afterPack hook', async ({ target, arch, native }) => {
+  const root = await fixture(target);
+  const appOutDir = tempDir();
+  const installed = path.join(appOutDir, 'LobsterAI.app', 'Contents', 'Resources', 'cfmind');
+  fs.cpSync(root, installed, { recursive: true });
+  write(installed, 'node_modules/.bin/unused');
+  await afterPack({ appOutDir, arch, electronPlatformName: 'darwin', packager: { appInfo: { productFilename: 'LobsterAI' } } });
+  expect(fs.existsSync(path.join(installed, 'gateway.asar'))).toBe(false);
+  expect(fs.existsSync(path.join(installed, 'gateway-bundle.mjs'))).toBe(false);
+  expect(fs.existsSync(path.join(installed, 'node_modules/.bin'))).toBe(false);
+  expect(fs.existsSync(path.join(root, 'gateway.asar'))).toBe(true);
+  expect(fs.existsSync(path.join(root, 'gateway-bundle.mjs'))).toBe(true);
+  expect(fs.existsSync(path.join(installed, 'dist/native', native, 'fs-safe-native.node'))).toBe(true);
+});
+
+test.each([Arch.arm64, Arch.x64, Arch.universal])('preserves universal build resources in its arch=%s hook', async arch => {
+  const appOutDir = tempDir();
+  const installed = path.join(appOutDir, 'LobsterAI.app', 'Contents', 'Resources', 'cfmind');
+  for (const { native } of macTargets) write(installed, `dist/native/${native}/fs-safe-native.node`);
+  write(installed, 'gateway-bundle.mjs');
+  const before = snapshot(installed);
+  const platform = {};
+  await afterPack({
+    appOutDir, arch, electronPlatformName: 'darwin',
+    packager: {
+      platform, appInfo: { productFilename: 'LobsterAI' },
+      info: { options: { targets: new Map([[platform, new Map([[Arch.universal, ['dmg']]])]]) } },
+    },
+  });
+  expect(snapshot(installed)).toEqual(before);
 });

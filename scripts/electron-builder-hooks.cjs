@@ -4,6 +4,7 @@ const path = require('path');
 const { existsSync, readdirSync, statSync, mkdirSync, readFileSync, rmSync, cpSync, lstatSync, writeFileSync } = require('fs');
 const { spawnSync } = require('child_process');
 const asar = require('@electron/asar');
+const { Arch } = require('builder-util');
 const { OPENCLAW_BUNDLE_ASSET_TARGETS } = require('./openclaw-bundle-assets.cjs');
 const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-python-runtime.js');
 const { syncLocalOpenClawExtensions } = require('./sync-local-openclaw-extensions.cjs');
@@ -18,6 +19,8 @@ const {
 const { collectHostPeerLeftovers, measureDirectorySize } = require('./openclaw-plugin-host-peer-leftovers.cjs');
 const { verifyOpenClawPluginSdkBridge } = require('./openclaw-plugin-sdk-bridge.cjs');
 const { createOpenClawWindowsPayload } = require('./openclaw-windows-payload.cjs');
+const { pruneOpenClawMacPayload } = require('./openclaw-mac-payload.cjs');
+const { configureBetterSqlite3MacPayload } = require('./better-sqlite3-mac-payload.cjs');
 
 function isWindowsTarget(context) {
   return context?.electronPlatformName === 'win32';
@@ -696,6 +699,7 @@ function writeWindowsPayloadSizeFragment(context) {
 }
 
 async function beforePack(context) {
+  configureBetterSqlite3MacPayload(context);
   ensureBundledOpenClawRuntime(context);
   // Install skill dependencies first (for all platforms)
   installSkillDependencies();
@@ -774,6 +778,13 @@ async function afterPack(context) {
     const appPath = path.join(context.appOutDir, `${appName}.app`);
 
     if (existsSync(appPath)) {
+      // Universal merging requires matching native file paths in both inputs.
+      // Keep its existing layout, including the intermediate per-arch hooks.
+      const universalBuild = context.arch === Arch.universal
+        || context.packager.info?.options?.targets?.get(context.packager.platform)?.has(Arch.universal);
+      if (!universalBuild) {
+        pruneOpenClawMacPayload(appPath, resolveOpenClawRuntimeTargetId(context));
+      }
       // Remove all .bin directories (symlinks) before signing to prevent codesign failures
       removeAllBinDirsInCfmind(appPath);
       applyMacIconFix(appPath);
