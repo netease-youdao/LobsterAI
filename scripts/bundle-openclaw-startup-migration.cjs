@@ -15,6 +15,10 @@ async function bundleOpenClawStartupMigration(runtimeDir, openclawSrc) {
       throw new Error(`Startup migration must use OpenClaw ${expectedVersion}; found ${version} at ${directory}`);
     }
   }
+  const authOwner = fs.readFileSync(path.join(openclawSrc, 'src/commands/doctor-auth-flat-profiles.ts'), 'utf8');
+  if (!authOwner.includes('await params.persistConfig?.(params.cfg)')) {
+    throw new Error('Startup auth migration requires openclaw-auth-migration-config-commit.patch; run openclaw:patch first.');
+  }
   const outputPath = path.join(runtimeDir, path.basename(entryPath));
   // Rebuild even when the gateway cache is current: this entry is maintained by
   // LobsterAI and must match the pinned upstream migration/schema implementation.
@@ -27,6 +31,14 @@ async function bundleOpenClawStartupMigration(runtimeDir, openclawSrc) {
       '#openclaw-device-identity-migration': path.join(openclawSrc, 'src/infra/state-migrations.device-identity.ts'),
       '#openclaw-device-identity': path.join(openclawSrc, 'src/infra/device-identity.ts'),
       '#openclaw-exec-approvals-migration': path.join(openclawSrc, 'src/infra/state-migrations.exec-approvals.ts'),
+      '#openclaw-auth-profile-migration': path.join(openclawSrc, 'src/commands/doctor-auth-flat-profiles.ts'),
+      '#openclaw-auth-sidecar-migration': path.join(openclawSrc, 'src/commands/doctor-auth-oauth-sidecar.ts'),
+      '#openclaw-auth-migration-paths': path.join(openclawSrc, 'src/commands/doctor-auth-legacy-paths.ts'),
+      '#openclaw-auth-migration-diagnostic': path.join(openclawSrc, 'src/agents/auth-profiles/legacy-source-diagnostic.ts'),
+      '#openclaw-auth-profile-persisted': path.join(openclawSrc, 'src/agents/auth-profiles/persisted.ts'),
+      '#openclaw-auth-profile-sqlite': path.join(openclawSrc, 'src/agents/auth-profiles/sqlite.ts'),
+      '#openclaw-config-io': path.join(openclawSrc, 'src/config/io.factory.ts'),
+      '#openclaw-migration-lock': path.join(openclawSrc, 'src/infra/state-migrations.lock.ts'),
     },
     tsconfig: path.join(openclawSrc, 'tsconfig.json'),
     bundle: true,
@@ -35,6 +47,23 @@ async function bundleOpenClawStartupMigration(runtimeDir, openclawSrc) {
     format: 'esm',
     packages: 'external',
     plugins: [{
+      name: 'inline-doctor-markdown-dependencies',
+      setup(build) {
+        // Doctor's note formatter imports these packages, which the desktop
+        // runtime does not ship. Inline their complete pure-JS dependency trees.
+        build.onResolve({ filter: /^(?:mdast-util-from-markdown|mdast-util-gfm-table|micromark-extension-gfm-table)$/ }, args => ({
+          path: require.resolve(args.path, { paths: [args.resolveDir] }),
+          namespace: 'doctor-markdown',
+        }));
+        build.onLoad({ filter: /.*/, namespace: 'doctor-markdown' }, async args => {
+          const result = await esbuild.build({
+            entryPoints: [args.path], bundle: true, platform: 'node',
+            format: 'esm', write: false, logLevel: 'warning',
+          });
+          return { contents: result.outputFiles[0].text, loader: 'js' };
+        });
+      },
+    }, {
       name: 'openclaw-sqlite-schema',
       setup(build) {
         // Match OpenClaw's production build: schema modules read adjacent SQL

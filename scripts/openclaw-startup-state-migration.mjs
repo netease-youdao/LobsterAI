@@ -1,6 +1,7 @@
 // Bundle the pinned owners, without general Doctor's config/plugin repairs.
 import fs from 'node:fs';
 import path from 'node:path';
+import { migrateAuthProfilesBeforeStartup } from './openclaw-auth-profile-migration.mjs';
 import { detectLegacyDeviceAuth, migrateLegacyDeviceAuth } from '#openclaw-device-auth-migration';
 import { detectLegacyDeviceIdentity, migrateLegacyDeviceIdentity } from '#openclaw-device-identity-migration';
 import { loadDeviceIdentityIfPresent } from '#openclaw-device-identity';
@@ -56,7 +57,8 @@ try {
   if (![stateDir, configPath, homeDir].every(value => value && path.isAbsolute(value))) {
     throw new Error('Startup migration requires explicit absolute OpenClaw state, config and home paths.');
   }
-  // Read only the generated config. Do not load plugins or acquire its config lock.
+  // Other owners read the generated config; the auth owner locks and persists
+  // only credential-related config changes through the canonical writer.
   const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
     throw new Error('Startup migration requires an OpenClaw config object.');
@@ -87,11 +89,18 @@ try {
     () => detectLegacyWorkspaceState(workspaceOptions),
     detected => migrateLegacyWorkspaceState({ ...options, detected }),
     detected => detected.sources.map(source => source.sourcePath));
+
+  const authProfiles = await migrateAuthProfilesBeforeStartup({ stateDir, configPath, env: process.env });
+  const authOwner = OpenClawStartupMigrationOwner.AuthProfiles;
+  report.sourceCounts[authOwner] = authProfiles.sourceCount;
+  report.changes.push(...authProfiles.changes.map(value => `[${authOwner}] ${value}`));
+  report.notices.push(...authProfiles.notices.map(value => `[${authOwner}] ${value}`));
+  report.warnings.push(...authProfiles.warnings.map(value => `[${authOwner}] ${value}`));
 } catch (error) {
   report.warnings.push(error instanceof Error ? error.message : String(error));
 }
 report.sourceCount = Object.values(report.sourceCounts).reduce((total, count) => total + count, 0);
 report.status = report.warnings.length || report.remainingPaths.length ? OpenClawStartupMigrationStatus.Failed
-  : report.sourceCount ? OpenClawStartupMigrationStatus.Migrated : OpenClawStartupMigrationStatus.Skipped;
+  : report.sourceCount || report.changes.length ? OpenClawStartupMigrationStatus.Migrated : OpenClawStartupMigrationStatus.Skipped;
 console.log(OPENCLAW_STARTUP_MIGRATION_RESULT_PREFIX + JSON.stringify(report));
 process.exitCode = report.status === OpenClawStartupMigrationStatus.Failed ? 1 : 0;

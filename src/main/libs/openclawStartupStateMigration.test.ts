@@ -21,6 +21,7 @@ const report = (overrides: Partial<OpenClawStartupMigrationReport> = {}): string
     status: OpenClawStartupMigrationStatus.Migrated,
     sourceCount: 2, changes: ['Migrated workspace setup state to SQLite.'],
     sourceCounts: {
+      [OpenClawStartupMigrationOwner.AuthProfiles]: 0,
       [OpenClawStartupMigrationOwner.DeviceAuth]: 0,
       [OpenClawStartupMigrationOwner.DeviceIdentity]: 0,
       [OpenClawStartupMigrationOwner.ExecApprovals]: 0,
@@ -130,7 +131,7 @@ describe('state migration before gateway startup', () => {
 
   test.each(Object.values(InventoryFault))('rejects an incomplete migration inventory: %s', async (fault) => {
     const incomplete = JSON.parse(report().slice(OPENCLAW_STARTUP_MIGRATION_RESULT_PREFIX.length));
-    if (fault === InventoryFault.MissingOwner) delete incomplete.sourceCounts[OpenClawStartupMigrationOwner.DeviceIdentity];
+    if (fault === InventoryFault.MissingOwner) delete incomplete.sourceCounts[OpenClawStartupMigrationOwner.AuthProfiles];
     if (fault === InventoryFault.WrongTotal) incomplete.sourceCount++;
     if (fault === InventoryFault.UnknownOwner) incomplete.sourceCounts.unknown = 0;
     const runner = vi.fn(async () => ({ code: 0,
