@@ -111,8 +111,13 @@ LobsterAI 在 `SKILLs/skills.config.json` 中配置了 28 个内置技能，包�
 环境要求：
 
 - Node.js `>=24.15.0 <25`
-- npm
+- npm `>=11.17.0 <12`（旧版本可运行 `npm install -g npm@11.17.0` 升级）
 - git 与 pnpm，首次启动时用于从同级目录 `../openclaw` 构建锁定版本的 OpenClaw runtime
+
+`better-sqlite3@13.0.3` 已包含 Windows、macOS 和 Linux 的 x64/arm64 N-API
+预编译文件。`package.json` 中的 `allowScripts` 配置跳过 npm 对此版本触发的多余编译，
+因此在 Windows 上安装它不需要 Visual Studio C++ Build Tools。其他依赖的安装脚本仍会执行。
+升级 `better-sqlite3` 时需重新检查此配置。
 
 ```bash
 git clone https://github.com/netease-youdao/LobsterAI.git
@@ -241,6 +246,7 @@ CI 工作流在各自的操作系统上构建对应的安装包（macOS、Window
 构建机环境要求：
 
 - Node.js `>=24.15.0 <25`。`.npmrc` 开启了 `engine-strict`，其他版本会被 npm 直接拒绝。
+- npm `>=11.17.0 <12`，用于支持依赖安装脚本的按包配置。
 - git 与 pnpm，用于从同级目录 `../openclaw` 构建锁定版本的 OpenClaw runtime（可用 `OPENCLAW_SRC` 指定路径）。
 - Windows：需要 Git for Windows，runtime 构建脚本在它自带的 Git Bash 中运行。没有安装的话，先执行一次 `npm run setup:mingit`，在 `resources/mingit` 准备便携版 Git。
 
@@ -250,7 +256,8 @@ CI 工作流在各自的操作系统上构建对应的安装包（macOS、Window
 # 1. 严格按 package-lock.json 安装依赖。
 #    npm ci 会自己清空 node_modules，不要手动删，也不要先跑 npm install：
 #    那样所有依赖会装两遍，还可能改写 lock 文件。
-#    postinstall 会应用 patches/ 下的补丁，并针对 Electron 重新编译原生模块。
+#    postinstall 会应用 patches/ 下的补丁；better-sqlite3 在 Node.js 和 Electron 中
+#    均使用包内的 N-API 预编译文件。
 npm ci
 
 # 2. 清理旧的构建产物。dist-electron 由 tsc 输出，源文件删掉后旧产物不会自动清理。

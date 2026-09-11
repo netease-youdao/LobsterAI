@@ -1,5 +1,5 @@
-import type { NativeImage, Rectangle } from 'electron';
-import { describe, expect, test, vi } from 'vitest';
+import type { NativeImage } from 'electron';
+import { describe, expect, test } from 'vitest';
 
 import {
   getLibraryHtmlThumbnailStampColor,
@@ -7,40 +7,9 @@ import {
 } from '../../shared/library/htmlThumbnail';
 import {
   getLibraryThumbnailPresentationStampColor,
-  LibraryThumbnailFailureCode,
   LibraryThumbnailPresentationStamp,
 } from '../../shared/library/thumbnail';
-import {
-  hasLibraryThumbnailPresentationStamp,
-  waitForCommittedThumbnailPresentation,
-} from './libraryThumbnailPresentation';
-
-const createWebContents = (frames: NativeImage[]) => {
-  let callback: ((image: NativeImage, dirtyRect: Rectangle) => void) | undefined;
-  const endFrameSubscription = vi.fn();
-  const invalidate = vi.fn(() => {
-    const image = frames.shift();
-    if (image) {
-      queueMicrotask(() => callback?.(image, {
-        x: 0,
-        y: 0,
-        width: 480,
-        height: 270,
-      }));
-    }
-  });
-  return {
-    beginFrameSubscription: vi.fn((
-      _onlyDirty: boolean,
-      nextCallback: (image: NativeImage, dirtyRect: Rectangle) => void,
-    ) => {
-      callback = nextCallback;
-    }),
-    endFrameSubscription,
-    invalidate,
-    isDestroyed: () => false,
-  };
-};
+import { hasLibraryThumbnailPresentationStamp } from './libraryThumbnailPresentation';
 
 const createStampedImage = (
   renderGeneration: number,
@@ -124,45 +93,12 @@ const createHtmlStampedImage = ({
   } as unknown as NativeImage;
 };
 
-describe('library thumbnail presentation barrier', () => {
-  test('ignores the first frame and returns the frame committed after a second repaint', async () => {
-    const firstFrame = { frame: 'previous' } as unknown as NativeImage;
-    const committedFrame = { frame: 'current' } as unknown as NativeImage;
-    const webContents = createWebContents([firstFrame, committedFrame]);
-
-    await expect(waitForCommittedThumbnailPresentation(webContents, 50)).resolves.toBe(
-      committedFrame,
-    );
-
-    expect(webContents.beginFrameSubscription).toHaveBeenCalledWith(false, expect.any(Function));
-    expect(webContents.invalidate).toHaveBeenCalledTimes(2);
-    expect(webContents.endFrameSubscription).toHaveBeenCalledTimes(1);
-  });
-
-  test('ends the frame subscription when presentation times out', async () => {
-    const webContents = createWebContents([]);
-
-    const presentation = waitForCommittedThumbnailPresentation(webContents, 5);
-    await expect(presentation).rejects.toThrow('Thumbnail presentation timed out');
-    await expect(presentation).rejects.toMatchObject({
-      code: LibraryThumbnailFailureCode.PresentationTimeout,
-    });
-
-    expect(webContents.endFrameSubscription).toHaveBeenCalledTimes(1);
-  });
-
-  test('waits until the frame carries the current render generation stamp', async () => {
-    const previousFrame = createStampedImage(41);
-    const committedFrame = createStampedImage(42);
+describe('library thumbnail presentation stamp', () => {
+  test('only accepts the frame carrying the current render generation stamp', () => {
     const expectation = { width: 480, height: 270, renderGeneration: 42 };
-    const webContents = createWebContents([previousFrame, committedFrame]);
 
-    expect(hasLibraryThumbnailPresentationStamp(previousFrame, expectation)).toBe(false);
-    expect(hasLibraryThumbnailPresentationStamp(committedFrame, expectation)).toBe(true);
-    await expect(
-      waitForCommittedThumbnailPresentation(webContents, 50, expectation),
-    ).resolves.toBe(committedFrame);
-    expect(webContents.invalidate).toHaveBeenCalledTimes(2);
+    expect(hasLibraryThumbnailPresentationStamp(createStampedImage(41), expectation)).toBe(false);
+    expect(hasLibraryThumbnailPresentationStamp(createStampedImage(42), expectation)).toBe(true);
   });
 
   test.each([1, 1.25, 1.5])(
@@ -216,22 +152,6 @@ describe('library thumbnail presentation barrier', () => {
     expect(hasLibraryThumbnailPresentationStamp(image, expectation)).toBe(true);
   });
 
-  test('returns the exact frame carrying both HTML stamps, not separate parent and child frames', async () => {
-    const expectation = { width: 480, height: 270, renderGeneration: 42, html: true };
-    const parentOnly = createHtmlStampedImage({ parentGeneration: 42 });
-    const childOnly = createHtmlStampedImage({ childGeneration: 42 });
-    const staleChild = createHtmlStampedImage({ parentGeneration: 42, childGeneration: 41 });
-    const committedFrame = createHtmlStampedImage({ parentGeneration: 42, childGeneration: 42 });
-    const webContents = createWebContents([parentOnly, childOnly, staleChild, committedFrame]);
-
-    await expect(
-      waitForCommittedThumbnailPresentation(webContents, 50, expectation),
-    ).resolves.toBe(committedFrame);
-
-    expect(webContents.invalidate).toHaveBeenCalledTimes(4);
-    expect(webContents.endFrameSubscription).toHaveBeenCalledTimes(1);
-  });
-
   test.each([1, 1.25, 1.5, 1.75, 2])(
     'recognizes both HTML stamps at %sx display scale with logical or physical reported dimensions',
     scale => {
@@ -269,18 +189,5 @@ describe('library thumbnail presentation barrier', () => {
     image.toBitmap().fill(255, sampleOffset, sampleOffset + 4);
 
     expect(hasLibraryThumbnailPresentationStamp(image, expectation)).toBe(false);
-  });
-
-  test('times out and unsubscribes if the HTML child marker never presents', async () => {
-    const expectation = { width: 480, height: 270, renderGeneration: 42, html: true };
-    const webContents = createWebContents([
-      createHtmlStampedImage({ parentGeneration: 42 }),
-      createHtmlStampedImage({ parentGeneration: 42, childGeneration: 41 }),
-    ]);
-
-    await expect(waitForCommittedThumbnailPresentation(webContents, 5, expectation)).rejects.toMatchObject({
-      code: LibraryThumbnailFailureCode.PresentationTimeout,
-    });
-    expect(webContents.endFrameSubscription).toHaveBeenCalledTimes(1);
   });
 });

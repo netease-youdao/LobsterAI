@@ -171,9 +171,10 @@ export default defineConfig({
     sourcemap: true,
     minify: false,
     rollupOptions: {
+      // library-thumbnail.html is built by vite.thumbnail.config.ts so the
+      // sandboxed thumbnail page never shares chunks with the app entry.
       input: {
         main: path.resolve(__dirname, 'index.html'),
-        libraryThumbnail: path.resolve(__dirname, 'library-thumbnail.html'),
       },
     },
   },

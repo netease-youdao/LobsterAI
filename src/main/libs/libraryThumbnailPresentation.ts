@@ -1,22 +1,10 @@
-import type { NativeImage, Rectangle } from 'electron';
+import type { NativeImage } from 'electron';
 
 import { getLibraryHtmlThumbnailStampColor, HtmlThumbnailLayout } from '../../shared/library/htmlThumbnail';
 import {
   getLibraryThumbnailPresentationStampColor,
-  LibraryThumbnailError,
-  LibraryThumbnailFailureCode,
   LibraryThumbnailPresentationStamp,
 } from '../../shared/library/thumbnail';
-
-interface ThumbnailPresentationWebContents {
-  beginFrameSubscription: (
-    onlyDirty: boolean,
-    callback: (image: NativeImage, dirtyRect: Rectangle) => void,
-  ) => void;
-  endFrameSubscription: () => void;
-  invalidate: () => void;
-  isDestroyed: () => boolean;
-}
 
 export interface LibraryThumbnailPresentationExpectation {
   width: number;
@@ -78,79 +66,3 @@ export const hasLibraryThumbnailPresentationStamp = (
     getLibraryHtmlThumbnailStampColor(expectation.renderGeneration),
   ));
 };
-
-export const waitForCommittedThumbnailPresentation = (
-  webContents: ThumbnailPresentationWebContents,
-  timeoutMs: number,
-  expectation?: LibraryThumbnailPresentationExpectation,
-): Promise<NativeImage> => new Promise((resolve, reject) => {
-  let settled = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let presentedFrameCount = 0;
-
-  const finish = (error?: Error, image?: NativeImage): void => {
-    if (settled) return;
-    settled = true;
-    if (timer) clearTimeout(timer);
-    if (!webContents.isDestroyed()) {
-      try {
-        webContents.endFrameSubscription();
-      } catch {
-        // The renderer can disappear while a frame is being delivered.
-      }
-    }
-    if (error) reject(error);
-    else if (image) resolve(image);
-    else reject(new LibraryThumbnailError(
-      LibraryThumbnailFailureCode.PresentationFailed,
-      'Thumbnail presentation did not provide a frame',
-    ));
-  };
-
-  timer = setTimeout(() => {
-    finish(new LibraryThumbnailError(
-      LibraryThumbnailFailureCode.PresentationTimeout,
-      'Thumbnail presentation timed out',
-    ));
-  }, timeoutMs);
-
-  try {
-    webContents.beginFrameSubscription(false, image => {
-      if (settled) return;
-      if (expectation) {
-        if (hasLibraryThumbnailPresentationStamp(image, expectation)) {
-          finish(undefined, image);
-          return;
-        }
-        try {
-          webContents.invalidate();
-        } catch (error) {
-          finish(new LibraryThumbnailError(
-            LibraryThumbnailFailureCode.PresentationFailed,
-            error instanceof Error ? error.message : 'Thumbnail repaint failed',
-          ));
-        }
-        return;
-      }
-      presentedFrameCount += 1;
-      if (presentedFrameCount === 1) {
-        try {
-          webContents.invalidate();
-        } catch (error) {
-          finish(new LibraryThumbnailError(
-            LibraryThumbnailFailureCode.PresentationFailed,
-            error instanceof Error ? error.message : 'Thumbnail repaint failed',
-          ));
-        }
-        return;
-      }
-      finish(undefined, image);
-    });
-    webContents.invalidate();
-  } catch (error) {
-    finish(new LibraryThumbnailError(
-      LibraryThumbnailFailureCode.PresentationFailed,
-      error instanceof Error ? error.message : 'Thumbnail presentation failed',
-    ));
-  }
-});

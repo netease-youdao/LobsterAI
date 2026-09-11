@@ -111,8 +111,14 @@ Download the latest macOS and Windows installers from [Official Website](https:/
 Requirements:
 
 - Node.js `>=24.15.0 <25`
-- npm
+- npm `>=11.17.0 <12` (older versions: `npm install -g npm@11.17.0`)
 - git and pnpm, needed on the first run to build the pinned OpenClaw runtime from the sibling `../openclaw` checkout
+
+`better-sqlite3@13.0.3` includes prebuilt N-API binaries for Windows, macOS,
+and Linux on x64/arm64. The `allowScripts` entry in `package.json` skips npm's
+unnecessary implicit rebuild for this version, so installing it does not require
+Visual Studio C++ Build Tools on Windows. Other dependencies' install scripts
+still run. Recheck this entry when upgrading `better-sqlite3`.
 
 ```bash
 git clone https://github.com/netease-youdao/LobsterAI.git
@@ -242,6 +248,7 @@ The CI workflow builds each installer on its own OS (macOS, Windows, Linux). Do 
 Build machine prerequisites:
 
 - Node.js `>=24.15.0 <25`. `.npmrc` sets `engine-strict`, so npm refuses other versions.
+- npm `>=11.17.0 <12`, required for the dependency install-script policy.
 - git and pnpm, used to build the pinned OpenClaw runtime from the sibling `../openclaw` checkout (override with `OPENCLAW_SRC`).
 - Windows: Git for Windows. The runtime build runs in its Git Bash. Without it, run `npm run setup:mingit` once to prepare a portable Git under `resources/mingit`.
 
@@ -251,8 +258,8 @@ Clean build:
 # 1. Install dependencies exactly as pinned in package-lock.json.
 #    npm ci removes node_modules itself, so do not delete it by hand and do not
 #    run npm install first: that installs everything twice and may rewrite the
-#    lock file. postinstall applies patches/ and rebuilds native modules
-#    against Electron.
+#    lock file. postinstall applies patches/. better-sqlite3 uses its bundled
+#    N-API binaries in both Node.js and Electron.
 npm ci
 
 # 2. Remove stale build output. dist-electron is compiled by tsc, which keeps
