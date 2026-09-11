@@ -413,6 +413,33 @@ const legacyStrongPatchValidators = {
 };
 
 const v20260801StrongPatchValidators = {
+  'openclaw-lobsterai-startup-recovery.patch': [
+    {
+      file: 'src/agents/main-session-recovery/main-session-restart-recovery-marking.ts',
+      snippets: ['const LOBSTERAI_SESSION_PREFIX = "lobsterai:"'],
+      orderedSnippets: [
+        'export async function markStartupOrphanedMainSessionsForRecovery',
+        'entry.abortedLastRun === true',
+        'hasCurrentProcessOwner({',
+        'if (isMainRestartRecoveryAggregateTerminalOnly(entry))',
+        'return { action: "retire_terminal" }',
+        'parseAgentSessionKey(sessionKey)?.rest ?? sessionKey.trim()',
+        'sessionNamespace.startsWith(LOBSTERAI_SESSION_PREFIX)',
+        'sessionNamespace.slice(LOBSTERAI_SESSION_PREFIX.length).trim()',
+        'return undefined',
+        'return { action: "mark" }',
+      ],
+    },
+    {
+      file: 'src/agents/main-session-recovery/main-session-restart-recovery.test.ts',
+      snippets: [
+        'does not revive unmarked $age running session $sessionKey',
+        'preserves explicit recovery of $sessionKey across consecutive gateway restarts',
+        'retires terminal-only managed recovery residue before skipping new orphan marks',
+        'keeps upstream orphan recovery for unrelated namespace %s',
+      ],
+    },
+  ],
   'openclaw-aborted-tool-loop-breaker.patch': [
     {
       file: 'src/agents/embedded-agent-runner/replay-history.ts',
