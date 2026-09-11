@@ -1,0 +1,247 @@
+OpenClaw v2026.8.1: constrain inferred plugin installation to plugins.allow.
+
+Base: ea806575e6450e4d1efdfc72c19f04be982a1b9b.
+
+Startup convergence treats provider keys inherited from a developer shell as
+requests to install official plugins. A VYDRA_API_KEY can therefore trigger an
+unrequested installation and capability-consent refusal before Gateway readiness,
+even though LobsterAI's restrictive plugins.allow excludes vydra.
+
+Filter the final inferred download candidate set using the normalized allowlist.
+Resolve official catalog aliases for comparison without rewriting the actual
+installation id. Explicit CLI plugin installation, existing install records,
+recorded npm updates, capability consent, and runtime verification are unchanged.
+An absent or empty allowlist preserves upstream auto-install behavior.
+
+The included repair tests cover env-only Vydra with excluded/allowed/normalized/
+empty/absent allowlists, explicit entries under a restrictive allowlist, both QQ
+catalog alias directions, and preservation of skipped existing npm records.
+
+diff --git a/src/commands/doctor/shared/missing-configured-plugin-install.candidates.ts b/src/commands/doctor/shared/missing-configured-plugin-install.candidates.ts
+--- a/src/commands/doctor/shared/missing-configured-plugin-install.candidates.ts
++++ b/src/commands/doctor/shared/missing-configured-plugin-install.candidates.ts
+@@ -8,6 +8,7 @@
+   resolveRegistryUpdateChannel,
+   type UpdateChannel,
+ } from "../../../infra/update-channels.js";
++import { normalizePluginId, normalizePluginsConfig } from "../../../plugins/config-state.js";
+ import {
+   resolveDefaultPluginExtensionsDir,
+   resolvePluginInstallDir,
+@@ -18,6 +19,7 @@
+ import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
+ import type { PluginPackageInstall } from "../../../plugins/manifest.js";
+ import {
++  getOfficialExternalPluginCatalogEntry,
+   listOfficialExternalPluginCatalogEntries,
+   resolveOfficialExternalPluginId,
+   resolveOfficialExternalPluginInstall,
+@@ -181,6 +183,15 @@
+   });
+ }
+ 
++/** Match catalog aliases before applying the host's restrictive install policy. */
++function resolveInstallPolicyPluginId(pluginId: string): string {
++  const normalized = normalizePluginId(pluginId);
++  const official = getOfficialExternalPluginCatalogEntry(normalized);
++  return official
++    ? normalizePluginId(resolveOfficialExternalPluginId(official) ?? normalized)
++    : normalized;
++}
++
+ export function collectDownloadableInstallCandidates(params: {
+   cfg: OpenClawConfig;
+   env?: NodeJS.ProcessEnv;
+@@ -306,9 +317,18 @@
+     }
+   }
+ 
+-  return [...candidates.values()].toSorted((left, right) =>
+-    left.pluginId.localeCompare(right.pluginId),
++  // Config/environment discovery is not permission to install a plugin outside
++  // an explicit allowlist. Keep the candidate's actual id for installation; only
++  // policy comparison resolves catalog aliases (for example qqbot/openclaw-qqbot).
++  const allow = new Set(
++    normalizePluginsConfig(params.cfg.plugins).allow.map(resolveInstallPolicyPluginId),
+   );
++  return [...candidates.values()]
++    .filter(
++      (candidate) =>
++        allow.size === 0 || allow.has(resolveInstallPolicyPluginId(candidate.pluginId)),
++    )
++    .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
+ }
+ 
+ function addLegacyNpmDeclarationInstallCandidate(params: {
+
+diff --git a/src/commands/doctor/shared/missing-configured-plugin-install.test.ts b/src/commands/doctor/shared/missing-configured-plugin-install.test.ts
+--- a/src/commands/doctor/shared/missing-configured-plugin-install.test.ts
++++ b/src/commands/doctor/shared/missing-configured-plugin-install.test.ts
+@@ -85,6 +85,7 @@
+   loadInstalledPluginIndex: vi.fn(),
+   loadInstalledPluginIndexInstallRecords: vi.fn(),
+   loadPluginMetadataSnapshot: vi.fn(),
++  getOfficialExternalPluginCatalogEntry: vi.fn(),
+   getOfficialExternalPluginCatalogManifest: vi.fn(
+     (entry: { openclaw?: unknown }) => entry.openclaw,
+   ),
+@@ -291,6 +292,7 @@
+   ...(await importOriginal<
+     typeof import("../../../plugins/official-external-plugin-catalog.js")
+   >()),
++  getOfficialExternalPluginCatalogEntry: mocks.getOfficialExternalPluginCatalogEntry,
+   getOfficialExternalPluginCatalogManifest: mocks.getOfficialExternalPluginCatalogManifest,
+   listOfficialExternalChannelEnvVars: mocks.listOfficialExternalChannelEnvVars,
+   listOfficialExternalPluginCatalogEntries: mocks.listOfficialExternalPluginCatalogEntries,
+@@ -665,6 +667,7 @@
+     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
+     mocks.listChannelPluginCatalogEntries.mockReturnValue([]);
+     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([]);
++    mocks.getOfficialExternalPluginCatalogEntry.mockReturnValue(undefined);
+     mocks.resolveDefaultPluginExtensionsDir.mockReturnValue("/tmp/openclaw-plugins");
+     mocks.resolveDefaultPluginNpmDir.mockReturnValue("/tmp/openclaw-npm");
+     mocks.resolveProviderInstallCatalogEntries.mockReturnValue([]);
+@@ -3300,12 +3303,12 @@
+       installs: false,
+     },
+     {
+-      name: "still installs a channel catalog plugin when the configured owner is blocked by the allowlist",
++      name: "does not install a channel catalog plugin when the configured owner is blocked by the allowlist",
+       plugins: {
+         allow: ["some-other-plugin"],
+         entries: { "openclaw-lark": { enabled: true } },
+       },
+-      installs: true,
++      installs: false,
+     },
+     {
+       name: "still installs a channel catalog plugin when that plugin is explicitly configured",
+@@ -4400,6 +4403,128 @@
+     );
+   });
+ 
++  it.each([
++    { allow: ["browser"], install: false },
++    { allow: ["vydra"], install: true },
++    { allow: [" VYDRA "], install: true },
++    { allow: [], install: true },
++    { allow: undefined, install: true },
++  ])(
++    "honors plugins.allow=$allow for env-only provider installation",
++    async ({ allow, install }) => {
++      const env = { VYDRA_API_KEY: "synthetic-vydra-key" };
++      mocks.resolveOfficialExternalProviderPluginIdsForEnv.mockReturnValue(["vydra"]);
++      mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
++        officialPluginEntry({ id: "vydra", npmSpec: "@openclaw/vydra-provider" }),
++      ]);
++      mocks.installPluginFromNpmSpec.mockResolvedValue(
++        successfulInstall({ pluginId: "vydra", npmSpec: "@openclaw/vydra-provider" }),
++      );
++      const cfg: OpenClawConfig = { plugins: { ...(allow ? { allow } : {}) } };
++      const original = structuredClone(cfg);
++
++      const result = await repairConfiguredPlugins(cfg, env);
++
++      expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledTimes(install ? 1 : 0);
++      expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
++      expect(result.warnings).toEqual([]);
++      expect(cfg).toEqual(original);
++      expect(env.VYDRA_API_KEY).toBe("synthetic-vydra-key");
++      if (!install) {
++        expect(result.records).toEqual({});
++        expect(result.changes).toEqual([]);
++      }
++    },
++  );
++
++  it("does not let an enabled plugin entry bypass a restrictive installation allowlist", async () => {
++    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
++      officialPluginEntry({ id: "vydra", npmSpec: "@openclaw/vydra-provider" }),
++    ]);
++
++    const result = await repairConfiguredPlugins({
++      plugins: { allow: ["browser"], entries: { vydra: { enabled: true } } },
++    });
++
++    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
++    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
++    expect(result.warnings).toEqual([]);
++    expect(result.records).toEqual({});
++  });
++
++  it.each([
++    { allowedId: "qqbot", candidateId: "openclaw-qqbot" },
++    { allowedId: "openclaw-qqbot", candidateId: "qqbot" },
++  ])(
++    "resolves catalog aliases for allowed $allowedId and candidate $candidateId",
++    async ({ allowedId, candidateId }) => {
++      const official = officialPluginEntry({
++        id: "openclaw-qqbot",
++        npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
++      });
++      mocks.getOfficialExternalPluginCatalogEntry.mockImplementation((id: string) =>
++        ["qqbot", "openclaw-qqbot"].includes(id) ? official : undefined,
++      );
++      mocks.listChannelPluginCatalogEntries.mockReturnValue([
++        {
++          ...channelPluginEntry({ id: "qqbot", npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1" }),
++          pluginId: candidateId,
++        },
++      ]);
++      mocks.installPluginFromNpmSpec.mockResolvedValue(
++        successfulInstall({
++          pluginId: candidateId,
++          npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
++        }),
++      );
++
++      const result = await repairConfiguredPlugins({
++        plugins: { allow: [allowedId], entries: { [candidateId]: { enabled: true } } },
++      });
++
++      expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledTimes(1);
++      expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
++        expectedPluginId: candidateId,
++      });
++      expect(result.warnings).toEqual([]);
++    },
++  );
++
++  it("preserves a skipped existing npm record outside the installation allowlist", async () => {
++    const records = installedRecords("vydra", {
++      spec: "@openclaw/vydra-provider",
++      installPath: "/missing/vydra",
++    });
++    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
++    mocks.resolveOfficialExternalProviderPluginIdsForEnv.mockReturnValue(["vydra"]);
++    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
++      officialPluginEntry({ id: "vydra", npmSpec: "@openclaw/vydra-provider" }),
++    ]);
++    mocks.updateNpmInstalledPlugins.mockResolvedValue({
++      changed: false,
++      config: { plugins: { installs: records } },
++      outcomes: [
++        { pluginId: "vydra", status: "skipped", message: 'Skipping "vydra" (not in allowlist).' },
++      ],
++    });
++
++    const result = await repairConfiguredPlugins(
++      { plugins: { allow: ["browser"] } },
++      { VYDRA_API_KEY: "synthetic-vydra-key" },
++    );
++
++    expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledWith(
++      expect.objectContaining({
++        pluginIds: ["vydra"],
++        skipDisabledPlugins: true,
++      }),
++    );
++    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
++    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
++    expect(result.records).toEqual(records);
++    expect(result.warnings).toEqual([]);
++  });
++
+   it("installs env-only provider plugins before model discovery", async () => {
+     mocks.resolveOfficialExternalProviderPluginIdsForEnv.mockReturnValue(["groq"]);
+     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
