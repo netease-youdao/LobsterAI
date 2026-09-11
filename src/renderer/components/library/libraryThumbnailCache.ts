@@ -10,7 +10,9 @@ export const createLibraryThumbnailCacheKey = (
   filePath: string,
   fileMtimeMs?: number,
   fileSizeBytes?: number,
+  accountGeneration?: number,
 ): string => [
+  ...(accountGeneration === undefined ? [] : [accountGeneration]),
   isLibraryHtmlThumbnailExtension(filePath.match(/[^/\\](\.[^./\\\s]+)$/)?.[1] ?? '')
     ? LibraryHtmlThumbnailClientCacheVersion
     : LibraryThumbnailClientCacheVersion,

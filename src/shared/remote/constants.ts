@@ -2,6 +2,7 @@
 export const RemoteIpc = {
   Changed: 'remote:changed', State: 'remote:state', Configure: 'remote:configure', Decide: 'remote:decide',
 } as const;
+export const RemoteSettingsError = { AccountChanged: 'remoteAccountChanged' } as const;
 export const REMOTE_PROTOCOL_VERSION = 1;
 export const REMOTE_TEXT_BYTES = 16 * 1024;
 export const REMOTE_MESSAGE_BYTES = 512 * 1024;
@@ -13,7 +14,7 @@ export const RemoteRunStatus = {
 export type RemoteRunStatusValue = typeof RemoteRunStatus[keyof typeof RemoteRunStatus];
 export interface RemoteOwner { userId: string; scopeKey: string }
 export interface RemoteWorkspace { workspaceId: string; name: string; available: boolean }
-export const RemoteCapability = { DualApproval: 'approval_dual_control_v1', CreateSession: 'session.create', SameAccountAccess: 'same_account_access', SessionAgent: 'session_agent_v1', AgentCatalog: 'agent_catalog_v1', AgentSelection: 'agent_selection_v1' } as const;
+export const RemoteCapability = { DualApproval: 'approval_dual_control_v1', CreateSession: 'session.create', SameAccountAccess: 'same_account_access', SessionAgent: 'session_agent_v1', AgentCatalog: 'agent_catalog_v1', AgentSelection: 'agent_selection_v1', AgentOwnershipClaim: 'agent_ownership_claim_v1' } as const;
 export const RemoteConnectionStatus = { Online: 'online', Offline: 'offline' } as const;
 export const RemoteConnectionReason = {
   Connecting: 'connecting', Reconnecting: 'reconnecting', Disabled: 'disabled', SignedOut: 'signed_out',
@@ -23,7 +24,7 @@ export const RemoteConnectionReason = {
 export type RemoteConnectionReasonValue = typeof RemoteConnectionReason[keyof typeof RemoteConnectionReason];
 export const RemoteSyncStatus = { Synced: 'synced', Pending: 'pending', Error: 'error' } as const;
 export interface RemoteSettingsState {
-  screenLocked?: boolean; hostName?: string; stateRevision?: number;
+  screenLocked?: boolean; hostName?: string; stateRevision?: number; accountEpoch?: string;
   connectionStatus?: typeof RemoteConnectionStatus[keyof typeof RemoteConnectionStatus];
   connectionReason?: RemoteConnectionReasonValue; errorCode?: number;
   settingsSyncStatus?: typeof RemoteSyncStatus[keyof typeof RemoteSyncStatus];
@@ -33,7 +34,7 @@ export interface RemoteSettingsState {
   owner: RemoteOwner | null; workspaces: RemoteWorkspace[]; error?: string;
   accessRequests: Array<{ requestId: string; mobileDevice: { deviceId: string; name: string; platform: string }; permissions: string[]; expiresAt?: string }>;
 }
-export interface RemoteConfigureRequest { keepAwakeEnabled?: boolean; retry?: boolean; enabled?: boolean; name?: string; addWorkspace?: boolean; removeWorkspaceId?: string }
+export interface RemoteConfigureRequest { expectedAccountEpoch?: string; keepAwakeEnabled?: boolean; retry?: boolean; enabled?: boolean; name?: string; addWorkspace?: boolean; removeWorkspaceId?: string }
 export interface RemoteSettingsApi {
   onChanged(listener: (state: RemoteSettingsState) => void): () => void;
   state(): Promise<RemoteSettingsState>;

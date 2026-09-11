@@ -1,17 +1,19 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
   createLocalFileProtocolResponse,
   getLocalFileProtocolPath,
   parseByteRange,
+  revalidateLocalFileProtocolStreams,
 } from './artifactLocalFileProtocol';
 
 let tempDir: string | undefined;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (tempDir) {
     fs.rmSync(tempDir, { recursive: true, force: true });
     tempDir = undefined;
@@ -79,5 +81,78 @@ describe('artifact local file protocol', () => {
     expect(response.headers.get('content-length')).toBe('10');
     expect(response.headers.get('content-type')).toBe('video/mp4');
     expect(await response.text()).toBe('');
+  });
+
+  test('preserves encoded query/hash characters in filenames while parsing the access grant', async () => {
+    const filePath = createTempFile('preview?#.mp4', '0123456789');
+    const access = { itemId: 'item-a', accountEpoch: 'epoch-a' };
+    const url = `${toLocalFileUrl(filePath)}?access=${encodeURIComponent(JSON.stringify(access))}`;
+    const assertAllowed = vi.fn();
+    const captureAccess = vi.fn(() => ({ assertAllowed }));
+    expect(getLocalFileProtocolPath(url)).toBe(filePath);
+    const response = await createLocalFileProtocolResponse(new Request(url, {
+      headers: { Range: 'bytes=2-5' },
+    }), captureAccess);
+    expect(response.status).toBe(206);
+    expect(await response.text()).toBe('2345');
+    expect(captureAccess).toHaveBeenCalledWith(filePath, access);
+    expect(assertAllowed).toHaveBeenCalledWith(filePath);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+  });
+
+  test.each(['GET', 'HEAD'])('denies hidden files before exposing metadata for %s requests', async (method) => {
+    const filePath = createTempFile('hidden.mp4', 'secret');
+    const captureAccess = () => { throw new Error('Not found'); };
+    const response = await createLocalFileProtocolResponse(new Request(toLocalFileUrl(filePath), {
+      method, headers: { Range: 'bytes=0-1' },
+    }), captureAccess);
+    expect(response.status).toBe(404);
+    expect(response.headers.get('content-range')).toBeNull();
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.text()).toBe('Not found');
+  });
+
+  test('rejects invalid access JSON without exposing file content', async () => {
+    const filePath = createTempFile('hidden.mp4', 'secret');
+    const captureAccess = vi.fn(() => ({ assertAllowed: vi.fn() }));
+    const response = await createLocalFileProtocolResponse(new Request(`${toLocalFileUrl(filePath)}?access=invalid`), captureAccess);
+    expect(response.status).toBe(404);
+    expect(captureAccess).not.toHaveBeenCalled();
+  });
+
+  test('revalidates a captured grant after asynchronous file metadata lookup', async () => {
+    const filePath = createTempFile('preview.mp4', 'secret');
+    const originalStat = fs.promises.stat.bind(fs.promises);
+    let allowed = true;
+    vi.spyOn(fs.promises, 'stat').mockImplementationOnce(async (target) => {
+      const stat = await originalStat(target);
+      allowed = false;
+      return stat;
+    });
+    const response = await createLocalFileProtocolResponse(new Request(toLocalFileUrl(filePath)), () => ({
+      assertAllowed: () => {
+        if (!allowed) throw new Error('Not found');
+      },
+    }));
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe('Not found');
+  });
+
+  test('account changes terminate an in-flight localfile stream', async () => {
+    const filePath = createTempFile('preview.mp4', '');
+    fs.writeFileSync(filePath, Buffer.alloc(16 * 1024 * 1024, 'a'));
+    let epoch = 1;
+    const response = await createLocalFileProtocolResponse(new Request(toLocalFileUrl(filePath)), () => ({
+      assertAllowed: () => {
+        if (epoch !== 1) throw new Error('Not found');
+      },
+    }));
+    const reader = response.body!.getReader();
+    expect((await reader.read()).done).toBe(false);
+    epoch++;
+    revalidateLocalFileProtocolStreams();
+    await expect((async () => {
+      while (!(await reader.read()).done) { /* Drain bytes already delivered before revocation. */ }
+    })()).rejects.toThrow('Not found');
   });
 });

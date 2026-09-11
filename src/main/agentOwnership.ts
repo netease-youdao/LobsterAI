@@ -130,6 +130,21 @@ export class AgentOwnerStore {
       .run(actor ? AgentOwnerKind.Owned : AgentOwnerKind.Anonymous, actor?.userId ?? null, actor?.scopeKey ?? null, agentId);
   }
 
+  /** Historical association is intentionally separate from the creation-only assignNew. */
+  associateHistorical(agentId: string, actor: RemoteOwner, associatedAt: number): string {
+    const record = this.get(agentId);
+    if (this.depth === 0 || !this.db.inTransaction || agentId === AgentId.Main
+      || !record || record.deletedAt !== null || record.ownerKind !== AgentOwnerKind.Anonymous) {
+      throw new AgentAccessError(AgentAccessErrorCode.IdentityReused);
+    }
+    this.db.prepare(`UPDATE agent_ownership SET owner_kind=?,owner_user_id=?,owner_scope_key=?,
+      version=version+1,updated_at=? WHERE agent_id=?`)
+      .run(AgentOwnerKind.Owned, actor.userId, actor.scopeKey, associatedAt, agentId);
+    this.db.prepare('INSERT OR IGNORE INTO agent_ownership_dirty VALUES (?)').run(agentId);
+    this.db.prepare('INSERT OR IGNORE INTO remote_dirty SELECT id FROM cowork_sessions WHERE agent_id=?').run(agentId);
+    return this.get(agentId)!.version;
+  }
+
   subscribe(listener: (agentId: string) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

@@ -1,3 +1,5 @@
+import type { OwnershipApi } from '@shared/ownership/types';
+
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
 import type {
   ActivityActionResponse,
@@ -9,6 +11,7 @@ import type {
   ActivitySlotResponse,
 } from '../../shared/activity/constants';
 import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
+import type { ArtifactFileAccess } from '../../shared/artifactPreview/types';
 import type {
   AsrRealtimeSessionRequest,
   AsrRealtimeSessionResult,
@@ -95,6 +98,7 @@ import type {
   KitSkillMetadata,
   ResolvedKitCapabilities,
 } from '../../shared/kit/constants';
+import type { LibraryLocalAccessData } from '../../shared/library/types';
 import type {
   LibraryAddLocalFilesData,
   LibraryArtifactCandidate,
@@ -649,6 +653,7 @@ interface HtmlShareResult {
 }
 
 interface IElectronAPI {
+  ownership: OwnershipApi;
   remote: RemoteSettingsApi;
   platform: string;
   arch: string;
@@ -1311,12 +1316,15 @@ interface IElectronAPI {
     }) => Promise<{ success: boolean; path: string | null; error?: string }>;
     readFileAsDataUrl: (
       filePath: string,
+      access?: ArtifactFileAccess,
     ) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
     statFile: (
       filePath: string,
+      access?: ArtifactFileAccess,
     ) => Promise<{ success: boolean; isFile?: boolean; isDirectory?: boolean; size?: number; mtimeMs?: number; error?: string }>;
     readTextFile: (
       filePath: string,
+      access?: ArtifactFileAccess,
     ) => Promise<{
       success: boolean;
       content?: string;
@@ -1327,6 +1335,7 @@ interface IElectronAPI {
     }>;
     saveFileCopy: (
       filePath: string,
+      access?: ArtifactFileAccess,
     ) => Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }>;
     generateThumbnail: (
       request: import('../../shared/library/thumbnail').LibraryThumbnailGenerateRequest,
@@ -1535,6 +1544,7 @@ interface IElectronAPI {
     getLocalItems: (
       input: LibraryGetLocalItemsInput,
     ) => Promise<LibraryResult<LibraryGetLocalItemsData>>;
+    getLocalAccess: (itemId: string) => Promise<LibraryResult<LibraryLocalAccessData>>;
     getLocalDetail: (itemId: string) => Promise<LibraryResult<LibraryLocalDetailData>>;
     recordCandidates: (
       candidates: LibraryArtifactCandidate[],
@@ -1564,9 +1574,11 @@ interface IElectronAPI {
     onFileChanged: (callback: (data: { filePath: string }) => void) => () => void;
     createPreviewSession: (
       filePath: string,
+      access?: ArtifactFileAccess,
     ) => Promise<{ success: boolean; sessionId?: string; url?: string; error?: string }>;
     createOfficePreviewSession: (
       filePath: string,
+      access?: ArtifactFileAccess,
     ) => Promise<{ success: boolean; sessionId?: string; url?: string; error?: string }>;
     destroyPreviewSession: (sessionId: string) => Promise<{ success: boolean }>;
     clearBrowserCookies: () => Promise<{ success: boolean; error?: string }>;

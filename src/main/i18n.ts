@@ -16,7 +16,12 @@ export type LanguageType = 'zh' | 'en';
 
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    ownershipCurrentAccount: '当前账号',
+    ownershipPersonalScope: '个人空间',
+    ownershipEnterpriseScope: '企业空间',
+    ownershipOperationBusy: '任务正在处理其他操作，请稍后重试。',
     agentAccessUnavailable: '当前账号无法访问此 Agent。',
+    libraryFileUnavailable: '文件不可用或当前账号无权访问。',
     agentIdentityReused: '此 Agent 标识已使用，请重新创建。',
     agentDefaultProtected: '默认 Agent 无法删除。',
     agentForeignSessions: '此 Agent 关联其他账号或归属待确认的任务，无法删除。',
@@ -395,7 +400,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    ownershipCurrentAccount: 'Current account',
+    ownershipPersonalScope: 'Personal workspace',
+    ownershipEnterpriseScope: 'Team workspace',
+    ownershipOperationBusy: 'Another task operation is in progress. Please try again shortly.',
     agentAccessUnavailable: 'This Agent is unavailable for the current account.',
+    libraryFileUnavailable: 'The file is unavailable or inaccessible to the current account.',
     agentIdentityReused: 'This Agent ID has already been used. Create a new Agent.',
     agentDefaultProtected: 'The default Agent cannot be deleted.',
     agentForeignSessions: 'This Agent has tasks belonging to another account or awaiting ownership verification.',

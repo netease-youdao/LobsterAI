@@ -10,6 +10,7 @@ import remarkGfm from 'remark-gfm';
 // @ts-ignore
 import remarkMath from 'remark-math';
 
+import type { ArtifactFileAccess } from '../../shared/artifactPreview/types';
 import { i18nService } from '../services/i18n';
 import { normalizeShellFilePath } from '../services/shellAppsCache';
 import { showShellFailureToast, showToast } from '../utils/localFileActions';
@@ -305,16 +306,17 @@ const encodeLocalPathForUrl = (filePath: string): string => {
     .join('/');
 };
 
-const toLocalFileSrc = (filePath: string): string => {
+const toLocalFileSrc = (filePath: string, fileAccess?: ArtifactFileAccess): string => {
+  const accessQuery = fileAccess ? `?access=${encodeURIComponent(JSON.stringify(fileAccess))}` : '';
   const normalized = normalizeMarkdownLocalFilePath(filePath);
   const encoded = encodeLocalPathForUrl(normalized);
   if (/^[A-Za-z]:/.test(normalized)) {
-    return `localfile:///${encoded}`;
+    return `localfile:///${encoded}${accessQuery}`;
   }
   if (encoded.startsWith('/')) {
-    return `localfile://${encoded}`;
+    return `localfile://${encoded}${accessQuery}`;
   }
-  return `localfile:///${encoded}`;
+  return `localfile:///${encoded}${accessQuery}`;
 };
 
 const isRemoteOrInlineImageSrc = (src: string): boolean => {
@@ -324,7 +326,8 @@ const isRemoteOrInlineImageSrc = (src: string): boolean => {
 const resolveMarkdownImageSrc = (
   src: unknown,
   alt: unknown,
-  resolveLocalFilePath?: (href: string, text: string) => string | null
+  resolveLocalFilePath?: (href: string, text: string) => string | null,
+  fileAccess?: ArtifactFileAccess,
 ): string | undefined => {
   if (typeof src !== 'string') return undefined;
 
@@ -336,19 +339,19 @@ const resolveMarkdownImageSrc = (
   const altText = typeof alt === 'string' ? alt : '';
   const resolvedPath = resolveLocalFilePath ? resolveLocalFilePath(srcValue, altText) : null;
   if (resolvedPath) {
-    return toLocalFileSrc(resolvedPath);
+    return toLocalFileSrc(resolvedPath, fileAccess);
   }
 
   if (/^(?:file|localfile):\/\//i.test(srcValue)) {
-    return toLocalFileSrc(srcValue);
+    return toLocalFileSrc(srcValue, fileAccess);
   }
 
   if (srcValue.startsWith('/') && !srcValue.startsWith('//')) {
-    return toLocalFileSrc(srcValue);
+    return toLocalFileSrc(srcValue, fileAccess);
   }
 
   if (/^[A-Za-z]:[\\/]/.test(srcValue)) {
-    return toLocalFileSrc(srcValue);
+    return toLocalFileSrc(srcValue, fileAccess);
   }
 
   return srcValue;
@@ -402,6 +405,7 @@ const findFallbackPathFromContext = (
 
 interface LocalFileLinkProps {
   filePath: string;
+  fileAccess?: ArtifactFileAccess;
   isDirectory: boolean;
   linkText: string;
   resolveLocalFilePath?: (href: string, text: string) => string | null;
@@ -411,6 +415,7 @@ interface LocalFileLinkProps {
 
 const LocalFileLink: React.FC<LocalFileLinkProps> = ({
   filePath,
+  fileAccess,
   isDirectory,
   linkText,
   resolveLocalFilePath,
@@ -470,6 +475,7 @@ const LocalFileLink: React.FC<LocalFileLinkProps> = ({
       {menuPosition && (
         <LocalFileContextMenu
           filePath={filePath}
+          fileAccess={fileAccess}
           isDirectory={isDirectory}
           position={menuPosition}
           onClose={() => setMenuPosition(null)}
@@ -483,6 +489,7 @@ const createMarkdownComponents = (
   resolveLocalFilePath?: (href: string, text: string) => string | null,
   onImageClick?: (image: { src: string; alt?: string | null }) => void,
   spacing: MarkdownSpacing = 'normal',
+  fileAccess?: ArtifactFileAccess,
 ) => ({
   p: ({ node: _node, className: _className, children, ...props }: any) => (
     <p className={`${spacing === 'compact' ? 'my-1' : 'my-3'} first:mt-0 last:mb-0 text-foreground`} {...props}>
@@ -571,7 +578,7 @@ const createMarkdownComponents = (
     </td>
   ),
   img: ({ node: _node, className: _className, src, alt, ...props }: any) => {
-    const resolvedSrc = resolveMarkdownImageSrc(src, alt, resolveLocalFilePath);
+    const resolvedSrc = resolveMarkdownImageSrc(src, alt, resolveLocalFilePath, fileAccess);
     const altText = typeof alt === 'string' ? alt : null;
     return (
       <img
@@ -617,6 +624,7 @@ const createMarkdownComponents = (
       return (
         <LocalFileLink
           filePath={filePath}
+          fileAccess={fileAccess}
           isDirectory={looksLikeDirectory(filePath)}
           linkText={linkText}
           resolveLocalFilePath={resolveLocalFilePath}
@@ -670,6 +678,7 @@ const createMarkdownComponents = (
 });
 
 interface MarkdownContentProps {
+  fileAccess?: ArtifactFileAccess;
   content: string;
   className?: string;
   spacing?: MarkdownSpacing;
@@ -684,6 +693,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
   className = '',
   spacing = 'normal',
   resolveLocalFilePath,
+  fileAccess,
   enableLargePreview = true,
   forceExpanded = false,
   onImageClick,
@@ -692,8 +702,8 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
   const canUseLargePreview = enableLargePreview && shouldUseLargeMarkdownPreview(content);
   const useLargePreview = canUseLargePreview && !isExpanded && !forceExpanded;
   const components = useMemo(
-    () => createMarkdownComponents(resolveLocalFilePath, onImageClick, spacing),
-    [resolveLocalFilePath, onImageClick, spacing]
+    () => createMarkdownComponents(resolveLocalFilePath, onImageClick, spacing, fileAccess),
+    [resolveLocalFilePath, onImageClick, spacing, fileAccess]
   );
   const markdownTextClassName = spacing === 'compact' ? 'text-markdown-body-compact' : 'text-markdown-body';
   const normalizedContent = useMemo(() => {

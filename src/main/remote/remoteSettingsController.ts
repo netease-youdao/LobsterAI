@@ -4,6 +4,7 @@ export const PREVENT_SLEEP_STORE_KEY = 'prevent_sleep_enabled';
 
 interface SettingsDependencies {
   getRemoteState(): RemoteSettingsState;
+  getAccountEpoch?(): string;
   getKeepAwakePreference(): boolean | undefined;
   saveKeepAwakePreference(enabled: boolean): void;
   applyKeepAwake(enabled: boolean): void;
@@ -25,6 +26,7 @@ export class RemoteSettingsController {
     try { active = this.deps.isKeepAwakeActive(); } catch { /* OS power API may be unavailable. */ }
     return {
       ...remote,
+      ...(this.deps.getAccountEpoch ? { accountEpoch: this.deps.getAccountEpoch() } : {}),
       stateRevision: this.revision,
       keepAwakeEnabled: Boolean(remote.owner) && (this.deps.getKeepAwakePreference() ?? true),
       keepAwakeActive: active,

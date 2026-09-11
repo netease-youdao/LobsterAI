@@ -17,6 +17,7 @@ import {
 } from '@/utils/localFileActions';
 import { canCopyLocalFileAsText } from '@/utils/localFileContentPolicy';
 
+import type { ArtifactFileAccess } from '../../../shared/artifactPreview/types';
 import { getFileTypeInfo } from '../icons/fileTypes/index';
 
 const t = (key: string) => i18nService.t(key);
@@ -50,6 +51,7 @@ const AppIcon: React.FC<{ className?: string }> = ({ className }) => (
 
 export interface LocalFileContextMenuProps {
   filePath: string;
+  fileAccess?: ArtifactFileAccess;
   isDirectory?: boolean;
   position: { x: number; y: number };
   onClose: () => void;
@@ -57,6 +59,7 @@ export interface LocalFileContextMenuProps {
 
 const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
   filePath,
+  fileAccess,
   isDirectory = false,
   position,
   onClose,
@@ -196,7 +199,7 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
   const handleSaveAs = useCallback(async () => {
     onClose();
     try {
-      const result = await window.electron?.dialog?.saveFileCopy(normalizedPath);
+      const result = await window.electron?.dialog?.saveFileCopy(normalizedPath, fileAccess);
       if (result && !result.success) {
         logContextMenuFailure('save file copy', result.error);
         showToast(t('fileMenuSaveFailed'));
@@ -205,7 +208,7 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
       logContextMenuFailure('save file copy', error);
       showToast(t('fileMenuSaveFailed'));
     }
-  }, [normalizedPath, onClose]);
+  }, [fileAccess, normalizedPath, onClose]);
 
   const handleCopyPath = useCallback(async () => {
     onClose();
@@ -224,7 +227,7 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
   const handleCopyContents = useCallback(async () => {
     onClose();
     try {
-      const readResult = await window.electron?.dialog?.readTextFile(normalizedPath);
+      const readResult = await window.electron?.dialog?.readTextFile(normalizedPath, fileAccess);
       if (readResult?.truncated) {
         logContextMenuFailure(
           'copy file contents because the file exceeds the safe read limit',
@@ -248,7 +251,7 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
       logContextMenuFailure('copy file contents', error);
       showToast(t('copyFailed'));
     }
-  }, [normalizedPath, onClose]);
+  }, [fileAccess, normalizedPath, onClose]);
 
   const handleCopyImage = useCallback(async () => {
     onClose();

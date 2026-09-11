@@ -1,6 +1,50 @@
 import fs from 'fs';
 import path from 'path';
-import { Readable } from 'stream';
+import { Readable, Transform } from 'stream';
+
+import type { ArtifactFileAccess } from '../shared/artifactPreview/types';
+
+type CaptureFileAccess = (
+  filePath: string,
+  access?: ArtifactFileAccess,
+) => { assertAllowed: (filePath?: string) => void };
+
+const activeStreams = new Map<Transform, () => void>();
+
+export function revalidateLocalFileProtocolStreams(): void {
+  for (const [stream, assertAllowed] of activeStreams) {
+    try {
+      assertAllowed();
+    } catch {
+      stream.destroy(new Error('Not found'));
+    }
+  }
+}
+
+function createCheckedFileStream(filePath: string, range: ByteRange | null, assertAllowed: () => void): BodyInit {
+  const stream = fs.createReadStream(filePath, range ?? undefined);
+  const checkedStream = new Transform({
+    transform(chunk, _encoding, callback) {
+      try {
+        assertAllowed();
+        callback(null, chunk);
+      } catch {
+        callback(new Error('Not found'));
+      }
+    },
+  });
+  activeStreams.set(checkedStream, assertAllowed);
+  stream.on('error', error => checkedStream.destroy(error));
+  checkedStream.once('close', () => {
+    activeStreams.delete(checkedStream);
+    stream.destroy();
+  });
+  return Readable.toWeb(stream.pipe(checkedStream)) as BodyInit;
+}
+
+function notFoundResponse(): Response {
+  return new Response('Not found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
+}
 
 const LOCAL_FILE_MIME_BY_EXT: Record<string, string> = {
   '.png': 'image/png',
@@ -128,12 +172,21 @@ function buildLocalFileBaseHeaders(filePath: string, size: number, mimeType: str
   };
 }
 
-export async function createLocalFileProtocolResponse(request: Request): Promise<Response> {
+export async function createLocalFileProtocolResponse(
+  request: Request,
+  captureAccess?: CaptureFileAccess,
+): Promise<Response> {
   try {
     const filePath = getLocalFileProtocolPath(request.url);
+    const serializedAccess = new URL(request.url).searchParams.get('access');
+    const access = serializedAccess === null ? undefined : JSON.parse(serializedAccess) as ArtifactFileAccess;
+    const capturedAccess = captureAccess?.(filePath, access);
+    const assertAllowed = () => capturedAccess?.assertAllowed(filePath);
+    assertAllowed();
     const stat = await fs.promises.stat(filePath);
+    assertAllowed();
     if (!stat.isFile()) {
-      return new Response('Not found', { status: 404 });
+      return notFoundResponse();
     }
 
     const mimeType = getLocalFileMimeType(filePath);
@@ -157,7 +210,7 @@ export async function createLocalFileProtocolResponse(request: Request): Promise
       return new Response(
         request.method === 'HEAD'
           ? null
-          : Readable.toWeb(fs.createReadStream(filePath, { start: range.start, end: range.end })) as BodyInit,
+          : createCheckedFileStream(filePath, range, assertAllowed),
         {
           status: 206,
           headers: {
@@ -172,7 +225,7 @@ export async function createLocalFileProtocolResponse(request: Request): Promise
     return new Response(
       request.method === 'HEAD'
         ? null
-        : Readable.toWeb(fs.createReadStream(filePath)) as BodyInit,
+        : createCheckedFileStream(filePath, null, assertAllowed),
       {
         status: 200,
         headers: baseHeaders,
@@ -180,6 +233,6 @@ export async function createLocalFileProtocolResponse(request: Request): Promise
     );
   } catch (error) {
     console.warn('[ArtifactPreview] local file request failed:', error);
-    return new Response('Not found', { status: 404 });
+    return notFoundResponse();
   }
 }

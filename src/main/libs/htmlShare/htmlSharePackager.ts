@@ -175,6 +175,7 @@ function findCommonDirectory(filePaths: string[]): string {
 async function buildStaticFileEntries(
   archiveRoot: string,
   filePaths: string[],
+  assertAccess?: (filePath: string) => void,
 ): Promise<StaticFileEntry[]> {
   if (filePaths.length > MAX_CLIENT_FILE_COUNT) {
     throw createHtmlShareSizeError(
@@ -186,7 +187,9 @@ async function buildStaticFileEntries(
 
   const entries: StaticFileEntry[] = [];
   for (const filePath of filePaths) {
+    assertAccess?.(filePath);
     const stat = await fs.promises.stat(filePath);
+    assertAccess?.(filePath);
     if (stat.size > MAX_CLIENT_SINGLE_FILE_BYTES) {
       throw createHtmlShareSizeError(
         HtmlShareFailureKind.FileTooLarge,
@@ -220,52 +223,70 @@ async function buildStaticFileEntries(
   return entries.sort((a, b) => a.archiveName.localeCompare(b.archiveName));
 }
 
-async function writeZip(entries: StaticFileEntry[]): Promise<{ archivePath: string; sourceSha256: string }> {
+async function writeZip(
+  entries: StaticFileEntry[],
+  assertAccess?: (filePath: string) => void,
+): Promise<{ archivePath: string; sourceSha256: string }> {
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lobster-html-share-'));
-  const archivePath = path.join(tempDir, 'share.zip');
-  const zipFile = new yazl.ZipFile();
-  console.debug(`[HtmlShare] writing share archive with ${entries.length} files`);
+  try {
+    const archivePath = path.join(tempDir, 'share.zip');
+    const zipFile = new yazl.ZipFile();
+    console.debug(`[HtmlShare] writing share archive with ${entries.length} files`);
 
-  zipFile.on('error', (err) => {
-    (zipFile.outputStream as unknown as { destroy(err: Error): void }).destroy(err as Error);
-  });
+    zipFile.on('error', (err) => {
+      (zipFile.outputStream as unknown as { destroy(err: Error): void }).destroy(err as Error);
+    });
 
-  for (const entry of entries) {
-    zipFile.addFile(entry.absolutePath, entry.archiveName);
-  }
+    for (const entry of entries) {
+      assertAccess?.(entry.absolutePath);
+      zipFile.addFile(entry.absolutePath, entry.archiveName);
+    }
 
-  const outputStream = fs.createWriteStream(archivePath);
-  const pipelinePromise = pipeline(zipFile.outputStream, outputStream);
-  zipFile.end();
-  await pipelinePromise;
+    const outputStream = fs.createWriteStream(archivePath);
+    const pipelinePromise = pipeline(zipFile.outputStream, outputStream);
+    zipFile.end();
+    await pipelinePromise;
+    for (const entry of entries) assertAccess?.(entry.absolutePath);
 
-  const stat = await fs.promises.stat(archivePath);
-  if (stat.size > MAX_CLIENT_ARCHIVE_BYTES) {
-    throw createHtmlShareSizeError(
-      HtmlShareFailureKind.ArchiveSizeExceeded,
-      `Share archive is too large. The limit is ${Math.floor(MAX_CLIENT_ARCHIVE_BYTES / 1024 / 1024)}MB.`,
-      {
-        limitBytes: MAX_CLIENT_ARCHIVE_BYTES,
-        actualBytes: stat.size,
-      },
+    const stat = await fs.promises.stat(archivePath);
+    if (stat.size > MAX_CLIENT_ARCHIVE_BYTES) {
+      throw createHtmlShareSizeError(
+        HtmlShareFailureKind.ArchiveSizeExceeded,
+        `Share archive is too large. The limit is ${Math.floor(MAX_CLIENT_ARCHIVE_BYTES / 1024 / 1024)}MB.`,
+        {
+          limitBytes: MAX_CLIENT_ARCHIVE_BYTES,
+          actualBytes: stat.size,
+        },
+      );
+    }
+
+    const buffer = await fs.promises.readFile(archivePath);
+    for (const entry of entries) assertAccess?.(entry.absolutePath);
+    const sourceSha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+    console.debug(
+      `[HtmlShare] wrote share archive with ${stat.size} bytes and hash ${sourceSha256}`,
     );
+    return {
+      archivePath,
+      sourceSha256,
+    };
+  } catch (error) {
+    await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(cleanupError => {
+      console.warn('[HtmlShare] failed to clean a temporary HTML archive after packaging failed:', cleanupError);
+    });
+    throw error;
   }
-
-  const buffer = await fs.promises.readFile(archivePath);
-  const sourceSha256 = crypto.createHash('sha256').update(buffer).digest('hex');
-  console.debug(
-    `[HtmlShare] wrote share archive with ${stat.size} bytes and hash ${sourceSha256}`,
-  );
-  return {
-    archivePath,
-    sourceSha256,
-  };
 }
 
-export async function packageHtmlFile(filePath: string): Promise<HtmlSharePackageResult> {
+export async function packageHtmlFile(
+  filePath: string,
+  assertAccess?: (filePath: string) => void,
+): Promise<HtmlSharePackageResult> {
   const resolvedFilePath = path.resolve(filePath);
+  assertAccess?.(resolvedFilePath);
   console.debug(`[HtmlShare] packaging HTML file at ${resolvedFilePath}`);
   const stat = await fs.promises.stat(resolvedFilePath);
+  assertAccess?.(resolvedFilePath);
   if (!stat.isFile()) {
     throw new Error('HTML artifact file does not exist.');
   }
@@ -275,10 +296,14 @@ export async function packageHtmlFile(filePath: string): Promise<HtmlSharePackag
 
   const boundaryRoot = await findShareBoundaryRoot(path.dirname(resolvedFilePath));
   const shareRoot = resolveHtmlFileShareRoot(resolvedFilePath, boundaryRoot);
-  return packageStaticDirectory(shareRoot, path.relative(shareRoot, resolvedFilePath));
+  return packageStaticDirectory(shareRoot, path.relative(shareRoot, resolvedFilePath), assertAccess);
 }
 
-export async function packageStaticDirectory(rootDir: string, entryFile = 'index.html'): Promise<HtmlSharePackageResult> {
+export async function packageStaticDirectory(
+  rootDir: string,
+  entryFile = 'index.html',
+  assertAccess?: (filePath: string) => void,
+): Promise<HtmlSharePackageResult> {
   const resolvedRootDir = path.resolve(rootDir);
   const entryPath = path.resolve(resolvedRootDir, entryFile);
   const relativeEntry = path.relative(resolvedRootDir, entryPath);
@@ -287,7 +312,9 @@ export async function packageStaticDirectory(rootDir: string, entryFile = 'index
     throw new Error('Entry HTML must be inside the shared directory.');
   }
 
+  assertAccess?.(entryPath);
   const entryStat = await fs.promises.stat(entryPath);
+  assertAccess?.(entryPath);
   if (!entryStat.isFile()) {
     throw new Error('Shared output directory must contain an entry HTML file.');
   }
@@ -296,12 +323,13 @@ export async function packageStaticDirectory(rootDir: string, entryFile = 'index
     allowedRoot: resolvedRootDir,
     isAllowedFile: isAllowedStaticFile,
     isBlockedPath: filePath => isBlockedStaticPath(resolvedRootDir, filePath),
+    assertAccess,
   });
   console.debug(
     `[HtmlShare] dependency scan found ${dependencyScan.files.length} files, ${dependencyScan.missing.length} missing referenced resources, and ${dependencyScan.blocked.length} blocked resources`,
   );
   const archiveRoot = findCommonDirectory(dependencyScan.files);
-  const files = await buildStaticFileEntries(archiveRoot, dependencyScan.files);
+  const files = await buildStaticFileEntries(archiveRoot, dependencyScan.files, assertAccess);
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
   console.debug(
     `[HtmlShare] collected ${files.length} referenced static files with ${totalBytes} bytes before compression`,
@@ -311,7 +339,7 @@ export async function packageStaticDirectory(rootDir: string, entryFile = 'index
     throw new Error('Entry HTML was excluded from the share archive.');
   }
 
-  const { archivePath, sourceSha256 } = await writeZip(files);
+  const { archivePath, sourceSha256 } = await writeZip(files, assertAccess);
 
   return {
     archivePath,

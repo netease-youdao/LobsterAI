@@ -15,6 +15,16 @@ afterEach(() => {
 });
 
 describe('library thumbnail cache', () => {
+  test('does not reuse cached thumbnails after switching accounts or signing back in', () => {
+    const firstAccountKey = createLibraryThumbnailCacheKey('/tmp/report.pdf', 100, 20, 1);
+    const secondAccountKey = createLibraryThumbnailCacheKey('/tmp/report.pdf', 100, 20, 2);
+    const signedBackInKey = createLibraryThumbnailCacheKey('/tmp/report.pdf', 100, 20, 3);
+    cacheLibraryThumbnail(firstAccountKey, 'data:image/png;base64,private');
+    expect(getCachedLibraryThumbnail(secondAccountKey)).toBeUndefined();
+    expect(getCachedLibraryThumbnail(signedBackInKey)).toBeUndefined();
+    expect(shouldApplyLibraryThumbnailResult(firstAccountKey, secondAccountKey, true)).toBe(false);
+  });
+
   test('changes the cache key when the file mtime changes', () => {
     expect(createLibraryThumbnailCacheKey('/tmp/report.pdf', 100)).not.toBe(
       createLibraryThumbnailCacheKey('/tmp/report.pdf', 200),

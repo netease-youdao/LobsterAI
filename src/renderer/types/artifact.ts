@@ -1,3 +1,4 @@
+import type { ArtifactFileAccess } from '../../shared/artifactPreview/types';
 import type { ShareDeploymentProjectCandidate } from '../../shared/shareDeployment/constants';
 
 export const ArtifactTypeValue = {
@@ -55,6 +56,7 @@ export interface Artifact {
   language?: string;
   fileName?: string;
   filePath?: string;
+  fileAccess?: ArtifactFileAccess;
   url?: string;
   localService?: LocalServiceArtifactMetadata;
   contentVersion?: number;

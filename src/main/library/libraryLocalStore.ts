@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import crypto from 'crypto';
+import path from 'path';
 
 import {
   type LibraryArtifactType,
@@ -308,6 +309,20 @@ export class LibraryLocalStore {
         ? { nextCursor: encodeLibraryLocalCursor(getLibraryLocalOrderKey(last)) }
         : {}),
     };
+  }
+
+  /** The caller resolves filesystem aliases before checking this indexed path. */
+  getFileAccess(filePath: string, actor: RemoteOwner | null): { tracked: boolean; visible: boolean } {
+    const normalizedPath = path.normalize(filePath);
+    const pathKey = process.platform === 'win32'
+      ? normalizedPath.replace(/\\/g, '/').toLowerCase()
+      : normalizedPath;
+    const visible = visibleTaskRelation(actor);
+    const row = this.db.prepare(`
+      SELECT (a.availability <> ? AND ${visible.sql}) AS visible
+      FROM library_local_artifacts a WHERE a.path_key = ?
+    `).get(LibraryAvailability.Missing, ...visible.parameters, pathKey) as { visible: number } | undefined;
+    return { tracked: row !== undefined, visible: row?.visible === 1 };
   }
 
   getDetail(itemId: string, actor?: RemoteOwner | null): LibraryLocalDetailData | null {

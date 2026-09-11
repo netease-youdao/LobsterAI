@@ -1,5 +1,6 @@
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { AgentLegacyIdentityCleanupStatus } from '@shared/agent';
+import { OwnershipTargetKind } from '@shared/ownership/constants';
 import type { Platform } from '@shared/platform';
 import { PlatformRegistry } from '@shared/platform';
 import { ProviderName } from '@shared/providers';
@@ -22,6 +23,7 @@ import { resolveOpenClawModelRef, toOpenClawModelRef } from '../../utils/opencla
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 import Modal from '../common/Modal';
 import TrashIcon from '../icons/TrashIcon';
+import OwnershipDetailButton from '../ownership/OwnershipDetailButton';
 import AgentAvatarPicker from './AgentAvatarPicker';
 import AgentConfirmDialog from './AgentConfirmDialog';
 import AgentDetailToolbar from './AgentDetailToolbar';
@@ -880,6 +882,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
 
         {/* Footer */}
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 px-5 py-3.5 border-t border-border">
+          <OwnershipDetailButton target={{ kind: OwnershipTargetKind.Agent, id: agentId }} />
           <AgentDetailToolbar
             model={model}
             onModelChange={setModel}

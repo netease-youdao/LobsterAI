@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 
+import { OWNERSHIP_MANUAL_SOURCE } from '../../shared/ownership/constants';
 import { REMOTE_MESSAGE_BYTES, type RemoteAgentSummary, type RemoteOwner, type RemoteRunStatusValue } from '../../shared/remote/constants';
 import { payloadHash, remoteError, sameOwner, stableJson } from './canonical';
 
@@ -13,6 +14,10 @@ export interface SyncRow {
 export interface RemoteRun {
   runId: string; status: RemoteRunStatusValue; statusVersion: string;
   startedAt: string | null; finishedAt: string | null; error: ReturnType<typeof remoteError> | null;
+}
+export interface SessionOwnershipRecord {
+  session_id: string; owner_user_id: string; owner_scope_key: string;
+  ownership_status: string; source: string; created_at: number;
 }
 const terminal = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
 const preview = (text: string): string => Buffer.from(text).subarray(0, 3000).toString('utf8').replace(/\uFFFD$/u, '');
@@ -182,6 +187,22 @@ export class RemoteStore {
   owner(sessionId: string): RemoteOwner | null {
     const row = this.db.prepare("SELECT owner_user_id,owner_scope_key FROM cowork_session_ownership WHERE session_id=? AND ownership_status='confirmed'").get(sessionId) as any;
     return row ? { userId: row.owner_user_id, scopeKey: row.owner_scope_key } : null;
+  }
+  /** Absence is anonymous; quarantined rows must never be treated as anonymous. */
+  ownershipRecord(sessionId: string): SessionOwnershipRecord | null {
+    return this.db.prepare('SELECT * FROM cowork_session_ownership WHERE session_id=?')
+      .get(sessionId) as SessionOwnershipRecord | undefined ?? null;
+  }
+  associateHistorical(sessionId: string, owner: RemoteOwner, associatedAt: number): void {
+    if (!this.db.inTransaction || this.depth === 0) throw new Error('Historical association requires a trusted session transaction');
+    if (!this.db.prepare('SELECT 1 FROM cowork_sessions WHERE id=?').get(sessionId)
+      || this.ownershipRecord(sessionId) || this.sync(sessionId)) {
+      throw new Error('Only genuinely anonymous sessions can be associated');
+    }
+    this.db.prepare('INSERT INTO cowork_session_ownership VALUES (?,?,?,?,?,?)')
+      .run(sessionId, owner.userId, owner.scopeKey, 'confirmed', OWNERSHIP_MANUAL_SOURCE, associatedAt);
+    this.db.prepare('INSERT INTO remote_sync(local_id,session_id) VALUES (?,?)').run(sessionId, randomUUID());
+    this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId);
   }
   assertActor(sessionId: string, actor: RemoteOwner | null): void {
     const row = this.db.prepare('SELECT ownership_status FROM cowork_session_ownership WHERE session_id=?').get(sessionId) as any;

@@ -1,5 +1,6 @@
 import { ShareIcon } from '@heroicons/react/20/solid';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { OwnershipTargetKind } from '@shared/ownership/constants';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
@@ -17,6 +18,8 @@ import ListChecksIcon from '../icons/ListChecksIcon';
 import LoadingIcon from '../icons/LoadingIcon';
 import PushPinIcon from '../icons/PushPinIcon';
 import TrashIcon from '../icons/TrashIcon';
+import { useOwnershipHover } from '../ownership/OwnershipHoverCard';
+import OwnershipMenuItems from '../ownership/OwnershipMenuItems';
 import { AgentSidebarIndicator } from './constants';
 import {
   getScheduledTaskDisplayTitle,
@@ -61,8 +64,8 @@ interface AgentTaskRowProps {
 
 const ACTION_MENU_VIEWPORT_PADDING = 8;
 const ACTION_MENU_VERTICAL_GAP = 4;
-const ACTION_MENU_HEIGHT = 164;
-const ACTION_MENU_WITH_BATCH_HEIGHT = 196;
+const ACTION_MENU_HEIGHT = 205;
+const ACTION_MENU_WITH_BATCH_HEIGHT = 237;
 
 const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
   task,
@@ -105,6 +108,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const isMenuOpen = menuPosition !== null;
+  const ownershipHover = useOwnershipHover({ kind: OwnershipTargetKind.Task, id: task.id }, isBatchMode || isRenaming || isSelectionDisabled || isMenuOpen);
 
   const calculateMenuPosition = useCallback(() => {
     const rect = actionButtonRef.current?.getBoundingClientRect();
@@ -266,6 +270,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
 
   return (
     <div
+      {...ownershipHover.handlers}
       className={`group relative -ml-[6px] flex w-[calc(100%+12px)] items-center gap-2 rounded-md ${
         isActivityRow ? 'min-h-[48px] py-1.5' : 'h-[30px]'
       } ${
@@ -280,7 +285,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
       onClick={handleRowClick}
       onKeyDown={handleRowKeyDown}
       onMouseMove={() => setSuppressPinHover(false)}
-      onMouseLeave={() => setSuppressPinHover(false)}
+      onMouseLeave={() => { setSuppressPinHover(false); ownershipHover.handlers.onMouseLeave(); }}
       role="treeitem"
       tabIndex={isSelectionDisabled ? -1 : 0}
       aria-level={isActivityRow ? 1 : 2}
@@ -437,11 +442,12 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
       {menuPosition && (
         <div
           ref={menuRef}
-          className="fixed z-[60] w-max min-w-[124px] max-w-[calc(100vw-16px)] overflow-hidden rounded-lg border border-border bg-surface shadow-lg"
+          className="fixed z-[60] w-max min-w-[112px] max-w-[calc(100vw-16px)] overflow-hidden rounded-lg border border-border bg-surface shadow-lg"
           style={{ top: menuPosition.top, right: menuPosition.right }}
           role="menu"
           onKeyDown={handleMenuKeyDown}
         >
+          <OwnershipMenuItems target={{ kind: OwnershipTargetKind.Task, id: task.id }} onAction={closeMenu} className={menuItemClassName} />
           {showBatchOption && (
             <button
               type="button"
@@ -497,6 +503,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
             <ShareIcon className={menuIconClassName} />
             {i18nService.t('coworkShareSession')}
           </button>
+          <div role="separator" className="my-1 border-t border-border" />
           <button
             type="button"
             onClick={(event) => {
@@ -514,6 +521,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
         </div>
       )}
 
+      {ownershipHover.card}
       {showConfirmDelete && (
         <Modal
           onClose={() => setShowConfirmDelete(false)}

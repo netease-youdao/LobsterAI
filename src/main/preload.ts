@@ -12,6 +12,7 @@ import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
+import type { ArtifactFileAccess } from '../shared/artifactPreview/types';
 import {
   AsrIpcChannel,
   type AsrRealtimeSessionRequest,
@@ -97,6 +98,8 @@ import {
 } from '../shared/localWebServices/constants';
 import { McpIpcChannel } from '../shared/mcp/constants';
 import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
+import { OwnershipIpc } from '../shared/ownership/constants';
+import type { OwnershipCommitRequest, OwnershipTarget } from '../shared/ownership/types';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
 import { type RemoteConfigureRequest, RemoteIpc, type RemoteSettingsState } from '../shared/remote/constants';
@@ -135,6 +138,17 @@ import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
+  ownership: {
+    getDetail: (target: OwnershipTarget) => ipcRenderer.invoke(OwnershipIpc.GetDetail, target),
+    preview: (target: OwnershipTarget) => ipcRenderer.invoke(OwnershipIpc.Preview, target),
+    commit: (input: OwnershipCommitRequest) => ipcRenderer.invoke(OwnershipIpc.Commit, input),
+    getResult: (input: { requestId: string }) => ipcRenderer.invoke(OwnershipIpc.GetResult, input),
+    onChanged: (listener: () => void) => {
+      const handler = () => listener();
+      ipcRenderer.on(OwnershipIpc.Changed, handler);
+      return () => ipcRenderer.removeListener(OwnershipIpc.Changed, handler);
+    },
+  },
   remote: {
     state: () => ipcRenderer.invoke(RemoteIpc.State),
     onChanged: (listener: (state: RemoteSettingsState) => void) => {
@@ -842,14 +856,14 @@ contextBridge.exposeInMainWorld('electron', {
       mimeType?: string;
       cwd?: string;
     }) => ipcRenderer.invoke('dialog:saveInlineFile', options),
-    readFileAsDataUrl: (filePath: string) =>
-      ipcRenderer.invoke('dialog:readFileAsDataUrl', filePath),
-    statFile: (filePath: string) =>
-      ipcRenderer.invoke(DialogIpc.StatFile, filePath),
-    readTextFile: (filePath: string) =>
-      ipcRenderer.invoke(DialogIpc.ReadTextFile, filePath),
-    saveFileCopy: (filePath: string) =>
-      ipcRenderer.invoke(DialogIpc.SaveFileCopy, filePath),
+    readFileAsDataUrl: (filePath: string, access?: ArtifactFileAccess) =>
+      ipcRenderer.invoke(DialogIpc.ReadFileAsDataUrl, filePath, access),
+    statFile: (filePath: string, access?: ArtifactFileAccess) =>
+      ipcRenderer.invoke(DialogIpc.StatFile, filePath, access),
+    readTextFile: (filePath: string, access?: ArtifactFileAccess) =>
+      ipcRenderer.invoke(DialogIpc.ReadTextFile, filePath, access),
+    saveFileCopy: (filePath: string, access?: ArtifactFileAccess) =>
+      ipcRenderer.invoke(DialogIpc.SaveFileCopy, filePath, access),
     generateThumbnail: (request: import('../shared/library/thumbnail').LibraryThumbnailGenerateRequest) =>
       ipcRenderer.invoke(DialogIpc.GenerateThumbnail, request),
     cancelThumbnail: (requestId: string) =>
@@ -1006,6 +1020,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(LibraryIpc.ListCloud, options),
     getLocalItems: (input: LibraryGetLocalItemsInput) =>
       ipcRenderer.invoke(LibraryIpc.GetLocalItems, input),
+    getLocalAccess: (itemId: string) =>
+      ipcRenderer.invoke(LibraryIpc.GetLocalAccess, itemId),
     getLocalDetail: (itemId: string) =>
       ipcRenderer.invoke(LibraryIpc.GetLocalDetail, itemId),
     recordCandidates: (candidates: LibraryArtifactCandidate[]) =>
@@ -1044,10 +1060,10 @@ contextBridge.exposeInMainWorld('electron', {
         ipcRenderer.removeListener('artifact:file:changed', handler);
       };
     },
-    createPreviewSession: (filePath: string) =>
-      ipcRenderer.invoke(ArtifactPreviewIpc.CreateSession, filePath),
-    createOfficePreviewSession: (filePath: string) =>
-      ipcRenderer.invoke(ArtifactPreviewIpc.CreateOfficeSession, filePath),
+    createPreviewSession: (filePath: string, access?: ArtifactFileAccess) =>
+      ipcRenderer.invoke(ArtifactPreviewIpc.CreateSession, filePath, access),
+    createOfficePreviewSession: (filePath: string, access?: ArtifactFileAccess) =>
+      ipcRenderer.invoke(ArtifactPreviewIpc.CreateOfficeSession, filePath, access),
     destroyPreviewSession: (sessionId: string) =>
       ipcRenderer.invoke(ArtifactPreviewIpc.DestroySession, sessionId),
     clearBrowserCookies: async () => {

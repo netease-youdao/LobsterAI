@@ -31,6 +31,7 @@ import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSession
 import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
+import { ownershipOperationGate } from './ownershipOperationGate';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1438,6 +1439,7 @@ test('resetRunningSessions batches changed projections and leaves no-op reset si
 });
 
 test('subagent upsert notifies creation and actual repeated running timestamp writes', () => {
+  db.prepare("INSERT INTO agents (id,name,created_at,updated_at) VALUES ('main','Main',1,1)").run();
   insertSession('parent-projection');
   const listener = vi.fn();
   store.onSessionProjectionChanges(listener);
@@ -1453,6 +1455,26 @@ test('subagent upsert notifies creation and actual repeated running timestamp wr
   store.upsertSubagentChildSession(options);
   expect(listener).toHaveBeenCalledTimes(2);
   expect(listener.mock.calls.map(call => call[0].changedSessionIds)).toEqual([[options.id], [options.id]]);
+});
+
+test('subagent materialization refuses an anonymously running parent after its target becomes private', () => {
+  db.prepare("INSERT INTO agents (id,name,created_at,updated_at) VALUES ('main','Main',1,1)").run();
+  insertSession('anonymous-parent');
+  const agent = store.createAgent({ name: 'Target' });
+  store.agentOwnership.transaction(() => store.agentOwnership.associateHistorical(agent.id, { userId: '1001', scopeKey: 'personal' }, Date.now()));
+  expect(() => store.upsertSubagentChildSession({ id: 'blocked-child', parentSessionId: 'anonymous-parent', childSessionKey: 'child-key', title: 'Child', agentId: agent.id })).toThrow();
+  expect(store.getSession('blocked-child')).toBeNull();
+});
+
+test('subagent materialization cannot pass an exclusive parent ownership reservation', () => {
+  db.prepare("INSERT INTO agents (id,name,created_at,updated_at) VALUES ('main','Main',1,1)").run();
+  insertSession('reserved-parent');
+  const release = ownershipOperationGate.tryAcquire({ agentIds: [], sessionIds: ['reserved-parent'] });
+  expect(release).not.toBeNull();
+  try {
+    expect(() => store.upsertSubagentChildSession({ id: 'blocked-child', parentSessionId: 'reserved-parent', childSessionKey: 'child-key', title: 'Child', agentId: 'main' })).toThrow();
+    expect(store.getSession('blocked-child')).toBeNull();
+  } finally { release?.(); }
 });
 
 test('outer session transaction publishes final values once and drops rollback or reverted writes', () => {

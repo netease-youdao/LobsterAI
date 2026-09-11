@@ -34,8 +34,13 @@ const FileBasedHtmlRenderer: React.FC<{ artifact: Artifact }> = ({ artifact }) =
 
     const setupSession = async () => {
       try {
-        const result = await window.electron.artifact.createPreviewSession(artifact.filePath!);
-        if (cancelled) return;
+        const result = await window.electron.artifact.createPreviewSession(artifact.filePath!, artifact.fileAccess);
+        if (cancelled) {
+          if (result.success && result.sessionId) {
+            void window.electron.artifact.destroyPreviewSession(result.sessionId);
+          }
+          return;
+        }
         if (result.success && result.url && result.sessionId) {
           sessionIdRef.current = result.sessionId;
           setPreviewUrl(result.url);
@@ -59,7 +64,7 @@ const FileBasedHtmlRenderer: React.FC<{ artifact: Artifact }> = ({ artifact }) =
         sessionIdRef.current = null;
       }
     };
-  }, [artifact.filePath]);
+  }, [artifact.fileAccess, artifact.filePath]);
 
   // Reload iframe when file content changes (triggered by file watcher)
   const contentVersion = artifact.contentVersion ?? artifact.content;

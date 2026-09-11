@@ -1,4 +1,5 @@
 import { ArtifactPreviewProtocol } from '@shared/artifactPreview/constants';
+import type { ArtifactFileAccess } from '@shared/artifactPreview/types';
 import React, { useEffect, useMemo, useState } from 'react';
 
 import { i18nService } from '@/services/i18n';
@@ -36,7 +37,7 @@ function normalizeLocalPath(filePath: string): string {
   return normalized.replace(/\\/g, '/');
 }
 
-function buildLocalFileSrc(filePath: string, cacheKey: number): string {
+function buildLocalFileSrc(filePath: string, cacheKey: number, access?: ArtifactFileAccess): string {
   const normalized = normalizeLocalPath(filePath);
   const pathForUrl = /^[A-Za-z]:/.test(normalized) || normalized.startsWith('/')
     ? normalized
@@ -45,7 +46,8 @@ function buildLocalFileSrc(filePath: string, cacheKey: number): string {
   const prefix = /^[A-Za-z]:/.test(pathForUrl)
     ? `${ArtifactPreviewProtocol.LocalFile}:///`
     : `${ArtifactPreviewProtocol.LocalFile}://`;
-  return `${prefix}${encoded}?v=${cacheKey}`;
+  const accessQuery = access ? `&access=${encodeURIComponent(JSON.stringify(access))}` : '';
+  return `${prefix}${encoded}?v=${cacheKey}${accessQuery}`;
 }
 
 function buildFileUrlSrc(filePath: string): string {
@@ -64,11 +66,12 @@ function buildVideoSources(
   remoteUrl: string | undefined,
   content: string,
   createdAt: number,
+  access?: ArtifactFileAccess,
 ): string[] {
   const sources: string[] = [];
   if (filePath) {
-    sources.push(buildLocalFileSrc(filePath, createdAt));
-    sources.push(buildFileUrlSrc(filePath));
+    sources.push(buildLocalFileSrc(filePath, createdAt, access));
+    if (!access) sources.push(buildFileUrlSrc(filePath));
   }
   for (const candidate of [remoteUrl, content]) {
     const value = candidate?.trim();
@@ -86,8 +89,9 @@ const VideoRenderer: React.FC<VideoRendererProps> = ({ artifact }) => {
       artifact.remoteUrl,
       artifact.content,
       artifact.createdAt,
+      artifact.fileAccess,
     ),
-    [artifact.content, artifact.createdAt, artifact.filePath, artifact.remoteUrl],
+    [artifact.content, artifact.createdAt, artifact.fileAccess, artifact.filePath, artifact.remoteUrl],
   );
   const [activeSourceIndex, setActiveSourceIndex] = useState(0);
   const [error, setError] = useState(false);

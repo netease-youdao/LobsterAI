@@ -11,7 +11,7 @@ import type { RemoteStore } from './remoteStore';
 interface AgentRow { id: string; name: string; icon: string; enabled: number }
 interface WorkspaceBinding { agentId: string; workspaceId: string; path: string; available: boolean }
 interface Publication { publicationId: string; expectedCatalogVersion: string; items: RemoteAgentCatalogItem[] }
-interface CatalogState { catalogVersion: string; syncedHash: string | null; pending: Publication | null }
+interface CatalogState { catalogVersion: string; syncedHash: string | null; syncedItems?: RemoteAgentCatalogItem[]; pending: Publication | null }
 export interface AgentWorkspace { path: string; name: string; available?: boolean }
 export class RemoteAgentError extends Error {
   constructor(readonly code: number, readonly reason: string, readonly reasonDetail: string) { super(reason); }
@@ -54,16 +54,18 @@ export class RemoteAgentCatalog {
     this.store.put(`agentSummary:${agentId}`, summary);
     return summary;
   }
-  async refresh(owner: RemoteOwner, deviceId: string, stillCurrent: () => boolean): Promise<RemoteAgentCatalogItem[]> {
+  async refresh(owner: RemoteOwner, deviceId: string, stillCurrent: () => boolean,
+    canPublishAgent: (agentId: string) => boolean = () => true): Promise<RemoteAgentCatalogItem[]> {
     const items: RemoteAgentCatalogItem[] = [];
     for (const identity of this.ownership.list()) {
       if (!this.ownership.canView(identity.agentId, owner)) continue;
       this.agentSummary(identity.agentId, owner);
-      if (!this.ownership.canPublish(identity.agentId, owner)) continue;
+      if (!this.ownership.canPublish(identity.agentId, owner) || !canPublishAgent(identity.agentId)) continue;
       const beforeVersion = this.ownership.get(identity.agentId)!.version;
       let workspace: AgentWorkspace | null = null;
       try { workspace = await this.getWorkspace(identity.agentId); } catch { /* Publish unavailability, never substitute another Agent's path. */ }
       if (!stillCurrent()) throw new Error('Account changed');
+      if (!canPublishAgent(identity.agentId)) throw new Error('Agent ownership synchronization is waiting for server support');
       if (!this.ownership.canPublish(identity.agentId, owner) || this.ownership.get(identity.agentId)!.version !== beforeVersion) throw new Error('Agent changed while resolving its workspace');
       const path: string | null = workspace?.path ? resolve(workspace.path) : null;
       let available = false;
@@ -101,32 +103,44 @@ export class RemoteAgentCatalog {
     catch { throw remoteAgentFailure('WORKSPACE_UNAVAILABLE'); }
     return binding.path;
   }
+  isSynced(owner: RemoteOwner, deviceId: string, agentId: string): boolean {
+    const state = this.store.get<CatalogState>(this.key(owner, deviceId));
+    if (!state?.syncedItems || state.syncedHash !== payloadHash(state.syncedItems)) return false;
+    const identity = this.ownership.get(agentId);
+    const item = state.syncedItems.find(value => value.agentId === agentId);
+    return this.ownership.canPublish(agentId, owner) && Boolean(item && item.version === identity?.version && item.kind === identity.ownerKind);
+  }
   async publish(owner: RemoteOwner, deviceId: string, generation: string, api: (path: string, method?: string, body?: unknown) => Promise<any>,
-    stillCurrent: () => boolean, limits = { items: REMOTE_AGENT_CATALOG_ITEMS, bytes: REMOTE_AGENT_CATALOG_BYTES }): Promise<void> {
+    stillCurrent: () => boolean, limits = { items: REMOTE_AGENT_CATALOG_ITEMS, bytes: REMOTE_AGENT_CATALOG_BYTES },
+    canPublishAgent: (agentId: string) => boolean = () => true): Promise<void> {
     const key = this.key(owner, deviceId);
     const path = `/devices/${deviceId}/agents`;
-    const items = await this.refresh(owner, deviceId, stillCurrent);
-    if (items.length > limits.items || !items.some(item => item.agentId === AgentId.Main && item.kind === AgentOwnerKind.Default)) throw new RemoteAgentError(47012, 'PAYLOAD_TOO_LARGE', 'CATALOG_LIMIT');
     let state = this.store.get<CatalogState>(key) || { catalogVersion: '0', syncedHash: null, pending: null };
     // GET first proves whether a previous uncertain PUT committed, including after WS reconnect.
     const current = await api(path);
     if (!stillCurrent()) throw new Error('Account changed');
     if (state.pending && current.lastPublicationId === state.pending.publicationId) {
-      state = { catalogVersion: current.catalogVersion, syncedHash: payloadHash(state.pending.items), pending: null };
+      state = { catalogVersion: current.catalogVersion, syncedHash: payloadHash(state.pending.items), syncedItems: state.pending.items, pending: null };
       this.store.put(key, state);
     } else if (state.pending && current.catalogVersion !== state.pending.expectedCatalogVersion) {
       state = { catalogVersion: current.catalogVersion, syncedHash: null, pending: null };
       this.store.put(key, state);
     } else if (!state.pending) state.catalogVersion = current.catalogVersion;
-    if (!state.pending && state.syncedHash === payloadHash(items) && current.syncStatus === 'ready' && payloadHash(current.items) === state.syncedHash) return;
     if (!state.pending) {
+      const items = await this.refresh(owner, deviceId, stillCurrent, canPublishAgent);
+      if (items.length > limits.items || !items.some(item => item.agentId === AgentId.Main && item.kind === AgentOwnerKind.Default)) throw new RemoteAgentError(47012, 'PAYLOAD_TOO_LARGE', 'CATALOG_LIMIT');
+      if (state.syncedHash === payloadHash(items) && current.syncStatus === 'ready' && payloadHash(current.items) === state.syncedHash) {
+        this.store.put(key, { ...state, syncedItems: items }); return;
+      }
       state.pending = { publicationId: randomUUID(), expectedCatalogVersion: state.catalogVersion, items };
       if (Buffer.byteLength(JSON.stringify({ ...state.pending, connectionGeneration: generation })) > limits.bytes) throw new RemoteAgentError(47012, 'PAYLOAD_TOO_LARGE', 'CATALOG_LIMIT');
       this.store.put(key, state);
     }
+    // Pending content is immutable. A different admission context may delay it, never filter/rewrite its ID.
+    if (state.pending.items.some(item => !canPublishAgent(item.agentId))) throw new Error('Agent ownership synchronization is waiting for server support');
     const result = await api(path, 'PUT', { ...state.pending, connectionGeneration: generation });
     if (!stillCurrent()) throw new Error('Account changed');
     if (result.publicationId !== state.pending.publicationId || result.deviceId !== deviceId) throw new Error('Agent catalog ACK identity mismatch');
-    this.store.put(key, { catalogVersion: result.catalogVersion, syncedHash: payloadHash(state.pending.items), pending: null });
+    this.store.put(key, { catalogVersion: result.catalogVersion, syncedHash: payloadHash(state.pending.items), syncedItems: state.pending.items, pending: null });
   }
 }

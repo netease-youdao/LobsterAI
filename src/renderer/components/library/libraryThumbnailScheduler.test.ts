@@ -5,6 +5,7 @@ import {
   type LibraryThumbnailGenerateResponse,
   LibraryThumbnailRequestPriority,
 } from '../../../shared/library/thumbnail';
+import { createLibraryThumbnailCacheKey } from './libraryThumbnailCache';
 import {
   LibraryThumbnailLoadStatus,
   LibraryThumbnailScheduler,
@@ -19,6 +20,30 @@ afterEach(() => {
 });
 
 describe('LibraryThumbnailScheduler', () => {
+  test('a remounted account cannot receive the previous account pending thumbnail', async () => {
+    const scheduler = new LibraryThumbnailScheduler({ maxConcurrency: 2 });
+    let finishPrevious: ((response: LibraryThumbnailGenerateResponse) => void) | undefined;
+    const previous = scheduler.subscribe({
+      key: createLibraryThumbnailCacheKey('/tmp/report.pdf', 100, 20, 1),
+      priority: LibraryThumbnailRequestPriority.Visible,
+      load: () => new Promise(resolve => { finishPrevious = resolve; }),
+      onStateChange: () => undefined,
+    });
+    previous.unsubscribe();
+    const currentData: string[] = [];
+    scheduler.subscribe({
+      key: createLibraryThumbnailCacheKey('/tmp/report.pdf', 100, 20, 2),
+      priority: LibraryThumbnailRequestPriority.Visible,
+      load: async () => ({ success: true, dataUrl: 'current-account' }),
+      onStateChange: state => { if (state.dataUrl) currentData.push(state.dataUrl); },
+    });
+    finishPrevious?.({ success: true, dataUrl: 'previous-account' });
+    await flushTasks();
+    expect(currentData).toEqual(['current-account']);
+    scheduler.clear();
+  });
+
+
   test('limits IPC work and starts visible tasks before queued near-viewport tasks', async () => {
     const scheduler = new LibraryThumbnailScheduler({ maxConcurrency: 1 });
     const started: string[] = [];

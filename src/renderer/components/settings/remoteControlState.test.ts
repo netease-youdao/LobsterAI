@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import { RemoteConnectionReason, RemoteConnectionStatus, type RemoteSettingsState } from '../../../shared/remote/constants';
-import { editRemoteSettingsDraft, isNewRemoteState, isRemoteOnline, needsRemoteSignIn, normalizeRemoteDeviceName, reconcileRemoteSettingsDraft, remoteConnectionDescription, remoteConnectionFailure, remoteOwnerKey, remoteSettingsSwitchChecked, saveRemoteSettingsDraft, toggleRemoteSettingsSwitch } from './remoteControlState';
+import { isNewRemoteState, isRemoteOnline, needsRemoteSignIn, normalizeRemoteDeviceName, remoteConnectionDescription, remoteConnectionFailure, remoteOwnerKey, remoteSettingsSwitchChecked, toggleRemoteSettingsSwitch } from './remoteControlState';
 
 const connected: RemoteSettingsState = {
   enabled: true, connected: true, name: 'Computer', owner: { userId: 'user-a', scopeKey: 'personal' },
@@ -49,75 +49,45 @@ describe('remote settings state boundaries', () => {
 
 describe('remote switches require a completed login', () => {
   test('loading and signed-out states show both switches off even with stale true values', () => {
-    const staleDraft = { ownerKey: remoteOwnerKey(connected), changes: { enabled: true, keepAwakeEnabled: true } };
     for (const state of [null, { ...connected, owner: null, keepAwakeEnabled: true }]) {
-      expect(remoteSettingsSwitchChecked(state, staleDraft, 'enabled')).toBe(false);
-      expect(remoteSettingsSwitchChecked(state, staleDraft, 'keepAwakeEnabled')).toBe(false);
+      expect(remoteSettingsSwitchChecked(state, 'enabled')).toBe(false);
+      expect(remoteSettingsSwitchChecked(state, 'keepAwakeEnabled')).toBe(false);
     }
   });
 
-  test('authenticated defaults preserve each saved false value and only accept the current owner draft', () => {
-    expect(remoteSettingsSwitchChecked(connected, null, 'enabled')).toBe(true);
-    expect(remoteSettingsSwitchChecked(connected, null, 'keepAwakeEnabled')).toBe(true);
+  test('authenticated defaults preserve each saved false value', () => {
+    expect(remoteSettingsSwitchChecked(connected, 'enabled')).toBe(true);
+    expect(remoteSettingsSwitchChecked(connected, 'keepAwakeEnabled')).toBe(true);
     const saved = { ...connected, enabled: false, keepAwakeEnabled: false };
-    expect(remoteSettingsSwitchChecked(saved, null, 'enabled')).toBe(false);
-    expect(remoteSettingsSwitchChecked(saved, null, 'keepAwakeEnabled')).toBe(false);
-    const draft = editRemoteSettingsDraft(null, saved, { enabled: true });
-    expect(remoteSettingsSwitchChecked(saved, draft, 'enabled')).toBe(true);
-    expect(remoteSettingsSwitchChecked(saved, draft, 'keepAwakeEnabled')).toBe(false);
-    const otherOwner = { ...saved, owner: { userId: 'user-b', scopeKey: 'personal' } };
-    expect(remoteSettingsSwitchChecked(otherOwner, draft, 'enabled')).toBe(false);
+    expect(remoteSettingsSwitchChecked(saved, 'enabled')).toBe(false);
+    expect(remoteSettingsSwitchChecked(saved, 'keepAwakeEnabled')).toBe(false);
   });
 
-  test.each(['enabled', 'keepAwakeEnabled'] as const)('%s requests login without editing until an authenticated state arrives', setting => {
-    const onLogin = vi.fn();
-    const onEdit = vi.fn();
-    toggleRemoteSettingsSwitch(null, null, setting, onLogin, onEdit);
+  test.each(['enabled', 'keepAwakeEnabled'] as const)('%s requests login without writing settings', setting => {
+    const onLogin = vi.fn(); const onEdit = vi.fn();
+    toggleRemoteSettingsSwitch(null, setting, onLogin, onEdit);
     expect(onLogin).not.toHaveBeenCalled();
     for (const state of [{ ...connected, owner: null }, { ...connected, enabled: false, keepAwakeEnabled: false, errorCode: 401 }]) {
-      toggleRemoteSettingsSwitch(state, null, setting, onLogin, onEdit);
-      expect(remoteSettingsSwitchChecked(state, null, setting)).toBe(false);
+      toggleRemoteSettingsSwitch(state, setting, onLogin, onEdit);
     }
     expect(onLogin).toHaveBeenCalledTimes(2);
     expect(onEdit).not.toHaveBeenCalled();
-    // Successful browser handoff has not changed the account state or saved preferences.
+    // A browser handoff cannot overwrite an explicitly saved false preference.
     const saved = { ...connected, enabled: false, keepAwakeEnabled: false };
-    expect(remoteSettingsSwitchChecked(saved, null, setting)).toBe(false);
-    toggleRemoteSettingsSwitch(saved, null, setting, onLogin, onEdit);
+    expect(remoteSettingsSwitchChecked(saved, setting)).toBe(false);
+    toggleRemoteSettingsSwitch(saved, setting, onLogin, onEdit);
     expect(onEdit).toHaveBeenCalledExactlyOnceWith({ [setting]: true });
-    expect(onLogin).toHaveBeenCalledTimes(2);
   });
 
-  test.each(['enabled', 'keepAwakeEnabled'] as const)('%s preserves an expired account preference and still allows switching it off', setting => {
+  test.each(['enabled', 'keepAwakeEnabled'] as const)('%s permits turning off after login expires but gates enabling', setting => {
     const expired = { ...connected, keepAwakeEnabled: true, errorCode: 40100 };
-    const onLogin = vi.fn();
-    const onEdit = vi.fn();
-    expect(remoteSettingsSwitchChecked(expired, null, setting)).toBe(true);
-    toggleRemoteSettingsSwitch(expired, null, setting, onLogin, onEdit);
+    const onLogin = vi.fn(); const onEdit = vi.fn();
+    expect(remoteSettingsSwitchChecked(expired, setting)).toBe(true);
+    toggleRemoteSettingsSwitch(expired, setting, onLogin, onEdit);
     expect(onEdit).toHaveBeenCalledExactlyOnceWith({ [setting]: false });
-    expect(onLogin).not.toHaveBeenCalled();
-    const draft = editRemoteSettingsDraft(null, expired, { [setting]: false });
-    expect(remoteSettingsSwitchChecked(expired, draft, setting)).toBe(false);
-    toggleRemoteSettingsSwitch(expired, draft, setting, onLogin, onEdit);
+    const saved = { ...expired, [setting]: false };
+    toggleRemoteSettingsSwitch(saved, setting, onLogin, onEdit);
     expect(onLogin).toHaveBeenCalledOnce();
-    expect(onEdit).toHaveBeenCalledTimes(1);
-  });
-
-  test('authenticated toggles remain drafts that can be reverted or saved off', async () => {
-    const onLogin = vi.fn();
-    let draft = null as ReturnType<typeof editRemoteSettingsDraft>;
-    const onEdit = (changes: Parameters<typeof editRemoteSettingsDraft>[2]) => { draft = editRemoteSettingsDraft(draft, connected, changes); };
-    toggleRemoteSettingsSwitch(connected, draft, 'enabled', onLogin, onEdit);
-    toggleRemoteSettingsSwitch(connected, draft, 'keepAwakeEnabled', onLogin, onEdit);
-    expect(draft?.changes).toEqual({ enabled: false, keepAwakeEnabled: false });
-    const api = { state: vi.fn(async () => connected), configure: vi.fn(async () => connected) };
-    expect(api.configure).not.toHaveBeenCalled();
-    await saveRemoteSettingsDraft(draft, api);
-    expect(api.configure).toHaveBeenCalledExactlyOnceWith({ enabled: false, keepAwakeEnabled: false });
-    toggleRemoteSettingsSwitch(connected, draft, 'enabled', onLogin, onEdit);
-    toggleRemoteSettingsSwitch(connected, draft, 'keepAwakeEnabled', onLogin, onEdit);
-    expect(draft).toBeNull();
-    expect(onLogin).not.toHaveBeenCalled();
   });
 });
 
@@ -141,65 +111,6 @@ describe('device display names', () => {
   });
 });
 
-
-describe('remote preferences are saved by the settings form', () => {
-  test('edits merge in a draft, leave live preferences unchanged and disappear when discarded', async () => {
-    const api = { state: vi.fn(async () => connected), configure: vi.fn(async () => connected) };
-    let draft = editRemoteSettingsDraft(null, connected, { enabled: false });
-    draft = editRemoteSettingsDraft(draft, connected, { keepAwakeEnabled: false, name: 'Draft name' });
-    expect(draft?.changes).toEqual({ enabled: false, keepAwakeEnabled: false, name: 'Draft name' });
-    expect(connected.enabled).toBe(true); expect(connected.name).toBe('Computer');
-    expect(api.configure).not.toHaveBeenCalled();
-    draft = null; // Cancel/close discards form state; there is no compensating server mutation.
-    await saveRemoteSettingsDraft(draft, api);
-    expect(api.state).not.toHaveBeenCalled(); expect(api.configure).not.toHaveBeenCalled();
-  });
-
-  test('live connection updates preserve unsaved changes across tab unmounts', () => {
-    const draft = editRemoteSettingsDraft(null, connected, { enabled: false, name: 'Draft' });
-    expect(reconcileRemoteSettingsDraft(draft, { ...connected, connected: false, stateRevision: 11 })).toBe(draft);
-    // An in-flight configure may publish local preferences before ultimately failing.
-    expect(reconcileRemoteSettingsDraft(draft, { ...connected, enabled: false, name: 'Draft' })).toBe(draft);
-    expect(reconcileRemoteSettingsDraft(draft, { ...connected, owner: null })).toBeNull();
-    expect(reconcileRemoteSettingsDraft(draft, { ...connected, owner: { userId: 'user-b', scopeKey: 'personal' } })).toBeNull();
-    expect(reconcileRemoteSettingsDraft(draft, { ...connected, owner: { userId: 'user-a', scopeKey: 'enterprise:1' } })).toBeNull();
-  });
-
-  test('only submits accumulated settings at save, including edits made before switching tabs', async () => {
-    const api = { state: vi.fn(async () => connected), configure: vi.fn(async () => connected) };
-    const draft = editRemoteSettingsDraft(null, connected, { enabled: false, keepAwakeEnabled: false, name: 'Work' });
-    await saveRemoteSettingsDraft(draft, api);
-    expect(api.configure).toHaveBeenCalledExactlyOnceWith({ enabled: false, keepAwakeEnabled: false, name: 'Work' });
-  });
-
-  test('a failed save preserves the draft for retry and reports a localized error key', async () => {
-    const draft = editRemoteSettingsDraft(null, connected, { name: 'Work' });
-    const api = { state: vi.fn(async () => connected), configure: vi.fn().mockRejectedValueOnce(new Error('internal')).mockResolvedValue(connected) };
-    await expect(saveRemoteSettingsDraft(draft, api)).rejects.toThrow('remoteSaveFailed');
-    expect(draft?.changes).toEqual({ name: 'Work' });
-    await expect(saveRemoteSettingsDraft(draft, api)).resolves.toBeUndefined();
-    expect(api.configure).toHaveBeenCalledTimes(2);
-  });
-
-  test('does not apply an old account draft after switching accounts or signing out', async () => {
-    const draft = editRemoteSettingsDraft(null, connected, { enabled: false });
-    const api = { state: vi.fn(async () => ({ ...connected, owner: null })), configure: vi.fn(async () => connected) };
-    await expect(saveRemoteSettingsDraft(draft, api)).rejects.toThrow('remoteAccountChanged');
-    expect(api.configure).not.toHaveBeenCalled();
-  });
-
-  test('reverting fields removes only those edits and keep-awake activation failures stay retryable', async () => {
-    let draft = editRemoteSettingsDraft(null, connected, { enabled: false, name: 'Work' });
-    draft = editRemoteSettingsDraft(draft, connected, { enabled: true });
-    expect(draft?.changes).toEqual({ name: 'Work' });
-    expect(editRemoteSettingsDraft(draft, connected, { name: 'Computer' })).toBeNull();
-    const failed = { ...connected, keepAwakeError: 'os error' };
-    draft = editRemoteSettingsDraft(null, failed, { keepAwakeEnabled: true });
-    const api = { state: vi.fn(async () => failed), configure: vi.fn(async () => failed) };
-    await expect(saveRemoteSettingsDraft(draft, api)).rejects.toThrow('remoteKeepAwakeFailed');
-    expect(draft?.changes.keepAwakeEnabled).toBe(true);
-  });
-});
 
 describe('connection failure feedback', () => {
   test('credential failure wins over a reconnecting label and never exposes raw server data', () => {

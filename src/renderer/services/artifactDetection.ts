@@ -199,7 +199,7 @@ export async function loadDetectedFileArtifact(
 
   if (artifact.type === ArtifactTypeValue.Html) {
     try {
-      const stat = await window.electron.dialog.statFile(absPath);
+      const stat = await window.electron.dialog.statFile(absPath, artifact.fileAccess);
       if (stat?.success && stat.isFile) {
         return { ...artifact, content: '', filePath: absPath, contentVersion: Date.now() };
       }
@@ -210,7 +210,7 @@ export async function loadDetectedFileArtifact(
   }
 
   try {
-    const result = await window.electron.dialog.readFileAsDataUrl(absPath);
+    const result = await window.electron.dialog.readFileAsDataUrl(absPath, artifact.fileAccess);
     if (result?.success && result.dataUrl) {
       const isTextType = artifact.type !== ArtifactTypeValue.Image && artifact.type !== ArtifactTypeValue.Document;
       let content = result.dataUrl;

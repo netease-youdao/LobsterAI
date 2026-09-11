@@ -4,17 +4,20 @@ import {
   GlobeAltIcon,
 } from '@heroicons/react/24/outline';
 import React, { useEffect, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
 
 import {
   LibraryCategory,
   LibraryItemKind,
 } from '../../../shared/library/constants';
 import {
+  LibraryThumbnailFailureCode,
   LibraryThumbnailRequestPriority,
   type LibraryThumbnailRequestPriorityType,
 } from '../../../shared/library/thumbnail';
 import type { LibraryItem } from '../../../shared/library/types';
 import { i18nService } from '../../services/i18n';
+import { type RootState, store } from '../../store';
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
 import {
   getLibraryDisplayFileName,
@@ -97,6 +100,7 @@ const LibraryThumbnailFallback: React.FC<{
 };
 
 const LibraryThumbnail: React.FC<{ item: LibraryItem }> = ({ item }) => {
+  const accountGeneration = useSelector((state: RootState) => state.auth.accountGeneration);
   const localItem = item.itemKind === LibraryItemKind.LocalArtifact
     && item.availability === 'available' ? item : undefined;
   const cacheKey = localItem
@@ -104,6 +108,7 @@ const LibraryThumbnail: React.FC<{ item: LibraryItem }> = ({ item }) => {
         localItem.filePath,
         localItem.fileMtimeMs,
         localItem.sizeBytes,
+        accountGeneration,
       )
     : undefined;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -169,20 +174,34 @@ const LibraryThumbnail: React.FC<{ item: LibraryItem }> = ({ item }) => {
   useEffect(() => {
     if (!localItem || !cacheKey || !isNearViewport || dataUrl) return undefined;
     const requestedCacheKey = cacheKey;
+    let active = true;
+    const isCurrent = () => active
+      && store.getState().auth.accountGeneration === accountGeneration;
     const subscription = libraryThumbnailScheduler.subscribe({
       key: requestedCacheKey,
       priority: isVisibleRef.current
         ? LibraryThumbnailRequestPriority.Visible
         : LibraryThumbnailRequestPriority.NearViewport,
-      load: (requestId, priority) => window.electron.dialog.generateThumbnail({
-        filePath: localItem.filePath,
-        requestId,
-        priority,
-      }),
+      load: async (requestId, priority) => {
+        const result = await window.electron.library.getLocalAccess(localItem.itemId);
+        if (store.getState().auth.accountGeneration !== accountGeneration) {
+          return { success: false, failureCode: LibraryThumbnailFailureCode.RequestCanceled };
+        }
+        if (!result.success) {
+          return { success: false, error: result.error, retryable: false };
+        }
+        return window.electron.dialog.generateThumbnail({
+          filePath: result.data.filePath,
+          access: result.data.access,
+          requestId,
+          priority,
+        });
+      },
       cancel: requestId => {
         void window.electron.dialog.cancelThumbnail(requestId);
       },
       onStateChange: state => {
+        if (!isCurrent()) return;
         setLoadState(state);
         if (state.status !== LibraryThumbnailLoadStatus.Ready || !state.dataUrl) return;
         cacheLibraryThumbnail(requestedCacheKey, state.dataUrl);
@@ -191,10 +210,11 @@ const LibraryThumbnail: React.FC<{ item: LibraryItem }> = ({ item }) => {
     });
     subscriptionRef.current = subscription;
     return () => {
+      active = false;
       subscription.unsubscribe();
       if (subscriptionRef.current === subscription) subscriptionRef.current = undefined;
     };
-  }, [cacheKey, dataUrl, isNearViewport, localItem]);
+  }, [accountGeneration, cacheKey, dataUrl, isNearViewport, localItem]);
 
   return (
     <div ref={containerRef} className="h-full w-full">

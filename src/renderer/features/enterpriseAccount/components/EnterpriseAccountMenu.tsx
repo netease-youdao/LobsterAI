@@ -3,6 +3,7 @@ import {
   BuildingOffice2Icon,
   ChartBarIcon,
   ChevronRightIcon,
+  ComputerDesktopIcon,
 } from '@heroicons/react/24/outline';
 import {
   type FocusEvent,
@@ -37,6 +38,7 @@ import { resolveEnterpriseMenuFlyoutPosition } from '../enterpriseMenuPosition';
 interface EnterpriseAccountMenuProps {
   context: EnterpriseAccountContext;
   onClose: () => void;
+  onOpenDeviceManagement?: () => void;
 }
 
 interface MenuActionProps {
@@ -66,6 +68,7 @@ const formatCredits = (credits: number): string => (
 export const EnterpriseAccountMenu = ({
   context,
   onClose,
+  onOpenDeviceManagement,
 }: EnterpriseAccountMenuProps) => {
   const user = useSelector((state: RootState) => state.auth.user);
   const isSuperAdmin = context.role === EnterpriseMemberRole.SuperAdmin;
@@ -379,6 +382,11 @@ export const EnterpriseAccountMenu = ({
         </div>
 
         <div className="py-1">
+          {onOpenDeviceManagement && <MenuAction
+            icon={<ComputerDesktopIcon className={actionIconClassName} aria-hidden="true" />}
+            label={i18nService.t('remoteDeviceManagement')}
+            onClick={() => { onClose(); onOpenDeviceManagement(); }}
+          />}
           {adminIdentities.length > 0 ? (
             <div
               onMouseEnter={openEnterpriseFlyout}

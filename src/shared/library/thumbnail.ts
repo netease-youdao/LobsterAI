@@ -1,3 +1,4 @@
+import type { ArtifactFileAccess } from '../artifactPreview/types';
 import {
   getLibraryArtifactTypeForExtension,
   type LibraryArtifactType,
@@ -155,6 +156,7 @@ export const isLibraryThumbnailFailureRetryable = (
 ): boolean => LIBRARY_THUMBNAIL_RETRYABLE_FAILURE_CODES.has(code);
 
 export interface LibraryThumbnailGenerateRequest {
+  access?: ArtifactFileAccess;
   filePath: string;
   requestId: string;
   priority: LibraryThumbnailRequestPriorityType;

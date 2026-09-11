@@ -45,9 +45,12 @@ const MIME_TYPES: Record<string, string> = {
 
 interface PreviewSession {
   rootDir: string;
+  realRootDir: string;
   token: string;
   filePath: string;
   kind: 'html' | 'pptx';
+  assertAccess?: (filePath: string) => void;
+  responses: Set<http.ServerResponse>;
 }
 
 let server: http.Server | null = null;
@@ -93,27 +96,77 @@ function writePreviewHeaders(
   });
 }
 
-function streamFile(filePath: string, res: http.ServerResponse): void {
+function notFound(res: http.ServerResponse): void {
+  if (res.destroyed || res.writableEnded) return;
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  writePreviewHeaders(res, 404);
+  res.end('Not Found');
+}
+
+function assertSessionAccess(sessionId: string, session: PreviewSession, filePath?: string): void {
+  try {
+    if (sessions.get(sessionId) !== session) throw new Error('Preview session expired');
+    session.assertAccess?.(session.filePath);
+    if (filePath && filePath !== session.filePath) session.assertAccess?.(filePath);
+  } catch (error) {
+    destroyPreviewSession(sessionId);
+    throw error;
+  }
+}
+
+function isWithinDirectory(rootDir: string, filePath: string): boolean {
+  const relative = path.relative(rootDir, filePath);
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+function streamFile(
+  filePath: string,
+  res: http.ServerResponse,
+  sessionId: string,
+  session: PreviewSession,
+  trustedAsset = false,
+): void {
+  const assertAccess = () => {
+    assertSessionAccess(sessionId, session, trustedAsset ? undefined : filePath);
+    if (!trustedAsset && !isWithinDirectory(session.realRootDir, fs.realpathSync(filePath))) {
+      throw new Error('Preview resource is outside the session directory');
+    }
+  };
+  assertAccess();
   fs.stat(filePath, (err, stat) => {
+    if (res.destroyed || res.writableEnded) return;
     if (err || !stat.isFile()) {
-      res.writeHead(404);
-      res.end('Not Found');
+      notFound(res);
       return;
     }
-
-    writePreviewHeaders(res, 200, {
-      'Content-Type': getMimeType(filePath),
-      'Content-Length': stat.size,
-    });
-
-    const stream = fs.createReadStream(filePath);
-    stream.pipe(res);
-    stream.on('error', () => {
-      if (!res.headersSent) {
-        res.writeHead(500);
-      }
-      res.end();
-    });
+    try {
+      assertAccess();
+      const stream = fs.createReadStream(filePath);
+      res.once('close', () => stream.destroy());
+      stream.once('open', () => {
+        try {
+          assertAccess();
+          if (res.destroyed || res.writableEnded) {
+            stream.destroy();
+            return;
+          }
+          writePreviewHeaders(res, 200, {
+            'Content-Type': getMimeType(filePath),
+            'Content-Length': stat.size,
+          });
+          stream.pipe(res);
+        } catch {
+          stream.destroy();
+          notFound(res);
+        }
+      });
+      stream.on('error', () => notFound(res));
+    } catch {
+      notFound(res);
+    }
   });
 }
 
@@ -215,17 +268,16 @@ function handlePptxPreviewRequest(
   }
 
   if (relativePath === '__office_preview__/source.pptx') {
-    streamFile(session.filePath, res);
+    streamFile(session.filePath, res, sessionId, session);
     return;
   }
 
   if (relativePath === '__office_preview__/pptx-preview.umd.js') {
-    streamFile(getPptxPreviewUmdPath(), res);
+    streamFile(getPptxPreviewUmdPath(), res, sessionId, session, true);
     return;
   }
 
-  res.writeHead(404);
-  res.end('Not Found');
+  notFound(res);
 }
 
 function extractTokenFromReferer(req: http.IncomingMessage): string | null {
@@ -241,8 +293,7 @@ function extractTokenFromReferer(req: http.IncomingMessage): string | null {
 
 function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
   if (!req.url) {
-    res.writeHead(400);
-    res.end('Bad Request');
+    notFound(res);
     return;
   }
 
@@ -253,24 +304,25 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
   // URL format: /{sessionId}/relative/path/to/file
   const parts = pathname.split('/').filter(Boolean);
   if (parts.length < 1) {
-    res.writeHead(404);
-    res.end('Not Found');
+    notFound(res);
     return;
   }
 
   const sessionId = parts[0];
   const session = sessions.get(sessionId);
   if (!session) {
-    res.writeHead(404);
-    res.end('Session Not Found');
+    notFound(res);
     return;
   }
 
   if (token !== session.token) {
-    res.writeHead(403);
-    res.end('Forbidden');
+    notFound(res);
     return;
   }
+
+  assertSessionAccess(sessionId, session);
+  session.responses.add(res);
+  res.once('close', () => session.responses.delete(res));
 
   const relativePath = parts.slice(1).join('/') || path.basename(session.filePath);
 
@@ -282,13 +334,12 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
   const resolvedPath = path.resolve(session.rootDir, relativePath);
 
   // Path traversal protection
-  if (!resolvedPath.startsWith(session.rootDir)) {
-    res.writeHead(403);
-    res.end('Forbidden');
+  if (!isWithinDirectory(session.rootDir, resolvedPath)) {
+    notFound(res);
     return;
   }
 
-  streamFile(resolvedPath, res);
+  streamFile(resolvedPath, res, sessionId, session);
 }
 
 export async function startHtmlPreviewServer(): Promise<number> {
@@ -300,12 +351,8 @@ export async function startHtmlPreviewServer(): Promise<number> {
     const s = http.createServer((req, res) => {
       try {
         handleRequest(req, res);
-      } catch (e) {
-        console.error('[HtmlPreviewServer] Request error:', e);
-        if (!res.headersSent) {
-          res.writeHead(500);
-        }
-        res.end();
+      } catch {
+        notFound(res);
       }
     });
 
@@ -334,7 +381,7 @@ export async function stopHtmlPreviewServer(): Promise<void> {
   const activeServer = server;
   server = null;
   serverPort = null;
-  sessions.clear();
+  for (const sessionId of sessions.keys()) destroyPreviewSession(sessionId);
 
   // Bounded shutdown: server.close() waits for open preview connections
   // (e.g. a renderer webview keeping keep-alive sockets), so force-close
@@ -357,40 +404,76 @@ export async function stopHtmlPreviewServer(): Promise<void> {
   });
 }
 
-export async function createPreviewSession(filePath: string): Promise<{ sessionId: string; url: string }> {
-  const resolvedFilePath = path.resolve(filePath);
+export async function createPreviewSession(
+  filePath: string,
+  assertAccess?: (filePath: string) => void,
+): Promise<{ sessionId: string; url: string }> {
+  const requestedFilePath = path.resolve(filePath);
+  assertAccess?.(requestedFilePath);
+  const resolvedFilePath = fs.realpathSync(requestedFilePath);
+  assertAccess?.(resolvedFilePath);
   const stat = await fs.promises.stat(resolvedFilePath);
+  assertAccess?.(resolvedFilePath);
   if (!stat.isFile()) {
     throw new Error('Preview target is not a file');
   }
 
   const port = await startHtmlPreviewServer();
+  assertAccess?.(resolvedFilePath);
   const sessionId = crypto.randomBytes(16).toString('hex');
   const token = crypto.randomBytes(24).toString('hex');
   const rootDir = path.dirname(resolvedFilePath) + path.sep;
   const fileName = path.basename(resolvedFilePath);
 
-  sessions.set(sessionId, { rootDir, token, filePath: resolvedFilePath, kind: 'html' });
+  sessions.set(sessionId, {
+    rootDir, realRootDir: fs.realpathSync(rootDir), token, filePath: resolvedFilePath,
+    kind: 'html', assertAccess, responses: new Set(),
+  });
 
   const url = `http://127.0.0.1:${port}/${sessionId}/${encodeURIComponent(fileName)}?token=${token}`;
   return { sessionId, url };
 }
 
-export async function createOfficePreviewSession(filePath: string): Promise<{ sessionId: string; url: string }> {
+export async function createOfficePreviewSession(
+  filePath: string,
+  assertAccess?: (filePath: string) => void,
+): Promise<{ sessionId: string; url: string }> {
+  const requestedFilePath = path.resolve(filePath);
+  assertAccess?.(requestedFilePath);
+  const resolvedFilePath = fs.realpathSync(requestedFilePath);
+  assertAccess?.(resolvedFilePath);
+  const stat = await fs.promises.stat(resolvedFilePath);
+  assertAccess?.(resolvedFilePath);
+  if (!stat.isFile()) throw new Error('Preview target is not a file');
   const port = await startHtmlPreviewServer();
+  assertAccess?.(resolvedFilePath);
   const sessionId = crypto.randomBytes(16).toString('hex');
   const token = crypto.randomBytes(24).toString('hex');
-  const resolvedFilePath = path.resolve(filePath);
   const rootDir = path.dirname(resolvedFilePath) + path.sep;
 
-  sessions.set(sessionId, { rootDir, token, filePath: resolvedFilePath, kind: 'pptx' });
+  sessions.set(sessionId, {
+    rootDir, realRootDir: fs.realpathSync(rootDir), token, filePath: resolvedFilePath,
+    kind: 'pptx', assertAccess, responses: new Set(),
+  });
 
   const url = `http://127.0.0.1:${port}/${sessionId}/__office_preview__/index.html?token=${token}`;
   return { sessionId, url };
 }
 
 export function destroyPreviewSession(sessionId: string): void {
+  const session = sessions.get(sessionId);
   sessions.delete(sessionId);
+  session?.responses.forEach(notFound);
+}
+
+export function revalidatePreviewSessions(): void {
+  for (const [sessionId, session] of sessions) {
+    try {
+      assertSessionAccess(sessionId, session);
+    } catch {
+      // The assertion destroys the session and all its active responses.
+    }
+  }
 }
 
 export function isPreviewServerUrl(url: string): boolean {

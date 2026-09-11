@@ -8,6 +8,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import type { CoworkStore } from '../coworkStore';
 import { ApprovalDecisionService } from '../libs/agentEngine/approvalDecisionService';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
+import { OwnershipOperationGate } from '../ownershipOperationGate';
 import { payloadHash } from './canonical';
 import type { InboxEntry } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
@@ -17,6 +18,45 @@ const owner = { userId: '10001', scopeKey: 'personal' };
 const databases: Database.Database[] = [];
 const approvalDirectories: string[] = [];
 const approvalArbiters: ApprovalDecisionService[] = [];
+
+it('reserves a new submission and its subagent targets through asynchronous preparation', async () => {
+  const gate = new OwnershipOperationGate();
+  const runtime = new EventEmitter() as CoworkRuntime;
+  const store = { remote: { setApprovalLifecycle: vi.fn() }, assertAgentAccess: vi.fn(),
+    getAgent: () => ({ enabled: true, subagentAllowAgentIds: ['child-agent'] }),
+    agentOwnership: { get: () => ({ version: '1' }), canView: () => true } } as unknown as CoworkStore;
+  const service = new SessionCommandService(store, runtime, () => owner, { gate });
+  let resume!: () => void;
+  const running = service.submit({ agentId: 'source' }, true, async () => {
+    await new Promise<void>(done => { resume = done; });
+    assertRemoteExecutionPermit();
+    return { success: true };
+  });
+  expect(gate.tryAcquire({ agentIds: ['source'], sessionIds: [] })).toBeNull();
+  expect(gate.tryAcquire({ agentIds: ['child-agent'], sessionIds: [] })).toBeNull();
+  resume();
+  await expect(running).resolves.toEqual({ success: true });
+  expect(gate.isBusy({ agentIds: ['source', 'child-agent'], sessionIds: [] })).toBe(false);
+});
+
+it('fences an anonymous preparation after login even when its Agent remains public', async () => {
+  const gate = new OwnershipOperationGate();
+  let current: typeof owner | null = null;
+  let generation = 0;
+  const store = { remote: { setApprovalLifecycle: vi.fn() }, assertAgentAccess: vi.fn(),
+    getAgent: () => ({ enabled: true }), agentOwnership: { get: () => ({ version: '1' }) } } as unknown as CoworkStore;
+  const service = new SessionCommandService(store, new EventEmitter() as CoworkRuntime, () => current, { gate, getGeneration: () => generation });
+  let resume!: () => void;
+  const effect = vi.fn();
+  const running = service.submit({}, true, async () => {
+    await new Promise<void>(done => { resume = done; });
+    assertRemoteExecutionPermit(); effect(); return { success: true };
+  });
+  current = owner; generation++; resume();
+  await expect(running).rejects.toThrow('Account changed');
+  expect(effect).not.toHaveBeenCalled();
+  expect(gate.isBusy({ agentIds: ['main'], sessionIds: [] })).toBe(false);
+});
 afterEach(() => {
   vi.useRealTimers();
   for (const arbiter of approvalArbiters.splice(0)) arbiter.dispose();

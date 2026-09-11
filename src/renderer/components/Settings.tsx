@@ -1,4 +1,4 @@
-import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChipIcon, CubeIcon, DevicePhoneMobileIcon, EnvelopeIcon, ExclamationTriangleIcon, GlobeAltIcon, InformationCircleIcon, MagnifyingGlassIcon, SignalIcon, SunIcon, TrashIcon, WrenchScrewdriverIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, ComputerDesktopIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, ExclamationTriangleIcon, GlobeAltIcon, InformationCircleIcon, MagnifyingGlassIcon, SignalIcon, SunIcon, TrashIcon, WrenchScrewdriverIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -26,12 +26,10 @@ import {
   resolveCodingPlanBaseUrl,
   resolveModelRuntimeProfile,
 } from '../../shared/providers';
-import type { RemoteSettingsState } from '../../shared/remote/constants';
 import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, isCustomProvider, normalizeFontPreference, resolveArtifactAutoPreviewEnabled, ShortcutAction, type ShortcutConfig } from '../config';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import { useSkin } from '../providers/SkinProvider';
 import { apiService } from '../services/api';
-import { authService } from '../services/auth';
 import { configService } from '../services/config';
 import { coworkService } from '../services/cowork';
 import { decryptSecret, decryptWithPassword, EncryptedPayload, encryptWithPassword, PasswordEncryptedPayload } from '../services/encryption';
@@ -72,7 +70,7 @@ import PlugIcon from './icons/PlugIcon';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import IMSettings from './im/IMSettings';
 import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle } from './plugins/PluginsSettings';
-import { RemoteControlSettings } from './RemoteControlSettings';
+import { RemoteDeviceSettings } from './remote/RemoteDeviceSettings';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
 import {
   buildOpenAICompatibleChatCompletionsUrl,
@@ -99,7 +97,6 @@ import {
   shouldUseOpenAIResponsesForProvider,
 } from './settings/modelProviderUtils';
 import ModelSettingsSection, { DeleteProviderConfirmDialog, ModelEditorDialog } from './settings/ModelSettingsSection';
-import { isNewRemoteState, reconcileRemoteSettingsDraft, type RemoteSettingsDraft, saveRemoteSettingsDraft } from './settings/remoteControlState';
 import { resolveSettingsEscapeAction, SettingsEscapeAction } from './settings/settingsEscape';
 import SettingsSwitch from './settings/SettingsSwitch';
 import EmailSkillConfig from './skills/EmailSkillConfig';
@@ -107,7 +104,7 @@ import SkinPresentationScope from './skin/SkinPresentationScope';
 import SkinSettingsSection from './skin/SkinSettingsSection';
 import ThemedSelect from './ui/ThemedSelect';
 
-type TabType = 'general' | 'appearance' | 'coworkAgentEngine' | 'model' | 'browserWebAccess' | 'coworkMemory' | 'coworkDreaming' | 'shortcuts' | 'im' | 'remoteControl' | 'email' | 'plugins' | 'experimental' | 'about';
+type TabType = 'general' | 'appearance' | 'coworkAgentEngine' | 'model' | 'browserWebAccess' | 'coworkMemory' | 'coworkDreaming' | 'shortcuts' | 'im' | 'remoteDevices' | 'email' | 'plugins' | 'experimental' | 'about';
 
 const waitForNextPaint = (): Promise<void> => new Promise(resolve => {
   window.requestAnimationFrame(() => {
@@ -901,13 +898,15 @@ const DreamingTabIcon: React.FC<{ className?: string }> = ({ className }) => (
 );
 
 export type SettingsOpenOptions = {
-  initialTab?: TabType;
+  initialTab?: TabType | 'remoteControl';
   notice?: string;
   noticeI18nKey?: string;
   noticeExtra?: string;
 };
 
-interface SettingsProps extends SettingsOpenOptions {
+interface SettingsProps extends Omit<SettingsOpenOptions, 'initialTab'> {
+  initialTab?: TabType;
+  onShowLogin: () => void;
   onClose: () => void;
   onStartAiSkin?: (text: string, kitId: string) => void;
   initialTabRequestId?: number;
@@ -1350,6 +1349,7 @@ const SettingsNumberInputRow: React.FC<{
 
 const Settings: React.FC<SettingsProps> = ({
   onClose,
+  onShowLogin,
   onStartAiSkin,
   initialTab,
   initialTabRequestId,
@@ -1429,21 +1429,6 @@ const Settings: React.FC<SettingsProps> = ({
 
   // Plugin settings handle (deferred save)
   const pluginsSettingsRef = useRef<PluginsSettingsHandle>(null);
-  const [remoteSettingsDraft, setRemoteSettingsDraft] = useState<RemoteSettingsDraft | null>(null);
-  const remoteSettingsStateRef = useRef<RemoteSettingsState | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    const accept = (incoming: RemoteSettingsState) => {
-      if (!active || !isNewRemoteState(remoteSettingsStateRef.current, incoming)) return;
-      remoteSettingsStateRef.current = incoming;
-      setRemoteSettingsDraft(draft => reconcileRemoteSettingsDraft(draft, incoming));
-    };
-    const unsubscribe = window.electron.remote.onChanged(accept);
-    void window.electron.remote.state().then(accept).catch(() => { /* The remote settings page reports read failures. */ });
-    return () => { active = false; unsubscribe(); };
-  }, []);
-
   // Add state for active provider
   const [activeProvider, setActiveProvider] = useState<ProviderType>(getDefaultActiveProvider());
   const [showApiKey, setShowApiKey] = useState(false);
@@ -3670,9 +3655,6 @@ const Settings: React.FC<SettingsProps> = ({
         }
       }
 
-      try { await saveRemoteSettingsDraft(remoteSettingsDraft, window.electron.remote); }
-      catch (remoteError) { throw new Error(i18nService.t(remoteError instanceof Error ? remoteError.message : 'remoteSaveFailed')); }
-      setRemoteSettingsDraft(draft => draft === remoteSettingsDraft ? null : draft);
       didSaveRef.current = true;
       onClose();
     } catch (error) {
@@ -4525,7 +4507,7 @@ const Settings: React.FC<SettingsProps> = ({
       { key: 'coworkAgentEngine' as TabType, label: i18nService.t('coworkAgentEngine'), icon: <CpuChipIcon className="h-5 w-5" /> },
       { key: 'model' as TabType,          label: i18nService.t('settingsCustomModel'), icon: <CubeIcon className="h-5 w-5" /> },
       { key: 'im' as TabType,             label: i18nService.t('imBot'),          icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
-      { key: 'remoteControl' as TabType, label: i18nService.t('remoteTitle'), icon: <DevicePhoneMobileIcon className="h-5 w-5" /> },
+      { key: 'remoteDevices' as TabType, label: i18nService.t('remoteDeviceManagement'), icon: <ComputerDesktopIcon className="h-5 w-5" /> },
       { key: 'browserWebAccess' as TabType, label: i18nService.t('browserWebAccessTab'), icon: <GlobeAltIcon className="h-5 w-5" /> },
       { key: 'email' as TabType,          label: i18nService.t('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
       { key: 'coworkMemory' as TabType,   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
@@ -4798,11 +4780,8 @@ const Settings: React.FC<SettingsProps> = ({
 
   const renderTabContent = () => {
     switch(activeTab) {
-      case 'remoteControl':
-        return <RemoteControlSettings draft={remoteSettingsDraft} onDraftChange={setRemoteSettingsDraft} saving={isSaving} onLogin={async () => {
-          const result = await authService.login();
-          if (!result.success) throw new Error(i18nService.t('remoteLoginFailed'));
-        }} />;
+      case 'remoteDevices':
+        return <RemoteDeviceSettings onLogin={onShowLogin} loginAllowed={enterpriseConfig?.ui?.login !== 'hide'} />;
       case 'experimental':
         return <DshExperimentalSettings />;
       case 'general':

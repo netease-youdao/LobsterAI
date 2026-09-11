@@ -2,9 +2,13 @@ import { randomUUID } from 'crypto';
 import { statSync } from 'fs';
 import { resolve } from 'path';
 
+import { AgentOwnerKind } from '../../shared/agent/constants';
 import type { ApprovalDecisionOutcome } from '../../shared/cowork/approval';
+import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
+import type { OwnershipTarget } from '../../shared/ownership/types';
 import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, REMOTE_PROTOCOL_VERSION, REMOTE_TEXT_BYTES, RemoteCapability, RemoteConnectionReason, type RemoteConnectionReasonValue, RemoteConnectionStatus, type RemoteOwner, type RemoteSettingsState, RemoteSyncStatus, type RemoteWorkspace } from '../../shared/remote/constants';
 import type { AgentOwnerStore } from '../agentOwnership';
+import { OwnershipAssociationStore, type OwnershipClaimBlocks } from '../ownershipAssociationStore';
 import { payloadHash, remoteError, sameOwner, stableJson } from './canonical';
 import type { RemoteIdentity } from './installationIdentity';
 import { type AgentWorkspace,RemoteAgentCatalog, RemoteAgentError } from './remoteAgentCatalog';
@@ -73,6 +77,8 @@ export class RemoteBridge {
   private sameAccountAccess = false;
   private workspaceUnavailable = false;
   private readonly agentCatalog: RemoteAgentCatalog | null;
+  private readonly ownershipAssociations: OwnershipAssociationStore;
+  private ownershipClaimCapability: { environment: string; owner: RemoteOwner; enabled: boolean } | null = null;
   private agentCapabilities: string[] = [];
   private declaredDualApproval = false;
   private declaredAgentCapabilities: string[] = [];
@@ -83,6 +89,7 @@ export class RemoteBridge {
   private agentLimits = { items: REMOTE_AGENT_CATALOG_ITEMS, bytes: REMOTE_AGENT_CATALOG_BYTES };
   private lastCapabilityCheck = 0;
   constructor(private readonly deps: BridgeDependencies) {
+    this.ownershipAssociations = new OwnershipAssociationStore(deps.store);
     deps.store.setWake(() => this.schedule(1000));
     this.agentCatalog = deps.agentOwnership && deps.getAgentWorkspace ? new RemoteAgentCatalog(deps.store, deps.agentOwnership, deps.getAgentWorkspace) : null;
     deps.agentOwnership?.subscribe(() => { this.agentCatalogRevision++; this.schedule(300); });
@@ -94,6 +101,7 @@ export class RemoteBridge {
   private settingsKey(): string { return `settings:${this.owner?.userId}:${this.owner?.scopeKey}`; }
   private controlKey(): string { return `controlQueue:${this.owner?.userId}:${this.owner?.scopeKey}`; }
   private nameKey(): string { return `namePending:${this.owner?.userId}:${this.owner?.scopeKey}`; }
+  private catalogFailureKey(): string { return `agentCatalogFailure:${this.owner?.userId}:${this.owner?.scopeKey}:${this.registration?.deviceId}`; }
   private settings(): LocalSettings {
     const saved = this.owner ? this.deps.store.get<LocalSettings>(this.settingsKey()) : null;
     return { enabled: Boolean(this.owner), name: this.deps.metadata.hostName, workspaces: [], settingsVersion: '0', ...saved };
@@ -111,6 +119,31 @@ export class RemoteBridge {
       settingsSyncStatus: pendingSettings ? RemoteSyncStatus.Pending : RemoteSyncStatus.Synced,
       nameSyncStatus: pendingName ? RemoteSyncStatus.Pending : RemoteSyncStatus.Synced,
       workspaces: settings.workspaces.map(({ path: _path, ...w }) => w), error: this.error, errorCode: this.errorCode, accessRequests: this.accesses };
+  }
+  associationSyncState(target: OwnershipTarget): OwnershipSyncState {
+    const currentOwner = this.deps.getOwner();
+    if (!currentOwner) return OwnershipSyncState.Local;
+    if (target.kind === OwnershipTargetKind.Task) {
+      if (!sameOwner(this.deps.store.owner(target.id), currentOwner)) return OwnershipSyncState.Local;
+    } else {
+      const identity = this.deps.agentOwnership?.get(target.id);
+      if (identity?.ownerKind !== AgentOwnerKind.Owned || !sameOwner(identity.owner, currentOwner)) return OwnershipSyncState.Local;
+    }
+    if (!this.owner || !sameOwner(this.owner, currentOwner)) return OwnershipSyncState.Pending;
+    if (!this.registration) return OwnershipSyncState.Pending;
+    // Reading UI state must not grant an operation its first durable remote admission.
+    const blocked = this.ownershipClaimBlocks(false);
+    const waiting = target.kind === OwnershipTargetKind.Agent ? blocked.blockedAgentIds.has(target.id) : this.ownershipSyncBlocked(target.id, blocked);
+    if (waiting) return !this.settings().enabled || this.canAdmitOwnershipClaim() ? OwnershipSyncState.Pending : OwnershipSyncState.WaitingService;
+    if (target.kind === OwnershipTargetKind.Agent) {
+      if (this.deps.store.get(this.catalogFailureKey())) return OwnershipSyncState.Failed;
+      return this.agentCatalog?.isSynced(this.owner, this.registration.deviceId, target.id) ? OwnershipSyncState.Synced : OwnershipSyncState.Pending;
+    }
+    if (this.deps.store.get(`syncFailure:${target.id}`)) return OwnershipSyncState.Failed;
+    const row = this.deps.store.sync(target.id);
+    const dirty = this.deps.store.db.prepare('SELECT session_id FROM remote_dirty WHERE session_id=?').get(target.id);
+    return row && row.device_id === this.registration.deviceId && !row.needs_snapshot && row.source_seq === row.ack_seq
+      && !dirty && !this.deps.store.get(`import:${target.id}`) ? OwnershipSyncState.Synced : OwnershipSyncState.Pending;
   }
   async configure(changes: { enabled?: boolean; name?: string; workspace?: { name: string; path: string }; removeWorkspaceId?: string; retry?: boolean }): Promise<RemoteSettingsState> {
     this.ensureAccount();
@@ -136,7 +169,14 @@ export class RemoteBridge {
       this.suspended = false; this.backoff = 5000;
       this.error = undefined; this.errorCode = undefined;
       this.connectionReason = RemoteConnectionReason.Reconnecting;
-      if (changes.retry) this.disconnect();
+      if (changes.retry) {
+        this.deps.store.transaction(() => {
+          for (const row of this.deps.store.sessions(this.owner!)) this.deps.store.remove(`syncFailure:${row.local_id}`);
+          this.deps.store.remove(this.catalogFailureKey());
+        });
+        this.publishedCatalogRevision = -1; this.lastAgentCatalogCheck = 0; this.lastCapabilityCheck = 0;
+        this.disconnect();
+      }
     }
     if (!settings.enabled) { this.deps.store.setEnabledOwner(null); this.disconnect(); }
     this.changed(); this.schedule(0);
@@ -161,6 +201,7 @@ export class RemoteBridge {
     this.owner = current; this.registration = null; this.registrationPending = null;
     this.retryAfter = 0; this.suspended = false; this.accesses = [];
     this.agentCapabilities = []; this.declaredAgentCapabilities = []; this.lastCatalogConnection = null; this.publishedCatalogRevision = -1; this.lastCapabilityCheck = 0; this.deps.store.setAgentSummaryResolver(null);
+    this.ownershipClaimCapability = null;
     this.sameAccountAccess = false; this.workspaceUnavailable = false; this.error = undefined; this.errorCode = undefined;
     this.connectionReason = RemoteConnectionReason.Connecting;
     this.deps.store.setEnabledOwner(null); this.disconnect();
@@ -255,14 +296,18 @@ export class RemoteBridge {
         && (this.agentCatalogRevision !== this.publishedCatalogRevision || this.lastCatalogConnection !== this.generation || Date.now() - this.lastAgentCatalogCheck > 45000)) {
         const revision = this.agentCatalogRevision;
         const connection = this.generation;
+        const environment = this.remoteEnvironment();
         try { await this.agentCatalog.publish(owner, this.registration!.deviceId, this.generation,
-          (path, method, body) => this.api(path, method, body), () => accountGeneration === this.accountGeneration && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner()), this.agentLimits);
-          this.publishedCatalogRevision = revision; this.lastCatalogConnection = connection; this.lastAgentCatalogCheck = Date.now(); }
+          (path, method, body) => this.api(path, method, body), () => accountGeneration === this.accountGeneration && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner()) && environment === this.remoteEnvironment(), this.agentLimits,
+          agentId => !this.ownershipClaimBlocks().blockedAgentIds.has(agentId));
+          this.publishedCatalogRevision = revision; this.lastCatalogConnection = connection; this.lastAgentCatalogCheck = Date.now();
+          this.deps.store.remove(this.catalogFailureKey()); }
         catch (error) {
           if (!sameOwner(owner, this.deps.getOwner())) return;
           // Directory failure must not block old main commands or conversation synchronization.
           this.error = 'Agent list synchronization is temporarily unavailable';
           this.errorCode = error instanceof RemoteApiError || error instanceof RemoteAgentError ? error.code : undefined;
+          this.deps.store.put(this.catalogFailureKey(), { code: this.errorCode || 47019 });
         }
       }
       await this.reconcile();
@@ -327,7 +372,9 @@ export class RemoteBridge {
     try { await pending; } finally { if (this.registrationPending === pending) this.registrationPending = null; }
   }
   private async refreshCapabilities(): Promise<void> {
+    const environment = this.remoteEnvironment();
     const support = await this.api('/capabilities', 'GET', undefined, false);
+    if (environment !== this.remoteEnvironment()) throw new Error('Remote service environment changed');
     if (!support.enabled || !support.protocolVersions?.includes(REMOTE_PROTOCOL_VERSION)) throw new RemoteApiError(47000, 'Remote control is unavailable');
     this.sameAccountAccess = support.capabilities?.includes(RemoteCapability.SameAccountAccess) === true;
     if (!this.sameAccountAccess) {
@@ -338,6 +385,8 @@ export class RemoteBridge {
     const previous = stableJson([this.declaredAgentCapabilities, this.declaredDualApproval]);
     const supported = Array.isArray(support.capabilities) ? support.capabilities : [];
     this.agentCapabilities = this.agentCatalog && supported.includes(RemoteCapability.SessionAgent) ? [RemoteCapability.SessionAgent] : [];
+    this.ownershipClaimCapability = { environment, owner: { ...this.owner! },
+      enabled: this.agentCapabilities.includes(RemoteCapability.SessionAgent) && supported.includes(RemoteCapability.AgentOwnershipClaim) };
     if (this.agentCapabilities.length && supported.includes(RemoteCapability.AgentCatalog)
       && Number.isInteger(support.limits?.maxAgentCatalogItems) && Number.isInteger(support.limits?.maxAgentCatalogBytes)
       && support.limits.maxAgentCatalogItems > 0 && support.limits.maxAgentCatalogBytes > 0) {
@@ -362,6 +411,7 @@ export class RemoteBridge {
     this.deps.store.setApprovalProjectionSupported(this.declaredDualApproval);
     this.deps.configureDualApproval?.({ enabled: dualEnabled, projectionSupported: this.declaredDualApproval });
     this.lastCapabilityCheck = Date.now();
+    if (this.registration && this.settings().enabled) this.ownershipClaimBlocks();
     if (this.registration && previous !== stableJson([this.declaredAgentCapabilities, this.declaredDualApproval])) this.queueControl(this.settings());
   }
   private async register(): Promise<void> {
@@ -509,7 +559,12 @@ export class RemoteBridge {
   }
   private async syncSessions(): Promise<void> {
     if (!this.owner || !this.registration) return;
-    for (const row of this.deps.store.sessions(this.owner)) {
+    const owner = this.owner, deviceId = this.registration.deviceId, accountGeneration = this.accountGeneration;
+    const environment = this.remoteEnvironment();
+    for (const row of this.deps.store.sessions(owner)) {
+      if (accountGeneration !== this.accountGeneration || !sameOwner(owner, this.owner) || !sameOwner(owner, this.deps.getOwner())
+        || deviceId !== this.registration?.deviceId || environment !== this.remoteEnvironment()) return;
+      if (this.ownershipSyncBlocked(row.local_id)) continue;
       const failure = this.deps.store.get<any>(`syncFailure:${row.local_id}`);
       if (failure?.retryAt > Date.now()) continue;
       try {
@@ -533,12 +588,34 @@ export class RemoteBridge {
       }
     }
   }
+  private remoteEnvironment(): string {
+    const url = new URL(this.deps.getApiBaseUrl());
+    return `${url.origin}${url.pathname.replace(/\/+$/u, '')}`;
+  }
+  private canAdmitOwnershipClaim(): boolean {
+    const capability = this.ownershipClaimCapability;
+    return this.settings().enabled && capability?.enabled === true && capability.environment === this.remoteEnvironment() && sameOwner(capability.owner, this.owner);
+  }
+  private ownershipClaimBlocks(allowAdmission = true): OwnershipClaimBlocks {
+    if (!this.owner || !this.registration || !sameOwner(this.owner, this.deps.getOwner())) throw new Error('Account changed');
+    const environment = this.remoteEnvironment();
+    return this.ownershipAssociations.prepareRemoteAdmission({ owner: this.owner, environment, deviceId: this.registration.deviceId },
+      allowAdmission && this.canAdmitOwnershipClaim());
+  }
+  private ownershipSyncBlocked(sessionId: string, blocked = this.ownershipClaimBlocks()): boolean {
+    if (blocked.blockedSessionIds.has(sessionId)) return true;
+    if (!blocked.blockedAgentIds.size) return false;
+    const session = this.deps.store.db.prepare('SELECT agent_id FROM cowork_sessions WHERE id=?').get(sessionId) as { agent_id: string | null } | undefined;
+    return Boolean(session?.agent_id && blocked.blockedAgentIds.has(session.agent_id));
+  }
   private async importSession(row: SyncRow, saved: SavedImport | null): Promise<void> {
+    if (this.ownershipSyncBlocked(row.local_id)) return;
     const key = `import:${row.local_id}`;
     const deleted = this.deps.store.db.prepare('SELECT id FROM cowork_sessions WHERE id=?').get(row.local_id) === undefined;
     if (deleted && saved && !saved.manifest.recordCounts['session.deleted']) {
       try {
         const previous = await this.api(`/sync/imports/${saved.importId}`);
+        if (this.ownershipSyncBlocked(row.local_id)) return;
         if (previous.state === 'committed') this.deps.store.acknowledge(row.local_id, this.registration!.deviceId, saved.sessionId, previous.committedSourceSeq, previous.committedSeq, true, saved.snapshotEpoch);
         else if (previous.state === 'uploading') await this.api(`/sync/imports/${saved.importId}/abort`, 'POST', { ...this.transport(), expectedStateVersion: previous.stateVersion, reason: 'session_deleted' });
       } catch (error) { if (!(error instanceof RemoteApiError) || error.httpStatus !== 404 || saved.beginConfirmed) throw error; }
@@ -587,8 +664,12 @@ export class RemoteBridge {
     if (begun.sessionId !== saved.sessionId) throw new Error('Import changed the fixed remote session mapping');
     let result = begun;
     if (begun.state !== 'committed') {
-      for (const part of saved.parts) await this.api(`/sync/imports/${saved.importId}/parts/${part.partNo}`, 'PUT', {
-        ...this.transport(), payloadHash: part.payloadHash, payload: part.payload });
+      for (const part of saved.parts) {
+        if (this.ownershipSyncBlocked(row.local_id)) return;
+        await this.api(`/sync/imports/${saved.importId}/parts/${part.partNo}`, 'PUT', {
+          ...this.transport(), payloadHash: part.payloadHash, payload: part.payload });
+      }
+      if (this.ownershipSyncBlocked(row.local_id)) return;
       result = await this.api(`/sync/imports/${saved.importId}/commit`, 'POST', { ...this.transport(), expectedStateVersion: begun.stateVersion, manifestHash: saved.manifest.manifestHash });
     }
     this.deps.store.transaction(() => {

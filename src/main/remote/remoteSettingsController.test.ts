@@ -8,12 +8,14 @@ function fixture(preference?: boolean, loggedIn = true) {
   let unavailable = false;
   let failSaving = false;
   let connected = false;
+  let accountEpoch = 'boot:0:0';
   let owner: RemoteSettingsState['owner'] = loggedIn ? { userId: 'user-1', scopeKey: 'personal' } : null;
   const published: RemoteSettingsState[] = [];
   const saved: boolean[] = [];
   const applied: boolean[] = [];
   const controller = new RemoteSettingsController({
     getRemoteState: () => ({ enabled: false, connected, name: 'Desktop', owner, workspaces: [], accessRequests: [] }),
+    getAccountEpoch: () => accountEpoch,
     getKeepAwakePreference: () => preference,
     saveKeepAwakePreference: value => { if (failSaving) throw new Error('Disk full'); saved.push(value); preference = value; },
     applyKeepAwake: value => { applied.push(value); if (unavailable) throw new Error('Power unavailable'); active = value; },
@@ -24,10 +26,22 @@ function fixture(preference?: boolean, loggedIn = true) {
     unavailable: (value: boolean) => { unavailable = value; }, failSaving: (value = true) => { failSaving = value; },
     login: () => { owner = { userId: 'user-1', scopeKey: 'personal' }; controller.restoreKeepAwake(); },
     logout: () => { owner = null; connected = false; controller.restoreKeepAwake(); },
-    connect: () => { connected = true; controller.notify(); } };
+    connect: () => { connected = true; controller.notify(); },
+    setAccountEpoch: (value: string) => { accountEpoch = value; } };
 }
 
 describe('remote settings power and state lifecycle', () => {
+  test('reads the current account epoch for both snapshots and ordered change events', () => {
+    const f = fixture();
+    expect(f.controller.state().accountEpoch).toBe('boot:0:0');
+    f.controller.notify();
+    f.setAccountEpoch('boot:2:3');
+    f.controller.notify();
+    expect(f.controller.state().accountEpoch).toBe('boot:2:3');
+    expect(f.published.map(state => [state.accountEpoch, state.stateRevision]))
+      .toEqual([['boot:0:0', 1], ['boot:2:3', 2]]);
+  });
+
   test('defaults missing preference on only while logged in and preserves explicit false', () => {
     const fresh = fixture();
     fresh.controller.restoreKeepAwake();

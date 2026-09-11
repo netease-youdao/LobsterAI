@@ -1,7 +1,9 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
 import { RemoteCapability } from '../../shared/remote/constants';
+import { OwnershipAssociationStore } from '../ownershipAssociationStore';
 import { payloadHash } from './canonical';
 import { RemoteAgentError } from './remoteAgentCatalog';
 import { RemoteApprovalError } from './remoteApproval';
@@ -60,6 +62,59 @@ function fixture() {
   return { store, bridge, envelope, calls, execute, requestApi, disconnect: () => { disconnectOnReceipt = true; }, terminalReceipt: () => { receiptStatus = 'applied'; } };
 }
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
+
+describe('ownership association synchronization', () => {
+  function claimed() {
+    const value = fixture();
+    const { store } = value;
+    store.db.exec("ALTER TABLE cowork_sessions ADD COLUMN agent_id TEXT; INSERT INTO cowork_sessions VALUES('claimed-task','History',1,1,'idle','claimed-agent'); INSERT INTO cowork_sessions VALUES('future-task','New',1,1,'idle','claimed-agent');");
+    store.transaction(() => {
+      store.assignNew('claimed-task', owner, 'manual_claim');
+      store.assignNew('future-task', owner, 'local_create');
+      new OwnershipAssociationStore(store).save({ operation_id: 'claim', owner_user_id: owner.userId, owner_scope_key: owner.scopeKey,
+        request_id: 'request', commit_request_hash: 'request-hash', manifest_hash: 'manifest-hash', target_kind: OwnershipTargetKind.Agent,
+        target_id: 'claimed-agent', associated_at: 1, remote_admissions_json: '{}', manifest_json: JSON.stringify({
+          kind: OwnershipTargetKind.Agent, targetId: 'claimed-agent', agentId: 'claimed-agent', agentVersion: '2',
+          associatedSessionIds: ['claimed-task'], retainedSessionIds: [], affectedAgentIds: ['claimed-agent'],
+        }) });
+    });
+    return value;
+  }
+  it('blocks the whole unadmitted Agent including later tasks and does not admit from a detail read', () => {
+    const { bridge, store } = claimed();
+    expect(bridge.ownershipSyncBlocked('claimed-task')).toBe(true);
+    expect(bridge.ownershipSyncBlocked('future-task')).toBe(true);
+    expect(bridge.associationSyncState({ kind: OwnershipTargetKind.Task, id: 'claimed-task' })).toBe(OwnershipSyncState.WaitingService);
+    expect(new OwnershipAssociationStore(store).list(owner)[0].remote_admissions_json).toBe('{}');
+    bridge.stop();
+  });
+  it('keeps admitted work recoverable after the flag turns off but gates a different device', () => {
+    const { bridge, store } = claimed();
+    bridge.ownershipClaimCapability = { environment: 'https://example.com', owner, enabled: true };
+    expect(bridge.ownershipSyncBlocked('claimed-task')).toBe(false);
+    expect(new OwnershipAssociationStore(store).list(owner)[0].remote_admissions_json).not.toBe('{}');
+    bridge.ownershipClaimCapability.enabled = false;
+    expect(bridge.ownershipSyncBlocked('future-task')).toBe(false);
+    bridge.registration.deviceId = 'replacement';
+    expect(bridge.ownershipSyncBlocked('claimed-task')).toBe(true);
+    bridge.stop();
+  });
+  it('reports pending and failed task persistence independently from a healthy websocket', () => {
+    const { bridge, store } = claimed();
+    bridge.ownershipClaimCapability = { environment: 'https://example.com', owner, enabled: true };
+    bridge.ownershipSyncBlocked('claimed-task');
+    expect(bridge.associationSyncState({ kind: OwnershipTargetKind.Task, id: 'claimed-task' })).toBe(OwnershipSyncState.Pending);
+    store.put('syncFailure:claimed-task', { code: 47019 });
+    expect(bridge.associationSyncState({ kind: OwnershipTargetKind.Task, id: 'claimed-task' })).toBe(OwnershipSyncState.Failed);
+    bridge.stop();
+  });
+  it('keeps an owned task pending while the bridge has not adopted the current login', () => {
+    const { bridge } = claimed();
+    bridge.owner = null;
+    expect(bridge.associationSyncState({ kind: OwnershipTargetKind.Task, id: 'claimed-task' })).toBe(OwnershipSyncState.Pending);
+    bridge.stop();
+  });
+});
 
 describe('command execution safety', () => {
   it('durably prepares before received ACK and dispatches only once across duplicate claims', async () => {

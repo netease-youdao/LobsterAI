@@ -1,7 +1,8 @@
-import { ArrowPathIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, ChevronRightIcon, ComputerDesktopIcon } from '@heroicons/react/24/outline';
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -277,6 +278,7 @@ const PointsStackIcon: React.FC = () => (
 interface UserMenuProps {
   dailyCheckInSnapshot: DailyCheckInSnapshot | null;
   onClose: () => void;
+  onOpenDeviceManagement?: () => void;
   onOpenFinalReward: (campaignCode: string) => void;
   startupCreditEntry: StartupCreditCampaignEntry;
 }
@@ -284,6 +286,7 @@ interface UserMenuProps {
 const UserMenu: React.FC<UserMenuProps> = ({
   dailyCheckInSnapshot,
   onClose,
+  onOpenDeviceManagement,
   onOpenFinalReward,
   startupCreditEntry,
 }) => {
@@ -607,6 +610,14 @@ const UserMenu: React.FC<UserMenuProps> = ({
         />
       </div>
 
+      {onOpenDeviceManagement && <div className="border-b border-border py-1">
+        <AccountMenuAction
+          icon={<ComputerDesktopIcon className="h-4 w-4 shrink-0 text-secondary" aria-hidden="true" />}
+          label={i18nService.t('remoteDeviceManagement')}
+          onClick={() => { onClose(); onOpenDeviceManagement(); }}
+        />
+      </div>}
+
       {/* Campaigns and invitations */}
       <div className="border-b border-border py-1">
         {campaignActionLabel && (
@@ -652,11 +663,17 @@ const formatRewardExpiry = (expiresAt: string): string => {
 };
 
 interface LoginButtonProps {
+  onOpenDeviceManagement?: () => void;
+  onActivate?: () => void;
+  dismissMenu?: boolean;
   contentLeftOffset?: number;
   loggedOutVariant?: 'default' | 'sidebarPromo';
 }
 
 const LoginButton: React.FC<LoginButtonProps> = ({
+  onOpenDeviceManagement,
+  onActivate,
+  dismissMenu = false,
   contentLeftOffset = 0,
   loggedOutVariant = 'default',
 }) => {
@@ -694,6 +711,14 @@ const LoginButton: React.FC<LoginButtonProps> = ({
   const finalRewardOpen = finalReward !== undefined;
 
   authAccountScopeRef.current = authAccountScope;
+
+  useLayoutEffect(() => {
+    if (!dismissMenu) return;
+    menuOpenRequestRef.current += 1;
+    setMenuOpening(false);
+    setShowMenu(false);
+    setMenuDailyCheckInSnapshot(null);
+  }, [dismissMenu]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -751,6 +776,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({
   }
 
   const handleClick = async () => {
+    onActivate?.();
     if (isLoggedIn) {
       const creditItemCount = profileSummary?.creditItems?.length ?? 0;
       if (showMenu) {
@@ -804,6 +830,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({
           && menuOpenRequestRef.current === requestId
           && authAccountScopeRef.current === requestAccountScope
         ) {
+          onActivate?.();
           setMenuDailyCheckInSnapshot(dailyCheckInSnapshot);
           setShowMenu(true);
           setMenuOpening(false);
@@ -894,12 +921,14 @@ const LoginButton: React.FC<LoginButtonProps> = ({
             <EnterpriseAccountMenu
               context={enterpriseAccountContext}
               onClose={() => setShowMenu(false)}
+              onOpenDeviceManagement={onOpenDeviceManagement}
             />
           )
           : (
             <UserMenu
               dailyCheckInSnapshot={menuDailyCheckInSnapshot}
               onClose={() => setShowMenu(false)}
+              onOpenDeviceManagement={onOpenDeviceManagement}
               onOpenFinalReward={setSelectedFinalRewardCode}
               startupCreditEntry={menuStartupCreditEntry}
             />

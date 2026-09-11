@@ -7,12 +7,14 @@ import {
   getEnterpriseOverviewUrl,
   getEnterpriseRechargeUrl,
   getEnterpriseUsageUrl,
+  getMobileAppEntry,
   getPortalCreditsDetailUrl,
   getPortalCreditsResetActivityUrl,
   getPortalInvitationUrl,
   getPortalPricingUrl,
   getPortalProfileUrl,
   getPortalRechargeUrl,
+  MobileAppEntryKind,
   PortalPricingKeyfrom,
 } from './endpoints';
 
@@ -86,4 +88,13 @@ test('enterprise console urls use the selected enterprise context', () => {
   expect(getEnterpriseRechargeUrl(1001)).toBe(
     'https://lobsterai.youdao.com/portal#/enterprise/console/1001/recharge',
   );
+});
+
+test.each([false, true])('mobile entry is the same public HTTPS website when test mode is %s', testMode => {
+  mockTestMode(testMode);
+  const entry = getMobileAppEntry();
+  expect(entry).toEqual({ kind: MobileAppEntryKind.OfficialSite, url: 'https://lobsterai.youdao.com/' });
+  const url = new URL(entry.url);
+  expect(url.protocol).toBe('https:');
+  expect(url.username + url.password + url.search + url.hash).toBe('');
 });

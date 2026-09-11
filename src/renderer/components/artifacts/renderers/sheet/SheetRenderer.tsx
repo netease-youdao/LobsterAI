@@ -62,7 +62,7 @@ function useSheetFileContent(artifact: Artifact): { data: ArrayBuffer | null; lo
 
       if (artifact.filePath && window.electron?.dialog?.readFileAsDataUrl) {
         try {
-          const result = await window.electron.dialog.readFileAsDataUrl(normalizeFilePath(artifact.filePath));
+          const result = await window.electron.dialog.readFileAsDataUrl(normalizeFilePath(artifact.filePath), artifact.fileAccess);
           if (cancelled) return;
           if (result?.success && result.dataUrl) {
             setData(dataUrlToArrayBuffer(result.dataUrl));
@@ -83,7 +83,7 @@ function useSheetFileContent(artifact: Artifact): { data: ArrayBuffer | null; lo
 
     load();
     return () => { cancelled = true; };
-  }, [artifact.content, artifact.filePath]);
+  }, [artifact.content, artifact.fileAccess, artifact.filePath]);
 
   return { data, loading, error };
 }

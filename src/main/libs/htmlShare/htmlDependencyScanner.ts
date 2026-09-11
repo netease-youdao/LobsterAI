@@ -37,6 +37,7 @@ export interface HtmlDependencyScanOptions {
   allowedRoot: string;
   isAllowedFile: (filePath: string) => boolean;
   isBlockedPath: (filePath: string) => boolean;
+  assertAccess?: (filePath: string) => void;
 }
 
 export interface HtmlDependencyScanResult {
@@ -187,6 +188,7 @@ async function addReferencedFile(
   }
 
   if (files.has(filePath)) return;
+  options.assertAccess?.(filePath);
   files.add(filePath);
   if (isScannableFile(filePath)) pending.push(filePath);
 }
@@ -212,12 +214,14 @@ export async function scanHtmlDependencies(
     visited.add(filePath);
 
     let content = '';
+    scanOptions.assertAccess?.(filePath);
     try {
       content = await fs.promises.readFile(filePath, 'utf8');
     } catch {
       missing.add(normalizeDisplayPath(resolvedAllowedRoot, filePath));
       continue;
     }
+    scanOptions.assertAccess?.(filePath);
 
     for (const reference of scanReferencesForFile(filePath, content)) {
       const resolved = resolveReference(resolvedAllowedRoot, filePath, reference);

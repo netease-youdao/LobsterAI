@@ -1,4 +1,5 @@
 export const DialogIpc = {
+  ReadFileAsDataUrl: 'dialog:readFileAsDataUrl',
   StatFile: 'dialog:statFile',
   ReadTextFile: 'dialog:readTextFile',
   SaveFileCopy: 'dialog:saveFileCopy',

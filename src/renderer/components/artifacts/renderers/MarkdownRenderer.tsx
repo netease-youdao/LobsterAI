@@ -143,6 +143,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ artifact, selectedT
       {actionButton}
       <MarkdownContent
         content={artifact.content}
+        fileAccess={artifact.fileAccess}
         resolveLocalFilePath={resolveLocalFilePath}
         enableLargePreview={false}
       />

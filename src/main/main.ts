@@ -45,6 +45,7 @@ import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode, AppSettingsIpc } from '../shared/appSettings/constants';
 import { type AppUpdateActiveWorkloads, AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
+import type { ArtifactFileAccess } from '../shared/artifactPreview/types';
 import { createAccountOwnerKey } from '../shared/auth/accountOwner';
 import {
   AuthIpcChannel,
@@ -109,6 +110,7 @@ import {
   CoworkForkMode,
   CoworkIpcChannel,
   CoworkOnboardingMessageKind,
+  SESSION_AGNOSTIC_PERMISSION_SESSION_ID,
 } from '../shared/cowork/constants';
 import {
   buildCoworkImageAttachmentPreviews,
@@ -183,6 +185,7 @@ import {
   OpenClawEngineIpc,
   OpenClawGatewayRepairErrorCode,
 } from '../shared/openclawEngine/constants';
+import { OwnershipIpc } from '../shared/ownership/constants';
 import { PlatformRegistry } from '../shared/platform';
 import type { ProviderConfig } from '../shared/providers';
 import {
@@ -212,7 +215,7 @@ import type { ShellOpenFailureReason as ShellOpenFailureReasonType } from '../sh
 import { type ShellGetBrowserAppsInput, ShellIpc, ShellOpenFailureReason } from '../shared/shell/constants';
 import { AgentManager } from './agentManager';
 import { APP_NAME, APP_USER_MODEL_ID, DB_FILENAME } from './appConstants';
-import { createLocalFileProtocolResponse } from './artifactLocalFileProtocol';
+import { createLocalFileProtocolResponse, revalidateLocalFileProtocolStreams } from './artifactLocalFileProtocol';
 import { authQuotaGateStateFromQuota, AuthSubscriptionStatus, createDefaultAuthQuotaGateState, normalizeAuthQuota } from './authQuota';
 import { type AutoLaunchStatus, getAutoLaunchStatus, isAutoLaunched, setAutoLaunchEnabled } from './autoLaunchManager';
 import { BrowserCredentialApprovalService } from './browserCredentials/browserCredentialApprovalService';
@@ -268,6 +271,7 @@ import { registerEnterpriseAccountHandlers } from './ipcHandlers/enterpriseAccou
 import { registerKitHandlers } from './ipcHandlers/kits';
 import { registerMcpHandlers } from './ipcHandlers/mcp';
 import { registerNimQrLoginHandlers } from './ipcHandlers/nimQrLogin';
+import { registerOwnershipHandlers } from './ipcHandlers/ownership';
 import { registerPermissionIpcHandlers } from './ipcHandlers/permissions/handlers';
 import { registerPluginHandlers } from './ipcHandlers/plugins';
 import {
@@ -280,6 +284,7 @@ import {
 import { registerSessionDiagnosticsHandlers } from './ipcHandlers/sessionDiagnostics';
 import { registerSiteIpcHandlers } from './ipcHandlers/site';
 import { registerSkillHandlers } from './ipcHandlers/skills';
+import { LibraryFileAccessError, LibraryFileAccessPolicy } from './library/libraryFileAccess';
 import { LibraryIndexService } from './library/libraryIndexService';
 import { registerLibraryIpcHandlers } from './library/libraryIpc';
 import { LibraryLocalStore } from './library/libraryLocalStore';
@@ -380,6 +385,7 @@ import {
   createPreviewSession,
   destroyPreviewSession,
   isPreviewServerUrl,
+  revalidatePreviewSessions,
   stopHtmlPreviewServer,
 } from './libs/htmlPreviewServer';
 import {
@@ -563,10 +569,13 @@ import {
   loadOpenClawSessionPolicyConfig,
   saveOpenClawSessionPolicyConfig,
 } from './openclawSessionPolicy/store';
+import { OwnershipAssociationService } from './ownershipAssociation';
+import { ownershipOperationGate } from './ownershipOperationGate';
 import { registerVoiceInputPermissionHandler } from './permissions/voiceInputPermission';
 import { isHiddenUserPluginId } from './plugins/pluginManager';
 import { fenceCronJobs,filterOwnedInstances } from './remote/automationOwnership';
 import { sameOwner } from './remote/canonical';
+import { configureRemoteSettings } from './remote/configureRemoteSettings';
 import { prepareDefaultWorkspace } from './remote/defaultWorkspace';
 import { createRemoteDatabaseFence,loadRemoteIdentity } from './remote/installationIdentity';
 import { RemoteBridge } from './remote/remoteBridge';
@@ -2640,7 +2649,13 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
         );
       },
       getMcpBridgeSecret: () => getMcpRuntime().getBridgeSecret(),
-      getAgents: () => getCoworkStore().listAgents(),
+      getAgents: () => {
+        const store = getCoworkStore();
+        const actor = store.remoteCreationOwner();
+        return store.listVisibleAgents(actor).map(agent => ({ ...agent,
+          subagentAllowAgentIds: agent.subagentAllowAgentIds.filter(id => store.agentOwnership.canView(id, actor)),
+        }));
+      },
       getUserPlugins: () =>
         getCoworkStore()
           .listUserPlugins()
@@ -5135,7 +5150,19 @@ if (!gotTheLock) {
 
   let remoteBridge: RemoteBridge | null = null;
   let remoteSessionCommands: SessionCommandService | null = null;
+  let ownershipAssociations: OwnershipAssociationService | null = null;
+  const ownershipBootId = crypto.randomUUID();
+  let ownershipAccountEpoch = 0;
   let authAccountGeneration = 0;
+  let libraryFileAccess: LibraryFileAccessPolicy | null = null;
+  const captureLibraryFileAccess = (filePath: string, access?: ArtifactFileAccess) => {
+    if (!libraryFileAccess) throw new Error(t('libraryFileUnavailable'));
+    return libraryFileAccess.capture(filePath, access);
+  };
+  const revalidateArtifactPreviews = (): void => {
+    revalidatePreviewSessions();
+    revalidateLocalFileProtocolStreams();
+  };
   let authExchangeIntentSequence = 0;
   let activeAuthExchangeIntent: AuthExchangeIntentSnapshot | null = null;
 
@@ -5285,6 +5312,7 @@ if (!gotTheLock) {
     authExchangeIntentSequence += 1;
     activeAuthExchangeIntent = null;
     authAccountGeneration += 1;
+    revalidateArtifactPreviews();
     const quotaGateChanged = (
       cachedSubscriptionStatus !== AuthSubscriptionStatus.Free
       || cachedMediaGenerationEntitled
@@ -5549,41 +5577,29 @@ if (!gotTheLock) {
     remoteBridge.start();
     return remoteBridge;
   };
+  const getRemoteAccountEpoch = (): string => `${ownershipBootId}:${ownershipAccountEpoch}:${authAccountGeneration}`;
   const readRemoteState = (): RemoteSettingsState => {
     const owner = getCurrentRemoteOwner();
     if (remoteBridge && owner) {
       const state = remoteBridge.state();
-      if (sameOwner(owner, state.owner)) return state;
+      if (sameOwner(owner, state.owner)) return { ...state, accountEpoch: getRemoteAccountEpoch() };
     }
     const saved = owner ? getCoworkStore().remote.get<{ enabled?: boolean }>(`settings:${owner.userId}:${owner.scopeKey}`) : null;
-    return { enabled: Boolean(owner) && (saved?.enabled ?? true), connected: false, name: os.hostname(), hostName: os.hostname(),
+    return { accountEpoch: getRemoteAccountEpoch(), enabled: Boolean(owner) && (saved?.enabled ?? true), connected: false, name: os.hostname(), hostName: os.hostname(),
       owner, workspaces: [], accessRequests: [], error: owner ? t('remoteSecureStorageUnavailable') : undefined };
   };
   ipcMain.handle(RemoteIpc.State, () => remoteSettingsController?.state() ?? readRemoteState());
-  ipcMain.handle(RemoteIpc.Configure, async (_event, input: RemoteConfigureRequest) => {
-    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid remote settings');
-    if (input.enabled !== undefined && typeof input.enabled !== 'boolean') throw new Error('Invalid remote enabled setting');
-    if (input.retry !== undefined && typeof input.retry !== 'boolean') throw new Error('Invalid retry setting');
-    if (!getCurrentRemoteOwner()) throw new Error('Sign in before configuring remote access');
-    if (!remoteSettingsController) throw new Error('Remote settings are not initialized');
-    if (input.keepAwakeEnabled !== undefined) remoteSettingsController.setKeepAwake(input.keepAwakeEnabled);
-    if (input.retry) remoteSettingsController.restoreKeepAwake();
-    if (input.keepAwakeEnabled !== undefined && input.enabled === undefined && input.name === undefined
-      && !input.retry && !input.addWorkspace && !input.removeWorkspaceId) return remoteSettingsController.state();
-    let workspace: { name: string; path: string } | undefined;
-    if (input.addWorkspace) {
+  ipcMain.handle(RemoteIpc.Configure, (_event, input: RemoteConfigureRequest) => configureRemoteSettings(input, {
+    getAccountEpoch: getRemoteAccountEpoch,
+    getOwner: getCurrentRemoteOwner,
+    getController: () => remoteSettingsController,
+    selectWorkspace: async () => {
       const selection = await dialog.showOpenDialog({ properties: ['openDirectory'] });
-      if (!selection.canceled && selection.filePaths[0]) workspace = { name: path.basename(selection.filePaths[0]), path: fs.realpathSync(selection.filePaths[0]) };
-    }
-    if (getCurrentRemoteOwner()) {
-      await initializeRemoteBridge().configure({ enabled: input.enabled, name: input.name, workspace,
-        removeWorkspaceId: input.removeWorkspaceId, retry: input.retry });
-    } else if (input.enabled !== undefined || input.name !== undefined || input.addWorkspace || input.removeWorkspaceId) {
-      throw new Error('Sign in before configuring remote access');
-    }
-    remoteSettingsController.notify();
-    return remoteSettingsController.state();
-  });
+      return !selection.canceled && selection.filePaths[0]
+        ? { name: path.basename(selection.filePaths[0]), path: fs.realpathSync(selection.filePaths[0]) } : undefined;
+    },
+    configureRemote: changes => initializeRemoteBridge().configure(changes),
+  }));
   ipcMain.handle(RemoteIpc.Decide, (_event, requestId: string, decision: 'approve' | 'deny') => {
     if (typeof requestId !== 'string' || !['approve', 'deny'].includes(decision)) throw new Error('Invalid access decision');
     return initializeRemoteBridge().decide(requestId, decision).then(() => remoteSettingsController?.state() ?? readRemoteState());
@@ -5591,10 +5607,39 @@ if (!gotTheLock) {
   const initializeRemoteControl = (): void => {
     // Store-backed services and listeners must wait for initApp's database initialization.
     getCoworkStore().remoteCreationOwner = getCurrentRemoteOwner;
-    remoteSessionCommands = new SessionCommandService(getCoworkStore(), getCoworkEngineRouter(), getCurrentRemoteOwner);
+    remoteSessionCommands = new SessionCommandService(getCoworkStore(), getCoworkEngineRouter(), getCurrentRemoteOwner,
+      { getGeneration: () => `${ownershipAccountEpoch}:${authAccountGeneration}` });
     remoteSessionCommands.configure(submitStart, submitContinue);
+    ownershipAssociations = new OwnershipAssociationService({
+      store: getCoworkStore(), gate: ownershipOperationGate,
+      actor: () => {
+        const user = getAuthUser();
+        const enterprise = getPersistedEnterpriseAccountContext(getStore());
+        const label = user?.nickname ?? user?.displayName ?? user?.name;
+        return { owner: getCurrentRemoteOwner(), generation: `${ownershipBootId}:${ownershipAccountEpoch}:${authAccountGeneration}`,
+          label: typeof label === 'string' && label.trim() ? label : t('ownershipCurrentAccount'),
+          scopeLabel: enterprise?.enterpriseName || t(enterprise ? 'ownershipEnterpriseScope' : 'ownershipPersonalScope') };
+      },
+      deviceName: () => readRemoteState().name || os.hostname(),
+      isBusy: resources => resources.sessionIds.some(id => getCoworkEngineRouter().isSessionActive(id))
+        || getCoworkEngineRouter().listPendingPermissions().some(item => item.sessionId === SESSION_AGNOSTIC_PERMISSION_SESSION_ID),
+      syncState: target => remoteBridge?.associationSyncState(target),
+      afterCommit: result => {
+        revalidateArtifactPreviews();
+        libraryIndexService?.notifySessionProjectionChanges({ changedSessionIds: result.sessionIds, deletedSessionIds: [], affectedArtifactIds: [] });
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+            window.webContents.send(OwnershipIpc.Changed);
+          }
+        }
+        syncOpenClawConfig({ reason: 'ownership-associated' }).catch(error => {
+          console.error('[Ownership] Failed to refresh execution permissions', error);
+        });
+      },
+    });
     remoteSettingsController = new RemoteSettingsController({
       getRemoteState: readRemoteState,
+      getAccountEpoch: getRemoteAccountEpoch,
       getKeepAwakePreference: () => getStore().get<boolean>(PREVENT_SLEEP_STORE_KEY),
       saveKeepAwakePreference: enabled => getStore().set(PREVENT_SLEEP_STORE_KEY, enabled),
       applyKeepAwake: setPreventSleepBlockerEnabled,
@@ -5611,6 +5656,10 @@ if (!gotTheLock) {
     for (const key of ['auth_tokens', LogReporterStoreKey.AuthUser, 'enterprise_account_context']) {
       getStore().onDidChange(key, () => {
         const next = getCurrentRemoteOwner();
+        if (!(previousRemoteOwner === null && next === null) && !sameOwner(previousRemoteOwner, next)) {
+          ownershipAccountEpoch++;
+          revalidateArtifactPreviews();
+        }
         try {
           remoteSessionCommands?.accountChanged(previousRemoteOwner, next);
           if (previousRemoteOwner && !sameOwner(previousRemoteOwner, next)) {
@@ -5630,6 +5679,8 @@ if (!gotTheLock) {
       });
     }
   };
+
+  registerOwnershipHandlers(() => ownershipAssociations);
 
 
   type AvailableServerModel = ServerModelMetadataInput & {
@@ -7139,6 +7190,7 @@ if (!gotTheLock) {
     authExchangeIntentSequence += 1;
     activeAuthExchangeIntent = null;
     authAccountGeneration += 1;
+    revalidateArtifactPreviews();
     mediaSelectionBySession.clear();
     mediaTurnAccountScopeBySession.clear();
     mediaReferencesBySession.clear();
@@ -7302,6 +7354,7 @@ if (!gotTheLock) {
       const previousAccountScope = getCurrentMediaAccountScope();
       activeAuthExchangeIntent = null;
       authAccountGeneration += 1;
+      revalidateArtifactPreviews();
       const exchangeAccountGeneration = authAccountGeneration;
       clearEnterpriseAccountContext(getStore());
       clearServerModelMetadata();
@@ -7353,6 +7406,7 @@ if (!gotTheLock) {
         && authExchangeIntentSequence === exchangeIntent.intentId
       ) {
         authAccountGeneration += 1;
+        revalidateArtifactPreviews();
         if (startingTokens) {
           saveAuthTokens(startingTokens.accessToken, startingTokens.refreshToken);
         } else {
@@ -7826,6 +7880,7 @@ if (!gotTheLock) {
     try {
       const { scopedFetch } = capturePublishingRequest();
       const options = sanitizeCreateFromHtmlFileInput(input);
+      const fileLease = captureLibraryFileAccess(options.filePath);
       console.debug(
         `[HtmlShare] received HTML file share request for session ${options.sessionId} and artifact ${options.artifactId}`,
       );
@@ -7833,8 +7888,9 @@ if (!gotTheLock) {
         `[HtmlShare] HTML file share uses access mode ${options.accessMode ?? 'server-default'} and source file ${options.filePath}`,
       );
       const clientSourceKey = buildHtmlShareClientSourceKey(options.filePath);
-      const packaged = await packageHtmlFile(options.filePath);
+      const packaged = await packageHtmlFile(options.filePath, fileLease.assertAllowed);
       archivePath = packaged.archivePath;
+      fileLease.assertAllowed();
       console.debug(
         `[HtmlShare] packaged HTML file share with ${packaged.totalFiles} files, ${packaged.totalBytes} bytes, entry ${packaged.entryFile}, and ${packaged.warnings.length} warnings`,
       );
@@ -7899,9 +7955,11 @@ if (!gotTheLock) {
     try {
       const { scopedFetch } = capturePublishingRequest();
       const options = sanitizeUpdateFromHtmlFileInput(input);
+      const fileLease = captureLibraryFileAccess(options.filePath);
       const clientSourceKey = buildHtmlShareClientSourceKey(options.filePath);
-      const packaged = await packageHtmlFile(options.filePath);
+      const packaged = await packageHtmlFile(options.filePath, fileLease.assertAllowed);
       archivePath = packaged.archivePath;
+      fileLease.assertAllowed();
       const result = await updateHtmlShare(
         getServerApiBaseUrl(),
         getHtmlSharePublicBaseUrl(),
@@ -7944,6 +8002,7 @@ if (!gotTheLock) {
     try {
       const { scopedFetch } = capturePublishingRequest();
       const options = sanitizeCreateFromArtifactFileInput(input);
+      const fileLease = options.filePath ? captureLibraryFileAccess(options.filePath) : undefined;
       console.debug(
         `[HtmlShare] received ${options.sourceType} share request for session ${options.sessionId} and artifact ${options.artifactId}`,
       );
@@ -7954,8 +8013,9 @@ if (!gotTheLock) {
         filePath: options.filePath,
         content: options.content,
         remoteUrl: options.remoteUrl,
-      });
+      }, fileLease?.assertAllowed);
       archivePath = packaged.archivePath;
+      fileLease?.assertAllowed();
       console.debug(
         `[HtmlShare] packaged ${options.sourceType} share with ${packaged.totalBytes} bytes and entry ${packaged.entryFile}`,
       );
@@ -8085,6 +8145,7 @@ if (!gotTheLock) {
     try {
       const { scopedFetch } = capturePublishingRequest();
       const options = sanitizeUpdateFromArtifactFileInput(input);
+      const fileLease = options.filePath ? captureLibraryFileAccess(options.filePath) : undefined;
       const clientSourceKey = buildArtifactShareClientSourceKey(options);
       const packaged = await packageArtifactFile({
         sourceType: options.sourceType,
@@ -8092,8 +8153,9 @@ if (!gotTheLock) {
         filePath: options.filePath,
         content: options.content,
         remoteUrl: options.remoteUrl,
-      });
+      }, fileLease?.assertAllowed);
       archivePath = packaged.archivePath;
+      fileLease?.assertAllowed();
       const result = await updateHtmlShare(
         getServerApiBaseUrl(),
         getHtmlSharePublicBaseUrl(),
@@ -9387,6 +9449,7 @@ if (!gotTheLock) {
         }
 
         const execution = currentRemoteExecution();
+        assertRemoteExecutionPermit();
         if (execution?.owner && !sameOwner(execution.owner, getCurrentRemoteOwner())) throw new Error('Account changed');
         const session = (execution?.preparedSessionId ? coworkStoreInstance.getSession(execution.preparedSessionId, 0) : null) || coworkStoreInstance.createSession(
           title,
@@ -9588,6 +9651,7 @@ if (!gotTheLock) {
         const coworkStoreInstance = getCoworkStore();
         const existingSession = coworkStoreInstance.getSession(options.sessionId);
         const execution = currentRemoteExecution();
+        assertRemoteExecutionPermit();
         coworkStoreInstance.remote.assertActor(options.sessionId, execution?.owner ?? null);
         if (execution?.owner && !sameOwner(execution.owner, getCurrentRemoteOwner())) throw new Error('Account changed');
         if (!execution?.runId) coworkStoreInstance.remote.beginRun(options.sessionId);
@@ -10143,8 +10207,13 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(CoworkIpcChannel.DeleteSession, async (_event, sessionId: string) => {
+    let release: (() => void) | null = null;
     try {
       getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
+      release = ownershipOperationGate.beginOperation({
+        agentIds: [getCoworkStore().getSession(sessionId, 0)?.agentId || AgentId.Main], sessionIds: [sessionId],
+      });
+      if (!release) throw new Error(t('ownershipOperationBusy'));
       getCoworkEngineRouter().stopSession(sessionId);
       const coworkStoreInstance = getCoworkStore();
       coworkStoreInstance.deleteSession(sessionId);
@@ -10179,13 +10248,18 @@ if (!gotTheLock) {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to delete session',
       };
-    }
+    } finally { release?.(); }
   });
 
   ipcMain.handle(CoworkIpcChannel.DeleteSessions, async (_event, sessionIds: string[]) => {
+    let release: (() => void) | null = null;
     try {
       const runtime = getCoworkEngineRouter();
       sessionIds.forEach(sessionId => getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner()));
+      release = ownershipOperationGate.beginOperation({
+        agentIds: sessionIds.map(id => getCoworkStore().getSession(id, 0)?.agentId || AgentId.Main), sessionIds,
+      });
+      if (!release) throw new Error(t('ownershipOperationBusy'));
       sessionIds.forEach(sessionId => {
         runtime.stopSession(sessionId);
       });
@@ -10212,7 +10286,7 @@ if (!gotTheLock) {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to batch delete sessions',
       };
-    }
+    } finally { release?.(); }
   });
 
   ipcMain.handle(
@@ -10263,6 +10337,7 @@ if (!gotTheLock) {
         title?: string;
       },
     ) => {
+      let release: (() => void) | null = null;
       try {
         const sessionId = options?.sessionId?.trim();
         if (!sessionId) {
@@ -10277,6 +10352,9 @@ if (!gotTheLock) {
           console.warn('[CoworkFork] fork request referenced a missing session');
           return { success: false, error: 'Session not found' };
         }
+        const generation = `${ownershipAccountEpoch}:${authAccountGeneration}`;
+        release = ownershipOperationGate.beginOperation({ agentIds: [sourceSession.agentId || AgentId.Main], sessionIds: [sessionId] });
+        if (!release) throw new Error(t('ownershipOperationBusy'));
         if (sourceSession.status === 'running' || runtime.isSessionActive(sessionId)) {
           console.warn('[CoworkFork] fork request was rejected because the session is still running');
           return { success: false, error: 'Please stop the current task before forking it.' };
@@ -10291,6 +10369,7 @@ if (!gotTheLock) {
           sessionId,
           forkedFromTimestamp ?? undefined,
         );
+        if (generation !== `${ownershipAccountEpoch}:${authAccountGeneration}`) throw new Error(t('authAccountChanged'));
         coworkStoreInstance.remote.assertActor(sessionId, getCurrentRemoteOwner());
         if (compactionSummary) {
           forkContextMessages.push({
@@ -10326,7 +10405,7 @@ if (!gotTheLock) {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to fork session',
         };
-      }
+      } finally { release?.(); }
     },
   );
 
@@ -10691,6 +10770,17 @@ if (!gotTheLock) {
 
   registerCoworkSubagentHandlers({
     getOwner: getCurrentRemoteOwner,
+    beginDeleteOperation: (parentSessionId, runId) => {
+      const run = getStore().getDatabase().prepare('SELECT agent_id,child_cowork_session_id FROM subagent_runs WHERE id=? AND parent_session_id=?')
+        .get(runId, parentSessionId) as { agent_id: string | null; child_cowork_session_id: string | null } | undefined;
+      if (!run) throw new Error(t('agentAccessUnavailable'));
+      const release = ownershipOperationGate.beginOperation({
+        agentIds: [getCoworkStore().getSession(parentSessionId, 0)?.agentId || AgentId.Main, ...(run.agent_id ? [run.agent_id] : [])],
+        sessionIds: [parentSessionId, ...(run.child_cowork_session_id ? [run.child_cowork_session_id] : [])],
+      });
+      if (!release) throw new Error(t('ownershipOperationBusy'));
+      return release;
+    },
     assertSessionAccess: sessionId => getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner()),
     assertAgentAccess: agentId => getCoworkStore().assertAgentAccess(agentId, getCurrentRemoteOwner()),
     assertRunAccess: (parentSessionId, runId, sessionKey) => {
@@ -12817,17 +12907,20 @@ if (!gotTheLock) {
     '.avif': 'image/avif',
   };
   ipcMain.handle(
-    'dialog:readFileAsDataUrl',
+    DialogIpc.ReadFileAsDataUrl,
     async (
       _event,
       filePath?: string,
+      access?: ArtifactFileAccess,
     ): Promise<{ success: boolean; dataUrl?: string; error?: string }> => {
       try {
         if (typeof filePath !== 'string' || !filePath.trim()) {
           return { success: false, error: 'Missing file path' };
         }
         const resolvedPath = path.resolve(filePath.trim());
+        const lease = captureLibraryFileAccess(resolvedPath, access);
         const stat = await fs.promises.stat(resolvedPath);
+        lease.assertAllowed();
         if (!stat.isFile()) {
           return { success: false, error: 'Not a file' };
         }
@@ -12837,7 +12930,9 @@ if (!gotTheLock) {
             error: `File too large (max ${Math.floor(MAX_READ_AS_DATA_URL_BYTES / (1024 * 1024))}MB)`,
           };
         }
+        lease.assertAllowed();
         const buffer = await fs.promises.readFile(resolvedPath);
+        lease.assertAllowed();
         const ext = path.extname(resolvedPath).toLowerCase();
         const mimeType = MIME_BY_EXT[ext] || 'application/octet-stream';
         const base64 = buffer.toString('base64');
@@ -12854,12 +12949,15 @@ if (!gotTheLock) {
 
   ipcMain.handle(
     DialogIpc.StatFile,
-    async (_event, filePath?: string): Promise<{ success: boolean; isFile?: boolean; isDirectory?: boolean; size?: number; mtimeMs?: number; error?: string }> => {
+    async (_event, filePath?: string, access?: ArtifactFileAccess): Promise<{ success: boolean; isFile?: boolean; isDirectory?: boolean; size?: number; mtimeMs?: number; error?: string }> => {
       try {
         if (typeof filePath !== 'string' || !filePath.trim()) {
           return { success: false, error: 'Missing file path' };
         }
-        const stat = await fs.promises.stat(path.resolve(filePath.trim()));
+        const resolvedPath = path.resolve(filePath.trim());
+        const lease = captureLibraryFileAccess(resolvedPath, access);
+        const stat = await fs.promises.stat(resolvedPath);
+        lease.assertAllowed();
         return {
           success: true,
           isFile: stat.isFile(),
@@ -12879,23 +12977,27 @@ if (!gotTheLock) {
   const MAX_READ_TEXT_FILE_BYTES = 2 * 1024 * 1024;
   ipcMain.handle(
     DialogIpc.ReadTextFile,
-    async (_event, filePath?: string): Promise<{ success: boolean; content?: string; size?: number; readBytes?: number; truncated?: boolean; error?: string }> => {
+    async (_event, filePath?: string, access?: ArtifactFileAccess): Promise<{ success: boolean; content?: string; size?: number; readBytes?: number; truncated?: boolean; error?: string }> => {
       try {
         if (typeof filePath !== 'string' || !filePath.trim()) {
           return { success: false, error: 'Missing file path' };
         }
         const resolvedPath = path.resolve(filePath.trim());
+        const lease = captureLibraryFileAccess(resolvedPath, access);
         const stat = await fs.promises.stat(resolvedPath);
+        lease.assertAllowed();
         if (!stat.isFile()) {
           return { success: false, error: 'Not a file' };
         }
 
         const truncated = stat.size > MAX_READ_TEXT_FILE_BYTES;
+        lease.assertAllowed();
         const handle = await fs.promises.open(resolvedPath, 'r');
         try {
           const bytesToRead = Math.min(stat.size, MAX_READ_TEXT_FILE_BYTES);
           const buffer = Buffer.alloc(bytesToRead);
           const { bytesRead } = await handle.read(buffer, 0, bytesToRead, 0);
+          lease.assertAllowed();
           return {
             success: true,
             content: buffer.subarray(0, bytesRead).toString('utf8'),
@@ -12905,6 +13007,7 @@ if (!gotTheLock) {
           };
         } finally {
           await handle.close();
+          lease.assertAllowed();
         }
       } catch (error) {
         console.warn('[Dialog] failed to read text file:', error);
@@ -12921,13 +13024,16 @@ if (!gotTheLock) {
     async (
       event,
       filePath?: string,
+      access?: ArtifactFileAccess,
     ): Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }> => {
       try {
         if (typeof filePath !== 'string' || !filePath.trim()) {
           return { success: false, error: 'Missing file path' };
         }
         const resolvedPath = path.resolve(filePath.trim());
+        const lease = captureLibraryFileAccess(resolvedPath, access);
         const stat = await fs.promises.stat(resolvedPath);
+        lease.assertAllowed();
         if (!stat.isFile()) {
           return { success: false, error: 'Not a file' };
         }
@@ -12941,7 +13047,9 @@ if (!gotTheLock) {
         if (saveResult.canceled || !saveResult.filePath) {
           return { success: true, canceled: true };
         }
+        lease.assertAllowed();
         await fs.promises.copyFile(resolvedPath, saveResult.filePath);
+        lease.assertAllowed();
         return { success: true, canceled: false, path: saveResult.filePath };
       } catch (error) {
         console.warn('[Dialog] failed to save file copy:', error);
@@ -13050,10 +13158,12 @@ if (!gotTheLock) {
             retryable: false,
           };
         }
+        const lease = captureLibraryFileAccess(request.filePath, request.access);
         const dataUrl = await libraryThumbnailService.generate(request.filePath, {
           requestId: request.requestId,
           priority: request.priority,
         });
+        lease.assertAllowed();
         return { success: true, dataUrl };
       } catch (error) {
         const failure = getLibraryThumbnailFailureDetails(error);
@@ -13118,12 +13228,16 @@ if (!gotTheLock) {
   ipcMain.handle(ShellIpc.OpenPath, async (_event, filePath: string) => {
     try {
       const normalizedPath = normalizeWindowsShellPath(filePath);
+      captureLibraryFileAccess(normalizedPath);
       const result = await shell.openPath(normalizedPath);
       if (result) {
         return await getFailedShellPathStatus('open local path', normalizedPath, result);
       }
       return { success: true };
     } catch (error) {
+      if (error instanceof LibraryFileAccessError) {
+        return { success: false, error: error.message, reason: ShellOpenFailureReason.Unknown };
+      }
       const normalizedPath = normalizeWindowsShellPath(filePath);
       return await getFailedShellPathStatus(
         'open local path',
@@ -13136,6 +13250,7 @@ if (!gotTheLock) {
   ipcMain.handle(ShellIpc.ShowItemInFolder, async (_event, filePath: string) => {
     try {
       const normalizedPath = normalizeWindowsShellPath(filePath);
+      const lease = captureLibraryFileAccess(normalizedPath);
       try {
         await fs.promises.stat(normalizedPath);
       } catch (error) {
@@ -13146,6 +13261,7 @@ if (!gotTheLock) {
           reason: getFileAccessFailureReason(error),
         };
       }
+      lease.assertAllowed();
       shell.showItemInFolder(normalizedPath);
       return { success: true };
     } catch (error) {
@@ -13212,10 +13328,15 @@ if (!gotTheLock) {
   ipcMain.handle(ShellIpc.OpenPathWithApp, async (_event, filePath: string, appPath: string) => {
     const normalizedPath = normalizeWindowsShellPath(filePath);
     try {
+      const lease = captureLibraryFileAccess(normalizedPath);
       const { openFileWithApp } = await import('./shellApps');
+      lease.assertAllowed();
       await openFileWithApp(normalizedPath, appPath);
       return { success: true };
     } catch (error) {
+      if (error instanceof LibraryFileAccessError) {
+        return { success: false, error: error.message, reason: ShellOpenFailureReason.Unknown };
+      }
       return await getFailedShellPathStatus(
         'open local path with selected app',
         normalizedPath,
@@ -13251,6 +13372,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(ClipboardIpc.WriteImageFromFile, async (_event, filePath: string) => {
     try {
+      captureLibraryFileAccess(filePath);
       const image = nativeImage.createFromPath(filePath);
       if (image.isEmpty()) {
         return { success: false, error: 'Failed to read image file' };
@@ -13336,18 +13458,20 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle(ArtifactPreviewIpc.CreateSession, async (_event, filePath: string) => {
+  ipcMain.handle(ArtifactPreviewIpc.CreateSession, async (_event, filePath: string, access?: ArtifactFileAccess) => {
     try {
-      const result = await createPreviewSession(filePath);
+      const lease = captureLibraryFileAccess(filePath, access);
+      const result = await createPreviewSession(filePath, lease.assertAllowed);
       return { success: true, ...result };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   });
 
-  ipcMain.handle(ArtifactPreviewIpc.CreateOfficeSession, async (_event, filePath: string) => {
+  ipcMain.handle(ArtifactPreviewIpc.CreateOfficeSession, async (_event, filePath: string, access?: ArtifactFileAccess) => {
     try {
-      const result = await createOfficePreviewSession(filePath);
+      const lease = captureLibraryFileAccess(filePath, access);
+      const result = await createOfficePreviewSession(filePath, lease.assertAllowed);
       return { success: true, ...result };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
@@ -14564,7 +14688,7 @@ if (!gotTheLock) {
     console.log('[Main] initApp: default project dir ensured');
 
     // 注册 localfile:// 自定义协议，用于安全加载本地媒体文件。
-    protocol.handle(ArtifactPreviewProtocol.LocalFile, createLocalFileProtocolResponse);
+    protocol.handle(ArtifactPreviewProtocol.LocalFile, request => createLocalFileProtocolResponse(request, captureLibraryFileAccess));
     registerSkinElectronIntegration(getSkinRuntimeController().store);
 
     profiler.mark('initStore');
@@ -14573,6 +14697,8 @@ if (!gotTheLock) {
     profiler.measure('initStore');
     console.log('[Main] initApp: store initialized');
     const libraryLocalStore = new LibraryLocalStore(store.getDatabase());
+    libraryFileAccess = new LibraryFileAccessPolicy(libraryLocalStore, getCurrentRemoteOwner,
+      () => `${ownershipBootId}:${ownershipAccountEpoch}:${authAccountGeneration}`);
     const emitLibraryChanged = (payload: LibraryChangedPayload): void => {
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.isDestroyed()) window.webContents.send(LibraryIpc.Changed, payload);
@@ -14591,6 +14717,7 @@ if (!gotTheLock) {
     });
     registerLibraryIpcHandlers({
       localStore: libraryLocalStore,
+      fileAccess: libraryFileAccess,
       getOwner: getCurrentRemoteOwner,
       indexService: libraryIndexService,
       getServerApiBaseUrl,

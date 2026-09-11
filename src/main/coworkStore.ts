@@ -62,6 +62,8 @@ import {
   type SessionProjectionChanges,
   SessionProjectionNotifications,
 } from './libs/sessionProjectionNotifications';
+import { ownershipOperationGate } from './ownershipOperationGate';
+import { sameOwner } from './remote/canonical';
 import { RemoteStore } from './remote/remoteStore';
 
 
@@ -3505,6 +3507,23 @@ export class CoworkStore {
   upsertSubagentChildSession(options: UpsertSubagentChildSessionOptions): CoworkSession {
     const existing = this.getSession(options.id, 0);
     const parent = this.getSession(options.parentSessionId, 0);
+    if (!parent) throw new AgentAccessError(AgentAccessErrorCode.Unavailable);
+    const actor = this.remote.owner(parent.id);
+    this.remote.assertActor(parent.id, actor);
+    this.assertAgentAccess(parent.agentId || AgentId.Main, actor);
+    this.assertAgentAccess(options.agentId, actor);
+    if (existing) {
+      const childOwner = this.remote.owner(existing.id);
+      this.remote.assertActor(existing.id, actor);
+      if (existing.parentSessionId !== parent.id || existing.agentId !== options.agentId
+        || !(actor === null && childOwner === null) && !sameOwner(actor, childOwner)) {
+        throw new AgentAccessError(AgentAccessErrorCode.Unavailable);
+      }
+    }
+    // This method does not yield between the gate check and its transactional write.
+    if (ownershipOperationGate.isAssociating({ agentIds: [parent.agentId || AgentId.Main, options.agentId], sessionIds: [parent.id, options.id] })) {
+      throw new AgentAccessError(AgentAccessErrorCode.Busy);
+    }
     const agent = this.getAgent(options.agentId);
     const now = Date.now();
     const createdAt = options.createdAt ?? existing?.createdAt ?? now;

@@ -45,6 +45,34 @@ it('publishes only main and the current owner, sanitizes icons, and keeps anonym
   expect(catalog.summary('private', other)).toBeNull();
   expect(catalog.summary('guest', owner)).toBeNull();
 });
+
+it('keeps main and unrelated agents while delaying a claimed Agent until admission', async () => {
+  const { catalog, ownership, paths, directory } = fixture();
+  ownership.transaction(() => ownership.associateHistorical('anonymous', owner, Date.now()));
+  paths.anonymous = directory;
+  const blocked = (id: string) => id !== 'anonymous';
+  const first = await catalog.refresh(owner, 'device', () => true, blocked);
+  expect(first.map(item => item.agentId)).toEqual(['main', 'mine']);
+  const second = await catalog.refresh(owner, 'device', () => true);
+  expect(second.map(item => item.agentId)).toEqual(['anonymous', 'main', 'mine']);
+  expect(second[0].kind).toBe('owned');
+});
+
+it('does not rewrite an uncertain publication when its new context has not admitted an Agent', async () => {
+  const { catalog, ownership, paths, directory, store } = fixture();
+  ownership.transaction(() => ownership.associateHistorical('anonymous', owner, Date.now()));
+  paths.anonymous = directory;
+  const puts: unknown[] = [];
+  const api = async (_path: string, method?: string, body?: unknown) => {
+    if (method !== 'PUT') return { catalogVersion: '0', lastPublicationId: null, syncStatus: 'pending', items: [] };
+    puts.push(body); throw new Error('Offline');
+  };
+  await expect(catalog.publish(owner, 'device', '1', api, () => true)).rejects.toThrow('Offline');
+  const pending = store.entries<any>('agentCatalog:')[0].value.pending;
+  await expect(catalog.publish(owner, 'device', '2', api, () => true, undefined, id => id !== 'anonymous')).rejects.toThrow('waiting for server support');
+  expect(puts).toHaveLength(1);
+  expect(store.entries<any>('agentCatalog:')[0].value.pending).toEqual(pending);
+});
 it('never repoints workspace aliases and rejects stale version or cross-account selection', async () => {
   const { catalog, ownership, paths, directory, store } = fixture();
   const first = (await catalog.refresh(owner, 'device', () => true)).find(item => item.agentId === 'mine')!;
@@ -88,7 +116,7 @@ it('persists publication before PUT and reconciles an uncertain commit across re
   expect(payloadHash(puts[0].items)).toBe(firstHash);
   expect(store.entries<any>('agentCatalog:')[0].value.pending).toBeNull();
 });
-it('keeps the exact pending publication when a PUT did not commit and refuses over-limit snapshots atomically', async () => {
+it('recovers the exact pending publication before applying new catalog limits', async () => {
   const { catalog, ownership } = fixture();
   const puts: any[] = [];
   const api = async (_path: string, method?: string, body?: unknown) => {
@@ -99,8 +127,15 @@ it('keeps the exact pending publication when a PUT did not commit and refuses ov
   ownership.touch('mine');
   await expect(catalog.publish(owner, 'device', '2', api, () => true)).rejects.toThrow('Offline');
   expect(puts[1]).toEqual({ ...puts[0], connectionGeneration: '2' });
-  await expect(catalog.publish(owner, 'device', '3', api, () => true, { items: 1, bytes: 262144 })).rejects.toThrow('PAYLOAD_TOO_LARGE');
-  expect(puts).toHaveLength(2);
+  await expect(catalog.publish(owner, 'device', '3', api, () => true, { items: 1, bytes: 262144 })).rejects.toThrow('Offline');
+  expect(puts[2]).toEqual({ ...puts[0], connectionGeneration: '3' });
+});
+it('refuses a new over-limit snapshot without leaving a pending publication', async () => {
+  const { catalog, store } = fixture();
+  const api = vi.fn(async () => ({ catalogVersion: '0', lastPublicationId: null, syncStatus: 'pending', items: [] }));
+  await expect(catalog.publish(owner, 'device', '1', api, () => true, { items: 1, bytes: 262144 })).rejects.toThrow('PAYLOAD_TOO_LARGE');
+  expect(api).toHaveBeenCalledTimes(1);
+  expect(store.entries<any>('agentCatalog:').some(row => row.value.pending)).toBe(false);
 });
 it('adds summaries only after negotiation while preserving the bytes and hashes of already queued events', async () => {
   const { db, store, catalog } = fixture();

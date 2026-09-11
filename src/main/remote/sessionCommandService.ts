@@ -8,6 +8,7 @@ import type { RemoteOwner } from '../../shared/remote/constants';
 import type { CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkRuntime, PermissionRequest } from '../libs/agentEngine/types';
+import { type OwnershipOperationGate, ownershipOperationGate } from '../ownershipOperationGate';
 import { payloadHash, sameOwner } from './canonical';
 import { RemoteAgentError, remoteAgentFailure } from './remoteAgentCatalog';
 import { RemoteApprovalError } from './remoteApproval';
@@ -34,7 +35,8 @@ export class SessionCommandService {
   private readonly submitting = new Set<string>();
   private startHandler: ((options: any) => Promise<any>) | null = null;
   private continueHandler: ((options: any) => Promise<any>) | null = null;
-  constructor(private readonly store: CoworkStore, private readonly runtime: CoworkRuntime, private readonly getOwner: () => RemoteOwner | null) {
+  constructor(private readonly store: CoworkStore, private readonly runtime: CoworkRuntime, private readonly getOwner: () => RemoteOwner | null,
+    private readonly ownershipOptions: { gate?: OwnershipOperationGate; getGeneration?: () => number | string } = {}) {
     runtime.on('sessionStatus', (id, status) => {
       if (status !== 'running') return;
       // Anonymous tasks also need per-run approval identity; ownership still controls upload.
@@ -68,29 +70,43 @@ export class SessionCommandService {
   configure(start: (options: any) => Promise<any>, resume: (options: any) => Promise<any>): void { this.startHandler = start; this.continueHandler = resume; }
   async submit(options: any, create: boolean, handler: (options: any) => Promise<any>): Promise<any> {
     const inherited = currentRemoteExecution();
-    const actor = inherited?.owner || this.getOwner();
+    const actor = inherited ? inherited.owner : this.getOwner();
+    const generation = this.ownershipOptions.getGeneration?.();
     const id = create ? inherited?.preparedSessionId : options.sessionId;
     if (id) {
       this.store.remote.assertActor(id, actor);
       if (this.submitting.has(id)) return { success: false, error: 'REMOTE_SESSION_BUSY' };
       const run = this.store.remote.run(id);
       if (run && !terminal.has(run.status) && run.runId !== inherited?.runId) return { success: false, error: 'REMOTE_SESSION_BUSY' };
-      this.submitting.add(id);
     }
+    const agentId = create ? (options.agentId || AgentId.Main) : this.store.getSession(options.sessionId, 0)?.agentId;
+    if (!agentId) throw remoteAgentFailure('NOT_SELECTABLE');
+    const targetIds = (this.store.getAgent(agentId)?.subagentAllowAgentIds || [])
+      .filter(target => this.store.agentOwnership.canView(target, actor));
+    const agentIds = [...new Set([agentId, ...targetIds])];
+    const release = (this.ownershipOptions.gate || ownershipOperationGate).beginOperation({ agentIds, sessionIds: id ? [id] : [] });
+    if (!release) return { success: false, error: 'REMOTE_SESSION_BUSY' };
+    if (id) this.submitting.add(id);
     try {
-      const agentId = create ? (options.agentId || AgentId.Main) : this.store.getSession(options.sessionId, 0)?.agentId;
-      if (!agentId) throw remoteAgentFailure('NOT_SELECTABLE');
       this.store.assertAgentAccess(agentId, actor);
       if (!this.store.getAgent(agentId)?.enabled) throw remoteAgentFailure('DISABLED');
-      return await context.run(inherited || { owner: actor, assertAgentBinding: () => {
-        if (actor === null ? this.getOwner() !== null : !sameOwner(actor, this.getOwner())) throw new Error('Account changed');
-        this.store.assertAgentAccess(agentId, actor);
+      const versions = new Map(agentIds.map(target => [target, this.store.agentOwnership.get(target)?.version]));
+      const inheritedBinding = inherited?.assertAgentBinding;
+      return await context.run({ ...inherited, owner: actor, assertAgentBinding: () => {
+        inheritedBinding?.();
+        if (generation !== this.ownershipOptions.getGeneration?.()
+          || (actor === null ? this.getOwner() !== null : !sameOwner(actor, this.getOwner()))) throw new Error('Account changed');
+        for (const target of agentIds) {
+          this.store.assertAgentAccess(target, actor);
+          if (this.store.agentOwnership.get(target)?.version !== versions.get(target)) throw remoteAgentFailure('VERSION_CHANGED');
+        }
+        if (id) this.store.remote.assertActor(id, actor);
         if (!this.store.getAgent(agentId)?.enabled) throw remoteAgentFailure('DISABLED');
       } }, async () => {
         if (actor && !sameOwner(actor, this.getOwner())) throw new Error('Account changed');
         return handler(options);
       });
-    } finally { if (id) this.submitting.delete(id); }
+    } finally { if (id) this.submitting.delete(id); release(); }
   }
   private validateAgent(agentId: string, owner: RemoteOwner, expectedVersion?: string, selectable = false): void {
     const identity = this.store.agentOwnership.get(agentId);
@@ -175,6 +191,9 @@ export class SessionCommandService {
     const assertAgentBinding = (): void => {
       try { assertBinding(); } catch (error) { if (error instanceof RemoteAgentError) bindingFailure = error; throw error; }
     };
+    const release = (this.ownershipOptions.gate || ownershipOperationGate).beginOperation({ agentIds: [fixedAgentId], sessionIds: [localId] });
+    if (!release) throw new Error('REMOTE_SESSION_BUSY');
+    try {
     const result = await context.run({ owner: entry.owner, preparedSessionId: localId, runId: entry.runId || undefined, commandId: entry.command.commandId, stillPermitted, assertAgentBinding }, async () => {
       assertRemoteExecutionPermit();
       if (entry.command.type === 'create_session') return this.startHandler!({ prompt: request.payload.text, cwd: fixedCwd, agentId: fixedAgentId });
@@ -220,6 +239,7 @@ export class SessionCommandService {
     if (!result?.success) throw bindingFailure || new Error(result?.error || 'Task submission failed');
     return { outcome: ['create_session', 'send_message'].includes(entry.command.type) ? 'started'
       : entry.command.type === 'cancel_run' ? (result.alreadyTerminal ? 'already_terminal' : 'cancel_requested') : 'approval_applied' };
+    } finally { release(); }
   }
   private permission(sessionId: string, request: PermissionRequest): void {
     const state = request.approval || this.runtime.getPermissionState?.(request.requestId);

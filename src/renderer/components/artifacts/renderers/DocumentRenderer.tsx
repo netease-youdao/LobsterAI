@@ -68,7 +68,7 @@ function useFileContent(artifact: Artifact): { data: ArrayBuffer | null; loading
       if (artifact.filePath && window.electron?.dialog?.readFileAsDataUrl) {
         const filePath = normalizeLocalFilePath(artifact.filePath);
         try {
-          const result = await window.electron.dialog.readFileAsDataUrl(filePath);
+          const result = await window.electron.dialog.readFileAsDataUrl(filePath, artifact.fileAccess);
           if (cancelled) return;
           if (result?.success && result.dataUrl) {
             const buf = dataUrlToArrayBuffer(result.dataUrl);
@@ -89,7 +89,7 @@ function useFileContent(artifact: Artifact): { data: ArrayBuffer | null; loading
 
     load();
     return () => { cancelled = true; };
-  }, [artifact.content, artifact.filePath]);
+  }, [artifact.content, artifact.fileAccess, artifact.filePath]);
 
   return { data, loading, error };
 }
@@ -518,7 +518,7 @@ const NativePdfSubRenderer: React.FC<{ artifact: Artifact; onFallback: () => voi
       try {
         setLoading(true);
         const filePath = normalizeLocalFilePath(artifact.filePath!);
-        const result = await window.electron?.artifact?.createPreviewSession(filePath);
+        const result = await window.electron?.artifact?.createPreviewSession(filePath, artifact.fileAccess);
         if (cancelled) {
           if (result?.success && result.sessionId) {
             void window.electron?.artifact?.destroyPreviewSession(result.sessionId);
@@ -548,7 +548,7 @@ const NativePdfSubRenderer: React.FC<{ artifact: Artifact; onFallback: () => voi
         void window.electron?.artifact?.destroyPreviewSession(sessionId);
       }
     };
-  }, [artifact.contentVersion, artifact.filePath, onFallback]);
+  }, [artifact.contentVersion, artifact.fileAccess, artifact.filePath, onFallback]);
 
   return (
     <div className="relative h-full flex flex-col overflow-hidden bg-[#f5f5f5]">
@@ -1305,7 +1305,7 @@ const PptxHtmlFallback: React.FC<{ artifact: Artifact; data: ArrayBuffer }> = ({
       for (let i = 1; i <= 20; i++) {
         const slidePath = `${slidesDir}/slide${i}.html`;
         try {
-          const result = await window.electron?.dialog?.readFileAsDataUrl(slidePath);
+          const result = await window.electron?.dialog?.readFileAsDataUrl(slidePath, artifact.fileAccess);
           if (!result?.success || !result.dataUrl) break;
           const base64 = result.dataUrl.split(',')[1] || '';
           const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
@@ -1328,7 +1328,7 @@ const PptxHtmlFallback: React.FC<{ artifact: Artifact; data: ArrayBuffer }> = ({
 
     loadSlideHtmls();
     return () => { cancelled = true; };
-  }, [artifact.filePath]);
+  }, [artifact.fileAccess, artifact.filePath]);
 
   if (loading) {
     return <div className="flex items-center justify-center h-full text-muted text-sm">{t('artifactDocumentLoading')}</div>;

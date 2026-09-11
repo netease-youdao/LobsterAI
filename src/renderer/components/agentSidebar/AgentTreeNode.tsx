@@ -1,3 +1,4 @@
+import { OwnershipTargetKind } from '@shared/ownership/constants';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
@@ -11,6 +12,8 @@ import EditIcon from '../icons/EditIcon';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
 import PushPinIcon from '../icons/PushPinIcon';
 import TrashIcon from '../icons/TrashIcon';
+import { useOwnershipHover } from '../ownership/OwnershipHoverCard';
+import OwnershipMenuItems from '../ownership/OwnershipMenuItems';
 import AgentTaskRow from './AgentTaskRow';
 import { createSessionBatchKey } from './batchSelection';
 import ExpandAgentTasksRow from './ExpandAgentTasksRow';
@@ -60,7 +63,7 @@ interface AgentTreeNodeProps {
 
 const ACTION_MENU_VIEWPORT_PADDING = 8;
 const ACTION_MENU_VERTICAL_GAP = 4;
-const ACTION_MENU_HEIGHT = 104;
+const ACTION_MENU_HEIGHT = 168;
 const AGENT_TASKS_TRANSITION_MS = 200;
 
 const AgentAvatar: React.FC<{ agent: AgentSidebarAgentNode }> = ({ agent }) => {
@@ -112,6 +115,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const previousExpandedRef = useRef(agent.isExpanded);
   const isMenuOpen = menuPosition !== null;
+  const ownershipHover = useOwnershipHover({ kind: OwnershipTargetKind.Agent, id: agent.id }, isMenuOpen || showConfirmDelete || isBatchMode);
   const isMainAgent = isDefaultAgentId(agent.id);
   const isBatchAgent = isBatchMode && batchAgentId === agent.id;
   const isOutsideBatchAgent = isBatchMode && batchAgentId !== null && batchAgentId !== agent.id;
@@ -284,8 +288,10 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
 
   return (
     <div className="space-y-0.5">
+      {ownershipHover.card}
       <div className={`group sticky top-10 ${isMenuOpen ? 'z-50' : 'z-20'} -ml-[6px] h-7 w-[calc(100%+12px)] bg-surface-raised`}>
         <button
+          {...ownershipHover.handlers}
           type="button"
           onClick={handleAgentClick}
           className="flex h-full w-full items-center gap-2 rounded-md py-0 pl-3.5 pr-12 text-left text-sm font-normal text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
@@ -326,7 +332,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
               }
             }}
             className={rowActionButtonClassName}
-            aria-label={i18nService.t('coworkSessionActions')}
+            aria-label={`${agentName}：${i18nService.t('coworkSessionActions')}`}
           >
             <EllipsisHorizontalIcon className="h-3.5 w-3.5" />
           </button>
@@ -347,6 +353,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
             style={{ top: menuPosition.top, right: menuPosition.right }}
             role="menu"
           >
+            <OwnershipMenuItems target={{ kind: OwnershipTargetKind.Agent, id: agent.id }} onAction={closeMenu} className={menuItemClassName} />
             <button
               type="button"
               onClick={handleEditAgent}

@@ -168,7 +168,7 @@ const CodeRenderer: React.FC<CodeRendererProps> = ({ artifact }) => {
     setFileSize(undefined);
     setFileReadBytes(undefined);
 
-    window.electron.dialog.readTextFile(artifact.filePath)
+    window.electron.dialog.readTextFile(artifact.filePath, artifact.fileAccess)
       .then(result => {
         if (cancelled) return;
         if (result.success && typeof result.content === 'string') {
@@ -194,7 +194,7 @@ const CodeRenderer: React.FC<CodeRendererProps> = ({ artifact }) => {
     return () => {
       cancelled = true;
     };
-  }, [artifact.content, artifact.contentVersion, artifact.filePath]);
+  }, [artifact.content, artifact.contentVersion, artifact.fileAccess, artifact.filePath]);
 
   const sourceContent = artifact.content || fileContent;
   const renderTruncated = sourceContent.length > MAX_SOURCE_DISPLAY_CHARS;

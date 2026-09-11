@@ -13,6 +13,7 @@ import type { CoworkStore, CreateAgentRequest, UpdateAgentRequest } from '../../
 import type { IMGatewayManager } from '../../im';
 import type { CoworkEngineRouter } from '../../libs/agentEngine';
 import { cleanupLegacyAgentsMdIdentityBlockInWorkspace } from '../../libs/openclawAgentsMdIdentityMigration';
+import { ownershipOperationGate } from '../../ownershipOperationGate';
 
 type SyncOpenClawConfig = (options: {
   reason: string;
@@ -186,9 +187,12 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
   });
 
   ipcMain.handle(AgentIpcChannel.Delete, async (_event, id: string) => {
+    let release: (() => void) | null = null;
     try {
       const agentExists = id !== AgentId.Main && getAgentManager().getAgent(id) !== null;
       const deletedSessionIds = agentExists ? getCoworkStore().listSessionIdsByAgent(id) : [];
+      release = ownershipOperationGate.beginOperation({ agentIds: [id], sessionIds: deletedSessionIds });
+      if (!release) throw new AgentAccessError(AgentAccessErrorCode.Busy);
       // Runtime evidence can outlive a persisted status transition. Never stop work as part of deletion.
       const router = getCoworkEngineRouter();
       if (deletedSessionIds.some(sessionId => router.isSessionActive(sessionId))) {
@@ -244,7 +248,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to delete agent',
       };
-    }
+    } finally { release?.(); }
   });
 
   ipcMain.handle(AgentIpcChannel.Presets, async () => {

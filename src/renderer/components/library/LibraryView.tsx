@@ -46,7 +46,6 @@ import type {
   LibrarySessionRef,
   LocalArtifactItem,
 } from '../../../shared/library/types';
-import { loadDetectedFileArtifact } from '../../services/artifactDetection';
 import { copyTextToClipboard } from '../../services/clipboard';
 import { i18nService } from '../../services/i18n';
 import { startLibraryBackfill } from '../../services/libraryBackfill';
@@ -54,7 +53,7 @@ import {
   PublishingSubscriptionRecoveryCoordinatorEvent,
   reconcilePublishingSubscriptionRecovery,
 } from '../../services/publishingSubscriptionRecovery';
-import type { RootState } from '../../store';
+import { type RootState, store } from '../../store';
 import {
   ArtifactPreviewActionSource,
   ArtifactPublishEntryPoint,
@@ -91,7 +90,7 @@ import {
 } from './libraryAnalytics';
 import {
   canShareLibraryArtifact,
-  createLibraryArtifactCandidate,
+  loadLibraryArtifact,
 } from './libraryArtifactCandidate';
 import LibraryCategoryDropdown from './LibraryCategoryDropdown';
 import {
@@ -1495,6 +1494,9 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
   };
 
   const shareLocalItem = async (item: LocalArtifactItem): Promise<void> => {
+    const accountGeneration = store.getState().auth.accountGeneration;
+    const isCurrent = () => mountedRef.current
+      && store.getState().auth.accountGeneration === accountGeneration;
     if (
       !canShareLibraryArtifact(item)
       || !artifactFileShare
@@ -1503,7 +1505,8 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
       return;
     }
     try {
-      const artifact = await loadDetectedFileArtifact(createLibraryArtifactCandidate(item));
+      const artifact = await loadLibraryArtifact(item, isCurrent);
+      if (!isCurrent()) return;
       if (!artifact || !isArtifactFileShareable(artifact)) {
         setError(i18nService.t('artifactShareSourceUnavailable'));
         return;
@@ -1515,6 +1518,7 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
         pageViewId: analyticsPageViewId,
       });
     } catch (shareError) {
+      if (!isCurrent()) return;
       const message = shareError instanceof Error
         ? shareError.message
         : i18nService.t('htmlShareFailed');

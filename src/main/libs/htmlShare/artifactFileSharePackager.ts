@@ -281,10 +281,15 @@ async function downloadRemoteImage(remoteUrl: string): Promise<LoadedArtifactFil
   throw new Error('Image URL redirected too many times.');
 }
 
-async function loadArtifactFile(input: ArtifactFileSharePackageInput): Promise<LoadedArtifactFile> {
+async function loadArtifactFile(
+  input: ArtifactFileSharePackageInput,
+  assertAccess?: (filePath: string) => void,
+): Promise<LoadedArtifactFile> {
   if (input.filePath) {
     const resolvedPath = path.resolve(input.filePath);
+    assertAccess?.(resolvedPath);
     const stat = await fs.promises.stat(resolvedPath);
+    assertAccess?.(resolvedPath);
     if (!stat.isFile()) {
       throw new Error('Shared artifact file does not exist.');
     }
@@ -303,8 +308,10 @@ async function loadArtifactFile(input: ArtifactFileSharePackageInput): Promise<L
         },
       );
     }
+    const bytes = await fs.promises.readFile(resolvedPath);
+    assertAccess?.(resolvedPath);
     return {
-      bytes: await fs.promises.readFile(resolvedPath),
+      bytes,
       fileName: input.fileName || path.basename(resolvedPath),
       filePath: resolvedPath,
     };
@@ -637,7 +644,11 @@ function markdownImageUrls(markdown: string): string[] {
   return Array.from(new Set(urls));
 }
 
-async function collectMarkdownLocalAssets(markdown: string, filePath?: string): Promise<{
+async function collectMarkdownLocalAssets(
+  markdown: string,
+  filePath?: string,
+  assertAccess?: (filePath: string) => void,
+): Promise<{
   assets: MarkdownAsset[];
   omittedAssets: MarkdownOmittedAsset[];
 }> {
@@ -679,7 +690,10 @@ async function collectMarkdownLocalAssets(markdown: string, filePath?: string): 
       omittedAssets.push({ originalUrl, reason: 'asset_outside_allowed_root' });
       continue;
     }
+    assertAccess?.(resolved.absolutePath);
+    assertAccess?.(realPath);
     const stat = await fs.promises.stat(realPath);
+    assertAccess?.(realPath);
     if (!stat.isFile()) {
       omittedAssets.push({ originalUrl, reason: 'asset_not_file' });
       continue;
@@ -699,6 +713,7 @@ async function collectMarkdownLocalAssets(markdown: string, filePath?: string): 
       continue;
     }
     const bytes = await fs.promises.readFile(realPath);
+    assertAccess?.(realPath);
     if (extension === 'svg') {
       assertSafeSvgClientSide(bytes);
     } else {
@@ -797,12 +812,17 @@ function matchesDocumentMagic(extension: string, bytes: Buffer): boolean {
   return false;
 }
 
-async function writeSingleFileZip(file: LoadedArtifactFile): Promise<{ archivePath: string; sourceSha256: string }> {
+async function writeSingleFileZip(
+  file: LoadedArtifactFile,
+  assertInputsAllowed: () => void,
+): Promise<{ archivePath: string; sourceSha256: string }> {
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lobster-artifact-share-'));
   try {
+    assertInputsAllowed();
     const archivePath = path.join(tempDir, 'share.zip');
     const sourcePath = path.join(tempDir, file.fileName);
     await fs.promises.writeFile(sourcePath, file.bytes);
+    assertInputsAllowed();
 
     const zipFile = new yazl.ZipFile();
     zipFile.on('error', (err) => {
@@ -813,6 +833,7 @@ async function writeSingleFileZip(file: LoadedArtifactFile): Promise<{ archivePa
     const pipelinePromise = pipeline(zipFile.outputStream, outputStream);
     zipFile.end();
     await pipelinePromise;
+    assertInputsAllowed();
 
     const stat = await fs.promises.stat(archivePath);
     const maxArchiveBytes =
@@ -830,6 +851,7 @@ async function writeSingleFileZip(file: LoadedArtifactFile): Promise<{ archivePa
       );
     }
     const archiveBytes = await fs.promises.readFile(archivePath);
+    assertInputsAllowed();
     return {
       archivePath,
       sourceSha256: crypto.createHash('sha256').update(archiveBytes).digest('hex'),
@@ -842,7 +864,11 @@ async function writeSingleFileZip(file: LoadedArtifactFile): Promise<{ archivePa
   }
 }
 
-async function writeMarkdownZip(file: LoadedArtifactFile): Promise<{
+async function writeMarkdownZip(
+  file: LoadedArtifactFile,
+  assertInputsAllowed: () => void,
+  assertAccess?: (filePath: string) => void,
+): Promise<{
   archivePath: string;
   sourceSha256: string;
   totalFiles: number;
@@ -850,7 +876,8 @@ async function writeMarkdownZip(file: LoadedArtifactFile): Promise<{
   warnings: string[];
 }> {
   const markdown = assertTextContent(file.bytes);
-  const { assets, omittedAssets } = await collectMarkdownLocalAssets(markdown, file.filePath);
+  const { assets, omittedAssets } = await collectMarkdownLocalAssets(markdown, file.filePath, assertAccess);
+  assertInputsAllowed();
   const rewrittenMarkdown = rewriteMarkdownAssetUrls(markdown, assets);
   const entryBytes = Buffer.from(rewrittenMarkdown, 'utf8');
   const uniqueAssets = Array.from(new Map(assets.map(asset => [asset.relativePath, asset])).values());
@@ -867,6 +894,7 @@ async function writeMarkdownZip(file: LoadedArtifactFile): Promise<{
 
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lobster-artifact-share-'));
   try {
+    assertInputsAllowed();
     const archivePath = path.join(tempDir, 'share.zip');
     const zipFile = new yazl.ZipFile();
     zipFile.on('error', (err) => {
@@ -884,8 +912,10 @@ async function writeMarkdownZip(file: LoadedArtifactFile): Promise<{
     const pipelinePromise = pipeline(zipFile.outputStream, outputStream);
     zipFile.end();
     await pipelinePromise;
+    assertInputsAllowed();
 
     const stat = await fs.promises.stat(archivePath);
+    assertInputsAllowed();
     if (stat.size > MAX_CLIENT_TEXT_ARCHIVE_BYTES) {
       throw createHtmlShareSizeError(
         HtmlShareFailureKind.ArchiveSizeExceeded,
@@ -913,8 +943,18 @@ async function writeMarkdownZip(file: LoadedArtifactFile): Promise<{
 
 export async function packageArtifactFile(
   input: ArtifactFileSharePackageInput,
+  assertAccess?: (filePath: string) => void,
 ): Promise<ArtifactFileSharePackageResult> {
-  const loaded = await loadArtifactFile(input);
+  const accessedPaths = new Set<string>();
+  const checkAccess = assertAccess ? (filePath: string) => {
+    assertAccess(filePath);
+    accessedPaths.add(filePath);
+  } : undefined;
+  const assertInputsAllowed = () => {
+    for (const filePath of accessedPaths) assertAccess?.(filePath);
+  };
+  const loaded = await loadArtifactFile(input, checkAccess);
+  assertInputsAllowed();
   const maxBytes =
     input.sourceType === HtmlShareSourceType.DocumentFile
       ? MAX_CLIENT_DOCUMENT_FILE_BYTES
@@ -935,7 +975,7 @@ export async function packageArtifactFile(
   }
   if (input.sourceType === HtmlShareSourceType.MarkdownFile) {
     const normalized = normalizeMarkdownFile(loaded);
-    const packaged = await writeMarkdownZip(normalized);
+    const packaged = await writeMarkdownZip(normalized, assertInputsAllowed, checkAccess);
     return {
       archivePath: packaged.archivePath,
       sourceSha256: packaged.sourceSha256,
@@ -948,7 +988,7 @@ export async function packageArtifactFile(
   }
   if (input.sourceType === HtmlShareSourceType.MermaidFile) {
     const normalized = normalizeMermaidFile(loaded);
-    const { archivePath } = await writeSingleFileZip(normalized);
+    const { archivePath } = await writeSingleFileZip(normalized, assertInputsAllowed);
     return {
       archivePath,
       sourceSha256: crypto.createHash('sha256').update(normalized.bytes).digest('hex'),
@@ -965,7 +1005,7 @@ export async function packageArtifactFile(
       : input.sourceType === HtmlShareSourceType.DocumentFile
         ? normalizeDocumentFile(loaded)
         : normalizeSvgFile(loaded);
-  const { archivePath, sourceSha256: archiveSha256 } = await writeSingleFileZip(normalized);
+  const { archivePath, sourceSha256: archiveSha256 } = await writeSingleFileZip(normalized, assertInputsAllowed);
   return {
     archivePath,
     sourceSha256: input.sourceType === HtmlShareSourceType.DocumentFile

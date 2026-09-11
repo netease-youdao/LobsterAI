@@ -172,3 +172,13 @@ test('kit links are treated as safe internal links', () => {
 test('unsafe markdown protocols are still stripped', () => {
   expect(safeUrlTransform('javascript:alert(1)')).toBe('');
 });
+
+test('library markdown images carry their account-bound file access', () => {
+  const fileAccess = { itemId: 'item-a', accountEpoch: 'epoch-a' };
+  const html = renderToStaticMarkup(React.createElement(MarkdownContent, {
+    content: '![Chart](chart.png)',
+    resolveLocalFilePath: () => '/project/chart.png',
+    fileAccess,
+  }));
+  expect(html).toContain(`localfile:///project/chart.png?access=${encodeURIComponent(JSON.stringify(fileAccess))}`);
+});

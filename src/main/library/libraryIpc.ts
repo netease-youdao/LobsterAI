@@ -33,12 +33,14 @@ import type {
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { AgentAccessError, sameAgentOwner } from '../agentOwnership';
 import { listLibraryCloudItems } from './libraryCloudClient';
+import type { LibraryFileAccessPolicy } from './libraryFileAccess';
 import { LibraryIndexService } from './libraryIndexService';
 import { decodeLibraryLocalCursor, LibraryLocalStore } from './libraryLocalStore';
 import { normalizeLibraryTaskGroupsOptions, normalizeLibraryTaskItemsOptions } from './libraryLocalTaskQuery';
 
 export interface LibraryIpcDependencies {
   getOwner: () => RemoteOwner | null;
+  fileAccess?: LibraryFileAccessPolicy;
   localStore: LibraryLocalStore;
   indexService: LibraryIndexService;
   getServerApiBaseUrl: () => string;
@@ -229,6 +231,7 @@ export const registerLibraryIpcHandlers = ({
   getServerApiBaseUrl,
   fetchWithAuth,
   getOwner = () => null,
+  fileAccess,
 }: LibraryIpcDependencies): void => {
   const captureAccess = () => {
     const owner = getOwner();
@@ -304,6 +307,15 @@ export const registerLibraryIpcHandlers = ({
         error instanceof LibraryLocalDataError ? error.code : LibraryErrorCode.InvalidInput,
         error instanceof Error ? error.message : 'Invalid library item request.',
       );
+    }
+  });
+
+  ipcMain.handle(LibraryIpc.GetLocalAccess, (_event, itemId: unknown) => {
+    try {
+      if (!fileAccess) return failure(LibraryErrorCode.NotFound, 'Library item was not found.');
+      return success(fileAccess.authorize(requireItemId(itemId)));
+    } catch {
+      return failure(LibraryErrorCode.NotFound, 'Library item was not found.');
     }
   });
 

@@ -11,7 +11,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { StarIcon as StarSolidIcon } from '@heroicons/react/24/solid';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 import {
   LibraryAvailability,
@@ -22,8 +22,8 @@ import type {
   LibraryLocalDetailData,
   LibrarySessionRef,
 } from '../../../shared/library/types';
-import { loadDetectedFileArtifact } from '../../services/artifactDetection';
 import { i18nService } from '../../services/i18n';
+import { store } from '../../store';
 import type { Artifact } from '../../types/artifact';
 import {
   ArtifactPreviewActionSource,
@@ -53,7 +53,7 @@ import ShareUploadIcon from '../icons/ShareUploadIcon';
 import Tooltip, { TooltipAlign, TooltipPosition } from '../ui/Tooltip';
 import { LIBRARY_ACTION_MENU_WIDTH_PX } from './libraryActionMenuPresentation';
 import { LibraryAnalyticsSurface } from './libraryAnalytics';
-import { createLibraryArtifactCandidate } from './libraryArtifactCandidate';
+import { loadLibraryArtifact } from './libraryArtifactCandidate';
 import {
   getLibraryPreviewActionIds,
   LibraryItemAction,
@@ -183,31 +183,37 @@ const LibraryPreviewModalContent: React.FC<LibraryPreviewModalProps> = ({
   onShowSites,
 }) => {
   const artifactFileShare = useOptionalArtifactFileShare();
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   const [artifact, setArtifact] = useState<Artifact | null>(null);
   const [loading, setLoading] = useState(false);
   const [activePopover, setActivePopover] = useState<HeaderPopover>();
   const [isSessionsExpanded, setIsSessionsExpanded] = useState(false);
   const localItem = item.itemKind === LibraryItemKind.LocalArtifact ? item : undefined;
 
-  const candidate = useMemo<Artifact | null>(() => (
-    localItem ? createLibraryArtifactCandidate(localItem) : null
-  ), [localItem]);
-
   useEffect(() => {
     let active = true;
+    const accountGeneration = store.getState().auth.accountGeneration;
+    const isCurrent = () => active
+      && store.getState().auth.accountGeneration === accountGeneration;
     setArtifact(null);
-    if (!candidate || localItem?.availability !== LibraryAvailability.Available) {
+    if (!localItem || localItem.availability !== LibraryAvailability.Available) {
       setLoading(false);
       return () => { active = false; };
     }
     setLoading(true);
-    void loadDetectedFileArtifact(candidate).then(loaded => {
-      if (!active) return;
-      setArtifact(loaded);
-      setLoading(false);
+    void loadLibraryArtifact(localItem, isCurrent).then(loaded => {
+      if (isCurrent()) setArtifact(loaded);
+    }).catch(() => {
+      if (isCurrent()) setArtifact(null);
+    }).finally(() => {
+      if (isCurrent()) setLoading(false);
     });
     return () => { active = false; };
-  }, [candidate, localItem?.availability]);
+  }, [localItem]);
 
   useEffect(() => {
     if (!activePopover) return undefined;
@@ -242,14 +248,27 @@ const LibraryPreviewModalContent: React.FC<LibraryPreviewModalProps> = ({
     && isArtifactFileShareable(artifact),
   );
 
-  const handleShare = (): void => {
-    if (!artifact || !artifactFileShare || !canShare) return;
-    void artifactFileShare.openShare(artifact, {
-      source: ArtifactPreviewActionSource.LibraryPreview,
-      entryPoint: ArtifactPublishEntryPoint.LibraryToolbar,
-      surface: LibraryAnalyticsSurface.MyFiles,
-      pageViewId: analyticsPageViewId,
-    });
+  const handleShare = async (): Promise<void> => {
+    if (!localItem || !artifactFileShare || !canShare) return;
+    const accountGeneration = store.getState().auth.accountGeneration;
+    const isCurrent = () => mountedRef.current
+      && store.getState().auth.accountGeneration === accountGeneration;
+    try {
+      const authorizedArtifact = await loadLibraryArtifact(localItem, isCurrent);
+      if (!isCurrent()) return;
+      if (!authorizedArtifact) {
+        setArtifact(null);
+        return;
+      }
+      await artifactFileShare.openShare(authorizedArtifact, {
+        source: ArtifactPreviewActionSource.LibraryPreview,
+        entryPoint: ArtifactPublishEntryPoint.LibraryToolbar,
+        surface: LibraryAnalyticsSurface.MyFiles,
+        pageViewId: analyticsPageViewId,
+      });
+    } catch {
+      if (isCurrent()) setArtifact(null);
+    }
   };
 
   const runAction = (action: LibraryItemActionValue): void => {

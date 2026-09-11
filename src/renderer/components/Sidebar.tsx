@@ -31,6 +31,7 @@ import {
 import CoworkSearchModal from './cowork/CoworkSearchModal';
 import Cog6ToothIcon from './icons/Cog6ToothIcon';
 import ComposeIcon from './icons/ComposeIcon';
+import RemoteControlIcon from './icons/RemoteControlIcon';
 import SidebarAutomationIcon from './icons/SidebarAutomationIcon';
 import SidebarKitsIcon from './icons/SidebarKitsIcon';
 import SidebarLibraryIcon from './icons/SidebarLibraryIcon';
@@ -38,11 +39,18 @@ import SidebarToggleIcon from './icons/SidebarToggleIcon';
 import SkillIcon from './icons/SkillIcon';
 import TrashIcon from './icons/TrashIcon';
 import LoginButton from './LoginButton';
+import { RemoteControlPopover } from './remote/RemoteControlPopover';
+import type { SettingsOpenOptions } from './Settings';
 import SidebarExperienceSlot from './SidebarExperienceSlot';
 
 interface SidebarProps {
-  onShowSettings: () => void;
-  onShowLogin?: () => void;
+  onShowSettings: (options?: SettingsOpenOptions) => void;
+  hideDeviceManagement?: boolean;
+  onShowLogin: () => void;
+  remoteControlOpen: boolean;
+  onRemoteControlOpenChange: (open: boolean) => void;
+  remoteControlBlocked?: boolean;
+  onBatchModeChange?: (active: boolean) => void;
   activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'kits' | 'mcp' | 'library';
   onShowSkills: () => void;
   onShowCowork: () => void;
@@ -240,6 +248,12 @@ const logTaskSearchRequest = (
 
 const Sidebar: React.FC<SidebarProps> = ({
   onShowSettings,
+  hideDeviceManagement = false,
+  onShowLogin,
+  remoteControlOpen,
+  onRemoteControlOpenChange,
+  remoteControlBlocked = false,
+  onBatchModeChange,
   activeView,
   onShowSkills,
   onShowCowork,
@@ -259,6 +273,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   hideLogin,
   isEngineStartupOverlayVisible = false,
 }) => {
+  const remoteControlButton = useRef<HTMLButtonElement>(null);
+  const closeRemoteControl = useCallback(() => onRemoteControlOpenChange(false), [onRemoteControlOpenChange]);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const agents = useSelector((state: RootState) => state.agent.agents);
   const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
@@ -267,6 +283,12 @@ const Sidebar: React.FC<SidebarProps> = ({
   const currentSessionId = useSelector(selectCurrentSessionId);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isBatchMode, setIsBatchMode] = useState(false);
+  useEffect(() => { onBatchModeChange?.(isBatchMode); }, [isBatchMode, onBatchModeChange]);
+  const canShowRemoteControl = !isCollapsed && !isBatchMode && !remoteControlBlocked;
+  useEffect(() => {
+    if (!canShowRemoteControl && remoteControlOpen) closeRemoteControl();
+  }, [canShowRemoteControl, remoteControlOpen, closeRemoteControl]);
+
   const [batchAgentId, setBatchAgentId] = useState<string | null>(null);
   const [batchSelectableItems, setBatchSelectableItems] = useState<AgentSidebarBatchItem[]>([]);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
@@ -953,15 +975,30 @@ const Sidebar: React.FC<SidebarProps> = ({
                   </div>
                 )}
                 <LoginButton
+                  onActivate={closeRemoteControl}
+                  onOpenDeviceManagement={hideDeviceManagement ? undefined : () => { closeRemoteControl(); onShowSettings({ initialTab: 'remoteDevices' }); }}
+                  dismissMenu={remoteControlOpen}
                   contentLeftOffset={isCollapsed ? 0 : sidebarWidth}
                   loggedOutVariant="sidebarPromo"
                 />
               </div>
             )}
-            <div className="ml-auto flex shrink-0 items-center justify-end">
+            <div className="ml-auto flex shrink-0 items-center justify-end gap-1">
               <button
                 type="button"
-                onClick={() => onShowSettings()}
+                ref={remoteControlButton}
+                onClick={() => onRemoteControlOpenChange(!remoteControlOpen)}
+                className={`${sidebarBottomIconButtonClassName} !h-8 !w-8 ${remoteControlOpen ? 'bg-primary-muted text-primary' : ''}`}
+                title={i18nService.t('remoteTitle')}
+                aria-label={i18nService.t('remoteTitle')}
+                aria-haspopup="dialog"
+                aria-expanded={remoteControlOpen && canShowRemoteControl}
+              >
+                <RemoteControlIcon className="h-[18px] w-[18px]" />
+              </button>
+              <button
+                type="button"
+                onClick={() => { closeRemoteControl(); onShowSettings(); }}
                 className={sidebarBottomIconButtonClassName}
                 aria-label={i18nService.t('settings')}
               >
@@ -970,6 +1007,10 @@ const Sidebar: React.FC<SidebarProps> = ({
             </div>
           </div>
         </div>
+      )}
+      {remoteControlOpen && canShowRemoteControl && (
+        <RemoteControlPopover anchorRef={remoteControlButton} onClose={closeRemoteControl}
+          onLogin={onShowLogin} loginAllowed={!hideLogin} />
       )}
       {/* Batch Delete Confirmation Modal */}
       {showBatchDeleteConfirm && (

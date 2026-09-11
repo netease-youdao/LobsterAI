@@ -1,5 +1,5 @@
 import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
-import React, { useCallback, useEffect, useMemo,useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo,useRef, useState } from 'react';
 import { useDispatch,useSelector } from 'react-redux';
 
 import {
@@ -39,6 +39,7 @@ import NewUserOnboardingOverlay, {
   NewUserOnboardingStep,
   type NewUserOnboardingStep as NewUserOnboardingStepType,
 } from './components/NewUserOnboardingOverlay';
+import OwnershipHost from './components/ownership/OwnershipHost';
 import { ScheduledTasksView } from './components/scheduledTasks';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
 import Sidebar from './components/Sidebar';
@@ -77,6 +78,7 @@ import {
 } from './services/latestAsyncRequest';
 import { LogReporterAction, reportYdAnalyzer } from './services/logReporter';
 import { getOnboardingErrorCode, reportOnboardingAction } from './services/onboardingAnalytics';
+import { remoteSettingsService } from './services/remoteSettings';
 import { scheduledTaskService } from './services/scheduledTask';
 import { isTextEditingSafeShortcut, matchesShortcut } from './services/shortcuts';
 import { themeService } from './services/theme';
@@ -217,7 +219,9 @@ const logAppUpdateRendererLifecycle = (
 
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
-  const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions & { requestId: number }>({ requestId: 0 });
+  const [settingsOptions, setSettingsOptions] = useState<Omit<SettingsOpenOptions, 'initialTab'> & { initialTab?: Exclude<SettingsOpenOptions['initialTab'], 'remoteControl'>; requestId: number }>({ requestId: 0 });
+  const [remoteControlGeneration, setRemoteControlGeneration] = useState<number | null>(null);
+  const [pendingRemoteControlGeneration, setPendingRemoteControlGeneration] = useState<number | null>(null);
   const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'kits' | 'mcp' | 'library'>('cowork');
   const [libraryNavigationRequest, setLibraryNavigationRequest] = useState<{
     source: LibrarySourceFilter;
@@ -231,6 +235,7 @@ const App: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<ToastEventDetail | null>(null);
   const [, forceLanguageRefresh] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarBatchMode, setIsSidebarBatchMode] = useState(false);
   const [isTaskFilterActive, setIsTaskFilterActive] = useState(false);
   const [hasUnreadCompletedTasks, setHasUnreadCompletedTasks] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(244);
@@ -689,6 +694,17 @@ const App: React.FC = () => {
     });
   }, [accountGeneration]);
 
+  useLayoutEffect(() => {
+    remoteSettingsService.invalidate();
+    setRemoteControlGeneration(null);
+    setPendingRemoteControlGeneration(null);
+    setIsSidebarBatchMode(false);
+  }, [accountGeneration]);
+
+  const handleRemoteControlOpenChange = useCallback((open: boolean) => {
+    setRemoteControlGeneration(open ? accountGeneration : null);
+  }, [accountGeneration]);
+
   // Listen for Copilot token auto-refresh events from the main process
   useEffect(() => {
     const removeListener = window.electron.githubCopilot.onTokenUpdated(({ token, baseUrl }) => {
@@ -743,15 +759,23 @@ const App: React.FC = () => {
   }, [isInitialized, defaultSelectedModel?.id, defaultSelectedModel?.providerKey]);
 
   const handleShowSettings = useCallback((options?: SettingsOpenOptions) => {
+    const initialTab = options?.initialTab;
+    if (initialTab === 'remoteControl') {
+      // Keep any open Settings draft intact; the request runs after it closes.
+      setPendingRemoteControlGeneration(accountGeneration);
+      return;
+    }
+    setRemoteControlGeneration(null);
+    setPendingRemoteControlGeneration(null);
     setSettingsOptions((current) => ({
-      initialTab: options?.initialTab,
+      initialTab,
       notice: options?.notice,
       noticeI18nKey: options?.noticeI18nKey,
       noticeExtra: options?.noticeExtra,
       requestId: current.requestId + 1,
     }));
     setShowSettings(true);
-  }, []);
+  }, [accountGeneration]);
 
   const handleShowSkills = useCallback(() => {
     setMainView('skills');
@@ -1013,8 +1037,19 @@ const App: React.FC = () => {
   }, [showToast, stopUserInitiatedUpdateFlow]);
 
   const handleShowLogin = useCallback(() => {
-    showToast(i18nService.t('featureInDevelopment'));
-  }, [showToast]);
+    setRemoteControlGeneration(null);
+    if (enterpriseConfig?.ui?.login === 'hide') {
+      showToast(i18nService.t('remoteLoginUnavailable'));
+      return;
+    }
+    const generation = store.getState().auth.accountGeneration;
+    const reportLoginFailure = () => {
+      if (store.getState().auth.accountGeneration === generation) showToast(i18nService.t('remoteLoginFailed'));
+    };
+    void authService.login().then(result => {
+      if (!result.success) reportLoginFailure();
+    }).catch(reportLoginFailure);
+  }, [enterpriseConfig, showToast]);
 
   const runUpdateCheck = useCallback(async (): Promise<boolean> => {
     try {
@@ -1965,6 +2000,15 @@ const App: React.FC = () => {
     || isPermissionModalOpen
     || isUpdateInteractionBlocked
     || shouldShowNewUserOnboarding;
+  useEffect(() => {
+    if (pendingRemoteControlGeneration === null || isOverlayActive || isEngineStartupOverlayVisible || isSidebarBatchMode || !isInitialized) return;
+    if (pendingRemoteControlGeneration === accountGeneration) {
+      setIsSidebarCollapsed(false);
+      setRemoteControlGeneration(accountGeneration);
+    }
+    setPendingRemoteControlGeneration(null);
+  }, [pendingRemoteControlGeneration, accountGeneration, isOverlayActive, isEngineStartupOverlayVisible, isSidebarBatchMode, isInitialized]);
+
   // Downloads stay silent: the badge and sidebar card only appear once the
   // installer is ready or the update needs the user's attention.
   const shouldShowUpdateNotice = shouldShowAppUpdateNotice(appUpdateState);
@@ -2057,6 +2101,7 @@ const App: React.FC = () => {
             <SkinProvider>
               <Settings
                 onClose={handleCloseSettings}
+                onShowLogin={handleShowLogin}
                 initialTab={settingsOptions.initialTab}
                 initialTabRequestId={settingsOptions.requestId}
                 notice={settingsOptions.notice}
@@ -2085,6 +2130,7 @@ const App: React.FC = () => {
           onClose={() => setToastMessage(null)}
         />
       )}
+      <OwnershipHost />
       <StartupCreditCampaign
         enabled={privacyAgreed === true && !isEnterpriseAccount}
       />
@@ -2097,6 +2143,11 @@ const App: React.FC = () => {
           key={accountGeneration}
           onShowLogin={handleShowLogin}
           onShowSettings={handleShowSettings}
+          hideDeviceManagement={enterpriseConfig?.ui?.['settings.remoteDevices'] === 'hide'}
+          remoteControlOpen={remoteControlGeneration === accountGeneration}
+          onRemoteControlOpenChange={handleRemoteControlOpenChange}
+          remoteControlBlocked={isOverlayActive || isEngineStartupOverlayVisible}
+          onBatchModeChange={setIsSidebarBatchMode}
           activeView={mainView}
           onShowSkills={handleShowSkills}
           onShowCowork={handleShowCowork}
@@ -2207,6 +2258,7 @@ const App: React.FC = () => {
       {showSettings && (
         <Settings
           onClose={handleCloseSettings}
+          onShowLogin={handleShowLogin}
           onStartAiSkin={handleStartAiSkinFromSettings}
           initialTab={settingsOptions.initialTab}
           initialTabRequestId={settingsOptions.requestId}

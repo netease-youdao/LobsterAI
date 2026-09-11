@@ -1,4 +1,4 @@
-import { type RemoteConfigureRequest, RemoteConnectionReason, RemoteConnectionStatus, type RemoteSettingsApi, type RemoteSettingsState } from '../../../shared/remote/constants';
+import { type RemoteConfigureRequest, RemoteConnectionReason, RemoteConnectionStatus, type RemoteSettingsState } from '../../../shared/remote/constants';
 
 export function remoteOwnerKey(state: RemoteSettingsState | null): string {
   return state?.owner ? JSON.stringify([state.owner.userId, state.owner.scopeKey]) : '';
@@ -63,46 +63,18 @@ export function remoteConnectionFailure(state: RemoteSettingsState | null): stri
 }
 
 export type RemoteSettingsChanges = Pick<RemoteConfigureRequest, 'enabled' | 'keepAwakeEnabled' | 'name'>;
-export interface RemoteSettingsDraft { ownerKey: string; changes: RemoteSettingsChanges }
 export type RemoteSettingsSwitch = keyof Pick<RemoteSettingsChanges, 'enabled' | 'keepAwakeEnabled'>;
 
-export function remoteSettingsSwitchChecked(state: RemoteSettingsState | null, draft: RemoteSettingsDraft | null, setting: RemoteSettingsSwitch): boolean {
+export function remoteSettingsSwitchChecked(state: RemoteSettingsState | null, setting: RemoteSettingsSwitch): boolean {
   if (!state?.owner) return false;
-  const changes = draft?.ownerKey === remoteOwnerKey(state) ? draft.changes : {};
-  return changes[setting] ?? state[setting] ?? true;
+  return state[setting] ?? true;
 }
 
 /** Opening the login browser is not authentication; only a later state event can enable a switch. */
-export function toggleRemoteSettingsSwitch(state: RemoteSettingsState | null, draft: RemoteSettingsDraft | null, setting: RemoteSettingsSwitch,
+export function toggleRemoteSettingsSwitch(state: RemoteSettingsState | null, setting: RemoteSettingsSwitch,
   onLogin: () => void, onEdit: (changes: RemoteSettingsChanges) => void): void {
   if (!state) return;
-  const checked = remoteSettingsSwitchChecked(state, draft, setting);
+  const checked = remoteSettingsSwitchChecked(state, setting);
   if (needsRemoteSignIn(state) && !checked) { onLogin(); return; }
   onEdit({ [setting]: !checked });
-}
-
-/** Only local form state is changed. Reconnect and login are separate immediate actions. */
-export function editRemoteSettingsDraft(draft: RemoteSettingsDraft | null, state: RemoteSettingsState, changes: RemoteSettingsChanges): RemoteSettingsDraft | null {
-  const ownerKey = remoteOwnerKey(state);
-  const merged = { ...(draft?.ownerKey === ownerKey ? draft.changes : {}), ...changes };
-  if (merged.enabled === state.enabled) delete merged.enabled;
-  if (merged.name === state.name) delete merged.name;
-  if (merged.keepAwakeEnabled === (state.keepAwakeEnabled ?? true) && !state.keepAwakeError) delete merged.keepAwakeEnabled;
-  return Object.keys(merged).length ? { ownerKey, changes: merged } : null;
-}
-
-export function reconcileRemoteSettingsDraft(draft: RemoteSettingsDraft | null, state: RemoteSettingsState): RemoteSettingsDraft | null {
-  if (!draft || draft.ownerKey !== remoteOwnerKey(state)) return null;
-  return draft;
-}
-
-export async function saveRemoteSettingsDraft(draft: RemoteSettingsDraft | null, api: Pick<RemoteSettingsApi, 'state' | 'configure'>): Promise<void> {
-  if (!draft) return;
-  let current: RemoteSettingsState;
-  try { current = await api.state(); } catch { throw new Error('remoteSaveFailed'); }
-  if (draft.ownerKey !== remoteOwnerKey(current)) throw new Error('remoteAccountChanged');
-  let result: RemoteSettingsState;
-  try { result = await api.configure(draft.changes); } catch { throw new Error('remoteSaveFailed'); }
-  if (draft.ownerKey !== remoteOwnerKey(result)) throw new Error('remoteAccountChanged');
-  if (draft.changes.keepAwakeEnabled !== undefined && result.keepAwakeError) throw new Error('remoteKeepAwakeFailed');
 }

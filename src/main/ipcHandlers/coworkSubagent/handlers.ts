@@ -27,6 +27,7 @@ export interface CoworkSubagentHandlerDeps {
   assertSessionAccess: (sessionId: string) => void;
   assertAgentAccess: (agentId: string) => void;
   assertRunAccess: (parentSessionId: string, runId: string, sessionKey?: string) => void;
+  beginDeleteOperation?: (parentSessionId: string, runId: string) => () => void;
   getOpenClawRuntimeAdapter: () => CoworkSubagentRuntimeAdapter | null;
   getCoworkEngineRouter: () => CoworkSubagentEngineRouter;
 }
@@ -102,6 +103,7 @@ export function registerCoworkSubagentHandlers(deps: CoworkSubagentHandlerDeps):
   ipcMain.handle(
     CoworkIpcChannel.SubagentDelete,
     async (_event, options: { parentSessionId: string; runId: string }) => {
+      let release: (() => void) | undefined;
       const adapter = getOpenClawRuntimeAdapter();
       if (!adapter) {
         return { success: false, error: 'Runtime adapter not available' };
@@ -109,6 +111,7 @@ export function registerCoworkSubagentHandlers(deps: CoworkSubagentHandlerDeps):
       try {
         deps.assertSessionAccess(options.parentSessionId);
         deps.assertRunAccess(options.parentSessionId, options.runId);
+        release = deps.beginDeleteOperation?.(options.parentSessionId, options.runId);
         const deleted = await getCoworkEngineRouter().deleteSubagentSession(
           options.parentSessionId,
           options.runId,
@@ -119,7 +122,7 @@ export function registerCoworkSubagentHandlers(deps: CoworkSubagentHandlerDeps):
           success: false,
           error: error instanceof Error ? error.message : 'Failed to delete subagent session',
         };
-      }
+      } finally { release?.(); }
     },
   );
 }

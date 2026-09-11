@@ -170,6 +170,7 @@ export const LibraryIpc = {
   ListCloud: 'library:listCloud',
   GetLocalItems: 'library:getLocalItems',
   GetLocalDetail: 'library:getLocalDetail',
+  GetLocalAccess: 'library:getLocalAccess',
   RecordCandidates: 'library:recordCandidates',
   AddLocalFiles: 'library:addLocalFiles',
   SetFavorite: 'library:setFavorite',

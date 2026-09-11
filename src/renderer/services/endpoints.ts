@@ -23,6 +23,24 @@ export const getFallbackDownloadUrl = () => isTestModeEnabled()
   ? 'https://lobsterai.inner.youdao.com/#/download-list'
   : 'https://lobsterai.youdao.com/#/download-list';
 
+export const MobileAppEntryKind = {
+  OfficialSite: 'official_site',
+  AppDownload: 'app_download',
+} as const;
+
+export interface MobileAppEntry {
+  kind: typeof MobileAppEntryKind[keyof typeof MobileAppEntryKind];
+  url: string;
+}
+
+// Public mobile entry stays independent of the desktop API/test environment.
+const MOBILE_APP_ENTRY: Readonly<MobileAppEntry> = {
+  kind: MobileAppEntryKind.OfficialSite,
+  url: 'https://lobsterai.youdao.com/',
+};
+
+export const getMobileAppEntry = (): Readonly<MobileAppEntry> => MOBILE_APP_ENTRY;
+
 // Skill 商店
 export const getSkillStoreUrl = () => isTestModeEnabled()
   ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/skill-store'
