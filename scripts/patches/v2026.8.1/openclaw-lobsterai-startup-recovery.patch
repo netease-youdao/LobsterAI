@@ -1,0 +1,232 @@
+OpenClaw v2026.8.1: require explicit restart markers for LobsterAI desktop sessions.
+
+Base: ea806575e6450e4d1efdfc72c19f04be982a1b9b.
+
+The new startup orphan scan treats every persisted running root session without
+an active owner as interrupted. LobsterAI desktop sessions can retain that status
+long after a task ended, so upgrading can revive historical tasks and tools.
+
+Skip NEW orphan marks for the LobsterAI desktop namespace (agent:<id>:lobsterai:*
+and legacy lobsterai:*). Reuse the runtime session-key parser, preserve terminal
+residue retirement, and leave explicit shutdown marking and recovery dispatch
+unchanged. Both early gateway startup and the scheduled recovery scan use this
+same marking function. IM, cron, subagent, and ACP policies remain upstream-owned.
+
+This is intentionally narrower than rolling back all restart recovery to v2026.6.1.
+An unmarked hard crash is not inferred from desktop running state; existing
+abortedLastRun markers, including ones previously written by the faulty scan,
+are not cleaned up. No age threshold, config setting, or UI state change is added.
+
+Regression proof (from the OpenClaw source checkout):
+  node scripts/run-vitest.mjs src/agents/main-session-recovery/main-session-restart-recovery.test.ts -t "LobsterAI startup recovery" --reporter=dot
+The tests exercise the real SQLite marking/recovery boundary and mock only the
+agent dispatch. Closing fixture databases before removal also permits Windows runs.
+
+Retire this product patch when upstream provides an equivalent recovery boundary
+or LobsterAI desktop state has a reliable interruption provenance contract.
+
+diff --git a/src/agents/main-session-recovery/main-session-restart-recovery-marking.ts b/src/agents/main-session-recovery/main-session-restart-recovery-marking.ts
+index 32b34f423bc..ea2fef8c02e 100644
+--- a/src/agents/main-session-recovery/main-session-restart-recovery-marking.ts
++++ b/src/agents/main-session-recovery/main-session-restart-recovery-marking.ts
+@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
+ import type { RestartRecoveryCandidate } from "../../gateway/chat-abort.js";
+ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+ import { listAgentRunsForSession } from "../../infra/agent-run-registry.js";
++import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+ import {
+   collectActiveSessionWorkAdmissions,
+   isSessionWorkAdmissionTargetActive,
+@@ -32,6 +33,8 @@ import {
+   resolveRestartRecoveryStorePaths,
+ } from "./main-session-restart-recovery-shared.js";
+
++const LOBSTERAI_SESSION_PREFIX = "lobsterai:";
++
+ async function markRecoveryStore(params: {
+   storePath: string;
+   statuses?: Array<NonNullable<SessionEntry["status"]>>;
+@@ -249,9 +252,20 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
+         ) {
+           return undefined;
+         }
+-        return isMainRestartRecoveryAggregateTerminalOnly(entry)
+-          ? { action: "retire_terminal" }
+-          : { action: "mark" };
++        if (isMainRestartRecoveryAggregateTerminalOnly(entry)) {
++          return { action: "retire_terminal" };
++        }
++        // LobsterAI desktop rows may retain historical running state. Only an explicit
++        // restart interruption marker may authorize their recovery; the shutdown marker
++        // and recovery of already-marked rows remain unchanged.
++        const sessionNamespace = parseAgentSessionKey(sessionKey)?.rest ?? sessionKey.trim();
++        if (
++          sessionNamespace.startsWith(LOBSTERAI_SESSION_PREFIX) &&
++          sessionNamespace.slice(LOBSTERAI_SESSION_PREFIX.length).trim()
++        ) {
++          return undefined;
++        }
++        return { action: "mark" };
+       },
+     });
+     result.marked += storeResult.marked;
+diff --git a/src/agents/main-session-recovery/main-session-restart-recovery.test.ts b/src/agents/main-session-recovery/main-session-restart-recovery.test.ts
+index fa067c96a40..0f5a7bce96c 100644
+--- a/src/agents/main-session-recovery/main-session-restart-recovery.test.ts
++++ b/src/agents/main-session-recovery/main-session-restart-recovery.test.ts
+@@ -207,6 +207,8 @@ beforeEach(async () => {
+
+ afterEach(async () => {
+   resetGatewayWorkAdmission();
++  closeOpenClawAgentDatabasesForTest();
++  closeOpenClawStateDatabaseForTest();
+   await fs.rm(tmpDir, { recursive: true, force: true });
+ });
+
+@@ -2967,6 +2969,146 @@ describe("main-session-restart-recovery", () => {
+     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
+   });
+
++  describe("LobsterAI startup recovery", () => {
++    const managedSessions = [
++      { agentId: "main", sessionKey: "agent:main:lobsterai:desktop" },
++      { agentId: "writer", sessionKey: "agent:writer:lobsterai:desktop" },
++      { agentId: "main", sessionKey: "lobsterai:legacy" },
++      { agentId: "main", sessionKey: "agent:main:lobsterai:desktop:fork" },
++    ];
++
++    it.each(
++      managedSessions.flatMap((session) => [
++        { ...session, age: "historical", ageMs: 100 * 24 * 60 * 60 * 1_000 },
++        { ...session, age: "recent", ageMs: 10_000 },
++      ]),
++    )(
++      "does not revive unmarked $age running session $sessionKey",
++      async ({ agentId, sessionKey, ageMs }) => {
++        const sessionsDir = await makeSessionsDir(agentId);
++        const storePath = path.join(sessionsDir, "sessions.json");
++        const cutoff = Date.now();
++        await writeStore(sessionsDir, {
++          [sessionKey]: runningSessionEntry("desktop-session", { updatedAt: cutoff - ageMs }),
++        });
++        await writeTranscript(sessionsDir, "desktop-session", [
++          makeUserMessage("continue the old task"),
++          makeToolResultMessage(),
++        ]);
++        const before = readStore(storePath);
++
++        await expect(
++          markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir, updatedBeforeMs: cutoff }),
++        ).resolves.toEqual({ marked: 0, skipped: 0 });
++        await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 0 });
++
++        expect(callGateway).not.toHaveBeenCalled();
++        expect(readStore(storePath)).toEqual(before);
++      },
++    );
++
++    it.each(managedSessions)(
++      "preserves explicit recovery of $sessionKey across consecutive gateway restarts",
++      async ({ agentId, sessionKey }) => {
++        const sessionsDir = await makeSessionsDir(agentId);
++        const storePath = path.join(sessionsDir, "sessions.json");
++        // SQLite canonicalizes legacy desktop keys when persisting the session.
++        const storedSessionKey = sessionKey.startsWith("agent:")
++          ? sessionKey
++          : `agent:${agentId}:${sessionKey}`;
++        await writeStore(sessionsDir, {
++          [sessionKey]: runningSessionEntry("desktop-session", { updatedAt: 100 }),
++        });
++        await writeTranscript(sessionsDir, "desktop-session", [
++          makeUserMessage("finish the interrupted task"),
++          { role: "assistant", content: [{ type: "toolCall", id: "exec-1", name: "exec" }] },
++        ]);
++        let activeRun = activeRestartRun(storedSessionKey, "desktop-session");
++
++        for (let restart = 0; restart < 2; restart++) {
++          await expect(
++            markRestartAbortedMainSessions({ stateDir: tmpDir, activeRuns: [activeRun] }),
++          ).resolves.toEqual({ marked: 1, skipped: 0 });
++          const interrupted = readStore(storePath)[storedSessionKey];
++          expect(interrupted?.abortedLastRun).toBe(true);
++          expect(interrupted?.restartRecoveryRuns).toContainEqual({
++            runId: activeRun.runId,
++            lifecycleGeneration: activeRun.lifecycleGeneration,
++          });
++
++          rotateAgentEventLifecycleGeneration();
++          await expect(
++            markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir }),
++          ).resolves.toEqual({ marked: 0, skipped: 0 });
++          expect(readStore(storePath)[storedSessionKey]).toEqual(interrupted);
++          await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
++
++          expect(callGateway).toHaveBeenCalledTimes(restart + 1);
++          const request = vi.mocked(callGateway).mock.calls[restart]?.[0];
++          expect(request).toMatchObject({
++            method: "agent",
++            params: { sessionKey: storedSessionKey, forceRestartSafeTools: true },
++          });
++          const resumed = readStore(storePath)[storedSessionKey];
++          expect(resumed).toMatchObject({ abortedLastRun: false, status: "running" });
++          expect(resumed?.lifecycleRunId).toEqual(expect.any(String));
++          expect(resumed?.lifecycleRunId).toBe(
++            expectRecord(request?.params, "recovery dispatch params").idempotencyKey,
++          );
++          expect(resumed?.restartRecoveryRuns).toContainEqual({
++            runId: resumed?.lifecycleRunId,
++            lifecycleGeneration: getAgentEventLifecycleGeneration(),
++          });
++          activeRun = activeRestartRun(storedSessionKey, "desktop-session", {
++            runId: resumed?.lifecycleRunId,
++          });
++        }
++      },
++    );
++
++    it("retires terminal-only managed recovery residue before skipping new orphan marks", async () => {
++      const sessionsDir = await makeSessionsDir();
++      const sessionKey = "agent:main:lobsterai:desktop";
++      await writeStore(sessionsDir, {
++        [sessionKey]: runningSessionEntry("desktop-session", {
++          abortedLastRun: false,
++          mainRestartRecovery: { cycleId: "settled-cycle", revision: 1, chargedAttempts: 0 },
++          restartRecoveryRuns: [{ runId: "settled-run", lifecycleGeneration: "prior-process" }],
++          restartRecoveryTerminalRunIds: ["settled-run"],
++        }),
++      });
++
++      await expect(
++        markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir }),
++      ).resolves.toEqual({ marked: 0, skipped: 1 });
++      const entry = readStore(path.join(sessionsDir, "sessions.json"))[sessionKey];
++      expect(entry?.abortedLastRun).toBe(false);
++      expect(entry?.mainRestartRecovery).toBeUndefined();
++      expect(entry?.restartRecoveryRuns).toBeUndefined();
++      await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 0 });
++      expect(callGateway).not.toHaveBeenCalled();
++    });
++
++    it.each(["agent:main:telegram:direct:lobsterai:peer", "agent:main:lobsterai-other:desktop"])(
++      "keeps upstream orphan recovery for unrelated namespace %s",
++      async (sessionKey) => {
++        const sessionsDir = await makeSessionsDir();
++        await writeStore(sessionsDir, { [sessionKey]: runningSessionEntry("other-session") });
++        await writeTranscript(sessionsDir, "other-session", [
++          makeUserMessage(),
++          makeToolResultMessage(),
++        ]);
++
++        await expect(
++          markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir }),
++        ).resolves.toEqual({ marked: 1, skipped: 0 });
++        await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
++        expect(callGateway).toHaveBeenCalledOnce();
++        expect(gatewayParams().sessionKey).toBe(sessionKey);
++      },
++    );
++  });
++
+   it("marks startup-orphaned running main sessions before recovery", async () => {
+     const sessionsDir = await makeSessionsDir();
+     const cutoff = Date.now();
