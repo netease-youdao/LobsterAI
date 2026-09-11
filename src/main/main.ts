@@ -568,6 +568,7 @@ import {
   saveOpenClawSessionPolicyConfig,
 } from './openclawSessionPolicy/store';
 import { registerVoiceInputPermissionHandler } from './permissions/voiceInputPermission';
+import { patchEnabledNspClawguard } from './plugins/nspClawguardCompatibility';
 import { isHiddenUserPluginId } from './plugins/pluginManager';
 import { SkillManager } from './skills/skillManager';
 import { getSkillServiceManager } from './skills/skillServices';
@@ -2857,6 +2858,12 @@ const _syncOpenClawConfigImpl = async (
 
   const configSync = getOpenClawConfigSync();
   const manager = getOpenClawEngineManager();
+  // CLI migrations can load user plugins too, so patch before invoking them.
+  const nspClawguardPatched = patchEnabledNspClawguard({
+    plugins: getCoworkStore().listUserPlugins(),
+    userDataDir: app.getPath('userData'),
+    stateDir: manager.getStateDir(),
+  });
   const migrationSecretEnvVars = {
     ...manager.getSecretEnvVars(),
     ...configSync.collectSecretEnvVars(),
@@ -2973,6 +2980,7 @@ const _syncOpenClawConfigImpl = async (
     effectiveConfigChanged
     && options.expectedImpact === OpenClawConfigImpact.Restart;
   const syncRestartImpact =
+    nspClawguardPatched ||
     syncResult.restartImpact === OpenClawConfigImpact.Restart;
   const imRestartSatisfied = imConfigRestartTracker.isRestartSatisfied(
     options.imConfigRestartFingerprint,
@@ -3067,7 +3075,7 @@ const _syncOpenClawConfigImpl = async (
     // Killing the gateway mid self-restart poisons its single-instance lock
     // (empty lock file → 30s of "gateway already running; lock timeout").
     // Park the demand; the gateway-ready callback re-evaluates it.
-    const requiresRespawn = !selfRestartSatisfiesSync(options, secretEnvVarsChanged);
+    const requiresRespawn = nspClawguardPatched || !selfRestartSatisfiesSync(options, secretEnvVarsChanged);
     pendingSelfRestartReevaluation = {
       reasons: [...(pendingSelfRestartReevaluation?.reasons ?? []), options.reason],
       requiresRespawn: (pendingSelfRestartReevaluation?.requiresRespawn ?? false) || requiresRespawn,
