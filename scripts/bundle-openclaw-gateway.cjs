@@ -17,6 +17,11 @@ const fs = require('fs');
 const path = require('path');
 
 const { ensureOpenClawBundleAssets } = require('./openclaw-bundle-assets.cjs');
+const {
+  createBundleBuildKey,
+  isBundleCacheCurrent,
+  writeBundleCache,
+} = require('./openclaw-bundle-cache.cjs');
 const { ensureOpenClawWorkerShims } = require('./openclaw-worker-shims.cjs');
 
 const rootDir = path.resolve(__dirname, '..');
@@ -67,25 +72,6 @@ function ensureBundleSupportFiles() {
   }
 }
 
-// Skip if bundle is already up-to-date (newer than the entry point).
-if (fs.existsSync(bundleOutPath)) {
-  const bundleStat = fs.statSync(bundleOutPath);
-  const entryStat = fs.statSync(entryPath);
-  if (bundleStat.mtimeMs > entryStat.mtimeMs) {
-    console.log(`[bundle-openclaw-gateway] Bundle is up-to-date, skipping.`);
-    try {
-      ensureBundleSupportFiles();
-    } catch (error) {
-      console.error(`[bundle-openclaw-gateway] ${error.message || error}`);
-      process.exit(1);
-    }
-    process.exit(0);
-  }
-}
-
-console.log(`[bundle-openclaw-gateway] Bundling: ${path.relative(runtimeDir, entryPath)}`);
-console.log(`[bundle-openclaw-gateway] Output:   ${path.relative(runtimeDir, bundleOutPath)}`);
-
 // Native addons and heavy optional deps that must NOT be bundled.
 // These are resolved at runtime from node_modules/.
 const EXTERNAL_PACKAGES = [
@@ -125,30 +111,62 @@ try {
   process.exit(1);
 }
 
+const buildOptions = {
+  entryPoints: [entryPath],
+  bundle: true,
+  minify: true,
+  platform: 'node',
+  format: 'esm',
+  outfile: bundleOutPath,
+  external: EXTERNAL_PACKAGES,
+  // Inject createRequire so that esbuild's __require shim works in ESM context.
+  // Without this, CJS modules (e.g. @smithy/*) that call require("buffer")
+  // fail with "Dynamic require of X is not supported" when loaded via import().
+  banner: {
+    js: `import { createRequire as __bundleCreateRequire } from 'node:module';\n` +
+        `import { fileURLToPath as __bundleFileURLToPath } from 'node:url';\n` +
+        `const require = __bundleCreateRequire(import.meta.url);\n` +
+        `const __filename = __bundleFileURLToPath(import.meta.url);\n` +
+        `const __dirname = __bundleFileURLToPath(new URL('.', import.meta.url));\n`,
+  },
+  // Silence warnings about __dirname/__filename in ESM (they're polyfilled above).
+  logLevel: 'warning',
+  metafile: true,
+};
+const buildKey = createBundleBuildKey({
+  options: {
+    ...buildOptions,
+    entryPoints: [path.relative(runtimeDir, entryPath).split(path.sep).join('/')],
+    outfile: path.relative(runtimeDir, bundleOutPath).split(path.sep).join('/'),
+  },
+  esbuildVersion: esbuild.version,
+  builderPaths: [__filename, require.resolve('./openclaw-bundle-cache.cjs')],
+});
+
+// A previous graph, resolution metadata, builder, and output must all match.
+// Force a rebuild after manually changing module layout without updating its
+// lockfile/build metadata (for example, adding a new resolution candidate).
+if (process.env.OPENCLAW_FORCE_BUILD !== '1' && isBundleCacheCurrent({
+  runtimeDir,
+  bundlePath: bundleOutPath,
+  buildKey,
+})) {
+  console.log(`[bundle-openclaw-gateway] Bundle is up-to-date, skipping.`);
+  try {
+    ensureBundleSupportFiles();
+  } catch (error) {
+    console.error(`[bundle-openclaw-gateway] ${error.message || error}`);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+console.log(`[bundle-openclaw-gateway] Bundling: ${path.relative(runtimeDir, entryPath)}`);
+console.log(`[bundle-openclaw-gateway] Output:   ${path.relative(runtimeDir, bundleOutPath)}`);
 const t0 = Date.now();
 
 esbuild
-  .build({
-    entryPoints: [entryPath],
-    bundle: true,
-    minify: true,
-    platform: 'node',
-    format: 'esm',
-    outfile: bundleOutPath,
-    external: EXTERNAL_PACKAGES,
-    // Inject createRequire so that esbuild's __require shim works in ESM context.
-    // Without this, CJS modules (e.g. @smithy/*) that call require("buffer")
-    // fail with "Dynamic require of X is not supported" when loaded via import().
-    banner: {
-      js: `import { createRequire as __bundleCreateRequire } from 'node:module';\n` +
-          `import { fileURLToPath as __bundleFileURLToPath } from 'node:url';\n` +
-          `const require = __bundleCreateRequire(import.meta.url);\n` +
-          `const __filename = __bundleFileURLToPath(import.meta.url);\n` +
-          `const __dirname = __bundleFileURLToPath(new URL('.', import.meta.url));\n`,
-    },
-    // Silence warnings about __dirname/__filename in ESM (they're polyfilled above).
-    logLevel: 'warning',
-  })
+  .build(buildOptions)
   .then((result) => {
     const elapsed = Date.now() - t0;
     const sizeKB = Math.round(fs.statSync(bundleOutPath).size / 1024);
@@ -157,6 +175,9 @@ esbuild
         (result.warnings.length ? `, ${result.warnings.length} warnings` : ''),
     );
     ensureBundleSupportFiles();
+    if (!writeBundleCache({ runtimeDir, bundlePath: bundleOutPath, buildKey, metafile: result.metafile })) {
+      console.warn('[bundle-openclaw-gateway] Bundle cache skipped: inputs are not portable runtime files.');
+    }
   })
   .catch((err) => {
     console.error('[bundle-openclaw-gateway] Failed:', err.message || err);

@@ -20,6 +20,7 @@ const RETAINED_PATCHES = [
   'openclaw-lobsterai-model-compat-api.patch',
   'openclaw-lobsterai-startup-recovery.patch',
   'openclaw-memory-sidecar-archive-generations.patch',
+  'openclaw-native-plugin-file-url.patch',
   'openclaw-omit-default-model-from-system-prompt.patch',
   'openclaw-openai-compatible-cache-control.patch',
   'openclaw-plugin-archive-windows-timeout.patch',

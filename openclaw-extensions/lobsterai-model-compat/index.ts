@@ -4,8 +4,8 @@ import {
   buildGoogleGeminiReplayPolicy,
   buildOpenAICompatibleReplayPolicy,
 } from 'openclaw/plugin-sdk/provider-model-shared';
-import { createMoonshotKimiK3Wrapper } from 'openclaw/plugin-sdk/provider-stream-shared';
 
+import { createMoonshotKimiK3Wrapper } from './moonshotKimiK3';
 import {
   hasModelRuntimeProfile,
   LobsterAIModelRuntimeProfile,

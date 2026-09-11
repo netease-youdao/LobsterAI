@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { readJsonFile, writeJsonFile } = require('./common.cjs');
+const { patchLarkNativeModules } = require('./lark-native-modules.cjs');
 
 function patchSdkCompatibility(larkPluginDir, log) {
   // OpenClaw 2026.8.1 removed the SDK root and channel-runtime barrels.
@@ -283,6 +284,7 @@ function ${patchMarker}(name) {
 
 function patchLark({ runtimeExtensionsDir, log }) {
   const larkPluginDir = path.join(runtimeExtensionsDir, 'openclaw-lark');
+  patchLarkNativeModules(larkPluginDir, log);
   patchSdkCompatibility(larkPluginDir, log);
   patchDeferredStartup(larkPluginDir, log);
   patchToolContracts(larkPluginDir, log);

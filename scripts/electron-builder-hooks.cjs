@@ -17,7 +17,9 @@ const {
 } = require('./openclaw-runtime-packaging.cjs');
 const { collectHostPeerLeftovers, measureDirectorySize } = require('./openclaw-plugin-host-peer-leftovers.cjs');
 const { verifyOpenClawPluginSdkBridge } = require('./openclaw-plugin-sdk-bridge.cjs');
+const { ENTRY_KIND, collectPluginRuntimeEntries } = require('./openclaw-plugin-entries.cjs');
 const { createOpenClawWindowsPayload } = require('./openclaw-windows-payload.cjs');
+const { verifyOpenClawPluginLoad } = require('./verify-openclaw-plugin-load.cjs');
 
 function isWindowsTarget(context) {
   return context?.electronPlatformName === 'win32';
@@ -181,21 +183,16 @@ function verifyNoHostPeerLeftovers(extensionsDir, plugins) {
 }
 
 function hasCompiledLocalExtension(runtimeRoot, extensionId) {
-  const pluginDir = path.join(runtimeRoot, 'third-party-extensions', extensionId);
-  if (!existsSync(path.join(pluginDir, 'openclaw.plugin.json'))
-    || !existsSync(path.join(pluginDir, 'index.js'))) {
-    return false;
-  }
-
-  const packageJsonPath = path.join(pluginDir, 'package.json');
-  if (!existsSync(packageJsonPath)) {
+  const pluginDir = path.resolve(runtimeRoot, 'third-party-extensions', extensionId);
+  if (!existsSync(path.join(pluginDir, 'openclaw.plugin.json'))) {
     return false;
   }
 
   try {
-    const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
-    return Array.isArray(pkg.openclaw?.extensions)
-      && pkg.openclaw.extensions.includes('./index.js');
+    const entries = collectPluginRuntimeEntries(runtimeRoot)
+      .filter(entry => entry.pluginDir === pluginDir);
+    return entries.some(entry => entry.kind === ENTRY_KIND.Runtime)
+      && entries.every(entry => /\.(?:mjs|cjs|js)$/i.test(entry.source));
   } catch {
     return false;
   }
@@ -697,6 +694,7 @@ function writeWindowsPayloadSizeFragment(context) {
 
 async function beforePack(context) {
   ensureBundledOpenClawRuntime(context);
+  verifyOpenClawPluginLoad(path.join(__dirname, '..', 'vendor', 'openclaw-runtime', 'current'));
   // Install skill dependencies first (for all platforms)
   installSkillDependencies();
 

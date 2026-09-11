@@ -413,6 +413,19 @@ const legacyStrongPatchValidators = {
 };
 
 const v20260801StrongPatchValidators = {
+  'openclaw-native-plugin-file-url.patch': [
+    {
+      file: 'src/plugins/native-module-require.ts',
+      snippets: [
+        'function toNativeModulePath(modulePath: string): string',
+        'modulePath.startsWith("file:") ? fileURLToPath(modulePath) : modulePath',
+        'const nativeModulePath = toNativeModulePath(modulePath);',
+        'requireWithOptionalAliases(nativeModulePath, options.aliasMap)',
+        'isSourceTransformFallbackError(error, nativeModulePath)',
+        'nodeRequire.resolve(toNativeModulePath(modulePath))',
+      ],
+    },
+  ],
   'openclaw-lobsterai-startup-recovery.patch': [
     {
       file: 'src/agents/main-session-recovery/main-session-restart-recovery-marking.ts',

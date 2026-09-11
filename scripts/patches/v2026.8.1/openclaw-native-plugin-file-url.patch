@@ -1,0 +1,357 @@
+LobsterAI / OpenClaw v2026.8.1: load file-URL plugin entries with native Node require.
+
+Windows import callers pass file URLs. Decode only at the native require and
+require-cache eviction boundaries; keep ESM import specifiers, SDK alias hooks,
+source-transform fallback flags, and real module errors unchanged.
+
+Regression proof (Windows Node 24.15.0): 9 failures before, 32 passing after.
+node scripts/run-vitest.mjs run --config test/vitest/vitest.plugins.config.ts src/plugins/native-module-require.test.ts
+diff --git a/src/plugins/native-module-require.test.ts b/src/plugins/native-module-require.test.ts
+index 643268fd87b..f049bacd69d 100644
+--- a/src/plugins/native-module-require.test.ts
++++ b/src/plugins/native-module-require.test.ts
+@@ -4,7 +4,7 @@ import fs from "node:fs";
+ import Module from "node:module";
+ import path from "node:path";
+ import { pathToFileURL } from "node:url";
+-import { afterEach, beforeAll, describe, expect, it } from "vitest";
++import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+ import {
+   clearPluginModuleRequireCache,
+@@ -13,22 +13,57 @@ import {
+ } from "./native-module-require.js";
+ 
+ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
++const tsxRegisterUrl = pathToFileURL(
++  Module.createRequire(import.meta.url).resolve("tsx/esm/api"),
++).href;
+ type NativeEsmGraphProbe = {
+   status: number | null;
+   stderr: string;
+   stdout: string;
+ };
+-let nativeEsmGraphProbe: NativeEsmGraphProbe;
+-
+-describe("tryNativeRequireJavaScriptModule", () => {
+-  it("loads native CommonJS modules", () => {
+-    const dir = tempDirs.make("openclaw-native-require-");
+-    const modulePath = path.join(dir, "plugin.cjs");
+-    fs.writeFileSync(modulePath, 'module.exports = { marker: "native" };\n', "utf8");
++describe.each(["path", "file URL"])("native require with %s", (specifierKind) => {
++  let nativeEsmGraphProbe: NativeEsmGraphProbe;
++  const toModuleSpecifier = (modulePath: string) =>
++    specifierKind === "file URL" ? pathToFileURL(modulePath).href : modulePath;
++
++  it.each([".js", ".cjs"])("loads native CommonJS %s modules", (extension) => {
++    const dir = tempDirs.make("openclaw native 中文 % #-");
++    const modulePath = path.join(dir, `plugin${extension}`);
++    const sdkPath = path.join(dir, "sdk.cjs");
++    fs.writeFileSync(sdkPath, 'module.exports = { marker: "native" };\n', "utf8");
++    fs.writeFileSync(
++      modulePath,
++      'module.exports = require("openclaw/plugin-sdk/fixture");\n',
++      "utf8",
++    );
++    const originalResolver = Reflect.get(Module, "_resolveFilename");
+ 
+-    const result = tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true });
++    const result = tryNativeRequireJavaScriptModule(toModuleSpecifier(modulePath), {
++      allowWindows: true,
++      aliasMap: { "openclaw/plugin-sdk/fixture": sdkPath },
++    });
+ 
+     expect(result).toEqual({ ok: true, moduleExport: { marker: "native" } });
++    expect(Reflect.get(Module, "_resolveFilename")).toBe(originalResolver);
++    expect(() => Module.createRequire(modulePath).resolve("openclaw/plugin-sdk/fixture")).toThrow();
++    const fromPath = tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true });
++    expect(fromPath.ok).toBe(true);
++    if (result.ok && fromPath.ok) {
++      expect(fromPath.moduleExport).toBe(result.moduleExport);
++    }
++    clearPluginModuleRequireCache(toModuleSpecifier(modulePath));
++  });
++
++  it("leaves TypeScript entries for source-transform loading", () => {
++    const dir = tempDirs.make("openclaw native 中文 % #-");
++    const modulePath = path.join(dir, "plugin.ts");
++    fs.writeFileSync(modulePath, 'export const marker: string = "source";\n', "utf8");
++
++    expect(
++      tryNativeRequireJavaScriptModule(toModuleSpecifier(modulePath), { allowWindows: true }),
++    ).toEqual({
++      ok: false,
++    });
+   });
+ 
+   it("declines modules that need source-transform fallback", () => {
+@@ -40,7 +75,9 @@ describe("tryNativeRequireJavaScriptModule", () => {
+       "utf8",
+     );
+ 
+-    expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
++    expect(
++      tryNativeRequireJavaScriptModule(toModuleSpecifier(modulePath), { allowWindows: true }),
++    ).toEqual({
+       ok: false,
+     });
+   });
+@@ -61,7 +98,9 @@ describe("tryNativeRequireJavaScriptModule", () => {
+     });
+ 
+     try {
+-      expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
++      expect(
++        tryNativeRequireJavaScriptModule(toModuleSpecifier(modulePath), { allowWindows: true }),
++      ).toEqual({
+         ok: false,
+       });
+     } finally {
+@@ -72,7 +111,9 @@ describe("tryNativeRequireJavaScriptModule", () => {
+   it("declines missing target modules so callers can try source fallback", () => {
+     const modulePath = path.join(tempDirs.make("openclaw-native-require-"), "missing.cjs");
+ 
+-    expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
++    expect(
++      tryNativeRequireJavaScriptModule(toModuleSpecifier(modulePath), { allowWindows: true }),
++    ).toEqual({
+       ok: false,
+     });
+   });
+@@ -82,9 +123,9 @@ describe("tryNativeRequireJavaScriptModule", () => {
+     const modulePath = path.join(dir, "plugin.cjs");
+     fs.writeFileSync(modulePath, 'require("./missing-dependency.cjs");\n', "utf8");
+ 
+-    expect(() => tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toThrow(
+-      "missing-dependency.cjs",
+-    );
++    expect(() =>
++      tryNativeRequireJavaScriptModule(toModuleSpecifier(modulePath), { allowWindows: true }),
++    ).toThrow("missing-dependency.cjs");
+   });
+ 
+   it("declines missing dependency errors when source-transform fallback is available", () => {
+@@ -93,7 +134,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
+     fs.writeFileSync(modulePath, 'require("openclaw/plugin-sdk/core");\n', "utf8");
+ 
+     expect(
+-      tryNativeRequireJavaScriptModule(modulePath, {
++      tryNativeRequireJavaScriptModule(toModuleSpecifier(modulePath), {
+         allowWindows: true,
+         fallbackOnMissingDependency: true,
+       }),
+@@ -101,13 +142,14 @@ describe("tryNativeRequireJavaScriptModule", () => {
+   });
+ 
+   beforeAll(() => {
+-    const dir = tempDirs.make("openclaw-native-require-");
++    const dir = tempDirs.make("openclaw native 中文 % #-");
+     const sdkPath = path.join(dir, "sdk.js");
+     const modulePath = path.join(dir, "plugin.mjs");
+     const probePath = path.join(dir, "probe.mjs");
+     const nativeRequireModuleUrl = pathToFileURL(
+       path.join(process.cwd(), "src", "plugins", "native-module-require.ts"),
+     ).href;
++    fs.writeFileSync(path.join(dir, "package.json"), '{ "type": "module" }\n', "utf8");
+     fs.writeFileSync(
+       sdkPath,
+       'export const defineChannelMessageAdapter = () => "adapter";\n',
+@@ -121,8 +163,12 @@ describe("tryNativeRequireJavaScriptModule", () => {
+     fs.writeFileSync(
+       probePath,
+       [
+-        `import { tryNativeRequireJavaScriptModule } from ${JSON.stringify(nativeRequireModuleUrl)};`,
+-        `const result = tryNativeRequireJavaScriptModule(${JSON.stringify(modulePath)}, {`,
++        `import { register } from ${JSON.stringify(tsxRegisterUrl)};`,
++        "const unregister = register();",
++        `const { tryNativeRequireJavaScriptModule } = await import(${JSON.stringify(nativeRequireModuleUrl)});`,
++        // tsx's CJS resolver accepts file URLs and would hide the native loader regression.
++        "await unregister();",
++        `const result = tryNativeRequireJavaScriptModule(${JSON.stringify(toModuleSpecifier(modulePath))}, {`,
+         "  allowWindows: true,",
+         `  aliasMap: { "openclaw/plugin-sdk/channel-outbound": ${JSON.stringify(sdkPath)} },`,
+         "});",
+@@ -135,7 +181,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
+       "utf8",
+     );
+ 
+-    const result = spawnSync(process.execPath, ["--import", "tsx", probePath], {
++    const result = spawnSync(process.execPath, [probePath], {
+       cwd: process.cwd(),
+       encoding: "utf8",
+     });
+@@ -159,7 +205,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
+     fs.writeFileSync(path.join(dir, "helper.ts"), "export const loaded = true;\n", "utf8");
+ 
+     expect(
+-      tryNativeRequireJavaScriptModule(modulePath, {
++      tryNativeRequireJavaScriptModule(toModuleSpecifier(modulePath), {
+         allowWindows: true,
+         fallbackOnNativeError: true,
+       }),
+@@ -175,9 +221,9 @@ describe("tryNativeRequireJavaScriptModule", () => {
+       "utf8",
+     );
+ 
+-    expect(() => tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toThrow(
+-      "plugin exploded during native load",
+-    );
++    expect(() =>
++      tryNativeRequireJavaScriptModule(toModuleSpecifier(modulePath), { allowWindows: true }),
++    ).toThrow("plugin exploded during native load");
+   });
+ 
+   it("declines real module evaluation errors when the caller can use source transform fallback", () => {
+@@ -190,7 +236,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
+     );
+ 
+     expect(
+-      tryNativeRequireJavaScriptModule(modulePath, {
++      tryNativeRequireJavaScriptModule(toModuleSpecifier(modulePath), {
+         allowWindows: true,
+         fallbackOnNativeError: true,
+       }),
+@@ -207,7 +253,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
+     });
+ 
+     fs.writeFileSync(modulePath, 'module.exports = { marker: "after" };\n', "utf8");
+-    clearPluginModuleRequireCache(modulePath);
++    clearPluginModuleRequireCache(toModuleSpecifier(modulePath));
+ 
+     expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
+       ok: true,
+@@ -227,7 +273,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
+     });
+ 
+     fs.writeFileSync(helperPath, 'module.exports = { marker: "after" };\n', "utf8");
+-    clearPluginModuleRequireCache(modulePath, { dependencyRoot: dir });
++    clearPluginModuleRequireCache(toModuleSpecifier(modulePath), { dependencyRoot: dir });
+ 
+     expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
+       ok: true,
+@@ -236,7 +282,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
+   });
+ 
+   it("releases retired native module graphs, including local cycles", () => {
+-    const dir = tempDirs.make("openclaw-native-retirement-");
++    const dir = tempDirs.make("openclaw native retirement 中文 % #-");
+     const modulePath = path.join(dir, "plugin.cjs");
+     const probePath = path.join(dir, "probe.mjs");
+     fs.writeFileSync(modulePath, 'exports.helper = require("./helper.cjs");\n');
+@@ -246,8 +292,11 @@ describe("tryNativeRequireJavaScriptModule", () => {
+       probePath,
+       `import assert from "node:assert/strict";
+ import { setImmediate } from "node:timers/promises";
+-import { clearPluginModuleRequireCache, tryNativeRequireJavaScriptModule } from ${JSON.stringify(ownerUrl)};
+-const modulePath = ${JSON.stringify(modulePath)};
++import { register } from ${JSON.stringify(tsxRegisterUrl)};
++const unregister = register();
++const { clearPluginModuleRequireCache, tryNativeRequireJavaScriptModule } = await import(${JSON.stringify(ownerUrl)});
++await unregister();
++const modulePath = ${JSON.stringify(toModuleSpecifier(modulePath))};
+ function loadAndRetire() {
+   const result = tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true });
+   assert.equal(result.ok, true);
+@@ -265,7 +314,7 @@ for (let index = 0; index < 5; index++) {
+ assert.equal(retired.filter(ref => ref.deref() !== undefined).length, 0);
+ `,
+     );
+-    const result = spawnSync(process.execPath, ["--expose-gc", "--import", "tsx", probePath], {
++    const result = spawnSync(process.execPath, ["--expose-gc", probePath], {
+       cwd: process.cwd(),
+       encoding: "utf8",
+       timeout: 30_000,
+@@ -275,6 +324,35 @@ assert.equal(retired.filter(ref => ref.deref() !== undefined).length, 0);
+   });
+ });
+ 
++it("loads cached file URL targets natively and shares their path identity", async () => {
++  const { createPluginCache, withPluginCache } = await import("./plugin-cache.js");
++  const { getCachedPluginModuleLoader } = await import("./plugin-module-loader-cache.js");
++  const dir = tempDirs.make("openclaw native cache 中文 % #-");
++  const modulePath = path.join(dir, "plugin.cjs");
++  fs.writeFileSync(modulePath, 'module.exports = { marker: "native" };\n', "utf8");
++  const cache = createPluginCache();
++  const createLoader = vi.fn(() => {
++    throw new Error("Compiled JavaScript must not construct the source transformer");
++  });
++  try {
++    const loader = withPluginCache(cache, () =>
++      getCachedPluginModuleLoader({
++        modulePath,
++        importerUrl: import.meta.url,
++        aliasMap: {},
++        tryNative: true,
++        createLoader,
++      }),
++    );
++    const fromUrl = loader(pathToFileURL(modulePath).href);
++    expect(fromUrl).toEqual({ marker: "native" });
++    expect(loader(modulePath)).toBe(fromUrl);
++    expect(createLoader).not.toHaveBeenCalled();
++  } finally {
++    cache.disposeModules?.();
++  }
++});
++
+ describe("isJavaScriptModulePath", () => {
+   it("only accepts JavaScript runtime extensions", () => {
+     expect(isJavaScriptModulePath("/plugin/index.js")).toBe(true);
+diff --git a/src/plugins/native-module-require.ts b/src/plugins/native-module-require.ts
+index aba83231bf8..1c50e3b5a41 100644
+--- a/src/plugins/native-module-require.ts
++++ b/src/plugins/native-module-require.ts
+@@ -2,7 +2,7 @@
+ import fs from "node:fs";
+ import Module, { createRequire } from "node:module";
+ import path from "node:path";
+-import { pathToFileURL } from "node:url";
++import { fileURLToPath, pathToFileURL } from "node:url";
+ import { isPathInside } from "../infra/path-guards.js";
+ 
+ const nodeRequire = createRequire(import.meta.url);
+@@ -28,6 +28,11 @@ const moduleWithResolver = Module as typeof Module & {
+   }) => { deregister: () => void };
+ };
+ 
++function toNativeModulePath(modulePath: string): string {
++  // Import callers use file URLs on Windows; require and its cache use filesystem paths.
++  return modulePath.startsWith("file:") ? fileURLToPath(modulePath) : modulePath;
++}
++
+ /** True for file extensions Node can load through the native JS module loader. */
+ export function isJavaScriptModulePath(modulePath: string): boolean {
+   return [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase());
+@@ -71,16 +76,20 @@ export function tryNativeRequireJavaScriptModule(
+   if (process.platform === "win32" && options.allowWindows !== true) {
+     return { ok: false };
+   }
+-  if (!isJavaScriptModulePath(modulePath)) {
++  const nativeModulePath = toNativeModulePath(modulePath);
++  if (!isJavaScriptModulePath(nativeModulePath)) {
+     return { ok: false };
+   }
+   try {
+-    return { ok: true, moduleExport: requireWithOptionalAliases(modulePath, options.aliasMap) };
++    return {
++      ok: true,
++      moduleExport: requireWithOptionalAliases(nativeModulePath, options.aliasMap),
++    };
+   } catch (error) {
+     const code =
+       error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+     if (
+-      isSourceTransformFallbackError(error, modulePath) ||
++      isSourceTransformFallbackError(error, nativeModulePath) ||
+       options.fallbackOnNativeError ||
+       (options.fallbackOnMissingDependency === true &&
+         (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND"))
+@@ -97,7 +106,7 @@ export function clearPluginModuleRequireCache(
+   options: { dependencyRoot?: string } = {},
+ ): void {
+   try {
+-    const resolved = nodeRequire.resolve(modulePath);
++    const resolved = nodeRequire.resolve(toNativeModulePath(modulePath));
+     clearRequireCacheSubtree(
+       resolved,
+       resolveRequireCachePath(options.dependencyRoot ?? path.dirname(resolved)),
