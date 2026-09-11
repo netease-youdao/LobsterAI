@@ -50,6 +50,7 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw startup state migration', () => 
       // A full Doctor/validator would reject this: this migration must leave IM alone.
       channels: { discord: { accounts: { fixture: { dm: { policy: 'open', allowFrom: ['*'] } } } } },
       plugins: { load: { paths: [path.join(tempDir, 'must-not-load-plugin')] } },
+      logging: { file: path.join(tempDir, 'gateway.log') },
     }));
   });
   afterEach(() => {
@@ -63,7 +64,8 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw startup state migration', () => 
     const args = [path.join(runtimeRoot!, OPENCLAW_STARTUP_MIGRATION_ENTRY)];
     const options = {
       cwd: runtimeRoot, windowsHide: true, timeout: 30_000,
-      env: { ...process.env, OPENCLAW_HOME: tempDir, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+      env: { ...process.env, XDG_CACHE_HOME: path.join(tempDir, 'cache'),
+        OPENCLAW_HOME: tempDir, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
     };
     let stdout: string;
     let stderr = '';
@@ -243,7 +245,7 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw startup state migration', () => 
   });
 
   test.runIf(process.env.OPENCLAW_STARTUP_MIGRATION_GATEWAY === '1')(
-    'starts after a state-only CLI checkpoint and serves config, agents and exec approvals after migration/restart', async () => {
+    'starts with an unrelated provider key and serves config, agents and exec approvals after migration/restart', async () => {
       const { identity, source } = seedIdentity();
       const token = 'startup-migration-isolated-test-token';
       fs.writeFileSync(configPath, JSON.stringify({
@@ -252,9 +254,16 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw startup state migration', () => 
           defaults: { workspace: workspaces[0], systemAgent: { agentId: 'main' }, authInheritance: { agentId: 'main' } } },
         memory: { search: { enabled: true, provider: 'none', fallback: 'none', store: { vector: { enabled: false } } } },
         plugins: { allow: ['memory-core'], entries: { 'memory-core': { enabled: true, config: { dreaming: { enabled: false } } } } },
+        logging: { file: path.join(tempDir, 'gateway.log') },
         cron: { enabled: false }, browser: { enabled: false },
       }));
-      const env: NodeJS.ProcessEnv = { ...process.env, OPENCLAW_HOME: tempDir, OPENCLAW_STATE_DIR: stateDir,
+      const env: NodeJS.ProcessEnv = {
+        PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR,
+        XDG_CACHE_HOME: path.join(tempDir, 'cache'), TMPDIR: tempDir, TEMP: tempDir, TMP: tempDir,
+        // A terminal-launched app inherits these keys. They must not install a
+        // plugin outside the configured allowlist or request capability consent.
+        VYDRA_API_KEY: 'synthetic-unrelated-dev-provider-key',
+        OPENCLAW_HOME: tempDir, OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_GATEWAY_TOKEN: token, OPENCLAW_SERVICE_REPAIR_POLICY: 'external',
         OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: '1', NODE_COMPILE_CACHE: path.join(tempDir, 'compile-cache'), NODE_ENV: 'production' };
       delete env.VITEST;
@@ -280,7 +289,10 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw startup state migration', () => 
 
       for (let attempt = 0; attempt < 2; attempt++) {
         const server = net.createServer();
-        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        await new Promise<void>((resolve, reject) => {
+          server.once('error', reject);
+          server.listen(0, '127.0.0.1', resolve);
+        });
         const port = (server.address() as net.AddressInfo).port;
         await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
         const gateway = spawn(process.execPath, [cliPath, 'gateway', '--bind', 'loopback', '--port', String(port), '--token', token], {
@@ -302,6 +314,9 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw startup state migration', () => 
             await new Promise(resolve => setTimeout(resolve, 200));
           }
           expect(started, output.replaceAll(token, '[REDACTED]')).toBe(true);
+          const locked = await migrate();
+          expect(locked.code).toBe(1);
+          expect(locked.report.warnings.join(' ')).toContain('owns this state directory');
           for (const method of Object.values(GatewayProbeMethod)) {
             const result = await cli(['gateway', 'call', method, '--url', `ws://127.0.0.1:${port}`, '--token', token, '--json']);
             const response = JSON.parse(result.stdout);
@@ -380,9 +395,10 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw startup state migration', () => 
     } finally { db.close(); }
   });
 
-  test('does not create a database when there are no legacy workspace sources', async () => {
+  test('does not create workspace state when there are no legacy workspace sources', async () => {
     expect((await migrate()).report.status).toBe(OpenClawStartupMigrationStatus.Skipped);
-    expect(fs.existsSync(path.join(stateDir, 'state/openclaw.sqlite'))).toBe(false);
+    // Auth migration checks its crash-recovery receipts even without JSON files.
+    expect(withDatabase(db => db.prepare('SELECT COUNT(*) AS count FROM workspace_setup_state').get()?.count)).toBe(0);
   });
 
   test.each([0, 59])('quarantines a %i-byte zero-filled attestation without changing workspace/config', async (size) => {

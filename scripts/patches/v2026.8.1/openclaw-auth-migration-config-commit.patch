@@ -1,0 +1,68 @@
+OpenClaw v2026.8.1: commit auth metadata before archiving legacy credentials.
+
+Base: ea806575e6450e4d1efdfc72c19f04be982a1b9b.
+
+The dedicated auth migration owner can move AWS SDK markers into auth.profiles
+and remove imported inline config credentials. A host that writes the returned
+config only after migration can lose the only recoverable marker source if that
+write fails after the owner has archived the legacy JSON.
+
+Add an optional host config-persistence hook after each candidate's verified
+SQLite import and config changes, but before creating terminal archive receipts.
+Marker-only and config-only candidates use the same hook. A rejected commit is
+caught by the existing per-candidate handler while source bytes remain in place;
+the host must report the failure and retry from freshly loaded configuration.
+Existing Doctor callers that omit the hook retain their current behavior.
+
+LobsterAI supplies its core-only, optimistic-concurrency-checked config writer
+inside the existing stopped-Gateway maintenance lock. The owner keeps exclusive
+responsibility for credential parsing, SQLite import, verification, and archives.
+
+Regression coverage: tests/openclawAuthProfileMigration.integration.test.ts in
+LobsterAI, executed against a runtime rebuilt with this patch. In addition to the
+normal migration cases, verify marker-only config persistence and failed config
+commit followed by retry before retiring this patch upstream.
+
+diff --git a/src/commands/doctor-auth-flat-profiles.ts b/src/commands/doctor-auth-flat-profiles.ts
+--- a/src/commands/doctor-auth-flat-profiles.ts
++++ b/src/commands/doctor-auth-flat-profiles.ts
+@@ -895,6 +895,8 @@
+   now?: () => number;
+   env?: NodeJS.ProcessEnv;
+   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
++  /** Commit migrated config before retiring its legacy credential sources. */
++  persistConfig?: (cfg: OpenClawConfig) => Promise<void>;
+   deps?: {
+     loadPersistedAuthProfileStore?: typeof loadPersistedAuthProfileStore;
+   };
+@@ -980,6 +982,7 @@
+     params.openAICodexAuthProfileIdMap ??
+     collectOpenAICodexAuthProfileStoreIdMap({ cfg: params.cfg, env });
+   for (const candidate of detected) {
++    let candidateConfigChanged = false;
+     const configOwnerCandidate = isDefaultAgentCandidate(candidate, params.cfg, env);
+     let releaseSources: (() => void) | undefined;
+     try {
+@@ -1061,6 +1064,7 @@
+           awsSdkMarkerStore.profiles.map((profile) => profile.profileId),
+         );
+         result.configChanged = true;
++        candidateConfigChanged = true;
+       }
+       normalizeLegacyApiKeyAliasesForImport(rawStore);
+       const maybeCanonicalStore =
+@@ -1264,7 +1268,14 @@
+           stripImportedConfigAuthProfileCredentials(params.cfg, configCanonicalStore)
+         ) {
+           result.configChanged = true;
++          candidateConfigChanged = true;
+         }
++      }
++
++      // The source still owns recovery until both SQLite and its config metadata
++      // are durable. A failed host commit leaves the original source for retry.
++      if (candidateConfigChanged) {
++        await params.persistConfig?.(params.cfg);
+       }
+ 
+       const expectedProfileSha256 = Object.fromEntries(

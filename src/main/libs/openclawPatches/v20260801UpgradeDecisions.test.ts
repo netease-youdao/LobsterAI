@@ -10,12 +10,14 @@ import {
 
 const RETAINED_PATCHES = [
   'openclaw-aborted-tool-loop-breaker.patch',
+  'openclaw-auth-migration-config-commit.patch',
   'openclaw-browser-blocked-hostnames.patch',
   'openclaw-chat-send-cwd-decoupling.patch',
   'openclaw-cli-startup-metadata-windows-timeout.patch',
   'openclaw-cron-preparation-failure-state.patch',
   'openclaw-cron-skip-missed-jobs.patch',
   'openclaw-im-bound-agent-run-cwd.patch',
+  'openclaw-inferred-plugin-install-allowlist.patch',
   'openclaw-lancedb-optional-transformers.patch',
   'openclaw-lobsterai-model-compat-api.patch',
   'openclaw-lobsterai-startup-recovery.patch',

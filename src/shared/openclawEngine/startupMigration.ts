@@ -11,6 +11,7 @@ export type OpenClawStartupMigrationStatus =
   typeof OpenClawStartupMigrationStatus[keyof typeof OpenClawStartupMigrationStatus];
 
 export const OpenClawStartupMigrationOwner = {
+  AuthProfiles: 'auth-profiles',
   DeviceAuth: 'device-auth',
   DeviceIdentity: 'device-identity',
   ExecApprovals: 'exec-approvals',
