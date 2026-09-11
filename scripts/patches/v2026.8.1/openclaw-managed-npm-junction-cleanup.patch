@@ -1,0 +1,545 @@
+OpenClaw v2026.8.1: retire managed npm plugins without following Windows junctions.
+
+Base: ea806575e6450e4d1efdfc72c19f04be982a1b9b.
+
+Electron 43.5.0 / embedded Node 24.19.0 traverses a nested junction during
+fs.rmSync({ recursive: true }); plain Node 24.19.0 does not. The managed npm
+plugin peer link points at the bundled host runtime, so doctor cleanup can
+delete dist workers and prevent every subsequent gateway startup.
+
+Stage the entire retirement batch outside node_modules before changing npm
+metadata. Preserve original package/lock bytes, roll back failed publication,
+and clean committed payloads with explicit lstat/unlink/non-recursive rmdir.
+Locked cleanup debris stays in a reported quarantine; failed rollback retains
+recovery files and still blocks. The captured install-record baseline and
+public doctor call remain unchanged. No global fs patch or plugin-id special case.
+
+diff --git a/src/commands/doctor-plugin-registry.ts b/src/commands/doctor-plugin-registry.ts
+index 2426c8e10dc..cacf3ffb0fc 100644
+--- a/src/commands/doctor-plugin-registry.ts
++++ b/src/commands/doctor-plugin-registry.ts
+@@ -1,5 +1,4 @@
+ /** Doctor repairs for stale plugin registry entries, managed npm shadows, and peer links. */
+-import fs from "node:fs";
+ import path from "node:path";
+ import { isRecord } from "@openclaw/normalization-core/record-coerce";
+ import { note } from "../../packages/terminal-core/src/note.js";
+@@ -38,6 +37,7 @@ import {
+   listPluginOpenClawHostLinkIssues,
+   maybeRepairPluginOpenClawHostLinks,
+ } from "./doctor-plugin-host-links.js";
++import { removeManagedNpmPackages } from "./doctor-plugin-npm-cleanup.js";
+ import type { DoctorPrompter } from "./doctor-prompter.js";
+ import {
+   InvalidPluginInstallRecordStateError,
+@@ -251,13 +251,4 @@ function removeManagedNpmDependency(params: {
+         };
+   writeJsonTarget(npmPackageJsonPath, nextPackageJson);
+   removeManagedNpmPackageLockDependency(params);
+-  fs.rmSync(params.packageDir, { recursive: true, force: true });
+-  const scopeDir = path.dirname(params.packageDir);
+-  if (path.basename(path.dirname(scopeDir)) === "node_modules") {
+-    try {
+-      fs.rmdirSync(scopeDir);
+-    } catch {
+-      // Other packages can still live under the scope directory.
+-    }
+-  }
+ }
+@@ -335,9 +326,7 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
+   for (const pluginId of removedPluginIds) {
+     installRecords = removePluginInstallRecordFromRecords(installRecords, pluginId);
+   }
+-  for (const plugin of stale) {
+-    removeManagedNpmDependency(plugin);
+-  }
++  removeManagedNpmPackages(stale, removeManagedNpmDependency);
+   note(
+     [
+       "Removed stale managed npm plugin package(s) shadowing bundled plugins:",
+diff --git a/src/commands/doctor-plugin-npm-cleanup.ts b/src/commands/doctor-plugin-npm-cleanup.ts
+new file mode 100644
+index 00000000000..0c04bcc4882
+--- /dev/null
++++ b/src/commands/doctor-plugin-npm-cleanup.ts
+@@ -0,0 +1,131 @@
++// Retires managed npm payloads without traversing their host-runtime junctions.
++import fs from "node:fs";
++import path from "node:path";
++import { hasErrnoCode } from "../infra/errno.js";
++
++type ManagedNpmPackage = {
++  npmRoot: string;
++  packageName: string;
++  packageDir: string;
++};
++
++function removePathNoFollowSync(target: string): void {
++  const stat = fs.lstatSync(target, { throwIfNoEntry: false });
++  if (!stat) {
++    return;
++  }
++  // Electron's recursive rmSync can descend into Windows junctions. Unlink
++  // aliases explicitly and use only non-recursive removal for real directories.
++  if (stat.isSymbolicLink() || !stat.isDirectory()) {
++    fs.unlinkSync(target);
++    return;
++  }
++  for (const name of fs.readdirSync(target)) {
++    removePathNoFollowSync(path.join(target, name));
++  }
++  fs.rmdirSync(target);
++}
++
++function cleanupQuarantines(quarantines: Iterable<string>): void {
++  for (const quarantine of quarantines) {
++    try {
++      removePathNoFollowSync(quarantine);
++    } catch (error) {
++      console.warn(
++        `[Plugin registry] Could not finish managed npm cleanup; retained files at ${quarantine}`,
++        error,
++      );
++    }
++  }
++}
++
++/** Stage the complete batch before metadata changes; delete payloads only after those writes succeed. */
++export function removeManagedNpmPackages(
++  packages: readonly ManagedNpmPackage[],
++  updateMetadata: (entry: ManagedNpmPackage) => void,
++): void {
++  const quarantines = new Map<string, string>();
++  const snapshots: Array<{ filePath: string; backupPath: string }> = [];
++  const staged: Array<{ packageDir: string; stagedDir: string }> = [];
++  let metadataStarted = false;
++  try {
++    for (const { npmRoot } of packages) {
++      if (quarantines.has(npmRoot)) {
++        continue;
++      }
++      // Keep quarantines outside node_modules: host-link repair scans scoped
++      // package directories even when their names start with a dot.
++      const quarantine = fs.mkdtempSync(path.join(npmRoot, ".openclaw-npm-cleanup-"));
++      quarantines.set(npmRoot, quarantine);
++      for (const name of ["package.json", "package-lock.json"]) {
++        const filePath = path.join(npmRoot, name);
++        const backupPath = path.join(quarantine, name);
++        try {
++          fs.copyFileSync(filePath, backupPath);
++          snapshots.push({ filePath, backupPath });
++        } catch (error) {
++          if (name !== "package-lock.json" || !hasErrnoCode(error, "ENOENT")) {
++            throw error;
++          }
++        }
++      }
++    }
++    for (const entry of packages) {
++      const quarantine = quarantines.get(entry.npmRoot);
++      if (!quarantine) {
++        throw new Error(`Missing managed npm cleanup snapshot for ${entry.npmRoot}`);
++      }
++      const stagedDir = path.join(quarantine, "node_modules", ...entry.packageName.split("/"));
++      fs.mkdirSync(path.dirname(stagedDir), { recursive: true });
++      fs.renameSync(entry.packageDir, stagedDir);
++      staged.push({ packageDir: entry.packageDir, stagedDir });
++    }
++    metadataStarted = true;
++    for (const entry of packages) {
++      updateMetadata(entry);
++    }
++  } catch (error) {
++    const rollbackErrors: unknown[] = [];
++    if (metadataStarted) {
++      // A failed Windows JSON replacement may already have removed the original.
++      // Restore raw bytes for every root, including packages finalized earlier.
++      for (const { filePath, backupPath } of snapshots) {
++        try {
++          fs.copyFileSync(backupPath, filePath);
++        } catch (rollbackError) {
++          rollbackErrors.push(rollbackError);
++        }
++      }
++    }
++    for (const { packageDir, stagedDir } of staged.toReversed()) {
++      try {
++        fs.renameSync(stagedDir, packageDir);
++      } catch (rollbackError) {
++        rollbackErrors.push(rollbackError);
++      }
++    }
++    if (rollbackErrors.length > 0) {
++      // Keep both payloads and original metadata available if recovery itself fails.
++      throw new AggregateError(
++        [error, ...rollbackErrors],
++        `Managed npm cleanup rollback failed; recovery files retained at ${[...quarantines.values()].join(", ")}`,
++        { cause: error },
++      );
++    }
++    cleanupQuarantines(quarantines.values());
++    throw error;
++  }
++
++  // Retirement is committed. Locked debris must not prevent callers from
++  // persisting the pruned install records and starting with the bundled plugins.
++  cleanupQuarantines(quarantines.values());
++  for (const scopeDir of new Set(packages.map((entry) => path.dirname(entry.packageDir)))) {
++    if (path.basename(path.dirname(scopeDir)) === "node_modules") {
++      try {
++        fs.rmdirSync(scopeDir);
++      } catch {
++        // Other packages can still live under the scope directory.
++      }
++    }
++  }
++}
+diff --git a/src/commands/doctor-plugin-registry.cleanup.test.ts b/src/commands/doctor-plugin-registry.cleanup.test.ts
+new file mode 100644
+index 00000000000..3fce552bc3b
+--- /dev/null
++++ b/src/commands/doctor-plugin-registry.cleanup.test.ts
+@@ -0,0 +1,343 @@
++// Exercises managed npm retirement through the public registry repair boundary.
++import fs from "node:fs";
++import path from "node:path";
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
++import type { PluginInstallRecord } from "../config/types.plugins.js";
++import * as jsonFile from "../infra/json-file.js";
++import type { PluginCandidate } from "../plugins/discovery.js";
++import { resolvePluginNpmProjectDir } from "../plugins/install-paths.js";
++import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
++import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
++import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
++import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
++import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
++import { maybeRepairPluginRegistryState } from "./doctor-plugin-registry.js";
++
++vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
++
++const tempDirs = createTempDirTracker();
++
++afterEach(() => {
++  vi.restoreAllMocks();
++  closeOpenClawStateDatabaseForTest();
++  tempDirs.cleanup();
++});
++
++async function readRequiredPersistedInstalledPluginIndex(stateDir: string) {
++  const persisted = await readPersistedInstalledPluginIndex({ stateDir });
++  if (!persisted) {
++    throw new Error("Expected persisted installed plugin index");
++  }
++  return persisted;
++}
++
++async function createNpmCleanupScenario(
++  ids = ["cleanup-first", "cleanup-second"],
++  layout: "project" | "legacy" = "project",
++) {
++  const stateDir = tempDirs.make("openclaw-doctor-npm-cleanup-");
++  const packages = ids.map((id) => {
++    const packageName = `@openclaw/${id}`;
++    const npmRoot =
++      layout === "legacy"
++        ? path.join(stateDir, "npm")
++        : resolvePluginNpmProjectDir({
++            npmDir: path.join(stateDir, "npm"),
++            packageName,
++          });
++    const packageDir = writeManagedNpmPlugin({
++      stateDir,
++      packageName,
++      pluginId: id,
++      version: "2026.5.2",
++      layout,
++    });
++    return { id, packageName, npmRoot, packageDir };
++  });
++  for (const npmRoot of new Set(packages.map((entry) => entry.npmRoot))) {
++    const entries = packages.filter((entry) => entry.npmRoot === npmRoot);
++    const dependencies = Object.fromEntries(
++      entries.map(({ packageName }) => [packageName, "2026.5.2"]),
++    );
++    fs.writeFileSync(
++      path.join(npmRoot, "package-lock.json"),
++      JSON.stringify({
++        lockfileVersion: 3,
++        packages: {
++          "": { dependencies },
++          ...Object.fromEntries(
++            entries.map(({ packageName }) => [
++              `node_modules/${packageName}`,
++              { version: "2026.5.2" },
++            ]),
++          ),
++        },
++        dependencies: Object.fromEntries(
++          entries.map(({ packageName }) => [packageName, { version: "2026.5.2" }]),
++        ),
++      }),
++    );
++  }
++  const candidates: PluginCandidate[] = packages.map(({ id, packageName }) => {
++    const rootDir = path.join(stateDir, "bundled", id);
++    fs.mkdirSync(rootDir, { recursive: true });
++    fs.writeFileSync(
++      path.join(rootDir, "package.json"),
++      JSON.stringify({ name: packageName, version: "2026.5.3" }),
++    );
++    fs.writeFileSync(
++      path.join(rootDir, "openclaw.plugin.json"),
++      JSON.stringify({ id, name: id, configSchema: { type: "object" }, providers: [id] }),
++    );
++    const source = path.join(rootDir, "index.ts");
++    fs.writeFileSync(source, "throw new Error('runtime entry should not load');\n");
++    return {
++      idHint: id,
++      source,
++      rootDir,
++      origin: "bundled",
++      packageName,
++      packageVersion: "2026.5.3",
++    };
++  });
++  const index: InstalledPluginIndex = {
++    version: 1,
++    hostContractVersion: "2026.4.25",
++    compatRegistryVersion: "compat-v1",
++    migrationVersion: 1,
++    policyHash: "policy-v1",
++    generatedAtMs: 1777118400000,
++    installRecords: Object.fromEntries(
++      packages.map(({ id, packageName, packageDir }): [string, PluginInstallRecord] => [
++        id,
++        {
++          source: "npm",
++          spec: `${packageName}@2026.5.2`,
++          installPath: packageDir,
++          version: "2026.5.2",
++          resolvedName: packageName,
++          resolvedVersion: "2026.5.2",
++          resolvedSpec: `${packageName}@2026.5.2`,
++        },
++      ]),
++    ),
++    plugins: [],
++    diagnostics: [],
++  };
++  await writePersistedInstalledPluginIndex(index, { stateDir });
++  const metadata = packages.flatMap(({ npmRoot }) =>
++    ["package.json", "package-lock.json"].map((name) => {
++      const filePath = path.join(npmRoot, name);
++      return { filePath, contents: fs.readFileSync(filePath) };
++    }),
++  );
++  const repair = () =>
++    maybeRepairPluginRegistryState({
++      stateDir,
++      candidates,
++      env: {
++        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
++        OPENCLAW_VERSION: "2026.4.25",
++        VITEST: "true",
++      },
++      config: { plugins: { allow: ids } },
++      prompter: { shouldRepair: true },
++    });
++  return { stateDir, packages, index, metadata, repair };
++}
++
++describe("managed npm cleanup during registry repair", () => {
++  it("retains original metadata and reports recovery paths when restoring a snapshot fails", async () => {
++    const scenario = await createNpmCleanupScenario();
++    const managed = scenario.packages[1];
++    const failurePath = path.join(managed.npmRoot, "package.json");
++    const originalMetadata = fs.readFileSync(failurePath);
++    const writeJsonTarget = jsonFile.writeJsonTarget;
++    vi.spyOn(jsonFile, "writeJsonTarget").mockImplementation((filePath, data) => {
++      if (filePath === failurePath) {
++        fs.unlinkSync(filePath);
++        throw new Error("injected metadata publication failure");
++      }
++      writeJsonTarget(filePath, data);
++    });
++    const copyFileSync = fs.copyFileSync;
++    vi.spyOn(fs, "copyFileSync").mockImplementation((source, target, mode) => {
++      if (target === failurePath) {
++        throw new Error("injected snapshot restore failure");
++      }
++      copyFileSync(source, target, mode);
++    });
++
++    const failure = await scenario.repair().then(
++      () => {
++        throw new Error("Expected registry repair to fail");
++      },
++      (error: unknown) => error,
++    );
++    expect(failure).toBeInstanceOf(AggregateError);
++    const retained = fs
++      .readdirSync(managed.npmRoot)
++      .filter((name) => name.startsWith(".openclaw-npm-cleanup-"));
++    expect(retained).toHaveLength(1);
++    const quarantinePath = path.join(managed.npmRoot, retained[0]);
++    expect(String(failure)).toContain("recovery files retained at");
++    expect(String(failure)).toContain(quarantinePath);
++    expect(fs.readFileSync(path.join(quarantinePath, "package.json"))).toEqual(originalMetadata);
++    expect(fs.existsSync(failurePath)).toBe(false);
++    for (const { id, packageDir } of scenario.packages) {
++      expect(
++        JSON.parse(fs.readFileSync(path.join(packageDir, "openclaw.plugin.json"), "utf8")).id,
++      ).toBe(id);
++    }
++    expect(
++      (await readRequiredPersistedInstalledPluginIndex(scenario.stateDir)).installRecords,
++    ).toEqual(scenario.index.installRecords);
++  });
++
++  it("removes stale packages without deleting nested junction targets", async () => {
++    const scenario = await createNpmCleanupScenario(["cleanup-junction"]);
++    const managed = scenario.packages[0];
++    const runtimeDir = path.join(scenario.stateDir, "host-runtime");
++    const workerPath = path.join(runtimeDir, "dist", "workers", "agent.js");
++    fs.mkdirSync(path.dirname(workerPath), { recursive: true });
++    fs.writeFileSync(workerPath, "host worker remains intact");
++    const nodeModulesDir = path.join(managed.packageDir, "node_modules");
++    fs.mkdirSync(nodeModulesDir);
++    fs.symlinkSync(runtimeDir, path.join(nodeModulesDir, "openclaw"), "junction");
++    fs.symlinkSync(
++      path.join(scenario.stateDir, "missing-host"),
++      path.join(nodeModulesDir, "missing-host"),
++      "junction",
++    );
++
++    await scenario.repair();
++
++    expect(fs.readFileSync(workerPath, "utf8")).toBe("host worker remains intact");
++    expect(fs.existsSync(managed.packageDir)).toBe(false);
++    expect(
++      Object.keys(
++        (await readRequiredPersistedInstalledPluginIndex(scenario.stateDir)).installRecords,
++      ),
++    ).toEqual([]);
++  });
++
++  it.each([
++    { layout: "project", name: "package.json" },
++    { layout: "project", name: "package-lock.json" },
++    { layout: "legacy", name: "package.json" },
++    { layout: "legacy", name: "package-lock.json" },
++  ] as const)(
++    "restores the $layout batch after a destructive $name write failure",
++    async ({ layout, name }) => {
++      const scenario = await createNpmCleanupScenario(undefined, layout);
++      const failurePath = path.join(scenario.packages[1].npmRoot, name);
++      const writeJsonTarget = jsonFile.writeJsonTarget;
++      let failed = false;
++      const writeSpy = vi
++        .spyOn(jsonFile, "writeJsonTarget")
++        .mockImplementation((filePath, data) => {
++          if (filePath === failurePath && !failed) {
++            failed = true;
++            // The Windows JSON writer can unlink the old file before its replacement rename fails.
++            fs.unlinkSync(filePath);
++            throw new Error("injected metadata publication failure");
++          }
++          writeJsonTarget(filePath, data);
++        });
++      try {
++        await expect(scenario.repair()).rejects.toThrow("injected metadata publication failure");
++        for (const { filePath, contents } of scenario.metadata) {
++          expect(fs.readFileSync(filePath)).toEqual(contents);
++        }
++        for (const { id, packageDir } of scenario.packages) {
++          expect(
++            JSON.parse(fs.readFileSync(path.join(packageDir, "openclaw.plugin.json"), "utf8")).id,
++          ).toBe(id);
++        }
++        expect(
++          (await readRequiredPersistedInstalledPluginIndex(scenario.stateDir)).installRecords,
++        ).toEqual(scenario.index.installRecords);
++      } finally {
++        writeSpy.mockRestore();
++      }
++
++      await scenario.repair();
++      expect(
++        Object.keys(
++          (await readRequiredPersistedInstalledPluginIndex(scenario.stateDir)).installRecords,
++        ),
++      ).toEqual([]);
++      expect(scenario.packages.every(({ packageDir }) => !fs.existsSync(packageDir))).toBe(true);
++    },
++  );
++
++  it("rolls back an earlier staged package when a later package cannot be renamed", async () => {
++    const scenario = await createNpmCleanupScenario();
++    const renameSync = fs.renameSync;
++    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
++      if (source === scenario.packages[1].packageDir) {
++        throw new Error("injected package rename failure");
++      }
++      renameSync(source, target);
++    });
++    try {
++      await expect(scenario.repair()).rejects.toThrow("injected package rename failure");
++      expect(scenario.packages.every(({ packageDir }) => fs.existsSync(packageDir))).toBe(true);
++      for (const { filePath, contents } of scenario.metadata) {
++        expect(fs.readFileSync(filePath)).toEqual(contents);
++      }
++      expect(
++        (await readRequiredPersistedInstalledPluginIndex(scenario.stateDir)).installRecords,
++      ).toEqual(scenario.index.installRecords);
++    } finally {
++      renameSpy.mockRestore();
++    }
++    await scenario.repair();
++    expect(scenario.packages.every(({ packageDir }) => !fs.existsSync(packageDir))).toBe(true);
++  });
++
++  it("persists all retirements and reports retained quarantine when payload cleanup fails", async () => {
++    const scenario = await createNpmCleanupScenario();
++    const managed = scenario.packages[1];
++    fs.writeFileSync(path.join(managed.packageDir, "locked-payload.bin"), "locked payload");
++    const unlinkSync = fs.unlinkSync;
++    const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((filePath) => {
++      if (path.basename(String(filePath)) === "locked-payload.bin") {
++        throw new Error("injected payload cleanup failure");
++      }
++      unlinkSync(filePath);
++    });
++    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
++    try {
++      await scenario.repair();
++      expect(scenario.packages.every(({ packageDir }) => !fs.existsSync(packageDir))).toBe(true);
++      expect(
++        Object.keys(
++          (await readRequiredPersistedInstalledPluginIndex(scenario.stateDir)).installRecords,
++        ),
++      ).toEqual([]);
++      const retained = fs
++        .readdirSync(managed.npmRoot)
++        .filter((name) => name.startsWith(".openclaw-npm-cleanup-"));
++      expect(retained).toHaveLength(1);
++      const quarantinePath = path.join(managed.npmRoot, retained[0]);
++      expect(
++        fs
++          .readdirSync(quarantinePath, { recursive: true })
++          .some((name) => String(name).endsWith("locked-payload.bin")),
++      ).toBe(true);
++      expect(warnSpy.mock.calls.flat().join("\n")).toContain(quarantinePath);
++      expect(warnSpy.mock.calls.flat().join("\n")).toContain("injected payload cleanup failure");
++      await scenario.repair();
++      expect(
++        Object.keys(
++          (await readRequiredPersistedInstalledPluginIndex(scenario.stateDir)).installRecords,
++        ),
++      ).toEqual([]);
++    } finally {
++      unlinkSpy.mockRestore();
++      warnSpy.mockRestore();
++    }
++  });
++});

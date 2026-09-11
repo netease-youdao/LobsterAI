@@ -80,6 +80,20 @@ export function isGeneratedOpenClawWorkerShim(content: string): boolean {
   return content.includes(OPENCLAW_WORKER_SHIM_MARKER);
 }
 
+/** A root shim cannot replace its worker implementation in dist/. */
+export function getMissingOpenClawWorkerTargets(runtimeRoot: string): string[] {
+  if (!fs.existsSync(path.join(runtimeRoot, 'gateway-bundle.mjs'))) return [];
+  return OPENCLAW_WORKER_SHIM_TARGETS
+    .filter(({ targetFile }) => {
+      try {
+        return !fs.statSync(path.join(runtimeRoot, targetFile)).isFile();
+      } catch {
+        return true;
+      }
+    })
+    .map(({ targetFile }) => targetFile);
+}
+
 export function ensureOpenClawWorkerShims(runtimeRoot: string): OpenClawWorkerShimResult {
   const result: OpenClawWorkerShimResult = {
     created: [],

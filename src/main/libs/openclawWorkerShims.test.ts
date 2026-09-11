@@ -7,6 +7,7 @@ import { afterEach, expect, test } from 'vitest';
 import {
   buildOpenClawWorkerShimContent,
   ensureOpenClawWorkerShims,
+  getMissingOpenClawWorkerTargets,
   OPENCLAW_WORKER_SHIM_MARKER,
   OPENCLAW_WORKER_SHIM_TARGETS,
 } from './openclawWorkerShims';
@@ -50,6 +51,7 @@ test('skips shim creation when gateway bundle is absent', () => {
   const result = ensureOpenClawWorkerShims(runtimeRoot);
 
   expect(result.skippedBecauseBundleMissing).toBe(true);
+  expect(getMissingOpenClawWorkerTargets(runtimeRoot)).toEqual([]);
   for (const target of OPENCLAW_WORKER_SHIM_TARGETS) {
     expect(fs.existsSync(path.join(runtimeRoot, target.shimFile))).toBe(false);
   }
@@ -65,6 +67,7 @@ test('creates root worker shims that import their dist worker targets', () => {
   expect(result.created).toEqual(OPENCLAW_WORKER_SHIM_TARGETS.map((target) => target.shimFile));
   expect(result.updated).toEqual([]);
   expect(result.missingTargets).toEqual([]);
+  expect(getMissingOpenClawWorkerTargets(runtimeRoot)).toEqual([]);
   for (const target of OPENCLAW_WORKER_SHIM_TARGETS) {
     const shimPath = path.join(runtimeRoot, target.shimFile);
     expect(fs.readFileSync(shimPath, 'utf8')).toBe(buildOpenClawWorkerShimContent(target.targetFile));
@@ -156,6 +159,9 @@ test('reports missing worker targets without creating shims', () => {
 
   expect(result.created).toEqual([presentTarget.shimFile]);
   expect(result.missingTargets).toEqual(OPENCLAW_WORKER_SHIM_TARGETS.slice(1).map((target) => target.shimFile));
+  expect(getMissingOpenClawWorkerTargets(runtimeRoot)).toEqual(
+    OPENCLAW_WORKER_SHIM_TARGETS.slice(1).map((target) => target.targetFile),
+  );
   for (const target of OPENCLAW_WORKER_SHIM_TARGETS.slice(1)) {
     expect(fs.existsSync(path.join(runtimeRoot, target.shimFile))).toBe(false);
   }

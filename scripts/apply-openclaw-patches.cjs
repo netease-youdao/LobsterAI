@@ -857,6 +857,36 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-managed-npm-junction-cleanup.patch': [
+    {
+      file: 'src/commands/doctor-plugin-registry.ts',
+      snippets: ['removeManagedNpmPackages(stale, removeManagedNpmDependency)'],
+      forbiddenSnippets: ['fs.rmSync(params.packageDir'],
+    },
+    {
+      file: 'src/commands/doctor-plugin-npm-cleanup.ts',
+      snippets: [
+        'fs.lstatSync(target, { throwIfNoEntry: false })',
+        'fs.unlinkSync(target)',
+        'fs.rmdirSync(target)',
+        '".openclaw-npm-cleanup-"',
+        'fs.renameSync(entry.packageDir, stagedDir)',
+        'fs.copyFileSync(backupPath, filePath)',
+        'cleanupQuarantines(quarantines.values())',
+        'Managed npm cleanup rollback failed; recovery files retained at',
+      ],
+      forbiddenSnippets: ['fs.rmSync('],
+    },
+    {
+      file: 'src/commands/doctor-plugin-registry.cleanup.test.ts',
+      snippets: [
+        'removes stale packages without deleting nested junction targets',
+        'restores the $layout batch after a destructive $name write failure',
+        'retains original metadata and reports recovery paths when restoring a snapshot fails',
+        'persists all retirements and reports retained quarantine when payload cleanup fails',
+      ],
+    },
+  ],
   'openclaw-memory-sidecar-archive-generations.patch': [
     {
       file: 'extensions/memory-core/src/migration/doctor-memory-sidecar.ts',
