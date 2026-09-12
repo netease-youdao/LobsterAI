@@ -9,7 +9,6 @@ export const HtmlThumbnailLimits = {
   LoadTimeoutMs: 3_000,
   AnimationTimeoutMs: 3_000,
   AnimationSettleMs: 50,
-  CaptureIntervalMs: 50,
 } as const;
 
 export const isLibraryHtmlThumbnailExtension = (extension: string): boolean => (

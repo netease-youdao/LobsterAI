@@ -147,17 +147,25 @@ if (currentTag === desiredVersion) {
 
 log(`Current: ${currentTag || '(not on a tag)'}. Switching to ${desiredVersion} ...`);
 
-// Fetch tags (unshallow if needed)
-try {
-  const isShallow = fs.existsSync(path.join(openclawSrc, '.git', 'shallow'));
-  if (isShallow) {
-    log('Repository is shallow, fetching full history for tags ...');
-    git(['fetch', '--unshallow', '--tags', 'origin'], { cwd: openclawSrc, stdio: 'inherit' });
-  } else {
-    git(['fetch', '--tags', 'origin'], { cwd: openclawSrc, stdio: 'inherit' });
+// Fetch the pinned tag — and only that tag. `--unshallow --tags` used to be
+// used here, which drags in OpenClaw's entire history plus every upstream tag
+// (~3.5 GB and several hundred auto-generated release-publish/* CI tags) when
+// all the build needs is a single commit snapshot. `--no-tags` also disables
+// tag auto-following, so the refspec below is exactly what lands locally.
+const tagRef = `refs/tags/${desiredVersion}`;
+const fetchArgs = ['fetch', '--no-tags', 'origin', `+${tagRef}:${tagRef}`];
+if (fs.existsSync(path.join(openclawSrc, '.git', 'shallow'))) {
+  // Keep a shallow clone shallow; the new tag just adds its own shallow root.
+  log(`Repository is shallow, fetching ${desiredVersion} at depth 1 ...`);
+  fetchArgs.splice(1, 0, '--depth', '1');
+}
+if (gitExitCode(fetchArgs, { cwd: openclawSrc, stdio: 'inherit' }) !== 0) {
+  // Distinguish "bad pin" from "network/git failure" — the fetch no longer
+  // succeeds vacuously the way a whole-remote `--tags` fetch did.
+  if (gitExitCode(['ls-remote', '--exit-code', 'origin', tagRef], { cwd: openclawSrc }) !== 0) {
+    die(`Tag ${desiredVersion} not found in the OpenClaw repository. Check openclaw.version in package.json.`);
   }
-} catch (e) {
-  die(`Failed to fetch tags: ${e.message}`);
+  die(`Failed to fetch ${desiredVersion} from origin.`);
 }
 
 // Verify the desired tag exists

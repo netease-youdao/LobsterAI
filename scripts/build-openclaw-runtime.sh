@@ -88,6 +88,13 @@ fi
 
 node -e 'const [a,b,c]=process.versions.node.split(".").map(Number);const ok=a>22||(a===22&&(b>12||(b===12&&c>=0)));if(!ok){console.error(`Node ${process.versions.node} is too old. Require >= 22.12.0`);process.exit(1)}'
 
+# OpenClaw pins its package manager via package.json "packageManager". pnpm
+# downloads that version into its store without running its build scripts, which
+# leaves pnpm v12+ with a placeholder bin instead of its native binary. Repair it
+# here rather than failing at the first `pnpm install` below with an opaque
+# "not recognized as an internal or external command".
+node "$ELECTRON_ROOT/scripts/ensure-pnpm-native-binary.cjs" "$OPENCLAW_SRC"
+
 # ---------------------------------------------------------------------------
 # Build cache: skip if the runtime was already built for the pinned version.
 # On Windows (Git Bash / MSYS2), paths like $ELECTRON_ROOT are Unix-style

@@ -130,22 +130,24 @@
   },
   "main": "dist-electron/main.js",
   "engines": {
-    "node": ">=24.15.0 <25"
+    "node": ">=24.15.0 <25",
+    "npm": ">=11.17.0 <12"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.3": false
   },
   "scripts": {
     "dev": "vite",
     "prebuild": "node scripts/generate-keyfrom-build-info.cjs",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && vite build --config vite.thumbnail.config.ts",
     "lint": "eslint src/",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepare": "husky",
     "test": "vitest run",
-    "pretest": "npm rebuild better-sqlite3",
     "test:sqlite-backup:seed": "node tests/sqlite-backup/generate-large-db.cjs",
     "preview": "vite preview",
     "compile:electron": "tsc --project electron-tsconfig.json",
-    "precompile:electron": "electron-builder install-app-deps",
     "build:skill:web-search": "npm install --prefix SKILLs/web-search && npx tsc -p SKILLs/web-search/tsconfig.json && node -e \"const fs=require('fs');['.connection','.server.log','.server.pid'].forEach(f=>{try{fs.unlinkSync('SKILLs/web-search/'+f)}catch(e){}});\"",
     "build:skill:tech-news": "node scripts/build-skill-tech-news.js",
     "build:skill:email": "cd SKILLs/imap-smtp-email && npm install --production",
@@ -155,7 +157,7 @@
     "electron:dev": "rimraf dist-electron && npm run compile:electron && concurrently \"vite --port 5175 --strictPort\" \"npm run wait:electron:dev && npm run start:electron\"",
     "electron:dev:inspect": "cross-env ELECTRON_OPEN_DEVTOOLS=1 npm run electron:dev",
     "electron:dev:openclaw": "npm run openclaw:runtime:host && npm run electron:dev",
-    "postinstall": "patch-package --error-on-fail && electron-builder install-app-deps",
+    "postinstall": "patch-package --error-on-fail",
     "pack": "npm run setup:python-runtime && npm run build && npm run compile:electron && npm run build:skills && electron-builder --dir --config scripts/electron-builder-config.cjs",
     "dist": "npm run setup:python-runtime && npm run build && npm run compile:electron && npm run build:skills && electron-builder --config scripts/electron-builder-config.cjs",
     "dist:mac": "electron-builder --mac --config scripts/electron-builder-config.cjs",

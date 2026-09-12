@@ -4,7 +4,6 @@ import path from 'path';
 
 import {
   HtmlThumbnailLayout,
-  HtmlThumbnailLimits,
   isLibraryHtmlThumbnailExtension,
 } from '../../shared/library/htmlThumbnail';
 import {
@@ -24,7 +23,6 @@ import {
 import {
   hasLibraryThumbnailPresentationStamp,
   type LibraryThumbnailPresentationExpectation,
-  waitForCommittedThumbnailPresentation,
 } from './libraryThumbnailPresentation';
 import { isLikelyBlankThumbnailBitmap } from './libraryThumbnailValidation';
 
@@ -40,7 +38,6 @@ interface LibraryThumbnailRendererOptions {
   renderTimeoutMs?: number;
   captureTimeoutMs?: number;
   presentationTimeoutMs?: number;
-  platform?: NodeJS.Platform;
 }
 
 const LIBRARY_THUMBNAIL_PARTITION = 'library-thumbnail-renderer';
@@ -53,6 +50,24 @@ const isRenderResult = (value: unknown): value is LibraryThumbnailRenderResult =
   && typeof (value as LibraryThumbnailRenderResult).success === 'boolean'
 );
 
+/**
+ * Captured pages are 1x bitmaps in physical pixels, so on HiDPI displays the
+ * thumbnail rectangle must be scaled before cropping and the result brought
+ * back to the requested size.
+ */
+const cropPresentedThumbnail = (image: NativeImage, size: ThumbnailSize): NativeImage => {
+  const captured = image.getSize();
+  const scale = captured.width > 0 ? captured.width / size.width : 1;
+  const cropped = image.crop({
+    x: 0,
+    y: 0,
+    width: Math.min(captured.width, Math.round(size.width * scale)),
+    height: Math.min(captured.height, Math.round(size.height * scale)),
+  });
+  if (scale <= 1) return cropped;
+  return cropped.resize({ width: size.width, height: size.height, quality: 'best' });
+};
+
 export class LibraryThumbnailRenderer {
   private readonly developmentServerUrl?: string;
   private readonly productionHtmlPath: string;
@@ -60,7 +75,6 @@ export class LibraryThumbnailRenderer {
   private readonly renderTimeoutMs: number;
   private readonly captureTimeoutMs: number;
   private readonly presentationTimeoutMs: number;
-  private readonly platform: NodeJS.Platform;
   private window?: BrowserWindow;
   private renderGeneration = 0;
 
@@ -72,7 +86,6 @@ export class LibraryThumbnailRenderer {
     this.captureTimeoutMs = options.captureTimeoutMs ?? LibraryThumbnailLimits.CaptureTimeoutMs;
     this.presentationTimeoutMs = options.presentationTimeoutMs
       ?? LibraryThumbnailLimits.PresentationTimeoutMs;
-    this.platform = options.platform ?? process.platform;
   }
 
   render(filePath: string, size: ThumbnailSize): Promise<Buffer> {
@@ -266,69 +279,23 @@ export class LibraryThumbnailRenderer {
     renderGeneration: number,
     metrics?: LibraryThumbnailRenderMetrics,
   ): Promise<Buffer> {
-    let image: NativeImage;
     const expectation: LibraryThumbnailPresentationExpectation = {
       width: size.width,
       height: size.height,
       renderGeneration,
       html: isLibraryHtmlThumbnailExtension(extension),
     };
-    if (this.platform === 'win32') {
-      try {
-        const presentedImage = await waitForCommittedThumbnailPresentation(
-          rendererWindow.webContents,
-          this.presentationTimeoutMs,
-          expectation,
-        );
-        image = presentedImage.crop({
-          x: 0,
-          y: 0,
-          width: size.width,
-          height: size.height,
-        });
-      } catch (error) {
-        throw withLibraryThumbnailErrorMetrics(
-          error,
-          LibraryThumbnailFailureCode.PresentationFailed,
-          metrics ?? {},
-        );
-      }
-    } else if (expectation.html) {
-      try {
-        // Validate and crop the very same image; a second capture would reintroduce the race.
-        const presentedImage = await this.captureHtmlPresentation(rendererWindow, expectation);
-        image = presentedImage.crop({ x: 0, y: 0, width: size.width, height: size.height });
-      } catch (error) {
-        throw withLibraryThumbnailErrorMetrics(
-          error,
-          LibraryThumbnailFailureCode.PresentationFailed,
-          metrics ?? {},
-        );
-      }
-    } else {
-      rendererWindow.webContents.invalidate();
-      try {
-        image = await this.withTimeout(
-          rendererWindow.webContents.capturePage({
-            x: 0,
-            y: 0,
-            width: size.width,
-            height: size.height,
-          }, {
-            stayHidden: true,
-            stayAwake: true,
-          }),
-          this.captureTimeoutMs,
-          LibraryThumbnailFailureCode.CaptureTimeout,
-          'Thumbnail capture timed out',
-        );
-      } catch (error) {
-        throw withLibraryThumbnailErrorMetrics(
-          error,
-          LibraryThumbnailFailureCode.PresentationFailed,
-          metrics ?? {},
-        );
-      }
+    let image: NativeImage;
+    try {
+      // Validate and crop the very same image; a second capture would reintroduce the race.
+      const presentedImage = await this.capturePresentedPage(rendererWindow, expectation);
+      image = cropPresentedThumbnail(presentedImage, size);
+    } catch (error) {
+      throw withLibraryThumbnailErrorMetrics(
+        error,
+        LibraryThumbnailFailureCode.PresentationFailed,
+        metrics ?? {},
+      );
     }
     const capturedSize = image.getSize();
     if (image.isEmpty() || capturedSize.width <= 0 || capturedSize.height <= 0) {
@@ -367,10 +334,19 @@ export class LibraryThumbnailRenderer {
     return png;
   }
 
-  private async captureHtmlPresentation(
+  /**
+   * Poll capturePage until the frame carries the current generation stamps.
+   * A hidden window does not repaint on demand: a frame subscription only
+   * delivers the snapshot taken when it starts and invalidate() never yields
+   * another frame, whereas every capturePage call copies the current surface.
+   */
+  private async capturePresentedPage(
     rendererWindow: BrowserWindow,
     expectation: LibraryThumbnailPresentationExpectation,
   ): Promise<NativeImage> {
+    const captureHeight = expectation.height
+      + (expectation.html ? HtmlThumbnailLayout.ChildStampHeight : 0)
+      + LibraryThumbnailPresentationStamp.Height;
     const deadline = Date.now() + this.presentationTimeoutMs;
     while (Date.now() < deadline) {
       rendererWindow.webContents.invalidate();
@@ -379,21 +355,24 @@ export class LibraryThumbnailRenderer {
           x: 0,
           y: 0,
           width: expectation.width,
-          height: expectation.height + HtmlThumbnailLayout.ChildStampHeight + LibraryThumbnailPresentationStamp.Height,
+          height: captureHeight,
         }, { stayHidden: true, stayAwake: true }),
         Math.max(1, Math.min(this.captureTimeoutMs, deadline - Date.now())),
         LibraryThumbnailFailureCode.PresentationTimeout,
-        'HTML thumbnail presentation timed out',
+        'Thumbnail presentation timed out',
       );
       if (hasLibraryThumbnailPresentationStamp(image, expectation)) return image;
       const remaining = deadline - Date.now();
       if (remaining > 0) {
-        await new Promise(resolve => setTimeout(resolve, Math.min(HtmlThumbnailLimits.CaptureIntervalMs, remaining)));
+        await new Promise(resolve => setTimeout(
+          resolve,
+          Math.min(LibraryThumbnailLimits.PresentationPollIntervalMs, remaining),
+        ));
       }
     }
     throw new LibraryThumbnailError(
       LibraryThumbnailFailureCode.PresentationTimeout,
-      'HTML thumbnail presentation timed out',
+      'Thumbnail presentation timed out',
     );
   }
 

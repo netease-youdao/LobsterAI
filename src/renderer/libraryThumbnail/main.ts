@@ -428,6 +428,9 @@ const renderMermaid = async (
     startOnLoad: false,
     securityLevel: 'strict',
     theme: 'neutral',
+    // The sanitizer below strips foreignObject, so labels must be plain SVG text.
+    htmlLabels: false,
+    flowchart: { htmlLabels: false },
   });
   const source = new TextDecoder('utf-8').decode(bytes);
   const renderId = `library-thumbnail-${Date.now()}`;
