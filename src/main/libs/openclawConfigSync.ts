@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
+import { isDeepStrictEqual } from 'util';
 
 import { buildScheduledTaskEnginePrompt } from '../../scheduledTask/enginePrompt';
 import { AgentId, DefaultAgentProfile } from '../../shared/agent';
@@ -74,6 +75,7 @@ import { logOpenClawConfigLockDiagnostics } from './openclawConfigDiagnostics';
 import { OpenClawConfigImpact } from './openclawConfigImpact';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { repairHeartbeatFile, stripProactiveHeartbeatSection } from './openclawHeartbeatRepair';
+import { withManagedOpenClawModelPolicy, withoutOpenClawWriteMetadata } from './openclawManagedModelPolicy';
 import { getMainAgentWorkspacePath } from './openclawMemoryFile';
 import { resolveOpenClawCatalogModelMaxTokens } from './openclawModelCatalog';
 
@@ -1935,9 +1937,12 @@ export class OpenClawConfigSync {
     } catch {
       // Engine manager may not be fully initialised (e.g. in tests).
     }
+    const meta = { ...asConfigRecord(config.meta) };
+    delete meta.lastTouchedAt; // OpenClaw v2026.8.1 stores this in machine state.
     return {
       ...config,
       meta: {
+        ...meta,
         ...(version ? { lastTouchedVersion: version } : {}),
       },
     };
@@ -2351,9 +2356,11 @@ export class OpenClawConfigSync {
     // See: openclaw/openclaw#58678, #33310, #61613
     let existingGateway: Record<string, unknown> = {};
     let existingPlugins: Record<string, unknown> = {};
+    let existingConfig: Record<string, unknown> = {};
     let existingSessionStoreOwner: unknown;
     try {
       const existing = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      existingConfig = asConfigRecord(existing) ?? {};
       existingGateway = (existing.gateway ?? {}) as Record<string, unknown>;
       existingSessionStoreOwner = existing.agents?.defaults?.sessionStore;
       // Filtered: plugin-index-managed keys (e.g. `installs`) must never be
@@ -3220,6 +3227,7 @@ export class OpenClawConfigSync {
       stateDir: this.engineManager.getStateDir(),
       legacyOwner: existingSessionStoreOwner,
     });
+    managedConfig = withManagedOpenClawModelPolicy(managedConfig, existingConfig);
     const nextContent = `${JSON.stringify(managedConfig, null, 2)}\n`;
     console.log('[OpenClawConfigSync] sync() managedConfig key fields:', {
       providers: (managedConfig.models as Record<string, unknown>)?.providers,
@@ -3234,16 +3242,14 @@ export class OpenClawConfigSync {
       currentContent = '';
     }
 
-    // Compare ignoring `meta` — it contains timestamps that change on every
-    // write and should not trigger a gateway restart.
+    // OpenClaw may reorder object keys during config writes. Compare values,
+    // retaining array order and migration markers, but ignoring write provenance.
     const configChanged = (() => {
       if (!currentContent) return true;
       try {
-        const cur = JSON.parse(currentContent);
-        delete cur.meta;
-        const nxt = JSON.parse(nextContent);
-        delete nxt.meta;
-        return JSON.stringify(cur) !== JSON.stringify(nxt);
+        const cur = withoutOpenClawWriteMetadata(JSON.parse(currentContent));
+        const nxt = withoutOpenClawWriteMetadata(JSON.parse(nextContent));
+        return !isDeepStrictEqual(cur, nxt);
       } catch {
         return currentContent !== nextContent;
       }
@@ -3267,8 +3273,8 @@ export class OpenClawConfigSync {
     if (configChanged) {
       // Diagnostic: diff gateway and plugins sections to identify what triggers OpenClaw restart
       try {
-        const currentObj = currentContent ? JSON.parse(currentContent) : {};
-        const nextObj = JSON.parse(nextContent);
+        const currentObj = withoutOpenClawWriteMetadata(currentContent ? JSON.parse(currentContent) : {});
+        const nextObj = withoutOpenClawWriteMetadata(JSON.parse(nextContent));
         const curGw = JSON.stringify(currentObj.gateway ?? {});
         const nxtGw = JSON.stringify(nextObj.gateway ?? {});
         const curPl = JSON.stringify(currentObj.plugins ?? {});
@@ -3284,16 +3290,15 @@ export class OpenClawConfigSync {
         }
         if (curPl !== nxtPl) {
           console.log(`${gwDiagTs()} plugins DIFF:`);
-          console.log(`${gwDiagTs()} old plugin entry keys:`, Object.keys((currentObj.plugins?.entries) ?? {}).sort().join(','));
-          console.log(`${gwDiagTs()} new plugin entry keys:`, Object.keys((nextObj.plugins?.entries) ?? {}).sort().join(','));
+          console.log(`${gwDiagTs()} old plugin entry keys:`, Object.keys(asConfigRecord(asConfigRecord(currentObj.plugins)?.entries) ?? {}).sort().join(','));
+          console.log(`${gwDiagTs()} new plugin entry keys:`, Object.keys(asConfigRecord(asConfigRecord(nextObj.plugins)?.entries) ?? {}).sort().join(','));
         } else {
           console.log(`${gwDiagTs()} plugins section UNCHANGED`);
         }
         // Check which top-level keys actually changed
         const allKeys = new Set([...Object.keys(currentObj), ...Object.keys(nextObj)]);
         changedTopLevelKeys = [...allKeys].filter(k => {
-          if (k === 'meta') return false;
-          return JSON.stringify(currentObj[k]) !== JSON.stringify(nextObj[k]);
+          return !isDeepStrictEqual(currentObj[k], nextObj[k]);
         });
         console.log(`${gwDiagTs()} top-level changed keys:`, changedTopLevelKeys.join(',') || '(none)');
       } catch { /* ignore parse errors in diag */ }
@@ -4175,15 +4180,13 @@ export class OpenClawConfigSync {
     });
     const nextContent = `${JSON.stringify(mergedConfig, null, 2)}\n`;
 
-    // Compare ignoring `meta` timestamps to avoid unnecessary writes.
+    // Preserve migration semantics while ignoring write provenance.
     const unchanged = (() => {
       if (!currentContent) return false;
       try {
-        const cur = JSON.parse(currentContent);
-        delete cur.meta;
-        const nxt = JSON.parse(nextContent);
-        delete nxt.meta;
-        return JSON.stringify(cur) === JSON.stringify(nxt);
+        const cur = withoutOpenClawWriteMetadata(JSON.parse(currentContent));
+        const nxt = withoutOpenClawWriteMetadata(JSON.parse(nextContent));
+        return isDeepStrictEqual(cur, nxt);
       } catch {
         return currentContent === nextContent;
       }
