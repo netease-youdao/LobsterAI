@@ -277,7 +277,7 @@
   "devDependencies": {
     "@commitlint/cli": "^20.5.0",
     "@commitlint/config-conventional": "^20.5.0",
-    "@sinclair/typebox": "0.34.49",
+    "@sinclair/typebox": "0.34.52",
     "@tailwindcss/typography": "^0.5.16",
     "@types/better-sqlite3": "^9.6.0",
     "@types/js-yaml": "^4.0.9",
