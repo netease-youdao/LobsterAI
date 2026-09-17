@@ -1,0 +1,19 @@
+{
+  "preset": "deep-tech-nocturne",
+  "tokens": {
+    "color": {
+      "pageBg": "#130e2a",
+      "pageBgAlt": "#1b1437",
+      "surface": "#231d46",
+      "surfaceSoft": "#2d2754",
+      "ink": "#f5f2ff",
+      "muted": "#b8b2d8",
+      "accent": "#9e73ff",
+      "accentSoft": "#392f69",
+      "line": "#453f78",
+      "chipNeutral": "#473d72",
+      "chipAccent": "#9e73ff",
+      "chipPositive": "#4ac7c7"
+    }
+  }
+}

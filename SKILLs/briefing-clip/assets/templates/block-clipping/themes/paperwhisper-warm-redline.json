@@ -1,0 +1,33 @@
+{
+  "preset": "paperwhisper-warm-redline",
+  "tokens": {
+    "color": {
+      "pageBg": "#ebe1cf",
+      "pageBgAlt": "#f3eadc",
+      "surface": "#fffdf9",
+      "surfaceSoft": "#f9f2eb",
+      "ink": "#1e1914",
+      "muted": "#7f7266",
+      "accent": "#bf4935",
+      "accentSoft": "#efd8d1",
+      "line": "#d4c5b2",
+      "chipNeutral": "#45506d",
+      "chipAccent": "#bf4935",
+      "chipPositive": "#2d8b57"
+    },
+    "radius": {
+      "card": "10px",
+      "chip": "4px"
+    },
+    "type": {
+      "display": "\"Iowan Old Style\", \"Palatino Linotype\", \"Book Antiqua\", Georgia, serif",
+      "body": "\"Iowan Old Style\", \"Palatino Linotype\", \"Book Antiqua\", Georgia, serif"
+    },
+    "shadow": {
+      "paper": "0 10px 28px rgba(58, 45, 30, 0.12)"
+    },
+    "texture": {
+      "wash": "0.12"
+    }
+  }
+}

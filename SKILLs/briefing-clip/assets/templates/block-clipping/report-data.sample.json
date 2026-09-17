@@ -1,0 +1,120 @@
+{
+  "meta": {
+    "title": "OpenSpec × Superpowers",
+    "subtitle": "从规范驱动到行为规范",
+    "date_label": "2026年3月23日",
+    "edition": "默认样例",
+    "source_note": "示例数据：默认使用 warm-ledger 纸感剪报预设。"
+  },
+  "theme": {
+    "preset": "paperwhisper-warm-ledger"
+  },
+  "layout": {
+    "canvas_width": 720,
+    "spacing_scale": "comfortable",
+    "freedom": "expressive"
+  },
+  "blocks": [
+    {
+      "id": "masthead-1",
+      "type": "masthead",
+      "variant": "centered-stamp",
+      "props": {
+        "title": "OpenSpec × Superpowers",
+        "subtitle": "从“规范驱动”到“行为规范”的思考",
+        "date_label": "2026年3月23日",
+        "meta_line": "纸感剪报 · 默认预设"
+      }
+    },
+    {
+      "id": "tags-1",
+      "type": "tag-row",
+      "variant": "flag-tabs",
+      "props": {
+        "items": [
+          { "label": "OpenSpec", "tone": "accent" },
+          { "label": "Superpowers", "tone": "neutral" },
+          { "label": "SDD", "tone": "soft" }
+        ]
+      }
+    },
+    {
+      "id": "section-1",
+      "type": "section-card",
+      "variant": "paper-slip",
+      "props": {
+        "icon": "🧭",
+        "title": "核心问题已经不是让 AI 写代码，而是让它稳定地写对代码",
+        "intro": "这套默认样例用 warm-ledger 纸感风格展示一篇方法论文章的 block 化结果。",
+        "bullets": [
+          "OpenSpec 主要回答“要做什么”。",
+          "Superpowers 主要约束“应该怎么做”。",
+          "两者结合后，AI 研发流程会更稳定。"
+        ],
+        "closing": "默认 preset 继续使用你最喜欢的第一套 warm-ledger 风格。"
+      }
+    },
+    {
+      "id": "divider-1",
+      "type": "divider",
+      "variant": "stitched-line",
+      "props": {}
+    },
+    {
+      "id": "metric-1",
+      "type": "metric-strip",
+      "variant": "triple-counter",
+      "props": {
+        "icon": "⚖️",
+        "title": "两种方法，三个关键词",
+        "summary": "默认样例保持信息简洁，方便你一眼看出模板的基础骨架。",
+        "stats": [
+          { "value": "What", "label": "OpenSpec" },
+          { "value": "How", "label": "Superpowers" },
+          { "value": "Merge", "label": "建议" }
+        ],
+        "bullets": [
+          "语义边界需要被定义。",
+          "执行纪律需要被约束。",
+          "成熟流程需要上下游闭环。"
+        ],
+        "closing": "这个 metric-strip 也是默认模板里最常用的核心块之一。"
+      }
+    },
+    {
+      "id": "divider-2",
+      "type": "divider",
+      "variant": "tiny-ornament",
+      "props": {}
+    },
+    {
+      "id": "quotes-1",
+      "type": "quote-stack",
+      "variant": "pink-stack",
+      "props": {
+        "icon": "💬",
+        "title": "默认结论卡",
+        "quotes": [
+          {
+            "text": "不要把它们当竞品，要把它们当上下游。",
+            "source": "默认示例"
+          },
+          {
+            "text": "成熟的 AI 工程体系，需要同时拥有语义规范与行为规范。",
+            "source": "默认示例"
+          }
+        ]
+      }
+    },
+    {
+      "id": "footer-1",
+      "type": "footer-mark",
+      "variant": "double-rule-footer",
+      "props": {
+        "left": "PAPERWHISPER",
+        "center": "默认剪报",
+        "right": "2026.03.23"
+      }
+    }
+  ]
+}

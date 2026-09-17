@@ -16,6 +16,7 @@
     "stock-analyzer": { "order": 110, "enabled": true },
     "stock-announcements": { "order": 111, "enabled": true },
     "stock-explorer": { "order": 112, "enabled": true },
+    "briefing-clip": { "order": 113, "enabled": true },
     "content-planner": { "order": 120, "enabled": true },
     "article-writer": { "order": 121, "enabled": true },
     "daily-trending": { "order": 122, "enabled": true },

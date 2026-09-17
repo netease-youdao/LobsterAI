@@ -1,0 +1,23 @@
+{
+  "preset": "editorial-tldr-bold",
+  "tokens": {
+    "color": {
+      "pageBg": "#f3f1ec",
+      "pageBgAlt": "#fbfaf7",
+      "surface": "#fffefb",
+      "surfaceSoft": "#f3f4f6",
+      "ink": "#17181b",
+      "muted": "#5e636c",
+      "accent": "#295ea8",
+      "accentSoft": "#dce7f6",
+      "line": "#cfd4dc",
+      "chipNeutral": "#17181b",
+      "chipAccent": "#295ea8",
+      "chipPositive": "#4a6d97"
+    },
+    "radius": {
+      "card": "18px",
+      "chip": "999px"
+    }
+  }
+}
