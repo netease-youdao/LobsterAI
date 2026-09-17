@@ -687,6 +687,8 @@ export interface UserInstalledPlugin {
   enabled: boolean;
   installedAt: number;
   config?: Record<string, unknown>;
+  /** OpenClaw plugins.entries.<id>.hooks — persisted across gateway sync rewrites. */
+  hooks?: Record<string, unknown>;
 }
 
 
@@ -3668,31 +3670,25 @@ export class CoworkStore {
       enabled: number;
       installed_at: number;
       config: string | null;
+      hooks: string | null;
     }>('SELECT * FROM user_plugins ORDER BY installed_at ASC');
 
-    return rows.map(row => ({
-      pluginId: row.plugin_id,
-      source: row.source as PluginSource,
-      spec: row.spec,
-      registry: row.registry || undefined,
-      version: row.version || undefined,
-      enabled: Boolean(row.enabled),
-      installedAt: row.installed_at,
-      config: row.config ? JSON.parse(row.config) as Record<string, unknown> : undefined,
-    }));
+    return rows.map(row => this.mapUserPluginRow(row));
   }
 
   addUserPlugin(plugin: UserInstalledPlugin): void {
     this.db.prepare(
-      `INSERT INTO user_plugins (plugin_id, source, spec, registry, version, enabled, installed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO user_plugins (plugin_id, source, spec, registry, version, enabled, installed_at, config, hooks)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(plugin_id) DO UPDATE SET
          source = excluded.source,
          spec = excluded.spec,
          registry = excluded.registry,
          version = excluded.version,
          enabled = excluded.enabled,
-         installed_at = excluded.installed_at`,
+         installed_at = excluded.installed_at,
+         config = COALESCE(excluded.config, user_plugins.config),
+         hooks = COALESCE(excluded.hooks, user_plugins.hooks)`,
     ).run(
       plugin.pluginId,
       plugin.source,
@@ -3701,6 +3697,8 @@ export class CoworkStore {
       plugin.version || null,
       plugin.enabled ? 1 : 0,
       plugin.installedAt,
+      plugin.config ? JSON.stringify(plugin.config) : null,
+      plugin.hooks ? JSON.stringify(plugin.hooks) : null,
     );
   }
 
@@ -3717,17 +3715,24 @@ export class CoworkStore {
     const row = this.getOne<{ config: string | null }>(
       'SELECT config FROM user_plugins WHERE plugin_id = ?', [pluginId],
     );
-    if (!row?.config) return null;
-    try {
-      return JSON.parse(row.config) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
+    return this.parseJsonObject(row?.config ?? null);
   }
 
   setUserPluginConfig(pluginId: string, config: Record<string, unknown>): void {
     this.db.prepare('UPDATE user_plugins SET config = ? WHERE plugin_id = ?')
       .run(JSON.stringify(config), pluginId);
+  }
+
+  getUserPluginHooks(pluginId: string): Record<string, unknown> | null {
+    const row = this.getOne<{ hooks: string | null }>(
+      'SELECT hooks FROM user_plugins WHERE plugin_id = ?', [pluginId],
+    );
+    return this.parseJsonObject(row?.hooks ?? null);
+  }
+
+  setUserPluginHooks(pluginId: string, hooks: Record<string, unknown>): void {
+    this.db.prepare('UPDATE user_plugins SET hooks = ? WHERE plugin_id = ?')
+      .run(JSON.stringify(hooks), pluginId);
   }
 
   getUserPlugin(pluginId: string): UserInstalledPlugin | undefined {
@@ -3740,9 +3745,37 @@ export class CoworkStore {
       enabled: number;
       installed_at: number;
       config: string | null;
+      hooks: string | null;
     }>('SELECT * FROM user_plugins WHERE plugin_id = ?', [pluginId]);
 
     if (!row) return undefined;
+    return this.mapUserPluginRow(row);
+  }
+
+  private parseJsonObject(raw: string | null): Record<string, unknown> | null {
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private mapUserPluginRow(row: {
+    plugin_id: string;
+    source: string;
+    spec: string;
+    registry: string | null;
+    version: string | null;
+    enabled: number;
+    installed_at: number;
+    config: string | null;
+    hooks: string | null;
+  }): UserInstalledPlugin {
     return {
       pluginId: row.plugin_id,
       source: row.source as PluginSource,
@@ -3751,7 +3784,8 @@ export class CoworkStore {
       version: row.version || undefined,
       enabled: Boolean(row.enabled),
       installedAt: row.installed_at,
-      config: row.config ? JSON.parse(row.config) as Record<string, unknown> : undefined,
+      config: this.parseJsonObject(row.config) ?? undefined,
+      hooks: this.parseJsonObject(row.hooks) ?? undefined,
     };
   }
 }
