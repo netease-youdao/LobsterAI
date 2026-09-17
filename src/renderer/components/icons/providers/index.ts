@@ -13,6 +13,7 @@ export { default as MoonshotIcon } from './MoonshotIcon';
 export { default as OllamaIcon } from './OllamaIcon';
 export { default as OpenAIIcon } from './OpenAIIcon';
 export { default as OpenRouterIcon } from './OpenRouterIcon';
+export { default as OrcaRouterIcon } from './OrcaRouterIcon';
 export { default as QianfanIcon } from './QianfanIcon';
 export { default as QwenIcon } from './QwenIcon';
 export { default as StepfunIcon } from './StepfunIcon';

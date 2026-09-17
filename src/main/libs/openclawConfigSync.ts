@@ -1060,6 +1060,12 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
 
+  [ProviderName.OrcaRouter]: {
+    providerId: OpenClawProviderId.OpenRouter,
+    resolveApi: ({ apiType, baseURL }) => mapApiTypeToOpenClawApi(apiType, undefined, baseURL),
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+
   [ProviderName.Ollama]: {
     providerId: OpenClawProviderId.Ollama,
     resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawTransportApi,
