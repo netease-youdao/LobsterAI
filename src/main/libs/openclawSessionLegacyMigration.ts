@@ -8,6 +8,7 @@ import { OpenClawEngineErrorCode } from '../../shared/openclawEngine/constants';
 import { inspectOpenClawPath, logOpenClawConfigLockDiagnostics } from './openclawConfigDiagnostics';
 import { extractDreamingStartupFailure } from './openclawDreamingStartupFailure';
 import { extractOpenClawCliFailure, isOpenClawAgentMediaMigrationFailure } from './openclawStartupCompatibility';
+import { safelyReplaceTextFileSync } from './safeFileReplace';
 
 const LEGACY_SESSION_DOCTOR_TIMEOUT_MS = 300_000;
 const LOG_TAIL_LIMIT = 4_000;
@@ -84,6 +85,66 @@ export function listLegacySessionStorePaths(stateDir: string): string[] {
   }
 
   return candidates.filter(fileExists);
+}
+
+const UTF8_BOM = '\uFEFF';
+
+const parsesAsSessionStore = (raw: string): boolean => {
+  try {
+    const value: unknown = JSON.parse(raw);
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+};
+
+export type LegacySessionStorePreflightResult = {
+  /** Stores rewritten without a leading UTF-8 BOM. */
+  repaired: string[];
+  /** Unparseable stores renamed aside; the renamed file stays next to the original. */
+  quarantined: string[];
+};
+
+/**
+ * Doctor reads each store as raw UTF-8 and fails the whole import when one of
+ * them does not parse into an object (`store_unreadable` / `store_not_object`).
+ * The store then stays in place, so every later start fails the same way and
+ * the gateway never starts. Mirror doctor's parse, strip a BOM when that is the
+ * only defect, and rename anything else aside so the remaining stores migrate.
+ */
+export function preflightLegacySessionStores(
+  storePaths: readonly string[],
+  now: Date = new Date(),
+): LegacySessionStorePreflightResult {
+  const result: LegacySessionStorePreflightResult = { repaired: [], quarantined: [] };
+  const stamp = now.toISOString().replace(/[:.]/g, '-');
+  for (const storePath of storePaths) {
+    let raw: string;
+    try {
+      raw = fs.readFileSync(storePath).toString('utf-8');
+    } catch {
+      // Permission or lock errors are not damaged data; leave them for doctor to report.
+      continue;
+    }
+    if (parsesAsSessionStore(raw)) continue;
+    try {
+      if (raw.startsWith(UTF8_BOM) && parsesAsSessionStore(raw.slice(UTF8_BOM.length))) {
+        safelyReplaceTextFileSync({
+          filePath: storePath,
+          content: raw.slice(UTF8_BOM.length),
+          mode: fs.statSync(storePath).mode & 0o777,
+          tempLabel: 'strip-bom',
+        });
+        result.repaired.push(storePath);
+        continue;
+      }
+      fs.renameSync(storePath, `${storePath}.unreadable-${stamp}`);
+      result.quarantined.push(storePath);
+    } catch (error) {
+      console.warn(`[OpenClaw] Could not repair or set aside unreadable legacy session store ${storePath}:`, error);
+    }
+  }
+  return result;
 }
 
 function tailLog(text: string): string {
@@ -203,6 +264,13 @@ export async function migrateLegacySessionStorageWithDoctor(params: {
   env: NodeJS.ProcessEnv;
   runner?: LegacySessionMigrationRunner;
 }): Promise<LegacySessionMigrationResult> {
+  const preflight = preflightLegacySessionStores(listLegacySessionStorePaths(params.stateDir));
+  if (preflight.repaired.length > 0) {
+    console.warn(`[OpenClaw] Removed a UTF-8 BOM from ${preflight.repaired.length} legacy session store(s) before migration: ${preflight.repaired.join(', ')}`);
+  }
+  if (preflight.quarantined.length > 0) {
+    console.warn(`[OpenClaw] Set aside ${preflight.quarantined.length} unreadable legacy session store(s) so migration can continue: ${preflight.quarantined.join(', ')}`);
+  }
   const legacyPaths = listLegacySessionStorePaths(params.stateDir);
   if (legacyPaths.length === 0) {
     return { status: 'skipped', reason: 'no-legacy-session-files' };

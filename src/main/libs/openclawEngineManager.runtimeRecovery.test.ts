@@ -28,6 +28,7 @@ vi.mock('electron', () => ({
 }));
 
 import { INSTALLER_RESOURCES_TAR } from './installerResourceRecovery';
+import { healOpenClawConfigUnrecognizedKeys, OpenClawConfigSelfHealStatus } from './openclawConfigSelfHeal';
 import { OpenClawEngineManager } from './openclawEngineManager';
 import { spawnOpenClawGatewayProcess } from './openclawGatewayProcess';
 import { runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
@@ -40,6 +41,10 @@ vi.mock('./openclawGatewayProcess', async (importOriginal) => ({
 vi.mock('./openclawStartupCompatibility', async (importOriginal) => ({
   ...await importOriginal<typeof import('./openclawStartupCompatibility')>(),
   runOpenClawStartupCompatibility: vi.fn(),
+}));
+vi.mock('./openclawConfigSelfHeal', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./openclawConfigSelfHeal')>(),
+  healOpenClawConfigUnrecognizedKeys: vi.fn(async () => ({ status: 'valid' })),
 }));
 import {
   migrateLegacyOpenClawPluginInstalls,
@@ -206,5 +211,89 @@ describe('OpenClawEngineManager startup runtime recovery', () => {
     }));
     expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
     expect(fs.readFileSync(databasePath, 'utf8')).toBe('migration owns this database');
+  });
+
+  const prepareSpawnlessStartup = () => {
+    setProcessProperty('platform', 'darwin');
+    fs.writeFileSync(path.join(resourcesDir, 'cfmind', 'openclaw.mjs'), 'export {};\n');
+    const manager = new OpenClawEngineManager();
+    vi.spyOn(manager, 'ensureReady').mockResolvedValue({ phase: OpenClawEnginePhase.Ready } as ReturnType<typeof manager.getStatus>);
+    const internals = manager as unknown as {
+      resolveGatewayPort: () => Promise<number>;
+      ensureBundledCliShims: () => string;
+      configSelfHealPending: boolean;
+    };
+    vi.spyOn(internals, 'resolveGatewayPort').mockResolvedValue(19763);
+    vi.spyOn(internals, 'ensureBundledCliShims').mockReturnValue('');
+    const databasePath = path.join(manager.getStateDir(), 'state', 'openclaw.sqlite');
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fs.writeFileSync(databasePath, 'migration owns this database');
+    fs.writeFileSync(manager.getConfigPath(), JSON.stringify({ gateway: { mode: 'local' } }));
+    const order: string[] = [];
+    vi.mocked(healOpenClawConfigUnrecognizedKeys).mockClear().mockImplementation(async () => {
+      order.push('config-self-heal');
+      return { status: OpenClawConfigSelfHealStatus.Valid };
+    });
+    vi.mocked(runOpenClawStartupCompatibility).mockImplementationOnce(async () => {
+      order.push('startup-compatibility');
+      return { status: OpenClawStartupMigrationStatus.Failed, error: 'stop after preparation' };
+    });
+    return { manager, internals, order };
+  };
+
+  test('removes unrecognized config keys before helpers or the legacy session import validate an older build\'s data', async () => {
+    const { manager, order } = prepareSpawnlessStartup();
+    const legacyStore = path.join(manager.getStateDir(), 'agents', 'main', 'sessions', 'sessions.json');
+    fs.mkdirSync(path.dirname(legacyStore), { recursive: true });
+    fs.writeFileSync(legacyStore, '{}');
+
+    await manager.startGateway('legacy-data-test');
+
+    expect(order).toEqual(['config-self-heal', 'startup-compatibility']);
+    expect(healOpenClawConfigUnrecognizedKeys).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      configPath: manager.getConfigPath(), stateDir: manager.getStateDir(),
+    }));
+    expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
+  });
+
+  test('heals once after the gateway rejected unrecognized keys, and not on an ordinary start', async () => {
+    const { manager, internals, order } = prepareSpawnlessStartup();
+    await manager.startGateway('ordinary-start');
+    expect(order).toEqual(['startup-compatibility']);
+
+    vi.mocked(runOpenClawStartupCompatibility).mockImplementationOnce(async () => {
+      order.push('startup-compatibility');
+      return { status: OpenClawStartupMigrationStatus.Failed, error: 'stop after preparation' };
+    });
+    internals.configSelfHealPending = true;
+    await manager.startGateway('auto-restart-after-crash');
+
+    expect(order).toEqual(['startup-compatibility', 'config-self-heal', 'startup-compatibility']);
+    expect(internals.configSelfHealPending).toBe(false);
+  });
+
+  test('drops missing managed plugin load paths before helpers, migrations or the gateway read the config', async () => {
+    const { manager } = prepareSpawnlessStartup();
+    // Left by a previous install location; a failed config sync never rewrites it.
+    const missingRuntimeDir = path.join(tempDir, 'old-install', 'resources', 'cfmind', 'third-party-extensions');
+    const userDataDir = path.join(tempDir, 'user-data', 'third-party-extensions');
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(manager.getConfigPath(), JSON.stringify({
+      gateway: { mode: 'local', port: 18789 },
+      plugins: { load: { paths: [missingRuntimeDir, userDataDir] }, entries: { browser: { enabled: true } } },
+    }));
+    let configSeenByHelper: unknown;
+    vi.mocked(runOpenClawStartupCompatibility).mockReset().mockImplementationOnce(async () => {
+      configSeenByHelper = JSON.parse(fs.readFileSync(manager.getConfigPath(), 'utf8'));
+      return { status: OpenClawStartupMigrationStatus.Failed, error: 'stop after preparation' };
+    });
+
+    await manager.startGateway('missing-plugin-load-path-test');
+
+    expect(configSeenByHelper).toEqual({
+      gateway: { mode: 'local', port: 18789 },
+      plugins: { load: { paths: [userDataDir] }, entries: { browser: { enabled: true } } },
+    });
+    expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
   });
 });

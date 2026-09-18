@@ -17,6 +17,7 @@ import {
   listBundledOpenClawExtensionIds,
   listBundledOpenClawExtensionManifests,
   resolveOpenClawExtensionPluginId,
+  withoutMissingManagedPluginLoadPaths,
 } from './openclawLocalExtensions';
 import { removeTreeNoFollowSync } from './removeTreeNoFollow';
 
@@ -109,5 +110,44 @@ describe('runtime-bundled preinstalled extensions', () => {
     expect(warn).toHaveBeenCalledOnce();
     removal.mockRestore();
     expect(cleanupStaleThirdPartyPluginsFromBundledDir(runtime, ['ordinary-plugin'])).toEqual(['ordinary-plugin']);
+  });
+});
+
+describe('withoutMissingManagedPluginLoadPaths', () => {
+  // A reinstall to another directory leaves the old runtime path behind.
+  const missingRuntimeDir = 'D:\\LobsterAI\\resources\\cfmind\\third-party-extensions';
+  const userDataDir = 'C:\\Users\\me\\AppData\\Roaming\\LobsterAI\\third-party-extensions';
+  const exists = (filePath: string) => filePath === userDataDir;
+
+  test('drops only missing managed extension directories', () => {
+    const config = {
+      gateway: { mode: 'local' },
+      plugins: {
+        allow: ['browser'],
+        load: { paths: [missingRuntimeDir, userDataDir, '/opt/linked/plugins', `${missingRuntimeDir}\\`] },
+      },
+    };
+    const original = structuredClone(config);
+
+    const result = withoutMissingManagedPluginLoadPaths(config, exists);
+
+    // A missing path the user linked is not ours to judge.
+    expect(result.config).toEqual({
+      gateway: { mode: 'local' },
+      plugins: { allow: ['browser'], load: { paths: [userDataDir, '/opt/linked/plugins'] } },
+    });
+    expect(result.removed).toEqual([missingRuntimeDir, `${missingRuntimeDir}\\`]);
+    expect(config).toEqual(original);
+  });
+
+  test.each([
+    {},
+    null,
+    { plugins: { entries: {} } },
+    { plugins: { load: { paths: [userDataDir, '/opt/linked/plugins'] } } },
+  ])('returns the same config when every load path is usable or there is none: %j', (config) => {
+    const result = withoutMissingManagedPluginLoadPaths(config, exists);
+    expect(result).toEqual({ config, removed: [] });
+    expect(result.config).toBe(config);
   });
 });

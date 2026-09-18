@@ -29,14 +29,15 @@ import {
 import { recoverInstallerResourcesFromTar } from './installerResourceRecovery';
 import { mergeNoProxyValue } from './noProxyEnv';
 import { getCodexHomeDir } from './openaiCodexAuth';
+import { healOpenClawConfigUnrecognizedKeys, OpenClawConfigSelfHealStatus } from './openclawConfigSelfHeal';
 import { migrateLegacyCronStorageWithDoctor } from './openclawCronLegacyMigration';
 import { readDreamingRecoverySummary } from './openclawDreamingRecovery';
 import { createDreamingStartupFailureCollector } from './openclawDreamingStartupFailure';
 import { cleanupStaleGatewayLocks, GatewayLockCleanupAction } from './openclawGatewayLock';
 import { buildOpenClawGatewayShutdownBridge, spawnOpenClawGatewayProcess, stopOpenClawGatewayProcess } from './openclawGatewayProcess';
-import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
+import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime, withoutMissingManagedPluginLoadPaths } from './openclawLocalExtensions';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
-import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
+import { listLegacySessionStorePaths, migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
 import { extractOpenClawBindingSchemaFailure, extractOpenClawCliFailure, hasLegacyOpenClawDiscovery, isOpenClawBindingSchemaFailure, runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
 import { migrateLegacyStateBeforeStartup, stopStartupStateMigrations } from './openclawStartupStateMigration';
 import { ensureOpenClawWorkerShims, getMissingOpenClawWorkerTargets } from './openclawWorkerShims';
@@ -87,6 +88,11 @@ const OPENCLAW_CONFIG_STARTUP_FAILURE_PATTERNS = [
   /openclaw\.json[\s\S]{0,240}(?:syntaxerror|unexpected token|invalid)/i,
   /(?:syntaxerror|unexpected token|invalid)[\s\S]{0,240}openclaw\.json/i,
 ];
+const OPENCLAW_CONFIG_ISSUE_LINE_LIMIT = 4;
+const OPENCLAW_CONFIG_ISSUE_LINE_MAX_LENGTH = 200;
+const OPENCLAW_CONFIG_UNRECOGNIZED_KEY_PATTERN = /\bUnrecognized keys?:/;
+const OPENCLAW_CONFIG_STARTUP_FAILURE_MESSAGE =
+  'OpenClaw gateway startup stopped because openclaw.json is invalid. Repair the config or use Quick Repair before restarting.';
 const OPENCLAW_GATEWAY_HEAP_OOM_PATTERNS = [
   /JavaScript heap out of memory/i,
   /Ineffective mark-compacts near heap limit/i,
@@ -119,6 +125,27 @@ export interface OpenClawGatewayConnectionInfo {
 export const isOpenClawConfigStartupFailure = (text: string | null | undefined): boolean => {
   if (!text) return false;
   return OPENCLAW_CONFIG_STARTUP_FAILURE_PATTERNS.some((pattern) => pattern.test(text));
+};
+
+/**
+ * The per-key lines OpenClaw prints after "Invalid config at <path>:", such as
+ * `openclaw.json:4 — cron: Unrecognized key: "store"` from the gateway or
+ * `- cron: Unrecognized key: "store"` from CLI commands, as `<path>: <problem>`.
+ */
+export const extractOpenClawConfigIssueLines = (text: string | null | undefined): string[] => {
+  if (!text) return [];
+  const lines = stripVTControlCharacters(text).split(/\r?\n/)
+    .map(line => line.trim().replace(/^(?:\[[^\]\r\n]*\]\s*)+/, ''));
+  const header = lines.findLastIndex(line => /Invalid config at .+:$/i.test(line));
+  if (header < 0) return [];
+  const issues: string[] = [];
+  for (const line of lines.slice(header + 1)) {
+    const issue = line.replace(/^-\s+/, '').replace(/^\S+:\d+\s+—\s+/, '');
+    if (!/^(?:<root>|[^\s:]+):\s+\S/.test(issue)) break;
+    issues.push(issue.slice(0, OPENCLAW_CONFIG_ISSUE_LINE_MAX_LENGTH));
+    if (issues.length >= OPENCLAW_CONFIG_ISSUE_LINE_LIMIT) break;
+  }
+  return issues;
 };
 
 export const extractOpenClawPluginVerificationFailure = (
@@ -344,6 +371,11 @@ export class OpenClawEngineManager extends EventEmitter {
   private gatewayRestartTimer: NodeJS.Timeout | null = null;
   private gatewayRestartWait: { promise: Promise<boolean>; resolve: (retry: boolean) => void } | null = null;
   private gatewayRestartAttempt = 0;
+  // Set when the gateway exits on keys this OpenClaw version does not recognize;
+  // the next start removes them first. At most one automatic restart for that
+  // until the gateway reaches running again.
+  private configSelfHealPending = false;
+  private configSelfHealRestartUsed = false;
   private gatewayLifecycleGeneration = 0;
   private gatewayMaintenanceActive = false;
   private gatewayStartupBlock: OpenClawEngineStatus | null = null;
@@ -1007,6 +1039,15 @@ export class OpenClawEngineManager extends EventEmitter {
     }
 
     if (this.shutdownRequested) return this.getStatus();
+    // Data from an older build can carry config keys this OpenClaw version has
+    // retired. The helpers below write through OpenClaw's validating config
+    // writer, and the legacy session import refuses an invalid config, so
+    // remove them first when that data is present or the gateway rejected them.
+    if (this.configSelfHealPending || hasLegacyDiscovery || listLegacySessionStorePaths(this.stateDir).length > 0) {
+      this.configSelfHealPending = false;
+      await this.healUnrecognizedConfigKeys(runtime.root, electronNodeRuntimePath, env);
+      if (this.shutdownRequested) return this.getStatus();
+    }
     this.startupCompatibilityRunner = mode => runOpenClawStartupCompatibility({
       stateDir: this.stateDir, configPath: this.configPath, runtimeRoot: runtime.root!,
       electronNodeRuntimePath, env, mode,
@@ -1147,6 +1188,7 @@ export class OpenClawEngineManager extends EventEmitter {
     console.log(`[OpenClaw] startGateway: gateway is running, total startup time: ${elapsed()}`);
     // Reset restart counter on successful start — gateway is healthy
     this.gatewayRestartAttempt = 0;
+    this.configSelfHealRestartUsed = false;
     this.clearScheduledGatewayRestart();
     this.setStatus({
       phase: 'running',
@@ -1830,9 +1872,19 @@ export class OpenClawEngineManager extends EventEmitter {
     // Ensure gateway.mode is set even if config already exists
     try {
       const raw = fs.readFileSync(this.configPath, 'utf8');
-      const config = JSON.parse(raw);
+      // Load paths into a previous install location make OpenClaw reject the
+      // whole config. Drop them before any helper, migration or the gateway
+      // reads it: a config sync that fails or keeps the plugins section does not.
+      const { config, removed } = withoutMissingManagedPluginLoadPaths(JSON.parse(raw));
+      let changed = removed.length > 0;
+      if (changed) {
+        console.warn(`[OpenClaw] Dropped missing managed plugin load paths before startup: ${removed.join(', ')}`);
+      }
       if (!config.gateway?.mode) {
         config.gateway = { ...config.gateway, mode: 'local' };
+        changed = true;
+      }
+      if (changed) {
         fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
       }
       return hasLegacyOpenClawDiscovery(config);
@@ -2206,13 +2258,24 @@ export class OpenClawEngineManager extends EventEmitter {
       }
 
       if (isOpenClawConfigStartupFailure(tail)) {
-        console.error(`${gwDiagTs()} gateway exited during startup because OpenClaw config is invalid; auto-restart suppressed`);
         this.gatewayRestartAttempt = 0;
         this.clearScheduledGatewayRestart();
+        const issues = extractOpenClawConfigIssueLines(tail);
+        if (issues.some(issue => OPENCLAW_CONFIG_UNRECOGNIZED_KEY_PATTERN.test(issue))) {
+          // Retired keys can be removed before the next start, including a manual retry.
+          this.configSelfHealPending = true;
+          if (!this.configSelfHealRestartUsed) {
+            this.configSelfHealRestartUsed = true;
+            console.warn(`${gwDiagTs()} gateway exited during startup because openclaw.json has keys this OpenClaw version does not recognize; restarting once after config self-heal`);
+            this.scheduleGatewayRestart();
+            return;
+          }
+        }
+        console.error(`${gwDiagTs()} gateway exited during startup because OpenClaw config is invalid; auto-restart suppressed`);
         this.setStatus({
           phase: 'error',
           version: this.status.version,
-          message: 'OpenClaw gateway startup stopped because openclaw.json is invalid. Repair the config or use Quick Repair before restarting.',
+          message: [OPENCLAW_CONFIG_STARTUP_FAILURE_MESSAGE, ...issues].join('\n'),
           canRetry: true,
         });
         return;
@@ -2220,6 +2283,29 @@ export class OpenClawEngineManager extends EventEmitter {
 
       this.scheduleGatewayRestart();
     });
+  }
+
+  private async healUnrecognizedConfigKeys(
+    runtimeRoot: string,
+    electronNodeRuntimePath: string,
+    env: NodeJS.ProcessEnv,
+  ): Promise<void> {
+    try {
+      const result = await healOpenClawConfigUnrecognizedKeys({
+        configPath: this.configPath, stateDir: this.stateDir, runtimeRoot, electronNodeRuntimePath, env,
+      });
+      if (result.status === OpenClawConfigSelfHealStatus.Healed) {
+        console.warn(`[OpenClaw] Removed ${result.removed.length} config key(s) this OpenClaw version does not recognize (backup: ${result.backupPath}): ${result.removed.join(', ')}`);
+      } else if (result.status === OpenClawConfigSelfHealStatus.Invalid) {
+        const removed = result.removed.length > 0
+          ? ` after removing ${result.removed.join(', ')} (backup: ${result.backupPath})` : '';
+        console.warn(`[OpenClaw] openclaw.json still fails validation${removed}: ${JSON.stringify(result.issues).slice(0, 2_000)}`);
+      } else if (result.status === OpenClawConfigSelfHealStatus.Skipped) {
+        console.warn(`[OpenClaw] Config self-heal skipped: ${result.reason}`);
+      }
+    } catch (error) {
+      console.warn('[OpenClaw] Config self-heal failed; continuing startup:', error);
+    }
   }
 
   private scheduleGatewayRestart(): void {

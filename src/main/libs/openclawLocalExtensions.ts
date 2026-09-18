@@ -249,6 +249,40 @@ export const findThirdPartyExtensionsDir = (): string | null => {
   return dir;
 };
 
+const isManagedExtensionsDir = (loadPath: string): boolean => (
+  loadPath.trim().replace(/[\\/]+$/, '').split(/[\\/]/).pop() === THIRD_PARTY_EXTENSIONS_DIR
+);
+
+const asRecord = (value: unknown): Record<string, unknown> | undefined => (
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+);
+
+/**
+ * Drop `plugins.load.paths` entries that point at a missing managed extensions
+ * directory (findBundledExtensionsDir / findThirdPartyExtensionsDir), such as
+ * the runtime directory of a previous install location. OpenClaw rejects the
+ * whole config for a missing load path (`plugins.load.paths: plugin: plugin
+ * path not found`), and a config sync that keeps the existing plugins section
+ * keeps the stale entry. Other paths a user linked are left alone.
+ */
+export const withoutMissingManagedPluginLoadPaths = <T>(
+  config: T,
+  pathExists: (filePath: string) => boolean = fs.existsSync,
+): { config: T; removed: string[] } => {
+  const plugins = asRecord(asRecord(config)?.plugins);
+  const load = asRecord(plugins?.load);
+  if (!plugins || !load || !Array.isArray(load.paths)) return { config, removed: [] };
+
+  const removed: string[] = [];
+  const paths = load.paths.filter((loadPath: unknown) => {
+    if (typeof loadPath !== 'string' || !isManagedExtensionsDir(loadPath) || pathExists(loadPath)) return true;
+    removed.push(loadPath);
+    return false;
+  });
+  if (removed.length === 0) return { config, removed };
+  return { config: { ...config, plugins: { ...plugins, load: { ...load, paths } } }, removed };
+};
+
 /**
  * Remove third-party plugins that may linger in directories scanned by the
  * gateway's bundled-channel metadata loader.  Two locations are cleaned:

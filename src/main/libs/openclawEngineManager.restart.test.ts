@@ -28,6 +28,8 @@ interface SupervisorInternals {
   gatewayProcess: ChildProcess | null;
   gatewayRecentOutput: WeakMap<ChildProcess, string[]>;
   gatewayRestartAttempt: number;
+  configSelfHealPending: boolean;
+  configSelfHealRestartUsed: boolean;
   gatewayRestartTimer: ReturnType<typeof setTimeout> | null;
   startGatewayPromise: Promise<OpenClawEngineStatus> | null;
   shutdownRequested: boolean;
@@ -71,6 +73,8 @@ function makeSupervisor() {
     gatewayRestartTimer: null,
     gatewayRestartWait: null,
     gatewayRestartAttempt: 0,
+    configSelfHealPending: false,
+    configSelfHealRestartUsed: false,
     gatewayLifecycleGeneration: 0,
     shutdownRequested: false,
     gatewayPort: 18789,
@@ -527,6 +531,62 @@ describe('OpenClaw gateway restart supervision', () => {
     closeChild(child, 1);
 
     expect(phases).toEqual([OpenClawEnginePhase.Starting, OpenClawEnginePhase.Error]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Output of the v2026.8.1 gateway for keys it has no startup migration for.
+  const unrecognizedKeyExit = [
+    '[stderr] 2026-09-18T23:16:36.503+08:00 Gateway failed to start: Invalid config at /state/openclaw.json:',
+    '[stderr] openclaw.json:3 — session.maintenance: Unrecognized key: "rotateBytes"',
+    '[stderr] openclaw.json:5 — cron: Unrecognized key: "store"',
+    '[stderr] Run "openclaw doctor --fix" to repair, then retry.',
+  ];
+
+  test('restarts once to remove unrecognized config keys before reporting invalid configuration', async () => {
+    const { manager, internals, child, phases } = makeSupervisor();
+    const start = vi.spyOn(manager, 'startGateway').mockResolvedValue(manager.getStatus());
+    internals.gatewayRecentOutput.set(child, unrecognizedKeyExit);
+    child.exitCode = 78;
+    closeChild(child, 78);
+
+    expect(internals.configSelfHealPending).toBe(true);
+    expect(internals.configSelfHealRestartUsed).toBe(true);
+    expect(phases).toEqual([OpenClawEnginePhase.Starting]);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(start).toHaveBeenCalledWith('auto-restart-after-crash');
+  });
+
+  test('names the rejected keys once the self-heal restart has been used', () => {
+    const { manager, internals, child, phases } = makeSupervisor();
+    internals.configSelfHealRestartUsed = true;
+    internals.gatewayRecentOutput.set(child, unrecognizedKeyExit);
+    child.exitCode = 78;
+    closeChild(child, 78);
+
+    expect(phases).toEqual([OpenClawEnginePhase.Error]);
+    expect(manager.getStatus().message).toBe([
+      'OpenClaw gateway startup stopped because openclaw.json is invalid. Repair the config or use Quick Repair before restarting.',
+      'session.maintenance: Unrecognized key: "rotateBytes"',
+      'cron: Unrecognized key: "store"',
+    ].join('\n'));
+    // A manual retry still removes the keys first.
+    expect(internals.configSelfHealPending).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test('does not spend a self-heal restart on invalid configuration it cannot repair', () => {
+    const { manager, internals, child, phases } = makeSupervisor();
+    internals.gatewayRecentOutput.set(child, [
+      '[stderr] Gateway failed to start: Invalid config at /state/openclaw.json:',
+      '[stderr] plugins.load.paths: plugin: plugin path not found: /old/resources/cfmind/third-party-extensions',
+    ]);
+    child.exitCode = 78;
+    closeChild(child, 78);
+
+    expect(phases).toEqual([OpenClawEnginePhase.Error]);
+    expect(manager.getStatus().message).toContain('plugins.load.paths: plugin: plugin path not found');
+    expect(internals.configSelfHealPending).toBe(false);
+    expect(internals.configSelfHealRestartUsed).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
 

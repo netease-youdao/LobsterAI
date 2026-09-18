@@ -4,7 +4,7 @@ import path from 'path';
 
 import { safelyReplaceTextFileSync } from './safeFileReplace';
 
-const LEGACY_PLUGIN_INSTALL_CONFIG_PATH = 'plugins.installs';
+export const LEGACY_PLUGIN_INSTALL_CONFIG_PATH = 'plugins.installs';
 const LEGACY_PLUGIN_INSTALL_MIGRATION_TIMEOUT_MS = 2 * 60_000;
 const PROCESS_KILL_GRACE_MS = 2_000;
 const PROCESS_OUTPUT_TAIL_LIMIT = 4_000;

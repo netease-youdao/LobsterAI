@@ -19,6 +19,7 @@ vi.mock('electron', () => ({
 import {
   buildOpenClawCompileCacheEnv,
   buildOpenClawGatewayExecArgv,
+  extractOpenClawConfigIssueLines,
   extractOpenClawPluginVerificationFailure,
   isOpenClawConfigStartupFailure,
   isOpenClawGatewayHeapOutOfMemory,
@@ -136,6 +137,39 @@ describe('isOpenClawConfigStartupFailure', () => {
     expect(isOpenClawConfigStartupFailure(
       '[stderr] Invalid configuration: region from ARN does not match client region'
     )).toBe(false);
+  });
+});
+
+describe('extractOpenClawConfigIssueLines', () => {
+  test('reads the per-key lines of the gateway startup failure', () => {
+    expect(extractOpenClawConfigIssueLines([
+      '[stderr] - plugins.allow: plugin not installed: qqbot',
+      '[stderr] 2026-09-18T23:16:36.503+08:00 Gateway failed to start: Invalid config at C:\\Users\\me\\AppData\\Roaming\\LobsterAI\\openclaw\\state\\openclaw.json:',
+      '[stderr] openclaw.json:4 — agents.defaults.compaction: Unrecognized key: "truncateAfterCompaction"',
+      '[stderr] \u001b[31mopenclaw.json:3 — session.maintenance: Unrecognized key: "rotateBytes"\u001b[0m',
+      '[stderr] <root>: Unrecognized key: "staleKey"',
+      '[stderr] Run "openclaw doctor --fix" to repair, then retry.',
+      '[stderr] - unrelated: bullet after the block',
+    ].join('\n'))).toEqual([
+      'agents.defaults.compaction: Unrecognized key: "truncateAfterCompaction"',
+      'session.maintenance: Unrecognized key: "rotateBytes"',
+      '<root>: Unrecognized key: "staleKey"',
+    ]);
+  });
+
+  test('reads CLI-style bullets and caps the number of lines', () => {
+    expect(extractOpenClawConfigIssueLines([
+      'Invalid config at /state/openclaw.json:',
+      ...['a', 'b', 'c', 'd', 'e'].map(key => `- cron: Unrecognized key: "${key}"`),
+    ].join('\n'))).toEqual(['a', 'b', 'c', 'd'].map(key => `cron: Unrecognized key: "${key}"`));
+  });
+
+  test.each([
+    undefined,
+    'JSON5 parse failed: invalid character at 4:3 in openclaw.json',
+    '- tools.loopDetection: Unrecognized keys: "historySize"',
+  ])('returns nothing without an invalid-config block: %s', (text) => {
+    expect(extractOpenClawConfigIssueLines(text)).toEqual([]);
   });
 });
 
