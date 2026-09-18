@@ -338,6 +338,37 @@ export type SkillRecord = {
   version?: string;
 };
 
+/** An imported skill whose directory ID is already taken by an installed, user-managed skill. */
+export type SkillImportConflict = {
+  id: string;
+  installedVersion: string;
+  incomingVersion: string;
+};
+
+/**
+ * How `downloadSkill` treats an imported skill whose ID is already installed:
+ * - `rename` (default): install next to it as `<id>-1`, `<id>-2`, ...
+ * - `ask`: install nothing and return the conflicts so the caller can confirm.
+ * - `overwrite`: update the installed skill in place, keeping its local config.
+ * Built-in and plugin skills are never overwritten and always fall back to `rename`.
+ */
+export type SkillImportConflictStrategy = 'rename' | 'ask' | 'overwrite';
+
+export type SkillDownloadOptions = {
+  onConflict?: SkillImportConflictStrategy;
+};
+
+const SKILL_IMPORT_CONFLICT_STRATEGIES: readonly SkillImportConflictStrategy[] = ['rename', 'ask', 'overwrite'];
+
+/** Sanitize download options coming over IPC; unknown values fall back to the default behaviour. */
+export const normalizeSkillDownloadOptions = (raw: unknown): SkillDownloadOptions => {
+  if (!raw || typeof raw !== 'object') return {};
+  const onConflict = (raw as { onConflict?: unknown }).onConflict;
+  return SKILL_IMPORT_CONFLICT_STRATEGIES.includes(onConflict as SkillImportConflictStrategy)
+    ? { onConflict: onConflict as SkillImportConflictStrategy }
+    : {};
+};
+
 type SkillStateMap = Record<string, { enabled: boolean }>;
 
 type EmailConnectivityCheckCode = 'imap_connection' | 'smtp_connection';
@@ -484,6 +515,29 @@ const resolveWithin = (root: string, target: string): string => {
     throw new Error('Invalid target path');
   }
   return resolvedTarget;
+};
+
+const findSkillImportConflicts = (
+  root: string,
+  skillDirs: string[],
+  deps: {
+    isProtectedId: (id: string) => boolean;
+    readVersion: (skillDir: string) => string;
+  },
+): SkillImportConflict[] => {
+  return skillDirs.flatMap((skillDir) => {
+    const id = normalizeFolderName(path.basename(skillDir));
+    if (deps.isProtectedId(id)) return [];
+    const targetDir = resolveWithin(root, id);
+    if (!fs.existsSync(targetDir) || path.resolve(targetDir) === path.resolve(skillDir)) {
+      return [];
+    }
+    return [{
+      id,
+      installedVersion: deps.readVersion(targetDir),
+      incomingVersion: deps.readVersion(skillDir),
+    }];
+  });
 };
 
 const appendEnvPath = (current: string | undefined, entries: string[]): string => {
@@ -1413,6 +1467,7 @@ export class SkillManager {
     timer: NodeJS.Timeout;
     isUpgrade?: boolean;
     existingSkillDir?: string;
+    overwriteExisting?: boolean;
   }>();
   private upgradingSkillIds = new Set<string>();
   private deletingSkillIds = new Set<string>();
@@ -1930,13 +1985,16 @@ export class SkillManager {
     }
   }
 
-  async downloadSkill(source: string): Promise<{
+  async downloadSkill(source: string, options: SkillDownloadOptions = {}): Promise<{
     success: boolean;
     skills?: SkillRecord[];
     error?: string;
     auditReport?: SkillSecurityReport;
     pendingInstallId?: string;
+    /** Set (with `success: false`) when `onConflict` is `ask` and an installed skill would be replaced. */
+    overwriteConflicts?: SkillImportConflict[];
   }> {
+    const onConflict = options.onConflict ?? 'rename';
     let cleanupPath: string | null = null;
     try {
       const trimmed = source.trim();
@@ -2060,6 +2118,20 @@ export class SkillManager {
         return { success: false, error: t('skillErrNoSkillMd') };
       }
 
+      if (onConflict === 'ask') {
+        const overwriteConflicts = findSkillImportConflicts(root, skillDirs, {
+          isProtectedId: id => this.isBuiltInSkillId(id),
+          readVersion: dir => this.getSkillVersion(dir),
+        });
+        if (overwriteConflicts.length > 0) {
+          console.log(`[SkillManager] downloadSkill: ${overwriteConflicts.length} installed skill(s) would be replaced, asking for confirmation`);
+          cleanupPathSafely(cleanupPath);
+          cleanupPath = null;
+          return { success: false, overwriteConflicts };
+        }
+      }
+      const overwriteExisting = onConflict === 'overwrite';
+
       // Security scan before installation
       let auditReport: SkillSecurityReport | null = null;
       try {
@@ -2095,6 +2167,7 @@ export class SkillManager {
           root,
           skillDirs,
           timer,
+          overwriteExisting,
         });
 
         return {
@@ -2106,22 +2179,7 @@ export class SkillManager {
 
       // Safe or scan failed — install directly
       console.log(`[SkillManager] Skill is safe (or scan failed), installing directly`);
-      for (const skillDir of skillDirs) {
-        const folderName = normalizeFolderName(path.basename(skillDir));
-        let targetDir = resolveWithin(root, folderName);
-        let suffix = 1;
-        while (fs.existsSync(targetDir)) {
-          targetDir = resolveWithin(root, `${folderName}-${suffix}`);
-          suffix += 1;
-        }
-        cpRecursiveSync(skillDir, targetDir);
-        const normalizeResult = normalizeWindowsSkillDirectoryAttrs(targetDir);
-        if (normalizeResult.success) {
-          console.log('[skills] install normalization applied for "%s" at %s', folderName, targetDir);
-        } else {
-          console.warn('[skills] install normalization failed for "%s" at %s: %s', folderName, targetDir, normalizeResult.detail || 'unknown');
-        }
-      }
+      this.installSkillDirs(root, skillDirs, overwriteExisting);
 
       cleanupPathSafely(cleanupPath);
       cleanupPath = null;
@@ -2339,6 +2397,58 @@ export class SkillManager {
     fs.rmSync(upgradingDir, { recursive: true, force: true });
   }
 
+  /**
+   * Copy extracted skill directories into the skills root and return the installed IDs.
+   * With `overwriteExisting`, a skill whose ID is already installed (and is not built-in)
+   * is updated in place via `performSkillUpgrade`, which keeps its local config files.
+   * Otherwise a free `<id>-N` directory is chosen so nothing installed is touched.
+   */
+  private installSkillDirs(root: string, skillDirs: string[], overwriteExisting: boolean): string[] {
+    const installedIds: string[] = [];
+    if (overwriteExisting) {
+      // Release directory watchers before swapping skill directories (Windows keeps
+      // handles open). Callers restart watching once installation is done.
+      this.stopWatching();
+    }
+    try {
+      this.copySkillDirs(root, skillDirs, overwriteExisting, installedIds);
+    } catch (error) {
+      // Callers only restart watching on success; do not leave watchers off after a failed swap.
+      if (overwriteExisting) this.startWatching();
+      throw error;
+    }
+    return installedIds;
+  }
+
+  private copySkillDirs(root: string, skillDirs: string[], overwriteExisting: boolean, installedIds: string[]): void {
+    for (const skillDir of skillDirs) {
+      const folderName = normalizeFolderName(path.basename(skillDir));
+      let targetDir = resolveWithin(root, folderName);
+      const shouldOverwrite = overwriteExisting
+        && fs.existsSync(targetDir)
+        && path.resolve(targetDir) !== path.resolve(skillDir)
+        && !this.isBuiltInSkillId(folderName);
+      if (shouldOverwrite) {
+        console.log('[skills] overwriting installed skill "%s" at %s', folderName, targetDir);
+        this.performSkillUpgrade(skillDir, targetDir);
+      } else {
+        let suffix = 1;
+        while (fs.existsSync(targetDir)) {
+          targetDir = resolveWithin(root, `${folderName}-${suffix}`);
+          suffix += 1;
+        }
+        cpRecursiveSync(skillDir, targetDir);
+      }
+      const normalizeResult = normalizeWindowsSkillDirectoryAttrs(targetDir);
+      if (normalizeResult.success) {
+        console.log('[skills] install normalization applied for "%s" at %s', folderName, targetDir);
+      } else {
+        console.warn('[skills] install normalization failed for "%s" at %s: %s', folderName, targetDir, normalizeResult.detail || 'unknown');
+      }
+      installedIds.push(path.basename(targetDir));
+    }
+  }
+
   confirmPendingInstall(
     pendingId: string,
     action: SecurityReportAction
@@ -2368,24 +2478,8 @@ export class SkillManager {
         installedIds.push(path.basename(pending.existingSkillDir));
       }
     } else {
-      // Fresh install path: find unique directory name
-      for (const skillDir of pending.skillDirs) {
-        const folderName = normalizeFolderName(path.basename(skillDir));
-        let targetDir = resolveWithin(pending.root, folderName);
-        let suffix = 1;
-        while (fs.existsSync(targetDir)) {
-          targetDir = resolveWithin(pending.root, `${folderName}-${suffix}`);
-          suffix += 1;
-        }
-        cpRecursiveSync(skillDir, targetDir);
-        const normalizeResult = normalizeWindowsSkillDirectoryAttrs(targetDir);
-        if (normalizeResult.success) {
-          console.log('[skills] install normalization applied for "%s" at %s', folderName, targetDir);
-        } else {
-          console.warn('[skills] install normalization failed for "%s" at %s: %s', folderName, targetDir, normalizeResult.detail || 'unknown');
-        }
-        installedIds.push(path.basename(targetDir));
-      }
+      // Fresh install path (or confirmed overwrite of same-ID skills)
+      installedIds.push(...this.installSkillDirs(pending.root, pending.skillDirs, pending.overwriteExisting === true));
     }
 
     cleanupPathSafely(pending.cleanupPath);
@@ -3256,4 +3350,5 @@ export const __skillManagerTestUtils = {
   parseClawhubUrl,
   isWindowsDeletePermissionError,
   getSkillScriptRuntimeCandidates,
+  findSkillImportConflicts,
 };

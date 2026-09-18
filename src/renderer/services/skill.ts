@@ -1,5 +1,13 @@
 import { BUNDLED_SKILL_DISPLAY_NAMES } from '../components/skills/bundledSkillNames';
-import { LocalizedText, LocalSkillInfo, MarketplaceSkill, MarketTag, Skill } from '../types/skill';
+import {
+  LocalizedText,
+  LocalSkillInfo,
+  MarketplaceSkill,
+  MarketTag,
+  Skill,
+  SkillDownloadOptions,
+  SkillImportConflict,
+} from '../types/skill';
 import { i18nService } from './i18n';
 import { LogReporterAction, reportYdAnalyzer } from './logReporter';
 
@@ -172,15 +180,16 @@ class SkillService {
     }
   }
 
-  async downloadSkill(source: string): Promise<{
+  async downloadSkill(source: string, options?: SkillDownloadOptions): Promise<{
     success: boolean;
     skills?: Skill[];
     error?: string;
     auditReport?: any;
     pendingInstallId?: string;
+    overwriteConflicts?: SkillImportConflict[];
   }> {
     try {
-      const result = await window.electron.skills.download(source);
+      const result = await window.electron.skills.download(source, options);
       if (result.success && result.skills) {
         this.skills = result.skills;
       }
