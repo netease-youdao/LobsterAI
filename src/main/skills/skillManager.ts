@@ -413,7 +413,28 @@ const WATCH_DEBOUNCE_MS = 250;
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
-const parseFrontmatter = (raw: string): { frontmatter: Record<string, unknown>; content: string } => {
+// Matches an unindented `version: x.y.z` line, optionally quoted and followed by a comment.
+const TOP_LEVEL_VERSION_LINE_RE = /^version[ \t]*:[ \t]*(['"]?)([^'"\r\n#]+?)\1[ \t]*(?:#.*)?$/m;
+
+/**
+ * Best-effort recovery of fields from a frontmatter block that is not valid YAML.
+ * Third-party SKILL.md files frequently contain values such as an unquoted
+ * `description: Use when: ...`, which makes the whole block unparsable. Losing
+ * `version` in that case makes an installed skill look outdated forever and
+ * breaks version-based bundled skill sync, so salvage it line by line.
+ */
+const salvageInvalidFrontmatter = (block: string): Record<string, unknown> => {
+  const versionMatch = block.match(TOP_LEVEL_VERSION_LINE_RE);
+  const version = versionMatch?.[2].trim();
+  return version ? { version } : {};
+};
+
+const parseFrontmatter = (
+  raw: string,
+  // Only used for diagnostics: without it, a parse warning gives no hint which
+  // of the installed SKILL.md files is malformed.
+  sourcePath?: string,
+): { frontmatter: Record<string, unknown>; content: string } => {
   const normalized = raw.replace(/^\uFEFF/, '');
   const match = normalized.match(FRONTMATTER_RE);
   if (!match) {
@@ -427,7 +448,8 @@ const parseFrontmatter = (raw: string): { frontmatter: Record<string, unknown>; 
       frontmatter = parsed as Record<string, unknown>;
     }
   } catch (e) {
-    console.warn('[skills] Failed to parse YAML frontmatter:', e);
+    console.warn(`[skills] Failed to parse YAML frontmatter${sourcePath ? ` in ${sourcePath}` : ''}:`, e);
+    frontmatter = salvageInvalidFrontmatter(match[1]);
   }
 
   const content = normalized.slice(match[0].length);
@@ -1631,8 +1653,9 @@ export class SkillManager {
 
   private getSkillVersion(skillDir: string): string {
     try {
-      const raw = fs.readFileSync(path.join(skillDir, SKILL_FILE_NAME), 'utf8');
-      const { frontmatter } = parseFrontmatter(raw);
+      const skillFile = path.join(skillDir, SKILL_FILE_NAME);
+      const raw = fs.readFileSync(skillFile, 'utf8');
+      const { frontmatter } = parseFrontmatter(raw, skillFile);
       const meta = frontmatter.metadata as Record<string, unknown> | undefined;
       const v = frontmatter.version ?? meta?.version;
       return typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
@@ -2529,7 +2552,7 @@ export class SkillManager {
     if (!fs.existsSync(skillFile)) return null;
     try {
       const raw = fs.readFileSync(skillFile, 'utf8');
-      const { frontmatter, content } = parseFrontmatter(raw);
+      const { frontmatter, content } = parseFrontmatter(raw, skillFile);
       const name = (String(frontmatter.name || '') || path.basename(dir)).trim() || path.basename(dir);
       const description = (String(frontmatter.description || '') || extractDescription(content) || name).trim();
       const isOfficial = isTruthy(frontmatter.official) || isTruthy(frontmatter.isOfficial);
