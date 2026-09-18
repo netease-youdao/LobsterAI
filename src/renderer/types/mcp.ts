@@ -1,6 +1,13 @@
 // MCP Server type definitions
 export type McpTransportType = 'stdio' | 'sse' | 'http';
 
+// Per-server MCP tool selection, forwarded to OpenClaw's mcp.servers.*.toolFilter.
+// Excluded tools never reach the model payload (~350 prompt tokens saved per tool).
+export interface McpToolFilter {
+  include?: string[];
+  exclude?: string[];
+}
+
 export const McpRegistryEntryKind = {
   Server: 'server',
   Bundle: 'bundle',
@@ -18,6 +25,8 @@ export interface McpServerConfig {
   env?: Record<string, string>;  // stdio
   url?: string;                  // sse / http
   headers?: Record<string, string>; // sse / http
+  toolFilter?: McpToolFilter;    // expose only / hide selected tools
+  supportsParallelToolCalls?: boolean; // allow parallel execution of this server's tools
   isBuiltIn: boolean;            // installed from built-in registry
   githubUrl?: string;            // GitHub repository URL
   registryId?: string;           // matching registry entry ID
@@ -55,6 +64,8 @@ export interface McpServerFormData {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  toolFilter?: McpToolFilter;
+  supportsParallelToolCalls?: boolean;
   isBuiltIn?: boolean;
   githubUrl?: string;
   registryId?: string;
