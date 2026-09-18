@@ -472,6 +472,7 @@ import {
   writeConfigDiagnostic,
 } from './libs/openclawConfigObservation';
 import { buildProviderSelection, OpenClawConfigSync } from './libs/openclawConfigSync';
+import { admitPastDeferredGatewayRestart } from './libs/openclawDeferredRestartAdmission';
 import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
 import {
   backupOpenClawConfig,
@@ -2794,17 +2795,28 @@ const waitForOpenClawConfigApply = async (context: string): Promise<OpenClawEngi
   }
 
   if (deferredRestartReason) {
-    return buildConfigApplyPendingStatus(
-      deferredRestartOverdue
-        ? t('openClawConfigApplyOverdue')
-        : t('openClawConfigApplyPending'),
-    );
+    const admission = await admitPastDeferredGatewayRestart({
+      getDeferredReason: () => deferredRestartReason,
+      hasActiveWorkloads: reason => hasActiveConfigRestartWorkloads(reason),
+      runDeferredRestart: async (reason) => {
+        console.log(`[OpenClawConfigApply] gateway is idle; applying the deferred restart now for ${context} (reason: ${reason}).`);
+        const result = await executeDeferredGatewayRestart(reason);
+        if (!result.success) throw new Error(result.error || 'OpenClaw config sync failed.');
+      },
+      waitForPendingApply: async () => { await openClawConfigApplyState?.promise; },
+    });
+    if (!admission.admitted) {
+      return buildConfigApplyPendingStatus(
+        admission.error
+          ?? (deferredRestartOverdue ? t('openClawConfigApplyOverdue') : t('openClawConfigApplyPending')),
+      );
+    }
   }
 
   return null;
 };
 
-const executeDeferredGatewayRestart = async (reason: string) => {
+const executeDeferredGatewayRestart = async (reason: string): Promise<SyncOpenClawConfigResult> => {
   clearDeferredRestart();
   deferredRestartReason = null;
   console.log(
@@ -2818,7 +2830,7 @@ const executeDeferredGatewayRestart = async (reason: string) => {
   const syncReason = reason.startsWith(DEFERRED_SYNC_REASON_PREFIX)
     ? reason
     : `${DEFERRED_SYNC_REASON_PREFIX}${reason}`;
-  await syncOpenClawConfig({
+  return syncOpenClawConfig({
     reason: syncReason,
     restartGatewayIfRunning: true,
     expectedImpact: OpenClawConfigImpact.Restart,
