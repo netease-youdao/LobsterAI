@@ -1404,6 +1404,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [artifactAutoPreviewEnabled, setArtifactAutoPreviewEnabled] = useState(true);
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
+  const [adBannerHidden, setAdBannerHidden] = useState(false);
   const [sqliteAutoBackupEnabled, setSqliteAutoBackupEnabled] = useState(false);
   const [usageAnalyticsEnabled, setUsageAnalyticsEnabled] = useState(true);
   const [taskCompletionNotificationMode, setTaskCompletionNotificationMode] =
@@ -2003,6 +2004,7 @@ const Settings: React.FC<SettingsProps> = ({
         setQuestionNotificationsEnabled(notificationSettings.questionNotificationsEnabled);
       }
       setBrowserWebAccess(normalizeBrowserWebAccessConfig(config.browserWebAccess));
+      setAdBannerHidden(config.app?.adBannerHidden ?? false);
       const savedTestMode = config.app?.testMode ?? false;
       setTestMode(savedTestMode);
       if (savedTestMode) setTestModeUnlocked(true);
@@ -3475,6 +3477,7 @@ const Settings: React.FC<SettingsProps> = ({
         app: {
           ...previousConfig.app,
           testMode,
+          adBannerHidden,
         },
       });
 
@@ -4961,6 +4964,16 @@ const Settings: React.FC<SettingsProps> = ({
                   checked={useSystemProxy}
                   onToggle={() => {
                     setUseSystemProxy((prev) => !prev);
+                  }}
+                />
+              </SettingsRow>
+              <SettingsRow>
+                <SettingsToggleRow
+                  title={i18nService.t('hideAdBanner')}
+                  description={i18nService.t('hideAdBannerDescription')}
+                  checked={adBannerHidden}
+                  onToggle={() => {
+                    setAdBannerHidden((prev) => !prev);
                   }}
                 />
               </SettingsRow>
