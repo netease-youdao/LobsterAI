@@ -20,7 +20,7 @@ function writeFile(root: string, relativePath: string, content: string) {
 }
 
 function createRuntime() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-im-sdk-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-im-sdk-')));
   tempDirs.push(root);
   // Model 2026.8.1's package boundary: the removed barrels are not exported.
   writeFile(root, 'node_modules/openclaw/package.json', JSON.stringify({

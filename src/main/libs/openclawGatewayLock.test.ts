@@ -62,7 +62,7 @@ describe('cleanupStaleGatewayLocks', () => {
   let lockDir: string;
 
   beforeEach(() => {
-    lockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-lock-test-'));
+    lockDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-lock-test-')));
   });
 
   afterEach(() => {
