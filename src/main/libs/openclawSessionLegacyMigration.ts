@@ -22,6 +22,9 @@ export const LegacySessionMigrationWarningCode = {
 } as const;
 const WARNING_ISSUE_CODES = new Set<string>(Object.values(LegacySessionMigrationWarningCode));
 const DOCTOR_EXCEPTION_LINE = /^(?:\w*Error\b|Cannot\b|Failed\b|Fatal\b|ERR_|file lock timeout|Config validation failed)/i;
+const DOCTOR_CAUSE_LINE = /^\[cause\]:\s*(.+)$/;
+const DOCTOR_CAUSE_SEARCH_LINES = 40;
+export const LEGACY_SESSION_MIGRATION_RETRY_COOLDOWN_MS = 5 * 60_000;
 const doctorReportSchema = z.object({
   mode: z.string().optional(),
   totals: z.object({ issues: z.number().int().nonnegative(), targets: z.number().int().nonnegative() }).optional(),
@@ -128,8 +131,17 @@ function summarizeDoctorFailure(stderr: string, stdout: string, report?: DoctorR
   const lines = [...stderrLines, ...cleanDoctorLines(stdout)];
   // Doctor writes boxed, wrapped validation errors to stdout. Prefer those
   // and actual exceptions over stderr warnings such as snapshot rotation.
-  const exception = lines.find(line => DOCTOR_EXCEPTION_LINE.test(line));
-  if (exception) return exception;
+  const exceptionIndex = lines.findIndex(line => DOCTOR_EXCEPTION_LINE.test(line));
+  if (exceptionIndex >= 0) {
+    // Node prints Error.cause as an indented `[cause]: ...` block after the
+    // stack. It usually carries the actionable reason (for example why the
+    // PowerShell helper failed), so keep it next to the headline.
+    const cause = lines.slice(exceptionIndex + 1, exceptionIndex + DOCTOR_CAUSE_SEARCH_LINES)
+      .map(line => DOCTOR_CAUSE_LINE.exec(line)?.[1]?.trim())
+      .find(Boolean);
+    const exception = lines[exceptionIndex];
+    return cause ? `${exception} (cause: ${cause})`.slice(0, 1_000) : exception;
+  }
   const issues = report?.targets.flatMap(target => target.issues.map(issue => ({ ...issue, agentId: target.agentId })));
   const issue = issues?.find(item => !WARNING_ISSUE_CODES.has(item.code ?? '')) ?? issues?.[0];
   if (issue) {
@@ -317,4 +329,50 @@ export async function migrateLegacySessionStorageWithDoctor(params: {
     console.error('[OpenClaw] Legacy session doctor migration failed before gateway startup:', error);
     return { status: 'failed', code: null, error: message };
   }
+}
+
+export interface LegacySessionMigrationFailureRecord {
+  at: number;
+  error: string;
+  errorCode?: OpenClawEngineErrorCode;
+  /** Legacy store paths, sizes and mtimes; a changed store always earns a fresh attempt. */
+  fingerprint: string;
+}
+
+export function computeLegacySessionStoreFingerprint(stateDir: string): string {
+  return listLegacySessionStorePaths(stateDir).map(filePath => {
+    try {
+      const stat = fs.statSync(filePath);
+      return `${filePath}|${stat.mtimeMs}|${stat.size}`;
+    } catch {
+      return `${filePath}|missing`;
+    }
+  }).join('\n');
+}
+
+/**
+ * User-initiated starts (install/retry/repair/restart from the UI) carry a
+ * reason containing `manual` and always rerun the migration.
+ */
+function isManualGatewayStartReason(reason: string): boolean {
+  return reason.toLowerCase().includes('manual');
+}
+
+/**
+ * Avoid spawning another doctor process for an automatic gateway start while a
+ * failure for the same legacy stores is still fresh. Otherwise every automatic
+ * ensure-running call reruns the same failing migration.
+ */
+export function shouldSkipLegacySessionMigrationRetry(params: {
+  previous: LegacySessionMigrationFailureRecord | null;
+  fingerprint: string;
+  reason: string;
+  now?: number;
+  cooldownMs?: number;
+}): boolean {
+  const { previous, fingerprint, reason } = params;
+  if (!previous || isManualGatewayStartReason(reason)) return false;
+  if (previous.fingerprint !== fingerprint) return false;
+  const elapsedMs = (params.now ?? Date.now()) - previous.at;
+  return elapsedMs >= 0 && elapsedMs < (params.cooldownMs ?? LEGACY_SESSION_MIGRATION_RETRY_COOLDOWN_MS);
 }

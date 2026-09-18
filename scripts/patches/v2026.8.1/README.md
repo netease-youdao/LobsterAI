@@ -1,5 +1,40 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Windows SQLite staging directory fallback
+
+`openclaw-windows-sqlite-private-dir-fallback.patch` lets disposable SQLite
+staging directories fall back to a plain directory when the Windows
+PowerShell/Add-Type helper cannot create the ACL-protected one. On some real
+machines powershell.exe is blocked by security software, Constrained Language
+Mode rejects `Add-Type`, or no C# compiler is available. The legacy session
+import (`doctor --session-sqlite import`) then failed with `Unable to create
+private Windows SQLite directory`, and so did every gateway start.
+
+Security trade-off: the fallback runs only after the ACL-based creation fails
+with an error other than `EEXIST`. It covers only the random-name temporary
+directories from `createPrivateSqliteTempDirectory(Sync)`: the session import
+spool under `%TEMP%`, snapshot staging under `%LOCALAPPDATA%`, and staging next
+to the target database. These all live under the user's profile, and a plain
+child inherits its parent's ACL. `createPrivateSqliteDirectory`, which creates
+persistent snapshot directories, stays fail-closed. A real `EEXIST` still
+propagates. If the fallback `mkdir` fails as well, the original PowerShell error
+and its cause are rethrown. The process logs one `[sqlite]` warning with the
+sanitized PowerShell cause.
+
+LobsterAI also keeps the Node `[cause]:` line in the legacy session migration
+error summary. After a failure, automatic gateway starts skip the doctor rerun
+for 5 minutes while the legacy stores are unchanged. Starts whose reason
+contains `manual` (install, retry, repair, restart from the UI) always rerun it.
+
+After applying the patch, run the owning upstream suite:
+
+```sh
+pnpm test src/infra/sqlite-private-directory.test.ts
+```
+
+Remove this patch when the pinned upstream can create its private staging
+directories without PowerShell, or degrades on its own when PowerShell fails.
+
 ## Manual lock-owner recovery
 
 `zz-openclaw-lock-owner-recovery.patch` adds an optional asynchronous

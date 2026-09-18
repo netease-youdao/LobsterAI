@@ -1122,6 +1122,25 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-windows-sqlite-private-dir-fallback.patch': [
+    {
+      file: 'src/infra/sqlite-private-directory.ts',
+      snippets: [
+        'let privateStagingFallbackWarned = false;',
+        'await createStagingDirectoryWithFallback(directoryPath);',
+        'createStagingDirectoryWithFallbackSync(directoryPath);',
+        'throw isDirectoryExistsError(fallbackError) ? fallbackError : error;',
+      ],
+    },
+    {
+      file: 'src/infra/sqlite-private-directory.test.ts',
+      snippets: [
+        'falls back to a plain staging directory and warns once',
+        'does not fall back when the private directory already exists',
+        'keeps persistent private directories fail-closed',
+      ],
+    },
+  ],
 };
 
 const strongPatchValidators = openclawVersion === 'v2026.8.1'

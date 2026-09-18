@@ -6,12 +6,15 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { OpenClawEngineErrorCode } from '../../shared/openclawEngine/constants';
 import { OPENCLAW_STARTUP_MIGRATION_REFUSAL } from './openclawDreamingStartupFailure';
 import {
+  computeLegacySessionStoreFingerprint,
+  LEGACY_SESSION_MIGRATION_RETRY_COOLDOWN_MS,
   LEGACY_SESSION_SQLITE_IMPORT_MODE,
   type LegacySessionMigrationRunner,
   type LegacySessionMigrationRunResult,
   LegacySessionMigrationWarningCode,
   listLegacySessionStorePaths,
   migrateLegacySessionStorageWithDoctor,
+  shouldSkipLegacySessionMigrationRetry,
 } from './openclawSessionLegacyMigration';
 
 let tempDir = '';
@@ -428,5 +431,53 @@ describe('openclawSessionLegacyMigration', () => {
 
     expect(result).toEqual({ status: 'skipped', reason: 'missing-openclaw-cli' });
     expect(runner).not.toHaveBeenCalled();
+  });
+
+  test('keeps the Node [cause] line next to the doctor exception', async () => {
+    writeFile(path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const runner = vi.fn<LegacySessionMigrationRunner>().mockResolvedValue({
+      code: 1,
+      stdout: '',
+      stderr: [
+        'Error: Unable to create private Windows SQLite directory: C:\\Users\\u\\AppData\\Local\\Temp\\openclaw-session-import-1',
+        '    at createPrivateSqliteDirectorySync (file:///C:/app/dist/sqlite.js:10:5)',
+        '  [cause]: Error: PowerShell failed (status=1, exit=1); stderr: Add-Type : Cannot add type.',
+        '      at buildPowerShellFailureCause (file:///C:/app/dist/sqlite.js:20:9)',
+      ].join('\n'),
+    });
+
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result).toMatchObject({
+      error: expect.stringContaining(
+        'Unable to create private Windows SQLite directory: C:\\Users\\u\\AppData\\Local\\Temp\\openclaw-session-import-1'
+        + ' (cause: Error: PowerShell failed (status=1, exit=1); stderr: Add-Type : Cannot add type.)',
+      ),
+    });
+  });
+
+  test('skips automatic doctor reruns while a failure for unchanged stores is fresh', () => {
+    const legacyPath = path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json');
+    writeFile(legacyPath);
+    const fingerprint = computeLegacySessionStoreFingerprint(stateDir);
+    const previous = { at: 1_000_000, error: 'boom', fingerprint };
+    const soon = previous.at + 7_000;
+    const skip = (reason: string, now = soon, current = fingerprint) =>
+      shouldSkipLegacySessionMigrationRetry({ previous, fingerprint: current, reason, now });
+
+    expect(skip('ensure-running-for-cowork')).toBe(true);
+    expect(skip('restart:config-sync:mcp')).toBe(true);
+    expect(skip('manual-repair')).toBe(false);
+    expect(skip('restart:ipc-manual')).toBe(false);
+    expect(skip('bootstrap:manual-retry')).toBe(false);
+    expect(skip('ensure-running-for-cowork', previous.at + LEGACY_SESSION_MIGRATION_RETRY_COOLDOWN_MS)).toBe(false);
+
+    writeFile(legacyPath, '{"changed":true}\n');
+    expect(skip('ensure-running-for-cowork', soon, computeLegacySessionStoreFingerprint(stateDir))).toBe(false);
+    expect(shouldSkipLegacySessionMigrationRetry({ previous: null, fingerprint, reason: 'auto', now: soon })).toBe(false);
   });
 });

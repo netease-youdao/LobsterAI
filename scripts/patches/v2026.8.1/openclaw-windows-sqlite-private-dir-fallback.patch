@@ -1,0 +1,222 @@
+diff --git a/src/infra/sqlite-private-directory.test.ts b/src/infra/sqlite-private-directory.test.ts
+index 5c4d0ca6979..0a5e5806697 100644
+--- a/src/infra/sqlite-private-directory.test.ts
++++ b/src/infra/sqlite-private-directory.test.ts
+@@ -1,5 +1,7 @@
++import fs from "node:fs";
+ import path from "node:path";
+ import { afterEach, describe, expect, it, vi } from "vitest";
++import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+ import { withEnv } from "../test-utils/env.js";
+ 
+ const childProcess = vi.hoisted(() => ({
+@@ -139,6 +141,7 @@ describe("private Windows SQLite directory diagnostics", () => {
+ 
+   it("reports sync status and string codes from sanitized stderr", () => {
+     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
++    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+     childProcess.execFileSync.mockImplementation(() => {
+       throw Object.assign(new Error("powershell -EncodedCommand secret"), {
+         code: "ETIMEDOUT",
+@@ -175,3 +178,115 @@ describe("private Windows SQLite directory diagnostics", () => {
+     expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
+   });
+ });
++
++describe("private Windows SQLite staging fallback", () => {
++  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
++
++  afterEach(() => {
++    vi.restoreAllMocks();
++    childProcess.execFile.mockReset();
++    childProcess.execFileSync.mockReset();
++  });
++
++  async function loadFreshModule() {
++    // The fallback warning is process-wide; reload so each case observes it.
++    vi.resetModules();
++    return await import("./sqlite-private-directory.js");
++  }
++
++  function failPowerShell() {
++    const failure = Object.assign(new Error("powershell -EncodedCommand secret"), {
++      status: 1,
++      stderr: Buffer.from("Add-Type : Cannot add type. Compilation failed."),
++    });
++    childProcess.execFileSync.mockImplementation(() => {
++      throw failure;
++    });
++    childProcess.execFile.mockImplementation((_file, _args, _options, callback) => {
++      callback(failure, Buffer.from(""), failure.stderr);
++    });
++  }
++
++  it("falls back to a plain staging directory and warns once", async () => {
++    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
++    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
++    failPowerShell();
++    const fresh = await loadFreshModule();
++    const root = tempDirs.make("openclaw-sqlite-staging-fallback-");
++
++    const syncDir = fresh.createPrivateSqliteTempDirectorySync(root, "stage-");
++    const asyncDir = await fresh.createPrivateSqliteTempDirectory(root, "stage-");
++
++    expect(path.dirname(syncDir)).toBe(root);
++    expect(path.dirname(asyncDir)).toBe(root);
++    expect(fs.statSync(syncDir).isDirectory()).toBe(true);
++    expect(fs.statSync(asyncDir).isDirectory()).toBe(true);
++    expect(warn).toHaveBeenCalledTimes(1);
++    expect(String(warn.mock.calls[0]?.[0])).toContain("Add-Type : Cannot add type");
++    expect(String(warn.mock.calls[0]?.[0])).not.toContain("EncodedCommand");
++  });
++
++  it("falls back when PowerShell cannot be spawned", async () => {
++    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
++    vi.spyOn(console, "warn").mockImplementation(() => undefined);
++    childProcess.execFileSync.mockImplementation(() => {
++      throw Object.assign(new Error("spawn powershell.exe EACCES"), { code: "EACCES" });
++    });
++    const fresh = await loadFreshModule();
++    const root = tempDirs.make("openclaw-sqlite-staging-fallback-");
++
++    expect(
++      fs.statSync(fresh.createPrivateSqliteTempDirectorySync(root, "stage-")).isDirectory(),
++    ).toBe(true);
++  });
++
++  it("keeps the PowerShell diagnostics when the fallback also fails", async () => {
++    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
++    vi.spyOn(console, "warn").mockImplementation(() => undefined);
++    failPowerShell();
++    const fresh = await loadFreshModule();
++    const missingRoot = path.join(tempDirs.make("openclaw-sqlite-staging-fallback-"), "missing");
++
++    let error: unknown;
++    try {
++      fresh.createPrivateSqliteTempDirectorySync(missingRoot, "stage-");
++    } catch (cause) {
++      error = cause;
++    }
++    expect((error as Error).message).toContain("Unable to create private Windows SQLite directory");
++    expect(errorCause(error).message).toContain("Add-Type : Cannot add type");
++  });
++
++  it("does not fall back when the private directory already exists", async () => {
++    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
++    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
++    childProcess.execFileSync.mockImplementation(() => {
++      throw Object.assign(new Error("failed"), {
++        status: 1,
++        stderr: Buffer.from("OPENCLAW_SQLITE_DIRECTORY_EXISTS"),
++      });
++    });
++    const fresh = await loadFreshModule();
++    const root = tempDirs.make("openclaw-sqlite-staging-fallback-");
++
++    expect(() => fresh.createPrivateSqliteTempDirectorySync(root, "stage-")).toThrow(
++      expect.objectContaining({ code: "EEXIST" }),
++    );
++    expect(fs.readdirSync(root)).toEqual([]);
++    expect(warn).not.toHaveBeenCalled();
++  });
++
++  it("keeps persistent private directories fail-closed", async () => {
++    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
++    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
++    failPowerShell();
++    const fresh = await loadFreshModule();
++    const target = path.join(tempDirs.make("openclaw-sqlite-staging-fallback-"), "snapshot");
++
++    await expect(fresh.createPrivateSqliteDirectory(target)).rejects.toThrow(
++      "Unable to create private Windows SQLite directory",
++    );
++    expect(fs.existsSync(target)).toBe(false);
++    expect(warn).not.toHaveBeenCalled();
++  });
++});
+diff --git a/src/infra/sqlite-private-directory.ts b/src/infra/sqlite-private-directory.ts
+index 237ca39555b..575ed7d7eee 100644
+--- a/src/infra/sqlite-private-directory.ts
++++ b/src/infra/sqlite-private-directory.ts
+@@ -208,6 +208,64 @@ function createPrivateSqliteDirectorySync(directoryPath: string): void {
+   }
+ }
+ 
++// Some Windows hosts cannot run the PowerShell/Add-Type helper at all: security
++// software blocks powershell.exe, Constrained Language Mode rejects Add-Type, or
++// no C# compiler is available. Disposable staging directories then fall back to
++// a plain child directory, which inherits the ACL of its (user-owned) parent.
++// A genuine "already exists" keeps its meaning, and persistent directories made
++// through createPrivateSqliteDirectory stay fail-closed.
++let privateStagingFallbackWarned = false;
++
++function isDirectoryExistsError(error: unknown): boolean {
++  return (error as NodeJS.ErrnoException | undefined)?.code === "EEXIST";
++}
++
++function warnPrivateStagingFallback(directoryPath: string, error: unknown): void {
++  if (privateStagingFallbackWarned) {
++    return;
++  }
++  privateStagingFallbackWarned = true;
++  const cause = error instanceof Error ? error.cause : undefined;
++  const detail =
++    cause instanceof Error ? cause.message : error instanceof Error ? error.message : String(error);
++  console.warn(
++    `[sqlite] private Windows staging directory creation failed; falling back to a plain directory that inherits its parent ACL (${directoryPath}): ${detail}`,
++  );
++}
++
++async function createStagingDirectoryWithFallback(directoryPath: string): Promise<void> {
++  try {
++    await createPrivateSqliteDirectory(directoryPath);
++  } catch (error) {
++    if (isDirectoryExistsError(error)) {
++      throw error;
++    }
++    warnPrivateStagingFallback(directoryPath, error);
++    try {
++      await fs.mkdir(directoryPath, { mode: SQLITE_DIRECTORY_MODE });
++    } catch (fallbackError) {
++      // Keep the PowerShell diagnostics unless the fallback reports a collision.
++      throw isDirectoryExistsError(fallbackError) ? fallbackError : error;
++    }
++  }
++}
++
++function createStagingDirectoryWithFallbackSync(directoryPath: string): void {
++  try {
++    createPrivateSqliteDirectorySync(directoryPath);
++  } catch (error) {
++    if (isDirectoryExistsError(error)) {
++      throw error;
++    }
++    warnPrivateStagingFallback(directoryPath, error);
++    try {
++      fsSync.mkdirSync(directoryPath, { mode: SQLITE_DIRECTORY_MODE });
++    } catch (fallbackError) {
++      throw isDirectoryExistsError(fallbackError) ? fallbackError : error;
++    }
++  }
++}
++
+ export function resolvePrivateSqliteSnapshotStagingRoot(): string {
+   const appData = process.platform === "win32" ? process.env.LOCALAPPDATA?.trim() : undefined;
+   const defaultRoot = process.platform === "win32" ? "AppData/Local" : ".cache";
+@@ -229,7 +287,7 @@ export async function createPrivateSqliteTempDirectory(
+     return await fs.mkdtemp(path.join(rootPath, prefix));
+   }
+   const directoryPath = path.join(rootPath, `${prefix}${randomUUID()}`);
+-  await createPrivateSqliteDirectory(directoryPath);
++  await createStagingDirectoryWithFallback(directoryPath);
+   return directoryPath;
+ }
+ 
+@@ -238,6 +296,6 @@ export function createPrivateSqliteTempDirectorySync(rootPath: string, prefix: s
+     return fsSync.mkdtempSync(path.join(rootPath, prefix));
+   }
+   const directoryPath = path.join(rootPath, `${prefix}${randomUUID()}`);
+-  createPrivateSqliteDirectorySync(directoryPath);
++  createStagingDirectoryWithFallbackSync(directoryPath);
+   return directoryPath;
+ }

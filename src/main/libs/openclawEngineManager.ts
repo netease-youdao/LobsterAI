@@ -36,7 +36,12 @@ import { cleanupStaleGatewayLocks, GatewayLockCleanupAction } from './openclawGa
 import { buildOpenClawGatewayShutdownBridge, spawnOpenClawGatewayProcess, stopOpenClawGatewayProcess } from './openclawGatewayProcess';
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
-import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
+import {
+  computeLegacySessionStoreFingerprint,
+  type LegacySessionMigrationFailureRecord,
+  migrateLegacySessionStorageWithDoctor,
+  shouldSkipLegacySessionMigrationRetry,
+} from './openclawSessionLegacyMigration';
 import { extractOpenClawBindingSchemaFailure, extractOpenClawCliFailure, hasLegacyOpenClawDiscovery, isOpenClawBindingSchemaFailure, runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
 import { migrateLegacyStateBeforeStartup, stopStartupStateMigrations } from './openclawStartupStateMigration';
 import { ensureOpenClawWorkerShims, getMissingOpenClawWorkerTargets } from './openclawWorkerShims';
@@ -344,6 +349,8 @@ export class OpenClawEngineManager extends EventEmitter {
   private gatewayRestartTimer: NodeJS.Timeout | null = null;
   private gatewayRestartWait: { promise: Promise<boolean>; resolve: (retry: boolean) => void } | null = null;
   private gatewayRestartAttempt = 0;
+  private lastStartGatewayReason = 'unknown';
+  private legacySessionMigrationFailure: LegacySessionMigrationFailureRecord | null = null;
   private gatewayLifecycleGeneration = 0;
   private gatewayMaintenanceActive = false;
   private shutdownRequested = false;
@@ -688,6 +695,7 @@ export class OpenClawEngineManager extends EventEmitter {
       return this.startGatewayPromise;
     }
     console.log(`${gwDiagTs()} startGateway: reason=${reason}, currentPhase=${this.status.phase}, port=${this.gatewayPort ?? 'none'}`);
+    this.lastStartGatewayReason = reason;
     this.shutdownRequested = false;
     this.startupCompatibilityRunner = null;
     this.startGatewayPromise = this.startGatewayUntilSettled(generation).finally(() => {
@@ -1022,6 +1030,23 @@ export class OpenClawEngineManager extends EventEmitter {
     });
     if (this.shutdownRequested) return this.getStatus();
 
+    const legacyStoreFingerprint = computeLegacySessionStoreFingerprint(this.stateDir);
+    const previousLegacyFailure = this.legacySessionMigrationFailure;
+    if (previousLegacyFailure && shouldSkipLegacySessionMigrationRetry({
+      previous: previousLegacyFailure,
+      fingerprint: legacyStoreFingerprint,
+      reason: this.lastStartGatewayReason,
+    })) {
+      console.warn(`[OpenClaw] Legacy session migration failed ${Math.round((Date.now() - previousLegacyFailure.at) / 1000)}s ago with unchanged stores; not rerunning doctor for reason=${this.lastStartGatewayReason}`);
+      this.setStatus({
+        phase: 'error',
+        version: runtime.version,
+        message: previousLegacyFailure.error,
+        errorCode: previousLegacyFailure.errorCode,
+        canRetry: true,
+      });
+      return this.getStatus();
+    }
     const legacySessionMigration = await migrateLegacySessionStorageWithDoctor({
       stateDir: this.stateDir,
       configPath: this.configPath,
@@ -1031,16 +1056,24 @@ export class OpenClawEngineManager extends EventEmitter {
     });
     if (this.shutdownRequested) return this.getStatus();
     if (legacySessionMigration.status === 'failed') {
+      const errorCode = legacySessionMigration.errorCode ?? (isOpenClawBindingSchemaFailure(legacySessionMigration.error, this.stateDir)
+        ? OpenClawEngineErrorCode.StartupCompatibilityFailed : undefined);
+      this.legacySessionMigrationFailure = {
+        at: Date.now(),
+        error: legacySessionMigration.error,
+        errorCode,
+        fingerprint: legacyStoreFingerprint,
+      };
       this.setStatus({
         phase: 'error',
         version: runtime.version,
         message: legacySessionMigration.error,
-        errorCode: legacySessionMigration.errorCode ?? (isOpenClawBindingSchemaFailure(legacySessionMigration.error, this.stateDir)
-          ? OpenClawEngineErrorCode.StartupCompatibilityFailed : undefined),
+        errorCode,
         canRetry: true,
       });
       return this.getStatus();
     }
+    this.legacySessionMigrationFailure = null;
     if (legacySessionMigration.status === 'skipped'
       && legacySessionMigration.reason === 'missing-openclaw-cli') {
       this.setStatus({
