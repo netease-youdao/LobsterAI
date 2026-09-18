@@ -29,6 +29,7 @@ interface SupervisorInternals {
   gatewayRecentOutput: WeakMap<ChildProcess, string[]>;
   gatewayRestartAttempt: number;
   gatewayRestartTimer: ReturnType<typeof setTimeout> | null;
+  scheduleGatewayRestartBudgetReset: (child: ChildProcess) => void;
   startGatewayPromise: Promise<OpenClawEngineStatus> | null;
   shutdownRequested: boolean;
   attachGatewayExitHandlers: (child: ChildProcess) => void;
@@ -71,6 +72,7 @@ function makeSupervisor() {
     gatewayRestartTimer: null,
     gatewayRestartWait: null,
     gatewayRestartAttempt: 0,
+    gatewayRestartBudgetResetTimer: null,
     gatewayLifecycleGeneration: 0,
     shutdownRequested: false,
     gatewayPort: 18789,
@@ -663,5 +665,50 @@ describe('OpenClaw gateway restart supervision', () => {
       OpenClawEnginePhase.Error,
     ]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test('a gateway that crashes soon after becoming healthy still exhausts the restart budget', async () => {
+    const { manager, internals, child, phases } = makeSupervisor();
+    const attempt = vi.spyOn(internals, 'doStartGateway').mockImplementation(async () => {
+      const nextChild = makeChild();
+      internals.gatewayProcess = nextChild;
+      internals.gatewayRecentOutput.set(nextChild, ['extension driver crashed']);
+      internals.attachGatewayExitHandlers(nextChild);
+      internals.scheduleGatewayRestartBudgetReset(nextChild);
+      internals.setStatus({ phase: OpenClawEnginePhase.Running, version: '2026.8.1', canRetry: false });
+      return manager.getStatus();
+    });
+    internals.scheduleGatewayRestartBudgetReset(child);
+
+    for (const delay of [3_000, 5_000, 10_000, 20_000, 30_000]) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      closeChild(internals.gatewayProcess!, 1);
+      await vi.advanceTimersByTimeAsync(delay);
+    }
+    expect(attempt).toHaveBeenCalledTimes(5);
+    expect(internals.gatewayRestartAttempt).toBe(5);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    closeChild(internals.gatewayProcess!, 1);
+
+    expect(manager.getStatus()).toMatchObject({ phase: OpenClawEnginePhase.Error, canRetry: true });
+    expect(phases.at(-1)).toBe(OpenClawEnginePhase.Error);
+    expect(attempt).toHaveBeenCalledTimes(5);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test('a gateway that stays healthy past the stability window refills the restart budget', async () => {
+    const { manager, internals, child } = makeSupervisor();
+    internals.gatewayRestartAttempt = 4;
+    internals.scheduleGatewayRestartBudgetReset(child);
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(internals.gatewayRestartAttempt).toBe(4);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(internals.gatewayRestartAttempt).toBe(0);
+
+    closeChild(child, 1);
+    expect(internals.gatewayRestartAttempt).toBe(1);
+    expect(manager.getStatus().phase).toBe(OpenClawEnginePhase.Starting);
   });
 });
