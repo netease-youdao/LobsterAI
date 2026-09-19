@@ -94,6 +94,57 @@ describe('renderDshManagedSettings', () => {
     expect(managed.routes['lobsterai-gw'].models[0].input).toEqual(['text', 'image']);
   });
 
+  test('keeps models without thinking capability free of effort metadata', () => {
+    const managed = renderDshManagedSettings({ gw: providerFixture() });
+    const route = managed.routes['lobsterai-gw'];
+    expect(route.models[0].reasoningEfforts).toBeUndefined();
+    expect(route.compat).toBeUndefined();
+  });
+
+  test('declares default OpenAI efforts and route compat for a thinking model', () => {
+    const managed = renderDshManagedSettings({
+      gw: providerFixture({ models: [{ id: 'thinker', name: 'Thinker', supportsThinking: true }] }),
+    });
+    const route = managed.routes['lobsterai-gw'];
+    expect(route.models[0].reasoningEfforts).toEqual({
+      off: null,
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      max: 'max',
+    });
+    expect(route.compat).toEqual({ thinkingFormat: 'openai', supportsReasoningEffort: true });
+  });
+
+  test('maps an explicit per-model thinkingLevelMap instead of the default', () => {
+    const managed = renderDshManagedSettings({
+      gw: providerFixture({
+        models: [{
+          id: 'deepseek-v4',
+          name: 'DeepSeek V4',
+          supportsThinking: true,
+          customParams: { thinkingLevelMap: { off: 'off', high: 'high', xhigh: 'xhigh' } },
+        }],
+      }),
+    });
+    const route = managed.routes['lobsterai-gw'];
+    expect(route.models[0].reasoningEfforts).toEqual({ off: null, high: 'high', xhigh: 'xhigh' });
+    expect(route.compat).toEqual({ thinkingFormat: 'openai', supportsReasoningEffort: true });
+  });
+
+  test('leaves anthropic routes without reasoning compat', () => {
+    const managed = renderDshManagedSettings({
+      gw: providerFixture({
+        apiFormat: 'anthropic',
+        models: [{ id: 'claude', name: 'Claude', supportsThinking: true }],
+      }),
+    });
+    const route = managed.routes['lobsterai-gw'];
+    expect(route.api).toBe('anthropic-messages');
+    expect(route.models[0].reasoningEfforts).toBeUndefined();
+    expect(route.compat).toBeUndefined();
+  });
+
   test('skips disabled, oauth, keyless, model-less, and gemini providers with reasons', () => {
     const managed = renderDshManagedSettings({
       off: providerFixture({ enabled: false }),
@@ -148,6 +199,44 @@ describe('plan provider (token proxy)', () => {
     expect(route.models.map((model) => model.id)).toEqual(['plan-chat', 'plan-vision']);
     // The proxy overwrites Authorization, so the key only has to be non-empty.
     expect(managed.envVars[route.apiKeyEnv]).toBeTruthy();
+  });
+
+  test('declares plan reasoning efforts from server thinking config', () => {
+    const managed = renderDshManagedSettings(
+      {},
+      {
+        planProvider: {
+          ...plan,
+          models: [
+            {
+              modelId: 'plan-chat',
+              supportsThinking: true,
+              thinkingConfig: {
+                options: [
+                  { level: 'off', openclawLevel: 'off' },
+                  { level: 'high', openclawLevel: 'high' },
+                  { level: 'xhigh', openclawLevel: 'xhigh' },
+                ],
+                defaultLevel: 'high',
+              },
+            },
+            { modelId: 'plan-vision' },
+          ],
+        },
+      }
+    );
+    const route = managed.routes[DSH_PLAN_ROUTE_ID];
+    expect(route.models[0].reasoningEfforts).toEqual({ off: null, high: 'high', xhigh: 'xhigh' });
+    expect(route.compat).toEqual({ thinkingFormat: 'openai', supportsReasoningEffort: true });
+    // Models without thinking capability stay untouched.
+    expect(route.models[1].reasoningEfforts).toBeUndefined();
+  });
+
+  test('plan models without thinking capability leave the route bare', () => {
+    const managed = renderDshManagedSettings({}, { planProvider: plan });
+    const route = managed.routes[DSH_PLAN_ROUTE_ID];
+    expect(route.compat).toBeUndefined();
+    expect(route.models.every((model) => model.reasoningEfforts === undefined)).toBe(true);
   });
 
   test('marks the plan as LobsterAI-managed in the picker', () => {
