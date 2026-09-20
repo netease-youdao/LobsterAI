@@ -75,7 +75,7 @@ const COWORK_SYNC_FIELDS = new Set([
   'embeddingRemoteApiKey',
 ]);
 
-const COWORK_RESTART_FIELDS = new Set([
+const COWORK_PLUGIN_CONFIG_FIELDS = new Set([
   'dreamingEnabled',
   'dreamingFrequency',
   'dreamingModel',
@@ -155,14 +155,8 @@ export const removeImpactDecisionReasons = (
     if (
       reason === OpenClawConfigImpactReason.AppUseSystemProxy
       || reason === OpenClawConfigImpactReason.AppProviderSecret
-      || reason === OpenClawConfigImpactReason.CoworkDreamingConfig
-      || reason === OpenClawConfigImpactReason.ImConfig
-      || reason === OpenClawConfigImpactReason.ImForceRestart
       || reason === OpenClawConfigImpactReason.PluginInstall
       || reason === OpenClawConfigImpactReason.PluginUninstall
-      || reason === OpenClawConfigImpactReason.PluginToggle
-      || reason === OpenClawConfigImpactReason.PluginConfig
-      || reason === OpenClawConfigImpactReason.McpConfig
     ) {
       return decision(OpenClawConfigImpact.Restart, reason);
     }
@@ -274,9 +268,9 @@ export const classifyCoworkConfigChange = (
     }
   }
 
-  for (const field of COWORK_RESTART_FIELDS) {
+  for (const field of COWORK_PLUGIN_CONFIG_FIELDS) {
     if (changed(previous[field], next[field])) {
-      decisions.push(decision(OpenClawConfigImpact.Restart, OpenClawConfigImpactReason.CoworkDreamingConfig));
+      decisions.push(decision(OpenClawConfigImpact.Sync, OpenClawConfigImpactReason.CoworkDreamingConfig));
       break;
     }
   }
@@ -290,12 +284,16 @@ export const classifyImOpenClawConfigChange = (
   options: { forceRestart?: boolean } = {},
 ): ImpactDecision => {
   if (options.forceRestart) {
-    return decision(OpenClawConfigImpact.Restart, OpenClawConfigImpactReason.ImForceRestart);
+    // Legacy settings/auth hints request a reconciliation, not a process respawn.
+    // Channel credentials and reload policy belong to the runtime/plugin.
+    return decision(OpenClawConfigImpact.Sync, OpenClawConfigImpactReason.ImForceRestart);
   }
   if (previousFingerprint === null || previousFingerprint === nextFingerprint) {
     return noImpact();
   }
-  return decision(OpenClawConfigImpact.Restart, OpenClawConfigImpactReason.ImConfig);
+  // The runtime owns per-plugin/account reload rules; a settings edit alone
+  // does not establish that the entire gateway needs replacement.
+  return decision(OpenClawConfigImpact.Sync, OpenClawConfigImpactReason.ImConfig);
 };
 
 export const classifyPluginConfigChange = (
@@ -307,8 +305,8 @@ export const classifyPluginConfigChange = (
     case OpenClawPluginChangeAction.Uninstall:
       return decision(OpenClawConfigImpact.Restart, OpenClawConfigImpactReason.PluginUninstall);
     case OpenClawPluginChangeAction.Toggle:
-      return decision(OpenClawConfigImpact.Restart, OpenClawConfigImpactReason.PluginToggle);
+      return decision(OpenClawConfigImpact.Sync, OpenClawConfigImpactReason.PluginToggle);
     case OpenClawPluginChangeAction.Config:
-      return decision(OpenClawConfigImpact.Restart, OpenClawConfigImpactReason.PluginConfig);
+      return decision(OpenClawConfigImpact.Sync, OpenClawConfigImpactReason.PluginConfig);
   }
 };

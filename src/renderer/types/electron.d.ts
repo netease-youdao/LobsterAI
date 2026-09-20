@@ -97,6 +97,7 @@ import type {
   HtmlShareSourceType,
   HtmlShareStatus,
 } from '../../shared/htmlShare/constants';
+import type { IMConfigSyncResult } from '../../shared/im/configSync';
 import type {
   InstalledKitRecord,
   KitReference,
@@ -1731,7 +1732,7 @@ interface IElectronAPI {
       config: Partial<IMGatewayConfig>,
       options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
     ) => Promise<{ success: boolean; error?: string }>;
-    syncConfig: () => Promise<{ success: boolean; skipped?: boolean; error?: string }>;
+    syncConfig: () => Promise<IMConfigSyncResult>;
     startGateway: (platform: Platform) => Promise<{ success: boolean; error?: string }>;
     stopGateway: (platform: Platform) => Promise<{ success: boolean; error?: string }>;
     testGateway: (

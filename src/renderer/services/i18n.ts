@@ -1371,6 +1371,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawStatusBadgeNotInstalled: '未安装',
     settingsSavedButOpenClawSyncFailed:
       '设置已保存，但应用到 OpenClaw 运行环境失败。请重试保存，或重启 OpenClaw 后再试。',
+    settingsSavedOpenClawPending: '设置已保存，正在等待 AI 引擎确认生效；任务运行期间不会强制重启。',
     openClawSessionKeepAlive: '会话保持时长',
     openClawSessionKeepAliveHint:
       '决定一段对话在连续空闲多久后会被视为新的会话。只要间隔没有超过这个时间，就会继续沿用原来的上下文。设置得更长可以保留更多上下文，但也可能增加 token 消耗。',
@@ -5430,6 +5431,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawStatusBadgeNotInstalled: 'Not installed',
     settingsSavedButOpenClawSyncFailed:
       'Settings were saved locally, but applying them to the running OpenClaw environment failed. Please save again or restart OpenClaw.',
+    settingsSavedOpenClawPending: 'Settings saved. Waiting for the AI engine to confirm application; running tasks will not be interrupted.',
     openClawSessionKeepAlive: 'Session continuity',
     openClawSessionKeepAliveHint:
       'Determines how long a conversation can stay continuously idle before it is treated as a new session. As long as the gap does not exceed this duration, the existing context will continue to be used. Longer durations preserve more context, but may also increase token usage.',

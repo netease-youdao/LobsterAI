@@ -201,19 +201,19 @@ describe('OpenClaw config impact classification', () => {
     });
   });
 
-  test('classifies dreaming changes as restart', () => {
+  test('classifies dreaming plugin configuration as runtime-owned sync', () => {
     const result = classifyCoworkConfigChange(
       { dreamingEnabled: false, dreamingFrequency: '0 3 * * *' },
       { dreamingEnabled: true, dreamingFrequency: '0 4 * * *' },
     );
 
     expect(result).toEqual({
-      impact: OpenClawConfigImpact.Restart,
+      impact: OpenClawConfigImpact.Sync,
       reasons: [OpenClawConfigImpactReason.CoworkDreamingConfig],
     });
   });
 
-  test('lets dreaming restart take precedence over cowork sync changes', () => {
+  test('merges dreaming and cowork sync changes without a host restart', () => {
     const result = classifyCoworkConfigChange(
       {
         skipMissedJobs: true,
@@ -226,7 +226,7 @@ describe('OpenClaw config impact classification', () => {
     );
 
     expect(result).toEqual({
-      impact: OpenClawConfigImpact.Restart,
+      impact: OpenClawConfigImpact.Sync,
       reasons: [
         OpenClawConfigImpactReason.CoworkOpenClawConfig,
         OpenClawConfigImpactReason.CoworkDreamingConfig,
@@ -246,18 +246,18 @@ describe('OpenClaw config impact classification', () => {
     });
   });
 
-  test('classifies IM fingerprint changes as restart and identical fingerprints as none', () => {
+  test('classifies IM fingerprint changes as runtime-owned sync and identical fingerprints as none', () => {
     const previous = createStableConfigFingerprint({ telegram: { enabled: false } });
     const next = createStableConfigFingerprint({ telegram: { enabled: true } });
 
     expect(classifyImOpenClawConfigChange(previous, previous).impact).toBe(OpenClawConfigImpact.None);
     expect(classifyImOpenClawConfigChange(previous, next)).toEqual({
-      impact: OpenClawConfigImpact.Restart,
+      impact: OpenClawConfigImpact.Sync,
       reasons: [OpenClawConfigImpactReason.ImConfig],
     });
   });
 
-  test('keeps IM binding saves as restart when removing an unrelated restart reason', () => {
+  test('keeps IM binding saves as sync when removing an unrelated restart reason', () => {
     const imDecision = classifyImOpenClawConfigChange(
       createStableConfigFingerprint({ settings: { platformAgentBindings: {} } }),
       createStableConfigFingerprint({ settings: { platformAgentBindings: { qq: 'worker' } } }),
@@ -268,27 +268,27 @@ describe('OpenClaw config impact classification', () => {
     });
 
     expect(removeImpactDecisionReasons(combined, [OpenClawConfigImpactReason.AppUseSystemProxy]))
-      .toEqual({ impact: OpenClawConfigImpact.Restart, reasons: [OpenClawConfigImpactReason.ImConfig] });
+      .toEqual({ impact: OpenClawConfigImpact.Sync, reasons: [OpenClawConfigImpactReason.ImConfig] });
   });
 
-  test('classifies forced IM sync as restart even without fingerprint diff', () => {
+  test('classifies legacy forced IM sync as reconciliation even without fingerprint diff', () => {
     const fingerprint = createStableConfigFingerprint({ weixin: { accountId: 'wxid' } });
 
     expect(classifyImOpenClawConfigChange(fingerprint, fingerprint, { forceRestart: true })).toEqual({
-      impact: OpenClawConfigImpact.Restart,
+      impact: OpenClawConfigImpact.Sync,
       reasons: [OpenClawConfigImpactReason.ImForceRestart],
     });
   });
 
-  test('classifies plugin install, uninstall, toggle, and config changes as restart', () => {
+  test('keeps artifact replacement as restart and delegates plugin state changes to runtime', () => {
     expect(classifyPluginConfigChange(OpenClawPluginChangeAction.Install).impact)
       .toBe(OpenClawConfigImpact.Restart);
     expect(classifyPluginConfigChange(OpenClawPluginChangeAction.Uninstall).impact)
       .toBe(OpenClawConfigImpact.Restart);
     expect(classifyPluginConfigChange(OpenClawPluginChangeAction.Toggle).impact)
-      .toBe(OpenClawConfigImpact.Restart);
+      .toBe(OpenClawConfigImpact.Sync);
     expect(classifyPluginConfigChange(OpenClawPluginChangeAction.Config).impact)
-      .toBe(OpenClawConfigImpact.Restart);
+      .toBe(OpenClawConfigImpact.Sync);
   });
 
   test('merges decisions with restart taking precedence over sync and none', () => {

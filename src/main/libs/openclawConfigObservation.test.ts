@@ -15,6 +15,8 @@ test.each([
   [ConfigRecoveryEvidence.Unconfirmed, ConfigRecoveryAction.Scheduled, ConfigWorkloadState.Idle, ConfigRecoverySuggestion.RetryDelivery],
   [ConfigRecoveryEvidence.Rejected, ConfigRecoveryAction.None, ConfigWorkloadState.Idle, ConfigRecoverySuggestion.ReportRejection],
   [ConfigRecoveryEvidence.NextStart, ConfigRecoveryAction.None, ConfigWorkloadState.Unknown, ConfigRecoverySuggestion.LoadAtStart],
+  [ConfigRecoveryEvidence.RestartRequired, ConfigRecoveryAction.None, ConfigWorkloadState.Idle, ConfigRecoverySuggestion.AwaitIdleRestart],
+  [ConfigRecoveryEvidence.RestartRequired, ConfigRecoveryAction.None, ConfigWorkloadState.Busy, ConfigRecoverySuggestion.WaitBusy],
 ] as const)('shadow policy reports %s / %s / %s without scheduling', (evidence, actualAction, workloadState, suggestion) => {
   vi.useFakeTimers();
   try {

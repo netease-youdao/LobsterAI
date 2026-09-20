@@ -2553,6 +2553,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private gatewayClientVersion: string | null = null;
   private gatewayClientEntryPath: string | null = null;
   private gatewayClientGeneration = 0;
+  private gatewayClientProcessGeneration: number | null = null;
+  private gatewayHandshakeComplete = false;
   /** Holds the client between start() and onHelloOk so stopGatewayClient can clean it up. */
   private pendingGatewayClient: GatewayClientLike | null = null;
   private gatewayReadyPromise: Promise<void> | null = null;
@@ -4278,8 +4280,11 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * for a LobsterAI-initiated session.
    */
   async connectGatewayIfNeeded(): Promise<void> {
+    this.assertGatewayConnectionAllowed();
     this.gatewayReconnectSuppressed = false;
-    if (this.gatewayClient) {
+    const processGeneration = this.engineManager.getGatewayProcessGeneration?.();
+    if (this.gatewayClient && this.gatewayHandshakeComplete &&
+        (processGeneration === undefined || this.gatewayClientProcessGeneration === processGeneration)) {
       // Another RPC may have established the socket after a gateway restart.
       // A connected client does not imply that channel polling is running.
       this.startChannelPolling();
@@ -4288,6 +4293,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     console.log('[ChannelSync] connectGatewayIfNeeded: no gateway client, initializing...');
     try {
       await this.ensureGatewayClientReady();
+      this.assertGatewayHandshakeReady();
       console.log('[ChannelSync] connectGatewayIfNeeded: gateway client ready, starting channel polling');
       this.startChannelPolling();
     } catch (error) {
@@ -4312,17 +4318,21 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   /**
-   * Force-reconnect the gateway WebSocket client.
-   * Used after the OpenClaw gateway process has been restarted (e.g. after config sync).
-   * Unlike `connectGatewayIfNeeded`, this always tears down the old client first
-   * to avoid a race where the old client's `onClose` fires after a new client is created.
+   * Connect after a process restart. Socket recovery may already be connecting;
+   * join its handshake rather than stopping the new pending transport. A late
+   * notification also preserves a ready client for the current process generation.
    */
   async reconnectGateway(): Promise<void> {
-    console.log('[ChannelSync] reconnectGateway: tearing down old client and reconnecting...');
+    this.assertGatewayConnectionAllowed();
+    console.log('[ChannelSync] reconnectGateway: ensuring a connection to the current gateway...');
     this.gatewayReconnectSuppressed = false;
-    this.stopGatewayClient();
+    const processGeneration = this.engineManager.getGatewayProcessGeneration?.();
+    const currentProcessConnected = this.gatewayClient && this.gatewayHandshakeComplete &&
+      processGeneration !== undefined && this.gatewayClientProcessGeneration === processGeneration;
+    if (!this.gatewayClientInitLock && !currentProcessConnected) this.stopGatewayClient();
     try {
       await this.ensureGatewayClientReady();
+      this.assertGatewayHandshakeReady();
       console.log('[ChannelSync] reconnectGateway: gateway client ready, starting channel polling');
       this.startChannelPolling();
     } catch (error) {
@@ -5359,13 +5369,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   getConfigRestartWorkloadSnapshot() {
     const im = this.configRestartImWorkloads.snapshot(this.getChannelLifecycleRunTtlMs());
     const activeTurns = this.activeTurns.size;
-    const connected = this.gatewayClient !== null;
+    const tickAgeMs = this.lastTickTimestamp > 0 ? Math.max(0, Date.now() - this.lastTickTimestamp) : null;
+    const connected = this.gatewayClient !== null && this.gatewayHandshakeComplete
+      && tickAgeMs !== null && tickAgeMs < OpenClawRuntimeAdapter.TICK_TIMEOUT_MS;
     const state = activeTurns > 0 || im.activeSessions > 0 ? ConfigWorkloadState.Busy
       : !connected ? ConfigWorkloadState.Unknown : im.state;
     return {
       state, activeTurns, im, connected,
       connectionGeneration: this.gatewayClientGeneration,
-      tickAgeMs: this.lastTickTimestamp > 0 ? Math.max(0, Date.now() - this.lastTickTimestamp) : null,
+      tickAgeMs,
     };
   }
 
@@ -6117,23 +6129,48 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     return sections.join('\n');
   }
 
+  private assertGatewayConnectionAllowed(): void {
+    if (this.engineManager.isShuttingDown?.()) {
+      throw new Error('OpenClaw gateway connection cancelled because the application is shutting down.');
+    }
+  }
+
+  private assertGatewayHandshakeReady(expectedGeneration = this.gatewayClientGeneration): void {
+    this.assertGatewayConnectionAllowed();
+    if (expectedGeneration !== this.gatewayClientGeneration || !this.gatewayClient || !this.gatewayHandshakeComplete) {
+      throw new Error('OpenClaw gateway connection was stopped or superseded before its handshake completed.');
+    }
+    const processGeneration = this.engineManager.getGatewayProcessGeneration?.();
+    if (processGeneration !== undefined && this.gatewayClientProcessGeneration !== processGeneration) {
+      throw new Error('OpenClaw gateway connection was superseded by a new gateway process.');
+    }
+  }
+
   private async ensureGatewayClientReady(): Promise<void> {
+    this.assertGatewayConnectionAllowed();
     // Serialize concurrent calls: if another init is already in progress, wait for it.
     if (this.gatewayClientInitLock) {
       await this.gatewayClientInitLock;
+      this.assertGatewayHandshakeReady();
       return;
     }
     this.gatewayClientInitLock = this._ensureGatewayClientReadyImpl();
     try {
       await this.gatewayClientInitLock;
+      this.assertGatewayHandshakeReady();
     } finally {
       this.gatewayClientInitLock = null;
     }
   }
 
   private async _ensureGatewayClientReadyImpl(): Promise<void> {
+    const startingGeneration = this.gatewayClientGeneration;
     console.log('[ChannelSync] ensureGatewayClientReady: starting engine gateway...');
     const engineStatus = await this.engineManager.startGateway('channel-sync-ensure-ready');
+    this.assertGatewayConnectionAllowed();
+    if (startingGeneration !== this.gatewayClientGeneration) {
+      throw new Error('Gateway connection was stopped or superseded while starting its process.');
+    }
     console.log('[ChannelSync] ensureGatewayClientReady: engine phase=', engineStatus.phase, 'message=', engineStatus.message);
     if (engineStatus.phase !== 'running') {
       const message = engineStatus.message || 'OpenClaw engine is not running.';
@@ -6151,27 +6188,43 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       throw new Error(`OpenClaw gateway connection info is incomplete (missing: ${missing.join(', ')})`);
     }
 
-    const needsNewClient = !this.gatewayClient
+    const needsNewClient = !this.gatewayClient || !this.gatewayHandshakeComplete
       || this.gatewayClientVersion !== connection.version
-      || this.gatewayClientEntryPath !== connection.clientEntryPath;
+      || this.gatewayClientEntryPath !== connection.clientEntryPath
+      || (this.engineManager.getGatewayProcessGeneration?.() !== undefined &&
+        this.gatewayClientProcessGeneration !== this.engineManager.getGatewayProcessGeneration());
     console.log('[ChannelSync] ensureGatewayClientReady: needsNewClient=', needsNewClient, 'hasExistingClient=', !!this.gatewayClient);
     if (!needsNewClient && this.gatewayReadyPromise) {
+      const generation = this.gatewayClientGeneration;
       await waitWithTimeout(this.gatewayReadyPromise, GATEWAY_READY_TIMEOUT_MS);
+      this.assertGatewayHandshakeReady(generation);
       return;
     }
 
     this.stopGatewayClient();
     console.log('[ChannelSync] ensureGatewayClientReady: creating gateway client, url=', connection.url);
     await this.createGatewayClient(connection);
+    this.assertGatewayConnectionAllowed();
     console.log('[ChannelSync] ensureGatewayClientReady: createGatewayClient returned, waiting for handshake...');
-    if (this.gatewayReadyPromise) {
-      await waitWithTimeout(this.gatewayReadyPromise, GATEWAY_READY_TIMEOUT_MS);
-    }
+    const generation = this.gatewayClientGeneration;
+    const readiness = this.gatewayReadyPromise;
+    if (!readiness) throw new Error('Gateway connection stopped before handshake.');
+    await waitWithTimeout(readiness, GATEWAY_READY_TIMEOUT_MS);
+    this.assertGatewayHandshakeReady(generation);
     console.log('[ChannelSync] ensureGatewayClientReady: gateway client created and ready');
   }
 
   private async createGatewayClient(connection: OpenClawGatewayConnectionInfo): Promise<void> {
+    const loadingGeneration = this.gatewayClientGeneration;
+    const processGeneration = this.engineManager.getGatewayProcessGeneration?.();
     const GatewayClient = await this.loadGatewayClientCtor(connection.clientEntryPath);
+    this.assertGatewayConnectionAllowed();
+    // A new explicit ensure may resume a deliberately disconnected client.
+    // Generation changes still cancel disconnects that happen during this load.
+    if (loadingGeneration !== this.gatewayClientGeneration
+      || processGeneration !== this.engineManager.getGatewayProcessGeneration?.()) {
+      throw new Error('Gateway connection was stopped or superseded while loading its client.');
+    }
     const clientGeneration = ++this.gatewayClientGeneration;
 
     let resolveReady: (() => void) | null = null;
@@ -6187,13 +6240,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const settleResolve = () => {
       if (settled) return;
       settled = true;
-      this.gatewayReadyReject = null;
+      if (this.gatewayReadyReject === rejectReady) this.gatewayReadyReject = null;
       resolveReady?.();
     };
     const settleReject = (error: Error) => {
       if (settled) return;
       settled = true;
-      this.gatewayReadyReject = null;
+      if (this.gatewayReadyReject === rejectReady) this.gatewayReadyReject = null;
       rejectReady?.(error);
     };
 
@@ -6211,8 +6264,17 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       // which belongs to a separate standalone OpenClaw installation.
       deviceIdentity: null,
       onHelloOk: () => {
+        if (this.engineManager.isShuttingDown?.()) {
+          this.stopGatewayClient();
+          return;
+        }
         if (clientGeneration !== this.gatewayClientGeneration) {
           console.debug('[ChannelSync] ignored hello from a stale gateway client generation');
+          return;
+        }
+        if (processGeneration !== this.engineManager.getGatewayProcessGeneration?.()) {
+          this.stopGatewayClient();
+          this.scheduleGatewayReconnect();
           return;
         }
         console.log('[ChannelSync] GatewayClient: onHelloOk — handshake succeeded');
@@ -6220,6 +6282,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         // Setting gatewayClient earlier would let concurrent code send
         // request frames before the connect frame, causing 1008 rejection.
         this.gatewayClient = client;
+        this.gatewayHandshakeComplete = true;
+        this.gatewayClientProcessGeneration = processGeneration ?? null;
         this.gatewayClientVersion = connection.version;
         this.gatewayClientEntryPath = connection.clientEntryPath;
         this.gatewayReconnectSuppressed = false;
@@ -6243,6 +6307,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         this.startTickWatchdog();
       },
       onConnectError: (error: Error) => {
+        if (clientGeneration !== this.gatewayClientGeneration) return;
         console.error('[ChannelSync] GatewayClient: onConnectError —', error.message);
         // Don't reject on transient connect errors — the GatewayClient has
         // built-in reconnection logic and will retry automatically.  Let the
@@ -6263,6 +6328,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           console.debug('[ChannelSync] ignored close from a stale gateway client generation');
           return;
         }
+        this.gatewayHandshakeComplete = false;
         if (!settled) {
           // v2026.4.5+: The initial handshake may fail due to the gateway
           // being busy with plugin loading (connect.challenge timeout on the
@@ -6349,6 +6415,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   private stopGatewayClient(): void {
+    this.gatewayHandshakeComplete = false;
+    this.gatewayClientProcessGeneration = null;
     this.gatewayStoppingIntentionally = true;
     this.questionController.disconnect();
     this.failAllPendingBtwRuns(t('coworkBtwDisconnected'), 'gateway stopped');
@@ -7183,7 +7251,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * Resets the reconnect counter and triggers an immediate reconnect or health check.
    */
   onSystemResume(): void {
-    if (this.gatewayReconnectSuppressed || this.engineManager.isGatewayStartupBlocked?.()) {
+    if (this.gatewayReconnectSuppressed || this.engineManager.isGatewayStartupBlocked?.() || this.engineManager.isShuttingDown?.()) {
       console.log('[GatewayReconnect] skipped system resume reconnect because gateway reconnect is suppressed');
       return;
     }
@@ -7202,7 +7270,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * Called from onClose when the connection drops unexpectedly after a successful handshake.
    */
   private scheduleGatewayReconnect(): void {
-    if (this.gatewayReconnectSuppressed || this.engineManager.isGatewayStartupBlocked?.()) {
+    if (this.gatewayReconnectSuppressed || this.engineManager.isGatewayStartupBlocked?.() || this.engineManager.isShuttingDown?.()) {
       console.log('[GatewayReconnect] skipped reconnect scheduling because gateway reconnect is suppressed');
       return;
     }
@@ -7224,7 +7292,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   private async attemptGatewayReconnect(): Promise<void> {
-    if (this.gatewayReconnectSuppressed || this.engineManager.isGatewayStartupBlocked?.()) {
+    if (this.gatewayReconnectSuppressed || this.engineManager.isGatewayStartupBlocked?.() || this.engineManager.isShuttingDown?.()) {
       console.log('[GatewayReconnect] skipped reconnect attempt because gateway reconnect is suppressed');
       return;
     }
@@ -7232,6 +7300,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     try {
       // connectGatewayIfNeeded checks if client already exists, so safe to call
       await this.connectGatewayIfNeeded();
+      this.assertGatewayHandshakeReady();
       console.log('[GatewayReconnect] reconnected successfully');
       this.gatewayReconnectAttempt = 0; // reset counter on success
     } catch (error) {

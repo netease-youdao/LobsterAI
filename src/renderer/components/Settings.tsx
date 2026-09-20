@@ -10,6 +10,7 @@ import {
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
 import { DataMigrationRestoreStatus } from '../../shared/dataMigration/constants';
+import { getIMConfigSaveStatus, IMConfigSaveStatus, type IMConfigSyncResult } from '../../shared/im/configSync';
 import {
   normalizeNotificationSettings,
   TaskCompletionNotificationMode,
@@ -70,6 +71,7 @@ import EditIcon from './icons/EditIcon';
 import MessageCopyIcon from './icons/MessageCopyIcon';
 import PlugIcon from './icons/PlugIcon';
 import PlusCircleIcon from './icons/PlusCircleIcon';
+import { IMConfigSyncNotice } from './im/IMConfigSyncNotice';
 import IMSettings from './im/IMSettings';
 import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle } from './plugins/PluginsSettings';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
@@ -1418,6 +1420,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [preventSleep, setPreventSleepState] = useState(false);
   const [isUpdatingPreventSleep, setIsUpdatingPreventSleep] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [imConfigSaveResult, setIMConfigSaveResult] = useState<IMConfigSyncResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const buildNoticeMessage = useCallback((): string | null => {
     if (noticeI18nKey) {
@@ -3367,6 +3370,7 @@ const Settings: React.FC<SettingsProps> = ({
     e.preventDefault();
     if (isSaving || isAppearanceChanging) return;
     setIsSaving(true);
+    setIMConfigSaveResult(null);
     setError(null);
 
     try {
@@ -3573,10 +3577,13 @@ const Settings: React.FC<SettingsProps> = ({
       // Ask main to sync IM/OpenClaw config. The main process skips this when
       // the IM fingerprint has not changed, so unrelated settings saves do not
       // restart the gateway.
-      const syncSucceeded = await imService.saveAndSyncConfig();
-      if (!syncSucceeded) {
-        throw new Error(i18nService.t('settingsSavedButOpenClawSyncFailed'));
+      const syncResult = await imService.saveAndSyncConfig();
+      setIMConfigSaveResult(syncResult);
+      const saveStatus = getIMConfigSaveStatus(syncResult);
+      if (saveStatus === IMConfigSaveStatus.Rejected) {
+        throw new Error([i18nService.t('settingsSavedButOpenClawSyncFailed'), syncResult.error].filter(Boolean).join(' '));
       }
+      if (saveStatus === IMConfigSaveStatus.Pending) return;
 
       // Batch save plugin changes (toggles + configs) if any pending
       if (activeTab === 'plugins' && pluginsSettingsRef.current) {
@@ -6097,6 +6104,7 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
+          <IMConfigSyncNotice result={imConfigSaveResult} message={i18nService.t('settingsSavedOpenClawPending')} />
           {error && (
             <div className="px-6">
               <ErrorMessage

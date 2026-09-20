@@ -6,6 +6,8 @@
 import type { Platform } from '@shared/platform';
 import { PlatformRegistry } from '@shared/platform';
 
+import type { IMConfigSyncResult } from '../../shared/im/configSync';
+import { ConfigDeliveryState } from '../../shared/openclawEngine/configDelivery';
 import { store } from '../store';
 import {
   addDingTalkInstance,
@@ -263,13 +265,13 @@ class IMService {
    * Sync IM gateway config if IM-related settings changed.
    * Called from the global Settings Save button.
    */
-  async saveAndSyncConfig(): Promise<boolean> {
+  async saveAndSyncConfig(): Promise<IMConfigSyncResult> {
     try {
-      const result: IMGatewayResult = await window.electron.im.syncConfig();
-      return result.success;
+      return await window.electron.im.syncConfig();
     } catch (error) {
       console.error('[IM Service] Failed to sync IM config:', error);
-      return false;
+      return { success: false, deliveryState: ConfigDeliveryState.Rejected,
+        error: error instanceof Error ? error.message : 'Failed to sync IM config' };
     }
   }
 

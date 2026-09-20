@@ -260,6 +260,22 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(recovered.gateway).toEqual(configured.gateway);
   });
 
+  test.each([true, false])('RPC candidate generation preserves the watched file (has model: %s)', async (hasModel) => {
+    if (!hasModel) mockRuntimeState.rawApiConfig.config = null;
+    const sync = await createSync();
+    expect(sync.sync('offline-bootstrap').ok).toBe(true);
+    const before = fs.readFileSync(configPath, 'utf8');
+    const { SyncDeliveryMode } = await import('./openclawConfigSync');
+    const result = sync.sync('live-im-edit', {
+      deliveryMode: SyncDeliveryMode.Rpc,
+      transformCandidate: raw => JSON.stringify({ ...JSON.parse(raw), channels: { telegram: { enabled: false } } }),
+    });
+    expect(result.ok).toBe(true);
+    expect(result.configChanged).toBe(true);
+    expect(JSON.parse(result.candidateRaw!).channels.telegram.enabled).toBe(false);
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(before);
+  });
+
   test('keeps a fresh installation minimal when no model has been configured', async () => {
     mockRuntimeState.rawApiConfig.config = null;
     const sync = await createSync();

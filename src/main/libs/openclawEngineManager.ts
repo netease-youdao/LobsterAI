@@ -34,6 +34,7 @@ import { readDreamingRecoverySummary } from './openclawDreamingRecovery';
 import { createDreamingStartupFailureCollector } from './openclawDreamingStartupFailure';
 import { cleanupStaleGatewayLocks, GatewayLockCleanupAction } from './openclawGatewayLock';
 import { buildOpenClawGatewayShutdownBridge, spawnOpenClawGatewayProcess, stopOpenClawGatewayProcess } from './openclawGatewayProcess';
+import type { IdleStopResult } from './openclawIdleRestart';
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
@@ -94,6 +95,13 @@ const OPENCLAW_GATEWAY_HEAP_OOM_PATTERNS = [
 ];
 
 export type { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
+
+export interface OpenClawConfigRestartOptions {
+  retryBlocked?: boolean;
+  gatewayGeneration?: number;
+  requestIdleStop?: () => Promise<IdleStopResult>;
+  prepare?: () => Promise<void>;
+}
 
 export interface OpenClawEngineStatus {
   phase: OpenClawEnginePhase;
@@ -344,6 +352,8 @@ export class OpenClawEngineManager extends EventEmitter {
   private gatewayRestartTimer: NodeJS.Timeout | null = null;
   private gatewayRestartWait: { promise: Promise<boolean>; resolve: (retry: boolean) => void } | null = null;
   private gatewayRestartAttempt = 0;
+  private gatewayIdleStopPending: GatewayProcess | null = null;
+  private gatewayRestartPreparing = false;
   private gatewayLifecycleGeneration = 0;
   private gatewayMaintenanceActive = false;
   private gatewayStartupBlock: OpenClawEngineStatus | null = null;
@@ -680,6 +690,8 @@ export class OpenClawEngineManager extends EventEmitter {
   }
 
   async startGateway(reason = 'unknown', options: { retryBlocked?: boolean } = {}): Promise<OpenClawEngineStatus> {
+    if (this.gatewayRestartPreparing) return this.restartGatewayPromise ?? this.getStatus();
+    if (this.gatewayProcess && this.gatewayIdleStopPending === this.gatewayProcess) return this.getStatus();
     if (this.gatewayMaintenanceActive) return this.getStatus();
     if (options.retryBlocked) this.gatewayStartupBlock = null;
     if (this.isGatewayStartupBlocked()) return this.getStatus();
@@ -1159,6 +1171,8 @@ export class OpenClawEngineManager extends EventEmitter {
     return this.getStatus();
   }
 
+  isShuttingDown(): boolean { return this.shutdownRequested; }
+
   async stopGateway(options: { restarting?: boolean } = {}): Promise<void> {
     if (!options.restarting) this.gatewayLifecycleGeneration += 1;
     if (this.stopGatewayPromise) return this.stopGatewayPromise;
@@ -1210,28 +1224,79 @@ export class OpenClawEngineManager extends EventEmitter {
     });
   }
 
-  async restartGateway(reason = 'unknown', options: { retryBlocked?: boolean } = {}): Promise<OpenClawEngineStatus> {
+  async restartGateway(reason = 'unknown', options: OpenClawConfigRestartOptions = {}): Promise<OpenClawEngineStatus> {
     if (this.gatewayMaintenanceActive) return this.getStatus();
     if (options.retryBlocked) this.gatewayStartupBlock = null;
     if (this.isGatewayStartupBlocked()) return this.getStatus();
     if (this.restartGatewayPromise) return this.restartGatewayPromise;
-    this.restartGatewayPromise = this.doRestartGateway(reason).finally(() => {
+    this.gatewayRestartPreparing = true;
+    this.restartGatewayPromise = this.doRestartGateway(reason, options).finally(() => {
+      this.gatewayRestartPreparing = false;
       this.restartGatewayPromise = null;
     });
     return this.restartGatewayPromise;
   }
 
-  private async doRestartGateway(reason: string): Promise<OpenClawEngineStatus> {
+  private async doRestartGateway(reason: string, options: OpenClawConfigRestartOptions): Promise<OpenClawEngineStatus> {
+    if (options.gatewayGeneration !== undefined && options.gatewayGeneration !== this.getGatewayProcessGeneration()) {
+      return this.getStatus();
+    }
     const generation = this.gatewayLifecycleGeneration;
     const pid = this.gatewayProcess && 'pid' in this.gatewayProcess ? this.gatewayProcess.pid : 'none';
     console.log(`${gwDiagTs()} restartGateway: reason=${reason}, pid=${pid}, port=${this.gatewayPort ?? 'none'}`);
+    if (options.requestIdleStop && this.gatewayProcess) {
+      const closed = await this.requestGatewayIdleStop(this.gatewayProcess, options.requestIdleStop);
+      if (!closed || generation !== this.gatewayLifecycleGeneration) return this.getStatus();
+    }
     console.log(`${gwDiagTs()} restartGateway: stopping existing gateway...`);
     await this.stopGateway({ restarting: true });
+    if (generation !== this.gatewayLifecycleGeneration) return this.getStatus();
+    try { await options.prepare?.(); }
+    catch (error) {
+      if (generation !== this.gatewayLifecycleGeneration) return this.getStatus();
+      return this.setExternalError(error instanceof Error ? error.message : String(error));
+    }
     if (generation !== this.gatewayLifecycleGeneration) return this.getStatus();
     // Reset restart counter on manual restart so user can always retry
     this.gatewayRestartAttempt = 0;
     console.log(`${gwDiagTs()} restartGateway: starting gateway with new env...`);
+    this.gatewayRestartPreparing = false;
     return this.startGateway(`restart:${reason}`);
+  }
+
+  /** Wait for the exact runtime owner to exit; an uncertain ACK never permits a kill. */
+  private async requestGatewayIdleStop(child: GatewayProcess, request: () => Promise<IdleStopResult>): Promise<boolean> {
+    let closed = false;
+    let complete!: (value: boolean) => void;
+    const completion = new Promise<boolean>(resolve => { complete = resolve; });
+    const onClose = () => { closed = true; complete(true); };
+    child.once('close', onClose);
+    this.expectedGatewayExits.add(child);
+    const timer = setTimeout(() => complete(false), 30_000);
+    try {
+      let accepted = this.gatewayIdleStopPending === child;
+      if (!accepted) {
+        const receipt = await Promise.race([
+          request().catch(() => 'uncertain' as const),
+          completion.then(() => 'uncertain' as const),
+        ]);
+        accepted = receipt !== 'not-requested';
+      }
+      if (closed) return true;
+      if (!accepted) {
+        this.expectedGatewayExits.delete(child);
+        return false;
+      }
+      this.gatewayIdleStopPending = child;
+      this.setStatus({ phase: OpenClawEnginePhase.Starting, version: this.status.version,
+        canRetry: false, message: t('openClawConfigApplyPending') });
+      // Keep the old child reserved even after timeout. A later retry only waits.
+      return await completion;
+    } finally {
+      clearTimeout(timer);
+      child.removeListener('close', onClose);
+      if (closed && this.gatewayIdleStopPending === child) this.gatewayIdleStopPending = null;
+    }
   }
 
   private buildGatewayHttpUrl(port: number | null): string | null {

@@ -1792,7 +1792,16 @@ function buildOpenClawMcpServers(
   return result;
 }
 
+export const SyncDeliveryMode = { File: 'file', Rpc: 'rpc' } as const;
+export type OpenClawConfigSyncOptions = {
+  deliveryMode?: typeof SyncDeliveryMode[keyof typeof SyncDeliveryMode];
+  transformCandidate?: (raw: string) => string;
+};
+
 export type OpenClawConfigSyncResult = {
+  candidateRaw?: string;
+  configChanged?: boolean;
+  sessionStoreChanged?: boolean;
   ok: boolean;
   changed: boolean;
   configPath: string;
@@ -2035,7 +2044,7 @@ export class OpenClawConfigSync {
     };
   }
 
-  sync(reason: string): OpenClawConfigSyncResult {
+  sync(reason: string, options: OpenClawConfigSyncOptions = {}): OpenClawConfigSyncResult {
     const configPath = this.engineManager.getConfigPath();
     const coworkConfig = this.getCoworkConfig();
     // OpenClaw defaults to automatic review; require an explicit user opt-in.
@@ -2072,7 +2081,7 @@ export class OpenClawConfigSync {
       } else {
         // This also happens during logout or before server models finish
         // loading. Keep existing non-provider state so IM stays configured.
-        const result = this.writeMinimalConfig(configPath, reason, skillReviewMode, memoryFlushEnabled);
+        const result = this.writeMinimalConfig(configPath, reason, skillReviewMode, memoryFlushEnabled, options);
         // Still sync AGENTS.md even when API is not configured — skills/systemPrompt
         // may already be set and should be available when the user configures a model.
         const mainWorkspacePath = getMainAgentWorkspacePath(this.engineManager.getStateDir());
@@ -3221,8 +3230,7 @@ export class OpenClawConfigSync {
       && bindingsJson !== this.previousBindingsJson;
     this.previousBindingsJson = bindingsJson;
 
-    // Binding changes are detected via bindingsChanged which
-    // triggers a hard gateway restart in the caller.  We no longer inject
+    // Binding changes are delivered to the runtime's reload planner. Never inject
     // _agentBinding into channel configs because OpenClaw plugins using
     // additionalProperties:false reject the extra field and crash.
 
@@ -3230,7 +3238,9 @@ export class OpenClawConfigSync {
       stateDir: this.engineManager.getStateDir(),
       legacyOwner: existingSessionStoreOwner,
     });
-    const nextContent = `${JSON.stringify(managedConfig, null, 2)}\n`;
+    const nextContent = options.transformCandidate
+      ? options.transformCandidate(`${JSON.stringify(managedConfig, null, 2)}\n`)
+      : `${JSON.stringify(managedConfig, null, 2)}\n`;
     console.log('[OpenClawConfigSync] sync() managedConfig key fields:', {
       providers: (managedConfig.models as Record<string, unknown>)?.providers,
       primaryModel: (
@@ -3287,8 +3297,6 @@ export class OpenClawConfigSync {
           console.log(`${gwDiagTs()} gateway DIFF:`);
           console.log(`${gwDiagTs()} old gateway keys:`, Object.keys(currentObj.gateway ?? {}).sort().join(','));
           console.log(`${gwDiagTs()} new gateway keys:`, Object.keys(nextObj.gateway ?? {}).sort().join(','));
-          console.log(`${gwDiagTs()} old gateway:`, curGw.slice(0, 500));
-          console.log(`${gwDiagTs()} new gateway:`, nxtGw.slice(0, 500));
         } else {
           console.log(`${gwDiagTs()} gateway section UNCHANGED`);
         }
@@ -3309,12 +3317,14 @@ export class OpenClawConfigSync {
       } catch { /* ignore parse errors in diag */ }
       try {
         ensureDir(path.dirname(configPath));
-        const stampedContent = `${JSON.stringify(this.stampConfigMeta(managedConfig), null, 2)}\n`;
+        const stampedContent = `${JSON.stringify(this.stampConfigMeta(JSON.parse(nextContent)), null, 2)}\n`;
         const tmpPath = `${configPath}.tmp-${Date.now()}`;
         logOpenClawConfigLockDiagnostics(configPath, `managed-config-write:${reason}`, true);
         console.debug(`[OpenClawConfigSync] Writing managed config: reason=${reason} pid=${process.pid} path=${configPath}`);
-        fs.writeFileSync(tmpPath, stampedContent, 'utf8');
-        fs.renameSync(tmpPath, configPath);
+        if (options.deliveryMode !== SyncDeliveryMode.Rpc) {
+          fs.writeFileSync(tmpPath, stampedContent, 'utf8');
+          fs.renameSync(tmpPath, configPath);
+        }
       } catch (error) {
         return {
           ok: false,
@@ -3344,6 +3354,7 @@ export class OpenClawConfigSync {
     return {
       ok: true,
       changed: configChanged || sessionStoreChanged,
+      configChanged, sessionStoreChanged, candidateRaw: nextContent,
       configPath,
       ...(bindingsChanged ? { bindingsChanged } : {}),
       ...(changedTopLevelKeys.length > 0 ? { changedTopLevelKeys } : {}),
@@ -4107,6 +4118,7 @@ export class OpenClawConfigSync {
     _reason: string,
     skillReviewMode: OpenClawSkillReviewMode,
     memoryFlushEnabled: boolean,
+    options: OpenClawConfigSyncOptions,
   ): OpenClawConfigSyncResult {
     const baseMinimalConfig: Record<string, unknown> = {
       gateway: {
@@ -4184,6 +4196,7 @@ export class OpenClawConfigSync {
     mergedConfig = withRequiredOpenClawSessionStoreOwner(mergedConfig, {
       stateDir: this.engineManager.getStateDir(),
     });
+    if (options.transformCandidate) mergedConfig = JSON.parse(options.transformCandidate(JSON.stringify(mergedConfig)));
     const nextContent = `${JSON.stringify(mergedConfig, null, 2)}\n`;
 
     // Compare ignoring `meta` timestamps to avoid unnecessary writes.
@@ -4200,16 +4213,18 @@ export class OpenClawConfigSync {
       }
     })();
     if (unchanged) {
-      return { ok: true, changed: false, configPath };
+      return { ok: true, changed: false, configChanged: false, configPath, candidateRaw: nextContent };
     }
 
     try {
       ensureDir(path.dirname(configPath));
       const stampedContent = `${JSON.stringify(this.stampConfigMeta(mergedConfig), null, 2)}\n`;
       const tmpPath = `${configPath}.tmp-${Date.now()}`;
-      fs.writeFileSync(tmpPath, stampedContent, 'utf8');
-      fs.renameSync(tmpPath, configPath);
-      return { ok: true, changed: true, configPath };
+      if (options.deliveryMode !== SyncDeliveryMode.Rpc) {
+        fs.writeFileSync(tmpPath, stampedContent, 'utf8');
+        fs.renameSync(tmpPath, configPath);
+      }
+      return { ok: true, changed: true, configChanged: true, configPath, candidateRaw: stampedContent };
     } catch (error) {
       return {
         ok: false,

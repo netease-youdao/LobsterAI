@@ -139,6 +139,76 @@ describe('terminal plugin startup block', () => {
   });
 });
 
+describe('configuration restart ownership', () => {
+  test('refuses a busy runtime without stopping its child or writing configuration', async () => {
+    const { manager, child, internals } = makeSupervisor();
+    const stop = vi.spyOn(internals, 'stopGatewayProcess');
+    const prepare = vi.fn();
+    const request = vi.fn(async () => 'not-requested' as const);
+    await manager.restartGateway('config-sync:im', { requestIdleStop: request, prepare });
+    expect(request).toHaveBeenCalledOnce();
+    expect(stop).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(internals.gatewayProcess).toBe(child);
+  });
+
+  test('a lost idle-stop ACK cannot trigger a kill, another commit, or a new writer', async () => {
+    const { manager, child, internals } = makeSupervisor();
+    const prepare = vi.fn();
+    const request = vi.fn(async () => 'uncertain' as const);
+    const first = manager.restartGateway('config-sync:im', { requestIdleStop: request, prepare });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await first;
+    const second = manager.restartGateway('config-sync:im', { requestIdleStop: request, prepare });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await second;
+    expect(request).toHaveBeenCalledOnce();
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(internals.gatewayProcess).toBe(child);
+  });
+
+  test('writes a replacement configuration only after the same child has closed', async () => {
+    const { manager, child, internals } = makeSupervisor();
+    const prepare = vi.fn(async () => { expect(internals.gatewayProcess).toBeNull(); });
+    const start = vi.spyOn(manager, 'startGateway').mockResolvedValue(manager.getStatus());
+    const restarting = manager.restartGateway('config-sync:im', {
+      requestIdleStop: async () => { closeChild(child, 0); return 'uncertain'; }, prepare,
+    });
+    await restarting;
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  test('a reconnect cannot start another gateway while its configuration owner is stopping', async () => {
+    const { manager, internals, child } = makeSupervisor();
+    const start = vi.spyOn(internals, 'doStartGateway');
+    const request = vi.fn(async () => 'uncertain' as const);
+    const restarting = manager.restartGateway('config-sync:im', { requestIdleStop: request });
+    const reconnecting = manager.startGateway('channel-sync-ensure-ready');
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.all([restarting, reconnecting]);
+    await manager.startGateway('late-reconnect');
+    expect(start).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledOnce();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  test('a stale process generation cannot stop a replacement gateway', async () => {
+    const { manager, child } = makeSupervisor();
+    const request = vi.fn(async () => 'committed' as const);
+    const prepare = vi.fn();
+    await manager.restartGateway('config-sync:im', {
+      gatewayGeneration: manager.getGatewayProcessGeneration() + 1, requestIdleStop: request, prepare,
+    });
+    expect(request).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+});
+
 describe('failure-triggered binding recovery', () => {
   function failureHarness() {
     const context = makeSupervisor();

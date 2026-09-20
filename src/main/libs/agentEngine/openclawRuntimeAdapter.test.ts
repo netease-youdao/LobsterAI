@@ -1968,6 +1968,7 @@ function createPatchAdapter(options?: {
   adapter.gatewayClientVersion = 'test-version';
   adapter.gatewayClientEntryPath = '/tmp/openclaw-gateway-client.js';
   adapter.gatewayReadyPromise = Promise.resolve();
+  adapter.gatewayHandshakeComplete = true;
   if (options?.isChannelSession !== undefined) {
     adapter.channelSessionSync = {
       getOpenClawSessionKeyForCoworkSession: () => ({
@@ -2019,6 +2020,7 @@ test('disconnectGatewayClient suppresses automatic gateway reconnect until manua
     stop: () => {},
     request: async () => ({}),
   };
+  adapter.gatewayHandshakeComplete = true;
   await adapter.connectGatewayIfNeeded();
   expect(adapter.gatewayReconnectSuppressed).toBe(false);
 });
@@ -3404,6 +3406,7 @@ function createRunTurnAdapter(options: {
   adapter.gatewayClientVersion = 'test-version';
   adapter.gatewayClientEntryPath = '/tmp/openclaw-gateway-client.js';
   adapter.gatewayReadyPromise = Promise.resolve();
+  adapter.gatewayHandshakeComplete = true;
   adapter.reconcileWithHistory = async () => {};
 
   if (options.cachedModel) {

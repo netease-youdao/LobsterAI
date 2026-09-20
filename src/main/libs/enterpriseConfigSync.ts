@@ -1194,3 +1194,14 @@ export function mergeEnterpriseOpenclawConfig(runtimeConfigPath: string): boolea
     return false;
   }
 }
+
+/** Merge enterprise overrides before a live RPC write, without touching the watched file. */
+export function mergeEnterpriseOpenclawCandidate(runtimeRaw: string): string {
+  const enterprisePath = resolveEnterpriseConfigPath();
+  if (!enterprisePath) return runtimeRaw;
+  const sourcePath = path.join(enterprisePath, 'openclaw.json');
+  if (!fs.existsSync(sourcePath)) return runtimeRaw;
+  const runtime = JSON.parse(runtimeRaw) as Record<string, unknown>;
+  const enterprise = JSON.parse(fs.readFileSync(sourcePath, 'utf8')) as Record<string, unknown>;
+  return `${JSON.stringify(mergeOpenClawConfigs(runtime, enterprise), null, 2)}\n`;
+}

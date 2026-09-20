@@ -1,0 +1,1801 @@
+diff --git a/packages/gateway-protocol/src/schema/config.ts b/packages/gateway-protocol/src/schema/config.ts
+index 9b6a4c48..eaf9782d 100644
+--- a/packages/gateway-protocol/src/schema/config.ts
++++ b/packages/gateway-protocol/src/schema/config.ts
+@@ -23,13 +23,24 @@ const ConfigDeliveryContextSchema = closedObject({
+   threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+ });
+
+-/** Empty request payload for reading the current raw config. */
+-export const ConfigGetParamsSchema = closedObject({});
++/** Read config, a mutation receipt, or attest one exact persisted candidate. */
++export const ConfigGetParamsSchema = closedObject({
++  mutationId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
++  expectedRawHash: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
++});
+
+ /** Full raw config replacement request with optional base hash guard. */
+ export const ConfigSetParamsSchema = closedObject({
+   raw: NonEmptyString,
+   baseHash: Type.Optional(NonEmptyString),
++  mutationId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
++  allowRestart: Type.Optional(Type.Boolean()),
++  restartLeaseAction: Type.Optional(
++    Type.Union([Type.Literal("acquire"), Type.Literal("commit"), Type.Literal("release")]),
++  ),
++  restartLeaseId: Type.Optional(NonEmptyString),
++  restartLeaseInstanceId: Type.Optional(NonEmptyString),
++  restartTargetRevision: Type.Optional(NonEmptyString),
+ });
+
+ /** Shared config apply/patch payload with optional restart notification context. */
+@@ -50,6 +61,8 @@ export const ConfigApplyParamsSchema = ConfigApplyLikeParamsSchema;
+ export const ConfigPatchParamsSchema = closedObject({
+   ...ConfigApplyLikeParamProperties,
+   replacePaths: Type.Optional(Type.Array(NonEmptyString, { maxItems: 256 })),
++  mutationId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
++  allowRestart: Type.Optional(Type.Boolean()),
+ });
+
+ /** Empty request payload for fetching the generated config schema. */
+diff --git a/src/gateway/config-get-response.ts b/src/gateway/config-get-response.ts
+index 9b898d3f..abdc9495 100644
+--- a/src/gateway/config-get-response.ts
++++ b/src/gateway/config-get-response.ts
+@@ -1,3 +1,4 @@
++import { createHash } from "node:crypto";
+ import { readConfigFileSnapshot } from "../config/config.js";
+ import { redactConfigSnapshot } from "../config/redact-snapshot.js";
+ import { getRuntimeConfigAppliedHash, hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
+@@ -21,6 +22,7 @@ function createConfigGetResponse(
+   snapshot: ConfigFileSnapshot,
+   uiHints: Parameters<typeof redactConfigSnapshot>[1],
+   revisionProjector: GatewayConfigRevisionProjector,
++  expectedRawHash?: string,
+ ) {
+   const redacted = redactConfigSnapshot(snapshot, uiHints);
+   const appliedConfigHash = getRuntimeConfigAppliedHash();
+@@ -33,6 +35,15 @@ function createConfigGetResponse(
+     appliedConfigHash: appliedConfigHash
+       ? revisionProjector.projectResolvedHash(appliedConfigHash)
+       : null,
++    ...(expectedRawHash
++      ? {
++          // Exact local-file attestation is request-scoped. Never echo the supplied
++          // digest: normal revision tokens remain process-keyed and opaque.
++          persistedCandidateMatches:
++            typeof snapshot.raw === "string" &&
++            createHash("sha256").update(snapshot.raw).digest("hex") === expectedRawHash,
++        }
++      : {}),
+   };
+ }
+
+@@ -41,13 +52,15 @@ export async function readConfigGetResponse(params: {
+   getHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
+   loadUiHints: () => Parameters<typeof redactConfigSnapshot>[1];
+   revisionProjector: GatewayConfigRevisionProjector;
++  expectedRawHash?: string;
+ }): Promise<ConfigGetResponse> {
+   const getHotReloadStatus = params.getHotReloadStatus;
+-  if (!getHotReloadStatus || getHotReloadStatus() !== "active") {
++  if (params.expectedRawHash || !getHotReloadStatus || getHotReloadStatus() !== "active") {
+     return createConfigGetResponse(
+       await readConfigFileSnapshot(),
+       params.loadUiHints(),
+       params.revisionProjector,
++      params.expectedRawHash,
+     );
+   }
+   const appliedConfigHash = getRuntimeConfigAppliedHash();
+diff --git a/src/gateway/config-mutation-receipts.test.ts b/src/gateway/config-mutation-receipts.test.ts
+new file mode 100644
+index 00000000..ed563f15
+--- /dev/null
++++ b/src/gateway/config-mutation-receipts.test.ts
+@@ -0,0 +1,66 @@
++import { afterEach, expect, test, vi } from "vitest";
++import { ConfigMutationReceipts } from "./config-mutation-receipts.js";
++
++afterEach(() => vi.useRealTimers());
++
++test("persistence remains pending until the application owner confirms the same revision", async () => {
++  const receipts = new ConfigMutationReceipts();
++  const { receipt } = receipts.begin("write-1", "secret fixture config");
++  let settle!: (state: string) => void;
++  receipts.committed(
++    receipt,
++    "revision-1",
++    new Promise((resolve) => {
++      settle = resolve;
++    }),
++  );
++  expect(receipts.get("write-1")).toEqual({
++    mutationId: "write-1",
++    state: "pending",
++    desiredRevision: "revision-1",
++    persistedRevision: "revision-1",
++  });
++  settle("applied");
++  await Promise.resolve();
++  expect(receipts.get("write-1")).toEqual({
++    mutationId: "write-1",
++    state: "applied",
++    desiredRevision: "revision-1",
++    persistedRevision: "revision-1",
++    appliedRevision: "revision-1",
++  });
++  expect(JSON.stringify(receipts.get("write-1"))).not.toContain("secret");
++  expect(receipts.begin("write-1", "secret fixture config").duplicate).toBe(true);
++  expect(() => receipts.begin("write-1", "different config")).toThrow("different config mutation");
++});
++
++test.each([
++  ["unclaimed", "pending"],
++  ["failed", "rejected"],
++  ["superseded", "rejected"],
++  ["restart-pending", "restart-required"],
++  ["applied-restart-required", "restart-required"],
++])(
++  "application %s yields %s without inventing an applied revision",
++  async (application, expected) => {
++    const receipts = new ConfigMutationReceipts();
++    const { receipt } = receipts.begin("write-2", "config");
++    receipts.committed(receipt, "revision-2", Promise.resolve(application));
++    await Promise.resolve();
++    expect(receipts.get("write-2")).toMatchObject({ state: expected });
++    expect(receipts.get("write-2")?.appliedRevision).toBeUndefined();
++  },
++);
++
++test("receipt memory is bounded and expired receipts become unknown", () => {
++  vi.useFakeTimers();
++  const receipts = new ConfigMutationReceipts();
++  for (let index = 0; index < 256; index++) {
++    receipts.begin(String(index), "config");
++  }
++  expect(() => receipts.begin("overflow", "config")).toThrow("capacity");
++  vi.advanceTimersByTime(600_001);
++  receipts.begin("new", "config");
++  expect(receipts.get("0")).toBeNull();
++  expect(receipts.get("new")?.state).toBe("pending");
++});
+diff --git a/src/gateway/config-mutation-receipts.ts b/src/gateway/config-mutation-receipts.ts
+new file mode 100644
+index 00000000..b70e0bcb
+--- /dev/null
++++ b/src/gateway/config-mutation-receipts.ts
+@@ -0,0 +1,76 @@
++import { createHash } from "node:crypto";
++
++export type ConfigMutationReceipt = {
++  mutationId: string;
++  state: "pending" | "applied" | "rejected" | "restart-required";
++  desiredRevision?: string;
++  persistedRevision?: string;
++  appliedRevision?: string;
++  /** Schema paths only; retained for ACK loss and read-only reconciliation. */
++  restartPaths?: string[];
++};
++
++/** Short-lived, process-owned receipts. They contain no config values or credentials. */
++export class ConfigMutationReceipts {
++  private entries = new Map<
++    string,
++    { digest: string; at: number; receipt: ConfigMutationReceipt }
++  >();
++
++  get(id: string): ConfigMutationReceipt | null {
++    const entry = this.entries.get(id);
++    return entry ? { ...entry.receipt } : null;
++  }
++
++  begin(id: string, payload: string): { receipt: ConfigMutationReceipt; duplicate: boolean } {
++    const digest = createHash("sha256").update(payload).digest("hex");
++    const existing = this.entries.get(id);
++    if (existing) {
++      if (existing.digest !== digest) {
++        throw new Error("mutationId was already used for a different config mutation");
++      }
++      return { receipt: existing.receipt, duplicate: true };
++    }
++    // The desktop reconciles for at most 45 seconds. Keep a ten minute receipt
++    // window; eviction means unknown, never proof that a mutation did not run.
++    const now = Date.now();
++    for (const [key, value] of this.entries) {
++      if (now - value.at > 600_000) {
++        this.entries.delete(key);
++      }
++    }
++    if (this.entries.size >= 256) {
++      throw new Error("config mutation receipt capacity reached");
++    }
++    const receipt: ConfigMutationReceipt = { mutationId: id, state: "pending" };
++    this.entries.set(id, { digest, at: now, receipt });
++    return { receipt, duplicate: false };
++  }
++
++  committed(
++    receipt: ConfigMutationReceipt,
++    revision: string | undefined,
++    application?: Promise<string>,
++  ): void {
++    receipt.desiredRevision = revision;
++    receipt.persistedRevision = revision;
++    if (!application) {
++      return;
++    }
++    void application.then(
++      (status) => {
++        if (status === "applied" && revision) {
++          receipt.appliedRevision = revision;
++          receipt.state = "applied";
++        } else if (status === "restart-pending" || status === "applied-restart-required") {
++          receipt.state = "restart-required";
++        } else if (status !== "unclaimed") {
++          receipt.state = "rejected";
++        }
++      },
++      () => {
++        receipt.state = "rejected";
++      },
++    );
++  }
++}
+diff --git a/src/gateway/gateway.config-mutations.e2e.test.ts b/src/gateway/gateway.config-mutations.e2e.test.ts
+new file mode 100644
+index 00000000..236870dd
+--- /dev/null
++++ b/src/gateway/gateway.config-mutations.e2e.test.ts
+@@ -0,0 +1,429 @@
++import { createHash } from "node:crypto";
++import fs from "node:fs/promises";
++import os from "node:os";
++import path from "node:path";
++import { afterAll, beforeAll, expect, test, vi } from "vitest";
++import { setLoggerOverride } from "../logging.js";
++import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
++import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
++import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
++import { captureEnv } from "../test-utils/env.js";
++import type { ConfigMutationReceipt } from "./config-mutation-receipts.js";
++import { startGatewayServer } from "./server.js";
++import {
++  connectGatewayClient,
++  getGatewayE2ePortBlock,
++  disconnectGatewayClient,
++} from "./test-helpers.e2e.js";
++
++let server: {
++  client: Awaited<ReturnType<typeof connectGatewayClient>>;
++  server: Awaited<ReturnType<typeof startGatewayServer>>;
++};
++const recoveryRestart = vi.fn(() => ({ status: "failed" as const }));
++let tempHome: string;
++let envSnapshot: ReturnType<typeof captureEnv>;
++beforeAll(async () => {
++  const keys = [
++    "HOME",
++    "USERPROFILE",
++    "OPENCLAW_STATE_DIR",
++    "OPENCLAW_CONFIG_PATH",
++    "OPENCLAW_GATEWAY_TOKEN",
++    "OPENCLAW_TEST_MINIMAL_GATEWAY",
++    "OPENCLAW_SKIP_CHANNELS",
++    "OPENCLAW_SKIP_GMAIL_WATCHER",
++    "OPENCLAW_SKIP_CRON",
++    "OPENCLAW_SKIP_CANVAS_HOST",
++    "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
++    "OPENCLAW_SKIP_PROVIDERS",
++    "OPENCLAW_BUNDLED_PLUGINS_DIR",
++    "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
++  ];
++  envSnapshot = captureEnv(keys);
++  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-receipts-"));
++  const configPath = path.join(tempHome, "state", "openclaw.json");
++  const bundled = path.join(tempHome, "empty-plugins");
++  await fs.mkdir(path.dirname(configPath), { recursive: true });
++  await fs.mkdir(bundled);
++  Object.assign(process.env, {
++    HOME: tempHome,
++    USERPROFILE: tempHome,
++    OPENCLAW_STATE_DIR: path.dirname(configPath),
++    OPENCLAW_GATEWAY_TOKEN: "receipt-fixture-token",
++    OPENCLAW_SKIP_CHANNELS: "1",
++    OPENCLAW_SKIP_GMAIL_WATCHER: "1",
++    OPENCLAW_SKIP_CRON: "1",
++    OPENCLAW_SKIP_CANVAS_HOST: "1",
++    OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
++    OPENCLAW_SKIP_PROVIDERS: "1",
++    OPENCLAW_BUNDLED_PLUGINS_DIR: bundled,
++    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
++  });
++  delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
++  process.env.OPENCLAW_CONFIG_PATH = configPath;
++  await fs.writeFile(
++    configPath,
++    JSON.stringify({
++      gateway: { mode: "local", auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" } },
++      skills: { entries: {} },
++    }),
++  );
++  const port = await getGatewayE2ePortBlock();
++  const gateway = await startGatewayServer(port, {
++    bind: "loopback",
++    auth: { mode: "token", token: "receipt-fixture-token" },
++    controlUiEnabled: false,
++    hotReloadRecovery: recoveryRestart,
++  });
++  const client = await connectGatewayClient({
++    url: `ws://127.0.0.1:${port}`,
++    token: "receipt-fixture-token",
++    scopes: ["operator.admin"],
++  });
++  server = { server: gateway, client };
++  await server.server.startupSettled;
++}, 90_000);
++afterAll(async () => {
++  if (server) {
++    await disconnectGatewayClient(server.client);
++    await server.server.close();
++  }
++  closeOpenClawAgentDatabasesForTest();
++  closeOpenClawStateDatabaseForTest();
++  if (tempHome) {
++    await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
++  }
++  setLoggerOverride(null);
++  envSnapshot?.restore();
++});
++
++async function rpcReq<T = Record<string, unknown>>(
++  client: typeof server.client,
++  method: string,
++  params: unknown,
++  timeoutMs = 10_000,
++) {
++  try {
++    return { ok: true, payload: await client.request<T>(method, params, { timeoutMs }) };
++  } catch (error) {
++    return { ok: false, error, payload: undefined };
++  }
++}
++
++type Snapshot = {
++  hash: string;
++  path: string;
++  config: Record<string, unknown>;
++  capabilities: { configMutationReceipts: number };
++};
++async function snapshot() {
++  const response = await rpcReq<Snapshot>(server.client, "config.get", {});
++  expect(response.ok).toBe(true);
++  expect(response.payload?.capabilities.configMutationReceipts).toBe(1);
++  return response.payload!;
++}
++
++test("authored skills and employee updates retain token placeholders without gateway restart", async () => {
++  for (const kind of ["skills", "employee"] as const) {
++    const before = await snapshot();
++    const candidate = JSON.parse(await fs.readFile(before.path, "utf8"));
++    expect(candidate.gateway.auth.token).toBe("${OPENCLAW_GATEWAY_TOKEN}");
++    if (kind === "skills") {
++      candidate.skills.entries["installed-employee-skill"] = { enabled: false };
++    } else {
++      const agents = before.config.agents as { entries?: Record<string, unknown> };
++      candidate.agents = { ...candidate.agents, ownership: "explicit", entries: { ...agents.entries,
++        "installed-employee": { name: "Isolated fixture employee", workspace: path.join(tempHome, "employee-workspace") } } };
++    }
++    const response = await rpcReq<{ mutation: ConfigMutationReceipt }>(server.client, "config.set", {
++      raw: JSON.stringify(candidate), baseHash: before.hash, mutationId: `authored-${kind}`, allowRestart: false,
++    }, 20_000);
++    expect(response.ok, String(response.error)).toBe(true);
++    expect(response.payload?.mutation.state, JSON.stringify(response.payload)).toBe("applied");
++    expect(JSON.parse(await fs.readFile(before.path, "utf8")).gateway.auth.token).toBe("${OPENCLAW_GATEWAY_TOKEN}");
++    await expect(server.client.request("health", {})).resolves.toEqual(expect.any(Object));
++    expect(recoveryRestart).not.toHaveBeenCalled();
++  }
++});
++
++test("a real authentication change still requires restart without touching the live file", async () => {
++  const before = await snapshot();
++  const bytes = await fs.readFile(before.path, "utf8");
++  const candidate = JSON.parse(bytes);
++  candidate.gateway.auth.token = "genuinely-different-token";
++  const response = await rpcReq<{ mutation: ConfigMutationReceipt; restartPaths: string[] }>(server.client, "config.set", {
++    raw: JSON.stringify(candidate), baseHash: before.hash, mutationId: "authored-auth-change", allowRestart: false,
++  });
++  expect(response.payload?.mutation.state).toBe("restart-required");
++  expect(response.payload?.restartPaths).toContain("gateway.auth.token");
++  const reconciled = await rpcReq<{ mutation: ConfigMutationReceipt }>(server.client, "config.get", {
++    mutationId: "authored-auth-change",
++  });
++  expect(reconciled.payload?.mutation.restartPaths).toContain("gateway.auth.token");
++  expect(await fs.readFile(before.path, "utf8")).toBe(bytes);
++  await expect(server.client.request("health", {})).resolves.toEqual(expect.any(Object));
++});
++
++test("restart-required candidates never reach the file watcher and duplicate IDs do not execute again", async () => {
++  const before = await snapshot();
++  const bytes = await fs.readFile(before.path, "utf8");
++  const candidate = structuredClone(before.config);
++  candidate.discovery = { mdns: { mode: "off" } };
++  const params = {
++    raw: JSON.stringify(candidate),
++    baseHash: before.hash,
++    mutationId: "requires-restart",
++    allowRestart: false,
++  };
++  const response = await rpcReq<{ mutation: ConfigMutationReceipt }>(
++    server.client,
++    "config.set",
++    params,
++  );
++  expect(response.ok).toBe(true);
++  expect(response.payload?.mutation.state).toBe("restart-required");
++  expect(await fs.readFile(before.path, "utf8")).toBe(bytes);
++  const duplicate = await rpcReq<{ mutation: ConfigMutationReceipt }>(
++    server.client,
++    "config.set",
++    params,
++  );
++  expect(duplicate.payload?.mutation).toEqual(response.payload?.mutation);
++  const readback = await rpcReq<{ mutation: ConfigMutationReceipt }>(server.client, "config.get", {
++    mutationId: params.mutationId,
++  });
++  expect(readback.payload?.mutation).toEqual(response.payload?.mutation);
++  expect(await fs.readFile(before.path, "utf8")).toBe(bytes);
++});
++
++test("disabled live reloading rejects managed mutations before persistence", async () => {
++  const before = await snapshot();
++  const bytes = await fs.readFile(before.path, "utf8");
++  const candidate = structuredClone(before.config);
++  candidate.gateway = { ...(candidate.gateway as object), reload: { mode: "off" } };
++  candidate.skills = { entries: { "disabled-reload-fixture": { enabled: false } } };
++  const response = await rpcReq<{ mutation: ConfigMutationReceipt }>(server.client, "config.set", {
++    raw: JSON.stringify(candidate),
++    baseHash: before.hash,
++    mutationId: "disabled-reload",
++    allowRestart: false,
++  });
++  expect(response.ok).toBe(true);
++  expect(response.payload?.mutation.state).toBe("restart-required");
++  expect(await fs.readFile(before.path, "utf8")).toBe(bytes);
++});
++
++test("hot config.set settles only after its owner applies the saved revision", async () => {
++  const before = await snapshot();
++  const candidate = structuredClone(before.config);
++  candidate.skills = { entries: { "receipt-fixture": { enabled: false } } };
++  const params = {
++    raw: JSON.stringify(candidate),
++    baseHash: before.hash,
++    mutationId: "hot-write",
++    allowRestart: false,
++  };
++  const response = await rpcReq<{ mutation: ConfigMutationReceipt }>(
++    server.client,
++    "config.set",
++    params,
++    20_000,
++  );
++  expect(response.ok).toBe(true);
++  expect(response.payload?.mutation.state, JSON.stringify(response.payload)).not.toBe(
++    "restart-required",
++  );
++  let last: ConfigMutationReceipt | null | undefined;
++  await expect
++    .poll(
++      async () => {
++        const readback = await rpcReq<{ mutation: ConfigMutationReceipt | null }>(
++          server.client,
++          "config.get",
++          { mutationId: params.mutationId },
++        );
++        last = readback.payload?.mutation;
++        return last?.state;
++      },
++      { timeout: 10_000 },
++    )
++    .toBe("applied");
++  expect(last?.desiredRevision).toBeTruthy();
++  expect(last?.persistedRevision).toBe(last?.desiredRevision);
++  expect(last?.appliedRevision).toBe(last?.desiredRevision);
++  const persisted = await fs.readFile(before.path, "utf8");
++  const duplicate = await rpcReq<{ mutation: ConfigMutationReceipt }>(
++    server.client,
++    "config.set",
++    params,
++  );
++  expect(duplicate.payload?.mutation).toEqual(last);
++  expect(await fs.readFile(before.path, "utf8")).toBe(persisted);
++  await expect(server.client.request("health", {})).resolves.toEqual(expect.any(Object));
++  expect(recoveryRestart).not.toHaveBeenCalled();
++});
++
++test("agents-only config.patch uses the same watcher receipt without a legacy restart", async () => {
++  setLoggerOverride({ level: "debug", file: path.join(tempHome, "config-reload.log") });
++  const before = await snapshot();
++  const params = {
++    raw: JSON.stringify({ agents: { defaults: { maxConcurrent: 3 } } }),
++    baseHash: before.hash,
++    mutationId: "agent-patch",
++    allowRestart: false,
++  };
++  const response = await rpcReq<{ mutation: ConfigMutationReceipt }>(
++    server.client,
++    "config.patch",
++    params,
++  );
++  expect(response.ok).toBe(true);
++  expect(response.payload?.mutation.state, JSON.stringify(response.payload)).not.toBe(
++    "restart-required",
++  );
++  await expect
++    .poll(
++      async () => {
++        const result = await rpcReq<{ mutation: ConfigMutationReceipt }>(
++          server.client,
++          "config.get",
++          { mutationId: params.mutationId },
++        );
++        return result.payload?.mutation.state;
++      },
++      { timeout: 10_000 },
++    )
++    .toBe("applied")
++    .catch(async (error) => {
++      const log = await fs
++        .readFile(path.join(tempHome, "config-reload.log"), "utf8")
++        .catch(() => "");
++      throw new Error(
++        `${String(error)}\n${log
++          .split("\n")
++          .filter((line) => /reload.*failed|Error:/.test(line))
++          .join("\n")}`,
++      );
++    });
++  await expect(server.client.request("health", {})).resolves.toEqual(expect.any(Object));
++  expect(recoveryRestart).not.toHaveBeenCalled();
++});
++
++test("unknown IDs and invalid writes cannot masquerade as applied", async () => {
++  const unknown = await rpcReq<{ mutation: null }>(server.client, "config.get", {
++    mutationId: "not-submitted",
++  });
++  expect(unknown.payload?.mutation).toBeNull();
++  const before = await snapshot();
++  const bytes = await fs.readFile(before.path, "utf8");
++  const invalid = await rpcReq(server.client, "config.set", {
++    raw: "{invalid",
++    baseHash: before.hash,
++    mutationId: "invalid-write",
++    allowRestart: false,
++  });
++  expect(invalid.ok).toBe(false);
++  const readback = await rpcReq<{ mutation: ConfigMutationReceipt }>(server.client, "config.get", {
++    mutationId: "invalid-write",
++  });
++  expect(readback.payload?.mutation.state).toBe("rejected");
++  expect(await fs.readFile(before.path, "utf8")).toBe(bytes);
++});
++
++test("read-only candidate attestation bypasses a cached old snapshot", async () => {
++  const before = await snapshot();
++  const currentRaw = await fs.readFile(before.path, "utf8");
++  const expectedRawHash = createHash("sha256").update(currentRaw).digest("hex");
++  const match = await rpcReq<{
++    persistedCandidateMatches: boolean;
++    configRevisionHash: string;
++    appliedConfigHash: string;
++  }>(server.client, "config.get", { expectedRawHash });
++  expect(match.payload?.persistedCandidateMatches).toBe(true);
++  expect(match.payload?.configRevisionHash).toBe(match.payload?.appliedConfigHash);
++  const wrong = await rpcReq<{ persistedCandidateMatches: boolean }>(server.client, "config.get", {
++    expectedRawHash: "a".repeat(64),
++  });
++  expect(wrong.payload?.persistedCandidateMatches).toBe(false);
++  expect(await fs.readFile(before.path, "utf8")).toBe(currentRaw);
++});
++
++type RestartLease = {
++  state: string;
++  leaseId?: string;
++  instanceId: string;
++  expiresAtMs?: number;
++  reason?: string;
++};
++async function lease(action: "acquire" | "commit" | "release", held?: RestartLease) {
++  if (action === "acquire") {
++    // WebSocket ACKs can precede the previous request envelope releasing its root.
++    await expect.poll(() => getActiveGatewayRootWorkCount(), { timeout: 5_000 }).toBe(0);
++  }
++  const response = await rpcReq<{ restartLease: RestartLease }>(
++    server.client,
++    "config.set",
++    {
++      raw: "{}",
++      restartLeaseAction: action,
++      ...(action === "acquire"
++        ? { restartTargetRevision: "fixture-desired-revision" }
++        : { restartLeaseId: held?.leaseId, restartLeaseInstanceId: held?.instanceId }),
++    },
++    3_000,
++  );
++  expect(response.ok, String(response.error)).toBe(true);
++  return response.payload!.restartLease;
++}
++
++test(
++  "restart leases release or expire without closing the live gateway",
++  { timeout: 25_000 },
++  async () => {
++    const shutdown = vi.fn();
++    process.on("SIGINT", shutdown);
++    try {
++      const before = await snapshot();
++      const raw = await fs.readFile(before.path, "utf8");
++      const first = await lease("acquire");
++      expect(first.state, first.reason).toBe("acquired");
++      expect((await lease("release", first)).state).toBe("released");
++      const expiring = await lease("acquire");
++      expect(expiring.state, expiring.reason).toBe("acquired");
++      await new Promise((resolve) => {
++        setTimeout(resolve, Math.max(0, expiring.expiresAtMs! - Date.now()) + 50);
++      });
++      expect((await lease("commit", expiring)).state).toBe("expired");
++      await expect(server.client.request("health", {})).resolves.toEqual(expect.any(Object));
++      expect(shutdown).not.toHaveBeenCalled();
++      expect(await fs.readFile(before.path, "utf8")).toBe(raw);
++    } finally {
++      process.off("SIGINT", shutdown);
++    }
++  },
++);
++
++test("committed restart lease emits SIGINT with new write admission already fenced", async () => {
++  const shutdown = vi.fn();
++  process.on("SIGINT", shutdown);
++  try {
++    const before = await snapshot();
++    const raw = await fs.readFile(before.path, "utf8");
++    const acquired = await lease("acquire");
++    expect(acquired.state, acquired.reason).toBe("acquired");
++    expect((await lease("commit", acquired)).state).toBe("committed");
++    await expect.poll(() => shutdown.mock.calls.length).toBe(1);
++    const blocked = await rpcReq(server.client, "config.set", {
++      raw,
++      baseHash: before.hash,
++      mutationId: "must-not-write-after-commit",
++      allowRestart: false,
++    });
++    expect(blocked.ok).toBe(false);
++    expect(String(blocked.error)).toMatch(/suspend|drain|restart/i);
++    expect(await fs.readFile(before.path, "utf8")).toBe(raw);
++  } finally {
++    process.off("SIGINT", shutdown);
++  }
++});
+diff --git a/src/gateway/host-config-restart-lease.test.ts b/src/gateway/host-config-restart-lease.test.ts
+new file mode 100644
+index 00000000..b6c04a7e
+--- /dev/null
++++ b/src/gateway/host-config-restart-lease.test.ts
+@@ -0,0 +1,214 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../infra/gateway-suspend-coordinator.js";
++import {
++  isGatewayWorkAdmissionClosed,
++  resetGatewayWorkAdmission,
++  tryBeginGatewayRootWorkAdmission,
++} from "../process/gateway-work-admission.js";
++import {
++  consumeControlPlaneWriteBudget,
++  CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS,
++} from "./control-plane-rate-limit.js";
++import {
++  acquireHostConfigRestartLease,
++  commitHostConfigRestartLease,
++  releaseHostConfigRestartLease,
++} from "./host-config-restart-lease.js";
++import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
++import { createGatewayMethodRegistry } from "./methods/registry.js";
++import { runWithGatewayRequestEnvelope } from "./server-methods.js";
++import type { GatewayRequestContext } from "./server-methods/types.js";
++
++const shutdown = vi.fn();
++function fixture() {
++  const pauseScheduling = vi.fn();
++  const resumeScheduling = vi.fn();
++  const getSuspensionBlockerCount = vi.fn(() => 0);
++  const context = {
++    cron: { pauseScheduling, resumeScheduling, getSuspensionBlockerCount },
++    chatAbortControllers: new Map(),
++    chatQueuedTurns: new Map(),
++    terminalSessions: { size: 0 },
++    logGateway: { warn: vi.fn() },
++  } as unknown as GatewayRequestContext;
++  return { context, pauseScheduling, resumeScheduling, getSuspensionBlockerCount };
++}
++beforeEach(() => {
++  vi.useFakeTimers();
++  shutdown.mockClear();
++  process.on("SIGINT", shutdown);
++  resetGatewaySuspendCoordinatorForLifecycleRestart();
++  resetGatewayWorkAdmission();
++});
++afterEach(() => {
++  resetGatewaySuspendCoordinatorForLifecycleRestart();
++  resetGatewayWorkAdmission();
++  process.removeListener("SIGINT", shutdown);
++  vi.useRealTimers();
++});
++
++describe("host config restart lease", () => {
++  it("excludes only its own admitted RPC root when acquiring through the real dispatcher", async () => {
++    const { context } = fixture();
++    const handler = async () => acquireHostConfigRestartLease(context, "revision-a");
++    const methodRegistry = createGatewayMethodRegistry([
++      createPluginGatewayMethodDescriptor({ pluginId: "lease-proof", name: "config.set", handler }),
++    ]);
++    const acquired = await runWithGatewayRequestEnvelope("config.set", null, handler, {
++      context,
++      methodRegistry,
++      isWebchatConnect: () => false,
++      requestParams: {
++        raw: "{}",
++        restartLeaseAction: "acquire",
++        restartTargetRevision: "revision-a",
++      },
++      reject: () => {
++        throw new Error("unexpected admission rejection");
++      },
++    });
++    expect(acquired.state, acquired.reason).toBe("acquired");
++    expect(releaseHostConfigRestartLease(acquired.leaseId!, acquired.instanceId).state).toBe(
++      "released",
++    );
++  });
++
++  it("fences new work and resumes the scheduler when an uncommitted lease expires", async () => {
++    const { context, pauseScheduling, resumeScheduling } = fixture();
++    const acquired = await acquireHostConfigRestartLease(context, "revision-a");
++    expect(acquired.state).toBe("acquired");
++    expect(pauseScheduling).toHaveBeenCalledOnce();
++    expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
++    await vi.advanceTimersByTimeAsync(15_000);
++    expect(resumeScheduling).toHaveBeenCalledOnce();
++    expect(isGatewayWorkAdmissionClosed()).toBe(false);
++    expect(commitHostConfigRestartLease(acquired.leaseId!, acquired.instanceId).state).toBe(
++      "expired",
++    );
++    expect(shutdown).not.toHaveBeenCalled();
++  });
++
++  it("refuses an existing root and rolls back admission without aborting that work", async () => {
++    const { context, resumeScheduling } = fixture();
++    const running = tryBeginGatewayRootWorkAdmission();
++    try {
++      expect((await acquireHostConfigRestartLease(context, "revision-a")).state).toBe("busy");
++      expect(isGatewayWorkAdmissionClosed()).toBe(false);
++      expect(resumeScheduling).toHaveBeenCalledOnce();
++    } finally {
++      running?.release();
++    }
++    expect(shutdown).not.toHaveBeenCalled();
++  });
++
++  it("does not authorize shutdown when inspection fails", async () => {
++    const { context, getSuspensionBlockerCount, resumeScheduling } = fixture();
++    getSuspensionBlockerCount.mockImplementation(() => {
++      throw new Error("inventory unavailable");
++    });
++    expect((await acquireHostConfigRestartLease(context, "revision-a")).state).toBe("unknown");
++    expect(resumeScheduling).toHaveBeenCalledOnce();
++    expect(isGatewayWorkAdmissionClosed()).toBe(false);
++  });
++
++  it("rejects the wrong instance and a retired lifecycle without stopping a replacement", async () => {
++    const { context } = fixture();
++    const acquired = await acquireHostConfigRestartLease(context, "revision-a");
++    expect(commitHostConfigRestartLease(acquired.leaseId!, "another-instance").state).toBe(
++      "expired",
++    );
++    expect(isGatewayWorkAdmissionClosed()).toBe(true);
++    resetGatewaySuspendCoordinatorForLifecycleRestart();
++    resetGatewayWorkAdmission();
++    expect(commitHostConfigRestartLease(acquired.leaseId!, acquired.instanceId).state).toBe(
++      "expired",
++    );
++    expect(shutdown).not.toHaveBeenCalled();
++  });
++
++  it("rechecks runtime work before commit and keeps that work alive", async () => {
++    const { context, getSuspensionBlockerCount } = fixture();
++    const acquired = await acquireHostConfigRestartLease(context, "revision-a");
++    getSuspensionBlockerCount.mockReturnValue(1);
++    expect(commitHostConfigRestartLease(acquired.leaseId!, acquired.instanceId).state).toBe("busy");
++    expect(isGatewayWorkAdmissionClosed()).toBe(false);
++    expect(shutdown).not.toHaveBeenCalled();
++  });
++
++  it("commits the irreversible fence before ACK and emits one shutdown even when retried", async () => {
++    const { context, resumeScheduling } = fixture();
++    const acquired = await acquireHostConfigRestartLease(context, "revision-a");
++    expect(commitHostConfigRestartLease(acquired.leaseId!, acquired.instanceId).state).toBe(
++      "committed",
++    );
++    expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
++    expect(shutdown).not.toHaveBeenCalled();
++    expect(commitHostConfigRestartLease(acquired.leaseId!, acquired.instanceId).state).toBe(
++      "committed",
++    );
++    expect(releaseHostConfigRestartLease(acquired.leaseId!, acquired.instanceId).state).toBe(
++      "committed",
++    );
++    await vi.advanceTimersByTimeAsync(15_001);
++    expect(shutdown).toHaveBeenCalledOnce();
++    expect(resumeScheduling).not.toHaveBeenCalled();
++    expect(isGatewayWorkAdmissionClosed()).toBe(true);
++  });
++
++  it("allows only exact lease completion through the real dispatcher while config writes remain fenced", async () => {
++    const { context } = fixture();
++    const acquired = await acquireHostConfigRestartLease(context, "revision-a");
++    const handler = vi.fn();
++    const reject = vi.fn();
++    const methodRegistry = createGatewayMethodRegistry([
++      {
++        ...createPluginGatewayMethodDescriptor({
++          pluginId: "lease-proof",
++          name: "config.set",
++          scope: "operator.write",
++          handler,
++        }),
++        controlPlaneWrite: true,
++      },
++    ]);
++    const dispatch = (requestParams: unknown) =>
++      runWithGatewayRequestEnvelope("config.set", null, handler, {
++        context,
++        methodRegistry,
++        isWebchatConnect: () => false,
++        requestParams,
++        reject,
++      });
++    await dispatch({ raw: "{}" });
++    await dispatch({
++      raw: "{}",
++      restartLeaseAction: "release",
++      restartLeaseId: acquired.leaseId,
++      restartLeaseInstanceId: "another-instance",
++    });
++    await dispatch({
++      raw: '{"models":{}}',
++      restartLeaseAction: "release",
++      restartLeaseId: acquired.leaseId,
++      restartLeaseInstanceId: acquired.instanceId,
++    });
++    expect(reject).toHaveBeenCalledTimes(3);
++    expect(handler).not.toHaveBeenCalled();
++    for (let i = 0; i < CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS; i++) {
++      consumeControlPlaneWriteBudget({ client: null, method: "config.set" });
++    }
++    expect(consumeControlPlaneWriteBudget({ client: null, method: "config.set" }).allowed).toBe(
++      false,
++    );
++    await dispatch({
++      raw: "{}",
++      restartLeaseAction: "release",
++      restartLeaseId: acquired.leaseId,
++      restartLeaseInstanceId: acquired.instanceId,
++    });
++    expect(handler).toHaveBeenCalledOnce();
++    expect(releaseHostConfigRestartLease(acquired.leaseId!, acquired.instanceId).state).toBe(
++      "released",
++    );
++  });
++});
+diff --git a/src/gateway/host-config-restart-lease.ts b/src/gateway/host-config-restart-lease.ts
+new file mode 100644
+index 00000000..d5c1050a
+--- /dev/null
++++ b/src/gateway/host-config-restart-lease.ts
+@@ -0,0 +1,254 @@
++import { randomUUID } from "node:crypto";
++import type { GatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
++import type { GatewayRequestContext } from "./server-methods/types.js";
++
++type RestartLeaseState = "acquired" | "committed" | "released" | "busy" | "unknown" | "expired";
++export type HostConfigRestartLeaseResult = {
++  state: RestartLeaseState;
++  instanceId: string;
++  leaseId?: string;
++  expiresAtMs?: number;
++  targetRevision?: string;
++  reason?: string;
++};
++type HeldLease = {
++  leaseId: string;
++  targetRevision: string;
++  expiresAtMs: number;
++  committed: boolean;
++  timer?: ReturnType<typeof setTimeout>;
++  isReady: () => boolean;
++  inspect: () => GatewayActiveWorkSnapshot;
++  release: () => boolean;
++  commitAdmission: () => void;
++  isDraining: () => boolean;
++};
++
++const INSTANCE_ID = randomUUID();
++const LEASE_TTL_MS = 15_000;
++let current: HeldLease | undefined;
++
++function result(
++  state: RestartLeaseState,
++  held?: HeldLease,
++  reason?: string,
++): HostConfigRestartLeaseResult {
++  return {
++    state,
++    instanceId: INSTANCE_ID,
++    ...(held
++      ? {
++          leaseId: held.leaseId,
++          targetRevision: held.targetRevision,
++          expiresAtMs: held.expiresAtMs,
++        }
++      : {}),
++    ...(reason ? { reason } : {}),
++  };
++}
++
++function releaseHeld(held: HeldLease): boolean {
++  clearTimeout(held.timer);
++  if (current === held) {
++    current = undefined;
++  }
++  return held.release();
++}
++
++function liveLease(): HeldLease | undefined {
++  const held = current;
++  if (!held) {
++    return undefined;
++  }
++  if (held.committed) {
++    // An in-process lifecycle reset retires the old lease too.
++    if (!held.isDraining()) {
++      current = undefined;
++    }
++    return current;
++  }
++  if (Date.now() >= held.expiresAtMs || !held.isReady()) {
++    releaseHeld(held);
++    return undefined;
++  }
++  return held;
++}
++
++function requestRecord(params: unknown): Record<string, unknown> | undefined {
++  if (!params || typeof params !== "object" || Array.isArray(params)) {
++    return undefined;
++  }
++  const record = params as Record<string, unknown>;
++  if (
++    record.raw !== "{}" ||
++    record.mutationId !== undefined ||
++    record.allowRestart !== undefined ||
++    record.baseHash !== undefined
++  ) {
++    return undefined;
++  }
++  return record;
++}
++
++function isHostConfigRestartLeaseAcquire(params: unknown): boolean {
++  return requestRecord(params)?.restartLeaseAction === "acquire";
++}
++
++/** Only the exact held lease may finish through closed admission; config writes stay blocked. */
++function isHostConfigRestartLeaseContinuation(params: unknown): boolean {
++  const request = requestRecord(params);
++  if (
++    !request ||
++    (request.restartLeaseAction !== "commit" && request.restartLeaseAction !== "release")
++  ) {
++    return false;
++  }
++  const held = liveLease();
++  return Boolean(
++    held &&
++    request.restartLeaseId === held.leaseId &&
++    request.restartLeaseInstanceId === INSTANCE_ID,
++  );
++}
++
++export function getHostConfigRestartLeaseRequestKind(
++  method: string,
++  params: unknown,
++): "acquire" | "continuation" | undefined {
++  if (method !== "config.set") {
++    return undefined;
++  }
++  if (isHostConfigRestartLeaseAcquire(params)) {
++    return "acquire";
++  }
++  return isHostConfigRestartLeaseContinuation(params) ? "continuation" : undefined;
++}
++
++/** Acquire through the existing scheduler-aware, process-wide suspension owner. */
++export async function acquireHostConfigRestartLease(
++  context: GatewayRequestContext,
++  targetRevision: string,
++): Promise<HostConfigRestartLeaseResult> {
++  if (
++    !targetRevision?.trim() ||
++    targetRevision.length > 256 ||
++    process.listenerCount("SIGINT") === 0 ||
++    !context.cron?.pauseScheduling ||
++    !context.cron?.resumeScheduling ||
++    !context.chatAbortControllers ||
++    !context.chatQueuedTurns
++  ) {
++    return result("unknown", undefined, "restart-prerequisites-unavailable");
++  }
++  // Keep activity registries off the dispatcher's static startup import path.
++  const [suspension, activity, admission, serverActivity] = await Promise.all([
++    import("../infra/gateway-suspend-coordinator.js"),
++    import("../infra/gateway-active-work.js"),
++    import("../process/gateway-work-admission.js"),
++    import("./server-active-work.js"),
++  ]);
++  const existing = liveLease();
++  if (existing) {
++    return result("busy", undefined, "restart-lease-held");
++  }
++  const inspect = serverActivity.createGatewayServerActiveWorkInspectors(context);
++  const requestId = `host-config-restart:${randomUUID()}`;
++  try {
++    const prepared = suspension.prepareGatewaySuspend({
++      requestId,
++      terminalPolicy: "preserve",
++      pauseScheduling: () => context.cron.pauseScheduling(),
++      resumeScheduling: () => context.cron.resumeScheduling(),
++      inspect,
++      warn: (message) => context.logGateway.warn(message),
++    });
++    if (prepared.status !== "ready") {
++      return result(
++        prepared.status === "busy" || prepared.status === "conflict" ? "busy" : "unknown",
++        undefined,
++        prepared.status === "busy"
++          ? `runtime-not-idle:${prepared.reason}:${prepared.blockers.map(({ kind, count }) => `${kind}=${count}`).join(",")}`
++          : `runtime-not-idle:${prepared.status}`,
++      );
++    }
++    const leaseId = prepared.suspensionId;
++    const lifecycleSignal = admission.getGatewayRestartDrainSignal();
++    const held: HeldLease = {
++      leaseId,
++      targetRevision,
++      expiresAtMs: Date.now() + LEASE_TTL_MS,
++      committed: false,
++      isReady: () => suspension.getGatewaySuspendStatus(leaseId).status === "ready",
++      inspect: () => activity.createGatewayActiveWorkSnapshot(inspect),
++      release: () => suspension.resumeGatewaySuspend(leaseId).ok,
++      commitAdmission: admission.markGatewayRestartDraining,
++      isDraining: () =>
++        admission.getGatewayRestartDrainSignal() === lifecycleSignal &&
++        admission.isGatewayRestartDraining(),
++    };
++    current = held;
++    held.timer = setTimeout(() => {
++      if (current === held && !held.committed) {
++        releaseHeld(held);
++      }
++    }, LEASE_TTL_MS);
++    held.timer.unref?.();
++    return result("acquired", held);
++  } catch {
++    // The suspension owner rolls back scheduler/admission on inspection failure.
++    return result("unknown", undefined, "runtime-inspection-failed");
++  }
++}
++
++/** Commit and close admission in one turn; the host never force-kills this automatic restart. */
++export function commitHostConfigRestartLease(
++  leaseId: string,
++  instanceId: string,
++): HostConfigRestartLeaseResult {
++  const held = liveLease();
++  if (!held || held.leaseId !== leaseId || instanceId !== INSTANCE_ID) {
++    return result("expired");
++  }
++  if (held.committed) {
++    return result("committed", held);
++  }
++  try {
++    if (process.listenerCount("SIGINT") === 0) {
++      releaseHeld(held);
++      return result("unknown", undefined, "shutdown-handler-unavailable");
++    }
++    const snapshot = held.inspect();
++    if (
++      snapshot.idle !== true ||
++      !Number.isFinite(snapshot.counts.totalActive) ||
++      snapshot.counts.totalActive !== 0
++    ) {
++      releaseHeld(held);
++      return result("busy", undefined, "runtime-became-busy");
++    }
++  } catch {
++    releaseHeld(held);
++    return result("unknown", undefined, "runtime-inspection-failed");
++  }
++  // No await separates the final inventory check from the irreversible admission fence.
++  held.commitAdmission();
++  held.committed = true;
++  clearTimeout(held.timer);
++  // Let config.set enqueue the ACK first. Even a lost ACK cannot admit new work.
++  setImmediate(() => process.emit("SIGINT"));
++  return result("committed", held);
++}
++
++export function releaseHostConfigRestartLease(
++  leaseId: string,
++  instanceId: string,
++): HostConfigRestartLeaseResult {
++  const held = liveLease();
++  if (!held || held.leaseId !== leaseId || instanceId !== INSTANCE_ID) {
++    return result("expired");
++  }
++  if (held.committed) {
++    return result("committed", held);
++  }
++  return result(releaseHeld(held) ? "released" : "unknown");
++}
+diff --git a/src/gateway/server-methods-admission-error.ts b/src/gateway/server-methods-admission-error.ts
+new file mode 100644
+index 00000000..c1070be9
+--- /dev/null
++++ b/src/gateway/server-methods-admission-error.ts
+@@ -0,0 +1,29 @@
++import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
++import {
++  GATEWAY_RESTART_UNAVAILABLE_REASON,
++  GATEWAY_SUSPEND_UNAVAILABLE_REASON,
++} from "../../packages/gateway-protocol/src/restart-unavailable.js";
++import {
++  getGatewaySuspendAdmissionPhase,
++  isGatewayRestartDraining,
++} from "../process/gateway-work-admission.js";
++
++/** Preserve the public rejection contract for all requests refused by admission. */
++export function gatewayClosedAdmissionError(method: string) {
++  const restartDraining = isGatewayRestartDraining();
++  return errorShape(
++    ErrorCodes.UNAVAILABLE,
++    `${method} unavailable during gateway ${restartDraining ? "restart" : "suspension"}`,
++    {
++      retryable: true,
++      retryAfterMs: 1_000,
++      details: {
++        method,
++        reason: restartDraining
++          ? GATEWAY_RESTART_UNAVAILABLE_REASON
++          : GATEWAY_SUSPEND_UNAVAILABLE_REASON,
++        phase: getGatewaySuspendAdmissionPhase(),
++      },
++    },
++  );
++}
+diff --git a/src/gateway/server-methods.ts b/src/gateway/server-methods.ts
+index 2ff086f0..de8cc2d4 100644
+--- a/src/gateway/server-methods.ts
++++ b/src/gateway/server-methods.ts
+@@ -5,10 +5,6 @@ import {
+   missingScopeErrorShape,
+   type ErrorShape,
+ } from "../../packages/gateway-protocol/src/index.js";
+-import {
+-  GATEWAY_RESTART_UNAVAILABLE_REASON,
+-  GATEWAY_SUSPEND_UNAVAILABLE_REASON,
+-} from "../../packages/gateway-protocol/src/restart-unavailable.js";
+ import {
+   gatewayStartupUnavailableDetails,
+   GATEWAY_STARTUP_RETRY_AFTER_MS,
+@@ -30,6 +26,7 @@ import {
+   CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS,
+   CONTROL_PLANE_RATE_LIMIT_WINDOW_MS,
+ } from "./control-plane-rate-limit.js";
++import { getHostConfigRestartLeaseRequestKind } from "./host-config-restart-lease.js";
+ import {
+   ADMIN_SCOPE,
+   authorizeOperatorScopesForMethod,
+@@ -50,6 +47,7 @@ import {
+ } from "./methods/registry.js";
+ import { isOperatorScope } from "./operator-scopes.js";
+ import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
++import { gatewayClosedAdmissionError } from "./server-methods-admission-error.js";
+ import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
+ import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
+ import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
+@@ -568,7 +566,8 @@ export async function runWithGatewayRequestEnvelope<T>(
+       },
+     );
+   };
+-  const isSuspendPrepare = method === "gateway.suspend.prepare";
++  const hostRestart = getHostConfigRestartLeaseRequestKind(method, options.requestParams);
++  const isSuspendPrepare = method === "gateway.suspend.prepare" || hostRestart === "acquire";
+   const preAdmissionRateLimitError = isSuspendPrepare
+     ? rejectRateLimitedControlPlaneWrite()
+     : undefined;
+@@ -605,30 +604,18 @@ export async function runWithGatewayRequestEnvelope<T>(
+       }),
+     );
+   }
+-  if (!rootWorkAdmission && !isGatewayMethodAllowedDuringSuspension(method)) {
+-    const restartDraining = isGatewayRestartDraining();
+-    return await options.reject(
+-      errorShape(
+-        ErrorCodes.UNAVAILABLE,
+-        `${method} unavailable during gateway ${restartDraining ? "restart" : "suspension"}`,
+-        {
+-          retryable: true,
+-          retryAfterMs: 1_000,
+-          details: {
+-            method,
+-            reason: restartDraining
+-              ? GATEWAY_RESTART_UNAVAILABLE_REASON
+-              : GATEWAY_SUSPEND_UNAVAILABLE_REASON,
+-            phase: getGatewaySuspendAdmissionPhase(),
+-          },
+-        },
+-      ),
+-    );
++  if (
++    !rootWorkAdmission &&
++    !isGatewayMethodAllowedDuringSuspension(method) &&
++    hostRestart !== "continuation"
++  ) {
++    return await options.reject(gatewayClosedAdmissionError(method));
+   }
+   async function invokeWithRequestScope() {
+-    const postAdmissionRateLimitError = isSuspendPrepare
+-      ? undefined
+-      : rejectRateLimitedControlPlaneWrite();
++    const postAdmissionRateLimitError =
++      isSuspendPrepare || hostRestart === "continuation"
++        ? undefined
++        : rejectRateLimitedControlPlaneWrite();
+     // A closed admission must reject first so refused writes do not exhaust the controller's
+     // budget and strand it behind rate limiting after suspension resumes.
+     if (postAdmissionRateLimitError) {
+diff --git a/src/gateway/server-methods/config.env-restart.test.ts b/src/gateway/server-methods/config.env-restart.test.ts
+new file mode 100644
+index 00000000..a2d9c0b2
+--- /dev/null
++++ b/src/gateway/server-methods/config.env-restart.test.ts
+@@ -0,0 +1,102 @@
++import { beforeEach, expect, test, vi } from "vitest";
++import { configHandlers } from "./config.js";
++import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
++
++const mocks = vi.hoisted(() => ({ read: vi.fn(), commit: vi.fn() }));
++vi.mock("../../config/io.js", async () => ({
++  ...(await vi.importActual<typeof import("../../config/io.js")>("../../config/io.js")),
++  readConfigFileSnapshotForWrite: mocks.read,
++}));
++vi.mock("./config-write-flow.js", async () => ({
++  ...(await vi.importActual<typeof import("./config-write-flow.js")>("./config-write-flow.js")),
++  commitGatewayConfigWrite: mocks.commit,
++}));
++vi.mock("../../config/validation.js", async () => ({
++  ...(await vi.importActual<typeof import("../../config/validation.js")>("../../config/validation.js")),
++  validateConfigObjectRawWithPlugins: (config: unknown) => ({ ok: true, config, warnings: [] }),
++  validateConfigObjectWithPlugins: (config: unknown) => ({ ok: true, config, warnings: [] }),
++}));
++vi.mock("../../config/runtime-schema.js", () => ({
++  loadGatewayRuntimeConfigSchema: () => ({ schema: { type: "object" }, uiHints: {}, version: "fixture" }),
++}));
++vi.mock("../../secrets/runtime.js", async () => ({
++  ...(await vi.importActual<typeof import("../../secrets/runtime.js")>("../../secrets/runtime.js")),
++  prepareSecretsRuntimeSnapshot: async () => ({ degradedOwners: [] }),
++}));
++
++const tokenVariable = "OPENCLAW_ENV_RESTART_FIXTURE_TOKEN";
++const template = `\${${tokenVariable}}`;
++const original = {
++  gateway: { mode: "local" as const, auth: { mode: "token" as const, token: "read-time-token" } },
++  skills: { entries: {} },
++};
++let counter = 0;
++beforeEach(() => {
++  vi.clearAllMocks();
++  const read = createConfigWriteSnapshot(structuredClone(original));
++  read.snapshot.parsed = { ...original, gateway: { ...original.gateway, auth: { ...original.gateway.auth, token: template } } };
++  read.snapshot.raw = JSON.stringify(read.snapshot.parsed);
++  read.writeOptions = { envSnapshotForRestore: { [tokenVariable]: "read-time-token" } } as never;
++  mocks.read.mockResolvedValue(read);
++  mocks.commit.mockImplementation(async ({ nextConfig }) => ({
++    path: "/tmp/fixture-openclaw.json", config: nextConfig, hash: "fixture-next-hash",
++    application: Promise.resolve("applied"), queueFollowUp: vi.fn(),
++  }));
++});
++
++async function apply(method: "config.set" | "config.patch", token: string, extra?: object) {
++  const raw = {
++    gateway: { ...original.gateway, auth: { ...original.gateway.auth, token } },
++    skills: { entries: { "fixture-installed-skill": { enabled: true } } }, ...extra,
++  };
++  const harness = createConfigHandlerHarness({ method, params: {
++    raw: JSON.stringify(raw), baseHash: "base-hash", mutationId: `env-fixture-${++counter}`, allowRestart: false,
++  } });
++  await configHandlers[method]!(harness.options);
++  return harness.respond.mock.calls.at(-1);
++}
++
++test.each(["config.set", "config.patch"] as const)("%s keeps an unchanged authored token placeholder hot", async (method) => {
++  const response = await apply(method, template);
++  expect(response?.[0]).toBe(true);
++  expect(response?.[1]).toMatchObject({ mutation: { state: "applied" } });
++  expect(mocks.commit).toHaveBeenCalledOnce();
++  expect(mocks.commit.mock.calls[0][0].nextConfig.gateway.auth.token).toBe(template);
++});
++
++test.each(["config.set", "config.patch"] as const)("%s still requires restart for a genuinely changed token", async (method) => {
++  const response = await apply(method, "different-token");
++  expect(response?.[1]).toMatchObject({ mutation: { state: "restart-required" }, restartPaths: ["gateway.auth.token"] });
++  expect(mocks.commit).not.toHaveBeenCalled();
++});
++
++test("candidate env changes still require restart without modifying the live process environment", async () => {
++  const previous = process.env[tokenVariable];
++  const response = await apply("config.set", template, { env: { [tokenVariable]: "candidate-new-token" } });
++  expect(response?.[1]).toMatchObject({ mutation: { state: "restart-required" } });
++  expect(response?.[1].restartPaths).toContain("env");
++  expect(process.env[tokenVariable]).toBe(previous);
++  expect(mocks.commit).not.toHaveBeenCalled();
++});
++
++test("changing the token reference to a different environment value requires restart", async () => {
++  const read = await mocks.read();
++  read.writeOptions.envSnapshotForRestore.OPENCLAW_ENV_RESTART_OTHER_FIXTURE = "other-token";
++  const response = await apply("config.set", "${OPENCLAW_ENV_RESTART_OTHER_FIXTURE}");
++  expect(response?.[1]).toMatchObject({ mutation: { state: "restart-required" }, restartPaths: ["gateway.auth.token"] });
++  expect(mocks.commit).not.toHaveBeenCalled();
++});
++
++test.skipIf(process.platform !== "win32")("Windows read-time environment names remain case-insensitive", async () => {
++  const read = await mocks.read();
++  read.writeOptions.envSnapshotForRestore = { [tokenVariable.toLowerCase()]: "read-time-token" };
++  const response = await apply("config.set", template);
++  expect(response?.[1]).toMatchObject({ mutation: { state: "applied" } });
++  expect(mocks.commit.mock.calls[0][0].nextConfig.gateway.auth.token).toBe(template);
++});
++
++test("an unresolved new placeholder is never treated as unchanged gateway authentication", async () => {
++  const response = await apply("config.set", "${OPENCLAW_ENV_RESTART_MISSING_FIXTURE}");
++  expect(response?.[1]).toMatchObject({ mutation: { state: "restart-required" } });
++  expect(mocks.commit).not.toHaveBeenCalled();
++});
+diff --git a/src/gateway/server-methods/config.ts b/src/gateway/server-methods/config.ts
+index 138425f0..9fd23b6a 100644
+--- a/src/gateway/server-methods/config.ts
++++ b/src/gateway/server-methods/config.ts
+@@ -15,7 +15,9 @@ import {
+   validateConfigSetParams,
+ } from "../../../packages/gateway-protocol/src/index.js";
+ import { readAgentRosterProperty } from "../../agents/agent-scope-config.js";
++import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
+ import { resolveModelIdNormalizationPolicies } from "../../config/io.context.js";
++import { resolveConfigForRead } from "../../config/io.read-helpers.js";
+ import {
+   createConfigIO,
+   parseConfigJson5,
+@@ -34,6 +36,10 @@ import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
+ import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
+ import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
+ import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
++import {
++  getRuntimeConfigAppliedHash,
++  hashRuntimeConfigValue,
++} from "../../config/runtime-snapshot.js";
+ import { projectSourceOntoRuntimeShape } from "../../config/runtime-source-projection.js";
+ import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
+ import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
+@@ -54,15 +60,22 @@ import {
+   prepareSecretsRuntimeSnapshot,
+   type PreparedSecretsRuntimeSnapshot,
+ } from "../../secrets/runtime.js";
+-import { diffConfigPaths } from "../config-diff.js";
++import { diffConfigPaths, diffGatewayReloadPaths } from "../config-diff.js";
+ import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../config-get-response.js";
+-import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
++import { ConfigMutationReceipts, type ConfigMutationReceipt } from "../config-mutation-receipts.js";
++import { buildGatewayReloadPlan, resolveConfigReloadMetadata } from "../config-reload-plan.js";
++import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
+ import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
+ import {
+   formatControlPlaneActor,
+   resolveControlPlaneActor,
+   summarizeChangedPaths,
+ } from "../control-plane-audit.js";
++import {
++  acquireHostConfigRestartLease,
++  commitHostConfigRestartLease,
++  releaseHostConfigRestartLease,
++} from "../host-config-restart-lease.js";
+ import { resolveBaseHashParam } from "./base-hash.js";
+ import {
+   commitGatewayConfigWrite,
+@@ -83,6 +96,87 @@ import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from ".
+ import { assertValidParams } from "./validation.js";
+
+ const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
++const configMutationReceipts = new ConfigMutationReceipts();
++
++function beginConfigMutation(
++  params: unknown,
++  method: string,
++  originalRespond: RespondFn,
++): { receipt?: ConfigMutationReceipt; respond: RespondFn; allowRestart: boolean } | null {
++  const request = params as { mutationId?: string; raw: string; allowRestart?: boolean };
++  if (!request.mutationId) {
++    return { respond: originalRespond, allowRestart: request.allowRestart !== false };
++  }
++  try {
++    const { receipt, duplicate } = configMutationReceipts.begin(
++      request.mutationId,
++      `${method}:${request.raw}`,
++    );
++    if (duplicate) {
++      originalRespond(true, { mutation: { ...receipt } }, undefined);
++      return null;
++    }
++    const respond: RespondFn = (ok, payload, error, meta) => {
++      if (!ok && receipt.state === "pending") {
++        receipt.state = "rejected";
++      }
++      originalRespond(
++        ok,
++        ok ? { ...(payload as object), mutation: { ...receipt } } : payload,
++        error,
++        meta,
++      );
++    };
++    return { receipt, respond, allowRestart: request.allowRestart === true };
++  } catch (error) {
++    originalRespond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
++    return null;
++  }
++}
++
++function rejectUngovernedConfigRestart(
++  mutation: NonNullable<ReturnType<typeof beginConfigMutation>>,
++  previous: OpenClawConfig,
++  candidate: OpenClawConfig,
++  runtimeCandidate: OpenClawConfig = candidate,
++  readEnv: NodeJS.ProcessEnv = process.env,
++): boolean {
++  if (mutation.allowRestart) {
++    return false;
++  }
++  // The watcher compares resolved source objects, without runtime defaults.
++  // A host submits authored ${ENV} placeholders: comparing them directly with
++  // the read snapshot's materialized values invents gateway.auth.token changes.
++  // Resolve only this comparison using the exact read-time environment. Keep the
++  // submitted write candidate untouched so secrets remain placeholders on disk.
++  const comparisonEnv = cloneEnvWithPlatformSemantics(readEnv);
++  const resolvedCandidate = resolveConfigForRead(candidate, comparisonEnv).resolvedConfigRaw;
++  const resolvedRuntimeCandidate = resolveConfigForRead(
++    runtimeCandidate,
++    comparisonEnv,
++  ).resolvedConfigRaw as OpenClawConfig;
++  const changedPaths = diffGatewayReloadPaths(previous, resolvedCandidate);
++  const plan = buildGatewayReloadPlan(changedPaths, {
++    candidateConfig: resolvedRuntimeCandidate,
++  });
++  const reloadDisabled = resolveGatewayReloadSettings(resolvedRuntimeCandidate).mode === "off";
++  if (!plan.restartGateway && (!reloadDisabled || changedPaths.length === 0)) {
++    return false;
++  }
++  if (mutation.receipt) {
++    mutation.receipt.state = "restart-required";
++    mutation.receipt.restartPaths = reloadDisabled ? ["gateway.reload.mode"] : plan.restartReasons;
++  }
++  mutation.respond(
++    true,
++    {
++      restartRequired: true,
++      restartPaths: reloadDisabled ? ["gateway.reload.mode"] : plan.restartReasons,
++    },
++    undefined,
++  );
++  return true;
++}
+ // ui.prefs is the cross-device Control UI preference surface documented in docs/web/control-ui.md.
+ // Leaf preferences are LWW so independent tabs/devices do not CAS-conflict on the whole config;
+ // every other path keeps strict document CAS.
+@@ -860,17 +954,37 @@ function diffConfigLeafPaths(prev: unknown, next: unknown, prefix = ""): string[
+ }
+
+ export const configHandlers: GatewayRequestHandlers = {
+-  "config.get": async ({ params, respond, context }) => {
++  "config.get": async ({ params, respond, context, client }) => {
+     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
+       return;
+     }
++    if (
++      (params as { expectedRawHash?: string }).expectedRawHash &&
++      !client?.connect.scopes?.includes("operator.admin")
++    ) {
++      respond(
++        false,
++        undefined,
++        errorShape(ErrorCodes.INVALID_REQUEST, "candidate attestation requires operator.admin"),
++      );
++      return;
++    }
++    const mutationId = (params as { mutationId?: string }).mutationId;
++    if (mutationId) {
++      respond(true, { mutation: configMutationReceipts.get(mutationId) }, undefined);
++      return;
++    }
+     respond(
+       true,
+-      await readConfigGetResponse({
+-        getHotReloadStatus: context.getConfigReloaderHotReloadStatus,
+-        loadUiHints: () => loadSchemaWithPlugins().uiHints,
+-        revisionProjector: context.configRevisionProjector,
+-      }),
++      {
++        ...(await readConfigGetResponse({
++          getHotReloadStatus: context.getConfigReloaderHotReloadStatus,
++          loadUiHints: () => loadSchemaWithPlugins().uiHints,
++          revisionProjector: context.configRevisionProjector,
++          expectedRawHash: (params as { expectedRawHash?: string }).expectedRawHash,
++        })),
++        capabilities: { configMutationReceipts: 1, persistedCandidateMatch: 1 },
++      },
+       undefined,
+     );
+   },
+@@ -913,10 +1027,58 @@ export const configHandlers: GatewayRequestHandlers = {
+     }
+     respond(true, result, undefined);
+   },
+-  "config.set": async ({ params, respond, context }) => {
++  "config.set": async ({ params, respond: originalRespond, context }) => {
++    let respond = originalRespond;
+     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
+       return;
+     }
++    const leaseParams = params as {
++      raw: string;
++      mutationId?: string;
++      baseHash?: string;
++      allowRestart?: boolean;
++      restartLeaseAction?: "acquire" | "commit" | "release";
++      restartLeaseId?: string;
++      restartLeaseInstanceId?: string;
++      restartTargetRevision?: string;
++    };
++    if (leaseParams.restartLeaseAction) {
++      if (
++        leaseParams.raw !== "{}" ||
++        leaseParams.mutationId !== undefined ||
++        leaseParams.baseHash !== undefined ||
++        leaseParams.allowRestart !== undefined ||
++        (leaseParams.restartLeaseAction === "acquire"
++          ? !leaseParams.restartTargetRevision
++          : !leaseParams.restartLeaseId || !leaseParams.restartLeaseInstanceId)
++      ) {
++        respond(
++          false,
++          undefined,
++          errorShape(ErrorCodes.INVALID_REQUEST, "invalid restart lease request"),
++        );
++        return;
++      }
++      const restartLease =
++        leaseParams.restartLeaseAction === "acquire"
++          ? await acquireHostConfigRestartLease(context, leaseParams.restartTargetRevision!)
++          : leaseParams.restartLeaseAction === "commit"
++            ? commitHostConfigRestartLease(
++                leaseParams.restartLeaseId!,
++                leaseParams.restartLeaseInstanceId!,
++              )
++            : releaseHostConfigRestartLease(
++                leaseParams.restartLeaseId!,
++                leaseParams.restartLeaseInstanceId!,
++              );
++      respond(true, { restartLease }, undefined);
++      return;
++    }
++    const mutation = beginConfigMutation(params, "config.set", respond);
++    if (!mutation) {
++      return;
++    }
++    respond = mutation.respond;
+     const writeSnapshot = await readConfigWriteSnapshotOrRespond(
+       params,
+       respond,
+@@ -945,6 +1107,17 @@ export const configHandlers: GatewayRequestHandlers = {
+     ) {
+       return;
+     }
++    if (
++      rejectUngovernedConfigRestart(
++        mutation,
++        snapshot.sourceConfig,
++        parsed.writeConfig,
++        parsed.config,
++        writeOptions.envSnapshotForRestore,
++      )
++    ) {
++      return;
++    }
+     const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
+       config: parsed.config,
+       respond,
+@@ -956,12 +1129,27 @@ export const configHandlers: GatewayRequestHandlers = {
+       snapshot,
+       writeOptions,
+       nextConfig: parsed.writeConfig,
++      awaitRuntimeApplication: Boolean(mutation.receipt),
+       context,
+       respond,
+     });
+     if (!writeResult) {
+       return;
+     }
++    if (mutation.receipt) {
++      configMutationReceipts.committed(
++        mutation.receipt,
++        writeResult.hash
++          ? context.configRevisionProjector.projectRawHash(writeResult.hash)
++          : undefined,
++        writeResult.application,
++      );
++    }
++    // The watcher continuation belongs to this admitted RPC root. Keep its
++    // owner alive until application settles, even if the client's ACK times out.
++    if (mutation.receipt) {
++      await writeResult.application?.catch(() => undefined);
++    }
+     clearConfigSchemaResponseCache();
+     respond(
+       true,
+@@ -980,10 +1168,16 @@ export const configHandlers: GatewayRequestHandlers = {
+     );
+     writeResult.queueFollowUp();
+   },
+-  "config.patch": async ({ params, respond, client, context }) => {
++  "config.patch": async ({ params, respond: originalRespond, client, context }) => {
++    let respond = originalRespond;
+     if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
+       return;
+     }
++    const mutation = beginConfigMutation(params, "config.patch", respond);
++    if (!mutation) {
++      return;
++    }
++    respond = mutation.respond;
+     const hashlessPatch = resolveBaseHashParam(params) === null;
+     // Hash-free writes do not retry: only the client can replay fresh intent after a lost race;
+     // server re-merge would replay frozen stale intent over the winner. A paused handler can still
+@@ -1116,6 +1310,18 @@ export const configHandlers: GatewayRequestHandlers = {
+     }
+     const actor = resolveControlPlaneActor(client);
+     if (restoredChangedPaths.length === 0) {
++      if (
++        mutation.receipt &&
++        getRuntimeConfigAppliedHash() === hashRuntimeConfigValue(snapshot.sourceConfig)
++      ) {
++        const hash = resolveConfigSnapshotHash(snapshot);
++        if (hash) {
++          mutation.receipt.desiredRevision = context.configRevisionProjector.projectRawHash(hash);
++          mutation.receipt.persistedRevision = mutation.receipt.desiredRevision;
++          mutation.receipt.appliedRevision = mutation.receipt.desiredRevision;
++          mutation.receipt.state = "applied";
++        }
++      }
+       respondConfigPatchNoop({
+         snapshot,
+         config: snapshot.config,
+@@ -1127,7 +1333,14 @@ export const configHandlers: GatewayRequestHandlers = {
+       return;
+     }
+     const validatedSubmission = validateSubmittedConfigOrRespond({
+-      candidate: restoredMerge.result,
++      // Receipt mutations persist authored intent only, just like config.set.
++      // Runtime defaults in untouched siblings must not become new writes.
++      candidate: mutation.receipt
++        ? applyMergePatch(
++            projectSourceOntoRuntimeShape(snapshot.resolved, snapshot.config),
++            createMergePatch(snapshot.config, restoredMerge.result),
++          )
++        : restoredMerge.result,
+       sourceConfig: snapshot.sourceConfig,
+       modelIdNormalizationPolicies,
+       respond,
+@@ -1137,6 +1350,17 @@ export const configHandlers: GatewayRequestHandlers = {
+     }
+     const writeConfig = validatedSubmission.validationCandidate;
+     const validatedConfig = validatedSubmission.config;
++    if (
++      rejectUngovernedConfigRestart(
++        mutation,
++        snapshot.sourceConfig,
++        writeConfig,
++        validatedConfig,
++        writeOptions.envSnapshotForRestore,
++      )
++    ) {
++      return;
++    }
+     const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
+       config: validatedConfig,
+       respond,
+@@ -1151,6 +1375,18 @@ export const configHandlers: GatewayRequestHandlers = {
+     // gateway restart (and the resulting connection drop) when a control-plane
+     // client re-sends the same config (e.g. hot-apply with no actual changes).
+     if (changedPaths.length === 0) {
++      if (
++        mutation.receipt &&
++        getRuntimeConfigAppliedHash() === hashRuntimeConfigValue(snapshot.sourceConfig)
++      ) {
++        const hash = resolveConfigSnapshotHash(snapshot);
++        if (hash) {
++          mutation.receipt.desiredRevision = context.configRevisionProjector.projectRawHash(hash);
++          mutation.receipt.persistedRevision = mutation.receipt.desiredRevision;
++          mutation.receipt.appliedRevision = mutation.receipt.desiredRevision;
++          mutation.receipt.state = "applied";
++        }
++      }
+       respondConfigPatchNoop({
+         snapshot,
+         config: validatedConfig,
+@@ -1179,15 +1415,34 @@ export const configHandlers: GatewayRequestHandlers = {
+       nextConfig: writeConfig,
+       context,
+       disconnectSharedAuthClients,
+-      awaitRuntimeApplication: shouldAwaitGatewayConfigApplication({
+-        changedPaths,
+-        nextConfig: writeConfig,
+-      }),
++      awaitRuntimeApplication:
++        Boolean(mutation.receipt) ||
++        shouldAwaitGatewayConfigApplication({
++          changedPaths,
++          nextConfig: writeConfig,
++        }),
+       respond,
+     });
+     if (!writeResult) {
+       return;
+     }
++    if (mutation.receipt) {
++      configMutationReceipts.committed(
++        mutation.receipt,
++        writeResult.hash
++          ? context.configRevisionProjector.projectRawHash(writeResult.hash)
++          : undefined,
++        writeResult.application,
++      );
++    }
++    if (mutation.receipt) {
++      // Do not release the captured admission root while its watcher is still
++      // applying. Timed-out clients query the receipt with a separate read RPC.
++      await writeResult.application?.catch(() => undefined);
++      respond(true, { ok: true, path: writeResult.path }, undefined);
++      writeResult.queueFollowUp();
++      return;
++    }
+     await respondWithConfigRestartWrite({
+       requestParams: params,
+       kind: "config-patch",
