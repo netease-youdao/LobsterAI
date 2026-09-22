@@ -36,6 +36,8 @@ import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
+import { EmployeeView } from './components/digitalEmployees/constants';
+import DigitalEmployeesView from './components/digitalEmployees/DigitalEmployeesView';
 import KitsView from './components/kits/KitsView';
 import LibraryView from './components/library/LibraryView';
 import FirstRunLoginIntroduction from './components/login/FirstRunLoginIntroduction';
@@ -222,7 +224,7 @@ const logAppUpdateRendererLifecycle = (
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions & { requestId: number }>({ requestId: 0 });
-  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'kits' | 'mcp' | 'library'>('cowork');
+  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'kits' | 'mcp' | 'library' | typeof EmployeeView>('cowork');
   const [libraryNavigationRequest, setLibraryNavigationRequest] = useState<{
     source: LibrarySourceFilter;
     requestId: number;
@@ -2129,6 +2131,7 @@ const App: React.FC = () => {
           onShowScheduledTasks={handleShowScheduledTasks}
           onShowKits={handleShowKits}
           onShowLibrary={handleShowLibrary}
+          onShowEmployees={() => setMainView(EmployeeView)}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
@@ -2163,6 +2166,13 @@ const App: React.FC = () => {
                 onUseSkill={handleSkillUse}
                 updateBadge={collapsedHeaderUpdateBadge}
                 skillsReadOnly={enterpriseConfig?.ui?.skills === 'readonly'}
+              />
+            ) : mainView === EmployeeView ? (
+              <DigitalEmployeesView
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={handleToggleSidebar}
+                onShowSkills={handleShowSkills}
+                onOpenAgent={() => { setMainView('cowork'); }}
               />
             ) : mainView === 'scheduledTasks' ? (
               <ScheduledTasksView

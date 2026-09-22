@@ -10,6 +10,7 @@ import { useDispatch, useSelector } from 'react-redux';
 
 import type { SkillSecurityReport as SkillSecurityReportData } from '../../../main/libs/skillSecurity/skillSecurityTypes';
 import { ENABLE_OPENCLAW_SKILL_SYNC } from '../../../shared/featureFlags';
+import { CATALOG_PAGE_SIZE, CatalogLayout, CatalogSort, sortMarketplaceSkills } from '../../services/capabilityCatalog';
 import { i18nService } from '../../services/i18n';
 import { compareVersions,resolveLocalizedText, skillService } from '../../services/skill';
 import { RootState } from '../../store';
@@ -18,6 +19,7 @@ import { MarketplaceSkill, MarketTag,Skill } from '../../types/skill';
 import { CARD_ACTION_PILL_CLASS, DETAIL_ACTION_PILL_CLASS } from '../common/actionPillStyles';
 import CardOverflowMenu, { type CardOverflowMenuItem } from '../common/CardOverflowMenu';
 import CardToggle from '../common/CardToggle';
+import CatalogControls from '../common/CatalogControls';
 import { MANAGEMENT_BODY_TEXT, MANAGEMENT_META_TEXT, MANAGEMENT_TITLE_TEXT } from '../common/managementTypography';
 import Modal from '../common/Modal';
 import ErrorMessage from '../ErrorMessage';
@@ -33,6 +35,7 @@ import {
   getMarketplaceSkillAnalyticsParams,
   reportSkillAction,
 } from './analytics';
+import { countMarketplaceSkillsByTag } from './marketTagCounts';
 import SkillIconTile from './SkillIconTile';
 import SkillSecurityReport from './SkillSecurityReport';
 import { SKILL_TAB_LABEL_KEYS, SKILL_TAB_ORDER, SkillTab } from './skillTabs';
@@ -69,6 +72,9 @@ const importTabConfig: Record<ImportSourceType, {
 const CARD_ACTION_REVEAL_CLASS =
   'opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100';
 
+/** Result count shown inside each marketplace tag pill; inherits the pill's text color. */
+const MARKET_TAG_COUNT_CLASS = 'ml-1 tabular-nums opacity-70';
+
 interface SkillsManagerProps {
   readOnly?: boolean;
   onCreateByChat?: () => void;
@@ -81,6 +87,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
   const skills = useSelector((state: RootState) => state.skill.skills);
 
   const [skillSearchQuery, setSkillSearchQuery] = useState('');
+  const [catalogSort, setCatalogSort] = useState<CatalogSort>(CatalogSort.Recommended);
+  const [catalogLayout, setCatalogLayout] = useState<CatalogLayout>(CatalogLayout.Grid);
+  const [visibleCount, setVisibleCount] = useState(CATALOG_PAGE_SIZE);
   const [skillDownloadSource, setSkillDownloadSource] = useState('');
   const [skillActionError, setSkillActionError] = useState('');
   const [isDownloadingSkill, setIsDownloadingSkill] = useState(false);
@@ -249,20 +258,29 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
     });
   }, [mySkills, builtInSkills, skillSearchQuery]);
 
-  const filteredMarketplaceSkills = useMemo(() => {
+  const searchMatchedMarketplaceSkills = useMemo(() => {
     const query = skillSearchQuery.trim().replace(/\s+/g, ' ').toLowerCase();
-    let results = marketplaceSkills;
-    if (query) {
-      results = results.filter(skill => {
-        return skill.name.toLowerCase().includes(query)
-          || resolveLocalizedText(skill.description).toLowerCase().includes(query);
-      });
-    }
-    if (activeMarketTag !== 'all') {
-      results = results.filter(skill => skill.tags?.includes(activeMarketTag));
-    }
-    return results;
-  }, [marketplaceSkills, skillSearchQuery, activeMarketTag]);
+    if (!query) return marketplaceSkills;
+    return marketplaceSkills.filter(skill => {
+      return skill.name.toLowerCase().includes(query)
+        || resolveLocalizedText(skill.description).toLowerCase().includes(query);
+    });
+  }, [marketplaceSkills, skillSearchQuery]);
+
+  const filteredMarketplaceSkills = useMemo(() => {
+    if (activeMarketTag === 'all') return searchMatchedMarketplaceSkills;
+    return searchMatchedMarketplaceSkills.filter(skill => skill.tags?.includes(activeMarketTag));
+  }, [searchMatchedMarketplaceSkills, activeMarketTag]);
+
+  const sortedMarketplaceSkills = useMemo(() => sortMarketplaceSkills(filteredMarketplaceSkills, catalogSort), [filteredMarketplaceSkills, catalogSort]);
+  useEffect(() => setVisibleCount(CATALOG_PAGE_SIZE), [skillSearchQuery, activeMarketTag, catalogSort]);
+
+  // Counts follow the search query but not the selected tag, so every pill shows
+  // how many results switching to it would give.
+  const marketTagCounts = useMemo(
+    () => countMarketplaceSkillsByTag(searchMatchedMarketplaceSkills),
+    [searchMatchedMarketplaceSkills],
+  );
 
   useEffect(() => {
     const query = skillSearchQuery.trim();
@@ -1331,6 +1349,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
           )}
         </div>
 
+        {activeTab === SkillTab.Marketplace && <CatalogControls sort={catalogSort} onSort={setCatalogSort} layout={catalogLayout} onLayout={setCatalogLayout} />}
         {/* Tag filter pills (Marketplace only) */}
         {activeTab === SkillTab.Marketplace && !isLoadingMarketplace && marketTags.length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -1353,6 +1372,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
               }`}
             >
               {i18nService.t('skillCategoryAll')}
+              <span className={MARKET_TAG_COUNT_CLASS}>{searchMatchedMarketplaceSkills.length}</span>
             </button>
             {marketTags.map((tag) => (
               <button
@@ -1375,6 +1395,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 }`}
               >
                 {resolveLocalizedText(tag)}
+                <span className={MARKET_TAG_COUNT_CLASS}>{marketTagCounts[tag.id] ?? 0}</span>
               </button>
             ))}
           </div>
@@ -1493,8 +1514,8 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 {i18nService.t('skillMarketplaceEmpty')}
               </div>
             ) : (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
-                {filteredMarketplaceSkills.map((skill) => {
+              <div className={catalogLayout === CatalogLayout.Grid ? 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4' : 'grid grid-cols-1 gap-3'}>
+                {sortedMarketplaceSkills.slice(0, visibleCount).map((skill) => {
                   const openMarketplaceDetail = () => {
                     reportSkillAction('open_marketplace_detail', {
                       source: 'skills_manager',
@@ -1617,6 +1638,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
       )}
       </div>
 
+      {activeTab === SkillTab.Marketplace && visibleCount < sortedMarketplaceSkills.length && <button type="button" className="my-4 w-full rounded-xl border border-border p-3 text-sm" onClick={() => setVisibleCount(count => count + CATALOG_PAGE_SIZE)}>
+        {i18nService.t('capabilityShowMore')} ({Math.min(visibleCount, sortedMarketplaceSkills.length)}/{sortedMarketplaceSkills.length})
+      </button>}
       {selectedMarketplaceSkill && createPortal(
         <Modal
           onClose={() => {

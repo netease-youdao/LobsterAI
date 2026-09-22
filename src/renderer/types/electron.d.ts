@@ -794,6 +794,7 @@ interface IElectronAPI {
     onChanged: (callback: () => void) => () => void;
   };
   agents: {
+    installExpertTeam: (request: import('../../shared/agent/teamInstallation').ExpertTeamInstallRequest) => Promise<import('../../shared/agent/teamInstallation').ExpertTeamInstallResult>;
     list: () => Promise<Agent[]>;
     get: (id: string) => Promise<Agent | null>;
     create: (request: {

@@ -26,6 +26,39 @@ describe('parseMcpServersJson', () => {
     });
   });
 
+  test('parses toolFilter and supportsParallelToolCalls, accepting Gemini CLI aliases', () => {
+    const result = parseMcpServersJson(JSON.stringify({
+      mcpServers: {
+        native: {
+          type: 'http',
+          url: 'https://mcp.example.com/mcp',
+          toolFilter: { include: ['doc.get', 'sheet.*'] },
+          supportsParallelToolCalls: true,
+        },
+        aliased: {
+          command: 'npx',
+          args: ['-y', 'some-mcp'],
+          includeTools: ['search'],
+          excludeTools: ['dangerous_delete'],
+          supports_parallel_tool_calls: false,
+        },
+        plain: { command: 'npx', args: ['-y', 'plain-mcp'] },
+      },
+    }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.servers[0]).toMatchObject({
+      toolFilter: { include: ['doc.get', 'sheet.*'] },
+      supportsParallelToolCalls: true,
+    });
+    expect(result.servers[1]).toMatchObject({
+      toolFilter: { include: ['search'], exclude: ['dangerous_delete'] },
+      supportsParallelToolCalls: false,
+    });
+    expect(result.servers[2]).not.toHaveProperty('toolFilter');
+    expect(result.servers[2]).not.toHaveProperty('supportsParallelToolCalls');
+  });
+
   test('parses a bare name-to-config map with multiple servers', () => {
     const result = parseMcpServersJson(JSON.stringify({
       one: { command: 'npx', args: ['-y', 'one-mcp'] },

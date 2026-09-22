@@ -1,3 +1,4 @@
+import { UsersIcon } from '@heroicons/react/24/outline';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { AgentId } from '@shared/agent';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -29,6 +30,7 @@ import {
   CoworkUiEvent,
 } from './cowork/constants';
 import CoworkSearchModal from './cowork/CoworkSearchModal';
+import { EmployeeView } from './digitalEmployees/constants';
 import Cog6ToothIcon from './icons/Cog6ToothIcon';
 import ComposeIcon from './icons/ComposeIcon';
 import SidebarAutomationIcon from './icons/SidebarAutomationIcon';
@@ -45,12 +47,13 @@ import { useSidebarPurchaseGuide } from './useSidebarPurchaseGuide';
 interface SidebarProps {
   onShowSettings: () => void;
   onShowLogin?: () => void;
-  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'kits' | 'mcp' | 'library';
+  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'kits' | 'mcp' | 'library' | typeof EmployeeView;
   onShowSkills: () => void;
   onShowCowork: () => void;
   onShowScheduledTasks: () => void;
   onShowKits: () => void;
   onShowLibrary: () => void;
+  onShowEmployees: () => void;
   onNewChat: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
@@ -248,6 +251,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onShowScheduledTasks,
   onShowKits,
   onShowLibrary,
+  onShowEmployees,
   onNewChat,
   isCollapsed,
   onToggleCollapse,
@@ -763,6 +767,12 @@ const Sidebar: React.FC<SidebarProps> = ({
           >
             <SidebarAutomationIcon className="h-4 w-4 shrink-0" />
             {i18nService.t('scheduledTasks')}
+          </button>
+          <button type="button" onClick={onShowEmployees}
+            className={activeView === EmployeeView ? activeSidebarNavItemClassName : sidebarNavItemClassName}
+            aria-current={activeView === EmployeeView ? 'page' : undefined}>
+            <UsersIcon className="h-4 w-4 shrink-0" />
+            <span className="min-w-0 truncate">{i18nService.t('digitalEmployees')}</span>
           </button>
           <button
             type="button"

@@ -13,6 +13,10 @@ export interface KitSkillBundle {
 }
 
 export interface MarketplaceKit {
+  libraryKind?: 'expert' | 'plugin';
+  category?: string;
+  unavailable?: boolean;
+  setupNotice?: string;
   id: string;
   name: string | LocalizedText;
   description: string | LocalizedText;

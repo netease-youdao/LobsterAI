@@ -10,6 +10,7 @@ import {
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch } from 'react-redux';
 
+import { CapabilityKind, getKitKind } from '../../services/capabilityCatalog';
 import { i18nService } from '../../services/i18n';
 import { kitService } from '../../services/kit';
 import { compareVersions, resolveLocalizedText } from '../../services/skill';
@@ -168,6 +169,9 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
   const [installedKits, setInstalledKits] = useState<Record<string, InstalledKit>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [kind, setKind] = useState<CapabilityKind>(CapabilityKind.All);
+  const [category, setCategory] = useState('');
+  const categories = useMemo(() => [...new Set(kits.map(kit => kit.category).filter((value): value is string => Boolean(value)))], [kits]);
   const [activeTab, setActiveTab] = useState<KitTab>(KitTab.Marketplace);
   const [selectedKit, setSelectedKit] = useState<MarketplaceKit | null>(null);
   const [operatingKitId, setOperatingKitId] = useState<string | null>(null);
@@ -178,6 +182,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
+    kitService.clearCache();
     const [marketKits, installed] = await Promise.all([
       kitService.fetchMarketplaceKits(),
       kitService.getInstalledKits(),
@@ -204,6 +209,8 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
     if (activeTab === KitTab.Installed) {
       results = results.filter(kit => !!installedKits[kit.id]);
     }
+    if (kind !== CapabilityKind.All) results = results.filter(kit => getKitKind(kit) === kind);
+    if (category) results = results.filter(kit => kit.category === category);
     // Search filtering
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -214,7 +221,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
       });
     }
     return results;
-  }, [kits, installedKits, activeTab, searchQuery]);
+  }, [kits, installedKits, activeTab, searchQuery, kind, category]);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -245,6 +252,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
   );
 
   const handleInstall = async (kit: MarketplaceKit) => {
+    if (kit.unavailable) return;
     setOperatingKitId(kit.id);
     setOperationType(KitOperationType.Install);
     setActionError('');
@@ -552,6 +560,9 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
                 )}
               </div>
             </div>
+            {(selectedKit.setupNotice || getKitKind(selectedKit) === CapabilityKind.Plugin) && <p className="my-4 whitespace-pre-wrap text-sm text-secondary">
+              {selectedKit.setupNotice || i18nService.t('capabilityPluginSetup')}
+            </p>}
             {/* The detail page is where a single loud action belongs; uninstall
                 is rare and destructive, so it waits at the bottom. */}
             {installed ? (
@@ -568,7 +579,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
             ) : (
               <button
                 type="button"
-                disabled={operating}
+                disabled={operating || selectedKit.unavailable}
                 onClick={() => handleInstall(selectedKit)}
                 className={DETAIL_ACTION_PILL_CLASS}
               >
@@ -577,7 +588,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
                     <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
                     {i18nService.t('kitInstalling')}
                   </>
-                ) : i18nService.t('kitInstall')}
+                ) : i18nService.t(selectedKit.unavailable ? 'capabilityUnavailable' : 'kitInstall')}
               </button>
             )}
           </div>
@@ -736,6 +747,18 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
           </div>
         </div>
 
+        <div className="flex flex-wrap items-center gap-2">
+          {Object.values(CapabilityKind).map(value => <button key={value} type="button" aria-pressed={kind === value}
+            onClick={() => { setKind(value); setCategory(''); }}
+            className={`rounded-full px-3 py-1 text-xs ${kind === value ? 'bg-primary text-white' : 'bg-surface-raised text-secondary'}`}>
+            {i18nService.t(value === CapabilityKind.All ? 'capabilityAll' : value === CapabilityKind.Plugin ? 'capabilityPlugin' : 'capabilityExpert')}
+            <span className="ml-1">{kits.filter(kit => value === CapabilityKind.All || getKitKind(kit) === value).length}</span>
+          </button>)}
+          {categories.length > 0 && <select aria-label={i18nService.t('capabilityCategory')} value={category} onChange={event => setCategory(event.target.value)} className="rounded-lg border border-border bg-surface p-1.5 text-xs">
+            <option value="">{i18nService.t('capabilityAll')}</option>{categories.map(value => <option key={value}>{value}</option>)}
+          </select>}
+          <button type="button" disabled={isLoading} onClick={() => void loadData()} className="ml-auto rounded-lg border border-border px-3 py-1.5 text-xs">{i18nService.t('refresh')}</button>
+        </div>
         {/* Marketplace / Installed tabs */}
         <div className="flex items-center border-b border-border">
           <button
@@ -867,7 +890,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
                       ) : (
                         <button
                           type="button"
-                          disabled={operating}
+                          disabled={operating || kit.unavailable}
                           onClick={(e) => { e.stopPropagation(); handleInstall(kit); }}
                           className={CARD_ACTION_PILL_CLASS}
                         >

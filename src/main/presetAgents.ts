@@ -1,4 +1,5 @@
 import { AgentAvatarSvg, encodeAgentAvatarIcon } from '../shared/agent/avatar';
+import employeeCatalog from '../shared/agent/employeeCatalog.json';
 import type { CreateAgentRequest } from './coworkStore';
 import { getLanguage } from './i18n';
 
@@ -45,7 +46,7 @@ const PresetAgentIcon = {
  * the target audience is Chinese-speaking users.  System prompts are
  * kept bilingual so models respond naturally in the user's language.
  */
-export const PRESET_AGENTS: PresetAgent[] = [
+const BUNDLED_PRESET_AGENTS: PresetAgent[] = [
   {
     id: 'stockexpert',
     name: '股票助手',
@@ -366,6 +367,12 @@ export const PRESET_AGENTS: PresetAgent[] = [
       '> 🐾 The above analysis is for reference only. For pet health issues, please consult a professional veterinarian. If symptoms persist or worsen, please take your furry friend to the vet promptly.\n',
     skillIds: ['web-search'],
   },
+];
+
+// Preserve upstream identities and prompts when an imported preset has the same ID.
+export const PRESET_AGENTS: PresetAgent[] = [
+  ...BUNDLED_PRESET_AGENTS,
+  ...employeeCatalog.filter(item => !BUNDLED_PRESET_AGENTS.some(preset => preset.id === item.id)),
 ];
 
 /**

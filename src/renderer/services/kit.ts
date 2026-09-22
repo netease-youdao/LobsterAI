@@ -1,4 +1,5 @@
 import type { InstalledKit, MarketplaceKit } from '../types/kit';
+import { parseKitCatalog } from './capabilityCatalog';
 
 class KitService {
   private marketplaceCache: MarketplaceKit[] | null = null;
@@ -12,9 +13,8 @@ class KitService {
       return this.fetchPromise;
     }
     this.fetchPromise = this.loadMarketplaceKits();
-    const result = await this.fetchPromise;
-    this.fetchPromise = null;
-    return result;
+    try { return await this.fetchPromise; }
+    finally { this.fetchPromise = null; }
   }
 
   private async loadMarketplaceKits(): Promise<MarketplaceKit[]> {
@@ -26,14 +26,7 @@ class KitService {
       }
 
       const parsed = JSON.parse(result.data);
-      // overmind response: { data: { value: { ... } } }
-      const value = parsed?.data?.value;
-      if (!value) {
-        console.warn('[KitService] Unexpected kit store response structure');
-        return [];
-      }
-
-      const kits: MarketplaceKit[] = value.kits ?? [];
+      const kits = parseKitCatalog(parsed);
       this.marketplaceCache = kits;
       return kits;
     } catch (error) {
@@ -43,7 +36,7 @@ class KitService {
   }
 
   async installKit(kit: MarketplaceKit): Promise<{ success: boolean; error?: string }> {
-    if (!kit.skills?.bundle) {
+    if (kit.unavailable || !kit.skills?.bundle) {
       return { success: false, error: 'Kit has no skill bundle URL' };
     }
 

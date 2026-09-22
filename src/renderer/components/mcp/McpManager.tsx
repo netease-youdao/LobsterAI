@@ -4,6 +4,7 @@ import React, { useCallback,useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { mcpCategories,mcpRegistry } from '../../data/mcpRegistry';
+import { CATALOG_PAGE_SIZE } from '../../services/capabilityCatalog';
 import { i18nService } from '../../services/i18n';
 import { mcpService } from '../../services/mcp';
 import {
@@ -98,6 +99,7 @@ const McpManager: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<McpTab>(MCP_TAB_ORDER[0]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [visibleCount, setVisibleCount] = useState(CATALOG_PAGE_SIZE);
   const [actionError, setActionError] = useState('');
   const [pendingDelete, setPendingDelete] = useState<DeleteTarget | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -313,6 +315,7 @@ const McpManager: React.FC = () => {
     searchQuery,
   ]);
 
+  useEffect(() => setVisibleCount(CATALOG_PAGE_SIZE), [searchQuery, activeCategory]);
   const filteredMarketplace = useMemo(() => {
     const query = searchQuery.trim().replace(/\s+/g, ' ').toLowerCase();
     let entries = [...dynamicRegistry];
@@ -1447,7 +1450,7 @@ const McpManager: React.FC = () => {
                 {i18nService.t('noMcpServersAvailable')}
               </div>
             ) : (
-              filteredMarketplace.map((entry) => {
+              filteredMarketplace.slice(0, visibleCount).map((entry) => {
                 const isInstalled = installedRegistryIds.has(entry.id);
                 const isQichacha = isQichachaRegistryEntry(entry);
                 const isConnecting = connectingRegistryId === entry.id;
@@ -1548,6 +1551,9 @@ const McpManager: React.FC = () => {
         </Modal>
       )}
 
+      {activeTab === McpTab.Marketplace && visibleCount < filteredMarketplace.length && <button type="button" onClick={() => setVisibleCount(count => count + CATALOG_PAGE_SIZE)} className="my-4 w-full rounded-xl border border-border p-3 text-sm">
+        {i18nService.t('capabilityShowMore')} ({Math.min(visibleCount, filteredMarketplace.length)}/{filteredMarketplace.length})
+      </button>}
       {/* Edit / Registry-install form modal */}
       <McpServerFormModal
         isOpen={isFormOpen}

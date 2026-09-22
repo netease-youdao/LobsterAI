@@ -4107,6 +4107,39 @@ describe('OpenClawConfigSync runtime config output', () => {
       },
     });
   });
+
+  test('passes toolFilter and supportsParallelToolCalls through to mcp.servers', async () => {
+    const sync = await createSync({
+      getResolvedMcpServers: () => [
+        {
+          name: 'docs-server',
+          transportType: 'http',
+          url: 'https://mcp.example.com/mcp',
+          toolFilter: { include: ['doc.get', 'sheet.*', '', '  '] },
+          supportsParallelToolCalls: true,
+        },
+        {
+          name: 'plain-tools',
+          transportType: 'stdio',
+          command: 'node',
+          args: ['server.js'],
+          // An empty filter means "not configured" and must not emit toolFilter.
+          toolFilter: { include: [], exclude: [] },
+        },
+      ],
+    });
+
+    const result = sync.sync('mcp-passthrough');
+
+    expect(result.ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.mcp.servers['docs-server'].toolFilter).toEqual({
+      include: ['doc.get', 'sheet.*'],
+    });
+    expect(config.mcp.servers['docs-server'].supportsParallelToolCalls).toBe(true);
+    expect(config.mcp.servers['plain-tools']).not.toHaveProperty('toolFilter');
+    expect(config.mcp.servers['plain-tools']).not.toHaveProperty('supportsParallelToolCalls');
+  });
 });
 
 describe('resolveModelSourceForOpenClawProvider', () => {

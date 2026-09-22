@@ -249,6 +249,13 @@ export class McpRuntime {
       }
       return shimEnv;
     };
+    // toolFilter / supportsParallelToolCalls ride along to openclaw.json regardless of transport.
+    const passthroughFields = (server: typeof enabledServers[number]) => ({
+      ...(server.toolFilter ? { toolFilter: server.toolFilter } : {}),
+      ...(typeof server.supportsParallelToolCalls === 'boolean'
+        ? { supportsParallelToolCalls: server.supportsParallelToolCalls }
+        : {}),
+    });
     const pushRawStdioServer = async (server: typeof enabledServers[number]): Promise<void> => {
       const r = await resolveStdioCommand(server);
       resolved.push({
@@ -257,6 +264,7 @@ export class McpRuntime {
         command: r.command,
         args: r.args,
         env: { ...buildShimEnv(), ...(r.env || {}) },
+        ...passthroughFields(server),
       });
     };
 
@@ -279,6 +287,7 @@ export class McpRuntime {
               command: readyResolution.command,
               args: readyResolution.args || [],
               env: { ...shimEnv, ...(readyResolution.env || {}), ...(server.env || {}) },
+              ...passthroughFields(server),
             });
             continue;
           }
@@ -330,6 +339,7 @@ export class McpRuntime {
           transportType: server.transportType,
           url: server.url,
           headers: server.headers,
+          ...passthroughFields(server),
         });
       }
     }

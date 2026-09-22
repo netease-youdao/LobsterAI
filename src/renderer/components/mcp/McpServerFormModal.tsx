@@ -3,6 +3,7 @@ import React, { useEffect,useState } from 'react';
 import { McpUrlValidationError, normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
 import { i18nService } from '../../services/i18n';
 import { McpJsonImportErrorCode, McpJsonImportResult, parseMcpServersJson } from '../../services/mcpJsonImport';
+import { buildMcpToolFilterFromText, formatMcpToolNameList } from '../../services/mcpToolFilter';
 import { McpRegistryEntry,McpServerConfig, McpServerFormData } from '../../types/mcp';
 import Modal from '../common/Modal';
 
@@ -73,6 +74,9 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   const [envRows, setEnvRows] = useState<{ key: string; value: string; required?: boolean }[]>([]);
   const [url, setUrl] = useState('');
   const [headerRows, setHeaderRows] = useState<{ key: string; value: string }[]>([]);
+  const [includeToolsText, setIncludeToolsText] = useState('');
+  const [excludeToolsText, setExcludeToolsText] = useState('');
+  const [parallelToolCalls, setParallelToolCalls] = useState(false);
   const [error, setError] = useState('');
   const [envErrors, setEnvErrors] = useState<Record<number, boolean>>({});
 
@@ -101,6 +105,9 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
           ? Object.entries(server.headers).map(([key, value]) => ({ key, value }))
           : []
       );
+      setIncludeToolsText(formatMcpToolNameList(server.toolFilter?.include));
+      setExcludeToolsText(formatMcpToolNameList(server.toolFilter?.exclude));
+      setParallelToolCalls(server.supportsParallelToolCalls === true);
     } else if (registryEntry) {
       // Registry install mode — pre-fill from template
       setName(registryEntry.name);
@@ -141,6 +148,11 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       setEnvRows([]);
       setUrl('');
       setHeaderRows([]);
+    }
+    if (!server) {
+      setIncludeToolsText('');
+      setExcludeToolsText('');
+      setParallelToolCalls(false);
     }
     setInputMode(McpFormInputMode.Form);
     setJsonText('');
@@ -232,6 +244,13 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
     } else {
       data.url = normalizedUrl;
       data.headers = headers;
+    }
+
+    data.toolFilter = buildMcpToolFilterFromText(includeToolsText, excludeToolsText);
+    // Only write the flag when it is on or was set before, so servers that never
+    // touched it keep OpenClaw's default without an explicit `false`.
+    if (parallelToolCalls || server?.supportsParallelToolCalls !== undefined) {
+      data.supportsParallelToolCalls = parallelToolCalls;
     }
 
     // Attach registry metadata if installing from registry
@@ -595,6 +614,41 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
               </div>
             </>
           )}
+
+          {/* Tool selection: filtered tools are never sent to the model */}
+          <div className="space-y-1.5">
+            <label className={labelClass}>{i18nService.t('mcpToolFilterInclude')}</label>
+            <textarea
+              value={includeToolsText}
+              onChange={(e) => setIncludeToolsText(e.target.value)}
+              placeholder={i18nService.t('mcpToolFilterPlaceholder')}
+              rows={2}
+              className={inputClass + ' resize-none'}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className={labelClass}>{i18nService.t('mcpToolFilterExclude')}</label>
+            <textarea
+              value={excludeToolsText}
+              onChange={(e) => setExcludeToolsText(e.target.value)}
+              placeholder={i18nService.t('mcpToolFilterPlaceholder')}
+              rows={2}
+              className={inputClass + ' resize-none'}
+            />
+            <p className="text-xs text-secondary">{i18nService.t('mcpToolFilterHint')}</p>
+          </div>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={parallelToolCalls}
+              onChange={(e) => setParallelToolCalls(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span className="space-y-0.5">
+              <span className="block text-sm text-foreground">{i18nService.t('mcpParallelToolCalls')}</span>
+              <span className="block text-xs text-secondary">{i18nService.t('mcpParallelToolCallsHint')}</span>
+            </span>
+          </label>
 
           </>
           )}

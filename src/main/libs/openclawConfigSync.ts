@@ -1718,6 +1718,14 @@ export interface ResolvedMcpServer {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  // Per-server tool allow/deny lists -> openclaw mcp.servers.*.toolFilter.
+  // Filtered tools are dropped when OpenClaw materializes MCP tools, before the
+  // model payload is built, so every excluded tool schema is saved on each call.
+  toolFilter?: { include?: string[]; exclude?: string[] };
+  // -> openclaw mcp.servers.*.supportsParallelToolCalls. OpenClaw defaults this
+  // to false, which makes any tool batch containing one of this server's tools
+  // run sequentially. Only set true for servers that handle concurrent requests.
+  supportsParallelToolCalls?: boolean;
 }
 
 // Normalize header keys to lowercase before writing to openclaw.json.
@@ -1750,6 +1758,9 @@ function safeServerKey(name: string): string {
   const hash = createHash('md5').update(name).digest('hex').slice(0, 8);
   return `mcp-${hash}`;
 }
+
+const cleanMcpToolNames = (list?: string[]): string[] =>
+  (list ?? []).map(item => String(item).trim()).filter(Boolean);
 
 function buildOpenClawMcpServers(
   servers: ResolvedMcpServer[],
@@ -1784,6 +1795,20 @@ function buildOpenClawMcpServers(
           entry.headers = lowercaseHeaderKeys(server.headers);
         entry.transport = 'streamable-http';
         break;
+    }
+    // Optional passthrough knobs (see ResolvedMcpServer). Omitted when unset so
+    // openclaw.json stays unchanged for servers that never configured them.
+    // OpenClaw's schema rejects empty include/exclude arrays, so drop them here.
+    const toolFilterInclude = cleanMcpToolNames(server.toolFilter?.include);
+    const toolFilterExclude = cleanMcpToolNames(server.toolFilter?.exclude);
+    if (toolFilterInclude.length > 0 || toolFilterExclude.length > 0) {
+      entry.toolFilter = {
+        ...(toolFilterInclude.length > 0 ? { include: toolFilterInclude } : {}),
+        ...(toolFilterExclude.length > 0 ? { exclude: toolFilterExclude } : {}),
+      };
+    }
+    if (typeof server.supportsParallelToolCalls === 'boolean') {
+      entry.supportsParallelToolCalls = server.supportsParallelToolCalls;
     }
     result[safeServerKey(server.name)] = entry;
   }

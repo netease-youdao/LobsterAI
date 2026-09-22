@@ -22,6 +22,7 @@ import BetterSqlite3 from 'better-sqlite3';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
 import { AgentAvatarSvg, DefaultAgentAvatarIcon, encodeAgentAvatarIcon } from '../shared/agent/avatar';
+import { EXPERT_TEAM_DEFINITIONS } from '../shared/agent/expertTeams';
 import {
   COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
   COWORK_SEARCH_MESSAGE_PAGE_MAX_CONTENT_BYTES,
@@ -30,6 +31,7 @@ import {
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
+import { installExpertTeam } from './libs/expertTeamInstallation';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
 
 // ---------------------------------------------------------------------------
@@ -225,6 +227,52 @@ function insertMessage(
 
 beforeEach(() => {
   setupDb();
+});
+
+test('expert team creation persists one lead and its allowlisted native members', () => {
+  const definition = EXPERT_TEAM_DEFINITIONS[0];
+  const skills = new Set([definition.lead, ...definition.roles].flatMap(role => role.skillIds));
+  const result = installExpertTeam(store, definition.id, 'provider/model', skills);
+  expect(result.lead?.subagentAllowAgentIds).toEqual(result.members.map(member => member.id));
+  expect(store.listAgents()).toHaveLength(definition.roles.length + 1);
+  expect(result.members.every(member => member.model === 'provider/model')).toBe(true);
+  expect(result.lead?.systemPrompt).toContain('context="isolated"');
+});
+
+test('team retries preserve edits and never duplicate a previously saved team', () => {
+  const definition = EXPERT_TEAM_DEFINITIONS[0];
+  const skills = new Set([definition.lead, ...definition.roles].flatMap(role => role.skillIds));
+  const first = installExpertTeam(store, definition.id, 'provider/model', skills);
+  store.updateAgent(first.lead!.id, { name: 'My delivery team' });
+  const retried = installExpertTeam(store, definition.id, 'other/model', skills);
+  expect(retried.lead?.name).toBe('My delivery team');
+  expect(retried.lead?.model).toBe('provider/model');
+  expect(retried.members.map(member => member.id)).toEqual(first.members.map(member => member.id));
+  expect(store.listAgents()).toHaveLength(definition.roles.length + 1);
+});
+
+test('team creation rolls back all members when saving the lead fails', () => {
+  const definition = EXPERT_TEAM_DEFINITIONS[0];
+  const skills = new Set([definition.lead, ...definition.roles].flatMap(role => role.skillIds));
+  const create = store.createAgent.bind(store);
+  const spy = vi.spyOn(store, 'createAgent').mockImplementation(request => {
+    if (request.id === `expert-team-${definition.id}`) throw new Error('Disk full');
+    return create(request);
+  });
+  try {
+    expect(() => installExpertTeam(store, definition.id, '', skills)).toThrow('Disk full');
+    expect(store.listAgents()).toEqual([]);
+  } finally { spy.mockRestore(); }
+});
+
+test('missing dependencies and conflicting IDs never leave partial teams', () => {
+  const definition = EXPERT_TEAM_DEFINITIONS[0];
+  expect(installExpertTeam(store, definition.id, '', new Set()).missingSkillIds.length).toBeGreaterThan(0);
+  expect(store.listAgents()).toEqual([]);
+  store.createAgent({ id: `expert-team-${definition.id}`, name: 'Unrelated agent' });
+  const skills = new Set([definition.lead, ...definition.roles].flatMap(role => role.skillIds));
+  expect(() => installExpertTeam(store, definition.id, '', skills)).toThrow('already in use');
+  expect(store.listAgents()).toHaveLength(1);
 });
 
 test('getSession returns all messages when one has corrupt metadata', () => {

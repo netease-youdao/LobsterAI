@@ -6,10 +6,12 @@ import {
   type AgentLegacyIdentityCleanupResult,
   AgentLegacyIdentityCleanupStatus,
 } from '../../../shared/agent/constants';
+import type { ExpertTeamInstallRequest, ExpertTeamInstallResult } from '../../../shared/agent/teamInstallation';
 import type { AgentManager } from '../../agentManager';
 import type { CoworkStore, CreateAgentRequest, UpdateAgentRequest } from '../../coworkStore';
 import type { IMGatewayManager } from '../../im';
 import type { CoworkEngineRouter } from '../../libs/agentEngine';
+import { installExpertTeam } from '../../libs/expertTeamInstallation';
 import { cleanupLegacyAgentsMdIdentityBlockInWorkspace } from '../../libs/openclawAgentsMdIdentityMigration';
 
 type SyncOpenClawConfig = (options: {
@@ -23,6 +25,8 @@ type SyncOpenClawConfig = (options: {
 
 export interface AgentHandlerDeps {
   getAgentManager: () => AgentManager;
+  getAvailableSkillIds: () => Promise<string[]>;
+  isEngineRunning: () => boolean;
   getCoworkStore: () => CoworkStore;
   getCoworkEngineRouter: () => CoworkEngineRouter;
   getIMGatewayManager: () => IMGatewayManager | null;
@@ -79,6 +83,37 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     resolveDefaultAgentModelRef,
     syncOpenClawConfig,
   } = deps;
+
+  // Serialize install + config delivery. Duplicate clicks/retries reuse saved
+  // agents, including after a gateway failure, without overwriting user edits.
+  let teamInstallQueue: Promise<unknown> = Promise.resolve();
+  ipcMain.handle(AgentIpcChannel.InstallExpertTeam, (_event, request: ExpertTeamInstallRequest) => {
+    const operation = async (): Promise<ExpertTeamInstallResult> => {
+      try {
+        if (!request || typeof request.definitionId !== 'string') throw new Error('Invalid team request');
+        const saved = installExpertTeam(getCoworkStore(), request.definitionId,
+          resolveDefaultAgentModelRef(), new Set(await deps.getAvailableSkillIds()));
+        if (!saved.lead) return { success: false, missingSkillIds: saved.missingSkillIds };
+        const result: ExpertTeamInstallResult = {
+          success: true, leadAgentId: saved.lead.id,
+          memberAgentIds: saved.members.map(member => member.id), runtimeReady: false,
+        };
+        try {
+          const delivery = await syncOpenClawConfig({ reason: 'expert-team-created' });
+          return { ...result, runtimeReady: delivery.success && deps.isEngineRunning(), error: delivery.error };
+        } catch (error) {
+          console.warn('[ExpertTeams] Saved team is awaiting configuration delivery:', error);
+          return result;
+        }
+      } catch (error) {
+        console.error('[ExpertTeams] Could not create team:', error);
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    };
+    const pending = teamInstallQueue.then(operation, operation);
+    teamInstallQueue = pending;
+    return pending;
+  });
 
   ipcMain.handle(AgentIpcChannel.List, async () => {
     try {

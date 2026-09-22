@@ -8,6 +8,7 @@ export const AgentIpcChannel = {
   List: 'agents:list',
   Get: 'agents:get',
   Create: 'agents:create',
+  InstallExpertTeam: 'agents:installExpertTeam',
   Update: 'agents:update',
   Reorder: 'agents:reorder',
   Delete: 'agents:delete',
