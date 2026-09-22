@@ -22,6 +22,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18nService } from '@/services/i18n';
 
+import AgentBrowserPasskeyNotice from './AgentBrowserPasskeyNotice';
 import AgentBrowserTabStrip from './AgentBrowserTabStrip';
 
 interface AgentBrowserInAppPanelProps {
@@ -350,6 +351,29 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
         <div className="shrink-0 truncate border-b border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[11px] text-amber-700 dark:text-amber-300" title={state.error}>
           {state.error}
         </div>
+      ) : null}
+
+      {state?.passkey ? (
+        <AgentBrowserPasskeyNotice
+          key={`${state.passkey.pageId}:${state.passkey.requestId}`}
+          notice={state.passkey}
+          onResolve={async action => {
+            const notice = state.passkey;
+            if (!notice) return false;
+            try {
+              const response = await runAction(() => window.electron.openclaw.browser.resolvePasskey({
+                pageId: notice.pageId,
+                requestId: notice.requestId,
+                action,
+              }));
+              if (!response.success) showToast(i18nService.t('agentBrowserActionFailed'));
+              return response.success;
+            } catch {
+              showToast(i18nService.t('agentBrowserActionFailed'));
+              return false;
+            }
+          }}
+        />
       ) : null}
 
       {state?.credentialSavePrompt ? (

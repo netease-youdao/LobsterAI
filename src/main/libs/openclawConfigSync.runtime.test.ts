@@ -2,6 +2,7 @@ import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { pathToFileURL } from 'url';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { AgentId } from '../../shared/agent/constants';
@@ -9,6 +10,7 @@ import {
   BrowserCredentialLoginTool,
   BrowserCredentialMcpServer,
 } from '../../shared/browserCredentials/constants';
+import { WeixinPlugin } from '../../shared/im/weixin';
 import { OpenClawSkillReviewMode } from '../../shared/openclawEngine/constants';
 import { OpenClawProviderId, ProviderName } from '../../shared/providers';
 import { DEFAULT_DISCORD_OPENCLAW_CONFIG, DEFAULT_QQ_CONFIG, DiscordDmPolicy } from '../im/types';
@@ -475,6 +477,155 @@ describe('OpenClawConfigSync runtime config output', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.bindings).toContainEqual({ agentId: 'main', match: { channel: OpenClawQQPlugin.Channel, accountId: '*' } });
   });
+
+  test.each([
+    { appId: 'cli_incomplete', appSecret: '' },
+    { appId: '', appSecret: 'incomplete-secret' },
+  ])('keeps Feishu account secrets aligned after an incomplete instance: $appId', async incomplete => {
+    const instances = [
+      { ...incomplete, instanceId: 'incomple-1111-2222-3333-444444444444' },
+      { appId: 'cli_working', appSecret: 'working-secret', instanceId: 'working1-1111-2222-3333-444444444444' },
+    ].map(instance => ({ ...instance, enabled: true, instanceName: instance.instanceId }));
+    const sync = await createSync({ getFeishuInstances: () => instances });
+    expect(sync.sync('feishu-secret-account-alignment').ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const secretEnv = sync.collectSecretEnvVars();
+    for (const instance of instances.filter(instance => instance.appId)) {
+      const account = config.channels.feishu.accounts[instance.instanceId.slice(0, 8)];
+      const envName = account.appSecret.slice(2, -1);
+      expect(secretEnv[envName]).toBe(instance.appSecret);
+    }
+    expect(instances.map(instance => instance.appSecret)).toEqual([incomplete.appSecret, 'working-secret']);
+  });
+
+  test.runIf(fs.existsSync(path.resolve('vendor/openclaw-runtime/current/dist/plugin-sdk/routing.js')))(
+    'routes multiple Feishu accounts with the pinned SDK and preserves explicit agent precedence',
+    async () => {
+      const firstInstanceId = '507cc76b-1111-2222-3333-444444444444';
+      const secondInstanceId = '936657e5-1111-2222-3333-444444444444';
+      const platformAgentBindings: Record<string, string> = {};
+      const sync = await createSync({
+        getFeishuInstances: () => [firstInstanceId, secondInstanceId].map(instanceId => ({
+          enabled: true, appId: `cli_${instanceId.slice(0, 8)}`, appSecret: 'fixture-secret',
+          instanceId, instanceName: instanceId, dmPolicy: 'open', groupPolicy: 'allowlist',
+        })),
+        getIMSettings: () => ({ platformAgentBindings }),
+        getAgents: () => ['stockexpert', 'worker'].map(id => ({
+          id, name: id, enabled: true, model: 'openai/gpt-test', skillIds: [],
+        })),
+      });
+      const sdkUrl = pathToFileURL(path.resolve('vendor/openclaw-runtime/current/dist/plugin-sdk/routing.js')).href;
+      const configSdkUrl = pathToFileURL(path.resolve('vendor/openclaw-runtime/current/dist/plugin-sdk/config-runtime.js')).href;
+      const resolveRoutes = () => {
+        // Optional source-backed integration audit of the canonical writer and Doctor.
+        const roundtripSource = process.env.OPENCLAW_ROUTING_ROUNDTRIP_SOURCE;
+        const sourcePreload = roundtripSource
+          ? ['--import', pathToFileURL(path.join(roundtripSource, 'scripts/tsx.mjs')).href]
+          : [];
+        const result = spawnSync(process.execPath, [...sourcePreload, '--input-type=module', '-e', `
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          import path from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          import { resolveAgentRoute } from ${JSON.stringify(sdkUrl)};
+          import { getRuntimeConfig, setRuntimeConfigSnapshot } from ${JSON.stringify(configSdkUrl)};
+          const cfg = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+          setRuntimeConfigSnapshot(cfg);
+          const route = accountId => resolveAgentRoute({
+            cfg: getRuntimeConfig(), channel: 'feishu', accountId, peer: { kind: 'direct', id: 'fixture-user' },
+          });
+          const routes = Object.keys(cfg.channels.feishu.accounts).map(accountId => {
+            const { agentId, matchedBy } = route(accountId);
+            return { accountId, agentId, matchedBy };
+          });
+          const source = process.env.OPENCLAW_ROUTING_ROUNDTRIP_SOURCE;
+          if (source) {
+            const fromSource = relative => import(pathToFileURL(path.join(source, relative)).href);
+            const { createConfigIO } = await fromSource('src/config/io.ts');
+            const { applyLegacyDoctorMigrations } = await fromSource('src/commands/doctor/shared/legacy-config-compat.ts');
+            const io = createConfigIO({ configPath: process.argv[1], env: process.env,
+              pluginValidation: 'core-only', shellEnvFallback: 'defer', observe: false });
+            const expectedBindings = structuredClone(cfg.bindings);
+            for (const stage of ['canonical-write', 'doctor-legacy-write']) {
+              const migrated = stage === 'doctor-legacy-write'
+                ? applyLegacyDoctorMigrations({ ...cfg, gateway: { ...cfg.gateway, reload: { mode: 'hot' } } })
+                : null;
+              const candidate = migrated?.next ?? cfg;
+              assert.deepEqual(candidate.bindings, expectedBindings, stage + ': migration retained bindings');
+              await io.writeConfigFile(candidate, { skipPluginValidation: true,
+                skipRuntimeSnapshotRefresh: true, skipOutputLogs: true, auditOrigin: 'doctor' });
+              const snapshot = await io.readConfigFileSnapshot();
+              assert.equal(snapshot.valid, true, JSON.stringify(snapshot.issues));
+              const representations = {
+                persisted: JSON.parse(fs.readFileSync(process.argv[1], 'utf8')),
+                sourceSnapshot: snapshot.sourceConfig,
+                resolvedSnapshot: snapshot.config,
+                loaded: io.loadConfig(),
+              };
+              for (const [name, value] of Object.entries(representations)) {
+                assert.deepEqual(value.bindings, expectedBindings, stage + ':' + name + ': bindings retained');
+                setRuntimeConfigSnapshot(value);
+                const resolved = Object.keys(cfg.channels.feishu.accounts).map(accountId => {
+                  const { agentId, matchedBy } = route(accountId);
+                  return { accountId, agentId, matchedBy };
+                });
+                assert.deepEqual(resolved, routes, stage + ':' + name + ': route unchanged');
+              }
+              if (process.env.OPENCLAW_ROUTING_ROUNDTRIP_REPORT) {
+                fs.appendFileSync(process.env.OPENCLAW_ROUTING_ROUNDTRIP_REPORT, JSON.stringify({
+                  stage, routes, bindings: expectedBindings, representations: Object.keys(representations),
+                  migrationChanges: migrated?.changes ?? [], snapshotValid: snapshot.valid,
+                }) + '\\n');
+              }
+            }
+          }
+          // Negative control reproduces row 4's ownerless multi-agent error.
+          // This is a fixture mutation, not evidence that config sync loses bindings.
+          // The live config accessor must also observe an immutable replacement.
+          setRuntimeConfigSnapshot({ ...cfg, bindings: [] });
+          let missingOwner;
+          try { route('936657e5'); } catch (error) { missingOwner = error.name; }
+          console.log(JSON.stringify({ routes, missingOwner }));
+        `, configPath], {
+          encoding: 'utf8', timeout: roundtripSource ? 90_000 : 15_000,
+          ...(roundtripSource ? { cwd: roundtripSource, env: {
+            PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR,
+            HOME: tmpDir, USERPROFILE: tmpDir, APPDATA: path.join(tmpDir, 'appdata'),
+            TEMP: tmpDir, TMP: tmpDir, TMPDIR: tmpDir, XDG_CONFIG_HOME: path.join(tmpDir, 'config'),
+            OPENCLAW_HOME: tmpDir, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_GATEWAY_TOKEN: 'gateway-token', LOBSTER_APIKEY_OPENAI: 'sk-test', ...sync.collectSecretEnvVars(),
+            OPENCLAW_ROUTING_ROUNDTRIP_SOURCE: roundtripSource,
+            OPENCLAW_ROUTING_ROUNDTRIP_REPORT: process.env.OPENCLAW_ROUTING_ROUNDTRIP_REPORT,
+          } } : {}),
+        });
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.status, result.stderr).toBe(0);
+        return JSON.parse(result.stdout.trim().split('\n').at(-1)!);
+      };
+
+      expect(sync.sync('feishu-default-owner').ok).toBe(true);
+      expect(resolveRoutes()).toEqual({
+        routes: [
+          { accountId: '507cc76b', agentId: AgentId.Main, matchedBy: 'binding.channel' },
+          { accountId: '936657e5', agentId: AgentId.Main, matchedBy: 'binding.channel' },
+        ],
+        missingOwner: 'AgentSelectionRequiredError',
+      });
+
+      platformAgentBindings[`feishu:${firstInstanceId}`] = 'stockexpert';
+      platformAgentBindings.feishu = 'worker';
+      expect(sync.sync('feishu-explicit-owner')).toMatchObject({ ok: true, bindingsChanged: true });
+      expect(resolveRoutes()).toEqual({
+        routes: [
+          { accountId: '507cc76b', agentId: 'stockexpert', matchedBy: 'binding.account' },
+          { accountId: '936657e5', agentId: 'worker', matchedBy: 'binding.channel' },
+        ],
+        missingOwner: 'AgentSelectionRequiredError',
+      });
+      expect(platformAgentBindings).toEqual({ [`feishu:${firstInstanceId}`]: 'stockexpert', feishu: 'worker' });
+    },
+    process.env.OPENCLAW_ROUTING_ROUNDTRIP_SOURCE ? 180_000 : 30_000,
+  );
 
   test('keys OpenClaw skill entries by frontmatter name, not directory id', async () => {
     const sync = await createSync({
@@ -3304,6 +3455,36 @@ describe('OpenClawConfigSync runtime config output', () => {
     const env = sync.collectSecretEnvVars();
     expect(env).not.toHaveProperty('LOBSTER_NIM_TOKEN');
     expect(env.LOBSTER_NIM_TOKEN_1).toBe('work-token');
+  });
+
+  test('keeps unused Weixin disabled across config rewrites and cold starts, with temporary QR activation', async () => {
+    let enabled = false;
+    let qrActive = false;
+    const deps = {
+      getWeixinConfig: () => ({ enabled, accountId: 'saved-account', dmPolicy: 'open', allowFrom: [] }),
+      isWeixinQrLoginActive: () => qrActive,
+      getUserPlugins: () => [{ pluginId: WeixinPlugin.Id, enabled: true }],
+    };
+    const sync = await createSync(deps);
+    const read = () => JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    sync.sync('unused-weixin');
+    expect(read().plugins.entries[WeixinPlugin.Id].enabled).toBe(false);
+    qrActive = true;
+    sync.sync('qr-login');
+    expect(read().plugins.entries[WeixinPlugin.Id].enabled).toBe(true);
+    expect(read().channels[WeixinPlugin.Id].enabled).toBe(false);
+    enabled = true;
+    qrActive = false;
+    sync.sync('login-complete');
+    expect(read().plugins.entries[WeixinPlugin.Id].enabled).toBe(true);
+    expect(read().channels[WeixinPlugin.Id].enabled).toBe(true);
+    enabled = false;
+    sync.sync('disable-weixin');
+    expect(read().plugins.entries[WeixinPlugin.Id].enabled).toBe(false);
+    const restarted = await createSync(deps);
+    restarted.sync('cold-start');
+    expect(read().plugins.entries[WeixinPlugin.Id].enabled).toBe(false);
+    expect(read().channels[WeixinPlugin.Id].enabled).toBe(false);
   });
 
   test('writes weixin channel config using dmPolicy and allowFrom instead of unsupported accountId', async () => {

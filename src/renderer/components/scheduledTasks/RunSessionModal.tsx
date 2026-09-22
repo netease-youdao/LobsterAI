@@ -2,6 +2,7 @@ import { ArrowPathIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import type { ScheduledTask, ScheduledTaskRun } from '../../../scheduledTask/types';
 import { collectSessionArtifacts, loadDetectedFileArtifact } from '../../services/artifactDetection';
 import { i18nService } from '../../services/i18n';
 import { type Artifact, PREVIEWABLE_ARTIFACT_TYPES } from '../../types/artifact';
@@ -14,6 +15,7 @@ import {
   getTurnMessageIds,
 } from '../cowork/messageDisplayUtils';
 import UserMessageItem from '../cowork/UserMessageItem';
+import RunDeliveryNotice from './RunDeliveryNotice';
 import { formatDateTime, stripCronMetadataPrefix } from './utils';
 
 interface RunSessionModalProps {
@@ -25,6 +27,8 @@ interface RunSessionModalProps {
   sessionKey?: string | null;
   runSummary?: string | null;
   runError?: string | null;
+  run?: ScheduledTaskRun;
+  task?: ScheduledTask;
   onClose: () => void;
 }
 
@@ -63,6 +67,8 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({
   sessionKey,
   runSummary,
   runError,
+  run,
+  task,
   onClose,
 }) => {
   const [session, setSession] = useState<CoworkSession | null>(null);
@@ -291,6 +297,7 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto">
+          {run && <RunDeliveryNotice key={run.id} run={run} task={task} />}
           {loading && (
             <div className="flex flex-col items-center justify-center py-16 gap-3">
               <svg className="w-5 h-5 animate-spin text-secondary" viewBox="0 0 24 24" fill="none">

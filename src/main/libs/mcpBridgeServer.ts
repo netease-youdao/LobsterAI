@@ -30,6 +30,7 @@ export type AskUserRequest = {
   expiresAt: number;
   sessionKey?: string;
   questions: Array<{
+    id?: string;
     question: string;
     header?: string;
     title?: string;
@@ -48,6 +49,7 @@ export type AskUserResponse = {
   behavior: 'allow' | 'deny';
   answers?: Record<string, string>;
   reason?: typeof AskUserResponseReason[keyof typeof AskUserResponseReason];
+  skippedQuestionIds?: string[];
 };
 
 type PendingAskUser = {

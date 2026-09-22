@@ -4,7 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
 
-import { type OpenClawCompatibilityRepairReport, OpenClawRepairPhase, OpenClawRepairPluginSource } from '../../shared/openclawEngine/repair';
+import {
+  OPENCLAW_PLUGIN_SKILLS_DIRECTORY, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST,
+  type OpenClawCompatibilityRepairReport, OpenClawRepairPhase, OpenClawRepairPluginSource,
+  type OpenClawRepairSnapshotManifest,
+} from '../../shared/openclawEngine/repair';
+import { isMissingUnaliasedPluginPath, isPreviousManagedPluginPath } from './openclawPluginRepairPaths';
 
 type Config = Record<string, unknown>;
 export interface RepairInstallRecord {
@@ -146,41 +151,64 @@ export async function repairOrphanMemoryVectors(
 async function snapshotState(options: CompatibilityRepairOptions, report: OpenClawCompatibilityRepairReport): Promise<void> {
   const snapshotRoot = path.join(options.backupDir, 'original');
   if (fs.existsSync(snapshotRoot)) throw new Error('Repair snapshot already exists; start a new repair run.');
+  const pluginSkillsRoot = path.join(options.stateDir, OPENCLAW_PLUGIN_SKILLS_DIRECTORY);
+  const manifest: OpenClawRepairSnapshotManifest = {
+    version: 1, generatedPluginSkillLinks: [],
+    restoreInstructions: 'Generated plugin skill links are recorded without copying their targets. After restoring, run the bundled openclaw skills list or start an agent session to rebuild them from current plugin metadata.',
+  };
   async function visit(directory: string): Promise<void> {
     const destination = path.join(snapshotRoot, path.relative(options.stateDir, directory));
     fs.mkdirSync(destination, { recursive: true, mode: 0o700 });
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const source = path.join(directory, entry.name);
       const target = path.join(destination, entry.name);
-      if (entry.isSymbolicLink()) {
-        const relative = path.relative(options.stateDir, source);
-        if (entry.name.endsWith('.sqlite') || /^(?:state|agents|memory)(?:[/\\]|$)/.test(relative)) {
-          throw new Error(`Repair cannot back up database state through a symbolic link: ${source}`);
-        }
-        // Preserve links as links; never walk into another profile or project.
-        // Windows npm host links are directory junctions. Recreating them as
-        // file symlinks would unnecessarily require Developer Mode/admin rights.
-        let linkType: fs.symlink.Type | undefined;
-        if (process.platform === 'win32') {
-          try { linkType = fs.statSync(source).isDirectory() ? 'junction' : 'file'; } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      try {
+        if (entry.isSymbolicLink()) {
+          const relative = path.relative(options.stateDir, source);
+          if (entry.name.endsWith('.sqlite') || /^(?:state|agents|memory)(?:[/\\]|$)/.test(relative)) {
+            throw new Error(`Repair cannot back up database state through a symbolic link: ${source}`);
+          }
+          // Only direct links in OpenClaw's generated index are regenerable.
+          // Do not stat/follow them: a prior installation's target can be absent,
+          // and recreating a dangling link on Windows requires extra privileges.
+          if (directory === pluginSkillsRoot) {
+            manifest.generatedPluginSkillLinks.push({ path: relative, target: fs.readlinkSync(source) });
+            continue;
+          }
+          // Preserve links as links; never walk into another profile or project.
+          // Windows npm host links are directory junctions. Recreating them as
+          // file symlinks would unnecessarily require Developer Mode/admin rights.
+          let linkType: fs.symlink.Type | undefined;
+          if (process.platform === 'win32') {
+            try { linkType = fs.statSync(source).isDirectory() ? 'junction' : 'file'; } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            }
+          }
+          fs.symlinkSync(fs.readlinkSync(source), target, linkType);
+        } else if (entry.isDirectory()) {
+          await visit(source);
+        } else if (entry.isFile()) {
+          if (/\.sqlite-(?:wal|shm|journal)$/.test(entry.name) && fs.existsSync(source.replace(/-(?:wal|shm|journal)$/, ''))) continue;
+          if (entry.name.endsWith('.sqlite') && fs.statSync(source).size > 0) {
+            await backupDatabase(source, options, report);
+          } else {
+            fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+            fs.chmodSync(target, 0o600 | (fs.statSync(source).mode & 0o100));
           }
         }
-        fs.symlinkSync(fs.readlinkSync(source), target, linkType);
-      } else if (entry.isDirectory()) {
-        await visit(source);
-      } else if (entry.isFile()) {
-        if (/\.sqlite-(?:wal|shm|journal)$/.test(entry.name) && fs.existsSync(source.replace(/-(?:wal|shm|journal)$/, ''))) continue;
-        if (entry.name.endsWith('.sqlite') && fs.statSync(source).size > 0) {
-          await backupDatabase(source, options, report);
-        } else {
-          fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
-          fs.chmodSync(target, 0o600 | (fs.statSync(source).mode & 0o100));
-        }
+      } catch (error) {
+        report.failurePath ??= source;
+        throw error;
       }
     }
   }
   await visit(options.stateDir);
+  const manifestPath = path.join(options.backupDir, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST);
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), { flag: 'wx', mode: 0o600 });
+  report.backups.push(manifestPath);
+  if (manifest.generatedPluginSkillLinks.length) {
+    report.changes.push(`Recorded ${manifest.generatedPluginSkillLinks.length} generated plugin skill links for reconstruction from current plugin metadata.`);
+  }
   report.changes.push('Created a consistent snapshot of OpenClaw state before Doctor repair.');
 }
 
@@ -217,13 +245,20 @@ async function repairPlugins(options: CompatibilityRepairOptions, report: OpenCl
       && record.installPath === plugin.root && record.sourcePath === plugin.root;
     if (!isPriorRepair && record.source !== OpenClawRepairPluginSource.Npm) continue;
     // A matching ID alone does not make a user plugin a bundled plugin.
-    if (!isPriorRepair && record.resolvedName !== plugin.packageName && record.spec !== plugin.packageName
-      && !record.spec?.startsWith(`${plugin.packageName}@`)) continue;
+    const packageIdentities = [record.resolvedName, record.spec, record.resolvedSpec]
+      .filter((value): value is string => typeof value === 'string' && value.length > 0);
+    if (!isPriorRepair && (!packageIdentities.length || !packageIdentities.every(value =>
+      value === plugin.packageName || value.startsWith(`${plugin.packageName}@`)))) continue;
     if (record.installPath && !isPriorRepair) {
-      // External/user-managed installs are outside this repair's backup scope.
-      if (!path.resolve(record.installPath).startsWith(path.resolve(options.stateDir) + path.sep)) continue;
-      assertOwnedRepairPath(options.stateDir, record.installPath);
-      try { await owners.validatePlugin(plugin.id, record.installPath); continue; } catch { /* restore the shipped payload */ }
+      if (path.resolve(record.installPath).startsWith(path.resolve(options.stateDir) + path.sep)) {
+        assertOwnedRepairPath(options.stateDir, record.installPath);
+        try { await owners.validatePlugin(plugin.id, record.installPath); continue; } catch { /* restore the shipped payload */ }
+      } else {
+        // Only replace the ledger entry for a missing managed install from a
+        // previous profile. Never mutate external files or adopt custom installs.
+        if (!isPreviousManagedPluginPath({ ...options, installPath: record.installPath, pluginId: plugin.id, packageName: plugin.packageName })
+          || !isMissingUnaliasedPluginPath(record.installPath)) continue;
+      }
     }
     const manifest = readConfig(path.join(plugin.root, 'package.json'));
     const pluginManifest = readConfig(path.join(plugin.root, 'openclaw.plugin.json'));
@@ -263,6 +298,8 @@ export async function repairOpenClawCompatibility(options: CompatibilityRepairOp
     report.success = true;
   } catch (error) {
     report.error = error instanceof Error ? error.message : String(error);
+    const failurePath = (error as NodeJS.ErrnoException)?.path;
+    if (typeof failurePath === 'string') report.failurePath ??= failurePath;
   }
   fs.writeFileSync(path.join(options.backupDir, `${options.phase}-report.json`), JSON.stringify(report, null, 2), { mode: 0o600 });
   return report;

@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteRunStatus } from '../../shared/remote/constants';
+import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteInputCapability } from '../../shared/remote/input';
 import { RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
@@ -35,7 +36,7 @@ async function fixture() {
     throw new Error(`Unexpected request ${path}`);
   });
   const bridge: any = new RemoteBridge({ store, identity: { installationId: 'install', deviceKey: 'test', databaseId: 'db' },
-    runSessionTransaction: operation => store.transaction(operation), getOwner: () => owner, getApiBaseUrl: () => 'https://example.com', request,
+    runSessionTransaction: operation => store.transaction(operation), getOwner: () => owner, getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => 'https://example.com', request,
     metadata: { name: 'PC', hostName: 'pc', instanceLabel: 'default', platform: 'macos', appVersion: '1' },
     prepare: vi.fn(), execute: vi.fn(), onAccountChange: vi.fn(),
     input: { models: { publish: vi.fn(async () => {}) } as any, preparations: { prepare: vi.fn() } as any },

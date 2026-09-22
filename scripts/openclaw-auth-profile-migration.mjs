@@ -31,8 +31,11 @@ export async function migrateAuthProfilesBeforeStartup({ stateDir, configPath, e
       }
       // Inline credentials from old releases are invalid under the new schema.
       // Only the auth owner may repair them; unrelated core errors still block.
-      if (!snapshot.valid && snapshot.issues.some(issue => !/^auth(?:\.|$)/.test(issue.path))) {
-        throw new Error('Auth migration cannot repair unrelated config errors.');
+      const unrelatedPaths = [...new Set(snapshot.issues
+        .filter(issue => !/^auth(?:\.|$)/.test(issue.path)).map(issue => issue.path || '<root>'))].sort();
+      if (!snapshot.valid && unrelatedPaths.length) {
+        // Schema messages can quote credential values; report only field paths.
+        throw new Error(`Auth migration cannot repair unrelated config errors at: ${unrelatedPaths.join(', ')}.`);
       }
       const cfg = structuredClone(snapshot.parsed);
       const originalConfig = structuredClone(cfg);

@@ -74,6 +74,12 @@ function setupDb(): void {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS subagent_runs (
+      id TEXT PRIMARY KEY,
+      parent_session_id TEXT,
+      child_cowork_session_id TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS cowork_messages (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
@@ -1629,4 +1635,41 @@ test('session visibility is applied before pagination, counts, search and recent
   });
   expect(store.listRecentCwds(8, owner)).toEqual(['/mine', '/tmp']);
   expect(store.canReadSession('quarantined', owner)).toBe(false);
+});
+
+test('sidebar hides historical self-spawns while preserving expert work, forks and direct access', () => {
+  const parent = store.createSession('parent', '/tmp', '', 'local', [], 'main');
+  const self = store.createSession('child self', '/tmp', '', 'local', [], 'main');
+  const expert = store.createSession('child expert', '/tmp', '', 'local', [], 'writer');
+  const fork = store.createSession('child fork', '/tmp', '', 'local', [], 'main');
+  for (const child of [self, expert, fork]) {
+    db.prepare('UPDATE cowork_sessions SET parent_session_id = ? WHERE id = ?').run(parent.id, child.id);
+  }
+  for (const child of [self, expert]) {
+    db.prepare('INSERT INTO subagent_runs VALUES (?, ?, ?)').run(child.id, parent.id, child.id);
+  }
+  expect(store.listSessions(100).map(session => session.id)).toEqual(expect.arrayContaining([parent.id, expert.id, fork.id]));
+  expect(store.listSessions(100).map(session => session.id)).not.toContain(self.id);
+  expect(store.countSessions()).toBe(3);
+  expect(store.countSessions('main')).toBe(2);
+  expect(store.searchSessions({ query: 'child' }).map(session => session.id)).not.toContain(self.id);
+  expect(store.searchSessions({ query: 'child', agentId: 'main' }).map(session => session.id)).toEqual([fork.id]);
+  expect(store.countSearchSessions({ query: 'child' })).toBe(2);
+  expect(store.countSearchSessions({ query: 'child', agentId: 'main' })).toBe(1);
+  expect(store.getSession(self.id)?.id).toBe(self.id);
+
+  const owner = { userId: 'a', scopeKey: 'personal' };
+  store.remote.transaction(() => {
+    for (const session of [parent, self, expert]) {
+      store.remote.assignNew(session.id, owner, 'local_create');
+    }
+    store.remote.assignNew(fork.id, { userId: 'b', scopeKey: 'personal' }, 'local_create');
+  });
+  expect(store.countSessions(undefined, owner)).toBe(2);
+  expect(store.countSessions('main', owner)).toBe(1);
+  expect(store.countSessions(undefined, null)).toBe(0);
+  expect(store.searchSessions({ query: 'child', limit: 1 }, owner).map(session => session.id)).toEqual([expert.id]);
+  expect(store.countSearchSessions({ query: 'child' }, owner)).toBe(1);
+  expect(store.canReadSession(self.id, owner)).toBe(true);
+  expect(store.canReadSession(fork.id, owner)).toBe(false);
 });

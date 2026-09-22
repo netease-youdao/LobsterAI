@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { RemoteOwner } from '../../shared/remote/constants';
+import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteApiError, RemoteBridge } from './remoteBridge';
 import { type ProjectionRecord, RemoteStore } from './remoteStore';
 
@@ -95,7 +96,7 @@ function fixture() {
   });
   const bridge: any = new RemoteBridge({ store, identity: { installationId: 'instance', deviceKey: 'key', databaseId: 'db' },
     runSessionTransaction: <T>(operation: () => T) => store.transaction(operation),
-    getOwner: () => loggedIn, getApiBaseUrl: () => 'https://example.com', request,
+    getOwner: () => loggedIn, getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => 'https://example.com', request,
     metadata: { name: 'Desktop', hostName: 'host', platform: 'macos', appVersion: '1', instanceLabel: 'default' },
     prepare: vi.fn(), execute: vi.fn(), onAccountChange: vi.fn() });
   bridge.owner = owner; bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1' }; bridge.generation = '1'; bridge.sameAccountAccess = true;

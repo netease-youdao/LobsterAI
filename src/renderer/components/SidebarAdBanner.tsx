@@ -1,7 +1,7 @@
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import React from 'react';
 
-import { getPortalInvitationUrl } from '../services/endpoints';
+import { getClientBannerTargetUrl } from '../services/endpoints';
 import { i18nService } from '../services/i18n';
 import type { ClientBanner } from './sidebarAdBannerState';
 
@@ -23,7 +23,7 @@ const SidebarAdBanner: React.FC<SidebarAdBannerProps> = ({
 
   const openBanner = async () => {
     await window.electron.shell.openExternal(
-      banner.linkUrl || getPortalInvitationUrl(),
+      getClientBannerTargetUrl(banner.linkUrl, banner.activityDescription),
     );
   };
 

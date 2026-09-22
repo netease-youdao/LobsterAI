@@ -262,12 +262,15 @@ export class McpRuntime {
         })),
         resolve: response => {
           const answers: Record<string, string> = Object.create(null);
+          const skippedQuestionIds: string[] = [];
           if (response.action === 'answer') snapshot.questions.forEach((question, index) => {
             const values = response.answers[`q_${index}`] ?? [];
             if (values.length) answers[question.question] = question.multiSelect ? values.join('|||') : values[0];
+            else skippedQuestionIds.push(question.id ?? `question-${index + 1}`);
           });
           const applied = this.resolveAskUser(request.requestId, response.action === 'answer'
-            ? { behavior: 'allow', answers } : { behavior: 'deny' });
+            ? { behavior: 'allow', answers, ...(skippedQuestionIds.length ? { skippedQuestionIds } : {}) }
+            : { behavior: 'deny' });
           if (!applied || !pending.terminal) return { kind: 'known_not_applied', reason: 'QUESTION_UNAVAILABLE' };
           if (pending.terminal.reason) return { kind: 'known_not_applied', status: questionStatus(pending.terminal), reason: 'QUESTION_UNAVAILABLE' };
           return { kind: 'confirmed', status: questionStatus(pending.terminal),

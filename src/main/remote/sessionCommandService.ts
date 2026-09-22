@@ -47,7 +47,10 @@ interface InputFence {
   gatewayBootId?: string;
   gatewayProcessPid?: number;
   remoteRunId?: string;
+  syncTargetId?: string;
 }
+
+const inputOperationKey = (operationId: string, targetId?: string): string => `inputOperation:${targetId ? `${targetId}:` : ''}${operationId}`;
 
 
 /** All local/mobile submissions pass this account fence and per-session control lane. */
@@ -103,7 +106,7 @@ export class SessionCommandService {
             this.store.updateSession(sessionId, { modelOverride: config.modelOverride,
               thinkingLevel: parseModelThinkingLevel(config.thinkingLevel) || '' }, { touchUpdatedAt: false });
             this.store.remote.inputVersion(sessionId); this.recordCurrentInputModel(sessionId);
-            this.store.remote.put(`inputOperation:${fence.operationId}`, { phase: 'reconciled', afterVersion: this.store.remote.inputVersion(sessionId) });
+            this.store.remote.put(inputOperationKey(fence.operationId, fence.syncTargetId), { phase: 'reconciled', afterVersion: this.store.remote.inputVersion(sessionId) });
             this.store.remote.remove(`inputFence:${sessionId}`);
             changed = true;
             // This durable marker precedes dispatch and is removed before any engine send.
@@ -135,20 +138,21 @@ export class SessionCommandService {
   }
 
   /** Only a new-format fence written before the real dispatch boundary proves no RPC was sent. */
-  private clearPreparedInput(sessionId: string, operationId: string): boolean {
+  private clearPreparedInput(sessionId: string, operationId: string, expected?: { syncTargetId: string | undefined }): boolean {
     const fence = this.store.remote.get<InputFence>(`inputFence:${sessionId}`);
     if (fence?.operationId !== operationId || fence.schemaVersion !== 2
+      || expected && fence.syncTargetId !== expected.syncTargetId
       || fence.phase !== RemoteInputOperationPhase.Prepared || fence.gatewayProcessPid
       || fence.preparedProcessId !== inputPreparationProcessId) return false;
     this.store.remote.transaction(() => {
-      this.store.remote.put(`inputOperation:${operationId}`, { phase: RemoteInputOperationPhase.KnownNotApplied });
+      this.store.remote.put(inputOperationKey(operationId, fence.syncTargetId), { phase: RemoteInputOperationPhase.KnownNotApplied });
       this.store.remote.remove(`inputFence:${sessionId}`);
     });
     remoteDiagnostics.record('fence.released');
     return true;
   }
 
-  private input: { preparations: InputPreparationService; models: RemoteModelCatalog; getDeviceId(): string | undefined } | null = null;
+  private input: { preparations: InputPreparationService; models: RemoteModelCatalog; getDeviceId(): string | undefined; getTargetId?(): string | null } | null = null;
   configureInput(input: NonNullable<SessionCommandService['input']>): void { this.input = input; }
   recordCurrentInputModel(sessionId: string): Record<string, unknown> | null {
     const actor = this.getOwner(); const deviceId = this.input?.getDeviceId();
@@ -398,14 +402,21 @@ export class SessionCommandService {
       assertRemoteExecutionPermit();
       if (preparedInput) {
         if (this.configurationLane.has(localId) || this.submitting.has(localId) || this.store.remote.get(`inputFence:${localId}`)) throw new RemoteInputError(RemoteInputReason.Busy);
+        const syncTargetId = entry.targetId ?? preparedInput.targetId ?? this.input!.getTargetId?.() ?? undefined;
+        const sameInputTarget = (): boolean => this.input!.getDeviceId() === preparedInput.deviceId
+          && (!this.input!.getTargetId || (this.input!.getTargetId() ?? undefined) === syncTargetId);
+        if (!sameInputTarget()) throw new RemoteInputError(RemoteInputReason.Stale);
         this.configurationLane.set(localId, entry.command.commandId);
         try {
           const options = await this.input!.preparations.executionOptions(preparedInput, assertRemoteExecutionPermit);
           assertRemoteExecutionPermit();
+          if (!sameInputTarget()) throw new RemoteInputError(RemoteInputReason.Stale);
+          const inputModel = this.inputModel(preparedInput);
           const beforeVersion = this.store.remote.inputVersion(localId);
           if (entry.command.type === 'send_message' && request.expectedInputVersion !== beforeVersion) throw new RemoteInputError(RemoteInputReason.Version);
           if (entry.command.type === 'send_message') {
             this.store.remote.put(`inputFence:${localId}`, { schemaVersion: 2, preparedProcessId: inputPreparationProcessId, operationId: entry.command.commandId, phase: RemoteInputOperationPhase.Prepared, beforeVersion, remoteRunId: entry.runId,
+              ...(syncTargetId ? { syncTargetId } : {}),
               target: { model: options.modelOverride, thinkingLevel: options.thinkingLevel || null }, gatewayBootId: '', gatewayProcessPid: null });
             await this.runtime.patchSession(localId, { model: options.modelOverride, thinkingLevel: options.thinkingLevel || null });
             // A confirmed patch remains a fact even if the send permit expires during the await.
@@ -413,15 +424,21 @@ export class SessionCommandService {
             this.store.updateSession(localId, { modelOverride: options.modelOverride, thinkingLevel: parseModelThinkingLevel(options.thinkingLevel) || '' }, { touchUpdatedAt: false });
           }
           const afterVersion = this.store.remote.inputVersion(localId);
-          const inputModel = this.inputModel(preparedInput);
           this.store.remote.transaction(() => {
-            this.store.remote.put(`inputOperation:${entry.command.commandId}`, { phase: 'model_applied', beforeVersion, afterVersion });
-            this.store.remote.put(`inputModel:${localId}`, inputModel);
-            this.store.remote.put(`inputRun:${entry.runId}`, { input: preparedInput.resolvedInput, inputModel });
-            this.store.remote.remove(`inputFence:${localId}`);
+            if (entry.command.type === 'send_message') {
+              const fence = this.store.remote.get<InputFence>(`inputFence:${localId}`);
+              if (fence?.operationId !== entry.command.commandId || fence.syncTargetId !== syncTargetId) throw new RemoteInputError(RemoteInputReason.Busy);
+              this.store.remote.remove(`inputFence:${localId}`);
+            }
+            this.store.remote.put(inputOperationKey(entry.command.commandId, syncTargetId), { phase: 'model_applied', beforeVersion, afterVersion });
+            // The gateway patch is a local fact; its old service references are not the new target's projection.
+            if (sameInputTarget()) {
+              this.store.remote.put(`inputModel:${localId}`, inputModel);
+              this.store.remote.put(`inputRun:${entry.runId}`, { input: preparedInput.resolvedInput, inputModel });
+            }
             this.store.remote.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(localId);
           });
-          if (!stillPermitted()) throw new RemoteInputError(RemoteInputReason.Expired);
+          if (!sameInputTarget() || !stillPermitted()) throw new RemoteInputError(RemoteInputReason.Expired);
           assertRemoteExecutionPermit();
           const submitted = entry.command.type === 'create_session'
             ? await this.startHandler!({ ...options, cwd: fixedCwd, agentId: fixedAgentId })
@@ -431,7 +448,7 @@ export class SessionCommandService {
         } catch (error) {
           if (sameOwner(entry.owner, this.getOwner())) {
             this.store.remote.assertActor(localId, entry.owner);
-            this.clearPreparedInput(localId, entry.command.commandId);
+            this.clearPreparedInput(localId, entry.command.commandId, { syncTargetId });
           }
           throw error;
         } finally { this.configurationLane.delete(localId); }

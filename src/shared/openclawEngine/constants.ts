@@ -38,6 +38,7 @@ export type OpenClawSkillReviewMode =
 export const OpenClawGatewayRepairErrorCode = {
   Busy: 'busy',
   ConfigApplyPending: 'config_apply_pending',
+  SnapshotFailed: 'snapshot_failed',
 } as const;
 
 export type OpenClawGatewayRepairErrorCode =
@@ -67,6 +68,8 @@ export const OpenClawEngineErrorCode = {
   /** A targeted startup migration/recovery failed; retain its source during Quick Repair. */
   StartupCompatibilityFailed: 'startup_compatibility_failed',
   MemoryDreamingMigrationFailed: 'memory_dreaming_migration_failed',
+  AgentMediaMigrationRequired: 'agent_media_migration_required',
+  PluginVerificationFailed: 'plugin_verification_failed',
 } as const;
 
 export type OpenClawEngineErrorCode =

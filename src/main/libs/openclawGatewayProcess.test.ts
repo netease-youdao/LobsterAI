@@ -167,6 +167,71 @@ describe('stopOpenClawGatewayProcess', () => {
 });
 
 describe('Windows gateway shutdown bridge', () => {
+  test('buffers parent disconnection until the gateway installs its shutdown handler', async () => {
+    vi.useFakeTimers();
+    const childProcess = Object.assign(new EventEmitter(), { send: vi.fn(), connected: true, exit: vi.fn() });
+    runInNewContext(buildOpenClawGatewayShutdownBridge(), { process: childProcess, queueMicrotask, setTimeout });
+    childProcess.emit('disconnect');
+    const shutdown = vi.fn();
+    childProcess.on(OpenClawGatewaySignal.Interrupt, shutdown);
+    await Promise.resolve();
+    expect(shutdown).toHaveBeenCalledOnce();
+    childProcess.emit('message', { type: OpenClawGatewayProcessControl.Shutdown });
+    expect(shutdown).toHaveBeenCalledOnce();
+    expect(childProcess.exit).not.toHaveBeenCalled();
+  });
+
+  test('bounds a disconnected child lifetime even if startup never installs a shutdown handler', async () => {
+    vi.useFakeTimers();
+    const childProcess = Object.assign(new EventEmitter(), { send: vi.fn(), connected: false, exit: vi.fn() });
+    runInNewContext(buildOpenClawGatewayShutdownBridge(), { process: childProcess, queueMicrotask, setTimeout });
+    await vi.advanceTimersByTimeAsync(5_999);
+    expect(childProcess.exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(childProcess.exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  test.skipIf(process.platform !== 'win32')('releases a real SQLite lease when parent IPC disconnects', async () => {
+    const entry = makeEntry(buildOpenClawGatewayShutdownBridge() + `
+      const { DatabaseSync } = require('node:sqlite');
+      const db = new DatabaseSync('lease.sqlite');
+      db.exec('CREATE TABLE sentinel(value TEXT); BEGIN EXCLUSIVE');
+      process.on('SIGINT', () => {
+        db.exec('ROLLBACK');
+        db.close();
+        process.exit(0);
+      });
+      process.send('ready');
+      setInterval(() => {}, 1000);
+    `);
+    const child = spawnOpenClawGatewayProcess({
+      executablePath: process.execPath, ...entry, args: [], execArgv: [], env: process.env,
+    });
+    const exited = once(child, 'exit');
+    let stderr = '';
+    child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    try {
+      await Promise.race([
+        once(child, 'message'),
+        exited.then(() => { throw new Error(`Gateway fixture exited before ready: ${stderr}`); }),
+      ]);
+      const { DatabaseSync } = await import('node:sqlite');
+      const database = new DatabaseSync(path.join(entry.cwd, 'lease.sqlite'));
+      try {
+        expect(() => database.exec('BEGIN EXCLUSIVE')).toThrow(/locked/);
+        child.disconnect();
+        await expect.poll(() => child.exitCode, { timeout: 3_000 }).toBe(0);
+        expect(await exited).toEqual([0, null]);
+        expect(() => database.exec('BEGIN EXCLUSIVE; ROLLBACK')).not.toThrow();
+      } finally { database.close(); }
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill(OpenClawGatewaySignal.Kill);
+      await exited;
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    }
+  });
+
   test('buffers shutdown until the gateway installs its handler and delivers it once', async () => {
     const childProcess = Object.assign(new EventEmitter(), { send: vi.fn() });
     runInNewContext(buildOpenClawGatewayShutdownBridge(), { process: childProcess, queueMicrotask });

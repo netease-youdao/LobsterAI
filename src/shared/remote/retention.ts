@@ -13,4 +13,5 @@ export interface RetentionState {
   deviceId: string; sessionId: string; localSessionId: string; syncProtocolVersion: number;
   streamEpoch: string | null; lastSourceSeq: string; lastSeq: string;
   sourcePurgeSeq: string; eventPurgeSeq: string; activeImport?: { importId: string } | null;
+  deleted?: boolean;
 }

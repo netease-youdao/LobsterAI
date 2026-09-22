@@ -10,11 +10,12 @@ import { payloadHash } from './canonical';
 import { RemoteAgentCatalog, RemoteAgentError } from './remoteAgentCatalog';
 import { RemoteStore } from './remoteStore';
 
+const Target = { First: 'space-a-generation-7', Second: 'space-b-generation-4' } as const;
 const owner = { userId: '1001', scopeKey: 'personal' };
 const other = { userId: '1002', scopeKey: 'personal' };
 const dispose: Array<() => void> = [];
 afterEach(() => { for (const cleanup of dispose.splice(0).reverse()) cleanup(); });
-function fixture(getDefaultInput?: () => RemoteAgentCatalogItem['defaultInput']) {
+function fixture(getDefaultInput?: () => RemoteAgentCatalogItem['defaultInput'], getTargetId?: () => string | null) {
   const directory = mkdtempSync(join(tmpdir(), 'remote-agent-catalog-'));
   const db = new Database(':memory:');
   dispose.push(() => { db.close(); rmSync(directory, { recursive: true, force: true }); });
@@ -29,9 +30,59 @@ function fixture(getDefaultInput?: () => RemoteAgentCatalogItem['defaultInput'])
     ownership.assignNew(id, actor);
   });
   const paths: Record<string, string> = { main: directory, mine: directory };
-  const catalog = new RemoteAgentCatalog(store, ownership, agentId => ({ path: paths[agentId], name: 'Workspace' }), getDefaultInput);
+  const catalog = new RemoteAgentCatalog(store, ownership, agentId => ({ path: paths[agentId], name: 'Workspace' }), getDefaultInput, getTargetId);
   return { db, store, ownership, catalog, directory, paths };
 }
+it('does not resolve or publish workspace references before a target is known', async () => {
+  const { catalog, store } = fixture(undefined, () => null);
+  await expect(catalog.refresh(owner, 'device', () => true)).rejects.toThrow('Remote target is not ready');
+  const api = vi.fn();
+  await expect(catalog.publish(owner, 'device', '1', api, () => true)).rejects.toThrow('Remote target is not ready');
+  expect(api).not.toHaveBeenCalled();
+  expect(store.entries('agentWorkspaces:')).toEqual([]);
+});
+it('rejects a stale route response even when the verified target stays the same', async () => {
+  const { catalog, store } = fixture(undefined, () => Target.First);
+  const before = await catalog.refresh(owner, 'device', () => true);
+  let finish!: (value: unknown) => void;
+  const pending = catalog.publish(owner, 'device', '1', () => new Promise(resolve => { finish = resolve; }), () => true);
+  catalog.reset();
+  finish({ catalogVersion: '9', items: [] });
+  await expect(pending).rejects.toThrow('Account changed');
+  expect(store.entries('agentCatalog:')).toEqual([]);
+  expect(await catalog.refresh(owner, 'device', () => true)).toEqual(before);
+});
+it('does not save resolved workspaces after the route is invalidated during lookup', async () => {
+  const { store, ownership, directory } = fixture();
+  let finish!: (value: { path: string; name: string }) => void;
+  const catalog = new RemoteAgentCatalog(store, ownership, () => new Promise(resolve => { finish = resolve; }), undefined, () => Target.First);
+  const pending = catalog.refresh(owner, 'device', () => true);
+  catalog.reset();
+  finish({ path: directory, name: 'Workspace' });
+  await expect(pending).rejects.toThrow('Account changed');
+  expect(store.entries('agentWorkspaces:')).toEqual([]);
+});
+it('isolates workspace aliases when the same account and device use different targets', async () => {
+  let targetId: string | null = Target.First;
+  const { catalog, directory } = fixture(undefined, () => targetId);
+  const first = (await catalog.refresh(owner, 'device', () => true)).find(item => item.agentId === 'mine')!;
+  targetId = Target.Second;
+  const second = (await catalog.refresh(owner, 'device', () => true)).find(item => item.agentId === 'mine')!;
+  expect(second.defaultWorkspaceId).not.toBe(first.defaultWorkspaceId);
+  expect(() => catalog.resolve(owner, 'device', 'mine', second.version, first.defaultWorkspaceId!)).toThrow('AGENT_UNAVAILABLE');
+  targetId = Target.First;
+  expect(catalog.resolve(owner, 'device', 'mine', first.version, first.defaultWorkspaceId!)).toBe(directory);
+});
+it('does not retain a publication receipt received in another target', async () => {
+  let targetId: string | null = Target.First;
+  const { catalog, store } = fixture(undefined, () => targetId);
+  let finish!: (value: unknown) => void;
+  const pending = catalog.publish(owner, 'device', '1', () => new Promise(resolve => { finish = resolve; }), () => true);
+  targetId = Target.Second;
+  finish({ catalogVersion: '9', items: [] });
+  await expect(pending).rejects.toThrow('Account changed');
+  expect(store.entries('agentCatalog:')).toEqual([]);
+});
 it('publishes only main and the current owner, sanitizes icons, and keeps anonymous Agent session summaries', async () => {
   const { db, store, catalog } = fixture();
   store.transaction(() => {

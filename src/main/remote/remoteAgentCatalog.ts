@@ -32,11 +32,20 @@ export const remoteAgentFailure = (detail: string): RemoteAgentError => new Remo
 
 /** A device publishes one bounded, durable snapshot; workspace aliases are never repointed. */
 export class RemoteAgentCatalog {
+  private operationEpoch = 0;
   constructor(private readonly store: RemoteStore, private readonly ownership: AgentOwnerStore,
     private readonly getWorkspace: (agentId: string) => Promise<AgentWorkspace> | AgentWorkspace,
-    private readonly getDefaultInput?: (owner: RemoteOwner, deviceId: string, agentId: string) => RemoteAgentCatalogItem['defaultInput']) {}
-  private key(owner: RemoteOwner, deviceId: string): string { return `agentCatalog:${JSON.stringify([owner.userId, owner.scopeKey, deviceId])}`; }
-  private workspaceKey(owner: RemoteOwner, deviceId: string, agentId: string): string { return `agentWorkspaces:${JSON.stringify([owner.userId, owner.scopeKey, deviceId, agentId])}`; }
+    private readonly getDefaultInput?: (owner: RemoteOwner, deviceId: string, agentId: string) => RemoteAgentCatalogItem['defaultInput'],
+    private readonly getTargetId?: () => string | null) {}
+  reset(): void { this.operationEpoch++; }
+  private targetId(): string | undefined {
+    const targetId = this.getTargetId?.();
+    if (this.getTargetId && !targetId) throw new Error('Remote target is not ready');
+    return targetId ?? undefined;
+  }
+  private scope(parts: string[]): string { return JSON.stringify([...(this.getTargetId ? [this.targetId()] : []), ...parts]); }
+  private key(owner: RemoteOwner, deviceId: string): string { return `agentCatalog:${this.scope([owner.userId, owner.scopeKey, deviceId])}`; }
+  private workspaceKey(owner: RemoteOwner, deviceId: string, agentId: string): string { return `agentWorkspaces:${this.scope([owner.userId, owner.scopeKey, deviceId, agentId])}`; }
   private row(agentId: string): AgentRow | undefined { return this.store.db.prepare('SELECT id,name,icon,enabled FROM agents WHERE id=?').get(agentId) as AgentRow | undefined; }
   summary(sessionId: string, actor: RemoteOwner): RemoteAgentSummary | null {
     if (!sameOwner(this.store.owner(sessionId), actor)) return null;
@@ -58,6 +67,9 @@ export class RemoteAgentCatalog {
   }
   async refresh(owner: RemoteOwner, deviceId: string, stillCurrent: () => boolean,
     canPublishAgent: (agentId: string) => boolean = () => true): Promise<RemoteAgentCatalogItem[]> {
+    const targetId = this.targetId(), epoch = this.operationEpoch;
+    const isCurrent = () => stillCurrent() && this.getTargetId?.() === targetId && this.operationEpoch === epoch;
+    if (!isCurrent()) throw new Error('Account changed');
     const items: RemoteAgentCatalogItem[] = [];
     for (const identity of this.ownership.list()) {
       if (!this.ownership.canView(identity.agentId, owner)) continue;
@@ -66,13 +78,13 @@ export class RemoteAgentCatalog {
       const beforeVersion = this.ownership.get(identity.agentId)!.version;
       let workspace: AgentWorkspace | null = null;
       try { workspace = await this.getWorkspace(identity.agentId); } catch { /* Publish unavailability, never substitute another Agent's path. */ }
-      if (!stillCurrent()) throw new Error('Account changed');
+      if (!isCurrent()) throw new Error('Account changed');
       if (!canPublishAgent(identity.agentId)) throw new Error('Agent ownership synchronization is waiting for server support');
       if (!this.ownership.canPublish(identity.agentId, owner) || this.ownership.get(identity.agentId)!.version !== beforeVersion) throw new Error('Agent changed while resolving its workspace');
       const path: string | null = workspace?.path ? resolve(workspace.path) : null;
       let available = false;
       try { available = Boolean(path && workspace?.available !== false && statSync(path).isDirectory()); } catch { available = false; }
-      const stateKey = `agentWorkspaceState:${identity.agentId}`;
+      const stateKey = `agentWorkspaceState:${this.getTargetId ? this.scope([identity.agentId]) : identity.agentId}`;
       const defaultInput = this.getDefaultInput?.(owner, deviceId, identity.agentId);
       const fingerprint = payloadHash({ path, available, defaultInput: defaultInput || null });
       const previous = this.store.get<string>(stateKey);
@@ -144,12 +156,15 @@ export class RemoteAgentCatalog {
   async publish(owner: RemoteOwner, deviceId: string, generation: string, api: (path: string, method?: string, body?: unknown) => Promise<any>,
     stillCurrent: () => boolean, limits = { items: REMOTE_AGENT_CATALOG_ITEMS, bytes: REMOTE_AGENT_CATALOG_BYTES },
     canPublishAgent: (agentId: string) => boolean = () => true): Promise<void> {
+    const targetId = this.targetId(), epoch = this.operationEpoch;
+    const isCurrent = () => stillCurrent() && this.getTargetId?.() === targetId && this.operationEpoch === epoch;
+    if (!isCurrent()) throw new Error('Account changed');
     const key = this.key(owner, deviceId);
     const path = `/devices/${deviceId}/agents`;
     let state = this.store.get<CatalogState>(key) || { catalogVersion: '0', syncedHash: null, pending: null };
     // GET first proves whether a previous uncertain PUT committed, including after WS reconnect.
     const current = await api(path);
-    if (!stillCurrent()) throw new Error('Account changed');
+    if (!isCurrent()) throw new Error('Account changed');
     if (state.pending && current.lastPublicationId === state.pending.publicationId) {
       state = { catalogVersion: current.catalogVersion, syncedHash: payloadHash(state.pending.items), syncedItems: state.pending.items, pending: null };
       this.store.put(key, state);
@@ -158,7 +173,8 @@ export class RemoteAgentCatalog {
       this.store.put(key, state);
     } else if (!state.pending) state.catalogVersion = current.catalogVersion;
     if (!state.pending) {
-      const items = await this.refresh(owner, deviceId, stillCurrent, canPublishAgent);
+      const items = await this.refresh(owner, deviceId, isCurrent, canPublishAgent);
+      if (!isCurrent()) throw new Error('Account changed');
       if (items.length > limits.items || !items.some(item => item.agentId === AgentId.Main && item.kind === AgentOwnerKind.Default)) throw new RemoteAgentError(47012, 'PAYLOAD_TOO_LARGE', 'CATALOG_LIMIT');
       if (state.syncedHash === payloadHash(items) && current.syncStatus === 'ready' && payloadHash(current.items) === state.syncedHash) {
         this.store.put(key, { ...state, syncedItems: items }); return;
@@ -172,9 +188,9 @@ export class RemoteAgentCatalog {
     let result;
     try { result = await api(path, 'PUT', { ...state.pending, connectionGeneration: generation }); }
     catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === AGENT_VERSION_CONFLICT && stillCurrent()) {
+      if (error instanceof Error && 'code' in error && error.code === AGENT_VERSION_CONFLICT && isCurrent()) {
         const latest = await api(path);
-        if (!stillCurrent()) throw new Error('Account changed');
+        if (!isCurrent()) throw new Error('Account changed');
         if (latest.deviceId === deviceId && latest.lastPublicationId === state.pending.publicationId) {
           this.store.put(key, { catalogVersion: latest.catalogVersion, syncedHash: payloadHash(state.pending.items), syncedItems: state.pending.items, pending: null });
           return;
@@ -183,7 +199,7 @@ export class RemoteAgentCatalog {
       }
       throw error;
     }
-    if (!stillCurrent()) throw new Error('Account changed');
+    if (!isCurrent()) throw new Error('Account changed');
     if (result.publicationId !== state.pending.publicationId || result.deviceId !== deviceId) throw new Error('Agent catalog ACK identity mismatch');
     this.store.put(key, { catalogVersion: result.catalogVersion, syncedHash: payloadHash(state.pending.items), syncedItems: state.pending.items, pending: null });
   }

@@ -32,6 +32,8 @@ import Modal from './common/Modal';
 import ModelThinkingMenu, {
   getModelThinkingLevelLabel,
 } from './modelSelector/ModelThinkingMenu';
+import { useModelPurchaseOffer } from './modelSelector/useModelPurchaseOffer';
+import PurchaseOfferCountdown from './PurchaseOfferCountdown';
 
 interface ModelSelectorProps {
   dropdownDirection?: 'up' | 'down' | 'auto';
@@ -149,6 +151,7 @@ export const ModelAccessPromptModal: React.FC<ModelAccessPromptModalProps> = ({
 }) => {
   const agenticNotReadyPrompt = promptKind === ModelAccessPromptKind.AgenticNotReady;
   const loginPrompt = promptKind === ModelAccessPromptKind.Login;
+  const purchaseOffer = useModelPurchaseOffer(promptKind === ModelAccessPromptKind.Subscribe, onClose);
   const resolvedTitleKey = titleKey ?? (
     agenticNotReadyPrompt
       ? 'modelSelectorAgenticNotReadyTitle'
@@ -166,9 +169,10 @@ export const ModelAccessPromptModal: React.FC<ModelAccessPromptModalProps> = ({
   );
 
   const openSubscriptionPage = async () => {
+    const pricingUrl = purchaseOffer.getPricingUrl();
+    if (!pricingUrl) return;
     onClose();
-    const { getPortalPricingUrl } = await import('../services/endpoints');
-    await window.electron.shell.openExternal(getPortalPricingUrl());
+    await window.electron.shell.openExternal(pricingUrl);
   };
 
   const handlePrimary = async () => {
@@ -196,8 +200,13 @@ export const ModelAccessPromptModal: React.FC<ModelAccessPromptModalProps> = ({
             {i18nService.t(resolvedTitleKey)}
           </div>
           <div className="mt-1.5 text-sm leading-5 text-secondary">
-            {i18nService.t(resolvedDescriptionKey)}
+            {purchaseOffer.description ?? i18nService.t(resolvedDescriptionKey)}
           </div>
+          {purchaseOffer.offer?.expiresAtEpochMs != null && (
+            <div className="mt-3">
+              <PurchaseOfferCountdown offer={purchaseOffer.offer} />
+            </div>
+          )}
         </div>
         <button
           type="button"
@@ -211,7 +220,8 @@ export const ModelAccessPromptModal: React.FC<ModelAccessPromptModalProps> = ({
       <button
         type="button"
         onClick={() => { void handlePrimary(); }}
-        className="mt-5 w-full rounded-lg bg-primary px-3 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary/90"
+        disabled={purchaseOffer.isRefreshing}
+        className="mt-5 w-full rounded-lg bg-primary px-3 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-wait disabled:opacity-50"
       >
         {i18nService.t(resolvedPrimaryButtonKey)}
       </button>

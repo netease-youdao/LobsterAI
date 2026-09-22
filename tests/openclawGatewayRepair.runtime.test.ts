@@ -56,6 +56,7 @@ test.skipIf(process.env.LOBSTERAI_TEST_GATEWAY_REPAIR !== '1')('the packaged Doc
       stateDir, configPath, runtimeRoot, backupDir, electronNodeRuntimePath: process.execPath,
       env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, XDG_CACHE_HOME: path.join(root, 'cache') },
     };
+    await runOpenClawCompatibilityRepair({ ...params, phase: OpenClawRepairPhase.LockRecovery });
     await runOpenClawCompatibilityRepair({ ...params, phase: OpenClawRepairPhase.Snapshot });
     // The generic upstream preflight allows old global versions for startup
     // migration. One-click repair must explicitly refuse incomplete migration.

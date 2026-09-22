@@ -1,0 +1,861 @@
+diff --git a/src/infra/state-migrations.workspace-setup-recovery.ts b/src/infra/state-migrations.workspace-setup-recovery.ts
+new file mode 100644
+--- /dev/null
++++ b/src/infra/state-migrations.workspace-setup-recovery.ts
+@@ -0,0 +1,386 @@
++// Archive regenerated setup markers only while their completed migration still
++// describes canonical SQLite. Never give retired JSON authority over live state.
++import { createHash } from "node:crypto";
++import path from "node:path";
++import { root, type Root } from "@openclaw/fs-safe";
++import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
++import {
++  WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
++  WORKSPACE_SETUP_STATE_VERSION,
++} from "../agents/workspace-state-store.js";
++import { resolveStateDir } from "../config/paths.js";
++import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
++import type { DB } from "../state/openclaw-state-db.generated.js";
++import {
++  openOpenClawStateDatabase,
++  runOpenClawStateWriteTransaction,
++} from "../state/openclaw-state-db.js";
++import { formatErrorMessage } from "./errors.js";
++import {
++  executeSqliteQuerySync,
++  executeSqliteQueryTakeFirstSync,
++  getNodeSqliteKysely,
++} from "./kysely-sync.js";
++import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
++import { recordLegacyMigrationReceipt } from "./state-migrations.receipts.js";
++import {
++  type LegacyMigrationSourceClaim,
++  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
++} from "./state-migrations.source-snapshot.js";
++import type { MigrationMessages } from "./state-migrations.types.js";
++import { resolveWorkspaceMigrationSourceKey } from "./state-migrations.workspace-setup-receipts.js";
++import {
++  parseSource,
++  setupFingerprint,
++  type SourceSnapshot,
++} from "./state-migrations.workspace-setup-store.js";
++import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
++
++export const WORKSPACE_SETUP_QUARANTINE_DIRNAME = "workspace-setup-quarantine";
++export const WORKSPACE_SETUP_RECOVERY_RESOLUTION = "archived-reappeared-setup";
++const MAX_BACKUP_BYTES = 64 * 1024;
++const HASH_PATTERN = /^[a-f0-9]{64}$/;
++type Database = ReturnType<typeof openOpenClawStateDatabase>["db"];
++type RecoveryDatabase = Pick<DB, "workspace_setup_state" | "migration_sources">;
++
++function pendingRecovery(db: Database, source: LegacyWorkspaceStateSource): boolean {
++  // Discovery also runs before the first shared-state schema migration.
++  if (
++    !db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='migration_sources'").get()
++  ) {
++    return false;
++  }
++  const receipt = executeSqliteQueryTakeFirstSync(
++    db,
++    getNodeSqliteKysely<RecoveryDatabase>(db)
++      .selectFrom("migration_sources")
++      .select(["removed_source", "report_json"])
++      .where("source_key", "=", resolveWorkspaceMigrationSourceKey(source)),
++  );
++  return (
++    receipt?.removed_source === 0 &&
++    safeParseJsonRecord(receipt.report_json)?.resolution === WORKSPACE_SETUP_RECOVERY_RESOLUTION
++  );
++}
++
++// Include a committed recovery whose final unlink succeeded before a crash.
++// Without this probe, the missing file would hide its unfinished removal receipt.
++export function hasPendingWorkspaceSetupRecovery(
++  source: LegacyWorkspaceStateSource,
++  env: NodeJS.ProcessEnv,
++): boolean {
++  return (
++    withExistingOpenClawStateDatabaseReadOnly(({ db }) => pendingRecovery(db, source), { env }) ??
++    false
++  );
++}
++
++function validTimestamp(value: string | null): boolean {
++  if (value === null) {
++    return true;
++  }
++  const parsed = new Date(value);
++  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
++}
++
++function readRecoveryState(db: Database, source: LegacyWorkspaceStateSource) {
++  const kysely = getNodeSqliteKysely<RecoveryDatabase>(db);
++  const receipt = executeSqliteQueryTakeFirstSync(
++    db,
++    kysely
++      .selectFrom("migration_sources")
++      .selectAll()
++      .where("source_key", "=", resolveWorkspaceMigrationSourceKey(source)),
++  );
++  const report = receipt ? safeParseJsonRecord(receipt.report_json) : undefined;
++  const canonical = executeSqliteQueryTakeFirstSync(
++    db,
++    kysely
++      .selectFrom("workspace_setup_state")
++      .selectAll()
++      .where("workspace_key", "=", source.workspaceKey),
++  );
++  if (
++    !receipt ||
++    !report ||
++    !canonical ||
++    !source.workspaceDir ||
++    receipt.status !== "completed" ||
++    receipt.migration_kind !== WORKSPACE_LEGACY_STATE_MIGRATION_KIND ||
++    receipt.target_table !== "workspace_setup_state" ||
++    receipt.source_path !== source.sourcePath ||
++    report.source !== WORKSPACE_LEGACY_STATE_MIGRATION_KIND ||
++    report.target !== "workspace_setup_state" ||
++    report.sourceKind !== source.kind ||
++    report.workspaceKey !== source.workspaceKey ||
++    report.sourceSha256 !== receipt.source_sha256 ||
++    !receipt.source_sha256 ||
++    !HASH_PATTERN.test(receipt.source_sha256) ||
++    receipt.source_size_bytes === null ||
++    receipt.source_size_bytes < 1 ||
++    receipt.source_size_bytes > MAX_BACKUP_BYTES ||
++    canonical.version !== WORKSPACE_SETUP_STATE_VERSION ||
++    canonical.workspace_path !== source.workspaceDir ||
++    !validTimestamp(canonical.bootstrap_seeded_at) ||
++    !validTimestamp(canonical.setup_completed_at)
++  ) {
++    return null;
++  }
++  const fingerprint = setupFingerprint({
++    workspacePath: canonical.workspace_path,
++    bootstrapSeededAt: canonical.bootstrap_seeded_at,
++    setupCompletedAt: canonical.setup_completed_at,
++  });
++  if (report.canonicalFingerprint !== fingerprint) {
++    return null;
++  }
++  return { receipt, report, canonical, fingerprint };
++}
++
++type RecoveryState = NonNullable<ReturnType<typeof readRecoveryState>>;
++
++function assertUnchanged(
++  db: Database,
++  source: LegacyWorkspaceStateSource,
++  expected: RecoveryState,
++): RecoveryState {
++  const current = readRecoveryState(db, source);
++  if (
++    !current ||
++    current.fingerprint !== expected.fingerprint ||
++    current.receipt.report_json !== expected.receipt.report_json ||
++    current.receipt.source_sha256 !== expected.receipt.source_sha256 ||
++    current.receipt.removed_source !== expected.receipt.removed_source
++  ) {
++    throw new Error(
++      "workspace setup recovery state changed; preserved the legacy source for retry",
++    );
++  }
++  return current;
++}
++
++function backupRelativePath(source: LegacyWorkspaceStateSource, sha256: string): string {
++  const keyHash = createHash("sha256")
++    .update(resolveWorkspaceMigrationSourceKey(source))
++    .digest("hex");
++  return path.join(WORKSPACE_SETUP_QUARANTINE_DIRNAME, keyHash, sha256 + ".json");
++}
++
++async function verifyBackup(
++  archive: Root,
++  relativePath: string,
++  sha256: string,
++  size: number,
++): Promise<void> {
++  const bytes = await archive.readBytes(relativePath, { maxBytes: size });
++  if (bytes.length !== size || createHash("sha256").update(bytes).digest("hex") !== sha256) {
++    throw new Error("workspace setup backup verification failed; preserved the legacy source");
++  }
++}
++
++/** Called under the owning migration's stopped-Gateway lease. */
++export async function recoverReappearedWorkspaceSetup(params: {
++  source: LegacyWorkspaceStateSource;
++  sourceRoot: Root;
++  sourceClaim: LegacyMigrationSourceClaim<SourceSnapshot>;
++  env: NodeJS.ProcessEnv;
++  hasSource: boolean;
++  hasClaim: boolean;
++  assertIdentity: () => void;
++  beforeClaim?: (source: LegacyWorkspaceStateSource) => void;
++  removeSource?: (sourcePath: string) => Promise<void> | void;
++}): Promise<MigrationMessages | null> {
++  const { source, sourceClaim, env } = params;
++  if (source.kind !== "setup" || (params.hasSource && params.hasClaim)) {
++    return null;
++  }
++  const db = openOpenClawStateDatabase({ env }).db;
++  let state = runSqliteDeferredTransactionSync(db, () => readRecoveryState(db, source));
++  if (!state) {
++    return pendingRecovery(db, source)
++      ? {
++          changes: [],
++          warnings: [
++            "Cannot verify pending workspace setup recovery against canonical SQLite state.",
++          ],
++        }
++      : null;
++  }
++  const pendingCleanup =
++    state.receipt.removed_source === 0 &&
++    state.report.resolution === WORKSPACE_SETUP_RECOVERY_RESOLUTION;
++  if (!pendingCleanup && state.receipt.removed_source !== 1) {
++    return null;
++  }
++  if (!pendingCleanup && !params.hasSource && !params.hasClaim) {
++    return null;
++  }
++
++  let claimedByThisRun = false;
++  let backupPath: string | undefined;
++  try {
++    params.assertIdentity();
++    let snapshot =
++      params.hasSource || params.hasClaim ? await sourceClaim.read(params.hasClaim) : null;
++    const parsed = snapshot ? parseSource(source, snapshot) : null;
++    if (parsed && parsed.kind !== "setup") {
++      return null;
++    }
++    if (!pendingCleanup) {
++      if (!snapshot || !parsed || parsed.kind !== "setup" || parsed.recordCount === 0) {
++        return null;
++      }
++      // The existing database must already contain every incoming milestone.
++      // Missing facts still go through the ordinary import/merge policy.
++      if (
++        (parsed.value.bootstrapSeededAt && !state.canonical.bootstrap_seeded_at) ||
++        (parsed.value.setupCompletedAt && !state.canonical.setup_completed_at)
++      ) {
++        return null;
++      }
++      const differs =
++        (parsed.value.bootstrapSeededAt &&
++          parsed.value.bootstrapSeededAt !== state.canonical.bootstrap_seeded_at) ||
++        (parsed.value.setupCompletedAt &&
++          parsed.value.setupCompletedAt !== state.canonical.setup_completed_at);
++      if (!differs) {
++        return null;
++      }
++    } else if (snapshot && snapshot.sha256 !== state.receipt.source_sha256) {
++      throw new Error("workspace setup source changed during recovery; preserved both generations");
++    }
++
++    if (params.hasSource && snapshot) {
++      claimedByThisRun = true;
++      snapshot = await sourceClaim.claim({
++        snapshot,
++        beforeClaim: () => {
++          params.beforeClaim?.(source);
++          params.assertIdentity();
++        },
++        mismatchMessage: "legacy workspace source changed before recovery could claim it",
++      });
++    }
++    const sha256 = snapshot?.sha256 ?? state.receipt.source_sha256!;
++    const size = snapshot?.size ?? state.receipt.source_size_bytes!;
++    const relativePath = backupRelativePath(source, sha256);
++    const stateDir = resolveStateDir(env);
++    const archive = await root(stateDir, {
++      hardlinks: "reject",
++      symlinks: "reject",
++    });
++    backupPath = path.join(stateDir, relativePath);
++    if (pendingCleanup) {
++      if (state.report.backupPath !== backupPath) {
++        throw new Error("workspace setup recovery backup path changed");
++      }
++    } else if (!(await archive.exists(relativePath))) {
++      // Read the claimed bytes again instead of re-encoding decoded JSON, so a
++      // legacy UTF-8 BOM and original whitespace survive the independent copy.
++      const bytes = await params.sourceRoot.readBytes(sourceClaim.claimRelativePath, {
++        maxBytes: size,
++      });
++      if (bytes.length !== size || createHash("sha256").update(bytes).digest("hex") !== sha256) {
++        throw new Error("legacy workspace claim changed before backup");
++      }
++      await archive.create(relativePath, bytes, { mode: 0o600 });
++    }
++    await verifyBackup(archive, relativePath, sha256, size);
++    if (!pendingCleanup) {
++      params.assertIdentity();
++      if (
++        !snapshot ||
++        !snapshotsMatch(snapshot, await sourceClaim.read(true)) ||
++        (await sourceClaim.exists())
++      ) {
++        throw new Error("legacy workspace source changed before recovery commit");
++      }
++      const expected = state;
++      state = runOpenClawStateWriteTransaction(
++        ({ db: writer }) => {
++          assertUnchanged(writer, source, expected);
++          const reportJson = JSON.stringify({
++            ...expected.report,
++            sourceSha256: sha256,
++            sourceRecordCount: parsed!.recordCount,
++            previousSourceSha256: expected.receipt.source_sha256,
++            authoritative: false,
++            imported: false,
++            resolution: WORKSPACE_SETUP_RECOVERY_RESOLUTION,
++            backupPath,
++          });
++          recordLegacyMigrationReceipt(writer, {
++            sourceKey: expected.receipt.source_key,
++            migrationKind: WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
++            sourcePath: source.sourcePath,
++            targetTable: "workspace_setup_state",
++            sourceSha256: sha256,
++            sourceSizeBytes: size,
++            sourceRecordCount: parsed!.recordCount,
++            runId: `${expected.receipt.source_key}:${sha256.slice(0, 16)}`,
++            now: Date.now(),
++            reportJson,
++            upsert: true,
++          });
++          const recorded = readRecoveryState(writer, source);
++          if (
++            !recorded ||
++            recorded.receipt.source_sha256 !== sha256 ||
++            recorded.receipt.report_json !== reportJson
++          ) {
++            throw new Error("workspace setup recovery receipt verification failed");
++          }
++          return recorded;
++        },
++        { env },
++      );
++    }
++    // A committed receipt with removed_source=0 is a cleanup-only retry. Never
++    // overwrite it using a concurrently regenerated file or an unverified copy.
++    if (snapshot) {
++      if (!snapshotsMatch(snapshot, await sourceClaim.read(true))) {
++        throw new Error("workspace setup claim changed before cleanup");
++      }
++      params.assertIdentity();
++      runSqliteDeferredTransactionSync(db, () => assertUnchanged(db, source, state!));
++      await sourceClaim.remove({
++        removeSource: params.removeSource,
++        remainingMessage: "legacy workspace source remains after recovery cleanup",
++      });
++    }
++    const expected = state;
++    runOpenClawStateWriteTransaction(
++      ({ db: writer }) => {
++        assertUnchanged(writer, source, expected);
++        executeSqliteQuerySync(
++          writer,
++          getNodeSqliteKysely<RecoveryDatabase>(writer)
++            .updateTable("migration_sources")
++            .set({ removed_source: 1 })
++            .where("source_key", "=", expected.receipt.source_key),
++        );
++      },
++      { env },
++    );
++    return {
++      changes: [
++        `Archived reappeared workspace setup state at ${source.sourcePath}; backup: ${backupPath}.`,
++      ],
++      warnings: [],
++      notices: [
++        "Preserved canonical SQLite workspace setup state verified by its completed migration receipt.",
++      ],
++    };
++  } catch (error) {
++    const restoreError = claimedByThisRun ? await sourceClaim.restore() : null;
++    return {
++      changes: [],
++      warnings: [
++        "Failed recovering reappeared workspace setup state: " +
++          formatErrorMessage(error) +
++          (backupPath ? `; backup: ${backupPath}` : "") +
++          (restoreError ? `; restore failure: ${restoreError}` : ""),
++      ],
++    };
++  }
++}
+diff --git a/src/infra/state-migrations.workspace-setup-recovery.test.ts b/src/infra/state-migrations.workspace-setup-recovery.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/infra/state-migrations.workspace-setup-recovery.test.ts
+@@ -0,0 +1,382 @@
++import { createHash } from "node:crypto";
++import fs from "node:fs";
++import path from "node:path";
++import { describe, expect, it } from "vitest";
++import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
++import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
++import { acquireGatewayLock } from "./gateway-lock.js";
++import {
++  WORKSPACE_SETUP_QUARANTINE_DIRNAME,
++  WORKSPACE_SETUP_RECOVERY_RESOLUTION,
++} from "./state-migrations.workspace-setup-recovery.js";
++import { migrateLegacyWorkspaceState } from "./state-migrations.workspace-setup.js";
++import { useWorkspaceMigrationTestFixture } from "./state-migrations.workspace-setup.test-support.js";
++
++const INITIAL = {
++  version: 1,
++  bootstrapSeededAt: "2026-08-09T11:04:21.963Z",
++  setupCompletedAt: "2026-08-09T11:06:10.877Z",
++};
++const REAPPEARED = Buffer.from(
++  '{\n  "version": 1,\n  "setupCompletedAt": "2026-09-17T08:37:39.987Z"\n}\n',
++);
++const CLAIM_SUFFIX = ".doctor-importing";
++const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
++
++describe("reappeared workspace setup recovery", () => {
++  const { setup, detect, migrate } = useWorkspaceMigrationTestFixture();
++
++  async function fixture(nested = true, alias = false) {
++    const context = setup();
++    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
++    const db = openOpenClawStateDatabase({ env: context.env }).db;
++    db.prepare(
++      "INSERT INTO workspace_setup_state (workspace_key, workspace_path, version, bootstrap_seeded_at, updated_at) VALUES (?, ?, 1, ?, 1)",
++    ).run(identity.workspaceKey, identity.workspacePath, INITIAL.bootstrapSeededAt);
++    const marker = path.join(
++      identity.workspacePath,
++      ...(nested ? [".openclaw", "workspace-state.json"] : ["openclaw-workspace-state.json"]),
++    );
++    fs.mkdirSync(path.dirname(marker), { recursive: true });
++    fs.writeFileSync(marker, JSON.stringify(INITIAL));
++    const contentPath = path.join(context.workspaceDir, "MEMORY.md");
++    fs.writeFileSync(contentPath, "Keep the user's memory and bootstrap files.\n");
++    if (alias) {
++      const link = path.join(context.homeDir, "workspace-main");
++      fs.symlinkSync(context.workspaceDir, link, process.platform === "win32" ? "junction" : "dir");
++      context.cfg.agents.defaults.workspace = link;
++    }
++    expect((await migrate(context)).warnings).toEqual([]);
++    const receipt = () =>
++      db
++        .prepare("SELECT * FROM migration_sources WHERE target_table='workspace_setup_state'")
++        .get()!;
++    expect(JSON.parse(receipt().report_json as string)).toMatchObject({
++      authoritative: false,
++      resolution: "merged",
++    });
++    expect(receipt().removed_source).toBe(1);
++    const state = () =>
++      db
++        .prepare("SELECT * FROM workspace_setup_state WHERE workspace_key=?")
++        .get(identity.workspaceKey);
++    const before = state();
++    fs.writeFileSync(marker, REAPPEARED);
++    return {
++      ...context,
++      db,
++      marker,
++      contentPath,
++      receipt,
++      state,
++      before,
++      identity,
++    };
++  }
++
++  it.each([
++    [true, false],
++    [false, false],
++    [true, true],
++  ])(
++    "archives the new generation without changing SQLite (nested=%s, alias=%s)",
++    async (nested, alias) => {
++      const context = await fixture(nested, alias);
++      const result = await migrate(context);
++      expect(result.warnings).toEqual([]);
++      expect(result.changes.join(" ")).toContain("backup:");
++      expect(context.state()).toEqual(context.before);
++      expect(fs.readFileSync(context.contentPath, "utf8")).toBe(
++        "Keep the user's memory and bootstrap files.\n",
++      );
++      const receipt = context.receipt();
++      const report = JSON.parse(receipt.report_json as string);
++      expect(report).toMatchObject({
++        resolution: WORKSPACE_SETUP_RECOVERY_RESOLUTION,
++        authoritative: false,
++        imported: false,
++      });
++      expect(receipt.source_sha256).toBe(hash(REAPPEARED));
++      expect(receipt.removed_source).toBe(1);
++      expect(fs.readFileSync(report.backupPath)).toEqual(REAPPEARED);
++      expect(
++        report.backupPath.startsWith(
++          path.join(context.stateDir, WORKSPACE_SETUP_QUARANTINE_DIRNAME),
++        ),
++      ).toBe(true);
++      expect(detect(context).hasLegacy).toBe(false);
++      expect((await migrate(context)).changes).toEqual([]);
++      fs.writeFileSync(context.marker, REAPPEARED);
++      expect((await migrate(context)).warnings).toEqual([]);
++      expect(JSON.parse(context.receipt().report_json as string).backupPath).toBe(
++        report.backupPath,
++      );
++      expect(context.state()).toEqual(context.before);
++    },
++  );
++
++  it("preserves a UTF-8 BOM and whitespace in the independent backup", async () => {
++    const context = await fixture();
++    const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), REAPPEARED]);
++    fs.writeFileSync(context.marker, bytes);
++    expect((await migrate(context)).warnings).toEqual([]);
++    expect(fs.readFileSync(JSON.parse(context.receipt().report_json as string).backupPath)).toEqual(
++      bytes,
++    );
++  });
++
++  it("recovers a new generation already claimed before interruption", async () => {
++    const context = await fixture();
++    fs.renameSync(context.marker, context.marker + CLAIM_SUFFIX);
++    expect((await migrate(context)).warnings).toEqual([]);
++    expect(context.receipt().removed_source).toBe(1);
++    expect(context.state()).toEqual(context.before);
++    expect(detect(context).hasLegacy).toBe(false);
++    expect(fs.readFileSync(JSON.parse(context.receipt().report_json as string).backupPath)).toEqual(
++      REAPPEARED,
++    );
++  });
++
++  it.each([
++    "missing receipt",
++    "unfinished receipt",
++    "wrong fingerprint",
++    "changed canonical",
++    "wrong path",
++    "wrong version",
++  ])("retains an unverified conflict: %s", async (reason) => {
++    const context = await fixture();
++    if (reason === "missing receipt") {
++      context.db.exec("DELETE FROM migration_sources WHERE target_table='workspace_setup_state'");
++    }
++    if (reason === "unfinished receipt") {
++      context.db.exec(
++        "UPDATE migration_sources SET removed_source=0 WHERE target_table='workspace_setup_state'",
++      );
++    }
++    if (reason === "wrong fingerprint") {
++      const report = JSON.parse(context.receipt().report_json as string);
++      report.canonicalFingerprint = "0".repeat(64);
++      context.db
++        .prepare(
++          "UPDATE migration_sources SET report_json=? WHERE target_table='workspace_setup_state'",
++        )
++        .run(JSON.stringify(report));
++    }
++    if (reason === "changed canonical") {
++      context.db.exec(
++        "UPDATE workspace_setup_state SET setup_completed_at='2026-09-15T00:00:00.000Z' WHERE version=1",
++      );
++    }
++    if (reason === "wrong path") {
++      context.db
++        .prepare("UPDATE workspace_setup_state SET workspace_path=? WHERE version=1")
++        .run(path.join(context.homeDir, "other"));
++    }
++    if (reason === "wrong version") {
++      context.db.exec("UPDATE workspace_setup_state SET version=2");
++    }
++    const before = context.state();
++    expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++    expect(fs.readFileSync(context.marker)).toEqual(REAPPEARED);
++    expect(context.state()).toEqual(before);
++    expect(fs.existsSync(path.join(context.stateDir, WORKSPACE_SETUP_QUARANTINE_DIRNAME))).toBe(
++      false,
++    );
++  });
++
++  it.each([
++    '{"version":2,"setupCompletedAt":"2026-09-17T08:37:39.987Z"}',
++    '{"version":1,"setupCompletedAt":"invalid"}',
++    '{"version":1,"setupCompletedAt":"2026-09-17T08:37:39.987Z","extra":"data"}',
++    '{"version":1,"setupCompletedAt":"2026-09-17T08:37:39.987Z","onboardingCompletedAt":"2026-09-18T00:00:00.000Z"}',
++    "{broken",
++  ])("preserves invalid legacy JSON %#", async (value) => {
++    const context = await fixture();
++    fs.writeFileSync(context.marker, value);
++    expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++    expect(fs.readFileSync(context.marker, "utf8")).toBe(value);
++    expect(context.state()).toEqual(context.before);
++  });
++
++  it("restores the original when backup fails and completes a later retry", async () => {
++    const context = await fixture();
++    const quarantine = path.join(context.stateDir, WORKSPACE_SETUP_QUARANTINE_DIRNAME);
++    fs.writeFileSync(quarantine, "unrelated file");
++    const before = context.receipt();
++    expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++    expect(context.receipt()).toEqual(before);
++    expect(fs.readFileSync(context.marker)).toEqual(REAPPEARED);
++    expect(fs.existsSync(context.marker + CLAIM_SUFFIX)).toBe(false);
++    fs.unlinkSync(quarantine);
++    expect((await migrate(context)).warnings).toEqual([]);
++  });
++
++  it.each(["source", "claim", "removed"])(
++    "resumes a committed receipt after interruption with %s",
++    async (remaining) => {
++      const context = await fixture();
++      const result = await migrateLegacyWorkspaceState({
++        detected: detect(context),
++        stateDir: context.stateDir,
++        env: context.env,
++        removeSource: (file) => {
++          if (remaining === "removed") {
++            fs.unlinkSync(file);
++          }
++          throw new Error("simulated interruption");
++        },
++      });
++      expect(result.warnings.length).toBeGreaterThan(0);
++      expect(context.receipt().removed_source).toBe(0);
++      const backup = JSON.parse(context.receipt().report_json as string).backupPath;
++      if (remaining === "claim") {
++        fs.renameSync(context.marker, context.marker + CLAIM_SUFFIX);
++      }
++      expect(detect(context).hasLegacy).toBe(true);
++      expect((await migrate(context)).warnings).toEqual([]);
++      expect(context.receipt().removed_source).toBe(1);
++      expect(fs.readFileSync(backup)).toEqual(REAPPEARED);
++      expect(context.state()).toEqual(context.before);
++      expect(detect(context).hasLegacy).toBe(false);
++    },
++  );
++
++  it("does not clean a pending recovery if its backup is damaged", async () => {
++    const context = await fixture();
++    await migrateLegacyWorkspaceState({
++      detected: detect(context),
++      stateDir: context.stateDir,
++      env: context.env,
++      removeSource: () => {
++        throw new Error("interrupted");
++      },
++    });
++    fs.writeFileSync(JSON.parse(context.receipt().report_json as string).backupPath, "damaged");
++    expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++    expect(fs.readFileSync(context.marker)).toEqual(REAPPEARED);
++    expect(context.receipt().removed_source).toBe(0);
++  });
++
++  it.each(["canonical", "source"])(
++    "preserves a pending recovery after %s changes",
++    async (changed) => {
++      const context = await fixture();
++      await migrateLegacyWorkspaceState({
++        detected: detect(context),
++        stateDir: context.stateDir,
++        env: context.env,
++        removeSource: () => {
++          throw new Error("interrupted");
++        },
++      });
++      if (changed === "canonical") {
++        context.db.exec(
++          "UPDATE workspace_setup_state SET setup_completed_at='2026-09-15T00:00:00.000Z'",
++        );
++      } else {
++        fs.appendFileSync(context.marker, " ");
++      }
++      const before = context.state();
++      const original = fs.readFileSync(context.marker);
++      expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++      expect(context.state()).toEqual(before);
++      expect(fs.readFileSync(context.marker)).toEqual(original);
++      expect(context.receipt().removed_source).toBe(0);
++      expect(
++        fs.readFileSync(JSON.parse(context.receipt().report_json as string).backupPath),
++      ).toEqual(REAPPEARED);
++    },
++  );
++
++  it("refuses a redirected backup directory without touching its target", async () => {
++    const context = await fixture();
++    const outside = path.join(context.homeDir, "outside");
++    fs.mkdirSync(outside);
++    fs.symlinkSync(
++      outside,
++      path.join(context.stateDir, WORKSPACE_SETUP_QUARANTINE_DIRNAME),
++      process.platform === "win32" ? "junction" : "dir",
++    );
++    const receipt = context.receipt();
++    expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++    expect(fs.readdirSync(outside)).toEqual([]);
++    expect(fs.readFileSync(context.marker)).toEqual(REAPPEARED);
++    expect(context.receipt()).toEqual(receipt);
++  });
++
++  it("retains the old workspace source when its configured alias moves before claim", async () => {
++    const context = await fixture(true, true);
++    const alias = context.cfg.agents.defaults.workspace;
++    const other = path.join(context.homeDir, "different-workspace");
++    fs.mkdirSync(other);
++    const result = await migrateLegacyWorkspaceState({
++      detected: detect(context),
++      stateDir: context.stateDir,
++      env: context.env,
++      beforeClaim: () => {
++        fs.unlinkSync(alias);
++        fs.symlinkSync(other, alias, process.platform === "win32" ? "junction" : "dir");
++      },
++    });
++    expect(result.warnings.join(" ")).toContain("workspace identity changed");
++    expect(fs.readFileSync(context.marker)).toEqual(REAPPEARED);
++    expect(context.state()).toEqual(context.before);
++    expect(fs.readdirSync(other)).toEqual([]);
++  });
++
++  it("retains both files when a source and claim coexist", async () => {
++    const context = await fixture();
++    fs.writeFileSync(context.marker + CLAIM_SUFFIX, "another generation");
++    expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++    expect(fs.readFileSync(context.marker)).toEqual(REAPPEARED);
++    expect(fs.readFileSync(context.marker + CLAIM_SUFFIX, "utf8")).toBe("another generation");
++  });
++
++  it("rechecks canonical state after claiming and restores the source on drift", async () => {
++    const context = await fixture();
++    const result = await migrateLegacyWorkspaceState({
++      detected: detect(context),
++      stateDir: context.stateDir,
++      env: context.env,
++      beforeClaim: () => {
++        context.db.exec(
++          "UPDATE workspace_setup_state SET setup_completed_at='2026-09-15T00:00:00.000Z' WHERE version=1",
++        );
++      },
++    });
++    expect(result.warnings.join(" ")).toContain("recovery state changed");
++    expect(fs.readFileSync(context.marker)).toEqual(REAPPEARED);
++    expect(context.receipt().removed_source).toBe(1);
++  });
++
++  it("restores a source that changed while being claimed", async () => {
++    const context = await fixture();
++    const result = await migrateLegacyWorkspaceState({
++      detected: detect(context),
++      stateDir: context.stateDir,
++      env: context.env,
++      beforeClaim: () => {
++        fs.appendFileSync(context.marker, " ");
++      },
++    });
++    expect(result.warnings.join(" ")).toContain("changed before recovery could claim");
++    expect(fs.readFileSync(context.marker, "utf8")).toBe(REAPPEARED.toString() + " ");
++    expect(fs.existsSync(context.marker + CLAIM_SUFFIX)).toBe(false);
++  });
++
++  it("refuses repair while a gateway owns the same state", async () => {
++    const context = await fixture();
++    const lock = await acquireGatewayLock({
++      env: context.env,
++      allowInTests: true,
++    });
++    try {
++      expect((await migrate(context)).warnings.length).toBeGreaterThan(0);
++      expect(fs.readFileSync(context.marker)).toEqual(REAPPEARED);
++      expect(context.state()).toEqual(context.before);
++    } finally {
++      await lock?.release();
++    }
++  });
++});
+diff --git a/src/infra/state-migrations.workspace-setup-store.ts b/src/infra/state-migrations.workspace-setup-store.ts
+--- a/src/infra/state-migrations.workspace-setup-store.ts
++++ b/src/infra/state-migrations.workspace-setup-store.ts
+@@ -174,7 +174,7 @@
+   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+ }
+
+-function setupFingerprint(params: {
++export function setupFingerprint(params: {
+   workspacePath: string;
+   bootstrapSeededAt: string | null;
+   setupCompletedAt: string | null;
+diff --git a/src/infra/state-migrations.workspace-setup.ts b/src/infra/state-migrations.workspace-setup.ts
+--- a/src/infra/state-migrations.workspace-setup.ts
++++ b/src/infra/state-migrations.workspace-setup.ts
+@@ -36,6 +36,10 @@
+   readReceipt,
+   type MigrationReceipt,
+ } from "./state-migrations.workspace-setup-receipts.js";
++import {
++  hasPendingWorkspaceSetupRecovery,
++  recoverReappearedWorkspaceSetup,
++} from "./state-migrations.workspace-setup-recovery.js";
+ import { listSandboxWorkspaceDirs } from "./state-migrations.workspace-setup-sandbox.js";
+ import {
+   canonicalCoversParsedSource,
+@@ -257,20 +261,22 @@
+     homedir: params.homedir,
+   });
+   for (const [priority, sourcePath] of paths.setupStatePaths.entries()) {
+-    if (sourceOrClaimMayExist(sourcePath)) {
+-      params.add(
+-        createLegacySource({
+-          kind: "setup",
+-          rootDir: sourcePath.endsWith(LEGACY_WORKSPACE_STATE_CURRENT_FILENAME)
+-            ? path.dirname(sourcePath)
+-            : path.dirname(path.dirname(sourcePath)),
+-          sourcePath,
+-          workspaceKey: identity.workspaceKey,
+-          workspaceDir: identity.workspacePath,
+-          workspaceAliasPath: paths.workspacePath,
+-          priority,
+-        }),
+-      );
++    const source = createLegacySource({
++      kind: "setup",
++      rootDir: sourcePath.endsWith(LEGACY_WORKSPACE_STATE_CURRENT_FILENAME)
++        ? path.dirname(sourcePath)
++        : path.dirname(path.dirname(sourcePath)),
++      sourcePath,
++      workspaceKey: identity.workspaceKey,
++      workspaceDir: identity.workspacePath,
++      workspaceAliasPath: paths.workspacePath,
++      priority,
++    });
++    if (
++      sourceOrClaimMayExist(sourcePath) ||
++      hasPendingWorkspaceSetupRecovery(source, params.env)
++    ) {
++      params.add(source);
+     }
+   }
+   for (const [priority, sourcePath] of paths.stateDirAttestationPaths.entries()) {
+@@ -487,6 +493,19 @@
+       changes: [],
+       warnings: [`Failed reading legacy workspace state: ${formatErrorMessage(error)}`],
+     };
++  }
++  if (receipt) {
++    const recovered = await recoverReappearedWorkspaceSetup({
++      ...params,
++      sourceRoot,
++      sourceClaim,
++      hasSource,
++      hasClaim,
++      assertIdentity: () => assertConfiguredWorkspaceIdentity(params.source),
++    });
++    if (recovered) {
++      return recovered;
++    }
+   }
+   // One artifact after verified removal is a new generation, including a source
+   // already renamed before a crash. Collisions keep the stricter receipt check.

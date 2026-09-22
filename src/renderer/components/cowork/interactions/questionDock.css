@@ -1,0 +1,56 @@
+/* Inline question dock rendered above the prompt input. Colors follow the app theme variables. */
+.cowork-question-dock {
+  container-type: inline-size;
+  color: var(--lobster-foreground);
+  background: var(--lobster-surface);
+  border: 1px solid var(--lobster-border);
+  border-radius: 24px;
+  padding: 16px 12px 12px;
+  margin: 0 0 12px;
+  min-width: 0;
+}
+.cowork-question-dock header { display: flex; align-items: flex-start; gap: 16px; padding: 4px 12px 16px; }
+.cowork-question-dock h2 { flex: 1; min-width: 0; font-size: 16px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.cowork-question-dock nav { display: flex; align-items: center; gap: 6px; color: var(--lobster-text-secondary); white-space: nowrap; font-size: 12px; }
+.cowork-question-dock button { transition: background-color 120ms, color 120ms, opacity 120ms; }
+.cowork-question-dock button:disabled { opacity: .4; cursor: default; }
+.cowork-question-dock button:focus-visible, .cowork-question-dock textarea:focus-visible { outline: 2px solid var(--lobster-primary); outline-offset: 2px; }
+.cowork-question-dock nav button { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0; }
+.cowork-question-dock nav button:not(:disabled):hover { background: var(--lobster-surface-raised); }
+.cowork-question-dock svg { width: 18px; height: 18px; flex-shrink: 0; }
+.cowork-question-page { max-height: min(36vh, 360px); overflow-y: auto; animation: cowork-question-page-in 180ms ease-out; }
+.cowork-question-option { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; text-align: left; border-radius: 15px; margin-bottom: 2px; }
+.cowork-question-option:hover, .cowork-question-option.is-highlighted { background: var(--lobster-surface-raised); }
+.cowork-question-number, .cowork-question-pencil {
+  display: flex; justify-content: center; align-items: center; flex-shrink: 0;
+  border: 1px solid var(--lobster-border); border-radius: 50%; width: 32px; height: 32px;
+  color: var(--lobster-text-secondary); background: var(--lobster-surface);
+}
+.cowork-question-copy { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 3px; overflow-wrap: anywhere; font-size: 14px; line-height: 1.5; }
+.cowork-question-copy strong { font-weight: 500; }
+.cowork-question-copy > span { color: var(--lobster-text-secondary); }
+.cowork-question-arrow { opacity: 0; color: var(--lobster-text-secondary); }
+.cowork-question-option:is(:hover, :focus-visible, .is-highlighted) .cowork-question-arrow { opacity: 1; }
+.cowork-question-dock footer { display: flex; gap: 10px; align-items: center; padding: 12px 12px 2px; }
+.cowork-question-dock footer > .cowork-question-pencil { padding: 8px; width: 32px; height: 32px; }
+.cowork-question-dock textarea {
+  flex: 1; min-width: 0; background: transparent; resize: none; border: 0; font: inherit;
+  font-size: 14px; line-height: 24px; min-height: 24px; max-height: 100px; overflow-y: auto;
+}
+.cowork-question-dock textarea::placeholder { color: var(--lobster-text-secondary); opacity: .7; }
+.cowork-question-skip, .cowork-question-submit { border: 1px solid var(--lobster-border); border-radius: 999px; padding: 5px 12px; white-space: nowrap; font-size: 13px; }
+.cowork-question-skip { margin-left: auto; }
+.cowork-question-submit { background: var(--lobster-foreground); color: var(--lobster-background); }
+.cowork-question-hint { font-size: 12px; color: var(--lobster-text-secondary); padding: 4px 12px; }
+.cowork-question-restore { display: flex; align-items: center; gap: 8px; padding: 8px 4px; margin-bottom: 6px; color: var(--lobster-text-secondary); font-size: 13px; }
+.cowork-question-restore svg { width: 16px; height: 16px; }
+@keyframes cowork-question-page-in { from { opacity: .55; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+@container (max-width: 520px) {
+  .cowork-question-dock header { gap: 8px; padding-inline: 4px; }
+  .cowork-question-dock h2 { font-size: 14px; }
+  .cowork-question-dock footer { flex-wrap: wrap; padding-inline: 4px; }
+  .cowork-question-dock textarea { flex-basis: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cowork-question-dock * { animation: none !important; transition: none !important; }
+}

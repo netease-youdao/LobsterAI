@@ -4,19 +4,50 @@ import { RemoteInputReason } from '../../shared/remote/input';
 import { type LocalRemoteModel, RemoteModelCatalog } from './remoteModelCatalog';
 import type { RemoteStore } from './remoteStore';
 
+const Target = { First: 'space-a-generation-7', Second: 'space-b-generation-4' } as const;
 const owner = { userId: 'A', scopeKey: 'personal' };
 afterEach(() => vi.restoreAllMocks());
-function fixture() {
+function fixture(getTargetId?: () => string | null) {
   const values = new Map<string, unknown>();
   const store = { get: <T>(key: string): T | null => values.get(key) as T ?? null,
     put: (key: string, value: unknown) => values.set(key, structuredClone(value)) };
   let models: LocalRemoteModel[] = [{ identity: 'provider/model', runtimeRef: 'custom/model', source: 'custom', displayName: 'Chat model',
     providerLabel: 'Custom', available: true, image: true, toolCalling: true, thinking: { options: ['low', 'high'], default: 'low' },
     configuration: { apiKey: 'secret-one', baseURL: 'http://private.local/v1' } }];
-  return { values, catalog: new RemoteModelCatalog(store as Pick<RemoteStore, 'get' | 'put'>, () => models),
+  return { values, catalog: new RemoteModelCatalog(store as Pick<RemoteStore, 'get' | 'put'>, () => models, getTargetId),
     change: (patch: Partial<LocalRemoteModel>) => { models = [{ ...models[0], ...patch }]; }, remove: () => { models = []; } };
 }
 describe('remote model references', () => {
+  it('does not create references before a target is known', async () => {
+    const { catalog, values } = fixture(() => null);
+    expect(() => catalog.refresh(owner, 'pc')).toThrow(RemoteInputReason.Stale);
+    const api = vi.fn();
+    await expect(catalog.publish(owner, 'pc', '1', api, () => true)).rejects.toThrow(RemoteInputReason.Stale);
+    expect(api).not.toHaveBeenCalled();
+    expect(values.size).toBe(0);
+  });
+  it('keeps target-specific references when account and device IDs match', () => {
+    let targetId: string | null = Target.First;
+    const { catalog } = fixture(() => targetId);
+    const first = catalog.refresh(owner, 'pc')[0];
+    targetId = Target.Second;
+    expect(() => catalog.resolve(owner, 'pc', first.modelRef)).toThrow(RemoteInputReason.ModelUnavailable);
+    const second = catalog.refresh(owner, 'pc')[0];
+    expect(second.modelRef).not.toBe(first.modelRef);
+    targetId = Target.First;
+    expect(catalog.resolve(owner, 'pc', first.modelRef).item).toEqual(first);
+  });
+  it('discards a catalog response received after the target changes', async () => {
+    let targetId: string | null = Target.First;
+    const { catalog, values } = fixture(() => targetId);
+    const items = catalog.refresh(owner, 'pc');
+    let finish!: (value: { catalogVersion: string; items: typeof items }) => void;
+    const pending = catalog.publish(owner, 'pc', '1', () => new Promise(resolve => { finish = resolve; }), () => true);
+    targetId = Target.Second;
+    finish({ catalogVersion: '9', items });
+    await expect(pending).rejects.toThrow(RemoteInputReason.Account);
+    expect([...values.values()]).not.toContainEqual(expect.objectContaining({ catalogVersion: '9' }));
+  });
   it('caches only the catalog actually published when an old immutable publication is pending', async () => {
     const { catalog, change } = fixture();
     let items: any[] = []; let version = '0';
@@ -36,7 +67,7 @@ describe('remote model references', () => {
     expect(items[0].displayName).toBe('Changed while pending');
   });
   it('does not accept an old response after publication state is reset', async () => {
-    const { catalog } = fixture(); const items = catalog.refresh(owner, 'pc');
+    const { catalog } = fixture(() => Target.First); const items = catalog.refresh(owner, 'pc');
     let finish: (value: { catalogVersion: string; items: typeof items }) => void = () => {};
     const api = vi.fn(async () => ({ catalogVersion: '1', items }));
     api.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
@@ -44,6 +75,7 @@ describe('remote model references', () => {
     catalog.resetPublication();
     finish({ catalogVersion: '1', items });
     await expect(pending).rejects.toThrow(RemoteInputReason.Account);
+    expect(catalog.refresh(owner, 'pc')).toEqual(items);
     await catalog.publish(owner, 'pc', '1', api, () => true);
     expect(api).toHaveBeenCalledTimes(2);
   });

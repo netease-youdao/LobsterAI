@@ -80,8 +80,10 @@ export const buildMainLogUrl = (
     uuid: context.installationId,
     firstKeyfrom: context.firstKeyfrom,
     latestKeyfrom: context.latestKeyfrom,
+    keyfrom: context.latestKeyfrom,
     is_logged_in: context.userId.length > 0,
     log_Usid: context.userId,
+    user_id: context.userId || undefined,
     uts: context.timestamp,
   };
 

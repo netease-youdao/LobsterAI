@@ -185,6 +185,43 @@ describe('MCP question authority bridge', () => {
     expect(authority.getState(requestId)?.status).toBe('answered');
   });
 
+  test.each(['desktop', 'mobile'] as const)('preserves skipped plugin question IDs through %s authority responses', async source => {
+    const { runtime, registered, settled, deps } = await fixture(true);
+    const rows = new Map<string, string>();
+    const authority = new RemoteQuestionService({
+      get: (key: string) => rows.has(key) ? JSON.parse(rows.get(key)!) : undefined,
+      put: (key: string, value: unknown) => rows.set(key, JSON.stringify(value)),
+      transaction: (operation: () => unknown) => operation(), updateQuestion: () => {},
+    } as unknown as RemoteStore, () => ({ runId: 'run-a', owner: { userId: 'user-a', scopeKey: 'personal' }, agentId: 'main', cwd: '/workspace' }));
+    registered.mockImplementation(input => authority.register(input));
+    settled.mockImplementation((id, result) => authority.settle(id, result));
+    deps.runtime.getQuestionState = id => authority.getState(id);
+    deps.runtime.respondToQuestionConfirmed = (id, result, options) => authority.submit(id, result, options);
+    const localResponse = runtime.askUserInternal([
+      questions[0],
+      { ...questions[0], id: 'release-label', question: 'Release label?' },
+      { ...questions[0], question: 'Release date?' },
+    ], 10_000, { sessionKey });
+    const requestId = registered.mock.calls[0][0].requestId;
+    const state = authority.getState(requestId)!;
+    const result = source === 'desktop'
+      ? submitCoworkPermission({ requestId, result: { behavior: 'allow', updatedInput: {
+        answers: { 'Continue?': 'Yes' }, skippedQuestionIds: ['release-label', 'question-3'],
+      } } }, deps)
+      : authority.submit(state.questionId, { behavior: 'allow', updatedInput: {
+        answers: { q_0: ['Yes'], q_1: [], q_2: [] },
+      } }, {
+        submissionId: 'mobile-skip', source, expectedVersion: state.questionVersion,
+        operationDigest: state.operationDigest, beforeDispatch: () => {},
+      });
+    await expect(result).resolves.toMatchObject({ kind: 'confirmed', status: 'answered' });
+    await expect(localResponse).resolves.toEqual({
+      behavior: 'allow', answers: { 'Continue?': 'Yes' }, skippedQuestionIds: ['release-label', 'question-3'],
+    });
+    expect(authority.getState(requestId)?.resolution.answers).toEqual({ q_0: ['Yes'], q_1: [], q_2: [] });
+    expect(deps.resolveQuestion).not.toHaveBeenCalled();
+  });
+
   test('does not publish session-agnostic or duplicate legacy keys to remote control', async () => {
     const { runtime, registered, requested } = await fixture(true);
     const global = runtime.askUserInternal(questions, 1_000);

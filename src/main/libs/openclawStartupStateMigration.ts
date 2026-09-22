@@ -1,4 +1,4 @@
-import { execFile } from 'child_process';
+import { type ChildProcess,execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -21,8 +21,24 @@ export type StartupMigrationRunner = (
   options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
 ) => Promise<{ code: number | null; stdout: string; stderr: string }>;
 
+const activeMigrations = new Map<ChildProcess, { stateDir?: string; closed: Promise<void> }>();
+
+/** Only stop children spawned by this process for the selected state directory. */
+export async function stopStartupStateMigrations(stateDir: string): Promise<void> {
+  const entries = [...activeMigrations].filter(([, entry]) => entry.stateDir === path.resolve(stateDir));
+  await Promise.all(entries.map(async ([child, entry]) => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([entry.closed, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Startup migration PID ${child.pid} did not close after cancellation.`)), 5_000);
+      })]);
+    } finally { if (timer) clearTimeout(timer); }
+  }));
+}
+
 export const runStartupMigration: StartupMigrationRunner = (command, args, options) => new Promise((resolve, reject) => {
-  execFile(command, args, {
+  const child = execFile(command, args, {
     cwd: options.cwd,
     env: options.env,
     windowsHide: true,
@@ -38,6 +54,16 @@ export const runStartupMigration: StartupMigrationRunner = (command, args, optio
       resolve({ code: typeof error?.code === 'number' ? error.code : 0, stdout, stderr });
     }
   });
+  const stateDir = options.env.OPENCLAW_STATE_DIR;
+  const closed = new Promise<void>(done => child.once('close', (code, signal) => {
+    activeMigrations.delete(child);
+    console.log('[OpenClaw] Startup migration process closed:', { pid: child.pid, entry: path.basename(args[0]), code, signal });
+    done();
+  }));
+  activeMigrations.set(child, { stateDir: stateDir ? path.resolve(stateDir) : undefined, closed });
+  child.once('spawn', () => console.log('[OpenClaw] Startup migration process spawned:', {
+    pid: child.pid, parentPid: process.pid, entry: path.basename(args[0]), stateDir, createdAt: new Date().toISOString(),
+  }));
 });
 
 function parseReport(stdout: string): OpenClawStartupMigrationReport | null {

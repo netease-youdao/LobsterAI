@@ -5,8 +5,10 @@ import type { RemoteOwner } from '../../shared/remote/constants';
 import { type DeletionClaim, type DeletionCompletion, type DeletionReceipt, RemoteDeletion } from '../../shared/remote/deletions';
 import { payloadHash, sameOwner, stableJson } from './canonical';
 import { remoteDiagnostics } from './remoteDiagnostics';
+import { matchesRemoteDeletionTargetScope, samePersistedRemoteEnvironment } from './remoteEnvironmentMigration';
 import { remoteFileCacheDirectory } from './remoteFileSnapshots';
 import type { RemoteStore } from './remoteStore';
+import { archivedRemoteSyncReferences } from './remoteSyncTargetStore';
 
 const Prefix = { Deleted: 'localGcDeleted:', File: 'localGcFile:', Receipt: 'localGcReceipt:' } as const;
 const Phase = { Eligible: 'eligible', Deleting: 'deleting', Deleted: 'deleted' } as const;
@@ -41,7 +43,9 @@ export function acknowledgeRemoteSessionDeletion(store: RemoteStore, sessionId: 
   const key = `${Prefix.Deleted}${sessionId}`, saved = store.get<Tombstone>(key), sync = store.sync(sessionId);
   if (!saved || !sync || saved.phase === Phase.Deleted || store.db.prepare('SELECT 1 FROM cowork_sessions WHERE id=?').get(sessionId)
     || sync.session_id !== saved.sessionId || (saved.deviceId && sync.device_id !== saved.deviceId)
-    || (saved.environment && sync.sync_environment !== saved.environment) || (saved.streamEpoch && sync.stream_epoch !== saved.streamEpoch)
+    || (saved.environment && (sync.sync_environment === null
+      || !samePersistedRemoteEnvironment(store, { owner: saved.owner, deviceId: sync.device_id }, sync.sync_environment, saved.environment)))
+    || (saved.streamEpoch && sync.stream_epoch !== saved.streamEpoch)
     || sync.needs_snapshot || sync.source_seq !== sync.ack_seq || sync.ack_seq <= saved.sourceHighWatermark) return;
   const deletion = store.db.prepare("SELECT record_json FROM remote_projection WHERE session_id=? AND object_key='deleted'").get(sessionId) as { record_json: string } | undefined;
   if (!deletion || JSON.parse(deletion.record_json).eventType !== 'session.deleted') return;
@@ -62,7 +66,8 @@ export function acknowledgeRemoteDeletionCompletion(store: RemoteStore, entry: D
     || completion.receiptDigest !== receipt.receiptDigest || completion.localReceiptId !== receipt.localReceiptId
     || completion.localDeletionRevision !== receipt.localDeletionRevision || payloadHash(completion.guard || null) !== payloadHash(receipt.guard)
     || completion.closedSourceHighWatermark !== receipt.closedSourceHighWatermark || closed.receiptId !== receipt.localReceiptId || closed.receiptDigest !== receipt.receiptDigest
-    || sync.session_id !== target.sessionId || sync.device_id !== target.deviceId || sync.stream_epoch !== target.streamEpoch || sync.sync_environment !== target.serviceScope
+    || sync.session_id !== target.sessionId || sync.device_id !== target.deviceId || sync.stream_epoch !== target.streamEpoch
+    || sync.sync_environment === null || !matchesRemoteDeletionTargetScope(store, target, sync.sync_environment)
     || String(sync.source_seq) !== receipt.closedSourceHighWatermark || sync.ack_seq < Number(receipt.lastAcknowledgedSourceSeq)
     || store.db.prepare('SELECT 1 FROM cowork_sessions WHERE id=?').get(target.localSessionId)) return false;
   store.put(key, { ...saved, deviceId: sync.device_id, environment: sync.sync_environment, streamEpoch: sync.stream_epoch,
@@ -99,7 +104,9 @@ export class RemoteLocalGc {
     return sameOwner(tombstone.owner, this.deps.owner()) && sameOwner(tombstone.owner, store.owner(tombstone.localSessionId))
       && !store.needsSecurityRecovery() && this.deps.enabled?.() !== false && !!sync && !sync.migration_frozen
       && sync.session_id === tombstone.sessionId && sync.device_id === tombstone.deviceId
-      && sync.sync_environment === tombstone.environment && sync.stream_epoch === tombstone.streamEpoch
+      && (sync.sync_environment === tombstone.environment || sync.sync_environment !== null && tombstone.environment !== null
+        && samePersistedRemoteEnvironment(store, { owner: tombstone.owner, deviceId: tombstone.deviceId }, sync.sync_environment, tombstone.environment))
+      && sync.stream_epoch === tombstone.streamEpoch
       && (tombstone.completionReceipt
         ? closed?.receiptId === tombstone.completionReceipt.localReceiptId && closed?.receiptDigest === tombstone.completionReceipt.receiptDigest
           && closed?.operationId === tombstone.completionReceipt.operationId && closed?.deletionVersion === tombstone.completionReceipt.deletionVersion
@@ -154,6 +161,16 @@ export class RemoteLocalGc {
     const run = this.deps.store.get<{ runId: string; status: string }>(`runHistory:${sessionId}:${runId}`);
     return run?.runId === runId && terminalRuns.has(run.status);
   }
+  private preparationCommand(job: JsonRecord): JsonRecord | null {
+    if (typeof job.boundCommandId !== 'string') return null;
+    const keys = typeof job.targetId === 'string' ? [`inbox:${job.targetId}:${job.boundCommandId}`, `inbox:${job.boundCommandId}`]
+      : [`inbox:${job.boundCommandId}`];
+    for (const key of keys) {
+      const command = this.deps.store.get<JsonRecord>(key);
+      if (command && (job.targetId === undefined || command.targetId === job.targetId)) return command;
+    }
+    return null;
+  }
   private trimJobs(tombstone: Tombstone): boolean {
     const store = this.deps.store;
     const prefixes = ['desktopAsset:', DESKTOP_INPUT_RUN_PREFIX, 'fileOutput:', 'inputPreparation:'];
@@ -166,7 +183,11 @@ export class RemoteLocalGc {
       const job = row.value;
       const inputRun = this.inputRunBelongsToSession(row.key, job, tombstone.localSessionId);
       const preparation = row.key.startsWith('inputPreparation:');
-      const command = preparation && typeof job.boundCommandId === 'string' ? store.get<JsonRecord>(`inbox:${job.boundCommandId}`) : null;
+      const command = preparation ? this.preparationCommand(job) : null;
+      const preparationTarget = job.targetId ?? command?.targetId;
+      if (preparation && typeof preparationTarget === 'string' && preparationTarget !== tombstone.environment
+        && (tombstone.environment === null || !samePersistedRemoteEnvironment(store,
+          { owner: tombstone.owner, deviceId: tombstone.deviceId }, preparationTarget, tombstone.environment))) continue;
       if ((!inputRun && job.localSessionId !== tombstone.localSessionId && !(preparation && command?.localSessionId === tombstone.localSessionId)) || !sameOwner(job.owner, tombstone.owner)) continue;
       if (inputRun && !Array.isArray(job.attachments)) { tombstone.jobsBlocked = true; continue; }
       if (preparation && (!this.deps.inputCacheRoot || !command || !terminalCommands.has(command.state) || !terminalCommands.has(command.command?.status)
@@ -216,6 +237,7 @@ export class RemoteLocalGc {
     } finally { this.running = false; }
   }
   private referenced(filePath: string): boolean {
+    if (archivedRemoteSyncReferences(this.deps.store).paths.has(filePath)) return true;
     for (const prefix of ['desktopAsset:', DESKTOP_INPUT_RUN_PREFIX, 'fileOutput:', 'inputPreparation:']) {
       const rows = this.entries<JsonRecord>(prefix, '', 501);
       if (rows.length > 500 || rows.some(row => stableJson(row.value).includes(filePath))) return true;

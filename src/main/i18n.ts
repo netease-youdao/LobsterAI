@@ -34,6 +34,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     remotePermissionRequired: '需要操作确认',
     remoteReviewOnDesktop: '请在电脑端查看并确认此操作。',
     remoteSecureStorageUnavailable: '系统安全存储不可用，暂时无法启用手机远程控制。',
+    browserPasskeyChooseAccountTitle: '使用通行密钥',
+    browserPasskeyChooseAccountMessage: '选择用于登录 {site} 的账号',
+    browserPasskeyUnnamedAccount: '已保存的账号',
+    browserPasskeyCancel: '取消',
     xaiAuthMigrationPending: '请等待 AI 引擎完成认证数据升级后，再更改 xAI 登录；若升级失败，请先修复引擎。',
     xaiAuthStoreFailed: '无法访问 xAI 认证存储，请检查 AI 引擎状态后重试。',
     openClawStartupMigrationFailed: 'AI 引擎状态升级失败：{error}',
@@ -99,6 +103,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Session titles (created by ChannelSessionSync)
     coworkDefaultSessionTitle: '新对话',
+    coworkWorkspaceChangesTitle: '工作区变更',
     cronSessionPrefix: '定时',
     channelPrefixFeishu: '飞书',
     channelPrefixDingtalk: '钉钉',
@@ -127,6 +132,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork error messages (shared with renderer via classifyErrorKey)
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请检查配置。',
+    coworkErrorSubagentSummaryFailed: '子任务已完成，但主 Agent 未能恢复汇总。请继续对话以重试汇总。',
     coworkErrorLobsterAILoginExpired: '登录状态已过期，请重新登录后继续使用 LobsterAI 套餐模型。',
     coworkErrorOAuthInvalid: 'OAuth 授权已失效或权限不足，请重新授权后重试。',
     coworkErrorModelAccessDenied: '当前账号无权访问该模型，请切换模型或检查服务商账号权限。',
@@ -138,6 +144,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorEnterprisePoolExhausted: '当前团队积分池已用完。',
     coworkErrorEnterpriseCreditBatchesExpired: '当前团队积分批次已全部过期。',
     coworkErrorInsufficientBalance: 'API 余额不足，请充值后重试。',
+    coworkErrorModelServiceUnavailable: '该模型服务暂不可用，请切换模型或稍后重试。',
+    coworkErrorProviderCooldown: '模型凭据暂时处于冷却期，请稍后重试或切换其他服务商。',
     coworkErrorInputTooLong: '输入内容过长，超出模型上下文限制。',
     coworkErrorMessageTooLarge:
       '本次消息过大，请减少附件、压缩图片或拆分提交。（单次整体需小于 30MB）',
@@ -317,6 +325,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Weixin
     imWeixinNotEnabled: '微信渠道当前未启用。',
+    imWeixinQrSessionExpired: '本次微信扫码已结束，请重新获取二维码。',
+    imWeixinGatewayUnavailable: 'AI 引擎尚未连接，请启动引擎后重新扫码。',
+    imWeixinQrInvalidResponse: '未能获取有效的微信二维码，请重试；若持续失败，请更新应用。',
+    openClawConfigSyncFailed: 'AI 引擎配置同步失败，请重试。',
     imWeixinEnableSuggestion: '请启用微信渠道后重新测试连通性。',
     imWeixinConfigReady: '微信配置已就绪。',
     imWeixinOpenClawHint:
@@ -429,6 +441,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     remotePermissionRequired: 'Permission required',
     remoteReviewOnDesktop: 'Review this operation on the desktop.',
     remoteSecureStorageUnavailable: 'Secure system storage is unavailable. Remote control cannot be enabled.',
+    browserPasskeyChooseAccountTitle: 'Use a passkey',
+    browserPasskeyChooseAccountMessage: 'Choose an account to sign in to {site}',
+    browserPasskeyUnnamedAccount: 'Saved account',
+    browserPasskeyCancel: 'Cancel',
     xaiAuthMigrationPending: 'Wait for the AI engine credential migration to finish before changing xAI login. If migration failed, repair the engine first.',
     xaiAuthStoreFailed: 'Unable to access the xAI credential store. Check the AI engine status and retry.',
     openClawStartupMigrationFailed: 'AI engine state migration failed: {error}',
@@ -494,6 +510,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Session titles
     coworkDefaultSessionTitle: 'New Chat',
+    coworkWorkspaceChangesTitle: 'Workspace changes',
     cronSessionPrefix: 'Cron',
     channelPrefixFeishu: 'Feishu',
     channelPrefixDingtalk: 'DingTalk',
@@ -532,6 +549,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork error messages
     coworkErrorAuthInvalid: 'Invalid or expired API key. Please check your configuration.',
+    coworkErrorSubagentSummaryFailed: 'Subtasks finished, but the main agent could not resume the summary. Send a follow-up to retry.',
     coworkErrorLobsterAILoginExpired:
       'Your login session has expired. Sign in again to continue using LobsterAI plan models.',
     coworkErrorOAuthInvalid: 'OAuth authorization is invalid or missing required access. Re-authenticate and try again.',
@@ -544,6 +562,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorEnterprisePoolExhausted: 'The current team credit pool has been used up.',
     coworkErrorEnterpriseCreditBatchesExpired: 'All credit batches for the current team have expired.',
     coworkErrorInsufficientBalance: 'Insufficient API balance. Please top up and try again.',
+    coworkErrorModelServiceUnavailable: 'This model service is temporarily unavailable. Switch models or try again later.',
+    coworkErrorProviderCooldown: 'The model credentials are temporarily in cooldown. Try again later or switch providers.',
     coworkErrorInputTooLong: 'Input too long, exceeding model context limit.',
     coworkErrorMessageTooLarge:
       'This message is too large. Reduce attachments, compress images, or split it up. (Keep each message under about 30 MB.)',
@@ -754,6 +774,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Weixin
     imWeixinNotEnabled: 'WeChat channel is not currently enabled.',
+    imWeixinQrSessionExpired: 'This WeChat login session has ended. Please request a new QR code.',
+    imWeixinGatewayUnavailable: 'The AI engine is not connected. Start the engine and try scanning again.',
+    imWeixinQrInvalidResponse: 'Could not get a valid WeChat QR code. Try again; if this continues, update the app.',
+    openClawConfigSyncFailed: 'Failed to sync the AI engine configuration. Please try again.',
     imWeixinEnableSuggestion: 'Please enable the WeChat channel and test connectivity again.',
     imWeixinConfigReady: 'WeChat configuration is ready.',
     imWeixinOpenClawHint:

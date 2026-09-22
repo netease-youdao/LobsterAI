@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
 import { RemoteCapability, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus } from '../../shared/remote/constants';
+import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteQuestion } from '../../shared/remote/questions';
 import { RemoteReply } from '../../shared/remote/reply';
 import { OwnershipAssociationStore } from '../ownershipAssociationStore';
@@ -56,7 +57,7 @@ function fixture() {
   });
   const bridge: any = new RemoteBridge({ store, identity: { installationId: 'instance', deviceKey: 'key', databaseId: 'db' },
     runSessionTransaction: <T>(operation: () => T) => store.transaction(operation),
-    getOwner: () => owner, getApiBaseUrl: () => 'https://example.com', request: requestApi,
+    getOwner: () => owner, getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => 'https://example.com', request: requestApi,
     metadata: { name: 'Desktop', hostName: 'host', platform: 'macos', appVersion: '1', instanceLabel: 'default' },
     prepare: () => { store.db.prepare("INSERT INTO cowork_sessions VALUES ('local','hello',1,1,'idle')").run(); store.assignNew('local', owner, 'remote_command'); return { localSessionId: 'local', remoteSessionId: 'remote', runId: command.runId }; },
     execute, onAccountChange: vi.fn(),
@@ -142,7 +143,7 @@ describe('ownership association synchronization', () => {
   });
   it('keeps admitted work recoverable after the flag turns off but gates a different device', () => {
     const { bridge, store } = claimed();
-    bridge.ownershipClaimCapability = { environment: 'https://example.com', owner, enabled: true };
+    bridge.ownershipClaimCapability = { environment: RemoteEnvironment.Test, owner, enabled: true };
     expect(bridge.ownershipSyncBlocked('claimed-task')).toBe(false);
     expect(new OwnershipAssociationStore(store).list(owner)[0].remote_admissions_json).not.toBe('{}');
     bridge.ownershipClaimCapability.enabled = false;
@@ -153,7 +154,7 @@ describe('ownership association synchronization', () => {
   });
   it('reports pending and failed task persistence independently from a healthy websocket', () => {
     const { bridge, store } = claimed();
-    bridge.ownershipClaimCapability = { environment: 'https://example.com', owner, enabled: true };
+    bridge.ownershipClaimCapability = { environment: RemoteEnvironment.Test, owner, enabled: true };
     bridge.ownershipSyncBlocked('claimed-task');
     expect(bridge.associationSyncState({ kind: OwnershipTargetKind.Task, id: 'claimed-task' })).toBe(OwnershipSyncState.Pending);
     store.put('syncFailure:claimed-task', { code: 47019 });

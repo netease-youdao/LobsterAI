@@ -29,6 +29,7 @@ import {
   normalizeBrowserHostnamePolicyList,
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
+import type { BrowserPasskeyRequest } from '../../shared/browserWebAccess/passkeys';
 import {
   AgentBrowserCredentialLogin,
 } from '../browserCredentials/agentBrowserCredentialLogin';
@@ -42,6 +43,7 @@ import {
 import {
   ManualCredentialCaptureService,
 } from '../browserCredentials/manualCredentialCaptureService';
+import { BrowserPasskeyService } from '../browserPasskeys/browserPasskeyService';
 import type {
   BrowserToolRequest,
   BrowserToolResponse,
@@ -75,6 +77,11 @@ export const BrowserCdpCommand = {
   Evaluate: 'Runtime.evaluate',
   CallFunctionOn: 'Runtime.callFunctionOn',
   ReleaseObjectGroup: 'Runtime.releaseObjectGroup',
+} as const;
+
+export const BrowserWindowOpenAction = {
+  Allow: 'allow',
+  Deny: 'deny',
 } as const;
 
 const DEFAULT_PAGE_URL = AgentBrowserPageUrl.Blank;
@@ -119,6 +126,7 @@ type SnapshotNode = {
 
 type BrowserPage = {
   pageId: number;
+  openerPageId?: number;
   view: WebContentsView;
   loading: boolean;
   refs: Map<string, number>;
@@ -258,6 +266,7 @@ const resolveKeyInput = (rawKey: string): { keyCode: string; modifiers: string[]
 export class AgentBrowserHost {
   private readonly pages = new Map<number, BrowserPage>();
   private readonly browserSession: Session;
+  private readonly passkeys: BrowserPasskeyService;
   private nextPageId = 1;
   private selectedPageId: number | undefined;
   private attachedPageId: number | undefined;
@@ -284,6 +293,11 @@ export class AgentBrowserHost {
     this.browserSession.setPermissionCheckHandler(() => false);
     this.browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
       callback(false);
+    });
+    this.passkeys = new BrowserPasskeyService({
+      session: this.browserSession,
+      getMainWindow: this.deps.getMainWindow,
+      onChanged: () => this.emitState(),
     });
     this.manualCredentialPreloadPath = this.deps.manualCredentialPreloadPath
       ?? resolveManualCredentialPreloadPath();
@@ -338,6 +352,7 @@ export class AgentBrowserHost {
       updatedAt: Date.now(),
       ...(this.credentialLoginState ? { credentialLogin: this.credentialLoginState } : {}),
       ...(this.credentialSavePrompt ? { credentialSavePrompt: this.credentialSavePrompt } : {}),
+      passkey: this.passkeys.getNotice(this.credentialLoginView?.webContents ?? this.getSelectedPage()?.view.webContents),
       ...(this.lastError ? { error: this.lastError } : {}),
     };
   }
@@ -361,6 +376,12 @@ export class AgentBrowserHost {
   setWindowVisible(visible: boolean): void {
     this.windowVisible = visible;
     this.syncAttachment();
+  }
+
+  resolvePasskey(request: BrowserPasskeyRequest): AgentBrowserHostState {
+    const webContents = this.credentialLoginView?.webContents ?? this.getSelectedPage()?.view.webContents;
+    if (webContents) this.passkeys.resolve(webContents, request);
+    return this.getState();
   }
 
   refreshConfig(): void {
@@ -514,7 +535,7 @@ export class AgentBrowserHost {
     this.assertCredentialLoginInactive();
     this.clearCredentialLoginStatus();
     const page = this.requirePage(pageId);
-    const fallbackPageId = this.getAdjacentPageId(pageId);
+    const fallbackPageId = this.getPageCloseFallbackId(pageId);
     this.markBrowserToolBootstrapPageUsed(pageId);
     this.manualCredentialCapture.clearPage(pageId);
     this.detachPage(pageId);
@@ -573,6 +594,7 @@ export class AgentBrowserHost {
 
   async dispose(): Promise<void> {
     this.desiredVisible = false;
+    this.passkeys.dispose();
     await this.credentialLogin.dispose();
     this.manualCredentialCapture.dispose();
     this.detachCredentialLoginView();
@@ -705,35 +727,7 @@ export class AgentBrowserHost {
     url: string,
     timeoutMs = DEFAULT_OPERATION_TIMEOUT_MS,
   ): Promise<BrowserPage> {
-    const pageId = this.nextPageId++;
-    const view = new WebContentsView({
-      webPreferences: {
-        partition: AgentBrowserPartition.Default,
-        preload: this.manualCredentialPreloadPath,
-        nodeIntegration: false,
-        nodeIntegrationInSubFrames: false,
-        contextIsolation: true,
-        sandbox: true,
-        webSecurity: true,
-        plugins: false,
-        devTools: false,
-        spellcheck: false,
-        navigateOnDragDrop: false,
-      },
-    });
-    view.setBackgroundColor('#ffffff');
-    const page: BrowserPage = {
-      pageId,
-      view,
-      loading: false,
-      refs: new Map(),
-    };
-    this.pages.set(pageId, page);
-    this.selectedPageId = pageId;
-    this.installPageHandlers(page);
-    this.syncAttachment();
-    this.emitState();
-
+    const page = this.createPageView();
     try {
       await this.navigatePage(page, url, timeoutMs);
     } catch (error) {
@@ -741,6 +735,46 @@ export class AgentBrowserHost {
       this.emitState();
       throw error;
     }
+    return page;
+  }
+
+  private getPageWebPreferences(): Electron.WebPreferences {
+    return {
+      partition: AgentBrowserPartition.Default,
+      preload: this.manualCredentialPreloadPath,
+      nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      plugins: false,
+      devTools: false,
+      spellcheck: false,
+      navigateOnDragDrop: false,
+    };
+  }
+
+  private createPageView(
+    options: Electron.WebContentsViewConstructorOptions = { webPreferences: this.getPageWebPreferences() },
+    openerPageId?: number,
+  ): BrowserPage {
+    const pageId = this.nextPageId++;
+    const view = new WebContentsView(options);
+    view.setBackgroundColor('#ffffff');
+    const page: BrowserPage = {
+      pageId,
+      openerPageId,
+      view,
+      loading: false,
+      refs: new Map(),
+    };
+    this.pages.set(pageId, page);
+    this.selectedPageId = pageId;
+    this.installPageHandlers(page);
+    this.passkeys.watch(view.webContents, pageId);
+    this.syncAttachment();
+    this.emitState();
+
     return page;
   }
 
@@ -811,12 +845,12 @@ export class AgentBrowserHost {
       console.debug('[AgentBrowserHost] Browser page destroyed:', page.pageId);
       this.markBrowserToolBootstrapPageUsed(page.pageId);
       this.manualCredentialCapture.clearPage(page.pageId);
-      const fallbackPageId = this.getAdjacentPageId(page.pageId);
+      const fallbackPageId = this.getPageCloseFallbackId(page.pageId);
+      this.detachPage(page.pageId);
       this.pages.delete(page.pageId);
       if (this.selectedPageId === page.pageId) {
         this.selectedPageId = fallbackPageId;
       }
-      if (this.attachedPageId === page.pageId) this.attachedPageId = undefined;
       this.syncAttachment();
       emit();
     });
@@ -829,24 +863,51 @@ export class AgentBrowserHost {
     };
     webContents.on('will-navigate', preventBlockedNavigation);
     webContents.on('will-redirect', preventBlockedNavigation);
-    webContents.setWindowOpenHandler(({ url }) => {
-      if (this.isAllowedUrl(url)) {
-        void this.createPage(url).catch(error => {
-          console.warn('[AgentBrowserHost] Failed to open child page:', error);
-        });
-      }
-      return { action: 'deny' };
+    webContents.setWindowOpenHandler(({ url, referrer, postBody }) => {
+      if (!this.isAllowedUrl(url)) return { action: BrowserWindowOpenAction.Deny };
+      return {
+        action: BrowserWindowOpenAction.Allow,
+        overrideBrowserWindowOptions: { webPreferences: this.getPageWebPreferences() },
+        createWindow: options => {
+          // Adopt Chromium's popup instead of reopening its URL: OAuth relies on
+          // the original window.opener, WindowProxy and pending navigation.
+          const viewOptions: Electron.WebContentsViewConstructorOptions = options;
+          const childPage = this.createPageView(viewOptions, page.pageId);
+          if (!viewOptions.webContents) {
+            // Background links can defer WebContents creation. Only these need
+            // an explicit navigation; loading a native popup again loses POSTs.
+            void this.navigatePage(childPage, url, DEFAULT_OPERATION_TIMEOUT_MS, {
+              httpReferrer: referrer,
+              ...(postBody ? {
+                postData: postBody.data,
+                extraHeaders: `Content-Type: ${postBody.contentType}${postBody.boundary ? `; boundary=${postBody.boundary}` : ''}`,
+              } : {}),
+            }).catch(error => {
+              console.warn('[AgentBrowserHost] Failed to open child page:', error);
+            });
+          }
+          return childPage.view.webContents;
+        },
+      };
     });
   }
 
-  private async navigatePage(page: BrowserPage, url: string, timeoutMs: number): Promise<void> {
+  private async navigatePage(
+    page: BrowserPage,
+    url: string,
+    timeoutMs: number,
+    loadOptions?: Electron.LoadURLOptions,
+  ): Promise<void> {
     if (!this.isAllowedUrl(url)) {
       throw new Error('Navigation was blocked by the LobsterAI browser access policy.');
     }
     this.clearCredentialLoginStatus();
     this.lastError = undefined;
     await this.proxyReady;
-    const loadPromise = page.view.webContents.loadURL(url);
+    await this.passkeys.ready;
+    const loadPromise = loadOptions
+      ? page.view.webContents.loadURL(url, loadOptions)
+      : page.view.webContents.loadURL(url);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
@@ -1371,6 +1432,7 @@ export class AgentBrowserHost {
   private setCredentialLoginView(view: WebContentsView | null): void {
     if (this.credentialLoginView !== view) this.detachCredentialLoginView();
     this.credentialLoginView = view;
+    if (view && this.selectedPageId) this.passkeys.watch(view.webContents, this.selectedPageId);
     this.syncAttachment();
     this.emitState();
   }
@@ -1394,7 +1456,9 @@ export class AgentBrowserHost {
     }
   }
 
-  private getAdjacentPageId(pageId: number): number | undefined {
+  private getPageCloseFallbackId(pageId: number): number | undefined {
+    const openerPageId = this.pages.get(pageId)?.openerPageId;
+    if (openerPageId && this.pages.has(openerPageId)) return openerPageId;
     const pageIds = Array.from(this.pages.keys());
     const pageIndex = pageIds.indexOf(pageId);
     if (pageIndex < 0) return undefined;

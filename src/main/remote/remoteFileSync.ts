@@ -7,11 +7,14 @@ import { RemoteDeletion } from '../../shared/remote/deletions';
 import { type RemoteArtifactManifest, type RemoteFilePolicy, RemoteFileReason, remoteFileRule } from '../../shared/remote/files';
 import type { RemoteInputAsset } from '../../shared/remote/input';
 import { sameOwner, stableJson } from './canonical';
+import type { DesktopInputSource } from './desktopInputMetadata';
 import { projectRemoteArtifacts, remoteArtifactReasons } from './remoteArtifactProjection';
 import { type DeliveredFileDependencies,RemoteDeliveredFileSync } from './remoteDeliveredFileSync';
 import { type DesktopMessageAssetJob, uploadDesktopMessageAsset } from './remoteDesktopAssetUpload';
 import { captureRemoteFileSnapshot, remoteFileCacheDirectory, type RemoteFileSnapshot, verifyRemoteFileSnapshot } from './remoteFileSnapshots';
+import { capturePreparedInputSnapshot, type RemotePreparedInputSource } from './remotePreparedInputSnapshots';
 import type { RemoteStore } from './remoteStore';
+import { archivedRemoteSyncReferences } from './remoteSyncTargetStore';
 
 interface Source { id: string; file_path: string; file_name: string; file_identity: string; updated_at: number; message_id: string; run_id: string; session_id: string }
 interface Publication {
@@ -32,6 +35,7 @@ interface ArtifactJob {
 interface InputJob extends DesktopMessageAssetJob {
   localSessionId: string; snapshot?: RemoteFileSnapshot; availability: string; uploadedAsset?: RemoteInputAsset; reason?: string; retryAt?: number; captureReason?: string;
   environment?: string;
+  preparedSource?: RemotePreparedInputSource;
 }
 interface Connection { owner: RemoteOwner; environment: string; deviceId: string; generation: string }
 interface TerminalBoundary { owner: RemoteOwner; environment: string; deviceId: string; ordinal: string; finishedAt: string }
@@ -184,7 +188,7 @@ export class RemoteFileSync {
   }
   private async cleanupSnapshots(connection: Connection): Promise<void> {
     this.assert(connection);
-    const references = new Set<string>();
+    const references = archivedRemoteSyncReferences(this.deps.store).paths;
     for (const { value } of this.deps.store.entries<{ owner: RemoteOwner; attachments: Array<{ snapshot?: RemoteFileSnapshot }> }>('desktopInputRun:'))
       if (value.owner.userId === connection.owner.userId) for (const item of value.attachments) if (item.snapshot) references.add(item.snapshot.path);
     for (const { value } of this.deps.store.entries<InputJob>('desktopAsset:')) if (value.owner.userId === connection.owner.userId && value.snapshot) references.add(value.snapshot.path);
@@ -379,7 +383,14 @@ export class RemoteFileSync {
         const siblings = jobs.map(row => row.value).filter(item => item.messageId === job.messageId && sameOwner(item.owner, job.owner));
         if (siblings.length > this.policy.limits.maxInputCount || siblings.reduce((sum, item) => sum + BigInt(item.sizeBytes || '0'), 0n) > BigInt(this.policy.limits.maxInputBytes)
           || siblings.filter(item => item.intent === 'image').reduce((sum, item) => sum + BigInt(item.sizeBytes || '0'), 0n) > BigInt(this.policy.limits.maxImageBytes)) throw new Error('INPUT_TOTAL_TOO_LARGE');
-        // Only newly captured immutable input sources are eligible. No backfill from mutable historical paths.
+        // An executed phone input retains a sealed preparation; each target gets an independent upload copy.
+        if (!job.snapshot && job.preparedSource) {
+          job.snapshot = await capturePreparedInputSnapshot(this.deps.store, job as InputJob & DesktopInputSource & { preparedSource: RemotePreparedInputSource },
+            this.deps.cacheRoot, connection.deviceId, () => this.assert(connection, job.localSessionId));
+          this.assert(connection, job.localSessionId);
+          this.deps.store.put(key, durableJson(job));
+        }
+        // Mutable historical file paths never become retrospective snapshots.
         if (!job.snapshot) throw new Error(typeof job.captureReason === 'string' && remoteArtifactReasons.has(job.captureReason)
           ? job.captureReason : RemoteFileReason.Source);
         job.deviceId = connection.deviceId; job.sessionId = session.session_id; job.environment = connection.environment;

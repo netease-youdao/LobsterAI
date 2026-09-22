@@ -1,3 +1,5 @@
+import '../browserPasskeys/passkeyPreload';
+
 import { ipcRenderer } from 'electron';
 
 import {

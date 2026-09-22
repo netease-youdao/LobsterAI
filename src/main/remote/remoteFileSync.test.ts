@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { RemoteCapability } from '../../shared/remote/constants';
+import { RemoteEnvironment } from '../../shared/remote/environment';
 import { type RemoteFilePolicy, RemoteFileReason, remoteFileRule } from '../../shared/remote/files';
 import { RemoteFileCapability } from '../../shared/remote/files';
 import type { LibraryIndexedFile } from '../library/libraryLocalStore';
@@ -375,11 +376,11 @@ describe('artifact sync durable boundaries and protocol', () => {
     const f = fixture(), requests: RequestInit[] = [];
     const bridge: any = new RemoteBridge({ store: f.store, identity: { installationId: 'i', deviceKey: 'k', databaseId: 'd' },
       files: { cacheRoot: f.cache, access: () => ({ assertAllowed: () => undefined }) },
-      getOwner: () => owner, getApiBaseUrl: () => 'https://example.invalid', runSessionTransaction: fn => f.store.transaction(fn),
+      getOwner: () => owner, getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => 'https://example.invalid', runSessionTransaction: fn => f.store.transaction(fn),
       metadata: { name: 'pc', hostName: 'pc', instanceLabel: 'default', platform: 'macos', appVersion: '1' }, prepare: vi.fn(), execute: vi.fn(), onAccountChange: vi.fn(),
       request: async (_owner, _pathname, init) => { requests.push(init); return ok({ enabled: true, protocolVersions: [1], projectionVersions: [1, 2, 3], capabilities: [RemoteCapability.SameAccountAccess, ...Object.values(RemoteFileCapability)] }); },
     });
-    bridge.owner = owner; bridge.registration = { deviceId: 'pc', ...owner, metadataVersion: '1' };
+    bridge.owner = owner; bridge.registration = { deviceId: 'pc', ...owner, metadataVersion: '1' }; bridge.targetId = RemoteEnvironment.Test;
     await bridge.refreshCapabilities(); await bridge.refreshCapabilities();
     expect(bridge.projectionVersion).toBe(3);
     expect(requests.every(init => !new Headers(init.headers).has('X-Remote-Projection-Version'))).toBe(true);

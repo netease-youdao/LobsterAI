@@ -52,6 +52,20 @@ function archiveWarningFixture(fixture: ReturnType<typeof createWarningImportFix
 }
 
 describe('openclawSessionLegacyMigration', () => {
+  test.each([false, true])('classifies the Agent media migration requirement from CLI output, json=%s', async json => {
+    const legacy = path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json');
+    writeFile(legacy);
+    const cause = `OpenClaw agent database ${path.join(stateDir, 'agents', 'main', 'agent', 'openclaw-agent.sqlite')} uses schema version 1; run openclaw doctor --fix to migrate persisted media before using it.`;
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {},
+      runner: async () => ({ code: 1,
+        stdout: json ? JSON.stringify({ ok: false, error: { type: 'cli_error', message: cause } }) : '',
+        stderr: 'Config warnings: unrelated plugin warning\n[openclaw] Reason: ' + cause,
+      }),
+    });
+    expect(result).toMatchObject({ status: 'failed', errorCode: OpenClawEngineErrorCode.AgentMediaMigrationRequired });
+    expect(fs.readFileSync(legacy, 'utf8')).toBe('{}\n');
+  });
   test('preserves dreaming failure classification from a long structured CLI error', async () => {
     writeFile(path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json'));
     const message = `${OPENCLAW_STARTUP_MIGRATION_REFUSAL}\n- Skipped Memory Core session ingestion import for fixture because the legacy source could not be imported: SyntaxError: invalid JSON\n`

@@ -1,3 +1,4 @@
+import { SubagentYield } from '../../../../shared/cowork/subagent';
 import { extractGatewayMessageText } from '../../openclawHistory';
 import { AgentLifecyclePhase } from '../constants';
 import {
@@ -6,14 +7,7 @@ import {
   isHistoryToolResultRole,
 } from './historyBackfill';
 
-export const SubagentYield = {
-  ToolName: 'sessions_yield',
-  ResultStatus: 'yielded',
-  LivenessState: 'paused',
-  StopReason: 'end_turn',
-  CancelledStatus: 'cancelled',
-  TimedOutStatus: 'timed_out',
-} as const;
+export { SubagentYield } from '../../../../shared/cowork/subagent';
 
 export const YieldHistoryRole = {
   Assistant: 'assistant',

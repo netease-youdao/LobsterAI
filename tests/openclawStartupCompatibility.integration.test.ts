@@ -10,9 +10,11 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { runOpenClawCompatibilityRepair, runOpenClawDoctorRepair } from '../src/main/libs/openclawCompatibilityRepair';
 import { OpenClawRepairPhase } from '../src/shared/openclawEngine/repair';
 import {
+  OPENCLAW_RETIRED_GATEWAY_RELOAD_KEYS,
   OPENCLAW_STARTUP_COMPATIBILITY_ENTRY,
   OPENCLAW_STARTUP_COMPATIBILITY_RESULT_PREFIX,
   OpenClawBundledDiscoveryMode,
+  OpenClawGatewayReloadMode,
   OpenClawStartupCompatibilityMode,
 } from '../src/shared/openclawEngine/startupCompatibility';
 import { OpenClawStartupMigrationStatus } from '../src/shared/openclawEngine/startupMigration';
@@ -100,6 +102,39 @@ describe.skipIf(!runtimeRoot || !sourceRoot)('bundled on-demand startup compatib
     } };
   }
 
+  test.each([OpenClawGatewayReloadMode.LegacyHot, OpenClawGatewayReloadMode.LegacyRestart])('migrates retired reload mode %s before the legacy session CLI validates config', async mode => {
+    seedDatabase();
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    delete config.plugins.bundledDiscovery;
+    config.gateway.reload = { mode };
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    const original = fs.readFileSync(configPath, 'utf8');
+
+    const result = await run(OpenClawStartupCompatibilityMode.PrepareStartup);
+    expect(result.report, JSON.stringify(result.report)).toMatchObject({ status: OpenClawStartupMigrationStatus.Migrated });
+    expect(result.report.changes).toContain('Mapped retired gateway.reload.mode to hybrid.');
+    expect(result.report.backups).toHaveLength(1);
+    expect(fs.readFileSync(result.report.backups[0], 'utf8')).toBe(original);
+    const after = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(after.gateway).toEqual({ ...config.gateway, reload: { mode: OpenClawGatewayReloadMode.Hybrid } });
+    expect(after.agents).toEqual(config.agents);
+    expect(after.plugins).toEqual(config.plugins);
+    expect((await run(OpenClawStartupCompatibilityMode.PrepareStartup)).report)
+      .toMatchObject({ status: OpenClawStartupMigrationStatus.Skipped, changes: [], backups: [] });
+  });
+
+  test.each([OpenClawGatewayReloadMode.Off, OpenClawGatewayReloadMode.Hybrid, 'unknown-user-value'])('preserves reload mode %s without guessing or discarding config', async mode => {
+    seedDatabase();
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    delete config.plugins.bundledDiscovery;
+    config.gateway.reload = { mode };
+    const original = JSON.stringify(config, null, 2);
+    fs.writeFileSync(configPath, original);
+    expect((await run(OpenClawStartupCompatibilityMode.PrepareStartup)).report)
+      .toMatchObject({ status: OpenClawStartupMigrationStatus.Skipped, changes: [], backups: [] });
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(original);
+  });
+
   test.each(Object.values(OpenClawBundledDiscoveryMode))('imports %s once and retains the exact source backup', async mode => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     config.plugins.bundledDiscovery = mode;
@@ -113,6 +148,83 @@ describe.skipIf(!runtimeRoot || !sourceRoot)('bundled on-demand startup compatib
       .toBe(JSON.stringify(mode));
     const second = await run(OpenClawStartupCompatibilityMode.MigrateConfig);
     expect(second.report).toMatchObject({ status: OpenClawStartupMigrationStatus.Skipped, backups: [], changes: [] });
+  });
+
+  test('migrates discovery and retired reload together with one original backup', async () => {
+    seedDatabase();
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    config.gateway.reload = { mode: OpenClawGatewayReloadMode.LegacyRestart };
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    const original = fs.readFileSync(configPath, 'utf8');
+    const { report } = await run(OpenClawStartupCompatibilityMode.PrepareStartup);
+    expect(report, JSON.stringify(report)).toMatchObject({ status: OpenClawStartupMigrationStatus.Migrated });
+    expect(report.backups).toHaveLength(1);
+    expect(report.changes).toHaveLength(2);
+    expect(fs.readFileSync(report.backups[0], 'utf8')).toBe(original);
+    const after = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(after.gateway.reload.mode).toBe(OpenClawGatewayReloadMode.Hybrid);
+    expect(after.plugins).toEqual({ enabled: false });
+  });
+
+  test.each([
+    OpenClawGatewayReloadMode.LegacyHot,
+    OpenClawGatewayReloadMode.LegacyRestart,
+    OpenClawGatewayReloadMode.Hybrid,
+    undefined,
+  ])('retires only the two old reload timers alongside mode %s with exact backup', async mode => {
+    seedDatabase();
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    delete config.plugins.bundledDiscovery;
+    config.gateway.reload = {
+      ...(mode ? { mode } : {}),
+      ...Object.fromEntries(OPENCLAW_RETIRED_GATEWAY_RELOAD_KEYS.map((key, index) => [key, 1000 + index])),
+    };
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    const original = fs.readFileSync(configPath, 'utf8');
+    const { report } = await run(OpenClawStartupCompatibilityMode.PrepareStartup);
+    expect(report, JSON.stringify(report)).toMatchObject({ status: OpenClawStartupMigrationStatus.Migrated });
+    expect(report.backups).toHaveLength(1);
+    expect(fs.readFileSync(report.backups[0], 'utf8')).toBe(original);
+    const after = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(after.gateway).toEqual({ ...config.gateway, reload: mode ? { mode: OpenClawGatewayReloadMode.Hybrid } : {} });
+    expect(after.agents).toEqual(config.agents);
+    expect(after.plugins).toEqual(config.plugins);
+    for (const key of OPENCLAW_RETIRED_GATEWAY_RELOAD_KEYS) {
+      expect(report.changes).toContain(`Removed retired gateway.reload.${key}.`);
+    }
+    expect((await run(OpenClawStartupCompatibilityMode.PrepareStartup)).report)
+      .toMatchObject({ status: OpenClawStartupMigrationStatus.Skipped, changes: [], backups: [] });
+  });
+
+  test('preserves original config and backup when an unrelated field prevents canonical write', async () => {
+    seedDatabase();
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    delete config.plugins.bundledDiscovery;
+    config.gateway.reload = {
+      mode: OpenClawGatewayReloadMode.LegacyHot, userUnrecognizedField: true,
+      ...Object.fromEntries(OPENCLAW_RETIRED_GATEWAY_RELOAD_KEYS.map(key => [key, 1000])),
+    };
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    const original = fs.readFileSync(configPath, 'utf8');
+    const { report } = await run(OpenClawStartupCompatibilityMode.PrepareStartup);
+    expect(report).toMatchObject({ status: OpenClawStartupMigrationStatus.Failed });
+    expect(report.backups).toHaveLength(1);
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(original);
+    expect(fs.readFileSync(report.backups[0], 'utf8')).toBe(original);
+  });
+
+  test('preserves an unknown mode and its timers when canonical validation refuses migration', async () => {
+    seedDatabase();
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    delete config.plugins.bundledDiscovery;
+    config.gateway.reload = { mode: 'unknown-user-mode', [OPENCLAW_RETIRED_GATEWAY_RELOAD_KEYS[0]]: 1000 };
+    const original = JSON.stringify(config);
+    fs.writeFileSync(configPath, original);
+    const { report } = await run(OpenClawStartupCompatibilityMode.PrepareStartup);
+    expect(report).toMatchObject({ status: OpenClawStartupMigrationStatus.Failed });
+    expect(report.backups).toHaveLength(1);
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(original);
+    expect(fs.readFileSync(report.backups[0], 'utf8')).toBe(original);
   });
 
   test('keeps an existing canonical discovery mode over the legacy value', async () => {

@@ -14,6 +14,7 @@ import type {
   ScheduledTaskPayload,
 } from '../../../scheduledTask/types';
 import { AgentId } from '../../../shared/agent/constants';
+import { sanitizeWeixinDeliveryError } from '../../../shared/im/weixin';
 import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
 import {
   imConversationDisplayName,
@@ -32,6 +33,7 @@ import {
   resolveGroupDeliveryTargetFromSessions,
   resolveImDeliveryHintsFromSessions,
 } from './helpers';
+import { WeixinReportDelivery } from './weixinReportDelivery';
 
 /** Matches auto-generated channel session titles, e.g. "[TG] group:123". */
 const AUTO_CHANNEL_TITLE_RE = /^\[[^\]]*\]\s/;
@@ -40,6 +42,15 @@ const WECOM_PLATFORM: Platform = 'wecom';
 const CASE_SENSITIVE_GROUP_TARGET_PLATFORMS = new Set<Platform>([
   DINGTALK_PLATFORM,
   WECOM_PLATFORM,
+]);
+const WEIXIN_PLATFORM: Platform = 'weixin';
+/**
+ * Direct-peer providers that route by case-sensitive user ids. Weixin also
+ * keys its per-conversation context tokens by the original id, so a
+ * lowercased target is sent without context and rejected by the API.
+ */
+const CASE_SENSITIVE_DIRECT_TARGET_PLATFORMS = new Set<Platform>([
+  WEIXIN_PLATFORM,
 ]);
 
 type ConversationMappingForList = {
@@ -76,12 +87,15 @@ function normalizeImAnnounceDeliveryTo(
     return rawTo;
   }
 
+  // Session mappings derive from lowercased OpenClaw session keys, so a
+  // matching mapping only confirms the peer. Keep the caller's casing: it is
+  // the channel-native id for case-sensitive providers such as Weixin.
   const peer = parsed.peerId.trim().toLowerCase();
   if (peer) {
     for (const mapping of mappings) {
       const mappingParsed = parseImConversationId(mapping.imConversationId);
       if (mappingParsed.peerId.trim().toLowerCase() !== peer) continue;
-      return mappingParsed.peerId;
+      return parsed.peerId.trim();
     }
   }
 
@@ -368,6 +382,33 @@ async function restoreAnnounceDeliveryHintsFromGateway(
           }
         }
 
+        if (
+          options?.casingOnly &&
+          CASE_SENSITIVE_DIRECT_TARGET_PLATFORMS.has(context.platform)
+        ) {
+          // Historical repair for direct peers: only restore the channel-native
+          // casing of the same peer id; never change the account routing.
+          const hints = resolveImDeliveryHintsFromSessions({
+            sessions,
+            channel: delivery.channel,
+            peerId: delivery.to,
+            preferredAccountId: selectedAccountId ?? context.parsedConversation.accountId,
+          });
+          if (
+            hints &&
+            hints.to !== delivery.to &&
+            hints.to.toLowerCase() === delivery.to.toLowerCase()
+          ) {
+            console.log(
+              `[ScheduledTask] restored ${context.platform} direct delivery.to casing from gateway session:`,
+              delivery.to,
+              '->',
+              hints.to,
+            );
+            delivery.to = hints.to;
+          }
+        }
+
         if (CASE_SENSITIVE_GROUP_TARGET_PLATFORMS.has(context.platform)) {
           const nativeGroupTarget = resolveGroupDeliveryTargetFromSessions({
             sessions,
@@ -459,11 +500,12 @@ async function buildAnnounceNormalizationPatch(
     ? normalizedInput.delivery.to.trim()
     : '';
   if (
-    CASE_SENSITIVE_GROUP_TARGET_PLATFORMS.has(context.platform) &&
+    (CASE_SENSITIVE_GROUP_TARGET_PLATFORMS.has(context.platform) ||
+      CASE_SENSITIVE_DIRECT_TARGET_PLATFORMS.has(context.platform)) &&
     normalizedTo &&
     normalizedTo === normalizedTo.toLowerCase()
   ) {
-    // Historical repair must only restore the case-sensitive native group id;
+    // Historical repair must only restore the case-sensitive native target id;
     // it must not infer or change account routing from gateway metadata.
     await restoreAnnounceDeliveryHintsFromGateway(normalizedInput, context, deps, {
       casingOnly: true,
@@ -558,6 +600,41 @@ async function ensureScheduledTaskGatewayClient(
 
 export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): void {
   const { getCronJobService, getIMGatewayManager, getOpenClawRuntimeAdapter, getCoworkSessionTitle } = deps;
+  const weixinReportDelivery = new WeixinReportDelivery({
+    getJob: id => getCronJobService().getJob(id),
+    listRuns: (id, limit, offset) => getCronJobService().listRuns(id, limit, offset),
+    send: async params => {
+      await ensureScheduledTaskGatewayClient(getOpenClawRuntimeAdapter);
+      const client = asGatewayRpcClient(getOpenClawRuntimeAdapter()?.getGatewayClient());
+      if (!client) throw new Error('Gateway not ready');
+      return client.request('send', params, { timeoutMs: 90_000 });
+    },
+  });
+
+  ipcMain.handle(ScheduledTaskIpc.ResendWeixinReport, async (_event, taskId: string, runId: string) => {
+    try {
+      // A lowercased Weixin recipient is sent without its context token and
+      // rejected, so repair the stored target before reusing it for the resend.
+      try {
+        const task = typeof taskId === 'string' && taskId
+          ? await getCronJobService().getJob(taskId)
+          : null;
+        if (task) {
+          await migrateScheduledTaskAnnounceJob(task, {
+            getCronJobService,
+            getIMGatewayManager,
+            getOpenClawRuntimeAdapter,
+          });
+        }
+      } catch (error) {
+        console.warn('[ScheduledTask] failed to repair delivery target before Weixin resend:', error);
+      }
+      await weixinReportDelivery.resend(taskId, runId);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: sanitizeWeixinDeliveryError(error) };
+    }
+  });
 
   ipcMain.handle(ScheduledTaskIpc.List, async () => {
     try {

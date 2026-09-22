@@ -6,7 +6,10 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { OpenClawRepairPhase, OpenClawRepairPluginSource } from '../../shared/openclawEngine/repair';
+import {
+  OPENCLAW_PLUGIN_SKILLS_DIRECTORY, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST,
+  OpenClawRepairPhase, OpenClawRepairPluginSource,
+} from '../../shared/openclawEngine/repair';
 import {
   assertOwnedRepairPath, type CompatibilityRepairOptions, type CompatibilityRepairOwners,
   type RepairInstallRecord, repairOpenClawCompatibility,
@@ -32,7 +35,56 @@ function owners(): CompatibilityRepairOwners {
   };
 }
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test.each([false, true])('snapshots a generated skill link without creating or following it, dangling=%s', async dangling => {
+  const options = fixture();
+  const skills = path.join(options.stateDir, OPENCLAW_PLUGIN_SKILLS_DIRECTORY);
+  const external = path.join(path.dirname(options.stateDir), 'old-installation');
+  const link = path.join(skills, 'browser-automation');
+  fs.mkdirSync(skills);
+  if (!dangling) {
+    fs.mkdirSync(external);
+    fs.writeFileSync(path.join(external, 'SKILL.md'), 'external source must remain unchanged');
+  }
+  fs.symlinkSync(external, link, 'junction');
+  const linkTarget = fs.readlinkSync(link);
+  fs.writeFileSync(path.join(skills, 'user-note.md'), 'keep real files');
+  fs.mkdirSync(path.join(skills, 'user-directory'));
+  fs.writeFileSync(path.join(skills, 'user-directory', 'SKILL.md'), 'keep real directories');
+  const symlink = vi.spyOn(fs, 'symlinkSync').mockImplementation(() => {
+    throw Object.assign(new Error('EPERM: cannot create symbolic links'), { code: 'EPERM' });
+  });
+
+  const report = await repairOpenClawCompatibility(options, owners());
+  expect(report, report.error).toMatchObject({ success: true });
+  expect(symlink).not.toHaveBeenCalled();
+  expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+  expect(fs.readlinkSync(link)).toBe(linkTarget);
+  const savedSkills = path.join(options.backupDir, 'original', OPENCLAW_PLUGIN_SKILLS_DIRECTORY);
+  expect(fs.lstatSync(path.join(savedSkills, 'browser-automation'), { throwIfNoEntry: false })).toBeUndefined();
+  expect(fs.readFileSync(path.join(savedSkills, 'user-note.md'), 'utf8')).toBe('keep real files');
+  expect(fs.readFileSync(path.join(savedSkills, 'user-directory', 'SKILL.md'), 'utf8')).toBe('keep real directories');
+  const manifest = JSON.parse(fs.readFileSync(path.join(options.backupDir, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST), 'utf8'));
+  expect(manifest.generatedPluginSkillLinks).toEqual([{ path: path.relative(options.stateDir, link), target: linkTarget }]);
+  expect(manifest.restoreInstructions).toContain('openclaw skills list');
+  if (!dangling) expect(fs.readFileSync(path.join(external, 'SKILL.md'), 'utf8')).toBe('external source must remain unchanged');
+});
+
+test.each(['outside-index', 'nested', 'database'])('does not suppress backup failure for a %s link', async kind => {
+  const options = fixture();
+  const skills = path.join(options.stateDir, OPENCLAW_PLUGIN_SKILLS_DIRECTORY);
+  const link = kind === 'outside-index' ? path.join(options.stateDir, 'user-link')
+    : path.join(skills, kind === 'nested' ? 'user-directory/link' : 'user.sqlite');
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(path.join(path.dirname(options.stateDir), 'absent'), link, 'junction');
+  vi.spyOn(fs, 'symlinkSync').mockImplementation(() => { throw new Error('EPERM: symbolic link denied'); });
+  const report = await repairOpenClawCompatibility(options, owners());
+  expect(report).toMatchObject({ success: false, failurePath: link });
+  expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+  expect(fs.existsSync(path.join(options.backupDir, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST))).toBe(false);
 });
 
 test('snapshot includes committed WAL data, config, and legacy transcripts without changing sources', async () => {
@@ -135,6 +187,64 @@ test('healthy installations and same-ID third-party packages are retained', asyn
   expect(deps.writeInstallRecords).not.toHaveBeenCalled();
   expect(deps.acceptBundledPlugin).not.toHaveBeenCalled();
 });
+
+function migratedPluginFixture() {
+  const context = pluginFixture();
+  const base = path.dirname(context.options.stateDir);
+  context.options.stateDir = path.join(base, 'admin', 'LobsterAI', 'openclaw', 'state');
+  fs.mkdirSync(context.options.stateDir, { recursive: true });
+  context.options.configPath = path.join(context.options.stateDir, 'openclaw.json');
+  fs.writeFileSync(context.options.configPath, '{}');
+  context.records.deepseek.installPath = path.join(base, 'old-user', 'LobsterAI', 'openclaw', 'state',
+    'npm', 'projects', 'openclaw-deepseek-123', 'node_modules', '@openclaw', 'deepseek-provider');
+  return context;
+}
+
+test('reconciles a missing previous-profile install and backs up its SQLite ledger including WAL', async () => {
+  const { options, deps, records, root, user } = migratedPluginFixture();
+  const dbPath = path.join(options.stateDir, 'state', 'openclaw.sqlite');
+  fs.mkdirSync(path.dirname(dbPath));
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec('PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; CREATE TABLE ledger (value TEXT)');
+    db.prepare('INSERT INTO ledger VALUES (?)').run(JSON.stringify(records));
+    const result = await repairOpenClawCompatibility(options, deps);
+    expect(result, result.error).toMatchObject({ success: true });
+    expect(deps.writeInstallRecords).toHaveBeenCalledWith({
+      user, deepseek: expect.objectContaining({ source: OpenClawRepairPluginSource.Path, installPath: root }),
+    }, {});
+    expect(deps.validatePlugin).toHaveBeenCalledExactlyOnceWith('deepseek', root);
+    expect(deps.acceptBundledPlugin).toHaveBeenCalledExactlyOnceWith('deepseek', {});
+    const saved = new DatabaseSync(path.join(options.backupDir, 'original', 'state', 'openclaw.sqlite'), { readOnly: true });
+    try { expect(saved.prepare('SELECT value FROM ledger').get()?.value).toBe(JSON.stringify(records)); } finally { saved.close(); }
+    expect(fs.existsSync(records.deepseek.installPath!)).toBe(false);
+  } finally { db.close(); }
+});
+
+test.each(['existing', 'custom-path', 'conflicting-package', 'linked-parent', 'permission-denied'])(
+  'preserves an ambiguous previous-profile installation: %s', async scenario => {
+    const { options, deps, records } = migratedPluginFixture();
+    const installPath = records.deepseek.installPath!;
+    if (scenario === 'existing') fs.mkdirSync(installPath, { recursive: true });
+    if (scenario === 'custom-path') records.deepseek.installPath = path.join(path.dirname(options.backupDir), 'custom-plugin');
+    if (scenario === 'conflicting-package') records.deepseek.resolvedName = '@someone/deepseek-provider';
+    if (scenario === 'linked-parent') {
+      fs.mkdirSync(path.dirname(installPath), { recursive: true });
+      fs.symlinkSync(path.join(path.dirname(options.backupDir), 'absent-target'), installPath, 'junction');
+    }
+    if (scenario === 'permission-denied') {
+      const lstat = fs.lstatSync;
+      vi.spyOn(fs, 'lstatSync').mockImplementation(((filePath: fs.PathLike, ...args: []) => {
+        if (String(filePath).includes('old-user')) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+        return lstat(filePath, ...args);
+      }) as typeof fs.lstatSync);
+    }
+    const result = await repairOpenClawCompatibility(options, deps);
+    expect(result.success).toBe(scenario !== 'permission-denied');
+    expect(deps.writeInstallRecords).not.toHaveBeenCalled();
+    expect(deps.acceptBundledPlugin).not.toHaveBeenCalled();
+  },
+);
 
 test('bundled version mismatch stops before writing install records or consent', async () => {
   const { options, deps, root } = pluginFixture();

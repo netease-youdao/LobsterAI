@@ -16,6 +16,7 @@ interface InputImagePreview { mimeType: string; base64Data: string }
 interface LocalAsset { preview?: InputImagePreview | null; assetId: string; version: string; path: string; identity: FileIdentity; imagePath?: string; imageIdentity?: FileIdentity; imageMime?: string }
 export interface LocalPreparedInput {
   preparationId: string; owner: RemoteOwner; deviceId: string; requestHash: string; inputDigest: string;
+  targetId?: string;
   resolvedInput: RemoteResolvedInput; cwd: string; directoryIdentity: FileIdentity; runtimeRef: string;
   sessionId: string | null; expectedInputVersion: string | null; expectedControlVersion: string | null;
   files: LocalAsset[]; createdAt: number; expiresAt: number; boundCommandId: string | null;
@@ -23,6 +24,7 @@ export interface LocalPreparedInput {
 }
 interface Dependencies {
   store: CoworkStore; models: RemoteModelCatalog; cacheRoot: string; getOwner(): RemoteOwner | null;
+  getTargetId?(): string | null;
   getDefaultModel(): string; getAgentCatalog(): RemoteAgentCatalog | null;
   createImagePreview?(filePath: string): Promise<InputImagePreview | undefined>;
   convertImage?(filePath: string, mimeType: string, targetPath: string): Promise<{ path: string; mimeType: string }>;
@@ -52,10 +54,12 @@ const hashFile = async (filePath: string, check: () => void): Promise<string> =>
 
 /** No runtime mutation occurs here. An immutable local manifest is required again at dispatch. */
 export class InputPreparationService {
+  private operationEpoch = 0;
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private cleanupRunning = false;
   private cleanupCursor = '';
   constructor(private readonly deps: Dependencies) {}
+  reset(): void { this.operationEpoch++; }
   startCleanup(): void {
     if (this.cleanupTimer) return;
     const run = (): void => { void this.cleanupExpired().catch(() => console.warn('[RemoteInput] Cache cleanup deferred')); };
@@ -125,14 +129,23 @@ export class InputPreparationService {
       || estimateBase64DecodedBytes(preview.base64Data) > maxPreviewBytes) return undefined;
     return preview;
   }
-  private key(id: string): string { return `inputPreparation:${id}`; }
+  private targetId(): string | undefined {
+    const targetId = this.deps.getTargetId?.();
+    if (this.deps.getTargetId && !targetId) throw new RemoteInputError(RemoteInputReason.Stale);
+    return targetId ?? undefined;
+  }
+  private key(id: string): string { return `inputPreparation:${this.deps.getTargetId ? JSON.stringify([this.targetId(), id]) : id}`; }
+  private assertTarget(prepared: LocalPreparedInput): void {
+    if (prepared.targetId !== this.targetId()) throw new RemoteInputError(RemoteInputReason.Stale);
+  }
   private assertOwner(owner: RemoteOwner, current: () => boolean): void {
     if (!sameOwner(owner, this.deps.getOwner()) || !current()) throw new RemoteInputError(RemoteInputReason.Account);
   }
   private sessionInputVersion(sessionId: string): string { return this.deps.store.remote.inputVersion(sessionId); }
   async prepare(owner: RemoteOwner, deviceId: string, claim: RemotePreparationClaim,
     download: (assetId: string) => Promise<Response>, current: () => boolean): Promise<LocalPreparedInput> {
-    const check = (): void => this.assertOwner(owner, current);
+    const targetId = this.targetId(), epoch = this.operationEpoch;
+    const check = (): void => this.assertOwner(owner, () => current() && this.deps.getTargetId?.() === targetId && this.operationEpoch === epoch);
     check();
     const request = claim.request;
     if (request.inputSchemaVersion !== 2 || request.preparationId !== claim.preparationId) throw new RemoteInputError(RemoteInputReason.Invalid);
@@ -141,6 +154,7 @@ export class InputPreparationService {
       if (previous.requestHash !== payloadHash(request) || previous.deviceId !== deviceId || !sameOwner(previous.owner, owner)) throw new RemoteInputError(RemoteInputReason.Stale);
       this.validate(previous, owner, deviceId, false);
       await this.validateFiles(previous, check);
+      check();
       return previous;
     }
     const store = this.deps.store;
@@ -194,10 +208,11 @@ export class InputPreparationService {
     const resolvedInput: RemoteResolvedInput = { text, agentId, expectedAgentVersion: ownership.version, workspaceId,
       model: { modelRef: model.item.modelRef, version: model.item.version }, options: thinkingLevel ? { thinkingLevel } : {}, attachments };
     const folder = path.join(this.deps.cacheRoot, payloadHash([owner.userId, owner.scopeKey, deviceId]), randomUUID());
-    await fs.mkdir(folder, { recursive: true, mode: 0o700 }); check();
+    await fs.mkdir(folder, { recursive: true, mode: 0o700 });
     const files: LocalAsset[] = [];
     let frameBytes = 0;
     try {
+      check();
       for (const asset of attachments) {
         check();
         const extension = path.extname(asset.fileName).replace(/[^.a-zA-Z0-9]/gu, '').slice(0, 12);
@@ -239,6 +254,7 @@ export class InputPreparationService {
       }
       check();
       const prepared: LocalPreparedInput = { preparationId: claim.preparationId, owner, deviceId, requestHash: payloadHash(request),
+        ...(targetId ? { targetId } : {}),
         inputDigest: payloadHash(resolvedInput), resolvedInput, cwd, directoryIdentity, runtimeRef: model.local.runtimeRef,
         sessionId: session?.id || null, expectedInputVersion: request.expectedInputVersion || null, expectedControlVersion: request.expectedControlVersion || null,
         files, cacheDirectory: folder, createdAt: Date.now(), expiresAt: Math.min(Date.now() + 15 * 60_000, claim.expiresAt ? Date.parse(claim.expiresAt) : Infinity), boundCommandId: null };
@@ -250,9 +266,11 @@ export class InputPreparationService {
   read(id: string, owner: RemoteOwner, deviceId: string): LocalPreparedInput {
     const prepared = this.deps.store.remote.get<LocalPreparedInput>(this.key(id));
     if (!prepared || prepared.cacheCleanup || !sameOwner(prepared.owner, owner) || prepared.deviceId !== deviceId) throw new RemoteInputError(RemoteInputReason.Stale);
+    this.assertTarget(prepared);
     return prepared;
   }
   validate(prepared: LocalPreparedInput, owner: RemoteOwner, deviceId: string, bound: boolean): void {
+    this.assertTarget(prepared);
     if (prepared.cacheCleanup || !sameOwner(prepared.owner, owner) || !sameOwner(owner, this.deps.getOwner()) || prepared.deviceId !== deviceId
       || (!bound && prepared.expiresAt <= Date.now()) || payloadHash(prepared.resolvedInput) !== prepared.inputDigest) throw new RemoteInputError(RemoteInputReason.Stale);
     const input = prepared.resolvedInput;
@@ -270,9 +288,11 @@ export class InputPreparationService {
     for (const file of prepared.files) if (!sameFile(file.path, file.identity) || file.imagePath && !sameFile(file.imagePath, file.imageIdentity!)) throw new RemoteInputError(RemoteInputReason.Stale);
   }
   bind(prepared: LocalPreparedInput, commandId: string): void {
+    this.assertTarget(prepared);
     const current = this.deps.store.remote.get<LocalPreparedInput>(this.key(prepared.preparationId));
     if (!current || current.cacheCleanup || current.requestHash !== prepared.requestHash || !sameOwner(current.owner, prepared.owner)
-      || current.deviceId !== prepared.deviceId || current.boundCommandId && current.boundCommandId !== commandId) throw new RemoteInputError(RemoteInputReason.Stale);
+      || current.targetId !== prepared.targetId || current.deviceId !== prepared.deviceId
+      || current.boundCommandId && current.boundCommandId !== commandId) throw new RemoteInputError(RemoteInputReason.Stale);
     Object.assign(prepared, current, { boundCommandId: commandId }); this.deps.store.remote.put(this.key(prepared.preparationId), prepared);
   }
   confirmReady(id: string, owner: RemoteOwner, deviceId: string, expiresAt: string): void {
@@ -289,7 +309,15 @@ export class InputPreparationService {
     }
   }
   async executionOptions(prepared: LocalPreparedInput, check: () => void): Promise<{ prompt: string; modelOverride: string; thinkingLevel?: string; imageAttachments: CoworkImageAttachmentPayload[] }> {
+    const checkCurrent = check, epoch = this.operationEpoch;
+    check = () => {
+      this.assertTarget(prepared);
+      if (epoch !== this.operationEpoch) throw new RemoteInputError(RemoteInputReason.Stale);
+      checkCurrent();
+    };
+    check();
     await this.validateFiles(prepared, check);
+    check();
     const imageAttachments: CoworkImageAttachmentPayload[] = [];
     const references: string[] = [];
     for (const file of prepared.files) {

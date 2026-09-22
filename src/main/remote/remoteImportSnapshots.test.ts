@@ -7,10 +7,12 @@ import os from 'os';
 import path from 'path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { RemoteEnvironment } from '../../shared/remote/environment';
 import { payloadHash, stableJson } from './canonical';
 import { RemoteBridge } from './remoteBridge';
 import { RemoteImportSnapshotError, RemoteImportSnapshots } from './remoteImportSnapshots';
 import { RemoteStore } from './remoteStore';
+import { RemoteSyncTargetStore } from './remoteSyncTargetStore';
 
 const workerDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-import-worker-'));
 const workerPath = path.join(workerDirectory, 'worker.cjs');
@@ -20,7 +22,7 @@ beforeAll(async () => {
     plugins: [{ name: 'native-sqlite', setup(builder) { builder.onResolve({ filter: /^better-sqlite3$/ }, () => ({ path: require.resolve('better-sqlite3'), external: true })); } }] });
 });
 afterAll(() => fs.rmSync(workerDirectory, { recursive: true, force: true }));
-const owner = { userId: 'A', scopeKey: 'personal' }, environment = 'https://example.com';
+const owner = { userId: 'A', scopeKey: 'personal' }, environment = RemoteEnvironment.Test;
 const disposals: Array<() => void> = [];
 afterEach(() => { for (const dispose of disposals.splice(0).reverse()) dispose(); vi.restoreAllMocks(); });
 function fixture(count = 10, size = 10) {
@@ -44,7 +46,7 @@ function fixture(count = 10, size = 10) {
 function bridgeFixture(f = fixture()) {
   const request = vi.fn();
   const bridge: any = new RemoteBridge({ store: f.store, identity: { installationId: 'i', deviceKey: 'secret', databaseId: 'db' },
-    runSessionTransaction: operation => f.store.transaction(operation), getOwner: () => owner, getApiBaseUrl: () => environment,
+    runSessionTransaction: operation => f.store.transaction(operation), getOwner: () => owner, getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => 'https://example.com',
     request, execute: vi.fn(), prepare: vi.fn(), onAccountChange: vi.fn(),
     metadata: { name: 'Desktop', hostName: 'host', platform: 'macos', appVersion: '1', instanceLabel: 'default' },
   });
@@ -109,6 +111,18 @@ describe('immutable import snapshot worker', () => {
     fs.rmSync(file); expect(await reopened.exists(result.fileSet, result.parts)).toBe(false);
     await reopened.release(result.fileSet); expect(fs.existsSync(path.dirname(file))).toBe(true);
     f.store.remove('import:task'); await reopened.release(result.fileSet); expect(fs.existsSync(path.dirname(file))).toBe(false);
+  });
+  it('preserves immutable import parts referenced only by an inactive target', async () => {
+    const f = fixture(), result = await f.snapshots.create(randomUUID(), f.identity(), () => true);
+    new RemoteSyncTargetStore(f.store);
+    f.db.prepare('INSERT INTO remote_sync_target_archives VALUES (?,?,?,?)').run('inactive-target', 'remote_state', 0,
+      JSON.stringify({ key: 'import:task', value: JSON.stringify({ fileSet: result.fileSet }) }));
+    const reopened = new RemoteImportSnapshots(f.store, workerPath);
+    await reopened.collect(); await reopened.release(result.fileSet);
+    expect(await reopened.exists(result.fileSet, result.parts)).toBe(true);
+    f.db.prepare('DELETE FROM remote_sync_target_archives').run();
+    await reopened.release(result.fileSet);
+    expect(await reopened.exists(result.fileSet, result.parts)).toBe(false);
   });
   it('uploads each production part from disk, stores only indexes, and keeps the existing request hash contract', async () => {
     const f = bridgeFixture(fixture(1200, 100)); let uploaded = 0;

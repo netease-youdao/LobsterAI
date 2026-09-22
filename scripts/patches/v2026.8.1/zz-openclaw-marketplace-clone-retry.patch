@@ -1,0 +1,373 @@
+diff --git a/src/plugins/install-types.ts b/src/plugins/install-types.ts
+--- a/src/plugins/install-types.ts
++++ b/src/plugins/install-types.ts
+@@ -28,6 +28,7 @@
+   EMPTY_OPENCLAW_EXTENSIONS: "empty_openclaw_extensions",
+   INVALID_OPENCLAW_EXTENSIONS: "invalid_openclaw_extensions",
+   NPM_METADATA_FAILURE: "npm_metadata_failure",
++  MARKETPLACE_SOURCE_CLONE_FAILED: "marketplace_source_clone_failed",
+   NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
+   RELEASE_COHORT_UNAVAILABLE: "release_cohort_unavailable",
+   PLUGIN_ID_MISMATCH: "plugin_id_mismatch",
+diff --git a/src/plugins/marketplace.ts b/src/plugins/marketplace.ts
+--- a/src/plugins/marketplace.ts
++++ b/src/plugins/marketplace.ts
+@@ -20,7 +20,11 @@
+ import { isImmutableGitCommitRef } from "./git-install.js";
+ import type { InstallSafetyOverrides } from "./install-security-scan.js";
+ import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
+-import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
++import {
++  PLUGIN_INSTALL_ERROR_CODE,
++  type PluginInstallArtifactConsentHandler,
++  type PluginInstallFailureResult,
++} from "./install-types.js";
+ import { installPluginFromPath, type InstallPluginResult } from "./install.js";
+ 
+ const DEFAULT_GIT_TIMEOUT_MS = 120_000;
+@@ -529,7 +533,7 @@
+   logger?: MarketplaceLogger;
+ }): Promise<
+   | { ok: true; rootDir: string; cleanup: () => Promise<void>; label: string; ref?: string }
+-  | { ok: false; error: string }
++  | PluginInstallFailureResult
+ > {
+   const normalized = normalizeGitCloneSource(params.source);
+   if (!normalized) {
+@@ -556,6 +560,7 @@
+     const detail = res.stderr.trim() || res.stdout.trim() || "git clone failed";
+     return {
+       ok: false,
++      code: PLUGIN_INSTALL_ERROR_CODE.MARKETPLACE_SOURCE_CLONE_FAILED,
+       error: `failed to clone marketplace source ${normalized.label}: ${detail}`,
+     };
+   }
+@@ -592,7 +597,7 @@
+   source: string;
+   logger?: MarketplaceLogger;
+   timeoutMs?: number;
+-}): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> {
++}): Promise<{ ok: true; marketplace: LoadedMarketplace } | PluginInstallFailureResult> {
+   const loadMarketplaceFromManifestFile = async (paramsLocal: {
+     manifestPath: string;
+     sourceLabel: string;
+diff --git a/src/plugins/marketplace.test.ts b/src/plugins/marketplace.test.ts
+--- a/src/plugins/marketplace.test.ts
++++ b/src/plugins/marketplace.test.ts
+@@ -6,6 +6,7 @@
+ import * as jsonFiles from "../infra/json-files.js";
+ import { withEnvAsync } from "../test-utils/env.js";
+ import { withTempDir } from "../test-utils/temp-dir.js";
++import { PLUGIN_INSTALL_ERROR_CODE } from "./install-types.js";
+ import {
+   cleanupTrackedTempDirsAsync,
+   makeTrackedTempDirAsync,
+@@ -295,6 +296,27 @@
+ }
+ 
+ describe("marketplace plugins", () => {
++  it("identifies a source clone failure before any plugin artifact is installed", async () => {
++    let stagingRoot: string | undefined;
++    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
++      stagingRoot = path.dirname(argv.at(-1)!);
++      await fs.mkdir(argv.at(-1)!, { recursive: true });
++      await fs.writeFile(path.join(argv.at(-1)!, "partial"), "partial clone");
++      return { code: 128, stdout: "", stderr: "Recv failure: Connection was reset" };
++    });
++    const result = await installPluginFromMarketplace({
++      marketplace: "anthropics/skills",
++      plugin: "document-skills",
++    });
++    expect(result).toMatchObject({
++      ok: false,
++      code: PLUGIN_INSTALL_ERROR_CODE.MARKETPLACE_SOURCE_CLONE_FAILED,
++    });
++    expect(installPluginFromPathMock).not.toHaveBeenCalled();
++    expect(stagingRoot).toBeDefined();
++    await expect(fs.stat(stagingRoot!)).rejects.toMatchObject({ code: "ENOENT" });
++  });
++
+   afterEach(async () => {
+     fetchWithSsrFGuardMock.mockClear();
+     installPluginFromPathMock.mockReset();
+diff --git a/src/plugins/update-installed.ts b/src/plugins/update-installed.ts
+--- a/src/plugins/update-installed.ts
++++ b/src/plugins/update-installed.ts
+@@ -556,7 +556,10 @@
+         continue;
+       }
+       const phase = params.dryRun ? "check" : "update";
+-      const code = resultSource === "npm" && "code" in result ? result.code : undefined;
++      const code =
++        (resultSource === "npm" || resultSource === "marketplace") && "code" in result
++          ? result.code
++          : undefined;
+       const message =
+         resultSource === "npm"
+           ? formatNpmInstallFailure({
+diff --git a/src/plugins/update-summary.ts b/src/plugins/update-summary.ts
+--- a/src/plugins/update-summary.ts
++++ b/src/plugins/update-summary.ts
+@@ -56,6 +56,7 @@
+     pluginId: params.pluginId,
+     status: "error",
+     message: params.message,
++    ...(options.code ? { code: options.code } : {}),
+     ...(options.channelFallback ? { channelFallback: options.channelFallback } : {}),
+   });
+   return { config: params.config, changed: false };
+diff --git a/src/plugins/update.test.ts b/src/plugins/update.test.ts
+--- a/src/plugins/update.test.ts
++++ b/src/plugins/update.test.ts
+@@ -9,6 +9,7 @@
+ import { withEnvAsync } from "../test-utils/env.js";
+ import { resolvePluginArtifactDeclaredSurface } from "./capability-consent.js";
+ import { computeDeclaredSurfaceHash } from "./capability-summary.js";
++import { PLUGIN_INSTALL_ERROR_CODE } from "./install-types.js";
+ import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+ 
+ const APP_ROOT = "/app";
+@@ -2632,6 +2633,7 @@
+           pluginId: "lossless-claw",
+           status: "error",
+           message: "Failed to check lossless-claw: npm view failed: registry timeout",
++          code: PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE,
+         },
+       ]);
+     }
+@@ -2729,6 +2731,7 @@
+         pluginId: "lossless-claw",
+         status: "error",
+         message: "Failed to check lossless-claw: npm view failed: registry timeout",
++        code: PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE,
+       },
+     ]);
+   });
+@@ -3667,6 +3670,7 @@
+         pluginId,
+         status: "error",
+         message: expectedMessage,
++        code: installerResult.code,
+       },
+     ]);
+   });
+@@ -4086,6 +4090,7 @@
+         pluginId: "openclaw-codex-app-server",
+         status: "error",
+         message: `Failed to ${action} openclaw-codex-app-server: npm package not found for openclaw-codex-app-server.`,
++        code: PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND,
+         channelFallback: {
+           requestedSpec: "openclaw-codex-app-server@beta",
+           usedSpec: "openclaw-codex-app-server",
+@@ -4935,6 +4940,31 @@
+     expect(result.config.plugins?.installs?.["context-engine"]).toBeUndefined();
+   });
+ 
++  it("preserves marketplace clone failure codes and installed configuration", async () => {
++    installPluginFromMarketplaceMock.mockResolvedValue({
++      ok: false,
++      code: PLUGIN_INSTALL_ERROR_CODE.MARKETPLACE_SOURCE_CLONE_FAILED,
++      error: "failed to clone marketplace source: Connection was reset",
++    });
++    const config = createMarketplaceInstallConfig({
++      pluginId: "document-skills",
++      installPath: "/tmp/document-skills",
++      marketplaceSource: "anthropics/skills",
++      marketplacePlugin: "document-skills",
++    });
++    const before = structuredClone(config);
++    const result = await updateNpmInstalledPlugins({ config, pluginIds: ["document-skills"] });
++    expect(result.outcomes).toEqual([
++      expect.objectContaining({
++        pluginId: "document-skills",
++        status: "error",
++        code: PLUGIN_INSTALL_ERROR_CODE.MARKETPLACE_SOURCE_CLONE_FAILED,
++      }),
++    ]);
++    expect(result.config).toEqual(before);
++    expect(result.changed).toBe(false);
++  });
++
+   it("checks marketplace installs during dry-run updates", async () => {
+     installPluginFromMarketplaceMock.mockResolvedValue({
+       ok: true,
+diff --git a/src/commands/doctor/shared/missing-configured-plugin-install.repair.ts b/src/commands/doctor/shared/missing-configured-plugin-install.repair.ts
+--- a/src/commands/doctor/shared/missing-configured-plugin-install.repair.ts
++++ b/src/commands/doctor/shared/missing-configured-plugin-install.repair.ts
+@@ -8,6 +8,7 @@
+   normalizePluginsConfig,
+   resolveEffectiveEnableState,
+ } from "../../../plugins/config-state.js";
++import { PLUGIN_INSTALL_ERROR_CODE } from "../../../plugins/install-types.js";
+ import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
+ import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
+ import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
+@@ -191,6 +192,14 @@
+       notices.push(
+         `Kept installed plugin "${pluginId}"; replacement deferred. ${messages.join(" ")}`,
+       );
++    } else if (code === PLUGIN_INSTALL_ERROR_CODE.MARKETPLACE_SOURCE_CLONE_FAILED) {
++      // Source acquisition failed before plugin artifact publication. Preserve
++      // the record; startup still verifies/quarantines its current payload.
++      notices.push(
++        ...messages.map(
++          (message) => `${message} Run \`openclaw update repair\` to retry plugin repair.`,
++        ),
++      );
+     } else {
+       warnings.push(...messages);
+     }
+diff --git a/src/commands/doctor/shared/missing-configured-plugin-install.test.ts b/src/commands/doctor/shared/missing-configured-plugin-install.test.ts
+--- a/src/commands/doctor/shared/missing-configured-plugin-install.test.ts
++++ b/src/commands/doctor/shared/missing-configured-plugin-install.test.ts
+@@ -13,7 +13,10 @@
+   resolveClawHubInstallSpecsForUpdateChannel,
+   resolveNpmInstallSpecsForUpdateChannel,
+ } from "../../../plugins/install-channel-specs.js";
+-import type { PluginInstallArtifactConsentHandler } from "../../../plugins/install-types.js";
++import {
++  PLUGIN_INSTALL_ERROR_CODE,
++  type PluginInstallArtifactConsentHandler,
++} from "../../../plugins/install-types.js";
+ import { resolveInstalledPluginIndexPolicyHash } from "../../../plugins/installed-plugin-index-policy.js";
+ import type { BundledProviderPolicySurface } from "../../../plugins/provider-policy-surface.js";
+ import { createColdPluginFixture } from "../../../plugins/test-helpers/cold-plugin-fixtures.js";
+@@ -1205,6 +1208,45 @@
+     expect(result.warnings).toStrictEqual([]);
+   });
+ 
++  it.each([
++    PLUGIN_INSTALL_ERROR_CODE.MARKETPLACE_SOURCE_CLONE_FAILED,
++    PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED,
++    PLUGIN_CAPABILITY_CONSENT_REQUIRED,
++    undefined,
++  ])("only treats a typed marketplace source clone failure as a retry notice: %s", async (code) => {
++    const records = {
++      "document-skills": {
++        source: "marketplace",
++        marketplaceSource: "anthropics/skills",
++        marketplacePlugin: "document-skills",
++        installPath: "/missing/document-skills",
++      },
++    };
++    const message = "Source operation failed.";
++    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
++    mocks.updateNpmInstalledPlugins.mockResolvedValueOnce({
++      changed: false,
++      config: { plugins: { installs: records } },
++      outcomes: [{ pluginId: "document-skills", status: "error", code, message }],
++    });
++    const cfg: OpenClawConfig = { plugins: { entries: { "document-skills": { enabled: true } } } };
++    const before = structuredClone(cfg);
++    const result = await repairConfiguredPlugins(cfg);
++    if (code === PLUGIN_INSTALL_ERROR_CODE.MARKETPLACE_SOURCE_CLONE_FAILED) {
++      expect(result.warnings).toEqual([]);
++      expect(result.notices).toEqual([
++        message + " Run `openclaw update repair` to retry plugin repair.",
++      ]);
++    } else {
++      expect(result.warnings).toContain(message);
++      expect(result.notices ?? []).toEqual([]);
++    }
++    expect(result.records).toEqual(records);
++    expect(result.failedPluginIds).toContain("document-skills");
++    expect(cfg).toEqual(before);
++    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
++  });
++
+   it("adds repair warnings for blocked ClawHub update outcomes", async () => {
+     const records = {
+       demo: {
+diff --git a/src/cli/update-cli/post-core-plugin-convergence.test.ts b/src/cli/update-cli/post-core-plugin-convergence.test.ts
+--- a/src/cli/update-cli/post-core-plugin-convergence.test.ts
++++ b/src/cli/update-cli/post-core-plugin-convergence.test.ts
+@@ -37,7 +37,12 @@
+ vi.mock("./plugin-payload-validation.js", () => ({
+   runPluginPayloadSmokeCheck: mocks.runPluginPayloadSmokeCheck,
+ }));
+-
++vi.mock("../../commands/doctor/shared/startup-plugin-convergence-plan.js", () => ({
++  planStartupPluginConvergence: vi.fn().mockResolvedValue({ required: true, installRecords: {} }),
++}));
++vi.mock("../../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
++
++import { runStartupUpgradeConvergence } from "../../commands/doctor-config-preflight-plugin-verification.js";
+ import type { OpenClawConfig } from "../../config/types.openclaw.js";
+ import type { PluginInstallRecord } from "../../config/types.plugins.js";
+ import { VERSION } from "../../version.js";
+@@ -471,6 +476,75 @@
+     });
+   });
+ 
++  it.each([false, true])(
++    "keeps a marketplace fetch failure nonblocking while quarantining a known broken payload=%s",
++    async (missingPayload) => {
++      const pluginId = "document-skills";
++      const installPath = path.join(tempDirs.make("post-core-marketplace-"), pluginId);
++      const cfg: OpenClawConfig = {
++        plugins: { entries: { [pluginId]: { enabled: true, config: { retained: true } } } },
++      };
++      const originalConfig = structuredClone(cfg);
++      const records: Record<string, PluginInstallRecord> = {
++        [pluginId]: { source: "marketplace", installPath },
++      };
++      mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
++        changes: [],
++        warnings: [],
++        notices: [
++          'Failed to install missing configured plugin "document-skills": Connection was reset. Run `openclaw update repair` to retry plugin repair.',
++        ],
++        failedPluginIds: [pluginId],
++        records,
++      });
++      mocks.runPluginPayloadSmokeCheck.mockResolvedValue({
++        checked: [pluginId],
++        failures: missingPayload
++          ? [
++              {
++                pluginId,
++                installPath,
++                reason: "missing-package-dir",
++                detail: "Package is missing.",
++              },
++            ]
++          : [],
++      });
++      const result = await runStartupUpgradeConvergence({ cfg, env: {} });
++      expect(result.blockingDiagnostic).toBeNull();
++      expect(result.quarantinedPlugins).toEqual(
++        missingPayload
++          ? [expect.objectContaining({ pluginId, state: "configured-unavailable" })]
++          : [],
++      );
++      expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
++        records,
++        env: expect.any(Object),
++      });
++      expect(cfg).toEqual(originalConfig);
++    },
++  );
++
++  it("still blocks startup when failed repair leaves no verifiable payload owner", async () => {
++    const pluginId = "document-skills";
++    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
++      changes: [],
++      warnings: [],
++      notices: ["Marketplace fetch failed."],
++      records: { [pluginId]: { source: "marketplace" } },
++    });
++    mocks.runPluginPayloadSmokeCheck.mockResolvedValue({
++      checked: [pluginId],
++      failures: [{ pluginId, reason: "missing-install-path", detail: "Install path is missing." }],
++    });
++    const result = await runStartupUpgradeConvergence({
++      cfg: { plugins: { entries: { [pluginId]: { enabled: true } } } },
++      env: {},
++    });
++    expect(result.blockingDiagnostic).toMatchObject({ kind: "plugin-verification" });
++    expect(result.quarantinedPlugins).toEqual([]);
++  });
++
+   it("keeps inactive repair failures nonblocking", async () => {
+     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+       changes: [],

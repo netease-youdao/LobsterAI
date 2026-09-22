@@ -23,6 +23,7 @@ import type {
   OpenClawGatewayRepairErrorCode,
 } from '../../shared/openclawEngine/constants';
 import type { OpenClawDreamingRecoverySummary } from '../../shared/openclawEngine/dreamingRecovery';
+import type { OpenClawRepairStage } from '../../shared/openclawEngine/repair';
 import type { Platform } from '../../shared/platform';
 import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 
@@ -277,6 +278,8 @@ export interface OpenClawGatewayRepairResult {
   error?: string;
   errorCode?: OpenClawGatewayRepairErrorCode;
   recoverable?: boolean;
+  failedStage?: OpenClawRepairStage;
+  failurePath?: string;
 }
 
 export interface CoworkUserMemoryEntry {
@@ -351,6 +354,13 @@ export interface CoworkForkSessionOptions {
 }
 
 // Subagent session summary for sidebar display
+export const SubagentSessionStatus = {
+  Running: 'running',
+  Done: 'done',
+  Error: 'error',
+} as const;
+export type SubagentSessionStatus = typeof SubagentSessionStatus[keyof typeof SubagentSessionStatus];
+
 export interface SubagentSessionSummary {
   id: string;
   agentId: string | null;
@@ -362,7 +372,7 @@ export interface SubagentSessionSummary {
   parentAgentId?: string | null;
   parentTitle?: string | null;
   parentUpdatedAt?: number | null;
-  status: 'running' | 'done' | 'error';
+  status: SubagentSessionStatus;
   createdAt: number;
   endedAt: number | null;
 }

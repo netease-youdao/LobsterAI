@@ -30,6 +30,7 @@ import { recoverInstallerResourcesFromTar } from './installerResourceRecovery';
 import { mergeNoProxyValue } from './noProxyEnv';
 import { getCodexHomeDir } from './openaiCodexAuth';
 import { migrateLegacyCronStorageWithDoctor } from './openclawCronLegacyMigration';
+import { getOpenClawDailyLogCandidates } from './openclawDailyLogs';
 import { readDreamingRecoverySummary } from './openclawDreamingRecovery';
 import { createDreamingStartupFailureCollector } from './openclawDreamingStartupFailure';
 import { cleanupStaleGatewayLocks, GatewayLockCleanupAction } from './openclawGatewayLock';
@@ -38,7 +39,7 @@ import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtension
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
 import { extractOpenClawBindingSchemaFailure, extractOpenClawCliFailure, hasLegacyOpenClawDiscovery, isOpenClawBindingSchemaFailure, runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
-import { migrateLegacyStateBeforeStartup } from './openclawStartupStateMigration';
+import { migrateLegacyStateBeforeStartup, stopStartupStateMigrations } from './openclawStartupStateMigration';
 import { ensureOpenClawWorkerShims, getMissingOpenClawWorkerTargets } from './openclawWorkerShims';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 
@@ -349,6 +350,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private gatewayReadySince: number | null = null;
   private gatewayLifecycleGeneration = 0;
   private gatewayMaintenanceActive = false;
+  private gatewayStartupBlock: OpenClawEngineStatus | null = null;
   private shutdownRequested = false;
   private gatewayPort: number | null = null;
   private startGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
@@ -494,6 +496,11 @@ export class OpenClawEngineManager extends EventEmitter {
     return 'pid' in child && typeof child.pid === 'number' ? child.pid : null;
   }
 
+  /** Read-only diagnostics; avoids resolving runtime files or reading tokens. */
+  getGatewayProcessGeneration(): number {
+    return this.gatewayGeneration;
+  }
+
   /**
    * Called when the gateway announced it is restarting itself (WS close 1012
    * "service restart" after an OpenClaw config reload). While the window is
@@ -563,32 +570,14 @@ export class OpenClawEngineManager extends EventEmitter {
     this.gatewayLogPrunedDateKey = dateKey;
   }
 
-  /**
-   * Resolve the directory where the OpenClaw gateway writes its daily rolling
-   * logs (openclaw-YYYY-MM-DD.log).  Returns null when no candidate exists.
-   */
-  getOpenClawDailyLogDir(): string | null {
-    if (process.platform === 'win32') {
-      const runtime = this.resolveRuntimeMetadata();
-      if (runtime.root) {
-        const drive = path.parse(runtime.root).root;
-        const preferred = path.join(drive, 'tmp', 'openclaw');
-        if (fs.existsSync(preferred)) return preferred;
-      }
-      const fallback = path.join(os.tmpdir(), 'openclaw');
-      return fs.existsSync(fallback) ? fallback : null;
-    }
-
-    // macOS / Linux
-    if (fs.existsSync('/tmp/openclaw')) return '/tmp/openclaw';
-    try {
-      const uid = process.getuid?.();
-      if (uid != null) {
-        const fallback = path.join(os.tmpdir(), `openclaw-${uid}`);
-        if (fs.existsSync(fallback)) return fallback;
-      }
-    } catch { /* getuid unavailable */ }
-    return null;
+  /** Include the active runtime temp path and legacy locations in diagnostics. */
+  getOpenClawDailyLogDirs(): string[] {
+    return getOpenClawDailyLogCandidates({
+      platform: process.platform,
+      tmpDir: os.tmpdir(),
+      runtimeRoot: this.resolveRuntimeMetadata().root,
+      uid: process.getuid?.(),
+    });
   }
 
   getGatewayConnectionInfo(): OpenClawGatewayConnectionInfo {
@@ -609,6 +598,7 @@ export class OpenClawEngineManager extends EventEmitter {
 
   async ensureReady(_options: { forceReinstall?: boolean } = {}): Promise<OpenClawEngineStatus> {
     if (this.gatewayRestartExhausted) return this.getStatus();
+    if (this.isGatewayStartupBlocked() && !this.gatewayMaintenanceActive) return this.getStatus();
     const runtime = this.resolveRuntimeMetadata();
     this.desiredVersion = runtime.version || DEFAULT_OPENCLAW_VERSION;
 
@@ -668,11 +658,18 @@ export class OpenClawEngineManager extends EventEmitter {
       return await repair();
     } finally {
       this.gatewayMaintenanceActive = false;
+      if (this.gatewayStartupBlock) this.setStatus(this.gatewayStartupBlock);
     }
   }
 
-  async startGateway(reason = 'unknown'): Promise<OpenClawEngineStatus> {
+  isGatewayStartupBlocked(): boolean {
+    return !!this.gatewayStartupBlock;
+  }
+
+  async startGateway(reason = 'unknown', options: { retryBlocked?: boolean } = {}): Promise<OpenClawEngineStatus> {
     if (this.gatewayMaintenanceActive) return this.getStatus();
+    if (options.retryBlocked) this.gatewayStartupBlock = null;
+    if (this.isGatewayStartupBlocked()) return this.getStatus();
     const generation = this.gatewayLifecycleGeneration;
     if (this.stopGatewayPromise) {
       await this.stopGatewayPromise;
@@ -1005,8 +1002,8 @@ export class OpenClawEngineManager extends EventEmitter {
       stateDir: this.stateDir, configPath: this.configPath, runtimeRoot: runtime.root!,
       electronNodeRuntimePath, env, mode,
     });
-    if (hasLegacyDiscovery) {
-      const compatibility = await this.startupCompatibilityRunner(OpenClawStartupCompatibilityMode.MigrateConfig);
+    if (hasLegacyDiscovery || fs.existsSync(path.join(this.stateDir, 'state', 'openclaw.sqlite'))) {
+      const compatibility = await this.startupCompatibilityRunner(OpenClawStartupCompatibilityMode.PrepareStartup);
       if (this.shutdownRequested) return this.getStatus();
       if (compatibility.status === OpenClawStartupMigrationStatus.Failed) {
         this.setStatus({
@@ -1193,6 +1190,7 @@ export class OpenClawEngineManager extends EventEmitter {
 
     // Let an in-flight startup observe cancellation before allowing its
     // replacement to begin (startup may still be awaiting a probe/migration).
+    await stopStartupStateMigrations(this.stateDir);
     if (this.startGatewayPromise) await this.startGatewayPromise.catch(() => {});
     if (restarting && generation === this.gatewayLifecycleGeneration) return;
 
@@ -1207,8 +1205,10 @@ export class OpenClawEngineManager extends EventEmitter {
     });
   }
 
-  async restartGateway(reason = 'unknown'): Promise<OpenClawEngineStatus> {
+  async restartGateway(reason = 'unknown', options: { retryBlocked?: boolean } = {}): Promise<OpenClawEngineStatus> {
     if (this.gatewayMaintenanceActive) return this.getStatus();
+    if (options.retryBlocked) this.gatewayStartupBlock = null;
+    if (this.isGatewayStartupBlocked()) return this.getStatus();
     if (this.restartGatewayPromise) return this.restartGatewayPromise;
     this.restartGatewayPromise = this.doRestartGateway(reason).finally(() => {
       this.restartGatewayPromise = null;
@@ -2173,12 +2173,14 @@ export class OpenClawEngineManager extends EventEmitter {
         console.error(`${gwDiagTs()} gateway plugin verification failed; auto-restart suppressed`);
         this.gatewayRestartAttempt = 0;
         this.clearScheduledGatewayRestart();
-        this.setStatus({
+        this.gatewayStartupBlock = {
           phase: OpenClawEnginePhase.Error,
           version: this.status.version,
+          errorCode: OpenClawEngineErrorCode.PluginVerificationFailed,
           message: t('openClawPluginVerificationFailed', { error: pluginVerificationFailure }),
           canRetry: true,
-        });
+        };
+        this.setStatus(this.gatewayStartupBlock);
         return;
       }
 
@@ -2273,6 +2275,7 @@ export class OpenClawEngineManager extends EventEmitter {
   }
 
   private setStatus(next: OpenClawEngineStatus): void {
+    if (this.gatewayStartupBlock && !this.gatewayMaintenanceActive && next.phase !== OpenClawEnginePhase.Error) next = this.gatewayStartupBlock;
     this.status = {
       ...next,
       message: next.message ? next.message.slice(0, 500) : undefined,

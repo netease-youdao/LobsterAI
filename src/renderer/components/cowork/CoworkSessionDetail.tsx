@@ -65,6 +65,7 @@ import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { getInstalledKitSkillIds } from '../../services/kitCapability';
 import { readLocalServiceProjectDirectoryCandidate } from '../../services/localServiceProjectDirectoryCache';
+import { getSubagentWaitPhase, SubagentWaitPhase } from '../../services/subagentWaitState';
 import { RootState } from '../../store';
 import {
   selectCurrentMessagesLength,
@@ -72,6 +73,7 @@ import {
   selectCurrentSession,
   selectIsStreaming,
   selectLastMessageContent,
+  selectPendingPermissions,
   selectRemoteManaged,
 } from '../../store/selectors/coworkSelectors';
 import {
@@ -183,6 +185,7 @@ import {
 import CoworkBtwFloatingPanel from './CoworkBtwFloatingPanel';
 import CoworkConversationSearch from './CoworkConversationSearch';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
+import QuestionDock from './interactions/QuestionDock';
 import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
 import {
   buildConversationTurns,
@@ -1405,6 +1408,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const isMac = window.electron.platform === 'darwin';
   const isWindows = window.electron.platform === 'win32';
   const currentSession = useSelector(selectCurrentSession);
+  const pendingPermissions = useSelector(selectPendingPermissions);
   const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const isStreaming = useSelector(selectIsStreaming);
   const remoteManaged = useSelector(selectRemoteManaged);
@@ -2159,6 +2163,17 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [artifactPanelMinWidth, setArtifactPanelMinWidth] = useState(MIN_PANEL_WIDTH);
   const [artifactPanelMaxWidth, setArtifactPanelMaxWidth] = useState(MAX_PANEL_WIDTH);
   const [subagents, setSubagents] = useState<SubagentSessionSummary[]>([]);
+  const subagentWaitPhase = useMemo(
+    () => getSubagentWaitPhase(currentSession?.messages ?? [], subagents),
+    [currentSession?.messages, subagents],
+  );
+  const activityStatusOverride = isContextMaintenance
+    ? i18nService.t('coworkContextMaintenanceRunning')
+    : subagentWaitPhase === SubagentWaitPhase.Children
+      ? i18nService.t('coworkActivityLiveWaitSubagents')
+      : subagentWaitPhase === SubagentWaitPhase.Summary
+        ? i18nService.t('coworkActivityWaitSubagentSummary')
+        : null;
   const [subagentsLoading, setSubagentsLoading] = useState(false);
   const [selectedSubagent, setSelectedSubagent] = useState<SubagentSessionSummary | null>(null);
   const [contentRowWidth, setContentRowWidth] = useState(0);
@@ -3427,6 +3442,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       dispatch(activateArtifactSubagentTab({ sessionId }));
       return;
     }
+
 
     dispatch(closePanel({ sessionId }));
   }, [
@@ -5920,7 +5936,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             localServiceDirectory={currentSession?.cwd}
             showActivityIndicator
             activityStatusOverride={
-              isContextMaintenance ? i18nService.t('coworkContextMaintenanceRunning') : null
+              activityStatusOverride
             }
             showCopyButtons={!isStreaming}
             completedGoal={
@@ -6018,7 +6034,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 }}
                 showActivityIndicator={showActivityIndicator}
                 activityStatusOverride={
-                  isContextMaintenance ? i18nService.t('coworkContextMaintenanceRunning') : null
+                  activityStatusOverride
                 }
                 showCopyButtons={!isStreaming || !isLastTurn}
                 hiddenSystemMessageId={enterpriseQuotaPromptMessageId}
@@ -6764,17 +6780,19 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           </div>,
           document.body
         )}
-        {shouldShowScrollToBottom && !exportImageProgress && (
-          <button
-            type="button"
-            onClick={handleScrollToBottom}
-            onWheel={handleScrollToBottomWheel}
-            className="absolute bottom-4 left-1/2 z-20 inline-flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-background text-foreground/85 shadow-[0_2px_10px_rgba(15,23,42,0.12)] transition-colors hover:bg-surface-raised hover:text-foreground dark:shadow-[0_2px_14px_rgba(0,0,0,0.36)]"
-            aria-label={i18nService.t('coworkScrollToBottom')}
-            title={i18nService.t('coworkScrollToBottom')}
-          >
-            <ArrowDownIcon className="h-4 w-4 stroke-[2.1]" />
-          </button>
+        {!exportImageProgress && shouldShowScrollToBottom && (
+          <div className="pointer-events-none absolute bottom-4 left-0 right-0 z-20 flex items-center justify-center gap-2 px-3">
+            <button
+              type="button"
+              onClick={handleScrollToBottom}
+              onWheel={handleScrollToBottomWheel}
+              className="pointer-events-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background text-foreground/85 shadow-[0_2px_10px_rgba(15,23,42,0.12)] transition-colors hover:bg-surface-raised hover:text-foreground dark:shadow-[0_2px_14px_rgba(0,0,0,0.36)]"
+              aria-label={i18nService.t('coworkScrollToBottom')}
+              title={i18nService.t('coworkScrollToBottom')}
+            >
+              <ArrowDownIcon className="h-4 w-4 stroke-[2.1]" />
+            </button>
+          </div>
         )}
       </div>
 
@@ -6796,6 +6814,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             <PromptInputCollapseIcon className="h-3.5 w-3.5" />
           </button>
         )}
+        <div className={COWORK_DETAIL_CONTENT_CLASS}>
+          <QuestionDock sessionId={currentSession.id} permissions={pendingPermissions} />
+        </div>
         {minimizedPermission && (
           <div className={`${COWORK_DETAIL_CONTENT_CLASS} mb-2`}>
             <div

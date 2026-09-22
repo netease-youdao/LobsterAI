@@ -3,6 +3,15 @@ import {
   OpenClawEnginePhase,
 } from '../../shared/openclawEngine/constants';
 import { logOpenClawConfigLockDiagnostics } from './openclawConfigDiagnostics';
+import {
+  type ConfigDeliveryDiagnostic,
+  configDiagnosticDigest,
+  ConfigDiagnosticErrorKind,
+  ConfigDiagnosticOutcome,
+  ConfigDiagnosticStage,
+  ConfigRecoveryAction,
+  ConfigRecoveryEvidence,
+} from './openclawConfigObservation';
 
 /**
  * Reliable delivery of openclaw.json changes to a RUNNING gateway.
@@ -48,8 +57,8 @@ export const CONFIG_DELIVERY_FALLBACK_REASON_PREFIX = 'config-delivery-fallback:
 export const DEFERRED_SYNC_REASON_PREFIX = 'deferred:';
 
 export const OpenClawConfigRpcMethod = {
-  Get: 'config.get',
-  Set: 'config.set',
+  Get: ConfigDiagnosticStage.Get,
+  Set: ConfigDiagnosticStage.Set,
 } as const;
 
 export function isConfigDeliveryFallbackReason(reason: string): boolean {
@@ -89,6 +98,8 @@ export type OpenClawConfigDeliveryInput = {
   /** Omit when rechecking a queued restart; the caller owns the final fallback. */
   scheduleDeferredRestart?: (reason: string) => void;
   nowMs?: () => number;
+  /** Observation only; exceptions are isolated from delivery and scheduling. */
+  onDiagnostic?: (event: ConfigDeliveryDiagnostic) => void;
 };
 
 export type OpenClawConfigDeliveryResult = {
@@ -166,26 +177,72 @@ const describeError = (error: unknown): string => {
 async function requestConfigSet(
   client: OpenClawConfigRpcClient,
   readConfigFile: () => string,
+  diagnose: (build: () => ConfigDeliveryDiagnostic) => void,
+  attempt: number,
 ): Promise<void> {
-  const snapshot = await client.request<{ hash?: unknown }>(
+  const request = async <T,>(stage: ConfigDiagnosticStage, params: unknown, timeoutMs: number): Promise<T> => {
+    const startedAt = Date.now();
+    diagnose(() => ({ stage, attempt, outcome: ConfigDiagnosticOutcome.Started, elapsedMs: 0, timeoutMs }));
+    try {
+      const result = await client.request<T>(stage, params, { timeoutMs });
+      diagnose(() => ({
+        stage, attempt, outcome: ConfigDiagnosticOutcome.Succeeded, elapsedMs: Date.now() - startedAt, timeoutMs,
+        rawRevision: result && typeof result === 'object' && 'hash' in result && typeof result.hash === 'string'
+          ? configDiagnosticDigest(result.hash) : undefined,
+      }));
+      return result;
+    } catch (error) {
+      diagnose(() => ({
+        stage, attempt, outcome: ConfigDiagnosticOutcome.Failed, elapsedMs: Date.now() - startedAt, timeoutMs,
+        errorKind: classifyDiagnosticError(error),
+      }));
+      throw error;
+    }
+  };
+  const snapshot = await request<{ hash?: unknown; configRevisionHash?: unknown; appliedConfigHash?: unknown }>(
     OpenClawConfigRpcMethod.Get,
     {},
-    { timeoutMs: CONFIG_GET_TIMEOUT_MS },
+    CONFIG_GET_TIMEOUT_MS,
   );
   const baseHash = typeof snapshot?.hash === 'string' && snapshot.hash.trim()
     ? snapshot.hash.trim()
     : undefined;
   // A watcher migration or another writer may have changed the file while we
   // awaited the hash. Never replay the payload captured before a retry wait.
-  const raw = readConfigFile();
-  if (!raw.trim()) {
-    throw new Error('config file is empty');
+  const readStartedAt = Date.now();
+  let raw: string;
+  try {
+    raw = readConfigFile();
+    if (!raw.trim()) throw new Error('config file is empty');
+  } catch (error) {
+    diagnose(() => ({
+      stage: ConfigDiagnosticStage.Read, attempt, outcome: ConfigDiagnosticOutcome.Failed,
+      elapsedMs: Date.now() - readStartedAt, errorKind: classifyDiagnosticError(error),
+    }));
+    throw error;
   }
-  await client.request(
+  const payload = stripPluginIndexManagedKeysFromRawConfig(raw);
+  diagnose(() => ({
+    stage: ConfigDiagnosticStage.Read, attempt, outcome: ConfigDiagnosticOutcome.Succeeded, elapsedMs: Date.now() - readStartedAt,
+    payloadDigest: configDiagnosticDigest(payload), payloadBytes: Buffer.byteLength(payload),
+    rawRevision: typeof snapshot?.hash === 'string' ? configDiagnosticDigest(snapshot.hash) : undefined,
+    resolvedRevision: typeof snapshot?.configRevisionHash === 'string' ? configDiagnosticDigest(snapshot.configRevisionHash) : undefined,
+    appliedRevision: typeof snapshot?.appliedConfigHash === 'string' ? configDiagnosticDigest(snapshot.appliedConfigHash) : undefined,
+  }));
+  await request(
     OpenClawConfigRpcMethod.Set,
-    { raw: stripPluginIndexManagedKeysFromRawConfig(raw), ...(baseHash ? { baseHash } : {}) },
-    { timeoutMs: CONFIG_SET_TIMEOUT_MS },
+    { raw: payload, ...(baseHash ? { baseHash } : {}) },
+    CONFIG_SET_TIMEOUT_MS,
   );
+}
+
+function classifyDiagnosticError(error: unknown): ConfigDiagnosticErrorKind {
+  if (isBaseHashConflict(error)) return ConfigDiagnosticErrorKind.HashConflict;
+  if (isConfigValidationRejection(error)) return ConfigDiagnosticErrorKind.Validation;
+  const message = error instanceof Error ? error.message : String(error);
+  if (/timeout|timed out/i.test(message)) return ConfigDiagnosticErrorKind.Timeout;
+  if (/closed|disconnected|unavailable/i.test(message)) return ConfigDiagnosticErrorKind.Unavailable;
+  return ConfigDiagnosticErrorKind.Other;
 }
 
 /**
@@ -199,6 +256,15 @@ export async function deliverOpenClawConfigToGateway(
 ): Promise<OpenClawConfigDeliveryResult> {
   const now = input.nowMs ?? Date.now;
   const startedAtMs = now();
+  let diagnosticAttempt = 0;
+  let rateLimited = false;
+  const diagnose = (build: () => ConfigDeliveryDiagnostic): void => {
+    try {
+      if (input.onDiagnostic) input.onDiagnostic(build());
+    } catch {
+      // Diagnostics are deliberately outside the delivery result contract.
+    }
+  };
   const finish = (
     mode: OpenClawConfigDeliveryMode,
     detail: string,
@@ -217,6 +283,17 @@ export async function deliverOpenClawConfigToGateway(
       `[ConfigDelivery] mode=${result.mode} reason=${input.reason} detail=${result.detail}`
       + ` restartScheduled=${result.restartScheduled} elapsedMs=${result.elapsedMs}`,
     );
+    diagnose(() => ({
+      stage: ConfigDiagnosticStage.Complete, attempt: diagnosticAttempt, elapsedMs: result.elapsedMs,
+      outcome: mode === OpenClawConfigDeliveryMode.Fallback || mode === OpenClawConfigDeliveryMode.Rejected
+        ? ConfigDiagnosticOutcome.Failed : ConfigDiagnosticOutcome.Succeeded,
+      evidence: mode === OpenClawConfigDeliveryMode.Rpc ? ConfigRecoveryEvidence.Accepted
+        : mode === OpenClawConfigDeliveryMode.Rejected ? ConfigRecoveryEvidence.Rejected
+          : mode === OpenClawConfigDeliveryMode.Skipped ? ConfigRecoveryEvidence.NextStart : ConfigRecoveryEvidence.Unconfirmed,
+      actualAction: restartScheduled ? ConfigRecoveryAction.Scheduled
+        : rateLimited ? ConfigRecoveryAction.RateLimited
+          : mode === OpenClawConfigDeliveryMode.Fallback ? ConfigRecoveryAction.CallerFallback : ConfigRecoveryAction.None,
+    }));
     return result;
   };
 
@@ -226,6 +303,7 @@ export async function deliverOpenClawConfigToGateway(
     }
     const sinceLast = now() - lastFallbackRestartAtMs;
     if (sinceLast < FALLBACK_RESTART_MIN_INTERVAL_MS) {
+      rateLimited = true;
       return finish(
         OpenClawConfigDeliveryMode.Fallback,
         `${detail}; restart rate-limited (${Math.round(sinceLast / 1000)}s since last)`,
@@ -255,27 +333,47 @@ export async function deliverOpenClawConfigToGateway(
   }
 
   let raw: string;
+  const readStartedAt = Date.now();
   try {
     raw = input.readConfigFile();
+    diagnose(() => ({
+      stage: ConfigDiagnosticStage.Read, attempt: 0, outcome: ConfigDiagnosticOutcome.Succeeded,
+      elapsedMs: Date.now() - readStartedAt, payloadDigest: configDiagnosticDigest(raw), payloadBytes: Buffer.byteLength(raw),
+    }));
   } catch (error) {
+    diagnose(() => ({
+      stage: ConfigDiagnosticStage.Read, attempt: 0, outcome: ConfigDiagnosticOutcome.Failed,
+      elapsedMs: Date.now() - readStartedAt, errorKind: classifyDiagnosticError(error),
+    }));
     return fallback(`config file read failed: ${describeError(error)}`);
   }
   if (!raw.trim()) {
     return fallback('config file is empty');
   }
   let client: OpenClawConfigRpcClient | null = null;
+  const connectStartedAt = Date.now();
   try {
     client = await input.ensureRpcClient();
   } catch (error) {
+    diagnose(() => ({
+      stage: ConfigDiagnosticStage.Connect, attempt: 0, outcome: ConfigDiagnosticOutcome.Failed,
+      elapsedMs: Date.now() - connectStartedAt, errorKind: classifyDiagnosticError(error),
+    }));
     return fallback(`gateway client unavailable: ${describeError(error)}`);
   }
+  diagnose(() => ({
+    stage: ConfigDiagnosticStage.Connect, attempt: 0,
+    outcome: client ? ConfigDiagnosticOutcome.Succeeded : ConfigDiagnosticOutcome.Failed,
+    elapsedMs: Date.now() - connectStartedAt,
+  }));
   if (!client) {
     return fallback('gateway client unavailable');
   }
 
   for (let attempt = 0; ; attempt += 1) {
+    diagnosticAttempt = attempt + 1;
     try {
-      await requestConfigSet(client, input.readConfigFile);
+      await requestConfigSet(client, input.readConfigFile, diagnose, diagnosticAttempt);
       return finish(
         OpenClawConfigDeliveryMode.Rpc,
         attempt === 0 ? 'config.set acked' : `config.set acked after hash retry (${attempt} retries)`,

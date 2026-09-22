@@ -5,6 +5,7 @@ import { Worker } from 'worker_threads';
 import { sameOwner, stableJson } from './canonical';
 import type { ImportPartIndex, ImportSnapshotIdentity, ImportSnapshotPackage, ImportSnapshotWork } from './remoteImportSnapshotWorker';
 import type { RemoteStore } from './remoteStore';
+import { archivedRemoteSyncReferences } from './remoteSyncTargetStore';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 
 const fileSetPattern = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/u;
@@ -88,7 +89,8 @@ export class RemoteImportSnapshots {
   private referenced(): Set<string> {
     // Unknown receipts can still own files. Corrupt bookkeeping must never authorize cache deletion.
     if (this.store.db.prepare("SELECT 1 FROM remote_state WHERE key LIKE 'import:%' AND NOT json_valid(value) LIMIT 1").get()) throw new RemoteImportSnapshotError('REMOTE_IMPORT_PART_UNAVAILABLE');
-    return new Set((this.store.db.prepare("SELECT json_extract(value,'$.fileSet') AS file_set FROM remote_state WHERE key LIKE 'import:%' AND json_valid(value)").all() as Array<{ file_set: string | null }>).map(row => row.file_set).filter((value): value is string => typeof value === 'string'));
+    return new Set([...archivedRemoteSyncReferences(this.store).importFileSets,
+      ...(this.store.db.prepare("SELECT json_extract(value,'$.fileSet') AS file_set FROM remote_state WHERE key LIKE 'import:%' AND json_valid(value)").all() as Array<{ file_set: string | null }>).map(row => row.file_set).filter((value): value is string => typeof value === 'string')]);
   }
   async collect(): Promise<void> {
     await fs.promises.mkdir(this.root, { recursive: true, mode: 0o700 });

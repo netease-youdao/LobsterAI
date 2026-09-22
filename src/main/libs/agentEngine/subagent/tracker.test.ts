@@ -359,3 +359,15 @@ test('forbidden spawn result is recorded as error', () => {
     endedAt: expect.any(Number),
   });
 });
+
+
+test('accepted visible spawns resolve the real agent instead of the task label', () => {
+  const shouldMaterialize = vi.fn(() => false);
+  const tracker = new SubagentTracker(runStore, messageStore, () => null, undefined, shouldMaterialize);
+  tracker.onToolStart('visible-call', { task: 'read demo.ts', label: 'explain-demo' }, 'parent-1');
+  tracker.onSpawnResult('visible-call', JSON.stringify({
+    status: 'accepted', childSessionKey: 'agent:main:dashboard:visible-child',
+  }), {});
+  expect(runStore.getSubagentRun('visible-call')).toMatchObject({ agentId: 'main', childCoworkSessionId: null });
+  expect(shouldMaterialize).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'main' }));
+});

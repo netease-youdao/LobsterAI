@@ -1,5 +1,7 @@
 # 远控同步保留 v2：桌面端接入
 
+2026-09-22 同步设计更新（代码已实现，未部署）：见[远程同步使用当前生效服务](../../specs/bugfixes/remote-sync-target/2026-09-22-effective-server-sync-design.md)。最终不以域名或线上／测试模式阻断同步，而由当前服务确认绑定及进度；下文描述既有协议，新增身份发现和目标校验的部署状态见 2026-09-22 配套接入文档。
+
 2026-09-17。本次实现服务端数据保留方案所需的桌面同步协议与源头减量；是否可用以服务端能力公告为准。需要先部署扩展数据库结构及所有服务节点，再发布桌面端。本文不表示线上已开启清理。
 
 默认值更新：按用户要求，服务端 retention 功能开关全部默认开启，`mode=purge`、`cluster-ready=true`。部署前必须完成 V95–V97，并确认所有共用数据库的实例兼容；混部期间须显式覆盖 `mode=observe`、`cluster-ready=false`、`sync-v2-enabled=false`，完成升级后移除临时覆盖。NOS 配置、引用保护与删除证明仍需满足；桌面继续依据实际 capabilities 协商。
@@ -28,6 +30,8 @@
 `GET /sync/state?localSessionId=<本地会话ID>` 返回 `deviceId/sessionId/localSessionId/syncProtocolVersion/streamEpoch/lastSourceSeq/lastSeq/sourcePurgeSeq/eventPurgeSeq/activeImport`。
 
 仅 `404 / 47038 / SYNC_STATE_NOT_FOUND` 且本地 v1、ACK 为零时允许首次建立映射。普通 404、其他设备的映射以及服务端序号超过本地持久上限不能当作新任务。GET 的序号只作为新导入的期望基线，不能用于删除 outbox。
+
+后续设计将这些进度条件限定在**当前服务的绑定**内：另一个服务的旧 ACK 既不能阻止经权威确认的新绑定，也不能被新绑定复用。已发布会话在当前服务缺失时，需要新增 resolve/reservation 契约确认可以 bootstrap；现有 47038 不提供该授权。同流安全快照、回滚/未知历史、删除墓碑与真正的新服务分支详见新 spec §4–7；在新协议实现前，上述既有门禁保持有效。
 
 `POST /sync/imports` 在原 DTO 上增量添加：
 

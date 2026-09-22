@@ -58,6 +58,7 @@ import {
   ContinuityCapsuleSource,
   type CoworkContinuityCapsule,
 } from './libs/agentEngine/coworkContinuityCapsule';
+import { VISIBLE_COWORK_SESSION_SQL } from './libs/agentEngine/subagent/sessionVisibility';
 import {
   type SessionProjection,
   type SessionProjectionChanges,
@@ -1675,7 +1676,7 @@ export class CoworkStore {
     sql: string; parameters: string[];
   } {
     const access = sessionVisibilitySql(actor);
-    const clauses = [access.sql];
+    const clauses = [access.sql, VISIBLE_COWORK_SESSION_SQL];
     const parameters = [...access.parameters];
     if (agentId) {
       clauses.push("COALESCE(NULLIF(TRIM(s.agent_id), ''), 'main') = ?");

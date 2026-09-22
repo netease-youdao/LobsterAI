@@ -5,7 +5,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { repairOpenClawCompatibility } from '../src/main/libs/openclawCompatibilityRepairCore.ts';
-import { OPENCLAW_REPAIR_RESULT_PREFIX } from '../src/shared/openclawEngine/repair.ts';
+import { OPENCLAW_REPAIR_RESULT_PREFIX, OpenClawRepairPhase } from '../src/shared/openclawEngine/repair.ts';
+import { recoverOpenClawLockOwners } from '../src/main/libs/openclawLockRecovery.ts';
+import { acquireGatewayLock } from '#openclaw-gateway-lock';
 import { withDoctorSqliteMaintenanceLock } from '#openclaw-repair-lock';
 import { assertOpenClawDatabasesReady } from '#openclaw-repair-schema-check';
 import { assertOpenClawStateDatabaseForMaintenance } from '#openclaw-repair-state-check';
@@ -28,7 +30,9 @@ const options = {
   ...request, stateDir: env.OPENCLAW_STATE_DIR, configPath: env.OPENCLAW_CONFIG_PATH,
   plugins: manifest.plugins.map(plugin => ({ ...plugin, root: path.join(runtimeRoot, plugin.relativePath) })),
 };
-const report = await repairOpenClawCompatibility(options, {
+const report = request.phase === OpenClawRepairPhase.LockRecovery
+  ? await recoverOpenClawLockOwners({ ...options, runtimeRoot, executablePath: process.execPath, env }, { acquireLock: acquireGatewayLock })
+  : await repairOpenClawCompatibility(options, {
   withLock: run => withDoctorSqliteMaintenanceLock({ env, operation: 'LobsterAI one-click repair', run }),
   verifyDatabaseSchemas() {
     const pathname = path.join(env.OPENCLAW_STATE_DIR, 'state', 'openclaw.sqlite');

@@ -5,6 +5,7 @@ import { join } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { REMOTE_PROTOCOL_VERSION, RemoteCapability, RemoteConnectionReason, RemoteConnectionStatus, RemoteSyncStatus } from '../../shared/remote/constants';
+import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteApiError, RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
 
@@ -38,7 +39,7 @@ function fixture(registered = true) {
   });
   const deps = { store, identity: { installationId: 'instance', deviceKey: 'key', databaseId: 'db' },
     runSessionTransaction: <T>(operation: () => T) => store.transaction(operation),
-    getOwner: () => owner, getApiBaseUrl: () => 'https://example.com', request,
+    getOwner: () => owner, getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => 'https://example.com', request,
     metadata: { name: 'host.local', hostName: 'host.local', instanceLabel: 'default', platform: 'macos', appVersion: '1' },
     getDefaultWorkspace: undefined as undefined | (() => { path: string; name: string; available?: boolean }),
     onStateChange: changed, onAccountChange: accountChanged, prepare: vi.fn(), execute: vi.fn(),

@@ -1,0 +1,203 @@
+.subscription-trial-overlay {
+  padding: 24px;
+  background: rgb(17 20 35 / 40%);
+  backdrop-filter: blur(4px);
+}
+
+.subscription-trial-dialog {
+  width: min(100%, 500px);
+  min-width: 0;
+}
+
+.subscription-trial-card {
+  position: relative;
+  isolation: isolate;
+  max-height: calc(100dvh - 48px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 38px 36px 28px;
+  border: 1px solid #ffffff40;
+  border-radius: 24px;
+  background:
+    radial-gradient(ellipse at 95% 0%, #b83fdf99, transparent 58%),
+    radial-gradient(ellipse at 10% 100%, #52baff77, transparent 60%),
+    linear-gradient(135deg, #4932db, #6637e6 65%, #5332d3);
+  box-shadow: 0 24px 80px #20205055;
+  color: #fff;
+  font-family: system-ui, -apple-system, "PingFang SC", sans-serif;
+  line-height: normal;
+}
+
+.subscription-trial-card::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  right: -100px;
+  top: -120px;
+  width: 360px;
+  height: 360px;
+  border: 1px solid #ffffff18;
+  border-radius: 50%;
+  box-shadow: 0 0 0 30px #ffffff04, 0 0 0 60px #ffffff04;
+  pointer-events: none;
+}
+
+.subscription-trial-card button:focus-visible,
+.subscription-trial-details summary:focus-visible {
+  outline: 3px solid #dfff65;
+  outline-offset: 4px;
+}
+
+.subscription-trial-close {
+  position: absolute;
+  right: 16px;
+  top: 16px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: #ffffff14;
+  color: #fff;
+  font-size: 23px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.subscription-trial-close:hover {
+  background: #ffffff28;
+}
+
+.subscription-trial-title {
+  margin: 16px 0 4px;
+  font-size: 24px;
+  line-height: 1.35;
+  font-weight: 650;
+  letter-spacing: -.7px;
+  text-align: center;
+}
+
+.subscription-trial-price {
+  font-size: 42px;
+  letter-spacing: -2px;
+  white-space: nowrap;
+}
+
+.subscription-trial-currency {
+  margin-right: 2px;
+  font-size: .58em;
+  letter-spacing: 0;
+}
+
+.subscription-trial-credits {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 12px;
+  color: #e5ff65;
+}
+
+.subscription-trial-credits strong {
+  font-size: 84px;
+  line-height: 1.06;
+  letter-spacing: -3px;
+}
+
+.subscription-trial-credits span {
+  position: relative;
+  top: -3px;
+  font-size: 28px;
+  font-weight: 650;
+}
+
+.subscription-trial-subtitle {
+  margin: 16px 0 24px;
+  font-size: 19px;
+  font-weight: 500;
+  text-align: center;
+}
+
+.subscription-trial-cta {
+  width: 100%;
+  min-height: 54px;
+  border: 1px solid #e5ff65;
+  border-radius: 999px;
+  background: #e5ff65;
+  color: #282264;
+  font-size: 18px;
+  font-weight: 700;
+  box-shadow: 0 6px 20px #deff5822;
+  cursor: pointer;
+}
+
+.subscription-trial-cta:hover:not(:disabled) {
+  background: #efff9a;
+}
+
+.subscription-trial-cta:disabled {
+  opacity: .6;
+  cursor: wait;
+}
+
+.subscription-trial-details {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #ffffff22;
+}
+
+.subscription-trial-details summary {
+  font-size: 12px;
+  color: rgb(255 255 255 / 70%);
+  list-style: none;
+  text-align: center;
+  cursor: pointer;
+}
+
+.subscription-trial-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.subscription-trial-info {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 5px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 10px;
+}
+
+.subscription-trial-rules {
+  margin-top: 12px;
+  padding: 13px 15px;
+  border-radius: 10px;
+  background: #1f165744;
+  text-align: left;
+}
+
+.subscription-trial-rules p {
+  margin: 0 0 7px;
+  color: #f2eeff;
+  font-size: 12px;
+  line-height: 1.75;
+}
+
+.subscription-trial-rules p:last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 480px) {
+  .subscription-trial-overlay { padding: 16px; }
+  .subscription-trial-card { max-height: calc(100dvh - 32px); padding: 30px 24px 22px; }
+  .subscription-trial-title { font-size: 22px; }
+  .subscription-trial-price { font-size: 36px; }
+  .subscription-trial-credits strong { font-size: 72px; }
+  .subscription-trial-credits span { font-size: 24px; }
+  .subscription-trial-subtitle { font-size: 17px; }
+}
+
+@media (max-height: 680px) {
+  .subscription-trial-credits strong { font-size: 68px; }
+}

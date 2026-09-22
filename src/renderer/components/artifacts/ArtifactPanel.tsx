@@ -8,6 +8,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { PublishingRecoveryAnalyticsSurface } from '@shared/analytics/constants';
 import { ArtifactBrowserPartition } from '@shared/artifactPreview/constants';
+import { isWorkspaceDiffArtifact } from '@shared/artifactPreview/workspaceChanges';
 import { AuthSubscriptionStatus } from '@shared/auth/constants';
 import {
   BrowserAnnotationGuestChannel,
@@ -5186,7 +5187,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         style={isPanelExpanded
           ? { width: '100%', maxWidth: 'none' }
           : { width: constrainedPanelWidth, maxWidth: constrainedMaxPanelWidth }}
-        className={`bg-background flex flex-col h-full overflow-hidden relative ${
+        className={`${selectedArtifact && isWorkspaceDiffArtifact(selectedArtifact) ? 'bg-white dark:bg-[#181818]' : 'bg-background'} flex flex-col h-full overflow-hidden relative ${
           isPanelExpanded ? 'min-w-0 flex-1' : 'shrink border-l border-border'
         }`}
       >
@@ -5196,8 +5197,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
 
         {selectedArtifact ? (
           <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
-            {/* Header: current file + actions */}
-            <div className="h-10 flex items-center gap-2 px-3 border-b border-border shrink-0">
+            {/* Header: current file + actions. A workspace review owns its toolbar and file tree. */}
+            {!isWorkspaceDiffArtifact(selectedArtifact) && <div className="h-10 flex items-center gap-2 px-3 border-b border-border shrink-0">
               <span className="text-sm font-medium truncate">
                 {selectedArtifact.fileName || selectedArtifact.title}
               </span>
@@ -5361,9 +5362,9 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
               >
                 <FileListIcon />
               </button>
-            </div>
+            </div>}
 
-            {showFileListDrawer && (
+            {showFileListDrawer && !isWorkspaceDiffArtifact(selectedArtifact) && (
               <div
                 ref={fileListDrawerRef}
                 className={`absolute top-10 right-0 bottom-0 z-20 flex w-[min(320px,86%)] flex-col border-l border-border bg-background shadow-xl transition-[transform,opacity] duration-[180ms] ease-out motion-reduce:transition-none ${

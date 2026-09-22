@@ -46,8 +46,10 @@ describe('MainLogReporter', () => {
     expect(result.searchParams.get('uuid')).toBe('installation-1');
     expect(result.searchParams.get('firstKeyfrom')).toBe('official');
     expect(result.searchParams.get('latestKeyfrom')).toBe('campaign');
+    expect(result.searchParams.get('keyfrom')).toBe('campaign');
     expect(result.searchParams.get('is_logged_in')).toBe('true');
     expect(result.searchParams.get('log_Usid')).toBe('user-1');
+    expect(result.searchParams.get('user_id')).toBe('user-1');
     expect(result.searchParams.get('uts')).toBe('1234');
   });
 
@@ -102,7 +104,9 @@ describe('MainLogReporter', () => {
     expect(url.searchParams.get('platform')).toBe('feishu');
     expect(url.searchParams.get('uuid')).toBe('installation-2');
     expect(url.searchParams.get('log_Usid')).toBe('user-2');
+    expect(url.searchParams.get('user_id')).toBe('user-2');
     expect(url.searchParams.get('latestKeyfrom')).toBe('partner');
+    expect(url.searchParams.get('keyfrom')).toBe('partner');
   });
 
   test('returns false when the analyzer request fails', async () => {

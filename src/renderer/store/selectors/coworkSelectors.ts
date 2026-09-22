@@ -1,6 +1,7 @@
 import { createSelector } from '@reduxjs/toolkit';
 
 import { SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../../shared/cowork/constants';
+import { isQuestionDockRequest } from '../../components/cowork/interactions/questionDockModel';
 import { type CoworkMessage, CoworkSessionStatusValue } from '../../types/cowork';
 import type { RootState } from '../index';
 
@@ -90,8 +91,11 @@ export const selectFirstCurrentSessionPendingPermission = createSelector(
   selectPendingPermissions,
   selectCurrentSessionId,
   (permissions, currentSessionId) => {
+    // Questions the session's inline dock renders never open the global modal;
+    // approvals and anything the dock cannot parse still do.
     const sessionScoped = currentSessionId
-      ? permissions.find((permission) => permission.sessionId === currentSessionId)
+      ? permissions.find((permission) => permission.sessionId === currentSessionId
+        && !isQuestionDockRequest(permission))
       : undefined;
     if (sessionScoped) return sessionScoped;
     // Session-agnostic requests carry a sentinel sessionId that never matches a

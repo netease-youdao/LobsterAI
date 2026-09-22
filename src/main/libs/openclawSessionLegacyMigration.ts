@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { OpenClawEngineErrorCode } from '../../shared/openclawEngine/constants';
 import { inspectOpenClawPath, logOpenClawConfigLockDiagnostics } from './openclawConfigDiagnostics';
 import { extractDreamingStartupFailure } from './openclawDreamingStartupFailure';
-import { extractOpenClawCliFailure } from './openclawStartupCompatibility';
+import { extractOpenClawCliFailure, isOpenClawAgentMediaMigrationFailure } from './openclawStartupCompatibility';
 
 const LEGACY_SESSION_DOCTOR_TIMEOUT_MS = 300_000;
 const LOG_TAIL_LIMIT = 4_000;
@@ -290,7 +290,9 @@ export async function migrateLegacySessionStorageWithDoctor(params: {
       console.error(`[OpenClaw] ${details}`);
       logFailureDiagnostics();
       const cause = summarizeDoctorFailure(result.stderr, result.stdout, report);
-      return { status: 'failed', code: result.code, error: cause ? `${cause}\n${failure}` : failure };
+      return { status: 'failed', code: result.code, error: cause ? `${cause}\n${failure}` : failure,
+        ...(isOpenClawAgentMediaMigrationFailure(cause)
+          ? { errorCode: OpenClawEngineErrorCode.AgentMediaMigrationRequired } : {}) };
     }
 
     if (remainingPaths.length > 0) {

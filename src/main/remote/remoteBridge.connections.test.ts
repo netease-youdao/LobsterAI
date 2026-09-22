@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { REMOTE_CONNECTION_MANAGEMENT_CAPABILITY, RemoteConnectionReleaseState, RemoteDeviceAdmissionState, RemoteDeviceConnectionState } from '../../shared/remote/connections';
 import { RemoteCapability, RemoteConnectionReason, type RemoteOwner } from '../../shared/remote/constants';
+import { RemoteEnvironment } from '../../shared/remote/environment';
 import { type InboxEntry, RemoteApiError, RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
 
@@ -43,7 +44,7 @@ function fixture(managed = true) {
   const execute = vi.fn();
   const deps = { store, identity: { installationId: 'installation', deviceKey: 'private-key', databaseId: 'database' },
     runSessionTransaction: <T>(action: () => T) => store.transaction(action),
-    getOwner: () => currentOwner, getApiBaseUrl: () => 'https://example.com', request,
+    getOwner: () => currentOwner, getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => 'https://example.com', request,
     metadata: { name: 'Desktop', hostName: 'desktop.local', platform: 'macos', appVersion: '1', instanceLabel: 'default' },
     prepare: vi.fn(), execute, onAccountChange: vi.fn() };
   const bridge: any = new RemoteBridge(deps);
@@ -156,7 +157,7 @@ describe('device connection management bridge', () => {
   it('uses only bounded existing-claim receipts while removed, never granting execution permission', async () => {
     const { bridge, store, request, execute, removeAtServer } = fixture();
     removeAtServer(); await bridge.queryConnections(); request.mockClear();
-    for (let i = 0; i < 25; i++) store.put(`inbox:${String(i).padStart(2, '0')}`, { owner, command: { commandId: `c${i}`, claimId: 'claim', claimToken: 'claim-token', statusVersion: '2', status: 'received' },
+    for (let i = 0; i < 25; i++) store.put(`inbox:${String(i).padStart(2, '0')}`, { owner, targetId: bridge.getSyncTargetId(), command: { commandId: `c${i}`, claimId: 'claim', claimToken: 'claim-token', statusVersion: '2', status: 'received' },
       localSessionId: 'local', remoteSessionId: 'remote', runId: 'run', state: 'unknown', result: null } as InboxEntry);
     await bridge.reconcilePaused();
     expect(request).toHaveBeenCalledTimes(20);
@@ -171,7 +172,7 @@ describe('device connection management bridge', () => {
   it('refreshes a stale receipt version from a scoped conflict without requesting an execution permit', async () => {
     const { bridge, store, request, removeAtServer } = fixture();
     removeAtServer(); await bridge.queryConnections();
-    store.put('inbox:receipt', { owner, command: { commandId: 'receipt', claimId: 'claim', claimToken: 'claim-token', statusVersion: '2', status: 'received' },
+    store.put('inbox:receipt', { owner, targetId: bridge.getSyncTargetId(), command: { commandId: 'receipt', claimId: 'claim', claimToken: 'claim-token', statusVersion: '2', status: 'received' },
       localSessionId: 'local', remoteSessionId: 'remote', runId: 'run', state: 'unknown', result: null } as InboxEntry);
     request.mockRejectedValueOnce(new RemoteApiError(47024, 'Conflict', { currentCommand: {
       commandId: 'receipt', sessionId: 'remote', runId: 'run', status: 'reconciling', statusVersion: '3' } }));
@@ -192,7 +193,7 @@ describe('device connection management bridge', () => {
   it('blocks a dispatch if removal arrives while its received ACK is in flight', async () => {
     const { bridge, request, execute } = fixture();
     await bridge.queryConnections(); bridge.generation = '1'; bridge.quotaBlocked = false;
-    const entry = { owner, command: { commandId: 'command', claimId: 'claim', claimToken: 'token', claimUntil: new Date(Date.now() + 20000).toISOString(),
+    const entry = { owner, targetId: bridge.getSyncTargetId(), command: { commandId: 'command', claimId: 'claim', claimToken: 'token', claimUntil: new Date(Date.now() + 20000).toISOString(),
       expiresAt: new Date(Date.now() + 60000).toISOString(), statusVersion: '2', status: 'claimed' },
       localSessionId: 'local', remoteSessionId: 'remote', runId: 'run', state: 'prepared', result: null } as InboxEntry;
     request.mockImplementationOnce(async () => {

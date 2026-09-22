@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, test } from 'vitest';
 
@@ -45,6 +46,16 @@ function createRuntime() {
     'exports.resolveSessionStoreEntry = ({ store, sessionKey }) => ({ existing: store[sessionKey] });',
   ].join('\n'));
   return root;
+}
+
+function createLarkPlugin(root: string) {
+  const pluginDir = path.join(root, 'openclaw-lark');
+  writeFile(pluginDir, 'package.json', JSON.stringify({ name: '@larksuite/openclaw-lark', version: '2026.7.16' }));
+  for (const name of ['version', 'token-store']) {
+    const fixture = fileURLToPath(new URL(`./fixtures/openclaw-lark-2026.7.16/${name}.txt`, import.meta.url));
+    writeFile(pluginDir, `src/core/${name}.js`, fs.readFileSync(fixture, 'utf8'));
+  }
+  return pluginDir;
 }
 
 afterEach(() => {
@@ -105,7 +116,7 @@ describe('DingTalk and Lark OpenClaw SDK compatibility', () => {
 
   test('loads Lark registration, reply callbacks and saved verbose state without legacy SDK exports', () => {
     const root = createRuntime();
-    const pluginDir = path.join(root, 'openclaw-lark');
+    const pluginDir = createLarkPlugin(root);
     const entry = writeFile(pluginDir, 'index.js', [
       'const plugin_sdk_1 = require("openclaw/plugin-sdk");',
       'exports.configSchema = plugin_sdk_1.emptyPluginConfigSchema();',
@@ -141,7 +152,7 @@ describe('DingTalk and Lark OpenClaw SDK compatibility', () => {
 
   test('reads current Lark config on inbound events and tool calls after snapshot changes', () => {
     const root = createRuntime();
-    const pluginDir = path.join(root, 'openclaw-lark');
+    const pluginDir = createLarkPlugin(root);
     const clientFile = writeFile(pluginDir, 'src/core/lark-client.js', [
       'const LarkClient = { runtime: null };',
       'exports.LarkClient = LarkClient;',

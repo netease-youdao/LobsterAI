@@ -1,5 +1,7 @@
 # Agent / 任务主动关联：服务端接入增量
 
+2026-09-22 同步设计更新（代码已实现，未部署）：[当前生效服务同步方案](../../specs/bugfixes/remote-sync-target/2026-09-22-effective-server-sync-design.md)将远端 admission 和目录状态绑定到已验证的服务数据身份。相同服务的多个域名不重复关联；新服务重新确认能力和准入，不借用旧服务 admission，也不改变会话或 Agent 的本地 owner。本文已实现的账号关联规则保持有效。
+
 日期：2026-09-11。消费端：LobsterAI 桌面。服务端无需新增 MySQL DDL；依赖既有 V88/V89 远控与 Agent 表。
 
 ## 1. 变更摘要

@@ -39,9 +39,11 @@ import SidebarToggleIcon from './icons/SidebarToggleIcon';
 import SkillIcon from './icons/SkillIcon';
 import TrashIcon from './icons/TrashIcon';
 import LoginButton from './LoginButton';
+import LowCreditPurchaseOfferCard from './LowCreditPurchaseOfferCard';
 import { RemoteControlPopover } from './remote/RemoteControlPopover';
 import type { SettingsOpenOptions } from './Settings';
 import SidebarExperienceSlot from './SidebarExperienceSlot';
+import { useSidebarPurchaseGuide } from './useSidebarPurchaseGuide';
 
 interface SidebarProps {
   onShowSettings: (options?: SettingsOpenOptions) => void;
@@ -305,6 +307,10 @@ const Sidebar: React.FC<SidebarProps> = ({
   const resizeStartXRef = useRef(0);
   const resizeStartWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH);
   const agentScrollContainerRef = useRef<HTMLDivElement>(null);
+  const purchaseGuide = useSidebarPurchaseGuide();
+  const canShowPurchaseGuide = !isCollapsed && !isBatchMode && !hideLogin && !isEngineStartupOverlayVisible;
+  const paymentGuideVisible = canShowPurchaseGuide && purchaseGuide.candidate !== null;
+  const paymentGuideOwnsSlot = canShowPurchaseGuide && (paymentGuideVisible || purchaseGuide.loading);
   const isWindows = window.electron.platform === 'win32';
   const showHeaderRow = !isWindows;
   const showLoginPromo = !hideLogin && !isAuthLoading && !isLoggedIn;
@@ -866,7 +872,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         </div>
         {!isBatchMode && (
           <SidebarExperienceSlot
-            hidden={hideAdBanner}
+            hidden={hideAdBanner || paymentGuideOwnsSlot}
             onVisibleChange={setIsSidebarBannerVisible}
           />
         )}
@@ -894,8 +900,17 @@ const Sidebar: React.FC<SidebarProps> = ({
         currentSessionId={currentSessionId}
         onSelectSession={handleSelectSession}
       />
-      {!isBatchMode && updateNotice && (
-        <div className="non-draggable px-3 pt-1.5">{updateNotice}</div>
+      {!isBatchMode && (updateNotice || paymentGuideVisible) && (
+        <div className="non-draggable px-3 pt-1.5">
+          <div hidden={paymentGuideOwnsSlot}>{updateNotice}</div>
+          {paymentGuideVisible && purchaseGuide.candidate && (
+            <LowCreditPurchaseOfferCard
+              offer={purchaseGuide.candidate.offer}
+              variant={purchaseGuide.candidate.variant}
+              onClose={purchaseGuide.dismiss}
+            />
+          )}
+        </div>
       )}
       {isBatchMode ? (
         <div className="border-t border-border/60 px-3 pb-3 pt-2">

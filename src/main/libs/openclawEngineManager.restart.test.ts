@@ -102,6 +102,46 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
+describe('terminal plugin startup block', () => {
+  test('blocks every implicit startup/restart and preserves the error through runtime preparation', async () => {
+    const { manager, internals, child } = makeSupervisor();
+    internals.gatewayRecentOutput.set(child, [
+      'OpenClaw plugin verification failed; refusing to report the gateway ready.',
+      '- Plugin "openclaw-weixin" requires capability consent.',
+    ]);
+    closeChild(child, 1);
+    const start = vi.spyOn(internals, 'doStartGateway').mockImplementation(async () => {
+      internals.setStatus({ phase: OpenClawEnginePhase.Running, version: '2026.8.1', canRetry: false });
+      return manager.getStatus();
+    });
+    const blocked = manager.getStatus();
+    expect(blocked.errorCode).toBe(OpenClawEngineErrorCode.PluginVerificationFailed);
+    expect(manager.isGatewayStartupBlocked()).toBe(true);
+    for (const reason of ['channel-sync-ensure-ready', 'ensure-running-for-cowork', 'auto-restart-after-crash']) {
+      expect(await manager.startGateway(reason)).toEqual(blocked);
+    }
+    expect(await manager.restartGateway('config-sync')).toEqual(blocked);
+    expect(await manager.ensureReady()).toEqual(blocked);
+    internals.setStatus({ phase: OpenClawEnginePhase.Ready, version: '2026.8.1', canRetry: false });
+    expect(manager.getStatus()).toEqual(blocked);
+    expect(start).not.toHaveBeenCalled();
+    expect(await manager.restartGateway('manual', { retryBlocked: true })).toMatchObject({ phase: OpenClawEnginePhase.Running });
+    expect(manager.isGatewayStartupBlocked()).toBe(false);
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  test('maintenance may prepare the runtime but cannot silently clear the block', async () => {
+    const { manager, internals, child } = makeSupervisor();
+    internals.gatewayRecentOutput.set(child, ['OpenClaw plugin verification failed; refusing to report the gateway ready.']);
+    closeChild(child, 1);
+    await manager.withGatewayStoppedForRepair(async () => {
+      expect(await manager.ensureReady()).toMatchObject({ phase: OpenClawEnginePhase.Ready });
+      expect(manager.isGatewayStartupBlocked()).toBe(true);
+    });
+    expect(manager.getStatus().errorCode).toBe(OpenClawEngineErrorCode.PluginVerificationFailed);
+  });
+});
+
 describe('failure-triggered binding recovery', () => {
   function failureHarness() {
     const context = makeSupervisor();

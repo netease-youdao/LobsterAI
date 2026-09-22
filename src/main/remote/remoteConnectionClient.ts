@@ -18,6 +18,7 @@ const validId = (value: unknown): value is string => typeof value === 'string' &
 export class RemoteConnectionClient {
   private readonly completedOperations = new Set<string>();
   constructor(private readonly deps: ConnectionClientDependencies) {}
+  reset(): void { this.completedOperations.clear(); }
 
   async query(): Promise<RemoteConnectionsSnapshot> {
     const assertCurrent = this.deps.guard();

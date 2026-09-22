@@ -2,7 +2,7 @@ import { type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
+import { OpenClawEngineErrorCode, OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import { setLanguage } from '../i18n';
 
 vi.mock('electron', () => ({
@@ -247,6 +247,7 @@ describe('gateway terminal plugin verification failure', () => {
     await vi.advanceTimersByTimeAsync(120_000);
 
     expect(manager.getStatus()).toMatchObject({ phase: OpenClawEnginePhase.Error, canRetry: true });
+    expect(manager.getStatus().errorCode).toBe(OpenClawEngineErrorCode.PluginVerificationFailed);
     expect(statuses).toHaveLength(1);
     expect(statuses[0].message).toContain(PLUGIN_CONSENT_DETAIL);
     expect(statuses[0].message).toContain(language === 'zh' ? '已停止自动重启' : 'Automatic restarts stopped');

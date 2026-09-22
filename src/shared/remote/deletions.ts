@@ -1,4 +1,5 @@
 import type { RemoteOwner } from './constants';
+import type { RemoteSyncTargetIdentity } from './syncTarget';
 
 export const RemoteDeletion = {
   Capability: 'session_delete_v1', Inbox: 'sessionDeletion:', Pending: 'sessionDeletionPending:', Fence: 'deletionFence:', Closed: 'deletionClosed:',
@@ -15,6 +16,7 @@ export interface DeletionOperation {
 }
 export interface DeletionTarget extends RemoteOwner {
   serviceScope: string; deviceId: string; sessionId: string; localSessionId: string; streamEpoch: string;
+  syncTarget?: RemoteSyncTargetIdentity;
 }
 export interface DeletionClaim {
   operation: DeletionOperation; target: DeletionTarget;

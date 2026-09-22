@@ -162,6 +162,22 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw auth profile migration', () => {
     configBytes = fs.readFileSync(configPath, 'utf8');
   }
 
+  test('identifies unrelated config paths without exposing values or archiving credentials', async () => {
+    const config = JSON.parse(configBytes);
+    const secretValue = 'synthetic-secret-that-must-not-appear';
+    config.gateway = { reload: { mode: secretValue } };
+    configBytes = JSON.stringify(config, null, 2);
+    fs.writeFileSync(configPath, configBytes);
+    const source = writeSource('auth-profiles.json', { version: 1, profiles: { [profileId]: fixtureCredential } });
+
+    const result = await migrate();
+    expect(result.code).toBe(1);
+    expect(result.report.warnings.join('\n')).toContain('gateway.reload.mode');
+    expect(JSON.stringify(result.report)).not.toContain(secretValue);
+    expect(fs.readFileSync(source.source, 'utf8')).toBe(source.bytes);
+    expect(archives(source.source)).toEqual([]);
+  });
+
   test('migrates the configured non-main agent credentials and rotation state without running Doctor', async () => {
     const sources = [
       writeSource('auth-profiles.json', { version: 1, profiles: { [profileId]: fixtureCredential } }),

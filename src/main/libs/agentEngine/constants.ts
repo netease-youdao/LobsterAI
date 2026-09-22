@@ -24,4 +24,12 @@ export const OpenClawGatewayMethod = {
   ChatAbort: 'chat.abort',
   ChatSend: 'chat.send',
   SessionsSubscribe: 'sessions.subscribe',
+  SessionsAbort: 'sessions.abort',
+  SessionsList: 'sessions.list',
+} as const;
+
+export const OpenClawGatewayEvent = {
+  ChatSideResult: 'chat.side_result',
+  SessionsChanged: 'sessions.changed',
+  SubagentSettleFailed: 'lobsterai.subagent.settle_failed',
 } as const;

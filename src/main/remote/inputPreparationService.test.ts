@@ -13,10 +13,11 @@ import { InputPreparationService, type LocalPreparedInput } from './inputPrepara
 import type { RemoteAgentCatalog } from './remoteAgentCatalog';
 import { RemoteModelCatalog } from './remoteModelCatalog';
 
+const Target = { First: 'space-a-generation-7', Second: 'space-b-generation-4' } as const;
 const owner = { userId: 'A', scopeKey: 'personal' };
 const folders: string[] = [];
 afterEach(() => { for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }); });
-function fixture() {
+function fixture(getTargetId?: () => string | null) {
   const folder = mkdtempSync(path.join(tmpdir(), 'remote-input-')); folders.push(folder);
   const cwd = path.join(folder, 'cwd'); mkdirSync(cwd);
   const values = new Map<string, unknown>();
@@ -31,8 +32,8 @@ function fixture() {
     getSession: () => session, agentOwnership: { get: () => ({ version }), canPublish: () => !session } } as unknown as CoworkStore;
   const catalog = { refresh: vi.fn(async () => [{ agentId: 'main', version, defaultWorkspaceId: 'ws', workspaceAvailable: true }]), resolve: () => cwd } as unknown as RemoteAgentCatalog;
   const models = new RemoteModelCatalog(store.remote, () => [{ identity: 'configured-model', runtimeRef: 'provider/model', source: 'custom', displayName: 'Chat', providerLabel: 'Custom',
-    available: true, image: true, toolCalling: true, thinking: { options: ['low', 'high'], default: 'low' }, configuration: {} }]);
-  const deps = { store, models, cacheRoot: path.join(folder, 'cache'), getOwner: () => actor, getDefaultModel: () => 'provider/model', getAgentCatalog: () => catalog };
+    available: true, image: true, toolCalling: true, thinking: { options: ['low', 'high'], default: 'low' }, configuration: {} }], getTargetId);
+  const deps = { store, models, cacheRoot: path.join(folder, 'cache'), getOwner: () => actor, getTargetId, getDefaultModel: () => 'provider/model', getAgentCatalog: () => catalog };
   const service = new InputPreparationService(deps);
   const claim: RemotePreparationClaim = { preparationId: 'prep', claimId: 'claim', claimToken: 'token', claimUntil: new Date(Date.now() + 60_000).toISOString(), statusVersion: '1',
     request: { preparationId: 'prep', inputSchemaVersion: 2, purpose: 'create_session', draftId: 'draft',
@@ -48,6 +49,58 @@ function fixture() {
       claim.request = { ...claim.request, purpose: 'send_message', sessionId: 'remote', expectedInputVersion: '0', expectedControlVersion: '4',
         input: { text: 'continue', model: { mode: RemoteInputMode.Session } } }; } };
 }
+it('rejects preparation while the current target has not been verified', async () => {
+  const { service, claim, values } = fixture(() => null);
+  const download = vi.fn();
+  await expect(service.prepare(owner, 'pc', claim, download, () => true)).rejects.toThrow(RemoteInputReason.Stale);
+  expect(download).not.toHaveBeenCalled();
+  expect(values.size).toBe(0);
+});
+it('isolates preparations and cached files across targets with identical preparation IDs', async () => {
+  let targetId: string | null = Target.First;
+  const { service, deps, claim, attach } = fixture(() => targetId); attach('hello');
+  const first = await service.prepare(owner, 'pc', claim, async () => new Response('hello'), () => true);
+  expect(first.targetId).toBe(Target.First);
+  targetId = Target.Second;
+  expect(() => service.read('prep', owner, 'pc')).toThrow(RemoteInputReason.Stale);
+  expect(() => service.validate(first, owner, 'pc', true)).toThrow(RemoteInputReason.Stale);
+  expect(() => service.bind(first, 'command')).toThrow(RemoteInputReason.Stale);
+  await expect(service.executionOptions(first, () => undefined)).rejects.toThrow(RemoteInputReason.Stale);
+  const second = await service.prepare(owner, 'pc', claim, async () => new Response('hello'), () => true);
+  expect(second.targetId).toBe(Target.Second);
+  expect(second.cacheDirectory).not.toBe(first.cacheDirectory);
+  targetId = Target.First;
+  expect(new InputPreparationService(deps).read('prep', owner, 'pc')).toEqual(first);
+  expect(await service.cleanupExpired(first.expiresAt + 25 * 60 * 60_000)).toBe(2);
+  expect(existsSync(second.cacheDirectory!)).toBe(false);
+  expect(existsSync(first.cacheDirectory!)).toBe(false);
+});
+it('rejects old downloads after a target round trip without consuming their ready input', async () => {
+  let targetId: string | null = Target.First;
+  const { service, claim, attach, values } = fixture(() => targetId); attach('hello');
+  const download = async () => {
+    targetId = Target.Second; service.reset();
+    targetId = Target.First; service.reset();
+    return new Response('hello');
+  };
+  await expect(service.prepare(owner, 'pc', claim, download, () => true)).rejects.toThrow(RemoteInputReason.Account);
+  expect([...values.keys()].filter(key => key.startsWith('inputPreparation:'))).toEqual([]);
+});
+it('does not return a cached text preparation if its route changes while validation yields', async () => {
+  const { service, claim } = fixture(() => Target.First);
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  const pending = service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  service.reset();
+  await expect(pending).rejects.toThrow(RemoteInputReason.Account);
+  expect(service.read('prep', owner, 'pc')).toEqual(prepared);
+});
+it('rejects an attachment response if the target changes during download', async () => {
+  let targetId: string | null = Target.First;
+  const { service, claim, attach, values } = fixture(() => targetId); attach('hello');
+  const download = async () => { targetId = Target.Second; return new Response('hello'); };
+  await expect(service.prepare(owner, 'pc', claim, download, () => true)).rejects.toThrow(RemoteInputReason.Account);
+  expect([...values.keys()].filter(key => key.startsWith('inputPreparation:'))).toEqual([]);
+});
 it('freezes Agent model, thinking and cwd without creating a run', async () => {
   const { service, claim, cwd, values } = fixture();
   const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);

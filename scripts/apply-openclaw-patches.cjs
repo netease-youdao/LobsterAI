@@ -413,6 +413,47 @@ const legacyStrongPatchValidators = {
 };
 
 const v20260801StrongPatchValidators = {
+  'openclaw-gateway-fast-path-rejection-handler.patch': [
+    {
+      file: 'src/cli/run-main.ts',
+      snippets: ['let unhandledRejectionHandlerInstalled = false;', 'if (!unhandledRejectionHandlerInstalled) {'],
+      orderedSnippets: [
+        'if (isGatewayRunFastPathArgv(normalizedArgv)) {',
+        'installUnhandledRejectionHandler();',
+        'unhandledRejectionHandlerInstalled = true;',
+        '(await tryRunGatewayRunFastPath(normalizedArgv, startupTrace))',
+      ],
+    },
+  ],
+  'openclaw-browser-navigation-error-containment.patch': [
+    {
+      file: 'extensions/browser/src/browser/pw-session-navigation.ts',
+      snippets: [
+        'const NAVIGATION_GUARD_CLEANUP_TIMEOUT_MS = 1_000;',
+        'const stopSignal = new Promise<void>',
+        'requestKind === "subframe" && isTransientNetworkError(err)',
+        'await cleanupGuard();',
+        'throw toErrorObject(guardError.error, "Non-Error thrown");',
+      ],
+    },
+    {
+      file: 'extensions/browser/src/browser/pw-session-navigation.rejection.test.ts',
+      snippets: [
+        'browser navigation callback rejection ownership',
+        'isolates subframe %s while preserving a successful main document',
+        'aborts pending DNS at navigation timeout and observes its late %s',
+      ],
+    },
+  ],
+  'openclaw-browser-cdp-dispatch-rejection.patch': [
+    {
+      file: 'extensions/browser/src/browser/pw-session-cdp-transport.ts',
+      snippets: [
+        'void Promise.resolve(onMessage(message)).catch((error: unknown) => {',
+        'closeTransportSocket(formatErrorMessage(error));',
+      ],
+    },
+  ],
   'openclaw-transcript-replay-validation.patch': [
     {
       file: 'packages/ai/src/transcript-replay-validation.ts',

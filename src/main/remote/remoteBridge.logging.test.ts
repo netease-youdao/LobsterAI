@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteApiError, RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
 import { REMOTE_SYNC_REQUEST_ID_HEADER, remoteSyncRequestId } from './remoteSyncLog';
@@ -18,7 +19,7 @@ function fixture() {
   const request = vi.fn(async (_owner, _pathname, _init): Promise<Response> => new Response(JSON.stringify({ code: 0, data: {} })));
   const bridge: any = new RemoteBridge({ store, identity: { installationId: 'instance', deviceKey: privateText, databaseId: 'db' },
     runSessionTransaction: <T>(operation: () => T) => store.transaction(operation),
-    getOwner: () => owner, getApiBaseUrl: () => 'https://example.com', request,
+    getOwner: () => owner, getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => 'https://example.com', request,
     metadata: { name: 'Desktop', hostName: 'host', platform: 'macos', appVersion: '1', instanceLabel: 'default' },
     prepare: vi.fn(), execute: vi.fn(), onAccountChange: vi.fn() });
   bridge.owner = owner; bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1' };

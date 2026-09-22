@@ -5,6 +5,7 @@ import { join } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteCapability } from '../../shared/remote/constants';
+import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteReplyCapability } from '../../shared/remote/reply';
 import { RemoteRetention } from '../../shared/remote/retention';
 import { RemoteBridge } from './remoteBridge';
@@ -44,7 +45,7 @@ function bridgeFixture() {
   const request = vi.fn();
   const bridge: any = new RemoteBridge({ store, identity: { installationId: 'i', deviceKey: 'secret', databaseId: 'db' },
     runSessionTransaction: operation => store.transaction(operation), getOwner: () => owner,
-    getApiBaseUrl: () => 'https://example.com', request, execute, prepare: vi.fn(), onAccountChange: vi.fn(),
+    getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => 'https://example.com', request, execute, prepare: vi.fn(), onAccountChange: vi.fn(),
     metadata: { name: 'Desktop', hostName: 'host', platform: 'macos', appVersion: '1', instanceLabel: 'default' },
   });
   bridge.owner = owner; bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1' };
@@ -103,11 +104,11 @@ describe('retention protocol persistence', () => {
   it('does not reimport unchanged confirmed projection on ten process restarts', () => {
     const dir = mkdtempSync(join(tmpdir(), 'retention-mode-')); directories.push(dir);
     const file = join(dir, 'db.sqlite'); let store = fixture(file); create(store);
-    store.setProjectionIdentity('https://example.com', owner, 'desktop'); store.setReplyProjectionSupported(true);
+    store.setProjectionIdentity(RemoteEnvironment.Test, owner, 'desktop'); store.setReplyProjectionSupported(true);
     const row = store.sync('local')!; store.acknowledge('local', 'desktop', row.session_id, String(row.source_seq), '1', true);
     for (let i = 0; i < 10; i++) {
       store.db.close(); store = fixture(file);
-      store.setProjectionIdentity('https://example.com', owner, 'desktop'); store.setReplyProjectionSupported(true);
+      store.setProjectionIdentity(RemoteEnvironment.Test, owner, 'desktop'); store.setReplyProjectionSupported(true);
       expect(store.sync('local')!.needs_snapshot).toBe(0);
     }
   });
@@ -115,7 +116,7 @@ describe('retention protocol persistence', () => {
     const store = fixture(); create(store); create(store, 'other');
     store.db.prepare("UPDATE cowork_session_ownership SET owner_user_id='20002' WHERE session_id='other'").run();
     store.db.prepare('UPDATE remote_sync SET needs_snapshot=0').run();
-    store.setProjectionIdentity('https://example.com', owner, 'desktop'); store.setReplyProjectionSupported(true);
+    store.setProjectionIdentity(RemoteEnvironment.Test, owner, 'desktop'); store.setReplyProjectionSupported(true);
     expect(store.sync('local')!.needs_snapshot).toBe(1); expect(store.sync('other')!.needs_snapshot).toBe(0);
   });
   it('rejects an old epoch ACK atomically without clearing the outbox', () => {

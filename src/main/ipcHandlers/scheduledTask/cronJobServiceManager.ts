@@ -22,6 +22,11 @@ export function initCronJobServiceManager(d: CronJobServiceDeps): void {
   deps = d;
 }
 
+/** Diagnostics must not instantiate a service or start any gateway work. */
+export function peekCronJobService(): CronJobService | null {
+  return cronJobService;
+}
+
 export function getCronJobService(): CronJobService {
   if (!cronJobService) {
     if (!deps) {

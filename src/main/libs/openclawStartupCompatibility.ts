@@ -49,6 +49,12 @@ export function hasLegacyOpenClawDiscovery(config: unknown): boolean {
     && Object.hasOwn(plugins, OPENCLAW_LEGACY_DISCOVERY_KEY));
 }
 
+/** The pinned CLI's actual media migration failure, not plugin/config warnings. */
+export function isOpenClawAgentMediaMigrationFailure(message: string | undefined): boolean {
+  return typeof message === 'string'
+    && /^OpenClaw agent database .+ uses schema version \d+; run openclaw doctor --fix to migrate persisted media before using it\.$/.test(message.trim());
+}
+
 /** Only the app's shared-state binding failure authorizes this recovery path. */
 export function extractOpenClawBindingSchemaFailure(message: string | undefined, stateDir: string): string | undefined {
   if (!message) return undefined;

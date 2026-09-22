@@ -5,6 +5,8 @@ import * as tar from 'tar';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { OpenClawEngineErrorCode, OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
+import { OpenClawStartupCompatibilityMode } from '../../shared/openclawEngine/startupCompatibility';
+import { OpenClawStartupMigrationStatus } from '../../shared/openclawEngine/startupMigration';
 
 const electronState = vi.hoisted(() => ({
   appPath: process.cwd(),
@@ -28,11 +30,16 @@ vi.mock('electron', () => ({
 import { INSTALLER_RESOURCES_TAR } from './installerResourceRecovery';
 import { OpenClawEngineManager } from './openclawEngineManager';
 import { spawnOpenClawGatewayProcess } from './openclawGatewayProcess';
+import { runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
 import { OPENCLAW_WORKER_SHIM_TARGETS } from './openclawWorkerShims';
 
 vi.mock('./openclawGatewayProcess', async (importOriginal) => ({
   ...await importOriginal<typeof import('./openclawGatewayProcess')>(),
   spawnOpenClawGatewayProcess: vi.fn(),
+}));
+vi.mock('./openclawStartupCompatibility', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./openclawStartupCompatibility')>(),
+  runOpenClawStartupCompatibility: vi.fn(),
 }));
 import {
   migrateLegacyOpenClawPluginInstalls,
@@ -171,5 +178,33 @@ describe('OpenClawEngineManager startup runtime recovery', () => {
     expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
     expect(fs.readFileSync(manager.getConfigPath(), 'utf8')).toBe(originalConfig);
     expect(fs.existsSync(path.join(manager.getStateDir(), 'gateway-token'))).toBe(false);
+  });
+
+  test.each([false, true])('prepares existing SQLite before spawning, with legacy discovery=%s', async legacyDiscovery => {
+    setProcessProperty('platform', 'darwin');
+    fs.writeFileSync(path.join(resourcesDir, 'cfmind', 'openclaw.mjs'), 'export {};\n');
+    const manager = new OpenClawEngineManager();
+    vi.spyOn(manager, 'ensureReady').mockResolvedValue({ phase: OpenClawEnginePhase.Ready } as ReturnType<typeof manager.getStatus>);
+    const internals = manager as unknown as { resolveGatewayPort: () => Promise<number>; ensureBundledCliShims: () => string };
+    vi.spyOn(internals, 'resolveGatewayPort').mockResolvedValue(19763);
+    vi.spyOn(internals, 'ensureBundledCliShims').mockReturnValue('');
+    const databasePath = path.join(manager.getStateDir(), 'state', 'openclaw.sqlite');
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fs.writeFileSync(databasePath, 'migration owns this database');
+    fs.writeFileSync(manager.getConfigPath(), JSON.stringify({ gateway: { mode: 'local' },
+      plugins: legacyDiscovery ? { bundledDiscovery: 'compat' } : {} }));
+    vi.mocked(runOpenClawStartupCompatibility).mockResolvedValueOnce({
+      status: OpenClawStartupMigrationStatus.Failed, error: 'Shared-state snapshot failed',
+    });
+
+    await expect(manager.startGateway('schema-migration-test')).resolves.toMatchObject({
+      phase: OpenClawEnginePhase.Error, errorCode: OpenClawEngineErrorCode.StartupCompatibilityFailed,
+      message: 'Shared-state snapshot failed',
+    });
+    expect(runOpenClawStartupCompatibility).toHaveBeenLastCalledWith(expect.objectContaining({
+      stateDir: manager.getStateDir(), mode: OpenClawStartupCompatibilityMode.PrepareStartup,
+    }));
+    expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
+    expect(fs.readFileSync(databasePath, 'utf8')).toBe('migration owns this database');
   });
 });

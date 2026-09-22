@@ -14,7 +14,7 @@ import {
   normalizeNotificationSettings,
   TaskCompletionNotificationMode,
 } from '../../shared/notifications/constants';
-import { OpenClawEnginePhase, OpenClawGatewayRepairErrorCode } from '../../shared/openclawEngine/constants';
+import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import {
   applyModelRuntimeProfileMetadata,
   findKimiK3ReservedCustomParamKeys,
@@ -36,6 +36,7 @@ import { decryptSecret, decryptWithPassword, EncryptedPayload, encryptWithPasswo
 import { i18nService, LanguageType } from '../services/i18n';
 import { imService } from '../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
+import { resolveOpenClawRepairError } from '../services/openclawRepair';
 import { clearPendingPublishingConversionAttribution } from '../services/publishingConversionAttribution';
 import { clearPublishingSubscriptionRecoveryAnalytics } from '../services/publishingSubscriptionRecovery';
 import { formatShortcutForDisplay, getShortcutConflictSignature, isTextEditingSafeShortcut, matchesShortcut } from '../services/shortcuts';
@@ -2958,13 +2959,7 @@ const Settings: React.FC<SettingsProps> = ({
         ? i18nService.t('openClawRepairSuccess')
         : i18nService.t('openClawRepairSuccessNoBackup');
     }
-    if (result.errorCode === OpenClawGatewayRepairErrorCode.Busy) {
-      return i18nService.t('openClawRepairBusyError');
-    }
-    if (result.errorCode === OpenClawGatewayRepairErrorCode.ConfigApplyPending) {
-      return i18nService.t('openClawRepairConfigApplyPendingError');
-    }
-    return result.error?.trim() || i18nService.t('openClawRepairFailed');
+    return resolveOpenClawRepairError(result, false);
   };
 
   const handleConfirmOpenClawRepair = useCallback(async () => {

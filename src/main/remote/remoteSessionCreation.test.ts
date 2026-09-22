@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('electron', () => ({ app: { getAppPath: () => '/mock' } }));
 
 import { AgentId } from '../../shared/agent/constants';
+import { RemoteEnvironment } from '../../shared/remote/environment';
 import { CoworkStore } from '../coworkStore';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
 import { OwnershipOperationGate } from '../ownershipOperationGate';
@@ -102,7 +103,7 @@ function fixture() {
   });
   const dependencies = {
     store: remote, identity: { installationId: 'instance', deviceKey: 'key', databaseId: 'database' },
-    getOwner: () => owner, getApiBaseUrl: () => 'https://example.com', request: requestApi,
+    getOwner: () => owner, getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => 'https://example.com', request: requestApi,
     metadata: { name: 'Desktop', hostName: 'host', platform: 'macos', appVersion: '1', instanceLabel: 'default' },
     runSessionTransaction: <T>(operation: () => T): T => store.runSessionTransaction(operation),
     prepare: service.prepare.bind(service), execute: service.execute.bind(service), onAccountChange: vi.fn(),

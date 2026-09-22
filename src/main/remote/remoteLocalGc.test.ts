@@ -4,22 +4,25 @@ import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { RemoteEnvironment } from '../../shared/remote/environment';
 import { payloadHash } from './canonical';
+import { migrateRemoteEnvironment } from './remoteEnvironmentMigration';
 import { remoteFileCacheDirectory } from './remoteFileSnapshots';
 import { acknowledgeRemoteSessionDeletion, recordRemoteSessionDeletion, RemoteLocalGc } from './remoteLocalGc';
 import { RemoteStore } from './remoteStore';
+import { RemoteSyncTargetStore } from './remoteSyncTargetStore';
 
 const owner = { userId: 'a', scopeKey: 'personal' }, other = { userId: 'b', scopeKey: 'personal' };
 const day = 24 * 60 * 60_000;
 const databases: Database.Database[] = [], directories: string[] = [];
-function fixture() {
+function fixture(environment: string | null = null) {
   const db = new Database(':memory:'); databases.push(db);
   db.exec('CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT); CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER)');
   const store = new RemoteStore(db, { deferredProjection: true, restoreRuns: false });
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'remote-local-gc-'))); directories.push(root);
   let actor = owner;
   store.transaction(() => { db.prepare("INSERT INTO cowork_sessions VALUES ('s','title',1,1,'idle')").run(); store.assignNew('s', owner, 'local_create'); });
-  db.prepare("UPDATE remote_sync SET device_id='device',source_seq=1,ack_seq=1,needs_snapshot=0 WHERE local_id='s'").run();
+  db.prepare("UPDATE remote_sync SET device_id='device',source_seq=1,ack_seq=1,needs_snapshot=0,sync_environment=? WHERE local_id='s'").run(environment);
   store.transaction(() => { recordRemoteSessionDeletion(store, 's', 100); db.prepare("DELETE FROM cowork_sessions WHERE id='s'").run(); });
   db.prepare("UPDATE remote_sync SET source_seq=2,ack_seq=2 WHERE local_id='s'").run();
   db.prepare('INSERT INTO remote_projection VALUES (?,?,?,?,?)').run('s', 'deleted', 'hash', 1, JSON.stringify({ eventType: 'session.deleted', payload: { deletedAt: 'date' } }));
@@ -38,6 +41,51 @@ async function finish(gc: RemoteLocalGc) { for (let i = 0; i < 12; i++) await gc
 afterEach(() => { vi.restoreAllMocks(); for (const db of databases.splice(0)) db.close(); for (const dir of directories.splice(0)) fs.rmSync(dir, { force: true, recursive: true }); });
 
 describe('deleted remote session local GC', () => {
+  it.each([
+    ['https://lobsterai-server-dev.inner.youdao.com', RemoteEnvironment.Test],
+    ['https://lobsterai-server.youdao.com', RemoteEnvironment.Production],
+    ['https://lobsterai-server-dev.inner.youdao.com', 'https://lobsterai-server.inner.youdao.com'],
+  ])('acknowledges an unchanged deletion stream after environment migration from %s to %s', async (legacyEnvironment, environment) => {
+    const f = fixture(legacyEnvironment);
+    f.db.prepare("UPDATE remote_sync SET sync_environment=? WHERE local_id='s'").run(environment);
+    f.ack();
+    expect(f.store.get('localGcDeleted:s')).toMatchObject({ environment, ackAt: 1000 });
+    await finish(f.gc);
+    expect(f.body().n).toBe(0);
+  });
+  it('keeps existing deletion evidence valid when its local environment migrates after acknowledgement', async () => {
+    const legacyEnvironment = 'https://lobsterai-server-dev.inner.youdao.com';
+    const f = fixture(legacyEnvironment);
+    f.ack();
+    f.db.prepare("UPDATE remote_sync SET sync_environment=? WHERE local_id='s'").run(RemoteEnvironment.Test);
+    await finish(f.gc);
+    expect(f.body().n).toBe(0);
+    expect(f.store.get('localGcDeleted:s')).toMatchObject({ environment: legacyEnvironment, ackAt: 1000 });
+  });
+  it('uses persisted custom-domain identity when legacy deletion evidence is recovered after migration', async () => {
+    const legacyEnvironment = 'https://custom-gateway.example.com';
+    const f = fixture(legacyEnvironment);
+    f.ack();
+    const tombstone = f.store.get('localGcDeleted:s');
+    migrateRemoteEnvironment(f.store, { owner, deviceId: 'device', environment: RemoteEnvironment.Test, legacyEnvironments: [legacyEnvironment] });
+    f.store.put('localGcDeleted:s', tombstone);
+    expect(f.store.sync('s')?.sync_environment).toBe(RemoteEnvironment.Test);
+    await finish(f.gc);
+    expect(f.body().n).toBe(0);
+    expect(f.store.get('localGcDeleted:s')).toMatchObject({ environment: legacyEnvironment, ackAt: 1000 });
+  });
+  it.each([RemoteEnvironment.Production, 'https://unknown.example.com', null])('retains deletion data after a distinct environment switch to %s', async environment => {
+    const f = fixture('https://lobsterai-server-dev.inner.youdao.com');
+    f.db.prepare("UPDATE remote_sync SET sync_environment=? WHERE local_id='s'").run(environment);
+    f.ack();
+    expect(f.store.get('localGcDeleted:s')).toMatchObject({ ackAt: null });
+    f.db.prepare("UPDATE remote_sync SET sync_environment=? WHERE local_id='s'").run(RemoteEnvironment.Test);
+    f.ack();
+    expect(f.store.get('localGcDeleted:s')).toMatchObject({ ackAt: 1000 });
+    f.db.prepare("UPDATE remote_sync SET sync_environment=? WHERE local_id='s'").run(environment);
+    await finish(f.gc);
+    expect(f.body().n).toBe(1);
+  });
   it('requires a transaction and retains caches without deletion ACK or during grace', async () => {
     const f = fixture(); expect(() => recordRemoteSessionDeletion(f.store, 's')).toThrow();
     await finish(f.gc); expect(f.body().n).toBe(1);
@@ -84,6 +132,19 @@ describe('deleted remote session local GC', () => {
     f.store.put('desktopAsset:asset', { owner, localSessionId: 's', availability: 'ready', snapshot: { path: snapshot }, path: workspace, uploadRequestId: 'id', assetId: 'asset' });
     await finish(f.gc); expect(fs.existsSync(snapshot)).toBe(false); expect(fs.readFileSync(workspace, 'utf8')).toBe('original');
     expect(f.store.get('desktopAsset:asset')).toBeNull(); expect(f.store.entries('localGcReceipt:')).toHaveLength(1);
+  });
+  it('retains files referenced by an inactive target after the active deletion is acknowledged', async () => {
+    const f = fixture(); f.ack(); new RemoteSyncTargetStore(f.store);
+    const folder = remoteFileCacheDirectory(f.root, owner); fs.mkdirSync(folder, { recursive: true });
+    const snapshot = path.join(folder, 'snapshot'); fs.writeFileSync(snapshot, 'retained bytes');
+    f.store.put('desktopAsset:asset', { owner, localSessionId: 's', availability: 'ready', snapshot: { path: snapshot } });
+    f.db.prepare('INSERT INTO remote_sync_target_archives VALUES (?,?,?,?)').run('inactive-target', 'remote_state', 0,
+      JSON.stringify({ key: 'fileOutput:pending', value: JSON.stringify({ queue: [{ publicationId: 'unknown', snapshot: { path: snapshot } }] }) }));
+    await finish(f.gc);
+    expect(f.store.get('desktopAsset:asset')).toBeNull();
+    expect(fs.readFileSync(snapshot, 'utf8')).toBe('retained bytes');
+    f.db.prepare('DELETE FROM remote_sync_target_archives').run();
+    await finish(f.gc); expect(fs.existsSync(snapshot)).toBe(false);
   });
   it.each(['session-field', 'legacy-history', 'legacy-prefix'])('reclaims %s desktop input snapshots using exact session evidence', async format => {
     const f = fixture(); f.ack();
@@ -156,6 +217,22 @@ describe('deleted remote session local GC', () => {
     await finish(f.gc); expect(fs.existsSync(file)).toBe(false); expect(f.store.get('inputPreparation:prepared')).toBeNull();
     expect(f.store.entries('localGcReceipt:')[0].value).toMatchObject({ boundCommandId: 'command', requestHash: 'request-digest', inputDigest: 'input-digest' });
     expect(f.store.get('inbox:command')).toBeDefined();
+  });
+  it.each([true, false])('scopes preparation cleanup to its target and exact command when IDs collide (active=%s)', async active => {
+    const targetId = 'a'.repeat(64), otherTarget = 'b'.repeat(64);
+    const f = fixture(targetId); new RemoteSyncTargetStore(f.store);
+    f.db.prepare('INSERT INTO remote_sync_targets VALUES (?,?,?,?,?)').run(targetId, owner.userId, owner.scopeKey, 'device', null);
+    f.ack();
+    const preparationTarget = active ? targetId : otherTarget;
+    const folder = path.join(f.deps.inputCacheRoot, payloadHash([owner.userId, owner.scopeKey, 'device']), '11111111-1111-4111-8111-111111111111');
+    fs.mkdirSync(folder, { recursive: true }); const file = path.join(folder, 'download.txt'); fs.writeFileSync(file, 'input');
+    const key = `inputPreparation:${JSON.stringify([preparationTarget, 'prepared'])}`;
+    f.store.put(key, { owner, targetId: preparationTarget, deviceId: 'device', boundCommandId: 'command', preparationId: 'prepared', files: [{ path: file }] });
+    f.store.put('inbox:command', { targetId: otherTarget, localSessionId: 'other-session', state: 'applied', command: { status: 'applied' } });
+    f.store.put(`inbox:${preparationTarget}:command`, { targetId: preparationTarget, localSessionId: 's', state: 'applied', command: { status: 'applied' } });
+    await finish(f.gc);
+    expect(fs.existsSync(file)).toBe(!active);
+    expect(f.store.get(key) === null).toBe(active);
   });
   it.each(['unknown-command', 'unknown-run', 'other-owner'])('keeps preparation copies protected for %s', async reason => {
     const f = fixture(); f.ack();

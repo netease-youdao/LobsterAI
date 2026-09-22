@@ -6,7 +6,7 @@ const electronMocks = vi.hoisted(() => {
   const createWebContents = () => {
     let currentUrl = '';
     let zoomFactor = 1;
-    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
     const webContents = {
       close: vi.fn(),
       debugger: {
@@ -16,7 +16,7 @@ const electronMocks = vi.hoisted(() => {
         sendCommand: vi.fn(),
       },
       executeJavaScript: vi.fn(),
-      emit: (event: string, ...args: unknown[]) => listeners.get(event)?.(...args),
+      emit: (event: string, ...args: unknown[]) => listeners.get(event)?.forEach(listener => listener(...args)),
       focus: vi.fn(),
       getTitle: vi.fn(() => ''),
       getURL: vi.fn(() => currentUrl),
@@ -32,12 +32,12 @@ const electronMocks = vi.hoisted(() => {
         goForward: vi.fn(),
       },
       on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
-        listeners.set(event, listener);
+        listeners.set(event, [...(listeners.get(event) ?? []), listener]);
         return webContents;
       }),
       reload: vi.fn(),
       sendInputEvent: vi.fn(),
-      setWindowOpenHandler: vi.fn(),
+      setWindowOpenHandler: vi.fn<(handler: (details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse) => void>(),
       setZoomFactor: vi.fn((factor: number) => {
         zoomFactor = factor;
       }),
@@ -63,6 +63,7 @@ const electronMocks = vi.hoisted(() => {
 });
 
 vi.mock('electron', () => ({
+  app: { isPackaged: false },
   nativeImage: {
     createFromBuffer: electronMocks.createImageFromBuffer,
   },
@@ -70,11 +71,13 @@ vi.mock('electron', () => ({
     fromPartition: electronMocks.fromPartition,
   },
   WebContentsView: class {
-    readonly webContents = electronMocks.createWebContents();
+    readonly webContents: ReturnType<typeof electronMocks.createWebContents>;
     readonly setBackgroundColor = vi.fn();
     readonly setBounds = vi.fn();
 
-    constructor() {
+    constructor(options: Electron.WebContentsViewConstructorOptions = {}) {
+      this.webContents = options.webContents as unknown as typeof this.webContents
+        ?? electronMocks.createWebContents();
       electronMocks.webContentsInstances.push(this.webContents);
     }
   },
@@ -89,7 +92,7 @@ import {
   AgentBrowserPartition,
   BrowserDisplayMode,
 } from '../../shared/browserWebAccess/constants';
-import { AgentBrowserHost, BrowserCdpCommand, BrowserMcpTool } from './agentBrowserHost';
+import { AgentBrowserHost, BrowserCdpCommand, BrowserMcpTool, BrowserWindowOpenAction } from './agentBrowserHost';
 
 const createHost = (
   overrides: Partial<ConstructorParameters<typeof AgentBrowserHost>[0]> = {},
@@ -122,6 +125,8 @@ beforeEach(() => {
     setPermissionCheckHandler: electronMocks.setPermissionCheckHandler,
     setPermissionRequestHandler: electronMocks.setPermissionRequestHandler,
     setProxy: electronMocks.setProxy,
+    on: vi.fn(),
+    removeListener: vi.fn(),
   });
 });
 
@@ -305,6 +310,151 @@ describe('AgentBrowserHost', () => {
 
     expect(stateAfterMiddleClose.selectedPageId).toBe(3);
     expect(stateAfterRightClose.selectedPageId).toBe(1);
+  });
+});
+
+describe('AgentBrowserHost popup navigation', () => {
+  const getPopupResponse = (
+    opener: ReturnType<typeof electronMocks.createWebContents>,
+    details: Partial<Electron.HandlerDetails> = {},
+  ): Electron.WindowOpenHandlerResponse => opener.setWindowOpenHandler.mock.calls[0][0]({
+    url: 'https://accounts.example.com/authorize',
+    frameName: 'sign-in',
+    features: 'width=500,height=600',
+    disposition: 'new-window',
+    referrer: { url: 'https://example.com/', policy: 'strict-origin-when-cross-origin' },
+    ...details,
+  });
+
+  const adoptPopup = (response: Electron.WindowOpenHandlerResponse) => {
+    const popup = electronMocks.createWebContents();
+    const options: Electron.WebContentsViewConstructorOptions = {
+      ...response.overrideBrowserWindowOptions,
+      webContents: popup as unknown as Electron.WebContents,
+    };
+    const returned = response.createWindow?.(options);
+    expect(returned).toBe(popup);
+    return popup;
+  };
+
+  test('adopts the native popup without replaying its navigation', async () => {
+    const host = createHost();
+    await host.newPage();
+    const response = getPopupResponse(electronMocks.webContentsInstances[0], {
+      postBody: {
+        contentType: 'application/x-www-form-urlencoded',
+        data: [{ type: 'rawData', bytes: Buffer.from('state=local-test') }],
+      },
+    });
+
+    expect(response.action).toBe(BrowserWindowOpenAction.Allow);
+    expect(response.overrideBrowserWindowOptions?.webPreferences).toEqual(expect.objectContaining({
+      partition: AgentBrowserPartition.Default,
+      nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      devTools: false,
+      preload: expect.any(String),
+    }));
+    const popup = adoptPopup(response);
+
+    expect(electronMocks.webContentsInstances).toHaveLength(2);
+    expect(electronMocks.webContentsInstances[1]).toBe(popup);
+    expect(popup.loadURL).not.toHaveBeenCalled();
+    expect(popup.setWindowOpenHandler).toHaveBeenCalledOnce();
+    expect(host.getState().selectedPageId).toBe(2);
+  });
+
+  test('preserves a blank popup for opener-driven navigation', async () => {
+    const host = createHost();
+    await host.newPage();
+    const response = getPopupResponse(electronMocks.webContentsInstances[0], { url: AgentBrowserPageUrl.Blank });
+
+    const popup = adoptPopup(response);
+
+    expect(response.action).toBe(BrowserWindowOpenAction.Allow);
+    expect(popup.loadURL).not.toHaveBeenCalled();
+  });
+
+  test.each(['https://blocked.example.com/login', 'file:///tmp/private.txt', 'javascript:alert(1)'])(
+    'rejects disallowed popup URL %s without creating a tab',
+    async url => {
+      const host = createHost({
+        getBrowserConfig: () => ({ displayMode: BrowserDisplayMode.InApp, blockedHostnames: ['blocked.example.com'] }),
+      });
+      await host.newPage();
+
+      const response = getPopupResponse(electronMocks.webContentsInstances[0], { url });
+
+      expect(response).toEqual({ action: BrowserWindowOpenAction.Deny });
+      expect(host.getState().tabs).toHaveLength(1);
+      expect(electronMocks.webContentsInstances).toHaveLength(1);
+    },
+  );
+
+  test('enforces hostname policy on native popup redirects and navigations', async () => {
+    const host = createHost({
+      getBrowserConfig: () => ({ displayMode: BrowserDisplayMode.InApp, blockedHostnames: ['blocked.example.com'] }),
+    });
+    await host.newPage();
+    const popup = adoptPopup(getPopupResponse(electronMocks.webContentsInstances[0]));
+    const event = { preventDefault: vi.fn() };
+
+    popup.emit('will-redirect', event, 'https://blocked.example.com/callback');
+    popup.emit('will-navigate', event, 'https://blocked.example.com/');
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(2);
+    expect(host.getState().error).toContain('Navigation was blocked');
+  });
+
+  test('loads deferred child pages with the original referrer and POST body', async () => {
+    const host = createHost();
+    await host.newPage();
+    const referrer: Electron.Referrer = { url: 'https://example.com/', policy: 'strict-origin' };
+    const postBody: Electron.PostBody = {
+      contentType: 'multipart/form-data',
+      boundary: 'local-test-boundary',
+      data: [{ type: 'rawData', bytes: Buffer.from('--local-test-boundary\r\n') }],
+    };
+    const response = getPopupResponse(electronMocks.webContentsInstances[0], {
+      disposition: 'background-tab', referrer, postBody,
+    });
+
+    response.createWindow?.({ ...response.overrideBrowserWindowOptions });
+    await new Promise<void>(resolve => { setImmediate(resolve); });
+
+    expect(electronMocks.webContentsInstances[1].loadURL).toHaveBeenCalledExactlyOnceWith(
+      'https://accounts.example.com/authorize',
+      {
+        httpReferrer: referrer,
+        postData: postBody.data,
+        extraHeaders: 'Content-Type: multipart/form-data; boundary=local-test-boundary',
+      },
+    );
+  });
+
+  test('removes a closed popup view and returns to its opener instead of an unrelated tab', async () => {
+    const mainWindow = {
+      isVisible: () => true,
+      isDestroyed: () => false,
+      getContentBounds: () => ({ x: 0, y: 0, width: 1000, height: 700 }),
+      contentView: { addChildView: vi.fn<(view: unknown) => void>(), removeChildView: vi.fn() },
+    };
+    const host = createHost({ getMainWindow: () => mainWindow as unknown as Electron.BrowserWindow });
+    await host.newPage();
+    await host.newPage();
+    host.selectPage(1);
+    host.setView({ visible: true });
+    const popup = adoptPopup(getPopupResponse(electronMocks.webContentsInstances[0]));
+    const popupView = mainWindow.contentView.addChildView.mock.calls.at(-1)?.[0];
+
+    popup.emit('destroyed');
+
+    expect(mainWindow.contentView.removeChildView).toHaveBeenCalledWith(popupView);
+    expect(host.getState().tabs.map(tab => tab.pageId)).toEqual([1, 2]);
+    expect(host.getState().selectedPageId).toBe(1);
   });
 });
 

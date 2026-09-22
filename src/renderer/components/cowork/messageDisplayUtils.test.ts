@@ -8,6 +8,8 @@ import {
   canFoldTurnProcess,
   chunkConsolidatedItemsForDisplay,
   type ConsolidatedItem,
+  countTurnCompletedSteps,
+  countTurnFailedSteps,
   formatElapsedDuration,
   formatStructuredText,
   formatTurnDuration,
@@ -16,6 +18,8 @@ import {
   getActivityGroupSummary,
   getActivityIndicatorStatusText,
   getActivityStepDisplay,
+  getThinkingPhaseLabels,
+  getToolInputSummary,
   getToolResultCollapsedDisplay,
   getToolResultDisplay,
   getTurnActivityFingerprint,
@@ -256,6 +260,35 @@ test('turn end timestamp is the latest message time and duration formats in loca
   expect(formatTurnDuration(45_000)).toBe('45秒');
   expect(formatTurnDuration(21 * 60_000 + 45_000)).toBe('21分钟 45秒');
   expect(formatTurnDuration(3_720_000)).toBe('1小时 2分钟');
+});
+
+test('failed tool steps are counted so the folded process can report them', () => {
+  const turn = buildTurn([{
+    id: 'user-1', type: 'user', content: 'hello', timestamp: 1000,
+  }, {
+    id: 'tool-1', type: 'tool_use', content: '', timestamp: 2000, metadata: { toolUseId: 'tool-use-1', toolName: 'exec' },
+  }, {
+    id: 'result-1', type: 'tool_result', content: 'command not found', timestamp: 3000, metadata: { toolUseId: 'tool-use-1', isError: true },
+  }, {
+    id: 'tool-2', type: 'tool_use', content: '', timestamp: 4000, metadata: { toolUseId: 'tool-use-2', toolName: 'read' },
+  }, {
+    id: 'result-2', type: 'tool_result', content: 'ok', timestamp: 5000, metadata: { toolUseId: 'tool-use-2' },
+  }, {
+    id: 'tool-3', type: 'tool_use', content: '', timestamp: 6000, metadata: { toolUseId: 'tool-use-3', toolName: 'image' },
+  }, {
+    id: 'result-3', type: 'tool_result', content: '', timestamp: 7000, metadata: { toolUseId: 'tool-use-3', error: 'unsupported' },
+  }, {
+    id: 'assistant-1', type: 'assistant', content: 'done', timestamp: 8000,
+  }]);
+  expect(countTurnFailedSteps(turn)).toBe(2);
+  expect(countTurnFailedSteps(buildTurn([{ id: 'user-2', type: 'user', content: 'hi', timestamp: 1 }]))).toBe(0);
+});
+
+test('image and browser tool rows summarize their target instead of a generic tool label', () => {
+  expect(getToolInputSummary('image', { path: '/tmp/shots/cover.png', prompt: 'describe' })).toBe('/tmp/shots/cover.png');
+  expect(getToolInputSummary('browser', { action: 'navigate', url: 'https://example.com/docs' })).toBe('navigate · https://example.com/docs');
+  expect(getToolInputSummary('browser', { action: 'screenshot' })).toBe('screenshot');
+  expect(getToolInputSummary('browser', {})).toBeNull();
 });
 
 test('turn answer start index splits trailing answer text from the process', () => {
@@ -530,4 +563,33 @@ test('media polling groups count their polls as steps', () => {
   const summary = getActivityGroupSummary([mediaItem, activityToolItem('tool-1')]);
 
   expect(summary.stepCount).toBe(4);
+});
+
+test('thinking phase labels start with the plain thinking label so the first render is unchanged', () => {
+  const phases = getThinkingPhaseLabels();
+  expect(phases[0]).toBe(getActivityIndicatorStatusText());
+  expect(phases.length).toBeGreaterThan(1);
+  expect(new Set(phases).size).toBe(phases.length);
+});
+
+test('completed step count only includes tool groups with a final result', () => {
+  const group = (id: string, result?: { isStreaming?: boolean; isFinal?: boolean } | null) => ({
+    type: 'tool_group' as const,
+    group: {
+      type: 'tool_group' as const,
+      toolUse: { id, type: 'tool_use' as const, content: '', timestamp: 1, metadata: { toolName: 'exec' } },
+      ...(result === undefined ? {} : { toolResult: result === null ? null : { id: `${id}-r`, type: 'tool_result' as const, content: 'ok', timestamp: 2, metadata: result } }),
+    },
+  });
+  const turn = {
+    id: 'turn', userMessage: null,
+    assistantItems: [
+      group('done', { isFinal: true }),
+      group('legacy', {}),
+      group('streaming', { isStreaming: true, isFinal: false }),
+      group('pending'),
+      { type: 'assistant' as const, message: { id: 'a', type: 'assistant' as const, content: 'text', timestamp: 3 } },
+    ],
+  };
+  expect(countTurnCompletedSteps(turn)).toBe(2);
 });

@@ -1,4 +1,5 @@
 import type { ArtifactFileAccess } from '../../shared/artifactPreview/types';
+import type { WorkspaceChangesSummary } from '../../shared/artifactPreview/workspace';
 import type { ShareDeploymentProjectCandidate } from '../../shared/shareDeployment/constants';
 
 export const ArtifactTypeValue = {
@@ -60,6 +61,7 @@ export interface Artifact {
   url?: string;
   localService?: LocalServiceArtifactMetadata;
   contentVersion?: number;
+  workspaceChanges?: WorkspaceChangesSummary;
   remoteUrl?: string;
   mediaOrigin?: GeneratedVideoArtifactOrigin;
   legacyGeneratedVideoCandidate?: boolean;

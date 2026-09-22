@@ -19,6 +19,7 @@ import {
 } from '../../shared/browserWebAccess/constants';
 import { COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
 import { CoworkErrorModelSource } from '../../shared/cowork/errorDetail';
+import { WeixinPlugin } from '../../shared/im/weixin';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
 import { OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS, OpenClawSkillReviewMode } from '../../shared/openclawEngine/constants';
 import { OpenClawTranscriptSafetyLimit } from '../../shared/openclawTranscript/constants';
@@ -1821,6 +1822,10 @@ const buildManagedBrowserProxyExtraArgs = (browserWebAccess: BrowserWebAccessCon
   return proxyUrl ? [`${CHROME_PROXY_SERVER_ARG_PREFIX}${proxyUrl}`] : [];
 };
 
+const getSyncedFeishuInstances = (instances: FeishuInstanceConfig[]): FeishuInstanceConfig[] => (
+  instances.filter(instance => instance.enabled && instance.appId)
+);
+
 type OpenClawConfigSyncDeps = {
   engineManager: OpenClawEngineManager;
   getCoworkConfig: () => CoworkConfig;
@@ -1838,6 +1843,7 @@ type OpenClawConfigSyncDeps = {
   getNimInstances?: () => NimInstanceConfig[];
   getNeteaseBeeChanConfig: () => NeteaseBeeChanConfig | null;
   getWeixinConfig: () => WeixinOpenClawConfig | null;
+  isWeixinQrLoginActive?: () => boolean;
   getIMSettings?: () => IMSettings | null;
   getResolvedMcpServers?: () => ResolvedMcpServer[];
   getAskUserCallbackUrl?: () => string | null;
@@ -1869,6 +1875,7 @@ export class OpenClawConfigSync {
   private readonly getNimInstances: () => NimInstanceConfig[];
   private readonly getNeteaseBeeChanConfig: () => NeteaseBeeChanConfig | null;
   private readonly getWeixinConfig: () => WeixinOpenClawConfig | null;
+  private readonly isWeixinQrLoginActive: () => boolean;
   private readonly getIMSettings?: () => IMSettings | null;
   private readonly getResolvedMcpServers?: () => ResolvedMcpServer[];
   private readonly getAskUserCallbackUrl?: () => string | null;
@@ -1901,6 +1908,7 @@ export class OpenClawConfigSync {
     this.getNimInstances = deps.getNimInstances ?? (() => []);
     this.getNeteaseBeeChanConfig = deps.getNeteaseBeeChanConfig;
     this.getWeixinConfig = deps.getWeixinConfig;
+    this.isWeixinQrLoginActive = deps.isWeixinQrLoginActive ?? (() => false);
     this.getIMSettings = deps.getIMSettings;
     this.getResolvedMcpServers = deps.getResolvedMcpServers;
     this.getAskUserCallbackUrl = deps.getAskUserCallbackUrl;
@@ -2541,6 +2549,7 @@ export class OpenClawConfigSync {
         const qqbotPluginEnabled = qqInstances.some(i => i.enabled && i.appId);
         const discordPluginEnabled = discordInstances.some(i => i.enabled && i.botToken);
         const userPlugins = this.getUserPlugins();
+        const weixinPluginEnabled = !!weixinConfig?.enabled || this.isWeixinQrLoginActive();
 
         const pluginEntries: Record<string, unknown> = {
           // Preserve ALL existing plugin entries so runtime auto-injected
@@ -2564,7 +2573,7 @@ export class OpenClawConfigSync {
                 if (pluginMatches(plugin, 'openclaw-nim-channel', NIM_CHANNEL_PLUGIN_ID, 'nim'))
                   return nimInstances.some(isEnabledNimRuntimeInstance);
                 if (pluginMatches(plugin, 'openclaw-netease-bee')) return !!(neteaseBeeChanConfig?.enabled && neteaseBeeChanConfig.clientId && neteaseBeeChanConfig.secret);
-                if (pluginMatches(plugin, 'openclaw-weixin')) return true; // Always keep enabled for QR login discovery
+                if (pluginMatches(plugin, WeixinPlugin.Id)) return weixinPluginEnabled;
                 if (pluginMatches(plugin, 'clawemail-email', EMAIL_PLUGIN_ID)) return !!emailConfig?.instances.some(i => i.enabled && i.email);
                 return true; // other plugins stay enabled
               })();
@@ -2599,7 +2608,8 @@ export class OpenClawConfigSync {
           // User-installed plugins: merge enabled state and config from user_plugins table
           ...Object.fromEntries(
             userPlugins.map(p => [p.pluginId, {
-              enabled: p.enabled,
+              enabled: p.pluginId === WeixinPlugin.Id && hasPreinstalledPlugin(WeixinPlugin.Id)
+                ? weixinPluginEnabled : p.enabled,
               ...(p.config && Object.keys(p.config).length > 0 ? { config: p.config } : {}),
             }]),
           ),
@@ -2864,7 +2874,7 @@ export class OpenClawConfigSync {
     }
 
     // Sync Feishu OpenClaw channel config (via @larksuite/openclaw-lark) — multi-instance via accounts
-    const enabledFeishuInstances = feishuInstances.filter(i => i.enabled && i.appId);
+    const enabledFeishuInstances = getSyncedFeishuInstances(feishuInstances);
     if (enabledFeishuInstances.length > 0) {
       const buildFeishuAccountConfig = (
         inst: (typeof enabledFeishuInstances)[0],
@@ -3176,7 +3186,7 @@ export class OpenClawConfigSync {
     // Sync Weixin OpenClaw channel config (via openclaw-weixin plugin)
     // Only write the channel entry when the plugin is actually installed,
     // otherwise the gateway rejects the config as invalid.
-    if (hasPreinstalledPlugin('openclaw-weixin')) {
+    if (hasPreinstalledPlugin(WeixinPlugin.Id)) {
       const weixinChannelEnabled = !!weixinConfig?.enabled;
       const weixinChannel: Record<string, unknown> = {
         enabled: weixinChannelEnabled,
@@ -3189,7 +3199,7 @@ export class OpenClawConfigSync {
       };
       managedConfig.channels = {
         ...((managedConfig.channels as Record<string, unknown>) || {}),
-        'openclaw-weixin': weixinChannel,
+        [WeixinPlugin.Id]: weixinChannel,
       };
     }
 
@@ -3400,9 +3410,10 @@ export class OpenClawConfigSync {
       }
     }
 
-    // Feishu — per-instance secrets (must match sync() indexing: enabled instances only)
+    // Preserve the same account slots as sync(), including incomplete credentials.
+    // Skipping an empty secret would assign the next account's secret to this one.
     const feishuInstances = this.getFeishuInstances();
-    const enabledFeishu = feishuInstances.filter(i => i.enabled && i.appSecret);
+    const enabledFeishu = getSyncedFeishuInstances(feishuInstances);
     for (let idx = 0; idx < enabledFeishu.length; idx++) {
       if (idx === 0) {
         env.LOBSTER_FEISHU_APP_SECRET = enabledFeishu[idx].appSecret;
@@ -3970,7 +3981,7 @@ export class OpenClawConfigSync {
       platform: string;
     }> = [
       { getter: () => this.getNeteaseBeeChanConfig(), channel: 'netease-bee', platform: 'netease-bee' },
-      { getter: () => this.getWeixinConfig(), channel: 'openclaw-weixin', platform: 'weixin' },
+      { getter: () => this.getWeixinConfig(), channel: WeixinPlugin.Id, platform: 'weixin' },
     ];
 
     for (const { getter, channel, platform } of singleInstanceChannels) {

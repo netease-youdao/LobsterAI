@@ -6,6 +6,7 @@ import { type DeletionClaim, type DeletionCompletion, type DeletionOperation, ty
 import type { CoworkRuntime } from '../libs/agentEngine/types';
 import { ownershipOperationGate } from '../ownershipOperationGate';
 import { payloadHash, sameOwner } from './canonical';
+import { matchesRemoteDeletionTargetScope, samePersistedRemoteEnvironment } from './remoteEnvironmentMigration';
 import { acknowledgeRemoteDeletionCompletion } from './remoteLocalGc';
 import type { RemoteStore } from './remoteStore';
 import type { SessionDeletionService } from './sessionDeletionService';
@@ -55,13 +56,15 @@ export class RemoteSessionDeletionClient {
     entry.permitRequestPending = false; entry.phase = Settled; this.releaseFence(entry); this.save(entry); return true;
   }
   private matching(entry: DeletionInbox, context: Context | null): context is Context {
-    return !!context && sameOwner(entry.target, context.owner) && entry.target.deviceId === context.deviceId && entry.target.serviceScope === context.environment;
+    return !!context && sameOwner(entry.target, context.owner) && entry.target.deviceId === context.deviceId
+      && matchesRemoteDeletionTargetScope(this.deps.store, entry.target, context.environment);
   }
   private identity(entry: DeletionInbox): boolean {
     const store = this.deps.store, target = entry.target, row = store.sync(target.localSessionId);
     return this.matching(entry, this.deps.context()) && sameOwner(target, store.owner(target.localSessionId)) && !!row
       && row.device_id === target.deviceId && row.session_id === target.sessionId && row.stream_epoch === target.streamEpoch
-      && row.sync_environment === target.serviceScope && !row.migration_frozen && !store.needsSecurityRecovery();
+      && row.sync_environment !== null && matchesRemoteDeletionTargetScope(store, target, row.sync_environment)
+      && !row.migration_frozen && !store.needsSecurityRecovery();
   }
   private guardMatches(entry: DeletionInbox): boolean {
     return payloadHash(this.deps.store.deletionGuard(entry.target.localSessionId)) === payloadHash(entry.operation.approvedGuard);
@@ -95,7 +98,8 @@ export class RemoteSessionDeletionClient {
       }
       if (entries.length < 20) this.cursor = '';
       const current = this.deps.context();
-      if (!available || !current?.enabled || !current.generation || !sameOwner(context.owner, current.owner) || context.environment !== current.environment) return;
+      if (!available || !current?.enabled || !current.generation || !sameOwner(context.owner, current.owner)
+        || !samePersistedRemoteEnvironment(this.deps.store, current, context.environment, current.environment)) return;
       const response = await this.deps.request(`/devices/${encodeURIComponent(context.deviceId)}/session-deletions/claim`, 'POST', { connectionGeneration: current.generation, limit: 1 });
       for (const item of (response.items || []).slice(0, 1) as DeletionClaim[]) {
         if (!item.operation || !item.target || !item.claim || !this.matching({ ...item } as DeletionInbox, current)) continue;

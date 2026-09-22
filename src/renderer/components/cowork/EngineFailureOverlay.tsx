@@ -1,27 +1,18 @@
 import { ArrowPathIcon, ChevronDownIcon, ExclamationTriangleIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useState } from 'react';
 
-import { OpenClawEngineErrorCode, OpenClawEnginePhase, OpenClawGatewayRepairErrorCode } from '../../../shared/openclawEngine/constants';
+import { OpenClawEngineErrorCode, OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
-import type { OpenClawEngineStatus, OpenClawGatewayRepairResult } from '../../types/cowork';
+import { resolveOpenClawRepairError } from '../../services/openclawRepair';
+import type { OpenClawEngineStatus } from '../../types/cowork';
 import type { SettingsOpenOptions } from '../Settings';
 
 interface EngineFailureOverlayProps {
   onRequestAppSettings?: (options?: SettingsOpenOptions) => void;
   suspended?: boolean;
 }
-
-const resolveGatewayRepairErrorText = (result: OpenClawGatewayRepairResult): string => {
-  if (result.errorCode === OpenClawGatewayRepairErrorCode.Busy) {
-    return i18nService.t('openClawRepairBusyError');
-  }
-  if (result.errorCode === OpenClawGatewayRepairErrorCode.ConfigApplyPending) {
-    return i18nService.t('openClawRepairConfigApplyPendingError');
-  }
-  return result.error?.trim() || i18nService.t('openClawRepairFailed');
-};
 
 const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
   onRequestAppSettings,
@@ -84,7 +75,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
         source: 'cowork_engine_failure_overlay',
       });
       if (!result.success) {
-        setGatewayRepairError(resolveGatewayRepairErrorText(result));
+        setGatewayRepairError(resolveOpenClawRepairError(result));
       }
     } catch (error) {
       console.error('[EngineFailureOverlay] Failed to repair gateway state:', error);
@@ -111,10 +102,11 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
   // installer resources, but the honest fix is allowlist + reinstall.
   const isRuntimeMissing = status.errorCode === OpenClawEngineErrorCode.RuntimeEntryMissing;
   const isRuntimeDamaged = status.errorCode === OpenClawEngineErrorCode.RuntimeFilesMissing;
+  const needsMediaMigration = status.errorCode === OpenClawEngineErrorCode.AgentMediaMigrationRequired;
   const titleKey = isRepairingGateway ? 'openClawRepairRunning' : isRuntimeDamaged ? 'coworkOpenClawRuntimeDamagedError'
-    : isRuntimeMissing ? 'coworkOpenClawRuntimeMissingError' : 'coworkOpenClawError';
+    : isRuntimeMissing ? 'coworkOpenClawRuntimeMissingError' : needsMediaMigration ? 'openClawAgentMediaMigrationTitle' : 'coworkOpenClawError';
   const hintKey = isRuntimeDamaged ? 'coworkOpenClawRuntimeDamagedRepairHint'
-    : isRuntimeMissing ? 'coworkOpenClawRuntimeMissingRepairHint' : 'coworkOpenClawErrorRepairHint';
+    : isRuntimeMissing ? 'coworkOpenClawRuntimeMissingRepairHint' : needsMediaMigration ? 'openClawAgentMediaMigrationHint' : 'coworkOpenClawErrorRepairHint';
 
   if (isDeferred) {
     return (

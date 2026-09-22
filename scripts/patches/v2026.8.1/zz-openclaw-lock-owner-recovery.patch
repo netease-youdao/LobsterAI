@@ -1,0 +1,56 @@
+diff --git a/src/infra/gateway-lock.ts b/src/infra/gateway-lock.ts
+--- a/src/infra/gateway-lock.ts
++++ b/src/infra/gateway-lock.ts
+@@ -109,6 +109,8 @@ export type GatewayLockOptions = {
+   readProcessCmdline?: (pid: number) => string[] | null;
+   /** Override process start-identity reader (testing seam). */
+   readProcessStartTime?: (pid: number) => number | null;
++  /** Managed manual repair: invoked inside the native coordinator and rechecked before removal. */
++  inspectOwner?: (payload: Readonly<LockPayload>) => Promise<LockOwnerStatus>;
+ };
+
+ export class GatewayLockError extends Error {
+@@ -168,7 +170,7 @@ function readProcessStartTime(pid: number, platform: NodeJS.Platform): number |
+     return null;
+   }
+   return platform === "win32"
+-    ? readWindowsProcessStartTimeSync(pid, CMDLINE_EXEC_TIMEOUT_MS)
++    ? readWindowsProcessStartTimeSync(pid, 5_000)
+     : getFileLockProcessStartTime(pid);
+ }
+
+@@ -264,10 +266,13 @@ async function shouldReclaimGatewayLock(params: {
+   platform: NodeJS.Platform;
+   readProcessCmdline?: (pid: number) => string[] | null;
+   readProcessStartTime?: (pid: number) => number | null;
++  inspectOwner?: GatewayLockOptions["inspectOwner"];
+ }): Promise<boolean> {
+   const ownerPid = params.payload?.pid;
+   const ownerStatus = ownerPid
+-    ? await resolveGatewayOwnerStatus(
++    ? params.inspectOwner && params.payload
++      ? await params.inspectOwner(params.payload)
++      : await resolveGatewayOwnerStatus(
+         ownerPid,
+         params.payload,
+         params.platform,
+@@ -558,6 +563,7 @@ async function acquireLockFile(
+       platform,
+       readProcessCmdline: opts.readProcessCmdline,
+       readProcessStartTime: opts.readProcessStartTime,
++      inspectOwner: opts.inspectOwner,
+     });
+
+   while (now() - startedAt < timeoutMs) {
+diff --git a/src/infra/windows-process-start.ts b/src/infra/windows-process-start.ts
+--- a/src/infra/windows-process-start.ts
++++ b/src/infra/windows-process-start.ts
+@@ -91,7 +91,7 @@ export function readWindowsProcessStartTimeSync(
+       "-NoProfile",
+       "-NonInteractive",
+       "-Command",
+-      `$process = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop; [Console]::Out.Write($process.CreationDate.ToUniversalTime().ToString("o"))`,
++      `$ErrorActionPreference = 'Stop'; $process = [System.Diagnostics.Process]::GetProcessById(${pid}); try { [Console]::Out.Write($process.StartTime.ToUniversalTime().ToString("o")) } finally { $process.Dispose() }`,
+     ],
+     {
+       encoding: "utf8",

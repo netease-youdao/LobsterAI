@@ -29,9 +29,17 @@ export class RemoteModelCatalog {
   private checkedAt = 0;
   private retryAt = 0;
   private publicationEpoch = 0;
-  constructor(private readonly store: Pick<RemoteStore, 'get' | 'put'>, private readonly models: () => LocalRemoteModel[]) {}
+  constructor(private readonly store: Pick<RemoteStore, 'get' | 'put'>, private readonly models: () => LocalRemoteModel[],
+    private readonly getTargetId?: () => string | null) {}
   resetPublication(): void { this.publicationEpoch++; this.publicationContext = ''; this.checkedHash = ''; this.checkedAt = 0; this.retryAt = 0; }
-  private key(owner: RemoteOwner, deviceId: string): string { return `inputModels:${JSON.stringify([owner.userId, owner.scopeKey, deviceId])}`; }
+  private targetId(): string | undefined {
+    const targetId = this.getTargetId?.();
+    if (this.getTargetId && !targetId) throw new RemoteInputError(RemoteInputReason.Stale);
+    return targetId ?? undefined;
+  }
+  private key(owner: RemoteOwner, deviceId: string): string {
+    return `inputModels:${JSON.stringify([...(this.getTargetId ? [this.targetId()] : []), owner.userId, owner.scopeKey, deviceId])}`;
+  }
   private state(owner: RemoteOwner, deviceId: string): CatalogState { return this.store.get<CatalogState>(this.key(owner, deviceId)) || { bindings: [], catalogVersion: '0' }; }
   refresh(owner: RemoteOwner, deviceId: string): RemoteModelItem[] {
     const state = this.state(owner, deviceId);
@@ -73,9 +81,12 @@ export class RemoteModelCatalog {
   }
   async publish(owner: RemoteOwner, deviceId: string, generation: string,
     api: (path: string, method?: string, body?: unknown) => Promise<any>, current: () => boolean): Promise<void> {
+    const targetId = this.targetId();
+    const isCurrent = () => current() && this.getTargetId?.() === targetId;
+    if (!isCurrent()) throw new RemoteInputError(RemoteInputReason.Account);
     const items = this.refresh(owner, deviceId);
     if (items.length > 200 || Buffer.byteLength(JSON.stringify(items)) > 256 * 1024) throw new RemoteInputError(RemoteInputReason.Invalid);
-    const context = JSON.stringify([owner, deviceId, generation]);
+    const context = JSON.stringify([targetId, owner, deviceId, generation]);
     if (this.publicationContext !== context) { this.resetPublication(); this.publicationContext = context; }
     const epoch = this.publicationEpoch;
     const digest = payloadHash(items);
@@ -83,7 +94,7 @@ export class RemoteModelCatalog {
     // Local configuration is checked frequently; unchanged catalogs only need a slow remote reconciliation.
     this.retryAt = Date.now() + 60000;
     const remote = await api(`/devices/${deviceId}/models`);
-    if (!current() || epoch !== this.publicationEpoch) throw new RemoteInputError(RemoteInputReason.Account);
+    if (!isCurrent() || epoch !== this.publicationEpoch) throw new RemoteInputError(RemoteInputReason.Account);
     const state = this.state(owner, deviceId);
     if (state.pending && (remote.lastPublicationId === state.pending.publicationId || remote.catalogVersion !== state.pending.expectedCatalogVersion)) delete state.pending;
     state.catalogVersion = remote.catalogVersion || '0';
@@ -96,7 +107,7 @@ export class RemoteModelCatalog {
     this.store.put(this.key(owner, deviceId), state);
     const publishedHash = payloadHash(state.pending.items);
     const result = await api(`/devices/${deviceId}/models/publish`, 'POST', { ...state.pending, connectionGeneration: generation });
-    if (!current() || epoch !== this.publicationEpoch) throw new RemoteInputError(RemoteInputReason.Account);
+    if (!isCurrent() || epoch !== this.publicationEpoch) throw new RemoteInputError(RemoteInputReason.Account);
     const latest = this.state(owner, deviceId);
     if (latest.pending?.publicationId !== state.pending.publicationId) return;
     latest.catalogVersion = result.catalogVersion; delete latest.pending; this.store.put(this.key(owner, deviceId), latest);

@@ -1,0 +1,73 @@
+diff --git a/src/agents/subagents/registry/subagent-registry-lifecycle-wake.ts b/src/agents/subagents/registry/subagent-registry-lifecycle-wake.ts
+--- a/src/agents/subagents/registry/subagent-registry-lifecycle-wake.ts
++++ b/src/agents/subagents/registry/subagent-registry-lifecycle-wake.ts
+@@ -1,5 +1,5 @@
+ import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+-import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
++import { clearGatewayContextResolver, getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+ import {
+   runWithGatewayIndependentRootWorkContinuation,
+   runWithGatewayIndependentRootWorkAdmission,
+@@ -135,6 +135,25 @@
+       entry.suppressCompletionDelivery = previous?.suppressCompletionDelivery;
+     });
+     throw error;
++  }
++  if (outcome && !outcome.delivered && outcome.error) {
++    const notified = new Set<string>();
++    for (const [, entry] of entries) {
++      const requesterRunId = entry.requesterTurnRunId;
++      if (!requesterRunId || notified.has(requesterRunId)) continue;
++      notified.add(requesterRunId);
++      try {
++        const gateway = getGatewayContextResolver(entry)?.();
++        gateway?.broadcastToConnIds?.(
++          "lobsterai.subagent.settle_failed",
++          { sessionKey: entry.requesterSessionKey, requesterRunId },
++          gateway.getSessionEventSubscriberConnIds(),
++          { sessionKeys: [entry.requesterSessionKey] },
++        );
++      } catch (error) {
++        params.warn("failed to publish requester settle failure", buildSafeLifecycleErrorMeta(error));
++      }
++    }
+   }
+   for (const entry of settledDeliveries) {
+     if (outcome?.delivered) {
+diff --git a/src/agents/subagents/registry/subagent-registry-lifecycle.test.ts b/src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
+--- a/src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
++++ b/src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
+@@ -4891,6 +4891,7 @@
+   it("marks yielded intentional non-delivery blocked after requester-settle exhaustion", async () => {
+     const entry = createRunEntry({
+       endedAt: 4_000,
++      requesterTurnRunId: "waiting-requester",
+       expectsCompletionMessage: true,
+       requesterSettleWake: {
+         status: "pending",
+@@ -4899,6 +4900,12 @@
+         rearmGeneration: 1,
+       },
+     });
++    const broadcastToConnIds = vi.fn();
++    const subscribers = new Set(["lobsterai-desktop"]);
++    bindGatewayContextResolver(entry, () => ({
++      broadcastToConnIds,
++      getSessionEventSubscriberConnIds: () => subscribers,
++    }) as never);
+     let settleParams:
+       | Parameters<LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]>[0]
+       | undefined;
+@@ -4939,6 +4946,12 @@
+       error: "requester settle wake attempts exhausted",
+     });
+ 
++    expect(broadcastToConnIds).toHaveBeenCalledWith(
++      "lobsterai.subagent.settle_failed",
++      { sessionKey: entry.requesterSessionKey, requesterRunId: "waiting-requester" },
++      subscribers,
++      { sessionKeys: [entry.requesterSessionKey] },
++    );
+     expect(entry.delivery).toMatchObject({
+       status: "failed",
+       disposition: "intentional_non_delivery",

@@ -43,6 +43,18 @@ export function buildOpenClawGatewayShutdownBridge(): string {
     requested = true;
     deliver();
   });
+  let disconnected = false;
+  const onDisconnect = () => {
+    if (disconnected) return;
+    disconnected = true;
+    // The supervisor cannot enforce its shutdown deadline after it exits.
+    // Bound this child's lifetime even if startup has no signal handler yet.
+    setTimeout(() => process.exit(1), ${GATEWAY_STOP_GRACE_MS}).unref();
+    requested = true;
+    deliver();
+  };
+  process.once('disconnect', onDisconnect);
+  if (process.connected === false) onDisconnect();
 })();\n`;
 }
 

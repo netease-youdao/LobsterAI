@@ -1,5 +1,7 @@
 # 手机远程控制：桌面接入说明
 
+2026-09-22 同步设计更新（代码已实现，未部署）：[远程同步使用当前生效服务](../../specs/bugfixes/remote-sync-target/2026-09-22-effective-server-sync-design.md)规定请求始终使用当前 endpoint，模式/域名不作为同步身份；由服务端数据身份和会话绑定决定能否沿用进度。账户归属、执行许可与删除证明继续独立校验。下文为历史已实现接入说明，不代表新协议已部署。
+
 日期：2026-09-08。状态：已实现桌面接入，尚未部署或连接真实手机进行端到端验收。
 
 服务端协议以 `lobsterai-server/docs/api/mobile-remote-api.md` 和 `docs/specs/mobile-remote-control/feature-2026-09-08-mobile-remote-control.md` 为准。此文档说明桌面落点与运行边界；不包含设备密钥、测试数据库口令或用户数据。

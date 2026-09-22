@@ -25,6 +25,8 @@ type QuestionOption = {
 };
 
 type Question = {
+  /** Optional stable identifier; defaults to `question-<n>` by position. */
+  id?: string;
   question: string;
   header?: string;
   options: QuestionOption[];
@@ -48,6 +50,8 @@ type AskUserResponse = {
   behavior: 'allow' | 'deny';
   answers?: Record<string, string>;
   reason?: typeof AskUserResponseReason[keyof typeof AskUserResponseReason];
+  /** Questions the user explicitly skipped; they carry neither an answer nor approval. */
+  skippedQuestionIds?: string[];
 };
 
 // Allow the bridge's 120s question deadline to return its explicit timeout reason.
@@ -70,7 +74,11 @@ const QuestionOptionSchema = Type.Object({
   description: Type.Optional(Type.String({ description: 'Explanation of what this option means.' })),
 });
 
+const questionId = (question: Question, index: number): string =>
+  question.id ?? `question-${index + 1}`;
+
 const QuestionSchema = Type.Object({
+  id: Type.Optional(Type.String({ minLength: 1, description: 'Stable identifier for this question.' })),
   question: Type.String({ description: 'The question to ask. Should be clear and end with a question mark.' }),
   header: Type.Optional(Type.String({ description: 'Short label displayed as a tag (max 12 chars). Examples: "Auth method", "Confirm".' })),
   options: Type.Array(QuestionOptionSchema, {
@@ -117,13 +125,38 @@ async function askUser(
       return { behavior: 'deny', reason: AskUserResponseReason.Unavailable };
     }
 
-    const parsed = JSON.parse(text);
+    const parsed: unknown = JSON.parse(text);
+    if (!isRecord(parsed)) return { behavior: 'deny' };
+    if (parsed.behavior !== 'allow') {
+      return {
+        behavior: 'deny',
+        reason: parsed.reason === AskUserResponseReason.Timeout || parsed.reason === AskUserResponseReason.Unavailable
+          ? parsed.reason
+          : undefined,
+      };
+    }
+    if (parsed.answers !== undefined && (!isRecord(parsed.answers)
+      || Object.values(parsed.answers).some((answer) => typeof answer !== 'string'))) {
+      throw new Error('AskUserQuestion callback returned invalid answers.');
+    }
+    const answers = parsed.answers as Record<string, string> | undefined;
+    const skipped = parsed.skippedQuestionIds;
+    const questionsById = new Map(input.questions.map((question, index) => [questionId(question, index), question]));
+    if (skipped !== undefined && (!Array.isArray(skipped)
+      || skipped.some((id) => typeof id !== 'string' || !questionsById.has(id))
+      || new Set(skipped).size !== skipped.length)) {
+      throw new Error('AskUserQuestion callback returned invalid skipped question IDs.');
+    }
+    for (const id of (skipped as string[] | undefined) ?? []) {
+      const question = questionsById.get(id)!;
+      if (answers && Object.prototype.hasOwnProperty.call(answers, question.question) && answers[question.question].trim()) {
+        throw new Error('AskUserQuestion callback both answered and skipped the same question.');
+      }
+    }
     return {
-      behavior: parsed?.behavior === 'allow' ? 'allow' : 'deny',
-      answers: isRecord(parsed?.answers) ? parsed.answers as Record<string, string> : undefined,
-      reason: parsed?.reason === AskUserResponseReason.Timeout || parsed?.reason === AskUserResponseReason.Unavailable
-        ? parsed.reason
-        : undefined,
+      behavior: 'allow',
+      ...(answers !== undefined ? { answers } : {}),
+      ...(skipped !== undefined ? { skippedQuestionIds: skipped as string[] } : {}),
     };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
@@ -201,14 +234,19 @@ const plugin = {
             };
           }
 
-          const answerLines = response.answers
-            ? Object.entries(response.answers)
-                .map(([q, a]) => `${q}: ${a}`)
-                .join('\n')
-            : 'User approved.';
+          const answerLines = Object.entries(response.answers ?? {}).map(([q, a]) => `${q}: ${a}`);
+          for (const [index, question] of input.questions.entries()) {
+            if (response.skippedQuestionIds?.includes(questionId(question, index))) {
+              answerLines.push(`${question.question}: (skipped by user; no answer or approval given)`);
+            }
+          }
 
           return {
-            content: [{ type: 'text', text: answerLines }],
+            content: [{
+              type: 'text',
+              text: answerLines.join('\n') || 'No answers were provided; no user approval was given.',
+            }],
+            details: { answers: response.answers ?? {}, skippedQuestionIds: response.skippedQuestionIds ?? [] },
           };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

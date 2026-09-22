@@ -36,13 +36,14 @@ import { OpenClawCronRunMetadataKey } from '../../../shared/cowork/openclawCronS
 import { CoworkSelectedTextSource } from '../../../shared/cowork/selectedText';
 import { CoworkSteerRejectReason, CoworkSteerStatus } from '../../../shared/cowork/steer';
 import { OpenClawTranscriptSafetyLimit } from '../../../shared/openclawTranscript/constants';
+import { ProviderName } from '../../../shared/providers/constants';
 import { t } from '../../i18n';
 import { OpenClawChannelSessionSync } from '../openclawChannelSessionSync';
 import {
   __openClawTokenProxyTestUtils,
   consumeRecentOpenClawTokenProxyQuotaError,
 } from '../openclawTokenProxy';
-import { AgentEventStream, AgentLifecyclePhase, OpenClawChatState, OpenClawGatewayMethod } from './constants';
+import { AgentEventStream, AgentLifecyclePhase, OpenClawChatState, OpenClawGatewayEvent, OpenClawGatewayMethod } from './constants';
 import { ContinuityCapsuleSource } from './coworkContinuityCapsule';
 import {
   buildOpenClawChatSendPayloadTooLargeError,
@@ -707,6 +708,44 @@ test('length final does not overwrite an explicit stop while history is pending'
     message.type === 'system'
     && message.metadata?.isTruncated === true
   ))).toBe(false);
+});
+
+test('resolveOpenClawRuntimeErrorMessage surfaces a LobsterAI upstream billing failure as a model service issue', () => {
+  const metadata = {
+    provider: ProviderName.LobsteraiServer,
+    model: 'kimi-k2.6',
+    failoverReason: 'billing',
+    rawErrorPreview: 'Your account is suspended due to insufficient balance',
+  };
+  for (const message of ['LLM request failed.', 'lobsterai-server returned a billing error']) {
+    expect(resolveOpenClawRuntimeErrorMessage(message, metadata))
+      .toBe(t('coworkErrorModelServiceUnavailable'));
+  }
+  expect(resolveOpenClawRuntimeErrorMessage('LLM request failed.', {
+    provider: ProviderName.LobsteraiServer,
+    code: '50203',
+  })).toBe(t('coworkErrorModelServiceUnavailable'));
+});
+
+test('resolveOpenClawRuntimeErrorMessage preserves user quota evidence behind a billing wrapper', () => {
+  expect(resolveOpenClawRuntimeErrorMessage('lobsterai-server returned a billing error', {
+    provider: ProviderName.LobsteraiServer,
+    failoverReason: 'billing',
+    rawErrorPreview: '{"error":{"code":40202,"message":"本月积分已用完"}}',
+  })).toBe(t('coworkErrorQuotaExhausted'));
+});
+
+test('resolveOpenClawRuntimeErrorMessage preserves customer-managed provider billing guidance', () => {
+  expect(resolveOpenClawRuntimeErrorMessage('LLM request failed.', {
+    provider: ProviderName.Moonshot,
+    failoverReason: 'billing',
+    rawErrorPreview: 'insufficient balance',
+  })).toBe(t('coworkErrorInsufficientBalance'));
+});
+
+test('resolveOpenClawRuntimeErrorMessage does not classify persisted cooldowns as billing failures', () => {
+  expect(resolveOpenClawRuntimeErrorMessage('Inline API key for provider "lobsterai-server" is temporarily disabled after a provider auth/billing failure. Retry after about 300 minutes, or switch to a different auth profile/API key.'))
+    .toBe(t('coworkErrorProviderCooldown'));
 });
 
 test('resolveOpenClawRuntimeErrorMessage restores recent quota error hidden by OpenClaw generic error', () => {
@@ -1905,7 +1944,8 @@ test('resolveToolEventIsError reads nested tool result errors', () => {
   expect(resolveToolEventIsError({ isError: false, result: { isError: false } })).toBe(false);
 });
 
-// ==================== Session patch tests ====================
+// ==================== Session patch tests =============});
+
 
 function createPatchAdapter(options?: {
   isChannelSession?: boolean;
@@ -2008,6 +2048,19 @@ test('disconnectGatewayClient suppresses automatic gateway reconnect until manua
   };
   await adapter.connectGatewayIfNeeded();
   expect(adapter.gatewayReconnectSuppressed).toBe(false);
+});
+
+test('terminal plugin failures stop reconnect scheduling, queued attempts and wake-from-sleep retries', async () => {
+  const adapter = new OpenClawRuntimeAdapter({} as never, {
+    isGatewayStartupBlocked: () => true,
+  } as never);
+  const connect = vi.spyOn(adapter, 'connectGatewayIfNeeded').mockResolvedValue();
+  adapter.scheduleGatewayReconnect();
+  expect(adapter.gatewayReconnectTimer).toBeNull();
+  await adapter.attemptGatewayReconnect();
+  adapter.onSystemResume();
+  expect(connect).not.toHaveBeenCalled();
+  expect(adapter.gatewayReconnectTimer).toBeNull();
 });
 
 test('a successful gateway hello clears reconnect suppression on the normal ensure path', async () => {
@@ -4213,7 +4266,8 @@ test('continueSession aborts silently when the session is stopped during the mod
   expect(errors).toEqual([]);
 });
 
-// ==================== Reconcile tests ====================
+// ==================== Reconcile tests =============});
+
 
 function createReconcileStore(
   messages: Array<Record<string, unknown>>,
@@ -8039,9 +8093,11 @@ test.each(['chat', 'lifecycle'])('yielded %s completion stays silent while a del
     }
     await vi.advanceTimersByTimeAsync(2_000);
 
-    expect(completeSpy).toHaveBeenCalledWith(session.id, runId);
+    expect(completeSpy).not.toHaveBeenCalled();
+    expect(adapter.isSessionActive(session.id)).toBe(true);
+    expect(adapter.hasActiveSessions()).toBe(true);
     expect(adapter.activeTurns.has(session.id)).toBe(false);
-    expect(session.status).toBe('completed');
+    expect(session.status).toBe('running');
 
     await vi.advanceTimersByTimeAsync(330_000);
     expect(session.messages.some((message) => message.type === 'system')).toBe(false);
@@ -8068,7 +8124,9 @@ test.each(['chat', 'lifecycle'])('yielded %s completion stays silent while a del
 
     expect(session.messages.filter((message) => message.type === 'assistant' && message.content === answer)).toHaveLength(1);
     expect(session.messages.some((message) => message.type === 'system')).toBe(false);
-    expect(completeSpy).toHaveBeenCalledWith(session.id, announceRunId);
+    expect(completeSpy).toHaveBeenCalledExactlyOnceWith(session.id, announceRunId);
+    expect(session.status).toBe('completed');
+    expect(adapter.isSessionActive(session.id)).toBe(false);
     expect(adapter.activeTurns.has(session.id)).toBe(false);
   } finally {
     vi.useRealTimers();
@@ -8225,7 +8283,8 @@ test.each(['active', 'yielded'])('a late subagent announce cannot resume a manua
     const sessionKey = `agent:main:lobsterai:${session.id}`;
     const turn = createActiveTurn(session.id, sessionKey, 'run-before-stop');
     const completeSpy = vi.fn();
-    adapter.gatewayClient = { start: () => {}, stop: () => {}, request: async () => ({}) };
+    const request = vi.fn(async () => ({}));
+    adapter.gatewayClient = { start: () => {}, stop: () => {}, request };
     adapter.activeTurns.set(session.id, turn);
     adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
     adapter.sessionIdByRunId.set(turn.runId, session.id);
@@ -8243,6 +8302,10 @@ test.each(['active', 'yielded'])('a late subagent announce cannot resume a manua
       completeSpy.mockClear();
     }
     adapter.stopSession(session.id);
+    if (phase === 'yielded') {
+      expect(request).toHaveBeenCalledWith(OpenClawGatewayMethod.SessionsAbort, { key: sessionKey, clearQueued: true });
+    }
+    expect(adapter.isSessionActive(session.id)).toBe(false);
 
     await vi.advanceTimersByTimeAsync(330_000);
     const announceRunId = 'announce:requester-settle:stopped-result';
@@ -8458,7 +8521,7 @@ test('yielding to subagents does not consume a queued goal continuation', async 
     await vi.advanceTimersByTimeAsync(332_000);
 
     expect(adapter.activeTurns.has(session.id)).toBe(false);
-    expect(session.status).toBe('completed');
+    expect(session.status).toBe('running');
     expect(continueSpy).not.toHaveBeenCalled();
     expect(adapter.pendingGoalContinuations.get(session.id)).toEqual(pendingContinuation);
     expect(session.messages.some((message) => message.type === 'system')).toBe(false);
@@ -10013,7 +10076,8 @@ test('reconcileWithHistory: new messages arrived — preserves old and adds new'
   expect((args.authoritative[5] as Record<string, unknown>).text).toBe('Answer 3');
 });
 
-// ==================== History tests ====================
+// ==================== History tests =============});
+
 
 function createHistoryStore(messages: Array<Record<string, unknown>>) {
   const session = {
@@ -10648,6 +10712,90 @@ test('late aborted evidence after legacy local stop is emitted before closed-run
   expect(termination).toHaveBeenCalledWith('local-stop-session', 'old-run', 'cancelled');
 });
 
+test.each([undefined, false])('remote cancellation confirms a yielded stop with idle descendants reported as %s', async (hasActiveSubagentRun) => {
+  const { session, store } = createReconcileStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const turn = createActiveTurn(session.id, sessionKey, 'yielded-parent');
+  adapter.activeTurns.set(session.id, turn);
+  turn.yieldedRunId = turn.runId;
+  adapter.completeYieldedRun(session.id, turn);
+  let finishSnapshot: (value: unknown) => void = () => {};
+  const request = vi.fn(async (method: string) => method === OpenClawGatewayMethod.SessionsAbort
+    ? { ok: true }
+    : new Promise(resolve => { finishSnapshot = resolve; }));
+  adapter.gatewayClient = { start: () => {}, stop: () => {}, request };
+  const termination = vi.fn();
+  adapter.on('runTermination', termination);
+  let settled = false;
+  const pending = adapter.cancelSessionConfirmed(session.id).then(result => { settled = true; return result; });
+  await Promise.resolve();
+  expect(request).toHaveBeenCalledWith(OpenClawGatewayMethod.SessionsAbort,
+    { key: sessionKey, clearQueued: true }, { timeoutMs: 15_000 });
+  expect(request).toHaveBeenCalledWith(OpenClawGatewayMethod.SessionsList,
+    { search: sessionKey, limit: 50 }, { timeoutMs: 2_000 });
+  expect(settled).toBe(false);
+  expect(adapter.isSessionActive(session.id)).toBe(true);
+  expect(termination).not.toHaveBeenCalled();
+
+  finishSnapshot({ sessions: [{ key: sessionKey, hasActiveRun: false, hasActiveSubagentRun }] });
+  await expect(pending).resolves.toBe(true);
+  expect(adapter.isSessionActive(session.id)).toBe(false);
+  expect(session.status).toBe('idle');
+  expect(termination).toHaveBeenCalledWith(session.id, turn.runId, 'cancelled');
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+test.each([
+  { hasActiveRun: true, hasActiveSubagentRun: false },
+  { hasActiveRun: false, hasActiveSubagentRun: true },
+  { hasActiveRun: false, hasActiveSubagentRun: 'unknown' },
+  {},
+])('remote cancellation preserves the yielded wait without conclusive inactivity: %j', async (activity) => {
+  const { session, store } = createReconcileStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const waiting = { sessionKey, runId: 'yielded-parent', turnToken: 1, yieldedAt: Date.now() };
+  adapter.yieldedSessions.set(session.id, waiting);
+  const request = vi.fn(async (method: string) => method === OpenClawGatewayMethod.SessionsAbort
+    ? { ok: true }
+    : { sessions: [{ key: sessionKey, ...activity }] });
+  adapter.gatewayClient = { start: () => {}, stop: () => {}, request };
+  const termination = vi.fn();
+  adapter.on('runTermination', termination);
+
+  await expect(adapter.cancelSessionConfirmed(session.id)).resolves.toBe(false);
+  expect(adapter.yieldedSessions.get(session.id)).toBe(waiting);
+  expect(termination).not.toHaveBeenCalled();
+});
+
+test.each([
+  ['replacement wait', (adapter: OpenClawRuntimeAdapter, sessionId: string) => {
+    const waiting = adapter.yieldedSessions.get(sessionId);
+    adapter.yieldedSessions.set(sessionId, { ...waiting, turnToken: 2 });
+  }],
+  ['replacement client', (adapter: OpenClawRuntimeAdapter) => { adapter.gatewayClient = null; }],
+  ['lost receipt', () => { throw new Error('disconnected'); }],
+] as const)('yielded remote cancellation rejects %s', async (_scenario, invalidate) => {
+  const { session, store } = createReconcileStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const waiting = { sessionKey, runId: 'yielded-parent', turnToken: 1, yieldedAt: Date.now() };
+  adapter.yieldedSessions.set(session.id, waiting);
+  const request = vi.fn(async (method: string) => {
+    if (method === OpenClawGatewayMethod.SessionsAbort) return { ok: true };
+    invalidate(adapter, session.id);
+    return { sessions: [{ key: sessionKey, hasActiveRun: false, hasActiveSubagentRun: false }] };
+  });
+  adapter.gatewayClient = { start: () => {}, stop: () => {}, request };
+  const termination = vi.fn();
+  adapter.on('runTermination', termination);
+
+  await expect(adapter.cancelSessionConfirmed(session.id)).resolves.toBe(false);
+  expect(adapter.isSessionActive(session.id)).toBe(true);
+  expect(termination).not.toHaveBeenCalled();
+});
+
 
 test('persists gateway bindings only for a current active remote run after closed-run filtering', () => {
   const remote = { run: vi.fn(() => ({ runId: 'remote-current' })), put: vi.fn() };
@@ -10739,4 +10887,81 @@ test('configuration dispatch rejects an old client when the managed gateway proc
     source: 'test', reason: 'test', inputFenceOperationId: 'patch' })).rejects.toThrow('writer changed');
   expect(request).not.toHaveBeenCalled();
   expect(adapter.store.remote.get('inputFence:s')).toMatchObject({ gatewayProcessPid: null });
+});
+
+test('session reconciliation preserves the wait and cannot complete a replacement turn', async () => {
+  const { session, store } = createReconcileStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const turn = createActiveTurn(session.id, sessionKey, 'waiting-parent');
+  adapter.activeTurns.set(session.id, turn);
+  adapter.rememberSessionKey(session.id, sessionKey);
+  adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
+  turn.yieldedRunId = turn.runId;
+  const complete = vi.fn();
+  adapter.on('complete', complete);
+  adapter.completeYieldedRun(session.id, turn);
+  adapter.reconcileManagedSubagentSession({ key: sessionKey, hasActiveRun: false, hasActiveSubagentRun: false, status: 'running' });
+  expect(session.status).toBe('running');
+  expect(adapter.isSessionActive(session.id)).toBe(true);
+  adapter.reconcileManagedSubagentSession({ key: sessionKey, status: 'done', endedAt: 1 });
+  expect(complete).not.toHaveBeenCalled();
+  let finishHistory: () => void = () => {};
+  vi.spyOn(adapter, 'syncSessionHistoryFromGateway').mockImplementation(() => new Promise<void>(resolve => { finishHistory = resolve; }));
+  adapter.reconcileManagedSubagentSession({ key: sessionKey, status: 'done', endedAt: Date.now() + 100 });
+  adapter.stopSession(session.id);
+  adapter.manuallyStoppedSessions.delete(session.id);
+  adapter.stoppedSessions.delete(session.id);
+  adapter.ensureActiveTurn(session.id, sessionKey, 'new-request');
+  finishHistory();
+  await Promise.resolve();
+  expect(complete).not.toHaveBeenCalled();
+  expect(session.status).toBe('running');
+  adapter.stopSession(session.id);
+});
+
+test('restart recovers descendant activity and reconciles the final result once', async () => {
+  const { session, store } = createReconcileStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  adapter.rememberSessionKey(session.id, sessionKey);
+  const complete = vi.fn();
+  adapter.on('complete', complete);
+  vi.spyOn(adapter, 'syncSessionHistoryFromGateway').mockResolvedValue(undefined);
+  adapter.reconcileManagedSubagentSession({ key: sessionKey, status: 'running', hasActiveSubagentRun: true, hasActiveRun: false });
+  expect(session.status).toBe('running');
+  expect(adapter.isSessionActive(session.id)).toBe(true);
+  adapter.reconcileManagedSubagentSession({ key: sessionKey, status: 'done', hasActiveSubagentRun: false, hasActiveRun: false, endedAt: Date.now() + 100 });
+  await Promise.resolve();
+  expect(session.status).toBe('completed');
+  expect(adapter.isSessionActive(session.id)).toBe(false);
+  expect(complete).toHaveBeenCalledTimes(1);
+  adapter.reconcileManagedSubagentSession({ key: sessionKey, status: 'done', endedAt: Date.now() + 100 });
+  expect(complete).toHaveBeenCalledTimes(1);
+});
+
+
+test('settle failure ends only its own yielded request', () => {
+  const { session, store } = createReconcileStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const turn = createActiveTurn(session.id, sessionKey, 'waiting-parent');
+  adapter.activeTurns.set(session.id, turn);
+  adapter.rememberSessionKey(session.id, sessionKey);
+  turn.yieldedRunId = turn.runId;
+  adapter.completeYieldedRun(session.id, turn);
+  const error = vi.fn();
+  adapter.on('error', error);
+  const failure = (requesterRunId: string) => adapter.handleGatewayEvent({
+    event: OpenClawGatewayEvent.SubagentSettleFailed, payload: { sessionKey, requesterRunId },
+  });
+  failure('older-request');
+  expect(error).not.toHaveBeenCalled();
+  expect(session.status).toBe('running');
+  failure(turn.runId);
+  expect(error).toHaveBeenCalledTimes(1);
+  expect(session.status).toBe('error');
+  expect(adapter.isSessionActive(session.id)).toBe(false);
+  failure(turn.runId);
+  expect(error).toHaveBeenCalledTimes(1);
 });

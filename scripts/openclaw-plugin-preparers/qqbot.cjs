@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { patchQQQrLogin } = require('../openclaw-plugin-patches/qqbot-qr-login.cjs');
 const { extractPluginTarball, npmPackDirectory, readJsonFile, writeJsonFile } = require('./typescript-plugin.cjs');
 
 const QQ_PACKAGE_NAME = '@tencent-connect/openclaw-qqbot';
@@ -53,6 +54,7 @@ function configureQQRuntimeEntry(packageDir) {
     throw new Error('[qqbot-package] The published QQ CommonJS runtime entry is missing.');
   }
   patchQQExitHooks(path.join(packageDir, QQ_RUNTIME_ENTRY));
+  patchQQQrLogin(path.join(packageDir, QQ_RUNTIME_ENTRY));
   // LobsterAI supplies the shared SDK bridge. The published preload exists
   // only to find a global OpenClaw install and create a private SDK symlink;
   // bypass it via entry metadata so relocated builds use their own SDK.

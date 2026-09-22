@@ -6,7 +6,7 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "2026.9.15",
+  "version": "2026.9.20",
   "openclaw": {
     "version": "v2026.8.1",
     "repo": "https://github.com/openclaw/openclaw.git",
@@ -154,7 +154,7 @@
     "build:skills": "npm run build:skill:web-search && npm run build:skill:tech-news && npm run build:skill:email",
     "start:electron": "cross-env NODE_ENV=development ELECTRON_START_URL=http://localhost:5175 electron .",
     "wait:electron:dev": "wait-on -v -t 120000 http://localhost:5175 dist-electron/main.js dist-electron/preload.js dist-electron/browserAnnotationPreload.js dist-electron/agentBrowserCredentialPreload.js dist-electron/manualCredentialCapturePreload.js dist-electron/remoteFileSnapshotWorker.cjs dist-electron/remoteProjectionWorker.js dist-electron/remoteSecurityJournalWorker.js dist-electron/remoteImportSnapshotWorker.js",
-    "electron:dev": "rimraf dist-electron && npm run compile:electron && concurrently \"vite --port 5175 --strictPort\" \"npm run wait:electron:dev && npm run start:electron\"",
+    "electron:dev": "rimraf dist-electron && npm run compile:electron && concurrently --kill-others \"vite --port 5175 --strictPort\" \"npm run wait:electron:dev && npm run start:electron\"",
     "electron:dev:inspect": "cross-env ELECTRON_OPEN_DEVTOOLS=1 npm run electron:dev",
     "electron:dev:openclaw": "npm run openclaw:runtime:host && npm run electron:dev",
     "postinstall": "patch-package --error-on-fail",

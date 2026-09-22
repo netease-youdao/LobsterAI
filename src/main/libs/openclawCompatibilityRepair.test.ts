@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, expect, test, vi } from 'vitest';
 
-import { OPENCLAW_REPAIR_ENTRY, OPENCLAW_REPAIR_RESULT_PREFIX, OpenClawRepairPhase } from '../../shared/openclawEngine/repair';
+import { OPENCLAW_REPAIR_ENTRY, OPENCLAW_REPAIR_RESULT_PREFIX, OpenClawRepairPhase, OpenClawRepairStage } from '../../shared/openclawEngine/repair';
 import { OPENCLAW_STARTUP_COMPATIBILITY_ENTRY, OPENCLAW_STARTUP_COMPATIBILITY_RESULT_PREFIX, OpenClawStartupCompatibilityMode } from '../../shared/openclawEngine/startupCompatibility';
 import { OpenClawStartupMigrationStatus } from '../../shared/openclawEngine/startupMigration';
 import { createOpenClawRepairBackupDirectory, OPENCLAW_DOCTOR_REPAIR_ARGS, runOpenClawCompatibilityRepair, runOpenClawDoctorRepair } from './openclawCompatibilityRepair';
@@ -30,7 +30,8 @@ afterEach(() => {
 
 test('Doctor uses the controlled runtime, safe flags and externally managed service policy', async () => {
   const params = fixture();
-  const runner = vi.fn<StartupMigrationRunner>(async () => ({ code: 1, stdout: 'partial repair', stderr: 'remaining orphan vectors' }));
+  const runner = vi.fn<StartupMigrationRunner>().mockResolvedValueOnce(startupResult())
+    .mockResolvedValueOnce({ code: 1, stdout: 'partial repair', stderr: 'remaining orphan vectors' });
   expect(await runOpenClawDoctorRepair({ ...params, runner })).toEqual({ code: 1 });
   expect(runner).toHaveBeenCalledWith('/bundled/electron', [path.join(params.runtimeRoot, 'openclaw.mjs'), ...OPENCLAW_DOCTOR_REPAIR_ARGS], expect.objectContaining({
     env: {
@@ -39,6 +40,9 @@ test('Doctor uses the controlled runtime, safe flags and externally managed serv
     },
   }));
   expect(fs.readFileSync(path.join(params.backupDir, 'doctor.log'), 'utf8')).toContain('remaining orphan vectors');
+  expect(runner.mock.calls[0][1]).toEqual([
+    path.join(params.runtimeRoot, OPENCLAW_STARTUP_COMPATIBILITY_ENTRY), OpenClawStartupCompatibilityMode.PrepareStartup,
+  ]);
 });
 
 test('exit zero alone or an invalid phase cannot certify repair completion', async () => {
@@ -57,6 +61,24 @@ test('structured failure takes precedence over unrelated plugin warnings', async
     success: false, phase: OpenClawRepairPhase.Recovery, changes: [], backups: [], error: 'Unsupported database schema',
   }), stderr: 'Config warnings: duplicate plugin ID' });
   await expect(runOpenClawCompatibilityRepair({ ...params, phase: OpenClawRepairPhase.Recovery, runner })).rejects.toThrow('Unsupported database schema');
+});
+
+test('snapshot failure preserves its phase and source path for the UI', async () => {
+  const params = fixture();
+  const failurePath = path.join(params.stateDir, 'agents', 'main', 'agent', 'openclaw-agent.sqlite');
+  const runner: StartupMigrationRunner = async () => ({ code: 1, stderr: '', stdout: OPENCLAW_REPAIR_RESULT_PREFIX + JSON.stringify({
+    phase: OpenClawRepairPhase.Snapshot, success: false, changes: [], backups: [], failurePath, error: 'SQLITE_CORRUPT',
+  }) });
+  await expect(runOpenClawCompatibilityRepair({ ...params, phase: OpenClawRepairPhase.Snapshot, runner }))
+    .rejects.toMatchObject({ stage: OpenClawRepairStage.Snapshot, failurePath, message: 'SQLITE_CORRUPT' });
+});
+
+test('an interrupted Doctor retains its own stage', async () => {
+  const params = fixture();
+  const runner = vi.fn<StartupMigrationRunner>().mockResolvedValueOnce(startupResult())
+    .mockRejectedValueOnce(new Error('Doctor process timed out'));
+  await expect(runOpenClawDoctorRepair({ ...params, runner }))
+    .rejects.toMatchObject({ stage: OpenClawRepairStage.Doctor, message: 'Doctor process timed out' });
 });
 
 test('backup directories do not collide on repeated repair requests', () => {
@@ -92,7 +114,7 @@ test.each([false, true])('discovery is migrated before Doctor can remove its sou
 
   expect(await runOpenClawDoctorRepair({ ...params, runner })).toEqual({ code: 0 });
 
-  const migration = [path.join(params.runtimeRoot, OPENCLAW_STARTUP_COMPATIBILITY_ENTRY), OpenClawStartupCompatibilityMode.MigrateConfig];
+  const migration = [path.join(params.runtimeRoot, OPENCLAW_STARTUP_COMPATIBILITY_ENTRY), OpenClawStartupCompatibilityMode.PrepareStartup];
   const bindings = [path.join(params.runtimeRoot, OPENCLAW_STARTUP_COMPATIBILITY_ENTRY), OpenClawStartupCompatibilityMode.RepairBindings];
   expect(runner.mock.calls.map(([, args]) => args)).toEqual([
     ...(bindingDrift ? [migration, bindings] : []), migration,
@@ -116,6 +138,14 @@ test('unverified discovery migration keeps its config source and does not run Do
 
   expect(runner).toHaveBeenCalledTimes(1);
   expect(fs.readFileSync(params.configPath, 'utf8')).toBe(original);
+  expect(fs.existsSync(path.join(params.backupDir, 'doctor-result.json'))).toBe(false);
+});
+
+test('a schema migration failure stops Doctor even without legacy discovery config', async () => {
+  const params = fixture();
+  const runner = vi.fn<StartupMigrationRunner>().mockResolvedValue(startupResult('Shared-state snapshot failed'));
+  await expect(runOpenClawDoctorRepair({ ...params, runner })).rejects.toThrow('Shared-state snapshot failed');
+  expect(runner).toHaveBeenCalledTimes(1);
   expect(fs.existsSync(path.join(params.backupDir, 'doctor-result.json'))).toBe(false);
 });
 

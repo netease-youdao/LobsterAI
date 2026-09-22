@@ -7,12 +7,14 @@ import { type RemoteOwner, RemoteRunStatus } from '../../shared/remote/constants
 import { remoteFileLocalLimit, RemoteFileReason } from '../../shared/remote/files';
 import { RemoteInputIntent } from '../../shared/remote/input';
 import { captureRemoteFileSnapshot, type RemoteFileSnapshot, writeRemoteTemporaryInput } from './remoteFileSnapshots';
+import type { RemotePreparedInputSource } from './remotePreparedInputSnapshots';
 import type { RemoteRun, RemoteStore } from './remoteStore';
 
 export interface DesktopInputSource {
   path: string; fileName: string; mimeType: string; intent: 'file' | 'image'; sizeBytes: string;
   fileIdentity: { dev: string; ino: string; sizeBytes: string; mtimeMs: number };
   snapshot?: RemoteFileSnapshot;
+  preparedSource?: RemotePreparedInputSource;
   captureReason?: string;
 }
 export interface DesktopInputRun { owner: RemoteOwner; text: string; attachments: DesktopInputSource[] }

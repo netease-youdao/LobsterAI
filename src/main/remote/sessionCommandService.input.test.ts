@@ -18,7 +18,8 @@ import { assertRemoteExecutionPermit, markRemoteExecutionDispatched, SessionComm
 const owner = { userId: 'A', scopeKey: 'personal' };
 const resources: Array<() => void> = [];
 afterEach(() => { for (const dispose of resources.splice(0)) dispose(); });
-function fixture(create = false) {
+function fixture(create = false, initialTargetId: string | null = null) {
+  let targetId = initialTargetId;
   const cwd = mkdtempSync(path.join(tmpdir(), 'input-command-'));
   const db = new Database(':memory:'); resources.push(() => { db.close(); rmSync(cwd, { recursive: true, force: true }); });
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT,agent_id TEXT,model_override TEXT,thinking_level TEXT);
@@ -44,10 +45,14 @@ function fixture(create = false) {
   const service = new SessionCommandService(store, runtime as unknown as CoworkRuntime, () => owner);
   const input: RemoteResolvedInput = { text: 'hello', agentId: 'main', expectedAgentVersion: '1', workspaceId: 'ws',
     model: { modelRef: 'new-model', version: '1' }, options: { thinkingLevel: 'high' }, attachments: [] };
-  const manifest = { preparationId: 'prep', deviceId: 'pc', owner, resolvedInput: input, inputDigest: payloadHash(input), runtimeRef: 'provider/new', cwd } as LocalPreparedInput;
+  const manifest = { preparationId: 'prep', deviceId: 'pc', owner, targetId: targetId ?? undefined, resolvedInput: input, inputDigest: payloadHash(input), runtimeRef: 'provider/new', cwd } as LocalPreparedInput;
   const preparations = { read: () => manifest, validate: vi.fn(), bind: vi.fn(), executionOptions: async () => ({ prompt: 'hello', modelOverride: 'provider/new', thinkingLevel: 'high', imageAttachments: [] }) } as unknown as InputPreparationService;
-  const models = { resolve: () => ({ item: { modelRef: 'new-model', version: '1', source: 'custom', displayName: 'Chat', providerLabel: 'Custom' } }) } as unknown as RemoteModelCatalog;
-  service.configureInput({ preparations, models, getDeviceId: () => 'pc' });
+  const resolveModel = vi.fn(() => {
+    if (targetId !== initialTargetId) throw new Error('Old model reference is unavailable on the current target');
+    return { item: { modelRef: 'new-model', version: '1', source: 'custom', displayName: 'Chat', providerLabel: 'Custom' } };
+  });
+  const models = { resolve: resolveModel } as unknown as RemoteModelCatalog;
+  service.configureInput({ preparations, models, getDeviceId: () => 'pc', getTargetId: () => targetId });
   const send = vi.fn(async () => { assertRemoteExecutionPermit(); markRemoteExecutionDispatched(); return { success: true }; });
   service.configure(options => service.submit(options, true, send), options => service.submit(options, false, send));
   const request = { commandId: 'cmd', type: create ? 'create_session' : 'send_message', inputSchemaVersion: 2, sessionId: 'remote',
@@ -56,8 +61,8 @@ function fixture(create = false) {
   const command = { commandId: 'cmd', type: request.type, request, requestHash: payloadHash(request), sessionId: 'remote', runId: 'run',
     status: 'claimed', statusVersion: '1', expiresAt: new Date(Date.now() + 60000).toISOString() };
   const binding = remote.transaction(() => service.prepare(command, owner, create ? cwd : null));
-  const entry: InboxEntry = { command, owner, ...binding, state: 'executing', result: null };
-  return { service, remote, runtime, send, entry, store };
+  const entry: InboxEntry = { targetId: targetId ?? undefined, command, owner, ...binding, state: 'executing', result: null };
+  return { service, remote, runtime, send, entry, store, resolveModel, switchTarget(next: string | null) { targetId = next; } };
 }
 it('starts a v2 task with the frozen session model and thinking override', async () => {
   const { service, entry, store, runtime, send } = fixture(true);
@@ -87,6 +92,43 @@ it('publishes a confirmed model change even when the send expires during patch',
   expect(store.getSession('local', 0)?.modelOverride).toBe('provider/new');
   expect(remote.inputVersion('local')).toBe('1'); expect(remote.get('inputFence:local')).toBeNull();
   expect(send).not.toHaveBeenCalled();
+});
+it('retains a confirmed model patch without publishing old service references after a target switch', async () => {
+  const f = fixture(false, 'target-a'); let finish!: () => void;
+  f.runtime.patchSession.mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+  const execution = f.service.execute(f.entry, () => true);
+  await vi.waitFor(() => expect(f.runtime.patchSession).toHaveBeenCalledOnce());
+  expect(f.remote.get('inputFence:local')).toMatchObject({ operationId: 'cmd', syncTargetId: 'target-a' });
+  f.resolveModel.mockClear();
+  f.switchTarget('target-b');
+  const currentModel = { modelRef: 'target-b-model', version: '2' };
+  f.remote.put('inputModel:local', currentModel);
+  const rejected = expect(execution).rejects.toThrow(RemoteInputReason.Expired);
+  finish(); await rejected;
+  expect(f.store.getSession('local', 0)).toMatchObject({ modelOverride: 'provider/new', thinkingLevel: 'high' });
+  expect(f.remote.inputVersion('local')).toBe('1');
+  expect(f.remote.get('inputFence:local')).toBeNull();
+  expect(f.remote.get('inputOperation:target-a:cmd')).toMatchObject({ phase: 'model_applied', afterVersion: '1' });
+  expect(f.remote.get('inputOperation:target-b:cmd')).toBeNull();
+  // The real model change invalidates B's derived summary; A's IDs must not replace it.
+  expect(f.remote.get('inputModel:local')).toBeNull();
+  expect(f.remote.get('inputRun:run')).toBeNull();
+  expect(f.resolveModel).not.toHaveBeenCalled();
+  expect(f.send).not.toHaveBeenCalled();
+});
+it('does not clear a replacement target fence after an old patch finishes', async () => {
+  const f = fixture(false, 'target-a'); let finish!: () => void;
+  f.runtime.patchSession.mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+  const execution = f.service.execute(f.entry, () => true);
+  await vi.waitFor(() => expect(f.runtime.patchSession).toHaveBeenCalledOnce());
+  f.switchTarget('target-b');
+  const replacement = { ...f.remote.get<Record<string, unknown>>('inputFence:local'), syncTargetId: 'target-b' };
+  f.remote.put('inputFence:local', replacement);
+  const rejected = expect(execution).rejects.toThrow(RemoteInputReason.Busy);
+  finish(); await rejected;
+  expect(f.remote.get('inputFence:local')).toEqual(replacement);
+  expect(f.remote.get('inputOperation:target-b:cmd')).toBeNull();
+  expect(f.send).not.toHaveBeenCalled();
 });
 it('retains a durable fence for an unknown model patch instead of unlocking on timeout', async () => {
   const { service, entry, runtime, remote, send } = fixture();

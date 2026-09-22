@@ -1,0 +1,25 @@
+:root {
+  --code-fg: #24292f; --code-keyword: #a020f0; --code-name: #c65d09; --code-function: #c65d09;
+  --code-constant: #175bc0; --code-type: #c65d09; --code-operator: #24292f; --code-comment: #7d858d;
+  --code-string: #198139; --code-invalid: #ca1243; --code-selection: #b8d6fa;
+}
+.dark {
+  --code-fg: #d4d4d4; --code-keyword: #d18cf2; --code-name: #efa86b; --code-function: #efa86b;
+  --code-constant: #82b8ff; --code-type: #efa86b; --code-operator: #d4d4d4; --code-comment: #9ca5b4;
+  --code-string: #98c379; --code-invalid: #ff829d; --code-selection: #355b85;
+}
+.tok-keyword { color: var(--code-keyword); }
+.tok-name { color: var(--code-name); }
+.tok-function { color: var(--code-function); }
+.tok-constant { color: var(--code-constant); }
+.tok-punctuation, .tok-heading { color: var(--code-fg); }
+.tok-type { color: var(--code-type); }
+.tok-operator { color: var(--code-operator); }
+.tok-comment, .tok-link { color: var(--code-comment); }
+.tok-string { color: var(--code-string); }
+.tok-invalid { color: var(--code-invalid); }
+.tok-strong, .tok-heading { font-weight: 600; }
+.tok-emphasis { font-style: italic; }
+.tok-strikethrough { text-decoration: line-through; }
+.tok-link { text-decoration: underline; }
+.workspace-diff-line-text::selection, .workspace-diff-line-text ::selection { background: var(--code-selection) !important; color: var(--code-fg) !important; }

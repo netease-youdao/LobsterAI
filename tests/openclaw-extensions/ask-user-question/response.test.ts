@@ -28,7 +28,10 @@ describe('AskUserQuestion response handling', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ behavior: 'deny' }))));
     const tool = createTool();
 
-    await expect(tool.execute('call-a', input)).resolves.toEqual({ content: [{ type: 'text', text: 'Continue?: Yes' }] });
+    await expect(tool.execute('call-a', input)).resolves.toEqual({
+      content: [{ type: 'text', text: 'Continue?: Yes' }],
+      details: { answers: { 'Continue?': 'Yes' }, skippedQuestionIds: [] },
+    });
     await expect(tool.execute('call-b', input)).resolves.toEqual({ content: [{ type: 'text', text: 'User denied the operation.' }] });
   });
 

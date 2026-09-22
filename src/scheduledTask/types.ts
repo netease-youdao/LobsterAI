@@ -1,4 +1,4 @@
-import type { DeliveryMode, SessionTarget, TaskStatus, WakeMode } from './constants';
+import type { DeliveryMode, RunDeliveryStatus, SessionTarget, TaskStatus, WakeMode } from './constants';
 
 export interface ScheduleAt {
   kind: 'at';
@@ -83,6 +83,9 @@ export interface ScheduledTaskRun {
   error: string | null;
   summary?: string | null;
   deliveryError?: string | null;
+  deliveryStatus?: RunDeliveryStatus | null;
+  /** Current configured channel, used to scope delivery recovery UI. */
+  deliveryChannel?: string | null;
 }
 
 export interface ScheduledTaskRunWithName extends ScheduledTaskRun {

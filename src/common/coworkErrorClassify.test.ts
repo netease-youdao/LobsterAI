@@ -1,6 +1,7 @@
-import { expect,test } from 'vitest';
+import { expect, test } from 'vitest';
 
-import { classifyErrorKey, isLobsterAIQuotaExhaustedError } from './coworkErrorClassify';
+import { ProviderName } from '../shared/providers/constants';
+import { classifyErrorKey, CoworkErrorI18nKey, isLobsterAIQuotaExhaustedError } from './coworkErrorClassify';
 
 const classifyError = (error: string) => classifyErrorKey(error) ?? error;
 
@@ -59,6 +60,25 @@ test('auth: auth scope maps to model access denied', () => {
 });
 
 // ==================== Billing errors ====================
+
+test('billing: a local inline-key cooldown preserves its actual cause', () => {
+  const message = 'Inline API key for provider "lobsterai-server" is temporarily disabled after a provider auth/billing failure. Retry after about 300 minutes, or switch to a different auth profile/API key.';
+  expect(classifyErrorKey(message)).toBe(CoworkErrorI18nKey.ProviderCooldown);
+});
+
+test('billing: LobsterAI upstream balance errors do not tell users to recharge', () => {
+  expect(classifyErrorKey('insufficient balance', ProviderName.LobsteraiServer))
+    .toBe(CoworkErrorI18nKey.ModelServiceUnavailable);
+  expect(classifyErrorKey('insufficient balance', ProviderName.Moonshot))
+    .toBe(CoworkErrorI18nKey.InsufficientBalance);
+  expect(classifyErrorKey('{"error":{"code":50203,"message":"insufficient balance"}}'))
+    .toBe(CoworkErrorI18nKey.ModelServiceUnavailable);
+});
+
+test.each([40200, 40201, 40202])('billing: LobsterAI user quota code %s still requires quota recovery', (code) => {
+  expect(classifyErrorKey(JSON.stringify({ error: { code, message: 'billing failure' } }), ProviderName.LobsteraiServer))
+    .toBe(CoworkErrorI18nKey.QuotaExhausted);
+});
 
 test('billing: DeepSeek insufficient_balance', () => {
   expect(classifyError('insufficient_balance: Your account does not have enough balance')).toBe('coworkErrorInsufficientBalance');

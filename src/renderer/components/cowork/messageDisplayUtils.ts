@@ -330,6 +330,13 @@ export const getToolInputSummary = (
       return getToolInputString(input, ['description', 'task']);
     case 'webfetch':
       return getToolInputString(input, ['url']);
+    case 'image':
+      return getToolInputString(input, ['path', 'file_path', 'filePath', 'url']);
+    case 'browser': {
+      const action = getToolInputString(input, ['action']);
+      const target = getToolInputString(input, ['url', 'name', 'selector', 'text']);
+      return [action, target ? truncatePreview(target, 60) : null].filter(Boolean).join(' · ') || null;
+    }
     case 'process': {
       const action = getToolInputString(input, ['action']);
       const sessionId = getToolInputString(input, ['sessionId', 'session_id']);
@@ -424,6 +431,34 @@ export const getActivityIndicatorStatusText = (
     return i18nService.t('coworkModelResponseWaitingLong');
   }
   return i18nService.t(hasContent ? 'coworkProcessing' : 'coworkThinking');
+};
+
+/**
+ * Phase words shown while the model is silent, rotated by the activity indicator so the
+ * status keeps moving instead of sitting on "Thinking" for a minute. The first entry is
+ * always the plain thinking label, so the initial render matches getActivityIndicatorStatusText.
+ */
+export const getThinkingPhaseLabels = (): string[] => {
+  const phases = i18nService.t('coworkThinkingPhases')
+    .split('|')
+    .map(phase => phase.trim())
+    .filter(Boolean);
+  return phases.length > 0 ? phases : [i18nService.t('coworkThinking')];
+};
+
+const isToolGroupSettled = (group: ToolGroupItem): boolean => {
+  const meta = group.toolResult?.metadata;
+  if (!group.toolResult) return false;
+  return !(meta?.isStreaming && !meta?.isFinal);
+};
+
+/** Tool steps of this turn that already have a final result; shown next to the live timer. */
+export const countTurnCompletedSteps = (turn: ConversationTurn): number => {
+  let count = 0;
+  for (const item of turn.assistantItems) {
+    if (item.type === 'tool_group' && isToolGroupSettled(item.group)) count += 1;
+  }
+  return count;
 };
 
 export const formatElapsedDuration = (elapsedMs: number): string => {
@@ -585,6 +620,18 @@ export const getTurnEndTimestamp = (turn: ConversationTurn): number | null => {
     consider(item.message.timestamp);
   }
   return latest;
+};
+
+// Failed tool steps in a turn. Once the process folds they are no longer
+// visible, so the duration line carries the count instead of hiding it.
+export const countTurnFailedSteps = (turn: ConversationTurn): number => {
+  let failed = 0;
+  for (const item of turn.assistantItems) {
+    if (item.type !== 'tool_group') continue;
+    const metadata = item.group.toolResult?.metadata;
+    if (metadata?.isError || metadata?.error) failed += 1;
+  }
+  return failed;
 };
 
 /** Localized duration for the collapsed-process line, e.g. "21分钟 45秒" / "21m 45s". */
