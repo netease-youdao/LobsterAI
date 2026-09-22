@@ -23,7 +23,7 @@ import { type AgentWorkspace,RemoteAgentCatalog, RemoteAgentError } from './remo
 import { approvalCommandError, RemoteApprovalError } from './remoteApproval';
 import { RemoteConnectionClient } from './remoteConnectionClient';
 import { remoteDiagnostics } from './remoteDiagnostics';
-import { RemoteFileSync } from './remoteFileSync';
+import { RemoteFileSync, type RemoteFileSyncDependencies } from './remoteFileSync';
 import { RemoteImportSnapshotError, RemoteImportSnapshots } from './remoteImportSnapshots';
 import type { ImportPartIndex } from './remoteImportSnapshotWorker';
 import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
@@ -50,7 +50,7 @@ export interface BridgeDependencies {
   deletion?: Pick<SessionDeletionDependencies, 'service' | 'runtime' | 'reconcileStop'>;
   security?: { available(): Promise<void>; commit<T>(operationId: string, operation: unknown, apply: () => T): Promise<T> };
   input?: { models: RemoteModelCatalog; preparations: InputPreparationService };
-  files?: { cacheRoot: string; access(filePath: string): { assertAllowed(): void } };
+  files?: Pick<RemoteFileSyncDependencies, 'cacheRoot' | 'access' | 'recordArtifact'>;
   getAgentDefaultInput?(owner: RemoteOwner, deviceId: string, agentId: string): RemoteAgentCatalogItem['defaultInput'];
   store: RemoteStore; identity: RemoteIdentity;
   /** Session creation and inbox persistence share the outer commit/notification boundary. */
@@ -220,6 +220,11 @@ export class RemoteBridge {
   private syncFiles(): void {
     if (!this.deps.store.needsSecurityRecovery() && !this.syncPaused() && this.owner && this.registration && this.generation && this.projectionVersion >= 3) this.files?.tick({ owner: this.owner,
       deviceId: this.registration.deviceId, generation: this.generation, environment: this.remoteEnvironment() });
+  }
+  async prepareFileRun(sessionId: string, roots: string[]): Promise<void> {
+    if (!this.canCaptureRemoteFiles()) return;
+    const epoch = this.accountGeneration;
+    await this.files?.prepareRun(sessionId, roots, () => epoch === this.accountGeneration && !this.deps.store.needsSecurityRecovery());
   }
   canCaptureRemoteFiles(): boolean { return !this.deps.store.needsSecurityRecovery() && this.files?.canCaptureInput() === true && this.settings().enabled; }
   getInputAgentCatalog(): RemoteAgentCatalog | null { return this.agentCatalog; }

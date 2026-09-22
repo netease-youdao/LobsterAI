@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'vitest';
 
+import { getLibraryArtifactTypeForExtension, LIBRARY_PREVIEWABLE_EXTENSIONS, LibraryArtifactType } from '../../shared/library/constants';
 import { ShareDeploymentCandidateSource } from '../../shared/shareDeployment/constants';
 import {
   dedupeArtifactsForDisplay,
+  getArtifactTypeFromExtension,
   hasToolResultMediaAssets,
   isIgnoredArtifactPath,
   isPathInsideDirectory,
@@ -1078,5 +1080,27 @@ describe('parseFilePathsFromText — find command output scenario', () => {
     const content = 'B-01-seedream.png\nB-02-chart.png';
     const artifacts = parseFilePathsFromText(content, 'msg1', 'sess1');
     expect(artifacts).toHaveLength(0);
+  });
+});
+
+describe('artifact file type alignment', () => {
+  test.each([...LIBRARY_PREVIEWABLE_EXTENSIONS])('uses the library preview policy for %s', extension => {
+    expect(getArtifactTypeFromExtension(extension)).toBe(getLibraryArtifactTypeForExtension(extension));
+    expect(getArtifactTypeFromExtension(extension.toUpperCase())).toBe(getLibraryArtifactTypeForExtension(extension));
+  });
+
+  test.each('json yaml yml xml js ts py java c cpp h hpp go rs sh sql'.split(' '))(
+    'recognizes a delivered %s link as source without granting tool provenance',
+    extension => {
+      const filePath = `/workspace/result.${extension}`;
+      const artifacts = parseFileLinksFromMessage(`[Result](file://${filePath})`, 'reply', 'session');
+      expect(artifacts).toHaveLength(1);
+      expect(artifacts[0]).toMatchObject({ filePath, type: LibraryArtifactType.Code, messageId: 'reply' });
+      expect(artifacts[0].source).toBeUndefined();
+    },
+  );
+
+  test.each(['.exe', '.zip', '.bin', '.unknown'])('does not recognize unsupported file type %s', extension => {
+    expect(getArtifactTypeFromExtension(extension)).toBeNull();
   });
 });

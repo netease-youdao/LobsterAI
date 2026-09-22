@@ -219,6 +219,11 @@ const IMAGE_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.avif', '.svg',
 ]);
 const MEDIA_EXTENSIONS = new Set(['.mp4', '.webm', '.mov']);
+// Source and structured text files use the read-only code viewer, never active HTML/SVG previews.
+const CODE_EXTENSIONS = new Set([
+  '.json', '.yaml', '.yml', '.xml', '.js', '.jsx', '.ts', '.tsx', '.py', '.java',
+  '.c', '.cpp', '.h', '.hpp', '.go', '.rs', '.sh', '.sql', '.css',
+]);
 
 export const LIBRARY_PREVIEWABLE_EXTENSIONS = new Set([
   ...WEB_EXTENSIONS,
@@ -227,7 +232,8 @@ export const LIBRARY_PREVIEWABLE_EXTENSIONS = new Set([
   ...SPREADSHEET_EXTENSIONS,
   ...IMAGE_EXTENSIONS,
   ...MEDIA_EXTENSIONS,
-  '.mermaid', '.mmd', '.jsx', '.tsx', '.css',
+  ...CODE_EXTENSIONS,
+  '.mermaid', '.mmd',
 ]);
 
 export const getLibraryCategoryForExtension = (extension: string): LibraryCategory => {

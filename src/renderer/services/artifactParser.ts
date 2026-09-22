@@ -1,3 +1,4 @@
+import { getLibraryArtifactTypeForExtension } from '../../shared/library/constants';
 import {
   ShareDeploymentCandidateSource,
   type ShareDeploymentProjectCandidate,
@@ -326,37 +327,6 @@ export function hasToolResultMediaAssets(toolResultMsg: CoworkMessage | undefine
   });
 }
 
-const EXTENSION_TO_ARTIFACT_TYPE: Record<string, ArtifactType> = {
-  '.html': 'html',
-  '.htm': 'html',
-  '.svg': 'svg',
-  '.png': 'image',
-  '.jpg': 'image',
-  '.jpeg': 'image',
-  '.gif': 'image',
-  '.webp': 'image',
-  '.bmp': 'image',
-  '.avif': 'image',
-  '.mp4': 'video',
-  '.webm': 'video',
-  '.mov': 'video',
-  '.mermaid': 'mermaid',
-  '.mmd': 'mermaid',
-  '.jsx': 'code',
-  '.tsx': 'code',
-  '.css': 'code',
-  '.md': 'markdown',
-  '.txt': 'text',
-  '.log': 'text',
-  '.csv': 'document',
-  '.tsv': 'document',
-  '.xls': 'document',
-  '.docx': 'document',
-  '.xlsx': 'document',
-  '.pptx': 'document',
-  '.pdf': 'document',
-};
-
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.avif']);
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov']);
 const BINARY_DOCUMENT_EXTENSIONS = new Set(['.docx', '.xlsx', '.pptx', '.pdf', '.csv', '.tsv', '.xls']);
@@ -370,7 +340,7 @@ const FILE_LIKE_PATH_EXTENSION_RE = /\.[A-Za-z0-9]{1,12}$/;
 
 
 export function getArtifactTypeFromExtension(ext: string): ArtifactType | null {
-  return EXTENSION_TO_ARTIFACT_TYPE[ext.toLowerCase()] ?? null;
+  return getLibraryArtifactTypeForExtension(ext);
 }
 
 export function isImageExtension(ext: string): boolean {

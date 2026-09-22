@@ -150,7 +150,7 @@ export class LibraryIndexService {
     this.itemPaths.clear();
   }
 
-  async recordCandidates(candidates: LibraryArtifactCandidate[], actor?: RemoteOwner | null, assertCurrentOwner?: () => void): Promise<LibraryRecordCandidatesData> {
+  async recordCandidates(candidates: LibraryArtifactCandidate[], actor?: RemoteOwner | null, assertCurrentOwner?: () => void, validateIndexed?: (indexed: LibraryIndexedFile) => void): Promise<LibraryRecordCandidatesData> {
     let recorded = 0;
     let ignored = 0;
     const changedIds: string[] = [];
@@ -161,11 +161,11 @@ export class LibraryIndexService {
         continue;
       }
       try {
-        const item = await this.indexCandidate(candidate, actor, assertCurrentOwner);
+        const item = await this.indexCandidate(candidate, actor, assertCurrentOwner, validateIndexed);
         if (!item) {
           ignored += 1;
           if (this.store.sessionExists(candidate.sessionId)) {
-            this.scheduleCandidateRetry(candidate, 0, actor, assertCurrentOwner);
+            this.scheduleCandidateRetry(candidate, 0, actor, assertCurrentOwner, validateIndexed);
           }
           continue;
         }
@@ -174,7 +174,7 @@ export class LibraryIndexService {
       } catch (error) {
         if (isMissingError(error)) {
           ignored += 1;
-          this.scheduleCandidateRetry(candidate, 0, actor, assertCurrentOwner);
+          this.scheduleCandidateRetry(candidate, 0, actor, assertCurrentOwner, validateIndexed);
           continue;
         }
         ignored += 1;
@@ -307,7 +307,7 @@ export class LibraryIndexService {
     }
   }
 
-  private async indexCandidate(candidate: LibraryArtifactCandidate, actor?: RemoteOwner | null, assertCurrentOwner?: () => void): Promise<LocalArtifactItem | null> {
+  private async indexCandidate(candidate: LibraryArtifactCandidate, actor?: RemoteOwner | null, assertCurrentOwner?: () => void, validateIndexed?: (indexed: LibraryIndexedFile) => void): Promise<LocalArtifactItem | null> {
     assertCurrentOwner?.();
     if (!this.store.sessionExists(candidate.sessionId, actor)) return null;
     const cwd = this.store.getSessionCwd(candidate.sessionId);
@@ -322,6 +322,7 @@ export class LibraryIndexService {
     if (!indexed) return null;
     assertCurrentOwner?.();
     if (!this.store.sessionExists(candidate.sessionId, actor)) return null;
+    validateIndexed?.(indexed);
     const item = this.store.upsertFile(indexed, candidate);
     if (!item) return null;
     this.addWatch(item.itemId, item.filePath);
@@ -370,21 +371,21 @@ export class LibraryIndexService {
     return normalized === libraryCachePath || normalized.startsWith(`${libraryCachePath}${path.sep}`);
   }
 
-  private scheduleCandidateRetry(candidate: LibraryArtifactCandidate, attempt: number, actor?: RemoteOwner | null, assertCurrentOwner?: () => void): void {
+  private scheduleCandidateRetry(candidate: LibraryArtifactCandidate, attempt: number, actor?: RemoteOwner | null, assertCurrentOwner?: () => void, validateIndexed?: (indexed: LibraryIndexedFile) => void): void {
     if (this.stopped || attempt >= RETRY_DELAYS_MS.length) return;
     const timer = setTimeout(() => {
       this.retryTimers.delete(timer);
       if (this.stopped || !this.store.sessionExists(candidate.sessionId, actor)) return;
-      void this.indexCandidate(candidate, actor, assertCurrentOwner)
+      void this.indexCandidate(candidate, actor, assertCurrentOwner, validateIndexed)
         .then(item => {
           if (item) {
             this.onChanged({ reason: 'recorded', itemIds: [item.itemId] });
           } else {
-            this.scheduleCandidateRetry(candidate, attempt + 1, actor, assertCurrentOwner);
+            this.scheduleCandidateRetry(candidate, attempt + 1, actor, assertCurrentOwner, validateIndexed);
           }
         })
         .catch(error => {
-          if (isMissingError(error)) this.scheduleCandidateRetry(candidate, attempt + 1, actor, assertCurrentOwner);
+          if (isMissingError(error)) this.scheduleCandidateRetry(candidate, attempt + 1, actor, assertCurrentOwner, validateIndexed);
         });
     }, RETRY_DELAYS_MS[attempt]);
     this.retryTimers.add(timer);

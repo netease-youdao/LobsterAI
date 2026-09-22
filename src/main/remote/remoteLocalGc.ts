@@ -12,6 +12,7 @@ const Prefix = { Deleted: 'localGcDeleted:', File: 'localGcFile:', Receipt: 'loc
 const Phase = { Eligible: 'eligible', Deleting: 'deleting', Deleted: 'deleted' } as const;
 const GRACE_MS = 24 * 60 * 60_000;
 const PAGE = 20;
+const DESKTOP_INPUT_RUN_PREFIX = 'desktopInputRun:';
 const terminalRuns = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
 const terminalCommands = new Set(['applied', 'rejected', 'expired']);
 const terminalImports = new Set(['committed', 'aborted', 'expired']);
@@ -141,9 +142,21 @@ export class RemoteLocalGc {
         filePath, ...(inputDeviceId ? { inputDeviceId } : {}), phase: Phase.Eligible } satisfies CacheFile);
     }
   }
+  private inputRunBelongsToSession(key: string, job: JsonRecord, sessionId: string): boolean {
+    if (!key.startsWith(DESKTOP_INPUT_RUN_PREFIX)) return false;
+    // Explicit identity wins over legacy key conventions, including conflicting or malformed values.
+    if (job.localSessionId !== undefined) return job.localSessionId === sessionId;
+    if (key.startsWith(`${DESKTOP_INPUT_RUN_PREFIX}${sessionId}:`)) return true;
+    const runId = key.slice(DESKTOP_INPUT_RUN_PREFIX.length);
+    if (!runId || runId.includes(':')) return false;
+    // Old writers used a random run ID without a session field. Exact durable history is sufficient;
+    // unknown or unsettled history remains retained without scanning unrelated sessions.
+    const run = this.deps.store.get<{ runId: string; status: string }>(`runHistory:${sessionId}:${runId}`);
+    return run?.runId === runId && terminalRuns.has(run.status);
+  }
   private trimJobs(tombstone: Tombstone): boolean {
     const store = this.deps.store;
-    const prefixes = ['desktopAsset:', 'desktopInputRun:', 'fileOutput:', 'inputPreparation:'];
+    const prefixes = ['desktopAsset:', DESKTOP_INPUT_RUN_PREFIX, 'fileOutput:', 'inputPreparation:'];
     const cursor = tombstone.jobCursor || prefixes[0];
     const index = prefixes.findIndex(prefix => cursor.startsWith(prefix));
     if (index < 0) return true;
@@ -151,10 +164,11 @@ export class RemoteLocalGc {
     for (const row of rows) {
       tombstone.jobCursor = row.key;
       const job = row.value;
-      const inputRun = row.key.startsWith(`desktopInputRun:${tombstone.localSessionId}:`);
+      const inputRun = this.inputRunBelongsToSession(row.key, job, tombstone.localSessionId);
       const preparation = row.key.startsWith('inputPreparation:');
       const command = preparation && typeof job.boundCommandId === 'string' ? store.get<JsonRecord>(`inbox:${job.boundCommandId}`) : null;
       if ((!inputRun && job.localSessionId !== tombstone.localSessionId && !(preparation && command?.localSessionId === tombstone.localSessionId)) || !sameOwner(job.owner, tombstone.owner)) continue;
+      if (inputRun && !Array.isArray(job.attachments)) { tombstone.jobsBlocked = true; continue; }
       if (preparation && (!this.deps.inputCacheRoot || !command || !terminalCommands.has(command.state) || !terminalCommands.has(command.command?.status)
         || job.deviceId !== tombstone.deviceId || !Array.isArray(job.files))) { tombstone.jobsBlocked = true; continue; }
       if (row.key.startsWith('fileOutput:') && (!Array.isArray(job.queue) || !tombstone.completionReceipt && (job.queue.length || job.rename))) { tombstone.jobsBlocked = true; continue; }
@@ -202,7 +216,7 @@ export class RemoteLocalGc {
     } finally { this.running = false; }
   }
   private referenced(filePath: string): boolean {
-    for (const prefix of ['desktopAsset:', 'desktopInputRun:', 'fileOutput:', 'inputPreparation:']) {
+    for (const prefix of ['desktopAsset:', DESKTOP_INPUT_RUN_PREFIX, 'fileOutput:', 'inputPreparation:']) {
       const rows = this.entries<JsonRecord>(prefix, '', 501);
       if (rows.length > 500 || rows.some(row => stableJson(row.value).includes(filePath))) return true;
     }

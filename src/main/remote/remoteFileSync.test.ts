@@ -9,6 +9,7 @@ import type { RemoteOwner } from '../../shared/remote/constants';
 import { RemoteCapability } from '../../shared/remote/constants';
 import { type RemoteFilePolicy, RemoteFileReason, remoteFileRule } from '../../shared/remote/files';
 import { RemoteFileCapability } from '../../shared/remote/files';
+import type { LibraryIndexedFile } from '../library/libraryLocalStore';
 import { captureDesktopInput } from './desktopInputMetadata';
 import { RemoteBridge } from './remoteBridge';
 import { captureRemoteFileSnapshot, remoteFileCacheDirectory, verifyRemoteFileSnapshot } from './remoteFileSnapshots';
@@ -19,12 +20,13 @@ const owner = { userId: 'A', scopeKey: 'personal' };
 const disposable: Array<() => void> = [];
 afterEach(() => { for (const dispose of disposable.splice(0).reverse()) dispose(); vi.useRealTimers(); vi.restoreAllMocks(); });
 const policy: RemoteFilePolicy = { policyVersion: '1', features: { inputUpload: true, desktopInputSync: true, artifactPublish: true, artifactDownload: true },
-  types: [{ category: 'text', extensions: ['md', 'txt', 'js', 'html'], maxFileBytes: '5242880', inputAllowed: true, artifactAutoSync: true }],
+  types: [{ category: 'text', extensions: ['md', 'txt', 'json', 'yaml', 'js', 'html'], maxFileBytes: '5242880', inputAllowed: true, artifactAutoSync: true },
+    { category: 'image', extensions: ['png'], maxFileBytes: '10485760', inputAllowed: true, artifactAutoSync: true }],
   limits: { partBytes: '4194304', maxInputCount: 10, maxInputBytes: '104857600', maxImageBytes: '20971520', maxTaskArtifactCount: 20, maxTaskArtifactBytes: '209715200' } };
-function folder(): string { const result = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-files-test-')); disposable.push(() => fs.rmSync(result, { recursive: true, force: true })); return result; }
+function folder(): string { const result = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'remote-files-test-'))); disposable.push(() => fs.rmSync(result, { recursive: true, force: true })); return result; }
 const ok = (data: unknown): Response => new Response(JSON.stringify({ code: 0, data }));
-function fixture(sealedProducer = true) {
-  const directory = folder(), source = path.join(directory, 'report.md'), cache = path.join(directory, 'cache'); fs.writeFileSync(source, 'first');
+function fixture(sealedProducer = true, deliveries = false, fileName = 'report.md') {
+  const directory = folder(), source = path.join(directory, fileName), cache = path.join(directory, 'cache'); fs.writeFileSync(source, 'first');
   const db = new Database(':memory:'); disposable.push(() => db.close());
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT,model_override TEXT,thinking_level TEXT);
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);
@@ -36,7 +38,7 @@ function fixture(sealedProducer = true) {
   store.beginRun('s', 'run1');
   store.transaction(() => {
     db.prepare("INSERT INTO cowork_messages VALUES('m1','s','assistant','report',?,1,1)").run(JSON.stringify({ remoteRunId: 'run1' }));
-    db.prepare("INSERT INTO library_local_artifacts VALUES('local',?,'report.md',?,1,'md',5,'available')").run(source, sourceIdentity);
+    db.prepare("INSERT INTO library_local_artifacts VALUES('local',?,?,?,1,?,5,'available')").run(source, fileName, sourceIdentity, path.extname(fileName).slice(1));
     db.exec("INSERT INTO library_artifact_sessions VALUES('local','s','m1','created')");
   });
   let actor: RemoteOwner | null = owner, generation = '1', version = 0;
@@ -50,7 +52,7 @@ function fixture(sealedProducer = true) {
     responseHook?.(pathname);
     if (pathname.startsWith('/file-policy')) return ok(policy);
     if (pathname === '/devices/pc/artifacts') return ok({ artifactId: 'remote', revision: '1', latestVersion: '0' });
-    const manifest = () => ({ artifactId: 'remote', sessionId: store.sync('s')!.session_id, name: 'report.md', revision: String(version + 1), availability: latest ? 'ready' : 'desktop_only', latest,
+    const manifest = () => ({ artifactId: 'remote', sessionId: store.sync('s')!.session_id, name: fileName, revision: String(version + 1), availability: latest ? 'ready' : 'desktop_only', latest,
       latestVersion: latest?.artifactVersion || '0', lastCaptureSequence: latest ? uploads.get(latest.assetId).captureSequence : '0',
       pendingArtifactVersion: [...uploads.values()].find(item => item.publicationStatus === 'uploading')?.artifactVersion || null, ...manifestOverrides });
     if (pathname.startsWith('/sessions/')) return ok(manifest());
@@ -79,6 +81,15 @@ function fixture(sealedProducer = true) {
   });
   const deps = { store, cacheRoot: cache, owner: () => actor, environment: () => connection().environment, enabled: () => true,
     access: () => ({ assertAllowed: () => { if (actor !== owner) throw new Error('hidden'); } }), request,
+    recordArtifact: deliveries ? async (candidate: { filePath: string; messageId?: string }, _owner: RemoteOwner, assert: () => void, validate: (file: LibraryIndexedFile) => void) => {
+      assert();
+      const stat = fs.statSync(candidate.filePath);
+      const identity = `${stat.dev}:${stat.ino}:${Math.trunc(stat.birthtimeMs)}`;
+      validate({ filePath: candidate.filePath, fileIdentity: identity, sizeBytes: stat.size, fileMtimeMs: Math.trunc(stat.mtimeMs) } as LibraryIndexedFile);
+      db.prepare("UPDATE library_local_artifacts SET file_identity=?,size_bytes=?,updated_at=? WHERE id='local'").run(identity, stat.size, Date.now());
+      db.prepare("UPDATE library_artifact_sessions SET last_message_id=?,relation_kind='modified' WHERE artifact_id='local'").run(candidate.messageId);
+      return true;
+    } : undefined,
     // Simulates an engine that already sealed bytes before reporting its terminal event.
     terminalSnapshot: sealedProducer ? (item: { run_id: string; id: string }) => {
       const directory = remoteFileCacheDirectory(cache, owner); fs.mkdirSync(directory, { recursive: true });
@@ -100,6 +111,7 @@ function fixture(sealedProducer = true) {
     });
   };
   return { store, db, source, cache, calls, bytes, references, uploads, tick, nextRun,
+    prepareDelivery: () => sync.prepareRun('s', [fs.realpathSync(directory)], () => true),
     switchOwner: () => { actor = { userId: 'B', scopeKey: 'personal' }; },
     hook: (hook?: typeof responseHook) => { responseHook = hook; },
     loseVersionReceipt: () => { loseVersionReceipt = true; },
@@ -155,6 +167,60 @@ describe('remote files policy and immutable snapshots', () => {
   });
 });
 describe('artifact sync durable boundaries and protocol', () => {
+  it('publishes an exec-delivered Markdown reference through the existing HTTP protocol', async () => {
+    const f = fixture(false, true);
+    f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run();
+    await f.tick();
+    await f.prepareDelivery();
+    fs.writeFileSync(f.source, '100 new arithmetic problems');
+    f.store.transaction(() => {
+      f.db.prepare("UPDATE cowork_messages SET content=?,sequence=3 WHERE id='m1'").run(`Delivered [report](${f.source})`);
+      f.db.prepare("INSERT INTO cowork_messages VALUES('tool','s','tool_use','',?,1,1)").run(JSON.stringify({ remoteRunId: 'run1', toolName: 'exec', toolUseId: 't' }));
+      f.db.prepare("INSERT INTO cowork_messages VALUES('result','s','tool_result','',?,1,2)").run(JSON.stringify({ remoteRunId: 'run1', toolUseId: 't', isFinal: true, toolResultDetails: { exitCode: 0 } }));
+    });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2);
+    f.store.updateRun('s', 'succeeded'); clock.mockRestore();
+    await f.tick(); await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('100 new arithmetic problems');
+    expect(f.references).toHaveLength(0);
+    expect(f.jobs()[0].reason).toBeUndefined();
+    expect(f.jobs()[0].references.m1).toMatchObject({ pinned: false, latest: { artifactVersion: '1' } });
+    const message = f.store.snapshot('s').records.find(row => row.eventType === 'message.upsert' && row.payload.message.messageId === 'm1');
+    expect(message?.payload.message.blocks.at(-1)).toMatchObject({ availability: 'ready', referenceMode: 'latest' });
+  });
+  it.each([
+    { fileName: 'result.json', bytes: Buffer.from('{"answer":42}'), mimeType: 'application/json', image: false },
+    { fileName: 'result.yaml', bytes: Buffer.from('answer: 42\n'), mimeType: 'text/plain', image: false },
+    { fileName: 'result.png', bytes: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=', 'base64'), mimeType: 'image/png', image: true },
+  ])('publishes $fileName as a ready version without reading a remote URL', async sample => {
+    const f = fixture(false, true, sample.fileName);
+    f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run();
+    await f.tick(); await f.prepareDelivery();
+    fs.writeFileSync(f.source, sample.bytes);
+    f.store.transaction(() => {
+      f.db.prepare("UPDATE cowork_messages SET content=?,sequence=3 WHERE id='m1'")
+        .run(`Delivered ${sample.image ? '!' : ''}[result](${f.source})`);
+      f.db.prepare("INSERT INTO cowork_messages VALUES('tool','s','tool_use','',?,1,1)")
+        .run(JSON.stringify({ remoteRunId: 'run1', toolName: 'exec', toolUseId: 't' }));
+      f.db.prepare("INSERT INTO cowork_messages VALUES('result','s','tool_result','',?,1,2)")
+        .run(JSON.stringify({ remoteRunId: 'run1', toolUseId: 't', isFinal: true, toolResultDetails: { exitCode: 0 } }));
+    });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2);
+    f.store.updateRun('s', 'succeeded'); clock.mockRestore();
+    await f.tick(); await f.tick();
+    expect(f.bytes.get('asset1')).toEqual(sample.bytes);
+    expect(f.calls.find(call => call.pathname === '/artifacts/remote/versions')?.body).toMatchObject({ mimeType: sample.mimeType });
+    const message = f.store.snapshot('s').records.find(row => row.eventType === 'message.upsert' && row.payload.message.messageId === 'm1');
+    expect(message?.payload.message.blocks.at(-1)).toMatchObject({ name: sample.fileName, availability: 'ready', referenceMode: 'latest', mimeType: sample.mimeType });
+    expect(JSON.stringify(f.calls)).not.toContain(f.source);
+  });
+  it('binds identical current bytes to a new message without fabricating terminal history', async () => {
+    const f = fixture(false); await f.tick(); f.store.updateRun('s', 'succeeded'); await f.tick();
+    f.nextRun(2, 'first'); await f.tick(); f.store.updateRun('s', 'succeeded'); await f.tick();
+    expect(f.uploads.size).toBe(1);
+    expect(f.jobs()[0].references.m2).toMatchObject({ runId: 'run2', pinned: false, latest: { artifactVersion: '1' } });
+    expect(f.references).toHaveLength(0);
+  });
   it('does not pin a mutable file as the past terminal version or delay starting the next run', async () => {
     const f = fixture(false); await f.tick(); f.store.updateRun('s', 'succeeded');
     expect(f.jobs()[0].queue).toHaveLength(0);

@@ -30,7 +30,7 @@ export const isTestModeEnabled = (): boolean => {
  */
 export const getServerApiBaseUrl = (): string => {
   const defaultBaseUrl = isTestModeEnabled()
-    ? 'https://lobsterai-server-dev.inner.youdao.com'
+    ? 'https://lobsterai-server.inner.youdao.com'
     : 'https://lobsterai-server.youdao.com';
   const serverBaseUrl = resolveDevelopmentServerBaseUrl({
     defaultBaseUrl,

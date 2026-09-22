@@ -504,6 +504,7 @@ type ChannelSessionLifecycleRun = {
 
 type OpenClawRuntimeAdapterOptions = {
   beforeExecutionDispatch?: () => void;
+  prepareDeliverableSync?: (sessionId: string, cwd: string) => Promise<void>;
   normalizeModelRef?: (modelRef: string) => string;
   onChannelPromptSubmit?: (event: {
     agentId: string;
@@ -514,6 +515,20 @@ type OpenClawRuntimeAdapterOptions = {
   onGatewayClientReady?: () => void;
   onBrowserToolEvent?: (event: AgentBrowserToolEvent) => void;
 };
+
+export async function prepareOpenClawDeliverableSync(
+  prepare: OpenClawRuntimeAdapterOptions['prepareDeliverableSync'], sessionId: string, cwd: string,
+): Promise<void> {
+  if (!prepare || !cwd.trim()) return;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // The metadata observer expires at 80ms; local execution resumes even if the observer fails.
+    await Promise.race([
+      new Promise<void>(resolve => { timeout = setTimeout(resolve, 100); }), prepare(sessionId, cwd),
+    ]);
+  } catch { /* Optional file synchronization must never block local execution. */ }
+  finally { if (timeout) clearTimeout(timeout); }
+}
 
 const SessionModelPatchSource = {
   SessionOverride: 'sessionOverride',
@@ -5911,6 +5926,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       assertOpenClawChatSendPayloadWithinLimit(sessionId, chatSendParams, attachments);
       const chatSendStartMs = Date.now();
       firstResponseTiming.chatSendStartedAtMs = chatSendStartMs;
+      if (runCwd) await prepareOpenClawDeliverableSync(this.options.prepareDeliverableSync, sessionId, runCwd);
       assertApprovalContinuationAllowed();
       this.options.beforeExecutionDispatch?.();
       const sendResult = await client.request<Record<string, unknown>>(

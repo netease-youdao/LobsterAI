@@ -3,10 +3,11 @@ import path from 'path';
 
 import type { CoworkImageAttachmentPayload } from '../../shared/cowork/imageAttachments';
 import type { CoworkLocalInput } from '../../shared/cowork/inputAttachments';
-import type { RemoteOwner } from '../../shared/remote/constants';
-import { remoteFileLocalLimit,RemoteFileReason } from '../../shared/remote/files';
+import { type RemoteOwner, RemoteRunStatus } from '../../shared/remote/constants';
+import { remoteFileLocalLimit, RemoteFileReason } from '../../shared/remote/files';
 import { RemoteInputIntent } from '../../shared/remote/input';
 import { captureRemoteFileSnapshot, type RemoteFileSnapshot, writeRemoteTemporaryInput } from './remoteFileSnapshots';
+import type { RemoteRun, RemoteStore } from './remoteStore';
 
 export interface DesktopInputSource {
   path: string; fileName: string; mimeType: string; intent: 'file' | 'image'; sizeBytes: string;
@@ -15,6 +16,43 @@ export interface DesktopInputSource {
   captureReason?: string;
 }
 export interface DesktopInputRun { owner: RemoteOwner; text: string; attachments: DesktopInputSource[] }
+const desktopInputCaptureBudgetMs = 250;
+
+export function desktopInputCaptureEnabled(read: () => boolean): boolean {
+  try { return read(); } catch { return false; }
+}
+
+/** Settle only this caller's reserved local run when its capture-time context was revoked. */
+export function assertDesktopInputDispatchCurrent(store: Pick<RemoteStore, 'run' | 'updateRun'>, sessionId: string,
+  expected: RemoteRun | null, locallyCreated: boolean, assertCurrent: () => void): void {
+  try { assertCurrent(); } catch (error) {
+    if (locallyCreated && expected?.status === RemoteRunStatus.Starting) {
+      try {
+        const run = store.run(sessionId);
+        if (run?.runId === expected.runId && run.status === expected.status && run.statusVersion === expected.statusVersion) {
+          store.updateRun(sessionId, RemoteRunStatus.Cancelled);
+        }
+      } catch { console.warn('[RemoteFiles] Undispatched input run settlement deferred'); }
+    }
+    throw error;
+  }
+}
+
+/** Only local capture may delay dispatch, for a fixed total budget. Network sync never waits here. */
+export async function waitForDesktopInputCapture(record: (deadline: number) => Promise<void>, enabled = true): Promise<void> {
+  if (!enabled) {
+    void Promise.resolve().then(() => record(0)).catch((): void => undefined);
+    return;
+  }
+  const deadline = performance.now() + desktopInputCaptureBudgetMs;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(() => record(deadline)).catch((): void => undefined),
+      new Promise<void>(resolve => { timer = setTimeout(resolve, desktopInputCaptureBudgetMs); }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
+}
 const mimeTypes: Record<string, string> = { '.pdf': 'application/pdf', '.txt': 'text/plain', '.md': 'text/markdown', '.json': 'application/json',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.heic': 'image/heic',
   '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
@@ -23,11 +61,12 @@ const mimeTypes: Record<string, string> = { '.pdf': 'application/pdf', '.txt': '
 
 /** Captures selected files only. Network upload runs independently after message synchronization. */
 export async function captureDesktopInput(input: CoworkLocalInput | undefined, images: CoworkImageAttachmentPayload[] | undefined,
-  deps: { owner: RemoteOwner; fallbackText: string; cacheRoot: string; captureSnapshot?: boolean; current(): boolean; access(filePath: string): { assertAllowed(): void } }): Promise<DesktopInputRun | null> {
+  deps: { owner: RemoteOwner; fallbackText: string; cacheRoot: string; captureSnapshot?: boolean; selectedFileCaptureDeadline?: number; current(): boolean; access(filePath: string): { assertAllowed(): void } }): Promise<DesktopInputRun | null> {
   if (!input && !images?.length) return null;
   const attachments: DesktopInputSource[] = [];
   let capturedBytes = 0, capturedImages = 0, capturedCount = 0;
   const temporary = new Set<string>();
+  const imageSources = new Map<string, CoworkImageAttachmentPayload>();
   const selected = Array.isArray(input?.attachments) ? input.attachments.slice(0, 20) : [];
   const candidates = [...selected];
   for (const image of images || []) {
@@ -39,6 +78,7 @@ export async function captureDesktopInput(input: CoworkLocalInput | undefined, i
         filePath = await writeRemoteTemporaryInput(deps.cacheRoot, deps.owner, image.base64Data,
           () => { if (!deps.current()) throw new Error('ACCESS_DENIED'); });
         temporary.add(filePath);
+        imageSources.set(filePath, image);
         const index = candidates.findIndex(item => item.path === image.localPath);
         if (index >= 0) candidates.splice(index, 1);
       } catch { /* Preserve local-only metadata when immutable capture is unavailable. */ }
@@ -56,19 +96,36 @@ export async function captureDesktopInput(input: CoworkLocalInput | undefined, i
     if (typeof candidate.path !== 'string' || !path.isAbsolute(candidate.path) || typeof candidate.name !== 'string') continue;
     try {
       const lease = deps.access(candidate.path);
-      const file = await fs.stat(candidate.path); lease.assertAllowed();
+      const file = await fs.lstat(candidate.path); lease.assertAllowed();
       if (!deps.current()) return null;
       if (!file.isFile() || file.size > 100 * 1024 * 1024) continue;
-      const image = images?.find(value => value.localPath === candidate.path || value.name === candidate.name);
+      const image = imageSources.get(candidate.path) || images?.find(value => value.localPath === candidate.path);
       const localLimit = remoteFileLocalLimit(candidate.name, false);
-      const mayCapture = deps.captureSnapshot && temporary.has(candidate.path) && localLimit !== null && file.size <= localLimit && capturedCount < 10
+      const immutableInput = temporary.has(candidate.path);
+      // Ordinary inputs retain their original engine paths. The remote copy is the
+      // send-time version, never a claim about what a tool may read or edit later.
+      const withinDispatch = (): boolean => Number.isFinite(deps.selectedFileCaptureDeadline)
+        && performance.now() < deps.selectedFileCaptureDeadline!;
+      const mayCapture = deps.captureSnapshot && (immutableInput || withinDispatch()) && localLimit !== null && file.size <= localLimit && capturedCount < 10
         && capturedBytes + file.size <= 100 * 1024 * 1024 && (candidate.intent !== RemoteInputIntent.Image || capturedImages + file.size <= 20 * 1024 * 1024);
       let snapshot: RemoteFileSnapshot | undefined;
       let captureReason: string | undefined;
       if (mayCapture) {
         try {
-          snapshot = await captureRemoteFileSnapshot(candidate.path, deps.cacheRoot, deps.owner, localLimit!,
-            () => { if (!deps.current()) throw new Error('ACCESS_DENIED'); lease.assertAllowed(); });
+          const assertCapture = (): void => {
+            if (!deps.current()) throw new Error(RemoteFileReason.Access);
+            lease.assertAllowed();
+            if (!immutableInput && !withinDispatch()) throw new Error(RemoteFileReason.Transfer);
+          };
+          const captured = await captureRemoteFileSnapshot(candidate.path, deps.cacheRoot, deps.owner, localLimit!, assertCapture);
+          try {
+            assertCapture();
+            if (captured.identity !== `${file.dev}:${file.ino}:${file.size}:${file.mtimeMs}:${file.ctimeMs}`) throw new Error(RemoteFileReason.Source);
+            snapshot = captured;
+          } catch (error) {
+            await fs.rm(captured.path, { force: true }).catch((): void => undefined);
+            throw error;
+          }
         } catch (error) {
           // A remote cache failure must not erase the attachment from the message projection.
           const reason = error instanceof Error ? error.message : '';
@@ -76,7 +133,9 @@ export async function captureDesktopInput(input: CoworkLocalInput | undefined, i
         }
       } else if (deps.captureSnapshot) {
         captureReason = localLimit === null ? RemoteFileReason.Type
-          : file.size > localLimit || temporary.has(candidate.path) ? RemoteFileReason.Size : RemoteFileReason.Source;
+          : file.size > localLimit || capturedCount >= 10 || capturedBytes + file.size > 100 * 1024 * 1024
+            || (candidate.intent === RemoteInputIntent.Image && capturedImages + file.size > 20 * 1024 * 1024) ? RemoteFileReason.Size
+            : deps.selectedFileCaptureDeadline !== undefined ? RemoteFileReason.Transfer : RemoteFileReason.Source;
       }
       if (!deps.current()) {
         if (snapshot) await fs.rm(snapshot.path, { force: true }).catch((): void => undefined);

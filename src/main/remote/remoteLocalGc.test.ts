@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { payloadHash } from './canonical';
 import { remoteFileCacheDirectory } from './remoteFileSnapshots';
@@ -35,7 +35,7 @@ function fixture() {
     body: () => db.prepare("SELECT COUNT(*) AS n FROM remote_projection WHERE object_key<>'deleted'").get() as { n: number } };
 }
 async function finish(gc: RemoteLocalGc) { for (let i = 0; i < 12; i++) await gc.sweep(day + 2000); }
-afterEach(() => { for (const db of databases.splice(0)) db.close(); for (const dir of directories.splice(0)) fs.rmSync(dir, { force: true, recursive: true }); });
+afterEach(() => { vi.restoreAllMocks(); for (const db of databases.splice(0)) db.close(); for (const dir of directories.splice(0)) fs.rmSync(dir, { force: true, recursive: true }); });
 
 describe('deleted remote session local GC', () => {
   it('requires a transaction and retains caches without deletion ACK or during grace', async () => {
@@ -84,6 +84,68 @@ describe('deleted remote session local GC', () => {
     f.store.put('desktopAsset:asset', { owner, localSessionId: 's', availability: 'ready', snapshot: { path: snapshot }, path: workspace, uploadRequestId: 'id', assetId: 'asset' });
     await finish(f.gc); expect(fs.existsSync(snapshot)).toBe(false); expect(fs.readFileSync(workspace, 'utf8')).toBe('original');
     expect(f.store.get('desktopAsset:asset')).toBeNull(); expect(f.store.entries('localGcReceipt:')).toHaveLength(1);
+  });
+  it.each(['session-field', 'legacy-history', 'legacy-prefix'])('reclaims %s desktop input snapshots using exact session evidence', async format => {
+    const f = fixture(); f.ack();
+    const folder = remoteFileCacheDirectory(f.root, owner); fs.mkdirSync(folder, { recursive: true });
+    const snapshot = path.join(folder, 'input-snapshot'); fs.writeFileSync(snapshot, 'send-time bytes');
+    const original = path.join(f.root, 'original.md'); fs.writeFileSync(original, 'user file');
+    const key = format === 'legacy-prefix' ? 'desktopInputRun:s:run-id' : 'desktopInputRun:run-id';
+    if (format === 'legacy-history') f.store.put('runHistory:s:run-id', { runId: 'run-id', status: 'succeeded' });
+    f.store.put(key, { owner, ...(format === 'session-field' ? { localSessionId: 's' } : {}),
+      attachments: [{ path: original, snapshot: { path: snapshot } }, { path: original, snapshot: { path: original } }] });
+    await finish(f.gc);
+    expect(f.store.get(key)).toBeNull(); expect(fs.existsSync(snapshot)).toBe(false);
+    expect(fs.readFileSync(original, 'utf8')).toBe('user file');
+    expect(f.store.get(`localGcReceipt:${payloadHash(key)}`)).toMatchObject({ localSessionId: 's', owner });
+    if (format === 'legacy-history') expect(f.store.get('runHistory:s:run-id')).toMatchObject({ runId: 'run-id' });
+  });
+  it.each(['other-account', 'other-space', 'other-session', 'unknown-history', 'unsettled-history', 'conflicting-session'])('retains desktop input snapshots for %s', async reason => {
+    const f = fixture(); f.ack();
+    const folder = remoteFileCacheDirectory(f.root, owner); fs.mkdirSync(folder, { recursive: true });
+    const snapshot = path.join(folder, 'input-snapshot'); fs.writeFileSync(snapshot, 'keep');
+    const key = reason === 'conflicting-session' ? 'desktopInputRun:s:run-id' : 'desktopInputRun:run-id';
+    const savedOwner = reason === 'other-account' ? other : reason === 'other-space' ? { ...owner, scopeKey: 'team:other' } : owner;
+    const localSessionId = ['other-session', 'conflicting-session'].includes(reason) ? 'other-session' : 's';
+    const legacy = ['unknown-history', 'unsettled-history'].includes(reason);
+    f.store.put(key, { owner: savedOwner, ...(!legacy ? { localSessionId } : {}), attachments: [{ snapshot: { path: snapshot } }] });
+    f.store.put('runHistory:other-session:run-id', { runId: 'run-id', status: 'succeeded' });
+    if (reason === 'unsettled-history') f.store.put('runHistory:s:run-id', { runId: 'run-id', status: 'running' });
+    await finish(f.gc);
+    expect(f.store.get(key)).not.toBeNull(); expect(fs.readFileSync(snapshot, 'utf8')).toBe('keep');
+    expect(f.store.get(`localGcReceipt:${payloadHash(key)}`)).toBeNull();
+  });
+  it('keeps input snapshots until deletion is acknowledged and pending uploads settle', async () => {
+    const f = fixture();
+    const folder = remoteFileCacheDirectory(f.root, owner); fs.mkdirSync(folder, { recursive: true });
+    const snapshot = path.join(folder, 'input-snapshot'); fs.writeFileSync(snapshot, 'send-time bytes');
+    const inputKey = 'desktopInputRun:run-id', uploadKey = 'desktopAsset:pending';
+    f.store.put(inputKey, { owner, localSessionId: 's', attachments: [{ snapshot: { path: snapshot } }] });
+    await finish(f.gc); expect(f.store.get(inputKey)).not.toBeNull(); expect(fs.existsSync(snapshot)).toBe(true);
+    f.ack();
+    f.store.put(uploadKey, { owner, localSessionId: 's', availability: 'uploading', snapshot: { path: snapshot } });
+    await finish(f.gc); expect(f.store.get(uploadKey)).not.toBeNull(); expect(fs.existsSync(snapshot)).toBe(true);
+    f.store.put(uploadKey, { owner, localSessionId: 's', availability: 'ready', snapshot: { path: snapshot } });
+    await finish(f.gc); expect(f.store.get(uploadKey)).toBeNull(); expect(fs.existsSync(snapshot)).toBe(false);
+  });
+  it('does not unlink a snapshot acquired by a pending upload during filesystem validation', async () => {
+    const f = fixture(); f.ack();
+    const folder = remoteFileCacheDirectory(f.root, owner); fs.mkdirSync(folder, { recursive: true });
+    const snapshot = path.join(folder, 'input-snapshot'); fs.writeFileSync(snapshot, 'send-time bytes');
+    f.store.put('desktopInputRun:run-id', { owner, localSessionId: 's', attachments: [{ snapshot: { path: snapshot } }] });
+    const lstat = fs.promises.lstat;
+    let injected = false;
+    vi.spyOn(fs.promises, 'lstat').mockImplementation(async (...args) => {
+      const stat = await lstat(...args);
+      if (String(args[0]) === snapshot && !injected) {
+        injected = true;
+        f.store.put('desktopAsset:late', { owner, localSessionId: 's', availability: 'uploading', snapshot: { path: snapshot } });
+      }
+      return stat;
+    });
+    await finish(f.gc);
+    expect(injected).toBe(true); expect(fs.readFileSync(snapshot, 'utf8')).toBe('send-time bytes');
+    expect(f.store.get('desktopAsset:late')).toMatchObject({ availability: 'uploading' });
   });
   it('reclaims bound preparation files only after terminal command and deletion ACK, preserving hashes', async () => {
     const f = fixture(); f.ack();

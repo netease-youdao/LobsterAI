@@ -140,42 +140,51 @@ export class RemoteStore {
     }
     this.replyProjectionSupported = this.get<boolean>('replyProjectionMode') === true;
     this.questionProjectionSupported = this.get<boolean>('questionProjectionMode:default') === true;
+    // Replace persisted dirty triggers; explicit UPSERT is not overridden by an outer UPSERT
+    // conflict policy, which can turn INSERT OR IGNORE inside a trigger into an abort.
     for (const table of ['cowork_sessions', 'cowork_messages']) {
       const sid = table === 'cowork_sessions' ? 'id' : 'session_id';
       for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
         const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
-        db.exec(`CREATE TRIGGER IF NOT EXISTS remote_revision_${table}_${operation.toLowerCase()}
+        db.transaction(() => db.exec(`CREATE TRIGGER IF NOT EXISTS remote_revision_${table}_${operation.toLowerCase()}
           AFTER ${operation} ON ${table} BEGIN
           INSERT INTO remote_session_revisions(session_id,revision,dirty_at) VALUES (${ref}.${sid},1,CAST(strftime('%s','now') AS INTEGER)*1000)
           ON CONFLICT(session_id) DO UPDATE SET dirty_at=CASE WHEN revision=clean_revision THEN excluded.dirty_at ELSE dirty_at END,revision=revision+1; END;
-          CREATE TRIGGER IF NOT EXISTS remote_content_${table}_${operation.toLowerCase()}
-          AFTER ${operation} ON ${table} BEGIN INSERT OR IGNORE INTO remote_content_dirty VALUES (${ref}.${sid}); END;
-          CREATE TRIGGER IF NOT EXISTS remote_${table}_${operation.toLowerCase()}
+          DROP TRIGGER IF EXISTS remote_content_${table}_${operation.toLowerCase()};
+          CREATE TRIGGER remote_content_${table}_${operation.toLowerCase()}
+          AFTER ${operation} ON ${table} BEGIN INSERT INTO remote_content_dirty VALUES (${ref}.${sid}) ON CONFLICT(session_id) DO NOTHING; END;
+          DROP TRIGGER IF EXISTS remote_${table}_${operation.toLowerCase()};
+          CREATE TRIGGER remote_${table}_${operation.toLowerCase()}
           AFTER ${operation} ON ${table} BEGIN
-          INSERT OR IGNORE INTO remote_dirty VALUES (${ref}.${sid});
+          INSERT INTO remote_dirty VALUES (${ref}.${sid}) ON CONFLICT(session_id) DO NOTHING;
           UPDATE cowork_session_ownership SET ownership_status='quarantined'
           WHERE session_id=${ref}.${sid} AND (SELECT trusted FROM remote_write_context WHERE id=1)=0;
-          END;`);
+          END;`))();
       }
     }
     this.artifactTracking = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='library_local_artifacts'").get();
     if (this.artifactTracking) {
       for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
         const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
-        db.exec(`CREATE TRIGGER IF NOT EXISTS remote_content_library_relation_${operation.toLowerCase()}
-          AFTER ${operation} ON library_artifact_sessions BEGIN INSERT OR IGNORE INTO remote_content_dirty VALUES (${ref}.session_id); END;
-          CREATE TRIGGER IF NOT EXISTS remote_content_library_artifact_${operation.toLowerCase()}
+        db.transaction(() => db.exec(`DROP TRIGGER IF EXISTS remote_content_library_relation_${operation.toLowerCase()};
+          CREATE TRIGGER remote_content_library_relation_${operation.toLowerCase()}
+          AFTER ${operation} ON library_artifact_sessions BEGIN INSERT INTO remote_content_dirty VALUES (${ref}.session_id) ON CONFLICT(session_id) DO NOTHING; END;
+          DROP TRIGGER IF EXISTS remote_content_library_artifact_${operation.toLowerCase()};
+          CREATE TRIGGER remote_content_library_artifact_${operation.toLowerCase()}
           AFTER ${operation} ON library_local_artifacts BEGIN
-          INSERT OR IGNORE INTO remote_content_dirty SELECT session_id FROM library_artifact_sessions WHERE artifact_id=${ref}.id; END;
-          CREATE TRIGGER IF NOT EXISTS remote_library_relation_${operation.toLowerCase()}
+          INSERT INTO remote_content_dirty SELECT session_id FROM library_artifact_sessions WHERE artifact_id=${ref}.id
+          ON CONFLICT(session_id) DO NOTHING; END;
+          DROP TRIGGER IF EXISTS remote_library_relation_${operation.toLowerCase()};
+          CREATE TRIGGER remote_library_relation_${operation.toLowerCase()}
           AFTER ${operation} ON library_artifact_sessions BEGIN
-          INSERT OR IGNORE INTO remote_dirty SELECT ${ref}.session_id WHERE EXISTS
-            (SELECT 1 FROM cowork_session_ownership WHERE session_id=${ref}.session_id AND ownership_status='confirmed'); END;
-          CREATE TRIGGER IF NOT EXISTS remote_library_artifact_${operation.toLowerCase()}
+          INSERT INTO remote_dirty SELECT ${ref}.session_id WHERE EXISTS
+            (SELECT 1 FROM cowork_session_ownership WHERE session_id=${ref}.session_id AND ownership_status='confirmed') ON CONFLICT(session_id) DO NOTHING; END;
+          DROP TRIGGER IF EXISTS remote_library_artifact_${operation.toLowerCase()};
+          CREATE TRIGGER remote_library_artifact_${operation.toLowerCase()}
           AFTER ${operation} ON library_local_artifacts BEGIN
-          INSERT OR IGNORE INTO remote_dirty SELECT r.session_id FROM library_artifact_sessions r
+          INSERT INTO remote_dirty SELECT r.session_id FROM library_artifact_sessions r
             JOIN cowork_session_ownership o ON o.session_id=r.session_id
-            WHERE r.artifact_id=${ref}.id AND o.ownership_status='confirmed'; END;`);
+            WHERE r.artifact_id=${ref}.id AND o.ownership_status='confirmed' ON CONFLICT(session_id) DO NOTHING; END;`))();
       }
     }
     db.prepare('UPDATE remote_write_context SET trusted=0 WHERE id=1').run();

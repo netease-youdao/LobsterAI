@@ -8,6 +8,7 @@ import { type RemoteArtifactManifest, type RemoteFilePolicy, RemoteFileReason, r
 import type { RemoteInputAsset } from '../../shared/remote/input';
 import { sameOwner, stableJson } from './canonical';
 import { projectRemoteArtifacts, remoteArtifactReasons } from './remoteArtifactProjection';
+import { type DeliveredFileDependencies,RemoteDeliveredFileSync } from './remoteDeliveredFileSync';
 import { type DesktopMessageAssetJob, uploadDesktopMessageAsset } from './remoteDesktopAssetUpload';
 import { captureRemoteFileSnapshot, remoteFileCacheDirectory, type RemoteFileSnapshot, verifyRemoteFileSnapshot } from './remoteFileSnapshots';
 import type { RemoteStore } from './remoteStore';
@@ -37,6 +38,7 @@ interface TerminalBoundary { owner: RemoteOwner; environment: string; deviceId: 
 export interface RemoteFileSyncDependencies {
   store: RemoteStore; cacheRoot: string; owner(): RemoteOwner | null; environment(): string; enabled(): boolean;
   access(filePath: string): { assertAllowed(): void };
+  recordArtifact?: DeliveredFileDependencies['recordArtifact'];
   /** Only an already sealed producer version may be pinned to a completed run. Must not perform file I/O here. */
   terminalSnapshot?(source: Source): { snapshot: RemoteFileSnapshot; runId: string; artifactId: string; producerRevision: string } | null;
   request(connection: Connection, pathname: string, init: RequestInit): Promise<Response>;
@@ -66,7 +68,9 @@ export class RemoteFileSync {
   health(): { degraded: boolean; pending: number | null } { return { ...this.fileHealth }; }
   private observationCursor = 0;
   private coldObservationAt = new Map<string, number>();
+  private readonly delivered: RemoteDeliveredFileSync;
   constructor(private readonly deps: RemoteFileSyncDependencies) {
+    this.delivered = new RemoteDeliveredFileSync(deps);
     deps.store.setArtifactProjectionResolver((sessionId, messageId) => this.projection(sessionId, messageId));
     deps.store.setFileTerminalBoundary((sessionId, runId) => this.captureTerminal(sessionId, runId));
   }
@@ -74,7 +78,12 @@ export class RemoteFileSync {
   // Capture sealed send-time bytes before the asynchronous file policy arrives. Upload still waits for policy admission.
   canCaptureInput(): boolean { return this.enabled && this.deps.enabled() && this.deps.owner() !== null; }
   private canUploadInput(): boolean { return this.canCaptureInput() && this.policy?.features.desktopInputSync === true; }
-  pause(): void { this.fileHealth = { degraded: false, pending: null }; this.connection = null; this.policy = null; this.policyAt = 0; this.policyRetryAt = 0; }
+  async prepareRun(sessionId: string, roots: string[], validEpoch: () => boolean): Promise<void> {
+    const connection = this.connection;
+    if (!connection || !this.current(connection, sessionId)) return;
+    await this.delivered.prepare(sessionId, roots, connection.owner, () => validEpoch() && this.current(connection, sessionId));
+  }
+  pause(): void { this.delivered.clear(); this.fileHealth = { degraded: false, pending: null }; this.connection = null; this.policy = null; this.policyAt = 0; this.policyRetryAt = 0; }
   private prefix(connection: Connection): string {
     return `fileOutput:${createHash('sha256').update(JSON.stringify([connection.environment, connection.owner, connection.deviceId])).digest('hex')}:`;
   }
@@ -128,6 +137,19 @@ export class RemoteFileSync {
     if (Date.now() - this.cleanupAt > 3_600_000) { await this.cleanupSnapshots(connection); this.cleanupAt = Date.now(); }
     if (this.canUploadInput()) await this.inputs(connection);
     if (!this.policy?.features.artifactPublish || !this.current(connection)) return;
+    await this.delivered.collect(connection.owner, this.policy, sessionId => this.current(connection, sessionId),
+      (sessionId, messageId, runId, filePath, snapshot) => {
+        const sync = this.deps.store.sync(sessionId);
+        if (!sync || sync.device_id !== connection.deviceId) return false;
+        const source = this.sources(sessionId, runId).find(item => item.message_id === messageId && item.file_path === filePath);
+        if (!source) return false;
+        const { key, job } = this.getJob(connection, source);
+        // The immutable bytes were sealed after completion: publish current/latest, never fabricate a terminal version.
+        this.enqueueSnapshot(source, job, snapshot, false);
+        job.reason = undefined; job.terminalRuns.push(runId);
+        this.save(key, job);
+        return true;
+      });
     await this.observe(connection);
     for (const { key, value: job } of this.deps.store.entries<ArtifactJob>(this.prefix(connection))) {
       if (this.deps.store.get(`${RemoteDeletion.Closed}${job.localSessionId}`)) continue;
@@ -422,7 +444,11 @@ export class RemoteFileSync {
     if (pending.artifactVersion && manifest.latest?.artifactVersion === pending.artifactVersion && manifest.latest.sha256 === sha256) {
       await this.finish(connection, key, job, pending); return;
     }
-    if (!pending.assetId && manifest.latest?.sha256 === sha256) { await this.finish(connection, key, job, pending); return; }
+    if (!pending.assetId && manifest.latest?.sha256 === sha256) {
+      // Reuse verified bytes while still giving the new message a current/latest reference.
+      pending.artifactVersion = manifest.latest.artifactVersion;
+      await this.finish(connection, key, job, pending); return;
+    }
     // A newer message must not leave an older message pointing at a stale "latest" version.
     for (const [messageId, reference] of Object.entries(job.references)) {
       if (messageId === pending.messageId || reference.pinned) continue;

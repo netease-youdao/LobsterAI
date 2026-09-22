@@ -590,7 +590,7 @@ import { fenceCronJobs,filterOwnedInstances } from './remote/automationOwnership
 import { sameOwner } from './remote/canonical';
 import { configureRemoteSettings } from './remote/configureRemoteSettings';
 import { prepareDefaultWorkspace } from './remote/defaultWorkspace';
-import { captureDesktopInput } from './remote/desktopInputMetadata';
+import { assertDesktopInputDispatchCurrent, captureDesktopInput, desktopInputCaptureEnabled, waitForDesktopInputCapture } from './remote/desktopInputMetadata';
 import { InputPreparationService } from './remote/inputPreparationService';
 import { createRemoteDatabaseFence,loadRemoteIdentity } from './remote/installationIdentity';
 import { RemoteBridge } from './remote/remoteBridge';
@@ -2175,6 +2175,7 @@ let remoteSettingsController: RemoteSettingsController | null = null;
 let appUpdateCoordinator: AppUpdateCoordinator | null = null;
 let mainLogReporter: MainLogReporter | null = null;
 let libraryIndexService: LibraryIndexService | null = null;
+let prepareRemoteFileRun: ((sessionId: string, cwd: string) => Promise<void>) | null = null;
 let unsubscribeLibrarySessionChanges: (() => void) | null = null;
 
 function setPreventSleepBlockerEnabled(enabled: boolean): void {
@@ -3713,6 +3714,7 @@ const getCoworkEngineRouter = () => {
         getOpenClawEngineManager(),
         {
           beforeExecutionDispatch: markRemoteExecutionDispatched,
+          prepareDeliverableSync: async (sessionId, cwd) => { await prepareRemoteFileRun?.(sessionId, cwd); },
           normalizeModelRef: normalizeOpenClawModelRef,
           onChannelPromptSubmit: event => {
             void getMainLogReporter().report({
@@ -5271,6 +5273,9 @@ if (!gotTheLock) {
   // ── Auth IPC handlers ──
 
   let remoteBridge: RemoteBridge | null = null;
+  prepareRemoteFileRun = async (sessionId, cwd) => {
+    await remoteBridge?.prepareFileRun(sessionId, [cwd, app.getPath('desktop')]);
+  };
   let remoteLocalGc: RemoteLocalGc | null = null;
   let remoteSessionCommands: SessionCommandService | null = null;
   let ownershipAssociations: OwnershipAssociationService | null = null;
@@ -5727,7 +5732,16 @@ if (!gotTheLock) {
       security,
       deletion: { service: getSessionDeletionService(), runtime: getCoworkEngineRouter(), reconcileStop: id => remoteSessionCommands!.reconcileSession(id) },
       input: { models, preparations },
-      files: { cacheRoot: path.join(app.getPath('userData'), 'remote-file-uploads'), access: filePath => captureLibraryFileAccess(filePath) },
+      files: {
+        cacheRoot: path.join(app.getPath('userData'), 'remote-file-uploads'), access: filePath => captureLibraryFileAccess(filePath),
+        recordArtifact: async (candidate, owner, assertCurrent, validateIndexed) => {
+          assertCurrent();
+          if (!libraryIndexService) return false;
+          const result = await libraryIndexService.recordCandidates([candidate], owner, assertCurrent, validateIndexed);
+          assertCurrent();
+          return result.recorded === 1;
+        },
+      },
       getAgentDefaultInput: (owner, deviceId, agentId) => {
         try {
           const agent = getCoworkStore().getVisibleAgent(agentId, owner);
@@ -9563,24 +9577,32 @@ if (!gotTheLock) {
 
 
   // Cowork IPC handlers
-  const recordDesktopInput = async (sessionId: string, options: { prompt: string; localInput?: CoworkLocalInput; imageAttachments?: CoworkImageAttachmentMain[] }): Promise<void> => {
+  const recordDesktopInput = async (sessionId: string, options: { prompt: string; localInput?: CoworkLocalInput; imageAttachments?: CoworkImageAttachmentMain[] }, selectedFileCaptureDeadline: number): Promise<void> => {
     if (currentRemoteExecution()?.commandId) return;
     const owner = getCurrentRemoteOwner();
     const runId = getCoworkStore().remote.run(sessionId)?.runId;
     const epoch = `${ownershipAccountEpoch}:${authAccountGeneration}`;
     if (!owner || !runId || !sameOwner(getCoworkStore().remote.owner(sessionId), owner)) return;
-    const current = (): boolean => epoch === `${ownershipAccountEpoch}:${authAccountGeneration}` && sameOwner(owner, getCurrentRemoteOwner())
-      && sameOwner(getCoworkStore().remote.owner(sessionId), owner) && getCoworkStore().remote.run(sessionId)?.runId === runId;
+    const current = (): boolean => {
+      try {
+        getCoworkStore().remote.assertNoDeletionEffect(sessionId);
+        return epoch === `${ownershipAccountEpoch}:${authAccountGeneration}` && sameOwner(owner, getCurrentRemoteOwner())
+          && !!getCoworkStore().getSession(sessionId, 0) && sameOwner(getCoworkStore().remote.owner(sessionId), owner)
+          && getCoworkStore().remote.run(sessionId)?.runId === runId;
+      } catch { return false; }
+    };
     const captured = await captureDesktopInput(options.localInput, options.imageAttachments, {
       owner, fallbackText: options.prompt, cacheRoot: path.join(app.getPath('userData'), 'remote-file-uploads'), current,
-      captureSnapshot: remoteBridge?.canCaptureRemoteFiles() === true,
+      captureSnapshot: desktopInputCaptureEnabled(() => remoteBridge?.canCaptureRemoteFiles() === true), selectedFileCaptureDeadline,
       access: filePath => captureLibraryFileAccess(filePath),
     });
     if (current()) {
       const inputModel = remoteSessionCommands?.recordCurrentInputModel(sessionId) || null;
-      if (captured) getCoworkStore().remote.put(`desktopInputRun:${runId}`, { ...captured, inputModel });
-      else if (inputModel) getCoworkStore().remote.put(`desktopInputRun:${runId}`, { owner, text: options.prompt, attachments: [], inputModel });
+      if (captured) getCoworkStore().remote.put(`desktopInputRun:${runId}`, { ...captured, localSessionId: sessionId, inputModel });
+      else if (inputModel) getCoworkStore().remote.put(`desktopInputRun:${runId}`, { owner, localSessionId: sessionId, text: options.prompt, attachments: [], inputModel });
       if (captured || inputModel) getCoworkStore().remote.markFilesDirty(sessionId);
+    } else if (captured) {
+      for (const source of captured.attachments) if (source.snapshot) await fs.promises.rm(source.snapshot.path, { force: true }).catch((): void => undefined);
     }
   };
 
@@ -9770,8 +9792,21 @@ if (!gotTheLock) {
           imageAttachmentPreviews,
         });
         if (!execution?.runId) coworkStoreInstance.remote.beginRun(session.id);
-        void recordDesktopInput(session.id, options).catch(error => console.warn('[RemoteFiles] Input synchronization deferred', error));
-        assertRemoteExecutionPermit();
+        const inputCaptureEpoch = `${ownershipAccountEpoch}:${authAccountGeneration}`;
+        const inputCaptureRun = coworkStoreInstance.remote.run(session.id);
+        await waitForDesktopInputCapture(deadline => recordDesktopInput(session.id, options, deadline)
+          .catch(error => console.warn('[RemoteFiles] Input synchronization deferred', error)), desktopInputCaptureEnabled(() => remoteBridge?.canCaptureRemoteFiles() === true));
+        assertDesktopInputDispatchCurrent(coworkStoreInstance.remote, session.id, inputCaptureRun, !execution?.runId && !execution?.commandId, () => {
+          if (inputCaptureEpoch !== `${ownershipAccountEpoch}:${authAccountGeneration}`
+            || !isMediaAccountScopeSnapshotCurrent(requestAccountScope, getCurrentMediaAccountScope())
+            || !coworkStoreInstance.getSession(session.id, 0) || !canViewCoworkSession(session.id)
+            || coworkStoreInstance.remote.run(session.id)?.runId !== inputCaptureRun?.runId
+            || coworkStoreInstance.remote.run(session.id)?.status !== inputCaptureRun?.status) {
+            throw new Error(t('authAccountChanged'));
+          }
+          coworkStoreInstance.remote.assertNoDeletionEffect(session.id);
+          assertRemoteExecutionPermit();
+        });
         coworkStoreInstance.addMessage(session.id, {
           type: 'user',
           content: prompt,
@@ -9905,8 +9940,21 @@ if (!gotTheLock) {
         coworkStoreInstance.remote.assertActor(options.sessionId, execution?.owner ?? null);
         if (execution?.owner && !sameOwner(execution.owner, getCurrentRemoteOwner())) throw new Error('Account changed');
         if (!execution?.runId) coworkStoreInstance.remote.beginRun(options.sessionId);
-        void recordDesktopInput(options.sessionId, options).catch(error => console.warn('[RemoteFiles] Input synchronization deferred', error));
-        assertRemoteExecutionPermit();
+        const inputCaptureEpoch = `${ownershipAccountEpoch}:${authAccountGeneration}`;
+        const inputCaptureRun = coworkStoreInstance.remote.run(options.sessionId);
+        await waitForDesktopInputCapture(deadline => recordDesktopInput(options.sessionId, options, deadline)
+          .catch(error => console.warn('[RemoteFiles] Input synchronization deferred', error)), desktopInputCaptureEnabled(() => remoteBridge?.canCaptureRemoteFiles() === true));
+        assertDesktopInputDispatchCurrent(coworkStoreInstance.remote, options.sessionId, inputCaptureRun, !execution?.runId && !execution?.commandId, () => {
+          if (inputCaptureEpoch !== `${ownershipAccountEpoch}:${authAccountGeneration}`
+            || !isMediaAccountScopeSnapshotCurrent(requestAccountScope, getCurrentMediaAccountScope())
+            || !coworkStoreInstance.getSession(options.sessionId, 0) || !canViewCoworkSession(options.sessionId)
+            || coworkStoreInstance.remote.run(options.sessionId)?.runId !== inputCaptureRun?.runId
+            || coworkStoreInstance.remote.run(options.sessionId)?.status !== inputCaptureRun?.status) {
+            throw new Error(t('authAccountChanged'));
+          }
+          coworkStoreInstance.remote.assertNoDeletionEffect(options.sessionId);
+          assertRemoteExecutionPermit();
+        });
         const config = coworkStoreInstance.getConfig();
         const hasLegacyPersistedPlanMode = containsPlanModePrompt(existingSession?.systemPrompt);
         const continuationSystemPrompt = mergeCoworkSystemPrompt(

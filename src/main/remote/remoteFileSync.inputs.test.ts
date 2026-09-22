@@ -13,7 +13,12 @@ import { RemoteStore } from './remoteStore';
 const owner = { userId: 'attachment-user', scopeKey: 'personal' };
 const policy: RemoteFilePolicy = {
   policyVersion: '1', features: { inputUpload: true, desktopInputSync: true, artifactPublish: false, artifactDownload: true },
-  types: [{ category: 'image', extensions: ['png'], maxFileBytes: '10485760', inputAllowed: true, artifactAutoSync: true }],
+  types: [
+    { category: 'image', extensions: ['png'], maxFileBytes: '10485760', inputAllowed: true, artifactAutoSync: true },
+    { category: 'text', extensions: ['md', 'json', 'py'], maxFileBytes: '5242880', inputAllowed: true, artifactAutoSync: true },
+    { category: 'document', extensions: ['pdf', 'docx'], maxFileBytes: '31457280', inputAllowed: true, artifactAutoSync: true },
+    { category: 'video', extensions: ['mp4'], maxFileBytes: '52428800', inputAllowed: true, artifactAutoSync: false },
+  ],
   limits: { partBytes: '4194304', maxInputCount: 10, maxInputBytes: '104857600', maxImageBytes: '20971520', maxTaskArtifactCount: 20, maxTaskArtifactBytes: '209715200' },
 };
 const disposables: Array<() => void> = [];
@@ -23,6 +28,7 @@ const ok = (data: unknown): Response => new Response(JSON.stringify({ code: 0, d
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-input-policy-'));
   disposables.push(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cacheRoot = path.join(root, 'cache');
   const db = new Database(':memory:'); disposables.push(() => db.close());
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT,model_override TEXT,thinking_level TEXT);
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
@@ -41,12 +47,15 @@ function fixture() {
     }
     throw new Error(`Unexpected ${pathname}`);
   });
-  const sync = new RemoteFileSync({ store, cacheRoot: root, owner: () => actor, enabled: () => enabled,
+  const sync = new RemoteFileSync({ store, cacheRoot, owner: () => actor, enabled: () => enabled,
     environment: () => connection.environment, access: () => ({ assertAllowed: () => undefined }), request });
   sync.configure(true);
-  const capture = async () => {
-    const input = await captureDesktopInput({ text: '', attachments: [] }, [{ name: 'photo.png', mimeType: 'image/png', base64Data: Buffer.from('send-time image').toString('base64') }], {
-      owner, fallbackText: '', cacheRoot: root, captureSnapshot: sync.canCaptureInput(), current: () => actor === owner,
+  const sourcePath = path.join(root, 'selected-file');
+  const capture = async (extension?: string) => {
+    if (extension) fs.writeFileSync(sourcePath, 'send-time selected file');
+    const input = await captureDesktopInput({ text: '', attachments: extension ? [{ path: sourcePath, name: `selected.${extension}`, intent: 'file' }] : [] },
+      extension ? undefined : [{ name: 'photo.png', mimeType: 'image/png', base64Data: Buffer.from('send-time image').toString('base64') }], {
+      owner, fallbackText: '', cacheRoot, captureSnapshot: sync.canCaptureInput(), selectedFileCaptureDeadline: performance.now() + 5000, current: () => actor === owner,
       access: () => ({ assertAllowed: () => undefined }),
     });
     store.put('desktopInputRun:run', input);
@@ -56,11 +65,24 @@ function fixture() {
     return input!.attachments[0].snapshot!;
   };
   const tick = async (): Promise<void> => { sync.tick({ ...connection }); await sync.settled(); };
-  return { sync, store, request, connection, uploads, capture, tick, job: () => store.get<any>('desktopAsset:m:0'),
+  return { sync, store, request, connection, uploads, capture, tick, sourcePath, job: () => store.get<any>('desktopAsset:m:0'),
     advance: () => { now += 60_001; }, setOwner: (value: RemoteOwner | null) => { actor = value; }, setEnabled: (value: boolean) => { enabled = value; } };
 }
 
 describe('desktop input capture and upload admission', () => {
+  it.each(['md', 'json', 'py', 'pdf', 'docx', 'mp4'])('uploads only the sealed send-time .%s input after the task edits the source', async extension => {
+    const f = fixture();
+    const snapshot = await f.capture(extension);
+    expect(f.request).not.toHaveBeenCalled();
+    fs.writeFileSync(f.sourcePath, 'changed by the local task');
+    expect(fs.readFileSync(snapshot.path, 'utf8')).toBe('send-time selected file');
+    await f.tick();
+    expect(f.uploads).toHaveLength(1);
+    expect(f.uploads[0]).toMatchObject({ sha256: snapshot.sha256, sizeBytes: snapshot.sizeBytes, fileName: `selected.${extension}` });
+    expect(f.job()).toMatchObject({ availability: 'ready', uploadedAsset: { assetId: 'asset', intent: 'file' } });
+    expect(fs.readFileSync(f.sourcePath, 'utf8')).toBe('changed by the local task');
+  });
+
   it('captures sealed send-time bytes before the first policy response and uploads after policy arrives', async () => {
     const f = fixture();
     expect(f.sync.canCaptureInput()).toBe(true);
