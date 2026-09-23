@@ -932,7 +932,26 @@ export class RemoteBridge {
   private async reconcileRegistrationImport(row: SyncRow): Promise<void> {
     const pending = this.deps.store.get<SavedImport>(`import:${row.local_id}`);
     if (!pending || pending.beginAttempted === false) return;
-    const receipt = await this.api(`/sync/imports/${pending.importId}`);
+    let receipt: any;
+    try { receipt = await this.api(`/sync/imports/${pending.importId}`); }
+    catch (error) {
+      if (!(error instanceof RemoteApiError) || error.httpStatus !== 404 || error.code !== 47002) throw error;
+      // A begin rejected by a tombstone leaves a local attempt but no server import receipt.
+      // Only the authenticated, matching stream can prove this task must stop uploading.
+      if (pending.sessionId !== row.session_id || pending.owner && !sameOwner(pending.owner, this.owner)
+        || pending.deviceId && pending.deviceId !== this.registration!.deviceId) throw new RemoteSyncStateError('Saved import identity does not match its session');
+      const state = await this.readSyncState(row, true);
+      if (state?.deleted !== true || state.activeImport) throw new RemoteSyncStateError('Pending import has no verifiable terminal state');
+      // Keep the attempt, original ACK and local task. The normal state check isolates this tombstone.
+      const requestKey = this.requestErrorKeys.get(error);
+      if (requestKey && this.errorRequestKey === requestKey) {
+        this.error = undefined; this.errorCode = undefined; this.errorRequestKey = undefined;
+      }
+      console.debug('[RemoteSync] Missing import belongs to a deleted remote session', {
+        localSessionId: row.local_id, sessionId: row.session_id, importId: pending.importId,
+      });
+      return;
+    }
     this.assertImportIdentity(pending, receipt);
     if (receipt.state === 'committed') {
       if (receipt.targetStreamEpoch) pending.targetStreamEpoch ||= receipt.targetStreamEpoch;
@@ -1332,16 +1351,16 @@ export class RemoteBridge {
     if (aborted.state === 'committed') this.completeImport(row, pending, aborted);
     else if (['aborted', 'expired'].includes(aborted.state)) this.discardImport(row);
   }
-  private async readSyncState(row: SyncRow): Promise<RetentionState | null> {
+  private async readSyncState(row: SyncRow, allowDeleted = false): Promise<RetentionState | null> {
     try {
       const state: RetentionState = await this.api(`/sync/state?localSessionId=${encodeURIComponent(row.local_id)}`);
-      if (state.deleted) throw new RemoteSyncStateError('Remote session is deleted');
       if (state.deviceId !== this.registration!.deviceId || state.sessionId !== row.session_id || state.localSessionId !== row.local_id
         || retentionSequence(state.lastSourceSeq) > BigInt(this.deps.store.sync(row.local_id)!.source_seq)
         || retentionSequence(state.lastSourceSeq) < BigInt(row.ack_seq)
         || retentionSequence(state.lastSeq) < retentionSequence(row.server_seq)
         || (row.stream_epoch && row.stream_epoch !== state.streamEpoch)) throw new RemoteSyncStateError('Remote sync state conflicts with durable local history');
       if (row.sync_protocol_version === RemoteRetention.Version && state.syncProtocolVersion !== RemoteRetention.Version) throw new RemoteSyncStateError('Server cannot restore the active synchronization protocol');
+      if (state.deleted && !allowDeleted) throw new RemoteSyncStateError('Remote session is deleted');
       return state;
     } catch (error) {
       // Only a never-published session may be created after a verified missing mapping.

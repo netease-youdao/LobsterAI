@@ -185,6 +185,107 @@ describe('remote synchronization follows the effective service', () => {
     expect(f.store.get('import:local')).toBeNull();
     expect(f.store.sync('local')).toMatchObject({ ack_seq: 12, server_seq: '18', stream_epoch: 'new-epoch' });
   });
+  it.each([false, true])('isolates missing imports of verified deleted sessions and still synchronizes a new task (known target: %s)', async knownTarget => {
+    const f = fixture();
+    const state = f.seed();
+    if (knownTarget) await f.bridge.ensureRegistration();
+    state.deleted = true;
+    const pending = { importId: 'rejected-import', sessionId: state.sessionId, beginAttempted: true,
+      owner, deviceId: state.deviceId, manifest: { manifestHash: 'original-hash' }, parts: [] };
+    f.store.put('import:local', pending);
+    f.bridge.registration = null;
+    f.bridge.error = '47002: missing import'; f.bridge.errorCode = 47002;
+    f.bridge.errorRequestKey = '1:GET:/sync/imports/rejected-import';
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (actor, pathname, init) => {
+      if (pathname.endsWith('/sync/imports/rejected-import')) return new Response(JSON.stringify({ code: 47002, message: 'missing' }), { status: 404 });
+      if (pathname.endsWith('/sync/imports') && init.method === 'POST') {
+        const body = JSON.parse(String(init.body));
+        return response({ state: 'committed', importId: body.importId, sessionId: body.sessionId,
+          manifestHash: body.manifest.manifestHash, committedSourceSeq: body.baseSourceSeq, committedSeq: '30' });
+      }
+      return original(actor, pathname, init);
+    });
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.registration.deviceId).toBe('desktop');
+    expect(f.bridge.getSyncTargetId()).not.toBeNull();
+    expect(f.bridge.error).toBeUndefined();
+    expect(f.store.get('syncFailure:local')).toMatchObject({ blocked: true });
+    expect(f.store.get('import:local')).toMatchObject(pending);
+    expect(f.store.sync('local')).toMatchObject({ ack_seq: 9, server_seq: '10', session_id: 'remote-local' });
+    expect(f.db.prepare('SELECT id FROM cowork_sessions WHERE id=?').get('local')).toBeTruthy();
+    f.store.transaction(() => {
+      f.db.prepare('INSERT INTO cowork_sessions VALUES (?,?,1,1,?)').run('new-task', 'New task', 'idle');
+      f.store.assignNew('new-task', owner, 'local_create');
+    });
+    f.bridge.generation = 'connected';
+    f.request.mockClear();
+    await f.bridge.syncSessions();
+    const uploads = f.request.mock.calls.filter(([, path, init]) => path.endsWith('/sync/imports') && init.method === 'POST');
+    expect(uploads).toHaveLength(1);
+    expect(JSON.parse(String(uploads[0][2].body)).localSessionId).toBe('new-task');
+    const synced = f.store.sync('new-task')!;
+    expect(synced.ack_seq).toBe(synced.source_seq);
+    expect(synced.needs_snapshot).toBe(0);
+    expect(f.store.get('import:local')).toMatchObject(pending);
+    expect(f.deps.execute).not.toHaveBeenCalled();
+  });
+  it.each(['not-deleted', 'wrong-device', 'wrong-session', 'wrong-local', 'rollback', 'ahead', 'server-rollback', 'epoch', 'protocol', 'active-import', 'missing-state', 'wrong-attempt'])('does not infer a deleted stream from an import 404 (%s)', async mismatch => {
+    const f = fixture(); const state = f.seed();
+    f.db.prepare('UPDATE remote_sync SET sync_protocol_version=2,stream_epoch=? WHERE local_id=?').run('original-epoch', 'local');
+    Object.assign(state, { syncProtocolVersion: 2, streamEpoch: 'original-epoch', deleted: true });
+    f.store.put('import:local', { importId: 'rejected-import', sessionId: mismatch === 'wrong-attempt' ? 'foreign' : state.sessionId,
+      beginAttempted: true, owner, deviceId: state.deviceId });
+    if (mismatch === 'not-deleted') state.deleted = false;
+    if (mismatch === 'wrong-device') state.deviceId = 'foreign';
+    if (mismatch === 'wrong-session') state.sessionId = 'foreign';
+    if (mismatch === 'wrong-local') state.localSessionId = 'foreign';
+    if (mismatch === 'rollback') state.lastSourceSeq = '8';
+    if (mismatch === 'ahead') state.lastSourceSeq = '13';
+    if (mismatch === 'server-rollback') state.lastSeq = '9';
+    if (mismatch === 'epoch') state.streamEpoch = 'foreign';
+    if (mismatch === 'protocol') state.syncProtocolVersion = 1;
+    if (mismatch === 'active-import') state.activeImport = { importId: 'unknown' };
+    if (mismatch === 'missing-state') f.states.clear();
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (actor, pathname, init) => pathname.endsWith('/sync/imports/rejected-import')
+      ? new Response(JSON.stringify({ code: 47002, message: 'missing' }), { status: 404 }) : original(actor, pathname, init));
+    await expect(f.bridge.ensureRegistration()).rejects.toThrow();
+    expect(f.bridge.registration).toBeNull();
+    expect(f.bridge.getSyncTargetId()).toBeNull();
+    expect(f.store.sync('local')).toMatchObject({ ack_seq: 9, server_seq: '10', stream_epoch: 'original-epoch' });
+    expect(f.store.get('import:local')).not.toBeNull();
+    expect(f.request.mock.calls.some(([, path, init]) => path.endsWith('/sync/imports') && init.method === 'POST')).toBe(false);
+  });
+  it.each([[403, 47002], [500, 500], [404, 404]])('does not treat HTTP %s / code %s as a missing import receipt', async (status, code) => {
+    const f = fixture(); const state = f.seed(); state.deleted = true;
+    f.store.put('import:local', { importId: 'rejected-import', sessionId: state.sessionId, beginAttempted: true });
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (actor, pathname, init) => pathname.endsWith('/sync/imports/rejected-import')
+      ? new Response(JSON.stringify({ code, message: 'unavailable' }), { status }) : original(actor, pathname, init));
+    await expect(f.bridge.ensureRegistration()).rejects.toThrow('unavailable');
+    expect(f.request.mock.calls.some(([, path]) => path.includes('/sync/state?'))).toBe(false);
+    expect(f.store.get('import:local')).not.toBeNull();
+  });
+  it('rejects a tombstone response arriving after a route change without binding or acknowledging it', async () => {
+    const f = fixture(); const state = f.seed(); state.deleted = true;
+    f.store.put('import:local', { importId: 'rejected-import', sessionId: state.sessionId, beginAttempted: true });
+    const started = deferred<void>(), finish = deferred<Response>();
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (actor, pathname, init) => {
+      if (pathname.endsWith('/sync/imports/rejected-import')) return new Response(JSON.stringify({ code: 47002, message: 'missing' }), { status: 404 });
+      if (pathname.includes('/sync/state?')) { started.resolve(); return finish.promise; }
+      return original(actor, pathname, init);
+    });
+    const registration = f.bridge.ensureRegistration();
+    const rejected = expect(registration).rejects.toThrow('Account changed during remote request');
+    await started.promise;
+    f.switchRoute('https://other.example.com', targetB, 'desktop-b');
+    finish.resolve(response(state)); await rejected;
+    expect(f.bridge.registration).toBeNull(); expect(f.bridge.getSyncTargetId()).toBeNull();
+    expect(f.store.sync('local')?.ack_seq).toBe(9);
+    expect(f.store.get('import:local')).not.toBeNull();
+  });
   it('keeps the result of an old execution in its original inbox without ACKing the new server', async () => {
     const f = fixture(); f.seed(); await f.bridge.ensureRegistration();
     const origin = f.bridge.getSyncTargetId(); f.bridge.generation = 'connected-a';

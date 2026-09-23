@@ -95,9 +95,11 @@ export function remoteSyncDescription(state: RemoteSettingsState | null): string
     if (health.reason === RemoteSyncHealthReason.Files || health.reason === RemoteSyncHealthReason.StorageDependency) return 'remoteFilesPending';
     return 'remoteSyncPaused';
   }
-  if (health?.status === RemoteSyncHealthStatus.Syncing || (health?.pendingSessions ?? 0) > 0) return 'remoteContentSyncing';
+  // Queued content is not actively syncing while the connection is unavailable.
+  const pendingDescription = isRemoteOnline(state) ? 'remoteContentSyncing' : 'remoteSyncPaused';
+  if (health?.status === RemoteSyncHealthStatus.Syncing || (health?.pendingSessions ?? 0) > 0) return pendingDescription;
   if (state.sessionSyncStatus === RemoteSyncStatus.Error || state.agentCatalogSyncStatus === RemoteSyncStatus.Error) return 'remoteSyncPaused';
-  if (state.sessionSyncStatus === RemoteSyncStatus.Pending || state.agentCatalogSyncStatus === RemoteSyncStatus.Pending) return 'remoteContentSyncing';
+  if (state.sessionSyncStatus === RemoteSyncStatus.Pending || state.agentCatalogSyncStatus === RemoteSyncStatus.Pending) return pendingDescription;
   return null;
 }
 
@@ -105,8 +107,9 @@ export function remoteAttention(state: RemoteSettingsState | null): { key: strin
   if (!state?.owner || !state.enabled) return null;
   if (state.connectionReason === RemoteConnectionReason.QuotaBlocked || state.errorCode === 47022) return { key: 'remoteQuotaAttention', immediate: true };
   if (state.connectionReason === RemoteConnectionReason.Removed || state.errorCode === 47121) return { key: 'remoteRemovedAttention', immediate: true };
+  if (!isRemoteOnline(state)) return { key: 'remoteConnectionAttention', immediate: false };
   const sync = remoteSyncDescription(state);
   if (sync && sync !== 'remoteContentSyncing') return { key: sync, immediate: false };
-  if (remoteConnectionFailure(state) || !isRemoteOnline(state)) return { key: 'remoteConnectionAttention', immediate: false };
+  if (remoteConnectionFailure(state)) return { key: 'remoteConnectionAttention', immediate: false };
   return null;
 }

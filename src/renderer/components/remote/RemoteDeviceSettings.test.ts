@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { type RemoteConnectionsSnapshot, RemoteDeviceAdmissionState, RemoteDeviceConnectionState } from '../../../shared/remote/connections';
-import { RemoteConnectionReason, RemoteConnectionStatus, type RemoteSettingsState, RemoteSyncStatus } from '../../../shared/remote/constants';
+import { RemoteConnectionReason, RemoteConnectionStatus, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus } from '../../../shared/remote/constants';
 import { i18nService } from '../../services/i18n';
 import RemoteDeviceSettings from './RemoteDeviceSettings';
 
@@ -107,6 +107,23 @@ describe('current remote device settings', () => {
     expect(html).not.toContain('network stack details');
     click(button('remoteReconnect'));
     expect(harness.submit.mock.calls).toEqual([[{ retry: true }]]);
+  });
+
+  test('an unavailable server pauses queued content without displaying active synchronization', () => {
+    harness.snapshot.state = { ...connected, connected: false, connectionStatus: RemoteConnectionStatus.Offline,
+      connectionReason: RemoteConnectionReason.ServerUnavailable, sessionSyncStatus: RemoteSyncStatus.Pending,
+      syncHealth: { status: RemoteSyncHealthStatus.Syncing, reason: RemoteSyncHealthReason.Connection,
+        pendingSessions: 1, oldestPendingAt: null, lastSuccessfulSyncAt: null, observedAt: '2026-09-23T03:03:23Z' } };
+    const { html, button } = render();
+    expect(html).toContain(i18nService.t('remoteUnavailable'));
+    expect(html).toContain(i18nService.t('remoteSyncPaused'));
+    expect(html).not.toContain(i18nService.t('remoteContentSyncing'));
+    expect(button('remoteReconnect')).toBeDefined();
+    harness.snapshot.state = { ...harness.snapshot.state, connected: true, connectionStatus: RemoteConnectionStatus.Online,
+      connectionReason: undefined };
+    const recovered = render();
+    expect(recovered.html).toContain(i18nService.t('remoteContentSyncing'));
+    expect(recovered.html).not.toContain(i18nService.t('remoteSyncPaused'));
   });
 
   test.each([

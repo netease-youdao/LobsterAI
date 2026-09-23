@@ -178,6 +178,19 @@ describe('connection and content health remain independent', () => {
     expect(remoteSyncDescription({ ...connected, syncHealth: { ...health, status: RemoteSyncHealthStatus.Recovering } })).toBe('remoteSyncRecovering');
     expect(remoteSyncDescription({ ...connected, sessionSyncStatus: RemoteSyncStatus.Pending })).toBe('remoteContentSyncing');
   });
+  test.each([
+    { syncHealth: { ...health, status: RemoteSyncHealthStatus.Syncing, reason: RemoteSyncHealthReason.Connection } },
+    { sessionSyncStatus: RemoteSyncStatus.Pending },
+    { agentCatalogSyncStatus: RemoteSyncStatus.Pending },
+  ])('queued content waits for connectivity instead of claiming active synchronization: %j', pending => {
+    const offline = { ...connected, ...pending, connected: false, connectionStatus: RemoteConnectionStatus.Offline,
+      connectionReason: RemoteConnectionReason.ServerUnavailable };
+    expect(remoteSyncDescription(offline)).toBe('remoteSyncPaused');
+    expect(remoteAttention(offline)).toEqual({ key: 'remoteConnectionAttention', immediate: false });
+    const recovered = { ...connected, ...pending };
+    expect(remoteSyncDescription(recovered)).toBe('remoteContentSyncing');
+    expect(remoteAttention(recovered)).toBeNull();
+  });
   test('quota and removal require immediate action; normal sync does not add an alert', () => {
     expect(remoteAttention({ ...connected, errorCode: 47022 })).toEqual({ key: 'remoteQuotaAttention', immediate: true });
     expect(remoteAttention({ ...connected, connectionReason: RemoteConnectionReason.Removed })).toEqual({ key: 'remoteRemovedAttention', immediate: true });
