@@ -8,7 +8,25 @@
 问题 2 的日志显示，宿主代理端口从 3474 换到 4121 后，部分套餐请求仍访问旧端口；
 `config.set` 返回成功时，`configRevisionHash` 与 `appliedConfigHash` 尚不相等。
 后续连接失败触发同一 run 的重试，才出现截图中的 `Session transcript keyed user is outside the current turn`。
-完整日志时间线、历史提交及证据边界保留在同目录 `2026-09-23-config-lifecycle-research.md`。
+三个反馈模型共用本地套餐代理，同一会话切到自配 DeepSeek 曾收到 HTTP 200。
+
+现场关键时间线如下，时间均为北京时间，行号对应原始日志：
+
+| 时间 | 证据 | 含义 |
+| --- | --- | --- |
+| 10:58:32 | `main-2026-09-23.log:83`：代理监听 `127.0.0.1:3474` | 旧宿主代理地址 |
+| 11:13:09 | `main-2026-09-23.log:2577`：新宿主监听 `127.0.0.1:4121` | 升级启动后端口改变 |
+| 11:13:22 | `main-2026-09-23.log:2670,2692`：生成 provider 地址 4121 并写入配置 | 宿主知道新地址 |
+| 11:19:41 | `main-2026-09-23.log:3288`：`config.set acked`，没有安排重启 | 收到保存成功回应 |
+| 11:19:44 | `gateway-2026-09-23.log:262,269`：baseUrl 等变化，`commands.ownerAllowFrom` 要求重启，等待一个网关请求结束 | 本批配置并非纯模型热更新 |
+| 11:19:45 | `main-2026-09-23.log:3756`：resolved revision 摘要 `596ed34a4d777a9f`，applied 摘要 `2a1a7ba83b4e8e65` | 保存内容尚未应用 |
+| 11:19:46 | main 再次 ACK；`gateway-2026-09-23.log:274,276` 出现 reload superseded | 后续候选取代前次重载 |
+| 11:22 起 | `gateway-2026-09-23.log:346` 起仍访问 3474，收到 `ECONNREFUSED` | 请求未使用当前代理 |
+
+实际错误顺序是旧端口连接失败，再由外层使用同一 run 重试，最后触发会话幂等检查。
+日志缺少事故时的 `openclaw.json`、agent 模型状态及 SQLite 快照，因此不能证明最初旧地址
+从哪份状态进入新网关，也不能将某次 supersession 认定为唯一原因。
+当前宿主使用 `models.mode=replace`，不能套用 merge 模式保留旧 baseUrl 的解释。
 
 ### 1.2 根因及范围
 
@@ -17,6 +35,22 @@
 本次修复配置生成、条件交付、应用确认、任务准入与进程恢复这条链路。
 不升级整个 OpenClaw，不清除用户历史，不放宽会话幂等检查。
 网络错误后的同 run 重试错误是独立上游问题；本次消除配置失配导致的触发源，不能宣称修复任意网络失败的会话重试。
+
+### 1.3 历史修复及留下的边界
+
+| 提交 | 解决的问题 | 仍需补全的边界 |
+| --- | --- | --- |
+| 07-20 `adaa644df` | watcher 可能漏更新，增加 get/set 和延后重启 | 当时一次实验观察到应用早于 ACK，不能作为当前版本通用契约 |
+| 08-05 `e77ea8de9` | 宿主强杀与网关自行重启竞争，导致 Windows 锁异常 | 自行重启窗口不等于目标已应用 |
+| 08-06 `99a8575f2` | 过滤插件索引拥有、RPC 不接受的配置键 | 未改变保存与应用的完成条件 |
+| 09-09 `667eedb84` | 陈旧 config.get 缓存导致 hash 冲突和立即重试 | 退避缓解冲突，不能证明当前目标生效 |
+| 09-17 `b9f03477a` | 原生 IM 准备阶段未计入活动工作 | 应用确认及保留 pending 当时仍是观测建议 |
+| 09-22 `0b9842a13` | 重复技能同步、重启循环及超时后多余重启 | 主要在写前或超时分支确认，正常 SET ACK 仍结束等待 |
+
+这些修改分别缓解了真实问题；缺失的是贯穿完整生命周期的成功标准。
+历史背景见 [最初交付设计](2026-07-17-openclaw-config-hot-reload-delivery-design.md)、
+[hash 冲突修复](2026-09-09-model-switch-hash-conflict-restart.md)、
+[IM 工作观测与恢复](2026-09-17-im-workload-guard-and-recovery-observation.md)。
 
 ## 2. 用户场景
 
@@ -75,6 +109,11 @@ receipt 仅适用于它提交的原始目标；确认期间目标变化后不能
 恢复重启最多每 10 分钟一次，持续失败的检查至少退避 30 秒；原生限流的 `retryAfterMs` 更长时遵守该期限，且限流本身不触发重启。待办保留。
 主动环境/插件变更不受配置恢复冷却抑制。手动修复等待当前写操作结束，但可接管停滞待办。
 
+热应用通常不会改变 manager 的 running 阶段，最新同步收敛后需显式向 renderer 广播真实状态，
+解除准入失败留下的 starting 遮罩；校验拒绝显示错误。
+首次创建被拒绝只产生临时 UI 会话，恢复后的新提交重新创建真实会话，不能调用 continue(temp-id)，
+也不会自动重放此前被拒绝的请求。
+
 ### 4.4 进程生命周期
 
 `restartGateway` 的 `beforeStart` 回调在旧子进程确认退出后、启动新进程前发布目标启动配置。
@@ -87,6 +126,10 @@ receipt 仅适用于它提交的原始目标；确认期间目标变化后不能
 
 ## 5. 上游依据与升级清理
 
+以下状态核实截至 2026-09-23；版本包含关系通过 Git 祖先关系确认，不能仅按发布日期推断。
+#129321 的 `15ce9ab9b1f`、#131180 的 `515c3d8ff3f` 已在固定 tag 中；
+#138112、#142169、#145983 均为 v2026.9.5 的祖先，#154792 不在其祖先链中。
+
 | 上游 | 固定版状态 | 本次选择 / 后续清理 |
 | --- | --- | --- |
 | [#129321](https://github.com/openclaw/openclaw/pull/129321)：应用 receipt | v2026.8.1 已包含 | 使用 apply 的应用契约，不再将 set 当作应用接口 |
@@ -98,44 +141,17 @@ receipt 仅适用于它提交的原始目标；确认期间目标变化后不能
 | [#154792](https://github.com/openclaw/openclaw/pull/154792)：更多服务生命周期热重载 | 调研时 main 已合并，v2026.9.5 未包含 | 后续升级再评估，非本次回迁范围 |
 
 契约参考：[Config RPC](https://docs.openclaw.ai/gateway/configuration/config-rpc)、[Embedding](https://docs.openclaw.ai/gateway/embedding)。
+历史上 [#43803](https://github.com/openclaw/openclaw/issues/43803)、[#46310](https://github.com/openclaw/openclaw/issues/46310)
+记录过 patch 对可热更新内容也安排整网关重启的问题，目前均已关闭。
+原先担心自主重启有真实背景，但不能继续作为当前全部接口选择的依据。
+社区 macOS 宿主也曾因写入旧全量快照丢失字段，见 [#75631](https://github.com/openclaw/openclaw/issues/75631)
+及 [#75953](https://github.com/openclaw/openclaw/pull/75953)；其局部合并修复不等于完整 RPC 生命周期方案。
+固定版无变化 patch 也可能提前返回，因此保留“先写文件再 patch”不能自动获得应用确认。
+
 本次版本补丁为 `scripts/patches/v2026.8.1/openclaw-config-candidate-cache-invalidation.patch`。
 只适配原提交生产代码上下文；新版上游测试已换 harness，不一并迁入旧版本。
 升级含 #142169 的版本后移除此补丁，验证 agent 创建/修改/删除和外部文件编辑在慢重载期间仍返回新 revision，
 同时保留真实 stale baseHash 拒绝、未应用不能冒充 applied 的反例。
 宿主应用屏障、所有权合并和环境进程要求属于集成契约，不能因为移除缓存补丁而一起删除。
-
-## 6. 边界与验收
-
-基础回归覆盖：ACK 未应用、超时后实际成功、旧相等 revision、脱敏 receipt、目标变化、hash 并发、MCP 删除、
-A→B→C、冷却待办、环境新进程、启动文件发布顺序、原生 shutdown 意图。
-
-实操使用独立工作树、独立 appData/OpenClaw 状态及端口；通过 Electron 主进程调试和 renderer CDP 操作客户端。
-不使用 computer-use，不接管系统键鼠，不操作其他任务实例。重建运行时及实操避让优先级更高的插件任务。
-用本地合成模型端点注入旧端口与延迟/失败，并观察客户端实际会话、Gateway revision、端点请求和进程代次。
-仅有单测或直接调用交付函数不能计为客户端验收通过。
-
-### 6.1 基础验证（2026-09-23）
-
-- 定向 Vitest：9 个文件，546 项通过、3 项跳过；包含交付、应用确认、目标合并、恢复状态、配置生成、企业覆盖、进程重启及运行时适配器。
-- 修改文件 ESLint：零错误、零警告；`npm run compile:electron` 通过。
-- `npm run build` 通过。后续实操使用包含最终修改的客户端产物。
-- 新版本补丁在独立 v2026.8.1 源码树应用，Windows 适用补丁 57 项成功（目录包含 58 项跨平台补丁）。
-- 上游 `config-get-response.test.ts`、`server-reload-managed-secrets.test.ts`：13 项通过。
-- 扩展尝试 `config-reload.test.ts` 时出现文件监听/日志断言失败及 120 秒超时，已停止该组；尚未做无本补丁的对照，因此不能将其写成已通过或断言为既有问题。
-
-验证输出保存在本机隔离目录 `C:/Users/yangwn/AppData/Local/Temp/codex-config-lifecycle-20260923`。
-### 6.2 客户端实操
-
-- Electron 主进程调试接口与 renderer CDP 驱动，独立 appData、独立运行时，合成账号/模型服务；未使用 computer-use 或系统键鼠。
-- 正常 `deepseek-flash` 会话已从界面发送并收到响应，实际请求经过本地套餐代理到达 `/api/proxy/v1/chat/completions`。
-- 保持一条真实流式会话运行，代理端口由 61250 切换至 53475，并注入只返回 ACK、不执行 apply 的传输反例。
-  目标仍待应用，磁盘及 Gateway 保持旧端口；界面发起的新任务返回“正在应用配置”，模型端点没有收到该请求，原任务继续运行。
-- 解除注入并允许原流式会话结束，未触发新的设置事件；空闲恢复自动应用新端口，pending 清除，两个应用 revision 一致，PID 36160 / 进程代次 1 未变。
-- 端侧补充修复：后台热应用完成后显式广播收敛状态。复验端口 57511→55729，pending 自动清除、遮罩自动消失，PID 22536 / 代次 1 不变；随后从界面新建任务收到模型响应。
-- 被拒绝的首次请求只存在于临时 UI，会话尚未入库。恢复后在原失败页发送新请求会重新创建真实会话，不能向主进程提交临时会话 ID。已通过实际界面复验，收到 `CONFIG_QA_RETRY_OK` 模型响应；未自动重放此前被拒绝的请求。
-- 本轮 renderer 相关回归：3 个文件 48 项通过，修改文件 ESLint、完整 `npm run build` 通过。
-- 首轮 GitHub CI：5,562 项测试通过、1 项失败（新补丁未加入审核清单）、163 项跳过；已补齐清单，本地对应 19 项测试通过，后续以 PR 最新 SHA 的 CI 为准。
-- 三模型请求、丢回包确认、校验拒绝及修正、外部写入缓存、忙碌保护、连续目标变化、真实进程重启和限流恢复均已完成客户端验收。详细矩阵、证据和复跑方法见 [验收记录](2026-09-23-config-lifecycle-acceptance.md)。合成模型不证明生产套餐服务的可用性。
-
-证据：`01-baseline-state.json`、`01-baseline-ui.json`、`01-baseline.png`、`02-ack-unapplied-state.json`、
-`02-blocked-ui.json`、`02-blocked.png`、`03-idle-recovery-state.json`、`model-requests.jsonl`，均在上述隔离目录。
+升级含 #138112/#154792 的版本后可评估减少必须重启的配置类别，但需确认实际服务消费者已刷新，
+不能只移植热重载规则。固定代理端口或所有变化都重启，既不能解决所有权及待办问题，也会影响多实例和活动任务。
