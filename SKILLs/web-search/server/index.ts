@@ -21,10 +21,10 @@ import { BingSearch } from './search/bing';
 import { GoogleSearch } from './search/google';
 import { navigate, screenshot, getContent, getTextContent } from './playwright/operations';
 import { Config, mergeConfig } from './config';
-import { SearchResponse } from './search/types';
+import { SearchEngine, SearchEnginePreference, SearchResponse } from './search/types';
+import { ParallelSearch } from './search/parallel';
 
-type SearchEngine = 'google' | 'bing';
-type SearchEnginePreference = SearchEngine | 'auto';
+type BrowserSearchEngine = typeof SearchEngine.Google | typeof SearchEngine.Bing;
 
 interface EnsureBrowserResult {
   instance: BrowserInstance;
@@ -89,6 +89,7 @@ export class BridgeServer {
   private playwrightManager: PlaywrightManager;
   private bingSearch: BingSearch;
   private googleSearch: GoogleSearch;
+  private parallelSearch = new ParallelSearch();
   private browserInstance: BrowserInstance | null = null;
   private ensureBrowserPromise: Promise<EnsureBrowserResult> | null = null;
   private sharedPageQueue: Promise<unknown> = Promise.resolve();
@@ -473,6 +474,14 @@ export class BridgeServer {
   private async handleSearch(req: Request, res: Response): Promise<void> {
     try {
       const { connectionId, query, maxResults, engine } = req.body;
+      const preferredEngine = this.normalizeEnginePreference(engine);
+
+      // Parallel is independent of Chrome and the shared browser-page queue.
+      if (preferredEngine === SearchEngine.Parallel) {
+        const results = await this.parallelSearch.search(query, maxResults, this.config.search.searchTimeout);
+        res.json({ success: true, data: results });
+        return;
+      }
 
       if (!connectionId || !query) {
         res.status(400).json({
@@ -482,7 +491,6 @@ export class BridgeServer {
         return;
       }
 
-      const preferredEngine = this.normalizeEnginePreference(engine);
       const results = await this.enqueueSharedPageOperation(
         () => this.searchWithFallback(connectionId, query, maxResults, preferredEngine)
       );
@@ -500,23 +508,23 @@ export class BridgeServer {
   }
 
   private normalizeEnginePreference(engine: unknown): SearchEnginePreference {
-    if (engine === 'google' || engine === 'bing' || engine === 'auto') {
-      return engine;
+    if (Object.values(SearchEngine).includes(engine as SearchEnginePreference)) {
+      return engine as SearchEnginePreference;
     }
 
     return this.config.search.defaultEngine;
   }
 
-  private resolveSearchEngineOrder(preferredEngine: SearchEnginePreference): SearchEngine[] {
+  private resolveSearchEngineOrder(preferredEngine: SearchEnginePreference): BrowserSearchEngine[] {
     if (preferredEngine === 'google' || preferredEngine === 'bing') {
       return [preferredEngine];
     }
 
     const configuredOrder = this.config.search.fallbackOrder.filter(
-      (item): item is SearchEngine => item === 'google' || item === 'bing'
+      (item): item is BrowserSearchEngine => item === 'google' || item === 'bing'
     );
-    const fullOrder: SearchEngine[] = [...configuredOrder, 'google', 'bing'];
-    return Array.from(new Set<SearchEngine>(fullOrder));
+    const fullOrder: BrowserSearchEngine[] = [...configuredOrder, 'google', 'bing'];
+    return Array.from(new Set<BrowserSearchEngine>(fullOrder));
   }
 
   private async searchWithFallback(
