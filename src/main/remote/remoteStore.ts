@@ -20,6 +20,7 @@ import { isPublicReplyMessage, redactReplyText,replyAppendDelta, replyBlockId, r
 import { RemoteSyncStateError, retentionEventId, retentionSequence, safeSourceSequence } from './remoteRetention';
 import { remoteSyncErrorMetadata } from './remoteSyncLog';
 import { activeRemoteSyncTargetContext } from './remoteSyncTargetStore';
+import { RemoteTaskDataError } from './remoteTaskSyncState';
 
 export interface ProjectionRecord { eventType: string; payload: Record<string, any> }
 export interface RemoteEvent extends ProjectionRecord { eventId: string; sourceSeq: string; occurredAt: string }
@@ -58,6 +59,18 @@ const desktopInputReason = (job: { reason?: unknown; snapshot?: unknown }, captu
 
 /** Native SQLite transactions commit synchronously; no deferred persistence is allowed here. */
 export class RemoteStore {
+  private controlAdmission: (() => boolean) | null = null;
+  private taskAdmission: ((id: string) => boolean) | null = null;
+  private taskProjectionEligibility: ((id: string) => boolean) | null = null;
+  private projectionCandidateOffset = 0;
+  setControlAdmission(check: () => boolean): void { this.controlAdmission = check; }
+  areControlsAdmitted(): boolean { try { return this.controlAdmission?.() ?? true; } catch { return false; } }
+  setTaskAdmission(check: (id: string) => boolean): void { this.taskAdmission = check; }
+  isTaskAdmitted(id: string): boolean { try { return this.taskAdmission?.(id) ?? true; } catch { return false; } }
+  setTaskProjectionEligibility(check: (id: string) => boolean): void { this.taskProjectionEligibility = check; }
+  private canProjectTask(id: string): boolean {
+    try { return this.isTaskAdmitted(id) && (this.taskProjectionEligibility?.(id) ?? true); } catch { return false; }
+  }
   private securityRecoveryRequired = false;
   private ownershipSigner: ((sessionId: string, userId: string, scopeKey: string, operationId: string) => string) | null = null;
   setSecurityRecoveryRequired(required: boolean): void { this.securityRecoveryRequired = required || !!this.db.prepare("SELECT 1 FROM remote_corrupt_state WHERE key LIKE 'run:%' LIMIT 1").get(); }
@@ -255,37 +268,63 @@ export class RemoteStore {
   nextProjectionWork(): ProjectionWork | null {
     if (!this.questionEvidenceHealthy()) return null;
     if (!this.enabledOwner || !this.options.deferredProjection || this.securityRecoveryRequired) return null;
-    for (const row of this.db.prepare(`SELECT d.session_id FROM remote_dirty d JOIN cowork_session_ownership o ON o.session_id=d.session_id
-      WHERE o.owner_user_id=? AND o.owner_scope_key=? AND EXISTS(SELECT 1 FROM remote_state WHERE key='deletionClosed:'||d.session_id)`)
-      .all(this.enabledOwner.userId, this.enabledOwner.scopeKey) as Array<{ session_id: string }>) {
-      if (this.isSyncClosed(row.session_id)) {
-        this.db.prepare('DELETE FROM remote_dirty WHERE session_id=?').run(row.session_id);
-        this.db.prepare('DELETE FROM remote_content_dirty WHERE session_id=?').run(row.session_id);
-      }
-    }
-    // Interrupted publication reserves sequences permanently; rebuild all bodies from core + monotonic object identities.
-    for (const row of this.db.prepare('SELECT session_id FROM remote_projection_publications LIMIT 1').all() as Array<{ session_id: string }>) {
-      this.db.transaction(() => {
-        this.requireSnapshot(row.session_id, 'publication_interrupted');
-        this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(row.session_id);
-        this.db.prepare('DELETE FROM remote_projection_publications WHERE session_id=?').run(row.session_id);
-      })();
-    }
-    const row = this.db.prepare(`SELECT d.session_id FROM remote_dirty d JOIN cowork_session_ownership o ON o.session_id=d.session_id
+    const candidates = this.db.prepare(`SELECT d.session_id FROM (
+      SELECT session_id FROM remote_dirty UNION SELECT session_id FROM remote_projection_publications
+    ) d JOIN cowork_session_ownership o ON o.session_id=d.session_id
       JOIN remote_sync s ON s.local_id=d.session_id LEFT JOIN remote_projection_failures f ON f.session_id=d.session_id
       LEFT JOIN remote_session_revisions r ON r.session_id=d.session_id
       WHERE o.ownership_status='confirmed' AND o.owner_user_id=? AND o.owner_scope_key=? AND s.migration_frozen=0
-        AND (f.session_id IS NULL OR (f.reason<>'REMOTE_PROJECTION_BUDGET' AND f.revision<>r.revision) OR f.retry_at<=?) ORDER BY r.dirty_at,d.session_id LIMIT 1`)
-      .get(this.enabledOwner.userId, this.enabledOwner.scopeKey, Date.now()) as { session_id: string } | undefined;
-    if (!row) return null;
-    const sync = this.sync(row.session_id)!;
-    if (this.deletionProjectionSupported) this.deletionGuard(row.session_id);
-    const work: ProjectionWork = { database: this.db.name, target: '', sessionId: row.session_id, owner: { ...this.enabledOwner },
-      deviceId: this.projectionIdentity?.deviceId || sync.device_id, environment: this.fileEnvironment || this.projectionIdentity?.environment || null,
-      agent: this.agentSummary?.(row.session_id, this.enabledOwner) || null, approval: this.approvalProjectionSupported, questions: this.questionProjectionSupported,
-      input: this.inputProjectionSupported, files: this.fileProjectionSupported, reply: this.replyProjectionSupported, deletions: this.deletionProjectionSupported };
-    this.projectionTargetContexts.set(work, stableJson(activeRemoteSyncTargetContext(this, work.owner)));
-    return work;
+        AND (f.session_id IS NULL OR (f.reason NOT IN ('REMOTE_PROJECTION_BUDGET','REMOTE_PROJECTION_PUBLICATION_INVALID') AND f.revision<>r.revision) OR f.retry_at<=?)
+      ORDER BY r.dirty_at,d.session_id LIMIT 50 OFFSET ?`)
+      .all(this.enabledOwner.userId, this.enabledOwner.scopeKey, Date.now(), this.projectionCandidateOffset) as Array<{ session_id: string }>;
+    let skipped = 0;
+    for (const { session_id: id } of candidates) {
+      if (!this.canProjectTask(id)) { skipped++; continue; }
+      const publication = this.db.prepare('SELECT * FROM remote_projection_publications WHERE session_id=?').get(id) as
+        { path: string; source_seq: number; revision: number; digest: string } | undefined;
+      try {
+        if (this.isSyncClosed(id)) {
+          this.db.prepare('DELETE FROM remote_dirty WHERE session_id=?').run(id);
+          this.db.prepare('DELETE FROM remote_content_dirty WHERE session_id=?').run(id);
+          if (publication) skipped++;
+          continue;
+        }
+        const sync = this.sync(id)!;
+        if (publication) {
+          // Only this admitted task may reconcile an interrupted publication. A corrupt
+          // epoch/evidence row must retain both its reserved sequences and original spool.
+          const epoch = this.get<number>(`snapshotEpoch:${id}`) ?? 0;
+          if (!Number.isSafeInteger(epoch) || epoch < 0 || epoch >= Number.MAX_SAFE_INTEGER
+            || !Number.isSafeInteger(publication.source_seq) || publication.source_seq < 0 || publication.source_seq > sync.source_seq
+            || !Number.isSafeInteger(publication.revision) || publication.revision < 0
+            || typeof publication.path !== 'string' || !publication.path || typeof publication.digest !== 'string' || !publication.digest) throw new Error('REMOTE_PROJECTION_PUBLICATION_INVALID');
+          this.db.transaction(() => {
+            this.requireSnapshot(id, 'publication_interrupted');
+            this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(id);
+            this.db.prepare('DELETE FROM remote_projection_publications WHERE session_id=?').run(id);
+          })();
+        }
+        if (this.deletionProjectionSupported) this.deletionGuard(id);
+        const work: ProjectionWork = { database: this.db.name, target: '', sessionId: id, owner: { ...this.enabledOwner },
+          deviceId: this.projectionIdentity?.deviceId || sync.device_id, environment: this.fileEnvironment || this.projectionIdentity?.environment || null,
+          agent: this.agentSummary?.(id, this.enabledOwner) || null, approval: this.approvalProjectionSupported, questions: this.questionProjectionSupported,
+          input: this.inputProjectionSupported, files: this.fileProjectionSupported, reply: this.replyProjectionSupported, deletions: this.deletionProjectionSupported };
+        this.projectionTargetContexts.set(work, stableJson(activeRemoteSyncTargetContext(this, work.owner)));
+        this.projectionCandidateOffset = 0;
+        return work;
+      } catch (error) {
+        if (typeof (error as { code?: unknown })?.code === 'string' && /^SQLITE_(?:CORRUPT|NOTADB|FULL|IOERR)/u.test(String((error as { code: string }).code))) throw error;
+        const reason = publication ? 'REMOTE_PROJECTION_PUBLICATION_INVALID' : error instanceof Error ? error.message : 'REMOTE_PROJECTION_FAILED';
+        this.recordProjectionFailure(id, reason);
+        if (publication) this.db.prepare('UPDATE remote_projection_failures SET retry_at=? WHERE session_id=?').run(Number.MAX_SAFE_INTEGER, id);
+        // The history lane reports the failure for this task, even if the interrupted
+        // publisher crashed after removing its former dirty marker.
+        this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(id);
+        console.warn('[RemoteSync] Projection task selection isolated', { localSessionId: id, reason });
+      }
+    }
+    this.projectionCandidateOffset = candidates.length < 50 ? 0 : this.projectionCandidateOffset + skipped;
+    return null;
   }
   projectionWorkCurrent(work: ProjectionWork): boolean {
     return (!this.projectionTargetContexts.has(work) || this.projectionTargetContexts.get(work) === stableJson(activeRemoteSyncTargetContext(this, work.owner)))
@@ -788,6 +827,7 @@ export class RemoteStore {
       const dirty = this.db.prepare('SELECT session_id FROM remote_dirty').all() as Array<{ session_id: string }>;
       let processed = false;
       for (const { session_id: id } of dirty) {
+        if (!this.canProjectTask(id)) continue;
         if (this.isSyncClosed(id)) { this.db.prepare('DELETE FROM remote_dirty WHERE session_id=?').run(id); this.db.prepare('DELETE FROM remote_content_dirty WHERE session_id=?').run(id); continue; }
         if (this.sync(id)?.migration_frozen) continue;
         // Consume only this marker; frozen records survive commits and process restarts.
@@ -1081,7 +1121,13 @@ export class RemoteStore {
     const rows = this.db.prepare('SELECT event_json FROM remote_outbox WHERE session_id=? ORDER BY source_seq LIMIT 100').all(sessionId) as any[];
     const result: RemoteEvent[] = [];
     let bytes = 0;
-    for (const row of rows) { const length = Buffer.byteLength(row.event_json); if (result.length && bytes + length > 240 * 1024) break; result.push(JSON.parse(row.event_json)); bytes += length; }
+    for (const row of rows) {
+      const length = Buffer.byteLength(row.event_json);
+      if (result.length && bytes + length > 240 * 1024) break;
+      try { result.push(JSON.parse(row.event_json)); }
+      catch { throw new RemoteTaskDataError('REMOTE_OUTBOX_JSON_INVALID'); }
+      bytes += length;
+    }
     return result;
   }
   freezeMigration(sessionId: string): void {

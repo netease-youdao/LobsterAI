@@ -4,7 +4,7 @@ import React, { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExte
 import { useSelector } from 'react-redux';
 
 import { RemoteDeviceAdmissionState, RemoteDeviceConnectionState } from '../../../shared/remote/connections';
-import { type RemoteConfigureRequest, RemoteConnectionReason, RemoteSyncStatus } from '../../../shared/remote/constants';
+import { type RemoteConfigureRequest, RemoteConnectionReason, RemoteSyncStatus, RemoteSyncTaskIssueStatus } from '../../../shared/remote/constants';
 import { getMobileAppEntry, MobileAppEntryKind } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
 import { remoteDeviceConnectionsService } from '../../services/remoteDeviceConnections';
@@ -21,7 +21,14 @@ interface RemoteDeviceSettingsProps {
 }
 
 const t = (key: string) => i18nService.t(key);
-const DeviceAction = { Rename: 'rename', Retry: 'retry', Enable: 'enable' } as const;
+const DeviceAction = { Rename: 'rename', Retry: 'retry', RetryTask: 'retry_task', Enable: 'enable' } as const;
+const TASK_STATUS_KEYS = {
+  [RemoteSyncTaskIssueStatus.Retrying]: 'remoteTaskSyncRetrying',
+  [RemoteSyncTaskIssueStatus.Isolated]: 'remoteTaskSyncIsolated',
+  [RemoteSyncTaskIssueStatus.WaitingDependency]: 'remoteTaskSyncWaiting',
+  [RemoteSyncTaskIssueStatus.Repairing]: 'remoteTaskSyncRepairing',
+  [RemoteSyncTaskIssueStatus.Closed]: 'remoteTaskSyncClosed',
+} as const;
 type DeviceAction = typeof DeviceAction[keyof typeof DeviceAction];
 const ACTION_CLASS = 'text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50';
 
@@ -50,8 +57,14 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
   const identity = JSON.stringify([accountGeneration, state?.accountEpoch, state?.owner?.userId, state?.owner?.scopeKey]);
   const online = isRemoteOnline(state);
   const signInRequired = needsRemoteSignIn(state);
+  const admissionDeferred = Boolean(state?.owner && state.enabled && !signInRequired && state.syncHealth?.admissionDeferred);
   const connectionFailure = remoteConnectionFailure(state);
   const contentStatus = remoteSyncDescription(state);
+  const contentLabel = contentStatus === 'remoteTasksSyncFailed'
+    ? t('remoteTasksSyncFailedCount').replace('{count}', String(state?.syncHealth?.failedSessions ?? 0))
+    : t(contentStatus ?? 'remoteCurrentDevice');
+  const taskIssues = state?.owner && state.enabled && !signInRequired
+    ? (state.syncHealth?.taskIssues ?? []).filter(issue => issue.status !== RemoteSyncTaskIssueStatus.Closed).slice(0, 20) : [];
   const displayName = state?.owner ? state.name || state.hostName : state?.hostName;
   const connections = state?.accountEpoch === management.accountEpoch ? management.data : null;
   const showConnections = Boolean(state?.owner && !signInRequired && (state.deviceConnectionManagementSupported || connections?.supported) && management.accountEpoch === state.accountEpoch);
@@ -133,6 +146,7 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
         const pending = current?.nameSyncStatus === RemoteSyncStatus.Pending || current?.nameSyncStatus === RemoteSyncStatus.Error;
         setFeedback(pending ? 'remoteNamePending' : 'remoteNameSaved');
       }
+      if (saved && action === DeviceAction.RetryTask) setFeedback('remoteTaskRetryRequested');
       return saved;
     } catch {
       if (mounted.current && generation === requestGeneration.current) setActionError('remoteSaveFailed');
@@ -185,7 +199,7 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
           <p className="truncate text-sm font-medium leading-5" title={displayName} data-remote-device-name="true">{displayName || t('remoteThisComputer')}</p>
           <p className="mt-0.5 text-xs leading-4 text-secondary" role="status">
             <span className={quotaBlocked ? 'text-amber-700 dark:text-amber-400' : undefined}>{t(statusKey)}</span>
-            {` · ${t(removed || quotaBlocked ? 'remoteSyncPaused' : contentStatus ?? 'remoteCurrentDevice')}`}
+            {` · ${removed || quotaBlocked ? t('remoteSyncPaused') : contentLabel}`}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2 text-xs">
@@ -206,6 +220,7 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
           <span>{t(slotAvailable ? 'remoteQuotaSlotAvailable' : 'remoteQuotaPausedWithoutCount')} {t('remoteLocalTasksUnaffected')}</span>
         </p>}
         {removed && <p className="text-secondary">{t('remoteRemovedCompactHelp')}</p>}
+        {admissionDeferred && <p role="status" className="text-amber-700 dark:text-amber-400">{t('remoteHistoryAdmissionDeferred')}</p>}
         {!removed && !quotaBlocked && currentConnection?.slotOccupied && currentConnection.admissionState === RemoteDeviceAdmissionState.Reconnecting && <p className="text-secondary">{t('remoteReconnectSlotRetained')}</p>}
         {!removed && !quotaBlocked && connectionFailure && connectionFailure !== statusKey && <p role="alert" className="text-red-600 dark:text-red-400">{t(connectionFailure)}</p>}
         {online && state?.connectionReason === RemoteConnectionReason.WorkspaceUnavailable && <p className="text-secondary">{t('remoteWorkspaceUnavailable')}</p>}
@@ -216,9 +231,9 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
         {state && signInRequired && !loginAllowed && <p className="text-secondary">{t('remoteLoginUnavailable')}</p>}
         {removed && management.error && !showConnections && <p role="alert" className="text-amber-700 dark:text-amber-400">{t(management.error)}</p>}
         {state?.owner && state.enabled && !signInRequired && !removed
-          && (online ? Boolean(connectionFailure) : state.connectionReason !== RemoteConnectionReason.Connecting)
+          && (online ? Boolean(connectionFailure) || admissionDeferred : state.connectionReason !== RemoteConnectionReason.Connecting)
           && <button type="button" disabled={busy || retryCooldown} className={ACTION_CLASS} onClick={() => { void submit({ retry: true }, DeviceAction.Retry); }}>
-            {t(busy && activeAction === DeviceAction.Retry ? 'remoteReconnecting' : online ? 'retry' : 'remoteReconnect')}
+            {t(busy && activeAction === DeviceAction.Retry ? 'remoteReconnecting' : online && !admissionDeferred ? 'retry' : 'remoteReconnect')}
           </button>}
         {displayedError && <div role="alert" className="text-red-600 dark:text-red-400">
           <p>{t(displayedError)}</p>
@@ -226,6 +241,27 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
         </div>}
       </div>
     </section>
+    {taskIssues.length > 0 && <details key={identity} className="rounded-xl border border-border bg-surface px-3.5 py-2.5">
+      <summary className="cursor-pointer text-xs font-medium text-secondary">{t('remoteTaskSyncDetails')}</summary>
+      <p className="mt-2 text-xs leading-5 text-secondary">{t(contentStatus === 'remoteTasksSyncFailed' ? 'remoteTaskSyncLocalUnaffected' : 'remoteLocalTasksUnaffected')}</p>
+      <ul className="mt-2 divide-y divide-border">
+        {taskIssues.map(issue => <li key={issue.localSessionId} className="flex items-center gap-3 py-2">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-medium" title={issue.title}>{issue.title || t('remoteUnnamedTask')}</p>
+            <p className="mt-0.5 text-[11px] leading-4 text-secondary">{t(TASK_STATUS_KEYS[issue.status])}</p>
+            {Number.isFinite(issue.nextRetryAt) && (issue.nextRetryAt ?? 0) > Date.now() && <p className="mt-0.5 text-[11px] leading-4 text-secondary">
+              {t('remoteTaskNextRetry').replace('{time}', new Date(issue.nextRetryAt ?? 0).toLocaleTimeString())}
+            </p>}
+          </div>
+          <button type="button" disabled={busy || !issue.retryable || !state?.accountEpoch}
+            className={`${ACTION_CLASS} min-h-7 shrink-0 text-xs`}
+            onClick={() => { if (!issue.retryable) return; void submit({ retrySessionId: issue.localSessionId }, DeviceAction.RetryTask); }}>
+            {t('remoteRetryTask')}
+          </button>
+        </li>)}
+      </ul>
+      {state?.syncHealth?.taskIssuesTruncated && <p className="mt-1 text-[11px] text-secondary">{t('remoteTaskIssuesTruncated')}</p>}
+    </details>}
     {showConnections && <RemoteDeviceConnectionList snapshot={management} sectionRef={connectionsSection} />}
     <Modal isOpen={renameOpen} onClose={closeRename} onEscape={closeRename}
       overlayClassName="fixed inset-0 z-[60] modal-backdrop flex items-center justify-center p-4"

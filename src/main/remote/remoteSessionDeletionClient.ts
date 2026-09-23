@@ -21,6 +21,7 @@ interface DeletionInbox extends DeletionClaim {
 export interface SessionDeletionDependencies {
   store: RemoteStore; service: SessionDeletionService; runtime: CoworkRuntime;
   context(): Context | null;
+  controlsAdmitted?(): boolean;
   request(path: string, method?: string, body?: unknown): Promise<any>;
   security?: { commit<T>(operationId: string, operation: unknown, apply: () => T): Promise<T> };
   reconcileStop(sessionId: string): Promise<boolean>;
@@ -66,6 +67,12 @@ export class RemoteSessionDeletionClient {
       && row.sync_environment !== null && matchesRemoteDeletionTargetScope(store, target, row.sync_environment)
       && !row.migration_frozen && !store.needsSecurityRecovery();
   }
+  private controlsAdmitted(): boolean {
+    try { return this.deps.store.areControlsAdmitted() && this.deps.controlsAdmitted?.() !== false; } catch { return false; }
+  }
+  private executionAdmitted(entry: DeletionInbox): boolean {
+    return this.controlsAdmitted() && this.deps.store.isTaskAdmitted(entry.target.localSessionId);
+  }
   private guardMatches(entry: DeletionInbox): boolean {
     return payloadHash(this.deps.store.deletionGuard(entry.target.localSessionId)) === payloadHash(entry.operation.approvedGuard);
   }
@@ -98,7 +105,7 @@ export class RemoteSessionDeletionClient {
       }
       if (entries.length < 20) this.cursor = '';
       const current = this.deps.context();
-      if (!available || !current?.enabled || !current.generation || !sameOwner(context.owner, current.owner)
+      if (!available || !this.controlsAdmitted() || !current?.enabled || !current.generation || !sameOwner(context.owner, current.owner)
         || !samePersistedRemoteEnvironment(this.deps.store, current, context.environment, current.environment)) return;
       const response = await this.deps.request(`/devices/${encodeURIComponent(context.deviceId)}/session-deletions/claim`, 'POST', { connectionGeneration: current.generation, limit: 1 });
       for (const item of (response.items || []).slice(0, 1) as DeletionClaim[]) {
@@ -227,6 +234,7 @@ export class RemoteSessionDeletionClient {
   private async execute(entry: DeletionInbox, deleteOnly = false): Promise<void> {
     const id = entry.target.localSessionId;
     if (!this.identity(entry)) { await this.sendReport(entry, { kind: 'blocked', reason: 'LOCAL_IDENTITY_MISSING' }); return; }
+    if (!this.executionAdmitted(entry)) { await this.sendReport(entry, { kind: 'blocked', reason: 'LOCAL_RECOVERY_REQUIRED' }); return; }
     if (!this.localExists(id)) { await this.sendReport(entry, { kind: 'blocked', reason: 'LOCAL_RECOVERY_REQUIRED' }); return; }
     const release = ownershipOperationGate.tryAcquire({ agentIds: [], sessionIds: [id] });
     if (!release) return;
@@ -251,6 +259,7 @@ export class RemoteSessionDeletionClient {
       };
       if (this.deps.security) await this.deps.security.commit(entry.operation.operationId, { target: entry.target, localFenceId: entry.localFenceId, phase: RemoteDeletion.Prepared }, prepare);
       else store.transaction(prepare);
+      if (!this.executionAdmitted(entry)) return;
       const started = performance.now();
       const permitRequest = {
         claimId: entry.claim.claimId, claimToken: entry.claim.claimToken, connectionGeneration: generation,
@@ -269,6 +278,7 @@ export class RemoteSessionDeletionClient {
       let serverTime = Date.parse(permit.serverTime), serverObservedAt = performance.now();
       let deadline = started + Math.min(30000, Math.max(0, Date.parse(permit.permitUntil) - serverTime));
       const permitted = (): boolean => permit.executionAllowed === true && (!permit.connectionGeneration || permit.connectionGeneration === generation) && this.identity(entry) && this.guardMatches(entry)
+        && this.executionAdmitted(entry)
         && this.deps.context()?.enabled === true && this.deps.context()?.generation === generation && performance.now() + 1000 < deadline;
       if (!permitted()) { if (deleteOnly) await this.reportStopped(entry); else await this.notStarted(entry); return; }
       const recordEffect = (): void => {
@@ -280,6 +290,7 @@ export class RemoteSessionDeletionClient {
       if (!permitted()) { if (deleteOnly) await this.reportStopped(entry); else await this.notStarted(entry); return; }
       let renewing = false;
       renewal = setInterval(() => {
+        if (!permitted()) { deadline = 0; return; }
         if (renewing) return; renewing = true;
         const began = performance.now();
         void this.deps.request(`/session-deletions/${encodeURIComponent(entry.operation.operationId)}/lease/renew`, 'POST', {

@@ -23,7 +23,7 @@ const sameIdentity = (left: SettingsIdentity, right: SettingsIdentity): boolean 
 const confirmsChanges = (state: RemoteSettingsState, changes: RemoteConfigureRequest): boolean => {
   const fields = ['enabled', 'keepAwakeEnabled', 'name'] as const;
   const changedFields = fields.filter(field => changes[field] !== undefined);
-  return changedFields.length > 0 && !changes.retry && !changes.addWorkspace && !changes.removeWorkspaceId
+  return changedFields.length > 0 && !changes.retry && !changes.retrySessionId && !changes.addWorkspace && !changes.removeWorkspaceId
     && changedFields.every(field => state[field] === changes[field]);
 };
 

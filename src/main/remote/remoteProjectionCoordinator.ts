@@ -7,6 +7,7 @@ import { Worker } from 'worker_threads';
 import { remoteDiagnostics } from './remoteDiagnostics';
 import type { ProjectionWork } from './remoteProjectionWorker';
 import type { RemoteStore } from './remoteStore';
+import { archivedRemoteSyncReferences } from './remoteSyncTargetStore';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 
 const yieldMain = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
@@ -54,16 +55,25 @@ export class RemoteProjectionCoordinator {
     try {
       await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
       // A crashed worker may leave a disposable snapshot. Never accumulate another 256 MiB per retry.
-      const protectedPaths = new Set((this.store.db.prepare('SELECT path FROM remote_projection_publications').all() as Array<{ path: string }>).map(row => row.path));
+      const publications = this.store.db.prepare('SELECT path FROM remote_projection_publications').all() as Array<{ path: unknown }>;
+      const protectedPaths = new Set(publications.filter((row): row is { path: string } => typeof row.path === 'string' && path.isAbsolute(row.path)).map(row => path.resolve(row.path)));
+      let referencesUnknown = publications.some(row => typeof row.path !== 'string' || !path.isAbsolute(row.path));
+      try { for (const file of archivedRemoteSyncReferences(this.store, true).paths) protectedPaths.add(path.resolve(file)); }
+      catch (error) {
+        if (typeof (error as { code?: unknown })?.code === 'string' && /^SQLITE_(?:CORRUPT|NOTADB|FULL|IOERR)/u.test(String((error as { code: string }).code))) throw error;
+        referencesUnknown = true;
+      }
       let stagingBytes = 0;
       for (const entry of await fs.promises.readdir(directory, { withFileTypes: true })) {
         if (!entry.isFile() || !/^[a-f0-9-]{36}\.sqlite(?:-wal|-shm)?$/u.test(entry.name)) continue;
         const file = path.join(directory, entry.name);
         const base = file.replace(/-(?:wal|shm)$/u, '');
-        if (!protectedPaths.has(base)) await fs.promises.rm(file, { force: true });
+        if (!referencesUnknown && !protectedPaths.has(base)) await fs.promises.rm(file, { force: true });
         else stagingBytes += (await fs.promises.stat(file)).size;
       }
-      if (stagingBytes > 0) throw new Error('REMOTE_PROJECTION_STAGING_BUSY');
+      // Preserve isolated publications, but allow an independent 256 MiB materialization
+      // while the shared spool remains within its 1 GiB budget.
+      if (stagingBytes > 768 * 1024 * 1024) throw new Error('REMOTE_PROJECTION_BUDGET');
       filename = path.join(directory, `${randomUUID()}.sqlite`);
       const result = await this.work({ ...work, database: this.store.db.name, target: filename });
       // No projected object can cross an owner, environment, capability or source-sequence change.

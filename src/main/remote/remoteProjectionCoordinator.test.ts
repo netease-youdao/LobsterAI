@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { randomUUID } from 'crypto';
 import { build } from 'esbuild';
 import fs from 'fs';
 import { createRequire } from 'module';
@@ -8,6 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { initializeLibraryTables } from '../library/libraryMigrations';
 import { RemoteStore } from './remoteStore';
+import { RemoteSyncTargetStore } from './remoteSyncTargetStore';
 
 const workerDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-projection-test-worker-'));
 const workerPath = path.join(workerDirectory, 'worker.cjs');
@@ -80,6 +82,74 @@ describe('desktop core and remote projection isolation', () => {
     expect(f.store.sync('task')!.source_seq).toBeGreaterThan(high);
     expect(f.store.sync('task')!.ack_seq).toBe(0); expect(f.store.sync('task')!.needs_snapshot).toBe(1);
     expect(f.store.pending('task').every(event => Number(event.sourceSeq) > high)).toBe(true);
+  });
+  it('isolates a corrupt interrupted publication and projects another dirty task without losing the original reservation', async () => {
+    const f = fixture(), directory = path.join(f.directory, 'remote-projection-staging');
+    fs.mkdirSync(directory); const original = path.join(directory, `${randomUUID()}.sqlite`);
+    fs.writeFileSync(original, 'original publication evidence');
+    f.db.prepare('UPDATE remote_sync SET source_seq=99 WHERE local_id=?').run('task');
+    f.db.prepare('INSERT INTO remote_projection_publications VALUES (?,?,?,?,?)').run('task', original, 99, 1, 'original');
+    f.db.prepare('INSERT OR REPLACE INTO remote_state VALUES (?,?)').run('snapshotEpoch:task', '{');
+    f.store.transaction(() => {
+      f.db.exec("INSERT INTO cowork_sessions VALUES('healthy','Healthy',1,1,'idle')"); f.store.assignNew('healthy', owner, 'local_create');
+      f.db.exec("INSERT INTO cowork_messages VALUES('healthy-message','healthy','assistant','Keeps syncing','{}',1,1)");
+    });
+    f.db.prepare('UPDATE remote_session_revisions SET dirty_at=0 WHERE session_id=?').run('task');
+    const evidence = f.db.prepare('SELECT * FROM remote_projection_publications WHERE session_id=?').get('task');
+    await expect(f.store.flushProjections()).resolves.toBeUndefined();
+    expect(f.store.snapshot('healthy').records.find(row => row.payload.message)?.payload.message.blocks[0].text).toBe('Keeps syncing');
+    expect(f.db.prepare('SELECT * FROM remote_projection_publications WHERE session_id=?').get('task')).toEqual(evidence);
+    expect(f.store.sync('task')).toMatchObject({ source_seq: 99, ack_seq: 0 });
+    expect(f.db.prepare('SELECT value FROM remote_state WHERE key=?').get('snapshotEpoch:task')).toEqual({ value: '{' });
+    expect(fs.readFileSync(original, 'utf8')).toBe('original publication evidence');
+    expect(f.db.prepare('SELECT reason,retry_at FROM remote_projection_failures WHERE session_id=?').get('task')).toEqual({ reason: 'REMOTE_PROJECTION_PUBLICATION_INVALID', retry_at: Number.MAX_SAFE_INTEGER });
+    expect(() => f.store.transaction(() => f.db.prepare("UPDATE cowork_messages SET content='Still locally usable' WHERE id='message'").run())).not.toThrow();
+    await f.store.flushProjections();
+    expect(f.db.prepare('SELECT * FROM remote_projection_publications WHERE session_id=?').get('task')).toEqual(evidence);
+    expect(f.db.prepare('SELECT content FROM cowork_messages WHERE id=?').get('message')).toEqual({ content: 'Still locally usable' });
+  });
+  it('does not skip the next healthy page after isolating a full page of bad publication evidence', () => {
+    const f = fixture();
+    f.store.transaction(() => {
+      for (let i = 0; i < 50; i++) {
+        const id = `bad-${String(i).padStart(2, '0')}`;
+        f.db.prepare("INSERT INTO cowork_sessions VALUES (?, 'Bad',1,1,'idle')").run(id); f.store.assignNew(id, owner, 'local_create');
+        f.db.prepare('INSERT INTO remote_projection_publications VALUES (?,?,?,?,?)').run(id, `/unavailable/${id}`, 0, 1, 'evidence');
+        f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run(`snapshotEpoch:${id}`, '{');
+        f.db.prepare('UPDATE remote_session_revisions SET dirty_at=0 WHERE session_id=?').run(id);
+      }
+    });
+    expect(f.store.nextProjectionWork()).toBeNull();
+    expect(f.store.nextProjectionWork()?.sessionId).toBe('task');
+    expect(f.db.prepare('SELECT COUNT(*) AS count FROM remote_projection_publications').get()).toEqual({ count: 50 });
+  });
+  it.each(['admission', 'isolation'])('preserves a %s-blocked publication while a healthy task is materialized', async gate => {
+    const f = fixture(), directory = path.join(f.directory, 'remote-projection-staging');
+    fs.mkdirSync(directory); const original = path.join(directory, `${randomUUID()}.sqlite`); fs.writeFileSync(original, 'opaque original');
+    f.db.prepare('INSERT INTO remote_projection_publications VALUES (?,?,?,?,?)').run('task', original, 0, 1, 'original');
+    if (gate === 'admission') f.store.setTaskAdmission(id => id !== 'task');
+    else f.store.setTaskProjectionEligibility(id => id !== 'task');
+    f.store.transaction(() => {
+      f.db.exec("INSERT INTO cowork_sessions VALUES('healthy','Healthy',1,1,'idle')"); f.store.assignNew('healthy', owner, 'local_create');
+    });
+    await f.store.flushProjections();
+    expect(f.store.sync('healthy')!.source_seq).toBeGreaterThan(0);
+    expect(f.store.sync('task')!.source_seq).toBe(0);
+    expect(f.store.get('snapshotReason:task')).toBeNull();
+    expect(f.store.projectionPublishing('task')).toBe(true); expect(fs.readFileSync(original, 'utf8')).toBe('opaque original');
+    expect(f.db.prepare('SELECT * FROM remote_projection_failures').all()).toEqual([]);
+  });
+  it.each([false, true])('retains staging referenced by an inactive target without blocking healthy publication (unknown=%s)', async corrupt => {
+    const f = fixture(), directory = path.join(f.directory, 'remote-projection-staging');
+    new RemoteSyncTargetStore(f.store);
+    fs.mkdirSync(directory); const original = path.join(directory, `${randomUUID()}.sqlite`); fs.writeFileSync(original, 'inactive publication');
+    f.db.prepare('INSERT INTO remote_sync_target_archives VALUES (?,?,?,?)').run('inactive', 'remote_projection_publications', 0,
+      corrupt ? '{' : JSON.stringify({ session_id: 'inactive-task', path: original, source_seq: 42, revision: 1, digest: 'original' }));
+    await f.store.flushProjections();
+    expect(f.store.sync('task')!.source_seq).toBeGreaterThan(0);
+    expect(fs.readFileSync(original, 'utf8')).toBe('inactive publication');
+    expect(f.db.prepare('SELECT * FROM remote_projection_failures').all()).toEqual([]);
+    expect(fs.readdirSync(directory)).toEqual([path.basename(original)]);
   });
   it('keeps disabled synchronization as durable dirtiness without projecting or advancing source sequences', async () => {
     const f = fixture(); f.store.setEnabledOwner(null);

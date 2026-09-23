@@ -11,6 +11,7 @@ import type { DesktopInputSource } from './desktopInputMetadata';
 import { projectRemoteArtifacts, remoteArtifactReasons } from './remoteArtifactProjection';
 import { type DeliveredFileDependencies,RemoteDeliveredFileSync } from './remoteDeliveredFileSync';
 import { type DesktopMessageAssetJob, uploadDesktopMessageAsset } from './remoteDesktopAssetUpload';
+import { fileRetryAllowed, nextFileRetry, RemoteFileRequestError, RemoteFileRetryPhase, type RemoteFileRetryState } from './remoteFileRetry';
 import { captureRemoteFileSnapshot, remoteFileCacheDirectory, type RemoteFileSnapshot, verifyRemoteFileSnapshot } from './remoteFileSnapshots';
 import { requestRemoteFilePart } from './remoteFileTransferLog';
 import { capturePreparedInputSnapshot, type RemotePreparedInputSource } from './remotePreparedInputSnapshots';
@@ -31,10 +32,10 @@ interface ArtifactJob {
   completedPublications?: string[];
   messageId?: string; sizeBytes?: string;
   rename?: { operationId: string; name: string; expectedRevision?: string };
-  reason?: string; retryAt?: number;
+  reason?: string; retryAt?: number; retry?: RemoteFileRetryState;
 }
 interface InputJob extends DesktopMessageAssetJob {
-  localSessionId: string; snapshot?: RemoteFileSnapshot; availability: string; uploadedAsset?: RemoteInputAsset; reason?: string; retryAt?: number; captureReason?: string;
+  localSessionId: string; snapshot?: RemoteFileSnapshot; availability: string; uploadedAsset?: RemoteInputAsset; reason?: string; retryAt?: number; captureReason?: string; retry?: RemoteFileRetryState;
   environment?: string;
   preparedSource?: RemotePreparedInputSource;
 }
@@ -71,6 +72,29 @@ export class RemoteFileSync {
   private enabled = false;
   private fileHealth: { degraded: boolean; pending: number | null } = { degraded: false, pending: null };
   health(): { degraded: boolean; pending: number | null } { return { ...this.fileHealth }; }
+  /** A task retry changes only retry timing; immutable jobs and unsafe isolation remain intact. */
+  retrySession(sessionId: string): boolean {
+    const connection = this.connection;
+    if (!connection || !this.current(connection, sessionId)) return false;
+    const now = Date.now(), key = `fileManualRetry:${this.prefix(connection)}${sessionId}`;
+    const lastRetryAt = this.deps.store.get<number>(key);
+    if (lastRetryAt !== null && now - lastRetryAt < 60_000) return false;
+    let accepted = false;
+    this.deps.store.transaction(() => {
+      const entries = [...this.fileEntries<InputJob>('desktopAsset:'), ...this.fileEntries<ArtifactJob>(`${this.prefix(connection)}${sessionId}:`)];
+      for (const entry of entries) {
+        const job = entry.value;
+        if (job.localSessionId !== sessionId || !sameOwner(job.owner, connection.owner)
+          || job.environment && job.environment !== connection.environment || !job.retry
+          || job.retry.phase !== RemoteFileRetryPhase.Backoff && job.retry.phase !== RemoteFileRetryPhase.Cooldown
+          || (job.retry.serverRetryAt || 0) > now) continue;
+        job.retry = { ...job.retry, nextRetryAt: now }; job.retryAt = now;
+        this.deps.store.put(entry.key, durableJson(job)); accepted = true;
+      }
+      if (accepted) this.deps.store.put(key, now);
+    });
+    return accepted;
+  }
   private observationCursor = 0;
   private coldObservationAt = new Map<string, number>();
   private readonly delivered: RemoteDeliveredFileSync;
@@ -95,7 +119,7 @@ export class RemoteFileSync {
   private current(connection: Connection, sessionId?: string): boolean {
     return this.enabled && this.deps.enabled() && sameOwner(connection.owner, this.deps.owner())
       && connection.environment === this.deps.environment() && this.connection?.generation === connection.generation
-      && this.connection.deviceId === connection.deviceId && (!sessionId || !this.deps.store.get(`${RemoteDeletion.Closed}${sessionId}`) && sameOwner(this.deps.store.owner(sessionId), connection.owner));
+      && this.connection.deviceId === connection.deviceId && (!sessionId || this.deps.store.isTaskAdmitted(sessionId) && !this.deps.store.get(`${RemoteDeletion.Closed}${sessionId}`) && sameOwner(this.deps.store.owner(sessionId), connection.owner));
   }
   private assert(connection: Connection, sessionId?: string): void { if (!this.current(connection, sessionId)) throw new Error(RemoteFileReason.Access); }
   tick(connection: Connection): void {
@@ -118,14 +142,17 @@ export class RemoteFileSync {
     const response = await requestRemoteFilePart(pathname, init, () => this.deps.request(connection, pathname, {
       ...init, redirect: 'error', signal: AbortSignal.timeout(120_000),
       headers: { ...init.headers, ...(this.policy ? { 'X-Remote-File-Policy-Version': this.policy.policyVersion } : {}) },
-    }));
+    })).catch((error: unknown) => { throw new RemoteFileRequestError(error instanceof Error ? error.message : RemoteFileReason.Transfer); });
     this.assert(connection);
-    const envelope = await response.json() as { code: number; data: Record<string, any> };
+    const envelope = await response.json().catch((error: unknown) => {
+      if (!response.ok) throw new RemoteFileRequestError(RemoteFileReason.Transfer, response.status, response.headers.get('Retry-After'));
+      throw error;
+    }) as { code: number; data: Record<string, any> };
     this.assert(connection);
     if (!response.ok || envelope.code !== 0) {
       const reason = envelope.data?.reason || RemoteFileReason.Transfer;
       if (reason === RemoteFileReason.Policy) { this.policy = null; this.policyAt = 0; this.policyRetryAt = 0; }
-      throw new Error(String(reason));
+      throw new RemoteFileRequestError(String(reason), response.status, response.headers.get('Retry-After'), String(reason));
     }
     return envelope.data;
   }
@@ -141,7 +168,10 @@ export class RemoteFileSync {
       this.policy = policy; this.policyAt = Date.now(); this.policyRetryAt = 0;
     }
     this.fileHealth = { degraded: false, pending: 0 };
-    if (Date.now() - this.cleanupAt > 3_600_000) { await this.cleanupSnapshots(connection); this.cleanupAt = Date.now(); }
+    if (Date.now() - this.cleanupAt > 3_600_000) {
+      // Unknown references prohibit garbage collection, not independent publication of verified resources.
+      await this.cleanupSnapshots(connection).catch(() => { this.fileHealth.degraded = true; }); this.cleanupAt = Date.now();
+    }
     if (this.canUploadInput()) await this.inputs(connection);
     if (!this.policy?.features.artifactPublish || !this.current(connection)) return;
     await this.delivered.collect(connection.owner, this.policy, sessionId => this.current(connection, sessionId),
@@ -156,38 +186,84 @@ export class RemoteFileSync {
         job.reason = undefined; job.terminalRuns.push(runId);
         this.save(key, job);
         return true;
-      });
-    await this.observe(connection);
-    for (const { key, value: job } of this.deps.store.entries<ArtifactJob>(this.prefix(connection))) {
-      if (this.deps.store.get(`${RemoteDeletion.Closed}${job.localSessionId}`)) continue;
-      if (!this.current(connection, job.localSessionId)) return;
-      this.fileHealth.pending = (this.fileHealth.pending || 0) + job.queue.length + (job.rename ? 1 : 0);
-      if (job.reason) this.fileHealth.degraded = true;
-      if ((!job.queue.length && !job.rename) || (job.retryAt || 0) > Date.now()) continue;
+      }).catch(() => { this.fileHealth.degraded = true; });
+    await this.observe(connection).catch(() => { this.fileHealth.degraded = true; });
+    for (const { key, value: job } of this.fileEntries<ArtifactJob>(this.prefix(connection), true)) {
       try {
-        if (job.rename && job.artifactId) {
-          const rename = job.rename;
-          if (!rename.expectedRevision) {
-            const value = await this.json(connection, `/sessions/${escapeId(job.sessionId)}/artifacts/${escapeId(job.artifactId)}`);
-            rename.expectedRevision = value.revision; this.save(key, job);
-          }
-          const renamed = await this.json(connection, `/artifacts/${escapeId(job.artifactId)}`, rename, 'PATCH');
-          job.name = renamed.name; job.revision = renamed.revision; job.rename = undefined; this.save(key, job);
-        }
-        await this.publish(connection, key, job);
-      }
-      catch (error) {
         if (this.deps.store.get(`${RemoteDeletion.Closed}${job.localSessionId}`)) continue;
-        if (!this.current(connection, job.localSessionId)) return;
+        if (!this.current(connection)) return;
+        if (!this.current(connection, job.localSessionId)) continue;
+        this.fileHealth.pending = (this.fileHealth.pending || 0) + job.queue.length + (job.rename ? 1 : 0);
+        if (job.reason) this.fileHealth.degraded = true;
+        if ((!job.queue.length && !job.rename) || !this.retryAllowed(job)) continue;
+        try {
+          if (job.rename && job.artifactId) {
+            const rename = job.rename;
+            if (!rename.expectedRevision) {
+              const value = await this.json(connection, `/sessions/${escapeId(job.sessionId)}/artifacts/${escapeId(job.artifactId)}`);
+              rename.expectedRevision = value.revision; this.save(key, job);
+            }
+            const renamed = await this.json(connection, `/artifacts/${escapeId(job.artifactId)}`, rename, 'PATCH');
+            job.name = renamed.name; job.revision = renamed.revision; job.rename = undefined; this.save(key, job);
+          }
+          await this.publish(connection, key, job);
+        }
+        catch (error) {
+          if (this.deps.store.get(`${RemoteDeletion.Closed}${job.localSessionId}`)) continue;
+          if (!this.current(connection)) return;
+          if (!this.current(connection, job.localSessionId)) continue;
+          this.fileHealth.degraded = true;
+          job.reason = error instanceof Error ? error.message : RemoteFileReason.Transfer;
+          job.retry = nextFileRetry(job.retry, error, Date.now(), this.policy?.policyVersion || ''); job.retryAt = job.retry.nextRetryAt;
+          this.save(key, job);
+          if (job.artifactId) await this.json(connection, `/artifacts/${escapeId(job.artifactId)}/sync-state`, {
+            operationId: randomUUID(), expectedRevision: job.revision, syncState: 'blocked',
+            reason: remoteArtifactReasons.has(job.reason) ? job.reason : RemoteFileReason.Transfer,
+          }, 'PUT').catch((): void => undefined);
+        }
+      } catch { this.fileHealth.degraded = true; /* Preserve the resource and continue even if its failure record is malformed. */ }
+    }
+  }
+  private retryAllowed(job: { retry?: RemoteFileRetryState; retryAt?: number }): boolean {
+    return job.retry ? fileRetryAllowed(job.retry, Date.now(), this.policy?.policyVersion || '') : (job.retryAt || 0) <= Date.now();
+  }
+  private fileEntries<T>(prefix: string, page = false, strict = false): Array<{ key: string; value: T }> {
+    const cursorKey = `fileScheduleCursor:${prefix}`;
+    let cursor = '';
+    if (page) {
+      try {
+        const value = this.deps.store.get<string>(cursorKey);
+        if (typeof value === 'string' && value.startsWith(prefix)) cursor = value;
+      } catch { this.fileHealth.degraded = true; /* The cursor is a reconstructible scheduling hint, never an upload receipt. */ }
+    }
+    const read = (after: string): Array<{ key: string; value: string }> => this.deps.store.db.prepare(
+      `SELECT key,value FROM remote_state WHERE key>=? AND key<? AND key>? ORDER BY key${page ? ' LIMIT 50' : ''}`,
+    ).all(prefix, `${prefix}\uffff`, after) as Array<{ key: string; value: string }>;
+    let rows = read(cursor);
+    if (page && !rows.length && cursor) rows = read('');
+    if (page && rows.length) this.deps.store.put(cursorKey, rows[rows.length - 1].key);
+    const parsed: Array<{ key: string; value: T }> = [];
+    for (const row of rows) {
+      try {
+        const value = JSON.parse(row.value) as T;
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid file job');
+        const job = value as unknown as InputJob | ArtifactJob;
+        if (!safeId(job.localSessionId) || !job.owner || typeof job.owner.userId !== 'string' || typeof job.owner.scopeKey !== 'string'
+          || typeof job.sessionId !== 'string') throw new Error('Invalid file job identity');
+        if (prefix.startsWith('fileOutput:')) {
+          const output = job as ArtifactJob;
+          if (!Array.isArray(output.queue) || !Array.isArray(output.terminalRuns) || !output.references || Array.isArray(output.references)
+            || typeof output.references !== 'object' || !/^\d+$/u.test(output.captureSequence)) throw new Error('Invalid artifact job');
+        } else if (!safeId((job as InputJob).messageId) || typeof (job as InputJob).fileName !== 'string') throw new Error('Invalid input job');
+        parsed.push({ key: row.key, value });
+      } catch {
+        // This is operation evidence: retain both the live row and its original bytes, never reconstruct a new upload ID.
+        this.deps.store.db.prepare('INSERT OR IGNORE INTO remote_corrupt_state VALUES (?,?,?)').run(row.key, row.value, Date.now());
         this.fileHealth.degraded = true;
-        job.reason = error instanceof Error ? error.message : RemoteFileReason.Transfer; job.retryAt = Date.now() + 60_000;
-        this.save(key, job);
-        if (job.artifactId) await this.json(connection, `/artifacts/${escapeId(job.artifactId)}/sync-state`, {
-          operationId: randomUUID(), expectedRevision: job.revision, syncState: 'blocked',
-          reason: remoteArtifactReasons.has(job.reason) ? job.reason : RemoteFileReason.Transfer,
-        }, 'PUT').catch((): void => undefined);
+        if (strict) throw new Error(RemoteFileReason.Source);
       }
     }
+    return parsed;
   }
   private async cleanupSnapshots(connection: Connection): Promise<void> {
     this.assert(connection);
@@ -309,45 +385,50 @@ export class RemoteFileSync {
     const selected = [...rows.slice(offset), ...rows.slice(0, offset)].slice(0, 20);
     this.observationCursor = rows.length ? (offset + selected.length) % rows.length : 0;
     for (const row of selected) {
-      const activeRun = this.deps.store.run(row.local_id);
-      if (!activeRun || terminal.has(activeRun.status)) {
-        if ((this.coldObservationAt.get(row.local_id) ?? 0) > Date.now()) continue;
-        this.coldObservationAt.set(row.local_id, Date.now() + 60000);
-        if (this.coldObservationAt.size > 2000) this.coldObservationAt.delete(this.coldObservationAt.keys().next().value!);
-      }
-      if (!this.current(connection, row.local_id)) return;
-      let count = 0;
-      for (const source of this.sources(row.local_id)) {
-        if (++count > (this.policy?.limits.maxTaskArtifactCount || 20)) break;
-        const { key, job } = this.getJob(connection, source);
-        try {
-          const stat = await fs.promises.stat(source.file_path);
-          job.sizeBytes = String(stat.size);
-          const signature = `${source.updated_at}:${source.message_id}:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
-          if (signature !== job.signature) { job.signature = signature; job.changedAt = Date.now(); job.dirtyAt ||= Date.now(); }
-          const run = this.deps.store.run(row.local_id);
-          if (run?.runId === source.run_id && terminal.has(run.status) && !job.terminalRuns.includes(run.runId)) {
-            const boundary = this.deps.store.get<TerminalBoundary>(`fileTerminalBoundary:${row.local_id}:${run.runId}`);
-            const ordinal = this.deps.store.get<string>(`fileRunOrdinal:${row.local_id}`);
-            // Renderer indexing can follow complete. Admission must have been durably recorded at the real live boundary.
-            const admitted = boundary && sameOwner(boundary.owner, connection.owner) && boundary.environment === connection.environment
-              && boundary.deviceId === connection.deviceId && boundary.finishedAt === run.finishedAt && boundary.ordinal === ordinal
-              && ordinal === this.deps.store.get<string>(`fileRunOrdinal:${row.local_id}:${run.runId}`)
-              && stat.mtimeMs <= Date.parse(boundary.finishedAt) + 1 && stat.birthtimeMs <= Date.parse(boundary.finishedAt) + 1;
-            if (admitted) {
-              try {
-                if (!this.captureProducerVersion(connection, source, job)) { job.reason = RemoteFileReason.Final; await this.capture(connection, source, job); }
-              } catch { job.reason = RemoteFileReason.Final; }
-            }
-            else job.reason = RemoteFileReason.Final;
-            job.terminalRuns.push(run.runId);
-          } else if (run?.runId !== source.run_id && !job.terminalRuns.includes(source.run_id)) {
-            job.reason = RemoteFileReason.Final; job.terminalRuns.push(source.run_id);
-          } else if (job.dirtyAt && !job.queue.length && run?.runId === source.run_id && !terminal.has(run.status)
-            && (Date.now() - (job.changedAt || 0) >= 2_000 || Date.now() - job.dirtyAt >= 10_000)) await this.capture(connection, source, job);
-        } catch (error) { job.reason = error instanceof Error ? error.message : RemoteFileReason.Source; }
-        this.save(key, job);
-      }
+      try {
+        const activeRun = this.deps.store.run(row.local_id);
+        if (!activeRun || terminal.has(activeRun.status)) {
+          if ((this.coldObservationAt.get(row.local_id) ?? 0) > Date.now()) continue;
+          this.coldObservationAt.set(row.local_id, Date.now() + 60000);
+          if (this.coldObservationAt.size > 2000) this.coldObservationAt.delete(this.coldObservationAt.keys().next().value!);
+        }
+        if (!this.current(connection)) return;
+        if (!this.current(connection, row.local_id)) continue;
+        let count = 0;
+        for (const source of this.sources(row.local_id)) {
+          if (++count > (this.policy?.limits.maxTaskArtifactCount || 20)) break;
+          try {
+            const { key, job } = this.getJob(connection, source);
+            try {
+              const stat = await fs.promises.stat(source.file_path);
+              job.sizeBytes = String(stat.size);
+              const signature = `${source.updated_at}:${source.message_id}:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+              if (signature !== job.signature) { job.signature = signature; job.changedAt = Date.now(); job.dirtyAt ||= Date.now(); }
+              const run = this.deps.store.run(row.local_id);
+              if (run?.runId === source.run_id && terminal.has(run.status) && !job.terminalRuns.includes(run.runId)) {
+                const boundary = this.deps.store.get<TerminalBoundary>(`fileTerminalBoundary:${row.local_id}:${run.runId}`);
+                const ordinal = this.deps.store.get<string>(`fileRunOrdinal:${row.local_id}`);
+                // Renderer indexing can follow complete. Admission must have been durably recorded at the real live boundary.
+                const admitted = boundary && sameOwner(boundary.owner, connection.owner) && boundary.environment === connection.environment
+                  && boundary.deviceId === connection.deviceId && boundary.finishedAt === run.finishedAt && boundary.ordinal === ordinal
+                  && ordinal === this.deps.store.get<string>(`fileRunOrdinal:${row.local_id}:${run.runId}`)
+                  && stat.mtimeMs <= Date.parse(boundary.finishedAt) + 1 && stat.birthtimeMs <= Date.parse(boundary.finishedAt) + 1;
+                if (admitted) {
+                  try {
+                    if (!this.captureProducerVersion(connection, source, job)) { job.reason = RemoteFileReason.Final; await this.capture(connection, source, job); }
+                  } catch { job.reason = RemoteFileReason.Final; }
+                }
+                else job.reason = RemoteFileReason.Final;
+                job.terminalRuns.push(run.runId);
+              } else if (run?.runId !== source.run_id && !job.terminalRuns.includes(source.run_id)) {
+                job.reason = RemoteFileReason.Final; job.terminalRuns.push(source.run_id);
+              } else if (job.dirtyAt && !job.queue.length && run?.runId === source.run_id && !terminal.has(run.status)
+                && (Date.now() - (job.changedAt || 0) >= 2_000 || Date.now() - job.dirtyAt >= 10_000)) await this.capture(connection, source, job);
+            } catch (error) { job.reason = error instanceof Error ? error.message : RemoteFileReason.Source; }
+            this.save(key, job);
+          } catch { this.fileHealth.degraded = true; }
+        }
+      } catch { this.fileHealth.degraded = true; }
     }
   }
   private captureTerminal(sessionId: string, runId: string): void {
@@ -370,63 +451,73 @@ export class RemoteFileSync {
   }
   private async inputs(connection: Connection): Promise<void> {
     if (!this.policy || !this.canUploadInput()) return;
-    const jobs = this.deps.store.entries<InputJob>('desktopAsset:');
+    const jobs = this.fileEntries<InputJob>('desktopAsset:', true);
     for (const { key, value: job } of jobs) {
-      if (!sameOwner(job.owner, connection.owner) || !this.current(connection, job.localSessionId)) continue;
-      if (job.environment && job.environment !== connection.environment) continue;
-      if (job.availability === 'ready') continue;
-      this.fileHealth.pending = (this.fileHealth.pending || 0) + 1;
-      if (job.reason) this.fileHealth.degraded = true;
-      if ((job.retryAt || 0) > Date.now()) continue;
-      const session = this.deps.store.sync(job.localSessionId);
-      if (!session || session.device_id !== connection.deviceId || session.needs_snapshot || session.source_seq !== session.ack_seq) continue;
       try {
-        const reason = remoteFileRule(this.policy, job.fileName, job.sizeBytes || '0', false);
-        if (reason) throw new Error(reason);
-        const siblings = jobs.map(row => row.value).filter(item => item.messageId === job.messageId && sameOwner(item.owner, job.owner));
-        if (siblings.length > this.policy.limits.maxInputCount || siblings.reduce((sum, item) => sum + BigInt(item.sizeBytes || '0'), 0n) > BigInt(this.policy.limits.maxInputBytes)
-          || siblings.filter(item => item.intent === 'image').reduce((sum, item) => sum + BigInt(item.sizeBytes || '0'), 0n) > BigInt(this.policy.limits.maxImageBytes)) throw new Error('INPUT_TOTAL_TOO_LARGE');
-        // An executed phone input retains a sealed preparation; each target gets an independent upload copy.
-        if (!job.snapshot && job.preparedSource) {
-          job.snapshot = await capturePreparedInputSnapshot(this.deps.store, job as InputJob & DesktopInputSource & { preparedSource: RemotePreparedInputSource },
-            this.deps.cacheRoot, connection.deviceId, () => this.assert(connection, job.localSessionId));
-          this.assert(connection, job.localSessionId);
-          this.deps.store.put(key, durableJson(job));
-        }
-        // Mutable historical file paths never become retrospective snapshots.
-        if (!job.snapshot) throw new Error(typeof job.captureReason === 'string' && remoteArtifactReasons.has(job.captureReason)
-          ? job.captureReason : RemoteFileReason.Source);
-        job.deviceId = connection.deviceId; job.sessionId = session.session_id; job.environment = connection.environment;
-        const uploadedAsset = await uploadDesktopMessageAsset({ ...job, path: job.snapshot.path, sha256: job.snapshot.sha256, fileIdentity: undefined }, {
-          current: () => this.current(connection, job.localSessionId) && !!this.deps.store.db.prepare("SELECT id FROM cowork_messages WHERE id=? AND session_id=? AND type='user'").get(job.messageId, job.localSessionId),
-          request: (pathname, init) => this.deps.request(connection, pathname.replace(/^\/api\/remote\/v1/u, ''), { ...init,
-            headers: { ...init.headers, 'X-Remote-File-Policy-Version': this.policy!.policyVersion } }),
-          persist: patch => {
+        if (!sameOwner(job.owner, connection.owner) || !this.current(connection, job.localSessionId)) continue;
+        if (job.environment && job.environment !== connection.environment) continue;
+        if (job.availability === 'ready') continue;
+        this.fileHealth.pending = (this.fileHealth.pending || 0) + 1;
+        if (job.reason) this.fileHealth.degraded = true;
+        if (!this.retryAllowed(job)) continue;
+        const session = this.deps.store.sync(job.localSessionId);
+        if (!session || session.device_id !== connection.deviceId || session.needs_snapshot || session.source_seq !== session.ack_seq) continue;
+        try {
+          const reason = remoteFileRule(this.policy, job.fileName, job.sizeBytes || '0', false);
+          if (reason) throw new Error(reason);
+          // The quota boundary must include every sibling, even outside this scheduler page. Corrupt siblings block only this message.
+          const siblings = this.deps.store.entries<InputJob>(`desktopAsset:${job.messageId}:`).map(row => row.value);
+          if (siblings.some(item => item.messageId !== job.messageId || !sameOwner(item.owner, job.owner))) throw new Error(RemoteFileReason.Access);
+          if (siblings.length > this.policy.limits.maxInputCount || siblings.reduce((sum, item) => sum + BigInt(item.sizeBytes || '0'), 0n) > BigInt(this.policy.limits.maxInputBytes)
+            || siblings.filter(item => item.intent === 'image').reduce((sum, item) => sum + BigInt(item.sizeBytes || '0'), 0n) > BigInt(this.policy.limits.maxImageBytes)) throw new Error('INPUT_TOTAL_TOO_LARGE');
+          // An executed phone input retains a sealed preparation; each target gets an independent upload copy.
+          if (!job.snapshot && job.preparedSource) {
+            job.snapshot = await capturePreparedInputSnapshot(this.deps.store, job as InputJob & DesktopInputSource & { preparedSource: RemotePreparedInputSource },
+              this.deps.cacheRoot, connection.deviceId, () => this.assert(connection, job.localSessionId));
             this.assert(connection, job.localSessionId);
-            const changed = patch.availability !== undefined && (job.availability !== patch.availability || job.reason !== undefined);
-            Object.assign(job, patch);
-            if (patch.availability !== undefined) job.reason = undefined;
-            this.deps.store.transaction(() => {
+            this.deps.store.put(key, durableJson(job));
+          }
+          // Mutable historical file paths never become retrospective snapshots.
+          if (!job.snapshot) throw new Error(typeof job.captureReason === 'string' && remoteArtifactReasons.has(job.captureReason)
+            ? job.captureReason : RemoteFileReason.Source);
+          job.deviceId = connection.deviceId; job.sessionId = session.session_id; job.environment = connection.environment;
+          const uploadedAsset = await uploadDesktopMessageAsset({ ...job, path: job.snapshot.path, sha256: job.snapshot.sha256, fileIdentity: undefined }, {
+            current: () => this.current(connection, job.localSessionId) && !!this.deps.store.db.prepare("SELECT id FROM cowork_messages WHERE id=? AND session_id=? AND type='user'").get(job.messageId, job.localSessionId),
+            request: (pathname, init) => this.deps.request(connection, pathname.replace(/^\/api\/remote\/v1/u, ''), { ...init,
+              headers: { ...init.headers, 'X-Remote-File-Policy-Version': this.policy!.policyVersion } }),
+            persist: patch => {
+              this.assert(connection, job.localSessionId);
+              const changed = patch.availability !== undefined && (job.availability !== patch.availability || job.reason !== undefined);
+              Object.assign(job, patch);
+              if (patch.availability !== undefined) job.reason = undefined;
+              this.deps.store.transaction(() => {
+                this.deps.store.put(key, durableJson(job));
+                if (changed) this.deps.store.markFilesDirty(job.localSessionId);
+              });
+            },
+            progress: () => {
+              this.assert(connection, job.localSessionId); job.retry = undefined; job.retryAt = undefined;
               this.deps.store.put(key, durableJson(job));
-              if (changed) this.deps.store.markFilesDirty(job.localSessionId);
-            });
-          },
-        });
-        this.assert(connection, job.localSessionId);
-        this.deps.store.transaction(() => { this.deps.store.put(key, durableJson({ ...job, availability: 'ready', uploadedAsset, reason: undefined })); this.deps.store.markFilesDirty(job.localSessionId); });
-        // Remote publication is already committed. A private-cache cleanup failure must not erase its ready receipt.
-        await fs.promises.rm(job.snapshot.path, { force: true }).catch((): void => undefined);
-      } catch (error) {
-        if (!this.current(connection, job.localSessionId)) return;
-        this.fileHealth.degraded = true;
-        const reason = error instanceof Error ? error.message : RemoteFileReason.Transfer;
-        const changed = job.reason !== reason;
-        job.reason = reason; job.retryAt = Date.now() + 60_000;
-        this.deps.store.transaction(() => {
-          this.deps.store.put(key, durableJson(job));
-          if (changed) this.deps.store.markFilesDirty(job.localSessionId);
-        });
-      }
+            },
+          }, { partBudget: 1 });
+          this.assert(connection, job.localSessionId);
+          if (!uploadedAsset) { job.retry = undefined; job.retryAt = undefined; this.deps.store.put(key, durableJson(job)); continue; }
+          this.deps.store.transaction(() => { this.deps.store.put(key, durableJson({ ...job, retry: undefined, retryAt: undefined, availability: 'ready', uploadedAsset, reason: undefined })); this.deps.store.markFilesDirty(job.localSessionId); });
+          // Remote publication is already committed. A private-cache cleanup failure must not erase its ready receipt.
+          await fs.promises.rm(job.snapshot.path, { force: true }).catch((): void => undefined);
+        } catch (error) {
+          if (!this.current(connection)) return;
+          if (!this.current(connection, job.localSessionId)) continue;
+          this.fileHealth.degraded = true;
+          const reason = error instanceof Error ? error.message : RemoteFileReason.Transfer;
+          const changed = job.reason !== reason;
+          job.reason = reason; job.retry = nextFileRetry(job.retry, error, Date.now(), this.policy?.policyVersion || ''); job.retryAt = job.retry.nextRetryAt;
+          this.deps.store.transaction(() => {
+            this.deps.store.put(key, durableJson(job));
+            if (changed) this.deps.store.markFilesDirty(job.localSessionId);
+          });
+        }
+      } catch { this.fileHealth.degraded = true; /* A resource read/recovery failure cannot starve the next job. */ }
     }
   }
   private async publish(connection: Connection, key: string, job: ArtifactJob): Promise<void> {
@@ -468,7 +559,7 @@ export class RemoteFileSync {
       if (messageId === pending.messageId || reference.pinned) continue;
       await this.json(connection, `${artifactPath}/references`, { requestId: `history-${createHash('sha256').update(`${job.artifactId}:${messageId}:${reference.latest.artifactVersion}`).digest('hex').slice(0, 32)}`,
         artifactVersion: reference.latest.artifactVersion, messageId, runId: reference.runId, sha256: reference.latest.sha256, kind: 'history' });
-      reference.pinned = true; this.save(key, job);
+      reference.pinned = true; this.save(key, job); return;
     }
     let upload: Record<string, any>;
     for (let attempt = 0; ; attempt++) {
@@ -494,18 +585,22 @@ export class RemoteFileSync {
     const uploadPath = `/artifact-uploads/${escapeId(pending.assetId!)}`;
     if (upload.status !== 'ready' && upload.status !== 'published') {
       const partBytes = Number(upload.partBytes), partCount = Number(upload.partCount), size = Number(pending.snapshot.sizeBytes);
-      if (!Number.isInteger(partBytes) || partBytes < 1 || partBytes > 4 * 1024 * 1024 || partCount !== Math.ceil(size / partBytes) || !Array.isArray(upload.completedParts)) throw new Error(RemoteFileReason.Transfer);
+      if (!Number.isInteger(partBytes) || partBytes < 1 || partBytes > 4 * 1024 * 1024 || partCount !== Math.ceil(size / partBytes) || !Array.isArray(upload.completedParts)
+        || upload.completedParts.some((value: unknown) => !Number.isInteger(value) || Number(value) < 1 || Number(value) > partCount)) throw new Error(RemoteFileReason.Transfer);
       const handle = await fs.promises.open(pending.snapshot.path, 'r');
+      let sent = false;
       try {
         for (let partNo = 1; partNo <= partCount; partNo++) {
           if (!current()) throw new Error(RemoteFileReason.Access);
           if (upload.completedParts.includes(partNo)) continue;
+          if (sent) return;
           const offset = (partNo - 1) * partBytes, length = Math.min(partBytes, size - offset), buffer = new Uint8Array(length);
           let read = 0;
           while (read < length) { const chunk = await handle.read(buffer, read, length - read, offset + read); if (!chunk.bytesRead) throw new Error(RemoteFileReason.Source); read += chunk.bytesRead; }
           const digest = createHash('sha256').update(buffer).digest('hex');
           // Electron computes Content-Length from these fixed bytes; setting it manually rejects net.fetch.
           await this.request(connection, `${uploadPath}/parts/${partNo}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', 'X-Content-SHA256': digest }, body: buffer.buffer });
+          sent = true; job.retry = undefined; job.retryAt = undefined; this.save(key, job);
         }
       } finally { await handle.close(); }
       await this.json(connection, `${uploadPath}/complete`, { sha256 });
@@ -549,13 +644,13 @@ export class RemoteFileSync {
     job.queue = job.queue.filter(item => item.publicationId !== pending.publicationId);
     job.completedPublications = [...(job.completedPublications || []), pending.publicationId];
     if (job.reason !== RemoteFileReason.Final) job.reason = undefined;
-    job.retryAt = undefined; this.save(key, job);
-    await fs.promises.rm(pending.snapshot.path, { force: true });
+    job.retry = undefined; job.retryAt = undefined; this.save(key, job);
+    await fs.promises.rm(pending.snapshot.path, { force: true }).catch((): void => undefined);
   }
   private projection(sessionId: string, messageId: string): Array<{ localArtifactId: string; block: Record<string, unknown> }> {
     const connection = this.connection;
     if (!connection || !this.current(connection, sessionId)) return [];
-    return projectRemoteArtifacts(this.deps.store.entries<ArtifactJob>(this.prefix(connection))
+    return projectRemoteArtifacts(this.fileEntries<ArtifactJob>(`${this.prefix(connection)}${sessionId}:`, false, true)
       .map(row => row.value).filter(job => job.localSessionId === sessionId), messageId);
   }
 }

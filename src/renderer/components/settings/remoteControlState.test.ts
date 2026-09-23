@@ -172,6 +172,17 @@ describe('connection and content health remain independent', () => {
     expect(remoteSyncDescription(state)).toBe('remoteFilesPending');
     expect(remoteAttention(state)).toEqual({ key: 'remoteFilesPending', immediate: false });
   });
+  test('isolated tasks stay visible without turning a healthy device into a paused connection', () => {
+    const state = { ...connected, sessionSyncStatus: RemoteSyncStatus.Error,
+      syncHealth: { ...health, reason: RemoteSyncHealthReason.Projection, failedSessions: 2, isolatedSessions: 1, retryingSessions: 1 } };
+    expect(isRemoteOnline(state)).toBe(true);
+    expect(remoteConnectionFailure(state)).toBeNull();
+    expect(remoteSyncDescription(state)).toBe('remoteTasksSyncFailed');
+    expect(remoteAttention(state)).toEqual({ key: 'remoteTasksSyncFailed', immediate: false });
+    expect(remoteSyncDescription({ ...state, connected: false })).toBe('remoteSyncPaused');
+    expect(remoteSyncDescription({ ...state, syncHealth: { ...state.syncHealth, reason: RemoteSyncHealthReason.StorageDependency } })).toBe('remoteSyncPaused');
+  });
+
   test('new clients distinguish backlog and cache recovery; old clients do not claim full sync', () => {
     expect(remoteSyncDescription(connected)).toBeNull();
     expect(remoteSyncDescription({ ...connected, syncHealth: { ...health, status: RemoteSyncHealthStatus.Syncing } })).toBe('remoteContentSyncing');

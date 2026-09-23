@@ -205,7 +205,7 @@ describe('remote sync persistence logging', () => {
 
   it('emits one retry deferral per unchanged deadline and logs a changed deadline again', async () => {
     const { bridge, store, request, debug, warning } = syncing();
-    request.mockRejectedValue(new RemoteApiError(47019, privateText, { reason: 'EXECUTION_FAILED' }, 409));
+    request.mockRejectedValue(new RemoteApiError(503, privateText, { reason: 'TEMPORARILY_UNAVAILABLE' }, 503));
     await bridge.syncSessions();
     const failure = store.get<any>('syncFailure:sync-task')!;
     await bridge.syncSessions(); await bridge.syncSessions(); await bridge.syncSessions();
@@ -213,7 +213,7 @@ describe('remote sync persistence logging', () => {
     const deferred = () => debug.mock.calls.filter(([message]) => message === '[RemoteSync] Session synchronization deferred');
     expect(deferred()).toHaveLength(1);
     expect(deferred()[0][1]).toMatchObject({ reason: 'retry_backoff', retryAt: failure.retryAt, localSessionId: 'sync-task' });
-    store.put('syncFailure:sync-task', { ...failure, retryAt: failure.retryAt + 1000 });
+    store.db.prepare("UPDATE remote_sync_task_state SET next_retry_at=next_retry_at+1000 WHERE local_session_id='sync-task'").run();
     await bridge.syncSessions();
     expect(deferred()).toHaveLength(2);
   });

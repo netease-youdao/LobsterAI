@@ -165,6 +165,59 @@ describe('desktop input capture and upload admission', () => {
     expect(f.uploads).toHaveLength(0);
   });
 
+  it('preserves a corrupt unrelated job and continues a healthy input even when cleanup cannot inspect its references', async () => {
+    const f = fixture(); await f.capture();
+    f.store.db.prepare('INSERT INTO remote_state VALUES (?,?)').run('desktopAsset:broken:0', '{broken');
+    await f.tick();
+    expect(f.job()).toMatchObject({ availability: 'ready' });
+    expect(f.store.db.prepare('SELECT value FROM remote_state WHERE key=?').get('desktopAsset:broken:0')).toEqual({ value: '{broken' });
+    expect(f.store.db.prepare('SELECT value FROM remote_corrupt_state WHERE key=?').get('desktopAsset:broken:0')).toEqual({ value: '{broken' });
+    expect(f.sync.health().degraded).toBe(true);
+  });
+  it('does not evade message-level quotas when a sibling attachment is corrupt', async () => {
+    const f = fixture(), snapshot = await f.capture();
+    f.store.db.prepare('INSERT INTO remote_state VALUES (?,?)').run('desktopAsset:m:1', '{broken');
+    await f.tick();
+    expect(f.uploads).toHaveLength(0);
+    expect(f.job().retry.phase).toBe('isolated');
+    expect(fs.existsSync(snapshot.path)).toBe(true);
+  });
+  it('persists increasing backoff and cooldown across reconnect without replacing upload identity', async () => {
+    const f = fixture(); await f.capture();
+    const requestId = f.job().uploadRequestId;
+    f.request.mockImplementation(async (_connection, pathname) => {
+      if (pathname.startsWith('/file-policy')) return ok(policy);
+      throw new Error('temporary transfer failure');
+    });
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      await f.tick();
+      expect(f.job().retry.failures).toBe(attempt);
+      expect(f.job().uploadRequestId).toBe(requestId);
+      if (attempt < 5) vi.mocked(Date.now).mockReturnValue(f.job().retryAt + 1);
+    }
+    expect(f.job().retry.phase).toBe('cooldown');
+    const count = f.request.mock.calls.length;
+    f.sync.pause(); f.connection.generation = '2'; await f.tick();
+    expect(f.request.mock.calls.filter(call => !call[1].startsWith('/file-policy'))).toHaveLength(5);
+    expect(f.request.mock.calls.length).toBe(count + 1);
+    expect(f.job().retry.failures).toBe(5);
+  });
+  it('retries only eligible task resources once per minute without clearing failure counts or server delay', async () => {
+    const f = fixture(); await f.capture();
+    f.request.mockResolvedValueOnce(ok(policy)).mockRejectedValueOnce(new Error('temporary transfer failure'));
+    await f.tick();
+    const failed = f.job();
+    expect(f.sync.retrySession('s')).toBe(true);
+    expect(f.job().retry.failures).toBe(1);
+    expect(f.job().uploadRequestId).toBe(failed.uploadRequestId);
+    expect(f.sync.retrySession('s')).toBe(false);
+    f.advance();
+    f.store.put('desktopAsset:m:0', { ...failed, retry: { ...failed.retry, serverRetryAt: Date.now() + 60_000 } });
+    expect(f.sync.retrySession('s')).toBe(false);
+    f.store.put('desktopAsset:m:0', { ...failed, retry: { ...failed.retry, phase: 'isolated' } });
+    expect(f.sync.retrySession('s')).toBe(false);
+  });
+
   it('does not upload captured bytes under another account or without remote admission', async () => {
     const f = fixture(); const snapshot = await f.capture();
     f.setOwner({ userId: 'another-account', scopeKey: 'personal' });

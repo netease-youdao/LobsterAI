@@ -26,7 +26,7 @@ const policy: RemoteFilePolicy = { policyVersion: '1', features: { inputUpload: 
   limits: { partBytes: '4194304', maxInputCount: 10, maxInputBytes: '104857600', maxImageBytes: '20971520', maxTaskArtifactCount: 20, maxTaskArtifactBytes: '209715200' } };
 function folder(): string { const result = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'remote-files-test-'))); disposable.push(() => fs.rmSync(result, { recursive: true, force: true })); return result; }
 const ok = (data: unknown): Response => new Response(JSON.stringify({ code: 0, data }));
-function fixture(sealedProducer = true, deliveries = false, fileName = 'report.md') {
+function fixture(sealedProducer = true, deliveries = false, fileName = 'report.md', partBytes = 4194304) {
   const directory = folder(), source = path.join(directory, fileName), cache = path.join(directory, 'cache'); fs.writeFileSync(source, 'first');
   const db = new Database(':memory:'); disposable.push(() => db.close());
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT,model_override TEXT,thinking_level TEXT);
@@ -44,7 +44,7 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
   });
   let actor: RemoteOwner | null = owner, generation = '1', version = 0;
   const calls: Array<{ pathname: string; body: any; headers: HeadersInit | undefined; generation: string }> = [];
-  const uploads = new Map<string, any>(), bytes = new Map<string, Buffer>(), references: any[] = [];
+  const uploads = new Map<string, any>(), bytes = new Map<string, Buffer>(), references: any[] = [], chunks = new Map<string, Map<number, Buffer>>();
   let latest: any = null, responseHook: ((pathname: string) => void) | undefined, loseVersionReceipt = false, manifestOverrides: Record<string, unknown> = {};
   const connection = () => ({ owner, environment: 'https://example.invalid', deviceId: 'pc', generation });
   const request = vi.fn(async (con, pathname, init) => {
@@ -61,7 +61,7 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
       const existing = [...uploads.values()].find(item => item.publicationId === body.publicationId);
       if (existing) return ok(existing);
       const item = { ...body, artifactId: 'remote', assetId: `asset${++version}`, artifactVersion: String(version), assetVersion: '1', writerGeneration: con.generation,
-        status: 'uploading', publicationStatus: 'uploading', published: false, partBytes: '4194304', partCount: 1, completedParts: [] };
+        status: 'uploading', publicationStatus: 'uploading', published: false, partBytes: String(partBytes), partCount: Math.ceil(Number(body.sizeBytes) / partBytes), completedParts: [] };
       uploads.set(item.assetId, item);
       if (loseVersionReceipt) { loseVersionReceipt = false; throw new Error('create receipt lost'); }
       return ok(item);
@@ -72,7 +72,10 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
       expect(headers.has('Content-Length')).toBe(false);
       expect(headers.get('Content-Type')).toBe('application/octet-stream');
       expect(headers.get('X-Content-SHA256')).toBe(createHash('sha256').update(part).digest('hex'));
-      const id = pathname.split('/')[2]; bytes.set(id, part); uploads.get(id).completedParts = [1]; return ok({});
+      const id = pathname.split('/')[2], partNo = Number(pathname.split('/').at(-1));
+      const parts = chunks.get(id) || new Map<number, Buffer>(); parts.set(partNo, part); chunks.set(id, parts);
+      bytes.set(id, Buffer.concat([...parts.entries()].sort(([left], [right]) => left - right).map(([, value]) => value)));
+      uploads.get(id).completedParts = [...parts.keys()]; return ok({});
     }
     if (pathname.endsWith('/complete')) { const item = uploads.get(pathname.split('/')[2]); item.status = 'ready'; return ok(item); }
     if (pathname.endsWith('/resume')) { const item = uploads.get(pathname.split('/')[2]); item.writerGeneration = con.generation; return ok(item); }
@@ -263,6 +266,31 @@ describe('artifact sync durable boundaries and protocol', () => {
     expect(f.uploads.get('asset1')).toMatchObject({ sizeBytes: '9327', sha256: createHash('sha256').update(original).digest('hex'), publicationStatus: 'published' });
     expect(f.calls.filter(call => call.pathname === '/artifact-uploads/asset1/parts/1')).toHaveLength(1);
     expect(f.references[0]).toMatchObject({ runId: 'run1', kind: 'terminal', artifactVersion: '1' });
+  });
+  it('does not let an unrelated corrupt artifact poison this task projection or upload', async () => {
+    const f = fixture(); await f.tick();
+    const key = f.store.entries('fileOutput:')[0].key.replace(/:s:local$/u, ':other:broken');
+    f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run(key, '{broken');
+    f.store.updateRun('s', 'succeeded'); await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('first');
+    expect(f.db.prepare('SELECT value FROM remote_state WHERE key=?').get(key)).toEqual({ value: '{broken' });
+    expect(f.db.prepare('SELECT value FROM remote_corrupt_state WHERE key=?').get(key)).toEqual({ value: '{broken' });
+  });
+  it('yields multipart artifacts after each new part and resumes the original publication after restart', async () => {
+    const f = fixture(true, false, 'report.md', 2);
+    await f.tick(); f.store.updateRun('s', 'succeeded'); await f.tick();
+    const original = f.jobs()[0].queue[0];
+    expect(f.calls.filter(call => call.pathname.includes('/parts/')).map(call => call.pathname)).toEqual(['/artifact-uploads/asset1/parts/1']);
+    expect(f.calls.some(call => call.pathname.endsWith('/complete'))).toBe(false);
+    f.reconnect(); await f.tick();
+    expect(f.calls.filter(call => call.pathname.includes('/parts/')).map(call => call.pathname)).toEqual([
+      '/artifact-uploads/asset1/parts/1', '/artifact-uploads/asset1/parts/2',
+    ]);
+    expect(f.jobs()[0].queue[0].publicationId).toBe(original.publicationId);
+    await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('first');
+    expect(f.jobs()[0].queue).toHaveLength(0);
+    expect(f.uploads.size).toBe(1);
   });
   it('keeps two final snapshots in capture order while the later run overwrites the source', async () => {
     const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded'); f.nextRun(2, 'second'); f.store.updateRun('s', 'succeeded');

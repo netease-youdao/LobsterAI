@@ -149,21 +149,22 @@ describe('retention bridge recovery', () => {
     request.mockImplementation(async (_actor, path: string) => {
       if (path.includes('/sync/state?')) return response({ reason: 'SYNC_STATE_NOT_FOUND' }, RemoteRetention.StateMissingCode, 404);
       if (path.endsWith('/sync/imports')) {
-        if (lostAt === 'begin' && !failed) { failed = true; throw new Error('Lost ACK'); }
+        if (lostAt === 'begin' && !failed) { failed = true; throw new TypeError('fetch failed'); }
         return response(receipt(store, committed ? 'committed' : 'uploading'));
       }
       if (path.includes('/parts/')) return response({});
       if (path.endsWith('/commit')) {
         committed = true;
-        if (lostAt === 'commit' && !failed) { failed = true; throw new Error('Lost ACK'); }
+        if (lostAt === 'commit' && !failed) { failed = true; throw new TypeError('fetch failed'); }
         return response(receipt(store));
       }
       throw new Error(path);
     });
-    await expect(bridge.syncSessions()).rejects.toThrow('Lost ACK');
+    await expect(bridge.syncSessions()).resolves.toBeUndefined();
     const saved = store.get<any>('import:local')!; const old = store.pending('local');
     expect(store.sync('local')!.migration_frozen).toBe(1); update(store);
     expect(store.pending('local')).toEqual(old);
+    store.db.prepare("UPDATE remote_sync_task_state SET next_retry_at=0,server_retry_at=0 WHERE local_session_id='local'").run();
     await bridge.syncSessions();
     const beginCalls = request.mock.calls.filter(call => call[1].endsWith('/sync/imports'));
     expect(beginCalls.map(call => JSON.parse(String(call[2].body)).importId)).toEqual([saved.importId, saved.importId]);

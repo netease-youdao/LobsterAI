@@ -8,7 +8,7 @@ interface ConfigureDependencies {
   selectWorkspace(): Promise<{ name: string; path: string } | undefined>;
   configureRemote(changes: {
     enabled?: boolean; name?: string; workspace?: { name: string; path: string };
-    removeWorkspaceId?: string; retry?: boolean;
+    removeWorkspaceId?: string; retry?: boolean; retrySessionId?: string;
   }): Promise<unknown>;
 }
 
@@ -24,6 +24,8 @@ export async function configureRemoteSettings(
   }
   if (input.enabled !== undefined && typeof input.enabled !== 'boolean') throw new Error('Invalid remote enabled setting');
   if (input.retry !== undefined && typeof input.retry !== 'boolean') throw new Error('Invalid retry setting');
+  if (input.retrySessionId !== undefined && (!input.expectedAccountEpoch || typeof input.retrySessionId !== 'string'
+    || !/^[A-Za-z0-9_-]{1,128}$/.test(input.retrySessionId))) throw new Error('Invalid task retry setting');
   const actor = deps.getOwner();
   if (!actor) throw new Error('Sign in before configuring remote access');
   const owner = { ...actor };
@@ -46,9 +48,10 @@ export async function configureRemoteSettings(
     if (input.retry) controller.restoreKeepAwake();
     assertCurrent();
     if (input.keepAwakeEnabled !== undefined && input.enabled === undefined && input.name === undefined
-      && !input.retry && !input.addWorkspace && !input.removeWorkspaceId) return controller.state();
+      && !input.retry && !input.retrySessionId && !input.addWorkspace && !input.removeWorkspaceId) return controller.state();
     await deps.configureRemote({ enabled: input.enabled, name: input.name, workspace,
-      removeWorkspaceId: input.removeWorkspaceId, retry: input.retry });
+      removeWorkspaceId: input.removeWorkspaceId, retry: input.retry,
+      ...(input.retrySessionId !== undefined ? { retrySessionId: input.retrySessionId } : {}) });
     assertCurrent();
     controller.notify();
     return controller.state();

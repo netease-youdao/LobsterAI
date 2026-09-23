@@ -64,6 +64,50 @@ function fixture(localEnvironment = environment, serviceScope = localEnvironment
 }
 
 describe('bidirectional session deletion control lane', () => {
+  it('keeps an unadmitted task intact without asking for a deletion permit', async () => {
+    const f = fixture(); f.active(); f.store.setTaskAdmission(() => false);
+    await f.client.poll(true, true);
+    expect(f.exists()).toBe(true); expect(f.cleanup).not.toHaveBeenCalled();
+    expect(f.runtime.cancelSessionConfirmed).not.toHaveBeenCalled();
+    expect(f.request.mock.calls.some(([path]) => path.endsWith('/permit'))).toBe(false);
+    expect(f.request.mock.calls.find(([path]) => path.endsWith('/reports'))?.[2].result).toMatchObject({ kind: 'blocked', reason: 'LOCAL_RECOVERY_REQUIRED' });
+  });
+  it('does not claim deletions while shared control evidence is unverified', async () => {
+    const f = fixture(); f.store.setControlAdmission(() => false);
+    await f.client.poll(true, true);
+    expect(f.request).not.toHaveBeenCalled(); expect(f.exists()).toBe(true);
+  });
+  it('rechecks task admission after preparing deletion evidence', async () => {
+    const f = fixture(); f.active();
+    const client = new RemoteSessionDeletionClient({ ...f.deps, security: {
+      commit: async <T>(_id: string, _operation: unknown, apply: () => T): Promise<T> => { const result = apply(); f.store.setTaskAdmission(() => false); return result; },
+    } });
+    await client.poll(true, true);
+    expect(f.request.mock.calls.some(([path]) => path.endsWith('/permit'))).toBe(false);
+    expect(f.runtime.cancelSessionConfirmed).not.toHaveBeenCalled(); expect(f.exists()).toBe(true);
+  });
+  it('does not stop or delete a task whose admission is lost while requesting a permit', async () => {
+    const f = fixture(); f.active();
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      if (args[0].endsWith('/permit')) f.store.setTaskAdmission(() => false);
+      return result;
+    });
+    await f.client.poll(true, true);
+    expect(f.runtime.cancelSessionConfirmed).not.toHaveBeenCalled(); expect(f.exists()).toBe(true);
+    expect(f.request.mock.calls.find(([path]) => path.endsWith('/reports'))?.[2].result.kind).toBe('not_started');
+  });
+  it('recovers an existing deletion receipt even when new controls and task admission are blocked', async () => {
+    const f = fixture(); f.lose(); await f.client.poll(true, true);
+    expect(f.exists()).toBe(false);
+    const receipt = structuredClone(f.store.entries<any>(RemoteDeletion.Inbox)[0].value.receipt);
+    f.store.setControlAdmission(() => false); f.store.setTaskAdmission(() => false);
+    await new RemoteSessionDeletionClient(f.deps).poll(true, true);
+    expect(f.store.entries<any>(RemoteDeletion.Inbox)[0].value).toMatchObject({ phase: RemoteDeletion.Completed, receipt });
+    expect(f.store.get<any>('localGcDeleted:local').ackAt).not.toBeNull();
+    expect(f.request.mock.calls.filter(([path]) => path.endsWith('/permit'))).toHaveLength(1);
+  });
   it.each([true, false])('uses an authenticated data identity for a deletion created through a new domain (matching: %s)', async matching => {
     const targetId = 'verified-target';
     const f = fixture(targetId, 'https://new-alias.example.com');

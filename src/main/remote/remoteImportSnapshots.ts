@@ -83,25 +83,33 @@ export class RemoteImportSnapshots {
     } catch { return false; }
   }
   async release(fileSet: string): Promise<void> {
-    if (this.referenced().has(fileSet)) return;
+    const references = this.referenced();
+    if (references === null || references.has(fileSet)) return;
     await fs.promises.rm(this.directory(fileSet), { recursive: true, force: true });
   }
-  private referenced(): Set<string> {
+  private referenced(): Set<string> | null {
     // Unknown receipts can still own files. Corrupt bookkeeping must never authorize cache deletion.
-    if (this.store.db.prepare("SELECT 1 FROM remote_state WHERE key LIKE 'import:%' AND NOT json_valid(value) LIMIT 1").get()) throw new RemoteImportSnapshotError('REMOTE_IMPORT_PART_UNAVAILABLE');
-    return new Set([...archivedRemoteSyncReferences(this.store).importFileSets,
+    if (this.store.db.prepare("SELECT 1 FROM remote_state WHERE key LIKE 'import:%' AND NOT json_valid(value) LIMIT 1").get()) return null;
+    let archived: ReturnType<typeof archivedRemoteSyncReferences>;
+    try { archived = archivedRemoteSyncReferences(this.store); }
+    catch (error) {
+      // Preserve all spool files on uncertain evidence. Shared storage errors still propagate.
+      if (typeof (error as { code?: unknown })?.code === 'string' && String((error as { code: string }).code).startsWith('SQLITE_')) throw error;
+      return null;
+    }
+    return new Set([...archived.importFileSets,
       ...(this.store.db.prepare("SELECT json_extract(value,'$.fileSet') AS file_set FROM remote_state WHERE key LIKE 'import:%' AND json_valid(value)").all() as Array<{ file_set: string | null }>).map(row => row.file_set).filter((value): value is string => typeof value === 'string')]);
   }
   async collect(): Promise<void> {
     await fs.promises.mkdir(this.root, { recursive: true, mode: 0o700 });
     const rootStat = await fs.promises.lstat(this.root);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new RemoteImportSnapshotError('REMOTE_IMPORT_PART_UNAVAILABLE');
-    const protectedSets = this.referenced(); if (this.active) protectedSets.add(this.active);
+    const protectedSets = this.referenced(); if (this.active) protectedSets?.add(this.active);
     let total = 0;
     for (const entry of await fs.promises.readdir(this.root, { withFileTypes: true })) {
       if (!fileSetPattern.test(entry.name)) continue;
       const directory = this.directory(entry.name);
-      if (!protectedSets.has(entry.name)) { await fs.promises.rm(directory, { recursive: true, force: true }); continue; }
+      if (protectedSets !== null && !protectedSets.has(entry.name)) { await fs.promises.rm(directory, { recursive: true, force: true }); continue; }
       if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
       for (const file of await fs.promises.readdir(directory, { withFileTypes: true })) {
         if (!file.isFile()) continue;

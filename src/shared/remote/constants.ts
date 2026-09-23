@@ -29,7 +29,24 @@ export type RemoteConnectionReasonValue = typeof RemoteConnectionReason[keyof ty
 export const RemoteSyncStatus = { Synced: 'synced', Pending: 'pending', Error: 'error' } as const;
 export const RemoteSyncHealthStatus = { Idle: 'idle', Syncing: 'syncing', Paused: 'paused', Degraded: 'degraded', Recovering: 'recovering' } as const;
 export const RemoteSyncHealthReason = { Connection: 'connection', Quota: 'quota', Removed: 'removed', Projection: 'projection', Files: 'files', LocalRecovery: 'local_recovery', StorageDependency: 'storage_dependency' } as const;
+export const RemoteSyncTaskIssueStatus = {
+  Retrying: 'retrying', Isolated: 'isolated', WaitingDependency: 'waiting_dependency', Repairing: 'repairing', Closed: 'closed',
+} as const;
+export interface RemoteSyncTaskIssue {
+  localSessionId: string;
+  title?: string;
+  status: typeof RemoteSyncTaskIssueStatus[keyof typeof RemoteSyncTaskIssueStatus];
+  nextRetryAt?: number | null;
+  retryable: boolean;
+}
 export interface RemoteSyncHealth {
+  admissionDeferred?: boolean;
+  failedSessions?: number;
+  retryingSessions?: number;
+  isolatedSessions?: number;
+  pendingFiles?: number;
+  taskIssues?: RemoteSyncTaskIssue[];
+  taskIssuesTruncated?: boolean;
   status: typeof RemoteSyncHealthStatus[keyof typeof RemoteSyncHealthStatus];
   reason?: typeof RemoteSyncHealthReason[keyof typeof RemoteSyncHealthReason];
   pendingSessions: number | null;
@@ -53,7 +70,7 @@ export interface RemoteSettingsState {
   owner: RemoteOwner | null; workspaces: RemoteWorkspace[]; error?: string;
   accessRequests: Array<{ requestId: string; mobileDevice: { deviceId: string; name: string; platform: string }; permissions: string[]; expiresAt?: string }>;
 }
-export interface RemoteConfigureRequest { expectedAccountEpoch?: string; keepAwakeEnabled?: boolean; retry?: boolean; enabled?: boolean; name?: string; addWorkspace?: boolean; removeWorkspaceId?: string }
+export interface RemoteConfigureRequest { expectedAccountEpoch?: string; keepAwakeEnabled?: boolean; retry?: boolean; retrySessionId?: string; enabled?: boolean; name?: string; addWorkspace?: boolean; removeWorkspaceId?: string }
 export interface RemoteSettingsApi {
   onChanged(listener: (state: RemoteSettingsState) => void): () => void;
   state(): Promise<RemoteSettingsState>;

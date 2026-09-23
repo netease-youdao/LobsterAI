@@ -27,10 +27,11 @@ function fixture() {
   cleanup.push(() => { bridge.stop(); db.close(); });
   bridge.owner = owner;
   bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1' };
-  bridge.targetId = RemoteEnvironment.Test;
   store.put('settings:10001:personal', { enabled: true, name: 'Desktop', settingsVersion: '1', workspaces: [] });
+  const activation = bridge.targets.activateLegacy({ owner, deviceId: 'desktop', allowPartialLegacy: true });
+  bridge.targetId = activation.targetId;
   store.setEnabledOwner(owner);
-  store.setProjectionIdentity(RemoteEnvironment.Test, owner, 'desktop');
+  store.setProjectionIdentity(activation.targetId, owner, 'desktop');
   store.transaction(() => {
     db.exec("INSERT INTO cowork_sessions VALUES('task','Task',1,1,'completed')");
     store.assignNew('task', owner, 'local_create');

@@ -8,6 +8,7 @@ import { RemoteRetention, type RetentionState } from '../../shared/remote/retent
 import { RemoteSyncTarget, type RemoteSyncTargetIdentity } from '../../shared/remote/syncTarget';
 import { stableJson } from './canonical';
 import { RemoteStore } from './remoteStore';
+import { RemoteSyncAdmissionBudgetError } from './remoteSyncAdmission';
 import { archivedRemoteSyncReferences, RemoteSyncTargetActivationKind, remoteSyncTargetId, RemoteSyncTargetStore } from './remoteSyncTargetStore';
 
 const owner = { userId: 'user', scopeKey: 'personal' }, other = { userId: 'other', scopeKey: 'personal' };
@@ -24,7 +25,7 @@ function fixture() {
   const add = (id = 's', actor: RemoteOwner = owner) => store.transaction(() => {
     db.prepare("INSERT INTO cowork_sessions(id,title,created_at,updated_at,status) VALUES (?,?,1,1,'idle')").run(id, id); store.assignNew(id, actor, 'local_create');
   });
-  const activate = (target = spaceA, options: { bootstrap?: boolean; legacyStates?: RetentionState[] } = {}) => {
+  const activate = (target = spaceA, options: { bootstrap?: boolean; legacyStates?: RetentionState[]; allowPartialLegacy?: boolean } = {}) => {
     const result = targets.activate({ ...input(target), ...options });
     store.setProjectionIdentity(result.targetId, owner, result.deviceId); store.setEnabledOwner(owner);
     return result;
@@ -324,5 +325,158 @@ describe('active synchronization target working sets', () => {
     f.add('later');
     expect(f.activate(spaceA).kind).toBe(RemoteSyncTargetActivationKind.Restored);
     expect(f.store.sync('later')).toMatchObject({ device_id: 'device-a', source_seq: 0, ack_seq: 0, sync_environment: first.targetId });
+  });
+});
+
+
+describe('per-session synchronization admission', () => {
+  test('keeps unverified legacy bytes while independently admitting a verified task', () => {
+    const f = fixture(); f.add('good'); f.add('bad'); f.bind('good'); f.bind('bad');
+    f.store.put('import:bad', { importId: 'original', fileSet: 'bad-spool' });
+    f.db.prepare('INSERT INTO remote_projection_publications VALUES (?,?,?,?,?)').run('bad', '/private/bad-publication', 5, 1, 'hash');
+    const before = f.store.sync('bad');
+    const target = f.activate(spaceA, { allowPartialLegacy: true, legacyStates: [f.proof('good')] });
+    expect(f.targets.isAdmitted(owner, 'device-a', target.targetId, 'good')).toBe(true);
+    expect(f.targets.isAdmitted(owner, 'device-a', target.targetId, 'bad')).toBe(false);
+    expect(f.store.sync('bad')).toEqual(before); expect(f.store.sync('good')!.ack_seq).toBe(5);
+    expect(f.targets.hasPendingAdmissions(owner, target.targetId)).toBe(true);
+    expect(archivedRemoteSyncReferences(f.store).importFileSets.has('bad-spool')).toBe(true);
+    expect(archivedRemoteSyncReferences(f.store).paths.has('/private/bad-publication')).toBe(true);
+    expect(archivedRemoteSyncReferences(f.store, true).paths.has('/private/bad-publication')).toBe(true);
+    expect(archivedRemoteSyncReferences(f.store, true).importFileSets.size).toBe(0);
+    const evidence = f.db.prepare('SELECT row_json FROM remote_sync_admission_evidence WHERE table_name=? AND row_key=?').get('remote_state', 'import:bad');
+    f.targets.admitLegacySession(owner, 'device-a', target.targetId, f.proof('bad'));
+    expect(f.targets.isAdmitted(owner, 'device-a', target.targetId, 'bad')).toBe(true);
+    expect(f.store.sync('bad')!.ack_seq).toBe(5); expect(f.store.get('import:bad')).toEqual({ importId: 'original', fileSet: 'bad-spool' });
+    expect(f.db.prepare('SELECT row_json FROM remote_sync_admission_evidence WHERE table_name=? AND row_key=?').get('remote_state', 'import:bad')).toEqual(evidence);
+    expect(f.targets.hasPendingAdmissions(owner, target.targetId)).toBe(false);
+  });
+
+  test('quarantines malformed task evidence without retagging its run or stopping another task', () => {
+    const f = fixture(); f.add('good'); f.add('bad'); f.bind('good'); f.bind('bad');
+    f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run('run:bad', '{damaged');
+    const target = f.activate(spaceA, { allowPartialLegacy: true, legacyStates: [f.proof('bad'), f.proof('good')] });
+    expect(f.targets.isAdmitted(owner, 'device-a', target.targetId, 'good')).toBe(true);
+    expect(f.targets.isAdmitted(owner, 'device-a', target.targetId, 'bad')).toBe(false);
+    expect(f.store.sync('bad')!.sync_environment).toBe('https://former.example');
+    expect(f.db.prepare('SELECT value FROM remote_state WHERE key=?').get('run:bad')).toEqual({ value: '{damaged' });
+    expect(f.db.prepare('SELECT admission FROM remote_sync_session_admissions WHERE local_session_id=?').get('bad')).toEqual({ admission: 'quarantined' });
+  });
+
+  test('transfers only the verified task inbox and file routing with the admission transaction', () => {
+    const f = fixture(); f.add('good'); f.add('bad'); f.bind('good'); f.bind('bad');
+    for (const localSessionId of ['good', 'bad']) {
+      f.store.put(`inbox:${localSessionId}`, { owner, localSessionId, remoteSessionId: f.store.sync(localSessionId)!.session_id,
+        state: 'unknown', command: { commandId: localSessionId } });
+      f.store.put(`desktopAsset:${localSessionId}:0`, { owner, localSessionId, deviceId: 'device-a', environment: 'https://former.example', uploadRequestId: `original-${localSessionId}` });
+    }
+    const target = f.activate(spaceA, { allowPartialLegacy: true, legacyStates: [f.proof('good')] });
+    expect(f.store.get<any>('inbox:good').targetId).toBe(target.targetId);
+    expect(f.store.get<any>('inbox:bad').targetId).toBeUndefined();
+    expect(f.store.get<any>('desktopAsset:good:0').environment).toBe(target.targetId);
+    expect(f.store.get<any>('desktopAsset:bad:0').environment).toBe('https://former.example');
+  });
+
+  test('an unattributable malformed inbox closes the control dependency without stopping verified content', () => {
+    const f = fixture(); f.add(); f.bind();
+    f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run('inbox:unattributable', '{damaged');
+    const target = f.activate(spaceA, { allowPartialLegacy: true, legacyStates: [f.proof()] });
+    expect(f.targets.isAdmitted(owner, 'device-a', target.targetId, 's')).toBe(true);
+    expect(f.targets.controlAdmissionBlocked(owner, target.targetId)).toBe(true);
+    expect(() => archivedRemoteSyncReferences(f.store)).toThrow();
+    expect(() => archivedRemoteSyncReferences(f.store, true)).not.toThrow();
+    expect(f.db.prepare('SELECT value FROM remote_state WHERE key=?').get('inbox:unattributable')).toEqual({ value: '{damaged' });
+  });
+
+  test('does not archive or impose control barriers from another identified account target', () => {
+    const f = fixture(); f.add(); f.bind();
+    const otherTarget = f.targets.activate({ ...input(spaceA, other), allowPartialLegacy: true });
+    const key = `inbox:${otherTarget.targetId}:other`;
+    f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run(key, '{damaged');
+    f.store.put('inbox:other-owner', { owner: other, localSessionId: null, command: { commandId: 'other' } });
+    const target = f.activate(spaceA, { allowPartialLegacy: true, legacyStates: [f.proof()] });
+    expect(f.targets.controlAdmissionBlocked(owner, target.targetId)).toBe(false);
+    expect(f.db.prepare('SELECT 1 FROM remote_sync_admission_evidence WHERE archive_id=? AND row_key=?').get(`admission:${target.targetId}`, key)).toBeUndefined();
+  });
+
+  test('missing admission evidence is not interpreted as a successful legacy verification', () => {
+    const f = fixture(); f.add(); f.bind();
+    const target = f.activate(spaceA, { allowPartialLegacy: true, legacyStates: [f.proof()] });
+    f.db.prepare('DELETE FROM remote_sync_session_admissions WHERE local_session_id=?').run('s');
+    expect(f.targets.isAdmitted(owner, 'device-a', target.targetId, 's')).toBe(false);
+    expect(f.targets.hasPendingAdmissions(owner, target.targetId)).toBe(true);
+    f.add('new-local');
+    expect(f.targets.isAdmitted(owner, 'device-a', target.targetId, 'new-local')).toBe(true);
+  });
+
+  test('pages pending admissions without hiding clean legacy tasks or losing missing ledger rows', () => {
+    const f = fixture();
+    for (let i = 0; i < 55; i++) { const id = `task-${String(i).padStart(2, '0')}`; f.add(id); f.bind(id); }
+    const target = f.activate(spaceA, { allowPartialLegacy: true, legacyStates: [f.proof('task-01')] });
+    f.db.prepare('DELETE FROM remote_sync_session_admissions WHERE local_session_id=?').run('task-00');
+    const first = f.targets.pendingAdmissionSessionIds(owner, target.targetId, '', 1000);
+    expect(first).toHaveLength(50); expect(first[0]).toBe('task-00'); expect(first).not.toContain('task-01');
+    const second = f.targets.pendingAdmissionSessionIds(owner, target.targetId, first[first.length - 1]);
+    expect(second).toEqual(['task-51', 'task-52', 'task-53', 'task-54']);
+    expect(f.targets.pendingAdmissionSessionIds(other, target.targetId)).toEqual([]);
+  });
+
+  test('never admits a service active import without its original local operation', () => {
+    for (const known of [false, true]) {
+      const f = fixture(); f.add(); f.bind();
+      const proof = { ...f.proof(), activeImport: { importId: 'original' } };
+      if (known) f.store.put('import:s', { importId: 'original', beginAttempted: true });
+      const target = f.activate(spaceA, { allowPartialLegacy: true, legacyStates: [proof] });
+      expect(f.targets.isAdmitted(owner, 'device-a', target.targetId, 's')).toBe(known);
+      expect(f.store.sync('s')!.ack_seq).toBe(5);
+    }
+  });
+
+  test.each(['rows', 'bytes'])('defers oversized legacy admission before changing original evidence (%s)', mode => {
+    const f = fixture(); f.add(); f.bind(); const before = f.store.sync('s');
+    if (mode === 'rows') f.db.exec(`WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<2001)
+      INSERT INTO remote_state SELECT 'budget:'||x, '{}' FROM n`);
+    else f.store.put('import:s', { original: 'x'.repeat(1024 * 1024) });
+    const originalCount = f.db.prepare('SELECT count(*) AS n FROM remote_state').get();
+    let failure: unknown;
+    try { f.activate(spaceA, { allowPartialLegacy: true }); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(RemoteSyncAdmissionBudgetError);
+    expect((failure as RemoteSyncAdmissionBudgetError).targetId).toBe(remoteSyncTargetId(spaceA, owner));
+    expect(f.targets.active(owner)).toBeNull(); expect(f.store.sync('s')).toEqual(before);
+    expect(f.db.prepare('SELECT count(*) AS n FROM remote_state').get()).toEqual(originalCount);
+    expect(f.db.prepare('SELECT count(*) AS n FROM remote_sync_admission_evidence').get()).toEqual({ n: 0 });
+  });
+
+  test.each(['remote_sync_target_archives', 'remote_sync_admission_evidence'])('does not treat malformed archived publication paths as unreferenced (%s)', table => {
+    const f = fixture();
+    for (const path of [undefined, null, 42, 'relative/staging']) {
+      const row = path === undefined ? { session_id: 's' } : { session_id: 's', path };
+      f.db.prepare(`INSERT OR REPLACE INTO ${table} VALUES (?,?,?,?)`).run('target', 'remote_projection_publications', 1, stableJson(row));
+      expect(() => archivedRemoteSyncReferences(f.store)).toThrow('publication path is invalid');
+    }
+  });
+
+  test('partial admission rolls back evidence, mapping and target together on persistence failure', () => {
+    const f = fixture(); f.add(); f.bind(); const before = f.store.sync('s');
+    f.db.exec("CREATE TRIGGER fail_admission BEFORE UPDATE ON remote_sync_session_admissions BEGIN SELECT RAISE(ABORT,'disk unavailable'); END;");
+    expect(() => f.activate(spaceA, { allowPartialLegacy: true, legacyStates: [f.proof()] })).toThrow('disk unavailable');
+    expect(f.targets.active(owner)).toBeNull(); expect(f.store.sync('s')).toEqual(before);
+    expect(f.db.prepare('SELECT count(*) AS n FROM remote_sync_admission_evidence').get()).toEqual({ n: 0 });
+  });
+
+  test('does not reinterpret unverified legacy history during a target switch', () => {
+    const f = fixture(); f.add(); f.bind(); const before = f.store.sync('s');
+    const target = f.activate(spaceA, { allowPartialLegacy: true });
+    expect(() => f.activate(spaceB, { bootstrap: true, allowPartialLegacy: true })).toThrow('Unverified synchronization history');
+    expect(f.targets.active(owner)!.targetId).toBe(target.targetId); expect(f.store.sync('s')).toEqual(before);
+    expect(f.activate(spaceA, { allowPartialLegacy: true }).kind).toBe(RemoteSyncTargetActivationKind.Unchanged);
+  });
+
+  test('admits truly local execution without inventing a remote receipt', () => {
+    const f = fixture(); f.add(); f.store.beginRun('s', 'local-run');
+    const target = f.activate(spaceA, { allowPartialLegacy: true });
+    expect(f.targets.isAdmitted(owner, 'device-a', target.targetId, 's')).toBe(true);
+    expect(f.store.sync('s')!.ack_seq).toBe(0);
+    expect(f.store.get('syncRunTarget:local-run')).toBe(target.targetId);
   });
 });

@@ -102,7 +102,8 @@ export class RemoteLocalGc {
     const store = this.deps.store, sync = store.sync(tombstone.localSessionId);
     const closed = store.get<{ operationId: string; deletionVersion: string; receiptId: string; receiptDigest: string }>(`${RemoteDeletion.Closed}${tombstone.localSessionId}`);
     return sameOwner(tombstone.owner, this.deps.owner()) && sameOwner(tombstone.owner, store.owner(tombstone.localSessionId))
-      && !store.needsSecurityRecovery() && this.deps.enabled?.() !== false && !!sync && !sync.migration_frozen
+      && !store.needsSecurityRecovery() && store.areControlsAdmitted() && store.isTaskAdmitted(tombstone.localSessionId)
+      && this.deps.enabled?.() !== false && !!sync && !sync.migration_frozen
       && sync.session_id === tombstone.sessionId && sync.device_id === tombstone.deviceId
       && (sync.sync_environment === tombstone.environment || sync.sync_environment !== null && tombstone.environment !== null
         && samePersistedRemoteEnvironment(store, { owner: tombstone.owner, deviceId: tombstone.deviceId }, sync.sync_environment, tombstone.environment))
@@ -213,7 +214,8 @@ export class RemoteLocalGc {
     return true;
   }
   async sweep(now = Date.now()): Promise<number> {
-    if (this.running || this.deps.enabled?.() === false || this.deps.store.needsSecurityRecovery() || !this.deps.owner()) return 0;
+    if (this.running || this.deps.enabled?.() === false || this.deps.store.needsSecurityRecovery()
+      || !this.deps.store.areControlsAdmitted() || !this.deps.owner()) return 0;
     this.running = true;
     let removed = 0;
     try {

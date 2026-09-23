@@ -41,6 +41,16 @@ async function finish(gc: RemoteLocalGc) { for (let i = 0; i < 12; i++) await gc
 afterEach(() => { vi.restoreAllMocks(); for (const db of databases.splice(0)) db.close(); for (const dir of directories.splice(0)) fs.rmSync(dir, { force: true, recursive: true }); });
 
 describe('deleted remote session local GC', () => {
+  it.each(['task', 'shared'])('retains acknowledged deletion caches while %s admission is blocked', async scope => {
+    const f = fixture();
+    if (scope === 'task') f.store.setTaskAdmission(() => false); else f.store.setControlAdmission(() => false);
+    f.ack();
+    expect(f.store.get('localGcDeleted:s')).toMatchObject({ ackAt: 1000 });
+    await finish(f.gc); expect(f.body().n).toBe(1);
+    expect(f.store.get('inbox:command')).toMatchObject({ command: { requestHash: 'unchanged' } });
+    f.store.setTaskAdmission(() => true); f.store.setControlAdmission(() => true);
+    await finish(f.gc); expect(f.body().n).toBe(0);
+  });
   it.each([
     ['https://lobsterai-server-dev.inner.youdao.com', RemoteEnvironment.Test],
     ['https://lobsterai-server.youdao.com', RemoteEnvironment.Production],

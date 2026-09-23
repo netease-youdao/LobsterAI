@@ -7,6 +7,8 @@ import { RemoteRetention, type RetentionState } from '../../shared/remote/retent
 import { RemoteSyncTarget, type RemoteSyncTargetIdentity } from '../../shared/remote/syncTarget';
 import { RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
+import { RemoteSyncAdmissionBudgetError } from './remoteSyncAdmission';
+import { remoteSyncTargetId } from './remoteSyncTargetStore';
 
 const owner: RemoteOwner = { userId: '10001', scopeKey: 'personal' };
 const disposables: Array<() => void> = [];
@@ -122,6 +124,7 @@ describe('remote synchronization follows the effective service', () => {
   });
   it('starts an independent mapping on a new space and restores the previous ACK on return', async () => {
     const f = fixture(); f.seed(); await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
     const targetId = f.bridge.getSyncTargetId();
     f.switchRoute('https://other.example.com', targetB, 'desktop-b');
     await f.bridge.ensureRegistration();
@@ -135,6 +138,7 @@ describe('remote synchronization follows the effective service', () => {
   });
   it('blocks a generation change without clearing previous progress', async () => {
     const f = fixture(); f.seed(); await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
     f.switchRoute('https://restored.example.com', { ...targetA, dataGeneration: '2' });
     await expect(f.bridge.ensureRegistration()).rejects.toThrow('generation requires recovery');
     expect(f.store.sync('local')?.ack_seq).toBe(9);
@@ -142,6 +146,9 @@ describe('remote synchronization follows the effective service', () => {
   it.each(['https://unknown.test.example', RemoteEnvironment.Test, RemoteEnvironment.Production])('claims legacy %s only after server state confirms it', async environment => {
     const f = fixture(); f.seed('local', environment); f.seed('foreign', environment, { ...owner, userId: 'foreign' });
     await f.bridge.ensureRegistration();
+    expect(f.store.sync('local')?.sync_environment).toBe(environment);
+    expect(f.request.mock.calls.some(([, path]) => path.includes('/sync/state?'))).toBe(false);
+    await f.bridge.syncSessions(true);
     expect(f.store.sync('local')?.sync_environment).toBe(f.bridge.getSyncTargetId());
     expect(f.store.sync('foreign')?.sync_environment).toBe(environment);
     expect(f.store.sync('local')?.ack_seq).toBe(9);
@@ -152,18 +159,23 @@ describe('remote synchronization follows the effective service', () => {
     if (reason === 'rollback') state.lastSourceSeq = '8';
     if (reason === 'ahead') state.lastSourceSeq = '13';
     if (reason === 'wrong-session') state.sessionId = 'different';
-    await expect(f.bridge.ensureRegistration()).rejects.toThrow();
+    await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
+    expect(f.bridge.registration.deviceId).toBe('desktop');
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'local')?.phase).toBe('isolated');
     expect(f.store.sync('local')).toMatchObject({ sync_environment: 'https://legacy.example.com', ack_seq: 9 });
   });
   it('blocks a deleted remote session instead of creating a new snapshot mapping', async () => {
     const f = fixture(); const state = f.seed(); state.deleted = true;
     await f.bridge.ensureRegistration();
-    expect(f.store.get('syncFailure:local')).toMatchObject({ blocked: true });
+    await f.bridge.syncSessions(true);
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'local')?.phase).toBe('closed');
     expect(f.store.sync('local')).toMatchObject({ session_id: 'remote-local', ack_seq: 9 });
     await expect(f.bridge.readSyncState(f.store.sync('local'))).rejects.toThrow('deleted');
   });
   it('supports a proven legacy server but refuses an identified target downgrade', async () => {
     const f = fixture(null); f.seed(); await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
     expect(f.bridge.getSyncTargetId()).toMatch(/^legacy:/u);
     f.switchRoute('https://upgraded.example.com', targetA); await f.bridge.ensureRegistration();
     expect(f.bridge.getSyncTargetId()).not.toMatch(/^legacy:/u);
@@ -182,6 +194,7 @@ describe('remote synchronization follows the effective service', () => {
         syncProtocolVersion: RemoteRetention.Version, targetStreamEpoch: 'new-epoch', streamEpoch: 'new-epoch',
         committedSourceSeq: '12', committedSeq: '18', sourcePurgeSeq: '0', eventPurgeSeq: '0' })) : original(actor, pathname, init));
     await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
     expect(f.store.get('import:local')).toBeNull();
     expect(f.store.sync('local')).toMatchObject({ ack_seq: 12, server_seq: '18', stream_epoch: 'new-epoch' });
   });
@@ -209,8 +222,9 @@ describe('remote synchronization follows the effective service', () => {
     await f.bridge.ensureRegistration();
     expect(f.bridge.registration.deviceId).toBe('desktop');
     expect(f.bridge.getSyncTargetId()).not.toBeNull();
+    await f.bridge.syncSessions(true);
     expect(f.bridge.error).toBeUndefined();
-    expect(f.store.get('syncFailure:local')).toMatchObject({ blocked: true });
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'local')?.phase).toBe('closed');
     expect(f.store.get('import:local')).toMatchObject(pending);
     expect(f.store.sync('local')).toMatchObject({ ack_seq: 9, server_seq: '10', session_id: 'remote-local' });
     expect(f.db.prepare('SELECT id FROM cowork_sessions WHERE id=?').get('local')).toBeTruthy();
@@ -250,9 +264,11 @@ describe('remote synchronization follows the effective service', () => {
     const original = f.request.getMockImplementation()!;
     f.request.mockImplementation(async (actor, pathname, init) => pathname.endsWith('/sync/imports/rejected-import')
       ? new Response(JSON.stringify({ code: 47002, message: 'missing' }), { status: 404 }) : original(actor, pathname, init));
-    await expect(f.bridge.ensureRegistration()).rejects.toThrow();
-    expect(f.bridge.registration).toBeNull();
-    expect(f.bridge.getSyncTargetId()).toBeNull();
+    await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
+    expect(f.bridge.registration.deviceId).toBe('desktop');
+    expect(f.bridge.getSyncTargetId()).not.toBeNull();
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'local')?.phase).toBe('isolated');
     expect(f.store.sync('local')).toMatchObject({ ack_seq: 9, server_seq: '10', stream_epoch: 'original-epoch' });
     expect(f.store.get('import:local')).not.toBeNull();
     expect(f.request.mock.calls.some(([, path, init]) => path.endsWith('/sync/imports') && init.method === 'POST')).toBe(false);
@@ -263,7 +279,10 @@ describe('remote synchronization follows the effective service', () => {
     const original = f.request.getMockImplementation()!;
     f.request.mockImplementation(async (actor, pathname, init) => pathname.endsWith('/sync/imports/rejected-import')
       ? new Response(JSON.stringify({ code, message: 'unavailable' }), { status }) : original(actor, pathname, init));
-    await expect(f.bridge.ensureRegistration()).rejects.toThrow('unavailable');
+    await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
+    expect(f.bridge.registration.deviceId).toBe('desktop');
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'local')?.phase).toBe(status >= 500 ? 'backoff' : 'isolated');
     expect(f.request.mock.calls.some(([, path]) => path.includes('/sync/state?'))).toBe(false);
     expect(f.store.get('import:local')).not.toBeNull();
   });
@@ -277,17 +296,18 @@ describe('remote synchronization follows the effective service', () => {
       if (pathname.includes('/sync/state?')) { started.resolve(); return finish.promise; }
       return original(actor, pathname, init);
     });
-    const registration = f.bridge.ensureRegistration();
-    const rejected = expect(registration).rejects.toThrow('Account changed during remote request');
+    await f.bridge.ensureRegistration();
+    const history = f.bridge.syncSessions(true);
     await started.promise;
     f.switchRoute('https://other.example.com', targetB, 'desktop-b');
-    finish.resolve(response(state)); await rejected;
+    finish.resolve(response(state)); await history;
     expect(f.bridge.registration).toBeNull(); expect(f.bridge.getSyncTargetId()).toBeNull();
     expect(f.store.sync('local')?.ack_seq).toBe(9);
     expect(f.store.get('import:local')).not.toBeNull();
   });
   it('keeps the result of an old execution in its original inbox without ACKing the new server', async () => {
     const f = fixture(); f.seed(); await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
     const origin = f.bridge.getSyncTargetId(); f.bridge.generation = 'connected-a';
     const entry = { targetId: origin, owner, command: { commandId: 'running-command', claimId: 'claim', claimToken: 'secret',
       claimUntil: new Date(Date.now() + 60000).toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString(),
@@ -309,7 +329,7 @@ describe('remote synchronization follows the effective service', () => {
     const f = fixture(); f.seed(); const original = f.request.getMockImplementation()!;
     const started = deferred<void>(), release = deferred<void>();
     f.request.mockImplementation(async (actor, pathname, init) => {
-      if (pathname.includes('/sync/state?')) { started.resolve(); await release.promise; }
+      if (pathname.endsWith('/devices/register')) { started.resolve(); await release.promise; }
       return original(actor, pathname, init);
     });
     const first = f.bridge.ensureRegistration(); await started.promise;
@@ -342,6 +362,37 @@ describe('remote synchronization follows the effective service', () => {
       const headers = new Headers(init.headers);
       expect(headers.get(RemoteSyncTarget.SpaceHeader)).toBe(pathname.endsWith('/capabilities') ? null : targetA.dataSpaceId);
     }
+  });
+  it('keeps authenticated transport while deferring an oversized legacy admission without repeated work', async () => {
+    const f = fixture(); f.seed(); const before = f.store.sync('local');
+    const candidate = remoteSyncTargetId(targetA, owner);
+    const activate = vi.spyOn(f.bridge.targets, 'activate').mockImplementation(() => { throw new RemoteSyncAdmissionBudgetError(candidate); });
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.registration).toMatchObject({ ...owner, deviceId: 'desktop' });
+    expect(f.bridge.getSyncTargetId()).toBe(candidate);
+    expect(f.bridge.state().syncHealth).toMatchObject({ admissionDeferred: true, status: 'degraded' });
+    expect(f.bridge.syncContext()()).toBe(false); expect(f.store.areControlsAdmitted()).toBe(false);
+    expect(f.store.isTaskAdmitted('local')).toBe(false);
+    expect(f.store.sync('local')).toEqual(before); expect(f.bridge.targets.active(owner)).toBeNull();
+    await f.bridge.ensureRegistration(); await f.bridge.ensureRegistration();
+    expect(activate).toHaveBeenCalledOnce();
+    expect(f.request.mock.calls.filter(([, path]) => path.endsWith('/devices/register'))).toHaveLength(1);
+  });
+  it('retries deferred admission only after explicit reconnect and preserves its original ACK', async () => {
+    const f = fixture(); f.seed();
+    const candidate = remoteSyncTargetId(targetA, owner);
+    const activate = vi.spyOn(f.bridge.targets, 'activate').mockImplementationOnce(() => { throw new RemoteSyncAdmissionBudgetError(candidate); });
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.state().syncHealth.admissionDeferred).toBe(true);
+    await f.bridge.configure({ retry: true }); await f.bridge.ensureRegistration();
+    expect(activate).toHaveBeenCalledTimes(2);
+    expect(f.bridge.registration.deviceId).toBe('desktop');
+    expect(f.bridge.state().syncHealth.admissionDeferred).toBe(false);
+    expect(f.bridge.targets.active(owner)?.targetId).toBe(candidate);
+    expect(f.store.areControlsAdmitted()).toBe(true);
+    await f.bridge.syncSessions(true);
+    expect(f.store.isTaskAdmitted('local')).toBe(true);
+    expect(f.store.sync('local')).toMatchObject({ session_id: 'remote-local', source_seq: 12, ack_seq: 9, server_seq: '10' });
   });
   it('rejects registration from another data space before activating a work set', async () => {
     const f = fixture(); const original = f.request.getMockImplementation()!;

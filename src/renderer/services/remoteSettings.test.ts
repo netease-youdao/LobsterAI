@@ -154,6 +154,17 @@ describe('RemoteSettingsService', () => {
     expect(f.service.getSnapshot()).toMatchObject({ error: null, state: { keepAwakeEnabled: true, keepAwakeActive: false, keepAwakeError: 'unavailable' } });
   });
 
+  test('does not infer task retry success from an unchanged accompanying preference after a lost response', async () => {
+    const f = fixture();
+    const off = f.service.subscribe(vi.fn());
+    await Promise.resolve();
+    f.api.configure.mockRejectedValueOnce(new Error('Reply lost'));
+    expect(await f.service.submit({ retrySessionId: 'task-1', name: 'Computer' })).toBe(false);
+    expect(f.api.configure).toHaveBeenCalledWith({ retrySessionId: 'task-1', name: 'Computer', expectedAccountEpoch: 'a-1' });
+    expect(f.api.configure).toHaveBeenCalledOnce();
+    off();
+  });
+
   test('does not infer retry success from unchanged preference values', async () => {
     const f = fixture();
     await f.service.refresh();

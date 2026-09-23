@@ -64,7 +64,8 @@ export function remoteConnectionFailure(state: RemoteSettingsState | null): stri
   if (state.connectionReason === RemoteConnectionReason.DeviceUnavailable) return 'remoteDeviceUnavailable';
   if (state.error || state.errorCode || state.connectionReason === RemoteConnectionReason.ServerUnavailable) return 'remoteUnavailable';
   if (state.agentCatalogSyncStatus === RemoteSyncStatus.Error) return 'remoteAgentCatalogSyncFailed';
-  if (state.sessionSyncStatus === RemoteSyncStatus.Error) return 'remoteSessionSyncFailed';
+  if (state.sessionSyncStatus === RemoteSyncStatus.Error && !state.syncHealth?.admissionDeferred
+    && !(state.syncHealth?.failedSessions && state.syncHealth.failedSessions > 0)) return 'remoteSessionSyncFailed';
   return null;
 }
 
@@ -90,7 +91,10 @@ export function remoteSyncDescription(state: RemoteSettingsState | null): string
   if (state?.syncHealth?.reason === RemoteSyncHealthReason.StorageDependency) return 'remoteSyncPaused';
   if (!state?.owner || !state.enabled || needsRemoteSignIn(state)) return null;
   const health = state.syncHealth;
+  if (health?.admissionDeferred) return 'remoteSyncPaused';
   if (health?.status === RemoteSyncHealthStatus.Recovering) return 'remoteSyncRecovering';
+  if (isRemoteOnline(state) && health?.reason !== RemoteSyncHealthReason.LocalRecovery && (health?.failedSessions ?? 0) > 0)
+    return 'remoteTasksSyncFailed';
   if (health?.status === RemoteSyncHealthStatus.Degraded || health?.status === RemoteSyncHealthStatus.Paused) {
     if (health.reason === RemoteSyncHealthReason.Files || health.reason === RemoteSyncHealthReason.StorageDependency) return 'remoteFilesPending';
     return 'remoteSyncPaused';

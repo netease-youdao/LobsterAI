@@ -36,7 +36,7 @@ describe('remote settings account preconditions', () => {
   test.each<RemoteConfigureRequest>([
     { enabled: true }, { enabled: false }, { name: 'New name' }, { retry: true },
     { keepAwakeEnabled: true }, { keepAwakeEnabled: false }, { addWorkspace: true },
-    { removeWorkspaceId: 'workspace-1' },
+    { removeWorkspaceId: 'workspace-1' }, { retrySessionId: 'task-1' },
   ])('rejects stale requests before any settings or connection effects: %j', async changes => {
     const f = fixture();
     await expect(configureRemoteSettings({ ...changes, expectedAccountEpoch: 'old' }, f.deps))
@@ -44,6 +44,24 @@ describe('remote settings account preconditions', () => {
     for (const effect of [f.save, f.power, f.publish, f.configureRemote, f.selectWorkspace]) {
       expect(effect).not.toHaveBeenCalled();
     }
+  });
+
+  test('forwards a single task retry without restoring the connection or keep-awake state', async () => {
+    const f = fixture();
+    await configureRemoteSettings({ retrySessionId: 'task-1', expectedAccountEpoch: f.epoch() }, f.deps);
+    expect(f.configureRemote).toHaveBeenCalledWith(expect.objectContaining({ retrySessionId: 'task-1', retry: undefined }));
+    expect(f.power).not.toHaveBeenCalled();
+    expect(f.save).not.toHaveBeenCalled();
+  });
+
+  test('task retry requires an epoch and validates the local task identifier before any effects', async () => {
+    const f = fixture();
+    for (const request of [{ retrySessionId: 'task-1' }, { retrySessionId: '../task', expectedAccountEpoch: f.epoch() },
+      { retrySessionId: '', expectedAccountEpoch: f.epoch() }]) {
+      await expect(configureRemoteSettings(request, f.deps)).rejects.toThrow('Invalid task retry setting');
+    }
+    expect(f.configureRemote).not.toHaveBeenCalled();
+    expect(f.power).not.toHaveBeenCalled();
   });
 
   test('rejects an expired epoch before the logged-out validation', async () => {

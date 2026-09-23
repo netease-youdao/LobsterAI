@@ -55,6 +55,33 @@ describe('desktop message private asset uploads', () => {
     await uploadDesktopMessageAsset(f.job, f.deps);
     expect(f.job.uploadRequestId).toBe(requestId); expect(f.calls).not.toContain('/api/remote/v1/input-assets/asset/parts/1'); expect(f.calls).not.toContain('/api/remote/v1/input-assets/asset/parts/2');
   });
+  it('yields after one part and resumes the same upload using authoritative completed parts', async () => {
+    const f = await fixture(), requestId = f.job.uploadRequestId;
+    expect(await uploadDesktopMessageAsset(f.job, f.deps, { partBudget: 1 })).toBeNull();
+    expect([...f.parts.keys()]).toEqual([1]);
+    expect(f.calls.some(url => url.endsWith('/complete'))).toBe(false);
+    const restored = JSON.parse(JSON.stringify(f.job));
+    expect(await uploadDesktopMessageAsset(restored, f.deps, { partBudget: 1 })).toBeNull();
+    expect([...f.parts.keys()]).toEqual([1, 2]);
+    expect(await uploadDesktopMessageAsset(f.job, f.deps, { partBudget: 1 })).toMatchObject({ assetId: 'asset' });
+    expect([...f.parts.keys()]).toEqual([1, 2, 3]);
+    expect(f.job.uploadRequestId).toBe(requestId);
+    expect(f.calls.filter(url => url.includes('/parts/'))).toHaveLength(3);
+  });
+  it('keeps the original request identity when a time-sliced part succeeds but its reply is lost', async () => {
+    const f = await fixture(), original = f.deps.request, requestId = f.job.uploadRequestId;
+    let lost = false;
+    f.deps.request = async (url, init) => {
+      const response = await original(url, init);
+      if (url.endsWith('/parts/1') && !lost) { lost = true; throw new Error('lost reply'); }
+      return response;
+    };
+    await expect(uploadDesktopMessageAsset(f.job, f.deps, { partBudget: 1 })).rejects.toThrow('lost reply');
+    expect(await uploadDesktopMessageAsset(f.job, f.deps, { partBudget: 1 })).toBeNull();
+    expect([...f.parts.keys()]).toEqual([1, 2]);
+    expect(f.calls.filter(url => url.endsWith('/parts/1'))).toHaveLength(1);
+    expect(f.job.uploadRequestId).toBe(requestId);
+  });
   it('stops before persisting or making requests after account/session authorization changes', async () => {
     const f = await fixture(); f.setCurrent(false);
     await expect(uploadDesktopMessageAsset(f.job, f.deps)).rejects.toMatchObject({ reason: 'ACCESS_DENIED' });

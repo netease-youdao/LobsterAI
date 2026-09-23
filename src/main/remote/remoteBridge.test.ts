@@ -68,6 +68,71 @@ function fixture() {
 }
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 
+describe('remote command task admission', () => {
+  it('does not claim new commands while shared execution evidence is unverified', async () => {
+    const f = fixture(); f.store.setControlAdmission(() => false);
+    expect(await f.bridge.claim()).toBe(false);
+    expect(f.requestApi).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled();
+    f.bridge.stop();
+  });
+  it('preserves a claimed command without preparing an unadmitted existing task', async () => {
+    const f = fixture();
+    f.store.transaction(() => {
+      f.store.db.exec("INSERT INTO cowork_sessions VALUES('existing','Existing',1,1,'idle')");
+      f.store.assignNew('existing', owner, 'local_create'); f.store.bindRemote('existing', 'remote', 'desktop');
+    });
+    f.store.setTaskAdmission(id => id !== 'existing');
+    const prepare = vi.spyOn(f.bridge.deps, 'prepare');
+    await f.bridge.claim();
+    expect(prepare).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled();
+    expect(f.store.get('inbox:command-1')).toMatchObject({ state: 'unknown', localSessionId: 'existing', command: { claimId: 'claim', claimToken: 'secret' } });
+    await f.bridge.reconcile();
+    const body = JSON.parse(String(f.requestApi.mock.calls.find(([, pathname]) => pathname.endsWith('/reconcile'))![2].body));
+    expect(body).toMatchObject({ observedExecution: 'unknown', requestExecutionPermit: false, localEvidence: null });
+    expect(prepare).not.toHaveBeenCalled(); f.bridge.stop();
+  });
+  it('requires admission after a newly created task is bound and before execution', async () => {
+    const f = fixture(); f.store.setTaskAdmission(() => false);
+    await f.bridge.claim();
+    expect(f.store.sync('local')?.session_id).toBe('remote');
+    expect(f.store.get('inbox:command-1')).toMatchObject({ state: 'prepared' });
+    expect(f.execute).not.toHaveBeenCalled();
+    expect(f.requestApi.mock.calls.some(([, pathname]) => pathname.endsWith('/ack'))).toBe(false);
+    f.bridge.stop();
+  });
+  it('checks admission again after persisting the executing journal', async () => {
+    const f = fixture();
+    f.bridge.deps.security = { commit: async (_id: string, _operation: unknown, apply: () => void) => { apply(); f.store.setTaskAdmission(() => false); } };
+    await f.bridge.claim();
+    expect(f.store.get('inbox:command-1')).toMatchObject({ state: 'executing' });
+    expect(f.execute).not.toHaveBeenCalled();
+    f.bridge.stop();
+  });
+  it('does not reconstruct a lost claim or infer not-started for an unadmitted task', async () => {
+    const f = fixture();
+    f.store.transaction(() => {
+      f.store.db.exec("INSERT INTO cowork_sessions VALUES('existing','Existing',1,1,'idle')");
+      f.store.assignNew('existing', owner, 'local_create'); f.store.bindRemote('existing', 'remote', 'desktop');
+    });
+    f.store.setTaskAdmission(() => false); (f.envelope as any).currentClaimId = 'lost-claim';
+    const prepare = vi.spyOn(f.bridge.deps, 'prepare');
+    await f.bridge.reconcile();
+    expect(prepare).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled();
+    const body = JSON.parse(String(f.requestApi.mock.calls.find(([, pathname]) => pathname.endsWith('/reconcile'))![2].body));
+    expect(body).toMatchObject({ observedExecution: 'unknown', requestExecutionPermit: false });
+    expect(f.store.get('inbox:command-1')).toBeNull(); f.bridge.stop();
+  });
+  it('reconciles a factual applied result even when further execution is blocked', async () => {
+    const f = fixture(); await f.bridge.claim();
+    const saved = f.store.get<InboxEntry>('inbox:command-1')!;
+    f.store.setControlAdmission(() => false); f.store.setTaskAdmission(() => false);
+    await f.bridge.reconcile();
+    const body = JSON.parse(String(f.requestApi.mock.calls.find(([, pathname]) => pathname.endsWith('/reconcile'))![2].body));
+    expect(body).toMatchObject({ observedExecution: 'applied', result: saved.result, requestExecutionPermit: false });
+    expect(f.execute).toHaveBeenCalledTimes(1); f.bridge.stop();
+  });
+});
+
 describe('device synchronization health', () => {
   it('keeps an online idle device idle during and after an empty history scan', async () => {
     const { bridge, store, requestApi } = fixture();
@@ -176,8 +241,11 @@ describe('session synchronization recovery', () => {
 
   function syncing(beginCommitted = false) {
     const value = fixture();
-    value.bridge.targetId = RemoteEnvironment.Test;
     const { bridge, store, requestApi } = value;
+    const target = bridge.targets.activateLegacy({ owner, deviceId: 'desktop', allowPartialLegacy: true });
+    bridge.targetId = target.targetId;
+    store.setProjectionIdentity(target.targetId, owner, 'desktop');
+    store.setFileEnvironment(target.targetId);
     bridges.push(bridge); store.setWake(() => {}); store.setEnabledOwner(owner);
     store.transaction(() => {
       store.db.prepare("INSERT INTO cowork_sessions VALUES ('sync-task','History',1,1,'idle')").run();
@@ -198,6 +266,13 @@ describe('session synchronization recovery', () => {
     return { ...value, warning };
   }
 
+  function expireTaskRetry(bridge: any, store: RemoteStore, id = 'sync-task'): void {
+    const context = bridge.taskContext();
+    store.db.prepare(`UPDATE remote_sync_task_state SET next_retry_at=0,server_retry_at=0
+      WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?`)
+      .run(context.owner.userId, context.owner.scopeKey, context.target, context.deviceId, id);
+  }
+
   function acknowledgeSnapshot(store: RemoteStore): void {
     const snapshot = store.snapshot('sync-task');
     const row = store.sync('sync-task')!;
@@ -208,17 +283,17 @@ describe('session synchronization recovery', () => {
   it('clears a failed import after a later commit and logs no sensitive error content', async () => {
     const { bridge, store, requestApi, warning } = syncing();
     const secret = 'private conversation and device credential';
-    requestApi.mockRejectedValueOnce(new RemoteApiError(47019, secret, { reason: 'EXECUTION_FAILED', accessToken: secret }, 409));
+    requestApi.mockRejectedValueOnce(new RemoteApiError(503, secret, { reason: 'TEMPORARILY_UNAVAILABLE', accessToken: secret }, 503));
     await bridge.syncSessions();
     const failure = store.get<any>('syncFailure:sync-task');
-    expect(failure.code).toBe(47019);
+    expect(failure.code).toBe(503);
     expect(store.get('import:sync-task')).not.toBeNull();
     expect(bridge.associationSyncState({ kind: OwnershipTargetKind.Task, id: 'sync-task' })).toBe(OwnershipSyncState.Failed);
     expect(bridge.state()).toMatchObject({ error: undefined, errorCode: undefined, sessionSyncStatus: RemoteSyncStatus.Error });
     expect(warning).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(warning.mock.calls)).not.toContain(secret);
     expect(JSON.stringify(warning.mock.calls)).not.toContain('accessToken');
-    store.put('syncFailure:sync-task', { ...failure, retryAt: 0 });
+    expireTaskRetry(bridge, store);
 
     await bridge.syncSessions();
     expect(store.get('syncFailure:sync-task')).toBeNull();
@@ -228,7 +303,7 @@ describe('session synchronization recovery', () => {
     expect(bridge.state()).toMatchObject({ error: undefined, errorCode: undefined, sessionSyncStatus: RemoteSyncStatus.Synced });
   });
 
-  it('pauses quota failures without dropping content and allows an explicit reconnect to retry', async () => {
+  it('preserves quota dependency waits and original imports across an explicit reconnect', async () => {
     const { bridge, store, requestApi } = syncing();
     vi.spyOn(bridge, 'schedule').mockImplementation(() => undefined);
     requestApi.mockRejectedValueOnce(new RemoteApiError(47012, 'quota exceeded', { reason: 'REPLY_CONTENT_QUOTA_EXCEEDED' }, 413));
@@ -241,8 +316,10 @@ describe('session synchronization recovery', () => {
     expect(store.get<any>('import:sync-task')?.importId).toBe(saved.importId);
     await bridge.configure({ retry: true });
     await bridge.syncSessions();
-    expect(store.get('syncFailure:sync-task')).toBeNull();
-    expect(store.get('import:sync-task')).toBeNull();
+    expect(requestApi).toHaveBeenCalledTimes(1);
+    expect(store.get<any>('syncFailure:sync-task')?.code).toBe(47012);
+    expect(store.get<any>('import:sync-task')?.importId).toBe(saved.importId);
+    expect(bridge.taskSync.get(bridge.taskContext(), 'sync-task').phase).toBe('waiting_dependency');
   });
 
   for (const change of ['stop', 'account', 'projection'] as const) it(`stops a snapshot publication when ${change} changes after content upload`, async () => {
@@ -280,7 +357,7 @@ describe('session synchronization recovery', () => {
     expect(requestApi).toHaveBeenCalledTimes(1);
 
     const restarted: any = new RemoteBridge(bridge.deps); bridges.push(restarted);
-    restarted.owner = owner; restarted.registration = { ...bridge.registration }; restarted.generation = '1';
+    restarted.owner = owner; restarted.registration = { ...bridge.registration }; restarted.generation = '1'; restarted.targetId = bridge.targetId;
     await restarted.syncSessions();
     expect(requestApi).toHaveBeenCalledTimes(1);
     expect(store.pending('sync-task')).toEqual(pending);
@@ -312,24 +389,30 @@ describe('session synchronization recovery', () => {
     new RemoteApiError(47010, 'Other error', { reason: 'OTHER_REASON' }, 410),
     new RemoteApiError(47019, 'Other error', { reason: 'SESSION_DELETED' }, 410),
     new RemoteApiError(47010, 'Other error', { reason: 'SESSION_DELETED' }, 503),
-  ]) it(`retains retries for non-deletion errors (${failure.code}/${failure.httpStatus}/${failure.data.reason})`, async () => {
+  ]) it(`never closes the stream on non-deletion errors (${failure.code}/${failure.httpStatus}/${failure.data.reason})`, async () => {
     const { bridge, store, requestApi } = syncing(true);
     requestApi.mockRejectedValueOnce(failure);
     await bridge.syncSessions();
     const saved = store.get<any>('syncFailure:sync-task');
-    expect(saved.blocked).not.toBe(true);
-    store.put('syncFailure:sync-task', { ...saved, retryAt: 0 });
+    const retryable = failure.httpStatus >= 500;
+    expect(bridge.taskSync.get(bridge.taskContext(), 'sync-task').phase).toBe(retryable ? 'backoff' : 'isolated');
+    const originalImport = store.get<any>('import:sync-task');
+    expireTaskRetry(bridge, store);
     await bridge.syncSessions();
-    expect(requestApi).toHaveBeenCalledTimes(2);
-    expect(store.get('syncFailure:sync-task')).toBeNull();
+    expect(requestApi).toHaveBeenCalledTimes(retryable ? 2 : 1);
+    if (retryable) expect(store.get('syncFailure:sync-task')).toBeNull();
+    else {
+      expect(store.get('syncFailure:sync-task')).toEqual(saved);
+      expect(store.get<any>('import:sync-task')?.importId).toBe(originalImport.importId);
+    }
   });
 
   it('clears a previous failure when begin returns an already committed import', async () => {
     const { bridge, store, requestApi } = syncing(true);
-    requestApi.mockRejectedValueOnce(new RemoteApiError(47019, 'Begin acknowledgement was lost'));
+    requestApi.mockRejectedValueOnce(new RemoteApiError(503, 'Begin acknowledgement was lost', null, 503));
     await bridge.syncSessions();
     const saved = store.get<any>('import:sync-task');
-    store.put('syncFailure:sync-task', { code: 47019, retryAt: 0 });
+    expireTaskRetry(bridge, store);
 
     await bridge.syncSessions();
     expect(requestApi).toHaveBeenCalledTimes(2);
@@ -357,7 +440,8 @@ describe('session synchronization recovery', () => {
     // A malformed import receipt pauses that session without failing the independent control lane.
     await bridge.syncSessions();
 
-    expect(store.get<any>('syncFailure:sync-task')?.code).toBe(failureAt === 'commit' ? 47025 : 47019);
+    if (failureAt === 'commit') expect(store.get<any>('syncFailure:sync-task')?.code).toBe(47025);
+    else expect(bridge.taskSync.get(bridge.taskContext(), 'sync-task')?.phase).toBe('isolated');
     expect(store.get<any>('import:sync-task')?.beginConfirmed).toBe(true);
     expect(store.pending('sync-task')).toEqual(pending);
     expect(store.sync('sync-task')!.ack_seq).toBe(before.ack_seq);
@@ -390,8 +474,7 @@ describe('session synchronization recovery', () => {
     const pendingFence = new Promise<void>(resolve => { releaseFence = resolve; });
     const fence = vi.spyOn(bridge, 'ensureRetentionFence').mockReturnValue(pendingFence);
     const sync = bridge.syncSessions();
-    await Promise.resolve();
-    expect(fence).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(fence).toHaveBeenCalledTimes(1));
     currentOwner = { userId: '20002', scopeKey: 'personal' };
     bridge.accountChanged();
     expect(bridge.state().sessionSyncStatus).toBe(RemoteSyncStatus.Synced);
@@ -429,7 +512,7 @@ describe('session synchronization recovery', () => {
       if (pendingState === 'dirty') {
         // Keep queued dirt visible while isolating the failure cleanup guard from admission transactions.
         vi.spyOn(bridge, 'ownershipSyncBlocked').mockReturnValue(false);
-        store.db.prepare('INSERT INTO remote_dirty VALUES (?)').run('sync-task');
+        store.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run('sync-task');
       }
       if (pendingState === 'import') store.put('import:sync-task', { importId: 'pending' });
       if (pendingState === 'outbox') store.db.prepare('INSERT INTO remote_outbox VALUES (?,1,?)').run('sync-task', JSON.stringify({ sourceSeq: '1' }));

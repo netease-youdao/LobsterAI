@@ -6,6 +6,7 @@ import { RemoteEnvironment, sameRemoteEnvironment } from '../../shared/remote/en
 import { RemoteRetention } from '../../shared/remote/retention';
 import { parseRemoteSyncTarget } from '../../shared/remote/syncTarget';
 import { payloadHash, stableJson } from './canonical';
+import { RemoteSyncStateError } from './remoteRetention';
 import type { RemoteStore } from './remoteStore';
 
 const StatePrefix = {
@@ -40,7 +41,7 @@ interface MigrationResult {
 
 interface StateRow { key: string; value: string }
 interface SessionRow { local_id: string; session_id: string; sync_environment: string | null }
-interface VerifiedTargetContext { owner: RemoteOwner; deviceId: string; targetId: string; legacyEnvironments: readonly string[] }
+interface VerifiedTargetContext { owner: RemoteOwner; deviceId: string; targetId: string; legacyEnvironments: readonly string[]; localSessionIds?: ReadonlySet<string> }
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const parse = (value: string): unknown => { try { return JSON.parse(value); } catch { return undefined; } };
 const matchesOwner = (value: unknown, owner: RemoteOwner): boolean => record(value)
@@ -102,7 +103,8 @@ export function migrateVerifiedRemoteTargetFileRouting(store: Pick<RemoteStore, 
       JOIN cowork_session_ownership o ON o.session_id=s.local_id
       WHERE o.ownership_status='confirmed' AND o.owner_user_id=? AND o.owner_scope_key=? AND s.device_id=?`)
       .all(context.owner.userId, context.owner.scopeKey, context.deviceId) as SessionRow[])
-      .filter(row => row.sync_environment === context.targetId || row.sync_environment !== null && aliases.has(row.sync_environment));
+      .filter(row => (!context.localSessionIds || context.localSessionIds.has(row.local_id))
+        && (row.sync_environment === context.targetId || row.sync_environment !== null && aliases.has(row.sync_environment)));
     const byId = new Map(sessions.map(row => [row.local_id, row]));
     const filePrefix = `${StatePrefix.FileOutput}${createHash('sha256')
       .update(JSON.stringify([context.targetId, context.owner, context.deviceId])).digest('hex')}:`;
@@ -124,7 +126,7 @@ export function migrateVerifiedRemoteTargetFileRouting(store: Pick<RemoteStore, 
         const serialized = stableJson({ ...value, environment: context.targetId });
         const existing = store.db.prepare('SELECT value FROM remote_state WHERE key=?').get(destination) as { value: string } | undefined;
         if (destination !== row.key && existing && stableJson(parse(existing.value)) !== serialized) {
-          throw new Error('Remote target file routing conflict');
+          throw new RemoteSyncStateError('Remote target file routing conflict');
         }
         store.db.prepare('INSERT INTO remote_state(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
           .run(destination, serialized);

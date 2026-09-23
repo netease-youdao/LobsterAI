@@ -35,6 +35,7 @@ function outbox(store: RemoteStore): Array<{ source_seq: number; event_json: str
 }
 function retry(store: RemoteStore): void {
   store.put('syncFailure:task', { ...store.get<any>('syncFailure:task'), retryAt: 0 });
+  store.db.prepare("UPDATE remote_sync_task_state SET next_retry_at=0,server_retry_at=0 WHERE local_session_id='task'").run();
 }
 function addMessage(store: RemoteStore, id: string): void {
   store.transaction(() => store.db.prepare("INSERT INTO cowork_messages VALUES (?,'task','assistant',?,NULL,2,2)").run(id, id));
@@ -156,7 +157,7 @@ describe('remote run publication and durable recovery', () => {
     expect(store.sync('task')!.needs_snapshot).toBe(1);
     const before = outbox(store), control = store.controlVersion('task');
     const epoch = store.get('snapshotEpoch:task'), ack = store.sync('task')!.ack_seq;
-    options.commitError = conflict();
+    options.commitError = new RemoteApiError(503, 'Temporary service failure', null, 503);
     for (let attempt = 0; attempt < 2; attempt++) {
       retry(store); await bridge.syncSessions();
       expect(store.controlVersion('task')).toBe(control); expect(store.get('snapshotEpoch:task')).toBe(epoch);

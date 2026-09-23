@@ -13,6 +13,7 @@ import { RemoteBridge } from './remoteBridge';
 import { RemoteImportSnapshotError, RemoteImportSnapshots } from './remoteImportSnapshots';
 import { RemoteStore } from './remoteStore';
 import { RemoteSyncTargetStore } from './remoteSyncTargetStore';
+import { RemoteTaskSyncState } from './remoteTaskSyncState';
 
 const workerDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-import-worker-'));
 const workerPath = path.join(workerDirectory, 'worker.cjs');
@@ -169,7 +170,10 @@ describe('immutable import snapshot worker', () => {
   it('never collects package files when an import receipt is corrupt and its references are unknown', async () => {
     const f = fixture(), result = await f.snapshots.create(randomUUID(), f.identity(), () => true);
     f.db.prepare('INSERT OR REPLACE INTO remote_state VALUES (?,?)').run('import:task', '{');
-    await expect(f.snapshots.collect()).rejects.toThrow('REMOTE_IMPORT_PART_UNAVAILABLE');
+    await expect(f.snapshots.collect()).resolves.toBeUndefined();
+    expect(await f.snapshots.exists(result.fileSet, result.parts)).toBe(true);
+    const other = await f.snapshots.create(randomUUID(), f.identity(), () => true);
+    expect(await f.snapshots.exists(other.fileSet, other.parts)).toBe(true);
     expect(await f.snapshots.exists(result.fileSet, result.parts)).toBe(true);
   });
   it('rebuilds a discarded never-sent package with a fresh import ID', async () => {
@@ -183,6 +187,76 @@ describe('immutable import snapshot worker', () => {
     });
     await f.bridge.importSession(f.store.sync('task'), null);
     expect(rebuiltId).not.toBe(entry.importId); expect(f.store.get('import:task')).toBeNull();
+  });
+  it('preserves the next package and its original evidence when the durable rebuild budget is exhausted', async () => {
+    const f = bridgeFixture(), context = f.bridge.taskContext();
+    const first = saved(f, { beginAttempted: false }); f.store.put('import:task', first);
+    await f.bridge.importSession(f.store.sync('task'), first);
+    const packaged = await f.snapshots.create(randomUUID(), f.identity(), () => true);
+    const next = saved(f, { ...packaged, beginConfirmed: true, beginAttempted: true }); f.store.put('import:task', next);
+    f.store.freezeMigration('task');
+    f.request.mockResolvedValue(ok({ importId: next.importId, sessionId: next.sessionId, state: 'expired' }));
+    f.bridge.taskSync = new RemoteTaskSyncState(f.db);
+    await expect(f.bridge.importSession(f.store.sync('task'), next, true)).rejects.toThrow('REMOTE_IMPORT_REBUILD_LIMIT');
+    expect(f.store.get('import:task')).toMatchObject({ importId: next.importId, manifest: next.manifest, fileSet: packaged.fileSet });
+    expect(await f.snapshots.exists(packaged.fileSet, packaged.parts)).toBe(true);
+    expect(f.store.sync('task')).toMatchObject({ ack_seq: 0, migration_frozen: 1 });
+    expect(JSON.parse(f.bridge.taskSync.get(context, 'task').repair_json).times).toHaveLength(1);
+  });
+  it('does not consume rebuild budget for unknown results or contradictory never-sent evidence', async () => {
+    const f = bridgeFixture(), entry = saved(f, { beginAttempted: true }); f.store.put('import:task', entry);
+    f.request.mockRejectedValue(new Error('network unavailable'));
+    await expect(f.bridge.importSession(f.store.sync('task'), entry)).rejects.toThrow();
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'task')).toBeNull();
+    const contradictory = { ...entry, beginAttempted: false, beginConfirmed: true }; f.store.put('import:task', contradictory);
+    await expect(f.bridge.importSession(f.store.sync('task'), contradictory)).rejects.toThrow('never-sent evidence');
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'task')).toBeNull();
+    expect(f.store.get<any>('import:task').importId).toBe(entry.importId);
+    expect(() => f.bridge.discardImport(f.store.sync('task'), { ...entry, beginAttempted: false })).toThrow('evidence changed');
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'task')).toBeNull();
+  });
+  it('rejects mismatched terminal identities before replacing imports and accepts old v1 terminal fields', async () => {
+    const f = bridgeFixture(), entry = saved(f, { beginConfirmed: true }); f.store.put('import:task', entry);
+    await expect(f.bridge.recoverImportConflict(f.store.sync('task'), { importId: entry.importId, state: 'expired', manifestHash: 'other' }, () => true)).rejects.toThrow('identity mismatch');
+    expect(f.store.get<any>('import:task').importId).toBe(entry.importId);
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'task')).toBeNull();
+    await f.bridge.recoverImportConflict(f.store.sync('task'), { importId: entry.importId, state: 'expired' }, () => true);
+    expect(f.store.get('import:task')).toBeNull(); expect(f.request).not.toHaveBeenCalled();
+  });
+  it('refreshes a near-expiry original import without replaying acknowledged parts or clearing failure progress', async () => {
+    const f = bridgeFixture(fixture(2300, 1)), packaged = await f.snapshots.create(randomUUID(), f.identity(), () => true);
+    const entry = saved(f, { ...packaged, beginAttempted: true, beginConfirmed: true, uploadCursor: 1, confirmedPartCount: 1,
+      expiresAt: new Date(Date.now() + 60000).toISOString(), absoluteExpiresAt: new Date(Date.now() + 120000).toISOString() });
+    f.store.put('import:task', entry);
+    f.bridge.verifiedImports.set(entry.importId, { importId: entry.importId, sessionId: entry.sessionId, state: 'uploading', stateVersion: '1', checkedAt: Date.now() - 31000 });
+    const progress = vi.spyOn(f.bridge.taskSync, 'progress');
+    f.request.mockImplementation(async (_actor, pathname) => {
+      if (pathname.endsWith('/sync/imports')) return ok({ importId: entry.importId, sessionId: entry.sessionId, state: 'uploading', stateVersion: '1', expiresAt: entry.expiresAt });
+      const partNo = Number(pathname.split('/').at(-1));
+      return ok(packaged.parts[partNo]);
+    });
+    await f.bridge.importSession(f.store.sync('task'), entry, true);
+    expect(f.store.get<any>('import:task').uploadCursor).toBe(1); expect(progress).not.toHaveBeenCalled();
+    await f.bridge.importSession(f.store.sync('task'), f.store.get('import:task'), true);
+    expect(f.request.mock.calls[1][1]).toContain('/parts/1'); expect(progress).toHaveBeenCalledTimes(1);
+    // A process restart revalidates original parts, but a duplicate ACK is not new progress.
+    f.bridge.verifiedImports.clear(); progress.mockClear();
+    await f.bridge.importSession(f.store.sync('task'), f.store.get('import:task'), true);
+    await f.bridge.importSession(f.store.sync('task'), f.store.get('import:task'), true);
+    expect(f.request.mock.calls.at(-1)![1]).toContain('/parts/0'); expect(progress).not.toHaveBeenCalled();
+    expect(f.store.get<any>('import:task').confirmedPartCount).toBe(2);
+  });
+  it('promotes only one verified expiring import while preserving regular task order and retry gates', () => {
+    const f = bridgeFixture(), row = f.store.sync('task')!;
+    const normal = { ...row, local_id: 'normal', session_id: 'normal' }, later = { ...row, local_id: 'later', session_id: 'later' };
+    const receipts = f.bridge.verifiedImports;
+    receipts.set('current', { sessionId: row.session_id, state: 'uploading', absoluteExpiresAt: new Date(Date.now() + 60000).toISOString() });
+    receipts.set('later', { sessionId: later.session_id, state: 'uploading', expiresAt: new Date(Date.now() + 120000).toISOString() });
+    expect(f.bridge.prioritizeExpiringImports([normal, later, row])).toEqual([row, normal, later]);
+    f.bridge.taskSync.defer(f.bridge.taskContext(), row.local_id, 60000);
+    expect(f.bridge.prioritizeExpiringImports([normal, later, row])).toEqual([later, normal, row]);
+    receipts.clear();
+    expect(f.bridge.prioritizeExpiringImports([normal, later, row])).toEqual([normal, later, row]);
   });
   it('uses a committed original receipt without reading missing payload files', async () => {
     const f = bridgeFixture(), entry = saved(f, { beginAttempted: true }); f.store.put('import:task', entry);
