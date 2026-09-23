@@ -119,12 +119,12 @@ A→B→C、冷却待办、环境新进程、启动文件发布顺序、原生 s
 - 定向 Vitest：9 个文件，546 项通过、3 项跳过；包含交付、应用确认、目标合并、恢复状态、配置生成、企业覆盖、进程重启及运行时适配器。
 - 修改文件 ESLint：零错误、零警告；`npm run compile:electron` 通过。
 - `npm run build` 通过。后续实操使用包含最终修改的客户端产物。
-- 新版本补丁在独立 v2026.8.1 源码树应用，完整补丁栈 57 项成功。
+- 新版本补丁在独立 v2026.8.1 源码树应用，Windows 适用补丁 57 项成功（目录包含 58 项跨平台补丁）。
 - 上游 `config-get-response.test.ts`、`server-reload-managed-secrets.test.ts`：13 项通过。
 - 扩展尝试 `config-reload.test.ts` 时出现文件监听/日志断言失败及 120 秒超时，已停止该组；尚未做无本补丁的对照，因此不能将其写成已通过或断言为既有问题。
 
 验证输出保存在本机隔离目录 `C:/Users/yangwn/AppData/Local/Temp/codex-config-lifecycle-20260923`。
-### 6.2 首轮客户端实操（持续验收中）
+### 6.2 客户端实操
 
 - Electron 主进程调试接口与 renderer CDP 驱动，独立 appData、独立运行时，合成账号/模型服务；未使用 computer-use 或系统键鼠。
 - 正常 `deepseek-flash` 会话已从界面发送并收到响应，实际请求经过本地套餐代理到达 `/api/proxy/v1/chat/completions`。
@@ -134,8 +134,8 @@ A→B→C、冷却待办、环境新进程、启动文件发布顺序、原生 s
 - 端侧补充修复：后台热应用完成后显式广播收敛状态。复验端口 57511→55729，pending 自动清除、遮罩自动消失，PID 22536 / 代次 1 不变；随后从界面新建任务收到模型响应。
 - 被拒绝的首次请求只存在于临时 UI，会话尚未入库。恢复后在原失败页发送新请求会重新创建真实会话，不能向主进程提交临时会话 ID。已通过实际界面复验，收到 `CONFIG_QA_RETRY_OK` 模型响应；未自动重放此前被拒绝的请求。
 - 本轮 renderer 相关回归：3 个文件 48 项通过，修改文件 ESLint、完整 `npm run build` 通过。
-- 首轮 GitHub CI：5,562 项测试通过、1 项失败（新补丁未加入审核清单）、163 项跳过；已补齐清单，本地对应 19 项测试通过，等待下一轮 CI。
-- 其余异常路径继续验收，最终结果另行汇总；合成模型不证明生产套餐服务的可用性。
+- 首轮 GitHub CI：5,562 项测试通过、1 项失败（新补丁未加入审核清单）、163 项跳过；已补齐清单，本地对应 19 项测试通过，后续以 PR 最新 SHA 的 CI 为准。
+- 三模型请求、丢回包确认、校验拒绝及修正、外部写入缓存、忙碌保护、连续目标变化、真实进程重启和限流恢复均已完成客户端验收。详细矩阵、证据和复跑方法见 [验收记录](2026-09-23-config-lifecycle-acceptance.md)。合成模型不证明生产套餐服务的可用性。
 
 证据：`01-baseline-state.json`、`01-baseline-ui.json`、`01-baseline.png`、`02-ack-unapplied-state.json`、
 `02-blocked-ui.json`、`02-blocked.png`、`03-idle-recovery-state.json`、`model-requests.jsonl`，均在上述隔离目录。
