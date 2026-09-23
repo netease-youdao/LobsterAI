@@ -33,6 +33,7 @@ import {
   getMarketplaceSkillAnalyticsParams,
   reportSkillAction,
 } from './analytics';
+import { countMarketplaceSkillsByTag } from './marketTagCounts';
 import SkillIconTile from './SkillIconTile';
 import SkillSecurityReport from './SkillSecurityReport';
 import { SKILL_TAB_LABEL_KEYS, SKILL_TAB_ORDER, SkillTab } from './skillTabs';
@@ -68,6 +69,9 @@ const importTabConfig: Record<ImportSourceType, {
 /** Hover/focus-revealed card actions, matching the MCP card treatment. */
 const CARD_ACTION_REVEAL_CLASS =
   'opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100';
+
+/** Result count shown inside each marketplace tag pill; inherits the pill's text color. */
+const MARKET_TAG_COUNT_CLASS = 'ml-1 tabular-nums opacity-70';
 
 interface SkillsManagerProps {
   readOnly?: boolean;
@@ -249,20 +253,26 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
     });
   }, [mySkills, builtInSkills, skillSearchQuery]);
 
-  const filteredMarketplaceSkills = useMemo(() => {
+  const searchMatchedMarketplaceSkills = useMemo(() => {
     const query = skillSearchQuery.trim().replace(/\s+/g, ' ').toLowerCase();
-    let results = marketplaceSkills;
-    if (query) {
-      results = results.filter(skill => {
-        return skill.name.toLowerCase().includes(query)
-          || resolveLocalizedText(skill.description).toLowerCase().includes(query);
-      });
-    }
-    if (activeMarketTag !== 'all') {
-      results = results.filter(skill => skill.tags?.includes(activeMarketTag));
-    }
-    return results;
-  }, [marketplaceSkills, skillSearchQuery, activeMarketTag]);
+    if (!query) return marketplaceSkills;
+    return marketplaceSkills.filter(skill => {
+      return skill.name.toLowerCase().includes(query)
+        || resolveLocalizedText(skill.description).toLowerCase().includes(query);
+    });
+  }, [marketplaceSkills, skillSearchQuery]);
+
+  const filteredMarketplaceSkills = useMemo(() => {
+    if (activeMarketTag === 'all') return searchMatchedMarketplaceSkills;
+    return searchMatchedMarketplaceSkills.filter(skill => skill.tags?.includes(activeMarketTag));
+  }, [searchMatchedMarketplaceSkills, activeMarketTag]);
+
+  // Counts follow the search query but not the selected tag, so every pill shows
+  // how many results switching to it would give.
+  const marketTagCounts = useMemo(
+    () => countMarketplaceSkillsByTag(searchMatchedMarketplaceSkills),
+    [searchMatchedMarketplaceSkills],
+  );
 
   useEffect(() => {
     const query = skillSearchQuery.trim();
@@ -1353,6 +1363,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
               }`}
             >
               {i18nService.t('skillCategoryAll')}
+              <span className={MARKET_TAG_COUNT_CLASS}>{searchMatchedMarketplaceSkills.length}</span>
             </button>
             {marketTags.map((tag) => (
               <button
@@ -1375,6 +1386,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 }`}
               >
                 {resolveLocalizedText(tag)}
+                <span className={MARKET_TAG_COUNT_CLASS}>{marketTagCounts[tag.id] ?? 0}</span>
               </button>
             ))}
           </div>
