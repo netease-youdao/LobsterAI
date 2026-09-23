@@ -346,11 +346,15 @@ export class SqliteStore {
       // Migration not needed
     }
 
-    // Migration: add config column to user_plugins
+    // Migration: add config / hooks columns to user_plugins
     try {
       const pluginCols = this.db.pragma('table_info(user_plugins)') as Array<{ name: string }>;
       if (!pluginCols.some(c => c.name === 'config')) {
         this.db.exec('ALTER TABLE user_plugins ADD COLUMN config TEXT;');
+        this.didRunMigration = true;
+      }
+      if (!pluginCols.some(c => c.name === 'hooks')) {
+        this.db.exec('ALTER TABLE user_plugins ADD COLUMN hooks TEXT;');
         this.didRunMigration = true;
       }
     } catch {
