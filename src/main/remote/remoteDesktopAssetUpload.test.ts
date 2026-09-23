@@ -23,10 +23,15 @@ async function fixture(): Promise<{ job: DesktopMessageAssetJob; deps: DesktopMe
       calls.push(url);
       if (url.endsWith('/input-assets')) { const body = JSON.parse(String(init.body)); expect(body.source).toBe('desktop_message'); expect(body.sessionId).toBe('session'); expect(body.messageId).toBe('message'); expect(body.sha256).toBe(asset.sha256); return ok({ ...asset, completedParts: [...parts.keys()] }); }
       if (url.includes('/parts/')) {
-        const partNo = Number(url.split('/').pop()); const bytes = new Uint8Array(init.body as ArrayBuffer); parts.set(partNo, bytes);
-        expect((init.headers as Record<string, string>)['Content-Length']).toBe(String(bytes.length));
-        expect((init.headers as Record<string, string>)['X-Content-SHA256']).toBe(sha(bytes));
-        return ok({ assetId: 'asset', partNo, status: 'ready', sha256: sha(bytes) });
+        expect(init.method).toBe('PUT'); expect(init.body).toBeInstanceOf(ArrayBuffer);
+        const partNo = Number(url.split('/').pop()), part = new Uint8Array(init.body as ArrayBuffer);
+        const headers = new Headers(init.headers);
+        expect(headers.has('Content-Length')).toBe(false);
+        expect(headers.get('Content-Type')).toBe('application/octet-stream');
+        expect(headers.get('X-Content-SHA256')).toBe(sha(part));
+        expect(Buffer.from(part)).toEqual(bytes.subarray((partNo - 1) * 3, partNo * 3));
+        parts.set(partNo, part);
+        return ok({ assetId: 'asset', partNo, status: 'ready', sha256: sha(part) });
       }
       expect(parts.size).toBe(3); return ok({ ...asset, status: 'ready' });
     },
@@ -34,11 +39,13 @@ async function fixture(): Promise<{ job: DesktopMessageAssetJob; deps: DesktopMe
   return { job, deps, calls, parts, setCurrent: value => { current = value; } };
 }
 describe('desktop message private asset uploads', () => {
-  it('uploads bounded parts with deterministic server-bound identifiers and returns safe metadata', async () => {
+  it('uploads exact bounded ArrayBuffer parts without manual Content-Length and returns safe metadata', async () => {
     const f = await fixture(); const asset = await uploadDesktopMessageAsset(f.job, f.deps);
     expect(f.calls).toEqual(['/api/remote/v1/devices/pc/input-assets', '/api/remote/v1/input-assets/asset/parts/1', '/api/remote/v1/input-assets/asset/parts/2', '/api/remote/v1/input-assets/asset/parts/3', '/api/remote/v1/input-assets/asset/complete']);
     expect(asset).toMatchObject({ assetId: 'asset', version: '1', intent: 'file', fileName: 'report.txt', sizeBytes: '7' });
     expect('path' in asset).toBe(false); expect(f.job.assetId).toBe('asset');
+    expect([...f.parts.values()].map(part => part.byteLength)).toEqual([3, 3, 1]);
+    expect(Buffer.concat([...f.parts.values()])).toEqual(Buffer.from('abcdefg'));
   });
   it('reuses uploadRequestId and skips acknowledged parts after a lost response', async () => {
     const f = await fixture(); const original = f.deps.request; let failOnce = true;

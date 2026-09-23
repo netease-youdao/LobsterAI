@@ -3,6 +3,7 @@ import { createReadStream, promises as fs } from 'fs';
 
 import type { RemoteOwner } from '../../shared/remote/constants';
 import type { RemoteInputAsset } from '../../shared/remote/input';
+import { requestRemoteFilePart } from './remoteFileTransferLog';
 
 export interface DesktopMessageAssetJob {
   owner: RemoteOwner;
@@ -56,7 +57,7 @@ export async function uploadDesktopMessageAsset(job: DesktopMessageAssetJob, dep
   check(); deps.persist({ sha256, sizeBytes, availability: 'uploading' });
   const request = async (path: string, init: RequestInit): Promise<Record<string, unknown>> => {
     check();
-    const response = await deps.request(path, { ...init, redirect: 'error', signal: AbortSignal.timeout(120_000) });
+    const response = await requestRemoteFilePart(path, init, () => deps.request(path, { ...init, redirect: 'error', signal: AbortSignal.timeout(120_000) }));
     check();
     let envelope: { code?: number; data?: Record<string, unknown> };
     try { envelope = await response.json() as typeof envelope; } catch { return fail('ASSET_UPLOAD_FAILED'); }
@@ -97,8 +98,9 @@ export async function uploadDesktopMessageAsset(job: DesktopMessageAssetJob, dep
         }
         await unchanged();
         const partHash = createHash('sha256').update(bytes).digest('hex');
+        // Electron computes Content-Length from these fixed bytes; setting it manually rejects net.fetch.
         const receipt = await request(`/api/remote/v1/input-assets/${encodeURIComponent(assetId)}/parts/${partNo}`, {
-          method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(length), 'X-Content-SHA256': partHash }, body: bytes.buffer,
+          method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', 'X-Content-SHA256': partHash }, body: bytes.buffer,
         });
         if (receipt.assetId !== assetId || receipt.partNo !== partNo || receipt.sha256 !== partHash || receipt.status !== 'ready') fail('ASSET_UPLOAD_FAILED');
       }

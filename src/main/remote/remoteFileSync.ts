@@ -12,6 +12,7 @@ import { projectRemoteArtifacts, remoteArtifactReasons } from './remoteArtifactP
 import { type DeliveredFileDependencies,RemoteDeliveredFileSync } from './remoteDeliveredFileSync';
 import { type DesktopMessageAssetJob, uploadDesktopMessageAsset } from './remoteDesktopAssetUpload';
 import { captureRemoteFileSnapshot, remoteFileCacheDirectory, type RemoteFileSnapshot, verifyRemoteFileSnapshot } from './remoteFileSnapshots';
+import { requestRemoteFilePart } from './remoteFileTransferLog';
 import { capturePreparedInputSnapshot, type RemotePreparedInputSource } from './remotePreparedInputSnapshots';
 import type { RemoteStore } from './remoteStore';
 import { archivedRemoteSyncReferences } from './remoteSyncTargetStore';
@@ -114,8 +115,10 @@ export class RemoteFileSync {
   async settled(): Promise<void> { await this.work; }
   private async request(connection: Connection, pathname: string, init: RequestInit): Promise<Record<string, any>> {
     this.assert(connection);
-    const response = await this.deps.request(connection, pathname, { ...init, redirect: 'error', signal: AbortSignal.timeout(120_000),
-      headers: { ...init.headers, ...(this.policy ? { 'X-Remote-File-Policy-Version': this.policy.policyVersion } : {}) } });
+    const response = await requestRemoteFilePart(pathname, init, () => this.deps.request(connection, pathname, {
+      ...init, redirect: 'error', signal: AbortSignal.timeout(120_000),
+      headers: { ...init.headers, ...(this.policy ? { 'X-Remote-File-Policy-Version': this.policy.policyVersion } : {}) },
+    }));
     this.assert(connection);
     const envelope = await response.json() as { code: number; data: Record<string, any> };
     this.assert(connection);
@@ -501,7 +504,8 @@ export class RemoteFileSync {
           let read = 0;
           while (read < length) { const chunk = await handle.read(buffer, read, length - read, offset + read); if (!chunk.bytesRead) throw new Error(RemoteFileReason.Source); read += chunk.bytesRead; }
           const digest = createHash('sha256').update(buffer).digest('hex');
-          await this.request(connection, `${uploadPath}/parts/${partNo}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(length), 'X-Content-SHA256': digest }, body: buffer.buffer });
+          // Electron computes Content-Length from these fixed bytes; setting it manually rejects net.fetch.
+          await this.request(connection, `${uploadPath}/parts/${partNo}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', 'X-Content-SHA256': digest }, body: buffer.buffer });
         }
       } finally { await handle.close(); }
       await this.json(connection, `${uploadPath}/complete`, { sha256 });

@@ -66,7 +66,14 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
       if (loseVersionReceipt) { loseVersionReceipt = false; throw new Error('create receipt lost'); }
       return ok(item);
     }
-    if (pathname.includes('/parts/')) { const id = pathname.split('/')[2]; bytes.set(id, Buffer.from(init.body)); uploads.get(id).completedParts = [1]; return ok({}); }
+    if (pathname.includes('/parts/')) {
+      expect(init.method).toBe('PUT'); expect(init.body).toBeInstanceOf(ArrayBuffer);
+      const headers = new Headers(init.headers), part = Buffer.from(init.body);
+      expect(headers.has('Content-Length')).toBe(false);
+      expect(headers.get('Content-Type')).toBe('application/octet-stream');
+      expect(headers.get('X-Content-SHA256')).toBe(createHash('sha256').update(part).digest('hex'));
+      const id = pathname.split('/')[2]; bytes.set(id, part); uploads.get(id).completedParts = [1]; return ok({});
+    }
     if (pathname.endsWith('/complete')) { const item = uploads.get(pathname.split('/')[2]); item.status = 'ready'; return ok(item); }
     if (pathname.endsWith('/resume')) { const item = uploads.get(pathname.split('/')[2]); item.writerGeneration = con.generation; return ok(item); }
     if (pathname.startsWith('/artifact-uploads/')) return ok(uploads.get(pathname.split('/')[2]));
@@ -245,6 +252,17 @@ describe('artifact sync durable boundaries and protocol', () => {
     const record = f.store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!;
     expect(record.payload.message.blocks.at(-1)).toMatchObject({ artifactId: 'remote', availability: 'ready', artifactVersion: '1', referenceMode: 'pinned' });
     expect(JSON.stringify(f.calls)).not.toContain(f.source); expect(f.jobs()[0].queue).toHaveLength(0);
+  });
+  it('uploads exact immutable artifact bytes without manually setting Content-Length', async () => {
+    const f = fixture(), original = Buffer.alloc(9327, ' '); Buffer.from('# 成语表格\n').copy(original);
+    fs.writeFileSync(f.source, original);
+    await f.tick(); f.store.updateRun('s', 'succeeded');
+    fs.writeFileSync(f.source, 'later edits must not replace the captured content');
+    await f.tick();
+    expect(f.bytes.get('asset1')).toEqual(original);
+    expect(f.uploads.get('asset1')).toMatchObject({ sizeBytes: '9327', sha256: createHash('sha256').update(original).digest('hex'), publicationStatus: 'published' });
+    expect(f.calls.filter(call => call.pathname === '/artifact-uploads/asset1/parts/1')).toHaveLength(1);
+    expect(f.references[0]).toMatchObject({ runId: 'run1', kind: 'terminal', artifactVersion: '1' });
   });
   it('keeps two final snapshots in capture order while the later run overwrites the source', async () => {
     const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded'); f.nextRun(2, 'second'); f.store.updateRun('s', 'succeeded');
