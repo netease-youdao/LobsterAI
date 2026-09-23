@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 
+import { sameOpenClawConfigContent } from './openclawConfigTarget';
 import { withoutOpenClawWriteMetadata } from './openclawManagedModelPolicy';
 
 export type OpenClawConfigSnapshot = {
@@ -16,12 +17,19 @@ const isRecord = (value: unknown): value is Record<string, unknown> => (
 );
 
 /** Equal revision tokens alone can describe an old cached config.get response. */
-export function isOpenClawConfigApplied(snapshot: OpenClawConfigSnapshot, targetRaw: string): boolean {
+export function isOpenClawConfigApplied(
+  snapshot: OpenClawConfigSnapshot,
+  targetRaw: string,
+  persistedHash?: string,
+): boolean {
   if (
     snapshot.valid !== true
     || typeof snapshot.configRevisionHash !== 'string' || !snapshot.configRevisionHash.trim()
     || snapshot.configRevisionHash !== snapshot.appliedConfigHash
   ) return false;
+  // The write receipt identifies persisted bytes even when raw contains redactions.
+  // Raw and resolved revision tokens are different domains; never compare them.
+  if (persistedHash && snapshot.hash === persistedHash) return true;
   try {
     const target: unknown = JSON.parse(targetRaw);
     // v2026.8.1 expands environment references in parsed, then redacts them.
@@ -46,6 +54,8 @@ export const CONFIG_APPLICATION_CHECK_TIMEOUT_MS = 3_000;
 export async function confirmOpenClawConfigApplied(input: {
   readConfigFile: () => string;
   readSnapshot: () => Promise<OpenClawConfigSnapshot>;
+  persistedHash?: string;
+  persistedRaw?: string;
 }): Promise<boolean> {
   for (const delay of CONFIG_APPLICATION_CHECK_DELAYS_MS) {
     if (delay) await new Promise<void>(resolve => setTimeout(resolve, delay));
@@ -53,7 +63,9 @@ export async function confirmOpenClawConfigApplied(input: {
       const before = input.readConfigFile();
       const snapshot = await input.readSnapshot();
       const after = input.readConfigFile();
-      if (before === after && isOpenClawConfigApplied(snapshot, after)) return true;
+      const receiptHash = input.persistedRaw && sameOpenClawConfigContent(after, input.persistedRaw)
+        ? input.persistedHash : undefined;
+      if (before === after && isOpenClawConfigApplied(snapshot, after, receiptHash)) return true;
     } catch {
       // A failed probe is unknown, not proof that the write failed or applied.
     }

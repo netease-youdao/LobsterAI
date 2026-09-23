@@ -6260,12 +6260,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         }
 
         console.warn('[OpenClawRuntime] gateway WS disconnected — code:', _code, 'reason:', reason);
-        if (_code === WebSocketCloseCode.ServiceRestart) {
-          // The gateway is restarting itself after a config reload. Flag the
-          // window so the supervisor doesn't kill the process mid-restart
-          // (which poisons the single-instance lock file on Windows).
-          this.engineManager.noteGatewaySelfRestart(reason || 'service restart');
-        }
         const gatewayFailure = typeof this.engineManager.getLastGatewayFailure === 'function'
           ? this.engineManager.getLastGatewayFailure()
           : null;
@@ -7424,6 +7418,21 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     // events (agent, tool updates) keep flowing — causing false-positive
     // disconnect from the TickWatchdog.
     this.lastTickTimestamp = Date.now();
+
+    if (event.event === OpenClawGatewayEvent.Shutdown) {
+      // A close code describes the transport, not process ownership. Use the
+      // native restart announcement and let the supervisor observe child exit.
+      const payload = isRecord(event.payload) ? event.payload : {};
+      if (!this.gatewayStoppingIntentionally
+        && typeof payload.restartExpectedMs === 'number'
+        && Number.isFinite(payload.restartExpectedMs) && payload.restartExpectedMs >= 0
+        && this.engineManager.getGatewayProcessPid() !== null) {
+        this.engineManager.noteGatewaySelfRestart(
+          typeof payload.reason === 'string' ? payload.reason : 'gateway restart announced',
+        );
+      }
+      return;
+    }
 
     if (event.event === 'tick') {
       return;

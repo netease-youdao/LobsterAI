@@ -385,7 +385,7 @@ import {
   refreshEndpointsTestMode,
 } from './libs/endpoints';
 import {
-  mergeEnterpriseOpenclawConfig,
+  prepareEnterpriseOpenclawConfig,
   resolveEnterpriseConfigPath,
   syncEnterpriseConfig,
 } from './libs/enterpriseConfigSync';
@@ -480,7 +480,9 @@ import {
   observeConfigRecovery,
   writeConfigDiagnostic,
 } from './libs/openclawConfigObservation';
+import { OpenClawConfigRecovery } from './libs/openclawConfigRecovery';
 import { buildProviderSelection, OpenClawConfigSync } from './libs/openclawConfigSync';
+import { persistOpenClawConfigTarget, readOpenClawConfigRaw, rebaseOpenClawConfigTarget, sameOpenClawConfigContent } from './libs/openclawConfigTarget';
 import { getRecentOpenClawDailyLogEntries } from './libs/openclawDailyLogs';
 import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
 import {
@@ -2443,10 +2445,14 @@ const ensureOpenClawRunningForCowork = async () => {
   });
   if (!syncResult.success) {
     console.error('[OpenClaw] ensureRunning: config sync failed:', syncResult.error);
+    return buildConfigApplyPendingStatus(syncResult.error || t('openClawConfigApplyPending'));
   }
 
   console.log(`${gwDiagTs()} ensureRunning: gateway not running (phase=${status.phase}), starting`);
-  return await manager.startGateway('ensure-running-for-cowork');
+  const started = await manager.startGateway('ensure-running-for-cowork');
+  if (started.phase !== OpenClawEnginePhase.Running) return started;
+  await syncOpenClawConfig({ reason: 'ensureRunning:config-confirm' });
+  return await waitForOpenClawConfigApply('cowork startup confirmation') ?? manager.getStatus();
 };
 
 const getCoworkStore = () => {
@@ -2756,6 +2762,7 @@ type GatewayConfigApplyState = {
 let openClawConfigApplyQueue: Promise<void> = Promise.resolve();
 let openClawConfigApplyState: GatewayConfigApplyState | null = null;
 let openClawConfigApplyGeneration = 0;
+const openClawConfigRecovery = new OpenClawConfigRecovery();
 let deferredRestartReason: string | null = null;
 const imConfigRestartTracker = new OpenClawImConfigRestartTracker({
   getImConfigFingerprint: () => createStableConfigFingerprint(getIMGatewayManager().getConfig()),
@@ -2772,9 +2779,9 @@ const buildConfigApplyPendingStatus = (message: string): OpenClawEngineStatus =>
   };
 };
 
-const waitForOpenClawConfigApply = async (context: string): Promise<OpenClawEngineStatus | null> => {
-  const pendingApply = openClawConfigApplyState;
-  if (pendingApply) {
+const waitForOpenClawConfigApply = async (context: string, waitForRecovery = true): Promise<OpenClawEngineStatus | null> => {
+  let pendingApply = openClawConfigApplyState;
+  while (pendingApply) {
     console.log(
       '[OpenClawConfigApply] waiting for pending config sync before proceeding.',
       `Context ${context}.`,
@@ -2789,9 +2796,15 @@ const waitForOpenClawConfigApply = async (context: string): Promise<OpenClawEngi
         : 'OpenClaw config sync failed.';
       return buildConfigApplyPendingStatus(message);
     }
+    // A newer queued target must not escape an older operation's barrier.
+    pendingApply = openClawConfigApplyState === pendingApply ? null : openClawConfigApplyState;
   }
 
-  if (deferredRestartReason) {
+  if (!waitForRecovery) return null;
+  if (openClawConfigRecovery.error) return buildConfigApplyPendingStatus(openClawConfigRecovery.error);
+  const phase = getOpenClawEngineManager().getStatus().phase;
+  if (deferredRestartReason || (openClawConfigRecovery.pending
+    && (phase === OpenClawEnginePhase.Running || phase === OpenClawEnginePhase.Starting))) {
     return buildConfigApplyPendingStatus(
       deferredRestartOverdue
         ? t('openClawConfigApplyOverdue')
@@ -2811,8 +2824,7 @@ const executeDeferredGatewayRestart = async (reason: string) => {
   // When the sync below re-defers (workloads still active), the re-scheduled
   // reason flows back here on the next attempt — don't stack another
   // `deferred:` prefix. Unbounded stacking also breaks the
-  // selfRestartSatisfiesSync() prefix check, misclassifying restarts that a
-  // gateway self-restart would satisfy as needing a full respawn.
+  // recovery reason classifier, misclassifying hot application as a respawn.
   const syncReason = reason.startsWith(DEFERRED_SYNC_REASON_PREFIX)
     ? reason
     : `${DEFERRED_SYNC_REASON_PREFIX}${reason}`;
@@ -2823,43 +2835,9 @@ const executeDeferredGatewayRestart = async (reason: string) => {
   });
 };
 
-// A hard restart requested while the gateway is restarting itself (config
-// reload → SIGUSR1) is parked here instead of killing the mid-restart process.
-// When the gateway client reconnects we either drop it (the self-restart
-// already loaded the on-disk config) or replay it (env vars need a respawn).
-type PendingSelfRestartReevaluation = {
-  reasons: string[];
-  requiresRespawn: boolean;
-  gatewayPid: number | null;
-};
-let pendingSelfRestartReevaluation: PendingSelfRestartReevaluation | null = null;
-
-/**
- * True when this sync's restart demand is satisfied by the gateway reloading
- * the on-disk config (which a self-restart does). Env-var changes need a
- * respawn (same-process restart keeps the old environment), and explicit
- * restart flags may depend on out-of-config state — except the
- * config-delivery fallback, whose only goal is on-disk config convergence.
- */
-const selfRestartSatisfiesSync = (
-  options: SyncOpenClawConfigOptions,
-  secretEnvVarsChanged: boolean,
-): boolean => {
-  if (secretEnvVarsChanged) {
-    return false;
-  }
-  if (options.restartGatewayIfRunning === true) {
-    return options.reason.startsWith(
-      `${DEFERRED_SYNC_REASON_PREFIX}${CONFIG_DELIVERY_FALLBACK_REASON_PREFIX}`,
-    );
-  }
-  return true;
-};
-
 const scheduleDeferredGatewayRestart = (reason: string) => {
   deferredRestartReason = mergeDeferredGatewayRestartReason(deferredRestartReason, reason);
-  // If already scheduled, the latest config is already on disk — just let
-  // the existing timer handle the restart.
+  // Recovery retains the latest target even when it has not been persisted.
   if (deferredRestartTimer) {
     console.log(
       `${gwDiagTs()} scheduleDeferredGatewayRestart: already scheduled, keeping reason=${deferredRestartReason}`,
@@ -2872,6 +2850,7 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
   );
   deferredRestartOverdue = false;
   deferredRestartTimer = setInterval(() => {
+    if (isConfigDeliveryFallbackReason(deferredRestartReason ?? reason) && !openClawConfigRecovery.canRetry()) return;
     if (!hasActiveConfigRestartWorkloads(deferredRestartReason ?? reason)) {
       void executeDeferredGatewayRestart(deferredRestartReason ?? reason);
     }
@@ -2955,11 +2934,11 @@ const _syncOpenClawConfigImpl = async (
   });
 
   const imConfigFingerprint = imConfigRestartTracker.captureConfig();
-  const syncResult = configSync.sync(options.reason);
+  const syncResult = configSync.prepare(options.reason);
   console.log(
     `${D()} sync() ok=${syncResult.ok} changed=${syncResult.changed} bindingsChanged=${!!syncResult.bindingsChanged} restartImpact=${syncResult.restartImpact ?? OpenClawConfigImpact.None}`,
   );
-  if (!syncResult.ok) {
+  if (!syncResult.ok || !syncResult.target) {
     console.log(`${D()} sync FAILED: ${syncResult.error}`);
     const status = getOpenClawEngineManager().setExternalError(
       `OpenClaw config sync failed: ${syncResult.error || 'unknown error'}`,
@@ -2972,12 +2951,10 @@ const _syncOpenClawConfigImpl = async (
     };
   }
 
-  let enterpriseConfigChanged = false;
-  try {
-    enterpriseConfigChanged = mergeEnterpriseOpenclawConfig(manager.getConfigPath());
-  } catch {
-    /* non-critical */
-  }
+  const target = syncResult.target;
+  const enterpriseRaw = prepareEnterpriseOpenclawConfig(target.raw);
+  const enterpriseConfigChanged = !sameOpenClawConfigContent(target.raw, enterpriseRaw);
+  target.raw = enterpriseRaw;
 
   const effectiveConfigChanged =
     syncResult.changed || pluginInstallMigrationChanged || enterpriseConfigChanged;
@@ -2989,7 +2966,7 @@ const _syncOpenClawConfigImpl = async (
   const prevSecretEnvVars = manager.getSecretEnvVars();
   let referencedSecretEnvVarNames: Set<string> | null = null;
   try {
-    const configText = fs.readFileSync(manager.getConfigPath(), 'utf8');
+    const configText = target.raw;
     referencedSecretEnvVarNames = collectReferencedEnvVarNames(configText);
   } catch (error) {
     console.warn('[OpenClawConfigSync] failed to inspect referenced secret env vars, comparing all secrets:', error);
@@ -3042,12 +3019,15 @@ const _syncOpenClawConfigImpl = async (
     options.imConfigRestartFingerprint,
     effectiveConfigChanged,
   );
-  const needsHardRestart =
+  const fallbackRecovery = isConfigDeliveryFallbackReason(options.reason);
+  const requestedRespawn =
     secretEnvVarsChanged ||
     syncResult.bindingsChanged === true ||
     syncRestartImpact ||
-    expectedRestartImpact ||
-    (options.restartGatewayIfRunning === true && !imRestartSatisfied);
+    (!fallbackRecovery && expectedRestartImpact) ||
+    (!fallbackRecovery && options.restartGatewayIfRunning === true && !imRestartSatisfied);
+  openClawConfigRecovery.stage(target, requestedRespawn, manager.getGatewayProcessGeneration());
+  const needsHardRestart = openClawConfigRecovery.needsRespawn(manager.getGatewayProcessGeneration());
 
   if (imRestartSatisfied && !needsHardRestart) {
     console.log('[OpenClawConfigSync] IM config already loaded by a completed gateway restart; skipping duplicate restart.');
@@ -3057,34 +3037,26 @@ const _syncOpenClawConfigImpl = async (
     `${D()} needsHardRestart=${needsHardRestart} (envChanged=${secretEnvVarsChanged} bindingsChanged=${!!syncResult.bindingsChanged} configChanged=${effectiveConfigChanged} restartImpact=${syncResult.restartImpact ?? OpenClawConfigImpact.None} expectedRestart=${expectedRestartImpact} restartFlag=${!!options.restartGatewayIfRunning})`,
   );
 
-  const retryDeferredDelivery = options.reason.startsWith(DEFERRED_SYNC_REASON_PREFIX)
-    && isConfigDeliveryFallbackReason(options.reason)
-    && !secretEnvVarsChanged
-    && !syncResult.bindingsChanged
-    && !syncRestartImpact;
-  if (!needsHardRestart || retryDeferredDelivery) {
-    if (!effectiveConfigChanged && !retryDeferredDelivery) {
-      console.log(`${D()} ──── NO RESTART, config unchanged. reason=${options.reason}`);
-      return {
-        success: true,
-        changed: false,
-      };
-    }
-    // The gateway's file watcher can miss writes that land right after a
-    // (re)start, so never rely on it alone: push the final on-disk content
-    // through config.set for a positive hot-apply ack, or schedule a deferred
-    // restart when the RPC path is unavailable.
-    const deliveryManager = getOpenClawEngineManager();
+  // Stopped-child bootstrap is the only direct write path. A starting/running
+  // child owns its source file, so preparation cannot race its watcher.
+  const phase = manager.getStatus().phase;
+  if (phase !== OpenClawEnginePhase.Running && phase !== OpenClawEnginePhase.Starting
+    && manager.getGatewayProcessPid() === null) {
+    persistOpenClawConfigTarget(manager.getConfigPath(), target);
+    clearDeferredRestart();
+    deferredRestartReason = null;
+    return { success: true, changed: effectiveConfigChanged, status: manager.getStatus() };
+  }
+
+  const deliver = async () => {
     let payloadDigest: string | undefined;
+    const gatewayGeneration = manager.getGatewayProcessGeneration();
     const delivery = await deliverOpenClawConfigToGateway({
       reason: options.reason,
-      gatewayPhase: deliveryManager.getStatus().phase,
-      readConfigFile: () => fs.readFileSync(deliveryManager.getConfigPath(), 'utf8'),
-      configPath: deliveryManager.getConfigPath(),
-      ensureRpcClient: async () => (
-        openClawRuntimeAdapter ? openClawRuntimeAdapter.ensureGatewayRpcClient() : null
-      ),
-      scheduleDeferredRestart: retryDeferredDelivery ? undefined : scheduleDeferredGatewayRestart,
+      gatewayPhase: manager.getStatus().phase,
+      readConfigFile: () => rebaseOpenClawConfigTarget(target, readOpenClawConfigRaw(manager.getConfigPath())),
+      configPath: manager.getConfigPath(),
+      ensureRpcClient: async () => openClawRuntimeAdapter?.ensureGatewayRpcClient() ?? null,
       onDiagnostic: event => {
         if (event.payloadDigest) payloadDigest = event.payloadDigest;
         const terminal = event.stage === ConfigDiagnosticStage.Complete;
@@ -3097,8 +3069,8 @@ const _syncOpenClawConfigImpl = async (
           // Logical host attempt, not the runtime's private wire request ID.
           hostAttemptId: `${syncId}:${event.attempt}:${event.stage}`,
           ...event, payloadDigest, workloads,
-          gatewayPid: deliveryManager.getGatewayProcessPid(),
-          gatewayGeneration: deliveryManager.getGatewayProcessGeneration(),
+          gatewayPid: manager.getGatewayProcessPid(),
+          gatewayGeneration: manager.getGatewayProcessGeneration(),
           observation: terminal && event.evidence && event.actualAction ? observeConfigRecovery({
             evidence: event.evidence, actualAction: event.actualAction,
             workloadState: workloads?.state ?? ConfigWorkloadState.Unknown,
@@ -3106,35 +3078,53 @@ const _syncOpenClawConfigImpl = async (
         }, warn);
       },
     });
+    if (delivery.mode === OpenClawConfigDeliveryMode.Applied
+      && gatewayGeneration !== manager.getGatewayProcessGeneration()) {
+      return { ...delivery, mode: OpenClawConfigDeliveryMode.Fallback, detail: 'Gateway generation changed during application confirmation.' };
+    }
+    if (delivery.mode === OpenClawConfigDeliveryMode.Applied) {
+      if (openClawConfigRecovery.applied(target, manager.getGatewayProcessGeneration())) {
+        clearDeferredRestart();
+        deferredRestartReason = null;
+      }
+    } else if (delivery.mode === OpenClawConfigDeliveryMode.Rejected) {
+      openClawConfigRecovery.reject(target, delivery.detail);
+      clearDeferredRestart();
+      deferredRestartReason = null;
+    }
+    return delivery;
+  };
+
+  const retryDeferredDelivery = options.reason.startsWith(DEFERRED_SYNC_REASON_PREFIX) && fallbackRecovery;
+  if (!needsHardRestart) {
+    const delivery = await deliver();
     if (delivery.mode === OpenClawConfigDeliveryMode.Rejected) {
-      return {
-        success: false,
-        changed: true,
-        status: deliveryManager.getStatus(),
-        error: delivery.detail,
-      };
+      return { success: false, changed: effectiveConfigChanged, status: manager.getStatus(), error: delivery.detail };
     }
-    if (!retryDeferredDelivery || delivery.mode !== OpenClawConfigDeliveryMode.Fallback) {
-      console.log(
-        `${D()} ──── NO RESTART, hot delivery mode=${delivery.mode} restartScheduled=${delivery.restartScheduled}. reason=${options.reason}`,
-      );
-      return {
-        success: true,
-        changed: true,
-      };
+    if (delivery.mode === OpenClawConfigDeliveryMode.Applied && !openClawConfigRecovery.pending) {
+      return { success: true, changed: effectiveConfigChanged, status: manager.getStatus() };
     }
-    console.warn(`${D()} deferred config delivery still failed; retaining queued restart. reason=${options.reason}`);
+    // An ordinary write does not immediately respawn on an ambiguous outcome.
+    // Re-read and reapply at the idle recovery boundary before escalating.
+    if (!retryDeferredDelivery || delivery.retryAfterMs !== undefined || !openClawConfigRecovery.canRestart()) {
+      openClawConfigRecovery.retryAfter(Math.max(delivery.retryAfterMs ?? 0,
+        retryDeferredDelivery ? 30_000 : DEFERRED_RESTART_POLL_MS));
+      scheduleDeferredGatewayRestart(fallbackRecovery ? options.reason
+        : `${CONFIG_DELIVERY_FALLBACK_REASON_PREFIX}${options.reason}`);
+      return { success: true, changed: effectiveConfigChanged, status: buildConfigApplyPendingStatus(t('openClawConfigApplyPending')) };
+    }
   }
 
   const status = manager.getStatus();
-  if (status.phase !== 'running') {
+  if (status.phase !== OpenClawEnginePhase.Running) {
+    scheduleDeferredGatewayRestart(options.reason);
     console.log(
       `${D()} ──── RESTART NEEDED but gateway not running (phase=${status.phase}), skipping. reason=${options.reason}`,
     );
     return {
       success: true,
       changed: true,
-      status,
+      status: buildConfigApplyPendingStatus(t('openClawConfigApplyPending')),
     };
   }
 
@@ -3144,28 +3134,13 @@ const _syncOpenClawConfigImpl = async (
     return {
       success: true,
       changed: true,
-      status,
+      status: buildConfigApplyPendingStatus(t('openClawConfigApplyPending')),
     };
   }
 
   if (manager.isGatewaySelfRestartActive()) {
-    // Killing the gateway mid self-restart poisons its single-instance lock
-    // (empty lock file → 30s of "gateway already running; lock timeout").
-    // Park the demand; the gateway-ready callback re-evaluates it.
-    const requiresRespawn = nspClawguardPatched || !selfRestartSatisfiesSync(options, secretEnvVarsChanged);
-    pendingSelfRestartReevaluation = {
-      reasons: [...(pendingSelfRestartReevaluation?.reasons ?? []), options.reason],
-      requiresRespawn: (pendingSelfRestartReevaluation?.requiresRespawn ?? false) || requiresRespawn,
-      gatewayPid: pendingSelfRestartReevaluation?.gatewayPid ?? manager.getGatewayProcessPid(),
-    };
-    console.log(
-      `${D()} ──── RESTART PARKED (gateway self-restart in progress). reason=${options.reason}, requiresRespawn=${requiresRespawn}`,
-    );
-    return {
-      success: true,
-      changed: true,
-      status,
-    };
+    scheduleDeferredGatewayRestart(options.reason);
+    return { success: true, changed: true, status: buildConfigApplyPendingStatus(t('openClawConfigApplyPending')) };
   }
 
   if (isQuitting || isDataMigrationRestoreInProgress) {
@@ -3180,7 +3155,12 @@ const _syncOpenClawConfigImpl = async (
 
   const restarted = await imConfigRestartTracker.restartGateway(
     imConfigFingerprint,
-    () => manager.restartGateway(`config-sync:${options.reason}`),
+    () => manager.restartGateway(`config-sync:${options.reason}`, {
+      beforeStart: () => {
+        persistOpenClawConfigTarget(manager.getConfigPath(), target);
+        if (fallbackRecovery) openClawConfigRecovery.restarted();
+      },
+    }),
   );
   if (restarted.phase !== 'running') {
     return {
@@ -3195,11 +3175,20 @@ const _syncOpenClawConfigImpl = async (
   if (openClawRuntimeAdapter && !isQuitting && !isDataMigrationRestoreInProgress) {
     await openClawRuntimeAdapter.connectGatewayIfNeeded();
   }
-  return {
-    success: true,
-    changed: true,
-    status: restarted,
-  };
+  const confirmed = await deliver();
+  if (confirmed.mode !== OpenClawConfigDeliveryMode.Applied || openClawConfigRecovery.pending) {
+    if (confirmed.mode !== OpenClawConfigDeliveryMode.Rejected) {
+      openClawConfigRecovery.retryAfter(30_000);
+      scheduleDeferredGatewayRestart(`${CONFIG_DELIVERY_FALLBACK_REASON_PREFIX}${options.reason}`);
+    }
+    return {
+      success: confirmed.mode !== OpenClawConfigDeliveryMode.Rejected,
+      changed: true,
+      status: buildConfigApplyPendingStatus(confirmed.detail),
+      error: confirmed.mode === OpenClawConfigDeliveryMode.Rejected ? confirmed.detail : undefined,
+    };
+  }
+  return { success: true, changed: true, status: restarted };
 };
 
 const syncOpenClawConfig = async (
@@ -3269,33 +3258,13 @@ const syncOpenClawConfig = async (
   }
 };
 
-// The gateway client reconnected — any self-restart has settled. Resolve the
-// parked restart demand: a same-pid (in-process) restart already loaded the
-// on-disk config, so only env-var style demands still need a real respawn.
-// A changed pid means the process was respawned with fresh env anyway.
+// A handshake proves transport readiness only. Reconcile the pending target
+// after cold startup or a self-restart; same-process restarts cannot satisfy env changes.
 const handleGatewaySelfRestartSettled = () => {
-  const manager = getOpenClawEngineManager();
-  manager.clearGatewaySelfRestart();
-  const pending = pendingSelfRestartReevaluation;
-  if (!pending) {
-    return;
+  getOpenClawEngineManager().clearGatewaySelfRestart();
+  if (openClawConfigRecovery.pending && !openClawConfigApplyState && !isQuitting && !isDataMigrationRestoreInProgress) {
+    void syncOpenClawConfig({ reason: 'gateway-ready:config-confirm' });
   }
-  pendingSelfRestartReevaluation = null;
-  const currentPid = manager.getGatewayProcessPid();
-  const respawned = pending.gatewayPid != null && currentPid != null && currentPid !== pending.gatewayPid;
-  if (pending.requiresRespawn && !respawned) {
-    console.log(
-      `${gwDiagTs()} parked restart still required after gateway self-restart (reasons: ${pending.reasons.join(', ')}); executing now`,
-    );
-    void syncOpenClawConfig({
-      reason: `self-restart-reevaluate:${pending.reasons[0]}`,
-      restartGatewayIfRunning: true,
-    });
-    return;
-  }
-  console.log(
-    `${gwDiagTs()} parked restart satisfied by gateway self-restart (reasons: ${pending.reasons.join(', ')}, respawned=${respawned})`,
-  );
 };
 
 type OpenClawGatewayRepairResult = {
@@ -3354,7 +3323,7 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
       return initialBusyResult;
     }
 
-    const pendingApplyStatus = await waitForOpenClawConfigApply('manual OpenClaw repair');
+    const pendingApplyStatus = await waitForOpenClawConfigApply('manual OpenClaw repair', false);
     if (pendingApplyStatus) {
       console.warn('[OpenClawRepair] repair was blocked while configuration changes are still applying.');
       return {

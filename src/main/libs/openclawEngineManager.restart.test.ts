@@ -461,16 +461,19 @@ describe('OpenClaw gateway restart supervision', () => {
 
   test('keeps one startup screen and never starts the replacement before the old process exits', async () => {
     const { manager, internals, child, phases } = makeSupervisor();
+    const publishConfig = vi.fn(() => expect(internals.gatewayProcess).toBeNull());
     const start = vi.spyOn(manager, 'startGateway').mockImplementation(async () => {
+      expect(publishConfig).toHaveBeenCalledOnce();
       expect((await manager.ensureReady()).phase).toBe(OpenClawEnginePhase.Starting);
       internals.setStatus({ phase: OpenClawEnginePhase.Running, version: '2026.8.1', canRetry: false });
       return manager.getStatus();
     });
-    const first = manager.restartGateway('mcp-change');
+    const first = manager.restartGateway('mcp-change', { beforeStart: publishConfig });
     const concurrent = manager.restartGateway('another-config-change');
 
     await vi.advanceTimersByTimeAsync(5_300);
     expect(start).not.toHaveBeenCalled();
+    expect(publishConfig).not.toHaveBeenCalled();
     expect(phases).toEqual([OpenClawEnginePhase.Starting]);
     child.exitCode = 0;
     closeChild(child, 0);

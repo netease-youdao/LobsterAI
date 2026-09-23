@@ -1,5 +1,28 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Config candidate revision cache (upstream backport)
+
+`openclaw-config-candidate-cache-invalidation.patch` backports the production
+changes from [OpenClaw #142169](https://github.com/openclaw/openclaw/pull/142169),
+merged as `37dbd0aac6556ea9a63f045cabec91963d0571b3` on 2026-09-08.
+It invalidates `config.get` at candidate observation for every writer, including
+agent mutations and watched edits, instead of only config RPC persistence.
+Application revisions and committed notifications still advance at acceptance.
+
+The patch adapts context to v2026.8.1, with no new reload policy. The upstream
+test file uses a newer server harness, so its fixture rewrite is not backported.
+Validate the cache/reloader tests and the real Electron/Gateway config lifecycle
+flow described in `specs/bugfixes/openclaw-config-hot-reload-delivery/2026-09-23-config-lifecycle-design.md`.
+Rebuild the Gateway bundle from patched source; changing the source alone does
+not update the bundled runtime.
+
+Removal: upstream v2026.9.5 contains this commit (v2026.8.1 does not). On an
+upgrade that contains equivalent candidate-observation invalidation, remove this
+patch and rerun agent-mutation/watched-edit freshness, genuine stale-CAS rejection,
+and delayed-application checks. Do not remove LobsterAI's application barrier or
+pending recovery: persistence and runtime application remain different states.
+The broader reload changes in #138112 and #154792 are not part of this backport.
+
 ## Device identity conflicts without an import receipt
 
 `openclaw-device-identity-preservation.patch` aligns the identity migration owner

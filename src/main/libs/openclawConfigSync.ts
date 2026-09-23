@@ -74,6 +74,7 @@ import {
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
 import { logOpenClawConfigLockDiagnostics } from './openclawConfigDiagnostics';
 import { OpenClawConfigImpact } from './openclawConfigImpact';
+import { createOpenClawConfigTarget, type OpenClawConfigTarget, readOpenClawConfigRaw } from './openclawConfigTarget';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { repairHeartbeatFile, stripProactiveHeartbeatSection } from './openclawHeartbeatRepair';
 import { withManagedOpenClawModelPolicy, withoutOpenClawWriteMetadata } from './openclawManagedModelPolicy';
@@ -1794,6 +1795,7 @@ export type OpenClawConfigSyncResult = {
   ok: boolean;
   changed: boolean;
   configPath: string;
+  target?: OpenClawConfigTarget;
   error?: string;
   agentsMdWarning?: string;
   bindingsChanged?: boolean;
@@ -2036,8 +2038,14 @@ export class OpenClawConfigSync {
     };
   }
 
-  sync(reason: string): OpenClawConfigSyncResult {
+  /** Prepare the config without writing a running Gateway's source file. */
+  prepare(reason: string): OpenClawConfigSyncResult {
+    return this.sync(reason, false);
+  }
+
+  sync(reason: string, persist = true): OpenClawConfigSyncResult {
     const configPath = this.engineManager.getConfigPath();
+    const baseRaw = readOpenClawConfigRaw(configPath);
     const coworkConfig = this.getCoworkConfig();
     // OpenClaw defaults to automatic review; require an explicit user opt-in.
     const skillReviewMode = coworkConfig.openClawSkillReviewEnabled === true
@@ -2073,7 +2081,7 @@ export class OpenClawConfigSync {
       } else {
         // This also happens during logout or before server models finish
         // loading. Keep existing non-provider state so IM stays configured.
-        const result = this.writeMinimalConfig(configPath, reason, skillReviewMode, memoryFlushEnabled);
+        const result = this.writeMinimalConfig(configPath, reason, skillReviewMode, memoryFlushEnabled, persist);
         // Still sync AGENTS.md even when API is not configured — skills/systemPrompt
         // may already be set and should be available when the user configures a model.
         const mainWorkspacePath = getMainAgentWorkspacePath(this.engineManager.getStateDir());
@@ -2363,7 +2371,7 @@ export class OpenClawConfigSync {
     let existingConfig: Record<string, unknown> = {};
     let existingSessionStoreOwner: unknown;
     try {
-      const existing = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      const existing = JSON.parse(baseRaw);
       existingConfig = asConfigRecord(existing) ?? {};
       existingGateway = (existing.gateway ?? {}) as Record<string, unknown>;
       existingSessionStoreOwner = existing.agents?.defaults?.sessionStore;
@@ -3237,19 +3245,15 @@ export class OpenClawConfigSync {
       legacyOwner: existingSessionStoreOwner,
     });
     managedConfig = withManagedOpenClawModelPolicy(managedConfig, existingConfig);
-    const nextContent = `${JSON.stringify(managedConfig, null, 2)}\n`;
+    const target = createOpenClawConfigTarget(baseRaw, `${JSON.stringify(managedConfig, null, 2)}\n`);
+    const nextContent = target.raw;
     console.log('[OpenClawConfigSync] sync() managedConfig key fields:', {
       providers: (managedConfig.models as Record<string, unknown>)?.providers,
       primaryModel: (
         (managedConfig.agents as Record<string, unknown>)?.defaults as Record<string, unknown>
       )?.model,
     });
-    let currentContent = '';
-    try {
-      currentContent = fs.readFileSync(configPath, 'utf8');
-    } catch {
-      currentContent = '';
-    }
+    const currentContent = baseRaw;
 
     // OpenClaw may reorder object keys during config writes. Compare values,
     // retaining array order and migration markers, but ignoring write provenance.
@@ -3311,9 +3315,9 @@ export class OpenClawConfigSync {
         });
         console.log(`${gwDiagTs()} top-level changed keys:`, changedTopLevelKeys.join(',') || '(none)');
       } catch { /* ignore parse errors in diag */ }
-      try {
+      if (persist) try {
         ensureDir(path.dirname(configPath));
-        const stampedContent = `${JSON.stringify(this.stampConfigMeta(managedConfig), null, 2)}\n`;
+        const stampedContent = `${JSON.stringify(this.stampConfigMeta(JSON.parse(target.raw)), null, 2)}\n`;
         const tmpPath = `${configPath}.tmp-${Date.now()}`;
         logOpenClawConfigLockDiagnostics(configPath, `managed-config-write:${reason}`, true);
         console.debug(`[OpenClawConfigSync] Writing managed config: reason=${reason} pid=${process.pid} path=${configPath}`);
@@ -3349,6 +3353,7 @@ export class OpenClawConfigSync {
       ok: true,
       changed: configChanged || sessionStoreChanged,
       configPath,
+      target,
       ...(bindingsChanged ? { bindingsChanged } : {}),
       ...(changedTopLevelKeys.length > 0 ? { changedTopLevelKeys } : {}),
       // Native MCP config reload disposes affected runtimes; server edits do
@@ -4111,6 +4116,7 @@ export class OpenClawConfigSync {
     _reason: string,
     skillReviewMode: OpenClawSkillReviewMode,
     memoryFlushEnabled: boolean,
+    persist: boolean,
   ): OpenClawConfigSyncResult {
     const baseMinimalConfig: Record<string, unknown> = {
       gateway: {
@@ -4194,7 +4200,8 @@ export class OpenClawConfigSync {
     if (asConfigRecord(agentDefaults?.modelPolicy)) {
       mergedConfig = withManagedOpenClawModelPolicy(mergedConfig, mergedConfig);
     }
-    const nextContent = `${JSON.stringify(mergedConfig, null, 2)}\n`;
+    const target = createOpenClawConfigTarget(currentContent, `${JSON.stringify(mergedConfig, null, 2)}\n`, ['models']);
+    const nextContent = target.raw;
 
     // Preserve migration semantics while ignoring write provenance.
     const unchanged = (() => {
@@ -4208,16 +4215,17 @@ export class OpenClawConfigSync {
       }
     })();
     if (unchanged) {
-      return { ok: true, changed: false, configPath };
+      return { ok: true, changed: false, configPath, target };
     }
 
+    if (!persist) return { ok: true, changed: true, configPath, target };
     try {
       ensureDir(path.dirname(configPath));
       const stampedContent = `${JSON.stringify(this.stampConfigMeta(mergedConfig), null, 2)}\n`;
       const tmpPath = `${configPath}.tmp-${Date.now()}`;
       fs.writeFileSync(tmpPath, stampedContent, 'utf8');
       fs.renameSync(tmpPath, configPath);
-      return { ok: true, changed: true, configPath };
+      return { ok: true, changed: true, configPath, target };
     } catch (error) {
       return {
         ok: false,

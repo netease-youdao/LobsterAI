@@ -539,8 +539,7 @@ export class OpenClawEngineManager extends EventEmitter {
   }
 
   /**
-   * Called when the gateway announced it is restarting itself (WS close 1012
-   * "service restart" after an OpenClaw config reload). While the window is
+   * Called on the native shutdown event with restartExpectedMs. While the window is
    * active LobsterAI must not kill/respawn the process: the gateway is between
    * releasing and re-acquiring its single-instance lock, and a TerminateProcess
    * there leaves a poisoned (empty) lock file behind.
@@ -1233,24 +1232,31 @@ export class OpenClawEngineManager extends EventEmitter {
     });
   }
 
-  async restartGateway(reason = 'unknown', options: { retryBlocked?: boolean } = {}): Promise<OpenClawEngineStatus> {
+  async restartGateway(reason = 'unknown', options: { retryBlocked?: boolean; beforeStart?: () => void } = {}): Promise<OpenClawEngineStatus> {
     if (this.gatewayMaintenanceActive) return this.getStatus();
     if (options.retryBlocked) this.gatewayStartupBlock = null;
     if (this.isGatewayStartupBlocked()) return this.getStatus();
     if (this.restartGatewayPromise) return this.restartGatewayPromise;
-    this.restartGatewayPromise = this.doRestartGateway(reason).finally(() => {
+    this.restartGatewayPromise = this.doRestartGateway(reason, options.beforeStart).finally(() => {
       this.restartGatewayPromise = null;
     });
     return this.restartGatewayPromise;
   }
 
-  private async doRestartGateway(reason: string): Promise<OpenClawEngineStatus> {
+  private async doRestartGateway(reason: string, beforeStart?: () => void): Promise<OpenClawEngineStatus> {
     const generation = this.gatewayLifecycleGeneration;
     const pid = this.gatewayProcess && 'pid' in this.gatewayProcess ? this.gatewayProcess.pid : 'none';
     console.log(`${gwDiagTs()} restartGateway: reason=${reason}, pid=${pid}, port=${this.gatewayPort ?? 'none'}`);
     console.log(`${gwDiagTs()} restartGateway: stopping existing gateway...`);
     await this.stopGateway({ restarting: true });
     if (generation !== this.gatewayLifecycleGeneration) return this.getStatus();
+    // Publish bootstrap config only after the old watcher/process has stopped.
+    try {
+      beforeStart?.();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return this.setExternalError(`OpenClaw restart preparation failed: ${message}`);
+    }
     // Reset restart counter on manual restart so user can always retry
     this.gatewayRestartAttempt = 0;
     console.log(`${gwDiagTs()} restartGateway: starting gateway with new env...`);
