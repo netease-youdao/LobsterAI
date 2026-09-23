@@ -578,6 +578,10 @@ import {
   shouldRemoveMediaTaskAfterPoll,
 } from './mediaAccountIsolation';
 import {
+  collectMediaGenerationIntentContext,
+  resolveMediaGenerationIntentGate,
+} from './mediaGenerationIntentGuard';
+import {
   MediaGenerationGateReason,
   MediaGenerationTool,
   type MediaSelectionState,
@@ -6004,6 +6008,9 @@ if (!gotTheLock) {
     },
   });
 
+  /** Recent messages loaded to find the current turn and the user's earlier media directives. */
+  const MEDIA_INTENT_MESSAGE_LOOKBACK = 120;
+
   const extractSessionIdFromKey = (sessionKey: string): string | null =>
     resolveCoworkSessionIdByOpenClawSessionKey(getStore().getDatabase(), sessionKey);
 
@@ -6090,6 +6097,29 @@ if (!gotTheLock) {
           content: [{ type: 'text', text: gate.message }],
           isError: true,
           details: { status: 'failed', warnings: [gate.reason] },
+        };
+      }
+
+      // Intent gating: the selection stays active across messages, so make sure
+      // the user actually wants media before starting a paid generation. Skin
+      // workflows drive their own generation steps and only get the prompt check.
+      const intentConversation = sessionId && !skinRuntime.hasActiveWorkflow(sessionId)
+        ? collectMediaGenerationIntentContext(
+          getCoworkStore().getSession(sessionId, MEDIA_INTENT_MESSAGE_LOOKBACK)?.messages ?? [],
+        )
+        : undefined;
+      const intentGate = resolveMediaGenerationIntentGate({ prompt, conversation: intentConversation });
+      if (intentGate.allowed === false) {
+        console.warn('[MediaGeneration] blocked generate request because it does not match the user intent:', serializeForLog({
+          tool,
+          sessionId: sessionId ?? '',
+          toolCallId: request.context.toolCallId,
+          reason: intentGate.reason,
+        }));
+        return {
+          content: [{ type: 'text', text: intentGate.message }],
+          isError: true,
+          details: { status: 'cancelled', reason: intentGate.reason },
         };
       }
     }
