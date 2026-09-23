@@ -67,6 +67,8 @@ import CoworkSessionDetail from './CoworkSessionDetail';
 import { reportPromptTemplateAction } from './promptAnalytics';
 import { buildCoworkContinuationSystemPrompt, buildCoworkSystemPrompt } from './skillSystemPrompt';
 
+const TEMP_SESSION_ID_PREFIX = 'temp-';
+
 // Time-aware hero greeting: the brand mark stays as the logo, so the heading
 // can greet the user instead of repeating the product name on every visit.
 const resolveHomeGreetingKey = (date: Date = new Date()): string => {
@@ -381,7 +383,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       }
 
       // Create a temporary session with user message to show immediately
-      const tempSessionId = `temp-${Date.now()}`;
+      const tempSessionId = `${TEMP_SESSION_ID_PREFIX}${Date.now()}`;
       const fallbackTitle = buildSessionTitleFromInput(
         prompt,
         i18nService.t('coworkDefaultSessionTitle')
@@ -576,6 +578,14 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     collaborationMode: CoworkCollaborationModeType = CoworkCollaborationMode.Default,
   ) => {
     if (!currentSession) return false;
+    // A rejected start only exists in the optimistic UI, not in the database.
+    // Once the engine recovers, a new submission must create a real session.
+    if (currentSession.id.startsWith(TEMP_SESSION_ID_PREFIX)) {
+      return handleStartSession(
+        prompt, skillPrompt, imageAttachments, mediaReferences,
+        selectedTextSnippets, browserAnnotations, collaborationMode,
+      );
+    }
     // Prevent duplicate submissions
     if (isContinuingRef.current) return false;
     if (openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
@@ -643,7 +653,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
 
   const handleStopSession = useCallback(async () => {
     if (!currentSession) return;
-    if (currentSession.id.startsWith('temp-') && pendingStartRef.current) {
+    if (currentSession.id.startsWith(TEMP_SESSION_ID_PREFIX) && pendingStartRef.current) {
       pendingStartRef.current.cancelled = true;
       pendingStartRef.current.cancellationAction = 'stop';
     }
