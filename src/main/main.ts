@@ -2779,6 +2779,13 @@ const buildConfigApplyPendingStatus = (message: string): OpenClawEngineStatus =>
   };
 };
 
+const buildConfigApplyErrorStatus = (message: string): OpenClawEngineStatus => ({
+  phase: OpenClawEnginePhase.Error,
+  version: getOpenClawEngineManager().getStatus().version,
+  message,
+  canRetry: false,
+});
+
 const waitForOpenClawConfigApply = async (context: string, waitForRecovery = true): Promise<OpenClawEngineStatus | null> => {
   let pendingApply = openClawConfigApplyState;
   while (pendingApply) {
@@ -2801,7 +2808,7 @@ const waitForOpenClawConfigApply = async (context: string, waitForRecovery = tru
   }
 
   if (!waitForRecovery) return null;
-  if (openClawConfigRecovery.error) return buildConfigApplyPendingStatus(openClawConfigRecovery.error);
+  if (openClawConfigRecovery.error) return buildConfigApplyErrorStatus(openClawConfigRecovery.error);
   const phase = getOpenClawEngineManager().getStatus().phase;
   if (deferredRestartReason || (openClawConfigRecovery.pending
     && (phase === OpenClawEnginePhase.Running || phase === OpenClawEnginePhase.Starting))) {
@@ -3099,7 +3106,7 @@ const _syncOpenClawConfigImpl = async (
   if (!needsHardRestart) {
     const delivery = await deliver();
     if (delivery.mode === OpenClawConfigDeliveryMode.Rejected) {
-      return { success: false, changed: effectiveConfigChanged, status: manager.getStatus(), error: delivery.detail };
+      return { success: false, changed: effectiveConfigChanged, status: buildConfigApplyErrorStatus(delivery.detail), error: delivery.detail };
     }
     if (delivery.mode === OpenClawConfigDeliveryMode.Applied && !openClawConfigRecovery.pending) {
       return { success: true, changed: effectiveConfigChanged, status: manager.getStatus() };
@@ -3184,7 +3191,8 @@ const _syncOpenClawConfigImpl = async (
     return {
       success: confirmed.mode !== OpenClawConfigDeliveryMode.Rejected,
       changed: true,
-      status: buildConfigApplyPendingStatus(confirmed.detail),
+      status: confirmed.mode === OpenClawConfigDeliveryMode.Rejected
+        ? buildConfigApplyErrorStatus(confirmed.detail) : buildConfigApplyPendingStatus(confirmed.detail),
       error: confirmed.mode === OpenClawConfigDeliveryMode.Rejected ? confirmed.detail : undefined,
     };
   }
@@ -3254,6 +3262,17 @@ const syncOpenClawConfig = async (
   } finally {
     if (generation === openClawConfigApplyGeneration) {
       openClawConfigApplyState = null;
+      // Task admission can publish a temporary starting state to the renderer.
+      // A hot apply leaves the real process running, so there is no manager
+      // phase transition to clear that UI state. Only the latest queue item may
+      // announce convergence; rejected config must not leave a startup spinner.
+      if (!isQuitting && !isDataMigrationRestoreInProgress) {
+        if (openClawConfigRecovery.error) {
+          forwardOpenClawStatus(buildConfigApplyErrorStatus(openClawConfigRecovery.error));
+        } else if (!openClawConfigRecovery.pending && !deferredRestartReason) {
+          forwardOpenClawStatus(getOpenClawEngineManager().getStatus());
+        }
+      }
     }
   }
 };

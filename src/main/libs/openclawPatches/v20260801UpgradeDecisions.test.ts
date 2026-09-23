@@ -19,6 +19,7 @@ const RETAINED_PATCHES = [
   'openclaw-cli-startup-metadata-windows-timeout.patch',
   'openclaw-compaction-summary-format.patch',
   'openclaw-compaction-summary-section-order.patch',
+  'openclaw-config-candidate-cache-invalidation.patch',
   'openclaw-cron-preparation-failure-state.patch',
   'openclaw-cron-skip-missed-jobs.patch',
   'openclaw-device-identity-preservation.patch',
