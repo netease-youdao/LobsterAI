@@ -1002,6 +1002,22 @@ describe('Windows installer hardening contracts', () => {
     );
   });
 
+  test('materializes Skills backup file records as objects before summing their size', () => {
+    // Windows PowerShell 5.1 Measure-Object -Property cannot read keys of a
+    // hashtable/[ordered] dictionary; under ErrorActionPreference=Stop that
+    // aborts the whole Skills backup. The records must be PSCustomObjects.
+    const fileRecords = installerInclude.slice(
+      installerInclude.indexOf('$$files = @('),
+      installerInclude.indexOf('$$payload = [ordered]@{'),
+    );
+
+    expect(fileRecords).toContain('[PSCustomObject][ordered]@{');
+    expect(fileRecords).not.toMatch(/ForEach-Object \{\\\s*\[ordered\]@\{/);
+    expect(installerInclude).toContain(
+      'totalBytes = [long](($$files | Measure-Object -Property length -Sum).Sum)',
+    );
+  });
+
   test('drives Skills backup state from helper exit codes, never stdout text', () => {
     const defines: Record<string, string> = {};
     for (const match of installerInclude.matchAll(

@@ -1494,7 +1494,7 @@ FunctionEnd
           $$_.FullName.Substring($$staging.Length).TrimStart([IO.Path]::DirectorySeparatorChar).Replace([IO.Path]::DirectorySeparatorChar, [char]47)\
         });\
         $$files = @(Get-ChildItem -LiteralPath $$staging -File -Recurse -Force -ErrorAction Stop | Where-Object { $$_.Name -ne \"backup-manifest.json\" } | Sort-Object FullName | ForEach-Object {\
-          [ordered]@{\
+          [PSCustomObject][ordered]@{\
             path = $$_.FullName.Substring($$staging.Length).TrimStart([IO.Path]::DirectorySeparatorChar).Replace([IO.Path]::DirectorySeparatorChar, [char]47);\
             length = $$_.Length;\
             sha256 = (Get-FileHash -LiteralPath $$_.FullName -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()\
