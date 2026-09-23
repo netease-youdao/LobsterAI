@@ -13,9 +13,10 @@ export function projectRemoteArtifacts(jobs: ArtifactProjectionJob[], messageId:
     if (!reference || !job.artifactId) return job.messageId === messageId && job.reason && remoteArtifactReasons.has(job.reason)
       ? [{ localArtifactId: job.localArtifactId, block: { type: 'artifact', artifactId: job.artifactId || job.localArtifactId,
         name: job.name, mimeType: 'application/octet-stream', sizeBytes: job.sizeBytes || null, availability: 'desktop_only', reason: job.reason } }] : [];
+    // Local capture failures remain on the job; published references cannot carry a failure reason.
     return [{ localArtifactId: job.localArtifactId, block: { type: 'artifact', artifactId: job.artifactId,
       name: reference.pinned ? reference.latest.fileName || job.name : job.name, mimeType: reference.latest.mimeType,
       sizeBytes: reference.latest.sizeBytes, availability: 'ready', artifactVersion: reference.latest.artifactVersion,
-      assetId: reference.latest.assetId, assetVersion: reference.latest.assetVersion, ...(job.reason ? { reason: job.reason } : {}), referenceMode: reference.pinned ? 'pinned' : 'latest' } }];
+      assetId: reference.latest.assetId, assetVersion: reference.latest.assetVersion, referenceMode: reference.pinned ? 'pinned' : 'latest' } }];
   });
 }
