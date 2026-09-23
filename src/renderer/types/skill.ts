@@ -14,6 +14,18 @@ export interface Skill {
 
 export type LocalizedText = { en: string; zh: string };
 
+/** An imported skill whose ID matches an already installed (non built-in) skill. */
+export interface SkillImportConflict {
+  id: string;
+  installedVersion: string;
+  incomingVersion: string;
+}
+
+/** Mirrors `SkillDownloadOptions` in the main process skill manager. */
+export interface SkillDownloadOptions {
+  onConflict?: 'rename' | 'ask' | 'overwrite';
+}
+
 export interface MarketTag {
   id: string;
   en: string;

@@ -151,7 +151,8 @@ contextBridge.exposeInMainWorld('electron', {
     setEnabled: (options: { id: string; enabled: boolean }) =>
       ipcRenderer.invoke('skills:setEnabled', options),
     delete: (id: string) => ipcRenderer.invoke('skills:delete', id),
-    download: (source: string) => ipcRenderer.invoke('skills:download', source),
+    download: (source: string, options?: { onConflict?: 'rename' | 'ask' | 'overwrite' }) =>
+      ipcRenderer.invoke('skills:download', source, options),
     upgrade: (skillId: string, downloadUrl: string) =>
       ipcRenderer.invoke('skills:upgrade', skillId, downloadUrl),
     confirmInstall: (pendingId: string, action: string) =>
