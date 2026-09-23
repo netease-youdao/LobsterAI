@@ -151,6 +151,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         env?: Record<string, string>;
         url?: string;
         headers?: Record<string, string>;
+        toolFilter?: McpServerFormData['toolFilter'];
+        supportsParallelToolCalls?: boolean;
       },
     ) => {
       try {
@@ -186,6 +188,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         env?: Record<string, string>;
         url?: string;
         headers?: Record<string, string>;
+        toolFilter?: McpServerFormData['toolFilter'];
+        supportsParallelToolCalls?: boolean;
       },
     ) => {
       try {
