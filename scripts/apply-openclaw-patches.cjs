@@ -724,6 +724,36 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-malformed-tool-call-continuation.patch': [
+    {
+      file: 'src/agents/embedded-agent-runner/run/malformed-tool-call-recovery.ts',
+      snippets: [
+        'export const MALFORMED_TOOL_CALL_RETRY_LIMIT = 2',
+        'export function isMalformedToolCallAssistantTurn',
+        'export function continueAfterMalformedToolCall',
+        'malformed tool call rejected before execution:',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/terminal-resolution.ts',
+      snippets: ['!settledTurnFinalizationAttempted && continueAfterMalformedToolCall(input)'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts',
+      snippets: ['isMalformedToolCallAssistantTurn('],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/terminal-retry-state.ts',
+      snippets: ['malformedToolCallAttempts: 0'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/terminal-resolution.malformed-tool-call.test.ts',
+      snippets: [
+        "continues a side-effecting turn after the provider's tool call is rejected",
+        'does not request isolated finalization for a rejected tool call',
+      ],
+    },
+  ],
   'openclaw-openai-compatible-cache-control.patch': [
     {
       file: 'packages/ai/src/transports/openai-completions-params.ts',
@@ -761,6 +791,37 @@ const v20260801StrongPatchValidators = {
     {
       file: 'src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts',
       snippets: ['bounds compaction recovery for an output budget rejection'],
+    },
+  ],
+  'openclaw-openai-completions-tool-call-repair.patch': [
+    {
+      file: 'packages/ai/src/providers/openai-completions-tool-calls.ts',
+      snippets: [
+        'const MALFORMED_TOOL_CALL_DIAGNOSTIC_TYPE = "malformed_tool_call_arguments"',
+        'repairStringLiterals: true',
+        'readMalformedToolCallArgumentsDiagnostics(error)',
+      ],
+      forbiddenSnippets: ['finalizeTerminalToolCallArguments(toolCalls, (call) => call.partialArgs);'],
+    },
+    {
+      file: 'packages/ai/src/transports/transport-stream-shared.ts',
+      snippets: [
+        'function repairTerminalToolCallArguments',
+        'class MalformedToolCallArgumentsError extends Error',
+        'export function readMalformedToolCallArgumentsDiagnostics',
+      ],
+    },
+    {
+      file: 'packages/ai/src/utils/json-parse.ts',
+      snippets: ['preserveValidControlEscapes'],
+    },
+    {
+      file: 'packages/ai/src/transports/openai-completions-stream.ts',
+      snippets: ['providerStopReason: finishReason,'],
+    },
+    {
+      file: 'packages/ai/src/providers/openai-completions.legacy-function-call.test.ts',
+      snippets: ['repairs a complete modern tool terminal with $reason'],
     },
   ],
   'openclaw-plugin-archive-windows-timeout.patch': [

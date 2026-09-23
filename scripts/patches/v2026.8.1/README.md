@@ -489,3 +489,52 @@ Verify with upstream `runtime-facts-prompt.test.ts`,
 while a background `exec` is running and that the gateway log no longer reports
 `[prompt-cache] cache read dropped` at run boundaries. Remove this patch when
 the pinned upstream includes `#140799`.
+
+## Malformed provider tool calls
+
+`openclaw-openai-completions-tool-call-repair.patch` and
+`openclaw-malformed-tool-call-continuation.patch` keep one malformed tool call
+from ending a whole agent turn.
+
+Why: v2026.8.1 parses OpenAI-compatible terminal tool arguments with plain
+`JSON.parse`. When the model writes a complete call whose strings contain a
+raw line break, an invalid escape (`\'`, `\|`), or an unescaped quote, the
+transport rejects the whole assistant message ("Provider returned an incomplete
+or malformed tool call") and drops the call. The runner's own argument-repair
+wrapper never sees it, and every existing retry is off after earlier tools ran,
+so the user got "Agent couldn't generate a response. Note: some tool actions may
+have already been executed". On 2026-09-23 a deepseek-flash run ended this way
+after seven tools; replying "继续" finished the same edit on the next try.
+v2026.6.1 parsed these buffers leniently, so this failure is new with 8.1.
+
+The repair patch backports upstream v2026.9.5 `repairStringLiterals` and applies
+it to OpenAI-compatible completions (upstream only uses it for Anthropic). Only
+raw control characters and invalid escapes inside string values are repaired;
+valid escapes are preserved as written. Truncated, non-object, empty, or unnamed
+calls stay rejected so a cut-off write never runs. A rejection appends a
+`malformed_tool_call_arguments` message diagnostic with shape facts only
+(reason, mapped provider stop reason, argument length and hash, JSON failure
+class and position). The error class keeps these facts off `code`, `cause`, and
+`errorBody`, so Anthropic-lane error projection and failover classification do
+not change.
+
+The continuation patch gives such a turn up to two internal continuations
+(`activateInternalPrompt`, not persisted as a user turn). The rejected call
+never ran and the turn resumes after the committed transcript, so this is the
+one retry that may follow side-effecting tools. It skips aborted, timed-out,
+failed, yielded, client-tool, approval, and already-finalized attempts. A
+settled-tool final-answer pass is not requested for a rejected call; it would
+drop the action the model was taking. After two failures the existing
+incomplete-turn error is shown. Logs record `malformed tool call rejected
+before execution` or `malformed tool call continuations exhausted` with the
+diagnostic summary.
+
+Verify with upstream `transport-stream-shared.test.ts`,
+`openai-completions.legacy-function-call.test.ts`,
+`malformed-tool-call-recovery.test.ts`,
+`terminal-resolution.malformed-tool-call.test.ts`, and the full-entry
+`run.malformed-tool-call-continuation.integration.test.ts`. Then run LobsterAI's
+`malformedToolCallRecovery` test and rebuild the runtime. Remove the repair
+patch when the pinned upstream applies terminal string-literal repair to
+OpenAI-compatible completions. Remove the continuation patch when upstream
+recovers rejected tool calls after side effects.
