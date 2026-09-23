@@ -10,6 +10,7 @@ import React, {
   useState,
 } from 'react';
 
+import { configService } from '../services/config';
 import { i18nService } from '../services/i18n';
 import SidebarAdBanner from './SidebarAdBanner';
 import {
@@ -45,12 +46,26 @@ const SidebarExperienceSlot: React.FC<SidebarExperienceSlotProps> = ({
     dismissGroup,
   } = useSidebarAdBanners();
   const [activeItemKey, setActiveItemKey] = useState<string | null>(null);
+  const [configHidden, setConfigHidden] = useState(false);
+
+  // Check if user has permanently hidden the ad banner in settings
+  useEffect(() => {
+    try {
+      const config = configService.getConfig();
+      setConfigHidden(config.app?.adBannerHidden === true);
+    } catch {
+      // config service may not be ready yet
+    }
+  }, []);
+
   const items = useMemo<BannerExperienceItem[]>(
-    () => visibleBanners.map(banner => ({
-      key: `banner:${getSidebarBannerVersion(banner)}`,
-      banner,
-    })),
-    [visibleBanners],
+    () => (configHidden
+      ? []
+      : visibleBanners.map(banner => ({
+        key: `banner:${getSidebarBannerVersion(banner)}`,
+        banner,
+      }))),
+    [configHidden, visibleBanners],
   );
   const itemKeys = useMemo(
     () => items.map(item => item.key),
