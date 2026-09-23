@@ -107,6 +107,40 @@ test('parseFrontmatter: invalid YAML returns empty frontmatter gracefully', () =
   expect(content).toMatch(/# Content/);
 });
 
+test('parseFrontmatter: salvages the version from otherwise invalid YAML', () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    // Unquoted ": " inside the description makes the whole block invalid YAML.
+    const raw = '---\nname: demo\ndescription: Use when: the user asks\nversion: "1.2.3" # pinned\n---\n# Content\n';
+    const { frontmatter, content } = parseFrontmatter(raw);
+    expect(frontmatter).toEqual({ version: '1.2.3' });
+    expect(content).toMatch(/# Content/);
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test('parseFrontmatter: does not salvage an indented (nested) version key', () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const raw = '---\ndescription: Use when: x\nrequires:\n  version: 18\n---\n';
+    expect(parseFrontmatter(raw).frontmatter).toEqual({});
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test('parseFrontmatter: parse warning names the offending file', () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    parseFrontmatter('---\ndescription: Use when: x\n---\n', '/skills/demo/SKILL.md');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('/skills/demo/SKILL.md');
+  } finally {
+    warn.mockRestore();
+  }
+});
+
 // ==================== isTruthy ====================
 
 test('isTruthy: native boolean true', () => {
