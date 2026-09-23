@@ -119,6 +119,7 @@ describe('device synchronization health', () => {
 describe('ownership association synchronization', () => {
   function claimed() {
     const value = fixture();
+    value.bridge.targetId = RemoteEnvironment.Test;
     const { store } = value;
     store.db.exec("ALTER TABLE cowork_sessions ADD COLUMN agent_id TEXT; INSERT INTO cowork_sessions VALUES('claimed-task','History',1,1,'idle','claimed-agent'); INSERT INTO cowork_sessions VALUES('future-task','New',1,1,'idle','claimed-agent');");
     store.transaction(() => {
@@ -175,6 +176,7 @@ describe('session synchronization recovery', () => {
 
   function syncing(beginCommitted = false) {
     const value = fixture();
+    value.bridge.targetId = RemoteEnvironment.Test;
     const { bridge, store, requestApi } = value;
     bridges.push(bridge); store.setWake(() => {}); store.setEnabledOwner(owner);
     store.transaction(() => {

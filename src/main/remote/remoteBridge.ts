@@ -139,6 +139,7 @@ export class RemoteBridge {
   private scheduledAt = 0;
   private settingsQueue: Promise<unknown> = Promise.resolve();
   private retryAfter = 0;
+  private retryGeneration = 0;
   private sameAccountAccess = false;
   private workspaceUnavailable = false;
   private readonly agentCatalog: RemoteAgentCatalog | null;
@@ -323,20 +324,27 @@ export class RemoteBridge {
       if (identity?.ownerKind !== AgentOwnerKind.Owned || !sameOwner(identity.owner, currentOwner)) return OwnershipSyncState.Local;
     }
     if (!this.owner || !sameOwner(this.owner, currentOwner)) return OwnershipSyncState.Pending;
-    if (!this.registration) return OwnershipSyncState.Pending;
+    // A route switch invalidates the old admission even before the next bridge tick.
+    if (this.accountRoute !== this.deps.getApiBaseUrl()) return OwnershipSyncState.Pending;
+    const pending = this.settings().enabled && (this.connectionReason === RemoteConnectionReason.ServerUnavailable
+      || this.connectionReason === RemoteConnectionReason.ServerUpgradeRequired) ? OwnershipSyncState.WaitingService : OwnershipSyncState.Pending;
+    if (!this.registration || !this.targetId) return pending;
     // Reading UI state must not grant an operation its first durable remote admission.
     const blocked = this.ownershipClaimBlocks(false);
     const waiting = target.kind === OwnershipTargetKind.Agent ? blocked.blockedAgentIds.has(target.id) : this.ownershipSyncBlocked(target.id, blocked);
     if (waiting) return !this.settings().enabled || this.canAdmitOwnershipClaim() ? OwnershipSyncState.Pending : OwnershipSyncState.WaitingService;
     if (target.kind === OwnershipTargetKind.Agent) {
       if (this.deps.store.get(this.catalogFailureKey())) return OwnershipSyncState.Failed;
-      return this.agentCatalog?.isSynced(this.owner, this.registration.deviceId, target.id) ? OwnershipSyncState.Synced : OwnershipSyncState.Pending;
+      return this.agentCatalog?.isSynced(this.owner, this.registration.deviceId, target.id) ? OwnershipSyncState.Synced : pending;
     }
-    if (this.deps.store.get(`syncFailure:${target.id}`)) return OwnershipSyncState.Failed;
     const row = this.deps.store.sync(target.id);
+    // Old-target ACKs/failures do not describe an unverified current target.
+    if (row?.sync_environment && !this.targets.matchesEnvironment(this.remoteEnvironment(), row.sync_environment)) return pending;
+    if (this.deps.store.get(`syncFailure:${target.id}`)
+      || this.deps.store.db.prepare('SELECT 1 FROM remote_projection_failures WHERE session_id=?').get(target.id)) return OwnershipSyncState.Failed;
     const dirty = this.deps.store.db.prepare('SELECT session_id FROM remote_dirty WHERE session_id=?').get(target.id);
     return row && row.device_id === this.registration.deviceId && !row.needs_snapshot && row.source_seq === row.ack_seq
-      && !dirty && !this.deps.store.get(`import:${target.id}`) ? OwnershipSyncState.Synced : OwnershipSyncState.Pending;
+      && !dirty && !this.deps.store.get(`import:${target.id}`) ? OwnershipSyncState.Synced : pending;
   }
   async configure(changes: SettingsChanges): Promise<RemoteSettingsState> {
     this.ensureAccount();
@@ -367,6 +375,7 @@ export class RemoteBridge {
     });
     this.retryAfter = 0;
     if (changes.retry || changes.enabled === true && !wasEnabled) {
+      this.retryGeneration++;
       this.suspended = false; this.backoff = 5000;
       this.error = undefined; this.errorCode = undefined; this.errorRequestKey = undefined;
       this.connectionReason = RemoteConnectionReason.Reconnecting;
@@ -497,6 +506,8 @@ export class RemoteBridge {
   }
   private schedule(delay: number): void {
     if (this.stopped) return;
+    // Local writes cannot bypass a failed discovery/registration attempt's deadline.
+    if (!this.registration) delay = Math.max(delay, this.retryAfter - Date.now());
     if (this.running && delay <= 1000) { this.tickRequested = true; return; }
     const due = Date.now() + delay;
     if (this.timer && this.scheduledAt <= due) return;
@@ -506,6 +517,8 @@ export class RemoteBridge {
     this.timer.unref?.();
   }
   private startDeletionSync(): void {
+    // Without a verified context, poll() cannot advance its deadline and would wake every tick.
+    if (!this.owner || !this.registration || !this.targetId || !sameOwner(this.owner, this.deps.getOwner())) return;
     const declared = this.deletionSupported || !!(this.owner && this.deps.store.get<boolean>(`deletionCapability:${this.remoteEnvironment()}:${this.owner.userId}:${this.owner.scopeKey}`));
     if (this.deletions && declared) void this.deletions.poll(declared, this.deletionAvailable)
       .catch((): void => undefined).finally(() => { if (!this.stopped) this.schedule(this.deletions!.retryDelay()); });
@@ -515,10 +528,12 @@ export class RemoteBridge {
     this.running = true;
     let owner = this.owner;
     let accountGeneration = this.accountGeneration;
+    let retryGeneration = this.retryGeneration;
     let nextPollDelay: number | undefined;
     let pollCommands = false;
     try {
       this.ensureAccount(); owner = this.owner; accountGeneration = this.accountGeneration;
+      retryGeneration = this.retryGeneration;
       this.startDeletionSync();
       if (this.deps.security) await this.deps.security.available();
       if (!owner || this.suspended && !this.connectionRemoved) { this.backoff = 5000; return; }
@@ -626,7 +641,8 @@ export class RemoteBridge {
       if (this.generation && !this.inputWork && this.inputCapabilities.includes(RemoteInputCapability.Schema) && this.deps.input)
         nextPollDelay = Math.min(nextPollDelay, Math.max(0, Math.max(this.inputPollAt, this.inputRetryAt) - Date.now()));
     } catch (error) {
-      if (!sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) return;
+      if (accountGeneration !== this.accountGeneration || retryGeneration !== this.retryGeneration
+        || !sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) return;
       console.warn('[RemoteSync] Bridge cycle deferred', { deviceId: this.registration?.deviceId ?? null,
         connectionGeneration: this.generation, ...remoteSyncErrorMetadata(error) });
       this.recordConnectionFailure(error);
@@ -634,11 +650,14 @@ export class RemoteBridge {
       if (error instanceof RemoteApiError && [404, 47000].includes(error.code)) {
         this.retryAfter = Date.now() + 60000; this.backoff = 60000;
         if (!this.sameAccountAccess) this.registration = null;
-      } else this.backoff = Math.min(60000, this.backoff * 2);
+      } else {
+        this.backoff = Math.min(60000, this.backoff * 2);
+        if (!this.registration) this.retryAfter = Date.now() + this.backoff;
+      }
     } finally {
       this.running = false; this.changed();
-      const accountChanged = owner === null ? this.owner !== null : !sameOwner(owner, this.owner);
-      const immediate = accountChanged || this.tickRequested; this.tickRequested = false;
+      const accountChanged = accountGeneration !== this.accountGeneration || (owner === null ? this.owner !== null : !sameOwner(owner, this.owner));
+      const immediate = accountChanged || retryGeneration !== this.retryGeneration || this.tickRequested; this.tickRequested = false;
       this.schedule(immediate ? 0 : (nextPollDelay ?? this.backoff) + Math.floor(Math.random() * 1000));
     }
   }
