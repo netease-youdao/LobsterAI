@@ -266,6 +266,7 @@ test('createMigrationArchive excludes cache and log data and writes a manifest',
   writeFile(path.join(userData, 'Local State'), 'local-state');
   writeFile(path.join(userData, 'Local Storage', 'leveldb', 'LOCK'), 'local-storage-lock');
   writeFile(path.join(userData, 'Network', 'Cookies'), 'network-cookies');
+  writeFile(path.join(userData, 'Partitions', 'lobster-artifact-browser', 'Local Storage', 'leveldb', 'LOCK'), 'partition-lock');
   writeFile(path.join(userData, 'Preferences'), 'preferences');
   writeFile(path.join(userData, 'Session Storage', 'leveldb', 'LOCK'), 'session-storage-lock');
   writeFile(path.join(userData, 'Shared Dictionary', 'dict.bin'), 'dictionary');
@@ -302,6 +303,7 @@ test('createMigrationArchive excludes cache and log data and writes a manifest',
   expect(entries.some(entry => entry.includes('/GPUCache/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/Local Storage/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/Network/'))).toBe(false);
+  expect(entries.some(entry => entry.includes('/Partitions/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/Session Storage/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/Shared Dictionary/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/openclaw/mcp-packages/'))).toBe(false);
@@ -664,6 +666,7 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   writeFile(path.join(sourceUserData, 'Local State'), 'source-local-state');
   writeFile(path.join(sourceUserData, 'Local Storage', 'leveldb', 'source.log'), 'source-local-storage');
   writeFile(path.join(sourceUserData, 'Network', 'Cookies'), 'source-network-cookies');
+  writeFile(path.join(sourceUserData, 'Partitions', 'lobster-artifact-browser', 'Local Storage', 'leveldb', 'source.log'), 'source-partition-storage');
   writeFile(path.join(sourceUserData, 'Preferences'), 'source-preferences');
   writeFile(path.join(sourceUserData, 'Session Storage', 'leveldb', 'source.log'), 'source-session-storage');
   writeFile(path.join(sourceUserData, 'Shared Dictionary', 'source.dict'), 'source-dictionary');
@@ -688,6 +691,7 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   writeFile(path.join(targetUserData, 'Local State'), 'target-local-state');
   writeFile(path.join(targetUserData, 'Local Storage', 'leveldb', 'LOCK'), 'target-local-storage-lock');
   writeFile(path.join(targetUserData, 'Network', 'Cookies'), 'runtime-cookies');
+  writeFile(path.join(targetUserData, 'Partitions', 'lobster-artifact-browser', 'Local Storage', 'leveldb', 'LOCK'), 'target-partition-lock');
   writeFile(path.join(targetUserData, 'Preferences'), 'target-preferences');
   writeFile(path.join(targetUserData, 'Session Storage', 'leveldb', 'LOCK'), 'target-session-storage-lock');
   writeFile(path.join(targetUserData, 'Shared Dictionary', 'target.dict'), 'target-dictionary');
@@ -708,6 +712,7 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   writeFile(path.join(extractRoot, 'LobsterAI', 'skill-migrate.log'), 'legacy-source-skill-migrate-log');
   writeFile(path.join(extractRoot, 'LobsterAI', 'Dictionaries', 'source.bdic'), 'legacy-source-dictionary');
   writeFile(path.join(extractRoot, 'LobsterAI', 'Local Storage', 'leveldb', 'source.log'), 'legacy-source-local-storage');
+  writeFile(path.join(extractRoot, 'LobsterAI', 'Partitions', 'lobster-artifact-browser', 'Local Storage', 'leveldb', 'source.log'), 'legacy-source-partition-storage');
   writeFile(path.join(extractRoot, 'LobsterAI', 'Preferences'), 'legacy-source-preferences');
   writeFile(path.join(extractRoot, 'LobsterAI', 'Session Storage', 'leveldb', 'source.log'), 'legacy-source-session-storage');
   writeFile(path.join(extractRoot, 'LobsterAI', 'openclaw', 'logs', 'gateway-2026-06-10.log'), 'legacy-source-gateway-log');
@@ -735,6 +740,7 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   expect(rollbackEntries.some(entry => entry.includes('/Dictionaries/'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.includes('/Local Storage/'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.includes('/Network/'))).toBe(false);
+  expect(rollbackEntries.some(entry => entry.includes('/Partitions/'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.includes('/openclaw/mcp-packages/'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.includes('/openclaw/logs/'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.includes('/openclaw/state/logs/'))).toBe(false);
@@ -761,6 +767,10 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   expect(fs.readFileSync(path.join(targetUserData, 'Local Storage', 'leveldb', 'LOCK'), 'utf8'))
     .toBe('target-local-storage-lock');
   expect(fs.readFileSync(path.join(targetUserData, 'Network', 'Cookies'), 'utf8')).toBe('runtime-cookies');
+  expect(fs.readFileSync(path.join(targetUserData, 'Partitions', 'lobster-artifact-browser', 'Local Storage', 'leveldb', 'LOCK'), 'utf8'))
+    .toBe('target-partition-lock');
+  expect(fs.existsSync(path.join(targetUserData, 'Partitions', 'lobster-artifact-browser', 'Local Storage', 'leveldb', 'source.log')))
+    .toBe(false);
   expect(fs.readFileSync(path.join(targetUserData, 'Preferences'), 'utf8')).toBe('target-preferences');
   expect(fs.readFileSync(path.join(targetUserData, 'Session Storage', 'leveldb', 'LOCK'), 'utf8'))
     .toBe('target-session-storage-lock');
