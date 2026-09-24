@@ -1,0 +1,807 @@
+diff --git a/src/agents/embedded-agent-runner/run.malformed-tool-call-continuation.integration.test.ts b/src/agents/embedded-agent-runner/run.malformed-tool-call-continuation.integration.test.ts
+new file mode 100644
+index 00000000000..8c51a74fbe8
+--- /dev/null
++++ b/src/agents/embedded-agent-runner/run.malformed-tool-call-continuation.integration.test.ts
+@@ -0,0 +1,111 @@
++// Full-entry coverage for continuing a turn after the provider's tool call was rejected.
++import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
++import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
++import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
++import {
++  mockedRunEmbeddedAttempt,
++  resetSharedRunIntegrationHarnessMocks,
++} from "./run.overflow-compaction.harness.js";
++import {
++  createSharedRunIntegrationSession,
++  loadSharedRunIntegrationHarness,
++} from "./run.shared-integration-harness.test-support.js";
++
++let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
++let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
++
++const rejectedEditAssistant = buildEmbeddedRunnerAssistant({
++  api: "openai-completions",
++  stopReason: "error",
++  errorMessage: "Provider returned an incomplete or malformed tool call",
++  content: [{ type: "thinking", thinking: "Update the report section next." }],
++  diagnostics: [
++    {
++      type: "malformed_tool_call_arguments",
++      timestamp: 1,
++      details: { toolCallCount: 1, reason: "invalid_arguments", parseError: "unexpected_token" },
++    },
++  ],
++});
++
++// An earlier write committed a side effect, then the model's next call was rejected.
++function makeRejectedToolCallAttempt() {
++  return makeAttemptResult({
++    assistantTexts: [],
++    lastAssistant: rejectedEditAssistant,
++    currentAttemptAssistant: rejectedEditAssistant,
++    toolMetas: [{ toolName: "write", toolCallId: "call-write", replaySafe: false }],
++    replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
++    currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
++  });
++}
++
++function requireAttemptCall(index: number): {
++  prompt?: string;
++  sessionId?: string;
++  suppressNextUserMessagePersistence?: boolean;
++} {
++  const call = mockedRunEmbeddedAttempt.mock.calls[index];
++  if (!call) {
++    throw new Error(`expected embedded attempt call ${index}`);
++  }
++  return call[0] as {
++    prompt?: string;
++    sessionId?: string;
++    suppressNextUserMessagePersistence?: boolean;
++  };
++}
++
++describe("runEmbeddedAgent malformed tool-call continuation", () => {
++  beforeAll(async () => {
++    runEmbeddedAgent = await loadSharedRunIntegrationHarness();
++  });
++
++  beforeEach(async () => {
++    resetSharedRunIntegrationHarnessMocks();
++    session = await createSharedRunIntegrationSession();
++  });
++
++  afterEach(async () => {
++    await session?.cleanup();
++  });
++
++  it("continues from the transcript after the provider rejects a tool call", async () => {
++    mockedRunEmbeddedAttempt
++      .mockResolvedValueOnce(makeRejectedToolCallAttempt())
++      .mockResolvedValueOnce(makeAttemptResult());
++
++    const result = await runEmbeddedAgent({
++      ...session.runParams,
++      runId: "run-malformed-tool-call-continuation",
++    });
++
++    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
++    const initial = requireAttemptCall(0);
++    const retry = requireAttemptCall(1);
++    expect(retry.prompt).toContain("rejected before it ran");
++    expect(retry.prompt).not.toBe(session.runParams.prompt);
++    // The continuation is model-only context, never a persisted user turn.
++    expect(retry.suppressNextUserMessagePersistence).toBe(true);
++    expect(retry.sessionId).toBe(initial.sessionId);
++    expect(result.meta.error).toBeUndefined();
++  });
++
++  it("surfaces the incomplete-turn error after the bounded continuations", async () => {
++    mockedRunEmbeddedAttempt
++      .mockResolvedValueOnce(makeRejectedToolCallAttempt())
++      .mockResolvedValueOnce(makeRejectedToolCallAttempt())
++      .mockResolvedValueOnce(makeRejectedToolCallAttempt());
++
++    const result = await runEmbeddedAgent({
++      ...session.runParams,
++      runId: "run-malformed-tool-call-exhausted",
++    });
++
++    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
++    expect(result.meta.error?.kind).toBe("incomplete_turn");
++    expect(result.payloads?.[0]?.text).toContain(
++      "some tool actions may have already been executed",
++    );
++  });
++});
+diff --git a/src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts b/src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
+index ace77bf5905..f607f5c527f 100644
+--- a/src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
++++ b/src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
+@@ -25,6 +25,7 @@ import {
+   shouldApplyNonVisibleTurnRetryGuard,
+   type IncompleteTurnAttempt,
+ } from "./incomplete-turn-classification.js";
++import { isMalformedToolCallAssistantTurn } from "./malformed-tool-call-recovery.js";
+ import type { EmbeddedRunAttemptResult } from "./types.js";
+ 
+ // Allow one immediate continuation plus one follow-up continuation before
+@@ -350,7 +351,12 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
+     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
+     attempt.clientToolCalls ||
+     attempt.yieldDetected ||
+-    attempt.didSendDeterministicApprovalPrompt
++    attempt.didSendDeterministicApprovalPrompt ||
++    // A rejected tool call resumes through the malformed-call continuation; a final-answer
++    // pass here would drop the action the model was still taking.
++    isMalformedToolCallAssistantTurn(
++      attempt.currentAttemptAssistant ?? attempt.lastAssistant ?? null,
++    )
+   ) {
+     return null;
+   }
+diff --git a/src/agents/embedded-agent-runner/run/malformed-tool-call-recovery.test.ts b/src/agents/embedded-agent-runner/run/malformed-tool-call-recovery.test.ts
+new file mode 100644
+index 00000000000..c4503fadb96
+--- /dev/null
++++ b/src/agents/embedded-agent-runner/run/malformed-tool-call-recovery.test.ts
+@@ -0,0 +1,221 @@
++import { describe, expect, it, vi } from "vitest";
++import {
++  buildEmbeddedRunnerAssistant,
++  makeEmbeddedRunnerAttempt,
++} from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
++import {
++  continueAfterMalformedToolCall,
++  describeMalformedToolCallDiagnostic,
++  isMalformedToolCallAssistantTurn,
++  MALFORMED_TOOL_CALL_RETRY_LIMIT,
++  resolveMalformedToolCallRetryInstruction,
++} from "./malformed-tool-call-recovery.js";
++import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
++import { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
++
++function malformedToolCallAssistant(
++  overrides: Parameters<typeof buildEmbeddedRunnerAssistant>[0] = {},
++) {
++  return buildEmbeddedRunnerAssistant({
++    api: "openai-completions",
++    stopReason: "error",
++    errorMessage: "Provider returned an incomplete or malformed tool call",
++    content: [{ type: "thinking", thinking: "Update the report section next." }],
++    diagnostics: [
++      {
++        type: "malformed_tool_call_arguments",
++        timestamp: 1,
++        details: {
++          toolCallCount: 1,
++          providerStopReason: "toolUse",
++          reason: "invalid_arguments",
++          argumentChars: 812,
++          argumentHash: "abc123",
++          repairAttempted: true,
++          parseError: "unexpected_token",
++          parseErrorPosition: 401,
++        },
++      },
++    ],
++    ...overrides,
++  });
++}
++
++function sideEffectingAttempt(
++  assistant: ReturnType<typeof buildEmbeddedRunnerAssistant>,
++  overrides: Parameters<typeof makeEmbeddedRunnerAttempt>[0] = {},
++) {
++  return makeEmbeddedRunnerAttempt({
++    assistantTexts: [],
++    lastAssistant: assistant,
++    currentAttemptAssistant: assistant,
++    toolMetas: [
++      { toolName: "write", replaySafe: false },
++      { toolName: "exec", replaySafe: false },
++    ],
++    replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
++    currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
++    ...overrides,
++  });
++}
++
++function continuationInput(attempt: ReturnType<typeof makeEmbeddedRunnerAttempt>) {
++  return {
++    runParams: { runId: "run:malformed", sessionId: "session:malformed" },
++    attempt,
++    retryState: createEmbeddedRunTerminalRetryState(),
++    terminalState: resolveEmbeddedRunAttemptTerminalState({
++      attempt,
++      assistant: attempt.currentAttemptAssistant ?? attempt.lastAssistant,
++    }),
++    activeErrorContext: { provider: "lobsterai-server", model: "deepseek-flash" },
++    activateInternalPrompt: vi.fn(),
++  };
++}
++
++describe("isMalformedToolCallAssistantTurn", () => {
++  it.each([
++    { name: "transport diagnostic", assistant: malformedToolCallAssistant() },
++    {
++      name: "completions rejection text",
++      assistant: malformedToolCallAssistant({ diagnostics: undefined }),
++    },
++    {
++      name: "terminal argument parse text",
++      assistant: malformedToolCallAssistant({
++        diagnostics: undefined,
++        errorMessage: "Provider completed tool call with malformed JSON arguments",
++      }),
++    },
++  ])("recognizes a rejected tool call from its $name", ({ assistant }) => {
++    expect(isMalformedToolCallAssistantTurn(assistant)).toBe(true);
++  });
++
++  it.each([
++    { name: "missing assistant", assistant: null },
++    {
++      name: "non-error stop",
++      assistant: malformedToolCallAssistant({ stopReason: "toolUse" }),
++    },
++    {
++      name: "unrelated provider error",
++      assistant: malformedToolCallAssistant({
++        diagnostics: undefined,
++        errorMessage: "500 Internal Server Error",
++      }),
++    },
++    {
++      name: "unrelated diagnostic",
++      assistant: malformedToolCallAssistant({
++        errorMessage: "Provider finish_reason: content_filter",
++        diagnostics: [{ type: "provider_refusal", timestamp: 1 }],
++      }),
++    },
++  ])("ignores a $name", ({ assistant }) => {
++    expect(isMalformedToolCallAssistantTurn(assistant)).toBe(false);
++  });
++});
++
++describe("describeMalformedToolCallDiagnostic", () => {
++  it("summarizes only whitelisted, content-free diagnostic fields", () => {
++    expect(describeMalformedToolCallDiagnostic(malformedToolCallAssistant())).toBe(
++      "reason=invalid_arguments providerStopReason=toolUse toolCallCount=1 argumentChars=812 " +
++        "parseError=unexpected_token parseErrorPosition=401 repairAttempted=true",
++    );
++    expect(
++      describeMalformedToolCallDiagnostic(malformedToolCallAssistant({ diagnostics: undefined })),
++    ).toBe("diagnostic=none");
++  });
++});
++
++describe("resolveMalformedToolCallRetryInstruction", () => {
++  it("continues after committed tool side effects", () => {
++    const instruction = resolveMalformedToolCallRetryInstruction({
++      aborted: false,
++      timedOut: false,
++      attempt: sideEffectingAttempt(malformedToolCallAssistant()),
++    });
++    expect(instruction).toContain("rejected before it ran");
++    expect(instruction).toContain("Do not repeat tool calls that already completed.");
++  });
++
++  it.each([
++    { name: "caller abort", aborted: true, timedOut: false, overrides: {} },
++    { name: "timeout", aborted: false, timedOut: true, overrides: {} },
++    {
++      name: "failed prompt",
++      aborted: false,
++      timedOut: false,
++      overrides: { terminal: { kind: "failed", source: "prompt", error: new Error("boom") } },
++    },
++    {
++      name: "pending client tool",
++      aborted: false,
++      timedOut: false,
++      overrides: { clientToolCalls: [{ name: "pending", params: {} }] },
++    },
++    { name: "yield", aborted: false, timedOut: false, overrides: { yieldDetected: true } },
++    {
++      name: "approval prompt",
++      aborted: false,
++      timedOut: false,
++      overrides: { didSendDeterministicApprovalPrompt: true },
++    },
++  ] as const)("does not continue after a $name", ({ aborted, timedOut, overrides }) => {
++    expect(
++      resolveMalformedToolCallRetryInstruction({
++        aborted,
++        timedOut,
++        attempt: sideEffectingAttempt(malformedToolCallAssistant(), overrides),
++      }),
++    ).toBeNull();
++  });
++});
++
++describe("continueAfterMalformedToolCall", () => {
++  it("arms bounded internal continuations and then yields to incomplete-turn resolution", () => {
++    const input = continuationInput(sideEffectingAttempt(malformedToolCallAssistant()));
++
++    for (let attempt = 1; attempt <= MALFORMED_TOOL_CALL_RETRY_LIMIT; attempt += 1) {
++      expect(continueAfterMalformedToolCall(input)).toBe(true);
++      expect(input.retryState.malformedToolCallAttempts).toBe(attempt);
++    }
++    expect(continueAfterMalformedToolCall(input)).toBe(false);
++    expect(input.retryState.malformedToolCallAttempts).toBe(MALFORMED_TOOL_CALL_RETRY_LIMIT);
++    expect(input.activateInternalPrompt).toHaveBeenCalledTimes(MALFORMED_TOOL_CALL_RETRY_LIMIT);
++    expect(input.activateInternalPrompt).toHaveBeenCalledWith(
++      expect.stringContaining("rejected before it ran"),
++    );
++  });
++
++  it.each([
++    {
++      name: "external abort",
++      overrides: { terminal: { kind: "aborted", source: "external" } },
++    },
++    {
++      name: "failed prompt",
++      overrides: { terminal: { kind: "failed", source: "prompt", error: new Error("boom") } },
++    },
++  ] as const)("does not arm a continuation after an $name", ({ overrides }) => {
++    const input = continuationInput(sideEffectingAttempt(malformedToolCallAssistant(), overrides));
++
++    expect(continueAfterMalformedToolCall(input)).toBe(false);
++    expect(input.retryState.malformedToolCallAttempts).toBe(0);
++    expect(input.activateInternalPrompt).not.toHaveBeenCalled();
++  });
++
++  it("leaves other provider errors to the ordinary terminal path", () => {
++    const input = continuationInput(
++      sideEffectingAttempt(
++        malformedToolCallAssistant({
++          diagnostics: undefined,
++          errorMessage: "500 Internal Server Error",
++        }),
++      ),
++    );
++
++    expect(continueAfterMalformedToolCall(input)).toBe(false);
++    expect(input.activateInternalPrompt).not.toHaveBeenCalled();
++  });
++});
+diff --git a/src/agents/embedded-agent-runner/run/malformed-tool-call-recovery.ts b/src/agents/embedded-agent-runner/run/malformed-tool-call-recovery.ts
+new file mode 100644
+index 00000000000..994032d9448
+--- /dev/null
++++ b/src/agents/embedded-agent-runner/run/malformed-tool-call-recovery.ts
+@@ -0,0 +1,141 @@
++/**
++ * Continues a turn whose final provider tool call was rejected before it ran.
++ *
++ * Transports reject incomplete or malformed tool-call arguments at the terminal boundary,
++ * so the call never executes. Continuing after the committed transcript therefore cannot
++ * replay a side effect, which lets this recovery run after earlier tools committed work,
++ * unlike the non-visible-answer retries that resubmit a replay-safe turn.
++ */
++import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
++import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
++import { log } from "../logger.js";
++import type { IncompleteTurnAttempt } from "./incomplete-turn-classification.js";
++import {
++  isEmbeddedRunTerminalAbort,
++  isEmbeddedRunTerminalInterrupted,
++  isEmbeddedRunTerminalTimeout,
++  type EmbeddedRunTerminalState,
++} from "./terminal-outcome.js";
++import type { EmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
++
++export const MALFORMED_TOOL_CALL_RETRY_LIMIT = 2;
++const MALFORMED_TOOL_CALL_RETRY_INSTRUCTION =
++  "Your previous tool call was rejected before it ran because its arguments were not complete, valid JSON, so it had no effect. Continue from the current transcript and issue that tool call again with valid JSON arguments (escape quotes, backslashes, and line breaks inside strings). If the arguments are large, split the work into several smaller tool calls. Do not repeat tool calls that already completed.";
++/** Transport fact recorded when a provider tool call is rejected at the terminal boundary. */
++const MALFORMED_TOOL_CALL_DIAGNOSTIC_TYPE = "malformed_tool_call_arguments";
++// Terminal rejections from transports that surface the failed argument parse as text only.
++const MALFORMED_TOOL_CALL_ERROR_MESSAGES = new Set([
++  "Provider returned an incomplete or malformed tool call",
++  "Provider completed tool call with malformed JSON arguments",
++]);
++const MALFORMED_TOOL_CALL_LOG_FIELDS = [
++  "reason",
++  "providerStopReason",
++  "toolCallCount",
++  "argumentChars",
++  "parseError",
++  "parseErrorPosition",
++  "repairAttempted",
++] as const;
++
++type TerminalAssistant = IncompleteTurnAttempt["lastAssistant"] | null;
++
++/** True when the provider's final tool call was rejected at the terminal boundary and never ran. */
++export function isMalformedToolCallAssistantTurn(assistant: TerminalAssistant): boolean {
++  if (!assistant || assistant.stopReason !== "error") {
++    return false;
++  }
++  if (
++    assistant.diagnostics?.some(
++      (diagnostic) => diagnostic.type === MALFORMED_TOOL_CALL_DIAGNOSTIC_TYPE,
++    )
++  ) {
++    return true;
++  }
++  const errorMessage = assistant.errorMessage?.trim();
++  return errorMessage !== undefined && MALFORMED_TOOL_CALL_ERROR_MESSAGES.has(errorMessage);
++}
++
++/** Content-free summary of the rejected call's transport diagnostic for runner logs. */
++export function describeMalformedToolCallDiagnostic(assistant: TerminalAssistant): string {
++  const details = assistant?.diagnostics?.findLast(
++    (diagnostic) => diagnostic.type === MALFORMED_TOOL_CALL_DIAGNOSTIC_TYPE,
++  )?.details;
++  if (!details) {
++    return "diagnostic=none";
++  }
++  return MALFORMED_TOOL_CALL_LOG_FIELDS.flatMap((field) => {
++    const value = details[field];
++    return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
++      ? [`${field}=${sanitizeForLog(String(value)).slice(0, 64)}`]
++      : [];
++  }).join(" ");
++}
++
++/** Builds the continuation instruction when the attempt ended on a rejected tool call. */
++export function resolveMalformedToolCallRetryInstruction(params: {
++  aborted: boolean;
++  timedOut: boolean;
++  attempt: IncompleteTurnAttempt;
++}): string | null {
++  if (
++    params.aborted ||
++    params.timedOut ||
++    params.attempt.terminal.kind === "failed" ||
++    params.attempt.clientToolCalls ||
++    params.attempt.yieldDetected ||
++    params.attempt.didSendDeterministicApprovalPrompt
++  ) {
++    return null;
++  }
++  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant ?? null;
++  return isMalformedToolCallAssistantTurn(assistant) ? MALFORMED_TOOL_CALL_RETRY_INSTRUCTION : null;
++}
++
++/**
++ * Arms one bounded continuation for a rejected tool call and reports whether the run should
++ * retry. Exhausted continuations fall through to the ordinary incomplete-turn resolution.
++ */
++export function continueAfterMalformedToolCall(input: {
++  runParams: { runId: string; sessionId: string };
++  attempt: IncompleteTurnAttempt;
++  retryState: EmbeddedRunTerminalRetryState;
++  terminalState: EmbeddedRunTerminalState;
++  activeErrorContext: { provider: string; model: string };
++  activateInternalPrompt: (prompt: string) => void;
++}): boolean {
++  const { outcome } = input.terminalState;
++  const { promptError } = projectAgentRunAttemptTerminal(input.attempt.terminal);
++  const instruction =
++    isEmbeddedRunTerminalInterrupted(outcome) || promptError
++      ? null
++      : resolveMalformedToolCallRetryInstruction({
++          aborted: isEmbeddedRunTerminalAbort(outcome),
++          timedOut: isEmbeddedRunTerminalTimeout(outcome),
++          attempt: input.attempt,
++        });
++  if (!instruction) {
++    return false;
++  }
++  const { retryState } = input;
++  const context =
++    `runId=${input.runParams.runId} sessionId=${input.runParams.sessionId} ` +
++    `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} ` +
++    describeMalformedToolCallDiagnostic(
++      input.attempt.currentAttemptAssistant ?? input.attempt.lastAssistant ?? null,
++    );
++  if (retryState.malformedToolCallAttempts >= MALFORMED_TOOL_CALL_RETRY_LIMIT) {
++    log.warn(
++      `malformed tool call continuations exhausted: ${context} ` +
++        `attempts=${retryState.malformedToolCallAttempts}/${MALFORMED_TOOL_CALL_RETRY_LIMIT} — surfacing incomplete-turn error`,
++    );
++    return false;
++  }
++  retryState.malformedToolCallAttempts += 1;
++  input.activateInternalPrompt(instruction);
++  log.warn(
++    `malformed tool call rejected before execution: ${context} — retrying ` +
++      `${retryState.malformedToolCallAttempts}/${MALFORMED_TOOL_CALL_RETRY_LIMIT} with tool-call continuation`,
++  );
++  return true;
++}
+diff --git a/src/agents/embedded-agent-runner/run/terminal-resolution.malformed-tool-call.test.ts b/src/agents/embedded-agent-runner/run/terminal-resolution.malformed-tool-call.test.ts
+new file mode 100644
+index 00000000000..ab0d290486b
+--- /dev/null
++++ b/src/agents/embedded-agent-runner/run/terminal-resolution.malformed-tool-call.test.ts
+@@ -0,0 +1,241 @@
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import {
++  buildEmbeddedRunnerAssistant,
++  makeEmbeddedRunnerAttempt,
++} from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
++import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
++import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
++import {
++  resolveEmbeddedRunTerminal,
++  resolveSettledTurnFinalizationRequest,
++} from "./terminal-resolution.js";
++import { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
++
++vi.mock("./auth-profile-success.js", () => ({
++  markEmbeddedRunAuthProfileSuccess: vi.fn(),
++  reportEmbeddedRunSuccessfulAuthBinding: vi.fn(),
++}));
++
++const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
++  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
++
++type TerminalInput = Parameters<typeof resolveEmbeddedRunTerminal>[0];
++type Assistant = ReturnType<typeof buildEmbeddedRunnerAssistant>;
++
++function malformedToolCallAssistant(overrides: Partial<Assistant> = {}): Assistant {
++  return buildEmbeddedRunnerAssistant({
++    api: "openai-completions",
++    stopReason: "error",
++    errorMessage: "Provider returned an incomplete or malformed tool call",
++    content: [{ type: "thinking", thinking: "Update the report section next." }],
++    diagnostics: [
++      {
++        type: "malformed_tool_call_arguments",
++        timestamp: 1,
++        details: {
++          toolCallCount: 1,
++          reason: "invalid_arguments",
++          parseError: "unexpected_token",
++        },
++      },
++    ],
++    ...overrides,
++  });
++}
++
++// The reported run: seven committed tools, then a rejected edit call with only reasoning left.
++function makeTerminalInput(
++  assistant: Assistant,
++  overrides: Partial<TerminalInput> = {},
++): TerminalInput {
++  const attempt = makeEmbeddedRunnerAttempt({
++    assistantTexts: [],
++    lastAssistant: assistant,
++    currentAttemptAssistant: assistant,
++    toolMetas: ["decision_evaluate", "write", "edit", "edit", "exec", "write", "exec"].map(
++      (toolName) => ({ toolName, replaySafe: false }),
++    ),
++    replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
++    currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
++  });
++  const profileStore = { version: 1, profiles: {} } as never;
++  return {
++    runParams: {
++      sessionId: "session:malformed-tool-call",
++      sessionKey: "agent:main:malformed-tool-call",
++      runId: "run:malformed-tool-call",
++      agentDir: "/tmp/openclaw-malformed-tool-call",
++      workspaceDir: "/tmp/openclaw-malformed-tool-call",
++    } as TerminalInput["runParams"],
++    retryState: createEmbeddedRunTerminalRetryState(),
++    attempt,
++    attemptAssistant: assistant,
++    activeErrorContext: { provider: "lobsterai-server", model: "deepseek-flash" },
++    modelApi: "openai-completions",
++    executionContract: undefined,
++    terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
++    payloadsWithToolMedia: [],
++    recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,
++    finalAssistantVisibleText: undefined,
++    finalAssistantRawText: undefined,
++    agentMeta: {} as never,
++    attemptToolSummary: undefined,
++    failureSignal: undefined,
++    maxReasoningOnlyRetryAttempts: 2,
++    maxEmptyResponseRetryAttempts: 1,
++    attemptCompactionCount: 0,
++    replayState: { hadPotentialSideEffects: true, replayInvalid: true },
++    activePromptPersisted: true,
++    activateInternalPrompt: vi.fn(),
++    setSuppressNextUserMessagePersistence: vi.fn(),
++    armPostCompactionGuard: vi.fn(),
++    readTerminalToolPresentation: () => undefined,
++    resolveReplayInvalid: () => false,
++    setTerminalLifecycleMeta: vi.fn(),
++    maybeMarkAuthProfileFailure: vi.fn(async () => undefined),
++    assistantProfileFailureReason: null,
++    startedAtMs: Date.now(),
++    provider: "lobsterai-server",
++    modelId: "deepseek-flash",
++    modelTransportId: "deepseek-flash",
++    modelTransportApi: "openai-completions",
++    requestTransportOverrides: "none",
++    authProfileId: undefined,
++    profileFailureStore: profileStore,
++    attemptAuthProfileStore: profileStore,
++    apiKeyInfo: null,
++    agentHarnessId: "builtin-openclaw",
++    settledTurnFinalizationOutcome: "not-attempted",
++    pluginHarnessOwnsTransport: false,
++    pluginHarnessOwnsAuthBootstrap: false,
++    reportedModelRef: { provider: "lobsterai-server", model: "deepseek-flash" },
++    traceAttempts: [],
++    traceAttemptUsesFallback: () => false,
++    thinkLevel: "high",
++    contextRecoveryState: createEmbeddedRunContextRecoveryState(),
++    ...overrides,
++  };
++}
++
++describe("terminal resolution for a rejected provider tool call", () => {
++  beforeEach(() => vi.clearAllMocks());
++
++  it("continues a side-effecting turn after the provider's tool call is rejected", async () => {
++    const input = makeTerminalInput(malformedToolCallAssistant());
++
++    await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
++    expect(input.activateInternalPrompt).toHaveBeenCalledWith(
++      expect.stringContaining("rejected before it ran"),
++    );
++    expect(input.retryState.malformedToolCallAttempts).toBe(1);
++    expect(input.setSuppressNextUserMessagePersistence).not.toHaveBeenCalled();
++  });
++
++  it("continues when the transport surfaced the rejection as text only", async () => {
++    const input = makeTerminalInput(
++      malformedToolCallAssistant({
++        diagnostics: undefined,
++        errorMessage: "Provider completed tool call with malformed JSON arguments",
++      }),
++    );
++
++    await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
++    expect(input.retryState.malformedToolCallAttempts).toBe(1);
++  });
++
++  it("surfaces the incomplete-turn error once continuations are exhausted", async () => {
++    const retryState = createEmbeddedRunTerminalRetryState();
++    retryState.malformedToolCallAttempts = 2;
++    const input = makeTerminalInput(malformedToolCallAssistant(), { retryState });
++
++    const resolved = await resolveEmbeddedRunTerminal(input);
++
++    expect(resolved.action).toBe("complete");
++    if (resolved.action !== "complete") {
++      return;
++    }
++    expect(resolved.result.payloads?.[0]?.text).toContain(
++      "some tool actions may have already been executed",
++    );
++    expect(resolved.result.meta.error?.kind).toBe("incomplete_turn");
++    expect(input.activateInternalPrompt).not.toHaveBeenCalled();
++    expect(retryState.malformedToolCallAttempts).toBe(2);
++  });
++
++  it("does not continue after isolated finalization was attempted", async () => {
++    const input = makeTerminalInput(malformedToolCallAssistant(), {
++      settledTurnFinalizationOutcome: "failed",
++    });
++
++    const resolved = await resolveEmbeddedRunTerminal(input);
++
++    expect(resolved.action).toBe("complete");
++    expect(input.activateInternalPrompt).not.toHaveBeenCalled();
++  });
++
++  it("keeps other provider errors on the incomplete-turn path", async () => {
++    const input = makeTerminalInput(
++      malformedToolCallAssistant({
++        diagnostics: undefined,
++        errorMessage: "500 Internal Server Error",
++      }),
++    );
++
++    const resolved = await resolveEmbeddedRunTerminal(input);
++
++    expect(resolved.action).toBe("complete");
++    expect(input.activateInternalPrompt).not.toHaveBeenCalled();
++    expect(input.retryState.malformedToolCallAttempts).toBe(0);
++  });
++
++  it("does not request isolated finalization for a rejected tool call", () => {
++    const toolUseAssistant = buildEmbeddedRunnerAssistant({
++      stopReason: "toolUse",
++      content: [{ type: "toolCall", id: "tool-1", name: "write", arguments: {} }],
++    });
++    const request = (assistant: Assistant) => {
++      const attempt = makeEmbeddedRunnerAttempt({
++        assistantTexts: [],
++        lastAssistant: assistant,
++        currentAttemptAssistant: assistant,
++        messagesSnapshot: [
++          { role: "user", content: "Update the report", timestamp: 1 },
++          toolUseAssistant,
++          {
++            role: "toolResult",
++            toolCallId: "tool-1",
++            toolName: "write",
++            content: [{ type: "text", text: "Wrote note.txt" }],
++            isError: false,
++            timestamp: 2,
++          },
++          assistant,
++        ],
++        toolMetas: [{ toolName: "write", toolCallId: "tool-1", replaySafe: false }],
++        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
++        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
++        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
++      });
++      return resolveSettledTurnFinalizationRequest({
++        runParams: { sessionId: "session:malformed", runId: "run:malformed" } as never,
++        attempt,
++        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
++        modelApi: "openai-responses",
++        executionContract: undefined,
++        payloadsWithToolMedia: [],
++        hasTerminalToolPresentation: false,
++        terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
++        settledTurnFinalizationAvailable: true,
++      });
++    };
++
++    // A final-answer pass would drop the action the model was still taking; the
++    // rejected call resumes through the malformed-call continuation instead.
++    expect(request(malformedToolCallAssistant())).toBeNull();
++    expect(
++      request(
++        buildEmbeddedRunnerAssistant({ stopReason: "stop", content: [{ type: "text", text: "" }] }),
++      ),
++    ).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
++  });
++});
+diff --git a/src/agents/embedded-agent-runner/run/terminal-resolution.ts b/src/agents/embedded-agent-runner/run/terminal-resolution.ts
+index 706ecb0aa49..676b95cade0 100644
+--- a/src/agents/embedded-agent-runner/run/terminal-resolution.ts
++++ b/src/agents/embedded-agent-runner/run/terminal-resolution.ts
+@@ -43,6 +43,7 @@ import {
+   YIELD_DIAGNOSTIC_TEXT,
+ } from "./incomplete-turn-resolution.js";
+ import type { RunEmbeddedAgentInternalParams as TerminalRunParams } from "./internal-params.js";
++import { continueAfterMalformedToolCall } from "./malformed-tool-call-recovery.js";
+ import {
+   isEmbeddedRunTerminalAbort,
+   isEmbeddedRunTerminalInterrupted,
+@@ -257,6 +258,10 @@ export async function resolveEmbeddedRunTerminal(input: {
+   // A failed isolated finalization is terminal for this user turn. Do not let
+   // its settled side effects cascade into any ordinary retry family.
+   const settledTurnFinalizationAttempted = input.settledTurnFinalizationOutcome !== "not-attempted";
++  // A rejected provider tool call never ran, so it continues even after committed side effects.
++  if (!settledTurnFinalizationAttempted && continueAfterMalformedToolCall(input)) {
++    return { action: "retry" };
++  }
+   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
+     allowEmptyAssistantReplyAsSilent: runParams.allowEmptyAssistantReplyAsSilent,
+     terminalReplyExpectation: runParams.terminalReplyExpectation,
+diff --git a/src/agents/embedded-agent-runner/run/terminal-retry-state.ts b/src/agents/embedded-agent-runner/run/terminal-retry-state.ts
+index 0981042076d..6a17218c9d5 100644
+--- a/src/agents/embedded-agent-runner/run/terminal-retry-state.ts
++++ b/src/agents/embedded-agent-runner/run/terminal-retry-state.ts
+@@ -21,6 +21,7 @@ export type EmbeddedRunTerminalRetryState = {
+   reasoningOnlyAttempts: number;
+   emptyResponseAttempts: number;
+   missingAssistantAttempts: number;
++  malformedToolCallAttempts: number;
+   compactionContinuationAttempts: number;
+   compactionContinuationInstruction: string | null;
+   beforeFinalizeRevisionAttempts: number;
+@@ -32,6 +33,7 @@ export function createEmbeddedRunTerminalRetryState(): EmbeddedRunTerminalRetryS
+     reasoningOnlyAttempts: 0,
+     emptyResponseAttempts: 0,
+     missingAssistantAttempts: 0,
++    malformedToolCallAttempts: 0,
+     compactionContinuationAttempts: 0,
+     compactionContinuationInstruction: null,
+     beforeFinalizeRevisionAttempts: 0,
