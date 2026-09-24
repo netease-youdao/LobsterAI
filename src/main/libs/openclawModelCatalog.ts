@@ -45,12 +45,16 @@ const catalogKey = (providerId: string, modelId: string): string =>
   `${normalizeLookupPart(providerId)}/${normalizeLookupPart(modelId)}`;
 
 // The bundled OpenClaw catalog may be unavailable in CI or in a trimmed
-// runtime, but LobsterAI still needs to write correct limits for known native
-// Anthropic-format providers. Keep this fallback scoped to official provider
-// IDs so custom providers do not inherit limits by model-name coincidence.
+// runtime, and pinned plugin catalogs can lag vendor releases, but LobsterAI
+// still needs to write correct limits for known native Anthropic-format
+// providers. Keep this fallback scoped to official provider IDs so custom
+// providers do not inherit limits by model-name coincidence.
 const BUILT_IN_MODEL_MAX_TOKENS = new Map<string, number>([
   ['anthropic/claude-sonnet-4-6', 64_000],
   ['anthropic/claude-sonnet-4.6', 64_000],
+  // @openclaw/volcengine-provider 2026.8.1 lists glm-5.2 but not glm-5.3;
+  // mirror the plan catalog's GLM row.
+  ['volcengine-plan/glm-5.3', 128_000],
   ['minimax/minimax-m3', 131_072],
   ['minimax/minimax-m2.7', 131_072],
   ['minimax/minimax-m2.7-highspeed', 131_072],
@@ -127,16 +131,26 @@ const resolveOpenClawRuntimeRoot = (): string | null => {
   return findExistingPath(candidates);
 };
 
-const listExtensionDirs = (runtimeRoot: string): string[] => {
-  const extensionsRoot = path.join(runtimeRoot, 'dist', 'extensions');
-  try {
-    return fs.readdirSync(extensionsRoot, { withFileTypes: true })
-      .filter(entry => entry.isDirectory())
-      .map(entry => path.join(extensionsRoot, entry.name));
-  } catch {
-    return [];
-  }
-};
+// Provider plugins that OpenClaw no longer bundles in core (volcengine, zai,
+// deepseek, moonshot, qwen, ...) are preinstalled under third-party-extensions.
+// It is scanned last so a pinned external plugin wins over a bundled copy.
+const RUNTIME_EXTENSION_ROOTS = [
+  path.join('dist', 'extensions'),
+  'third-party-extensions',
+];
+
+const listExtensionDirs = (runtimeRoot: string): string[] => (
+  RUNTIME_EXTENSION_ROOTS.flatMap((relativeRoot) => {
+    const extensionsRoot = path.join(runtimeRoot, relativeRoot);
+    try {
+      return fs.readdirSync(extensionsRoot, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .map(entry => path.join(extensionsRoot, entry.name));
+    } catch {
+      return [];
+    }
+  })
+);
 
 const addProviderAlias = (
   index: OpenClawCatalogIndex,
