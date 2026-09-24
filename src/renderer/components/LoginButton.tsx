@@ -1,4 +1,5 @@
 import { ArrowPathIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import { AuthLoginFailureReason } from '@shared/auth/constants';
 import React, {
   useCallback,
   useEffect,
@@ -16,7 +17,7 @@ import soccerBallIconUrl from '../assets/icons/soccer-ball.svg';
 import usageOverviewIconUrl from '../assets/icons/usage-overview.svg';
 import { EnterpriseAccountMenu } from '../features/enterpriseAccount/components/EnterpriseAccountMenu';
 import { selectEnterpriseAccountContext } from '../features/enterpriseAccount/selectors';
-import { authService } from '../services/auth';
+import { authService, getLoginFailureMessage } from '../services/auth';
 import {
   getPortalCreditsDetailUrl,
   getPortalCreditsResetActivityUrl,
@@ -814,11 +815,17 @@ const LoginButton: React.FC<LoginButtonProps> = ({
     const loginVariant = useSidebarPromoLogin ? 'sidebar_promo' : 'default';
     writeAccountMenuRendererLog('debug', `login requested variant=${loginVariant}`);
     try {
-      await authService.login();
+      const result = await authService.login();
       reportAccountMenuAction('login', {
         isLoggedIn: false,
-        result: 'success',
+        result: result.success ? 'success' : 'failed',
+        errorCode: result.success ? undefined : result.reason,
       });
+      if (!result.success && result.reason !== AuthLoginFailureReason.Cancelled) {
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: getLoginFailureMessage(result.reason),
+        }));
+      }
     } catch (error) {
       writeAccountMenuRendererLog('warn', `login request failed variant=${loginVariant}`);
       reportAccountMenuAction('login', {

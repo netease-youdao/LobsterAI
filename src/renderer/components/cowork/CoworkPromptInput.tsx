@@ -8,7 +8,7 @@ import {
   PlayCircleIcon,
 } from '@heroicons/react/24/outline';
 import { ArrowUpIcon, FolderIcon } from '@heroicons/react/24/solid';
-import { AuthSubscriptionStatus } from '@shared/auth/constants';
+import { AuthLoginFailureReason, AuthSubscriptionStatus } from '@shared/auth/constants';
 import {
   BrowserAnnotationScreenshotStatus,
   type CoworkBrowserAnnotationBatch,
@@ -41,7 +41,7 @@ import {
   CoworkSteerStatus,
 } from '../../../shared/cowork/steer';
 import { agentService } from '../../services/agent';
-import { authService } from '../../services/auth';
+import { authService, getLoginFailureMessage } from '../../services/auth';
 import { configService, ConfigServiceEvent } from '../../services/config';
 import { coworkService } from '../../services/cowork';
 import { buildCoworkCapabilitySelection } from '../../services/coworkCapabilitySelection';
@@ -744,7 +744,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     try {
       const result = await authService.login();
       if (!result.success) {
-        throw new Error(result.error || i18nService.t('welcomeLoginFailed'));
+        if (result.reason === AuthLoginFailureReason.Cancelled) {
+          setChatLoginExperiencePending(false);
+          return;
+        }
+        throw new Error(getLoginFailureMessage(result.reason));
       }
       logPromptModelSelection(
         'debug',
@@ -770,7 +774,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           errorCode: getOnboardingErrorCode(error),
         });
       }
-      showToast(i18nService.t('welcomeLoginFailed'));
+      showToast(error instanceof Error && error.message ? error.message : i18nService.t('authLoginFailed'));
       setChatLoginExperiencePending(false);
     }
   }, [chatLoginExperiencePending]);

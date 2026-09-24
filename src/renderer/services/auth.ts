@@ -2,6 +2,7 @@ import { createAccountOwnerKey } from '@shared/auth/accountOwner';
 import {
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
+  AuthLoginFailureReason,
   type AuthLoginResult,
   type AuthSessionChangedEvent,
   AuthSessionChangeReason,
@@ -290,8 +291,13 @@ const ServerModelLoadOutcome = {
 } as const;
 type ServerModelLoadOutcome = typeof ServerModelLoadOutcome[keyof typeof ServerModelLoadOutcome];
 
+export function getLoginFailureMessage(reason?: AuthLoginFailureReason): string {
+  if (reason === AuthLoginFailureReason.Timeout) return i18nService.t('authLoginTimeout');
+  if (reason === AuthLoginFailureReason.LoadFailed) return i18nService.t('authLoginLoadFailed');
+  return i18nService.t('authLoginFailed');
+}
+
 class AuthService {
-  private unsubCallback: (() => void) | null = null;
   private unsubLifecycleEvent: (() => void) | null = null;
   private unsubQuotaChanged: (() => void) | null = null;
   private unsubSessionChanged: (() => void) | null = null;
@@ -396,10 +402,6 @@ class AuthService {
 
     store.dispatch(setAuthLoading(true));
 
-    // Listen for OAuth callback from protocol handler
-    this.unsubCallback = window.electron.auth.onCallback(async ({ code }) => {
-      await this.handleCallback(code);
-    });
     this.unsubSessionChanged = window.electron.auth.onSessionChanged(event => {
       void this.handleSessionChanged(event);
     });
@@ -413,17 +415,10 @@ class AuthService {
     });
 
     try {
-      const pendingCode = await window.electron.auth.getPendingCallback();
-      let handledPendingCode = false;
-      if (pendingCode) {
-        handledPendingCode = await this.handleCallback(pendingCode);
-      }
-      if (!handledPendingCode) {
-        await this.refreshAuthState({
-          clearOnFailure: true,
-          reportLifecycle: true,
-        });
-      }
+      await this.refreshAuthState({
+        clearOnFailure: true,
+        reportLifecycle: true,
+      });
     } catch {
       store.dispatch(setAuthTemporarilyUnavailable({ hasCredentials: false }));
       reportAuthLifecycleEvent({
@@ -464,64 +459,20 @@ class AuthService {
   }
 
   /**
-   * Initiate login (opens system browser).
+   * Sign in through the embedded login window. Resolves when the user finishes, cancels or fails.
    */
   async login(): Promise<AuthLoginResult> {
     const attemptId = ++this.loginAttemptSequence;
     writeAuthRendererLog('info', `login attempt ${attemptId} started`);
-
+    let result: Awaited<ReturnType<typeof window.electron.auth.login>>;
     try {
-      const loginUrl = await this.fetchLoginUrl();
-      const result = await window.electron.auth.login(loginUrl);
-      if (result.success) {
-        writeAuthRendererLog('info', `login attempt ${attemptId} handed off to the system browser`);
-      } else {
-        writeAuthRendererLog('warn', `login attempt ${attemptId} could not open the system browser`);
-      }
-      return result;
+      result = await window.electron.auth.login();
     } catch (error) {
-      writeAuthRendererLog('warn', `login attempt ${attemptId} failed before browser handoff`, error);
-      throw error;
+      writeAuthRendererLog('warn', `login attempt ${attemptId} could not start`, error);
+      return { success: false, reason: AuthLoginFailureReason.LoadFailed };
     }
-  }
-
-  /**
-   * Fetch login URL from overmind, fallback to Portal login page.
-   */
-  private async fetchLoginUrl(): Promise<string> {
-    const { getLoginOvermindUrl } = await import('./endpoints');
-    const url = getLoginOvermindUrl();
-    try {
-      const response = await window.electron.api.fetch({
-        url,
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-      });
-      if (response.ok && typeof response.data === 'object' && response.data !== null) {
-        const value = (response.data as any)?.data?.value;
-        if (typeof value === 'string' && value.trim()) {
-          writeAuthRendererLog('debug', 'resolved login URL from overmind');
-          return value.trim();
-        }
-      }
-    } catch (e) {
-      writeAuthRendererLog('warn', 'failed to resolve login URL from overmind', e);
-    }
-    // Fallback: use Portal login page directly
-    const { getPortalLoginUrl } = await import('./endpoints');
-    writeAuthRendererLog('info', 'using fallback portal login URL');
-    return getPortalLoginUrl();
-  }
-
-  /**
-   * Handle OAuth callback with auth code.
-   */
-  async handleCallback(code: string): Promise<boolean> {
-    writeAuthRendererLog('info', 'received login callback; starting token exchange');
-    try {
-      const result = await window.electron.auth.exchange(code);
-      if (result.success && result.user) {
-        writeAuthRendererLog('info', 'login callback exchange succeeded');
+    if (result.success && result.user) {
+      try {
         store.dispatch(invalidateAuthAccountContext());
         store.dispatch(clearMediaAccountState());
         this.applyAuthenticatedState(
@@ -530,15 +481,21 @@ class AuthService {
           result.purchaseOffer,
           result.enterpriseContext,
         );
+        writeAuthRendererLog('info', `login attempt ${attemptId} completed`);
         await this.loadServerModels();
         void this.refreshQuota({ refreshProfileSummary: true });
-        return true;
+        return { success: true };
+      } catch (error) {
+        writeAuthRendererLog('warn', `login attempt ${attemptId} returned an unusable account`, error);
+        return { success: false, reason: AuthLoginFailureReason.ExchangeFailed };
       }
-      writeAuthRendererLog('warn', 'login callback exchange was rejected');
-    } catch (e) {
-      writeAuthRendererLog('warn', 'login callback exchange failed', e);
     }
-    return false;
+    const reason = result.reason ?? AuthLoginFailureReason.ExchangeFailed;
+    writeAuthRendererLog(
+      reason === AuthLoginFailureReason.Cancelled ? 'info' : 'warn',
+      `login attempt ${attemptId} ended: ${reason}`,
+    );
+    return { success: false, reason, error: result.error };
   }
 
   /**
@@ -845,24 +802,11 @@ class AuthService {
     return result.data;
   }
 
-  /**
-   * Get current access token (for proxy API calls).
-   */
-  async getAccessToken(): Promise<string | null> {
-    try {
-      return await window.electron.auth.getAccessToken();
-    } catch {
-      return null;
-    }
-  }
-
   destroy() {
     this.pendingQuotaCheck = null;
     this.pendingServerModelLoad = null;
     this.serverModelLoadSequence += 1;
     this.clearEnterpriseQuotaBoundaryTimer();
-    this.unsubCallback?.();
-    this.unsubCallback = null;
     this.unsubLifecycleEvent?.();
     this.unsubLifecycleEvent = null;
     this.unsubQuotaChanged?.();

@@ -10,6 +10,7 @@ import {
   AppUpdateStatus,
   isManualDownloadUrl,
 } from '../shared/appUpdate/constants';
+import { AuthLoginFailureReason } from '../shared/auth/constants';
 import { BrowserPasskeyUiEvent } from '../shared/browserWebAccess/passkeys';
 import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import {
@@ -70,7 +71,7 @@ import { selectIsEnterpriseAccount } from './features/enterpriseAccount/selector
 import { SkinProvider } from './providers/SkinProvider';
 import type { ApiConfig } from './services/api';
 import { apiService } from './services/api';
-import { authService } from './services/auth';
+import { authService, getLoginFailureMessage } from './services/auth';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
 import { i18nService } from './services/i18n';
@@ -123,7 +124,6 @@ const NEW_USER_WELCOME_AFTER_LOGIN_STORAGE_KEY = 'lobsterai:newUserWelcomeAfterL
 const NEW_USER_WELCOME_AFTER_LOGIN_RESTART_GRACE_MS = 1800;
 const NEW_USER_WELCOME_AFTER_LOGIN_ENGINE_SETTLE_MS = 700;
 const NEW_USER_WELCOME_UNAUTHENTICATED_RETURN_DELAY_MS = 600;
-const NEW_USER_WELCOME_AUTH_CALLBACK_SUPPRESSION_MS = 5000;
 
 const setNewUserWelcomeAfterLoginPending = (): void => {
   try {
@@ -283,7 +283,6 @@ const App: React.FC = () => {
   const privacyGateRequestIdRef = useRef(0);
   const pendingNewUserWelcomeAfterLoginSawStartupRef = useRef(false);
   const pendingNewUserWelcomeAfterLoginWaitingLoggedRef = useRef(false);
-  const pendingNewUserWelcomeAuthCallbackAtRef = useRef(0);
   const newUserLoginPendingRef = useRef(false);
   const isUserInitiatedUpdateFlowActiveRef = useRef(false);
   const dispatch = useDispatch();
@@ -1222,22 +1221,6 @@ const App: React.FC = () => {
   }, [showToast]);
 
   useEffect(() => {
-    const unsubscribe = window.electron.auth.onCallback(() => {
-      pendingNewUserWelcomeAuthCallbackAtRef.current = Date.now();
-      if (hasNewUserWelcomeAfterLoginPending()) {
-        console.log('[Onboarding] auth callback observed during new user login handoff');
-        reportOnboardingAction('auth_callback_observed', {
-          source: 'new_user_onboarding',
-        });
-      }
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, []);
-
-  useEffect(() => {
     if (!authUser || !hasNewUserWelcomeAfterLoginPending()) {
       pendingNewUserWelcomeAfterLoginSawStartupRef.current = false;
       pendingNewUserWelcomeAfterLoginWaitingLoggedRef.current = false;
@@ -1342,14 +1325,8 @@ const App: React.FC = () => {
         if (!hasNewUserWelcomeAfterLoginPending()) return;
         if (store.getState().auth.isLoggedIn) return;
 
-        const lastCallbackAgeMs = Date.now() - pendingNewUserWelcomeAuthCallbackAtRef.current;
-        if (lastCallbackAgeMs >= 0 && lastCallbackAgeMs < NEW_USER_WELCOME_AUTH_CALLBACK_SUPPRESSION_MS) {
-          console.log(
-            '[Onboarding] auth callback recently observed; waiting for login exchange before '
-            + `opening fallback welcome task callbackAge=${lastCallbackAgeMs}ms`,
-          );
-          return;
-        }
+        // The login window reports its own outcome; focus changes while it is open mean nothing.
+        if (newUserLoginPendingRef.current) return;
 
         if (!consumeNewUserWelcomeAfterLoginPending()) return;
 
@@ -1430,17 +1407,30 @@ const App: React.FC = () => {
     setNewUserWelcomeAfterLoginSignal((value) => value + 1);
     await authService.login()
       .then((result) => {
+        if (!result.success && result.reason === AuthLoginFailureReason.Cancelled) {
+          // Like returning from the browser without signing in: the new user still gets the welcome task.
+          const source = 'start_experience_login_cancelled';
+          console.log(`[Onboarding] login window closed without signing in; opening new user welcome task source=${source}`);
+          reportOnboardingAction('login_return_without_auth', {
+            source,
+            pendingAge: Math.round(getNewUserWelcomeAfterLoginPendingAgeMs() ?? 0),
+          });
+          consumeNewUserWelcomeAfterLoginPending();
+          finishNewUserOnboarding('start_experience');
+          openNewUserWelcomeTask(source);
+          return;
+        }
         if (!result.success) {
           console.warn(
-            `[Onboarding] login handoff from new user onboarding failed: ${result.error ?? 'unknown error'}`,
+            `[Onboarding] login from new user onboarding failed: ${result.reason ?? 'unknown'}`,
           );
           reportOnboardingAction('login_redirect_result', {
             source: 'new_user_onboarding',
             result: 'failed',
-            errorCode: result.error ? 'login_redirect_failed' : 'unknown',
+            errorCode: result.reason ?? 'unknown',
           });
           consumeNewUserWelcomeAfterLoginPending();
-          showToast(i18nService.t('welcomeLoginFailed'));
+          showToast(getLoginFailureMessage(result.reason));
           return;
         }
         console.log('[Onboarding] login handoff from new user onboarding succeeded');
@@ -1464,7 +1454,7 @@ const App: React.FC = () => {
       .finally(() => {
         newUserLoginPendingRef.current = false;
       });
-  }, [finishNewUserOnboarding, newUserOnboardingStep, showToast]);
+  }, [finishNewUserOnboarding, newUserOnboardingStep, openNewUserWelcomeTask, showToast]);
 
   const handlePermissionResponse = useCallback(async (result: CoworkPermissionResult) => {
     if (!pendingPermission) return false;

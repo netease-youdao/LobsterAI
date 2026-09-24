@@ -7,6 +7,7 @@ import {
   OneTimeCreditAction,
   type StartupCreditActionResponse,
 } from '@shared/activity/constants';
+import { AuthLoginFailureReason } from '@shared/auth/constants';
 import { OpenClawEnginePhase } from '@shared/openclawEngine/constants';
 import React, {
   useCallback,
@@ -19,7 +20,7 @@ import { useSelector } from 'react-redux';
 
 import startupCreditActionArtworkUrl from '../assets/startup-credit-action.png';
 import startupCreditPosterArtworkUrl from '../assets/startup-credit-poster.png';
-import { authService } from '../services/auth';
+import { authService, getLoginFailureMessage } from '../services/auth';
 import { coworkService } from '../services/cowork';
 import { i18nService } from '../services/i18n';
 import { LogReporterAction } from '../services/logReporter';
@@ -725,17 +726,20 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
       showTerminalView(CampaignModalView.StartingLogin);
       try {
         const loginResult = await authService.login();
-        if (!loginResult.success || !loginResult.redirectUrl) {
-          throw new Error(
-            loginResult.error || i18nService.t('startupCreditLoginFailed'),
-          );
+        if (!loginResult.success && loginResult.reason === AuthLoginFailureReason.Cancelled) {
+          clearPendingStartupCreditClaim(localStorage);
+          if (mountedRef.current) setModalView(CampaignModalView.Offer);
+          return;
+        }
+        if (!loginResult.success) {
+          throw new Error(getLoginFailureMessage(loginResult.reason));
         }
         reportStartupCreditCampaignEvent(
           LogReporterAction.ActivityLoginRedirect,
           current.descriptor,
           {
             source: offerSourceRef.current,
-            redirect_url: loginResult.redirectUrl,
+            login_transport: 'embedded',
             return_to: 'netease_user_bonus_activity',
             reason: 'claim_requires_login',
           },

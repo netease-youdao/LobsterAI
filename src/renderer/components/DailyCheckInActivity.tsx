@@ -6,6 +6,7 @@ import {
   ActivityServerErrorCode,
   type DailyCheckInDescriptor,
 } from '@shared/activity/constants';
+import { AuthLoginFailureReason } from '@shared/auth/constants';
 import React, {
   useCallback,
   useEffect,
@@ -16,7 +17,7 @@ import { createPortal } from 'react-dom';
 import { useSelector } from 'react-redux';
 
 import dailyCheckInGiftUrl from '../assets/daily-check-in-gift.png';
-import { authService } from '../services/auth';
+import { authService, getLoginFailureMessage } from '../services/auth';
 import { i18nService } from '../services/i18n';
 import type { RootState } from '../store';
 import { ACCOUNT_MENU_COMPACT_CTA_CLASS_NAME } from './accountMenuStyles';
@@ -105,7 +106,8 @@ export const DailyCheckInLoginModal: React.FC<DailyCheckInLoginModalProps> = ({
     try {
       const result = await authService.login();
       if (!result.success) {
-        throw new Error(result.error || i18nService.t('dailyCheckInLoginFailed'));
+        if (result.reason === AuthLoginFailureReason.Cancelled) return;
+        throw new Error(getLoginFailureMessage(result.reason));
       }
       onClose();
     } catch (error) {

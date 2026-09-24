@@ -1,4 +1,5 @@
 import {
+  AuthLoginFailureReason,
   type AuthSessionChangedEvent,
   AuthSessionChangeReason,
   AuthSessionStatus,
@@ -224,12 +225,13 @@ describe('auth-scoped renderer requests', () => {
     }, personalA)).toBe(false);
   });
 
-  test('clears the previous renderer account when a committed exchange lacks a stable owner', async () => {
+  test('clears the previous renderer account when a completed login lacks a stable owner', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.stubGlobal('window', {
       electron: {
         auth: {
-          exchange: vi.fn().mockResolvedValue({
+          login: vi.fn().mockResolvedValue({
             success: true,
             user: {
               yid: 'enterprise-user',
@@ -254,7 +256,10 @@ describe('auth-scoped renderer requests', () => {
       ownerAccountKey: 'personal:previous-user',
     }));
 
-    await expect(authService.handleCallback('auth-code')).resolves.toBe(false);
+    await expect(authService.login()).resolves.toEqual({
+      success: false,
+      reason: AuthLoginFailureReason.ExchangeFailed,
+    });
     expect(store.getState().auth).toMatchObject({
       isLoggedIn: false,
       ownerAccountKey: null,
@@ -264,73 +269,106 @@ describe('auth-scoped renderer requests', () => {
   });
 });
 
-describe('login diagnostics', () => {
-  test('persists renderer lifecycle logs without including the login URL', async () => {
+describe('embedded login', () => {
+  test('applies the account delivered by the login window and refreshes its quota', async () => {
     const fromRenderer = vi.fn();
-    const loginResult = {
-      success: true,
-      redirectUrl: 'https://lobsterai.youdao.com/portal#/login?source=electron',
-    };
-    const login = vi.fn().mockResolvedValue(loginResult);
+    const getQuota = vi.fn().mockResolvedValue({ success: false });
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'debug').mockImplementation(() => {});
     vi.stubGlobal('window', {
       electron: {
-        api: {
-          fetch: vi.fn().mockResolvedValue({
-            ok: true,
-            data: { data: { value: 'https://lobsterai.youdao.com/portal#/login' } },
+        auth: {
+          login: vi.fn().mockResolvedValue({
+            success: true,
+            user: { yid: 'tester', nickname: 'Tester', avatarUrl: null },
+            quota: null,
+            enterpriseContext: null,
           }),
+          getModels: vi.fn().mockResolvedValue({ success: true, models: [] }),
+          getQuota,
         },
-        auth: { login },
         log: { fromRenderer },
       },
     });
 
-    await expect(authService.login()).resolves.toEqual(loginResult);
+    await expect(authService.login()).resolves.toEqual({ success: true });
 
-    expect(login).toHaveBeenCalledWith('https://lobsterai.youdao.com/portal#/login');
+    expect(store.getState().auth).toMatchObject({
+      isLoggedIn: true,
+      ownerAccountKey: 'personal:tester',
+    });
     expect(fromRenderer).toHaveBeenCalledWith(
       'info',
       'AuthService',
-      expect.stringMatching(/^login attempt \d+ started$/),
+      expect.stringMatching(/^login attempt \d+ completed$/),
     );
-    expect(fromRenderer).toHaveBeenCalledWith(
-      'info',
-      'AuthService',
-      expect.stringMatching(/^login attempt \d+ handed off to the system browser$/),
-    );
-    expect(fromRenderer.mock.calls.flat().join(' ')).not.toContain('lobsterai.youdao.com');
+    await vi.waitFor(() => expect(getQuota).toHaveBeenCalledOnce());
   });
 
-  test('returns the IPC failure result without throwing and records a warning', async () => {
+  test('returns why the login ended without throwing and records a warning', async () => {
     const fromRenderer = vi.fn();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(console, 'debug').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.stubGlobal('window', {
       electron: {
-        api: {
-          fetch: vi.fn().mockResolvedValue({
-            ok: true,
-            data: { data: { value: 'https://lobsterai.youdao.com/portal#/login' } },
-          }),
+        auth: {
+          login: vi.fn().mockResolvedValue({ success: false, reason: AuthLoginFailureReason.Timeout }),
         },
-        auth: { login: vi.fn().mockResolvedValue({ success: false, error: 'open failed' }) },
         log: { fromRenderer },
       },
     });
 
     await expect(authService.login()).resolves.toEqual({
       success: false,
-      error: 'open failed',
+      reason: AuthLoginFailureReason.Timeout,
     });
-
     expect(fromRenderer).toHaveBeenCalledWith(
       'warn',
       'AuthService',
-      expect.stringMatching(/^login attempt \d+ could not open the system browser$/),
+      expect.stringMatching(/^login attempt \d+ ended: timeout$/),
     );
+    expect(store.getState().auth.isLoggedIn).toBe(false);
+  });
+
+  test('logs a cancelled login without a warning', async () => {
+    const fromRenderer = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.stubGlobal('window', {
+      electron: {
+        auth: {
+          login: vi.fn().mockResolvedValue({ success: false, reason: AuthLoginFailureReason.Cancelled }),
+        },
+        log: { fromRenderer },
+      },
+    });
+
+    await expect(authService.login()).resolves.toEqual({
+      success: false,
+      reason: AuthLoginFailureReason.Cancelled,
+    });
+    expect(fromRenderer).toHaveBeenCalledWith(
+      'info',
+      'AuthService',
+      expect.stringMatching(/^login attempt \d+ ended: cancelled$/),
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test('treats a login IPC error as a load failure', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { login: vi.fn().mockRejectedValue(new Error('No handler registered')) },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    await expect(authService.login()).resolves.toEqual({
+      success: false,
+      reason: AuthLoginFailureReason.LoadFailed,
+    });
   });
 });
 

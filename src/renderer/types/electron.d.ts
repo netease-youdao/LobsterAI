@@ -2031,16 +2031,11 @@ interface IElectronAPI {
     ) => Promise<ActivityResult<ActivityActionResponse>>;
   };
   auth: {
-    login: (loginUrl?: string) => Promise<AuthLoginResult>;
-    exchange: (
-      code: string,
-    ) => Promise<{
-      success: boolean;
+    login: () => Promise<AuthLoginResult & {
       user?: import('../store/slices/authSlice').UserProfile;
       quota?: import('../store/slices/authSlice').UserQuota;
       purchaseOffer?: import('../store/slices/authSlice').LowCreditPurchaseOffer | null;
       enterpriseContext?: EnterpriseAccountContext | null;
-      error?: string;
     }>;
     getUser: () => Promise<{
       success: boolean;
@@ -2061,10 +2056,8 @@ interface IElectronAPI {
     logout: () => Promise<{ success: boolean }>;
     refreshToken: () => Promise<{
       success: boolean;
-      accessToken?: string;
       outcome?: AuthRefreshOutcome;
     }>;
-    getAccessToken: () => Promise<string | null>;
     getModels: () => Promise<{
       success: boolean;
       models?: Array<{
@@ -2143,8 +2136,6 @@ interface IElectronAPI {
       success: boolean;
       data?: ClientBannerSnapshotData;
     }>;
-    getPendingCallback: () => Promise<string | null>;
-    onCallback: (callback: (data: { code: string }) => void) => () => void;
     onQuotaChanged: (callback: () => void) => () => void;
     onSessionChanged: (callback: (event: AuthSessionChangedEvent) => void) => () => void;
     onLifecycleEvent: (callback: (event: AuthLifecycleEvent) => void) => () => void;
