@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 
 import { AuthLoginFailureReason } from '../../../shared/auth/constants';
 import { EmbeddedLoginService } from './embeddedLoginService';
-import { EmbeddedLoginError, type EmbeddedLoginCompletion } from './embeddedLoginWindow';
+import { type EmbeddedLoginCompletion,EmbeddedLoginError } from './embeddedLoginWindow';
 import type { NavigationPolicy } from './loginUrlPolicy';
 
 const CODE = '0f8fad5b-d9cb-469f-a165-70867728950e';
