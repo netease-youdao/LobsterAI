@@ -9313,6 +9313,9 @@ if (!gotTheLock) {
           modelName: model.modelName,
           apiFormat: model.apiFormat,
           supportsImage: model.supportsImage,
+          // Thinking capability flows into dsh's reasoning-effort control.
+          supportsThinking: model.supportsThinking,
+          thinkingConfig: model.thinkingConfig,
           contextWindow: model.contextWindow,
           maxTokens: model.maxTokens,
         })),

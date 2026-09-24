@@ -13,8 +13,15 @@
 //     that disappeared is the one exception, repaired instead of left broken.
 // Nothing else in the home is touched: no composition patch layer, so every
 // shipped provider, tool, and plugin stays exactly as dsh ships it.
-// Reasoning-effort/thinking metadata is deliberately not declared yet; wire
-// dialects differ per upstream and over-claiming breaks requests mid-turn.
+// Reasoning-effort/thinking metadata is declared only when the source model
+// actually supports it, so dsh's thinking-strength control shows up for
+// LobsterAI-managed models without over-claiming: a model whose provider
+// declared no thinking capability keeps the pre-existing behavior (no effort
+// control, provider default thinking). For supporting models the route carries
+// `compat.supportsReasoningEffort` plus per-model `reasoningEfforts` in dsh's
+// own schema; wire dialects still vary per upstream, which is why the values
+// come from LobsterAI-side metadata (thinkingLevelMap) rather than a blanket
+// declaration.
 // No Electron imports; callers pass DSH_HOME explicitly.
 
 import * as fs from 'fs';
@@ -22,6 +29,7 @@ import * as yaml from 'js-yaml';
 import * as path from 'path';
 
 import { ApiFormat, ProviderRegistry } from '../../shared/providers/constants';
+import { type ModelThinkingConfig } from '../../shared/providers/modelThinking';
 import type { ProviderConfig } from '../../shared/providers/types';
 
 export const DSH_MANAGED_PROVIDER_PREFIX = 'lobsterai-';
@@ -51,12 +59,22 @@ export interface DshProviderRoute {
   apiKeyEnv: string;
   api: 'openai-completions' | 'anthropic-messages';
   baseURL: string;
+  /** Reasoning-effort switches, declared only when a model supports thinking. */
+  compat?: {
+    thinkingFormat?: string;
+    supportsReasoningEffort?: boolean;
+  };
   models: Array<{
     id: string;
     name: string;
     contextWindow?: number;
     maxTokens?: number;
     input?: Array<'text' | 'image'>;
+    /**
+     * dsh's per-model effort-to-wire map ({@link https://github.com/deepseek-ai/deepseek-harness}).
+     * Absent when the model has no declared thinking capability.
+     */
+    reasoningEfforts?: Record<string, string | null>;
   }>;
 }
 
@@ -73,6 +91,9 @@ export interface DshPlanProviderInput {
     supportsImage?: boolean;
     contextWindow?: number;
     maxTokens?: number;
+    /** Thinking capability from server model metadata; drives dsh's effort control. */
+    supportsThinking?: boolean;
+    thinkingConfig?: ModelThinkingConfig;
   }>;
 }
 
@@ -106,6 +127,100 @@ export function mapApiFormatToDshProtocol(apiFormat: string | undefined): DshPro
   // compatible endpoints; chat-completions is the universally supported wire.
   if (apiFormat === ApiFormat.OpenAI || apiFormat === undefined) return 'openai-completions';
   return null;
+}
+
+// dsh's reasoning-effort levels for an OpenAI-compatible endpoint. The wire
+// value equals the level name (OpenAI's `reasoning_effort` vocabulary), and
+// `off` maps to null because closing thinking is the parameter's absence.
+const DSH_OPENAI_DEFAULT_REASONING_EFFORTS: Record<string, string | null> = {
+  off: null,
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  max: 'max',
+};
+
+const DSH_THINKING_OFF = 'off';
+
+// A route that declares a reasoning-effort control must also advertise the
+// capability, or dsh's dispatch never sends the wire value. Only
+// openai-completions takes these compat switches (see pi-ai's compat gates);
+// anthropic-messages has no reasoning-effort field, so its routes stay bare.
+function renderRouteThinkingCompat(
+  api: DshProviderRoute['api'],
+  models: DshProviderRoute['models'],
+): DshProviderRoute['compat'] | undefined {
+  if (api !== 'openai-completions') return undefined;
+  const anyEfforts = models.some((model) => model.reasoningEfforts !== undefined);
+  return anyEfforts ? { thinkingFormat: 'openai', supportsReasoningEffort: true } : undefined;
+}
+
+/**
+ * Renders dsh's `reasoningEfforts` from LobsterAI-side thinking metadata.
+ *
+ * A declared LobsterAI thinking level maps to the same level name on the wire
+ * (LobsterAI's OpenClaw sync uses the level name as the wire value), and a
+ * LobsterAI level pinned to null (unsupported) is omitted so dsh never offers
+ * a control it cannot honor. `off` is written as null: dsh's convention where
+ * closing thinking means not sending the parameter at all.
+ *
+ * @returns the effort map, or undefined when the model has no thinking level
+ *   (nothing to declare — dsh falls back to provider default thinking).
+ */
+function renderDshReasoningEfforts(
+  thinkingLevelMap: Record<string, string | null> | undefined,
+): Record<string, string | null> | undefined {
+  if (!thinkingLevelMap) return undefined;
+  const efforts: Record<string, string | null> = {};
+  let hasThinkingLevel = false;
+  for (const [level, wire] of Object.entries(thinkingLevelMap)) {
+    if (wire === null) continue; // pinned unsupported in LobsterAI
+    if (level === DSH_THINKING_OFF) {
+      efforts.off = null;
+      continue;
+    }
+    efforts[level] = wire;
+    hasThinkingLevel = true;
+  }
+  return hasThinkingLevel ? efforts : undefined;
+}
+
+/** Extracts a thinking-level map the user may have declared per model. */
+function providerModelThinkingLevelMap(model: NonNullable<ProviderConfig['models']>[number]): Record<string, string | null> | undefined {
+  if (model.supportsThinking !== true) return undefined;
+  const raw = (model.customParams as Record<string, unknown> | undefined)?.['thinkingLevelMap'];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const map: Record<string, string | null> = {};
+  for (const [level, wire] of Object.entries(raw as Record<string, unknown>)) {
+    if (wire === null || typeof wire === 'string') {
+      map[level] = wire as string | null;
+    }
+  }
+  return map;
+}
+
+/**
+ * dsh's effort map for one provider model, or undefined when the model has no
+ * declared thinking capability. Models flagged `supportsThinking` without an
+ * explicit level map get the OpenAI-compatible default set, matching how dsh
+ * users hand-write the same routes; everything else stays as it was (no
+ * control, provider default thinking).
+ */
+function renderProviderModelReasoningEfforts(model: NonNullable<ProviderConfig['models']>[number]): Record<string, string | null> | undefined {
+  const explicit = renderDshReasoningEfforts(providerModelThinkingLevelMap(model));
+  if (explicit) return explicit;
+  return model.supportsThinking === true ? DSH_OPENAI_DEFAULT_REASONING_EFFORTS : undefined;
+}
+
+/** dsh's effort map for one plan (token-proxy) model, from server metadata. */
+function renderPlanModelReasoningEfforts(model: DshPlanProviderInput['models'][number]): Record<string, string | null> | undefined {
+  if (model.supportsThinking !== true) return undefined;
+  if (!model.thinkingConfig || model.thinkingConfig.options.length === 0) return undefined;
+  const map: Record<string, string | null> = {};
+  for (const option of model.thinkingConfig.options) {
+    map[option.openclawLevel] = option.openclawLevel;
+  }
+  return renderDshReasoningEfforts(map);
 }
 
 export function renderDshManagedSettings(
@@ -155,6 +270,20 @@ export function renderDshManagedSettings(
     const routeId = sanitizeDshRouteId(providerId);
     const apiKeyEnv = deriveDshApiKeyEnvRef(routeId);
     envVars[apiKeyEnv] = apiKey;
+    const renderedModels = models.map((model) => ({
+      id: model.id,
+      name: model.name?.trim() || model.id,
+      ...(typeof model.contextWindow === 'number' && model.contextWindow > 0
+        ? { contextWindow: Math.floor(model.contextWindow) }
+        : {}),
+      ...(typeof model.maxTokens === 'number' && model.maxTokens > 0 ? { maxTokens: Math.floor(model.maxTokens) } : {}),
+      ...(model.supportsImage ? { input: ['text', 'image'] as Array<'text' | 'image'> } : {}),
+      // Reasoning effort is an OpenAI-completions wire concept; anthropic
+      // routes keep bare models (dsh has no reasoning-effort field there).
+      ...(api === 'openai-completions' && renderProviderModelReasoningEfforts(model)
+        ? { reasoningEfforts: renderProviderModelReasoningEfforts(model) }
+        : {}),
+    }));
     routes[routeId] = {
       // Prefer the canonical label ("DeepSeek") over the raw config key
       // ("deepseek"), and mark the entry as LobsterAI-managed.
@@ -164,15 +293,10 @@ export function renderDshManagedSettings(
       apiKeyEnv,
       api,
       baseURL,
-      models: models.map((model) => ({
-        id: model.id,
-        name: model.name?.trim() || model.id,
-        ...(typeof model.contextWindow === 'number' && model.contextWindow > 0
-          ? { contextWindow: Math.floor(model.contextWindow) }
-          : {}),
-        ...(typeof model.maxTokens === 'number' && model.maxTokens > 0 ? { maxTokens: Math.floor(model.maxTokens) } : {}),
-        ...(model.supportsImage ? { input: ['text', 'image'] as Array<'text' | 'image'> } : {}),
-      })),
+      ...(renderRouteThinkingCompat(api, renderedModels)
+        ? { compat: renderRouteThinkingCompat(api, renderedModels) }
+        : {}),
+      models: renderedModels,
     };
   }
 
@@ -250,20 +374,27 @@ function renderPlanRoutes(
     const apiKeyEnv = deriveDshApiKeyEnvRef(routeId);
     envVars[apiKeyEnv] = DSH_PLAN_API_KEY_PLACEHOLDER;
     const needsProtocolSuffix = protocolCount > 1 && routeId === DSH_PLAN_ANTHROPIC_ROUTE_ID;
+    const renderedModels = protocolModels.map((model) => ({
+      id: model.modelId,
+      name: model.modelName?.trim() || model.modelId,
+      ...(typeof model.contextWindow === 'number' && model.contextWindow > 0
+        ? { contextWindow: Math.floor(model.contextWindow) }
+        : {}),
+      ...(typeof model.maxTokens === 'number' && model.maxTokens > 0 ? { maxTokens: Math.floor(model.maxTokens) } : {}),
+      ...(model.supportsImage ? { input: ['text', 'image'] as Array<'text' | 'image'> } : {}),
+      ...(renderPlanModelReasoningEfforts(model)
+        ? { reasoningEfforts: renderPlanModelReasoningEfforts(model) }
+        : {}),
+    }));
     routes[routeId] = {
       displayName: `${DSH_MANAGED_LABEL_PREFIX}${plan.displayName}${needsProtocolSuffix ? ' (Anthropic)' : ''}`,
       apiKeyEnv,
       api,
       baseURL,
-      models: protocolModels.map((model) => ({
-        id: model.modelId,
-        name: model.modelName?.trim() || model.modelId,
-        ...(typeof model.contextWindow === 'number' && model.contextWindow > 0
-          ? { contextWindow: Math.floor(model.contextWindow) }
-          : {}),
-        ...(typeof model.maxTokens === 'number' && model.maxTokens > 0 ? { maxTokens: Math.floor(model.maxTokens) } : {}),
-        ...(model.supportsImage ? { input: ['text', 'image'] as Array<'text' | 'image'> } : {}),
-      })),
+      ...(renderRouteThinkingCompat(api, renderedModels)
+        ? { compat: renderRouteThinkingCompat(api, renderedModels) }
+        : {}),
+      models: renderedModels,
     };
     emitted.push(routeId);
   }
