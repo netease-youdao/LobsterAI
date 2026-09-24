@@ -29,6 +29,7 @@ import { RootState } from '../store';
 import type { Model } from '../store/slices/modelSlice';
 import { getModelIdentityKey, isSameModelIdentity, setSelectedModel } from '../store/slices/modelSlice';
 import Modal from './common/Modal';
+import { resolvePopoverPlacement } from './cowork/popoverPlacement';
 import ModelThinkingMenu, {
   getModelThinkingLevelLabel,
 } from './modelSelector/ModelThinkingMenu';
@@ -61,8 +62,10 @@ interface ModelSelectorProps {
 }
 
 const DROPDOWN_MAX_HEIGHT = 380; // list max-h-72 plus the tab area and current-model footer
-const DROPDOWN_WIDTH = 300;
-const MODEL_ITEM_HEIGHT = 36; // px-3 py-2 row with a 20px line
+// Wide enough for the longest plan model name plus its tag, thinking level,
+// multiplier and check columns, so names stay readable instead of truncating.
+const DROPDOWN_WIDTH = 360;
+const MODEL_ITEM_HEIGHT = 36; // py-2 row with a 20px line
 const LIST_VERTICAL_PADDING = 8; // scroll container py-1
 const LIST_MAX_HEIGHT = 288; // default cap for the scrollable model list (18rem)
 const LIST_MIN_HEIGHT = MODEL_ITEM_HEIGHT * 3 + LIST_VERTICAL_PADDING; // never collapse below three rows
@@ -79,6 +82,8 @@ const THINKING_MENU_WIDTH = 210;
 // look disconnected, and no overlap that makes the panels look stacked.
 const CASCADE_OVERLAP = 0;
 const MODEL_ICON_CLASS_NAME = 'h-[18px] w-[18px]';
+// Foreground-tinted so the tag stays visible on the gray hover/selected row.
+const MODEL_TAG_CLASS_NAME = 'shrink-0 rounded-md bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] font-medium leading-none text-secondary';
 export const CascadeSide = {
   Left: 'left',
   Right: 'right',
@@ -380,6 +385,28 @@ export function supportsConfigurableModelThinkingProtocol(
     && supportsLobsterAIRequestOptionsV1(model.requestCapabilities);
 }
 
+/** Whether hovering a row opens the detail card (which also shows the full name). */
+export function hasModelHoverDetails(
+  model: Pick<
+    Model,
+    | 'agenticReady'
+    | 'costMultiplier'
+    | 'description'
+    | 'isServerModel'
+    | 'runtimeProfile'
+    | 'supportsImage'
+    | 'supportsThinking'
+    | 'thinkingConfig'
+  >,
+): boolean {
+  return !!model.description
+    || !!model.costMultiplier
+    || !!model.supportsImage
+    || !!model.supportsThinking
+    || !!model.thinkingConfig
+    || isModelAgenticBlocked(model);
+}
+
 const MODEL_ICON_PROVIDER_HINTS: Array<{ pattern: RegExp; providerName: ProviderName | ProviderIconId }> = [
   { pattern: /doubao|豆包/i, providerName: ProviderIconId.Doubao },
   { pattern: /deepseek/i, providerName: ProviderName.DeepSeek },
@@ -409,6 +436,10 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const [isOpen, setIsOpen] = React.useState(false);
   const [resolvedDirection, setResolvedDirection] = React.useState<'up' | 'down'>('down');
   const [portalStyle, setPortalStyle] = React.useState<React.CSSProperties>({});
+  const [inPlacePlacement, setInPlacePlacement] = React.useState(() => ({
+    alignEnd: alignDropdownToTriggerEnd,
+    width: DROPDOWN_WIDTH,
+  }));
   const [listMaxHeight, setListMaxHeight] = React.useState<number>(LIST_MAX_HEIGHT);
   const [activeGroup, setActiveGroup] = React.useState<ModelSelectorGroup>(ModelSelectorGroup.Server);
   const [moreModelsExpanded, setMoreModelsExpanded] = React.useState(false);
@@ -591,6 +622,26 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     setPortalStyle(nextStyle);
   }, [alignDropdownToTriggerEnd]);
 
+  const updateInPlacePlacement = React.useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    // The in-place dropdown is wider than most triggers and is clipped by
+    // overflow ancestors, so flip the anchored edge (or cap the width) rather
+    // than letting its columns get cut off near a container edge.
+    const placement = resolvePopoverPlacement(container, {
+      preferredAlign: alignDropdownToTriggerEnd ? 'right' : 'left',
+      estimatedHeight: DROPDOWN_MAX_HEIGHT,
+      desiredWidth: DROPDOWN_WIDTH,
+    });
+    const next = {
+      alignEnd: placement.alignSide === 'right',
+      width: placement.maxWidth ?? DROPDOWN_WIDTH,
+    };
+    setInPlacePlacement(current => (
+      current.alignEnd === next.alignEnd && current.width === next.width ? current : next
+    ));
+  }, [alignDropdownToTriggerEnd]);
+
   React.useEffect(() => {
     if (!isOpen) return;
 
@@ -598,7 +649,11 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const handlePositionUpdate = (event?: Event) => {
       // Scrolls inside the dropdown itself (e.g. the model list) do not move the trigger.
       if (event && event.target instanceof Node && dropdownRef.current?.contains(event.target)) return;
-      if (portal) updatePortalPosition(resolvedDirection);
+      if (portal) {
+        updatePortalPosition(resolvedDirection);
+      } else {
+        updateInPlacePlacement();
+      }
       setListMaxHeight(resolveListMaxHeight(resolvedDirection));
     };
     window.addEventListener('resize', handlePositionUpdate);
@@ -608,7 +663,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       window.removeEventListener('resize', handlePositionUpdate);
       window.removeEventListener('scroll', handlePositionUpdate, true);
     };
-  }, [isOpen, portal, resolvedDirection, updatePortalPosition, resolveListMaxHeight]);
+  }, [isOpen, portal, resolvedDirection, updatePortalPosition, updateInPlacePlacement, resolveListMaxHeight]);
 
   React.useLayoutEffect(() => {
     if (!isOpen || !selectedModelKey) return;
@@ -656,6 +711,8 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       setListMaxHeight(resolveListMaxHeight(nextDirection));
       if (portal) {
         updatePortalPosition(nextDirection);
+      } else {
+        updateInPlacePlacement();
       }
       const preferredGroup = getPreferredGroup();
       setActiveGroup(preferredGroup);
@@ -843,7 +900,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const dropdownPositionClass = resolvedDirection === 'up'
     ? 'bottom-full mb-1'
     : 'top-full mt-1';
-  const dropdownAlignmentClass = alignDropdownToTriggerEnd ? 'right-0' : 'left-0';
+  const dropdownAlignmentClass = inPlacePlacement.alignEnd ? 'right-0' : 'left-0';
 
   const isSelected = (model: Model): boolean => {
     if (!selectedModel) return false;
@@ -866,14 +923,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     const itemRect = target.getBoundingClientRect();
     hoverTimerRef.current = setTimeout(() => {
-      if (
-        !model.description
-        && !model.costMultiplier
-        && !model.supportsImage
-        && !model.supportsThinking
-        && !model.thinkingConfig
-        && !isModelAgenticBlocked(model)
-      ) {
+      if (!hasModelHoverDetails(model)) {
         setHoveredModel(null);
         return;
       }
@@ -949,6 +999,14 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const blocked = restricted || agenticBlocked;
     const hasThinkingProtocol = supportsConfigurableModelThinkingProtocol(model);
 
+    const thinkingLevelLabel = hasThinkingProtocol && model.thinkingConfig
+      ? getModelThinkingLevelLabel(resolveThinkingLevel(model) ?? model.thinkingConfig.defaultLevel)
+      : null;
+    const showCostMultiplier = model.costMultiplier != null && model.costMultiplier > 0;
+
+    // Layout: the name (with its tags) takes all remaining width; the thinking
+    // level and multiplier sit in a right-aligned column next to a fixed status
+    // slot, so every row lines up and only extreme names ever truncate.
     return (
       <button
         ref={selected ? selectedItemRef : undefined}
@@ -961,48 +1019,52 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         onBlur={handleModelHoverEnd}
         aria-disabled={blocked}
         aria-haspopup={thinkingSelectionEnabled && hasThinkingProtocol ? 'menu' : undefined}
-        className={`w-full px-3 py-2 text-left dark:text-claude-darkText text-claude-text flex items-center gap-2.5 transition-colors ${
+        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors ${
           blocked
-            ? 'cursor-pointer opacity-60 dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'
+            ? 'cursor-pointer opacity-60 hover:bg-surface-raised'
             : selected
-              ? 'bg-primary/10 dark:bg-primary/15'
-              : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'
+              ? 'bg-surface-raised'
+              : 'hover:bg-surface-raised'
         }`}
       >
         <span className="flex h-5 w-5 shrink-0 items-center justify-center text-secondary">
           {renderProviderIcon(model)}
         </span>
-        <span className={`min-w-0 truncate text-[13px] leading-5 ${selected ? 'font-medium' : 'font-normal'}`}>
-          {model.name}
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          <span
+            className={`min-w-0 truncate text-[13px] leading-5 ${selected ? 'font-medium' : 'font-normal'}`}
+            title={hasModelHoverDetails(model) ? undefined : model.name}
+          >
+            {model.name}
+          </span>
+          {model.supportsImage && (
+            <span className={MODEL_TAG_CLASS_NAME}>
+              {i18nService.t('modelSupportsImageInputBadge')}
+            </span>
+          )}
+          {agenticBlocked && (
+            <span className="flex shrink-0 items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-amber-700 dark:text-amber-300">
+              <ClockIcon className="h-3 w-3" />
+              {i18nService.t('modelSelectorAgenticVerifyingBadge')}
+            </span>
+          )}
         </span>
-        {hasThinkingProtocol && model.thinkingConfig && (
-          <span className="shrink-0 text-[11px] font-medium text-secondary whitespace-nowrap">
-            {getModelThinkingLevelLabel(resolveThinkingLevel(model) ?? model.thinkingConfig.defaultLevel)}
+        {(thinkingLevelLabel || showCostMultiplier) && (
+          <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-4 text-secondary">
+            {thinkingLevelLabel && <span className="font-medium">{thinkingLevelLabel}</span>}
+            {showCostMultiplier && (
+              <span className="min-w-[34px] text-right tabular-nums">x{model.costMultiplier}</span>
+            )}
           </span>
         )}
-        {model.costMultiplier != null && model.costMultiplier > 0 && (
-          <span className="shrink-0 text-[11px] text-secondary whitespace-nowrap">
-            x{model.costMultiplier}
-          </span>
-        )}
-        <span className="flex-1" />
-        {model.supportsImage && (
-          <span className="shrink-0 rounded-md bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium leading-none text-secondary">
-            {i18nService.t('modelSupportsImageInputBadge')}
-          </span>
-        )}
-        {agenticBlocked && (
-          <span className="flex shrink-0 items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-amber-700 dark:text-amber-300">
-            <ClockIcon className="h-3 w-3" />
-            {i18nService.t('modelSelectorAgenticVerifyingBadge')}
-          </span>
-        )}
-        {restricted && !agenticBlocked && (
-          <LockClosedIcon className="h-3.5 w-3.5 shrink-0 text-secondary" />
-        )}
-        {selected && !blocked && (
-          <CheckIcon className="h-4 w-4 shrink-0 text-primary" strokeWidth={2.5} />
-        )}
+        <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+          {restricted && !agenticBlocked && (
+            <LockClosedIcon className="h-3.5 w-3.5 text-secondary" />
+          )}
+          {selected && !blocked && (
+            <CheckIcon className="h-4 w-4 text-primary" strokeWidth={2.5} />
+          )}
+        </span>
       </button>
     );
   };
@@ -1033,7 +1095,9 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
           type="button"
           aria-expanded={moreModelsExpanded}
           onClick={handleToggle}
-          className="mx-2 flex w-[calc(100%-1rem)] items-center justify-between rounded-lg bg-surface-raised px-3 py-2 text-left text-[13px] font-semibold leading-5 text-foreground transition-colors hover:bg-surface-hover"
+          // A quiet expander rather than a filled bar, so it never reads as the
+          // (gray) selected row sitting right above it.
+          className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-[12px] font-medium leading-5 text-secondary transition-colors hover:bg-surface-raised hover:text-foreground"
         >
           <span>{i18nService.t('modelSelectorMoreModels')}</span>
           <ChevronDownIcon
@@ -1213,8 +1277,8 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const dropdown = isOpen ? (
     <div
       ref={dropdownRef}
-      style={portal ? portalStyle : undefined}
-      className={`${portal ? '' : `absolute ${dropdownPositionClass} ${dropdownAlignmentClass}`} w-[300px] bg-surface rounded-xl popover-enter shadow-popover z-50 border-border border overflow-hidden`}
+      style={portal ? portalStyle : { width: inPlacePlacement.width }}
+      className={`${portal ? '' : `absolute ${dropdownPositionClass} ${dropdownAlignmentClass}`} bg-surface rounded-xl popover-enter shadow-popover z-50 border-border border overflow-hidden`}
     >
       {shouldShowGroupTabs && renderGroupTabs()}
       <div
@@ -1223,16 +1287,14 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
           maxHeight: listMaxHeight,
           minHeight: stableListMinHeight !== undefined ? Math.min(stableListMinHeight, listMaxHeight) : undefined,
         }}
-        className="model-selector-scroll overflow-y-auto py-1"
+        className="model-selector-scroll overflow-y-auto px-1.5 py-1"
       >
         {defaultLabel && (
           <button
             type="button"
             onClick={() => handleModelSelect(null)}
-            className={`w-full px-3 py-2 text-left dark:text-claude-darkText text-claude-text flex items-center justify-between gap-2 transition-colors ${
-              !selectedModel
-                ? 'bg-primary/10 dark:bg-primary/15'
-                : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'
+            className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors ${
+              !selectedModel ? 'bg-surface-raised' : 'hover:bg-surface-raised'
             }`}
           >
             <span className={`truncate text-[13px] leading-5 ${!selectedModel ? 'font-medium' : 'font-normal'}`}>{defaultLabel}</span>

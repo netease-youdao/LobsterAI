@@ -2170,14 +2170,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     ? 'relative rounded-2xl border border-border bg-surface shadow-subtle'
     : isLarge
     ? useHomeContextLayout
-      ? 'relative rounded-2xl'
-      : `relative rounded-2xl border border-border bg-surface ${showReadOnlyContext ? '' : 'shadow-card'}`
+      ? 'relative rounded-3xl'
+      : 'relative rounded-3xl border border-border bg-surface shadow-composer'
     : 'relative flex items-end gap-2 p-3 rounded-xl border border-border bg-surface';
 
   const textareaClass = isCompact
-    ? `w-full resize-none bg-transparent px-4 pb-1.5 text-sm leading-[var(--lobster-leading-sm)] text-foreground placeholder:dark:text-foregroundSecondary/60 placeholder:text-secondary/60 focus:outline-none min-h-[${minHeight}px] max-h-[${maxHeight}px] ${hasActiveContext ? 'pt-1.5' : 'pt-2'}`
+    ? `w-full resize-none bg-transparent px-4 pb-1.5 text-sm leading-[var(--lobster-leading-sm)] text-foreground placeholder:dark:text-foregroundSecondary/60 placeholder:text-secondary/80 focus:outline-none min-h-[${minHeight}px] max-h-[${maxHeight}px] ${hasActiveContext ? 'pt-1.5' : 'pt-2'}`
     : isLarge
-    ? `w-full resize-none bg-transparent px-4 pb-2 text-foreground placeholder:dark:text-foregroundSecondary/60 placeholder:text-secondary/60 focus:outline-none min-h-[${minHeight}px] max-h-[${maxHeight}px] ${
+    ? `w-full resize-none bg-transparent px-4 pb-2 text-foreground placeholder:dark:text-foregroundSecondary/60 placeholder:text-secondary/80 focus:outline-none min-h-[${minHeight}px] max-h-[${maxHeight}px] ${
       useHomeContextLayout
         ? `${hasActiveContext ? 'pt-2' : 'pt-3'} text-sm leading-[var(--lobster-leading-prompt)]`
         : `${hasActiveContext ? 'pt-2' : 'pt-2.5'} text-[length:var(--lobster-text-promptLarge)] leading-[var(--lobster-leading-promptLarge)]`
@@ -3793,7 +3793,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             <>
               <div
                 data-onboarding-target="home-prompt"
-                className="relative z-10 rounded-2xl border border-border bg-surface shadow-card transition-[border-color,box-shadow] duration-200 focus-within:border-primary/35 focus-within:shadow-elevated"
+                className="relative z-10 rounded-3xl border border-border bg-surface shadow-composer transition-[border-color,box-shadow] duration-200 focus-within:border-primary/35 focus-within:shadow-elevated"
               >
                 {largeAttachmentPreview}
                 {selectedTextSnippetPreview}
@@ -3835,7 +3835,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   </div>
                 </div>
               </div>
-              <div className="-mt-2 flex min-h-10 items-center gap-1 rounded-b-2xl bg-black/[0.035] px-4 pb-2 pt-3.5 dark:bg-white/[0.05]">
+              <div className="-mt-6 flex min-h-10 items-center gap-1 rounded-b-3xl bg-black/[0.035] px-4 pb-2 pt-[30px] dark:bg-white/[0.05]">
                 {showFolderSelector && (
                   <div className="relative min-w-0 shrink">
                     <button

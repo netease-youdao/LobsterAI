@@ -266,15 +266,15 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
 
   return (
     <div
-      className={`group relative -ml-[6px] flex w-[calc(100%+12px)] items-center gap-2 rounded-md ${
-        isActivityRow ? 'min-h-[48px] py-1.5' : 'h-[30px]'
+      className={`group relative -ml-[6px] flex w-[calc(100%+12px)] items-center gap-2 rounded-[18px] ${
+        isActivityRow ? 'min-h-[48px] py-1.5' : 'h-9'
       } ${
-        isBatchMode ? 'pl-4' : isActivityRow ? 'pl-3.5' : 'pl-[38px]'
-      } pr-2.5 text-sm font-normal transition-colors ${
+        isBatchMode ? 'pl-2' : isActivityRow ? 'pl-1.5' : 'pl-9'
+      } pr-2.5 text-[length:var(--lobster-text-sidebarCompact)] font-normal transition-colors ${
         isSelectionDisabled
           ? 'cursor-default text-foreground/30'
           : task.isSelected && !hasActiveSubagent
-          ? 'cursor-pointer bg-black/[0.06] font-medium text-foreground dark:bg-white/[0.07]'
+          ? 'cursor-pointer bg-black/[0.05] text-foreground dark:bg-white/[0.07]'
           : 'cursor-pointer text-foreground hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
       }`}
       onClick={handleRowClick}
@@ -297,7 +297,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
             event.currentTarget.blur();
             void onTogglePin(nextPinned);
           }}
-          className={`absolute left-[13px] top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-foreground transition-opacity hover:opacity-[0.46] focus:outline-none ${
+          className={`absolute left-[7px] top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-foreground transition-opacity hover:opacity-[0.46] focus:outline-none ${
             suppressPinHover
               ? 'pointer-events-none opacity-0'
               : task.pinned
@@ -339,7 +339,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
               handleRenameCancel();
             }
           }}
-          className="min-w-0 flex-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-sm font-normal text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          className="min-w-0 flex-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
         />
       ) : (
         <>

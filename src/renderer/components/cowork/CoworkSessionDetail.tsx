@@ -6057,7 +6057,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       {/* Header — spans full width */}
       <div
         data-skin-session-titlebar="true"
-        className={`draggable relative z-30 flex h-12 shrink-0 items-center justify-between overflow-visible border-b border-border bg-background ${
+        className={`draggable relative z-30 flex h-12 shrink-0 items-center justify-between overflow-visible bg-background ${
+          isArtifactPanelVisible ? 'border-b border-border' : ''
+        } ${
           isArtifactPanelExpanded ? 'pl-0 pr-4' : 'px-4'
         }`}
       >

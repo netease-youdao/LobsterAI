@@ -92,10 +92,18 @@ describe('WindowsAppTitleBar', () => {
 
     expect(html.match(/w-\[46px\]/g)).toHaveLength(3);
     expect(html.match(/h-3 w-3/g)).toHaveLength(3);
-    expect(html.match(/hover:bg-surface/g)).toHaveLength(3);
+    expect(html.match(/hover:bg-black\/\[0\.05\]/g)).toHaveLength(2);
     expect(html).toContain('aria-label="Minimize"');
     expect(html).toContain('aria-label="Maximize"');
     expect(html).toContain('aria-label="Close"');
-    expect(html).toContain('bg-surface-raised pl-3');
+    expect(html).toContain('bg-background pl-3');
+  });
+
+  test('paints the strip above the sidebar only while the sidebar column is shown', () => {
+    const withSidebar = renderTitleBar('win32', { sidebarColumnVisible: true, sidebarWidth: 260 });
+    expect(withSidebar).toContain('var(--lobster-surface-raised) 260px, transparent 260px');
+
+    const withoutSidebar = renderTitleBar('win32', { sidebarColumnVisible: false, sidebarWidth: 260 });
+    expect(withoutSidebar).not.toContain('--lobster-surface-raised');
   });
 });
