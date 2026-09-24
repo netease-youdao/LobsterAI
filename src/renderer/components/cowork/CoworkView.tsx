@@ -952,7 +952,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                   {i18nService.t(resolveHomeGreetingKey())}
                 </h2>
                 <p
-                  className="mt-2 text-[length:var(--lobster-text-promptLarge)] font-normal leading-[var(--lobster-leading-promptLarge)] text-secondary animate-fade-in-up"
+                  className="mt-1.5 text-sm font-normal leading-[var(--lobster-leading-sm)] text-secondary animate-fade-in-up"
                   style={{ animationDelay: '120ms', animationFillMode: 'both' }}
                 >
                   {i18nService.t('coworkHomeTagline')}
@@ -961,7 +961,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
 
               {/* Prompt Input Area - Large version with folder selector */}
               <div
-                className="relative z-30 mt-9 w-full max-w-3xl animate-fade-in-up"
+                className="relative z-30 mt-8 w-full max-w-3xl animate-fade-in-up"
                 style={{ animationDelay: '180ms', animationFillMode: 'both' }}
               >
                 <CoworkPromptInput

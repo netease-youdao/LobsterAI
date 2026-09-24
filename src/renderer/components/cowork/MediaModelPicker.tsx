@@ -8,7 +8,7 @@ import { EnterpriseAccountMode } from '@shared/enterpriseAccount/constants';
 import { canonicalizeMediaModelId, GPT_IMAGE_2_MODEL_ID, mediaModelDisplayName } from '@shared/mediaModelAliases';
 import { ProviderName } from '@shared/providers';
 import Lottie from 'lottie-react';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -27,6 +27,7 @@ import { setMediaModels, setMediaSelection } from '../../store/slices/coworkSlic
 import type { MediaGenerationMode, MediaModel } from '../../types/mediaGeneration';
 import MagicIcon from '../icons/MagicIcon';
 import mediaGenAnimation from '../icons/MediaGenIcon.json';
+import { resolvePopoverPlacement } from './popoverPlacement';
 
 interface SavedMediaSelection {
   image?: { modelId: string; modelName: string };
@@ -34,6 +35,11 @@ interface SavedMediaSelection {
 }
 
 const MEDIA_SELECTION_KV_KEY = 'media_selection';
+// The model list needs room for the longest name next to a price such as
+// "x30-60 积分/张输出图"; the login/subscribe prompt cards keep a compact width.
+const MEDIA_MODEL_LIST_PANEL_WIDTH = 400;
+const MEDIA_PROMPT_PANEL_WIDTH = 240;
+const MEDIA_PANEL_ESTIMATED_HEIGHT = 380;
 const EMPTY_MEDIA_MODELS: { image: MediaModel[]; video: MediaModel[] } = {
   image: [],
   video: [],
@@ -677,6 +683,13 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     enterpriseQuotaAvailable: enterpriseContext?.quotaStatus.available,
   });
   const canUseMediaGeneration = mediaAccess.allowed;
+  const showsModelList = isLoggedIn && canUseMediaGeneration;
+  const desiredPanelWidth = showsModelList ? MEDIA_MODEL_LIST_PANEL_WIDTH : MEDIA_PROMPT_PANEL_WIDTH;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [panelPlacement, setPanelPlacement] = useState(() => ({
+    alignEnd: false,
+    width: desiredPanelWidth,
+  }));
 
   const cachedMediaModels = useSelector((state: RootState) => state.cowork.mediaModels);
   const mediaModelsOwnerAccountKey = useSelector(
@@ -804,6 +817,31 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
       fetchModels();
     }
   }, [isOpen, canUseMediaGeneration, fetchModels]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    // The panel grows rightward from the trigger; flip it (or cap its width)
+    // when a clipping ancestor such as a narrow chat pane cannot fit it.
+    const updatePlacement = () => {
+      const container = containerRef.current;
+      if (!container) return;
+      const placement = resolvePopoverPlacement(container, {
+        preferredAlign: 'left',
+        estimatedHeight: MEDIA_PANEL_ESTIMATED_HEIGHT,
+        desiredWidth: desiredPanelWidth,
+      });
+      const next = {
+        alignEnd: placement.alignSide === 'right',
+        width: placement.maxWidth ?? desiredPanelWidth,
+      };
+      setPanelPlacement(current => (
+        current.alignEnd === next.alignEnd && current.width === next.width ? current : next
+      ));
+    };
+    updatePlacement();
+    window.addEventListener('resize', updatePlacement);
+    return () => window.removeEventListener('resize', updatePlacement);
+  }, [isOpen, desiredPanelWidth]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -1296,8 +1334,8 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
           </div>
         </div>
 
-        {/* Model List */}
-        <div className="max-h-72 overflow-y-auto py-1">
+        {/* Model List: max-h-80 fits eight rows, so a typical list needs no scrollbar. */}
+        <div className="max-h-80 overflow-y-auto px-1.5 py-1">
           {isLoading ? (
             <div className="px-2 py-3 text-center text-xs text-secondary">
               {i18nService.t('mediaLoadingModels')}
@@ -1313,8 +1351,10 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
                   || (selection?.mode === 'image' && canonicalizeMediaModelId(selection?.modelId) === model.modelId))
                 : (canonicalizeMediaModelId(selection?.videoModelId) === model.modelId
                   || (selection?.mode === 'video' && canonicalizeMediaModelId(selection?.modelId) === model.modelId));
-              const priceLabel = getModelPriceLabel(model);
-              const discountLabel = getModelDiscountLabel(model);
+              const priceLabel = activeTab === 'image' ? getModelPriceLabel(model) : null;
+              const discountLabel = activeTab === 'image' ? getModelDiscountLabel(model) : null;
+              // Name and discount tag take the remaining width; the price sits in
+              // a right-aligned column next to a fixed check slot.
               return (
                 <button
                   key={model.modelId}
@@ -1322,24 +1362,31 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
                   onClick={() => handleSelect(activeTab, model)}
                   onMouseEnter={(e) => handleModelHover(model, e)}
                   onMouseLeave={handleModelHoverEnd}
-                  className={`flex w-full items-center gap-2.5 rounded px-2 py-2 text-left text-xs transition-colors hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover ${isSelected ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''}`}
+                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors ${
+                    isSelected ? 'bg-surface-raised' : 'hover:bg-surface-raised'
+                  }`}
                 >
-                  <span className="shrink-0 h-4 w-4 [&_svg]:h-4 [&_svg]:w-4">{resolveMediaModelIcon(model)}</span>
-                  <span className="min-w-0 truncate text-[13px] font-normal leading-5">{model.displayName}</span>
-                  {activeTab === 'image' && priceLabel && (
-                    <span className="shrink-0 text-[11px] text-secondary whitespace-nowrap">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center [&_svg]:h-[18px] [&_svg]:w-[18px]">
+                    {resolveMediaModelIcon(model)}
+                  </span>
+                  <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <span className={`min-w-0 truncate text-[13px] leading-5 ${isSelected ? 'font-medium' : 'font-normal'}`}>
+                      {model.displayName}
+                    </span>
+                    {discountLabel && (
+                      <span className="shrink-0 rounded bg-red-500/10 px-1 py-0.5 text-[10px] font-medium leading-3 text-red-500">
+                        {discountLabel}
+                      </span>
+                    )}
+                  </span>
+                  {priceLabel && (
+                    <span className="shrink-0 whitespace-nowrap text-[11px] leading-4 text-secondary tabular-nums">
                       {priceLabel}
                     </span>
                   )}
-                  {activeTab === 'image' && discountLabel && (
-                    <span className="shrink-0 rounded bg-red-500/10 px-1 py-0.5 text-[9px] font-medium leading-3 text-red-500">
-                      {discountLabel}
-                    </span>
-                  )}
-                  <span className="flex-1" />
-                  {isSelected && (
-                    <CheckIcon className="h-4 w-4 shrink-0 text-emerald-500" />
-                  )}
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                    {isSelected && <CheckIcon className="h-4 w-4 text-primary" strokeWidth={2.5} />}
+                  </span>
                 </button>
               );
             })
@@ -1350,7 +1397,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
   };
 
   return (
-    <div className="relative">
+    <div ref={containerRef} className="relative">
       <button
         ref={buttonRef}
         type="button"
@@ -1368,7 +1415,8 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
       {isOpen && (
         <div
           ref={dropdownRef}
-          className="absolute bottom-full left-0 z-50 mb-1 w-60 rounded-xl border border-border bg-surface shadow-popover overflow-hidden"
+          style={{ width: panelPlacement.width }}
+          className={`absolute bottom-full ${panelPlacement.alignEnd ? 'right-0' : 'left-0'} z-50 mb-1 rounded-xl border border-border bg-surface shadow-popover overflow-hidden`}
         >
           {renderDropdownContent()}
         </div>

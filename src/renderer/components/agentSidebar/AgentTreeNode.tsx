@@ -65,15 +65,15 @@ const AGENT_TASKS_TRANSITION_MS = 200;
 
 const AgentAvatar: React.FC<{ agent: AgentSidebarAgentNode }> = ({ agent }) => {
   if (shouldUseDefaultAgentIcon(agent)) {
-    return <DefaultAgentIcon className="h-4 w-4" />;
+    return <DefaultAgentIcon className="h-[18px] w-[18px]" />;
   }
 
   return (
     <AgentAvatarIcon
       value={agent.icon}
-      className="h-4 w-4"
-      iconClassName="h-4 w-4"
-      legacyClassName="text-[14px]"
+      className="h-[18px] w-[18px]"
+      iconClassName="h-[18px] w-[18px]"
+      legacyClassName="text-[15px]"
       fallbackText={getAgentDisplayName(agent).trim().slice(0, 1).toUpperCase() || 'A'}
     />
   );
@@ -284,16 +284,16 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
 
   return (
     <div className="space-y-0.5">
-      <div className={`group sticky top-10 ${isMenuOpen ? 'z-50' : 'z-20'} -ml-[6px] h-7 w-[calc(100%+12px)] bg-surface-raised`}>
+      <div className={`group sticky top-10 ${isMenuOpen ? 'z-50' : 'z-20'} -ml-[6px] h-9 w-[calc(100%+12px)] bg-surface-raised`}>
         <button
           type="button"
           onClick={handleAgentClick}
-          className="flex h-full w-full items-center gap-2 rounded-md py-0 pl-3.5 pr-12 text-left text-sm font-normal text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
+          className="flex h-full w-full items-center gap-2.5 rounded-full py-0 pl-2 pr-12 text-left text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
           role="treeitem"
           aria-level={1}
           aria-expanded={agent.isExpanded}
         >
-          <span className="flex h-4 w-4 shrink-0 items-center justify-center leading-none text-foreground">
+          <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center leading-none text-foreground">
             <AgentAvatar agent={agent} />
           </span>
           <span className="min-w-0 flex-1 truncate">
@@ -436,20 +436,20 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
                 <button
                   type="button"
                   onClick={() => onRetryLoadTasks(agent.id)}
-                  className="-ml-[6px] flex h-7 w-[calc(100%+12px)] items-center rounded-md pl-[38px] pr-2.5 text-left text-[13px] text-red-500 transition-colors hover:bg-red-500/10"
+                  className="-ml-[6px] flex h-9 w-[calc(100%+12px)] items-center rounded-full pl-9 pr-2.5 text-left text-[13px] text-red-500 transition-colors hover:bg-red-500/10"
                 >
                   {i18nService.t('myAgentSidebarLoadFailed')}
                 </button>
               )}
 
               {agent.isLoadingTasks && !hasVisibleTasks && (
-                <div className="-ml-[6px] flex h-7 w-[calc(100%+12px)] items-center pl-[38px] pr-2.5 text-[13px] text-secondary">
+                <div className="-ml-[6px] flex h-9 w-[calc(100%+12px)] items-center pl-9 pr-2.5 text-[13px] text-secondary">
                   {i18nService.t('loading')}
                 </div>
               )}
 
               {!agent.isLoadingTasks && !agent.hasLoadError && !hasVisibleTasks && (
-                <div className="-ml-[6px] flex h-7 w-[calc(100%+12px)] items-center pl-[38px] pr-2.5 text-[length:var(--lobster-text-sidebarCompact)] text-secondary">
+                <div className="-ml-[6px] flex h-9 w-[calc(100%+12px)] items-center pl-9 pr-2.5 text-[length:var(--lobster-text-sidebarCompact)] text-secondary">
                   {i18nService.t('myAgentSidebarNoTasks')}
                 </div>
               )}
@@ -478,7 +478,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
                 <button
                   type="button"
                   onClick={() => onRetryLoadTasks(agent.id)}
-                  className="-ml-[6px] flex h-7 w-[calc(100%+12px)] items-center rounded-md pl-[38px] pr-2.5 text-left text-[13px] text-red-500 transition-colors hover:bg-red-500/10"
+                  className="-ml-[6px] flex h-9 w-[calc(100%+12px)] items-center rounded-full pl-9 pr-2.5 text-left text-[13px] text-red-500 transition-colors hover:bg-red-500/10"
                 >
                   {i18nService.t('myAgentSidebarLoadFailed')}
                 </button>

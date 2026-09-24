@@ -1,6 +1,7 @@
 import 'katex/dist/katex.min.css';
 import 'katex/contrib/mhchem';
 
+import { ChevronRightIcon } from '@heroicons/react/24/outline';
 import React, { useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 // @ts-ignore
@@ -14,13 +15,17 @@ import { i18nService } from '../services/i18n';
 import { normalizeShellFilePath } from '../services/shellAppsCache';
 import { showShellFailureToast, showToast } from '../utils/localFileActions';
 import { transformMarkdownTextSegments } from '../utils/markdownCodeSegments';
+import { remarkDetailsBlocks } from '../utils/remarkDetailsBlocks';
 import { remarkMarkdownLayout } from '../utils/remarkMarkdownLayout';
 import CodeBlock from './CodeBlock';
 import LocalFileContextMenu from './common/LocalFileContextMenu';
 
 const SAFE_URL_PROTOCOLS = new Set(['http', 'https', 'mailto', 'tel', 'file', 'localfile', 'kit']);
 const INTERNAL_URL_PROTOCOLS = new Set(['kit']);
-const LINK_CLASS_NAME = 'text-primary hover:text-primary-hover hover:underline underline-offset-2 transition-colors break-words [overflow-wrap:anywhere]';
+// no-underline and the inherited weight override @tailwindcss/typography, whose
+// `.prose a` rule otherwise underlines every link at weight 500 (lighter than
+// the surrounding text inside **bold**).
+const LINK_CLASS_NAME = 'text-primary no-underline [font-weight:inherit] decoration-primary/40 underline-offset-[3px] hover:text-primary-hover hover:underline transition-colors break-words [overflow-wrap:anywhere]';
 const LARGE_MARKDOWN_RENDER_THRESHOLD = 8 * 1024;
 const LARGE_MARKDOWN_PREVIEW_HEAD_LENGTH = 4 * 1024;
 const LARGE_MARKDOWN_PREVIEW_TAIL_LENGTH = 8 * 1024;
@@ -584,6 +589,28 @@ const createMarkdownComponents = (
       />
     );
   },
+  details: ({ node: _node, className: _className, children, ...props }: any) => {
+    // remarkDetailsBlocks always puts <summary> first; the rest is the collapsible body.
+    const [summary, ...body] = React.Children.toArray(children);
+    return (
+      <details className={`${spacing === 'compact' ? 'my-2' : 'my-3'} first:mt-0 last:mb-0 overflow-hidden rounded-xl border border-border bg-surface-raised/30 text-foreground`} {...props}>
+        {summary}
+        {body.length > 0 && (
+          <div className={`border-t border-border ${spacing === 'compact' ? 'px-3 py-2' : 'px-4 py-3'}`}>
+            {body}
+          </div>
+        )}
+      </details>
+    );
+  },
+  summary: ({ node: _node, className: _className, children, ...props }: any) => (
+    <summary className={`flex cursor-pointer select-none list-none items-center gap-1.5 font-medium text-foreground transition-colors hover:bg-surface-raised/60 [&::-webkit-details-marker]:hidden ${spacing === 'compact' ? 'px-3 py-1.5' : 'px-4 py-2.5'}`} {...props}>
+      <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted transition-transform duration-150 [details[open]>summary>&]:rotate-90" aria-hidden="true" />
+      <span className="min-w-0 break-words">
+        {React.Children.count(children) > 0 ? children : i18nService.t('markdownDetailsSummary')}
+      </span>
+    </summary>
+  ),
   hr: ({ node: _node, ...props }: any) => (
     <hr className={`${spacing === 'compact' ? 'my-2' : 'my-5'} border-border`} {...props} />
   ),
@@ -745,7 +772,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
         </div>
       )}
       <ReactMarkdown
-        remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkMath, remarkMarkdownLayout]}
+        remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkMath, remarkDetailsBlocks, remarkMarkdownLayout]}
         rehypePlugins={[rehypeKatex]}
         urlTransform={safeUrlTransform}
         components={components}
