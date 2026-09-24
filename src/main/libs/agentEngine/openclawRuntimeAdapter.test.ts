@@ -67,6 +67,21 @@ import {
 } from './openclawRuntimeAdapter';
 import { SubagentYield } from './subagent/yield';
 
+test('only a live-child native shutdown announcement parks config recovery for self-restart', () => {
+  const noteGatewaySelfRestart = vi.fn();
+  const getGatewayProcessPid = vi.fn((): number | null => 42);
+  const adapter = new OpenClawRuntimeAdapter({} as never, {
+    noteGatewaySelfRestart, getGatewayProcessPid,
+  } as never);
+  adapter.handleGatewayEvent({ event: OpenClawGatewayEvent.Shutdown, payload: { reason: 'stopping' } });
+  expect(noteGatewaySelfRestart).not.toHaveBeenCalled();
+  adapter.handleGatewayEvent({ event: OpenClawGatewayEvent.Shutdown, payload: { restartExpectedMs: 0, reason: 'config reload' } });
+  expect(noteGatewaySelfRestart).toHaveBeenCalledExactlyOnceWith('config reload');
+  getGatewayProcessPid.mockReturnValue(null);
+  adapter.handleGatewayEvent({ event: OpenClawGatewayEvent.Shutdown, payload: { restartExpectedMs: 500 } });
+  expect(noteGatewaySelfRestart).toHaveBeenCalledTimes(1);
+});
+
 test('browser control requests use the embedded gateway RPC', async () => {
   const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
   const request = vi.fn(async () => ({ tabs: [] }));

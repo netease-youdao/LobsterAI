@@ -217,6 +217,18 @@ describe('OpenClawConfigSync runtime config output', () => {
     } as never);
   };
 
+  test('prepares a changed proxy config without publishing it to the live watcher', async () => {
+    const sync = await createSync();
+    expect(sync.sync('bootstrap')).toMatchObject({ ok: true });
+    const original = fs.readFileSync(configPath, 'utf8');
+    mockRuntimeState.proxyPort = 4121;
+    mockRuntimeState.serverModels = [{ modelId: 'deepseek-flash', provider: 'deepseek', apiFormat: 'openai-completions' }];
+    const prepared = sync.prepare('proxy-rebound');
+    expect(prepared).toMatchObject({ ok: true, changed: true });
+    expect(prepared.target?.raw).toContain('4121');
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(original);
+  });
+
   test('enables channel scheduling without promoting IM senders to global owners', async () => {
     fs.writeFileSync(configPath, JSON.stringify({
       commands: { ownerAllowFrom: ['gateway-client', '*'] },
