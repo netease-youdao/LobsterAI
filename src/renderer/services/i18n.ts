@@ -182,6 +182,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
       '开启后会将该模型标记为可返回思考内容；实际是否产生思考取决于模型能力和自定义参数',
     contextWindow: '上下文窗口',
     contextWindowHint: '模型一次可处理的最大 token 数量，窗口越大可容纳越多对话历史与文档。较低的窗口大小可能无法体验完整功能，实际支持的窗口大小取决于模型本身。',
+    maxOutputTokens: '最大输出 Token',
+    maxOutputTokensPlaceholder: '自动',
+    maxOutputTokensHint:
+      '单次回复（含思考过程）最多生成的 token 数。留空时按模型自动推断；调大前请确认服务商支持该上限。',
+    maxOutputTokensInvalid: '最大输出 Token 需为 {min} 到 {max} 之间的整数',
     customParams: '自定义参数',
     customParamsHint:
       '以 JSON 格式填写需要透传给模型的额外参数，如 {"reasoning_effort": "high"}。这些参数将直接传递给模型 API。',
@@ -4260,6 +4265,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     contextWindow: 'Context Window',
     contextWindowHint:
       'Maximum tokens the model can process at once. A larger window fits more conversation history and documents. A smaller window may limit features. Actual supported size depends on the model itself.',
+    maxOutputTokens: 'Max Output Tokens',
+    maxOutputTokensPlaceholder: 'Auto',
+    maxOutputTokensHint:
+      'Maximum tokens per response, including thinking. Leave empty to infer it from the model; raise it only when your provider supports that limit.',
+    maxOutputTokensInvalid: 'Max output tokens must be a whole number between {min} and {max}.',
     customParams: 'Custom Params',
     customParamsHint:
       'Extra parameters to pass through to the model API in JSON format, e.g. {"reasoning_effort": "high"}.',

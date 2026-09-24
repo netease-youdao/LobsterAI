@@ -836,6 +836,11 @@ type ProviderDescriptor = {
    * 优先级高于 modelDefaults.reasoning。
    */
   resolveModelReasoning?: (modelId: string, codingPlanEnabled: boolean) => boolean | undefined;
+  /**
+   * 开启 Coding Plan 时查询模型上限所用的 OpenClaw 目录 provider。
+   * 仅影响目录查询；模型仍写在 providerId 下，避免改动模型引用。
+   */
+  codingPlanCatalogProviderId?: string;
   modelDefaults?: Partial<{
     reasoning: boolean;
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -904,17 +909,26 @@ const resolveModelMaxTokensForOpenClaw = (options: {
   modelId: string;
   sessionModelId: string;
   descriptor: ProviderDescriptor;
+  codingPlanEnabled: boolean;
   contextWindow?: number;
 }): number | undefined => {
+  const catalogProviderId = options.codingPlanEnabled
+    ? options.descriptor.codingPlanCatalogProviderId ?? options.descriptor.providerId
+    : options.descriptor.providerId;
   const catalogMaxTokens = options.api === OpenClawApiConst.AnthropicMessages
     ? resolveCatalogModelMaxTokens(
-      options.descriptor.providerId,
+      catalogProviderId,
       options.modelId,
       options.sessionModelId,
     )
     : undefined;
+  // Catalog rows only raise the default: placeholder rows such as
+  // volcengine-plan/ark-code-latest (4096) sit below what we already send.
+  const raisedCatalogMaxTokens = catalogMaxTokens === undefined
+    ? undefined
+    : Math.max(catalogMaxTokens, OPENCLAW_DEFAULT_MODEL_MAX_TOKENS);
   const rawMaxTokens = options.maxTokens
-    ?? catalogMaxTokens
+    ?? raisedCatalogMaxTokens
     ?? options.descriptor.modelDefaults?.maxTokens
     ?? (
       options.api === OpenClawApiConst.AnthropicMessages
@@ -1022,6 +1036,7 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
     providerId: OpenClawProviderId.Volcengine,
     resolveApi: ({ apiType, baseURL }) => mapApiTypeToOpenClawApi(apiType, undefined, baseURL),
     normalizeBaseUrl: stripChatCompletionsSuffix,
+    codingPlanCatalogProviderId: OpenClawProviderId.VolcenginePlan,
   },
 
   [ProviderName.Minimax]: {
@@ -1233,6 +1248,7 @@ export const buildProviderSelection = (options: {
     modelId: options.modelId,
     sessionModelId,
     descriptor,
+    codingPlanEnabled: !!options.codingPlanEnabled,
     contextWindow,
   });
   const request = shouldUseEnvProxyForProviderBaseUrl(baseUrl)

@@ -15,6 +15,7 @@ vi.mock('electron', () => ({
   },
 }));
 
+import { classifyErrorKey } from '../../../common/coworkErrorClassify';
 import {
   ContextCompactionStatus,
   CoworkSystemMessageKind,
@@ -32,12 +33,13 @@ import {
   COWORK_BTW_RESULT_MAX_CHARS,
   CoworkBtwStatus,
 } from '../../../shared/cowork/btw';
+import { CoworkErrorModelSource } from '../../../shared/cowork/errorDetail';
 import { OpenClawCronRunMetadataKey } from '../../../shared/cowork/openclawCronSessionKey';
 import { CoworkSelectedTextSource } from '../../../shared/cowork/selectedText';
 import { CoworkSteerRejectReason, CoworkSteerStatus } from '../../../shared/cowork/steer';
 import { OpenClawTranscriptSafetyLimit } from '../../../shared/openclawTranscript/constants';
 import { ProviderName } from '../../../shared/providers/constants';
-import { t } from '../../i18n';
+import { setLanguage, t } from '../../i18n';
 import { OpenClawChannelSessionSync } from '../openclawChannelSessionSync';
 import {
   __openClawTokenProxyTestUtils,
@@ -60,6 +62,7 @@ import {
   OPENCLAW_CHAT_SEND_PAYLOAD_SAFE_LIMIT_BYTES,
   OpenClawRuntimeAdapter,
   pickPersistedAssistantSegment,
+  resolveOpenClawOutputLimitErrorMessage,
   resolveOpenClawRuntimeError,
   resolveOpenClawRuntimeErrorMessage,
   resolveOpenClawToolLoopErrorOverride,
@@ -1027,6 +1030,42 @@ test('resolveOpenClawToolLoopErrorOverride leaves unrelated errors untouched', (
   expect(resolveOpenClawToolLoopErrorOverride(undefined, OPENCLAW_INCOMPLETE_TURN_ERROR_TEXT)).toBeNull();
   // Loop veto seen, but the run failed for a different reason.
   expect(resolveOpenClawToolLoopErrorOverride(TOOL_LOOP_POLL_BLOCK_TEXT, 'LLM request failed.')).toBeNull();
+});
+
+test('resolveOpenClawOutputLimitErrorMessage only explains output-limit stops', () => {
+  for (const stopReason of [undefined, 'stop', 'error', 'toolUse']) {
+    expect(resolveOpenClawOutputLimitErrorMessage(stopReason, CoworkErrorModelSource.CodingPlan)).toBeNull();
+  }
+});
+
+test('resolveOpenClawOutputLimitErrorMessage points at Max Output Tokens only for configurable models', () => {
+  // LobsterAI plan models have no output-limit setting to change.
+  expect(resolveOpenClawOutputLimitErrorMessage('length', CoworkErrorModelSource.LobsterAIPlan))
+    .toBe(t('coworkErrorOutputLimitReached'));
+  expect(resolveOpenClawOutputLimitErrorMessage('length', undefined))
+    .toBe(t('coworkErrorOutputLimitReached'));
+  for (const modelSource of [
+    CoworkErrorModelSource.CodingPlan,
+    CoworkErrorModelSource.CustomProvider,
+    CoworkErrorModelSource.BuiltinProvider,
+    CoworkErrorModelSource.BuiltinOAuth,
+  ]) {
+    expect(resolveOpenClawOutputLimitErrorMessage('length', modelSource))
+      .toBe(t('coworkErrorOutputLimitReachedWithSettings'));
+  }
+});
+
+test('output-limit copy is shown verbatim instead of being reclassified by error rules', () => {
+  try {
+    for (const language of ['zh', 'en'] as const) {
+      setLanguage(language);
+      for (const key of ['coworkErrorOutputLimitReached', 'coworkErrorOutputLimitReachedWithSettings']) {
+        expect(classifyErrorKey(t(key)), `${language}:${key}`).toBeNull();
+      }
+    }
+  } finally {
+    setLanguage('zh');
+  }
 });
 
 test('estimateOpenClawChatSendFrameBytes measures the full RPC frame as UTF-8 JSON', () => {
@@ -5669,6 +5708,39 @@ test.each(['retry', 'different-run', 'different-error'])('chat error does not re
   const persistedError = session.messages.find((message) => message.type === 'system');
   expect(persistedError?.content).toBe(errorMessage);
   expect(persistedError?.metadata?.errorDetail?.rawErrorPreview).toBeUndefined();
+});
+
+test('chat error at the output limit shows readable copy and keeps the raw error in details', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'hello', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const errorSpy = vi.fn();
+  adapter.on('error', errorSpy);
+  const turn = createActiveTurn(session.id, sessionKey, 'run-output-limit');
+  turn.model = 'lobsterai-server/glm-5.3-flash';
+  adapter.activeTurns.set(session.id, turn);
+  const rawErrorMessage = 'Agent run ended before producing a complete result.';
+
+  adapter.handleChatEvent({
+    state: OpenClawChatState.Error,
+    runId: turn.runId,
+    sessionKey,
+    errorMessage: rawErrorMessage,
+    stopReason: 'length',
+  }, 1);
+
+  const persistedError = session.messages.find((message) => message.type === 'system');
+  expect(session.status).toBe('error');
+  expect(persistedError?.content).toBe(t('coworkErrorOutputLimitReached'));
+  expect(persistedError?.metadata?.errorDetail).toMatchObject({
+    provider: 'lobsterai-server',
+    modelSource: CoworkErrorModelSource.LobsterAIPlan,
+    rawErrorMessage,
+    stopReason: 'length',
+  });
+  expect(errorSpy).toHaveBeenCalledWith(session.id, t('coworkErrorOutputLimitReached'));
 });
 
 test('chat error can consume quota signal after lifecycle error schedules fallback', () => {
