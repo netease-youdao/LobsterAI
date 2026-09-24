@@ -25,6 +25,7 @@ export const DEFAULT_PROXY_RESOLUTION_TARGETS = [
   'https://api.anthropic.com',
   'https://generativelanguage.googleapis.com',
   'https://openrouter.ai',
+  'https://api.orcarouter.ai',
 ] as const;
 
 function setEnvValue(key: ProxyEnvKey, value: string | undefined): void {
