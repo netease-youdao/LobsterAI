@@ -63,12 +63,6 @@
       "to": "app-icon/512x512.png"
     }
   ],
-  "protocols": [
-    {
-      "name": "LobsterAI",
-      "schemes": ["lobsterai"]
-    }
-  ],
   "mac": {
     "target": [
       "dmg"

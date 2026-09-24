@@ -1357,13 +1357,11 @@ contextBridge.exposeInMainWorld('electron', {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
   },
   auth: {
-    login: (loginUrl?: string) => ipcRenderer.invoke(AuthIpcChannel.Login, { loginUrl }),
-    exchange: (code: string) => ipcRenderer.invoke(AuthIpcChannel.Exchange, { code }),
+    login: () => ipcRenderer.invoke(AuthIpcChannel.Login),
     getUser: () => ipcRenderer.invoke(AuthIpcChannel.GetUser),
     getQuota: () => ipcRenderer.invoke(AuthIpcChannel.GetQuota),
     logout: () => ipcRenderer.invoke(AuthIpcChannel.Logout),
     refreshToken: () => ipcRenderer.invoke(AuthIpcChannel.RefreshToken),
-    getAccessToken: () => ipcRenderer.invoke(AuthIpcChannel.GetAccessToken),
     getModels: () => ipcRenderer.invoke(AuthIpcChannel.GetModels),
     getPricingCatalog: () => ipcRenderer.invoke(AuthIpcChannel.GetPricingCatalog),
     getProfileSummary: () => ipcRenderer.invoke(AuthIpcChannel.GetProfileSummary),
@@ -1372,12 +1370,6 @@ contextBridge.exposeInMainWorld('electron', {
     getActiveClientBanner: () => ipcRenderer.invoke(AuthIpcChannel.GetActiveClientBanner),
     getActiveClientBanners: () => ipcRenderer.invoke(AuthIpcChannel.GetActiveClientBanners),
     getClientBannerSnapshot: () => ipcRenderer.invoke(AuthIpcChannel.GetClientBannerSnapshot),
-    getPendingCallback: () => ipcRenderer.invoke(AuthIpcChannel.GetPendingCallback),
-    onCallback: (callback: (data: { code: string }) => void) => {
-      const handler = (_event: any, data: { code: string }) => callback(data);
-      ipcRenderer.on(AuthIpcChannel.Callback, handler);
-      return () => ipcRenderer.removeListener(AuthIpcChannel.Callback, handler);
-    },
     onQuotaChanged: (callback: () => void) => {
       const handler = () => callback();
       ipcRenderer.on(AuthIpcChannel.QuotaChanged, handler);

@@ -148,8 +148,8 @@ export function openEmbeddedLoginWindow(options: EmbeddedLoginWindowOptions): Em
     settle(new EmbeddedLoginError(AuthLoginFailureReason.LoadFailed));
   });
   window.on('closed', () => {
-    void loginSession.clearStorageData().catch(() => undefined);
-    void loginSession.clearCache().catch(() => undefined);
+    void loginSession.clearStorageData().catch((): void => undefined);
+    void loginSession.clearCache().catch((): void => undefined);
     settle(new EmbeddedLoginError(AuthLoginFailureReason.Cancelled));
   });
 

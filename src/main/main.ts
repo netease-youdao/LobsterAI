@@ -311,16 +311,11 @@ import {
 import { hideAppWindowsForQuit } from './libs/appQuitWindows';
 import { AppUpdateCoordinator, INSTALLATION_UUID_KEY } from './libs/appUpdateCoordinator';
 import { AppUpdateGrayClient, type AppUpdateGraySession } from './libs/appUpdateGrayClient';
-import { AuthCallbackRouter } from './libs/authCallbackRouter';
-import {
-  appendCallbackReturnTo,
-  appendLoginParams,
-  startAuthLocalCallback,
-} from './libs/authLocalCallbackServer';
 import {
   AuthSessionManager,
   resolveAuthSessionStatusFromError,
 } from './libs/authSessionManager';
+import { type AuthTokenStorage, createAuthTokenStorage } from './libs/authTokenStorage';
 import type { BrowserAnnotationAssetIdentity, SaveBrowserAnnotationAssetInput } from './libs/browserAnnotationAssetStore';
 import { BrowserAnnotationAssetStore } from './libs/browserAnnotationAssetStore';
 import {
@@ -377,12 +372,18 @@ import {
   performPendingDataMigrationRestoreSync,
 } from './libs/dataMigration/dataMigrationService';
 import { DesktopNotificationManager } from './libs/desktopNotificationManager';
+import { EmbeddedLoginService } from './libs/embeddedLogin/embeddedLoginService';
+import { EMBEDDED_LOGIN_TIMEOUT_MS, openEmbeddedLoginWindow } from './libs/embeddedLogin/embeddedLoginWindow';
+import { createLoginTransaction } from './libs/embeddedLogin/loginTransaction';
+import { NETEASE_LOGIN_ORIGINS, resolvePortalLoginUrl } from './libs/embeddedLogin/loginUrlPolicy';
 import {
   getHtmlSharePublicBaseUrl,
   getKitStoreUrl,
+  getLoginOvermindUrl,
   getPortalTasksUrl,
   getServerApiBaseUrl,
   getSkillStoreUrl,
+  isTestModeEnabled,
   refreshEndpointsTestMode,
 } from './libs/endpoints';
 import {
@@ -4860,33 +4861,10 @@ if (!gotTheLock) {
   }
   app.quit();
 } else {
-  // Register custom protocol for OAuth callback
-  if (!app.isPackaged) {
-    // In dev mode, setAsDefaultProtocolClient needs the electron exe path
-    // and the app entry point as extra args so the OS can relaunch correctly
-    app.setAsDefaultProtocolClient('lobsterai', process.execPath, [
-      path.resolve(process.argv[1]),
-    ]);
-  } else {
-    app.setAsDefaultProtocolClient('lobsterai');
+  // Sign-in no longer uses the lobsterai:// protocol; drop a registration left by an older version.
+  if (app.isDefaultProtocolClient('lobsterai')) {
+    app.removeAsDefaultProtocolClient('lobsterai');
   }
-
-  const authCallbackRouter = new AuthCallbackRouter({
-    getTarget: () => {
-      if (!mainWindow || mainWindow.isDestroyed()) return null;
-      return mainWindow.webContents;
-    },
-    onParseError: error => {
-      console.error('[Main] Failed to parse deep link:', error);
-    },
-  });
-
-  /**
-   * Parse a lobsterai:// deep link and send (or buffer) the auth code.
-   */
-  const handleDeepLink = (url: string) => {
-    authCallbackRouter.handleDeepLink(url);
-  };
 
   // First-frame gate for window activation. Showing a window whose renderer
   // has never painted produces a stuck plain-white window (field case: slow
@@ -4943,27 +4921,11 @@ if (!gotTheLock) {
     fn(`[Renderer][${safeTag}] ${safeMessage}`);
   });
 
-  // Allow renderer to retrieve a buffered auth code on init
-  ipcMain.handle(AuthIpcChannel.GetPendingCallback, () =>
-    authCallbackRouter.markListenerReadyAndConsumePending());
-
-  // macOS: handle open-url event for deep links
-  app.on('open-url', (event, url) => {
-    event.preventDefault();
-    handleDeepLink(url);
-  });
-
   app.on('second-instance', (_event, commandLine, workingDirectory) => {
     console.debug('[Main] second-instance event', { commandLine, workingDirectory });
     if (isDataMigrationRestoreInProgress) {
       console.log('[DataMigration] ignored second-instance activation while restore is in progress.');
       return;
-    }
-
-    // Check for deep link in command line args (Windows/Linux)
-    const deepLink = commandLine.find(arg => arg.startsWith('lobsterai://'));
-    if (deepLink) {
-      handleDeepLink(deepLink);
     }
 
     focusMainWindow('second instance activation');
@@ -5281,16 +5243,26 @@ if (!gotTheLock) {
   let authExchangeIntentSequence = 0;
   let activeAuthExchangeIntent: AuthExchangeIntentSnapshot | null = null;
 
+  let authTokenStorage: AuthTokenStorage | null = null;
+  const getAuthTokenStorage = (): AuthTokenStorage => {
+    authTokenStorage ??= createAuthTokenStorage({
+      store: getStore(),
+      encryption: safeStorage,
+      platform: process.platform,
+    });
+    return authTokenStorage;
+  };
+
   /**
    * Helper: Persist auth tokens into the kv store.
    */
   const saveAuthTokens = (accessToken: string, refreshToken: string) => {
-    getStore().set('auth_tokens', { accessToken, refreshToken });
+    getAuthTokenStorage().save({ accessToken, refreshToken });
   };
 
-  const getAuthTokens = (): { accessToken: string; refreshToken: string } | null => {
-    return getStore().get<{ accessToken: string; refreshToken: string }>('auth_tokens') || null;
-  };
+  const getAuthTokens = (): { accessToken: string; refreshToken: string } | null => (
+    getAuthTokenStorage().get()
+  );
 
   const captureAuthStateSnapshot = (): AuthStateSnapshot | null => {
     const tokens = getAuthTokens();
@@ -5309,7 +5281,7 @@ if (!gotTheLock) {
   );
 
   const clearAuthTokens = () => {
-    getStore().delete('auth_tokens');
+    getAuthTokenStorage().clear();
   };
 
   const getEnterpriseAccountHeaders = (): Record<string, string> => (
@@ -7202,47 +7174,6 @@ if (!gotTheLock) {
     return quota;
   };
 
-  ipcMain.handle(AuthIpcChannel.Login, async (_event, { loginUrl }: { loginUrl?: string } = {}) => {
-    const baseUrl = loginUrl || `${getServerApiBaseUrl()}/login`;
-    const fallbackUrl = appendLoginParams(baseUrl, { source: 'electron' });
-    let localCallback: Awaited<ReturnType<typeof startAuthLocalCallback>> | null = null;
-
-    try {
-      console.log('[Auth] starting browser login with local callback server');
-      localCallback = await startAuthLocalCallback({
-        onCode: code => {
-          authCallbackRouter.handleAuthCode(code);
-          focusMainWindow('local auth callback');
-        },
-      });
-      const returnTo = appendLoginParams(baseUrl, {
-        source: 'electron',
-        electronLogin: 'success',
-      });
-      const finalUrl = appendLoginParams(baseUrl, {
-        source: 'electron',
-        redirect_uri: appendCallbackReturnTo(localCallback.redirectUri, returnTo),
-        state: localCallback.state,
-      });
-      console.log('[Auth] opening portal login with local callback redirect');
-      await shell.openExternal(finalUrl);
-      return { success: true, redirectUrl: finalUrl };
-    } catch (error) {
-      // The callback may be shared by another login page and will clean itself up on timeout.
-      console.warn('[Auth] local callback login failed, falling back to deep link login:', error);
-      try {
-        await shell.openExternal(fallbackUrl);
-        return { success: true, redirectUrl: fallbackUrl };
-      } catch (fallbackError) {
-        console.error('[Auth] login failed:', fallbackError);
-        return {
-          success: false,
-          error: fallbackError instanceof Error ? fallbackError.message : 'Failed to open login',
-        };
-      }
-    }
-  });
-
   registerActivityIpcHandlers({
     ipcMain,
     getMainWindow: () => mainWindow,
@@ -7284,7 +7215,7 @@ if (!gotTheLock) {
     }
   };
 
-  ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {
+  const completeLoginWithAuthCode = async (code: string, codeVerifier: string) => {
     const startingTokens = getAuthTokens();
     const startingUser = getAuthUser();
     const startingEnterpriseContext = getPersistedEnterpriseAccountContext(getStore());
@@ -7312,7 +7243,7 @@ if (!gotTheLock) {
       const resp = await net.fetch(exchangeUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(withKeyfromBody({ authCode: code })),
+        body: JSON.stringify(withKeyfromBody({ authCode: code, codeVerifier })),
       });
       if (!resp.ok) {
         return { success: false, error: `Exchange failed: ${resp.status}` };
@@ -7426,7 +7357,50 @@ if (!gotTheLock) {
         activeAuthExchangeIntent = null;
       }
     }
+  };
+
+  const resolveEmbeddedLoginUrl = async (): Promise<string> => {
+    let configured: string | null = null;
+    try {
+      const response = await net.fetch(getLoginOvermindUrl(), {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (response.ok) {
+        const body = await response.json() as { data?: { value?: unknown } };
+        configured = typeof body?.data?.value === 'string' ? body.data.value.trim() : null;
+      }
+    } catch (error) {
+      console.warn('[Auth] login URL config unavailable; using the built-in Portal address:',
+        error instanceof Error ? error.name : 'unknown');
+    }
+    return resolvePortalLoginUrl(configured, {
+      testMode: isTestModeEnabled(),
+      developmentLoginUrl: app.isPackaged ? null : process.env.LOBSTER_PORTAL_LOGIN_URL ?? null,
+    });
+  };
+
+  const embeddedLoginService = new EmbeddedLoginService({
+    resolveLoginUrl: resolveEmbeddedLoginUrl,
+    createTransaction: () => createLoginTransaction(),
+    allowedTopLevelOrigins: () => [new URL(getServerApiBaseUrl()).origin, ...NETEASE_LOGIN_ORIGINS],
+    openWindow: (loginUrl, policy) => openEmbeddedLoginWindow({
+      loginUrl,
+      policy,
+      timeoutMs: EMBEDDED_LOGIN_TIMEOUT_MS,
+      title: t('authLoginWindowTitle'),
+      isDev,
+      parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
+      createWindow: options => new BrowserWindow(options),
+      sessionFromPartition: partition => session.fromPartition(partition),
+      openExternal: url => {
+        void shell.openExternal(url);
+      },
+    }),
+    exchange: (code, codeVerifier) => completeLoginWithAuthCode(code, codeVerifier),
   });
+
+  ipcMain.handle(AuthIpcChannel.Login, () => embeddedLoginService.login());
 
   ipcMain.handle(AuthIpcChannel.GetUser, async () => {
     const createUnavailableResponse = () => {
@@ -7788,16 +7762,11 @@ if (!gotTheLock) {
     try {
       const result = await authSessionManager.refresh(AuthRefreshReason.Manual);
       return result.outcome === AuthRefreshOutcome.Success
-        ? { success: true, accessToken: result.accessToken, outcome: result.outcome }
+        ? { success: true, outcome: result.outcome }
         : { success: false, outcome: result.outcome };
     } catch {
       return { success: false };
     }
-  });
-
-  ipcMain.handle(AuthIpcChannel.GetAccessToken, async () => {
-    const tokens = getAuthTokens();
-    return tokens?.accessToken || null;
   });
 
   ipcMain.handle(AuthIpcChannel.GetPricingCatalog, async () => {
@@ -14112,7 +14081,6 @@ if (!gotTheLock) {
 
     // 处理渲染进程崩溃或退出
     mainWindow.webContents.on('render-process-gone', (_event, details) => {
-      authCallbackRouter.markRendererUnavailable();
       console.error('Window render process gone:', details);
       scheduleReload('webContents-crashed');
     });
@@ -14161,7 +14129,6 @@ if (!gotTheLock) {
       if (isMainFrame && !isInPlace) {
         isOpenSessionFromNotificationReady = false;
       }
-      authCallbackRouter.handleNavigationStarted({ isMainFrame, isInPlace });
     });
 
     if (isDev) {
@@ -14178,7 +14145,6 @@ if (!gotTheLock) {
       clearLoadWatchdog();
       clearTimeout(showFallbackTimer);
       windowStatePersist.cleanup();
-      authCallbackRouter.markRendererUnavailable();
       isOpenSessionFromNotificationReady = false;
       agentBrowserHost?.setWindowVisible(false);
       mainWindow = null;
@@ -15093,13 +15059,6 @@ if (!gotTheLock) {
     profiler.measure('skillManager');
 
     console.log(profiler.summary());
-
-    // Windows/Linux cold start: parse deep link from process.argv.
-    // The router buffers it because the renderer is not ready yet after createWindow().
-    const coldStartDeepLink = process.argv.find(arg => arg.startsWith('lobsterai://'));
-    if (coldStartDeepLink) {
-      handleDeepLink(coldStartDeepLink);
-    }
 
     // Auto-reconnect IM bots that were enabled before restart
     getIMGatewayManager()

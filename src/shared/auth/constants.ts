@@ -1,15 +1,11 @@
 export const AuthIpcChannel = {
-  Callback: 'auth:callback',
   ClaimCreditsFinalReward: 'auth:claimCreditsFinalReward',
-  Exchange: 'auth:exchange',
-  GetAccessToken: 'auth:getAccessToken',
   GetActiveClientBanner: 'auth:getActiveClientBanner',
   GetActiveClientBanners: 'auth:getActiveClientBanners',
   GetClientBannerSnapshot: 'auth:getClientBannerSnapshot',
   GetModels: 'auth:getModels',
   GetPricingCatalog: 'auth:getPricingCatalog',
   GetProfileSummary: 'auth:getProfileSummary',
-  GetPendingCallback: 'auth:getPendingCallback',
   GetQuota: 'auth:getQuota',
   GetUser: 'auth:getUser',
   LifecycleEvent: 'auth:lifecycleEvent',
@@ -22,9 +18,19 @@ export const AuthIpcChannel = {
 
 export type AuthIpcChannel = typeof AuthIpcChannel[keyof typeof AuthIpcChannel];
 
+export const AuthLoginFailureReason = {
+  Cancelled: 'cancelled',
+  Timeout: 'timeout',
+  LoadFailed: 'load_failed',
+  InvalidCompletion: 'invalid_completion',
+  ExchangeFailed: 'exchange_failed',
+} as const;
+
+export type AuthLoginFailureReason = typeof AuthLoginFailureReason[keyof typeof AuthLoginFailureReason];
+
 export interface AuthLoginResult {
   success: boolean;
-  redirectUrl?: string;
+  reason?: AuthLoginFailureReason;
   error?: string;
 }
 

@@ -76,6 +76,12 @@ export const getSkillStoreUrl = (): string => (
     : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/skill-store'
 );
 
+export const getLoginOvermindUrl = (): string => (
+  isTestModeEnabled()
+    ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/login-url'
+    : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/login-url'
+);
+
 // Portal 页面
 const PORTAL_BASE_TEST = 'https://lobsterai.inner.youdao.com/portal#';
 const PORTAL_BASE_PROD = 'https://lobsterai.youdao.com/portal#';
