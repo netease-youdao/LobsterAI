@@ -489,3 +489,16 @@ Verify with upstream `runtime-facts-prompt.test.ts`,
 while a background `exec` is running and that the gateway log no longer reports
 `[prompt-cache] cache read dropped` at run boundaries. Remove this patch when
 the pinned upstream includes `#140799`.
+
+## Live gateway security and proxy settings
+
+`zzzz-openclaw-live-gateway-settings.patch` marks `gateway.tools`,
+`gateway.trustedProxies`, and `gateway.allowRealIpFallback` as hot-reloadable.
+Their HTTP consumers already read the live configuration snapshot per request.
+Changing these settings no longer unnecessarily restarts the listener;
+`gateway.auth`, `gateway.port`, and other process-owned gateway settings keep
+their existing restart behavior. Mixed changes retain the restart requirement.
+
+The patch includes reload-plan coverage and same-listener HTTP tests that change
+tool policy and proxy trust between requests. It is independent of the mutation
+receipt/configuration-delivery work in PR #2721 and changes no desktop IPC.

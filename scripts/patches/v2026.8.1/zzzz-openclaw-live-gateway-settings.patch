@@ -1,0 +1,109 @@
+diff --git a/src/gateway/config-reload-plan.ts b/src/gateway/config-reload-plan.ts
+index eee26df46a9953928b7fcce3fe72d77ee40cadbf..f1aebb7ddaa926fd5a441e0b7230b9f1871f6c0d 100644
+--- a/src/gateway/config-reload-plan.ts
++++ b/src/gateway/config-reload-plan.ts
+@@ -90,6 +90,11 @@ const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
+ const BASE_RELOAD_RULES: ReloadRule[] = [
+   { prefix: "gateway.remote", kind: "none" },
+   { prefix: "gateway.reload", kind: "none" },
++  // These policies are read from the current snapshot per request/connection.
++  // Keep startup-owned gateway resources on the broad restart fallback.
++  { prefix: "gateway.tools", kind: "hot" },
++  { prefix: "gateway.trustedProxies", kind: "hot" },
++  { prefix: "gateway.allowRealIpFallback", kind: "hot" },
+   // gateway.terminal.* deliberately has no rule here: it falls through to the
+   // `gateway` restart rule below. The terminal drives the Control UI CSP (WASM
+   // permissions) and the bootstrap availability flag, both fixed at document
+diff --git a/src/gateway/config-reload.test.ts b/src/gateway/config-reload.test.ts
+index 104d429cc3114825aeb9372aee5a2782a1998858..b6ec04ee29e72b586ed1d3f284f088d0d008e841 100644
+--- a/src/gateway/config-reload.test.ts
++++ b/src/gateway/config-reload.test.ts
+@@ -277,6 +277,25 @@ describe("diffConfigPaths", () => {
+ });
+ 
+ describe("buildGatewayReloadPlan", () => {
++  it.each([
++    "gateway.tools.allow",
++    "gateway.tools.deny",
++    "gateway.trustedProxies",
++    "gateway.allowRealIpFallback",
++  ])("hot-applies request-time gateway policy: %s", (path) => {
++    const plan = buildGatewayReloadPlan([path]);
++    expect(plan.restartGateway).toBe(false);
++    expect(plan.hotReasons).toEqual([path]);
++    expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
++  });
++
++  it("keeps a mixed request-policy and listener change restart-backed", () => {
++    const plan = buildGatewayReloadPlan(["gateway.tools.deny", "gateway.port"]);
++    expect(plan.restartGateway).toBe(true);
++    expect(plan.restartReasons).toEqual(["gateway.port"]);
++    expect(plan.hotReasons).toContain("gateway.tools.deny");
++  });
++
+   const emptyRegistry = createTestRegistry([]);
+   const telegramPlugin: ChannelPlugin = {
+     id: "telegram",
+diff --git a/src/gateway/server-http.device-pairing-ingress.test.ts b/src/gateway/server-http.device-pairing-ingress.test.ts
+index c8e0a45232db8288519b0e493042e2c6f1e7edaf..3170468fa06e37b9d8ccf3fd33075b510c43b88f 100644
+--- a/src/gateway/server-http.device-pairing-ingress.test.ts
++++ b/src/gateway/server-http.device-pairing-ingress.test.ts
+@@ -42,6 +42,27 @@ afterEach(() => {
+ });
+ 
+ describe("Gateway device-join ingress attribution", () => {
++  it("uses updated proxy trust and real-IP policy on the same server", async () => {
++    let gateway = { trustedProxies: [] as string[], allowRealIpFallback: false };
++    const server = createTestGatewayServer({
++      resolvedAuth: AUTH_NONE,
++      overrides: { getRuntimeConfig: () => ({ gateway }) },
++    });
++    const request = () =>
++      sendRequest(server, {
++        path: `/j/${VALID_CODE}`,
++        headers: { ...PROXY_HEADERS, "x-real-ip": "203.0.113.12" },
++      });
++    expect((await request()).res.statusCode).toBe(403);
++    gateway = { trustedProxies: ["127.0.0.1"], allowRealIpFallback: false };
++    expect((await request()).res.statusCode).toBe(403);
++    gateway = { ...gateway, allowRealIpFallback: true };
++    expect((await request()).res.statusCode).toBe(200);
++    gateway = { ...gateway, trustedProxies: [] };
++    expect((await request()).res.statusCode).toBe(403);
++    expect(mocks.redeemDevicePairingJoinCode).toHaveBeenCalledTimes(1);
++  });
++
+   it("rejects unattributable proxy traffic before join-code redemption", async () => {
+     const server = createTestGatewayServer({
+       resolvedAuth: AUTH_NONE,
+diff --git a/src/gateway/tools-invoke-http.test.ts b/src/gateway/tools-invoke-http.test.ts
+index 7aef5ba3fbc9927b2bfc85739eeda668c2271b50..d5f3d20f7e549c42d4dfa1db87e16f34c3c8274f 100644
+--- a/src/gateway/tools-invoke-http.test.ts
++++ b/src/gateway/tools-invoke-http.test.ts
+@@ -1116,6 +1116,26 @@ describe("POST /tools/invoke", () => {
+     expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
+   });
+ 
++  it("applies changed gateway tool policy to the next request on the same listener", async () => {
++    setMainAllowedTools({ allow: ["gateway"], gatewayAllow: ["gateway"] });
++    const invoke = () =>
++      invokeTool({
++        port: sharedPort,
++        headers: gatewayAdminHeaders(),
++        tool: "gateway",
++        sessionKey: "main",
++      });
++    expect((await invoke()).status).toBe(400);
++    setMainAllowedTools({
++      allow: ["gateway"],
++      gatewayAllow: ["gateway"],
++      gatewayDeny: ["gateway"],
++    });
++    expect((await invoke()).status).toBe(404);
++    setMainAllowedTools({ allow: ["gateway"], gatewayAllow: ["gateway"] });
++    expect((await invoke()).status).toBe(400);
++  });
++
+   it("treats gateway.tools.deny as higher priority than gateway.tools.allow", async () => {
+     setMainAllowedTools({
+       allow: ["gateway"],
