@@ -1332,6 +1332,23 @@ v20260801StrongPatchValidators['zzz-openclaw-plugin-degraded-startup.patch'] = [
   },
 ];
 
+v20260801StrongPatchValidators['openclaw-skip-turn-replay-after-model-call.patch'] = [
+  {
+    file: 'src/auto-reply/reply/agent-runner-error-handler.ts',
+    snippets: ['  modelCallStarted: boolean;'],
+    orderedSnippets: [
+      '!params.overloadRetryState.modelCallStarted &&',
+      'params.overloadRetryState.retryCount < MAX_OVERLOAD_RETRIES',
+      '!params.overloadRetryState.modelCallStarted &&',
+      'params.consumeTransientHttpRetry()',
+    ],
+  },
+  {
+    file: 'src/auto-reply/reply/agent-runner-execution.ts',
+    snippets: ['overloadRetryState.modelCallStarted = true;', 'modelCallStarted: false,'],
+  },
+];
+
 const strongPatchValidators = openclawVersion === 'v2026.8.1'
   ? v20260801StrongPatchValidators
   : legacyStrongPatchValidators;
