@@ -561,3 +561,51 @@ Verify with upstream `transport-stream-shared.test.ts`,
 patch when the pinned upstream applies terminal string-literal repair to
 OpenAI-compatible completions. Remove the continuation patch when upstream
 recovers rejected tool calls after side effects.
+
+## Whole-turn replay after a started model call
+
+`openclaw-skip-turn-replay-after-model-call.patch` stops the reply runner from
+replaying a whole turn once that turn has started a model call. This applies to
+both outer replays in `agent-runner-error-handler.ts`: the one-shot transient
+HTTP retry and the overload retry.
+
+Why: v2026.8.1 still has both replays, and it adds keyed user admission to the
+session transcript. A started model call has already committed the turn's
+`<runId>:user` message and, when the call fails, its error reply. The replay
+admits the same keyed user again, behind that reply, and `SessionManager`
+rejects it with "Session transcript keyed user is outside the current turn"
+(or "Transcript idempotency key ... conflicts with the admitted message"). The
+user then sees "LLM request failed." with that internal text 2.5s later,
+instead of the real provider error. The existing replay guard only reacts to
+tool execution and CLI output; the embedded runner never emits
+`assistant_output_started`, so streamed text or reasoning did not stop the
+replay. On 2026-09-24 a Windows user hit this 6 times out of 6. Each case
+followed a mid-stream `net::ERR_SSL_PROTOCOL_ERROR` in the token proxy, which
+OpenClaw reports as `LLM request timed out.` with `terminated`. v2026.6.1 had
+the replay but not the keyed guard, so this failure is new with 8.1.
+
+The patch adds `OverloadRetryState.modelCallStarted`. The embedded runner's
+`model_call_started` phase sets it, and both replay branches require it to be
+false. Failures before any model call (for example an auth-profile cooldown
+classified as overloaded) still replay as before, with the delayed overload
+notice. After a started call, the first failure is surfaced directly with its
+own classification: LobsterAI maps `providerRuntimeFailureKind: timeout` to its
+response-timeout message. CLI backends (`process_spawned`) are unchanged.
+
+Verify with the upstream suites. The new cases in the provider-failures suite
+check that overloaded, HTTP 503 and interrupted-stream failures are not
+replayed after `model_call_started`. The existing pre-call 503 and overload
+retry cases must still pass:
+
+```sh
+node_modules/.bin/vitest run src/auto-reply/reply/agent-runner-execution-provider-failures.test.ts src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
+node_modules/.bin/vitest run --config test/vitest/vitest.e2e.config.ts src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
+```
+
+These files already fail in 16 cases before this patch: failure copy and trace
+segments changed by other LobsterAI patches. The failing set must stay the
+same. Then run LobsterAI's `turnReplayAfterModelCall` test and rebuild the
+runtime. Remove this patch when the pinned upstream contains
+[OpenClaw #134281](https://github.com/openclaw/openclaw/pull/134281) (v2026.9.1
+and later). That change deletes both outer replays and budgets transient
+retries inside the embedded runner, before any visible output.
