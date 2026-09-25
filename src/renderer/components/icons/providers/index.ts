@@ -15,6 +15,7 @@ export { default as OpenAIIcon } from './OpenAIIcon';
 export { default as OpenRouterIcon } from './OpenRouterIcon';
 export { default as QianfanIcon } from './QianfanIcon';
 export { default as QwenIcon } from './QwenIcon';
+export { default as RequestyIcon } from './RequestyIcon';
 export { default as StepfunIcon } from './StepfunIcon';
 export { default as VolcengineIcon } from './VolcengineIcon';
 export { default as XaiIcon } from './XaiIcon';

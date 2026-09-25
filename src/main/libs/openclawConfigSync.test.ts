@@ -216,6 +216,11 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
     resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
+  [ProviderName.Requesty]: {
+    providerId: OpenClawProviderId.Requesty,
+    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
   [ProviderName.Ollama]: {
     providerId: OpenClawProviderId.Ollama,
     resolveApi: () => OpenClawApi.OpenAICompletions as OpenClawProviderApi,
@@ -358,10 +363,11 @@ describe('provider registry coverage', () => {
     ProviderName.StepFun,
     ProviderName.Xiaomi,
     ProviderName.OpenRouter,
+    ProviderName.Requesty,
     ProviderName.Ollama,
   ] as const;
 
-  test('all 14 providers have registry entries', () => {
+  test('all 15 providers have registry entries', () => {
     for (const name of allRegistryProviders) {
       expect(name in PROVIDER_REGISTRY, `${name} missing from registry`).toBe(true);
     }
