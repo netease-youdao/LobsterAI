@@ -53,6 +53,7 @@ export const LogReporterAction = {
   ImInstanceChanged: 'lobsterai_im_instance_changed',
   ImPromptSubmit: 'lobsterai_im_prompt_submit',
   ImSettingsSaved: 'lobsterai_im_settings_saved',
+  InAppPurchaseAction: 'lobsterai_in_app_purchase_action',
   LibraryAction: 'lobsterai_library_action',
   LowCreditSidebarOfferExposure: 'lobsterai_low_credit_sidebar_offer_exposure',
   LowCreditSidebarRechargeClick: 'lobsterai_low_credit_sidebar_recharge_click',
