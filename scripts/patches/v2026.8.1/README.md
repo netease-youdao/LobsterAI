@@ -489,3 +489,36 @@ Verify with upstream `runtime-facts-prompt.test.ts`,
 while a background `exec` is running and that the gateway log no longer reports
 `[prompt-cache] cache read dropped` at run boundaries. Remove this patch when
 the pinned upstream includes `#140799`.
+
+## Startup and accepted-work continuity
+
+Three patches backport selected OpenClaw improvements without changing the
+`v2026.8.1` runtime pin:
+
+- `zzzz-openclaw-worker-startup-checkpoints.patch` separates the model-catalog
+  worker's serialized contract from host orchestration and combines startup/state
+  migration checkpoint reads into one integrity-checked database observation.
+  Credential fingerprints, lease-time rechecks, and invalidation remain intact.
+- `zzzz-openclaw-parent-owned-recovery.patch` makes the parent own interrupted
+  child recovery, with exact source-run claims and delivery receipts. Legacy
+  receipts are reconciled without blindly relaunching children. Stop persists
+  cancellation before acknowledgement, including the completed-child/pending-wake
+  window. Commentary, errors, reasoning and silent replies cannot certify final
+  delivery, even with explicit visibility metadata.
+- `zzzz-openclaw-compaction-admission.patch` captures the predecessor before the
+  send ACK and follows verified compaction lineage through admission, session
+  initialization and abort ownership. It preserves the accepted run ID only
+  within the same physical SQLite database. Reset, restart, cancellation and
+  replaced databases remain routing boundaries.
+
+The recovery and compaction patches address the same session ownership boundary
+and should be reviewed together. Regression tests are included inside the source
+patches, including real SQLite handoffs and cancellation/restart races.
+
+References: OpenClaw [#154293](https://github.com/openclaw/openclaw/pull/154293),
+[#153243](https://github.com/openclaw/openclaw/pull/153243), and
+[#152958](https://github.com/openclaw/openclaw/pull/152958). These are selective
+adaptations for the pinned runtime, not a complete runtime upgrade.
+
+These changes affect the bundled runtime and require a rebuilt desktop package;
+a renderer-only update cannot deliver them.

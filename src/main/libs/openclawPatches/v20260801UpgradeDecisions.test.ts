@@ -66,6 +66,9 @@ const RETAINED_PATCHES = [
   'zz-openclaw-marketplace-clone-retry.patch',
   'zz-openclaw-task-cwd-system-prompt.patch',
   'zzz-openclaw-plugin-degraded-startup.patch',
+  'zzzz-openclaw-compaction-admission.patch',
+  'zzzz-openclaw-parent-owned-recovery.patch',
+  'zzzz-openclaw-worker-startup-checkpoints.patch',
 ] as const;
 
 const RETIRED_PATCHES = [
