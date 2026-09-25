@@ -135,6 +135,7 @@ import type {
   OpenClawGatewayRepairErrorCode,
 } from '../../shared/openclawEngine/constants';
 import type { OpenClawRepairStage } from '../../shared/openclawEngine/repair';
+import type { PaymentBridge } from '../../shared/payment/constants';
 import type {
   PublishingQuota,
   PublishingQuotaErrorData,
@@ -2019,6 +2020,7 @@ interface IElectronAPI {
     }>;
   };
   subscriptionTrial: SubscriptionTrialBridge;
+  payment: PaymentBridge;
   activity: {
     getSlot: (
       input: ActivityHostGetSlotInput,

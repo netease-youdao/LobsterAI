@@ -101,6 +101,7 @@ import {
 } from '../shared/localWebServices/constants';
 import { McpIpcChannel } from '../shared/mcp/constants';
 import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
+import { type PaymentBridge, PaymentIpc } from '../shared/payment/constants';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
 import {
@@ -1104,6 +1105,16 @@ contextBridge.exposeInMainWorld('electron', {
   subscriptionTrial: {
     status: () => ipcRenderer.invoke(SubscriptionTrialIpc.Status),
   },
+  payment: {
+    getAvailability: () => ipcRenderer.invoke(PaymentIpc.GetAvailability),
+    getCatalog: () => ipcRenderer.invoke(PaymentIpc.GetCatalog),
+    quote: input => ipcRenderer.invoke(PaymentIpc.Quote, input),
+    createOrder: input => ipcRenderer.invoke(PaymentIpc.CreateOrder, input),
+    replaceOrder: input => ipcRenderer.invoke(PaymentIpc.ReplaceOrder, input),
+    getReplacement: input => ipcRenderer.invoke(PaymentIpc.GetReplacement, input),
+    initAlipayQr: input => ipcRenderer.invoke(PaymentIpc.InitAlipayQr, input),
+    getOrderStatus: input => ipcRenderer.invoke(PaymentIpc.GetOrderStatus, input),
+  } satisfies PaymentBridge,
   activity: {
     getSlot: (input: ActivityHostGetSlotInput) =>
       ipcRenderer.invoke(ActivityIpc.HostGetSlot, input),

@@ -48,7 +48,7 @@ import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol }
 import { ReviewIpc, ReviewScope, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest } from '../shared/artifactPreview/reviewSource';
 import { buildWorkspaceChangesArtifact } from '../shared/artifactPreview/workspaceChanges';
-import { createAccountOwnerKey } from '../shared/auth/accountOwner';
+import { createAccountOwnerKey, resolveAccountOwnerUserId } from '../shared/auth/accountOwner';
 import {
   AuthIpcChannel,
   type AuthLifecycleEvent,
@@ -277,6 +277,7 @@ import { registerKitHandlers } from './ipcHandlers/kits';
 import { hasUnsafeMarkdownEdits, registerMarkdownEditingHandlers } from './ipcHandlers/markdownEditing';
 import { registerMcpHandlers } from './ipcHandlers/mcp';
 import { registerNimQrLoginHandlers } from './ipcHandlers/nimQrLogin';
+import { registerPaymentIpcHandlers } from './ipcHandlers/payment';
 import { registerPermissionIpcHandlers } from './ipcHandlers/permissions/handlers';
 import { registerPluginHandlers } from './ipcHandlers/plugins';
 import {
@@ -378,6 +379,7 @@ import { createLoginTransaction } from './libs/embeddedLogin/loginTransaction';
 import { NETEASE_LOGIN_ORIGINS, resolvePortalLoginUrl } from './libs/embeddedLogin/loginUrlPolicy';
 import {
   getHtmlSharePublicBaseUrl,
+  getInAppPaymentOvermindUrl,
   getKitStoreUrl,
   getLoginOvermindUrl,
   getPortalTasksUrl,
@@ -7191,6 +7193,17 @@ if (!gotTheLock) {
     getServerBaseUrl: getServerApiBaseUrl,
     getClientVersion: () => app.getVersion(),
     platform: process.platform,
+    hasAuthTokens: () => getAuthTokens() !== null,
+    fetchPublic: (url, options) => net.fetch(url, options),
+    fetchWithAuth,
+  });
+
+  registerPaymentIpcHandlers({
+    ipcMain,
+    getMainWindow: () => mainWindow,
+    getServerBaseUrl: getServerApiBaseUrl,
+    getAvailabilityUrl: getInAppPaymentOvermindUrl,
+    getAccountKey: () => resolveAccountOwnerUserId(getAuthUser()),
     hasAuthTokens: () => getAuthTokens() !== null,
     fetchPublic: (url, options) => net.fetch(url, options),
     fetchWithAuth,
