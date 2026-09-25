@@ -68,6 +68,7 @@ import { shouldShowAppUpdateNotice } from './components/update/appUpdateNoticeSt
 import WindowsAppTitleBar from './components/window/WindowsAppTitleBar';
 import { defaultConfig, getProviderDisplayName, ShortcutAction } from './config';
 import { selectIsEnterpriseAccount } from './features/enterpriseAccount/selectors';
+import PurchaseCenter from './features/payment/components/PurchaseCenter';
 import { SkinProvider } from './providers/SkinProvider';
 import type { ApiConfig } from './services/api';
 import { apiService } from './services/api';
@@ -2105,6 +2106,7 @@ const App: React.FC = () => {
       <StartupCreditCampaign
         enabled={privacyAgreed === true && !isEnterpriseAccount}
       />
+      <PurchaseCenter />
       {windowsStandaloneTitleBar}
       <div
         className="relative flex flex-1 min-h-0 overflow-hidden"
