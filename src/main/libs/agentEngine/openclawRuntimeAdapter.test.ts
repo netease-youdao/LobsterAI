@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { expect, test, vi } from 'vitest';
 
+
 vi.mock('electron', () => ({
   app: {
     getAppPath: () => process.cwd(),
@@ -10800,4 +10801,22 @@ test('tool input_delta is ignored in plan mode and for stale runs', () => {
     data: { toolCallId: 'call-2', phase: 'input_delta', name: 'write', diff: { added: 3, removed: 0 } },
   }, 2);
   expect(session.messages.some((message) => message.type === 'tool_use')).toBe(false);
+});
+
+
+test('tool activity does not persist a host-authored placeholder over native plans', () => {
+  const { session, store } = createReconcileStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const key = `agent:main:lobsterai:${session.id}`;
+  const turn = createActiveTurn(session.id, key, 'progress-run');
+  adapter.activeTurns.set(session.id, turn);
+  const request = vi.fn();
+  adapter.progressCards = new Proxy(adapter.progressCards, { get(target, prop, receiver) {
+    if (prop === 'ensureActivity') return request;
+    return Reflect.get(target, prop, receiver);
+  } });
+  for (const id of ['one', 'two', 'three']) adapter.handleAgentToolEvent(session.id, turn,
+    { toolCallId: id, name: 'read', phase: 'start', args: { path: '/tmp/example' } }, turn.runId);
+  expect(request).not.toHaveBeenCalled();
+  expect(session.messages.filter(message => message.type === 'tool_use')).toHaveLength(3);
 });

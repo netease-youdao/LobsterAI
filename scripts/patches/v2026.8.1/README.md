@@ -1,5 +1,21 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Native progress activity card
+
+`zz-openclaw-progress-card-activity.patch` adds optional `ifAbsent` to
+`progressCard.put`. Cowork uses it after observing two distinct tool starts to
+create a factual activity card when the agent has not supplied a native plan.
+The native SQLite transaction checks for an existing row before writing;
+both a populated card and a cleared-card tombstone prevent replacement.
+Ordinary agent updates and revision-aware dismissal retain their semantics.
+
+Verify upstream `src/session-cards/progress-card-store.test.ts` and
+`src/gateway/server-methods/progress-card.test.ts`, including native-plan races
+and cleared-card preservation. Rebuild the bundled runtime with the main/preload
+changes; renderer-only delivery is insufficient. Remove this patch when the
+pinned upstream protocol and store provide equivalent atomic create-if-absent
+semantics. See `docs/native-progress-card.md` for the client contract.
+
 ## Device identity conflicts without an import receipt
 
 `openclaw-device-identity-preservation.patch` aligns the identity migration owner
@@ -489,3 +505,14 @@ Verify with upstream `runtime-facts-prompt.test.ts`,
 while a background `exec` is running and that the gateway log no longer reports
 `[prompt-cache] cache read dropped` at run boundaries. Remove this patch when
 the pinned upstream includes `#140799`.
+
+## Progress card refresh
+
+`zzzz-openclaw-progress-card-refresh.patch` adds an operator-write `progressCard.refresh`
+RPC. A fixed hidden status request keeps the caller's authorization, restricts tools
+to status/reporting, and returns the original card revision as an idempotent receipt.
+User/assistant transcript display, session activity, and lifecycle projections stay
+hidden; stale completed sessions are not reset. Authorized `progress_card` remains
+directly available through tool catalog compaction, without bypassing policy denial.
+Includes Gateway authorization/retry/race tests, real SQLite session-init coverage,
+chat transcript/projection regressions, and catalog visibility tests.

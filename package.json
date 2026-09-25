@@ -304,6 +304,7 @@
     "eslint-plugin-simple-import-sort": "^12.1.1",
     "globals": "^17.4.0",
     "husky": "^9.1.7",
+    "jsdom": "^26.1.0",
     "patch-package": "^8.0.1",
     "postcss": "^8.4.35",
     "prettier": "^3.8.1",

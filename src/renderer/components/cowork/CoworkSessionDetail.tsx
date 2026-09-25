@@ -197,6 +197,7 @@ import {
   MEDIA_TOKEN_DISPLAY_RE,
   type ToolGroupItem,
 } from './messageDisplayUtils';
+import OpenClawProgressCard from './OpenClawProgressCard';
 import { parseProposedPlanBlock } from './proposedPlanParser';
 import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
 import { buildSelectedSkillRoutingPrompt } from './selectedSkillRoutingPrompt';
@@ -6851,6 +6852,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               })}
             />
           )}
+          <OpenClawProgressCard key={currentSession.id} session={currentSession} />
           {showExternalGoalStatusBar && (
             <div className={`relative z-10 ${showExternalSteerPreview ? 'mb-1.5' : '-mb-px'}`}>
               <div ref={setGoalStatusBarPortalTarget} />

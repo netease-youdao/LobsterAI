@@ -7,6 +7,7 @@ import type {
 } from '../../../shared/cowork/btw';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import { OpenClawQuestion } from '../../../shared/cowork/openclawQuestion';
+import { ProgressCardEvent } from '../../../shared/cowork/progressCard';
 import type { CoworkSteerResponse } from '../../../shared/cowork/steer';
 import type {
   CoworkAgentEngine,
@@ -125,6 +126,13 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     }
     return this.runtime.patchSession(sessionId, patch);
   }
+
+  async getProgressCard(sessionId: string) { return this.runtime.getProgressCard?.(sessionId) ?? null; }
+  async refreshProgressCard(sessionId: string, idempotencyKey: string) {
+    if (!this.runtime.refreshProgressCard) throw new Error('Progress refresh unavailable');
+    return this.runtime.refreshProgressCard(sessionId, idempotencyKey);
+  }
+  async dismissProgressCard(sessionId: string, revision: number) { return this.runtime.dismissProgressCard?.(sessionId, revision) ?? null; }
 
   async getContextUsage(sessionId: string): Promise<CoworkContextUsage | null> {
     if (!this.runtime.getContextUsage) {
@@ -247,6 +255,8 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       this.sessionEngine.set(sessionId, engine);
       this.emit('btwResult', sessionId, result);
     });
+
+    runtime.on(ProgressCardEvent.Changed, sessionId => this.emit(ProgressCardEvent.Changed, sessionId));
 
     runtime.on('contextUsageUpdate', (sessionId, usage) => {
       this.sessionEngine.set(sessionId, engine);

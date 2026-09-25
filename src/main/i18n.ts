@@ -16,6 +16,7 @@ export type LanguageType = 'zh' | 'en';
 
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    coworkProgressActivityObserved: '已开始执行多项工具操作；详细任务计划尚未提供。',
     browserPasskeyChooseAccountTitle: '使用通行密钥',
     browserPasskeyChooseAccountMessage: '选择用于登录 {site} 的账号',
     browserPasskeyUnnamedAccount: '已保存的账号',
@@ -403,6 +404,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    coworkProgressActivityObserved: 'Multiple tool operations have started; a detailed task plan has not been provided yet.',
     browserPasskeyChooseAccountTitle: 'Use a passkey',
     browserPasskeyChooseAccountMessage: 'Choose an account to sign in to {site}',
     browserPasskeyUnnamedAccount: 'Saved account',

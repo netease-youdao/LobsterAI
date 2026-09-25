@@ -57,6 +57,10 @@ export const COWORK_TEMP_DIR_NAME = '.cowork-temp';
 export const COWORK_TEMP_ATTACHMENTS_DIR_NAME = 'attachments';
 
 export const CoworkIpcChannel = {
+  RefreshProgressCard: 'cowork:progressCard:refresh',
+  GetProgressCard: 'cowork:progressCard:get',
+  DismissProgressCard: 'cowork:progressCard:dismiss',
+  ProgressCardChanged: 'cowork:progressCard:changed',
   ConfigSet: 'cowork:config:set',
   PermissionRespond: 'cowork:permission:respond',
   GetPendingQuestions: 'cowork:question:pending',

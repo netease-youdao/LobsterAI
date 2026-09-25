@@ -1,0 +1,1016 @@
+diff --git a/packages/gateway-protocol/src/schema/progress-card.ts b/packages/gateway-protocol/src/schema/progress-card.ts
+index 3a5f3df9..1e5bd54f 100644
+--- a/packages/gateway-protocol/src/schema/progress-card.ts
++++ b/packages/gateway-protocol/src/schema/progress-card.ts
+@@ -57,3 +57,16 @@ export const ProgressCardChangedEventSchema = closedObject({
+   revision: Type.Union([Type.Number(), Type.Null()]),
+ });
+ export type ProgressCardChangedEvent = Static<typeof ProgressCardChangedEventSchema>;
++
++export const ProgressCardRefreshParamsSchema = closedObject({
++  sessionKey: NonEmptyString,
++  agentId: Type.Optional(NonEmptyString),
++  idempotencyKey: NonEmptyString,
++});
++export type ProgressCardRefreshParams = Static<typeof ProgressCardRefreshParamsSchema>;
++export const ProgressCardRefreshResultSchema = closedObject({
++  runId: NonEmptyString,
++  status: Type.Literal("accepted"),
++  revision: Type.Integer({ minimum: 1 }),
++});
++export type ProgressCardRefreshResult = Static<typeof ProgressCardRefreshResultSchema>;
+diff --git a/packages/gateway-protocol/src/schema/protocol-schema-fragment-progress-card.ts b/packages/gateway-protocol/src/schema/protocol-schema-fragment-progress-card.ts
+index 73dbc4d5..d7e4cf0f 100644
+--- a/packages/gateway-protocol/src/schema/protocol-schema-fragment-progress-card.ts
++++ b/packages/gateway-protocol/src/schema/protocol-schema-fragment-progress-card.ts
+@@ -1,6 +1,8 @@
+ import * as progressCard from "./progress-card.js";
+ 
+ export const ProgressCardProtocolSchemas = {
++  ProgressCardRefreshParams: progressCard.ProgressCardRefreshParamsSchema,
++  ProgressCardRefreshResult: progressCard.ProgressCardRefreshResultSchema,
+   ProgressCardStepStatus: progressCard.ProgressCardStepStatusSchema,
+   ProgressCardStep: progressCard.ProgressCardStepSchema,
+   ProgressCard: progressCard.ProgressCardSchema,
+diff --git a/packages/gateway-protocol/src/validator-registry.ts b/packages/gateway-protocol/src/validator-registry.ts
+index a3e2a8fa..fa097318 100644
+--- a/packages/gateway-protocol/src/validator-registry.ts
++++ b/packages/gateway-protocol/src/validator-registry.ts
+@@ -135,6 +135,7 @@ export const validateBoardEventParams = compile(S.BoardEventParamsSchema);
+ export const validateBoardPromptAuthorizeParams = compile(S.BoardPromptAuthorizeParamsSchema);
+ export const validateBoardDataReadParams = compile(S.BoardDataReadParamsSchema);
+ export const validateBoardActionParams = compile(S.BoardActionParamsSchema);
++export const validateProgressCardRefreshParams = compile(S.ProgressCardRefreshParamsSchema);
+ export const validateProgressCardGetParams = compile(S.ProgressCardGetParamsSchema);
+ export const validateProgressCardPutParams = compile(S.ProgressCardPutParamsSchema);
+ export const validateWorktreesCreateParams = compile(S.WorktreesCreateParamsSchema);
+diff --git a/src/agents/tools/progress-card-tool.ts b/src/agents/tools/progress-card-tool.ts
+index e07730b1..8c7affd0 100644
+--- a/src/agents/tools/progress-card-tool.ts
++++ b/src/agents/tools/progress-card-tool.ts
+@@ -31,6 +31,8 @@ export function createProgressCardTool(options: ProgressCardToolOptions = {}): A
+   return {
+     name: "progress_card",
+     label: "Progress Card",
++    // Progress reporting must remain available before the first tool search.
++    catalogMode: "direct-only",
+     description:
+       'Maintain this session\'s progress card: the single durable status surface shown next to the session in OpenClaw\'s UIs, for someone who is not reading the transcript. Keep it current on any task that takes more than a moment — it is how the user watches you work without scrolling. Each call replaces the whole card. Pick the representation that fits the work, using either or both parts: `markdown` — a compact note; tables for comparisons or metrics, <progress value="3" max="7"></progress> bars for one long operation, a bold one-liner for simple state; other raw HTML is stripped. Known URL? Link it. Don’t leave PRs or issues as bare IDs. And `plan` — an ordered step checklist (pending | in_progress | completed, at most one in_progress) for genuinely sequential work. The checklist is optional: omit it whenever a table, bar, or sentence says it better, and never repeat the same facts in both parts. Call with both parts empty to clear. Update on meaningful change — a step done, a blocker, results in — not every message. Max 8 KB markdown, 50 steps.',
+     parameters: ProgressCardToolSchema,
+diff --git a/src/agents/tools/progress-card-tool.visibility.test.ts b/src/agents/tools/progress-card-tool.visibility.test.ts
+new file mode 100644
+index 00000000..d7acf2e1
+--- /dev/null
++++ b/src/agents/tools/progress-card-tool.visibility.test.ts
+@@ -0,0 +1,67 @@
++import { describe, expect, it } from "vitest";
++import { finalizeAgentTools } from "../agent-tools.finalize.js";
++import { applyCodeModeCatalog, createCodeModeTools } from "../code-mode.js";
++import { filterToolsByPolicy } from "../tool-policy-match.js";
++import {
++  applyToolSchemaDirectoryCatalog,
++  applyToolSearchCatalog,
++  createToolSearchCatalogRef,
++  createToolSearchTools,
++} from "../tool-search.js";
++import type { AnyAgentTool } from "./common.js";
++import { createProgressCardTool } from "./progress-card-tool.js";
++
++const modes = ["tools", "directory", "code", "code-mode"] as const;
++type Mode = (typeof modes)[number];
++
++function compact(mode: Mode, authorizedTools: AnyAgentTool[]) {
++  const config = {
++    tools: { toolSearch: { enabled: true, mode: mode === "code-mode" ? ("code" as const) : mode } },
++  };
++  const catalogRef = createToolSearchCatalogRef();
++  const controls =
++    mode === "code-mode"
++      ? createCodeModeTools({ config, catalogRef })
++      : createToolSearchTools({ config, catalogRef });
++  const params = { config, catalogRef, tools: [...controls, ...authorizedTools] };
++  const result =
++    mode === "code-mode"
++      ? applyCodeModeCatalog(params)
++      : mode === "directory"
++        ? applyToolSchemaDirectoryCatalog(params)
++        : applyToolSearchCatalog(params);
++  return { ...result, entries: catalogRef.current?.entries ?? [] };
++}
++
++describe("progress_card visibility after tool surface compaction", () => {
++  for (const wrapped of [false, true]) {
++    it.each(modes)(`keeps progress_card directly callable in %s (wrapped=${wrapped})`, (mode) => {
++      const progress = createProgressCardTool({ agentSessionKey: "agent:main:progress" });
++      const tools = wrapped
++        ? finalizeAgentTools({
++            tools: [progress],
++            hookContext: {},
++            abortSignal: new AbortController().signal,
++          })
++        : [progress];
++      const result = compact(mode, tools);
++      expect(result.catalogRegistered).toBe(true);
++      expect(result.tools.map((tool) => tool.name)).toContain("progress_card");
++      expect(result.tools.find((tool) => tool.name === "progress_card")?.execute).toBeTypeOf(
++        "function",
++      );
++      expect(result.entries.map((entry) => entry.name)).not.toContain("progress_card");
++    });
++  }
++
++  it.each(modes)("preserves explicit policy denial in %s", (mode) => {
++    const tools = filterToolsByPolicy(
++      [createProgressCardTool({ agentSessionKey: "agent:main:progress" })],
++      { deny: ["progress_card"] },
++    );
++    const result = compact(mode, tools);
++    expect(result.catalogRegistered).toBe(true);
++    expect(result.tools.map((tool) => tool.name)).not.toContain("progress_card");
++    expect(result.entries.map((entry) => entry.name)).not.toContain("progress_card");
++  });
++});
+diff --git a/src/auto-reply/reply/session.heartbeat-no-reset.test.ts b/src/auto-reply/reply/session.heartbeat-no-reset.test.ts
+index ac10505f..4b76eef0 100644
+--- a/src/auto-reply/reply/session.heartbeat-no-reset.test.ts
++++ b/src/auto-reply/reply/session.heartbeat-no-reset.test.ts
+@@ -132,6 +132,35 @@ describe("initSessionState - heartbeat should not trigger session reset", () =>
+     },
+   );
+ 
++  it.each(["cancelled", "completed"] as const)(
++    "preserves a stale %s session when refreshing its progress card",
++    async (status) => {
++      const staleTime = Date.now() - 10 * 60 * 1000;
++      const terminal = {
++        status,
++        lifecycleRunId: "original-run",
++        lastRunId: "original-run",
++        endedAt: staleTime + 1000,
++        abortedLastRun: status === "cancelled",
++        lastInteractionAt: staleTime,
++      };
++      await saveExistingSession("terminal-session", staleTime, terminal);
++      const result = await initSessionState({
++        ctx: createBaseCtx({
++          InputProvenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
++          Body: "Refresh the existing progress card only.",
++        }),
++        cfg: createBaseConfig(),
++        commandAuthorized: true,
++      });
++      expect(result.isNewSession).toBe(false);
++      expect(result.resetTriggered).toBe(false);
++      expect(result.sessionId).toBe("terminal-session");
++      expect(result.sessionEntry).toMatchObject(terminal);
++      expect(expectPersistedSession()).toMatchObject(terminal);
++    },
++  );
++
+   it("resets a stale session for a user turn", async () => {
+     // Setup: Create a session entry that is "stale" (older than idle timeout)
+     const now = Date.now();
+diff --git a/src/auto-reply/reply/session.ts b/src/auto-reply/reply/session.ts
+index 0b4bf83d..8e787119 100644
+--- a/src/auto-reply/reply/session.ts
++++ b/src/auto-reply/reply/session.ts
+@@ -79,7 +79,10 @@ import {
+   normalizeMainKey,
+ } from "../../routing/session-key.js";
+ import { resolveAgentHarnessSessionContextError } from "../../sessions/agent-harness-session-key.js";
+-import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
++import {
++  isInterSessionInputProvenance,
++  isProgressCardRefreshInputProvenance,
++} from "../../sessions/input-provenance.js";
+ import {
+   isModelSelectionLocked,
+   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+@@ -305,7 +308,9 @@ function resolveInitSessionStateAttemptContext(
+ ): InitSessionStateAttemptContext {
+   const { cfg, ctx } = params;
+   // Automated system events must not reset sessions or retarget conversation bindings.
+-  const isSystemEvent = ctx.InternalTurnSource !== undefined;
++  const isSystemEvent =
++    ctx.InternalTurnSource !== undefined ||
++    isProgressCardRefreshInputProvenance(ctx.InputProvenance);
+   const conversationBindingContext = isSystemEvent
+     ? null
+     : resolveSessionConversationBindingContext(cfg, ctx);
+diff --git a/src/gateway/chat-abort.ts b/src/gateway/chat-abort.ts
+index 3c7e9f6a..8e7c89c9 100644
+--- a/src/gateway/chat-abort.ts
++++ b/src/gateway/chat-abort.ts
+@@ -222,6 +222,7 @@ export function registerChatAbortController(params: {
+   providerId?: string;
+   authProviderId?: string;
+   controlUiVisible?: boolean;
++  projectSessionActive?: boolean;
+   isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
+   onRemoved?: () => void;
+   kind?: ChatAbortControllerEntry["kind"];
+@@ -342,7 +343,7 @@ export function registerChatAbortController(params: {
+     controlUiVisible: params.controlUiVisible,
+     isAbortable: params.isAbortable,
+     onRemoved: params.onRemoved,
+-    projectSessionActive: true,
++    projectSessionActive: params.projectSessionActive ?? true,
+     kind: params.kind,
+     turnKind: params.turnKind,
+   };
+diff --git a/src/gateway/methods/core-descriptors.ts b/src/gateway/methods/core-descriptors.ts
+index 80fa6697..ea56f0f6 100644
+--- a/src/gateway/methods/core-descriptors.ts
++++ b/src/gateway/methods/core-descriptors.ts
+@@ -602,6 +602,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
+   ],
+   ["sessions.assignOwner", "sessions-mutations", "operator.write", "2026.8"],
+   ["progressCard.get", "progress-card", "operator.read", "2026.8"],
++  ["progressCard.refresh", "progress-card", "operator.write", "2026.9"],
+   ["progressCard.put", "progress-card", "operator.write", "2026.8"],
+   ["tools.github.status", "tools-github", "operator.read", "2026.8"],
+   [
+diff --git a/src/gateway/server-methods/chat-broadcast.ts b/src/gateway/server-methods/chat-broadcast.ts
+index e08e0785..0407a10a 100644
+--- a/src/gateway/server-methods/chat-broadcast.ts
++++ b/src/gateway/server-methods/chat-broadcast.ts
+@@ -1,5 +1,6 @@
+ import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+ import type { OpenClawConfig } from "../../config/types.openclaw.js";
++import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+ import { projectChatDisplayMessage } from "../chat-display-projection.js";
+ import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+@@ -97,6 +98,10 @@ type ChatTerminal =
+   | { state: "error"; errorMessage?: string; stopReason?: string; errorKind?: "timeout" };
+ 
+ export function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void {
++  if (getAgentRunContext(params.runId)?.isControlUiVisible === false) {
++    params.context.agentRunSeq.delete(params.runId);
++    return;
++  }
+   const seq = nextChatSeq(params.context, params.runId);
+   const payloadAgentId = parseAgentSessionKey(params.sessionKey) ? undefined : params.agentId;
+   const terminal =
+diff --git a/src/gateway/server-methods/chat-send-admission.ts b/src/gateway/server-methods/chat-send-admission.ts
+index ebb4ad54..d7299014 100644
+--- a/src/gateway/server-methods/chat-send-admission.ts
++++ b/src/gateway/server-methods/chat-send-admission.ts
+@@ -17,6 +17,10 @@ import type { SessionEntry } from "../../config/sessions/types.js";
+ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+ import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
+ import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
++import {
++  isProgressCardRefreshInputProvenance,
++  progressCardRefreshRunProjection,
++} from "../../sessions/input-provenance.js";
+ import {
+   beginSessionWorkAdmission,
+   interruptSessionWorkAdmissions,
+@@ -396,6 +400,9 @@ export async function admitChatSend(params: {
+       authProviderId: resolvedSessionAuthProvider,
+       isAbortable: (active) => isReplyRunAbortableForSignal(active.controller.signal),
+       kind: "chat-send",
++      ...(isProgressCardRefreshInputProvenance(request.systemInputProvenance)
++        ? { controlUiVisible: false, projectSessionActive: false }
++        : {}),
+       turnKind,
+       lifecycleGeneration,
+     });
+@@ -626,6 +633,7 @@ export async function admitChatSend(params: {
+     respond(true, payload, undefined, { runId: clientRunId });
+   };
+   claimAgentRunContext(clientRunId, {
++    ...progressCardRefreshRunProjection(request.systemInputProvenance),
+     sessionKey,
+     sessionId: admittedSessionId,
+     lifecycleGeneration,
+diff --git a/src/gateway/server-methods/chat-send-agent-dispatch.ts b/src/gateway/server-methods/chat-send-agent-dispatch.ts
+index 4acef61c..9793c069 100644
+--- a/src/gateway/server-methods/chat-send-agent-dispatch.ts
++++ b/src/gateway/server-methods/chat-send-agent-dispatch.ts
+@@ -66,6 +66,8 @@ type StartChatDispatchParams = {
+   client: GatewayRequestHandlerOptions["client"];
+   context: GatewayRequestHandlerOptions["context"];
+   toolsAllow?: string[];
++  prepareAssistantTranscriptMessage?:
++    import("../../config/sessions/transcript-assistant-delivery.js").PrepareAssistantTranscriptMessage;
+   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
+   cronCreatorAuthority: ReturnType<ChatSendExternalAuthorityAdmission["resolve"]>;
+   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;
+@@ -153,6 +155,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
+   let agentRunStarted = false;
+   let replyDispatchRun: ReplyDispatchRun | undefined;
+   const replyDispatch = createChatSendReplyDispatch({
++    prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+     accountId,
+     isAgentRunStarted: () => agentRunStarted,
+     isRunCurrent: () =>
+diff --git a/src/gateway/server-methods/chat-send-handler.ts b/src/gateway/server-methods/chat-send-handler.ts
+index d54e01c6..e8a6ca6d 100644
+--- a/src/gateway/server-methods/chat-send-handler.ts
++++ b/src/gateway/server-methods/chat-send-handler.ts
+@@ -6,6 +6,7 @@ import {
+   type SessionGoalOperation,
+   type SessionGoalOperationResult,
+ } from "../../config/sessions/goals-operations.js";
++import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+ import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+ import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
+@@ -46,6 +47,8 @@ import { resolveOperatorSessionCreation } from "./session-creation-provenance.js
+ import type { GatewayRequestHandlerOptions } from "./types.js";
+ 
+ type ChatSendInternalOptions = {
++  transcript?: { display: false };
++  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+   goalResume?: SessionGoalOperation & { action: "resume" };
+   trustedSystemInput?: boolean;
+   toolsAllow?: string[];
+@@ -163,6 +166,7 @@ async function handleChatSendWithOptions(
+       request: normalizedRequest.value,
+       session: preparedSession.value,
+       startedAt: admissionStartedAt,
++      transcript: options?.transcript,
+       warn: (message) => context.logGateway.warn(message),
+       assertGoalCurrent: () => {
+         sessionMutationCommitGuard?.();
+@@ -391,6 +395,7 @@ async function handleChatSendWithOptions(
+       client,
+       context,
+       toolsAllow: options?.toolsAllow,
++      prepareAssistantTranscriptMessage: options?.prepareAssistantTranscriptMessage,
+       skillWorkshopProposalRevision: options?.skillWorkshopProposalRevision,
+       cronCreatorAuthority,
+       externalAuthorityAdmission,
+@@ -464,8 +469,13 @@ export async function handleChatSendWithSkillWorkshopProposalRevision(
+ export async function handleTrustedInternalChatSend(
+   options: GatewayRequestHandlerOptions,
+   onAdmissionOwned?: () => Promise<boolean>,
++  internalOptions?: Pick<
++    ChatSendInternalOptions,
++    "transcript" | "toolsAllow" | "prepareAssistantTranscriptMessage"
++  >,
+ ): Promise<void> {
+   await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {
++    ...internalOptions,
+     trustedSystemInput: true,
+   });
+ }
+diff --git a/src/gateway/server-methods/chat-send-reply-dispatch.ts b/src/gateway/server-methods/chat-send-reply-dispatch.ts
+index 520b61e4..6c003c8e 100644
+--- a/src/gateway/server-methods/chat-send-reply-dispatch.ts
++++ b/src/gateway/server-methods/chat-send-reply-dispatch.ts
+@@ -105,6 +105,7 @@ export function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
+ 
+ /** Build delivery options and capture state for the core-owned webchat dispatcher. */
+ export function createChatSendReplyDispatch(params: {
++  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+   accountId: string | undefined;
+   isAgentRunStarted: () => boolean;
+   isRunCurrent?: () => boolean;
+@@ -154,12 +155,17 @@ export function createChatSendReplyDispatch(params: {
+     message,
+     sourceText,
+   ) => {
++    const preparedMessage =
++      params.prepareAssistantTranscriptMessage?.(message, sourceText) ?? message;
+     if (!preparingTranscript || !isAgentRunStarted() || !params.isRunCurrent?.() || !sourceText) {
+-      return message;
++      return preparedMessage;
+     }
+     // Record delivery ownership before publication, while preserving raw refs for
+     // the exact-row materializer. This is display provenance, never local-file trust.
+-    return recordAssistantManagedMediaUrls(message, splitMediaFromOutput(sourceText).mediaUrls);
++    return recordAssistantManagedMediaUrls(
++      preparedMessage,
++      splitMediaFromOutput(sourceText).mediaUrls,
++    );
+   };
+   const needsAgentMediaTranscriptFinalization = (payload: ReplyPayload): boolean =>
+     isMediaBearingPayload(payload) ||
+diff --git a/src/gateway/server-methods/chat-send-reply-finalization.ts b/src/gateway/server-methods/chat-send-reply-finalization.ts
+index 22861649..60d27ca9 100644
+--- a/src/gateway/server-methods/chat-send-reply-finalization.ts
++++ b/src/gateway/server-methods/chat-send-reply-finalization.ts
+@@ -1,6 +1,7 @@
+ import { expectDefined } from "@openclaw/normalization-core";
+ import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+ import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
++import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+ import {
+   appendLocalMediaParentRoots,
+   getAgentScopedMediaLocalRoots,
+@@ -162,6 +163,10 @@ export async function finalizeChatSendDispatchedReplies(params: {
+     suppressReplies,
+   } = params;
+   const { agentId, backingSessionId, cfg, clientRunId, sessionKey, sessionLoadOptions } = session;
++  if (getAgentRunContext(clientRunId)?.projectSessionMessages === false) {
++    await persistUserTurnTranscript();
++    return;
++  }
+   const btwResult = buildChatSendBtwSideResult(deliveredReplies);
+   if (btwResult) {
+     broadcastSideResult({
+diff --git a/src/gateway/server-methods/chat-send-source-finalization.ts b/src/gateway/server-methods/chat-send-source-finalization.ts
+index 15221f78..a4755d4f 100644
+--- a/src/gateway/server-methods/chat-send-source-finalization.ts
++++ b/src/gateway/server-methods/chat-send-source-finalization.ts
+@@ -3,6 +3,7 @@ import {
+   isReplyPayloadStatusNotice,
+   type ReplyPayload,
+ } from "../../auto-reply/reply-payload.js";
++import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+ import {
+   appendLocalMediaParentRoots,
+   getAgentScopedMediaLocalRoots,
+@@ -325,6 +326,9 @@ export async function finalizeChatSendSourceReplies(
+     suppressFinal?: boolean;
+   },
+ ): Promise<boolean> {
++  if (getAgentRunContext(params.session.clientRunId)?.projectSessionMessages === false) {
++    return false;
++  }
+   const result = await finalizeChatSendAgentReplyPayloads({
+     accountId: params.accountId,
+     context: params.context,
+diff --git a/src/gateway/server-methods/chat-user-turn-recorder.ts b/src/gateway/server-methods/chat-user-turn-recorder.ts
+index 64534cdf..9afd5111 100644
+--- a/src/gateway/server-methods/chat-user-turn-recorder.ts
++++ b/src/gateway/server-methods/chat-user-turn-recorder.ts
+@@ -36,6 +36,7 @@ export function createGatewayChatUserTurnController(params: {
+   request: NormalizedChatSendRequest;
+   session: PreparedChatSendSession;
+   startedAt: number;
++  transcript?: { display: false };
+   warn: (message: string) => void;
+   assertGoalCurrent?: () => void;
+ }): GatewayChatUserTurnController {
+@@ -45,6 +46,7 @@ export function createGatewayChatUserTurnController(params: {
+       ? undefined
+       : gatewayClientSenderFields(params.client).sender;
+   const baseInput: UserTurnInput = {
++    ...params.transcript,
+     ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
+     text: request.rawMessage,
+     timestamp: session.now,
+diff --git a/src/gateway/server-methods/chat.directive-tags.test.ts b/src/gateway/server-methods/chat.directive-tags.test.ts
+index 59e15c6d..de9e7ea6 100644
+--- a/src/gateway/server-methods/chat.directive-tags.test.ts
++++ b/src/gateway/server-methods/chat.directive-tags.test.ts
+@@ -63,7 +63,11 @@ import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-gran
+ import { createChatRunState } from "../server-chat-state.js";
+ import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
+ import { agentWaitHandler } from "./agent-wait.js";
+-import { handleChatSend, handleChatSendWithRuntimeTools } from "./chat-send-handler.js";
++import {
++  handleTrustedInternalChatSend,
++  handleChatSend,
++  handleChatSendWithRuntimeTools,
++} from "./chat-send-handler.js";
+ import type { GatewayRequestContext, RespondFn } from "./types.js";
+ 
+ type ProjectedDispatchParams = Parameters<
+@@ -1288,6 +1292,7 @@ async function runNonStreamingChatSend(params: {
+   waitForDedupe?: boolean;
+   waitFor?: NonStreamingChatSendWaitFor;
+   runtimeToolsAllow?: string[];
++  hiddenRefresh?: boolean;
+ }): Promise<Record<string, any> | undefined> {
+   const sendParams: {
+     sessionKey: string;
+@@ -1317,7 +1322,13 @@ async function runNonStreamingChatSend(params: {
+     isWebchatConnect: () => false,
+     context: params.context,
+   };
+-  if (params.runtimeToolsAllow) {
++  if (params.hiddenRefresh) {
++    await handleTrustedInternalChatSend(handlerOptions, undefined, {
++      transcript: { display: false },
++      toolsAllow: ["progress_card", "read"],
++      prepareAssistantTranscriptMessage: (message) => ({ ...message, display: false }),
++    });
++  } else if (params.runtimeToolsAllow) {
+     await handleChatSendWithRuntimeTools(handlerOptions, params.runtimeToolsAllow);
+   } else {
+     await handler(handlerOptions);
+@@ -1466,6 +1477,44 @@ describe("chat directive tag stripping for non-streaming final payloads", () =>
+     bindingMocks.resolveByConversation.mockReturnValue(null);
+   });
+ 
++  it.each([false, true])(
++    "keeps progress refresh input and fallback output hidden (error=%s)",
++    async (failure) => {
++      const { context, send } = await createSqliteChatRequest("openclaw-hidden-refresh-");
++      mockState.finalText = "Internal status response";
++      if (failure) {
++        mockState.dispatchError = new Error("Internal status failure");
++      }
++      const request = {
++        idempotencyKey: "hidden-refresh",
++        hiddenRefresh: true,
++        waitFor: "dedupe" as const,
++        message: "Internal status prompt",
++        deliver: false,
++        requestParams: {
++          suppressCommandInterpretation: true,
++          systemInputProvenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
++        },
++      };
++      await send(request);
++      const users = readPersistedUserMessages();
++      expect(users).toHaveLength(1);
++      expect(users[0]).toMatchObject({ display: false });
++      expect(context.broadcast.mock.calls.filter(([event]) => event === "chat")).toEqual([]);
++      expect(dispatchInboundMessageMock).toHaveBeenLastCalledWith(
++        expect.objectContaining({ toolsAllow: ["progress_card", "read"] }),
++      );
++      const calls = dispatchInboundMessageMock.mock.calls.length;
++      await send(request);
++      expect(dispatchInboundMessageMock.mock.calls.length).toBe(calls);
++      expect(readPersistedUserMessages()).toHaveLength(1);
++      const assistants = readTranscriptJsonLines(mockState.transcriptPath)
++        .map((row) => row.message)
++        .filter((message) => message?.role === "assistant");
++      expect(assistants.every((message) => message.display === false)).toBe(true);
++    },
++  );
++
+   it("carries an internal runtime tool cap into agent dispatch", async () => {
+     const { send } = await createSqliteChatRequest("openclaw-chat-send-runtime-tools-");
+ 
+diff --git a/src/gateway/server-methods/progress-card-refresh.test.ts b/src/gateway/server-methods/progress-card-refresh.test.ts
+new file mode 100644
+index 00000000..e18113e2
+--- /dev/null
++++ b/src/gateway/server-methods/progress-card-refresh.test.ts
+@@ -0,0 +1,222 @@
++import { describe, expect, it, vi } from "vitest";
++import type { ProgressCard } from "../../../packages/gateway-protocol/src/index.js";
++import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
++import { createDeferredCore } from "../../shared/deferred.js";
++import type { handleTrustedInternalChatSend } from "./chat-send-handler.js";
++import { createProgressCardHandlers } from "./progress-card.js";
++import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
++
++const { send } = vi.hoisted(() => ({ send: vi.fn<typeof handleTrustedInternalChatSend>() }));
++vi.mock("./chat-send-handler.js", () => ({ handleTrustedInternalChatSend: send }));
++const card: ProgressCard = {
++  sessionKey: "agent:work:status",
++  revision: 7,
++  updatedAt: 1,
++  markdown: "Old status",
++};
++function fixture() {
++  const get = vi.fn(async () => card as ProgressCard | null);
++  const put = vi.fn();
++  const handlers = createProgressCardHandlers({ get, put });
++  const respond = vi.fn<RespondFn>();
++  const assertCurrent = vi.fn();
++  const invocation = {
++    req: { type: "req", id: "refresh", method: "progressCard.refresh" },
++    params: { sessionKey: card.sessionKey, idempotencyKey: "click-1" },
++    respond,
++    client: { connId: "requester", connect: { scopes: ["operator.write"] } },
++    context: {
++      dedupe: new Map(),
++      getRuntimeConfig: () => ({ agents: { entries: { work: {} }, ownership: "explicit" } }),
++      broadcast: vi.fn(),
++    },
++    sessionMutationAuthorization: { assertCurrent },
++    sessionMutationCommitGuard: assertCurrent,
++  } as unknown as GatewayRequestHandlerOptions;
++  send
++    .mockReset()
++    .mockImplementation(async (request: GatewayRequestHandlerOptions) =>
++      request.respond(true, { status: "started" }),
++    );
++  return {
++    get,
++    put,
++    respond,
++    assertCurrent,
++    invocation,
++    invoke: () => handlers["progressCard.refresh"]!(invocation),
++  };
++}
++describe("progressCard.refresh", () => {
++  it("dispatches a fixed hidden steer under the original caller and keeps the old card", async () => {
++    const f = fixture();
++    await f.invoke();
++    expect(send).toHaveBeenCalledOnce();
++    const call = send.mock.calls[0];
++    if (!call) {
++      throw new Error("Expected refresh dispatch");
++    }
++    const [request, , options] = call;
++    if (!options) {
++      throw new Error("Expected hidden refresh dispatch options");
++    }
++    expect(request.client).toBe(f.invocation.client);
++    expect(request.sessionMutationAuthorization).toBe(f.invocation.sessionMutationAuthorization);
++    expect(request.params).toMatchObject({
++      sessionKey: card.sessionKey,
++      agentId: "work",
++      queueMode: "steer",
++      deliver: false,
++      suppressCommandInterpretation: true,
++      systemInputProvenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
++    });
++    expect(request.params.message).toContain("not authorization to resume stopped or idle work");
++    expect(options.transcript).toEqual({ display: false });
++    expect(options.toolsAllow).toContain("progress_card");
++    expect(options.toolsAllow).not.toContain("exec");
++    const assistant = makeAgentAssistantMessage({ content: [{ type: "text", text: "Updated" }] });
++    expect(options.prepareAssistantTranscriptMessage?.(assistant, "Updated")).toEqual({
++      ...assistant,
++      display: false,
++    });
++    expect(f.respond).toHaveBeenCalledWith(
++      true,
++      { runId: request.params.idempotencyKey, status: "accepted", revision: 7 },
++      undefined,
++      undefined,
++    );
++    expect(f.put).not.toHaveBeenCalled();
++    expect(f.invocation.context.broadcast).not.toHaveBeenCalled();
++  });
++  it("keeps retry identity stable and isolates another agent/session", async () => {
++    const f = fixture();
++    await f.invoke();
++    await f.invoke();
++    const original = send.mock.calls[0]?.[0].params.idempotencyKey;
++    expect(original).toEqual(expect.any(String));
++    expect(send.mock.calls[1]?.[0].params.idempotencyKey).toBe(original);
++    f.invocation.params = { sessionKey: "agent:work:other", idempotencyKey: "click-1" };
++    await f.invoke();
++    expect(send.mock.calls[2]?.[0].params.idempotencyKey).not.toBe(original);
++  });
++  it("retains the original baseline when a lost acceptance is retried after the card update", async () => {
++    const f = fixture();
++    await f.invoke();
++    f.get.mockResolvedValue({ ...card, revision: 8, updatedAt: 2 });
++    await f.invoke();
++    expect(f.respond.mock.calls[1]?.[1]).toMatchObject({ status: "accepted", revision: 7 });
++  });
++  it.each([false, true])(
++    "reconciles a completed refresh before permitting a new intent (updated=%s)",
++    async (updated) => {
++      const f = fixture();
++      await f.invoke();
++      if (updated) {
++        f.get.mockResolvedValue({ ...card, revision: 8, updatedAt: 2 });
++      }
++      send.mockImplementation(async (request) => request.respond(true, { status: "completed" }));
++      await f.invoke();
++      if (updated) {
++        expect(f.respond).toHaveBeenLastCalledWith(
++          true,
++          expect.objectContaining({ status: "accepted", revision: 7 }),
++          undefined,
++          undefined,
++        );
++      } else {
++        expect(f.respond).toHaveBeenLastCalledWith(
++          false,
++          undefined,
++          expect.objectContaining({ details: { code: "PROGRESS_CARD_REFRESH_TERMINAL" } }),
++          undefined,
++        );
++      }
++    },
++  );
++  it("accepts a completed retry whose card advances during admission", async () => {
++    const f = fixture();
++    await f.invoke();
++    f.get.mockResolvedValueOnce(card).mockResolvedValueOnce({ ...card, revision: 8 });
++    send.mockImplementation(async (request) => request.respond(true, { status: "completed" }));
++    await f.invoke();
++    expect(f.respond).toHaveBeenLastCalledWith(
++      true,
++      expect.objectContaining({ status: "accepted", revision: 7 }),
++      undefined,
++      undefined,
++    );
++  });
++  it("rechecks authorization when completion races a final card reread", async () => {
++    const f = fixture();
++    await f.invoke();
++    send.mockImplementation(async (request) => request.respond(true, { status: "completed" }));
++    let reads = 0;
++    f.get.mockImplementation(async () => {
++      if (++reads === 2) {
++        f.assertCurrent.mockImplementation(() => {
++          throw new Error("revoked");
++        });
++      }
++      return { ...card, revision: reads === 2 ? 8 : 7 };
++    });
++    await expect(f.invoke()).rejects.toThrow("revoked");
++  });
++  it("does not treat a cached steering acknowledgment as completed work", async () => {
++    const f = fixture();
++    await f.invoke();
++    send.mockImplementation(async (request) => request.respond(true, { status: "ok" }));
++    await f.invoke();
++    expect(f.respond).toHaveBeenLastCalledWith(
++      true,
++      expect.objectContaining({ status: "accepted", revision: 7 }),
++      undefined,
++      undefined,
++    );
++  });
++  it("refuses missing cards and arbitrary prompt/visibility fields", async () => {
++    const f = fixture();
++    f.get.mockResolvedValue(null);
++    await f.invoke();
++    expect(send).not.toHaveBeenCalled();
++    expect(f.respond).toHaveBeenLastCalledWith(
++      false,
++      undefined,
++      expect.objectContaining({ code: "INVALID_REQUEST" }),
++    );
++    f.invocation.params = { ...f.invocation.params, message: "resume all work", hidden: true };
++    await f.invoke();
++    expect(send).not.toHaveBeenCalled();
++  });
++  it("rejects reset or revoked authorization while reading the card", async () => {
++    const f = fixture();
++    const release = createDeferredCore();
++    f.get.mockImplementation(async () => {
++      await release.promise;
++      return card;
++    });
++    const pending = f.invoke();
++    f.assertCurrent.mockImplementation(() => {
++      throw new Error("session was reset");
++    });
++    release.resolve();
++    await expect(pending).rejects.toThrow("session was reset");
++    expect(send).not.toHaveBeenCalled();
++  });
++  it.each(["error", "timeout", "aborted"])(
++    "does not report %s as a successful refresh request",
++    async (status) => {
++      const f = fixture();
++      send.mockImplementation(async (request: GatewayRequestHandlerOptions) =>
++        request.respond(true, { status }),
++      );
++      await f.invoke();
++      expect(f.respond).toHaveBeenCalledWith(
++        false,
++        undefined,
++        expect.objectContaining({ code: "UNAVAILABLE" }),
++        undefined,
++      );
++      expect(f.put).not.toHaveBeenCalled();
++    },
++  );
++});
+diff --git a/src/gateway/server-methods/progress-card-refresh.ts b/src/gateway/server-methods/progress-card-refresh.ts
+new file mode 100644
+index 00000000..9037e5d8
+--- /dev/null
++++ b/src/gateway/server-methods/progress-card-refresh.ts
+@@ -0,0 +1,111 @@
++import { createHash } from "node:crypto";
++import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
++import {
++  ErrorCodes,
++  errorShape,
++  type ProgressCard,
++} from "../../../packages/gateway-protocol/src/index.js";
++import { PROGRESS_CARD_REFRESH_SOURCE_TOOL } from "../../sessions/input-provenance.js";
++import { handleTrustedInternalChatSend } from "./chat-send-handler.js";
++import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
++
++const REFRESH_MESSAGE = [
++  "Refresh this session’s progress card now using progress_card.",
++  "Reconcile the latest conversation and current work: completed work, remaining steps, blockers, and next action. Replace stale scope and statuses; do not merely repeat the previous card or update its timestamp.",
++  "Use only quick read-only checks if needed. State what is unverified rather than inventing progress. If nothing changed, confirm the current state with a fresh card write.",
++  "This is a status request, not authorization to resume stopped or idle work, start new work, or change the task goal.",
++  "Do not acknowledge this request or send a chat reply. The updated card is the response. After updating it, continue work only if it was already active.",
++].join("\n");
++
++/** Reuse chat admission/steering with the original principal, never an elevated synthetic client. */
++export async function requestProgressCardRefresh(
++  invocation: GatewayRequestHandlerOptions,
++  target: { sessionKey: string; agentId: string },
++  card: ProgressCard,
++  idempotencyKey: string,
++  readCard: () => Promise<ProgressCard | null>,
++): Promise<void> {
++  const runId = `progress-card-refresh:${createHash("sha256")
++    .update(JSON.stringify([target.agentId, target.sessionKey, idempotencyKey]))
++    .digest("hex")}`;
++  const receiptKey = `progressCard.refresh:${runId}`;
++  let response: Parameters<RespondFn> | undefined;
++  await handleTrustedInternalChatSend(
++    {
++      ...invocation,
++      req: { ...invocation.req, method: "chat.send" },
++      params: {
++        sessionKey: target.sessionKey,
++        agentId: target.agentId,
++        message: REFRESH_MESSAGE,
++        idempotencyKey: runId,
++        queueMode: "steer",
++        deliver: false,
++        suppressCommandInterpretation: true,
++        systemInputProvenance: {
++          kind: "internal_system",
++          sourceTool: PROGRESS_CARD_REFRESH_SOURCE_TOOL,
++        },
++      },
++      respond: (...args) => {
++        response ??= args;
++      },
++    },
++    undefined,
++    {
++      transcript: { display: false },
++      // Active steering inherits the current turn’s tools; a standalone refresh cannot resume work.
++      toolsAllow: [
++        "progress_card",
++        "read",
++        "sessions_history",
++        "sessions_list",
++        "session_status",
++        "memory_search",
++        "memory_get",
++      ],
++      prepareAssistantTranscriptMessage: (message) => ({ ...message, display: false }),
++    },
++  );
++  if (!response) {
++    return;
++  }
++  const [ok, payload, error, meta] = response;
++  const result = asOptionalRecord(payload);
++  // A lost ACK can be retried after the new card is already written. Keep
++  // the original baseline in the existing bounded Gateway dedupe owner.
++  const receipt = asOptionalRecord(invocation.context.dedupe.get(receiptKey)?.payload);
++  const revision = typeof receipt?.revision === "number" ? receipt.revision : card.revision;
++  // Completion can overtake this retry's initial card read during chat admission.
++  const currentCard =
++    ok && result?.status === "completed" && card.revision <= revision ? await readCard() : card;
++  invocation.sessionMutationCommitGuard?.();
++  invocation.sessionMutationAuthorization?.assertCurrent();
++  const terminalFailure =
++    (result?.status === "completed" && (currentCard?.revision ?? 0) <= revision) ||
++    result?.status === "error" ||
++    result?.status === "timeout" ||
++    result?.status === "aborted";
++  if (!ok || terminalFailure) {
++    invocation.respond(
++      false,
++      undefined,
++      terminalFailure
++        ? errorShape(
++            ErrorCodes.UNAVAILABLE,
++            "The agent could not refresh this card. Retry the refresh.",
++            { details: { code: "PROGRESS_CARD_REFRESH_TERMINAL" } },
++          )
++        : (error ??
++            errorShape(
++              ErrorCodes.UNAVAILABLE,
++              "The agent could not refresh this card. Retry the refresh.",
++            )),
++      meta,
++    );
++    return;
++  }
++  const accepted = { runId, status: "accepted", revision };
++  invocation.context.dedupe.set(receiptKey, { ts: Date.now(), ok: true, payload: accepted });
++  invocation.respond(true, accepted, undefined, meta);
++}
+diff --git a/src/gateway/server-methods/progress-card.ts b/src/gateway/server-methods/progress-card.ts
+index a8c9e24e..bda98e5a 100644
+--- a/src/gateway/server-methods/progress-card.ts
++++ b/src/gateway/server-methods/progress-card.ts
+@@ -2,6 +2,7 @@ import {
+   ErrorCodes,
+   errorShape,
+   validateProgressCardGetParams,
++  validateProgressCardRefreshParams,
+   validateProgressCardPutParams,
+ } from "../../../packages/gateway-protocol/src/index.js";
+ import {
+@@ -38,6 +39,56 @@ export function createProgressCardHandlers(
+   store: ProgressCardStore = progressCardStore,
+ ): GatewayRequestHandlers {
+   return {
++    "progressCard.refresh": async (invocation) => {
++      const { params, respond, context, sessionMutationAuthorization } = invocation;
++      if (
++        !assertValidParams(
++          params,
++          validateProgressCardRefreshParams,
++          "progressCard.refresh",
++          respond,
++        )
++      ) {
++        return;
++      }
++      const cfg = context.getRuntimeConfig();
++      const requested = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
++      if (!requested.ok) {
++        respond(false, undefined, requested.error);
++        return;
++      }
++      const sessionKey = resolveSessionStoreKey({
++        cfg,
++        sessionKey: params.sessionKey,
++        storeAgentId: requested.agentId,
++      });
++      const scopeKey = sessionObserverScopeKey(sessionKey, requested.agentId);
++      const readCard = async () => {
++        sessionMutationAuthorization?.assertCurrent();
++        const card = await Promise.resolve(store.get(scopeKey));
++        sessionMutationAuthorization?.assertCurrent();
++        return card;
++      };
++      const card = await readCard();
++      if (!card) {
++        respond(
++          false,
++          undefined,
++          errorShape(ErrorCodes.INVALID_REQUEST, "There is no progress card to refresh."),
++        );
++        return;
++      }
++      const { requestProgressCardRefresh } = await import("./progress-card-refresh.js");
++      invocation.sessionMutationCommitGuard?.();
++      sessionMutationAuthorization?.assertCurrent();
++      await requestProgressCardRefresh(
++        invocation,
++        { sessionKey, agentId: requested.agentId },
++        card,
++        params.idempotencyKey,
++        readCard,
++      );
++    },
+     "progressCard.get": ({ params, respond, context }) => {
+       if (!assertValidParams(params, validateProgressCardGetParams, "progressCard.get", respond)) {
+         return;
+diff --git a/src/gateway/session-sharing-target-input.ts b/src/gateway/session-sharing-target-input.ts
+index b853981e..27bb0309 100644
+--- a/src/gateway/session-sharing-target-input.ts
++++ b/src/gateway/session-sharing-target-input.ts
+@@ -30,6 +30,7 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
+   ["message.action", ["sessionKey"]],
+   ["plugins.sessionAction", ["sessionKey"]],
+   ["progressCard.get", ["sessionKey"]],
++  ["progressCard.refresh", ["sessionKey"]],
+   ["progressCard.put", ["sessionKey"]],
+   ["send", ["sessionKey"]],
+   ["session.discussion.open", ["sessionKey"]],
+@@ -87,6 +88,7 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
+   "mcp.app.callTool",
+   "mcp.app.updateModelContext",
+   "progressCard.get",
++  "progressCard.refresh",
+   "progressCard.put",
+   "session.discussion.open",
+   "sessions.abort",
+diff --git a/src/sessions/input-provenance.ts b/src/sessions/input-provenance.ts
+index ba71b495..926ef0fe 100644
+--- a/src/sessions/input-provenance.ts
++++ b/src/sessions/input-provenance.ts
+@@ -20,6 +20,26 @@ export type InputProvenance = {
+ export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
+ 
+ export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
++export const PROGRESS_CARD_REFRESH_SOURCE_TOOL = "progress_card_refresh" as const;
++export function isProgressCardRefreshInputProvenance(
++  provenance: InputProvenance | undefined,
++): boolean {
++  return (
++    provenance?.kind === "internal_system" &&
++    provenance.sourceTool === PROGRESS_CARD_REFRESH_SOURCE_TOOL
++  );
++}
++export function progressCardRefreshRunProjection(provenance: InputProvenance | undefined) {
++  return isProgressCardRefreshInputProvenance(provenance)
++    ? {
++        isControlUiVisible: false,
++        projectSessionMessages: false,
++        projectSessionActive: false,
++        projectSessionLifecycle: false,
++      }
++    : undefined;
++}
++
+ const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
+   "agent_harness_task",
+   "image_generate",
+@@ -111,6 +131,9 @@ const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = n
+ 
+ export function shouldPreserveUserFacingSessionStateForInputProvenance(value: unknown): boolean {
+   const provenance = normalizeInputProvenance(value);
++  if (isProgressCardRefreshInputProvenance(provenance)) {
++    return true;
++  }
+   if (provenance?.kind !== "inter_session") {
+     return false;
+   }

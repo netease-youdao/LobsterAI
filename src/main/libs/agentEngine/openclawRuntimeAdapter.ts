@@ -65,6 +65,7 @@ import {
   isPlanImplementationApproval,
   PLAN_MODE_EXECUTION_OVERRIDE_MARKER,
 } from '../../../shared/cowork/planMode';
+import { ProgressCardEvent } from '../../../shared/cowork/progressCard';
 import {
   buildSelectedTextPromptSection,
   type CoworkSelectedTextSnippet,
@@ -175,6 +176,7 @@ import {
   shouldReplaceLocalConversationWithCronHistory,
 } from './openclawCronRunHistorySync';
 import { OpenClawImWorkloadTracker } from './openclawImWorkloadTracker';
+import { OpenClawProgressCards } from './openclawProgressCard';
 import { OpenClawQuestionController } from './openclawQuestionController';
 import {
   buildOpenClawTranscriptOversizedError,
@@ -3389,6 +3391,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.emit('message', sessionId, userMessage);
   }
 
+  private readonly progressCards = new OpenClawProgressCards({
+    client: () => this.requireGatewayClient(),
+    key: id => this.activeTurns.get(id)?.sessionKey ?? this.getSessionKeysForSession(id)[0],
+    changed: id => this.emit(ProgressCardEvent.Changed, id),
+  });
+  getProgressCard(sessionId: string) { return this.progressCards.get(sessionId); }
+  refreshProgressCard(sessionId: string, idempotencyKey: string) { return this.progressCards.refresh(sessionId, idempotencyKey); }
+  dismissProgressCard(sessionId: string, revision: number) { return this.progressCards.dismiss(sessionId, revision); }
+
   async getContextUsage(sessionId: string): Promise<CoworkContextUsage | null> {
     const existing = this.contextUsageInFlightBySession.get(sessionId);
     if (existing) {
@@ -5912,6 +5923,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (shouldInjectSystemPrompt) {
       sections.push(this.buildSystemPromptPrefix(normalizedSystemPrompt));
     }
+    sections.push('[LobsterAI progress card instructions]\nFor work requiring multiple actions, call progress_card before executing the plan, then update it when a step completes, a blocker appears, or the task finishes. Use markdown for the actual goal/current phase and plan for concrete steps (step, status: pending | in_progress | completed). Each call replaces the whole card. Do not invent completion, percentages, or steps. A generic activity card from the client is not your plan: replace it with your actual plan. Skip greetings and simple one-step answers. Respect tool availability and policy.');
     sections.push(buildOpenClawLocalTimeContextPrompt());
     if (currentModel) {
       sections.push(`[Session info]\nCurrent model: ${currentModel}`);
@@ -6199,6 +6211,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         // Setting gatewayClient earlier would let concurrent code send
         // request frames before the connect frame, causing 1008 rejection.
         this.gatewayClient = client;
+        this.progressCards.reconnected();
         this.gatewayClientVersion = connection.version;
         this.gatewayClientEntryPath = connection.clientEntryPath;
         this.gatewayReconnectSuppressed = false;
@@ -7418,6 +7431,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     );
   }
   private handleGatewayEvent(event: GatewayEventFrame): void {
+    if (event.event === ProgressCardEvent.GatewayChanged) {
+      this.progressCards.changed(event.payload);
+      return;
+    }
     // Any event from the gateway proves the connection is alive.
     // Previously only 'tick' updated this timestamp, but during heavy exec
     // streaming the gateway's tick timer gets starved by I/O while other

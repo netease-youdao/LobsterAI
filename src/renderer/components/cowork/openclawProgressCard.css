@@ -1,0 +1,52 @@
+/* Adapted from OpenClaw v2026.8.1 progress-card.css/composer-progress.css (MIT). */
+.openclaw-progress-card {
+  container-type: inline-size;
+  min-width: 0;
+  margin: 0 0 -10px;
+  padding-bottom: 14px;
+  border: 1px solid var(--lobster-border);
+  border-radius: 22px 22px 12px 12px;
+  background: var(--lobster-surface);
+  box-shadow: 0 1px 2px -1px rgb(0 0 0 / 6%), 0 4px 14px rgb(0 0 0 / 7%);
+  color: var(--lobster-text-primary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.openclaw-progress-card-heading { display: flex; align-items: center; padding: 0 14px; gap: 6px; }
+.openclaw-progress-card-heading svg { width: 14px; height: 14px; flex: none; }
+.openclaw-progress-card-toggle { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; padding: 12px 0 8px; text-align: left; }
+.openclaw-progress-card-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.openclaw-progress-card-meta { color: var(--lobster-text-secondary); font-size: 12px; }
+.openclaw-progress-card-body { max-height: min(280px, 35vh); overflow: auto; overscroll-behavior: contain; padding: 0 14px 8px; overflow-wrap: anywhere; }
+.openclaw-progress-card-body ol { list-style: none; margin: 8px 0 0; padding: 0; }
+.openclaw-progress-card-body li { display: flex; align-items: flex-start; gap: 8px; margin: 4px 0; color: var(--lobster-text-secondary); }
+.openclaw-progress-card-body li[data-status="in_progress"] { color: var(--lobster-text-primary); }
+.openclaw-progress-card-marker { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 14px; height: 21px; }
+.openclaw-progress-card-marker svg { width: 14px; height: 14px; }
+.openclaw-progress-card-spinner { width: 14px; height: 14px; border: 1.5px solid var(--lobster-border); border-top-color: var(--lobster-text-secondary); border-radius: 50%; animation: openclaw-progress-spin 1s linear infinite; }
+.openclaw-progress-card-markdown { font-size: 13px; line-height: 1.6; }
+.openclaw-progress-card-markdown p { margin: 0 0 6px; }
+.openclaw-progress-card-error { margin: 8px 26px; color: var(--lobster-text-secondary); font-size: 12px; }
+.openclaw-progress-card-error button { text-decoration: underline; }
+.openclaw-progress-card button:focus-visible, .openclaw-progress-card-body:focus-visible { outline: 2px solid var(--lobster-primary); outline-offset: 2px; }
+@keyframes openclaw-progress-spin { to { transform: rotate(360deg); } }
+@media (max-width: 600px) { .openclaw-progress-card-toggle { flex-wrap: wrap; gap: 4px 8px; } .openclaw-progress-card-meta { max-width: 65%; } }
+@media (prefers-reduced-motion: reduce) { .openclaw-progress-card-spinner { animation: none; } }
+.openclaw-progress-card-markdown ul { list-style: disc; padding-left: 20px; margin: 4px 0 8px; }
+.openclaw-progress-card-markdown li { display: list-item; margin: 2px 0; }
+.openclaw-progress-card-markdown a { text-decoration: underline; }
+.openclaw-progress-card-markdown table { border-collapse: collapse; width: 100%; }
+.openclaw-progress-card-markdown :is(td, th) { padding: 3px 6px; border: 1px solid var(--lobster-border); }
+.openclaw-progress-card-markdown progress { width: 100%; height: 6px; accent-color: var(--lobster-primary); }
+
+.openclaw-progress-card-markdown :is(h1, h2, h3, h4) { font-size: 13px; font-weight: 600; margin: 0 0 6px; }
+
+@container (max-width: 420px) {
+  .openclaw-progress-card-toggle { display: grid; grid-template-columns: minmax(0, 1fr) 14px; gap: 3px 8px; }
+  .openclaw-progress-card-title { grid-column: 1; grid-row: 1; }
+  .openclaw-progress-card-meta { grid-column: 1 / -1; grid-row: 2; max-width: none; font-size: 11px; }
+  .openclaw-progress-card-toggle > svg { grid-column: 2; grid-row: 1; }
+}
+
+.openclaw-progress-card [data-refresh] { display: inline-flex; align-items: center; gap: 4px; padding: 6px; border-radius: 6px; color: var(--lobster-text-secondary); }
+.openclaw-progress-card [data-refresh]:disabled { cursor: wait; }

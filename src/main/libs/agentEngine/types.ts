@@ -7,6 +7,8 @@ import type {
 } from '../../../shared/cowork/btw';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import type { CoworkImageAttachmentPayload } from '../../../shared/cowork/imageAttachments';
+import type { OpenClawProgressCard } from '../../../shared/cowork/progressCard';
+import { ProgressCardEvent } from '../../../shared/cowork/progressCard';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
 import type { CoworkSteerResponse } from '../../../shared/cowork/steer';
 import type {
@@ -47,6 +49,7 @@ export interface CoworkRuntimeEvents {
   sessionStatus: (sessionId: string, status: CoworkSessionStatus) => void;
   btwResult: (sessionId: string, result: CoworkBtwEntry) => void;
   goalUpdate: (sessionId: string, goal: CoworkGoal | null) => void;
+  [ProgressCardEvent.Changed]: (sessionId: string) => void;
   contextUsageUpdate: (sessionId: string, usage: CoworkContextUsage) => void;
   contextMaintenance: (sessionId: string, active: boolean) => void;
   permissionRequest: (sessionId: string, request: PermissionRequest) => void;
@@ -162,6 +165,9 @@ export interface CoworkRuntime {
   submitSteer?(sessionId: string, text: string, clientSteerId: string): Promise<CoworkSteerResponse>;
   runGoalCommand?(sessionId: string, command: string): Promise<CoworkGoal | null>;
   patchSession?(sessionId: string, patch: OpenClawSessionPatch): Promise<CoworkSessionPatchResult | void>;
+  getProgressCard?(sessionId: string): Promise<OpenClawProgressCard | null>;
+  refreshProgressCard?(sessionId: string, idempotencyKey: string): Promise<import('../../../shared/cowork/progressCard').ProgressCardRefreshReceipt>;
+  dismissProgressCard?(sessionId: string, revision: number): Promise<OpenClawProgressCard | null>;
   getContextUsage?(sessionId: string): Promise<CoworkContextUsage | null>;
   compactContext?(sessionId: string): Promise<{ compacted: boolean; reason?: string; usage?: CoworkContextUsage | null }>;
   getForkCompactionSummary?(sessionId: string, beforeCreatedAt?: number): Promise<CoworkForkCompactionSummary | null>;

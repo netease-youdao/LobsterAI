@@ -121,6 +121,7 @@ import {
 } from '../shared/cowork/imageAttachments';
 import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import { containsPlanModePrompt } from '../shared/cowork/planMode';
+import { ProgressCardEvent } from '../shared/cowork/progressCard';
 import type { CoworkSearchMessageCursor } from '../shared/cowork/search';
 import {
   type CoworkSelectedTextSnippet,
@@ -3580,6 +3581,10 @@ const bindCoworkRuntimeForwarder = (): void => {
         console.error('[CoworkBtw] failed to forward side-question result:', error);
       }
     });
+  });
+
+  runtime.on(ProgressCardEvent.Changed, (sessionId: string) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(CoworkIpcChannel.ProgressCardChanged, { sessionId });
   });
 
   runtime.on('contextUsageUpdate', (sessionId: string, usage: unknown) => {
@@ -10535,6 +10540,30 @@ if (!gotTheLock) {
       };
     }
   });
+
+  ipcMain.handle(CoworkIpcChannel.RefreshProgressCard, async (event, sessionId: string, idempotencyKey: string) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) return { success: false, error: 'Untrusted sender' };
+    if (typeof sessionId !== 'string' || !getCoworkStore().getSession(sessionId)) return { success: false, error: 'Unknown session' };
+    try {
+      const receipt = await getCoworkEngineRouter().refreshProgressCard(sessionId, idempotencyKey);
+      return { success: true, receipt };
+    } catch (error) {
+      const details = (error as { details?: { code?: string } } | null)?.details;
+      return { success: false, error: 'Progress refresh unavailable', terminal: details?.code === 'PROGRESS_CARD_REFRESH_TERMINAL' };
+    }
+  });
+
+  for (const channel of [CoworkIpcChannel.GetProgressCard, CoworkIpcChannel.DismissProgressCard]) {
+    ipcMain.handle(channel, async (event, sessionId: string, revision?: number) => {
+      if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) return { success: false, error: 'Untrusted sender' };
+      if (typeof sessionId !== 'string' || !getCoworkStore().getSession(sessionId)) return { success: false, error: 'Unknown session' };
+      try {
+        const router = getCoworkEngineRouter();
+        const card = channel === CoworkIpcChannel.GetProgressCard ? await router.getProgressCard(sessionId) : await router.dismissProgressCard(sessionId, revision!);
+        return { success: true, card };
+      } catch { return { success: false, error: 'Progress card unavailable' }; }
+    });
+  }
 
   ipcMain.handle('cowork:session:contextUsage', async (_event, sessionId: string) => {
     try {

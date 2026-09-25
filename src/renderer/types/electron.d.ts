@@ -64,6 +64,7 @@ import type {
   CoworkSessionsChangedPayload,
 } from '../../shared/cowork/constants';
 import type { CoworkGoal } from '../../shared/cowork/goal';
+import type { ProgressCardResponse } from '../../shared/cowork/progressCard';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
 import type {
   CoworkSearchMessage,
@@ -1086,6 +1087,10 @@ interface IElectronAPI {
       hasMore?: boolean;
       error?: string;
     }>;
+    refreshProgressCard: (sessionId: string, idempotencyKey: string) => Promise<import('../../shared/cowork/progressCard').ProgressCardRefreshResponse>;
+    getProgressCard: (sessionId: string) => Promise<ProgressCardResponse>;
+    dismissProgressCard: (sessionId: string, revision: number) => Promise<ProgressCardResponse>;
+    onProgressCardChanged: (callback: (event: { sessionId: string }) => void) => () => void;
     getContextUsage: (
       sessionId: string,
     ) => Promise<{

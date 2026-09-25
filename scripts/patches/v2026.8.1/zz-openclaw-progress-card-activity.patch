@@ -1,0 +1,104 @@
+--- a/packages/gateway-protocol/src/schema/progress-card.ts
++++ b/packages/gateway-protocol/src/schema/progress-card.ts
+@@ -43,6 +43,8 @@
+   sessionKey: NonEmptyString,
+   markdown: Type.Optional(Type.String()),
+   plan: Type.Optional(Type.Array(ProgressCardStepSchema, { maxItems: PROGRESS_CARD_MAX_STEPS })),
++  // LobsterAI: create a factual activity card only if this session has never had a card.
++  ifAbsent: Type.Optional(Type.Boolean()),
+   expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),
+ });
+ export type ProgressCardPutParams = Static<typeof ProgressCardPutParamsSchema>;
+--- a/src/session-cards/progress-card-store.ts
++++ b/src/session-cards/progress-card-store.ts
+@@ -115,12 +115,17 @@
+ export function writeSessionProgressCard(
+   dbPathOrDb: ProgressCardDatabaseInput,
+   sessionKey: string,
+-  input: { markdown?: string; steps?: ProgressCardStep[]; expectedRevision?: number },
++  input: { markdown?: string; steps?: ProgressCardStep[]; expectedRevision?: number; ifAbsent?: boolean },
+ ): { card: ProgressCard | null } | { cleared: true } {
+   return withProgressCardDatabase(dbPathOrDb, false, (db, label) => {
+     const write = (): { card: ProgressCard | null } | { cleared: true } => {
+       ensureOpenClawAgentProgressCardSchemaInTransaction(db);
+       const kysely = getNodeSqliteKysely<ProgressCardDatabase>(db);
++      // A tombstone also wins: never resurrect a card explicitly cleared by the agent/user.
++      if (input.ifAbsent) {
++        const existing = selectProgressCard(db, sessionKey);
++        if (existing) return { card: rowToProgressCard(existing) };
++      }
+       const markdown = input.markdown?.trim() ? input.markdown : undefined;
+       const steps = input.steps && input.steps.length > 0 ? input.steps : undefined;
+       if (!markdown && !steps) {
+--- a/src/gateway/progress-card-store.ts
++++ b/src/gateway/progress-card-store.ts
+@@ -11,7 +11,7 @@
+   get(sessionKey: string): ProgressCard | null;
+   put(
+     sessionKey: string,
+-    input: { markdown?: string; steps?: ProgressCardStep[]; expectedRevision?: number },
++    input: { markdown?: string; steps?: ProgressCardStep[]; expectedRevision?: number; ifAbsent?: boolean },
+   ): { card: ProgressCard | null };
+ };
+ 
+--- a/src/gateway/server-methods/progress-card.ts
++++ b/src/gateway/server-methods/progress-card.ts
+@@ -85,6 +85,7 @@
+         const result = store.put(sessionKey, {
+           ...input,
+           expectedRevision: params.expectedRevision,
++          ...(params.ifAbsent ? { ifAbsent: true } : {}),
+         });
+         if (params.expectedRevision === undefined || result.card === null) {
+           context.broadcast("progressCard.changed", {
+--- a/src/session-cards/progress-card-store.test.ts
++++ b/src/session-cards/progress-card-store.test.ts
+@@ -68,6 +68,24 @@
+     expect(readSessionProgressCard(db, SESSION_KEY)).toBeNull();
+   });
+ 
++  it("creates activity only when absent, preserves native updates and cleared tombstones", () => {
++    const fallback = { markdown: "Two tool operations started", ifAbsent: true };
++    writeSessionProgressCard(db, SESSION_KEY, fallback);
++    expect(readSessionProgressCard(db, SESSION_KEY)?.revision).toBe(1);
++    writeSessionProgressCard(db, SESSION_KEY, { markdown: "Agent plan", steps: STEPS });
++    writeSessionProgressCard(db, SESSION_KEY, fallback);
++    expect(readSessionProgressCard(db, SESSION_KEY)).toMatchObject({ markdown: "Agent plan", revision: 2 });
++    writeSessionProgressCard(db, SESSION_KEY, {});
++    writeSessionProgressCard(db, SESSION_KEY, fallback);
++    expect(readSessionProgressCard(db, SESSION_KEY)).toBeNull();
++  });
++
++  it("does not replace a native card which wins the creation race", () => {
++    writeSessionProgressCard(db, SESSION_KEY, { markdown: "Native plan" });
++    writeSessionProgressCard(db, SESSION_KEY, { markdown: "Activity", ifAbsent: true });
++    expect(readSessionProgressCard(db, SESSION_KEY)).toMatchObject({ markdown: "Native plan", revision: 1 });
++  });
++
+   it("treats a missing lazy table as no card without creating it", () => {
+     db.close();
+     db = new DatabaseSync(":memory:");
+--- a/src/gateway/server-methods/progress-card.test.ts
++++ b/src/gateway/server-methods/progress-card.test.ts
+@@ -49,10 +49,20 @@
+     } as never);
+     return respond;
+   };
+-  return { broadcast, invoke };
++  return { broadcast, invoke, store };
+ }
+ 
+ describe("progress card gateway methods", () => {
++  it("accepts and forwards atomic create-only activity writes", async () => {
++    const { invoke, store } = createHarness();
++    const put = vi.spyOn(store, "put");
++    const respond = await invoke("progressCard.put", {
++      sessionKey: "agent:main:main", markdown: "Activity", ifAbsent: true,
++    });
++    expect(respond.mock.calls[0]?.[0]).toBe(true);
++    expect(put).toHaveBeenCalledWith("agent:main:main", expect.objectContaining({ ifAbsent: true }));
++  });
++
+   it("registers read and write scopes", () => {
+     expect(resolveCoreOperatorGatewayMethodScope("progressCard.get")).toBe("operator.read");
+     expect(resolveCoreOperatorGatewayMethodScope("progressCard.put")).toBe("operator.write");
