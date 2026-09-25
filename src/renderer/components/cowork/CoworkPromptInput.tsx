@@ -40,6 +40,7 @@ import {
   type CoworkPendingSteer,
   CoworkSteerStatus,
 } from '../../../shared/cowork/steer';
+import { openPurchase } from '../../features/payment/purchaseEntry';
 import { agentService } from '../../services/agent';
 import { authService, getLoginFailureMessage } from '../../services/auth';
 import { configService, ConfigServiceEvent } from '../../services/config';
@@ -50,7 +51,6 @@ import {
   prepareCoworkPromptPayload,
   type PreparedCoworkPromptPayload,
 } from '../../services/coworkPromptPayload';
-import { getPortalPricingUrl } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
 import { getInstalledKitSkillIds } from '../../services/kitCapability';
 import {
@@ -3664,7 +3664,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       return;
     }
     setShowVoiceQuotaPrompt(false);
-    await window.electron.shell.openExternal(getPortalPricingUrl());
+    await openPurchase();
   };
   const normalizedGoalEditDraft = goalEditDraft.trim();
   const canSaveGoalEdit = Boolean(

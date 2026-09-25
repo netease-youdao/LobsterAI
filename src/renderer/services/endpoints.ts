@@ -106,7 +106,6 @@ export const getClientBannerTargetUrl = (linkUrl: string, description: string): 
 
 export const getPortalProfileUrl = () => `${getPortalBase()}/profile`;
 export const getPortalCreditsDetailUrl = () => `${getPortalBase()}/profile/detail`;
-export const getPortalRechargeUrl = () => `${getPortalBase()}/`;
 export const getPortalInvitationUrl = () => `${getPortalBase()}/invitation`;
 export const getPortalCreditsResetActivityUrl = (campaignCode?: string) => (
   `${getPortalBase()}/profile?activity=credits_reset${campaignCode ? `&campaignCode=${encodeURIComponent(campaignCode)}` : ''}`

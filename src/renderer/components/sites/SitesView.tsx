@@ -41,8 +41,9 @@ import {
   SiteStatus,
   type SiteStatus as SiteStatusValue,
 } from '../../../shared/site/constants';
+import { openPurchase } from '../../features/payment/purchaseEntry';
 import { copyTextToClipboard } from '../../services/clipboard';
-import { getPortalPricingUrl, PortalPricingKeyfrom } from '../../services/endpoints';
+import { PortalPricingKeyfrom } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
 import {
   armPublishingSubscriptionRecovery,
@@ -827,10 +828,10 @@ const SitesView: React.FC<SitesViewProps> = ({
       recoveryMode: recoveryAnalyticsContext.subscriptionRecoveryMode,
       traceId: recoveryAnalyticsContext.attemptId,
     });
-    void window.electron.shell.openExternal(getPortalPricingUrl(
-      PortalPricingKeyfrom.SiteDeployment,
-      { traceId: recoveryAnalyticsContext.attemptId },
-    ));
+    void openPurchase({
+      keyfrom: PortalPricingKeyfrom.SiteDeployment,
+      traceId: recoveryAnalyticsContext.attemptId,
+    });
   };
 
   const exitSiteDetail = useCallback(() => {

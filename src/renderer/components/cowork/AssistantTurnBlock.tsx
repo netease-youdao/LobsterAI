@@ -14,8 +14,8 @@ import {
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import purchaseOfferFirstBadge from '../../assets/purchase-offer-first.svg';
 import purchaseOfferLimitedBadge from '../../assets/purchase-offer-limited.svg';
+import { openPurchase } from '../../features/payment/purchaseEntry';
 import { dedupeArtifactsForDisplay } from '../../services/artifactParser';
-import { getPortalPricingUrl } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
 import { type LogEventAction, LogReporterAction } from '../../services/logReporter';
 import { LowCreditOfferVariant, reportLowCreditPurchaseEvent } from '../../services/lowCreditPurchaseAnalytics';
@@ -357,15 +357,14 @@ const CreditQuotaExhaustedBanner: React.FC<{ offer: LowCreditPurchaseOffer | nul
   });
   const handlePurchase = async () => {
     const active = isPurchaseOfferActive(offer) && rate !== null;
-    const pricingUrl = getPortalPricingUrl(undefined, {
-      offerToken: active ? offer?.offerToken ?? undefined : undefined,
-      tab: portalTab,
-    });
     ensureExposure();
     report(LogReporterAction.LowCreditTaskPurchaseClick, active);
     logCreditQuotaBannerEvent('debug', 'purchase action clicked');
     try {
-      const result = await window.electron?.shell?.openExternal(pricingUrl);
+      const result = await openPurchase({
+        offerToken: active ? offer?.offerToken ?? undefined : undefined,
+        tab: portalTab,
+      });
       if (!result?.success) {
         logCreditQuotaBannerEvent(
           'warn',

@@ -18,6 +18,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { openPurchase } from '../features/payment/purchaseEntry';
 import { getProviderIcon, ProviderIconId } from '../providers/uiRegistry';
 import { authService } from '../services/auth';
 import { i18nService } from '../services/i18n';
@@ -169,10 +170,10 @@ export const ModelAccessPromptModal: React.FC<ModelAccessPromptModalProps> = ({
   );
 
   const openSubscriptionPage = async () => {
-    const pricingUrl = purchaseOffer.getPricingUrl();
-    if (!pricingUrl) return;
+    const purchaseOptions = purchaseOffer.getPurchaseOptions();
+    if (!purchaseOptions) return;
     onClose();
-    await window.electron.shell.openExternal(pricingUrl);
+    await openPurchase(purchaseOptions);
   };
 
   const handlePrimary = async () => {

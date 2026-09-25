@@ -13,7 +13,6 @@ import {
   getPortalInvitationUrl,
   getPortalPricingUrl,
   getPortalProfileUrl,
-  getPortalRechargeUrl,
   getPortalSubscriptionTrialUrl,
   PortalPricingKeyfrom,
 } from './endpoints';
@@ -33,7 +32,6 @@ test('portal account urls use production base when test mode is disabled', () =>
 
   expect(getPortalProfileUrl()).toBe('https://lobsterai.youdao.com/portal#/profile');
   expect(getPortalCreditsDetailUrl()).toBe('https://lobsterai.youdao.com/portal#/profile/detail');
-  expect(getPortalRechargeUrl()).toBe('https://lobsterai.youdao.com/portal#/');
   expect(getPortalInvitationUrl()).toBe('https://lobsterai.youdao.com/portal#/invitation');
   expect(getPortalCreditsResetActivityUrl()).toBe('https://lobsterai.youdao.com/portal#/profile?activity=credits_reset');
   expect(getPortalCreditsResetActivityUrl('credits_final_reward_2026_07')).toBe(
@@ -46,7 +44,6 @@ test('portal account urls use test base when test mode is enabled', () => {
 
   expect(getPortalProfileUrl()).toBe('https://lobsterai.inner.youdao.com/portal#/profile');
   expect(getPortalCreditsDetailUrl()).toBe('https://lobsterai.inner.youdao.com/portal#/profile/detail');
-  expect(getPortalRechargeUrl()).toBe('https://lobsterai.inner.youdao.com/portal#/');
   expect(getPortalInvitationUrl()).toBe('https://lobsterai.inner.youdao.com/portal#/invitation');
   expect(getPortalCreditsResetActivityUrl()).toBe('https://lobsterai.inner.youdao.com/portal#/profile?activity=credits_reset');
 });

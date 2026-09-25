@@ -17,14 +17,13 @@ import soccerBallIconUrl from '../assets/icons/soccer-ball.svg';
 import usageOverviewIconUrl from '../assets/icons/usage-overview.svg';
 import { EnterpriseAccountMenu } from '../features/enterpriseAccount/components/EnterpriseAccountMenu';
 import { selectEnterpriseAccountContext } from '../features/enterpriseAccount/selectors';
+import { openPurchase } from '../features/payment/purchaseEntry';
 import { authService, getLoginFailureMessage } from '../services/auth';
 import {
   getPortalCreditsDetailUrl,
   getPortalCreditsResetActivityUrl,
   getPortalInvitationUrl,
-  getPortalPricingUrl,
   getPortalProfileUrl,
-  getPortalRechargeUrl,
 } from '../services/endpoints';
 import { i18nService } from '../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
@@ -386,10 +385,10 @@ const UserMenu: React.FC<UserMenuProps> = ({
       hasCredits,
     });
     try {
-      const message = 'opening recharge portal from account menu';
+      const message = 'opening recharge from account menu';
       console.debug(`[LoginButton] ${message}`);
       writeAccountMenuRendererLog('debug', message);
-      const result = await window.electron.shell.openExternal(getPortalRechargeUrl());
+      const result = await openPurchase({ tab: 'boost' });
       if (!result.success) {
         console.warn('[LoginButton] failed to open recharge portal:', result.error);
         writeAccountMenuRendererLog(
@@ -432,7 +431,8 @@ const UserMenu: React.FC<UserMenuProps> = ({
       const logMessage = getPlanUpgradeLogMessage(accountPlanAnalytics, hasCredits);
       console.debug(`[LoginButton] ${logMessage}`);
       writeAccountMenuRendererLog('debug', logMessage);
-      await openPortalUrl(getPortalPricingUrl());
+      await openPurchase();
+      onClose();
       reportAccountMenuAction('open_plan_upgrade', {
         ...accountPlanAnalytics,
         creditItemCount: creditItems.length,

@@ -3,8 +3,8 @@ import { EnterpriseAccountMode } from '@shared/enterpriseAccount/constants';
 import { useEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
+import type { PurchaseEntryOptions } from '../../features/payment/purchaseEntry';
 import { authService, isAuthAccountRequestCurrent } from '../../services/auth';
-import { getPortalPricingUrl } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
 import {
   formatPurchaseOfferDiscount,
@@ -80,7 +80,7 @@ export const useModelPurchaseOffer = (enabled: boolean, onClose: () => void) => 
 
   const activeOffer = resolveOffer(purchaseOffer, now);
   const isRefreshing = shouldRefresh && refreshSucceeded === null;
-  const getPricingUrl = (): string | null => {
+  const getPurchaseOptions = (): PurchaseEntryOptions | null => {
     const currentState = store.getState();
     if (enabled && !isAuthAccountRequestCurrent(accountAtOpen.current, currentState.auth)) {
       onClose();
@@ -91,16 +91,15 @@ export const useModelPurchaseOffer = (enabled: boolean, onClose: () => void) => 
     const currentOffer = enabled && refreshSucceeded === true && isPersonalAccount(currentState)
       ? resolveOffer(currentState.auth.purchaseOffer)
       : null;
-    return getPortalPricingUrl(undefined, currentOffer ? {
-      offerToken: currentOffer.offer.offerToken ?? undefined,
-      tab: currentOffer.tab,
-    } : {});
+    return currentOffer
+      ? { offerToken: currentOffer.offer.offerToken ?? undefined, tab: currentOffer.tab }
+      : {};
   };
 
   return {
     offer: activeOffer?.offer ?? null,
     description: activeOffer?.description,
     isRefreshing,
-    getPricingUrl,
+    getPurchaseOptions,
   };
 };

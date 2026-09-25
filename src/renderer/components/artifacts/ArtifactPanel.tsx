@@ -65,9 +65,10 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { openPurchase } from '@/features/payment/purchaseEntry';
 import { authService } from '@/services/auth';
 import { copyTextToClipboard } from '@/services/clipboard';
-import { getPortalPricingUrl, PortalPricingKeyfrom } from '@/services/endpoints';
+import { PortalPricingKeyfrom } from '@/services/endpoints';
 import { i18nService } from '@/services/i18n';
 import {
   readLocalServiceProjectDirectory as readNodeDeploymentProjectDirectory,
@@ -1955,9 +1956,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     const keyfrom = analyticsAttempt?.feature === ArtifactSubscriptionFeature.Deployment
       ? PortalPricingKeyfrom.SiteDeployment
       : PortalPricingKeyfrom.HtmlShare;
-    void window.electron?.shell?.openExternal(
-      getPortalPricingUrl(keyfrom, { traceId: analyticsAttempt?.attemptId }),
-    );
+    void openPurchase({ keyfrom, traceId: analyticsAttempt?.attemptId });
     if (publishingQuotaDialog) {
       closePublishingQuotaDialog();
     } else {
@@ -3568,11 +3567,10 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   }, [nodeDeploymentTrialNotice, openNodeDeploymentCreateDialog]);
 
   const openNodeDeploymentTrialSubscriptionPage = useCallback(() => {
-    void window.electron?.shell?.openExternal(
-      getPortalPricingUrl(PortalPricingKeyfrom.SiteDeployment, {
-        traceId: publishingAnalyticsAttemptRef.current?.attemptId,
-      }),
-    );
+    void openPurchase({
+      keyfrom: PortalPricingKeyfrom.SiteDeployment,
+      traceId: publishingAnalyticsAttemptRef.current?.attemptId,
+    });
     closeNodeDeploymentTrialNotice();
   }, [closeNodeDeploymentTrialNotice]);
 
@@ -5049,11 +5047,10 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       recoveryMode: nodeDeploymentRecoveryAnalyticsContext.subscriptionRecoveryMode,
       traceId: nodeDeploymentRecoveryAnalyticsContext.attemptId,
     });
-    void window.electron?.shell?.openExternal(
-      getPortalPricingUrl(PortalPricingKeyfrom.SiteDeployment, {
-        traceId: nodeDeploymentRecoveryAnalyticsContext.attemptId,
-      }),
-    );
+    void openPurchase({
+      keyfrom: PortalPricingKeyfrom.SiteDeployment,
+      traceId: nodeDeploymentRecoveryAnalyticsContext.attemptId,
+    });
   };
   const nodeDeploymentSubmitLabel = (() => {
     switch (nodeDeploymentDialog?.phase) {

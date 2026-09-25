@@ -18,6 +18,7 @@ import {
   MediaGenerationAccessReason,
   resolveMediaGenerationAccess,
 } from '../../features/enterpriseAccount/mediaAccess';
+import { openPurchase } from '../../features/payment/purchaseEntry';
 import { getProviderIcon, ProviderIconId } from '../../providers/uiRegistry';
 import { authService } from '../../services/auth';
 import { i18nService } from '../../services/i18n';
@@ -952,8 +953,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
 
   const handleSubscribe = async () => {
     setIsOpen(false);
-    const { getPortalPricingUrl } = await import('../../services/endpoints');
-    await window.electron.shell.openExternal(getPortalPricingUrl());
+    await openPurchase();
   };
 
   const handleEnterpriseRefresh = async () => {

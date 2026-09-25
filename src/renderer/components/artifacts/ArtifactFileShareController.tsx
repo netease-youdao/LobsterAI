@@ -30,9 +30,10 @@ import {
 import { createPortal } from 'react-dom';
 import { useSelector } from 'react-redux';
 
+import { openPurchase } from '@/features/payment/purchaseEntry';
 import { authService } from '@/services/auth';
 import { copyTextToClipboard } from '@/services/clipboard';
-import { getPortalPricingUrl, PortalPricingKeyfrom } from '@/services/endpoints';
+import { PortalPricingKeyfrom } from '@/services/endpoints';
 import { i18nService } from '@/services/i18n';
 import {
   armPublishingSubscriptionRecovery,
@@ -1426,10 +1427,10 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
   }, [dialog, showTimedCopyStatus]);
 
   const openSubscriptionPage = useCallback(() => {
-    void window.electron?.shell?.openExternal(getPortalPricingUrl(
-      PortalPricingKeyfrom.HtmlShare,
-      { traceId: analyticsAttemptRef.current?.attemptId },
-    ));
+    void openPurchase({
+      keyfrom: PortalPricingKeyfrom.HtmlShare,
+      traceId: analyticsAttemptRef.current?.attemptId,
+    });
     closeSubscriptionPrompt();
   }, [closeSubscriptionPrompt]);
 
@@ -1439,10 +1440,10 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
   }, [closeSubscriptionPrompt]);
 
   const openTrialSubscriptionPage = useCallback(() => {
-    void window.electron?.shell?.openExternal(getPortalPricingUrl(
-      PortalPricingKeyfrom.HtmlShare,
-      { traceId: analyticsAttemptRef.current?.attemptId },
-    ));
+    void openPurchase({
+      keyfrom: PortalPricingKeyfrom.HtmlShare,
+      traceId: analyticsAttemptRef.current?.attemptId,
+    });
     closeTrialNotice();
   }, [closeTrialNotice]);
 
@@ -1536,10 +1537,10 @@ export function ArtifactFileShareProvider({ sessionId, children }: ArtifactFileS
       recoveryMode: recoveryAnalyticsContext.subscriptionRecoveryMode,
       traceId: recoveryAnalyticsContext.attemptId,
     });
-    void window.electron?.shell?.openExternal(getPortalPricingUrl(
-      PortalPricingKeyfrom.HtmlShare,
-      { traceId: recoveryAnalyticsContext.attemptId },
-    ));
+    void openPurchase({
+      keyfrom: PortalPricingKeyfrom.HtmlShare,
+      traceId: recoveryAnalyticsContext.attemptId,
+    });
   }, [recoveryAnalyticsContext]);
 
   const contextValue = useMemo<ArtifactFileShareControllerValue>(

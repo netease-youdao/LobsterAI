@@ -54,8 +54,9 @@ import {
   SiteKind,
   SiteStatus,
 } from '../../../shared/site/constants';
+import { openPurchase } from '../../features/payment/purchaseEntry';
 import { copyTextToClipboard } from '../../services/clipboard';
-import { getPortalPricingUrl, PortalPricingKeyfrom } from '../../services/endpoints';
+import { PortalPricingKeyfrom } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
 import {
   armPublishingSubscriptionRecovery,
@@ -591,12 +592,12 @@ const LibraryCloudRecoveryActionCell: React.FC<{
       recoveryMode: recoveryAnalyticsContext.subscriptionRecoveryMode,
       traceId: recoveryAnalyticsContext.attemptId,
     });
-    void window.electron.shell.openExternal(getPortalPricingUrl(
-      item.itemKind === LibraryItemKind.SharedFile
+    void openPurchase({
+      keyfrom: item.itemKind === LibraryItemKind.SharedFile
         ? PortalPricingKeyfrom.HtmlShare
         : PortalPricingKeyfrom.SiteDeployment,
-      { traceId: recoveryAnalyticsContext.attemptId },
-    ));
+      traceId: recoveryAnalyticsContext.attemptId,
+    });
   };
 
   return (
@@ -920,10 +921,10 @@ const LibraryShareSettingsView: React.FC<{
       recoveryMode: recoveryAnalyticsContext.subscriptionRecoveryMode,
       traceId: recoveryAnalyticsContext.attemptId,
     });
-    void window.electron.shell.openExternal(getPortalPricingUrl(
-      PortalPricingKeyfrom.HtmlShare,
-      { traceId: recoveryAnalyticsContext.attemptId },
-    ));
+    void openPurchase({
+      keyfrom: PortalPricingKeyfrom.HtmlShare,
+      traceId: recoveryAnalyticsContext.attemptId,
+    });
   };
 
   const openLink = (): void => {
@@ -1592,11 +1593,10 @@ const LibraryShareSettingsView: React.FC<{
             onClose={() => setPublishingQuota(null)}
             onSubscribe={() => {
               setPublishingQuota(null);
-              void window.electron?.shell?.openExternal(
-                getPortalPricingUrl(PortalPricingKeyfrom.HtmlShare, {
-                  traceId: publishingAnalyticsAttemptRef.current?.attemptId,
-                }),
-              );
+              void openPurchase({
+                keyfrom: PortalPricingKeyfrom.HtmlShare,
+                traceId: publishingAnalyticsAttemptRef.current?.attemptId,
+              });
             }}
             onManage={() => {
               setPublishingQuota(null);

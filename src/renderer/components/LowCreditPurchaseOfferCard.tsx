@@ -3,7 +3,7 @@ import { AuthSubscriptionStatus } from '@shared/auth/constants';
 import React, { useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 
-import { getPortalPricingUrl } from '../services/endpoints';
+import { openPurchase } from '../features/payment/purchaseEntry';
 import { i18nService } from '../services/i18n';
 import { type LogEventAction, LogReporterAction } from '../services/logReporter';
 import { LowCreditOfferVariant, reportLowCreditPurchaseEvent } from '../services/lowCreditPurchaseAnalytics';
@@ -98,10 +98,10 @@ const LowCreditPurchaseOfferCard: React.FC<LowCreditPurchaseOfferCardProps> = ({
       ? LogReporterAction.LowCreditSidebarRechargeClick
       : LogReporterAction.LowCreditSidebarSubscriptionClick, applyOffer);
     try {
-      const result = await window.electron?.shell?.openExternal(getPortalPricingUrl(undefined, {
+      const result = await openPurchase({
         offerToken: applyOffer ? offer.offerToken ?? undefined : undefined,
         tab,
-      }));
+      });
       if (!result?.success) console.warn('[LowCreditPurchaseOfferCard] Unable to open pricing page');
     } catch {
       console.warn('[LowCreditPurchaseOfferCard] Unable to open pricing page');
