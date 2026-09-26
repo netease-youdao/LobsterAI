@@ -327,7 +327,7 @@ const isRemoteOrInlineImageSrc = (src: string): boolean => {
   return /^(?:https?|data|blob):/i.test(src);
 };
 
-const resolveMarkdownImageSrc = (
+export const resolveMarkdownImageSrc = (
   src: unknown,
   alt: unknown,
   resolveLocalFilePath?: (href: string, text: string) => string | null
