@@ -28,6 +28,7 @@ interface SupervisorInternals {
   gatewayReadyProcesses: WeakSet<ChildProcess>;
   gatewayProcess: ChildProcess | null;
   gatewayRecentOutput: WeakMap<ChildProcess, string[]>;
+  noteGatewayOutput: (child: ChildProcess) => void;
   gatewayRestartAttempt: number;
   gatewayRestartTimer: ReturnType<typeof setTimeout> | null;
   startGatewayPromise: Promise<OpenClawEngineStatus> | null;
@@ -65,6 +66,7 @@ function makeSupervisor() {
     stateDir: path.join(process.cwd(), 'fixtures', 'state'),
     gatewayProcess: null,
     gatewayRecentOutput: new WeakMap(),
+    gatewayLastOutputAt: new WeakMap(),
     gatewayGenerationByProcess: new WeakMap(),
     gatewayFailureByProcess: new WeakMap(),
     expectedGatewayExits: new WeakSet(),
@@ -619,6 +621,64 @@ describe('OpenClaw gateway restart supervision', () => {
 
     await expect(ready).resolves.toBe(false);
     expect(phases).toEqual([OpenClawEnginePhase.Starting]);
+  });
+
+  describe('startup readiness wait', () => {
+    function startWaiting() {
+      const context = makeSupervisor();
+      const probe = vi.spyOn(context.internals, 'isGatewayStartupReady').mockResolvedValue(false);
+      const settled = vi.fn();
+      const ready = context.internals.waitForGatewayReady(18789, 300_000).then((value) => {
+        settled(value);
+        return value;
+      });
+      return { ...context, probe, settled, ready };
+    }
+
+    async function emitOutputEvery(internals: SupervisorInternals, child: ChildProcess, intervalMs: number, untilMs: number) {
+      for (let at = intervalMs; at <= untilMs; at += intervalMs) {
+        await vi.advanceTimersByTimeAsync(intervalMs);
+        internals.noteGatewayOutput(child);
+      }
+    }
+
+    test('keeps a slow start that is still producing output past the base deadline', async () => {
+      const { internals, child, probe, settled, ready } = startWaiting();
+      await emitOutputEvery(internals, child, 30_000, 300_000);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(settled).not.toHaveBeenCalled();
+      probe.mockResolvedValue(true);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(ready).resolves.toBe(true);
+      expect(internals.gatewayReadyProcesses.has(child)).toBe(true);
+    });
+
+    test('still gives up at the base deadline when the gateway produced no output', async () => {
+      const { settled, ready } = startWaiting();
+      await vi.advanceTimersByTimeAsync(299_000);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(ready).resolves.toBe(false);
+    });
+
+    test('gives up once output has stopped for the idle window', async () => {
+      const { internals, child, settled, ready } = startWaiting();
+      await emitOutputEvery(internals, child, 50_000, 400_000);
+      await vi.advanceTimersByTimeAsync(239_000);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(ready).resolves.toBe(false);
+    });
+
+    test('enforces the absolute limit when output never stops', async () => {
+      const { internals, child, settled, ready } = startWaiting();
+      await emitOutputEvery(internals, child, 30_000, 870_000);
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(settled).not.toHaveBeenCalled();
+      internals.noteGatewayOutput(child);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(ready).resolves.toBe(false);
+    });
   });
 
   test('waits for an in-flight startup to acknowledge cancellation before returning from stop', async () => {

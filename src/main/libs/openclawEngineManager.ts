@@ -35,6 +35,14 @@ import { readDreamingRecoverySummary } from './openclawDreamingRecovery';
 import { createDreamingStartupFailureCollector, OPENCLAW_STARTUP_MIGRATION_REFUSAL } from './openclawDreamingStartupFailure';
 import { cleanupStaleGatewayLocks, GatewayLockCleanupAction } from './openclawGatewayLock';
 import { buildOpenClawGatewayShutdownBridge, spawnOpenClawGatewayProcess, stopOpenClawGatewayProcess } from './openclawGatewayProcess';
+import {
+  DEFAULT_GATEWAY_STARTUP_WAIT_POLICY,
+  evaluateGatewayStartupWait,
+  gatewayStartupProgressPercent,
+  GatewayStartupWaitOutcome,
+  type GatewayStartupWaitPolicy,
+  isGatewayStartupWaitOver,
+} from './openclawGatewayStartupWait';
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
@@ -375,6 +383,8 @@ export class OpenClawEngineManager extends EventEmitter {
   private status: OpenClawEngineStatus;
   private gatewayProcess: GatewayProcess | null = null;
   private readonly gatewayRecentOutput = new WeakMap<GatewayProcess, string[]>();
+  /** Last stdout/stderr activity per process: the startup wait's progress signal. */
+  private readonly gatewayLastOutputAt = new WeakMap<GatewayProcess, number>();
   private readonly gatewayGenerationByProcess = new WeakMap<GatewayProcess, number>();
   private readonly gatewayFailureByProcess = new WeakMap<GatewayProcess, OpenClawGatewayFailureSnapshot>();
   private readonly expectedGatewayExits = new WeakSet<object>();
@@ -1963,6 +1973,14 @@ export class OpenClawEngineManager extends EventEmitter {
   private waitForGatewayReady(port: number, timeoutMs: number): Promise<boolean> {
     const startedAt = Date.now();
     const child = this.gatewayProcess;
+    // timeoutMs is the base deadline; past it, a gateway that is still
+    // producing output keeps its startup (see openclawGatewayStartupWait).
+    const policy: GatewayStartupWaitPolicy = {
+      ...DEFAULT_GATEWAY_STARTUP_WAIT_POLICY,
+      baseTimeoutMs: timeoutMs,
+      maxWaitMs: Math.max(DEFAULT_GATEWAY_STARTUP_WAIT_POLICY.maxWaitMs, timeoutMs),
+    };
+    let extensionLogged = false;
     let pollCount = 0;
     return new Promise((resolve) => {
       const tick = async () => {
@@ -1995,15 +2013,26 @@ export class OpenClawEngineManager extends EventEmitter {
           return;
         }
 
-        if (elapsedMs >= timeoutMs) {
-          console.log(`[OpenClaw] waitForGatewayReady: timed out after ${timeoutMs}ms (${pollCount} polls)`);
+        const lastActivityAt = Math.max(startedAt, this.gatewayLastOutputAt.get(child) ?? startedAt);
+        const silentMs = Math.max(0, startedAt + elapsedMs - lastActivityAt);
+        const outcome = evaluateGatewayStartupWait(elapsedMs, silentMs, policy);
+        if (isGatewayStartupWaitOver(outcome)) {
+          const reason = outcome === GatewayStartupWaitOutcome.Stalled
+            ? `no gateway output for ${silentMs}ms`
+            : `reached the ${policy.maxWaitMs}ms startup limit`;
+          console.log(`[OpenClaw] waitForGatewayReady: timed out after ${elapsedMs}ms (${pollCount} polls): ${reason}`);
           resolve(false);
           return;
+        }
+        if (outcome === GatewayStartupWaitOutcome.Extended && !extensionLogged) {
+          extensionLogged = true;
+          console.log(`[OpenClaw] waitForGatewayReady: still starting after ${elapsedMs}ms; last gateway output ${silentMs}ms ago, `
+            + `waiting while output continues (idle limit ${policy.idleTimeoutMs}ms, total limit ${policy.maxWaitMs}ms)`);
         }
 
         // Progress belongs to a startup/restart, not a running process whose
         // HTTP endpoint is temporarily slow. Readiness still gates the caller.
-        const progress = Math.min(90, 10 + Math.round((elapsedMs / timeoutMs) * 80));
+        const progress = gatewayStartupProgressPercent(elapsedMs, policy);
         if (this.status.phase === OpenClawEnginePhase.Starting) {
           this.setStatus({
             phase: OpenClawEnginePhase.Starting,
@@ -2105,12 +2134,14 @@ export class OpenClawEngineManager extends EventEmitter {
     };
 
     child.stdout?.on('data', (chunk) => {
+      this.noteGatewayOutput(child);
       appendLog(chunk, 'stdout');
       const text = typeof chunk === 'string' ? chunk : chunk.toString();
       logStartupMilestone(text);
       console.log(`[OpenClaw stdout] ${OpenClawEngineManager.rewriteUtcTimestamps(text)}`);
     });
     child.stderr?.on('data', (chunk) => {
+      this.noteGatewayOutput(child);
       appendLog(chunk, 'stderr');
       const text = typeof chunk === 'string' ? chunk : chunk.toString();
       const recentOutput = (this.gatewayRecentOutput.get(child) ?? []).join('\n');
@@ -2118,6 +2149,10 @@ export class OpenClawEngineManager extends EventEmitter {
       logStartupMilestone(text);
       console.error(`[OpenClaw stderr] ${OpenClawEngineManager.rewriteUtcTimestamps(text)}`);
     });
+  }
+
+  private noteGatewayOutput(child: GatewayProcess): void {
+    this.gatewayLastOutputAt.set(child, Date.now());
   }
 
   private recordGatewayFatalFailure(child: GatewayProcess, output: string): void {
