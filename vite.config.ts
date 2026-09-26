@@ -194,10 +194,12 @@ export default defineConfig({
       // Ignore vendor/ to prevent dev reload when plugins are installed into
       // vendor/openclaw-runtime/.../third-party-extensions/
       // Skip temporary trees (which may contain circular junctions) and Electron output.
+      // Anchor artifacts/ (repo-root scratch output) so src/renderer/components/artifacts/ still
+      // hot-reloads; chokidar never matches relative globs, and a directory path covers its subtree.
       ignored: [
         '**/vendor/**',
         '**/.work/**',
-        '**/artifacts/**',
+        path.resolve(__dirname, 'artifacts'),
         '**/dist-electron/**',
       ],
     },
