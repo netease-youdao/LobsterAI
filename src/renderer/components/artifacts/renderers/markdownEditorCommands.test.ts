@@ -18,12 +18,31 @@ import {
 } from './markdownEditorCommands';
 import { lineMarkupEnd, lineStructure } from './markdownLiveStructure';
 
+/** Remove a marker that must occur exactly once, and return where it was. */
+function cutMarker(text: string, marker: string): { text: string; at: number } {
+  const at = text.indexOf(marker);
+  if (at < 0 || text.includes(marker, at + marker.length)) {
+    throw new Error(`Expected exactly one ${marker} marker in ${JSON.stringify(text)}`);
+  }
+  return { text: text.slice(0, at) + text.slice(at + marker.length), at };
+}
+
 /** `|` marks the caret; `[[` and `]]` mark the start and end of a selection. */
 function stateFor(marked: string): EditorState {
-  const caret = marked.indexOf('|');
-  const anchor = caret >= 0 ? caret : marked.indexOf('[[');
-  const doc = marked.replace('|', '').replace('[[', '').replace(']]', '');
-  const head = caret >= 0 ? caret : marked.replace('[[', '').indexOf(']]');
+  let doc: string;
+  let anchor: number;
+  let head: number;
+  if (marked.includes('|')) {
+    const caret = cutMarker(marked, '|');
+    doc = caret.text;
+    anchor = head = caret.at;
+  } else {
+    const start = cutMarker(marked, '[[');
+    const end = cutMarker(start.text, ']]');
+    doc = end.text;
+    anchor = start.at;
+    head = end.at;
+  }
   return EditorState.create({
     doc,
     selection: EditorSelection.range(anchor, head),
