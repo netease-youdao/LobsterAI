@@ -8,7 +8,7 @@ import { expect, test } from 'vitest';
 
 import MarkdownContent from '@/components/MarkdownContent';
 
-import { markdownLivePreview } from './markdownLivePreview';
+import { buildLivePreviewDecorations, markdownLivePreview } from './markdownLivePreview';
 import { markdownPreviewReferences, withMarkdownReferenceDefinitions } from './markdownPreviewReferences';
 
 function createState(doc: string): EditorState {
@@ -19,12 +19,16 @@ function createState(doc: string): EditorState {
   });
 }
 
+/** Block previews come from state; line and inline rendering from the viewport builder. */
 function decorations(state: EditorState): Array<{ from: number; to: number; value: Decoration }> {
   const result: Array<{ from: number; to: number; value: Decoration }> = [];
-  for (const set of state.facet(EditorView.decorations)) {
-    if (typeof set === 'function') continue;
+  const collect = (set: { between: (from: number, to: number, f: (from: number, to: number, value: Decoration) => void) => void }) => {
     set.between(0, state.doc.length, (from, to, value) => { result.push({ from, to, value }); });
+  };
+  for (const set of state.facet(EditorView.decorations)) {
+    if (typeof set !== 'function') collect(set);
   }
+  collect(buildLivePreviewDecorations(state).decorations);
   return result;
 }
 
@@ -86,11 +90,11 @@ test('inline full, collapsed, and shortcut references get resolved destinations 
   const source = '[full][ref] [ref][] [ref] [unknown]\n\n[ref]: <https://example.com/?a=1&amp;b=2> "Reference title"';
   const state = createState(source);
   const marks = decorations(state).filter(decoration => decoration.value.spec.attributes?.['data-md-href']);
-  expect(marks.map(decoration => source.slice(decoration.from, decoration.to))).toEqual(['[full][ref]', '[ref][]', '[ref]']);
+  expect(marks.map(decoration => source.slice(decoration.from, decoration.to))).toEqual(['full', 'ref', 'ref']);
   expect(marks.every(decoration => decoration.value.spec.attributes['data-md-href'] === 'https://example.com/?a=1&b=2')).toBe(true);
-  expect(marks.every(decoration => decoration.value.spec.attributes.title === 'Reference title')).toBe(true);
+  expect(marks.every(decoration => decoration.value.spec.attributes.title.startsWith('Reference title\n'))).toBe(true);
   const hidden = decorations(state).filter(decoration => decoration.value.spec.widget === undefined && decoration.value.spec.class === undefined && decoration.from < source.indexOf('\n'));
-  expect(hidden.map(decoration => source.slice(decoration.from, decoration.to))).toContain('[ref]');
+  expect(hidden.map(decoration => source.slice(decoration.from, decoration.to))).toEqual(['[', '][ref]', '[', '][]', '[', ']']);
   expect(hidden.some(decoration => decoration.from >= source.indexOf('[unknown]'))).toBe(false);
 });
 
@@ -104,10 +108,11 @@ test('metadata and unsafe reference destinations stay outside the rendered link 
   expect(mark?.value.spec.attributes['data-md-href']).toBe('');
 });
 
-test('reference context is not appended inside an unfinished code fence', () => {
-  const source = '[ref]: https://example.com\n\n```md\n[click][ref]';
+test('an unfinished code fence keeps table-like text as code', () => {
+  const source = '[ref]: https://example.com\n\n```md\n| A |\n| --- |\n| [click][ref] |';
   const state = createState(source);
-  expect(previewWidget(state, source.indexOf('```')).source).toBe('```md\n[click][ref]');
+  expect(decorations(state).some(decoration => decoration.value.spec.block)).toBe(false);
+  expect(decorations(state).some(decoration => decoration.value.spec.class === 'md-link')).toBe(false);
 });
 
 test('an explicit empty link remains a link while an unresolved reference stays literal', () => {
@@ -115,7 +120,7 @@ test('an explicit empty link remains a link while an unresolved reference stays 
   const state = createState(source);
   const marks = decorations(state).filter(decoration => decoration.value.spec.class === 'md-link');
   expect(marks).toHaveLength(1);
-  expect(source.slice(marks[0].from, marks[0].to)).toBe('[empty]()');
+  expect(source.slice(marks[0].from, marks[0].to)).toBe('empty');
   expect(marks[0].value.spec.attributes['data-md-href']).toBe('');
 });
 
@@ -181,8 +186,9 @@ test('a fallback definition does not hide links in the following paragraph witho
     '> [ref]: <https://example.com/a\\>b>\n> [click][ref]',
   ]) {
     const state = createState(source);
-    const mark = decorations(state).find(decoration => decoration.value.spec.class === 'md-link');
-    expect(mark?.from).toBe(source.indexOf('[click]'));
+    const mark = decorations(state).find(decoration => decoration.value.spec.class === 'md-link'
+      && decoration.from > source.indexOf('[click]'));
+    expect(mark?.from).toBe(source.indexOf('[click]') + 1);
     expect(mark?.value.spec.attributes['data-md-href']).toBe('https://example.com/a>b');
   }
 });
