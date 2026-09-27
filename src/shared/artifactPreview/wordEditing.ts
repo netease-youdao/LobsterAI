@@ -1,3 +1,6 @@
+import type { WordAgentRequest, WordAgentResponse } from './wordAgent';
+import type { WordDocumentFontDecl, WordFontResolveResult } from './wordFonts';
+
 export const WordFileIpc = {
   Open: 'artifact:word:open',
   Read: 'artifact:word:read',
@@ -7,7 +10,27 @@ export const WordFileIpc = {
   Release: 'artifact:word:release',
   Changed: 'artifact:word:changed',
   SetUnsafeEdits: 'artifact:word:set-unsafe-edits',
+  ResolveFonts: 'artifact:word:resolve-fonts',
+  ReadFont: 'artifact:word:read-font',
 } as const;
+
+/** Content the open core preserves but does not manage; such files open read only. */
+export const WordReadOnlyReason = {
+  Comments: 'comments',
+  Revisions: 'revisions',
+  Protection: 'protection',
+  Embedded: 'embedded',
+  Signature: 'signature',
+  Macros: 'macros',
+  ExternalContent: 'external-content',
+} as const;
+export type WordReadOnlyReason = typeof WordReadOnlyReason[keyof typeof WordReadOnlyReason];
+
+/** What admission learned about a package besides its validity. */
+export interface WordPackageInfo {
+  readOnly: WordReadOnlyReason[];
+  fonts: WordDocumentFontDecl[];
+}
 
 export const WordFileError = {
   InvalidFile: 'invalid-file',
@@ -24,7 +47,7 @@ export const WORD_MAX_EXPANDED_BYTES = 100 * 1024 * 1024;
 export const WORD_MAX_PART_BYTES = 25 * 1024 * 1024;
 export const WORD_MAX_PARTS = 4096;
 
-export interface WordFileSnapshot {
+export interface WordFileSnapshot extends WordPackageInfo {
   filePath: string;
   bytes: Uint8Array;
   version: string;
@@ -60,7 +83,19 @@ export interface WordFileApi {
   release: (sessionId: string) => Promise<void>;
 }
 
-export interface WordFileBridge extends WordFileApi {
+/** Installed fonts, looked up by family name; bytes are fetched one face at a time. */
+export interface WordFontApi {
+  resolveFonts: (families: string[]) => Promise<WordResult<WordFontResolveResult>>;
+  readFont: (faceId: string) => Promise<WordResult<Uint8Array>>;
+}
+
+/** Agent tool calls routed to the live editor, answered once per request. */
+export interface WordAgentChannel {
+  onAgentRequest: (listener: (request: WordAgentRequest) => void) => () => void;
+  respondAgent: (response: WordAgentResponse) => void;
+}
+
+export interface WordFileBridge extends WordFileApi, WordFontApi, WordAgentChannel {
   setHasUnsafeEdits: (unsafe: boolean) => void;
   onChanged: (listener: (sessionId: string) => void) => () => void;
 }

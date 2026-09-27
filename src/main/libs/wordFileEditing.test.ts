@@ -7,7 +7,7 @@ import JSZip from 'jszip';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
 import { makeWordFixture } from '../../../tests/fixtures/word';
-import { WORD_MAX_PART_BYTES, WordFileError, type WordOpenResult, type WordResult } from '../../shared/artifactPreview/wordEditing';
+import { WORD_MAX_PART_BYTES, WordFileError, type WordOpenResult, WordReadOnlyReason, type WordResult } from '../../shared/artifactPreview/wordEditing';
 import { WordFileStore } from './wordFileEditing';
 import { inspectWordPackage } from './wordPackage';
 
@@ -141,6 +141,26 @@ describe('Word file editing', () => {
   });
 });
 
+describe('Read-only Word sessions', () => {
+  test('review content opens with its reasons and can never be written back', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'lobster-word-readonly-'));
+    try {
+      const filePath = path.join(directory, 'reviewed.docx');
+      const original = await makeWordFixture('审阅中的文档', { 'word/settings.xml': '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:documentProtection w:edit="readOnly"/></w:settings>' });
+      await fs.writeFile(filePath, original);
+      const store = new WordFileStore(path.join(directory, 'drafts'));
+      const file = unwrap(await store.open(1, filePath));
+      expect(file.readOnly).toEqual([WordReadOnlyReason.Protection]);
+      const request = { sessionId: file.sessionId, bytes: await makeWordFixture('改动'), baseVersion: file.version, revision: 1 };
+      expect(await store.checkpoint(1, request)).toEqual({ success: false, code: WordFileError.Forbidden });
+      expect(await store.save(1, request)).toEqual({ success: false, code: WordFileError.Forbidden });
+      expect(await fs.readFile(filePath)).toEqual(Buffer.from(original));
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('DOCX admission', () => {
   test.each([
     '<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>',
@@ -153,21 +173,41 @@ describe('DOCX admission', () => {
   });
 
   test.each([
-    ['comments', { 'word/comments.xml': '<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:id="0"><w:p><w:r><w:t>Review</w:t></w:r></w:p></w:comment></w:comments>' }],
-    ['empty comment record', { 'word/comments.xml': '<w:comments><w:comment w:id="0"/></w:comments>' }],
-    ['comment metadata', { 'word/commentsExtended.xml': '<w15:commentsEx><w15:commentEx w15:paraId="1"/></w15:commentsEx>' }],
-    ['invalid comment XML', { 'word/comments.xml': '<w:comments><w:comment></w:comments>' }],
-    ['unexpected comment root', { 'word/comments.xml': '<differentRoot/>' }],
-    ['comment reference without comments part', { 'word/footer2.xml': '<w:ftr><w:p><w:r><w:commentReference w:id="0"/></w:r></w:p></w:ftr>' }],
-    ['comment range without comments part', { 'word/header2.xml': '<w:hdr><w:p><w:commentRangeStart w:id="0"/><w:r><w:t>Review</w:t></w:r><w:commentRangeEnd w:id="0"/></w:p></w:hdr>' }],
-    ['macros', { 'word/vbaProject.bin': 'macro' }],
-    ['signatures', { '_xmlsignatures/sig1.xml': '<Signature/>' }],
-    ['external image', { 'word/_rels/document.xml.rels': '<Relationships><Relationship TargetMode="External" Target="https://example.com/a.png" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"/></Relationships>' }],
-    ['encoded external relationship', { 'word/_rels/document.xml.rels': '<r-x:Relationships xmlns:r-x="urn:test"><r-x:Relationship Target="https://example.com/a>b.png" TargetMode="&#x45;xternal" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"/></r-x:Relationships>' }],
-    ['self-closing protection', { 'word/settings.xml': '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:documentProtection/></w:settings>' }],
-  ])('rejects %s before opening an editable model', async (_name, parts) => {
+    ['comments', WordReadOnlyReason.Comments, { 'word/comments.xml': '<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:id="0"><w:p><w:r><w:t>Review</w:t></w:r></w:p></w:comment></w:comments>' }],
+    ['empty comment record', WordReadOnlyReason.Comments, { 'word/comments.xml': '<w:comments><w:comment w:id="0"/></w:comments>' }],
+    ['comment metadata', WordReadOnlyReason.Comments, { 'word/commentsExtended.xml': '<w15:commentsEx><w15:commentEx w15:paraId="1"/></w15:commentsEx>' }],
+    ['invalid comment XML', WordReadOnlyReason.Comments, { 'word/comments.xml': '<w:comments><w:comment></w:comments>' }],
+    ['unexpected comment root', WordReadOnlyReason.Comments, { 'word/comments.xml': '<differentRoot/>' }],
+    ['comment reference without comments part', WordReadOnlyReason.Comments, { 'word/footer2.xml': '<w:ftr><w:p><w:r><w:commentReference w:id="0"/></w:r></w:p></w:ftr>' }],
+    ['comment range without comments part', WordReadOnlyReason.Comments, { 'word/header2.xml': '<w:hdr><w:p><w:commentRangeStart w:id="0"/><w:r><w:t>Review</w:t></w:r><w:commentRangeEnd w:id="0"/></w:p></w:hdr>' }],
+    ['tracked insertion', WordReadOnlyReason.Revisions, { 'word/footer2.xml': '<w:ftr><w:p><w:ins w:id="1" w:author="A"><w:r><w:t>x</w:t></w:r></w:ins></w:p></w:ftr>' }],
+    ['tracked formatting', WordReadOnlyReason.Revisions, { 'word/footer2.xml': '<w:ftr><w:p><w:r><w:rPr><w:b/><w:rPrChange w:id="2" w:author="A"><w:rPr/></w:rPrChange></w:rPr><w:t>x</w:t></w:r></w:p></w:ftr>' }],
+    ['embedded object', WordReadOnlyReason.Embedded, { 'word/embeddings/oleObject1.bin': 'ole' }],
+    ['macros', WordReadOnlyReason.Macros, { 'word/vbaProject.bin': 'macro' }],
+    ['signatures', WordReadOnlyReason.Signature, { '_xmlsignatures/sig1.xml': '<Signature/>' }],
+    ['external image', WordReadOnlyReason.ExternalContent, { 'word/_rels/document.xml.rels': '<Relationships><Relationship TargetMode="External" Target="https://example.com/a.png" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"/></Relationships>' }],
+    ['encoded external relationship', WordReadOnlyReason.ExternalContent, { 'word/_rels/document.xml.rels': '<r-x:Relationships xmlns:r-x="urn:test"><r-x:Relationship Target="https://example.com/a>b.png" TargetMode="&#x45;xternal" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"/></r-x:Relationships>' }],
+    ['self-closing protection', WordReadOnlyReason.Protection, { 'word/settings.xml': '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:documentProtection/></w:settings>' }],
+  ])('opens %s read only instead of editing around it', async (_name, reason, parts) => {
     const bytes = await makeWordFixture('fixture', parts as Record<string, string>);
-    expect(() => inspectWordPackage(bytes)).toThrowError(expect.objectContaining({ code: WordFileError.Unsupported }));
+    expect(inspectWordPackage(bytes).readOnly).toContain(reason);
+  });
+
+  test('a plain generated document is fully editable', async () => {
+    expect(inspectWordPackage(await makeWordFixture()).readOnly).toEqual([]);
+  });
+
+  test('reads font declarations and their fallback classes from the font table', async () => {
+    const fontTable = '<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      + '<w:font w:name="宋体"><w:altName w:val="SimSun"/><w:panose1 w:val="02010600030101010101"/><w:charset w:val="86"/><w:family w:val="auto"/><w:pitch w:val="variable"/></w:font>'
+      + '<w:font w:name="Times New Roman"><w:charset w:val="00"/><w:family w:val="roman"/><w:pitch w:val="variable"/></w:font>'
+      + '<w:font w:name="Consolas"/></w:fonts>';
+    const bytes = await makeWordFixture('fixture', { 'word/fontTable.xml': fontTable });
+    expect(inspectWordPackage(bytes).fonts).toEqual([
+      { name: '宋体', altName: 'SimSun', charset: '86', family: 'auto', pitch: 'variable' },
+      { name: 'Times New Roman', charset: '00', family: 'roman', pitch: 'variable' },
+      { name: 'Consolas' },
+    ]);
   });
 
   test('rejects declared oversized entries before decompressing', async () => {

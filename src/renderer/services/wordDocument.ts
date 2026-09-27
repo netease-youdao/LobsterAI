@@ -1,5 +1,5 @@
 import {
-  type WordFileApi, WordFileError, type WordOpenResult, type WordWriteRequest,
+  type WordFileApi, WordFileError, type WordOpenResult, type WordPackageInfo, type WordReadOnlyReason, type WordWriteRequest,
 } from '../../shared/artifactPreview/wordEditing';
 
 export const WordSaveState = {
@@ -16,6 +16,8 @@ export interface WordDocumentState {
   restored: boolean;
   needsResolution: boolean;
   originalCopyPath?: string;
+  /** Review, protected or embedded content keeps the document in viewing mode. */
+  readOnlyReasons: WordReadOnlyReason[];
 }
 
 export interface WordEditorPort {
@@ -29,8 +31,10 @@ const AUTOSAVE_DELAY_MS = 700;
 /** A document owns its revisions and save queue independently of the React view. */
 export class WordDocument {
   private state: WordDocumentState = {
-    ready: false, status: WordSaveState.Loading, draftSafe: true, restored: false, needsResolution: false,
+    ready: false, status: WordSaveState.Loading, draftSafe: true, restored: false, needsResolution: false, readOnlyReasons: [],
   };
+  /** Admission facts for the bytes currently shown: read-only reasons and declared fonts. */
+  packageInfo: WordPackageInfo;
   private listeners = new Set<() => void>();
   private revision: number;
   private savedRevision: number;
@@ -54,6 +58,14 @@ export class WordDocument {
     this.durableRevision = this.revision;
     this.baseVersion = file.recovery?.baseVersion ?? file.version;
     this.state.needsResolution = Boolean(file.recovery);
+    this.packageInfo = { readOnly: file.readOnly, fonts: file.fonts };
+    this.state.readOnlyReasons = file.readOnly;
+  }
+
+  get locked(): boolean { return this.packageInfo.readOnly.length > 0; }
+
+  private adopt(info: WordPackageInfo): void {
+    this.packageInfo = { readOnly: info.readOnly, fonts: info.fonts };
   }
 
   getSnapshot = (): WordDocumentState => this.state;
@@ -75,9 +87,11 @@ export class WordDocument {
     this.loading = true;
     try {
       await this.editor.load(this.file.recovery?.bytes ?? this.file.bytes);
+      this.editor.setReadOnly(this.locked);
       const restored = Boolean(this.file.recovery);
       // Recovery is shown for an explicit choice. Opening a file must never overwrite it.
-      this.publish({ ready: true, restored, status: restored ? WordSaveState.Conflict : WordSaveState.Saved });
+      this.publish({ ready: true, restored, status: restored ? WordSaveState.Conflict : WordSaveState.Saved,
+        readOnlyReasons: this.packageInfo.readOnly });
     } catch (error) {
       console.warn('[WordDocument] Could not initialize editor:', error);
       this.publish({ status: WordSaveState.Error, errorCode: WordFileError.Unsupported });
@@ -168,6 +182,9 @@ export class WordDocument {
   private async refreshFromDisk(): Promise<void> {
     if (!this.state.ready || this.loading || this.resolving || this.disposed) return;
     await this.saving;
+    // Most refreshes follow our own saves or window focus and find nothing new; only a real
+    // reload locks the editor and releases it again.
+    let reloading = false;
     try {
       const baseVersion = this.baseVersion;
       const result = await this.api.read(this.file.sessionId);
@@ -185,16 +202,18 @@ export class WordDocument {
         return;
       }
       this.loading = true;
+      reloading = true;
       this.editor.setReadOnly(true);
+      this.adopt(result.value);
       await this.editor.load(result.value.bytes);
       this.baseVersion = result.value.version;
-      this.publish({ status: WordSaveState.Saved, errorCode: undefined });
+      this.publish({ status: WordSaveState.Saved, errorCode: undefined, readOnlyReasons: this.packageInfo.readOnly });
     } catch (error) {
       console.warn('[WordDocument] Could not refresh document:', error);
       this.publish({ status: WordSaveState.Error, errorCode: WordFileError.Io });
     } finally {
       this.loading = false;
-      this.editor.setReadOnly(false);
+      if (reloading) this.editor.setReadOnly(this.locked);
     }
   }
 
@@ -214,6 +233,7 @@ export class WordDocument {
       }
       if (!keepMine) {
         this.loading = true;
+        this.adopt(current.value);
         await this.editor.load(current.value.bytes);
         this.revision++;
         this.savedRevision = this.revision;
@@ -226,14 +246,14 @@ export class WordDocument {
       }
       this.baseVersion = current.value.version;
       this.publish({ status: keepMine ? WordSaveState.Pending : WordSaveState.Saved,
-        restored: false, needsResolution: false, errorCode: undefined });
+        restored: false, needsResolution: false, errorCode: undefined, readOnlyReasons: this.packageInfo.readOnly });
     } catch (error) {
       console.error('[WordDocument] Could not resolve document conflict:', error);
       this.publish({ status: WordSaveState.Conflict, errorCode: WordFileError.Io });
     } finally {
       this.loading = false;
       this.resolving = false;
-      this.editor.setReadOnly(false);
+      this.editor.setReadOnly(this.locked);
     }
     if (keepMine) await this.flush();
   }

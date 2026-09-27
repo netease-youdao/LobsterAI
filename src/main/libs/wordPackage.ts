@@ -4,8 +4,9 @@ import { XMLParser, XMLValidator } from 'fast-xml-parser';
 
 import {
   WORD_MAX_EXPANDED_BYTES, WORD_MAX_FILE_BYTES, WORD_MAX_PART_BYTES, WORD_MAX_PARTS,
-  WordFileError,
+  WordFileError, type WordPackageInfo, WordReadOnlyReason,
 } from '../../shared/artifactPreview/wordEditing';
+import type { WordDocumentFontDecl } from '../../shared/artifactPreview/wordFonts';
 
 export class WordFileException extends Error {
   constructor(readonly code: WordFileError, message: string) {
@@ -57,12 +58,57 @@ function relationshipAttributes(tag: string): Map<string, string> {
   return attributes;
 }
 
+const MAX_FONT_DECLARATIONS = 256;
+
+/** `w:font` entries of `word/fontTable.xml`: names, alternates and the classes Word falls back on. */
+function parseFontTable(xml: string | undefined): WordDocumentFontDecl[] {
+  if (!xml) return [];
+  const fonts: WordDocumentFontDecl[] = [];
+  const pattern = /<(?:[^\s<>/=:]+:)?font\b((?:[^"'>]|"[^"]*"|'[^']*')*?)(\/>|>([\s\S]*?)<\/(?:[^\s<>/=:]+:)?font>)/g;
+  const child = (body: string, local: string): string | undefined => {
+    const match = body.match(new RegExp(`<(?:[^\\s<>/=:]+:)?${local}\\b((?:[^"'>]|"[^"]*"|'[^']*')*)\\/?>`));
+    return match ? [...relationshipAttributes(match[0])].find(([key]) => key.split(':').pop() === 'val')?.[1] : undefined;
+  };
+  for (const match of xml.matchAll(pattern)) {
+    const name = [...relationshipAttributes(`<x${match[1]}>`)].find(([key]) => key.split(':').pop() === 'name')?.[1]?.trim();
+    if (!name || name.length > 64) continue;
+    const body = match[3] ?? '';
+    const decl: WordDocumentFontDecl = { name };
+    const altName = child(body, 'altName')?.trim();
+    if (altName && altName.length <= 64) decl.altName = altName;
+    const family = child(body, 'family');
+    if (family) decl.family = family;
+    const charset = child(body, 'charset');
+    if (charset && /^[0-9a-f]{1,2}$/i.test(charset)) decl.charset = charset.toUpperCase();
+    const pitch = child(body, 'pitch');
+    if (pitch) decl.pitch = pitch;
+    fonts.push(decl);
+    if (fonts.length >= MAX_FONT_DECLARATIONS) break;
+  }
+  return fonts;
+}
+
+const REVIEW_ELEMENT = /<(?:[^\s<>/=:]+:)?(ins|del|moveFrom|moveTo|rPrChange|pPrChange|sectPrChange|tblPrChange|trPrChange|tcPrChange|numberingChange|comment|commentRangeStart|commentRangeEnd|commentReference|documentProtection|altChunk|object)(?:\s|\/?>)/g;
+const REASON_BY_ELEMENT: Record<string, WordReadOnlyReason> = {
+  ins: WordReadOnlyReason.Revisions, del: WordReadOnlyReason.Revisions,
+  moveFrom: WordReadOnlyReason.Revisions, moveTo: WordReadOnlyReason.Revisions,
+  rPrChange: WordReadOnlyReason.Revisions, pPrChange: WordReadOnlyReason.Revisions,
+  sectPrChange: WordReadOnlyReason.Revisions, tblPrChange: WordReadOnlyReason.Revisions,
+  trPrChange: WordReadOnlyReason.Revisions, tcPrChange: WordReadOnlyReason.Revisions,
+  numberingChange: WordReadOnlyReason.Revisions,
+  comment: WordReadOnlyReason.Comments, commentRangeStart: WordReadOnlyReason.Comments,
+  commentRangeEnd: WordReadOnlyReason.Comments, commentReference: WordReadOnlyReason.Comments,
+  documentProtection: WordReadOnlyReason.Protection, altChunk: WordReadOnlyReason.Embedded, object: WordReadOnlyReason.Embedded,
+};
+
 /**
  * Inspect the ZIP directory BEFORE inflation. Never trust the declared expanded size:
  * zlib gets an output cap too. No entries are extracted to filesystem paths.
- * Deliberately reject ZIP64/encryption and review/active content in this first editor.
+ * Malformed, encrypted and ZIP64 packages are refused. Review, protected, signed and
+ * embedded content still opens with true pagination, but read only: the open core does
+ * not manage those structures, and editing around them could break what Word expects.
  */
-export function inspectWordPackage(input: Uint8Array): void {
+export function inspectWordPackage(input: Uint8Array): WordPackageInfo {
   if (!(input instanceof Uint8Array)) invalid('Expected DOCX bytes');
   if (input.byteLength > WORD_MAX_FILE_BYTES) tooLarge();
   const bytes = Buffer.from(input.buffer, input.byteOffset, input.byteLength);
@@ -85,6 +131,7 @@ export function inspectWordPackage(input: Uint8Array): void {
   if (directoryStart + directorySize !== end) invalid('Invalid ZIP directory bounds');
   const names = new Set<string>();
   const xml = new Map<string, string>();
+  const readOnly = new Set<WordReadOnlyReason>();
   let offset = directoryStart;
   let expandedTotal = 0;
   const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -124,17 +171,14 @@ export function inspectWordPackage(input: Uint8Array): void {
       const text = decoder.decode(content);
       if (/<!DOCTYPE|<!ENTITY/i.test(text)) unsupported('XML entities are not supported');
       xml.set(name, text);
-      // The open core does not expose review management. Preserve such files through preview.
-      if (/<(?:[^\s<>/=:]+:)?(?:altChunk|object|documentProtection|ins|del|moveFrom|moveTo|comment|commentRangeStart|commentRangeEnd|commentReference)(?:\s|\/?>)/.test(text)) {
-        unsupported('Document contains protected, embedded, or review content');
-      }
+      for (const match of text.matchAll(REVIEW_ELEMENT)) readOnly.add(REASON_BY_ELEMENT[match[1]]);
     }
-    if (/(?:^_xmlsignatures\/|vbaProject\.bin$|^word\/embeddings\/)/i.test(name)) {
-      unsupported('Signed, macro, embedded, or annotated document');
-    }
+    if (/^_xmlsignatures\//i.test(name)) readOnly.add(WordReadOnlyReason.Signature);
+    if (/vbaProject\.bin$/i.test(name)) readOnly.add(WordReadOnlyReason.Macros);
+    if (/^word\/embeddings\//i.test(name)) readOnly.add(WordReadOnlyReason.Embedded);
     if (/^word\/comments[^/]*\.xml$/i.test(name)
       && !(name === 'word/comments.xml' && isEmptyCommentPart(xml.get(name)!))) {
-      unsupported('Document contains annotations or unsupported comment metadata');
+      readOnly.add(WordReadOnlyReason.Comments);
     }
     offset = entryEnd;
   }
@@ -143,7 +187,7 @@ export function inspectWordPackage(input: Uint8Array): void {
   const document = xml.get('word/document.xml');
   if (!types?.includes('application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml')
     || !document || !xml.has('_rels/.rels')) invalid('Not a DOCX document package');
-  // Block external resources except user-activated hyperlinks; the editor must work offline.
+  // Linked (not embedded) resources other than hyperlinks are never fetched; keep them untouched.
   for (const [name, text] of xml) {
     if (!name.endsWith('.rels')) continue;
     const relations = text.match(/<(?:[^\s<>/=:]+:)?Relationship\b(?:[^"'>]|"[^"]*"|'[^']*')*>/g) ?? [];
@@ -151,6 +195,7 @@ export function inspectWordPackage(input: Uint8Array): void {
       const attributes = relationshipAttributes(relation);
       return attributes.get('TargetMode')?.toLowerCase() === 'external'
         && !attributes.get('Type')?.endsWith('/hyperlink');
-    })) unsupported('Externally linked resource');
+    })) readOnly.add(WordReadOnlyReason.ExternalContent);
   }
+  return { readOnly: [...readOnly].sort(), fonts: parseFontTable(xml.get('word/fontTable.xml')) };
 }

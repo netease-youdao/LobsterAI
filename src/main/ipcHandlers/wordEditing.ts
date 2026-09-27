@@ -3,14 +3,24 @@ import path from 'node:path';
 
 import { app, type BrowserWindow, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
 
+import { WordAgentIpc } from '../../shared/artifactPreview/wordAgent';
 import { WordFileError, WordFileIpc, type WordWriteRequest } from '../../shared/artifactPreview/wordEditing';
+import { WordAgentBridge } from '../libs/wordAgentBridge';
 import { WordFileStore } from '../libs/wordFileEditing';
+import { defaultWordFontDirectories, WordFontCatalog } from '../libs/wordFonts/fontCatalog';
 
 const unsafeEditors = new Set<WebContents>();
 export const hasUnsafeWordEdits = (): boolean => unsafeEditors.size > 0;
 
-export function registerWordEditingHandlers(getMainWindow: () => BrowserWindow | null): void {
+/** Registers the Word file, font and agent channels; returns the agent tool bridge. */
+export function registerWordEditingHandlers(getMainWindow: () => BrowserWindow | null): WordAgentBridge {
   const store = new WordFileStore(path.join(app.getPath('userData'), 'word-drafts'));
+  const agent = new WordAgentBridge(getMainWindow);
+  // Installed fonts are read in place for layout only; they are never copied into documents.
+  const fonts = new WordFontCatalog({
+    directories: defaultWordFontDirectories(),
+    cachePath: path.join(app.getPath('userData'), 'word-fonts', 'catalog.json'),
+  });
   const observed = new WeakSet<WebContents>();
   const ownerEpoch = new WeakMap<WebContents, number>();
   const watches = new Map<string, { owner: number; close: () => void }>();
@@ -46,6 +56,7 @@ export function registerWordEditingHandlers(getMainWindow: () => BrowserWindow |
       const clear = () => {
         ownerEpoch.set(owner, (ownerEpoch.get(owner) ?? 0) + 1);
         store.releaseOwner(owner.id); releaseWatches(owner.id); unsafeEditors.delete(owner);
+        agent.cancelAll('The LobsterAI window reloaded before the Word edit finished; read the document again.');
       };
       owner.once('destroyed', clear);
       owner.on('render-process-gone', clear);
@@ -79,9 +90,33 @@ export function registerWordEditingHandlers(getMainWindow: () => BrowserWindow |
     const watcher = watches.get(sessionId);
     if (watcher?.owner === event.sender.id) { watcher.close(); watches.delete(sessionId); }
   });
+  ipcMain.handle(WordFileIpc.ResolveFonts, async (event, families: unknown) => {
+    if (!allowed(event)) return forbidden;
+    if (!Array.isArray(families) || families.some(family => typeof family !== 'string')) {
+      return { success: false, code: WordFileError.InvalidFile };
+    }
+    try {
+      return { success: true, value: { faces: await fonts.resolve(families as string[]) } };
+    } catch (error) {
+      console.error('[WordFonts] Could not resolve installed fonts:', error);
+      return { success: false, code: WordFileError.Io };
+    }
+  });
+  ipcMain.handle(WordFileIpc.ReadFont, async (event, faceId: unknown) => {
+    if (!allowed(event)) return forbidden;
+    if (typeof faceId !== 'string') return { success: false, code: WordFileError.InvalidFile };
+    try {
+      return { success: true, value: new Uint8Array(await fonts.readFace(faceId)) };
+    } catch (error) {
+      console.warn('[WordFonts] Could not read installed font face:', error);
+      return { success: false, code: WordFileError.Io };
+    }
+  });
   ipcMain.on(WordFileIpc.SetUnsafeEdits, (event, unsafe: unknown) => {
     if (!allowed(event) || typeof unsafe !== 'boolean') return;
     if (unsafe) unsafeEditors.add(event.sender);
     else unsafeEditors.delete(event.sender);
   });
+  ipcMain.on(WordAgentIpc.Respond, agent.handleResponse);
+  return agent;
 }

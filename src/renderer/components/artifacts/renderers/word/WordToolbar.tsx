@@ -11,10 +11,13 @@ import { i18nService } from '@/services/i18n';
 import type { WordEditorSession } from '@/services/wordEditorSession';
 
 const t = (key: string) => i18nService.t(key);
-const Slot = { Style: 'styles.style', Font: 'font.family', Size: 'font.size' } as const;
+const Slot = { Style: 'styles.style', Font: 'font.family', Size: 'font.size', Undo: 'history.undo', Redo: 'history.redo' } as const;
+/** Word's own family names; the font resolver maps each to an installed face or a stand-in. */
+const COMMON_FONTS = ['宋体', '黑体', '微软雅黑', '等线', '楷体', '仿宋', 'Calibri', 'Arial', 'Times New Roman', 'Cambria', 'Courier New'];
+const PRIVATE_FAMILY_PREFIX = 'LobsterAI Word ';
 const BUTTONS = [
-  { slot: 'history.undo', icon: ArrowUturnLeftIcon, label: 'wordUndo' },
-  { slot: 'history.redo', icon: ArrowUturnRightIcon, label: 'wordRedo' },
+  { slot: Slot.Undo, icon: ArrowUturnLeftIcon, label: 'wordUndo' },
+  { slot: Slot.Redo, icon: ArrowUturnRightIcon, label: 'wordRedo' },
   { slot: 'text.bold', icon: BoldIcon, label: 'wordBold' },
   { slot: 'text.italic', icon: ItalicIcon, label: 'wordItalic' },
   { slot: 'text.underline', icon: UnderlineIcon, label: 'wordUnderline' },
@@ -48,6 +51,14 @@ export function WordToolbar({ session }: { session: WordEditorSession }): React.
     release();
     editor.focus();
   };
+  // An agent edit spans several engine steps; the session undoes it as one.
+  const activate = (slot: ChromeSlotId, command: EditorCommand | null) => {
+    if ((slot === Slot.Undo && session.undo()) || (slot === Slot.Redo && session.redo())) {
+      editor?.focus();
+      return;
+    }
+    run(command);
+  };
   return (
     <div className="lobster-word-toolbar" role="toolbar" aria-label={t('wordToolbar')}>
       <select aria-label={t('wordStyle')} title={t('wordStyle')} value={formatting?.styleId ?? ''}
@@ -60,7 +71,8 @@ export function WordToolbar({ session }: { session: WordEditorSession }): React.
       <select aria-label={t('wordFont')} title={t('wordFont')} value={formatting?.fontFamily ?? ''}
         onFocus={retain} onBlur={release} onChange={event => run(commandForSlotValue(Slot.Font, event.target.value))}>
         <option value="" disabled>{t('wordFont')}</option>
-        {[...new Set([formatting?.fontFamily, 'Carlito', 'Caladea', 'Noto Sans SC'])].filter(Boolean).map(font => (
+        {[...new Set([formatting?.fontFamily, ...(editor?.getDocumentFonts() ?? []), ...COMMON_FONTS])]
+          .filter((font): font is string => Boolean(font) && !font!.startsWith(PRIVATE_FAMILY_PREFIX)).map(font => (
           <option key={font} value={font}>{font}</option>
         ))}
       </select>
@@ -79,7 +91,7 @@ export function WordToolbar({ session }: { session: WordEditorSession }): React.
         const active = Boolean(command && editor?.isActive(command));
         return (
           <button type="button" key={slot} title={t(label)} aria-label={t(label)} aria-pressed={active}
-            disabled={!enabled} onMouseDown={event => event.preventDefault()} onClick={() => run(command)}>
+            disabled={!enabled} onMouseDown={event => event.preventDefault()} onClick={() => activate(slot, command)}>
             <Icon className="h-4 w-4" />
           </button>
         );

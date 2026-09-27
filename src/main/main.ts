@@ -420,6 +420,7 @@ import {
   resolveLobsterBrowserMcpCommand,
   resolveLobsterBrowserMcpStdioLaunch,
 } from './libs/lobsterBrowserMcpServer';
+import { resolveLobsterWordMcpStdioLaunch } from './libs/lobsterWordMcpServer';
 import { exportLogsZip } from './libs/logExport';
 import { MainLogReporter } from './libs/mainLogReporter';
 import {
@@ -531,6 +532,7 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
+import type { WordAgentBridge } from './libs/wordAgentBridge';
 import { getLogFilePath, getRecentMainLogEntries, initLogger } from './logger';
 import { type AskUserResponse, McpRuntime } from './mcp/mcpRuntime';
 import {
@@ -1960,9 +1962,15 @@ const savePngWithDialog = async (
   return { success: true, canceled: false, path: outputPath };
 };
 
+/** Development builds only: automated end-to-end runs use a throwaway profile. */
+const DEV_USER_DATA_DIR_ENV = 'LOBSTERAI_DEV_USER_DATA_DIR';
+
 const configureUserDataPath = (): void => {
   const appDataPath = app.getPath('appData');
-  const preferredUserDataPath = path.join(appDataPath, APP_NAME);
+  const devUserDataPath = app.isPackaged ? undefined : process.env[DEV_USER_DATA_DIR_ENV]?.trim();
+  const preferredUserDataPath = devUserDataPath && path.isAbsolute(devUserDataPath)
+    ? devUserDataPath
+    : path.join(appDataPath, APP_NAME);
   const currentUserDataPath = app.getPath('userData');
 
   if (currentUserDataPath !== preferredUserDataPath) {
@@ -2127,6 +2135,7 @@ let browserCredentialService: BrowserCredentialService | null = null;
 let browserCredentialApprovalService: BrowserCredentialApprovalService | null = null;
 let skillManager: SkillManager | null = null;
 let mcpRuntime: McpRuntime | null = null;
+let wordAgentBridge: WordAgentBridge | null = null;
 let skinRuntimeController: SkinRuntimeController | null = null;
 let imGatewayManager: IMGatewayManager | null = null;
 let storeInitPromise: Promise<SqliteStore> | null = null;
@@ -2638,6 +2647,25 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
             bridgeSecret: mcpRuntime.getBridgeSecret(),
           },
         );
+      },
+      getLobsterWordMcpStdioLaunch: () => {
+        const mcpRuntime = getMcpRuntime();
+        const bridgeUrl = mcpRuntime.getWordCallbackUrl();
+        if (!bridgeUrl) return null;
+        try {
+          return resolveLobsterWordMcpStdioLaunch(
+            path.join(getOpenClawEngineManager().getStateDir(), 'generated'),
+            {
+              electronNodeRuntimePath: getElectronNodeRuntimePath(),
+              bridgeUrl,
+              bridgeSecret: mcpRuntime.getBridgeSecret(),
+            },
+          );
+        } catch (error) {
+          // The Word tools are optional; never let them break the rest of the config sync.
+          console.warn('[WordAgent] Could not prepare the Word MCP server:', error);
+          return null;
+        }
       },
       getMcpBridgeSecret: () => getMcpRuntime().getBridgeSecret(),
       getAgents: () => getCoworkStore().listAgents(),
@@ -3699,6 +3727,9 @@ const startAskUserServer = async (): Promise<void> => {
   const runtime = getMcpRuntime();
   await runtime.startAskUserServer();
   runtime.setBrowserToolHandler(request => getAgentBrowserHost().handleToolRequest(request));
+  runtime.setWordToolHandler(async request => (wordAgentBridge
+    ? wordAgentBridge.call(request.tool, request.args)
+    : { content: [{ type: 'text', text: 'The LobsterAI Word editor is not ready yet.' }], isError: true }));
 };
 
 const getIMGatewayManager = () => {
@@ -13097,7 +13128,7 @@ if (!gotTheLock) {
   });
 
   registerMarkdownEditingHandlers(() => mainWindow);
-  registerWordEditingHandlers(() => mainWindow);
+  wordAgentBridge = registerWordEditingHandlers(() => mainWindow);
 
   // ---- artifact file watching ----
   const fileWatchers = new Map<

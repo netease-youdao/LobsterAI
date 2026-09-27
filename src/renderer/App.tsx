@@ -82,6 +82,7 @@ import { scheduledTaskService } from './services/scheduledTask';
 import { isTextEditingSafeShortcut, matchesShortcut } from './services/shortcuts';
 import { themeService } from './services/theme';
 import { applyTypographyPreferences } from './services/typography';
+import { installWordAgentBridge } from './services/wordAgentBridge';
 import { RootState, store } from './store';
 import {
   selectCurrentSessionId,
@@ -304,6 +305,9 @@ const App: React.FC = () => {
     && hasResolvedEngineStartupOverlayState
     && !isEngineStartupOverlayVisible
     && !isUpdateInteractionBlocked;
+
+  // Agent Word tools edit the document open in the artifact panel in place.
+  useEffect(() => installWordAgentBridge(), []);
 
   useEffect(() => {
     if (!shouldShowNewUserOnboarding) return;

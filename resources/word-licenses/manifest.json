@@ -3,7 +3,7 @@
   "packages": [
     {
       "name": "@docx-editor.dev/core",
-      "version": "2.17.0",
+      "version": "2.22.0",
       "license": "Apache-2.0",
       "materials": [
         {
@@ -12,7 +12,7 @@
         },
         {
           "file": "THIRD_PARTY_NOTICES.md",
-          "sha256": "2bdb4d459bb5c90fee1ec2c246393ec360074fe139943189186e0c3bdf4505ff"
+          "sha256": "8786d445ec687931a5df6525d2116568434f9286080681f23902b400009bd3ab"
         },
         {
           "file": "licenses/HarfBuzz-COPYING.txt",
@@ -22,7 +22,7 @@
     },
     {
       "name": "@docx-editor.dev/i18n",
-      "version": "2.17.0",
+      "version": "2.22.0",
       "license": "Apache-2.0",
       "materials": [
         {
@@ -59,7 +59,7 @@
     },
     {
       "name": "bidi-js",
-      "version": "1.0.3",
+      "version": "1.1.0",
       "license": "MIT",
       "materials": [
         {
@@ -114,7 +114,7 @@
     },
     {
       "name": "harfbuzzjs",
-      "version": "1.6.0",
+      "version": "1.6.1",
       "license": "MIT",
       "materials": [
         {
@@ -390,11 +390,115 @@
       "sha256": "ccdab61d371d8c8683a128a92cd7d498dbdb1d37689f7cb21f1bf6b16658d213",
       "bytes": 4393,
       "license": "OFL-1.1"
+    },
+    {
+      "file": "LiberationMono-Bold.ttf",
+      "url": "https://registry.npmjs.org/@docx-editor.dev/fonts/-/fonts-2.22.0.tgz",
+      "archivePath": "package/assets/LiberationMono-Bold.ttf",
+      "sha256": "bd62a0672d0b9b6710b01df434c80ad54fa5f0835207eb7b17b7a761463067bb",
+      "bytes": 307996,
+      "license": "OFL-1.1"
+    },
+    {
+      "file": "LiberationMono-BoldItalic.ttf",
+      "url": "https://registry.npmjs.org/@docx-editor.dev/fonts/-/fonts-2.22.0.tgz",
+      "archivePath": "package/assets/LiberationMono-BoldItalic.ttf",
+      "sha256": "79451f3c09fe25116098853b7a2ca6e2436220ccc11af022979adbcf195be130",
+      "bytes": 284068,
+      "license": "OFL-1.1"
+    },
+    {
+      "file": "LiberationMono-Italic.ttf",
+      "url": "https://registry.npmjs.org/@docx-editor.dev/fonts/-/fonts-2.22.0.tgz",
+      "archivePath": "package/assets/LiberationMono-Italic.ttf",
+      "sha256": "605c01c711b44480a7508d349dfbf3264e81fa43d69e61cfa7d10b86e764c4d1",
+      "bytes": 281536,
+      "license": "OFL-1.1"
+    },
+    {
+      "file": "LiberationMono-Regular.ttf",
+      "url": "https://registry.npmjs.org/@docx-editor.dev/fonts/-/fonts-2.22.0.tgz",
+      "archivePath": "package/assets/LiberationMono-Regular.ttf",
+      "sha256": "f2b83c763e8afd21709333370bed4774337fae82267937e2b5aea7e2fbd922c1",
+      "bytes": 319508,
+      "license": "OFL-1.1"
+    },
+    {
+      "file": "LiberationSans-Bold.ttf",
+      "url": "https://registry.npmjs.org/@docx-editor.dev/fonts/-/fonts-2.22.0.tgz",
+      "archivePath": "package/assets/LiberationSans-Bold.ttf",
+      "sha256": "788abee4c806d660e8aee46689dd8540cd4bb98da03dcc9d171ce3efd99a9173",
+      "bytes": 414456,
+      "license": "OFL-1.1"
+    },
+    {
+      "file": "LiberationSans-BoldItalic.ttf",
+      "url": "https://registry.npmjs.org/@docx-editor.dev/fonts/-/fonts-2.22.0.tgz",
+      "archivePath": "package/assets/LiberationSans-BoldItalic.ttf",
+      "sha256": "698da70fc191cc5f33ad4d6d3fe830fe4624b898ea2e3169955928b7c491f1ee",
+      "bytes": 408996,
+      "license": "OFL-1.1"
+    },
+    {
+      "file": "LiberationSans-Italic.ttf",
+      "url": "https://registry.npmjs.org/@docx-editor.dev/fonts/-/fonts-2.22.0.tgz",
+      "archivePath": "package/assets/LiberationSans-Italic.ttf",
+      "sha256": "e5bae5c4cde31f22142753855f4f8fb86da6ff39955ed3c0a11248b0d16948b0",
+      "bytes": 415816,
+      "license": "OFL-1.1"
+    },
+    {
+      "file": "LiberationSans-Regular.ttf",
+      "url": "https://registry.npmjs.org/@docx-editor.dev/fonts/-/fonts-2.22.0.tgz",
+      "archivePath": "package/assets/LiberationSans-Regular.ttf",
+      "sha256": "76d04c18ea243f426b7de1f3ad208e927008f961dc5945e5aad352d0dfde8ee8",
+      "bytes": 410712,
+      "license": "OFL-1.1"
+    },
+    {
+      "file": "LiberationSerif-Bold.ttf",
+      "url": "https://registry.npmjs.org/@docx-editor.dev/fonts/-/fonts-2.22.0.tgz",
+      "archivePath": "package/assets/LiberationSerif-Bold.ttf",
+      "sha256": "d754ba427cfe0bca54ae052384baa8f842da5bd6550ad4da024ac441e7a7d5ce",
+      "bytes": 370096,
+      "license": "OFL-1.1"
+    },
+    {
+      "file": "LiberationSerif-BoldItalic.ttf",
+      "url": "https://registry.npmjs.org/@docx-editor.dev/fonts/-/fonts-2.22.0.tgz",
+      "archivePath": "package/assets/LiberationSerif-BoldItalic.ttf",
+      "sha256": "f17db8af71e24d2066b587546021d4f0b296be389512b658dec3c09affeb11a7",
+      "bytes": 376772,
+      "license": "OFL-1.1"
+    },
+    {
+      "file": "LiberationSerif-Italic.ttf",
+      "url": "https://registry.npmjs.org/@docx-editor.dev/fonts/-/fonts-2.22.0.tgz",
+      "archivePath": "package/assets/LiberationSerif-Italic.ttf",
+      "sha256": "0e3dea9f8d613e006ccfa62201f33e265d19167bd0907725c3e145368b04fc2e",
+      "bytes": 375632,
+      "license": "OFL-1.1"
+    },
+    {
+      "file": "LiberationSerif-Regular.ttf",
+      "url": "https://registry.npmjs.org/@docx-editor.dev/fonts/-/fonts-2.22.0.tgz",
+      "archivePath": "package/assets/LiberationSerif-Regular.ttf",
+      "sha256": "058ea80864aef09a23f45cbec2bb5400bc3dfbdea01c3f10538a21fcb497fb74",
+      "bytes": 393576,
+      "license": "OFL-1.1"
+    },
+    {
+      "file": "OFL-Liberation.txt",
+      "url": "https://registry.npmjs.org/@docx-editor.dev/fonts/-/fonts-2.22.0.tgz",
+      "archivePath": "package/licenses/LICENSE-Liberation.txt",
+      "sha256": "93fed46019c38bbe566b479d22148e2e8a1e85ada614accb0211c37b2c61c19b",
+      "bytes": 4414,
+      "license": "OFL-1.1"
     }
   ],
   "wasm": {
     "package": "@docx-editor.dev/core",
     "file": "dist/harfbuzz.wasm",
-    "sha256": "66f25d50cdf9942366498d0504d13096d567946cb1f6b5af6cdd87f392be99da"
+    "sha256": "37777ced92a2ba10279c33e1dbacf08835ddcacc215b7fcb3131e558dd01ce71"
   }
 }

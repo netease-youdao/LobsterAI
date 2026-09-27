@@ -5,6 +5,7 @@ import path from 'path';
 
 import { buildScheduledTaskEnginePrompt } from '../../scheduledTask/enginePrompt';
 import { AgentId, DefaultAgentProfile } from '../../shared/agent';
+import { WORD_AGENT_MCP_SERVER_NAME } from '../../shared/artifactPreview/wordAgent';
 import {
   BrowserCredentialLoginTool,
   BrowserCredentialMcpServer,
@@ -61,6 +62,7 @@ import {
   getCoworkOpenAICompatProxyToken,
 } from './coworkOpenAICompatProxy';
 import type { LobsterBrowserMcpStdioLaunch } from './lobsterBrowserMcpServer';
+import type { LobsterWordMcpStdioLaunch } from './lobsterWordMcpServer';
 import {
   buildAgentEntry,
   buildManagedAgentEntries,
@@ -1845,6 +1847,7 @@ type OpenClawConfigSyncDeps = {
   getBrowserCallbackUrl?: () => string | null;
   getLobsterBrowserMcpCommand?: () => string | null;
   getLobsterBrowserMcpStdioLaunch?: () => LobsterBrowserMcpStdioLaunch | null;
+  getLobsterWordMcpStdioLaunch?: () => LobsterWordMcpStdioLaunch | null;
   getMcpBridgeSecret?: () => string;
   getSkillsList?: () => Array<{ id: string; name: string; enabled: boolean }>;
   getAgents?: () => Agent[];
@@ -1876,6 +1879,7 @@ export class OpenClawConfigSync {
   private readonly getBrowserCallbackUrl?: () => string | null;
   private readonly getLobsterBrowserMcpCommand?: () => string | null;
   private readonly getLobsterBrowserMcpStdioLaunch?: () => LobsterBrowserMcpStdioLaunch | null;
+  private readonly getLobsterWordMcpStdioLaunch?: () => LobsterWordMcpStdioLaunch | null;
   private readonly getMcpBridgeSecret?: () => string;
   private readonly getSkillsList?: () => Array<{ id: string; name: string; enabled: boolean }>;
   private readonly getAgents?: () => Agent[];
@@ -1908,6 +1912,7 @@ export class OpenClawConfigSync {
     this.getBrowserCallbackUrl = deps.getBrowserCallbackUrl;
     this.getLobsterBrowserMcpCommand = deps.getLobsterBrowserMcpCommand;
     this.getLobsterBrowserMcpStdioLaunch = deps.getLobsterBrowserMcpStdioLaunch;
+    this.getLobsterWordMcpStdioLaunch = deps.getLobsterWordMcpStdioLaunch;
     this.getMcpBridgeSecret = deps.getMcpBridgeSecret;
     this.getSkillsList = deps.getSkillsList;
     this.getAgents = deps.getAgents;
@@ -2682,6 +2687,15 @@ export class OpenClawConfigSync {
           },
         };
       }
+    }
+    // LobsterAI's Word editor tools edit the document open in the right-side panel live.
+    const wordMcpLaunch = this.getLobsterWordMcpStdioLaunch?.();
+    if (wordMcpLaunch) {
+      nativeMcpServers[WORD_AGENT_MCP_SERVER_NAME] = {
+        command: wordMcpLaunch.command,
+        args: wordMcpLaunch.args,
+        ...(Object.keys(wordMcpLaunch.env).length > 0 ? { env: wordMcpLaunch.env } : {}),
+      };
     }
     const nativeMcpServerCount = Object.keys(nativeMcpServers).length;
     if (nativeMcpServerCount > 0) {

@@ -6,9 +6,10 @@ import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } fro
 import { i18nService } from '@/services/i18n';
 import { WordSaveState } from '@/services/wordDocument';
 import { acquireWordEditor, type WordEditorSession } from '@/services/wordEditorSession';
+import { WordFontSource } from '@/services/wordFonts';
 import { openLocalPathWithToast, revealLocalPathWithToast } from '@/utils/localFileActions';
 
-import { WordFileError, type WordResult } from '../../../../../shared/artifactPreview/wordEditing';
+import { WordFileError, WordReadOnlyReason, type WordResult } from '../../../../../shared/artifactPreview/wordEditing';
 import { useRegisterOfficePreviewZoomControls } from '../OfficePreviewActionsContext';
 import { WordToolbar } from './WordToolbar';
 
@@ -17,6 +18,15 @@ const SAVE_LABEL = {
   [WordSaveState.Loading]: 'wordLoading', [WordSaveState.Saved]: 'wordSaved',
   [WordSaveState.Pending]: 'wordPending', [WordSaveState.Saving]: 'wordSaving',
   [WordSaveState.Conflict]: 'wordConflict', [WordSaveState.Error]: 'wordSaveFailed',
+};
+const READ_ONLY_LABEL: Record<WordReadOnlyReason, string> = {
+  [WordReadOnlyReason.Comments]: 'wordReadOnlyComments',
+  [WordReadOnlyReason.Revisions]: 'wordReadOnlyRevisions',
+  [WordReadOnlyReason.Protection]: 'wordReadOnlyProtection',
+  [WordReadOnlyReason.Embedded]: 'wordReadOnlyEmbedded',
+  [WordReadOnlyReason.Signature]: 'wordReadOnlySignature',
+  [WordReadOnlyReason.Macros]: 'wordReadOnlyMacros',
+  [WordReadOnlyReason.ExternalContent]: 'wordReadOnlyExternal',
 };
 const ConflictChoice = { Mine: 'mine', Disk: 'disk' } as const;
 type ConflictChoice = typeof ConflictChoice[keyof typeof ConflictChoice];
@@ -31,6 +41,10 @@ function ActiveWordEditor({ session }: { session: WordEditorSession }): React.Re
   const document = session.document;
   const state = useSyncExternalStore(document.subscribe, document.getSnapshot);
   const editorState = useSyncExternalStore(session.subscribeEditor, session.getEditorSnapshot);
+  const fontReport = useSyncExternalStore(session.subscribeEditor, session.getFontReport);
+  const substitutedFonts = fontReport.filter(entry => entry.source !== WordFontSource.Available);
+  const fontDetails = substitutedFonts.map(entry => (entry.source === WordFontSource.Missing
+    ? `${entry.family}: ${t('wordFontMissing')}` : `${entry.family} → ${entry.substitute}`)).join('\n');
   const host = useRef<HTMLDivElement>(null);
   const [choice, setChoice] = useState<ConflictChoice | null>(null);
   const [resolving, setResolving] = useState(false);
@@ -63,18 +77,32 @@ function ActiveWordEditor({ session }: { session: WordEditorSession }): React.Re
   return (
     <section className="lobster-word-editor" aria-label={t('wordEditor')}
       onKeyDownCapture={event => {
-        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        const key = event.key.toLowerCase();
+        if ((event.metaKey || event.ctrlKey) && key === 's') {
           event.preventDefault(); event.stopPropagation(); void document.flush();
+          return;
+        }
+        // Undo/redo an agent edit as one step, like the toolbar buttons.
+        const redo = (key === 'z' && event.shiftKey) || (key === 'y' && event.ctrlKey && !event.metaKey);
+        if ((event.metaKey || event.ctrlKey) && !event.altKey && (key === 'z' || redo)
+          && (redo ? session.redo() : session.undo())) {
+          event.preventDefault(); event.stopPropagation();
         }
       }}>
       <div className="lobster-word-statusbar">
-        <span className="flex items-center gap-1.5 text-xs" role="status" aria-live="polite">
-          {state.status === WordSaveState.Saved && <CheckIcon className="h-3.5 w-3.5 text-emerald-600" />}
-          {t(SAVE_LABEL[state.status])}
-          {state.status !== WordSaveState.Saved && state.draftSafe && <span className="opacity-60">· {t('wordDraftSafe')}</span>}
-        </span>
-        <button type="button" disabled={resolving || state.status === WordSaveState.Saving || !document.dirty}
-          onClick={() => { void document.flush(); }}>{t('save')}</button>
+        {state.readOnlyReasons.length > 0 ? (
+          <span className="text-xs" role="status">{t('wordReadOnlyStatus')}</span>
+        ) : (
+          <span className="flex items-center gap-1.5 text-xs" role="status" aria-live="polite">
+            {state.status === WordSaveState.Saved && <CheckIcon className="h-3.5 w-3.5 text-emerald-600" />}
+            {t(SAVE_LABEL[state.status])}
+            {state.status !== WordSaveState.Saved && state.draftSafe && <span className="opacity-60">· {t('wordDraftSafe')}</span>}
+          </span>
+        )}
+        {state.readOnlyReasons.length === 0 && (
+          <button type="button" disabled={resolving || state.status === WordSaveState.Saving || !document.dirty}
+            onClick={() => { void document.flush(); }}>{t('save')}</button>
+        )}
       </div>
       {state.needsResolution && (
         <div className="lobster-word-notice" role="alert">
@@ -93,12 +121,20 @@ function ActiveWordEditor({ session }: { session: WordEditorSession }): React.Re
           <button type="button" onClick={() => { void (document.dirty ? document.flush() : document.refresh()); }}>{t('retry')}</button>
         </div>
       )}
-      <WordToolbar session={session} />
+      {state.readOnlyReasons.length > 0 && (
+        <div className="lobster-word-notice" role="status">
+          <p>{t('wordReadOnly').replace('{reasons}', state.readOnlyReasons.map(reason => t(READ_ONLY_LABEL[reason])).join(t('wordListSeparator')))}</p>
+          <button type="button" className="mt-2" onClick={() => { void openLocalPathWithToast(document.file.filePath); }}>{t('wordOpenExternal')}</button>
+        </div>
+      )}
+      {state.readOnlyReasons.length === 0 && <WordToolbar session={session} />}
       <div className="lobster-word-mount docx-editor__scroll-container" ref={host} />
       <div className="lobster-word-footer">
         <span>{t('wordPage')} {editorState?.page.current ?? 1} / {editorState?.page.total ?? 1}</span>
         {state.originalCopyPath && <button type="button" onClick={() => { void revealLocalPathWithToast(state.originalCopyPath!); }}>{t('wordOriginalCopy')}</button>}
-        <span title={t('wordFontNotice')}>{t('wordLocalFonts')}</span>
+        <span title={fontDetails || t('wordFontsOriginalHelp')}>
+          {substitutedFonts.length ? t('wordFontsSubstituted').replace('{count}', String(substitutedFonts.length)) : t('wordFontsOriginal')}
+        </span>
       </div>
     </section>
   );

@@ -1,8 +1,8 @@
 /**
  * McpBridgeServer — authenticated loopback callbacks shared by OpenClaw integrations.
  *
- * Provides AskUser, media-generation, and in-app browser endpoints. Binds to
- * 127.0.0.1 only and requires the per-process bridge secret.
+ * Provides AskUser, media-generation, in-app browser and Word editor endpoints.
+ * Binds to 127.0.0.1 only and requires the per-process bridge secret.
  */
 import crypto from 'crypto';
 import http from 'http';
@@ -73,6 +73,10 @@ export type BrowserToolResponse = {
   isError?: boolean;
 };
 
+/** Word editor tools share the browser tools' request and result shapes. */
+export type WordToolRequest = BrowserToolRequest;
+export type WordToolResponse = BrowserToolResponse;
+
 export class McpBridgeServer {
   private server: http.Server | null = null;
   private _port: number | null = null;
@@ -82,6 +86,7 @@ export class McpBridgeServer {
   private onAskUserDismissCallback: ((requestId: string) => void) | null = null;
   private onMediaGenerationCallback: ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>) | null = null;
   private onBrowserToolCallback: ((request: BrowserToolRequest) => Promise<BrowserToolResponse>) | null = null;
+  private onWordToolCallback: ((request: WordToolRequest) => Promise<WordToolResponse>) | null = null;
 
   constructor(secret: string) {
     this.secret = secret;
@@ -102,6 +107,10 @@ export class McpBridgeServer {
 
   get browserCallbackUrl(): string | null {
     return this._port ? `http://127.0.0.1:${this._port}/browser/tool` : null;
+  }
+
+  get wordCallbackUrl(): string | null {
+    return this._port ? `http://127.0.0.1:${this._port}/word/tool` : null;
   }
 
   /**
@@ -130,6 +139,10 @@ export class McpBridgeServer {
 
   onBrowserTool(callback: (request: BrowserToolRequest) => Promise<BrowserToolResponse>): void {
     this.onBrowserToolCallback = callback;
+  }
+
+  onWordTool(callback: (request: WordToolRequest) => Promise<WordToolResponse>): void {
+    this.onWordToolCallback = callback;
   }
 
   /**
@@ -263,6 +276,11 @@ export class McpBridgeServer {
 
     if (req.url?.startsWith('/browser/tool')) {
       await this.handleBrowserTool(req, res);
+      return;
+    }
+
+    if (req.url?.startsWith('/word/tool')) {
+      await this.handleWordTool(req, res);
       return;
     }
 
@@ -419,6 +437,36 @@ export class McpBridgeServer {
           isError: true,
         }));
       }
+    }
+  }
+
+  private async handleWordTool(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const startedAt = Date.now();
+    const reply = (status: number, payload: WordToolResponse): void => {
+      if (res.writableEnded) return;
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(payload));
+    };
+    try {
+      const request = JSON.parse(await this.readBody(req)) as WordToolRequest;
+      if (typeof request.tool !== 'string' || !request.tool.trim()) {
+        reply(400, { content: [{ type: 'text', text: 'Missing Word tool name.' }], isError: true });
+        return;
+      }
+      if (!this.onWordToolCallback) {
+        reply(503, { content: [{ type: 'text', text: 'The LobsterAI Word editor is not ready.' }], isError: true });
+        return;
+      }
+      const result = await this.onWordToolCallback({
+        tool: request.tool,
+        args: request.args && typeof request.args === 'object' && !Array.isArray(request.args) ? request.args : {},
+      });
+      log('INFO', `Word tool "${request.tool}" completed in ${Date.now() - startedAt}ms with isError=${result.isError ?? false}`);
+      reply(200, result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log('ERROR', `Word tool request failed after ${Date.now() - startedAt}ms: ${message}`);
+      reply(500, { content: [{ type: 'text', text: `LobsterAI Word editor error: ${message}` }], isError: true });
     }
   }
 

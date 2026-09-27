@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { type WordFileApi, WordFileError, type WordOpenResult, type WordResult } from '../../shared/artifactPreview/wordEditing';
+import { type WordFileApi, WordFileError, type WordOpenResult, WordReadOnlyReason, type WordResult } from '../../shared/artifactPreview/wordEditing';
 import { WordDocument, type WordEditorPort, WordSaveState } from './wordDocument';
 
 const bytes = (value: string): Uint8Array => new TextEncoder().encode(value);
@@ -11,8 +11,10 @@ const deferred = <T>() => {
   return { promise, resolve };
 };
 
-async function harness(recovery?: WordOpenResult['recovery']) {
-  const file: WordOpenResult = { sessionId: 'handle', filePath: '/report.docx', bytes: bytes('disk'), version: 'disk-v1', recovery };
+async function harness(recovery?: WordOpenResult['recovery'], readOnly: WordOpenResult['readOnly'] = []) {
+  const file: WordOpenResult = {
+    sessionId: 'handle', filePath: '/report.docx', bytes: bytes('disk'), version: 'disk-v1', recovery, readOnly, fonts: [],
+  };
   const api = {
     open: vi.fn(async () => success(file)),
     read: vi.fn(async () => success(file)),
@@ -162,6 +164,18 @@ describe('Word document revisions and recovery', () => {
     expect(port.load).toHaveBeenCalledTimes(1);
   });
 
+  test('a refresh that finds no change leaves the editing mode alone', async () => {
+    const { document, api, port, file } = await harness();
+    port.setReadOnly.mockClear();
+    document.changed();
+    await document.flush();
+    api.read.mockResolvedValue(success({ ...file, version: 'disk-v2' }));
+    await document.refresh();
+    await document.refresh();
+    expect(port.setReadOnly).not.toHaveBeenCalled();
+    expect(port.load).toHaveBeenCalledTimes(1);
+  });
+
   test('an edit arriving during an external read is retained instead of replaced', async () => {
     const { document, api, port, file } = await harness();
     const read = deferred<WordResult<WordOpenResult>>();
@@ -187,5 +201,18 @@ describe('Word document revisions and recovery', () => {
     await refreshing;
     expect(port.load).toHaveBeenCalledTimes(1);
     expect(document.getSnapshot().status).toBe(WordSaveState.Saved);
+  });
+});
+
+describe('Read-only Word documents', () => {
+  test('review content stays in viewing mode after loading and refreshing', async () => {
+    const { document, port, api, file } = await harness(undefined, [WordReadOnlyReason.Revisions]);
+    expect(document.locked).toBe(true);
+    expect(document.getSnapshot().readOnlyReasons).toEqual([WordReadOnlyReason.Revisions]);
+    expect(port.setReadOnly).toHaveBeenLastCalledWith(true);
+    api.read.mockResolvedValueOnce(success({ ...file, bytes: bytes('clean'), version: 'disk-v3', readOnly: [] }));
+    await document.refresh();
+    expect(document.locked).toBe(false);
+    expect(port.setReadOnly).toHaveBeenLastCalledWith(false);
   });
 });

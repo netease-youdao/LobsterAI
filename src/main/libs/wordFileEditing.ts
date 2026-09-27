@@ -19,6 +19,8 @@ interface FileSession {
   requestedPath: string;
   filePath: string;
   latestRevision: number;
+  /** Review, protected or embedded content opens read only and is never written back. */
+  editable: boolean;
   originalCopyPath?: string;
 }
 
@@ -74,8 +76,7 @@ async function readBounded(filePath: string, maximum: number): Promise<Buffer> {
 
 async function readSnapshot(filePath: string): Promise<WordFileSnapshot> {
   const bytes = await readBounded(filePath, WORD_MAX_FILE_BYTES);
-  inspectWordPackage(bytes);
-  return { filePath, bytes, version: hash(bytes) };
+  return { filePath, bytes, version: hash(bytes), ...inspectWordPackage(bytes) };
 }
 
 /** Sync a complete temporary file, then replace it on the same filesystem. */
@@ -168,7 +169,11 @@ export class WordFileStore {
         const recovery = await this.readDraft(filePath);
         const existing = [...this.sessions].find(([, session]) => session.owner === owner && session.filePath === filePath);
         const sessionId = existing?.[0] ?? randomUUID();
-        if (!existing) this.sessions.set(sessionId, { owner, requestedPath, filePath, latestRevision: recovery?.revision ?? 0 });
+        if (!existing) {
+          this.sessions.set(sessionId, {
+            owner, requestedPath, filePath, latestRevision: recovery?.revision ?? 0, editable: file.readOnly.length === 0,
+          });
+        }
         // A crash after replacement but before draft cleanup must not restore already-saved edits.
         if (recovery && hash(recovery.bytes) === file.version) {
           await fs.unlink(this.draftPath(filePath));
@@ -186,7 +191,10 @@ export class WordFileStore {
         if (await resolveWordPath(session.requestedPath) !== session.filePath) {
           throw new WordFileException(WordFileError.Conflict, 'File link target changed');
         }
-        return readSnapshot(session.filePath);
+        const snapshot = await readSnapshot(session.filePath);
+        // The renderer shows exactly these bytes next, so writes follow their admission.
+        session.editable = snapshot.readOnly.length === 0;
+        return snapshot;
       });
     });
   }
@@ -197,6 +205,7 @@ export class WordFileStore {
       throw new WordFileException(WordFileError.InvalidFile, 'Invalid snapshot');
     }
     const session = this.session(owner, request.sessionId);
+    if (!session.editable) throw new WordFileException(WordFileError.Forbidden, 'Document opened read only');
     if (request.revision < session.latestRevision) throw new WordFileException(WordFileError.Conflict, 'Stale revision');
     inspectWordPackage(request.bytes);
     return session;

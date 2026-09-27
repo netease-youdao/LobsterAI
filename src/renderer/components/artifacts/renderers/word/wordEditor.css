@@ -56,8 +56,15 @@
 .lobster-word-toolbar-divider { width: 1px; height: 18px; background: rgba(128, 128, 128, .2); margin: 0 4px; }
 .lobster-word-mount { flex: 1; min-height: 0; position: relative; overflow: auto; background: #e9eaec; overscroll-behavior: contain; }
 .lobster-word-mount.docx-editor__scroll-container { display: block; }
-/* Core sizes this plane in pixels. The surrounding viewport owns scrolling. */
-.lobster-word-surface { margin: 12px auto; color: #202124; }
+/* Core sizes this plane in pixels. The surrounding viewport owns scrolling.
+   Word emboldens and slants fonts without those faces (宋体, 楷体, 仿宋); the app shell
+   turns synthesis off globally, so pages turn it back on. */
+.lobster-word-surface { margin: 12px auto; color: #202124; font-synthesis: weight style; }
+/* Lines paint at font size 0 around their runs. IME text typed into an empty line lands outside
+   any run, so it needs the size of the text it will become (set in wordComposition.ts). */
+.lobster-word-surface.lobster-word-composing .docx-line:not(:has(.layout-run)) {
+  font-size: var(--lobster-word-preedit-size) !important;
+}
 .lobster-word-surface .docx-page { background: white; box-shadow: 0 1px 5px rgba(0, 0, 0, .12); }
 .lobster-word-footer { font-size: 11px; opacity: .65; border-top: 1px solid rgba(128, 128, 128, .18); }
 .lobster-word-notice { padding: 10px 12px; font-size: 12px; background: rgba(245, 158, 11, .09); flex-shrink: 0; }
