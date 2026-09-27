@@ -4667,6 +4667,10 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       return;
     }
     try {
+      if (/\.docx$/i.test(selectedArtifact.filePath) && window.electron?.artifact?.word) {
+        const { refreshOpenWordEditor } = await import('@/services/wordEditorSession');
+        if (await refreshOpenWordEditor(selectedArtifact.filePath)) return;
+      }
       if (selectedArtifact.type === ArtifactTypeValue.Html) {
         dispatch(addArtifact({
           sessionId: selectedArtifact.sessionId,

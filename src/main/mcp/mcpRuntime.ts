@@ -17,6 +17,8 @@ import {
   McpBridgeServer,
   type MediaGenerationRequest,
   type MediaGenerationResponse,
+  type WordToolRequest,
+  type WordToolResponse,
 } from '../libs/mcpBridgeServer';
 import { OpenClawConfigImpact } from '../libs/openclawConfigImpact';
 import type { ResolvedMcpServer } from '../libs/openclawConfigSync';
@@ -55,6 +57,7 @@ export class McpRuntime {
     | ((request: BrowserToolRequest) => Promise<BrowserToolResponse>)
     | null = null;
   private decisionToolHandler: DecisionToolHandler | null = null;
+  private wordToolHandler: ((request: WordToolRequest) => Promise<WordToolResponse>) | null = null;
 
   constructor(private readonly deps: McpRuntimeDeps) {}
 
@@ -103,6 +106,15 @@ export class McpRuntime {
 
   setDecisionToolHandler(handler: DecisionToolHandler): void {
     this.decisionToolHandler = handler;
+  }
+
+  setWordToolHandler(handler: (request: WordToolRequest) => Promise<WordToolResponse>): void {
+    this.wordToolHandler = handler;
+    this.bridgeServer?.onWordTool(handler);
+  }
+
+  getWordCallbackUrl(): string | null {
+    return this.bridgeServer?.wordCallbackUrl ?? null;
   }
 
   getAskUserCallbackUrl(): string | null {
@@ -219,6 +231,9 @@ export class McpRuntime {
 
     if (this.browserToolHandler) {
       this.bridgeServer.onBrowserTool(this.browserToolHandler);
+    }
+    if (this.wordToolHandler) {
+      this.bridgeServer.onWordTool(this.wordToolHandler);
     }
   }
 

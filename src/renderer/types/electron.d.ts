@@ -12,6 +12,7 @@ import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeSt
 import type { MarkdownFileBridge } from '../../shared/artifactPreview/markdownEditing';
 import type { ReviewScopeRequest } from '../../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest, ReviewSourceResponse } from '../../shared/artifactPreview/reviewSource';
+import type { WordFileBridge } from '../../shared/artifactPreview/wordEditing';
 import type { ResolvedArtifactOutput } from '../../shared/artifactPreview/workspace';
 import type {
   AsrRealtimeSessionRequest,
@@ -1585,6 +1586,7 @@ interface IElectronAPI {
     createRealtimeSession: (options: AsrRealtimeSessionRequest) => Promise<AsrRealtimeSessionResult>;
   };
   artifact: {
+    word: WordFileBridge;
     markdown: MarkdownFileBridge;
     watchFile: (filePath: string) => Promise<void>;
     unwatchFile: (filePath: string) => Promise<void>;

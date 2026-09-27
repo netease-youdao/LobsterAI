@@ -291,6 +291,7 @@ import { registerSessionDiagnosticsHandlers } from './ipcHandlers/sessionDiagnos
 import { registerSiteIpcHandlers } from './ipcHandlers/site';
 import { registerSkillHandlers } from './ipcHandlers/skills';
 import { registerSubscriptionTrialIpcHandlers } from './ipcHandlers/subscriptionTrial';
+import { hasUnsafeWordEdits, registerWordEditingHandlers } from './ipcHandlers/wordEditing';
 import { LibraryIndexService } from './library/libraryIndexService';
 import { registerLibraryIpcHandlers } from './library/libraryIpc';
 import { LibraryLocalStore } from './library/libraryLocalStore';
@@ -433,6 +434,7 @@ import {
   resolveLobsterBrowserMcpCommand,
   resolveLobsterBrowserMcpStdioLaunch,
 } from './libs/lobsterBrowserMcpServer';
+import { resolveLobsterWordMcpStdioLaunch } from './libs/lobsterWordMcpServer';
 import { exportLogsZip } from './libs/logExport';
 import { MainLogReporter } from './libs/mainLogReporter';
 import {
@@ -559,6 +561,7 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
+import type { WordAgentBridge } from './libs/wordAgentBridge';
 import { getLogFilePath, getRecentMainLogEntries, initLogger } from './logger';
 import { type AskUserResponse, McpRuntime } from './mcp/mcpRuntime';
 import {
@@ -1965,9 +1968,15 @@ const savePngWithDialog = async (
   return { success: true, canceled: false, path: outputPath };
 };
 
+/** Development builds only: automated end-to-end runs use a throwaway profile. */
+const DEV_USER_DATA_DIR_ENV = 'LOBSTERAI_DEV_USER_DATA_DIR';
+
 const configureUserDataPath = (): void => {
   const appDataPath = app.getPath('appData');
-  const preferredUserDataPath = path.join(appDataPath, APP_NAME);
+  const devUserDataPath = app.isPackaged ? undefined : process.env[DEV_USER_DATA_DIR_ENV]?.trim();
+  const preferredUserDataPath = devUserDataPath && path.isAbsolute(devUserDataPath)
+    ? devUserDataPath
+    : path.join(appDataPath, APP_NAME);
   const currentUserDataPath = app.getPath('userData');
 
   if (currentUserDataPath !== preferredUserDataPath) {
@@ -2132,6 +2141,7 @@ let browserCredentialService: BrowserCredentialService | null = null;
 let browserCredentialApprovalService: BrowserCredentialApprovalService | null = null;
 let skillManager: SkillManager | null = null;
 let mcpRuntime: McpRuntime | null = null;
+let wordAgentBridge: WordAgentBridge | null = null;
 let skinRuntimeController: SkinRuntimeController | null = null;
 let imGatewayManager: IMGatewayManager | null = null;
 let storeInitPromise: Promise<SqliteStore> | null = null;
@@ -2660,6 +2670,25 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
             bridgeSecret: mcpRuntime.getBridgeSecret(),
           },
         );
+      },
+      getLobsterWordMcpStdioLaunch: () => {
+        const mcpRuntime = getMcpRuntime();
+        const bridgeUrl = mcpRuntime.getWordCallbackUrl();
+        if (!bridgeUrl) return null;
+        try {
+          return resolveLobsterWordMcpStdioLaunch(
+            path.join(getOpenClawEngineManager().getStateDir(), 'generated'),
+            {
+              electronNodeRuntimePath: getElectronNodeRuntimePath(),
+              bridgeUrl,
+              bridgeSecret: mcpRuntime.getBridgeSecret(),
+            },
+          );
+        } catch (error) {
+          // The Word tools are optional; never let them break the rest of the config sync.
+          console.warn('[WordAgent] Could not prepare the Word MCP server:', error);
+          return null;
+        }
       },
       getMcpBridgeSecret: () => getMcpRuntime().getBridgeSecret(),
       getAgents: () => getCoworkStore().listAgents(),
@@ -3849,6 +3878,9 @@ const startAskUserServer = async (): Promise<void> => {
   const runtime = getMcpRuntime();
   await runtime.startAskUserServer();
   runtime.setBrowserToolHandler(request => getAgentBrowserHost().handleToolRequest(request));
+  runtime.setWordToolHandler(async request => (wordAgentBridge
+    ? wordAgentBridge.call(request.tool, request.args)
+    : { content: [{ type: 'text', text: 'The LobsterAI Word editor is not ready yet.' }], isError: true }));
 };
 
 const getIMGatewayManager = () => {
@@ -13333,6 +13365,7 @@ if (!gotTheLock) {
   });
 
   registerMarkdownEditingHandlers(() => mainWindow);
+  wordAgentBridge = registerWordEditingHandlers(() => mainWindow);
 
   // ---- artifact file watching ----
   const fileWatchers = new Map<
@@ -13821,11 +13854,16 @@ if (!gotTheLock) {
       }
 
       const devPort = process.env.ELECTRON_START_URL?.match(/:(\d+)/)?.[1] || '5175';
+      const appDocumentUrl = isDev ? new URL(DEV_SERVER_URL).href
+        : pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
+      // Local Word shaping needs WASM compilation, without enabling JavaScript eval.
+      const wordWasmSource = details.url === appDocumentUrl && details.webContentsId === mainWindow?.webContents.id
+        ? " 'wasm-unsafe-eval'" : '';
       const cspDirectives = [
         "default-src 'self'",
         isDev
-          ? `script-src 'self' 'unsafe-inline' http://localhost:${devPort} ws://localhost:${devPort}`
-          : "script-src 'self'",
+          ? `script-src 'self'${wordWasmSource} 'unsafe-inline' http://localhost:${devPort} ws://localhost:${devPort}`
+          : `script-src 'self'${wordWasmSource}`,
         "style-src 'self' 'unsafe-inline' https:",
         `img-src 'self' data: blob: https: http: ${ArtifactPreviewProtocol.LocalFile}: ${SKIN_PRIVILEGED_SCHEME.scheme}:`,
         // 允许连接到所有域名，不做限制
@@ -14565,12 +14603,12 @@ if (!gotTheLock) {
 
     // User-initiated quit (Cmd+Q, app menu, Dock, tray): scheduled tasks and
     // IM replies stop with the app, so ask first.
-    void showAppQuitConfirmation(hasUnsafeMarkdownEdits)
+    void showAppQuitConfirmation(() => hasUnsafeMarkdownEdits() || hasUnsafeWordEdits())
       .then(
         confirmed => confirmed,
         error => {
-          if (hasUnsafeMarkdownEdits()) {
-            console.error('[Main] quit confirmation prompt failed, retaining unsaved Markdown edits:', error);
+          if (hasUnsafeMarkdownEdits() || hasUnsafeWordEdits()) {
+            console.error('[Main] quit confirmation prompt failed, retaining unsaved document edits:', error);
             return false;
           }
           // Honor the quit rather than trap the user in a process that cannot

@@ -43,7 +43,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Quit confirmation (native dialog shown on user-initiated quit)
     appQuitConfirmTitle: '退出 LobsterAI？',
     appQuitConfirmDetail: 'LobsterAI 关闭期间，定时任务不会运行，也无法回复 IM 消息。',
-    appQuitConfirmUnsafeMarkdown: '有 Markdown 修改尚未保存，且无法备份草稿。退出后这些修改将丢失。请取消退出，返回文档保存或复制修改。',
+    appQuitConfirmUnsafeMarkdown: '有文档修改尚未保存，也尚未备份。退出后这些修改将丢失。请取消退出，返回文档保存修改。',
     appQuitConfirmQuit: '退出',
     appQuitConfirmCancel: '取消',
     taskCompletionNotificationTitle: '任务已完成',
@@ -434,7 +434,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Quit confirmation (native dialog shown on user-initiated quit)
     appQuitConfirmTitle: 'Quit LobsterAI?',
     appQuitConfirmDetail: 'While LobsterAI is closed, scheduled tasks will not run and IM messages will not be answered.',
-    appQuitConfirmUnsafeMarkdown: 'Some Markdown changes have not been saved and could not be backed up as drafts. Quitting will lose these changes. Cancel and return to the document to save or copy your changes.',
+    appQuitConfirmUnsafeMarkdown: 'Some document changes have not been saved or backed up. Quitting will lose these changes. Cancel and return to the document to save your changes.',
     appQuitConfirmQuit: 'Quit',
     appQuitConfirmCancel: 'Cancel',
     taskCompletionNotificationTitle: 'Task Complete',

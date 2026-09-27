@@ -15,6 +15,7 @@ import { OpenClawSkillReviewMode } from '../../shared/openclawEngine/constants';
 import { OpenClawProviderId, ProviderName } from '../../shared/providers';
 import { DEFAULT_DISCORD_OPENCLAW_CONFIG, DEFAULT_QQ_CONFIG, DiscordDmPolicy } from '../im/types';
 import { OpenClawAgentOwnership } from './openclawAgentModels';
+import { OPENCLAW_MEMORY_CORE_PLUGIN_ID } from './openclawConfigSync';
 import { OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
 
 vi.mock('electron', () => ({
@@ -525,10 +526,30 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(_meta?.migrations?.modelPolicyAllowlist).toBeUndefined();
     expect(config).toEqual({
       gateway: { mode: 'local' },
+      plugins: { allow: [OPENCLAW_MEMORY_CORE_PLUGIN_ID] },
       skills: { workshop: { autonomous: { mode: OpenClawSkillReviewMode.Off } } },
       agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
     });
     expect(sync.sync('repeat-start')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test('adds the first-start plugin allowlist to an existing minimal config', async () => {
+    fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: 'local' } }));
+    const apiConfig = mockRuntimeState.rawApiConfig.config;
+    mockRuntimeState.rawApiConfig.config = null;
+    const sync = await createSync();
+
+    expect(sync.sync('no-model')).toMatchObject({ ok: true, changed: true });
+    const minimal = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(minimal.plugins).toEqual({ allow: [OPENCLAW_MEMORY_CORE_PLUGIN_ID] });
+    expect(sync.sync('repeat-start')).toMatchObject({ ok: true, changed: false });
+
+    mockRuntimeState.rawApiConfig.config = apiConfig;
+    expect(sync.sync('model-configured')).toMatchObject({ ok: true, changed: true });
+    const configured = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(configured.plugins.allow).toContain(OPENCLAW_MEMORY_CORE_PLUGIN_ID);
+    expect(configured.plugins.allow).toContain(OpenClawQQPlugin.Id);
+    expect(configured.models.providers).not.toEqual({});
   });
 
   test('still removes plugin-index-managed installs when no model is available', async () => {
@@ -3886,6 +3907,53 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.tools.loopDetection).toEqual({
       enabled: true,
     });
+  });
+
+  test('registers the LobsterAI Word editor tools as a native MCP server', async () => {
+    const { OpenClawConfigSync } = await import('./openclawConfigSync');
+    const { WORD_AGENT_MCP_SERVER_NAME } = await import('../../shared/artifactPreview/wordAgent');
+    let launch: { command: string; args: string[]; env: Record<string, string> } | null = {
+      command: '/Applications/LobsterAI.app/Contents/MacOS/LobsterAI',
+      args: ['/state/generated/lobster-word-mcp/lobster-word-mcp-server.mjs'],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    };
+    const sync = new OpenClawConfigSync({
+      engineManager: {
+        getConfigPath: () => configPath,
+        getGatewayToken: () => 'gateway-token',
+        getStateDir: () => stateDir,
+        getBaseDir: () => tmpDir,
+      } as never,
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: '',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        memoryEnabled: false,
+        memoryImplicitUpdateEnabled: false,
+        memoryLlmJudgeEnabled: false,
+        memoryGuardLevel: 'balanced',
+        memoryUserMemoriesMaxItems: 100,
+        skipMissedJobs: false,
+      }),
+      getLobsterWordMcpStdioLaunch: () => launch,
+      isEnterprise: () => false,
+      getPopoInstances: () => [],
+      getNeteaseBeeChanConfig: () => null,
+      getWeixinConfig: () => null,
+      getIMSettings: () => null,
+      getSkillsList: () => [],
+      getAgents: () => [],
+    } as never);
+    expect(sync.sync('word-editor-tools').ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.mcp.servers[WORD_AGENT_MCP_SERVER_NAME]).toEqual(launch);
+
+    // Without an active bridge the server is left out rather than pointing nowhere.
+    launch = null;
+    expect(sync.sync('word-editor-tools-unavailable').ok).toBe(true);
+    const withoutBridge = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(withoutBridge.mcp?.servers?.[WORD_AGENT_MCP_SERVER_NAME]).toBeUndefined();
   });
 
   test('writes browser and web fetch access settings', async () => {

@@ -45,6 +45,11 @@
   ],
   "extraResources": [
     {
+      "from": "resources/word-licenses",
+      "to": "licenses/word",
+      "filter": ["NOTICE.txt", "manifest.json"]
+    },
+    {
       "from": ".keyfrom-build",
       "to": "keyfrom",
       "filter": [

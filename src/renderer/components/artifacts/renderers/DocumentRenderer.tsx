@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { i18nService } from '@/services/i18n';
 import type { Artifact } from '@/types/artifact';
@@ -13,6 +13,7 @@ import { useOfficePreviewZoom } from './OfficeZoomControls';
 import { SheetRenderer } from './sheet/SheetRenderer';
 
 const t = (key: string) => i18nService.t(key);
+const WordFileEditor = lazy(() => import('./word/WordFileEditor'));
 
 function getExtension(name: string): string {
   const lastDot = name.lastIndexOf('.');
@@ -1476,6 +1477,12 @@ const DocumentRenderer: React.FC<DocumentRendererProps> = ({ artifact }) => {
 
   switch (ext) {
     case '.docx':
+      if (artifact.filePath && window.electron?.artifact?.word) {
+        return <Suspense fallback={<div className="p-6 text-sm opacity-60">{t('wordLoading')}</div>}>
+          <WordFileEditor key={artifact.filePath} filePath={normalizeLocalFilePath(artifact.filePath)}
+            preview={<DocxSubRenderer artifact={{ ...artifact, content: '' }} />} />
+        </Suspense>;
+      }
       return <DocxSubRenderer artifact={artifact} />;
     case '.xlsx':
     case '.xls':

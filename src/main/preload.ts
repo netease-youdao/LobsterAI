@@ -15,6 +15,8 @@ import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
 import { MarkdownFileIpc, type SaveMarkdownFileRequest } from '../shared/artifactPreview/markdownEditing';
 import { ReviewIpc, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest } from '../shared/artifactPreview/reviewSource';
+import { WordAgentIpc, type WordAgentRequest } from '../shared/artifactPreview/wordAgent';
+import { type WordFileBridge,WordFileIpc } from '../shared/artifactPreview/wordEditing';
 import {
   AsrIpcChannel,
   type AsrRealtimeSessionRequest,
@@ -1039,6 +1041,28 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(AsrIpcChannel.CreateRealtimeSession, options),
   },
   artifact: {
+    word: {
+      open: filePath => ipcRenderer.invoke(WordFileIpc.Open, filePath),
+      read: sessionId => ipcRenderer.invoke(WordFileIpc.Read, sessionId),
+      checkpoint: request => ipcRenderer.invoke(WordFileIpc.Checkpoint, request),
+      save: request => ipcRenderer.invoke(WordFileIpc.Save, request),
+      discardDraft: sessionId => ipcRenderer.invoke(WordFileIpc.DiscardDraft, sessionId),
+      release: sessionId => ipcRenderer.invoke(WordFileIpc.Release, sessionId),
+      resolveFonts: families => ipcRenderer.invoke(WordFileIpc.ResolveFonts, families),
+      readFont: faceId => ipcRenderer.invoke(WordFileIpc.ReadFont, faceId),
+      setHasUnsafeEdits: unsafe => ipcRenderer.send(WordFileIpc.SetUnsafeEdits, unsafe),
+      onChanged: listener => {
+        const handler = (_event: Electron.IpcRendererEvent, sessionId: string) => listener(sessionId);
+        ipcRenderer.on(WordFileIpc.Changed, handler);
+        return () => { ipcRenderer.removeListener(WordFileIpc.Changed, handler); };
+      },
+      onAgentRequest: listener => {
+        const handler = (_event: Electron.IpcRendererEvent, request: WordAgentRequest) => listener(request);
+        ipcRenderer.on(WordAgentIpc.Request, handler);
+        return () => { ipcRenderer.removeListener(WordAgentIpc.Request, handler); };
+      },
+      respondAgent: response => ipcRenderer.send(WordAgentIpc.Respond, response),
+    } satisfies WordFileBridge,
     markdown: {
       read: (filePath: string) => ipcRenderer.invoke(MarkdownFileIpc.Read, filePath),
       save: (request: SaveMarkdownFileRequest) => ipcRenderer.invoke(MarkdownFileIpc.Save, request),
