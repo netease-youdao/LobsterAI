@@ -139,7 +139,7 @@
   "scripts": {
     "dev": "vite",
     "prebuild": "node scripts/generate-keyfrom-build-info.cjs && node scripts/word-third-party-notices.cjs",
-    "build": "tsc && vite build && vite build --config vite.thumbnail.config.ts",
+    "build": "tsc && cross-env NODE_OPTIONS=--max-old-space-size=6144 vite build && vite build --config vite.thumbnail.config.ts",
     "lint": "eslint src/",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
