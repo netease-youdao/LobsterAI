@@ -53,4 +53,19 @@ describe('EngineFailureOverlay', () => {
     expect(html).not.toContain('coworkOpenClawQuickRepair');
     expect(html).not.toContain('coworkOpenClawRestartGateway');
   });
+
+  test('tells the user to handle the listed legacy data when startup migrations were refused', () => {
+    snapshot.status = {
+      phase: OpenClawEnginePhase.Error,
+      version: '2026.8.1',
+      errorCode: OpenClawEngineErrorCode.StartupMigrationRefused,
+      message: 'OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.\n'
+        + '- Legacy channel allowFrom channel/account is unresolved; left in place at credentials/openclaw-weixin-a74391227cd8-im-bot-allowFrom.json',
+      canRetry: true,
+    };
+    const html = renderToStaticMarkup(React.createElement(EngineFailureOverlay));
+    expect(html).toContain('openClawStartupMigrationRefusedHint');
+    expect(html).toContain('openclaw-weixin-a74391227cd8-im-bot-allowFrom.json');
+    expect(html).toContain('coworkOpenClawQuickRepair');
+  });
 });

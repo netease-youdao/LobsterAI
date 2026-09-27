@@ -44,7 +44,7 @@ describe('parseGatewayLockPayload', () => {
     const parsed = parseGatewayLockPayload(
       JSON.stringify({ pid: 1234, createdAt: '2026-08-05T07:40:47.280Z', configPath: CONFIG_PATH }),
     );
-    expect(parsed).toEqual({ pid: 1234, configPath: CONFIG_PATH });
+    expect(parsed).toEqual({ pid: 1234, createdAt: '2026-08-05T07:40:47.280Z', configPath: CONFIG_PATH });
   });
 
   test.each([
@@ -62,7 +62,7 @@ describe('cleanupStaleGatewayLocks', () => {
   let lockDir: string;
 
   beforeEach(() => {
-    lockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-lock-test-'));
+    lockDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-lock-test-')));
   });
 
   afterEach(() => {

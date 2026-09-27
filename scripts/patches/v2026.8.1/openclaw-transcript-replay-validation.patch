@@ -1,0 +1,768 @@
+Validate historical replay fields before provider conversion.
+
+Base: OpenClaw v2026.8.1 (ea806575e6450e4d1efdfc72c19f04be982a1b9b).
+Prevent missing/non-string IDs and text/thinking from throwing before dispatch.
+Keep transport-owned parameter handling and legacy result pairing intact.
+Emit bounded structural locations without persisting repairs or logging content.
+Remove when upstream provides equivalent validation at both replay boundaries.
+
+diff --git a/packages/ai/src/internal/shared.ts b/packages/ai/src/internal/shared.ts
+index 9370c82449d..5360c54d6e1 100644
+--- a/packages/ai/src/internal/shared.ts
++++ b/packages/ai/src/internal/shared.ts
+@@ -1,6 +1,7 @@
+ export * from "../providers/simple-options.js";
+ export * from "../providers/tool-result-text.js";
+ export * from "../providers/transform-messages.js";
++export * from "../transcript-replay-validation.js";
+ export * from "../utils/prompt-cache-stability.js";
+ export * from "../utils/sanitize-unicode.js";
+ export * from "../utils/system-prompt-cache-boundary.js";
+diff --git a/packages/ai/src/transcript-replay-validation.test.ts b/packages/ai/src/transcript-replay-validation.test.ts
+new file mode 100644
+index 00000000000..29d424b6ed3
+--- /dev/null
++++ b/packages/ai/src/transcript-replay-validation.test.ts
+@@ -0,0 +1,270 @@
++import { createServer } from "node:http";
++import type { AddressInfo } from "node:net";
++import { describe, expect, it, vi } from "vitest";
++import { configureAiTransportHost } from "./host.js";
++import { convertMessages } from "./openai-completions-messages.js";
++import { streamOpenAICompletions } from "./providers/openai-completions.js";
++import { transformMessages } from "./transcript-transform.js";
++import { resolveOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
++import type { AssistantMessage, Message, Model } from "./types.js";
++
++const model: Model<"openai-completions"> = {
++  id: "replay-test",
++  name: "Replay test",
++  api: "openai-completions",
++  provider: "custom",
++  baseUrl: "https://example.invalid/v1",
++  reasoning: false,
++  input: ["text"],
++  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++  contextWindow: 128000,
++  maxTokens: 4096,
++};
++const assistant = (content: unknown, extra: Partial<AssistantMessage> = {}): AssistantMessage => ({
++  role: "assistant",
++  api: model.api,
++  provider: model.provider,
++  model: model.id,
++  content: content as AssistantMessage["content"],
++  stopReason: "stop",
++  timestamp: 42,
++  usage: {
++    input: 0,
++    output: 0,
++    cacheRead: 0,
++    cacheWrite: 0,
++    totalTokens: 0,
++    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++  },
++  ...extra,
++});
++const result = (id: unknown, text: string): Message => ({
++  role: "toolResult",
++  toolCallId: id as string,
++  toolName: "read",
++  content: [{ type: "text", text }],
++  isError: false,
++  timestamp: 43,
++});
++const call = (id: unknown, name: unknown = "read") => ({
++  type: "toolCall",
++  id,
++  name,
++  arguments: {},
++});
++const wire = (messages: Message[]) =>
++  convertMessages(model, { messages }, resolveOpenAICompletionsCompat(model));
++
++describe("malformed historical replay", () => {
++  it.each([undefined, null, 7, "", "  "])(
++    "omits tool calls with invalid id %s while preserving valid siblings",
++    (id) => {
++      const messages = [
++        assistant([{ type: "text", text: "retained" }, call(id), call("good")]),
++        result("good", "real output"),
++      ];
++      const snapshot = structuredClone(messages);
++      const output = wire(messages);
++      expect(output[0]).toMatchObject({ content: "retained", tool_calls: [{ id: "good" }] });
++      expect(output[1]).toMatchObject({
++        role: "tool",
++        tool_call_id: "good",
++        content: "real output",
++      });
++      expect(messages).toEqual(snapshot);
++    },
++  );
++
++  it.each([undefined, null, 5, "", "  "])(
++    "omits tool results with invalid id %s and preserves the missing-result fallback",
++    (id) => {
++      const output = wire([assistant([call("good")]), result(id, "orphan")]);
++      expect(output).toHaveLength(2);
++      expect(output[1]).toMatchObject({
++        role: "tool",
++        tool_call_id: "good",
++        content: "No result provided",
++      });
++    },
++  );
++
++  it("keeps valid text and unknown provider blocks without interpreting them as tool calls", () => {
++    const extension = { type: "provider_extension", data: "opaque" };
++    const input = [
++      assistant([
++        null,
++        { type: "text" },
++        { type: "text", text: 7 },
++        extension,
++        { type: "text", text: "ok" },
++      ]),
++    ];
++    expect(wire(input)).toEqual([{ role: "assistant", content: "ok" }]);
++    expect(transformMessages(input, model)[0]?.content).toContainEqual(extension);
++  });
++
++  it.each(["error", "aborted"] as const)(
++    "excludes malformed %s turns before transforming fields",
++    (stopReason) => {
++      const input: Message[] = [
++        { role: "user", content: "continue", timestamp: 1 },
++        assistant([null, call(undefined), call("bad"), { type: "thinking", thinking: 5 }], {
++          stopReason,
++        }),
++        result("bad", "failed-turn output"),
++      ];
++      expect(wire(input)).toEqual([{ role: "user", content: "continue" }]);
++    },
++  );
++
++  it("does not suppress a later valid occurrence of a rejected tool id", () => {
++    const input: Message[] = [
++      assistant([call("reused")], { stopReason: "error" }),
++      result("reused", "rejected"),
++      assistant([call("valid")]),
++      result("valid", "first"),
++      { role: "user", content: "again", timestamp: 44 },
++      assistant([call("reused")]),
++      result("reused", "second"),
++    ];
++    const outputs = wire(input).filter((message) => message.role === "tool");
++    expect(outputs).toEqual([
++      { role: "tool", tool_call_id: "valid", content: "first" },
++      { role: "tool", tool_call_id: "reused", content: "second" },
++    ]);
++  });
++
++  it("preserves existing unframed results and whitespace normalization", () => {
++    expect(transformMessages([result(" checkpoint ", "preserved")], model)[0]).toMatchObject({
++      toolCallId: "checkpoint",
++    });
++    expect(wire([assistant([call(" id ")]), result(" id ", "ok")])[1]).toMatchObject({
++      tool_call_id: "id",
++      content: "ok",
++    });
++  });
++
++  it("preserves valid signed thinking and isolates unsafe signed turns", () => {
++    const thinking = {
++      type: "thinking",
++      thinking: "",
++      thinkingSignature: "opaque-signature",
++      redacted: true,
++    };
++    expect(
++      transformMessages([assistant([thinking, call("good")]), result("good", "ok")], model)[0]
++        ?.content,
++    ).toContainEqual(thinking);
++    expect(
++      wire([
++        assistant([thinking, { type: "text" }, call("bad")]),
++        result("bad", "must not replay"),
++      ]),
++    ).toEqual([]);
++  });
++
++  it("drops malformed thinking while preserving transport-owned parameter representations", () => {
++    const input = [
++      assistant([
++        { type: "thinking", thinking: 4 },
++        { ...call("good"), arguments: '{"path":"test.txt"}' },
++        { type: "text", text: "ok" },
++      ]),
++      result("good", "real result"),
++    ];
++    const output = transformMessages(input, model);
++    expect(output[0].content).toEqual([
++      { ...call("good"), arguments: '{"path":"test.txt"}' },
++      { type: "text", text: "ok" },
++    ]);
++    expect(output[1]).toEqual(input[1]);
++  });
++
++  it("records bounded field locations without logging transcript contents", () => {
++    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
++    try {
++      const input = [
++        assistant(
++          Array.from({ length: 20 }, () => ({
++            ...call(undefined),
++            arguments: { secret: "DO_NOT_LOG" },
++          })),
++        ),
++      ];
++      const output = transformMessages(input, model);
++      expect(transformMessages(output, model)).toEqual(output);
++      expect(warnings).toHaveBeenCalledTimes(1);
++      const serialized = warnings.mock.calls.flat().join(" ");
++      expect(serialized).toContain('"messageIndex":0');
++      expect(serialized).toContain('"blockIndex":0');
++      expect(serialized).toContain('"timestamp":42');
++      expect(serialized).toContain('"field":"id"');
++      expect(serialized).not.toContain("DO_NOT_LOG");
++      expect(serialized.length).toBeLessThan(2500);
++    } finally {
++      warnings.mockRestore();
++    }
++  });
++
++  it("dispatches consecutive SDK requests with the same malformed history", async () => {
++    const requests: Array<{
++      messages: Array<{ role: string; content?: unknown; tool_calls?: unknown }>;
++    }> = [];
++    const server = createServer((request, response) => {
++      const chunks: Buffer[] = [];
++      request.on("data", (chunk: Buffer) => {
++        chunks.push(chunk);
++      });
++      request.on("end", () => {
++        requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
++        response.writeHead(200, { "content-type": "text/event-stream" });
++        response.end(
++          [
++            `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", model: model.id, choices: [{ index: 0, delta: { role: "assistant", content: "recovered" }, finish_reason: null }] })}`,
++            `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", model: model.id, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}`,
++            "data: [DONE]",
++            "",
++          ].join("\n\n"),
++        );
++      });
++    });
++    await new Promise<void>((resolve) => {
++      server.listen(0, "127.0.0.1", resolve);
++    });
++    configureAiTransportHost({ buildModelFetch: () => globalThis.fetch });
++    const history: Message[] = [
++      assistant([
++        { type: "text", text: "retained" },
++        call(undefined),
++        { type: "thinking", thinking: 5 },
++      ]),
++    ];
++    const snapshot = structuredClone(history);
++    try {
++      const address = server.address() as AddressInfo;
++      const target = { ...model, baseUrl: `http://127.0.0.1:${address.port}/v1` };
++      for (let round = 0; round < 2; round += 1) {
++        const reply = await streamOpenAICompletions(
++          target,
++          { messages: [...history, { role: "user", content: "continue", timestamp: 50 + round }] },
++          { apiKey: "fixture-only", maxRetries: 0, signal: AbortSignal.timeout(5000) },
++        ).result();
++        expect(reply.stopReason).toBe("stop");
++        expect(reply.content).toContainEqual(
++          expect.objectContaining({ type: "text", text: "recovered" }),
++        );
++      }
++      expect(requests).toHaveLength(2);
++      for (const request of requests) {
++        expect(request.messages[0]).toEqual({ role: "assistant", content: "retained" });
++      }
++      expect(history).toEqual(snapshot);
++    } finally {
++      configureAiTransportHost({});
++      server.closeAllConnections();
++      await new Promise<void>((resolve, reject) => {
++        server.close((error) => (error ? reject(error) : resolve()));
++      });
++    }
++  });
++});
+diff --git a/packages/ai/src/transcript-replay-validation.ts b/packages/ai/src/transcript-replay-validation.ts
+new file mode 100644
+index 00000000000..dc0fb1f8943
+--- /dev/null
++++ b/packages/ai/src/transcript-replay-validation.ts
+@@ -0,0 +1,183 @@
++import type { Message } from "./types.js";
++
++export const ReplayField = {
++  Content: "content",
++  Block: "block",
++  Text: "text",
++  Thinking: "thinking",
++  Id: "id",
++  ToolCallId: "toolCallId",
++} as const;
++
++export type ReplayValidationIssue = {
++  messageIndex: number;
++  blockIndex?: number;
++  timestamp?: number;
++  field: (typeof ReplayField)[keyof typeof ReplayField];
++  action: "drop-block" | "drop-content" | "drop-message" | "drop-owned-result";
++};
++
++function isRecord(value: unknown): value is Record<string, unknown> {
++  return value !== null && typeof value === "object" && !Array.isArray(value);
++}
++
++function isNonBlankString(value: unknown): value is string {
++  return typeof value === "string" && value.trim().length > 0;
++}
++
++function invalidBlockField(
++  block: unknown,
++  assistant: boolean,
++): ReplayValidationIssue["field"] | undefined {
++  if (!isRecord(block)) {
++    return ReplayField.Block;
++  }
++  if (block.type === "text" && typeof block.text !== "string") {
++    return ReplayField.Text;
++  }
++  if (assistant && block.type === "thinking" && typeof block.thinking !== "string") {
++    return ReplayField.Thinking;
++  }
++  if (assistant && block.type === "toolCall" && !isNonBlankString(block.id)) {
++    return ReplayField.Id;
++  }
++  // Opaque provider blocks are not tool calls. Leave their interpretation to the transport.
++  return undefined;
++}
++
++/** Validate persisted replay data without mutating the transcript or inventing tool identities. */
++export function sanitizeReplayMessages(
++  messages: Message[],
++  reportIssue: (issue: ReplayValidationIssue) => void,
++  options?: { preserveLegacyToolResults?: boolean },
++): Message[] {
++  const result: Message[] = [];
++  let rejectedCallIds = new Set<string>();
++  let malformedFrame = false;
++  for (const [messageIndex, message] of messages.entries()) {
++    const report = (
++      field: ReplayValidationIssue["field"],
++      action: ReplayValidationIssue["action"],
++      blockIndex?: number,
++    ) =>
++      reportIssue({
++        messageIndex,
++        ...(blockIndex === undefined ? {} : { blockIndex }),
++        ...(typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
++          ? { timestamp: message.timestamp }
++          : {}),
++        field,
++        action,
++      });
++    if (message.role === "toolResult") {
++      const validId = isNonBlankString(message.toolCallId);
++      if (!validId && !options?.preserveLegacyToolResults) {
++        report(ReplayField.ToolCallId, "drop-message");
++        continue;
++      }
++      if (validId && rejectedCallIds.has(message.toolCallId.trim())) {
++        if (malformedFrame) {
++          report(ReplayField.ToolCallId, "drop-owned-result");
++        }
++        continue;
++      }
++    } else {
++      // IDs may be reused in a later turn. Rejection is local to the adjacent result frame.
++      rejectedCallIds = new Set();
++      malformedFrame = false;
++    }
++    if (message.role !== "assistant" && message.role !== "toolResult") {
++      result.push(message);
++      continue;
++    }
++    const assistant = message.role === "assistant";
++    const source: unknown = message.content;
++    const blocks: unknown[] = Array.isArray(source)
++      ? source
++      : typeof source === "string"
++        ? [{ type: "text", text: source }]
++        : isRecord(source)
++          ? [source]
++          : [];
++    if (
++      source != null &&
++      typeof source !== "string" &&
++      !Array.isArray(source) &&
++      !isRecord(source)
++    ) {
++      report(ReplayField.Content, "drop-content");
++    }
++    const content = blocks.filter((block, blockIndex) => {
++      const field = invalidBlockField(block, assistant);
++      if (!field) {
++        return true;
++      }
++      report(field, "drop-block", blockIndex);
++      malformedFrame = true;
++      return false;
++    });
++    if (assistant) {
++      const signed = blocks.some(
++        (block) =>
++          isRecord(block) &&
++          ((block.type === "thinking" && (block.thinkingSignature || block.redacted)) ||
++            (block.type === "toolCall" && block.thoughtSignature)),
++      );
++      const unsafeSignedTurn = signed && content.length !== blocks.length;
++      const failed =
++        unsafeSignedTurn || message.stopReason === "error" || message.stopReason === "aborted";
++      for (const block of failed ? blocks : content) {
++        if (isRecord(block) && block.type === "toolCall" && isNonBlankString(block.id)) {
++          if (failed) {
++            rejectedCallIds.add(block.id.trim());
++          } else {
++            rejectedCallIds.delete(block.id.trim());
++          }
++        }
++      }
++      if (unsafeSignedTurn) {
++        report(ReplayField.Content, "drop-message");
++        // Keep a failed frame for pairing ownership, but never replay an edited signed span.
++        result.push({
++          ...message,
++          content: content as typeof message.content,
++          stopReason: "error",
++        });
++        continue;
++      }
++    }
++    if (source === blocks && content.length === blocks.length) {
++      result.push(message);
++    } else if (message.role === "assistant") {
++      result.push({ ...message, content: content as typeof message.content });
++    } else {
++      result.push({ ...message, content: content as typeof message.content });
++    }
++  }
++  return result;
++}
++
++/** Log only bounded structural locations, never content, tool arguments, or signatures. */
++export function prepareReplayMessages(
++  messages: Message[],
++  options?: { preserveLegacyToolResults?: boolean },
++): Message[] {
++  const locations: ReplayValidationIssue[] = [];
++  let issueCount = 0;
++  const result = sanitizeReplayMessages(
++    messages,
++    (issue) => {
++      issueCount += 1;
++      if (locations.length < 8) {
++        locations.push(issue);
++      }
++    },
++    options,
++  );
++  if (issueCount > 0) {
++    console.warn(
++      `[transcript-replay] Invalid historical fields omitted: ${JSON.stringify({ issueCount, locations })}`,
++    );
++  }
++  return result;
++}
+diff --git a/packages/ai/src/transcript-transform.ts b/packages/ai/src/transcript-transform.ts
+index ff60d5f4366..ad9fe636193 100644
+--- a/packages/ai/src/transcript-transform.ts
++++ b/packages/ai/src/transcript-transform.ts
+@@ -1,5 +1,6 @@
+ import { resolveModelBoundThinkingReplayMode } from "./providers/anthropic-model-contract.js";
+ import { isImageWithMediaPayload } from "./providers/tool-result-text.js";
++import { prepareReplayMessages } from "./transcript-replay-validation.js";
+ import type {
+   Api,
+   AssistantMessage,
+@@ -102,6 +103,9 @@ function transformAssistant<TApi extends Api>(
+     if (block.type === "text") {
+       return sameModel ? block : { type: "text" as const, text: block.text };
+     }
++    if (block.type !== "toolCall") {
++      return block;
++    }
+     const { thoughtSignature: _, ...unsigned } = block;
+     // Pairing uses these IDs as shared keys, before model-specific normalization runs.
+     const trimmedId = block.id.trim();
+@@ -123,7 +127,7 @@ export function transformMessages<TApi extends Api>(
+   normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+ ): Message[] {
+   const toolCallIdMap = new Map<string, string>();
+-  const normalized = messages.map((message) =>
++  const normalized = prepareReplayMessages(messages).map((message) =>
+     message.content == null ? Object.assign({}, message, { content: [] }) : message,
+   );
+   const transformed = downgradeUnsupportedImages(normalized, model).map((message) => {
+diff --git a/src/agents/transport-message-replay-validation.test.ts b/src/agents/transport-message-replay-validation.test.ts
+new file mode 100644
+index 00000000000..668f75b3867
+--- /dev/null
++++ b/src/agents/transport-message-replay-validation.test.ts
+@@ -0,0 +1,211 @@
++import { describe, expect, it } from "vitest";
++import type { Api, Context, Model } from "../llm/types.js";
++import { transformTransportMessages } from "./transport-message-transform.js";
++
++function makeModel(api: Api, provider: string, id: string): Model {
++  return {
++    api,
++    provider,
++    id,
++    name: id,
++    baseUrl: "https://example.invalid/v1",
++    input: ["text"],
++    reasoning: false,
++    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++    contextWindow: 128000,
++    maxTokens: 4096,
++  };
++}
++
++describe("configured transport replay validation", () => {
++  it.each(["openai-completions", "openai-responses", "anthropic-messages"] as const)(
++    "validates historical blocks before %s field conversion",
++    (api) => {
++      const model = makeModel(api, "custom", "replay-test");
++      const messages = [
++        {
++          role: "assistant",
++          api,
++          provider: "custom",
++          model: model.id,
++          stopReason: "toolUse",
++          timestamp: 42,
++          content: [
++            null,
++            { type: "text" },
++            { type: "thinking", thinking: 7 },
++            { type: "toolCall", name: "read", arguments: {} },
++            { type: "text", text: "retained" },
++            { type: "toolCall", id: "good", name: "read", arguments: { path: "test.txt" } },
++          ],
++        },
++        {
++          role: "toolResult",
++          toolCallId: "good",
++          toolName: "read",
++          timestamp: 43,
++          content: [{ type: "text", text: "real result" }],
++          isError: false,
++        },
++      ] as Context["messages"];
++      const snapshot = structuredClone(messages);
++      const output = transformTransportMessages(messages, model, (id) => id.trim());
++      expect(output).toHaveLength(2);
++      expect(output[0].content).toEqual([
++        { type: "text", text: "retained" },
++        { type: "toolCall", id: "good", name: "read", arguments: { path: "test.txt" } },
++      ]);
++      expect(output[1]).toEqual(messages[1]);
++      expect(messages).toEqual(snapshot);
++      expect(transformTransportMessages(output, model)).toEqual(output);
++    },
++  );
++
++  it("keeps failed frames from stealing a reused tool id", () => {
++    const model = makeModel("openai-responses", "custom", "replay-test");
++    const assistant = (stopReason: string, malformed = false) => ({
++      role: "assistant",
++      api: model.api,
++      provider: model.provider,
++      model: model.id,
++      stopReason,
++      timestamp: 42,
++      content: [
++        ...(malformed ? [{ type: "thinking", thinking: 7 }] : []),
++        { type: "toolCall", id: "reused", name: "read", arguments: {} },
++      ],
++    });
++    const result = {
++      role: "toolResult",
++      toolCallId: "reused",
++      toolName: "read",
++      timestamp: 43,
++      content: [{ type: "text", text: "failed turn output" }],
++      isError: false,
++    };
++    const input = [
++      assistant("toolUse"),
++      assistant("error", true),
++      result,
++      { role: "user", content: "continue", timestamp: 44 },
++      assistant("toolUse"),
++      { ...result, content: [{ type: "text", text: "last result" }] },
++    ];
++    const output = transformTransportMessages(input as Context["messages"], model);
++    expect(
++      output.filter((message) => message.role === "toolResult").map((message) => message.content),
++    ).toEqual([[{ type: "text", text: "aborted" }], [{ type: "text", text: "last result" }]]);
++  });
++
++  it("preserves a displaced result owned by an earlier successful frame", () => {
++    const model = makeModel("openai-responses", "custom", "replay-test");
++    const assistant = (id: string, stopReason: string) => ({
++      role: "assistant",
++      api: model.api,
++      provider: model.provider,
++      model: model.id,
++      stopReason,
++      timestamp: 42,
++      content: [{ type: "toolCall", id, name: "read", arguments: {} }],
++    });
++    const result = (toolCallId: string) => ({
++      role: "toolResult",
++      toolCallId,
++      toolName: "read",
++      timestamp: 43,
++      content: [{ type: "text", text: "real result" }],
++      isError: false,
++    });
++    const output = transformTransportMessages(
++      [
++        assistant("early", "toolUse"),
++        assistant("failed", "error"),
++        result("early"),
++        result("failed"),
++      ] as Context["messages"],
++      model,
++    );
++    expect(output).toEqual([assistant("early", "toolUse"), result("early")]);
++  });
++
++  it.each([{}, { toolUseId: "legacy" }])(
++    "preserves recoverable legacy result identity %j",
++    (identity) => {
++      const model = makeModel("anthropic-messages", "custom", "replay-test");
++      const messages = [
++        {
++          role: "assistant",
++          api: model.api,
++          provider: model.provider,
++          model: model.id,
++          stopReason: "toolUse",
++          timestamp: 42,
++          content: [
++            { type: "toolCall", id: "legacy", name: "read", arguments: '{"path":"test.txt"}' },
++          ],
++        },
++        {
++          role: "toolResult",
++          ...identity,
++          toolName: "read",
++          timestamp: 43,
++          content: [{ type: "text", text: "real legacy output" }],
++          isError: false,
++        },
++      ] as Context["messages"];
++      const output = transformTransportMessages(messages, model);
++      expect(output).toHaveLength(2);
++      expect(output[0].content).toEqual(messages[0].content);
++      expect(output[1].content).toEqual(messages[1].content);
++    },
++  );
++
++  it.each([false, true])(
++    "retains signed failed-frame identity across a user turn (normalize=%s)",
++    (normalize) => {
++      const model = makeModel("openai-responses", "custom", "replay-test");
++      const toolCall = { type: "toolCall", id: "reused", name: "read", arguments: {} };
++      const first = {
++        role: "assistant",
++        api: model.api,
++        provider: model.provider,
++        model: model.id,
++        stopReason: "toolUse",
++        timestamp: 10,
++        content: [toolCall],
++      };
++      const input = [
++        first,
++        {
++          ...first,
++          timestamp: 20,
++          content: [
++            { type: "thinking", thinking: "signed", thinkingSignature: "opaque" },
++            { type: "text" },
++            { ...toolCall, name: "" },
++          ],
++        },
++        { role: "user", content: "continue", timestamp: 30 },
++        {
++          role: "toolResult",
++          toolCallId: "reused",
++          toolName: "read",
++          timestamp: 40,
++          content: [{ type: "text", text: "failed span output" }],
++          isError: false,
++        },
++      ] as Context["messages"];
++      const output = transformTransportMessages(
++        input,
++        model,
++        normalize ? (id) => `normalized_${id}` : undefined,
++        {
++          normalizeSameModelToolCallIds: normalize,
++        },
++      );
++      expect(
++        output.filter((message) => message.role === "toolResult").map((message) => message.content),
++      ).toEqual([[{ type: "text", text: "aborted" }]]);
++    },
++  );
++});
+diff --git a/src/agents/transport-message-transform.ts b/src/agents/transport-message-transform.ts
+index 214d181456d..8b45ac22b65 100644
+--- a/src/agents/transport-message-transform.ts
++++ b/src/agents/transport-message-transform.ts
+@@ -1,4 +1,5 @@
+ import { resolveModelBoundThinkingReplayMode } from "@openclaw/ai/internal/anthropic";
++import { prepareReplayMessages } from "@openclaw/ai/internal/shared";
+ /**
+  * Normalizes transcript messages before provider transport replay. It drops
+  * unsafe failed turns, maps tool-call ids across model boundaries, and fills
+@@ -75,11 +76,15 @@ export function transformTransportMessages(
+   },
+ ): Context["messages"] {
+   const allowSyntheticToolResults = defaultAllowSyntheticToolResults(model.api);
++  // Shared pairing can recover legacy missing/alias IDs from an unambiguous call frame.
++  const validated = prepareReplayMessages(messages, {
++    preserveLegacyToolResults: allowSyntheticToolResults,
++  });
+   const syntheticToolResultText = OPENAI_RESPONSES_ABORTED_OUTPUT_APIS.has(model.api)
+     ? "aborted"
+     : "No result provided";
+   const toolCallIdMap = new Map<string, string>();
+-  const transformed = messages.map((msg) => {
++  const transformed = validated.map((msg) => {
+     if (msg.role === "user") {
+       return msg;
+     }
+@@ -171,7 +176,7 @@ export function transformTransportMessages(
+   // their adjacent results together; pre-filtering the call can misattribute its result
+   // to an older turn that reused the same provider id.
+   const replayable = transformed.filter((_, index) => {
+-    const original = messages[index];
++    const original = validated[index];
+     if (!original) {
+       return true;
+     }

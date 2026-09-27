@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { OpenClawEngineErrorCode } from '../../shared/openclawEngine/constants';
 import {
   OPENCLAW_STARTUP_MIGRATION_ENTRY,
   OPENCLAW_STARTUP_MIGRATION_RESULT_PREFIX,
@@ -10,6 +11,7 @@ import {
   type OpenClawStartupMigrationReport,
   OpenClawStartupMigrationStatus,
 } from '../../shared/openclawEngine/startupMigration';
+import { OPENCLAW_STARTUP_MIGRATION_REFUSAL } from './openclawDreamingStartupFailure';
 import { migrateLegacyStateBeforeStartup } from './openclawStartupStateMigration';
 
 let tempDir: string;
@@ -52,6 +54,16 @@ describe('state migration before gateway startup', () => {
       env: { EXISTING: 'preserved', OPENCLAW_STATE_DIR: '/wrong-state', OPENCLAW_HOME: '/wrong-home' },
     };
   }
+
+  test('classifies current terminal dreaming failures before truncating a long stderr tail', async () => {
+    const stderr = `${OPENCLAW_STARTUP_MIGRATION_REFUSAL}\n- Skipped Memory Core phase signals import for fixture because the legacy source could not be compared: SyntaxError: invalid JSON\n`
+      + '- another migration warning\n'.repeat(200);
+    const result = await migrateLegacyStateBeforeStartup({ ...options(), runner: async () => ({ code: 1, stdout: '', stderr }) });
+    expect(result).toMatchObject({ status: OpenClawStartupMigrationStatus.Failed, errorCode: OpenClawEngineErrorCode.MemoryDreamingMigrationFailed });
+    expect(result.error).toContain('phase signals');
+    const unrelated = await migrateLegacyStateBeforeStartup({ ...options(), runner: async () => ({ code: 0, stdout: '', stderr }) });
+    expect(unrelated.errorCode).toBeUndefined();
+  });
 
   test('runs the focused helper with the gateway state/config and preserves other environment', async () => {
     const runner = vi.fn(async () => ({ code: 0, stdout: `diagnostic line\n${report()}\n`, stderr: '' }));

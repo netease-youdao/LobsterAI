@@ -1,7 +1,8 @@
 import Database from 'better-sqlite3';
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { BrowserCredentialAvailabilityReason } from '../../shared/browserCredentials/constants';
+import type { SqliteStore } from '../sqliteStore';
 import {
   type BrowserCredentialCrypto,
   BrowserCredentialService,
@@ -33,11 +34,18 @@ describe('BrowserCredentialService', () => {
   let db: Database.Database;
   let encryption: TestCredentialCrypto;
   let service: BrowserCredentialService;
+  let storedSettings: Map<string, unknown>;
+  let store: Pick<SqliteStore, 'get' | 'set'>;
 
   beforeEach(() => {
     db = new Database(':memory:');
     encryption = new TestCredentialCrypto();
-    service = new BrowserCredentialService(db, encryption, 'win32');
+    storedSettings = new Map();
+    store = {
+      get: <T>(key: string) => storedSettings.get(key) as T | undefined,
+      set: <T>(key: string, value: T) => { storedSettings.set(key, value); },
+    };
+    service = new BrowserCredentialService(db, encryption, 'win32', store);
   });
 
   afterEach(() => {
@@ -98,7 +106,7 @@ describe('BrowserCredentialService', () => {
 
   test('reports unavailable or insecure OS storage', () => {
     encryption.available = false;
-    expect(service.getAvailability()).toEqual({
+    expect(service.requestAccess()).toEqual({
       available: false,
       reason: BrowserCredentialAvailabilityReason.EncryptionUnavailable,
     });
@@ -106,9 +114,127 @@ describe('BrowserCredentialService', () => {
     encryption.available = true;
     encryption.backend = 'basic_text';
     const linuxService = new BrowserCredentialService(db, encryption, 'linux');
-    expect(linuxService.getAvailability()).toEqual({
+    expect(linuxService.requestAccess()).toEqual({
       available: false,
       reason: BrowserCredentialAvailabilityReason.InsecureStorageBackend,
     });
+  });
+
+  test('opening settings and listing accounts never probes OS encryption', () => {
+    const probe = vi.spyOn(encryption, 'isEncryptionAvailable');
+    expect(service.getAvailability()).toEqual({
+      available: false,
+      reason: BrowserCredentialAvailabilityReason.AccessNotRequested,
+    });
+    expect(service.list()).toEqual([]);
+    service.getAvailability();
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  test('remembers access across settings visits and application restarts without prompting', () => {
+    const probe = vi.spyOn(encryption, 'isEncryptionAvailable');
+    expect(service.requestAccess()).toEqual({ available: true });
+    expect(service.getAvailability()).toEqual({ available: true });
+
+    const restarted = new BrowserCredentialService(db, encryption, 'win32', store);
+    expect(restarted.getAvailability()).toEqual({ available: true });
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect([...storedSettings.values()]).toEqual([{ available: true }]);
+  });
+
+  test('keeps a failed request quiet until the user explicitly retries', () => {
+    encryption.available = false;
+    const probe = vi.spyOn(encryption, 'isEncryptionAvailable');
+    expect(service.requestAccess().available).toBe(false);
+    service.getAvailability();
+    const restarted = new BrowserCredentialService(db, encryption, 'win32', store);
+    expect(restarted.getAvailability().available).toBe(false);
+    expect(() => restarted.save({ origin: 'example.com', username: 'alice', password: 'secret' }))
+      .toThrow(/unavailable/);
+    expect(probe).toHaveBeenCalledTimes(1);
+
+    encryption.available = true;
+    expect(restarted.requestAccess()).toEqual({ available: true });
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  test('explains the macOS restart requirement and permits authorization after relaunch', () => {
+    const macService = new BrowserCredentialService(db, encryption, 'darwin', store);
+    encryption.available = false;
+    const probe = vi.spyOn(encryption, 'isEncryptionAvailable');
+    expect(macService.requestAccess()).toEqual({
+      available: false,
+      reason: BrowserCredentialAvailabilityReason.EncryptionUnavailable,
+      requiresRestart: true,
+    });
+    expect(macService.getAvailability().requiresRestart).toBe(true);
+    macService.requestAccess();
+    expect(probe).toHaveBeenCalledTimes(1);
+
+    encryption.available = true;
+    const restarted = new BrowserCredentialService(db, encryption, 'darwin', store);
+    expect(restarted.getAvailability()).toEqual({
+      available: false,
+      reason: BrowserCredentialAvailabilityReason.EncryptionUnavailable,
+    });
+    expect(restarted.requestAccess()).toEqual({ available: true });
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  test('rechecks the OS before using a remembered grant after restart', () => {
+    const saved = service.save({ origin: 'example.com', username: 'alice', password: 'secret' });
+    encryption.available = false;
+    const decrypt = vi.spyOn(encryption, 'decryptString');
+    const restarted = new BrowserCredentialService(db, encryption, 'win32', store);
+
+    expect(restarted.getAvailability().available).toBe(true);
+    expect(() => restarted.getSecret(saved.id, saved.origin)).toThrow(/unavailable/);
+    expect(decrypt).not.toHaveBeenCalled();
+    expect(restarted.getAvailability().available).toBe(false);
+    expect(restarted.list()).toEqual([saved]);
+  });
+
+  test.each(['basic_text', 'unknown'])('never trusts a remembered grant on insecure Linux backend %s', backend => {
+    service.requestAccess();
+    encryption.backend = backend;
+    const encrypt = vi.spyOn(encryption, 'encryptString');
+    const restarted = new BrowserCredentialService(db, encryption, 'linux', store);
+    expect(() => restarted.save({ origin: 'example.com', username: 'alice', password: 'secret' }))
+      .toThrow(/unavailable/);
+    expect(encrypt).not.toHaveBeenCalled();
+    expect(restarted.getAvailability().reason).toBe(BrowserCredentialAvailabilityReason.InsecureStorageBackend);
+  });
+
+  test('clears remembered availability when an encryption operation fails', () => {
+    service.requestAccess();
+    const encrypt = vi.spyOn(encryption, 'encryptString').mockImplementationOnce(() => {
+      throw new Error('OS storage locked');
+    });
+    expect(() => service.save({ origin: 'example.com', username: 'alice', password: 'secret' }))
+      .toThrow('OS storage locked');
+    expect(service.list()).toEqual([]);
+    const restarted = new BrowserCredentialService(db, encryption, 'win32', store);
+    expect(restarted.getAvailability().available).toBe(false);
+
+    expect(service.requestAccess().available).toBe(true);
+    service.save({ origin: 'example.com', username: 'alice', password: 'secret' });
+    expect(encrypt).toHaveBeenCalledTimes(2);
+  });
+
+  test('keeps existing accounts enabled without a keychain lookup during upgrade', () => {
+    service.save({ origin: 'example.com', username: 'alice', password: 'secret' });
+    storedSettings.clear();
+    const probe = vi.spyOn(encryption, 'isEncryptionAvailable');
+    const upgraded = new BrowserCredentialService(db, encryption, 'darwin', store);
+    expect(upgraded.getAvailability()).toEqual({ available: true });
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  test('rejects unrelated origins before probing OS storage after restart', () => {
+    const saved = service.save({ origin: 'example.com', username: 'alice', password: 'secret' });
+    const probe = vi.spyOn(encryption, 'isEncryptionAvailable');
+    const restarted = new BrowserCredentialService(db, encryption, 'darwin', store);
+    expect(() => restarted.getSecret(saved.id, 'https://other.example.com')).toThrow(/does not match/);
+    expect(probe).not.toHaveBeenCalled();
   });
 });

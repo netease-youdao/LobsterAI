@@ -26,6 +26,11 @@ export type GatewayLockPayload = {
   pid: number;
   createdAt?: string;
   configPath?: string;
+  stateDir?: string;
+  startTime?: number;
+  ownerId?: string;
+  role?: string;
+  port?: number;
 };
 
 export const GatewayLockCleanupAction = {
@@ -88,11 +93,14 @@ export function parseGatewayLockPayload(raw: string): GatewayLockPayload | null 
     if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) {
       return null;
     }
-    const configPath = (parsed as { configPath?: unknown }).configPath;
-    return {
-      pid,
-      ...(typeof configPath === 'string' ? { configPath } : {}),
-    };
+    const fields = parsed as Record<string, unknown>;
+    const payload: GatewayLockPayload = { pid };
+    for (const key of ['createdAt', 'configPath', 'stateDir', 'ownerId', 'role'] as const) {
+      if (typeof fields[key] === 'string') payload[key] = fields[key];
+    }
+    if (typeof fields.startTime === 'number' && Number.isFinite(fields.startTime)) payload.startTime = fields.startTime;
+    if (typeof fields.port === 'number' && Number.isInteger(fields.port) && fields.port > 0 && fields.port <= 65535) payload.port = fields.port;
+    return payload;
   } catch {
     return null;
   }

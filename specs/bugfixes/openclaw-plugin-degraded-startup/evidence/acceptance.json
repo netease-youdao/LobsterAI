@@ -1,0 +1,290 @@
+{
+  "date": "2026-09-23",
+  "transport": "Electron remote debugging / CDP; real preload IPC, Gateway and plan model",
+  "testedCodeCommit": "44d2fa3c3",
+  "pluginPackage": {
+    "name": "@tencentdb-agent-memory/memory-tencentdb",
+    "version": "0.2.2",
+    "sha256": "f4d5c764bd991bdd4827590416bace144c273d6f1b9ce9da52e9e6a5c1d0af46"
+  },
+  "finalPersistedMessages": {
+    "at": "2026-09-23T09:02:14.208Z",
+    "status": {
+      "success": true,
+      "status": {
+        "phase": "running",
+        "version": "2026.8.1",
+        "progressPercent": 100,
+        "message": "OpenClaw gateway is running on loopback:18789.",
+        "canRetry": false,
+        "gatewayPort": 18789,
+        "gatewayHttpUrl": "http://localhost:18789/"
+      }
+    },
+    "sessions": [
+      {
+        "id": "fb5eaa2e-2894-4713-8cc0-f17a154fddad",
+        "status": "completed",
+        "assistant": [
+          {
+            "response": "BASELINE-PLUGIN-OK",
+            "model": "deepseek-flash-YoudaoInner"
+          },
+          {
+            "response": "DEGRADED-CONTINUE-OK",
+            "model": "deepseek-flash-YoudaoInner"
+          },
+          {
+            "response": "RESTART-CONTINUE-OK",
+            "model": "deepseek-flash-YoudaoInner"
+          },
+          {
+            "response": "CORE-RECOVERY-OK",
+            "model": "deepseek-flash-YoudaoInner"
+          }
+        ]
+      },
+      {
+        "id": "4e738a81-86fa-4905-900c-e774ee1f9202",
+        "status": "completed",
+        "assistant": [
+          {
+            "response": "MODULE-THROW-OK",
+            "model": "deepseek-flash-YoudaoInner"
+          },
+          {
+            "response": "RESTORED-PLUGINS-OK",
+            "model": "deepseek-flash-YoudaoInner"
+          },
+          {
+            "response": "MISSING-PATH-OK",
+            "model": "deepseek-flash-YoudaoInner"
+          }
+        ]
+      },
+      {
+        "id": "92bc0aaa-1b73-44ac-8998-ec5019e423ec",
+        "status": "completed",
+        "assistant": [
+          {
+            "response": "SECONDARY-FAILURES-OK",
+            "model": "deepseek-flash-YoudaoInner"
+          }
+        ]
+      },
+      {
+        "id": "51fef347-64a1-4f7d-a047-dc8d01d88de5",
+        "status": "completed",
+        "assistant": [
+          {
+            "response": "DEGRADED-NEW-OK",
+            "model": "deepseek-flash-YoudaoInner"
+          }
+        ]
+      }
+    ],
+    "verifiedMarkers": 9
+  },
+  "degradedHealth": {
+    "ok": true,
+    "plugins": {
+      "loaded": [
+        "ask-user-question",
+        "browser",
+        "lobster-media-generation",
+        "lobsterai-model-compat",
+        "memory-core",
+        "xai"
+      ],
+      "errors": [],
+      "unavailable": [
+        {
+          "id": "e2e-pathless",
+          "state": "configured-unavailable",
+          "diagnostic": {
+            "kind": "plugin-verification",
+            "reason": "missing-install-path",
+            "detail": "Install path is missing from the plugin install record."
+          }
+        },
+        {
+          "id": "memory-tencentdb",
+          "state": "configured-unavailable",
+          "diagnostic": {
+            "kind": "plugin-verification",
+            "reason": "missing-extension-entry",
+            "detail": "Plugin extension entry validation failed: package install requires compiled runtime output for TypeScript entry ./index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, ./index.js, ./index.mjs, ./index.cjs. This is a plugin packaging issue, not a local config problem; update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then. TypeScript source fallback is only supported for source checkouts and local development paths."
+          }
+        }
+      ]
+    }
+  },
+  "restoredHealth": {
+    "ok": true,
+    "plugins": {
+      "loaded": [
+        "ask-user-question",
+        "browser",
+        "e2e-pathless",
+        "e2e-returning",
+        "lobster-media-generation",
+        "lobsterai-model-compat",
+        "memory-core",
+        "xai"
+      ],
+      "errors": [],
+      "unavailable": [
+        {
+          "id": "memory-tencentdb",
+          "state": "configured-unavailable",
+          "diagnostic": {
+            "kind": "plugin-verification",
+            "reason": "missing-extension-entry",
+            "detail": "Plugin extension entry validation failed: package install requires compiled runtime output for TypeScript entry ./index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, ./index.js, ./index.mjs, ./index.cjs. This is a plugin packaging issue, not a local config problem; update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then. TypeScript source fallback is only supported for source checkouts and local development paths."
+          }
+        }
+      ]
+    }
+  },
+  "finalHealth": {
+    "ok": true,
+    "plugins": {
+      "loaded": [
+        "ask-user-question",
+        "browser",
+        "e2e-pathless",
+        "e2e-returning",
+        "lobster-media-generation",
+        "lobsterai-model-compat",
+        "memory-core",
+        "xai"
+      ],
+      "errors": [],
+      "unavailable": [
+        {
+          "id": "memory-tencentdb",
+          "state": "configured-unavailable",
+          "diagnostic": {
+            "kind": "plugin-verification",
+            "reason": "missing-extension-entry",
+            "detail": "Plugin extension entry validation failed: package install requires compiled runtime output for TypeScript entry ./index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, ./index.js, ./index.mjs, ./index.cjs. This is a plugin packaging issue, not a local config problem; update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then. TypeScript source fallback is only supported for source checkouts and local development paths."
+          }
+        }
+      ]
+    }
+  },
+  "missingPathConfig": {
+    "action": "inspect",
+    "missingPathPreserved": true,
+    "corePort": null,
+    "plugins": [
+      {
+        "id": "memory-tencentdb",
+        "enabled": true,
+        "marker": "CONFIG-PRESERVE-20260923",
+        "allowed": true
+      },
+      {
+        "id": "e2e-pathless",
+        "enabled": true,
+        "marker": null,
+        "allowed": true
+      },
+      {
+        "id": "e2e-returning",
+        "enabled": true,
+        "marker": null,
+        "allowed": true
+      },
+      {
+        "id": "e2e-preserved-unseen",
+        "enabled": true,
+        "marker": "UNSEEN-PRESERVE-20260923",
+        "allowed": true
+      }
+    ],
+    "history": "HISTORY-PRESERVE-20260923"
+  },
+  "invalidCoreResult": {
+    "success": false,
+    "status": {
+      "phase": "error",
+      "version": "2026.8.1",
+      "message": "AI 引擎状态升级失败：[auth-profiles] Auth profile migration failed: Error: Auth migration cannot repair unrelated config errors at: gateway.port.",
+      "canRetry": true,
+      "gatewayPort": null,
+      "gatewayHttpUrl": null
+    }
+  },
+  "invalidCorePreserved": {
+    "action": "inspect",
+    "missingPathPreserved": false,
+    "corePort": "E2E-INVALID-PORT",
+    "plugins": [
+      {
+        "id": "memory-tencentdb",
+        "enabled": true,
+        "marker": "CONFIG-PRESERVE-20260923",
+        "allowed": true
+      },
+      {
+        "id": "e2e-pathless",
+        "enabled": true,
+        "marker": null,
+        "allowed": true
+      },
+      {
+        "id": "e2e-returning",
+        "enabled": true,
+        "marker": null,
+        "allowed": true
+      },
+      {
+        "id": "e2e-preserved-unseen",
+        "enabled": null,
+        "marker": null,
+        "allowed": false
+      }
+    ],
+    "history": "HISTORY-PRESERVE-20260923"
+  },
+  "finalConfig": {
+    "memory-tencentdb": {
+      "enabled": true,
+      "allowed": true,
+      "config": {
+        "capture": {
+          "enabled": false
+        },
+        "e2ePreserve": "CONFIG-PRESERVE-20260923"
+      }
+    },
+    "e2e-pathless": {
+      "enabled": true,
+      "allowed": true,
+      "config": {
+        "preserveMarker": "e2e-pathless"
+      }
+    },
+    "e2e-returning": {
+      "enabled": true,
+      "allowed": true,
+      "config": {
+        "preserveMarker": "e2e-returning"
+      }
+    }
+  },
+  "finalHistoryMarker": "HISTORY-PRESERVE-20260923",
+  "logExcerpts": [
+    "|  - Failed to update memory-tencentdb: package install requires compiled  |\n|    runtime output for TypeScript entry ./index.ts: expected              |\n|    ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, ./index.js,      |\n|    ./index.mjs, ./index.cjs. This is a plugin packaging issue, not a     |\n|    local config problem; update or reinstall the plugin after the        |\n|    publisher ships compiled JavaScript, or disable/uninstall the plugin  |\n|    until then. TypeScript source fallback is only supported for source   |\n|    checkouts and local development paths. Run `openclaw update repair`   |\n|    to retry plugin repair.                                               |",
+    "[2026-09-23T08:44:15.284Z] [stderr] 2026-09-23T16:44:15.283+08:00 [plugins] e2e-returning failed to load from %USERPROFILE%\\AppData\\Local\\Temp\\lobster-plugin-degraded-e2e-20260923\\appdata\\LobsterAI\\openclaw\\state\\extensions\\e2e-returning\\index.js: Error: E2E_PLUGIN_MODULE_THROW",
+    "[2026-09-23T08:54:42.719Z] [stdout] 2026-09-23T16:54:42.718+08:00 [plugins] E2E_RECOVERED_e2e-pathless",
+    "[2026-09-23T08:54:42.748Z] [stdout] 2026-09-23T16:54:42.746+08:00 [plugins] E2E_RECOVERED_e2e-returning",
+    "[2026-09-23T08:56:01.433Z] [stderr] [plugins/doctor-contracts] Configured plugin load path is unavailable: %USERPROFILE%\\AppData\\Local\\Temp\\lobster-plugin-degraded-e2e-20260923\\temporarily-unmounted-plugin-root. Uninspected plugin configuration is preserved. Restore access to the path, then run `openclaw doctor --fix`."
+  ],
+  "ci": {
+    "run": "https://github.com/netease-youdao/LobsterAI/actions/runs/35839220721",
+    "passed": 5550,
+    "skipped": 163
+  }
+}

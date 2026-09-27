@@ -122,7 +122,7 @@ describe('OpenClaw POPO plugin startup patches', () => {
     fs.writeFileSync(path.join(tempDir, 'package.json'), JSON.stringify({ version: '2.2.0' }));
 
     expect(() => assertPopoPluginVersion(tempDir)).toThrow(
-      'moltbot-popo Fabric patch expects 2.1.13, found 2.2.0',
+      'moltbot-popo patches expect 2.1.13, found 2.2.0',
     );
     fs.rmSync(tempDir, { recursive: true, force: true });
   });

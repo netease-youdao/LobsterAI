@@ -7,9 +7,9 @@
 import { type ChildProcess } from 'child_process';
 import { app } from 'electron';
 import * as fs from 'fs';
-import * as http from 'http';
 import * as net from 'net';
 import * as path from 'path';
+import * as readline from 'readline';
 
 import {
   DSH_STATE_DIR_NAME,
@@ -42,6 +42,7 @@ import {
   resolveDshArtifactFromConfig,
   resolveInstalledDshRuntime,
 } from './dshRuntimeInstaller';
+import { exchangeDshLaunchToken, parseDshWebLaunchUrl, probeDshWebIndex, redactDshWebToken } from './dshWebAuth';
 
 // The pinned version and the per-target archive descriptors travel inside the
 // app, so the digest we verify against is one we shipped rather than one
@@ -102,9 +103,8 @@ function resolvePinnedDshRuntimeIdentity(): DshPinnedRuntimeIdentity | null {
 // a child that dies is caught by the liveness check, not by this.
 const READY_TIMEOUT_MS = 180_000;
 const READY_POLL_INTERVAL_MS = 250;
-// dsh starts listening before its plugin tree finishes loading, so a boot
-// failure answers the first probe with 200 and exits ~50ms later. Ready on that
-// first 200 opens the workbench onto a dead port: a blank window whose only
+// A runtime can answer once and still die during boot. Ready on that first
+// answer opens the workbench onto a dead port: a blank window whose only
 // symptom is ERR_CONNECTION_REFUSED in its devtools. Re-probe after this settle
 // so a runtime that dies during boot is reported as a failure instead.
 const READY_SETTLE_MS = 750;
@@ -150,6 +150,8 @@ export class DshEngineManager {
     install: null,
   };
   private readonly logRing: string[] = [];
+  // The URL dsh prints once settled, carrying its launch token (see dshWebAuth).
+  private webLaunchUrl: string | null = null;
   private listeners = new Set<(state: DshEngineState) => void>();
   private quitHookInstalled = false;
   private startPromise: Promise<DshEngineState> | null = null;
@@ -200,8 +202,10 @@ export class DshEngineManager {
     return () => this.listeners.delete(listener);
   }
 
-  getWebUrl(): string | null {
-    return this.state.phase === DshEnginePhase.Ready && this.state.port ? `http://127.0.0.1:${this.state.port}` : null;
+  // Loading this URL trades the runtime's launch token for its session cookie,
+  // so it is a credential: it goes to the workbench window and nowhere else.
+  getAuthenticatedWebUrl(): string | null {
+    return this.state.phase === DshEnginePhase.Ready ? this.webLaunchUrl : null;
   }
 
   getRecentLogs(): string[] {
@@ -343,6 +347,7 @@ export class DshEngineManager {
     const child = this.child;
     this.generation += 1;
     this.child = null;
+    this.webLaunchUrl = null;
     if (child) {
       await this.terminateChild(child);
       this.sharedHomeLock?.release();
@@ -422,7 +427,7 @@ export class DshEngineManager {
     this.child = child;
     this.sharedHomeLock?.claim(port);
     this.installQuitHook();
-    this.wireChildStreams(child, generation);
+    this.wireChildStreams(child, generation, port);
 
     const readyError = await this.waitForReady(port, generation);
     if (this.generation !== generation) return this.getState();
@@ -464,16 +469,22 @@ export class DshEngineManager {
       .catch((error) => console.warn('[DSH] Could not prune superseded runtimes', error));
   }
 
-  private wireChildStreams(child: DshChild, generation: number): void {
-    const append = (chunk: unknown) => {
-      const lines = String(chunk).split(/\r?\n/).filter((line) => line.length > 0);
-      this.logRing.push(...lines);
+  private wireChildStreams(child: DshChild, generation: number, port: number): void {
+    // Whole lines, not raw chunks: a chunk boundary inside the launch URL line
+    // would hide the URL from the parser and split its token past the redaction.
+    const onLine = (line: string) => {
+      if (line.length === 0) return;
+      if (this.generation === generation && !this.webLaunchUrl) {
+        this.webLaunchUrl = parseDshWebLaunchUrl(line, port);
+      }
+      this.logRing.push(redactDshWebToken(line));
       if (this.logRing.length > LOG_RING_MAX_LINES) {
         this.logRing.splice(0, this.logRing.length - LOG_RING_MAX_LINES);
       }
     };
-    child.stdout?.on('data', append);
-    child.stderr?.on('data', append);
+    for (const stream of [child.stdout, child.stderr]) {
+      if (stream) readline.createInterface({ input: stream, crlfDelay: Infinity }).on('line', onLine);
+    }
     child.on('exit', (code: number | null) => {
       if (this.generation !== generation) return;
       this.child = null;
@@ -490,18 +501,27 @@ export class DshEngineManager {
     });
   }
 
-  // Resolves null once the web server answers and keeps answering, or the error
-  // code on failure.
+  // Resolves null once the runtime has printed its launch URL, the token buys a
+  // session, and the index keeps answering that session; the error code on
+  // failure. Without the session every request answers 401, so a bare probe of
+  // `/` can never see a ready runtime.
   private async waitForReady(port: number, generation: number): Promise<DshEngineErrorCode | null> {
     const startedAt = Date.now();
     const deadline = startedAt + READY_TIMEOUT_MS;
     let nextProgressLog = startedAt + READY_PROGRESS_LOG_INTERVAL_MS;
     while (Date.now() < deadline) {
       if (this.generation !== generation || !this.child) return DshEngineErrorCode.CrashedEarly;
-      const status = await probeHttpStatus(port);
-      if (status === 200) return this.confirmStillServing(port, generation);
+      const launchUrl = this.webLaunchUrl;
+      if (launchUrl) {
+        const cookie = await exchangeDshLaunchToken(launchUrl);
+        if (cookie && (await probeDshWebIndex(port, cookie)) === 200) {
+          return this.confirmStillServing(port, cookie, generation);
+        }
+      }
       if (Date.now() >= nextProgressLog) {
-        console.log(`[DSH] Still waiting for the runtime on 127.0.0.1:${port} (${Math.round((Date.now() - startedAt) / 1000)}s)`);
+        const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+        const urlState = launchUrl ? 'launch URL printed' : 'no launch URL printed yet';
+        console.log(`[DSH] Still waiting for the runtime on 127.0.0.1:${port} (${elapsedSeconds}s, ${urlState})`);
         nextProgressLog = Date.now() + READY_PROGRESS_LOG_INTERVAL_MS;
       }
       await delay(READY_POLL_INTERVAL_MS);
@@ -509,12 +529,12 @@ export class DshEngineManager {
     return DshEngineErrorCode.ReadyTimeout;
   }
 
-  // See READY_SETTLE_MS: a first 200 only proves the HTTP server bound, not that
-  // the runtime survived boot.
-  private async confirmStillServing(port: number, generation: number): Promise<DshEngineErrorCode | null> {
+  // See READY_SETTLE_MS: a first 200 only proves the runtime answered once, not
+  // that it survived boot.
+  private async confirmStillServing(port: number, cookie: string, generation: number): Promise<DshEngineErrorCode | null> {
     await delay(READY_SETTLE_MS);
     if (this.generation !== generation || !this.child) return DshEngineErrorCode.CrashedEarly;
-    return (await probeHttpStatus(port)) === 200 ? null : DshEngineErrorCode.CrashedEarly;
+    return (await probeDshWebIndex(port, cookie)) === 200 ? null : DshEngineErrorCode.CrashedEarly;
   }
 
   private async terminateChild(child: DshChild): Promise<void> {
@@ -598,17 +618,6 @@ function allocateLoopbackPort(): Promise<number> {
         server.close(() => reject(new Error('Could not allocate a loopback port')));
       }
     });
-  });
-}
-
-function probeHttpStatus(port: number): Promise<number> {
-  return new Promise((resolve) => {
-    const request = http.get({ host: '127.0.0.1', port, path: '/', timeout: 2_000 }, (response) => {
-      response.resume();
-      resolve(response.statusCode ?? 0);
-    });
-    request.on('timeout', () => request.destroy(new Error('timeout')));
-    request.on('error', () => resolve(0));
   });
 }
 

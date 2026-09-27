@@ -64,6 +64,7 @@ import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { getInstalledKitSkillIds } from '../../services/kitCapability';
 import { readLocalServiceProjectDirectoryCandidate } from '../../services/localServiceProjectDirectoryCache';
+import { getSubagentWaitPhase, SubagentWaitPhase } from '../../services/subagentWaitState';
 import { RootState } from '../../store';
 import {
   selectCurrentMessagesLength,
@@ -71,6 +72,7 @@ import {
   selectCurrentSession,
   selectIsStreaming,
   selectLastMessageContent,
+  selectPendingPermissions,
   selectRemoteManaged,
 } from '../../store/selectors/coworkSelectors';
 import {
@@ -149,6 +151,7 @@ import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
 import { type ToastEventDetail } from '../Toast';
 import { resolveAgentModelSelection, useAgentSelectedModel } from './agentModelSelection';
+import ArtifactPreviewTabItem from './ArtifactPreviewTabItem';
 import AssistantTurnBlock, { ContextCompactionDivider } from './AssistantTurnBlock';
 import type { BrowserAnnotationAttachmentOpenPayload } from './BrowserAnnotationMessageAttachments';
 import { type CoworkOpenShareOptionsEventDetail, CoworkUiEvent } from './constants';
@@ -182,6 +185,7 @@ import {
 import CoworkBtwFloatingPanel from './CoworkBtwFloatingPanel';
 import CoworkConversationSearch from './CoworkConversationSearch';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
+import QuestionDock from './interactions/QuestionDock';
 import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
 import {
   buildConversationTurns,
@@ -1245,20 +1249,11 @@ const PromptInputExpandIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) =
   </svg>
 );
 
-const ArtifactTabCloseIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" {...props}>
-    <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />
-  </svg>
-);
-
 const ArtifactTabPlusIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" {...props}>
     <path d="M8 3.5v9M3.5 8h9" />
   </svg>
 );
-
-const artifactTabCloseButtonClassName =
-  'mr-1 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-transparent transition-colors group-hover:bg-muted group-hover:text-background hover:!bg-foreground hover:!text-background';
 
 const ArtifactBrowserTabIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" {...props}>
@@ -1403,6 +1398,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const isMac = window.electron.platform === 'darwin';
   const isWindows = window.electron.platform === 'win32';
   const currentSession = useSelector(selectCurrentSession);
+  const pendingPermissions = useSelector(selectPendingPermissions);
   const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const isStreaming = useSelector(selectIsStreaming);
   const remoteManaged = useSelector(selectRemoteManaged);
@@ -2157,6 +2153,17 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [artifactPanelMinWidth, setArtifactPanelMinWidth] = useState(MIN_PANEL_WIDTH);
   const [artifactPanelMaxWidth, setArtifactPanelMaxWidth] = useState(MAX_PANEL_WIDTH);
   const [subagents, setSubagents] = useState<SubagentSessionSummary[]>([]);
+  const subagentWaitPhase = useMemo(
+    () => getSubagentWaitPhase(currentSession?.messages ?? [], subagents),
+    [currentSession?.messages, subagents],
+  );
+  const activityStatusOverride = isContextMaintenance
+    ? i18nService.t('coworkContextMaintenanceRunning')
+    : subagentWaitPhase === SubagentWaitPhase.Children
+      ? i18nService.t('coworkActivityLiveWaitSubagents')
+      : subagentWaitPhase === SubagentWaitPhase.Summary
+        ? i18nService.t('coworkActivityWaitSubagentSummary')
+        : null;
   const [subagentsLoading, setSubagentsLoading] = useState(false);
   const [selectedSubagent, setSelectedSubagent] = useState<SubagentSessionSummary | null>(null);
   const [contentRowWidth, setContentRowWidth] = useState(0);
@@ -3425,6 +3432,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       dispatch(activateArtifactSubagentTab({ sessionId }));
       return;
     }
+
 
     dispatch(closePanel({ sessionId }));
   }, [
@@ -5097,7 +5105,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     messages?.some(message => message.metadata?.kind === CoworkOnboardingMessageKind.NewUserWelcome) ?? false
   ), [messages]);
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
-  const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
+  const leadingTurnStartTimestamp = currentSession?.leadingTurnStartTimestamp ?? null;
+  const turns = useMemo(
+    () => buildConversationTurns(displayItems, { leadingTurnStartTimestamp }),
+    [displayItems, leadingTurnStartTimestamp],
+  );
   const enterpriseQuotaSignal = useMemo(
     () => findCurrentEnterpriseQuotaSignal(currentSession, currentMessagesWithDetachedTail),
     [currentMessagesWithDetachedTail, currentSession],
@@ -5918,7 +5930,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             localServiceDirectory={currentSession?.cwd}
             showActivityIndicator
             activityStatusOverride={
-              isContextMaintenance ? i18nService.t('coworkContextMaintenanceRunning') : null
+              activityStatusOverride
             }
             showCopyButtons={!isStreaming}
             completedGoal={
@@ -6016,7 +6028,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 }}
                 showActivityIndicator={showActivityIndicator}
                 activityStatusOverride={
-                  isContextMaintenance ? i18nService.t('coworkContextMaintenanceRunning') : null
+                  activityStatusOverride
                 }
                 showCopyButtons={!isStreaming || !isLastTurn}
                 hiddenSystemMessageId={enterpriseQuotaPromptMessageId}
@@ -6045,7 +6057,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       {/* Header — spans full width */}
       <div
         data-skin-session-titlebar="true"
-        className={`draggable relative z-30 flex h-12 shrink-0 items-center justify-between overflow-visible border-b border-border bg-background ${
+        className={`draggable relative z-30 flex h-12 shrink-0 items-center justify-between overflow-visible bg-background ${
+          isArtifactPanelVisible ? 'border-b border-border' : ''
+        } ${
           isArtifactPanelExpanded ? 'pl-0 pr-4' : 'px-4'
         }`}
       >
@@ -6107,225 +6121,78 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   ref={artifactTabsScrollRef}
                   className="scrollbar-hidden flex h-full min-w-0 flex-1 overflow-x-auto overflow-y-hidden"
                 >
-                  <div className={`flex h-full min-w-max items-center gap-1 pr-3 ${
+                  <div className={`flex h-full min-w-0 flex-1 items-center gap-1 pr-3 ${
                     isArtifactPanelExpanded ? 'pl-3' : 'pl-4'
                   }`}
                   >
                   {isFileListPreviewTabOpen && (
-                    <div
-                      data-artifact-preview-active={
-                        !activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.FileList
-                          ? 'true'
-                          : undefined
-                      }
-                      className={`non-draggable group flex h-7 max-w-[190px] items-center rounded-lg text-xs transition-colors ${
-                        activeArtifactPreviewTab || activeSpecialPreviewTab !== ArtifactSpecialTab.FileList
-                          ? 'text-secondary hover:bg-surface hover:text-foreground'
-                          : 'bg-surface-raised text-foreground shadow-sm'
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={handleActivateArtifactFileListTab}
-                        className="flex min-w-0 items-center gap-1.5 px-2 text-left"
-                        title={i18nService.t('artifactFileList')}
-                      >
-                        <ArtifactPanelIcon className="h-3.5 w-3.5 shrink-0" open />
-                        <span className="truncate">{i18nService.t('artifactFileList')}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleCloseArtifactFileListTab();
-                        }}
-                        className={artifactTabCloseButtonClassName}
-                        title={i18nService.t('artifactCloseTab')}
-                      >
-                        <ArtifactTabCloseIcon className="h-2.5 w-2.5" />
-                      </button>
-                    </div>
+                    <ArtifactPreviewTabItem
+                      active={!activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.FileList}
+                      icon={<ArtifactPanelIcon className="h-3.5 w-3.5" open />}
+                      label={i18nService.t('artifactFileList')}
+                      closeLabel={i18nService.t('artifactCloseTab')}
+                      onActivate={handleActivateArtifactFileListTab}
+                      onClose={handleCloseArtifactFileListTab}
+                    />
                   )}
                   {isBrowserPreviewTabOpen && (
-                    <div
-                      data-artifact-preview-active={
-                        !activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.Browser
-                          ? 'true'
-                          : undefined
-                      }
-                      className={`non-draggable group flex h-7 max-w-[190px] items-center rounded-lg text-xs transition-colors ${
-                        activeArtifactPreviewTab || activeSpecialPreviewTab !== ArtifactSpecialTab.Browser
-                          ? 'text-secondary hover:bg-surface hover:text-foreground'
-                          : 'bg-surface-raised text-foreground shadow-sm'
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={handleActivateArtifactBrowserTab}
-                        className="flex min-w-0 items-center gap-1.5 px-2 text-left"
-                        title={browserPreviewTabTitle}
-                      >
-                        <ArtifactBrowserTabIcon className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{browserPreviewTabTitle}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleCloseArtifactBrowserTab();
-                        }}
-                        className={artifactTabCloseButtonClassName}
-                        title={i18nService.t('artifactCloseTab')}
-                      >
-                        <ArtifactTabCloseIcon className="h-2.5 w-2.5" />
-                      </button>
-                    </div>
+                    <ArtifactPreviewTabItem
+                      active={!activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.Browser}
+                      icon={<ArtifactBrowserTabIcon className="h-3.5 w-3.5" />}
+                      label={browserPreviewTabTitle}
+                      closeLabel={i18nService.t('artifactCloseTab')}
+                      onActivate={handleActivateArtifactBrowserTab}
+                      onClose={handleCloseArtifactBrowserTab}
+                    />
                   )}
                   {isAgentBrowserPreviewTabOpen && (
-                    <div
-                      data-artifact-preview-active={
-                        !activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.AgentBrowser
-                          ? 'true'
-                          : undefined
-                      }
-                      className={`non-draggable group flex h-7 max-w-[190px] items-center rounded-lg text-xs transition-colors ${
-                        activeArtifactPreviewTab || activeSpecialPreviewTab !== ArtifactSpecialTab.AgentBrowser
-                          ? 'text-secondary hover:bg-surface hover:text-foreground'
-                          : 'bg-surface-raised text-foreground shadow-sm'
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={handleActivateArtifactAgentBrowserTab}
-                        className="relative flex min-w-0 items-center gap-1.5 px-2 text-left"
-                        title={i18nService.t('agentBrowserTab')}
-                      >
-                        <ComputerDesktopIcon className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{i18nService.t('agentBrowserTab')}</span>
-                        {hasUnreadAgentBrowserActivity && (
-                          <span
-                            className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
-                            title={i18nService.t('agentBrowserLiveActivity')}
-                          />
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleCloseArtifactAgentBrowserTab();
-                        }}
-                        className={artifactTabCloseButtonClassName}
-                        title={i18nService.t('artifactCloseTab')}
-                      >
-                        <ArtifactTabCloseIcon className="h-2.5 w-2.5" />
-                      </button>
-                    </div>
+                    <ArtifactPreviewTabItem
+                      active={!activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.AgentBrowser}
+                      icon={<ComputerDesktopIcon className="h-3.5 w-3.5" />}
+                      label={i18nService.t('agentBrowserTab')}
+                      closeLabel={i18nService.t('artifactCloseTab')}
+                      indicator={hasUnreadAgentBrowserActivity ? (
+                        <span
+                          className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                          title={i18nService.t('agentBrowserLiveActivity')}
+                        />
+                      ) : undefined}
+                      onActivate={handleActivateArtifactAgentBrowserTab}
+                      onClose={handleCloseArtifactAgentBrowserTab}
+                    />
                   )}
                   {isSubagentPreviewTabOpen && (
-                    <div
-                      data-artifact-preview-active={
-                        !activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.Subagents
-                          ? 'true'
-                          : undefined
-                      }
-                      className={`non-draggable group flex h-7 max-w-[190px] items-center rounded-lg text-xs transition-colors ${
-                        activeArtifactPreviewTab || activeSpecialPreviewTab !== ArtifactSpecialTab.Subagents
-                          ? 'text-secondary hover:bg-surface hover:text-foreground'
-                          : 'bg-surface-raised text-foreground shadow-sm'
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={handleActivateArtifactSubagentTab}
-                        className="flex min-w-0 items-center gap-1.5 px-2 text-left"
-                        title={i18nService.t('subagentPanelTitle')}
-                      >
-                        <SubagentIcon className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{i18nService.t('subagentPanelTitle')}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleCloseArtifactSubagentTab();
-                        }}
-                        className={artifactTabCloseButtonClassName}
-                        title={i18nService.t('artifactCloseTab')}
-                      >
-                        <ArtifactTabCloseIcon className="h-2.5 w-2.5" />
-                      </button>
-                    </div>
+                    <ArtifactPreviewTabItem
+                      active={!activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.Subagents}
+                      icon={<SubagentIcon className="h-3.5 w-3.5" />}
+                      label={i18nService.t('subagentPanelTitle')}
+                      closeLabel={i18nService.t('artifactCloseTab')}
+                      onActivate={handleActivateArtifactSubagentTab}
+                      onClose={handleCloseArtifactSubagentTab}
+                    />
                   )}
                   {isUserAttachmentPreviewTabOpen && (
-                    <div
-                      data-artifact-preview-active={
-                        !activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.UserAttachment
-                          ? 'true'
-                          : undefined
-                      }
-                      className={`non-draggable group flex h-7 max-w-[190px] items-center rounded-lg text-xs transition-colors ${
-                        activeArtifactPreviewTab || activeSpecialPreviewTab !== ArtifactSpecialTab.UserAttachment
-                          ? 'text-secondary hover:bg-surface hover:text-foreground'
-                          : 'bg-surface-raised text-foreground shadow-sm'
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={handleActivateArtifactUserAttachmentTab}
-                        className="flex min-w-0 items-center gap-1.5 px-2 text-left"
-                        title={i18nService.t('artifactUserAttachmentTab')}
-                      >
-                        <PaperClipIcon className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{i18nService.t('artifactUserAttachmentTab')}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleCloseArtifactUserAttachmentTab();
-                        }}
-                        className={artifactTabCloseButtonClassName}
-                        title={i18nService.t('artifactCloseTab')}
-                      >
-                        <ArtifactTabCloseIcon className="h-2.5 w-2.5" />
-                      </button>
-                    </div>
+                    <ArtifactPreviewTabItem
+                      active={!activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.UserAttachment}
+                      icon={<PaperClipIcon className="h-3.5 w-3.5" />}
+                      label={i18nService.t('artifactUserAttachmentTab')}
+                      closeLabel={i18nService.t('artifactCloseTab')}
+                      onActivate={handleActivateArtifactUserAttachmentTab}
+                      onClose={handleCloseArtifactUserAttachmentTab}
+                    />
                   )}
                   {artifactTabsWithArtifacts.map(({ tab, artifact }) => {
-                    const isActive = tab.id === activeArtifactPreviewTab?.id;
                     const fileName = artifact.fileName || artifact.title;
                     return (
-                      <div
+                      <ArtifactPreviewTabItem
                         key={tab.id}
-                        data-artifact-preview-active={isActive ? 'true' : undefined}
-                        className={`non-draggable group flex h-7 max-w-[190px] shrink-0 items-center rounded-lg text-xs transition-colors ${
-                          isActive
-                            ? 'bg-surface-raised text-foreground shadow-sm'
-                            : 'text-secondary hover:bg-surface hover:text-foreground'
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => handleActivateArtifactTab(tab.id)}
-                          className="flex min-w-0 max-w-[158px] items-center gap-1.5 px-2 text-left"
-                          title={fileName}
-                        >
-                          <FileTypeIcon fileName={fileName} className="h-3.5 w-3.5 shrink-0" />
-                          <span className="truncate">{fileName}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleCloseArtifactTab(tab.id);
-                          }}
-                          className={artifactTabCloseButtonClassName}
-                          title={i18nService.t('artifactCloseTab')}
-                        >
-                          <ArtifactTabCloseIcon className="h-2.5 w-2.5" />
-                        </button>
-                      </div>
+                        active={tab.id === activeArtifactPreviewTab?.id}
+                        icon={<FileTypeIcon fileName={fileName} className="h-3.5 w-3.5" />}
+                        label={fileName}
+                        closeLabel={i18nService.t('artifactCloseTab')}
+                        onActivate={() => handleActivateArtifactTab(tab.id)}
+                        onClose={() => handleCloseArtifactTab(tab.id)}
+                      />
                     );
                   })}
                   {shouldPinArtifactAddTab ? (
@@ -6762,17 +6629,19 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           </div>,
           document.body
         )}
-        {shouldShowScrollToBottom && !exportImageProgress && (
-          <button
-            type="button"
-            onClick={handleScrollToBottom}
-            onWheel={handleScrollToBottomWheel}
-            className="absolute bottom-4 left-1/2 z-20 inline-flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-background text-foreground/85 shadow-[0_2px_10px_rgba(15,23,42,0.12)] transition-colors hover:bg-surface-raised hover:text-foreground dark:shadow-[0_2px_14px_rgba(0,0,0,0.36)]"
-            aria-label={i18nService.t('coworkScrollToBottom')}
-            title={i18nService.t('coworkScrollToBottom')}
-          >
-            <ArrowDownIcon className="h-4 w-4 stroke-[2.1]" />
-          </button>
+        {!exportImageProgress && shouldShowScrollToBottom && (
+          <div className="pointer-events-none absolute bottom-4 left-0 right-0 z-20 flex items-center justify-center gap-2 px-3">
+            <button
+              type="button"
+              onClick={handleScrollToBottom}
+              onWheel={handleScrollToBottomWheel}
+              className="pointer-events-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background text-foreground/85 shadow-[0_2px_10px_rgba(15,23,42,0.12)] transition-colors hover:bg-surface-raised hover:text-foreground dark:shadow-[0_2px_14px_rgba(0,0,0,0.36)]"
+              aria-label={i18nService.t('coworkScrollToBottom')}
+              title={i18nService.t('coworkScrollToBottom')}
+            >
+              <ArrowDownIcon className="h-4 w-4 stroke-[2.1]" />
+            </button>
+          </div>
         )}
       </div>
 
@@ -6794,6 +6663,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             <PromptInputCollapseIcon className="h-3.5 w-3.5" />
           </button>
         )}
+        <div className={COWORK_DETAIL_CONTENT_CLASS}>
+          <QuestionDock sessionId={currentSession.id} permissions={pendingPermissions} />
+        </div>
         {minimizedPermission && (
           <div className={`${COWORK_DETAIL_CONTENT_CLASS} mb-2`}>
             <div

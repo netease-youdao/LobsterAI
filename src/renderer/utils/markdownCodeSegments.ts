@@ -1,3 +1,7 @@
+import { parser } from '@lezer/markdown';
+
+const CodeSyntax = new Set(['InlineCode', 'FencedCode', 'CodeBlock']);
+
 export type MarkdownCodeSegment =
   | { kind: 'text'; raw: string; visibleText: string }
   | { kind: 'inline-code'; raw: string; visibleText: string }
@@ -122,7 +126,7 @@ const collectBacktickRuns = (content: string): BacktickRun[] => {
   return runs;
 };
 
-const normalizeInlineCodeText = (content: string): string => {
+export const normalizeInlineCodeText = (content: string): string => {
   const normalized = content.replace(/\r\n?|\n/g, ' ');
   if (
     normalized.startsWith(' ')
@@ -218,6 +222,19 @@ export const splitMarkdownCodeSegments = (content: string): MarkdownCodeSegment[
 export const transformMarkdownTextSegments = (
   content: string,
   transform: (text: string) => string,
-): string => splitMarkdownCodeSegments(content)
-  .map(segment => segment.kind === 'text' ? transform(segment.raw) : segment.raw)
-  .join('');
+): string => {
+  // Use Markdown structure here: a line scan cannot distinguish indented code
+  // or fences nested in lists/quotes from ordinary prose.
+  const result: string[] = [];
+  let cursor = 0;
+  parser.parse(content).iterate({
+    enter(node) {
+      if (!CodeSyntax.has(node.name)) return;
+      result.push(transform(content.slice(cursor, node.from)), content.slice(node.from, node.to));
+      cursor = node.to;
+      return false;
+    },
+  });
+  result.push(transform(content.slice(cursor)));
+  return result.join('');
+};

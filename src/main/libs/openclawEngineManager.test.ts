@@ -2,7 +2,7 @@ import { type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
+import { OpenClawEngineErrorCode, OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import { setLanguage } from '../i18n';
 
 vi.mock('electron', () => ({
@@ -16,10 +16,13 @@ vi.mock('electron', () => ({
   },
 }));
 
+import { OPENCLAW_STARTUP_MIGRATION_REFUSAL } from './openclawDreamingStartupFailure';
 import {
   buildOpenClawCompileCacheEnv,
   buildOpenClawGatewayExecArgv,
+  extractOpenClawConfigIssueLines,
   extractOpenClawPluginVerificationFailure,
+  extractOpenClawStartupMigrationRefusal,
   isOpenClawConfigStartupFailure,
   isOpenClawGatewayHeapOutOfMemory,
   OpenClawEngineManager,
@@ -29,6 +32,9 @@ import {
 
 const PLUGIN_FAILURE = 'OpenClaw plugin verification failed; refusing to report the gateway ready.';
 const PLUGIN_CONSENT_DETAIL = '- Plugin "vydra" requires capability consent. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry. Run `openclaw update repair` to retry plugin repair.';
+const MIGRATION_REFUSAL = OPENCLAW_STARTUP_MIGRATION_REFUSAL;
+const MIGRATION_WARNING = '- Legacy channel allowFrom channel/account is unresolved; left in place at C:\\Users\\L\\AppData\\Roaming\\LobsterAI\\openclaw\\state\\credentials\\openclaw-weixin-a74391227cd8-im-bot-allowFrom.json';
+const MIGRATION_DOCTOR_HINT = 'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
 
 describe('buildOpenClawCompileCacheEnv', () => {
   test('prevents the packaged launcher from respawning Electron Helper', () => {
@@ -139,6 +145,39 @@ describe('isOpenClawConfigStartupFailure', () => {
   });
 });
 
+describe('extractOpenClawConfigIssueLines', () => {
+  test('reads the per-key lines of the gateway startup failure', () => {
+    expect(extractOpenClawConfigIssueLines([
+      '[stderr] - plugins.allow: plugin not installed: qqbot',
+      '[stderr] 2026-09-18T23:16:36.503+08:00 Gateway failed to start: Invalid config at C:\\Users\\me\\AppData\\Roaming\\LobsterAI\\openclaw\\state\\openclaw.json:',
+      '[stderr] openclaw.json:4 — agents.defaults.compaction: Unrecognized key: "truncateAfterCompaction"',
+      '[stderr] \u001b[31mopenclaw.json:3 — session.maintenance: Unrecognized key: "rotateBytes"\u001b[0m',
+      '[stderr] <root>: Unrecognized key: "staleKey"',
+      '[stderr] Run "openclaw doctor --fix" to repair, then retry.',
+      '[stderr] - unrelated: bullet after the block',
+    ].join('\n'))).toEqual([
+      'agents.defaults.compaction: Unrecognized key: "truncateAfterCompaction"',
+      'session.maintenance: Unrecognized key: "rotateBytes"',
+      '<root>: Unrecognized key: "staleKey"',
+    ]);
+  });
+
+  test('reads CLI-style bullets and caps the number of lines', () => {
+    expect(extractOpenClawConfigIssueLines([
+      'Invalid config at /state/openclaw.json:',
+      ...['a', 'b', 'c', 'd', 'e'].map(key => `- cron: Unrecognized key: "${key}"`),
+    ].join('\n'))).toEqual(['a', 'b', 'c', 'd'].map(key => `cron: Unrecognized key: "${key}"`));
+  });
+
+  test.each([
+    undefined,
+    'JSON5 parse failed: invalid character at 4:3 in openclaw.json',
+    '- tools.loopDetection: Unrecognized keys: "historySize"',
+  ])('returns nothing without an invalid-config block: %s', (text) => {
+    expect(extractOpenClawConfigIssueLines(text)).toEqual([]);
+  });
+});
+
 describe('isOpenClawGatewayHeapOutOfMemory', () => {
   test('matches the V8 fatal heap OOM emitted by the gateway', () => {
     expect(isOpenClawGatewayHeapOutOfMemory(
@@ -188,7 +227,29 @@ describe('extractOpenClawPluginVerificationFailure', () => {
   });
 });
 
-describe('gateway terminal plugin verification failure', () => {
+describe('extractOpenClawStartupMigrationRefusal', () => {
+  test('keeps the refusal and its own warning bullets without log prefixes or the doctor hint', () => {
+    expect(extractOpenClawStartupMigrationRefusal([
+      '[stderr] [state-migrations] Legacy state migration warnings:',
+      `[stderr] ${MIGRATION_WARNING}`,
+      '[stdout] |  - Migrated update-check state → shared SQLite state',
+      `[stderr] \u001b[31m${MIGRATION_REFUSAL}\u001b[0m`,
+      MIGRATION_WARNING,
+      MIGRATION_DOCTOR_HINT,
+    ].join('\n'))).toBe(`${MIGRATION_REFUSAL}\n${MIGRATION_WARNING}`);
+  });
+
+  test.each([
+    undefined,
+    `[state-migrations] Legacy state migration warnings:\n${MIGRATION_WARNING}`,
+    PLUGIN_FAILURE,
+    'OpenClaw startup migrations were skipped because the selected config changed during startup; refusing to report the gateway ready. Retry startup so the new config can be validated.',
+  ])('does not suppress retries without the terminal refusal marker: %s', (output) => {
+    expect(extractOpenClawStartupMigrationRefusal(output)).toBeNull();
+  });
+});
+
+describe('gateway terminal startup failures', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -211,6 +272,7 @@ describe('gateway terminal plugin verification failure', () => {
       gatewayRecentOutput: new WeakMap([[child, output.split('\n')]]),
       gatewayFailureByProcess: new WeakMap(),
       expectedGatewayExits: new WeakSet(),
+      gatewayReadyProcesses: new WeakSet(),
       gatewayRestartTimer: null,
       gatewayRestartWait: null,
       gatewayRestartAttempt: 0,
@@ -242,10 +304,11 @@ describe('gateway terminal plugin verification failure', () => {
     internals.gatewayRestartTimer = setTimeout(pendingRestart, 3_000);
     internals.gatewayRestartWait = { promise: Promise.resolve(true), resolve: resolveRetry };
 
-    child.emit('exit', 1);
+    child.emit('close', 1);
     await vi.advanceTimersByTimeAsync(120_000);
 
     expect(manager.getStatus()).toMatchObject({ phase: OpenClawEnginePhase.Error, canRetry: true });
+    expect(manager.getStatus().errorCode).toBe(OpenClawEngineErrorCode.PluginVerificationFailed);
     expect(statuses).toHaveLength(1);
     expect(statuses[0].message).toContain(PLUGIN_CONSENT_DETAIL);
     expect(statuses[0].message).toContain(language === 'zh' ? '已停止自动重启' : 'Automatic restarts stopped');
@@ -258,9 +321,32 @@ describe('gateway terminal plugin verification failure', () => {
     expect(internals.gatewayRestartAttempt).toBe(0);
   });
 
+  test.each(['zh', 'en'] as const)('stops retrying after a startup migration refusal and names the unresolved source in %s', async (language) => {
+    setLanguage(language);
+    const { child, manager, internals, start, statuses } = makeSupervisor(`${MIGRATION_REFUSAL}\n${MIGRATION_WARNING}\n${MIGRATION_DOCTOR_HINT}`);
+    const pendingRestart = vi.fn();
+    internals.gatewayRestartAttempt = 4;
+    internals.gatewayRestartTimer = setTimeout(pendingRestart, 3_000);
+
+    child.emit('close', 1);
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(manager.getStatus()).toMatchObject({
+      phase: OpenClawEnginePhase.Error, canRetry: true, errorCode: OpenClawEngineErrorCode.StartupMigrationRefused,
+    });
+    expect(manager.isGatewayStartupBlocked()).toBe(true);
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0].message).toContain('openclaw-weixin-a74391227cd8-im-bot-allowFrom.json');
+    expect(statuses[0].message).toContain(language === 'zh' ? '已停止自动重启' : 'Automatic restarts stopped');
+    expect(statuses[0].message).not.toContain('Check model configuration');
+    expect(start).not.toHaveBeenCalled();
+    expect(pendingRestart).not.toHaveBeenCalled();
+    expect(internals.gatewayRestartTimer).toBeNull();
+    expect(internals.gatewayRestartAttempt).toBe(0);
+  });
   test('retains automatic retries for plugin warnings followed by a transient crash', async () => {
     const { child, manager, start } = makeSupervisor('[config] warnings: plugins.allow: plugin not installed: qqbot\nPlugin download failed: ECONNRESET');
-    child.emit('exit', 1);
+    child.emit('close', 1);
     expect(manager.getStatus()).toMatchObject({ phase: OpenClawEnginePhase.Starting, canRetry: false });
     await vi.advanceTimersByTimeAsync(3_000);
     expect(start).toHaveBeenCalledExactlyOnceWith('auto-restart-after-crash');
@@ -269,7 +355,7 @@ describe('gateway terminal plugin verification failure', () => {
   test('keeps config-validation text inside a terminal plugin diagnostic in the plugin error', () => {
     const pluginDetail = '- Plugin "custom" failed: config validation failed: missing capability declaration';
     const { child, manager } = makeSupervisor(`${PLUGIN_FAILURE}\n${pluginDetail}`);
-    child.emit('exit', 1);
+    child.emit('close', 1);
     expect(manager.getStatus()).toMatchObject({ phase: OpenClawEnginePhase.Error, canRetry: true });
     expect(manager.getStatus().message).toContain(pluginDetail);
     expect(manager.getStatus().message).not.toContain('openclaw.json is invalid');
@@ -277,7 +363,7 @@ describe('gateway terminal plugin verification failure', () => {
 
   test('preserves the existing invalid-json error classification', () => {
     const { child, manager } = makeSupervisor('JSON5 parse failed: invalid character at 4:3 in openclaw.json');
-    child.emit('exit', 1);
+    child.emit('close', 1);
     expect(manager.getStatus()).toMatchObject({ phase: OpenClawEnginePhase.Error, canRetry: true });
     expect(manager.getStatus().message).toContain('openclaw.json is invalid');
     expect(manager.getStatus().message).not.toContain(PLUGIN_FAILURE);

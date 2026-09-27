@@ -67,7 +67,7 @@ export class SubagentSessionMaterializer {
   }
 
   shouldMaterialize(params: SubagentChildSessionCandidateParams): boolean {
-    const childAgentId = parseAgentIdFromSubagentSessionKey(params.childSessionKey);
+    const childAgentId = parseAgentIdFromSubagentSessionKey(params.childSessionKey) || params.agentId.trim();
     if (!childAgentId) return true;
     const parentSession = this.deps.store.getSession(params.parentSessionId, 0);
     const parentAgentId = parentSession?.agentId?.trim() || 'main';

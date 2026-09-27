@@ -1,7 +1,8 @@
-import { execFile } from 'child_process';
+import { type ChildProcess,execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
+import { OpenClawEngineErrorCode } from '../../shared/openclawEngine/constants';
 import {
   OPENCLAW_STARTUP_MIGRATION_ENTRY,
   OPENCLAW_STARTUP_MIGRATION_RESULT_PREFIX,
@@ -9,6 +10,7 @@ import {
   type OpenClawStartupMigrationReport,
   OpenClawStartupMigrationStatus,
 } from '../../shared/openclawEngine/startupMigration';
+import { extractDreamingStartupFailure } from './openclawDreamingStartupFailure';
 
 const STARTUP_MIGRATION_TIMEOUT_MS = 180_000;
 const LOG_TAIL_LIMIT = 4_000;
@@ -19,8 +21,24 @@ export type StartupMigrationRunner = (
   options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
 ) => Promise<{ code: number | null; stdout: string; stderr: string }>;
 
-const runStartupMigration: StartupMigrationRunner = (command, args, options) => new Promise((resolve, reject) => {
-  execFile(command, args, {
+const activeMigrations = new Map<ChildProcess, { stateDir?: string; closed: Promise<void> }>();
+
+/** Only stop children spawned by this process for the selected state directory. */
+export async function stopStartupStateMigrations(stateDir: string): Promise<void> {
+  const entries = [...activeMigrations].filter(([, entry]) => entry.stateDir === path.resolve(stateDir));
+  await Promise.all(entries.map(async ([child, entry]) => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([entry.closed, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Startup migration PID ${child.pid} did not close after cancellation.`)), 5_000);
+      })]);
+    } finally { if (timer) clearTimeout(timer); }
+  }));
+}
+
+export const runStartupMigration: StartupMigrationRunner = (command, args, options) => new Promise((resolve, reject) => {
+  const child = execFile(command, args, {
     cwd: options.cwd,
     env: options.env,
     windowsHide: true,
@@ -36,6 +54,16 @@ const runStartupMigration: StartupMigrationRunner = (command, args, options) => 
       resolve({ code: typeof error?.code === 'number' ? error.code : 0, stdout, stderr });
     }
   });
+  const stateDir = options.env.OPENCLAW_STATE_DIR;
+  const closed = new Promise<void>(done => child.once('close', (code, signal) => {
+    activeMigrations.delete(child);
+    console.log('[OpenClaw] Startup migration process closed:', { pid: child.pid, entry: path.basename(args[0]), code, signal });
+    done();
+  }));
+  activeMigrations.set(child, { stateDir: stateDir ? path.resolve(stateDir) : undefined, closed });
+  child.once('spawn', () => console.log('[OpenClaw] Startup migration process spawned:', {
+    pid: child.pid, parentPid: process.pid, entry: path.basename(args[0]), stateDir, createdAt: new Date().toISOString(),
+  }));
 });
 
 function parseReport(stdout: string): OpenClawStartupMigrationReport | null {
@@ -67,7 +95,7 @@ export async function migrateLegacyStateBeforeStartup(params: {
   electronNodeRuntimePath: string;
   env: NodeJS.ProcessEnv;
   runner?: StartupMigrationRunner;
-}): Promise<{ status: OpenClawStartupMigrationStatus; error?: string }> {
+}): Promise<{ status: OpenClawStartupMigrationStatus; error?: string; errorCode?: OpenClawEngineErrorCode }> {
   const entryPath = path.join(params.runtimeRoot, OPENCLAW_STARTUP_MIGRATION_ENTRY);
   try {
     if (!fs.existsSync(entryPath)) {
@@ -98,6 +126,12 @@ export async function migrateLegacyStateBeforeStartup(params: {
     }
     if (result.code !== 0 || !report || report.status === OpenClawStartupMigrationStatus.Failed
       || report.warnings.length > 0 || report.remainingPaths.length > 0) {
+      const dreamingFailure = result.code !== null && result.code !== 0
+        ? extractDreamingStartupFailure(result.stdout, result.stderr) : undefined;
+      if (dreamingFailure) {
+        return { status: OpenClawStartupMigrationStatus.Failed, error: dreamingFailure,
+          errorCode: OpenClawEngineErrorCode.MemoryDreamingMigrationFailed };
+      }
       const detail = report
         ? [...report.warnings, ...report.remainingPaths.map(value => `Unmigrated startup state: ${value}`)].join('\n')
         : result.stderr.trim().slice(-LOG_TAIL_LIMIT);

@@ -1161,24 +1161,35 @@ export function mergeOpenClawConfigs(
  * Called AFTER openclawConfigSync generates the runtime config.
  * Enterprise values override generated values; fields not in enterprise config are preserved.
  */
-export function mergeEnterpriseOpenclawConfig(runtimeConfigPath: string): boolean {
+export function prepareEnterpriseOpenclawConfig(runtimeRaw: string): string {
   const enterprisePath = resolveEnterpriseConfigPath();
-  if (!enterprisePath) return false;
+  if (!enterprisePath) return runtimeRaw;
 
   const enterpriseOpenclawPath = path.join(enterprisePath, 'openclaw.json');
-  if (!fs.existsSync(enterpriseOpenclawPath) || !fs.existsSync(runtimeConfigPath)) return false;
+  if (!fs.existsSync(enterpriseOpenclawPath)) return runtimeRaw;
 
   try {
-    const runtimeRaw = fs.readFileSync(runtimeConfigPath, 'utf-8');
     const runtimeConfig = JSON.parse(runtimeRaw) as Record<string, unknown>;
 
     const enterpriseRaw = fs.readFileSync(enterpriseOpenclawPath, 'utf-8');
     const enterpriseConfig = JSON.parse(enterpriseRaw) as Record<string, unknown>;
 
     const merged = mergeOpenClawConfigs(runtimeConfig, enterpriseConfig);
-    const currentNormalized = `${JSON.stringify(runtimeConfig, null, 2)}\n`;
-    const mergedRaw = `${JSON.stringify(merged, null, 2)}\n`;
-    if (currentNormalized === mergedRaw) return false;
+    return `${JSON.stringify(merged, null, 2)}\n`;
+  } catch (error) {
+    console.error('[Enterprise] failed to prepare enterprise openclaw.json:', error);
+    return runtimeRaw;
+  }
+}
+
+/** Offline compatibility entry; running Gateways receive the prepared content by RPC. */
+export function mergeEnterpriseOpenclawConfig(runtimeConfigPath: string): boolean {
+  if (!fs.existsSync(runtimeConfigPath)) return false;
+  try {
+    const runtimeRaw = fs.readFileSync(runtimeConfigPath, 'utf-8');
+    const currentNormalized = `${JSON.stringify(JSON.parse(runtimeRaw), null, 2)}\n`;
+    const mergedRaw = prepareEnterpriseOpenclawConfig(runtimeRaw);
+    if (runtimeRaw === mergedRaw || currentNormalized === mergedRaw) return false;
 
     const existingMode = fs.statSync(runtimeConfigPath).mode & 0o777;
     safelyReplaceTextFileSync({

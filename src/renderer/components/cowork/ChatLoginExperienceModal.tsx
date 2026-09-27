@@ -1,7 +1,11 @@
-import React from 'react';
+import '../login/loginIntroduction.css';
+
+import { XMarkIcon } from '@heroicons/react/24/outline';
+import React, { useEffect, useId, useRef } from 'react';
 
 import { i18nService } from '../../services/i18n';
 import Modal from '../common/Modal';
+import LoginShowcase from '../login/LoginShowcase';
 
 interface ChatLoginExperienceModalProps {
   loginPending: boolean;
@@ -14,39 +18,89 @@ const ChatLoginExperienceModal: React.FC<ChatLoginExperienceModalProps> = ({
   onClose,
   onStart,
 }) => {
+  const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement;
+    dialogRef.current?.focus();
+    return () => {
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+    };
+  }, []);
+
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key !== 'Tab') return;
+    const buttons = dialogRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)');
+    if (!buttons?.length) return;
+    const first = buttons[0];
+    const last = buttons[buttons.length - 1];
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
     <Modal
       onClose={onClose}
       onEscape={onClose}
-      overlayClassName="non-draggable fixed inset-0 z-[10050] flex items-center justify-center bg-black/35 px-4 backdrop-blur-[1px]"
-      className="modal-content relative max-h-[calc(100vh-48px)] w-full max-w-[480px] overflow-hidden rounded-3xl border border-border bg-surface px-6 py-10 text-center text-foreground shadow-modal sm:px-8 sm:py-12"
+      overlayClassName="login-introduction-overlay draggable fixed inset-0 z-[10050] flex items-center justify-center pt-6"
+      className="login-introduction-card non-draggable relative overflow-hidden rounded-2xl bg-white text-[#1c1b19]"
     >
-      <div className="relative z-10 flex flex-col items-center">
-        <img
-          src="logo.png"
-          alt="LobsterAI"
-          width={56}
-          height={56}
-          className="rounded-xl select-none"
-          draggable={false}
-        />
-        <h2 className="mt-6 text-[25px] font-semibold leading-[1.25] tracking-normal sm:text-[28px]">
-          <span className="block">{i18nService.t('chatLoginExperienceTitlePrefix')}</span>
-          <span className="block text-[31px] font-bold leading-[1.15] sm:text-[34px]">LobsterAI</span>
-        </h2>
-        <p className="mt-12 text-base leading-8 tracking-normal text-secondary sm:mt-16 sm:text-[17px]">
-          <span className="block">{i18nService.t('chatLoginExperiencePromoLine1')}</span>
-          <span className="block">{i18nService.t('chatLoginExperiencePromoLine2')}</span>
-        </p>
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="login-introduction-content grid h-full outline-none"
+        onKeyDown={handleKeyDown}
+      >
+        <LoginShowcase />
+        <div className="login-introduction-welcome flex min-w-0 flex-col justify-between">
+          <div className="relative isolate">
+            <div className="login-introduction-glow" aria-hidden="true" />
+            <h1 id={titleId} className="login-introduction-heading font-semibold leading-[1.3]">
+              <span className="block">{i18nService.t('chatLoginExperienceTitlePrefix')}</span>
+              <span className="login-introduction-brand mt-3.5 flex items-center gap-2 font-bold tracking-[-1px]">
+                LobsterAI
+                <img
+                  src="logo.png"
+                  alt=""
+                  width={28}
+                  height={28}
+                  className="shrink-0 select-none rounded-lg"
+                  draggable={false}
+                />
+              </span>
+            </h1>
+          </div>
+          <div>
+            <p className="mb-4 text-[17px] font-medium leading-[1.5] text-[#ff4f36]">
+              {i18nService.t('loginIntroductionPromo')}
+            </p>
+            <button
+              type="button"
+              onClick={onStart}
+              disabled={loginPending}
+              className="inline-flex h-12 w-full items-center justify-center rounded-md bg-[#1c1b19] px-4 text-base font-medium text-white transition-colors hover:bg-[#35332f] disabled:cursor-wait disabled:opacity-60 motion-reduce:transition-none"
+            >
+              {i18nService.t(loginPending ? 'chatLoginExperienceStarting' : 'sidebarLoginNow')}
+            </button>
+          </div>
+        </div>
         <button
           type="button"
-          onClick={onStart}
-          disabled={loginPending}
-          className="sidebar-login-rainbow chat-login-experience-action relative mt-8 inline-flex h-9 w-[8.5rem] items-center justify-center whitespace-nowrap rounded-lg px-5 text-base font-medium leading-none transition-[filter,transform] disabled:cursor-not-allowed disabled:opacity-70"
+          onClick={onClose}
+          aria-label={i18nService.t('loginIntroductionSkip')}
+          title={i18nService.t('loginIntroductionSkip')}
+          className="absolute right-2 top-2 grid h-9 w-9 place-items-center rounded-full text-[#c9c9c9] transition-colors hover:bg-black/5 hover:text-[#777] motion-reduce:transition-none"
         >
-          <span className="relative">
-            {i18nService.t(loginPending ? 'chatLoginExperienceStarting' : 'chatLoginExperienceStart')}
-          </span>
+          <XMarkIcon className="h-5 w-5" aria-hidden="true" />
         </button>
       </div>
     </Modal>

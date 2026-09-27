@@ -1,6 +1,6 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
-import { type AskUserRequest, McpBridgeServer } from './mcpBridgeServer';
+import { type AskUserRequest, type DecisionToolRequest, McpBridgeServer } from './mcpBridgeServer';
 
 const makeQuestions = (): AskUserRequest['questions'] => [{
   question: 'Continue?',
@@ -99,6 +99,90 @@ describe('McpBridgeServer browser bridge', () => {
         content: [{ type: 'text', text: 'navigate_page' }],
         structuredContent: { args: { pageId: 7 } },
       });
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+describe('McpBridgeServer decision tool', () => {
+  const secret = 'decision-test-secret';
+  const post = (url: string, body: unknown, options: { secret?: string; signal?: AbortSignal } = {}) => fetch(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(options.secret ? { 'x-mcp-bridge-secret': options.secret } : {}),
+    },
+    body: JSON.stringify(body),
+    signal: options.signal,
+  });
+
+  test('authenticates and forwards arguments with the calling session', async () => {
+    const server = new McpBridgeServer(secret);
+    const received: DecisionToolRequest[] = [];
+
+    try {
+      await server.start();
+      server.onDecisionTool(async request => {
+        received.push(request);
+        return { content: [{ type: 'text', text: '{"status":"ok"}' }] };
+      });
+      const body = {
+        args: { state: 'x', questions: [] },
+        context: { sessionKey: 'agent:main:lobsterai:session-a', toolCallId: 'call-1' },
+      };
+
+      const unauthorized = await post(server.decisionCallbackUrl!, body);
+      expect(unauthorized.status).toBe(401);
+
+      const response = await post(server.decisionCallbackUrl!, body, { secret });
+      expect(response.ok).toBe(true);
+      await expect(response.json()).resolves.toEqual({ content: [{ type: 'text', text: '{"status":"ok"}' }] });
+      expect(received).toEqual([body]);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('answers with a tool error when arguments or the handler are missing', async () => {
+    const server = new McpBridgeServer(secret);
+
+    try {
+      await server.start();
+      const missingArgs = await post(server.decisionCallbackUrl!, { context: {} }, { secret });
+      expect(missingArgs.status).toBe(400);
+
+      const notReady = await post(server.decisionCallbackUrl!, { args: {} }, { secret });
+      expect(notReady.status).toBe(503);
+      await expect(notReady.json()).resolves.toMatchObject({ isError: true });
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('aborts the handler when the caller drops the connection', async () => {
+    const server = new McpBridgeServer(secret);
+    let handlerSignal: AbortSignal | null = null;
+
+    try {
+      await server.start();
+      const started = new Promise<void>(resolve => {
+        server.onDecisionTool((_request, signal) => {
+          handlerSignal = signal;
+          resolve();
+          return new Promise(settle => {
+            signal.addEventListener('abort', () => settle({ content: [{ type: 'text', text: 'aborted' }], isError: true }));
+          });
+        });
+      });
+
+      const caller = new AbortController();
+      const pending = post(server.decisionCallbackUrl!, { args: {} }, { secret, signal: caller.signal }).catch(() => null);
+      await started;
+      caller.abort();
+      await pending;
+
+      await vi.waitFor(() => expect(handlerSignal?.aborted).toBe(true));
     } finally {
       await server.stop();
     }

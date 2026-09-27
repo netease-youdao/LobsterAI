@@ -1,27 +1,18 @@
 import { ArrowPathIcon, ChevronDownIcon, ExclamationTriangleIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useState } from 'react';
 
-import { OpenClawEngineErrorCode, OpenClawEnginePhase, OpenClawGatewayRepairErrorCode } from '../../../shared/openclawEngine/constants';
+import { OpenClawEngineErrorCode, OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
-import type { OpenClawEngineStatus, OpenClawGatewayRepairResult } from '../../types/cowork';
+import { resolveOpenClawRepairError } from '../../services/openclawRepair';
+import type { OpenClawEngineStatus } from '../../types/cowork';
 import type { SettingsOpenOptions } from '../Settings';
 
 interface EngineFailureOverlayProps {
   onRequestAppSettings?: (options?: SettingsOpenOptions) => void;
   suspended?: boolean;
 }
-
-const resolveGatewayRepairErrorText = (result: OpenClawGatewayRepairResult): string => {
-  if (result.errorCode === OpenClawGatewayRepairErrorCode.Busy) {
-    return i18nService.t('openClawRepairBusyError');
-  }
-  if (result.errorCode === OpenClawGatewayRepairErrorCode.ConfigApplyPending) {
-    return i18nService.t('openClawRepairConfigApplyPendingError');
-  }
-  return result.error?.trim() || i18nService.t('openClawRepairFailed');
-};
 
 const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
   onRequestAppSettings,
@@ -69,8 +60,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
     }
   };
 
-  // Same repair flow as Settings > Agent Engine > Repair Startup: back up
-  // openclaw.json, regenerate config, restart the gateway.
+  // Same backed-up Doctor and compatibility repair flow as Settings.
   const handleQuickRepairGateway = async () => {
     if (isRepairingGateway || isRestartingGateway) return;
     setIsRepairingGateway(true);
@@ -85,7 +75,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
         source: 'cowork_engine_failure_overlay',
       });
       if (!result.success) {
-        setGatewayRepairError(resolveGatewayRepairErrorText(result));
+        setGatewayRepairError(resolveOpenClawRepairError(result));
       }
     } catch (error) {
       console.error('[EngineFailureOverlay] Failed to repair gateway state:', error);
@@ -103,7 +93,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
     }
   };
 
-  if (suspended || status?.phase !== OpenClawEnginePhase.Error) {
+  if (suspended || !status || (status.phase !== OpenClawEnginePhase.Error && !isRepairingGateway)) {
     return null;
   }
 
@@ -112,10 +102,13 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
   // installer resources, but the honest fix is allowlist + reinstall.
   const isRuntimeMissing = status.errorCode === OpenClawEngineErrorCode.RuntimeEntryMissing;
   const isRuntimeDamaged = status.errorCode === OpenClawEngineErrorCode.RuntimeFilesMissing;
-  const titleKey = isRuntimeDamaged ? 'coworkOpenClawRuntimeDamagedError'
-    : isRuntimeMissing ? 'coworkOpenClawRuntimeMissingError' : 'coworkOpenClawError';
+  const needsMediaMigration = status.errorCode === OpenClawEngineErrorCode.AgentMediaMigrationRequired;
+  const migrationRefused = status.errorCode === OpenClawEngineErrorCode.StartupMigrationRefused;
+  const titleKey = isRepairingGateway ? 'openClawRepairRunning' : isRuntimeDamaged ? 'coworkOpenClawRuntimeDamagedError'
+    : isRuntimeMissing ? 'coworkOpenClawRuntimeMissingError' : needsMediaMigration ? 'openClawAgentMediaMigrationTitle' : 'coworkOpenClawError';
   const hintKey = isRuntimeDamaged ? 'coworkOpenClawRuntimeDamagedRepairHint'
-    : isRuntimeMissing ? 'coworkOpenClawRuntimeMissingRepairHint' : 'coworkOpenClawErrorRepairHint';
+    : isRuntimeMissing ? 'coworkOpenClawRuntimeMissingRepairHint' : needsMediaMigration ? 'openClawAgentMediaMigrationHint'
+      : migrationRefused ? 'openClawStartupMigrationRefusedHint' : 'coworkOpenClawErrorRepairHint';
 
   if (isDeferred) {
     return (
@@ -166,7 +159,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
           <p className="mt-2 text-[13px] leading-5 text-secondary">
             {i18nService.t(hintKey)}
           </p>
-          {(gatewayRepairError || status.message) && (
+          {!isRepairingGateway && (gatewayRepairError || status.message) && (
             <p className="mt-2 max-h-36 max-w-full overflow-y-auto whitespace-pre-wrap break-words text-left text-xs leading-5 text-red-600 dark:text-red-400 [overflow-wrap:anywhere]">
               {gatewayRepairError || status.message}
             </p>

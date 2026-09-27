@@ -162,6 +162,10 @@ export default defineConfig({
     renderer(),
   ],
   base: process.env.NODE_ENV === 'development' ? '/' : './',
+  // The syntax-highlighting worker loads grammars on demand; ES module workers allow that code splitting.
+  worker: {
+    format: 'es',
+  },
   resolve: {
     alias: {
       '@shared': path.resolve(__dirname, './src/shared'),
@@ -193,7 +197,13 @@ export default defineConfig({
       usePolling: false,
       // Ignore vendor/ to prevent dev reload when plugins are installed into
       // vendor/openclaw-runtime/.../third-party-extensions/
-      ignored: ['**/vendor/**'],
+      // Skip temporary trees (which may contain circular junctions) and Electron output.
+      ignored: [
+        '**/vendor/**',
+        '**/.work/**',
+        '**/artifacts/**',
+        '**/dist-electron/**',
+      ],
     },
   },
   optimizeDeps: {

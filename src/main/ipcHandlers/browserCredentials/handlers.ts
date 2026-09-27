@@ -35,6 +35,18 @@ export const registerBrowserCredentialHandlers = ({
     },
   );
 
+  ipcMain.handle(
+    BrowserCredentialIpc.RequestAccess,
+    (): BrowserCredentialAvailabilityResponse => {
+      try {
+        return { success: true, availability: getService().requestAccess() };
+      } catch (error) {
+        console.error('[BrowserCredentials] Failed to request secure storage access:', error);
+        return { success: false, error: errorMessage(error) };
+      }
+    },
+  );
+
   ipcMain.handle(BrowserCredentialIpc.List, (): BrowserCredentialListResponse => {
     try {
       return { success: true, credentials: getService().list() };

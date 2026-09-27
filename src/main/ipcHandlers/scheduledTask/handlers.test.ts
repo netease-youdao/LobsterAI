@@ -16,7 +16,9 @@ import {
   DeliveryMode,
   IpcChannel as ScheduledTaskIpc,
   PayloadKind,
+  RunDeliveryStatus,
   SessionTarget,
+  TaskStatus,
   WakeMode,
 } from '../../../scheduledTask/constants';
 import type { CronJobService } from '../../../scheduledTask/cronJobService';
@@ -35,6 +37,7 @@ function makeDeps(
   const cronJobService = {
     listJobs: vi.fn(async () => []),
     getJob: vi.fn(async () => null),
+    listRuns: vi.fn(async () => []),
     listAllRuns: vi.fn(async () => []),
     addJob: vi.fn(async (input: { name?: string }) => ({ id: 'job-1', name: input?.name ?? '' })),
     updateJob: vi.fn(async (id: string, input: { name?: string }) => ({
@@ -714,5 +717,174 @@ describe('registerScheduledTaskHandlers', () => {
       channel: 'openclaw-weixin',
       to: 'wxid_zhangsan@im.wechat',
     });
+  });
+
+  const weixinTaskState = {
+    nextRunAtMs: null,
+    lastRunAtMs: null,
+    lastStatus: null,
+    lastError: null,
+    lastDurationMs: null,
+    runningAtMs: null,
+    consecutiveErrors: 0,
+  };
+
+  function makeWeixinTask(to: string, agentId: string | null = 'main') {
+    return {
+      id: 'weixin-job',
+      name: 'weixin report',
+      description: '',
+      enabled: true,
+      schedule: { kind: 'cron', expr: '0 9 * * *' },
+      sessionTarget: SessionTarget.Isolated,
+      wakeMode: WakeMode.Now,
+      payload: { kind: PayloadKind.AgentTurn, message: 'hi' },
+      delivery: {
+        mode: DeliveryMode.Announce,
+        channel: 'openclaw-weixin',
+        to,
+        accountId: 'weixin-bot-1',
+      },
+      agentId,
+      sessionKey: null,
+      state: weixinTaskState,
+      createdAt: '2026-09-20T00:00:00.000Z',
+      updatedAt: '2026-09-20T00:00:00.000Z',
+    };
+  }
+
+  test('keeps the restored Weixin direct target casing when migrating before a manual run', async () => {
+    const request = vi.fn(async () => ({ sessions: [] }));
+    const { cronJobService, deps } = makeDeps(OpenClawEnginePhase.Running, {
+      gatewayClient: { request },
+    });
+    cronJobService.getJob.mockResolvedValue(makeWeixinTask('WxId_ZhangSan@im.wechat'));
+    const boundDeps: ScheduledTaskHandlerDeps = {
+      ...deps,
+      getIMGatewayManager: () => ({
+        getIMStore: () => ({
+          getSessionMapping: () => undefined,
+          getIMSettings: () => ({ platformAgentBindings: {} }),
+          listSessionMappings: () => [
+            {
+              imConversationId: 'weixin-bot-1:direct:wxid_zhangsan@im.wechat',
+              platform: 'weixin',
+              coworkSessionId: 'cw-weixin-direct',
+              agentId: 'main',
+              lastActiveAt: '1',
+            },
+          ],
+        }),
+        primeConversationReplyRoute: vi.fn(async () => {}),
+      }),
+    };
+    registerScheduledTaskHandlers(boundDeps);
+
+    const handler = registeredHandlers.get(ScheduledTaskIpc.RunManually);
+    const result = await handler?.(undefined, 'weixin-job');
+
+    expect(result).toEqual({ success: true });
+    expect(cronJobService.updateJob).not.toHaveBeenCalled();
+    expect(cronJobService.runJob).toHaveBeenCalledWith('weixin-job');
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  test('repairs only the casing of an existing Weixin direct target', async () => {
+    const request = vi.fn(async () => ({
+      sessions: [
+        {
+          updatedAt: 2_000,
+          lastChannel: 'openclaw-weixin',
+          lastTo: 'WxId_ZhangSan@im.wechat',
+          lastAccountId: 'weixin-bot-2',
+        },
+      ],
+    }));
+    const { cronJobService, deps } = makeDeps(OpenClawEnginePhase.Running, {
+      gatewayClient: { request },
+    });
+    cronJobService.listJobs.mockResolvedValue([makeWeixinTask('wxid_zhangsan@im.wechat')]);
+
+    const result = await migrateScheduledTaskAnnounceJobs(deps);
+
+    expect(result).toEqual({ checked: 1, updated: 1 });
+    expect(request).toHaveBeenCalledWith(
+      'sessions.list',
+      expect.objectContaining({ includeGlobal: true }),
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
+    );
+    expect(cronJobService.updateJob).toHaveBeenCalledWith('weixin-job', {
+      delivery: {
+        mode: DeliveryMode.Announce,
+        channel: 'openclaw-weixin',
+        to: 'WxId_ZhangSan@im.wechat',
+        accountId: 'weixin-bot-1',
+      },
+    });
+  });
+
+  test('repairs the Weixin target casing and names the main agent before resending a saved report', async () => {
+    const request = vi.fn(async (method: string) => (method === 'sessions.list'
+      ? {
+        sessions: [
+          {
+            updatedAt: 2_000,
+            lastChannel: 'openclaw-weixin',
+            lastTo: 'WxId_ZhangSan@im.wechat',
+            lastAccountId: 'weixin-bot-1',
+          },
+        ],
+      }
+      : { messageId: 'accepted-1' }));
+    const { cronJobService, deps } = makeDeps(OpenClawEnginePhase.Running, {
+      gatewayClient: { request },
+    });
+    let stored = makeWeixinTask('wxid_zhangsan@im.wechat', null);
+    cronJobService.getJob.mockImplementation(async () => stored);
+    cronJobService.updateJob.mockImplementation(async (_id, patch) => {
+      stored = { ...stored, ...patch };
+      return stored;
+    });
+    cronJobService.listRuns.mockResolvedValue([
+      {
+        id: 'weixin-run',
+        taskId: 'weixin-job',
+        sessionId: null,
+        sessionKey: null,
+        status: TaskStatus.Success,
+        startedAt: '',
+        finishedAt: '',
+        durationMs: 1,
+        error: null,
+        summary: 'saved report',
+        deliveryStatus: RunDeliveryStatus.NotDelivered,
+        deliveryError: 'WEIXIN_SEND_REJECTED ret=-3 errcode=0',
+      },
+    ]);
+    registerScheduledTaskHandlers(deps);
+
+    const handler = registeredHandlers.get(ScheduledTaskIpc.ResendWeixinReport);
+    const result = await handler?.(undefined, 'weixin-job', 'weixin-run');
+
+    expect(result).toEqual({ success: true });
+    expect(cronJobService.updateJob).toHaveBeenCalledWith('weixin-job', {
+      delivery: {
+        mode: DeliveryMode.Announce,
+        channel: 'openclaw-weixin',
+        to: 'WxId_ZhangSan@im.wechat',
+        accountId: 'weixin-bot-1',
+      },
+    });
+    expect(request).toHaveBeenCalledWith(
+      'send',
+      expect.objectContaining({
+        channel: 'openclaw-weixin',
+        to: 'WxId_ZhangSan@im.wechat',
+        accountId: 'weixin-bot-1',
+        agentId: 'main',
+        message: 'saved report',
+      }),
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
+    );
   });
 });

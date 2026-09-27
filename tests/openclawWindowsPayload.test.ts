@@ -48,6 +48,12 @@ function manifest(root: string, relative: string, value: object): void {
   write(root, relative, JSON.stringify(value));
 }
 
+function writeKoffiStub(root: string): void {
+  for (const [file, format] of [['index.js', 'CJS'], ['index.mjs', 'ESM']]) {
+    write(root, `node_modules/koffi/${file}`, `// Stub (${format}): this package is not needed for headless gateway operation.\n`);
+  }
+}
+
 async function fixture(target: string = OpenClawPayloadTarget.WindowsX64): Promise<string> {
   const parent = tempDir();
   const root = path.join(parent, 'runtime');
@@ -112,8 +118,12 @@ async function fixture(target: string = OpenClawPayloadTarget.WindowsX64): Promi
     write(root, `node_modules/@koromix/koffi-${native}/native.node`);
     write(root, `node_modules/@img/sharp-${native}/lib/sharp.node`);
   }
-  for (const [file, format] of [['index.js', 'CJS'], ['index.mjs', 'ESM']]) {
-    write(root, `node_modules/koffi/${file}`, `// Stub (${format}): this package is not needed for headless gateway operation.\n`);
+  // prune-openclaw-runtime keeps the real koffi loader on Windows targets for the
+  // native private-directory helper and stubs it everywhere else.
+  if (target === OpenClawPayloadTarget.WindowsX64) {
+    write(root, 'node_modules/koffi/index.js', 'module.exports = require("@koromix/koffi-win32-x64");');
+  } else {
+    writeKoffiStub(root);
   }
   write(root, 'third-party-extensions/discord/probe.mjs', [
     'import assert from "node:assert/strict";',
@@ -150,7 +160,7 @@ test.each(['single', 'combined'])('slims the %s tar while preserving native SDK 
   for (const removed of [
     'gateway.asar', `node_modules/${sdkName}-win32-x64/native.bin`,
     `node_modules/${cuaName}/sdk.mjs`, `node_modules/${cuaName}-win32-x64-msvc/native.bin`,
-    'node_modules/@koromix/koffi-win32-x64/native.node',
+    ...macTargets.map(item => `node_modules/@koromix/koffi-${item.native}/native.node`),
     'dist/control-ui/assets/app.js.br', 'dist/control-ui/assets/app.js.gz',
     ...nativeRoots.flatMap(nativeRoot => ['darwin-arm64', 'linux-x64-gnu'].map(target => `${nativeRoot}/${target}/fs-safe-native.node`)),
   ]) {
@@ -162,6 +172,7 @@ test.each(['single', 'combined'])('slims the %s tar while preserving native SDK 
     'dist/control-ui/index.html', 'dist/control-ui/assets/app.js', 'dist/control-ui/assets/compressed-only.gz',
     `node_modules/${sdkName}/sdk.mjs`, 'node_modules/@anthropic-ai/sdk/index.mjs', 'dist/extensions/anthropic/index.js',
     'node_modules/@trycua/unrelated/index.js', 'node_modules/@koromix/unrelated/index.js',
+    'node_modules/koffi/index.js', 'node_modules/@koromix/koffi-win32-x64/native.node',
     ...nativeRoots.flatMap(nativeRoot => [`${nativeRoot}/win32-x64-msvc/fs-safe-native.node`, `${nativeRoot}/metadata.json`]),
   ]) expect(entries).toContain(`cfmind/${kept}`);
   if (mode === 'combined') {
@@ -211,11 +222,27 @@ test('rejects a same-sized stale bare chunk instead of discarding its archive fa
 test('keeps the CUA driver when its owner returns and keeps native Koffi when the parent is real', async () => {
   const root = await fixture();
   write(root, 'dist/extensions/cua-computer/index.js');
-  write(root, 'node_modules/koffi/index.js', 'module.exports = require("@koromix/koffi-win32-x64");');
   const filter = createOpenClawWindowsPayloadFilter(root, 'win-x64');
   expect(filter(`node_modules/${cuaName}/sdk.mjs`)).toBe(true);
   expect(filter(`node_modules/${cuaName}-win32-x64-msvc/native.bin`)).toBe(true);
   expect(filter('node_modules/@koromix/koffi-win32-x64/native.node')).toBe(true);
+  for (const { native } of macTargets) expect(filter(`node_modules/@koromix/koffi-${native}/native.node`)).toBe(false);
+});
+
+test('excludes every native Koffi package behind a stubbed loader', async () => {
+  const root = await fixture();
+  writeKoffiStub(root);
+  const filter = createOpenClawWindowsPayloadFilter(root, 'win-x64');
+  expect(filter('node_modules/koffi/index.js')).toBe(true);
+  expect(filter('node_modules/@koromix/koffi-win32-x64/native.node')).toBe(false);
+  for (const { native } of macTargets) expect(filter(`node_modules/@koromix/koffi-${native}/native.node`)).toBe(false);
+  expect(filter('node_modules/@koromix/unrelated/index.js')).toBe(true);
+});
+
+test('rejects a real Koffi loader whose Windows platform binary is missing', async () => {
+  const root = await fixture();
+  fs.rmSync(path.join(root, 'node_modules/@koromix/koffi-win32-x64'), { recursive: true, force: true });
+  expect(() => createOpenClawWindowsPayloadFilter(root, 'win-x64')).toThrow('Missing @koromix/koffi-win32-x64');
 });
 
 test.each(['mac-arm64', 'linux-x64', 'win-arm64', undefined])('does not apply x64 exclusions to target %s', target => {

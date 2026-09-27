@@ -10,6 +10,7 @@ import {
   AppUpdateStatus,
   isManualDownloadUrl,
 } from '../shared/appUpdate/constants';
+import { BrowserPasskeyUiEvent } from '../shared/browserWebAccess/passkeys';
 import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import {
   LibraryNavigationEvent,
@@ -37,6 +38,7 @@ import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
 import KitsView from './components/kits/KitsView';
 import LibraryView from './components/library/LibraryView';
+import FirstRunLoginIntroduction from './components/login/FirstRunLoginIntroduction';
 import NewUserOnboardingOverlay, {
   NewUserOnboardingStep,
   type NewUserOnboardingStep as NewUserOnboardingStepType,
@@ -48,6 +50,7 @@ import { SkillsAndConnectorsView, SkillsConnectorsSection } from './components/s
 import SkinBackdrop, { SkinBackdropVariant } from './components/skin/SkinBackdrop';
 import SkinPresentationScope from './components/skin/SkinPresentationScope';
 import StartupCreditCampaign from './components/StartupCreditCampaign';
+import SubscriptionTrialCampaign from './components/SubscriptionTrialCampaign';
 import Toast, { type ToastEventDetail } from './components/Toast';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateBlockingPanel from './components/update/AppUpdateBlockingPanel';
@@ -235,7 +238,7 @@ const App: React.FC = () => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isTaskFilterActive, setIsTaskFilterActive] = useState(false);
   const [hasUnreadCompletedTasks, setHasUnreadCompletedTasks] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(244);
+  const [sidebarWidth, setSidebarWidth] = useState(260);
   const initialOpenClawEngineStatusRef = useRef(coworkService.getOpenClawEngineStatusSnapshot());
   const [isEngineStartupOverlayVisible, setIsEngineStartupOverlayVisible] = useState(
     () => initialOpenClawEngineStatusRef.current?.phase === OpenClawEnginePhase.Starting,
@@ -257,6 +260,7 @@ const App: React.FC = () => {
   const [isUpdateCardExpanded, setIsUpdateCardExpanded] = useState(false);
   const [isUserInitiatedUpdateFlowActive, setIsUserInitiatedUpdateFlowActive] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
+  const [trialTaskCreatedSignal, setTrialTaskCreatedSignal] = useState(0);
   const [newUserOnboardingStep, setNewUserOnboardingStep] =
     useState<NewUserOnboardingStepType>(NewUserOnboardingStep.NewTask);
   const [isNewUserOnboardingDismissed, setIsNewUserOnboardingDismissed] = useState(false);
@@ -281,6 +285,7 @@ const App: React.FC = () => {
   const pendingNewUserWelcomeAfterLoginSawStartupRef = useRef(false);
   const pendingNewUserWelcomeAfterLoginWaitingLoggedRef = useRef(false);
   const pendingNewUserWelcomeAuthCallbackAtRef = useRef(0);
+  const newUserLoginPendingRef = useRef(false);
   const isUserInitiatedUpdateFlowActiveRef = useRef(false);
   const dispatch = useDispatch();
   const defaultSelectedModel = useSelector((state: RootState) => state.model.defaultSelectedModel);
@@ -301,6 +306,7 @@ const App: React.FC = () => {
   );
   const shouldShowNewUserOnboarding =
     privacyAgreed === false
+    && !authUser
     && !isNewUserOnboardingDismissed
     && hasResolvedEngineStartupOverlayState
     && !isEngineStartupOverlayVisible
@@ -908,6 +914,7 @@ const App: React.FC = () => {
   }, [isSidebarCollapsed, mainView]);
 
   const handleNewChat = useCallback(() => {
+    setTrialTaskCreatedSignal(value => value + 1);
     // Only clear when already on home (no session) — preserve __home__ draft when returning from a session
     const shouldClearInput = mainView === 'cowork' && !currentSessionId;
     coworkService.clearSession({ restoreAgentSkills: true });
@@ -1415,7 +1422,9 @@ const App: React.FC = () => {
     finishNewUserOnboarding('next');
   }, [finishNewUserOnboarding, newUserOnboardingStep]);
 
-  const handleNewUserOnboardingStartExperience = useCallback(() => {
+  const handleNewUserOnboardingStartExperience = useCallback(async () => {
+    if (newUserLoginPendingRef.current) return;
+    newUserLoginPendingRef.current = true;
     console.log('[Onboarding] start experience clicked; starting login handoff');
     reportOnboardingAction('guide_start_experience_click', {
       source: 'new_user_onboarding',
@@ -1423,8 +1432,7 @@ const App: React.FC = () => {
     });
     setNewUserWelcomeAfterLoginPending();
     setNewUserWelcomeAfterLoginSignal((value) => value + 1);
-    finishNewUserOnboarding('start_experience');
-    void authService.login()
+    await authService.login()
       .then((result) => {
         if (!result.success) {
           console.warn(
@@ -1444,6 +1452,7 @@ const App: React.FC = () => {
           source: 'new_user_onboarding',
           result: 'success',
         });
+        finishNewUserOnboarding('start_experience');
         setNewUserWelcomeAfterLoginSignal((value) => value + 1);
       })
       .catch((error) => {
@@ -1455,6 +1464,9 @@ const App: React.FC = () => {
         });
         consumeNewUserWelcomeAfterLoginPending();
         showToast(i18nService.t('welcomeLoginFailed'));
+      })
+      .finally(() => {
+        newUserLoginPendingRef.current = false;
       });
   }, [finishNewUserOnboarding, newUserOnboardingStep, showToast]);
 
@@ -1824,6 +1836,12 @@ const App: React.FC = () => {
     };
   }, [dispatch]);
 
+  useEffect(() => {
+    const openBrowserSettings = () => handleShowSettings({ initialTab: 'browserWebAccess' });
+    window.addEventListener(BrowserPasskeyUiEvent.OpenBrowserSettings, openBrowserSettings);
+    return () => window.removeEventListener(BrowserPasskeyUiEvent.OpenBrowserSettings, openBrowserSettings);
+  }, [handleShowSettings]);
+
   // 监听托盘菜单打开设置的 IPC 事件
   useEffect(() => {
     const unsubscribe = window.electron.ipcRenderer.on('app:openSettings', () => {
@@ -1998,6 +2016,7 @@ const App: React.FC = () => {
       isOverlayActive={isOverlayActive}
       isSidebarCollapsed={isSidebarCollapsed}
       sidebarWidth={sidebarWidth}
+      sidebarColumnVisible={isInitialized && !initError && !isSidebarCollapsed}
       onToggleSidebar={canUseWindowsTopBarActions ? handleToggleSidebar : undefined}
       onSearch={canUseWindowsTopBarActions && !isSidebarCollapsed
         ? handleOpenTaskSearch
@@ -2093,6 +2112,11 @@ const App: React.FC = () => {
           onClose={() => setToastMessage(null)}
         />
       )}
+      <SubscriptionTrialCampaign
+        privacyAgreed={privacyAgreed}
+        taskCreatedSignal={trialTaskCreatedSignal}
+        enabled={privacyAgreed === true && !isOverlayActive && hasResolvedEngineStartupOverlayState && !isEngineStartupOverlayVisible}
+      />
       <StartupCreditCampaign
         enabled={privacyAgreed === true && !isEnterpriseAccount}
       />
@@ -2123,11 +2147,14 @@ const App: React.FC = () => {
           hideLogin={enterpriseConfig?.ui?.login === 'hide'}
           isEngineStartupOverlayVisible={isEngineStartupOverlayVisible}
         />
-        <div className={`flex-1 min-w-0 transition-[padding] duration-200 ease-out ${isSidebarCollapsed ? 'pl-1.5' : ''}`}>
+        <div className="flex-1 min-w-0">
+          {/* The main area meets the sidebar edge to edge (no inset card
+              border or corner), so the gray sidebar and white canvas read as
+              two flat planes. */}
           <div
             data-skin-cowork-frame={mainView === 'cowork' ? 'true' : undefined}
             data-skin-management-frame={mainView !== 'cowork' ? 'true' : undefined}
-            className="relative h-full min-h-0 rounded-xl border border-border bg-background overflow-hidden"
+            className="relative h-full min-h-0 bg-background overflow-hidden"
           >
             {mainView !== 'cowork' && (
               <SkinBackdrop variant={SkinBackdropVariant.Management} />
@@ -2195,12 +2222,14 @@ const App: React.FC = () => {
           </AppUpdateInteractionOverlay>
         )}
         {shouldShowNewUserOnboarding && (
-          <NewUserOnboardingOverlay
-            step={newUserOnboardingStep}
-            onNext={handleNewUserOnboardingNext}
-            onSkip={handleNewUserOnboardingSkip}
-            onStartExperience={handleNewUserOnboardingStartExperience}
-          />
+          <FirstRunLoginIntroduction onStartExperience={handleNewUserOnboardingStartExperience}>
+            <NewUserOnboardingOverlay
+              step={newUserOnboardingStep}
+              onNext={handleNewUserOnboardingNext}
+              onSkip={handleNewUserOnboardingSkip}
+              onStartExperience={handleNewUserOnboardingStartExperience}
+            />
+          </FirstRunLoginIntroduction>
         )}
       </div>
 

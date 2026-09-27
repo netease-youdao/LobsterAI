@@ -1,8 +1,9 @@
 /**
  * McpBridgeServer — authenticated loopback callbacks shared by OpenClaw integrations.
  *
- * Provides AskUser, media-generation, in-app browser and Word editor endpoints.
- * Binds to 127.0.0.1 only and requires the per-process bridge secret.
+ * Provides AskUser, media-generation, decision-model, in-app browser and Word
+ * editor endpoints. Binds to 127.0.0.1 only and requires the per-process bridge
+ * secret.
  */
 import crypto from 'crypto';
 import http from 'http';
@@ -27,6 +28,7 @@ export type AskUserRequest = {
   requestId: string;
   sessionKey?: string;
   questions: Array<{
+    id?: string;
     question: string;
     header?: string;
     title?: string;
@@ -39,6 +41,7 @@ export type AskUserRequest = {
 export type AskUserResponse = {
   behavior: 'allow' | 'deny';
   answers?: Record<string, string>;
+  skippedQuestionIds?: string[];
 };
 
 type PendingAskUser = {
@@ -77,6 +80,25 @@ export type BrowserToolResponse = {
 export type WordToolRequest = BrowserToolRequest;
 export type WordToolResponse = BrowserToolResponse;
 
+export type DecisionToolRequest = {
+  args: Record<string, unknown>;
+  context: {
+    sessionKey: string;
+    toolCallId: string;
+  };
+};
+
+export type DecisionToolResponse = {
+  content: Array<{ type: string; text: string }>;
+  isError?: boolean;
+  details?: Record<string, unknown>;
+};
+
+export type DecisionToolHandler = (
+  request: DecisionToolRequest,
+  signal: AbortSignal,
+) => Promise<DecisionToolResponse>;
+
 export class McpBridgeServer {
   private server: http.Server | null = null;
   private _port: number | null = null;
@@ -86,6 +108,7 @@ export class McpBridgeServer {
   private onAskUserDismissCallback: ((requestId: string) => void) | null = null;
   private onMediaGenerationCallback: ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>) | null = null;
   private onBrowserToolCallback: ((request: BrowserToolRequest) => Promise<BrowserToolResponse>) | null = null;
+  private onDecisionToolCallback: DecisionToolHandler | null = null;
   private onWordToolCallback: ((request: WordToolRequest) => Promise<WordToolResponse>) | null = null;
 
   constructor(secret: string) {
@@ -107,6 +130,10 @@ export class McpBridgeServer {
 
   get browserCallbackUrl(): string | null {
     return this._port ? `http://127.0.0.1:${this._port}/browser/tool` : null;
+  }
+
+  get decisionCallbackUrl(): string | null {
+    return this._port ? `http://127.0.0.1:${this._port}/decision/tool` : null;
   }
 
   get wordCallbackUrl(): string | null {
@@ -143,6 +170,14 @@ export class McpBridgeServer {
 
   onWordTool(callback: (request: WordToolRequest) => Promise<WordToolResponse>): void {
     this.onWordToolCallback = callback;
+  }
+
+  /**
+   * Register a callback for decision_evaluate tool requests. The signal
+   * aborts when the plugin drops the connection (tool call cancelled).
+   */
+  onDecisionTool(callback: DecisionToolHandler): void {
+    this.onDecisionToolCallback = callback;
   }
 
   /**
@@ -276,6 +311,11 @@ export class McpBridgeServer {
 
     if (req.url?.startsWith('/browser/tool')) {
       await this.handleBrowserTool(req, res);
+      return;
+    }
+
+    if (req.url?.startsWith('/decision/tool')) {
+      await this.handleDecisionTool(req, res);
       return;
     }
 
@@ -437,6 +477,47 @@ export class McpBridgeServer {
           isError: true,
         }));
       }
+    }
+  }
+
+  private async handleDecisionTool(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    res.on('close', () => {
+      if (!res.writableFinished) controller.abort();
+    });
+    const reply = (status: number, payload: DecisionToolResponse) => {
+      if (res.writableEnded || res.destroyed) return;
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(payload));
+    };
+
+    try {
+      const body = await this.readBody(req);
+      const request = JSON.parse(body) as Partial<DecisionToolRequest> | null;
+      const args = request?.args;
+      if (!args || typeof args !== 'object' || Array.isArray(args)) {
+        reply(400, { content: [{ type: 'text', text: 'Missing decision tool arguments.' }], isError: true });
+        return;
+      }
+      if (!this.onDecisionToolCallback) {
+        reply(503, { content: [{ type: 'text', text: 'The decision model service is not ready yet.' }], isError: true });
+        return;
+      }
+
+      const result = await this.onDecisionToolCallback({
+        args,
+        context: {
+          sessionKey: typeof request?.context?.sessionKey === 'string' ? request.context.sessionKey : '',
+          toolCallId: typeof request?.context?.toolCallId === 'string' ? request.context.toolCallId : '',
+        },
+      }, controller.signal);
+      log('DEBUG', `Decision tool completed in ${Date.now() - startedAt}ms with isError=${result.isError ?? false}`);
+      reply(200, result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log('ERROR', `Decision tool request failed after ${Date.now() - startedAt}ms: ${message}`);
+      reply(500, { content: [{ type: 'text', text: `Decision model error: ${message}` }], isError: true });
     }
   }
 

@@ -3,6 +3,8 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { OpenClawEngineErrorCode } from '../../shared/openclawEngine/constants';
+import { OPENCLAW_STARTUP_MIGRATION_REFUSAL } from './openclawDreamingStartupFailure';
 import {
   LEGACY_SESSION_SQLITE_IMPORT_MODE,
   type LegacySessionMigrationRunner,
@@ -50,6 +52,48 @@ function archiveWarningFixture(fixture: ReturnType<typeof createWarningImportFix
 }
 
 describe('openclawSessionLegacyMigration', () => {
+  test.each([false, true])('classifies the Agent media migration requirement from CLI output, json=%s', async json => {
+    const legacy = path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json');
+    writeFile(legacy);
+    const cause = `OpenClaw agent database ${path.join(stateDir, 'agents', 'main', 'agent', 'openclaw-agent.sqlite')} uses schema version 1; run openclaw doctor --fix to migrate persisted media before using it.`;
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {},
+      runner: async () => ({ code: 1,
+        stdout: json ? JSON.stringify({ ok: false, error: { type: 'cli_error', message: cause } }) : '',
+        stderr: 'Config warnings: unrelated plugin warning\n[openclaw] Reason: ' + cause,
+      }),
+    });
+    expect(result).toMatchObject({ status: 'failed', errorCode: OpenClawEngineErrorCode.AgentMediaMigrationRequired });
+    expect(fs.readFileSync(legacy, 'utf8')).toBe('{}\n');
+  });
+  test('preserves dreaming failure classification from a long structured CLI error', async () => {
+    writeFile(path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json'));
+    const message = `${OPENCLAW_STARTUP_MIGRATION_REFUSAL}\n- Skipped Memory Core session ingestion import for fixture because the legacy source could not be imported: SyntaxError: invalid JSON\n`
+      + '- another migration warning\n'.repeat(200);
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {},
+      runner: async () => ({ code: 1, stdout: JSON.stringify({ ok: false, error: { type: 'cli_error', message } }), stderr: '' }),
+    });
+    expect(result).toMatchObject({ status: 'failed', errorCode: OpenClawEngineErrorCode.MemoryDreamingMigrationFailed });
+    if (result.status === 'failed') expect(result.error).toContain('session ingestion');
+  });
+  test('surfaces the incident SQLite cli_error instead of duplicate-plugin warnings', async () => {
+    writeFile(path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json'));
+    const cause = `SQLite schema is incomplete or noncanonical for ${path.join(stateDir, 'state', 'openclaw.sqlite')}: column definitions differ for current_conversation_bindings`;
+    const runner = vi.fn<LegacySessionMigrationRunner>().mockResolvedValue({
+      code: 1,
+      stderr: 'Config warnings: plugins.entries.openclaw-weixin: duplicate plugin id\nplugins.entries.acpx: plugin not installed\n[openclaw] Could not start the CLI.\n[openclaw] Reason: ' + cause,
+      stdout: JSON.stringify({ ok: false, error: { type: 'cli_error', message: cause } }),
+    });
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+    });
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.error).toContain(cause);
+      expect(result.error).not.toContain('Config warnings');
+    }
+  });
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-openclaw-session-migration-'));
     stateDir = path.join(tempDir, 'openclaw', 'state');
@@ -91,6 +135,22 @@ describe('openclawSessionLegacyMigration', () => {
     writeFile(workerPath);
 
     expect(listLegacySessionStorePaths(stateDir)).toEqual([sharedPath, mainPath, workerPath]);
+  });
+
+  test('normal migration preserves an unreadable store and reports the failure for explicit repair', async () => {
+    const brokenPath = path.join(stateDir, 'agents', 'worker', 'sessions', 'sessions.json');
+    writeFile(brokenPath, '\uFEFF\uFEFFnot json');
+    const runner = vi.fn<LegacySessionMigrationRunner>().mockResolvedValue({
+      code: 1, stdout: '', stderr: 'store_unreadable',
+    });
+
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+    });
+
+    expect(result.status).toBe('failed');
+    expect(fs.readFileSync(brokenPath, 'utf8')).toBe('\uFEFF\uFEFFnot json');
+    expect(fs.readdirSync(path.dirname(brokenPath))).toEqual(['sessions.json']);
   });
 
   test('runs official doctor with the same state and config then verifies migration', async () => {

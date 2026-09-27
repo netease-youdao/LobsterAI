@@ -7,6 +7,7 @@ import {
   BrowserCredentialUseMode,
   type BrowserCredentialUseMode as BrowserCredentialUseModeValue,
 } from '../browserCredentials/constants';
+import type { BrowserPasskeyNotice } from './passkeys';
 
 export const BrowserProfileMode = {
   Managed: 'managed',
@@ -116,6 +117,7 @@ export const BrowserIpc = {
   ClearHostCache: 'openclaw:browser:clearHostCache',
   DismissCredentialLoginStatus: 'openclaw:browser:dismissCredentialLoginStatus',
   ResolveCredentialSavePrompt: 'openclaw:browser:resolveCredentialSavePrompt',
+  ResolvePasskey: 'openclaw:browser:resolvePasskey',
   HostState: 'openclaw:browser:hostState',
 } as const;
 
@@ -211,6 +213,7 @@ export interface AgentBrowserHostState {
   updatedAt: number;
   credentialLogin?: BrowserCredentialLoginState;
   credentialSavePrompt?: BrowserCredentialSavePrompt;
+  passkey?: BrowserPasskeyNotice;
   error?: string;
 }
 

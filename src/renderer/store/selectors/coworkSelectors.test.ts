@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'vitest';
 
-import { CoworkSessionStatusValue } from '../../types/cowork';
+import { SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../../shared/cowork/constants';
+import { type CoworkPermissionRequest, CoworkSessionStatusValue } from '../../types/cowork';
 import type { RootState } from '../index';
-import { selectHasRunningCoworkSessions } from './coworkSelectors';
+import {
+  selectFirstCurrentSessionPendingPermission,
+  selectHasRunningCoworkSessions,
+} from './coworkSelectors';
 
 type SessionLike = { id: string; status: string };
 
@@ -44,5 +48,31 @@ describe('selectHasRunningCoworkSessions', () => {
       currentSession: { id: 'a', status: CoworkSessionStatusValue.Running },
     }))).toBe(true);
     expect(selectHasRunningCoworkSessions(createState({ isStreaming: true }))).toBe(true);
+  });
+});
+
+describe('selectFirstCurrentSessionPendingPermission', () => {
+  const question = (requestId: string, sessionId = 'a'): CoworkPermissionRequest => ({
+    sessionId,
+    requestId,
+    toolName: 'AskUserQuestion',
+    toolInput: { questions: [{ question: 'Which?', options: [{ label: 'A' }, { label: 'B' }] }] },
+  });
+  const approval: CoworkPermissionRequest = {
+    sessionId: 'a', requestId: 'approval', toolName: 'Bash', toolInput: { command: 'rm -rf build' },
+  };
+  const stateWith = (pendingPermissions: CoworkPermissionRequest[], currentSessionId: string | null = 'a') => ({
+    cowork: { pendingPermissions, currentSessionId },
+  } as unknown as RootState);
+
+  test('skips questions the inline dock renders and keeps approvals in the modal', () => {
+    expect(selectFirstCurrentSessionPendingPermission(stateWith([question('q1'), approval]))).toBe(approval);
+    expect(selectFirstCurrentSessionPendingPermission(stateWith([question('q1')]))).toBeNull();
+  });
+
+  test('still surfaces session-agnostic questions as the modal fallback', () => {
+    const agnostic = question('q2', SESSION_AGNOSTIC_PERMISSION_SESSION_ID);
+    expect(selectFirstCurrentSessionPendingPermission(stateWith([question('q1'), agnostic]))).toBe(agnostic);
+    expect(selectFirstCurrentSessionPendingPermission(stateWith([agnostic], null))).toBe(agnostic);
   });
 });

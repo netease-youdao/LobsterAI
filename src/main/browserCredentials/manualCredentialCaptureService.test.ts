@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import {
+  type BrowserCredentialAvailability,
+  BrowserCredentialAvailabilityReason,
   BrowserCredentialSaveDecision,
   BrowserCredentialSaveMode,
   type BrowserCredentialSavePrompt,
@@ -17,6 +19,7 @@ describe('ManualCredentialCaptureService', () => {
   let saved: BrowserCredentialSaveRequest[];
   let existingUsernames: string[];
   let saveMode: BrowserCredentialSaveMode;
+  let availability: BrowserCredentialAvailability;
   let service: ManualCredentialCaptureService;
 
   beforeEach(() => {
@@ -25,8 +28,9 @@ describe('ManualCredentialCaptureService', () => {
     saved = [];
     existingUsernames = [];
     saveMode = BrowserCredentialSaveMode.Ask;
+    availability = { available: true };
     const credentialService = {
-      getAvailability: () => ({ available: true }),
+      getAvailability: () => availability,
       list: (origin?: string) => existingUsernames.map((username, index) => ({
         id: String(index),
         origin: origin ?? 'https://example.com',
@@ -105,6 +109,36 @@ describe('ManualCredentialCaptureService', () => {
     });
     vi.advanceTimersByTime(30_000);
 
+    expect(prompts).toEqual([]);
+    expect(saved).toEqual([]);
+  });
+
+  test('offers a first save before OS access has been requested', () => {
+    availability = { available: false, reason: BrowserCredentialAvailabilityReason.AccessNotRequested };
+    service.capture({
+      pageId: 1,
+      url: 'https://example.com/login',
+      username: 'alice',
+      password: 'secret',
+      formKind: ManualCredentialFormKind.Login,
+    });
+    service.observePageState({ pageId: 1, url: 'https://example.com/account', hasPasswordField: false });
+    vi.advanceTimersByTime(1_200);
+    expect(prompts.at(-1)?.username).toBe('alice');
+    expect(saved).toEqual([]);
+  });
+
+  test('keeps manual login observation quiet after OS access was denied', () => {
+    availability = { available: false, reason: BrowserCredentialAvailabilityReason.EncryptionUnavailable };
+    service.capture({
+      pageId: 1,
+      url: 'https://example.com/login',
+      username: 'alice',
+      password: 'secret',
+      formKind: ManualCredentialFormKind.Login,
+    });
+    service.observePageState({ pageId: 1, url: 'https://example.com/account', hasPasswordField: false });
+    vi.advanceTimersByTime(1_200);
     expect(prompts).toEqual([]);
     expect(saved).toEqual([]);
   });

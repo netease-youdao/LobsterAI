@@ -1,21 +1,366 @@
 diff --git a/src/logging/redact-patterns.ts b/src/logging/redact-patterns.ts
-index 28d256b4521..e130622940f 100644
 --- a/src/logging/redact-patterns.ts
 +++ b/src/logging/redact-patterns.ts
-@@ -79,7 +79,7 @@ const AMBIGUOUS_QUOTED_AUTH_FIELD_REDACT_PATTERN = String.raw`(^|[\s,{])["']?(?:
- // Pure-base64 prefixes require a non-alphanumeric boundary and skip explicit data-URL payloads.
- export const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])(?<!;base64,[A-Za-z0-9+/=]*)`;
+@@ -81,7 +81,7 @@
  export const IDENTIFIER_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9_])`;
--const AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY = String.raw`(^|[^A-Za-z0-9/+=_])(?<!;base64,[A-Za-z0-9+/=]*)`;
-+const AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY = String.raw`(^|[^A-Za-z0-9/+=_])(?<!;base64,[A-Za-z0-9+/=]*)(?<![A-Za-z]:)`;
+ const AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY = String.raw`(^|[^A-Za-z0-9/+=_])(?<!;base64,[A-Za-z0-9+/=]*)`;
  export const AWS_SECRET_ACCESS_KEY_VALUE_PATTERN = String.raw`(?=[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=]))(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[^A-Fa-f0-9])[A-Za-z0-9/+=]{40}`;
- const AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN = String.raw`/${AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY}(${AWS_SECRET_ACCESS_KEY_VALUE_PATTERN})(?!_)/g`;
+-const AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN = String.raw`/${AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY}(${AWS_SECRET_ACCESS_KEY_VALUE_PATTERN})(?!_)/g`;
++export const AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN = String.raw`/${AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY}(${AWS_SECRET_ACCESS_KEY_VALUE_PATTERN})(?!_)/g`;
  const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
+ const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
+ const CREDENTIAL_STYLE_HEADER_KEYS = "x-goog-api-key|api-key|apikey|x-api-token|x-access-token";
+diff --git a/src/logging/redact-file-path.ts b/src/logging/redact-file-path.ts
+new file mode 100644
+--- /dev/null
++++ b/src/logging/redact-file-path.ts
+@@ -0,0 +1,67 @@
++const FILE_PATH_CONTEXT_LIMIT = 4096;
++const FILE_PATH_ROOT =
++  /^(?:file:\/\/\/(?:[A-Za-z]:\/)?|[A-Za-z]:[\\/]|\\\\|\/(?!\/)|~\/|\$(?:HOME|\{HOME\})\/|\.{1,2}\/)/;
++const PATH_ARGUMENT_DELIMITERS = /[\s"'`()[\]{}<>;|&=]/;
++
++/** Exempt only a fragment of a rooted filename, never an ambiguous complete AWS token. */
++export function isAwsSecretFilePathMatch(input: string, offset: number, token: string): boolean {
++  if (offset < 0) {
++    return false;
++  }
++  const tokenEnd = offset + token.length;
++  const hasFilenameContinuation =
++    /^[.-][A-Za-z0-9_]|^\\/.test(input.slice(tokenEnd, tokenEnd + 2)) ||
++    /[A-Za-z0-9_][.-]$|\\$/.test(input.slice(Math.max(0, offset - 2), offset));
++  if (!hasFilenameContinuation) {
++    return false;
++  }
++  const floor = Math.max(0, offset - FILE_PATH_CONTEXT_LIMIT);
++  const ceiling = Math.min(input.length, tokenEnd + FILE_PATH_CONTEXT_LIMIT);
++  const context = input.slice(floor, ceiling);
++  const tokenStart = offset - floor;
++  const end = tokenEnd - floor;
++  const isPath = (start: number, stop: number): boolean => {
++    if (
++      start < 0 ||
++      start >= tokenStart ||
++      stop < end ||
++      stop > context.length ||
++      (start === 0 && floor > 0) ||
++      (stop === context.length && ceiling < input.length)
++    ) {
++      return false;
++    }
++    const candidate = context.slice(start, stop);
++    const root = candidate.match(FILE_PATH_ROOT);
++    // Do not span commands, fields, prose quotes, or URL credentials/query parameters.
++    return root !== null && !/[\r\n"'`<>;|&=?:]/.test(candidate.slice(root[0].length));
++  };
++
++  // Spaces belong to a path only inside its own enclosing argument; nearby prose is not a path.
++  for (const [open, close] of [
++    ['"', '"'],
++    ["'", "'"],
++    ["`", "`"],
++    ["(", ")"],
++    ["<", ">"],
++  ] as const) {
++    const start = context.lastIndexOf(open, tokenStart - 1);
++    if (start < 0) {
++      continue;
++    }
++    const stop = context.indexOf(close, start + 1);
++    if (isPath(start + 1, stop)) {
++      return true;
++    }
++  }
++  let start = tokenStart;
++  let stop = end;
++  while (start > 0 && !PATH_ARGUMENT_DELIMITERS.test(context.charAt(start - 1))) {
++    start -= 1;
++  }
++  while (stop < context.length && !PATH_ARGUMENT_DELIMITERS.test(context.charAt(stop))) {
++    stop += 1;
++  }
++  // A truncated scan cannot establish an argument boundary.
++  return isPath(start, stop);
++}
+diff --git a/src/logging/redact.ts b/src/logging/redact.ts
+--- a/src/logging/redact.ts
++++ b/src/logging/redact.ts
+@@ -10,10 +10,12 @@
+ import { compileConfigRegex } from "../security/config-regex.js";
+ import { readLoggingConfig } from "./config.js";
+ import { replacePatternBounded } from "./redact-bounded.js";
++import { isAwsSecretFilePathMatch } from "./redact-file-path.js";
+ import { isFullContextToolPayloadRedaction } from "./redact-internal.js";
+ import {
+   AWS_SECRET_ACCESS_KEY_FIELD_KEYS,
+   AWS_SECRET_ACCESS_KEY_VALUE_PATTERN,
++  AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN,
+   BASE64_SAFE_TOKEN_BOUNDARY,
+   BODY_SECRET_KEYS,
+   CHUNK_UNSAFE_PATTERN_SOURCES,
+@@ -44,6 +46,8 @@
+ const chunkUnsafePatterns = new WeakSet<RegExp>();
+ const formAwareEqualsAssignmentPatterns = new WeakSet<RegExp>();
+ const sourceAssignmentPatterns = new WeakSet<RegExp>();
++const bareAwsSecretPatterns = new WeakSet<RegExp>();
++const builtInPatternStarts = new WeakMap<readonly RedactPattern[], number>();
+ let defaultResolvedPatterns: RegExp[] | undefined;
+ let toolPayloadResolvedPatterns: RegExp[] | undefined;
+
+@@ -151,7 +155,7 @@
+   return value === "off" ? "off" : DEFAULT_REDACT_MODE;
+ }
+
+-function parsePattern(raw: RedactPattern): RegExp | null {
++function parsePattern(raw: RedactPattern, builtIn = false): RegExp | null {
+   let pattern: RegExp | null = null;
+   if (raw instanceof RegExp) {
+     if (raw.flags.includes("g")) {
+@@ -174,6 +178,11 @@
+   if (pattern && typeof raw === "string" && SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
+     shellReferencePreservingPatterns.add(pattern);
+   }
++  if (pattern && builtIn && raw === AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN) {
++    // compileConfigRegex caches by source; keep custom rules from sharing this exemption.
++    pattern = new RegExp(pattern.source, pattern.flags);
++    bareAwsSecretPatterns.add(pattern);
++  }
+   if (pattern && typeof raw === "string" && TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(raw)) {
+     sourceAssignmentPatterns.add(pattern);
+   }
+@@ -194,18 +203,34 @@
+
+ function resolvePatterns(value?: readonly RedactPattern[]): RegExp[] {
+   if (value === TOOL_PAYLOAD_REDACT_PATTERNS) {
+-    toolPayloadResolvedPatterns ??= TOOL_PAYLOAD_REDACT_PATTERNS.map(parsePattern).filter(
+-      (re): re is RegExp => Boolean(re),
+-    );
++    toolPayloadResolvedPatterns ??= TOOL_PAYLOAD_REDACT_PATTERNS.map((raw) =>
++      parsePattern(raw, true),
++    ).filter((re): re is RegExp => Boolean(re));
+     return toolPayloadResolvedPatterns;
+   }
+-  if (!value?.length) {
+-    defaultResolvedPatterns ??= DEFAULT_REDACT_PATTERNS.map(parsePattern).filter(
+-      (re): re is RegExp => Boolean(re),
+-    );
++  if (!value?.length || value === DEFAULT_REDACT_PATTERNS) {
++    defaultResolvedPatterns ??= DEFAULT_REDACT_PATTERNS.map((raw) =>
++      parsePattern(raw, true),
++    ).filter((re): re is RegExp => Boolean(re));
+     return defaultResolvedPatterns;
+   }
+-  return value.map(parsePattern).filter((re): re is RegExp => Boolean(re));
++  const builtInStart = builtInPatternStarts.get(value) ?? value.length;
++  return value
++    .map((raw, index) => parsePattern(raw, index >= builtInStart))
++    .filter((re): re is RegExp => Boolean(re));
++}
++
++function mergeRedactPatterns(
++  custom: readonly RedactPattern[] | undefined,
++  builtIn: readonly RedactPattern[],
++): readonly RedactPattern[] {
++  if (!custom?.length) {
++    return builtIn;
++  }
++  const patterns = [...custom, ...builtIn];
++  // User rules stay authoritative even when their source equals a built-in heuristic.
++  builtInPatternStarts.set(patterns, custom.length);
++  return patterns;
+ }
+
+ function includesDefaultRedactPatterns(value?: readonly RedactPattern[]): boolean {
+@@ -704,6 +729,16 @@
+   }
+   const selected = selectSecretCapture(match, groups);
+   const token = selected.value;
++  if (
++    bareAwsSecretPatterns.has(pattern) &&
++    isAwsSecretFilePathMatch(
++      context?.input ?? "",
++      (context?.offset ?? -1) + match.length - token.length,
++      token,
++    )
++  ) {
++    return match;
++  }
+   if (
+     sourceAssignmentPatterns.has(pattern) &&
+     context?.preserveSourceAssignment?.(
+@@ -833,6 +868,16 @@
+     fullMatch,
+     match.slice(1).map((value) => (typeof value === "string" ? value : "")),
+   );
++  if (
++    bareAwsSecretPatterns.has(pattern) &&
++    isAwsSecretFilePathMatch(
++      input,
++      match.index + fullMatch.length - selected.value.length,
++      selected.value,
++    )
++  ) {
++    return;
++  }
+   const tokenStart =
+     selected.value === fullMatch
+       ? 0
+@@ -949,10 +994,7 @@
+   loggingConfig: LoggingConfig | undefined = readLoggingConfig(),
+ ): RedactOptions {
+   const userPatterns = loggingConfig?.redactPatterns;
+-  const patterns =
+-    userPatterns && userPatterns.length > 0
+-      ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
+-      : undefined;
++  const patterns = mergeRedactPatterns(userPatterns, DEFAULT_REDACT_PATTERNS);
+   return { mode: "tools", patterns };
+ }
+
+@@ -960,15 +1002,10 @@
+   loggingConfig: LoggingConfig | undefined = readLoggingConfig(),
+ ): RedactOptions {
+   const userPatterns = loggingConfig?.redactPatterns;
+-  const hasUserPatterns = userPatterns && userPatterns.length > 0;
+   return {
+     mode: "tools",
+-    patterns: hasUserPatterns
+-      ? [...userPatterns, ...TOOL_PAYLOAD_REDACT_PATTERNS]
+-      : TOOL_PAYLOAD_REDACT_PATTERNS,
+-    sensitiveFieldPatterns: hasUserPatterns
+-      ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
+-      : DEFAULT_REDACT_PATTERNS,
++    patterns: mergeRedactPatterns(userPatterns, TOOL_PAYLOAD_REDACT_PATTERNS),
++    sensitiveFieldPatterns: mergeRedactPatterns(userPatterns, DEFAULT_REDACT_PATTERNS),
+   };
+ }
+
+@@ -1244,7 +1281,9 @@
+ }
+
+ export function getDefaultRedactPatterns(): string[] {
+-  return [...DEFAULT_REDACT_PATTERNS];
++  const patterns = [...DEFAULT_REDACT_PATTERNS];
++  builtInPatternStarts.set(patterns, 0);
++  return patterns;
+ }
+
+ // Applies already-resolved redaction to a batch of lines without re-resolving options.
+diff --git a/src/logging/redact-file-path.test.ts b/src/logging/redact-file-path.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/logging/redact-file-path.test.ts
+@@ -0,0 +1,106 @@
++import { afterEach, describe, expect, it } from "vitest";
++import { AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN } from "./redact-patterns.js";
++import {
++  computeSensitiveRedactionBitmap,
++  getDefaultRedactPatterns,
++  redactSensitiveText,
++  redactToolPayloadTextWithConfig,
++  resolveRedactOptions,
++} from "./redact.js";
++import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
++import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
++
++const macPath = "/Users/tester/Library/Application Support/LobsterAI/openclaw/state/gateway-token";
++const linuxPath = "/home/tester/Application-Support/LobsterAI/openclaw/state/gateway-token";
++const windowsPath = "C:/Users/tester/lobsterai/project/chinajoy-ppt/deck.pptx";
++const pathFragment = "Support/LobsterAI/openclaw/state/gateway";
++const secret = "Wj7/".repeat(10);
++const fileComponent = "Gx9Q".repeat(10);
++
++afterEach(resetSecretRedactionRegistryForTest);
++
++describe("file paths in credential redaction", () => {
++  it.each([
++    `cat "${macPath}"`,
++    `The file is \`${macPath}\`.`,
++    `[token file](file://${macPath})`,
++    JSON.stringify({ text: macPath }),
++    JSON.stringify({ command: `cat "${macPath}"` }),
++    linuxPath,
++    `cat '${linuxPath}'`,
++    windowsPath,
++    `[deck](file:///${windowsPath})`,
++    `cat "C:${macPath}"`,
++    String.raw`C:\Users\tester\${fileComponent}.json`,
++    String.raw`C:\Users\tester\${fileComponent}\next.txt`,
++    `/tmp/report-${fileComponent}.txt`,
++    `before\n${"x".repeat(32_760)} cat "${macPath}"\nafter`,
++  ])("preserves the complete path in case %#", (input) => {
++    expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
++    expect(redactToolPayloadTextWithConfig(input)).toBe(input);
++    const explicitDefaults = { mode: "tools" as const, patterns: getDefaultRedactPatterns() };
++    expect(redactSensitiveText(input, explicitDefaults)).toBe(input);
++    expect(
++      computeSensitiveRedactionBitmap(input, resolveRedactOptions(explicitDefaults)),
++    ).not.toContain(true);
++    expect(
++      computeSensitiveRedactionBitmap(input, resolveRedactOptions({ mode: "tools" })),
++    ).not.toContain(true);
++  });
++
++  it.each([
++    `bare ${secret}`,
++    `bare ${secret}.`,
++    `x:${secret}`,
++    `bare ${"/Ab7".repeat(10)}`,
++    `bare ${"/Ab7".repeat(10)}-suffix`,
++    `bare ${"/Ab7".repeat(10)}.txt`,
++    `bare ${pathFragment}`,
++    `AWS_SECRET_ACCESS_KEY="${secret}"`,
++    JSON.stringify({ SecretAccessKey: secret }),
++    `tool --aws-secret-access-key '${secret}'`,
++    `cat "${macPath}"; printf '${secret}'`,
++    `/tmp/notes ${secret}`,
++    `Read /tmp/notes first; the key is ${secret}`,
++    `path=/tmp/a plus ${secret}-suffix`,
++    `/tmp/a plus ${secret}-suffix`,
++    `/tmp/a ${secret}.json`,
++    `"/tmp/a" ${secret}-suffix`,
++    `echo "/tmp/a" "${secret}"`,
++  ])("still masks credentials in case %#", (input) => {
++    const credential = input.includes(secret)
++      ? secret
++      : input.includes(pathFragment)
++        ? pathFragment
++        : "/Ab7".repeat(10);
++    expect(redactSensitiveText(input, { mode: "tools" })).not.toContain(credential);
++    expect(redactToolPayloadTextWithConfig(input)).not.toContain(credential);
++    expect(
++      computeSensitiveRedactionBitmap(input, resolveRedactOptions({ mode: "tools" })),
++    ).toContain(true);
++  });
++
++  it("keeps custom and registered secret rules authoritative inside paths", () => {
++    const input = `cat "${macPath}"`;
++    expect(redactToolPayloadTextWithConfig(input, { redactPatterns: ["unrelated-marker"] })).toBe(
++      input,
++    );
++    expect(
++      redactToolPayloadTextWithConfig(input, {
++        redactPatterns: [AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN],
++      }),
++    ).not.toContain(pathFragment);
++    expect(
++      redactToolPayloadTextWithConfig(input, { redactPatterns: [pathFragment] }),
++    ).not.toContain(pathFragment);
++    registerSecretValueForRedaction(pathFragment);
++    expect(redactSensitiveText(input, { mode: "tools" })).not.toContain(pathFragment);
++    expect(redactToolPayloadTextWithConfig(input)).not.toContain(pathFragment);
++  });
++
++  it("still masks explicitly labeled path-shaped credentials", () => {
++    const input = JSON.stringify({ SecretAccessKey: macPath });
++    expect(redactSensitiveText(input, { mode: "tools" })).not.toContain(macPath);
++    expect(redactToolPayloadTextWithConfig(input)).not.toContain(macPath);
++  });
++});
 diff --git a/src/logging/redact.test.ts b/src/logging/redact.test.ts
-index 83fceb7541a..a23f5a68ef7 100644
 --- a/src/logging/redact.test.ts
 +++ b/src/logging/redact.test.ts
-@@ -288,4 +288,10 @@
+@@ -288,6 +288,12 @@
      expect(output).toContain(`"SecretAccessKey":"${masked}"`);
      expect(output).toContain(`bare ${masked}`);
      expect(output).not.toContain(secret);
@@ -26,3 +371,51 @@ index 83fceb7541a..a23f5a68ef7 100644
 +    expect(redactSensitiveText(windowsPath, { mode: "tools" })).toBe(windowsPath);
 +    expect(redactSensitiveText(fileLink, { mode: "tools" })).toBe(fileLink);
    });
+
+   it("masks structured AWS secret access key fields", () => {
+diff --git a/src/agents/embedded-agent-error-observation.ts b/src/agents/embedded-agent-error-observation.ts
+--- a/src/agents/embedded-agent-error-observation.ts
++++ b/src/agents/embedded-agent-error-observation.ts
+@@ -6,7 +6,7 @@
+ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+ import { readLoggingConfig } from "../logging/config.js";
+ import { redactIdentifier } from "../logging/redact-identifier.js";
+-import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
++import { redactToolPayloadTextWithConfig } from "../logging/redact.js";
+ import {
+   classifyProviderRuntimeFailureKind,
+   getApiErrorPayloadFingerprint,
+@@ -74,13 +74,8 @@
+   // Observation logs must stay redacted even when operators disable general-purpose
+   // log redaction, otherwise raw provider payloads leak back into always-on logs.
+   const configuredPatterns = resolveConfiguredRedactPatterns();
+-  return redactSensitiveText(text, {
+-    mode: "tools",
+-    patterns: [
+-      ...getDefaultRedactPatterns(),
+-      ...configuredPatterns,
+-      ...OBSERVATION_EXTRA_REDACT_PATTERNS,
+-    ],
++  return redactToolPayloadTextWithConfig(text, {
++    redactPatterns: [...configuredPatterns, ...OBSERVATION_EXTRA_REDACT_PATTERNS],
+   });
+ }
+
+diff --git a/src/agents/embedded-agent-error-observation.test.ts b/src/agents/embedded-agent-error-observation.test.ts
+--- a/src/agents/embedded-agent-error-observation.test.ts
++++ b/src/agents/embedded-agent-error-observation.test.ts
+@@ -31,6 +31,14 @@
+     expect(observed.providerErrorMessagePreview).toBe("Overloaded");
+     expect(observed.requestIdHash?.startsWith("sha256:")).toBe(true);
+     expect(observed.rawErrorPreview).not.toContain("req_overload");
++  });
++
++  it("preserves quoted file paths while masking nearby credentials", () => {
++    const path = "/Users/tester/Library/Application Support/LobsterAI/openclaw/state/gateway-token";
++    const credential = "Wj7/".repeat(10);
++    const observed = buildApiErrorObservationFields(`Cannot read "${path}"; secret: ${credential}`);
++    expect(observed.rawErrorPreview).toContain(path);
++    expect(observed.rawErrorPreview).not.toContain(credential);
+   });
+
+   it("forces token redaction for observation previews", () => {

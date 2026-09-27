@@ -227,7 +227,7 @@ npm run dsh:runtime:verify-urls mac-arm64
 <summary>升级 dsh 版本</summary>
 
 1. 修改 `package.json` 的 `dsh.version`。
-2. 复制补丁目录：`cp -R scripts/dsh-patches/<旧版本> scripts/dsh-patches/<新版本>`。补丁按版本号查找，目录缺失时**一个补丁都不会应用且不会报错**——Windows 控制台隐藏与目录选择器两个修复会就此静默消失。复制后构建时的 sentinel 会重新校验每个补丁是否仍能落地，上游改动导致失效时会让构建失败。
+2. 在新版本目录尚不存在时复制补丁目录：`cp -R scripts/dsh-patches/<旧版本> scripts/dsh-patches/<新版本>`（`<新版本>` 目录已存在时，`cp` 会把副本嵌套到下一层，构建时一个补丁都找不到）。补丁按版本号查找，目录缺失时**一个补丁都不会应用且不会报错**——Windows 控制台隐藏修复会就此静默消失。复制后构建时的 sentinel 会重新校验每个补丁是否仍能落地，上游挪动代码时构建失败：此时改写补丁目标，并在 `scripts/build-dsh-runtime.cjs` 的 `PATCH_SENTINELS` 中登记新的 sentinel；上游已带上修复则删掉该补丁（目录选择器修复自 0.1.5 起已在上游，控制台隐藏修复自 0.1.6-alpha.2 起在上游）。
 3. 清空 `dsh.runtimes`。残留的旧描述仍能通过摘要校验，于是旧 runtime 会被安装到新版本号命名的目录下。
 4. 按上文重新构建、上传并登记三个平台。
 5. 重跑 `npm run dsh:runtime:verify-urls` 与 `npm run dsh:e2e`。

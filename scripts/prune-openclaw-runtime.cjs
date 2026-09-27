@@ -106,6 +106,59 @@ const PACKAGES_TO_STUB = [
   // module and by exec-tool scripts that use require('sharp').
 ];
 
+// koffi backs OpenClaw's native Windows private-directory helper
+// (scripts/patches/<version>/openclaw-windows-private-directory-native.patch),
+// which replaced the PowerShell + Add-Type spawn that security software blocks.
+// Windows runtimes keep the real package and its @koromix/koffi-win32-* binary;
+// every other target still ships the stub.
+const KOFFI_PACKAGE = 'koffi';
+const WINDOWS_RUNTIME_TARGET_PREFIX = 'win-';
+// Build-only koffi content that its runtime loader never reads.
+const KOFFI_BUILD_ONLY_PATHS = ['doc', 'vendor', 'CHANGELOG.md', 'cnoke.cjs'];
+
+function readRuntimeTarget(runtimeRoot) {
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(runtimeRoot, 'runtime-build-info.json'), 'utf8'));
+    return typeof info.target === 'string' ? info.target : '';
+  } catch {
+    return '';
+  }
+}
+
+function isWindowsRuntimeTarget(target) {
+  return typeof target === 'string' && target.startsWith(WINDOWS_RUNTIME_TARGET_PREFIX);
+}
+
+function resolvePackagesToStub(target) {
+  return PACKAGES_TO_STUB.filter(pkgName => !(pkgName === KOFFI_PACKAGE && isWindowsRuntimeTarget(target)));
+}
+
+function getPathSize(target) {
+  try {
+    const stat = fs.statSync(target);
+    return stat.isDirectory() ? getDirSize(target) : stat.size;
+  } catch {
+    return 0;
+  }
+}
+
+function trimKoffiBuildFiles(nodeModulesDir, stats) {
+  const koffiDir = path.join(nodeModulesDir, KOFFI_PACKAGE);
+  if (!fs.existsSync(koffiDir)) return [];
+  const removed = [];
+  for (const relative of KOFFI_BUILD_ONLY_PATHS) {
+    const target = path.join(koffiDir, relative);
+    if (!fs.existsSync(target)) continue;
+    const size = getPathSize(target);
+    const isDirectory = fs.statSync(target).isDirectory();
+    fs.rmSync(target, { recursive: true, force: true });
+    stats.bytesFreed += size;
+    if (isDirectory) stats.dirsRemoved++; else stats.filesRemoved++;
+    removed.push(relative);
+  }
+  return removed;
+}
+
 const GENERIC_STUB_INDEX_CJS = `// Stub (CJS): this package is not needed for headless gateway operation.
 module.exports = new Proxy({}, {
   get(_, prop) {
@@ -295,15 +348,25 @@ function main() {
     );
   }
 
-  // Step 2: Replace large unnecessary packages with stubs
-  for (const pkgName of PACKAGES_TO_STUB) {
+  // Step 2: Replace large unnecessary packages with stubs. Windows runtimes
+  // keep koffi for the native private-directory helper.
+  const runtimeTarget = readRuntimeTarget(runtimeRoot);
+  const packagesToStub = resolvePackagesToStub(runtimeTarget);
+  if (!packagesToStub.includes(KOFFI_PACKAGE)) {
+    const trimmed = trimKoffiBuildFiles(nodeModulesDir, stats);
+    console.log(
+      `[prune-openclaw-runtime] Keeping ${KOFFI_PACKAGE} for ${runtimeTarget}: native Windows private-directory helper` +
+        (trimmed.length > 0 ? ` (trimmed ${trimmed.join(', ')})` : '')
+    );
+  }
+  for (const pkgName of packagesToStub) {
     stubPackage(path.join(nodeModulesDir, pkgName), pkgName, stats);
   }
 
   // Step 2a: Remove orphaned platform-specific binaries for stubbed packages.
   // When a package like @tloncorp/tlon-skill is stubbed, its optionalDependencies
   // (e.g. @tloncorp/tlon-skill-darwin-x64) remain as orphaned siblings.
-  for (const pkgName of PACKAGES_TO_STUB) {
+  for (const pkgName of packagesToStub) {
     if (!pkgName.startsWith('@')) continue;
     const [scope, base] = pkgName.split('/');
     const scopeDir = path.join(nodeModulesDir, scope);
@@ -404,7 +467,14 @@ function main() {
 
 module.exports = {
   BUNDLED_EXTENSIONS_TO_KEEP,
+  KOFFI_BUILD_ONLY_PATHS,
+  KOFFI_PACKAGE,
+  PACKAGES_TO_STUB,
+  isWindowsRuntimeTarget,
+  readRuntimeTarget,
+  resolvePackagesToStub,
   shouldKeepBundledExtension,
+  trimKoffiBuildFiles,
 };
 
 if (require.main === module) {

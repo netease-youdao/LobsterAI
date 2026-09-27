@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { readJsonFile, writeJsonFile } = require('./common.cjs');
+const { patchWeixinDeliveryLog, patchWeixinSendReceipt } = require('./weixin-send-receipt.cjs');
 
 const WEIXIN_PLUGIN_VERSION = '2.4.3';
 const WEIXIN_LAZY_OUTBOUND_HOOKS_MARKER = 'lobster_weixin_lazy_outbound_hooks';
@@ -251,6 +252,10 @@ function patchWeixin({ runtimeExtensionsDir, log }) {
     return;
   }
 
+  for (const relativePath of ['src/api/api.ts', 'dist/src/api/api.js']) {
+    patchWeixinSendReceipt(path.join(pluginDir, relativePath), `openclaw-weixin/${relativePath}`, log);
+  }
+
   const sdkImportFiles = [
     path.join(pluginDir, 'index.js'),
     path.join(pluginDir, 'src', 'channel.ts'),
@@ -304,6 +309,13 @@ function patchWeixin({ runtimeExtensionsDir, log }) {
     'openclaw-weixin/src/messaging/process-message.ts',
     log,
   );
+
+  for (const relativePath of [
+    'src/channel.ts', 'dist/src/channel.js',
+    'src/messaging/process-message.ts', 'dist/src/messaging/process-message.js',
+  ]) {
+    patchWeixinDeliveryLog(path.join(pluginDir, relativePath), `openclaw-weixin/${relativePath}`, log);
+  }
   patchWeixinLazyInboundSdk(
     path.join(pluginDir, 'dist', 'src', 'messaging', 'process-message.js'),
     'openclaw-weixin/dist/src/messaging/process-message.js',

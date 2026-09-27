@@ -1,0 +1,141 @@
+// Extracted from moltbot-popo 2.1.13 (MIT), dist SDK facade.
+// src/openclaw-sdk.ts
+import { createRequire } from "module";
+import { join, dirname } from "path";
+import { readFileSync, realpathSync } from "fs";
+import { fileURLToPath } from "url";
+var __filename_local = fileURLToPath(import.meta.url);
+var __dirname_local = dirname(__filename_local);
+var _openclawRequire = null;
+var REQUIRED_SUBPATHS = [
+  "core",
+  "channel-status",
+  "channel-reply-pipeline",
+  "channel-feedback",
+  "reply-history"
+];
+function hasRequiredExports(packageRoot) {
+  try {
+    const raw = readFileSync(join(packageRoot, "package.json"), "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed.name !== "openclaw") return false;
+    const exports = parsed.exports;
+    if (!exports) return false;
+    return REQUIRED_SUBPATHS.every((sub) => `./plugin-sdk/${sub}` in exports);
+  } catch {
+    return false;
+  }
+}
+function tryRequireFromRoot(packageRoot) {
+  if (!hasRequiredExports(packageRoot)) return null;
+  const req = createRequire(join(packageRoot, "dist", "plugins", "loader.js"));
+  try {
+    req.resolve("openclaw/plugin-sdk/core");
+    return req;
+  } catch {
+    return null;
+  }
+}
+function walkUpForOpenClaw(startDir, maxDepth = 12) {
+  let cursor = startDir;
+  for (let i = 0; i < maxDepth; i++) {
+    try {
+      const pkgPath = join(cursor, "package.json");
+      const raw = readFileSync(pkgPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed.name === "openclaw" && hasRequiredExports(cursor)) {
+        return cursor;
+      }
+    } catch {
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  return null;
+}
+function getOpenClawRequire() {
+  if (_openclawRequire) return _openclawRequire;
+  const argv1 = process.argv[1];
+  if (argv1) {
+    try {
+      const realArgv1 = realpathSync(argv1);
+      const root = walkUpForOpenClaw(dirname(realArgv1));
+      if (root) {
+        const req = tryRequireFromRoot(root);
+        if (req) {
+          _openclawRequire = req;
+          return _openclawRequire;
+        }
+      }
+    } catch {
+    }
+  }
+  {
+    const root = walkUpForOpenClaw(__dirname_local);
+    if (root) {
+      const req = tryRequireFromRoot(root);
+      if (req) {
+        _openclawRequire = req;
+        return _openclawRequire;
+      }
+    }
+  }
+  {
+    const localReq = createRequire(__filename_local);
+    try {
+      for (const sub of REQUIRED_SUBPATHS) {
+        localReq.resolve(`openclaw/plugin-sdk/${sub}`);
+      }
+      _openclawRequire = localReq;
+      return _openclawRequire;
+    } catch {
+    }
+  }
+  throw new Error(
+    "[moltbot-popo] Cannot locate a compatible openclaw installation (need >=2026.3.22 with plugin-sdk subpath exports). Searched: process.argv[1], walk-up from plugin, local node_modules."
+  );
+}
+function requireSdk(subpath) {
+  return getOpenClawRequire()(`openclaw/plugin-sdk/${subpath}`);
+}
+var _core = null;
+function getCore() {
+  _core ??= requireSdk("core");
+  return _core;
+}
+var DEFAULT_ACCOUNT_ID = (() => getCore().DEFAULT_ACCOUNT_ID)();
+var emptyPluginConfigSchema = () => getCore().emptyPluginConfigSchema();
+var _channelCore = null;
+function getChannelCore() {
+  _channelCore ??= requireSdk("channel-core");
+  return _channelCore;
+}
+var defineSetupPluginEntry = (...args) => getChannelCore().defineSetupPluginEntry(...args);
+var _channelStatus = null;
+function getChannelStatus() {
+  _channelStatus ??= requireSdk("channel-status");
+  return _channelStatus;
+}
+var PAIRING_APPROVED_MESSAGE = (() => getChannelStatus().PAIRING_APPROVED_MESSAGE)();
+var _channelReplyPipeline = null;
+function getChannelReplyPipeline() {
+  _channelReplyPipeline ??= requireSdk("channel-reply-pipeline");
+  return _channelReplyPipeline;
+}
+var createChannelReplyPipeline = (params) => getChannelReplyPipeline().createChannelReplyPipeline(params);
+var _channelFeedback = null;
+function getChannelFeedback() {
+  _channelFeedback ??= requireSdk("channel-feedback");
+  return _channelFeedback;
+}
+var logTypingFailure = (...args) => getChannelFeedback().logTypingFailure(...args);
+var _replyHistory = null;
+function getReplyHistory() {
+  _replyHistory ??= requireSdk("reply-history");
+  return _replyHistory;
+}
+var buildPendingHistoryContextFromMap = (params) => getReplyHistory().buildPendingHistoryContextFromMap(params);
+var recordPendingHistoryEntryIfEnabled = (...args) => getReplyHistory().recordPendingHistoryEntryIfEnabled(...args);
+var clearHistoryEntriesIfEnabled = (...args) => getReplyHistory().clearHistoryEntriesIfEnabled(...args);
+var DEFAULT_GROUP_HISTORY_LIMIT = (() => getReplyHistory().DEFAULT_GROUP_HISTORY_LIMIT)();

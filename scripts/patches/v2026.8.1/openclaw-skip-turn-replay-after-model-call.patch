@@ -1,0 +1,128 @@
+diff --git a/src/auto-reply/reply/agent-runner-error-handler.ts b/src/auto-reply/reply/agent-runner-error-handler.ts
+index ac8cd3c3..ee9607ee 100644
+--- a/src/auto-reply/reply/agent-runner-error-handler.ts
++++ b/src/auto-reply/reply/agent-runner-error-handler.ts
+@@ -66,6 +66,12 @@ export type OverloadRetryState = {
+   retryCount: number;
+   turnStartedAtMs: number;
+   unsafeToReplay: boolean;
++  /**
++   * A started model call commits this turn's keyed user message and, on failure, its error
++   * reply. Replaying the whole turn afterwards can only collide with that committed turn
++   * ("Session transcript keyed user is outside the current turn"), so only pre-call failures replay.
++   */
++  modelCallStarted: boolean;
+   noticeSent: boolean;
+   noticeTimer?: ReturnType<typeof setTimeout>;
+   noticeDelivery?: Promise<void>;
+@@ -291,6 +297,7 @@ export async function handleAgentExecutionError(params: {
+   if (
+     isOverloaded &&
+     !params.overloadRetryState.unsafeToReplay &&
++    !params.overloadRetryState.modelCallStarted &&
+     params.overloadRetryState.retryCount < MAX_OVERLOAD_RETRIES
+   ) {
+     params.overloadRetryState.retryCount += 1;
+@@ -419,6 +426,7 @@ export async function handleAgentExecutionError(params: {
+     isTransientHttp &&
+     (!providerRequestError || providerRequestError.allowTransientHttpRetry) &&
+     !params.overloadRetryState.unsafeToReplay &&
++    !params.overloadRetryState.modelCallStarted &&
+     params.consumeTransientHttpRetry()
+   ) {
+     params.state.pendingLifecycleTerminal = undefined;
+diff --git a/src/auto-reply/reply/agent-runner-execution-provider-failures.test.ts b/src/auto-reply/reply/agent-runner-execution-provider-failures.test.ts
+index 575370f1..fbc701fe 100644
+--- a/src/auto-reply/reply/agent-runner-execution-provider-failures.test.ts
++++ b/src/auto-reply/reply/agent-runner-execution-provider-failures.test.ts
+@@ -345,6 +345,58 @@ describe("executeAgentTurn: provider failures", () => {
+     }
+   });
+ 
++  it("surfaces a provider HTTP 503 without replaying once the model call started", async () => {
++    vi.useFakeTimers();
++    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
++      params.onExecutionPhase?.({ phase: "model_call_started" });
++      throw createOpenAiServiceUnavailableError();
++    });
++
++    const executeAgentTurn = await getExecuteAgentTurnForTest();
++    const resultPromise = executeAgentTurn(
++      createMinimalRunAgentTurnParams({
++        sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]),
++      }),
++    );
++    await vi.advanceTimersByTimeAsync(2_500);
++    const result = await resultPromise;
++
++    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
++    expect(result.kind).toBe("final");
++    if (result.kind === "final") {
++      expect(result.payload.isError).toBe(true);
++      expect(result.payload.text).toBe(PROVIDER_INTERNAL_ERROR_USER_MESSAGE);
++    }
++  });
++
++  it("does not replay a stream interrupted after the model call started", async () => {
++    // The started call already committed the keyed user message and its failed reply, so a
++    // replay would fail with "Session transcript keyed user is outside the current turn".
++    vi.useFakeTimers();
++    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
++      params.onExecutionPhase?.({ phase: "model_call_started" });
++      throw new FailoverError("LLM request timed out.", {
++        reason: "timeout",
++        provider: "lobsterai-server",
++        model: "deepseek-flash",
++        status: 408,
++        rawError: "terminated",
++      });
++    });
++
++    const executeAgentTurn = await getExecuteAgentTurnForTest();
++    const resultPromise = executeAgentTurn(createMinimalRunAgentTurnParams());
++    await vi.advanceTimersByTimeAsync(2_500);
++    const result = await resultPromise;
++
++    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
++    expect(result.kind).toBe("final");
++    if (result.kind === "final") {
++      expect(result.payload.isError).toBe(true);
++      expect(result.payload.text).toContain("timed out");
++    }
++  });
++
+   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+     "surfaces provider authentication failures in $label chats",
+     async (testCase) => {
+@@ -535,7 +587,7 @@ describe("executeAgentTurn: provider failures", () => {
+     });
+   });
+ 
+-  it.each(["tool_execution_started", "assistant_output_started"] as const)(
++  it.each(["tool_execution_started", "assistant_output_started", "model_call_started"] as const)(
+     "does not replay an overloaded turn after %s",
+     async (phase) => {
+       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+diff --git a/src/auto-reply/reply/agent-runner-execution.ts b/src/auto-reply/reply/agent-runner-execution.ts
+index 568e0e75..4ec218e5 100644
+--- a/src/auto-reply/reply/agent-runner-execution.ts
++++ b/src/auto-reply/reply/agent-runner-execution.ts
+@@ -272,6 +272,10 @@ async function executeAgentTurnInternalWithRetryState(
+     if (info.phase === "model_call_started" || info.phase === "process_spawned") {
+       commitMcpAppModelContext();
+     }
++    if (info.phase === "model_call_started") {
++      // The transcript now owns this turn; whole-turn replay would re-admit its keyed user.
++      overloadRetryState.modelCallStarted = true;
++    }
+     if (info.phase === "tool_execution_started" || info.phase === "assistant_output_started") {
+       markOverloadRetryUnsafeToReplay(overloadRetryState);
+     }
+@@ -536,6 +540,7 @@ async function executeAgentTurnInternal(
+     retryCount: 0,
+     turnStartedAtMs: Date.now(),
+     unsafeToReplay: false,
++    modelCallStarted: false,
+     noticeSent: false,
+     completed: false,
+   };

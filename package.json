@@ -6,7 +6,7 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "2026.9.4",
+  "version": "2026.9.23",
   "openclaw": {
     "version": "v2026.8.1",
     "repo": "https://github.com/openclaw/openclaw.git",
@@ -108,23 +108,23 @@
     ]
   },
   "dsh": {
-    "version": "0.1.1-rc.1",
+    "version": "0.1.5-rc.3",
     "npm": "@deepseek-ai/dsh",
     "runtimes": {
       "mac-arm64": {
-        "url": "https://ydschool-video.nosdn.127.net/1787305922372dsh-runtime-0.1.1-rc.1-mac-arm64.tar.gz",
-        "sha256": "90e2b7dcb0d20a9ddc322ce4a681761676ca67194dbfdf6ccfac7409fca3a3aa",
-        "size": 32011089
+        "url": "https://ydschool-video.nosdn.127.net/1790144938570dsh-runtime-0.1.5-rc.3-mac-arm64.tar.gz",
+        "sha256": "f05ac026bd02550da0fe1a8b9b824a760765a7b5c2d884031dd55fc1f889c75c",
+        "size": 35535483
       },
       "mac-x64": {
-        "url": "https://ydschool-video.nosdn.127.net/1787307267457dsh-runtime-0.1.1-rc.1-mac-x64.tar.gz",
-        "sha256": "89869b9e323bb14e2c31c533e93d7220b79631778651ba674e2fd53999e18874",
-        "size": 29270091
+        "url": "https://ydschool-video.nosdn.127.net/1790148651817dsh-runtime-0.1.5-rc.3-mac-x64.tar.gz",
+        "sha256": "e355ae19a636f0bb0d4a794ad181abea01e59e027ecba176b7a62173907367a5",
+        "size": 32779272
       },
       "win-x64": {
-        "url": "https://ydschool-video.nosdn.127.net/1787307929467dsh-runtime-0.1.1-rc.1-win-x64.tar.gz",
-        "sha256": "492d9f7b4827def4cfee7be4ee8ee53e4c5aadcd4d90d63359b363408b297d6c",
-        "size": 28402933
+        "url": "https://ydschool-video.nosdn.127.net/1790149296647dsh-runtime-0.1.5-rc.3-win-x64.tar.gz",
+        "sha256": "2c9895f424cfa61f4e6faf4e9155a4e6420906a31184c55b5826e6b9f2e54409",
+        "size": 31996964
       }
     }
   },
@@ -154,7 +154,7 @@
     "build:skills": "npm run build:skill:web-search && npm run build:skill:tech-news && npm run build:skill:email",
     "start:electron": "cross-env NODE_ENV=development ELECTRON_START_URL=http://localhost:5175 electron .",
     "wait:electron:dev": "wait-on -v -t 120000 http://localhost:5175 dist-electron/main.js dist-electron/preload.js dist-electron/browserAnnotationPreload.js dist-electron/agentBrowserCredentialPreload.js dist-electron/manualCredentialCapturePreload.js",
-    "electron:dev": "rimraf dist-electron && npm run compile:electron && concurrently \"vite --port 5175 --strictPort\" \"npm run wait:electron:dev && npm run start:electron\"",
+    "electron:dev": "rimraf dist-electron && npm run compile:electron && concurrently --kill-others \"vite --port 5175 --strictPort\" \"npm run wait:electron:dev && npm run start:electron\"",
     "electron:dev:inspect": "cross-env ELECTRON_OPEN_DEVTOOLS=1 npm run electron:dev",
     "electron:dev:openclaw": "npm run openclaw:runtime:host && npm run electron:dev",
     "postinstall": "patch-package --error-on-fail",
@@ -182,6 +182,7 @@
     "openclaw:extensions:local": "node scripts/sync-local-openclaw-extensions.cjs",
     "openclaw:bundle": "node scripts/bundle-openclaw-startup-migration.cjs && node scripts/bundle-openclaw-gateway.cjs",
     "openclaw:precompile": "node scripts/precompile-openclaw-extensions.cjs",
+    "openclaw:sdk-contract": "node scripts/openclaw-plugin-sdk-contract.cjs",
     "openclaw:channel-deps": "node scripts/install-openclaw-channel-deps.cjs",
     "openclaw:prune": "node scripts/prune-openclaw-runtime.cjs",
     "openclaw:runtime:host": "node scripts/openclaw-runtime-host.cjs",

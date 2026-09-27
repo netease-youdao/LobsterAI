@@ -8,6 +8,20 @@ const { readJsonFile } = require('./common.cjs');
 const POPO_PLUGIN_VERSION = '2.1.13';
 const POPO_ASYNC_FABRIC_MARKER = 'lobster_popo_async_fabric_cli';
 const POPO_BACKGROUND_PREWARM_MARKER = 'lobster_popo_background_fabric_prewarm';
+const POPO_STATIC_SDK_MARKER = 'lobster_popo_static_sdk_imports';
+const POPO_SDK_IMPORTS = {
+  core: ['DEFAULT_ACCOUNT_ID', 'emptyPluginConfigSchema'],
+  'channel-core': ['defineSetupPluginEntry'],
+  'channel-status': ['PAIRING_APPROVED_MESSAGE'],
+  'channel-reply-pipeline': ['createChannelReplyPipeline'],
+  'channel-feedback': ['logTypingFailure'],
+  'reply-history': [
+    'buildPendingHistoryContextFromMap',
+    'recordPendingHistoryEntryIfEnabled',
+    'clearHistoryEntriesIfEnabled',
+    'DEFAULT_GROUP_HISTORY_LIMIT',
+  ],
+};
 
 function assertPopoPluginVersion(pluginDir) {
   if (!fs.existsSync(pluginDir)) {
@@ -17,7 +31,7 @@ function assertPopoPluginVersion(pluginDir) {
   const packageJson = readJsonFile(path.join(pluginDir, 'package.json'));
   if (packageJson?.version !== POPO_PLUGIN_VERSION) {
     throw new Error(
-      `moltbot-popo Fabric patch expects ${POPO_PLUGIN_VERSION}, found ${packageJson?.version ?? 'unknown'}`,
+      `moltbot-popo patches expect ${POPO_PLUGIN_VERSION}, found ${packageJson?.version ?? 'unknown'}`,
     );
   }
   return true;
@@ -39,6 +53,43 @@ function findSingleDistBundle(pluginDir, predicate, description) {
     );
   }
   return matches[0];
+}
+
+function patchPopoSdkImports(sdkPath, log) {
+  const src = fs.readFileSync(sdkPath, 'utf8');
+  const label = `moltbot-popo/dist/${path.basename(sdkPath)}`;
+  const replacement = [
+    '// src/openclaw-sdk.ts',
+    `// ${POPO_STATIC_SDK_MARKER}: let the host loader link ESM SDK dependencies before evaluation.`,
+    ...Object.entries(POPO_SDK_IMPORTS).map(([subpath, names]) =>
+      `import { ${names.join(', ')} } from "openclaw/plugin-sdk/${subpath}";`),
+    '',
+    '',
+  ].join('\n');
+  const blocks = [...src.matchAll(/\/\/ src\/openclaw-sdk\.ts\r?\n[\s\S]*?(?=\/\/ src\/stomp-client\.ts\r?\n)/g)];
+  if (blocks.length !== 1) {
+    throw new Error(`${label}: expected one bounded OpenClaw SDK facade, found ${blocks.length}`);
+  }
+  const block = blocks[0][0];
+  if (block.replace(/\r\n/g, '\n') === replacement) {
+    log(`${label} SDK imports already use ESM, skipping patch`);
+    return;
+  }
+  // Fail the build if the pinned facade changes instead of dropping unknown helpers.
+  const publicBindings = [...block.matchAll(/^var ([A-Za-z][\w]*) =/gm)]
+    .map((match) => match[1])
+    .filter((name) => name !== 'REQUIRED_SUBPATHS');
+  const expectedBindings = Object.values(POPO_SDK_IMPORTS).flat();
+  if (!block.includes('function requireSdk(subpath) {')
+    || publicBindings.length !== expectedBindings.length
+    || expectedBindings.some((name) => !publicBindings.includes(name))
+    || Object.keys(POPO_SDK_IMPORTS).some((subpath) => !block.includes(`requireSdk("${subpath}")`))) {
+    throw new Error(`${label}: unsupported OpenClaw SDK facade; review the POPO SDK patch`);
+  }
+  // Keep imports external: the host SDK resolver/bridge owns module identity.
+  // A private createRequire bypasses loader fallback and races pending import().
+  fs.writeFileSync(sdkPath, src.replace(block, replacement));
+  log(`Patched ${label}: OpenClaw SDK dependencies now use static ESM imports`);
 }
 
 function buildAsyncFabricCliImplementation() {
@@ -107,6 +158,12 @@ function patchPopo({ runtimeExtensionsDir, log }) {
     (src) => src.includes('[POPO] fabric-cli pre-warm failed') && src.includes('[POPO] Starting monitor'),
     'channel startup lookup',
   );
+  const sdkPath = findSingleDistBundle(
+    pluginDir,
+    (src) => src.includes('// src/openclaw-sdk.ts'),
+    'SDK facade lookup',
+  );
+  patchPopoSdkImports(sdkPath, log);
   patchPopoFabricManager(managerPath, log);
   patchPopoBackgroundPrewarm(startupPath, log);
 }
@@ -117,4 +174,5 @@ module.exports = {
   patchPopo,
   patchPopoBackgroundPrewarm,
   patchPopoFabricManager,
+  patchPopoSdkImports,
 };

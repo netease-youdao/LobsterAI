@@ -77,7 +77,8 @@ try {
     () => detectLegacyDeviceIdentity(identityOptions),
     detected => migrateLegacyDeviceIdentity({ ...identityOptions, detected }),
     detected => [detected.sourcePath, detected.claimPath, detected.nativeClaimPath].filter(pathMayExist),
-    // A verified migration receipt can intentionally retain inert, divergent JSON.
+    // The owner can retain valid divergent JSON while SQLite stays authoritative,
+    // including identities originally created without a legacy import receipt.
     // Respect the canonical runtime reader instead of making that notice a fatal error.
     () => Boolean(loadDeviceIdentityIfPresent({ env: process.env })));
   await migrateOwner(OpenClawStartupMigrationOwner.ExecApprovals,

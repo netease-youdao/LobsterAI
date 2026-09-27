@@ -7,10 +7,12 @@ import {
   type BrowserCredentialSaveRequest,
   type BrowserCredentialSummary,
 } from '../../shared/browserCredentials/constants';
+import type { SqliteStore } from '../sqliteStore';
 
 const MAX_ORIGIN_LENGTH = 2_048;
 const MAX_USERNAME_LENGTH = 512;
 const MAX_PASSWORD_LENGTH = 8_192;
+const AVAILABILITY_STORE_KEY = 'browserCredentials.availability';
 
 interface BrowserCredentialRow {
   id: string;
@@ -87,32 +89,75 @@ const rowToSummary = (row: BrowserCredentialRow): BrowserCredentialSummary => ({
 
 export class BrowserCredentialService {
   private initialized = false;
+  private availability: BrowserCredentialAvailability | undefined;
+  private encryptionVerified = false;
+  private requiresRestart = false;
 
   constructor(
     private readonly db: Database.Database,
     private readonly encryption: BrowserCredentialCrypto,
     private readonly platform: NodeJS.Platform = process.platform,
+    private readonly store?: Pick<SqliteStore, 'get' | 'set'>,
   ) {}
 
   getAvailability(): BrowserCredentialAvailability {
-    if (!this.encryption.isEncryptionAvailable()) {
-      return {
-        available: false,
-        reason: BrowserCredentialAvailabilityReason.EncryptionUnavailable,
-      };
-    }
-
-    if (this.platform === 'linux') {
-      const backend = this.encryption.getSelectedStorageBackend();
-      if (backend === 'basic_text' || backend === 'unknown') {
-        return {
-          available: false,
-          reason: BrowserCredentialAvailabilityReason.InsecureStorageBackend,
-        };
+    // Reading settings or observing a login form must never open an OS prompt.
+    // Persist only the last known status; actual secret operations still check
+    // the OS backend again after every application restart.
+    if (!this.availability) {
+      const saved = this.store?.get<BrowserCredentialAvailability>(AVAILABILITY_STORE_KEY);
+      if (saved?.available === true) {
+        this.availability = { available: true };
+      } else if (
+        saved?.available === false
+        && saved.reason
+        && Object.values(BrowserCredentialAvailabilityReason).includes(saved.reason)
+      ) {
+        this.availability = { available: false, reason: saved.reason };
+      } else {
+        // Existing saved logins predate the explicit enable action.
+        this.availability = this.list().length > 0
+          ? { available: true }
+          : { available: false, reason: BrowserCredentialAvailabilityReason.AccessNotRequested };
       }
     }
+    return {
+      ...this.availability,
+      ...(this.requiresRestart ? { requiresRestart: true } : {}),
+    };
+  }
 
-    return { available: true };
+  requestAccess(): BrowserCredentialAvailability {
+    if (this.requiresRestart) return this.getAvailability();
+    try {
+      if (this.platform === 'linux') {
+        const backend = this.encryption.getSelectedStorageBackend();
+        if (backend === 'basic_text' || backend === 'unknown') {
+          return this.rememberAvailability({
+            available: false,
+            reason: BrowserCredentialAvailabilityReason.InsecureStorageBackend,
+          });
+        }
+      }
+
+      const available = this.encryption.isEncryptionAvailable();
+      // Electron's synchronous macOS OSCrypt backend caches a failed keychain
+      // lookup for the lifetime of the process. A retry needs an app restart.
+      this.requiresRestart = this.platform === 'darwin' && !available;
+      return this.rememberAvailability(available
+        ? { available: true }
+        : {
+          available: false,
+          reason: BrowserCredentialAvailabilityReason.EncryptionUnavailable,
+        });
+    } catch (error) {
+      this.requiresRestart = this.platform === 'darwin';
+      this.rememberAvailability({
+        available: false,
+        reason: BrowserCredentialAvailabilityReason.EncryptionUnavailable,
+      });
+      throw error;
+    }
   }
 
   list(origin?: string): BrowserCredentialSummary[] {
@@ -134,12 +179,11 @@ export class BrowserCredentialService {
   }
 
   save(request: BrowserCredentialSaveRequest): BrowserCredentialSummary {
-    this.assertAvailable();
     this.ensureTable();
     const origin = normalizeBrowserCredentialOrigin(request.origin);
     const username = normalizeUsername(request.username);
     const password = validatePassword(request.password);
-    const encryptedPassword = this.encryption.encryptString(password);
+    const encryptedPassword = this.withEncryption(() => this.encryption.encryptString(password));
     const now = Date.now();
     const requestedId = request.id?.trim();
 
@@ -185,7 +229,6 @@ export class BrowserCredentialService {
   }
 
   getSecret(id: string, expectedOrigin: string): BrowserCredentialSecret {
-    this.assertAvailable();
     this.ensureTable();
     const row = this.requireRow(id.trim());
     const origin = normalizeBrowserCredentialOrigin(expectedOrigin);
@@ -194,7 +237,7 @@ export class BrowserCredentialService {
     }
     return {
       summary: rowToSummary(row),
-      password: this.encryption.decryptString(row.encrypted_password),
+      password: this.withEncryption(() => this.encryption.decryptString(row.encrypted_password)),
     };
   }
 
@@ -205,9 +248,35 @@ export class BrowserCredentialService {
   }
 
   private assertAvailable(): void {
-    const availability = this.getAvailability();
+    let availability = this.getAvailability();
+    if (
+      !this.encryptionVerified
+      && (availability.available || availability.reason === BrowserCredentialAvailabilityReason.AccessNotRequested)
+    ) {
+      availability = this.requestAccess();
+    }
     if (!availability.available) {
       throw new Error('Secure browser credential storage is unavailable on this device.');
+    }
+  }
+
+  private rememberAvailability(availability: BrowserCredentialAvailability): BrowserCredentialAvailability {
+    this.availability = availability;
+    this.encryptionVerified = availability.available;
+    this.store?.set(AVAILABILITY_STORE_KEY, availability);
+    return this.getAvailability();
+  }
+
+  private withEncryption<T>(operation: () => T): T {
+    this.assertAvailable();
+    try {
+      return operation();
+    } catch (error) {
+      this.rememberAvailability({
+        available: false,
+        reason: BrowserCredentialAvailabilityReason.EncryptionUnavailable,
+      });
+      throw error;
     }
   }
 
