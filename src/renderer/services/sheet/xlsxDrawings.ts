@@ -7,7 +7,7 @@ import { addContentType, addDefaultContentType, nextPartName, relationshipsPath,
 import type { AxisGeometry } from './xlsxStructureExport';
 import { mapElements, RelationshipTypes } from './xlsxStructureExport';
 import {
-  addElementPrefix, decodeXml, elementPrefix, encodeXmlAttribute, firstXmlElement, setXmlAttributes, xmlAttribute, type XmlElement, xmlElements,
+  addElementPrefix, appendChildren, childInsertionPoint, decodeXml, elementPrefix, encodeXmlAttribute, firstXmlElement, setXmlAttributes, xmlAttribute, type XmlElement, xmlElements,
 } from './xlsxXml';
 
 /**
@@ -480,7 +480,7 @@ function nextRelationshipId(rels: string | undefined): string {
 function withRelationship(rels: string | undefined, id: string, type: string, target: string): string {
   const element = `<Relationship Id="${id}" Type="${type}" Target="${target}"/>`;
   return rels
-    ? rels.replace(/<\/((?:[\w.-]+:)?Relationships)>\s*$/, `${element}</$1>`)
+    ? appendChildren(rels, 'Relationships', element) ?? rels
     : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${element}</Relationships>`;
 }
 
@@ -542,8 +542,7 @@ export function addSheetDrawings(files: Map<string, Uint8Array>, sheetPart: stri
     files.set(sheetRelsPath, encoder.encode(withRelationship(sheetRels, id, RelationshipTypes.Drawing, relativeTarget(sheetPart, drawingPart))));
     const worksheet = firstXmlElement(sheet, 'worksheet');
     const prefix = elementPrefix(worksheet?.name ?? '');
-    const next = AFTER_DRAWING.map(name => firstXmlElement(sheet, name)).filter(Boolean).sort((a, b) => a!.start - b!.start)[0];
-    const at = next ? next.start : sheet.lastIndexOf('</');
+    const at = childInsertionPoint(sheet, 'worksheet', AFTER_DRAWING) ?? sheet.lastIndexOf('</');
     sheet = sheet.slice(0, at) + addElementPrefix(`<drawing r:id="${id}"/>`, prefix) + sheet.slice(at);
     if (worksheet && !/\sxmlns:r=/.test(worksheet.open)) sheet = sheet.replace(worksheet.open, worksheet.open.replace(/>$/, ` xmlns:r="${RELATIONSHIPS_NS}">`));
   }

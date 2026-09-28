@@ -1,6 +1,6 @@
 import type { ICellData, IWorkbookData } from '@univerjs/core';
 
-import type { ResolvedData } from './sheetChartOption';
+import { categoryLevels, type ResolvedData } from './sheetChartOption';
 import { mapFormulaReferences } from './sheetStructure';
 import { type ChartAxis, type ChartDataRef, type ChartPlot, ChartPlotType, type ChartSeries, type ChartSpec } from './xlsxCharts';
 import { encodeXmlAttribute, encodeXmlText } from './xlsxXml';
@@ -58,6 +58,11 @@ function dataReference(source: ChartDataRef | undefined, read: (source: ChartDat
       : `<c:strLit><c:ptCount val="${count}"/>${points}</c:strLit>`;
   }
   const formula = `<c:f>${encodeXmlText(source.ref.replace(/^=/, ''))}</c:f>`;
+  if (source.levels && data.levels?.length) {
+    // Several columns of labels: Excel's multi-level categories, the level nearest the axis first.
+    const level = (labels: string[]) => `<c:lvl>${labels.map((label, index) => (label === '' ? '' : `<c:pt idx="${index}"><c:v>${encodeXmlText(label)}</c:v></c:pt>`)).join('')}</c:lvl>`;
+    return `<c:multiLvlStrRef>${formula}<c:multiLvlStrCache><c:ptCount val="${data.text.length}"/>${level(data.text)}${data.levels.map(level).join('')}</c:multiLvlStrCache></c:multiLvlStrRef>`;
+  }
   if (asNumbers) {
     const points = numbers.map((value, index) => (value === null ? '' : `<c:pt idx="${index}"><c:v>${value}</c:v></c:pt>`)).join('');
     return `<c:numRef>${formula}<c:numCache><c:formatCode>${encodeXmlText(data.formatCode ?? 'General')}</c:formatCode><c:ptCount val="${count}"/>${points}</c:numCache></c:numRef>`;
@@ -248,6 +253,7 @@ export function snapshotChartReader(snapshot: IWorkbookData): (source: ChartData
     if (!source.ref) return fallback;
     const values: (string | number | null)[] = [];
     let readable = true;
+    let width = 0;
     mapFormulaReferences(source.ref.replace(/^=/, ''), token => {
       const sheetId = token.sheets.length === 1 ? sheetIds.get(token.sheets[0].toLowerCase()) : undefined;
       const area = token.reference;
@@ -258,6 +264,7 @@ export function snapshotChartReader(snapshot: IWorkbookData): (source: ChartData
       }
       const start = area.kind === 'cell' ? area.cell : area.start;
       const end = area.kind === 'cell' ? area.cell : area.end;
+      width = end.column - start.column + 1;
       for (let row = start.row; row <= end.row && values.length < MAX_POINTS; row++) {
         for (let column = start.column; column <= end.column && values.length < MAX_POINTS; column++) {
           const cell = cells?.[row]?.[column];
@@ -269,6 +276,13 @@ export function snapshotChartReader(snapshot: IWorkbookData): (source: ChartData
       return token.text;
     });
     if (!readable) return fallback;
-    return { values, text: values.map(value => (value === null ? '' : String(value))), ...(source.formatCode ? { formatCode: source.formatCode } : {}) };
+    const text = values.map(value => (value === null ? '' : String(value)));
+    // Multi-level categories: the block of labels as Excel splits it into levels.
+    if (source.levels && width > 1 && text.length > width) {
+      const matrix = Array.from({ length: Math.ceil(text.length / width) }, (_, row) => text.slice(row * width, (row + 1) * width));
+      const split = categoryLevels(matrix);
+      return { values: split.text, text: split.text, ...(split.levels.length ? { levels: split.levels } : {}) };
+    }
+    return { values, text, ...(source.formatCode ? { formatCode: source.formatCode } : {}) };
   };
 }

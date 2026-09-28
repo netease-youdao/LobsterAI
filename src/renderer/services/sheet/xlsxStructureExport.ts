@@ -8,7 +8,7 @@ import {
 import type { ImportedSheet, WorkbookBaseline } from './xlsxImport';
 import { relationshipsPath, RelationshipType } from './xlsxPackage';
 import {
-  addElementPrefix, decodeXml, elementPrefix, encodeXmlAttribute, encodeXmlText, firstXmlElement, setXmlAttributes, xmlAttribute,
+  addElementPrefix, appendChildren, decodeXml, elementPrefix, encodeXmlAttribute, encodeXmlText, firstXmlElement, setXmlAttributes, xmlAttribute,
   type XmlElement, xmlElements,
 } from './xlsxXml';
 
@@ -819,19 +819,27 @@ export function transformChart(xml: string, scope: FormulaScope): string {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Sheet views: frozen panes, grid lines, tab color
+// Sheet views: frozen panes, grid lines, zoom, tab color
 
 export interface SheetViewState {
   freeze?: { xSplit: number; ySplit: number; startRow: number; startColumn: number } | null;
   showGridlines: boolean;
+  /** Zoom in percent, as Excel stores it (10–400); undefined at 100%. */
+  zoom?: number;
   tabColor?: string;
 }
 
+/** Excel's zoom range. */
+const ZOOM_RANGE = [10, 400] as const;
+
 export function sheetViewState(sheet: Partial<IWorksheetData> | undefined): SheetViewState {
   const freeze = sheet?.freeze;
+  const zoom = typeof sheet?.zoomRatio === 'number' && Number.isFinite(sheet.zoomRatio)
+    ? Math.min(ZOOM_RANGE[1], Math.max(ZOOM_RANGE[0], Math.round(sheet.zoomRatio * 100))) : 100;
   return {
     freeze: freeze && (freeze.xSplit > 0 || freeze.ySplit > 0) ? { xSplit: freeze.xSplit, ySplit: freeze.ySplit, startRow: freeze.startRow, startColumn: freeze.startColumn } : null,
     showGridlines: sheet?.showGridlines !== 0,
+    ...(zoom !== 100 ? { zoom } : {}),
     tabColor: normalizeTabColor(sheet?.tabColor),
   };
 }
@@ -851,7 +859,7 @@ export function normalizeTabColor(color: unknown): string | undefined {
 const sameFreeze = (a: SheetViewState['freeze'], b: SheetViewState['freeze']): boolean => (a?.xSplit ?? 0) === (b?.xSplit ?? 0) && (a?.ySplit ?? 0) === (b?.ySplit ?? 0);
 
 export function viewChanged(before: SheetViewState, after: SheetViewState): boolean {
-  return !sameFreeze(before.freeze, after.freeze) || before.showGridlines !== after.showGridlines || before.tabColor !== after.tabColor;
+  return !sameFreeze(before.freeze, after.freeze) || before.showGridlines !== after.showGridlines || before.zoom !== after.zoom || before.tabColor !== after.tabColor;
 }
 
 /** The pane and selections Excel writes for a frozen view (or for none). */
@@ -871,16 +879,19 @@ function paneMarkup(freeze: SheetViewState['freeze'], prefix: string): string {
   return addElementPrefix(markup, prefix);
 }
 
-/** Write frozen panes, grid lines and the tab color of a sheet that changed them. */
+/** Write frozen panes, grid lines, zoom and the tab color of a sheet that changed them. */
 export function patchSheetView(xml: string, before: SheetViewState, after: SheetViewState): string {
   let result = xml;
   const views = firstXmlElement(result, 'sheetViews');
   const prefix = elementPrefix(firstXmlElement(result, 'worksheet')?.name ?? '');
-  if (!sameFreeze(before.freeze, after.freeze) || before.showGridlines !== after.showGridlines) {
+  const zoomed = before.zoom !== after.zoom;
+  if (!sameFreeze(before.freeze, after.freeze) || before.showGridlines !== after.showGridlines || zoomed) {
     const view = views?.inner !== undefined ? firstXmlElement(views.inner, 'sheetView') : undefined;
     if (views?.inner !== undefined && view) {
       let open = view.open;
       if (before.showGridlines !== after.showGridlines) open = setXmlAttributes(open, { showGridLines: after.showGridlines ? undefined : '0' });
+      // Excel keeps the Normal view's zoom in zoomScaleNormal as well.
+      if (zoomed) open = setXmlAttributes(open, { zoomScale: after.zoom ? String(after.zoom) : undefined, zoomScaleNormal: after.zoom ? String(after.zoom) : undefined });
       let inner = view.inner ?? '';
       if (!sameFreeze(before.freeze, after.freeze)) {
         inner = mapElements(inner, 'pane', () => null);
@@ -890,7 +901,8 @@ export function patchSheetView(xml: string, before: SheetViewState, after: Sheet
       const markup = inner ? `${open.replace(/\/>$/, '>')}${inner}</${view.name}>` : open;
       result = replaceInner(result, views, views.inner.slice(0, view.start) + markup + views.inner.slice(view.end));
     } else {
-      const sheetView = `<sheetView${after.showGridlines ? '' : ' showGridLines="0"'} workbookViewId="0">${after.freeze ? paneMarkup(after.freeze, '') : ''}</sheetView>`;
+      const zoom = after.zoom ? ` zoomScale="${after.zoom}" zoomScaleNormal="${after.zoom}"` : '';
+      const sheetView = `<sheetView${after.showGridlines ? '' : ' showGridLines="0"'}${zoom} workbookViewId="0">${after.freeze ? paneMarkup(after.freeze, '') : ''}</sheetView>`;
       const markup = addElementPrefix(`<sheetViews>${sheetView}</sheetViews>`, prefix);
       if (views) {
         result = result.slice(0, views.start) + markup + result.slice(views.end);
@@ -1112,7 +1124,7 @@ export function updateWorkbookRelationships(files: Map<string, Uint8Array>, base
     const relsPrefix = elementPrefix(firstXmlElement(rels, 'Relationships')?.name ?? '');
     const workbookDir = baseline.workbookPart.slice(0, baseline.workbookPart.lastIndexOf('/') + 1);
     const additions = newParts.map(part => addElementPrefix(`<Relationship Id="${part.relationshipId}" Type="${RelationshipType.Worksheet}" Target="${part.part.startsWith(workbookDir) ? part.part.slice(workbookDir.length) : `/${part.part}`}"/>`, relsPrefix)).join('');
-    rels = rels.replace(/<\/((?:[\w.-]+:)?Relationships)>\s*$/, `${additions}</$1>`);
+    rels = appendChildren(rels, 'Relationships', additions) ?? rels;
   }
   files.set(relsPath, encoder.encode(rels));
 
@@ -1133,7 +1145,7 @@ export function updateWorkbookRelationships(files: Map<string, Uint8Array>, base
   if (gone.size) types = mapElements(types, 'Override', element => (gone.has(xmlAttribute(element.open, 'PartName') ?? '') ? null : undefined));
   if (newParts.length) {
     const additions = newParts.map(part => `<Override PartName="/${part.part}" ContentType="${WORKSHEET_CONTENT_TYPE}"/>`).join('');
-    types = types.replace(/<\/((?:[\w.-]+:)?Types)>\s*$/, `${additions}</$1>`);
+    types = appendChildren(types, 'Types', additions) ?? types;
   }
   files.set('[Content_Types].xml', encoder.encode(types));
 }

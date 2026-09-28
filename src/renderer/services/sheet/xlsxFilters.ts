@@ -6,7 +6,10 @@ import { columnLabel, parseRangeReference, rangeReference } from './sheetAddress
 import { formulaSheetName, mapRange, type SheetMaps } from './sheetStructure';
 import { stable } from './xlsxConditionalFormatExport';
 import { mapElements } from './xlsxStructureExport';
-import { addElementPrefix, elementPrefix, encodeXmlAttribute, encodeXmlText, firstXmlElement, setXmlAttributes, xmlAttribute, xmlElements } from './xlsxXml';
+import {
+  addElementPrefix, appendChildren, childInsertionPoint, elementPrefix, encodeXmlAttribute, encodeXmlText, firstChildElement, firstXmlElement, setXmlAttributes, xmlAttribute,
+  xmlElements,
+} from './xlsxXml';
 
 /**
  * A worksheet's AutoFilter in Univer's filter model, whose shape follows the file's. Excel keeps
@@ -78,14 +81,7 @@ export interface PendingFilterColumn {
 }
 
 /** The sheet's own AutoFilter element: not one saved inside a custom view. */
-function sheetAutoFilter(xml: string) {
-  const views = firstXmlElement(xml, 'customSheetViews');
-  for (const element of xmlElements(xml, 'autoFilter')) {
-    if (views && element.start > views.start && element.start < views.end) continue;
-    return element;
-  }
-  return undefined;
-}
+const sheetAutoFilter = (xml: string) => firstChildElement(xml, 'worksheet', 'autoFilter');
 
 function dateGroup(open: string): DateGroup | undefined {
   const grouping = xmlAttribute(open, 'dateTimeGrouping') as DateGrouping | undefined;
@@ -303,8 +299,7 @@ export function rewriteAutoFilter(xml: string, filter: SheetFilter | null, dxf: 
   const markup = filter ? autoFilterMarkup(filter, dxf, prefix, kept) : '';
   if (existing) return xml.slice(0, existing.start) + markup + xml.slice(existing.end);
   if (!markup) return xml;
-  const next = AFTER_AUTO_FILTER.map(name => firstXmlElement(xml, name)).filter(Boolean).sort((a, b) => a!.start - b!.start)[0];
-  const at = next ? next.start : xml.lastIndexOf('</');
+  const at = childInsertionPoint(xml, 'worksheet', AFTER_AUTO_FILTER) ?? xml.lastIndexOf('</');
   return xml.slice(0, at) + markup + xml.slice(at);
 }
 
@@ -336,14 +331,12 @@ export function syncFilterDatabases(workbookXml: string, updates: Map<string, IR
   const added = [...pending].filter(([, update]) => update.text !== null)
     .map(([index, update]) => `<definedName name="${FILTER_DATABASE}" localSheetId="${index}" hidden="1">${encodeXmlText(update.text!)}</definedName>`);
   if (added.length) {
-    const container = firstXmlElement(result, 'definedNames');
     const markup = addElementPrefix(added.join(''), prefix);
-    if (container?.inner !== undefined) {
-      const close = container.start + container.open.length + container.inner.length;
-      result = result.slice(0, close) + markup + result.slice(close);
+    // An existing list, even an empty `<definedNames/>`: a second one would be invalid.
+    if (firstChildElement(result, 'workbook', 'definedNames')) {
+      result = appendChildren(result, 'definedNames', markup) ?? result;
     } else {
-      const next = AFTER_DEFINED_NAMES.map(name => firstXmlElement(result, name)).filter(Boolean).sort((a, b) => a!.start - b!.start)[0];
-      const at = next ? next.start : result.lastIndexOf('</');
+      const at = childInsertionPoint(result, 'workbook', AFTER_DEFINED_NAMES) ?? result.lastIndexOf('</');
       result = result.slice(0, at) + addElementPrefix(`<definedNames>${added.join('')}</definedNames>`, prefix) + result.slice(at);
     }
   }

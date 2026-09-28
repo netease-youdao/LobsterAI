@@ -7,7 +7,7 @@ import {
 } from './xlsxPackage';
 import { mapElements, RelationshipTypes } from './xlsxStructureExport';
 import {
-  addElementPrefix, decodeXml, elementPrefix, encodeExcelString, encodeXmlText, firstXmlElement, plainText, setXmlAttributes, xmlAttribute, type XmlElement, xmlElements,
+  addElementPrefix, appendChildren, childInsertionPoint, decodeXml, elementPrefix, encodeExcelString, encodeXmlText, firstXmlElement, plainText, setXmlAttributes, xmlAttribute, type XmlElement, xmlElements,
 } from './xlsxXml';
 
 /**
@@ -426,7 +426,7 @@ export function rewriteNotes(files: Map<string, Uint8Array>, sheetPart: string, 
     relationIds.add(id);
     const element = `<Relationship Id="${id}" Type="${type}" Target="${relativeTarget(sheetPart, part)}"/>`;
     rels = rels
-      ? rels.replace(/<\/((?:[\w.-]+:)?Relationships)>\s*$/, `${element}</$1>`)
+      ? appendChildren(rels, 'Relationships', element) ?? rels
       : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${element}</Relationships>`;
     return id;
   };
@@ -521,8 +521,7 @@ export function rewriteNotes(files: Map<string, Uint8Array>, sheetPart: string, 
     addDefaultContentType(files, 'vml', VML_CONTENT_TYPE);
     const worksheet = firstXmlElement(sheet, 'worksheet');
     const prefix = elementPrefix(worksheet?.name ?? '');
-    const nextElement = AFTER_LEGACY_DRAWING.map(name => firstXmlElement(sheet, name)).filter(Boolean).sort((a, b) => a!.start - b!.start)[0];
-    const at = nextElement ? nextElement.start : sheet.lastIndexOf('</');
+    const at = childInsertionPoint(sheet, 'worksheet', AFTER_LEGACY_DRAWING) ?? sheet.lastIndexOf('</');
     sheet = sheet.slice(0, at) + addElementPrefix(`<legacyDrawing r:id="${id}"/>`, prefix) + sheet.slice(at);
     if (worksheet && !/\sxmlns:r=/.test(worksheet.open)) sheet = sheet.replace(worksheet.open, worksheet.open.replace(/>$/, ` xmlns:r="${RELATIONSHIPS_NS}">`));
   }

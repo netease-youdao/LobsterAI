@@ -5,6 +5,7 @@ import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } fro
 
 import { i18nService } from '@/services/i18n';
 import { OfficeSaveState } from '@/services/officeDocument';
+import type { SheetSelectionReference } from '@/services/sheet/sheetChatReference';
 import { acquireSheetEditor, type SheetEditorSession } from '@/services/sheet/sheetEditorSession';
 import { StructureRefusal } from '@/services/sheet/sheetStructureSupport';
 import { SheetExportIssue } from '@/services/sheet/xlsxExport';
@@ -69,7 +70,9 @@ function errorLabel(code?: OfficeFileError): string {
 
 const list = (keys: string[]) => keys.map(key => t(key)).join(t('sheetListSeparator'));
 
-function ActiveSheetEditor({ session }: { session: SheetEditorSession }): React.ReactElement {
+type AddToChat = (reference: SheetSelectionReference) => void;
+
+function ActiveSheetEditor({ session, onAddToChat }: { session: SheetEditorSession; onAddToChat?: AddToChat }): React.ReactElement {
   const document = session.document;
   const state = useSyncExternalStore(document.subscribe, document.getSnapshot);
   useSyncExternalStore(session.subscribe, session.getVersion);
@@ -84,6 +87,14 @@ function ActiveSheetEditor({ session }: { session: SheetEditorSession }): React.
     void document.refresh();
     return unmount;
   }, [session, document]);
+  // The grid's "Add to chat" reaches the task chat beside it; the latest callback is used.
+  const addToChat = useRef(onAddToChat);
+  addToChat.current = onAddToChat;
+  const chatAvailable = Boolean(onAddToChat);
+  useEffect(() => {
+    session.setChatHandler(chatAvailable ? reference => addToChat.current?.(reference) : undefined);
+    return () => session.setChatHandler(undefined);
+  }, [session, chatAvailable]);
   useEffect(() => {
     const onFocus = () => { void document.refresh(); };
     window.addEventListener('focus', onFocus);
@@ -186,7 +197,9 @@ function ActiveSheetEditor({ session }: { session: SheetEditorSession }): React.
   );
 }
 
-export default function SheetFileEditor({ filePath, preview }: { filePath: string; preview: React.ReactNode }): React.ReactElement {
+export default function SheetFileEditor({ filePath, preview, onAddToChat }: {
+  filePath: string; preview: React.ReactNode; onAddToChat?: AddToChat;
+}): React.ReactElement {
   const [result, setResult] = useState<OfficeResult<SheetEditorSession>>();
   const [previewing, setPreviewing] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -197,7 +210,7 @@ export default function SheetFileEditor({ filePath, preview }: { filePath: strin
     void acquireSheetEditor(filePath).then(opened => { if (!cancelled) setResult(opened); });
     return () => { cancelled = true; };
   }, [filePath, attempt]);
-  if (result?.success) return <ActiveSheetEditor key={result.value.document.file.sessionId} session={result.value} />;
+  if (result?.success) return <ActiveSheetEditor key={result.value.document.file.sessionId} session={result.value} onAddToChat={onAddToChat} />;
   if (!result) return <div className="p-6 text-sm opacity-60" role="status">{t('sheetLoading')}</div>;
   return (
     <div className="h-full min-h-0 flex flex-col">

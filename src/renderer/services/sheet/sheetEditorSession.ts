@@ -6,13 +6,17 @@ import {
 import type { FUniver } from '@univerjs/core/facade';
 import { getDrawingShapeKeyByDrawingSearch, getOrCreateDrawingCopyPlan, IDrawingManagerService, SetDrawingSelectedOperation } from '@univerjs/drawing';
 import { IRenderManagerService } from '@univerjs/engine-render';
-import { BEFORE_CELL_EDIT, CopySheetCommand, INTERCEPTOR_POINT, SetRangeValuesCommand, SheetInterceptorService, SheetSkeletonService } from '@univerjs/sheets';
+import {
+  AUTO_FILL_HOOK_TYPE, BEFORE_CELL_EDIT, CopySheetCommand, IAutoFillService, INTERCEPTOR_POINT, SetRangeValuesCommand, SheetInterceptorService, SheetSkeletonService,
+  SheetsSelectionsService,
+} from '@univerjs/sheets';
 import type { FWorkbook } from '@univerjs/sheets/facade';
 import { drawingPositionToTransform, InsertSheetDrawingCommand, ISheetDrawingService, RemoveSheetDrawingCommand, SetSheetDrawingCommand } from '@univerjs/sheets-drawing';
 import { DeleteDrawingsCommand } from '@univerjs/sheets-drawing-ui';
 import { SheetsFilterService } from '@univerjs/sheets-filter';
 import { AutoHeightController, FormatPainterStatus, IFormatPainterService, ISheetClipboardService, SheetCanvasPopManagerService } from '@univerjs/sheets-ui';
 import { DISABLE_AUTO_FOCUS_KEY, IShortcutService, KeyCode } from '@univerjs/ui';
+import { BehaviorSubject } from 'rxjs';
 
 import { OfficeFileError, type OfficeOpenResult, type OfficeResult } from '../../../shared/artifactPreview/officeEditing';
 import { SHEET_MAX_CELLS, type SheetPackageInfo } from '../../../shared/artifactPreview/sheetEditing';
@@ -22,10 +26,15 @@ import { OfficeDocument, type OfficeEditorPort, OfficeExportRefusal } from '../o
 import { normalizeShellFilePath } from '../shellAppsCache';
 import { type CellRange, parseRangeReference, rangeReference } from './sheetAddress';
 import { chartHost, readChartData, registerChartHost, SHEET_CHART_COMPONENT } from './sheetChartHost';
-import { chartFromRange, type ChartKind, chartKind, chartSeriesList, chartSourceRange, mapChartReferences, type SheetChartData, withChartData } from './sheetChartSpec';
+import {
+  chartFromRange, type ChartKind, chartKind, chartSeriesList, chartSourceRange, mapChartReferences, type SheetChartData, withChartData, withChartTitle,
+} from './sheetChartSpec';
+import { installAddToChat } from './sheetChatAction';
+import type { SheetSelectionReference } from './sheetChatReference';
 import type { EditorImport } from './sheetEditorImport';
 import { createSheetFileClient, type SheetFileClient } from './sheetFileClient';
 import { measureDigitWidth, prepareSheetFonts } from './sheetFonts';
+import { installExcelShortcuts } from './sheetShortcuts';
 import {
   expandThisRowReferences, type FormulaScope, formulaSheetName, IDENTITY_COLUMNS, IDENTITY_ROWS, laterEditsScope, shortenThisRowReferences, transformFormula,
 } from './sheetStructure';
@@ -34,6 +43,7 @@ import { StructureTracker, UNSUPPORTED_IMAGE_EDIT } from './sheetStructureTracke
 import { type DrawnTable, tableCellStyle, underCellStyle } from './sheetTableStyles';
 import { registerWorkbookTables, type SheetLanguage, toUniverLocale } from './sheetUniverEngine';
 import { createSheetFormulaWorker, createSheetUniver } from './sheetUniverUi';
+import { installValidationPrompts } from './sheetValidationPrompt';
 import type { ChartSpec } from './xlsxCharts';
 import { XlsxExportError } from './xlsxExport';
 import { pendingFilterValues } from './xlsxFilters';
@@ -48,6 +58,8 @@ const VIEW_MUTATIONS = new Set([
   'sheet.mutation.set-workbook-name', 'sheet.mutation.empty', 'sheet.mutation.mark-dirty-filter-change',
   'sheet.mutation.data-validation-formula-mark-dirty',
 ]);
+/** Mutations of saved content: sheets, data validation rules and the hyperlink model. */
+const EDIT_MUTATION = /^(?:sheet|sheets|data-validation)\.mutation\./;
 const CALCULATION_WAIT_MS = 10_000;
 /**
  * Excel for Mac deletes a selected picture or chart with fn+delete too; Univer binds only delete
@@ -229,6 +241,16 @@ function resolvePendingFilters(univer: Univer, workbook: Workbook, imported: Edi
 
 const currentLanguage = (): SheetLanguage => (i18nService.getLanguage() === 'zh' ? 'zh' : 'en');
 
+/** The block a discrete range (rows and columns listed) spans. */
+function boundsOf(range: { rows: number[]; cols: number[] }): CellRange | undefined {
+  const { rows, cols } = range;
+  if (!rows.length || !cols.length) return undefined;
+  return {
+    startRow: rows.reduce((a, b) => Math.min(a, b)), endRow: rows.reduce((a, b) => Math.max(a, b)),
+    startColumn: cols.reduce((a, b) => Math.min(a, b)), endColumn: cols.reduce((a, b) => Math.max(a, b)),
+  };
+}
+
 /** The name Univer gives a copy of a sheet (getCopyUniqueSheetName in @univerjs/sheets, not exported). */
 function copyName(workbook: Workbook, locale: LocaleService, name: string): string {
   let output = `${name} ${locale.t('sheets.tabs.sheetCopy', '')}`;
@@ -303,6 +325,9 @@ export class SheetEditorSession implements OfficeEditorPort {
   get hiddenDrawings(): boolean { return Boolean(this.imported?.hiddenDrawings); }
   /** Whether the file has links the grid does not show (they are kept as they are). */
   get hiddenHyperlinks(): boolean { return Boolean(this.imported?.hiddenHyperlinks); }
+
+  /** The workbook's theme color palette (Excel's "Theme Colors"), for the font and fill colors. */
+  get themeColors(): string[][] { return this.imported?.themeColors ?? []; }
 
   private disposeInstance(): void {
     for (const disposable of this.instanceDisposers.splice(0)) disposable.dispose();
@@ -382,12 +407,17 @@ export class SheetEditorSession implements OfficeEditorPort {
         workbook: created,
         resolve: (reference, origin) => this.resolveChartReference(reference, origin),
         data: drawingId => this.chartDrawing(drawingId)?.data,
+        title: drawingId => this.chartTitle(drawingId),
+        setTitle: (drawingId, text) => {
+          if (this.readOnly) return;
+          this.updateChart(drawingId, spec => withChartTitle(spec, text)).catch(error => console.warn('[SheetEditor] The chart title change was refused:', error));
+        },
       });
       this.instanceDisposers.push({ dispose: unregister });
     }
     this.structure = new StructureTracker(univer, imported, index => i18nService.t('sheetTableColumnName').replace('{n}', String(index)));
     this.instanceDisposers.push(...this.structure.install(api.getFormula()));
-    this.instanceDisposers.push(this.installPasteExpansion(univer, this.structure));
+    this.instanceDisposers.push(this.installPasteExpansion(univer, this.structure), this.installFillExpansion(univer, this.structure));
     this.instanceDisposers.push(this.installThisRowDisplay(univer));
     registerWorkbookTables(univer, imported.data.id, imported.tables);
     const tableStyles = this.installTableStyles(univer, imported);
@@ -406,7 +436,18 @@ export class SheetEditorSession implements OfficeEditorPort {
     this.workbook = workbook;
     this.imported = imported;
     this.sourceBytes = bytes;
-    this.installListeners(univer, api, workbook);
+    this.installListeners(univer, api);
+    this.instanceDisposers.push(
+      installValidationPrompts(univer, workbook, { alertTitle: i18nService.t('sheetDataValidation') }),
+      installExcelShortcuts(univer, api, { language }),
+      installAddToChat(univer, workbook, {
+        label: i18nService.t('coworkSelectedTextAddToChat'),
+        labels: { empty: i18nService.t('sheetChatEmptyCells'), moreRows: i18nService.t('sheetChatMoreRows') },
+        available$: this.chatAvailable$,
+        isAvailable: () => Boolean(this.chatHandler),
+        add: reference => this.chatHandler?.(reference),
+      }),
+    );
     workbook.setEditable(!this.readOnly);
     this.fitRowsToContent(univer, imported);
     this.bump();
@@ -513,6 +554,38 @@ export class SheetEditorSession implements OfficeEditorPort {
     this.bump();
   }
 
+  /** Where "Add to chat" puts selected cells: the task chat beside the editor, when there is one. */
+  private chatHandler: ((reference: SheetSelectionReference) => void) | undefined;
+  private readonly chatAvailable$ = new BehaviorSubject(false);
+
+  setChatHandler(handler: ((reference: SheetSelectionReference) => void) | undefined): void {
+    this.chatHandler = handler;
+    if (this.chatAvailable$.getValue() !== Boolean(handler)) this.chatAvailable$.next(Boolean(handler));
+  }
+
+  /** Dragging the fill handle below or beside a table grows it too, as in Excel. */
+  private installFillExpansion(univer: Univer, structure: StructureTracker): IDisposable {
+    return univer.__getInjector().get(IAutoFillService).addHook({
+      id: 'lobster-table-expansion',
+      type: AUTO_FILL_HOOK_TYPE.APPEND,
+      onFillData: location => {
+        const target = boundsOf(location.target);
+        const source = boundsOf(location.source);
+        const sheet = this.workbook?.getWorkbook().getSheetBySheetId(location.subUnitId);
+        if (!target || !source || !sheet) return { redos: [], undos: [] };
+        // Filling from empty cells enters nothing.
+        let hasValues = false;
+        for (let row = source.startRow; row <= source.endRow && !hasValues; row++) {
+          for (let column = source.startColumn; column <= source.endColumn && !hasValues; column++) {
+            const cell = sheet.getCellRaw(row, column);
+            hasValues = Boolean(cell && ((cell.v !== undefined && cell.v !== null && cell.v !== '') || cell.p || cell.f || cell.si));
+          }
+        }
+        return structure.pasteExpansion(location.subUnitId, target, hasValues);
+      },
+    });
+  }
+
   /**
    * The formula bar and the cell editor show same-row table references as Excel does (`[@Qty]`);
    * what is entered is written out in the long form files keep (see `expandThisRow`).
@@ -536,12 +609,8 @@ export class SheetEditorSession implements OfficeEditorPort {
     return univer.__getInjector().get(ISheetClipboardService).addClipboardHook({
       id: 'lobster-table-expansion',
       onPasteCells: (_from, to, data) => {
-        const { rows, cols } = to.range;
-        if (!rows.length || !cols.length) return { redos: [], undos: [] };
-        const range = {
-          startRow: rows.reduce((a, b) => Math.min(a, b)), endRow: rows.reduce((a, b) => Math.max(a, b)),
-          startColumn: cols.reduce((a, b) => Math.min(a, b)), endColumn: cols.reduce((a, b) => Math.max(a, b)),
-        };
+        const range = boundsOf(to.range);
+        if (!range) return { redos: [], undos: [] };
         let hasValues = false;
         data.forValue((_row, _column, cell) => {
           hasValues = Boolean(cell && ((cell.v !== undefined && cell.v !== null && cell.v !== '') || cell.p || cell.f));
@@ -812,7 +881,7 @@ export class SheetEditorSession implements OfficeEditorPort {
     this.bump();
   }
 
-  private installListeners(univer: Univer, api: FUniver, workbook: FWorkbook): void {
+  private installListeners(univer: Univer, api: FUniver): void {
     const commands = univer.__getInjector().get(ICommandService);
     const editorTextColor = univer.__getInjector().get(ThemeService).getColorFromTheme('gray.900');
     this.instanceDisposers.push(commands.beforeCommandExecuted(command => {
@@ -832,7 +901,7 @@ export class SheetEditorSession implements OfficeEditorPort {
       }
     }));
     this.instanceDisposers.push(commands.onCommandExecuted((command, options) => {
-      if (command.type !== CommandType.MUTATION || !command.id.startsWith('sheet.mutation.')) return;
+      if (command.type !== CommandType.MUTATION || !EDIT_MUTATION.test(command.id)) return;
       const flags = options as { applyFormulaCalculationResult?: boolean; onlyLocal?: boolean } | undefined;
       // Local-only mutations recompute what is shown (formula results, rule caches, row heights);
       // user edits, undo and redo never carry the flag.
@@ -840,7 +909,8 @@ export class SheetEditorSession implements OfficeEditorPort {
       this.editedSinceLoad = true;
       this.document.changed();
     }));
-    this.instanceDisposers.push(workbook.onSelectionChange(() => this.bump()));
+    // Selections made in code (an agent revealing its edit) update the toolbar too.
+    const selections = univer.__getInjector().get(SheetsSelectionsService).selectionChanged$.subscribe(() => this.bump());
     // The toolbar shows chart settings while a chart is selected.
     const drawings = univer.__getInjector().get(IDrawingManagerService);
     const focus = drawings.focus$.subscribe(() => this.bump());
@@ -850,7 +920,7 @@ export class SheetEditorSession implements OfficeEditorPort {
       this.formatPainterActive = status !== FormatPainterStatus.OFF;
       this.bump();
     });
-    this.instanceDisposers.push({ dispose: () => { focus.unsubscribe(); updates.unsubscribe(); painter.unsubscribe(); } });
+    this.instanceDisposers.push({ dispose: () => { selections.unsubscribe(); focus.unsubscribe(); updates.unsubscribe(); painter.unsubscribe(); } });
     this.themeObserver = new MutationObserver(() => {
       if (api.isDarkMode() !== prefersDark()) api.toggleDarkMode(prefersDark());
     });

@@ -1,7 +1,7 @@
 import type { FWorkbook } from '@univerjs/sheets/facade';
 
 import { rangeReference } from './sheetAddress';
-import type { ResolvedData } from './sheetChartOption';
+import { categoryLevels, type ResolvedData } from './sheetChartOption';
 import type { SheetChartData } from './sheetChartSpec';
 import { mapFormulaReferences } from './sheetStructure';
 import type { ChartDataRef } from './xlsxCharts';
@@ -19,6 +19,10 @@ export interface ChartHost {
   resolve: (reference: string, origin?: number) => string;
   /** A chart's latest data: settings change it after the chart was first drawn. */
   data?: (drawingId: string) => SheetChartData | undefined;
+  /** The chart's own title text, for editing it on the chart (undefined for the placeholder). */
+  title?: (drawingId: string) => string | undefined;
+  /** Retitle a chart as one undoable step (an empty text deletes the title); absent when read-only. */
+  setTitle?: (drawingId: string, text: string) => void;
 }
 
 /** Univer's float DOM component key for charts drawn over the grid. */
@@ -37,6 +41,7 @@ const fromCache = (source: ChartDataRef): ResolvedData => ({
   values: source.cache,
   text: source.cache.map(value => (value === null || value === undefined ? '' : String(value))),
   ...(source.formatCode ? { formatCode: source.formatCode } : {}),
+  ...(source.levels?.length ? { levels: source.levels.map(level => level.map(label => label ?? '')) } : {}),
 });
 
 /** A series source read from the workbook's cells, or from the chart's cache when they cannot be read. */
@@ -57,6 +62,13 @@ export function readChartData(host: ChartHost, source: ChartDataRef | undefined,
     return token.text;
   });
   if (!readable || !areas.length) return fromCache(source);
+  // Multi-level categories: a block of labels, split into the levels Excel draws.
+  if (source.levels && areas.length === 1) {
+    const sheet = host.workbook.getSheetByName(areas[0].sheet);
+    if (!sheet) return fromCache(source);
+    const { text, levels } = categoryLevels(sheet.getRange(areas[0].range).getDisplayValues().map(row => row.map(cell => cell ?? '')));
+    return { values: text, text, ...(levels.length ? { levels } : {}) };
+  }
   const values: (string | number | null)[] = [];
   const text: string[] = [];
   let formatCode = source.formatCode;

@@ -1,6 +1,6 @@
 import {
-  DataValidationErrorStyle, DataValidationOperator, DataValidationRenderMode, DataValidationType, type IRange, type ISheetDataValidationRule,
-  type IWorkbookData,
+  DataValidationErrorStyle, DataValidationOperator, DataValidationRenderMode, DataValidationType, DateSystem, excelDateTimePartsToSerial, type IRange,
+  type ISheetDataValidationRule, type IWorkbookData,
 } from '@univerjs/core';
 
 import { parseSqref } from './sheetStructure';
@@ -51,8 +51,29 @@ export function univerFormula(type: string, formula: string | undefined): string
   return `=${formula}`;
 }
 
+const DATE_TIME_TEXT = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
+const TIME_TEXT = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+const SECONDS_PER_DAY = 86_400;
+
+/**
+ * Excel's serial for the date or time text of a rule: Univer's date rules keep their values as
+ * `2026-09-28` or `2026-09-28 13:30:00`, and times are typed as `13:30`. Undefined for other text.
+ */
+export function dateTimeSerial(text: string, date1904 = false): number | undefined {
+  const trimmed = text.trim();
+  const time = TIME_TEXT.exec(trimmed);
+  if (time) {
+    const [hours, minutes, seconds] = [Number(time[1]), Number(time[2]), Number(time[3] ?? 0)];
+    return hours < 24 && minutes < 60 && seconds < 60 ? (hours * 3600 + minutes * 60 + seconds) / SECONDS_PER_DAY : undefined;
+  }
+  const date = DATE_TIME_TEXT.exec(trimmed);
+  if (!date) return undefined;
+  const [year, month, day, hours, minutes, seconds] = date.slice(1).map(part => Number(part ?? 0));
+  return excelDateTimePartsToSerial({ year, month, day, hours, minutes, seconds, fractionalSecond: 0 }, { dateSystem: date1904 ? DateSystem.Date1904 : DateSystem.Date1900 }) ?? undefined;
+}
+
 /** The formula text Excel stores for a Univer rule formula. */
-export function excelFormula(type: string, formula: string | undefined): string | undefined {
+export function excelFormula(type: string, formula: string | undefined, date1904 = false): string | undefined {
   if (formula === undefined || formula === '') return undefined;
   if (formula.startsWith('=')) return formula.slice(1);
   if (type === DataValidationType.LIST) {
@@ -64,6 +85,11 @@ export function excelFormula(type: string, formula: string | undefined): string 
       items = formula.split(',');
     }
     return `"${items.join(',').replace(/"/g, '""')}"`;
+  }
+  // Excel stores dates and times as serial numbers; the text would be read as a formula (2026-09-28 is 1989).
+  if ((type === DataValidationType.DATE || type === DataValidationType.TIME) && !NUMBER.test(formula)) {
+    const serial = dateTimeSerial(formula, date1904);
+    if (serial !== undefined) return String(serial);
   }
   return formula;
 }

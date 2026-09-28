@@ -74,6 +74,9 @@ export function chartFromRange(kind: ChartKind, sheetName: string, range: CellRa
   if (!numberedColumns.length) return undefined;
   const byColumns = dataRows >= numberedColumns.length;
   const lines = byColumns ? numberedColumns : numbered(dataRows, (index, step) => cell(top + index, left + step), dataColumns);
+  // Columns of text right after the category column are its outer levels (Excel's multi-level axis).
+  let levels = 0;
+  if (byColumns && headerColumn) while (levels < dataColumns && !numberedColumns.includes(levels)) levels++;
   const series: ChartSeries[] = lines.map(index => {
     const values: CellRange = byColumns
       ? { startRow: top, endRow: range.endRow, startColumn: left + index, endColumn: left + index }
@@ -82,11 +85,11 @@ export function chartFromRange(kind: ChartKind, sheetName: string, range: CellRa
       ? (headerRow ? { startRow: range.startRow, endRow: range.startRow, startColumn: left + index, endColumn: left + index } : undefined)
       : (headerColumn ? { startRow: top + index, endRow: top + index, startColumn: range.startColumn, endColumn: range.startColumn } : undefined);
     const categories: CellRange | undefined = byColumns
-      ? (headerColumn ? { startRow: top, endRow: range.endRow, startColumn: range.startColumn, endColumn: range.startColumn } : undefined)
+      ? (headerColumn ? { startRow: top, endRow: range.endRow, startColumn: range.startColumn, endColumn: range.startColumn + (kind === ChartKind.Scatter ? 0 : levels) } : undefined)
       : (headerRow ? { startRow: range.startRow, endRow: range.startRow, startColumn: left, endColumn: range.endColumn } : undefined);
     const item: ChartSeries = { values: reference(sheetName, values) };
     if (name) item.name = reference(sheetName, name);
-    if (categories) item[kind === ChartKind.Scatter ? 'x' : 'categories'] = reference(sheetName, categories);
+    if (categories) item[kind === ChartKind.Scatter ? 'x' : 'categories'] = levels && kind !== ChartKind.Scatter ? { ...reference(sheetName, categories), levels: [] } : reference(sheetName, categories);
     return item;
   });
   const round = kind === ChartKind.Pie || kind === ChartKind.Doughnut;

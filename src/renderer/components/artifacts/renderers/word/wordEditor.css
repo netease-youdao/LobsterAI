@@ -55,6 +55,8 @@
 }
 .lobster-word-toolbar-divider { width: 1px; height: 18px; background: rgba(128, 128, 128, .2); margin: 0 4px; }
 .lobster-word-mount { flex: 1; min-height: 0; position: relative; overflow: auto; background: #e9eaec; overscroll-behavior: contain; }
+/* Holds the scrolled pages and, above them, "Add to chat" for the selected text. */
+.lobster-word-frame { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
 .lobster-word-mount.docx-editor__scroll-container { display: block; }
 /* Core sizes this plane in pixels. The surrounding viewport owns scrolling.
    Word emboldens and slants fonts without those faces (宋体, 楷体, 仿宋); the app shell

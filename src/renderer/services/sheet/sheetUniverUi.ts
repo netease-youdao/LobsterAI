@@ -90,14 +90,18 @@ import SheetsSortUIZhCN from '@univerjs/sheets-sort-ui/locale/zh-CN';
 import { UniverSheetsUIPlugin } from '@univerjs/sheets-ui';
 import SheetsUIEnUS from '@univerjs/sheets-ui/locale/en-US';
 import SheetsUIZhCN from '@univerjs/sheets-ui/locale/zh-CN';
-import { UniverUIPlugin } from '@univerjs/ui';
+import { IconManager, UniverUIPlugin } from '@univerjs/ui';
 import UIEnUS from '@univerjs/ui/locale/en-US';
 import UIZhCN from '@univerjs/ui/locale/zh-CN';
 
 import { SheetChart } from '../../components/artifacts/renderers/sheet/SheetChart';
+import { SheetAddToChatIcon, SheetChatAction } from '../../components/artifacts/renderers/sheet/SheetChatAction';
+import { SheetValidationPrompt } from '../../components/artifacts/renderers/sheet/SheetValidationPrompt';
 import { SHEET_CHART_COMPONENT } from './sheetChartHost';
+import { CHAT_ACTION_COMPONENT, CHAT_ICON_COMPONENT } from './sheetChatAction';
 import { SHEET_MENU_CONFIG } from './sheetCommandPolicy';
 import { ENGINE_LOCALES, FORMULA_CONFIG, type SheetLanguage, toUniverLocale } from './sheetUniverEngine';
+import { VALIDATION_PROMPT_COMPONENT } from './sheetValidationPrompt';
 
 const UI_LOCALES = {
   zh: [DesignZhCN, UIZhCN, DocsUIZhCN, SheetsUIZhCN, SheetsFormulaUIZhCN, SheetsNumfmtUIZhCN, FindReplaceZhCN, SheetsSortUIZhCN, SheetsConditionalFormattingUIZhCN,
@@ -203,7 +207,7 @@ export function createSheetUniver(options: SheetUniverOptions): { univer: Univer
     clipboardConfig: { hidePasteOptions: true },
     // Excel flags text only when it would convert to a number; Univer also flags date-like text.
     disableForceStringMark: true,
-    footer: { sheetBar: true, statisticBar: true, menus: true, zoomSlider: false, addSheetButtonConfig: { show: true, defaultColumnCount: 26 } },
+    footer: { sheetBar: true, statisticBar: true, menus: true, zoomSlider: true, addSheetButtonConfig: { show: true, defaultColumnCount: 26 } },
   });
   univer.registerPlugin(UniverSheetsFormulaPlugin, { ...FORMULA_CONFIG, notExecuteFormula: remote });
   univer.registerPlugin(UniverSheetsFormulaUIPlugin);
@@ -234,5 +238,9 @@ export function createSheetUniver(options: SheetUniverOptions): { univer: Univer
   const api = FUniver.newAPI(univer);
   // Charts from the file float over the grid like pictures and are drawn by LobsterAI.
   api.registerComponent(SHEET_CHART_COMPONENT, SheetChart);
+  api.registerComponent(VALIDATION_PROMPT_COMPONENT, SheetValidationPrompt);
+  api.registerComponent(CHAT_ACTION_COMPONENT, SheetChatAction);
+  // Menu entries draw icons from Univer's icon registry.
+  univer.__getInjector().get(IconManager).register(CHAT_ICON_COMPONENT, SheetAddToChatIcon);
   return { univer, api };
 }

@@ -30,6 +30,8 @@ export interface EditorImport {
   tableStyles: Map<string, ResolvedTableStyle>;
   /** The theme's accent colors, for new charts. */
   palette: string[];
+  /** Excel's theme color palette for the font and fill colors: columns of a color and its variants. */
+  themeColors: string[][];
 }
 
 export function editorImport(imported: ImportedWorkbook): EditorImport {
@@ -58,5 +60,6 @@ export function editorImport(imported: ImportedWorkbook): EditorImport {
     structure: analyzeWorkbookStructure(baseline, imported.unshownLinks),
     tableStyles,
     palette: chartPalette(baseline.styles),
+    themeColors: baseline.styles.themeColorGrid(),
   };
 }

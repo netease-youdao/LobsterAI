@@ -4,6 +4,8 @@ import { i18nService } from '@/services/i18n';
 import type { Artifact } from '@/types/artifact';
 import { openLocalPathWithToast } from '@/utils/localFileActions';
 
+import { CoworkSelectedTextSource } from '../../../../shared/cowork/selectedText';
+import { type ArtifactSelectedTextContext, artifactSnippet } from '../artifactSelectedText';
 import { getDocxExpectedPageCount, repaginateDocx, waitForDocxLayout } from './docxPagination';
 import {
   type OfficePreviewZoomControlsConfig,
@@ -1471,9 +1473,11 @@ const FileInfoFallback: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
 
 interface DocumentRendererProps {
   artifact: Artifact;
+  /** Takes excerpts for the task chat ("Add to chat"). */
+  selectedTextContext?: ArtifactSelectedTextContext;
 }
 
-const DocumentRenderer: React.FC<DocumentRendererProps> = ({ artifact }) => {
+const DocumentRenderer: React.FC<DocumentRendererProps> = ({ artifact, selectedTextContext }) => {
   const ext = getExtension(artifact.fileName || artifact.filePath || '');
 
   switch (ext) {
@@ -1481,7 +1485,10 @@ const DocumentRenderer: React.FC<DocumentRendererProps> = ({ artifact }) => {
       if (artifact.filePath && window.electron?.artifact?.word) {
         return <Suspense fallback={<div className="p-6 text-sm opacity-60">{t('wordLoading')}</div>}>
           <WordFileEditor key={artifact.filePath} filePath={normalizeLocalFilePath(artifact.filePath)}
-            preview={<DocxSubRenderer artifact={{ ...artifact, content: '' }} />} />
+            preview={<DocxSubRenderer artifact={{ ...artifact, content: '' }} />}
+            onAddToChat={selectedTextContext?.enabled
+              ? text => selectedTextContext.onAddSelectedText(artifactSnippet(artifact, CoworkSelectedTextSource.ArtifactWord, text))
+              : undefined} />
         </Suspense>;
       }
       return <DocxSubRenderer artifact={artifact} />;
@@ -1489,7 +1496,10 @@ const DocumentRenderer: React.FC<DocumentRendererProps> = ({ artifact }) => {
       if (artifact.filePath && window.electron?.artifact?.sheet) {
         return <Suspense fallback={<div className="p-6 text-sm opacity-60">{t('sheetLoading')}</div>}>
           <SheetFileEditor key={artifact.filePath} filePath={normalizeLocalFilePath(artifact.filePath)}
-            preview={<SheetRenderer artifact={{ ...artifact, content: '' }} />} />
+            preview={<SheetRenderer artifact={{ ...artifact, content: '' }} />}
+            onAddToChat={selectedTextContext?.enabled
+              ? reference => selectedTextContext.onAddSelectedText(artifactSnippet(artifact, CoworkSelectedTextSource.ArtifactSheet, reference.text, reference.address))
+              : undefined} />
         </Suspense>;
       }
       return <SheetRenderer artifact={artifact} />;

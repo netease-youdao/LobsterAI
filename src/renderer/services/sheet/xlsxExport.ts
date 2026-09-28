@@ -25,7 +25,7 @@ import {
 } from './xlsxStructureExport';
 import { effectiveStyle, XlsxStyleWriter } from './xlsxStyles';
 import {
-  addElementPrefix, decodeXml, elementPrefix, encodeExcelString, encodeXmlText, firstXmlElement, setXmlAttributes,
+  addElementPrefix, childInsertionPoint, decodeXml, elementPrefix, encodeExcelString, encodeXmlText, firstXmlElement, setXmlAttributes,
   xmlAttribute, xmlElements,
 } from './xlsxXml';
 
@@ -541,8 +541,7 @@ function patchMerges(xml: string, merges: IRange[], prefix: string): string {
     : '';
   if (existing) return xml.slice(0, existing.start) + markup + xml.slice(existing.end);
   if (!markup) return xml;
-  const next = WORKSHEET_AFTER_MERGES.map(name => firstXmlElement(xml, name)).filter(Boolean).sort((a, b) => a!.start - b!.start)[0];
-  const at = next ? next.start : xml.lastIndexOf('</');
+  const at = childInsertionPoint(xml, 'worksheet', WORKSHEET_AFTER_MERGES) ?? xml.lastIndexOf('</');
   return xml.slice(0, at) + markup + xml.slice(at);
 }
 
@@ -764,6 +763,7 @@ export function exportXlsx(request: ExportRequest, originalBytes: Uint8Array): E
       current: validations?.[sheet.id] ?? [],
       maps,
       scope: plan.scope(sheet.name),
+      date1904: baseline.date1904,
     };
     return {
       sheet, maps, aligned, now, formats, rules,
@@ -938,7 +938,7 @@ export function exportXlsx(request: ExportRequest, originalBytes: Uint8Array): E
       xml = rewriteConditionalFormats(xml, { imported: [], current: rules, maps: plan.maps(part.id), scope: plan.scope(), dxf: style => styles.dxfFor(style) });
     }
     const checks = validations?.[part.id] ?? [];
-    if (checks.length) xml = rewriteDataValidations(xml, { imported: [], current: checks, maps: plan.maps(part.id), scope: plan.scope() });
+    if (checks.length) xml = rewriteDataValidations(xml, { imported: [], current: checks, maps: plan.maps(part.id), scope: plan.scope(), date1904: baseline.date1904 });
     const links = hyperlinkChanges(empty, now);
     if (links) xml = writeLinks(part.part, xml, links);
     if (sheetFilter) {

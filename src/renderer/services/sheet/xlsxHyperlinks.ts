@@ -4,7 +4,9 @@ import { type CellRange, cellReference, parseRangeReference } from './sheetAddre
 import { formulaSheetName } from './sheetStructure';
 import type { Relationship } from './xlsxPackage';
 import { mapElements } from './xlsxStructureExport';
-import { addElementPrefix, elementPrefix, encodeXmlAttribute, firstXmlElement, xmlAttribute, xmlElements } from './xlsxXml';
+import {
+  addElementPrefix, appendChildren, childInsertionPoint, elementPrefix, encodeXmlAttribute, firstChildElement, firstXmlElement, xmlAttribute, xmlElements,
+} from './xlsxXml';
 
 /**
  * Hyperlinks of a worksheet. Univer keeps a link inside the cell's rich text, so a linked text
@@ -197,18 +199,16 @@ export function rewriteHyperlinks(
   }
   if (newRelationships.length) {
     rels = rels
-      ? rels.replace(/<\/((?:[\w.-]+:)?Relationships)>\s*$/, `${newRelationships.join('')}</$1>`)
+      ? appendChildren(rels, 'Relationships', newRelationships.join('')) ?? rels
       : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${newRelationships.join('')}</Relationships>`;
   }
   if (elements.length) {
     const markup = addElementPrefix(elements.join(''), prefix);
-    const container = firstXmlElement(result, 'hyperlinks');
-    if (container?.inner !== undefined) {
-      const close = container.start + container.open.length + container.inner.length;
-      result = result.slice(0, close) + markup + result.slice(close);
+    const container = firstChildElement(result, 'worksheet', 'hyperlinks');
+    if (container) {
+      result = appendChildren(result, 'hyperlinks', markup) ?? result;
     } else {
-      const next = AFTER_HYPERLINKS.map(name => firstXmlElement(result, name)).filter(Boolean).sort((a, b) => a!.start - b!.start)[0];
-      const at = next ? next.start : result.lastIndexOf('</');
+      const at = childInsertionPoint(result, 'worksheet', AFTER_HYPERLINKS) ?? result.lastIndexOf('</');
       result = result.slice(0, at) + addElementPrefix(`<hyperlinks>${elements.join('')}</hyperlinks>`, prefix) + result.slice(at);
     }
     // New relationship ids need the relationships namespace on the worksheet.

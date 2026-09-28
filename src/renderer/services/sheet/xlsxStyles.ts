@@ -1,7 +1,7 @@
 import type { IBorderData, IStyleData } from '@univerjs/core';
 
 import {
-  addElementPrefix, elementPrefix, encodeXmlAttribute, firstXmlElement, setXmlAttributes, stripElementPrefix,
+  addElementPrefix, childInsertionPoint, elementPrefix, encodeXmlAttribute, firstXmlElement, setXmlAttributes, stripElementPrefix,
   xmlAttribute, xmlElements,
 } from './xlsxXml';
 
@@ -186,6 +186,14 @@ export class XlsxStyles {
     return index >= 0 ? this.theme[index] : undefined;
   }
 
+  /**
+   * Excel's "Theme Colors" palette: a column per theme color (background 1, text 1, background 2,
+   * text 2, accents 1–6) with the color first and its five lighter or darker variants below.
+   */
+  themeColorGrid(): string[][] {
+    return this.theme.slice(0, 10).map(base => [base, ...themeVariants(base).map(tint => applyTint(base, tint))].map(color => `#${color.toUpperCase()}`));
+  }
+
   /** Normalized style of a cellXfs record, straight from the XML. */
   normalized(xfIndex: number): NormalizedStyle {
     const xf = this.cellXfs?.records[xfIndex];
@@ -281,6 +289,17 @@ function parseTheme(xml: string | undefined): string[] {
   // SpreadsheetML theme indexes swap the first pairs: 0 = lt1 (background), 1 = dk1 (text).
   return ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6', 'hlink', 'folHlink']
     .map((name, index) => colors.get(name) ?? DEFAULT_THEME[index]);
+}
+
+/** The tints of Excel's theme palette under a color, which depend on how light it is. */
+function themeVariants(hex: string): number[] {
+  const [r, g, b] = [0, 2, 4].map(offset => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
+  const lightness = (Math.max(r, g, b) + Math.min(r, g, b)) / 2;
+  if (lightness >= 1) return [-0.05, -0.15, -0.25, -0.35, -0.5];
+  if (lightness <= 0) return [0.5, 0.35, 0.25, 0.15, 0.05];
+  if (lightness > 0.8) return [-0.1, -0.25, -0.5, -0.75, -0.9];
+  if (lightness < 0.2) return [0.9, 0.75, 0.5, 0.25, 0.1];
+  return [0.8, 0.6, 0.4, -0.25, -0.5];
 }
 
 /** Excel's tint: scale HSL luminance toward black (negative) or white (positive). */
@@ -436,8 +455,10 @@ export function toUniverStyle(style: NormalizedStyle): IStyleData {
   if (alignment.horizontal) result.ht = HORIZONTAL_TO_UNIVER[alignment.horizontal];
   if (alignment.vertical) result.vt = VERTICAL_TO_UNIVER[alignment.vertical];
   if (alignment.wrap) result.tb = WRAP;
+  // Excel turns text counterclockwise by 1–90 degrees and clockwise by 91–180 (90 plus the degrees);
+  // Univer's angle turns it clockwise.
   if (alignment.rotation !== undefined) {
-    result.tr = alignment.rotation === 255 ? { a: 0, v: 1 } : { a: alignment.rotation <= 90 ? alignment.rotation : 90 - alignment.rotation };
+    result.tr = alignment.rotation === 255 ? { a: 0, v: 1 } : { a: alignment.rotation <= 90 ? -alignment.rotation : alignment.rotation - 90 };
   }
   if (alignment.shrink) result.stf = 1;
   if (style.numberFormat) result.n = { pattern: style.numberFormat };
@@ -463,7 +484,7 @@ export function fromUniverStyle(style: IStyleData | null | undefined): Normalize
     const name = value ? BORDER_FROM_UNIVER[value.s] : undefined;
     if (name) result.border[side] = { style: name, color: normalizeColor(value?.cl?.rgb) ?? '#000000' };
   }
-  const rotation = style.tr ? (style.tr.v === 1 ? 255 : style.tr.a > 0 ? Math.min(90, style.tr.a) : style.tr.a < 0 ? Math.min(180, 90 - style.tr.a) : undefined) : undefined;
+  const rotation = style.tr ? (style.tr.v === 1 ? 255 : style.tr.a < 0 ? Math.min(90, -style.tr.a) : style.tr.a > 0 ? Math.min(180, 90 + style.tr.a) : undefined) : undefined;
   result.alignment = {
     horizontal: style.ht ? HORIZONTAL_FROM_UNIVER[style.ht] : undefined,
     vertical: style.vt && style.vt !== 3 ? VERTICAL_FROM_UNIVER[style.vt] : undefined,
@@ -603,10 +624,10 @@ export class XlsxStyleWriter {
     container(this.styles.cellXfs, this.xfs);
     if (this.styles.dxfs) container(this.styles.dxfs, this.dxfs);
     else if (this.dxfs.length) {
-      const anchor = ['tableStyles', 'colors', 'extLst'].map(name => firstXmlElement(xml, name)).find(Boolean);
-      const prefix = elementPrefix((anchor ?? firstXmlElement(xml, 'cellXfs'))!.name);
+      const prefix = elementPrefix(firstXmlElement(xml, 'styleSheet')?.name ?? '');
       const markup = addElementPrefix(`<dxfs count="${this.dxfs.length}">${this.dxfs.join('')}</dxfs>`, prefix);
-      const at = anchor ? anchor.start : xml.lastIndexOf('</');
+      // Before the stylesheet's own table styles, colors or extensions (not an `extLst` inside a cell style).
+      const at = childInsertionPoint(xml, 'styleSheet', ['tableStyles', 'colors', 'extLst']) ?? xml.lastIndexOf('</');
       replacements.push({ start: at, end: at, text: markup });
     }
     if (this.addedFormats.size) {

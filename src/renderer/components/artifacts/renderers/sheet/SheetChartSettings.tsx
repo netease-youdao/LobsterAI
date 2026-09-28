@@ -79,8 +79,8 @@ function ColorSetting({ label, value, disabled, onCommit }: { label: string; val
  * The selected chart's settings, like Excel's chart elements and styles: type and stacking, title,
  * legend, data labels, gridlines, axis titles and series colors. Each change is one undo step.
  */
-export function SheetChartSettings({ session, chart, disabled, onClose }: {
-  session: SheetEditorSession; chart: ChartDrawing; disabled: boolean; onClose: () => void;
+export function SheetChartSettings({ session, chart, disabled, onClose, style }: {
+  session: SheetEditorSession; chart: ChartDrawing; disabled: boolean; onClose: () => void; style?: React.CSSProperties;
 }): React.ReactElement | null {
   const spec = chart.data?.spec;
   if (!spec) return null;
@@ -91,7 +91,7 @@ export function SheetChartSettings({ session, chart, disabled, onClose }: {
   const palette = spec.palette?.length ? spec.palette : DEFAULT_PALETTE;
   const names = session.chartSeriesNames(chart.drawingId);
   return (
-    <div className="lobster-sheet-chart-settings" role="dialog" aria-label={t('sheetChartSettings')}
+    <div className="lobster-sheet-chart-settings" role="dialog" aria-label={t('sheetChartSettings')} style={style}
       onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } }}>
       <div className="lobster-sheet-chart-settings-header">
         <span>{t('sheetChartSettings')}</span>

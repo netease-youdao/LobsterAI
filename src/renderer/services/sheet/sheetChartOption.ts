@@ -13,6 +13,23 @@ export interface ResolvedData {
   /** What the cells show (formatted), for categories and names. */
   text: string[];
   formatCode?: string;
+  /** Outer category levels (next to the axis first), a label where a group starts and '' where it goes on. */
+  levels?: string[][];
+}
+
+/**
+ * The labels of a block of multi-level categories (rows × columns of what the cells show): the
+ * points run down the longer side and the level nearest the axis is the last column (or row), as
+ * Excel reads a selection with several columns of labels.
+ */
+export function categoryLevels(matrix: string[][]): { text: string[]; levels: string[][] } {
+  const rows = matrix.length;
+  const columns = Math.max(0, ...matrix.map(row => row.length));
+  const byRows = rows >= columns;
+  const depth = byRows ? columns : rows;
+  const count = byRows ? rows : columns;
+  const level = (index: number) => Array.from({ length: count }, (_, point) => (byRows ? matrix[point]?.[index] : matrix[index]?.[point]) ?? '');
+  return { text: level(depth - 1), levels: Array.from({ length: Math.max(0, depth - 1) }, (_, index) => level(depth - 2 - index)) };
 }
 
 /** Reads a series source from the workbook, or its cache when the cells cannot be read. */
@@ -80,6 +97,29 @@ function axisOption(axis: ChartAxis | undefined, kind: 'category' | 'value', ext
     ...(kind === 'value' && axis?.max !== undefined ? { max: axis.max } : {}),
     ...(kind === 'value' && axis?.majorUnit ? { interval: axis.majorUnit } : {}),
     ...extra,
+  };
+}
+
+/**
+ * One outer level of a multi-level category axis, drawn as Excel draws it: each group's label (a
+ * label starts a group that runs to the next one) under the middle of its categories, with a
+ * separator where a group starts.
+ */
+function outerCategoryAxis(labels: string[], length: number, level: number, horizontal: boolean, innerWidth: number, inverse: boolean): Record<string, unknown> {
+  const starts: number[] = [];
+  for (let index = 0; index < length; index++) if (index === 0 || (labels[index] ?? '') !== '') starts.push(index);
+  const data = Array.from({ length }, () => '');
+  starts.forEach((start, group) => { data[Math.floor((start + (starts[group + 1] ?? length) - 1) / 2)] = labels[start] ?? ''; });
+  const separators = new Set(starts);
+  const width = Math.max(0, ...data.map(textWidth));
+  return {
+    type: 'category', data, boundaryGap: true, inverse,
+    position: horizontal ? 'left' : 'bottom',
+    offset: horizontal ? innerWidth + 14 + level * (width + 14) : 22 * (level + 1),
+    axisLine: { show: false },
+    axisTick: { show: true, length: horizontal ? width + 12 : 20, interval: (index: number) => separators.has(index), lineStyle: { color: LINE } },
+    axisLabel: { interval: 0, color: TEXT, fontSize: 12 },
+    splitLine: { show: false },
   };
 }
 
@@ -157,7 +197,7 @@ export function chartOption(spec: ChartSpec, context: ChartOptionContext): EChar
     animation: false,
     backgroundColor: spec.background ?? '#FFFFFF',
     textStyle: { fontFamily: FONT },
-    ...(hasTitle ? { title: { text: titleText, left: 'center', top: 8, textStyle: { color: TEXT, fontSize: 18, fontWeight: 'normal' } } } : {}),
+    ...(hasTitle ? { title: { text: titleText, left: 'center', top: 8, triggerEvent: true, textStyle: { color: TEXT, fontSize: 18, fontWeight: 'normal' } } } : {}),
     ...(spec.legend ? { legend: legendOption(spec, hasTitle) } : {}),
     tooltip: { confine: true },
   };
@@ -302,14 +342,18 @@ export function chartOption(spec: ChartSpec, context: ChartOptionContext): EChar
   });
   const secondary = spec.plots.some(plot => plot.secondary) ? axisOption(spec.secondaryValueAxis, 'value', { splitLine: { show: false } }) : undefined;
   const categoryAxis = axisOption(spec.categoryAxis, 'category', { data: categoryNames, boundaryGap: spec.plots.some(plot => plot.type === ChartPlotType.Bar), ...(horizontal ? { nameGap: sideGap } : {}) });
+  // Multi-level categories: the outer levels under (or beside) the labels nearest the axis.
+  const innerWidth = Math.max(0, ...categoryNames.map(textWidth));
+  const outerAxes = (categories.levels ?? []).map((labels, level) => outerCategoryAxis(labels, length, level, horizontal, innerWidth, Boolean(spec.categoryAxis?.reverse)));
+  const categoryAxes = outerAxes.length ? [categoryAxis, ...outerAxes] : categoryAxis;
   const [bottomAxis, leftAxis] = horizontal ? [spec.valueAxis, spec.categoryAxis] : [spec.categoryAxis, spec.valueAxis];
   return {
     ...base,
     tooltip: { trigger: 'axis', confine: true, axisPointer: { type: spec.plots.some(plot => plot.type === ChartPlotType.Bar) ? 'shadow' : 'line' } },
     grid: gridOption(spec, hasTitle, { bottom: Boolean(bottomAxis?.title), left: Boolean(leftAxis?.title), right: Boolean(secondary && !horizontal && spec.secondaryValueAxis?.title) }),
     ...(horizontal
-      ? { yAxis: categoryAxis, xAxis: secondary ? [valueAxis, secondary] : valueAxis }
-      : { xAxis: categoryAxis, yAxis: secondary ? [valueAxis, secondary] : valueAxis }),
+      ? { yAxis: categoryAxes, xAxis: secondary ? [valueAxis, secondary] : valueAxis }
+      : { xAxis: categoryAxes, yAxis: secondary ? [valueAxis, secondary] : valueAxis }),
     series,
   } as EChartsOption;
 }

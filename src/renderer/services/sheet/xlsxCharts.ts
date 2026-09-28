@@ -17,6 +17,12 @@ export interface ChartDataRef {
   /** The values Excel cached with the chart, used when the reference cannot be read. */
   cache: (string | number | null)[];
   formatCode?: string;
+  /**
+   * Set for multi-level categories (Excel's `multiLvlStrRef`, several columns of labels): the outer
+   * levels' cached labels, next to the axis first, each only where a group starts. `cache` holds
+   * the level nearest the axis.
+   */
+  levels?: (string | null)[][];
 }
 
 export interface ChartSeries {
@@ -204,10 +210,41 @@ function cacheOf(reference: XmlElement | undefined): { cache: (string | number |
   return { cache: values, ...(format?.inner ? { formatCode: decodeXml(format.inner) } : {}) };
 }
 
+/** The cached labels of multi-level categories: `c:lvl` elements, the level nearest the axis first. */
+function levelsOf(reference: XmlElement): { cache: (string | null)[]; levels: (string | null)[][] } {
+  const cache = child(reference, 'multiLvlStrCache');
+  if (!cache?.inner) return { cache: [], levels: [] };
+  const count = Number(value(cache, 'ptCount') ?? 0);
+  const levels = [...xmlElements(cache.inner, 'lvl')].map(level => {
+    const labels: (string | null)[] = Array.from({ length: Number.isFinite(count) ? count : 0 }, () => null);
+    for (const point of xmlElements(level.inner ?? '', 'pt')) {
+      const index = Number(xmlAttribute(point.open, 'idx'));
+      if (Number.isInteger(index) && index >= 0 && index < labels.length) labels[index] = decodeXml(child(point, 'v')?.inner ?? '');
+    }
+    return labels;
+  });
+  return { cache: levels[0] ?? [], levels: levels.slice(1) };
+}
+
+/**
+ * Categories whose reference spans several columns and rows are multi-level however the part
+ * writes them (other tools use `numRef` or `strRef`), as Excel reads them.
+ */
+function multiLevelBlock(source: ChartDataRef | undefined): ChartDataRef | undefined {
+  if (!source?.ref || source.levels) return source;
+  const area = /!\$?([A-Za-z]{1,3})\$?(\d+):\$?([A-Za-z]{1,3})\$?(\d+)$/.exec(source.ref.trim());
+  return area && area[1].toUpperCase() !== area[3].toUpperCase() && area[2] !== area[4] ? { ...source, levels: [] } : source;
+}
+
 /** A series source: `c:tx`, `c:cat`, `c:val`, `c:xVal`, `c:yVal` or `c:bubbleSize`. */
 function dataRef(element: XmlElement | undefined): ChartDataRef | undefined {
   if (!element?.inner) return undefined;
-  const reference = child(element, 'numRef') ?? child(element, 'strRef') ?? child(element, 'multiLvlStrRef');
+  const multiLevel = child(element, 'multiLvlStrRef');
+  if (multiLevel) {
+    const formula = child(multiLevel, 'f');
+    return { ...(formula?.inner ? { ref: decodeXml(formula.inner) } : {}), ...levelsOf(multiLevel) };
+  }
+  const reference = child(element, 'numRef') ?? child(element, 'strRef');
   if (reference) {
     const formula = child(reference, 'f');
     return { ...(formula?.inner ? { ref: decodeXml(formula.inner) } : {}), ...cacheOf(reference) };
@@ -274,7 +311,7 @@ function seriesOf(element: XmlElement, type: ChartPlotType, styles: XlsxStyles):
   const values = dataRef(child(element, scatter ? 'yVal' : 'val')) ?? { cache: [] };
   return {
     name: dataRef(child(element, 'tx')),
-    ...(scatter ? { x: dataRef(child(element, 'xVal')) } : { categories: dataRef(child(element, 'cat')) }),
+    ...(scatter ? { x: dataRef(child(element, 'xVal')) } : { categories: multiLevelBlock(dataRef(child(element, 'cat'))) }),
     values,
     ...(type === ChartPlotType.Bubble ? { sizes: dataRef(child(element, 'bubbleSize')) } : {}),
     ...(shape.fill ? { color: shape.fill } : {}),

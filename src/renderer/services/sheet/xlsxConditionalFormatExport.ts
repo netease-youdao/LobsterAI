@@ -8,7 +8,9 @@ import { type CellRange,cellReference } from './sheetAddress';
 import { type FormulaScope, mapRanges, parseSqref, type SheetMaps, sqrefText, transformAnchoredFormula } from './sheetStructure';
 import type { ImportedConditionalFormat } from './xlsxConditionalFormats';
 import { mapElements } from './xlsxStructureExport';
-import { addElementPrefix, decodeXml, elementPrefix, encodeXmlAttribute, encodeXmlText, firstXmlElement, setXmlAttributes, xmlAttribute } from './xlsxXml';
+import {
+  addElementPrefix, childInsertionPoint, decodeXml, elementPrefix, encodeXmlAttribute, encodeXmlText, firstXmlElement, setXmlAttributes, xmlAttribute,
+} from './xlsxXml';
 
 /**
  * Writes conditional formats back from Univer's rule model. A sheet whose rules are exactly what
@@ -322,8 +324,7 @@ export function rewriteConditionalFormats(xml: string, context: ConditionalForma
   }
   if (main.length) {
     const markup = addElementPrefix(main.join(''), prefix);
-    const next = AFTER_CONDITIONAL_FORMATS.map(name => firstXmlElement(result, name)).filter(Boolean).sort((a, b) => a!.start - b!.start)[0];
-    const at = next ? next.start : result.lastIndexOf('</');
+    const at = childInsertionPoint(result, 'worksheet', AFTER_CONDITIONAL_FORMATS) ?? result.lastIndexOf('</');
     result = result.slice(0, at) + markup + result.slice(at);
   }
   // An emptied extension list would be invalid.

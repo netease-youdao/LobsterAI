@@ -1,6 +1,6 @@
 import { unzipSync, type Zippable, zipSync } from 'fflate';
 
-import { xmlAttribute, xmlElements } from './xlsxXml';
+import { appendChildren, xmlAttribute, xmlElements } from './xlsxXml';
 
 /** Fixed entry time so that saving the same content twice yields the same bytes. */
 const ENTRY_TIME = new Date(1980, 0, 1, 0, 0, 0);
@@ -66,7 +66,7 @@ export function relativeTarget(from: string, to: string): string {
 
 const CONTENT_TYPES = '[Content_Types].xml';
 const contentTypes = (files: Map<string, Uint8Array>) => new TextDecoder().decode(files.get(CONTENT_TYPES) ?? new Uint8Array());
-const withinTypes = (types: string, markup: string) => types.replace(/<\/((?:[\w.-]+:)?Types)>\s*$/, `${markup}</$1>`);
+const withinTypes = (types: string, markup: string) => appendChildren(types, 'Types', markup) ?? types;
 
 export function addContentType(files: Map<string, Uint8Array>, partName: string, contentType: string): void {
   const types = contentTypes(files);

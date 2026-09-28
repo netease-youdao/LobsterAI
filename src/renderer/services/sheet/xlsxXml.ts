@@ -129,6 +129,66 @@ export function setXmlAttributes(open: string, changes: Record<string, string | 
   return `${head}${rewritten.replace(/\s+$/, '')}${selfClosing ? '/>' : '>'}`;
 }
 
+/** Any tag, comment, CDATA section or processing instruction: group 1 is `/` for closing tags. */
+const TAG = new RegExp(`<!--[\\s\\S]*?-->|<!\\[CDATA\\[[\\s\\S]*?\\]\\]>|<\\?[\\s\\S]*?\\?>|<(\\/?)(${NAME}([A-Za-z_][\\w.-]*))${ATTRIBUTES}(\\/?)>`, 'g');
+
+/**
+ * Where a new child of the document's first `<parent>` goes, schema order kept: the offset of its
+ * first direct child named one of `followers`, or of its closing tag. Only direct children count —
+ * an `extLst` inside an earlier child (a `cfRule`, a `sheetView`) or `x14:` extension content is
+ * not a sibling. Markup-compatibility wrappers (`mc:AlternateContent` around `controls` or
+ * `oleObjects`) count as what they wrap. Undefined without such a parent.
+ */
+export function childInsertionPoint(xml: string, parent: string, followers: readonly string[]): number | undefined {
+  const root = firstXmlElement(xml, parent);
+  if (!root || root.inner === undefined) return undefined;
+  const wanted = new Set(followers);
+  const end = root.innerStart + root.inner.length;
+  const tags = new RegExp(TAG.source, 'g');
+  tags.lastIndex = root.innerStart;
+  let depth = 0;
+  let wrapper: { start: number; named: boolean } | undefined;
+  for (let match = tags.exec(xml); match && match.index < end; match = tags.exec(xml)) {
+    if (match[2] === undefined) continue;
+    const local = match[3];
+    if (match[1] === '/') {
+      depth--;
+      if (depth === 0) wrapper = undefined;
+      continue;
+    }
+    if (depth === 0 && local === 'AlternateContent') {
+      wrapper = { start: match.index, named: false };
+    } else if (depth === 0) {
+      if (wanted.has(local)) return match.index;
+    } else if (wrapper && !wrapper.named && local !== 'Choice' && local !== 'Fallback') {
+      // The first element a wrapper chooses between is what it stands for.
+      if (wanted.has(local)) return wrapper.start;
+      wrapper.named = true;
+    }
+    if (match[5] !== '/') depth++;
+  }
+  return end;
+}
+
+/**
+ * `xml` with `markup` added after the last child of the first `<parent>` element, which may be
+ * written empty and self-closing (`<definedNames/>`, `<Relationships …/>`). Undefined without one.
+ */
+export function appendChildren(xml: string, parent: string, markup: string): string | undefined {
+  const element = firstXmlElement(xml, parent);
+  if (!element) return undefined;
+  if (element.inner === undefined) return `${xml.slice(0, element.start)}${element.open.replace(/\s*\/>$/, '>')}${markup}</${element.name}>${xml.slice(element.end)}`;
+  const close = element.innerStart + element.inner.length;
+  return xml.slice(0, close) + markup + xml.slice(close);
+}
+
+/** The first direct child of the document's first `<parent>` named `local` (not a nested one). */
+export function firstChildElement(xml: string, parent: string, local: string): XmlElement | undefined {
+  const at = childInsertionPoint(xml, parent, [local]);
+  const element = at === undefined ? undefined : firstXmlElement(xml, local, at);
+  return element?.start === at ? element : undefined;
+}
+
 /** `x:` for `x:fonts`, '' for an unprefixed element name. */
 export function elementPrefix(qualifiedName: string): string {
   const colon = qualifiedName.indexOf(':');

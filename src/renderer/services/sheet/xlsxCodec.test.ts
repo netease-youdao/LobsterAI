@@ -237,6 +237,20 @@ describe('xlsx export', () => {
     expect(parts[PARTS.calcChain]).toBeUndefined();
   });
 
+  test('writes the zoom of a sheet with its next save, as Excel does', async () => {
+    const { bytes, imported } = await fixture();
+    expect(imported.data.sheets[DATA].zoomRatio).toBe(0.9);
+    // Opening and saving without zooming changes nothing.
+    expect(exportXlsx({ baseline: imported.baseline, current: edited(imported, () => undefined), resolveFormula: noFormula }, bytes).changed).toBe(false);
+    const current = edited(imported, data => {
+      data.sheets[DATA].zoomRatio = 1;
+      data.sheets[SUMMARY].zoomRatio = 1.25;
+    });
+    const parts = unpack(exportXlsx({ baseline: imported.baseline, current, resolveFormula: noFormula }, bytes).bytes);
+    expect(parts[PARTS.data]).toContain('<sheetView tabSelected="1" workbookViewId="0"><pane ySplit="1"');
+    expect(parts[PARTS.summary]).toContain('<sheetView showGridLines="0" workbookViewId="0" zoomScale="125" zoomScaleNormal="125"/>');
+  });
+
   test('moves every reference when rows are inserted', async () => {
     const { bytes, imported } = await fixture();
     const current = edited(imported, data => {
@@ -447,6 +461,31 @@ describe('xlsx export', () => {
     expect(afterRename).toContain('<xm:f>Data!$A$2:$A$4</xm:f>');
   });
 
+  test('new validation goes after the conditional formats, not into a data bar\'s extension list', async () => {
+    const x14 = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main';
+    const xm = 'http://schemas.microsoft.com/office/excel/2006/main';
+    // Excel writes a data bar with an extension list inside its rule, and the bar's settings at the end.
+    const summary = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="B1"><v>5</v></c></row></sheetData>'
+      + '<conditionalFormatting sqref="B1:B5"><cfRule type="dataBar" priority="1"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar>'
+      + `<extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" xmlns:x14="${x14}"><x14:id>{00000000-0000-4000-8000-000000000001}</x14:id></ext></extLst></cfRule></conditionalFormatting>`
+      + '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>'
+      + `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" xmlns:x14="${x14}"><x14:conditionalFormattings><x14:conditionalFormatting xmlns:xm="${xm}">`
+      + '<x14:cfRule type="dataBar" id="{00000000-0000-4000-8000-000000000001}"><x14:dataBar minLength="0" maxLength="100"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/></x14:dataBar></x14:cfRule>'
+      + '<xm:sqref>B1:B5</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst></worksheet>';
+    const { bytes, imported } = await fixture({ [PARTS.summary]: summary });
+    const current = edited(imported, data => {
+      const rule = { uid: 'new', type: 'list', formula1: '是,否', ranges: [{ startRow: 0, endRow: 4, startColumn: 3, endColumn: 3 }], showDropDown: true };
+      data.resources = [...(data.resources ?? []).filter(item => item.name !== DATA_VALIDATIONS_RESOURCE), { name: DATA_VALIDATIONS_RESOURCE, data: JSON.stringify({ [SUMMARY]: [rule] }) }];
+    }, true);
+    const saved = exportXlsx({ baseline: imported.baseline, current, resolveFormula: noFormula }, bytes).bytes;
+    const written = unpack(saved)[PARTS.summary];
+    expect(written).toContain('</cfRule></conditionalFormatting><dataValidations count="1"><dataValidation type="list" sqref="D1:D5"><formula1>"是,否"</formula1></dataValidation></dataValidations><pageMargins');
+    // Read back: the data bar and the new list are both there.
+    const reopened = importXlsx(saved, OPTIONS);
+    expect(conditionalFormatsOf(reopened.data)[SUMMARY]).toHaveLength(1);
+    expect(dataValidationsOf(reopened.data)![SUMMARY].map(rule => rule.formula1)).toEqual(['是,否']);
+  });
+
   test('shows hyperlinks as links and writes back only the ones edited', async () => {
     const rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
     const summary = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${rel}"><sheetData>`
@@ -535,6 +574,33 @@ describe('xlsx export', () => {
     expect(parts[PARTS.summary]).not.toContain('autoFilter');
     expect(parts[PARTS.summary]).not.toContain('hidden="1"');
     expect(parts[PARTS.workbook]).not.toContain('_FilterDatabase');
+  });
+
+  test('a filter turned on in the editor writes an AutoFilter and its hidden name', async () => {
+    const { bytes, imported } = await fixture();
+    expect(filtersOf(imported.data)?.[DATA]).toBeUndefined();
+    const current = edited(imported, data => {
+      const filter = { ref: { startRow: 0, endRow: 4, startColumn: 0, endColumn: 2 }, filterColumns: [{ colId: 1, customFilters: { customFilters: [{ val: 2, operator: 'greaterThan' }] } }], cachedFilteredOut: [1] };
+      data.resources = [...(data.resources ?? []).filter(item => item.name !== FILTERS_RESOURCE), { name: FILTERS_RESOURCE, data: JSON.stringify({ [DATA]: filter }) }];
+    });
+    const parts = unpack(exportXlsx({ baseline: imported.baseline, current, resolveFormula: noFormula }, bytes).bytes);
+    const sheet = parts[PARTS.data];
+    expect(sheet).toContain('<autoFilter ref="A1:C5"><filterColumn colId="1"><customFilters><customFilter operator="greaterThan" val="2"/></customFilters></filterColumn></autoFilter>');
+    // Schema order: the AutoFilter comes before the conditional formats and the page margins.
+    expect(sheet.indexOf('<autoFilter')).toBeLessThan(sheet.indexOf('<conditionalFormatting'));
+    expect(row(sheet, 2)).toContain('hidden="1"');
+    expect(parts[PARTS.workbook]).toContain('<definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">数据!$A$1:$C$5</definedName>');
+
+    // A workbook with an empty `<definedNames/>` (openpyxl writes one) keeps a single list.
+    const empty = unpack(await makeSheetFixture())[PARTS.workbook].replace(/<definedNames>[\s\S]*?<\/definedNames>/, '<definedNames />');
+    const bare = await fixture({ [PARTS.workbook]: empty });
+    const withFilter = edited(bare.imported, data => {
+      const filter = { ref: { startRow: 0, endRow: 4, startColumn: 0, endColumn: 2 }, filterColumns: [], cachedFilteredOut: [] };
+      data.resources = [...(data.resources ?? []).filter(item => item.name !== FILTERS_RESOURCE), { name: FILTERS_RESOURCE, data: JSON.stringify({ [DATA]: filter }) }];
+    });
+    const workbook = unpack(exportXlsx({ baseline: bare.imported.baseline, current: withFilter, resolveFormula: noFormula }, bare.bytes).bytes)[PARTS.workbook];
+    expect(workbook.match(/<definedNames/g)).toHaveLength(1);
+    expect(workbook).toContain('<definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">数据!$A$1:$C$5</definedName></definedNames>');
   });
 
   test('loads comments as notes and writes back only the notes edited', async () => {

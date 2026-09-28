@@ -10,6 +10,7 @@ import { WordFontSource } from '@/services/wordFonts';
 import { openLocalPathWithToast, revealLocalPathWithToast } from '@/utils/localFileActions';
 
 import { WordFileError, WordReadOnlyReason, type WordResult } from '../../../../../shared/artifactPreview/wordEditing';
+import { useEditorSelectionChat } from '../../artifactSelectedText';
 import { useRegisterOfficePreviewZoomControls } from '../OfficePreviewActionsContext';
 import { WordToolbar } from './WordToolbar';
 
@@ -37,7 +38,9 @@ function errorLabel(code?: WordFileError): string {
   return t('wordAccessFailed');
 }
 
-function ActiveWordEditor({ session }: { session: WordEditorSession }): React.ReactElement {
+type AddToChat = (text: string) => void;
+
+function ActiveWordEditor({ session, onAddToChat }: { session: WordEditorSession; onAddToChat?: AddToChat }): React.ReactElement {
   const document = session.document;
   const state = useSyncExternalStore(document.subscribe, document.getSnapshot);
   const editorState = useSyncExternalStore(session.subscribeEditor, session.getEditorSnapshot);
@@ -46,6 +49,9 @@ function ActiveWordEditor({ session }: { session: WordEditorSession }): React.Re
   const fontDetails = substitutedFonts.map(entry => (entry.source === WordFontSource.Missing
     ? `${entry.family}: ${t('wordFontMissing')}` : `${entry.family} → ${entry.substitute}`)).join('\n');
   const host = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
+  // Selected text goes to the task chat beside the editor, as in the other previews.
+  const chat = useEditorSelectionChat({ frame, content: host, selectedText: () => session.selectionSummary()?.text, onAdd: onAddToChat });
   const [choice, setChoice] = useState<ConflictChoice | null>(null);
   const [resolving, setResolving] = useState(false);
   useEffect(() => {
@@ -128,7 +134,10 @@ function ActiveWordEditor({ session }: { session: WordEditorSession }): React.Re
         </div>
       )}
       {state.readOnlyReasons.length === 0 && <WordToolbar session={session} />}
-      <div className="lobster-word-mount docx-editor__scroll-container" ref={host} />
+      <div className="lobster-word-frame" ref={frame} onPointerUp={chat.handlePointerUp}>
+        <div className="lobster-word-mount docx-editor__scroll-container" ref={host} />
+        {chat.button}
+      </div>
       <div className="lobster-word-footer">
         <span>{t('wordPage')} {editorState?.page.current ?? 1} / {editorState?.page.total ?? 1}</span>
         {state.originalCopyPath && <button type="button" onClick={() => { void revealLocalPathWithToast(state.originalCopyPath!); }}>{t('wordOriginalCopy')}</button>}
@@ -140,7 +149,9 @@ function ActiveWordEditor({ session }: { session: WordEditorSession }): React.Re
   );
 }
 
-export default function WordFileEditor({ filePath, preview }: { filePath: string; preview: React.ReactNode }): React.ReactElement {
+export default function WordFileEditor({ filePath, preview, onAddToChat }: {
+  filePath: string; preview: React.ReactNode; onAddToChat?: AddToChat;
+}): React.ReactElement {
   const [result, setResult] = useState<WordResult<WordEditorSession>>();
   const [previewing, setPreviewing] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -151,7 +162,7 @@ export default function WordFileEditor({ filePath, preview }: { filePath: string
     void acquireWordEditor(filePath).then(opened => { if (!cancelled) setResult(opened); });
     return () => { cancelled = true; };
   }, [filePath, attempt]);
-  if (result?.success) return <ActiveWordEditor key={result.value.document.file.sessionId} session={result.value} />;
+  if (result?.success) return <ActiveWordEditor key={result.value.document.file.sessionId} session={result.value} onAddToChat={onAddToChat} />;
   if (!result) return <div className="p-6 text-sm opacity-60" role="status">{t('wordLoading')}</div>;
   return (
     <div className="h-full min-h-0 flex flex-col">

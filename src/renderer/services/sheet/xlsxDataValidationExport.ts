@@ -5,7 +5,7 @@ import { stable } from './xlsxConditionalFormatExport';
 import { COMPARED_TYPES, EXCEL_ERROR_STYLES, EXCEL_TYPES, excelFormula, type ImportedDataValidation } from './xlsxDataValidations';
 import { mapElements } from './xlsxStructureExport';
 import {
-  addElementPrefix, decodeXml, elementPrefix, encodeXmlAttribute, encodeXmlText, firstXmlElement, setXmlAttributes, xmlAttribute,
+  addElementPrefix, childInsertionPoint, decodeXml, elementPrefix, encodeXmlAttribute, encodeXmlText, firstXmlElement, setXmlAttributes, xmlAttribute,
 } from './xlsxXml';
 
 /**
@@ -29,6 +29,8 @@ export interface DataValidationContext {
   current: ISheetDataValidationRule[];
   maps: SheetMaps;
   scope: FormulaScope;
+  /** Whether the workbook counts dates from 1904 (dates in rules are written as serial numbers). */
+  date1904?: boolean;
 }
 
 const rangeKey = (ranges: IRange[]): string => ranges
@@ -74,10 +76,12 @@ export function dataValidationsUnchanged(context: DataValidationContext): boolea
 }
 
 /** The original element with its ranges and formulas replaced. */
-function reuse(item: ImportedDataValidation, rule: ISheetDataValidationRule, sqref: string): string {
+function reuse(item: ImportedDataValidation, rule: ISheetDataValidationRule, sqref: string, date1904?: boolean): string {
   const open = item.markup.match(/^<[^>]+>/)![0];
   let markup = item.extension ? item.markup : setXmlAttributes(open, { sqref }) + item.markup.slice(open.length);
-  const formulas: Record<string, string | undefined> = { formula1: excelFormula(rule.type, rule.formula1), formula2: excelFormula(rule.type, rule.formula2) };
+  const formulas: Record<string, string | undefined> = {
+    formula1: excelFormula(rule.type, rule.formula1, date1904), formula2: excelFormula(rule.type, rule.formula2, date1904),
+  };
   for (const local of ['formula1', 'formula2'] as const) {
     markup = mapElements(markup, local, element => {
       if (element.inner === undefined || formulas[local] === undefined) return undefined;
@@ -91,7 +95,7 @@ function reuse(item: ImportedDataValidation, rule: ISheetDataValidationRule, sqr
 }
 
 /** Markup for a rule made in the editor. */
-function build(rule: ISheetDataValidationRule, sqref: string, extension: boolean): string | undefined {
+function build(rule: ISheetDataValidationRule, sqref: string, extension: boolean, date1904?: boolean): string | undefined {
   const type = EXCEL_TYPES[rule.type];
   if (!type) return undefined;
   const attributes: [string, string | undefined][] = [
@@ -109,7 +113,7 @@ function build(rule: ISheetDataValidationRule, sqref: string, extension: boolean
   ];
   if (!extension) attributes.push(['sqref', sqref]);
   const open = attributes.filter(([, value]) => value !== undefined).map(([name, value]) => ` ${name}="${encodeXmlAttribute(value!)}"`).join('');
-  const formulas = [['formula1', excelFormula(rule.type, rule.formula1)], ['formula2', COMPARED_TYPES.has(rule.type) ? excelFormula(rule.type, rule.formula2) : undefined]]
+  const formulas = [['formula1', excelFormula(rule.type, rule.formula1, date1904)], ['formula2', COMPARED_TYPES.has(rule.type) ? excelFormula(rule.type, rule.formula2, date1904) : undefined]]
     .filter(([, value]) => value !== undefined)
     .map(([name, value]) => (extension ? `<x14:${name}><xm:f>${encodeXmlText(value!)}</xm:f></x14:${name}>` : `<${name}>${encodeXmlText(value!)}</${name}>`))
     .join('');
@@ -150,12 +154,12 @@ export function rewriteDataValidations(xml: string, context: DataValidationConte
         : xmlAttribute(original.markup.match(/^<[^>]+>/)![0], 'sqref') ?? '';
       const kept = rangeKey(moved.ranges) === rangeKey(ranges) ? transformSqref(sourceSqref, context.maps) : null;
       const sqref = kept && parseSqref(kept).length ? kept : sqrefText(ranges);
-      (original.extension ? extensions : main).push(reuse(original, rule, sqref));
+      (original.extension ? extensions : main).push(reuse(original, rule, sqref, context.date1904));
       continue;
     }
     // Formulas naming other sheets go where Excel 2010 puts them.
     const extension = [rule.formula1, rule.formula2].some(formula => formula?.startsWith('=') && formula.includes('!'));
-    const built = build(rule, sqrefText(ranges), extension);
+    const built = build(rule, sqrefText(ranges), extension, context.date1904);
     if (built) (extension ? extensions : main).push(built);
   }
   if (extensions.length) {
@@ -171,8 +175,7 @@ export function rewriteDataValidations(xml: string, context: DataValidationConte
   if (main.length) {
     const open = containerOpen ? setXmlAttributes(containerOpen, { count: String(main.length) }) : addElementPrefix(`<dataValidations count="${main.length}">`, prefix);
     const markup = `${open}${addElementPrefix(main.join(''), prefix)}${addElementPrefix('</dataValidations>', prefix)}`;
-    const next = AFTER_DATA_VALIDATIONS.map(name => firstXmlElement(result, name)).filter(Boolean).sort((a, b) => a!.start - b!.start)[0];
-    const at = next ? next.start : result.lastIndexOf('</');
+    const at = childInsertionPoint(result, 'worksheet', AFTER_DATA_VALIDATIONS) ?? result.lastIndexOf('</');
     result = result.slice(0, at) + markup + result.slice(at);
   }
   return mapElements(result, 'extLst', element => (element.inner !== undefined && !element.inner.trim() ? null : undefined));

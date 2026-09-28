@@ -4,6 +4,10 @@ export const CoworkSelectedTextSource = {
   AssistantMessage: 'assistant',
   ArtifactMarkdown: 'artifact_markdown',
   ArtifactText: 'artifact_text',
+  /** Cells of a workbook open in the Excel editor; the title names the sheet and range. */
+  ArtifactSheet: 'artifact_sheet',
+  /** Text selected in a document open in the Word editor. */
+  ArtifactWord: 'artifact_word',
 } as const;
 
 export type CoworkSelectedTextSource =
@@ -100,6 +104,8 @@ const normalizeSnippet = (value: unknown): CoworkSelectedTextSnippet | null => {
   if (
     sourceType === CoworkSelectedTextSource.ArtifactMarkdown
     || sourceType === CoworkSelectedTextSource.ArtifactText
+    || sourceType === CoworkSelectedTextSource.ArtifactSheet
+    || sourceType === CoworkSelectedTextSource.ArtifactWord
   ) {
     const normalizedSourceId = explicitSourceId || artifactId;
     if (!normalizedSourceId) return null;
@@ -171,6 +177,14 @@ const getSnippetHeading = (snippet: CoworkSelectedTextSnippet, index: number): s
   if (sourceType === CoworkSelectedTextSource.ArtifactText) {
     const title = snippet.sourceTitle?.trim() || 'text file';
     return `[Excerpt ${index + 1} from text file ${title}]`;
+  }
+  if (sourceType === CoworkSelectedTextSource.ArtifactSheet) {
+    const title = snippet.sourceTitle?.trim() || 'spreadsheet';
+    return `[Excerpt ${index + 1} from spreadsheet ${title} (tab-separated cells as shown; excel_read gives formulas and more)]`;
+  }
+  if (sourceType === CoworkSelectedTextSource.ArtifactWord) {
+    const title = snippet.sourceTitle?.trim() || 'Word document';
+    return `[Excerpt ${index + 1} from Word document ${title} (word_read gives its paragraph ids)]`;
   }
   return `[Excerpt ${index + 1} from assistant message]`;
 };

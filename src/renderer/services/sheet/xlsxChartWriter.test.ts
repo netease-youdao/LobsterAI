@@ -1,12 +1,13 @@
+import type { IWorkbookData } from '@univerjs/core';
 import { describe, expect, test } from 'vitest';
 
-import type { ResolvedData } from './sheetChartOption';
+import { categoryLevels, chartOption, type ResolvedData } from './sheetChartOption';
 import {
   ChartAxisKind, type ChartCell, chartFromRange, ChartKind, chartKind, chartSourceRange, ChartStacking, chartStacking, hasDataLabels, hasGridlines, LegendPosition,
   withAxisTitle, withChartData, withChartKind, withChartTitle, withDataLabels, withGridlines, withLegend, withSeriesColor, withStacking,
 } from './sheetChartSpec';
 import { ChartPlotType, parseChart } from './xlsxCharts';
-import { chartPartXml } from './xlsxChartWriter';
+import { chartPartXml, snapshotChartReader } from './xlsxChartWriter';
 import { XlsxStyles } from './xlsxStyles';
 
 const styles = new XlsxStyles(undefined, undefined, 'en');
@@ -138,5 +139,39 @@ describe('charts made in the editor', () => {
     expect(withStacking(parsed, ChartStacking.Standard).plots[0]).toMatchObject({ grouping: 'clustered' });
     expect(withStacking(parsed, ChartStacking.Standard).plots[0].overlap).toBeUndefined();
   });
-});
 
+  test('two columns of labels make a two-level category axis, written and drawn as Excel does', () => {
+    // Region / product / units, the region only where a group starts (merged-looking cells).
+    const rows: unknown[][] = [['区域', '产品', '销量'], ['华东', '笔记本', 120], [null, '显示器', 95], ['华南', '键盘', 300], [null, '鼠标', 410]];
+    const cellData = Object.fromEntries(rows.map((row, r) => [r, Object.fromEntries(row.map((value, c) => [c, value === null ? null : { v: value as string | number }]))]));
+    const snapshot = { id: 'book', sheetOrder: ['s1'], sheets: { s1: { id: 's1', name: 'Data', cellData } } } as unknown as IWorkbookData;
+    const spec = chartFromRange(ChartKind.Column, 'Data', { startRow: 0, endRow: 4, startColumn: 0, endColumn: 2 }, (row, column) => {
+      const value = rows[row]?.[column] ?? null;
+      return { value, text: value === null ? '' : String(value) };
+    })!;
+    expect(spec.plots[0].series).toHaveLength(1);
+    expect(spec.plots[0].series[0].categories).toEqual({ ref: 'Data!$A$2:$B$5', cache: [], levels: [] });
+    const xml = chartPartXml(spec, snapshotChartReader(snapshot));
+    expect(xml).toContain('<c:cat><c:multiLvlStrRef><c:f>Data!$A$2:$B$5</c:f><c:multiLvlStrCache><c:ptCount val="4"/>'
+      + '<c:lvl><c:pt idx="0"><c:v>笔记本</c:v></c:pt><c:pt idx="1"><c:v>显示器</c:v></c:pt><c:pt idx="2"><c:v>键盘</c:v></c:pt><c:pt idx="3"><c:v>鼠标</c:v></c:pt></c:lvl>'
+      + '<c:lvl><c:pt idx="0"><c:v>华东</c:v></c:pt><c:pt idx="2"><c:v>华南</c:v></c:pt></c:lvl></c:multiLvlStrCache></c:multiLvlStrRef></c:cat>');
+    const parsed = parseChart(xml, styles);
+    const categories = parsed.plots[0].series[0].categories!;
+    expect(categories).toMatchObject({ ref: 'Data!$A$2:$B$5', cache: ['笔记本', '显示器', '键盘', '鼠标'], levels: [['华东', null, '华南', null]] });
+    // Drawn: the labels nearest the axis, and the regions under the middle of their groups.
+    const read = (source: { ref?: string; cache: (string | number | null)[]; levels?: (string | null)[][] } | undefined): ResolvedData => {
+      if (!source) return { values: [], text: [] };
+      if (source.levels) return { values: source.cache, text: source.cache.map(value => String(value ?? '')), levels: source.levels.map(level => level.map(label => label ?? '')) };
+      return { values: source.cache, text: source.cache.map(value => String(value ?? '')) };
+    };
+    const option = chartOption(parsed, { read, seriesName: index => `S${index + 1}` }) as { xAxis: { data: string[]; offset?: number }[] };
+    expect(option.xAxis).toHaveLength(2);
+    expect(option.xAxis[0].data).toEqual(['笔记本', '显示器', '键盘', '鼠标']);
+    expect(option.xAxis[1]).toMatchObject({ data: ['华东', '', '华南', ''], offset: 22 });
+    // Labels laid out across the top instead (series in rows): levels run down the rows.
+    expect(categoryLevels([['华东', '', '华南'], ['笔记本', '显示器', '键盘']])).toEqual({ text: ['笔记本', '显示器', '键盘'], levels: [['华东', '', '华南']] });
+    // Other tools write a block of labels as a plain reference; Excel still reads it as levels.
+    const plain = xml.replace(/<c:multiLvlStrRef>.*<\/c:multiLvlStrRef>/, "<c:numRef><c:f>'Data'!$A$2:$B$5</c:f></c:numRef>");
+    expect(parseChart(plain, styles).plots[0].series[0].categories).toEqual({ ref: "'Data'!$A$2:$B$5", cache: [], levels: [] });
+  });
+});

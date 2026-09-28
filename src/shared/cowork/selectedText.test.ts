@@ -176,3 +176,46 @@ test('builds artifact source headings in selected text prompt section', () => {
   expect(prompt).toContain('Source path: /tmp/project/README.md');
   expect(prompt).toContain('> docs excerpt');
 });
+
+test('keeps spreadsheet cell snippets and names the sheet range in the prompt', () => {
+  const result = normalizeCoworkSelectedTextSnippets([
+    {
+      id: 'artifact-sheet',
+      text: '项目\t金额\n苹果\t15',
+      sourceType: CoworkSelectedTextSource.ArtifactSheet,
+      sourceId: 'artifact-3',
+      artifactId: 'artifact-3',
+      sourceTitle: '报价单.xlsx · Sheet1!B2:C3',
+      sourcePath: '/tmp/project/报价单.xlsx',
+      createdAt: 3,
+    },
+  ]);
+  expect(result.success).toBe(true);
+  if (result.success === false) return;
+  expect(result.snippets[0]).toMatchObject({ sourceType: CoworkSelectedTextSource.ArtifactSheet, sourceTitle: '报价单.xlsx · Sheet1!B2:C3' });
+
+  const prompt = buildSelectedTextPromptSection(result.snippets);
+  expect(prompt).toContain('[Excerpt 1 from spreadsheet 报价单.xlsx · Sheet1!B2:C3');
+  expect(prompt).toContain('Source path: /tmp/project/报价单.xlsx');
+  expect(prompt).toContain('> 苹果\t15');
+});
+
+test('keeps Word document snippets and names the document in the prompt', () => {
+  const result = normalizeCoworkSelectedTextSnippets([
+    {
+      id: 'artifact-word',
+      text: '本季度收入增长了百分之十二',
+      sourceType: CoworkSelectedTextSource.ArtifactWord,
+      sourceId: 'artifact-4',
+      artifactId: 'artifact-4',
+      sourceTitle: '季度报告.docx',
+      sourcePath: '/tmp/project/季度报告.docx',
+      createdAt: 4,
+    },
+  ]);
+  expect(result.success).toBe(true);
+  if (result.success === false) return;
+  const prompt = buildSelectedTextPromptSection(result.snippets);
+  expect(prompt).toContain('[Excerpt 1 from Word document 季度报告.docx');
+  expect(prompt).toContain('> 本季度收入增长了百分之十二');
+});

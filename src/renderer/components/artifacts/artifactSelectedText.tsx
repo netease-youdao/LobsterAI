@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   type CoworkSelectedTextSnippet,
@@ -10,6 +10,21 @@ import type { Artifact } from '../../types/artifact';
 export interface ArtifactSelectedTextContext {
   enabled: boolean;
   onAddSelectedText: (snippet: CoworkSelectedTextSnippet) => void;
+}
+
+/** A chat excerpt from an artifact; `title` names where in it the text is (default: the file). */
+export function artifactSnippet(artifact: Artifact, sourceType: CoworkSelectedTextSource, text: string, title?: string): CoworkSelectedTextSnippet {
+  const fileTitle = artifact.fileName || artifact.title;
+  return {
+    id: `selected-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    text,
+    sourceId: artifact.id,
+    sourceType,
+    artifactId: artifact.id,
+    sourceTitle: title ? `${fileTitle} · ${title}` : fileTitle,
+    ...(artifact.filePath ? { sourcePath: artifact.filePath } : {}),
+    createdAt: Date.now(),
+  };
 }
 
 const SELECTED_TEXT_ACTION_HALF_WIDTH = 72;
@@ -111,18 +126,9 @@ export function useArtifactSelectedTextAction(options: {
 
   const handleAddSelectedText = useCallback(() => {
     if (!selectedTextAction || !selectedTextContext?.enabled) return;
-    selectedTextContext.onAddSelectedText({
-      id: `selected-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      text: selectedTextAction.text,
-      sourceId: artifact.id,
-      sourceType,
-      artifactId: artifact.id,
-      sourceTitle: artifact.fileName || artifact.title,
-      ...(artifact.filePath ? { sourcePath: artifact.filePath } : {}),
-      createdAt: Date.now(),
-    });
+    selectedTextContext.onAddSelectedText(artifactSnippet(artifact, sourceType, selectedTextAction.text));
     closeSelectedTextAction({ clearSelection: true });
-  }, [artifact.fileName, artifact.filePath, artifact.id, artifact.title, closeSelectedTextAction, selectedTextAction, selectedTextContext, sourceType]);
+  }, [artifact, closeSelectedTextAction, selectedTextAction, selectedTextContext, sourceType]);
 
   useEffect(() => {
     closeSelectedTextAction({ clearSelection: true });
@@ -173,4 +179,83 @@ export function useArtifactSelectedTextAction(options: {
     containerRef,
     handleMouseUp,
   };
+}
+
+/**
+ * "Add to chat" for text selected in an editor that owns its scrolling DOM (the Word editor),
+ * where the button cannot live inside the scrolled content: it floats in `frame` (positioned)
+ * above the selection and goes away on scrolling, typing or a press elsewhere. Such editors cancel
+ * pointerdown, so no mouse events follow: the selection is read on pointerup.
+ */
+export function useEditorSelectionChat(options: {
+  frame: RefObject<HTMLElement>;
+  content: RefObject<HTMLElement>;
+  /** The editor's own reading of the selection, when it has one. */
+  selectedText?: () => string | undefined;
+  onAdd?: (text: string) => void;
+}) {
+  const { frame, content, selectedText, onAdd } = options;
+  const [action, setAction] = useState<{ text: string; left: number; top: number } | null>(null);
+
+  const handlePointerUp = useCallback((event: React.PointerEvent) => {
+    if (event.target instanceof Element && event.target.closest('[data-cowork-selected-text-action]')) return;
+    const box = frame.current;
+    const selection = window.getSelection();
+    if (!onAdd || !box || !selection || selection.isCollapsed || selection.rangeCount === 0) {
+      setAction(null);
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    if (!content.current?.contains(range.commonAncestorContainer)) {
+      setAction(null);
+      return;
+    }
+    const text = (selectedText?.() ?? selection.toString()).trim();
+    if (!text) {
+      setAction(null);
+      return;
+    }
+    const rect = getSelectionAnchorRect(range);
+    const frameRect = box.getBoundingClientRect();
+    setAction({
+      text,
+      left: Math.min(box.clientWidth - SELECTED_TEXT_ACTION_HALF_WIDTH, Math.max(SELECTED_TEXT_ACTION_HALF_WIDTH, rect.left - frameRect.left + rect.width / 2)),
+      top: Math.max(8, rect.top - frameRect.top - 42),
+    });
+  }, [content, frame, onAdd, selectedText]);
+
+  useEffect(() => {
+    if (!action) return undefined;
+    const close = () => setAction(null);
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest('[data-cowork-selected-text-action]')) return;
+      close();
+    };
+    const scroller = content.current;
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', close);
+    scroller?.addEventListener('scroll', close, { passive: true });
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', close);
+      scroller?.removeEventListener('scroll', close);
+    };
+  }, [action, content]);
+
+  useEffect(() => { if (!onAdd) setAction(null); }, [onAdd]);
+
+  const button = action && onAdd ? (
+    <button
+      type="button"
+      data-cowork-selected-text-action
+      onMouseDown={event => event.preventDefault()}
+      onClick={() => { onAdd(action.text); setAction(null); }}
+      className="absolute z-40 -translate-x-1/2 rounded-full border border-border bg-surface px-3 py-1.5 text-xs font-medium text-foreground shadow-popover transition-colors hover:bg-surface-raised"
+      style={{ left: action.left, top: action.top }}
+    >
+      {i18nService.t('coworkSelectedTextAddToChat')}
+    </button>
+  ) : null;
+
+  return { handlePointerUp, button };
 }
