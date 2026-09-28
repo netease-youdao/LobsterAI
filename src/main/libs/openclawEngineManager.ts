@@ -33,7 +33,7 @@ import { migrateLegacyCronStorageWithDoctor } from './openclawCronLegacyMigratio
 import { getOpenClawDailyLogCandidates } from './openclawDailyLogs';
 import { readDreamingRecoverySummary } from './openclawDreamingRecovery';
 import { createDreamingStartupFailureCollector, OPENCLAW_STARTUP_MIGRATION_REFUSAL } from './openclawDreamingStartupFailure';
-import { cleanupStaleGatewayLocks, GatewayLockCleanupAction } from './openclawGatewayLock';
+import { cleanupStaleGatewayLocks, GatewayLockCleanupAction, openClawRuntimeHoldsLockCoordinators } from './openclawGatewayLock';
 import { buildOpenClawGatewayShutdownBridge, spawnOpenClawGatewayProcess, stopOpenClawGatewayProcess } from './openclawGatewayProcess';
 import {
   DEFAULT_GATEWAY_STARTUP_WAIT_POLICY,
@@ -44,6 +44,7 @@ import {
   isGatewayStartupWaitOver,
 } from './openclawGatewayStartupWait';
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
+import { tryAcquireOpenClawLockCoordinator } from './openclawLockCoordinator';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
 import { extractOpenClawBindingSchemaFailure, extractOpenClawCliFailure, hasLegacyOpenClawDiscovery, isOpenClawBindingSchemaFailure, runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
@@ -593,6 +594,9 @@ export class OpenClawEngineManager extends EventEmitter {
       const results = cleanupStaleGatewayLocks({
         configPath: this.configPath,
         stateDir: this.stateDir,
+        ...(openClawRuntimeHoldsLockCoordinators(this.resolveRuntimeMetadata().version)
+          ? { tryAcquireLockCoordinator: tryAcquireOpenClawLockCoordinator }
+          : {}),
       });
       for (const result of results) {
         const owner = result.ownerPid != null ? ` ownerPid=${result.ownerPid}` : '';
@@ -700,6 +704,10 @@ export class OpenClawEngineManager extends EventEmitter {
     try {
       // Invalidate in-flight restarts as well as stopping the current child.
       await this.stopGateway();
+      // stopGateway() reclaims locks only after stopping a live child, and a
+      // failed startup leaves none. The repair's lock stage refuses owners it
+      // cannot inspect, such as a SYSTEM process that reused the recorded PID.
+      this.cleanupStaleGatewayLocksSafely('pre-repair');
       return await repair();
     } finally {
       this.gatewayMaintenanceActive = false;
