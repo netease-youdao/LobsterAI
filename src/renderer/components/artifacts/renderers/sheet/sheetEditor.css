@@ -1,0 +1,136 @@
+.lobster-sheet-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--lobster-text-primary, #242424);
+}
+.lobster-sheet-statusbar, .lobster-sheet-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  flex-shrink: 0;
+}
+.lobster-sheet-statusbar, .lobster-sheet-toolbar {
+  border-bottom: 1px solid rgba(128, 128, 128, .18);
+}
+.lobster-sheet-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 6px 10px;
+  flex-shrink: 0;
+}
+.lobster-sheet-toolbar button {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.lobster-sheet-editor button, .lobster-sheet-notice button {
+  border-radius: 5px;
+  font-size: 12px;
+}
+.lobster-sheet-statusbar button, .lobster-sheet-notice button, .lobster-sheet-footer button {
+  padding: 4px 8px;
+  border: 1px solid rgba(128, 128, 128, .25);
+}
+.lobster-sheet-editor button:not(:disabled):hover, .lobster-sheet-notice button:not(:disabled):hover {
+  background: rgba(128, 128, 128, .12);
+}
+.lobster-sheet-editor button:disabled { opacity: .35; }
+.lobster-sheet-toolbar button[aria-pressed="true"] { background: rgba(30, 120, 220, .17); color: #277bc3; }
+.lobster-sheet-toolbar select {
+  height: 28px;
+  max-width: 110px;
+  border: 1px solid rgba(128, 128, 128, .25);
+  border-radius: 5px;
+  background: transparent;
+  font-size: 12px;
+  padding: 0 4px;
+}
+.lobster-sheet-toolbar-divider { width: 1px; height: 18px; background: rgba(128, 128, 128, .2); margin: 0 4px; }
+.lobster-sheet-toolbar { position: relative; }
+.lobster-sheet-chart-settings {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 10px;
+  z-index: 30;
+  width: 250px;
+  max-height: 70vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border: 1px solid rgba(128, 128, 128, .25);
+  border-radius: 8px;
+  background: var(--lobster-bg, #fff);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .14);
+  font-size: 12px;
+}
+.lobster-sheet-chart-settings-header { display: flex; align-items: center; justify-content: space-between; font-weight: 600; }
+.lobster-sheet-chart-settings label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.lobster-sheet-chart-settings label > span { flex-shrink: 0; opacity: .8; }
+.lobster-sheet-chart-settings select, .lobster-sheet-chart-settings input[type="text"] {
+  height: 26px;
+  width: 140px;
+  max-width: 140px;
+  border: 1px solid rgba(128, 128, 128, .25);
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  padding: 0 6px;
+}
+.lobster-sheet-chart-settings .lobster-sheet-chart-check { justify-content: flex-start; }
+.lobster-sheet-chart-series { display: flex; flex-direction: column; gap: 6px; }
+.lobster-sheet-chart-settings .lobster-sheet-chart-color { justify-content: flex-start; }
+.lobster-sheet-chart-color input[type="color"] { width: 26px; height: 20px; padding: 0; border: 1px solid rgba(128, 128, 128, .3); border-radius: 4px; background: none; }
+.lobster-sheet-chart-color span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dark .lobster-sheet-chart-settings { background: #26292d; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+.dark .lobster-sheet-chart-settings select option { background: #26292d; color: #e1e1e1; }
+.lobster-sheet-color {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.lobster-sheet-color:hover { background: rgba(128, 128, 128, .12); }
+.lobster-sheet-color > span:first-child:not(.lobster-sheet-fill) { border-bottom: 3px solid; line-height: 1.1; padding: 0 2px; }
+.lobster-sheet-fill { width: 16px; height: 16px; border: 1px solid rgba(128, 128, 128, .5); border-radius: 3px; }
+.lobster-sheet-color input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.lobster-sheet-mount { flex: 1; min-height: 0; position: relative; overflow: hidden; }
+/* Univer sizes itself to its container; the host fills the mount point. */
+.lobster-sheet-surface { position: absolute; inset: 0; }
+.lobster-sheet-footer { font-size: 11px; opacity: .65; border-top: 1px solid rgba(128, 128, 128, .18); min-height: 34px; }
+.lobster-sheet-notice { padding: 10px 12px; font-size: 12px; background: rgba(245, 158, 11, .09); flex-shrink: 0; }
+.lobster-sheet-chart { width: 100%; height: 100%; background: #fff; }
+.lobster-sheet-chart-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  box-sizing: border-box;
+  text-align: center;
+  font-size: 12px;
+  color: #6b6b6b;
+  background: #f7f7f7;
+  border: 1px dashed rgba(128, 128, 128, .45);
+}
+.dark .lobster-sheet-editor { color: #e1e1e1; }
+/* Univer's dropdown options keep dark text on a transparent chip (arrow-style lists) in dark mode. */
+.univer-dark .univer-rounded-full.univer-text-gray-900[style*="background: transparent"] { color: #e1e1e1; }
+.dark .lobster-sheet-toolbar select option { background: #26292d; color: #e1e1e1; }

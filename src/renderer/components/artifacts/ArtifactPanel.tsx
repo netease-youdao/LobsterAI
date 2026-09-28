@@ -4671,6 +4671,10 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         const { refreshOpenWordEditor } = await import('@/services/wordEditorSession');
         if (await refreshOpenWordEditor(selectedArtifact.filePath)) return;
       }
+      if (/\.xlsx$/i.test(selectedArtifact.filePath) && window.electron?.artifact?.sheet) {
+        const { refreshOpenSheetEditor } = await import('@/services/sheet/sheetEditorSession');
+        if (await refreshOpenSheetEditor(selectedArtifact.filePath)) return;
+      }
       if (selectedArtifact.type === ArtifactTypeValue.Html) {
         dispatch(addArtifact({
           sessionId: selectedArtifact.sessionId,

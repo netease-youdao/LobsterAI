@@ -15,6 +15,7 @@ import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
 import { MarkdownFileIpc, type SaveMarkdownFileRequest } from '../shared/artifactPreview/markdownEditing';
 import { ReviewIpc, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest } from '../shared/artifactPreview/reviewSource';
+import { type SheetFileBridge, SheetFileIpc } from '../shared/artifactPreview/sheetEditing';
 import { WordAgentIpc, type WordAgentRequest } from '../shared/artifactPreview/wordAgent';
 import { type WordFileBridge,WordFileIpc } from '../shared/artifactPreview/wordEditing';
 import {
@@ -1063,6 +1064,26 @@ contextBridge.exposeInMainWorld('electron', {
       },
       respondAgent: response => ipcRenderer.send(WordAgentIpc.Respond, response),
     } satisfies WordFileBridge,
+    sheet: {
+      open: filePath => ipcRenderer.invoke(SheetFileIpc.Open, filePath),
+      read: sessionId => ipcRenderer.invoke(SheetFileIpc.Read, sessionId),
+      checkpoint: request => ipcRenderer.invoke(SheetFileIpc.Checkpoint, request),
+      save: request => ipcRenderer.invoke(SheetFileIpc.Save, request),
+      discardDraft: sessionId => ipcRenderer.invoke(SheetFileIpc.DiscardDraft, sessionId),
+      release: sessionId => ipcRenderer.invoke(SheetFileIpc.Release, sessionId),
+      setHasUnsafeEdits: unsafe => ipcRenderer.send(SheetFileIpc.SetUnsafeEdits, unsafe),
+      onChanged: listener => {
+        const handler = (_event: Electron.IpcRendererEvent, sessionId: string) => listener(sessionId);
+        ipcRenderer.on(SheetFileIpc.Changed, handler);
+        return () => { ipcRenderer.removeListener(SheetFileIpc.Changed, handler); };
+      },
+      onAgentRequest: listener => {
+        const handler = (_event: Electron.IpcRendererEvent, request: Parameters<typeof listener>[0]) => listener(request);
+        ipcRenderer.on(SheetFileIpc.AgentRequest, handler);
+        return () => { ipcRenderer.removeListener(SheetFileIpc.AgentRequest, handler); };
+      },
+      respondAgent: response => ipcRenderer.send(SheetFileIpc.AgentRespond, response),
+    } satisfies SheetFileBridge,
     markdown: {
       read: (filePath: string) => ipcRenderer.invoke(MarkdownFileIpc.Read, filePath),
       save: (request: SaveMarkdownFileRequest) => ipcRenderer.invoke(MarkdownFileIpc.Save, request),

@@ -12,6 +12,7 @@ import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeSt
 import type { MarkdownFileBridge } from '../../shared/artifactPreview/markdownEditing';
 import type { ReviewScopeRequest } from '../../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest, ReviewSourceResponse } from '../../shared/artifactPreview/reviewSource';
+import type { SheetFileBridge } from '../../shared/artifactPreview/sheetEditing';
 import type { WordFileBridge } from '../../shared/artifactPreview/wordEditing';
 import type { ResolvedArtifactOutput } from '../../shared/artifactPreview/workspace';
 import type {
@@ -1587,6 +1588,7 @@ interface IElectronAPI {
   };
   artifact: {
     word: WordFileBridge;
+    sheet: SheetFileBridge;
     markdown: MarkdownFileBridge;
     watchFile: (filePath: string) => Promise<void>;
     unwatchFile: (filePath: string) => Promise<void>;

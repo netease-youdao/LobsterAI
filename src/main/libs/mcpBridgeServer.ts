@@ -1,8 +1,8 @@
 /**
  * McpBridgeServer — authenticated loopback callbacks shared by OpenClaw integrations.
  *
- * Provides AskUser, media-generation, decision-model, in-app browser and Word
- * editor endpoints. Binds to 127.0.0.1 only and requires the per-process bridge
+ * Provides AskUser, media-generation, decision-model, in-app browser, Word and
+ * Excel editor endpoints. Binds to 127.0.0.1 only and requires the per-process bridge
  * secret.
  */
 import crypto from 'crypto';
@@ -79,6 +79,10 @@ export type BrowserToolResponse = {
 /** Word editor tools share the browser tools' request and result shapes. */
 export type WordToolRequest = BrowserToolRequest;
 export type WordToolResponse = BrowserToolResponse;
+/** Excel editor tools share the same shapes. */
+export type SheetToolRequest = BrowserToolRequest;
+export type SheetToolResponse = BrowserToolResponse;
+type EditorToolHandler = (request: BrowserToolRequest) => Promise<BrowserToolResponse>;
 
 export type DecisionToolRequest = {
   args: Record<string, unknown>;
@@ -110,6 +114,7 @@ export class McpBridgeServer {
   private onBrowserToolCallback: ((request: BrowserToolRequest) => Promise<BrowserToolResponse>) | null = null;
   private onDecisionToolCallback: DecisionToolHandler | null = null;
   private onWordToolCallback: ((request: WordToolRequest) => Promise<WordToolResponse>) | null = null;
+  private onSheetToolCallback: ((request: SheetToolRequest) => Promise<SheetToolResponse>) | null = null;
 
   constructor(secret: string) {
     this.secret = secret;
@@ -138,6 +143,10 @@ export class McpBridgeServer {
 
   get wordCallbackUrl(): string | null {
     return this._port ? `http://127.0.0.1:${this._port}/word/tool` : null;
+  }
+
+  get sheetCallbackUrl(): string | null {
+    return this._port ? `http://127.0.0.1:${this._port}/sheet/tool` : null;
   }
 
   /**
@@ -170,6 +179,10 @@ export class McpBridgeServer {
 
   onWordTool(callback: (request: WordToolRequest) => Promise<WordToolResponse>): void {
     this.onWordToolCallback = callback;
+  }
+
+  onSheetTool(callback: (request: SheetToolRequest) => Promise<SheetToolResponse>): void {
+    this.onSheetToolCallback = callback;
   }
 
   /**
@@ -320,7 +333,12 @@ export class McpBridgeServer {
     }
 
     if (req.url?.startsWith('/word/tool')) {
-      await this.handleWordTool(req, res);
+      await this.handleEditorTool(req, res, this.onWordToolCallback, 'Word');
+      return;
+    }
+
+    if (req.url?.startsWith('/sheet/tool')) {
+      await this.handleEditorTool(req, res, this.onSheetToolCallback, 'Excel');
       return;
     }
 
@@ -521,33 +539,34 @@ export class McpBridgeServer {
     }
   }
 
-  private async handleWordTool(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  /** Word and Excel editor tools: forward to the renderer-backed handler and relay its result. */
+  private async handleEditorTool(req: http.IncomingMessage, res: http.ServerResponse, callback: EditorToolHandler | null, editorName: string): Promise<void> {
     const startedAt = Date.now();
-    const reply = (status: number, payload: WordToolResponse): void => {
+    const reply = (status: number, payload: BrowserToolResponse): void => {
       if (res.writableEnded) return;
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(payload));
     };
     try {
-      const request = JSON.parse(await this.readBody(req)) as WordToolRequest;
+      const request = JSON.parse(await this.readBody(req)) as BrowserToolRequest;
       if (typeof request.tool !== 'string' || !request.tool.trim()) {
-        reply(400, { content: [{ type: 'text', text: 'Missing Word tool name.' }], isError: true });
+        reply(400, { content: [{ type: 'text', text: `Missing ${editorName} tool name.` }], isError: true });
         return;
       }
-      if (!this.onWordToolCallback) {
-        reply(503, { content: [{ type: 'text', text: 'The LobsterAI Word editor is not ready.' }], isError: true });
+      if (!callback) {
+        reply(503, { content: [{ type: 'text', text: `The LobsterAI ${editorName} editor is not ready.` }], isError: true });
         return;
       }
-      const result = await this.onWordToolCallback({
+      const result = await callback({
         tool: request.tool,
         args: request.args && typeof request.args === 'object' && !Array.isArray(request.args) ? request.args : {},
       });
-      log('INFO', `Word tool "${request.tool}" completed in ${Date.now() - startedAt}ms with isError=${result.isError ?? false}`);
+      log('INFO', `${editorName} tool "${request.tool}" completed in ${Date.now() - startedAt}ms with isError=${result.isError ?? false}`);
       reply(200, result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      log('ERROR', `Word tool request failed after ${Date.now() - startedAt}ms: ${message}`);
-      reply(500, { content: [{ type: 'text', text: `LobsterAI Word editor error: ${message}` }], isError: true });
+      log('ERROR', `${editorName} tool request failed after ${Date.now() - startedAt}ms: ${message}`);
+      reply(500, { content: [{ type: 'text', text: `LobsterAI ${editorName} editor error: ${message}` }], isError: true });
     }
   }
 

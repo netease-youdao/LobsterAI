@@ -47,6 +47,7 @@ import { type AppUpdateActiveWorkloads, AppUpdateIpc } from '../shared/appUpdate
 import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
 import { ReviewIpc, ReviewScope, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest } from '../shared/artifactPreview/reviewSource';
+import { SHEET_AGENT_MCP_SERVER_NAME, SHEET_AGENT_TIMEOUT_MS, SHEET_AGENT_TOOL_DEFINITIONS } from '../shared/artifactPreview/sheetAgent';
 import { buildWorkspaceChangesArtifact } from '../shared/artifactPreview/workspaceChanges';
 import { createAccountOwnerKey } from '../shared/auth/accountOwner';
 import {
@@ -288,6 +289,7 @@ import {
   registerScheduledTaskHandlers,
 } from './ipcHandlers/scheduledTask';
 import { registerSessionDiagnosticsHandlers } from './ipcHandlers/sessionDiagnostics';
+import { hasUnsafeSheetEdits, registerSheetEditingHandlers } from './ipcHandlers/sheetEditing';
 import { registerSiteIpcHandlers } from './ipcHandlers/site';
 import { registerSkillHandlers } from './ipcHandlers/skills';
 import { registerSubscriptionTrialIpcHandlers } from './ipcHandlers/subscriptionTrial';
@@ -434,6 +436,7 @@ import {
   resolveLobsterBrowserMcpCommand,
   resolveLobsterBrowserMcpStdioLaunch,
 } from './libs/lobsterBrowserMcpServer';
+import { resolveLobsterOfficeMcpStdioLaunch } from './libs/lobsterOfficeMcpServer';
 import { resolveLobsterWordMcpStdioLaunch } from './libs/lobsterWordMcpServer';
 import { exportLogsZip } from './libs/logExport';
 import { MainLogReporter } from './libs/mainLogReporter';
@@ -443,6 +446,7 @@ import {
   MainWindowLoadErrorCode,
 } from './libs/mainWindowLoadRecovery';
 import { inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
+import type { OfficeAgentBridge } from './libs/officeAgentBridge';
 import {
   migrateAgentModelRefs,
   parsePrimaryModelRef,
@@ -2142,6 +2146,7 @@ let browserCredentialApprovalService: BrowserCredentialApprovalService | null = 
 let skillManager: SkillManager | null = null;
 let mcpRuntime: McpRuntime | null = null;
 let wordAgentBridge: WordAgentBridge | null = null;
+let sheetAgentBridge: OfficeAgentBridge | null = null;
 let skinRuntimeController: SkinRuntimeController | null = null;
 let imGatewayManager: IMGatewayManager | null = null;
 let storeInitPromise: Promise<SqliteStore> | null = null;
@@ -2687,6 +2692,31 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
         } catch (error) {
           // The Word tools are optional; never let them break the rest of the config sync.
           console.warn('[WordAgent] Could not prepare the Word MCP server:', error);
+          return null;
+        }
+      },
+      getLobsterSheetMcpStdioLaunch: () => {
+        const mcpRuntime = getMcpRuntime();
+        const bridgeUrl = mcpRuntime.getSheetCallbackUrl();
+        if (!bridgeUrl) return null;
+        try {
+          return resolveLobsterOfficeMcpStdioLaunch(
+            path.join(getOpenClawEngineManager().getStateDir(), 'generated'),
+            {
+              serverName: SHEET_AGENT_MCP_SERVER_NAME,
+              editorName: 'Excel',
+              tools: SHEET_AGENT_TOOL_DEFINITIONS,
+              timeoutMs: SHEET_AGENT_TIMEOUT_MS,
+            },
+            {
+              electronNodeRuntimePath: getElectronNodeRuntimePath(),
+              bridgeUrl,
+              bridgeSecret: mcpRuntime.getBridgeSecret(),
+            },
+          );
+        } catch (error) {
+          // The Excel tools are optional too.
+          console.warn('[SheetAgent] Could not prepare the Excel MCP server:', error);
           return null;
         }
       },
@@ -3881,6 +3911,9 @@ const startAskUserServer = async (): Promise<void> => {
   runtime.setWordToolHandler(async request => (wordAgentBridge
     ? wordAgentBridge.call(request.tool, request.args)
     : { content: [{ type: 'text', text: 'The LobsterAI Word editor is not ready yet.' }], isError: true }));
+  runtime.setSheetToolHandler(async request => (sheetAgentBridge
+    ? sheetAgentBridge.call(request.tool, request.args)
+    : { content: [{ type: 'text', text: 'The LobsterAI Excel editor is not ready yet.' }], isError: true }));
 };
 
 const getIMGatewayManager = () => {
@@ -13366,6 +13399,7 @@ if (!gotTheLock) {
 
   registerMarkdownEditingHandlers(() => mainWindow);
   wordAgentBridge = registerWordEditingHandlers(() => mainWindow);
+  sheetAgentBridge = registerSheetEditingHandlers(() => mainWindow);
 
   // ---- artifact file watching ----
   const fileWatchers = new Map<
@@ -14603,11 +14637,11 @@ if (!gotTheLock) {
 
     // User-initiated quit (Cmd+Q, app menu, Dock, tray): scheduled tasks and
     // IM replies stop with the app, so ask first.
-    void showAppQuitConfirmation(() => hasUnsafeMarkdownEdits() || hasUnsafeWordEdits())
+    void showAppQuitConfirmation(() => hasUnsafeMarkdownEdits() || hasUnsafeWordEdits() || hasUnsafeSheetEdits())
       .then(
         confirmed => confirmed,
         error => {
-          if (hasUnsafeMarkdownEdits() || hasUnsafeWordEdits()) {
+          if (hasUnsafeMarkdownEdits() || hasUnsafeWordEdits() || hasUnsafeSheetEdits()) {
             console.error('[Main] quit confirmation prompt failed, retaining unsaved document edits:', error);
             return false;
           }

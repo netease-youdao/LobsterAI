@@ -1,0 +1,105 @@
+diff --git a/node_modules/@univerjs/engine-render/lib/cjs/index.js b/node_modules/@univerjs/engine-render/lib/cjs/index.js
+index 255f64d..df3cbab 100644
+--- a/node_modules/@univerjs/engine-render/lib/cjs/index.js
++++ b/node_modules/@univerjs/engine-render/lib/cjs/index.js
+@@ -25749,10 +25749,30 @@ function getShrinkToFitScale(contentWidth, availableWidth, fontSize) {
+ 	if (contentWidth <= availableWidth || contentWidth <= 0 || availableWidth <= 0 || fontSize <= 0) return 1;
+ 	return Math.max(1 / fontSize, availableWidth / contentWidth);
+ }
++/**
++* LobsterAI patch: like Excel's General format, a number too wide for its column first loses
++* decimal places in fixed notation; scientific notation is the fallback when even the integer
++* part does not fit or rounding would leave no significant digit.
++*/
++function getGeneralFixedFit(value, displayText, fontString, availableWidth) {
++	if (!Number.isFinite(value) || /e/i.test(displayText)) return "";
++	const match = /^(-?)(\d+)([.,])(\d+)$/.exec(displayText);
++	if (!match) return "";
++	const [, sign, , separator, fraction] = match;
++	for (let places = fraction.length - 1; places >= 0; places--) {
++		const rounded = Number(`${Math.round(Number(`${Math.abs(value)}e${places}`))}e-${places}`);
++		if (!Number.isFinite(rounded) || rounded === 0) return "";
++		const candidate = `${sign}${rounded.toFixed(places).replace(/\.?0+$/, "").replace(".", separator)}`;
++		if (FontCache.getMeasureText(candidate, fontString).width <= availableWidth) return candidate;
++	}
++	return "";
++}
+ function getGeneralNumberDisplayText(value, displayText, fontString, availableWidth) {
+ 	if (availableWidth <= 0) return displayText;
+ 	const roundingReserveWidth = FontCache.getMeasureText(GENERAL_NUMBER_RESERVE_GLYPH, fontString).width;
+ 	if (FontCache.getMeasureText(displayText, fontString).width + roundingReserveWidth <= availableWidth) return displayText;
++	const fixedFit = getGeneralFixedFit(value, displayText, fontString, availableWidth);
++	if (fixedFit) return fixedFit;
+ 	let bestFit = "";
+ 	for (let decimalPlaces = 0; decimalPlaces < GENERAL_NUMBER_MAX_SIGNIFICANT_DIGITS; decimalPlaces++) {
+ 		const pattern = decimalPlaces === 0 ? "0E+00" : `0.${"#".repeat(decimalPlaces)}E+00`;
+diff --git a/node_modules/@univerjs/engine-render/lib/es/index.js b/node_modules/@univerjs/engine-render/lib/es/index.js
+index 04f7bc0..7b396e1 100644
+--- a/node_modules/@univerjs/engine-render/lib/es/index.js
++++ b/node_modules/@univerjs/engine-render/lib/es/index.js
+@@ -25748,10 +25748,30 @@ function getShrinkToFitScale(contentWidth, availableWidth, fontSize) {
+ 	if (contentWidth <= availableWidth || contentWidth <= 0 || availableWidth <= 0 || fontSize <= 0) return 1;
+ 	return Math.max(1 / fontSize, availableWidth / contentWidth);
+ }
++/**
++* LobsterAI patch: like Excel's General format, a number too wide for its column first loses
++* decimal places in fixed notation; scientific notation is the fallback when even the integer
++* part does not fit or rounding would leave no significant digit.
++*/
++function getGeneralFixedFit(value, displayText, fontString, availableWidth) {
++	if (!Number.isFinite(value) || /e/i.test(displayText)) return "";
++	const match = /^(-?)(\d+)([.,])(\d+)$/.exec(displayText);
++	if (!match) return "";
++	const [, sign, , separator, fraction] = match;
++	for (let places = fraction.length - 1; places >= 0; places--) {
++		const rounded = Number(`${Math.round(Number(`${Math.abs(value)}e${places}`))}e-${places}`);
++		if (!Number.isFinite(rounded) || rounded === 0) return "";
++		const candidate = `${sign}${rounded.toFixed(places).replace(/\.?0+$/, "").replace(".", separator)}`;
++		if (FontCache.getMeasureText(candidate, fontString).width <= availableWidth) return candidate;
++	}
++	return "";
++}
+ function getGeneralNumberDisplayText(value, displayText, fontString, availableWidth) {
+ 	if (availableWidth <= 0) return displayText;
+ 	const roundingReserveWidth = FontCache.getMeasureText(GENERAL_NUMBER_RESERVE_GLYPH, fontString).width;
+ 	if (FontCache.getMeasureText(displayText, fontString).width + roundingReserveWidth <= availableWidth) return displayText;
++	const fixedFit = getGeneralFixedFit(value, displayText, fontString, availableWidth);
++	if (fixedFit) return fixedFit;
+ 	let bestFit = "";
+ 	for (let decimalPlaces = 0; decimalPlaces < GENERAL_NUMBER_MAX_SIGNIFICANT_DIGITS; decimalPlaces++) {
+ 		const pattern = decimalPlaces === 0 ? "0E+00" : `0.${"#".repeat(decimalPlaces)}E+00`;
+diff --git a/node_modules/@univerjs/engine-render/lib/index.js b/node_modules/@univerjs/engine-render/lib/index.js
+index 04f7bc0..7b396e1 100644
+--- a/node_modules/@univerjs/engine-render/lib/index.js
++++ b/node_modules/@univerjs/engine-render/lib/index.js
+@@ -25748,10 +25748,30 @@ function getShrinkToFitScale(contentWidth, availableWidth, fontSize) {
+ 	if (contentWidth <= availableWidth || contentWidth <= 0 || availableWidth <= 0 || fontSize <= 0) return 1;
+ 	return Math.max(1 / fontSize, availableWidth / contentWidth);
+ }
++/**
++* LobsterAI patch: like Excel's General format, a number too wide for its column first loses
++* decimal places in fixed notation; scientific notation is the fallback when even the integer
++* part does not fit or rounding would leave no significant digit.
++*/
++function getGeneralFixedFit(value, displayText, fontString, availableWidth) {
++	if (!Number.isFinite(value) || /e/i.test(displayText)) return "";
++	const match = /^(-?)(\d+)([.,])(\d+)$/.exec(displayText);
++	if (!match) return "";
++	const [, sign, , separator, fraction] = match;
++	for (let places = fraction.length - 1; places >= 0; places--) {
++		const rounded = Number(`${Math.round(Number(`${Math.abs(value)}e${places}`))}e-${places}`);
++		if (!Number.isFinite(rounded) || rounded === 0) return "";
++		const candidate = `${sign}${rounded.toFixed(places).replace(/\.?0+$/, "").replace(".", separator)}`;
++		if (FontCache.getMeasureText(candidate, fontString).width <= availableWidth) return candidate;
++	}
++	return "";
++}
+ function getGeneralNumberDisplayText(value, displayText, fontString, availableWidth) {
+ 	if (availableWidth <= 0) return displayText;
+ 	const roundingReserveWidth = FontCache.getMeasureText(GENERAL_NUMBER_RESERVE_GLYPH, fontString).width;
+ 	if (FontCache.getMeasureText(displayText, fontString).width + roundingReserveWidth <= availableWidth) return displayText;
++	const fixedFit = getGeneralFixedFit(value, displayText, fontString, availableWidth);
++	if (fixedFit) return fixedFit;
+ 	let bestFit = "";
+ 	for (let decimalPlaces = 0; decimalPlaces < GENERAL_NUMBER_MAX_SIGNIFICANT_DIGITS; decimalPlaces++) {
+ 		const pattern = decimalPlaces === 0 ? "0E+00" : `0.${"#".repeat(decimalPlaces)}E+00`;

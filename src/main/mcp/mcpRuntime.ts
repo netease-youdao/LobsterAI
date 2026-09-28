@@ -17,6 +17,8 @@ import {
   McpBridgeServer,
   type MediaGenerationRequest,
   type MediaGenerationResponse,
+  type SheetToolRequest,
+  type SheetToolResponse,
   type WordToolRequest,
   type WordToolResponse,
 } from '../libs/mcpBridgeServer';
@@ -58,6 +60,7 @@ export class McpRuntime {
     | null = null;
   private decisionToolHandler: DecisionToolHandler | null = null;
   private wordToolHandler: ((request: WordToolRequest) => Promise<WordToolResponse>) | null = null;
+  private sheetToolHandler: ((request: SheetToolRequest) => Promise<SheetToolResponse>) | null = null;
 
   constructor(private readonly deps: McpRuntimeDeps) {}
 
@@ -115,6 +118,15 @@ export class McpRuntime {
 
   getWordCallbackUrl(): string | null {
     return this.bridgeServer?.wordCallbackUrl ?? null;
+  }
+
+  setSheetToolHandler(handler: (request: SheetToolRequest) => Promise<SheetToolResponse>): void {
+    this.sheetToolHandler = handler;
+    this.bridgeServer?.onSheetTool(handler);
+  }
+
+  getSheetCallbackUrl(): string | null {
+    return this.bridgeServer?.sheetCallbackUrl ?? null;
   }
 
   getAskUserCallbackUrl(): string | null {
@@ -234,6 +246,9 @@ export class McpRuntime {
     }
     if (this.wordToolHandler) {
       this.bridgeServer.onWordTool(this.wordToolHandler);
+    }
+    if (this.sheetToolHandler) {
+      this.bridgeServer.onSheetTool(this.sheetToolHandler);
     }
   }
 

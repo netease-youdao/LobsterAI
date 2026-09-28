@@ -82,6 +82,7 @@ import {
 import { LogReporterAction, reportYdAnalyzer } from './services/logReporter';
 import { getOnboardingErrorCode, reportOnboardingAction } from './services/onboardingAnalytics';
 import { scheduledTaskService } from './services/scheduledTask';
+import { installSheetAgentBridge } from './services/sheetAgentBridge';
 import { isTextEditingSafeShortcut, matchesShortcut } from './services/shortcuts';
 import { themeService } from './services/theme';
 import { applyTypographyPreferences } from './services/typography';
@@ -312,8 +313,9 @@ const App: React.FC = () => {
     && !isEngineStartupOverlayVisible
     && !isUpdateInteractionBlocked;
 
-  // Agent Word tools edit the document open in the artifact panel in place.
+  // Agent Word and Excel tools edit the file open in the artifact panel in place.
   useEffect(() => installWordAgentBridge(), []);
+  useEffect(() => installSheetAgentBridge(), []);
 
   useEffect(() => {
     if (!shouldShowNewUserOnboarding) return;

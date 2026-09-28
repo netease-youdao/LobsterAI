@@ -14,6 +14,7 @@ import { SheetRenderer } from './sheet/SheetRenderer';
 
 const t = (key: string) => i18nService.t(key);
 const WordFileEditor = lazy(() => import('./word/WordFileEditor'));
+const SheetFileEditor = lazy(() => import('./sheet/SheetFileEditor'));
 
 function getExtension(name: string): string {
   const lastDot = name.lastIndexOf('.');
@@ -1485,6 +1486,13 @@ const DocumentRenderer: React.FC<DocumentRendererProps> = ({ artifact }) => {
       }
       return <DocxSubRenderer artifact={artifact} />;
     case '.xlsx':
+      if (artifact.filePath && window.electron?.artifact?.sheet) {
+        return <Suspense fallback={<div className="p-6 text-sm opacity-60">{t('sheetLoading')}</div>}>
+          <SheetFileEditor key={artifact.filePath} filePath={normalizeLocalFilePath(artifact.filePath)}
+            preview={<SheetRenderer artifact={{ ...artifact, content: '' }} />} />
+        </Suspense>;
+      }
+      return <SheetRenderer artifact={artifact} />;
     case '.xls':
     case '.csv':
     case '.tsv':

@@ -3956,6 +3956,57 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(withoutBridge.mcp?.servers?.[WORD_AGENT_MCP_SERVER_NAME]).toBeUndefined();
   });
 
+  test('registers the LobsterAI Excel editor tools next to the Word tools', async () => {
+    const { OpenClawConfigSync } = await import('./openclawConfigSync');
+    const { SHEET_AGENT_MCP_SERVER_NAME } = await import('../../shared/artifactPreview/sheetAgent');
+    const { WORD_AGENT_MCP_SERVER_NAME } = await import('../../shared/artifactPreview/wordAgent');
+    const launch = (server: string) => ({
+      command: '/Applications/LobsterAI.app/Contents/MacOS/LobsterAI',
+      args: [`/state/generated/${server}-mcp/${server}-mcp-server.mjs`],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    });
+    let sheetLaunch: ReturnType<typeof launch> | null = launch(SHEET_AGENT_MCP_SERVER_NAME);
+    const sync = new OpenClawConfigSync({
+      engineManager: {
+        getConfigPath: () => configPath,
+        getGatewayToken: () => 'gateway-token',
+        getStateDir: () => stateDir,
+        getBaseDir: () => tmpDir,
+      } as never,
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: '',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        memoryEnabled: false,
+        memoryImplicitUpdateEnabled: false,
+        memoryLlmJudgeEnabled: false,
+        memoryGuardLevel: 'balanced',
+        memoryUserMemoriesMaxItems: 100,
+        skipMissedJobs: false,
+      }),
+      getLobsterWordMcpStdioLaunch: () => launch('lobster-word'),
+      getLobsterSheetMcpStdioLaunch: () => sheetLaunch,
+      isEnterprise: () => false,
+      getPopoInstances: () => [],
+      getNeteaseBeeChanConfig: () => null,
+      getWeixinConfig: () => null,
+      getIMSettings: () => null,
+      getSkillsList: () => [],
+      getAgents: () => [],
+    } as never);
+    expect(sync.sync('excel-editor-tools').ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.mcp.servers[SHEET_AGENT_MCP_SERVER_NAME]).toEqual(sheetLaunch);
+    expect(config.mcp.servers[WORD_AGENT_MCP_SERVER_NAME]).toEqual(launch('lobster-word'));
+
+    sheetLaunch = null;
+    expect(sync.sync('excel-editor-tools-unavailable').ok).toBe(true);
+    const withoutBridge = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(withoutBridge.mcp.servers[SHEET_AGENT_MCP_SERVER_NAME]).toBeUndefined();
+    expect(withoutBridge.mcp.servers[WORD_AGENT_MCP_SERVER_NAME]).toBeDefined();
+  });
+
   test('writes browser and web fetch access settings', async () => {
     const { setSystemProxyEnabled } = await import('./systemProxy');
     const {
