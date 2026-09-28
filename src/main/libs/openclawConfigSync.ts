@@ -1875,6 +1875,8 @@ type OpenClawConfigSyncDeps = {
   getLobsterBrowserMcpStdioLaunch?: () => LobsterBrowserMcpStdioLaunch | null;
   getLobsterWordMcpStdioLaunch?: () => LobsterWordMcpStdioLaunch | null;
   getMcpBridgeSecret?: () => string;
+  /** Persisted loopback proxy token; the token proxy requires it on every request. */
+  getProxyAuthToken?: () => string | null;
   getSkillsList?: () => Array<{ id: string; name: string; enabled: boolean }>;
   getAgents?: () => Agent[];
   getUserPlugins?: () => Array<{ pluginId: string; enabled: boolean; config?: Record<string, unknown> }>;
@@ -1910,6 +1912,7 @@ export class OpenClawConfigSync {
   private readonly getLobsterBrowserMcpStdioLaunch?: () => LobsterBrowserMcpStdioLaunch | null;
   private readonly getLobsterWordMcpStdioLaunch?: () => LobsterWordMcpStdioLaunch | null;
   private readonly getMcpBridgeSecret?: () => string;
+  private readonly getProxyAuthToken?: () => string | null;
   private readonly getSkillsList?: () => Array<{ id: string; name: string; enabled: boolean }>;
   private readonly getAgents?: () => Agent[];
   private readonly getUserPlugins: () => Array<{ pluginId: string; enabled: boolean; config?: Record<string, unknown> }>;
@@ -1946,6 +1949,7 @@ export class OpenClawConfigSync {
     this.getLobsterBrowserMcpStdioLaunch = deps.getLobsterBrowserMcpStdioLaunch;
     this.getLobsterWordMcpStdioLaunch = deps.getLobsterWordMcpStdioLaunch;
     this.getMcpBridgeSecret = deps.getMcpBridgeSecret;
+    this.getProxyAuthToken = deps.getProxyAuthToken;
     this.getSkillsList = deps.getSkillsList;
     this.getAgents = deps.getAgents;
     this.getUserPlugins = deps.getUserPlugins ?? (() => []);
@@ -3446,7 +3450,8 @@ export class OpenClawConfigSync {
     // is never resolved. Use a fixed value to avoid secretEnvVarsChanged on switch.
     env.LOBSTER_PROVIDER_API_KEY = 'legacy-unused';
 
-    env.LOBSTER_PROXY_TOKEN = getCoworkOpenAICompatProxyToken() || 'unconfigured';
+    // Must equal the token the loopback proxies verify, even if the compat proxy failed to start.
+    env.LOBSTER_PROXY_TOKEN = this.getProxyAuthToken?.() || getCoworkOpenAICompatProxyToken() || 'unconfigured';
 
     // MCP Bridge Secret — always set so stale openclaw.json with
     // ${LOBSTER_MCP_BRIDGE_SECRET} placeholder doesn't crash the gateway.

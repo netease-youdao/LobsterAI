@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 
-import { OpenClawConfigRecovery } from './openclawConfigRecovery';
+import { isDeferredRestartSatisfied, OpenClawConfigRecovery } from './openclawConfigRecovery';
 import { createOpenClawConfigTarget } from './openclawConfigTarget';
 
 const target = (port: number) => createOpenClawConfigTarget('', JSON.stringify({ models: { port } }));
@@ -53,4 +53,24 @@ test('validation rejection survives a no-op, but a corrected target may converge
   state.stage(fixed, false, 1);
   expect(state.error).toBeNull();
   expect(state.applied(fixed, 1)).toBe(true);
+});
+
+test('a deferred restart is satisfied only by a later spawn of the unchanged target', () => {
+  const settled = {
+    restartRequestedAt: 1_000,
+    gatewayProcessStartedAt: 2_000,
+    configChanged: false,
+    envChanged: false,
+    bindingsChanged: false,
+    restartImpact: false,
+  };
+  expect(isDeferredRestartSatisfied(settled)).toBe(true);
+  // The process that was already starting when the demand arrived loaded the old inputs.
+  expect(isDeferredRestartSatisfied({ ...settled, gatewayProcessStartedAt: 1_000 })).toBe(false);
+  expect(isDeferredRestartSatisfied({ ...settled, gatewayProcessStartedAt: null })).toBe(false);
+  // Ordinary syncs keep their explicit restart semantics.
+  expect(isDeferredRestartSatisfied({ ...settled, restartRequestedAt: undefined })).toBe(false);
+  for (const change of ['configChanged', 'envChanged', 'bindingsChanged', 'restartImpact'] as const) {
+    expect(isDeferredRestartSatisfied({ ...settled, [change]: true })).toBe(false);
+  }
 });

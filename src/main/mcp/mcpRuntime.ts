@@ -42,13 +42,18 @@ export interface McpRuntimeDeps {
   onAskUserRequested?: (sessionId: string, request: { requestId: string; toolName: string }) => void;
   /** Fired when a pending AskUserQuestion request is dismissed upstream. */
   onAskUserDismissed?: (requestId: string) => void;
+  /** Persisted bridge secret; openclaw.json must stay stable across launches. */
+  bridgeSecret?: string;
+  /** Callback-server port from the previous launch. */
+  getBridgePreferredPort?: () => number | undefined;
+  onBridgePortBound?: (port: number) => void;
 }
 
 export class McpRuntime {
   private mcpStore: McpStore | null = null;
   private launchResolverManager: McpLaunchResolverManager | null = null;
   private bridgeServer: McpBridgeServer | null = null;
-  private readonly bridgeSecret = crypto.randomUUID();
+  private readonly bridgeSecret: string;
   private resolvedServersCache: ResolvedMcpServer[] = [];
   private mediaGenerationHandler:
     | ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>)
@@ -59,7 +64,9 @@ export class McpRuntime {
   private decisionToolHandler: DecisionToolHandler | null = null;
   private wordToolHandler: ((request: WordToolRequest) => Promise<WordToolResponse>) | null = null;
 
-  constructor(private readonly deps: McpRuntimeDeps) {}
+  constructor(private readonly deps: McpRuntimeDeps) {
+    this.bridgeSecret = deps.bridgeSecret || crypto.randomUUID();
+  }
 
   getStore(): McpStore {
     if (!this.mcpStore) {
@@ -157,7 +164,8 @@ export class McpRuntime {
       this.bridgeServer = new McpBridgeServer(this.bridgeSecret);
     }
     console.log('[AskUser] starting HTTP callback server...');
-    await this.bridgeServer.start();
+    const port = await this.bridgeServer.start(this.deps.getBridgePreferredPort?.());
+    this.deps.onBridgePortBound?.(port);
 
     this.bridgeServer.onAskUser(request => {
       const sessionId = request.sessionKey
