@@ -88,10 +88,11 @@ test('snapshot failure preserves its phase and source path for the UI', async ()
 
 test('an interrupted Doctor retains its own stage', async () => {
   const params = fixture();
+  const interruption = Object.assign(new Error('Doctor process timed out'), { killed: true, signal: 'SIGTERM' });
   const runner = vi.fn<StartupMigrationRunner>().mockResolvedValueOnce(startupResult())
-    .mockRejectedValueOnce(new Error('Doctor process timed out'));
+    .mockRejectedValueOnce(interruption);
   await expect(runOpenClawDoctorRepair({ ...params, runner }))
-    .rejects.toMatchObject({ stage: OpenClawRepairStage.Doctor, message: 'Doctor process timed out' });
+    .rejects.toMatchObject({ stage: OpenClawRepairStage.Doctor, message: 'Doctor process timed out', cause: interruption });
 });
 
 test('backup directories do not collide on repeated repair requests', () => {
