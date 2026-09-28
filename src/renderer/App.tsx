@@ -80,12 +80,12 @@ import {
   isLatestAsyncRequest,
 } from './services/latestAsyncRequest';
 import { LogReporterAction, reportYdAnalyzer } from './services/logReporter';
+import { installOfficeAgentBridges } from './services/office/officeFormats';
 import { getOnboardingErrorCode, reportOnboardingAction } from './services/onboardingAnalytics';
 import { scheduledTaskService } from './services/scheduledTask';
 import { isTextEditingSafeShortcut, matchesShortcut } from './services/shortcuts';
 import { themeService } from './services/theme';
 import { applyTypographyPreferences } from './services/typography';
-import { installWordAgentBridge } from './services/wordAgentBridge';
 import { RootState, store } from './store';
 import {
   selectCurrentSessionId,
@@ -312,8 +312,8 @@ const App: React.FC = () => {
     && !isEngineStartupOverlayVisible
     && !isUpdateInteractionBlocked;
 
-  // Agent Word tools edit the document open in the artifact panel in place.
-  useEffect(() => installWordAgentBridge(), []);
+  // The agent's Office tools edit the file open in the artifact panel in place.
+  useEffect(() => installOfficeAgentBridges(), []);
 
   useEffect(() => {
     if (!shouldShowNewUserOnboarding) return;

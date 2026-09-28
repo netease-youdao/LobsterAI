@@ -6,7 +6,6 @@ import { isDeepStrictEqual } from 'util';
 
 import { buildScheduledTaskEnginePrompt } from '../../scheduledTask/enginePrompt';
 import { AgentId, DefaultAgentProfile } from '../../shared/agent';
-import { WORD_AGENT_MCP_SERVER_NAME } from '../../shared/artifactPreview/wordAgent';
 import {
   BrowserCredentialLoginTool,
   BrowserCredentialMcpServer,
@@ -24,6 +23,7 @@ import { CoworkErrorModelSource } from '../../shared/cowork/errorDetail';
 import { DECISION_MODEL_PLUGIN_ID } from '../../shared/decisionModel/constants';
 import { WeixinPlugin } from '../../shared/im/weixin';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
+import { OFFICE_EDITORS } from '../../shared/office/editors';
 import { OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS, OpenClawSkillReviewMode } from '../../shared/openclawEngine/constants';
 import { OpenClawTranscriptSafetyLimit } from '../../shared/openclawTranscript/constants';
 import type {
@@ -51,6 +51,7 @@ import type { Agent, CoworkConfig, CoworkExecutionMode } from '../coworkStore';
 import type { DiscordInstanceConfig, IMSettings, TelegramInstanceConfig } from '../im/types';
 import type { DingTalkInstanceConfig, EmailMultiInstanceConfig, FeishuInstanceConfig, NeteaseBeeChanConfig, NimInstanceConfig, PopoInstanceConfig, QQInstanceConfig, WecomInstanceConfig, WeixinOpenClawConfig } from '../im/types';
 import { DiscordDmPolicy } from '../im/types';
+import type { OfficeMcpStdioLaunch } from '../office/core/officeMcpServer';
 import { OpenClawSessionKeepAlive } from '../openclawSessionPolicy/constants';
 import { buildOpenClawSessionConfig } from '../openclawSessionPolicy/store';
 import {
@@ -65,7 +66,6 @@ import {
   getCoworkOpenAICompatProxyToken,
 } from './coworkOpenAICompatProxy';
 import type { LobsterBrowserMcpStdioLaunch } from './lobsterBrowserMcpServer';
-import type { LobsterWordMcpStdioLaunch } from './lobsterWordMcpServer';
 import {
   buildAgentEntry,
   buildManagedAgentEntries,
@@ -1873,7 +1873,8 @@ type OpenClawConfigSyncDeps = {
   getBrowserCallbackUrl?: () => string | null;
   getLobsterBrowserMcpCommand?: () => string | null;
   getLobsterBrowserMcpStdioLaunch?: () => LobsterBrowserMcpStdioLaunch | null;
-  getLobsterWordMcpStdioLaunch?: () => LobsterWordMcpStdioLaunch | null;
+  /** The Office editors' MCP servers by server name (see OfficeEditing.mcpServers). */
+  getOfficeMcpServers?: () => Record<string, OfficeMcpStdioLaunch>;
   getMcpBridgeSecret?: () => string;
   /** Persisted loopback proxy token; the token proxy requires it on every request. */
   getProxyAuthToken?: () => string | null;
@@ -1910,7 +1911,7 @@ export class OpenClawConfigSync {
   private readonly getBrowserCallbackUrl?: () => string | null;
   private readonly getLobsterBrowserMcpCommand?: () => string | null;
   private readonly getLobsterBrowserMcpStdioLaunch?: () => LobsterBrowserMcpStdioLaunch | null;
-  private readonly getLobsterWordMcpStdioLaunch?: () => LobsterWordMcpStdioLaunch | null;
+  private readonly getOfficeMcpServers?: () => Record<string, OfficeMcpStdioLaunch>;
   private readonly getMcpBridgeSecret?: () => string;
   private readonly getProxyAuthToken?: () => string | null;
   private readonly getSkillsList?: () => Array<{ id: string; name: string; enabled: boolean }>;
@@ -1947,7 +1948,7 @@ export class OpenClawConfigSync {
     this.getBrowserCallbackUrl = deps.getBrowserCallbackUrl;
     this.getLobsterBrowserMcpCommand = deps.getLobsterBrowserMcpCommand;
     this.getLobsterBrowserMcpStdioLaunch = deps.getLobsterBrowserMcpStdioLaunch;
-    this.getLobsterWordMcpStdioLaunch = deps.getLobsterWordMcpStdioLaunch;
+    this.getOfficeMcpServers = deps.getOfficeMcpServers;
     this.getMcpBridgeSecret = deps.getMcpBridgeSecret;
     this.getProxyAuthToken = deps.getProxyAuthToken;
     this.getSkillsList = deps.getSkillsList;
@@ -2743,13 +2744,12 @@ export class OpenClawConfigSync {
         };
       }
     }
-    // LobsterAI's Word editor tools edit the document open in the right-side panel live.
-    const wordMcpLaunch = this.getLobsterWordMcpStdioLaunch?.();
-    if (wordMcpLaunch) {
-      nativeMcpServers[WORD_AGENT_MCP_SERVER_NAME] = {
-        command: wordMcpLaunch.command,
-        args: wordMcpLaunch.args,
-        ...(Object.keys(wordMcpLaunch.env).length > 0 ? { env: wordMcpLaunch.env } : {}),
+    // LobsterAI's Office editor tools edit the document open in the right-side panel live.
+    for (const [serverName, launch] of Object.entries(this.getOfficeMcpServers?.() ?? {})) {
+      nativeMcpServers[serverName] = {
+        command: launch.command,
+        args: launch.args,
+        ...(Object.keys(launch.env).length > 0 ? { env: launch.env } : {}),
       };
     }
     const nativeMcpServerCount = Object.keys(nativeMcpServers).length;
@@ -3880,6 +3880,9 @@ export class OpenClawConfigSync {
       sections.push(MANAGED_BROWSER_POLICY_PROMPT);
       sections.push(MANAGED_EXEC_SAFETY_PROMPT);
       sections.push(MANAGED_DELIVERABLE_LINKS_PROMPT);
+      for (const editor of OFFICE_EDITORS) {
+        if (editor.agent.prompt) sections.push(editor.agent.prompt);
+      }
       sections.push(MANAGED_MATH_FORMAT_PROMPT);
       sections.push(MANAGED_MEMORY_POLICY_PROMPT);
       sections.push(MANAGED_HEARTBEAT_POLICY_PROMPT);

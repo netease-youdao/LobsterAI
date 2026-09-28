@@ -14,11 +14,10 @@ import {
   type BrowserToolRequest,
   type BrowserToolResponse,
   type DecisionToolHandler,
+  type EditorToolHandler,
   McpBridgeServer,
   type MediaGenerationRequest,
   type MediaGenerationResponse,
-  type WordToolRequest,
-  type WordToolResponse,
 } from '../libs/mcpBridgeServer';
 import { OpenClawConfigImpact } from '../libs/openclawConfigImpact';
 import type { ResolvedMcpServer } from '../libs/openclawConfigSync';
@@ -62,7 +61,7 @@ export class McpRuntime {
     | ((request: BrowserToolRequest) => Promise<BrowserToolResponse>)
     | null = null;
   private decisionToolHandler: DecisionToolHandler | null = null;
-  private wordToolHandler: ((request: WordToolRequest) => Promise<WordToolResponse>) | null = null;
+  private readonly editorToolHandlers = new Map<string, { editorName: string; handler: EditorToolHandler }>();
 
   constructor(private readonly deps: McpRuntimeDeps) {
     this.bridgeSecret = deps.bridgeSecret || crypto.randomUUID();
@@ -115,13 +114,14 @@ export class McpRuntime {
     this.decisionToolHandler = handler;
   }
 
-  setWordToolHandler(handler: (request: WordToolRequest) => Promise<WordToolResponse>): void {
-    this.wordToolHandler = handler;
-    this.bridgeServer?.onWordTool(handler);
+  /** Serve a document editor's agent tools on the bridge at `/<route>/tool`. */
+  setEditorToolHandler(route: string, editorName: string, handler: EditorToolHandler): void {
+    this.editorToolHandlers.set(route, { editorName, handler });
+    this.bridgeServer?.onEditorTool(route, editorName, handler);
   }
 
-  getWordCallbackUrl(): string | null {
-    return this.bridgeServer?.wordCallbackUrl ?? null;
+  getEditorCallbackUrl(route: string): string | null {
+    return this.bridgeServer?.editorCallbackUrl(route) ?? null;
   }
 
   getAskUserCallbackUrl(): string | null {
@@ -240,8 +240,8 @@ export class McpRuntime {
     if (this.browserToolHandler) {
       this.bridgeServer.onBrowserTool(this.browserToolHandler);
     }
-    if (this.wordToolHandler) {
-      this.bridgeServer.onWordTool(this.wordToolHandler);
+    for (const [route, { editorName, handler }] of this.editorToolHandlers) {
+      this.bridgeServer.onEditorTool(route, editorName, handler);
     }
   }
 

@@ -19,7 +19,7 @@ test('the real development config prebundles the Word editor from a cold cache',
       cacheDir,
       logLevel: 'silent',
       optimizeDeps: {
-        entries: [path.join(root, 'src/renderer/services/wordEditorSession.ts')],
+        entries: [path.join(root, 'src/renderer/services/office/word/wordEditorSession.ts')],
       },
     }, 'serve');
     const metadata = await optimizeDeps(config, true);

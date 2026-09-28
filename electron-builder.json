@@ -50,6 +50,11 @@
       "filter": ["NOTICE.txt", "manifest.json"]
     },
     {
+      "from": "resources/sheet-licenses",
+      "to": "licenses/sheet",
+      "filter": ["NOTICE.txt", "manifest.json"]
+    },
+    {
       "from": ".keyfrom-build",
       "to": "keyfrom",
       "filter": [

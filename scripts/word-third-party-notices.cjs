@@ -7,7 +7,7 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const root = path.resolve(__dirname, '..');
 const output = path.join(root, 'resources/word-licenses');
-const fontsRoot = path.join(root, 'src/renderer/assets/word-fonts');
+const fontsRoot = path.join(root, 'src/renderer/assets/office-fonts');
 const allowed = new Set(['MIT', 'Apache-2.0', '(MIT AND Zlib)']);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const packages = new Map();

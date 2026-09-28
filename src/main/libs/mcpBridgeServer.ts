@@ -1,9 +1,10 @@
 /**
  * McpBridgeServer — authenticated loopback callbacks shared by OpenClaw integrations.
  *
- * Provides AskUser, media-generation, decision-model, in-app browser and Word
- * editor endpoints. Binds to 127.0.0.1 only and requires the bridge secret,
- * which persists for an app version so OpenClaw's config stays stable.
+ * Provides AskUser, media-generation, decision-model, in-app browser and Office
+ * editor (Word, Excel, PowerPoint) endpoints. Binds to 127.0.0.1 only and
+ * requires the bridge secret, which persists for an app version so OpenClaw's
+ * config stays stable.
  */
 import crypto from 'crypto';
 import http from 'http';
@@ -76,9 +77,10 @@ export type BrowserToolResponse = {
   isError?: boolean;
 };
 
-/** Word editor tools share the browser tools' request and result shapes. */
-export type WordToolRequest = BrowserToolRequest;
-export type WordToolResponse = BrowserToolResponse;
+/** Document editor tools (the Office editors) share the browser tools' request and result shapes. */
+export type EditorToolRequest = BrowserToolRequest;
+export type EditorToolResponse = BrowserToolResponse;
+export type EditorToolHandler = (request: EditorToolRequest) => Promise<EditorToolResponse>;
 
 export type DecisionToolRequest = {
   args: Record<string, unknown>;
@@ -109,7 +111,8 @@ export class McpBridgeServer {
   private onMediaGenerationCallback: ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>) | null = null;
   private onBrowserToolCallback: ((request: BrowserToolRequest) => Promise<BrowserToolResponse>) | null = null;
   private onDecisionToolCallback: DecisionToolHandler | null = null;
-  private onWordToolCallback: ((request: WordToolRequest) => Promise<WordToolResponse>) | null = null;
+  /** Editor tool handlers by route, served at `/<route>/tool`. */
+  private readonly editorTools = new Map<string, { editorName: string; handler: EditorToolHandler }>();
 
   constructor(secret: string) {
     this.secret = secret;
@@ -137,8 +140,8 @@ export class McpBridgeServer {
     return this._port ? `http://127.0.0.1:${this._port}/decision/tool` : null;
   }
 
-  get wordCallbackUrl(): string | null {
-    return this._port ? `http://127.0.0.1:${this._port}/word/tool` : null;
+  editorCallbackUrl(route: string): string | null {
+    return this._port ? `http://127.0.0.1:${this._port}/${route}/tool` : null;
   }
 
   /**
@@ -169,8 +172,9 @@ export class McpBridgeServer {
     this.onBrowserToolCallback = callback;
   }
 
-  onWordTool(callback: (request: WordToolRequest) => Promise<WordToolResponse>): void {
-    this.onWordToolCallback = callback;
+  /** Serve a document editor's tools at `/<route>/tool`; `editorName` appears in errors the agent reads. */
+  onEditorTool(route: string, editorName: string, handler: EditorToolHandler): void {
+    this.editorTools.set(route, { editorName, handler });
   }
 
   /**
@@ -320,8 +324,10 @@ export class McpBridgeServer {
       return;
     }
 
-    if (req.url?.startsWith('/word/tool')) {
-      await this.handleWordTool(req, res);
+    const editorRoute = /^\/([a-z][a-z0-9-]*)\/tool(?:[/?]|$)/.exec(req.url ?? '')?.[1];
+    const editorTool = editorRoute ? this.editorTools.get(editorRoute) : undefined;
+    if (editorTool) {
+      await this.handleEditorTool(req, res, editorTool.handler, editorTool.editorName);
       return;
     }
 
@@ -522,33 +528,30 @@ export class McpBridgeServer {
     }
   }
 
-  private async handleWordTool(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  /** Document editor tools: forward to the renderer-backed handler and relay its result. */
+  private async handleEditorTool(req: http.IncomingMessage, res: http.ServerResponse, callback: EditorToolHandler, editorName: string): Promise<void> {
     const startedAt = Date.now();
-    const reply = (status: number, payload: WordToolResponse): void => {
+    const reply = (status: number, payload: BrowserToolResponse): void => {
       if (res.writableEnded) return;
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(payload));
     };
     try {
-      const request = JSON.parse(await this.readBody(req)) as WordToolRequest;
+      const request = JSON.parse(await this.readBody(req)) as EditorToolRequest;
       if (typeof request.tool !== 'string' || !request.tool.trim()) {
-        reply(400, { content: [{ type: 'text', text: 'Missing Word tool name.' }], isError: true });
+        reply(400, { content: [{ type: 'text', text: `Missing ${editorName} tool name.` }], isError: true });
         return;
       }
-      if (!this.onWordToolCallback) {
-        reply(503, { content: [{ type: 'text', text: 'The LobsterAI Word editor is not ready.' }], isError: true });
-        return;
-      }
-      const result = await this.onWordToolCallback({
+      const result = await callback({
         tool: request.tool,
         args: request.args && typeof request.args === 'object' && !Array.isArray(request.args) ? request.args : {},
       });
-      log('INFO', `Word tool "${request.tool}" completed in ${Date.now() - startedAt}ms with isError=${result.isError ?? false}`);
+      log('INFO', `${editorName} tool "${request.tool}" completed in ${Date.now() - startedAt}ms with isError=${result.isError ?? false}`);
       reply(200, result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      log('ERROR', `Word tool request failed after ${Date.now() - startedAt}ms: ${message}`);
-      reply(500, { content: [{ type: 'text', text: `LobsterAI Word editor error: ${message}` }], isError: true });
+      log('ERROR', `${editorName} tool request failed after ${Date.now() - startedAt}ms: ${message}`);
+      reply(500, { content: [{ type: 'text', text: `LobsterAI ${editorName} editor error: ${message}` }], isError: true });
     }
   }
 
