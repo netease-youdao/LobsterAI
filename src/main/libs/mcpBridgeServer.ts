@@ -2,13 +2,13 @@
  * McpBridgeServer — authenticated loopback callbacks shared by OpenClaw integrations.
  *
  * Provides AskUser, media-generation, decision-model, in-app browser and Word
- * editor endpoints. Binds to 127.0.0.1 only and requires the per-process bridge
- * secret.
+ * editor endpoints. Binds to 127.0.0.1 only and requires the bridge secret,
+ * which persists for an app version so OpenClaw's config stays stable.
  */
 import crypto from 'crypto';
 import http from 'http';
-import net from 'net';
 
+import { listenOnLoopback } from './loopbackListen';
 import { serializeForLog } from './sanitizeForLog';
 
 const log = (level: string, msg: string) => {
@@ -113,7 +113,8 @@ export class McpBridgeServer {
 
   constructor(secret: string) {
     this.secret = secret;
-    log('INFO', `McpBridgeServer created, secret prefix="${secret.slice(0, 8)}…"`);
+    // The secret persists across launches; never log any part of it.
+    log('INFO', 'McpBridgeServer created');
   }
 
   get port(): number | null {
@@ -227,38 +228,38 @@ export class McpBridgeServer {
   }
 
   /**
-   * Start the HTTP callback server on a free port.
+   * Start the HTTP callback server, reusing the previous launch's port while it
+   * is free so the callback URLs in openclaw.json stay stable.
    */
-  async start(): Promise<number> {
+  async start(preferredPort?: number | null): Promise<number> {
     if (this.server) {
       throw new Error('McpBridgeServer is already running');
     }
 
-    const port = await this.findFreePort();
-
-    return new Promise((resolve, reject) => {
-      const srv = http.createServer((req, res) => {
-        this.handleRequest(req, res).catch((err) => {
-          log('ERROR', `Unhandled error in handleRequest: ${err instanceof Error ? err.message : String(err)}`);
-          if (!res.headersSent) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Internal server error' }));
-          }
-        });
-      });
-
-      srv.on('error', (err) => {
-        log('ERROR', `HTTP server error: ${err.message}`);
-        reject(err);
-      });
-
-      srv.listen(port, '127.0.0.1', () => {
-        this._port = port;
-        this.server = srv;
-        log('INFO', `McpBridgeServer listening on http://127.0.0.1:${port}`);
-        resolve(port);
+    const srv = http.createServer((req, res) => {
+      this.handleRequest(req, res).catch((err) => {
+        log('ERROR', `Unhandled error in handleRequest: ${err instanceof Error ? err.message : String(err)}`);
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Internal server error' }));
+        }
       });
     });
+
+    let bound: { port: number; reused: boolean };
+    try {
+      bound = await listenOnLoopback(srv, '127.0.0.1', preferredPort);
+    } catch (err) {
+      log('ERROR', `HTTP server error: ${err instanceof Error ? err.message : String(err)}`);
+      throw err;
+    }
+    srv.on('error', (err) => {
+      log('ERROR', `HTTP server error: ${err.message}`);
+    });
+    this._port = bound.port;
+    this.server = srv;
+    log('INFO', `McpBridgeServer listening on http://127.0.0.1:${bound.port}${bound.reused ? ' (reused port)' : ''}`);
+    return bound.port;
   }
 
   /**
@@ -557,19 +558,6 @@ export class McpBridgeServer {
       req.on('data', (chunk: Buffer) => chunks.push(chunk));
       req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
       req.on('error', reject);
-    });
-  }
-
-  private findFreePort(): Promise<number> {
-    return new Promise((resolve, reject) => {
-      const srv = net.createServer();
-      srv.once('error', reject);
-      srv.once('listening', () => {
-        const addr = srv.address();
-        const port = typeof addr === 'object' && addr ? addr.port : 0;
-        srv.close(() => resolve(port));
-      });
-      srv.listen(0, '127.0.0.1');
     });
   }
 }

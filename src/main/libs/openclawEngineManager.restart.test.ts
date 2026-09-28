@@ -71,6 +71,8 @@ function makeSupervisor() {
     gatewayFailureByProcess: new WeakMap(),
     expectedGatewayExits: new WeakSet(),
     gatewayReadyProcesses: new WeakSet(),
+    startupPrepSkippedProcesses: new WeakSet(),
+    startupPrepMarker: { check: vi.fn(() => ({ valid: false, reason: 'test' })), record: vi.fn(), clear: vi.fn() },
     gatewayRestartTimer: null,
     gatewayRestartWait: null,
     gatewayRestartAttempt: 0,

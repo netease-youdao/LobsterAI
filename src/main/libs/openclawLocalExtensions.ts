@@ -124,6 +124,41 @@ export const hasRuntimeBundledOpenClawExtension = (extensionId: string): boolean
   return fs.existsSync(path.join(dir, extensionId, 'openclaw.plugin.json'));
 };
 
+/**
+ * Copy only files whose bytes differ. OpenClaw folds each plugin manifest's
+ * size, mtime and ctime into the fingerprint of its startup-migration
+ * checkpoint, so rewriting identical files would rerun its migrations on every
+ * dev launch.
+ */
+const copyChangedFiles = (sourceDir: string, targetDir: string): boolean => {
+  let changed = false;
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    const source = path.join(sourceDir, entry.name);
+    const target = path.join(targetDir, entry.name);
+    if (entry.isDirectory()) {
+      changed = copyChangedFiles(source, target) || changed;
+      continue;
+    }
+    if (!entry.isFile()) {
+      fs.cpSync(source, target, { recursive: true, force: true });
+      changed = true;
+      continue;
+    }
+    let current: Buffer | null = null;
+    try {
+      current = fs.readFileSync(target);
+    } catch {
+      current = null;
+    }
+    if (!current || !current.equals(fs.readFileSync(source))) {
+      fs.copyFileSync(source, target);
+      changed = true;
+    }
+  }
+  return changed;
+};
+
 export const syncLocalOpenClawExtensionsIntoRuntime = (
   runtimeRoot: string,
 ): { sourceDir: string | null; copied: string[] } => {
@@ -146,12 +181,9 @@ export const syncLocalOpenClawExtensionsIntoRuntime = (
     if (!entry.isDirectory()) {
       continue;
     }
-    fs.cpSync(
-      path.join(sourceDir, entry.name),
-      path.join(targetExtensionsDir, entry.name),
-      { recursive: true, force: true },
-    );
-    copied.push(entry.name);
+    if (copyChangedFiles(path.join(sourceDir, entry.name), path.join(targetExtensionsDir, entry.name))) {
+      copied.push(entry.name);
+    }
   }
 
   return { sourceDir, copied };
