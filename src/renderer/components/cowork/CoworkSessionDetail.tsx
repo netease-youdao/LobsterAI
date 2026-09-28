@@ -197,6 +197,7 @@ import {
   MEDIA_TOKEN_DISPLAY_RE,
   type ToolGroupItem,
 } from './messageDisplayUtils';
+import OpenClawProgressCard from './OpenClawProgressCard';
 import { parseProposedPlanBlock } from './proposedPlanParser';
 import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
 import { buildSelectedSkillRoutingPrompt } from './selectedSkillRoutingPrompt';
@@ -6851,6 +6852,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 sessionId: btwThread.sessionId,
                 runId,
               })}
+            />
+          )}
+          {currentSession && (
+            <OpenClawProgressCard
+              key={currentSession.id}
+              sessionId={currentSession.id}
+              sessionStatus={currentSession.status}
+              compact={isArtifactPanelExpanded}
             />
           )}
           {showExternalGoalStatusBar && (
