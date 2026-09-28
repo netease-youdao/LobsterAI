@@ -130,6 +130,7 @@
 
 - 第五轮单元测试：`src/renderer/services/sheet/` 与 `selectedText` 共 16 个测试文件、118 项通过（新增选区摘录、倾斜角度换算、主题色板、XML 插入点、1904 日期换算等）。完整 `npm test` 5866 项通过、17 项失败（同上三组 OpenClaw 插件修复测试，在 HEAD 的干净工作树上同样失败）。`npm run build`、`npm run compile:electron`、50 个改动的 TypeScript 文件按 CI 规则的 ESLint：通过。
 - 第五轮端到端（隔离数据目录，经 `DocumentRenderer` 挂载，与任务面板相同的路径）：Excel 拖选 C1:E3 后出现“添加到对话”，点击后摘录为 `fmt1.xlsx · Data!C1:E3` 与三行数值，经 `normalizeCoworkSelectedTextSnippets` 校验并生成带来源路径的提示段落，选区不变；右键菜单第一项为“添加到对话”（带图标）；单击单元格不出现、开始输入时消失、Esc 后单元格内容不变；没有任务对话时按钮与菜单项都不出现。Word 拖选文字后出现按钮，摘录来源为 `artifact_word`；在选区上输入替换文字、撤销正常。
+- 完整任务链路（隔离数据目录的真实应用，本地脚本化的 OpenAI 兼容模型代替真实模型）：在任务会话的右侧面板中打开 xlsx，拖选 C1:E3 点“添加到对话”，输入框出现“1 个已选文本片段”；输入“把选中的这些数都乘以 2”回车发送后，模型收到的用户消息包含 `[Excerpt 1 from spreadsheet agent.xlsx · Data!C1:E3 …]`、文件路径和三行数值，随后按脚本调用 `lobster-excel__excel_read`（Data!C1:E3）和 `lobster-excel__excel_edit`（值翻倍）；面板中的表格实时变为 26…70（第 4 行不变）并选中改动区域，自动保存后 openpyxl 读回相同数值；在表格中按一次 ⌘Z 撤回整次 AI 修改，⌘⇧Z 恢复。同一会话中打开 docx 选中文字后点“添加到对话”，发送后模型收到 `[Excerpt 1 from Word document agent.docx …]`。
 - 出错警告（端到端）：停止规则“重试”回到编辑并保留键入的内容；警告规则“是”保留、回车（默认“否”）重新编辑；信息规则“取消”放弃；保存的文件通过严格校验。倾斜 45° 的文字按 Excel 的方向（向右上）显示，写回 `textRotation="45"`。
 - 严格校验：单元测试产生的 56 个导出文件、21 个引擎场景输出（openpyxl 生成的输入）和第五轮端到端编辑后的文件全部通过。
 
