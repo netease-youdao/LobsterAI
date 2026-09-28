@@ -25,6 +25,7 @@ import { installMarkdownDocumentLifecycle } from '../markdownDocumentLifecycle';
 import { OfficeDocument, type OfficeEditorPort, OfficeExportRefusal } from '../officeDocument';
 import { normalizeShellFilePath } from '../shellAppsCache';
 import { type CellRange, parseRangeReference, rangeReference } from './sheetAddress';
+import { installPlainTypedCells } from './sheetCellInput';
 import { chartHost, readChartData, registerChartHost, SHEET_CHART_COMPONENT } from './sheetChartHost';
 import {
   chartFromRange, type ChartKind, chartKind, chartSeriesList, chartSourceRange, mapChartReferences, type SheetChartData, withChartData, withChartTitle,
@@ -440,6 +441,7 @@ export class SheetEditorSession implements OfficeEditorPort {
     this.instanceDisposers.push(
       installValidationPrompts(univer, workbook, { alertTitle: i18nService.t('sheetDataValidation') }),
       installExcelShortcuts(univer, api, { language }),
+      installPlainTypedCells(univer),
       installAddToChat(univer, workbook, {
         label: i18nService.t('coworkSelectedTextAddToChat'),
         labels: { empty: i18nService.t('sheetChatEmptyCells'), moreRows: i18nService.t('sheetChatMoreRows') },
@@ -951,6 +953,7 @@ export class SheetEditorSession implements OfficeEditorPort {
         // Univer's own save deep-copies the model; posting to the export worker copies it anyway.
         live: () => ({ ...workbook.getWorkbook().getSnapshot(), resources: resources?.getResources(workbook.getId(), UniverInstanceType.UNIVER_SHEET) ?? [] }),
         copy: () => workbook.save(),
+        revision: () => this.document.currentRevision,
       };
       return await this.exporter.export(snapshots, {
         structure: [...(this.structure?.ops ?? [])], tables: this.structure?.grownTables(), activeSheetId: workbook.getActiveSheet().getSheetId(),

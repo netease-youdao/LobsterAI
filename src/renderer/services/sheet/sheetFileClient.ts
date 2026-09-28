@@ -3,6 +3,7 @@ import type { IWorkbookData } from '@univerjs/core';
 import { type EditorImport, editorImport } from './sheetEditorImport';
 import { type SheetEdits, SheetExporter } from './sheetExporter';
 import { FileWorkerMessage, type FileWorkerRequest, type FileWorkerResponse } from './sheetFileMessages';
+import { cellSlices, SLICED_EXPORT_CELLS, snapshotCellCount, withoutCells } from './sheetSnapshotSlices';
 import { XlsxExportError } from './xlsxExport';
 import { type ImportOptions, importXlsxPackage, readXlsxPackage, type WorkbookFonts, workbookFonts, XlsxImportError } from './xlsxImport';
 import type { XlsxPackage } from './xlsxPackage';
@@ -21,7 +22,15 @@ export interface SheetSnapshotSource {
   live(): IWorkbookData;
   /** A copy the export may keep while the grid changes. */
   copy(): IWorkbookData;
+  /** Changes with every edit, so a snapshot sent in parts can tell it stayed the same. */
+  revision?(): number;
 }
+
+/** Attempts at sending a large snapshot in parts while edits keep arriving, before sending it whole. */
+const SLICED_EXPORT_ATTEMPTS = 3;
+
+/** Lets the grid draw and take input between the parts of a snapshot. */
+const nextTask = () => new Promise<void>(resolve => { setTimeout(resolve, 0); });
 
 export interface SheetFileClient {
   /** The workbook's default font and the fonts its cells use (loaded before measuring column widths). */
@@ -78,6 +87,7 @@ class WorkerFileClient implements SheetFileClient {
   private readonly worker: Worker;
   private readonly pending = new Map<number, { resolve: (reply: Reply) => void; reject: (error: Error) => void }>();
   private sequence = 0;
+  private pass = 0;
   private broken = false;
   private disposed = false;
   private fallback?: InlineFileClient;
@@ -169,9 +179,41 @@ class WorkerFileClient implements SheetFileClient {
     else this.call({ kind: FileWorkerMessage.Adopt, id: 0, loaded }).catch(() => undefined);
   }
 
+  /**
+   * Sends a large snapshot's cells in parts, one task each, and then the rest of it. An edit while
+   * the parts go out restarts the pass, so the saved file never mixes two states of the grid; after
+   * a few restarts the snapshot goes whole. Resolves undefined when it was not sent in parts.
+   */
+  private async exportInParts(source: SheetSnapshotSource, edits: SheetEdits): Promise<Uint8Array | undefined> {
+    if (!source.revision) return undefined;
+    for (let attempt = 0; attempt < SLICED_EXPORT_ATTEMPTS; attempt++) {
+      const revision = source.revision();
+      const snapshot = source.live();
+      if (snapshotCellCount(snapshot) < SLICED_EXPORT_CELLS) return undefined;
+      const pass = ++this.pass;
+      let changed = false;
+      for (const slice of cellSlices(snapshot)) {
+        this.worker.postMessage({ kind: FileWorkerMessage.ExportPart, id: 0, pass, ...slice } satisfies FileWorkerRequest);
+        await nextTask();
+        if (this.broken || source.revision() !== revision) {
+          changed = true;
+          break;
+        }
+      }
+      if (this.broken) throw new Error('The workbook file worker stopped');
+      if (changed) continue;
+      const { bytes } = await this.call({ kind: FileWorkerMessage.Export, id: 0, current: withoutCells(snapshot), edits, pass });
+      if (!bytes) throw new Error('The workbook file worker returned no file');
+      return bytes;
+    }
+    return undefined;
+  }
+
   async export(source: SheetSnapshotSource, edits: SheetEdits): Promise<Uint8Array> {
     if (!this.fallback) {
       try {
+        const sliced = await this.exportInParts(source, edits);
+        if (sliced) return sliced;
         // Posting copies the snapshot, so the model's own is read right before it is sent.
         const { bytes } = await this.call({ kind: FileWorkerMessage.Export, id: 0, current: source.live(), edits });
         if (bytes) return bytes;

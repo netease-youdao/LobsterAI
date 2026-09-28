@@ -1,6 +1,7 @@
 import { editorImport } from './sheetEditorImport';
 import { SheetExporter } from './sheetExporter';
 import { FileWorkerMessage, type FileWorkerRequest, type FileWorkerResponse } from './sheetFileMessages';
+import { CellSliceStore } from './sheetSnapshotSlices';
 import { XlsxExportError } from './xlsxExport';
 import { importXlsxPackage, readXlsxPackage, workbookFonts, XlsxImportError } from './xlsxImport';
 import type { XlsxPackage } from './xlsxPackage';
@@ -12,6 +13,8 @@ import type { XlsxPackage } from './xlsxPackage';
 let bytes: Uint8Array | undefined;
 let pkg: XlsxPackage | undefined;
 let exporter: SheetExporter | undefined;
+/** The cells of the export pass being sent in parts. */
+let staged: { pass: number; cells: CellSliceStore } | undefined;
 
 function opened(): { bytes: Uint8Array; pkg: XlsxPackage } {
   if (!bytes || !pkg) throw new Error('The workbook is not open');
@@ -44,8 +47,15 @@ self.onmessage = (event: MessageEvent<FileWorkerRequest>) => {
         imported().adopt(request.loaded);
         reply({ id: request.id, ok: true });
         return;
+      case FileWorkerMessage.ExportPart:
+        if (staged?.pass !== request.pass) staged = { pass: request.pass, cells: new CellSliceStore() };
+        staged.cells.add(request);
+        return;
       case FileWorkerMessage.Export: {
-        const file = imported().export(request.current, request.edits);
+        const current = request.pass === undefined ? request.current
+          : (staged?.pass === request.pass ? staged.cells : new CellSliceStore()).assemble(request.current);
+        staged = undefined;
+        const file = imported().export(current, request.edits);
         reply({ id: request.id, ok: true, bytes: file }, [file.buffer]);
         return;
       }
