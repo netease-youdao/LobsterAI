@@ -142,7 +142,9 @@ describe('openclawSessionLegacyMigration', () => {
   test.each([
     ['main', true], ['content-writer', true], ['efa723bc-8bff-4763-8748-ec0099d51e0e', true],
     ['Main-', true], ['设计expert', true], ['Retired Agent', true], ['a.b', true], ['-x-', true],
+    ['MAIN', true], ['worker_1', true], ['内容-worker', true], ['worker-内容', true], ['a'.repeat(65), true],
     ['内容创作', false], ['设计专家', false], ['主main', false], ['###', false], ['_old', false],
+    ['-main', false], ['main-内容', false], ['内容-MAIN', false],
   ])('matches OpenClaw discovery for agent directory %s', (dirName, discoverable) => {
     expect(isOpenClawDiscoverableAgentDirName(dirName)).toBe(discoverable);
   });
@@ -335,25 +337,32 @@ describe('openclawSessionLegacyMigration', () => {
     expect(fs.readFileSync(fixture.archivePath, 'utf8')).toBe('{}\n');
   });
 
-  test('accepts a warning-only import while stores that OpenClaw cannot own stay in place', async () => {
+  test.each([0, 1])('accepts a completed import with code %s while preserving undiscoverable stores', async code => {
     const fixture = createWarningImportFixture();
     const orphanPaths = ['内容创作', '设计专家']
       .map(name => path.join(stateDir, 'agents', name, 'sessions', 'sessions.json'));
-    for (const orphanPath of orphanPaths) writeFile(orphanPath);
+    const preservedPaths = orphanPaths.flatMap(orphanPath => {
+      const transcriptPath = path.join(path.dirname(orphanPath), 'history.jsonl');
+      writeFile(orphanPath, '{"old":{"sessionId":"history"}}');
+      writeFile(transcriptPath, '{"message":"preserve this history"}\n');
+      return [orphanPath, transcriptPath];
+    });
+    const originals = preservedPaths.map(file => fs.readFileSync(file));
     const logWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const runner = vi.fn<LegacySessionMigrationRunner>().mockImplementation(async () => {
       archiveWarningFixture(fixture);
-      return { code: 1, stdout: JSON.stringify(fixture.report), stderr: '' };
+      return { code, stdout: JSON.stringify(fixture.report), stderr: '' };
     });
 
     const result = await migrateLegacySessionStorageWithDoctor({
       stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
     });
 
-    expect(result).toEqual({ status: 'migrated', code: 1, migratedPaths: [fixture.legacyPath] });
-    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining('completed with warnings'));
-    for (const orphanPath of orphanPaths) expect(fs.readFileSync(orphanPath, 'utf8')).toBe('{}\n');
+    expect(result).toEqual({ status: 'migrated', code, migratedPaths: [fixture.legacyPath] });
+    if (code === 1) expect(logWarn).toHaveBeenCalledWith(expect.stringContaining('completed with warnings'));
+    expect(fs.existsSync(fixture.archivePath)).toBe(true);
+    expect(preservedPaths.map(file => fs.readFileSync(file))).toEqual(originals);
   });
 
   test('shows a blocking issue from a later target before an invalid-entry warning and logs issue counts', async () => {

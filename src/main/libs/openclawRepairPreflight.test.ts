@@ -95,6 +95,21 @@ test.each(['config', 'session'])('refuses to modify %s data that changed after t
   expect(fs.existsSync(broken)).toBe(true);
 });
 
+test('leaves doctor-undiscoverable indexes and transcripts untouched during quick repair', async () => {
+  const params = fixture();
+  const ignored = store(params, '内容创作', '\uFEFFnot json');
+  const transcript = path.join(path.dirname(ignored), 'history.jsonl');
+  fs.writeFileSync(transcript, 'historical transcript\n');
+  await snapshot(params);
+
+  expect(await runOpenClawRepairPreflight(params)).toMatchObject({
+    repairedSessionStores: [], quarantinedSessionStores: [],
+  });
+  expect(fs.readFileSync(ignored, 'utf8')).toBe('\uFEFFnot json');
+  expect(fs.readFileSync(transcript, 'utf8')).toBe('historical transcript\n');
+  expect(fs.readdirSync(path.dirname(ignored)).sort()).toEqual(['history.jsonl', 'sessions.json']);
+});
+
 test('rechecks sessions after asynchronous CLI validation and never quarantines permission failures', async () => {
   const params = fixture();
   const broken = store(params, 'main', 'truncated');
