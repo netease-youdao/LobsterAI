@@ -76,13 +76,10 @@ export type BrowserToolResponse = {
   isError?: boolean;
 };
 
-/** Word editor tools share the browser tools' request and result shapes. */
-export type WordToolRequest = BrowserToolRequest;
-export type WordToolResponse = BrowserToolResponse;
-/** Excel editor tools share the same shapes. */
-export type SheetToolRequest = BrowserToolRequest;
-export type SheetToolResponse = BrowserToolResponse;
-type EditorToolHandler = (request: BrowserToolRequest) => Promise<BrowserToolResponse>;
+/** Document editor tools (the Office editors) share the browser tools' request and result shapes. */
+export type EditorToolRequest = BrowserToolRequest;
+export type EditorToolResponse = BrowserToolResponse;
+export type EditorToolHandler = (request: EditorToolRequest) => Promise<EditorToolResponse>;
 
 export type DecisionToolRequest = {
   args: Record<string, unknown>;
@@ -113,8 +110,8 @@ export class McpBridgeServer {
   private onMediaGenerationCallback: ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>) | null = null;
   private onBrowserToolCallback: ((request: BrowserToolRequest) => Promise<BrowserToolResponse>) | null = null;
   private onDecisionToolCallback: DecisionToolHandler | null = null;
-  private onWordToolCallback: ((request: WordToolRequest) => Promise<WordToolResponse>) | null = null;
-  private onSheetToolCallback: ((request: SheetToolRequest) => Promise<SheetToolResponse>) | null = null;
+  /** Editor tool handlers by route, served at `/<route>/tool`. */
+  private readonly editorTools = new Map<string, { editorName: string; handler: EditorToolHandler }>();
 
   constructor(secret: string) {
     this.secret = secret;
@@ -141,12 +138,8 @@ export class McpBridgeServer {
     return this._port ? `http://127.0.0.1:${this._port}/decision/tool` : null;
   }
 
-  get wordCallbackUrl(): string | null {
-    return this._port ? `http://127.0.0.1:${this._port}/word/tool` : null;
-  }
-
-  get sheetCallbackUrl(): string | null {
-    return this._port ? `http://127.0.0.1:${this._port}/sheet/tool` : null;
+  editorCallbackUrl(route: string): string | null {
+    return this._port ? `http://127.0.0.1:${this._port}/${route}/tool` : null;
   }
 
   /**
@@ -177,12 +170,9 @@ export class McpBridgeServer {
     this.onBrowserToolCallback = callback;
   }
 
-  onWordTool(callback: (request: WordToolRequest) => Promise<WordToolResponse>): void {
-    this.onWordToolCallback = callback;
-  }
-
-  onSheetTool(callback: (request: SheetToolRequest) => Promise<SheetToolResponse>): void {
-    this.onSheetToolCallback = callback;
+  /** Serve a document editor's tools at `/<route>/tool`; `editorName` appears in errors the agent reads. */
+  onEditorTool(route: string, editorName: string, handler: EditorToolHandler): void {
+    this.editorTools.set(route, { editorName, handler });
   }
 
   /**
@@ -332,13 +322,10 @@ export class McpBridgeServer {
       return;
     }
 
-    if (req.url?.startsWith('/word/tool')) {
-      await this.handleEditorTool(req, res, this.onWordToolCallback, 'Word');
-      return;
-    }
-
-    if (req.url?.startsWith('/sheet/tool')) {
-      await this.handleEditorTool(req, res, this.onSheetToolCallback, 'Excel');
+    const editorRoute = /^\/([a-z][a-z0-9-]*)\/tool(?:[/?]|$)/.exec(req.url ?? '')?.[1];
+    const editorTool = editorRoute ? this.editorTools.get(editorRoute) : undefined;
+    if (editorTool) {
+      await this.handleEditorTool(req, res, editorTool.handler, editorTool.editorName);
       return;
     }
 
@@ -539,8 +526,8 @@ export class McpBridgeServer {
     }
   }
 
-  /** Word and Excel editor tools: forward to the renderer-backed handler and relay its result. */
-  private async handleEditorTool(req: http.IncomingMessage, res: http.ServerResponse, callback: EditorToolHandler | null, editorName: string): Promise<void> {
+  /** Document editor tools: forward to the renderer-backed handler and relay its result. */
+  private async handleEditorTool(req: http.IncomingMessage, res: http.ServerResponse, callback: EditorToolHandler, editorName: string): Promise<void> {
     const startedAt = Date.now();
     const reply = (status: number, payload: BrowserToolResponse): void => {
       if (res.writableEnded) return;
@@ -548,13 +535,9 @@ export class McpBridgeServer {
       res.end(JSON.stringify(payload));
     };
     try {
-      const request = JSON.parse(await this.readBody(req)) as BrowserToolRequest;
+      const request = JSON.parse(await this.readBody(req)) as EditorToolRequest;
       if (typeof request.tool !== 'string' || !request.tool.trim()) {
         reply(400, { content: [{ type: 'text', text: `Missing ${editorName} tool name.` }], isError: true });
-        return;
-      }
-      if (!callback) {
-        reply(503, { content: [{ type: 'text', text: `The LobsterAI ${editorName} editor is not ready.` }], isError: true });
         return;
       }
       const result = await callback({

@@ -3909,63 +3909,17 @@ describe('OpenClawConfigSync runtime config output', () => {
     });
   });
 
-  test('registers the LobsterAI Word editor tools as a native MCP server', async () => {
+  test('registers the LobsterAI Office editor tools as native MCP servers', async () => {
     const { OpenClawConfigSync } = await import('./openclawConfigSync');
-    const { WORD_AGENT_MCP_SERVER_NAME } = await import('../../shared/artifactPreview/wordAgent');
-    let launch: { command: string; args: string[]; env: Record<string, string> } | null = {
-      command: '/Applications/LobsterAI.app/Contents/MacOS/LobsterAI',
-      args: ['/state/generated/lobster-word-mcp/lobster-word-mcp-server.mjs'],
-      env: { ELECTRON_RUN_AS_NODE: '1' },
-    };
-    const sync = new OpenClawConfigSync({
-      engineManager: {
-        getConfigPath: () => configPath,
-        getGatewayToken: () => 'gateway-token',
-        getStateDir: () => stateDir,
-        getBaseDir: () => tmpDir,
-      } as never,
-      getCoworkConfig: () => ({
-        workingDirectory: tmpDir,
-        systemPrompt: '',
-        executionMode: 'local',
-        agentEngine: 'openclaw',
-        memoryEnabled: false,
-        memoryImplicitUpdateEnabled: false,
-        memoryLlmJudgeEnabled: false,
-        memoryGuardLevel: 'balanced',
-        memoryUserMemoriesMaxItems: 100,
-        skipMissedJobs: false,
-      }),
-      getLobsterWordMcpStdioLaunch: () => launch,
-      isEnterprise: () => false,
-      getPopoInstances: () => [],
-      getNeteaseBeeChanConfig: () => null,
-      getWeixinConfig: () => null,
-      getIMSettings: () => null,
-      getSkillsList: () => [],
-      getAgents: () => [],
-    } as never);
-    expect(sync.sync('word-editor-tools').ok).toBe(true);
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.mcp.servers[WORD_AGENT_MCP_SERVER_NAME]).toEqual(launch);
-
-    // Without an active bridge the server is left out rather than pointing nowhere.
-    launch = null;
-    expect(sync.sync('word-editor-tools-unavailable').ok).toBe(true);
-    const withoutBridge = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(withoutBridge.mcp?.servers?.[WORD_AGENT_MCP_SERVER_NAME]).toBeUndefined();
-  });
-
-  test('registers the LobsterAI Excel editor tools next to the Word tools', async () => {
-    const { OpenClawConfigSync } = await import('./openclawConfigSync');
-    const { SHEET_AGENT_MCP_SERVER_NAME } = await import('../../shared/artifactPreview/sheetAgent');
-    const { WORD_AGENT_MCP_SERVER_NAME } = await import('../../shared/artifactPreview/wordAgent');
+    const { OFFICE_EDITORS } = await import('../../shared/office/editors');
     const launch = (server: string) => ({
       command: '/Applications/LobsterAI.app/Contents/MacOS/LobsterAI',
       args: [`/state/generated/${server}-mcp/${server}-mcp-server.mjs`],
       env: { ELECTRON_RUN_AS_NODE: '1' },
     });
-    let sheetLaunch: ReturnType<typeof launch> | null = launch(SHEET_AGENT_MCP_SERVER_NAME);
+    const serverNames = OFFICE_EDITORS.map(editor => editor.agent.serverName);
+    // An editor whose bridge is down is simply missing from the servers it reports.
+    let available = serverNames;
     const sync = new OpenClawConfigSync({
       engineManager: {
         getConfigPath: () => configPath,
@@ -3985,8 +3939,7 @@ describe('OpenClawConfigSync runtime config output', () => {
         memoryUserMemoriesMaxItems: 100,
         skipMissedJobs: false,
       }),
-      getLobsterWordMcpStdioLaunch: () => launch('lobster-word'),
-      getLobsterSheetMcpStdioLaunch: () => sheetLaunch,
+      getOfficeMcpServers: () => Object.fromEntries(available.map(server => [server, launch(server)])),
       isEnterprise: () => false,
       getPopoInstances: () => [],
       getNeteaseBeeChanConfig: () => null,
@@ -3995,16 +3948,15 @@ describe('OpenClawConfigSync runtime config output', () => {
       getSkillsList: () => [],
       getAgents: () => [],
     } as never);
-    expect(sync.sync('excel-editor-tools').ok).toBe(true);
+    expect(sync.sync('office-editor-tools').ok).toBe(true);
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.mcp.servers[SHEET_AGENT_MCP_SERVER_NAME]).toEqual(sheetLaunch);
-    expect(config.mcp.servers[WORD_AGENT_MCP_SERVER_NAME]).toEqual(launch('lobster-word'));
+    for (const server of serverNames) expect(config.mcp.servers[server]).toEqual(launch(server));
 
-    sheetLaunch = null;
-    expect(sync.sync('excel-editor-tools-unavailable').ok).toBe(true);
+    available = serverNames.slice(1);
+    expect(sync.sync('office-editor-tools-partly-unavailable').ok).toBe(true);
     const withoutBridge = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(withoutBridge.mcp.servers[SHEET_AGENT_MCP_SERVER_NAME]).toBeUndefined();
-    expect(withoutBridge.mcp.servers[WORD_AGENT_MCP_SERVER_NAME]).toBeDefined();
+    expect(withoutBridge.mcp.servers[serverNames[0]]).toBeUndefined();
+    for (const server of available) expect(withoutBridge.mcp.servers[server]).toEqual(launch(server));
   });
 
   test('writes browser and web fetch access settings', async () => {

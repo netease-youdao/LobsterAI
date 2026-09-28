@@ -182,7 +182,7 @@ export function useArtifactSelectedTextAction(options: {
 }
 
 /**
- * "Add to chat" for text selected in an editor that owns its scrolling DOM (the Word editor),
+ * "Add to chat" for text selected in an editor that owns its scrolling DOM (such as the Word editor),
  * where the button cannot live inside the scrolled content: it floats in `frame` (positioned)
  * above the selection and goes away on scrolling, typing or a press elsewhere. Such editors cancel
  * pointerdown, so no mouse events follow: the selection is read on pointerup.

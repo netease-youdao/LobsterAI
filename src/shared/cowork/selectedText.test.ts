@@ -219,3 +219,23 @@ test('keeps Word document snippets and names the document in the prompt', () => 
   expect(prompt).toContain('[Excerpt 1 from Word document 季度报告.docx');
   expect(prompt).toContain('> 本季度收入增长了百分之十二');
 });
+
+test('keeps presentation snippets and points the agent at ppt_read', () => {
+  const result = normalizeCoworkSelectedTextSnippets([
+    {
+      id: 'artifact-slides',
+      text: '测试覆盖率 85%',
+      sourceType: CoworkSelectedTextSource.ArtifactSlides,
+      sourceId: 'artifact-5',
+      artifactId: 'artifact-5',
+      sourceTitle: '季度汇报.pptx · 第 2 张幻灯片 · 内容占位符 2 #3',
+      sourcePath: '/tmp/project/季度汇报.pptx',
+      createdAt: 5,
+    },
+  ]);
+  expect(result.success).toBe(true);
+  if (result.success === false) return;
+  const prompt = buildSelectedTextPromptSection(result.snippets);
+  expect(prompt).toContain('[Excerpt 1 from presentation 季度汇报.pptx · 第 2 张幻灯片 · 内容占位符 2 #3 (ppt_read gives its slides and shape ids)]');
+  expect(prompt).toContain('> 测试覆盖率 85%');
+});

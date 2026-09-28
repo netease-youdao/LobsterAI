@@ -47,7 +47,6 @@ import { type AppUpdateActiveWorkloads, AppUpdateIpc } from '../shared/appUpdate
 import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
 import { ReviewIpc, ReviewScope, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest } from '../shared/artifactPreview/reviewSource';
-import { SHEET_AGENT_MCP_SERVER_NAME, SHEET_AGENT_TIMEOUT_MS, SHEET_AGENT_TOOL_DEFINITIONS } from '../shared/artifactPreview/sheetAgent';
 import { buildWorkspaceChangesArtifact } from '../shared/artifactPreview/workspaceChanges';
 import { createAccountOwnerKey } from '../shared/auth/accountOwner';
 import {
@@ -289,11 +288,9 @@ import {
   registerScheduledTaskHandlers,
 } from './ipcHandlers/scheduledTask';
 import { registerSessionDiagnosticsHandlers } from './ipcHandlers/sessionDiagnostics';
-import { hasUnsafeSheetEdits, registerSheetEditingHandlers } from './ipcHandlers/sheetEditing';
 import { registerSiteIpcHandlers } from './ipcHandlers/site';
 import { registerSkillHandlers } from './ipcHandlers/skills';
 import { registerSubscriptionTrialIpcHandlers } from './ipcHandlers/subscriptionTrial';
-import { hasUnsafeWordEdits, registerWordEditingHandlers } from './ipcHandlers/wordEditing';
 import { LibraryIndexService } from './library/libraryIndexService';
 import { registerLibraryIpcHandlers } from './library/libraryIpc';
 import { LibraryLocalStore } from './library/libraryLocalStore';
@@ -436,8 +433,6 @@ import {
   resolveLobsterBrowserMcpCommand,
   resolveLobsterBrowserMcpStdioLaunch,
 } from './libs/lobsterBrowserMcpServer';
-import { resolveLobsterOfficeMcpStdioLaunch } from './libs/lobsterOfficeMcpServer';
-import { resolveLobsterWordMcpStdioLaunch } from './libs/lobsterWordMcpServer';
 import { exportLogsZip } from './libs/logExport';
 import { MainLogReporter } from './libs/mainLogReporter';
 import {
@@ -446,7 +441,6 @@ import {
   MainWindowLoadErrorCode,
 } from './libs/mainWindowLoadRecovery';
 import { inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
-import type { OfficeAgentBridge } from './libs/officeAgentBridge';
 import {
   migrateAgentModelRefs,
   parsePrimaryModelRef,
@@ -565,7 +559,6 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
-import type { WordAgentBridge } from './libs/wordAgentBridge';
 import { getLogFilePath, getRecentMainLogEntries, initLogger } from './logger';
 import { type AskUserResponse, McpRuntime } from './mcp/mcpRuntime';
 import {
@@ -598,6 +591,8 @@ import {
   MediaGenerationRequestType,
   summarizeMediaGenerationParamsForLog,
 } from './mediaGenerationReferences';
+import { MAIN_OFFICE_FORMATS } from './office/formats';
+import { OfficeEditing } from './office/officeEditing';
 import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 import {
@@ -2145,8 +2140,7 @@ let browserCredentialService: BrowserCredentialService | null = null;
 let browserCredentialApprovalService: BrowserCredentialApprovalService | null = null;
 let skillManager: SkillManager | null = null;
 let mcpRuntime: McpRuntime | null = null;
-let wordAgentBridge: WordAgentBridge | null = null;
-let sheetAgentBridge: OfficeAgentBridge | null = null;
+const officeEditing = new OfficeEditing(MAIN_OFFICE_FORMATS);
 let skinRuntimeController: SkinRuntimeController | null = null;
 let imGatewayManager: IMGatewayManager | null = null;
 let storeInitPromise: Promise<SqliteStore> | null = null;
@@ -2676,49 +2670,13 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
           },
         );
       },
-      getLobsterWordMcpStdioLaunch: () => {
+      getOfficeMcpServers: () => {
         const mcpRuntime = getMcpRuntime();
-        const bridgeUrl = mcpRuntime.getWordCallbackUrl();
-        if (!bridgeUrl) return null;
-        try {
-          return resolveLobsterWordMcpStdioLaunch(
-            path.join(getOpenClawEngineManager().getStateDir(), 'generated'),
-            {
-              electronNodeRuntimePath: getElectronNodeRuntimePath(),
-              bridgeUrl,
-              bridgeSecret: mcpRuntime.getBridgeSecret(),
-            },
-          );
-        } catch (error) {
-          // The Word tools are optional; never let them break the rest of the config sync.
-          console.warn('[WordAgent] Could not prepare the Word MCP server:', error);
-          return null;
-        }
-      },
-      getLobsterSheetMcpStdioLaunch: () => {
-        const mcpRuntime = getMcpRuntime();
-        const bridgeUrl = mcpRuntime.getSheetCallbackUrl();
-        if (!bridgeUrl) return null;
-        try {
-          return resolveLobsterOfficeMcpStdioLaunch(
-            path.join(getOpenClawEngineManager().getStateDir(), 'generated'),
-            {
-              serverName: SHEET_AGENT_MCP_SERVER_NAME,
-              editorName: 'Excel',
-              tools: SHEET_AGENT_TOOL_DEFINITIONS,
-              timeoutMs: SHEET_AGENT_TIMEOUT_MS,
-            },
-            {
-              electronNodeRuntimePath: getElectronNodeRuntimePath(),
-              bridgeUrl,
-              bridgeSecret: mcpRuntime.getBridgeSecret(),
-            },
-          );
-        } catch (error) {
-          // The Excel tools are optional too.
-          console.warn('[SheetAgent] Could not prepare the Excel MCP server:', error);
-          return null;
-        }
+        return officeEditing.mcpServers(path.join(getOpenClawEngineManager().getStateDir(), 'generated'), {
+          electronNodeRuntimePath: getElectronNodeRuntimePath(),
+          bridgeSecret: mcpRuntime.getBridgeSecret(),
+          callbackUrl: id => mcpRuntime.getEditorCallbackUrl(id),
+        });
       },
       getMcpBridgeSecret: () => getMcpRuntime().getBridgeSecret(),
       getAgents: () => getCoworkStore().listAgents(),
@@ -3908,12 +3866,9 @@ const startAskUserServer = async (): Promise<void> => {
   const runtime = getMcpRuntime();
   await runtime.startAskUserServer();
   runtime.setBrowserToolHandler(request => getAgentBrowserHost().handleToolRequest(request));
-  runtime.setWordToolHandler(async request => (wordAgentBridge
-    ? wordAgentBridge.call(request.tool, request.args)
-    : { content: [{ type: 'text', text: 'The LobsterAI Word editor is not ready yet.' }], isError: true }));
-  runtime.setSheetToolHandler(async request => (sheetAgentBridge
-    ? sheetAgentBridge.call(request.tool, request.args)
-    : { content: [{ type: 'text', text: 'The LobsterAI Excel editor is not ready yet.' }], isError: true }));
+  for (const editor of officeEditing.editors) {
+    runtime.setEditorToolHandler(editor.id, editor.editorName, request => officeEditing.callTool(editor.id, request.tool, request.args));
+  }
 };
 
 const getIMGatewayManager = () => {
@@ -13398,8 +13353,7 @@ if (!gotTheLock) {
   });
 
   registerMarkdownEditingHandlers(() => mainWindow);
-  wordAgentBridge = registerWordEditingHandlers(() => mainWindow);
-  sheetAgentBridge = registerSheetEditingHandlers(() => mainWindow);
+  officeEditing.register(() => mainWindow);
 
   // ---- artifact file watching ----
   const fileWatchers = new Map<
@@ -14637,11 +14591,11 @@ if (!gotTheLock) {
 
     // User-initiated quit (Cmd+Q, app menu, Dock, tray): scheduled tasks and
     // IM replies stop with the app, so ask first.
-    void showAppQuitConfirmation(() => hasUnsafeMarkdownEdits() || hasUnsafeWordEdits() || hasUnsafeSheetEdits())
+    void showAppQuitConfirmation(() => hasUnsafeMarkdownEdits() || officeEditing.hasUnsafeEdits())
       .then(
         confirmed => confirmed,
         error => {
-          if (hasUnsafeMarkdownEdits() || hasUnsafeWordEdits() || hasUnsafeSheetEdits()) {
+          if (hasUnsafeMarkdownEdits() || officeEditing.hasUnsafeEdits()) {
             console.error('[Main] quit confirmation prompt failed, retaining unsaved document edits:', error);
             return false;
           }

@@ -15,9 +15,6 @@ import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
 import { MarkdownFileIpc, type SaveMarkdownFileRequest } from '../shared/artifactPreview/markdownEditing';
 import { ReviewIpc, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest } from '../shared/artifactPreview/reviewSource';
-import { type SheetFileBridge, SheetFileIpc } from '../shared/artifactPreview/sheetEditing';
-import { WordAgentIpc, type WordAgentRequest } from '../shared/artifactPreview/wordAgent';
-import { type WordFileBridge,WordFileIpc } from '../shared/artifactPreview/wordEditing';
 import {
   AsrIpcChannel,
   type AsrRealtimeSessionRequest,
@@ -137,6 +134,7 @@ import type {
 } from '../shared/skin/types';
 import { SubscriptionTrialIpc } from '../shared/subscriptionTrial/constants';
 import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
+import { createOfficeBridges } from './office/officePreloadBridges';
 import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 
@@ -546,7 +544,7 @@ contextBridge.exposeInMainWorld('electron', {
       kitIds?: string[];
       kitReferences?: KitReference[];
       resolvedKitCapabilities?: ResolvedKitCapabilities;
-      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       agentId?: string;
       modelOverride?: string;
@@ -563,7 +561,7 @@ contextBridge.exposeInMainWorld('electron', {
       kitIds?: string[];
       kitReferences?: KitReference[];
       resolvedKitCapabilities?: ResolvedKitCapabilities;
-      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
@@ -1042,48 +1040,7 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(AsrIpcChannel.CreateRealtimeSession, options),
   },
   artifact: {
-    word: {
-      open: filePath => ipcRenderer.invoke(WordFileIpc.Open, filePath),
-      read: sessionId => ipcRenderer.invoke(WordFileIpc.Read, sessionId),
-      checkpoint: request => ipcRenderer.invoke(WordFileIpc.Checkpoint, request),
-      save: request => ipcRenderer.invoke(WordFileIpc.Save, request),
-      discardDraft: sessionId => ipcRenderer.invoke(WordFileIpc.DiscardDraft, sessionId),
-      release: sessionId => ipcRenderer.invoke(WordFileIpc.Release, sessionId),
-      resolveFonts: families => ipcRenderer.invoke(WordFileIpc.ResolveFonts, families),
-      readFont: faceId => ipcRenderer.invoke(WordFileIpc.ReadFont, faceId),
-      setHasUnsafeEdits: unsafe => ipcRenderer.send(WordFileIpc.SetUnsafeEdits, unsafe),
-      onChanged: listener => {
-        const handler = (_event: Electron.IpcRendererEvent, sessionId: string) => listener(sessionId);
-        ipcRenderer.on(WordFileIpc.Changed, handler);
-        return () => { ipcRenderer.removeListener(WordFileIpc.Changed, handler); };
-      },
-      onAgentRequest: listener => {
-        const handler = (_event: Electron.IpcRendererEvent, request: WordAgentRequest) => listener(request);
-        ipcRenderer.on(WordAgentIpc.Request, handler);
-        return () => { ipcRenderer.removeListener(WordAgentIpc.Request, handler); };
-      },
-      respondAgent: response => ipcRenderer.send(WordAgentIpc.Respond, response),
-    } satisfies WordFileBridge,
-    sheet: {
-      open: filePath => ipcRenderer.invoke(SheetFileIpc.Open, filePath),
-      read: sessionId => ipcRenderer.invoke(SheetFileIpc.Read, sessionId),
-      checkpoint: request => ipcRenderer.invoke(SheetFileIpc.Checkpoint, request),
-      save: request => ipcRenderer.invoke(SheetFileIpc.Save, request),
-      discardDraft: sessionId => ipcRenderer.invoke(SheetFileIpc.DiscardDraft, sessionId),
-      release: sessionId => ipcRenderer.invoke(SheetFileIpc.Release, sessionId),
-      setHasUnsafeEdits: unsafe => ipcRenderer.send(SheetFileIpc.SetUnsafeEdits, unsafe),
-      onChanged: listener => {
-        const handler = (_event: Electron.IpcRendererEvent, sessionId: string) => listener(sessionId);
-        ipcRenderer.on(SheetFileIpc.Changed, handler);
-        return () => { ipcRenderer.removeListener(SheetFileIpc.Changed, handler); };
-      },
-      onAgentRequest: listener => {
-        const handler = (_event: Electron.IpcRendererEvent, request: Parameters<typeof listener>[0]) => listener(request);
-        ipcRenderer.on(SheetFileIpc.AgentRequest, handler);
-        return () => { ipcRenderer.removeListener(SheetFileIpc.AgentRequest, handler); };
-      },
-      respondAgent: response => ipcRenderer.send(SheetFileIpc.AgentRespond, response),
-    } satisfies SheetFileBridge,
+    office: createOfficeBridges(ipcRenderer),
     markdown: {
       read: (filePath: string) => ipcRenderer.invoke(MarkdownFileIpc.Read, filePath),
       save: (request: SaveMarkdownFileRequest) => ipcRenderer.invoke(MarkdownFileIpc.Save, request),

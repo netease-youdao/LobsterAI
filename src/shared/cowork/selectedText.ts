@@ -8,6 +8,8 @@ export const CoworkSelectedTextSource = {
   ArtifactSheet: 'artifact_sheet',
   /** Text selected in a document open in the Word editor. */
   ArtifactWord: 'artifact_word',
+  /** Text of a presentation open in the PowerPoint editor; the title names the slide and shape. */
+  ArtifactSlides: 'artifact_slides',
 } as const;
 
 export type CoworkSelectedTextSource =
@@ -106,6 +108,7 @@ const normalizeSnippet = (value: unknown): CoworkSelectedTextSnippet | null => {
     || sourceType === CoworkSelectedTextSource.ArtifactText
     || sourceType === CoworkSelectedTextSource.ArtifactSheet
     || sourceType === CoworkSelectedTextSource.ArtifactWord
+    || sourceType === CoworkSelectedTextSource.ArtifactSlides
   ) {
     const normalizedSourceId = explicitSourceId || artifactId;
     if (!normalizedSourceId) return null;
@@ -185,6 +188,10 @@ const getSnippetHeading = (snippet: CoworkSelectedTextSnippet, index: number): s
   if (sourceType === CoworkSelectedTextSource.ArtifactWord) {
     const title = snippet.sourceTitle?.trim() || 'Word document';
     return `[Excerpt ${index + 1} from Word document ${title} (word_read gives its paragraph ids)]`;
+  }
+  if (sourceType === CoworkSelectedTextSource.ArtifactSlides) {
+    const title = snippet.sourceTitle?.trim() || 'presentation';
+    return `[Excerpt ${index + 1} from presentation ${title} (ppt_read gives its slides and shape ids)]`;
   }
   return `[Excerpt ${index + 1} from assistant message]`;
 };

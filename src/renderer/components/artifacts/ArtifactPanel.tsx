@@ -75,6 +75,7 @@ import {
   writeLocalServiceProjectDirectory as writeNodeDeploymentProjectDirectory,
 } from '@/services/localServiceProjectDirectoryCache';
 import { getMarkdownDocumentContent } from '@/services/markdownDocument';
+import { refreshOpenOfficeEditor } from '@/services/office/officeFormats';
 import {
   armPublishingSubscriptionRecovery,
   PublishingSubscriptionRecoveryRefreshOutcome,
@@ -214,8 +215,8 @@ import {
 import {
   OfficePreviewActionsContext,
   type OfficePreviewZoomControlsConfig,
-} from './renderers/OfficePreviewActionsContext';
-import { OfficeZoomControls } from './renderers/OfficeZoomControls';
+} from './renderers/office/common/OfficePreviewActionsContext';
+import { OfficeZoomControls } from './renderers/office/common/OfficeZoomControls';
 import { usePublishingRecoveryExposureLifecycle } from './usePublishingRecoveryExposureLifecycle';
 
 const t = (key: string) => i18nService.t(key);
@@ -4667,14 +4668,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       return;
     }
     try {
-      if (/\.docx$/i.test(selectedArtifact.filePath) && window.electron?.artifact?.word) {
-        const { refreshOpenWordEditor } = await import('@/services/wordEditorSession');
-        if (await refreshOpenWordEditor(selectedArtifact.filePath)) return;
-      }
-      if (/\.xlsx$/i.test(selectedArtifact.filePath) && window.electron?.artifact?.sheet) {
-        const { refreshOpenSheetEditor } = await import('@/services/sheet/sheetEditorSession');
-        if (await refreshOpenSheetEditor(selectedArtifact.filePath)) return;
-      }
+      if (await refreshOpenOfficeEditor(selectedArtifact.filePath)) return;
       if (selectedArtifact.type === ArtifactTypeValue.Html) {
         dispatch(addArtifact({
           sessionId: selectedArtifact.sessionId,

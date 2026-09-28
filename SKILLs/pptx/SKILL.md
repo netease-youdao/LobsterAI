@@ -169,6 +169,21 @@ When creating a new PowerPoint presentation from scratch, use the **html2pptx** 
    - If issues found, adjust HTML margins/spacing/colors and regenerate the presentation
    - Repeat until all slides are visually correct
 
+## Live editing in LobsterAI
+
+When the `ppt_read` and `ppt_edit` tools exist, change existing presentations through them instead of unpacking and repacking the file. The presentation opens in LobsterAI's right-side PowerPoint editor, edits appear there immediately, the theme, layouts, animations and everything the tools do not touch are preserved, and the file saves automatically.
+
+1. Call `ppt_read` with the absolute `path` (and `slides` such as `"2-4"` for long decks). It returns `revision`, the layout names, and for each slide its number, layout, speaker notes and shapes: `id`, `name`, `kind`, placeholder role, position and size in points, `text` (one line per paragraph, leading tabs give the bullet level) and table cells. It also returns the user's current `selection` ("改这里" means that slide and shape).
+2. Call `ppt_edit` with the same `path`, `expectedRevision` from the read, and a list of `edits`; slides are numbered from 1 and shapes are addressed by their `id`:
+   - `replace_text` `{slide?, shape?, find, replace, occurrence?}` for wording changes; it keeps the formatting around the phrase.
+   - `set_text` `{slide, shape, text}` rewrites a shape's text and keeps its formatting; `set_table_cell` `{slide, shape, row, column, text}`.
+   - `format_text` (bold, italic, underline, strike, color, size in pt, font) on a `find` phrase, a `paragraph` or the whole shape; `format_paragraph` (alignment, bullet `level`).
+   - `set_bounds` `{slide, shape, x?, y?, width?, height?}` in points, `delete_shape`, `add_text_box`.
+   - `add_slide` `{after?, layout?, title?, body?}` with a layout name from the read, `duplicate_slide`, `move_slide` `{slide, position}`, `delete_slide`, `set_notes`.
+3. Edits in one call apply in order as one undoable step, and slide numbers in later edits refer to the deck after the earlier ones. If the call is refused because the revision changed, the user edited the presentation meanwhile: read again and redo the edit. If any edit fails, nothing is applied; fix the reported edit and retry.
+
+Use the OOXML workflow below only for what these tools cannot do: pictures, charts, SmartArt, new designs, or presentations LobsterAI reports as read-only.
+
 ## Editing an existing PowerPoint presentation
 
 When edit slides in an existing PowerPoint presentation, you need to work with the raw Office Open XML (OOXML) format. This involves unpacking the .pptx file, editing the XML content, and repacking it.
