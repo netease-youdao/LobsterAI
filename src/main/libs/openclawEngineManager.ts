@@ -33,7 +33,7 @@ import { migrateLegacyCronStorageWithDoctor } from './openclawCronLegacyMigratio
 import { getOpenClawDailyLogCandidates } from './openclawDailyLogs';
 import { readDreamingRecoverySummary } from './openclawDreamingRecovery';
 import { createDreamingStartupFailureCollector, OPENCLAW_STARTUP_MIGRATION_REFUSAL } from './openclawDreamingStartupFailure';
-import { cleanupStaleGatewayLocks, GatewayLockCleanupAction } from './openclawGatewayLock';
+import { cleanupStaleGatewayLocks, GatewayLockCleanupAction, openClawRuntimeHoldsLockCoordinators } from './openclawGatewayLock';
 import { buildOpenClawGatewayShutdownBridge, spawnOpenClawGatewayProcess, stopOpenClawGatewayProcess } from './openclawGatewayProcess';
 import {
   DEFAULT_GATEWAY_STARTUP_WAIT_POLICY,
@@ -44,9 +44,12 @@ import {
   isGatewayStartupWaitOver,
 } from './openclawGatewayStartupWait';
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
+import { tryAcquireOpenClawLockCoordinator } from './openclawLockCoordinator';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
+import { describeStartupMigrationCheckpoint, readStartupMigrationCheckpointStamp } from './openclawStartupCheckpoint';
 import { extractOpenClawBindingSchemaFailure, extractOpenClawCliFailure, hasLegacyOpenClawDiscovery, isOpenClawBindingSchemaFailure, runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
+import { configRequiresStartupCompatibility, OPENCLAW_STARTUP_PREP_MARKER_FILE, OpenClawStartupPrepMarker, resolveStartupPrepIdentity } from './openclawStartupPrep';
 import { migrateLegacyStateBeforeStartup, stopStartupStateMigrations } from './openclawStartupStateMigration';
 import { ensureOpenClawWorkerShims, getMissingOpenClawWorkerTargets } from './openclawWorkerShims';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
@@ -67,6 +70,8 @@ const DEFAULT_OPENCLAW_VERSION = '2026.2.23';
 const DEFAULT_GATEWAY_PORT = 18789;
 const GATEWAY_PORT_SCAN_LIMIT = 80;
 const GATEWAY_BOOT_TIMEOUT_MS = 300 * 1000;
+// Bounded so a failed app startup can never block every later gateway start.
+const STARTUP_PREREQUISITE_TIMEOUT_MS = 20 * 1000;
 const GATEWAY_MAX_RESTART_ATTEMPTS = 5;
 const GATEWAY_RESTART_DELAYS = [3_000, 5_000, 10_000, 20_000, 30_000];
 // How long a gateway-initiated restart (SIGUSR1 in-process restart after a
@@ -408,6 +413,10 @@ export class OpenClawEngineManager extends EventEmitter {
   private gatewayLogPrunedDateKey: string | null = null;
   private gatewaySelfRestartNotedAt: number | null = null;
   private startupCompatibilityRunner: ((mode: OpenClawStartupCompatibilityMode) => ReturnType<typeof runOpenClawStartupCompatibility>) | null = null;
+  private startupPrerequisite: (() => Promise<void>) | null = null;
+  private readonly startupPrepMarker: OpenClawStartupPrepMarker;
+  // Processes spawned without the pre-spawn helpers; a failed start falls back to running them.
+  private readonly startupPrepSkippedProcesses = new WeakSet<GatewayProcess>();
 
   constructor() {
     super();
@@ -420,6 +429,10 @@ export class OpenClawEngineManager extends EventEmitter {
     this.gatewayTokenPath = path.join(this.stateDir, 'gateway-token');
     this.gatewayPortPath = path.join(this.stateDir, 'gateway-port.json');
     this.configPath = path.join(this.stateDir, 'openclaw.json');
+    this.startupPrepMarker = new OpenClawStartupPrepMarker(
+      path.join(this.baseDir, OPENCLAW_STARTUP_PREP_MARKER_FILE),
+      this.stateDir,
+    );
 
     ensureDir(this.baseDir);
     ensureDir(this.logsDir);
@@ -548,6 +561,56 @@ export class OpenClawEngineManager extends EventEmitter {
     return this.gatewayGeneration;
   }
 
+  /** When the live gateway process was spawned; it loaded its config after this time. */
+  getGatewayProcessStartedAt(): number | null {
+    return isGatewayProcessAlive(this.gatewayProcess) ? this.gatewaySpawnedAt : null;
+  }
+
+  /** New gateway processes wait (bounded) until the app has written its first complete config. */
+  setStartupPrerequisite(wait: () => Promise<void>): void {
+    this.startupPrerequisite = wait;
+  }
+
+  private async awaitStartupPrerequisite(): Promise<void> {
+    const wait = this.startupPrerequisite;
+    if (!wait) return;
+    const startedAt = Date.now();
+    let timer: NodeJS.Timeout | undefined;
+    const ready = await Promise.race([
+      wait().then(() => true, () => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), STARTUP_PREREQUISITE_TIMEOUT_MS);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    const waitedMs = Date.now() - startedAt;
+    if (!ready) {
+      console.warn(`[OpenClaw] startup config not written after ${waitedMs}ms; starting the gateway anyway`);
+    } else if (waitedMs >= 50) {
+      console.log(`[OpenClaw] startGateway waited ${waitedMs}ms for the startup config`);
+    }
+  }
+
+  private checkStartupPrep(identity: string): { skip: boolean } {
+    let config: unknown = null;
+    try {
+      config = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+    } catch {
+      // A missing or unreadable config is handled by the helpers and the gateway.
+    }
+    const check = !config
+      ? { valid: false, reason: 'config-unreadable' }
+      : configRequiresStartupCompatibility(config)
+        ? { valid: false, reason: 'config-needs-compatibility' }
+        : this.startupPrepMarker.check(identity);
+    if (check.valid) {
+      console.log('[OpenClaw] startup preparation skipped: the last run found nothing to migrate and no input changed');
+      return { skip: true };
+    }
+    console.log(`[OpenClaw] running startup preparation helpers (${check.reason})`);
+    return { skip: false };
+  }
+
   /**
    * Called on the native shutdown event with restartExpectedMs. While the window is
    * active LobsterAI must not kill/respawn the process: the gateway is between
@@ -593,6 +656,9 @@ export class OpenClawEngineManager extends EventEmitter {
       const results = cleanupStaleGatewayLocks({
         configPath: this.configPath,
         stateDir: this.stateDir,
+        ...(openClawRuntimeHoldsLockCoordinators(this.resolveRuntimeMetadata().version)
+          ? { tryAcquireLockCoordinator: tryAcquireOpenClawLockCoordinator }
+          : {}),
       });
       for (const result of results) {
         const owner = result.ownerPid != null ? ` ownerPid=${result.ownerPid}` : '';
@@ -700,6 +766,10 @@ export class OpenClawEngineManager extends EventEmitter {
     try {
       // Invalidate in-flight restarts as well as stopping the current child.
       await this.stopGateway();
+      // stopGateway() reclaims locks only after stopping a live child, and a
+      // failed startup leaves none. The repair's lock stage refuses owners it
+      // cannot inspect, such as a SYSTEM process that reused the recorded PID.
+      this.cleanupStaleGatewayLocksSafely('pre-repair');
       return await repair();
     } finally {
       this.gatewayMaintenanceActive = false;
@@ -713,7 +783,10 @@ export class OpenClawEngineManager extends EventEmitter {
 
   async startGateway(reason = 'unknown', options: { retryBlocked?: boolean } = {}): Promise<OpenClawEngineStatus> {
     if (this.gatewayMaintenanceActive) return this.getStatus();
-    if (options.retryBlocked) this.gatewayStartupBlock = null;
+    if (options.retryBlocked) {
+      this.gatewayStartupBlock = null;
+      this.startupPrepMarker.clear(`manual start: ${reason}`);
+    }
     if (this.isGatewayStartupBlocked()) return this.getStatus();
     const generation = this.gatewayLifecycleGeneration;
     if (this.stopGatewayPromise) {
@@ -759,6 +832,7 @@ export class OpenClawEngineManager extends EventEmitter {
         && this.startupCompatibilityRunner && !this.gatewayProcess) {
         if (recoveryAttempts.has(recoveryMode)) return status;
         recoveryAttempts.add(recoveryMode);
+        this.startupPrepMarker.clear(`startup recovery: ${recoveryMode}`);
         this.setStatus({
           phase: OpenClawEnginePhase.Starting, version: status.version, canRetry: false,
           message: t(recoveryMode === OpenClawStartupCompatibilityMode.RepairDreamingState
@@ -885,6 +959,9 @@ export class OpenClawEngineManager extends EventEmitter {
       if (this.shutdownRequested) return this.getStatus();
       if (this.gatewayProcess === existingChild) this.gatewayProcess = null;
     }
+
+    await this.awaitStartupPrerequisite();
+    if (this.shutdownRequested) return this.getStatus();
 
     const runtime = this.resolveRuntimeMetadata();
     console.log(`[OpenClaw] startGateway: resolveRuntimeMetadata done (${elapsed()}), root=${runtime.root ? 'found' : 'missing'}`);
@@ -1043,7 +1120,13 @@ export class OpenClawEngineManager extends EventEmitter {
       stateDir: this.stateDir, configPath: this.configPath, runtimeRoot: runtime.root!,
       electronNodeRuntimePath, env, mode,
     });
-    if (hasLegacyDiscovery || fs.existsSync(path.join(this.stateDir, 'state', 'openclaw.sqlite'))) {
+    // Both pre-spawn helpers are skipped while their last run found nothing to
+    // migrate and none of their inputs changed; a failed start clears the marker.
+    const startupPrepIdentity = resolveStartupPrepIdentity(runtime.root, app.getVersion());
+    const startupPrep = this.checkStartupPrep(startupPrepIdentity);
+    let compatibilitySettled = true;
+    if (!startupPrep.skip
+      && (hasLegacyDiscovery || fs.existsSync(path.join(this.stateDir, 'state', 'openclaw.sqlite')))) {
       const compatibility = await this.startupCompatibilityRunner(OpenClawStartupCompatibilityMode.PrepareStartup);
       if (this.shutdownRequested) return this.getStatus();
       if (compatibility.status === OpenClawStartupMigrationStatus.Failed) {
@@ -1054,6 +1137,7 @@ export class OpenClawEngineManager extends EventEmitter {
         });
         return this.getStatus();
       }
+      compatibilitySettled = compatibility.status === OpenClawStartupMigrationStatus.Skipped;
     }
     await migrateLegacyCronStorageWithDoctor({
       stateDir: this.stateDir,
@@ -1094,24 +1178,31 @@ export class OpenClawEngineManager extends EventEmitter {
       return this.getStatus();
     }
 
-    const startupMigration = await migrateLegacyStateBeforeStartup({
-      stateDir: this.stateDir,
-      configPath: this.configPath,
-      runtimeRoot: runtime.root,
-      electronNodeRuntimePath,
-      env,
-    });
-    if (this.shutdownRequested) return this.getStatus();
-    if (startupMigration.status === OpenClawStartupMigrationStatus.Failed) {
-      this.setStatus({
-        phase: OpenClawEnginePhase.Error,
-        version: runtime.version,
-        message: t('openClawStartupMigrationFailed', { error: startupMigration.error ?? '' }),
-        errorCode: startupMigration.errorCode ?? (isOpenClawBindingSchemaFailure(startupMigration.error, this.stateDir)
-          ? OpenClawEngineErrorCode.StartupCompatibilityFailed : undefined),
-        canRetry: true,
+    if (!startupPrep.skip) {
+      const startupMigration = await migrateLegacyStateBeforeStartup({
+        stateDir: this.stateDir,
+        configPath: this.configPath,
+        runtimeRoot: runtime.root,
+        electronNodeRuntimePath,
+        env,
       });
-      return this.getStatus();
+      if (this.shutdownRequested) return this.getStatus();
+      if (startupMigration.status === OpenClawStartupMigrationStatus.Failed) {
+        this.setStatus({
+          phase: OpenClawEnginePhase.Error,
+          version: runtime.version,
+          message: t('openClawStartupMigrationFailed', { error: startupMigration.error ?? '' }),
+          errorCode: startupMigration.errorCode ?? (isOpenClawBindingSchemaFailure(startupMigration.error, this.stateDir)
+            ? OpenClawEngineErrorCode.StartupCompatibilityFailed : undefined),
+          canRetry: true,
+        });
+        return this.getStatus();
+      }
+      // Only a run that migrated nothing is recorded; after a migration the next
+      // start runs the helpers again to confirm the state is clean.
+      if (compatibilitySettled && startupMigration.settled && startupMigration.probePaths) {
+        this.startupPrepMarker.record(startupPrepIdentity, startupMigration.probePaths);
+      }
     }
 
     await migrateAllFtsOnlyMemoryIndexes({
@@ -1133,7 +1224,8 @@ export class OpenClawEngineManager extends EventEmitter {
     } else {
       console.log('[OpenClaw] gateway V8 old-space limit is controlled by existing NODE_OPTIONS');
     }
-    console.log(`[OpenClaw] forking gateway: entry=${openclawEntry}, cwd=${runtime.root}, port=${port}, args=${JSON.stringify(forkArgs)}`);
+    console.log(`[OpenClaw] forking gateway: entry=${openclawEntry}, cwd=${runtime.root}, port=${port}, args=${JSON.stringify(forkArgs.map(arg => (arg === token ? '<redacted>' : arg)))}`);
+    const checkpointBeforeSpawn = readStartupMigrationCheckpointStamp(this.stateDir);
 
     const child = spawnOpenClawGatewayProcess({
       executablePath: electronNodeRuntimePath,
@@ -1149,6 +1241,7 @@ export class OpenClawEngineManager extends EventEmitter {
     this.gatewayGeneration += 1;
     this.gatewayGenerationByProcess.set(child, this.gatewayGeneration);
     this.gatewaySpawnedAt = Date.now();
+    if (startupPrep.skip) this.startupPrepSkippedProcesses.add(child);
     this.attachGatewayProcessLogs(child);
     this.attachGatewayExitHandlers(child);
 
@@ -1163,6 +1256,7 @@ export class OpenClawEngineManager extends EventEmitter {
     // must not overwrite the stop/restart status or act on a newer process.
     if (this.shutdownRequested || this.gatewayProcess !== child) return this.getStatus();
     if (!ready) {
+      if (startupPrep.skip) this.startupPrepMarker.clear('gateway did not become healthy after skipped startup preparation');
       await this.stopGatewayProcess(child);
       if (!this.shutdownRequested) {
         this.clearScheduledGatewayRestart();
@@ -1177,6 +1271,9 @@ export class OpenClawEngineManager extends EventEmitter {
     }
 
     console.log(`[OpenClaw] startGateway: gateway is running, total startup time: ${elapsed()}`);
+    console.log(`[OpenClaw] startup summary: prep=${startupPrep.skip ? 'skipped' : 'ran'}`
+      + ` checkpoint=${describeStartupMigrationCheckpoint(checkpointBeforeSpawn, readStartupMigrationCheckpointStamp(this.stateDir))}`
+      + ` total=${elapsed()}`);
     // Reset restart counter on successful start — gateway is healthy
     this.gatewayRestartAttempt = 0;
     this.clearScheduledGatewayRestart();
@@ -1244,7 +1341,10 @@ export class OpenClawEngineManager extends EventEmitter {
 
   async restartGateway(reason = 'unknown', options: { retryBlocked?: boolean; beforeStart?: () => void } = {}): Promise<OpenClawEngineStatus> {
     if (this.gatewayMaintenanceActive) return this.getStatus();
-    if (options.retryBlocked) this.gatewayStartupBlock = null;
+    if (options.retryBlocked) {
+      this.gatewayStartupBlock = null;
+      this.startupPrepMarker.clear(`manual restart: ${reason}`);
+    }
     if (this.isGatewayStartupBlocked()) return this.getStatus();
     if (this.restartGatewayPromise) return this.restartGatewayPromise;
     this.restartGatewayPromise = this.doRestartGateway(reason, options.beforeStart).finally(() => {
@@ -2210,6 +2310,12 @@ export class OpenClawEngineManager extends EventEmitter {
       if (this.shutdownRequested) return;
       if (!wasCurrentProcess) return;
 
+      const exitedAfterSkippedPrep = this.startupPrepSkippedProcesses.has(child)
+        && !this.gatewayReadyProcesses.has(child);
+      if (exitedAfterSkippedPrep) {
+        this.startupPrepMarker.clear('gateway exited before ready after skipped startup preparation');
+      }
+
       if (code !== null && code !== 0 && !this.gatewayReadyProcesses.has(child) && dreamingFailure) {
         this.clearScheduledGatewayRestart();
         this.setStatus({
@@ -2254,6 +2360,12 @@ export class OpenClawEngineManager extends EventEmitter {
 
       const migrationRefusal = this.gatewayReadyProcesses.has(child)
         ? null : extractOpenClawStartupMigrationRefusal(recentOutput);
+      if (migrationRefusal && exitedAfterSkippedPrep) {
+        // The skipped helpers may own this migration; retry once with them before blocking.
+        console.warn(`${gwDiagTs()} gateway refused readiness after skipped startup preparation; retrying with the helpers`);
+        this.scheduleGatewayRestart();
+        return;
+      }
       if (migrationRefusal) {
         console.error(`${gwDiagTs()} gateway refused readiness because startup migrations did not complete cleanly; auto-restart suppressed`);
         this.gatewayRestartAttempt = 0;

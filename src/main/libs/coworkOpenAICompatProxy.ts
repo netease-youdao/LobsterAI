@@ -15,6 +15,7 @@ import {
   type OpenAIStreamChunk,
   openAIToAnthropic,
 } from './coworkFormatTransform';
+import { listenOnLoopback } from './loopbackListen';
 
 export type OpenAICompatUpstreamConfig = {
   baseURL: string;
@@ -2943,44 +2944,47 @@ export const __openAICompatProxyTestUtils = {
   shouldRefreshProxyToken,
 };
 
-export async function startCoworkOpenAICompatProxy(): Promise<void> {
+export async function startCoworkOpenAICompatProxy(options: {
+  /** Persisted secret; OpenClaw config references it as ${LOBSTER_PROXY_TOKEN}. */
+  authToken?: string;
+  /** Port from the previous launch; an ephemeral port is used when it is taken. */
+  preferredPort?: number | null;
+} = {}): Promise<void> {
   if (proxyServer) {
     return;
   }
 
-  proxyAuthToken = crypto.randomBytes(24).toString('hex');
+  proxyAuthToken = options.authToken || crypto.randomBytes(24).toString('hex');
 
-  await new Promise<void>((resolve, reject) => {
-    const server = http.createServer((req, res) => {
-      void handleRequest(req, res).catch((error) => {
-        const message = error instanceof Error ? error.message : 'Internal proxy error';
-        lastProxyError = message;
-        if (!res.headersSent) {
-          writeJSON(res, 500, createAnthropicErrorBody(message));
-        } else {
-          res.end();
-        }
-      });
-    });
-
-    server.on('error', (error) => {
-      lastProxyError = error.message;
-      reject(error);
-    });
-
-    server.listen(0, PROXY_BIND_HOST, () => {
-      const addr = server.address();
-      if (!addr || typeof addr === 'string') {
-        reject(new Error('Failed to bind OpenAI compatibility proxy port'));
-        return;
+  const server = http.createServer((req, res) => {
+    void handleRequest(req, res).catch((error) => {
+      const message = error instanceof Error ? error.message : 'Internal proxy error';
+      lastProxyError = message;
+      if (!res.headersSent) {
+        writeJSON(res, 500, createAnthropicErrorBody(message));
+      } else {
+        res.end();
       }
-      console.log(`[CoworkProxy] Proxy server started on port ${addr.port}`);
-      proxyServer = server;
-      proxyPort = addr.port;
-      lastProxyError = null;
-      resolve();
     });
   });
+
+  try {
+    const { port, reused } = await listenOnLoopback(server, PROXY_BIND_HOST, options.preferredPort);
+    server.on('error', (error) => {
+      lastProxyError = error.message;
+    });
+    console.log(`[CoworkProxy] Proxy server started on port ${port}${reused ? ' (reused port)' : ''}`);
+    proxyServer = server;
+    proxyPort = port;
+    lastProxyError = null;
+  } catch (error) {
+    lastProxyError = error instanceof Error ? error.message : String(error);
+    throw error;
+  }
+}
+
+export function getCoworkOpenAICompatProxyPort(): number | null {
+  return proxyPort;
 }
 
 export async function stopCoworkOpenAICompatProxy(): Promise<void> {

@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -12,6 +11,7 @@ import {
 import { OpenClawStartupCompatibilityMode } from '../../shared/openclawEngine/startupCompatibility';
 import { OpenClawStartupMigrationStatus } from '../../shared/openclawEngine/startupMigration';
 import { runOpenClawRepairPreflight } from './openclawRepairPreflight';
+import { createOpenClawRepairRunner } from './openclawRepairProcess';
 import { isOpenClawBindingSchemaFailure, runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
 import type { StartupMigrationRunner } from './openclawStartupStateMigration';
 
@@ -19,8 +19,8 @@ const REPAIR_TIMEOUT_MS = 300_000;
 export const OPENCLAW_DOCTOR_REPAIR_ARGS = ['doctor', '--fix', '--non-interactive'] as const;
 
 export class OpenClawRepairFailure extends Error {
-  constructor(readonly stage: OpenClawRepairStage, message: string, readonly failurePath?: string) {
-    super(message);
+  constructor(readonly stage: OpenClawRepairStage, message: string, readonly failurePath?: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = 'OpenClawRepairFailure';
   }
 }
@@ -29,7 +29,7 @@ async function atRepairStage<T>(stage: OpenClawRepairStage, operation: () => Pro
   try { return await operation(); } catch (error) {
     if (error instanceof OpenClawRepairFailure) throw error;
     throw new OpenClawRepairFailure(stage, error instanceof Error ? error.message : String(error),
-      (error as NodeJS.ErrnoException)?.path);
+      (error as NodeJS.ErrnoException)?.path, { cause: error });
   }
 }
 
@@ -43,31 +43,20 @@ function repairEnvironment(env: NodeJS.ProcessEnv, stateDir: string, configPath:
   return result;
 }
 
-const runRepair: StartupMigrationRunner = (command, args, options) => new Promise((resolve, reject) => {
-  execFile(command, args, {
-    cwd: options.cwd, env: options.env, windowsHide: true, encoding: 'utf8',
-    timeout: options.timeoutMs, maxBuffer: 1024 * 1024,
-  }, (error, stdout, stderr) => {
-    // Wait for close even on timeout before releasing the maintenance guard.
-    if (error && (error.killed || typeof error.code !== 'number')) reject(error);
-    else resolve({ code: typeof error?.code === 'number' ? error.code : 0, stdout, stderr });
-  });
-});
-
 export function createOpenClawRepairBackupDirectory(baseDir: string): string {
   const root = path.join(baseDir, 'repair-backups');
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   return fs.mkdtempSync(path.join(root, `${new Date().toISOString().replace(/[:.]/g, '-')}-`));
 }
 
-type StartupCompatibilityRepairOptions = Omit<Parameters<typeof runOpenClawStartupCompatibility>[0], 'mode'>;
+type StartupCompatibilityRepairOptions = Omit<Parameters<typeof runOpenClawStartupCompatibility>[0], 'mode'> & { backupDir: string };
 
 async function runStartupCompatibilityRepair(
   params: StartupCompatibilityRepairOptions, mode: OpenClawStartupCompatibilityMode,
 ): Promise<void> {
   const result = await runOpenClawStartupCompatibility({
     ...params, mode, env: repairEnvironment(params.env, params.stateDir, params.configPath),
-    runner: params.runner ?? runRepair,
+    runner: params.runner ?? createOpenClawRepairRunner(params.backupDir),
   });
   if (result.status === OpenClawStartupMigrationStatus.Failed) {
     throw new Error(result.error || 'OpenClaw startup compatibility repair failed.');
@@ -114,7 +103,7 @@ async function runCompatibilityRepairPhase(params: {
   // The app controls this helper's runtime. Shell-injected loaders/options must
   // not change its SQLite ABI or import code from outside the packaged runtime.
   const env = repairEnvironment(params.env, params.stateDir, params.configPath);
-  const result = await (params.runner ?? runRepair)(params.electronNodeRuntimePath, [entry, requestPath], {
+  const result = await (params.runner ?? createOpenClawRepairRunner(params.backupDir))(params.electronNodeRuntimePath, [entry, requestPath], {
     cwd: params.runtimeRoot, env, timeoutMs: REPAIR_TIMEOUT_MS,
   });
   const line = result.stdout.split(/\r?\n/).findLast(value => value.startsWith(OPENCLAW_REPAIR_RESULT_PREFIX));
@@ -138,19 +127,20 @@ export async function runOpenClawDoctorRepair(params: {
   runtimeRoot: string; stateDir: string; configPath: string; backupDir: string;
   electronNodeRuntimePath: string; env: NodeJS.ProcessEnv; runner?: StartupMigrationRunner;
 }): Promise<{ code: number | null }> {
+  const runner = params.runner ?? createOpenClawRepairRunner(params.backupDir);
   await atRepairStage(OpenClawRepairStage.Preparation, async () => {
     // Retired keys can block the validating writer in prepare-startup itself.
     // Only explicit repair may clear them, after a verified full snapshot.
     await runOpenClawRepairPreflight({
-      ...params, env: repairEnvironment(params.env, params.stateDir, params.configPath), runner: params.runner ?? runRepair,
+      ...params, env: repairEnvironment(params.env, params.stateDir, params.configPath), runner,
     });
     // Migrate schema/discovery before Doctor. The final plugin phase recovers
     // install records from the untouched snapshot if this writer strips them.
-    await withBindingRecovery(params,
-      () => runStartupCompatibilityRepair(params, OpenClawStartupCompatibilityMode.PrepareStartup));
+    await withBindingRecovery({ ...params, runner },
+      () => runStartupCompatibilityRepair({ ...params, runner }, OpenClawStartupCompatibilityMode.PrepareStartup));
   });
   return atRepairStage(OpenClawRepairStage.Doctor, async () => {
-    const result = await (params.runner ?? runRepair)(params.electronNodeRuntimePath, [
+    const result = await runner(params.electronNodeRuntimePath, [
       path.join(params.runtimeRoot, 'openclaw.mjs'), ...OPENCLAW_DOCTOR_REPAIR_ARGS,
     ], {
       cwd: params.runtimeRoot, env: repairEnvironment(params.env, params.stateDir, params.configPath), timeoutMs: REPAIR_TIMEOUT_MS,

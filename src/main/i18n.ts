@@ -26,6 +26,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawPluginVerificationFailed: 'AI 引擎插件校验失败，已停止自动重启。请处理以下插件错误后重试：\n{error}',
     openClawStartupMigrationRefused: 'AI 引擎启动迁移未完成，已停止自动重启。请先处理以下旧数据，再重新启动网关：\n{error}',
     openClawStartupCompatibilityRepairing: '正在备份并修复旧版网关状态…',
+    openClawRepairCommandTimeout: '修复命令 {command} 等待 {seconds} 秒后超时，修复已停止。诊断记录：{path}',
+    openClawRepairCommandFailed: '修复命令 {command} 未完成。诊断记录：{path}',
     openClawDreamingStateRepairing: '正在备份并处理旧版记忆状态…',
     openClawRuntimeFilesMissing: 'AI 引擎运行文件缺失或无法读取，已停止启动。请退出应用，使用包含修复的最新安装包覆盖安装后重试。',
     // DeepSeek Harness (experimental)
@@ -407,6 +409,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    openClawRepairCommandTimeout: 'Repair command {command} timed out after {seconds} seconds. Repair has stopped. Diagnostics: {path}',
+    openClawRepairCommandFailed: 'Repair command {command} did not complete. Diagnostics: {path}',
     browserPasskeyChooseAccountTitle: 'Use a passkey',
     browserPasskeyChooseAccountMessage: 'Choose an account to sign in to {site}',
     browserPasskeyUnnamedAccount: 'Saved account',
