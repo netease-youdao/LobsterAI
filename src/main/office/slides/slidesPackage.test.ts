@@ -37,6 +37,8 @@ describe('presentation admission', () => {
     const presentation = await zip.file(PARTS.presentation)!.async('string');
     const strict = await makeSlidesFixture({ [PARTS.presentation]: presentation.replace('http://schemas.openxmlformats.org/presentationml/2006/main', 'http://purl.oclc.org/ooxml/presentationml/main') });
     expect(codeOf(() => inspectSlidesPackage(strict))).toBe(OfficeFileError.Unsupported);
+    const defaultNamespaceStrict = await makeSlidesFixture({ [PARTS.presentation]: '<?xml version="1.0"?><presentation xmlns="http://purl.oclc.org/ooxml/presentationml/main"/>' });
+    expect(codeOf(() => inspectSlidesPackage(defaultNamespaceStrict))).toBe(OfficeFileError.Unsupported);
     const notDeck = await makeSlidesFixture({ [PARTS.contentTypes]: '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>' });
     expect(codeOf(() => inspectSlidesPackage(notDeck))).toBe(OfficeFileError.InvalidFile);
     const noPresentation = await makeSlidesFixture({ [PARTS.presentation]: undefined });

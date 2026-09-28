@@ -3,7 +3,8 @@ import { SLIDES_PACKAGE_LIMITS, type SlidesPackageInfo, SlidesReadOnlyReason } f
 import { OfficePackageException, packageRelationships, readOfficeZip } from '../core/officeZip';
 
 const OFFICE_DOCUMENT = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument';
-const STRICT_NAMESPACE = 'http://purl.oclc.org/ooxml/presentationml/main';
+/** A Strict Open XML presentation declares the Strict PresentationML namespace instead of the Transitional one. */
+const STRICT_NAMESPACE = /\sxmlns(?::[^\s=/>]+)?\s*=\s*["']http:\/\/purl\.oclc\.org\/ooxml\/presentationml\/main["']/;
 const PRESENTATION_CONTENT = /presentationml\.(presentation|slideshow|template)\.main\+xml|ms-powerpoint\.(presentation|slideshow|template)\.macroEnabled\.main\+xml/;
 const MACRO_CONTENT = /macroEnabled\.main\+xml/;
 /** A password to modify the file (PowerPoint's "Read-only recommended" with a password). */
@@ -25,7 +26,7 @@ export function inspectSlidesPackage(bytes: Uint8Array): SlidesPackageInfo {
   const presentationPart = packageRelationships(xml.get('_rels/.rels'), '').find(relation => relation.type === OFFICE_DOCUMENT && !relation.external)?.target;
   const presentation = presentationPart ? xml.get(presentationPart) : undefined;
   if (!presentation) fail(OfficeFileError.InvalidFile, 'Missing presentation part');
-  if (presentation.includes(STRICT_NAMESPACE)) fail(OfficeFileError.Unsupported, 'Strict Open XML presentations are not supported');
+  if (STRICT_NAMESPACE.test(presentation)) fail(OfficeFileError.Unsupported, 'Strict Open XML presentations are not supported');
 
   const readOnly = new Set<SlidesReadOnlyReason>();
   if (MACRO_CONTENT.test(types)) readOnly.add(SlidesReadOnlyReason.Macros);

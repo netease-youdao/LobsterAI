@@ -49,6 +49,8 @@ describe('workbook admission', () => {
     zip.file(PARTS.workbook, workbook.replace('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'http://purl.oclc.org/ooxml/spreadsheetml/main'));
     const strict = await zip.generateAsync({ type: 'uint8array' });
     expect(codeOf(() => inspectSheetPackage(strict))).toBe(OfficeFileError.Unsupported);
+    const prefixedStrict = await withPart(PARTS.workbook, workbook.replace('xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"', 'xmlns:x="http://purl.oclc.org/ooxml/spreadsheetml/main"'));
+    expect(codeOf(() => inspectSheetPackage(prefixedStrict))).toBe(OfficeFileError.Unsupported);
     const notSheet = await JSZip.loadAsync(await makeSheetFixture());
     notSheet.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
     const notSheetBytes = await notSheet.generateAsync({ type: 'uint8array' });

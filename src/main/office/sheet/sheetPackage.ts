@@ -5,7 +5,8 @@ import {
 import { OfficePackageException, packageRelationships, readOfficeZip } from '../core/officeZip';
 
 const OFFICE_DOCUMENT = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument';
-const STRICT_NAMESPACE = 'http://purl.oclc.org/ooxml/spreadsheetml/main';
+/** A Strict Open XML workbook declares the Strict SpreadsheetML namespace instead of the Transitional one. */
+const STRICT_NAMESPACE = /\sxmlns(?::[^\s=/>]+)?\s*=\s*["']http:\/\/purl\.oclc\.org\/ooxml\/spreadsheetml\/main["']/;
 const WORKBOOK_CONTENT = /spreadsheetml\.(sheet|template)\.main\+xml|ms-excel\.(sheet|template)\.macroEnabled\.main\+xml/;
 const MACRO_CONTENT = /macroEnabled\.main\+xml/;
 const PREFIX = '(?:[^\\s<>/=:]+:)?';
@@ -29,7 +30,7 @@ export function inspectSheetPackage(bytes: Uint8Array): SheetPackageInfo {
   const workbookPart = packageRelationships(xml.get('_rels/.rels'), '').find(relation => relation.type === OFFICE_DOCUMENT && !relation.external)?.target;
   const workbook = workbookPart ? xml.get(workbookPart) : undefined;
   if (!workbook) fail(OfficeFileError.InvalidFile, 'Missing workbook part');
-  if (workbook.includes(STRICT_NAMESPACE)) fail(OfficeFileError.Unsupported, 'Strict Open XML workbooks are not supported');
+  if (STRICT_NAMESPACE.test(workbook)) fail(OfficeFileError.Unsupported, 'Strict Open XML workbooks are not supported');
 
   const readOnly = new Set<SheetReadOnlyReason>();
   const hidden = new Set<SheetHiddenContent>();

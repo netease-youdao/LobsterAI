@@ -3,7 +3,7 @@ import { hasThreeDimensionalReference, mapRange, sheetMaps, StructureAction, Str
 import type { WorkbookBaseline } from './xlsxImport';
 import { RelationshipType } from './xlsxPackage';
 import { RelationshipTypes } from './xlsxStructureExport';
-import { firstXmlElement, xmlAttribute, xmlElements } from './xlsxXml';
+import { decodeXml, firstXmlElement, xmlAttribute, xmlElements } from './xlsxXml';
 
 /**
  * Which row, column and sheet operations the writer can carry into a particular workbook. The
@@ -90,7 +90,7 @@ function formulasHaveThreeDimensionalReferences(xml: string): boolean {
   if (!xml.includes(':') || !xml.includes('!')) return false;
   for (const match of xml.matchAll(FORMULA_TEXT)) {
     const text = match[1];
-    if (text.includes(':') && text.includes('!') && hasThreeDimensionalReference(text.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&apos;/g, '\''))) return true;
+    if (text.includes(':') && text.includes('!') && hasThreeDimensionalReference(decodeXml(text))) return true;
   }
   return false;
 }
