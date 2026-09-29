@@ -31,6 +31,7 @@ interface SupervisorInternals {
   noteGatewayOutput: (child: ChildProcess) => void;
   gatewayRestartAttempt: number;
   gatewayRestartTimer: ReturnType<typeof setTimeout> | null;
+  scheduleGatewayRestartBudgetReset: (child: ChildProcess) => void;
   startGatewayPromise: Promise<OpenClawEngineStatus> | null;
   shutdownRequested: boolean;
   attachGatewayExitHandlers: (child: ChildProcess) => void;
@@ -76,6 +77,7 @@ function makeSupervisor() {
     gatewayRestartTimer: null,
     gatewayRestartWait: null,
     gatewayRestartAttempt: 0,
+    gatewayRestartBudgetResetTimer: null,
     gatewayLifecycleGeneration: 0,
     shutdownRequested: false,
     gatewayPort: 18789,
@@ -831,6 +833,22 @@ describe('OpenClaw gateway restart supervision', () => {
       OpenClawEnginePhase.Error,
     ]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // The real doStartGateway path is covered by openclawEngineManager.restartBudget.test.ts.
+  test('a gateway that stays healthy past the stability window refills the restart budget', async () => {
+    const { manager, internals, child } = makeSupervisor();
+    internals.gatewayRestartAttempt = 4;
+    internals.scheduleGatewayRestartBudgetReset(child);
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(internals.gatewayRestartAttempt).toBe(4);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(internals.gatewayRestartAttempt).toBe(0);
+
+    closeChild(child, 1);
+    expect(internals.gatewayRestartAttempt).toBe(1);
+    expect(manager.getStatus().phase).toBe(OpenClawEnginePhase.Starting);
   });
 });
 
