@@ -12,6 +12,7 @@ vi.mock('electron', () => ({
 import {
   __openClawTokenProxyTestUtils,
   consumeRecentOpenClawTokenProxyQuotaError,
+  getOpenClawTokenProxyTraceStats,
 } from './openclawTokenProxy';
 
 const testUtils = __openClawTokenProxyTestUtils;
@@ -699,4 +700,163 @@ test('web stream: completion check is skipped when no scan state is provided', a
     expect(res.end).toHaveBeenCalledTimes(1);
   });
   expect(res.destroy).not.toHaveBeenCalled();
+});
+
+const TURN_TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
+const traceparentFor = (spanId: string): string => `00-${TURN_TRACE_ID}-${spanId}-01`;
+
+test('keeps the OpenClaw traceparent ids and forwards them to lobsterai-server', () => {
+  const trace = testUtils.createProxyRequestTrace(traceparentFor('00f067aa0ba902b7'), '/v1/chat/completions', 1_000);
+
+  expect(trace).toMatchObject({
+    traceId: TURN_TRACE_ID,
+    spanId: '00f067aa0ba902b7',
+    traceparent: traceparentFor('00f067aa0ba902b7'),
+    generated: false,
+    path: '/v1/chat/completions',
+  });
+  expect(testUtils.buildUpstreamRequestHeaders('access-token', {}, '2026.9.28', {}, trace.traceparent))
+    .toMatchObject({ traceparent: traceparentFor('00f067aa0ba902b7') });
+});
+
+test('generates trace ids for model requests without a valid traceparent', () => {
+  const trace = testUtils.createProxyRequestTrace('not-a-traceparent', '/v1/messages', 1_000);
+
+  expect(trace.generated).toBe(true);
+  expect(trace.traceId).toMatch(/^[0-9a-f]{32}$/);
+  expect(trace.spanId).toMatch(/^[0-9a-f]{16}$/);
+  expect(trace.traceparent).toBe(`00-${trace.traceId}-${trace.spanId}-01`);
+});
+
+test('counts forwarded requests per client trace and finishes each request once', () => {
+  testUtils.resetTraceStats();
+  const completed = testUtils.createProxyRequestTrace(traceparentFor('aaaaaaaaaaaaaaaa'), '/v1/chat/completions', 1_000);
+  const failed = testUtils.createProxyRequestTrace(traceparentFor('bbbbbbbbbbbbbbbb'), '/v1/chat/completions', 2_000);
+  const generated = testUtils.createProxyRequestTrace(undefined, '/v1/chat/completions', 3_000);
+
+  for (const trace of [completed, failed, generated]) {
+    testUtils.recordProxyRequestStarted(trace, 10);
+  }
+  testUtils.finishProxyRequest(completed, testUtils.ProxyRequestOutcome.Completed);
+  testUtils.finishProxyRequest(completed, testUtils.ProxyRequestOutcome.UpstreamError);
+  testUtils.finishProxyRequest(failed, testUtils.ProxyRequestOutcome.UnexpectedEof);
+  testUtils.finishProxyRequest(generated, testUtils.ProxyRequestOutcome.Completed);
+
+  expect(getOpenClawTokenProxyTraceStats(TURN_TRACE_ID)).toMatchObject({ requests: 2, completed: 1, failed: 1 });
+  expect(getOpenClawTokenProxyTraceStats(generated.traceId)).toBeNull();
+});
+
+test('keeps trace counters for the most recently used traces only', () => {
+  testUtils.resetTraceStats();
+  const traceIds: string[] = [];
+  for (let index = 0; index <= 500; index += 1) {
+    const traceId = `a${index.toString(16).padStart(31, '0')}`;
+    traceIds.push(traceId);
+    testUtils.recordProxyRequestStarted(
+      testUtils.createProxyRequestTrace(`00-${traceId}-00f067aa0ba902b7-01`, '/v1/chat/completions', index),
+      1,
+    );
+  }
+
+  expect(getOpenClawTokenProxyTraceStats(traceIds[0])).toBeNull();
+  expect(getOpenClawTokenProxyTraceStats(traceIds[500])).toMatchObject({ requests: 1 });
+});
+
+test('stream with a terminal packet completes the traced request and logs the server trace', async () => {
+  testUtils.resetTraceStats();
+  const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const trace = testUtils.createProxyRequestTrace(traceparentFor('cccccccccccccccc'), '/v1/chat/completions', Date.now());
+  trace.serverTraceId = 'ab12cd34';
+  trace.status = 200;
+  testUtils.recordProxyRequestStarted(trace, 1);
+  const res = createMockProxyResponse();
+  const upstream = new PassThrough();
+
+  testUtils.pipeNodeReadableResponseWithQuotaScan(
+    upstream,
+    asServerResponse(res),
+    testUtils.createProxySSEStreamScanState(Date.now(), undefined, trace),
+  );
+  upstream.end('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+
+  await vi.waitFor(() => {
+    expect(res.end).toHaveBeenCalledTimes(1);
+  });
+  expect(getOpenClawTokenProxyTraceStats(TURN_TRACE_ID)).toMatchObject({ requests: 1, completed: 1, failed: 0 });
+  expect(logSpy.mock.calls.some(([line]) => typeof line === 'string'
+    && line.includes(`trace=${TURN_TRACE_ID} span=cccccccccccccccc serverTrace=ab12cd34 status=200 outcome=completed`)))
+    .toBe(true);
+  logSpy.mockRestore();
+});
+
+test('stream that ends without a terminal packet fails the traced request', async () => {
+  testUtils.resetTraceStats();
+  const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const trace = testUtils.createProxyRequestTrace(traceparentFor('dddddddddddddddd'), '/v1/chat/completions', Date.now());
+  testUtils.recordProxyRequestStarted(trace, 1);
+  const res = createMockProxyResponse();
+  const upstream = new PassThrough();
+
+  testUtils.pipeNodeReadableResponseWithQuotaScan(
+    upstream,
+    asServerResponse(res),
+    testUtils.createProxySSEStreamScanState(Date.now(), undefined, trace),
+  );
+  upstream.end('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+
+  await vi.waitFor(() => {
+    expect(res.destroy).toHaveBeenCalledTimes(1);
+  });
+  expect(getOpenClawTokenProxyTraceStats(TURN_TRACE_ID)).toMatchObject({ requests: 1, completed: 0, failed: 1 });
+  expect(errorSpy.mock.calls.some(([line]) => typeof line === 'string'
+    && line.includes('outcome=unexpected_eof') && line.includes(`trace=${TURN_TRACE_ID}`))).toBe(true);
+  errorSpy.mockRestore();
+  warnSpy.mockRestore();
+});
+
+test('a client that closes after the terminal packet still completes the traced request', async () => {
+  testUtils.resetTraceStats();
+  const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+  const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const trace = testUtils.createProxyRequestTrace(traceparentFor('eeeeeeeeeeeeeeee'), '/v1/chat/completions', Date.now());
+  testUtils.recordProxyRequestStarted(trace, 1);
+  const res = createMockProxyResponse();
+  const upstream = new PassThrough();
+
+  testUtils.pipeNodeReadableResponseWithQuotaScan(
+    upstream,
+    asServerResponse(res),
+    testUtils.createProxySSEStreamScanState(Date.now(), undefined, trace),
+  );
+  upstream.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+  await flushStreamEvents();
+  res.emitClose();
+
+  expect(getOpenClawTokenProxyTraceStats(TURN_TRACE_ID)).toMatchObject({ requests: 1, completed: 1, failed: 0 });
+  debugSpy.mockRestore();
+  logSpy.mockRestore();
+});
+
+test('a client that closes before any terminal packet fails the traced request', async () => {
+  testUtils.resetTraceStats();
+  const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const trace = testUtils.createProxyRequestTrace(traceparentFor('ffffffffffffffff'), '/v1/chat/completions', Date.now());
+  testUtils.recordProxyRequestStarted(trace, 1);
+  const res = createMockProxyResponse();
+  const upstream = new PassThrough();
+
+  testUtils.pipeNodeReadableResponseWithQuotaScan(
+    upstream,
+    asServerResponse(res),
+    testUtils.createProxySSEStreamScanState(Date.now(), undefined, trace),
+  );
+  upstream.write('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+  await flushStreamEvents();
+  res.emitClose();
+
+  expect(getOpenClawTokenProxyTraceStats(TURN_TRACE_ID)).toMatchObject({ requests: 1, completed: 0, failed: 1 });
+  debugSpy.mockRestore();
+  warnSpy.mockRestore();
 });

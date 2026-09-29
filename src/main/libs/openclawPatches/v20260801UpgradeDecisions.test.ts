@@ -23,6 +23,7 @@ const RETAINED_PATCHES = [
   'openclaw-cron-skip-missed-jobs.patch',
   'openclaw-device-identity-preservation.patch',
   'openclaw-exec-command-description.patch',
+  'openclaw-gateway-client-request-traceparent.patch',
   'openclaw-gateway-fast-path-rejection-handler.patch',
   'openclaw-im-bound-agent-run-cwd.patch',
   'openclaw-inferred-plugin-install-allowlist.patch',
@@ -152,6 +153,19 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       'searchEnabled && (search || hasPluginWebSearchConfig)',
       'uses the fast path when web %s is explicitly disabled',
     ]);
+  });
+
+  test('lets the gateway client run a request in the caller trace', () => {
+    expectPatchContains('openclaw-gateway-client-request-traceparent.patch', [
+      '+  traceparent?: string;',
+      '+      traceparent: opts?.traceparent,',
+      '+            ...(options?.traceparent ? { traceparent: options.traceparent } : {}),',
+    ]);
+    const adapter = fs.readFileSync(
+      path.resolve('src/main/libs/agentEngine/openclawRuntimeAdapter.ts'),
+      'utf8',
+    );
+    expect(adapter).toContain('traceparent: createLlmTraceparent(llmTrace.traceId)');
   });
 
   test('uses native chat.send steering instead of the retired custom RPC', () => {

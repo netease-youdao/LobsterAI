@@ -3893,6 +3893,49 @@ test('approved implementation exits plan mode and does not request another plan'
   expect(chatSendRequests[0].params.message).not.toContain('[Plan Mode reminder]');
 });
 
+test('a turn stores one W3C trace on its user message and sends it with chat.send', async () => {
+  const { adapter, requests, session } = createRunTurnAdapter();
+
+  await adapter.continueSession('session-1', 'hello');
+
+  const userMessage = session.messages.find((message) => message.type === 'user');
+  const llmTrace = (userMessage?.metadata as { llmTrace?: { traceId: string; startedAt: number } }).llmTrace;
+  expect(llmTrace?.traceId).toMatch(/^[0-9a-f]{32}$/);
+  expect(typeof llmTrace?.startedAt).toBe('number');
+  const chatSend = requests.find((request) => request.method === 'chat.send');
+  expect(chatSend?.options).toMatchObject({
+    timeoutMs: 90_000,
+    traceparent: expect.stringMatching(new RegExp(`^00-${llmTrace?.traceId}-[0-9a-f]{16}-01$`)),
+  });
+});
+
+test('runs for a user message stored before the turn share the trace on that message', async () => {
+  const { adapter, requests, session } = createRunTurnAdapter();
+  session.messages.push({
+    id: 'stored-user',
+    type: 'user',
+    content: 'started from the composer',
+    timestamp: 1,
+    metadata: { skillIds: ['docx'] },
+  });
+
+  await adapter.continueSession('session-1', 'started from the composer', { skipInitialUserMessage: true });
+  await adapter.continueSession('session-1', 'continue the goal', { skipInitialUserMessage: true });
+
+  const stored = session.messages.find((message) => message.id === 'stored-user');
+  const traceId = (stored?.metadata as { llmTrace?: { traceId: string } }).llmTrace?.traceId;
+  expect(stored?.metadata).toMatchObject({ skillIds: ['docx'] });
+  expect(traceId).toMatch(/^[0-9a-f]{32}$/);
+  const traceparents = requests
+    .filter((request) => request.method === 'chat.send')
+    .map((request) => (request.options as { traceparent?: string } | undefined)?.traceparent);
+  expect(traceparents).toHaveLength(2);
+  for (const traceparent of traceparents) {
+    expect(traceparent).toMatch(new RegExp(`^00-${traceId}-[0-9a-f]{16}-01$`));
+  }
+  expect(traceparents[0]).not.toBe(traceparents[1]);
+});
+
 test('normal conversation does not receive plan mode instructions', async () => {
   const { adapter, requests } = createRunTurnAdapter();
 

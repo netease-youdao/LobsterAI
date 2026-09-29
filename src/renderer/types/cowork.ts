@@ -10,6 +10,11 @@ import type {
   CoworkImageAttachmentPayload,
   CoworkImageAttachmentPreview,
 } from '../../shared/cowork/imageAttachments';
+import type {
+  CoworkLlmTrace,
+  CoworkTurnUsage,
+  CoworkTurnUsageAnchor,
+} from '../../shared/cowork/llmTurnUsage';
 import type { CoworkSelectedTextSnippet } from '../../shared/cowork/selectedText';
 import type {
   KitReference,
@@ -104,6 +109,10 @@ export interface CoworkMessageMetadata {
   contextPercent?: number;
   model?: string;
   agentName?: string;
+  /** User messages: trace carried by every model request of the turn. */
+  llmTrace?: CoworkLlmTrace;
+  /** User messages: credits and tokens the turn consumed on LobsterAI models. */
+  turnUsage?: CoworkTurnUsage;
   selectedTextSnippets?: CoworkSelectedTextSnippet[];
   browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
   goalSetting?: {
@@ -181,6 +190,7 @@ export interface CoworkSession {
    * began before `messagesOffset`; anchors its elapsed time.
    */
   leadingTurnStartTimestamp?: number | null;
+  leadingTurnUsage?: CoworkTurnUsageAnchor | null;
   parentSessionId?: string | null;
   forkedFromMessageId?: string | null;
   forkedAt?: number | null;

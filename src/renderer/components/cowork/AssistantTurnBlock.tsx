@@ -12,6 +12,7 @@ import {
   parseCoworkErrorDetail,
 } from '../../../shared/cowork/errorDetail';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
+import { getCoworkTurnUsage } from '../../../shared/cowork/llmTurnUsage';
 import purchaseOfferFirstBadge from '../../assets/purchase-offer-first.svg';
 import purchaseOfferLimitedBadge from '../../assets/purchase-offer-limited.svg';
 import { dedupeArtifactsForDisplay } from '../../services/artifactParser';
@@ -85,6 +86,7 @@ import {
 } from './messageDisplayUtils';
 import ThinkingBlock from './ThinkingBlock';
 import ToolCallGroup from './ToolCallGroup';
+import TurnUsageChip from './TurnUsageChip';
 import { useStreamStall } from './useStreamStall';
 
 const encodeLocalPathForUrl = (filePath: string): string => {
@@ -667,6 +669,17 @@ const AssistantTurnBlock: React.FC<{
     setProcessExpanded(false);
   }, [turn.id]);
 
+  const turnStartTimestamp = getTurnStartTimestamp(turn);
+  const turnEndTimestamp = getTurnEndTimestamp(turn);
+  const processDurationMs = turnStartTimestamp != null && turnEndTimestamp != null
+    ? turnEndTimestamp - turnStartTimestamp
+    : null;
+  // The user message may be outside the loaded page of a long turn.
+  const turnUsage = isStreamingTurn
+    ? null
+    : getCoworkTurnUsage(turn.userMessage?.metadata) ?? turn.inheritedTurnUsage?.turnUsage;
+  const turnUsageMessageId = turn.userMessage?.id ?? turn.inheritedTurnUsage?.userMessageId;
+
   const renderSystemMessage = (message: CoworkMessage) => {
     if (message.id === hiddenSystemMessageId) {
       return null;
@@ -869,6 +882,13 @@ const AssistantTurnBlock: React.FC<{
           onFork={isLastAssistant ? onForkMessage : undefined}
           turnMetadata={isLastAssistant ? (item.message.metadata as CoworkMessageMetadata) : undefined}
           completedGoal={isLastAssistant && !hasAssistantAfter ? completedGoal : null}
+          turnUsageSlot={isLastAssistant && !hasAssistantAfter && turnUsage && turnUsageMessageId ? (
+            <TurnUsageChip
+              userMessageId={turnUsageMessageId}
+              turnUsage={turnUsage}
+              durationMs={processDurationMs}
+            />
+          ) : undefined}
           planConfirmationMessageId={planConfirmationMessageId}
           onConfirmPlan={onConfirmPlan}
           onAdjustPlan={onAdjustPlan}
@@ -971,11 +991,6 @@ const AssistantTurnBlock: React.FC<{
   // Tool errors stay on their own step row (Codex app behavior); they do not
   // color this duration line or force the fold open.
   const isProcessExpanded = processExpanded || processContainsSearchTarget;
-  const turnStartTimestamp = getTurnStartTimestamp(turn);
-  const turnEndTimestamp = getTurnEndTimestamp(turn);
-  const processDurationMs = turnStartTimestamp != null && turnEndTimestamp != null
-    ? turnEndTimestamp - turnStartTimestamp
-    : null;
   const processBaseLabel = processDurationMs != null && processDurationMs >= 1000
     ? i18nService.t('coworkTurnProcessDuration').replace('{duration}', formatTurnDuration(processDurationMs))
     : i18nService.t('coworkTurnProcess');

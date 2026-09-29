@@ -20,6 +20,7 @@ import {
   CoworkOnboardingMessageKind,
 } from '../../shared/cowork/constants';
 import { normalizeCoworkGoal } from '../../shared/cowork/goal';
+import type { CoworkTurnUsage } from '../../shared/cowork/llmTurnUsage';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
 import type { CoworkSelectedTextSnippet } from '../../shared/cowork/selectedText';
 import {
@@ -53,6 +54,7 @@ import {
   setHasMoreSessions,
   setMessageRailIndex,
   setMessageRailIndexLoading,
+  setMessageTurnUsage,
   setMessageWindow,
   setOpenClawRepairing,
   setRemoteManaged,
@@ -388,6 +390,13 @@ class CoworkService {
     });
     if (goalCleanup) {
       this.streamListenerCleanups.push(goalCleanup);
+    }
+
+    const turnUsageCleanup = cowork.onStreamTurnUsage?.(({ sessionId, messageId, turnUsage }) => {
+      store.dispatch(setMessageTurnUsage({ sessionId, messageId, turnUsage }));
+    });
+    if (turnUsageCleanup) {
+      this.streamListenerCleanups.push(turnUsageCleanup);
     }
 
     const btwResultCleanup = cowork.onStreamBtwResult?.(({ sessionId, result }) => {
@@ -1464,6 +1473,17 @@ class CoworkService {
     }
   }
 
+  /** Re-fetches a finished turn's credit usage from the server ledger. */
+  async refreshTurnUsage(sessionId: string, messageId: string): Promise<CoworkTurnUsage | null> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.refreshTurnUsage) return null;
+    const turnUsage = await cowork.refreshTurnUsage({ sessionId, messageId });
+    if (turnUsage) {
+      store.dispatch(setMessageTurnUsage({ sessionId, messageId, turnUsage }));
+    }
+    return turnUsage;
+  }
+
   async runGoalCommand(options: { sessionId: string; command: string }): Promise<boolean> {
     const cowork = window.electron?.cowork;
     if (!cowork?.runGoalCommand) {
@@ -1813,6 +1833,7 @@ class CoworkService {
                 messagesOffset: returnedOffset,
                 totalMessages: pageResult.total ?? session.totalMessages,
                 leadingTurnStartTimestamp: pageResult.leadingTurnStartTimestamp ?? null,
+                leadingTurnUsage: pageResult.leadingTurnUsage ?? null,
               };
               this.logDiagnostic(
                 'debug',
@@ -1940,6 +1961,7 @@ class CoworkService {
         messagesOffset: result.offset ?? offset,
         totalMessages: result.total ?? totalMessages,
         leadingTurnStartTimestamp: result.leadingTurnStartTimestamp ?? null,
+        leadingTurnUsage: result.leadingTurnUsage ?? null,
         preserveCurrentTotal: store.getState().cowork.currentSession!.totalMessages > totalMessages,
       }));
       return true;
@@ -1996,6 +2018,7 @@ class CoworkService {
         messages: result.messages,
         newOffset,
         leadingTurnStartTimestamp: result.leadingTurnStartTimestamp ?? null,
+        leadingTurnUsage: result.leadingTurnUsage ?? null,
       }));
       const nextCount = store.getState().cowork.currentSession?.messages.length ?? currentMessageCount;
       this.logDiagnostic(

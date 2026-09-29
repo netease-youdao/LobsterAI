@@ -489,3 +489,33 @@ Verify with upstream `runtime-facts-prompt.test.ts`,
 while a background `exec` is running and that the gateway log no longer reports
 `[prompt-cache] cache read dropped` at run boundaries. Remove this patch when
 the pinned upstream includes `#140799`.
+
+## Gateway client request traceparent
+
+`openclaw-gateway-client-request-traceparent.patch` lets a Gateway client put an
+optional W3C `traceparent` on a request frame. The frame schema and the
+authenticated request dispatcher already accept it and run the handler in a
+child of that trace; only the client could not send it: `GatewayClient.request`
+rebuilt its options without the field and the pending request writer never put
+it on the frame. The patch forwards the option through both.
+
+LobsterAI creates one trace per Cowork turn and sends it with `chat.send`
+(including plan-mode recovery sends). The command queue restores the request's
+async context for the agent run, and each model call's diagnostic wrapper adds a
+child `traceparent` header, so every model request of the turn reaches the local
+token proxy and lobsterai-server with the turn's trace id. The server stores it
+in the usage ledger, which lets the client show the turn's credits and lets
+support follow one request from client logs to server logs.
+
+Checked on the pinned source with a real Gateway and a mock
+`openai-completions` provider: a `chat.send` carrying
+`00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01` produced a model HTTP
+request with `traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-<new span>-01`,
+while a `chat.send` without it got an unrelated root trace. The Anthropic
+transport merges the same request headers.
+
+Omitting the option keeps the previous frame bytes. Verify with a rebuilt runtime:
+send a turn on a LobsterAI package model and confirm that the main log's
+`[OpenClawTokenProxy] LLM request started trace=...` lines carry the trace id
+logged by `[OpenClawRuntime] chat.send params`. Remove this patch when the pinned
+upstream Gateway client accepts `traceparent` request options.
