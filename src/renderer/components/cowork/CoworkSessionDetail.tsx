@@ -149,6 +149,7 @@ import SidebarSearchIcon from '../icons/SidebarSearchIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
+import { MarkdownLinkOpenerContext } from '../markdownLinkOpener';
 import { type ToastEventDetail } from '../Toast';
 import { resolveAgentModelSelection, useAgentSelectedModel } from './agentModelSelection';
 import ArtifactPreviewTabItem from './ArtifactPreviewTabItem';
@@ -194,6 +195,7 @@ import {
   COWORK_DETAIL_CONTENT_CLASS,
   COWORK_DETAIL_GUTTER_CLASS,
   getTurnMessageIds,
+  getTurnReplyMessageIds,
   MEDIA_TOKEN_DISPLAY_RE,
   type ToolGroupItem,
 } from './messageDisplayUtils';
@@ -211,6 +213,7 @@ import {
 } from './sessionExport';
 import SubagentSpawnCard from './SubagentSpawnCard';
 import { useCoworkConversationSearch } from './useCoworkConversationSearch';
+import { useCoworkMarkdownLinkOpener } from './useCoworkMarkdownLinkOpener';
 import UserMessageContent from './UserMessageContent';
 import UserMessageItem from './UserMessageItem';
 interface CoworkSessionDetailProps {
@@ -3020,6 +3023,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setSessionBrowserLocalServiceContext,
   ]);
 
+  const markdownLinkOpener = useCoworkMarkdownLinkOpener({
+    sessionId,
+    cwd: currentSession?.cwd,
+    sessionArtifacts,
+    onOpenHtmlFile: handleOpenHtmlFileInBrowser,
+    onOpenLocalService: handleOpenLocalServiceArtifact,
+  });
+
   const handleDeployLocalServiceArtifact = useCallback((artifact: Artifact) => {
     if (!sessionId || artifact.type !== ArtifactTypeValue.LocalService) return;
     const url = (artifact.url || artifact.content || '').trim();
@@ -5694,7 +5705,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     );
     const artifact = selectAutoPreviewArtifact(
       turnArtifacts,
-      { defaultProjectDirectory: currentSession.cwd },
+      {
+        defaultProjectDirectory: currentSession.cwd,
+        replyMessageIds: getTurnReplyMessageIds(pendingTurn),
+      },
     );
     if (!artifact) return;
 
@@ -6054,6 +6068,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   return (
     <ArtifactFileShareProvider sessionId={currentSession.id}>
+    <MarkdownLinkOpenerContext.Provider value={markdownLinkOpener}>
       <div className="flex-1 flex flex-col h-full overflow-hidden">
       {/* Header — spans full width */}
       <div
@@ -7031,6 +7046,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     )}
       </div>
       </div>
+    </MarkdownLinkOpenerContext.Provider>
     </ArtifactFileShareProvider>
   );
 };

@@ -80,6 +80,17 @@ export const getTurnMessageIds = (turn: ConversationTurn): Set<string> => {
   return messageIds;
 };
 
+/** The turn's assistant replies (text, not thinking), oldest first. */
+export const getTurnReplyMessageIds = (turn: ConversationTurn): string[] => {
+  const messageIds: string[] = [];
+  for (const item of turn.assistantItems) {
+    if (item.type === 'assistant' && !item.message.metadata?.isThinking) {
+      messageIds.push(item.message.id);
+    }
+  }
+  return messageIds;
+};
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 export const COWORK_DETAIL_CONTENT_CLASS = 'mx-auto w-full max-w-[760px]';
