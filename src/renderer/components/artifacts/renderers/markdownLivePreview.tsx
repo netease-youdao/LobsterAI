@@ -9,6 +9,7 @@ import MarkdownContent, { safeUrlTransform } from '@/components/MarkdownContent'
 import { i18nService } from '@/services/i18n';
 import { normalizeInlineCodeText } from '@/utils/markdownCodeSegments';
 import { isMarkdownHtmlBreak } from '@/utils/remarkMarkdownLayout';
+import { canCloseSingleDollarMath, canOpenSingleDollarMath } from '@/utils/remarkPandocInlineMath';
 
 import { markdownPreviewReferences, withMarkdownReferenceDefinitions } from './markdownPreviewReferences';
 
@@ -32,6 +33,10 @@ export const markdownMathSyntax: MarkdownConfig = {
       if (!latex && next !== 36) return -1;
       let size = latex ? 2 : 1;
       if (!latex) while (context.char(position + size) === 36) size++;
+      // Single-dollar math follows the same Pandoc rule as chat replies, so
+      // currency such as `$3/$15` stays literal.
+      const singleDollar = !latex && size === 1;
+      if (singleDollar && !canOpenSingleDollarMath(context.char(position + 1))) return position + size;
       for (let end = position + size; end < context.end; end++) {
         if (latex && context.char(end) === 92 && context.char(end + 1) === 41) {
           return context.slice(position + size, end).trim()
@@ -42,6 +47,8 @@ export const markdownMathSyntax: MarkdownConfig = {
           let closingSize = 1;
           while (context.char(end + closingSize) === 36) closingSize++;
           if (closingSize === size && context.slice(position + size, end).trim()) {
+            // An invalid first closer leaves the opening dollar literal.
+            if (singleDollar && !canCloseSingleDollarMath(context.char(end - 1), context.char(end + 1))) break;
             return context.addElement(context.elt(Syntax.Math, position, end + size));
           }
           end += closingSize - 1;

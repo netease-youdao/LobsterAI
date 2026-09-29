@@ -15,6 +15,7 @@ import { normalizeShellFilePath } from '../services/shellAppsCache';
 import { showShellFailureToast, showToast } from '../utils/localFileActions';
 import { transformMarkdownTextSegments } from '../utils/markdownCodeSegments';
 import { remarkMarkdownLayout } from '../utils/remarkMarkdownLayout';
+import { remarkPandocInlineMath } from '../utils/remarkPandocInlineMath';
 import CodeBlock from './CodeBlock';
 import LocalFileContextMenu from './common/LocalFileContextMenu';
 
@@ -745,7 +746,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
         </div>
       )}
       <ReactMarkdown
-        remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkMath, remarkMarkdownLayout]}
+        remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkMath, remarkPandocInlineMath, remarkMarkdownLayout]}
         rehypePlugins={[rehypeKatex]}
         urlTransform={safeUrlTransform}
         components={components}
