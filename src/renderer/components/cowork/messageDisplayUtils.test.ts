@@ -42,6 +42,7 @@ import {
   getTurnAnswerStartIndex,
   getTurnEndTimestamp,
   getTurnMessageIds,
+  getTurnReplyMessageIds,
   getTurnStartTimestamp,
   isAbandonedToolPlaceholder,
   isActivityConsolidatedItem,
@@ -77,6 +78,27 @@ test('turn message IDs include both the user and assistant messages', () => {
   const [turn] = buildConversationTurns(buildDisplayItems(messages));
 
   expect([...getTurnMessageIds(turn)]).toEqual(['user-1', 'assistant-1']);
+});
+
+test('turn reply IDs list assistant text replies but not thinking or tool steps', () => {
+  const messages: CoworkMessage[] = [
+    { id: 'user-1', type: 'user', content: 'make slides', timestamp: 1 },
+    { id: 'thinking-1', type: 'assistant', content: 'planning', timestamp: 2, metadata: { isThinking: true } },
+    { id: 'reply-1', type: 'assistant', content: 'Generating the cover first.', timestamp: 3 },
+    {
+      id: 'tool-use-1',
+      type: 'tool_use',
+      content: '',
+      timestamp: 4,
+      metadata: { toolName: 'exec', toolUseId: 'call-1', toolInput: { command: 'node build.js' } },
+    },
+    { id: 'tool-result-1', type: 'tool_result', content: 'done', timestamp: 5, metadata: { toolUseId: 'call-1' } },
+    { id: 'reply-2', type: 'assistant', content: 'Done: [deck.pptx](/tmp/deck.pptx)', timestamp: 6 },
+  ];
+
+  const [turn] = buildConversationTurns(buildDisplayItems(messages));
+
+  expect(getTurnReplyMessageIds(turn)).toEqual(['reply-1', 'reply-2']);
 });
 
 test('orphan turn IDs stay unique across paged windows', () => {

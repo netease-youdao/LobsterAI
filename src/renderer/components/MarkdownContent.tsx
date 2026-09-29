@@ -2,7 +2,7 @@ import 'katex/dist/katex.min.css';
 import 'katex/contrib/mhchem';
 
 import { ChevronRightIcon } from '@heroicons/react/24/outline';
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 // @ts-ignore
 import rehypeKatex from 'rehype-katex';
@@ -19,6 +19,7 @@ import { remarkDetailsBlocks } from '../utils/remarkDetailsBlocks';
 import { remarkMarkdownLayout } from '../utils/remarkMarkdownLayout';
 import CodeBlock from './CodeBlock';
 import LocalFileContextMenu from './common/LocalFileContextMenu';
+import { type MarkdownLinkOpener, useMarkdownLinkOpener } from './markdownLinkOpener';
 
 const SAFE_URL_PROTOCOLS = new Set(['http', 'https', 'mailto', 'tel', 'file', 'localfile', 'kit']);
 const INTERNAL_URL_PROTOCOLS = new Set(['kit']);
@@ -406,6 +407,19 @@ const findFallbackPathFromContext = (
   return null;
 };
 
+const openLocalFileInApp = async (
+  linkOpener: MarkdownLinkOpener | null,
+  filePath: string,
+): Promise<boolean> => {
+  if (!linkOpener) return false;
+  try {
+    return await linkOpener.openLocalFile(filePath);
+  } catch (error) {
+    console.warn('[MarkdownContent] Failed to open local file in app, using the system app instead:', error);
+    return false;
+  }
+};
+
 interface LocalFileLinkProps {
   filePath: string;
   isDirectory: boolean;
@@ -424,22 +438,28 @@ const LocalFileLink: React.FC<LocalFileLinkProps> = ({
   children,
 }) => {
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
+  const anchorRef = useRef<HTMLAnchorElement>(null);
+  const linkOpener = useMarkdownLinkOpener();
 
-  const handleClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
-    e.preventDefault();
-    const anchor = e.currentTarget;
+  const openLink = async () => {
     try {
+      if (!isDirectory && await openLocalFileInApp(linkOpener, filePath)) {
+        return;
+      }
       const result = await window.electron.shell.openPath(filePath);
       if (result?.success) {
         return;
       }
 
       const fallbackPath = findFallbackPathFromContext(
-        anchor,
+        anchorRef.current,
         linkText,
         resolveLocalFilePath
       );
       if (fallbackPath) {
+        if (await openLocalFileInApp(linkOpener, fallbackPath)) {
+          return;
+        }
         const fallbackResult = await window.electron.shell.openPath(fallbackPath);
         if (!fallbackResult?.success) {
           console.error('Failed to open file (fallback):', fallbackPath, fallbackResult?.error);
@@ -455,6 +475,11 @@ const LocalFileLink: React.FC<LocalFileLinkProps> = ({
     }
   };
 
+  const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    void openLink();
+  };
+
   const handleContextMenu = (e: React.MouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
     e.stopPropagation();
@@ -464,6 +489,7 @@ const LocalFileLink: React.FC<LocalFileLinkProps> = ({
   return (
     <>
       <a
+        ref={anchorRef}
         href={toFileHref(filePath)}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
@@ -478,10 +504,52 @@ const LocalFileLink: React.FC<LocalFileLinkProps> = ({
           filePath={filePath}
           isDirectory={isDirectory}
           position={menuPosition}
+          onOpen={linkOpener ? () => { void openLink(); } : undefined}
           onClose={() => setMenuPosition(null)}
         />
       )}
     </>
+  );
+};
+
+interface ExternalLinkProps {
+  href: string;
+  anchorProps: Record<string, unknown>;
+  children: React.ReactNode;
+}
+
+const ExternalLink: React.FC<ExternalLinkProps> = ({ href, anchorProps, children }) => {
+  const linkOpener = useMarkdownLinkOpener();
+
+  const handleClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (linkOpener?.openWebLink(href)) {
+      e.preventDefault();
+      return;
+    }
+
+    const openExternal = (window as any)?.electron?.shell?.openExternal;
+    if (typeof openExternal !== 'function') {
+      return;
+    }
+
+    e.preventDefault();
+    const opened = await openExternalViaDefaultBrowser(href);
+    if (!opened) {
+      openExternalViaAnchorFallback(href);
+    }
+  };
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={handleClick}
+      className={LINK_CLASS_NAME}
+      {...anchorProps}
+    >
+      {children}
+    </a>
   );
 };
 
@@ -656,30 +724,10 @@ const createMarkdownComponents = (
     }
 
     if (isExternalLink) {
-      const handleExternalClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
-        const openExternal = (window as any)?.electron?.shell?.openExternal;
-        if (typeof openExternal !== 'function') {
-          return;
-        }
-
-        e.preventDefault();
-        const opened = await openExternalViaDefaultBrowser(hrefValue);
-        if (!opened) {
-          openExternalViaAnchorFallback(hrefValue);
-        }
-      };
-
       return (
-        <a
-          href={hrefValue}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={handleExternalClick}
-          className={LINK_CLASS_NAME}
-          {...props}
-        >
+        <ExternalLink href={hrefValue} anchorProps={props}>
           {children}
-        </a>
+        </ExternalLink>
       );
     }
 

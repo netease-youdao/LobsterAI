@@ -1,4 +1,4 @@
-import { dedupeArtifactsForDisplay } from '@/services/artifactParser';
+import { dedupeArtifactsForDisplay, orderArtifactsByReplyReferences } from '@/services/artifactParser';
 import { type Artifact, ArtifactTypeValue } from '@/types/artifact';
 
 export const ArtifactAutoPreviewCategory = {
@@ -37,6 +37,8 @@ interface AutoPreviewCandidate {
 
 interface SelectAutoPreviewArtifactOptions {
   defaultProjectDirectory?: string;
+  /** The turn's replies, oldest first: within a category, the file they link wins. */
+  replyMessageIds?: readonly string[];
 }
 
 export function getAutoPreviewCategory(artifact: Artifact): ArtifactAutoPreviewCategory | null {
@@ -82,7 +84,11 @@ export function selectAutoPreviewArtifact(
   artifacts: Artifact[],
   options: SelectAutoPreviewArtifactOptions = {},
 ): Artifact | null {
-  const candidates = dedupeArtifactsForDisplay(artifacts, options)
+  const candidates = orderArtifactsByReplyReferences(
+    dedupeArtifactsForDisplay(artifacts, options),
+    artifacts,
+    options.replyMessageIds ?? [],
+  )
     .map((artifact, displayIndex) => ({
       artifact,
       displayIndex,
