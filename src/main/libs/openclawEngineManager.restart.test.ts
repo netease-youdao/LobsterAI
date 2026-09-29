@@ -835,36 +835,7 @@ describe('OpenClaw gateway restart supervision', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  test('a gateway that crashes soon after becoming healthy still exhausts the restart budget', async () => {
-    const { manager, internals, child, phases } = makeSupervisor();
-    const attempt = vi.spyOn(internals, 'doStartGateway').mockImplementation(async () => {
-      const nextChild = makeChild();
-      internals.gatewayProcess = nextChild;
-      internals.gatewayRecentOutput.set(nextChild, ['extension driver crashed']);
-      internals.attachGatewayExitHandlers(nextChild);
-      internals.scheduleGatewayRestartBudgetReset(nextChild);
-      internals.setStatus({ phase: OpenClawEnginePhase.Running, version: '2026.8.1', canRetry: false });
-      return manager.getStatus();
-    });
-    internals.scheduleGatewayRestartBudgetReset(child);
-
-    for (const delay of [3_000, 5_000, 10_000, 20_000, 30_000]) {
-      await vi.advanceTimersByTimeAsync(1_000);
-      closeChild(internals.gatewayProcess!, 1);
-      await vi.advanceTimersByTimeAsync(delay);
-    }
-    expect(attempt).toHaveBeenCalledTimes(5);
-    expect(internals.gatewayRestartAttempt).toBe(5);
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    closeChild(internals.gatewayProcess!, 1);
-
-    expect(manager.getStatus()).toMatchObject({ phase: OpenClawEnginePhase.Error, canRetry: true });
-    expect(phases.at(-1)).toBe(OpenClawEnginePhase.Error);
-    expect(attempt).toHaveBeenCalledTimes(5);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
+  // The real doStartGateway path is covered by openclawEngineManager.restartBudget.test.ts.
   test('a gateway that stays healthy past the stability window refills the restart budget', async () => {
     const { manager, internals, child } = makeSupervisor();
     internals.gatewayRestartAttempt = 4;

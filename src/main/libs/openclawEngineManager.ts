@@ -790,6 +790,9 @@ export class OpenClawEngineManager extends EventEmitter {
     if (this.gatewayMaintenanceActive) return this.getStatus();
     if (options.retryBlocked) {
       this.gatewayStartupBlock = null;
+      // An explicit retry such as Quick Repair gets a fresh automatic restart
+      // budget, like a manual restart does.
+      this.gatewayRestartAttempt = 0;
       this.startupPrepMarker.clear(`manual start: ${reason}`);
     }
     if (this.isGatewayStartupBlocked()) return this.getStatus();
@@ -2429,12 +2432,16 @@ export class OpenClawEngineManager extends EventEmitter {
 
     if (this.gatewayRestartAttempt >= GATEWAY_MAX_RESTART_ATTEMPTS) {
       console.error(`${gwDiagTs()} gateway auto-restart limit reached (${GATEWAY_MAX_RESTART_ATTEMPTS} attempts), giving up`);
-      this.setStatus({
-        phase: 'error',
+      // Block implicit starts too: session startup, channel sync and the WS
+      // reconnect loop would otherwise keep relaunching a crashing gateway.
+      // Only an explicit retry (manual restart or Quick Repair) clears it.
+      this.gatewayStartupBlock = {
+        phase: OpenClawEnginePhase.Error,
         version: this.status.version,
         message: `OpenClaw gateway failed to start after ${GATEWAY_MAX_RESTART_ATTEMPTS} attempts. Check model configuration or restart manually.`,
         canRetry: true,
-      });
+      };
+      this.setStatus(this.gatewayStartupBlock);
       return;
     }
 
