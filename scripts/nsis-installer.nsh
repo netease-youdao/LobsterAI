@@ -43,6 +43,7 @@ Var lobsterHiddenExecLaunchError
   Var lobsterLauncherFallback
   Var lobsterLegacySkillsStatus
   Var lobsterLegacySkillsRestoreStatus
+  Var lobsterLegacySkillNames
   Var lobsterOldAppRelaunchStatus
   Var lobsterOldAppRelaunchError
   Var lobsterOldAppExecutablePath
@@ -101,6 +102,26 @@ Var lobsterHiddenExecLaunchError
 !define LOBSTER_SKILL_BACKUP_EXIT_COPY_FAILED "11"
 !define LOBSTER_SKILL_BACKUP_EXIT_VERIFY_FAILED "12"
 !define LOBSTER_SKILL_BACKUP_EXIT_NO_USER_SKILLS "13"
+
+; Before copying anything, the backup helper writes the user skill folder names
+; it found to this $PLUGINSDIR file (one line, UTF-16LE without BOM). The file
+; feeds the abort dialog only and never drives control flow.
+!define LOBSTER_LEGACY_SKILL_NAMES_FILE "lobster-legacy-skill-names.txt"
+
+; Skills backup abort dialog. Users hit it on in-app updates, so it has to say,
+; in their language, that nothing was lost and what to do next. The concrete
+; fix is to move the listed folders out of the install tree into the per-user
+; skills root (%APPDATA%\LobsterAI\SKILLs, the root OpenClaw actually loads):
+; the skills keep working and later updates no longer need the legacy backup.
+; Without the folder list (the helper failed before it could enumerate them)
+; the user cannot tell which folders are theirs, so only retry/support advice
+; is given. The status code stays in every variant for support.
+!define LOBSTER_LANGID_SIMPCHINESE "2052"
+!define LOBSTER_LANGID_TRADCHINESE "1028"
+!define LOBSTER_SKILL_BACKUP_ABORT_MOVE_ZH "LobsterAI 这次没有升级成功，但当前版本和数据都没有受影响，可以继续正常使用。$\r$\n$\r$\n原因：安装目录里有你自己添加的技能。升级前要先把它们备份好，这次备份没有成功，为了不丢失这些技能，升级已自动停止。$\r$\n$\r$\n请按下面的步骤处理后再升级：$\r$\n1. 打开这个文件夹：$\r$\n    $INSTDIR\resources\SKILLs$\r$\n2. 把下面这些文件夹剪切（不是复制）到 %APPDATA%\LobsterAI\SKILLs 里：$\r$\n    $lobsterLegacySkillNames$\r$\n3. 回到 LobsterAI，重新升级。$\r$\n$\r$\n小提示：$\r$\n• 在文件资源管理器顶部的地址栏粘贴 %APPDATA%\LobsterAI\SKILLs 并回车，就能打开第 2 步的文件夹。$\r$\n• 如果那里已经有同名文件夹，把安装目录里的这一份移到桌面即可。$\r$\n• 按 Ctrl+C 可以复制这段提示，方便粘贴路径。$\r$\n$\r$\n移动后这些技能照常可用，以后升级也不会再因为这个原因停止。$\r$\n错误代码：$lobsterLegacySkillsStatus"
+!define LOBSTER_SKILL_BACKUP_ABORT_RETRY_ZH "LobsterAI 这次没有升级成功，但当前版本和数据都没有受影响，可以继续正常使用。$\r$\n$\r$\n原因：升级前需要检查并备份安装目录里你自己添加的技能，这一步没有完成，为了不丢失数据，升级已自动停止。$\r$\n$\r$\n请重启电脑后再升级一次。如果还是出现这个提示，请截图本窗口联系客服，并提供这个文件：$\r$\n    $APPDATA\LobsterAI\install-timing.log$\r$\n$\r$\n错误代码：$lobsterLegacySkillsStatus"
+!define LOBSTER_SKILL_BACKUP_ABORT_MOVE_EN "LobsterAI was not updated. Your current version and data are unchanged, and you can keep using it.$\r$\n$\r$\nWhy: some skills you added yourself are stored in the LobsterAI installation folder. They have to be backed up before an update, the backup did not succeed, and the update stopped so those skills are not lost.$\r$\n$\r$\nTo update, move them out first:$\r$\n1. Open this folder:$\r$\n    $INSTDIR\resources\SKILLs$\r$\n2. Cut (not copy) these folders into %APPDATA%\LobsterAI\SKILLs:$\r$\n    $lobsterLegacySkillNames$\r$\n3. Go back to LobsterAI and update again.$\r$\n$\r$\nTips:$\r$\n• To open the folder in step 2, paste %APPDATA%\LobsterAI\SKILLs into the File Explorer address bar and press Enter.$\r$\n• If a folder with the same name is already there, move the one from the installation folder to your desktop instead.$\r$\n• Press Ctrl+C to copy this message, paths included.$\r$\n$\r$\nYour skills keep working after the move, and future updates will not stop for this reason again.$\r$\nError code: $lobsterLegacySkillsStatus"
+!define LOBSTER_SKILL_BACKUP_ABORT_RETRY_EN "LobsterAI was not updated. Your current version and data are unchanged, and you can keep using it.$\r$\n$\r$\nWhy: before an update, LobsterAI has to check for and back up skills you added to its installation folder. That step did not complete, so the update stopped to keep your data safe.$\r$\n$\r$\nRestart your computer and update again. If you still see this message, take a screenshot of it and contact support with this file:$\r$\n    $APPDATA\LobsterAI\install-timing.log$\r$\n$\r$\nError code: $lobsterLegacySkillsStatus"
 
 ; -- Design invariant --
 ; Nothing destructive may run before the user confirms the wizard (or the
@@ -1461,6 +1482,8 @@ FunctionEnd
     System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_SKILL_BACKUP_ROOT", t "$APPDATA\LobsterAI\skills-backup")i'
     System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_INSTALL_ATTEMPT_ID", t "$lobsterInstallerAttemptId")i'
     System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_OLD_VERSION", t "$4")i'
+    InitPluginsDir
+    System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_SKILL_NAMES_FILE", t "$PLUGINSDIR\${LOBSTER_LEGACY_SKILL_NAMES_FILE}")i'
     Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "\
       $$ErrorActionPreference = \"Stop\";\
       $$src       = $$env:LOBSTERAI_SKILL_SOURCE;\
@@ -1482,6 +1505,7 @@ FunctionEnd
         } catch { });\
         $$userSkills = @(Get-ChildItem -LiteralPath $$src -Directory -ErrorAction Stop | Where-Object { $$bundled -notcontains $$_.Name });\
         if ($$userSkills.Count -eq 0) { Write-Output \"legacy-no-user-skills\"; exit ${LOBSTER_SKILL_BACKUP_EXIT_NO_USER_SKILLS} };\
+        try { [IO.File]::WriteAllText($$env:LOBSTERAI_SKILL_NAMES_FILE, (@($$userSkills.Name | Sort-Object) -join \", \"), (New-Object -TypeName Text.UnicodeEncoding -ArgumentList $$false, $$false)) } catch { };\
         $$phase = \"backup-copy\";\
         if (Test-Path -LiteralPath $$staging) { Remove-Item -LiteralPath $$staging -Recurse -Force -ErrorAction Stop };\
         if (Test-Path -LiteralPath $$backup) { throw \"attempt backup already exists\" };\
@@ -1556,6 +1580,7 @@ FunctionEnd
     System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_SKILL_BACKUP_ROOT", t "")i'
     System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_INSTALL_ATTEMPT_ID", t "")i'
     System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_OLD_VERSION", t "")i'
+    System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_SKILL_NAMES_FILE", t "")i'
     System::Call 'kernel32::GetTickCount()i .r6'
     IntOp $5 $6 - $7
 
@@ -1620,7 +1645,31 @@ FunctionEnd
       FileWrite $9 "$8 phase=skill-backup-failed-abort attempt_id=$lobsterInstallerAttemptId status=$lobsterLegacySkillsStatus exit=$R2 action=old-install-preserved$\r$\n"
       FileClose $9
       Call lobsterTryRelaunchOldApp
-      MessageBox MB_OK|MB_ICONEXCLAMATION "The LobsterAI update stopped because legacy user skills could not be safely inspected or backed up (status=$lobsterLegacySkillsStatus). The previous installation was not replaced. Please retry the update. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
+      ; InitPluginsDir first: on the paths that never launched the helper,
+      ; $PLUGINSDIR would otherwise still be empty.
+      StrCpy $lobsterLegacySkillNames ""
+      InitPluginsDir
+      ClearErrors
+      FileOpen $9 "$PLUGINSDIR\${LOBSTER_LEGACY_SKILL_NAMES_FILE}" r
+      IfErrors SkillBackupAbortNamesRead
+        FileReadUTF16LE $9 $lobsterLegacySkillNames
+        FileClose $9
+      SkillBackupAbortNamesRead:
+      StrCmp $LANGUAGE "${LOBSTER_LANGID_SIMPCHINESE}" SkillBackupAbortDialogZh
+      StrCmp $LANGUAGE "${LOBSTER_LANGID_TRADCHINESE}" SkillBackupAbortDialogZh
+      StrCmp $lobsterLegacySkillNames "" SkillBackupAbortDialogRetryEn
+        MessageBox MB_OK|MB_ICONEXCLAMATION "${LOBSTER_SKILL_BACKUP_ABORT_MOVE_EN}" /SD IDOK
+        Goto SkillBackupAbortDialogDone
+      SkillBackupAbortDialogRetryEn:
+        MessageBox MB_OK|MB_ICONEXCLAMATION "${LOBSTER_SKILL_BACKUP_ABORT_RETRY_EN}" /SD IDOK
+        Goto SkillBackupAbortDialogDone
+      SkillBackupAbortDialogZh:
+      StrCmp $lobsterLegacySkillNames "" SkillBackupAbortDialogRetryZh
+        MessageBox MB_OK|MB_ICONEXCLAMATION "${LOBSTER_SKILL_BACKUP_ABORT_MOVE_ZH}" /SD IDOK
+        Goto SkillBackupAbortDialogDone
+      SkillBackupAbortDialogRetryZh:
+        MessageBox MB_OK|MB_ICONEXCLAMATION "${LOBSTER_SKILL_BACKUP_ABORT_RETRY_ZH}" /SD IDOK
+      SkillBackupAbortDialogDone:
       SetErrorLevel 2
       Quit
     SkillBackupValidated:
