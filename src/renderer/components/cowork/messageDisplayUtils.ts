@@ -122,6 +122,18 @@ export const getStringArray = (value: unknown): string | null => {
 
 export const normalizeToolName = (value: string): string => value.toLowerCase().replace(/[\s_]+/g, '');
 
+const MCP_TOOL_NAME_SEPARATOR = '__';
+
+/** MCP tools reach the agent as `<server>__<tool>`, e.g. `tavily__tavily_search`. */
+export const isMcpToolName = (toolName: string | undefined): boolean => (
+  Boolean(toolName?.includes(MCP_TOOL_NAME_SEPARATOR))
+);
+
+/** The action half of an MCP tool name, the part a reader cares about. */
+const getMcpToolActionName = (toolName: string): string => (
+  toolName.slice(toolName.lastIndexOf(MCP_TOOL_NAME_SEPARATOR) + MCP_TOOL_NAME_SEPARATOR.length)
+);
+
 export const getToolDisplayName = (toolName: string | undefined): string => {
   if (!toolName) return 'Tool';
   const normalized = normalizeToolName(toolName);
@@ -150,6 +162,9 @@ export const getToolDisplayName = (toolName: string | undefined): string => {
     case 'sessionsyield':
       return i18nService.t('coworkToolWaitingSubagents');
     default:
+      if (isMcpToolName(toolName)) {
+        return getMcpToolActionName(toolName).replace(/[_-]+/g, ' ').trim() || toolName;
+      }
       return toolName;
   }
 };
@@ -191,6 +206,29 @@ export const isTodoWriteToolName = (toolName: string | undefined): boolean => {
 export const isCronToolName = (toolName: string | undefined): boolean => {
   if (!toolName) return false;
   return normalizeToolName(toolName) === 'cron';
+};
+
+/**
+ * Tools that publish the agent's plan or progress note instead of doing
+ * work: OpenClaw's progress_card (which replaced update_plan) and TodoWrite.
+ */
+const PLAN_TOOL_NAMES = new Set(['progresscard', 'updateplan', 'todowrite']);
+
+export const isPlanToolName = (toolName: string | undefined): boolean => (
+  toolName !== undefined && PLAN_TOOL_NAMES.has(normalizeToolName(toolName))
+);
+
+const PROCESS_OUTPUT_ACTIONS = new Set(['poll', 'log', 'list']);
+
+/**
+ * A `process` call that only reads what a background command printed
+ * (poll/log/list): waiting on a command already on screen, not a new step.
+ */
+export const isProcessOutputCheck = (group: ToolGroupItem): boolean => {
+  const rawName = group.toolUse.metadata?.toolName;
+  if (typeof rawName !== 'string' || normalizeToolName(rawName) !== 'process') return false;
+  const action = getToolInputString(group.toolUse.metadata?.toolInput ?? {}, ['action']);
+  return action !== null && PROCESS_OUTPUT_ACTIONS.has(action.trim().toLowerCase());
 };
 
 export const getCronToolSummary = (input: Record<string, unknown>): string | null => {
@@ -299,6 +337,42 @@ export const getTodoWriteSummary = (items: ParsedTodoItem[]): string => {
   }
 
   return summary.join(' · ');
+};
+
+/** A plan or progress note the agent published: an ordered checklist, a markdown note, or both. */
+export type ActivityPlan = {
+  steps: ParsedTodoItem[];
+  markdown: string | null;
+};
+
+const parsePlanSteps = (value: unknown): ParsedTodoItem[] => {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((rawStep): ParsedTodoItem[] => {
+    if (!rawStep || typeof rawStep !== 'object') return [];
+    const step = rawStep as Record<string, unknown>;
+    const text = toTrimmedString(step.step) ?? toTrimmedString(step.content) ?? toTrimmedString(step.title);
+    return text ? [{ primaryText: text, secondaryText: null, status: normalizeTodoStatus(step.status) }] : [];
+  });
+};
+
+/**
+ * The plan a plan tool call publishes, or null when it publishes nothing
+ * (progress_card called with both parts empty clears the card).
+ */
+export const parseActivityPlan = (
+  toolName: string | undefined,
+  toolInput: unknown,
+): ActivityPlan | null => {
+  if (!isPlanToolName(toolName) || !toolInput || typeof toolInput !== 'object') return null;
+  if (isTodoWriteToolName(toolName)) {
+    const steps = parseTodoWriteItems(toolInput);
+    return steps ? { steps, markdown: null } : null;
+  }
+  const input = toolInput as Record<string, unknown>;
+  const steps = parsePlanSteps(input.plan);
+  // update_plan (older runtimes) calls its note `explanation`.
+  const markdown = toTrimmedString(input.markdown) ?? toTrimmedString(input.explanation);
+  return steps.length > 0 || markdown ? { steps, markdown } : null;
 };
 
 export const getToolInputSummary = (
@@ -1294,6 +1368,54 @@ export const isActivityConsolidatedItem = (item: ConsolidatedItem): boolean => {
   return item.type === 'assistant' && item.message.metadata?.isThinking === true;
 };
 
+/**
+ * Work items that only matter while they run: a thought, a wait on a
+ * background command's output, an update of the progress card. Once
+ * settled they leave a running turn's window (the next step carries on
+ * from them), while the full list still has them.
+ */
+export const isTransientActivityItem = (item: ConsolidatedItem): boolean => {
+  if (item.type === 'assistant') return item.message.metadata?.isThinking === true;
+  if (item.type !== 'tool_group') return false;
+  const rawName = item.group.toolUse.metadata?.toolName;
+  return isPlanToolName(typeof rawName === 'string' ? rawName : undefined)
+    || isProcessOutputCheck(item.group);
+};
+
+/** How many of its latest steps a running turn keeps on screen. */
+export const ACTIVITY_LIVE_WINDOW_STEPS = 5;
+
+export type LiveActivityWindow = {
+  /** Everything before the window, folded behind one "earlier steps" line. */
+  earlier: ActivityChunkEntry[];
+  /** How many steps (not thoughts or waits) that line folds away. */
+  earlierStepCount: number;
+  /** The latest steps, then the tail item when it is a transient one. */
+  recent: ActivityChunkEntry[];
+};
+
+/**
+ * What a running turn's tail run shows: its latest steps, each on its own
+ * line as before, with everything older behind a single line so a long run
+ * no longer grows without bound. Settled transient items drop out of the
+ * window; the tail item always stays, so the line for what the agent is
+ * doing right now never disappears.
+ */
+export const getLiveActivityWindow = (
+  entries: ActivityChunkEntry[],
+  maxSteps: number = ACTIVITY_LIVE_WINDOW_STEPS,
+): LiveActivityWindow => {
+  const steps = entries.filter((entry) => !isTransientActivityItem(entry.item));
+  const earlierStepCount = Math.max(0, steps.length - maxSteps);
+  const recent = steps.slice(earlierStepCount);
+  const lastEntry = entries[entries.length - 1];
+  if (lastEntry && isTransientActivityItem(lastEntry.item)) {
+    recent.push(lastEntry);
+  }
+  const earlier = earlierStepCount > 0 ? entries.slice(0, entries.indexOf(recent[0])) : [];
+  return { earlier, earlierStepCount, recent };
+};
+
 export const chunkConsolidatedItemsForDisplay = (
   items: ConsolidatedItem[],
   isGroupable: (item: ConsolidatedItem, index: number) => boolean = isActivityConsolidatedItem,
@@ -1395,9 +1517,18 @@ type ActivityCategoryCounts = {
   thinking: number;
 };
 
+/**
+ * Steps that support other work rather than being work of their own: plan
+ * updates, and waits on a command that is already counted.
+ */
+const isAuxiliaryActivityStep = (item: ConsolidatedItem): boolean => (
+  item.type === 'tool_group' && isTransientActivityItem(item)
+);
+
 const countActivityCategories = (items: ConsolidatedItem[]): ActivityCategoryCounts => {
   const counts: ActivityCategoryCounts = { commands: 0, reads: 0, edits: 0, tools: 0, thinking: 0 };
   for (const item of items) {
+    if (isAuxiliaryActivityStep(item)) continue;
     if (item.type === 'tool_group') {
       const rawName = item.group.toolUse.metadata?.toolName;
       const normalized = typeof rawName === 'string' ? normalizeToolName(rawName) : '';
@@ -1433,7 +1564,10 @@ const countActivityCategories = (items: ConsolidatedItem[]): ActivityCategoryCou
  * only hide which tool it was.
  */
 export const getActivityGroupHeaderLabel = (items: ConsolidatedItem[]): string => {
-  const steps = items.filter((item) => item.type !== 'assistant');
+  const allSteps = items.filter((item) => item.type !== 'assistant');
+  const workSteps = allSteps.filter((item) => !isAuxiliaryActivityStep(item));
+  // A run of nothing but plan updates or output waits still names its last one.
+  const steps = workSteps.length > 0 ? workSteps : allSteps.slice(-1);
   if (steps.length === 1) {
     return getActivityStepDoneLabel(steps[0]);
   }
@@ -1564,6 +1698,8 @@ export const getActivityCurrentActionText = (item: ConsolidatedItem): string => 
       return getShellCommandDescription(toolName, toolInput)
         ?? i18nService.t('coworkActivityLiveCommandGeneric');
     }
+    const descriptiveLabel = getDescriptiveStepLabel(item.group, true);
+    if (descriptiveLabel) return descriptiveLabel;
     const { summary } = getToolStepDisplay(toolName, toolInput);
     const verb = (templateKey: string, genericKey: string): string => (
       summary
@@ -1686,6 +1822,94 @@ const isSkillInstructionPath = (value: string | null): boolean => (
   value !== null && /(^|[\\/])skills[\\/]/i.test(value)
 );
 
+/** The built-in web search, or an MCP search tool such as `tavily__tavily_search`. */
+const isWebSearchToolName = (toolName: string | undefined): boolean => {
+  if (!toolName) return false;
+  if (WEB_SEARCH_TOOL_NAMES.has(normalizeToolName(toolName))) return true;
+  return isMcpToolName(toolName) && normalizeToolName(getMcpToolActionName(toolName)).includes('search');
+};
+
+const SEARCH_QUERY_INPUT_KEYS = ['query', 'q', 'searchQuery', 'keyword', 'keywords'];
+const ACTIVITY_TARGET_MAX_CHARS = 40;
+
+const getWebSearchQuery = (
+  toolName: string | undefined,
+  toolInput: Record<string, unknown> | undefined,
+): string | null => {
+  if (!toolInput || !isWebSearchToolName(toolName)) return null;
+  const query = getToolInputString(toolInput, SEARCH_QUERY_INPUT_KEYS);
+  return query ? truncatePreview(query.replace(/\s+/g, ' ').trim(), ACTIVITY_TARGET_MAX_CHARS) : null;
+};
+
+const getWebFetchHost = (toolInput: Record<string, unknown> | undefined): string | null => {
+  const url = toolInput ? getToolInputString(toolInput, ['url']) : null;
+  if (!url) return null;
+  try {
+    return new URL(url.trim()).host || null;
+  } catch {
+    return truncatePreview(url.trim(), ACTIVITY_TARGET_MAX_CHARS);
+  }
+};
+
+/** Images a view-image call looks at: OpenClaw's view_image takes `paths`, older tools one path. */
+const getViewedImagePaths = (toolInput: Record<string, unknown> | undefined): string[] => {
+  if (!toolInput) return [];
+  if (Array.isArray(toolInput.paths)) {
+    return toolInput.paths.filter((path): path is string => typeof path === 'string' && path.trim() !== '');
+  }
+  const path = getToolInputString(toolInput, ['path', 'file_path', 'filePath', 'url']);
+  return path ? [path] : [];
+};
+
+/**
+ * Wording for steps whose generic "使用了 <tool>" line would hide what they
+ * did: plan updates, checks on a background command, web searches and
+ * fetches, image views. Present tense while the step runs, past tense once
+ * it is done; null for every other step.
+ */
+const getDescriptiveStepLabel = (group: ToolGroupItem, isLive: boolean): string | null => {
+  const rawName = group.toolUse.metadata?.toolName;
+  const toolName = typeof rawName === 'string' ? rawName : undefined;
+  if (!toolName) return null;
+  const normalized = normalizeToolName(toolName);
+  const toolInput = group.toolUse.metadata?.toolInput;
+  const pick = (liveKey: string, doneKey: string): string => i18nService.t(isLive ? liveKey : doneKey);
+
+  if (isPlanToolName(toolName)) {
+    const plan = isLive ? null : parseActivityPlan(toolName, toolInput);
+    if (!plan || plan.steps.length === 0) return pick('coworkActivityStatusTodo', 'coworkActivityDonePlan');
+    const doneCount = plan.steps.filter((step) => step.status === 'completed').length;
+    return i18nService.t('coworkActivityDonePlanProgress')
+      .replace('{done}', String(doneCount))
+      .replace('{total}', String(plan.steps.length));
+  }
+  if (normalized === 'process') {
+    return isProcessOutputCheck(group)
+      ? pick('coworkActivityStatusCommandOutput', 'coworkActivityDoneProcessOutput')
+      : pick('coworkActivityLiveProcess', 'coworkActivityDoneProcess');
+  }
+  const query = getWebSearchQuery(toolName, toolInput);
+  if (query) {
+    return pick('coworkActivityLiveSearch', 'coworkActivityDoneSearch').replace('{target}', query);
+  }
+  if (WEB_FETCH_TOOL_NAMES.has(normalized)) {
+    const host = getWebFetchHost(toolInput);
+    return host
+      ? pick('coworkActivityLiveWebFetch', 'coworkActivityDoneWebFetch').replace('{target}', host)
+      : pick('coworkActivityLiveWebFetchGeneric', 'coworkActivityDoneWebFetchGeneric');
+  }
+  if (IMAGE_VIEW_TOOL_NAMES.has(normalized)) {
+    const paths = getViewedImagePaths(toolInput);
+    if (paths.length > 1) {
+      return pick('coworkActivityLiveViewImages', 'coworkActivityDoneViewImages').replace('{count}', String(paths.length));
+    }
+    return paths.length === 1
+      ? pick('coworkActivityLiveViewImage', 'coworkActivityDoneViewImage').replace('{target}', getFileBasename(paths[0]))
+      : pick('coworkActivityLiveViewImageGeneric', 'coworkActivityDoneViewImageGeneric');
+  }
+  return null;
+};
+
 /**
  * Short phrase for the status line describing what the running step is
  * doing right now ("Running a command", "Reading skill instructions").
@@ -1728,11 +1952,11 @@ export const getActivityLiveStatusText = (item: ConsolidatedItem): string => {
   if (WRITE_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusWriting');
   if (EDIT_ONLY_TOOL_NAMES.has(normalized) || normalized === 'applypatch') return i18nService.t('coworkActivityStatusEditing');
   if (FILE_SEARCH_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusSearchingFiles');
-  if (WEB_SEARCH_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusSearchingWeb');
+  if (isWebSearchToolName(toolName)) return i18nService.t('coworkActivityStatusSearchingWeb');
   if (WEB_FETCH_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusFetchingWeb');
   if (BROWSER_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusBrowser');
   if (MEMORY_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusMemory');
-  if (isTodoWriteToolName(toolName)) return i18nService.t('coworkActivityStatusTodo');
+  if (isPlanToolName(toolName)) return i18nService.t('coworkActivityStatusTodo');
   if (ASK_USER_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusAsking');
   if (isCronToolName(toolName)) return i18nService.t('coworkActivityStatusCron');
   if (normalized === 'sessionsspawn') return i18nService.t('coworkActivityLiveSpawnSubagent');
@@ -1759,7 +1983,7 @@ export const getActivityStepKind = (item: ConsolidatedItem): ActivityStepKind =>
   if (EDIT_TOOL_NAMES.has(normalized) || normalized === 'applypatch') return ActivityStepKind.Edit;
   if (FILE_SEARCH_TOOL_NAMES.has(normalized) || MEMORY_TOOL_NAMES.has(normalized)) return ActivityStepKind.Search;
   if (
-    WEB_SEARCH_TOOL_NAMES.has(normalized)
+    isWebSearchToolName(toolName)
     || WEB_FETCH_TOOL_NAMES.has(normalized)
     || BROWSER_TOOL_NAMES.has(normalized)
   ) {
@@ -1767,7 +1991,7 @@ export const getActivityStepKind = (item: ConsolidatedItem): ActivityStepKind =>
   }
   if (MEDIA_GENERATE_TOOL_NAMES.has(normalized) || IMAGE_VIEW_TOOL_NAMES.has(normalized)) return ActivityStepKind.Media;
   if (SUBAGENT_TOOL_NAMES.has(normalized)) return ActivityStepKind.Agent;
-  if (isTodoWriteToolName(toolName)) return ActivityStepKind.Todo;
+  if (isPlanToolName(toolName)) return ActivityStepKind.Todo;
   if (isCronToolName(toolName)) return ActivityStepKind.Schedule;
   return ActivityStepKind.Tool;
 };
@@ -1778,7 +2002,11 @@ export const getActivityStepKind = (item: ConsolidatedItem): ActivityStepKind =>
  * orders them), else the first other tool step's kind.
  */
 export const getActivityGroupStepKind = (items: ConsolidatedItem[]): ActivityStepKind => {
-  const kinds = items.map(getActivityStepKind);
+  // Plan updates and output checks lead only a run that has nothing else,
+  // matching getActivityGroupHeaderLabel, which does not count them.
+  const workItems = items.filter((item) => !isAuxiliaryActivityStep(item));
+  const kinds = (workItems.some((item) => item.type !== 'assistant') ? workItems : items)
+    .map(getActivityStepKind);
   const leadKind = [ActivityStepKind.Command, ActivityStepKind.Read, ActivityStepKind.Edit]
     .find((kind) => kinds.includes(kind));
   return leadKind ?? kinds.find((kind) => kind !== ActivityStepKind.Thinking) ?? ActivityStepKind.Thinking;
@@ -1812,6 +2040,8 @@ export const getActivityStepDoneLabel = (item: ConsolidatedItem): string => {
     return getShellCommandDescription(toolName, toolInput)
       ?? i18nService.t('coworkActivityDoneCommandGeneric');
   }
+  const descriptiveLabel = getDescriptiveStepLabel(item.group, false);
+  if (descriptiveLabel) return descriptiveLabel;
   const { summary } = getToolStepDisplay(toolName, toolInput);
   const verb = (templateKey: string, genericKey: string): string => (
     summary
