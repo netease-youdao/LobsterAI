@@ -74,6 +74,10 @@ const GATEWAY_BOOT_TIMEOUT_MS = 300 * 1000;
 const STARTUP_PREREQUISITE_TIMEOUT_MS = 20 * 1000;
 const GATEWAY_MAX_RESTART_ATTEMPTS = 5;
 const GATEWAY_RESTART_DELAYS = [3_000, 5_000, 10_000, 20_000, 30_000];
+// A gateway must stay healthy this long before its automatic restart budget is
+// refilled. Resetting on the first healthy probe lets a gateway that crashes
+// shortly after startup restart forever without ever reaching the limit.
+const GATEWAY_RESTART_BUDGET_RESET_MS = 60_000;
 // How long a gateway-initiated restart (SIGUSR1 in-process restart after a
 // config change) is trusted to complete before LobsterAI resumes managing the
 // process itself.
@@ -400,6 +404,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private gatewayRestartTimer: NodeJS.Timeout | null = null;
   private gatewayRestartWait: { promise: Promise<boolean>; resolve: (retry: boolean) => void } | null = null;
   private gatewayRestartAttempt = 0;
+  private gatewayRestartBudgetResetTimer: NodeJS.Timeout | null = null;
   private gatewayLifecycleGeneration = 0;
   private gatewayMaintenanceActive = false;
   private gatewayStartupBlock: OpenClawEngineStatus | null = null;
@@ -1274,8 +1279,7 @@ export class OpenClawEngineManager extends EventEmitter {
     console.log(`[OpenClaw] startup summary: prep=${startupPrep.skip ? 'skipped' : 'ran'}`
       + ` checkpoint=${describeStartupMigrationCheckpoint(checkpointBeforeSpawn, readStartupMigrationCheckpointStamp(this.stateDir))}`
       + ` total=${elapsed()}`);
-    // Reset restart counter on successful start — gateway is healthy
-    this.gatewayRestartAttempt = 0;
+    this.scheduleGatewayRestartBudgetReset(child);
     this.clearScheduledGatewayRestart();
     this.setStatus({
       phase: 'running',
@@ -1312,6 +1316,7 @@ export class OpenClawEngineManager extends EventEmitter {
     this.clearGatewaySelfRestart();
 
     this.clearScheduledGatewayRestart();
+    this.clearGatewayRestartBudgetReset();
 
     if (this.gatewayProcess) {
       console.log('[OpenClaw] stopping gateway process...');
@@ -2299,6 +2304,8 @@ export class OpenClawEngineManager extends EventEmitter {
       const wasCurrentProcess = this.gatewayProcess === child;
       if (wasCurrentProcess) {
         this.gatewayProcess = null;
+        // A crash inside the stability window must keep consuming the budget.
+        this.clearGatewayRestartBudgetReset();
         // A self-restart never exits the process; if it exited anyway the
         // self-restart failed and normal crash handling owns recovery.
         this.clearGatewaySelfRestart();
@@ -2455,6 +2462,25 @@ export class OpenClawEngineManager extends EventEmitter {
         this.setExternalError(error instanceof Error ? error.message : 'OpenClaw gateway restart failed.');
       });
     }, delay);
+  }
+
+  private scheduleGatewayRestartBudgetReset(child: GatewayProcess): void {
+    this.clearGatewayRestartBudgetReset();
+    this.gatewayRestartBudgetResetTimer = setTimeout(() => {
+      this.gatewayRestartBudgetResetTimer = null;
+      if (this.gatewayProcess !== child) return;
+      if (this.gatewayRestartAttempt > 0) {
+        console.log(`${gwDiagTs()} gateway stable for ${GATEWAY_RESTART_BUDGET_RESET_MS}ms, resetting restart attempt counter`);
+      }
+      this.gatewayRestartAttempt = 0;
+    }, GATEWAY_RESTART_BUDGET_RESET_MS);
+  }
+
+  private clearGatewayRestartBudgetReset(): void {
+    if (this.gatewayRestartBudgetResetTimer) {
+      clearTimeout(this.gatewayRestartBudgetResetTimer);
+      this.gatewayRestartBudgetResetTimer = null;
+    }
   }
 
   private clearScheduledGatewayRestart(): void {
