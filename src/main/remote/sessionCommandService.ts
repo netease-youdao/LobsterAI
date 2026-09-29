@@ -361,7 +361,12 @@ export class SessionCommandService {
       if (!command.runId) throw new Error('Server run mapping is required');
       runId = this.store.remote.beginRun(localId, command.runId, command.commandId).runId;
     }
-    if (['cancel_run', 'approval_response', RemoteQuestion.Command].includes(command.type) && payload.runId !== runId) throw new Error('Run changed');
+    if (command.type === 'cancel_run' && payload.runId !== runId) {
+      const previous = this.store.remote.get<{ runId: string; status: string }>(`runHistory:${localId}:${payload.runId}`);
+      if (!previous || previous.runId !== payload.runId || !terminal.has(previous.status)) throw new Error('Run changed');
+      runId = previous.runId;
+    }
+    if (['approval_response', RemoteQuestion.Command].includes(command.type) && payload.runId !== runId) throw new Error('Run changed');
     return { localSessionId: localId, remoteSessionId: this.store.remote.sync(localId)!.session_id, runId };
   }
   async execute(entry: InboxEntry, stillPermitted: () => boolean = () => false): Promise<any> {
@@ -457,7 +462,11 @@ export class SessionCommandService {
       if (entry.command.type === 'send_message') return this.continueHandler!({ prompt: payload.text, sessionId: localId });
       if (entry.command.type === 'cancel_run') {
         const currentRun = this.store.remote.run(localId);
-        if (!currentRun || currentRun.runId !== entry.runId) return { success: true, alreadyTerminal: true };
+        if (!currentRun || currentRun.runId !== entry.runId) {
+          const previous = this.store.remote.get<{ runId: string; status: string }>(`runHistory:${localId}:${entry.runId}`);
+          if (previous?.runId === entry.runId && terminal.has(previous.status)) return { success: true, alreadyTerminal: true };
+          throw new Error('Run evidence unavailable');
+        }
         if (terminal.has(currentRun.status)) return { success: true, alreadyTerminal: true };
         if (!this.runtime.cancelSessionConfirmed) throw new Error('Cancellation unavailable');
         assertRemoteExecutionPermit();

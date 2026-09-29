@@ -129,6 +129,17 @@ function fixture() {
 }
 
 describe('delivered files require live preparation and current successful-run evidence', () => {
+  test('optional preparation never waits for a stuck directory scan or publishes unverified output', async () => {
+    const f = fixture();
+    vi.spyOn(fs.promises,'lstat').mockImplementation(() => new Promise<fs.Stats>(() => {}));
+    f.sync.startPreparation('s',[f.workspace,f.desktop],owner,() => true);
+    // The engine can immediately finish its run even though optional directory IO never returns.
+    f.write(); f.finish(); await f.collect();
+    expect(f.store.run('s')?.status).toBe('succeeded'); expect(f.recordArtifact).not.toHaveBeenCalled();
+    await new Promise(resolve => setTimeout(resolve,100));
+    await f.collect(); expect(f.accept).not.toHaveBeenCalled();
+  });
+
   test.each([false, true])('accepts a new or overwritten explicit deliverable (overwrite=%s)', async overwrite => {
     const f = fixture();
     if (overwrite) f.write('Old content');

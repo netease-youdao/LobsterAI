@@ -33,6 +33,27 @@ function message(store: RemoteStore, content: string): void {
 afterEach(() => { for (const db of databases.splice(0)) if (db.open) db.close(); for (const dir of directories.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
 describe('durable ownership and synchronization', () => {
+  it('reads core remote identity without decoding damaged history or exposing its watermarks', () => {
+    const store = fixture(); create(store, 's');
+    store.db.prepare("INSERT INTO remote_projection VALUES ('s','bad','hash',1,'{')").run();
+    store.db.prepare("INSERT INTO remote_outbox VALUES ('s',1,'{')").run();
+    const binding = store.controlBinding('s')!;
+    expect(binding.session_id).toBe(store.sync('s')!.session_id);
+    expect(binding).not.toHaveProperty('source_seq'); expect(binding).not.toHaveProperty('ack_seq');
+    expect(store.controlBindings(owner)).toEqual([binding]);
+    expect(store.controlBindings(other)).toEqual([]);
+    expect(store.isIndependentControlReady('s')).toBe(false);
+    store.setIndependentControlReady(id => id === 's'); expect(store.isIndependentControlReady('s')).toBe(true);
+    store.setIndependentControlReady(() => { throw new Error('control ledger unavailable'); });
+    expect(store.isIndependentControlReady('s')).toBe(false);
+  });
+  it('pages core bindings fairly while allowing a bounded recent-task priority view', () => {
+    const store = fixture(); create(store,'a'); create(store,'b'); create(store,'c');
+    store.transaction(() => store.db.prepare("UPDATE cowork_sessions SET updated_at=3 WHERE id='c'").run());
+    expect(store.controlBindings(owner,1,1).map(row => row.local_id)).toEqual(['b']);
+    expect(store.controlBindings(owner,1,0,'recent').map(row => row.local_id)).toEqual(['c']);
+    expect(store.controlBindings(other,32,0,'recent')).toEqual([]);
+  });
   it('records ownership while remote is off and never adopts unowned history', () => {
     const store = fixture(); create(store, 'legacy', false); create(store, 's');
     store.setEnabledOwner(owner);

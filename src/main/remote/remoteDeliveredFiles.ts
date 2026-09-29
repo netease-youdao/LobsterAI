@@ -29,18 +29,19 @@ export interface DeliveryBaseline {
 }
 
 /** Only complete, stable directory scans may establish that an output did not exist. */
-export async function captureDeliveryBaseline(roots: string[], current: () => boolean): Promise<DeliveryBaseline> {
+export async function captureDeliveryBaseline(roots: string[], current: () => boolean, observedBefore?: number): Promise<DeliveryBaseline> {
   const directories: DeliveryDirectory[] = [];
   const deadline = performance.now() + BASELINE_BUDGET_MS;
   let accepting = true;
   const active = (): boolean => accepting && performance.now() < deadline && permitted(current);
+  const predatesDispatch = (stat: fs.Stats): boolean => observedBefore === undefined || stat.mtimeMs <= observedBefore && stat.ctimeMs <= observedBefore;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const scan = async (): Promise<void> => {
     for (const root of new Set(roots.slice(0, MAX_ROOTS).filter(value => path.isAbsolute(value)).map(value => path.resolve(value)))) {
       if (!active()) break;
       try {
         const before = await fs.promises.lstat(root);
-        if (!active() || !before.isDirectory() || before.isSymbolicLink()) continue;
+        if (!active() || !before.isDirectory() || before.isSymbolicLink() || !predatesDispatch(before)) continue;
         if (await fs.promises.realpath(root) !== root || !active()) continue;
         const files: Record<string, string | null> = Object.create(null);
         const directory = await fs.promises.opendir(root, { bufferSize: 32 });
@@ -50,12 +51,12 @@ export async function captureDeliveryBaseline(roots: string[], current: () => bo
           if (!active() || ++count > MAX_DIRECTORY_ENTRIES) { complete = false; break; }
           if (remoteFileLocalLimit(entry.name, true) === null) continue;
           const stat = await fs.promises.lstat(path.join(root, entry.name));
-          if (!active()) { complete = false; break; }
+          if (!active() || !predatesDispatch(stat)) { complete = false; break; }
           files[entry.name] = stat.isFile() && !stat.isSymbolicLink() ? fileIdentity(stat) : null;
         }
         if (!complete || !active()) continue;
         const after = await fs.promises.lstat(root);
-        if (!active() || !after.isDirectory() || after.isSymbolicLink()
+        if (!active() || !after.isDirectory() || after.isSymbolicLink() || !predatesDispatch(after)
           || fileIdentity(before) !== fileIdentity(after) || await fs.promises.realpath(root) !== root || !active()) continue;
         directories.push({ path: root, identity: directoryIdentity(after), files });
       } catch { /* Missing, inaccessible, or changing directories provide no discovery authority. */ }

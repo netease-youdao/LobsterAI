@@ -87,6 +87,17 @@ describe('remote background polling', () => {
     expect(count('/input-preparations/claim')).toBe(2);
     expect(count('/commands/claim')).toBe(3);
   });
+  it('continues claiming commands while optional input model publication is stalled', async () => {
+    const { bridge,count } = await fixture();
+    let release!: () => void;
+    bridge.deps.input.models.publish.mockImplementation(() => new Promise<void>(resolve => { release=resolve; }));
+    bridge.lastInputPublish = 0;
+    bridge.schedule(0); await vi.advanceTimersByTimeAsync(1);
+    const before = count('/commands/claim');
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(count('/commands/claim')).toBe(before + 1);
+    release(); await vi.advanceTimersByTimeAsync(0);
+  });
   it('synchronizes reply changes promptly without polling every command queue', async () => {
     const { bridge, count, sync } = await fixture();
     for (let i = 0; i < 20; i++) {

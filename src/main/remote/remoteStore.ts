@@ -11,8 +11,10 @@ import { RemoteRetention } from '../../shared/remote/retention';
 import { payloadHash, remoteError, sameOwner, stableJson } from './canonical';
 import type { DesktopInputRun } from './desktopInputMetadata';
 import { remoteArtifactReasons } from './remoteArtifactProjection';
+import { initializeAvailabilitySource, markAvailabilityControl, touchAvailabilityControl } from './remoteAvailabilitySource';
 import { RemoteDatabaseHealth } from './remoteDatabaseHealth';
 import { samePersistedRemoteEnvironment } from './remoteEnvironmentMigration';
+import { RemoteHistoryStore } from './remoteHistoryStore';
 import { acknowledgeRemoteSessionDeletion } from './remoteLocalGc';
 import { RemoteProjectionCoordinator } from './remoteProjectionCoordinator';
 import type { ProjectionWork } from './remoteProjectionWorker';
@@ -24,7 +26,10 @@ import { RemoteTaskDataError } from './remoteTaskSyncState';
 
 export interface ProjectionRecord { eventType: string; payload: Record<string, any> }
 export interface RemoteEvent extends ProjectionRecord { eventId: string; sourceSeq: string; occurredAt: string }
-export interface SyncRow {
+export interface CoreRemoteBinding {
+  local_id: string; session_id: string; device_id: string; sync_environment: string | null; migration_frozen: number;
+}
+export interface SyncRow extends CoreRemoteBinding {
   local_id: string; session_id: string; device_id: string; source_seq: number; ack_seq: number;
   server_seq: string; needs_snapshot: number;
   sync_environment: string | null; sync_protocol_version: number; stream_epoch: string | null; source_purge_seq: string; event_purge_seq: string; migration_frozen: number;
@@ -59,7 +64,13 @@ const desktopInputReason = (job: { reason?: unknown; snapshot?: unknown }, captu
 
 /** Native SQLite transactions commit synchronously; no deferred persistence is allowed here. */
 export class RemoteStore {
+  readonly history: RemoteHistoryStore;
   private controlAdmission: (() => boolean) | null = null;
+  private independentControlReady: ((sessionId: string) => boolean) | null = null;
+  setIndependentControlReady(check: (sessionId: string) => boolean): void { this.independentControlReady = check; }
+  isIndependentControlReady(sessionId: string): boolean {
+    try { return this.independentControlReady?.(sessionId) ?? false; } catch { return false; }
+  }
   private taskAdmission: ((id: string) => boolean) | null = null;
   private taskProjectionEligibility: ((id: string) => boolean) | null = null;
   private projectionCandidateOffset = 0;
@@ -69,7 +80,7 @@ export class RemoteStore {
   isTaskAdmitted(id: string): boolean { try { return this.taskAdmission?.(id) ?? true; } catch { return false; } }
   setTaskProjectionEligibility(check: (id: string) => boolean): void { this.taskProjectionEligibility = check; }
   private canProjectTask(id: string): boolean {
-    try { return this.isTaskAdmitted(id) && (this.taskProjectionEligibility?.(id) ?? true); } catch { return false; }
+    try { return !this.hasIndependentHistoryFence(id) && this.isTaskAdmitted(id) && (this.taskProjectionEligibility?.(id) ?? true); } catch { return false; }
   }
   private securityRecoveryRequired = false;
   private ownershipSigner: ((sessionId: string, userId: string, scopeKey: string, operationId: string) => string) | null = null;
@@ -112,6 +123,8 @@ export class RemoteStore {
   private readonly projector: RemoteProjectionCoordinator | null;
   private readonly projectionTargetContexts = new WeakMap<ProjectionWork, string>();
   constructor(readonly db: Database.Database, private readonly options: { deferredProjection?: boolean; restoreRuns?: boolean; projectionWorkerPath?: string } = {}) {
+    this.history = new RemoteHistoryStore(this);
+    RemoteHistoryStore.initializeCore(db);
     this.databaseHealth = options.deferredProjection && db.name !== ':memory:' && options.restoreRuns !== false ? new RemoteDatabaseHealth(db.name) : null;
     this.projector = options.deferredProjection && options.restoreRuns !== false ? new RemoteProjectionCoordinator(this, options.projectionWorkerPath) : null;
     // Set outside transactions. FULL makes inbox receipts/outbox ACK cleanup durable at COMMIT.
@@ -154,6 +167,7 @@ export class RemoteStore {
       source_purge_seq: "TEXT NOT NULL DEFAULT '0'", event_purge_seq: "TEXT NOT NULL DEFAULT '0'", migration_frozen: 'INTEGER NOT NULL DEFAULT 0' })) {
       if (!syncColumns.has(name)) db.exec(`ALTER TABLE remote_sync ADD COLUMN ${name} ${declaration}`);
     }
+    initializeAvailabilitySource(db);
     this.replyProjectionSupported = this.get<boolean>('replyProjectionMode') === true;
     this.questionProjectionSupported = this.get<boolean>('questionProjectionMode:default') === true;
     // Replace persisted dirty triggers; explicit UPSERT is not overridden by an outer UPSERT
@@ -328,7 +342,7 @@ export class RemoteStore {
   }
   projectionWorkCurrent(work: ProjectionWork): boolean {
     return (!this.projectionTargetContexts.has(work) || this.projectionTargetContexts.get(work) === stableJson(activeRemoteSyncTargetContext(this, work.owner)))
-      && !this.isSyncClosed(work.sessionId) && sameOwner(work.owner, this.enabledOwner) && sameOwner(this.owner(work.sessionId), work.owner)
+      && this.canProjectTask(work.sessionId) && !this.isSyncClosed(work.sessionId) && sameOwner(work.owner, this.enabledOwner) && sameOwner(this.owner(work.sessionId), work.owner)
       && work.approval === this.approvalProjectionSupported && work.questions === this.questionProjectionSupported && work.input === this.inputProjectionSupported
       && work.files === this.fileProjectionSupported && work.reply === this.replyProjectionSupported && (work.deletions === true) === this.deletionProjectionSupported
       && work.deviceId === (this.projectionIdentity?.deviceId || this.sync(work.sessionId)?.device_id)
@@ -546,6 +560,10 @@ export class RemoteStore {
     this.inputProjectionSupported = supported;
     for (const { session_id } of this.projectionSessions()) this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(session_id);
   }
+  currentAgentSummary(sessionId: string): RemoteAgentSummary | null {
+    const owner = this.owner(sessionId);
+    return owner && this.agentSummary ? this.agentSummary(sessionId, owner) : null;
+  }
   inputVersion(sessionId: string): string {
     const row = this.db.prepare('SELECT model_override,thinking_level FROM cowork_sessions WHERE id=?').get(sessionId);
     if (!row) return '0';
@@ -572,13 +590,21 @@ export class RemoteStore {
     }
   }
   put(key: string, value: unknown): void {
-    const parts = key.split(':');
-    if (parts[1] && ['deletionGuard', 'run', 'runHistory', 'control', 'approval', 'question', 'localApprovalBlocker', 'inputModel', 'inputVersion', 'inputSignature'].includes(parts[0])) this.touchProjection(parts[1]);
     if (this.depth === 0 && this.advanceCheckpoint) { this.transaction(() => this.put(key, value)); return; }
+    const parts = key.split(':');
+    if (parts[1] && ['deletionGuard', 'run', 'runHistory', 'control', 'approval', 'question', 'localApprovalBlocker', 'inputModel', 'inputVersion', 'inputSignature'].includes(parts[0])) {
+      this.touchProjection(parts[1]); touchAvailabilityControl(this.db, parts[1]);
+    }
     this.db.prepare('INSERT INTO remote_state VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, stableJson(value));
+    if (parts[1] && ['run', 'runHistory', 'approval', 'question'].includes(parts[0])) {
+      const object = value as Record<string, any>;
+      const type = ['run', 'runHistory'].includes(parts[0]) ? 'run.updated' : `${parts[0]}.updated`;
+      const id = object.runId && type === 'run.updated' ? object.runId : object.approvalId || object.questionId;
+      if (id) markAvailabilityControl(this.db, parts[1], `${type}:${id}`);
+    }
     if (parts[0] === 'questionDecision') {
       const sessionId = (value as { state?: { sessionId?: string } }).state?.sessionId;
-      if (sessionId) { this.touchProjection(sessionId); this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId); }
+      if (sessionId) { this.touchProjection(sessionId); touchAvailabilityControl(this.db, sessionId); this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId); }
     }
   }
   remove(key: string): void { this.db.prepare('DELETE FROM remote_state WHERE key=?').run(key); }
@@ -689,6 +715,29 @@ export class RemoteStore {
       this.db.prepare("UPDATE cowork_session_ownership SET ownership_status='quarantined'").run();
       this.db.prepare('DELETE FROM remote_outbox').run();
     })();
+  }
+  /** A copied history archive never becomes a live legacy writer after a cache or control-ledger restart. */
+  hasIndependentHistoryFence(sessionId: string): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM remote_history_migrations h JOIN remote_sync s ON s.local_id=h.local_id
+      WHERE h.local_id=? AND json_extract(h.manifest_json,'$.context.sessionId')=s.session_id
+      AND json_extract(h.manifest_json,'$.legacy.sync_environment') IS s.sync_environment LIMIT 1`).get(sessionId);
+  }
+  private requireLegacyHistoryWriter(sessionId: string): void {
+    if (this.hasIndependentHistoryFence(sessionId)) throw new RemoteTaskDataError('REMOTE_LEGACY_WRITER_FENCED');
+  }
+  /** Atomic execution identity; this accessor never opens or decodes a history projection. */
+  controlBinding(sessionId: string): CoreRemoteBinding | null {
+    return this.db.prepare('SELECT local_id,session_id,device_id,sync_environment,migration_frozen FROM remote_sync WHERE local_id=?')
+      .get(sessionId) as CoreRemoteBinding || null;
+  }
+  controlBindings(owner: RemoteOwner, limit?: number, offset = 0, order: 'identity' | 'recent' = 'identity'): CoreRemoteBinding[] {
+    const bounded = limit !== undefined;
+    const size = Number.isSafeInteger(limit) ? Math.min(128,Math.max(1,limit!)) : 32;
+    const skip = Number.isSafeInteger(offset) ? Math.max(0,offset) : 0;
+    return this.db.prepare(`SELECT s.local_id,s.session_id,s.device_id,s.sync_environment,s.migration_frozen FROM remote_sync s
+      JOIN cowork_session_ownership o ON o.session_id=s.local_id ${order === 'recent' ? 'JOIN cowork_sessions c ON c.id=s.local_id' : ''}
+      WHERE o.owner_user_id=? AND o.owner_scope_key=? AND o.ownership_status='confirmed' ORDER BY ${order === 'recent' ? 'c.updated_at DESC,' : ''} s.local_id ${bounded ? 'LIMIT ? OFFSET ?' : ''}`)
+      .all(owner.userId, owner.scopeKey,...(bounded ? [size,skip] : [])) as CoreRemoteBinding[];
   }
   sync(sessionId: string): SyncRow | null { return this.db.prepare('SELECT * FROM remote_sync WHERE local_id=?').get(sessionId) as SyncRow || null; }
   sessions(owner: RemoteOwner): SyncRow[] {
@@ -1107,6 +1156,7 @@ export class RemoteStore {
     }
   }
   snapshot(sessionId: string): { baseSourceSeq: string; snapshotEpoch: number; records: ProjectionRecord[] } {
+    this.requireLegacyHistoryWriter(sessionId);
     return this.transaction(() => {
       if (this.projectionPublishing(sessionId)) throw new Error('REMOTE_PROJECTION_PUBLISHING');
       if (!this.options.deferredProjection) this.project(sessionId);
@@ -1117,6 +1167,7 @@ export class RemoteStore {
     });
   }
   pending(sessionId: string): RemoteEvent[] {
+    if (this.hasIndependentHistoryFence(sessionId)) return [];
     if (this.projectionPublishing(sessionId)) return [];
     const rows = this.db.prepare('SELECT event_json FROM remote_outbox WHERE session_id=? ORDER BY source_seq LIMIT 100').all(sessionId) as any[];
     const result: RemoteEvent[] = [];
@@ -1137,6 +1188,7 @@ export class RemoteStore {
     this.db.prepare('UPDATE remote_sync SET migration_frozen=0 WHERE local_id=?').run(sessionId);
   }
   applyRetentionAck(sessionId: string, result: { syncProtocolVersion: number; streamEpoch: string; sourcePurgeSeq: string; eventPurgeSeq: string }, activating = false): void {
+    this.requireLegacyHistoryWriter(sessionId);
     const row = this.sync(sessionId);
     if (!row || result.syncProtocolVersion !== RemoteRetention.Version || !result.streamEpoch
       || (!activating && (row.sync_protocol_version !== RemoteRetention.Version || row.stream_epoch !== result.streamEpoch))
@@ -1149,6 +1201,7 @@ export class RemoteStore {
         String(eventFloor > retentionSequence(row.event_purge_seq) ? eventFloor : retentionSequence(row.event_purge_seq)), sessionId);
   }
   acknowledge(sessionId: string, deviceId: string, remoteId: string, committedSourceSeq: string, committedSeq: string, snapshot = false, snapshotEpoch?: number): void {
+    this.requireLegacyHistoryWriter(sessionId);
     this.transaction(() => {
       const row = this.sync(sessionId);
       const ack = BigInt(safeSourceSequence(committedSourceSeq));

@@ -23,6 +23,7 @@ import type { InputPreparationService } from './inputPreparationService';
 import type { RemoteIdentity } from './installationIdentity';
 import { type AgentWorkspace,RemoteAgentCatalog, RemoteAgentError } from './remoteAgentCatalog';
 import { approvalCommandError, RemoteApprovalError } from './remoteApproval';
+import { RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
 import { RemoteConnectionClient } from './remoteConnectionClient';
 import { remoteDiagnostics } from './remoteDiagnostics';
 import { RemoteFileSync, type RemoteFileSyncDependencies } from './remoteFileSync';
@@ -94,6 +95,7 @@ const COMMAND_IDLE_POLL_MS = 30000;
 const ACTIVE_POLL_MS = 5000;
 const CATALOG_RECHECK_MS = 300000;
 export class RemoteBridge {
+  private readonly availability: RemoteAvailabilityPublisher;
   private readonly deletions: RemoteSessionDeletionClient | null;
   private deletionSupported = false;
   private deletionAvailable = false;
@@ -172,6 +174,7 @@ export class RemoteBridge {
   private inputCapabilities: string[] = [];
   private lastInputPublish = 0;
   private inputWork: Promise<void> | null = null;
+  private optionalPublishWork: Promise<void> | null = null;
   private commandPollAt = 0;
   private commandRetryAt = 0;
   private inputPollAt = 0;
@@ -194,11 +197,25 @@ export class RemoteBridge {
     this.accountRoute = deps.getApiBaseUrl();
     this.targets = new RemoteSyncTargetStore(deps.store);
     this.taskSync = new RemoteTaskSyncState(deps.store.db);
+    this.availability = new RemoteAvailabilityPublisher({
+      store: deps.store,
+      context: () => this.owner && this.targetId && this.registration && this.settings().enabled && !this.stopped
+        && !this.syncPaused() && !deps.store.needsSecurityRecovery() ? {
+        environment: this.remoteEnvironment(), scope: `${this.targetId}:${this.owner.userId}:${this.owner.scopeKey}:${this.registration.deviceId}`,
+        owner: this.owner, deviceId: this.registration.deviceId, generation: this.generation || '',
+        historySupported: this.capabilitySnapshot?.capabilities?.includes('sync_recovery_v3') === true,
+        supported: !!this.generation && !!this.registration.syncTarget
+          && ['control_facts_v1', 'live_projections_v3'].every(value => this.capabilitySnapshot?.capabilities?.includes(value)),
+      } : null,
+      admitted: id => this.sessionAdmitted(id),
+      request: (path, method, body, version, timeoutMs) => this.api(path, method, body, true, version, undefined, timeoutMs),
+    });
+    deps.store.setIndependentControlReady(sessionId => this.availability.controlReady(sessionId));
     deps.store.setTaskAdmission(sessionId => this.sessionAdmitted(sessionId));
     deps.store.setControlAdmission(() => !this.targetId || !!this.owner && !this.targets.controlAdmissionBlocked(this.owner, this.targetId));
     deps.store.setTaskProjectionEligibility(sessionId => {
       const context = this.taskContext();
-      return !context || this.taskSync.eligible(context, sessionId);
+      return !this.availability.ownsHistory(sessionId) && (!context || this.taskSync.eligible(context, sessionId));
     });
     this.importSnapshots = new RemoteImportSnapshots(deps.store);
     this.deletions = deps.deletion ? new RemoteSessionDeletionClient({ ...deps.deletion, store: deps.store, security: deps.security,
@@ -245,7 +262,7 @@ export class RemoteBridge {
         return response;
       } }) : null;
     this.ownershipAssociations = new OwnershipAssociationStore(deps.store);
-    deps.store.setWake((urgent?: boolean) => this.schedule(urgent ? 0 : this.replySupported ? REMOTE_REPLY_SYNC_DELAY_MS : 1000));
+    deps.store.setWake((urgent?: boolean) => { this.availability.wake(); this.schedule(urgent ? 0 : this.replySupported ? REMOTE_REPLY_SYNC_DELAY_MS : 1000); });
     this.agentCatalog = deps.agentOwnership && deps.getAgentWorkspace ? new RemoteAgentCatalog(deps.store, deps.agentOwnership, deps.getAgentWorkspace,
       (owner, deviceId, agentId) => this.inputCapabilities.includes(RemoteInputCapability.Schema) ? deps.getAgentDefaultInput?.(owner, deviceId, agentId) : undefined,
       () => this.getSyncTargetId()) : null;
@@ -257,7 +274,7 @@ export class RemoteBridge {
       remoteDiagnostics.gauge('pendingSessions', health?.pendingSessions ?? null);
       remoteDiagnostics.gauge('oldestPendingAgeMs', health?.oldestPendingAt ? Math.max(0, Date.now() - Date.parse(health.oldestPendingAt)) : null);
     });
-    this.stopped = false; this.deps.input?.preparations.startCleanup?.(); this.accountChanged();
+    this.stopped = false; this.availability.start(); this.deps.input?.preparations.startCleanup?.(); this.accountChanged();
     if (this.files && !this.fileTimer) { this.fileTimer = setInterval(() => this.syncFiles(), 2000); this.fileTimer.unref?.(); }
   }
   private syncFiles(): void {
@@ -271,7 +288,7 @@ export class RemoteBridge {
   }
   canCaptureRemoteFiles(): boolean { return !this.deps.store.needsSecurityRecovery() && this.files?.canCaptureInput() === true && this.settings().enabled; }
   getInputAgentCatalog(): RemoteAgentCatalog | null { return this.agentCatalog; }
-  stop(): void { this.importSnapshots.cancel(); remoteDiagnostics.stop(); this.deps.input?.preparations.stopCleanup?.(); this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null;
+  stop(): void { this.availability.stop(); this.importSnapshots.cancel(); remoteDiagnostics.stop(); this.deps.input?.preparations.stopCleanup?.(); this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null;
     if (this.fileTimer) clearInterval(this.fileTimer); this.fileTimer = null; this.files?.pause(); this.disconnect(); }
   accountChanged(): void { this.ensureAccount(); this.schedule(0); }
   private changed(): void { try { this.deps.onStateChange?.(); } catch { console.warn('[RemoteSync] State notification deferred'); } }
@@ -601,28 +618,7 @@ export class RemoteBridge {
       if (this.syncPaused()) { await this.reconcilePaused(); this.backoff = Math.max(30000, this.retryAfter - Date.now()); return; }
       if (this.admissionDeferred) { this.backoff = IDLE_POLL_MS; return; }
       if (this.connectionManagementKnown && !this.generation) { this.backoff = 5000; return; }
-      if (this.generation && this.agentCatalog && this.agentCapabilities.includes(RemoteCapability.AgentCatalog)
-        && Date.now() >= this.agentCatalogRetryAt
-        && (this.agentCatalogRevision !== this.publishedCatalogRevision || this.lastCatalogConnection !== this.generation || Date.now() - this.lastAgentCatalogCheck > CATALOG_RECHECK_MS)) {
-        const revision = this.agentCatalogRevision;
-        const connection = this.generation;
-        const environment = this.remoteEnvironment();
-        try { await this.agentCatalog.publish(owner, this.registration!.deviceId, this.generation,
-          (path, method, body) => this.api(path, method, body), () => accountGeneration === this.accountGeneration && connection === this.generation && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner()) && environment === this.remoteEnvironment(), this.agentLimits,
-          agentId => !this.ownershipClaimBlocks().blockedAgentIds.has(agentId));
-          this.publishedCatalogRevision = revision; this.lastCatalogConnection = connection; this.lastAgentCatalogCheck = Date.now();
-          this.deps.store.remove(this.catalogFailureKey()); }
-        catch (error) {
-          if (accountGeneration !== this.accountGeneration || connection !== this.generation || !sameOwner(owner, this.deps.getOwner())) return;
-          this.agentCatalogRetryAt = Date.now() + IDLE_POLL_MS;
-          // Authentication failures still use the connection gate; catalog failures are independent of WS health.
-          if (error instanceof RemoteApiError && [401, 40100, 403, 47000, 47013, 47023].includes(error.code)) throw error;
-          const code = error instanceof RemoteApiError || error instanceof RemoteAgentError ? error.code : 47019;
-          this.deps.store.put(this.catalogFailureKey(), { code });
-          console.warn('[RemoteSync] Agent catalog synchronization failed', { deviceId: this.registration?.deviceId,
-            connectionGeneration: connection, ...remoteSyncErrorMetadata(error) });
-        }
-      }
+      this.availability.wake();
       if (Date.now() >= Math.max(this.commandPollAt, this.commandRetryAt)) {
         pollCommands = true;
         // Set the next deadline before awaiting: a notification during I/O must remain pending.
@@ -635,15 +631,19 @@ export class RemoteBridge {
           throw error;
         }
       }
+      if (pollCommands && this.generation) {
+        const generation = this.generation;
+        try { if (await this.claim()) this.commandPollAt = 0; }
+        catch (error) {
+          if (accountGeneration === this.accountGeneration && generation === this.generation) this.commandRetryAt = Date.now() + IDLE_POLL_MS;
+          throw error;
+        }
+      }
+      this.startOptionalPublications(owner, accountGeneration);
       this.startDeletionSync();
       this.startHistorySync();
       this.syncFiles();
       if (this.generation && this.inputCapabilities.includes(RemoteInputCapability.Schema) && this.deps.input) {
-        if (Date.now() - this.lastInputPublish > 15000) {
-          await this.deps.input.models.publish(owner, this.registration!.deviceId, this.generation,
-            (pathname, method, body) => this.api(pathname, method, body), () => accountGeneration === this.accountGeneration && sameOwner(owner, this.deps.getOwner()));
-          this.lastInputPublish = Date.now();
-        }
         if (!this.inputWork && Date.now() >= Math.max(this.inputPollAt, this.inputRetryAt)) {
           this.inputPollAt = Date.now() + IDLE_POLL_MS;
           const generation = this.generation;
@@ -658,14 +658,6 @@ export class RemoteBridge {
             if (current()) this.schedule(Math.max(0, Math.max(this.inputPollAt, this.inputRetryAt) - Date.now()));
           });
           this.inputWork = work;
-        }
-      }
-      if (pollCommands && this.generation) {
-        const generation = this.generation;
-        try { if (await this.claim()) this.commandPollAt = 0; }
-        catch (error) {
-          if (accountGeneration === this.accountGeneration && generation === this.generation) this.commandRetryAt = Date.now() + IDLE_POLL_MS;
-          throw error;
         }
       }
       this.backoff = this.hasActiveWork() ? ACTIVE_POLL_MS : COMMAND_IDLE_POLL_MS;
@@ -694,6 +686,53 @@ export class RemoteBridge {
       this.schedule(immediate ? 0 : (nextPollDelay ?? this.backoff) + Math.floor(Math.random() * 1000));
     }
   }
+  /** Optional discovery publication never owns the next command/stop polling deadline. */
+  private startOptionalPublications(owner: RemoteOwner, accountGeneration: number): void {
+    if (this.optionalPublishWork || !this.generation || !this.registration) return;
+    const connection = this.generation;
+    const current = (): boolean => !this.stopped && accountGeneration === this.accountGeneration && connection === this.generation
+      && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner());
+    const work = (async (): Promise<void> => {
+      if (this.generation && this.agentCatalog && this.agentCapabilities.includes(RemoteCapability.AgentCatalog)
+        && Date.now() >= this.agentCatalogRetryAt
+        && (this.agentCatalogRevision !== this.publishedCatalogRevision || this.lastCatalogConnection !== this.generation || Date.now() - this.lastAgentCatalogCheck > CATALOG_RECHECK_MS)) {
+        const revision = this.agentCatalogRevision;
+        const connection = this.generation;
+        const environment = this.remoteEnvironment();
+        try { await this.agentCatalog.publish(owner, this.registration!.deviceId, this.generation,
+          (path, method, body) => this.api(path, method, body), () => accountGeneration === this.accountGeneration && connection === this.generation && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner()) && environment === this.remoteEnvironment(), this.agentLimits,
+          agentId => !this.ownershipClaimBlocks().blockedAgentIds.has(agentId));
+          this.publishedCatalogRevision = revision; this.lastCatalogConnection = connection; this.lastAgentCatalogCheck = Date.now();
+          this.deps.store.remove(this.catalogFailureKey()); }
+        catch (error) {
+          if (accountGeneration !== this.accountGeneration || connection !== this.generation || !sameOwner(owner, this.deps.getOwner())) return;
+          this.agentCatalogRetryAt = Date.now() + IDLE_POLL_MS;
+          // Authentication failures still use the connection gate; catalog failures are independent of WS health.
+          if (error instanceof RemoteApiError && [401, 40100, 403, 47000, 47013, 47023].includes(error.code)) throw error;
+          const code = error instanceof RemoteApiError || error instanceof RemoteAgentError ? error.code : 47019;
+          this.deps.store.put(this.catalogFailureKey(), { code });
+          console.warn('[RemoteSync] Agent catalog synchronization failed', { deviceId: this.registration?.deviceId,
+            connectionGeneration: connection, ...remoteSyncErrorMetadata(error) });
+        }
+      }
+      if (!current()) return;
+      if (this.inputCapabilities.includes(RemoteInputCapability.Schema) && this.deps.input) {
+        if (Date.now() - this.lastInputPublish > 15000) {
+          await this.deps.input.models.publish(owner, this.registration!.deviceId, this.generation,
+            (pathname, method, body) => this.api(pathname, method, body), () => accountGeneration === this.accountGeneration && sameOwner(owner, this.deps.getOwner()));
+          this.lastInputPublish = Date.now();
+        }
+      }
+    })().catch(error => {
+      if (!current()) return;
+      this.lastInputPublish = Date.now();
+      if (error instanceof RemoteApiError && [401,40100,403,47000,47013,47023].includes(error.code)) {
+        this.recordConnectionFailure(error); if (this.suspended) this.disconnect();
+      }
+      console.warn('[RemoteSync] Optional publication deferred', remoteSyncErrorMetadata(error));
+    }).finally(() => { if (this.optionalPublishWork === work) this.optionalPublishWork = null; });
+    this.optionalPublishWork = work;
+  }
   private hasActiveWork(): boolean {
     return this.deps.store.entries<InboxEntry>('inbox:').some(row => this.isEntryCurrent(row.value) && ['prepared', 'executing', 'unknown'].includes(row.value.state))
       || !!this.owner && this.deps.store.sessions(this.owner).some(row => { const run = this.deps.store.run(row.local_id); return run && !['succeeded', 'failed', 'cancelled', 'interrupted'].includes(run.status); });
@@ -716,7 +755,7 @@ export class RemoteBridge {
     this.recordConnectionFailure(new RemoteApiError(code, message));
     this.disconnect(); this.schedule(this.backoff);
   }
-  private async api(pathname: string, method = 'GET', body?: unknown, registrationRequired = true, version = 1, encodedBody?: string): Promise<any> {
+  private async api(pathname: string, method = 'GET', body?: unknown, registrationRequired = true, version = 1, encodedBody?: string, timeoutMs?: number): Promise<any> {
     const owner = this.owner;
     const accountGeneration = this.accountGeneration;
     const environment = this.remoteEnvironment();
@@ -746,7 +785,7 @@ export class RemoteBridge {
       const encoded = encodedBody ?? (body === undefined ? undefined : stableJson(body));
       if (sync) console.debug('[RemoteSync] Request started', { ...context, requestBytes: encoded ? Buffer.byteLength(encoded) : 0 });
       stage = 'transport';
-      const response = await this.deps.request(owner, `/api/remote/v${version}${pathname}`, { method, headers, body: encoded, signal: AbortSignal.timeout(20000) });
+      const response = await this.deps.request(owner, `/api/remote/v${version}${pathname}`, { method, headers, body: encoded, signal: AbortSignal.timeout(timeoutMs ?? (pathname.startsWith('/control/') || pathname.startsWith('/sync/live-') ? 10000 : 20000)) });
       httpStatus = response.status;
       const retryHeader = response.headers.get('Retry-After');
       const retryAfterMs = retryHeader === null ? undefined : /^\d+$/u.test(retryHeader.trim()) ? Number(retryHeader) * 1000
@@ -1196,7 +1235,7 @@ export class RemoteBridge {
     const worker = async (): Promise<void> => {
       while (cursor < rows.length && current() && !sharedFailure && (!stepwise || Date.now() >= this.historyRetryAt)) {
         const row = rows[cursor++];
-        if (this.taskMemoryBlocks.has(row.local_id)) continue;
+        if (this.availability.ownsHistory(row.local_id) || this.taskMemoryBlocks.has(row.local_id)) continue;
         if (!this.taskSync.eligible(context, row.local_id)) {
           const state = this.taskSync.get(context, row.local_id);
           this.logSyncSkipped(row, state?.phase === 'backoff' ? 'retry_backoff' : 'task_isolated', state?.next_retry_at ?? null);
@@ -1228,6 +1267,7 @@ export class RemoteBridge {
   }
   private async syncSession(row: SyncRow, current: () => boolean, context: TaskSyncContext, stepwise: boolean): Promise<void> {
     const id = row.local_id;
+    if (this.availability.ownsHistory(id)) return;
     if (this.deps.store.isSyncClosed(id)) { this.taskSync.fail(context, id, { phase: 'closed', scope: 'session', reason: 'SESSION_DELETED' }); return; }
     const previous = this.deps.store.get<any>(`syncFailure:${id}`);
     const oldState = this.taskSync.get(context, id);

@@ -1,8 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import { Worker } from 'worker_threads';
 
 import { sameOwner, stableJson } from './canonical';
+import { RemoteHistoryJob } from './remoteHistoryJob';
 import type { ImportPartIndex, ImportSnapshotIdentity, ImportSnapshotPackage, ImportSnapshotWork } from './remoteImportSnapshotWorker';
 import type { RemoteStore } from './remoteStore';
 import { archivedRemoteSyncReferences } from './remoteSyncTargetStore';
@@ -13,7 +13,7 @@ export class RemoteImportSnapshotError extends Error {}
 /** Private immutable snapshot bodies. Only the manifest/index is persisted in the core database. */
 export class RemoteImportSnapshots {
   private readonly root: string;
-  private cancelWorker: (() => void) | null = null;
+  private readonly encoder = new RemoteHistoryJob();
   private active: string | null = null;
   constructor(private readonly store: RemoteStore, private readonly workerPath = remoteWorkerPath(RemoteWorkerFile.ImportSnapshot)) {
     this.root = path.join(path.dirname(store.db.name), 'remote-import-snapshots');
@@ -22,27 +22,15 @@ export class RemoteImportSnapshots {
     if (!fileSetPattern.test(fileSet)) throw new RemoteImportSnapshotError('REMOTE_IMPORT_PART_UNAVAILABLE');
     return path.join(this.root, fileSet);
   }
-  cancel(): void { this.cancelWorker?.(); }
+  cancel(): void { this.encoder.cancel(); }
   private async work<T>(input: ImportSnapshotWork, current: () => boolean): Promise<T> {
-    if (this.cancelWorker || !current()) throw new RemoteImportSnapshotError('REMOTE_IMPORT_CONTEXT_CHANGED');
-    return new Promise((resolve, reject) => {
-      const worker = new Worker(this.workerPath, { workerData: input, resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16 } });
-      let finished = false;
-      const finish = (error?: Error, value?: T): void => {
-        if (finished) return; finished = true;
-        clearTimeout(timer); clearInterval(guard);
-        void worker.terminate().then(() => {
-          this.cancelWorker = null;
-          if (error) reject(error); else if (!current()) reject(new RemoteImportSnapshotError('REMOTE_IMPORT_CONTEXT_CHANGED')); else resolve(value!);
-        });
-      };
-      const timer = setTimeout(() => finish(new RemoteImportSnapshotError('REMOTE_IMPORT_BUDGET')), input.operation === 'build' ? 125_000 : 10_000);
-      const guard = setInterval(() => { if (!current()) finish(new RemoteImportSnapshotError('REMOTE_IMPORT_CONTEXT_CHANGED')); }, 100);
-      this.cancelWorker = () => finish(new RemoteImportSnapshotError('REMOTE_IMPORT_CONTEXT_CHANGED'));
-      worker.on('message', message => finish(message.error ? new RemoteImportSnapshotError(message.error) : undefined, message.result));
-      worker.on('error', error => finish(new RemoteImportSnapshotError((error as NodeJS.ErrnoException).code === 'ERR_WORKER_OUT_OF_MEMORY' ? 'REMOTE_IMPORT_BUDGET' : 'REMOTE_IMPORT_PART_UNAVAILABLE')));
-      worker.on('exit', () => finish(new RemoteImportSnapshotError('REMOTE_IMPORT_PART_UNAVAILABLE')));
-    });
+    try {
+      return await this.encoder.run<T>(this.workerPath, input, {
+        timeoutMs: input.operation === 'build' ? 125_000 : 10_000, memoryMb: 128, current, prefix: 'REMOTE_IMPORT',
+      });
+    } catch (error) {
+      throw new RemoteImportSnapshotError(error instanceof Error ? error.message : 'REMOTE_IMPORT_PART_UNAVAILABLE');
+    }
   }
   identity(localSessionId: string, owner: ImportSnapshotIdentity['owner'], deviceId: string, environment: string): ImportSnapshotIdentity {
     const row = this.store.sync(localSessionId);

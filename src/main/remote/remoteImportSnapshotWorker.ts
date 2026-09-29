@@ -98,3 +98,19 @@ if (parentPort) {
   try { const work = workerData as ImportSnapshotWork; parentPort.postMessage({ result: work.operation === 'build' ? build(work) : read(work) }); }
   catch (error) { const message = error instanceof Error ? error.message : ''; parentPort.postMessage({ error: /^REMOTE_IMPORT_[A-Z_]+$/u.test(message) ? message : 'REMOTE_IMPORT_PART_UNAVAILABLE' }); }
 }
+
+// Retain worker-thread entry compatibility for existing packaged-worker diagnostics.
+// Production uses one bounded IPC job in an independently terminable child process.
+if (!parentPort && process.send) {
+  process.once('message', (request: { type?: string; jobId?: string; input?: unknown }) => {
+    if (request.type !== 'remote.history.job' || typeof request.jobId !== 'string' || !/^[a-f0-9-]{36}$/u.test(request.jobId)) {
+      process.disconnect(); return;
+    }
+    const work = request.input as ImportSnapshotWork;
+    try { process.send!({ jobId: request.jobId, result: work.operation === 'build' ? build(work) : read(work) }); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      process.send!({ jobId: request.jobId, error: /^REMOTE_[A-Z_]+$/u.test(message) ? message : 'REMOTE_IMPORT_PART_UNAVAILABLE' });
+    }
+  });
+}

@@ -261,6 +261,7 @@
   "asarUnpack": [
     "dist-electron/remoteFileSnapshotWorker.cjs",
     "dist-electron/remoteProjectionWorker.js",
+    "dist-electron/remoteLiveProjectionWorker.js",
     "dist-electron/remoteSecurityJournalWorker.js",
     "dist-electron/remoteImportSnapshotWorker.js",
     "node_modules/@img/**",

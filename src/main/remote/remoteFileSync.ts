@@ -9,6 +9,7 @@ import type { RemoteInputAsset } from '../../shared/remote/input';
 import { sameOwner, stableJson } from './canonical';
 import type { DesktopInputSource } from './desktopInputMetadata';
 import { projectRemoteArtifacts, remoteArtifactReasons } from './remoteArtifactProjection';
+import { touchAvailabilityMessage } from './remoteAvailabilitySource';
 import { type DeliveredFileDependencies,RemoteDeliveredFileSync } from './remoteDeliveredFileSync';
 import { type DesktopMessageAssetJob, uploadDesktopMessageAsset } from './remoteDesktopAssetUpload';
 import { fileRetryAllowed, nextFileRetry, RemoteFileRequestError, RemoteFileRetryPhase, type RemoteFileRetryState } from './remoteFileRetry';
@@ -110,7 +111,9 @@ export class RemoteFileSync {
   async prepareRun(sessionId: string, roots: string[], validEpoch: () => boolean): Promise<void> {
     const connection = this.connection;
     if (!connection || !this.current(connection, sessionId)) return;
-    await this.delivered.prepare(sessionId, roots, connection.owner, () => validEpoch() && this.current(connection, sessionId));
+    if (this.deps.store.isIndependentControlReady(sessionId) || this.deps.store.hasIndependentHistoryFence(sessionId)) {
+      this.delivered.startPreparation(sessionId, roots, connection.owner, () => validEpoch() && this.current(connection, sessionId));
+    } else await this.delivered.prepare(sessionId, roots, connection.owner, () => validEpoch() && this.current(connection, sessionId));
   }
   pause(): void { this.delivered.clear(); this.fileHealth = { degraded: false, pending: null }; this.connection = null; this.policy = null; this.policyAt = 0; this.policyRetryAt = 0; }
   private prefix(connection: Connection): string {
@@ -267,6 +270,24 @@ export class RemoteFileSync {
   }
   private async cleanupSnapshots(connection: Connection): Promise<void> {
     this.assert(connection);
+    // A partial reference set cannot authorize deletion. Bound SQL materialization and JSON work
+    // before opening cache directories; large/unknown evidence leaves cleanup paused.
+    let referenceRows = 0, referenceBytes = 0;
+    const budget = (rows: Array<{ bytes: number }>): void => {
+      for (const row of rows) {
+        referenceRows++; referenceBytes += row.bytes;
+        if (referenceRows > 1024 || row.bytes > 256 * 1024 || referenceBytes > 4 * 1024 * 1024)
+          throw new Error('REMOTE_FILE_REFERENCE_BUDGET');
+      }
+    };
+    for (const prefix of ['desktopInputRun:', 'desktopAsset:', 'fileOutput:']) budget(this.deps.store.db.prepare(
+      'SELECT length(CAST(value AS BLOB)) AS bytes FROM remote_state WHERE key>=? AND key<? LIMIT 1025',
+    ).all(prefix, `${prefix}\uffff`) as Array<{ bytes: number }>);
+    for (const table of ['remote_sync_target_archives', 'remote_sync_admission_evidence']) {
+      if (this.deps.store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)) budget(this.deps.store.db.prepare(
+        `SELECT length(CAST(row_json AS BLOB)) AS bytes FROM ${table} WHERE table_name IN ('remote_state','remote_projection_publications') LIMIT 1025`,
+      ).all() as Array<{ bytes: number }>);
+    }
     const references = archivedRemoteSyncReferences(this.deps.store).paths;
     for (const { value } of this.deps.store.entries<{ owner: RemoteOwner; attachments: Array<{ snapshot?: RemoteFileSnapshot }> }>('desktopInputRun:'))
       if (value.owner.userId === connection.owner.userId) for (const item of value.attachments) if (item.snapshot) references.add(item.snapshot.path);
@@ -274,11 +295,14 @@ export class RemoteFileSync {
     for (const { value } of this.deps.store.entries<ArtifactJob>('fileOutput:')) if (value.owner.userId === connection.owner.userId)
       for (const pending of value.queue) references.add(pending.snapshot.path);
     const accountRoot = path.dirname(remoteFileCacheDirectory(this.deps.cacheRoot, connection.owner));
-    const scopes = await fs.promises.readdir(accountRoot, { withFileTypes: true }).catch((): fs.Dirent[] => []);
-    let scanned = 0;
-    for (const scope of scopes) {
+    const scopes = await fs.promises.opendir(accountRoot, { bufferSize: 64 }).catch((): null => null);
+    if (!scopes) return;
+    let scanned = 0, scopeCount = 0;
+    for await (const scope of scopes) {
+      if (++scopeCount > 128) return;
       if (!scope.isDirectory() || !/^[a-f0-9]{64}$/u.test(scope.name)) continue;
-      for (const file of await fs.promises.readdir(path.join(accountRoot, scope.name), { withFileTypes: true })) {
+      const files = await fs.promises.opendir(path.join(accountRoot, scope.name), { bufferSize: 64 });
+      for await (const file of files) {
         if (++scanned > 4096) return;
         if (!file.isFile() || !/^[a-f0-9-]{36}$/u.test(file.name)) continue;
         const target = path.join(accountRoot, scope.name, file.name);
@@ -309,20 +333,26 @@ export class RemoteFileSync {
       // Observation of an unchanged file is not a new publication or a conversation change.
       if (persisted && stableJson(persisted) === stableJson(durable)) return;
       this.deps.store.put(key, durable); this.deps.store.markFilesDirty(job.localSessionId);
+      const messageIds = new Set([...Object.keys(persisted?.references || {}), ...Object.keys(durable.references), ...(durable.messageId ? [durable.messageId] : [])]);
+      for (const messageId of messageIds) if (stableJson(projectRemoteArtifacts(persisted ? [persisted] : [], messageId)) !== stableJson(projectRemoteArtifacts([durable], messageId)))
+        touchAvailabilityMessage(this.deps.store.db, job.localSessionId, messageId);
     });
   }
   private sources(sessionId: string, runId?: string): Source[] {
     if (!this.deps.store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='library_local_artifacts'").get()) return [];
-    const rows = this.deps.store.db.prepare(`SELECT a.id,a.file_path,a.file_name,a.file_identity,a.updated_at,
-      m.id AS message_id,m.metadata,r.session_id FROM library_local_artifacts a
-      JOIN library_artifact_sessions r ON r.artifact_id=a.id JOIN cowork_messages m ON m.id=r.last_message_id AND m.session_id=r.session_id
-      WHERE r.session_id=? AND r.relation_kind IN ('created','modified') AND a.availability='available'
-      AND m.type IN ('assistant','tool_result') ORDER BY a.id`).all(sessionId) as Array<Source & { metadata: string }>;
-    return rows.flatMap(row => {
-      try { const run = JSON.parse(row.metadata).remoteRunId;
-        return safeId(run) && (!runId || run === runId) && safeId(row.id) && safeId(row.message_id) ? [{ ...row, run_id: run }] : [];
-      } catch { return []; }
-    });
+    // Only bounded identity metadata is needed for file provenance; never hydrate message bodies.
+    const run = "CASE WHEN length(CAST(m.metadata AS BLOB))<=32768 THEN CASE WHEN json_valid(m.metadata) THEN json_extract(m.metadata,'$.remoteRunId') END END";
+    const limit = Math.max(1, Math.min(64, this.policy?.limits.maxTaskArtifactCount || 20));
+    const rows = this.deps.store.db.prepare(`SELECT candidates.id,candidates.file_path,candidates.file_name,candidates.file_identity,candidates.updated_at,
+      m.id AS message_id,${run} AS run_id,candidates.session_id FROM (
+        SELECT a.id,a.file_path,a.file_name,a.file_identity,a.updated_at,r.last_message_id,r.session_id FROM library_local_artifacts a
+        JOIN library_artifact_sessions r ON r.artifact_id=a.id
+        WHERE r.session_id=? AND r.relation_kind IN ('created','modified') AND a.availability='available'
+        ORDER BY a.id LIMIT 64
+      ) candidates JOIN cowork_messages m ON m.id=candidates.last_message_id AND m.session_id=candidates.session_id
+      WHERE m.type IN ('assistant','tool_result') AND ${runId ? `${run}=?` : `${run} IS NOT NULL`}
+      ORDER BY candidates.id LIMIT ?`).all(...(runId ? [sessionId, runId, limit] : [sessionId, limit])) as Source[];
+    return rows.filter(row => safeId(row.run_id) && safeId(row.id) && safeId(row.message_id));
   }
   private getJob(connection: Connection, source: Source): { key: string; job: ArtifactJob } {
     const key = `${this.prefix(connection)}${source.session_id}:${source.id}`;
@@ -439,16 +469,20 @@ export class RemoteFileSync {
     if (!ordinal || run?.runId !== runId || !run.finishedAt || !terminal.has(run.status)) return;
     this.deps.store.put(`fileTerminalBoundary:${sessionId}:${runId}`, { owner: connection.owner, environment: connection.environment,
       deviceId: connection.deviceId, ordinal, finishedAt: run.finishedAt } satisfies TerminalBoundary);
+    // In the independent protocol, the control commit records only the trustworthy boundary.
+    // Optional producer snapshots are observed later; old clients retain their original final-capture behavior.
+    if (this.deps.store.isIndependentControlReady(sessionId) || this.deps.store.hasIndependentHistoryFence(sessionId)) return;
     for (const source of this.sources(sessionId, runId).slice(0, this.policy.limits.maxTaskArtifactCount)) {
       const { key, job } = this.getJob(connection, source);
       if (job.terminalRuns.includes(runId)) continue;
       try {
         if (this.captureProducerVersion(connection, source, job)) job.terminalRuns.push(runId);
-        else job.reason = RemoteFileReason.Final; // Mutable sources are captured later as current versions, never as pinned terminal bytes.
+        else job.reason = RemoteFileReason.Final;
       } catch { job.reason = RemoteFileReason.Final; job.terminalRuns.push(runId); }
       this.save(key, job);
     }
   }
+
   private async inputs(connection: Connection): Promise<void> {
     if (!this.policy || !this.canUploadInput()) return;
     const jobs = this.fileEntries<InputJob>('desktopAsset:', true);
@@ -502,7 +536,7 @@ export class RemoteFileSync {
           }, { partBudget: 1 });
           this.assert(connection, job.localSessionId);
           if (!uploadedAsset) { job.retry = undefined; job.retryAt = undefined; this.deps.store.put(key, durableJson(job)); continue; }
-          this.deps.store.transaction(() => { this.deps.store.put(key, durableJson({ ...job, retry: undefined, retryAt: undefined, availability: 'ready', uploadedAsset, reason: undefined })); this.deps.store.markFilesDirty(job.localSessionId); });
+          this.deps.store.transaction(() => { this.deps.store.put(key, durableJson({ ...job, retry: undefined, retryAt: undefined, availability: 'ready', uploadedAsset, reason: undefined })); this.deps.store.markFilesDirty(job.localSessionId); touchAvailabilityMessage(this.deps.store.db, job.localSessionId, job.messageId); });
           // Remote publication is already committed. A private-cache cleanup failure must not erase its ready receipt.
           await fs.promises.rm(job.snapshot.path, { force: true }).catch((): void => undefined);
         } catch (error) {
@@ -522,8 +556,11 @@ export class RemoteFileSync {
   }
   private async publish(connection: Connection, key: string, job: ArtifactJob): Promise<void> {
     const pending = job.queue[0]; if (!pending) return;
-    const sync = this.deps.store.sync(job.localSessionId);
-    if (!sync || sync.needs_snapshot || sync.source_seq !== sync.ack_seq) return;
+    const ready = this.deps.store.isIndependentControlReady(job.localSessionId);
+    if (!ready) {
+      const sync = this.deps.store.sync(job.localSessionId);
+      if (!sync || sync.needs_snapshot || sync.source_seq !== sync.ack_seq) return;
+    }
     const current = (): boolean => {
       const session = this.deps.store.sync(job.localSessionId);
       const message = this.deps.store.db.prepare('SELECT metadata FROM cowork_messages WHERE id=? AND session_id=?').get(pending.messageId, job.localSessionId) as { metadata: string } | undefined;

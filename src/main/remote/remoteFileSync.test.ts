@@ -15,6 +15,7 @@ import { captureDesktopInput } from './desktopInputMetadata';
 import { RemoteBridge } from './remoteBridge';
 import { captureRemoteFileSnapshot, remoteFileCacheDirectory, verifyRemoteFileSnapshot } from './remoteFileSnapshots';
 import { RemoteFileSync } from './remoteFileSync';
+import { projectLiveMessage } from './remoteLiveProjection';
 import { RemoteStore } from './remoteStore';
 
 const owner = { userId: 'A', scopeKey: 'personal' };
@@ -122,6 +123,7 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
     });
   };
   return { store, db, source, cache, calls, bytes, references, uploads, tick, nextRun,
+    tickUnacknowledged: async () => { sync.tick(connection()); await sync.settled(); },
     prepareDelivery: () => sync.prepareRun('s', [fs.realpathSync(directory)], () => true),
     switchOwner: () => { actor = { userId: 'B', scopeKey: 'personal' }; },
     hook: (hook?: typeof responseHook) => { responseHook = hook; },
@@ -132,6 +134,42 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
     jobs: () => store.entries<any>('fileOutput:').map(row => row.value) };
 }
 describe('remote files policy and immutable snapshots', () => {
+  it('bounds a session artifact discovery and excludes oversized provenance metadata', async () => {
+    const oversized = fixture();
+    oversized.db.prepare("UPDATE cowork_messages SET metadata=? WHERE id='m1'").run(JSON.stringify({ remoteRunId: 'run1', padding: 'x'.repeat(32768) }));
+    await oversized.tickUnacknowledged(); expect(oversized.store.isTaskAdmitted('s')).toBe(true); expect(oversized.jobs()).toHaveLength(0);
+    const f = fixture(); await f.tick();
+    const original = f.db.prepare("SELECT * FROM library_local_artifacts WHERE id='local'").get() as any;
+    for (let index = 0; index < 80; index++) {
+      const id = `file${String(index).padStart(3, '0')}`;
+      f.db.prepare("INSERT INTO library_local_artifacts VALUES(?,?,?,?,1,'md',5,'available')")
+        .run(id, original.file_path, original.file_name, original.file_identity);
+      f.db.prepare("INSERT INTO library_artifact_sessions VALUES(?,'s','m1','created')").run(id);
+    }
+    await f.tickUnacknowledged(); expect(f.jobs()).toHaveLength(policy.limits.maxTaskArtifactCount + 1);
+    expect(f.jobs().every(job => job.messageId === 'm1')).toBe(true);
+  });
+  it.each(['row-size', 'row-count', 'archive-size'])('preserves unknown cache references when cleanup exceeds its %s budget while verified uploads continue', async budget => {
+    const f = fixture();
+    const directory = remoteFileCacheDirectory(f.cache, owner); fs.mkdirSync(directory, { recursive: true });
+    const retained = path.join(directory, randomUUID()); fs.writeFileSync(retained, 'old retained evidence');
+    const old = new Date(Date.now() - 2 * 86_400_000); fs.utimesSync(retained, old, old);
+    if (budget === 'archive-size') {
+      f.db.exec('CREATE TABLE IF NOT EXISTS remote_sync_target_archives(target_id TEXT,table_name TEXT,row_key INTEGER,row_json TEXT)');
+      f.db.prepare('INSERT INTO remote_sync_target_archives VALUES(?,?,?,?)').run('archived', 'remote_state', 1,
+        JSON.stringify({ value: JSON.stringify({ path: retained, padding: 'x'.repeat(256 * 1024) }) }));
+    } else {
+      const count = budget === 'row-count' ? 1025 : 1;
+      for (let index = 0; index < count; index++) f.store.put(`desktopInputRun:budget-${index}`, {
+        owner, attachments: [{ snapshot: { path: retained } }], padding: budget === 'row-size' ? 'x'.repeat(256 * 1024) : '',
+      });
+    }
+    await f.tick();
+    expect(fs.readFileSync(retained, 'utf8')).toBe('old retained evidence');
+    f.store.updateRun('s', 'succeeded'); await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('first');
+    expect(fs.existsSync(retained)).toBe(true);
+  });
   it('intersects server types and limits with local deny-by-default rules', () => {
     expect(remoteFileRule(policy, 'report.md', '5242880', true)).toBeNull();
     expect(remoteFileRule(policy, 'report.md', '5242881', true)).toBe(RemoteFileReason.Size);
@@ -231,6 +269,26 @@ describe('artifact sync durable boundaries and protocol', () => {
     expect(f.uploads.size).toBe(1);
     expect(f.jobs()[0].references.m2).toMatchObject({ runId: 'run2', pinned: false, latest: { artifactVersion: '1' } });
     expect(f.references).toHaveLength(0);
+  });
+  it('publishes a generated file despite stale history ACK and advances its live message revision', async () => {
+    const f = fixture(); await f.tick(); f.store.setIndependentControlReady(() => true); f.store.setTaskProjectionEligibility(() => false);
+    f.db.prepare("UPDATE remote_sync SET source_seq=100,ack_seq=0,needs_snapshot=1 WHERE local_id='s'").run();
+    const revision = (): number => (f.db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='s' AND object_id='m1'").get() as { revision: number }).revision;
+    const before = revision(); f.store.updateRun('s','succeeded'); await f.tickUnacknowledged();
+    expect(f.bytes.get('asset1')?.toString()).toBe('first'); expect(revision()).toBeGreaterThan(before);
+    expect(f.store.sync('s')).toMatchObject({ source_seq: 100,ack_seq: 0,needs_snapshot: 1 });
+    const live = projectLiveMessage(f.db,{ database: f.db.name,localId: 's',sessionId: f.store.controlBinding('s')!.session_id,
+      deviceId: 'pc',owner,objectId: 'm1',revision: String(revision()),environment: 'https://example.invalid' });
+    expect(live?.payload.blocks.some((block: any) => block.type === 'artifact' && block.availability === 'ready')).toBe(true);
+  });
+  it('active control commits skip optional producer file work and keep the next run usable', async () => {
+    const f = fixture(); await f.tick(); f.store.setIndependentControlReady(() => true);
+    const before = f.jobs()[0].queue.length;
+    const copy = vi.spyOn(fs,'copyFileSync').mockImplementation(() => { throw new Error('optional producer IO unavailable'); });
+    expect(() => f.store.updateRun('s','succeeded')).not.toThrow();
+    expect(copy).not.toHaveBeenCalled(); expect(f.jobs()[0].queue).toHaveLength(before);
+    expect(() => f.nextRun(2,'next turn remains usable')).not.toThrow();
+    expect(f.store.run('s')?.runId).toBe('run2'); expect(f.references).toHaveLength(0);
   });
   it('does not pin a mutable file as the past terminal version or delay starting the next run', async () => {
     const f = fixture(false); await f.tick(); f.store.updateRun('s', 'succeeded');

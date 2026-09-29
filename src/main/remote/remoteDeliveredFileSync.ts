@@ -39,7 +39,12 @@ export class RemoteDeliveredFileSync {
   constructor(private readonly deps: DeliveredFileDependencies) {}
   clear(): void { this.pending.clear(); }
 
-  async prepare(sessionId: string, roots: string[], owner: RemoteOwner, validEpoch: () => boolean): Promise<void> {
+  /** Optional discovery never delays engine dispatch; only metadata predating this boundary can authorize discovery. */
+  startPreparation(sessionId: string, roots: string[], owner: RemoteOwner, validEpoch: () => boolean): void {
+    const observedBefore = Date.now();
+    void this.prepare(sessionId,roots,owner,validEpoch,observedBefore).catch(() => { /* Discovery is optional. */ });
+  }
+  async prepare(sessionId: string, roots: string[], owner: RemoteOwner, validEpoch: () => boolean, observedBefore?: number): Promise<void> {
     if (!this.deps.recordArtifact || !validEpoch() || !sameOwner(owner, this.deps.store.owner(sessionId))) return;
     const run = this.deps.store.run(sessionId);
     const ordinal = this.deps.store.get<string>(`fileRunOrdinal:${sessionId}`);
@@ -55,7 +60,7 @@ export class RemoteDeliveredFileSync {
     };
     this.pending.set(sessionId, entry);
     try {
-      const baseline = await captureDeliveryBaseline(roots.slice(0, 2), entry.current);
+      const baseline = await captureDeliveryBaseline(roots.slice(0, 2), entry.current, observedBefore);
       if (!entry.current() || terminal.has(this.deps.store.run(sessionId)!.status) || !baseline.directories.length) {
         if (this.pending.get(sessionId) === entry) this.pending.delete(sessionId);
         return;

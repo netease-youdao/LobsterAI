@@ -24,6 +24,14 @@ afterEach(() => {
 });
 
 describe('remote delivered file evidence', () => {
+  it('a background scan cannot claim a directory or file changed after dispatch as its baseline', async () => {
+    const root = directory(), beforeDispatch = Date.now() - 1000;
+    fs.writeFileSync(path.join(root,'output.md'),'already generated after dispatch');
+    const baseline = await captureDeliveryBaseline([root],current,beforeDispatch);
+    expect(baseline.directories).toEqual([]);
+    expect(await changedDeliveredFile(baseline,path.join(root,'output.md'),Date.now()+1,current)).toBeNull();
+  });
+
   it('admits new and changed direct files but leaves unchanged references local', async () => {
     const root = directory(), old = path.join(root, 'old.md'), changed = path.join(root, 'changed.md');
     fs.writeFileSync(old, 'existing reference'); fs.writeFileSync(changed, 'old');

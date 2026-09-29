@@ -3,6 +3,7 @@ import path from 'path';
 export const RemoteWorkerFile = {
   FileSnapshot: 'remoteFileSnapshotWorker.cjs',
   Projection: 'remoteProjectionWorker.js',
+  LiveProjection: 'remoteLiveProjectionWorker.js',
   SecurityJournal: 'remoteSecurityJournalWorker.js',
   ImportSnapshot: 'remoteImportSnapshotWorker.js',
 } as const;

@@ -108,3 +108,19 @@ if (parentPort) {
   try { parentPort.postMessage({ result: materialize(workerData as ProjectionWork) }); }
   catch (error) { parentPort.postMessage({ error: error instanceof Error ? error.message : 'REMOTE_PROJECTION_FAILED' }); }
 }
+
+// Retain worker-thread entry compatibility for existing packaged-worker diagnostics.
+// Production uses one bounded IPC job in an independently terminable child process.
+if (!parentPort && process.send) {
+  process.once('message', (request: { type?: string; jobId?: string; input?: unknown }) => {
+    if (request.type !== 'remote.history.job' || typeof request.jobId !== 'string' || !/^[a-f0-9-]{36}$/u.test(request.jobId)) {
+      process.disconnect(); return;
+    }
+    const work = request.input as ProjectionWork;
+    try { process.send!({ jobId: request.jobId, result: materialize(work) }); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      process.send!({ jobId: request.jobId, error: /^REMOTE_[A-Z_]+$/u.test(message) ? message : 'REMOTE_PROJECTION_FAILED' });
+    }
+  });
+}

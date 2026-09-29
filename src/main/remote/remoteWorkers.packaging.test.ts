@@ -8,6 +8,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Worker } from 'worker_threads';
 
 import { remoteWorkerBuilds } from '../../../remote-workers.config';
+import { RemoteHistoryJob } from './remoteHistoryJob';
+import { RemoteLiveProjectionJob } from './remoteLiveProjectionJob';
 import { RemoteStore } from './remoteStore';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 
@@ -26,6 +28,10 @@ beforeAll(async () => {
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 async function invoke(filename: typeof RemoteWorkerFile[keyof typeof RemoteWorkerFile], workerData?: unknown, message?: unknown): Promise<any> {
+  if (filename === RemoteWorkerFile.Projection || filename === RemoteWorkerFile.ImportSnapshot) {
+    const result = await new RemoteHistoryJob().run(remoteWorkerPath(filename, archived), workerData, { timeoutMs: 10000, memoryMb: 256, current: () => true, prefix: 'REMOTE_PROJECTION' });
+    return { result };
+  }
   const worker = new Worker(remoteWorkerPath(filename, archived), { workerData });
   try {
     return await new Promise((resolve, reject) => {
@@ -39,14 +45,14 @@ async function invoke(filename: typeof RemoteWorkerFile[keyof typeof RemoteWorke
 }
 
 describe('independent packaged remote workers', () => {
-  it('emits all four unpacked files and keeps native SQLite external', () => {
+  it('emits all unpacked files and keeps native SQLite external', () => {
     const config = require(path.resolve(__dirname, '../../../electron-builder.json'));
     for (const filename of Object.values(RemoteWorkerFile)) {
       expect(remoteWorkerPath(filename, archived)).toBe(path.join(output, filename));
       expect(config.asarUnpack).toContain(`dist-electron/${filename}`);
       expect(fs.statSync(path.join(output, filename)).size).toBeLessThan(2 * 1024 * 1024);
     }
-    for (const filename of [RemoteWorkerFile.Projection, RemoteWorkerFile.ImportSnapshot])
+    for (const filename of [RemoteWorkerFile.Projection, RemoteWorkerFile.ImportSnapshot, RemoteWorkerFile.LiveProjection])
       expect(fs.readFileSync(path.join(output, filename), 'utf8')).toMatch(/require\(["']better-sqlite3["']\)/u);
     const compiledDirectory = path.join(root, 'dist-electron', 'main', 'remote');
     expect(remoteWorkerPath(RemoteWorkerFile.Projection, compiledDirectory)).toBe(path.join(compiledDirectory, RemoteWorkerFile.Projection));
@@ -69,6 +75,10 @@ describe('independent packaged remote workers', () => {
         db.prepare("INSERT INTO cowork_messages VALUES('message','session','assistant','Worker output','{}',1,1)").run();
       });
       db.prepare("UPDATE remote_sync SET device_id='device',sync_environment='test' WHERE local_id='session'").run();
+      const live = await new RemoteLiveProjectionJob(remoteWorkerPath(RemoteWorkerFile.LiveProjection,archived),10000).project(db, {
+        database,localId: 'session',sessionId: store.controlBinding('session')!.session_id,deviceId: 'device',owner,objectId: 'message',revision: '1',
+      });
+      expect(live?.payload.preview).toBe('Worker output'); expect(live?.objectId).toBe('message');
       const projected = await invoke(RemoteWorkerFile.Projection, { database, target, sessionId: 'session', owner, deviceId: 'device', environment: 'test', agent: null, approval: false, input: false, files: false, reply: false });
       expect(projected.error).toBeUndefined(); expect(projected.result.targetSourceSeq).toBeGreaterThan(0);
       const snapshot = new Database(target);

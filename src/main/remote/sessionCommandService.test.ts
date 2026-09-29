@@ -462,3 +462,20 @@ it('reconciles question receipts without issuing answers and only proves exact p
   await expect(f.service.reconcileQuestion(entry)).resolves.toBeNull();
   expect(f.runtime.respondToQuestionConfirmed).not.toHaveBeenCalled();
 });
+
+it('prepares cancellation of an authentic old terminal run without touching its replacement', async () => {
+  const { service,remote,runtime,entry } = fixture();
+  remote.updateRun('local','succeeded'); remote.beginRun('local','new-run');
+  const command = { ...entry.command,type:'cancel_run',request:{ payload:{ runId:'server-run' } } };
+  const prepared = remote.transaction(() => service.prepare(command,owner,null));
+  expect(prepared.runId).toBe('server-run');
+  await expect(service.execute({ ...entry,...prepared,command },() => true)).resolves.toEqual({ outcome:'already_terminal' });
+  expect(runtime.cancelSessionConfirmed).not.toHaveBeenCalled();
+  expect(remote.run('local')?.runId).toBe('new-run');
+});
+it('does not claim an unknown target run was already terminal', async () => {
+  const { service,runtime,entry } = fixture();
+  const command = { ...entry.command,type:'cancel_run',request:{ payload:{ runId:'unknown' } } };
+  await expect(service.execute({ ...entry,runId:'unknown',command },() => true)).rejects.toThrow('Run evidence unavailable');
+  expect(runtime.cancelSessionConfirmed).not.toHaveBeenCalled();
+});

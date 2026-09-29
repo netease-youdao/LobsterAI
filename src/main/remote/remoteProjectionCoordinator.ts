@@ -2,9 +2,9 @@ import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { Worker } from 'worker_threads';
 
 import { remoteDiagnostics } from './remoteDiagnostics';
+import { RemoteHistoryJob } from './remoteHistoryJob';
 import type { ProjectionWork } from './remoteProjectionWorker';
 import type { RemoteStore } from './remoteStore';
 import { archivedRemoteSyncReferences } from './remoteSyncTargetStore';
@@ -17,6 +17,7 @@ const tables = ['remote_projection', 'remote_reply_contents', 'remote_reply_chun
 /** One immutable materialization at a time. Core writes continue between bounded publication batches. */
 export class RemoteProjectionCoordinator {
   private running: Promise<void> | null = null;
+  private readonly encoder = new RemoteHistoryJob();
   constructor(private store: RemoteStore, private workerPath = remoteWorkerPath(RemoteWorkerFile.Projection)) {}
   settled(): Promise<void> { return this.running || Promise.resolve(); }
   flush(): Promise<void> {
@@ -24,22 +25,10 @@ export class RemoteProjectionCoordinator {
     const operation = this.once().finally(() => { if (this.running === operation) this.running = null; });
     this.running = operation; return operation;
   }
-  private work(input: ProjectionWork): Promise<Materialization> {
-    return new Promise((resolve, reject) => {
-      const worker = new Worker(this.workerPath, {
-        workerData: input, resourceLimits: { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 32 },
-      });
-      const timer = setTimeout(() => { void worker.terminate(); reject(new Error('REMOTE_PROJECTION_BUDGET')); }, 125_000);
-      worker.on('message', (message: { result?: Materialization; error?: string }) => {
-        clearTimeout(timer); void worker.terminate();
-        if (message.result) resolve(message.result); else reject(new Error(message.error || 'REMOTE_PROJECTION_FAILED'));
-      });
-      worker.on('error', error => {
-        clearTimeout(timer);
-        reject((error as NodeJS.ErrnoException).code === 'ERR_WORKER_OUT_OF_MEMORY'
-          ? new Error('REMOTE_PROJECTION_BUDGET') : error);
-      });
-      worker.on('exit', code => { clearTimeout(timer); if (code !== 0) reject(new Error('REMOTE_PROJECTION_WORKER_EXIT')); });
+  private work(input: ProjectionWork, current: () => boolean): Promise<Materialization> {
+    return this.encoder.run<Materialization>(this.workerPath, input, {
+      timeoutMs: 125_000, memoryMb: 256, prefix: 'REMOTE_PROJECTION',
+      current,
     });
   }
   private async once(): Promise<void> {
@@ -75,7 +64,7 @@ export class RemoteProjectionCoordinator {
       // while the shared spool remains within its 1 GiB budget.
       if (stagingBytes > 768 * 1024 * 1024) throw new Error('REMOTE_PROJECTION_BUDGET');
       filename = path.join(directory, `${randomUUID()}.sqlite`);
-      const result = await this.work({ ...work, database: this.store.db.name, target: filename });
+      const result = await this.work({ ...work, database: this.store.db.name, target: filename }, () => this.store.projectionWorkCurrent(work));
       // No projected object can cross an owner, environment, capability or source-sequence change.
       if (!this.store.projectionWorkCurrent(work) || this.store.sync(id)?.source_seq !== result.sourceSeq) { await fs.promises.rm(filename, { force: true }); return; }
       target = new Database(filename, { readonly: true, fileMustExist: true });
