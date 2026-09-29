@@ -17,6 +17,7 @@ import { showShellFailureToast, showToast } from '../utils/localFileActions';
 import { transformMarkdownTextSegments } from '../utils/markdownCodeSegments';
 import { remarkDetailsBlocks } from '../utils/remarkDetailsBlocks';
 import { remarkMarkdownLayout } from '../utils/remarkMarkdownLayout';
+import { remarkPandocInlineMath } from '../utils/remarkPandocInlineMath';
 import CodeBlock from './CodeBlock';
 import LocalFileContextMenu from './common/LocalFileContextMenu';
 import { type MarkdownLinkOpener, useMarkdownLinkOpener } from './markdownLinkOpener';
@@ -820,7 +821,13 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
         </div>
       )}
       <ReactMarkdown
-        remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkMath, remarkDetailsBlocks, remarkMarkdownLayout]}
+        remarkPlugins={[
+          [remarkGfm, { singleTilde: false }],
+          remarkMath,
+          remarkPandocInlineMath,
+          remarkDetailsBlocks,
+          remarkMarkdownLayout,
+        ]}
         rehypePlugins={[rehypeKatex]}
         urlTransform={safeUrlTransform}
         components={components}

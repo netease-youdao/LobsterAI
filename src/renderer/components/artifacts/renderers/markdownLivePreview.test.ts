@@ -75,8 +75,24 @@ function mathSources(state: EditorState) {
 }
 
 describe('editable Markdown math syntax', () => {
-  test.each(['$x^2$', '$$x^2$$', '\\(x^2\\)', '$ x^2 $', '$x\n+y$'])('recognizes %s as math', content => {
+  test.each(['$x^2$', '$$x^2$$', '\\(x^2\\)', '$$ x^2 $$', '$x\n+y$'])('recognizes %s as math', content => {
     expect(mathSources(preview(`说明 ${content} 结束`))).toEqual([content]);
+  });
+
+  test.each(['$3/$15', '$5 and $10', '$3–$15', '价格 $3/$15'])('keeps currency %s literal', content => {
+    expect(mathSources(preview(`说明 ${content} 结束`))).toEqual([]);
+  });
+
+  test.each(['$x^2$', '$E=mc^2$', '$\\frac{a}{b}$'])('recognizes %s as math next to currency', content => {
+    expect(mathSources(preview(`说明 ${content}，价格 $3/$15`))).toEqual([content]);
+  });
+
+  test.each(['$ x^2 $', '$ x$', '$x $', '$x$1'])('applies the Pandoc delimiter rule to %s', content => {
+    expect(mathSources(preview(`说明 ${content} 结束`))).toEqual([]);
+  });
+
+  test('does not let a rejected currency dollar consume later math', () => {
+    expect(mathSources(preview('It costs $5, where $x$ is the count.'))).toEqual(['$x$']);
   });
 
   test('keeps code examples and escaped math delimiters literal', () => {
