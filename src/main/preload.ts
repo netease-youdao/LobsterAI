@@ -624,6 +624,15 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.GetSessionSearchMessages, options),
     getSessionMessageRailIndex: (sessionId: string) =>
       ipcRenderer.invoke(CoworkIpcChannel.GetSessionMessageRailIndex, sessionId),
+    getProgressCard: (sessionId: string) =>
+      ipcRenderer.invoke(CoworkIpcChannel.GetProgressCard, sessionId),
+    dismissProgressCard: (sessionId: string, revision: number) =>
+      ipcRenderer.invoke(CoworkIpcChannel.DismissProgressCard, sessionId, revision),
+    onProgressCardChanged: (callback: (event: { sessionId: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string }) => callback(data);
+      ipcRenderer.on(CoworkIpcChannel.ProgressCardChanged, handler);
+      return () => ipcRenderer.removeListener(CoworkIpcChannel.ProgressCardChanged, handler);
+    },
     getContextUsage: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:contextUsage', sessionId),
     compactContext: (sessionId: string) =>
