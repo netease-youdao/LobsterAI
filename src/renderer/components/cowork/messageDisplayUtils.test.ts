@@ -27,11 +27,14 @@ import {
   getActivityLiveDetail,
   getActivityLiveStatusText,
   getActivityStepDisplay,
+  getActivityStepDoneLabel,
   getActivityStepKind,
+  getLiveActivityWindow,
   getLiveEditDiff,
   getShellCommandDescription,
   getStreamingTextSignature,
   getThinkingPhaseLabels,
+  getToolDisplayName,
   getToolInputSummary,
   getToolResultCollapsedDisplay,
   getToolResultDisplay,
@@ -39,11 +42,14 @@ import {
   getTurnAnswerStartIndex,
   getTurnEndTimestamp,
   getTurnMessageIds,
+  getTurnReplyMessageIds,
   getTurnStartTimestamp,
   isAbandonedToolPlaceholder,
   isActivityConsolidatedItem,
   isActivityItemLive,
   isToolGroupSettled,
+  isTransientActivityItem,
+  parseActivityPlan,
   STRUCTURED_TEXT_FORMAT_MAX_CHARS,
   TOOL_RESULT_COLLAPSED_FULL_DISPLAY_MAX_CHARS,
   turnHasSelfIndicatingActivity,
@@ -72,6 +78,27 @@ test('turn message IDs include both the user and assistant messages', () => {
   const [turn] = buildConversationTurns(buildDisplayItems(messages));
 
   expect([...getTurnMessageIds(turn)]).toEqual(['user-1', 'assistant-1']);
+});
+
+test('turn reply IDs list assistant text replies but not thinking or tool steps', () => {
+  const messages: CoworkMessage[] = [
+    { id: 'user-1', type: 'user', content: 'make slides', timestamp: 1 },
+    { id: 'thinking-1', type: 'assistant', content: 'planning', timestamp: 2, metadata: { isThinking: true } },
+    { id: 'reply-1', type: 'assistant', content: 'Generating the cover first.', timestamp: 3 },
+    {
+      id: 'tool-use-1',
+      type: 'tool_use',
+      content: '',
+      timestamp: 4,
+      metadata: { toolName: 'exec', toolUseId: 'call-1', toolInput: { command: 'node build.js' } },
+    },
+    { id: 'tool-result-1', type: 'tool_result', content: 'done', timestamp: 5, metadata: { toolUseId: 'call-1' } },
+    { id: 'reply-2', type: 'assistant', content: 'Done: [deck.pptx](/tmp/deck.pptx)', timestamp: 6 },
+  ];
+
+  const [turn] = buildConversationTurns(buildDisplayItems(messages));
+
+  expect(getTurnReplyMessageIds(turn)).toEqual(['reply-1', 'reply-2']);
 });
 
 test('orphan turn IDs stay unique across paged windows', () => {
@@ -572,7 +599,7 @@ test('activity header label summarizes commands, reads, and edits in natural lan
   ])).toBe('读取了 App.tsx');
   expect(getActivityGroupHeaderLabel([
     activityToolItem('tool-1', 'tavily__tavily_search', undefined, { query: 'youdao' }),
-  ])).toBe('使用了 tavily__tavily_search');
+  ])).toBe('搜索了「youdao」');
   expect(getActivityGroupHeaderLabel([activityToolItem('tool-1', 'write')])).toBe('写入了文件');
 });
 
@@ -580,7 +607,7 @@ test('a folded run with one real step names that step, not a count', () => {
   expect(getActivityGroupHeaderLabel([
     activityThinkingItem('think-1'),
     activityToolItem('tool-1', 'tavily__tavily_search', undefined, { query: 'GPT-6' }),
-  ])).toBe('使用了 tavily__tavily_search');
+  ])).toBe('搜索了「GPT-6」');
   expect(getActivityGroupHeaderLabel([
     activityThinkingItem('think-1'),
     activityToolItem('tool-1', 'read', undefined, { file_path: '/skills/pptx/SKILL.md' }),
@@ -602,7 +629,9 @@ test('step lines lead with an icon kind that follows the tool, and thinking has 
   expect(getActivityStepKind(activityToolItem('tool-10', 'sessions_spawn'))).toBe(ActivityStepKind.Agent);
   expect(getActivityStepKind(activityToolItem('tool-11', 'TodoWrite'))).toBe(ActivityStepKind.Todo);
   expect(getActivityStepKind(activityToolItem('tool-12', 'cron'))).toBe(ActivityStepKind.Schedule);
-  expect(getActivityStepKind(activityToolItem('tool-13', 'tavily__tavily_search'))).toBe(ActivityStepKind.Tool);
+  expect(getActivityStepKind(activityToolItem('tool-13', 'tavily__tavily_search'))).toBe(ActivityStepKind.Web);
+  expect(getActivityStepKind(activityToolItem('tool-14', 'progress_card'))).toBe(ActivityStepKind.Todo);
+  expect(getActivityStepKind(activityToolItem('tool-15', 'lobster-excel__excel_read'))).toBe(ActivityStepKind.Tool);
 });
 
 test('a folded run summary leads with the icon of the first category its label names', () => {
@@ -697,7 +726,7 @@ test('activity current action text is a verb phrase for the latest step', () => 
     { file_path: '/repo/src/i18n.ts', old_string: 'a', new_string: 'b' },
   ))).toBe('正在修改 i18n.ts');
   expect(getActivityCurrentActionText(activityToolItem('tool-4', 'web_fetch')))
-    .toBe('正在使用 web_fetch');
+    .toBe('正在读取网页');
   // Session orchestration tools get plain-language labels instead of raw names.
   expect(getActivityCurrentActionText(activityToolItem('tool-5', 'sessions_yield')))
     .toBe('正在等待子 Agent 完成');
@@ -933,4 +962,165 @@ test('a file step whose tool never started is an abandoned placeholder', () => {
   expect(isAbandonedToolPlaceholder(started as Extract<ConsolidatedItem, { type: 'tool_group' }>)).toBe(false);
   const finished = runningToolItem('write', { path: '/tmp/a.html', content: '<html>' }, { content: 'ok', isFinal: true });
   expect(isAbandonedToolPlaceholder(finished as Extract<ConsolidatedItem, { type: 'tool_group' }>)).toBe(false);
+});
+
+// ── Live run window ──────────────────────────────────────────────────────────
+
+const windowEntry = (index: number, item: ConsolidatedItem) => ({ index, item });
+
+test('thoughts, waits on command output, and plan updates are transient; real work is not', () => {
+  expect(isTransientActivityItem(activityThinkingItem('think-1'))).toBe(true);
+  expect(isTransientActivityItem(activityToolItem('p-1', 'process', undefined, { action: 'poll', sessionId: 'vivid-lobster' }))).toBe(true);
+  expect(isTransientActivityItem(activityToolItem('p-2', 'process', undefined, { action: 'log', sessionId: 'vivid-lobster' }))).toBe(true);
+  expect(isTransientActivityItem(activityToolItem('p-3', 'process', undefined, { action: 'kill', sessionId: 'vivid-lobster' }))).toBe(false);
+  expect(isTransientActivityItem(activityToolItem('plan-1', 'progress_card', undefined, { markdown: 'working' }))).toBe(true);
+  expect(isTransientActivityItem(activityToolItem('plan-2', 'update_plan', undefined, { plan: [] }))).toBe(true);
+  expect(isTransientActivityItem(activityToolItem('exec-1', 'exec', undefined, { command: 'ls' }))).toBe(false);
+  expect(isTransientActivityItem(activityTextItem('text-1'))).toBe(false);
+});
+
+test('a live run keeps its latest five steps and counts the older ones', () => {
+  const entries = [
+    windowEntry(0, activityThinkingItem('think-0')),
+    windowEntry(1, activityToolItem('read-1', 'read', { result: 1 })),
+    windowEntry(2, activityToolItem('exec-2', 'exec', { result: 1 })),
+    windowEntry(3, activityThinkingItem('think-3')),
+    windowEntry(4, activityToolItem('exec-4', 'exec', { result: 1 })),
+    windowEntry(5, activityToolItem('poll-5', 'process', { result: 1 }, { action: 'poll', sessionId: 's' })),
+    windowEntry(6, activityToolItem('exec-6', 'exec', { result: 1 })),
+    windowEntry(7, activityThinkingItem('think-7')),
+    windowEntry(8, activityToolItem('exec-8', 'exec', { result: 1 })),
+    windowEntry(9, activityToolItem('exec-9', 'exec', { result: 1 })),
+    windowEntry(10, activityToolItem('exec-10', 'exec')),
+  ];
+  const liveWindow = getLiveActivityWindow(entries);
+  expect(liveWindow.earlierStepCount).toBe(2);
+  expect(liveWindow.earlier.map((entry) => entry.index)).toEqual([0, 1, 2, 3]);
+  // The finished thought and output check inside the window drop out.
+  expect(liveWindow.recent.map((entry) => entry.index)).toEqual([4, 6, 8, 9, 10]);
+});
+
+test('a live run keeps its tail on screen even when the tail is a thought', () => {
+  const entries = [
+    windowEntry(0, activityThinkingItem('think-0')),
+    windowEntry(1, activityToolItem('exec-1', 'exec', { result: 1 })),
+    windowEntry(2, activityThinkingItem('think-2')),
+  ];
+  const liveWindow = getLiveActivityWindow(entries);
+  expect(liveWindow.earlierStepCount).toBe(0);
+  expect(liveWindow.earlier).toEqual([]);
+  expect(liveWindow.recent.map((entry) => entry.index)).toEqual([1, 2]);
+});
+
+test('a short live run folds nothing', () => {
+  const entries = [1, 2, 3].map((index) => windowEntry(index, activityToolItem(`exec-${index}`, 'exec', { result: 1 })));
+  expect(getLiveActivityWindow(entries)).toEqual({ earlier: [], earlierStepCount: 0, recent: entries });
+});
+
+// ── Descriptive step labels ──────────────────────────────────────────────────
+
+test('web searches name their query, built-in or MCP', () => {
+  expect(getActivityStepDoneLabel(activityToolItem('s-1', 'web_search', { result: 1 }, { query: 'Anthropic 2026 valuation' })))
+    .toBe('搜索了「Anthropic 2026 valuation」');
+  expect(getActivityCurrentActionText(activityToolItem('s-2', 'tavily__tavily_search', undefined, { query: 'Claude Cowork' })))
+    .toBe('正在搜索「Claude Cowork」');
+  expect(getActivityLiveStatusText(activityToolItem('s-3', 'tavily__tavily_search', undefined, { query: 'x' })))
+    .toBe('正在搜索网页');
+  // Memory search keeps its own wording.
+  expect(getActivityStepDoneLabel(activityToolItem('s-4', 'memory_search', { result: 1 }, { query: 'blog' })))
+    .toBe('使用了 memory_search');
+});
+
+test('web fetches name the site, image views name the image', () => {
+  expect(getActivityStepDoneLabel(activityToolItem('f-1', 'web_fetch', { result: 1 }, { url: 'https://github.com/openclaw/openclaw/pull/1' })))
+    .toBe('读取了网页 github.com');
+  expect(getActivityStepDoneLabel(activityToolItem('i-1', 'view_image', { result: 1 }, { paths: ['/tmp/deck/contact-sheet.jpg'] })))
+    .toBe('查看了图片 contact-sheet.jpg');
+  expect(getActivityStepDoneLabel(activityToolItem('i-2', 'view_image', { result: 1 }, { paths: ['/tmp/a.png', '/tmp/b.png'] })))
+    .toBe('查看了 2 张图片');
+  expect(getActivityCurrentActionText(activityToolItem('i-3', 'view_image', undefined, { path: '/tmp/cover.png' })))
+    .toBe('正在查看图片 cover.png');
+  expect(getActivityStepDoneLabel(activityToolItem('i-4', 'view_image', { result: 1 }, {}))).toBe('查看了图片');
+});
+
+test('background command checks and plan updates read as what they are', () => {
+  expect(getActivityStepDoneLabel(activityToolItem('p-1', 'process', { result: 1 }, { action: 'poll', sessionId: 's' })))
+    .toBe('查看了命令输出');
+  expect(getActivityCurrentActionText(activityToolItem('p-2', 'process', undefined, { action: 'poll', sessionId: 's' })))
+    .toBe('正在等待命令输出');
+  expect(getActivityStepDoneLabel(activityToolItem('p-3', 'process', { result: 1 }, { action: 'kill', sessionId: 's' })))
+    .toBe('操作了后台命令');
+  expect(getActivityStepDoneLabel(activityToolItem('c-1', 'progress_card', { result: 1 }, {
+    plan: [{ step: 'Research', status: 'completed' }, { step: 'Build', status: 'in_progress' }, { step: 'Check', status: 'pending' }],
+  }))).toBe('更新了任务进度 1/3');
+  expect(getActivityStepDoneLabel(activityToolItem('c-2', 'progress_card', { result: 1 }, { markdown: '**Deck** in progress' })))
+    .toBe('更新了任务进度');
+  expect(getActivityCurrentActionText(activityToolItem('c-3', 'progress_card', undefined, { markdown: 'x' })))
+    .toBe('正在更新任务清单');
+});
+
+test('MCP tool names drop their server prefix', () => {
+  expect(getToolDisplayName('lobster-excel__excel_read')).toBe('excel read');
+  expect(getToolDisplayName('qcc-company__get_company_profile')).toBe('get company profile');
+  expect(getToolDisplayName('web_fetch')).toBe('web_fetch');
+});
+
+test('a folded run is not led by the icon of a plan update it does not count', () => {
+  expect(getActivityGroupStepKind([
+    activityToolItem('plan-1', 'progress_card', { result: 1 }, { markdown: 'x' }),
+    activityToolItem('s-1', 'web_search', { result: 1 }, { query: 'a' }),
+    activityToolItem('s-2', 'web_search', { result: 1 }, { query: 'b' }),
+  ])).toBe(ActivityStepKind.Web);
+  expect(getActivityGroupStepKind([
+    activityThinkingItem('think-1'),
+    activityToolItem('plan-1', 'progress_card', { result: 1 }, { markdown: 'x' }),
+  ])).toBe(ActivityStepKind.Todo);
+});
+
+test('plan updates and output checks do not count as work in a folded summary', () => {
+  expect(getActivityGroupHeaderLabel([
+    activityToolItem('exec-1', 'exec', { result: 1 }, { command: 'node build.js' }),
+    activityToolItem('poll-1', 'process', { result: 1 }, { action: 'poll', sessionId: 's' }),
+    activityToolItem('poll-2', 'process', { result: 1 }, { action: 'poll', sessionId: 's' }),
+  ])).toBe('运行了命令');
+  expect(getActivityGroupHeaderLabel([
+    activityToolItem('exec-1', 'exec', { result: 1 }),
+    activityToolItem('exec-2', 'exec', { result: 1 }),
+    activityToolItem('plan-1', 'progress_card', { result: 1 }, { markdown: 'x' }),
+  ])).toBe('运行了 2 个命令');
+  expect(getActivityGroupHeaderLabel([
+    activityToolItem('plan-1', 'progress_card', { result: 1 }, { markdown: 'x' }),
+    activityToolItem('plan-2', 'progress_card', { result: 1 }, { plan: [{ step: 'A', status: 'completed' }] }),
+  ])).toBe('更新了任务进度 1/1');
+});
+
+// ── Published plans ──────────────────────────────────────────────────────────
+
+test('a progress card publishes its checklist and its note', () => {
+  const plan = parseActivityPlan('progress_card', {
+    markdown: '**Anthropic 公司介绍 PPT**\n\n进行中：搭建 10 页幻灯片 <progress value="3" max="7"></progress>\n[预览](https://example.com)',
+    plan: [
+      { step: '调研 Anthropic 关键事实', status: 'completed' },
+      { step: '确定设计语言与内容大纲', status: 'in_progress' },
+      { step: '生成封面配图', status: 'pending' },
+    ],
+  });
+  expect(plan?.steps.map((step) => [step.primaryText, step.status])).toEqual([
+    ['调研 Anthropic 关键事实', 'completed'],
+    ['确定设计语言与内容大纲', 'in_progress'],
+    ['生成封面配图', 'pending'],
+  ]);
+  expect(plan?.markdown).toContain('**Anthropic 公司介绍 PPT**');
+});
+
+test('plans also come from update_plan and TodoWrite; an empty card clears the plan', () => {
+  expect(parseActivityPlan('update_plan', {
+    explanation: 'Refactor first',
+    plan: [{ step: 'Refactor', status: 'in_progress' }],
+  })).toMatchObject({ markdown: 'Refactor first', steps: [{ primaryText: 'Refactor', status: 'in_progress' }] });
+  expect(parseActivityPlan('TodoWrite', {
+    todos: [{ content: 'Write tests', activeForm: 'Writing tests', status: 'in_progress' }],
+  })?.steps[0]).toMatchObject({ primaryText: 'Writing tests', status: 'in_progress' });
+  expect(parseActivityPlan('progress_card', {})).toBeNull();
+  expect(parseActivityPlan('exec', { plan: [{ step: 'x', status: 'pending' }] })).toBeNull();
 });

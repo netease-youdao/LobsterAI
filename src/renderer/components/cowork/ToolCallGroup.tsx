@@ -1,4 +1,3 @@
-import { CheckIcon } from '@heroicons/react/24/outline';
 import Lottie from 'lottie-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -6,6 +5,7 @@ import { useSelector } from 'react-redux';
 import mediaGeneratingAnimation from '../../assets/lottie/media-generating.json';
 import { i18nService } from '../../services/i18n';
 import { selectIsStreaming } from '../../store/selectors/coworkSelectors';
+import { ActivityPlanDetail } from './ActivityPlanDetail';
 import { ActivityLiveDetailLine, ActivityStepLine } from './ActivityStepLine';
 import { ActivityEntryVariant, ActivityStepKind } from './constants';
 import {
@@ -35,58 +35,16 @@ import {
   isMediaGenerateRunning,
   isMediaStatusPoll,
   isMediaStatusPollRunning,
+  isPlanToolName,
   isTodoWriteToolName,
   isToolGroupSettled,
   normalizeToolName,
-  type ParsedTodoItem,
+  parseActivityPlan,
   parseMediaStreamingInfo,
-  parseTodoWriteItems,
-  type TodoStatus,
   type ToolGroupItem,
   truncatePreview,
 } from './messageDisplayUtils';
 import { DiffStatsBadge, getToolGroupDiffStats } from './toolDiffStats';
-
-// ── TodoWriteInputView ───────────────────────────────────────────────────────
-
-const TodoWriteInputView: React.FC<{ items: ParsedTodoItem[] }> = ({ items }) => {
-  const getStatusCheckboxClass = (status: TodoStatus): string => {
-    switch (status) {
-      case 'completed':
-        return 'bg-green-500/10 border-green-500 text-green-500';
-      case 'in_progress':
-        return 'bg-transparent border-blue-500';
-      case 'pending':
-      case 'unknown':
-      default:
-        return 'bg-transparent border-border';
-    }
-  };
-
-  return (
-    <div className="space-y-2">
-      {items.map((item, index) => (
-        <div
-          key={`todo-item-${index}`}
-          className="flex items-start gap-2"
-        >
-          <span className={`mt-0.5 h-4 w-4 rounded-[4px] border flex-shrink-0 inline-flex items-center justify-center ${getStatusCheckboxClass(item.status)}`}>
-            {item.status === 'completed' && <CheckIcon className="h-3 w-3 stroke-[2.5]" />}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className={`text-xs whitespace-pre-wrap break-words leading-5 ${
-              item.status === 'completed'
-                ? 'text-muted'
-                : 'text-foreground'
-            }`}>
-              {item.primaryText}
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-};
 
 // ── ToolCallGroup ────────────────────────────────────────────────────────────
 
@@ -138,7 +96,7 @@ const ToolCallGroup: React.FC<{
   const toolInput = toolUse.metadata?.toolInput;
   const isCronTool = isCronToolName(rawToolName);
   const isTodoWriteTool = isTodoWriteToolName(rawToolName);
-  const todoItems = isTodoWriteTool ? parseTodoWriteItems(toolInput) : null;
+  const activityPlan = isPlanToolName(rawToolName) ? parseActivityPlan(rawToolName, toolInput) : null;
   const mapText = mapDisplayText ?? ((value: string) => value);
   const toolInputDisplayRaw = formatToolInput(rawToolName, toolInput);
   const toolInputDisplay = toolInputDisplayRaw ? mapText(toolInputDisplayRaw) : null;
@@ -313,8 +271,8 @@ const ToolCallGroup: React.FC<{
                 )}
               </div>
             </div>
-          ) : isTodoWriteTool && todoItems ? (
-            <TodoWriteInputView items={todoItems} />
+          ) : activityPlan ? (
+            <ActivityPlanDetail plan={activityPlan} mapDisplayText={mapDisplayText} />
           ) : isEditWithDiff && diffDataList ? (
             <div className="space-y-2">
               {diffDataList.map((diff, idx) => (

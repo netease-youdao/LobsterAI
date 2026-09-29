@@ -81,7 +81,9 @@ function parseReport(stdout: string): OpenClawStartupMigrationReport | null {
         !== report.sourceCount
       || ![report.changes, report.notices, report.warnings, report.remainingPaths].every(
         values => Array.isArray(values) && values.every(value => typeof value === 'string'),
-      )) return null;
+      )
+      || (report.probePaths !== undefined && !(Array.isArray(report.probePaths)
+        && report.probePaths.every((value: unknown) => typeof value === 'string')))) return null;
     return report as OpenClawStartupMigrationReport;
   } catch {
     return null;
@@ -95,7 +97,15 @@ export async function migrateLegacyStateBeforeStartup(params: {
   electronNodeRuntimePath: string;
   env: NodeJS.ProcessEnv;
   runner?: StartupMigrationRunner;
-}): Promise<{ status: OpenClawStartupMigrationStatus; error?: string; errorCode?: OpenClawEngineErrorCode }> {
+}): Promise<{
+  status: OpenClawStartupMigrationStatus;
+  error?: string;
+  errorCode?: OpenClawEngineErrorCode;
+  /** Nothing was migrated and nothing remains; notices about retained files are allowed. */
+  settled?: boolean;
+  /** Absolute legacy locations to watch; only reported by current helper builds. */
+  probePaths?: string[];
+}> {
   const entryPath = path.join(params.runtimeRoot, OPENCLAW_STARTUP_MIGRATION_ENTRY);
   try {
     if (!fs.existsSync(entryPath)) {
@@ -137,7 +147,11 @@ export async function migrateLegacyStateBeforeStartup(params: {
         : result.stderr.trim().slice(-LOG_TAIL_LIMIT);
       throw new Error(detail || `Startup migration did not report verified completion (exit code ${result.code}).`);
     }
-    return { status: report.status };
+    return {
+      status: report.status,
+      settled: report.changes.length === 0,
+      ...(report.probePaths ? { probePaths: report.probePaths.filter(value => path.isAbsolute(value)) } : {}),
+    };
   } catch (error) {
     console.error('[OpenClaw] Startup state migration failed before gateway startup:', error);
     return {

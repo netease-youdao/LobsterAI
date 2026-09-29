@@ -61,6 +61,9 @@ export const OpenClawProviderId = {
   Qwen: 'qwen',
   Zai: 'zai', // OpenClaw official provider ID for Zhipu/GLM
   Volcengine: 'volcengine',
+  // OpenClaw catalog provider for Volcengine Coding Plan models. Used for
+  // catalog lookups only; LobsterAI writes plan models under `volcengine`.
+  VolcenginePlan: 'volcengine-plan',
   Minimax: 'minimax',
   MinimaxPortal: 'minimax-portal',
   Youdaozhiyun: 'youdaozhiyun',

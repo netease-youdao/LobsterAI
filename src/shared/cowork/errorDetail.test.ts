@@ -133,6 +133,22 @@ describe('formatCoworkErrorDetailText', () => {
   test('returns empty string for an empty detail', () => {
     expect(formatCoworkErrorDetailText({})).toBe('');
   });
+
+  test('shows the stop reason before the raw message', () => {
+    const detail = buildCoworkErrorDetail({
+      rawErrorMessage: 'Agent run ended before producing a complete result.',
+      displayMessage: '模型单次回复达到了输出长度上限，任务没有完成。',
+      metadata: { provider: 'volcengine', model: 'glm-5.3', stopReason: 'length' },
+    });
+
+    expect(detail?.stopReason).toBe('length');
+    expect(formatCoworkErrorDetailText(detail ?? {})).toBe([
+      'provider: volcengine',
+      'model: glm-5.3',
+      'stopReason: length',
+      'rawErrorMessage: Agent run ended before producing a complete result.',
+    ].join('\n'));
+  });
 });
 
 describe('parseCoworkErrorDetail', () => {

@@ -5,6 +5,7 @@ import { type Artifact, ArtifactTypeValue } from '../../types/artifact';
 import type { RootState } from '..';
 import artifactReducer, {
   addArtifact,
+  addLinkedFileArtifact,
   openArtifactPreviewTab,
   selectSessionArtifacts,
   setSessionArtifacts,
@@ -332,6 +333,32 @@ test('openArtifactPreviewTab resolves duplicate file cards to the display artifa
       artifactId: 'video-second-reply',
     }),
   ]);
+});
+
+test('addLinkedFileArtifact keeps one entry per opened file and refreshes it on reopen', () => {
+  const linkedFile: Artifact = {
+    id: 'artifact-linked-file-/users/admin/work/.cowork-temp/notes.md',
+    messageId: '',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Markdown,
+    title: 'notes.md',
+    content: 'first read',
+    fileName: 'notes.md',
+    filePath: '/Users/admin/work/.cowork-temp/notes.md',
+    createdAt: 1,
+  };
+
+  let state = artifactReducer(undefined, addLinkedFileArtifact({ sessionId: 'session-1', artifact: linkedFile }));
+  state = artifactReducer(state, openArtifactPreviewTab({ sessionId: 'session-1', artifactId: linkedFile.id }));
+  state = artifactReducer(state, addLinkedFileArtifact({
+    sessionId: 'session-1',
+    artifact: { ...linkedFile, content: 'second read', createdAt: 2 },
+  }));
+
+  expect(state.artifactsBySession['session-1']).toEqual([
+    expect.objectContaining({ id: linkedFile.id, content: 'second read' }),
+  ]);
+  expect(state.selectedArtifactId).toBe(linkedFile.id);
 });
 
 test('addArtifact keeps preview tab selected when local image replaces remote image', () => {

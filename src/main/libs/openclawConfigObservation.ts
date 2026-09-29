@@ -69,7 +69,7 @@ export const ConfigDiagnosticStage = {
   Read: 'read',
   Connect: 'connect',
   Get: 'config.get',
-  Set: 'config.set',
+  Apply: 'config.apply',
   Verify: 'verify-applied',
   Complete: 'complete',
 } as const;
