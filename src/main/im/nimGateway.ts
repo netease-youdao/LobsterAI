@@ -19,6 +19,7 @@ import {
   DEFAULT_NIM_STATUS,
   NimTeamPolicy,
   NimSessionType,
+  NimP2pConfig,
 } from './types';
 import {
   downloadNimMedia,
@@ -152,6 +153,32 @@ function splitMessageIntoChunks(text: string, maxLength: number = MAX_MESSAGE_LE
  * @param params.forcePushAccountIds Account IDs that were @-mentioned in the message
  * @param params.botAccount The bot's account ID
  */
+// P2P (direct-message) equivalent of isTeamMessageAllowed below. The two must
+// stay in lockstep: 'disabled' denies unconditionally, 'allowlist' checks
+// membership, and an unset/unrecognized policy fails closed rather than
+// falling through to "allowed" the way an unmatched string comparison would.
+export function isP2PMessageAllowed(params: {
+  p2pPolicy: NimP2pConfig['policy'] | undefined;
+  p2pAllowlist: string[];
+  senderId: string;
+}): { allowed: boolean; reason?: string } {
+  const { p2pPolicy, p2pAllowlist, senderId } = params;
+
+  if (p2pPolicy === 'open') {
+    return { allowed: true };
+  }
+
+  if (p2pPolicy === 'allowlist') {
+    if (!p2pAllowlist.includes(senderId)) {
+      return { allowed: false, reason: 'sender not in allowlist' };
+    }
+    return { allowed: true };
+  }
+
+  // 'disabled', unset, or any unrecognized value: fail closed.
+  return { allowed: false, reason: 'p2p messages disabled' };
+}
+
 function isTeamMessageAllowed(params: {
   teamPolicy: NimTeamPolicy;
   teamAllowlist: string[];
@@ -781,15 +808,6 @@ export class NimGateway extends EventEmitter {
         return;
       }
 
-      // P2P allowlist filtering: if p2p.policy is "allowlist", check p2p.allowFrom
-      if (this.config?.p2p?.policy === 'allowlist' && this.config.p2p.allowFrom?.length) {
-        const whitelistSet = new Set(this.config.p2p.allowFrom.map(String));
-        if (!whitelistSet.has(senderId)) {
-          this.log(`[NIM Gateway] Ignoring message from non-whitelisted account: ${senderId}`);
-          return;
-        }
-      }
-
       // Deduplication
       if (this.isMessageProcessed(msgId)) {
         this.log(`[NIM Gateway] Duplicate message ignored: ${msgId}`);
@@ -812,6 +830,22 @@ export class NimGateway extends EventEmitter {
       const { sessionType, targetId } = parseConversationId(msg.conversationId || '');
       const isP2P = sessionType === 'p2p';
       const isTeam = sessionType === 'team' || sessionType === 'superTeam';
+
+      // P2P policy check: 'open' allows any sender, 'allowlist' checks
+      // p2p.allowFrom, and 'disabled' (or an unset/unrecognized policy) fails
+      // closed. Mirrors isTeamMessageAllowed's fail-closed handling below.
+      if (isP2P) {
+        const p2pAllowlist = (this.config?.p2p?.allowFrom ?? []).map(String);
+        const p2pCheck = isP2PMessageAllowed({
+          p2pPolicy: this.config?.p2p?.policy,
+          p2pAllowlist,
+          senderId,
+        });
+        if (!p2pCheck.allowed) {
+          this.log(`[NIM Gateway] Ignoring P2P message: ${p2pCheck.reason}, sender: ${senderId}`);
+          return;
+        }
+      }
 
       // Handle team messages: only process if bot is @-mentioned and policy allows
       if (isTeam) {
