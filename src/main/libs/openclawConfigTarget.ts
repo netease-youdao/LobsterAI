@@ -96,12 +96,60 @@ export function sameOpenClawConfigContent(left: string, right: string): boolean 
   }
 }
 
+/** Same slot count as OpenClaw's own `.bak` ring (config/backup-rotation.ts). */
+const CONFIG_BACKUP_SLOTS = 5;
+
+/** Best effort: losing an old recovery point is better than keeping a stale `.bak`. */
+function rotateOpenClawConfigBackups(backupPath: string): void {
+  const steps: Array<() => void> = [() => fs.rmSync(`${backupPath}.${CONFIG_BACKUP_SLOTS - 1}`, { force: true })];
+  for (let index = CONFIG_BACKUP_SLOTS - 2; index >= 1; index -= 1) {
+    steps.push(() => fs.renameSync(`${backupPath}.${index}`, `${backupPath}.${index + 1}`));
+  }
+  steps.push(() => fs.renameSync(backupPath, `${backupPath}.1`));
+  for (const step of steps) {
+    try {
+      step();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn(`[OpenClawConfig] Failed to rotate config backups: ${backupPath}`, error);
+      }
+    }
+  }
+}
+
+/**
+ * OpenClaw restores `<config>.bak` when a read looks clobbered against its
+ * last-known-good baseline, e.g. the >50% size drop after sign-out removes the
+ * plan model catalog. Host writes bypass OpenClaw's backup rotation, so a stale
+ * `.bak` would silently bring back an old model/provider setup on every start.
+ * Keep the host-approved content there; older backups move down the ring.
+ */
+export function alignOpenClawConfigBackup(configPath: string, raw: string): boolean {
+  const backupPath = `${configPath}.bak`;
+  try {
+    const backupRaw = readOpenClawConfigRaw(backupPath);
+    // Byte-identical, so a restore rewrites exactly what the host wrote.
+    if (backupRaw === raw) return false;
+    if (backupRaw) rotateOpenClawConfigBackups(backupPath);
+    safelyReplaceTextFileSync({ filePath: backupPath, content: raw, mode: 0o600, tempLabel: 'config-backup' });
+    return true;
+  } catch (error) {
+    // The config itself is already on disk; the gateway's startup check reports any restore.
+    console.error(`[OpenClawConfig] Failed to align config backup: ${backupPath}`, error);
+    return false;
+  }
+}
+
 /** Only call while the child is stopped. Live writes belong to config.apply. */
 export function persistOpenClawConfigTarget(configPath: string, target: OpenClawConfigTarget): string {
   const current = readOpenClawConfigRaw(configPath);
   const raw = rebaseOpenClawConfigTarget(target, current);
-  if (current && sameOpenClawConfigContent(current, raw)) return current;
+  if (current && sameOpenClawConfigContent(current, raw)) {
+    alignOpenClawConfigBackup(configPath, current);
+    return current;
+  }
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   safelyReplaceTextFileSync({ filePath: configPath, content: raw, mode: 0o600, tempLabel: 'config-bootstrap' });
+  alignOpenClawConfigBackup(configPath, raw);
   return raw;
 }

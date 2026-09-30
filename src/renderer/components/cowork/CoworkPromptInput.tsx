@@ -132,6 +132,7 @@ import ModelSelector, {
 import { ActiveSkillBadge, SkillsPopover } from '../skills';
 import {
   resolveAgentModelSelection,
+  resolveAgentStartModel,
   resolveEffectiveModel,
   resolveModelThinkingLevel,
   useAgentSelectedModel,
@@ -662,6 +663,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     fallbackModel: currentAgentSelectedModel,
     engine: coworkAgentEngine,
   });
+  const homeStartModel = useMemo(() => resolveAgentStartModel({
+    agentModel: currentAgent?.model ?? '',
+    availableModels,
+    selectedModel: currentAgentSelectedModel,
+  }), [availableModels, currentAgent?.model, currentAgentSelectedModel]);
+  // A new session must not silently start on the other billing side of the agent's model.
+  const homeModelCrossesBillingSide = !sessionId && homeStartModel.crossesBillingSide;
+  const selectedModelUnavailable = agentModelIsInvalid || homeModelCrossesBillingSide;
+  const unavailableModelRef = agentModelIsInvalid
+    ? currentSession?.modelOverride ?? ''
+    : (homeModelCrossesBillingSide ? homeStartModel.unavailableModelRef ?? '' : '');
 
   const isCompact = size === 'compact';
   const isLarge = size === 'large' || isCompact;
@@ -2831,7 +2843,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     && !submitDisabled
     && !isVoiceRecognizing
     && !isPatchingModel
-    && !agentModelIsInvalid
+    && !selectedModelUnavailable
     && (effectiveModelIsAvailable || resolveSubmitModelAccessPrompt() === ModelAccessPromptKind.Login)
     && (!!activeTextareaValue.trim() || (!steerInputActive && (hasAttachments || browserAnnotationBatches.length > 0)));
   const showNewUserWelcomeLockOverlay = showNewUserWelcomeLoginOverlay && !isLoggedIn;
@@ -2894,8 +2906,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         triggerMaxWidthClassName={largeModelTriggerMaxWidthClassName}
         disabled={isPatchingModel || isPersistingAgentModel || modelSelectionRefreshPending}
         thinkingLevel={effectiveThinkingLevel ?? null}
-        value={agentModelIsInvalid && currentSession?.modelOverride
-          ? { id: '__invalid__', name: currentSession.modelOverride.split('/').pop() || currentSession.modelOverride } as Model
+        value={selectedModelUnavailable && unavailableModelRef
+          ? { id: '__invalid__', name: unavailableModelRef.split('/').pop() || unavailableModelRef } as Model
           : effectiveSelectedModel}
         onChange={async (nextModel, meta: ModelSelectorChangeMeta) => {
           if (isPatchingModel || isPersistingAgentModel) return;
@@ -2992,7 +3004,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           }
         }}
       />
-      {agentModelIsInvalid && (
+      {selectedModelUnavailable && (
         <span className="max-w-60 text-[11px] leading-4 text-red-500">
           {i18nService.t('agentModelInvalidHint')}
         </span>
