@@ -81,6 +81,7 @@ class OpenClawRuntimeAdapter extends RuntimeAdapter {
         .map(([key, value]) => ({ key, value: structuredClone(value) as T })),
       transaction: <T>(operation: () => T): T => operation(),
       run: () => null,
+      activeDecisionRun: () => remote.run(),
       owner: () => null,
       ...store.remote,
     };

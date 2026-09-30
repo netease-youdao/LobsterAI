@@ -14,6 +14,8 @@ import { type InboxEntry, RemoteApiError,RemoteBridge } from './remoteBridge';
 import { RemoteQuestionError } from './remoteQuestionService';
 import { RemoteStore } from './remoteStore';
 
+vi.mock('./remoteLogSink', () => ({ enqueueRemoteLog: (level: 'debug' | 'warn' | 'error' | 'info', message: string, fields: Record<string, unknown>) => console[level](message, fields) }));
+
 const owner = { userId: '10001', scopeKey: 'personal' };
 const databases: Database.Database[] = [];
 function fixture() {
@@ -134,6 +136,22 @@ describe('remote command task admission', () => {
 });
 
 describe('device synchronization health', () => {
+  it('does not convert an unrelated sync-health read failure into a transport disconnection', () => {
+    const { bridge, store } = fixture(); bridge.lastPong = Date.now();
+    expect(bridge.state().connected).toBe(true);
+    const read = vi.spyOn(store.db, 'prepare').mockImplementation(() => { throw new Error('projection unavailable'); });
+    expect(bridge.state()).toMatchObject({ connected: true, connectionStatus: 'online', syncHealth: { status: RemoteSyncHealthStatus.Degraded, reason: RemoteSyncHealthReason.StorageDependency } });
+    read.mockRestore(); bridge.stop();
+  });
+  it('uses v3 publication health independently of its fenced legacy outbox and historical failure', () => {
+    const { bridge, store } = fixture(); store.setEnabledOwner(owner); bridge.lastPong = Date.now();
+    store.transaction(() => { store.db.exec("INSERT INTO cowork_sessions VALUES('v3-task','Task',1,1,'idle')"); store.assignNew('v3-task', owner, 'local_create'); });
+    expect(store.sync('v3-task')!.needs_snapshot).toBeTruthy(); bridge.sessionSyncFailed = true;
+    vi.spyOn(bridge.availability, 'ownsHistory').mockReturnValue(true);
+    vi.spyOn(bridge.availability, 'health').mockReturnValue({ sessions: 1, pendingSessions: 0, degraded: false });
+    expect(bridge.state()).toMatchObject({ connected: true, sessionSyncStatus: RemoteSyncStatus.Synced, syncHealth: { status: RemoteSyncHealthStatus.Idle, pendingSessions: 0 } });
+    bridge.stop();
+  });
   it('keeps an online idle device idle during and after an empty history scan', async () => {
     const { bridge, store, requestApi } = fixture();
     bridge.stopped = false; bridge.lastPong = Date.now();
@@ -290,7 +308,7 @@ describe('session synchronization recovery', () => {
     expect(store.get('import:sync-task')).not.toBeNull();
     expect(bridge.associationSyncState({ kind: OwnershipTargetKind.Task, id: 'sync-task' })).toBe(OwnershipSyncState.Failed);
     expect(bridge.state()).toMatchObject({ error: undefined, errorCode: undefined, sessionSyncStatus: RemoteSyncStatus.Error });
-    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning.mock.calls.filter(([message]) => message === '[RemoteSync] Session synchronization failed')).toHaveLength(1);
     expect(JSON.stringify(warning.mock.calls)).not.toContain(secret);
     expect(JSON.stringify(warning.mock.calls)).not.toContain('accessToken');
     expireTaskRetry(bridge, store);

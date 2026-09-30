@@ -324,6 +324,7 @@ import {
   startAuthLocalCallback,
 } from './libs/authLocalCallbackServer';
 import {
+  type AuthFetch,
   AuthSessionManager,
   resolveAuthSessionStatusFromError,
 } from './libs/authSessionManager';
@@ -612,14 +613,17 @@ import { prepareDefaultWorkspace } from './remote/defaultWorkspace';
 import { assertDesktopInputDispatchCurrent, captureDesktopInput, desktopInputCaptureEnabled, waitForDesktopInputCapture } from './remote/desktopInputMetadata';
 import { InputPreparationService } from './remote/inputPreparationService';
 import { createRemoteDatabaseFence,loadRemoteIdentity } from './remote/installationIdentity';
+import { RemoteAccountTransition } from './remote/remoteAccountTransition';
 import { RemoteBridge } from './remote/remoteBridge';
 import { withRemoteConnectionAccount } from './remote/remoteConnectionIpc';
 import { listRemoteInputModels } from './remote/remoteInputModels';
 import { RemoteLocalGc } from './remote/remoteLocalGc';
 import { RemoteModelCatalog } from './remote/remoteModelCatalog';
+import { remoteNetworkTransport } from './remote/remoteNetworkTransport';
 import { RemoteSecurityCoordinator } from './remote/remoteSecurityCoordinator';
 import { RemoteSecurityJournal, RemoteSecurityJournalWorkerIo } from './remote/remoteSecurityJournal';
 import { PREVENT_SLEEP_STORE_KEY, RemoteSettingsController } from './remote/remoteSettingsController';
+import { remoteDiagnosticLog } from './remote/remoteSyncLog';
 import { assertRemoteExecutionPermit,currentRemoteExecution, markRemoteExecutionDispatched, SessionCommandService } from './remote/sessionCommandService';
 import { SessionDeletionService } from './remote/sessionDeletionService';
 import type { SkillChangeBatch } from './skills/skillChangeDiagnostics';
@@ -2429,7 +2433,7 @@ const bootstrapOpenClawEngine = async (
 let waitForPendingTokenRefresh: () => Promise<void> = async () => {};
 
 const ensureOpenClawRunningForCowork = async () => {
-  await remoteAccountTransition;
+  await remoteAccountTransition.wait();
   const configApplyStatus = await waitForOpenClawConfigApply('cowork engine startup');
   if (configApplyStatus) {
     return configApplyStatus;
@@ -2471,7 +2475,7 @@ const ensureOpenClawRunningForCowork = async () => {
 const getCoworkStore = () => {
   if (!coworkStore) {
     const sqliteStore = getStore();
-    coworkStore = new CoworkStore(sqliteStore.getDatabase());
+    coworkStore = new CoworkStore(sqliteStore.getDatabase(), { deferRemoteSynchronization: true });
     const cleaned = coworkStore.autoDeleteNonPersonalMemories();
     if (cleaned > 0) {
       console.info(`[cowork-memory] Auto-deleted ${cleaned} non-personal/procedural memories`);
@@ -2540,7 +2544,7 @@ const resolveCoworkAgentEngine = (): CoworkAgentEngine => {
   return 'openclaw';
 };
 
-let remoteAccountTransition: Promise<void> = Promise.resolve();
+const remoteAccountTransition = new RemoteAccountTransition();
 let remoteCredentialsAllowed = true;
 
 const getOpenClawConfigSync = (): OpenClawConfigSync => {
@@ -2929,7 +2933,7 @@ const _syncOpenClawConfigImpl = async (
   options: SyncOpenClawConfigOptions = { reason: 'unknown' },
   syncId = 0,
 ): Promise<SyncOpenClawConfigResult> => {
-  await remoteAccountTransition;
+  await remoteAccountTransition.wait();
   const D = gwDiagTs;
   console.log(
     `${D()} ──── syncOpenClawConfig START reason=${options.reason} restartIfRunning=${!!options.restartGatewayIfRunning} expectedImpact=${options.expectedImpact ?? OpenClawConfigImpact.None}`,
@@ -2977,7 +2981,7 @@ const _syncOpenClawConfigImpl = async (
     getMcpRuntime().clearResolvedServersCache();
   }
 
-  await remoteAccountTransition;
+  await remoteAccountTransition.wait();
   const imConfigFingerprint = imConfigRestartTracker.captureConfig();
   const syncResult = configSync.sync(options.reason);
   console.log(
@@ -5729,9 +5733,9 @@ if (!gotTheLock) {
   });
   waitForPendingTokenRefresh = () => authSessionManager.waitForPendingRefresh();
 
-  const fetchWithAuth = async (url: string, options?: RequestInit): Promise<Response> => {
+  const fetchWithAuth = async (url: string, options?: RequestInit, transport?: AuthFetch): Promise<Response> => {
     const requestEnterpriseSession = captureEnterpriseAuthSessionSnapshot();
-    const response = await authSessionManager.fetchWithAuth(url, options);
+    const response = await authSessionManager.fetchWithAuth(url, options, transport);
     if (
       requestEnterpriseSession
       && response.headers.get('content-type')?.includes('application/json')
@@ -5794,6 +5798,7 @@ if (!gotTheLock) {
 
   const initializeRemoteBridge = (): RemoteBridge => {
     if (remoteBridge) return remoteBridge;
+    getCoworkStore().remote.initializeSynchronization();
     const identity = loadRemoteIdentity(app.getPath('appData'), app.getPath('userData'), safeStorage);
     const fence = createRemoteDatabaseFence(app.getPath('appData'), app.getPath('userData'), safeStorage, identity);
     const profile = crypto.createHash('sha256').update(fs.realpathSync(app.getPath('userData'))).digest('hex');
@@ -5825,6 +5830,7 @@ if (!gotTheLock) {
       getTargetId: () => remoteBridge?.getSyncTargetId() ?? null });
     remoteBridge = new RemoteBridge({
       security,
+      createSocket: url => remoteNetworkTransport.socket(url),
       deletion: { service: getSessionDeletionService(), runtime: getCoworkEngineRouter(), reconcileStop: id => remoteSessionCommands!.reconcileSession(id) },
       input: { models, preparations },
       files: {
@@ -5852,7 +5858,7 @@ if (!gotTheLock) {
         platform: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux', appVersion: app.getVersion() },
       request: async (owner, pathname, init) => {
         if (!sameOwner(owner, getCurrentRemoteOwner())) throw new Error('Account changed');
-        return fetchWithAuth(`${getServerApiBaseUrl()}${pathname}`, { ...init, headers: { ...getEnterpriseAccountHeaders(), ...init.headers } });
+        return fetchWithAuth(`${getServerApiBaseUrl()}${pathname}`, { ...init, headers: { ...getEnterpriseAccountHeaders(), ...init.headers } }, remoteNetworkTransport.fetch);
       },
       getAgentWorkspace: async agentId => {
         const agent = getCoworkStore().getVisibleAgent(agentId, getCurrentRemoteOwner());
@@ -5985,7 +5991,7 @@ if (!gotTheLock) {
       },
     });
     remoteSettingsController.restoreKeepAwake();
-    try { initializeRemoteBridge(); } catch { /* Ownership is recorded even while secure remote credentials are unavailable. */ }
+    try { initializeRemoteBridge(); } catch { remoteDiagnosticLog('remote.record.quarantined', { lane: 'transport', reason: 'DEPENDENCY_UNAVAILABLE' }, 'warn'); }
     let previousRemoteOwner = getCurrentRemoteOwner();
     for (const key of ['auth_tokens', LogReporterStoreKey.AuthUser, 'enterprise_account_context']) {
       getStore().onDidChange(key, () => {
@@ -5998,12 +6004,12 @@ if (!gotTheLock) {
           remoteSessionCommands?.accountChanged(previousRemoteOwner, next);
           if (previousRemoteOwner && !sameOwner(previousRemoteOwner, next)) {
             remoteCredentialsAllowed = false;
-            remoteAccountTransition = remoteAccountTransition.then(async () => {
+            void remoteAccountTransition.run(async current => {
               await getOpenClawEngineManager().stopGateway();
+              if (!current()) return;
               fenceCronJobs(getOpenClawEngineManager().getStateDir(), getCoworkStore().remote, getCurrentRemoteOwner());
-              remoteCredentialsAllowed = true;
+              if (current()) remoteCredentialsAllowed = true;
             });
-            remoteAccountTransition.catch(() => { /* Fail closed: config/start await this rejected barrier. */ });
           }
         } finally {
           previousRemoteOwner = next;
@@ -14960,6 +14966,7 @@ if (!gotTheLock) {
     currentAppCleanupStep = 'sync-teardown';
     remoteLocalGc?.stop();
     remoteBridge?.stop();
+    remoteNetworkTransport.dispose();
     remoteSettingsController?.dispose();
     skillManager?.stopWatching();
     stopMediaPollTimer();

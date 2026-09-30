@@ -1,15 +1,17 @@
 import Database from 'better-sqlite3';
+import { fork } from 'child_process';
 import fs from 'fs';
 import { createRequire } from 'module';
 import os from 'os';
 import path from 'path';
 import { build } from 'vite';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Worker } from 'worker_threads';
 
 import { remoteWorkerBuilds } from '../../../remote-workers.config';
 import { RemoteHistoryJob } from './remoteHistoryJob';
 import { RemoteLiveProjectionJob } from './remoteLiveProjectionJob';
+import { RemoteNetworkTransport } from './remoteNetworkTransport';
 import { RemoteStore } from './remoteStore';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 
@@ -56,6 +58,47 @@ describe('independent packaged remote workers', () => {
       expect(fs.readFileSync(path.join(output, filename), 'utf8')).toMatch(/require\(["']better-sqlite3["']\)/u);
     const compiledDirectory = path.join(root, 'dist-electron', 'main', 'remote');
     expect(remoteWorkerPath(RemoteWorkerFile.Projection, compiledDirectory)).toBe(path.join(compiledDirectory, RemoteWorkerFile.Projection));
+  });
+  it('runs bounded HTTP parsing and WS admission in the packaged child without core access', async () => {
+    const fixture = path.join(root, 'network-fixture.cjs');
+    fs.writeFileSync(fixture, `
+      const { EventEmitter } = require('events');
+      global.fetch = async url => {
+        const mode = String(url).split('/').pop();
+        if (mode === 'oversized') return new Response('x'.repeat(2 * 1024 * 1024 + 1));
+        if (mode === 'deep') return new Response('['.repeat(100) + '0' + ']'.repeat(100));
+        if (mode === 'wide') return new Response(JSON.stringify(Array.from({length: 20001}, () => 0)));
+        if (mode === 'invalid') return new Response('{secret');
+        return new Response(JSON.stringify({code:0,data:{workerPid:process.pid}}));
+      };
+      global.WebSocket = class extends EventEmitter {
+        static OPEN = 1;
+        readyState = 1;
+        bufferedAmount = 0;
+        constructor() { super(); setImmediate(() => this.emit('open')); }
+        addEventListener(type, listener) { this.on(type, listener); }
+        close() { this.readyState = 3; }
+        send(mode) {
+          if(mode === 'burst') for(let i=0;i<17;i++) this.emit('message',{data:JSON.stringify({type:'pong'})});
+          else this.emit('message',{data:mode === 'oversized' ? 'x'.repeat(65537) : mode === 'deep' ? '{"type":"pong","value":'+'['.repeat(100)+'0'+']'.repeat(100)+'}' : '{secret'});
+        }
+      };
+      require(${JSON.stringify(path.join(output, RemoteWorkerFile.Network))});
+    `);
+    const transport = new RemoteNetworkTransport(fork, fixture);
+    try {
+      const prefix = 'https://example.com/api/remote/v1/capabilities/';
+      const response = await transport.fetch(prefix + 'ok');
+      const data = await response.clone().json(); expect(data.data.workerPid).not.toBe(process.pid);
+      for (const mode of ['oversized', 'deep', 'wide']) await expect(transport.fetch(prefix + mode)).rejects.toThrow('REMOTE_NETWORK_REQUEST_FAILED');
+      await expect((await transport.fetch(prefix + 'invalid')).json()).rejects.toThrow('REMOTE_NETWORK_RESPONSE_INVALID');
+      for (const [mode, code] of [['oversized',1009], ['deep',1002], ['invalid',1002], ['burst',1013]] as const) {
+        const socket = transport.socket('wss://example.com/api/remote/v1/ws'); const frames = vi.fn(); socket.addEventListener('message', frames);
+        const closed = new Promise<any>(resolve => socket.addEventListener('close', resolve));
+        await vi.waitFor(() => expect(socket.readyState).toBe(1)); socket.send(mode);
+        expect(await closed).toEqual({ code }); expect(frames.mock.calls.length).toBe(mode === 'burst' ? 16 : 0);
+      }
+    } finally { transport.dispose(); }
   });
   it('starts file and security workers from the same paths used by the bundled main process', async () => {
     const directory = path.join(root, 'cache', 'owner', 'scope');

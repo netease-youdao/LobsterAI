@@ -56,15 +56,15 @@ export class SessionDeletionService {
       recordReceipt?.();
       for (const sessionId of sessionIds) {
         this.store.deleteSession(sessionId);
-        if (this.store.remote.get(`${RemoteDeletion.Closed}${sessionId}`)) {
-          this.store.remote.db.prepare('DELETE FROM remote_dirty WHERE session_id=?').run(sessionId);
-          this.store.remote.db.prepare('DELETE FROM remote_content_dirty WHERE session_id=?').run(sessionId);
-        }
         this.store.remote.put(`${CleanupPrefix}${sessionId}`, { sessionId });
       }
     });
     // Cleanup/notifications cannot roll back a committed deletion or lose its durable receipt.
-    for (const sessionId of sessionIds) this.finishCleanup(sessionId);
+    for (const sessionId of sessionIds) {
+      try { if (this.store.remote.get(`${RemoteDeletion.Closed}${sessionId}`)) this.store.remote.clearProjectionHints(sessionId); }
+      catch { /* Disposable scheduling hints cannot undo the committed deletion. */ }
+      this.finishCleanup(sessionId);
+    }
   }
 
   private finishCleanup(sessionId: string): void {

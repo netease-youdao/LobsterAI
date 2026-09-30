@@ -21,6 +21,7 @@ import type { InboxEntry, RemoteCommand } from './remoteBridge';
 import { remoteDiagnostics } from './remoteDiagnostics';
 import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
 import { RemoteQuestionError } from './remoteQuestionService';
+import { remoteDiagnosticLog } from './remoteSyncLog';
 
 interface ExecutionContext { owner: RemoteOwner | null; preparedSessionId?: string; runId?: string; commandId?: string; stillPermitted?: () => boolean; assertAgentBinding?: () => void }
 const context = new AsyncLocalStorage<ExecutionContext>();
@@ -35,7 +36,10 @@ export const assertRemoteExecutionPermit = (): void => {
 export const markRemoteExecutionDispatched = (): void => {
   assertRemoteExecutionPermit();
   const active = context.getStore();
-  if (active) { active.stillPermitted = undefined; active.assertAgentBinding = undefined; }
+  if (active) {
+    active.stillPermitted = undefined; active.assertAgentBinding = undefined;
+    remoteDiagnosticLog('desktop.run.dispatched', { localSessionId: active.preparedSessionId, runId: active.runId, commandId: active.commandId, result: 'success' }, 'info');
+  }
 };
 const terminal = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
 interface InputFence {
@@ -58,9 +62,36 @@ export class SessionCommandService {
   private readonly submitting = new Set<string>();
   private readonly configurationLane = new Map<string, string>();
   private readonly recovering = new Map<string, Promise<boolean>>();
+  private readonly observedRuns = new Map<string, { runId: string; status: 'succeeded' | 'failed' | 'cancelled' | 'reconciling'; error?: string }>();
+
+  private observeRun(sessionId: string, status: 'succeeded' | 'failed' | 'cancelled' | 'reconciling', error?: string, gatewayRunId?: string): void {
+    try {
+      const run = this.store.remote.run(sessionId);
+      if (!run || terminal.has(run.status)) return;
+      if (gatewayRunId) {
+        const mapping = this.store.remote.get<{ runId: string; remoteRunId: string }>(`gatewayRun:${sessionId}`);
+        if (mapping?.runId !== gatewayRunId || mapping.remoteRunId !== run.runId) return;
+      }
+      // Dropping a retry hint never releases the durable run lock or permits replay.
+      if (!this.observedRuns.has(sessionId) && this.observedRuns.size >= 128) this.observedRuns.delete(this.observedRuns.keys().next().value!);
+      this.observedRuns.set(sessionId, { runId: run.runId, status, error });
+      this.store.remote.updateRun(sessionId, status, error);
+      this.observedRuns.delete(sessionId);
+      if (!this.store.remote.db.inTransaction) remoteDiagnosticLog(terminal.has(status) ? 'desktop.run.terminal' : 'desktop.run.outcome_unknown',
+        { localSessionId: sessionId, runId: run.runId, status, result: terminal.has(status) ? 'success' : 'unknown' }, 'info');
+    } catch {
+      // The unchanged core run still blocks another turn. Retry only this observed write, never engine work.
+      remoteDiagnosticLog('desktop.run.outcome_unknown', { localSessionId: sessionId, reason: 'EXECUTION_UNKNOWN' }, 'warn');
+    }
+  }
 
   /** A bounded local-Gateway reconciliation, never an HTTP/WS remote-control prerequisite. */
   reconcileSession(sessionId: string): Promise<boolean> {
+    const observed = this.observedRuns.get(sessionId);
+    if (observed) {
+      if (this.store.remote.run(sessionId)?.runId === observed.runId) this.observeRun(sessionId, observed.status, observed.error);
+      else this.observedRuns.delete(sessionId);
+    }
     const existing = this.recovering.get(sessionId);
     if (existing) return existing;
     const operation = this.reconcileSessionOnce(sessionId).finally(() => {
@@ -228,14 +259,11 @@ export class SessionCommandService {
       if (!run || terminal.has(run.status)) store.remote.beginRun(id);
       store.remote.refreshApprovalRunState(id, true);
     });
-    runtime.on('complete', id => store.remote.updateRun(id, 'succeeded'));
-    runtime.on('error', (id, error) => store.remote.updateRun(id, /disconnect|gateway|connection|socket/i.test(error) ? 'reconciling' : 'failed', t('remoteExecutionFailed')));
+    runtime.on('complete', id => this.observeRun(id, 'succeeded'));
+    runtime.on('error', (id, error) => this.observeRun(id, /disconnect|gateway|connection|socket/i.test(error) ? 'reconciling' : 'failed', t('remoteExecutionFailed')));
     // The legacy stop event means local cleanup, not proven gateway termination.
-    runtime.on('sessionStopped', id => store.remote.updateRun(id, 'reconciling'));
-    runtime.on('runTermination', (id, gatewayRunId, status) => {
-      const mapping = store.remote.get<{ runId: string; remoteRunId: string }>(`gatewayRun:${id}`);
-      if (mapping?.runId === gatewayRunId && mapping.remoteRunId === store.remote.run(id)?.runId) store.remote.updateRun(id, status);
-    });
+    runtime.on('sessionStopped', id => this.observeRun(id, 'reconciling'));
+    runtime.on('runTermination', (id, gatewayRunId, status) => this.observeRun(id, status, undefined, gatewayRunId));
     store.remote.setApprovalLifecycle({
       expire: now => runtime.expirePermissions?.(now),
       close: (sessionId, runId) => runtime.closeSessionPermissions?.(sessionId, runId, 'cancelled'),

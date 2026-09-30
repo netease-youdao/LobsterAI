@@ -46,3 +46,49 @@ describe('control ledger locator', () => {
     expect(core.prepare('SELECT phase FROM remote_control_ledger_locator').get()).toEqual({ phase: 'ready' });
   });
 });
+
+describe('availability request integrity and durable backoff', () => {
+  it('counts disjoint activating and live-pending tasks once without reading corrupt JSON globally', () => {
+    const { ledger } = fixture();
+    ledger.db.prepare('INSERT INTO availability_sessions VALUES(?,?,?)').run(pending.scope, 'a', '{');
+    ledger.db.prepare('INSERT INTO availability_sessions VALUES(?,?,?)').run(pending.scope, 'b', '{"phase":"active"}');
+    ledger.saveRequest({ ...pending, localId: 'b' });
+    expect(ledger.health(pending.scope)).toEqual({ sessions: 2, pendingSessions: 2, degraded: true });
+  });
+  it('retains a corrupted operation and its independent object identity while scanning healthy requests', () => {
+    const { ledger } = fixture();
+    ledger.saveRequest({ ...pending, key: 'a', body: { objectId: 'bad', objectKind: 'message', publicationId: 'a' } });
+    ledger.saveRequest({ ...pending, key: 'b', body: { objectId: 'good', objectKind: 'message', publicationId: 'b' } });
+    ledger.db.prepare("UPDATE availability_requests SET body='{' WHERE key='a'").run();
+    const first = ledger.scanPending(pending.scope, 'live', pending.localId, '', 1);
+    expect(first).toMatchObject({ rows: [{ key: 'a', state: 'corrupt', objectId: 'bad', objectKind: 'message' }], nextCursor: 'a' });
+    expect(ledger.scanPending(pending.scope, 'live', pending.localId, first.nextCursor!).rows[0]).toMatchObject({ key: 'b', state: 'valid' });
+    expect(ledger.hasPendingObject(pending.scope, pending.localId, 'message', 'bad')).toBe(true);
+    expect(ledger.hasPendingObject(pending.scope, pending.localId, 'message', 'later')).toBe(false);
+    expect(() => ledger.request('a')).toThrow('REMOTE_AVAILABILITY_RECORD_INVALID');
+    expect(ledger.db.prepare("SELECT body FROM availability_requests WHERE key='a'").get()).toEqual({ body: '{' });
+    ledger.close();
+    expect(ledger.scanPending(pending.scope, 'live', pending.localId).rows[0]).toMatchObject({ state: 'corrupt', objectId: 'bad' });
+  });
+  it('detects syntactically valid request changes instead of replaying a different original operation', () => {
+    const { ledger } = fixture(); ledger.saveRequest(pending);
+    ledger.db.prepare('UPDATE availability_requests SET body=? WHERE key=?').run(JSON.stringify({ ...pending, body: { altered: true } }), pending.key);
+    expect(() => ledger.request(pending.key)).toThrow('REMOTE_AVAILABILITY_RECORD_INVALID');
+  });
+  it('does not infer an object for undecodable legacy evidence', () => {
+    const { ledger } = fixture(); ledger.saveRequest(pending);
+    ledger.db.prepare("UPDATE availability_requests SET body='{',request_hash=NULL,object_id=NULL,object_kind=NULL").run();
+    ledger.close();
+    expect(ledger.hasPendingObject(pending.scope, pending.localId, 'message', 'new-message')).toBe(true);
+    expect(ledger.hasPendingObject(pending.scope, 'unrelated-task', 'message', 'new-message')).toBe(false);
+  });
+  it('keeps repeated encoding failures deferred across reopen but allows a changed source revision', () => {
+    const { ledger } = fixture();
+    ledger.objectFault(pending.scope, pending.localId, 'message:bad', 'revision-1', 1000);
+    ledger.close();
+    expect(ledger.objectRetryAllowed(pending.scope, pending.localId, 'message:bad', 2000, 'revision-1')).toBe(false);
+    expect(ledger.objectRetryAllowed(pending.scope, pending.localId, 'message:bad', 2000, 'revision-2')).toBe(true);
+    ledger.objectFault(pending.scope, pending.localId, 'message:bad', 'revision-1', 301000);
+    expect(ledger.objectRetryAllowed(pending.scope, pending.localId, 'message:bad', 900000, 'revision-1')).toBe(false);
+  });
+});

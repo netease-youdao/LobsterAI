@@ -13,9 +13,11 @@
  *   - Files older than 7 days are pruned on startup
  */
 
-import path from 'path';
-import fs from 'fs';
 import log from 'electron-log/main';
+import fs from 'fs';
+import path from 'path';
+
+import { configureRemoteLogSink } from './remote/remoteLogSink';
 
 const LOG_RETENTION_DAYS = 7;
 const LOG_MAX_SIZE = 80 * 1024 * 1024; // 80 MB
@@ -86,6 +88,9 @@ export function initLogger(): void {
   // (we already call originalLog above, so electron-log only needs to write to file)
   log.transports.console.level = false;
 
+  // Remote diagnostics use a bounded asynchronous writer; failures never fall back to core logging.
+  try { configureRemoteLogSink(logDir()); } catch { /* Optional diagnostics. */ }
+
   // Remove log files older than retention window
   pruneOldLogs();
 
@@ -133,7 +138,7 @@ export function getRecentMainLogEntries(): Array<{ archiveName: string; filePath
   const cutoffMs = Date.now() - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
   return fs.readdirSync(dir)
-    .filter((f) => /^main-\d{4}-\d{2}-\d{2}(\.old)?\.log$/.test(f))
+    .filter((f) => /^main-\d{4}-\d{2}-\d{2}(\.old)?\.log$/.test(f) || /^remote(?:\.old)?\.log$/.test(f))
     .map((f) => ({ archiveName: f, filePath: path.join(dir, f) }))
     .filter(({ filePath }) => {
       try {

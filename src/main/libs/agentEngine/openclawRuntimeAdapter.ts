@@ -3780,7 +3780,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       },
     });
     this.questionDecisions = new RemoteQuestionService(this.store.remote, (sessionId) => {
-      const session = this.store.getSession(sessionId, 0), run = this.store.remote.run(sessionId);
+      const session = this.store.getSession(sessionId, 0), run = this.store.remote.activeDecisionRun(sessionId);
       if (!session || !run) return null;
       return { runId: run.runId, owner: this.store.remote.owner(sessionId), agentId: session.agentId ?? 'main', cwd: session.cwd };
     });
@@ -3814,7 +3814,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       getBinding: (sessionId) => {
         const session = this.store.getSession(sessionId);
         if (!session) return null;
-        const runId = this.store.remote.run(sessionId)?.runId ?? null;
+        const run = this.store.remote.run(sessionId);
+        if (run && !this.store.remote.activeDecisionRun(sessionId)) return null;
+        const runId = run?.runId ?? null;
         return { runId, identity: { sessionId, owner: this.store.remote.owner(sessionId), agentId: session.agentId ?? 'main', cwd: session.cwd } };
       },
       getWorkspace: (sessionId) => {

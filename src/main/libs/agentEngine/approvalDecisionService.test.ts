@@ -12,6 +12,14 @@ function setup() {
     get: <T>(key: string): T | null => { const row = db.prepare('SELECT value FROM state WHERE key=?').get(key) as { value: string } | undefined; return row ? JSON.parse(row.value) : null; },
     put: (key, value) => { db.prepare('INSERT OR REPLACE INTO state VALUES (?,?)').run(key, JSON.stringify(value)); },
     entries: <T>(prefix: string) => (db.prepare('SELECT key,value FROM state WHERE key LIKE ?').all(`${prefix}%`) as { key: string; value: string }[]).map(r => ({ key: r.key, value: JSON.parse(r.value) as T })),
+    scanEntries: <T>(prefix: string, options: { after?: string; limit?: number } = {}) => {
+      const rows = db.prepare('SELECT key,value FROM state WHERE key LIKE ? AND key>? ORDER BY key LIMIT ?')
+        .all(`${prefix}%`, options.after ?? '', options.limit ?? 50) as Array<{ key: string; value: string }>;
+      return { rows: rows.map(row => {
+        try { return { key: row.key, state: 'valid' as const, value: JSON.parse(row.value) as T }; }
+        catch { return { key: row.key, state: 'corrupt' as const, reason: 'STATE_RECORD_INVALID' }; }
+      }), nextCursor: rows.length === (options.limit ?? 50) ? rows.at(-1)!.key : null };
+    },
     transaction: operation => db.transaction(operation)(),
   };
   const states: ApprovalState[] = [];
@@ -184,6 +192,77 @@ describe('durable dual approval arbiter', () => {
     const f = setup(); f.request.mockResolvedValue({ applied: true, approval: f.snapshot('deny') });
     expect((await f.service.submit('p', 'allow-once', f.opts())).kind).toBe('known_not_applied');
     expect(f.service.getState('p')?.resolution.confirmedDecision).toBe('deny');
+  });
+
+  it('isolates invalid JSON and unsupported versions during construction without rewriting evidence', () => {
+    const f = setup();
+    f.db.prepare('INSERT INTO state VALUES (?,?)').run('approvalResolution:broken', '{private evidence');
+    const unsupported = { ...f.storage.get<Record<string, unknown>>('approvalResolution:p'), formatVersion: 2 };
+    f.storage.put('approvalResolution:future', unsupported);
+    const recovered = f.make();
+    expect(recovered.supportsDualApproval()).toBe(true);
+    expect(recovered.listPending().map(row => row.request.requestId)).toEqual(['p']);
+    expect(() => recovered.getState('broken')).toThrow('Approval record integrity unavailable');
+    expect(() => recovered.getState('future')).toThrow('Approval record integrity unavailable');
+    expect(recovered.getState('absent')).toBeNull();
+    expect(f.db.prepare('SELECT value FROM state WHERE key=?').get('approvalResolution:broken')).toEqual({ value: '{private evidence' });
+    expect(f.storage.get('approvalResolution:future')).toEqual(unsupported);
+  });
+  it('advances safe scan pages past a corrupt prefix and still closes the healthy task', () => {
+    const f = setup();
+    for (let i = 0; i < 55; i++) f.db.prepare('INSERT INTO state VALUES (?,?)').run(`approvalResolution:bad${i}`, '{');
+    const recovered = f.make();
+    expect(recovered.listPending()).toHaveLength(1);
+    recovered.closeSession('s', 'run');
+    expect(recovered.getState('p')?.status).toBe('cancelled');
+    expect(f.db.prepare("SELECT COUNT(*) AS count FROM state WHERE value='{'").get()).toEqual({ count: 55 });
+  });
+  it('keeps malformed v1 schema strict in get and isolates it from another expiry', () => {
+    const f = setup();
+    f.storage.put('approvalResolution:broken', { formatVersion: 1, state: null });
+    expect(() => f.service.getPending('broken')).toThrow('Approval record integrity unavailable');
+    expect(() => f.service.expire(Date.now() + 999999)).not.toThrow();
+    expect(f.service.getState('p')?.status).toBe('expired');
+    expect(f.storage.get('approvalResolution:broken')).toEqual({ formatVersion: 1, state: null });
+  });
+  it('never interprets opaque approval evidence as no pending approvals for automatic continuation', async () => {
+    vi.useFakeTimers(); const f = setup(); f.request.mockResolvedValue({ applied: true, approval: f.snapshot() });
+    expect((await f.service.submit('p', 'allow-once', f.opts())).kind).toBe('confirmed');
+    f.db.prepare('INSERT INTO state VALUES (?,?)').run('approvalResolution:opaque', '{');
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(f.options.continueSession).not.toHaveBeenCalled();
+    expect(f.service.getState('p')?.status).toBe('approved');
+    expect(f.storage.entries('approvalContinuationLane:')).toEqual([]);
+  });
+  it('limits a coherent corrupt identity to its own session during automatic continuation', async () => {
+    vi.useFakeTimers(); const f = setup();
+    const broken = f.storage.get<Record<string, any>>('approvalResolution:p')!;
+    broken.pending = { ...broken.pending, requestId: 'broken', sessionId: 'other' };
+    broken.state = { ...broken.state, requestId: 'broken', sessionId: 'other', approvalVersion: 'invalid' };
+    f.storage.put('approvalResolution:broken', broken);
+    f.request.mockResolvedValue({ applied: true, approval: f.snapshot() });
+    await f.service.submit('p', 'allow-once', f.opts());
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(f.options.continueSession).toHaveBeenCalledOnce();
+    expect(f.storage.get('approvalResolution:broken')).toEqual(broken);
+  });
+  it('rechecks opaque evidence after asynchronous continuation preparation', async () => {
+    vi.useFakeTimers(); const f = setup(); f.request.mockResolvedValue({ applied: true, approval: f.snapshot() });
+    const dispatched = vi.fn(); let finish!: () => void;
+    f.options.continueSession.mockImplementation(async (_id, _decision, guard) => {
+      await new Promise<void>(resolve => { finish = resolve; }); guard(); dispatched();
+    });
+    await f.service.submit('p', 'allow-once', f.opts()); await vi.advanceTimersByTimeAsync(1000);
+    f.db.prepare('INSERT INTO state VALUES (?,?)').run('approvalResolution:opaque', '{');
+    finish(); for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(dispatched).not.toHaveBeenCalled();
+    expect(f.storage.entries('approvalContinuationLane:s:')[0]?.value).toMatchObject({ phase: 'unknown' });
+  });
+  it('does not classify database failures as corrupt rows or an empty approval catalog', () => {
+    const f = setup(); const failure = new Error('SQLITE_IOERR');
+    f.storage.scanEntries = () => { throw failure; };
+    expect(() => f.service.listPending()).toThrow(failure);
+    expect(() => f.make()).toThrow(failure);
   });
 
 });

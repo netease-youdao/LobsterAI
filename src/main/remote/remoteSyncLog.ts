@@ -1,4 +1,7 @@
+import { createHash } from 'crypto';
+
 import { RemoteSyncConflict } from '../../shared/remote/constants';
+import { enqueueRemoteLog } from './remoteLogSink';
 
 /** Diagnostic metadata only. Never pass raw requests, responses or errors to the logger. */
 export const REMOTE_SYNC_REQUEST_ID_HEADER = 'X-Remote-Request-Id';
@@ -47,7 +50,7 @@ export function remoteSyncRequestMetadata(pathname: string, raw: unknown): Recor
   const operation = pathname === '/sync/batches' ? SyncOperation.Batch : pathname === '/sync/imports' ? SyncOperation.Begin
     : route ? route[2]?.startsWith('parts/') ? SyncOperation.Part : route[2] === 'commit' ? SyncOperation.Commit
       : route[2] === 'abort' ? SyncOperation.Abort : SyncOperation.Status : null;
-  if (!operation) return null;
+  if (!operation) return remoteOperationMetadata(pathname, raw);
   const body = object(raw), manifest = object(body.manifest);
   const records = Array.isArray(body.events) ? body.events : object(body.payload).records;
   const items = Array.isArray(records) ? records : [];
@@ -80,7 +83,83 @@ export function remoteSyncErrorMetadata(error: unknown): Record<string, any> {
   return { code: count(value.code), httpStatus: count(value.httpStatus), reason: reason(details.reason), reasonDetail: reason(details.reasonDetail),
     requestId: remoteSyncRequestId(value.requestId) ?? remoteSyncRequestId(details.requestId),
     validation: validationMessages.has(value.message) ? value.message : null,
-    errorType: ['Error', 'RemoteApiError', 'AbortError', 'TimeoutError', 'TypeError', 'SqliteError'].includes(value.name) ? value.name : 'Error',
+    errorType: ['Error', 'RemoteApiError', 'AbortError', 'TimeoutError', 'TypeError', 'SyntaxError', 'SqliteError'].includes(value.name) ? value.name : 'Error',
     expectedSourceSeq: sequence(details.expectedSourceSeq), currentSourceSeq: sequence(details.currentSourceSeq),
     currentServerSeq: sequence(details.currentServerSeq), activeImportId: id(details.activeImportId) };
+}
+
+const operationRoutes: Array<[RegExp, string]> = [
+  [/^\/sync\/mode-activations(?:\/[A-Za-z0-9_-]{1,64})?$/u, 'mode_activation'],
+  [/^\/sync\/live-projections(?:\/[A-Za-z0-9_-]{1,64})?$/u, 'live_projection'],
+  [/^\/sync\/recoveries(?:\/[A-Za-z0-9_-]{1,64}(?:\/(?:parts\/\d+|commit|abort))?)?$/u, 'history_recovery'],
+  [/^\/sync\/state$/u, 'sync_state'],
+  [/^\/control\/bootstrap(?:\/[A-Za-z0-9_-]{1,64}(?:\/(?:parts\/\d+|commit|abort))?)?$/u, 'control_bootstrap'],
+  [/^\/control\/facts\/batches$/u, 'control_facts'],
+  [/^\/control\/operations\/[A-Za-z0-9_-]{1,64}$/u, 'control_operation'],
+  [/^\/commands(?:\/[A-Za-z0-9_-]{1,64}(?:\/(?:ack|reconcile))?)?$/u, 'command'],
+  [/^\/devices\/[A-Za-z0-9_-]{1,64}\/commands(?:\/claim)?$/u, 'command_poll'],
+  [/^\/sessions(?:\/[A-Za-z0-9_-]{1,64}(?:\/(?:snapshot|messages|events|tools|contents)(?:\/[A-Za-z0-9_-]{1,64})?)?)?$/u, 'session_read'],
+  [/^\/(?:connection-tickets|capabilities|devices\/register)$/u, 'connection'],
+  [/^\/devices\/[A-Za-z0-9_-]{1,64}\/connections(?:\/[A-Za-z0-9_-]{1,64})?$/u, 'connection'],
+];
+function remoteOperationMetadata(pathname: string, raw: unknown): Record<string, unknown> | null {
+  const route = pathname.split('?')[0], operation = operationRoutes.find(([pattern]) => pattern.test(route))?.[1];
+  if (!operation) return null;
+  const body = object(raw), command = /^\/commands\/([A-Za-z0-9_-]{1,64})/u.exec(route);
+  const operationPath = /^\/(?:sync\/(?:mode-activations|live-projections|recoveries)|control\/(?:bootstrap|operations))\/([A-Za-z0-9_-]{1,64})/u.exec(route);
+  return { operation, commandId: id(body.commandId ?? command?.[1]), operationId: id(body.operationId ?? body.publicationId ?? body.recoveryId ?? body.batchId ?? operationPath?.[1]),
+    localSessionId: id(body.localSessionId), sessionId: id(body.sessionId), runId: id(body.runId), deviceId: id(body.deviceId),
+    writerGeneration: id(body.writerGeneration), connectionGeneration: sequence(body.connectionGeneration),
+    sourceObjectRevision: sequence(body.sourceObjectRevision), objectId: id(body.objectId),
+    firstFactSeq: sequence(body.firstFactSeq), lastFactSeq: sequence(body.lastFactSeq),
+    exactSourcePrefix: sequence(body.exactSourcePrefix), resolvedSourceSeq: sequence(body.resolvedSourceSeq) };
+}
+
+const diagnosticEvents = new Set([
+  'remote.connection.changed', 'remote.request.completed', 'remote.record.quarantined', 'remote.record.probe', 'remote.record.recovered',
+  'remote.publication.sealed', 'remote.publication.acknowledged', 'remote.publication.unknown',
+  'remote.sync.round', 'remote.sync.task_deferred', 'remote.history.recovery_started', 'remote.history.committed', 'remote.history.deferred',
+  'remote.worker.exit', 'remote.worker.restart', 'remote.worker.circuit_changed',
+  'desktop.command.prepared', 'desktop.command.duplicate', 'desktop.command.unknown',
+  'desktop.run.dispatch_started', 'desktop.run.dispatched', 'desktop.run.outcome_unknown', 'desktop.run.terminal',
+  'desktop.message.persisted', 'desktop.message.persist_failed', 'desktop.action.decided', 'desktop.action.dispatched',
+  'desktop.action.reconciled', 'desktop.account_transition.changed',
+]);
+const diagnosticIds = new Set(['requestId','connectionId','connectionGeneration','generation','localSessionId','sessionId','commandId','runId','operationId','writerGeneration','objectId','revision','jobId','transitionId']);
+const diagnosticNumbers = new Set(['durationMs','elapsedMs','count','bytes','retryAttempt','nextRetryAt','retryAfterMs','scanned','processed','isolated','firstSeenAt','lastSeenAt']);
+const diagnosticValues = new Set(['desktop','mobile','im','cron','control','live','history','files','transport','success','failed','unknown','deferred','corrupt','active','ready','blocked','fencing','stopping','validating','recovery_required','prepared','executing','applied','rejected','accepted','superseded','starting','running','waiting_approval','waiting_local','waiting_user','succeeded','cancelled','interrupted','complete','error']);
+const diagnosticReasons = new Set(['RECORD_INVALID','ENCODING_FAILED','STORAGE_UNAVAILABLE','REQUEST_FAILED','CONTEXT_CHANGED','EXECUTION_UNKNOWN','DEPENDENCY_UNAVAILABLE','STATE_CHANGED','REMOTE_AVAILABILITY_RECORD_INVALID']);
+const diagnosticWindows = new Map<string, { at: number; count: number }>();
+/** Never let diagnostic output or an injected logger change a committed business result. */
+export function remoteLogMessage(level: 'debug' | 'warn' | 'error' | 'info', message: string, fields: Record<string, unknown>): void {
+  try {
+    let value = fields;
+    if (Buffer.byteLength(JSON.stringify(value)) > 3900) {
+      const { events: _events, ...bounded } = value;
+      value = bounded;
+      if (Buffer.byteLength(JSON.stringify(value)) > 3900) value = { truncated: true };
+    }
+    enqueueRemoteLog(level, message, value);
+  } catch { /* Logs are best effort and never execution evidence. */ }
+}
+export function remoteDiagnosticLog(event: string, fields: Record<string, unknown>, level: 'debug' | 'warn' | 'error' | 'info' = 'debug'): void {
+  if (!diagnosticEvents.has(event)) return;
+  const clean: Record<string, unknown> = { event, timestamp: new Date().toISOString(), component: 'desktop' };
+  for (const [key, value] of Object.entries(fields)) {
+    if (diagnosticIds.has(key)) { const safe = key === 'requestId' ? remoteSyncRequestId(value) : id(value); if (safe) clean[key] = safe; }
+    else if (diagnosticNumbers.has(key) && typeof value === 'number' && Number.isFinite(value) && value >= 0) clean[key] = value;
+    else if (['origin','lane','status','result'].includes(key) && typeof value === 'string' && diagnosticValues.has(value)) clean[key] = value;
+    else if (key === 'reason' && typeof value === 'string' && diagnosticReasons.has(value)) clean[key] = value;
+    else if (key === 'error') clean.error = remoteSyncErrorMetadata(value);
+  }
+  if (level === 'warn' || event === 'remote.record.quarantined') {
+    const key = createHash('sha256').update(JSON.stringify({ event, lane: clean.lane, sessionId: clean.localSessionId ?? clean.sessionId,
+      objectId: clean.objectId, operationId: clean.operationId, commandId: clean.commandId, reason: clean.reason })).digest('hex');
+    const previous = diagnosticWindows.get(key), now = Date.now();
+    if (previous && now - previous.at < 60000) { previous.count++; return; }
+    if (diagnosticWindows.size >= 1024) diagnosticWindows.delete(diagnosticWindows.keys().next().value!);
+    diagnosticWindows.set(key, { at: now, count: 1 });
+    if (previous) clean.suppressedCount = previous.count - 1;
+  }
+  remoteLogMessage(level, '[RemoteDiagnostic]', clean);
 }

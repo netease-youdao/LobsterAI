@@ -119,6 +119,7 @@ it('delegates expiry and terminal closure to the same persistent runtime decisio
   const now = Date.now(); remote.expireApprovals(now);
   expect(runtime.expirePermissions).toHaveBeenCalledWith(now);
   remote.updateRun('local', 'failed');
+  remote.expireApprovals(now);
   expect(runtime.closeSessionPermissions).toHaveBeenCalledWith('local', 'server-run', 'cancelled');
 });
 
@@ -312,7 +313,8 @@ function persistentApprovalFixture(anonymous = false) {
     });
     const continuation = vi.fn(async (): Promise<void> => {});
     arbiter = new ApprovalDecisionService({ persistence: remote, getGateway: () => ({ request: gateway }),
-      getBinding: () => ({ runId: remote.run('local')?.runId || null, identity: { owner: anonymous ? null : owner, agentId: 'main', cwd: directory } }),
+      getBinding: () => remote.run('local') && !remote.activeDecisionRun('local') ? null
+        : { runId: remote.run('local')?.runId || null, identity: { owner: anonymous ? null : owner, agentId: 'main', cwd: directory } },
       emitState: (id, state) => { expect(db.inTransaction).toBe(true); runtime.emit('permissionState', id, state); },
       emitResolved: (id, requestId) => { runtime.emit('permissionResolved', id, requestId); },
       emitRequest: (id, request) => { runtime.emit('permissionRequest', id, request); },
@@ -372,6 +374,7 @@ it('restores file-backed unknown proof, preserves it after expiry and only appen
   restarted.remote.expireApprovals(Date.now() + 86400000);
   expect(restarted.arbiter.getState('approval')?.status).toBe('pending');
   restarted.remote.updateRun('local', 'succeeded');
+  restarted.remote.expireApprovals();
   const closedAt = restarted.arbiter.getState('approval')?.resolvedAt;
   restarted.arbiter.mergeResolved('approval', 'allow-once', Date.now(), f.rawRequest);
   expect(restarted.remote.get<any>('approval:local:approval')).toMatchObject({ status: 'cancelled', resolvedAt: closedAt,
@@ -409,6 +412,7 @@ it('gives anonymous tasks distinct local runs and never lets an old approval con
   expect(f.first.arbiter.getState('approval')?.runId).toBe(firstRun);
   expect((await f.first.arbiter.submit('approval', 'allow-once', { submissionId: 'anonymous-desktop', source: 'desktop' })).kind).toBe('unknown');
   f.first.runtime.emit('complete', 'local');
+  f.first.remote.expireApprovals();
   expect(f.first.arbiter.getState('approval')?.status).toBe('cancelled');
   f.first.runtime.emit('sessionStatus', 'local', 'running');
   const next = f.first.remote.run('local');
@@ -478,4 +482,40 @@ it('does not claim an unknown target run was already terminal', async () => {
   const command = { ...entry.command,type:'cancel_run',request:{ payload:{ runId:'unknown' } } };
   await expect(service.execute({ ...entry,runId:'unknown',command },() => true)).rejects.toThrow('Run evidence unavailable');
   expect(runtime.cancelSessionConfirmed).not.toHaveBeenCalled();
+});
+
+
+it('isolates a damaged run observer from later runtime listeners and fences only that task', () => {
+  const { runtime, remote } = fixture();
+  remote.db.prepare("UPDATE remote_state SET value='{' WHERE key='run:local'").run();
+  const listener = vi.fn(); runtime.on('complete', listener);
+  expect(() => runtime.emit('complete', 'local')).not.toThrow();
+  expect(listener).toHaveBeenCalledWith('local');
+  expect(() => remote.beginRun('local')).toThrow();
+  remote.transaction(() => {
+    remote.db.prepare("INSERT INTO cowork_sessions VALUES('healthy','healthy',1,1,'idle')").run();
+    remote.assignNew('healthy', owner, 'local_create');
+  });
+  expect(() => remote.beginRun('healthy')).not.toThrow();
+});
+
+
+it('retries an observed terminal write after storage recovers without replaying an engine action', async () => {
+  const { service, runtime, remote } = fixture();
+  const update = vi.spyOn(remote, 'updateRun').mockImplementationOnce(() => { throw new Error('disk unavailable'); });
+  expect(() => runtime.emit('complete', 'local')).not.toThrow();
+  expect(remote.run('local')?.status).toBe('starting');
+  await expect(service.reconcileSession('local')).resolves.toBe(true);
+  expect(remote.run('local')?.status).toBe('succeeded');
+  expect(update).toHaveBeenCalledTimes(2);
+  expect(runtime.cancelSessionConfirmed).not.toHaveBeenCalled();
+});
+
+it('does not apply deferred terminal evidence to a replacement run', async () => {
+  const { service, runtime, remote } = fixture();
+  vi.spyOn(remote, 'updateRun').mockImplementationOnce(() => { throw new Error('disk unavailable'); });
+  expect(() => runtime.emit('complete', 'local')).not.toThrow();
+  remote.updateRun('local', 'succeeded'); remote.beginRun('local', 'replacement');
+  await expect(service.reconcileSession('local')).resolves.toBe(false);
+  expect(remote.run('local')).toMatchObject({ runId: 'replacement', status: 'starting' });
 });

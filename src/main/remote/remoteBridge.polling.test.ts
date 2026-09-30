@@ -124,7 +124,7 @@ describe('remote background polling', () => {
     const { store, request, count } = await fixture();
     const original = request.getMockImplementation()!;
     const items = Array.from({ length: 10 }, (_, i) => ({ commandId: `done-${i}` }));
-    for (const item of items) store.put(`inbox:${item.commandId}`, { owner: initialOwner, state: 'applied' });
+    for (const item of items) store.put(`inbox:${item.commandId}`, { owner: initialOwner, state: 'applied', command: { commandId: item.commandId } });
     let pending = true;
     request.mockImplementation(async (owner, path) => {
       if (pending && path.endsWith('/commands/claim')) { pending = false; return response({ items }); }
@@ -267,7 +267,7 @@ describe('remote background polling', () => {
   it('does not treat terminal runs or another account unresolved commands as active', async () => {
     const { bridge, store, count } = await fixture();
     startOwnedRun(store); store.updateRun('running', RemoteRunStatus.Succeeded);
-    store.put('inbox:other-owner', { owner: { userId: 'other-user', scopeKey: 'personal' }, state: 'unknown' });
+    store.put('inbox:other-owner', { owner: { userId: 'other-user', scopeKey: 'personal' }, state: 'unknown', command: { commandId: 'other-owner' } });
     bridge.schedule(0); await vi.advanceTimersByTimeAsync(29999);
     expect(count('/commands/claim')).toBe(1);
     await vi.advanceTimersByTimeAsync(1);
@@ -285,5 +285,30 @@ describe('remote background polling', () => {
     expect(bridge.commandPollAt).toBe(0); expect(bridge.inputPollAt).toBe(0);
     expect(bridge.commandRetryAt).toBe(0); expect(bridge.inputRetryAt).toBe(0);
     expect(bridge.generation).toBeNull();
+  });
+});
+
+describe('poisoned control records', () => {
+  it('continues claiming commands with a corrupt local inbox row and approval cleanup failure', async () => {
+    const { bridge, store, count } = await fixture();
+    store.db.prepare("INSERT INTO remote_state(key,value) VALUES('inbox:bad','{')").run();
+    vi.spyOn(store, 'expireApprovals').mockImplementation(() => { throw new Error('bad approval'); });
+    Socket.latest.frame({ type: 'commands.available' }); await vi.advanceTimersByTimeAsync(1);
+    expect(count('/commands/claim')).toBe(2);
+    expect(bridge.generation).toBe('1');
+    expect(store.db.prepare("SELECT value FROM remote_state WHERE key='inbox:bad'").get()).toEqual({ value: '{' });
+  });
+  it('advances unresolved pages across rounds so a bad command cannot starve claim', async () => {
+    const { bridge, store, request, count } = await fixture(); const original = request.getMockImplementation()!;
+    store.db.prepare("INSERT INTO remote_state(key,value) VALUES('inbox:bad-command','{')").run();
+    request.mockImplementation(async (owner,path) => {
+      if (path.includes('/commands?')) return response({ items: [{ commandId: 'bad-command', status: 'received' }], nextCursor: path.includes('cursor=') ? null : 'next' });
+      return original(owner,path);
+    });
+    Socket.latest.frame({ type: 'commands.available' }); await vi.advanceTimersByTimeAsync(2);
+    expect(count('/commands/claim')).toBeGreaterThanOrEqual(3);
+    expect(request.mock.calls.some(([,path]) => path.includes('cursor=next'))).toBe(true);
+    expect(bridge.generation).toBe('1');
+    expect(store.db.prepare("SELECT value FROM remote_state WHERE key='inbox:bad-command'").get()).toEqual({ value: '{' });
   });
 });

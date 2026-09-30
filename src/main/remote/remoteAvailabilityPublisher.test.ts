@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type AvailabilityContext,RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
 import { RemoteStore } from './remoteStore';
 
+vi.mock('./remoteLogSink', () => ({ enqueueRemoteLog: (level: 'debug' | 'warn' | 'error' | 'info', message: string, fields: Record<string, unknown>) => console[level](message, fields) }));
+
 const cleanup: Array<() => void> = [];
 afterEach(() => { cleanup.splice(0).reverse().forEach(dispose => dispose()); vi.restoreAllMocks(); });
 function fixture() {
@@ -306,4 +308,57 @@ it('reconciles an expired initial baseline and activates a new immutable checkpo
   await f.controls(); expect(f.publisher.controlReady('local')).toBe(true);
   const begins=f.request.mock.calls.filter(call=>call[0]==='/control/bootstrap').map(call=>call[2].operationId);
   expect(new Set(begins).size).toBe(2);
+});
+
+describe('task and object fault boundaries', () => {
+  function addTask(f: ReturnType<typeof fixture>, localId: string, messageId: string): void {
+    f.store.transaction(() => {
+      f.db.prepare('INSERT INTO cowork_sessions VALUES(?,?,1,1,?,NULL,NULL)').run(localId, 'Task', 'idle');
+      f.store.assignNew(localId, f.owner, 'local_create');
+      f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,3,2)').run(messageId, localId, 'assistant', 'Healthy reply', '{}');
+    });
+    f.store.bindRemote(localId, f.store.sync(localId)!.session_id, 'desktop');
+  }
+  it('does not let an invalid session ledger stop healthy live tasks or reactivate the legacy writer', async () => {
+    const f = fixture(); addTask(f, 'second', 'second-message'); await f.controls();
+    f.publisher.ledger.db.prepare("UPDATE availability_sessions SET body='{' WHERE local_id='local'").run();
+    expect(f.publisher.ownsHistory('local')).toBe(true);
+    expect(f.publisher.controlReady('local')).toBe(false);
+    await f.live();
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections' && call[2].objectId === 'second-message')).toBe(true);
+    expect(f.publisher.ledger.db.prepare("SELECT body FROM availability_sessions WHERE local_id='local'").get()).toEqual({ body: '{' });
+  });
+  it('keeps the original corrupt pending object blocked while publishing another object in the same session', async () => {
+    const f = fixture(); await f.controls();
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    f.publisher.ledger.saveRequest({ key: 'original-publication', scope: f.context.scope, localId: 'local', lane: 'live',
+      body: { objectKind: 'message', objectId: 'message', publicationId: 'original-publication', writerGeneration: state.writerGeneration },
+      pathname: '/sync/live-projections', method: 'POST', version: 3, lookup: null, lookupVersion: 3, createdAt: 1, attempted: true });
+    f.publisher.ledger.db.prepare("UPDATE availability_requests SET body='{' WHERE key='original-publication'").run();
+    f.store.transaction(() => f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,3,2)').run('new-message','local','assistant','New reply','{}'));
+    await f.live();
+    const objects = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections').map(call => call[2].objectId);
+    expect(objects).toContain('new-message'); expect(objects).not.toContain('message');
+    expect(f.publisher.ledger.db.prepare("SELECT body FROM availability_requests WHERE key='original-publication'").get()).toEqual({ body: '{' });
+  });
+  it('does not retry bad encoding after a scheduler reset and probes repaired revision independently', async () => {
+    const f = fixture();
+    f.store.transaction(() => f.db.prepare('UPDATE cowork_messages SET metadata=? WHERE id=?').run('{','message'));
+    await f.controls(); await f.live();
+    const before = f.publisher.ledger.db.prepare("SELECT attempts FROM availability_faults WHERE object_key='message:message'").get();
+    expect(before).toEqual({ attempts: 1 });
+    (f.publisher as any).failures.clear(); (f.publisher as any).liveScan.clear();
+    await f.live(); expect(f.publisher.ledger.db.prepare("SELECT attempts FROM availability_faults WHERE object_key='message:message'").get()).toEqual(before);
+    f.store.transaction(() => f.db.prepare('UPDATE cowork_messages SET metadata=? WHERE id=?').run('{}','message'));
+    await f.live();
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections' && call[2].objectId === 'message')).toBe(true);
+    expect(f.publisher.ledger.db.prepare("SELECT 1 FROM availability_faults WHERE object_key='message:message'").get()).toBeUndefined();
+  });
+  it('keeps control and live publishing safe when the diagnostic sink throws', async () => {
+    const f = fixture(); vi.spyOn(console,'debug').mockImplementation(() => { throw new Error('logger unavailable'); });
+    vi.spyOn(console,'warn').mockImplementation(() => { throw new Error('logger unavailable'); });
+    await f.controls(); await f.live();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    expect(f.publisher.ledger.pending(f.context.scope,'live','local')).toEqual([]);
+  });
 });

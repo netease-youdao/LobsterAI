@@ -68,6 +68,7 @@ import { ownershipOperationGate } from './ownershipOperationGate';
 import { sameOwner } from './remote/canonical';
 import { recordRemoteSessionDeletion } from './remote/remoteLocalGc';
 import { RemoteStore } from './remote/remoteStore';
+import { remoteDiagnosticLog } from './remote/remoteSyncLog';
 
 
 // Default working directory for new users
@@ -807,9 +808,9 @@ export class CoworkStore {
   private readonly sessionProjectionNotifications: SessionProjectionNotifications;
   private readonly knownIMPlatforms = new Set<string>(PlatformRegistry.platforms);
 
-  constructor(db: Database.Database) {
+  constructor(db: Database.Database, options: { deferRemoteSynchronization?: boolean } = {}) {
     this.db = db;
-    this.remote = new RemoteStore(db, { deferredProjection: true });
+    this.remote = new RemoteStore(db, { deferredProjection: true, deferSynchronization: options.deferRemoteSynchronization });
     this.agentOwnership = new AgentOwnerStore(db);
     this.sessionProjectionNotifications = new SessionProjectionNotifications({
       runTransaction: operation => this.remote.transaction(operation),
@@ -2150,9 +2151,9 @@ export class CoworkStore {
   addMessage(sessionId: string, message: Omit<CoworkMessage, 'id' | 'timestamp'>, timestamp?: number): CoworkMessage {
     const id = uuidv4();
     const now = timestamp ?? Date.now();
-    const run = this.remote.run(sessionId);
+    const run = this.remote.messageRunBinding(sessionId);
     if (run) message = { ...message, metadata: { ...message.metadata, remoteRunId: run.runId,
-      remoteCommandId: message.type === 'user' ? this.remote.get<string>(`runCommand:${sessionId}`) : null } };
+      remoteCommandId: message.type === 'user' ? run.commandId : null } };
 
     const seqRow = this.db
       .prepare(
@@ -2161,7 +2162,7 @@ export class CoworkStore {
       .get(sessionId) as { next_seq: number } | undefined;
     const sequence = seqRow?.next_seq ?? 1;
 
-    this.writeSessionProjections([sessionId], () => {
+    try { this.writeSessionProjections([sessionId], () => {
       if (message.type === 'user') this.remote.advanceDeletionGuard(sessionId);
       this.db
         .prepare(
@@ -2185,6 +2186,13 @@ export class CoworkStore {
       if (message.type === 'user') {
         this.db.prepare('UPDATE cowork_sessions SET updated_at = ? WHERE id = ?').run(now, sessionId);
       }
+    }); } catch (error) {
+      remoteDiagnosticLog('desktop.message.persist_failed', { localSessionId: sessionId, runId: run?.runId,
+        commandId: run?.commandId, reason: 'STORAGE_UNAVAILABLE' }, 'error');
+      throw error;
+    }
+    if (!this.db.inTransaction) remoteDiagnosticLog('desktop.message.persisted', {
+      localSessionId: sessionId, runId: run?.runId, commandId: run?.commandId, result: 'success',
     });
 
     return {

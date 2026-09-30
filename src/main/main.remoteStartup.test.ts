@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,7 +26,7 @@ function deferred<T>() {
 // Execute the real main-process entrypoint, but keep Electron, imported services,
 // filesystem operations and timers inside this inert fixture. In particular,
 // getStore/initStore are the real functions rather than mock implementations.
-function startupFixture() {
+function startupFixture(failSynchronization = false) {
   const ready = deferred<void>();
   const created = deferred<unknown>();
   const events: string[] = [];
@@ -65,7 +66,7 @@ function startupFixture() {
     },
   };
   const cowork = moduleOf({
-    remote: inert,
+    remote: moduleOf({ initializeSynchronization: () => { if (failSynchronization) throw new Error('optional schema unavailable'); } }),
     autoDeleteNonPersonalMemories: () => 0,
     onSessionProjectionChanges: () => noop,
   });
@@ -87,8 +88,8 @@ function startupFixture() {
     },
   });
   const modules: Record<string, unknown> = {
-    crypto: moduleOf({ default: inert }),
-    fs: moduleOf({ default: moduleOf({ existsSync: () => true }) }),
+    crypto: moduleOf({ default: crypto }),
+    fs: moduleOf({ default: moduleOf({ existsSync: () => true, realpathSync: () => fakePath }) }),
     os: moduleOf({ default: { homedir: () => fakePath, hostname: () => 'fixture-host' } }),
     path: moduleOf({ default: path }),
     url: moduleOf({ fileURLToPath, pathToFileURL: inert }),
@@ -154,6 +155,15 @@ describe('main remote-control startup lifecycle', () => {
       fixture.notifyStoreChange(key);
       expect(fixture.events.slice(before)).toEqual(['remote:accountChanged', 'power:restore']);
     }
+  });
+
+  test('continues desktop startup and keeps command handlers when optional synchronization initialization fails', async () => {
+    const fixture = startupFixture(true);
+    fixture.evaluate(); await fixture.appReady(); await fixture.storeReady();
+    expect(fixture.events).toContain('remote:configure');
+    expect(fixture.events).not.toContain('remote:bridge');
+    expect(fixture.errors).toHaveLength(1);
+    expect(String(fixture.errors[0][0])).toContain('fixture:startup-complete');
   });
 
   test('does not access the database or construct remote services before app and store readiness', async () => {

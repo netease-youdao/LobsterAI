@@ -17,10 +17,11 @@ import { samePersistedRemoteEnvironment } from './remoteEnvironmentMigration';
 import { RemoteHistoryStore } from './remoteHistoryStore';
 import { acknowledgeRemoteSessionDeletion } from './remoteLocalGc';
 import { RemoteProjectionCoordinator } from './remoteProjectionCoordinator';
+import { initializeRemoteProjectionSchema } from './remoteProjectionSchema';
 import type { ProjectionWork } from './remoteProjectionWorker';
 import { isPublicReplyMessage, redactReplyText,replyAppendDelta, replyBlockId, replyBlocks, replyChunks, replyToolState } from './remoteReplyProjection';
 import { RemoteSyncStateError, retentionEventId, retentionSequence, safeSourceSequence } from './remoteRetention';
-import { remoteSyncErrorMetadata } from './remoteSyncLog';
+import { remoteDiagnosticLog, remoteLogMessage, remoteSyncErrorMetadata } from './remoteSyncLog';
 import { activeRemoteSyncTargetContext } from './remoteSyncTargetStore';
 import { RemoteTaskDataError } from './remoteTaskSyncState';
 
@@ -122,7 +123,7 @@ export class RemoteStore {
   private readonly databaseHealth: RemoteDatabaseHealth | null;
   private readonly projector: RemoteProjectionCoordinator | null;
   private readonly projectionTargetContexts = new WeakMap<ProjectionWork, string>();
-  constructor(readonly db: Database.Database, private readonly options: { deferredProjection?: boolean; restoreRuns?: boolean; projectionWorkerPath?: string } = {}) {
+  constructor(readonly db: Database.Database, private readonly options: { deferredProjection?: boolean; restoreRuns?: boolean; projectionWorkerPath?: string; deferSynchronization?: boolean } = {}) {
     this.history = new RemoteHistoryStore(this);
     RemoteHistoryStore.initializeCore(db);
     this.databaseHealth = options.deferredProjection && db.name !== ':memory:' && options.restoreRuns !== false ? new RemoteDatabaseHealth(db.name) : null;
@@ -133,9 +134,7 @@ export class RemoteStore {
     db.exec(`
       CREATE TABLE IF NOT EXISTS remote_corrupt_state(key TEXT PRIMARY KEY,value TEXT NOT NULL,detected_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS remote_session_revisions(session_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, dirty_at INTEGER NOT NULL, clean_revision INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE IF NOT EXISTS remote_projection_publications(session_id TEXT PRIMARY KEY,path TEXT NOT NULL,source_seq INTEGER NOT NULL,revision INTEGER NOT NULL,digest TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS remote_projection_failures(session_id TEXT PRIMARY KEY,reason TEXT NOT NULL,retry_at INTEGER NOT NULL,revision INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS remote_object_state(session_id TEXT NOT NULL,object_key TEXT NOT NULL,revision INTEGER NOT NULL,record_json TEXT NOT NULL,PRIMARY KEY(session_id,object_key));
+
       CREATE TABLE IF NOT EXISTS remote_ownership_pending(session_id TEXT PRIMARY KEY,owner_user_id TEXT NOT NULL,owner_scope_key TEXT NOT NULL,operation_id TEXT NOT NULL,database_id TEXT);
       CREATE TABLE IF NOT EXISTS remote_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS remote_write_context (id INTEGER PRIMARY KEY CHECK(id=1), trusted INTEGER NOT NULL);
@@ -143,22 +142,12 @@ export class RemoteStore {
       CREATE TABLE IF NOT EXISTS cowork_session_ownership (
         session_id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, owner_scope_key TEXT NOT NULL,
         ownership_status TEXT NOT NULL, source TEXT NOT NULL, created_at INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS remote_dirty (session_id TEXT PRIMARY KEY);
-      CREATE TABLE IF NOT EXISTS remote_content_dirty (session_id TEXT PRIMARY KEY);
+
       CREATE TABLE IF NOT EXISTS remote_sync (
         local_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, device_id TEXT NOT NULL DEFAULT '',
         source_seq INTEGER NOT NULL DEFAULT 0, ack_seq INTEGER NOT NULL DEFAULT 0,
         server_seq TEXT NOT NULL DEFAULT '0', needs_snapshot INTEGER NOT NULL DEFAULT 1);
-      CREATE TABLE IF NOT EXISTS remote_outbox (
-        session_id TEXT NOT NULL, source_seq INTEGER NOT NULL, event_json TEXT NOT NULL,
-        PRIMARY KEY(session_id,source_seq));
-      CREATE TABLE IF NOT EXISTS remote_projection (
-        session_id TEXT NOT NULL, object_key TEXT NOT NULL, hash TEXT NOT NULL,
-        revision INTEGER NOT NULL, record_json TEXT NOT NULL, PRIMARY KEY(session_id,object_key));
-      CREATE TABLE IF NOT EXISTS remote_reply_contents (session_id TEXT NOT NULL, content_id TEXT NOT NULL, version INTEGER NOT NULL,
-        message_id TEXT NOT NULL, block_id TEXT NOT NULL, format TEXT NOT NULL, sha256 TEXT NOT NULL, chunks_json TEXT NOT NULL, size_bytes INTEGER NOT NULL,
-        PRIMARY KEY(session_id,content_id,version));
-      CREATE TABLE IF NOT EXISTS remote_reply_chunks(session_id TEXT NOT NULL, sha256 TEXT NOT NULL, content TEXT NOT NULL, size_bytes INTEGER NOT NULL, PRIMARY KEY(session_id,sha256));
+
       CREATE TABLE IF NOT EXISTS remote_source_owner (source_id TEXT PRIMARY KEY, owner_json TEXT NOT NULL);
     `);
     if (!(db.prepare('PRAGMA table_info(remote_session_revisions)').all() as Array<{ name: string }>).some(column => column.name === 'clean_revision')) db.exec('ALTER TABLE remote_session_revisions ADD COLUMN clean_revision INTEGER NOT NULL DEFAULT 0');
@@ -170,53 +159,40 @@ export class RemoteStore {
     initializeAvailabilitySource(db);
     this.replyProjectionSupported = this.get<boolean>('replyProjectionMode') === true;
     this.questionProjectionSupported = this.get<boolean>('questionProjectionMode:default') === true;
-    // Replace persisted dirty triggers; explicit UPSERT is not overridden by an outer UPSERT
-    // conflict policy, which can turn INSERT OR IGNORE inside a trigger into an abort.
-    for (const table of ['cowork_sessions', 'cowork_messages']) {
-      const sid = table === 'cowork_sessions' ? 'id' : 'session_id';
-      for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
-        const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
-        db.transaction(() => db.exec(`CREATE TRIGGER IF NOT EXISTS remote_revision_${table}_${operation.toLowerCase()}
-          AFTER ${operation} ON ${table} BEGIN
-          INSERT INTO remote_session_revisions(session_id,revision,dirty_at) VALUES (${ref}.${sid},1,CAST(strftime('%s','now') AS INTEGER)*1000)
-          ON CONFLICT(session_id) DO UPDATE SET dirty_at=CASE WHEN revision=clean_revision THEN excluded.dirty_at ELSE dirty_at END,revision=revision+1; END;
-          DROP TRIGGER IF EXISTS remote_content_${table}_${operation.toLowerCase()};
-          CREATE TRIGGER remote_content_${table}_${operation.toLowerCase()}
-          AFTER ${operation} ON ${table} BEGIN INSERT INTO remote_content_dirty VALUES (${ref}.${sid}) ON CONFLICT(session_id) DO NOTHING; END;
-          DROP TRIGGER IF EXISTS remote_${table}_${operation.toLowerCase()};
-          CREATE TRIGGER remote_${table}_${operation.toLowerCase()}
-          AFTER ${operation} ON ${table} BEGIN
-          INSERT INTO remote_dirty VALUES (${ref}.${sid}) ON CONFLICT(session_id) DO NOTHING;
-          UPDATE cowork_session_ownership SET ownership_status='quarantined'
-          WHERE session_id=${ref}.${sid} AND (SELECT trusted FROM remote_write_context WHERE id=1)=0;
-          END;`))();
+    // Upgrade old triggers before any local mutation; optional projections must never own core writes.
+    db.transaction(() => {
+      for (const table of ['cowork_sessions', 'cowork_messages']) {
+        const sid = table === 'cowork_sessions' ? 'id' : 'session_id';
+        for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
+          const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
+          db.exec(`CREATE TRIGGER IF NOT EXISTS remote_revision_${table}_${operation.toLowerCase()}
+            AFTER ${operation} ON ${table} BEGIN
+            INSERT INTO remote_session_revisions(session_id,revision,dirty_at) VALUES (${ref}.${sid},1,CAST(strftime('%s','now') AS INTEGER)*1000)
+            ON CONFLICT(session_id) DO UPDATE SET dirty_at=CASE WHEN revision=clean_revision THEN excluded.dirty_at ELSE dirty_at END,revision=revision+1; END;
+            DROP TRIGGER IF EXISTS remote_content_${table}_${operation.toLowerCase()};
+            DROP TRIGGER IF EXISTS remote_${table}_${operation.toLowerCase()};
+            CREATE TRIGGER remote_${table}_${operation.toLowerCase()} AFTER ${operation} ON ${table} BEGIN
+            UPDATE cowork_session_ownership SET ownership_status='quarantined'
+            WHERE session_id=${ref}.${sid} AND (SELECT trusted FROM remote_write_context WHERE id=1)=0; END;`);
+        }
       }
-    }
-    this.artifactTracking = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='library_local_artifacts'").get();
-    if (this.artifactTracking) {
-      for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
+      this.artifactTracking = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='library_local_artifacts'").get();
+      if (this.artifactTracking) for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
         const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
-        db.transaction(() => db.exec(`DROP TRIGGER IF EXISTS remote_content_library_relation_${operation.toLowerCase()};
-          CREATE TRIGGER remote_content_library_relation_${operation.toLowerCase()}
-          AFTER ${operation} ON library_artifact_sessions BEGIN INSERT INTO remote_content_dirty VALUES (${ref}.session_id) ON CONFLICT(session_id) DO NOTHING; END;
+        db.exec(`DROP TRIGGER IF EXISTS remote_content_library_relation_${operation.toLowerCase()};
           DROP TRIGGER IF EXISTS remote_content_library_artifact_${operation.toLowerCase()};
-          CREATE TRIGGER remote_content_library_artifact_${operation.toLowerCase()}
-          AFTER ${operation} ON library_local_artifacts BEGIN
-          INSERT INTO remote_content_dirty SELECT session_id FROM library_artifact_sessions WHERE artifact_id=${ref}.id
-          ON CONFLICT(session_id) DO NOTHING; END;
           DROP TRIGGER IF EXISTS remote_library_relation_${operation.toLowerCase()};
-          CREATE TRIGGER remote_library_relation_${operation.toLowerCase()}
-          AFTER ${operation} ON library_artifact_sessions BEGIN
-          INSERT INTO remote_dirty SELECT ${ref}.session_id WHERE EXISTS
-            (SELECT 1 FROM cowork_session_ownership WHERE session_id=${ref}.session_id AND ownership_status='confirmed') ON CONFLICT(session_id) DO NOTHING; END;
           DROP TRIGGER IF EXISTS remote_library_artifact_${operation.toLowerCase()};
-          CREATE TRIGGER remote_library_artifact_${operation.toLowerCase()}
-          AFTER ${operation} ON library_local_artifacts BEGIN
-          INSERT INTO remote_dirty SELECT r.session_id FROM library_artifact_sessions r
-            JOIN cowork_session_ownership o ON o.session_id=r.session_id
-            WHERE r.artifact_id=${ref}.id AND o.ownership_status='confirmed' ON CONFLICT(session_id) DO NOTHING; END;`))();
+          CREATE TRIGGER remote_library_relation_${operation.toLowerCase()} AFTER ${operation} ON library_artifact_sessions BEGIN
+          INSERT INTO remote_session_revisions(session_id,revision,dirty_at) VALUES (${ref}.session_id,1,CAST(strftime('%s','now') AS INTEGER)*1000)
+          ON CONFLICT(session_id) DO UPDATE SET revision=revision+1; END;
+          CREATE TRIGGER remote_library_artifact_${operation.toLowerCase()} AFTER ${operation} ON library_local_artifacts BEGIN
+          INSERT INTO remote_session_revisions(session_id,revision,dirty_at)
+          SELECT session_id,1,CAST(strftime('%s','now') AS INTEGER)*1000 FROM library_artifact_sessions WHERE artifact_id=${ref}.id
+          ON CONFLICT(session_id) DO UPDATE SET revision=revision+1; END;`);
       }
-    }
+    })();
+    if (!options.deferSynchronization) this.initializeSynchronization();
     db.prepare('UPDATE remote_write_context SET trusted=0 WHERE id=1').run();
     // Large histories are reconciled in bounded pages after the shell can start.
     if (options.restoreRuns !== false) {
@@ -238,6 +214,39 @@ export class RemoteStore {
       } else this.recoverRunRows(this.db.prepare("SELECT key,value FROM remote_state WHERE key LIKE 'run:%'").all() as Array<{ key: string; value: string }>);
     }
   }
+  private synchronizationReady = false;
+  private approvalExpiryCursor: string | undefined;
+  private readonly messageBindings = new Map<string, { runId: string; commandId: string | null; owner: RemoteOwner | null }>();
+  initializeSynchronization(): void {
+    if (this.synchronizationReady) return;
+    initializeRemoteProjectionSchema(this.db);
+    this.synchronizationReady = true;
+  }
+  /** Rebuild only scheduling hints from atomic revisions. No ACK or immutable request is changed. */
+  refreshProjectionHints(): void {
+    if (!this.synchronizationReady) return;
+    this.db.transaction(() => {
+      const rows = this.db.prepare(`SELECT r.session_id,r.revision FROM remote_session_revisions r
+        LEFT JOIN remote_projection_scan s ON s.session_id=r.session_id
+        WHERE s.session_id IS NULL OR r.revision>s.revision ORDER BY r.dirty_at,r.session_id LIMIT 128`)
+        .all() as Array<{ session_id: string; revision: number }>;
+      for (const row of rows) {
+        this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(row.session_id);
+        this.db.prepare('INSERT OR IGNORE INTO remote_content_dirty VALUES (?)').run(row.session_id);
+        this.db.prepare(`INSERT INTO remote_projection_scan VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision`)
+          .run(row.session_id, row.revision);
+      }
+    })();
+  }
+  private markProjectionDirty(sessionId: string): void {
+    this.touchProjection(sessionId);
+  }
+  /** Core writers never require the optional projection schema. */
+  clearProjectionHints(sessionId: string): void {
+    if (!this.synchronizationReady) return;
+    this.db.prepare('DELETE FROM remote_dirty WHERE session_id=?').run(sessionId);
+    this.db.prepare('DELETE FROM remote_content_dirty WHERE session_id=?').run(sessionId);
+  }
   private recoverRunRows(rows: Array<{ key: string; value: string }>): void {
     for (const row of rows) {
       const sessionId = row.key.slice('run:'.length);
@@ -249,7 +258,7 @@ export class RemoteStore {
       } catch {
         this.db.prepare('INSERT OR IGNORE INTO remote_corrupt_state VALUES (?,?,?)').run(row.key, row.value, Date.now());
         this.securityRecoveryRequired = true;
-        console.warn('[RemoteSync] Invalid run evidence isolated from application startup', { key: row.key });
+        remoteDiagnosticLog('remote.record.quarantined', { localSessionId: sessionId, lane: 'control', reason: 'RECORD_INVALID' }, 'warn');
       }
     }
   }
@@ -264,7 +273,7 @@ export class RemoteStore {
   }
   projectionPublishing(sessionId: string): boolean { return !!this.db.prepare('SELECT 1 FROM remote_projection_publications WHERE session_id=?').get(sessionId); }
   retryProjections(): void { this.db.prepare('DELETE FROM remote_projection_failures').run(); }
-  flushProjections(): Promise<void> { return this.projector?.flush() || Promise.resolve(); }
+  flushProjections(): Promise<void> { this.initializeSynchronization(); this.refreshProjectionHints(); return this.projector?.flush() || Promise.resolve(); }
   /** A working set must not move while the worker is publishing it in bounded batches. */
   async pauseSyncTargetProjection(): Promise<void> {
     this.enabledOwner = null;
@@ -334,7 +343,7 @@ export class RemoteStore {
         // The history lane reports the failure for this task, even if the interrupted
         // publisher crashed after removing its former dirty marker.
         this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(id);
-        console.warn('[RemoteSync] Projection task selection isolated', { localSessionId: id, reason });
+        remoteDiagnosticLog('remote.record.quarantined', { localSessionId: id, lane: 'history', reason: 'RECORD_INVALID', error }, 'warn');
       }
     }
     this.projectionCandidateOffset = candidates.length < 50 ? 0 : this.projectionCandidateOffset + skipped;
@@ -377,9 +386,7 @@ export class RemoteStore {
   setArtifactProjectionResolver(resolver: NonNullable<RemoteStore['artifactProjection']>): void { this.artifactProjection = resolver; }
   markFilesDirty(sessionId: string): void {
     if (this.isSyncClosed(sessionId)) return;
-    this.touchProjection(sessionId);
-    this.db.prepare('INSERT OR IGNORE INTO remote_content_dirty VALUES (?)').run(sessionId);
-    this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId);
+    this.markProjectionDirty(sessionId);
   }
   /** Called only after negotiation and registration confirm the exact projection identity. */
   setProjectionIdentity(environment: string, owner: RemoteOwner, deviceId: string): void {
@@ -510,7 +517,7 @@ export class RemoteStore {
       this.put(key, question);
       if (!previous || previous.status !== question.status || previous.remoteAllowed !== question.remoteAllowed
         || previous.resolution.phase !== question.resolution.phase) this.bumpControl(sessionId);
-      this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId);
+      this.markProjectionDirty(sessionId);
       this.refreshApprovalRunState(sessionId);
     });
   }
@@ -526,7 +533,7 @@ export class RemoteStore {
       const controlChanged = !previous || ['status', 'remoteAllowed', 'requiresLocalAction'].some(field => previous[field] !== approval[field])
         || previous.resolution?.phase !== approval.resolution?.phase;
       if (controlChanged) this.bumpControl(sessionId);
-      this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId);
+      this.markProjectionDirty(sessionId);
       this.refreshApprovalRunState(sessionId);
     });
   }
@@ -553,12 +560,12 @@ export class RemoteStore {
   setAgentSummaryResolver(resolver: ((sessionId: string, owner: RemoteOwner) => RemoteAgentSummary | null) | null): void {
     if (Boolean(this.agentSummary) === Boolean(resolver)) { this.agentSummary = resolver; return; }
     this.agentSummary = resolver;
-    if (resolver) for (const { session_id } of this.projectionSessions()) this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(session_id);
+    if (resolver) for (const { session_id } of this.projectionSessions()) this.markProjectionDirty(session_id);
   }
   setInputProjectionSupported(supported: boolean): void {
     if (this.inputProjectionSupported === supported) return;
     this.inputProjectionSupported = supported;
-    for (const { session_id } of this.projectionSessions()) this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(session_id);
+    for (const { session_id } of this.projectionSessions()) this.markProjectionDirty(session_id);
   }
   currentAgentSummary(sessionId: string): RemoteAgentSummary | null {
     const owner = this.owner(sessionId);
@@ -592,6 +599,7 @@ export class RemoteStore {
   put(key: string, value: unknown): void {
     if (this.depth === 0 && this.advanceCheckpoint) { this.transaction(() => this.put(key, value)); return; }
     const parts = key.split(':');
+    if (parts[0] === 'run' && parts[1] && this.messageBindings.get(parts[1])?.runId !== (value as RemoteRun)?.runId) this.messageBindings.delete(parts[1]);
     if (parts[1] && ['deletionGuard', 'run', 'runHistory', 'control', 'approval', 'question', 'localApprovalBlocker', 'inputModel', 'inputVersion', 'inputSignature'].includes(parts[0])) {
       this.touchProjection(parts[1]); touchAvailabilityControl(this.db, parts[1]);
     }
@@ -604,7 +612,7 @@ export class RemoteStore {
     }
     if (parts[0] === 'questionDecision') {
       const sessionId = (value as { state?: { sessionId?: string } }).state?.sessionId;
-      if (sessionId) { this.touchProjection(sessionId); touchAvailabilityControl(this.db, sessionId); this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId); }
+      if (sessionId) { this.touchProjection(sessionId); touchAvailabilityControl(this.db, sessionId); this.markProjectionDirty(sessionId); }
     }
   }
   remove(key: string): void { this.db.prepare('DELETE FROM remote_state WHERE key=?').run(key); }
@@ -616,6 +624,23 @@ export class RemoteStore {
     return (rows as any[])
       .map(row => ({ key: row.key, value: JSON.parse(row.value) as T }));
   }
+  scanEntries<T>(prefix: string, options: { after?: string; limit?: number; validate?: (value: unknown) => value is T } = {}): {
+    rows: Array<{ key: string; state: 'valid'; value: T } | { key: string; state: 'corrupt'; reason: string }>;
+    nextCursor: string | null;
+  } {
+    const limit = Math.max(1, Math.min(100, Number.isSafeInteger(options.limit) ? options.limit! : 50));
+    const rows = this.db.prepare(`SELECT key,length(CAST(value AS BLOB)) AS bytes,
+      CASE WHEN length(CAST(value AS BLOB))<=1048576 THEN value ELSE NULL END AS value FROM remote_state
+      WHERE key>=? AND key<? AND key>? ORDER BY key LIMIT ?`).all(prefix, `${prefix}\uffff`, options.after || '', limit) as Array<{ key: string; value: string | null; bytes: number }>;
+    return { rows: rows.map(row => {
+      if (row.value === null) return { key: row.key, state: 'corrupt' as const, reason: 'STATE_RECORD_BUDGET' };
+      try {
+        const value: unknown = JSON.parse(row.value);
+        if (options.validate && !options.validate(value)) return { key: row.key, state: 'corrupt' as const, reason: 'STATE_RECORD_INVALID' };
+        return { key: row.key, state: 'valid' as const, value: value as T };
+      } catch { return { key: row.key, state: 'corrupt' as const, reason: 'STATE_RECORD_INVALID' }; }
+    }), nextCursor: rows.length === limit ? rows.at(-1)!.key : null };
+  }
   transaction<T>(operation: () => T): T {
     if (this.depth > 0) return operation();
     const beforeChange = this.changeVersion;
@@ -625,7 +650,7 @@ export class RemoteStore {
       this.db.prepare('UPDATE remote_write_context SET trusted=1 WHERE id=1').run();
       try {
         const value = operation();
-        if (!this.publishing && !this.options.deferredProjection) this.captureDirty();
+        if (!this.publishing && !this.options.deferredProjection && this.synchronizationReady) { this.refreshProjectionHints(); this.captureDirty(); }
         if (this.advanceCheckpoint) this.put('databaseCheckpoint', this.advanceCheckpoint());
         return value;
       } finally {
@@ -633,7 +658,10 @@ export class RemoteStore {
         this.depth--;
       }
     })();
-    if (this.options.deferredProjection || this.changeVersion !== beforeChange) this.wake(this.urgentReplyChange);
+    if (this.options.deferredProjection || this.changeVersion !== beforeChange) {
+      try { this.wake(this.urgentReplyChange); }
+      catch { remoteDiagnosticLog('remote.record.quarantined', { lane: 'history', reason: 'DEPENDENCY_UNAVAILABLE' }, 'warn'); }
+    }
     return result;
   }
   owner(sessionId: string): RemoteOwner | null {
@@ -655,7 +683,7 @@ export class RemoteStore {
       .run(sessionId, owner.userId, owner.scopeKey, 'confirmed', OWNERSHIP_MANUAL_SOURCE, associatedAt);
     this.signOwnership(sessionId, owner);
     this.db.prepare('INSERT INTO remote_sync(local_id,session_id) VALUES (?,?)').run(sessionId, randomUUID());
-    this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId);
+    this.markProjectionDirty(sessionId);
   }
   assertActor(sessionId: string, actor: RemoteOwner | null): void {
     const row = this.db.prepare('SELECT ownership_status FROM cowork_session_ownership WHERE session_id=?').get(sessionId) as any;
@@ -707,8 +735,13 @@ export class RemoteStore {
       // It must have a newer control version even if execution has not left starting yet.
       if (this.get<boolean>(`runPublished:${run.runId}`) === false) this.bumpControl(sessionId);
       this.put(`runPublished:${run.runId}`, true);
-      this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId);
+      this.markProjectionDirty(sessionId);
     });
+    const commandId = this.get<string>(`runCommand:${sessionId}`);
+    if (commandId !== null && typeof commandId !== 'string') throw new Error('REMOTE_RUN_EVIDENCE_INVALID');
+    if (this.messageBindings.size >= 1000) this.messageBindings.delete(this.messageBindings.keys().next().value!);
+    if (!this.db.inTransaction) this.messageBindings.set(sessionId, { runId: run.runId, commandId, owner: this.owner(sessionId) });
+    remoteDiagnosticLog('desktop.run.dispatch_started', { localSessionId: sessionId, runId: run.runId, commandId, result: 'success' }, 'info');
   }
   quarantineAll(): void {
     this.db.transaction(() => {
@@ -758,7 +791,7 @@ export class RemoteStore {
     this.deletionProjectionSupported = supported;
     for (const { session_id } of this.projectionSessions()) {
       if (supported) this.deletionGuard(session_id);
-      this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(session_id);
+      this.markProjectionDirty(session_id);
     }
   }
   deletionGuard(sessionId: string): DeletionGuard {
@@ -791,7 +824,30 @@ export class RemoteStore {
     const previous = this.deletionGuard(sessionId);
     this.put(`${RemoteDeletion.Guard}${sessionId}`, { version: String(BigInt(previous.version) + 1n), runId: runId === undefined ? previous.runId : runId });
   }
-  run(sessionId: string): RemoteRun | null { return this.get<RemoteRun>(`run:${sessionId}`); }
+  run(sessionId: string): RemoteRun | null {
+    const run = this.get<RemoteRun>(`run:${sessionId}`);
+    if (run !== null && (!run || typeof run.runId !== 'string' || !run.runId || typeof run.status !== 'string'
+      || !['starting', 'running', 'waiting_approval', 'waiting_local', 'cancelling', 'reconciling', ...terminal].includes(run.status)
+      || typeof run.statusVersion !== 'string' || !/^[1-9][0-9]*$/u.test(run.statusVersion))) throw new Error('REMOTE_RUN_EVIDENCE_INVALID');
+    return run;
+  }
+  activeDecisionRun(sessionId: string): RemoteRun | null {
+    const run = this.run(sessionId);
+    return run && !terminal.has(run.status) ? run : null;
+  }
+  messageRunBinding(sessionId: string): { runId: string; commandId: string | null } | null {
+    const binding = this.messageBindings.get(sessionId);
+    if (binding) {
+      const owner = this.owner(sessionId);
+      if ((owner !== null || binding.owner !== null) && !sameOwner(owner, binding.owner)) throw new Error('REMOTE_RUN_OWNER_CHANGED');
+      return binding;
+    }
+    const run = this.run(sessionId);
+    if (!run) return null;
+    const commandId = this.get<string>(`runCommand:${sessionId}`);
+    if (commandId !== null && typeof commandId !== 'string') throw new Error('REMOTE_RUN_EVIDENCE_INVALID');
+    return { runId: run.runId, commandId };
+  }
   controlVersion(sessionId: string): string { return this.get<string>(`control:${sessionId}`) || '0'; }
   beginRun(sessionId: string, runId: string = randomUUID(), commandId: string | null = null): RemoteRun {
     if (this.recoveringRuns) this.runtimeTouchedSessions.add(sessionId);
@@ -813,7 +869,7 @@ export class RemoteStore {
       this.put(`runCommand:${sessionId}`, commandId);
       this.put(`runPublished:${runId}`, commandId === null);
       this.bumpControl(sessionId);
-      this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId);
+      this.markProjectionDirty(sessionId);
     });
     return run;
   }
@@ -826,32 +882,80 @@ export class RemoteStore {
         finishedAt: terminal.has(status) ? iso(Date.now()) : null,
         error: error ? remoteError(47019, 'EXECUTION_FAILED', error) : null });
       if (terminal.has(status)) {
-        try { this.fileTerminalBoundary?.(sessionId, previous.runId); }
-        catch { console.warn('[RemoteFiles] Final snapshot capture deferred'); }
-        this.approvalLifecycle?.close(sessionId, previous.runId, status);
-        // Legacy records have no private decision service; never invent a decision from resolution alone.
-        for (const { key, value: approval } of this.entries<any>(`approval:${sessionId}:`)) {
-          if (approval.runId === previous.runId && approval.status === 'pending' && !approval.resolution) this.put(key, { ...approval, remoteAllowed: false, status: 'cancelled', approvalVersion: String(BigInt(approval.approvalVersion) + 1n), resolvedAt: iso(Date.now()) });
-        }
+        this.put(`terminalCleanup:${sessionId}:${previous.runId}`, { sessionId, runId: previous.runId, status });
       }
       this.put(`runHistory:${sessionId}:${previous.runId}`, this.run(sessionId));
       this.bumpControl(sessionId);
-      this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId);
+      this.markProjectionDirty(sessionId);
     });
   }
-  expireApprovals(now = Date.now()): void {
-    this.approvalLifecycle?.expire(now);
-    const expired = this.entries<any>('approval:').filter(row => row.value.status === 'pending' && !row.value.resolution && Date.parse(row.value.expiresAt) <= now);
-    if (!expired.length) return;
-    this.transaction(() => {
-      for (const { key, value: approval } of expired) {
-        const sessionId = key.slice('approval:'.length, key.indexOf(':', 'approval:'.length));
-        this.put(key, { ...approval, remoteAllowed: false, status: 'expired', resolvedAt: iso(now), approvalVersion: String(BigInt(approval.approvalVersion) + 1n) });
-        this.bumpControl(sessionId);
-        this.refreshApprovalRunState(sessionId);
-        this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId);
+  private terminalCleanupCursor?: string;
+  private retryTerminalCleanup(): void {
+    const page = this.scanEntries<{ sessionId: string; runId: string; status: string; after?: string }>(
+      'terminalCleanup:', { after: this.terminalCleanupCursor, limit: 8 });
+    this.terminalCleanupCursor = page.nextCursor || undefined;
+    for (const row of page.rows) {
+      if (row.state !== 'valid') continue;
+      const work = row.value;
+      if (!work || typeof work.sessionId !== 'string' || typeof work.runId !== 'string' || !terminal.has(work.status)) continue;
+      try {
+        this.fileTerminalBoundary?.(work.sessionId, work.runId);
+        this.approvalLifecycle?.close(work.sessionId, work.runId, work.status);
+        const approvals = this.scanEntries<Record<string, any>>(`approval:${work.sessionId}:`, { after: work.after, limit: 50 });
+        this.transaction(() => {
+          for (const approvalRow of approvals.rows) {
+            if (approvalRow.state !== 'valid') continue;
+            const approval = approvalRow.value;
+            if (approval?.runId !== work.runId || approval.status !== 'pending' || approval.resolution
+              || typeof approval.approvalVersion !== 'string' || !/^[1-9][0-9]*$/u.test(approval.approvalVersion)) continue;
+            this.put(approvalRow.key, { ...approval, remoteAllowed: false, status: 'cancelled',
+              approvalVersion: String(BigInt(approval.approvalVersion) + 1n), resolvedAt: iso(Date.now()) });
+            this.bumpControl(work.sessionId); this.markProjectionDirty(work.sessionId);
+          }
+          if (approvals.nextCursor) this.put(row.key, { ...work, after: approvals.nextCursor });
+          else this.db.prepare('DELETE FROM remote_state WHERE key=?').run(row.key);
+        });
+      } catch {
+        remoteDiagnosticLog('remote.record.quarantined', { localSessionId: work.sessionId, runId: work.runId,
+          lane: 'control', reason: 'DEPENDENCY_UNAVAILABLE' }, 'warn');
       }
-    });
+    }
+  }
+  expireApprovals(now = Date.now()): void {
+    if (!this.db.inTransaction) this.retryTerminalCleanup();
+    try { this.approvalLifecycle?.expire(now); }
+    catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      remoteDiagnosticLog('remote.record.quarantined', { lane: 'control', reason: 'RECORD_INVALID' }, 'warn');
+    }
+    const page = this.scanEntries<Record<string, any>>('approval:', { after: this.approvalExpiryCursor, limit: 50 });
+    this.approvalExpiryCursor = page.nextCursor || undefined;
+    for (const row of page.rows) {
+      if (row.state === 'corrupt') {
+        remoteDiagnosticLog('remote.record.quarantined', { lane: 'control', reason: 'RECORD_INVALID' }, 'warn');
+        continue;
+      }
+      const approval = row.value;
+      if (!approval || approval.status !== 'pending' || approval.resolution) continue;
+      const sessionId = row.key.slice('approval:'.length, row.key.indexOf(':', 'approval:'.length));
+      if (!sessionId || typeof approval.expiresAt !== 'string' || !Number.isFinite(Date.parse(approval.expiresAt))
+        || typeof approval.approvalVersion !== 'string' || !/^[1-9][0-9]*$/u.test(approval.approvalVersion)) {
+        remoteDiagnosticLog('remote.record.quarantined', { localSessionId: sessionId, lane: 'control', reason: 'RECORD_INVALID' }, 'warn');
+        continue;
+      }
+      if (Date.parse(approval.expiresAt) > now) continue;
+      try {
+        this.transaction(() => {
+          this.put(row.key, { ...approval, remoteAllowed: false, status: 'expired', resolvedAt: iso(now), approvalVersion: String(BigInt(approval.approvalVersion) + 1n) });
+          this.bumpControl(sessionId);
+          this.refreshApprovalRunState(sessionId);
+          this.markProjectionDirty(sessionId);
+        });
+      } catch (error) {
+        if (!(error instanceof SyntaxError) && !(error instanceof Error && error.message === 'REMOTE_RUN_EVIDENCE_INVALID')) throw error;
+        remoteDiagnosticLog('remote.record.quarantined', { localSessionId: sessionId, lane: 'control', reason: 'RECORD_INVALID' }, 'warn');
+      }
+    }
   }
   private bumpControl(sessionId: string): void { this.put(`control:${sessionId}`, String(BigInt(this.controlVersion(sessionId)) + 1n)); }
 
@@ -867,7 +971,7 @@ export class RemoteStore {
       // A legacy null-run summary may already be committed at the current control version.
       this.bumpControl(sessionId);
       this.requireSnapshot(sessionId);
-      this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId);
+      this.markProjectionDirty(sessionId);
     });
   }
   private captureDirty(): void {
@@ -886,11 +990,11 @@ export class RemoteStore {
         processed = true;
         const owner = this.owner(id);
         if (!owner) {
-          console.debug('[RemoteSync] Projection skipped', { localSessionId: id, reason: 'owner_not_confirmed' });
+          remoteLogMessage('debug', '[RemoteSync] Projection skipped', { localSessionId: id, reason: 'owner_not_confirmed' });
           continue;
         }
         if (!sameOwner(owner, this.enabledOwner)) {
-          console.debug('[RemoteSync] Snapshot required while synchronization disabled', { localSessionId: id });
+          remoteLogMessage('debug', '[RemoteSync] Snapshot required while synchronization disabled', { localSessionId: id });
           this.requireSnapshot(id);
           continue;
         }
@@ -899,12 +1003,12 @@ export class RemoteStore {
         const before = this.sync(id);
         try { this.project(id, summaryOnly); }
         catch (error) {
-          console.warn('[RemoteSync] Local projection failed; transaction will roll back', { localSessionId: id, sessionId: before?.session_id ?? null,
+          remoteLogMessage('warn', '[RemoteSync] Local projection failed; transaction will roll back', { localSessionId: id, sessionId: before?.session_id ?? null,
             sourceSeq: before?.source_seq ?? null, ...remoteSyncErrorMetadata(error) });
           throw error;
         }
         const after = this.sync(id);
-        if (after && after.source_seq !== before?.source_seq) console.debug('[RemoteSync] Local projection staged', {
+        if (after && after.source_seq !== before?.source_seq) remoteLogMessage('debug', '[RemoteSync] Local projection staged', {
           localSessionId: id, sessionId: after.session_id, sourceSeq: after.source_seq, previousSourceSeq: before?.source_seq ?? null,
           ackSourceSeq: after.ack_seq, serverSeq: after.server_seq, needsSnapshot: Boolean(after.needs_snapshot),
           controlVersion: this.controlVersion(id), runId: this.run(id)?.runId ?? null, runStatus: this.run(id)?.status ?? null, summaryOnly });
@@ -1214,7 +1318,7 @@ export class RemoteStore {
       this.pruneReplyContents(sessionId);
       if (Number(ack) === row.source_seq && !this.db.prepare('SELECT 1 FROM remote_dirty WHERE session_id=?').get(sessionId)) this.db.prepare('UPDATE remote_session_revisions SET clean_revision=revision WHERE session_id=?').run(sessionId);
       try { acknowledgeRemoteSessionDeletion(this, sessionId); }
-      catch (error) { console.warn('[RemoteSync] Local deletion cleanup receipt deferred', error); }
+      catch (error) { remoteDiagnosticLog('remote.record.quarantined', { localSessionId: sessionId, lane: 'history', reason: 'STORAGE_UNAVAILABLE', error }, 'warn'); }
     });
   }
 }

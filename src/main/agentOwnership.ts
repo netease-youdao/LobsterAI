@@ -70,18 +70,22 @@ export class AgentOwnerStore {
           INSERT OR IGNORE INTO agent_ownership VALUES(NEW.id,CASE WHEN NEW.id='main' THEN 'default' ELSE 'quarantined' END,NULL,NULL,1,NEW.created_at,NEW.updated_at,NULL);
           INSERT OR IGNORE INTO agent_ownership_dirty VALUES(NEW.id);
         END;
-        CREATE TRIGGER IF NOT EXISTS agent_ownership_update AFTER UPDATE ON agents BEGIN
+        DROP TRIGGER IF EXISTS agent_ownership_update;
+        CREATE TRIGGER agent_ownership_update AFTER UPDATE ON agents BEGIN
           UPDATE agent_ownership SET version=version+1,updated_at=NEW.updated_at,
             owner_kind=CASE WHEN owner_kind='owned' AND (SELECT trusted FROM agent_write_context WHERE id=1)=0 THEN 'quarantined' ELSE owner_kind END
             WHERE agent_id=NEW.id;
           INSERT OR IGNORE INTO agent_ownership_dirty VALUES(NEW.id);
-          INSERT OR IGNORE INTO remote_dirty SELECT id FROM cowork_sessions WHERE agent_id=NEW.id;
+          INSERT INTO remote_session_revisions(session_id,revision,dirty_at) SELECT id,1,CAST(strftime('%s','now') AS INTEGER)*1000 FROM cowork_sessions WHERE agent_id=NEW.id
+          ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
         END;
-        CREATE TRIGGER IF NOT EXISTS agent_ownership_delete AFTER DELETE ON agents BEGIN
+        DROP TRIGGER IF EXISTS agent_ownership_delete;
+        CREATE TRIGGER agent_ownership_delete AFTER DELETE ON agents BEGIN
           UPDATE agent_ownership SET version=version+1,updated_at=CAST(strftime('%s','now') AS INTEGER)*1000,
             deleted_at=CAST(strftime('%s','now') AS INTEGER)*1000 WHERE agent_id=OLD.id;
           INSERT OR IGNORE INTO agent_ownership_dirty VALUES(OLD.id);
-          INSERT OR IGNORE INTO remote_dirty SELECT id FROM cowork_sessions WHERE agent_id=OLD.id;
+          INSERT INTO remote_session_revisions(session_id,revision,dirty_at) SELECT id,1,CAST(strftime('%s','now') AS INTEGER)*1000 FROM cowork_sessions WHERE agent_id=OLD.id
+          ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
         END;
       `);
     })();
@@ -141,7 +145,8 @@ export class AgentOwnerStore {
       version=version+1,updated_at=? WHERE agent_id=?`)
       .run(AgentOwnerKind.Owned, actor.userId, actor.scopeKey, associatedAt, agentId);
     this.db.prepare('INSERT OR IGNORE INTO agent_ownership_dirty VALUES (?)').run(agentId);
-    this.db.prepare('INSERT OR IGNORE INTO remote_dirty SELECT id FROM cowork_sessions WHERE agent_id=?').run(agentId);
+    this.db.prepare(`INSERT INTO remote_session_revisions(session_id,revision,dirty_at) SELECT id,1,? FROM cowork_sessions WHERE agent_id=?
+      ON CONFLICT(session_id) DO UPDATE SET revision=revision+1`).run(Date.now(), agentId);
     return this.get(agentId)!.version;
   }
 
@@ -177,7 +182,8 @@ export class AgentOwnerStore {
     this.transaction(() => {
       this.db.prepare('UPDATE agent_ownership SET version=version+1,updated_at=? WHERE agent_id=? AND deleted_at IS NULL').run(Date.now(), agentId);
       this.db.prepare('INSERT OR IGNORE INTO agent_ownership_dirty VALUES(?)').run(agentId);
-      this.db.prepare('INSERT OR IGNORE INTO remote_dirty SELECT id FROM cowork_sessions WHERE agent_id=?').run(agentId);
+      this.db.prepare(`INSERT INTO remote_session_revisions(session_id,revision,dirty_at) SELECT id,1,? FROM cowork_sessions WHERE agent_id=?
+      ON CONFLICT(session_id) DO UPDATE SET revision=revision+1`).run(Date.now(), agentId);
     });
   }
 

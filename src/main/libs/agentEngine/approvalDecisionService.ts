@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import type { ApprovalDecisionOptions, ApprovalDecisionOutcome, ApprovalReconcileOptions, ApprovalState, DualApprovalConfiguration } from '../../../shared/cowork/approval';
-import { t } from '../../i18n';
 import { stableJson } from '../../remote/canonical';
+import { remoteDiagnosticLog } from '../../remote/remoteSyncLog';
 import type { ApprovalDescription } from './openclawApprovalAdapters';
 import { APPROVAL_ADAPTER_VERSION } from './openclawApprovalAdapters';
 import type { ApprovalDecision, PendingApprovalEntry } from './openclawApprovalBridge';
@@ -12,6 +12,10 @@ export interface ApprovalPersistence {
   get<T>(key: string): T | null;
   put(key: string, value: unknown): void;
   entries<T>(prefix: string): Array<{ key: string; value: T }>;
+  scanEntries?<T>(prefix: string, options?: { after?: string; limit?: number; validate?: (value: unknown) => value is T }): {
+    rows: Array<{ key: string; state: 'valid'; value: T } | { key: string; state: 'corrupt'; reason: string }>;
+    nextCursor: string | null;
+  };
   transaction<T>(operation: () => T): T;
 }
 export interface ApprovalBinding { runId: string | null; identity: unknown }
@@ -69,6 +73,59 @@ const outcome = (kind: ApprovalDecisionOutcome['kind'], record?: RecordEntry, re
   ...(record?.state.resolution.confirmedDecision ? { decision: record.state.resolution.confirmedDecision } : {}),
 });
 
+const recordStates = new Set(['pending', 'approved', 'denied', 'expired', 'cancelled', 'superseded']);
+const resolutionPhases = new Set(['idle', 'submitting', 'unknown', 'finished']);
+const submissionPhases = new Set(['reserved', 'dispatching', 'unknown', 'confirmed']);
+const continuationPhases = new Set(['not_needed', 'prepared', 'dispatching', 'confirmed', 'unknown']);
+const sources = new Set(['desktop', 'mobile', 'system', 'unknown']);
+const decisions = new Set(['allow-once', 'allow-always', 'deny']);
+const isObject = (value: unknown): value is Record<string, any> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
+const identifier = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 256;
+const nullableId = (value: unknown): boolean => value === null || identifier(value);
+const version = (value: unknown): boolean => typeof value === 'string' && /^[0-9]{1,32}$/u.test(value) && BigInt(value) > 0n;
+const timestamp = (value: unknown): boolean => value === null || typeof value === 'string' && Number.isFinite(Date.parse(value));
+const milliseconds = (value: unknown): boolean => value === null || typeof value === 'number' && Number.isSafeInteger(value) && Math.abs(value) <= 8640000000000000;
+const hash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value);
+class ApprovalRecordUnavailable extends Error {
+  constructor() { super('Approval record integrity unavailable'); this.name = 'ApprovalRecordUnavailable'; }
+}
+/** The scanner/getter only supplies JSON values. Bound their shape before recursive hashing/cloning. */
+function recordValid(value: unknown, key: string): value is RecordEntry {
+  const pending = [{ value, depth: 0 }]; let count = 0;
+  while (pending.length) {
+    const item = pending.pop()!;
+    if (++count > 32768 || item.depth > 64) return false;
+    if (item.value && typeof item.value === 'object') {
+      for (const child of Object.values(item.value)) pending.push({ value: child, depth: item.depth + 1 });
+    }
+  }
+  if (!isObject(value) || value.formatVersion !== 1 || !isObject(value.pending) || !isObject(value.state)
+    || !isObject(value.state.resolution) || !isObject(value.binding) || !isObject(value.permission)
+    || !isObject(value.description) || !isObject(value.rawRequest)) return false;
+  const { state, binding, permission, description, submission } = value;
+  const request = value.pending, resolution = state.resolution;
+  if (!identifier(request.requestId) || !identifier(request.sessionId) || key !== `${prefix}${request.requestId}`
+    || !['exec', 'plugin'].includes(request.kind) || request.allowAlways !== undefined && typeof request.allowAlways !== 'boolean'
+    || request.allowedDecisions !== undefined && (!Array.isArray(request.allowedDecisions) || !request.allowedDecisions.every((d: unknown) => typeof d === 'string' && decisions.has(d)))) return false;
+  if (state.requestId !== request.requestId || state.sessionId !== request.sessionId || state.runId !== binding.runId
+    || !nullableId(binding.runId) || !hash(value.bindingHash) || value.bindingHash !== digest(binding)
+    || !hash(state.operationDigest) || !version(state.approvalVersion) || !recordStates.has(state.status)
+    || !resolutionPhases.has(resolution.phase) || resolution.source !== null && !sources.has(resolution.source)
+    || ![null, 'approve', 'deny'].includes(resolution.confirmedDecision) || !timestamp(resolution.confirmedAt)
+    || !timestamp(state.expiresAt) || !timestamp(state.resolvedAt) || typeof state.remoteAllowed !== 'boolean'
+    || typeof state.requiresLocalAction !== 'boolean' || typeof state.title !== 'string' || typeof state.summary !== 'string') return false;
+  if (permission.requestId !== request.requestId || typeof permission.toolName !== 'string' || !isObject(permission.toolInput)
+    || typeof description.title !== 'string' || typeof description.summary !== 'string' || typeof description.remoteSafe !== 'boolean'
+    || !nullableId(value.bootId) || !milliseconds(value.createdAtMs) || !milliseconds(value.expiresAtMs)
+    || !continuationPhases.has(value.continuation)
+    || ['conflict', 'needsValidation', 'continuationCancelled'].some(k => value[k] !== undefined && typeof value[k] !== 'boolean')) return false;
+  if (submission !== null && (!isObject(submission) || !identifier(submission.id) || !sources.has(submission.source)
+    || submission.source === 'unknown' || !decisions.has(submission.decision) || !hash(submission.contentHash)
+    || !version(submission.baseVersion) || !version(submission.reservationVersion) || !submissionPhases.has(submission.phase)
+    || !timestamp(submission.dispatchedAt) || ![null, true, false].includes(submission.applied))) return false;
+  return true;
+}
+
 /** One durable arbiter for desktop, notification and mobile approval entrances. */
 export class ApprovalDecisionService {
   private contract: ApprovalGatewayContract | null = null;
@@ -79,14 +136,13 @@ export class ApprovalDecisionService {
   private readonly reservedChecks = new Set<string>();
   private recoveryActive = 0;
   private readonly continuationTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly unsupported: boolean;
+  private incompleteEvidence = false;
+  private readonly unreadableSessions = new Set<string>();
 
   constructor(private readonly options: Options) {
-    const records = options.persistence.entries<RecordEntry>(prefix);
-    this.unsupported = records.some(({ value }) => value.formatVersion !== 1);
-    if (this.unsupported) return;
+    const records = this.records();
     options.persistence.transaction(() => {
-      for (const { value: record } of records) {
+      for (const record of records) {
         if (record.state.status === 'pending' && record.state.resolution.phase === 'idle') {
           record.needsValidation = true;
           record.state.resolution.phase = 'unknown'; record.state.remoteAllowed = false;
@@ -104,7 +160,7 @@ export class ApprovalDecisionService {
 
   supportsDualApproval(): boolean {
     const c = this.contract;
-    return !this.unsupported && Boolean(c && c.version.replace(/^v/u, '') === '2026.8.1' && c.bootId
+    return Boolean(c && c.version.replace(/^v/u, '') === '2026.8.1' && c.bootId
       && ['approval.get', 'approval.resolve', 'exec.approval.list', 'plugin.approval.list'].every(m => c.methods.includes(m)));
   }
 
@@ -144,7 +200,6 @@ export class ApprovalDecisionService {
   }
 
   register(registration: ApprovalRegistration): ApprovalState | null {
-    if (this.unsupported) { this.options.emitError(registration.pending.sessionId, t('approvalRequiresUpgrade')); return null; }
     const binding = this.options.getBinding(registration.pending.sessionId);
     if (!binding) return null;
     const old = this.read(registration.pending.requestId);
@@ -198,7 +253,7 @@ export class ApprovalDecisionService {
       return this.inFlight.get(opts.submissionId) ?? Promise.resolve(this.getSubmission(opts.submissionId)!);
     }
     let record = this.read(requestId);
-    if (!record || this.unsupported) return Promise.resolve({ kind: 'known_not_applied', reason: 'APPROVAL_STALE' });
+    if (!record) return Promise.resolve({ kind: 'known_not_applied', reason: 'APPROVAL_STALE' });
     const failure = this.checkNewSubmission(record, opts);
     if (failure) return Promise.resolve(outcome('known_not_applied', record, failure));
     this.options.persistence.transaction(() => {
@@ -410,7 +465,8 @@ export class ApprovalDecisionService {
       this.continuationTimers.delete(requestId);
       const record = this.read(requestId);
       if (!record || record.continuationCancelled || record.continuation !== 'prepared' || invalidated.has(record.state.status) || !this.bindingValid(record) || this.options.canContinue?.(record.pending.sessionId) === false) return;
-      if (this.records().some(r => r.pending.sessionId === record.pending.sessionId && r.state.status === 'pending')) return;
+      const records = this.records();
+      if (!this.continuationEvidenceComplete(record.pending.sessionId) || records.some(r => r.pending.sessionId === record.pending.sessionId && r.state.status === 'pending')) return;
       if (this.options.isSessionActive(record.pending.sessionId)) {
         if (retries > 0) this.scheduleContinuation(requestId, retries - 1);
         return;
@@ -418,7 +474,7 @@ export class ApprovalDecisionService {
       const laneKey = `approvalContinuationLane:${record.pending.sessionId}:${record.bindingHash}`;
       const lane = this.options.persistence.get<{ phase: string }>(laneKey);
       if (lane && lane.phase !== 'confirmed') return;
-      const members = this.records().filter(r => r.pending.sessionId === record.pending.sessionId
+      const members = records.filter(r => r.pending.sessionId === record.pending.sessionId
         && r.bindingHash === record.bindingHash && r.continuation === 'prepared').map(r => r.pending.requestId);
       this.options.persistence.transaction(() => {
         this.options.persistence.put(laneKey, { phase: 'dispatching', bindingHash: record.bindingHash, members, dispatchedAt: nowIso() });
@@ -426,7 +482,10 @@ export class ApprovalDecisionService {
       });
       const beforeDispatch = () => {
         const current = this.read(requestId);
-        if (!current || current.continuationCancelled || !this.bindingValid(current) || this.options.canContinue?.(current.pending.sessionId) === false) throw new Error('Approval continuation binding changed');
+        const evidence = this.records();
+        if (!current || current.continuationCancelled || !this.bindingValid(current) || this.options.canContinue?.(current.pending.sessionId) === false
+          || !this.continuationEvidenceComplete(current.pending.sessionId)
+          || evidence.some(r => r.pending.sessionId === current.pending.sessionId && r.state.status === 'pending')) throw new Error('Approval continuation binding changed');
       };
       void this.options.continueSession(record.pending.sessionId, record.state.resolution.confirmedDecision!, beforeDispatch).then(() => {
         this.options.persistence.transaction(() => {
@@ -440,7 +499,10 @@ export class ApprovalDecisionService {
         });
       });
     };
-    const timer = setTimeout(run, 1000); timer.unref?.(); this.continuationTimers.set(requestId, timer);
+    const timer = setTimeout(() => {
+      try { run(); }
+      catch { remoteDiagnosticLog('remote.record.quarantined', { lane: 'control', reason: 'DEPENDENCY_UNAVAILABLE' }, 'warn'); }
+    }, 1000); timer.unref?.(); this.continuationTimers.set(requestId, timer);
   }
 
   dispose(): void { for (const timer of this.continuationTimers.values()) clearTimeout(timer); this.continuationTimers.clear(); }
@@ -479,8 +541,55 @@ export class ApprovalDecisionService {
     const current = this.options.getBinding(record.pending.sessionId);
     return current !== null && digest(current) === record.bindingHash;
   }
-  private read(id: string): RecordEntry | null { return this.options.persistence.get<RecordEntry>(`${prefix}${id}`); }
-  private records(): RecordEntry[] { return this.options.persistence.entries<RecordEntry>(prefix).map(row => row.value).filter(r => r.formatVersion === 1); }
+  private read(id: string): RecordEntry | null {
+    const key = `${prefix}${id}`;
+    let record: unknown;
+    try { record = this.options.persistence.get<unknown>(key); }
+    catch (error) { if (error instanceof SyntaxError) throw new ApprovalRecordUnavailable(); throw error; }
+    if (record === null) return null;
+    if (!recordValid(record, key)) throw new ApprovalRecordUnavailable();
+    return record;
+  }
+  private continuationEvidenceComplete(sessionId: string): boolean {
+    return !this.incompleteEvidence && !this.unreadableSessions.has(sessionId);
+  }
+  private unavailable(key: string, value?: unknown): void {
+    // Only a coherent v1 identity can limit the safety hold to one task. Opaque records
+    // remain an unknown pending approval for automatic continuation, never an absence.
+    const sessionId = isObject(value) && value.formatVersion === 1 && isObject(value.pending) && isObject(value.state)
+      && identifier(value.pending.sessionId) && value.state.sessionId === value.pending.sessionId
+      && value.state.requestId === value.pending.requestId && key === `${prefix}${value.pending.requestId}` ? value.pending.sessionId : null;
+    if (sessionId) this.unreadableSessions.add(sessionId);
+    else this.incompleteEvidence = true;
+    remoteDiagnosticLog('remote.record.quarantined', { localSessionId: sessionId ?? undefined, lane: 'control', reason: 'RECORD_INVALID' }, 'warn');
+  }
+  private records(): RecordEntry[] {
+    const result: RecordEntry[] = [];
+    this.incompleteEvidence = false; this.unreadableSessions.clear();
+    const accept = (key: string, value: unknown) => {
+      if (recordValid(value, key)) result.push(value);
+      else this.unavailable(key, value);
+    };
+    if (this.options.persistence.scanEntries) {
+      let after: string | undefined;
+      do {
+        const page = this.options.persistence.scanEntries<unknown>(prefix, { after, limit: 50 });
+        for (const row of page.rows) {
+          if (row.state === 'valid') accept(row.key, row.value);
+          else this.unavailable(row.key);
+        }
+        if (page.nextCursor === null) break;
+        if (after !== undefined && page.nextCursor <= after) { this.incompleteEvidence = true; break; }
+        after = page.nextCursor;
+      } while (true);
+    } else {
+      // Compatibility for older persistence adapters. A failed bulk decode is unknown,
+      // while database/transaction faults still propagate instead of becoming empty data.
+      try { for (const row of this.options.persistence.entries<unknown>(prefix)) accept(row.key, row.value); }
+      catch (error) { if (!(error instanceof SyntaxError)) throw error; this.unavailable(prefix); }
+    }
+    return result;
+  }
   private save(record: RecordEntry, increment: boolean): void {
     if (increment) record.state.approvalVersion = String(BigInt(record.state.approvalVersion) + 1n);
     this.options.persistence.put(`${prefix}${record.pending.requestId}`, record);

@@ -30,7 +30,7 @@ export type AuthRefreshResult = {
 
 type AuthRefreshResultWithoutTiming = Omit<AuthRefreshResult, 'durationMs' | 'joinedRequests'>;
 
-type AuthFetch = (url: string, init?: RequestInit) => Promise<Response>;
+export type AuthFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
 type AuthSessionManagerOptions = {
   getTokens: () => AuthTokens | null;
@@ -178,7 +178,7 @@ export class AuthSessionManager {
     return promise;
   }
 
-  async fetchWithAuth(url: string, options?: RequestInit): Promise<Response> {
+  async fetchWithAuth(url: string, options?: RequestInit, transport: AuthFetch = this.options.fetch): Promise<Response> {
     const initialTokens = this.options.getTokens();
     if (!initialTokens) {
       throw new AuthSessionRequestError(
@@ -198,7 +198,7 @@ export class AuthSessionManager {
       const headers = new Headers(options?.headers);
       headers.set('Authorization', `Bearer ${accessToken}`);
       try {
-        const response = await this.options.fetch(url, {
+        const response = await transport(url, {
           ...options,
           headers,
         });

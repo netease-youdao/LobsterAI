@@ -4,6 +4,7 @@ export const RemoteWorkerFile = {
   FileSnapshot: 'remoteFileSnapshotWorker.cjs',
   Projection: 'remoteProjectionWorker.js',
   LiveProjection: 'remoteLiveProjectionWorker.js',
+  Network: 'remoteNetworkWorker.js',
   SecurityJournal: 'remoteSecurityJournalWorker.js',
   ImportSnapshot: 'remoteImportSnapshotWorker.js',
 } as const;

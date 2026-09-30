@@ -381,3 +381,27 @@ describe('AuthSessionManager authenticated fetch', () => {
     expect(testManager.onTerminalFailure).not.toHaveBeenCalled();
   });
 });
+
+
+describe('authenticated transport isolation', () => {
+  test('uses the supplied transport for requests and retries while refresh stays on the auth transport', async () => {
+    const authFetch = vi.fn(async (_url: string) => new Response(JSON.stringify({ code: 0, data: { accessToken: 'new', refreshToken: 'refresh-new' } })));
+    const transport = vi.fn(async (_url: string, init?: RequestInit) => new Response(null, {
+      status: new Headers(init?.headers).get('Authorization') === 'Bearer new' ? 200 : 401,
+    }));
+    const { manager } = createTestManager({ fetch: authFetch });
+    expect((await manager.fetchWithAuth('https://server.example/api/remote/poll', {}, transport)).status).toBe(200);
+    expect(authFetch).toHaveBeenCalledOnce();
+    expect(authFetch.mock.calls[0][0]).toContain('/api/auth/refresh');
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+  test('rejects a supplied transport response after the account changes', async () => {
+    let session = 'a';
+    const authFetch = vi.fn();
+    const { manager } = createTestManager({ fetch: authFetch, getSessionKey: () => session });
+    await expect(manager.fetchWithAuth('https://server.example/api/remote/poll', {}, async () => {
+      session = 'b'; return new Response(null);
+    })).rejects.toBeInstanceOf(AuthSessionRequestError);
+    expect(authFetch).not.toHaveBeenCalled();
+  });
+});

@@ -111,6 +111,7 @@ describe('RemoteStore triggers with the real local library', () => {
     expect(library.getDetail(first.itemId, owner)?.sessions).toEqual([
       expect.objectContaining({ sessionId: 'session', firstRelatedAt: 100, lastRelatedAt: 300 }),
     ]);
+    remote.refreshProjectionHints();
     expect(markers(db, 'remote_dirty')).toEqual([{ session_id: 'session' }]);
     expect(markers(db, 'remote_content_dirty')).toEqual([{ session_id: 'session' }]);
     expect(remote.owner('session')).toEqual(owner);
@@ -139,6 +140,7 @@ describe('RemoteStore triggers with the real local library', () => {
 
     expect(upsert(library, 300).itemId).toBe(item.itemId);
     expect(library.getDetail(item.itemId, owner)?.sessions).toHaveLength(2);
+    remote.refreshProjectionHints();
     const expected = [{ session_id: 'other' }, { session_id: 'session' }];
     expect(markers(db, 'remote_dirty')).toEqual(expected);
     expect(markers(db, 'remote_content_dirty')).toEqual(expected);
@@ -165,6 +167,7 @@ describe('RemoteStore triggers with the real local library', () => {
     expect(db.prepare('SELECT title FROM cowork_sessions').get()).toEqual({ title: 'Updated title' });
     expect(db.prepare('SELECT content FROM cowork_messages').get()).toEqual({ content: 'Updated reply' });
     expect(remote.projectionRevision('session')).toBe(revision + 3);
+    remote.refreshProjectionHints();
     expect(markers(db, 'remote_dirty')).toEqual([{ session_id: 'session' }]);
     expect(markers(db, 'remote_content_dirty')).toEqual([{ session_id: 'session' }]);
     // Unsupported writes still quarantine ownership; conflict handling must not weaken the fence.
@@ -179,12 +182,12 @@ describe('RemoteStore triggers with the real local library', () => {
     createSession(original.remote);
     const item = upsert(original.library);
     original.db.exec(`
-      DROP TRIGGER remote_content_library_artifact_update;
+      DROP TRIGGER IF EXISTS remote_content_library_artifact_update;
       CREATE TRIGGER remote_content_library_artifact_update AFTER UPDATE ON library_local_artifacts BEGIN
         INSERT OR IGNORE INTO remote_content_dirty
           SELECT session_id FROM library_artifact_sessions WHERE artifact_id=NEW.id;
       END;
-      DROP TRIGGER remote_content_library_relation_update;
+      DROP TRIGGER IF EXISTS remote_content_library_relation_update;
       CREATE TRIGGER remote_content_library_relation_update AFTER UPDATE ON library_artifact_sessions BEGIN
         INSERT OR IGNORE INTO remote_content_dirty VALUES (NEW.session_id);
       END;
@@ -195,6 +198,7 @@ describe('RemoteStore triggers with the real local library', () => {
           WHERE session_id=NEW.id AND (SELECT trusted FROM remote_write_context WHERE id=1)=0;
       END;
     `);
+    original.remote.refreshProjectionHints();
     expect(() => upsert(original.library, 200)).toThrow(expect.objectContaining({ code: 'SQLITE_CONSTRAINT_PRIMARYKEY' }));
     expect(original.library.getItem(item.itemId)?.sizeBytes).toBe(100);
     original.db.close();
@@ -207,6 +211,7 @@ describe('RemoteStore triggers with the real local library', () => {
       ON CONFLICT(id) DO UPDATE SET title=excluded.title
     `).run();
     expect(reopened.library.getItem(item.itemId)?.sizeBytes).toBe(300);
+    reopened.remote.refreshProjectionHints();
     expect(markers(reopened.db, 'remote_dirty')).toEqual([{ session_id: 'session' }]);
     expect(markers(reopened.db, 'remote_content_dirty')).toEqual([{ session_id: 'session' }]);
     const legacyTriggers = reopened.db.prepare(`

@@ -6,6 +6,8 @@ import { RemoteApiError, RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
 import { REMOTE_SYNC_REQUEST_ID_HEADER, remoteSyncRequestId } from './remoteSyncLog';
 
+vi.mock('./remoteLogSink', () => ({ enqueueRemoteLog: (level: 'debug' | 'warn' | 'error' | 'info', message: string, fields: Record<string, unknown>) => console[level](message, fields) }));
+
 const owner = { userId: '10001', scopeKey: 'personal' };
 const privateText = 'private conversation /Users/test/private.txt Bearer secret-token';
 const databases: Database.Database[] = [];
@@ -130,11 +132,11 @@ describe('remote sync request logging', () => {
     expect(JSON.stringify(debug.mock.calls)).not.toContain(privateText);
   });
 
-  it('does not add correlation headers or sync logs to unrelated APIs', async () => {
+  it('correlates other remote APIs without adding sync payload metadata', async () => {
     const { bridge, request, debug } = fixture();
     await bridge.api('/devices/desktop/settings', 'GET');
-    expect(request.mock.calls[0][2].headers).not.toHaveProperty(REMOTE_SYNC_REQUEST_ID_HEADER);
-    expect(debug).not.toHaveBeenCalled();
+    expect(remoteSyncRequestId(request.mock.calls[0][2].headers[REMOTE_SYNC_REQUEST_ID_HEADER])).toBeTruthy();
+    expect(debug.mock.calls.every(([message]) => message === '[RemoteDiagnostic]')).toBe(true);
   });
 });
 
@@ -216,5 +218,28 @@ describe('remote sync persistence logging', () => {
     store.db.prepare("UPDATE remote_sync_task_state SET next_retry_at=next_retry_at+1000 WHERE local_session_id='sync-task'").run();
     await bridge.syncSessions();
     expect(deferred()).toHaveLength(2);
+  });
+});
+
+describe('extended request correlation isolation', () => {
+  for (const pathname of ['/sync/live-projections', '/sync/recoveries', '/control/facts/batches', '/commands/cmd/reconcile', '/devices/desktop/commands?state=unresolved']) {
+    it(`correlates ${pathname} without logging payloads`, async () => {
+      const { bridge, request, debug } = fixture();
+      await bridge.api(pathname, 'POST', { commandId: 'cmd', publicationId: 'publication', sessionId: 'session', content: privateText });
+      expect(remoteSyncRequestId(request.mock.calls[0][2].headers[REMOTE_SYNC_REQUEST_ID_HEADER])).toBeTruthy();
+      expect(JSON.stringify(debug.mock.calls)).not.toContain(privateText);
+    });
+  }
+  it('adds a request ID to remote routes without detailed request metadata', async () => {
+    const { bridge, request, debug } = fixture();
+    await bridge.api('/devices/desktop/settings', 'POST', { settings: privateText });
+    const requestId = request.mock.calls[0][2].headers[REMOTE_SYNC_REQUEST_ID_HEADER];
+    expect(remoteSyncRequestId(requestId)).toBe(requestId);
+    expect(debug.mock.calls).toContainEqual(['[RemoteDiagnostic]', expect.objectContaining({ event: 'remote.request.completed', requestId, result: 'success' })]);
+    expect(JSON.stringify(debug.mock.calls)).not.toContain(privateText);
+  });
+  it('does not turn logger errors into HTTP or business failures', async () => {
+    const { bridge, debug } = fixture(); debug.mockImplementation(() => { throw new Error('sink failed'); });
+    await expect(bridge.api('/sync/batches', 'POST', batchBody())).resolves.toEqual({});
   });
 });
