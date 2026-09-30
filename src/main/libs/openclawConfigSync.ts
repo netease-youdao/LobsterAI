@@ -2250,6 +2250,7 @@ export class OpenClawConfigSync {
         const providerId = OpenClawProviderId.LobsteraiServer;
 
         if (serverModels.length > 0 || !allProvidersMap[providerId]) {
+          // Only its provider-level fields are used; models come from the catalog below.
           const firstServerModelId = serverModels[0]?.modelId || modelId;
           const firstServerSel = buildProviderSelection({
             apiKey: 'proxy-managed',
@@ -2266,13 +2267,6 @@ export class OpenClawConfigSync {
             runtimeProfile: serverModels[0]?.runtimeProfile,
             thinkingConfig: serverModels[0]?.thinkingConfig,
           });
-          collectCompatibilityOwnerProfile(candidateModelProfiles, firstServerSel);
-          collectThinkingProfile(
-            candidateThinkingProfiles,
-            firstServerSel,
-            serverModels[0]?.thinkingConfig,
-            serverModels[0]?.requestCapabilities,
-          );
           const lobsteraiProviderConfig =
             allProvidersMap[providerId] ?? {
               ...firstServerSel.providerConfig,
@@ -2280,40 +2274,40 @@ export class OpenClawConfigSync {
             };
           allProvidersMap[providerId] = lobsteraiProviderConfig;
 
-          if (serverModels.length === 0) {
-            upsertProviderModel(lobsteraiProviderConfig, firstServerSel.providerConfig.models[0]);
-          } else {
-            for (const sm of serverModels) {
-              const serverApiType = normalizeServerApiType(sm.apiFormat);
-              const serverSel = buildProviderSelection({
-                apiKey: 'proxy-managed',
-                baseURL: `http://127.0.0.1:${proxyPort}/v1`,
-                modelId: sm.modelId,
-                apiType: serverApiType,
-                providerName: ProviderName.LobsteraiServer,
-                supportsImage: sm.supportsImage,
-                supportsVideo: sm.supportsVideo,
-                supportsThinking: sm.supportsThinking,
-                modelName: sm.modelName || sm.modelId,
-                contextWindow: sm.contextWindow,
-                maxTokens: sm.maxTokens,
-                runtimeProfile: sm.runtimeProfile,
-                thinkingConfig: sm.thinkingConfig,
-              });
-              collectCompatibilityOwnerProfile(candidateModelProfiles, serverSel);
-              collectThinkingProfile(
-                candidateThinkingProfiles,
-                serverSel,
-                sm.thinkingConfig,
-                sm.requestCapabilities,
-              );
-              addExplicitContextCacheDefault(perModelCustomDefaults, serverSel, {
-                modelId: sm.modelId,
-                provider: sm.provider,
-                explicitContextCache: sm.explicitContextCache,
-              });
-              upsertProviderModel(lobsteraiProviderConfig, serverSel.providerConfig.models[0]);
-            }
+          // Without a plan catalog (signed out, or the list has not loaded) the
+          // provider still routes agents and channels bound to plan models to the
+          // token proxy, but lists no model: a placeholder reused the custom
+          // primary's ID and allowlisted a plan model sharing the user's model name.
+          for (const sm of serverModels) {
+            const serverApiType = normalizeServerApiType(sm.apiFormat);
+            const serverSel = buildProviderSelection({
+              apiKey: 'proxy-managed',
+              baseURL: `http://127.0.0.1:${proxyPort}/v1`,
+              modelId: sm.modelId,
+              apiType: serverApiType,
+              providerName: ProviderName.LobsteraiServer,
+              supportsImage: sm.supportsImage,
+              supportsVideo: sm.supportsVideo,
+              supportsThinking: sm.supportsThinking,
+              modelName: sm.modelName || sm.modelId,
+              contextWindow: sm.contextWindow,
+              maxTokens: sm.maxTokens,
+              runtimeProfile: sm.runtimeProfile,
+              thinkingConfig: sm.thinkingConfig,
+            });
+            collectCompatibilityOwnerProfile(candidateModelProfiles, serverSel);
+            collectThinkingProfile(
+              candidateThinkingProfiles,
+              serverSel,
+              sm.thinkingConfig,
+              sm.requestCapabilities,
+            );
+            addExplicitContextCacheDefault(perModelCustomDefaults, serverSel, {
+              modelId: sm.modelId,
+              provider: sm.provider,
+              explicitContextCache: sm.explicitContextCache,
+            });
+            upsertProviderModel(lobsteraiProviderConfig, serverSel.providerConfig.models[0]);
           }
         }
       }
