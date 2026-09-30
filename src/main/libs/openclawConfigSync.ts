@@ -199,6 +199,10 @@ export const modelCompatConfigChangeRequiresRestart = (
 );
 export const OPENCLAW_BINDING_ANY_ACCOUNT_ID = '*';
 const OPENCLAW_DEFAULT_MODEL_MAX_TOKENS = 8192;
+// Output cap for LobsterAI plan models whose server metadata carries no maxTokens.
+// They are all reasoning models, so thinking counts against this cap and OpenClaw's
+// generic 8192 default could end a turn before any visible answer.
+const LOBSTERAI_SERVER_DEFAULT_MODEL_MAX_TOKENS = 32_768;
 const CHROME_PROXY_SERVER_ARG_PREFIX = '--proxy-server=';
 
 const EXPLICIT_CONTEXT_CACHE_LOG_PREFIX = '********************';
@@ -952,6 +956,9 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
     resolveApiKey: () => {
       const proxyPort = getOpenClawTokenProxyPort();
       return proxyPort ? '${LOBSTER_PROXY_TOKEN}' : `\${${providerApiKeyEnvVar('server')}}`;
+    },
+    modelDefaults: {
+      maxTokens: LOBSTERAI_SERVER_DEFAULT_MODEL_MAX_TOKENS,
     },
   },
 

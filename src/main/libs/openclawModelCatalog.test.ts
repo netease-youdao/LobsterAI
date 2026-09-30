@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { OpenClawApi, OpenClawProviderId, ProviderName } from '../../shared/providers';
+import { ModelRuntimeProfile, OpenClawApi, OpenClawProviderId, ProviderName } from '../../shared/providers';
 import { buildProviderSelection } from './openclawConfigSync';
 import {
   resetOpenClawCatalogMaxTokensCacheForTest,
@@ -191,6 +191,43 @@ describe('with a fake OpenClaw runtime', () => {
         baseURL: 'https://proxy.example.com/anthropic',
         codingPlanEnabled: false,
       })).toBe(DEFAULT_MAX_TOKENS);
+    });
+  });
+
+  describe('LobsterAI plan model max tokens', () => {
+    const selectPlanModelMaxTokens = (overrides: Partial<SelectionOptions>): number | undefined => (
+      selectModelMaxTokens({
+        providerName: ProviderName.LobsteraiServer,
+        baseURL: 'https://lobsterai-server.youdao.com/api/proxy/v1',
+        modelId: 'qwen3.8-max',
+        modelName: 'Qwen3.8-Max',
+        apiType: 'openai',
+        codingPlanEnabled: false,
+        supportsImage: true,
+        contextWindow: 1_000_000,
+        ...overrides,
+      })
+    );
+
+    test('falls back to 32K when the server publishes no output cap', () => {
+      expect(selectPlanModelMaxTokens({})).toBe(32_768);
+      expect(selectPlanModelMaxTokens({ apiType: 'anthropic' })).toBe(32_768);
+    });
+
+    test('prefers the output cap published by the server', () => {
+      expect(selectPlanModelMaxTokens({ maxTokens: 131_072 })).toBe(131_072);
+      expect(selectPlanModelMaxTokens({ maxTokens: 16_384 })).toBe(16_384);
+    });
+
+    test('never exceeds the context window', () => {
+      expect(selectPlanModelMaxTokens({ contextWindow: 16_000 })).toBe(16_000);
+    });
+
+    test('keeps the Kimi K3 runtime profile cap', () => {
+      expect(selectPlanModelMaxTokens({
+        modelId: 'kimi-k3',
+        runtimeProfile: ModelRuntimeProfile.MoonshotKimiK3,
+      })).toBe(1_048_576);
     });
   });
 });
