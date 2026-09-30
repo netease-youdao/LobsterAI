@@ -29,6 +29,7 @@ import {
 import { recoverInstallerResourcesFromTar } from './installerResourceRecovery';
 import { mergeNoProxyValue } from './noProxyEnv';
 import { getCodexHomeDir } from './openaiCodexAuth';
+import { type OpenClawConfigAutoRestoreEvent, parseOpenClawConfigAutoRestore } from './openclawConfigAutoRestore';
 import { migrateLegacyCronStorageWithDoctor } from './openclawCronLegacyMigration';
 import { getOpenClawDailyLogCandidates } from './openclawDailyLogs';
 import { readDreamingRecoverySummary } from './openclawDreamingRecovery';
@@ -210,6 +211,7 @@ export const isOpenClawGatewayHeapOutOfMemory = (
 
 interface OpenClawEngineManagerEvents {
   status: (status: OpenClawEngineStatus) => void;
+  configAutoRestored: (event: OpenClawConfigAutoRestoreEvent) => void;
 }
 
 type RuntimeMetadata = {
@@ -2241,12 +2243,23 @@ export class OpenClawEngineManager extends EventEmitter {
       }
     };
 
+    // A read-time restore means the gateway runs a config LobsterAI did not write.
+    const noteConfigAutoRestore = (text: string) => {
+      const restore = parseOpenClawConfigAutoRestore(text);
+      if (!restore) return;
+      this.emit('configAutoRestored', {
+        ...restore,
+        gatewayGeneration: this.gatewayGenerationByProcess.get(child) ?? this.gatewayGeneration,
+      });
+    };
+
     child.stdout?.on('data', (chunk) => {
       this.noteGatewayOutput(child);
       appendLog(chunk, 'stdout');
       const text = typeof chunk === 'string' ? chunk : chunk.toString();
       logStartupMilestone(text);
       console.log(`[OpenClaw stdout] ${OpenClawEngineManager.rewriteUtcTimestamps(text)}`);
+      noteConfigAutoRestore(text);
     });
     child.stderr?.on('data', (chunk) => {
       this.noteGatewayOutput(child);
@@ -2256,6 +2269,7 @@ export class OpenClawEngineManager extends EventEmitter {
       this.recordGatewayFatalFailure(child, recentOutput);
       logStartupMilestone(text);
       console.error(`[OpenClaw stderr] ${OpenClawEngineManager.rewriteUtcTimestamps(text)}`);
+      noteConfigAutoRestore(text);
     });
   }
 

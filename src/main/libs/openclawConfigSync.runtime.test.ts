@@ -1945,6 +1945,25 @@ describe('OpenClawConfigSync runtime config output', () => {
     }));
   });
 
+  test('keeps the plan provider without a placeholder model while the plan catalog is empty', async () => {
+    mockRuntimeState.proxyPort = 56646;
+    mockRuntimeState.serverModels = [];
+
+    const sync = await createSync();
+    expect(sync.sync('signed-out-custom-primary')).toMatchObject({ ok: true });
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    // Agents bound to plan models still route to the token proxy.
+    expect(config.models.providers['lobsterai-server']).toMatchObject({
+      baseUrl: 'http://127.0.0.1:56646/v1',
+      models: [],
+    });
+    // No plan model borrows the custom primary's ID (openai/gpt-test).
+    expect(Object.keys(config.agents.defaults.models ?? {}).filter(ref => ref.startsWith('lobsterai-server/')))
+      .toEqual([]);
+    expect(JSON.stringify(config.agents.defaults.modelPolicy ?? {})).not.toContain('lobsterai-server/');
+  });
+
   test('writes explicit cache params for Anthropic, Qwen, and custom providers', async () => {
     const { ProviderName } = await import('../../shared/providers');
 

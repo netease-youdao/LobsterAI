@@ -3314,6 +3314,7 @@ function createRunTurnAdapter(options: {
   agentModel?: string;
   cachedModel?: string;
   modelPatchError?: Error;
+  modelPatchResult?: Record<string, unknown>;
   holdFirstModelPatch?: boolean;
   sessionCwd?: string;
   chatSendError?: Error;
@@ -3412,7 +3413,7 @@ function createRunTurnAdapter(options: {
         if (options.modelPatchError) {
           throw options.modelPatchError;
         }
-        return {};
+        return options.modelPatchResult ?? {};
       }
       if (method === 'chat.history') {
         return { messages: [] };
@@ -4109,6 +4110,50 @@ test('continueSession patches a session override before chat.send even when the 
     model,
     reasoningLevel: 'stream',
   });
+});
+
+const planResolvedPatchResult = {
+  ok: true,
+  entry: {},
+  resolved: { modelProvider: 'lobsterai-server', model: 'qwen3.8-flash' },
+};
+
+test('continueSession blocks chat.send when a selected custom model resolves to a plan model', async () => {
+  const { adapter, requests, session } = createRunTurnAdapter({
+    sessionModelOverride: 'qwen/qwen3.8-max',
+    modelPatchResult: planResolvedPatchResult,
+  });
+  const errors: string[] = [];
+  adapter.on('error', (_sessionId, error) => errors.push(error));
+
+  await expect(adapter.continueSession('session-1', 'hello')).rejects.toThrow('qwen/qwen3.8-max');
+
+  expect(requests.map((request) => request.method)).toEqual(['sessions.patch']);
+  expect(session.status).toBe('error');
+  expect(errors).toEqual([expect.stringContaining('qwen3.8-flash')]);
+});
+
+test('continueSession blocks an agent-model turn that resolves to a plan model', async () => {
+  const { adapter, requests } = createRunTurnAdapter({
+    agentModel: 'qwen/qwen3.8-max',
+    modelPatchResult: planResolvedPatchResult,
+  });
+  adapter.on('error', () => undefined);
+
+  await expect(adapter.continueSession('session-1', 'hello')).rejects.toThrow('qwen/qwen3.8-max');
+
+  expect(requests.map((request) => request.method)).toEqual(['sessions.patch']);
+});
+
+test('continueSession still sends when the gateway reports another spelling of the selected model', async () => {
+  const { adapter, requests } = createRunTurnAdapter({
+    sessionModelOverride: 'zhipu/glm-5',
+    modelPatchResult: { ok: true, entry: {}, resolved: { modelProvider: 'zai', model: 'glm-5' } },
+  });
+
+  await adapter.continueSession('session-1', 'hello');
+
+  expect(requests.map((request) => request.method)).toContain('chat.send');
 });
 
 test('continueSession continues after a redundant session override patch times out', async () => {
@@ -5688,6 +5733,34 @@ test.each([
   });
   if (withChatMetadata) expect(detail?.httpCode).toBe('500');
   expect(adapter.activeTurns.has(session.id)).toBe(false);
+});
+
+test('chat error explains a plan model that ran instead of the selected custom model', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'hello', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const errors: string[] = [];
+  adapter.on('error', (_sessionId, error) => errors.push(error));
+  const turn = { ...createActiveTurn(session.id, sessionKey, 'run-plan-substitution'), model: 'qwen/qwen3.8-max' };
+  adapter.activeTurns.set(session.id, turn);
+
+  adapter.handleChatEvent({
+    state: OpenClawChatState.Error,
+    runId: turn.runId,
+    sessionKey,
+    errorMessage: 'free quota exhausted',
+    provider: 'lobsterai-server',
+    model: 'qwen3.8-flash',
+    failoverReason: 'billing',
+  }, 1);
+
+  const persisted = session.messages.find((message) => message.type === 'system');
+  expect(persisted?.content).toContain('qwen/qwen3.8-max');
+  expect(persisted?.content).toContain('qwen3.8-flash');
+  expect(persisted?.metadata?.errorDetail).toMatchObject({ provider: 'lobsterai-server', model: 'qwen3.8-flash' });
+  expect(errors).toEqual([persisted?.content]);
 });
 
 test.each(['retry', 'different-run', 'different-error'])('chat error does not reuse lifecycle details from %s', (scenario) => {

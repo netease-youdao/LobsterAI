@@ -1,6 +1,6 @@
 import { ArrowPathIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import type { CoworkBrowserAnnotationMessageBatch } from '@shared/cowork/browserAnnotations';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { buildGoalSettingMessageMetadata } from '../../../common/goalCommandDisplay';
@@ -60,7 +60,7 @@ import {
   openStartupCreditCampaign,
   useStartupCreditCampaignEntry,
 } from '../startupCreditCampaignBridge';
-import { resolveModelThinkingLevel, useAgentSelectedModel } from './agentModelSelection';
+import { resolveAgentStartModel, resolveModelThinkingLevel, useAgentSelectedModel } from './agentModelSelection';
 import { CoworkUiEvent } from './constants';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
 import CoworkSessionDetail from './CoworkSessionDetail';
@@ -79,10 +79,11 @@ const resolveHomeGreetingKey = (date: Date = new Date()): string => {
   return 'coworkGreetingLateNight';
 };
 
-const logCoworkViewModel = (message: string): void => {
-  console.debug(`[CoworkView] ${message}`);
+const logCoworkViewModel = (message: string, level: 'debug' | 'warn' = 'debug'): void => {
+  if (level === 'warn') console.warn(`[CoworkView] ${message}`);
+  else console.debug(`[CoworkView] ${message}`);
   try {
-    window.electron?.log?.fromRenderer?.('debug', 'CoworkView', message.slice(0, 500));
+    window.electron?.log?.fromRenderer?.(level, 'CoworkView', message.slice(0, 500));
   } catch {
     // Diagnostics must never interrupt model selection.
   }
@@ -176,6 +177,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const currentAgentSelectedModelRef = currentAgentSelectedModel
     ? toOpenClawModelRef(currentAgentSelectedModel)
     : '';
+  const availableModels = useSelector((state: RootState) => state.model.availableModels);
+  const homeStartModel = useMemo(() => resolveAgentStartModel({
+    agentModel: currentAgent?.model ?? '',
+    availableModels,
+    selectedModel: currentAgentSelectedModel,
+  }), [availableModels, currentAgent?.model, currentAgentSelectedModel]);
   const homeModelUsesServerQuota = usesLobsterAIServerQuota(currentAgentSelectedModel);
   const blockingHomeQuotaReason = resolveBlockingEnterpriseQuotaReason(
     homeQuotaReason,
@@ -192,6 +199,20 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     const key = currentSession?.id || '__home__';
     return state.cowork.mediaSelection[key];
   });
+
+  useEffect(() => {
+    if (!homeStartModel.unavailableModelRef) return;
+    logCoworkViewModel(
+      `agent ${currentAgentId} model ${homeStartModel.unavailableModelRef} is unavailable; new sessions would use ${currentAgentSelectedModelRef || 'none'}`
+        + (homeStartModel.crossesBillingSide ? ', which bills the other side, so starting is blocked' : ''),
+      homeStartModel.crossesBillingSide ? 'warn' : 'debug',
+    );
+  }, [
+    currentAgentId,
+    currentAgentSelectedModelRef,
+    homeStartModel.crossesBillingSide,
+    homeStartModel.unavailableModelRef,
+  ]);
 
   useEffect(() => {
     if (!isHomeView || !hasEnterpriseAccount) return;
@@ -347,6 +368,14 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     }
     if (openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('coworkErrorEngineNotReady') }));
+      return false;
+    }
+    if (homeStartModel.crossesBillingSide) {
+      logCoworkViewModel(
+        `blocked new session: agent model ${homeStartModel.unavailableModelRef} is unavailable and ${currentAgentSelectedModelRef || 'none'} bills the other side`,
+        'warn',
+      );
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentModelInvalidHint') }));
       return false;
     }
     // Prevent duplicate submissions

@@ -152,6 +152,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorContentFiltered: '内容未通过安全审核，请修改后重试。',
     coworkErrorToolLoopBlocked:
       '检测到 AI 在重复执行同一个工具调用且没有新的进展（通常是在等待一个耗时较长的后台任务），本轮已被安全停止。后台任务可能仍在运行，可以继续发消息让 AI 接着处理。',
+    coworkErrorModelRoutedToPlan:
+      '当前任务选择的模型是「{requested}」，但 AI 引擎把它解析成了套餐模型「{resolved}」。为避免误用套餐额度，这条消息没有发送。请重新选择模型后重试；如果仍然出现，请重启 LobsterAI。',
+    coworkErrorRunUsedPlanModel:
+      '这一轮本应使用你选择的「{requested}」，但 AI 引擎实际调用了套餐模型「{actual}」并且失败了，所以出现了套餐相关的报错。请重新选择模型后重试；如果仍然出现，请重启 LobsterAI。',
     coworkErrorOutputLimitReached:
       '模型单次回复达到了输出长度上限，任务没有完成。可以继续发消息让它从中断处接着做；如果反复出现，可以让它分段完成，比如分批写入文件、用脚本生成大段数据。',
     coworkErrorOutputLimitReachedWithSettings:
@@ -558,6 +562,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Content did not pass the safety review. Please modify and try again.',
     coworkErrorToolLoopBlocked:
       'This turn was stopped safely because the AI kept repeating the same tool call with no new progress (usually while waiting on a slow background task). The background task may still be running — send another message to continue.',
+    coworkErrorModelRoutedToPlan:
+      'This task is set to {requested}, but the AI engine resolved it to the plan model {resolved}. The message was not sent, so your plan quota is not used by mistake. Reselect the model and try again; if this keeps happening, restart LobsterAI.',
+    coworkErrorRunUsedPlanModel:
+      'This turn should have used your selected model {requested}, but the AI engine called the plan model {actual} instead, and that call failed. That is why a plan error appeared. Reselect the model and try again; if this keeps happening, restart LobsterAI.',
     coworkErrorOutputLimitReached:
       'The model hit its output length limit before finishing this task. Send another message to let it continue where it stopped. If this keeps happening, ask it to work in smaller steps, such as writing files in batches or generating large data with a script.',
     coworkErrorOutputLimitReachedWithSettings:

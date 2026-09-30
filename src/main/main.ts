@@ -458,6 +458,7 @@ import {
   OpenClawChannelSessionSync,
 } from './libs/openclawChannelSessionSync';
 import { createOpenClawRepairBackupDirectory, OpenClawRepairFailure, runOpenClawCompatibilityRepair, runOpenClawDoctorRepair } from './libs/openclawCompatibilityRepair';
+import { createOpenClawConfigAutoRestoreHandler } from './libs/openclawConfigAutoRestore';
 import {
   CONFIG_DELIVERY_FALLBACK_REASON_PREFIX,
   DEFERRED_SYNC_REASON_PREFIX,
@@ -2340,12 +2341,24 @@ const forwardOpenClawStatus = (status: OpenClawEngineStatus): void => {
   });
 };
 
+const handleOpenClawConfigAutoRestore = createOpenClawConfigAutoRestoreHandler({
+  isShuttingDown: () => isQuitting || isDataMigrationRestoreInProgress,
+  resync: reason => {
+    void syncOpenClawConfig({ reason }).then(result => {
+      if (!result.success) {
+        console.warn(`[OpenClaw] Config resync after gateway auto-restore failed: ${result.error ?? 'unknown error'}`);
+      }
+    });
+  },
+});
+
 const bindOpenClawStatusForwarder = (): void => {
   if (openClawStatusForwarderBound) return;
   const manager = getOpenClawEngineManager();
   manager.on('status', status => {
     forwardOpenClawStatus(status);
   });
+  manager.on('configAutoRestored', handleOpenClawConfigAutoRestore);
   openClawStatusForwarderBound = true;
   forwardOpenClawStatus(manager.getStatus());
 };
