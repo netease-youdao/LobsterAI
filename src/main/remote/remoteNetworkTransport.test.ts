@@ -42,6 +42,33 @@ beforeEach(() => { vi.spyOn(console, 'info').mockImplementation(() => {}); vi.sp
 afterEach(async () => { transports.splice(0).forEach(transport => transport.dispose()); await settle(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('supervised remote network transport', () => {
+  it.each([
+    ['/v3/sync/state', 'GET'], ['/v3/sync/recoveries/original', 'GET'], ['/v3/sync/recoveries/original/abort', 'POST'],
+    ['/v1/sync/imports/original', 'GET'], ['/v1/sync/imports/original/abort', 'POST'], ['/v3/sync/live-projections/original', 'GET'],
+  ])('reserves a control slot for original receipt %s', async (path, method) => {
+    const { transport, children } = fixture();
+    const background = transport.fetch(base + '/sync/batches', { method: 'POST' });
+    const live = [transport.fetch('https://example.com/api/remote/v3/sync/live-projections', { method: 'POST' }),
+      transport.fetch('https://example.com/api/remote/v3/sync/live-projections/original/resolve', { method: 'POST' })];
+    const receipt = transport.queuedFetch('https://example.com/api/remote' + path, { method });
+    await settle();
+    const child = children[0], sent = child.messages.filter(message => message.type === Message.Fetch);
+    expect(sent).toHaveLength(4); expect(sent.some(message => message.url.endsWith(path))).toBe(true);
+    for (const message of sent) success(child,message.id);
+    await Promise.all([background,...live,receipt]);
+  });
+  it('fairly waits for actual background release while reserved controls proceed', async () => {
+    const { transport, children } = fixture();
+    const first = transport.queuedFetch(base + '/sync/batches');
+    const second = transport.queuedFetch(base + '/sync/state');
+    const control = transport.queuedFetch(base + '/commands/claim');
+    await settle(); const child = children[0];
+    expect(child.messages.filter(message => message.type === Message.Fetch)).toHaveLength(2);
+    expect(child.messages.some(message => message.url?.endsWith('/sync/state'))).toBe(false);
+    success(child, child.messages.find(message => message.url?.endsWith('/commands/claim')).id); await control;
+    success(child, child.messages.find(message => message.url?.endsWith('/sync/batches')).id); await first; await settle();
+    success(child, child.messages.find(message => message.url?.endsWith('/sync/state')).id); await second;
+  });
   it('starts lazily, shares one child and uses child-parsed response JSON for auth clones and bridge', async () => {
     const { transport, spawn, children } = fixture(); expect(spawn).not.toHaveBeenCalled();
     const first = request(transport), second = request(transport, '/sync/batches'); transport.socket('wss://example.com/api/remote/v1/ws');
@@ -218,6 +245,14 @@ it('does not count admission rejection or missing authentication as a physical s
   await expect(withRemoteTelemetryRequest(tracker, () => auth.fetchWithAuth(base + '/capabilities', undefined, transport.fetch))).rejects.toThrow('No auth tokens');
   expect(tracker.transportStarted).not.toHaveBeenCalled();
   success(children[0]); await active;
+});
+
+it('rejects oversized queued headers and URLs before worker admission', async () => {
+  const { transport, children } = fixture();
+  await expect(transport.queuedFetch(base + '/capabilities', { headers: { test: 'x'.repeat(20000) } })).rejects.toThrow('REQUEST_BUDGET');
+  await expect(transport.queuedFetch(base + '/' + 'x'.repeat(20000))).rejects.toThrow('REQUEST_BUDGET');
+  await expect(transport.queuedFetch(base + '/capabilities', { body: new Blob(['x']) })).rejects.toThrow('REQUEST_INVALID');
+  expect(children).toHaveLength(0);
 });
 
 it('keeps simultaneous logical request contexts separate and telemetry callbacks cannot reject requests', async () => {

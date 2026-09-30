@@ -17,11 +17,17 @@ export interface HistorySession extends HistoryContext {
 export interface HistoryOperation {
   id: string; context: HistoryContext; kind: 'batch' | 'recovery'; request: Record<string, unknown>; requestHash: string;
   state: 'pending' | 'complete'; receipt: Record<string, unknown> | null;
+  compactedRequestHash?: string;
 }
 interface Migration { migration_id: string; manifest_json: string; manifest_hash: string; phase: 'prepared' | 'copied' | 'ready' }
 export class RemoteHistoryUnavailable extends Error {
   constructor(readonly reason: string) { super(reason); this.name = 'RemoteHistoryUnavailable'; }
 }
+const sharedFailure = (error: unknown): boolean => /^(?:SQLITE_(?:BUSY|LOCKED|CANTOPEN|CORRUPT|NOTADB|FULL|IOERR|SCHEMA)|ENOENT|EACCES|ENOSPC)/u.test(String((error as { code?: unknown })?.code || ''))
+  || error instanceof RemoteHistoryUnavailable && /REMOTE_HISTORY_(?:STORAGE|LEDGER|IDENTITY)/u.test(error.reason);
+export const HistoryPreparation = { Ready: 'ready', TaskBlocked: 'task_blocked', StorageDeferred: 'storage_deferred', ContextChanged: 'context_changed' } as const;
+export type HistoryPreparationResult = { kind: typeof HistoryPreparation.Ready; session: HistorySession }
+  | { kind: Exclude<typeof HistoryPreparation[keyof typeof HistoryPreparation], 'ready'>; reason: string; retryAt: number };
 const contextKey = (context: HistoryContext): unknown[] => [context.scope, context.localId, context.writerGeneration];
 const sequence = (value: string): boolean => /^(?:0|[1-9][0-9]*)$/u.test(value);
 
@@ -30,6 +36,7 @@ export class RemoteHistoryStore {
   private database: Database.Database | null = null;
   private unavailableUntil = 0;
   private lastFailure: string | null = null;
+  private lastTaskFailure: string | null = null;
   readonly filename: string;
   constructor(private readonly store: RemoteStore) {
     this.filename = store.db.name === ':memory:' ? ':memory:' : path.join(path.dirname(store.db.name), 'remote-sync.sqlite');
@@ -40,12 +47,12 @@ export class RemoteHistoryStore {
         migration_id TEXT NOT NULL UNIQUE,manifest_json TEXT NOT NULL,manifest_hash TEXT NOT NULL,phase TEXT NOT NULL,
         PRIMARY KEY(scope,local_id,writer_generation));`);
   }
-  status(): { available: boolean; reason: string | null } { return { available: !!this.database?.open && !this.lastFailure, reason: this.lastFailure }; }
+  status(): { available: boolean; reason: string | null; retryAt: number } { return { available: !!this.database?.open && !this.lastFailure, reason: this.lastFailure || this.lastTaskFailure, retryAt: this.unavailableUntil }; }
   close(): void { this.database?.close(); this.database = null; }
   private fail(error: unknown): RemoteHistoryUnavailable {
     if (!this.lastFailure) remoteTelemetryEvent(SyncTelemetry.Event.Admission, { domain: 'history_storage', fromState: 'unknown',
       toState: 'blocked', reason: SyncTelemetry.Reason.StorageUnavailable });
-    this.close(); this.unavailableUntil = Date.now() + 30_000;
+    this.close(); if (Date.now() >= this.unavailableUntil) this.unavailableUntil = Date.now() + 30_000;
     this.lastFailure = error instanceof RemoteHistoryUnavailable ? error.reason : 'REMOTE_HISTORY_STORAGE_UNAVAILABLE';
     return new RemoteHistoryUnavailable(this.lastFailure);
   }
@@ -106,6 +113,19 @@ export class RemoteHistoryStore {
   }
   /** Best effort only: construction, local commits and control readiness never await this method. */
   prepare(context: HistoryContext): HistorySession | null {
+    const prepared = this.prepareResult(context);
+    return prepared.kind === HistoryPreparation.Ready ? prepared.session : null;
+  }
+  prepareResult(context: HistoryContext): HistoryPreparationResult {
+    try { const session = this.prepareSession(context); this.lastTaskFailure = null; return { kind: HistoryPreparation.Ready, session }; }
+    catch (error) {
+      const reason = error instanceof RemoteHistoryUnavailable ? error.reason : error instanceof SyntaxError ? 'REMOTE_HISTORY_RECORD_INVALID' : 'REMOTE_HISTORY_PREPARE_FAILED';
+      if (sharedFailure(error)) { const failure = this.fail(error); return { kind: HistoryPreparation.StorageDeferred, reason: failure.reason, retryAt: this.unavailableUntil }; }
+      this.lastTaskFailure = reason;
+      return { kind: reason === 'REMOTE_HISTORY_CONTEXT_CHANGED' ? HistoryPreparation.ContextChanged : HistoryPreparation.TaskBlocked, reason, retryAt: Date.now() + 60_000 };
+    }
+  }
+  private prepareSession(context: HistoryContext): HistorySession {
     try { return this.withCoreBudget(() => {
       if (this.store.db.inTransaction) throw new RemoteHistoryUnavailable('REMOTE_HISTORY_CROSS_DATABASE_TRANSACTION');
       this.assertCurrent(context);
@@ -153,7 +173,7 @@ export class RemoteHistoryStore {
         deviceId: context.deviceId, remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
         operationKind: SyncTelemetry.Kind.History, writerGeneration: context.writerGeneration });
       return session;
-    }); } catch (error) { this.fail(error); return null; }
+    }); } catch (error) { if (sharedFailure(error)) throw this.fail(error); throw error; }
   }
   private readSession(db: Database.Database, context: HistoryContext): HistorySession | null {
     const row = db.prepare('SELECT body FROM history_sessions WHERE scope=? AND local_id=? AND writer_generation=?').get(...contextKey(context)) as { body: string } | undefined;
@@ -174,7 +194,7 @@ export class RemoteHistoryStore {
       this.assertCurrent(context);
       if (this.migration(context)?.phase !== 'ready') throw new RemoteHistoryUnavailable('REMOTE_HISTORY_MIGRATION_NOT_READY');
       return action(this.databaseForHistory());
-    }); } catch (error) { throw this.fail(error); }
+    }); } catch (error) { if (sharedFailure(error)) throw this.fail(error); throw error; }
   }
   operation(context: HistoryContext, id: string): HistoryOperation | null {
     return this.access(context, db => this.readOperation(db,context,id));
@@ -184,7 +204,8 @@ export class RemoteHistoryStore {
       .get(id,...contextKey(context)) as { body: string } | undefined;
     if (!row) return null;
     const value = JSON.parse(row.body) as HistoryOperation;
-    if (value.id !== id || stableJson(value.context) !== stableJson(context) || payloadHash(value.request) !== value.requestHash) {
+    if (value.id !== id || stableJson(value.context) !== stableJson(context) || payloadHash(value.request) !== (value.compactedRequestHash || value.requestHash)
+      || value.compactedRequestHash && (value.state !== 'complete' || !value.receipt || !['committed','aborted','expired'].includes(String(value.receipt.state)))) {
       throw new RemoteHistoryUnavailable('REMOTE_HISTORY_OPERATION_INVALID');
     }
     return value;
@@ -204,8 +225,8 @@ export class RemoteHistoryStore {
       }
       const operation: HistoryOperation = { ...value, requestHash: hash, state: 'pending', receipt: null };
       const body = stableJson(operation), bytes = Buffer.byteLength(body);
-      const used = db.prepare('SELECT COALESCE(SUM(bytes),0) AS bytes FROM history_operations').get() as { bytes: number };
-      if (bytes > 1024 * 1024 || used.bytes + bytes > 32 * 1024 * 1024) throw new RemoteHistoryUnavailable('REMOTE_HISTORY_OPERATION_BUDGET');
+      const used = db.prepare("SELECT COALESCE(SUM(CASE WHEN state='pending' THEN bytes ELSE 0 END),0) AS pending,COALESCE(SUM(bytes),0) AS total FROM history_operations").get() as { pending: number; total: number };
+      if (bytes > 1024 * 1024 || used.pending + bytes > 32 * 1024 * 1024 || used.total + bytes > 96 * 1024 * 1024) throw new RemoteHistoryUnavailable('REMOTE_HISTORY_OPERATION_BUDGET');
       db.prepare('INSERT INTO history_operations VALUES(?,?,?,?,?,?,?)').run(value.id,...contextKey(value.context),body,bytes,'pending');
       inserted = true;
       return operation;
@@ -213,6 +234,28 @@ export class RemoteHistoryStore {
     if (inserted) telemetry.emit(SyncTelemetry.Event.HistoryStarted, { stage: SyncTelemetry.Stage.Sealed,
       phase: SyncTelemetry.Stage.Sealed, outcome: SyncTelemetry.Outcome.Completed, businessStatus: 'pending' });
     return result;
+  }
+  /** Caller has durably released the matching availability refresh/checkpoint references.
+   * Retain every original ID, request hash, receipt and boundary; never delete replay proof. */
+  compactCompletedOperation(context: HistoryContext, id: string): boolean {
+    return this.access(context, db => db.transaction(() => {
+      const original = db.prepare("SELECT body FROM history_operations WHERE id=? AND state='complete'").get(id) as { body: string } | undefined;
+      const operation = this.readOperation(db,context,id);
+      if (!original || !operation || operation.state !== 'complete' || !operation.receipt || operation.compactedRequestHash) return false;
+      if (!['committed','aborted','expired'].includes(String(operation.receipt.state))) return false;
+      const begin = operation.request.begin as Record<string, unknown> | undefined;
+      const checkpoint = operation.request.checkpointState as { operationId?: string } | undefined;
+      if (operation.kind !== 'recovery' || !begin || !checkpoint?.operationId) return false;
+      const { sourceManifest, ...identityAndBoundaries } = begin;
+      operation.request = { begin: identityAndBoundaries, checkpointId: checkpoint.operationId,
+        sourceManifestHash: payloadHash(sourceManifest ?? null) };
+      operation.compactedRequestHash = payloadHash(operation.request);
+      const body = stableJson(operation), bytes = Buffer.byteLength(body);
+      if (bytes >= Buffer.byteLength(original.body)) return false;
+      // CAS also protects against a future concurrent reference updater; terminal state is immutable.
+      return db.prepare("UPDATE history_operations SET body=?,bytes=? WHERE id=? AND state='complete' AND body=?")
+        .run(body,bytes,id,original.body).changes === 1;
+    })());
   }
   pending(context: HistoryContext): HistoryOperation[] {
     return this.access(context, db => (db.prepare("SELECT id FROM history_operations WHERE scope=? AND local_id=? AND writer_generation=? AND state='pending' ORDER BY id LIMIT 32")

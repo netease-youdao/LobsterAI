@@ -9,7 +9,7 @@ import { migrateVerifiedRemoteTargetCatalogRouting, migrateVerifiedRemoteTargetF
 import { materializeRemotePreparedInputSources } from './remotePreparedInputSnapshots';
 import { RemoteSyncStateError, retentionSequence } from './remoteRetention';
 import type { RemoteStore, SyncRow } from './remoteStore';
-import { RemoteSessionAdmission, RemoteSyncAdmissionBudgetError, RemoteSyncAdmissionStore } from './remoteSyncAdmission';
+import { AdmissionJobPhase, RemoteSessionAdmission, RemoteSyncAdmissionBudgetError, RemoteSyncAdmissionStore } from './remoteSyncAdmission';
 
 type Store = Pick<RemoteStore, 'db'>;
 type Row = Record<string, string | number | null>;
@@ -344,6 +344,7 @@ export class RemoteSyncTargetStore {
     if (!selected) migrateVerifiedRemoteTargetCatalogRouting(this.store, { owner, deviceId: device.device_id, targetId, legacyEnvironments: [...environments] });
   }
   isAdmitted(owner: RemoteOwner, deviceId: string, targetId: string, localSessionId: string): boolean {
+    if (this.admissions.ownerBlocked(owner)) return false;
     const active = this.active(owner);
     return active?.targetId === targetId && active.deviceId === deviceId && this.admissions.admitted(owner, deviceId, targetId, localSessionId);
   }
@@ -352,7 +353,48 @@ export class RemoteSyncTargetStore {
     return this.admissions.pendingIds(owner, targetId, after, limit);
   }
   controlAdmissionBlocked(owner: RemoteOwner, targetId: string): boolean {
-    return this.active(owner)?.targetId !== targetId || this.admissions.controlBlocked(targetId);
+    return this.admissions.ownerBlocked(owner) || this.active(owner)?.targetId !== targetId || this.admissions.controlBlocked(targetId);
+  }
+  /** One resume step; the owner gate forbids remote writers until the final pointer commit. */
+  resumeAdmission(input: { owner: RemoteOwner; deviceId: string; syncTarget: RemoteSyncTargetIdentity | null }): RemoteSyncTargetActivationResult | null {
+    const targetId = input.syncTarget ? remoteSyncTargetId(input.syncTarget, input.owner) : `legacy:${payloadHash([input.owner.userId, input.owner.scopeKey, input.deviceId])}`;
+    const previous = this.active(input.owner);
+    if (previous?.syncTarget && previous.targetId !== targetId) throw new RemoteSyncStateError('Incremental admission cannot replace an identified target');
+    this.register({ ...input, targetId });
+    const job = this.admissions.startJob(input.owner, targetId, input.deviceId, previous?.targetId || null, (previous?.epoch || 0) + 1);
+    if (job.phase === AdmissionJobPhase.Archiving) { this.admissions.archivePage(job, tables); return null; }
+    if (job.phase === AdmissionJobPhase.Complete) return { ...this.active(input.owner)!, kind: RemoteSyncTargetActivationKind.Claimed };
+    return this.store.db.transaction(() => {
+      const row = this.store.db.prepare(`SELECT * FROM remote_sync s WHERE local_id IN (${ownSessions})
+        AND (local_id>? OR NOT EXISTS(SELECT 1 FROM remote_sync_session_admissions a WHERE a.target_id=? AND a.local_session_id=s.local_id))
+        ORDER BY local_id LIMIT 1`).get(input.owner.userId, input.owner.scopeKey, job.task_cursor, targetId) as SyncRow | undefined;
+      if (row) {
+        this.store.db.prepare('INSERT OR IGNORE INTO remote_sync_session_admissions VALUES(?,?,?,?,?,?,?,?,?)')
+          .run(targetId, input.owner.userId, input.owner.scopeKey, input.deviceId, row.local_id, row.session_id,
+            RemoteSessionAdmission.Unverified, row.sync_environment, `admission:${targetId}`);
+        const admission = this.store.db.prepare('SELECT admission FROM remote_sync_session_admissions WHERE target_id=? AND local_session_id=?').get(targetId, row.local_id) as { admission: string };
+        try {
+          this.store.db.transaction(() => {
+            if (admission.admission !== RemoteSessionAdmission.Quarantined && this.admissions.isPristine(row, targetId)) {
+              this.admissions.validateAssociated(input.owner, input.deviceId, targetId, row, job.previous_target || undefined);
+              const selected = new Set([row.local_id]);
+              this.claim(input.owner, targetId, [], job.previous_target || undefined, selected);
+              this.history(input.owner, targetId, selected);
+              this.admissions.set(input.owner, targetId, input.deviceId, row, RemoteSessionAdmission.Verified);
+            }
+          })();
+        } catch (error) {
+          if (!(error instanceof RemoteSyncStateError) && !(error instanceof SyntaxError)) throw error;
+          this.admissions.set(input.owner, targetId, input.deviceId, row, RemoteSessionAdmission.Quarantined);
+        }
+        this.store.db.prepare('UPDATE remote_sync_admission_jobs SET task_cursor=MAX(task_cursor,?) WHERE target_id=?').run(row.local_id, targetId);
+        return null;
+      }
+      this.claim(input.owner, targetId, [], job.previous_target || undefined, new Set());
+      this.store.db.prepare('INSERT OR REPLACE INTO remote_sync_target_active VALUES(?,?,?,?)').run(input.owner.userId, input.owner.scopeKey, targetId, job.epoch);
+      this.store.db.prepare("UPDATE remote_sync_admission_jobs SET phase='complete' WHERE target_id=? AND phase='validating'").run(targetId);
+      return { ...input, targetId, epoch: job.epoch, kind: RemoteSyncTargetActivationKind.Claimed };
+    })();
   }
   admitLegacySession(owner: RemoteOwner, deviceId: string, targetId: string, state: RetentionState): void {
     this.store.db.transaction(() => {
@@ -402,6 +444,8 @@ export class RemoteSyncTargetStore {
   }
   private activateInternal(input: { owner: RemoteOwner; deviceId: string; targetId: string; syncTarget: RemoteSyncTargetIdentity | null; bootstrap?: boolean; legacyStates?: RetentionState[]; allowPartialLegacy?: boolean }): RemoteSyncTargetActivationResult {
     if (!input.deviceId || !input.owner.userId || !input.owner.scopeKey) throw new RemoteSyncStateError('Synchronization target requires an authenticated device and owner');
+    const job = this.admissions.job(input.targetId);
+    if (job && job.phase !== AdmissionJobPhase.Complete) throw new RemoteSyncAdmissionBudgetError(input.targetId);
     return this.store.db.transaction(() => {
       const active = this.active(input.owner);
       if (active?.targetId === input.targetId) {

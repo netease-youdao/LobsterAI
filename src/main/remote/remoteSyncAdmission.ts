@@ -11,6 +11,8 @@ const admissionBudget = { rows: 2000, bytes: 8 * 1024 * 1024, recordBytes: 1024 
 type Store = Pick<RemoteStore, 'db'>;
 interface StateRow { key: string; value: string }
 export const RemoteSessionAdmission = { Unverified: 'unverified', Verified: 'verified', Quarantined: 'quarantined' } as const;
+export const AdmissionJobPhase = { Archiving: 'archiving', Validating: 'validating', Complete: 'complete' } as const;
+export interface AdmissionJob { target_id: string; device_id: string; owner_user_id: string; owner_scope_key: string; phase: string; table_index: number; row_cursor: number; task_cursor: string; previous_target: string | null; epoch: number }
 export type RemoteSessionAdmission = typeof RemoteSessionAdmission[keyof typeof RemoteSessionAdmission];
 const owned = "SELECT session_id FROM cowork_session_ownership WHERE owner_user_id=? AND owner_scope_key=? AND ownership_status='confirmed'";
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -32,7 +34,89 @@ export class RemoteSyncAdmissionStore {
       archive_id TEXT NOT NULL,table_name TEXT NOT NULL,row_key TEXT NOT NULL,row_json TEXT NOT NULL,
       PRIMARY KEY(archive_id,table_name,row_key));
       CREATE TABLE IF NOT EXISTS remote_sync_admission_control_barriers(
-      target_id TEXT NOT NULL,state_key TEXT NOT NULL,PRIMARY KEY(target_id,state_key));`);
+      target_id TEXT NOT NULL,state_key TEXT NOT NULL,PRIMARY KEY(target_id,state_key));
+      CREATE TABLE IF NOT EXISTS remote_sync_admission_jobs(target_id TEXT PRIMARY KEY,device_id TEXT NOT NULL,
+        owner_user_id TEXT NOT NULL,owner_scope_key TEXT NOT NULL,phase TEXT NOT NULL,table_index INTEGER NOT NULL,
+        row_cursor INTEGER NOT NULL,task_cursor TEXT NOT NULL,previous_target TEXT,epoch INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS idx_remote_admission_jobs_owner ON remote_sync_admission_jobs(owner_user_id,owner_scope_key,phase);`);
+  }
+  job(targetId: string): AdmissionJob | null {
+    return (this.store.db.prepare('SELECT * FROM remote_sync_admission_jobs WHERE target_id=?').get(targetId) as AdmissionJob | undefined) || null;
+  }
+  ownerBlocked(owner: RemoteOwner): boolean {
+    return !!this.store.db.prepare("SELECT 1 FROM remote_sync_admission_jobs WHERE owner_user_id=? AND owner_scope_key=? AND phase<>'complete' LIMIT 1")
+      .get(owner.userId, owner.scopeKey);
+  }
+  startJob(owner: RemoteOwner, targetId: string, deviceId: string, previousTarget: string | null, epoch: number): AdmissionJob {
+    const other = this.store.db.prepare("SELECT target_id FROM remote_sync_admission_jobs WHERE owner_user_id=? AND owner_scope_key=? AND phase<>'complete' AND target_id<>? LIMIT 1").get(owner.userId, owner.scopeKey, targetId);
+    if (other) throw new RemoteSyncStateError('Unfinished admission prevents changing synchronization target');
+    this.store.db.prepare("INSERT OR IGNORE INTO remote_sync_admission_jobs VALUES(?,?,?,?,'archiving',0,0,'',?,?)")
+      .run(targetId, deviceId, owner.userId, owner.scopeKey, previousTarget, epoch);
+    const job = this.job(targetId)!;
+    if (job.device_id !== deviceId || job.owner_user_id !== owner.userId || job.owner_scope_key !== owner.scopeKey) throw new RemoteSyncStateError('Admission job identity changed');
+    return job;
+  }
+  /** One durable archive page. Original ACKs and unknown requests remain in their source tables. */
+  archivePage(job: AdmissionJob, tables: Readonly<Record<string, string>>): void {
+    const names = [...Object.entries(tables), ['remote_state', '']];
+    const entry = names[job.table_index];
+    if (!entry) {
+      this.store.db.prepare("UPDATE remote_sync_admission_jobs SET phase='validating',row_cursor=0 WHERE target_id=? AND phase='archiving'").run(job.target_id); return;
+    }
+    const [table, column] = entry;
+    this.store.db.transaction(() => {
+      const columns = (this.store.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string; type: string }>).filter(field => /TEXT|BLOB/iu.test(field.type));
+      const bytesSql = columns.map(field => `COALESCE(octet_length("${field.name}"),0)`).join('+') || '0';
+      const rows = this.store.db.prepare(`SELECT rowid AS evidence_rowid,${bytesSql} AS bytes,${column || 'key'} AS source_key FROM ${table}
+        WHERE rowid>? ${column ? `AND ${column} IN (${owned})` : ''} ORDER BY rowid LIMIT 32`)
+        .all(job.row_cursor, ...(column ? [job.owner_user_id, job.owner_scope_key] : [])) as Array<{ evidence_rowid: number; bytes: number; source_key: string }>;
+      if (!rows.length) { this.store.db.prepare('UPDATE remote_sync_admission_jobs SET table_index=table_index+1,row_cursor=0 WHERE target_id=?').run(job.target_id); return; }
+      let bytes = 0, cursor = job.row_cursor;
+      const owner = { userId: job.owner_user_id, scopeKey: job.owner_scope_key };
+      const targets = this.store.db.prepare('SELECT target_id,owner_user_id,owner_scope_key FROM remote_sync_targets').all() as Array<{ target_id: string; owner_user_id: string; owner_scope_key: string }>;
+      for (const header of rows) {
+        const { evidence_rowid, source_key } = header;
+        if (bytes && bytes + header.bytes > 256 * 1024) break;
+        const key = table === 'remote_sync' || table === 'remote_state' ? source_key : String(evidence_rowid);
+        const scopedTarget = table === 'remote_state' ? targets.find(target => key.endsWith(`:${target.target_id}`) || key.includes(`:${target.target_id}:`)) : null;
+        if (scopedTarget && (scopedTarget.owner_user_id !== owner.userId || scopedTarget.owner_scope_key !== owner.scopeKey)) { cursor = evidence_rowid; continue; }
+        if (header.bytes > admissionBudget.recordBytes) {
+          // Retain over-budget bytes in the original table. Their task stays quarantined; no serialized truncation is archived.
+          const local = column ? source_key : (this.store.db.prepare(`SELECT local_id FROM remote_sync WHERE local_id IN (${owned})
+            AND (?= 'run:'||local_id OR instr(?,':'||local_id||':')>0) LIMIT 1`).get(owner.userId, owner.scopeKey, key, key) as { local_id: string } | undefined)?.local_id;
+          if (local) this.store.db.prepare(`INSERT INTO remote_sync_session_admissions
+            SELECT ?,?,?,?,local_id,session_id,'quarantined',sync_environment,? FROM remote_sync WHERE local_id=?
+            ON CONFLICT(target_id,local_session_id) DO UPDATE SET admission='quarantined'`)
+            .run(job.target_id, owner.userId, owner.scopeKey, job.device_id, `admission:${job.target_id}`, local);
+          else if (table === 'remote_state' && controlPrefixes.some(prefix => key.startsWith(prefix)))
+            this.store.db.prepare('INSERT OR IGNORE INTO remote_sync_admission_control_barriers VALUES(?,?)').run(job.target_id, key);
+          cursor = evidence_rowid; continue;
+        }
+        const original = this.store.db.prepare(`SELECT * FROM ${table} WHERE rowid=?`).get(evidence_rowid) as Record<string, unknown> | undefined;
+        if (!original) { cursor = evidence_rowid; continue; }
+        const value = table === 'remote_state' ? parse(String(original.value)) : undefined;
+        const direct = table === 'remote_state' && !!this.store.db.prepare(`SELECT 1 FROM remote_sync WHERE local_id IN (${owned})
+          AND (instr(?,':'||local_id||':')>0 OR substr(?,-length(local_id)-1)=':'||local_id OR instr(?,':'||session_id||':')>0) LIMIT 1`)
+          .get(owner.userId, owner.scopeKey, key, key, key);
+        if (!direct && record(value) && record(value.owner) && !sameOwner(value.owner as unknown as RemoteOwner, owner)) { cursor = evidence_rowid; continue; }
+        const body = stableJson(original); bytes += Buffer.byteLength(body);
+        this.store.db.prepare('INSERT OR IGNORE INTO remote_sync_admission_evidence VALUES(?,?,?,?)').run(`admission:${job.target_id}`, table, key, body);
+        if (table === 'remote_sync') this.store.db.prepare('INSERT OR IGNORE INTO remote_sync_session_admissions VALUES(?,?,?,?,?,?,?,?,?)')
+          .run(job.target_id, owner.userId, owner.scopeKey, job.device_id, original.local_id, original.session_id,
+            RemoteSessionAdmission.Unverified, original.sync_environment, `admission:${job.target_id}`);
+        if (table === 'remote_state' && controlPrefixes.some(prefix => key.startsWith(prefix))) {
+          const unmatchedInbox = key.startsWith('inbox:') && record(value) && record(value.owner) && sameOwner(value.owner as unknown as RemoteOwner, owner)
+            && !this.store.db.prepare(`SELECT 1 FROM remote_sync WHERE local_id=? AND session_id=? AND local_id IN (${owned})`)
+              .get(typeof value.localSessionId === 'string' ? value.localSessionId : null,
+                typeof value.remoteSessionId === 'string' ? value.remoteSessionId : record(value.command) && typeof value.command.sessionId === 'string' ? value.command.sessionId : null,
+                owner.userId, owner.scopeKey);
+          if (value === undefined || key.startsWith('inbox:') && (!record(value) || !record(value.owner)) || unmatchedInbox)
+            this.store.db.prepare('INSERT OR IGNORE INTO remote_sync_admission_control_barriers VALUES(?,?)').run(job.target_id, key);
+        }
+        cursor = evidence_rowid;
+      }
+      this.store.db.prepare('UPDATE remote_sync_admission_jobs SET row_cursor=? WHERE target_id=?').run(cursor, job.target_id);
+    })();
   }
   /** Check lengths in SQLite before transferring archived payloads into the main process. */
   budget(owner: RemoteOwner, targetId: string, tables: Readonly<Record<string, string>>): () => void {
@@ -100,6 +184,10 @@ export class RemoteSyncAdmissionStore {
       && row.sync_environment === targetId && (!row.device_id || row.device_id === deviceId);
     if (this.store.db.prepare("SELECT 1 FROM remote_sync_admission_evidence WHERE archive_id=? AND table_name='remote_sync' AND row_key=?")
       .get(`admission:${targetId}`, localSessionId)) return false;
+    // A completed incremental gate must have covered every row that existed before activation.
+    // Fresh post-activation rows remain eligible for the ordinary pristine path.
+    const job = this.job(targetId);
+    if (job && job.phase !== AdmissionJobPhase.Complete) return false;
     // Existing identified working sets retain their persisted identity; genuinely new local rows have no remote authority to transfer.
     return row.sync_environment === targetId && row.device_id === deviceId || this.isPristine(row, targetId);
   }

@@ -503,7 +503,8 @@ type ChannelSessionLifecycleRun = {
 };
 
 type OpenClawRuntimeAdapterOptions = {
-  beforeExecutionDispatch?: () => void;
+  beforePreparationDispatch?: (sessionId: string, runId?: string) => void;
+  beforeExecutionDispatch?: (sessionId: string, runId?: string) => void;
   prepareDeliverableSync?: (sessionId: string, cwd: string) => Promise<void>;
   normalizeModelRef?: (modelRef: string) => string;
   onChannelPromptSubmit?: (event: {
@@ -5547,6 +5548,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   private async ensureSessionModelForTurn(options: {
+    executionRunId?: string;
     sessionId: string;
     sessionKey: string;
     model: string;
@@ -5606,6 +5608,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         const openClawThinkingLevel = thinkingLevel
           ? resolveOpenClawThinkingLevelForModel(model, thinkingLevel)
           : undefined;
+        this.options.beforePreparationDispatch?.(sessionId, options.executionRunId);
         await this.requestSessionPatchWithProfile({
           sessionId,
           sessionKey,
@@ -5740,6 +5743,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       throw new Error(`Session ${sessionId} not found`);
     }
 
+    const executionRunId = this.store.remote?.run(sessionId)?.runId;
     const confirmationMode = options.confirmationMode
       ?? this.confirmationModeBySession.get(sessionId)
       ?? 'modal';
@@ -5839,6 +5843,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     try {
       firstResponseTiming.modelPatchStartedAtMs = Date.now();
       await this.ensureSessionModelForTurn({
+        executionRunId,
         sessionId,
         sessionKey,
         model: currentModel,
@@ -5882,6 +5887,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           `OpenClaw key ${sessionKey}.`,
           `Action ${goalBootstrapCommand.action}.`,
         );
+        this.options.beforePreparationDispatch?.(sessionId, executionRunId);
         const response = await client.request<{ ok?: boolean; goal?: unknown }>('sessions.goal', {
           key: sessionKey,
           action: goalBootstrapCommand.action,
@@ -6030,7 +6036,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       firstResponseTiming.chatSendStartedAtMs = chatSendStartMs;
       if (runCwd) await prepareOpenClawDeliverableSync(this.options.prepareDeliverableSync, sessionId, runCwd);
       assertApprovalContinuationAllowed();
-      this.options.beforeExecutionDispatch?.();
+      this.options.beforeExecutionDispatch?.(sessionId, executionRunId);
       const sendResult = await client.request<Record<string, unknown>>(
         OpenClawGatewayMethod.ChatSend,
         chatSendParams,
@@ -12462,6 +12468,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.emitSessionStatus(sessionId, 'running');
     activeTurn.remoteRunId = this.store.remote?.run(sessionId)?.runId;
     this.bindRunIdToTurn(sessionId, turnRunId);
+    if (runId || trackedLifecycleRunId) this.store.remote?.recordExternalExecution?.(sessionId, turnRunId);
     this.startTurnTimeoutWatchdog(sessionId);
 
     // For channel sessions, prefetch user messages before streaming starts

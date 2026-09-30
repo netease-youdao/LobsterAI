@@ -546,3 +546,18 @@ test('adds scheduled task ids and backfills existing cron sessions from message 
   )).toBe('legacy-cron-session-newer');
   reopenedStore.close();
 });
+
+
+test('committed authentication fences precede optional observers and cannot be skipped by a broken observer', async () => {
+  const store = await SqliteStore.create(createTempUserDataPath());
+  try {
+    const events: string[] = [];
+    store.onDidChange('auth_tokens', () => { events.push('optional-failed'); throw new Error('optional'); });
+    store.onCriticalChange('auth_tokens', () => { events.push('fenced'); });
+    store.onDidChange('auth_tokens', () => { events.push('optional-next'); });
+    expect(() => store.set('auth_tokens', { test: true })).not.toThrow();
+    expect(events).toEqual(['fenced', 'optional-failed', 'optional-next']);
+    store.onCriticalChange('auth_tokens', () => { throw new Error('security failure'); });
+    expect(() => store.delete('auth_tokens')).toThrow('security failure');
+  } finally { store.close(); }
+});

@@ -5,7 +5,7 @@ import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { RemoteAvailabilityStore } from './remoteAvailabilityStore';
-import { type HistoryContext, RemoteHistoryStore } from './remoteHistoryStore';
+import { type HistoryContext, HistoryPreparation, RemoteHistoryStore } from './remoteHistoryStore';
 import { RemoteStore } from './remoteStore';
 
 const cleanup: Array<() => void> = [];
@@ -30,6 +30,37 @@ function reopen(store: RemoteStore): RemoteHistoryStore {
   const history = new RemoteHistoryStore(store); cleanup.push(() => history.close()); return history;
 }
 describe('v3 history isolation and migration', () => {
+  it('compacts only terminal payloads while retaining immutable replay proof across restart', () => {
+    const { store,context } = fixture(); store.history.prepare(context);
+    const request = { checkpointState: { operationId: 'checkpoint' }, snapshot: { records: ['x'.repeat(100_000)] },
+      begin: { recoveryId: 'recovery', frozenThroughSourceSeq: '7', expectedResolvedSourceSeq: '1', sourceManifest: { ranges: ['evidence'] } } };
+    const original = store.history.sealOperation({ id: 'recovery', context, kind: 'recovery', request });
+    expect(store.history.compactCompletedOperation(context,'recovery')).toBe(false);
+    const receipt = { state: 'committed', recoveryId: 'recovery', gaps: [{ first: '2', last: '7' }], exactSourcePrefix: '1' };
+    store.history.completeOperation(context,'recovery',receipt,{ historyGeneration: '1', resolvedSourceSeq: '7' });
+    expect(store.history.compactCompletedOperation(context,'recovery')).toBe(true);
+    const history = reopen(store); history.prepare(context);
+    const compacted = history.operation(context,'recovery')!;
+    expect(compacted.requestHash).toBe(original.requestHash); expect(compacted.receipt).toEqual(receipt);
+    expect(compacted.request).toMatchObject({ checkpointId: 'checkpoint', begin: { frozenThroughSourceSeq: '7', expectedResolvedSourceSeq: '1' } });
+    expect(compacted.request).not.toHaveProperty('snapshot');
+    expect(history.sealOperation({ id: 'recovery', context, kind: 'recovery', request }).state).toBe('complete');
+    expect(() => history.sealOperation({ id: 'recovery', context, kind: 'recovery', request: { changed: true } })).toThrow('IMMUTABLE');
+    expect(history.pending(context)).toEqual([]); expect(store.sync('s')!.ack_seq).toBe(0);
+  });
+  it('classifies a malformed task manifest without opening a shared storage cooldown', () => {
+    const { store, context } = fixture(); store.history.prepare(context);
+    store.db.prepare("UPDATE remote_history_migrations SET manifest_json='{' WHERE local_id='s'").run();
+    expect(store.history.prepareResult(context)).toMatchObject({ kind: HistoryPreparation.TaskBlocked });
+    expect(store.history.status()).toMatchObject({ available: true, retryAt: 0 });
+  });
+  it('does not extend shared storage cooldown when deferred preparation is visited again', () => {
+    const { store, context, directory } = fixture();
+    fs.writeFileSync(path.join(directory, 'remote-sync.sqlite'), 'broken');
+    const first = store.history.prepareResult(context);
+    expect(first.kind).toBe(HistoryPreparation.StorageDeferred);
+    expect(store.history.prepareResult(context)).toEqual(first);
+  });
   it('copies and verifies bounded metadata while preserving unknown legacy bytes and exact ACK', () => {
     const { store,context } = fixture();
     store.db.prepare('UPDATE remote_sync SET source_seq=2,ack_seq=1 WHERE local_id=?').run('s');

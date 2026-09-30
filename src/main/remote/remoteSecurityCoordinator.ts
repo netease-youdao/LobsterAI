@@ -14,7 +14,11 @@ export class RemoteSecurityCoordinator {
   private queue: Promise<unknown> = Promise.resolve();
   private failure: Error | null = null;
   private waiting = 0;
-  constructor(private store: RemoteStore, private journal: RemoteSecurityJournal, identity: RemoteIdentity, checkpoint: number) {
+  private recovery: Promise<void> | null = null;
+  private recoveryAttempts = 0;
+  private nextRecoveryAt = 0;
+  private closed = false;
+  constructor(private store: RemoteStore, private journal: RemoteSecurityJournal, private identity: RemoteIdentity, checkpoint: number) {
     const telemetry = captureRemoteTelemetry({ domain: 'security_journal' });
     const storedIdentity = store.get<string>('databaseInstance');
     const oldCheckpoint = store.get<number>('databaseCheckpoint') || 0;
@@ -80,13 +84,57 @@ export class RemoteSecurityCoordinator {
       this.store.put('databaseInstance', identity.databaseId);
       this.store.put('securityJournalMigrated', true);
     });
+    await this.classifyRunCorruption();
     this.store.setSecurityRecoveryRequired(false); remoteDiagnostics.record('security.recovered');
     telemetry.emit(SyncTelemetry.Event.Admission, { fromState: 'initializing', toState: 'ready', reason: SyncTelemetry.Reason.None });
   }
+  private async classifyRunCorruption(): Promise<void> {
+    let cursor: string | null = '';
+    do {
+      cursor = this.store.classifyRunCorruption((sessionId, owner) => {
+        const proof = this.store.get<{ operationId: string; signature: string }>(`ownershipProof:${sessionId}`);
+        return !!proof && this.journal.verifyOwnership({ sessionId, ownerUserId: owner.userId, scopeKey: owner.scopeKey,
+          ownershipRevision: 1, operationId: proof.operationId }, proof.signature);
+      }, cursor, record => {
+        const head = this.evidence().head;
+        return !!head && record.sequence <= head.sequence && (record.sequence !== head.sequence || record.recordDigest === head.recordDigest)
+          && this.journal.verifyCommit(record);
+      });
+      if (cursor) await new Promise<void>(resolve => setImmediate(resolve));
+    } while (cursor);
+  }
   async available(): Promise<void> {
     await this.ready;
+    if (this.failure && !this.waiting && !this.closed && this.recoveryAttempts < 4 && Date.now() >= this.nextRecoveryAt) await this.recover();
     if (this.failure) throw this.failure;
     if (this.store.needsSecurityRecovery()) throw new RemoteSecurityJournalError('Local security evidence requires recovery');
+  }
+  /** Coalesced evidence-only recovery; never runs an old apply closure or cancels pending work. */
+  recover(): Promise<void> {
+    if (this.recovery) return this.recovery;
+    if (this.waiting || this.closed) return Promise.reject(new RemoteSecurityJournalError('Security operations are still active'));
+    this.recoveryAttempts++;
+    this.nextRecoveryAt = Date.now() + [1000, 5000, 15000, 60000][Math.min(this.recoveryAttempts - 1, 3)]!;
+    const operation = (async () => {
+      try {
+        await this.ready;
+        if (!await this.store.verifyExecutionDatabaseHealth()) throw new RemoteSecurityJournalError('Core database health is unknown');
+        const result = await this.journal.recover(this.evidence());
+        if (result.status === RemoteSecurityRecovery.CancellationRequired) throw new RemoteSecurityJournalError('Pending execution journal requires explicit recovery');
+        await this.validateOwnership(this.identity, true, false);
+        if (this.closed) throw new RemoteSecurityJournalError('Security coordinator is closed');
+        await this.classifyRunCorruption();
+        this.store.setSecurityRecoveryRequired(false);
+        this.failure = null;
+        this.recoveryAttempts = 0;
+        remoteDiagnostics.record('security.recovered');
+      } catch (error) {
+        this.failure = error instanceof Error ? error : new RemoteSecurityJournalError('Execution durability is unknown');
+        this.store.setSecurityRecoveryRequired(true);
+      }
+    })().finally(() => { if (this.recovery === operation) this.recovery = null; });
+    this.recovery = operation;
+    return operation;
   }
   async commit<T>(operationId: string, operation: unknown, apply: () => T): Promise<T> {
     const telemetry = captureRemoteTelemetry({ domain: 'security_journal' });
@@ -96,11 +144,13 @@ export class RemoteSecurityCoordinator {
     }
     this.waiting++;
     const work = this.queue.catch((): void => undefined).then(async () => {
+      if (this.recovery) await this.recovery;
       await this.available();
       const record = await this.journal.prepare({ operationId, operationDigest: payloadHash(operation) });
       const result = this.store.transaction(() => {
         const value = apply();
         this.store.put('securityJournalHead', record);
+        this.store.recordCommittedExecution(operationId, operation, record);
         return value;
       });
       await this.journal.finalize(record, () => this.evidence());
@@ -114,5 +164,5 @@ export class RemoteSecurityCoordinator {
     this.queue = work;
     return work;
   }
-  close(): void { this.journal.close(); }
+  close(): void { this.closed = true; this.journal.close(); }
 }

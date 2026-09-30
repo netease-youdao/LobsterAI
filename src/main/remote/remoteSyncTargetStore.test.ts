@@ -42,6 +42,37 @@ function fixture() {
 }
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 
+describe('durable incremental admission', () => {
+  test('resumes after reconstruction and covers new task IDs before the saved cursor', () => {
+    const f = fixture(); f.add('z');
+    const target = remoteSyncTargetId(spaceA, owner);
+    for (let count = 0; count < 80; count++) {
+      f.targets.resumeAdmission(input());
+      if ((f.db.prepare('SELECT task_cursor FROM remote_sync_admission_jobs WHERE target_id=?').get(target) as { task_cursor: string }).task_cursor === 'z') break;
+    }
+    expect(f.targets.isAdmitted(owner, 'device-a', target, 'z')).toBe(false);
+    f.add('a');
+    const restarted = new RemoteSyncTargetStore(f.store);
+    let result = null;
+    for (let count = 0; count < 20 && !result; count++) result = restarted.resumeAdmission(input());
+    expect(result?.targetId).toBe(target);
+    expect(restarted.isAdmitted(owner, 'device-a', target, 'a')).toBe(true);
+    expect(restarted.isAdmitted(owner, 'device-a', target, 'z')).toBe(true);
+  });
+  test('quarantines an oversized original row and still admits its healthy neighbor', () => {
+    const f = fixture(); f.add('bad'); f.add('good');
+    const oversized = 'x'.repeat(1024 * 1024 + 1);
+    f.db.prepare('UPDATE remote_sync SET sync_environment=? WHERE local_id=?').run(oversized, 'bad');
+    let result = null;
+    for (let count = 0; count < 80 && !result; count++) result = f.targets.resumeAdmission(input());
+    expect(result).not.toBeNull();
+    expect(f.targets.isAdmitted(owner, 'device-a', result!.targetId, 'bad')).toBe(false);
+    expect(f.targets.isAdmitted(owner, 'device-a', result!.targetId, 'good')).toBe(true);
+    expect(f.db.prepare("SELECT admission FROM remote_sync_session_admissions WHERE local_session_id='bad'").get()).toEqual({ admission: 'quarantined' });
+    expect(f.store.sync('bad')!.sync_environment).toBe(oversized);
+  });
+});
+
 describe('active synchronization target working sets', () => {
   test('claims published legacy state only after continuity proof and never turns GET state into an ACK', () => {
     const f = fixture(); f.add(); f.bind();

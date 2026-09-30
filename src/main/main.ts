@@ -609,7 +609,7 @@ import { registerVoiceInputPermissionHandler } from './permissions/voiceInputPer
 import { patchEnabledNspClawguard } from './plugins/nspClawguardCompatibility';
 import { isHiddenUserPluginId } from './plugins/pluginManager';
 import { fenceCronJobs,filterOwnedInstances } from './remote/automationOwnership';
-import { sameOwner } from './remote/canonical';
+import { payloadHash, sameOwner } from './remote/canonical';
 import { configureRemoteSettings } from './remote/configureRemoteSettings';
 import { prepareDefaultWorkspace } from './remote/defaultWorkspace';
 import { assertDesktopInputDispatchCurrent, captureDesktopInput, desktopInputCaptureEnabled, waitForDesktopInputCapture } from './remote/desktopInputMetadata';
@@ -3802,7 +3802,8 @@ const getCoworkEngineRouter = () => {
         getCoworkStore(),
         getOpenClawEngineManager(),
         {
-          beforeExecutionDispatch: markRemoteExecutionDispatched,
+          beforePreparationDispatch: (sessionId, runId) => { assertRemoteExecutionPermit(); if (runId) getCoworkStore().remote.markExecutionDispatch(sessionId, runId); },
+          beforeExecutionDispatch: (sessionId, runId) => { assertRemoteExecutionPermit(); if (runId) getCoworkStore().remote.markExecutionDispatch(sessionId, runId); markRemoteExecutionDispatched(); },
           prepareDeliverableSync: async (sessionId, cwd) => { await prepareRemoteFileRun?.(sessionId, cwd); },
           normalizeModelRef: normalizeOpenClawModelRef,
           onChannelPromptSubmit: event => {
@@ -5863,7 +5864,7 @@ if (!gotTheLock) {
         platform: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux', appVersion: app.getVersion() },
       request: async (owner, pathname, init) => {
         if (!sameOwner(owner, getCurrentRemoteOwner())) throw new Error('Account changed');
-        return fetchWithAuth(`${getServerApiBaseUrl()}${pathname}`, { ...init, headers: { ...getEnterpriseAccountHeaders(), ...init.headers } }, remoteNetworkTransport.fetch);
+        return fetchWithAuth(`${getServerApiBaseUrl()}${pathname}`, { ...init, headers: { ...getEnterpriseAccountHeaders(), ...init.headers } }, remoteNetworkTransport.queuedFetch);
       },
       getAgentWorkspace: async agentId => {
         const agent = getCoworkStore().getVisibleAgent(agentId, getCurrentRemoteOwner());
@@ -5903,12 +5904,19 @@ if (!gotTheLock) {
   const getRemoteAccountEpoch = (): string => `${ownershipBootId}:${ownershipAccountEpoch}:${authAccountGeneration}`;
   const readRemoteState = (): RemoteSettingsState => {
     const owner = getCurrentRemoteOwner();
-    if (remoteBridge && owner) {
-      const state = remoteBridge.state();
-      if (sameOwner(owner, state.owner)) return { ...state, accountEpoch: getRemoteAccountEpoch() };
-    }
-    const saved = owner ? getCoworkStore().remote.get<{ enabled?: boolean }>(`settings:${owner.userId}:${owner.scopeKey}`) : null;
-    return { accountEpoch: getRemoteAccountEpoch(), enabled: Boolean(owner) && (saved?.enabled ?? true), connected: false, name: os.hostname(), hostName: os.hostname(),
+    try {
+      if (remoteBridge && owner) {
+        const state = remoteBridge.state();
+        if (sameOwner(owner, state.owner)) return { ...state, accountEpoch: getRemoteAccountEpoch() };
+      }
+    } catch { /* A failed optional bridge must still expose a stable settings response. */ }
+    let enabled = false;
+    try {
+      const saved = owner ? getCoworkStore().remote.get<unknown>(`settings:${owner.userId}:${owner.scopeKey}`) : null;
+      enabled = Boolean(owner) && (saved === null || typeof saved === 'object' && !Array.isArray(saved)
+        && ((saved as { enabled?: unknown }).enabled === undefined || (saved as { enabled?: unknown }).enabled === true));
+    } catch { /* Unknown persisted intent remains disabled; preserve the original bytes. */ }
+    return { accountEpoch: getRemoteAccountEpoch(), enabled, connected: false, name: os.hostname(), hostName: os.hostname(),
       owner, workspaces: [], accessRequests: [], error: owner ? t('remoteSecureStorageUnavailable') : undefined };
   };
   ipcMain.handle(RemoteIpc.State, () => remoteSettingsController?.state() ?? readRemoteState());
@@ -6004,6 +6012,7 @@ if (!gotTheLock) {
     });
     remoteSettingsController = new RemoteSettingsController({
       getRemoteState: readRemoteState,
+      getOwner: getCurrentRemoteOwner,
       getAccountEpoch: getRemoteAccountEpoch,
       getKeepAwakePreference: () => getStore().get<boolean>(PREVENT_SLEEP_STORE_KEY),
       saveKeepAwakePreference: enabled => getStore().set(PREVENT_SLEEP_STORE_KEY, enabled),
@@ -6017,31 +6026,59 @@ if (!gotTheLock) {
       },
     });
     remoteSettingsController.restoreKeepAwake();
-    try { initializeRemoteBridge(); } catch { remoteDiagnosticLog('remote.record.quarantined', { lane: 'transport', reason: 'DEPENDENCY_UNAVAILABLE' }, 'warn'); }
+    const accountFenceKey = 'remote_account_execution_fence';
+    let fenceGeneration = 0;
+    let fenceRetry: ReturnType<typeof setTimeout> | undefined;
+    const queueAccountFence = (next: RemoteOwner | null, attempt = 0): void => {
+      // Install the in-memory gate and Promise barrier before touching optional task records.
+      remoteCredentialsAllowed = false;
+      const generation = ++fenceGeneration;
+      if (fenceRetry) clearTimeout(fenceRetry);
+      let markerPersisted = false;
+      void remoteAccountTransition.run(async current => {
+        if (!markerPersisted) throw new Error('Account fence marker is not durable');
+        await getOpenClawEngineManager().stopGateway();
+        if (!current()) return;
+        fenceCronJobs(getOpenClawEngineManager().getStateDir(), getCoworkStore().remote, next);
+        if (!current() || (next === null ? getCurrentRemoteOwner() !== null : !sameOwner(next, getCurrentRemoteOwner()))) return;
+        // Persist ready only after both stop and ownership fencing are confirmed. No finally release.
+        getStore().set(accountFenceKey, { version: 1, phase: 'ready', ownerHash: payloadHash(next) });
+        remoteCredentialsAllowed = true;
+      }).catch(error => {
+        console.warn('[RemoteAccount] Execution remains fenced', error);
+        if (generation !== fenceGeneration || attempt >= 3) return;
+        fenceRetry = setTimeout(() => {
+          if (generation === fenceGeneration && (next === null ? getCurrentRemoteOwner() === null : sameOwner(next, getCurrentRemoteOwner()))) queueAccountFence(next, attempt + 1);
+        }, [1000, 5000, 15000][attempt]);
+        fenceRetry.unref?.();
+      });
+      try {
+        getStore().set(accountFenceKey, { version: 1, phase: 'pending', ownerHash: payloadHash(next) });
+        markerPersisted = true;
+      } catch (error) { console.warn('[RemoteAccount] Account fence persistence failed', error); }
+    };
     let previousRemoteOwner = getCurrentRemoteOwner();
+    try {
+      const saved = getStore().get<{ version: number; phase: string; ownerHash: string }>(accountFenceKey);
+      if (saved !== undefined && saved !== null && (saved.version !== 1 || saved.phase !== 'ready' || saved.ownerHash !== payloadHash(previousRemoteOwner))) queueAccountFence(previousRemoteOwner);
+    } catch { queueAccountFence(previousRemoteOwner); }
+    try { initializeRemoteBridge(); } catch { remoteDiagnosticLog('remote.record.quarantined', { lane: 'transport', reason: 'DEPENDENCY_UNAVAILABLE' }, 'warn'); }
     for (const key of ['auth_tokens', LogReporterStoreKey.AuthUser, 'enterprise_account_context']) {
-      getStore().onDidChange(key, () => {
+      getStore().onCriticalChange(key, () => {
         const next = getCurrentRemoteOwner();
         if (!(previousRemoteOwner === null && next === null) && !sameOwner(previousRemoteOwner, next)) {
           ownershipAccountEpoch++;
-          revalidateArtifactPreviews();
         }
-        try {
-          remoteSessionCommands?.accountChanged(previousRemoteOwner, next);
-          if (previousRemoteOwner && !sameOwner(previousRemoteOwner, next)) {
-            remoteCredentialsAllowed = false;
-            void remoteAccountTransition.run(async current => {
-              await getOpenClawEngineManager().stopGateway();
-              if (!current()) return;
-              fenceCronJobs(getOpenClawEngineManager().getStateDir(), getCoworkStore().remote, getCurrentRemoteOwner());
-              if (current()) remoteCredentialsAllowed = true;
-            });
-          }
-        } finally {
-          previousRemoteOwner = next;
-          try { remoteBridge?.accountChanged(); }
-          finally { remoteSettingsController?.restoreKeepAwake(); }
-        }
+        const previous = previousRemoteOwner;
+        const changed = !(previous === null && next === null) && !sameOwner(previous, next);
+        if (changed || !remoteCredentialsAllowed) queueAccountFence(next);
+        previousRemoteOwner = next;
+        try { if (changed) revalidateArtifactPreviews(); } catch (error) { console.warn('[RemoteAccount] Preview refresh failed', error); }
+        try { remoteSessionCommands?.accountChanged(previous, next); }
+        catch (error) { console.warn('[RemoteAccount] Task cleanup requires recovery', error); }
+        try { remoteBridge?.accountChanged(); }
+        catch (error) { console.warn('[RemoteAccount] Optional bridge notification failed', error); }
+        remoteSettingsController?.restoreKeepAwake();
       });
     }
   };
@@ -9815,6 +9852,7 @@ if (!gotTheLock) {
         browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       },
     ) => {
+      let localReservation: { sessionId: string; runId: string } | undefined;
       try {
         assertRemoteExecutionPermit();
         const ipcStartedAtMs = Date.now();
@@ -9972,7 +10010,11 @@ if (!gotTheLock) {
           browserAnnotations,
           imageAttachmentPreviews,
         });
-        if (!execution?.runId) coworkStoreInstance.remote.beginRun(session.id);
+        if (!execution?.runId) {
+          coworkStoreInstance.remote.beginRun(session.id);
+          coworkStoreInstance.remote.prepareLocalDispatch(session.id, { prompt });
+          localReservation = { sessionId: session.id, runId: coworkStoreInstance.remote.run(session.id)!.runId };
+        }
         const inputCaptureEpoch = `${ownershipAccountEpoch}:${authAccountGeneration}`;
         const inputCaptureRun = coworkStoreInstance.remote.run(session.id);
         await waitForDesktopInputCapture(deadline => recordDesktopInput(session.id, options, deadline)
@@ -10025,6 +10067,10 @@ if (!gotTheLock) {
           })
           .catch(error => {
             console.error('[Cowork] session error:', error);
+            if (inputCaptureRun) {
+              try { coworkStoreInstance.remote.settleUndispatchedRun(session.id, inputCaptureRun.runId); }
+              catch (recoveryError) { console.warn('[Cowork] Run requires recovery', recoveryError); }
+            }
             try {
               if (!canViewCoworkSession(session.id)) return;
               const existing = coworkStoreInstance.getSession(session.id);
@@ -10052,6 +10098,10 @@ if (!gotTheLock) {
         };
         return { success: true, session: sessionWithMessages };
       } catch (error) {
+        if (localReservation) {
+          try { getCoworkStore().remote.settleUndispatchedRun(localReservation.sessionId, localReservation.runId); }
+          catch (recoveryError) { console.warn('[Cowork] Run requires recovery', recoveryError); }
+        }
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to start session',
@@ -10083,6 +10133,7 @@ if (!gotTheLock) {
         browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       },
     ) => {
+      let localReservation: { sessionId: string; runId: string } | undefined;
       try {
         assertRemoteExecutionPermit();
         const ipcStartedAtMs = Date.now();
@@ -10120,7 +10171,11 @@ if (!gotTheLock) {
         assertRemoteExecutionPermit();
         coworkStoreInstance.remote.assertActor(options.sessionId, execution?.owner ?? null);
         if (execution?.owner && !sameOwner(execution.owner, getCurrentRemoteOwner())) throw new Error('Account changed');
-        if (!execution?.runId) coworkStoreInstance.remote.beginRun(options.sessionId);
+        if (!execution?.runId) {
+          coworkStoreInstance.remote.beginRun(options.sessionId);
+          coworkStoreInstance.remote.prepareLocalDispatch(options.sessionId, { prompt: options.prompt });
+          localReservation = { sessionId: options.sessionId, runId: coworkStoreInstance.remote.run(options.sessionId)!.runId };
+        }
         const inputCaptureEpoch = `${ownershipAccountEpoch}:${authAccountGeneration}`;
         const inputCaptureRun = coworkStoreInstance.remote.run(options.sessionId);
         await waitForDesktopInputCapture(deadline => recordDesktopInput(options.sessionId, options, deadline)
@@ -10233,6 +10288,10 @@ if (!gotTheLock) {
           })
           .catch(error => {
             console.error('[Cowork] continue error:', error);
+            if (inputCaptureRun) {
+              try { coworkStoreInstance.remote.settleUndispatchedRun(options.sessionId, inputCaptureRun.runId); }
+              catch (recoveryError) { console.warn('[Cowork] Run requires recovery', recoveryError); }
+            }
             try {
               if (!canViewCoworkSession(options.sessionId)) return;
               const existing = getCoworkStore().getSession(options.sessionId);
@@ -10257,6 +10316,10 @@ if (!gotTheLock) {
         const session = getCoworkStore().getSession(options.sessionId);
         return { success: true, session };
       } catch (error) {
+        if (localReservation) {
+          try { getCoworkStore().remote.settleUndispatchedRun(localReservation.sessionId, localReservation.runId); }
+          catch (recoveryError) { console.warn('[Cowork] Run requires recovery', recoveryError); }
+        }
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to continue session',

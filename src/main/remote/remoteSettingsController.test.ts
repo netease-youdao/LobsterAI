@@ -172,3 +172,19 @@ describe('remote settings power and state lifecycle', () => {
     expect(f.preference()).toBe(true);
   });
 });
+
+
+test('restores power using trusted owner despite corrupt optional settings and a broken publisher', () => {
+  let active = false;
+  const controller = new RemoteSettingsController({
+    getRemoteState: () => { throw new Error('corrupt remote settings'); },
+    getOwner: () => ({ userId: 'user', scopeKey: 'personal' }),
+    getKeepAwakePreference: () => false,
+    saveKeepAwakePreference: () => { throw new Error('must not replace preference'); },
+    applyKeepAwake: value => { active = value; }, isKeepAwakeActive: () => active,
+    publish: () => { throw new Error('broken UI observer'); },
+  });
+  expect(() => controller.restoreKeepAwake()).not.toThrow();
+  expect(() => controller.setScreenLocked(true)).not.toThrow();
+  expect(active).toBe(false);
+});

@@ -4,7 +4,7 @@ import type { RemoteOwner } from '../../shared/remote/constants';
 import { payloadHash, stableJson } from './canonical';
 import { availabilityControlSnapshot,type ControlSnapshot } from './remoteAvailabilitySource';
 import { AvailabilityReadState, type AvailabilityRequest, type AvailabilitySession, RemoteAvailabilityStore } from './remoteAvailabilityStore';
-import type { HistoryContext, HistoryOperation } from './remoteHistoryStore';
+import { type HistoryContext, type HistoryOperation,HistoryPreparation } from './remoteHistoryStore';
 import { RemoteLiveProjectionJob } from './remoteLiveProjectionJob';
 import { recoveryEvents, recoveryRequired, recoverySourceManifest } from './remoteRecoveryProof';
 import type { CoreRemoteBinding, RemoteStore } from './remoteStore';
@@ -12,7 +12,10 @@ import { remoteDiagnosticLog, remoteSyncErrorMetadata } from './remoteSyncLog';
 import { observeSyncCommit, SyncTelemetry } from './remoteSyncTelemetry';
 import { captureRemoteTelemetry } from './remoteTelemetry';
 
-export interface AvailabilityContext { environment?: string; scope: string; owner: RemoteOwner; deviceId: string; generation: string; supported: boolean; historySupported?: boolean }
+export interface AvailabilityContext { environment?: string; scope: string; owner: RemoteOwner; deviceId: string; generation: string; supported: boolean; historySupported?: boolean; checkpointPagesSupported?: boolean; publicationResolutionSupported?: boolean }
+export const HistoryOwnership = { Owned: 'owned', Unowned: 'unowned', Unavailable: 'unavailable' } as const;
+export type HistoryOwnershipResult = { state: typeof HistoryOwnership.Owned | typeof HistoryOwnership.Unowned }
+  | { state: typeof HistoryOwnership.Unavailable; dependency: 'control_ledger' | 'context'; error: unknown };
 interface Dependencies {
   store: RemoteStore;
   context(): AvailabilityContext | null;
@@ -49,6 +52,15 @@ export class RemoteAvailabilityPublisher {
     const context = this.deps.context();
     return !!context && this.ledger.hasSession(context.scope, localId);
   }
+  historyOwnership(localId: string): HistoryOwnershipResult {
+    const context = this.deps.context();
+    if (!context) return { state: HistoryOwnership.Unavailable, dependency: 'context', error: new Error('REMOTE_AVAILABILITY_CONTEXT_CHANGED') };
+    try { return { state: this.ledger.hasSession(context.scope,localId) ? HistoryOwnership.Owned : HistoryOwnership.Unowned }; }
+    catch (error) { return { state: HistoryOwnership.Unavailable, dependency: 'control_ledger', error }; }
+  }
+  legacyHistoryAllowed(localId: string): boolean {
+    return this.historyOwnership(localId).state === HistoryOwnership.Unowned;
+  }
   controlReady(localId: string): boolean {
     const context = this.deps.context();
     try { return !!context && this.ledger.session(context.scope, localId)?.phase === 'active'; }
@@ -64,7 +76,7 @@ export class RemoteAvailabilityPublisher {
     try {
       const state = this.ledger.session(context.scope, localId)!;
       const revision = this.deps.store.db.prepare('SELECT revision FROM remote_control_revisions WHERE session_id=?').get(localId) as { revision: number } | undefined;
-      const pending = !!this.ledger.db.prepare('SELECT 1 FROM availability_requests WHERE scope=? AND local_id=? LIMIT 1').get(context.scope, localId);
+      const pending = !!this.ledger.db.prepare('SELECT 1 FROM availability_requests WHERE scope=? AND local_id=? AND resolution_receipt IS NULL LIMIT 1').get(context.scope, localId);
       const degraded = !!this.ledger.db.prepare('SELECT 1 FROM availability_faults WHERE scope=? AND local_id=? LIMIT 1').get(context.scope, localId);
       return { ready: state.phase === 'active', pending: pending || state.controlRevision !== String(revision?.revision || 1), degraded };
     } catch { return { ready: false, pending: true, degraded: true }; }
@@ -157,6 +169,8 @@ export class RemoteAvailabilityPublisher {
     }
     this.ledger.attempted(request);
     const { coreRevision: _coreRevision, ackCoreRevision: _ackCoreRevision, knownCheckpointId: _knownCheckpointId, ...body } = request.body;
+    if (request.pathname.startsWith('/control/') && Buffer.byteLength(stableJson({ ...body, connectionGeneration: context.generation })) > 64 * 1024)
+      throw new Error('REMOTE_CONTROL_REQUEST_BUDGET');
     const result = await this.deps.request(request.pathname, request.method,
       { ...body, connectionGeneration: context.generation }, request.version, request.lane === 'control' ? this.checkpointTimeout() : undefined);
     if (request.lane === 'control') this.checkpointGuard();
@@ -210,6 +224,7 @@ export class RemoteAvailabilityPublisher {
       const result = await this.send(context, request);
       if (result.writerGeneration !== state.writerGeneration || !['fenced', 'active'].includes(result.state)) throw new Error('REMOTE_ACTIVATION_RECEIPT_INVALID');
       state.pendingCommandIds = result.pendingCommandIds || [];
+      state.requiredRunIds = result.pendingRunIds || [];
       state.pendingApprovalIds = result.pendingApprovalIds || []; state.pendingQuestionIds = result.pendingQuestionIds || [];
       for (const field of ['streamEpoch','historyGeneration','historyResolvedSourceSeq'] as const) if (typeof result[field] === 'string') state[field] = result[field];
       state.pendingRunIds = [...new Set([...(result.pendingRunIds || []), ...(result.pendingCommands || []).filter((command: any) => command.runId && !(command.status === 'accepted' && command.claimId == null))
@@ -265,47 +280,72 @@ export class RemoteAvailabilityPublisher {
     const checkpointKey = `${state.operationId}:checkpoint`;
     let saved = this.ledger.request(checkpointKey);
     if (!saved) {
-      const snapshot = options?.snapshot || availabilityControlSnapshot(this.deps.store, state.localId, state.pendingRunIds, false, { approvalIds: state.pendingApprovalIds, questionIds: state.pendingQuestionIds });
+      const snapshot = options?.snapshot || availabilityControlSnapshot(this.deps.store, state.localId, state.pendingRunIds, false, { approvalIds: state.pendingApprovalIds, questionIds: state.pendingQuestionIds }, { paged: context.checkpointPagesSupported });
       const parts: Array<{ records: typeof snapshot.records; payloadHash: string }> = [];
       for (const record of snapshot.records) {
         let part = parts.at(-1);
-        if (!part || Buffer.byteLength(stableJson([...part.records, record])) > 60 * 1024) {
+        if (!part || part.records.length >= 64 || Buffer.byteLength(stableJson([...part.records, record])) > 60 * 1024) {
           part = { records: [], payloadHash: '' }; parts.push(part);
         }
         part.records.push(record); part.payloadHash = payloadHash(part.records);
       }
-      if (parts.length > 4) throw new Error('REMOTE_CONTROL_CHECKPOINT_BUDGET');
+      const paged = snapshot.records.length > 64 || parts.length > 4;
+      if (parts.length > (context.checkpointPagesSupported ? 256 : 4) || paged && !context.checkpointPagesSupported) throw new Error('REMOTE_CONTROL_CHECKPOINT_BUDGET');
       const descriptors = parts.map((part, partNo) => ({ partNo, payloadHash: part.payloadHash, recordCount: part.records.length }));
       const kindCounts = Object.fromEntries([...new Set(snapshot.records.map(record => record.eventType))]
         .map(type => [type, snapshot.records.filter(record => record.eventType === type).length]));
-      // This non-HTTP local request preserves the full baseline until commit is authoritatively reconciled.
-      saved = this.save(context, state, checkpointKey, 'control', '', { revision: snapshot.revision,
-        throughFactSeq: String(BigInt(snapshot.revision) > BigInt(state.factSeq) ? BigInt(snapshot.revision) : BigInt(state.factSeq)), extra: options?.extra || {}, parts,
+      const describe = (ids: string[]): { count: number; sortedIdsDigest: string } => ({ count: ids.length, sortedIdsDigest: payloadHash([...ids].sort()) });
+      const pagedManifest = paged ? { checkpointFormat: 'paged_v1', captureControlRevision: snapshot.revision,
+        totalRecords: snapshot.records.length, totalBytes: parts.reduce((sum, part) => sum + Buffer.byteLength(stableJson(part.records)), 0),
+        pageManifest: descriptors.map((descriptor, i) => ({ ...descriptor, bytes: Buffer.byteLength(stableJson(parts[i].records)),
+          kindCounts: Object.fromEntries([...new Set(parts[i].records.map(record => record.eventType))].map(type => [type, parts[i].records.filter(record => record.eventType === type).length])) })),
+        requiredSets: { commands: describe(state.pendingCommandIds), runs: describe(state.requiredRunIds || state.pendingRunIds),
+          approvals: describe(state.pendingApprovalIds || []), questions: describe(state.pendingQuestionIds || []) }, ...options?.extra } : null;
+      if (pagedManifest && Buffer.byteLength(stableJson(pagedManifest.pageManifest)) > 48 * 1024) throw new Error('REMOTE_CONTROL_CHECKPOINT_BUDGET');
+      // Freeze individual bounded requests and the manifest atomically before any network write.
+      saved = this.ledger.db.transaction(() => {
+        if (paged) for (let partNo = 0; partNo < parts.length; partNo++) this.save(context, state, `${state.operationId}:part:${partNo}`, 'control', `/control/bootstrap/${state.operationId}/parts/${partNo}`,
+          { controlEpoch: state.controlEpoch, ...parts[partNo] }, 1, null, 1, 'PUT');
+        return this.save(context, state, checkpointKey, 'control', '', { revision: snapshot.revision,
+        throughFactSeq: String(BigInt(snapshot.revision) > BigInt(state.factSeq) ? BigInt(snapshot.revision) : BigInt(state.factSeq)), extra: options?.extra || {},
         recordHashes: Object.fromEntries(snapshot.records.map(record => [recordKey(record), payloadHash(record)])),
-        manifestHash: payloadHash(descriptors), kindCounts }, 1, null);
+        ...(paged ? { partCount: parts.length, pagedManifest } : { parts }),
+        manifestHash: payloadHash(pagedManifest || descriptors), kindCounts }, 1, null);
+      })();
     }
     const checkpoint = saved.body;
-    const begin = this.save(context, state, `${state.operationId}:begin`, 'control', '/control/bootstrap', {
+    const beginBody = {
       operationId: state.operationId, controlEpoch: state.controlEpoch, throughFactSeq: checkpoint.throughFactSeq, ...checkpoint.extra,
       coreCheckpointId: state.operationId, manifestHash: checkpoint.manifestHash,
-      partCount: checkpoint.parts.length, kindCounts: checkpoint.kindCounts,
+      partCount: checkpoint.partCount || checkpoint.parts.length, kindCounts: checkpoint.kindCounts,
       pendingRunIds: state.pendingRunIds || [], pendingApprovalIds: state.pendingApprovalIds || [], pendingQuestionIds: state.pendingQuestionIds || [],
       pendingCommandIds: state.pendingCommandIds, pendingCommandIdsDigest: payloadHash([...state.pendingCommandIds].sort()),
-    }, 1, `/control/operations/${state.operationId}`);
+      ...checkpoint.pagedManifest,
+    };
+    if (checkpoint.pagedManifest) for (const key of ['pendingRunIds', 'pendingApprovalIds', 'pendingQuestionIds', 'pendingCommandIds', 'pendingCommandIdsDigest']) delete (beginBody as Record<string, unknown>)[key];
+    const begin = this.save(context, state, `${state.operationId}:begin`, 'control', checkpoint.pagedManifest ? '/control/bootstrap/paged' : '/control/bootstrap', beginBody, 1, `/control/operations/${state.operationId}`);
     const began = await this.send(context, begin);
     let receipt = began;
     if (began.state !== 'committed') {
       if (['aborted','expired','superseded'].includes(began.state)) throw Object.assign(new Error('REMOTE_BOOTSTRAP_TERMINAL'),{ httpStatus:409,bootstrapReceipt:began });
-      for (let partNo = 0; partNo < checkpoint.parts.length; partNo++) {
-        const part = this.save(context, state, `${state.operationId}:part:${partNo}`, 'control', `/control/bootstrap/${state.operationId}/parts/${partNo}`,
+      for (let partNo = 0; partNo < (checkpoint.partCount || checkpoint.parts.length); partNo++) {
+        const part = this.ledger.request(`${state.operationId}:part:${partNo}`) || this.save(context, state, `${state.operationId}:part:${partNo}`, 'control', `/control/bootstrap/${state.operationId}/parts/${partNo}`,
           { controlEpoch: state.controlEpoch, ...checkpoint.parts[partNo] }, 1, null, 1, 'PUT');
-        await this.send(context, part); // Idempotent part replay is safe; preserve it until baseline commit.
+        if (checkpoint.pagedManifest && this.ledger.db.prepare('SELECT 1 FROM availability_checkpoint_uploaded WHERE operation_id=? AND part_no=? AND payload_hash=?')
+          .get(state.operationId, partNo, part.body.payloadHash)) continue;
+        const result = await this.send(context, part); // Preserve original request bytes until baseline commit.
+        if (checkpoint.pagedManifest) {
+          if (result.partNo !== partNo || result.payloadHash !== part.body.payloadHash || result.recordCount !== part.body.records.length)
+            throw new Error('REMOTE_CONTROL_PART_RECEIPT_INVALID');
+          this.ledger.db.prepare('INSERT OR IGNORE INTO availability_checkpoint_uploaded VALUES(?,?,?)').run(state.operationId, partNo, part.body.payloadHash);
+        }
       }
       const commit = this.save(context, state, `${state.operationId}:commit`, 'control', `/control/bootstrap/${state.operationId}/commit`,
         { controlEpoch: state.controlEpoch, manifestHash: checkpoint.manifestHash }, 1, `/control/operations/${state.operationId}`);
       // A nonterminal operation query cannot substitute for the commit itself.
       commit.lookup = null;
       const result = await this.send(context, commit);
+      if (['aborted','expired','superseded'].includes(result.state)) throw Object.assign(new Error('REMOTE_BOOTSTRAP_TERMINAL'), { httpStatus: 409, bootstrapReceipt: result });
       if (result.state !== 'committed' || result.controlReady !== true) throw new Error('REMOTE_BOOTSTRAP_RECEIPT_INVALID');
       receipt = result;
     }
@@ -316,12 +356,11 @@ export class RemoteAvailabilityPublisher {
         state.phase = 'active'; state.factSeq = String(checkpoint.throughFactSeq); state.controlRevision = String(checkpoint.revision); state.records = checkpoint.recordHashes;
         this.ledger.saveSession(state);
       } else Object.assign(state,currentState);
-      for (const request of this.ledger.pending(context.scope, 'control', state.localId))
-        if (request.key.startsWith(`${state.operationId}:`)) this.ledger.complete(request.key);
+      this.ledger.archiveBootstrap(context.scope, state.localId, state.operationId, receipt);
     })());
     telemetry.emit(SyncTelemetry.Event.Acknowledged, { stage: SyncTelemetry.Stage.Bootstrap, phase: SyncTelemetry.Stage.LocalAck,
       outcome: SyncTelemetry.Outcome.Completed, businessStatus: receipt.state, lastFactSeq: state.factSeq,
-      partCount: checkpoint.parts.length, persistOutcome: 'success' });
+      partCount: checkpoint.partCount || checkpoint.parts.length, persistOutcome: 'success' });
     for (const objectKey of Object.keys(checkpoint.recordHashes)) this.deps.store.db.prepare('DELETE FROM remote_control_pending WHERE session_id=? AND object_key=? AND revision<=?').run(state.localId, objectKey, checkpoint.revision);
     if (this.deps.store.db.prepare('SELECT 1 FROM remote_control_pending WHERE session_id=? LIMIT 1').get(state.localId)) {
       state.controlRevision = '0'; this.ledger.saveSession(state);
@@ -336,8 +375,15 @@ export class RemoteAvailabilityPublisher {
     if (!request) {
       const coreRevision = (this.deps.store.db.prepare('SELECT revision FROM remote_control_revisions WHERE session_id=?').get(state.localId) as { revision: number } | undefined)?.revision || 1;
       if (String(coreRevision) === state.controlRevision) return;
-      const snapshot = availabilityControlSnapshot(this.deps.store, state.localId);
+      const snapshot = availabilityControlSnapshot(this.deps.store, state.localId, [], true, {}, { incremental: true });
       const changed = snapshot.records.filter(record => state.records[recordKey(record)] !== payloadHash(record));
+      // Identical objects already have durable server receipts. Clear only the captured revisions,
+      // including when this bounded page contains no new facts, so later dirty objects can progress.
+      this.deps.store.db.transaction(() => {
+        for (const record of snapshot.records) if (state.records[recordKey(record)] === payloadHash(record))
+          this.deps.store.db.prepare('DELETE FROM remote_control_pending WHERE session_id=? AND object_key=? AND revision<=?')
+            .run(state.localId, recordKey(record), snapshot.revision);
+      })();
       const records: typeof changed = [];
       for (const record of changed) {
         if (records.length >= 16 || Buffer.byteLength(stableJson([...records, record])) > 60 * 1024) break;
@@ -345,7 +391,8 @@ export class RemoteAvailabilityPublisher {
       }
       if (!records.length) {
         if (changed.length) throw new Error('REMOTE_CONTROL_FACT_OBJECT_BUDGET');
-        state.controlRevision = snapshot.revision; this.ledger.saveSession(state); return;
+        state.controlRevision = this.deps.store.db.prepare('SELECT 1 FROM remote_control_pending WHERE session_id=? LIMIT 1').get(state.localId) ? '0' : snapshot.revision;
+        this.ledger.saveSession(state); return;
       }
       if (records.length > 16 || Buffer.byteLength(stableJson(records)) > 60 * 1024) throw new Error('REMOTE_CONTROL_FACT_BATCH_BUDGET');
       const batchId = randomUUID();
@@ -399,24 +446,30 @@ export class RemoteAvailabilityPublisher {
       if (!state || state.phase !== 'active') continue;
       if ((this.historyRetry.get(key) || 0) > Date.now()) continue;
       if (!this.ledger.objectRetryAllowed(context.scope,state.localId,'history-recovery')) continue;
-      this.historyRetry.set(key,Date.now() + 30 * 60_000);
       const historyContext: HistoryContext = { scope: context.scope, localId: state.localId, sessionId: state.sessionId,
         writerGeneration: state.writerGeneration, owner: context.owner, deviceId: context.deviceId };
         const history = this.deps.store.history;
-        const session = history.prepare(historyContext);
-        if (!session) continue;
+        const prepared = history.prepareResult(historyContext);
+        if (prepared.kind === HistoryPreparation.StorageDeferred) return;
+        if (prepared.kind !== HistoryPreparation.Ready) {
+          if (prepared.kind === HistoryPreparation.TaskBlocked) this.historyRetry.set(key, prepared.retryAt);
+          continue;
+        }
+        const session = prepared.session;
         operation = history.pending(historyContext).find(item => item.kind === 'recovery');
         if (!operation) {
           if (!context.historySupported) continue;
           const metadata = history.legacyMetadata(historyContext);
-          if (metadata.sourceSeq === metadata.exactAckSeq || BigInt(metadata.sourceSeq) <= BigInt(session.resolvedSourceSeq)) continue;
+          if (metadata.sourceSeq === metadata.exactAckSeq || BigInt(metadata.sourceSeq) <= BigInt(session.resolvedSourceSeq)) {
+            this.historyRetry.set(key, Date.now() + 30 * 60_000); continue;
+          }
           const query = new URLSearchParams({ deviceId: context.deviceId, sessionId: state.sessionId, localSessionId: state.localId,
             writerGeneration: state.writerGeneration, mode: 'online', connectionGeneration: context.generation });
           const server = await this.deps.request(`/sync/state?${query}`, 'GET', undefined, 3);
           if (!this.current(context)) return;
           const after = String(server.historyResolvedSourceSeq);
           if (!/^(0|[1-9][0-9]*)$/u.test(after) || !server.streamEpoch) throw new Error('REMOTE_HISTORY_STATE_INVALID');
-          if (BigInt(after) >= BigInt(metadata.sourceSeq)) continue;
+          if (BigInt(after) >= BigInt(metadata.sourceSeq)) { this.historyRetry.set(key, Date.now() + 30 * 60_000); continue; }
           // At most 64 archived events / 512 KiB enter one attempt; unknown events stop only history.
           const rows = history.legacySourcePage(historyContext,after,metadata.sourceSeq,64);
           if (!rows.length) throw new Error('REMOTE_HISTORY_SOURCE_EVIDENCE_MISSING');
@@ -424,6 +477,11 @@ export class RemoteAvailabilityPublisher {
           const refreshKey = `${context.scope}:${state.localId}:history-refresh`;
           const refreshId = this.ledger.request(refreshKey)?.body.operationId || randomUUID();
           const recoveryId = `recovery_${payloadHash(refreshId).slice(0,32)}`, checkpointId = randomUUID();
+          const original = history.operation(historyContext,recoveryId);
+          if (original?.state === 'complete') {
+            this.releaseHistoryPayload(context,original);
+            this.historyRetry.delete(key); continue;
+          }
           operation = await this.serialControl(context,async () => {
             const latest = this.ledger.session(context.scope,state.localId)!;
             this.checkpointRevision = { localId:state.localId,revision:String((this.deps.store.db.prepare('SELECT revision FROM remote_control_revisions WHERE session_id=?').get(state.localId) as { revision:number } | undefined)?.revision || 1) };
@@ -436,6 +494,7 @@ export class RemoteAvailabilityPublisher {
             if (current.writerGeneration !== latest.writerGeneration || current.state !== 'active') throw new Error('REMOTE_RECOVERY_CONTROL_NOT_READY');
             const required = recoveryRequired(events);
             const checkpointState: AvailabilitySession = { ...latest, operationId: checkpointId,
+              requiredRunIds: current.pendingRunIds || [],
               pendingCommandIds: current.pendingCommandIds || [], pendingApprovalIds: current.pendingApprovalIds || [], pendingQuestionIds: current.pendingQuestionIds || [],
               pendingRunIds: [...new Set([...(current.pendingRunIds || []), ...(current.pendingCommands || [])
                 .filter((command: any) => command.runId && !(command.status === 'accepted' && command.claimId == null)).map((command: any) => command.runId)])] as string[] };
@@ -465,6 +524,8 @@ export class RemoteAvailabilityPublisher {
             await this.bootstrap(context,checkpointState,{ snapshot: operation!.request.snapshot as ControlSnapshot,extra: operation!.request.extra as Record<string,unknown> });
         });
         await this.recoverHistory(context,operation);
+        this.releaseHistoryPayload(context,history.operation(historyContext,operation.id)!);
+        this.historyRetry.delete(key);
       } catch (error) {
         const status = (error as { httpStatus?: number }).httpStatus;
         if (operation && (status === 400 || status === 409)) {
@@ -527,7 +588,24 @@ export class RemoteAvailabilityPublisher {
     this.controlWork = lock;
     try { return await operation; } finally { if (this.controlWork === lock) this.controlWork = null; this.checkpointDeadline = 0; this.checkpointRevision = null; }
   }
+  private releaseHistoryPayload(context: AvailabilityContext, operation: HistoryOperation): void {
+    if (operation.state !== 'complete') return;
+    const refreshKey = `${context.scope}:${operation.context.localId}:history-refresh`;
+    const checkpoint = operation.request.checkpointState as { operationId?: string } | undefined;
+    if (!checkpoint?.operationId) return;
+    // The checkpoint's actual terminal receipt, not an inferred ACK, releases the bulky local snapshot.
+    const terminal = this.ledger.db.prepare('SELECT result FROM availability_receipts WHERE operation_id=?').get(checkpoint.operationId) as { result: string } | undefined;
+    if (!terminal || !['committed','aborted','expired','superseded'].includes(String(JSON.parse(terminal.result).state))) return;
+    this.ledger.db.transaction(() => {
+      const refresh = this.ledger.request(refreshKey);
+      if (refresh && `recovery_${payloadHash(refresh.body.operationId).slice(0,32)}` === operation.id) this.ledger.complete(refreshKey);
+    })();
+    if (this.ledger.db.prepare('SELECT 1 FROM availability_requests WHERE key GLOB ? LIMIT 1').get(`${checkpoint.operationId}:*`)) return;
+    // The two-ledger ordering is intentional: a crash here leaves full proof, never a dangling request.
+    this.deps.store.history.compactCompletedOperation(operation.context,operation.id);
+  }
   private async recoverHistory(context: AvailabilityContext, operation: HistoryOperation): Promise<void> {
+    if (operation.state === 'complete') return;
     const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
       deviceId: context.deviceId, localSessionId: operation.context.localId, sessionId: operation.context.sessionId,
       operationId: operation.id, operationKind: SyncTelemetry.Kind.History, lane: 'history' });
@@ -585,7 +663,7 @@ export class RemoteAvailabilityPublisher {
       this.deps.store.db.prepare(`INSERT INTO remote_live_tool_sources(session_id,message_id,tool_id)
         SELECT session_id,id,COALESCE(CASE WHEN json_valid(metadata) THEN COALESCE(json_extract(metadata,'$.toolUseId'),json_extract(metadata,'$.toolCallId')) END,id)
         FROM (SELECT session_id,id,metadata FROM cowork_messages WHERE session_id=? AND type IN ('tool_use','tool_result') ORDER BY sequence DESC LIMIT 64) WHERE 1
-        ON CONFLICT(session_id,message_id) DO NOTHING`).run(row.local_id);
+        ON CONFLICT(session_id,message_id) DO UPDATE SET tool_id=excluded.tool_id`).run(row.local_id);
       this.deps.store.db.prepare(`INSERT INTO remote_live_tools SELECT DISTINCT session_id,tool_id,1 FROM remote_live_tool_sources WHERE session_id=?
         ON CONFLICT(session_id,tool_id) DO NOTHING`).run(row.local_id);
       const candidates = this.deps.store.db.prepare(`SELECT r.object_id,r.revision,'message' AS kind,m.sequence AS position
@@ -601,6 +679,11 @@ export class RemoteAvailabilityPublisher {
         for (const item of page.rows) {
           if (sent > rowStart || sent >= 2 || !this.current(context)) break;
           if (item.state === AvailabilityReadState.Corrupt) {
+            if (context.publicationResolutionSupported && this.eligible(item.key)) {
+              sent++;
+              try { await this.resolveLive(context, state, item.key); this.failures.delete(item.key); }
+              catch (error) { if (this.current(context)) this.fail(item.key, error); }
+            }
             telemetry.emit(SyncTelemetry.Event.Quarantined, { operationId: item.key, objectId: item.objectId,
               stage: SyncTelemetry.Stage.Reconcile, phase: SyncTelemetry.Stage.Reconcile, outcome: SyncTelemetry.Outcome.Blocked, failureScope: 'object',
               reason: SyncTelemetry.Reason.RecordInvalid });
@@ -663,6 +746,28 @@ export class RemoteAvailabilityPublisher {
         }
       } catch (error) { if (this.current(context)) this.fail(taskKey, error); }
     }
+  }
+  private async resolveLive(context: AvailabilityContext, state: AvailabilitySession, publicationId: string): Promise<void> {
+    if (!context.publicationResolutionSupported || !/^[A-Za-z0-9_-]{1,64}$/u.test(publicationId)) throw new Error('REMOTE_LIVE_RESOLUTION_IDENTITY_INVALID');
+    const body = this.ledger.sealResolution(context.scope, state.localId, publicationId, this.body(context, state));
+    if (body.sessionId !== state.sessionId || body.writerGeneration !== state.writerGeneration || body.deviceId !== context.deviceId)
+      throw new Error('REMOTE_LIVE_RESOLUTION_CONTEXT_INVALID');
+    const receipt = await this.deps.request(`/sync/live-projections/${publicationId}/resolve`, 'POST', { ...body, connectionGeneration: context.generation }, 3);
+    if (!this.current(context)) throw new Error('REMOTE_AVAILABILITY_CONTEXT_CHANGED');
+    if (receipt.publicationId !== publicationId || receipt.sessionId !== state.sessionId || receipt.writerGeneration !== state.writerGeneration)
+      throw new Error('REMOTE_LIVE_RESOLUTION_RECEIPT_INVALID');
+    if (receipt.state === 'sealed_unpublished') {
+      const resolution: Record<string, unknown> = { ...body, publicationId };
+      const { mode: _mode, connectionGeneration: _generation, ...business } = resolution;
+      if (!receipt.sealId || receipt.resolutionRequestHash !== payloadHash(business)) throw new Error('REMOTE_LIVE_RESOLUTION_RECEIPT_INVALID');
+    } else if (receipt.state === 'original_terminal') {
+      if (!/^[a-f0-9]{64}$/u.test(String(receipt.originalRequestHash)) || !['accepted', 'superseded', 'rejected'].includes(receipt.receipt?.state)
+        || receipt.receipt.publicationId !== publicationId) throw new Error('REMOTE_LIVE_RESOLUTION_RECEIPT_INVALID');
+      // An old terminal receipt may lack object kind; its authoritative original-ID outcome is still terminal.
+    } else throw new Error('REMOTE_LIVE_RESOLUTION_RECEIPT_INVALID');
+    const current = this.ledger.session(context.scope, state.localId);
+    if (current?.writerGeneration !== state.writerGeneration || current.sessionId !== state.sessionId) throw new Error('REMOTE_LIVE_RESOLUTION_CONTEXT_INVALID');
+    this.ledger.completeResolution(context.scope, state.localId, publicationId, body, receipt);
   }
   private async publishLive(context: AvailabilityContext, request: AvailabilityRequest): Promise<void> {
     const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,

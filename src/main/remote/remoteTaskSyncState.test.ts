@@ -38,6 +38,23 @@ function fixture() {
 const transport = { phase: TaskSyncPhase.Backoff, scope: 'service', reason: 'TRANSPORT' };
 
 describe('task fault isolation persistence', () => {
+  it('permits only a targeted local projection probe before independently reconciling a repaired task', () => {
+    const f = fixture(); f.add('s');
+    f.db.exec(`ALTER TABLE remote_session_revisions ADD COLUMN revision INTEGER DEFAULT 1;
+      ALTER TABLE remote_session_revisions ADD COLUMN clean_revision INTEGER DEFAULT 0;
+      CREATE TABLE remote_projection_rechecks(session_id TEXT PRIMARY KEY,next_retry INTEGER);
+      CREATE TABLE remote_projection_failures(session_id TEXT PRIMARY KEY,reason TEXT,retry_at INTEGER);`);
+    f.state.fail(context,'s',{ phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'REMOTE_PROJECTION_BUDGET' });
+    expect(f.state.projectionEligible(context,'s')).toBe(false);
+    f.db.prepare('INSERT INTO remote_projection_rechecks VALUES(?,?)').run('s',300000);
+    f.db.prepare('INSERT INTO remote_projection_failures VALUES(?,?,?)').run('s','REMOTE_PROJECTION_BUDGET',1);
+    expect(f.state.projectionEligible(context,'s')).toBe(true); expect(f.state.eligible(context,'s')).toBe(false);
+    f.state.reconcileProjectionFailures(context,()=>true); expect(f.state.get(context,'s')!.phase).toBe(TaskSyncPhase.Isolated);
+    f.db.prepare('DELETE FROM remote_projection_failures WHERE session_id=?').run('s');
+    f.db.prepare('INSERT INTO remote_session_revisions VALUES(?,?,?,?)').run('s',0,2,2);
+    f.state.reconcileProjectionFailures(context,()=>false); expect(f.state.get(context,'s')!.phase).toBe(TaskSyncPhase.Isolated);
+    f.state.reconcileProjectionFailures(context,()=>true); expect(f.state.get(context,'s')!.phase).toBe(TaskSyncPhase.Reconciling);
+  });
   it('preserves failure counts through restart and state verification, then resets only on publication progress', () => {
     const f = fixture(); f.add('s');
     let state = f.state;

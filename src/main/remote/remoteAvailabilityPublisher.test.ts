@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { remoteTelemetryHasRequired, sanitizeRemoteTelemetryFields } from '../../shared/remote/telemetry';
+import { payloadHash } from './canonical';
 import { type AvailabilityContext,RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
 import { RemoteStore } from './remoteStore';
 import { SyncTelemetry } from './remoteSyncTelemetry';
@@ -49,6 +50,127 @@ function fixture() {
   const live = (): Promise<void> => (publisher as any).live(context);
   return { db, store, owner, context: context!, setContext: (value: AvailabilityContext | null) => { context = value; }, request, publisher, controls, live };
 }
+
+describe('September reliability protocols', () => {
+  it('never turns a missing current identity into an unowned legacy writer', () => {
+    const f = fixture(); f.setContext(null);
+    expect(f.publisher.historyOwnership('local')).toMatchObject({ state: 'unavailable', dependency: 'context' });
+    expect(f.publisher.legacyHistoryAllowed('local')).toBe(false);
+    f.setContext({ ...f.context, supported: false });
+    expect(f.publisher.historyOwnership('local')).toMatchObject({ state: 'unowned' });
+    expect(f.publisher.legacyHistoryAllowed('local')).toBe(true);
+  });
+  it('archives a superseded commit and automatically seals a new checkpoint ID', async () => {
+    const f = fixture(), ordinary = f.request.getMockImplementation()!;
+    let supersede = true;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0].endsWith('/commit') && supersede) { supersede = false; return { state: 'superseded', controlReady: false }; }
+      return ordinary(...args);
+    });
+    await f.controls(); expect(f.publisher.controlReady('local')).toBe(false);
+    await f.controls(); expect(f.publisher.controlReady('local')).toBe(true);
+    const checkpoints = f.request.mock.calls.filter(call => call[0] === '/control/bootstrap').map(call => call[2].operationId);
+    expect(checkpoints).toHaveLength(2); expect(new Set(checkpoints).size).toBe(2);
+  });
+  it('retains terminal history payload while checkpoint references exist and never re-executes a completed operation', async () => {
+    const f = fixture(); await f.controls();
+    const publisher = f.publisher as any, state = publisher.ledger.session(f.context.scope,'local');
+    const context = { scope: f.context.scope, localId: 'local', sessionId: state.sessionId, writerGeneration: state.writerGeneration, owner: f.owner, deviceId: 'desktop' };
+    f.store.history.prepare(context);
+    f.store.history.sealOperation({ id: 'history-proof', context, kind: 'recovery', request: {
+      checkpointState: { operationId: 'checkpoint-proof' }, snapshot: { records: ['x'.repeat(10000)] }, begin: { frozenThroughSourceSeq: '1' },
+    } });
+    f.store.history.completeOperation(context,'history-proof',{ state: 'committed', recoveryId: 'history-proof' },{ historyGeneration: '1', resolvedSourceSeq: '1' });
+    const operation = f.store.history.operation(context,'history-proof')!;
+    publisher.releaseHistoryPayload(f.context,operation);
+    expect(f.store.history.operation(context,'history-proof')!.request).toHaveProperty('snapshot');
+    publisher.ledger.db.prepare('INSERT INTO availability_receipts VALUES(?,?)').run('checkpoint-proof',JSON.stringify({ state: 'committed' }));
+    publisher.ledger.saveRequest({ key: 'checkpoint-proof:part:0', scope: f.context.scope, localId: 'local', lane: 'control', method: 'PUT',
+      pathname: '/control/bootstrap/checkpoint-proof/parts/0', version: 1, body: {}, lookup: null, lookupVersion: 1, createdAt: Date.now(), attempted: true });
+    publisher.releaseHistoryPayload(f.context,operation);
+    expect(f.store.history.operation(context,'history-proof')!.request).toHaveProperty('snapshot');
+    publisher.ledger.archiveBootstrap(f.context.scope,'local','checkpoint-proof',{ state: 'committed' });
+    publisher.releaseHistoryPayload(f.context,operation);
+    expect(f.store.history.operation(context,'history-proof')!.request).not.toHaveProperty('snapshot');
+    f.request.mockClear(); await publisher.recoverHistory(f.context,operation);
+    expect(f.request).not.toHaveBeenCalled();
+  });
+  it('drains an unchanged bounded dirty page before publishing later facts', async () => {
+    const f = fixture(); f.store.beginRun('local', 'long-run');
+    for (let index = 0; index < 30; index++) f.store.put(`approval:local:a-${index}`, {
+      approvalId: `a-${index}`, runId: 'long-run', approvalVersion: '2', status: 'approved', operationDigest: 'digest',
+    });
+    await f.controls();
+    for (let index = 0; index < 5; index++) await f.controls();
+    for (let index = 0; index < 20; index++) f.store.put(`approval:local:a-${index}`, f.store.get(`approval:local:a-${index}`));
+    f.store.put('approval:local:z-new', { approvalId: 'z-new', runId: 'long-run', approvalVersion: '2', status: 'approved', operationDigest: 'digest' });
+    for (let index = 0; index < 5; index++) await f.controls();
+    expect(f.request.mock.calls.some(call => call[0] === '/control/facts/batches' && call[2].facts.some((fact: any) => fact.payload.approval?.approvalId === 'z-new'))).toBe(true);
+    expect(f.db.prepare("SELECT COUNT(*) AS count FROM remote_control_pending WHERE session_id='local'").get()).toEqual({ count: 0 });
+  });
+  it('keeps a normal run with a hundred closed decisions controllable through bounded facts', async () => {
+    const f = fixture(); f.store.beginRun('local', 'long-run');
+    for (let index = 0; index < 100; index++) f.store.put(`approval:local:a-${index}`, {
+      approvalId: `a-${index}`, runId: 'long-run', approvalVersion: '2', status: 'approved', operationDigest: 'digest',
+    });
+    await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    for (let index = 0; index < 10; index++) await f.controls();
+    const batches = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches');
+    expect(batches.every(call => call[2].facts.length <= 16)).toBe(true);
+    expect(f.db.prepare("SELECT COUNT(*) AS count FROM remote_control_pending WHERE session_id='local'").get()).toEqual({ count: 0 });
+  });
+  it('freezes a negotiated complete baseline beyond 64 records and validates each original page receipt', async () => {
+    const f = fixture(); f.context.checkpointPagesSupported = true;
+    for (let index = 0; index < 80; index++) f.store.transaction(() => {
+      const id = `gone-${index}`;
+      f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,2,?)').run(id, 'local', 'assistant', 'gone', '{}', index + 2);
+      f.db.prepare('DELETE FROM cowork_messages WHERE id=?').run(id);
+    });
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/control/bootstrap/paged') return { state: 'uploading' };
+      if (/\/parts\/\d+$/u.test(args[0])) return { partNo: Number(args[0].split('/').at(-1)), payloadHash: args[2].payloadHash, recordCount: args[2].records.length };
+      return ordinary(...args);
+    });
+    await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    const begin = f.request.mock.calls.find(call => call[0] === '/control/bootstrap/paged')![2];
+    expect(begin.totalRecords).toBe(81); expect(begin.pageManifest).toHaveLength(2);
+    expect(begin).not.toHaveProperty('pendingCommandIds');
+    expect(begin.manifestHash).toBe(payloadHash({ checkpointFormat: begin.checkpointFormat, captureControlRevision: begin.captureControlRevision,
+      totalRecords: begin.totalRecords, totalBytes: begin.totalBytes, pageManifest: begin.pageManifest, requiredSets: begin.requiredSets }));
+    expect(f.request.mock.calls.filter(call => /\/parts\/\d+$/u.test(call[0])).every(call => Buffer.byteLength(JSON.stringify(call[2])) <= 65536)).toBe(true);
+  });
+  it('keeps unknown live bytes until an original-ID seal proof is durable, then allows new objects', async () => {
+    const f = fixture(); f.context.publicationResolutionSupported = true; await f.controls();
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    f.publisher.ledger.saveRequest({ key: 'unknown-publication', scope: f.context.scope, localId: 'local', lane: 'live',
+      body: { objectKind: 'message', objectId: 'message', publicationId: 'unknown-publication', writerGeneration: state.writerGeneration },
+      pathname: '/sync/live-projections', method: 'POST', version: 3, lookup: null, lookupVersion: 3, createdAt: 1, attempted: true });
+    f.publisher.ledger.db.prepare("UPDATE availability_requests SET body='{',object_id=NULL,object_kind=NULL WHERE key='unknown-publication'").run();
+    expect(f.publisher.ledger.hasPendingObject(f.context.scope, 'local', 'message', 'fresh')).toBe(true);
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0].endsWith('/resolve')) {
+        const { mode: _mode, connectionGeneration: _generation, ...business } = args[2];
+        return { state: 'sealed_unpublished', publicationId: 'unknown-publication', sessionId: state.sessionId, writerGeneration: state.writerGeneration,
+          sealId: 'seal', resolutionRequestHash: payloadHash({ ...business, publicationId: 'unknown-publication' }), sealedAt: 'now' };
+      }
+      return ordinary(...args);
+    });
+    await f.live();
+    expect(f.publisher.ledger.hasPendingObject(f.context.scope, 'local', 'message', 'fresh')).toBe(false);
+    expect(f.publisher.ledger.db.prepare("SELECT body FROM availability_requests WHERE key='unknown-publication'").get()).toEqual({ body: '{' });
+    await f.live(); expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections')).toBe(true);
+    expect(f.store.sync('local')?.ack_seq).toBe(0);
+  });
+  it('never permits a legacy writer when the ownership ledger is unavailable', () => {
+    const f = fixture(); vi.spyOn(f.publisher.ledger, 'hasSession').mockImplementation(() => { throw new Error('ledger missing'); });
+    expect(f.publisher.historyOwnership('local')).toMatchObject({ state: 'unavailable', dependency: 'control_ledger' });
+    expect(f.publisher.legacyHistoryAllowed('local')).toBe(false);
+  });
+});
 
 describe('availability-first control and current messages', () => {
   it('publishes controls and live content past a poisoned historical outbox without advancing its ACK', async () => {
@@ -424,4 +546,21 @@ describe('synchronization telemetry evidence', () => {
     expect(telemetryEvents.some(item => item.fields.reason === SyncTelemetry.Reason.InvalidReceipt)).toBe(true);
     expect(f.publisher.ledger.pending(f.context.scope, 'live', 'local')).toHaveLength(1);
   });
+});
+
+
+it('rebuilds optional tool membership from recent core messages without resetting durable tool revisions', async () => {
+  const f = fixture();
+  const metadata = JSON.stringify({ toolCallId: 'call', toolName: 'Read' });
+  f.store.transaction(() => f.db.prepare("INSERT INTO cowork_messages VALUES('tool-message','local','tool_use','read',?,3,2)").run(metadata));
+  expect(f.db.prepare("SELECT 1 FROM remote_live_tool_sources WHERE message_id='tool-message'").get()).toBeUndefined();
+  await f.controls(); await f.live();
+  expect(f.db.prepare("SELECT tool_id FROM remote_live_tool_sources WHERE message_id='tool-message'").get()).toEqual({ tool_id: 'call' });
+  f.db.prepare("DELETE FROM remote_live_tool_sources WHERE message_id='tool-message'").run();
+  f.store.transaction(() => f.db.prepare("UPDATE cowork_messages SET content='read again' WHERE id='tool-message'").run());
+  const revision = f.db.prepare("SELECT revision FROM remote_live_tools WHERE session_id='local' AND tool_id='call'").get();
+  await f.live();
+  expect(f.db.prepare("SELECT tool_id FROM remote_live_tool_sources WHERE message_id='tool-message'").get()).toEqual({ tool_id: 'call' });
+  expect(f.db.prepare("SELECT revision FROM remote_live_tools WHERE session_id='local' AND tool_id='call'").get()).toEqual(revision);
+  expect(revision).toEqual({ revision: 2 });
 });

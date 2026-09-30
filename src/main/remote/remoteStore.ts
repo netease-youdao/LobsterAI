@@ -11,7 +11,8 @@ import { RemoteRetention } from '../../shared/remote/retention';
 import { payloadHash, remoteError, sameOwner, stableJson } from './canonical';
 import type { DesktopInputRun } from './desktopInputMetadata';
 import { remoteArtifactReasons } from './remoteArtifactProjection';
-import { initializeAvailabilitySource, markAvailabilityControl, touchAvailabilityControl } from './remoteAvailabilitySource';
+import { initializeAvailabilityProjectionSources, initializeAvailabilitySource, markAvailabilityControl, touchAvailabilityControl } from './remoteAvailabilitySource';
+import type { InboxEntry } from './remoteBridge';
 import { RemoteDatabaseHealth } from './remoteDatabaseHealth';
 import { samePersistedRemoteEnvironment } from './remoteEnvironmentMigration';
 import { RemoteHistoryStore } from './remoteHistoryStore';
@@ -21,6 +22,7 @@ import { initializeRemoteProjectionSchema } from './remoteProjectionSchema';
 import type { ProjectionWork } from './remoteProjectionWorker';
 import { isPublicReplyMessage, redactReplyText,replyAppendDelta, replyBlockId, replyBlocks, replyChunks, replyToolState } from './remoteReplyProjection';
 import { RemoteSyncStateError, retentionEventId, retentionSequence, safeSourceSequence } from './remoteRetention';
+import type { RemoteSecurityCommit } from './remoteSecurityJournal';
 import { remoteDiagnosticLog, remoteLogMessage, remoteSyncErrorMetadata } from './remoteSyncLog';
 import { activeRemoteSyncTargetContext } from './remoteSyncTargetStore';
 import { RemoteTaskDataError } from './remoteTaskSyncState';
@@ -43,6 +45,9 @@ export interface SessionOwnershipRecord {
   session_id: string; owner_user_id: string; owner_scope_key: string;
   ownership_status: string; source: string; created_at: number;
 }
+export const LocalDispatchPhase = { Prepared: 'prepared', Dispatching: 'dispatching', NotDispatched: 'known_not_dispatched' } as const;
+export const LocalDispatchOrigin = { Local: 'local', Mobile: 'mobile', Im: 'im', Cron: 'cron', Unknown: 'unknown' } as const;
+interface MobileOriginEvidence { inboxKey: string; deviceId: string; targetId: string | null; claimId: string; claimTokenHash: string; journal: RemoteSecurityCommit; operation: { owner: RemoteOwner; commandId: string; requestHash: string; sessionId: string; runId: string; phase: string; inboxKey: string } }
 const terminal = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
 const preview = (text: string): string => Buffer.from(text).subarray(0, 3000).toString('utf8').replace(/\uFFFD$/u, '');
 const iso = (value: number): string => new Date(value).toISOString();
@@ -78,14 +83,58 @@ export class RemoteStore {
   setControlAdmission(check: () => boolean): void { this.controlAdmission = check; }
   areControlsAdmitted(): boolean { try { return this.controlAdmission?.() ?? true; } catch { return false; } }
   setTaskAdmission(check: (id: string) => boolean): void { this.taskAdmission = check; }
-  isTaskAdmitted(id: string): boolean { try { return this.taskAdmission?.(id) ?? true; } catch { return false; } }
+  isTaskAdmitted(id: string): boolean { try { return !this.isRunIsolated(id) && (this.taskAdmission?.(id) ?? true); } catch { return false; } }
   setTaskProjectionEligibility(check: (id: string) => boolean): void { this.taskProjectionEligibility = check; }
   private canProjectTask(id: string): boolean {
     try { return !this.hasIndependentHistoryFence(id) && this.isTaskAdmitted(id) && (this.taskProjectionEligibility?.(id) ?? true); } catch { return false; }
   }
   private securityRecoveryRequired = false;
   private ownershipSigner: ((sessionId: string, userId: string, scopeKey: string, operationId: string) => string) | null = null;
-  setSecurityRecoveryRequired(required: boolean): void { this.securityRecoveryRequired = required || !!this.db.prepare("SELECT 1 FROM remote_corrupt_state WHERE key LIKE 'run:%' LIMIT 1").get(); }
+  setSecurityRecoveryRequired(required: boolean): void {
+    this.securityRecoveryRequired = required || this.hasUnclassifiedRunCorruption();
+  }
+  private hasUnclassifiedRunCorruption(): boolean {
+    for (const row of this.db.prepare("SELECT key,value FROM remote_corrupt_state WHERE key LIKE 'run:%'").iterate() as Iterable<{ key: string; value: string }>) {
+      const isolated = this.db.prepare('SELECT corrupt_hash FROM remote_run_isolation WHERE session_id=?').get(row.key.slice(4)) as { corrupt_hash: string } | undefined;
+      const current = this.db.prepare('SELECT value FROM remote_state WHERE key=?').get(row.key) as { value: string } | undefined;
+      if (!isolated || isolated.corrupt_hash !== payloadHash(row.value) || current?.value !== row.value) return true;
+    }
+    return false;
+  }
+  isRunIsolated(sessionId: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM remote_run_isolation WHERE session_id=?').get(sessionId);
+  }
+  /** Only called after physical health, external journal and ownership signatures were verified. */
+  classifyRunCorruption(verifyOwner: (sessionId: string, owner: RemoteOwner) => boolean, after = '', verifyCommit?: (record: RemoteSecurityCommit) => boolean): string | null {
+    const rows = this.db.prepare("SELECT key,value FROM remote_corrupt_state WHERE key LIKE 'run:%' AND key>? ORDER BY key LIMIT 32").all(after) as Array<{ key: string; value: string }>;
+    for (const row of rows) {
+      const sessionId = row.key.slice(4);
+      try {
+        const owner = this.owner(sessionId);
+        if (!owner || !verifyOwner(sessionId, owner)) continue;
+        const dispatch = this.db.prepare('SELECT run_id,origin,owner_hash FROM local_execution_dispatch WHERE session_id=?').get(sessionId) as { run_id: string; origin: string; owner_hash: string } | undefined;
+        if (!dispatch || dispatch.owner_hash !== payloadHash(owner)) continue;
+        const fact = this.db.prepare('SELECT origin,owner_hash,evidence_json FROM local_execution_origin WHERE session_id=? AND run_id=?').get(sessionId, dispatch.run_id) as { origin: string; owner_hash: string; evidence_json: string } | undefined;
+        if (!fact || fact.origin !== dispatch.origin || fact.owner_hash !== dispatch.owner_hash) continue;
+        const evidence = JSON.parse(fact.evidence_json) as { requestHash?: string; sourceId?: string; gatewayRunId?: string; mobile?: MobileOriginEvidence };
+        if (fact.origin === LocalDispatchOrigin.Local) {
+          if (!/^[a-f0-9]{64}$/u.test(evidence.requestHash || '') || this.get(`runCommand:${sessionId}`) !== null) continue;
+        } else if (fact.origin === LocalDispatchOrigin.Im || fact.origin === LocalDispatchOrigin.Cron) {
+          if (!evidence.sourceId || !evidence.gatewayRunId || !sameOwner(owner, this.sourceOwner(evidence.sourceId)) || this.get(`runCommand:${sessionId}`) !== null) continue;
+          const mapping = this.get<{ runId: string; remoteRunId: string }>(`gatewayRun:${sessionId}`);
+          if (mapping?.runId !== evidence.gatewayRunId || mapping.remoteRunId !== dispatch.run_id) continue;
+        } else if (fact.origin === LocalDispatchOrigin.Mobile) {
+          if (!evidence.mobile || !verifyCommit?.(evidence.mobile.journal) || !this.mobileOriginMatches(sessionId, dispatch.run_id, owner, evidence.mobile)) continue;
+        } else continue; // Legacy evidence never turns absence into proof of local execution.
+        const history = this.get<RemoteRun>(`runHistory:${sessionId}:${dispatch.run_id}`);
+        if (!history || history.runId !== dispatch.run_id || !/^[1-9][0-9]*$/u.test(history.statusVersion)) continue;
+        const current = this.db.prepare('SELECT value FROM remote_state WHERE key=?').get(row.key) as { value: string } | undefined;
+        if (current?.value !== row.value) continue;
+        this.db.prepare('INSERT OR REPLACE INTO remote_run_isolation VALUES (?,?,?,?)').run(sessionId, dispatch.run_id, payloadHash(row.value), fact.origin);
+      } catch { /* Missing or conflicting positive evidence keeps the shared fence. */ }
+    }
+    return rows.length === 32 ? rows.at(-1)!.key : null;
+  }
   needsSecurityRecovery(): boolean { return this.securityRecoveryRequired; }
   setOwnershipSigner(signer: NonNullable<RemoteStore['ownershipSigner']>): void { this.ownershipSigner = signer; }
   private signOwnership(sessionId: string, owner: RemoteOwner): void {
@@ -96,6 +145,7 @@ export class RemoteStore {
     }
     this.put(`ownershipProof:${sessionId}`, { operationId, signature: this.ownershipSigner(sessionId, owner.userId, owner.scopeKey, operationId) });
   }
+  private readonly dispatchBootId = randomUUID();
   private recoveringRuns = false;
   private runRecovery: Promise<void> = Promise.resolve();
   private runtimeTouchedSessions = new Set<string>();
@@ -122,18 +172,21 @@ export class RemoteStore {
   private agentSummary: ((sessionId: string, owner: RemoteOwner) => RemoteAgentSummary | null) | null = null;
 
   private readonly databaseHealth: RemoteDatabaseHealth | null;
-  private readonly projector: RemoteProjectionCoordinator | null;
+  private projector: RemoteProjectionCoordinator | null = null;
   private readonly projectionTargetContexts = new WeakMap<ProjectionWork, string>();
   constructor(readonly db: Database.Database, private readonly options: { deferredProjection?: boolean; restoreRuns?: boolean; projectionWorkerPath?: string; deferSynchronization?: boolean } = {}) {
     this.history = new RemoteHistoryStore(this);
     RemoteHistoryStore.initializeCore(db);
     this.databaseHealth = options.deferredProjection && db.name !== ':memory:' && options.restoreRuns !== false ? new RemoteDatabaseHealth(db.name) : null;
-    this.projector = options.deferredProjection && options.restoreRuns !== false ? new RemoteProjectionCoordinator(this, options.projectionWorkerPath) : null;
-    // Set outside transactions. FULL makes inbox receipts/outbox ACK cleanup durable at COMMIT.
-    db.pragma('journal_mode = WAL');
-    db.pragma('synchronous = FULL');
     db.exec(`
       CREATE TABLE IF NOT EXISTS remote_corrupt_state(key TEXT PRIMARY KEY,value TEXT NOT NULL,detected_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS local_execution_dispatch(session_id TEXT PRIMARY KEY,run_id TEXT NOT NULL,origin TEXT NOT NULL,
+        owner_hash TEXT NOT NULL,boot_id TEXT NOT NULL,phase TEXT NOT NULL,version INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS local_execution_origin(session_id TEXT NOT NULL,run_id TEXT NOT NULL,origin TEXT NOT NULL,
+        owner_hash TEXT NOT NULL,evidence_json TEXT NOT NULL,PRIMARY KEY(session_id,run_id));
+      CREATE TABLE IF NOT EXISTS remote_run_isolation(session_id TEXT PRIMARY KEY,run_id TEXT NOT NULL,corrupt_hash TEXT NOT NULL,origin TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS remote_decision_bindings(key TEXT PRIMARY KEY,session_id TEXT NOT NULL,run_id TEXT NOT NULL,
+        owner_hash TEXT NOT NULL,body_hash TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS remote_session_revisions(session_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, dirty_at INTEGER NOT NULL, clean_revision INTEGER NOT NULL DEFAULT 0);
 
       CREATE TABLE IF NOT EXISTS remote_ownership_pending(session_id TEXT PRIMARY KEY,owner_user_id TEXT NOT NULL,owner_scope_key TEXT NOT NULL,operation_id TEXT NOT NULL,database_id TEXT);
@@ -220,7 +273,11 @@ export class RemoteStore {
   private readonly messageBindings = new Map<string, { runId: string; commandId: string | null; owner: RemoteOwner | null }>();
   initializeSynchronization(): void {
     if (this.synchronizationReady) return;
+    initializeAvailabilityProjectionSources(this.db);
     initializeRemoteProjectionSchema(this.db);
+    this.db.exec('CREATE TABLE IF NOT EXISTS remote_projection_worker_budget(session_id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,attempts INTEGER NOT NULL,window_start INTEGER NOT NULL,next_retry INTEGER NOT NULL)');
+    if ((this.db.prepare("SELECT type FROM sqlite_master WHERE name='remote_projection_worker_budget'").get() as { type: string } | undefined)?.type !== 'table') throw new Error('REMOTE_PROJECTION_SCHEMA_INVALID');
+    if (this.options.deferredProjection && this.options.restoreRuns !== false) this.projector ??= new RemoteProjectionCoordinator(this, this.options.projectionWorkerPath);
     this.synchronizationReady = true;
   }
   /** Rebuild only scheduling hints from atomic revisions. No ACK or immutable request is changed. */
@@ -274,6 +331,30 @@ export class RemoteStore {
   }
   projectionPublishing(sessionId: string): boolean { return !!this.db.prepare('SELECT 1 FROM remote_projection_publications WHERE session_id=?').get(sessionId); }
   retryProjections(): void { this.db.prepare('DELETE FROM remote_projection_failures').run(); }
+  requestProjectionRecheck(sessionId: string): { accepted: boolean; reason?: string } {
+    if (!this.synchronizationReady || this.isRunIsolated(sessionId) || this.hasIndependentHistoryFence(sessionId)) return { accepted: false, reason: 'REMOTE_PROJECTION_NOT_READY' };
+    const failure = this.db.prepare('SELECT reason FROM remote_projection_failures WHERE session_id=?').get(sessionId) as { reason: string } | undefined;
+    if (this.db.prepare('SELECT 1 FROM remote_projection_worker_budget WHERE session_id=? AND next_retry>?').get(sessionId, Date.now())) return { accepted: false, reason: 'REMOTE_PROJECTION_WORKER_COOLDOWN' };
+    if (failure?.reason === 'REMOTE_PROJECTION_PUBLICATION_INVALID') {
+      const publication = this.db.prepare('SELECT * FROM remote_projection_publications WHERE session_id=?').get(sessionId) as
+        { path: string; source_seq: number; revision: number; digest: string } | undefined;
+      try {
+        const epoch = this.get<number>(`snapshotEpoch:${sessionId}`) ?? 0;
+        const sync = this.sync(sessionId);
+        if (!publication || !sync || !Number.isSafeInteger(epoch) || epoch < 0 || epoch >= Number.MAX_SAFE_INTEGER
+          || !Number.isSafeInteger(publication.source_seq) || publication.source_seq < 0 || publication.source_seq > sync.source_seq
+          || !Number.isSafeInteger(publication.revision) || publication.revision < 0
+          || typeof publication.path !== 'string' || !publication.path || typeof publication.digest !== 'string' || !publication.digest) return { accepted: false, reason: failure.reason };
+      } catch { return { accepted: false, reason: failure.reason }; }
+    }
+    if (!this.sync(sessionId) || this.isSyncClosed(sessionId)) return { accepted: false, reason: 'REMOTE_PROJECTION_NOT_READY' };
+    this.db.transaction(() => {
+      this.db.prepare('UPDATE remote_projection_failures SET retry_at=? WHERE session_id=?').run(Date.now(), sessionId);
+      this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId);
+    })();
+    this.afterCommit(() => this.wake(true));
+    return { accepted: true };
+  }
   flushProjections(): Promise<void> { this.initializeSynchronization(); this.refreshProjectionHints(); return this.projector?.flush() || Promise.resolve(); }
   /** A working set must not move while the worker is publishing it in bounded batches. */
   async pauseSyncTargetProjection(): Promise<void> {
@@ -298,9 +379,10 @@ export class RemoteStore {
       JOIN remote_sync s ON s.local_id=d.session_id LEFT JOIN remote_projection_failures f ON f.session_id=d.session_id
       LEFT JOIN remote_session_revisions r ON r.session_id=d.session_id
       WHERE o.ownership_status='confirmed' AND o.owner_user_id=? AND o.owner_scope_key=? AND s.migration_frozen=0
+        AND NOT EXISTS (SELECT 1 FROM remote_projection_worker_budget b WHERE b.session_id=d.session_id AND b.next_retry>?)
         AND (f.session_id IS NULL OR (f.reason NOT IN ('REMOTE_PROJECTION_BUDGET','REMOTE_PROJECTION_PUBLICATION_INVALID') AND f.revision<>r.revision) OR f.retry_at<=?)
       ORDER BY r.dirty_at,d.session_id LIMIT 50 OFFSET ?`)
-      .all(this.enabledOwner.userId, this.enabledOwner.scopeKey, Date.now(), this.projectionCandidateOffset) as Array<{ session_id: string }>;
+      .all(this.enabledOwner.userId, this.enabledOwner.scopeKey, Date.now(), Date.now(), this.projectionCandidateOffset) as Array<{ session_id: string }>;
     let skipped = 0;
     for (const { session_id: id } of candidates) {
       if (!this.canProjectTask(id)) { skipped++; continue; }
@@ -495,12 +577,34 @@ export class RemoteStore {
     });
   }
   /** Public projection is recoverable from the private decision fact after a cache write failure. */
-  questionStates(sessionId: string): RemoteQuestionState[] {
+  questionStates(sessionId: string, currentRunId?: string, questionIds?: readonly string[]): RemoteQuestionState[] {
+    if (questionIds && (questionIds.length > 64 || questionIds.some(id => typeof id !== 'string' || !id))) throw new Error('REMOTE_QUESTION_SELECTION_INVALID');
+    if (questionIds?.length === 0) return [];
     this.questionEvidenceHealthy();
-    const values = new Map(this.entries<RemoteQuestionState>(`question:${sessionId}:`).map(row => [row.value.questionId, row.value]));
-    const facts = this.db.prepare("SELECT value FROM remote_state WHERE key LIKE 'questionDecision:%' AND CASE WHEN json_valid(value) THEN json_extract(value,'$.state.sessionId') END=?").all(sessionId) as Array<{ value: string }>;
+    let selectedBytes = 0;
+    const selectedQuestion = (id: string): RemoteQuestionState | null => {
+      const row = this.db.prepare('SELECT CASE WHEN length(CAST(value AS BLOB))<=32768 THEN value END AS value,length(CAST(value AS BLOB)) AS bytes FROM remote_state WHERE key=?')
+        .get(`question:${sessionId}:${id}`) as { value: string | null; bytes: number } | undefined;
+      if (!row) return null;
+      selectedBytes += row.bytes;
+      if (row.value === null || selectedBytes > 1024 * 1024) throw new Error('REMOTE_CONTROL_DECISION_BUDGET');
+      return JSON.parse(row.value) as RemoteQuestionState;
+    };
+    const projected = questionIds ? questionIds.map(selectedQuestion).filter((value): value is RemoteQuestionState => value !== null)
+      : currentRunId ? this.currentDecisionValues<RemoteQuestionState>(`question:${sessionId}:`, sessionId, currentRunId)
+        : this.entries<RemoteQuestionState>(`question:${sessionId}:`).map(row => row.value);
+    const values = new Map(projected.map(value => [value.questionId, value]));
+    const selection = questionIds ? ` AND CASE WHEN json_valid(value) THEN json_extract(value,'$.state.questionId') END IN (${questionIds.map(() => '?').join(',')})` : '';
+    const facts = this.db.prepare(`SELECT ${questionIds ? 'CASE WHEN length(CAST(value AS BLOB))<=32768 THEN value END' : 'value'} AS value,
+      length(CAST(value AS BLOB)) AS bytes FROM remote_state WHERE key>='questionDecision:' AND key<'questionDecision;'
+      AND CASE WHEN json_valid(value) THEN json_extract(value,'$.state.sessionId') END=?${selection}${questionIds ? ' LIMIT 65' : ''}`)
+      .all(sessionId, ...(questionIds || [])) as Array<{ value: string | null; bytes: number }>;
+    if (questionIds && (facts.length > 64 || facts.some(row => row.value === null)
+      || facts.reduce((sum, row) => sum + row.bytes, selectedBytes) > 1024 * 1024)) throw new Error('REMOTE_CONTROL_DECISION_BUDGET');
     for (const row of facts) {
+      if (row.value === null) throw new Error('REMOTE_CONTROL_DECISION_BUDGET');
       const { state, binding } = JSON.parse(row.value) as { state: LocalQuestionState; binding: { owner: RemoteOwner | null } };
+      if (currentRunId && state.runId !== currentRunId) continue;
       const owner = this.owner(sessionId);
       if (!binding || (binding.owner !== null || owner !== null) && !sameOwner(binding.owner, owner)) { values.delete(state.questionId); continue; }
       const { requestId: _requestId, sessionId: _sessionId, ...question } = state;
@@ -546,13 +650,37 @@ export class RemoteStore {
       this.refreshApprovalRunState(sessionId);
     });
   }
+  private currentDecisionValues<T>(prefix: string, sessionId: string, runId: string): T[] {
+    const rows = this.db.prepare(`SELECT s.key,s.value,b.run_id,b.owner_hash FROM remote_state s
+      LEFT JOIN remote_decision_bindings b ON b.key=s.key WHERE s.key>=? AND s.key<?`).all(prefix, `${prefix}\uffff`) as
+      Array<{ key: string; value: string; run_id: string | null; owner_hash: string | null }>;
+    const values: T[] = [];
+    const closed = new Set<string>();
+    const ownerHash = payloadHash(this.owner(sessionId));
+    for (const row of rows) {
+      if (row.run_id && row.run_id !== runId && row.owner_hash === ownerHash) {
+        if (!closed.has(row.run_id)) {
+          const previous = this.get<RemoteRun>(`runHistory:${sessionId}:${row.run_id}`);
+          if (previous?.runId === row.run_id && terminal.has(previous.status)) closed.add(row.run_id);
+        }
+        // Immutable key binding plus authoritative termination revokes the old decision.
+        // Its damaged body remains preserved and cannot be reused for the current run.
+        if (closed.has(row.run_id)) continue;
+      }
+      const value = JSON.parse(row.value) as T & { runId?: unknown };
+      if (!value || typeof value !== 'object' || typeof value.runId !== 'string') throw new Error('REMOTE_DECISION_EVIDENCE_INVALID');
+      if (row.run_id && (row.run_id !== value.runId || row.owner_hash !== ownerHash)) throw new Error('REMOTE_DECISION_BINDING_CHANGED');
+      if (value.runId === runId) values.push(value);
+    }
+    return values;
+  }
   /** Approval completion alone never proves the engine has resumed its run. */
   refreshApprovalRunState(sessionId: string, engineRunning = false): void {
     const run = this.run(sessionId);
     if (!run || terminal.has(run.status)) return;
-    const pending = [...this.entries<any>(`approval:${sessionId}:`), ...this.entries<any>(`localApprovalBlocker:${sessionId}:`)].map(row => row.value)
+    const pending = [...this.currentDecisionValues<any>(`approval:${sessionId}:`, sessionId, run.runId), ...this.currentDecisionValues<any>(`localApprovalBlocker:${sessionId}:`, sessionId, run.runId)]
       .filter(approval => approval.runId === run.runId && approval.status === 'pending');
-    const questions = this.questionStates(sessionId).filter(question => question.runId === run.runId && question.status === 'pending');
+    const questions = this.questionStates(sessionId, run.runId).filter(question => question.status === 'pending');
     const status = pending.some(approval => approval.resolution?.phase === 'unknown') || questions.some(question => question.resolution.phase === 'unknown') ? 'reconciling'
       : pending.some(approval => approval.requiresLocalAction && (!approval.resolution || approval.resolution.phase === 'idle')) ? 'waiting_local'
       : questions.length ? 'waiting_local' : pending.length ? 'waiting_approval' : engineRunning ? 'running' : null;
@@ -598,13 +726,23 @@ export class RemoteStore {
     }
   }
   put(key: string, value: unknown): void {
-    if (this.depth === 0 && this.advanceCheckpoint) { this.transaction(() => this.put(key, value)); return; }
+    if (this.depth === 0 && (this.advanceCheckpoint || /^(approval|question|localApprovalBlocker):/u.test(key))) { this.transaction(() => this.put(key, value)); return; }
     const parts = key.split(':');
     if (parts[0] === 'run' && parts[1] && this.messageBindings.get(parts[1])?.runId !== (value as RemoteRun)?.runId) this.messageBindings.delete(parts[1]);
     if (parts[1] && ['deletionGuard', 'run', 'runHistory', 'control', 'approval', 'question', 'localApprovalBlocker', 'inputModel', 'inputVersion', 'inputSignature'].includes(parts[0])) {
       this.touchProjection(parts[1]); touchAvailabilityControl(this.db, parts[1]);
     }
-    this.db.prepare('INSERT INTO remote_state VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, stableJson(value));
+    const encoded = stableJson(value);
+    if (parts[1] && ['approval', 'question', 'localApprovalBlocker'].includes(parts[0])) {
+      const runId = (value as { runId?: unknown })?.runId;
+      if (typeof runId === 'string' && runId) {
+        const existing = this.db.prepare('SELECT run_id,session_id FROM remote_decision_bindings WHERE key=?').get(key) as { run_id: string; session_id: string } | undefined;
+        if (existing && (existing.run_id !== runId || existing.session_id !== parts[1])) throw new Error('REMOTE_DECISION_BINDING_CHANGED');
+        this.db.prepare('INSERT INTO remote_decision_bindings VALUES (?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET body_hash=excluded.body_hash')
+          .run(key, parts[1], runId, payloadHash(this.owner(parts[1])), payloadHash(value));
+      }
+    }
+    this.db.prepare('INSERT INTO remote_state VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, encoded);
     if (parts[1] && ['run', 'runHistory', 'approval', 'question'].includes(parts[0])) {
       const object = value as Record<string, any>;
       const type = ['run', 'runHistory'].includes(parts[0]) ? 'run.updated' : `${parts[0]}.updated`;
@@ -734,7 +872,8 @@ export class RemoteStore {
     return this.databaseHealth ? this.databaseHealth.verify() : this.db.pragma('quick_check', { simple: true }) === 'ok';
   }
   hasCompleteExecutionHistory(): boolean {
-    return !this.recoveringRuns && !this.securityRecoveryRequired && this.get<boolean>('executionHistoryComplete') !== false
+    return !this.recoveringRuns && !this.securityRecoveryRequired
+      && !this.db.prepare("SELECT 1 FROM remote_corrupt_state WHERE key LIKE 'run:%' LIMIT 1").get() && this.get<boolean>('executionHistoryComplete') !== false
       && (this.databaseHealth ? this.databaseHealth.current() : this.db.pragma('quick_check', { simple: true }) === 'ok');
   }
   markRunDispatched(sessionId: string): void {
@@ -835,6 +974,7 @@ export class RemoteStore {
     this.put(`${RemoteDeletion.Guard}${sessionId}`, { version: String(BigInt(previous.version) + 1n), runId: runId === undefined ? previous.runId : runId });
   }
   run(sessionId: string): RemoteRun | null {
+    if (this.isRunIsolated(sessionId)) throw new Error('REMOTE_RUN_EVIDENCE_INVALID');
     const run = this.get<RemoteRun>(`run:${sessionId}`);
     if (run !== null && (!run || typeof run.runId !== 'string' || !run.runId || typeof run.status !== 'string'
       || !['starting', 'running', 'waiting_approval', 'waiting_local', 'cancelling', 'reconciling', ...terminal].includes(run.status)
@@ -862,15 +1002,17 @@ export class RemoteStore {
   beginRun(sessionId: string, runId: string = randomUUID(), commandId: string | null = null): RemoteRun {
     if (this.recoveringRuns) this.runtimeTouchedSessions.add(sessionId);
     this.assertNoDeletionEffect(sessionId);
+    if (this.isRunIsolated(sessionId)) throw new Error('REMOTE_RUN_EVIDENCE_INVALID');
     const previous = this.run(sessionId);
     if (previous && !terminal.has(previous.status)) throw new Error('REMOTE_SESSION_BUSY');
     const run: RemoteRun = { runId, status: 'starting', statusVersion: '1', startedAt: iso(Date.now()), finishedAt: null, error: null };
     this.transaction(() => {
       this.advanceDeletionGuard(sessionId, runId);
       this.remove(`gatewayRun:${sessionId}`);
-      const runOrdinal = String(BigInt(this.get<string>(`fileRunOrdinal:${sessionId}`) || '0') + 1n);
-      this.put(`fileRunOrdinal:${sessionId}`, runOrdinal);
-      this.put(`fileRunOrdinal:${sessionId}:${runId}`, runOrdinal);
+      this.db.prepare('INSERT OR REPLACE INTO local_execution_dispatch VALUES (?,?,?,?,?,?,1)').run(
+        sessionId, runId, commandId ? LocalDispatchOrigin.Mobile : LocalDispatchOrigin.Unknown,
+        payloadHash(this.owner(sessionId)), this.dispatchBootId, LocalDispatchPhase.Prepared);
+      this.afterCommit(() => this.prepareFileRunOrdinal(sessionId, runId));
       this.put(`run:${sessionId}`, run);
       this.put(`runHistory:${sessionId}:${runId}`, run);
       const owner = this.owner(sessionId);
@@ -883,6 +1025,107 @@ export class RemoteStore {
     });
     return run;
   }
+  /** File capture is optional. Never roll back a text run because its counter is damaged. */
+  private prepareFileRunOrdinal(sessionId: string, runId: string): void {
+    try {
+      this.transaction(() => {
+        if (this.run(sessionId)?.runId !== runId) return;
+        const previous = this.get<unknown>(`fileRunOrdinal:${sessionId}`);
+        if (previous !== null && (typeof previous !== 'string' || !/^(0|[1-9][0-9]*)$/u.test(previous) || previous.length > 30)) throw new Error('REMOTE_FILE_ORDINAL_INVALID');
+        const ordinal = String(BigInt(previous as string || '0') + 1n);
+        this.put(`fileRunOrdinal:${sessionId}`, ordinal);
+        this.put(`fileRunOrdinal:${sessionId}:${runId}`, ordinal);
+      });
+    } catch {
+      remoteDiagnosticLog('remote.record.quarantined', { localSessionId: sessionId, runId, lane: 'files', reason: 'RECORD_INVALID' }, 'warn');
+    }
+  }
+  /** Only a live desktop submission may opt into same-boot never-dispatched recovery. */
+  prepareLocalDispatch(sessionId: string, request?: unknown): void {
+    const run = this.run(sessionId);
+    if (!run || this.get(`runCommand:${sessionId}`) !== null) return;
+    this.transaction(() => {
+      const changed = this.db.prepare('UPDATE local_execution_dispatch SET origin=? WHERE session_id=? AND run_id=? AND boot_id=? AND phase=? AND owner_hash=?')
+        .run(LocalDispatchOrigin.Local, sessionId, run.runId, this.dispatchBootId, LocalDispatchPhase.Prepared, payloadHash(this.owner(sessionId))).changes;
+      if (changed && request !== undefined) this.db.prepare('INSERT OR IGNORE INTO local_execution_origin VALUES (?,?,?,?,?)').run(sessionId, run.runId,
+        LocalDispatchOrigin.Local, payloadHash(this.owner(sessionId)), stableJson({ requestHash: payloadHash(request) }));
+    });
+  }
+  bindExecutionSource(sessionId: string, sourceId: string): void {
+    const owner = this.owner(sessionId);
+    if (!owner || !sameOwner(owner, this.sourceOwner(sourceId)) || !/^(im|cron):/u.test(sourceId)) return;
+    this.put(`executionSource:${sessionId}`, { sourceId, ownerHash: payloadHash(owner) });
+  }
+  recordExternalExecution(sessionId: string, gatewayRunId: string): void {
+    const run = this.run(sessionId), owner = this.owner(sessionId);
+    const source = this.get<{ sourceId: string; ownerHash: string }>(`executionSource:${sessionId}`);
+    if (!run || !owner || !gatewayRunId || !source || source.ownerHash !== payloadHash(owner)
+      || !sameOwner(owner, this.sourceOwner(source.sourceId)) || this.get(`runCommand:${sessionId}`) !== null) return;
+    const origin = source.sourceId.startsWith('im:') ? LocalDispatchOrigin.Im : source.sourceId.startsWith('cron:') ? LocalDispatchOrigin.Cron : null;
+    if (!origin) return;
+    this.transaction(() => {
+      const changed = this.db.prepare('UPDATE local_execution_dispatch SET origin=?,phase=?,version=version+1 WHERE session_id=? AND run_id=? AND origin=?')
+        .run(origin, LocalDispatchPhase.Dispatching, sessionId, run.runId, LocalDispatchOrigin.Unknown).changes;
+      if (!changed) return;
+      this.db.prepare('INSERT OR IGNORE INTO local_execution_origin VALUES (?,?,?,?,?)').run(sessionId, run.runId, origin,
+        payloadHash(owner), stableJson({ sourceId: source.sourceId, gatewayRunId }));
+    });
+  }
+  private mobileOriginMatches(sessionId: string, runId: string, owner: RemoteOwner, fact: MobileOriginEvidence): boolean {
+    const operation = fact.operation;
+    if (!operation || operation.phase !== 'executing' || operation.sessionId !== sessionId || operation.runId !== runId
+      || !sameOwner(operation.owner, owner) || operation.inboxKey !== fact.inboxKey || !fact.inboxKey.startsWith('inbox:')
+      || operation.commandId !== fact.journal.operationId || payloadHash(operation) !== fact.journal.operationDigest
+      || this.get(`runCommand:${sessionId}`) !== operation.commandId) return false;
+    const entry = this.get<InboxEntry>(fact.inboxKey), binding = this.controlBinding(sessionId);
+    return !!entry && !!binding && !!fact.deviceId && binding.device_id === fact.deviceId && binding.session_id === entry.remoteSessionId
+      && entry.localSessionId === sessionId && entry.runId === runId && sameOwner(entry.owner, owner)
+      && entry.command.commandId === operation.commandId && entry.command.runId === runId
+      && ['create_session', 'send_message'].includes(entry.command.type) && entry.command.request?.type === entry.command.type
+      && entry.command.request?.commandId === operation.commandId && entry.command.requestHash === operation.requestHash
+      && payloadHash(entry.command.request) === operation.requestHash && (entry.targetId || null) === fact.targetId
+      && (!fact.targetId || this.get(`syncRunTarget:${runId}`) === fact.targetId)
+      && !!fact.claimId && entry.command.claimId === fact.claimId && typeof entry.command.claimToken === 'string'
+      && payloadHash(entry.command.claimToken) === fact.claimTokenHash && Number.isFinite(Date.parse(entry.command.claimUntil || ''));
+  }
+  /** Copy original execution evidence inside the same core commit, never infer it from missing inbox rows. */
+  recordCommittedExecution(operationId: string, value: unknown, journal: RemoteSecurityCommit): void {
+    const operation = value as MobileOriginEvidence['operation'];
+    if (!operation || operation.phase !== 'executing' || typeof operation.inboxKey !== 'string' || !operation.inboxKey.startsWith('inbox:')
+      || operation.commandId !== operationId || typeof operation.sessionId !== 'string' || typeof operation.runId !== 'string') return;
+    const entry = this.get<InboxEntry>(operation.inboxKey), owner = this.owner(operation.sessionId), binding = this.controlBinding(operation.sessionId);
+    if (!entry || !owner || !binding || !entry.command.claimId || !entry.command.claimToken) return;
+    const fact: MobileOriginEvidence = { inboxKey: operation.inboxKey, operation, journal, deviceId: binding.device_id,
+      targetId: entry.targetId || null, claimId: entry.command.claimId, claimTokenHash: payloadHash(entry.command.claimToken) };
+    const dispatch = this.db.prepare('SELECT origin,run_id,owner_hash FROM local_execution_dispatch WHERE session_id=?').get(operation.sessionId) as { origin: string; run_id: string; owner_hash: string } | undefined;
+    if (!dispatch || dispatch.origin !== LocalDispatchOrigin.Mobile || dispatch.run_id !== operation.runId || dispatch.owner_hash !== payloadHash(owner)
+      || !this.mobileOriginMatches(operation.sessionId, operation.runId, owner, fact)) return;
+    this.db.prepare('INSERT OR IGNORE INTO local_execution_origin VALUES (?,?,?,?,?)').run(operation.sessionId, operation.runId,
+      LocalDispatchOrigin.Mobile, payloadHash(owner), stableJson({ mobile: fact }));
+  }
+  markExecutionDispatch(sessionId: string, expectedRunId: string): void {
+    const run = this.run(sessionId);
+    if (!run || run.runId !== expectedRunId || terminal.has(run.status)) throw new Error('REMOTE_RUN_CHANGED');
+    const row = this.db.prepare('SELECT * FROM local_execution_dispatch WHERE session_id=?').get(sessionId) as
+      { run_id: string; boot_id: string; phase: string; version: number; owner_hash: string } | undefined;
+    if (!row) return; // Legacy runs never qualify for automatic never-dispatched settlement.
+    if (row.run_id !== run.runId || row.boot_id !== this.dispatchBootId || row.owner_hash !== payloadHash(this.owner(sessionId))) throw new Error('REMOTE_RUN_CHANGED');
+    if (row.phase === LocalDispatchPhase.Dispatching) return;
+    if (row.phase !== LocalDispatchPhase.Prepared || this.db.prepare('UPDATE local_execution_dispatch SET phase=?,version=version+1 WHERE session_id=? AND run_id=? AND phase=? AND version=?')
+      .run(LocalDispatchPhase.Dispatching, sessionId, run.runId, LocalDispatchPhase.Prepared, row.version).changes !== 1) throw new Error('REMOTE_RUN_CHANGED');
+  }
+  settleUndispatchedRun(sessionId: string, runId: string): boolean {
+    return this.transaction(() => {
+      const run = this.run(sessionId);
+      if (!run || run.runId !== runId || this.get(`runCommand:${sessionId}`) !== null) return false;
+      const changed = this.db.prepare('UPDATE local_execution_dispatch SET phase=?,version=version+1 WHERE session_id=? AND run_id=? AND boot_id=? AND origin=? AND phase=? AND version=1 AND owner_hash=?')
+        .run(LocalDispatchPhase.NotDispatched, sessionId, runId, this.dispatchBootId, LocalDispatchOrigin.Local,
+          LocalDispatchPhase.Prepared, payloadHash(this.owner(sessionId))).changes;
+      if (changed !== 1) return false;
+      this.updateRun(sessionId, 'interrupted');
+      return true;
+    });
+  }
   updateRun(sessionId: string, status: RemoteRunStatusValue, error?: string): void {
     if (this.recoveringRuns) this.runtimeTouchedSessions.add(sessionId);
     const previous = this.run(sessionId);
@@ -893,6 +1136,7 @@ export class RemoteStore {
         error: error ? remoteError(47019, 'EXECUTION_FAILED', error) : null });
       if (terminal.has(status)) {
         this.put(`terminalCleanup:${sessionId}:${previous.runId}`, { sessionId, runId: previous.runId, status });
+        this.afterCommit(() => this.fileTerminalBoundary?.(sessionId, previous.runId));
       }
       this.put(`runHistory:${sessionId}:${previous.runId}`, this.run(sessionId));
       this.bumpControl(sessionId);

@@ -9,6 +9,8 @@ import ts from 'typescript';
 import { describe, expect, test } from 'vitest';
 
 import { LogReporterStoreKey } from '../shared/analytics/constants';
+import { payloadHash, sameOwner } from './remote/canonical';
+import { RemoteAccountTransition } from './remote/remoteAccountTransition';
 
 const mainPath = fileURLToPath(new URL('./main.ts', import.meta.url));
 const source = fs.readFileSync(mainPath, 'utf8');
@@ -26,10 +28,13 @@ function deferred<T>() {
 // Execute the real main-process entrypoint, but keep Electron, imported services,
 // filesystem operations and timers inside this inert fixture. In particular,
 // getStore/initStore are the real functions rather than mock implementations.
-function startupFixture(failSynchronization = false) {
+function startupFixture(failSynchronization = false, savedFence?: unknown) {
   const ready = deferred<void>();
   const created = deferred<unknown>();
   const events: string[] = [];
+  const values = new Map<string, unknown>(savedFence !== undefined ? [['remote_account_execution_fence', savedFence]] : []);
+  const stopped = deferred<void>();
+  let failFence = false;
   const storeListeners = new Map<string, () => void>();
   const errors: unknown[][] = [];
   let isReady = false;
@@ -60,8 +65,9 @@ function startupFixture(failSynchronization = false) {
   });
   const sqlite = {
     getDatabase: () => { events.push('store:database'); return {}; },
-    get: () => null,
-    onDidChange: (key: string, listener: () => void) => {
+    get: (key: string) => values.get(key),
+    set: (key: string, value: unknown) => { values.set(key, value); if (key === 'remote_account_execution_fence') events.push(`fence:${(value as { phase: string }).phase}`); },
+    onCriticalChange: (key: string, listener: () => void) => {
       events.push(`store:listen:${key}`); storeListeners.set(key, listener); return noop;
     },
   };
@@ -98,6 +104,10 @@ function startupFixture(failSynchronization = false) {
     './appConstants': moduleOf({ APP_NAME: 'LobsterAI', DB_FILENAME: 'lobsterai.sqlite' }),
     './sqliteStore': moduleOf({ SqliteStore: { create: () => { events.push('store:creating'); return created.promise; } } }),
     './coworkStore': moduleOf({ CoworkStore: function () { events.push('cowork:construct'); return cowork; } }),
+    './remote/canonical': moduleOf({ payloadHash, sameOwner }),
+    './remote/remoteAccountTransition': moduleOf({ RemoteAccountTransition }),
+    './remote/automationOwnership': moduleOf({ fenceCronJobs: () => { events.push('gateway:fence'); if (failFence) throw new Error('cron fence failed'); } }),
+    './libs/openclawEngineManager': moduleOf({ OpenClawEngineManager: function () { return moduleOf({ getStateDir: () => fakePath, stopGateway: () => { events.push('gateway:stop'); return stopped.promise; } }); } }),
     './remote/sessionCommandService': moduleOf({ SessionCommandService: function () { events.push('remote:construct'); return commands; } }),
     './remote/remoteBridge': moduleOf({ RemoteBridge: function () { events.push('remote:bridge'); return bridge; } }),
     './remote/remoteSettingsController': moduleOf({ RemoteSettingsController: function () {
@@ -118,7 +128,9 @@ function startupFixture(failSynchronization = false) {
     Buffer, URL, URLSearchParams, AbortController, TextDecoder, TextEncoder,
   });
   return {
-    events, errors,
+    events, errors, values,
+    confirmStop: async () => { stopped.resolve(); await settle(); },
+    failFence: () => { failFence = true; },
     evaluate: () => vm.runInContext(compiledMain, context, { filename: mainPath }),
     appReady: async () => { isReady = true; ready.resolve(); await settle(); },
     storeReady: async () => { created.resolve(sqlite); await settle(); },
@@ -141,7 +153,7 @@ describe('main remote-control startup lifecycle', () => {
     if (failingCallback === 'commands') fixture.failCommandsChange();
     else fixture.failBridgeChange();
     const before = fixture.events.length;
-    expect(() => fixture.notifyStoreChange('auth_tokens')).toThrow();
+    expect(() => fixture.notifyStoreChange('auth_tokens')).not.toThrow();
     expect(fixture.events.slice(before)).toEqual(['remote:accountChanged', 'power:restore']);
   });
 
@@ -189,4 +201,34 @@ describe('main remote-control startup lifecycle', () => {
     expect(fixture.errors).toHaveLength(1);
     expect(String(fixture.errors[0][0])).toContain('fixture:startup-complete');
   });
+});
+
+
+test('restart retains the account gate until actual stop and cron fencing succeed', async () => {
+  const fixture = startupFixture(false, { version: 1, phase: 'pending', ownerHash: payloadHash(null) });
+  fixture.evaluate(); await fixture.appReady(); await fixture.storeReady();
+  expect(fixture.values.get('remote_account_execution_fence')).toMatchObject({ phase: 'pending' });
+  expect(fixture.events).toContain('gateway:stop');
+  expect(fixture.events).not.toContain('gateway:fence');
+  expect(fixture.events).not.toContain('fence:ready');
+  await fixture.confirmStop();
+  expect(fixture.events.indexOf('gateway:stop')).toBeLessThan(fixture.events.indexOf('gateway:fence'));
+  expect(fixture.events.indexOf('gateway:fence')).toBeLessThan(fixture.events.indexOf('fence:ready'));
+});
+
+test('failed cron fencing never persists a ready account marker', async () => {
+  const fixture = startupFixture(false, { version: 1, phase: 'pending', ownerHash: payloadHash(null) });
+  fixture.failFence(); fixture.evaluate(); await fixture.appReady(); await fixture.storeReady();
+  await fixture.confirmStop();
+  expect(fixture.values.get('remote_account_execution_fence')).toMatchObject({ phase: 'pending' });
+  expect(fixture.events).not.toContain('fence:ready');
+});
+
+
+test.each([false, 0, ''])('does not treat malformed account fence %j as absent', async marker => {
+  const fixture = startupFixture(false, marker);
+  fixture.evaluate(); await fixture.appReady(); await fixture.storeReady();
+  expect(fixture.values.get('remote_account_execution_fence')).toMatchObject({ phase: 'pending' });
+  expect(fixture.events).toContain('gateway:stop');
+  expect(fixture.events).not.toContain('fence:ready');
 });

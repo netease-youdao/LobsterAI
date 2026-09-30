@@ -49,11 +49,15 @@ export class SqliteStore {
   private db: Database.Database;
   private dbPath: string;
   private emitter = new EventEmitter();
+  private criticalEmitter = new EventEmitter();
   private didRunMigration = false;
 
   private constructor(db: Database.Database, dbPath: string) {
     this.db = db;
     this.dbPath = dbPath;
+    // Core durability is owned by the core connection, independent of optional remote services.
+    db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = FULL');
   }
 
   static async create(userDataPath?: string): Promise<SqliteStore> {
@@ -798,6 +802,21 @@ export class SqliteStore {
     return () => this.emitter.off('change', handler);
   }
 
+  /** Required account fences run before any best-effort observer sees committed credentials. */
+  onCriticalChange(key: string, callback: () => void): () => void {
+    const handler = (payload: ChangePayload) => { if (payload.key === key) callback(); };
+    this.criticalEmitter.on('change', handler);
+    return () => this.criticalEmitter.off('change', handler);
+  }
+
+  private publishChange(payload: ChangePayload): void {
+    this.criticalEmitter.emit('change', payload);
+    for (const listener of this.emitter.listeners('change')) {
+      try { listener(payload); }
+      catch (error) { console.warn('[Store] Optional change observer failed', error); }
+    }
+  }
+
   get<T = unknown>(key: string): T | undefined {
     const row = this.db.prepare('SELECT value FROM kv WHERE key = ?').get(key) as
       | { value: string }
@@ -825,13 +844,13 @@ export class SqliteStore {
     `,
       )
       .run(key, JSON.stringify(value), now);
-    this.emitter.emit('change', { key, newValue: value, oldValue } as ChangePayload<T>);
+    this.publishChange({ key, newValue: value, oldValue } as ChangePayload<T>);
   }
 
   delete(key: string): void {
     const oldValue = this.get(key);
     this.db.prepare('DELETE FROM kv WHERE key = ?').run(key);
-    this.emitter.emit('change', { key, newValue: undefined, oldValue } as ChangePayload);
+    this.publishChange({ key, newValue: undefined, oldValue } as ChangePayload);
   }
 
   getDatabase(): Database.Database {

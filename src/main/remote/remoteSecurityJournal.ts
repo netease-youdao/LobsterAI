@@ -30,6 +30,7 @@ export interface RemoteSecurityJournalIo {
   read(): Promise<{ current: string | null; previous: string | null }>;
   replace(expected: string | null, content: string): Promise<void>;
   close(): void;
+  restart?(): Promise<void>;
 }
 export class RemoteSecurityJournalError extends Error {
   constructor(message: string) { super(message); this.name = 'RemoteSecurityJournalError'; }
@@ -38,11 +39,17 @@ export class RemoteSecurityJournalError extends Error {
 /** Dedicated serial file worker. A timeout is an unknown write, never a successful cancellation. */
 export class RemoteSecurityJournalWorkerIo implements RemoteSecurityJournalIo {
   private worker: Worker;
+  private termination: Promise<number> | null = null;
+  private closed = false;
   private id = 0;
   private failed = false;
   private requests = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
-  constructor(directory: string, private timeoutMs = 5000) {
-    this.worker = new Worker(remoteWorkerPath(RemoteWorkerFile.SecurityJournal), { workerData: { directory } });
+  constructor(private directory: string, private timeoutMs = 5000) {
+    this.worker = this.createWorker();
+  }
+  private createWorker(): Worker {
+    const worker = new Worker(remoteWorkerPath(RemoteWorkerFile.SecurityJournal), { workerData: { directory: this.directory } });
+    this.worker = worker;
     this.worker.unref();
     this.worker.on('message', (response: { id: number; value?: unknown; error?: string }) => {
       const request = this.requests.get(response.id);
@@ -50,8 +57,9 @@ export class RemoteSecurityJournalWorkerIo implements RemoteSecurityJournalIo {
       clearTimeout(request.timer); this.requests.delete(response.id);
       if (response.error) request.reject(new RemoteSecurityJournalError(response.error)); else request.resolve(response.value);
     });
-    this.worker.on('error', () => this.fail());
-    this.worker.on('exit', () => this.fail());
+    this.worker.on('error', () => { if (this.worker === worker) this.fail(); });
+    this.worker.on('exit', () => { if (this.worker === worker) this.fail(); });
+    return worker;
   }
   private fail(): void {
     this.failed = true;
@@ -62,14 +70,24 @@ export class RemoteSecurityJournalWorkerIo implements RemoteSecurityJournalIo {
     if (this.failed || this.requests.size >= 2) return Promise.reject(new RemoteSecurityJournalError('Journal worker unavailable'));
     return new Promise((resolve, reject) => {
       const id = ++this.id;
-      const timer = setTimeout(() => { this.fail(); void this.worker.terminate(); }, this.timeoutMs);
+      const timer = setTimeout(() => { this.fail(); this.termination ??= this.worker.terminate(); }, this.timeoutMs);
       this.requests.set(id, { resolve, reject, timer });
       try { this.worker.postMessage({ id, operation, ...data }); } catch { this.fail(); }
     });
   }
   async read(): Promise<{ current: string | null; previous: string | null }> { return await this.request('read') as { current: string | null; previous: string | null }; }
   async replace(expected: string | null, content: string): Promise<void> { await this.request('replace', { expected, content }); }
-  close(): void { this.fail(); void this.worker.terminate(); }
+  async restart(): Promise<void> {
+    if (this.closed) throw new RemoteSecurityJournalError('Journal is closed');
+    this.fail();
+    this.termination ??= this.worker.terminate();
+    await this.termination;
+    if (this.closed) throw new RemoteSecurityJournalError('Journal is closed');
+    this.worker = this.createWorker();
+    this.termination = null;
+    this.failed = false;
+  }
+  close(): void { this.closed = true; this.fail(); this.termination ??= this.worker.terminate(); }
 }
 
 export class RemoteSecurityJournal {
@@ -92,6 +110,7 @@ export class RemoteSecurityJournal {
     const { recordDigest, ...body } = record;
     return this.equal(recordDigest, this.mac('commit', body));
   }
+  verifyCommit(record: RemoteSecurityCommit): boolean { return this.verifyRecord(record); }
   private coreHead(evidence: RemoteSecurityEvidence): Head {
     if (evidence.restored || evidence.hasConflict || !this.singleWriterVerified) throw new RemoteSecurityJournalError('Remote identity requires recovery');
     if (!evidence.head) return { sequence: 0, recordDigest: GENESIS };
@@ -145,6 +164,13 @@ export class RemoteSecurityJournal {
       if (!this.matches(head, this.anchor.committed)) throw new RemoteSecurityJournalError('Core security history differs from external anchor');
       return { status: RemoteSecurityRecovery.Ready };
     });
+  }
+  /** Reopen only after the old writer has exited; initialize rechecks the exact durable head. */
+  async recover(evidence: RemoteSecurityEvidence): Promise<{ status: typeof RemoteSecurityRecovery[keyof typeof RemoteSecurityRecovery]; pending?: RemoteSecurityCommit }> {
+    if (this.active || !this.singleWriterVerified || !this.io.restart) throw new RemoteSecurityJournalError('Journal cannot safely restart');
+    await this.io.restart();
+    this.anchor = null; this.encoded = null; this.poisoned = false;
+    return this.initialize({ ...evidence, legacyCheckpointVerified: false });
   }
   async prepare(operation: { operationId: string; operationDigest: string }): Promise<RemoteSecurityCommit> {
     return this.exclusive(async () => {

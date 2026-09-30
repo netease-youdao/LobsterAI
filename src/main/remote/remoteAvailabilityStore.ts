@@ -10,6 +10,7 @@ export interface AvailabilitySession {
   scope: string; localId: string; sessionId: string; writerGeneration: string; controlEpoch: string;
   phase: 'activating' | 'bootstrap' | 'active'; operationId: string; pendingCommandIds: string[]; pendingRunIds: string[];
   pendingApprovalIds?: string[]; pendingQuestionIds?: string[]; streamEpoch?: string; historyGeneration?: string; historyResolvedSourceSeq?: string;
+  requiredRunIds?: string[];
   controlRevision: string; factSeq: string; records: Record<string, string>;
 }
 export interface AvailabilityRequest {
@@ -25,7 +26,7 @@ class AvailabilityRecordError extends Error {
 const record = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
 const identifier = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(value);
 function decode(body: string): Record<string, any> {
-  if (Buffer.byteLength(body) > 256 * 1024) throw new AvailabilityRecordError();
+  if (Buffer.byteLength(body) > 1024 * 1024) throw new AvailabilityRecordError();
   let value: unknown;
   try { value = JSON.parse(body); } catch { throw new AvailabilityRecordError(); }
   if (!record(value)) throw new AvailabilityRecordError();
@@ -65,12 +66,14 @@ export class RemoteAvailabilityStore {
         CREATE TABLE IF NOT EXISTS availability_objects(scope TEXT NOT NULL,local_id TEXT NOT NULL,object_id TEXT NOT NULL,
           source_revision TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(scope,local_id,object_id));
         CREATE TABLE IF NOT EXISTS availability_receipts(operation_id TEXT PRIMARY KEY,result TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS availability_checkpoint_uploaded(operation_id TEXT NOT NULL,part_no INTEGER NOT NULL,payload_hash TEXT NOT NULL,
+          PRIMARY KEY(operation_id,part_no));
         CREATE TABLE IF NOT EXISTS availability_faults(scope TEXT NOT NULL,local_id TEXT NOT NULL,object_key TEXT NOT NULL,
           fingerprint TEXT NOT NULL,attempts INTEGER NOT NULL,window_start INTEGER NOT NULL,next_retry INTEGER NOT NULL,
           PRIMARY KEY(scope,local_id,object_key));`);
       // Independent identity columns survive a damaged request body. Unknown legacy identity stays unknown.
       const columns = new Set((database.prepare('PRAGMA table_info(availability_requests)').all() as Array<{ name: string }>).map(row => row.name));
-      for (const column of ['object_id', 'object_kind', 'request_hash']) {
+      for (const column of ['object_id', 'object_kind', 'request_hash', 'resolution_body', 'resolution_receipt']) {
         if (!columns.has(column)) database.exec(`ALTER TABLE availability_requests ADD COLUMN ${column} TEXT`);
       }
       database.exec('CREATE INDEX IF NOT EXISTS idx_availability_request_object ON availability_requests(scope,lane,local_id,object_kind,object_id)');
@@ -105,7 +108,7 @@ export class RemoteAvailabilityStore {
     const pending = this.db.prepare(`SELECT COUNT(*) AS count FROM (
       SELECT local_id FROM availability_sessions WHERE scope=? AND
         CASE WHEN json_valid(body) THEN CASE WHEN json_extract(body,'$.phase')='active' THEN 0 ELSE 1 END ELSE 1 END
-      UNION SELECT local_id FROM availability_requests WHERE scope=?)`).get(scope, scope) as { count: number };
+      UNION SELECT local_id FROM availability_requests WHERE scope=? AND resolution_receipt IS NULL)`).get(scope, scope) as { count: number };
     const faults = this.db.prepare('SELECT 1 FROM availability_faults WHERE scope=? LIMIT 1').get(scope);
     const corrupt = this.db.prepare('SELECT 1 FROM availability_sessions WHERE scope=? AND NOT json_valid(body) LIMIT 1').get(scope);
     return { sessions: sessions.count, pendingSessions: pending.count, degraded: !!faults || !!corrupt };
@@ -143,7 +146,7 @@ export class RemoteAvailabilityStore {
   }
   scanPending(scope: string, lane: 'control' | 'live', localId: string, after = '', limit = 32): { rows: AvailabilityRequestRow[]; nextCursor: string | null } {
     const size = Math.max(1, Math.min(100, limit));
-    const raw = this.db.prepare('SELECT * FROM availability_requests WHERE scope=? AND lane=? AND local_id=? AND key>? ORDER BY key LIMIT ?')
+    const raw = this.db.prepare('SELECT * FROM availability_requests WHERE scope=? AND lane=? AND local_id=? AND resolution_receipt IS NULL AND key>? ORDER BY key LIMIT ?')
       .all(scope, lane, localId, after, size) as any[];
     const rows: AvailabilityRequestRow[] = raw.map(row => {
       const identity = { key: row.key, localId: row.local_id, objectId: row.object_id, objectKind: row.object_kind };
@@ -158,10 +161,29 @@ export class RemoteAvailabilityStore {
   hasPendingObject(scope: string, localId: string, objectKind: string, objectId: string): boolean {
     // Unknown identity protects this task, never every task or a falsely inferred single object.
     return !!this.db.prepare(`SELECT 1 FROM availability_requests WHERE scope=? AND lane='live' AND local_id=?
-      AND (object_id IS NULL OR object_kind IS NULL OR (object_kind=? AND object_id=?)) LIMIT 1`).get(scope, localId, objectKind, objectId);
+      AND resolution_receipt IS NULL AND (object_id IS NULL OR object_kind IS NULL OR (object_kind=? AND object_id=?)) LIMIT 1`).get(scope, localId, objectKind, objectId);
+  }
+  sealResolution(scope: string, localId: string, key: string, body: Record<string, unknown>): Record<string, any> {
+    if (!identifier(key)) throw new AvailabilityRecordError();
+    return this.db.transaction(() => {
+      const row = this.db.prepare("SELECT resolution_body FROM availability_requests WHERE key=? AND scope=? AND local_id=? AND lane='live' AND resolution_receipt IS NULL")
+        .get(key, scope, localId) as { resolution_body: string | null } | undefined;
+      if (!row) throw new AvailabilityRecordError();
+      if (row.resolution_body) return decode(row.resolution_body);
+      const saved = { ...body, resolutionId: randomUUID(), action: 'recover_or_seal' };
+      this.db.prepare('UPDATE availability_requests SET resolution_body=? WHERE key=? AND resolution_body IS NULL').run(stableJson(saved), key);
+      return saved;
+    })();
+  }
+  completeResolution(scope: string, localId: string, key: string, body: Record<string, unknown>, receipt: Record<string, unknown>): void {
+    // Original bytes and unknown object identity remain archived in place. Only a verified terminal proof removes the scheduling barrier.
+    const changed = this.db.prepare(`UPDATE availability_requests SET resolution_receipt=?
+      WHERE key=? AND scope=? AND local_id=? AND lane='live' AND resolution_body=? AND resolution_receipt IS NULL`)
+      .run(stableJson(receipt), key, scope, localId, stableJson(body)).changes;
+    if (!changed) throw new AvailabilityRecordError();
   }
   pending(scope: string, lane: 'control' | 'live', localId?: string): AvailabilityRequest[] {
-    return (this.db.prepare(`SELECT * FROM availability_requests WHERE scope=? AND lane=? ${localId ? 'AND local_id=?' : ''} ORDER BY key LIMIT 32`)
+    return (this.db.prepare(`SELECT * FROM availability_requests WHERE scope=? AND lane=? AND resolution_receipt IS NULL ${localId ? 'AND local_id=?' : ''} ORDER BY key LIMIT 32`)
       .all(scope, lane, ...(localId ? [localId] : [])) as any[]).map(row => this.decodeRequest(row));
   }
   saveRequest(value: AvailabilityRequest): AvailabilityRequest {
@@ -169,7 +191,7 @@ export class RemoteAvailabilityStore {
     if (previous) return previous;
     const body = stableJson(value), bytes = Buffer.byteLength(body);
     const used = this.db.prepare('SELECT COALESCE(SUM(bytes),0) AS bytes FROM availability_requests WHERE lane=?').get(value.lane) as { bytes: number };
-    if (bytes > 256 * 1024 || used.bytes + bytes > (value.lane === 'live' ? 32 : 16) * 1024 * 1024) throw new Error('REMOTE_AVAILABILITY_QUEUE_BUDGET');
+    if (bytes > (value.pathname ? 256 : 1024) * 1024 || used.bytes + bytes > (value.lane === 'live' ? 32 : 16) * 1024 * 1024) throw new Error('REMOTE_AVAILABILITY_QUEUE_BUDGET');
     this.db.prepare('INSERT INTO availability_requests(key,lane,scope,local_id,body,bytes,object_id,object_kind,request_hash) VALUES(?,?,?,?,?,?,?,?,?)')
       .run(value.key, value.lane, value.scope, value.localId, body, bytes, identifier(value.body.objectId) ? value.body.objectId : null,
         ['message','tool'].includes(value.body.objectKind) ? value.body.objectKind : null, payloadHash(value));

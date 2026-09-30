@@ -87,7 +87,25 @@ export class RemoteTaskSyncState {
   /** Network retry deadlines must not prevent local projection of healthy new events. */
   projectionEligible(context: TaskSyncContext, id: string): boolean {
     const value = this.get(context, id);
-    return !value || value.phase !== TaskSyncPhase.Isolated && value.phase !== TaskSyncPhase.Closed;
+    if (!value || value.phase !== TaskSyncPhase.Isolated && value.phase !== TaskSyncPhase.Closed) return true;
+    if (value.phase !== TaskSyncPhase.Isolated || !['REMOTE_PROJECTION_BUDGET','REMOTE_PROJECTION_PUBLICATION_INVALID'].includes(value.reason)) return false;
+    if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_projection_rechecks'").get()) return false;
+    // A recheck grants local encoding only. Task admission, command execution and network reconciliation keep their own guards.
+    return !!this.db.prepare(`SELECT 1 FROM remote_projection_failures f JOIN remote_projection_rechecks r ON r.session_id=f.session_id
+      WHERE f.session_id=? AND f.reason=? AND f.retry_at<?`).get(id, value.reason, NEVER);
+  }
+  reconcileProjectionFailures(context: TaskSyncContext, canReconcile: (id: string) => boolean): void {
+    if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_projection_rechecks'").get()) return;
+    const rows = this.db.prepare(`SELECT s.local_session_id FROM remote_sync_task_state s
+      JOIN remote_projection_rechecks p ON p.session_id=s.local_session_id
+      JOIN remote_session_revisions r ON r.session_id=s.local_session_id AND r.clean_revision=r.revision
+      WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND phase='isolated'
+        AND reason IN ('REMOTE_PROJECTION_BUDGET','REMOTE_PROJECTION_PUBLICATION_INVALID')
+        AND NOT EXISTS(SELECT 1 FROM remote_projection_failures f WHERE f.session_id=s.local_session_id) LIMIT 16`)
+      .all(...identity(context)) as Array<{ local_session_id: string }>;
+    for (const row of rows) if (canReconcile(row.local_session_id)) this.db.prepare(`UPDATE remote_sync_task_state SET phase='reconciling',next_retry_at=server_retry_at
+      WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=? AND phase='isolated'`)
+      .run(...this.args(context,row.local_session_id));
   }
   /** One compatibility probe for old, ambiguous isolation. This grants scheduling only:
    * the bridge must reconcile original operations and verify the exact remote stream. */

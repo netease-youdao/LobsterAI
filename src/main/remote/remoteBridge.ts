@@ -113,6 +113,7 @@ export class RemoteBridge {
   private accountRoute: string;
   private targetId: string | null = null;
   private admissionDeferred = false;
+  private admissionRetryAt = 0;
   private discoveredTarget: RemoteSyncTargetIdentity | null = null;
   private readonly targets: RemoteSyncTargetStore;
   private readonly taskSync: RemoteTaskSyncState;
@@ -219,6 +220,8 @@ export class RemoteBridge {
         environment: this.remoteEnvironment(), scope: `${this.targetId}:${this.owner.userId}:${this.owner.scopeKey}:${this.registration.deviceId}`,
         owner: this.owner, deviceId: this.registration.deviceId, generation: this.generation || '',
         historySupported: this.capabilitySnapshot?.capabilities?.includes('sync_recovery_v3') === true,
+        checkpointPagesSupported: this.capabilitySnapshot?.capabilities?.includes('control_checkpoint_pages_v1') === true,
+        publicationResolutionSupported: this.capabilitySnapshot?.capabilities?.includes('live_publication_resolution_v1') === true,
         supported: !!this.generation && !!this.registration.syncTarget
           && ['control_facts_v1', 'live_projections_v3'].every(value => this.capabilitySnapshot?.capabilities?.includes(value)),
       } : null,
@@ -230,7 +233,7 @@ export class RemoteBridge {
     deps.store.setControlAdmission(() => !this.targetId || !!this.owner && !this.targets.controlAdmissionBlocked(this.owner, this.targetId));
     deps.store.setTaskProjectionEligibility(sessionId => {
       const context = this.taskContext();
-      return !this.availability.ownsHistory(sessionId) && (!context || this.taskSync.projectionEligible(context, sessionId));
+      return this.availability.legacyHistoryAllowed(sessionId) && (!context || this.taskSync.projectionEligible(context, sessionId));
     });
     this.importSnapshots = new RemoteImportSnapshots(deps.store);
     this.deletions = deps.deletion ? new RemoteSessionDeletionClient({ ...deps.deletion, store: deps.store, security: deps.security,
@@ -353,16 +356,16 @@ export class RemoteBridge {
         AND NOT EXISTS(SELECT 1 FROM remote_state closed WHERE closed.key='deletionClosed:'||s.local_id)
         AND (s.needs_snapshot=1 OR s.source_seq>s.ack_seq OR EXISTS(SELECT 1 FROM remote_dirty d WHERE d.session_id=s.local_id))`)
       .all(this.owner.userId, this.owner.scopeKey) as Array<{ local_id: string; oldest: number | null }> : [];
-    const legacyPending = pendingRows.filter(row => !this.availability.ownsHistory(row.local_id));
+    const legacyPending = pendingRows.filter(row => this.availability.legacyHistoryAllowed(row.local_id));
     const availabilityHealth = this.availability.health();
     const oldest = legacyPending.reduce<number | null>((value, row) => row.oldest && (value === null || row.oldest < value) ? row.oldest : value, null);
     const pending = { count: legacyPending.length + (availabilityHealth?.pendingSessions || 0), oldest };
     const recoveryRequired = this.deps.store.needsSecurityRecovery();
     const projectionFailed = !!this.owner && (this.deps.store.db.prepare(`SELECT f.session_id FROM remote_projection_failures f JOIN cowork_session_ownership o ON o.session_id=f.session_id WHERE o.owner_user_id=? AND o.owner_scope_key=?`).all(this.owner.userId, this.owner.scopeKey) as Array<{ session_id: string }>)
-      .some(row => !this.availability.ownsHistory(row.session_id));
+      .some(row => this.availability.legacyHistoryAllowed(row.session_id));
     const filesHealth = this.files?.health();
     const filesDegraded = filesHealth?.degraded === true;
-    const taskHealth = this.taskContext() ? this.taskSync.health(this.taskContext()!, id => this.sessionAdmitted(id) && !this.availability.ownsHistory(id)) : undefined;
+    const taskHealth = this.taskContext() ? this.taskSync.health(this.taskContext()!, id => this.sessionAdmitted(id) && this.availability.legacyHistoryAllowed(id)) : undefined;
     const syncFailed = Boolean(taskHealth?.failedSessions || availabilityHealth?.degraded || !availabilityHealth?.sessions && this.sessionSyncFailed);
     const reason = recoveryRequired ? RemoteSyncHealthReason.LocalRecovery : this.connectionRemoved ? RemoteSyncHealthReason.Removed : this.quotaBlocked ? RemoteSyncHealthReason.Quota
       : (syncFailed || projectionFailed) ? RemoteSyncHealthReason.Projection : filesDegraded ? RemoteSyncHealthReason.Files : settings.enabled && !connected ? RemoteSyncHealthReason.Connection : undefined;
@@ -426,6 +429,7 @@ export class RemoteBridge {
       const id = changes.retrySessionId, context = this.taskContext();
       if (!context || !sameOwner(this.deps.store.owner(id), context.owner) || !this.sessionAdmitted(id)) throw new Error('Task synchronization identity is not verified');
       if (!this.taskSync.manualRetry(context, id)) throw new Error('Task synchronization retry is unavailable');
+      this.deps.store.requestProjectionRecheck(id);
       this.files?.retrySession(id);
       this.sessionChecks.delete(id); this.taskMemoryBlocks.delete(id);
       this.changed(); this.schedule(0); return this.state();
@@ -649,7 +653,10 @@ export class RemoteBridge {
         }
       }
       if (this.syncPaused()) { await this.reconcilePaused(); this.backoff = Math.max(30000, this.retryAfter - Date.now()); return; }
-      if (this.admissionDeferred) { this.backoff = IDLE_POLL_MS; return; }
+      if (this.admissionDeferred) {
+        await this.resumeAdmission();
+        if (this.admissionDeferred) { this.backoff = Math.max(100, this.admissionRetryAt - Date.now()); return; }
+      }
       if (this.connectionManagementKnown && !this.generation) { this.backoff = 5000; return; }
       this.availability.wake();
       if (Date.now() >= Math.max(this.commandPollAt, this.commandRetryAt)) {
@@ -1055,7 +1062,8 @@ export class RemoteBridge {
       if (error instanceof RemoteSyncAdmissionBudgetError && epoch === this.accountGeneration && this.registration === result
         && this.accountRoute === this.deps.getApiBaseUrl() && sameOwner(this.owner, this.deps.getOwner())) {
         // Keep authenticated transport usable. No task or control is admitted into this unactivated target.
-        this.targetId = error.targetId; this.admissionDeferred = true; this.sessionSyncFailed = true;
+        this.targetId = error.targetId; this.admissionDeferred = true; this.admissionRetryAt = 0; this.sessionSyncFailed = true;
+        await this.resumeAdmission();
         this.changed(); return;
       }
       if (this.registration === result) this.registration = null;
@@ -1065,6 +1073,45 @@ export class RemoteBridge {
     if (this.sameAccountAccess) this.connectionReason = RemoteConnectionReason.Connecting;
     if (!this.controls().length) this.queueControl(this.settings());
     this.changed();
+  }
+  /** One durable admission page per turn; only the completed owner gate can bind the target. */
+  private async resumeAdmission(): Promise<void> {
+    const owner = this.owner, registration = this.registration, epoch = this.accountGeneration;
+    if (!this.admissionDeferred || !owner || !registration || Date.now() < this.admissionRetryAt || !this.settings().enabled) return;
+    const current = (): boolean => epoch === this.accountGeneration && this.registration === registration
+      && this.accountRoute === this.deps.getApiBaseUrl() && sameOwner(owner, this.deps.getOwner()) && this.settings().enabled;
+    try {
+      const activated = this.targets.resumeAdmission({ owner, deviceId: registration.deviceId, syncTarget: registration.syncTarget || null });
+      this.admissionRetryAt = Date.now() + 100;
+      if (!activated || !current()) return;
+      this.targetId = activated.targetId;
+      this.deps.store.setFileEnvironment(this.targetId);
+      this.connections.reset(); this.deps.input?.models.resetPublication();
+      this.agentCatalog?.reset(); this.deps.input?.preparations.reset?.();
+      const connection = this.savedConnectionState<{ state: string; version: string }>();
+      this.connectionRemoved = connection?.state === RemoteDeviceConnectionState.Removed;
+      this.connectionVersion = connection?.version || '0';
+      await this.refreshCapabilities(this.capabilitySnapshot);
+      if (!current()) return;
+      const pendingKey = this.pendingConfigurationKey(), pending = this.deps.store.get<PendingConfiguration>(pendingKey);
+      if (pending?.route === this.accountRoute) {
+        if (activated.epoch > 1) for (const changes of pending.changes) {
+          if (!current()) return;
+          await this.configure(changes);
+        }
+        if (!current()) return;
+        this.deps.store.remove(pendingKey);
+      }
+      if (!current()) return;
+      this.admissionDeferred = false; this.sessionSyncFailed = false;
+      this.sessionChecks.clear(); this.applyProjectionCapabilities();
+      if (this.sameAccountAccess) this.connectionReason = RemoteConnectionReason.Connecting;
+      if (!this.controls().length) this.queueControl(this.settings());
+      this.availability.wake(); this.changed();
+    } catch (error) {
+      this.admissionRetryAt = Date.now() + 30_000;
+      remoteDiagnosticLog('remote.admission.deferred', { lane: 'history', reason: 'ADMISSION_PENDING', error }, 'warn');
+    }
   }
   private async reconcileRegistrationImport(row: SyncRow): Promise<void> {
     const pending = this.deps.store.get<SavedImport>(`import:${row.local_id}`);
@@ -1295,6 +1342,7 @@ export class RemoteBridge {
     return this.owner && this.registration ? { owner: this.owner, target: this.remoteEnvironment(), deviceId: this.registration.deviceId } : null;
   }
   private sessionAdmitted(id: string): boolean {
+    if (this.deps.store.isRunIsolated(id)) return false;
     if (!this.targetId || !this.owner || !this.registration) return this.targetId === null && !!this.registration;
     return this.targets.isAdmitted(this.owner, this.registration.deviceId, this.targetId, id);
   }
@@ -1303,9 +1351,10 @@ export class RemoteBridge {
     if (!context) return;
     const current = this.syncContext();
     if (!current()) return;
+    this.taskSync.reconcileProjectionFailures(context, id => this.sessionAdmitted(id) && this.availability.legacyHistoryAllowed(id));
     // Older clients classified wrapped transport errors as permanent task failures.
     // A one-time probe reuses the original mapping/receipt checks; it grants no ACK or execution permission.
-    const recovered = this.taskSync.reconcileLegacyFailures(context, row => !this.availability.ownsHistory(row.local_id)
+    const recovered = this.taskSync.reconcileLegacyFailures(context, row => this.availability.legacyHistoryAllowed(row.local_id)
       && !this.deps.store.isSyncClosed(row.local_id)
       && (!row.sync_environment || this.targets.matchesEnvironment(context.target, row.sync_environment)));
     if (recovered.promotedIds.length) remoteDiagnosticLog('remote.sync.task_deferred', {
@@ -1324,7 +1373,7 @@ export class RemoteBridge {
       while (cursor < rows.length && current() && !sharedFailure && (!stepwise || Date.now() >= this.historyRetryAt)) {
         const row = rows[cursor++];
         try {
-        if (this.availability.ownsHistory(row.local_id) || this.taskMemoryBlocks.has(row.local_id)) continue;
+        if (!this.availability.legacyHistoryAllowed(row.local_id) || this.taskMemoryBlocks.has(row.local_id)) continue;
         if (!this.taskSync.eligible(context, row.local_id)) {
           const state = this.taskSync.get(context, row.local_id);
           this.logSyncSkipped(row, state?.phase === 'backoff' ? 'retry_backoff' : 'task_isolated', state?.next_retry_at ?? null);
@@ -1351,13 +1400,13 @@ export class RemoteBridge {
     if (!current()) return;
     await this.ensureRetentionFence();
     if (!current()) return;
-    this.sessionSyncFailed = this.taskSync.health(context, id => !this.availability.ownsHistory(id)).failedSessions > 0;
+    this.sessionSyncFailed = this.taskSync.health(context, id => this.availability.legacyHistoryAllowed(id)).failedSessions > 0;
   }
   private async syncSession(row: SyncRow, current: () => boolean, context: TaskSyncContext, stepwise: boolean): Promise<void> {
     const id = row.local_id;
     const telemetry = captureRemoteTelemetry({ localSessionId: id, sessionId: row.session_id, deviceId: context.deviceId,
       remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey, lane: 'history', publicationKind: 'legacy_batch', operationKind: 'legacy_batch' });
-    if (this.availability.ownsHistory(id)) return;
+    if (!this.availability.legacyHistoryAllowed(id)) return;
     if (this.deps.store.isSyncClosed(id)) { this.taskSync.fail(context, id, { phase: 'closed', scope: 'session', reason: 'SESSION_DELETED' }); return; }
     const previous = this.deps.store.get<any>(`syncFailure:${id}`);
     const oldState = this.taskSync.get(context, id);
@@ -1383,10 +1432,11 @@ export class RemoteBridge {
       if (state.deleted) { this.taskSync.fail(context, id, { phase: 'closed', scope: 'session', reason: 'SESSION_DELETED' }); return; }
       if (stepwise) return;
     }
-    const projectionFailure = this.deps.store.db.prepare('SELECT reason FROM remote_projection_failures WHERE session_id=?').get(id) as { reason: string } | undefined;
+    const projectionFailure = this.deps.store.db.prepare('SELECT reason,retry_at FROM remote_projection_failures WHERE session_id=?').get(id) as { reason: string; retry_at: number } | undefined;
     if (projectionFailure) {
       // The projection worker owns its retry deadline and clears this row after publication.
-      if (isTransientProjectionFailure(projectionFailure.reason)) { this.taskSync.defer(context, id, 1000); return; }
+      if (isTransientProjectionFailure(projectionFailure.reason) || ['REMOTE_PROJECTION_BUDGET','REMOTE_PROJECTION_PUBLICATION_INVALID'].includes(projectionFailure.reason)
+        && projectionFailure.retry_at < Number.MAX_SAFE_INTEGER) { this.taskSync.defer(context, id, 1000); return; }
       throw new RemoteTaskDataError(projectionFailure.reason);
     }
     if (this.deps.store.projectionPublishing(id) || this.ownershipSyncBlocked(id)) { this.taskSync.defer(context, id, 5000); return; }
@@ -2089,6 +2139,7 @@ export class RemoteBridge {
     const store = this.deps.store;
     if (!store.areControlsAdmitted()) return false;
     const boundSessionId = command.sessionId ? store.localSessionId(command.sessionId) : null;
+    if (boundSessionId && store.isRunIsolated(boundSessionId) || localSessionId && store.isRunIsolated(localSessionId)) return false;
     return (!boundSessionId || store.isTaskAdmitted(boundSessionId)) && (!localSessionId || store.isTaskAdmitted(localSessionId));
   }
   private async claim(): Promise<boolean> {
@@ -2184,7 +2235,7 @@ export class RemoteBridge {
     const commitExecuting = (): void => { entry.state = 'executing'; this.deps.store.put(this.inboxKey(entry), entry); };
     if (this.deps.security) await this.deps.security.commit(entry.command.commandId, {
       owner: entry.owner, commandId: entry.command.commandId, requestHash: entry.command.requestHash,
-      sessionId: entry.localSessionId, runId: entry.runId, phase: 'executing',
+      sessionId: entry.localSessionId, runId: entry.runId, phase: 'executing', inboxKey: this.inboxKey(entry),
     }, commitExecuting);
     else commitExecuting();
     // Disk finalization may outlive a claim, switch, disable or remove. Never execute on the old permit.

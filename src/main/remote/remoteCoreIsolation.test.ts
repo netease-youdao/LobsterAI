@@ -124,3 +124,106 @@ describe('bounded safety-record scans', () => {
     expect(() => store.get('approval:a:bad')).toThrow();
   });
 });
+
+
+describe('desktop fault-containment dispatch boundaries', () => {
+  it('preserves a damaged file ordinal while committing a text run', () => {
+    const { store, db, create } = fixture(); create('s');
+    db.prepare('INSERT INTO remote_state VALUES (?,?)').run('fileRunOrdinal:s', '{');
+    expect(() => store.beginRun('s', 'run')).not.toThrow();
+    expect(store.run('s')?.runId).toBe('run');
+    expect(db.prepare("SELECT value FROM remote_state WHERE key='fileRunOrdinal:s'").get()).toEqual({ value: '{' });
+    expect(store.get('fileRunOrdinal:s:run')).toBeNull();
+  });
+  it('rejects a late send after settlement wins, including after a new run starts', () => {
+    const { store, create } = fixture(); create('s'); store.beginRun('s', 'old'); store.prepareLocalDispatch('s');
+    expect(store.settleUndispatchedRun('s', 'old')).toBe(true);
+    expect(() => store.markExecutionDispatch('s', 'old')).toThrow('REMOTE_RUN_CHANGED');
+    store.beginRun('s', 'new'); store.prepareLocalDispatch('s');
+    expect(() => store.markExecutionDispatch('s', 'old')).toThrow('REMOTE_RUN_CHANGED');
+    expect(store.run('s')?.status).toBe('starting');
+  });
+  it('retains the occupied run when dispatch wins before settlement', () => {
+    const { store, create } = fixture(); create('s'); store.beginRun('s', 'run'); store.prepareLocalDispatch('s');
+    store.markExecutionDispatch('s', 'run');
+    expect(store.settleUndispatchedRun('s', 'run')).toBe(false);
+    expect(store.run('s')?.status).toBe('starting');
+    expect(() => store.beginRun('s')).toThrow('REMOTE_SESSION_BUSY');
+  });
+  it('does not infer never-dispatched from a mobile or unclassified run', () => {
+    const { store, create } = fixture(); create('mobile'); create('unknown');
+    store.beginRun('mobile', 'm', 'command'); store.prepareLocalDispatch('mobile');
+    store.beginRun('unknown', 'u');
+    expect(store.settleUndispatchedRun('mobile', 'm')).toBe(false);
+    expect(store.settleUndispatchedRun('unknown', 'u')).toBe(false);
+  });
+  it('ignores a revoked old decision body only with an immutable binding and trusted terminal run', () => {
+    const { store, db, create } = fixture(); create('s'); store.beginRun('s', 'old');
+    store.put('approval:s:a', { approvalId: 'a', runId: 'old', status: 'pending', approvalVersion: '1' });
+    store.updateRun('s', 'succeeded'); store.beginRun('s', 'new');
+    db.prepare("UPDATE remote_state SET value='{' WHERE key='approval:s:a'").run();
+    expect(() => store.refreshApprovalRunState('s', true)).not.toThrow();
+    expect(store.run('s')?.status).toBe('running');
+    expect(() => store.put('approval:s:a', { approvalId: 'a', runId: 'new', status: 'pending' })).toThrow('REMOTE_DECISION_BINDING_CHANGED');
+    expect(db.prepare("SELECT value FROM remote_state WHERE key='approval:s:a'").get()).toEqual({ value: '{' });
+  });
+  it('keeps pre-upgrade unbound corrupt decisions and current corrupt decisions blocking', () => {
+    const { store, db, create } = fixture(); create('s'); store.beginRun('s', 'run');
+    db.prepare('INSERT INTO remote_state VALUES (?,?)').run('approval:s:legacy', '{');
+    expect(() => store.refreshApprovalRunState('s', true)).toThrow();
+    db.prepare("DELETE FROM remote_state WHERE key='approval:s:legacy'").run();
+    store.put('approval:s:current', { approvalId: 'current', runId: 'run', status: 'pending' });
+    db.prepare("UPDATE remote_state SET value='{' WHERE key='approval:s:current'").run();
+    expect(() => store.refreshApprovalRunState('s', true)).toThrow();
+  });
+});
+
+
+it('keeps optional projection worker DDL out of deferred core startup', () => {
+  const { db } = fixture();
+  db.exec('CREATE VIEW remote_projection_worker_budget AS SELECT 1 AS unavailable');
+  const store = new RemoteStore(db, { deferredProjection: true, deferSynchronization: true });
+  expect(() => store.initializeSynchronization()).toThrow();
+  store.transaction(() => { db.prepare("INSERT INTO cowork_sessions VALUES('desktop','Desktop',1,1,'idle')").run(); });
+  expect(() => store.beginRun('desktop')).not.toThrow();
+});
+
+
+it('selected control questions keep private facts authoritative and enforce materialization budgets', () => {
+  const { store, create } = fixture(); create('s'); store.beginRun('s', 'run');
+  store.put('question:s:q', { questionId: 'q', runId: 'run', questionVersion: '1', status: 'pending' });
+  store.put('questionDecision:request', { binding: { owner }, state: { sessionId: 's', requestId: 'request', questionId: 'q', runId: 'run', questionVersion: '2', status: 'resolved' } });
+  expect(store.questionStates('s', undefined, ['q'])).toMatchObject([{ questionId: 'q', questionVersion: '2', status: 'resolved' }]);
+  store.put('question:s:large', { questionId: 'large', runId: 'run', text: 'x'.repeat(32768) });
+  expect(() => store.questionStates('s', undefined, ['large'])).toThrow('REMOTE_CONTROL_DECISION_BUDGET');
+  for (let n = 0; n < 65; n++) store.put(`questionDecision:extra-${n}`, { binding: { owner }, state: { sessionId: 's', questionId: 'q', runId: 'run', questionVersion: '2' } });
+  expect(() => store.questionStates('s', undefined, ['q'])).toThrow('REMOTE_CONTROL_DECISION_BUDGET');
+});
+
+
+it('upgrades old tool triggers before desktop writes even when the derived membership schema is damaged', () => {
+  const { store, db, create } = fixture(); create('s'); store.beginRun('s', 'run');
+  db.exec(`CREATE TABLE remote_live_tool_sources(incompatible TEXT);
+    DROP TRIGGER remote_live_tool_insert;
+    CREATE TRIGGER remote_live_tool_insert AFTER INSERT ON cowork_messages WHEN NEW.type='tool_use' BEGIN
+      INSERT INTO remote_live_tool_sources(session_id,message_id,tool_id) VALUES(NEW.session_id,NEW.id,NEW.id); END;`);
+  const reopened = new RemoteStore(db, { deferredProjection: true, deferSynchronization: true, restoreRuns: false });
+  expect(() => reopened.initializeSynchronization()).toThrow();
+  expect(() => reopened.transaction(() => db.prepare("INSERT INTO cowork_messages VALUES('tool','s','tool_use','hello','{}',2,1)").run())).not.toThrow();
+  expect(db.prepare("SELECT content FROM cowork_messages WHERE id='tool'").get()).toEqual({ content: 'hello' });
+  expect(db.prepare("SELECT revision FROM remote_live_tools WHERE session_id='s' AND tool_id='tool'").get()).toEqual({ revision: 1 });
+  expect(reopened.run('s')?.runId).toBe('run');
+  expect(reopened.owner('s')).toEqual(owner);
+  expect(db.prepare('PRAGMA table_info(remote_live_tool_sources)').all()).toMatchObject([{ name: 'incompatible' }]);
+});
+
+it('keeps tool edits and message deletion durable after optional membership cache failure', () => {
+  const { store, db, create } = fixture(); create('s'); store.initializeSynchronization();
+  store.transaction(() => db.prepare("INSERT INTO cowork_messages VALUES('tool','s','tool_use','hello','{}',2,1)").run());
+  db.exec('DROP TABLE remote_live_tool_sources');
+  expect(() => store.transaction(() => db.prepare("UPDATE cowork_messages SET content='updated' WHERE id='tool'").run())).not.toThrow();
+  expect(() => store.transaction(() => db.prepare("DELETE FROM cowork_messages WHERE id='tool'").run())).not.toThrow();
+  expect(db.prepare("SELECT revision,deleted FROM remote_live_revisions WHERE session_id='s' AND object_id='tool'").get()).toEqual({ revision: 3, deleted: 1 });
+  expect(db.prepare("SELECT object_key FROM remote_control_pending WHERE session_id='s' AND object_key='message.deleted:tool'").get()).toBeTruthy();
+  expect(db.prepare("SELECT revision FROM remote_live_tools WHERE session_id='s' AND tool_id='tool'").get()).toEqual({ revision: 3 });
+});

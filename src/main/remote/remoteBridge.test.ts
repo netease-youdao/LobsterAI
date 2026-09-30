@@ -172,6 +172,8 @@ describe('device synchronization health', () => {
   });
   it('reports real pending content until its ACK even with no history scan in progress', () => {
     const { bridge, store } = fixture(); store.setEnabledOwner(owner); bridge.lastPong = Date.now();
+    bridge.stopped = false;
+    bridge.targetId = bridge.targets.activateLegacy({ owner, deviceId: 'desktop' }).targetId;
     try {
       store.transaction(() => {
         store.db.exec("INSERT INTO cowork_sessions VALUES('pending-task','Task',1,1,'idle')");

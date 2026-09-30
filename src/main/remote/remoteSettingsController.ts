@@ -4,6 +4,7 @@ export const PREVENT_SLEEP_STORE_KEY = 'prevent_sleep_enabled';
 
 interface SettingsDependencies {
   getRemoteState(): RemoteSettingsState;
+  getOwner?(): RemoteSettingsState['owner'];
   getAccountEpoch?(): string;
   getKeepAwakePreference(): boolean | undefined;
   saveKeepAwakePreference(enabled: boolean): void;
@@ -37,11 +38,17 @@ export class RemoteSettingsController {
 
   notify(): void {
     this.revision += 1;
-    this.deps.publish(this.state());
+    try { this.deps.publish(this.state()); }
+    catch { /* Optional power/remote observers cannot interrupt desktop lifecycle. */ }
   }
 
   restoreKeepAwake(): void {
-    if (!this.deps.getRemoteState().owner) {
+    try { this.restoreKeepAwakeOnce(); }
+    catch { this.powerError = 'KEEP_AWAKE_UNAVAILABLE'; this.notify(); }
+  }
+
+  private restoreKeepAwakeOnce(): void {
+    if (!(this.deps.getOwner ? this.deps.getOwner() : this.deps.getRemoteState().owner)) {
       // Logout releases the OS assertion without replacing the saved user preference.
       this.applyKeepAwake(false);
       return;

@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { payloadHash } from './canonical';
 import type { RemoteIdentity } from './installationIdentity';
 import { RemoteSecurityCoordinator } from './remoteSecurityCoordinator';
 import { RemoteSecurityJournal, type RemoteSecurityJournalIo } from './remoteSecurityJournal';
@@ -16,6 +17,7 @@ class MemoryIo implements RemoteSecurityJournalIo {
     this.writes++; if (this.failWrite === this.writes) throw new Error('injected disk failure');
     this.previous = this.current; this.current = content;
   }
+  async restart(): Promise<void> {}
   close(): void {}
 }
 const databases: Database.Database[] = [];
@@ -75,4 +77,104 @@ describe('remote execution durability stays outside ordinary desktop writes', ()
     await expect(f.security().available()).rejects.toThrow('explicit recovery');
     expect(f.store().owner('task')).toEqual(owner); expect(f.store().hasCompleteExecutionHistory()).toBe(false);
   });
+});
+
+
+it('recovers a failed finalize in the same coordinator without replaying apply', async () => {
+  const f = fixture(); f.create('task'); const security = f.security(); await security.available();
+  let calls = 0;
+  f.io.failWrite = f.io.writes + 2;
+  await expect(security.commit('command', { type: 'execute' }, () => { calls++; f.store().put('inbox:command', { state: 'executing' }); })).rejects.toThrow();
+  f.io.failWrite = 0;
+  await security.recover(); await security.available();
+  expect(calls).toBe(1);
+  expect(f.store().get('inbox:command')).toEqual({ state: 'executing' });
+  expect(f.store().needsSecurityRecovery()).toBe(false);
+});
+
+it('same-instance recovery does not cancel pending with a predecessor core', async () => {
+  const f = fixture(); f.create('task'); const security = f.security(); await security.available();
+  f.io.failWrite = f.io.writes + 2;
+  await expect(security.commit('command', {}, () => f.store().put('inbox:command', { state: 'executing' }))).rejects.toThrow();
+  f.store().remove('securityJournalHead'); f.io.failWrite = 0;
+  await security.recover();
+  await expect(security.available()).rejects.toThrow('explicit recovery');
+  expect(f.store().get('inbox:command')).toEqual({ state: 'executing' });
+  expect(f.store().needsSecurityRecovery()).toBe(true);
+});
+
+
+it('scopes a damaged positively local run only after signed ownership and journal verification', async () => {
+  const f = fixture(); f.create('bad'); f.create('good'); await f.security().available();
+  f.store().beginRun('bad', 'run'); f.store().prepareLocalDispatch('bad', { prompt: 'test' });
+  f.db.prepare("UPDATE remote_state SET value='{' WHERE key='run:bad'").run();
+  f.reopen(); await f.security().available();
+  expect(f.store().isRunIsolated('bad')).toBe(true);
+  expect(f.store().needsSecurityRecovery()).toBe(false);
+  expect(f.store().hasCompleteExecutionHistory()).toBe(false);
+  expect(() => f.store().beginRun('bad')).toThrow();
+  expect(() => f.store().beginRun('good')).not.toThrow();
+  expect(f.db.prepare("SELECT value FROM remote_state WHERE key='run:bad'").get()).toEqual({ value: '{' });
+});
+
+it.each(['im:test:default', 'cron:job'])('uses bound source and observed engine identity to scope %s runs', async source => {
+  const f = fixture(); f.create('bad'); f.create('good'); await f.security().available();
+  f.store().bindSource(source, owner); f.store().bindExecutionSource('bad', source);
+  f.store().beginRun('bad', 'run');
+  f.store().put('gatewayRun:bad', { remoteRunId: 'run', runId: 'gateway-run' });
+  f.store().recordExternalExecution('bad', 'gateway-run');
+  f.db.prepare("UPDATE remote_state SET value='{' WHERE key='run:bad'").run();
+  f.reopen(); await f.security().available();
+  expect(f.store().isRunIsolated('bad')).toBe(true);
+  expect(f.store().hasCompleteExecutionHistory()).toBe(false);
+  expect(() => f.store().beginRun('good')).not.toThrow();
+});
+
+it('does not reclassify a mobile or unknown run as local because command evidence is absent', async () => {
+  const f = fixture(); f.create('bad'); await f.security().available();
+  f.store().beginRun('bad', 'run', 'command');
+  f.store().remove('runCommand:bad');
+  f.db.prepare("UPDATE remote_state SET value='{' WHERE key='run:bad'").run();
+  f.reopen(); await expect(f.security().available()).rejects.toThrow('recovery');
+  expect(f.store().isRunIsolated('bad')).toBe(false);
+  expect(f.store().needsSecurityRecovery()).toBe(true);
+});
+
+it('keeps changed corrupt bytes under the shared fence until evidence is rechecked', async () => {
+  const f = fixture(); f.create('bad'); await f.security().available();
+  f.store().beginRun('bad', 'run'); f.store().prepareLocalDispatch('bad', { prompt: 'test' });
+  f.db.prepare("UPDATE remote_state SET value='{' WHERE key='run:bad'").run();
+  f.reopen(); await f.security().available();
+  f.db.prepare("UPDATE remote_state SET value='changed' WHERE key='run:bad'").run();
+  f.reopen(); await expect(f.security().available()).rejects.toThrow('recovery');
+  expect(f.store().needsSecurityRecovery()).toBe(true);
+});
+
+
+it.each([false, true])('mobile damaged-run scoping requires original signed command evidence (missing=%s)', async missing => {
+  const f = fixture(); f.create('bad'); f.create('good'); const security = f.security(); await security.available();
+  f.store().bindRemote('bad', 'remote-session', 'device');
+  f.store().beginRun('bad', 'run', 'command');
+  const request = { commandId: 'command', type: 'send_message', payload: { prompt: 'continue' } };
+  const operation = { owner, commandId: 'command', requestHash: payloadHash(request), sessionId: 'bad', runId: 'run', phase: 'executing', inboxKey: 'inbox:command' };
+  await security.commit('command', operation, () => f.store().put('inbox:command', {
+    owner, localSessionId: 'bad', remoteSessionId: 'remote-session', runId: 'run', state: 'executing', result: null,
+    command: { commandId: 'command', runId: 'run', type: 'send_message', request, requestHash: payloadHash(request),
+      claimId: 'claim', claimToken: 'permit', claimUntil: '2026-09-30T12:00:00Z' },
+  }));
+  expect(f.db.prepare("SELECT origin FROM local_execution_origin WHERE session_id='bad'").get()).toEqual({ origin: 'mobile' });
+  if (missing) f.store().remove('inbox:command');
+  f.db.prepare("UPDATE remote_state SET value='{' WHERE key='run:bad'").run();
+  f.reopen();
+  if (missing) {
+    await expect(f.security().available()).rejects.toThrow('recovery');
+    expect(f.store().isRunIsolated('bad')).toBe(false);
+  } else {
+    await f.security().available();
+    expect(f.store().isRunIsolated('bad')).toBe(true);
+    expect(f.store().isTaskAdmitted('bad')).toBe(false);
+    expect(f.store().isTaskAdmitted('good')).toBe(true);
+    expect(f.store().hasCompleteExecutionHistory()).toBe(false);
+    expect(f.store().get('inbox:command')).toMatchObject({ state: 'executing' });
+  }
 });

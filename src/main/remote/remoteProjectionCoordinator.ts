@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
+import { payloadHash } from './canonical';
 import { remoteDiagnostics } from './remoteDiagnostics';
 import { RemoteHistoryJob } from './remoteHistoryJob';
 import type { ProjectionWork } from './remoteProjectionWorker';
@@ -29,7 +30,12 @@ const tables = ['remote_projection', 'remote_reply_contents', 'remote_reply_chun
 export class RemoteProjectionCoordinator {
   private running: Promise<void> | null = null;
   private readonly encoder = new RemoteHistoryJob();
-  constructor(private store: RemoteStore, private workerPath = remoteWorkerPath(RemoteWorkerFile.Projection)) {}
+  private nextRecheck = 0;
+  constructor(private store: RemoteStore, private workerPath = remoteWorkerPath(RemoteWorkerFile.Projection)) {
+    store.db.exec(`CREATE TABLE IF NOT EXISTS remote_projection_worker_budget(session_id TEXT PRIMARY KEY,
+      fingerprint TEXT NOT NULL,attempts INTEGER NOT NULL,window_start INTEGER NOT NULL,next_retry INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS remote_projection_rechecks(session_id TEXT PRIMARY KEY,next_retry INTEGER NOT NULL);`);
+  }
   settled(): Promise<void> { return this.running || Promise.resolve(); }
   flush(): Promise<void> {
     if (this.running) return this.running;
@@ -43,6 +49,20 @@ export class RemoteProjectionCoordinator {
     });
   }
   private async once(): Promise<void> {
+    if (Date.now() >= this.nextRecheck) {
+      this.nextRecheck = Date.now() + 60_000;
+      const due = this.store.db.prepare(`SELECT f.session_id FROM remote_projection_failures f
+        LEFT JOIN remote_projection_rechecks r ON r.session_id=f.session_id
+        WHERE f.reason IN ('REMOTE_PROJECTION_BUDGET','REMOTE_PROJECTION_PUBLICATION_INVALID')
+          AND (r.next_retry IS NULL OR r.next_retry<=?) ORDER BY COALESCE(r.next_retry,0),f.session_id LIMIT 1`).get(Date.now()) as { session_id: string } | undefined;
+      if (due) {
+        this.store.db.prepare('INSERT INTO remote_projection_rechecks VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET next_retry=excluded.next_retry')
+          .run(due.session_id, Date.now() + 300_000);
+        this.store.requestProjectionRecheck(due.session_id);
+      }
+    }
+    const device = this.store.db.prepare("SELECT next_retry FROM remote_projection_worker_budget WHERE session_id='*'").get() as { next_retry: number } | undefined;
+    if (device && device.next_retry > Date.now()) return;
     const work = this.store.nextProjectionWork();
     if (!work) return;
     const id = work.sessionId;
@@ -166,6 +186,24 @@ export class RemoteProjectionCoordinator {
           : reason === 'REMOTE_PROJECTION_BUDGET' ? SyncTelemetry.Reason.Budget : SyncTelemetry.Reason.EncodingFailed,
         durationMs: Math.max(0, performance.now() - monotonicStart) });
       this.store.recordProjectionFailure(id, reason); remoteDiagnostics.record('projection.failed');
+      if (reason !== RemoteProjectionFailure.ContextChanged && (reason === RemoteProjectionFailure.WorkerExit || reason === 'REMOTE_PROJECTION_BUDGET')) {
+        this.store.db.transaction(() => {
+          const now = Date.now();
+          for (const key of [id, '*']) {
+            const fingerprint = payloadHash(key === '*' ? 'projection-worker-v1' : { sessionId: id, owner: work.owner,
+              environment: work.environment, deviceId: work.deviceId, encoderVersion: 1, reason });
+            const previous = this.store.db.prepare('SELECT * FROM remote_projection_worker_budget WHERE session_id=?').get(key) as
+              { fingerprint: string; attempts: number; window_start: number } | undefined;
+            const window = key === '*' ? 600_000 : 86_400_000;
+            const same = previous?.fingerprint === fingerprint && now - previous.window_start < window;
+            const attempts = same ? previous.attempts + 1 : 1, start = same ? previous.window_start : now;
+            const retry = attempts >= 6 ? start + window : key !== '*' && attempts >= 3 ? now + 300_000 : now + (key === '*' ? 0 : 30_000);
+            this.store.db.prepare(`INSERT INTO remote_projection_worker_budget VALUES(?,?,?,?,?) ON CONFLICT(session_id)
+              DO UPDATE SET fingerprint=excluded.fingerprint,attempts=excluded.attempts,window_start=excluded.window_start,next_retry=excluded.next_retry`)
+              .run(key, fingerprint, attempts, start, retry);
+          }
+        })();
+      }
       console.warn('[RemoteSync] Projection deferred without rolling back local state', { localSessionId: id, reason });
     } finally {
       remoteDiagnostics.gauge('projection.queue', 0); remoteDiagnostics.gauge('projection.durationMs', Date.now() - startedAt);

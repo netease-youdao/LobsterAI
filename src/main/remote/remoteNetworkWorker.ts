@@ -1,6 +1,6 @@
-import { RemoteNetworkFailure as Failure, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message } from './remoteNetworkProtocol';
+import { remoteNetworkCapacities, RemoteNetworkFailure as Failure, type RemoteNetworkLane, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message, remoteNetworkRequestLane } from './remoteNetworkProtocol';
 
-const requests = new Map<string, AbortController>();
+const requests = new Map<string, { controller: AbortController; lane: RemoteNetworkLane }>();
 let socket: WebSocket | null = null;
 let socketId: string | null = null;
 let frameSeq = 0, windowStart = Date.now(), framesInWindow = 0;
@@ -32,8 +32,11 @@ function closeSocket(code = 1000): void {
 async function fetchRequest(message: any): Promise<void> {
   const { id } = message;
   if (!validId(id) || requests.has(id)) return;
-  if (requests.size >= Limit.Requests) { emit({ type: Message.Result, id, error: Failure.Busy }); return; }
-  const controller = new AbortController(); requests.set(id, controller);
+  let lane: RemoteNetworkLane;
+  try { lane = remoteNetworkRequestLane(message.url, message.method); }
+  catch { emit({ type: Message.Result, id, error: Failure.RequestInvalid }); return; }
+  if (requests.size >= Limit.Requests || [...requests.values()].filter(request => request.lane === lane).length >= remoteNetworkCapacities[lane]) { emit({ type: Message.Result, id, error: Failure.Busy }); return; }
+  const controller = new AbortController(); requests.set(id, { controller, lane });
   const timer = setTimeout(() => controller.abort(), 30000);
   try {
     const url = new URL(message.url);
@@ -74,7 +77,7 @@ async function fetchRequest(message: any): Promise<void> {
 process.on('message', (message: any) => {
   if (!message || typeof message !== 'object') return;
   if (message.type === Message.Fetch) { void fetchRequest(message); return; }
-  if (message.type === Message.Cancel && validId(message.id)) { requests.get(message.id)?.abort(); return; }
+  if (message.type === Message.Cancel && validId(message.id)) { requests.get(message.id)?.controller.abort(); return; }
   if (message.type === Message.Socket && validId(message.id)) {
     closeSocket();
     try {
@@ -112,4 +115,4 @@ process.on('message', (message: any) => {
   }
 });
 const alive = setInterval(() => { emit({ type: Message.Alive, rss: process.memoryUsage().rss }); }, 1000);
-process.on('disconnect', () => { clearInterval(alive); for (const request of requests.values()) request.abort(); closeSocket(); process.exit(0); });
+process.on('disconnect', () => { clearInterval(alive); for (const request of requests.values()) request.controller.abort(); closeSocket(); process.exit(0); });
