@@ -2,6 +2,8 @@ import { createHash } from 'crypto';
 
 import { RemoteSyncConflict } from '../../shared/remote/constants';
 import { enqueueRemoteLog } from './remoteLogSink';
+import { remoteTransportErrorMetadata } from './remoteNetworkError';
+import { RemoteNetworkFailure } from './remoteNetworkProtocol';
 
 /** Diagnostic metadata only. Never pass raw requests, responses or errors to the logger. */
 export const REMOTE_SYNC_REQUEST_ID_HEADER = 'X-Remote-Request-Id';
@@ -13,6 +15,7 @@ const SyncOperation = {
 const eventTypes = new Set(['session.upsert', 'session.deleted', 'message.upsert', 'message.delta', 'message.deleted', 'tool.upsert', 'run.updated', 'approval.updated']);
 const lifecycleStates = new Set(['starting', 'running', 'waiting_approval', 'waiting_local', 'cancelling', 'reconciling', 'succeeded', 'failed', 'cancelled', 'interrupted', 'pending', 'approved', 'rejected', 'expired', 'streaming', 'complete', 'error', 'queued', 'waiting_user', 'unavailable', 'uploading', 'committed', 'aborted']);
 const validationMessages = new Set([
+  ...Object.values(RemoteNetworkFailure),
   'Remote ACK outside durable local bounds', 'Remote batch ACK identity mismatch',
   'Remote import receipt identity mismatch', 'Import receipt identity mismatch', 'Import abortion is not confirmed',
   'REMOTE_IMPORT_BUDGET', 'REMOTE_IMPORT_RECORD_LIMIT', 'REMOTE_IMPORT_PART_UNAVAILABLE', 'REMOTE_IMPORT_CONTEXT_CHANGED',
@@ -83,9 +86,9 @@ export function remoteSyncErrorMetadata(error: unknown): Record<string, any> {
   return { code: count(value.code), httpStatus: count(value.httpStatus), reason: reason(details.reason), reasonDetail: reason(details.reasonDetail),
     requestId: remoteSyncRequestId(value.requestId) ?? remoteSyncRequestId(details.requestId),
     validation: validationMessages.has(value.message) ? value.message : null,
-    errorType: ['Error', 'RemoteApiError', 'AbortError', 'TimeoutError', 'TypeError', 'SyntaxError', 'SqliteError'].includes(value.name) ? value.name : 'Error',
+    errorType: ['Error', 'RemoteApiError', 'AbortError', 'TimeoutError', 'TypeError', 'SyntaxError', 'SqliteError', 'AuthSessionRequestError', 'RemoteNetworkError'].includes(value.name) ? value.name : 'Error',
     expectedSourceSeq: sequence(details.expectedSourceSeq), currentSourceSeq: sequence(details.currentSourceSeq),
-    currentServerSeq: sequence(details.currentServerSeq), activeImportId: id(details.activeImportId) };
+    currentServerSeq: sequence(details.currentServerSeq), activeImportId: id(details.activeImportId), ...remoteTransportErrorMetadata(error) };
 }
 
 const operationRoutes: Array<[RegExp, string]> = [

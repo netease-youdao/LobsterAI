@@ -1,4 +1,4 @@
-import { RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message } from './remoteNetworkProtocol';
+import { RemoteNetworkFailure as Failure, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message } from './remoteNetworkProtocol';
 
 const requests = new Map<string, AbortController>();
 let socket: WebSocket | null = null;
@@ -32,7 +32,7 @@ function closeSocket(code = 1000): void {
 async function fetchRequest(message: any): Promise<void> {
   const { id } = message;
   if (!validId(id) || requests.has(id)) return;
-  if (requests.size >= Limit.Requests) { emit({ type: Message.Result, id, error: 'REMOTE_NETWORK_BUSY' }); return; }
+  if (requests.size >= Limit.Requests) { emit({ type: Message.Result, id, error: Failure.Busy }); return; }
   const controller = new AbortController(); requests.set(id, controller);
   const timer = setTimeout(() => controller.abort(), 30000);
   try {
@@ -41,11 +41,11 @@ async function fetchRequest(message: any): Promise<void> {
       || typeof message.method !== 'string' || !['GET','POST','PUT','PATCH','DELETE'].includes(message.method)
       || message.body !== undefined && typeof message.body !== 'string'
       || Buffer.byteLength(message.body || '') > Limit.BodyBytes
-      || Buffer.byteLength(JSON.stringify(message.headers)) > Limit.HeaderBytes) throw new Error('REMOTE_NETWORK_REQUEST_INVALID');
+      || Buffer.byteLength(JSON.stringify(message.headers)) > Limit.HeaderBytes) throw new Error(Failure.RequestInvalid);
     const response = await fetch(url, { method: message.method, headers: message.headers, body: message.body,
       signal: controller.signal, redirect: 'error' });
     const headers = Object.fromEntries(response.headers);
-    if (Buffer.byteLength(JSON.stringify(headers)) > Limit.HeaderBytes) throw new Error('REMOTE_NETWORK_RESPONSE_BUDGET');
+    if (Buffer.byteLength(JSON.stringify(headers)) > Limit.HeaderBytes) throw new Error(Failure.ResponseBudget);
     const chunks: Buffer[] = []; let bytes = 0;
     if (response.body) {
       const reader = response.body.getReader();
@@ -53,7 +53,7 @@ async function fetchRequest(message: any): Promise<void> {
         while (true) {
           const next = await reader.read(); if (next.done) break;
           bytes += next.value.byteLength;
-          if (bytes > Limit.BodyBytes) { await reader.cancel(); throw new Error('REMOTE_NETWORK_RESPONSE_BUDGET'); }
+          if (bytes > Limit.BodyBytes) { await reader.cancel(); throw new Error(Failure.ResponseBudget); }
           chunks.push(Buffer.from(next.value));
         }
       } finally { reader.releaseLock(); }
@@ -61,12 +61,12 @@ async function fetchRequest(message: any): Promise<void> {
     const body = Buffer.concat(chunks).toString('utf8');
     let json: unknown = null, jsonValid = false;
     try { json = JSON.parse(body); jsonValid = true; } catch { /* Parent preserves the existing invalid-response error. */ }
-    if (jsonValid && !boundedJson(json)) throw new Error('REMOTE_NETWORK_RESPONSE_BUDGET');
+    if (jsonValid && !boundedJson(json)) throw new Error(Failure.ResponseBudget);
     emit({ type: Message.Result, id, status: response.status, headers, body, json, jsonValid });
   } catch (error) {
-    const allowed = new Set(['REMOTE_NETWORK_REQUEST_INVALID','REMOTE_NETWORK_RESPONSE_BUDGET']);
-    emit({ type: Message.Result, id, error: controller.signal.aborted ? 'REMOTE_NETWORK_CANCELLED'
-      : error instanceof Error && allowed.has(error.message) ? error.message : 'REMOTE_NETWORK_FAILED' });
+    const allowed = new Set<string>([Failure.RequestInvalid,Failure.ResponseBudget]);
+    emit({ type: Message.Result, id, error: controller.signal.aborted ? Failure.Cancelled
+      : error instanceof Error && allowed.has(error.message) ? error.message : Failure.Failed });
   } finally { clearTimeout(timer); requests.delete(id); }
 }
 process.on('message', (message: any) => {

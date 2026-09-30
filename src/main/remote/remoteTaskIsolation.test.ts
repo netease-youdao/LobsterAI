@@ -1,8 +1,12 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { AuthRefreshFailureKind, AuthSessionStatus } from '../../shared/auth/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
+import { AuthSessionRequestError } from '../libs/authSessionManager';
 import { RemoteApiError, RemoteBridge } from './remoteBridge';
+import { RemoteNetworkError } from './remoteNetworkError';
+import { RemoteNetworkFailure } from './remoteNetworkProtocol';
 import { RemoteStore } from './remoteStore';
 
 const owner = { userId: 'isolation-owner', scopeKey: 'personal' };
@@ -55,6 +59,93 @@ function fixture() {
 }
 
 describe('task synchronization isolation', () => {
+  it.each([false, true])('verifies the original stream before resuming a legacy isolated task (conflict: %s)', async conflict => {
+    const f = fixture(); f.add('legacy-isolated');
+    const context = f.bridge.taskContext(), row = f.store.sync('legacy-isolated')!;
+    f.bridge.taskSync.fail(context, row.local_id, { phase: 'isolated', scope: 'session', reason: 'REMOTE_TASK_SYNC_FAILED' });
+    f.db.prepare('UPDATE remote_sync_task_state SET recovery_probe_version=0 WHERE local_session_id=?').run(row.local_id);
+    f.store.put(`syncFailure:${row.local_id}`, { blocked: true, reason: 'REMOTE_TASK_SYNC_FAILED' });
+    const original = f.store.pending(row.local_id), usual = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (actor, pathname, init) => {
+      if (pathname.includes('/sync/state?')) return ok({ deviceId: 'desktop', sessionId: conflict ? 'another-session' : row.session_id,
+        localSessionId: row.local_id, lastSourceSeq: String(row.ack_seq), lastSeq: row.server_seq, syncProtocolVersion: row.sync_protocol_version });
+      return usual(actor, pathname, init);
+    });
+    await f.bridge.syncSessions(true);
+    expect(f.request).toHaveBeenCalledTimes(1);
+    expect(f.request.mock.calls[0][1]).toContain('/sync/state?');
+    expect(f.store.sync(row.local_id)!.ack_seq).toBe(row.ack_seq);
+    expect(f.store.pending(row.local_id)).toEqual(original);
+    expect(f.bridge.taskSync.get(context, row.local_id).failure_count).toBe(conflict ? 2 : 1);
+    await f.bridge.syncSessions(true);
+    if (conflict) {
+      expect(f.request).toHaveBeenCalledTimes(1);
+      expect(f.bridge.taskSync.get(context, row.local_id)).toMatchObject({ phase: 'isolated', reason: 'REMOTE_SYNC_STATE_CONFLICT' });
+      expect(f.store.sync(row.local_id)!.ack_seq).toBe(row.ack_seq);
+      expect(f.store.pending(row.local_id)).toEqual(original);
+    } else {
+      expect(f.request.mock.calls[1][1]).toBe('/api/remote/v1/sync/batches');
+      expect(f.acknowledged(row.local_id)).toBe(true);
+      expect(f.bridge.taskSync.get(context, row.local_id).failure_count).toBe(0);
+    }
+    expect(f.bridge.deps.execute).not.toHaveBeenCalled();
+  });
+
+  it('yields local network admission pressure without failing tasks or opening the service circuit', async () => {
+    let now = Date.now(); vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const f = fixture(); f.add('a-busy'); f.add('b-busy'); f.add('c-busy');
+    const usual = f.request.getMockImplementation()!;
+    f.request.mockRejectedValue(new AuthSessionRequestError(AuthSessionStatus.TemporarilyUnavailable, 'Authenticated request failed', {
+      failureKind: AuthRefreshFailureKind.Network, originalError: new RemoteNetworkError(RemoteNetworkFailure.AdmissionBusy),
+    }));
+    await f.bridge.syncSessions(true);
+    expect(f.bridge.historyCircuitProbe).toBe(false);
+    expect(f.bridge.historyTransportFailures).toEqual([]);
+    for (const id of ['a-busy', 'b-busy', 'c-busy']) {
+      expect(f.bridge.taskSync.get(f.bridge.taskContext(), id)).toMatchObject({ phase: 'ready', failure_count: 0, next_retry_at: now + 500 });
+      expect(f.store.get(`syncFailure:${id}`)).toBeNull(); expect(f.acknowledged(id)).toBe(false);
+    }
+    expect(f.bridge.state().syncHealth.failedSessions).toBe(0);
+    now += 501; f.request.mockImplementation(usual);
+    await f.bridge.syncSessions(true);
+    for (const id of ['a-busy', 'b-busy', 'c-busy']) expect(f.acknowledged(id)).toBe(true);
+  });
+
+  it('retries an authenticated transport failure after backoff while retaining the original batch', async () => {
+    let now = Date.now(); vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const f = fixture(); f.add('transport');
+    const usual = f.request.getMockImplementation()!;
+    const before = f.store.pending('transport');
+    f.request.mockRejectedValue(new AuthSessionRequestError(AuthSessionStatus.TemporarilyUnavailable, 'Authenticated request failed', {
+      failureKind: AuthRefreshFailureKind.Network, originalError: new TypeError('fetch failed'),
+    }));
+    await f.bridge.syncSessions(true);
+    const state = f.bridge.taskSync.get(f.bridge.taskContext(), 'transport');
+    expect(state).toMatchObject({ phase: 'backoff', scope: 'service', failure_count: 1 });
+    expect(f.store.pending('transport')).toEqual(before);
+    const originalBody = f.request.mock.calls[0][2].body;
+    now = state.next_retry_at; f.request.mockImplementation(usual);
+    await f.bridge.syncSessions(true);
+    expect(f.request.mock.calls[1][2].body).toBe(originalBody);
+    expect(f.acknowledged('transport')).toBe(true);
+  });
+
+  it('lets the projection scheduler recover a transient failure without blocking another task', async () => {
+    let now = Date.now(); vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const f = fixture(); f.add('a-projecting'); f.add('b-ready');
+    f.store.recordProjectionFailure('a-projecting', 'REMOTE_PROJECTION_CONTEXT_CHANGED');
+    await f.bridge.syncSessions(true);
+    expect(f.acknowledged('b-ready')).toBe(true); expect(f.acknowledged('a-projecting')).toBe(false);
+    const state = f.bridge.taskSync.get(f.bridge.taskContext(), 'a-projecting');
+    expect(state).toMatchObject({ phase: 'ready', failure_count: 0 });
+    expect(f.bridge.taskSync.projectionEligible(f.bridge.taskContext(), 'a-projecting')).toBe(true);
+    // The real projection worker clears its failure only after publishing a valid projection.
+    f.db.prepare('DELETE FROM remote_projection_failures WHERE session_id=?').run('a-projecting');
+    now = state.next_retry_at;
+    await f.bridge.syncSessions(true);
+    expect(f.acknowledged('a-projecting')).toBe(true);
+  });
+
   it('isolates a failed interrupted publication instead of deferring it forever', async () => {
     const f = fixture(); f.add('a-bad'); f.add('b-good');
     const before = f.store.sync('a-bad')!;

@@ -5,11 +5,13 @@ import fs from 'fs';
 import { createRequire } from 'module';
 import os from 'os';
 import path from 'path';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { initializeLibraryTables } from '../library/libraryMigrations';
+import { isTransientProjectionFailure, RemoteProjectionFailure } from './remoteProjectionCoordinator';
 import { RemoteStore } from './remoteStore';
 import { RemoteSyncTargetStore } from './remoteSyncTargetStore';
+import { RemoteTaskSyncState } from './remoteTaskSyncState';
 
 const workerDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-projection-test-worker-'));
 const workerPath = path.join(workerDirectory, 'worker.cjs');
@@ -21,7 +23,7 @@ beforeAll(async () => {
 afterAll(() => fs.rmSync(workerDirectory, { recursive: true, force: true }));
 const owner = { userId: 'A', scopeKey: 'personal' };
 const dispose: Array<() => void> = [];
-afterEach(() => { for (const close of dispose.splice(0).reverse()) close(); });
+afterEach(() => { vi.restoreAllMocks(); for (const close of dispose.splice(0).reverse()) close(); });
 function fixture(disk = true, withArtifacts = false) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-isolation-'));
   dispose.push(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -47,6 +49,13 @@ function addArtifact(db: Database.Database, id: string, sessionId: string, messa
 }
 
 describe('desktop core and remote projection isolation', () => {
+  it('treats only known context and worker cancellation failures as retryable', () => {
+    expect(isTransientProjectionFailure(RemoteProjectionFailure.ContextChanged)).toBe(true);
+    expect(isTransientProjectionFailure(RemoteProjectionFailure.WorkerExit)).toBe(true);
+    for (const reason of ['REMOTE_PROJECTION_BUDGET', 'REMOTE_PROJECTION_PUBLICATION_INVALID', 'REMOTE_PROJECTION_FAILED', 'other']) {
+      expect(isTransientProjectionFailure(reason)).toBe(false);
+    }
+  });
   it('commits local messages before any worker projection and publishes off-thread', async () => {
     const f = fixture();
     expect(f.store.sync('task')?.source_seq).toBe(0);
@@ -57,6 +66,49 @@ describe('desktop core and remote projection isolation', () => {
     expect(f.store.sync('task')!.source_seq).toBeGreaterThan(0);
     expect(f.db.prepare('SELECT * FROM remote_dirty').all()).toEqual([]);
     expect(fs.readdirSync(path.join(f.directory, 'remote-projection-staging'))).toEqual([]);
+  });
+  it('finishes an admitted publication when only the next scheduling deadline changes', async () => {
+    const f = fixture(), taskSync = new RemoteTaskSyncState(f.db);
+    const context = { owner, target: 'target', deviceId: 'desktop' };
+    f.store.setTaskProjectionEligibility(id => taskSync.projectionEligible(context, id));
+    const current = f.store.projectionWorkCurrent.bind(f.store);
+    vi.spyOn(f.store, 'projectionWorkCurrent').mockImplementation(work => {
+      if (f.store.projectionPublishing('task')) taskSync.defer(context, 'task', 5000);
+      return current(work);
+    });
+    await f.store.flushProjections();
+    expect(taskSync.eligible(context, 'task')).toBe(false);
+    expect(taskSync.projectionEligible(context, 'task')).toBe(true);
+    expect(f.db.prepare('SELECT * FROM remote_projection_failures').all()).toEqual([]);
+    expect(f.store.projectionPublishing('task')).toBe(false);
+    expect(f.store.snapshot('task').records.find(row => row.payload.message)?.payload.message.blocks[0].text).toBe('Original');
+    expect(f.store.sync('task')!.ack_seq).toBe(0);
+  });
+  it('preserves a publication reservation across context cancellation and resumes only under its owner', async () => {
+    const f = fixture();
+    const current = f.store.projectionWorkCurrent.bind(f.store);
+    const guard = vi.spyOn(f.store, 'projectionWorkCurrent').mockImplementation(work => {
+      if (f.store.projectionPublishing('task')) f.store.setEnabledOwner(null);
+      return current(work);
+    });
+    await f.store.flushProjections();
+    const reservation = f.db.prepare('SELECT * FROM remote_projection_publications WHERE session_id=?').get('task') as { path: string };
+    const highWater = f.store.sync('task')!.source_seq;
+    expect(reservation).toBeTruthy(); expect(fs.existsSync(reservation.path)).toBe(true);
+    expect(highWater).toBeGreaterThan(0); expect(f.store.sync('task')!.ack_seq).toBe(0);
+    const failure = f.db.prepare('SELECT reason,retry_at FROM remote_projection_failures WHERE session_id=?').get('task') as { reason: string; retry_at: number };
+    expect(failure.reason).toBe(RemoteProjectionFailure.ContextChanged);
+    guard.mockRestore();
+    vi.spyOn(Date, 'now').mockReturnValue(failure.retry_at + 1);
+    await f.store.flushProjections();
+    expect(f.db.prepare('SELECT * FROM remote_projection_publications WHERE session_id=?').get('task')).toEqual(reservation);
+    f.store.setEnabledOwner(owner); await f.store.flushProjections();
+    expect(f.store.projectionPublishing('task')).toBe(false);
+    expect(f.db.prepare('SELECT * FROM remote_projection_failures').all()).toEqual([]);
+    expect(f.store.sync('task')!.source_seq).toBeGreaterThan(highWater);
+    expect(f.store.sync('task')!.ack_seq).toBe(0);
+    expect(f.store.sync('task')!.needs_snapshot).toBe(1);
+    expect(f.store.snapshot('task').records.find(row => row.payload.message)?.payload.message.blocks[0].text).toBe('Original');
   });
   it('does not roll back a local mutation when a malformed projection fails', async () => {
     const f = fixture(); await f.store.flushProjections();
@@ -119,6 +171,8 @@ describe('desktop core and remote projection isolation', () => {
         f.db.prepare('UPDATE remote_session_revisions SET dirty_at=0 WHERE session_id=?').run(id);
       }
     });
+    // Production flush materializes deferred revision hints before calling the scheduler.
+    f.store.refreshProjectionHints();
     expect(f.store.nextProjectionWork()).toBeNull();
     expect(f.store.nextProjectionWork()?.sessionId).toBe('task');
     expect(f.db.prepare('SELECT COUNT(*) AS count FROM remote_projection_publications').get()).toEqual({ count: 50 });

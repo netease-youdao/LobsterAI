@@ -71,6 +71,66 @@ describe('device management store', () => {
     expect(h.service.getSnapshot().error).toBe('remoteConnectionsUnavailable');
     stop();
   });
+  test('recovers a transient list failure automatically after a short delay', async () => {
+    vi.useFakeTimers(); vi.spyOn(Math, 'random').mockReturnValue(0);
+    const h = create(); const stop = h.service.subscribe(() => undefined); await h.service.refresh();
+    h.api.queryConnections.mockRejectedValueOnce(new Error('busy'));
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(h.service.getSnapshot().error).toBe('remoteConnectionsUnavailable');
+    expect(h.service.getSnapshot().data).toEqual(data);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(h.api.queryConnections).toHaveBeenCalledTimes(3);
+    expect(h.service.getSnapshot().error).toBeNull();
+    await vi.advanceTimersByTimeAsync(14999); expect(h.api.queryConnections).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1); expect(h.api.queryConnections).toHaveBeenCalledTimes(4);
+    stop();
+  });
+  test('bounds repeated recovery attempts and stops them when the page closes', async () => {
+    vi.useFakeTimers(); vi.spyOn(Math, 'random').mockReturnValue(0);
+    const h = create(); h.api.queryConnections.mockRejectedValue(new Error('network'));
+    const stop = h.service.subscribe(() => undefined); await h.service.refresh();
+    let calls = 1;
+    for (const delay of [3000, 6000, 12000, 15000, 15000]) {
+      await vi.advanceTimersByTimeAsync(delay - 1); expect(h.api.queryConnections).toHaveBeenCalledTimes(calls);
+      await vi.advanceTimersByTimeAsync(1); expect(h.api.queryConnections).toHaveBeenCalledTimes(++calls);
+      expect(h.service.getSnapshot().error).toBe('remoteConnectionsUnavailable');
+    }
+    stop(); await vi.advanceTimersByTimeAsync(60000); expect(h.api.queryConnections).toHaveBeenCalledTimes(calls);
+  });
+  test('also retries a successful response whose presence information is unavailable', async () => {
+    vi.useFakeTimers(); vi.spyOn(Math, 'random').mockReturnValue(0);
+    const h = create();
+    h.api.queryConnections.mockResolvedValueOnce({ ...data, presenceAvailable: false, quota: { ...data.quota, onlineSlotsUsed: null } });
+    const stop = h.service.subscribe(() => undefined); await h.service.refresh();
+    expect(h.service.getSnapshot().data?.presenceAvailable).toBe(false);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(h.api.queryConnections).toHaveBeenCalledTimes(2);
+    expect(h.service.getSnapshot().data?.presenceAvailable).toBe(true);
+    stop();
+  });
+  test('keeps failure polling slow when the window is in the background', async () => {
+    vi.useFakeTimers(); vi.spyOn(Math, 'random').mockReturnValue(0);
+    vi.stubGlobal('document', { visibilityState: 'visible', hasFocus: () => false, addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    const h = create(); h.api.queryConnections.mockRejectedValue(new Error('network'));
+    const stop = h.service.subscribe(() => undefined); await h.service.refresh();
+    await vi.advanceTimersByTimeAsync(59999); expect(h.api.queryConnections).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1); expect(h.api.queryConnections).toHaveBeenCalledTimes(2);
+    stop();
+  });
+  test('refreshes on network recovery and coalesces it with an active list request', async () => {
+    vi.useFakeTimers(); vi.spyOn(Math, 'random').mockReturnValue(0);
+    const listeners = new Map<string, () => void>();
+    vi.stubGlobal('window', { addEventListener: (event: string, listener: () => void) => listeners.set(event, listener),
+      removeEventListener: (event: string) => listeners.delete(event) });
+    const h = create(); h.api.queryConnections.mockRejectedValueOnce(new Error('offline'));
+    const stop = h.service.subscribe(() => undefined); await h.service.refresh();
+    const pending = deferred<RemoteConnectionsSnapshot>(); h.api.queryConnections.mockReturnValueOnce(pending.promise);
+    listeners.get('online')?.(); listeners.get('online')?.();
+    expect(h.api.queryConnections).toHaveBeenCalledTimes(2);
+    pending.resolve(data); await h.service.refresh();
+    expect(h.service.getSnapshot().error).toBeNull();
+    stop(); expect(listeners.size).toBe(0);
+  });
   test('clears old account devices immediately and ignores their delayed response', async () => {
     const h = create(); const pending = deferred<RemoteConnectionsSnapshot>();
     h.api.queryConnections.mockReturnValueOnce(pending.promise);

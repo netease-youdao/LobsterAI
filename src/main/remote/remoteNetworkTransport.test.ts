@@ -2,8 +2,11 @@ import { type ChildProcess, type fork } from 'child_process';
 import { EventEmitter } from 'events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message } from './remoteNetworkProtocol';
+import { AuthSessionManager, AuthSessionRequestError } from '../libs/authSessionManager';
+import { RemoteNetworkFailure, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message } from './remoteNetworkProtocol';
 import { RemoteNetworkTransport, remoteResponseJson } from './remoteNetworkTransport';
+import { remoteSyncErrorMetadata } from './remoteSyncLog';
+import { classifyTaskSyncFailure } from './remoteTaskSyncPolicy';
 
 class Child extends EventEmitter {
   connected = true;
@@ -60,6 +63,52 @@ describe('supervised remote network transport', () => {
     for (const message of children[0].messages.filter(message => message.type === Message.Fetch)) success(children[0], message.id);
     await Promise.all([...rest, next]);
   });
+  it.each([
+    ['/device-connections', 'GET'],
+    ['/device-connection-operations/request-1', 'GET'],
+    ['/devices/current/connection/remove', 'POST'],
+    ['/devices/current/connection/resume', 'POST'],
+  ])('keeps device management %s available while sync lanes are full', async (path, method) => {
+    const { transport, children } = fixture();
+    const sync = [request(transport, '/sync/batches'), request(transport, '/sessions/a'), request(transport, '/sessions/b')];
+    const management = transport.fetch(`https://example.com/api/remote/v2${path}`, { method });
+    void management.catch(() => {});
+    await settle();
+    const child = children[0];
+    const sent = child.messages.filter(message => message.type === Message.Fetch);
+    expect(sent).toHaveLength(4);
+    expect(sent.some(message => message.url.endsWith(path) && message.method === method)).toBe(true);
+    const controls = [request(transport), request(transport, '/connection-tickets')];
+    await settle();
+    expect(child.messages.filter(message => message.type === Message.Fetch)).toHaveLength(Limit.Requests);
+    await expect(request(transport)).rejects.toThrow(RemoteNetworkFailure.AdmissionBusy);
+    for (const message of child.messages.filter(message => message.type === Message.Fetch)) success(child, message.id);
+    await Promise.all([...sync, management, ...controls]);
+  });
+  it('classifies rapid authenticated sync-state admission rejections without losing their original cause', async () => {
+    const { transport, children } = fixture();
+    const auth = new AuthSessionManager({ getTokens: () => ({ accessToken: 'test-access', refreshToken: 'test-refresh' }),
+      saveTokens: () => {}, fetch: async () => { throw new Error('Unexpected token refresh'); }, getRefreshUrl: () => 'https://example.com/auth',
+      buildRefreshRequestBody: () => '{}', onTerminalFailure: () => {} });
+    const active = auth.fetchWithAuth(base + '/sync/state', undefined, transport.fetch); void active.catch(() => {}); await settle();
+    for (let i = 0; i < 12; i++) {
+      const error = await auth.fetchWithAuth(base + '/sync/state', undefined, transport.fetch).catch(error => error);
+      expect(error).toBeInstanceOf(AuthSessionRequestError); expect(error.message).toBe('Authenticated request failed');
+      expect(classifyTaskSyncFailure(error)).toMatchObject({ scope: 'session', reason: RemoteNetworkFailure.AdmissionBusy, deferMs: 500 });
+      expect(remoteSyncErrorMetadata(error)).toMatchObject({ transportFailure: RemoteNetworkFailure.AdmissionBusy });
+    }
+    expect(children[0].messages.filter(message => message.type === Message.Fetch)).toHaveLength(1);
+    success(children[0]); await active;
+  });
+  it('preserves only finite worker error reasons', async () => {
+    const { transport, children } = fixture(); const budget = request(transport); await settle();
+    children[0].reply({ type: Message.Result, id: children[0].request().id, error: RemoteNetworkFailure.ResponseBudget });
+    await expect(budget).rejects.toMatchObject({ code: RemoteNetworkFailure.ResponseBudget });
+    const unknown = request(transport); await settle();
+    const id = children[0].messages.filter(message => message.type === Message.Fetch).at(-1).id;
+    children[0].reply({ type: Message.Result, id, error: 'private body and token' });
+    await expect(unknown).rejects.toMatchObject({ code: RemoteNetworkFailure.RequestFailed, message: RemoteNetworkFailure.RequestFailed });
+  });
   it('rejects oversized or invalid replies locally without leaking response content', async () => {
     const { transport, children } = fixture(); const pending = request(transport); await settle();
     success(children[0], undefined, { body: 'secret'.repeat(Limit.BodyBytes) });
@@ -102,7 +151,7 @@ describe('supervised remote network transport', () => {
     vi.useFakeTimers(); const { transport, children, spawn } = fixture(); const hung = request(transport); await settle();
     await vi.advanceTimersByTimeAsync(9000); await expect(hung).rejects.toThrow('WORKER_EXIT'); expect(children[0].kill).toHaveBeenCalledWith('SIGKILL');
     for (let i = 0; i < 4; i++) { const next = request(transport); await settle(); children.at(-1)!.exit(); await expect(next).rejects.toThrow('WORKER_EXIT'); }
-    await expect(request(transport)).rejects.toThrow('WORKER_UNAVAILABLE'); expect(spawn).toHaveBeenCalledTimes(5);
+    await expect(request(transport)).rejects.toThrow(RemoteNetworkFailure.RestartBudget); expect(spawn).toHaveBeenCalledTimes(5);
   });
   it('retires a worker that exceeds the observed memory budget and can recover later', async () => {
     const { transport, children } = fixture(); const pending = request(transport); await settle();

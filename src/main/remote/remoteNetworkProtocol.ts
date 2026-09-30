@@ -10,3 +10,18 @@ export interface RemoteSocket {
   close(): void;
   addEventListener(type: string, listener: (event: any) => void): void;
 }
+
+/** Finite local error identities; never serialize an arbitrary child error message. */
+export const RemoteNetworkFailure = {
+  AdmissionBusy: 'REMOTE_NETWORK_ADMISSION_BUSY', Busy: 'REMOTE_NETWORK_BUSY',
+  Cancelled: 'REMOTE_NETWORK_CANCELLED', IpcFailed: 'REMOTE_NETWORK_IPC_FAILED',
+  RequestFailed: 'REMOTE_NETWORK_REQUEST_FAILED', Failed: 'REMOTE_NETWORK_FAILED',
+  RequestInvalid: 'REMOTE_NETWORK_REQUEST_INVALID', RequestBudget: 'REMOTE_NETWORK_REQUEST_BUDGET',
+  ResponseInvalid: 'REMOTE_NETWORK_RESPONSE_INVALID', ResponseBudget: 'REMOTE_NETWORK_RESPONSE_BUDGET',
+  WorkerExit: 'REMOTE_NETWORK_WORKER_EXIT', WorkerUnavailable: 'REMOTE_NETWORK_WORKER_UNAVAILABLE',
+  RestartBudget: 'REMOTE_NETWORK_RESTART_BUDGET', SocketNotReady: 'REMOTE_NETWORK_SOCKET_NOT_READY',
+} as const;
+export type RemoteNetworkFailure = typeof RemoteNetworkFailure[keyof typeof RemoteNetworkFailure];
+export function remoteNetworkFailureValue(value: unknown): RemoteNetworkFailure | null {
+  return typeof value === 'string' && Object.values(RemoteNetworkFailure).some(code => code === value) ? value as RemoteNetworkFailure : null;
+}

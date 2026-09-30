@@ -1,7 +1,8 @@
 import { type ChildProcess, fork } from 'child_process';
 import { randomUUID } from 'crypto';
 
-import { RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message, type RemoteSocket } from './remoteNetworkProtocol';
+import { RemoteNetworkError } from './remoteNetworkError';
+import { RemoteNetworkFailure as Failure, remoteNetworkFailureValue, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message, type RemoteSocket } from './remoteNetworkProtocol';
 import { remoteDiagnosticLog } from './remoteSyncLog';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 
@@ -13,7 +14,7 @@ interface Pending {
 const parsedResponses = new WeakMap<Response, { valid: boolean; value: unknown }>();
 export function remoteResponseJson(response: Response, text: string): any {
   const parsed = parsedResponses.get(response);
-  if (parsed) { if (!parsed.valid) throw new Error('REMOTE_NETWORK_RESPONSE_INVALID'); return parsed.value; }
+  if (parsed) { if (!parsed.valid) throw new RemoteNetworkError(Failure.ResponseInvalid); return parsed.value; }
   return JSON.parse(text);
 }
 function responseFromWorker(message: any): Response {
@@ -41,7 +42,7 @@ class NetworkSocket implements RemoteSocket {
     }
   }
   send(data: string): void {
-    if (this.readyState !== 1 || Buffer.byteLength(data) > 4096) throw new Error('REMOTE_NETWORK_SOCKET_NOT_READY');
+    if (this.readyState !== 1 || Buffer.byteLength(data) > 4096) throw new RemoteNetworkError(Failure.SocketNotReady);
     this.transport.send({ type: Message.SocketSend, id: this.id, data });
   }
   close(): void {
@@ -68,9 +69,9 @@ export class RemoteNetworkTransport {
     const epoch = this.epoch; this.startingEpoch = epoch;
     const starting = (async () => {
       if (this.retiring) await this.retiring;
-      if (epoch !== this.epoch) throw new Error('REMOTE_NETWORK_CANCELLED');
+      if (epoch !== this.epoch) throw new RemoteNetworkError(Failure.Cancelled);
       const now = Date.now(); while (this.starts.length && now - this.starts[0] > 60000) this.starts.shift();
-      if (this.starts.length >= 5) throw new Error('REMOTE_NETWORK_RESTART_BUDGET');
+      if (this.starts.length >= 5) throw new RemoteNetworkError(Failure.RestartBudget);
       this.starts.push(now);
       const child = this.spawn(this.filename, [], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
         execArgv: [`--max-old-space-size=${Limit.WorkerMemoryMb}`], stdio: ['ignore','ignore','ignore','ipc'], serialization: 'json' });
@@ -91,7 +92,7 @@ export class RemoteNetworkTransport {
     if (child.pid && child.exitCode === null && child.signalCode === null) {
       this.retiring = new Promise(resolve => { child.once('exit', () => { this.retiring = null; resolve(); }); child.kill('SIGKILL'); });
     }
-    for (const request of this.pending.values()) { request.removeAbort(); request.reject(new Error('REMOTE_NETWORK_WORKER_EXIT')); }
+    for (const request of this.pending.values()) { request.removeAbort(); request.reject(new RemoteNetworkError(Failure.WorkerExit)); }
     this.pending.clear();
     const socket = this.currentSocket; this.currentSocket = null;
     if (socket && socket.readyState !== 3) { socket.readyState = 3; socket.dispatch('close', { code: 1006 }); }
@@ -99,11 +100,11 @@ export class RemoteNetworkTransport {
   }
   send(message: Record<string, unknown>): void {
     const child = this.child;
-    if (!child?.connected) throw new Error('REMOTE_NETWORK_WORKER_UNAVAILABLE');
+    if (!child?.connected) throw new RemoteNetworkError(Failure.WorkerUnavailable);
     try {
       // false is Node's queued-write backpressure, not a failed send. Request/frame counts bound retained bytes.
       child.send(message, error => { if (error) this.failed(child); });
-    } catch { this.failed(child); throw new Error('REMOTE_NETWORK_IPC_FAILED'); }
+    } catch { this.failed(child); throw new RemoteNetworkError(Failure.IpcFailed); }
   }
   private receive(message: any): void {
     if (!message || typeof message !== 'object') return;
@@ -115,12 +116,12 @@ export class RemoteNetworkTransport {
       const request = this.pending.get(message.id); if (!request) return;
       this.pending.delete(message.id); request.removeAbort();
       if (request.cancelled) return;
-      if (message.error) { request.reject(new Error('REMOTE_NETWORK_REQUEST_FAILED')); return; }
+      if (message.error) { request.reject(new RemoteNetworkError(remoteNetworkFailureValue(message.error) ?? Failure.RequestFailed)); return; }
       try {
         if (typeof message.body !== 'string' || Buffer.byteLength(message.body) > Limit.BodyBytes || !Number.isInteger(message.status)
-          || message.status < 200 || message.status > 599 || Buffer.byteLength(JSON.stringify(message.headers || {})) > Limit.HeaderBytes) throw new Error('REMOTE_NETWORK_RESPONSE_INVALID');
+          || message.status < 200 || message.status > 599 || Buffer.byteLength(JSON.stringify(message.headers || {})) > Limit.HeaderBytes) throw new RemoteNetworkError(Failure.ResponseInvalid);
         request.resolve(responseFromWorker(message));
-      } catch { request.reject(new Error('REMOTE_NETWORK_RESPONSE_INVALID')); }
+      } catch { request.reject(new RemoteNetworkError(Failure.ResponseInvalid)); }
       return;
     }
     const socket = this.currentSocket;
@@ -138,20 +139,23 @@ export class RemoteNetworkTransport {
   }
   readonly fetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
     const path = new URL(url).pathname;
-    const lane: Lane = /\/(?:control|commands|connection-tickets|capabilities|mode-activations)(?:\/|$)/u.test(path) || /\/devices\/(?:register|connections)(?:\/|$)/u.test(path) ? 'control'
+    // Device management must remain available while history/file synchronization occupies its lanes.
+    const control = /\/(?:control|commands|connection-tickets|capabilities|mode-activations|device-connections|device-connection-operations)(?:\/|$)/u.test(path)
+      || /\/devices\/(?:register|connections|[^/]+\/connection\/(?:remove|resume))(?:\/|$)/u.test(path);
+    const lane: Lane = control ? 'control'
       : /\/(?:live-projections|sessions|devices)(?:\/|$)/u.test(path) && !/\/(?:files|contents)\//u.test(path) ? 'live' : 'background';
     if (this.pending.size >= Limit.Requests || [...this.pending.values()].filter(value => value.lane === lane).length >= ({ control: 3, live: 2, background: 1 })[lane])
-      throw new Error('REMOTE_NETWORK_ADMISSION_BUSY');
-    if (options.body !== undefined && options.body !== null && typeof options.body !== 'string') throw new Error('REMOTE_NETWORK_REQUEST_INVALID');
-    if (Buffer.byteLength(String(options.body || '')) > Limit.BodyBytes) throw new Error('REMOTE_NETWORK_REQUEST_BUDGET');
+      throw new RemoteNetworkError(Failure.AdmissionBusy);
+    if (options.body !== undefined && options.body !== null && typeof options.body !== 'string') throw new RemoteNetworkError(Failure.RequestInvalid);
+    if (Buffer.byteLength(String(options.body || '')) > Limit.BodyBytes) throw new RemoteNetworkError(Failure.RequestBudget);
     const headers = Object.fromEntries(new Headers(options.headers));
-    if (Buffer.byteLength(JSON.stringify(headers)) > Limit.HeaderBytes) throw new Error('REMOTE_NETWORK_REQUEST_BUDGET');
+    if (Buffer.byteLength(JSON.stringify(headers)) > Limit.HeaderBytes) throw new RemoteNetworkError(Failure.RequestBudget);
     const id = randomUUID();
     return new Promise<Response>((resolve, reject) => {
       const signal = options.signal;
       const cancel = (): void => {
         const item = this.pending.get(id); if (!item || item.cancelled) return;
-        item.cancelled = true; reject(new Error('REMOTE_NETWORK_CANCELLED'));
+        item.cancelled = true; reject(new RemoteNetworkError(Failure.Cancelled));
         if (this.child?.connected) { try { this.send({ type: Message.Cancel, id }); } catch { /* Worker failure rejects and releases every pending slot. */ } }
       };
       this.pending.set(id, { lane, resolve, reject, cancelled: false, removeAbort: () => signal?.removeEventListener('abort', cancel) });
@@ -161,7 +165,7 @@ export class RemoteNetworkTransport {
         if (!this.pending.has(id)) return;
         if (this.pending.get(id)!.cancelled) { this.pending.delete(id); signal?.removeEventListener('abort', cancel); return; }
         this.send({ type: Message.Fetch, id, url, method: options.method || 'GET', headers, ...(typeof options.body === 'string' ? { body: options.body } : {}) });
-      }).catch(() => { this.pending.delete(id); signal?.removeEventListener('abort', cancel); reject(new Error('REMOTE_NETWORK_WORKER_UNAVAILABLE')); });
+      }).catch(error => { this.pending.delete(id); signal?.removeEventListener('abort', cancel); reject(error instanceof RemoteNetworkError ? error : new RemoteNetworkError(Failure.WorkerUnavailable)); });
     });
   };
   socket(url: string): RemoteSocket {
@@ -180,7 +184,7 @@ export class RemoteNetworkTransport {
   dispose(): void {
     this.epoch++;
     if (this.child) { this.failed(this.child); return; }
-    for (const request of this.pending.values()) { request.removeAbort(); request.reject(new Error('REMOTE_NETWORK_CANCELLED')); }
+    for (const request of this.pending.values()) { request.removeAbort(); request.reject(new RemoteNetworkError(Failure.Cancelled)); }
     this.pending.clear();
     this.currentSocket?.close();
   }

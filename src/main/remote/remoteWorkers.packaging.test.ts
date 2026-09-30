@@ -90,7 +90,7 @@ describe('independent packaged remote workers', () => {
       const prefix = 'https://example.com/api/remote/v1/capabilities/';
       const response = await transport.fetch(prefix + 'ok');
       const data = await response.clone().json(); expect(data.data.workerPid).not.toBe(process.pid);
-      for (const mode of ['oversized', 'deep', 'wide']) await expect(transport.fetch(prefix + mode)).rejects.toThrow('REMOTE_NETWORK_REQUEST_FAILED');
+      for (const mode of ['oversized', 'deep', 'wide']) await expect(transport.fetch(prefix + mode)).rejects.toThrow('REMOTE_NETWORK_RESPONSE_BUDGET');
       await expect((await transport.fetch(prefix + 'invalid')).json()).rejects.toThrow('REMOTE_NETWORK_RESPONSE_INVALID');
       for (const [mode, code] of [['oversized',1009], ['deep',1002], ['invalid',1002], ['burst',1013]] as const) {
         const socket = transport.socket('wss://example.com/api/remote/v1/ws'); const frames = vi.fn(); socket.addEventListener('message', frames);

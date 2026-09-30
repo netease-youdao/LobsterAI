@@ -32,6 +32,7 @@ import type { ImportPartIndex } from './remoteImportSnapshotWorker';
 import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
 import type { RemoteSocket } from './remoteNetworkProtocol';
 import { remoteResponseJson } from './remoteNetworkTransport';
+import { isTransientProjectionFailure } from './remoteProjectionCoordinator';
 import { RemoteQuestionError } from './remoteQuestionService';
 import { RemoteReplyTransport } from './remoteReplyTransport';
 import { RemoteSyncStateError, retentionSequence } from './remoteRetention';
@@ -222,7 +223,7 @@ export class RemoteBridge {
     deps.store.setControlAdmission(() => !this.targetId || !!this.owner && !this.targets.controlAdmissionBlocked(this.owner, this.targetId));
     deps.store.setTaskProjectionEligibility(sessionId => {
       const context = this.taskContext();
-      return !this.availability.ownsHistory(sessionId) && (!context || this.taskSync.eligible(context, sessionId));
+      return !this.availability.ownsHistory(sessionId) && (!context || this.taskSync.projectionEligible(context, sessionId));
     });
     this.importSnapshots = new RemoteImportSnapshots(deps.store);
     this.deletions = deps.deletion ? new RemoteSessionDeletionClient({ ...deps.deletion, store: deps.store, security: deps.security,
@@ -1262,6 +1263,15 @@ export class RemoteBridge {
     const context = this.taskContext();
     if (!context) return;
     const current = this.syncContext();
+    if (!current()) return;
+    // Older clients classified wrapped transport errors as permanent task failures.
+    // A one-time probe reuses the original mapping/receipt checks; it grants no ACK or execution permission.
+    const recovered = this.taskSync.reconcileLegacyFailures(context, row => !this.availability.ownsHistory(row.local_id)
+      && !this.deps.store.isSyncClosed(row.local_id)
+      && (!row.sync_environment || this.targets.matchesEnvironment(context.target, row.sync_environment)));
+    if (recovered.promotedIds.length) remoteDiagnosticLog('remote.sync.task_deferred', {
+      lane: 'history', result: 'deferred', reason: 'STATE_CHANGED', count: recovered.promotedIds.length,
+    });
     // Projection is an independent worker; a large/corrupt task cannot hold ready batches behind it.
     if (!this.projectionWork) {
       const work = this.deps.store.flushProjections().catch(error => {
@@ -1333,7 +1343,11 @@ export class RemoteBridge {
       if (stepwise) return;
     }
     const projectionFailure = this.deps.store.db.prepare('SELECT reason FROM remote_projection_failures WHERE session_id=?').get(id) as { reason: string } | undefined;
-    if (projectionFailure) throw new RemoteTaskDataError(projectionFailure.reason);
+    if (projectionFailure) {
+      // The projection worker owns its retry deadline and clears this row after publication.
+      if (isTransientProjectionFailure(projectionFailure.reason)) { this.taskSync.defer(context, id, 1000); return; }
+      throw new RemoteTaskDataError(projectionFailure.reason);
+    }
     if (this.deps.store.projectionPublishing(id) || this.ownershipSyncBlocked(id)) { this.taskSync.defer(context, id, 5000); return; }
     const state = this.taskSync.get(context, id);
     if (previous?.blocked && state?.phase !== 'reconciling' && !state?.failure_count) throw new RemoteSyncStateError('Persisted synchronization safety block requires task review');
@@ -1391,8 +1405,15 @@ export class RemoteBridge {
   private async failSession(row: SyncRow, error: unknown, current: () => boolean, context: TaskSyncContext): Promise<void> {
     if (isSharedSyncFailure(error)) throw error;
     const id = row.local_id;
-    for (const [key, receipt] of this.verifiedImports) if (receipt.sessionId === row.session_id) this.verifiedImports.delete(key);
     let failure = classifyTaskSyncFailure(error);
+    if (failure.deferMs !== undefined) {
+      if (!current()) return;
+      this.taskSync.defer(context, id, failure.deferMs);
+      remoteDiagnosticLog('remote.sync.task_deferred', { localSessionId: id, lane: 'history',
+        result: 'deferred', retryAfterMs: failure.deferMs, error });
+      return;
+    }
+    for (const [key, receipt] of this.verifiedImports) if (receipt.sessionId === row.session_id) this.verifiedImports.delete(key);
     remoteLogMessage('warn', '[RemoteSync] Session synchronization failed', { localSessionId: id, sessionId: row.session_id,
       deviceId: context.deviceId, phase: row.needs_snapshot ? 'snapshot' : 'batch', sourceSeq: row.source_seq, ackSourceSeq: row.ack_seq, serverSeq: row.server_seq, ...remoteSyncErrorMetadata(error) });
     if (!isSharedSyncFailure(error)) {
@@ -1426,6 +1447,7 @@ export class RemoteBridge {
       }
     }
     if (!current()) return;
+    if (failure.deferMs !== undefined) { this.taskSync.defer(context, id, failure.deferMs); return; }
     const saved = this.taskSync.fail(context, id, failure);
     this.deps.store.put(`syncFailure:${id}`, { ...remoteSyncErrorMetadata(error), code: error instanceof RemoteApiError ? error.code : 47019, reason: failure.reason,
       blocked: ['isolated', 'closed'].includes(saved.phase), retryAt: saved.next_retry_at });

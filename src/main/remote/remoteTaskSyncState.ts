@@ -15,18 +15,20 @@ export interface TaskSyncHealth {
   taskIssues: RemoteSyncTaskIssue[]; taskIssuesTruncated: boolean;
 }
 export interface TaskSyncContext { owner: RemoteOwner; target: string; deviceId: string }
-export interface TaskSyncFailure { phase: TaskSyncPhase; scope: string; reason: string; repairable?: boolean; retryAfterMs?: number }
+export interface TaskSyncFailure { phase: TaskSyncPhase; scope: string; reason: string; repairable?: boolean; retryAfterMs?: number; deferMs?: number }
 export class RemoteTaskDataError extends Error {
   constructor(message: string, readonly repairable = false) { super(message); }
 }
 export interface TaskSyncRecord {
   local_session_id: string; phase: TaskSyncPhase; next_retry_at: number; failure_count: number;
   reason: string; scope: string; fingerprint: string; last_served_at: number; last_progress_at: number;
-  pending_since: number; repair_json: string; manual_retry_at: number; server_retry_at: number;
+  pending_since: number; repair_json: string; manual_retry_at: number; server_retry_at: number; recovery_probe_version: number;
 }
 interface RepairLedger { attempts: string[]; times: number[] }
 const NEVER = Number.MAX_SAFE_INTEGER;
 const DAY = 86400000;
+const RECOVERY_PROBE_VERSION = 1;
+const legacyProbeReasons = new Set(['REMOTE_TASK_SYNC_FAILED', 'REMOTE_IMPORT_CONTEXT_CHANGED', 'REMOTE_PROJECTION_CONTEXT_CHANGED']);
 const identity = (context: TaskSyncContext): string[] => [context.owner.userId, context.owner.scopeKey, context.target, context.deviceId];
 
 /** Scheduling hints never replace source watermarks, immutable operations or admission evidence. */
@@ -38,6 +40,7 @@ export class RemoteTaskSyncState {
       reason TEXT NOT NULL DEFAULT '',scope TEXT NOT NULL DEFAULT 'session',fingerprint TEXT NOT NULL DEFAULT '',
       last_served_at INTEGER NOT NULL DEFAULT 0,last_progress_at INTEGER NOT NULL DEFAULT 0,pending_since INTEGER NOT NULL,
       repair_json TEXT NOT NULL DEFAULT '{"attempts":[],"times":[]}',manual_retry_at INTEGER NOT NULL DEFAULT -1,server_retry_at INTEGER NOT NULL DEFAULT 0,
+      recovery_probe_version INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY(owner_user_id,owner_scope_key,target_key,device_id,local_session_id));
       CREATE INDEX IF NOT EXISTS idx_remote_sync_task_due ON remote_sync_task_state(owner_user_id,owner_scope_key,target_key,device_id,phase,next_retry_at,last_served_at,local_session_id);`);
     const columns = db.prepare('PRAGMA table_info(remote_sync_task_state)').all() as Array<{ name: string }>;
@@ -48,19 +51,74 @@ export class RemoteTaskSyncState {
         WHERE phase IN ('backoff','cooldown','waiting_dependency') AND next_retry_at>0;
         UPDATE remote_sync_task_state SET manual_retry_at=-1 WHERE manual_retry_at=0;`);
     })();
+    if (!columns.some(column => column.name === 'recovery_probe_version')) {
+      db.exec('ALTER TABLE remote_sync_task_state ADD COLUMN recovery_probe_version INTEGER NOT NULL DEFAULT 0');
+    }
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_remote_sync_task_recovery
+      ON remote_sync_task_state(owner_user_id,owner_scope_key,target_key,device_id,recovery_probe_version,local_session_id);`);
   }
   private args(context: TaskSyncContext, id: string): string[] { return [...identity(context), id]; }
   get(context: TaskSyncContext, id: string): TaskSyncRecord | null {
     return this.db.prepare('SELECT * FROM remote_sync_task_state WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?').get(...this.args(context, id)) as TaskSyncRecord || null;
   }
   private ensure(context: TaskSyncContext, id: string): TaskSyncRecord {
-    this.db.prepare('INSERT OR IGNORE INTO remote_sync_task_state(owner_user_id,owner_scope_key,target_key,device_id,local_session_id,pending_since,manual_retry_at) VALUES(?,?,?,?,?,?,-1)').run(...this.args(context, id), this.now());
+    this.db.prepare('INSERT OR IGNORE INTO remote_sync_task_state(owner_user_id,owner_scope_key,target_key,device_id,local_session_id,pending_since,manual_retry_at,recovery_probe_version) VALUES(?,?,?,?,?,?,-1,?)').run(...this.args(context, id), this.now(), RECOVERY_PROBE_VERSION);
     return this.get(context, id)!;
   }
   eligible(context: TaskSyncContext, id: string): boolean {
     const value = this.get(context, id);
     return !value || ![TaskSyncPhase.Isolated, TaskSyncPhase.Closed].some(phase => phase === value.phase)
       && value.next_retry_at <= this.now() && value.server_retry_at <= this.now();
+  }
+  /** Network retry deadlines must not prevent local projection of healthy new events. */
+  projectionEligible(context: TaskSyncContext, id: string): boolean {
+    const value = this.get(context, id);
+    return !value || value.phase !== TaskSyncPhase.Isolated && value.phase !== TaskSyncPhase.Closed;
+  }
+  /** One compatibility probe for old, ambiguous isolation. This grants scheduling only:
+   * the bridge must reconcile original operations and verify the exact remote stream. */
+  reconcileLegacyFailures(context: TaskSyncContext, canReconcile: (row: SyncRow) => boolean, limit = 50): {
+    promotedIds: string[]; scanned: number; hasMore: boolean;
+  } {
+    const size = Math.max(1, Math.min(50, Number.isSafeInteger(limit) ? limit : 50));
+    return this.db.transaction(() => {
+      const rows = this.db.prepare(`SELECT * FROM remote_sync_task_state WHERE owner_user_id=? AND owner_scope_key=?
+        AND target_key=? AND device_id=? AND recovery_probe_version=0 AND phase<>'ready'
+        ORDER BY local_session_id LIMIT ?`).all(...identity(context), size + 1) as TaskSyncRecord[];
+      const promotedIds: string[] = [];
+      for (const value of rows.slice(0, size)) {
+        const id = value.local_session_id;
+        // Mark every evaluated legacy row, including permanent/corrupt failures. A later
+        // failure or restart cannot silently grant another automatic compatibility attempt.
+        const marked = this.db.prepare(`UPDATE remote_sync_task_state SET recovery_probe_version=?
+          WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?
+            AND recovery_probe_version=0`).run(RECOVERY_PROBE_VERSION, ...this.args(context, id));
+        if (marked.changes !== 1 || value.phase !== TaskSyncPhase.Isolated || value.scope !== 'session'
+          || !legacyProbeReasons.has(value.reason) || this.ledger(value) === null
+          || !Number.isSafeInteger(value.server_retry_at) || value.server_retry_at < 0 || value.server_retry_at === NEVER
+          || value.fingerprint !== createHash('sha256').update(JSON.stringify([value.scope, value.reason])).digest('hex')) continue;
+        const row = this.db.prepare(`SELECT s.* FROM remote_sync s JOIN cowork_sessions c ON c.id=s.local_id
+          JOIN cowork_session_ownership o ON o.session_id=s.local_id
+          WHERE s.local_id=? AND s.device_id=? AND o.owner_user_id=? AND o.owner_scope_key=?
+            AND o.ownership_status='confirmed'`).get(id, context.deviceId, context.owner.userId, context.owner.scopeKey) as SyncRow | undefined;
+        if (!row) continue;
+        try {
+          if (!canReconcile(row)) continue;
+        } catch (error) {
+          const code = (error as { code?: unknown } | null)?.code;
+          if (typeof code === 'string' && /^SQLITE_(?:CORRUPT|NOTADB|FULL|IOERR)(?:_|$)/u.test(code)) throw error;
+          // Opaque task-local evidence must remain isolated, without preventing the
+          // next task's independent verification or granting repeated restart probes.
+          continue;
+        }
+        this.db.prepare(`UPDATE remote_sync_task_state SET phase='reconciling',next_retry_at=server_retry_at
+          WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?
+            AND phase='isolated' AND scope='session' AND reason=? AND fingerprint=? AND recovery_probe_version=?`)
+          .run(...this.args(context, id), value.reason, value.fingerprint, RECOVERY_PROBE_VERSION);
+        promotedIds.push(id);
+      }
+      return { promotedIds, scanned: Math.min(size, rows.length), hasMore: rows.length > size };
+    })();
   }
   served(context: TaskSyncContext, id: string): void {
     this.ensure(context, id);
@@ -103,9 +161,9 @@ export class RemoteTaskSyncState {
     const delay = phase === 'cooldown' || phase === 'waiting_dependency' ? 900000 + Math.floor(this.random() * 180000)
       : [30000, 60000, 120000, 300000][Math.min(3, count - 1)] * (0.8 + this.random() * 0.4);
     const retry = ['isolated', 'closed'].includes(phase) ? NEVER : Math.max(serverRetryAt, Math.min(NEVER, Math.ceil(now + delay)));
-    this.db.prepare(`UPDATE remote_sync_task_state SET phase=?,next_retry_at=?,failure_count=?,reason=?,scope=?,fingerprint=?,server_retry_at=?
+    this.db.prepare(`UPDATE remote_sync_task_state SET phase=?,next_retry_at=?,failure_count=?,reason=?,scope=?,fingerprint=?,server_retry_at=?,recovery_probe_version=?
       WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?`)
-      .run(phase, retry, count, invalidWait ? TaskSyncFailureReason.RetryHintInvalid : failure.reason.slice(0, 160), failure.scope, fingerprint, serverRetryAt, ...this.args(context, id));
+      .run(phase, retry, count, invalidWait ? TaskSyncFailureReason.RetryHintInvalid : failure.reason.slice(0, 160), failure.scope, fingerprint, serverRetryAt, RECOVERY_PROBE_VERSION, ...this.args(context, id));
     return this.get(context, id)!;
   }
   private ledger(value: TaskSyncRecord): RepairLedger | null {

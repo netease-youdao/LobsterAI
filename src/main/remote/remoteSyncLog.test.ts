@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { AuthRefreshFailureKind, AuthSessionStatus } from '../../shared/auth/constants';
+import { AuthSessionRequestError } from '../libs/authSessionManager';
+import { RemoteNetworkError } from './remoteNetworkError';
+import { RemoteNetworkFailure } from './remoteNetworkProtocol';
 import {
   remoteSyncErrorMetadata,
   remoteSyncEventMetadata,
@@ -91,5 +95,28 @@ describe('remote sync diagnostic metadata', () => {
         stateVersion: '2', committedSourceSeq: '17', committedSeq: '24' });
     expect(remoteSyncResultMetadata({ sessionId: privateText, state: privateText, committedSeq: '9'.repeat(20) }))
       .toMatchObject({ sessionId: null, state: null, committedSeq: null });
+  });
+});
+
+describe('safe authenticated transport diagnostics', () => {
+  it('retains a finite local reason hidden by the authenticated wrapper without logging its message or cause', () => {
+    const cause = new RemoteNetworkError(RemoteNetworkFailure.AdmissionBusy);
+    Object.assign(cause, { stack: privateText, url: privateText, token: privateText });
+    const error = new AuthSessionRequestError(AuthSessionStatus.TemporarilyUnavailable, privateText,
+      { failureKind: AuthRefreshFailureKind.Network, originalError: cause });
+    const metadata = remoteSyncErrorMetadata(error);
+    expect(metadata).toMatchObject({ errorType: 'AuthSessionRequestError', authStatus: AuthSessionStatus.TemporarilyUnavailable,
+      authFailureKind: AuthRefreshFailureKind.Network, transportFailure: RemoteNetworkFailure.AdmissionBusy, transportErrorType: 'RemoteNetworkError' });
+    expect(JSON.stringify(metadata)).not.toContain(privateText);
+    expect(metadata).not.toHaveProperty('originalError'); expect(metadata).not.toHaveProperty('stack');
+  });
+  it('reports only known native error codes and never prints unknown nested properties', () => {
+    const cause = Object.assign(new TypeError(privateText), { cause: { code: 'ENOTFOUND', hostname: privateText } });
+    const error = new AuthSessionRequestError(AuthSessionStatus.TemporarilyUnavailable, privateText,
+      { failureKind: AuthRefreshFailureKind.Network, originalError: cause });
+    expect(remoteSyncErrorMetadata(error)).toMatchObject({ transportSystemCode: 'ENOTFOUND', transportErrorType: 'TypeError' });
+    cause.cause.code = privateText;
+    expect(remoteSyncErrorMetadata(error)).not.toHaveProperty('transportSystemCode');
+    expect(JSON.stringify(remoteSyncErrorMetadata(error))).not.toContain(privateText);
   });
 });

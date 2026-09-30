@@ -85,3 +85,16 @@ POST /api/remote/v1/devices/desktop_1/commands/claim
 详细实施/验证记录见服务端 `docs/operations/2026-09-29-remote-isolation-implementation.md`；完整方案见 `docs/specs/mobile-remote-control/feature-2026-09-29-remote-isolation-resilience-observability.md`。
 
 两项核心安全边界仍保持原行为，未应用被自动审批拒绝的改动：坏核心 run 的全局恢复屏障，以及账号切换全局停止屏障与逐任务清理的先后顺序。具体提案与验收见服务端 docs/operations/2026-09-29-remote-safety-boundary-approval.md。
+
+
+## 5. 9/30 在线设备的任务同步异常修复
+
+本次截图故障定位于客户端：鉴权请求包装隐藏传输原因，旧调度器将临时网络错误记为永久任务隔离；HTTP 退避条件还会取消本地投影。此次不改服务端接口、认证或 MySQL schema。
+
+- 本地网络并发满延后 500ms，快照上下文变化延后 1 秒；保留原身份、原快照与回执检查。真实网络故障仍自动退避。
+- 本地投影仅检查独立的隔离/关闭调度条件，原 owner、target、device、admission、发布上下文校验保持不变；HTTP 退避不会取消正在生成的投影。
+- SQLite 调度表新增 `recovery_probe_version`，旧版三个已知隔离原因可在当前 owner/target/device 下获得一次原操作核对机会。进入 `reconciling` 后先检查原 import receipt 与 stream，核对成功不构造 ACK，不重跑模型或工具。
+- 新日志提供白名单 `authStatus/authFailureKind/transportFailure/transportErrorType/transportSystemCode`。原始异常正文、URL、token 不写入诊断。
+- 重启新客户端主进程后生效，不直接清理用户运行数据库。已有端点配置修改保留；手机真机状态需在新客户端加载后检查。
+
+详细证据与验证见服务端 `docs/operations/2026-09-30-remote-sync-transient-failures.md`。

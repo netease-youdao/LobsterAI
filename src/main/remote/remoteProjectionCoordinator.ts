@@ -10,6 +10,15 @@ import type { RemoteStore } from './remoteStore';
 import { archivedRemoteSyncReferences } from './remoteSyncTargetStore';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 
+export const RemoteProjectionFailure = {
+  ContextChanged: 'REMOTE_PROJECTION_CONTEXT_CHANGED',
+  WorkerExit: 'REMOTE_PROJECTION_WORKER_EXIT',
+} as const;
+/** These failures keep the existing projection retry and publication evidence. */
+export function isTransientProjectionFailure(reason: string): boolean {
+  return reason === RemoteProjectionFailure.ContextChanged || reason === RemoteProjectionFailure.WorkerExit;
+}
+
 const yieldMain = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 interface Materialization { revision: number; sourceSeq: number; targetSourceSeq: number; digest: string }
 const tables = ['remote_projection', 'remote_reply_contents', 'remote_reply_chunks', 'remote_outbox'] as const;

@@ -37,6 +37,7 @@ export class RemoteDeviceConnectionsService {
   private localConnection = '';
   private enabled = false;
   private foreground = true;
+  private consecutiveFailures = 0;
   private inFlight: Promise<void> | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private unsubscribeSettings: (() => void) | undefined;
@@ -59,6 +60,7 @@ export class RemoteDeviceConnectionsService {
       if (typeof window !== 'undefined') {
         window.addEventListener('focus', this.onWindowFocus);
         window.addEventListener('blur', this.onWindowBlur);
+        window.addEventListener('online', this.onNetworkOnline);
       }
       this.onSettings();
       void this.refresh();
@@ -75,6 +77,7 @@ export class RemoteDeviceConnectionsService {
       if (typeof window !== 'undefined') {
         window.removeEventListener('focus', this.onWindowFocus);
         window.removeEventListener('blur', this.onWindowBlur);
+        window.removeEventListener('online', this.onNetworkOnline);
       }
       this.update({ loading: false });
     };
@@ -92,6 +95,7 @@ export class RemoteDeviceConnectionsService {
       if (connectionChanged && enabled && this.listeners.size) void this.refresh();
       return;
     }
+    this.consecutiveFailures = 0;
     this.identity = identity;
     this.enabled = enabled;
     this.generation++;
@@ -101,6 +105,7 @@ export class RemoteDeviceConnectionsService {
     if (enabled && this.listeners.size) void this.refresh();
   };
 
+  private onNetworkOnline = (): void => { void this.refresh(); };
   private onWindowFocus = (): void => { this.foreground = true; void this.refresh(); };
   private onWindowBlur = (): void => { this.foreground = false; this.schedule(); };
 
@@ -114,7 +119,9 @@ export class RemoteDeviceConnectionsService {
     clearTimeout(this.timer);
     if (!this.enabled || !this.listeners.size) return;
     const background = !this.foreground || (typeof document !== 'undefined' && document.visibilityState === 'hidden');
-    this.timer = setTimeout(() => { void this.refresh(); }, (background ? 60000 : 15000) + Math.floor(Math.random() * 3000));
+    // Recover transient read failures promptly, then return to the normal bounded polling rate.
+    const foregroundDelay = this.consecutiveFailures ? Math.min(15000, 3000 * 2 ** (this.consecutiveFailures - 1)) : 15000;
+    this.timer = setTimeout(() => { void this.refresh(); }, (background ? 60000 : foregroundDelay) + Math.floor(Math.random() * 3000));
   }
 
   refresh = (): Promise<void> => {
@@ -128,6 +135,7 @@ export class RemoteDeviceConnectionsService {
       try {
         const data = await this.getApi().queryConnections({ expectedAccountEpoch: epoch });
         if (generation !== this.generation || mutationRevision !== this.mutationRevision) return;
+        this.consecutiveFailures = data.supported && !data.presenceAvailable ? Math.min(this.consecutiveFailures + 1, 4) : 0;
         this.update({ data, error: null });
         // A response timeout is not evidence that a remove failed. Query its original receipt.
         for (const operation of Object.values(this.snapshot.operations)) {
@@ -139,7 +147,10 @@ export class RemoteDeviceConnectionsService {
           } catch { /* Retain the original request ID for a later read or explicit retry. */ }
         }
       } catch {
-        if (generation === this.generation) this.update({ error: 'remoteConnectionsUnavailable' });
+        if (generation === this.generation) {
+          this.consecutiveFailures = Math.min(this.consecutiveFailures + 1, 4);
+          this.update({ error: 'remoteConnectionsUnavailable' });
+        }
       } finally {
         if (generation === this.generation) {
           this.inFlight = null;
