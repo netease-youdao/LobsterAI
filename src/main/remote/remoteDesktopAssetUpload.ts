@@ -4,7 +4,9 @@ import { createReadStream, promises as fs } from 'fs';
 import type { RemoteOwner } from '../../shared/remote/constants';
 import type { RemoteInputAsset } from '../../shared/remote/input';
 import { RemoteFileRequestError } from './remoteFileRetry';
+import { captureRemoteFileTelemetry, remoteFileRequestBytes, remoteFileRequestFailure, remoteFileRequestFailureFields, remoteFileRequestOperation, RemoteFileTelemetry as Telemetry } from './remoteFileTelemetry';
 import { requestRemoteFilePart } from './remoteFileTransferLog';
+import { withRemoteTelemetryRequest } from './remoteTelemetryTransport';
 
 export interface DesktopMessageAssetJob {
   owner: RemoteOwner;
@@ -44,6 +46,8 @@ export function uploadDesktopMessageAsset(job: DesktopMessageAssetJob, deps: Des
 export function uploadDesktopMessageAsset(job: DesktopMessageAssetJob, deps: DesktopMessageAssetUploadDependencies, options: { partBudget: number }): Promise<RemoteInputAsset | null>;
 export async function uploadDesktopMessageAsset(job: DesktopMessageAssetJob, deps: DesktopMessageAssetUploadDependencies,
   options?: { partBudget: number }): Promise<RemoteInputAsset | null> {
+  const telemetry = captureRemoteFileTelemetry(job.owner, { direction: Telemetry.DesktopInput, device_id: job.deviceId, session_id: job.sessionId,
+    operation_id: job.uploadRequestId, operation_kind: 'file_asset' });
   const budget = options ? Math.max(1, Math.floor(options.partBudget) || 1) : Number.POSITIVE_INFINITY;
   const check = (): void => { if (!deps.current()) fail('ACCESS_DENIED'); };
   check();
@@ -63,20 +67,30 @@ export async function uploadDesktopMessageAsset(job: DesktopMessageAssetJob, dep
   if (job.sha256 && job.sha256 !== sha256 || job.sizeBytes && job.sizeBytes !== sizeBytes) fail('ASSET_FILE_CHANGED');
   check(); deps.persist({ sha256, sizeBytes, availability: 'uploading' });
   const request = async (path: string, init: RequestInit): Promise<Record<string, unknown>> => {
-    check();
-    const response = await requestRemoteFilePart(path, init, () => deps.request(path, { ...init, redirect: 'error', signal: AbortSignal.timeout(120_000) }))
-      .catch((error: unknown) => { throw new RemoteFileRequestError(error instanceof Error ? error.message : 'ASSET_UPLOAD_FAILED'); });
-    check();
-    let envelope: { code?: number; data?: Record<string, unknown> };
-    try { envelope = await response.json() as typeof envelope; } catch {
-      if (!response.ok) throw new RemoteFileRequestError('ASSET_UPLOAD_FAILED', response.status, response.headers.get('Retry-After'));
-      return fail('ASSET_UPLOAD_FAILED');
+    const tracker = telemetry.request({ request_family: 'remote_json', operation: remoteFileRequestOperation(path), method: init.method || 'GET', lane: 'files', request_bytes: remoteFileRequestBytes(init.body) });
+    let observedResponse: Response | undefined;
+    try {
+      check();
+      const response = await requestRemoteFilePart(path, init, () => withRemoteTelemetryRequest(tracker, () => deps.request(path, { ...init, redirect: 'error', signal: AbortSignal.timeout(120_000) })))
+        .catch((error: unknown) => { const result = remoteFileRequestFailure(error); tracker.finish(result, remoteFileRequestFailureFields(result, error)); throw new RemoteFileRequestError(error instanceof Error ? error.message : 'ASSET_UPLOAD_FAILED'); });
+      observedResponse = response;
+      check();
+      let envelope: { code?: number; data?: Record<string, unknown> };
+      try { envelope = await response.json() as typeof envelope; } catch {
+        if (!response.ok) throw new RemoteFileRequestError('ASSET_UPLOAD_FAILED', response.status, response.headers.get('Retry-After'));
+        return fail('ASSET_UPLOAD_FAILED');
+      }
+      check();
+      if (!response.ok || envelope.code !== 0) tracker.finish('response_rejected', { http_status: response.status, business_code: envelope.code, failure_stage: 'api' });
+      if (response.status === 401 || response.status === 403) fail('ACCESS_DENIED');
+      if (response.status === 410 || envelope.code === 47062) fail('ASSET_EXPIRED');
+      if (!response.ok || envelope.code !== 0 || !envelope.data) throw new RemoteFileRequestError('ASSET_UPLOAD_FAILED', response.status, response.headers.get('Retry-After'), typeof envelope.data?.reason === 'string' ? envelope.data.reason : undefined);
+      tracker.finish('api_ok', { http_status: response.status });
+      return envelope.data;
+    } catch (error) {
+      const result = remoteFileRequestFailure(error, observedResponse);
+      tracker.finish(result, remoteFileRequestFailureFields(result, error, observedResponse)); throw error;
     }
-    check();
-    if (response.status === 401 || response.status === 403) fail('ACCESS_DENIED');
-    if (response.status === 410 || envelope.code === 47062) fail('ASSET_EXPIRED');
-    if (!response.ok || envelope.code !== 0 || !envelope.data) throw new RemoteFileRequestError('ASSET_UPLOAD_FAILED', response.status, response.headers.get('Retry-After'), typeof envelope.data?.reason === 'string' ? envelope.data.reason : undefined);
-    return envelope.data;
   };
   const jsonPost = (path: string, body: unknown): Promise<Record<string, unknown>> => request(path, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -89,6 +103,7 @@ export async function uploadDesktopMessageAsset(job: DesktopMessageAssetJob, dep
       || job.assetId && job.assetId !== asset.assetId) fail('ASSET_UPLOAD_FAILED');
   const assetId = asset.assetId as string;
   check(); deps.persist({ assetId });
+  telemetry.emit(Telemetry.File, { phase: Telemetry.Upload, outcome: Telemetry.Started, asset_id: assetId });
   if (asset.status !== 'ready') {
     const partBytes = Number(asset.partBytes), partCount = Number(asset.partCount);
     if (!Number.isInteger(partBytes) || partBytes < 1 || partBytes > 8 * 1024 * 1024
@@ -117,6 +132,7 @@ export async function uploadDesktopMessageAsset(job: DesktopMessageAssetJob, dep
           method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', 'X-Content-SHA256': partHash }, body: bytes.buffer,
         });
         if (receipt.assetId !== assetId || receipt.partNo !== partNo || receipt.sha256 !== partHash || receipt.status !== 'ready') fail('ASSET_UPLOAD_FAILED');
+        telemetry.emit(Telemetry.File, { phase: Telemetry.Upload, outcome: Telemetry.Succeeded, asset_id: assetId, part_count: 1, bytes: bytes.byteLength });
         sent++; deps.progress?.();
       }
     } finally { await handle.close(); }
@@ -126,5 +142,6 @@ export async function uploadDesktopMessageAsset(job: DesktopMessageAssetJob, dep
   await unchanged();
   if (asset.status !== 'ready' || asset.assetId !== assetId || asset.version !== '1' || asset.sha256 !== sha256
       || asset.sizeBytes !== sizeBytes || asset.fileName !== job.fileName || typeof asset.mimeType !== 'string') fail('ASSET_UPLOAD_FAILED');
+  telemetry.emit(Telemetry.File, { phase: Telemetry.Complete, outcome: Telemetry.Succeeded, asset_id: assetId });
   return { assetId, version: '1', fileName: job.fileName, mimeType: asset.mimeType as string, sizeBytes, sha256, intent: job.intent };
 }

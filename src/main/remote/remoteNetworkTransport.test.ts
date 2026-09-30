@@ -7,6 +7,8 @@ import { RemoteNetworkFailure, RemoteNetworkLimit as Limit, RemoteNetworkMessage
 import { RemoteNetworkTransport, remoteResponseJson } from './remoteNetworkTransport';
 import { remoteSyncErrorMetadata } from './remoteSyncLog';
 import { classifyTaskSyncFailure } from './remoteTaskSyncPolicy';
+import * as telemetryApi from './remoteTelemetry';
+import { currentRemoteTelemetryRequest, withRemoteTelemetryRequest } from './remoteTelemetryTransport';
 
 class Child extends EventEmitter {
   connected = true;
@@ -158,4 +160,76 @@ describe('supervised remote network transport', () => {
     children[0].reply({ type: Message.Alive, rss: 193 * 1024 * 1024 }); await expect(pending).rejects.toThrow('WORKER_EXIT');
     await settle(); const next = request(transport); await settle(); success(children[1]); await next;
   });
+});
+
+it('distinguishes spawn from readiness and intentional disposal from a worker crash', async () => {
+  const events: Array<{ event: string; fields: Record<string, unknown> }> = [];
+  vi.spyOn(telemetryApi, 'captureRemoteTelemetry').mockImplementation((base = {}) => ({
+    emit: (event, fields = {}) => { events.push({ event, fields: { ...base, ...fields } }); },
+    request: () => ({ logicalAttemptId: 'attempt', transportStarted: () => undefined, finish: () => undefined }),
+  }));
+  const { transport, children } = fixture();
+  const pending = request(transport); await settle();
+  expect(events.filter(item => item.fields.phase === 'ready')).toHaveLength(0);
+  children[0].reply({ type: Message.Alive, rss: 1024 });
+  children[0].reply({ type: Message.Alive, rss: 1024 });
+  expect(events.filter(item => item.fields.phase === 'ready')).toHaveLength(1);
+  success(children[0]); await pending;
+  transport.dispose(); await settle();
+  expect(events.filter(item => item.event === 'remote.worker.exit')).toEqual([
+    expect.objectContaining({ fields: expect.objectContaining({ reason: 'WORKER_DISPOSE', outcome: 'cancelled' }) }),
+  ]);
+  expect(new Set(events.map(item => item.fields.worker_instance_id)).size).toBe(1);
+});
+
+it('counts only worker-confirmed physical sends, including authenticated retransmission', async () => {
+  const { transport, children } = fixture();
+  const tracker = { logicalAttemptId: 'attempt', transportStarted: vi.fn(), finish: vi.fn() };
+  let accessToken = 'first-access';
+  const auth = new AuthSessionManager({ getTokens: () => ({ accessToken, refreshToken: 'test-refresh' }),
+    saveTokens: () => {}, fetch: async () => { throw new Error('Unexpected refresh'); }, getRefreshUrl: () => 'https://example.com/auth',
+    buildRefreshRequestBody: () => '{}', onTerminalFailure: () => {} });
+  const pending = withRemoteTelemetryRequest(tracker, () => auth.fetchWithAuth(base + '/capabilities', undefined, transport.fetch));
+  await settle();
+  const child = children[0], firstId = child.request().id;
+  expect(tracker.transportStarted).not.toHaveBeenCalled();
+  child.reply({ type: Message.FetchStarted, id: 'unknown' });
+  child.reply({ type: Message.FetchStarted, id: firstId });
+  child.reply({ type: Message.FetchStarted, id: firstId });
+  expect(tracker.transportStarted).toHaveBeenCalledTimes(1);
+  accessToken = 'replacement-access';
+  success(child, firstId, { status: 401 }); await settle();
+  const second = child.messages.filter(message => message.type === Message.Fetch).at(-1);
+  expect(second.id).not.toBe(firstId);
+  expect(tracker.transportStarted).toHaveBeenCalledTimes(1);
+  child.reply({ type: Message.FetchStarted, id: second.id }); success(child, second.id);
+  await pending; expect(tracker.transportStarted).toHaveBeenCalledTimes(2);
+  expect(tracker.finish).not.toHaveBeenCalled();
+});
+
+it('does not count admission rejection or missing authentication as a physical send', async () => {
+  const { transport, children } = fixture();
+  const tracker = { logicalAttemptId: 'attempt', transportStarted: vi.fn(), finish: vi.fn() };
+  const active = request(transport, '/sync/state'); await settle();
+  await expect(withRemoteTelemetryRequest(tracker, () => transport.fetch(base + '/sync/state'))).rejects.toThrow('ADMISSION_BUSY');
+  const auth = new AuthSessionManager({ getTokens: () => null, saveTokens: () => {},
+    fetch: async () => { throw new Error('Unexpected refresh'); }, getRefreshUrl: () => 'https://example.com/auth',
+    buildRefreshRequestBody: () => '{}', onTerminalFailure: () => {} });
+  await expect(withRemoteTelemetryRequest(tracker, () => auth.fetchWithAuth(base + '/capabilities', undefined, transport.fetch))).rejects.toThrow('No auth tokens');
+  expect(tracker.transportStarted).not.toHaveBeenCalled();
+  success(children[0]); await active;
+});
+
+it('keeps simultaneous logical request contexts separate and telemetry callbacks cannot reject requests', async () => {
+  const { transport, children } = fixture();
+  const first = { logicalAttemptId: 'first', transportStarted: vi.fn(() => { throw new Error('telemetry failed'); }), finish: vi.fn() };
+  const second = { logicalAttemptId: 'second', transportStarted: vi.fn(), finish: vi.fn() };
+  const a = withRemoteTelemetryRequest(first, () => request(transport, '/capabilities'));
+  const b = withRemoteTelemetryRequest(second, async () => { await Promise.resolve(); return request(transport, '/sessions/a'); });
+  await settle();
+  const child = children[0], sent = child.messages.filter(message => message.type === Message.Fetch);
+  for (const item of sent) { child.reply({ type: Message.FetchStarted, id: item.id }); success(child, item.id); }
+  await Promise.all([a, b]);
+  expect(first.transportStarted).toHaveBeenCalledTimes(1); expect(second.transportStarted).toHaveBeenCalledTimes(1);
+  expect(currentRemoteTelemetryRequest()).toBeUndefined();
 });

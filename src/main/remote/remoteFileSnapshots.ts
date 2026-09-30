@@ -1,11 +1,13 @@
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { Worker } from 'worker_threads';
 
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { RemoteFileReason } from '../../shared/remote/files';
+import { RemoteTelemetryEvent as TelemetryEvent } from '../../shared/remote/telemetry';
 import { remoteDiagnostics } from './remoteDiagnostics';
+import { captureRemoteTelemetry } from './remoteTelemetry';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 
 export const REMOTE_FILE_CACHE_BYTES = 200 * 1024 * 1024;
@@ -15,12 +17,14 @@ export function remoteFileCacheDirectory(root: string, owner: RemoteOwner): stri
 }
 const Work = { Capture: 'capture', Verify: 'verify', Input: 'input' } as const;
 let worker: Worker | null = null;
+let workerTelemetry: ReturnType<typeof captureRemoteTelemetry> | null = null;
 let sequence = 0;
 let queuedBytes = 0;
 const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void;
   started: number; timer: ReturnType<typeof setTimeout>; guard: ReturnType<typeof setInterval>; bytes: number }>();
-function failWorker(current: Worker): void {
+function failWorker(current: Worker, reason: string): void {
   if (worker !== current) return;
+  workerTelemetry?.emit(TelemetryEvent.WorkerExit, { role: 'file', phase: 'exit', reason, outcome: 'failed' }); workerTelemetry = null;
   worker = null; remoteDiagnostics.record('worker.failed');
   for (const item of pending.values()) { clearTimeout(item.timer); clearInterval(item.guard); item.reject(new Error(RemoteFileReason.Transfer)); }
   pending.clear(); queuedBytes = 0;
@@ -28,7 +32,13 @@ function failWorker(current: Worker): void {
 }
 function getWorker(): Worker {
   if (worker) return worker;
-  const current = new Worker(remoteWorkerPath(RemoteWorkerFile.FileSnapshot));
+  const telemetry = captureRemoteTelemetry({ role: 'file', worker_instance_id: randomUUID() });
+  let current: Worker;
+  try { current = new Worker(remoteWorkerPath(RemoteWorkerFile.FileSnapshot)); }
+  catch (error) { telemetry.emit(TelemetryEvent.WorkerExit, { phase: 'starting', reason: 'WORKER_SPAWN_ERROR' }); throw error; }
+  workerTelemetry = telemetry;
+  telemetry.emit(TelemetryEvent.WorkerRestart, { phase: 'starting', reason: 'STATE_CHANGED' });
+  current.once('online', () => { if (worker === current) telemetry.emit(TelemetryEvent.WorkerRestart, { phase: 'ready', reason: 'STATE_CHANGED' }); });
   current.unref(); worker = current;
   current.on('message', (reply: { id: number; value?: unknown; error?: string }) => {
     const item = pending.get(reply.id); if (!item) return;
@@ -37,7 +47,7 @@ function getWorker(): Worker {
     remoteDiagnostics.record(reply.error ? 'files.failed' : 'files.completed');
     if (reply.error) item.reject(new Error(reply.error)); else item.resolve(reply.value);
   });
-  current.on('error', () => failWorker(current)); current.on('exit', () => failWorker(current));
+  current.on('error', () => failWorker(current, 'WORKER_SPAWN_ERROR')); current.on('exit', () => failWorker(current, 'WORKER_EXIT'));
   return current;
 }
 function run(kind: typeof Work[keyof typeof Work], args: unknown, assertAllowed: () => void, bytes = 0): Promise<unknown> {
@@ -45,11 +55,11 @@ function run(kind: typeof Work[keyof typeof Work], args: unknown, assertAllowed:
   if (pending.size >= 16 || queuedBytes + bytes > 32 * 1024 * 1024) return Promise.reject(new Error(RemoteFileReason.Transfer));
   const current = getWorker(); const cancel = new SharedArrayBuffer(4); const id = ++sequence;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => failWorker(current), 30000);
+    const timer = setTimeout(() => failWorker(current, 'WORKER_WATCHDOG'), 30000);
     const guard = setInterval(() => { try { assertAllowed(); } catch { Atomics.store(new Int32Array(cancel), 0, 1); } }, 50);
     pending.set(id, { resolve, reject, started: performance.now(), timer, guard, bytes }); queuedBytes += bytes;
     remoteDiagnostics.gauge('files.queue', pending.size);
-    try { current.postMessage({ id, kind, args, cancel }); } catch { failWorker(current); }
+    try { current.postMessage({ id, kind, args, cancel }); } catch { failWorker(current, 'WORKER_IPC_FAILURE'); }
   });
 }
 export async function writeRemoteTemporaryInput(root: string, owner: RemoteOwner, base64: string, assertAllowed: () => void): Promise<string> {

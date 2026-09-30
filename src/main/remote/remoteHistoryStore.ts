@@ -5,6 +5,8 @@ import path from 'path';
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { payloadHash, sameOwner, stableJson } from './canonical';
 import type { RemoteStore } from './remoteStore';
+import { SyncTelemetry } from './remoteSyncTelemetry';
+import { captureRemoteTelemetry, remoteTelemetryEvent } from './remoteTelemetry';
 
 export interface HistoryContext {
   scope: string; localId: string; sessionId: string; writerGeneration: string; owner: RemoteOwner; deviceId: string;
@@ -41,6 +43,8 @@ export class RemoteHistoryStore {
   status(): { available: boolean; reason: string | null } { return { available: !!this.database?.open && !this.lastFailure, reason: this.lastFailure }; }
   close(): void { this.database?.close(); this.database = null; }
   private fail(error: unknown): RemoteHistoryUnavailable {
+    if (!this.lastFailure) remoteTelemetryEvent(SyncTelemetry.Event.Admission, { domain: 'history_storage', fromState: 'unknown',
+      toState: 'blocked', reason: SyncTelemetry.Reason.StorageUnavailable });
     this.close(); this.unavailableUntil = Date.now() + 30_000;
     this.lastFailure = error instanceof RemoteHistoryUnavailable ? error.reason : 'REMOTE_HISTORY_STORAGE_UNAVAILABLE';
     return new RemoteHistoryUnavailable(this.lastFailure);
@@ -76,7 +80,10 @@ export class RemoteHistoryStore {
       if (identity && identity.sidecar_id !== profile.sidecar_id) throw new RemoteHistoryUnavailable('REMOTE_HISTORY_IDENTITY_MISMATCH');
       if (!identity && adopted) throw new RemoteHistoryUnavailable('REMOTE_HISTORY_IDENTITY_MISSING');
       db.prepare('INSERT OR IGNORE INTO history_identity VALUES(1,?)').run(profile.sidecar_id);
-      this.database = db; this.lastFailure = null; return db;
+      this.database = db;
+      if (this.lastFailure) remoteTelemetryEvent(SyncTelemetry.Event.Admission, { domain: 'history_storage', fromState: 'blocked',
+        toState: 'ready', reason: SyncTelemetry.Reason.None });
+      this.lastFailure = null; return db;
     } catch (error) { db?.close(); throw this.fail(error); }
   }
   private assertCurrent(context: HistoryContext): void {
@@ -141,6 +148,10 @@ export class RemoteHistoryStore {
         || !sequence(session.historyGeneration) || !sequence(session.resolvedSourceSeq)) throw new RemoteHistoryUnavailable('REMOTE_HISTORY_SESSION_INVALID');
       this.assertCurrent(context);
       this.store.db.prepare("UPDATE remote_history_migrations SET phase='ready' WHERE migration_id=? AND phase='copied'").run(migration.migration_id);
+      if (migration.phase !== 'ready') remoteTelemetryEvent(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.HistoryMigration,
+        outcome: SyncTelemetry.Outcome.Completed, localSessionId: context.localId, sessionId: context.sessionId,
+        deviceId: context.deviceId, remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
+        operationKind: SyncTelemetry.Kind.History, writerGeneration: context.writerGeneration });
       return session;
     }); } catch (error) { this.fail(error); return null; }
   }
@@ -179,7 +190,13 @@ export class RemoteHistoryStore {
     return value;
   }
   sealOperation(value: Omit<HistoryOperation,'requestHash' | 'state' | 'receipt'>): HistoryOperation {
-    return this.access(value.context, db => db.transaction(() => {
+    const telemetry = captureRemoteTelemetry({ localSessionId: value.context.localId, sessionId: value.context.sessionId,
+      deviceId: value.context.deviceId, remoteOwnerId: value.context.owner.userId, ownerScopeId: value.context.owner.scopeKey,
+      writerGeneration: value.context.writerGeneration, lane: 'history', operationId: value.id,
+      operationKind: value.kind === 'recovery' ? SyncTelemetry.Kind.History : SyncTelemetry.Kind.HistoryBatch,
+      publicationKind: value.kind === 'recovery' ? SyncTelemetry.Kind.History : SyncTelemetry.Kind.HistoryBatch });
+    let inserted = false;
+    const result = this.access(value.context, db => db.transaction(() => {
       const hash = payloadHash(value.request), existing = this.readOperation(db,value.context,value.id);
       if (existing) {
         if (existing.requestHash !== hash || existing.kind !== value.kind) throw new RemoteHistoryUnavailable('REMOTE_HISTORY_OPERATION_IMMUTABLE');
@@ -190,8 +207,12 @@ export class RemoteHistoryStore {
       const used = db.prepare('SELECT COALESCE(SUM(bytes),0) AS bytes FROM history_operations').get() as { bytes: number };
       if (bytes > 1024 * 1024 || used.bytes + bytes > 32 * 1024 * 1024) throw new RemoteHistoryUnavailable('REMOTE_HISTORY_OPERATION_BUDGET');
       db.prepare('INSERT INTO history_operations VALUES(?,?,?,?,?,?,?)').run(value.id,...contextKey(value.context),body,bytes,'pending');
+      inserted = true;
       return operation;
     })());
+    if (inserted) telemetry.emit(SyncTelemetry.Event.HistoryStarted, { stage: SyncTelemetry.Stage.Sealed,
+      phase: SyncTelemetry.Stage.Sealed, outcome: SyncTelemetry.Outcome.Completed, businessStatus: 'pending' });
+    return result;
   }
   pending(context: HistoryContext): HistoryOperation[] {
     return this.access(context, db => (db.prepare("SELECT id FROM history_operations WHERE scope=? AND local_id=? AND writer_generation=? AND state='pending' ORDER BY id LIMIT 32")
@@ -228,6 +249,11 @@ export class RemoteHistoryStore {
     });
   }
   completeOperation(context: HistoryContext, id: string, receipt: Record<string, unknown>, position: { historyGeneration: string; resolvedSourceSeq: string }): void {
+    const telemetry = captureRemoteTelemetry({ localSessionId: context.localId, sessionId: context.sessionId,
+      deviceId: context.deviceId, remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
+      writerGeneration: context.writerGeneration, lane: 'history', operationId: id });
+    let completed = false;
+    let kind: HistoryOperation['kind'] | undefined;
     this.access(context, db => db.transaction(() => {
       const operation = this.readOperation(db,context,id), session = this.readSession(db,context);
       if (!operation || !session || !sequence(position.historyGeneration) || !sequence(position.resolvedSourceSeq)) throw new RemoteHistoryUnavailable('REMOTE_HISTORY_RECEIPT_INVALID');
@@ -238,12 +264,20 @@ export class RemoteHistoryStore {
       if (BigInt(position.historyGeneration) < BigInt(session.historyGeneration) || BigInt(position.resolvedSourceSeq) < BigInt(session.resolvedSourceSeq)) {
         throw new RemoteHistoryUnavailable('REMOTE_HISTORY_RECEIPT_REGRESSION');
       }
-      operation.state = 'complete'; operation.receipt = receipt;
+      operation.state = 'complete'; operation.receipt = receipt; kind = operation.kind;
       const body = stableJson(operation);
       if (Buffer.byteLength(body) > 2 * 1024 * 1024) throw new RemoteHistoryUnavailable('REMOTE_HISTORY_RECEIPT_BUDGET');
       Object.assign(session, position);
       db.prepare('UPDATE history_operations SET body=?,bytes=?,state=? WHERE id=?').run(body,Buffer.byteLength(body),'complete',id);
       db.prepare('UPDATE history_sessions SET body=? WHERE scope=? AND local_id=? AND writer_generation=?').run(stableJson(session),...contextKey(context));
+      completed = true;
     })());
+    if (completed) telemetry.emit(receipt.state === 'committed' ? SyncTelemetry.Event.HistoryCommitted : SyncTelemetry.Event.Reconciled,
+      { stage: SyncTelemetry.Stage.LocalAck, phase: SyncTelemetry.Stage.LocalAck, outcome: SyncTelemetry.Outcome.Confirmed,
+        operationKind: kind === 'recovery' ? SyncTelemetry.Kind.History : SyncTelemetry.Kind.HistoryBatch,
+        publicationKind: kind === 'recovery' ? SyncTelemetry.Kind.History : SyncTelemetry.Kind.HistoryBatch,
+        businessStatus: receipt.state, receiptState: receipt.state, persistOutcome: 'success',
+        historyGeneration: position.historyGeneration, resolvedSourceSeq: position.resolvedSourceSeq,
+        exactSourcePrefix: receipt.exactSourcePrefix, gapCount: Array.isArray(receipt.gaps) ? receipt.gaps.length : undefined });
   }
 }

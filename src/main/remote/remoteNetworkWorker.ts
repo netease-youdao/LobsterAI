@@ -42,6 +42,8 @@ async function fetchRequest(message: any): Promise<void> {
       || message.body !== undefined && typeof message.body !== 'string'
       || Buffer.byteLength(message.body || '') > Limit.BodyBytes
       || Buffer.byteLength(JSON.stringify(message.headers)) > Limit.HeaderBytes) throw new Error(Failure.RequestInvalid);
+    // This notification carries no URL/body/auth data and must not change the HTTP outcome.
+    try { process.send?.({ type: Message.FetchStarted, id }, () => {}); } catch { /* Best-effort telemetry only. */ }
     const response = await fetch(url, { method: message.method, headers: message.headers, body: message.body,
       signal: controller.signal, redirect: 'error' });
     const headers = Object.fromEntries(response.headers);

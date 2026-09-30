@@ -380,3 +380,26 @@ it('downgrades persisted v4 projections through a snapshot after process restart
   expect(snapshot.snapshotEpoch).toBeGreaterThan(before);
   expect(snapshot.records.find(record => record.eventType === 'message.upsert')!.payload.message.projectionVersion).toBeUndefined();
 });
+
+
+describe('diagnostic commit observers', () => {
+  it('waits for the outer commit, drops rollback observations, and isolates observer failure', () => {
+    const store = fixture(); const seen: string[] = [];
+    store.transaction(() => {
+      store.afterCommit(() => seen.push('outer'));
+      store.transaction(() => store.afterCommit(() => seen.push('nested')));
+      expect(seen).toEqual([]);
+    });
+    expect(seen).toEqual(['outer', 'nested']);
+    expect(() => store.transaction(() => { store.afterCommit(() => seen.push('rolled-back')); throw new Error('rollback'); })).toThrow('rollback');
+    expect(() => store.transaction(() => { store.afterCommit(() => { throw new Error('logger'); }); store.afterCommit(() => seen.push('survived')); })).not.toThrow();
+    expect(seen).toEqual(['outer', 'nested', 'survived']);
+  });
+  it('does not announce an external savepoint as committed or retain unlimited callbacks', () => {
+    const store = fixture(); let calls = 0;
+    store.db.transaction(() => store.transaction(() => store.afterCommit(() => calls++)))();
+    expect(calls).toBe(0);
+    store.transaction(() => { for (let i = 0; i < 1000; i++) store.afterCommit(() => calls++); });
+    expect(calls).toBe(256);
+  });
+});

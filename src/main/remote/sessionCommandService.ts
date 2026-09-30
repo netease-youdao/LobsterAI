@@ -9,9 +9,10 @@ import { parseModelThinkingLevel } from '../../shared/providers/modelThinking';
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { RemoteInputOperationPhase, RemoteInputReason } from '../../shared/remote/input';
 import { type QuestionDecisionOutcome, RemoteQuestion } from '../../shared/remote/questions';
+import { RemoteTelemetryEvent } from '../../shared/remote/telemetry';
 import type { CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
-import type { CoworkRuntime, PermissionRequest } from '../libs/agentEngine/types';
+import { type CoworkRuntime, CoworkRuntimeDiagnosticEvent, type PermissionRequest } from '../libs/agentEngine/types';
 import { type OwnershipOperationGate, ownershipOperationGate } from '../ownershipOperationGate';
 import { payloadHash, sameOwner } from './canonical';
 import type { InputPreparationService, LocalPreparedInput } from './inputPreparationService';
@@ -22,8 +23,9 @@ import { remoteDiagnostics } from './remoteDiagnostics';
 import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
 import { RemoteQuestionError } from './remoteQuestionService';
 import { remoteDiagnosticLog } from './remoteSyncLog';
+import { captureRemoteTelemetry } from './remoteTelemetry';
 
-interface ExecutionContext { owner: RemoteOwner | null; preparedSessionId?: string; runId?: string; commandId?: string; stillPermitted?: () => boolean; assertAgentBinding?: () => void }
+interface ExecutionContext { owner: RemoteOwner | null; preparedSessionId?: string; runId?: string; commandId?: string; commandType?: string; stillPermitted?: () => boolean; assertAgentBinding?: () => void }
 const context = new AsyncLocalStorage<ExecutionContext>();
 const inputPreparationProcessId = randomUUID();
 export const currentRemoteExecution = (): ExecutionContext | undefined => context.getStore();
@@ -38,6 +40,9 @@ export const markRemoteExecutionDispatched = (): void => {
   const active = context.getStore();
   if (active) {
     active.stillPermitted = undefined; active.assertAgentBinding = undefined;
+    if (active.commandType === 'create_session' || active.commandType === 'send_message') captureRemoteTelemetry({ remoteOwnerId: active.owner?.userId, ownerScopeId: active.owner?.scopeKey }).emit(RemoteTelemetryEvent.Dispatch, {
+      localSessionId: active.preparedSessionId, runId: active.runId, commandId: active.commandId, phase: 'attempted', origin: 'remote', persistOutcome: 'committed',
+    });
     remoteDiagnosticLog('desktop.run.dispatched', { localSessionId: active.preparedSessionId, runId: active.runId, commandId: active.commandId, result: 'success' }, 'info');
   }
 };
@@ -60,6 +65,7 @@ const inputOperationKey = (operationId: string, targetId?: string): string => `i
 /** All local/mobile submissions pass this account fence and per-session control lane. */
 export class SessionCommandService {
   private readonly submitting = new Set<string>();
+  private readonly telemetryAcceptedRuns = new Set<string>();
   private readonly configurationLane = new Map<string, string>();
   private readonly recovering = new Map<string, Promise<boolean>>();
   private readonly observedRuns = new Map<string, { runId: string; status: 'succeeded' | 'failed' | 'cancelled' | 'reconciling'; error?: string }>();
@@ -74,9 +80,19 @@ export class SessionCommandService {
       }
       // Dropping a retry hint never releases the durable run lock or permits replay.
       if (!this.observedRuns.has(sessionId) && this.observedRuns.size >= 128) this.observedRuns.delete(this.observedRuns.keys().next().value!);
+      let telemetry: ReturnType<typeof captureRemoteTelemetry> | null = null;
+      try {
+        const owner = this.store.remote.owner(sessionId);
+        const commandId = this.store.remote.get<string>(`runCommand:${sessionId}`);
+        if (owner) telemetry = captureRemoteTelemetry({ remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey,
+          localSessionId: sessionId, runId: run.runId, commandId, origin: commandId ? 'remote' : 'unknown' });
+      } catch { /* Diagnostics cannot prevent the observed run state from being saved. */ }
       this.observedRuns.set(sessionId, { runId: run.runId, status, error });
       this.store.remote.updateRun(sessionId, status, error);
       this.observedRuns.delete(sessionId);
+      if (run.status !== status) this.store.remote.afterCommit(() => telemetry?.emit(terminal.has(status) ? RemoteTelemetryEvent.Terminal : RemoteTelemetryEvent.OutcomeUnknown, {
+        phase: 'terminal', businessStatus: status, persistOutcome: 'committed',
+      }));
       if (!this.store.remote.db.inTransaction) remoteDiagnosticLog(terminal.has(status) ? 'desktop.run.terminal' : 'desktop.run.outcome_unknown',
         { localSessionId: sessionId, runId: run.runId, status, result: terminal.has(status) ? 'success' : 'unknown' }, 'info');
     } catch {
@@ -259,6 +275,19 @@ export class SessionCommandService {
       if (!run || terminal.has(run.status)) store.remote.beginRun(id);
       store.remote.refreshApprovalRunState(id, true);
     });
+    runtime.on(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, (id, gatewayRunId) => {
+      try {
+        const accepted = store.remote.run(id), mapping = store.remote.get<{ runId: string; remoteRunId: string }>(`gatewayRun:${id}`);
+        const owner = store.remote.owner(id), commandId = store.remote.get<string>(`runCommand:${id}`);
+        if (owner && accepted && mapping?.runId === gatewayRunId && mapping.remoteRunId === accepted.runId && !this.telemetryAcceptedRuns.has(accepted.runId)) {
+          if (this.telemetryAcceptedRuns.size >= 256) this.telemetryAcceptedRuns.delete(this.telemetryAcceptedRuns.values().next().value!);
+          this.telemetryAcceptedRuns.add(accepted.runId);
+          captureRemoteTelemetry({ remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey }).emit(RemoteTelemetryEvent.EngineAccepted, {
+            localSessionId: id, runId: accepted.runId, commandId, phase: 'engine_accepted', origin: commandId ? 'remote' : 'unknown',
+          });
+        }
+      } catch { /* Observation must not affect runtime admission or persistence. */ }
+    });
     runtime.on('complete', id => this.observeRun(id, 'succeeded'));
     runtime.on('error', (id, error) => this.observeRun(id, /disconnect|gateway|connection|socket/i.test(error) ? 'reconciling' : 'failed', t('remoteExecutionFailed')));
     // The legacy stop event means local cleanup, not proven gateway termination.
@@ -431,7 +460,7 @@ export class SessionCommandService {
     const release = (this.ownershipOptions.gate || ownershipOperationGate).beginOperation({ agentIds: [fixedAgentId], sessionIds: [localId] });
     if (!release) throw new Error('REMOTE_SESSION_BUSY');
     try {
-    const result = await context.run({ owner: entry.owner, preparedSessionId: localId, runId: entry.runId || undefined, commandId: entry.command.commandId, stillPermitted, assertAgentBinding }, async () => {
+    const result = await context.run({ owner: entry.owner, preparedSessionId: localId, runId: entry.runId || undefined, commandId: entry.command.commandId, commandType: entry.command.type, stillPermitted, assertAgentBinding }, async () => {
       assertRemoteExecutionPermit();
       if (preparedInput) {
         if (this.configurationLane.has(localId) || this.submitting.has(localId) || this.store.remote.get(`inputFence:${localId}`)) throw new RemoteInputError(RemoteInputReason.Busy);
@@ -489,6 +518,8 @@ export class SessionCommandService {
       if (entry.command.type === 'create_session') return this.startHandler!({ prompt: payload.text, cwd: fixedCwd, agentId: fixedAgentId });
       if (entry.command.type === 'send_message') return this.continueHandler!({ prompt: payload.text, sessionId: localId });
       if (entry.command.type === 'cancel_run') {
+        const telemetry = captureRemoteTelemetry({ remoteOwnerId: entry.owner.userId, ownerScopeId: entry.owner.scopeKey,
+          commandId: entry.command.commandId, commandType: entry.command.type, runId: entry.runId, localSessionId: localId });
         const currentRun = this.store.remote.run(localId);
         if (!currentRun || currentRun.runId !== entry.runId) {
           const previous = this.store.remote.get<{ runId: string; status: string }>(`runHistory:${localId}:${entry.runId}`);
@@ -499,11 +530,16 @@ export class SessionCommandService {
         if (!this.runtime.cancelSessionConfirmed) throw new Error('Cancellation unavailable');
         assertRemoteExecutionPermit();
         this.store.remote.updateRun(localId, 'cancelling');
+        this.store.remote.afterCommit(() => telemetry.emit(RemoteTelemetryEvent.ActionDecided, { phase: 'decided', persistOutcome: 'committed' }));
+        telemetry.emit(RemoteTelemetryEvent.ActionDispatched, { phase: 'attempted' });
         const confirmed = await this.runtime.cancelSessionConfirmed(localId);
         if (this.store.remote.run(localId)?.runId === entry.runId) this.store.remote.updateRun(localId, confirmed ? 'cancelled' : 'reconciling');
+        telemetry.emit(RemoteTelemetryEvent.ActionReconciled, { phase: 'reconciled', outcome: confirmed ? 'confirmed' : 'unknown' });
         return { success: true };
       }
       if (entry.command.type === RemoteQuestion.Command) {
+        const telemetry = captureRemoteTelemetry({ remoteOwnerId: entry.owner.userId, ownerScopeId: entry.owner.scopeKey,
+          commandId: entry.command.commandId, commandType: entry.command.type, runId: entry.runId, localSessionId: localId });
         const state = this.runtime.getQuestionState?.(payload.questionId);
         if (!['answer', 'cancel'].includes(payload.action) || !state || state.sessionId !== localId
           || state.runId !== entry.runId || !this.runtime.respondToQuestionConfirmed) {
@@ -512,7 +548,7 @@ export class SessionCommandService {
         const outcome = await this.runtime.respondToQuestionConfirmed(payload.questionId, payload.action === 'answer'
           ? { behavior: 'allow', updatedInput: { answers: payload.answers } } : { behavior: 'deny', message: 'Cancelled from mobile' }, {
           submissionId: entry.command.commandId, source: 'mobile', expectedVersion: payload.questionVersion,
-          operationDigest: payload.operationDigest, onDispatch: markRemoteExecutionDispatched,
+          operationDigest: payload.operationDigest, onDispatch: () => { markRemoteExecutionDispatched(); telemetry.emit(RemoteTelemetryEvent.ActionDecided, { phase: 'decided', persistOutcome: 'committed' }); telemetry.emit(RemoteTelemetryEvent.ActionDispatched, { phase: 'attempted' }); },
           beforeDispatch: () => {
             assertRemoteExecutionPermit();
             this.store.remote.assertActor(localId, entry.owner);
@@ -523,11 +559,14 @@ export class SessionCommandService {
             this.store.assertAgentAccess(current.agentId || AgentId.Main, entry.owner);
           },
         });
+        telemetry.emit(RemoteTelemetryEvent.ActionReconciled, { phase: 'reconciled', outcome: outcome?.kind ?? 'unknown' });
         if (!outcome || outcome.kind !== 'confirmed') throw new RemoteQuestionError(outcome || { kind: 'unknown', reason: 'QUESTION_RESULT_UNKNOWN' });
         if (outcome.status !== (payload.action === 'answer' ? 'answered' : 'cancelled')) throw new RemoteQuestionError({ kind: 'unknown', reason: 'QUESTION_RESULT_UNKNOWN' });
         return { success: true };
       }
       if (entry.command.type === 'approval_response') {
+        const telemetry = captureRemoteTelemetry({ remoteOwnerId: entry.owner.userId, ownerScopeId: entry.owner.scopeKey,
+          commandId: entry.command.commandId, commandType: entry.command.type, runId: entry.runId, localSessionId: localId });
         const payload = request.payload;
         const state = this.runtime.getPermissionState?.(payload.approvalId);
         // The runtime owns CAS, versions and dispatch evidence. Do not mutate the original command
@@ -538,7 +577,7 @@ export class SessionCommandService {
         const outcome = await this.runtime.respondToPermissionConfirmed(payload.approvalId, payload.decision === 'approve'
           ? { behavior: 'allow', updatedInput: {} } : { behavior: 'deny', message: 'Denied from mobile' }, {
           submissionId: entry.command.commandId, source: 'mobile', expectedVersion: payload.approvalVersion,
-          operationDigest: payload.operationDigest, onDispatch: markRemoteExecutionDispatched,
+          operationDigest: payload.operationDigest, onDispatch: () => { markRemoteExecutionDispatched(); telemetry.emit(RemoteTelemetryEvent.ActionDecided, { phase: 'decided', persistOutcome: 'committed' }); telemetry.emit(RemoteTelemetryEvent.ActionDispatched, { phase: 'attempted' }); },
           beforeDispatch: () => {
             assertRemoteExecutionPermit();
             this.store.remote.assertActor(localId, entry.owner);
@@ -549,6 +588,7 @@ export class SessionCommandService {
             this.store.assertAgentAccess(current.agentId || AgentId.Main, entry.owner);
           },
         });
+        telemetry.emit(RemoteTelemetryEvent.ActionReconciled, { phase: 'reconciled', outcome: outcome?.kind ?? 'unknown' });
         if (!outcome || outcome.kind !== 'confirmed') throw new RemoteApprovalError(outcome || { kind: 'unknown', reason: 'RESULT_UNKNOWN' });
         return { success: true };
       }

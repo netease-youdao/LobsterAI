@@ -4,7 +4,7 @@ import {
   LogReporterAction,
   LogReporterStoreKey,
 } from '../../shared/analytics/constants';
-import { buildMainLogUrl, MainLogReporter } from './mainLogReporter';
+import { buildMainLogUrl, freezeMainLogEvent, FrozenLogOutcome, MainLogReporter, sendFrozenMainLogEvent } from './mainLogReporter';
 
 const createStore = (initial: Record<string, unknown> = {}) => {
   const values = new Map<string, unknown>(Object.entries(initial));
@@ -196,5 +196,43 @@ describe('MainLogReporter', () => {
     if (!finishRequest) throw new Error('request did not start');
     finishRequest({ ok: true, status: 200 });
     await expect(firstRequest).resolves.toBe(true);
+  });
+});
+
+
+describe('frozen main-process telemetry transport', () => {
+  const context = { appVersion: '1', arch: 'arm64', platform: 'darwin', language: 'en', firstKeyfrom: 'official',
+    latestKeyfrom: 'official', installationId: 'installation', timestamp: 1000, userId: 'user-a' };
+  test('freezes time and identity immediately, independent of later caller mutation', () => {
+    const local = { ...context };
+    const event = freezeMainLogEvent({ action: 'lobsterai_remote_runtime', eventId: 'event' }, local)!;
+    local.userId = 'user-b'; local.timestamp = 2000;
+    expect(new URL(event.url).searchParams.get('user_id')).toBe('user-a');
+    expect(new URL(event.url).searchParams.get('uts')).toBe('1000');
+    expect(freezeMainLogEvent({ action: 'lobsterai_remote_runtime', tooLong: 'x'.repeat(3000) }, context)).toBeNull();
+  });
+  test('hard timeout settles even when an injected transport ignores cancellation', async () => {
+    vi.useFakeTimers();
+    try {
+      let signal: AbortSignal | undefined;
+      const pending = sendFrozenMainLogEvent({ url: 'https://rlogs.youdao.com/rlog.php' }, {
+        signal: new AbortController().signal, timeoutMs: 100,
+        fetch: async (_url, value) => { signal = value; return new Promise(() => undefined); },
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(pending).resolves.toEqual({ outcome: FrozenLogOutcome.Retry });
+      expect(signal?.aborted).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+  test('caller cancellation, 429 retry hints and permanent rejections stay distinct', async () => {
+    const controller = new AbortController(); controller.abort(); const fetch = vi.fn();
+    await expect(sendFrozenMainLogEvent({ url: 'https://rlogs.youdao.com/rlog.php' }, { fetch, signal: controller.signal }))
+      .resolves.toEqual({ outcome: FrozenLogOutcome.Cancelled }); expect(fetch).not.toHaveBeenCalled();
+    const options = { fetch: vi.fn().mockResolvedValue({ ok: false, status: 429, retryAfter: '60' }), signal: new AbortController().signal };
+    await expect(sendFrozenMainLogEvent({ url: 'https://rlogs.youdao.com/rlog.php' }, options))
+      .resolves.toMatchObject({ outcome: FrozenLogOutcome.Retry, retryAfterMs: 60000 });
+    options.fetch.mockResolvedValue({ ok: false, status: 400 });
+    await expect(sendFrozenMainLogEvent({ url: 'https://rlogs.youdao.com/rlog.php' }, options))
+      .resolves.toMatchObject({ outcome: FrozenLogOutcome.Rejected });
   });
 });

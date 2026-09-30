@@ -6,13 +6,15 @@ import { join } from 'path';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { RemoteQuestion } from '../../shared/remote/questions';
+import { RemoteTelemetryEvent } from '../../shared/remote/telemetry';
 import type { CoworkStore } from '../coworkStore';
 import { ApprovalDecisionService } from '../libs/agentEngine/approvalDecisionService';
-import type { CoworkRuntime } from '../libs/agentEngine/types';
+import { type CoworkRuntime,CoworkRuntimeDiagnosticEvent } from '../libs/agentEngine/types';
 import { OwnershipOperationGate } from '../ownershipOperationGate';
 import { payloadHash } from './canonical';
 import type { InboxEntry } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
+import * as telemetry from './remoteTelemetry';
 import { assertRemoteExecutionPermit, currentRemoteExecution, markRemoteExecutionDispatched, SessionCommandService } from './sessionCommandService';
 
 const owner = { userId: '10001', scopeKey: 'personal' };
@@ -518,4 +520,49 @@ it('does not apply deferred terminal evidence to a replacement run', async () =>
   remote.updateRun('local', 'succeeded'); remote.beginRun('local', 'replacement');
   await expect(service.reconcileSession('local')).resolves.toBe(false);
   expect(remote.run('local')).toMatchObject({ runId: 'replacement', status: 'starting' });
+});
+
+
+it('telemetry ownership lookup failure cannot suppress an observed execution result', () => {
+  const { runtime, remote } = fixture();
+  const lookup = vi.spyOn(remote, 'owner').mockImplementationOnce(() => { throw new Error('diagnostic lookup unavailable'); });
+  runtime.emit('complete', 'local'); lookup.mockRestore();
+  expect(remote.run('local')?.status).toBe('succeeded');
+});
+
+
+it('engine acceptance requires a matching explicit gateway ACK and is recorded once per run', () => {
+  const events: Array<{ event: string; fields: Record<string, unknown> }> = [];
+  const spy = vi.spyOn(telemetry, 'captureRemoteTelemetry').mockImplementation((base = {}) => ({
+    emit: (event, fields = {}) => { events.push({ event, fields: { ...base, ...fields } }); },
+    request: () => ({ logicalAttemptId: 'attempt', transportStarted: () => undefined, finish: () => undefined }),
+  }));
+  try {
+    const { remote, runtime } = fixture();
+    remote.put('gatewayRun:local', { runId: 'gateway-run', remoteRunId: 'server-run' });
+    runtime.emit('sessionStatus', 'local', 'running');
+    runtime.emit(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, 'local', 'stale-gateway-run');
+    expect(events.filter(item => item.event === RemoteTelemetryEvent.EngineAccepted)).toHaveLength(0);
+    runtime.emit(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, 'local', 'gateway-run');
+    runtime.emit(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, 'local', 'gateway-run');
+    expect(events.filter(item => item.event === RemoteTelemetryEvent.EngineAccepted)).toEqual([
+      expect.objectContaining({ fields: expect.objectContaining({ runId: 'server-run', localSessionId: 'local', phase: 'engine_accepted' }) }),
+    ]);
+  } finally { spy.mockRestore(); }
+});
+
+
+it('does not recount an unchanged reconciling outcome when the runtime repeats its observation', () => {
+  const events: string[] = [];
+  const spy = vi.spyOn(telemetry, 'captureRemoteTelemetry').mockImplementation(() => ({
+    emit: event => { events.push(event); },
+    request: () => ({ logicalAttemptId: 'attempt', transportStarted: () => undefined, finish: () => undefined }),
+  }));
+  try {
+    const { runtime, remote } = fixture();
+    runtime.emit('error', 'local', 'gateway disconnected');
+    runtime.emit('error', 'local', 'gateway disconnected');
+    expect(remote.run('local')?.status).toBe('reconciling');
+    expect(events.filter(event => event === RemoteTelemetryEvent.OutcomeUnknown)).toHaveLength(1);
+  } finally { spy.mockRestore(); }
 });

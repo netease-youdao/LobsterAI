@@ -53,6 +53,7 @@ import {
   parseModelThinkingLevel,
 } from '../shared/providers/modelThinking';
 import type { RemoteOwner } from '../shared/remote/constants';
+import { RemoteTelemetryEvent } from '../shared/remote/telemetry';
 import { AgentAccessError, AgentOwnerStore, sessionVisibilitySql } from './agentOwnership';
 import {
   ContinuityCapsuleSource,
@@ -69,6 +70,7 @@ import { sameOwner } from './remote/canonical';
 import { recordRemoteSessionDeletion } from './remote/remoteLocalGc';
 import { RemoteStore } from './remote/remoteStore';
 import { remoteDiagnosticLog } from './remote/remoteSyncLog';
+import { captureRemoteTelemetry } from './remote/remoteTelemetry';
 
 
 // Default working directory for new users
@@ -2162,6 +2164,9 @@ export class CoworkStore {
       .get(sessionId) as { next_seq: number } | undefined;
     const sequence = seqRow?.next_seq ?? 1;
 
+    let telemetry: ReturnType<typeof captureRemoteTelemetry> | null = null;
+    try { const owner = this.remote.owner(sessionId); if (owner) telemetry = captureRemoteTelemetry({ remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey,
+      localSessionId: sessionId, runId: run?.runId, commandId: run?.commandId }); } catch { /* No trusted telemetry identity. */ }
     try { this.writeSessionProjections([sessionId], () => {
       if (message.type === 'user') this.remote.advanceDeletionGuard(sessionId);
       this.db
@@ -2181,17 +2186,22 @@ export class CoworkStore {
           sequence,
         );
 
+      this.remote.afterCommit(() => telemetry?.emit(message.metadata?.isFinal === true ? RemoteTelemetryEvent.FinalPersisted : RemoteTelemetryEvent.MessagePersisted, {
+        messageId: id, writeKind: 'insert', persistOutcome: 'committed', phase: 'local_commit',
+      }));
+
       // updated_at drives session list ordering: only user messages may move it,
       // otherwise concurrent streaming runs keep reordering the list.
       if (message.type === 'user') {
         this.db.prepare('UPDATE cowork_sessions SET updated_at = ? WHERE id = ?').run(now, sessionId);
       }
     }); } catch (error) {
+      telemetry?.emit(RemoteTelemetryEvent.PersistFailed, { writeKind: 'insert', persistOutcome: 'failed', reason: 'STORAGE_UNAVAILABLE' });
       remoteDiagnosticLog('desktop.message.persist_failed', { localSessionId: sessionId, runId: run?.runId,
         commandId: run?.commandId, reason: 'STORAGE_UNAVAILABLE' }, 'error');
       throw error;
     }
-    if (!this.db.inTransaction) remoteDiagnosticLog('desktop.message.persisted', {
+    if (!this.db.inTransaction) remoteDiagnosticLog(RemoteTelemetryEvent.MessagePersisted, {
       localSessionId: sessionId, runId: run?.runId, commandId: run?.commandId, result: 'success',
     });
 
@@ -2430,7 +2440,11 @@ export class CoworkStore {
     messageId: string,
     updates: { content?: string; metadata?: CoworkMessageMetadata },
   ): void {
-    return this.remote.transaction(() => {
+    let telemetry: ReturnType<typeof captureRemoteTelemetry> | null = null;
+    if (updates.metadata?.isFinal === true) {
+      try { const owner = this.remote.owner(sessionId); if (owner) telemetry = captureRemoteTelemetry({ remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey, localSessionId: sessionId, messageId }); } catch { /* No trusted telemetry identity. */ }
+    }
+    try { return this.remote.transaction(() => {
     const setClauses: string[] = [];
     const values: (string | number | null)[] = [];
 
@@ -2456,7 +2470,7 @@ export class CoworkStore {
     values.push(sessionId);
     // Intentionally leaves session updated_at untouched: this runs for every
     // streaming delta and would make concurrent runs fight over list order.
-    this.db
+    const result = this.db
       .prepare(
         `
       UPDATE cowork_messages
@@ -2465,7 +2479,15 @@ export class CoworkStore {
     `,
       )
       .run(...values);
-    });
+    if (result.changes > 0 && telemetry) this.remote.afterCommit(() => telemetry?.emit(updates.metadata?.isFinal === true
+      ? RemoteTelemetryEvent.FinalPersisted : RemoteTelemetryEvent.MessagePersisted, { writeKind: 'update', persistOutcome: 'committed', phase: 'local_commit' }));
+    }); } catch (error) {
+      if (!telemetry) {
+        try { const owner = this.remote.owner(sessionId); if (owner) telemetry = captureRemoteTelemetry({ remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey, localSessionId: sessionId, messageId }); } catch { /* Failed storage may also prevent diagnostic attribution. */ }
+      }
+      telemetry?.emit(RemoteTelemetryEvent.PersistFailed, { writeKind: 'update', persistOutcome: 'failed', reason: 'STORAGE_UNAVAILABLE' });
+      throw error;
+    }
   }
 
   // Config operations

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { RemoteSettingsError,type RemoteSettingsState } from '../../shared/remote/constants';
+import { RemoteTelemetryUiAction, RemoteTelemetryUiStage, RemoteTelemetryUiSurface } from '../../shared/remote/telemetryUi';
 import { RemoteSettingsService } from './remoteSettings';
 
 const state = (changes: Partial<RemoteSettingsState> = {}): RemoteSettingsState => ({
@@ -272,5 +273,21 @@ describe('RemoteSettingsService', () => {
     f.api.state.mockRejectedValueOnce(new Error('Disconnected'));
     await f.service.refresh();
     expect(f.service.getSnapshot()).toMatchObject({ error: 'remoteStateUnavailable', state: { enabled: true } });
+  });
+});
+
+
+describe('remote settings telemetry isolation', () => {
+  test('failed renderer analytics cannot prevent a configuration write', async () => {
+    const f = fixture(); const analytics = vi.fn(() => { throw new Error('analytics unavailable'); });
+    Object.assign(f.api, { telemetry: analytics });
+    const off = f.service.subscribe(vi.fn()); await Promise.resolve();
+    expect(await f.service.submit({ enabled: false })).toBe(true); expect(f.api.configure).toHaveBeenCalledOnce();
+    expect(analytics).toHaveBeenCalledTimes(2); off();
+  });
+  test('does not emit UI attribution until there is an authoritative account epoch', () => {
+    const f = fixture(); const analytics = vi.fn(); Object.assign(f.api, { telemetry: analytics });
+    f.service.telemetry(RemoteTelemetryUiSurface.Settings, RemoteTelemetryUiAction.Open, RemoteTelemetryUiStage.Open);
+    expect(analytics).not.toHaveBeenCalled();
   });
 });

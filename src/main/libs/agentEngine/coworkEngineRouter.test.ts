@@ -3,7 +3,7 @@ import { describe, expect, test, vi } from 'vitest';
 
 import { CoworkBtwStatus } from '../../../shared/cowork/btw';
 import { CoworkEngineRouter } from './coworkEngineRouter';
-import type { CoworkRuntime } from './types';
+import { type CoworkRuntime,CoworkRuntimeDiagnosticEvent } from './types';
 
 function createRuntimeMock(): CoworkRuntime {
   const emitter = new EventEmitter();
@@ -100,4 +100,15 @@ describe('CoworkEngineRouter', () => {
       .emit('btwResult', 'session-1', result);
     expect(listener).toHaveBeenCalledWith('session-1', result);
   });
+});
+
+
+test('diagnostic acceptance passes through the router without propagating listener exceptions', () => {
+  const runtime = createRuntimeMock() as CoworkRuntime & { emit(event: string, ...args: unknown[]): boolean };
+  const router = new CoworkEngineRouter({ getCurrentEngine: () => 'openclaw', openclawRuntime: runtime });
+  const received = vi.fn();
+  router.on(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, received);
+  router.on(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, () => { throw new Error('telemetry listener failed'); });
+  expect(() => runtime.emit(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, 'session-1', 'gateway-run')).not.toThrow();
+  expect(received).toHaveBeenCalledWith('session-1', 'gateway-run');
 });

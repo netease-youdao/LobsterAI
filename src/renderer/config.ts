@@ -136,6 +136,8 @@ export interface AppConfig {
   sqliteAutoBackupEnabled?: boolean;
   // 是否允许发送基础产品使用统计
   usageAnalyticsEnabled?: boolean;
+  // 远控诊断上报；同时受基础使用统计总开关控制
+  remoteTelemetryEnabled?: boolean;
   // 通知配置
   notificationSettings?: NotificationSettings;
   // 浏览器与网页访问配置
@@ -194,6 +196,7 @@ export const defaultConfig: AppConfig = {
   artifactAutoPreviewEnabled: true,
   sqliteAutoBackupEnabled: false,
   usageAnalyticsEnabled: true,
+  remoteTelemetryEnabled: true,
   notificationSettings: defaultNotificationSettings,
   browserWebAccess: defaultBrowserWebAccessConfig,
   app: {

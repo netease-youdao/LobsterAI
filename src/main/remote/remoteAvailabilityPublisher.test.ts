@@ -1,13 +1,24 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { remoteTelemetryHasRequired, sanitizeRemoteTelemetryFields } from '../../shared/remote/telemetry';
 import { type AvailabilityContext,RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
 import { RemoteStore } from './remoteStore';
+import { SyncTelemetry } from './remoteSyncTelemetry';
+
+const telemetryEvents = vi.hoisted(() => [] as Array<{ event: string; fields: Record<string, unknown> }>);
+vi.mock('./remoteTelemetry', () => ({
+  captureRemoteTelemetry: (base: Record<string, unknown> = {}) => ({
+    emit: (event: string, fields: Record<string, unknown> = {}) => telemetryEvents.push({ event, fields: { ...base, ...fields } }),
+  }),
+  remoteTelemetryEvent: (event: string, fields: Record<string, unknown> = {}) => telemetryEvents.push({ event, fields }),
+}));
+
 
 vi.mock('./remoteLogSink', () => ({ enqueueRemoteLog: (level: 'debug' | 'warn' | 'error' | 'info', message: string, fields: Record<string, unknown>) => console[level](message, fields) }));
 
 const cleanup: Array<() => void> = [];
-afterEach(() => { cleanup.splice(0).reverse().forEach(dispose => dispose()); vi.restoreAllMocks(); });
+afterEach(() => { telemetryEvents.length = 0; cleanup.splice(0).reverse().forEach(dispose => dispose()); vi.restoreAllMocks(); });
 function fixture() {
   const db = new Database(':memory:'); cleanup.push(() => db.close());
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT,model_override TEXT,thinking_level TEXT);
@@ -360,5 +371,57 @@ describe('task and object fault boundaries', () => {
     await f.controls(); await f.live();
     expect(f.publisher.controlReady('local')).toBe(true);
     expect(f.publisher.ledger.pending(f.context.scope,'live','local')).toEqual([]);
+  });
+});
+
+
+describe('synchronization telemetry evidence', () => {
+  it('reports a rejected complete body and the separately accepted placeholder without calling both complete content', async () => {
+    const f = fixture(); await f.controls(); telemetryEvents.length = 0;
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => args[0] === '/sync/live-projections' && args[2].representation === 'complete'
+      ? { publicationId: args[2].publicationId, state: 'rejected' } : ordinary(...args));
+    await f.live(); await f.live();
+    const acknowledged = telemetryEvents.filter(item => item.event === SyncTelemetry.Event.Acknowledged);
+    expect(acknowledged.map(item => [item.fields.businessStatus, item.fields.representation])).toEqual([
+      ['rejected', 'complete'], ['accepted', 'desktop_only'],
+    ]);
+    expect(acknowledged[0].fields.operationId).not.toBe(acknowledged[1].fields.operationId);
+    expect(telemetryEvents.filter(item => !remoteTelemetryHasRequired(item.event, sanitizeRemoteTelemetryFields(item.fields)))).toEqual([]);
+    expect(telemetryEvents.some(item => item.event === SyncTelemetry.Event.Content && item.fields.outcome === SyncTelemetry.Outcome.Degraded)).toBe(true);
+  });
+  it('announces content recovery only after the complete replacement is accepted and committed locally', async () => {
+    const f = fixture(); await f.controls();
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => args[0] === '/sync/live-projections' && args[2].representation === 'complete'
+      ? { publicationId: args[2].publicationId, state: 'rejected' } : ordinary(...args));
+    await f.live(); await f.live();
+    telemetryEvents.length = 0;
+    f.store.transaction(() => f.db.prepare('UPDATE cowork_messages SET content=? WHERE id=?').run('New healthy reply', 'message'));
+    (f.publisher as any).liveScan.clear();
+    f.request.mockImplementation(ordinary);
+    await f.live();
+    const recovered = telemetryEvents.filter(item => item.event === SyncTelemetry.Event.Content);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0].fields).toMatchObject({ outcome: SyncTelemetry.Outcome.Recovered,
+      stage: SyncTelemetry.Stage.LocalAck, representation: 'complete', businessStatus: 'accepted' });
+  });
+  it('does not announce an ACK when its local commit fails after HTTP success', async () => {
+    const f = fixture(); await f.controls(); telemetryEvents.length = 0;
+    vi.spyOn(f.publisher.ledger, 'completeObject').mockImplementationOnce(() => { throw new Error('disk unavailable'); });
+    await f.live();
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections')).toBe(true);
+    expect(telemetryEvents.some(item => item.event === SyncTelemetry.Event.Acknowledged)).toBe(false);
+    expect(f.publisher.ledger.pending(f.context.scope, 'live', 'local')).toHaveLength(1);
+  });
+  it('retains an invalid remote receipt without announcing synchronization success', async () => {
+    const f = fixture(); await f.controls(); telemetryEvents.length = 0;
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => args[0] === '/sync/live-projections'
+      ? { publicationId: 'wrong-publication', state: 'accepted' } : ordinary(...args));
+    await f.live();
+    expect(telemetryEvents.some(item => item.event === SyncTelemetry.Event.Acknowledged)).toBe(false);
+    expect(telemetryEvents.some(item => item.fields.reason === SyncTelemetry.Reason.InvalidReceipt)).toBe(true);
+    expect(f.publisher.ledger.pending(f.context.scope, 'live', 'local')).toHaveLength(1);
   });
 });

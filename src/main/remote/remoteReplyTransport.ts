@@ -1,7 +1,9 @@
 import { createHash, type Hash } from 'crypto';
 
 import type { RemoteReplyUpload as ReplyContentUpload } from '../../shared/remote/reply';
+import { SyncTelemetry } from './remoteSyncTelemetry';
 import { RemoteTaskDataError } from './remoteTaskSyncState';
+import { captureRemoteTelemetry } from './remoteTelemetry';
 
 interface ReplyUploadOptions {
   sessionId: string;
@@ -27,6 +29,10 @@ export class RemoteReplyTransport {
   private readonly progress = new Map<string, ReplyProgress>();
   clear(): void { this.chunks.clear(); this.progress.clear(); }
   async upload(options: ReplyUploadOptions, maxRequests = Number.POSITIVE_INFINITY): Promise<boolean> {
+    const telemetry = captureRemoteTelemetry({ sessionId: options.sessionId, deviceId: options.deviceId,
+      operationId: options.publicationId?.split(':')[0], operationKind: SyncTelemetry.Kind.Reply, lane: 'history' });
+    let stage: string = SyncTelemetry.Stage.ContentValidation;
+    try {
     const progressKey = options.publicationId ? JSON.stringify([options.scope, options.sessionId, options.publicationId]) : null;
     let requests = 0, validatedChunks = 0;
     const finite = Number.isFinite(maxRequests);
@@ -79,6 +85,7 @@ export class RemoteReplyTransport {
         if ((this.chunks.get(cacheKey) || 0) <= Date.now()) {
           if (requests >= maxRequests) return false;
           requests++;
+          stage = SyncTelemetry.Stage.ContentChunk;
           const ack = await options.api(`${base}/chunks/${chunk.sha256}`, 'PUT', {
             deviceId: options.deviceId, ...options.transport(), text: chunk.text,
           });
@@ -86,11 +93,14 @@ export class RemoteReplyTransport {
           if (ack.sha256 !== chunk.sha256 || String(ack.sizeBytes) !== chunk.sizeBytes) throw new RemoteTaskDataError('Reply chunk acknowledgement mismatch');
           if (this.chunks.size >= 1024) this.chunks.delete(this.chunks.keys().next().value!);
           this.chunks.set(cacheKey, Date.now() + 30_000);
+          telemetry.emit(SyncTelemetry.Event.Stage, { stage, outcome: SyncTelemetry.Outcome.Completed,
+            contentId: content.contentId, messageId: content.messageId, objectRevision: String(content.version), count: 1 });
         }
       }
       validateManifest();
       if (requests >= maxRequests) return false;
       requests++;
+      stage = SyncTelemetry.Stage.ContentManifest;
       const ack = await options.api(`${base}/${encodeURIComponent(content.contentId)}/versions/${encodeURIComponent(content.version)}`, 'PUT', {
         deviceId: options.deviceId, ...options.transport(), messageId: content.messageId, blockId: content.blockId,
         format: content.format, sizeBytes: content.sizeBytes, sha256: content.sha256,
@@ -99,9 +109,17 @@ export class RemoteReplyTransport {
       assertCurrent();
       if (ack.contentId !== content.contentId || String(ack.version) !== content.version || String(ack.sizeBytes) !== content.sizeBytes
         || ack.sha256 !== content.sha256 || ack.format !== content.format) throw new RemoteTaskDataError('Reply manifest acknowledgement mismatch');
+      telemetry.emit(SyncTelemetry.Event.Stage, { stage, outcome: SyncTelemetry.Outcome.Completed,
+        contentId: content.contentId, messageId: content.messageId, objectRevision: String(content.version), partCount: content.chunks.length });
       complete.add(key); cursor.chunk = 0; delete cursor.validation;
+      stage = SyncTelemetry.Stage.ContentValidation;
     }
     // Completing a manifest uses this slice; the next call can publish its reference without another HTTP upload.
     return !Number.isFinite(maxRequests) || requests === 0;
+    } catch (error) {
+      telemetry.emit(SyncTelemetry.Event.Stage, { stage, outcome: SyncTelemetry.Outcome.Failed,
+        reason: error instanceof RemoteTaskDataError ? SyncTelemetry.Reason.RecordInvalid : SyncTelemetry.Reason.RequestFailed });
+      throw error;
+    }
   }
 }

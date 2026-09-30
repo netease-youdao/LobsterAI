@@ -66,6 +66,7 @@ import {
   resolveToolEventIsError,
 } from './openclawRuntimeAdapter';
 import { SubagentYield } from './subagent/yield';
+import { CoworkRuntimeDiagnosticEvent } from './types';
 
 // Most tests provide only the store methods needed for their scenario. Supply
 // the durable approval store and local ownership contract shared by all turns.
@@ -10965,4 +10966,26 @@ test('settle failure ends only its own yielded request', () => {
   expect(adapter.isSessionActive(session.id)).toBe(false);
   failure(turn.runId);
   expect(error).toHaveBeenCalledTimes(1);
+});
+
+
+test('diagnostic acceptance is emitted after a chat.send ACK and listener errors do not fail the turn', async () => {
+  const { adapter, requests } = createRunTurnAdapter();
+  const accepted = vi.fn();
+  adapter.on(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, accepted);
+  adapter.on(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, () => { throw new Error('diagnostic listener failed'); });
+  await expect(adapter.continueSession('session-1', 'hello')).resolves.toBeUndefined();
+  const sent = requests.find(item => item.method === 'chat.send')!;
+  expect(accepted).toHaveBeenCalledTimes(1);
+  expect(accepted).toHaveBeenCalledWith('session-1', sent.params.idempotencyKey);
+});
+
+test('diagnostic acceptance is absent when execution dispatch is rejected before chat.send', async () => {
+  const { adapter, requests } = createRunTurnAdapter({ beforeExecutionDispatch: () => { throw new Error('execution permit rejected'); } });
+  const accepted = vi.fn();
+  adapter.on(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, accepted);
+  adapter.on('error', () => undefined);
+  await expect(adapter.continueSession('session-1', 'hello')).rejects.toThrow('execution permit rejected');
+  expect(requests.some(item => item.method === 'chat.send')).toBe(false);
+  expect(accepted).not.toHaveBeenCalled();
 });

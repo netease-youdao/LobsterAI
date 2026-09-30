@@ -108,6 +108,8 @@ import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
 import type { RemoteConnectionOperationRequest, RemoteConnectionRemoveRequest, RemoteConnectionResumeRequest, RemoteConnectionsRequest } from '../shared/remote/connections';
 import { type RemoteConfigureRequest, RemoteIpc, type RemoteSettingsState } from '../shared/remote/constants';
+import { RemoteTelemetryIpc } from '../shared/remote/telemetry';
+import type { RemoteTelemetryUiInput } from '../shared/remote/telemetryUi';
 import {
   type ShareDeploymentAnalyzeProjectInput,
   type ShareDeploymentCreateNodeInput,
@@ -156,6 +158,7 @@ contextBridge.exposeInMainWorld('electron', {
     },
   },
   remote: {
+    telemetry: (input: RemoteTelemetryUiInput) => ipcRenderer.send(RemoteTelemetryIpc.Ui, input),
     state: () => ipcRenderer.invoke(RemoteIpc.State),
     queryConnections: (input: RemoteConnectionsRequest) => ipcRenderer.invoke(RemoteIpc.Connections, input),
     removeConnection: (input: RemoteConnectionRemoveRequest) => ipcRenderer.invoke(RemoteIpc.RemoveConnection, input),

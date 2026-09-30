@@ -3,6 +3,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { RemoteReplyUpload as ReplyContentUpload } from '../../shared/remote/reply';
 import { RemoteReplyTransport } from './remoteReplyTransport';
+import { SyncTelemetry } from './remoteSyncTelemetry';
+
+const telemetryEvents = vi.hoisted(() => [] as Array<{ event: string; fields: Record<string, unknown> }>);
+vi.mock('./remoteTelemetry', () => ({
+  captureRemoteTelemetry: (base: Record<string, unknown> = {}) => ({
+    emit: (event: string, fields: Record<string, unknown> = {}) => telemetryEvents.push({ event, fields: { ...base, ...fields } }),
+  }),
+  remoteTelemetryEvent: (event: string, fields: Record<string, unknown> = {}) => telemetryEvents.push({ event, fields }),
+}));
+
 
 const hash = (text: string): string => createHash('sha256').update(text).digest('hex');
 const text = '中文🙂 stream';
@@ -21,7 +31,7 @@ const largeContent = (count: number): ReplyContentUpload => {
   const chunks = texts.map(value => ({ text: value, sizeBytes: String(Buffer.byteLength(value)), sha256: hash(value) }));
   return { ...content, chunks, sizeBytes: String(count * 32768), sha256: hash(texts.join('')) };
 };
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => { telemetryEvents.length = 0; vi.restoreAllMocks(); });
 describe('reply body upload', () => {
   it('validates a large reply once across finite slices without retaining its body in the cursor', async () => {
     const options = { ...setup(), publicationId: 'large-reply', uploads: [largeContent(128)] };
@@ -133,5 +143,27 @@ describe('reply body upload', () => {
     transport.clear();
     expect(await transport.upload(options, 1)).toBe(false);
     expect(options.api.mock.calls.at(-1)?.[0]).toBe(`/sessions/session/contents/chunks/${chunk.sha256}`);
+  });
+});
+
+
+describe('reply dependency telemetry', () => {
+  it('reports malformed chunk evidence before any manifest can be marked ready without retaining reply text', async () => {
+    const options = setup(); options.uploads = [{ ...content, chunks: [{ ...chunk, text: 'private-secret-body' }] }];
+    await expect(new RemoteReplyTransport().upload(options)).rejects.toThrow('Invalid local reply content chunk');
+    expect(options.api).not.toHaveBeenCalled();
+    expect(telemetryEvents).toContainEqual(expect.objectContaining({ event: SyncTelemetry.Event.Stage,
+      fields: expect.objectContaining({ stage: SyncTelemetry.Stage.ContentValidation, outcome: SyncTelemetry.Outcome.Failed }) }));
+    expect(JSON.stringify(telemetryEvents)).not.toContain('private-secret-body');
+    expect(telemetryEvents.some(item => item.fields.stage === SyncTelemetry.Stage.ContentManifest)).toBe(false);
+  });
+  it('does not announce manifest readiness after a forged manifest ACK', async () => {
+    const options = setup();
+    options.api.mockResolvedValueOnce({ sha256: chunk.sha256, sizeBytes: chunk.sizeBytes });
+    options.api.mockResolvedValueOnce({ contentId: 'forged', version: content.version, sizeBytes: chunk.sizeBytes, sha256: chunk.sha256 });
+    await expect(new RemoteReplyTransport().upload(options)).rejects.toThrow('manifest acknowledgement mismatch');
+    const manifests = telemetryEvents.filter(item => item.fields.stage === SyncTelemetry.Stage.ContentManifest);
+    expect(manifests).toHaveLength(1); expect(manifests[0].fields.outcome).toBe(SyncTelemetry.Outcome.Failed);
+    expect(JSON.stringify(telemetryEvents)).not.toContain(text);
   });
 });

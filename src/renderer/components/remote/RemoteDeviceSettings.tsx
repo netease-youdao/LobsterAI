@@ -5,6 +5,7 @@ import { useSelector } from 'react-redux';
 
 import { RemoteDeviceAdmissionState, RemoteDeviceConnectionState } from '../../../shared/remote/connections';
 import { type RemoteConfigureRequest, RemoteConnectionReason, RemoteSyncStatus, RemoteSyncTaskIssueStatus } from '../../../shared/remote/constants';
+import { RemoteTelemetryUiAction, RemoteTelemetryUiStage, RemoteTelemetryUiSurface } from '../../../shared/remote/telemetryUi';
 import { getMobileAppEntry, MobileAppEntryKind } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
 import { remoteDeviceConnectionsService } from '../../services/remoteDeviceConnections';
@@ -36,6 +37,12 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
   const { state, busy, error } = useSyncExternalStore(
     remoteSettingsService.subscribe, remoteSettingsService.getSnapshot, remoteSettingsService.getSnapshot,
   );
+  const telemetryOpened = useRef(false);
+  useEffect(() => {
+    if (!state?.accountEpoch || telemetryOpened.current) return;
+    telemetryOpened.current = true;
+    remoteSettingsService.telemetry(RemoteTelemetryUiSurface.Devices, RemoteTelemetryUiAction.Open, RemoteTelemetryUiStage.Open);
+  }, [state?.accountEpoch]);
   const management = useSyncExternalStore(remoteDeviceConnectionsService.subscribe, remoteDeviceConnectionsService.getSnapshot, remoteDeviceConnectionsService.getSnapshot);
   const connectionsSection = useRef<HTMLElement>(null);
   const entry = getMobileAppEntry();

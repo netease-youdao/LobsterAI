@@ -18,6 +18,8 @@ export interface DeliveredFileDependencies {
   recordArtifact?(candidate: LibraryArtifactCandidate, owner: RemoteOwner, assertCurrent: () => void,
     validateIndexed: (file: LibraryIndexedFile) => void): Promise<boolean>;
 }
+import { captureRemoteFileTelemetry, RemoteFileTelemetry as Telemetry,remoteFileTelemetryReason } from './remoteFileTelemetry';
+
 interface PendingRun {
   owner: RemoteOwner;
   runId: string;
@@ -46,6 +48,7 @@ export class RemoteDeliveredFileSync {
   }
   async prepare(sessionId: string, roots: string[], owner: RemoteOwner, validEpoch: () => boolean, observedBefore?: number): Promise<void> {
     if (!this.deps.recordArtifact || !validEpoch() || !sameOwner(owner, this.deps.store.owner(sessionId))) return;
+    const telemetry = captureRemoteFileTelemetry(owner, { local_session_id: sessionId, direction: Telemetry.Artifact, operation_kind: 'file_publication' });
     const run = this.deps.store.run(sessionId);
     const ordinal = this.deps.store.get<string>(`fileRunOrdinal:${sessionId}`);
     if (!run || terminal.has(run.status) || !ordinal) return;
@@ -66,7 +69,9 @@ export class RemoteDeliveredFileSync {
         return;
       }
       entry.baseline = baseline;
-    } catch { if (this.pending.get(sessionId) === entry) this.pending.delete(sessionId); }
+      telemetry.emit(Telemetry.Stage, { stage: Telemetry.Discovery, outcome: Telemetry.Succeeded, run_id: run.runId });
+    } catch (error) { if (this.pending.get(sessionId) === entry) this.pending.delete(sessionId);
+      telemetry.emit(Telemetry.Stage, { stage: Telemetry.Discovery, outcome: Telemetry.Failed, run_id: run.runId, reason: remoteFileTelemetryReason(error) }); }
   }
 
   private messages(sessionId: string, runId: string): DeliveryMessage[] {
@@ -98,6 +103,7 @@ export class RemoteDeliveredFileSync {
     accept: (sessionId: string, messageId: string, runId: string, filePath: string, snapshot: RemoteFileSnapshot) => boolean): Promise<void> {
     if (!policy.features.artifactPublish || !this.deps.recordArtifact) return;
     for (const [sessionId, entry] of [...this.pending].slice(0, MAX_PENDING_RUNS)) {
+      const telemetry = captureRemoteFileTelemetry(owner, { local_session_id: sessionId, run_id: entry.runId, direction: Telemetry.Artifact, operation_kind: 'file_publication' });
       if (!entry.current() || !current(sessionId) || !sameOwner(owner, entry.owner)) { this.pending.delete(sessionId); continue; }
       const run = this.deps.store.run(sessionId)!;
       if (!terminal.has(run.status) || !entry.baseline || Date.now() < entry.retryAt) continue;
@@ -144,7 +150,8 @@ export class RemoteDeliveredFileSync {
           if (!recorded || !accept(sessionId, final.id, run.runId, filePath, snapshot)) throw new Error(RemoteFileReason.Source);
           retained = true;
           entry.captured.add(filePath);
-        } catch { retry = true; /* Retry privately; never reject the local task or alter ordinary file references. */ }
+          telemetry.emit(Telemetry.Stage, { stage: Telemetry.Snapshot, outcome: Telemetry.Succeeded });
+        } catch (error) { retry = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.Snapshot, outcome: Telemetry.Deferred, reason: remoteFileTelemetryReason(error) }); /* Retry privately; never reject the local task or alter ordinary file references. */ }
         finally { if (snapshot && !retained) await fs.promises.rm(snapshot.path, { force: true }).catch((): void => undefined); }
       }
       if (this.pending.get(sessionId) !== entry) continue;

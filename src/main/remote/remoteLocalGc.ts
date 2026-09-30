@@ -9,6 +9,8 @@ import { matchesRemoteDeletionTargetScope, samePersistedRemoteEnvironment } from
 import { remoteFileCacheDirectory } from './remoteFileSnapshots';
 import type { RemoteStore } from './remoteStore';
 import { archivedRemoteSyncReferences } from './remoteSyncTargetStore';
+import { SyncTelemetry } from './remoteSyncTelemetry';
+import { captureRemoteTelemetry } from './remoteTelemetry';
 
 const Prefix = { Deleted: 'localGcDeleted:', File: 'localGcFile:', Receipt: 'localGcReceipt:' } as const;
 const Phase = { Eligible: 'eligible', Deleting: 'deleting', Deleted: 'deleted' } as const;
@@ -217,13 +219,16 @@ export class RemoteLocalGc {
     if (this.running || this.deps.enabled?.() === false || this.deps.store.needsSecurityRecovery()
       || !this.deps.store.areControlsAdmitted() || !this.deps.owner()) return 0;
     this.running = true;
-    let removed = 0;
+    const telemetry = captureRemoteTelemetry({ operationKind: SyncTelemetry.Kind.Cleanup, lane: 'background' });
+    let removed = 0, skipped = 0, completed = false;
     try {
       const rows = this.entries<Tombstone>(Prefix.Deleted, this.cursor, 5);
       for (const { key, value } of rows) {
         this.cursor = key;
         if (value.phase === Phase.Deleted || value.ackAt === null || !Number.isFinite(value.ackAt)
-          || Math.max(value.deletedAt, value.ackAt) + GRACE_MS > now || !this.valid(value) || this.blocked(value.localSessionId)) continue;
+          || Math.max(value.deletedAt, value.ackAt) + GRACE_MS > now || !this.valid(value) || this.blocked(value.localSessionId)) {
+          skipped++; continue;
+        }
         value.phase = Phase.Deleting; this.deps.store.put(key, value);
         let page = this.deleteBodyPage('remote_projection', value.localSessionId, "AND object_key<>'deleted'"); removed += page;
         if (!page) { page = this.deleteBodyPage('remote_reply_contents', value.localSessionId); removed += page; }
@@ -235,8 +240,14 @@ export class RemoteLocalGc {
       if (rows.length < 5) this.cursor = '';
       await this.files();
       remoteDiagnostics.record('gc.rows', removed);
+      completed = true;
       return removed;
-    } finally { this.running = false; }
+    } finally {
+      telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Cleanup,
+        outcome: completed ? SyncTelemetry.Outcome.Completed : SyncTelemetry.Outcome.Failed,
+        count: removed, skippedCount: skipped, reason: completed ? SyncTelemetry.Reason.None : SyncTelemetry.Reason.StorageUnavailable });
+      this.running = false;
+    }
   }
   private referenced(filePath: string): boolean {
     if (archivedRemoteSyncReferences(this.deps.store).paths.has(filePath)) return true;
@@ -259,6 +270,7 @@ export class RemoteLocalGc {
     return path.dirname(value.filePath) === folder ? [root, path.dirname(folder), folder] : null;
   }
   private async files(): Promise<void> {
+    const telemetry = captureRemoteTelemetry({ operationKind: SyncTelemetry.Kind.Cleanup, lane: 'files' });
     const rows = this.entries<CacheFile>(Prefix.File, this.fileCursor, 5);
     for (const { key, value } of rows) {
       this.fileCursor = key;
@@ -281,8 +293,13 @@ export class RemoteLocalGc {
         await fs.unlink(value.filePath);
         remoteDiagnostics.record('gc.bytes', stat.size);
         this.deps.store.put(key, { ...value, phase: Phase.Deleted });
+        telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Cleanup, outcome: SyncTelemetry.Outcome.Completed,
+          localSessionId: value.localSessionId, remoteOwnerId: value.owner.userId, ownerScopeId: value.owner.scopeKey, count: 1 });
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') this.deps.store.put(key, { ...value, phase: Phase.Deleted });
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') telemetry.emit(SyncTelemetry.Event.Stage,
+          { stage: SyncTelemetry.Stage.Cleanup, outcome: SyncTelemetry.Outcome.Deferred, localSessionId: value.localSessionId,
+            remoteOwnerId: value.owner.userId, ownerScopeId: value.owner.scopeKey, reason: SyncTelemetry.Reason.StorageUnavailable });
         // Retry a bounded page later; failure does not escape into local task operations.
       }
     }

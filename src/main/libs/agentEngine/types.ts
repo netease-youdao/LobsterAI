@@ -45,7 +45,10 @@ export interface PermissionRequest {
   approval?: ApprovalState;
 }
 
+export const CoworkRuntimeDiagnosticEvent = { ExecutionAccepted: 'executionAccepted' } as const;
+
 export interface CoworkRuntimeEvents {
+  [CoworkRuntimeDiagnosticEvent.ExecutionAccepted]: (sessionId: string, gatewayRunId: string) => void;
   message: (sessionId: string, message: CoworkMessage, beforeMessageId?: string) => void;
   messageUpdate: (sessionId: string, messageId: string, content: string, metadata?: Record<string, unknown>) => void;
   sessionStatus: (sessionId: string, status: CoworkSessionStatus) => void;

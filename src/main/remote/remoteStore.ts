@@ -100,6 +100,7 @@ export class RemoteStore {
   private runRecovery: Promise<void> = Promise.resolve();
   private runtimeTouchedSessions = new Set<string>();
   private depth = 0;
+  private readonly commitObservers: Array<() => void> = [];
   private changeVersion = 0;
   private publishing = false;
   private artifactTracking = false;
@@ -641,11 +642,17 @@ export class RemoteStore {
       } catch { return { key: row.key, state: 'corrupt' as const, reason: 'STATE_RECORD_INVALID' }; }
     }), nextCursor: rows.length === limit ? rows.at(-1)!.key : null };
   }
+  /** Best-effort diagnostics only; never part of commit success or execution permission. */
+  afterCommit(observer: () => void): void {
+    if (!this.db.inTransaction) { try { observer(); } catch { /* Isolated observer. */ } return; }
+    if (this.depth > 0 && this.commitObservers.length < 256) this.commitObservers.push(observer);
+  }
   transaction<T>(operation: () => T): T {
     if (this.depth > 0) return operation();
     const beforeChange = this.changeVersion;
     this.urgentReplyChange = false;
-    const result = this.db.transaction(() => {
+    let result: T;
+    try { result = this.db.transaction(() => {
       this.depth++;
       this.db.prepare('UPDATE remote_write_context SET trusted=1 WHERE id=1').run();
       try {
@@ -657,7 +664,10 @@ export class RemoteStore {
         this.db.prepare('UPDATE remote_write_context SET trusted=0 WHERE id=1').run();
         this.depth--;
       }
-    })();
+    })(); } catch (error) { this.commitObservers.length = 0; throw error; }
+    const observers = this.commitObservers.splice(0);
+    // An external SQLite transaction has not committed: never announce a savepoint as durable.
+    if (!this.db.inTransaction) for (const observer of observers) { try { observer(); } catch { /* Isolated observer. */ } }
     if (this.options.deferredProjection || this.changeVersion !== beforeChange) {
       try { this.wake(this.urgentReplyChange); }
       catch { remoteDiagnosticLog('remote.record.quarantined', { lane: 'history', reason: 'DEPENDENCY_UNAVAILABLE' }, 'warn'); }

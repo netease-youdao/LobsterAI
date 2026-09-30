@@ -4,6 +4,7 @@ import React, { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExte
 import { createPortal } from 'react-dom';
 
 import type { RemoteConfigureRequest } from '../../../shared/remote/constants';
+import { RemoteTelemetryUiAction, RemoteTelemetryUiStage, RemoteTelemetryUiSurface } from '../../../shared/remote/telemetryUi';
 import { getMobileAppEntry, MobileAppEntryKind } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
 import { remoteSettingsService } from '../../services/remoteSettings';
@@ -59,6 +60,12 @@ export function RemoteControlPopover({ anchorRef, onClose, onLogin, loginAllowed
   const { state, busy, error } = useSyncExternalStore(
     remoteSettingsService.subscribe, remoteSettingsService.getSnapshot, remoteSettingsService.getSnapshot,
   );
+  const telemetryOpened = useRef(false);
+  useEffect(() => {
+    if (!state?.accountEpoch || telemetryOpened.current) return;
+    telemetryOpened.current = true;
+    remoteSettingsService.telemetry(RemoteTelemetryUiSurface.Popover, RemoteTelemetryUiAction.Open, RemoteTelemetryUiStage.Open);
+  }, [state?.accountEpoch]);
   const id = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -235,7 +242,7 @@ export function RemoteControlPopover({ anchorRef, onClose, onLogin, loginAllowed
       {!state && !displayedError && <p role="status" className="mt-1 text-xs text-secondary">{t('remoteLoading')}</p>}
       {displayedError && <div role="alert" className="mt-2 text-xs leading-5 text-red-600 dark:text-red-400">
         <p>{t(displayedError)}</p>
-        <button type="button" disabled={busy} className={ACTION_CLASS} onClick={() => { setActionError(''); void remoteSettingsService.refresh(); }}>{t('retry')}</button>
+        <button type="button" disabled={busy} className={ACTION_CLASS} onClick={() => { setActionError(''); remoteSettingsService.telemetry(RemoteTelemetryUiSurface.Popover, RemoteTelemetryUiAction.Refresh, RemoteTelemetryUiStage.Click); void remoteSettingsService.refresh(); }}>{t('retry')}</button>
       </div>}
       {state?.keepAwakeError && <div role="alert" className="mt-2 text-xs leading-5 text-amber-700 dark:text-amber-400">
         <p>{t(state.keepAwakeEnabled ? 'remoteKeepAwakeFailed' : 'remoteKeepAwakeDisableFailed')}</p>

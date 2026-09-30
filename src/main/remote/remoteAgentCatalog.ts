@@ -7,6 +7,8 @@ import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, type RemoteAgen
 import type { AgentOwnerStore } from '../agentOwnership';
 import { payloadHash, sameOwner } from './canonical';
 import type { RemoteStore } from './remoteStore';
+import { SyncTelemetry } from './remoteSyncTelemetry';
+import { captureRemoteTelemetry } from './remoteTelemetry';
 
 interface AgentRow { id: string; name: string; icon: string; enabled: number }
 interface WorkspaceBinding { agentId: string; workspaceId: string; path: string; available: boolean }
@@ -156,6 +158,9 @@ export class RemoteAgentCatalog {
   async publish(owner: RemoteOwner, deviceId: string, generation: string, api: (path: string, method?: string, body?: unknown) => Promise<any>,
     stillCurrent: () => boolean, limits = { items: REMOTE_AGENT_CATALOG_ITEMS, bytes: REMOTE_AGENT_CATALOG_BYTES },
     canPublishAgent: (agentId: string) => boolean = () => true): Promise<void> {
+    const telemetry = captureRemoteTelemetry({ deviceId, remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey,
+      operationKind: SyncTelemetry.Kind.AgentCatalog, publicationKind: SyncTelemetry.Kind.AgentCatalog, lane: 'background' });
+    try {
     const targetId = this.targetId(), epoch = this.operationEpoch;
     const isCurrent = () => stillCurrent() && this.getTargetId?.() === targetId && this.operationEpoch === epoch;
     if (!isCurrent()) throw new Error('Account changed');
@@ -166,8 +171,11 @@ export class RemoteAgentCatalog {
     const current = await api(path);
     if (!isCurrent()) throw new Error('Account changed');
     if (state.pending && current.lastPublicationId === state.pending.publicationId) {
+      const operationId = state.pending.publicationId;
       state = { catalogVersion: current.catalogVersion, syncedHash: payloadHash(state.pending.items), syncedItems: state.pending.items, pending: null };
       this.store.put(key, state);
+      telemetry.emit(SyncTelemetry.Event.Reconciled, { stage: SyncTelemetry.Stage.Catalog, outcome: SyncTelemetry.Outcome.Confirmed,
+        operationId, catalogVersion: current.catalogVersion, persistOutcome: 'success', reconcileTrigger: 'receipt_missing' });
     } else if (state.pending && current.catalogVersion !== state.pending.expectedCatalogVersion) {
       state = { catalogVersion: current.catalogVersion, syncedHash: null, pending: null };
       this.store.put(key, state);
@@ -177,11 +185,15 @@ export class RemoteAgentCatalog {
       if (!isCurrent()) throw new Error('Account changed');
       if (items.length > limits.items || !items.some(item => item.agentId === AgentId.Main && item.kind === AgentOwnerKind.Default)) throw new RemoteAgentError(47012, 'PAYLOAD_TOO_LARGE', 'CATALOG_LIMIT');
       if (state.syncedHash === payloadHash(items) && current.syncStatus === 'ready' && payloadHash(current.items) === state.syncedHash) {
-        this.store.put(key, { ...state, syncedItems: items }); return;
+        this.store.put(key, { ...state, syncedItems: items });
+        telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Catalog, outcome: SyncTelemetry.Outcome.Skipped, recordCount: items.length });
+        return;
       }
       state.pending = { publicationId: randomUUID(), expectedCatalogVersion: state.catalogVersion, items };
       if (Buffer.byteLength(JSON.stringify({ ...state.pending, connectionGeneration: generation })) > limits.bytes) throw new RemoteAgentError(47012, 'PAYLOAD_TOO_LARGE', 'CATALOG_LIMIT');
       this.store.put(key, state);
+      telemetry.emit(SyncTelemetry.Event.Sealed, { operationId: state.pending.publicationId, stage: SyncTelemetry.Stage.Sealed,
+        phase: SyncTelemetry.Stage.Sealed, outcome: SyncTelemetry.Outcome.Completed, businessStatus: 'pending', recordCount: items.length });
     }
     // Pending content is immutable. A different admission context may delay it, never filter/rewrite its ID.
     if (state.pending.items.some(item => !canPublishAgent(item.agentId))) throw new Error('Agent ownership synchronization is waiting for server support');
@@ -193,6 +205,8 @@ export class RemoteAgentCatalog {
         if (!isCurrent()) throw new Error('Account changed');
         if (latest.deviceId === deviceId && latest.lastPublicationId === state.pending.publicationId) {
           this.store.put(key, { catalogVersion: latest.catalogVersion, syncedHash: payloadHash(state.pending.items), syncedItems: state.pending.items, pending: null });
+          telemetry.emit(SyncTelemetry.Event.Reconciled, { operationId: state.pending.publicationId, stage: SyncTelemetry.Stage.Catalog,
+            outcome: SyncTelemetry.Outcome.Confirmed, catalogVersion: latest.catalogVersion, persistOutcome: 'success', reconcileTrigger: 'receipt_missing' });
           return;
         }
         this.retireRejectedPublication(owner, deviceId, state, latest);
@@ -202,5 +216,13 @@ export class RemoteAgentCatalog {
     if (!isCurrent()) throw new Error('Account changed');
     if (result.publicationId !== state.pending.publicationId || result.deviceId !== deviceId) throw new Error('Agent catalog ACK identity mismatch');
     this.store.put(key, { catalogVersion: result.catalogVersion, syncedHash: payloadHash(state.pending.items), syncedItems: state.pending.items, pending: null });
+    telemetry.emit(SyncTelemetry.Event.Acknowledged, { operationId: state.pending.publicationId,
+      stage: SyncTelemetry.Stage.LocalAck, phase: SyncTelemetry.Stage.LocalAck, outcome: SyncTelemetry.Outcome.Completed,
+      catalogVersion: result.catalogVersion, businessStatus: 'unknown', persistOutcome: 'success', recordCount: state.pending.items.length });
+    } catch (error) {
+      telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Catalog, outcome: SyncTelemetry.Outcome.Failed,
+        reason: SyncTelemetry.Reason.RequestFailed });
+      throw error;
+    }
   }
 }

@@ -1,15 +1,18 @@
 import { type ChildProcess, fork } from 'child_process';
 import { randomUUID } from 'crypto';
 
+import { RemoteTelemetryEvent as TelemetryEvent } from '../../shared/remote/telemetry';
 import { RemoteNetworkError } from './remoteNetworkError';
 import { RemoteNetworkFailure as Failure, remoteNetworkFailureValue, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message, type RemoteSocket } from './remoteNetworkProtocol';
 import { remoteDiagnosticLog } from './remoteSyncLog';
+import { captureRemoteTelemetry, type RemoteTelemetryRequestTracker } from './remoteTelemetry';
+import { currentRemoteTelemetryRequest } from './remoteTelemetryTransport';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 
 type Lane = 'control' | 'live' | 'background';
 interface Pending {
   lane: Lane; resolve(response: Response): void; reject(error: Error): void;
-  removeAbort(): void; cancelled: boolean;
+  removeAbort(): void; cancelled: boolean; transportStarted: boolean; telemetry?: RemoteTelemetryRequestTracker;
 }
 const parsedResponses = new WeakMap<Response, { valid: boolean; value: unknown }>();
 export function remoteResponseJson(response: Response, text: string): any {
@@ -61,6 +64,8 @@ export class RemoteNetworkTransport {
   private currentSocket: NetworkSocket | null = null;
   private watchdog: ReturnType<typeof setInterval> | null = null;
   private lastAlive = 0;
+  private workerReady = false;
+  private workerTelemetry: ReturnType<typeof captureRemoteTelemetry> | null = null;
   private readonly starts: number[] = [];
   constructor(private readonly spawn: typeof fork = fork, private readonly filename = remoteWorkerPath(RemoteWorkerFile.Network)) {}
   private async ensure(): Promise<ChildProcess> {
@@ -71,23 +76,32 @@ export class RemoteNetworkTransport {
       if (this.retiring) await this.retiring;
       if (epoch !== this.epoch) throw new RemoteNetworkError(Failure.Cancelled);
       const now = Date.now(); while (this.starts.length && now - this.starts[0] > 60000) this.starts.shift();
-      if (this.starts.length >= 5) throw new RemoteNetworkError(Failure.RestartBudget);
+      if (this.starts.length >= 5) {
+        captureRemoteTelemetry().emit(TelemetryEvent.WorkerExit, { role: 'network', phase: 'starting', reason: 'WORKER_RESTART_BUDGET', worker_instance_id: randomUUID() });
+        throw new RemoteNetworkError(Failure.RestartBudget);
+      }
       this.starts.push(now);
-      const child = this.spawn(this.filename, [], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      const telemetry = captureRemoteTelemetry({ role: 'network', worker_instance_id: randomUUID() });
+      let child: ChildProcess;
+      try { child = this.spawn(this.filename, [], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
         execArgv: [`--max-old-space-size=${Limit.WorkerMemoryMb}`], stdio: ['ignore','ignore','ignore','ipc'], serialization: 'json' });
-      this.child = child; this.lastAlive = Date.now();
+      } catch (error) { telemetry.emit(TelemetryEvent.WorkerExit, { phase: 'starting', reason: 'WORKER_SPAWN_ERROR' }); throw error; }
+      this.child = child; this.lastAlive = Date.now(); this.workerReady = false; this.workerTelemetry = telemetry;
+      telemetry.emit(TelemetryEvent.WorkerRestart, { phase: 'starting', outcome: 'started', reason: 'STATE_CHANGED' });
       child.on('message', message => { if (this.child === child) this.receive(message); });
-      child.once('error', () => this.failed(child)); child.once('exit', () => this.failed(child));
-      this.watchdog = setInterval(() => { if (this.child === child && Date.now() - this.lastAlive > 8000) this.failed(child); }, 1000);
+      child.once('error', () => this.failed(child, 'WORKER_SPAWN_ERROR')); child.once('exit', () => this.failed(child, 'WORKER_EXIT'));
+      this.watchdog = setInterval(() => { if (this.child === child && Date.now() - this.lastAlive > 8000) this.failed(child, 'WORKER_WATCHDOG'); }, 1000);
       this.watchdog.unref?.();
-      remoteDiagnosticLog('remote.worker.restart', { lane: 'transport', result: 'success' }, 'info');
+      remoteDiagnosticLog(TelemetryEvent.WorkerRestart, { lane: 'transport', result: 'success' }, 'info');
       return child;
     })();
     this.starting = starting;
     try { return await starting; } finally { if (this.starting === starting) this.starting = null; }
   }
-  private failed(child: ChildProcess): void {
+  private failed(child: ChildProcess, reason: string): void {
     if (this.child !== child) return;
+    this.workerTelemetry?.emit(TelemetryEvent.WorkerExit, { phase: 'exit', reason, outcome: reason === 'WORKER_DISPOSE' ? 'cancelled' : 'failed' });
+    this.workerTelemetry = null;
     this.child = null; if (this.watchdog) clearInterval(this.watchdog); this.watchdog = null;
     if (child.pid && child.exitCode === null && child.signalCode === null) {
       this.retiring = new Promise(resolve => { child.once('exit', () => { this.retiring = null; resolve(); }); child.kill('SIGKILL'); });
@@ -96,21 +110,30 @@ export class RemoteNetworkTransport {
     this.pending.clear();
     const socket = this.currentSocket; this.currentSocket = null;
     if (socket && socket.readyState !== 3) { socket.readyState = 3; socket.dispatch('close', { code: 1006 }); }
-    remoteDiagnosticLog('remote.worker.exit', { lane: 'transport', reason: 'DEPENDENCY_UNAVAILABLE' }, 'warn');
+    remoteDiagnosticLog(TelemetryEvent.WorkerExit, { lane: 'transport', reason: 'DEPENDENCY_UNAVAILABLE' }, 'warn');
   }
   send(message: Record<string, unknown>): void {
     const child = this.child;
     if (!child?.connected) throw new RemoteNetworkError(Failure.WorkerUnavailable);
     try {
       // false is Node's queued-write backpressure, not a failed send. Request/frame counts bound retained bytes.
-      child.send(message, error => { if (error) this.failed(child); });
-    } catch { this.failed(child); throw new RemoteNetworkError(Failure.IpcFailed); }
+      child.send(message, error => { if (error) this.failed(child, 'WORKER_IPC_FAILURE'); });
+    } catch { this.failed(child, 'WORKER_IPC_FAILURE'); throw new RemoteNetworkError(Failure.IpcFailed); }
   }
   private receive(message: any): void {
     if (!message || typeof message !== 'object') return;
     if (message.type === Message.Alive) {
-      if (typeof message.rss === 'number' && message.rss > 192 * 1024 * 1024) { if (this.child) this.failed(this.child); return; }
+      if (typeof message.rss === 'number' && message.rss > 192 * 1024 * 1024) { if (this.child) this.failed(this.child, 'WORKER_MEMORY_LIMIT'); return; }
+      if (!this.workerReady) { this.workerReady = true; this.workerTelemetry?.emit(TelemetryEvent.WorkerRestart, { phase: 'ready', outcome: 'succeeded', reason: 'STATE_CHANGED' }); }
       this.lastAlive = Date.now(); return;
+    }
+    if (message.type === Message.FetchStarted) {
+      const request = this.pending.get(message.id);
+      if (request && !request.transportStarted) {
+        request.transportStarted = true;
+        try { request.telemetry?.transportStarted(); } catch { /* Telemetry cannot affect the pending response. */ }
+      }
+      return;
     }
     if (message.type === Message.Result) {
       const request = this.pending.get(message.id); if (!request) return;
@@ -138,6 +161,7 @@ export class RemoteNetworkTransport {
     }
   }
   readonly fetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
+    const telemetry = currentRemoteTelemetryRequest();
     const path = new URL(url).pathname;
     // Device management must remain available while history/file synchronization occupies its lanes.
     const control = /\/(?:control|commands|connection-tickets|capabilities|mode-activations|device-connections|device-connection-operations)(?:\/|$)/u.test(path)
@@ -158,7 +182,7 @@ export class RemoteNetworkTransport {
         item.cancelled = true; reject(new RemoteNetworkError(Failure.Cancelled));
         if (this.child?.connected) { try { this.send({ type: Message.Cancel, id }); } catch { /* Worker failure rejects and releases every pending slot. */ } }
       };
-      this.pending.set(id, { lane, resolve, reject, cancelled: false, removeAbort: () => signal?.removeEventListener('abort', cancel) });
+      this.pending.set(id, { lane, resolve, reject, cancelled: false, transportStarted: false, telemetry, removeAbort: () => signal?.removeEventListener('abort', cancel) });
       signal?.addEventListener('abort', cancel, { once: true });
       if (signal?.aborted) cancel();
       void this.ensure().then(() => {
@@ -183,7 +207,7 @@ export class RemoteNetworkTransport {
   }
   dispose(): void {
     this.epoch++;
-    if (this.child) { this.failed(this.child); return; }
+    if (this.child) { this.failed(this.child, 'WORKER_DISPOSE'); return; }
     for (const request of this.pending.values()) { request.removeAbort(); request.reject(new RemoteNetworkError(Failure.Cancelled)); }
     this.pending.clear();
     this.currentSocket?.close();

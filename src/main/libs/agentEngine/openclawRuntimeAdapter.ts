@@ -237,6 +237,7 @@ import type {
   PermissionRequest,
   PermissionResult,
 } from './types';
+import { CoworkRuntimeDiagnosticEvent } from './types';
 
 const OPENCLAW_BTW_SESSION_KEY_MAX_CHARS = 4_096;
 const OpenClawChatQueueMode = {
@@ -6050,6 +6051,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const returnedRunId = typeof sendResult?.runId === 'string' ? sendResult.runId.trim() : '';
       if (returnedRunId) {
         this.bindRunIdToTurn(sessionId, returnedRunId);
+        try { this.emit(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, sessionId, returnedRunId); } catch { /* Telemetry listeners cannot turn a gateway ACK into execution failure. */ }
       }
     } catch (error) {
       this.cleanupSessionTurn(sessionId);

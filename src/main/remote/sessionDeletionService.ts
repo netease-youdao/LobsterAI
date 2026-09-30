@@ -1,9 +1,11 @@
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { RemoteDeletion } from '../../shared/remote/deletions';
+import { RemoteTelemetryEvent as TelemetryEvent } from '../../shared/remote/telemetry';
 import type { CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
 import { sameOwner } from './canonical';
+import { captureRemoteTelemetry } from './remoteTelemetry';
 
 /** Shared local record deletion; remote authorization belongs to the deletion control lane. */
 const CleanupPrefix = 'deletionCleanup:';
@@ -27,6 +29,7 @@ export class SessionDeletionService {
 
   async deleteLocalBatch(sessionIds: string[]): Promise<void> {
     const ids = [...new Set(sessionIds)], actor = this.getOwner();
+    const telemetry = captureRemoteTelemetry({ lane: 'control', operation_kind: 'deletion', remote_owner_id: actor?.userId, owner_scope_id: actor?.scopeKey });
     const guards = new Map(ids.map(id => {
       this.store.remote.assertActor(id, actor);
       return [id, this.store.remote.deletionGuard(id).version];
@@ -44,6 +47,7 @@ export class SessionDeletionService {
       if ((actor ? !sameOwner(actor, this.getOwner()) : this.getOwner() !== null) || this.store.remote.deletionGuard(id).version !== guards.get(id)) throw new Error(t('sessionDeletionTargetChanged'));
     }
     this.commit(ids);
+    for (const localSessionId of ids) telemetry.emit(TelemetryEvent.SyncStage, { stage: 'local_commit', outcome: 'succeeded', local_session_id: localSessionId, origin: 'desktop' });
   }
 
   deleteRemote(sessionId: string, owner: RemoteOwner, recordReceipt: () => void): void {
@@ -68,7 +72,9 @@ export class SessionDeletionService {
   }
 
   private finishCleanup(sessionId: string): void {
+    // Retried cleanup records have no trusted owner after deletion; do not correlate them with the current account's session IDs.
+    const telemetry = captureRemoteTelemetry({ lane: 'control', operation_kind: 'cleanup' });
     try { this.cleanup(sessionId); this.store.remote.remove(`${CleanupPrefix}${sessionId}`); }
-    catch (error) { console.warn('[SessionDeletion] Post-commit cleanup deferred', error); }
+    catch (error) { telemetry.emit(TelemetryEvent.SyncStage, { stage: 'cleanup', outcome: 'deferred', reason: 'LOCAL_IO_FAILED' }); console.warn('[SessionDeletion] Post-commit cleanup deferred', error); }
   }
 }

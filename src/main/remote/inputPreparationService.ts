@@ -9,7 +9,9 @@ import { RemoteInputIntent, RemoteInputMode, RemoteInputReason, type RemotePrepa
 import type { CoworkStore } from '../coworkStore';
 import { payloadHash, sameOwner } from './canonical';
 import type { RemoteAgentCatalog } from './remoteAgentCatalog';
+import { captureRemoteFileTelemetry, remoteFileRequestFailure, remoteFileRequestFailureFields, RemoteFileTelemetry as Telemetry,remoteFileTelemetryReason } from './remoteFileTelemetry';
 import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
+import { withRemoteTelemetryRequest } from './remoteTelemetryTransport';
 
 interface FileIdentity { realPath: string; dev: string; ino: string; size: number; mtimeMs: number }
 interface InputImagePreview { mimeType: string; base64Data: string }
@@ -144,124 +146,162 @@ export class InputPreparationService {
   private sessionInputVersion(sessionId: string): string { return this.deps.store.remote.inputVersion(sessionId); }
   async prepare(owner: RemoteOwner, deviceId: string, claim: RemotePreparationClaim,
     download: (assetId: string) => Promise<Response>, current: () => boolean): Promise<LocalPreparedInput> {
-    const targetId = this.targetId(), epoch = this.operationEpoch;
-    const check = (): void => this.assertOwner(owner, () => current() && this.deps.getTargetId?.() === targetId && this.operationEpoch === epoch);
-    check();
-    const request = claim.request;
-    if (request.inputSchemaVersion !== 2 || request.preparationId !== claim.preparationId) throw new RemoteInputError(RemoteInputReason.Invalid);
-    const previous = this.deps.store.remote.get<LocalPreparedInput>(this.key(claim.preparationId));
-    if (previous) {
-      if (previous.requestHash !== payloadHash(request) || previous.deviceId !== deviceId || !sameOwner(previous.owner, owner)) throw new RemoteInputError(RemoteInputReason.Stale);
-      this.validate(previous, owner, deviceId, false);
-      await this.validateFiles(previous, check);
-      check();
-      return previous;
-    }
-    const store = this.deps.store;
-    const continuation = request.purpose === 'send_message';
-    const sessionId = continuation ? store.remote.localSessionId(request.sessionId || '') : null;
-    const session = sessionId ? store.getSession(sessionId, 0) : null;
-    if (continuation && (!session || !sameOwner(store.remote.owner(session.id), owner))) throw new RemoteInputError(RemoteInputReason.Account);
-    if (session && (request.expectedInputVersion !== this.sessionInputVersion(session.id) || request.expectedControlVersion !== store.remote.controlVersion(session.id))) throw new RemoteInputError(RemoteInputReason.Version);
-    const agentId = session?.agentId || request.input.agent?.agentId || AgentId.Main;
-    store.assertAgentAccess(agentId, owner);
-    const agent = store.getAgent(agentId);
-    const ownership = store.agentOwnership.get(agentId);
-    if (!agent?.enabled || !ownership || (!continuation && !store.agentOwnership.canPublish(agentId, owner))) throw new RemoteInputError(RemoteInputReason.AgentUnavailable);
-    if (!continuation && request.input.agent?.expectedVersion !== ownership.version) throw new RemoteInputError(RemoteInputReason.AgentChanged);
-    let workspaceId = session ? store.remote.get<string>(`workspace:${session.id}`) : null;
-    let cwd = session?.cwd || '';
-    if (!session) {
-      const catalog = this.deps.getAgentCatalog();
-      const items = await catalog?.refresh(owner, deviceId, current);
-      check();
-      const item = items?.find(value => value.agentId === agentId);
-      if (!item || item.version !== request.input.agent?.expectedVersion || !item.workspaceAvailable || !item.defaultWorkspaceId) throw new RemoteInputError(RemoteInputReason.AgentChanged);
-      workspaceId = item.defaultWorkspaceId;
-      cwd = catalog!.resolve(owner, deviceId, agentId, item.version, workspaceId);
-    }
-    await fs.access(cwd, constants.R_OK | constants.W_OK); check();
-    if (!statSync(cwd).isDirectory()) throw new RemoteInputError(RemoteInputReason.Workspace);
-    const directoryIdentity = identity(cwd);
-    const mode = request.input.model.mode;
-    if ((!continuation && mode === RemoteInputMode.Session) || !Object.values(RemoteInputMode).includes(mode)) throw new RemoteInputError(RemoteInputReason.Invalid);
-    const model = mode === RemoteInputMode.Selected
-      ? this.deps.models.resolve(owner, deviceId, request.input.model.modelRef || '', request.input.model.expectedVersion || '')
-      : this.deps.models.resolveRuntime(owner, deviceId, mode === RemoteInputMode.Session
-        ? session?.modelOverride || agent.model || this.deps.getDefaultModel() : agent.model || this.deps.getDefaultModel());
-    const inheritedThinking = mode === RemoteInputMode.Session ? session?.thinkingLevel : mode === RemoteInputMode.Agent ? agent.thinkingLevel : undefined;
-    const thinkingLevel = request.input.options?.thinkingLevel ?? (inheritedThinking || model.item.thinking.default);
-    if (thinkingLevel && !model.item.thinking.options.includes(thinkingLevel)) throw new RemoteInputError(RemoteInputReason.Invalid);
-    const text = request.input.text || '';
-    const requestedAssets = request.input.attachments || [];
-    if ((!text.trim() && !requestedAssets.length) || Buffer.byteLength(text) > REMOTE_TEXT_BYTES || requestedAssets.length > 20) throw new RemoteInputError(RemoteInputReason.Invalid);
-    const attachments = requestedAssets.map(ref => {
-      const asset = claim.attachments?.find(value => value.assetId === ref.assetId && value.version === ref.version);
-      if (!asset || asset.intent !== ref.intent || !/^[a-f0-9]{64}$/u.test(asset.sha256) || !/^\d+$/u.test(asset.sizeBytes)) throw new RemoteInputError(RemoteInputReason.Asset);
-      const size = Number(asset.sizeBytes);
-      if (!Number.isSafeInteger(size) || size < 0 || size > maxFileBytes || ref.kind !== 'uploaded_asset') throw new RemoteInputError(RemoteInputReason.Invalid);
-      if (asset.intent === RemoteInputIntent.Image && !model.item.inputCapabilities.image) throw new RemoteInputError(RemoteInputReason.Invalid);
-      return { assetId: asset.assetId, version: asset.version, intent: asset.intent, sha256: asset.sha256, sizeBytes: asset.sizeBytes,
-        mimeType: asset.mimeType, fileName: asset.fileName };
-    });
-    if (attachments.reduce((total, value) => total + Number(value.sizeBytes), 0) > maxTotalBytes) throw new RemoteInputError(RemoteInputReason.Invalid);
-    const resolvedInput: RemoteResolvedInput = { text, agentId, expectedAgentVersion: ownership.version, workspaceId,
-      model: { modelRef: model.item.modelRef, version: model.item.version }, options: thinkingLevel ? { thinkingLevel } : {}, attachments };
-    const folder = path.join(this.deps.cacheRoot, payloadHash([owner.userId, owner.scopeKey, deviceId]), randomUUID());
-    await fs.mkdir(folder, { recursive: true, mode: 0o700 });
-    const files: LocalAsset[] = [];
-    let frameBytes = 0;
+    const telemetry = captureRemoteFileTelemetry(owner, { device_id: deviceId, direction: Telemetry.InputDownload,
+      operation_id: claim.preparationId, operation_kind: 'input_preparation', preparation_id: claim.preparationId });
+    let phase: string = Telemetry.Validate;
     try {
+      const targetId = this.targetId(), epoch = this.operationEpoch;
+      const check = (): void => this.assertOwner(owner, () => current() && this.deps.getTargetId?.() === targetId && this.operationEpoch === epoch);
       check();
-      for (const asset of attachments) {
+      const request = claim.request;
+      if (request.inputSchemaVersion !== 2 || request.preparationId !== claim.preparationId) throw new RemoteInputError(RemoteInputReason.Invalid);
+      const previous = this.deps.store.remote.get<LocalPreparedInput>(this.key(claim.preparationId));
+      if (previous) {
+        if (previous.requestHash !== payloadHash(request) || previous.deviceId !== deviceId || !sameOwner(previous.owner, owner)) throw new RemoteInputError(RemoteInputReason.Stale);
+        this.validate(previous, owner, deviceId, false);
+        await this.validateFiles(previous, check);
         check();
-        const extension = path.extname(asset.fileName).replace(/[^.a-zA-Z0-9]/gu, '').slice(0, 12);
-        const filePath = path.join(folder, `${randomUUID()}${extension}`);
-        const temporary = `${filePath}.part`;
-        const response = await download(asset.assetId); check();
-        if (response.status !== 200 || !response.body) throw new RemoteInputError(RemoteInputReason.Asset);
-        const handle = await fs.open(temporary, 'wx', 0o600);
-        let count = 0; const hash = createHash('sha256');
-        try {
-          for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-            check(); count += chunk.byteLength;
-            if (count > Number(asset.sizeBytes)) throw new RemoteInputError(RemoteInputReason.Asset);
-            hash.update(chunk);
-            let offset = 0;
-            while (offset < chunk.byteLength) {
-              const written = await handle.write(chunk, offset, chunk.byteLength - offset);
-              if (!written.bytesWritten) throw new RemoteInputError(RemoteInputReason.Asset);
-              offset += written.bytesWritten; check();
-            }
-          }
-          if (count !== Number(asset.sizeBytes) || hash.digest('hex') !== asset.sha256) throw new RemoteInputError(RemoteInputReason.Asset);
-          await handle.sync();
-        } finally { await handle.close(); }
-        check(); await fs.rename(temporary, filePath); check();
-        const file: LocalAsset = { assetId: asset.assetId, version: asset.version, path: filePath, identity: identity(filePath) };
-        if (asset.intent === RemoteInputIntent.Image) {
-          let image = { path: filePath, mimeType: asset.mimeType };
-          if (this.deps.convertImage) {
-            image = await this.deps.convertImage(filePath, asset.mimeType, path.join(folder, `${randomUUID()}.png`)); check();
-          }
-          if (!imageMimes.has(image.mimeType)) throw new RemoteInputError(RemoteInputReason.Invalid);
-          file.imagePath = image.path; file.imageMime = image.mimeType; file.imageIdentity = identity(image.path);
-          file.preview = await this.imagePreview(image.path, check) || null;
-          frameBytes += 4 * Math.ceil(file.imageIdentity.size / 3);
-          if (frameBytes > imageFrameBytes) throw new RemoteInputError(RemoteInputReason.Invalid);
-        }
-        files.push(file);
+        telemetry.emit(Telemetry.Input, { phase: Telemetry.LocalReady, outcome: Telemetry.Succeeded });
+        return previous;
       }
-      check();
-      const prepared: LocalPreparedInput = { preparationId: claim.preparationId, owner, deviceId, requestHash: payloadHash(request),
-        ...(targetId ? { targetId } : {}),
-        inputDigest: payloadHash(resolvedInput), resolvedInput, cwd, directoryIdentity, runtimeRef: model.local.runtimeRef,
-        sessionId: session?.id || null, expectedInputVersion: request.expectedInputVersion || null, expectedControlVersion: request.expectedControlVersion || null,
-        files, cacheDirectory: folder, createdAt: Date.now(), expiresAt: Math.min(Date.now() + 15 * 60_000, claim.expiresAt ? Date.parse(claim.expiresAt) : Infinity), boundCommandId: null };
-      this.validate(prepared, owner, deviceId, false);
-      this.deps.store.remote.put(this.key(claim.preparationId), prepared);
-      return prepared;
-    } catch (error) { await fs.rm(folder, { recursive: true, force: true }); throw error; }
+      const store = this.deps.store;
+      const continuation = request.purpose === 'send_message';
+      const sessionId = continuation ? store.remote.localSessionId(request.sessionId || '') : null;
+      const session = sessionId ? store.getSession(sessionId, 0) : null;
+      if (continuation && (!session || !sameOwner(store.remote.owner(session.id), owner))) throw new RemoteInputError(RemoteInputReason.Account);
+      if (session && (request.expectedInputVersion !== this.sessionInputVersion(session.id) || request.expectedControlVersion !== store.remote.controlVersion(session.id))) throw new RemoteInputError(RemoteInputReason.Version);
+      const agentId = session?.agentId || request.input.agent?.agentId || AgentId.Main;
+      store.assertAgentAccess(agentId, owner);
+      const agent = store.getAgent(agentId);
+      const ownership = store.agentOwnership.get(agentId);
+      if (!agent?.enabled || !ownership || (!continuation && !store.agentOwnership.canPublish(agentId, owner))) throw new RemoteInputError(RemoteInputReason.AgentUnavailable);
+      if (!continuation && request.input.agent?.expectedVersion !== ownership.version) throw new RemoteInputError(RemoteInputReason.AgentChanged);
+      let workspaceId = session ? store.remote.get<string>(`workspace:${session.id}`) : null;
+      let cwd = session?.cwd || '';
+      if (!session) {
+        const catalog = this.deps.getAgentCatalog();
+        const items = await catalog?.refresh(owner, deviceId, current);
+        check();
+        const item = items?.find(value => value.agentId === agentId);
+        if (!item || item.version !== request.input.agent?.expectedVersion || !item.workspaceAvailable || !item.defaultWorkspaceId) throw new RemoteInputError(RemoteInputReason.AgentChanged);
+        workspaceId = item.defaultWorkspaceId;
+        cwd = catalog!.resolve(owner, deviceId, agentId, item.version, workspaceId);
+      }
+      await fs.access(cwd, constants.R_OK | constants.W_OK); check();
+      if (!statSync(cwd).isDirectory()) throw new RemoteInputError(RemoteInputReason.Workspace);
+      const directoryIdentity = identity(cwd);
+      const mode = request.input.model.mode;
+      if ((!continuation && mode === RemoteInputMode.Session) || !Object.values(RemoteInputMode).includes(mode)) throw new RemoteInputError(RemoteInputReason.Invalid);
+      const model = mode === RemoteInputMode.Selected
+        ? this.deps.models.resolve(owner, deviceId, request.input.model.modelRef || '', request.input.model.expectedVersion || '')
+        : this.deps.models.resolveRuntime(owner, deviceId, mode === RemoteInputMode.Session
+          ? session?.modelOverride || agent.model || this.deps.getDefaultModel() : agent.model || this.deps.getDefaultModel());
+      const inheritedThinking = mode === RemoteInputMode.Session ? session?.thinkingLevel : mode === RemoteInputMode.Agent ? agent.thinkingLevel : undefined;
+      const thinkingLevel = request.input.options?.thinkingLevel ?? (inheritedThinking || model.item.thinking.default);
+      if (thinkingLevel && !model.item.thinking.options.includes(thinkingLevel)) throw new RemoteInputError(RemoteInputReason.Invalid);
+      const text = request.input.text || '';
+      const requestedAssets = request.input.attachments || [];
+      if ((!text.trim() && !requestedAssets.length) || Buffer.byteLength(text) > REMOTE_TEXT_BYTES || requestedAssets.length > 20) throw new RemoteInputError(RemoteInputReason.Invalid);
+      const attachments = requestedAssets.map(ref => {
+        const asset = claim.attachments?.find(value => value.assetId === ref.assetId && value.version === ref.version);
+        if (!asset || asset.intent !== ref.intent || !/^[a-f0-9]{64}$/u.test(asset.sha256) || !/^\d+$/u.test(asset.sizeBytes)) throw new RemoteInputError(RemoteInputReason.Asset);
+        const size = Number(asset.sizeBytes);
+        if (!Number.isSafeInteger(size) || size < 0 || size > maxFileBytes || ref.kind !== 'uploaded_asset') throw new RemoteInputError(RemoteInputReason.Invalid);
+        if (asset.intent === RemoteInputIntent.Image && !model.item.inputCapabilities.image) throw new RemoteInputError(RemoteInputReason.Invalid);
+        return { assetId: asset.assetId, version: asset.version, intent: asset.intent, sha256: asset.sha256, sizeBytes: asset.sizeBytes,
+          mimeType: asset.mimeType, fileName: asset.fileName };
+      });
+      if (attachments.reduce((total, value) => total + Number(value.sizeBytes), 0) > maxTotalBytes) throw new RemoteInputError(RemoteInputReason.Invalid);
+      const resolvedInput: RemoteResolvedInput = { text, agentId, expectedAgentVersion: ownership.version, workspaceId,
+        model: { modelRef: model.item.modelRef, version: model.item.version }, options: thinkingLevel ? { thinkingLevel } : {}, attachments };
+      const folder = path.join(this.deps.cacheRoot, payloadHash([owner.userId, owner.scopeKey, deviceId]), randomUUID());
+      phase = Telemetry.Write;
+      await fs.mkdir(folder, { recursive: true, mode: 0o700 });
+      const files: LocalAsset[] = [];
+      let frameBytes = 0;
+      try {
+        check();
+        for (const asset of attachments) {
+          check();
+          const extension = path.extname(asset.fileName).replace(/[^.a-zA-Z0-9]/gu, '').slice(0, 12);
+          const filePath = path.join(folder, `${randomUUID()}${extension}`);
+          const temporary = `${filePath}.part`;
+          const transfer = telemetry.request({ request_family: 'remote_binary', operation: 'input_asset_content', method: 'GET', lane: 'files' });
+          let response: Response | undefined;
+          let consuming = false;
+          let bytesRead = 0;
+          try {
+            phase = Telemetry.Download;
+            response = await withRemoteTelemetryRequest(transfer, () => download(asset.assetId)); check();
+            if (response.status !== 200 || !response.body) {
+              transfer.finish(response.status === 200 ? 'response_invalid' : 'response_rejected', { http_status: response.status, failure_stage: response.status === 200 ? 'protocol' : 'http' });
+              throw new RemoteInputError(RemoteInputReason.Asset);
+            }
+            phase = Telemetry.Write;
+            const handle = await fs.open(temporary, 'wx', 0o600);
+            let count = 0; const hash = createHash('sha256');
+            try {
+              consuming = true; phase = Telemetry.Download;
+              for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+                consuming = false; check(); count += chunk.byteLength; bytesRead = count; phase = Telemetry.Validate;
+                if (count > Number(asset.sizeBytes)) throw new RemoteInputError(RemoteInputReason.Asset);
+                hash.update(chunk);
+                phase = Telemetry.Write;
+                let offset = 0;
+                while (offset < chunk.byteLength) {
+                  const written = await handle.write(chunk, offset, chunk.byteLength - offset);
+                  if (!written.bytesWritten) throw new RemoteInputError(RemoteInputReason.Asset);
+                  offset += written.bytesWritten; check();
+                }
+                consuming = true; phase = Telemetry.Download;
+              }
+              consuming = false;
+              transfer.finish('transfer_http_ok', { http_status: response.status, response_bytes: count });
+              phase = Telemetry.Validate;
+              if (count !== Number(asset.sizeBytes) || hash.digest('hex') !== asset.sha256) throw new RemoteInputError(RemoteInputReason.Asset);
+              telemetry.emit(Telemetry.Input, { phase: Telemetry.Validate, outcome: Telemetry.Succeeded, asset_id: asset.assetId });
+              phase = Telemetry.Write;
+              await handle.sync();
+            } finally { await handle.close(); }
+            check(); await fs.rename(temporary, filePath); check();
+            const file: LocalAsset = { assetId: asset.assetId, version: asset.version, path: filePath, identity: identity(filePath) };
+            if (asset.intent === RemoteInputIntent.Image) {
+              let image = { path: filePath, mimeType: asset.mimeType };
+              if (this.deps.convertImage) {
+                image = await this.deps.convertImage(filePath, asset.mimeType, path.join(folder, `${randomUUID()}.png`)); check();
+              }
+              if (!imageMimes.has(image.mimeType)) throw new RemoteInputError(RemoteInputReason.Invalid);
+              file.imagePath = image.path; file.imageMime = image.mimeType; file.imageIdentity = identity(image.path);
+              file.preview = await this.imagePreview(image.path, check) || null;
+              frameBytes += 4 * Math.ceil(file.imageIdentity.size / 3);
+              if (frameBytes > imageFrameBytes) throw new RemoteInputError(RemoteInputReason.Invalid);
+            }
+            files.push(file);
+            telemetry.emit(Telemetry.Input, { phase: Telemetry.Write, outcome: Telemetry.Succeeded, asset_id: asset.assetId });
+          } catch (error) {
+            const result = error instanceof RemoteInputError && error.reason === RemoteInputReason.Account ? 'context_changed'
+              : !response ? remoteFileRequestFailure(error) : !response.ok ? 'response_rejected'
+              : consuming ? 'transport_failed' : 'local_processing_failed';
+            transfer.finish(result, { ...remoteFileRequestFailureFields(result, error, response), response_bytes: bytesRead });
+            throw error;
+          }
+        }
+        check();
+        const prepared: LocalPreparedInput = { preparationId: claim.preparationId, owner, deviceId, requestHash: payloadHash(request),
+          ...(targetId ? { targetId } : {}),
+          inputDigest: payloadHash(resolvedInput), resolvedInput, cwd, directoryIdentity, runtimeRef: model.local.runtimeRef,
+          sessionId: session?.id || null, expectedInputVersion: request.expectedInputVersion || null, expectedControlVersion: request.expectedControlVersion || null,
+          files, cacheDirectory: folder, createdAt: Date.now(), expiresAt: Math.min(Date.now() + 15 * 60_000, claim.expiresAt ? Date.parse(claim.expiresAt) : Infinity), boundCommandId: null };
+        this.validate(prepared, owner, deviceId, false);
+        phase = Telemetry.LocalCommit;
+        this.deps.store.remote.put(this.key(claim.preparationId), prepared);
+        telemetry.emit(Telemetry.Input, { phase: Telemetry.LocalReady, outcome: Telemetry.Succeeded, attachment_count: files.length });
+        return prepared;
+      } catch (error) { await fs.rm(folder, { recursive: true, force: true }); throw error; }
+    } catch (error) {
+      telemetry.emit(Telemetry.Input, { phase, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) });
+      throw error;
+    }
   }
   read(id: string, owner: RemoteOwner, deviceId: string): LocalPreparedInput {
     const prepared = this.deps.store.remote.get<LocalPreparedInput>(this.key(id));

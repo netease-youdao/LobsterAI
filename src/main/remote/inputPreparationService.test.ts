@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { existsSync, mkdirSync, mkdtempSync, promises as fs, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { buildCoworkImageAttachmentPreviews } from '../../shared/cowork/imageAttachments';
 import type { RemoteOwner } from '../../shared/remote/constants';
@@ -11,7 +11,24 @@ import type { CoworkStore } from '../coworkStore';
 import { payloadHash } from './canonical';
 import { InputPreparationService, type LocalPreparedInput } from './inputPreparationService';
 import type { RemoteAgentCatalog } from './remoteAgentCatalog';
+import { RemoteFileTelemetry as Telemetry } from './remoteFileTelemetry';
 import { RemoteModelCatalog } from './remoteModelCatalog';
+import * as telemetryApi from './remoteTelemetry';
+
+const emitted: Array<{ event: string; fields: Record<string, unknown> }> = [];
+const requests: Array<{ fields: Record<string, unknown>; result?: string }> = [];
+beforeEach(() => {
+  emitted.length = 0; requests.length = 0;
+  vi.spyOn(telemetryApi, 'captureRemoteTelemetry').mockImplementation((base = {}) => ({
+    emit: (event, fields = {}) => { emitted.push({ event, fields: { ...base, ...fields } }); },
+    request: fields => {
+      const request: typeof requests[number] = { fields: { ...base, ...fields } }; requests.push(request);
+      return { logicalAttemptId: 'attempt', transportStarted: () => undefined,
+        finish: (result, extra = {}) => { if (!request.result) { request.result = result; Object.assign(request.fields, extra); } } };
+    },
+  }));
+});
+afterEach(() => { vi.restoreAllMocks(); });
 
 const Target = { First: 'space-a-generation-7', Second: 'space-b-generation-4' } as const;
 const owner = { userId: 'A', scopeKey: 'personal' };
@@ -300,4 +317,33 @@ it('does not swallow a revoked execution permit while a legacy thumbnail is bein
   try {
     await expect(resumed.executionOptions(prepared, () => { if (!permitted) throw new Error('permit revoked'); })).rejects.toThrow('permit revoked');
   } finally { warning.mockRestore(); }
+});
+
+it('reports completed download separately from failed integrity validation without ready or private data', async () => {
+  const { service, claim, attach, values, cwd } = fixture(); attach('hello');
+  await expect(service.prepare(owner, 'pc', claim, async () => new Response('other'), () => true)).rejects.toThrow(RemoteInputReason.Asset);
+  expect(requests.filter(request => request.fields.operation === 'input_asset_content').map(request => request.result)).toEqual(['transfer_http_ok']);
+  expect(emitted).toContainEqual(expect.objectContaining({ event: Telemetry.Input,
+    fields: expect.objectContaining({ phase: Telemetry.Validate, outcome: Telemetry.Failed, reason: RemoteInputReason.Asset }) }));
+  expect(emitted.some(item => item.event === Telemetry.Input && item.fields.phase === Telemetry.LocalReady)).toBe(false);
+  expect(values.has('inputPreparation:prep')).toBe(false);
+  const logged = JSON.stringify({ emitted, requests });
+  for (const secret of ['hello', 'other', 'report.txt', 'claimToken', cwd, claim.attachments![0].sha256]) expect(logged).not.toContain(secret);
+});
+it('classifies download cache write failure as local processing while preserving the original error', async () => {
+  const { service, claim, attach } = fixture(); attach('hello');
+  const failure = Object.assign(new Error('private path and details'), { code: 'ENOSPC' });
+  const open = vi.spyOn(fs, 'open').mockRejectedValueOnce(failure);
+  try { await expect(service.prepare(owner, 'pc', claim, async () => new Response('hello'), () => true)).rejects.toBe(failure); }
+  finally { open.mockRestore(); }
+  expect(requests.filter(request => request.fields.operation === 'input_asset_content').map(request => request.result)).toEqual(['local_processing_failed']);
+  expect(emitted).toContainEqual(expect.objectContaining({ fields: expect.objectContaining({ phase: Telemetry.Write, reason: Telemetry.LocalIo }) }));
+  expect(JSON.stringify(emitted)).not.toContain('private path');
+});
+it('counts a failed body stream once and never reports a completed transfer', async () => {
+  const { service, claim, attach } = fixture(); attach('hello');
+  await expect(service.prepare(owner, 'pc', claim, async () => new Response(new ReadableStream({
+    pull(controller) { controller.error(new Error('stream disconnected')); },
+  })), () => true)).rejects.toThrow('stream disconnected');
+  expect(requests.filter(request => request.fields.operation === 'input_asset_content').map(request => request.result)).toEqual(['transport_failed']);
 });

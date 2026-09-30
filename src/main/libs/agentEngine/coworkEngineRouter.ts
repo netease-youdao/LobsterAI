@@ -26,7 +26,7 @@ import type {
   PermissionRequest,
   PermissionResult,
 } from './types';
-import { ENGINE_SWITCHED_CODE } from './types';
+import { CoworkRuntimeDiagnosticEvent, ENGINE_SWITCHED_CODE } from './types';
 
 type RouterDeps = {
   getCurrentEngine: () => CoworkAgentEngine;
@@ -359,6 +359,9 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       this.emit('error', sessionId, error);
     });
 
+    runtime.on(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, (sessionId, gatewayRunId) => {
+      try { this.emit(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, sessionId, gatewayRunId); } catch { /* Diagnostic listeners cannot affect engine acceptance. */ }
+    });
     runtime.on('runTermination', (sessionId, gatewayRunId, status) => this.emit('runTermination', sessionId, gatewayRunId, status));
     runtime.on('sessionStopped', (sessionId) => {
       this.emit('sessionStopped', sessionId);

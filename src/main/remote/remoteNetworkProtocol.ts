@@ -1,5 +1,5 @@
 export const RemoteNetworkMessage = {
-  Fetch: 'fetch', Result: 'result', Cancel: 'cancel', Socket: 'socket', Frame: 'frame', FrameAck: 'frame_ack',
+  Fetch: 'fetch', FetchStarted: 'fetch_started', Result: 'result', Cancel: 'cancel', Socket: 'socket', Frame: 'frame', FrameAck: 'frame_ack',
   SocketSend: 'socket_send', SocketClose: 'socket_close', SocketOpened: 'socket_opened', SocketClosed: 'socket_closed', Alive: 'alive',
 } as const;
 export const RemoteNetworkLimit = { Requests: 6, BodyBytes: 2 * 1024 * 1024, HeaderBytes: 16 * 1024,

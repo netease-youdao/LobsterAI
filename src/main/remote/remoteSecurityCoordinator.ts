@@ -5,6 +5,8 @@ import type { RemoteIdentity } from './installationIdentity';
 import { remoteDiagnostics } from './remoteDiagnostics';
 import { type RemoteSecurityCommit,RemoteSecurityJournal, RemoteSecurityJournalError, RemoteSecurityRecovery } from './remoteSecurityJournal';
 import type { RemoteStore } from './remoteStore';
+import { SyncTelemetry } from './remoteSyncTelemetry';
+import { captureRemoteTelemetry } from './remoteTelemetry';
 
 /** External durability is paid only at an execution boundary, never by a normal message write. */
 export class RemoteSecurityCoordinator {
@@ -13,6 +15,7 @@ export class RemoteSecurityCoordinator {
   private failure: Error | null = null;
   private waiting = 0;
   constructor(private store: RemoteStore, private journal: RemoteSecurityJournal, identity: RemoteIdentity, checkpoint: number) {
+    const telemetry = captureRemoteTelemetry({ domain: 'security_journal' });
     const storedIdentity = store.get<string>('databaseInstance');
     const oldCheckpoint = store.get<number>('databaseCheckpoint') || 0;
     const legacyVerified = (!storedIdentity || storedIdentity === identity.databaseId) && checkpoint === oldCheckpoint;
@@ -24,6 +27,7 @@ export class RemoteSecurityCoordinator {
     this.ready = this.initialize(identity, migrated, legacyVerified).catch(error => {
       this.failure = error instanceof Error ? error : new RemoteSecurityJournalError('Security initialization failed');
       store.setSecurityRecoveryRequired(true); remoteDiagnostics.record('security.unknown');
+      telemetry.emit(SyncTelemetry.Event.Admission, { fromState: 'initializing', toState: 'blocked', reason: SyncTelemetry.Reason.EvidenceUnknown });
       console.warn('[RemoteSecurity] Mobile execution requires local recovery', { reason: 'security_evidence_unknown' });
     });
   }
@@ -61,6 +65,7 @@ export class RemoteSecurityCoordinator {
     }
   }
   private async initialize(identity: RemoteIdentity, migrated: boolean, legacyVerified: boolean): Promise<void> {
+    const telemetry = captureRemoteTelemetry({ domain: 'security_journal' });
     await this.store.waitRunRecovery();
     if (!await this.store.verifyExecutionDatabaseHealth()) throw new RemoteSecurityJournalError('Core database health is unknown');
     const evidence = this.evidence();
@@ -76,6 +81,7 @@ export class RemoteSecurityCoordinator {
       this.store.put('securityJournalMigrated', true);
     });
     this.store.setSecurityRecoveryRequired(false); remoteDiagnostics.record('security.recovered');
+    telemetry.emit(SyncTelemetry.Event.Admission, { fromState: 'initializing', toState: 'ready', reason: SyncTelemetry.Reason.None });
   }
   async available(): Promise<void> {
     await this.ready;
@@ -83,7 +89,11 @@ export class RemoteSecurityCoordinator {
     if (this.store.needsSecurityRecovery()) throw new RemoteSecurityJournalError('Local security evidence requires recovery');
   }
   async commit<T>(operationId: string, operation: unknown, apply: () => T): Promise<T> {
-    if (this.waiting >= 20) throw new RemoteSecurityJournalError('Security transition queue is full');
+    const telemetry = captureRemoteTelemetry({ domain: 'security_journal' });
+    if (this.waiting >= 20) {
+      telemetry.emit(SyncTelemetry.Event.Admission, { fromState: 'ready', toState: 'blocked', reason: SyncTelemetry.Reason.Budget });
+      throw new RemoteSecurityJournalError('Security transition queue is full');
+    }
     this.waiting++;
     const work = this.queue.catch((): void => undefined).then(async () => {
       await this.available();
@@ -98,6 +108,7 @@ export class RemoteSecurityCoordinator {
     }).catch(error => {
       this.failure = error instanceof Error ? error : new RemoteSecurityJournalError('Execution durability is unknown');
       this.store.setSecurityRecoveryRequired(true); remoteDiagnostics.record('security.unknown');
+      telemetry.emit(SyncTelemetry.Event.Admission, { fromState: 'ready', toState: 'blocked', reason: SyncTelemetry.Reason.EvidenceUnknown });
       throw error;
     }).finally(() => { this.waiting--; });
     this.queue = work;

@@ -1,4 +1,5 @@
 import type { RemoteConnectionOperation, RemoteConnectionOperationRequest, RemoteConnectionRemoveRequest, RemoteConnectionResumeRequest, RemoteConnectionsRequest, RemoteConnectionsSnapshot } from './connections';
+import type { RemoteTelemetryUiInput } from './telemetryUi';
 
 /** Remote transport values are shared by main, preload and settings. */
 export const RemoteIpc = {
@@ -72,6 +73,7 @@ export interface RemoteSettingsState {
 }
 export interface RemoteConfigureRequest { expectedAccountEpoch?: string; keepAwakeEnabled?: boolean; retry?: boolean; retrySessionId?: string; enabled?: boolean; name?: string; addWorkspace?: boolean; removeWorkspaceId?: string }
 export interface RemoteSettingsApi {
+  telemetry?(input: RemoteTelemetryUiInput): void;
   onChanged(listener: (state: RemoteSettingsState) => void): () => void;
   state(): Promise<RemoteSettingsState>;
   queryConnections(input: RemoteConnectionsRequest): Promise<RemoteConnectionsSnapshot>;

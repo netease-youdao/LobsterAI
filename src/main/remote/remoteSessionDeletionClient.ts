@@ -3,12 +3,15 @@ import { performance } from 'perf_hooks';
 
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { type DeletionClaim, type DeletionCompletion, type DeletionOperation, type DeletionPermit, type DeletionReceipt, RemoteDeletion } from '../../shared/remote/deletions';
+import { RemoteTelemetryEvent as TelemetryEvent } from '../../shared/remote/telemetry';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
 import { ownershipOperationGate } from '../ownershipOperationGate';
 import { payloadHash, sameOwner } from './canonical';
 import { matchesRemoteDeletionTargetScope, samePersistedRemoteEnvironment } from './remoteEnvironmentMigration';
+import { remoteFileTelemetryReason } from './remoteFileTelemetry';
 import { acknowledgeRemoteDeletionCompletion } from './remoteLocalGc';
 import type { RemoteStore } from './remoteStore';
+import { captureRemoteTelemetry } from './remoteTelemetry';
 import type { SessionDeletionService } from './sessionDeletionService';
 
 interface Context { owner: RemoteOwner; environment: string; deviceId: string; generation: string | null; enabled: boolean }
@@ -37,6 +40,11 @@ export class RemoteSessionDeletionClient {
   private nextPoll = 0;
   private cursor = '';
   constructor(private readonly deps: SessionDeletionDependencies) {}
+  private telemetry(entry: DeletionInbox) {
+    return captureRemoteTelemetry({ lane: 'control', operation_kind: 'deletion', operation_id: entry.operation.operationId,
+      remote_owner_id: entry.target.userId, owner_scope_id: entry.target.scopeKey, device_id: entry.target.deviceId,
+      local_session_id: entry.target.localSessionId, session_id: entry.target.sessionId });
+  }
   wake(): void { this.nextPoll = 0; }
   retryDelay(): number { return Math.max(1000, this.nextPoll - Date.now()); }
   private key(entry: DeletionInbox): string { return `${RemoteDeletion.Inbox}${entry.operation.operationId}:${entry.operation.deletionVersion}:${entry.claim.claimId}`; }
@@ -91,6 +99,7 @@ export class RemoteSessionDeletionClient {
   async poll(supported: boolean, available: boolean): Promise<void> {
     if (this.busy || !supported || Date.now() < this.nextPoll) return;
     const context = this.deps.context(); if (!context) return;
+    const telemetry = captureRemoteTelemetry({ lane: 'control', operation_kind: 'deletion', remote_owner_id: context.owner.userId, owner_scope_id: context.owner.scopeKey });
     this.busy = true; this.nextPoll = Date.now() + 30000;
     try {
       // Page durable work so terminal history never starves an unresolved operation.
@@ -132,15 +141,18 @@ export class RemoteSessionDeletionClient {
           entry.stopStatus = previous.stopStatus; entry.journalRevision = previous.journalRevision; entry.phase = RemoteDeletion.Stopped;
         }
         this.save(entry);
+        this.telemetry(entry).emit(TelemetryEvent.SyncStage, { stage: 'received', outcome: 'succeeded' });
         await this.execute(entry, !!resume);
         this.nextPoll = Math.min(this.nextPoll, Date.now() + 5000);
       }
-    } catch {
+    } catch (error) {
+      telemetry.emit(TelemetryEvent.SyncStage, { stage: 'reconcile', outcome: 'deferred', reason: remoteFileTelemetryReason(error) });
       // Credentials/results remain in the private SQLite inbox; never log tokens or task bodies.
       this.nextPoll = Date.now() + 5000;
     } finally { this.busy = false; }
   }
   private async sendReport(entry: DeletionInbox, result?: Record<string, unknown>): Promise<void> {
+    const telemetry = this.telemetry(entry);
     if (result) { entry.report = { reportId: randomUUID(), result }; this.save(entry); }
     if (!entry.report || !this.matching(entry, this.deps.context())) return;
     const response = await this.deps.request(`/session-deletions/${encodeURIComponent(entry.operation.operationId)}/reports`, 'POST', {
@@ -162,8 +174,11 @@ export class RemoteSessionDeletionClient {
       entry.phase = Settled; this.releaseFence(entry);
     }
     delete entry.report; this.save(entry);
+    telemetry.emit(TelemetryEvent.SyncStage, { stage: entry.phase === RemoteDeletion.Completed ? 'server_confirmed' : 'reconcile',
+      outcome: entry.phase === RemoteDeletion.Completed ? 'succeeded' : 'deferred' });
   }
   private async recover(entry: DeletionInbox, available: boolean): Promise<void> {
+    const telemetry = this.telemetry(entry);
     const remote = await this.deps.request(`/session-deletions/${encodeURIComponent(entry.operation.operationId)}`) as DeletionOperation & { completionReceipt?: DeletionCompletion };
     if (remote.operationId !== entry.operation.operationId) throw new Error('Deletion recovery identity changed');
     if (remote.state === RemoteDeletion.Completed && remote.completionReceipt) {
@@ -179,7 +194,8 @@ export class RemoteSessionDeletionClient {
         || !['desktop_source_delete', 'desktop_snapshot_delete'].includes(proof.proofKind)
         || !sameOwner(proof.owner, entry.target) || proof.deviceId !== entry.target.deviceId || proof.localSessionId !== entry.target.localSessionId
         || proof.sessionId !== entry.target.sessionId || proof.streamEpoch !== entry.target.streamEpoch || proof.serviceScope !== entry.target.serviceScope) return;
-      entry.completionReceipt = proof; entry.phase = RemoteDeletion.Completed; this.releaseFence(entry); this.save(entry); return;
+      entry.completionReceipt = proof; entry.phase = RemoteDeletion.Completed; this.releaseFence(entry); this.save(entry);
+      telemetry.emit(TelemetryEvent.SyncStage, { stage: 'server_confirmed', outcome: 'succeeded', reconcile_trigger: 'receipt_missing' }); return;
     }
     if (remote.state === RemoteDeletion.Cancelled && !entry.permit && !entry.receipt) {
       entry.phase = RemoteDeletion.Cancelled; this.releaseFence(entry); this.save(entry); return;
@@ -232,6 +248,7 @@ export class RemoteSessionDeletionClient {
       localFenceId: entry.localFenceId, guard: entry.operation.approvedGuard, evidence: this.evidence(entry, true) });
   }
   private async execute(entry: DeletionInbox, deleteOnly = false): Promise<void> {
+    const telemetry = this.telemetry(entry);
     const id = entry.target.localSessionId;
     if (!this.identity(entry)) { await this.sendReport(entry, { kind: 'blocked', reason: 'LOCAL_IDENTITY_MISSING' }); return; }
     if (!this.executionAdmitted(entry)) { await this.sendReport(entry, { kind: 'blocked', reason: 'LOCAL_RECOVERY_REQUIRED' }); return; }
@@ -259,6 +276,7 @@ export class RemoteSessionDeletionClient {
       };
       if (this.deps.security) await this.deps.security.commit(entry.operation.operationId, { target: entry.target, localFenceId: entry.localFenceId, phase: RemoteDeletion.Prepared }, prepare);
       else store.transaction(prepare);
+      telemetry.emit(TelemetryEvent.SyncStage, { stage: 'prepared', outcome: 'succeeded' });
       if (!this.executionAdmitted(entry)) return;
       const started = performance.now();
       const permitRequest = {
@@ -329,7 +347,10 @@ export class RemoteSessionDeletionClient {
           receiptId: entry.receipt.localReceiptId, receiptDigest: entry.receipt.receiptDigest, sourceHighWatermark: sync.source_seq, ackSourceSeq: sync.ack_seq });
         this.fence(entry, RemoteDeletion.Deleted);
       });
+      telemetry.emit(TelemetryEvent.SyncStage, { stage: 'local_commit', outcome: 'succeeded', persist_outcome: 'succeeded' });
       await this.sendReport(entry, entry.receipt as unknown as Record<string, unknown>);
+    } catch (error) {
+      telemetry.emit(TelemetryEvent.SyncStage, { stage: 'reconcile', outcome: 'unknown', reason: remoteFileTelemetryReason(error) }); throw error;
     } finally { if (renewal) clearInterval(renewal); release(); }
   }
 }

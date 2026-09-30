@@ -32,6 +32,7 @@ import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
 import { ownershipOperationGate } from './ownershipOperationGate';
+import { configureRemoteTelemetry, shutdownRemoteTelemetry } from './remote/remoteTelemetry';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1672,4 +1673,25 @@ test('sidebar hides historical self-spawns while preserving expert work, forks a
   expect(store.countSearchSessions({ query: 'child' }, owner)).toBe(1);
   expect(store.canReadSession(self.id, owner)).toBe(true);
   expect(store.canReadSession(fork.id, owner)).toBe(false);
+});
+
+
+test('final-message telemetry observes the committed outer transaction and drops rolled-back writes', async () => {
+  const owner = { userId: 'telemetry-owner', scopeKey: 'personal' }; store.remoteCreationOwner = () => owner;
+  const session = store.createSession('private title', '/tmp', '', 'local', [], 'main', '', { owner });
+  const uploaded: string[] = [];
+  const reporter = configureRemoteTelemetry({ context: { epoch: 'test', enabled: true, appVersion: '1', installationId: 'installation',
+    environment: 'test', remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey },
+    autoStart: false, fetch: async url => { uploaded.push(url); return { ok: true, status: 200 }; } })!;
+  try {
+    expect(() => store.runSessionTransaction(() => {
+      store.addMessage(session.id, { type: 'assistant', content: 'private answer', metadata: { isFinal: true } });
+      expect(reporter.snapshot().queued).toBe(0); throw new Error('rollback');
+    })).toThrow('rollback');
+    expect(reporter.snapshot().queued).toBe(0);
+    store.addMessage(session.id, { type: 'assistant', content: 'private answer', metadata: { isFinal: true } });
+    expect(reporter.snapshot().queued).toBe(1); await reporter.pump();
+    expect(new URL(uploaded[0]).searchParams.get('event_name')).toBe('desktop.message.final_persisted');
+    expect(uploaded[0]).not.toContain('private');
+  } finally { await shutdownRemoteTelemetry(); }
 });

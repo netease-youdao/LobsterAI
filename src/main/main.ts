@@ -203,6 +203,8 @@ import {
 } from '../shared/providers';
 import type { RemoteConnectionOperationRequest, RemoteConnectionRemoveRequest, RemoteConnectionResumeRequest, RemoteConnectionsRequest } from '../shared/remote/connections';
 import { type RemoteConfigureRequest, RemoteIpc, type RemoteOwner, type RemoteSettingsState } from '../shared/remote/constants';
+import { RemoteTelemetryEvent, RemoteTelemetryIpc } from '../shared/remote/telemetry';
+import { validRemoteTelemetryUi } from '../shared/remote/telemetryUi';
 import {
   ShareDeploymentCandidateSource,
   type ShareDeploymentCreateNodeInput,
@@ -624,6 +626,8 @@ import { RemoteSecurityCoordinator } from './remote/remoteSecurityCoordinator';
 import { RemoteSecurityJournal, RemoteSecurityJournalWorkerIo } from './remote/remoteSecurityJournal';
 import { PREVENT_SLEEP_STORE_KEY, RemoteSettingsController } from './remote/remoteSettingsController';
 import { remoteDiagnosticLog } from './remote/remoteSyncLog';
+import { captureRemoteTelemetry } from './remote/remoteTelemetry';
+import { initializeRemoteTelemetry } from './remote/remoteTelemetryRuntime';
 import { assertRemoteExecutionPermit,currentRemoteExecution, markRemoteExecutionDispatched, SessionCommandService } from './remote/sessionCommandService';
 import { SessionDeletionService } from './remote/sessionDeletionService';
 import type { SkillChangeBatch } from './skills/skillChangeDiagnostics';
@@ -5370,6 +5374,7 @@ if (!gotTheLock) {
   // ── Auth IPC handlers ──
 
   let remoteBridge: RemoteBridge | null = null;
+  let remoteTelemetryRuntime: ReturnType<typeof initializeRemoteTelemetry> | null = null;
   prepareRemoteFileRun = async (sessionId, cwd) => {
     await remoteBridge?.prepareFileRun(sessionId, [cwd, app.getPath('desktop')]);
   };
@@ -5907,6 +5912,12 @@ if (!gotTheLock) {
       owner, workspaces: [], accessRequests: [], error: owner ? t('remoteSecureStorageUnavailable') : undefined };
   };
   ipcMain.handle(RemoteIpc.State, () => remoteSettingsController?.state() ?? readRemoteState());
+  ipcMain.on(RemoteTelemetryIpc.Ui, (event, input: unknown) => {
+    if (event.sender !== mainWindow?.webContents || !validRemoteTelemetryUi(input)
+      || input.expectedAccountEpoch !== getRemoteAccountEpoch()) return;
+    captureRemoteTelemetry().emit(RemoteTelemetryEvent.Ui, { uiInteractionId: input.uiInteractionId,
+      uiAction: input.uiAction, uiStage: input.uiStage, surface: input.surface, outcome: input.outcome });
+  });
   const connectionAccount = { getAccountEpoch: getRemoteAccountEpoch, getOwner: getCurrentRemoteOwner };
   ipcMain.handle(RemoteIpc.Connections, (_event, input: RemoteConnectionsRequest) => withRemoteConnectionAccount(input, connectionAccount,
     () => initializeRemoteBridge().queryConnections()));
@@ -5933,6 +5944,20 @@ if (!gotTheLock) {
     return initializeRemoteBridge().decide(requestId, decision).then(() => remoteSettingsController?.state() ?? readRemoteState());
   });
   const initializeRemoteControl = (): void => {
+    try {
+      remoteTelemetryRuntime = initializeRemoteTelemetry({
+        store: getStore(), reporter: getMainLogReporter(), appVersion: app.getVersion(),
+        directory: path.join(app.getPath('userData'), 'remote-telemetry'),
+        getOwner: getCurrentRemoteOwner, getRoute: getServerApiBaseUrl,
+        getTarget: () => remoteBridge?.telemetryIdentity() ?? {},
+        fetch: async (url, signal) => {
+          const response = await session.defaultSession.fetch(url, { method: 'GET', signal, credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer' });
+          const result = { ok: response.ok, status: response.status, retryAfter: response.headers.get('Retry-After') };
+          await response.body?.cancel();
+          return result;
+        },
+      });
+    } catch { /* Diagnostics cannot prevent desktop or remote initialization. */ }
     // Store-backed services and listeners must wait for initApp's database initialization.
     getCoworkStore().remoteCreationOwner = getCurrentRemoteOwner;
     getSessionDeletionService();
@@ -5985,6 +6010,7 @@ if (!gotTheLock) {
       applyKeepAwake: setPreventSleepBlockerEnabled,
       isKeepAwakeActive: () => preventSleepBlockerId !== null && powerSaveBlocker.isStarted(preventSleepBlockerId),
       publish: state => {
+        remoteTelemetryRuntime?.refresh(state);
         for (const window of BrowserWindow.getAllWindows()) {
           if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(RemoteIpc.Changed, state);
         }
@@ -14966,6 +14992,7 @@ if (!gotTheLock) {
     currentAppCleanupStep = 'sync-teardown';
     remoteLocalGc?.stop();
     remoteBridge?.stop();
+    void remoteTelemetryRuntime?.dispose();
     remoteNetworkTransport.dispose();
     remoteSettingsController?.dispose();
     skillManager?.stopWatching();
@@ -15664,6 +15691,7 @@ if (!gotTheLock) {
 
     // Reconnect OpenClaw gateway WS after system wake from sleep/suspend
     powerMonitor.on('resume', () => {
+      captureRemoteTelemetry().emit(RemoteTelemetryEvent.Runtime, { domain: 'runtime', fromState: 'stopped', toState: 'active', reason: 'SYSTEM_RESUME' });
       remoteSettingsController?.restoreKeepAwake();
       remoteBridge?.start();
       if (openClawRuntimeAdapter) {
@@ -15671,7 +15699,10 @@ if (!gotTheLock) {
       }
     });
 
-    powerMonitor.on('suspend', () => remoteBridge?.stop());
+    powerMonitor.on('suspend', () => {
+      captureRemoteTelemetry().emit(RemoteTelemetryEvent.Runtime, { domain: 'runtime', fromState: 'active', toState: 'stopped', reason: 'SYSTEM_SUSPEND' });
+      remoteBridge?.stop();
+    });
     if (process.platform === 'darwin' || process.platform === 'win32') {
       powerMonitor.on('lock-screen', () => remoteSettingsController?.setScreenLocked(true));
       powerMonitor.on('unlock-screen', () => remoteSettingsController?.setScreenLocked(false));

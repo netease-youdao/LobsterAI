@@ -8,6 +8,8 @@ import { RemoteHistoryJob } from './remoteHistoryJob';
 import type { ProjectionWork } from './remoteProjectionWorker';
 import type { RemoteStore } from './remoteStore';
 import { archivedRemoteSyncReferences } from './remoteSyncTargetStore';
+import { SyncTelemetry } from './remoteSyncTelemetry';
+import { captureRemoteTelemetry } from './remoteTelemetry';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 
 export const RemoteProjectionFailure = {
@@ -44,7 +46,10 @@ export class RemoteProjectionCoordinator {
     const work = this.store.nextProjectionWork();
     if (!work) return;
     const id = work.sessionId;
-    const startedAt = Date.now();
+    const telemetry = captureRemoteTelemetry({ localSessionId: id, deviceId: work.deviceId, remoteOwnerId: work.owner.userId,
+      ownerScopeId: work.owner.scopeKey, operationKind: SyncTelemetry.Kind.Projection, lane: 'history' });
+    telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.ProjectionQueue, outcome: SyncTelemetry.Outcome.Started });
+    const startedAt = Date.now(), monotonicStart = performance.now();
     remoteDiagnostics.gauge('projection.queue', 1);
     if (this.store.db.name === ':memory:') { this.store.projectIsolatedForTest(id); return; }
     const directory = path.join(path.dirname(this.store.db.name), 'remote-projection-staging');
@@ -75,7 +80,11 @@ export class RemoteProjectionCoordinator {
       filename = path.join(directory, `${randomUUID()}.sqlite`);
       const result = await this.work({ ...work, database: this.store.db.name, target: filename }, () => this.store.projectionWorkCurrent(work));
       // No projected object can cross an owner, environment, capability or source-sequence change.
-      if (!this.store.projectionWorkCurrent(work) || this.store.sync(id)?.source_seq !== result.sourceSeq) { await fs.promises.rm(filename, { force: true }); return; }
+      if (!this.store.projectionWorkCurrent(work) || this.store.sync(id)?.source_seq !== result.sourceSeq) {
+        telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Projection, outcome: SyncTelemetry.Outcome.Deferred,
+          reason: SyncTelemetry.Reason.ContextChanged });
+        await fs.promises.rm(filename, { force: true }); return;
+      }
       target = new Database(filename, { readonly: true, fileMustExist: true });
       this.store.db.transaction(() => {
         this.store.db.prepare('INSERT OR REPLACE INTO remote_projection_publications VALUES (?,?,?,?,?)')
@@ -143,11 +152,19 @@ export class RemoteProjectionCoordinator {
         this.store.db.prepare('DELETE FROM remote_projection_publications WHERE session_id=?').run(id);
         this.store.db.prepare('DELETE FROM remote_projection_failures WHERE session_id=?').run(id);
       })();
+      telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.ProjectionPublish,
+        outcome: SyncTelemetry.Outcome.Completed, sourceSeq: String(result.targetSourceSeq), objectRevision: String(result.revision),
+        durationMs: Math.max(0, performance.now() - monotonicStart), persistOutcome: 'success' });
       remoteDiagnostics.record('projection.completed');
       remoteDiagnostics.record('projection.bytes', (await fs.promises.stat(filename)).size);
       target.close(); target = null; await fs.promises.rm(filename, { force: true });
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'REMOTE_PROJECTION_FAILED';
+      telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Projection,
+        outcome: isTransientProjectionFailure(reason) ? SyncTelemetry.Outcome.Deferred : SyncTelemetry.Outcome.Failed,
+        reason: isTransientProjectionFailure(reason) ? SyncTelemetry.Reason.ContextChanged
+          : reason === 'REMOTE_PROJECTION_BUDGET' ? SyncTelemetry.Reason.Budget : SyncTelemetry.Reason.EncodingFailed,
+        durationMs: Math.max(0, performance.now() - monotonicStart) });
       this.store.recordProjectionFailure(id, reason); remoteDiagnostics.record('projection.failed');
       console.warn('[RemoteSync] Projection deferred without rolling back local state', { localSessionId: id, reason });
     } finally {

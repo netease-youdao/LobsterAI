@@ -9,6 +9,8 @@ import { RemoteLiveProjectionJob } from './remoteLiveProjectionJob';
 import { recoveryEvents, recoveryRequired, recoverySourceManifest } from './remoteRecoveryProof';
 import type { CoreRemoteBinding, RemoteStore } from './remoteStore';
 import { remoteDiagnosticLog, remoteSyncErrorMetadata } from './remoteSyncLog';
+import { observeSyncCommit, SyncTelemetry } from './remoteSyncTelemetry';
+import { captureRemoteTelemetry } from './remoteTelemetry';
 
 export interface AvailabilityContext { environment?: string; scope: string; owner: RemoteOwner; deviceId: string; generation: string; supported: boolean; historySupported?: boolean }
 interface Dependencies {
@@ -38,9 +40,10 @@ export class RemoteAvailabilityPublisher {
   private readonly failures = new Map<string, { count: number; retryAt: number }>();
   private readonly liveScan = new Map<string, number>();
   private readonly scanOffsets = new Map<string, number>();
+  private readonly contentRepresentations = new Map<string, string>();
   constructor(private readonly deps: Dependencies) { this.ledger = new RemoteAvailabilityStore(deps.store.db.name); }
   start(): void { this.stopped = false; this.wake(); }
-  stop(): void { this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null; this.encoder.cancel(); }
+  stop(): void { this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null; this.encoder.cancel(); this.contentRepresentations.clear(); }
   dispose(): void { this.stop(); this.ledger.close(); }
   ownsHistory(localId: string): boolean {
     const context = this.deps.context();
@@ -105,6 +108,10 @@ export class RemoteAvailabilityPublisher {
     const delay = Math.max(backoff[Math.min(count - 1, backoff.length - 1)], Number.isFinite(retryAfter) ? retryAfter : 0);
     if (this.failures.size >= 1024 && !this.failures.has(key)) this.failures.delete(this.failures.keys().next().value!);
     this.failures.set(key, { count, retryAt: Date.now() + delay });
+    captureRemoteTelemetry().emit(SyncTelemetry.Event.Deferred, { stage: SyncTelemetry.Stage.Reconcile,
+      outcome: SyncTelemetry.Outcome.Deferred, retryAfterMs: delay, failureCount: count,
+      reason: error instanceof Error && /RECEIPT_INVALID$/u.test(error.message) ? SyncTelemetry.Reason.InvalidReceipt
+        : error instanceof Error && /BUDGET$/u.test(error.message) ? SyncTelemetry.Reason.Budget : SyncTelemetry.Reason.RequestFailed });
     if (!previous || count === 3) remoteDiagnosticLog('remote.sync.task_deferred', { operationId: /^[A-Za-z0-9_-]{1,64}$/u.test(key) ? key : undefined, error, retryAfterMs: delay, reason: 'REQUEST_FAILED' }, 'warn');
   }
   private body(context: AvailabilityContext, state: AvailabilitySession): Record<string, any> {
@@ -117,6 +124,11 @@ export class RemoteAvailabilityPublisher {
       body: { ...this.body(context, state), ...body }, lookup, lookupVersion, attempted: false, createdAt: Date.now() });
   }
   private async send(context: AvailabilityContext, request: AvailabilityRequest): Promise<any> {
+    const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
+      deviceId: context.deviceId, localSessionId: request.localId, sessionId: request.body.sessionId, lane: request.lane,
+      operationId: request.body.publicationId || request.body.batchId || request.body.operationId || request.key.split(':')[0],
+      operationKind: request.lane === 'live' ? SyncTelemetry.Kind.Live : request.pathname === '/sync/mode-activations'
+        ? SyncTelemetry.Kind.Activation : request.pathname === '/control/facts/batches' ? SyncTelemetry.Kind.Facts : SyncTelemetry.Kind.Bootstrap });
     if (!this.current(context)) throw new Error('REMOTE_AVAILABILITY_CONTEXT_CHANGED');
     if (request.lane === 'control') this.checkpointGuard();
     if (request.attempted && request.lookup) {
@@ -124,11 +136,23 @@ export class RemoteAvailabilityPublisher {
         const result = await this.deps.request(request.lookup, 'GET', undefined, request.lookupVersion, request.lane === 'control' ? this.checkpointTimeout() : undefined);
         if (request.lane === 'control') this.checkpointGuard();
         if (!this.current(context)) throw new Error('REMOTE_AVAILABILITY_CONTEXT_CHANGED');
-        if (result) return result;
+        if (result) {
+          telemetry.emit(SyncTelemetry.Event.Reconciled, { stage: SyncTelemetry.Stage.Reconcile, outcome: SyncTelemetry.Outcome.Pending,
+            reconcileTrigger: 'receipt_missing', receiptState: result.state, persistOutcome: 'pending' });
+          return result;
+        }
       } catch (error) {
         // Not found is not proof of failure: replay the same immutable operation, never allocate another ID.
         const failure = error as { httpStatus?: number; code?: number };
-        if (failure.httpStatus !== 404 && failure.code !== 404) throw error;
+        if (failure.httpStatus !== 404 && failure.code !== 404) {
+          telemetry.emit(SyncTelemetry.Event.Unknown, { stage: SyncTelemetry.Stage.Reconcile, phase: SyncTelemetry.Stage.Reconcile,
+            publicationKind: request.lane === 'live' ? SyncTelemetry.Kind.Live : request.pathname === '/control/facts/batches'
+              ? SyncTelemetry.Kind.Facts : SyncTelemetry.Kind.Bootstrap, businessStatus: 'unknown',
+            outcome: SyncTelemetry.Outcome.Unknown, reason: SyncTelemetry.Reason.RequestFailed });
+          throw error;
+        }
+        telemetry.emit(SyncTelemetry.Event.Reconciled, { stage: SyncTelemetry.Stage.Replay, outcome: SyncTelemetry.Outcome.Pending,
+          reconcileTrigger: 'receipt_missing', reason: SyncTelemetry.Reason.Pending });
       }
     }
     this.ledger.attempted(request);
@@ -169,6 +193,8 @@ export class RemoteAvailabilityPublisher {
     }
   }
   private async controlSession(context: AvailabilityContext, row: CoreRemoteBinding): Promise<void> {
+    const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
+      deviceId: context.deviceId, localSessionId: row.local_id, sessionId: row.session_id, lane: 'control' });
     let state = this.ledger.session(context.scope, row.local_id);
     if (!state) {
       if (!context.supported) return;
@@ -189,7 +215,13 @@ export class RemoteAvailabilityPublisher {
       state.pendingRunIds = [...new Set([...(result.pendingRunIds || []), ...(result.pendingCommands || []).filter((command: any) => command.runId && !(command.status === 'accepted' && command.claimId == null))
         .map((command: any) => command.runId)])] as string[];
       state.phase = 'bootstrap'; state.operationId = randomUUID();
-      this.ledger.db.transaction(() => { this.ledger.saveSession(state!); this.ledger.complete(request.key); })();
+      observeSyncCommit(telemetry, () => this.ledger.db.transaction(() => {
+        this.ledger.saveSession(state!); this.ledger.complete(request.key);
+      })(), { operationId: request.body.operationId, operationKind: SyncTelemetry.Kind.Activation });
+      telemetry.emit(SyncTelemetry.Event.Acknowledged, { operationId: request.body.operationId,
+        operationKind: SyncTelemetry.Kind.Activation, publicationKind: SyncTelemetry.Kind.Activation,
+        stage: SyncTelemetry.Stage.Activation, phase: SyncTelemetry.Stage.LocalAck, outcome: SyncTelemetry.Outcome.Completed,
+        businessStatus: result.state, writerGeneration: state.writerGeneration, persistOutcome: 'success' });
       this.deps.store.bindRemote(row.local_id, row.session_id, context.deviceId);
     }
     if (state.phase === 'bootstrap') {
@@ -226,6 +258,10 @@ export class RemoteAvailabilityPublisher {
     await this.facts(context, state);
   }
   private async bootstrap(context: AvailabilityContext, state: AvailabilitySession, options?: { snapshot: ControlSnapshot; extra: Record<string, unknown> }): Promise<void> {
+    const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
+      deviceId: context.deviceId, localSessionId: state.localId, sessionId: state.sessionId, operationId: state.operationId,
+      operationKind: SyncTelemetry.Kind.Bootstrap, publicationKind: SyncTelemetry.Kind.Bootstrap, lane: 'control',
+      writerGeneration: state.writerGeneration, controlEpoch: state.controlEpoch });
     const checkpointKey = `${state.operationId}:checkpoint`;
     let saved = this.ledger.request(checkpointKey);
     if (!saved) {
@@ -273,7 +309,7 @@ export class RemoteAvailabilityPublisher {
       if (result.state !== 'committed' || result.controlReady !== true) throw new Error('REMOTE_BOOTSTRAP_RECEIPT_INVALID');
       receipt = result;
     }
-    this.ledger.db.transaction(() => {
+    observeSyncCommit(telemetry, () => this.ledger.db.transaction(() => {
       this.ledger.db.prepare('INSERT OR IGNORE INTO availability_receipts VALUES(?,?)').run(state.operationId, stableJson(receipt));
       const currentState = this.ledger.session(context.scope,state.localId);
       if (!currentState || BigInt(currentState.factSeq) <= BigInt(checkpoint.throughFactSeq)) {
@@ -282,13 +318,20 @@ export class RemoteAvailabilityPublisher {
       } else Object.assign(state,currentState);
       for (const request of this.ledger.pending(context.scope, 'control', state.localId))
         if (request.key.startsWith(`${state.operationId}:`)) this.ledger.complete(request.key);
-    })();
+    })());
+    telemetry.emit(SyncTelemetry.Event.Acknowledged, { stage: SyncTelemetry.Stage.Bootstrap, phase: SyncTelemetry.Stage.LocalAck,
+      outcome: SyncTelemetry.Outcome.Completed, businessStatus: receipt.state, lastFactSeq: state.factSeq,
+      partCount: checkpoint.parts.length, persistOutcome: 'success' });
     for (const objectKey of Object.keys(checkpoint.recordHashes)) this.deps.store.db.prepare('DELETE FROM remote_control_pending WHERE session_id=? AND object_key=? AND revision<=?').run(state.localId, objectKey, checkpoint.revision);
     if (this.deps.store.db.prepare('SELECT 1 FROM remote_control_pending WHERE session_id=? LIMIT 1').get(state.localId)) {
       state.controlRevision = '0'; this.ledger.saveSession(state);
     }
   }
   private async facts(context: AvailabilityContext, state: AvailabilitySession): Promise<void> {
+    const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
+      deviceId: context.deviceId, localSessionId: state.localId, sessionId: state.sessionId, lane: 'control',
+      operationKind: SyncTelemetry.Kind.Facts, publicationKind: SyncTelemetry.Kind.Facts, writerGeneration: state.writerGeneration,
+      controlEpoch: state.controlEpoch });
     let request = this.ledger.pending(context.scope, 'control', state.localId).find(value => value.pathname === '/control/facts/batches');
     if (!request) {
       const coreRevision = (this.deps.store.db.prepare('SELECT revision FROM remote_control_revisions WHERE session_id=?').get(state.localId) as { revision: number } | undefined)?.revision || 1;
@@ -319,7 +362,7 @@ export class RemoteAvailabilityPublisher {
     }
     const result = await this.send(context, request);
     if (!['committed', 'covered_by_checkpoint'].includes(result.state) || BigInt(result.lastFactSeq) < BigInt(request.body.lastFactSeq)) throw new Error('REMOTE_CONTROL_FACT_RECEIPT_INVALID');
-    this.ledger.db.transaction(() => {
+    observeSyncCommit(telemetry, () => this.ledger.db.transaction(() => {
       const current = this.ledger.session(context.scope,state.localId)!;
       Object.assign(state,current);
       const newerCheckpoint = BigInt(current.factSeq) > BigInt(request!.body.lastFactSeq)
@@ -330,7 +373,11 @@ export class RemoteAvailabilityPublisher {
         for (const fact of request!.body.facts) state.records[recordKey(fact)] = payloadHash({ eventType: fact.eventType, payload: fact.payload });
       }
       this.ledger.saveSession(state); this.ledger.complete(request!.key);
-    })();
+    })());
+    telemetry.emit(SyncTelemetry.Event.Acknowledged, { operationId: request.body.batchId,
+      stage: SyncTelemetry.Stage.Facts, phase: SyncTelemetry.Stage.LocalAck, outcome: SyncTelemetry.Outcome.Completed,
+      businessStatus: result.state, firstFactSeq: request.body.firstFactSeq, lastFactSeq: result.lastFactSeq,
+      recordCount: request.body.facts.length, persistOutcome: 'success' });
     for (const fact of request.body.facts) this.deps.store.db.prepare('DELETE FROM remote_control_pending WHERE session_id=? AND object_key=? AND revision<=?')
       .run(state.localId, recordKey(fact), request.body.ackCoreRevision || request.body.coreRevision);
     if (this.deps.store.db.prepare('SELECT 1 FROM remote_control_pending WHERE session_id=? LIMIT 1').get(state.localId)) {
@@ -344,6 +391,9 @@ export class RemoteAvailabilityPublisher {
       if (!this.current(context)) return;
       const key = `${context.scope}:${row.local_id}`;
       let operation: HistoryOperation | undefined;
+      const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
+        deviceId: context.deviceId, localSessionId: row.local_id, sessionId: row.session_id, lane: 'history',
+        operationKind: SyncTelemetry.Kind.History });
       try {
       const state = this.ledger.session(context.scope,row.local_id);
       if (!state || state.phase !== 'active') continue;
@@ -420,6 +470,10 @@ export class RemoteAvailabilityPublisher {
         if (operation && (status === 400 || status === 409)) {
           try { await this.abortRecovery(context,operation); } catch { /* Unknown abort stays durable for reconciliation. */ }
         }
+        telemetry.emit(operation ? SyncTelemetry.Event.HistoryDeferred : SyncTelemetry.Event.Stage, { operationId: operation?.id,
+          publicationKind: SyncTelemetry.Kind.History, phase: SyncTelemetry.Stage.HistoryRecovery, businessStatus: 'pending',
+          stage: SyncTelemetry.Stage.HistoryRecovery, outcome: SyncTelemetry.Outcome.Deferred,
+          reason: SyncTelemetry.Reason.RequestFailed });
         // No service readiness/WS flag is changed by a history-only failure.
         remoteDiagnosticLog('remote.history.deferred', { localSessionId: row.local_id, lane: 'history', error, reason: 'REQUEST_FAILED' }, 'warn');
         if (error instanceof SyntaxError || (error instanceof Error && /REMOTE_(RECOVERY|HISTORY)_.*(EVIDENCE|UNCOVERED|CONFLICT|MISSING|INVALID)/u.test(error.message)))
@@ -474,6 +528,9 @@ export class RemoteAvailabilityPublisher {
     try { return await operation; } finally { if (this.controlWork === lock) this.controlWork = null; this.checkpointDeadline = 0; this.checkpointRevision = null; }
   }
   private async recoverHistory(context: AvailabilityContext, operation: HistoryOperation): Promise<void> {
+    const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
+      deviceId: context.deviceId, localSessionId: operation.context.localId, sessionId: operation.context.sessionId,
+      operationId: operation.id, operationKind: SyncTelemetry.Kind.History, lane: 'history' });
     const history = this.deps.store.history, begin = operation.request.begin as Record<string,any>;
     const state = this.ledger.session(context.scope,operation.context.localId)!;
     const prefix = `/sync/recoveries/${operation.id}`;
@@ -481,6 +538,8 @@ export class RemoteAvailabilityPublisher {
     try { result = await this.deps.request(prefix,'GET',undefined,3); }
     catch (error) { if ((error as { httpStatus?: number }).httpStatus !== 404) throw error; }
     if (!this.current(context)) throw new Error('REMOTE_AVAILABILITY_CONTEXT_CHANGED');
+    telemetry.emit(SyncTelemetry.Event.Reconciled, { stage: result ? SyncTelemetry.Stage.Reconcile : SyncTelemetry.Stage.Replay,
+      outcome: SyncTelemetry.Outcome.Pending, reconcileTrigger: 'receipt_missing', receiptState: result?.state });
     if (!result) result = await this.deps.request('/sync/recoveries','POST',{ ...begin,connectionGeneration: context.generation },3);
     if (!this.current(context)) throw new Error('REMOTE_AVAILABILITY_CONTEXT_CHANGED');
     if (['aborted','expired'].includes(result.state)) {
@@ -507,10 +566,17 @@ export class RemoteAvailabilityPublisher {
     for (const row of this.candidates(context, 'live')) {
       if (!this.current(context) || sent >= 2 || encoded >= 4) return;
       const taskKey = `${context.scope}:live:${row.local_id}`;
+      const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
+        deviceId: context.deviceId, localSessionId: row.local_id, sessionId: row.session_id, lane: 'live',
+        operationKind: SyncTelemetry.Kind.Live });
       if (!this.eligible(taskKey)) continue;
       try {
         const state = this.ledger.session(context.scope, row.local_id);
-        if (!state || state.phase !== 'active') continue;
+        if (!state || state.phase !== 'active') {
+          telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.ProjectionQueue,
+            outcome: SyncTelemetry.Outcome.Skipped, reason: SyncTelemetry.Reason.Guard });
+          continue;
+        }
         const rowStart = sent;
       // Seed only a bounded recent window. Old history is handled by explicit recovery, never by this live lane.
       this.deps.store.db.prepare(`INSERT INTO remote_live_revisions(session_id,object_id,revision,deleted)
@@ -535,6 +601,9 @@ export class RemoteAvailabilityPublisher {
         for (const item of page.rows) {
           if (sent > rowStart || sent >= 2 || !this.current(context)) break;
           if (item.state === AvailabilityReadState.Corrupt) {
+            telemetry.emit(SyncTelemetry.Event.Quarantined, { operationId: item.key, objectId: item.objectId,
+              stage: SyncTelemetry.Stage.Reconcile, phase: SyncTelemetry.Stage.Reconcile, outcome: SyncTelemetry.Outcome.Blocked, failureScope: 'object',
+              reason: SyncTelemetry.Reason.RecordInvalid });
             remoteDiagnosticLog('remote.record.quarantined', { localSessionId: row.local_id, operationId: item.key,
               objectId: item.objectId, lane: 'live', reason: item.reason }, 'warn');
             continue;
@@ -563,7 +632,16 @@ export class RemoteAvailabilityPublisher {
             if (!this.current(context)) return;
             if (this.liveScan.size >= 1024) this.liveScan.delete(this.liveScan.keys().next().value!);
             this.liveScan.set(key, Date.now() + 1000);
-            if (!projection) { this.ledger.skipObject(context.scope, row.local_id, objectKey, String(candidate.revision)); continue; }
+            if (!projection) {
+              this.ledger.skipObject(context.scope, row.local_id, objectKey, String(candidate.revision));
+              telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Projection, outcome: SyncTelemetry.Outcome.Skipped,
+                objectId: candidate.object_id, objectRevision: String(candidate.revision), reason: SyncTelemetry.Reason.LocalOnly });
+              continue;
+            }
+            telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Projection,
+              outcome: SyncTelemetry.Outcome.Completed,
+              objectId: candidate.object_id, objectRevision: String(candidate.revision), representation: projection.representation,
+              contentUnavailableReason: projection.payload.contentUnavailableReason });
             const publicationId = randomUUID();
             const request = this.save(context, state, publicationId, 'live', '/sync/live-projections', { publicationId,
               ...projection, policyVersion: '1' }, 3, `/sync/live-projections/${publicationId}?sessionId=${encodeURIComponent(row.session_id)}&writerGeneration=${encodeURIComponent(state.writerGeneration)}`);
@@ -572,6 +650,9 @@ export class RemoteAvailabilityPublisher {
           } catch (error) {
             if (!this.current(context)) return;
             if (encoding) {
+              telemetry.emit(SyncTelemetry.Event.Quarantined, { stage: SyncTelemetry.Stage.Projection,
+                outcome: SyncTelemetry.Outcome.Failed, phase: SyncTelemetry.Stage.Projection, failureScope: 'object', objectId: candidate.object_id,
+                objectRevision: String(candidate.revision), reason: SyncTelemetry.Reason.EncodingFailed });
               try { this.ledger.objectFault(context.scope, row.local_id, objectKey, fingerprint); }
               catch (recordError) { this.fail(taskKey, recordError); }
               remoteDiagnosticLog('remote.record.quarantined', { localSessionId: row.local_id, objectId: candidate.object_id,
@@ -584,6 +665,10 @@ export class RemoteAvailabilityPublisher {
     }
   }
   private async publishLive(context: AvailabilityContext, request: AvailabilityRequest): Promise<void> {
+    const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
+      deviceId: context.deviceId, localSessionId: request.localId, sessionId: request.body.sessionId, lane: 'live',
+      operationId: request.body.publicationId, operationKind: SyncTelemetry.Kind.Live, objectId: request.body.objectId,
+      objectRevision: request.body.sourceObjectRevision });
     const result = await this.send(context, request);
     if (result.publicationId !== request.body.publicationId || !['accepted', 'superseded', 'rejected'].includes(result.state)) throw new Error('REMOTE_LIVE_RECEIPT_INVALID');
     if (result.state === 'rejected') this.ledger.objectFault(context.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`,
@@ -593,16 +678,33 @@ export class RemoteAvailabilityPublisher {
       if (!state) throw new Error('REMOTE_AVAILABILITY_STATE_MISSING');
       const payload = { ...request.body.payload, blocks: [], contentState: 'desktop_only', contentUnavailableReason: 'CONTENT_UNAVAILABLE' };
       const publicationId = randomUUID();
-      this.ledger.db.transaction(() => {
+      observeSyncCommit(telemetry, () => this.ledger.db.transaction(() => {
         this.save(context, state, publicationId, 'live', '/sync/live-projections', { publicationId, objectKind: 'message',
           objectId: request.body.objectId, sourceObjectRevision: request.body.sourceObjectRevision, representation: 'desktop_only',
           policyVersion: '1', payload, payloadHash: payloadHash(payload) }, 3,
         `/sync/live-projections/${publicationId}?sessionId=${encodeURIComponent(state.sessionId)}&writerGeneration=${encodeURIComponent(state.writerGeneration)}`);
         this.ledger.completeObject(request, result);
-      })();
+      })());
+      telemetry.emit(SyncTelemetry.Event.Acknowledged, { publicationKind: SyncTelemetry.Kind.Live,
+        stage: SyncTelemetry.Stage.LocalAck, phase: SyncTelemetry.Stage.LocalAck, outcome: SyncTelemetry.Outcome.Completed,
+        businessStatus: result.state, representation: request.body.representation, persistOutcome: 'success' });
+      telemetry.emit(SyncTelemetry.Event.Sealed, { operationId: publicationId, publicationKind: SyncTelemetry.Kind.Live,
+        stage: SyncTelemetry.Stage.Sealed, phase: SyncTelemetry.Stage.Sealed, outcome: SyncTelemetry.Outcome.Completed,
+        representation: 'desktop_only', businessStatus: 'pending', persistOutcome: 'success' });
       return;
     }
     this.ledger.completeObject(request, result);
+    if (result.state === 'accepted' && ['complete', 'desktop_only'].includes(request.body.representation)) {
+      const key = `${context.scope}:${request.localId}:${request.body.objectKind}:${request.body.objectId}`;
+      const previous = this.contentRepresentations.get(key), representation = request.body.representation as string;
+      if (this.contentRepresentations.size >= 1024 && !this.contentRepresentations.has(key))
+        this.contentRepresentations.delete(this.contentRepresentations.keys().next().value!);
+      this.contentRepresentations.set(key, representation);
+      if (representation === 'desktop_only' && previous !== representation || previous === 'desktop_only' && representation === 'complete')
+        telemetry.emit(SyncTelemetry.Event.Content, { stage: SyncTelemetry.Stage.LocalAck,
+          outcome: representation === 'desktop_only' ? SyncTelemetry.Outcome.Degraded : SyncTelemetry.Outcome.Recovered,
+          businessStatus: result.state, representation, contentUnavailableReason: request.body.payload?.contentUnavailableReason });
+    }
     remoteDiagnosticLog('remote.publication.acknowledged', { operationId: request.key, localSessionId: request.localId, objectId: request.body.objectId, lane: 'live', result: result.state });
   }
 }

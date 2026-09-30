@@ -5,6 +5,8 @@ import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteApiError, RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
 import { REMOTE_SYNC_REQUEST_ID_HEADER, remoteSyncRequestId } from './remoteSyncLog';
+import { configureRemoteTelemetry, shutdownRemoteTelemetry } from './remoteTelemetry';
+import { currentRemoteTelemetryRequest } from './remoteTelemetryTransport';
 
 vi.mock('./remoteLogSink', () => ({ enqueueRemoteLog: (level: 'debug' | 'warn' | 'error' | 'info', message: string, fields: Record<string, unknown>) => console[level](message, fields) }));
 
@@ -32,7 +34,8 @@ function fixture() {
   return { bridge, store, request, debug, warning };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await shutdownRemoteTelemetry();
   for (const bridge of bridges.splice(0)) bridge.stop();
   for (const db of databases.splice(0)) db.close();
   vi.restoreAllMocks();
@@ -241,5 +244,31 @@ describe('extended request correlation isolation', () => {
   it('does not turn logger errors into HTTP or business failures', async () => {
     const { bridge, debug } = fixture(); debug.mockImplementation(() => { throw new Error('sink failed'); });
     await expect(bridge.api('/sync/batches', 'POST', batchBody())).resolves.toEqual({});
+  });
+});
+
+
+describe('remote request upload contract', () => {
+  it('counts preflight, rejected API and success once and never uploads request content', async () => {
+    const { bridge, request } = fixture(); let now = 100000;
+    request.mockImplementation(async () => { currentRemoteTelemetryRequest()?.transportStarted(); return new Response(JSON.stringify({ code: 0, data: {} })); });
+    const upload = vi.fn(async () => ({ ok: true, status: 200 }));
+    const reporter = configureRemoteTelemetry({ context: { epoch: 'a', enabled: true, installationId: 'installation',
+      appVersion: '1', environment: 'test', remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey, deviceId: 'desktop' },
+      fetch: upload, autoStart: false, now: () => now, monotonicNow: () => now })!;
+    await expect(bridge.api('/sync/batches', 'POST', { ...batchBody(), invalidValue: undefined })).rejects.toBeInstanceOf(Error);
+    request.mockImplementationOnce(async () => { currentRemoteTelemetryRequest()?.transportStarted(); return new Response(JSON.stringify({ code: 47025, message: privateText }), { status: 200 }); });
+    await expect(bridge.api('/sync/batches', 'POST', batchBody())).rejects.toBeInstanceOf(Error);
+    await bridge.api('/sync/batches', 'POST', batchBody());
+    now += 60000; reporter.flushWindows();
+    for (let i = 0; i < 8; i++) { await reporter.pump(); now += 3000; }
+    const events = upload.mock.calls.map(call => new URL((call as unknown as [string])[0]).searchParams);
+    const summary = events.find(event => event.get('summary_kind') === 'request_window')!;
+    expect(summary.get('attempt_started')).toBe('3'); expect(summary.get('preflight_failed')).toBe('1');
+    expect(summary.get('response_rejected')).toBe('1'); expect(summary.get('api_ok')).toBe('1');
+    expect(summary.get('inflight_end')).toBe('0'); expect(summary.get('transport_started')).toBe('2');
+    expect(events.some(event => event.get('event_name') === 'remote.request.completed' && event.get('result') === 'response_rejected'
+      && event.get('http_status') === '200' && event.get('request_id'))).toBe(true);
+    expect(JSON.stringify(upload.mock.calls)).not.toContain(privateText);
   });
 });

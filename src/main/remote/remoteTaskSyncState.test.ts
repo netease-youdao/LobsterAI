@@ -2,10 +2,20 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteSyncTaskIssueStatus } from '../../shared/remote/constants';
+import { SyncTelemetry } from './remoteSyncTelemetry';
 import { RemoteTaskSyncState, type TaskSyncContext, TaskSyncFailureReason, TaskSyncPhase } from './remoteTaskSyncState';
 
+const telemetryEvents = vi.hoisted(() => [] as Array<{ event: string; fields: Record<string, unknown> }>);
+vi.mock('./remoteTelemetry', () => ({
+  captureRemoteTelemetry: (base: Record<string, unknown> = {}) => ({
+    emit: (event: string, fields: Record<string, unknown> = {}) => telemetryEvents.push({ event, fields: { ...base, ...fields } }),
+  }),
+  remoteTelemetryEvent: (event: string, fields: Record<string, unknown> = {}) => telemetryEvents.push({ event, fields }),
+}));
+
+
 const databases: Database.Database[] = [];
-afterEach(() => { for (const db of databases.splice(0)) db.close(); });
+afterEach(() => { telemetryEvents.length = 0; for (const db of databases.splice(0)) db.close(); });
 const context: TaskSyncContext = { owner: { userId: 'owner', scopeKey: 'personal' }, target: 'target', deviceId: 'device' };
 function fixture() {
   const db = new Database(':memory:'); databases.push(db);
@@ -276,4 +286,27 @@ describe('task fault isolation persistence', () => {
     expect(f.state.projectionEligible(context, 'closed')).toBe(false);
   });
 
+});
+
+
+describe('task recovery telemetry commits', () => {
+  it('does not announce a repair from a rolled-back outer transaction', () => {
+    const f = fixture(); f.add('s');
+    expect(() => f.db.transaction(() => {
+      expect(f.state.reserveRepair(context, 's', 'RUN_MAPPING')).toBe(true);
+      throw new Error('rollback');
+    })()).toThrow('rollback');
+    expect(f.state.get(context, 's')).toBeNull();
+    expect(telemetryEvents).toHaveLength(0);
+    expect(f.state.reserveRepair(context, 's', 'RUN_MAPPING')).toBe(true);
+    expect(telemetryEvents).toContainEqual(expect.objectContaining({ event: SyncTelemetry.Event.Stage,
+      fields: expect.objectContaining({ stage: SyncTelemetry.Stage.Repair, outcome: SyncTelemetry.Outcome.Started }) }));
+  });
+  it('distinguishes a retry request rejected by its guard from a successfully admitted retry', () => {
+    const f = fixture(); f.add('s');
+    expect(f.state.manualRetry(context, 's')).toBe(true);
+    expect(f.state.manualRetry(context, 's')).toBe(false);
+    expect(telemetryEvents.filter(item => item.fields.stage === SyncTelemetry.Stage.ManualRetry).map(item => item.fields.outcome))
+      .toEqual([SyncTelemetry.Outcome.Started, SyncTelemetry.Outcome.Blocked]);
+  });
 });

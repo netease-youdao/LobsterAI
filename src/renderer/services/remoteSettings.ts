@@ -4,6 +4,7 @@ import {
   RemoteSettingsError,
   type RemoteSettingsState,
 } from '../../shared/remote/constants';
+import { RemoteTelemetryUiAction, type RemoteTelemetryUiInput, RemoteTelemetryUiStage, RemoteTelemetryUiSurface } from '../../shared/remote/telemetryUi';
 import { isNewRemoteState } from '../components/settings/remoteControlState';
 
 export interface RemoteSettingsSnapshot {
@@ -12,7 +13,7 @@ export interface RemoteSettingsSnapshot {
   error: string | null;
 }
 
-type SettingsApi = Pick<RemoteSettingsApi, 'state' | 'configure' | 'onChanged'>;
+type SettingsApi = Pick<RemoteSettingsApi, 'state' | 'configure' | 'onChanged' | 'telemetry'>;
 type SettingsIdentity = Pick<RemoteSettingsState, 'accountEpoch' | 'owner'>;
 
 const sameIdentity = (left: SettingsIdentity, right: SettingsIdentity): boolean => (
@@ -46,6 +47,15 @@ export class RemoteSettingsService {
   constructor(private readonly getApi: () => SettingsApi = () => window.electron.remote) {}
 
   getSnapshot = (): RemoteSettingsSnapshot => this.snapshot;
+
+  telemetry(surface: RemoteTelemetryUiInput['surface'], uiAction: RemoteTelemetryUiInput['uiAction'],
+    uiStage: RemoteTelemetryUiInput['uiStage'], uiInteractionId?: string,
+    outcome?: RemoteTelemetryUiInput['outcome'], expectedAccountEpoch = this.snapshot.state?.accountEpoch): void {
+    if (!expectedAccountEpoch) return;
+    try { this.getApi().telemetry?.({ surface, uiAction, uiStage, uiInteractionId: uiInteractionId ?? crypto.randomUUID(), outcome, expectedAccountEpoch }); }
+    catch { /* Analytics cannot affect settings. */ }
+  }
+
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -124,6 +134,12 @@ export class RemoteSettingsService {
       return false;
     }
     const generation = this.generation;
+    let interactionId: string | undefined;
+    try { interactionId = crypto.randomUUID(); } catch { /* Settings remain available without analytics. */ }
+    const action = changes.retrySessionId ? RemoteTelemetryUiAction.RetryTask : changes.retry ? RemoteTelemetryUiAction.RetryConnection
+      : changes.enabled === true ? RemoteTelemetryUiAction.Enable : changes.enabled === false ? RemoteTelemetryUiAction.Disable
+        : changes.keepAwakeEnabled !== undefined ? RemoteTelemetryUiAction.KeepAwake : RemoteTelemetryUiAction.Configure;
+    this.telemetry(RemoteTelemetryUiSurface.Settings, action, RemoteTelemetryUiStage.Click, interactionId, undefined, initial.accountEpoch);
     this.submitting = true;
     this.update({ busy: true, error: null });
     try {
@@ -135,8 +151,10 @@ export class RemoteSettingsService {
         return false;
       }
       this.accept(result);
+      this.telemetry(RemoteTelemetryUiSurface.Settings, action, RemoteTelemetryUiStage.Result, interactionId, 'committed', initial.accountEpoch);
       return true;
     } catch (error) {
+      this.telemetry(RemoteTelemetryUiSurface.Settings, action, RemoteTelemetryUiStage.Result, interactionId, 'failed', initial.accountEpoch);
       if (generation !== this.generation) return false;
       if (error instanceof Error && error.message.includes(RemoteSettingsError.AccountChanged)) {
         this.invalidate();

@@ -3,6 +3,8 @@ import { randomUUID } from 'crypto';
 import path from 'path';
 
 import { payloadHash, stableJson } from './canonical';
+import { emitCommittedTelemetry, observeSyncCommit, SyncTelemetry } from './remoteSyncTelemetry';
+import { captureRemoteTelemetry, remoteTelemetryEvent } from './remoteTelemetry';
 
 export interface AvailabilitySession {
   scope: string; localId: string; sessionId: string; writerGeneration: string; controlEpoch: string;
@@ -32,6 +34,7 @@ function decode(body: string): Record<string, any> {
 /** Immutable business requests survive a lost response. This WAL is independent of the history/outbox WAL. */
 export class RemoteAvailabilityStore {
   private database: Database.Database | null = null;
+  private telemetryStorageBlocked = false;
   constructor(private readonly coreDatabase: string) {}
   get db(): Database.Database {
     if (this.database?.open) return this.database;
@@ -84,8 +87,17 @@ export class RemoteAvailabilityStore {
       })();
       // The locator commits before any caller can send a request sealed in this ledger.
       core?.prepare("UPDATE remote_control_ledger_locator SET phase='ready' WHERE id=1 AND phase='prepared'").run();
-      this.database = database; return database;
-    } catch (error) { database?.close(); throw error; }
+      this.database = database;
+      if (this.telemetryStorageBlocked) remoteTelemetryEvent(SyncTelemetry.Event.Admission,
+        { domain: 'control', fromState: 'blocked', toState: 'ready', reason: SyncTelemetry.Reason.None });
+      this.telemetryStorageBlocked = false;
+      return database;
+    } catch (error) {
+      if (!this.telemetryStorageBlocked) remoteTelemetryEvent(SyncTelemetry.Event.Admission,
+        { domain: 'control', fromState: 'unknown', toState: 'blocked', reason: SyncTelemetry.Reason.StorageUnavailable });
+      this.telemetryStorageBlocked = true;
+      database?.close(); throw error;
+    }
     finally { core?.close(); }
   }
   health(scope: string): { sessions: number; pendingSessions: number; degraded: boolean } {
@@ -161,6 +173,18 @@ export class RemoteAvailabilityStore {
     this.db.prepare('INSERT INTO availability_requests(key,lane,scope,local_id,body,bytes,object_id,object_kind,request_hash) VALUES(?,?,?,?,?,?,?,?,?)')
       .run(value.key, value.lane, value.scope, value.localId, body, bytes, identifier(value.body.objectId) ? value.body.objectId : null,
         ['message','tool'].includes(value.body.objectKind) ? value.body.objectKind : null, payloadHash(value));
+    const kind = value.lane === 'live' ? SyncTelemetry.Kind.Live
+      : value.pathname === '/sync/mode-activations' ? SyncTelemetry.Kind.Activation
+        : value.pathname === '/control/facts/batches' ? SyncTelemetry.Kind.Facts : SyncTelemetry.Kind.Bootstrap;
+    const captured = captureRemoteTelemetry({ deviceId: value.body.deviceId, remoteOwnerId: value.body.owner?.userId,
+      ownerScopeId: value.body.owner?.scopeKey, localSessionId: value.localId, sessionId: value.body.sessionId,
+      operationId: value.body.publicationId || value.body.batchId || value.body.operationId || value.key.split(':')[0],
+      operationKind: kind, publicationKind: kind, lane: value.lane, apiVersion: value.version });
+    emitCommittedTelemetry(this.db, captured, value.pathname ? SyncTelemetry.Event.Sealed : SyncTelemetry.Event.Stage,
+      { stage: SyncTelemetry.Stage.Sealed, outcome: SyncTelemetry.Outcome.Completed, phase: SyncTelemetry.Stage.Sealed, businessStatus: 'pending',
+        objectId: value.body.objectId, objectRevision: value.body.sourceObjectRevision, writerGeneration: value.body.writerGeneration,
+        controlEpoch: value.body.controlEpoch, representation: value.body.representation, requestBytes: bytes },
+      () => true);
     return value;
   }
   attempted(value: AvailabilityRequest): void {
@@ -199,13 +223,21 @@ export class RemoteAvailabilityStore {
       DO UPDATE SET source_revision=excluded.source_revision,result=excluded.result`).run(scope, localId, objectKey, sourceRevision, stableJson({ state: 'local_only' }));
   }
   completeObject(request: AvailabilityRequest, result: Record<string, any>): void {
-    this.db.transaction(() => {
+    const telemetry = captureRemoteTelemetry({ localSessionId: request.localId, sessionId: request.body.sessionId,
+      deviceId: request.body.deviceId, remoteOwnerId: request.body.owner?.userId, ownerScopeId: request.body.owner?.scopeKey,
+      operationId: request.body.publicationId, operationKind: SyncTelemetry.Kind.Live, publicationKind: SyncTelemetry.Kind.Live,
+      objectId: request.body.objectId, objectRevision: request.body.sourceObjectRevision, lane: request.lane });
+    observeSyncCommit(telemetry, () => this.db.transaction(() => {
       this.db.prepare(`INSERT INTO availability_objects VALUES(?,?,?,?,?) ON CONFLICT(scope,local_id,object_id)
         DO UPDATE SET source_revision=excluded.source_revision,result=excluded.result`).run(request.scope, request.localId,
           `${request.body.objectKind}:${request.body.objectId}`, request.body.sourceObjectRevision, stableJson(result));
       if (result.state === 'accepted' || result.state === 'superseded') this.db.prepare('DELETE FROM availability_faults WHERE scope=? AND local_id=? AND object_key=?')
         .run(request.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`);
       this.complete(request.key);
-    })();
+    })());
+    emitCommittedTelemetry(this.db, telemetry, SyncTelemetry.Event.Acknowledged,
+      { stage: SyncTelemetry.Stage.LocalAck, phase: SyncTelemetry.Stage.LocalAck, outcome: SyncTelemetry.Outcome.Completed,
+        businessStatus: result.state, representation: request.body.representation, writerGeneration: request.body.writerGeneration },
+      () => true);
   }
 }
