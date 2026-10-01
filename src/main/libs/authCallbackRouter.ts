@@ -21,17 +21,20 @@ export class AuthCallbackRouter {
 
   constructor(private readonly options: AuthCallbackRouterOptions) {}
 
-  handleDeepLink(url: string): void {
+  /** Returns true when the URL carried an auth code. */
+  handleDeepLink(url: string): boolean {
     try {
       const parsed = new URL(url);
-      if (parsed.hostname !== 'auth' || parsed.pathname !== '/callback') return;
+      if (parsed.hostname !== 'auth' || parsed.pathname !== '/callback') return false;
 
       const code = parsed.searchParams.get('code');
-      if (!code) return;
+      if (!code) return false;
 
       this.deliverOrBuffer(code);
+      return true;
     } catch (error) {
       this.options.onParseError?.(error);
+      return false;
     }
   }
 

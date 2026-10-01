@@ -89,4 +89,18 @@ describe('AuthCallbackRouter', () => {
     expect(sent).toEqual([]);
     expect(router.markListenerReadyAndConsumePending()).toBe('reload-code');
   });
+
+  test('reports whether a deep link carried an auth code', () => {
+    const errors: unknown[] = [];
+    const router = new AuthCallbackRouter({
+      getTarget: () => null,
+      onParseError: error => errors.push(error),
+    });
+
+    expect(router.handleDeepLink('lobsterai://auth/callback?code=deep-code')).toBe(true);
+    expect(router.handleDeepLink('lobsterai://auth/callback')).toBe(false);
+    expect(router.handleDeepLink('lobsterai://skills/install?id=1')).toBe(false);
+    expect(router.handleDeepLink('not a url')).toBe(false);
+    expect(errors).toHaveLength(1);
+  });
 });

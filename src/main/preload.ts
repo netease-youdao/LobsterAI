@@ -22,6 +22,8 @@ import {
 import {
   AuthIpcChannel,
   type AuthLifecycleEvent,
+  type AuthLoginOptions,
+  type AuthLoginRequest,
   type AuthSessionChangedEvent,
 } from '../shared/auth/constants';
 import {
@@ -1368,7 +1370,11 @@ contextBridge.exposeInMainWorld('electron', {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
   },
   auth: {
-    login: (loginUrl?: string) => ipcRenderer.invoke(AuthIpcChannel.Login, { loginUrl }),
+    login: (loginUrl?: string, options: AuthLoginOptions = {}) =>
+      ipcRenderer.invoke(AuthIpcChannel.Login, {
+        loginUrl,
+        callbackTransport: options.callbackTransport,
+      } satisfies AuthLoginRequest),
     exchange: (code: string) => ipcRenderer.invoke(AuthIpcChannel.Exchange, { code }),
     getUser: () => ipcRenderer.invoke(AuthIpcChannel.GetUser),
     getQuota: () => ipcRenderer.invoke(AuthIpcChannel.GetQuota),

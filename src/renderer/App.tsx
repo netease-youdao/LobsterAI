@@ -38,6 +38,7 @@ import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
 import KitsView from './components/kits/KitsView';
 import LibraryView from './components/library/LibraryView';
+import BrowserLoginNotice from './components/login/BrowserLoginNotice';
 import FirstRunLoginIntroduction from './components/login/FirstRunLoginIntroduction';
 import NewUserOnboardingOverlay, {
   NewUserOnboardingStep,
@@ -2112,6 +2113,7 @@ const App: React.FC = () => {
           onClose={() => setToastMessage(null)}
         />
       )}
+      <BrowserLoginNotice />
       <SubscriptionTrialCampaign
         privacyAgreed={privacyAgreed}
         taskCreatedSignal={trialTaskCreatedSignal}

@@ -22,9 +22,32 @@ export const AuthIpcChannel = {
 
 export type AuthIpcChannel = typeof AuthIpcChannel[keyof typeof AuthIpcChannel];
 
+/** How the web portal hands the login code back to the desktop client. */
+export const AuthCallbackTransport = {
+  /** The portal jumps to the client's temporary http://127.0.0.1 callback server. */
+  Loopback: 'loopback',
+  /** The portal opens lobsterai://auth/callback, which shows a browser prompt. */
+  DeepLink: 'deep_link',
+} as const;
+
+export type AuthCallbackTransport = typeof AuthCallbackTransport[keyof typeof AuthCallbackTransport];
+
+/** How long a browser login may take; the loopback callback server closes after it. */
+export const AUTH_BROWSER_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+
+export interface AuthLoginOptions {
+  /** Omit to use the device's preferred transport. */
+  callbackTransport?: AuthCallbackTransport;
+}
+
+export interface AuthLoginRequest extends AuthLoginOptions {
+  loginUrl?: string;
+}
+
 export interface AuthLoginResult {
   success: boolean;
   redirectUrl?: string;
+  callbackTransport?: AuthCallbackTransport;
   error?: string;
 }
 

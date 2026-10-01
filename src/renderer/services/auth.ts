@@ -1,7 +1,10 @@
 import { createAccountOwnerKey } from '@shared/auth/accountOwner';
 import {
+  AUTH_BROWSER_LOGIN_TIMEOUT_MS,
+  AuthCallbackTransport,
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
+  type AuthLoginOptions,
   type AuthLoginResult,
   type AuthSessionChangedEvent,
   AuthSessionChangeReason,
@@ -24,6 +27,10 @@ import {
 } from '../features/enterpriseAccount/context';
 import { store } from '../store';
 import {
+  browserLoginCleared,
+  browserLoginStarted,
+  BrowserLoginStatus,
+  browserLoginTimedOut,
   clearProfileSummary,
   invalidateAuthAccountContext,
   type LowCreditPurchaseOffer,
@@ -309,6 +316,7 @@ class AuthService {
   private quotaRefreshSequence = 0;
   private lastRefreshTime = 0;
   private loginAttemptSequence = 0;
+  private browserLoginTimer: ReturnType<typeof setTimeout> | null = null;
   private enterpriseQuotaBoundaryTimer: ReturnType<typeof setTimeout> | null = null;
   private lastTriggeredEnterpriseQuotaBoundary = '';
 
@@ -349,6 +357,8 @@ class AuthService {
       store.dispatch(clearServerModels());
     }
     this.quotaRefreshSequence += 1;
+    // setLoggedIn also ends any browser login wait.
+    this.clearBrowserLoginTimer();
     store.dispatch(setLoggedIn({
       user,
       quota: quota ?? null,
@@ -466,15 +476,16 @@ class AuthService {
   /**
    * Initiate login (opens system browser).
    */
-  async login(): Promise<AuthLoginResult> {
+  async login(options: AuthLoginOptions = {}): Promise<AuthLoginResult> {
     const attemptId = ++this.loginAttemptSequence;
     writeAuthRendererLog('info', `login attempt ${attemptId} started`);
 
     try {
       const loginUrl = await this.fetchLoginUrl();
-      const result = await window.electron.auth.login(loginUrl);
+      const result = await window.electron.auth.login(loginUrl, options);
       if (result.success) {
         writeAuthRendererLog('info', `login attempt ${attemptId} handed off to the system browser`);
+        this.startBrowserLoginWait(attemptId, result.callbackTransport ?? null);
       } else {
         writeAuthRendererLog('warn', `login attempt ${attemptId} could not open the system browser`);
       }
@@ -483,6 +494,43 @@ class AuthService {
       writeAuthRendererLog('warn', `login attempt ${attemptId} failed before browser handoff`, error);
       throw error;
     }
+  }
+
+  /**
+   * Reopen the browser login with the other callback transport, for a browser
+   * that blocks the jump back to 127.0.0.1 or never shows the app prompt.
+   */
+  loginWithAlternateTransport(): Promise<AuthLoginResult> {
+    const { transport } = store.getState().auth.browserLogin;
+    const callbackTransport = transport === AuthCallbackTransport.DeepLink
+      ? AuthCallbackTransport.Loopback
+      : AuthCallbackTransport.DeepLink;
+    writeAuthRendererLog('info', `retrying browser login with the ${callbackTransport} callback`);
+    return this.login({ callbackTransport });
+  }
+
+  /** Hide the browser login notice; a code arriving later still signs in. */
+  dismissBrowserLogin(): void {
+    this.clearBrowserLoginTimer();
+    store.dispatch(browserLoginCleared());
+  }
+
+  private startBrowserLoginWait(attemptId: number, transport: AuthCallbackTransport | null): void {
+    this.clearBrowserLoginTimer();
+    store.dispatch(browserLoginStarted({ attemptId, transport }));
+    this.browserLoginTimer = setTimeout(() => {
+      this.browserLoginTimer = null;
+      const { browserLogin } = store.getState().auth;
+      if (browserLogin.status !== BrowserLoginStatus.Waiting || browserLogin.attemptId !== attemptId) return;
+      writeAuthRendererLog('warn', `login attempt ${attemptId} did not return from the browser in time`);
+      store.dispatch(browserLoginTimedOut(attemptId));
+    }, AUTH_BROWSER_LOGIN_TIMEOUT_MS);
+  }
+
+  private clearBrowserLoginTimer(): void {
+    if (!this.browserLoginTimer) return;
+    clearTimeout(this.browserLoginTimer);
+    this.browserLoginTimer = null;
   }
 
   /**
@@ -861,6 +909,7 @@ class AuthService {
     this.pendingServerModelLoad = null;
     this.serverModelLoadSequence += 1;
     this.clearEnterpriseQuotaBoundaryTimer();
+    this.dismissBrowserLogin();
     this.unsubCallback?.();
     this.unsubCallback = null;
     this.unsubLifecycleEvent?.();

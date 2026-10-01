@@ -19,6 +19,7 @@ import type {
 } from '../../shared/asr/constants';
 import type {
   AuthLifecycleEvent,
+  AuthLoginOptions,
   AuthLoginResult,
   AuthRefreshOutcome,
   AuthSessionChangedEvent,
@@ -2037,7 +2038,7 @@ interface IElectronAPI {
     ) => Promise<ActivityResult<ActivityActionResponse>>;
   };
   auth: {
-    login: (loginUrl?: string) => Promise<AuthLoginResult>;
+    login: (loginUrl?: string, options?: AuthLoginOptions) => Promise<AuthLoginResult>;
     exchange: (
       code: string,
     ) => Promise<{

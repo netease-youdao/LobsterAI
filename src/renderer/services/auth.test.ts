@@ -1,4 +1,7 @@
 import {
+  AUTH_BROWSER_LOGIN_TIMEOUT_MS,
+  AuthCallbackTransport,
+  type AuthLoginResult,
   type AuthSessionChangedEvent,
   AuthSessionChangeReason,
   AuthSessionStatus,
@@ -13,7 +16,7 @@ import {
 import type { EnterpriseAccountContext } from '../../shared/enterpriseAccount/types';
 import { setEnterpriseAccountContext } from '../features/enterpriseAccount/enterpriseAccountSlice';
 import { store } from '../store';
-import { setLoggedIn, setLoggedOut } from '../store/slices/authSlice';
+import { BrowserLoginStatus, setLoggedIn, setLoggedOut } from '../store/slices/authSlice';
 import { clearServerModels } from '../store/slices/modelSlice';
 import {
   authService,
@@ -289,7 +292,7 @@ describe('login diagnostics', () => {
 
     await expect(authService.login()).resolves.toEqual(loginResult);
 
-    expect(login).toHaveBeenCalledWith('https://lobsterai.youdao.com/portal#/login');
+    expect(login).toHaveBeenCalledWith('https://lobsterai.youdao.com/portal#/login', {});
     expect(fromRenderer).toHaveBeenCalledWith(
       'info',
       'AuthService',
@@ -331,6 +334,130 @@ describe('login diagnostics', () => {
       'AuthService',
       expect.stringMatching(/^login attempt \d+ could not open the system browser$/),
     );
+  });
+});
+
+describe('browser login wait', () => {
+  const portalLoginUrl = 'https://lobsterai.youdao.com/portal#/login';
+
+  function stubBrowserLogin(...results: AuthLoginResult[]) {
+    const login = vi.fn();
+    for (const result of results) login.mockResolvedValueOnce(result);
+    const fromRenderer = vi.fn();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('window', {
+      electron: {
+        api: {
+          fetch: vi.fn().mockResolvedValue({ ok: true, data: { data: { value: portalLoginUrl } } }),
+        },
+        auth: { login },
+        log: { fromRenderer },
+      },
+    });
+    return { login, fromRenderer };
+  }
+
+  const loopbackHandoff: AuthLoginResult = {
+    success: true,
+    callbackTransport: AuthCallbackTransport.Loopback,
+  };
+  const deepLinkHandoff: AuthLoginResult = {
+    success: true,
+    callbackTransport: AuthCallbackTransport.DeepLink,
+  };
+
+  test('waits for the browser with the transport chosen by the main process', async () => {
+    stubBrowserLogin(loopbackHandoff);
+
+    await authService.login();
+
+    expect(store.getState().auth.browserLogin).toEqual({
+      status: BrowserLoginStatus.Waiting,
+      attemptId: expect.any(Number),
+      transport: AuthCallbackTransport.Loopback,
+    });
+  });
+
+  test('does not wait when the browser could not be opened', async () => {
+    stubBrowserLogin({ success: false, error: 'open failed' });
+
+    await authService.login();
+
+    expect(store.getState().auth.browserLogin.status).toBe(BrowserLoginStatus.Idle);
+  });
+
+  test('reopens a loopback login with the deep link and back', async () => {
+    const { login } = stubBrowserLogin(loopbackHandoff, deepLinkHandoff, loopbackHandoff);
+    await authService.login();
+
+    await authService.loginWithAlternateTransport();
+    expect(login).toHaveBeenLastCalledWith(portalLoginUrl, {
+      callbackTransport: AuthCallbackTransport.DeepLink,
+    });
+    expect(store.getState().auth.browserLogin.transport).toBe(AuthCallbackTransport.DeepLink);
+
+    await authService.loginWithAlternateTransport();
+    expect(login).toHaveBeenLastCalledWith(portalLoginUrl, {
+      callbackTransport: AuthCallbackTransport.Loopback,
+    });
+  });
+
+  test('times out with the local callback server', async () => {
+    vi.useFakeTimers();
+    const { fromRenderer } = stubBrowserLogin(loopbackHandoff);
+    await authService.login();
+
+    vi.advanceTimersByTime(AUTH_BROWSER_LOGIN_TIMEOUT_MS - 1);
+    expect(store.getState().auth.browserLogin.status).toBe(BrowserLoginStatus.Waiting);
+    vi.advanceTimersByTime(1);
+
+    expect(store.getState().auth.browserLogin.status).toBe(BrowserLoginStatus.TimedOut);
+    expect(fromRenderer).toHaveBeenCalledWith(
+      'warn',
+      'AuthService',
+      expect.stringMatching(/^login attempt \d+ did not return from the browser in time$/),
+    );
+  });
+
+  test('only times out the latest attempt', async () => {
+    vi.useFakeTimers();
+    stubBrowserLogin(loopbackHandoff, deepLinkHandoff);
+    await authService.login();
+    vi.advanceTimersByTime(AUTH_BROWSER_LOGIN_TIMEOUT_MS - 1_000);
+
+    await authService.loginWithAlternateTransport();
+    vi.advanceTimersByTime(1_000);
+
+    expect(store.getState().auth.browserLogin.status).toBe(BrowserLoginStatus.Waiting);
+  });
+
+  test('ends the wait once the account signs in', async () => {
+    vi.useFakeTimers();
+    const { fromRenderer } = stubBrowserLogin(loopbackHandoff);
+    await authService.login();
+
+    store.dispatch(setLoggedIn({
+      user: { yid: 'tester', nickname: 'Tester', avatarUrl: null },
+      quota: null,
+      ownerAccountKey: 'personal:tester',
+    }));
+    vi.advanceTimersByTime(AUTH_BROWSER_LOGIN_TIMEOUT_MS);
+
+    expect(store.getState().auth.browserLogin.status).toBe(BrowserLoginStatus.Idle);
+    expect(fromRenderer).not.toHaveBeenCalledWith('warn', 'AuthService', expect.stringContaining('in time'));
+  });
+
+  test('dismisses the notice without a later timeout', async () => {
+    vi.useFakeTimers();
+    stubBrowserLogin(loopbackHandoff);
+    await authService.login();
+
+    authService.dismissBrowserLogin();
+    vi.advanceTimersByTime(AUTH_BROWSER_LOGIN_TIMEOUT_MS);
+
+    expect(store.getState().auth.browserLogin.status).toBe(BrowserLoginStatus.Idle);
   });
 });
 

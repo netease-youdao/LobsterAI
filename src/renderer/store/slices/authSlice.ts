@@ -1,5 +1,6 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import {
+  type AuthCallbackTransport,
   AuthSessionStatus,
   type AuthSessionStatus as AuthSessionStatusValue,
 } from '@shared/auth/constants';
@@ -115,6 +116,21 @@ export interface ProfileSummary {
   creditsResetCampaign?: CreditsResetCampaignStatus;
 }
 
+export const BrowserLoginStatus = {
+  Idle: 'idle',
+  /** The portal is open in the system browser and no login code has arrived yet. */
+  Waiting: 'waiting',
+  TimedOut: 'timed_out',
+} as const;
+
+export type BrowserLoginStatus = typeof BrowserLoginStatus[keyof typeof BrowserLoginStatus];
+
+export interface BrowserLoginState {
+  status: BrowserLoginStatus;
+  attemptId: number;
+  transport: AuthCallbackTransport | null;
+}
+
 interface AuthState {
   isLoggedIn: boolean;
   isLoading: boolean;
@@ -126,7 +142,14 @@ interface AuthState {
   profileSummary: ProfileSummary | null;
   ownerAccountKey: string | null;
   accountGeneration: number;
+  browserLogin: BrowserLoginState;
 }
+
+const idleBrowserLogin: BrowserLoginState = {
+  status: BrowserLoginStatus.Idle,
+  attemptId: 0,
+  transport: null,
+};
 
 const initialState: AuthState = {
   isLoggedIn: false,
@@ -139,6 +162,7 @@ const initialState: AuthState = {
   profileSummary: null,
   ownerAccountKey: null,
   accountGeneration: 0,
+  browserLogin: idleBrowserLogin,
 };
 
 const authSlice = createSlice({
@@ -163,6 +187,7 @@ const authSlice = createSlice({
       state.isLoggedIn = true;
       state.isLoading = false;
       state.sessionStatus = AuthSessionStatus.Authenticated;
+      state.browserLogin = idleBrowserLogin;
       state.user = action.payload.user;
       state.quota = action.payload.quota;
       if (action.payload.purchaseOffer !== undefined) {
@@ -246,10 +271,31 @@ const authSlice = createSlice({
     clearProfileSummary(state) {
       state.profileSummary = null;
     },
+    browserLoginStarted(state, action: PayloadAction<{
+      attemptId: number;
+      transport: AuthCallbackTransport | null;
+    }>) {
+      state.browserLogin = {
+        status: BrowserLoginStatus.Waiting,
+        attemptId: action.payload.attemptId,
+        transport: action.payload.transport,
+      };
+    },
+    browserLoginTimedOut(state, action: PayloadAction<number>) {
+      const browserLogin = state.browserLogin;
+      if (browserLogin.status !== BrowserLoginStatus.Waiting || browserLogin.attemptId !== action.payload) return;
+      browserLogin.status = BrowserLoginStatus.TimedOut;
+    },
+    browserLoginCleared(state) {
+      state.browserLogin = idleBrowserLogin;
+    },
   },
 });
 
 export const {
+  browserLoginCleared,
+  browserLoginStarted,
+  browserLoginTimedOut,
   clearProfileSummary,
   setAuthExpired,
   invalidateAuthAccountContext,

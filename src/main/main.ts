@@ -50,9 +50,12 @@ import type { ReviewSourceRequest } from '../shared/artifactPreview/reviewSource
 import { buildWorkspaceChangesArtifact } from '../shared/artifactPreview/workspaceChanges';
 import { createAccountOwnerKey } from '../shared/auth/accountOwner';
 import {
+  AuthCallbackTransport,
   AuthIpcChannel,
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
+  type AuthLoginRequest,
+  type AuthLoginResult,
   AuthRefreshOutcome,
   AuthRefreshReason,
   type AuthSessionChangedEvent,
@@ -318,6 +321,7 @@ import {
   appendLoginParams,
   startAuthLocalCallback,
 } from './libs/authLocalCallbackServer';
+import { AuthLoginTransportPolicy, AuthLoginTransportSource } from './libs/authLoginTransport';
 import {
   AuthSessionManager,
   resolveAuthSessionStatusFromError,
@@ -4960,12 +4964,15 @@ if (!gotTheLock) {
       console.error('[Main] Failed to parse deep link:', error);
     },
   });
+  const authLoginTransportPolicy = new AuthLoginTransportPolicy({ getStore: () => getStore() });
 
   /**
    * Parse a lobsterai:// deep link and send (or buffer) the auth code.
    */
   const handleDeepLink = (url: string) => {
-    authCallbackRouter.handleDeepLink(url);
+    if (authCallbackRouter.handleDeepLink(url)) {
+      authLoginTransportPolicy.recordCodeDelivered(AuthCallbackTransport.DeepLink);
+    }
   };
 
   // First-frame gate for window activation. Showing a window whose renderer
@@ -7282,15 +7289,39 @@ if (!gotTheLock) {
     return quota;
   };
 
-  ipcMain.handle(AuthIpcChannel.Login, async (_event, { loginUrl }: { loginUrl?: string } = {}) => {
+  ipcMain.handle(AuthIpcChannel.Login, async (
+    _event,
+    { loginUrl, callbackTransport }: AuthLoginRequest = {},
+  ): Promise<AuthLoginResult> => {
     const baseUrl = loginUrl || `${getServerApiBaseUrl()}/login`;
+    // Without redirect_uri the portal returns the code through lobsterai://.
     const fallbackUrl = appendLoginParams(baseUrl, { source: 'electron' });
+    const { transport, source } = authLoginTransportPolicy.resolve(callbackTransport);
     let localCallback: Awaited<ReturnType<typeof startAuthLocalCallback>> | null = null;
+    const openDeepLinkLogin = async (attemptSource: AuthLoginTransportSource): Promise<AuthLoginResult> => {
+      await shell.openExternal(fallbackUrl);
+      authLoginTransportPolicy.recordAttempt(AuthCallbackTransport.DeepLink, attemptSource);
+      return { success: true, redirectUrl: fallbackUrl, callbackTransport: AuthCallbackTransport.DeepLink };
+    };
+
+    if (transport === AuthCallbackTransport.DeepLink) {
+      console.log(`[Auth] opening portal login with deep link callback (source=${source})`);
+      try {
+        return await openDeepLinkLogin(source);
+      } catch (error) {
+        console.error('[Auth] login failed:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to open login',
+        };
+      }
+    }
 
     try {
       console.log('[Auth] starting browser login with local callback server');
       localCallback = await startAuthLocalCallback({
         onCode: code => {
+          authLoginTransportPolicy.recordCodeDelivered(AuthCallbackTransport.Loopback);
           authCallbackRouter.handleAuthCode(code);
           focusMainWindow('local auth callback');
         },
@@ -7306,13 +7337,13 @@ if (!gotTheLock) {
       });
       console.log('[Auth] opening portal login with local callback redirect');
       await shell.openExternal(finalUrl);
-      return { success: true, redirectUrl: finalUrl };
+      authLoginTransportPolicy.recordAttempt(AuthCallbackTransport.Loopback, source);
+      return { success: true, redirectUrl: finalUrl, callbackTransport: AuthCallbackTransport.Loopback };
     } catch (error) {
       // The callback may be shared by another login page and will clean itself up on timeout.
       console.warn('[Auth] local callback login failed, falling back to deep link login:', error);
       try {
-        await shell.openExternal(fallbackUrl);
-        return { success: true, redirectUrl: fallbackUrl };
+        return await openDeepLinkLogin(AuthLoginTransportSource.Default);
       } catch (fallbackError) {
         console.error('[Auth] login failed:', fallbackError);
         return {

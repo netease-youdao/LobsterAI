@@ -2,9 +2,11 @@ import crypto from 'crypto';
 import http from 'http';
 import type { AddressInfo } from 'net';
 
+import { AUTH_BROWSER_LOGIN_TIMEOUT_MS } from '../../shared/auth/constants';
+
 const AUTH_CALLBACK_PATH = '/auth/callback';
 const AUTH_LOCAL_CALLBACK_HOST = '127.0.0.1';
-const AUTH_LOCAL_CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
+const AUTH_LOCAL_CALLBACK_TIMEOUT_MS = AUTH_BROWSER_LOGIN_TIMEOUT_MS;
 
 interface AuthLocalCallbackOptions {
   onCode: (code: string) => void;
