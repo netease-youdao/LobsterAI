@@ -14,9 +14,16 @@ import {
   resolveHoverCardTop,
   resolveNestedCascadePlacement,
   resolvePickerThinkingLevel,
+  shouldRenderPlanModelLoginPrompt,
   shouldRenderSelectedModelUnavailableFallback,
   supportsConfigurableModelThinkingProtocol,
 } from './ModelSelector';
+
+test('prompts login instead of custom model setup when logged out with nothing to list', () => {
+  expect(shouldRenderPlanModelLoginPrompt(0, false)).toBe(true);
+  expect(shouldRenderPlanModelLoginPrompt(3, false)).toBe(false);
+  expect(shouldRenderPlanModelLoginPrompt(0, true)).toBe(false);
+});
 
 test('keeps a logged-in stale server model visible only while the model list is empty', () => {
   const selectedModel = {
