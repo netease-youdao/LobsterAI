@@ -125,6 +125,15 @@ export const shouldRenderSelectedModelUnavailableFallback = (
   && selectedModel?.isServerModel === true
 );
 
+/**
+ * Logged out with nothing to list (public catalog still loading or failed):
+ * point at login, which unlocks the plan models, not at custom model setup.
+ */
+export const shouldRenderPlanModelLoginPrompt = (
+  availableModelCount: number,
+  isLoggedIn: boolean,
+): boolean => !isLoggedIn && availableModelCount === 0;
+
 export interface ModelSelectorChangeMeta {
   group: ModelSelectorGroup;
   thinkingLevel?: ModelThinkingLevelType;
@@ -886,6 +895,30 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             <span className={`${triggerTextClassName} min-w-0 truncate`}>{selectedModel.name}</span>
             <ChevronDownIcon className={`${triggerIconClassName} shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary`} />
           </button>
+        </div>
+      );
+    }
+
+    if (shouldRenderPlanModelLoginPrompt(availableModels.length, isLoggedIn)) {
+      return (
+        <div ref={containerRef} className="relative">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => setRestrictedPrompt(ModelAccessPromptKind.Login)}
+            className={`flex min-w-0 items-center overflow-hidden text-secondary transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-wait disabled:opacity-70 ${triggerClassName}`}
+          >
+            <LockClosedIcon className={`${triggerIconClassName} shrink-0`} />
+            <span className={`${triggerTextClassName} min-w-0 truncate`}>
+              {i18nService.t('modelSelectorLoginForPlanModels')}
+            </span>
+          </button>
+          {restrictedPrompt && (
+            <ModelAccessPromptModal
+              promptKind={restrictedPrompt}
+              onClose={() => setRestrictedPrompt(null)}
+            />
+          )}
         </div>
       );
     }

@@ -675,6 +675,9 @@ const SHARE_DEPLOYMENT_CANDIDATE_SOURCES = new Set<string>(
 const shareDeploymentOperationCoordinator = new ShareDeploymentOperationCoordinator();
 const ENGINE_NOT_READY_CODE = 'ENGINE_NOT_READY';
 const LOCAL_WEB_SERVICE_PROBE_TIMEOUT_MS = 700;
+// The logged-out model selector waits on this catalog; the renderer retries
+// with backoff, so a stalled connection must fail instead of hanging.
+const PRICING_CATALOG_REQUEST_TIMEOUT_MS = 10_000;
 const LOCAL_WEB_SERVICE_TITLE_MAX_LENGTH = 80;
 const LOCAL_WEB_SERVICE_PORTS = Array.from(
   new Set([
@@ -7881,6 +7884,8 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(AuthIpcChannel.GetPricingCatalog, async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), PRICING_CATALOG_REQUEST_TIMEOUT_MS);
     try {
       const serverBaseUrl = getServerApiBaseUrl();
       const url = `${serverBaseUrl}/api/models/pricing-catalog`;
@@ -7888,6 +7893,7 @@ if (!gotTheLock) {
       const resp = await net.fetch(url, {
         method: 'GET',
         headers: { Accept: 'application/json' },
+        signal: controller.signal,
       });
       console.log(`[Auth:getPricingCatalog] server returned HTTP ${resp.status}.`);
       if (!resp.ok) {
@@ -7923,6 +7929,8 @@ if (!gotTheLock) {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
       };
+    } finally {
+      clearTimeout(timeout);
     }
   });
 

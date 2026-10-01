@@ -728,6 +728,85 @@ describe('server model loading', () => {
     await vi.advanceTimersByTimeAsync(12_000);
   });
 
+  test('retries the logged-out public catalog in the background after a transient failure', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const getPricingCatalog = vi.fn()
+      .mockRejectedValueOnce(new Error('net::ERR_INTERNET_DISCONNECTED'))
+      .mockResolvedValueOnce({
+        success: true,
+        textModels: [{ modelId: 'deepseek-v4-pro', modelName: 'DeepSeek-V4-Pro' }],
+      });
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getPricingCatalog },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    // Logged out, the network-recovery refresh reloads the public catalog.
+    await expect(authService.refreshServerModels()).resolves.toBe(false);
+    expect(planModelIds()).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(getPricingCatalog).toHaveBeenCalledTimes(2);
+    expect(planModelIds()).toEqual(['deepseek-v4-pro']);
+    expect(store.getState().model.availableModels.find(model => model.isServerModel)?.accessible)
+      .toBe(false);
+  });
+
+  test('stops retrying the public catalog once the user logs in', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const getPricingCatalog = vi.fn().mockRejectedValue(new Error('offline'));
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getPricingCatalog },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    await expect(authService.refreshServerModels()).resolves.toBe(false);
+    signIn();
+    await vi.advanceTimersByTimeAsync(12_000);
+
+    expect(getPricingCatalog).toHaveBeenCalledOnce();
+  });
+
+  test('falls back to the public catalog when an inconsistent login is cleared', async () => {
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('window', {
+      electron: {
+        auth: {
+          exchange: vi.fn().mockResolvedValue({
+            success: true,
+            user: {
+              yid: 'enterprise-user',
+              accountMode: 'enterprise',
+              nickname: 'Enterprise User',
+              avatarUrl: null,
+            },
+            quota: null,
+            enterpriseContext: null,
+          }),
+          getPricingCatalog: vi.fn().mockResolvedValue({
+            success: true,
+            textModels: [{ modelId: 'deepseek-v4-pro', modelName: 'DeepSeek-V4-Pro' }],
+          }),
+        },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+    signIn();
+
+    await expect(authService.handleCallback('auth-code')).resolves.toBe(false);
+
+    expect(store.getState().auth.isLoggedIn).toBe(false);
+    await vi.waitFor(() => expect(planModelIds()).toEqual(['deepseek-v4-pro']));
+  });
+
   test('still loads plan models when the quota refresh fails', async () => {
     vi.useFakeTimers();
     vi.spyOn(console, 'debug').mockImplementation(() => {});
