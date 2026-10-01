@@ -18,6 +18,7 @@ import type {
   AsrRealtimeSessionResult,
 } from '../../shared/asr/constants';
 import type {
+  AuthCallbackUrlResult,
   AuthLifecycleEvent,
   AuthLoginOptions,
   AuthLoginResult,
@@ -2039,6 +2040,7 @@ interface IElectronAPI {
   };
   auth: {
     login: (loginUrl?: string, options?: AuthLoginOptions) => Promise<AuthLoginResult>;
+    submitCallbackUrl: (url: string) => Promise<AuthCallbackUrlResult>;
     exchange: (
       code: string,
     ) => Promise<{

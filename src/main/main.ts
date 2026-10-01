@@ -322,6 +322,7 @@ import {
   startAuthLocalCallback,
 } from './libs/authLocalCallbackServer';
 import { AuthLoginTransportPolicy, AuthLoginTransportSource } from './libs/authLoginTransport';
+import { claimPastedAuthCallbackUrl } from './libs/authPastedCallback';
 import {
   AuthSessionManager,
   resolveAuthSessionStatusFromError,
@@ -7353,6 +7354,11 @@ if (!gotTheLock) {
       }
     }
   });
+
+  // For browsers that block both 127.0.0.1 and lobsterai://, e.g. under an
+  // organization policy, the user pastes the blocked callback address instead.
+  ipcMain.handle(AuthIpcChannel.SubmitCallbackUrl, (_event, { url }: { url?: unknown } = {}) =>
+    claimPastedAuthCallbackUrl(url));
 
   registerActivityIpcHandlers({
     ipcMain,

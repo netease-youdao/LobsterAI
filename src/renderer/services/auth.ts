@@ -2,6 +2,7 @@ import { createAccountOwnerKey } from '@shared/auth/accountOwner';
 import {
   AUTH_BROWSER_LOGIN_TIMEOUT_MS,
   AuthCallbackTransport,
+  AuthCallbackUrlError,
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
   type AuthLoginOptions,
@@ -79,6 +80,15 @@ interface AuthQuotaCheckResult {
 interface RefreshQuotaOptions {
   refreshProfileSummary?: boolean;
 }
+
+export const PastedLoginUrlOutcome = {
+  SignedIn: 'signed_in',
+  Invalid: AuthCallbackUrlError.Invalid,
+  Expired: AuthCallbackUrlError.Expired,
+  ExchangeFailed: 'exchange_failed',
+} as const;
+
+export type PastedLoginUrlOutcome = typeof PastedLoginUrlOutcome[keyof typeof PastedLoginUrlOutcome];
 
 export interface PricingCatalogBaseModel {
   modelId?: string;
@@ -507,6 +517,23 @@ class AuthService {
       : AuthCallbackTransport.DeepLink;
     writeAuthRendererLog('info', `retrying browser login with the ${callbackTransport} callback`);
     return this.login({ callbackTransport });
+  }
+
+  /**
+   * Finish a browser login from the callback address the user copied out of a
+   * browser that blocks both 127.0.0.1 and lobsterai:// (e.g. an organization
+   * policy), since the blocked page still shows the address with the code.
+   */
+  async completeBrowserLoginWithUrl(url: string): Promise<PastedLoginUrlOutcome> {
+    const result = await window.electron.auth.submitCallbackUrl(url);
+    if (!result.success) {
+      writeAuthRendererLog('warn', `pasted login address was rejected (${result.error})`);
+      return result.error;
+    }
+    writeAuthRendererLog('info', 'completing browser login from a pasted address');
+    return await this.handleCallback(result.code)
+      ? PastedLoginUrlOutcome.SignedIn
+      : PastedLoginUrlOutcome.ExchangeFailed;
   }
 
   /** Hide the browser login notice; a code arriving later still signs in. */

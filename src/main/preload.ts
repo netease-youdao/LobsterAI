@@ -1375,6 +1375,7 @@ contextBridge.exposeInMainWorld('electron', {
         loginUrl,
         callbackTransport: options.callbackTransport,
       } satisfies AuthLoginRequest),
+    submitCallbackUrl: (url: string) => ipcRenderer.invoke(AuthIpcChannel.SubmitCallbackUrl, { url }),
     exchange: (code: string) => ipcRenderer.invoke(AuthIpcChannel.Exchange, { code }),
     getUser: () => ipcRenderer.invoke(AuthIpcChannel.GetUser),
     getQuota: () => ipcRenderer.invoke(AuthIpcChannel.GetQuota),

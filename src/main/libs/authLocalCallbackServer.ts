@@ -261,6 +261,11 @@ async function createAuthLocalCallback(
   return callback;
 }
 
+/** The callback server still waiting for the portal, if any. */
+export function getActiveAuthLocalCallback(): AuthLocalCallback | null {
+  return activeCallback;
+}
+
 export async function startAuthLocalCallback(
   options: AuthLocalCallbackOptions,
 ): Promise<AuthLocalCallback> {

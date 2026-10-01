@@ -18,6 +18,7 @@ export const AuthIpcChannel = {
   QuotaChanged: 'auth:quotaChanged',
   RefreshToken: 'auth:refreshToken',
   SessionChanged: 'auth:sessionChanged',
+  SubmitCallbackUrl: 'auth:submitCallbackUrl',
 } as const;
 
 export type AuthIpcChannel = typeof AuthIpcChannel[keyof typeof AuthIpcChannel];
@@ -50,6 +51,20 @@ export interface AuthLoginResult {
   callbackTransport?: AuthCallbackTransport;
   error?: string;
 }
+
+/** Why a login callback address pasted by the user was not accepted. */
+export const AuthCallbackUrlError = {
+  /** Not a LobsterAI login callback address. */
+  Invalid: 'invalid',
+  /** A 127.0.0.1 address from a login that is no longer waiting. */
+  Expired: 'expired',
+} as const;
+
+export type AuthCallbackUrlError = typeof AuthCallbackUrlError[keyof typeof AuthCallbackUrlError];
+
+export type AuthCallbackUrlResult =
+  | { success: true; code: string }
+  | { success: false; error: AuthCallbackUrlError };
 
 export const AuthSessionStatus = {
   Authenticated: 'authenticated',

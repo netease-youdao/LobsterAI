@@ -15,6 +15,12 @@ interface NavigationStartedOptions {
   isInPlace: boolean;
 }
 
+/** Returns the code of a lobsterai://auth/callback URL, or null for other URLs. */
+export function readAuthDeepLinkCode(url: URL): string | null {
+  if (url.hostname !== 'auth' || url.pathname !== '/callback') return null;
+  return url.searchParams.get('code') || null;
+}
+
 export class AuthCallbackRouter {
   private pendingAuthCode: string | null = null;
   private listenerReady = false;
@@ -24,10 +30,7 @@ export class AuthCallbackRouter {
   /** Returns true when the URL carried an auth code. */
   handleDeepLink(url: string): boolean {
     try {
-      const parsed = new URL(url);
-      if (parsed.hostname !== 'auth' || parsed.pathname !== '/callback') return false;
-
-      const code = parsed.searchParams.get('code');
+      const code = readAuthDeepLinkCode(new URL(url));
       if (!code) return false;
 
       this.deliverOrBuffer(code);

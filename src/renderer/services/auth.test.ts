@@ -1,6 +1,7 @@
 import {
   AUTH_BROWSER_LOGIN_TIMEOUT_MS,
   AuthCallbackTransport,
+  AuthCallbackUrlError,
   type AuthLoginResult,
   type AuthSessionChangedEvent,
   AuthSessionChangeReason,
@@ -24,6 +25,7 @@ import {
   mapAvailableServerModelsToModels,
   mapPricingCatalogTextModelsToServerModels,
   mapPricingCatalogToPublicServerModels,
+  PastedLoginUrlOutcome,
 } from './auth';
 import { i18nService } from './i18n';
 
@@ -447,6 +449,63 @@ describe('browser login wait', () => {
 
     expect(store.getState().auth.browserLogin.status).toBe(BrowserLoginStatus.Idle);
     expect(fromRenderer).not.toHaveBeenCalledWith('warn', 'AuthService', expect.stringContaining('in time'));
+  });
+
+  describe('pasted callback address', () => {
+    function stubPastedLogin(submitResult: unknown, exchangeResult: unknown = { success: false }) {
+      const submitCallbackUrl = vi.fn().mockResolvedValue(submitResult);
+      const exchange = vi.fn().mockResolvedValue(exchangeResult);
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'debug').mockImplementation(() => {});
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.stubGlobal('window', {
+        electron: {
+          auth: {
+            submitCallbackUrl,
+            exchange,
+            getModels: vi.fn().mockResolvedValue({ success: true, models: [] }),
+            getQuota: vi.fn().mockResolvedValue({ success: false }),
+            getProfileSummary: vi.fn().mockResolvedValue({ success: false }),
+          },
+          log: { fromRenderer: vi.fn() },
+        },
+      });
+      return { submitCallbackUrl, exchange };
+    }
+
+    test('does not exchange a rejected address', async () => {
+      const { exchange } = stubPastedLogin({ success: false, error: AuthCallbackUrlError.Expired });
+
+      await expect(authService.completeBrowserLoginWithUrl('http://127.0.0.1:1/auth/callback?code=c'))
+        .resolves.toBe(PastedLoginUrlOutcome.Expired);
+      expect(exchange).not.toHaveBeenCalled();
+    });
+
+    test('signs in with the code from an accepted address', async () => {
+      const pastedUrl = 'lobsterai://auth/callback?code=pasted-code';
+      const { submitCallbackUrl, exchange } = stubPastedLogin(
+        { success: true, code: 'pasted-code' },
+        {
+          success: true,
+          user: { yid: 'tester', nickname: 'Tester', avatarUrl: null },
+          quota: null,
+          enterpriseContext: null,
+        },
+      );
+
+      await expect(authService.completeBrowserLoginWithUrl(pastedUrl))
+        .resolves.toBe(PastedLoginUrlOutcome.SignedIn);
+      expect(submitCallbackUrl).toHaveBeenCalledWith(pastedUrl);
+      expect(exchange).toHaveBeenCalledWith('pasted-code');
+      expect(store.getState().auth.isLoggedIn).toBe(true);
+    });
+
+    test('reports an exchange that fails for the pasted code', async () => {
+      stubPastedLogin({ success: true, code: 'stale-code' }, { success: false, error: 'Exchange failed: 400' });
+
+      await expect(authService.completeBrowserLoginWithUrl('lobsterai://auth/callback?code=stale-code'))
+        .resolves.toBe(PastedLoginUrlOutcome.ExchangeFailed);
+    });
   });
 
   test('dismisses the notice without a later timeout', async () => {
