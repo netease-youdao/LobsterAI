@@ -129,6 +129,7 @@ import type {
   ListLocalWebServicesOptions,
   LocalWebService,
 } from '../../shared/localWebServices/constants';
+import type { McpToolDiscoveryRequest, McpToolDiscoveryResult } from '../../shared/mcp/toolDiscovery';
 import type {
   OpenClawEngineErrorCode,
   OpenClawEnginePhase as SharedOpenClawEnginePhase,
@@ -761,6 +762,7 @@ interface IElectronAPI {
     retryLaunchResolution: (
       id: string,
     ) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
+    listTools: (request: McpToolDiscoveryRequest) => Promise<McpToolDiscoveryResult>;
     fetchMarketplace: () => Promise<{
       success: boolean;
       data?: McpMarketplaceData;
