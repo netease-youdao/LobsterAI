@@ -58,6 +58,25 @@ describe('config application evidence', () => {
     expect(readSnapshot).toHaveBeenCalledTimes(2);
   });
 
+  test('a persisted receipt proves redacted content only while its submitted target is still current', async () => {
+    vi.useFakeTimers();
+    const receipt = {
+      ...applied, hash: 'persisted', raw: '{"apiKey":"__OPENCLAW_REDACTED__"}',
+    };
+    const submitted = '{"apiKey":"synthetic-first"}';
+    expect(await confirmOpenClawConfigApplied({
+      readConfigFile: () => submitted, readSnapshot: async () => receipt,
+      persistedHash: 'persisted', persistedRaw: submitted,
+    })).toBe(true);
+    const changed = confirmOpenClawConfigApplied({
+      readConfigFile: () => '{"apiKey":"synthetic-second"}', readSnapshot: async () => receipt,
+      persistedHash: 'persisted', persistedRaw: submitted,
+    });
+    await vi.runAllTimersAsync();
+    expect(await changed).toBe(false);
+    expect(isOpenClawConfigApplied({ ...receipt, appliedConfigHash: 'old' }, submitted, 'persisted')).toBe(false);
+  });
+
   test('rejects evidence if the target changes while the probe is in flight', async () => {
     vi.useFakeTimers();
     let content = raw;

@@ -385,6 +385,9 @@ class AuthService {
     applyEnterpriseAccountContext(null);
     store.dispatch(clearServerModels());
     store.dispatch(clearMediaAccountState());
+    // Like every other signed-out path, fall back to the public catalog so the
+    // selector keeps showing the plan models instead of going empty.
+    void this.loadPublicPricingCatalogModels();
   }
 
   /**
@@ -430,6 +433,7 @@ class AuthService {
         eventType: AuthLifecycleEventType.Restore,
         outcome: AuthSessionStatus.TemporarilyUnavailable,
       });
+      void this.loadPublicPricingCatalogModels();
     }
 
     // Listen for quota changes (e.g. after cowork session using server model)
@@ -458,6 +462,17 @@ class AuthService {
         ) {
           this.lastRefreshTime = now;
           void this.checkQuota();
+        }
+      } else if (
+        state.isFocused
+        && !store.getState().model.availableModels.some(model => model.isServerModel)
+      ) {
+        // Logged out with no plan models: the public catalog load and its
+        // retries failed, and only an OS "online" event would retry it again.
+        const now = Date.now();
+        if (now - this.lastRefreshTime > 30_000) {
+          this.lastRefreshTime = now;
+          void this.loadPublicPricingCatalogModels();
         }
       }
     });
@@ -630,6 +645,7 @@ class AuthService {
       store.dispatch(setAuthTemporarilyUnavailable({
         hasCredentials: store.getState().auth.isLoggedIn,
       }));
+      void this.loadPublicPricingCatalogModels();
       if (options.reportLifecycle) {
         reportAuthLifecycleEvent({
           eventType: AuthLifecycleEventType.Restore,
@@ -969,10 +985,13 @@ class AuthService {
 
   /**
    * Re-fetch the plan model list after a recoverable outage (network restored,
-   * manual refresh). Safe to call when logged out: it is a no-op then.
+   * manual refresh). When logged out it reloads the public catalog instead, so a
+   * failed startup load does not leave the plan models missing for the session.
    */
   async refreshServerModels(): Promise<boolean> {
-    return this.loadServerModels();
+    return store.getState().auth.isLoggedIn
+      ? this.loadServerModels()
+      : this.loadPublicPricingCatalogModels();
   }
 
   /**
@@ -991,6 +1010,28 @@ class AuthService {
     ) {
       return Promise.resolve(false);
     }
+    return this.startServerModelLoad(requestSnapshot);
+  }
+
+  /**
+   * Load the public pricing catalog so a logged-out user still sees the plan
+   * models, locked until login, instead of an empty model selector. Same
+   * first-attempt/background-retry contract as loadServerModels.
+   */
+  private loadPublicPricingCatalogModels(): Promise<boolean> {
+    const requestSnapshot = store.getState().auth;
+    if (requestSnapshot.isLoggedIn || requestSnapshot.ownerAccountKey) {
+      return Promise.resolve(false);
+    }
+    return this.startServerModelLoad(requestSnapshot);
+  }
+
+  /**
+   * Starts, or joins, the plan model load for one auth snapshot. A logged-in
+   * snapshot loads the account's models and a logged-out one the public catalog;
+   * the two never join each other because their snapshots differ.
+   */
+  private startServerModelLoad(requestSnapshot: AuthAccountRequestSnapshot): Promise<boolean> {
     if (
       this.pendingServerModelLoad
       && isAuthAccountRequestCurrent(
@@ -1026,8 +1067,11 @@ class AuthService {
   ): Promise<void> {
     const loadSequence = this.serverModelLoadSequence;
     const totalAttempts = SERVER_MODEL_LOAD_RETRY_DELAYS_MS.length + 1;
+    const loadName = requestSnapshot.isLoggedIn ? 'server model load' : 'public catalog model load';
     for (let attempt = 1; attempt <= totalAttempts; attempt++) {
-      const outcome = await this.requestServerModels(requestSnapshot);
+      const outcome = requestSnapshot.isLoggedIn
+        ? await this.requestServerModels(requestSnapshot)
+        : await this.requestPublicPricingCatalogModels(requestSnapshot);
       if (attempt === 1) {
         settleFirstAttempt(outcome === ServerModelLoadOutcome.Loaded);
       }
@@ -1037,7 +1081,7 @@ class AuthService {
       const delayMs = SERVER_MODEL_LOAD_RETRY_DELAYS_MS[attempt - 1];
       writeAuthRendererLog(
         'debug',
-        `retrying the server model load in ${delayMs}ms (attempt ${attempt + 1}/${totalAttempts})`,
+        `retrying the ${loadName} in ${delayMs}ms (attempt ${attempt + 1}/${totalAttempts})`,
       );
       await new Promise<void>(resolve => { setTimeout(resolve, delayMs); });
       if (this.serverModelLoadSequence !== loadSequence) {
@@ -1051,7 +1095,7 @@ class AuthService {
     }
     writeAuthRendererLog(
       'warn',
-      `server model load failed after ${totalAttempts} attempts; `
+      `${loadName} failed after ${totalAttempts} attempts; `
       + 'plan models stay unavailable until the next refresh',
     );
   }
@@ -1082,29 +1126,33 @@ class AuthService {
     }
   }
 
-  /**
-   * Load public pricing catalog models for unauthenticated read-only display.
-   */
-  private async loadPublicPricingCatalogModels() {
-    const authStateAtStart = store.getState().auth;
-    if (authStateAtStart.isLoggedIn || authStateAtStart.ownerAccountKey) {
-      return;
-    }
+  private async requestPublicPricingCatalogModels(
+    requestSnapshot: AuthAccountRequestSnapshot,
+  ): Promise<ServerModelLoadOutcome> {
     try {
       const catalogResult = await window.electron.auth.getPricingCatalog();
-      if (!isAuthAccountRequestCurrent(authStateAtStart, store.getState().auth)) {
+      if (!isAuthAccountRequestCurrent(requestSnapshot, store.getState().auth)) {
         writeAuthRendererLog('debug', 'discarded stale public pricing catalog after auth state changed');
-        return;
+        return ServerModelLoadOutcome.Abandoned;
       }
-      if (!catalogResult.success || !catalogResult.textModels) {
-        return;
+      if (catalogResult.success && catalogResult.textModels) {
+        const serverModels = mapPricingCatalogToPublicServerModels({
+          textModels: catalogResult.textModels,
+        });
+        store.dispatch(setServerModels(serverModels));
+        writeAuthRendererLog(
+          'debug',
+          `loaded ${serverModels.length} public catalog model(s) into renderer state`,
+        );
+        return ServerModelLoadOutcome.Loaded;
       }
-      const serverModels = mapPricingCatalogToPublicServerModels({
-        textModels: catalogResult.textModels,
-      });
-      store.dispatch(setServerModels(serverModels));
-    } catch {
-      // ignore — public catalog is optional
+      writeAuthRendererLog('debug', 'public pricing catalog load returned no models');
+      return ServerModelLoadOutcome.Retryable;
+    } catch (error) {
+      // The main process already logs the request failure; the chain warns once
+      // if every attempt fails.
+      writeAuthRendererLog('debug', 'failed to load the public pricing catalog', error);
+      return ServerModelLoadOutcome.Retryable;
     }
   }
 }

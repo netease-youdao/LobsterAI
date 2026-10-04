@@ -20,6 +20,14 @@ import path from 'path';
  * timeout". LobsterAI is the gateway's only supervisor, so whenever it knows
  * it has no live gateway child it can safely reclaim locks whose owner is
  * dead or whose payload is unreadable.
+ *
+ * A lock can also outlive its writer while the recorded PID still looks
+ * alive: after an unclean shutdown Windows may hand that PID to a SYSTEM or
+ * elevated process that neither LobsterAI nor OpenClaw can inspect, and both
+ * then keep treating it as a live gateway. OpenClaw v2026.8.1 writers keep
+ * `<lock>.sqlite` in an exclusive SQLite transaction for as long as they own
+ * `<lock>`, and the OS drops that file lock when the process exits, so
+ * acquiring it proves the writer is gone whoever owns the PID now.
  */
 
 export type GatewayLockPayload = {
@@ -36,6 +44,7 @@ export type GatewayLockPayload = {
 export const GatewayLockCleanupAction = {
   RemovedUnreadable: 'removed-unreadable',
   RemovedDeadOwner: 'removed-dead-owner',
+  RemovedReusedPid: 'removed-reused-pid',
   KeptAliveOwner: 'kept-alive-owner',
   RemoveFailed: 'remove-failed',
 } as const;
@@ -49,6 +58,19 @@ export type GatewayLockCleanupResult = {
 };
 
 const GATEWAY_LOCK_FILE_RE = /^(?:gateway\.[0-9a-f]{8}\.lock|gateway\.state\.lock)$/;
+
+/**
+ * OpenClaw runtimes verified to hold `<lock>.sqlite` for as long as they own
+ * `<lock>`. Upstream main dropped these companions (#157413), so re-check the
+ * gateway lock protocol on every OpenClaw upgrade before extending this list.
+ */
+const LOCK_COORDINATOR_OPENCLAW_VERSIONS: ReadonlySet<string> = new Set(['2026.8.1']);
+
+export function openClawRuntimeHoldsLockCoordinators(version: string | null | undefined): boolean {
+  return !!version && LOCK_COORDINATOR_OPENCLAW_VERSIONS.has(version.trim().replace(/^v/, ''));
+}
+
+export type GatewayLockCoordinator = { release: () => void };
 
 /** Mirrors OpenClaw v2026.8.1 resolveGatewayLockDir(). */
 export function resolveGatewayLockDir(stateDir: string): string {
@@ -124,11 +146,21 @@ type CleanupOptions = {
   lockDir?: string;
   /** Override for tests. */
   isPidAliveFn?: (pid: number) => boolean;
+  /**
+   * Exclusively acquires a lock's `<lock>.sqlite` companion, or returns null
+   * when it is held or missing. Pass it only when the bundled runtime's
+   * writers hold that companion (see openClawRuntimeHoldsLockCoordinators);
+   * it lets cleanup reclaim locks whose recorded PID was reused.
+   */
+  tryAcquireLockCoordinator?: (coordinatorPath: string) => GatewayLockCoordinator | null;
 };
 
 function removeLockFile(
   lockPath: string,
-  action: typeof GatewayLockCleanupAction.RemovedUnreadable | typeof GatewayLockCleanupAction.RemovedDeadOwner,
+  action:
+    | typeof GatewayLockCleanupAction.RemovedUnreadable
+    | typeof GatewayLockCleanupAction.RemovedDeadOwner
+    | typeof GatewayLockCleanupAction.RemovedReusedPid,
   ownerPid?: number,
 ): GatewayLockCleanupResult {
   try {
@@ -140,12 +172,45 @@ function removeLockFile(
 }
 
 /**
+ * Writers publish and keep their payload only while holding the companion
+ * coordinator. Holding it ourselves with the payload unchanged proves that
+ * writer exited and its recorded PID now belongs to another process.
+ */
+function reclaimLockOfExitedWriter(
+  lockPath: string,
+  raw: string | null,
+  ownerPid: number,
+  tryAcquireLockCoordinator: (coordinatorPath: string) => GatewayLockCoordinator | null,
+): GatewayLockCleanupResult | null {
+  const coordinator = tryAcquireLockCoordinator(`${lockPath}.sqlite`);
+  if (!coordinator) {
+    return null;
+  }
+  try {
+    let current: string | null = null;
+    try {
+      current = fs.readFileSync(lockPath, 'utf8');
+    } catch {
+      current = null;
+    }
+    // Only the exact payload observed without the coordinator is proven stale.
+    if (current !== raw) {
+      return null;
+    }
+    return removeLockFile(lockPath, GatewayLockCleanupAction.RemovedReusedPid, ownerPid);
+  } finally {
+    coordinator.release();
+  }
+}
+
+/**
  * Reclaim stale gateway lock files for our config path.
  *
  * MUST only be called when the caller knows it has no live gateway child of
  * its own (before spawning a gateway, or right after confirming the previous
  * one exited). A lock whose payload is readable and whose owner pid is alive
- * is never touched.
+ * is never touched, unless `tryAcquireLockCoordinator` proves its writer
+ * exited and the PID was reused.
  *
  * Two matching strategies:
  * - The exact config and state lock paths for our state tree. An unreadable
@@ -206,7 +271,11 @@ export function cleanupStaleGatewayLocks(options: CleanupOptions): GatewayLockCl
     }
 
     if (pidAlive(payload.pid)) {
-      results.push({ lockPath, action: GatewayLockCleanupAction.KeptAliveOwner, ownerPid: payload.pid });
+      // Payloads without ownerId predate v2026.8.1 and its coordinators.
+      const reclaimed = options.tryAcquireLockCoordinator && payload.ownerId
+        ? reclaimLockOfExitedWriter(lockPath, raw, payload.pid, options.tryAcquireLockCoordinator)
+        : null;
+      results.push(reclaimed ?? { lockPath, action: GatewayLockCleanupAction.KeptAliveOwner, ownerPid: payload.pid });
       continue;
     }
     results.push(removeLockFile(lockPath, GatewayLockCleanupAction.RemovedDeadOwner, payload.pid));

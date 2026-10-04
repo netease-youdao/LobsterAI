@@ -63,7 +63,7 @@ test('a finished lone step keeps its own line instead of a summary', () => {
   expect(renderedSteps(html)).toEqual([4]);
 });
 
-test('a short live run lists every step on its own line', () => {
+test('a short live run lists every step on its own line, but not its finished thoughts', () => {
   const html = renderRun([
     thinkingEntry(0),
     toolEntry(1, 'read'),
@@ -71,12 +71,13 @@ test('a short live run lists every step on its own line', () => {
     toolEntry(3, 'exec', false),
   ], { isLiveRun: true });
   expect(html).not.toContain('data-activity-run-summary');
-  expect(renderedSteps(html)).toEqual([0, 1, 2, 3]);
+  expect(html).not.toContain('data-activity-earlier-steps');
+  expect(renderedSteps(html)).toEqual([1, 2, 3]);
   expect(html).toContain('data-step="3" data-live="true"');
   expect(html).toContain('data-step="2" data-live="false"');
 });
 
-test('a long live run still lists every step, so the whole process stays in view', () => {
+test('a long live run keeps its latest five steps and folds the older ones behind one line', () => {
   const html = renderRun([
     thinkingEntry(0),
     toolEntry(1, 'read'),
@@ -85,11 +86,37 @@ test('a long live run still lists every step, so the whole process stays in view
     toolEntry(4, 'exec'),
     toolEntry(5, 'exec'),
     thinkingEntry(6),
-    toolEntry(7, 'exec', false),
+    toolEntry(7, 'exec'),
+    toolEntry(8, 'exec'),
+    toolEntry(9, 'exec', false),
   ], { isLiveRun: true });
   expect(html).not.toContain('data-activity-run-summary');
-  expect(renderedSteps(html)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
-  expect(html).toContain('data-step="7" data-live="true"');
+  expect(html).toContain('data-activity-earlier-steps="2"');
+  expect(html).toContain('显示更早的 2 步');
+  expect(html).toContain('aria-expanded="false"');
+  expect(renderedSteps(html)).toEqual([4, 5, 7, 8, 9]);
+  expect(html).toContain('data-step="9" data-live="true"');
+});
+
+test('a live run keeps the thought it is having now as its last line', () => {
+  const streamingThought: ActivityChunkEntry = {
+    index: 3,
+    item: {
+      type: 'assistant',
+      message: {
+        id: 'think-3', type: 'assistant', content: 'next…', timestamp: 0,
+        metadata: { isThinking: true, isStreaming: true },
+      },
+    },
+  };
+  const html = renderRun([
+    thinkingEntry(0),
+    toolEntry(1, 'exec'),
+    toolEntry(2, 'exec'),
+    streamingThought,
+  ], { isLiveRun: true });
+  expect(renderedSteps(html)).toEqual([1, 2, 3]);
+  expect(html).toContain('data-step="3" data-live="true"');
 });
 
 test('the tail step stops reading as live once its streaming text stalls', () => {

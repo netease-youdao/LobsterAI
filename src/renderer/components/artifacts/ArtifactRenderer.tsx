@@ -45,7 +45,7 @@ const ArtifactRenderer: React.FC<ArtifactRendererProps> = ({ artifact, selectedT
     case 'text':
       return <TextRenderer artifact={artifact} selectedTextContext={selectedTextContext} />;
     case 'document':
-      return <DocumentRenderer artifact={artifact} />;
+      return <DocumentRenderer artifact={artifact} selectedTextContext={selectedTextContext} />;
     case 'code':
       return <CodeRenderer artifact={artifact} />;
     case 'local-service':

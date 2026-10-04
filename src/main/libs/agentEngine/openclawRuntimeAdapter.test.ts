@@ -15,6 +15,7 @@ vi.mock('electron', () => ({
   },
 }));
 
+import { classifyErrorKey } from '../../../common/coworkErrorClassify';
 import {
   ContextCompactionStatus,
   CoworkSystemMessageKind,
@@ -32,12 +33,13 @@ import {
   COWORK_BTW_RESULT_MAX_CHARS,
   CoworkBtwStatus,
 } from '../../../shared/cowork/btw';
+import { CoworkErrorModelSource } from '../../../shared/cowork/errorDetail';
 import { OpenClawCronRunMetadataKey } from '../../../shared/cowork/openclawCronSessionKey';
 import { CoworkSelectedTextSource } from '../../../shared/cowork/selectedText';
 import { CoworkSteerRejectReason, CoworkSteerStatus } from '../../../shared/cowork/steer';
 import { OpenClawTranscriptSafetyLimit } from '../../../shared/openclawTranscript/constants';
 import { ProviderName } from '../../../shared/providers/constants';
-import { t } from '../../i18n';
+import { setLanguage, t } from '../../i18n';
 import { OpenClawChannelSessionSync } from '../openclawChannelSessionSync';
 import {
   __openClawTokenProxyTestUtils,
@@ -60,12 +62,28 @@ import {
   OPENCLAW_CHAT_SEND_PAYLOAD_SAFE_LIMIT_BYTES,
   OpenClawRuntimeAdapter,
   pickPersistedAssistantSegment,
+  resolveOpenClawOutputLimitErrorMessage,
   resolveOpenClawRuntimeError,
   resolveOpenClawRuntimeErrorMessage,
   resolveOpenClawToolLoopErrorOverride,
   resolveToolEventIsError,
 } from './openclawRuntimeAdapter';
 import { SubagentYield } from './subagent/yield';
+
+test('only a live-child native shutdown announcement parks config recovery for self-restart', () => {
+  const noteGatewaySelfRestart = vi.fn();
+  const getGatewayProcessPid = vi.fn((): number | null => 42);
+  const adapter = new OpenClawRuntimeAdapter({} as never, {
+    noteGatewaySelfRestart, getGatewayProcessPid,
+  } as never);
+  adapter.handleGatewayEvent({ event: OpenClawGatewayEvent.Shutdown, payload: { reason: 'stopping' } });
+  expect(noteGatewaySelfRestart).not.toHaveBeenCalled();
+  adapter.handleGatewayEvent({ event: OpenClawGatewayEvent.Shutdown, payload: { restartExpectedMs: 0, reason: 'config reload' } });
+  expect(noteGatewaySelfRestart).toHaveBeenCalledExactlyOnceWith('config reload');
+  getGatewayProcessPid.mockReturnValue(null);
+  adapter.handleGatewayEvent({ event: OpenClawGatewayEvent.Shutdown, payload: { restartExpectedMs: 500 } });
+  expect(noteGatewaySelfRestart).toHaveBeenCalledTimes(1);
+});
 
 test('browser control requests use the embedded gateway RPC', async () => {
   const adapter = new OpenClawRuntimeAdapter({} as never, {} as never);
@@ -1027,6 +1045,42 @@ test('resolveOpenClawToolLoopErrorOverride leaves unrelated errors untouched', (
   expect(resolveOpenClawToolLoopErrorOverride(undefined, OPENCLAW_INCOMPLETE_TURN_ERROR_TEXT)).toBeNull();
   // Loop veto seen, but the run failed for a different reason.
   expect(resolveOpenClawToolLoopErrorOverride(TOOL_LOOP_POLL_BLOCK_TEXT, 'LLM request failed.')).toBeNull();
+});
+
+test('resolveOpenClawOutputLimitErrorMessage only explains output-limit stops', () => {
+  for (const stopReason of [undefined, 'stop', 'error', 'toolUse']) {
+    expect(resolveOpenClawOutputLimitErrorMessage(stopReason, CoworkErrorModelSource.CodingPlan)).toBeNull();
+  }
+});
+
+test('resolveOpenClawOutputLimitErrorMessage points at Max Output Tokens only for configurable models', () => {
+  // LobsterAI plan models have no output-limit setting to change.
+  expect(resolveOpenClawOutputLimitErrorMessage('length', CoworkErrorModelSource.LobsterAIPlan))
+    .toBe(t('coworkErrorOutputLimitReached'));
+  expect(resolveOpenClawOutputLimitErrorMessage('length', undefined))
+    .toBe(t('coworkErrorOutputLimitReached'));
+  for (const modelSource of [
+    CoworkErrorModelSource.CodingPlan,
+    CoworkErrorModelSource.CustomProvider,
+    CoworkErrorModelSource.BuiltinProvider,
+    CoworkErrorModelSource.BuiltinOAuth,
+  ]) {
+    expect(resolveOpenClawOutputLimitErrorMessage('length', modelSource))
+      .toBe(t('coworkErrorOutputLimitReachedWithSettings'));
+  }
+});
+
+test('output-limit copy is shown verbatim instead of being reclassified by error rules', () => {
+  try {
+    for (const language of ['zh', 'en'] as const) {
+      setLanguage(language);
+      for (const key of ['coworkErrorOutputLimitReached', 'coworkErrorOutputLimitReachedWithSettings']) {
+        expect(classifyErrorKey(t(key)), `${language}:${key}`).toBeNull();
+      }
+    }
+  } finally {
+    setLanguage('zh');
+  }
 });
 
 test('estimateOpenClawChatSendFrameBytes measures the full RPC frame as UTF-8 JSON', () => {
@@ -3260,6 +3314,7 @@ function createRunTurnAdapter(options: {
   agentModel?: string;
   cachedModel?: string;
   modelPatchError?: Error;
+  modelPatchResult?: Record<string, unknown>;
   holdFirstModelPatch?: boolean;
   sessionCwd?: string;
   chatSendError?: Error;
@@ -3358,7 +3413,7 @@ function createRunTurnAdapter(options: {
         if (options.modelPatchError) {
           throw options.modelPatchError;
         }
-        return {};
+        return options.modelPatchResult ?? {};
       }
       if (method === 'chat.history') {
         return { messages: [] };
@@ -4055,6 +4110,50 @@ test('continueSession patches a session override before chat.send even when the 
     model,
     reasoningLevel: 'stream',
   });
+});
+
+const planResolvedPatchResult = {
+  ok: true,
+  entry: {},
+  resolved: { modelProvider: 'lobsterai-server', model: 'qwen3.8-flash' },
+};
+
+test('continueSession blocks chat.send when a selected custom model resolves to a plan model', async () => {
+  const { adapter, requests, session } = createRunTurnAdapter({
+    sessionModelOverride: 'qwen/qwen3.8-max',
+    modelPatchResult: planResolvedPatchResult,
+  });
+  const errors: string[] = [];
+  adapter.on('error', (_sessionId, error) => errors.push(error));
+
+  await expect(adapter.continueSession('session-1', 'hello')).rejects.toThrow('qwen/qwen3.8-max');
+
+  expect(requests.map((request) => request.method)).toEqual(['sessions.patch']);
+  expect(session.status).toBe('error');
+  expect(errors).toEqual([expect.stringContaining('qwen3.8-flash')]);
+});
+
+test('continueSession blocks an agent-model turn that resolves to a plan model', async () => {
+  const { adapter, requests } = createRunTurnAdapter({
+    agentModel: 'qwen/qwen3.8-max',
+    modelPatchResult: planResolvedPatchResult,
+  });
+  adapter.on('error', () => undefined);
+
+  await expect(adapter.continueSession('session-1', 'hello')).rejects.toThrow('qwen/qwen3.8-max');
+
+  expect(requests.map((request) => request.method)).toEqual(['sessions.patch']);
+});
+
+test('continueSession still sends when the gateway reports another spelling of the selected model', async () => {
+  const { adapter, requests } = createRunTurnAdapter({
+    sessionModelOverride: 'zhipu/glm-5',
+    modelPatchResult: { ok: true, entry: {}, resolved: { modelProvider: 'zai', model: 'glm-5' } },
+  });
+
+  await adapter.continueSession('session-1', 'hello');
+
+  expect(requests.map((request) => request.method)).toContain('chat.send');
 });
 
 test('continueSession continues after a redundant session override patch times out', async () => {
@@ -5636,6 +5735,34 @@ test.each([
   expect(adapter.activeTurns.has(session.id)).toBe(false);
 });
 
+test('chat error explains a plan model that ran instead of the selected custom model', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'hello', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const errors: string[] = [];
+  adapter.on('error', (_sessionId, error) => errors.push(error));
+  const turn = { ...createActiveTurn(session.id, sessionKey, 'run-plan-substitution'), model: 'qwen/qwen3.8-max' };
+  adapter.activeTurns.set(session.id, turn);
+
+  adapter.handleChatEvent({
+    state: OpenClawChatState.Error,
+    runId: turn.runId,
+    sessionKey,
+    errorMessage: 'free quota exhausted',
+    provider: 'lobsterai-server',
+    model: 'qwen3.8-flash',
+    failoverReason: 'billing',
+  }, 1);
+
+  const persisted = session.messages.find((message) => message.type === 'system');
+  expect(persisted?.content).toContain('qwen/qwen3.8-max');
+  expect(persisted?.content).toContain('qwen3.8-flash');
+  expect(persisted?.metadata?.errorDetail).toMatchObject({ provider: 'lobsterai-server', model: 'qwen3.8-flash' });
+  expect(errors).toEqual([persisted?.content]);
+});
+
 test.each(['retry', 'different-run', 'different-error'])('chat error does not reuse lifecycle details from %s', (scenario) => {
   const { session, store } = createReconcileStore([
     { id: 'msg-1', type: 'user', content: 'hello', timestamp: 1, metadata: {} },
@@ -5669,6 +5796,39 @@ test.each(['retry', 'different-run', 'different-error'])('chat error does not re
   const persistedError = session.messages.find((message) => message.type === 'system');
   expect(persistedError?.content).toBe(errorMessage);
   expect(persistedError?.metadata?.errorDetail?.rawErrorPreview).toBeUndefined();
+});
+
+test('chat error at the output limit shows readable copy and keeps the raw error in details', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'hello', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const errorSpy = vi.fn();
+  adapter.on('error', errorSpy);
+  const turn = createActiveTurn(session.id, sessionKey, 'run-output-limit');
+  turn.model = 'lobsterai-server/glm-5.3-flash';
+  adapter.activeTurns.set(session.id, turn);
+  const rawErrorMessage = 'Agent run ended before producing a complete result.';
+
+  adapter.handleChatEvent({
+    state: OpenClawChatState.Error,
+    runId: turn.runId,
+    sessionKey,
+    errorMessage: rawErrorMessage,
+    stopReason: 'length',
+  }, 1);
+
+  const persistedError = session.messages.find((message) => message.type === 'system');
+  expect(session.status).toBe('error');
+  expect(persistedError?.content).toBe(t('coworkErrorOutputLimitReached'));
+  expect(persistedError?.metadata?.errorDetail).toMatchObject({
+    provider: 'lobsterai-server',
+    modelSource: CoworkErrorModelSource.LobsterAIPlan,
+    rawErrorMessage,
+    stopReason: 'length',
+  });
+  expect(errorSpy).toHaveBeenCalledWith(session.id, t('coworkErrorOutputLimitReached'));
 });
 
 test('chat error can consume quota signal after lifecycle error schedules fallback', () => {

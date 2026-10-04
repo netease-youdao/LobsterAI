@@ -67,7 +67,7 @@ interface SidebarProps {
   isEngineStartupOverlayVisible?: boolean;
 }
 
-const DEFAULT_SIDEBAR_WIDTH = 244;
+const DEFAULT_SIDEBAR_WIDTH = 260;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 420;
 const SIDEBAR_COLLAPSE_TRANSITION_MS = 200;
@@ -150,12 +150,12 @@ const SidebarNewFeatureBadge = {
   KitsVersion: '2026-06-05',
 } as const;
 const sidebarNavItemClassName =
-  'w-full inline-flex h-7 items-center gap-2 rounded-md px-1.5 text-left text-sm font-normal text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
+  'w-full inline-flex h-9 items-center gap-2.5 rounded-full px-2 text-left text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
 const activeSidebarNavItemClassName =
-  `${sidebarNavItemClassName} bg-black/[0.06] font-medium hover:bg-black/[0.06] dark:bg-white/[0.07] dark:hover:bg-white/[0.07]`;
-const sidebarCreateIconClassName = 'h-4 w-4 shrink-0';
+  `${sidebarNavItemClassName} bg-black/[0.05] hover:bg-black/[0.05] dark:bg-white/[0.07] dark:hover:bg-white/[0.07]`;
+const sidebarNavIconClassName = 'h-[18px] w-[18px] shrink-0 text-foreground/75';
 const sidebarBottomIconButtonClassName =
-  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-foreground/80 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
+  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-foreground/80 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
 
 type SidebarAnalyticsSource = 'home_sidebar' | 'home_agent_sidebar';
 
@@ -267,6 +267,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   const isAuthLoading = useSelector((state: RootState) => state.auth.isLoading);
   const sessions = useSelector(selectCoworkSessions);
   const currentSessionId = useSelector(selectCurrentSessionId);
+  // The home page is the "new task" view, so its nav item reads as selected there.
+  const isNewTaskViewActive = activeView === 'cowork' && !currentSessionId;
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isBatchMode, setIsBatchMode] = useState(false);
   const [batchAgentId, setBatchAgentId] = useState<string | null>(null);
@@ -708,10 +710,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   type="button"
                   onClick={onToggleCollapse}
-                  className="non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+                  className="non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors"
                   aria-label={isCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
                 >
-                  <SidebarToggleIcon className="h-4 w-4" isCollapsed={isCollapsed} />
+                  <SidebarToggleIcon className="h-[18px] w-[18px]" isCollapsed={isCollapsed} />
                 </button>
                 {!isCollapsed && (
                   <>
@@ -746,9 +748,10 @@ const Sidebar: React.FC<SidebarProps> = ({
               reportSidebarAction('new_task', { activeView, isCollapsed });
               onNewChat();
             }}
-            className={sidebarNavItemClassName}
+            className={isNewTaskViewActive ? activeSidebarNavItemClassName : sidebarNavItemClassName}
+            aria-current={isNewTaskViewActive ? 'page' : undefined}
           >
-            <ComposeIcon className={sidebarCreateIconClassName} />
+            <ComposeIcon className={sidebarNavIconClassName} />
             {i18nService.t('newChat')}
           </button>
           <button
@@ -761,7 +764,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             className={activeView === 'scheduledTasks' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
             aria-current={activeView === 'scheduledTasks' ? 'page' : undefined}
           >
-            <SidebarAutomationIcon className="h-4 w-4 shrink-0" />
+            <SidebarAutomationIcon className={sidebarNavIconClassName} />
             {i18nService.t('scheduledTasks')}
           </button>
           <button
@@ -775,7 +778,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             className={activeView === 'kits' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
             aria-current={activeView === 'kits' ? 'page' : undefined}
           >
-            <SidebarKitsIcon className="h-4 w-4 shrink-0" />
+            <SidebarKitsIcon className={sidebarNavIconClassName} />
             <span className="min-w-0 truncate">{i18nService.t('kits')}</span>
             {showKitsNewBadge && (
               <span className="inline-flex h-4 shrink-0 items-center rounded-[4px] bg-[#ff4f6d] px-1.5 text-[10px] font-semibold leading-none text-white">
@@ -793,7 +796,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             className={activeView === 'skills' || activeView === 'mcp' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
             aria-current={activeView === 'skills' || activeView === 'mcp' ? 'page' : undefined}
           >
-            <SkillIcon className="h-4 w-4 shrink-0" />
+            <SkillIcon className={sidebarNavIconClassName} />
             <span className="min-w-0 truncate">{i18nService.t('skillsAndConnectors')}</span>
           </button>
           <button
@@ -806,7 +809,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             className={activeView === 'library' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
             aria-current={activeView === 'library' ? 'page' : undefined}
           >
-            <SidebarLibraryIcon className="h-4 w-4 shrink-0" />
+            <SidebarLibraryIcon className={sidebarNavIconClassName} />
             <span className="min-w-0 truncate">{i18nService.t('librarySidebarTitle')}</span>
           </button>
         </div>
@@ -814,7 +817,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       <div className="relative min-h-0 flex-1">
         <div
           ref={agentScrollContainerRef}
-          className={`scrollbar-hidden h-full overflow-y-auto px-2.5 ${
+          className={`scrollbar-hidden h-full overflow-y-auto px-[18px] ${
             isSidebarBannerVisible && !isBatchMode ? 'pb-[128px]' : 'pb-10'
           }`}
           onScroll={handleAgentScroll}
@@ -980,7 +983,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 className={sidebarBottomIconButtonClassName}
                 aria-label={i18nService.t('settings')}
               >
-                <Cog6ToothIcon className="h-4 w-4 shrink-0" />
+                <Cog6ToothIcon className="h-[18px] w-[18px] shrink-0" />
               </button>
             </div>
           </div>

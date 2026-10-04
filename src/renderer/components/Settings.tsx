@@ -88,7 +88,10 @@ import {
   getProviderDefaultBaseUrl,
   hasEquivalentProviderModelId,
   hasProviderAuthConfigured,
+  MAX_OUTPUT_TOKENS_MAX,
+  MAX_OUTPUT_TOKENS_MIN,
   type Model,
+  parseMaxOutputTokensInput,
   type ProviderConfig,
   providerKeys,
   providerRequiresApiKey,
@@ -1541,6 +1544,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [newModelSupportsImage, setNewModelSupportsImage] = useState(false);
   const [newModelSupportsThinking, setNewModelSupportsThinking] = useState(false);
   const [newModelContextWindow, setNewModelContextWindow] = useState<number | undefined>(undefined);
+  const [newModelMaxTokens, setNewModelMaxTokens] = useState<string>('');
   const [newModelCustomParams, setNewModelCustomParams] = useState<string>('');
   const [modelFormError, setModelFormError] = useState<string | null>(null);
 
@@ -2368,6 +2372,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -3850,6 +3855,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -3861,6 +3867,7 @@ const Settings: React.FC<SettingsProps> = ({
     supportsThinking?: boolean,
     contextWindow?: number,
     customParams?: Record<string, unknown>,
+    maxTokens?: number,
   ) => {
     setIsAddingModel(false);
     setIsEditingModel(true);
@@ -3870,6 +3877,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(!!supportsImage);
     setNewModelSupportsThinking(!!supportsThinking);
     setNewModelContextWindow(contextWindow);
+    setNewModelMaxTokens(maxTokens !== undefined ? String(maxTokens) : '');
     setNewModelCustomParams(
       customParams && Object.keys(customParams).length > 0
         ? JSON.stringify(customParams, null, 2)
@@ -3971,6 +3979,19 @@ const Settings: React.FC<SettingsProps> = ({
       return;
     }
 
+    // Runtime profiles own the output cap, so the (hidden) field is ignored there.
+    const parsedMaxTokens = runtimeProfile
+      ? undefined
+      : parseMaxOutputTokensInput(newModelMaxTokens);
+    if (parsedMaxTokens === null) {
+      setModelFormError(
+        i18nService.t('maxOutputTokensInvalid')
+          .replace('{min}', String(MAX_OUTPUT_TOKENS_MIN))
+          .replace('{max}', String(MAX_OUTPUT_TOKENS_MAX)),
+      );
+      return;
+    }
+
     const editingModel = currentModels.find(model => model.id === editingModelId);
     const resolvedProfileMetadata = applyModelRuntimeProfileMetadata({
       supportsImage: ProviderRegistry.resolveModelSupportsImage(
@@ -3989,10 +4010,11 @@ const Settings: React.FC<SettingsProps> = ({
         newModelSupportsThinking,
       ),
       contextWindow: newModelContextWindow,
-      maxTokens: ProviderRegistry.resolveModelMaxTokens(
+      // An empty field falls back to the registry default instead of the
+      // previously saved value, so clearing it restores automatic inference.
+      maxTokens: parsedMaxTokens ?? ProviderRegistry.resolveModelMaxTokens(
         activeProvider,
         modelId,
-        editingModel?.maxTokens,
       ),
     }, runtimeProfile);
     const nextModel = {
@@ -4031,6 +4053,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -4044,6 +4067,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -4701,20 +4725,20 @@ const Settings: React.FC<SettingsProps> = ({
                 <svg viewBox="0 0 120 80" className="w-full h-auto rounded-md mb-2 overflow-hidden" xmlns="http://www.w3.org/2000/svg">
                   {mode === 'light' && (
                     <>
-                      <rect width="120" height="80" fill="#F8F9FB" />
-                      <rect x="0" y="0" width="30" height="80" fill="#EBEDF0" />
-                      <rect x="4" y="8" width="22" height="4" rx="2" fill="#C8CBD0" />
-                      <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D5D7DB" />
-                      <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D5D7DB" />
-                      <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D5D7DB" />
+                      <rect width="120" height="80" fill="#F9F9F9" />
+                      <rect x="0" y="0" width="30" height="80" fill="#EDEDED" />
+                      <rect x="4" y="8" width="22" height="4" rx="2" fill="#CBCBCB" />
+                      <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D8D8D8" />
+                      <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D8D8D8" />
+                      <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D8D8D8" />
                       <rect x="36" y="8" width="78" height="64" rx="4" fill="#FFFFFF" />
-                      <rect x="42" y="16" width="50" height="4" rx="2" fill="#D5D7DB" />
-                      <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="46" width="40" height="4" rx="2" fill="#D5D7DB" />
-                      <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="60" width="58" height="3" rx="1.5" fill="#E2E4E7" />
+                      <rect x="42" y="16" width="50" height="4" rx="2" fill="#D8D8D8" />
+                      <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="46" width="40" height="4" rx="2" fill="#D8D8D8" />
+                      <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="60" width="58" height="3" rx="1.5" fill="#E5E5E5" />
                     </>
                   )}
                   {mode === 'dark' && (
@@ -4746,19 +4770,19 @@ const Settings: React.FC<SettingsProps> = ({
                         </clipPath>
                       </defs>
                       <g clipPath="url(#left-half)">
-                        <rect width="120" height="80" fill="#F8F9FB" />
-                        <rect x="0" y="0" width="30" height="80" fill="#EBEDF0" />
-                        <rect x="4" y="8" width="22" height="4" rx="2" fill="#C8CBD0" />
-                        <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D5D7DB" />
-                        <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D5D7DB" />
-                        <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D5D7DB" />
+                        <rect width="120" height="80" fill="#F9F9F9" />
+                        <rect x="0" y="0" width="30" height="80" fill="#EDEDED" />
+                        <rect x="4" y="8" width="22" height="4" rx="2" fill="#CBCBCB" />
+                        <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D8D8D8" />
+                        <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D8D8D8" />
+                        <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D8D8D8" />
                         <rect x="36" y="8" width="78" height="64" rx="4" fill="#FFFFFF" />
-                        <rect x="42" y="16" width="50" height="4" rx="2" fill="#D5D7DB" />
-                        <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E2E4E7" />
-                        <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E2E4E7" />
-                        <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E2E4E7" />
-                        <rect x="42" y="46" width="40" height="4" rx="2" fill="#D5D7DB" />
-                        <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E2E4E7" />
+                        <rect x="42" y="16" width="50" height="4" rx="2" fill="#D8D8D8" />
+                        <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E5E5E5" />
+                        <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E5E5E5" />
+                        <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E5E5E5" />
+                        <rect x="42" y="46" width="40" height="4" rx="2" fill="#D8D8D8" />
+                        <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E5E5E5" />
                       </g>
                       <g clipPath="url(#right-half)">
                         <rect width="120" height="80" fill="#0F1117" />
@@ -6176,6 +6200,8 @@ const Settings: React.FC<SettingsProps> = ({
           setNewModelSupportsThinking={setNewModelSupportsThinking}
           newModelContextWindow={newModelContextWindow}
           setNewModelContextWindow={setNewModelContextWindow}
+          newModelMaxTokens={newModelMaxTokens}
+          setNewModelMaxTokens={setNewModelMaxTokens}
           newModelCustomParams={newModelCustomParams}
           setNewModelCustomParams={setNewModelCustomParams}
           activeProviderConfig={providers[activeProvider]}

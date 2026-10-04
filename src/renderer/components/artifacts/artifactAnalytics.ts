@@ -5,6 +5,7 @@ type ArtifactAnalyticsValue = string | number | boolean | null | undefined;
 
 export const ArtifactPreviewActionSource = {
   ConversationArtifactCard: 'conversation_artifact_card',
+  ConversationMessageLink: 'conversation_message_link',
   ArtifactPanel: 'artifact_panel',
   ArtifactBrowser: 'artifact_browser',
   LibraryList: 'library_list',

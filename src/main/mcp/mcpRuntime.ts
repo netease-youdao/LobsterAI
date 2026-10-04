@@ -15,6 +15,7 @@ import {
   type BrowserToolRequest,
   type BrowserToolResponse,
   type DecisionToolHandler,
+  type EditorToolHandler,
   McpBridgeServer,
   type MediaGenerationRequest,
   type MediaGenerationResponse,
@@ -73,13 +74,18 @@ export interface McpRuntimeDeps {
   onAskUserRequested?: (sessionId: string, request: { requestId: string; toolName: string }) => void;
   /** Fired when a pending AskUserQuestion request is dismissed upstream. */
   onAskUserDismissed?: (requestId: string) => void;
+  /** Persisted bridge secret; openclaw.json must stay stable across launches. */
+  bridgeSecret?: string;
+  /** Callback-server port from the previous launch. */
+  getBridgePreferredPort?: () => number | undefined;
+  onBridgePortBound?: (port: number) => void;
 }
 
 export class McpRuntime {
   private mcpStore: McpStore | null = null;
   private launchResolverManager: McpLaunchResolverManager | null = null;
   private bridgeServer: McpBridgeServer | null = null;
-  private readonly bridgeSecret = crypto.randomUUID();
+  private readonly bridgeSecret: string;
   private resolvedServersCache: ResolvedMcpServer[] = [];
   private mediaGenerationHandler:
     | ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>)
@@ -88,8 +94,11 @@ export class McpRuntime {
     | ((request: BrowserToolRequest) => Promise<BrowserToolResponse>)
     | null = null;
   private decisionToolHandler: DecisionToolHandler | null = null;
+  private readonly editorToolHandlers = new Map<string, { editorName: string; handler: EditorToolHandler }>();
 
-  constructor(private readonly deps: McpRuntimeDeps) {}
+  constructor(private readonly deps: McpRuntimeDeps) {
+    this.bridgeSecret = deps.bridgeSecret || crypto.randomUUID();
+  }
 
   getStore(): McpStore {
     if (!this.mcpStore) {
@@ -138,6 +147,16 @@ export class McpRuntime {
     this.decisionToolHandler = handler;
   }
 
+  /** Serve a document editor's agent tools on the bridge at `/<route>/tool`. */
+  setEditorToolHandler(route: string, editorName: string, handler: EditorToolHandler): void {
+    this.editorToolHandlers.set(route, { editorName, handler });
+    this.bridgeServer?.onEditorTool(route, editorName, handler);
+  }
+
+  getEditorCallbackUrl(route: string): string | null {
+    return this.bridgeServer?.editorCallbackUrl(route) ?? null;
+  }
+
   getAskUserCallbackUrl(): string | null {
     return this.bridgeServer?.askUserCallbackUrl ?? null;
   }
@@ -178,7 +197,8 @@ export class McpRuntime {
       this.bridgeServer = new McpBridgeServer(this.bridgeSecret);
     }
     console.log('[AskUser] starting HTTP callback server...');
-    await this.bridgeServer.start();
+    const port = await this.bridgeServer.start(this.deps.getBridgePreferredPort?.());
+    this.deps.onBridgePortBound?.(port);
 
     this.bridgeServer.onAskUser(request => {
       const sessionId = request.sessionKey
@@ -252,6 +272,9 @@ export class McpRuntime {
 
     if (this.browserToolHandler) {
       this.bridgeServer.onBrowserTool(this.browserToolHandler);
+    }
+    for (const [route, { editorName, handler }] of this.editorToolHandlers) {
+      this.bridgeServer.onEditorTool(route, editorName, handler);
     }
   }
 

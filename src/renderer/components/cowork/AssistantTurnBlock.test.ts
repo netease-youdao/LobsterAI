@@ -78,5 +78,40 @@ test('a running turn lists every step of its current run without a duration line
   expect(html).not.toContain('耗时');
   expect(html).not.toContain('data-activity-run-summary');
   expect(html.match(/data-activity-step-kind="command"/g)).toHaveLength(2);
-  expect(html).toContain('深度思考');
+  // The thought before them has finished, so it no longer takes a line.
+  expect(html).not.toContain('深度思考');
+});
+
+test('a running turn that keeps calling tools folds its older steps behind one line', () => {
+  const html = renderTurn([
+    ...process,
+    ...[3, 4, 5, 6, 7, 8].flatMap((n) => toolMessages(`tool-${n}`, n * 2_000 + 3_000)),
+  ], true);
+  expect(html).toContain('显示更早的 3 步');
+  expect(html.match(/data-activity-step-kind="command"/g)).toHaveLength(5);
+  expect(html).not.toContain('耗时');
+});
+
+test('a running turn spends no step line on progress card updates once they finish', () => {
+  const planCall: CoworkMessage[] = [
+    {
+      id: 'plan-1', type: 'tool_use', content: '', timestamp: 7_000,
+      metadata: {
+        toolName: 'progress_card',
+        toolUseId: 'plan-1',
+        toolInput: {
+          markdown: 'Deck underway',
+          plan: [
+            { step: 'Research', status: 'completed' },
+            { step: 'Draft slides', status: 'in_progress' },
+          ],
+        },
+      },
+    },
+    { id: 'plan-1-result', type: 'tool_result', content: 'Progress card updated', timestamp: 7_100, metadata: { toolUseId: 'plan-1' } },
+  ];
+  const running = renderTurn([...process, ...planCall, ...toolMessages('tool-9', 9_000)], true);
+  expect(running).not.toContain('更新了任务进度');
+  expect(running).not.toContain('progress_card');
+  expect(running.match(/data-activity-step-kind="command"/g)).toHaveLength(3);
 });

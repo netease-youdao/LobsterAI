@@ -1,0 +1,159 @@
+/* PowerPoint-specific parts; the shared frame is in ../common/officeEditor.css. */
+.lobster-slides-frame { flex: 1; min-height: 0; position: relative; display: flex; }
+.lobster-slides-mount { flex: 1; min-width: 0; min-height: 0; display: flex; }
+/* A definite height also while parked offscreen, so the slide list scrolls and draws lazily. */
+.lobster-slides-workspace { flex: 1; min-width: 0; min-height: 0; height: 100%; display: flex; }
+
+/* Slide list */
+.lobster-slides-thumbnails {
+  width: 184px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 8px 10px 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-right: 1px solid rgba(128, 128, 128, .18);
+  outline: none;
+}
+.lobster-slides-thumb { display: flex; align-items: flex-start; gap: 6px; cursor: pointer; }
+.lobster-slides-thumb-number { width: 18px; flex-shrink: 0; padding-top: 2px; font-size: 11px; text-align: right; opacity: .65; }
+.lobster-slides-thumb-hidden { text-decoration: line-through; }
+.lobster-slides-thumb-frame {
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid rgba(128, 128, 128, .3);
+  border-radius: 3px;
+}
+.lobster-slides-thumb:hover .lobster-slides-thumb-frame { border-color: rgba(128, 128, 128, .6); }
+.lobster-slides-thumb[aria-selected="true"] .lobster-slides-thumb-frame { outline: 2px solid #d35230; outline-offset: 1px; }
+.lobster-slides-drop-before { box-shadow: 0 -5px 0 -3px #d35230; }
+.lobster-slides-drop-after { box-shadow: 0 5px 0 -3px #d35230; }
+
+/* Stage */
+.lobster-slides-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.lobster-slides-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 24px;
+  box-sizing: border-box;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: #e9eaec;
+  outline: none;
+}
+.lobster-slides-canvas { position: relative; flex-shrink: 0; margin: auto; box-shadow: 0 1px 5px rgba(0, 0, 0, .15); }
+.lobster-slides-empty { margin: auto; font-size: 13px; opacity: .6; }
+.lobster-slides-notes {
+  height: 64px;
+  min-height: 36px;
+  max-height: 40%;
+  flex-shrink: 0;
+  resize: vertical;
+  padding: 8px 12px;
+  border: 0;
+  border-top: 1px solid rgba(128, 128, 128, .18);
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.dark .lobster-slides-stage { background: #26292d; }
+
+/* Selection: a frame with resize handles over the drawn slide. */
+.lobster-slides-selection { position: absolute; z-index: 2; box-sizing: border-box; border: 1px solid #2b79d0; pointer-events: none; transform-origin: center; }
+.lobster-slides-selection-editing { border-style: dashed; }
+.lobster-slides-handle {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  border: 1px solid #2b79d0;
+  border-radius: 50%;
+  background: #fff;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+}
+.lobster-slides-handle-nw { left: 0; top: 0; cursor: nwse-resize; }
+.lobster-slides-handle-n { left: 50%; top: 0; cursor: ns-resize; }
+.lobster-slides-handle-ne { left: 100%; top: 0; cursor: nesw-resize; }
+.lobster-slides-handle-e { left: 100%; top: 50%; cursor: ew-resize; }
+.lobster-slides-handle-se { left: 100%; top: 100%; cursor: nwse-resize; }
+.lobster-slides-handle-s { left: 50%; top: 100%; cursor: ns-resize; }
+.lobster-slides-handle-sw { left: 0; top: 100%; cursor: nesw-resize; }
+.lobster-slides-handle-w { left: 0; top: 50%; cursor: ew-resize; }
+.lobster-slides-selection-editing .lobster-slides-handle, .lobster-slides-selection-locked .lobster-slides-handle { display: none; }
+/* "Add to chat" beside the selected shape: the chat's own button for selected text (theme colors,
+   opaque in every state), right-aligned to the shape. */
+.lobster-slides-chat-action {
+  position: absolute;
+  z-index: 3;
+  padding: 6px 12px;
+  border: 1px solid var(--lobster-border);
+  border-radius: 999px;
+  background: var(--lobster-surface);
+  color: var(--lobster-foreground);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, .12), 0 1px 4px rgba(0, 0, 0, .05);
+  font-size: var(--lobster-text-xs);
+  line-height: var(--lobster-leading-xs);
+  font-weight: var(--lobster-ui-font-weight-medium, 500);
+  white-space: nowrap;
+  transform: translateX(-100%);
+  transition: background-color .15s;
+}
+.lobster-slides-chat-action:hover { background: var(--lobster-surface-raised); }
+
+/* The drawn slide. Office emboldens and slants fonts without those faces; the app shell turns
+   synthesis off, so slides turn it back on. */
+.lobster-slide { position: absolute; left: 0; top: 0; overflow: hidden; color: #000; font-synthesis: weight style; user-select: none; cursor: default; }
+.lobster-slide-shape { position: absolute; box-sizing: border-box; }
+.lobster-slide-group { left: 0; top: 0; width: 0; height: 0; overflow: visible; }
+.lobster-slide-geometry, .lobster-slide-fill, .lobster-slide-picture, .lobster-slide-graphic { position: absolute; inset: 0; }
+.lobster-slide-stroke { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.lobster-slide-picture { overflow: hidden; }
+.lobster-slide-picture img { position: absolute; max-width: none; user-select: none; }
+.lobster-slide-graphic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(0, 0, 0, .35);
+  background: rgba(0, 0, 0, .04);
+  color: rgba(0, 0, 0, .55);
+  font-size: 14px;
+}
+.lobster-slide-text {
+  position: absolute;
+  left: 0;
+  top: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  overflow-wrap: break-word;
+  tab-size: 72px;
+  outline: none;
+}
+.lobster-slide-text[contenteditable="true"] { cursor: text; user-select: text; }
+.lobster-slide-paragraph { margin: 0; }
+.lobster-slide-paragraph[data-bullet]::before {
+  content: attr(data-bullet);
+  display: inline-block;
+  min-width: var(--lobster-bullet-width, 0);
+  padding-right: var(--lobster-bullet-gap, 0);
+  text-indent: 0;
+  color: var(--lobster-bullet-color, inherit);
+  font-family: var(--lobster-bullet-font, inherit);
+  font-size: var(--lobster-bullet-size, 1em);
+}
+/* The app styles tables in chat content; a slide's table starts from nothing. */
+.lobster-slide .lobster-slide-table { position: absolute; left: 0; top: 0; margin: 0; border-collapse: collapse; border-spacing: 0; table-layout: fixed; }
+.lobster-slide-cell { box-sizing: border-box; }
+.lobster-slide-text.lobster-slide-cell-text { position: static; display: block; }
+.lobster-slide-prompt { pointer-events: none; color: rgba(0, 0, 0, .45); }
+.lobster-slide-editing .lobster-slide-prompt { display: none; }
+.lobster-slide-empty-placeholder { outline: 1px dashed rgba(0, 0, 0, .3); outline-offset: -1px; }
+.lobster-slide-editing { z-index: 1; }

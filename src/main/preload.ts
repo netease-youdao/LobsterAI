@@ -135,6 +135,7 @@ import type {
 } from '../shared/skin/types';
 import { SubscriptionTrialIpc } from '../shared/subscriptionTrial/constants';
 import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
+import { createOfficeBridges } from './office/officePreloadBridges';
 import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 
@@ -545,7 +546,7 @@ contextBridge.exposeInMainWorld('electron', {
       kitIds?: string[];
       kitReferences?: KitReference[];
       resolvedKitCapabilities?: ResolvedKitCapabilities;
-      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       agentId?: string;
       modelOverride?: string;
@@ -562,7 +563,7 @@ contextBridge.exposeInMainWorld('electron', {
       kitIds?: string[];
       kitReferences?: KitReference[];
       resolvedKitCapabilities?: ResolvedKitCapabilities;
-      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
@@ -625,6 +626,15 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.GetSessionSearchMessages, options),
     getSessionMessageRailIndex: (sessionId: string) =>
       ipcRenderer.invoke(CoworkIpcChannel.GetSessionMessageRailIndex, sessionId),
+    getProgressCard: (sessionId: string) =>
+      ipcRenderer.invoke(CoworkIpcChannel.GetProgressCard, sessionId),
+    dismissProgressCard: (sessionId: string, revision: number) =>
+      ipcRenderer.invoke(CoworkIpcChannel.DismissProgressCard, sessionId, revision),
+    onProgressCardChanged: (callback: (event: { sessionId: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string }) => callback(data);
+      ipcRenderer.on(CoworkIpcChannel.ProgressCardChanged, handler);
+      return () => ipcRenderer.removeListener(CoworkIpcChannel.ProgressCardChanged, handler);
+    },
     getContextUsage: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:contextUsage', sessionId),
     compactContext: (sessionId: string) =>
@@ -1041,6 +1051,7 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(AsrIpcChannel.CreateRealtimeSession, options),
   },
   artifact: {
+    office: createOfficeBridges(ipcRenderer),
     markdown: {
       read: (filePath: string) => ipcRenderer.invoke(MarkdownFileIpc.Read, filePath),
       save: (request: SaveMarkdownFileRequest) => ipcRenderer.invoke(MarkdownFileIpc.Save, request),

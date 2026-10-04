@@ -12,6 +12,8 @@ vi.mock('electron', () => ({
 import {
   __openClawTokenProxyTestUtils,
   consumeRecentOpenClawTokenProxyQuotaError,
+  startOpenClawTokenProxy,
+  stopOpenClawTokenProxy,
 } from './openclawTokenProxy';
 
 const testUtils = __openClawTokenProxyTestUtils;
@@ -699,4 +701,60 @@ test('web stream: completion check is skipped when no scan state is provided', a
     expect(res.end).toHaveBeenCalledTimes(1);
   });
   expect(res.destroy).not.toHaveBeenCalled();
+});
+
+test('accepts only loopback Host headers', () => {
+  expect(testUtils.isLoopbackHostHeader('127.0.0.1:54061')).toBe(true);
+  expect(testUtils.isLoopbackHostHeader('localhost:54061')).toBe(true);
+  expect(testUtils.isLoopbackHostHeader('[::1]:54061')).toBe(true);
+  expect(testUtils.isLoopbackHostHeader('LOCALHOST')).toBe(true);
+  expect(testUtils.isLoopbackHostHeader('attacker.example:54061')).toBe(false);
+  expect(testUtils.isLoopbackHostHeader('127.0.0.1.attacker.example')).toBe(false);
+  expect(testUtils.isLoopbackHostHeader(undefined)).toBe(false);
+});
+
+test('requires the proxy token through any provider API key header', () => {
+  const token = 'a'.repeat(48);
+  const authorized = (headers: http.IncomingHttpHeaders) => testUtils.isInboundRequestAuthorized(headers, token);
+  expect(authorized({ authorization: `Bearer ${token}` })).toBe(true);
+  expect(authorized({ authorization: `bearer ${token}` })).toBe(true);
+  expect(authorized({ 'x-api-key': token })).toBe(true);
+  expect(authorized({ 'x-goog-api-key': token })).toBe(true);
+  expect(authorized({ 'api-key': token })).toBe(true);
+  expect(authorized({})).toBe(false);
+  expect(authorized({ authorization: 'Bearer proxy-managed' })).toBe(false);
+  expect(authorized({ authorization: `Bearer ${token}x` })).toBe(false);
+  expect(authorized({ authorization: token })).toBe(false);
+  // Without a configured token the proxy keeps its previous open behavior.
+  expect(testUtils.isInboundRequestAuthorized({}, null)).toBe(true);
+});
+
+test('the running proxy rejects foreign hosts and missing tokens before touching the account', async () => {
+  const token = 'b'.repeat(48);
+  const getAuthTokens = vi.fn(() => null);
+  const { port } = await startOpenClawTokenProxy({
+    getAuthTokens,
+    refreshToken: vi.fn(),
+    getServerBaseUrl: () => 'https://server.example',
+    getClientVersion: () => 'test',
+    getInboundAuthToken: () => token,
+  });
+  const send = (headers: http.OutgoingHttpHeaders) => new Promise<number>((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/chat/completions', headers }, res => {
+      res.resume();
+      resolve(res.statusCode ?? 0);
+    });
+    req.on('error', reject);
+    req.end('{}');
+  });
+  try {
+    expect(await send({ host: 'attacker.example', authorization: `Bearer ${token}` })).toBe(403);
+    expect(await send({ authorization: 'Bearer proxy-managed' })).toBe(401);
+    expect(getAuthTokens).not.toHaveBeenCalled();
+    // Authorized requests reach the account layer (no signed-in account here).
+    expect(await send({ authorization: `Bearer ${token}` })).toBe(503);
+    expect(getAuthTokens).toHaveBeenCalledOnce();
+  } finally {
+    stopOpenClawTokenProxy();
+  }
 });

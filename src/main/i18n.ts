@@ -26,6 +26,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawPluginVerificationFailed: 'AI 引擎插件校验失败，已停止自动重启。请处理以下插件错误后重试：\n{error}',
     openClawStartupMigrationRefused: 'AI 引擎启动迁移未完成，已停止自动重启。请先处理以下旧数据，再重新启动网关：\n{error}',
     openClawStartupCompatibilityRepairing: '正在备份并修复旧版网关状态…',
+    openClawRepairCommandTimeout: '修复命令 {command} 等待 {seconds} 秒后超时，修复已停止。诊断记录：{path}',
+    openClawRepairCommandFailed: '修复命令 {command} 未完成。诊断记录：{path}',
     openClawDreamingStateRepairing: '正在备份并处理旧版记忆状态…',
     openClawRuntimeFilesMissing: 'AI 引擎运行文件缺失或无法读取，已停止启动。请退出应用，使用包含修复的最新安装包覆盖安装后重试。',
     // DeepSeek Harness (experimental)
@@ -43,7 +45,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Quit confirmation (native dialog shown on user-initiated quit)
     appQuitConfirmTitle: '退出 LobsterAI？',
     appQuitConfirmDetail: 'LobsterAI 关闭期间，定时任务不会运行，也无法回复 IM 消息。',
-    appQuitConfirmUnsafeMarkdown: '有 Markdown 修改尚未保存，且无法备份草稿。退出后这些修改将丢失。请取消退出，返回文档保存或复制修改。',
+    appQuitConfirmUnsafeMarkdown: '有文档修改尚未保存，也尚未备份。退出后这些修改将丢失。请取消退出，返回文档保存修改。',
     appQuitConfirmQuit: '退出',
     appQuitConfirmCancel: '取消',
     taskCompletionNotificationTitle: '任务已完成',
@@ -150,6 +152,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorContentFiltered: '内容未通过安全审核，请修改后重试。',
     coworkErrorToolLoopBlocked:
       '检测到 AI 在重复执行同一个工具调用且没有新的进展（通常是在等待一个耗时较长的后台任务），本轮已被安全停止。后台任务可能仍在运行，可以继续发消息让 AI 接着处理。',
+    coworkErrorModelRoutedToPlan:
+      '当前任务选择的模型是「{requested}」，但 AI 引擎把它解析成了套餐模型「{resolved}」。为避免误用套餐额度，这条消息没有发送。请重新选择模型后重试；如果仍然出现，请重启 LobsterAI。',
+    coworkErrorRunUsedPlanModel:
+      '这一轮本应使用你选择的「{requested}」，但 AI 引擎实际调用了套餐模型「{actual}」并且失败了，所以出现了套餐相关的报错。请重新选择模型后重试；如果仍然出现，请重启 LobsterAI。',
+    coworkErrorOutputLimitReached:
+      '模型单次回复达到了输出长度上限，任务没有完成。可以继续发消息让它从中断处接着做；如果反复出现，可以让它分段完成，比如分批写入文件、用脚本生成大段数据。',
+    coworkErrorOutputLimitReachedWithSettings:
+      '模型单次回复达到了输出长度上限，任务没有完成。可以继续发消息让它从中断处接着做；如果反复出现，可以在模型设置中调大「最大输出 Token」，或让它分段完成，比如分批写入文件、用脚本生成大段数据。',
     coworkErrorServerError: '服务端出现错误，请稍后重试。',
     coworkErrorEngineNotReady: 'AI 引擎正在启动中，请稍等几秒后重试。',
     serverModelMetadataUnavailable: '套餐模型信息暂不可用，请刷新后重试。',
@@ -403,6 +413,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    openClawRepairCommandTimeout: 'Repair command {command} timed out after {seconds} seconds. Repair has stopped. Diagnostics: {path}',
+    openClawRepairCommandFailed: 'Repair command {command} did not complete. Diagnostics: {path}',
     browserPasskeyChooseAccountTitle: 'Use a passkey',
     browserPasskeyChooseAccountMessage: 'Choose an account to sign in to {site}',
     browserPasskeyUnnamedAccount: 'Saved account',
@@ -430,7 +442,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Quit confirmation (native dialog shown on user-initiated quit)
     appQuitConfirmTitle: 'Quit LobsterAI?',
     appQuitConfirmDetail: 'While LobsterAI is closed, scheduled tasks will not run and IM messages will not be answered.',
-    appQuitConfirmUnsafeMarkdown: 'Some Markdown changes have not been saved and could not be backed up as drafts. Quitting will lose these changes. Cancel and return to the document to save or copy your changes.',
+    appQuitConfirmUnsafeMarkdown: 'Some document changes have not been saved or backed up. Quitting will lose these changes. Cancel and return to the document to save your changes.',
     appQuitConfirmQuit: 'Quit',
     appQuitConfirmCancel: 'Cancel',
     taskCompletionNotificationTitle: 'Task Complete',
@@ -550,6 +562,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Content did not pass the safety review. Please modify and try again.',
     coworkErrorToolLoopBlocked:
       'This turn was stopped safely because the AI kept repeating the same tool call with no new progress (usually while waiting on a slow background task). The background task may still be running — send another message to continue.',
+    coworkErrorModelRoutedToPlan:
+      'This task is set to {requested}, but the AI engine resolved it to the plan model {resolved}. The message was not sent, so your plan quota is not used by mistake. Reselect the model and try again; if this keeps happening, restart LobsterAI.',
+    coworkErrorRunUsedPlanModel:
+      'This turn should have used your selected model {requested}, but the AI engine called the plan model {actual} instead, and that call failed. That is why a plan error appeared. Reselect the model and try again; if this keeps happening, restart LobsterAI.',
+    coworkErrorOutputLimitReached:
+      'The model hit its output length limit before finishing this task. Send another message to let it continue where it stopped. If this keeps happening, ask it to work in smaller steps, such as writing files in batches or generating large data with a script.',
+    coworkErrorOutputLimitReachedWithSettings:
+      'The model hit its output length limit before finishing this task. Send another message to let it continue where it stopped. If this keeps happening, raise Max Output Tokens in the model settings, or ask it to work in smaller steps, such as writing files in batches or generating large data with a script.',
     coworkErrorServerError: 'Server error occurred. Please try again later.',
     coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
     serverModelMetadataUnavailable:

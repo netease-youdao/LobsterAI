@@ -45,6 +45,7 @@ import {
 import {
   buildCoworkErrorDetail,
   type CoworkErrorDetail,
+  CoworkErrorModelSource,
 } from '../../../shared/cowork/errorDetail';
 import {
   type CoworkGoal,
@@ -65,6 +66,7 @@ import {
   isPlanImplementationApproval,
   PLAN_MODE_EXECUTION_OVERRIDE_MARKER,
 } from '../../../shared/cowork/planMode';
+import { ProgressCardEvent } from '../../../shared/cowork/progressCard';
 import {
   buildSelectedTextPromptSection,
   type CoworkSelectedTextSnippet,
@@ -175,12 +177,19 @@ import {
   shouldReplaceLocalConversationWithCronHistory,
 } from './openclawCronRunHistorySync';
 import { OpenClawImWorkloadTracker } from './openclawImWorkloadTracker';
+import { OpenClawProgressCards } from './openclawProgressCard';
 import { OpenClawQuestionController } from './openclawQuestionController';
 import {
   buildOpenClawTranscriptOversizedError,
   inspectOpenClawTranscriptSafety,
 } from './openclawTranscriptSafety';
 import { OpenClawTurnHistorySync } from './openclawTurnHistorySync';
+import {
+  checkSessionModelRoute,
+  resolvePlanModelSubstitutionErrorOverride,
+  SessionModelRouteError,
+  SessionModelRouteVerdict,
+} from './sessionModelRouteGuard';
 import {
   buildSubagentChildHistorySyncPlan,
 } from './subagent/childHistorySync';
@@ -1575,6 +1584,22 @@ export const isIncompleteStopReason = (stopReason: string | undefined): boolean 
   return stopReason === GatewayStopReason.Length;
 };
 
+/**
+ * OpenClaw fails a run that exhausted the model's output budget with a generic
+ * "ended before producing a complete result" error. Explain the output limit
+ * instead, and only point at the Max Output Tokens setting when the model comes
+ * from a user-configured provider that actually has it.
+ */
+export function resolveOpenClawOutputLimitErrorMessage(
+  stopReason: string | undefined,
+  modelSource: CoworkErrorModelSource | undefined,
+): string | null {
+  if (!isIncompleteStopReason(stopReason)) return null;
+  return modelSource && modelSource !== CoworkErrorModelSource.LobsterAIPlan
+    ? t('coworkErrorOutputLimitReachedWithSettings')
+    : t('coworkErrorOutputLimitReached');
+}
+
 export function normalizeOpenClawRuntimeErrorMessage(errorMessage: string): string {
   const normalized = errorMessage.trim();
   switch (normalized) {
@@ -1605,6 +1630,7 @@ export type OpenClawSafeRuntimeErrorMetadata = {
   providerErrorMessagePreview?: string;
   rawErrorPreview?: string;
   rawErrorHash?: string;
+  stopReason?: string;
 };
 
 const COWORK_ERROR_KEY_BY_OPENCLAW_FAILOVER_REASON: Record<string, string> = {
@@ -1668,6 +1694,7 @@ function normalizeOpenClawSafeRuntimeErrorMetadata(
     'providerErrorMessagePreview',
     'rawErrorPreview',
     'rawErrorHash',
+    'stopReason',
   ] as const) {
     const value = pickStringField(metadata, key);
     if (value) normalized[key] = value;
@@ -3387,6 +3414,23 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       `Action ${command.action}.`,
     );
     this.emit('message', sessionId, userMessage);
+  }
+
+  // Native progress cards live in the Gateway under the session key the run
+  // writes them with: the active turn's key, else the session's first key.
+  private readonly progressCards = new OpenClawProgressCards({
+    client: () => this.requireGatewayClient(),
+    sessionKey: (sessionId) => this.activeTurns.get(sessionId)?.sessionKey
+      ?? this.getSessionKeysForSession(sessionId)[0],
+    changed: (sessionId) => this.emit(ProgressCardEvent.Changed, sessionId),
+  });
+
+  getProgressCard(sessionId: string) {
+    return this.progressCards.get(sessionId);
+  }
+
+  dismissProgressCard(sessionId: string, revision: number) {
+    return this.progressCards.dismiss(sessionId, revision);
   }
 
   async getContextUsage(sessionId: string): Promise<CoworkContextUsage | null> {
@@ -5426,7 +5470,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         const openClawThinkingLevel = thinkingLevel
           ? resolveOpenClawThinkingLevelForModel(model, thinkingLevel)
           : undefined;
-        await this.requestSessionPatchWithProfile({
+        const response = await this.requestSessionPatchWithProfile({
           sessionId,
           sessionKey,
           patch: {
@@ -5441,9 +5485,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           timeoutMs: OpenClawRuntimeAdapter.SESSION_PATCH_SEND_TIMEOUT_MS,
         });
         this.markGatewayRpcSuccess();
+        this.assertSessionModelRoute(sessionId, sessionKey, model, response);
         this.rememberSessionModelPatch(sessionId, sessionKey, model, source);
       });
     } catch (error) {
+      if (error instanceof SessionModelRouteError) {
+        this.sessionModelPatchStateBySession.delete(sessionId);
+        throw error;
+      }
       this.recordGatewayRpcFailure('sessions.patch', error);
       console.warn('[OpenClawRuntime] failed to patch the session model before chat.send:', error);
       const confirmedAfterFailure = this.getConfirmedSessionModelPatch(sessionId, sessionKey, model, source);
@@ -5456,6 +5505,28 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         throw error;
       }
     }
+  }
+
+  /** Blocks a send that the gateway resolved to a plan model the user did not select. */
+  private assertSessionModelRoute(
+    sessionId: string,
+    sessionKey: string,
+    requestedModelRef: string,
+    patchResult: OpenClawSessionPatchGatewayResult | undefined,
+  ): void {
+    const route = checkSessionModelRoute(requestedModelRef, patchResult);
+    if (route.verdict === SessionModelRouteVerdict.Ok || !route.resolvedModelRef) return;
+    const details = [
+      `Session ${sessionId}.`,
+      `OpenClaw key ${sessionKey}.`,
+      `Requested ${requestedModelRef}.`,
+      `Resolved ${route.resolvedModelRef}.`,
+    ];
+    if (route.verdict === SessionModelRouteVerdict.PlanSubstitution) {
+      console.error('[OpenClawRuntime] blocked chat.send because the gateway resolved a plan model the user did not select.', ...details);
+      throw new SessionModelRouteError(requestedModelRef, route.resolvedModelRef);
+    }
+    console.warn('[OpenClawRuntime] gateway resolved a different session model than requested.', ...details);
   }
 
   private async assertTranscriptSafeForRun(options: {
@@ -6199,6 +6270,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         // Setting gatewayClient earlier would let concurrent code send
         // request frames before the connect frame, causing 1008 rejection.
         this.gatewayClient = client;
+        this.progressCards.reconnected();
         this.gatewayClientVersion = connection.version;
         this.gatewayClientEntryPath = connection.clientEntryPath;
         this.gatewayReconnectSuppressed = false;
@@ -6260,12 +6332,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         }
 
         console.warn('[OpenClawRuntime] gateway WS disconnected — code:', _code, 'reason:', reason);
-        if (_code === WebSocketCloseCode.ServiceRestart) {
-          // The gateway is restarting itself after a config reload. Flag the
-          // window so the supervisor doesn't kill the process mid-restart
-          // (which poisons the single-instance lock file on Windows).
-          this.engineManager.noteGatewaySelfRestart(reason || 'service restart');
-        }
         const gatewayFailure = typeof this.engineManager.getLastGatewayFailure === 'function'
           ? this.engineManager.getLastGatewayFailure()
           : null;
@@ -6804,7 +6870,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     resolvedError: ResolvedOpenClawRuntimeError;
     detailRawErrorMessage: string;
   } {
-    const override = resolveOpenClawToolLoopErrorOverride(turn?.toolLoopBlockReason, rawErrorMessage);
+    const toolLoopOverride = resolveOpenClawToolLoopErrorOverride(turn?.toolLoopBlockReason, rawErrorMessage);
+    const planOverride = toolLoopOverride
+      ? null
+      : resolvePlanModelSubstitutionErrorOverride(turn?.model, rawErrorMessage, metadata);
+    // The plan call's quota capture belongs to this error; keep it from labeling the next one.
+    if (planOverride) consumeRecentOpenClawTokenProxyQuotaError();
+    const override = toolLoopOverride ?? planOverride;
     if (override) {
       return {
         resolvedError: buildResolvedRuntimeError(override.errorMessage),
@@ -7424,6 +7496,26 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     // events (agent, tool updates) keep flowing — causing false-positive
     // disconnect from the TickWatchdog.
     this.lastTickTimestamp = Date.now();
+
+    if (event.event === ProgressCardEvent.GatewayChanged) {
+      this.progressCards.changed(event.payload);
+      return;
+    }
+
+    if (event.event === OpenClawGatewayEvent.Shutdown) {
+      // A close code describes the transport, not process ownership. Use the
+      // native restart announcement and let the supervisor observe child exit.
+      const payload = isRecord(event.payload) ? event.payload : {};
+      if (!this.gatewayStoppingIntentionally
+        && typeof payload.restartExpectedMs === 'number'
+        && Number.isFinite(payload.restartExpectedMs) && payload.restartExpectedMs >= 0
+        && this.engineManager.getGatewayProcessPid() !== null) {
+        this.engineManager.noteGatewaySelfRestart(
+          typeof payload.reason === 'string' ? payload.reason : 'gateway restart announced',
+        );
+      }
+      return;
+    }
 
     if (event.event === 'tick') {
       return;
@@ -10766,7 +10858,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (/^400\b/.test(errorMessage)) {
       errorMessage += '\n\n[Hint: If the model attempted to read an image file, this may be because the model does not support image input. Consider using a vision-capable model or avoid sending image files.]';
     }
-    const errorDetail = this.buildTurnErrorDetail(sessionId, turn, resolved.detailRawErrorMessage, errorMessage, errorMetadata);
+    let errorDetail = this.buildTurnErrorDetail(sessionId, turn, resolved.detailRawErrorMessage, errorMessage, errorMetadata);
+    // A tool-loop veto has already replaced the copy; its detail carries the veto reason.
+    const outputLimitMessage = resolved.detailRawErrorMessage === rawErrorMessage && !resolvedError.enterpriseQuotaError
+      ? resolveOpenClawOutputLimitErrorMessage(errorMetadata.stopReason, errorDetail?.modelSource)
+      : null;
+    if (outputLimitMessage) {
+      errorMessage = outputLimitMessage;
+      errorDetail = { ...errorDetail, rawErrorMessage };
+    }
 
     const erroredSessionKey = turn.sessionKey;
     this.clearContextMaintenanceState(sessionId, turn, 'chat error');

@@ -1,5 +1,28 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Config candidate revision cache (upstream backport)
+
+`openclaw-config-candidate-cache-invalidation.patch` backports the production
+changes from [OpenClaw #142169](https://github.com/openclaw/openclaw/pull/142169),
+merged as `37dbd0aac6556ea9a63f045cabec91963d0571b3` on 2026-09-08.
+It invalidates `config.get` at candidate observation for every writer, including
+agent mutations and watched edits, instead of only config RPC persistence.
+Application revisions and committed notifications still advance at acceptance.
+
+The patch adapts context to v2026.8.1, with no new reload policy. The upstream
+test file uses a newer server harness, so its fixture rewrite is not backported.
+Validate the cache/reloader tests and the real Electron/Gateway config lifecycle
+flow described in `specs/bugfixes/openclaw-config-hot-reload-delivery/2026-09-23-config-lifecycle-design.md`.
+Rebuild the Gateway bundle from patched source; changing the source alone does
+not update the bundled runtime.
+
+Removal: upstream v2026.9.5 contains this commit (v2026.8.1 does not). On an
+upgrade that contains equivalent candidate-observation invalidation, remove this
+patch and rerun agent-mutation/watched-edit freshness, genuine stale-CAS rejection,
+and delayed-application checks. Do not remove LobsterAI's application barrier or
+pending recovery: persistence and runtime application remain different states.
+The broader reload changes in #138112 and #154792 are not part of this backport.
+
 ## Device identity conflicts without an import receipt
 
 `openclaw-device-identity-preservation.patch` aligns the identity migration owner
@@ -489,3 +512,100 @@ Verify with upstream `runtime-facts-prompt.test.ts`,
 while a background `exec` is running and that the gateway log no longer reports
 `[prompt-cache] cache read dropped` at run boundaries. Remove this patch when
 the pinned upstream includes `#140799`.
+
+## Malformed provider tool calls
+
+`openclaw-openai-completions-tool-call-repair.patch` and
+`openclaw-malformed-tool-call-continuation.patch` keep one malformed tool call
+from ending a whole agent turn.
+
+Why: v2026.8.1 parses OpenAI-compatible terminal tool arguments with plain
+`JSON.parse`. When the model writes a complete call whose strings contain a
+raw line break, an invalid escape (`\'`, `\|`), or an unescaped quote, the
+transport rejects the whole assistant message ("Provider returned an incomplete
+or malformed tool call") and drops the call. The runner's own argument-repair
+wrapper never sees it, and every existing retry is off after earlier tools ran,
+so the user got "Agent couldn't generate a response. Note: some tool actions may
+have already been executed". On 2026-09-23 a deepseek-flash run ended this way
+after seven tools; replying "继续" finished the same edit on the next try.
+v2026.6.1 parsed these buffers leniently, so this failure is new with 8.1.
+
+The repair patch backports upstream v2026.9.5 `repairStringLiterals` and applies
+it to OpenAI-compatible completions (upstream only uses it for Anthropic). Only
+raw control characters and invalid escapes inside string values are repaired;
+valid escapes are preserved as written. Truncated, non-object, empty, or unnamed
+calls stay rejected so a cut-off write never runs. A rejection appends a
+`malformed_tool_call_arguments` message diagnostic with shape facts only
+(reason, mapped provider stop reason, argument length and hash, JSON failure
+class and position). The error class keeps these facts off `code`, `cause`, and
+`errorBody`, so Anthropic-lane error projection and failover classification do
+not change.
+
+The continuation patch gives such a turn up to two internal continuations
+(`activateInternalPrompt`, not persisted as a user turn). The rejected call
+never ran and the turn resumes after the committed transcript, so this is the
+one retry that may follow side-effecting tools. It skips aborted, timed-out,
+failed, yielded, client-tool, approval, and already-finalized attempts. A
+settled-tool final-answer pass is not requested for a rejected call; it would
+drop the action the model was taking. After two failures the existing
+incomplete-turn error is shown. Logs record `malformed tool call rejected
+before execution` or `malformed tool call continuations exhausted` with the
+diagnostic summary.
+
+Verify with upstream `transport-stream-shared.test.ts`,
+`openai-completions.legacy-function-call.test.ts`,
+`malformed-tool-call-recovery.test.ts`,
+`terminal-resolution.malformed-tool-call.test.ts`, and the full-entry
+`run.malformed-tool-call-continuation.integration.test.ts`. Then run LobsterAI's
+`malformedToolCallRecovery` test and rebuild the runtime. Remove the repair
+patch when the pinned upstream applies terminal string-literal repair to
+OpenAI-compatible completions. Remove the continuation patch when upstream
+recovers rejected tool calls after side effects.
+
+## Whole-turn replay after a started model call
+
+`openclaw-skip-turn-replay-after-model-call.patch` stops the reply runner from
+replaying a whole turn once that turn has started a model call. This applies to
+both outer replays in `agent-runner-error-handler.ts`: the one-shot transient
+HTTP retry and the overload retry.
+
+Why: v2026.8.1 still has both replays, and it adds keyed user admission to the
+session transcript. A started model call has already committed the turn's
+`<runId>:user` message and, when the call fails, its error reply. The replay
+admits the same keyed user again, behind that reply, and `SessionManager`
+rejects it with "Session transcript keyed user is outside the current turn"
+(or "Transcript idempotency key ... conflicts with the admitted message"). The
+user then sees "LLM request failed." with that internal text 2.5s later,
+instead of the real provider error. The existing replay guard only reacts to
+tool execution and CLI output; the embedded runner never emits
+`assistant_output_started`, so streamed text or reasoning did not stop the
+replay. On 2026-09-24 a Windows user hit this 6 times out of 6. Each case
+followed a mid-stream `net::ERR_SSL_PROTOCOL_ERROR` in the token proxy, which
+OpenClaw reports as `LLM request timed out.` with `terminated`. v2026.6.1 had
+the replay but not the keyed guard, so this failure is new with 8.1.
+
+The patch adds `OverloadRetryState.modelCallStarted`. The embedded runner's
+`model_call_started` phase sets it, and both replay branches require it to be
+false. Failures before any model call (for example an auth-profile cooldown
+classified as overloaded) still replay as before, with the delayed overload
+notice. After a started call, the first failure is surfaced directly with its
+own classification: LobsterAI maps `providerRuntimeFailureKind: timeout` to its
+response-timeout message. CLI backends (`process_spawned`) are unchanged.
+
+Verify with the upstream suites. The new cases in the provider-failures suite
+check that overloaded, HTTP 503 and interrupted-stream failures are not
+replayed after `model_call_started`. The existing pre-call 503 and overload
+retry cases must still pass:
+
+```sh
+node_modules/.bin/vitest run src/auto-reply/reply/agent-runner-execution-provider-failures.test.ts src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
+node_modules/.bin/vitest run --config test/vitest/vitest.e2e.config.ts src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
+```
+
+These files already fail in 16 cases before this patch: failure copy and trace
+segments changed by other LobsterAI patches. The failing set must stay the
+same. Then run LobsterAI's `turnReplayAfterModelCall` test and rebuild the
+runtime. Remove this patch when the pinned upstream contains
+[OpenClaw #134281](https://github.com/openclaw/openclaw/pull/134281) (v2026.9.1
+and later). That change deletes both outer replays and budgets transient
+retries inside the embedded runner, before any visible output.

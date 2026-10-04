@@ -296,7 +296,7 @@ const UserMessageItem: React.FC<{
         <div>
           <div className="flex items-start gap-3 flex-row-reverse">
             <div className="w-full min-w-0 flex flex-col items-end">
-              <div className="w-fit max-w-full rounded-2xl px-4 py-2.5 bg-surface text-foreground shadow-subtle">
+              <div className="w-fit max-w-full rounded-2xl px-4 py-2.5 bg-chat-user text-chat-user-foreground shadow-subtle">
                 {browserAnnotationCount > 0 && sessionId && (
                   <BrowserAnnotationMessageAttachments
                     draftKey={sessionId}

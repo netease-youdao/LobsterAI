@@ -273,6 +273,8 @@ describe('gateway terminal startup failures', () => {
       gatewayFailureByProcess: new WeakMap(),
       expectedGatewayExits: new WeakSet(),
       gatewayReadyProcesses: new WeakSet(),
+      startupPrepSkippedProcesses: new WeakSet(),
+      startupPrepMarker: { check: vi.fn(() => ({ valid: false, reason: 'test' })), record: vi.fn(), clear: vi.fn() },
       gatewayRestartTimer: null,
       gatewayRestartWait: null,
       gatewayRestartAttempt: 0,
@@ -343,6 +345,22 @@ describe('gateway terminal startup failures', () => {
     expect(pendingRestart).not.toHaveBeenCalled();
     expect(internals.gatewayRestartTimer).toBeNull();
     expect(internals.gatewayRestartAttempt).toBe(0);
+  });
+  test('retries with the startup helpers instead of blocking when a refusal follows skipped preparation', async () => {
+    const { child, manager, start } = makeSupervisor(`${MIGRATION_REFUSAL}\n${MIGRATION_WARNING}`);
+    const internals = manager as unknown as {
+      startupPrepSkippedProcesses: WeakSet<ChildProcess>;
+      startupPrepMarker: { clear: ReturnType<typeof vi.fn> };
+    };
+    internals.startupPrepSkippedProcesses.add(child);
+
+    child.emit('close', 1);
+
+    expect(internals.startupPrepMarker.clear).toHaveBeenCalledOnce();
+    expect(manager.isGatewayStartupBlocked()).toBe(false);
+    expect(manager.getStatus()).toMatchObject({ phase: OpenClawEnginePhase.Starting });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(start).toHaveBeenCalledExactlyOnceWith('auto-restart-after-crash');
   });
   test('retains automatic retries for plugin warnings followed by a transient crash', async () => {
     const { child, manager, start } = makeSupervisor('[config] warnings: plugins.allow: plugin not installed: qqbot\nPlugin download failed: ECONNRESET');

@@ -326,6 +326,25 @@ const artifactSlice = createSlice({
       }
     },
 
+    /**
+     * Keep a file opened from a message link, which no card covers, in the
+     * session so the panel can show it. Unlike addArtifact this is not a
+     * detection, so the library does not index it.
+     */
+    addLinkedFileArtifact(state, action: PayloadAction<{ sessionId: string; artifact: Artifact }>) {
+      const { sessionId, artifact } = action.payload;
+      if (!state.artifactsBySession[sessionId]) {
+        state.artifactsBySession[sessionId] = [];
+      }
+      const artifacts = state.artifactsBySession[sessionId];
+      const existingIndex = artifacts.findIndex(item => item.id === artifact.id);
+      if (existingIndex >= 0) {
+        artifacts[existingIndex] = artifact;
+      } else {
+        artifacts.push(artifact);
+      }
+    },
+
     updateLocalServiceProjectMetadata(
       state,
       action: PayloadAction<UpdateLocalServiceProjectMetadataPayload>,
@@ -446,6 +465,7 @@ const artifactSlice = createSlice({
 export const {
   setSessionArtifacts,
   addArtifact,
+  addLinkedFileArtifact,
   updateLocalServiceProjectMetadata,
   selectArtifact,
   openArtifactPreviewTab,
