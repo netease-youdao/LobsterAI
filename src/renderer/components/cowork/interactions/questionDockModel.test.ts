@@ -78,6 +78,16 @@ describe('questionResolved', () => {
 });
 
 describe('permissionDockAnswer', () => {
+  test('presentation titles do not replace the original plugin answer key or request data', () => {
+    const question = 'Long question. '.repeat(30);
+    const permission = pluginPermission([{ title: 'Short title', subtitle: 'Context', question, options }]);
+    const request = permissionDockRequest(permission)!;
+    expect(request.questions[0]).toMatchObject({ title: question, displayTitle: 'Short title', subtitle: 'Context' });
+    expect(permissionDockAnswer(request, {
+      step: 0, answers: { 'question-1': ['B'] }, freeText: {}, skipped: [],
+    })).toEqual({ behavior: 'allow', updatedInput: { ...permission.toolInput, answers: { [question]: 'B' }, skippedQuestionIds: [] } });
+  });
+
   const draft: QuestionDraft = {
     step: 1,
     answers: { 'question-1': ['A (Recommended)', 'B'], timing: [] },

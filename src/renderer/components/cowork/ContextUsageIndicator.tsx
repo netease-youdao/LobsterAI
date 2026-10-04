@@ -103,7 +103,7 @@ const ContextUsageIndicator: React.FC<ContextUsageIndicatorProps> = ({
         </svg>
       </button>
       {showTooltip && (
-        <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 hidden min-w-max max-w-[min(260px,calc(100vw-24px))] -translate-x-1/2 whitespace-nowrap rounded-xl border border-border bg-surface px-3 py-2 text-left text-[12px] leading-5 text-foreground shadow-popover group-hover:block">
+        <span role="tooltip" className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 hidden w-[260px] max-w-[calc(100vw-24px)] whitespace-normal break-words rounded-xl border border-border bg-surface px-3 py-2 text-left text-[12px] leading-5 text-foreground shadow-popover group-hover:block group-focus-within:block">
           {tooltipLines.map((line, index) => (
             <React.Fragment key={`${line}-${index}`}>
               <span className={index === tooltipLines.length - 1 && !isDisabled && !compacting ? 'text-secondary' : undefined}>
