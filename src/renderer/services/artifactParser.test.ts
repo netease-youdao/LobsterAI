@@ -18,6 +18,31 @@ import {
   toAbsoluteArtifactPath,
 } from './artifactParser';
 
+describe('abbreviated artifact paths', () => {
+  test.each(['…/demo.mp4', '.../demo.mp4', 'out/…/demo.mp4', 'C:\\work\\...\\demo.mp4']) (
+    'does not infer a file from the display placeholder %s', filePath => {
+      expect(parseFilePathsFromText(`render -o "${filePath}"`, 'reply', 'session')).toEqual([]);
+    },
+  );
+
+  test('keeps relative directories and ellipses inside real filenames', () => {
+    expect(parseFilePathsFromText('"../out/demo…v2.mp4" "./out/demo...v2.mp4"', 'reply', 'session')
+      .map(artifact => artifact.filePath)).toEqual(['../out/demo…v2.mp4', './out/demo...v2.mp4']);
+  });
+
+  test.each(['C:\\work\\…\\demo.mp4', 'file:///C:/work/%E2%80%A6/demo.mp4']) (
+    'removes restored abbreviated cards regardless of ordering: %s', filePath => {
+      const [delivered] = parseFileLinksFromMessage('[demo.mp4](file:///C:/work/demo.mp4)', 'reply', 'session');
+      const stale = { ...delivered, id: 'stale', filePath, createdAt: delivered.createdAt + 1000 };
+      for (const candidates of [[delivered, stale], [stale, delivered]]) {
+        const result = dedupeArtifactsForDisplay(candidates);
+        expect(result).toHaveLength(1);
+        expect(result[0]).toBe(delivered);
+      }
+    },
+  );
+});
+
 describe('normalizeArtifactFilePath', () => {
   test('strips MEDIA prefix from paths parsed as bare file paths', () => {
     expect(normalizeArtifactFilePath('MEDIA:/Users/admin/work/test/test0623/generated-video.mp4'))

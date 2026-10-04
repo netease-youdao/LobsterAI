@@ -56,6 +56,11 @@ export function normalizeFilePathForDedup(p: string): string {
   return normalized.replace(/\\/g, '/').toLowerCase();
 }
 
+// Explanatory commands may shorten directories to "…/result.mp4". These
+// placeholders must not become inferred files or replace a real delivery link.
+const isAbbreviatedArtifactPath = (filePath: string): boolean =>
+  normalizeArtifactFilePath(filePath).split(/[\\/]/).some(segment => /^(?:…+|\.{3,})$/.test(segment));
+
 export function normalizeProjectDirectoryForDedup(projectDirectory: string): string {
   let normalized = projectDirectory.trim().replace(/\\/g, '/');
   while (normalized.length > 1 && normalized.endsWith('/')) {
@@ -228,6 +233,8 @@ export function dedupeArtifactsForDisplay(
   const keyToIndex = new Map<string, number>();
 
   for (const artifact of artifacts) {
+    // Also filter inferred cards restored from a previous session snapshot.
+    if (artifact.filePath && isAbbreviatedArtifactPath(artifact.filePath)) continue;
     const keys = getArtifactIdentityKeys(artifact);
     const existingIndex = keys
       .map(key => keyToIndex.get(key))
@@ -895,6 +902,7 @@ export function parseFilePathsFromText(
     if (/:\/\//.test(rawMatch) && !/^file:/i.test(rawMatch.trim())) continue;
 
     const filePath = normalizeArtifactFilePath(rawMatch);
+    if (isAbbreviatedArtifactPath(filePath)) continue;
 
     const ext = getFileExtension(filePath);
     const artifactType = getArtifactTypeFromExtension(ext);
