@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import { LogReporterEndpoint } from '../../shared/analytics/constants';
-import { isAnalyticsEndpointUrl, sanitizeUrlForLog, SENSITIVE_LOG_KEY_PATTERN, serializeForLog } from './sanitizeForLog';
+import { isAnalyticsEndpointUrl, redactBodyForLog, sanitizeUrlForLog, SENSITIVE_LOG_KEY_PATTERN, serializeForLog } from './sanitizeForLog';
 
 // ---------------------------------------------------------------------------
 // SENSITIVE_LOG_KEY_PATTERN — make sure every expected key variant matches
@@ -176,5 +176,41 @@ describe('isAnalyticsEndpointUrl', () => {
   test('returns false for unparsable input', () => {
     expect(isAnalyticsEndpointUrl('not a url')).toBe(false);
     expect(isAnalyticsEndpointUrl('')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('redactBodyForLog', () => {
+  test('redacts credential fields in a JSON request/response body', () => {
+    const body = JSON.stringify({
+      status: 'success',
+      access_token: 'secret-access-token',
+      refresh_token: 'secret-refresh-token',
+      expired_in: 3600,
+    });
+    const logged = redactBodyForLog(body);
+    expect(logged).not.toContain('secret-access-token');
+    expect(logged).not.toContain('secret-refresh-token');
+    expect(logged).toContain('3600');
+  });
+
+  test('redacts credential fields in a form-urlencoded OAuth token request body', () => {
+    const body = 'grant_type=device_code&client_id=abc123&user_code=WXYZ&code_verifier=secret-pkce-verifier';
+    const logged = redactBodyForLog(body);
+    expect(logged).not.toContain('secret-pkce-verifier');
+    expect(logged).toContain('device_code');
+    expect(logged).toContain('abc123');
+  });
+
+  test('passes plain non-credential JSON through unredacted', () => {
+    const body = JSON.stringify({ model: 'gpt-5', max_tokens: 1024 });
+    const logged = redactBodyForLog(body);
+    expect(logged).toContain('gpt-5');
+    expect(logged).toContain('1024');
+  });
+
+  test('leaves unparseable free-text bodies untouched (e.g. a streamed response)', () => {
+    const body = 'data: {"delta":"hello"}\n\ndata: [DONE]\n\n';
+    expect(redactBodyForLog(body)).toBe(body.trim());
   });
 });
