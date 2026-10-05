@@ -1,6 +1,5 @@
 import { ipcMain } from 'electron';
 import fs from 'fs';
-import path from 'path';
 
 import { updatePluginSkillIdsFromReport } from '../../skills';
 import type { SkillManager } from '../../skills/skillManager';
@@ -56,18 +55,11 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
 
   ipcMain.handle('skills:delete', async (_event, id: string) => {
     try {
-      // Read _meta.json before deletion to get OpenClaw source path
-      let openclawSourceDir: string | null = null;
-      try {
-        const skillRoot = getSkillManager().getSkillsRoot();
-        const metaPath = path.join(skillRoot, id, '_meta.json');
-        if (fs.existsSync(metaPath)) {
-          const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-          if (meta.openclawSourceDir) {
-            openclawSourceDir = meta.openclawSourceDir;
-          }
-        }
-      } catch { /* best-effort */ }
+      // Look up the OpenClaw source path from our own store, populated only by
+      // syncSkillsFromOpenClaw from the gateway's own report. A skill's own
+      // _meta.json is attacker-controlled content copied verbatim from the
+      // installed package, so it must never be trusted as a deletion target.
+      const openclawSourceDir = getSkillManager().getOpenClawSourceDir(id);
 
       const skills = await getSkillManager().deleteSkill(id);
 
@@ -80,6 +72,7 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
           console.warn('[skills] Failed to remove skill from OpenClaw workspace:', ocError);
         }
       }
+      getSkillManager().clearOpenClawSourceDir(id);
 
       return { success: true, skills };
     } catch (error) {

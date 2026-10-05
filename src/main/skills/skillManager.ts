@@ -410,6 +410,11 @@ const SKILLS_DIR_NAME = 'SKILLs';
 const SKILL_FILE_NAME = 'SKILL.md';
 const SKILLS_CONFIG_FILE = 'skills.config.json';
 const SKILL_STATE_KEY = 'skills_state';
+// Keyed by skillKey. Written only by syncSkillsFromOpenClaw, from the
+// OpenClaw gateway's own report, never from a skill package's own files, so a
+// malicious _meta.json shipped inside an installed skill cannot influence
+// which path deleteSkill later removes from the OpenClaw workspace.
+const OPENCLAW_SOURCE_DIR_KEY = 'skills_openclaw_source_dirs';
 const WATCH_DEBOUNCE_MS = 250;
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
@@ -1794,15 +1799,18 @@ export class SkillManager {
         const targetDir = path.join(root, entry.skillKey);
         if (fs.existsSync(targetDir)) continue;
         cpRecursiveSync(srcDir, targetDir);
-        // Record OpenClaw source path so we can remove it on delete
-        try {
-          const metaPath = path.join(targetDir, '_meta.json');
-          const meta = fs.existsSync(metaPath)
-            ? JSON.parse(fs.readFileSync(metaPath, 'utf8'))
-            : {};
-          meta.openclawSourceDir = srcDir;
-          fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n', 'utf8');
-        } catch { /* best-effort */ }
+        // Record OpenClaw source path so we can remove it on delete. Stored in
+        // our own app-controlled store, keyed by skillKey, rather than written
+        // into the copied _meta.json: that file now lives inside targetDir,
+        // which cpRecursiveSync just populated from entry.baseDir, a path this
+        // sync call itself resolved, so it is trustworthy here. But a skill
+        // installed by the normal download/import path (downloadSkill,
+        // upgradeSkill) also lands in the same directory via the same
+        // cpRecursiveSync helper, copying whatever _meta.json the package
+        // itself shipped, verbatim and unvalidated. Writing this value into
+        // that file would make a later deleteSkill() trust a field a skill
+        // author fully controls.
+        this.recordOpenClawSourceDir(entry.skillKey, srcDir);
         // Respect disabled state from OpenClaw
         if (entry.disabled) {
           const state = this.loadSkillStateMap();
@@ -2605,6 +2613,35 @@ export class SkillManager {
 
   private saveSkillStateMap(map: SkillStateMap): void {
     this.getStore().set(SKILL_STATE_KEY, map);
+  }
+
+  private loadOpenClawSourceDirs(): Record<string, string> {
+    const raw = this.getStore().get(OPENCLAW_SOURCE_DIR_KEY) as Record<string, string> | undefined;
+    return raw && typeof raw === 'object' ? raw : {};
+  }
+
+  private recordOpenClawSourceDir(skillKey: string, srcDir: string): void {
+    const map = this.loadOpenClawSourceDirs();
+    map[skillKey] = srcDir;
+    this.getStore().set(OPENCLAW_SOURCE_DIR_KEY, map);
+  }
+
+  /**
+   * The OpenClaw workspace path associated with a synced skill, if any. Only
+   * ever set by syncSkillsFromOpenClaw from the gateway's own report, so a
+   * skill package cannot inject or override this by shipping its own
+   * _meta.json with an openclawSourceDir field.
+   */
+  getOpenClawSourceDir(skillKey: string): string | null {
+    return this.loadOpenClawSourceDirs()[skillKey] ?? null;
+  }
+
+  clearOpenClawSourceDir(skillKey: string): void {
+    const map = this.loadOpenClawSourceDirs();
+    if (skillKey in map) {
+      delete map[skillKey];
+      this.getStore().set(OPENCLAW_SOURCE_DIR_KEY, map);
+    }
   }
 
   private loadSkillsDefaults(roots: string[]): Record<string, SkillDefaultConfig> {
