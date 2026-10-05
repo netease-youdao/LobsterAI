@@ -1,4 +1,5 @@
 import { net } from 'electron';
+import crypto from 'crypto';
 import http from 'http';
 
 import { isLobsterAIQuotaExhaustedError } from '../../common/coworkErrorClassify';
@@ -23,6 +24,7 @@ const GEMINI_FALLBACK_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
 
 let proxyServer: http.Server | null = null;
 let proxyPort: number | null = null;
+let proxyAuthToken: string | null = null;
 let recentQuotaError: OpenClawTokenProxyQuotaError | null = null;
 
 // Injected dependencies
@@ -83,6 +85,7 @@ export function startOpenClawTokenProxy(config: OpenClawTokenProxyConfig): Promi
       return;
     }
 
+    proxyAuthToken = crypto.randomBytes(24).toString('hex');
     const server = http.createServer(handleRequest);
 
     server.listen(0, PROXY_BIND_HOST, () => {
@@ -112,6 +115,7 @@ export function stopOpenClawTokenProxy(): void {
   }
   proxyServer = null;
   proxyPort = null;
+  proxyAuthToken = null;
   recentQuotaError = null;
   tokenGetter = null;
   tokenRefresher = null;
@@ -125,6 +129,19 @@ export function stopOpenClawTokenProxy(): void {
 
 export function getOpenClawTokenProxyPort(): number | null {
   return proxyPort;
+}
+
+export function getOpenClawTokenProxyToken(): string | null {
+  return proxyAuthToken;
+}
+
+function isAuthorizedOpenClawProxyRequest(req: http.IncomingMessage): boolean {
+  if (!proxyAuthToken) return false;
+  const authHeader = req.headers.authorization || '';
+  const candidate = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  const expected = Buffer.from(proxyAuthToken);
+  const actual = Buffer.from(candidate);
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
 }
 
 export function consumeRecentOpenClawTokenProxyQuotaError(
@@ -192,6 +209,16 @@ function writeAuthSessionChanged(res: http.ServerResponse): void {
 
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   try {
+    // Loopback binding only limits which network a caller must be on, not
+    // which local process may call in; without this, any other process on
+    // the machine could use this server to make authenticated upstream
+    // requests carrying the signed-in user's bearer token.
+    if (!isAuthorizedOpenClawProxyRequest(req)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized: invalid or missing proxy token' }));
+      return;
+    }
+
     const tokens = tokenGetter?.();
     const serverBaseUrl = serverBaseUrlGetter?.();
     const requestSessionKey = sessionKeyGetter?.() ?? null;

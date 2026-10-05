@@ -92,7 +92,7 @@ const gwDiagTs = (): string => {
 import { findBundledExtensionsDir, findThirdPartyExtensionsDir, hasBundledOpenClawExtension, hasRuntimeBundledOpenClawExtension, resolveOpenClawExtensionPluginId } from './openclawLocalExtensions';
 import { buildQQAccountConfig, OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
 import { withRequiredOpenClawSessionStoreOwner } from './openclawSessionStoreOwner';
-import { getOpenClawTokenProxyPort } from './openclawTokenProxy';
+import { getOpenClawTokenProxyPort, getOpenClawTokenProxyToken } from './openclawTokenProxy';
 import { getActiveSystemProxyUrl, isSystemProxyEnabled } from './systemProxy';
 
 export type AskUserCallbackConfig = {
@@ -3411,7 +3411,15 @@ export class OpenClawConfigSync {
     // is never resolved. Use a fixed value to avoid secretEnvVarsChanged on switch.
     env.LOBSTER_PROVIDER_API_KEY = 'legacy-unused';
 
-    env.LOBSTER_PROXY_TOKEN = getCoworkOpenAICompatProxyToken() || 'unconfigured';
+    // ${LOBSTER_PROXY_TOKEN} is shared by two provider descriptors that talk
+    // to two different local proxies: LobsteraiServer (openclawTokenProxy,
+    // only when that proxy has a port) and Copilot (the Cowork compat
+    // proxy). Resolve it to whichever one is actually in front of the
+    // request this run, instead of always using the Cowork proxy's token,
+    // which openclawTokenProxy never validates.
+    env.LOBSTER_PROXY_TOKEN = (getOpenClawTokenProxyPort()
+      ? getOpenClawTokenProxyToken()
+      : getCoworkOpenAICompatProxyToken()) || 'unconfigured';
 
     // MCP Bridge Secret — always set so stale openclaw.json with
     // ${LOBSTER_MCP_BRIDGE_SECRET} placeholder doesn't crash the gateway.
