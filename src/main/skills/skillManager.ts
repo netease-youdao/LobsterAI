@@ -408,6 +408,7 @@ export interface OpenClawSkillStatusEntry {
 
 const SKILLS_DIR_NAME = 'SKILLs';
 const SKILL_FILE_NAME = 'SKILL.md';
+const SKILL_META_FILE_NAME = '_meta.json';
 const SKILLS_CONFIG_FILE = 'skills.config.json';
 const SKILL_STATE_KEY = 'skills_state';
 const WATCH_DEBOUNCE_MS = 250;
@@ -453,9 +454,15 @@ const extractDescription = (content: string): string => {
   return '';
 };
 
+const DEFAULT_SKILL_FOLDER_NAME = 'skill';
+
+/** Folder-safe form of `name`, or '' when nothing usable is left. */
+const sanitizeFolderName = (name: string): string => {
+  return name.replace(/[^a-zA-Z0-9-_]+/g, '-').replace(/^-+|-+$/g, '');
+};
+
 const normalizeFolderName = (name: string): string => {
-  const normalized = name.replace(/[^a-zA-Z0-9-_]+/g, '-').replace(/^-+|-+$/g, '');
-  return normalized || 'skill';
+  return sanitizeFolderName(name) || DEFAULT_SKILL_FOLDER_NAME;
 };
 
 const isZipFile = (filePath: string): boolean => path.extname(filePath).toLowerCase() === '.zip';
@@ -485,6 +492,135 @@ const resolveWithin = (root: string, target: string): string => {
     throw new Error('Invalid target path');
   }
   return resolvedTarget;
+};
+
+/**
+ * Prefixes of the temp directories that archives and packages are extracted into.
+ * A skill directory carrying one of these names is the temp root itself, so its name
+ * is random. Git and upgrade temp roots never hold SKILL.md directly and are not listed.
+ */
+const SkillTempDirPrefix = {
+  Zip: 'lobsterai-skill-zip-',
+  Npm: 'lobsterai-skill-npm-',
+  Clawhub: 'lobsterai-skill-clawhub-',
+} as const;
+
+/** Directory inside a remote zip's temp root that the archive is extracted into. */
+const REMOTE_ZIP_EXTRACT_DIR = 'remote-skill';
+
+type InstallFolderNameHints = {
+  /** Directories created while downloading or extracting; their names say nothing about the skill. */
+  extractionRoots: string[];
+  /** Name taken from the source itself: zip file, URL, npm package or ClawHub slug. */
+  sourceName?: string;
+};
+
+const isTempExtractionRoot = (skillDir: string, extractionRoots: readonly string[]): boolean => {
+  const baseName = path.basename(skillDir);
+  if (Object.values(SkillTempDirPrefix).some(prefix => baseName.startsWith(prefix))) {
+    return true;
+  }
+  const resolvedDir = path.resolve(skillDir);
+  return extractionRoots.some(root => path.resolve(root) === resolvedDir);
+};
+
+const readSkillMetaFile = (skillDir: string): Record<string, unknown> | null => {
+  try {
+    const raw = fs.readFileSync(path.join(skillDir, SKILL_META_FILE_NAME), 'utf8');
+    const parsed: unknown = JSON.parse(raw.replace(/^\uFEFF/, ''));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+const readFrontmatterName = (skillDir: string): unknown => {
+  try {
+    return parseFrontmatter(fs.readFileSync(path.join(skillDir, SKILL_FILE_NAME), 'utf8')).frontmatter.name;
+  } catch {
+    return undefined;
+  }
+};
+
+const toFolderNameCandidate = (value: unknown): string => {
+  return typeof value === 'string' || typeof value === 'number' ? sanitizeFolderName(String(value)) : '';
+};
+
+/**
+ * Pick the folder name, which is also the skill id, for installing `skillDir`.
+ * A directory with a real name keeps it. When SKILL.md sat at the archive root, the
+ * directory is one of our temp extraction roots with a random name, so fall back to
+ * the `_meta.json` slug, then the frontmatter name, then the source name.
+ */
+const resolveInstallFolderName = (skillDir: string, hints: InstallFolderNameHints): string => {
+  if (!isTempExtractionRoot(skillDir, hints.extractionRoots)) {
+    return normalizeFolderName(path.basename(skillDir));
+  }
+  return toFolderNameCandidate(readSkillMetaFile(skillDir)?.slug)
+    || toFolderNameCandidate(readFrontmatterName(skillDir))
+    || toFolderNameCandidate(hints.sourceName)
+    || DEFAULT_SKILL_FOLDER_NAME;
+};
+
+/** Whether both directories carry a `_meta.json` for the same published release. */
+const isSameSkillRelease = (incomingDir: string, existingDir: string): boolean => {
+  const incoming = readSkillMetaFile(incomingDir);
+  const existing = readSkillMetaFile(existingDir);
+  if (!incoming || !existing) return false;
+  if (typeof incoming.slug !== 'string' || !incoming.slug) return false;
+  if (typeof incoming.version !== 'string' || !incoming.version) return false;
+  return incoming.slug === existing.slug
+    && incoming.version === existing.version
+    && incoming.ownerId === existing.ownerId;
+};
+
+/**
+ * Pick the directory under `root` to install `skillDir` into. A name taken by another
+ * skill gets a numeric suffix. A name taken by the same release is reported as already
+ * installed, so importing the same package again does not create a duplicate.
+ */
+const resolveInstallTarget = (
+  root: string,
+  folderName: string,
+  skillDir: string,
+): { targetDir: string; alreadyInstalled: boolean } => {
+  let targetDir = resolveWithin(root, folderName);
+  let suffix = 1;
+  while (fs.existsSync(targetDir)) {
+    if (isSameSkillRelease(skillDir, targetDir)) {
+      return { targetDir, alreadyInstalled: true };
+    }
+    targetDir = resolveWithin(root, `${folderName}-${suffix}`);
+    suffix += 1;
+  }
+  return { targetDir, alreadyInstalled: false };
+};
+
+/**
+ * Copy downloaded skill directories into `root` and return the ids they ended up under.
+ * Shared by direct installs and installs confirmed after a security review.
+ */
+const installSkillDirs = (root: string, skillDirs: string[], nameHints: InstallFolderNameHints): string[] => {
+  const installedIds: string[] = [];
+  for (const skillDir of skillDirs) {
+    const folderName = resolveInstallFolderName(skillDir, nameHints);
+    const { targetDir, alreadyInstalled } = resolveInstallTarget(root, folderName, skillDir);
+    installedIds.push(path.basename(targetDir));
+    if (alreadyInstalled) {
+      console.log('[skills] same release of "%s" already installed at %s, skipping copy', folderName, targetDir);
+      continue;
+    }
+    cpRecursiveSync(skillDir, targetDir);
+    const normalizeResult = normalizeWindowsSkillDirectoryAttrs(targetDir);
+    if (normalizeResult.success) {
+      console.log('[skills] install normalization applied for "%s" at %s', folderName, targetDir);
+    } else {
+      console.warn('[skills] install normalization failed for "%s" at %s: %s', folderName, targetDir, normalizeResult.detail || 'unknown');
+    }
+  }
+  return installedIds;
 };
 
 const appendEnvPath = (current: string | undefined, entries: string[]): string => {
@@ -1251,6 +1387,11 @@ const downloadNpmPackage = async (spec: string, tempRoot: string): Promise<strin
   return dirs[0] || extractDir;
 };
 
+/** `@scope/my-skill@1.2.0` → `my-skill` */
+const deriveNpmPackageBaseName = (spec: string): string => {
+  return spec.replace(/^@[^/]+\//, '').replace(/@.*$/, '');
+};
+
 const isRemoteZipUrl = (source: string): boolean => {
   try {
     const url = new URL(source);
@@ -1259,6 +1400,22 @@ const isRemoteZipUrl = (source: string): boolean => {
   } catch {
     return false;
   }
+};
+
+/** `https://host/path/my-skill.zip?token=x` → `my-skill` */
+const deriveZipUrlBaseName = (zipUrl: string): string => {
+  let fileName: string;
+  try {
+    fileName = path.posix.basename(new URL(zipUrl).pathname);
+  } catch {
+    return '';
+  }
+  try {
+    fileName = decodeURIComponent(fileName);
+  } catch {
+    // Keep the encoded form; it still sanitizes to a usable name.
+  }
+  return fileName.replace(/\.zip$/i, '');
 };
 
 const downloadZipUrl = async (zipUrl: string, tempRoot: string): Promise<string> => {
@@ -1272,11 +1429,17 @@ const downloadZipUrl = async (zipUrl: string, tempRoot: string): Promise<string>
   }
 
   const buffer = Buffer.from(await response.arrayBuffer());
-  const zipPath = path.join(tempRoot, 'remote-skill.zip');
-  const extractRoot = path.join(tempRoot, 'remote-skill');
+  const zipPath = path.join(tempRoot, `${REMOTE_ZIP_EXTRACT_DIR}.zip`);
+  const extractRoot = path.join(tempRoot, REMOTE_ZIP_EXTRACT_DIR);
   fs.writeFileSync(zipPath, buffer);
   fs.mkdirSync(extractRoot, { recursive: true });
   await extractZip(zipPath, { dir: extractRoot });
+
+  // SKILL.md at the archive root makes the root the skill; a lone folder next to it
+  // (e.g. scripts/) is part of the skill, not a wrapper to descend into.
+  if (fs.existsSync(path.join(extractRoot, SKILL_FILE_NAME))) {
+    return extractRoot;
+  }
 
   const extractedDirs = fs.readdirSync(extractRoot)
     .map(entry => path.join(extractRoot, entry))
@@ -1412,6 +1575,7 @@ export class SkillManager {
     cleanupPath: string | null;
     root: string;
     skillDirs: string[];
+    installNameHints?: InstallFolderNameHints;
     timer: NodeJS.Timeout;
     isUpgrade?: boolean;
     existingSkillDir?: string;
@@ -1949,13 +2113,18 @@ export class SkillManager {
       console.log(`[SkillManager] downloadSkill: source="${trimmed}"`);
       const root = this.ensureSkillsRoot();
       let localSource = trimmed;
+      let installNameHints: InstallFolderNameHints = { extractionRoots: [] };
       if (fs.existsSync(localSource)) {
         const stat = fs.statSync(localSource);
         if (stat.isFile()) {
           if (isZipFile(localSource)) {
             console.log('[SkillManager] downloadSkill: detected local zip file');
-            const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-zip-'));
+            const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), SkillTempDirPrefix.Zip));
             await extractZip(localSource, { dir: tempRoot });
+            installNameHints = {
+              extractionRoots: [tempRoot],
+              sourceName: path.basename(localSource, path.extname(localSource)),
+            };
             localSource = tempRoot;
             cleanupPath = tempRoot;
           } else if (path.basename(localSource) === SKILL_FILE_NAME) {
@@ -1969,23 +2138,33 @@ export class SkillManager {
         }
       } else if (isRemoteZipUrl(trimmed)) {
         console.log('[SkillManager] downloadSkill: detected remote zip URL');
-        const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-zip-'));
+        const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), SkillTempDirPrefix.Zip));
         cleanupPath = tempRoot;
         localSource = await downloadZipUrl(trimmed, tempRoot);
+        installNameHints = {
+          extractionRoots: [tempRoot, path.join(tempRoot, REMOTE_ZIP_EXTRACT_DIR)],
+          sourceName: deriveZipUrlBaseName(trimmed),
+        };
       } else if (isNpmPackageSpec(trimmed)) {
         console.log(`[SkillManager] downloadSkill: detected npm package spec "${trimmed}"`);
-        const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-npm-'));
+        const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), SkillTempDirPrefix.Npm));
         cleanupPath = tempRoot;
         localSource = await downloadNpmPackage(trimmed, tempRoot);
         console.log(`[SkillManager] downloadSkill: npm package extracted to ${localSource}`);
+        // The package root is named by the tarball layout (usually `package/`), not by the skill.
+        installNameHints = {
+          extractionRoots: [tempRoot, localSource],
+          sourceName: deriveNpmPackageBaseName(trimmed),
+        };
       } else if (parseClawhubUrl(trimmed)) {
         const clawhubParsed = parseClawhubUrl(trimmed)!;
         console.log(`[SkillManager] downloadSkill: detected ClawHub URL, skill name="${clawhubParsed.name}"`);
-        const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-clawhub-'));
+        const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), SkillTempDirPrefix.Clawhub));
         cleanupPath = tempRoot;
         const env = buildSkillEnv();
         await downloadClawhubSkill(clawhubParsed.name, tempRoot, env);
         localSource = tempRoot;
+        installNameHints = { extractionRoots: [tempRoot], sourceName: clawhubParsed.name };
       } else {
         const normalized = this.normalizeGitSource(trimmed);
         if (!normalized) {
@@ -2096,6 +2275,7 @@ export class SkillManager {
           cleanupPath,
           root,
           skillDirs,
+          installNameHints,
           timer,
         });
 
@@ -2108,22 +2288,7 @@ export class SkillManager {
 
       // Safe or scan failed — install directly
       console.log(`[SkillManager] Skill is safe (or scan failed), installing directly`);
-      for (const skillDir of skillDirs) {
-        const folderName = normalizeFolderName(path.basename(skillDir));
-        let targetDir = resolveWithin(root, folderName);
-        let suffix = 1;
-        while (fs.existsSync(targetDir)) {
-          targetDir = resolveWithin(root, `${folderName}-${suffix}`);
-          suffix += 1;
-        }
-        cpRecursiveSync(skillDir, targetDir);
-        const normalizeResult = normalizeWindowsSkillDirectoryAttrs(targetDir);
-        if (normalizeResult.success) {
-          console.log('[skills] install normalization applied for "%s" at %s', folderName, targetDir);
-        } else {
-          console.warn('[skills] install normalization failed for "%s" at %s: %s', folderName, targetDir, normalizeResult.detail || 'unknown');
-        }
-      }
+      installSkillDirs(root, skillDirs, installNameHints);
 
       cleanupPathSafely(cleanupPath);
       cleanupPath = null;
@@ -2370,24 +2535,11 @@ export class SkillManager {
         installedIds.push(path.basename(pending.existingSkillDir));
       }
     } else {
-      // Fresh install path: find unique directory name
-      for (const skillDir of pending.skillDirs) {
-        const folderName = normalizeFolderName(path.basename(skillDir));
-        let targetDir = resolveWithin(pending.root, folderName);
-        let suffix = 1;
-        while (fs.existsSync(targetDir)) {
-          targetDir = resolveWithin(pending.root, `${folderName}-${suffix}`);
-          suffix += 1;
-        }
-        cpRecursiveSync(skillDir, targetDir);
-        const normalizeResult = normalizeWindowsSkillDirectoryAttrs(targetDir);
-        if (normalizeResult.success) {
-          console.log('[skills] install normalization applied for "%s" at %s', folderName, targetDir);
-        } else {
-          console.warn('[skills] install normalization failed for "%s" at %s: %s', folderName, targetDir, normalizeResult.detail || 'unknown');
-        }
-        installedIds.push(path.basename(targetDir));
-      }
+      installedIds.push(...installSkillDirs(
+        pending.root,
+        pending.skillDirs,
+        pending.installNameHints ?? { extractionRoots: [] },
+      ));
     }
 
     cleanupPathSafely(pending.cleanupPath);
@@ -3274,4 +3426,9 @@ export const __skillManagerTestUtils = {
   parseClawhubUrl,
   isWindowsDeletePermissionError,
   getSkillScriptRuntimeCandidates,
+  SkillTempDirPrefix,
+  resolveInstallFolderName,
+  resolveInstallTarget,
+  deriveNpmPackageBaseName,
+  deriveZipUrlBaseName,
 };
