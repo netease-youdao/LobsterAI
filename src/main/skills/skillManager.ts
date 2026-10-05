@@ -3,10 +3,10 @@ import crypto from 'crypto';
 import { app, BrowserWindow, session } from 'electron';
 import extractZip from 'extract-zip';
 import fs from 'fs';
-import yaml from 'js-yaml';
 import path from 'path';
 
 import { ComputerUseSkillId } from '../../shared/computerUse/constants';
+import { SkillLoadIssue } from '../../shared/skills/constants';
 import { isComputerUseKitInstalled } from '../computerUse/computerUseKit';
 import { cpRecursiveSync } from '../fsCompat';
 import { t } from '../i18n';
@@ -23,6 +23,7 @@ import {
   SkillWatchDiagnostics,
   SkillWatchScope,
 } from './skillChangeDiagnostics';
+import { loadSkillFrontmatterYaml } from './skillFrontmatter';
 import { readSkillWatchSnapshot, type SkillWatchSnapshot } from './skillWatchSnapshot';
 
 /**
@@ -337,6 +338,7 @@ export type SkillRecord = {
   prompt: string;
   skillPath: string;
   version?: string;
+  loadIssue?: SkillLoadIssue;
 };
 
 type SkillStateMap = Record<string, { enabled: boolean }>;
@@ -415,25 +417,55 @@ const WATCH_DEBOUNCE_MS = 250;
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
-const parseFrontmatter = (raw: string): { frontmatter: Record<string, unknown>; content: string } => {
+const parseFrontmatter = (
+  raw: string,
+  // Only used to name the file in the parse warning.
+  sourcePath?: string,
+): {
+  frontmatter: Record<string, unknown>;
+  content: string;
+  // A frontmatter block exists but is not a YAML mapping, even after the
+  // description repair. OpenClaw skips such a skill.
+  invalidFrontmatter: boolean;
+} => {
   const normalized = raw.replace(/^\uFEFF/, '');
   const match = normalized.match(FRONTMATTER_RE);
   if (!match) {
-    return { frontmatter: {}, content: normalized };
+    return { frontmatter: {}, content: normalized, invalidFrontmatter: false };
   }
 
   let frontmatter: Record<string, unknown> = {};
+  let invalidFrontmatter = false;
   try {
-    const parsed = yaml.load(match[1]);
+    const parsed = loadSkillFrontmatterYaml(match[1]);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       frontmatter = parsed as Record<string, unknown>;
+    } else if (parsed !== null && parsed !== undefined) {
+      invalidFrontmatter = true;
     }
   } catch (e) {
-    console.warn('[skills] Failed to parse YAML frontmatter:', e);
+    invalidFrontmatter = true;
+    console.warn(`[skills] Failed to parse YAML frontmatter${sourcePath ? ` in ${sourcePath}` : ''}:`, e);
   }
 
   const content = normalized.slice(match[0].length);
-  return { frontmatter, content };
+  return { frontmatter, content, invalidFrontmatter };
+};
+
+/**
+ * The checks OpenClaw's skill loader applies before it loads a SKILL.md:
+ * parseable frontmatter and a non-empty description.
+ */
+const resolveSkillLoadIssue = (
+  frontmatter: Record<string, unknown>,
+  invalidFrontmatter: boolean,
+): SkillLoadIssue | undefined => {
+  if (invalidFrontmatter) return SkillLoadIssue.InvalidFrontmatter;
+  const description = frontmatter.description;
+  if (description === undefined || description === null || String(description).trim() === '') {
+    return SkillLoadIssue.MissingDescription;
+  }
+  return undefined;
 };
 
 const isTruthy = (value?: unknown): boolean => {
@@ -538,7 +570,8 @@ const readSkillMetaFile = (skillDir: string): Record<string, unknown> | null => 
 
 const readFrontmatterName = (skillDir: string): unknown => {
   try {
-    return parseFrontmatter(fs.readFileSync(path.join(skillDir, SKILL_FILE_NAME), 'utf8')).frontmatter.name;
+    const skillFile = path.join(skillDir, SKILL_FILE_NAME);
+    return parseFrontmatter(fs.readFileSync(skillFile, 'utf8'), skillFile).frontmatter.name;
   } catch {
     return undefined;
   }
@@ -1797,8 +1830,9 @@ export class SkillManager {
 
   private getSkillVersion(skillDir: string): string {
     try {
-      const raw = fs.readFileSync(path.join(skillDir, SKILL_FILE_NAME), 'utf8');
-      const { frontmatter } = parseFrontmatter(raw);
+      const skillFile = path.join(skillDir, SKILL_FILE_NAME);
+      const raw = fs.readFileSync(skillFile, 'utf8');
+      const { frontmatter } = parseFrontmatter(raw, skillFile);
       const meta = frontmatter.metadata as Record<string, unknown> | undefined;
       const v = frontmatter.version ?? meta?.version;
       return typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
@@ -2699,7 +2733,7 @@ export class SkillManager {
     if (!fs.existsSync(skillFile)) return null;
     try {
       const raw = fs.readFileSync(skillFile, 'utf8');
-      const { frontmatter, content } = parseFrontmatter(raw);
+      const { frontmatter, content, invalidFrontmatter } = parseFrontmatter(raw, skillFile);
       const name = (String(frontmatter.name || '') || path.basename(dir)).trim() || path.basename(dir);
       const description = (String(frontmatter.description || '') || extractDescription(content) || name).trim();
       const isOfficial = isTruthy(frontmatter.official) || isTruthy(frontmatter.isOfficial);
@@ -2711,7 +2745,8 @@ export class SkillManager {
       const prompt = content.trim();
       const defaultEnabled = defaults[id]?.enabled ?? true;
       const enabled = state[id]?.enabled ?? defaultEnabled;
-      return { id, name, description, enabled, isOfficial, isBuiltIn, updatedAt, prompt, skillPath: skillFile, version };
+      const loadIssue = resolveSkillLoadIssue(frontmatter, invalidFrontmatter);
+      return { id, name, description, enabled, isOfficial, isBuiltIn, updatedAt, prompt, skillPath: skillFile, version, loadIssue };
     } catch (error) {
       console.warn('[skills] Failed to parse skill:', dir, error);
       return null;
@@ -3421,6 +3456,7 @@ export class SkillManager {
 
 export const __skillManagerTestUtils = {
   parseFrontmatter,
+  resolveSkillLoadIssue,
   isTruthy,
   extractDescription,
   parseClawhubUrl,

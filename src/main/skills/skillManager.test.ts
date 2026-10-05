@@ -16,10 +16,12 @@ vi.mock('electron', () => ({
 
 vi.mock('../libs/nodeRuntime', () => nodeRuntimeMocks);
 
+import { SkillLoadIssue } from '../../shared/skills/constants';
 import { __skillManagerTestUtils } from './skillManager';
 
 const {
   parseFrontmatter,
+  resolveSkillLoadIssue,
   isTruthy,
   extractDescription,
   getSkillScriptRuntimeCandidates,
@@ -120,6 +122,76 @@ test('parseFrontmatter: invalid YAML returns empty frontmatter gracefully', () =
   expect(frontmatter).toEqual({});
   expect(content).toMatch(/# Content/);
 });
+
+test('parseFrontmatter: recovers a free-form description the way OpenClaw does', () => {
+  // Unquoted ": " in the description makes the block invalid YAML as written.
+  const raw = '---\nname: demo\ndescription: Use when: the user asks\nversion: "1.2.3"\n---\n# Content\n';
+  const { frontmatter, content, invalidFrontmatter } = parseFrontmatter(raw);
+  expect(frontmatter).toEqual({ name: 'demo', description: 'Use when: the user asks', version: '1.2.3' });
+  expect(invalidFrontmatter).toBe(false);
+  expect(content).toMatch(/# Content/);
+});
+
+test('parseFrontmatter: flags unrecoverable YAML and names the file in the warning', () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const raw = '---\nname: demo\ndescription: ok\nwhen_to_use: Use when: x\n---\n# Content\n';
+    const { frontmatter, invalidFrontmatter } = parseFrontmatter(raw, '/skills/demo/SKILL.md');
+    expect(frontmatter).toEqual({});
+    expect(invalidFrontmatter).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('/skills/demo/SKILL.md');
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test('parseFrontmatter: flags a frontmatter block that is not a mapping', () => {
+  const { frontmatter, invalidFrontmatter } = parseFrontmatter('---\nUse this skill for demos\n---\n# Content\n');
+  expect(frontmatter).toEqual({});
+  expect(invalidFrontmatter).toBe(true);
+});
+
+test('parseFrontmatter: a missing or empty block is not invalid', () => {
+  expect(parseFrontmatter('# Content\n').invalidFrontmatter).toBe(false);
+  expect(parseFrontmatter('---\n\n---\n# Content\n').invalidFrontmatter).toBe(false);
+});
+
+// ==================== resolveSkillLoadIssue ====================
+
+test('resolveSkillLoadIssue: matches the checks OpenClaw runs before loading a skill', () => {
+  expect(resolveSkillLoadIssue({ description: 'Does things' }, false)).toBeUndefined();
+  expect(resolveSkillLoadIssue({ description: 'Does things' }, true)).toBe(SkillLoadIssue.InvalidFrontmatter);
+  expect(resolveSkillLoadIssue({}, true)).toBe(SkillLoadIssue.InvalidFrontmatter);
+  expect(resolveSkillLoadIssue({}, false)).toBe(SkillLoadIssue.MissingDescription);
+  expect(resolveSkillLoadIssue({ description: null }, false)).toBe(SkillLoadIssue.MissingDescription);
+  expect(resolveSkillLoadIssue({ description: '   ' }, false)).toBe(SkillLoadIssue.MissingDescription);
+});
+
+// ==================== bundled SKILL.md files ====================
+
+// Version-based sync of bundled skills needs every bundled SKILL.md to parse,
+// and OpenClaw skips a skill whose frontmatter is invalid or has no description.
+const BUNDLED_SKILLS_ROOT = path.join(process.cwd(), 'SKILLs');
+const bundledSkillFiles = fs.readdirSync(BUNDLED_SKILLS_ROOT, { withFileTypes: true })
+  .filter(entry => entry.isDirectory())
+  .map(entry => path.join(BUNDLED_SKILLS_ROOT, entry.name, 'SKILL.md'))
+  .filter(file => fs.existsSync(file));
+
+test('bundled skills: SKILL.md files are found', () => {
+  expect(bundledSkillFiles.length).toBeGreaterThan(0);
+});
+
+test.each(bundledSkillFiles.map(file => [path.basename(path.dirname(file)), file]))(
+  'bundled skills: %s has frontmatter OpenClaw can load',
+  (_id, file) => {
+    const { frontmatter, invalidFrontmatter } = parseFrontmatter(fs.readFileSync(file, 'utf8'), file);
+    expect(resolveSkillLoadIssue(frontmatter, invalidFrontmatter)).toBeUndefined();
+    const metadata = frontmatter.metadata as Record<string, unknown> | undefined;
+    // An unquoted `version: 1.10` loads as the number 1.1 and breaks version comparison.
+    expect(['undefined', 'string']).toContain(typeof (frontmatter.version ?? metadata?.version));
+  },
+);
 
 // ==================== isTruthy ====================
 
