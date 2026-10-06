@@ -26,6 +26,10 @@ const UNAUTHORIZED_WARN_INTERVAL_MS = 60_000;
 const RECENT_QUOTA_ERROR_TTL_MS = 30_000;
 const MAX_PROXY_SSE_SCAN_BUFFER_CHARS = 1_048_576;
 const GEMINI_FALLBACK_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
+const PROXY_UPSTREAM_ERROR_MESSAGE = 'Token proxy upstream error';
+const PROXY_UPSTREAM_NETWORK_ERROR_TYPE = 'upstream_network_error';
+// Electron net.fetch rejects with Chromium's net error name, e.g. "net::ERR_HTTP2_PING_FAILED".
+const CHROMIUM_NET_ERROR_PATTERN = /\bnet::(ERR_[A-Z0-9_]+)\b/;
 
 let proxyServer: http.Server | null = null;
 let proxyPort: number | null = null;
@@ -357,9 +361,29 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     console.error('[OpenClawTokenProxy] request handling error:', err);
     if (!res.headersSent) {
       res.writeHead(502, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Token proxy upstream error' }));
+      res.end(buildUpstreamRequestFailureBody(err));
     }
   }
+}
+
+/**
+ * Body for a request that failed before upstream response headers arrived.
+ * Network failures keep their Chromium error name so the client can tell a
+ * broken connection apart from an error returned by the server.
+ */
+function buildUpstreamRequestFailureBody(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const netErrorName = CHROMIUM_NET_ERROR_PATTERN.exec(message)?.[1];
+  if (!netErrorName) {
+    return JSON.stringify({ error: PROXY_UPSTREAM_ERROR_MESSAGE });
+  }
+  return JSON.stringify({
+    error: {
+      message: `LobsterAI proxy upstream request failed: net::${netErrorName}`,
+      type: PROXY_UPSTREAM_NETWORK_ERROR_TYPE,
+      code: netErrorName,
+    },
+  });
 }
 
 type UpstreamResult = {
@@ -1211,6 +1235,7 @@ function pipeWebReadableResponseWithQuotaScan(
 }
 
 export const __openClawTokenProxyTestUtils = {
+  buildUpstreamRequestFailureBody,
   extractInboundProxyTokens,
   isInboundRequestAuthorized,
   isLoopbackHostHeader,
