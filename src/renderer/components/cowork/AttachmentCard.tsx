@@ -1,3 +1,4 @@
+import { FolderIcon } from '@heroicons/react/24/solid';
 import React, { useEffect, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
@@ -114,6 +115,7 @@ const ImageCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove, label 
 
 const FileCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove, label }) => {
   const { label: typeLabel } = getFileTypeInfo(attachment.name);
+  const displayTypeLabel = attachment.isDirectory ? i18nService.t('folderAttachmentType') : typeLabel;
 
   return (
     <div
@@ -122,7 +124,11 @@ const FileCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove, label }
     >
       {/* File type icon */}
       <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-black/[0.04] dark:bg-white/[0.08]">
-        <FileTypeIcon fileName={attachment.name} className="h-7 w-7 flex-shrink-0" />
+        {attachment.isDirectory ? (
+          <FolderIcon className="h-7 w-7 flex-shrink-0 text-amber-500" />
+        ) : (
+          <FileTypeIcon fileName={attachment.name} className="h-7 w-7 flex-shrink-0" />
+        )}
       </div>
 
       {/* File name + type label */}
@@ -131,7 +137,7 @@ const FileCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove, label }
           {label ? `${label} · ${attachment.name}` : attachment.name}
         </span>
         <span className="mt-0.5 text-xs text-secondary">
-          {typeLabel}
+          {displayTypeLabel}
         </span>
       </div>
 

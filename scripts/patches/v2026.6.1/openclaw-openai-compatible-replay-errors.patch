@@ -1,0 +1,313 @@
+diff --git a/src/llm/providers/google-shared.test.ts b/src/llm/providers/google-shared.test.ts
+index 98c38d8b8934c91d84169873f5e6ad9c0a559796..bd81fb532419be99fd387a805cf36f1876e89c64 100644
+--- a/src/llm/providers/google-shared.test.ts
++++ b/src/llm/providers/google-shared.test.ts
+@@ -5,6 +5,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
+ import {
+   buildGoogleGenerateContentParams,
+   consumeGoogleGenerateContentStream,
++  runGoogleGenerateContentLifecycle,
+ } from "./google-shared.js";
+ 
+ const model: Model<"google-generative-ai"> = {
+@@ -135,6 +136,34 @@ describe("consumeGoogleGenerateContentStream", () => {
+   });
+ });
+ 
++describe("runGoogleGenerateContentLifecycle", () => {
++  it("surfaces HTTP response body text from Google-compatible errors", async () => {
++    const output = createOutput();
++    const stream = new AssistantMessageEventStream();
++    const error = Object.assign(new Error("502 status code (no body)"), {
++      status: 502,
++      body: "gateway maintenance",
++    });
++
++    await runGoogleGenerateContentLifecycle({
++      stream,
++      model,
++      output,
++      createClient: () => ({
++        models: {
++          generateContentStream: async () => {
++            throw error;
++          },
++        },
++      }),
++      buildParams: () => ({ model: model.id, contents: [] }),
++      nextToolCallId: () => "call_1",
++    });
++
++    expect(output.errorMessage).toBe("502: gateway maintenance");
++  });
++});
++
+ describe("buildGoogleGenerateContentParams", () => {
+   it("forwards stop sequences to Google generation config", () => {
+     const params = buildGoogleGenerateContentParams(
+diff --git a/src/llm/providers/google-shared.ts b/src/llm/providers/google-shared.ts
+index d2f633365500bf25f68f1265820aefb3005d06cc..62af5b95f2d6c5797d685f8e67eea0a0593e30f8 100644
+--- a/src/llm/providers/google-shared.ts
++++ b/src/llm/providers/google-shared.ts
+@@ -30,6 +30,7 @@ import type {
+   StreamOptions,
+ } from "../types.js";
+ import type { AssistantMessageEventStream } from "../utils/event-stream.js";
++import { formatProviderError } from "../utils/provider-error.js";
+ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+ import { transformMessages } from "./transform-messages.js";
+ 
+@@ -457,7 +458,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
+       }
+     }
+     output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+-    output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
++    output.errorMessage = formatProviderError(error);
+     stream.push({ type: "error", reason: output.stopReason, error: output });
+     stream.end();
+   }
+diff --git a/src/llm/providers/openai-completions.test.ts b/src/llm/providers/openai-completions.test.ts
+index 4b11f4d690a315a977143a06ecf7e87b9301b303..04c89ee1166e9d01eb45d1ba3d81cb1a5c26c772 100644
+--- a/src/llm/providers/openai-completions.test.ts
++++ b/src/llm/providers/openai-completions.test.ts
+@@ -116,6 +116,22 @@ function makeFinishChunk(
+ }
+ 
+ describe("OpenAI-compatible completions params", () => {
++  it("surfaces HTTP response body text from OpenAI-compatible errors", async () => {
++    const stream = streamOpenAICompletions(createModel(32_000), context, {
++      apiKey: "sk-test",
++      onPayload() {
++        throw Object.assign(new Error("502 status code (no body)"), {
++          status: 502,
++          body: "gateway maintenance",
++        });
++      },
++    });
++
++    const result = await stream.result();
++
++    expect(result.errorMessage).toBe("502: gateway maintenance");
++  });
++
+   it("clamps requested max tokens to the model output cap", async () => {
+     let capturedMaxTokens: unknown;
+     const stream = streamOpenAICompletions(createModel(32_000), context, {
+diff --git a/src/llm/providers/openai-completions.ts b/src/llm/providers/openai-completions.ts
+index a39bf079d1a443b9fdff8b99b76c1f6e2c587375..d659d35bcb24178ac35304df59bb69cd3886bbf8 100644
+--- a/src/llm/providers/openai-completions.ts
++++ b/src/llm/providers/openai-completions.ts
+@@ -34,6 +34,7 @@ import type {
+ import { AssistantMessageEventStream } from "../utils/event-stream.js";
+ import { headersToRecord } from "../utils/headers.js";
+ import { parseStreamingJson } from "../utils/json-parse.js";
++import { formatProviderError } from "../utils/provider-error.js";
+ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+ import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
+ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+@@ -488,11 +489,11 @@ export const streamOpenAICompletions: StreamFunction<
+         delete (block as { streamIndex?: number }).streamIndex;
+       }
+       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+-      output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
++      output.errorMessage = formatProviderError(error);
+       // Some providers via OpenRouter give additional information in this field.
+       const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata
+         ?.raw;
+-      if (rawMetadata) {
++      if (rawMetadata && !output.errorMessage.includes(rawMetadata)) {
+         output.errorMessage += `\n${rawMetadata}`;
+       }
+       stream.push({ type: "error", reason: output.stopReason, error: output });
+diff --git a/src/llm/providers/transform-messages.null-content.test.ts b/src/llm/providers/transform-messages.null-content.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ad9fbb14ccf2f120872b1aad665fc0e832f1cf4
+--- /dev/null
++++ b/src/llm/providers/transform-messages.null-content.test.ts
+@@ -0,0 +1,53 @@
++import { describe, expect, it } from "vitest";
++import type { Message, Model } from "../types.js";
++import { transformMessages } from "./transform-messages.js";
++
++const model: Model<"openai-completions"> = {
++  id: "text-only-model",
++  name: "Text-only model",
++  api: "openai-completions",
++  provider: "openai",
++  baseUrl: "https://example.invalid/v1",
++  reasoning: false,
++  input: ["text"],
++  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++  contextWindow: 128_000,
++  maxTokens: 4096,
++};
++
++describe("transformMessages null content", () => {
++  it("normalizes null or missing content before provider transforms", () => {
++    const messages = [
++      { role: "user", content: null, timestamp: 1 },
++      {
++        role: "assistant",
++        content: null,
++        api: model.api,
++        provider: model.provider,
++        model: model.id,
++        usage: {
++          input: 0,
++          output: 0,
++          cacheRead: 0,
++          cacheWrite: 0,
++          totalTokens: 0,
++          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++        },
++        stopReason: "stop",
++        timestamp: 2,
++      },
++      {
++        role: "toolResult",
++        toolCallId: "call_1",
++        toolName: "lookup",
++        isError: false,
++        timestamp: 3,
++      },
++    ] as unknown as Message[];
++
++    const transformed = transformMessages(messages, model);
++
++    expect(transformed).toHaveLength(3);
++    expect(transformed.map((message) => message.content)).toEqual([[], [], []]);
++  });
++});
+diff --git a/src/llm/providers/transform-messages.ts b/src/llm/providers/transform-messages.ts
+index b262c0c047c913b6c3374032cb58792ea2dc48b7..3ff96e45a186c6c36bdc3d2e572191916761248c 100644
+--- a/src/llm/providers/transform-messages.ts
++++ b/src/llm/providers/transform-messages.ts
+@@ -74,7 +74,10 @@ export function transformMessages<TApi extends Api>(
+ ): Message[] {
+   // Build a map of original tool call IDs to normalized IDs
+   const toolCallIdMap = new Map<string, string>();
+-  const imageAwareMessages = downgradeUnsupportedImages(messages, model);
++  const normalizedMessages = messages.map((msg) =>
++    msg.content == null ? { ...msg, content: [] } : msg,
++  );
++  const imageAwareMessages = downgradeUnsupportedImages(normalizedMessages, model);
+ 
+   // First pass: transform messages (unsupported image downgrade, thinking blocks, tool call ID normalization)
+   const transformed = imageAwareMessages.map((msg) => {
+diff --git a/src/llm/utils/provider-error.test.ts b/src/llm/utils/provider-error.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d600fe4f8aa0c48737af91ba1f09179d16a134ec
+--- /dev/null
++++ b/src/llm/utils/provider-error.test.ts
+@@ -0,0 +1,37 @@
++import { describe, expect, it } from "vitest";
++import { formatProviderError } from "./provider-error.js";
++
++describe("formatProviderError", () => {
++  it.each([
++    {
++      name: "JSON body",
++      error: Object.assign(new Error("403 status code (no body)"), {
++        status: 403,
++        error: { message: "blocked by gateway" },
++      }),
++      expected: '403: {"message":"blocked by gateway"}',
++    },
++    {
++      name: "text body",
++      error: Object.assign(new Error("502 status code (no body)"), {
++        status: 502,
++        body: "proxy unavailable",
++      }),
++      expected: "502: proxy unavailable",
++    },
++    {
++      name: "no body",
++      error: Object.assign(new Error("503 status code (no body)"), { status: 503 }),
++      expected: "503 status code (no body)",
++    },
++  ])("formats an HTTP error with $name", ({ error, expected }) => {
++    expect(formatProviderError(error)).toBe(expected);
++  });
++
++  it("preserves an SDK message that already contains the response body", () => {
++    const body = '{"error":{"message":"permission denied"}}';
++    const error = Object.assign(new Error(body), { status: 403, body });
++
++    expect(formatProviderError(error)).toBe(body);
++  });
++});
+diff --git a/src/llm/utils/provider-error.ts b/src/llm/utils/provider-error.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..3bd4bc03317ee8cd973bc0a8cfd2b763926bbfc2
+--- /dev/null
++++ b/src/llm/utils/provider-error.ts
+@@ -0,0 +1,68 @@
++const MAX_ERROR_BODY_LENGTH = 4000;
++
++type HttpErrorShape = Error & {
++  status?: unknown;
++  statusCode?: unknown;
++  body?: unknown;
++  error?: unknown;
++  response?: {
++    status?: unknown;
++    statusCode?: unknown;
++    body?: unknown;
++    data?: unknown;
++  };
++};
++
++function stringify(value: unknown): string {
++  try {
++    return JSON.stringify(value) ?? String(value);
++  } catch {
++    return String(value);
++  }
++}
++
++function readStatus(error: HttpErrorShape): number | undefined {
++  for (const value of [
++    error.status,
++    error.statusCode,
++    error.response?.status,
++    error.response?.statusCode,
++  ]) {
++    if (typeof value === "number" && Number.isFinite(value)) {
++      return value;
++    }
++  }
++  return undefined;
++}
++
++function readBody(error: HttpErrorShape): string | undefined {
++  for (const value of [error.body, error.error, error.response?.body, error.response?.data]) {
++    if (value === undefined || value === null) {
++      continue;
++    }
++    if (typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0) {
++      continue;
++    }
++    const body = (typeof value === "string" ? value : stringify(value)).trim();
++    if (body.length > 0) {
++      return body.length <= MAX_ERROR_BODY_LENGTH
++        ? body
++        : `${body.slice(0, MAX_ERROR_BODY_LENGTH)}... [truncated]`;
++    }
++  }
++  return undefined;
++}
++
++export function formatProviderError(error: unknown): string {
++  if (!(error instanceof Error)) {
++    return stringify(error);
++  }
++
++  const httpError = error as HttpErrorShape;
++  const status = readStatus(httpError);
++  const body = readBody(httpError);
++  if (status === undefined || body === undefined || error.message.includes(body)) {
++    return error.message;
++  }
++  return `${status}: ${body}`;
++}

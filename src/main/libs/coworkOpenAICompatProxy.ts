@@ -3,6 +3,11 @@ import { session } from 'electron';
 import http from 'http';
 
 import {
+  AuthRefreshOutcome,
+  type AuthTokenRefreshResult,
+} from '../../shared/auth/constants';
+import { ProviderName } from '../../shared/providers';
+import {
   anthropicToOpenAI,
   buildOpenAIChatCompletionsURL,
   formatSSEEvent,
@@ -10,6 +15,7 @@ import {
   type OpenAIStreamChunk,
   openAIToAnthropic,
 } from './coworkFormatTransform';
+import { listenOnLoopback } from './loopbackListen';
 
 export type OpenAICompatUpstreamConfig = {
   baseURL: string;
@@ -180,7 +186,11 @@ export function isAllowedProxyHost(req: http.IncomingMessage): boolean {
  * with the new token.  Providers register their refresher via
  * {@link registerProxyTokenRefresher}.
  */
-const tokenRefreshers = new Map<string, () => Promise<string | null>>();
+type ProxyTokenRefresher = (
+  rejectedToken?: string,
+) => Promise<AuthTokenRefreshResult>;
+
+const tokenRefreshers = new Map<string, ProxyTokenRefresher>();
 let currentCoworkSessionId: string | null = null;
 const toolCallExtraContentById = new Map<string, unknown>();
 
@@ -230,6 +240,19 @@ function toOptionalObject(value: unknown): Record<string, unknown> | null {
     return value as Record<string, unknown>;
   }
   return null;
+}
+
+function shouldRefreshProxyToken(status: number, provider?: string): boolean {
+  if (status === 401) return true;
+  return status === 403 && provider !== ProviderName.LobsteraiServer;
+}
+
+function isTemporaryLobsterAIAuthRefreshFailure(
+  provider: string | undefined,
+  result: AuthTokenRefreshResult,
+): boolean {
+  return provider === ProviderName.LobsteraiServer
+    && result.outcome === AuthRefreshOutcome.TransientFailure;
 }
 
 function toString(value: unknown): string {
@@ -2520,23 +2543,36 @@ async function handleRequest(
       });
       // Auto-retry once for token expiry using provider-based refresher
       if (
-        (upstreamResponse.status === 401 || upstreamResponse.status === 403)
+        shouldRefreshProxyToken(upstreamResponse.status, upstreamConfig.provider)
         && upstreamConfig.provider
       ) {
         const refresher = tokenRefreshers.get(upstreamConfig.provider);
         if (refresher) {
           console.log(`[CoworkProxy] OpenAI passthrough: ${upstreamConfig.provider} auth error, refreshing token and retrying...`);
           try {
-            const newToken = await refresher();
-            if (newToken) {
-              upstreamConfig.apiKey = newToken;
-              upstreamHeaders.Authorization = `Bearer ${newToken}`;
+            const refreshResult = await refresher(upstreamConfig.apiKey);
+            if (refreshResult.accessToken) {
+              upstreamConfig.apiKey = refreshResult.accessToken;
+              upstreamHeaders.Authorization = `Bearer ${refreshResult.accessToken}`;
               upstreamResponse = await session.defaultSession.fetch(upstreamUrl, {
                 method: 'POST',
                 headers: upstreamHeaders,
                 body,
               });
               console.log(`[CoworkProxy] OpenAI passthrough: retry status=${upstreamResponse.status}`);
+            } else if (isTemporaryLobsterAIAuthRefreshFailure(
+              upstreamConfig.provider,
+              refreshResult,
+            )) {
+              writeJSON(
+                res,
+                503,
+                createAnthropicErrorBody(
+                  'Login verification is temporarily unavailable. Please retry.',
+                  'service_unavailable',
+                ),
+              );
+              return;
             }
           } catch (refreshErr) {
             console.warn(`[CoworkProxy] OpenAI passthrough: ${upstreamConfig.provider} token refresh failed:`, refreshErr);
@@ -2709,26 +2745,39 @@ async function handleRequest(
     // 401/403 likely means the token expired.  Look up the registered
     // refresher for this provider and retry once with a fresh token.
     if (
-      (upstreamResponse.status === 401 || upstreamResponse.status === 403)
+      shouldRefreshProxyToken(upstreamResponse.status, upstreamConfig?.provider)
       && upstreamConfig?.provider
     ) {
       const refresher = tokenRefreshers.get(upstreamConfig.provider);
       if (refresher) {
         console.log(`[CoworkProxy] Got ${upstreamResponse.status} from ${upstreamConfig.provider}, attempting token refresh and retry...`);
         try {
-          const newToken = await refresher();
-          if (newToken) {
+          const refreshResult = await refresher(upstreamConfig.apiKey);
+          if (refreshResult.accessToken) {
             if (isGeminiProvider(upstreamConfig.provider, upstreamConfig.baseURL)) {
-              headers['x-goog-api-key'] = newToken;
+              headers['x-goog-api-key'] = refreshResult.accessToken;
             } else {
-              headers.Authorization = `Bearer ${newToken}`;
+              headers.Authorization = `Bearer ${refreshResult.accessToken}`;
             }
             if (upstreamConfig) {
-              upstreamConfig.apiKey = newToken;
+              upstreamConfig.apiKey = refreshResult.accessToken;
             }
             upstreamResponse = await sendUpstreamRequest(upstreamRequest, currentTargetURL);
             const retryDuration = Date.now() - fetchStartTime;
             console.log(`[CoworkProxy] Token refresh retry: status=${upstreamResponse.status}, ok=${upstreamResponse.ok}, fetchTime=${retryDuration}ms`);
+          } else if (isTemporaryLobsterAIAuthRefreshFailure(
+            upstreamConfig.provider,
+            refreshResult,
+          )) {
+            writeJSON(
+              res,
+              503,
+              createAnthropicErrorBody(
+                'Login verification is temporarily unavailable. Please retry.',
+                'service_unavailable',
+              ),
+            );
+            return;
           }
         } catch (refreshError) {
           console.warn(`[CoworkProxy] Token refresh for ${upstreamConfig.provider} failed:`, refreshError);
@@ -2890,47 +2939,52 @@ export const __openAICompatProxyTestUtils = {
   processResponsesStreamEvent,
   convertChatCompletionsRequestToResponsesRequest,
   filterOpenAIToolsForProvider,
+  isTemporaryLobsterAIAuthRefreshFailure,
   isGeminiProvider,
+  shouldRefreshProxyToken,
 };
 
-export async function startCoworkOpenAICompatProxy(): Promise<void> {
+export async function startCoworkOpenAICompatProxy(options: {
+  /** Persisted secret; OpenClaw config references it as ${LOBSTER_PROXY_TOKEN}. */
+  authToken?: string;
+  /** Port from the previous launch; an ephemeral port is used when it is taken. */
+  preferredPort?: number | null;
+} = {}): Promise<void> {
   if (proxyServer) {
     return;
   }
 
-  proxyAuthToken = crypto.randomBytes(24).toString('hex');
+  proxyAuthToken = options.authToken || crypto.randomBytes(24).toString('hex');
 
-  await new Promise<void>((resolve, reject) => {
-    const server = http.createServer((req, res) => {
-      void handleRequest(req, res).catch((error) => {
-        const message = error instanceof Error ? error.message : 'Internal proxy error';
-        lastProxyError = message;
-        if (!res.headersSent) {
-          writeJSON(res, 500, createAnthropicErrorBody(message));
-        } else {
-          res.end();
-        }
-      });
-    });
-
-    server.on('error', (error) => {
-      lastProxyError = error.message;
-      reject(error);
-    });
-
-    server.listen(0, PROXY_BIND_HOST, () => {
-      const addr = server.address();
-      if (!addr || typeof addr === 'string') {
-        reject(new Error('Failed to bind OpenAI compatibility proxy port'));
-        return;
+  const server = http.createServer((req, res) => {
+    void handleRequest(req, res).catch((error) => {
+      const message = error instanceof Error ? error.message : 'Internal proxy error';
+      lastProxyError = message;
+      if (!res.headersSent) {
+        writeJSON(res, 500, createAnthropicErrorBody(message));
+      } else {
+        res.end();
       }
-      console.log(`[CoworkProxy] Proxy server started on port ${addr.port}`);
-      proxyServer = server;
-      proxyPort = addr.port;
-      lastProxyError = null;
-      resolve();
     });
   });
+
+  try {
+    const { port, reused } = await listenOnLoopback(server, PROXY_BIND_HOST, options.preferredPort);
+    server.on('error', (error) => {
+      lastProxyError = error.message;
+    });
+    console.log(`[CoworkProxy] Proxy server started on port ${port}${reused ? ' (reused port)' : ''}`);
+    proxyServer = server;
+    proxyPort = port;
+    lastProxyError = null;
+  } catch (error) {
+    lastProxyError = error instanceof Error ? error.message : String(error);
+    throw error;
+  }
+}
+
+export function getCoworkOpenAICompatProxyPort(): number | null {
+  return proxyPort;
 }
 
 export async function stopCoworkOpenAICompatProxy(): Promise<void> {
@@ -2943,14 +2997,28 @@ export async function stopCoworkOpenAICompatProxy(): Promise<void> {
   proxyPort = null;
   proxyAuthToken = null;
 
+  // server.close() alone waits for every established client connection to
+  // drop. The OpenClaw gateway keeps keep-alive sockets to this proxy, so an
+  // unbounded close can hang shutdown forever: give clients a short drain
+  // window, then force-close connections, with a hard deadline either way.
   await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
+    let settled = false;
+    let drainTimer: ReturnType<typeof setTimeout> | null = null;
+    let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+    const settle = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (drainTimer) clearTimeout(drainTimer);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
       if (error) {
         reject(error);
         return;
       }
       resolve();
-    });
+    };
+    drainTimer = setTimeout(() => server.closeAllConnections(), 1_000);
+    deadlineTimer = setTimeout(() => settle(), 3_000);
+    server.close((error) => settle(error ?? undefined));
   });
 }
 
@@ -2963,7 +3031,7 @@ export function configureCoworkOpenAICompatProxy(config: OpenAICompatUpstreamCon
   lastProxyError = null;
 }
 
-export function registerProxyTokenRefresher(provider: string, refresher: () => Promise<string | null>): void {
+export function registerProxyTokenRefresher(provider: string, refresher: ProxyTokenRefresher): void {
   tokenRefreshers.set(provider, refresher);
 }
 

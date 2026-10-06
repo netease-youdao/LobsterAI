@@ -1,3 +1,5 @@
+import { LogReporterEndpoint } from '../../shared/analytics/constants';
+
 const LOG_PREVIEW_MAX_CHARS = 400;
 const MAX_LOG_ARRAY_ITEMS = 10;
 const MAX_LOG_OBJECT_KEYS = 20;
@@ -84,6 +86,20 @@ export function serializeForLog(value: unknown, maxChars = LOG_PREVIEW_MAX_CHARS
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return truncateForLog(`"[log-serialization-failed:${message}]"`, maxChars);
+  }
+}
+
+// Usage-analytics beacons are fire-and-forget and arrive dozens to hundreds of
+// times a day; the reporter already writes its own one-line trace per event,
+// so the generic request/response logging would only duplicate it.
+const ANALYTICS_ENDPOINT = new URL(LogReporterEndpoint.YoudaoAnalyzer);
+
+export function isAnalyticsEndpointUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.origin === ANALYTICS_ENDPOINT.origin && url.pathname === ANALYTICS_ENDPOINT.pathname;
+  } catch {
+    return false;
   }
 }
 

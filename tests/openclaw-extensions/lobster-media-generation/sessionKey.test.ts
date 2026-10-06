@@ -11,6 +11,10 @@ describe('lobster-media-generation session key gating', () => {
     expect(isLobsterAiDesktopSessionKey('agent:creative-agent:lobsterai:session-2')).toBe(true);
   });
 
+  test('allows materialized subagent child sessions', () => {
+    expect(isLobsterAiDesktopSessionKey('agent:creative-agent:subagent:run-1')).toBe(true);
+  });
+
   test('allows legacy desktop sessions', () => {
     expect(isLobsterAiDesktopSessionKey('lobsterai:session-3')).toBe(true);
   });

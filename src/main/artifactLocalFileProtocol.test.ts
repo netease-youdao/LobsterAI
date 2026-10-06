@@ -43,7 +43,7 @@ describe('artifact local file protocol', () => {
 
   test('resolves localfile URLs back to absolute file paths', () => {
     const filePath = createTempFile('generated video.mp4', '0123456789');
-    expect(getLocalFileProtocolPath(toLocalFileUrl(filePath))).toBe(filePath);
+    expect(path.normalize(getLocalFileProtocolPath(toLocalFileUrl(filePath)))).toBe(path.normalize(filePath));
   });
 
   test('recovers paths that were previously prefixed with cwd and MEDIA marker', () => {

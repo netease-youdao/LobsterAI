@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -7,10 +8,17 @@ import {
   HtmlShareSourceType,
   HtmlShareStatus,
 } from '../../../shared/htmlShare/constants';
+import { normalizePublishingSubscriptionRecoveryMode } from '../../../shared/publishing/constants';
 import {
   type ShareDeploymentCreateNodeInput,
+  type ShareDeploymentDownloadPersistenceInput,
+  type ShareDeploymentDownloadPersistenceResult,
+  ShareDeploymentFailureCode,
+  type ShareDeploymentFailureCode as ShareDeploymentFailureCodeValue,
   type ShareDeploymentGetByLocalServiceInput,
   ShareDeploymentKind,
+  type ShareDeploymentPersistenceInfoResult,
+  ShareDeploymentPersistenceUpdateMode,
   type ShareDeploymentProjectAnalysis,
   type ShareDeploymentRecord,
   type ShareDeploymentResult,
@@ -25,6 +33,8 @@ interface ApiResponse<T> {
   message?: string;
   data?: T;
 }
+
+const MAX_API_ERROR_RESPONSE_BYTES = 64 * 1024;
 
 interface ServerShareDeploymentResponse {
   deploymentId?: string;
@@ -50,9 +60,12 @@ interface ServerShareDeploymentResponse {
   region?: string;
   providerResourceId?: string;
   runtimeUrlMasked?: string;
-  expiresAt?: string;
+  persistence?: ShareDeploymentRecord['persistence'];
+  expiresAt?: string | null;
+  subscriptionRecoveryMode?: unknown;
   lastAccessedAt?: string;
   failureMessage?: string;
+  failureCode?: string;
   createdAt?: string;
   updatedAt?: string;
   events?: ShareDeploymentRecord['events'];
@@ -231,6 +244,10 @@ function normalizeDeploymentStatus(value?: string): ShareDeploymentStatus {
   }
 }
 
+function normalizeDeploymentFailureCode(value?: string): ShareDeploymentFailureCodeValue | undefined {
+  return Object.values(ShareDeploymentFailureCode).find(code => code === value);
+}
+
 function buildDeploymentRecord(
   data: ServerShareDeploymentResponse | undefined,
   publicBaseUrl: string,
@@ -276,8 +293,15 @@ function buildDeploymentRecord(
     providerRegion: data.region,
     providerFunctionId: data.providerResourceId,
     providerEndpoint: data.runtimeUrlMasked,
-    expiresAt: data.expiresAt,
+    persistence: data.persistence,
+    ...(Object.prototype.hasOwnProperty.call(data, 'expiresAt')
+      ? { expiresAt: data.expiresAt }
+      : {}),
+    subscriptionRecoveryMode: normalizePublishingSubscriptionRecoveryMode(
+      data.subscriptionRecoveryMode,
+    ),
     lastAccessedAt: data.lastAccessedAt,
+    errorCode: normalizeDeploymentFailureCode(data.failureCode),
     errorMessage: data.failureMessage,
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
@@ -287,6 +311,15 @@ function buildDeploymentRecord(
 
 function buildManifest(input: UploadNodeDeploymentInput | UploadStaticDeploymentInput): Record<string, unknown> {
   const isStaticDeployment = input.deploymentKind === ShareDeploymentKind.StaticSite;
+  const persistence = input.persistence ?? input.analysis.persistence;
+  const manifestPersistence =
+    !isStaticDeployment && persistence?.enabled && persistence.bindings.length > 0
+      ? {
+          ...persistence,
+          updateMode:
+            input.persistenceUpdateMode ?? ShareDeploymentPersistenceUpdateMode.Preserve,
+        }
+      : undefined;
   return {
     schemaVersion: 1,
     deploymentKind: isStaticDeployment ? ShareDeploymentKind.StaticSite : ShareDeploymentKind.NodeService,
@@ -309,6 +342,7 @@ function buildManifest(input: UploadNodeDeploymentInput | UploadStaticDeployment
     includedFileCount: input.analysis.totalFiles,
     estimatedSourceArchiveBytes: input.archiveBytes,
     localServiceUrl: input.localServiceUrl,
+    ...(manifestPersistence ? { persistence: manifestPersistence } : {}),
     env: [],
   };
 }
@@ -335,6 +369,9 @@ export async function uploadNodeDeployment(
   form.set('title', input.title);
   form.set('accessMode', input.accessMode ?? HtmlShareAccessMode.Code);
   form.set('clientSourceKey', input.clientSourceKey);
+  if (input.quotaReservationId) {
+    form.set('quotaReservationId', input.quotaReservationId);
+  }
   form.set('sourceSha256', input.sourceSha256);
   form.set('manifest', JSON.stringify(buildManifest(input)));
   form.set('sourceArchive', archiveBlob, 'deployment.zip');
@@ -376,6 +413,9 @@ export async function uploadStaticDeployment(
   form.set('title', input.title);
   form.set('accessMode', input.accessMode ?? HtmlShareAccessMode.Code);
   form.set('clientSourceKey', input.clientSourceKey);
+  if (input.quotaReservationId) {
+    form.set('quotaReservationId', input.quotaReservationId);
+  }
   form.set('sourceSha256', input.sourceSha256);
   form.set('manifest', JSON.stringify(buildManifest(input)));
   form.set('sourceArchive', archiveBlob, 'deployment.zip');
@@ -427,6 +467,69 @@ export async function getNodeDeployment(
   return {
     success: true,
     deployment,
+  };
+}
+
+export async function getDeploymentPersistence(
+  serverBaseUrl: string,
+  fetchWithAuth: FetchWithAuth,
+  deploymentId: string,
+): Promise<ShareDeploymentPersistenceInfoResult> {
+  const response = await fetchWithAuth(
+    `${serverBaseUrl}/api/share-deployments/${encodeURIComponent(deploymentId)}/persistence`,
+  );
+  const payload = (await response.json().catch((): null => null)) as
+    | ApiResponse<ShareDeploymentRecord['persistence']>
+    | null;
+  if (!response.ok || payload?.code !== 0) {
+    return {
+      success: false,
+      error: payload?.message || `Service data lookup failed: ${response.status}`,
+      code: payload?.code,
+    };
+  }
+  return {
+    success: true,
+    persistence: payload.data ?? null,
+  };
+}
+
+export async function downloadDeploymentPersistenceArchive(
+  serverBaseUrl: string,
+  fetchWithAuth: FetchWithAuth,
+  input: ShareDeploymentDownloadPersistenceInput,
+): Promise<ShareDeploymentDownloadPersistenceResult> {
+  const response = await fetchWithAuth(
+    `${serverBaseUrl}/api/share-deployments/${encodeURIComponent(input.deploymentId)}/persistence/archive`,
+  );
+  if (response.status === 204) {
+    return {
+      success: true,
+      empty: true,
+    };
+  }
+  const archiveBuffer = Buffer.from(await response.arrayBuffer());
+  const payload = parsePersistenceArchiveError(archiveBuffer);
+  if (!response.ok && isMissingPersistenceDataError(payload?.message)) {
+    return {
+      success: true,
+      empty: true,
+    };
+  }
+  if (!response.ok || !hasZipArchiveSignature(archiveBuffer)) {
+    return {
+      success: false,
+      error: payload?.message || (response.ok
+        ? 'Service data download returned an invalid archive.'
+        : `Service data download failed: ${response.status}`),
+      code: payload?.code,
+    };
+  }
+
+  const filePath = await writeDeploymentPersistenceArchive(archiveBuffer, input);
+  return {
+    success: true,
+    filePath,
   };
 }
 
@@ -492,4 +595,50 @@ export async function getNodeDeploymentByLocalService(
       disabledSource: matchedShare.disabledSource ?? deployment.disabledSource,
     },
   };
+}
+
+function sanitizePersistenceArchiveId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'service';
+}
+
+async function writeDeploymentPersistenceArchive(
+  archiveBuffer: Buffer,
+  input: ShareDeploymentDownloadPersistenceInput,
+): Promise<string> {
+  const archiveId = sanitizePersistenceArchiveId(input.shareId || input.deploymentId);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const projectDirectory = input.projectDirectory?.trim();
+  const backupRoot = projectDirectory
+    ? path.join(projectDirectory, '.lobster', 'persistence', archiveId, timestamp)
+    : path.join(os.homedir(), 'Downloads');
+  const fileName = projectDirectory
+    ? `${archiveId}-service-data.zip`
+    : `${archiveId}-service-data-${timestamp}.zip`;
+  await fs.promises.mkdir(backupRoot, { recursive: true });
+  const filePath = path.join(backupRoot, fileName);
+  await fs.promises.writeFile(filePath, archiveBuffer);
+  return filePath;
+}
+
+function hasZipArchiveSignature(buffer: Buffer): boolean {
+  if (buffer.length < 4 || buffer[0] !== 0x50 || buffer[1] !== 0x4b) return false;
+  return (
+    (buffer[2] === 0x03 && buffer[3] === 0x04) ||
+    (buffer[2] === 0x05 && buffer[3] === 0x06) ||
+    (buffer[2] === 0x07 && buffer[3] === 0x08)
+  );
+}
+
+function parsePersistenceArchiveError(buffer: Buffer): ApiResponse<unknown> | null {
+  if (buffer.length === 0 || buffer.length > MAX_API_ERROR_RESPONSE_BYTES) return null;
+  try {
+    const payload = JSON.parse(buffer.toString('utf8')) as ApiResponse<unknown>;
+    return payload && typeof payload === 'object' ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function isMissingPersistenceDataError(message?: string): boolean {
+  return message?.toLowerCase().includes('cloud data does not exist') ?? false;
 }

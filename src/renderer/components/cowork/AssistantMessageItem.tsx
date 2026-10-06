@@ -62,6 +62,7 @@ const AssistantMessageItem: React.FC<{
   planConfirmationMessageId?: string | null;
   onConfirmPlan?: (messageId: string) => void;
   onAdjustPlan?: (messageId: string) => void;
+  forceSearchExpanded?: boolean;
 }> = ({
   message,
   resolveLocalFilePath,
@@ -73,6 +74,7 @@ const AssistantMessageItem: React.FC<{
   planConfirmationMessageId,
   onConfirmPlan,
   onAdjustPlan,
+  forceSearchExpanded = false,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ImagePreviewSource | null>(null);
@@ -134,6 +136,7 @@ const AssistantMessageItem: React.FC<{
     <div
       className="relative focus:outline-none"
       data-cowork-assistant-message-id={message.id}
+      data-cowork-search-message-id={message.id}
       tabIndex={showCopyButton ? 0 : undefined}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={handleMouseLeave}
@@ -147,11 +150,15 @@ const AssistantMessageItem: React.FC<{
               content={displayContent}
               className="prose dark:prose-invert max-w-none"
               resolveLocalFilePath={resolveLocalFilePath}
-              showRevealInFolderAction
+              forceExpanded={forceSearchExpanded}
               onImageClick={handleImageClick}
             />
             {showCopyButton && (
-              <div className={messageMetaClassName(metaVisible)} aria-hidden={!metaVisible}>
+              <div
+                className={messageMetaClassName(metaVisible)}
+                aria-hidden={!metaVisible}
+                data-cowork-search-exclude="true"
+              >
                 {goalCompletionLabel && (
                   <span className="inline-flex items-center gap-1 text-secondary">
                     <GoalIcon className="h-3.5 w-3.5" />
@@ -193,12 +200,17 @@ const AssistantMessageItem: React.FC<{
               showConfirmationActions={showPlanConfirmationActions}
               onConfirmExecution={showPlanConfirmationActions ? () => onConfirmPlan?.(message.id) : undefined}
               onAdjustPlan={showPlanConfirmationActions ? () => onAdjustPlan?.(message.id) : undefined}
+              forceExpanded={forceSearchExpanded}
             />
           </div>
         )}
       </div>
       {showCopyButton && !displayContent && (
-        <div className={messageMetaClassName(metaVisible)} aria-hidden={!metaVisible}>
+        <div
+          className={messageMetaClassName(metaVisible)}
+          aria-hidden={!metaVisible}
+          data-cowork-search-exclude="true"
+        >
           {goalCompletionLabel && (
             <span className="inline-flex items-center gap-1 text-secondary">
               <GoalIcon className="h-3.5 w-3.5" />

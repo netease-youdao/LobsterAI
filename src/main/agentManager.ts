@@ -42,6 +42,10 @@ export class AgentManager {
     });
   }
 
+  reorderAgents(agentIds: string[]): Agent[] {
+    return this.store.reorderAgents(agentIds);
+  }
+
   deleteAgent(agentId: string): boolean {
     return this.store.deleteAgent(agentId);
   }

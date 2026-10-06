@@ -1,0 +1,211 @@
+diff --git a/src/gateway/server-methods/web.ts b/src/gateway/server-methods/web.ts
+--- a/src/gateway/server-methods/web.ts
++++ b/src/gateway/server-methods/web.ts
+@@ -16,16 +16,16 @@
+ 
+ const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
+ 
+-/** Resolves the channel plugin that currently owns web QR-login methods. */
+-const resolveWebLoginProvider = () =>
+-  listChannelPlugins().find((plugin) =>
++/** Lists loaded providers without silently choosing by display order. */
++const listWebLoginProviders = () =>
++  listChannelPlugins().filter((plugin) =>
+     [
+       ...(plugin.gatewayMethods ?? []),
+       ...(plugin.gatewayMethodDescriptors ?? []).map((descriptor) => descriptor.name),
+     ].some((method) => WEB_LOGIN_METHODS.has(method)),
+-  ) ?? null;
+-
+-type WebLoginProvider = NonNullable<ReturnType<typeof resolveWebLoginProvider>>;
++  );
++
++type WebLoginProvider = ReturnType<typeof listWebLoginProviders>[number];
+ type WebLoginGateway = NonNullable<WebLoginProvider["gateway"]>;
+ type WebLoginGatewayMethod = "loginWithQrStart" | "loginWithQrWait";
+ 
+@@ -92,7 +92,32 @@
+   run: NonNullable<WebLoginGateway[TMethod]>;
+ } | null {
+   const accountId = resolveAccountId(params.rawParams);
+-  const provider = resolveWebLoginProvider();
++  const channel = (params.rawParams as { channel?: string }).channel?.trim();
++  const providers = listWebLoginProviders();
++  if (channel === undefined && providers.length > 1) {
++    params.respond(
++      false,
++      undefined,
++      errorShape(
++        ErrorCodes.INVALID_REQUEST,
++        "channel is required when multiple web login providers are available",
++      ),
++    );
++    return null;
++  }
++  const provider =
++    channel === undefined ? providers[0] : providers.find((candidate) => candidate.id === channel);
++  if (!provider && channel !== undefined) {
++    params.respond(
++      false,
++      undefined,
++      errorShape(
++        ErrorCodes.INVALID_REQUEST,
++        `web login provider is not available for channel ${channel}`,
++      ),
++    );
++    return null;
++  }
+   if (!provider) {
+     respondProviderUnavailable({
+       respond: params.respond,
+diff --git a/packages/gateway-protocol/src/schema/channels.ts b/packages/gateway-protocol/src/schema/channels.ts
+--- a/packages/gateway-protocol/src/schema/channels.ts
++++ b/packages/gateway-protocol/src/schema/channels.ts
+@@ -712,6 +712,7 @@
+ 
+ /** Starts browser/web login for a channel account. */
+ export const WebLoginStartParamsSchema = closedObject({
++  channel: Type.Optional(NonEmptyString),
+   force: Type.Optional(Type.Boolean()),
+   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+   verbose: Type.Optional(Type.Boolean()),
+@@ -725,6 +726,7 @@
+ 
+ /** Waits for web login completion or the next QR code. */
+ export const WebLoginWaitParamsSchema = closedObject({
++  channel: Type.Optional(NonEmptyString),
+   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+   accountId: Type.Optional(Type.String()),
+   currentQrDataUrl: Type.Optional(QrDataUrlSchema),
+diff --git a/src/gateway/server-methods/web.channel.test.ts b/src/gateway/server-methods/web.channel.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/gateway/server-methods/web.channel.test.ts
+@@ -0,0 +1,127 @@
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import {
++  validateWebLoginStartParams,
++  validateWebLoginWaitParams,
++} from "../../../packages/gateway-protocol/src/index.js";
++import type { GatewayRequestHandlerOptions } from "./types.js";
++
++const mocks = vi.hoisted(() => ({ listChannelPlugins: vi.fn() }));
++vi.mock("../../channels/plugins/index.js", () => ({
++  listChannelPlugins: mocks.listChannelPlugins,
++}));
++vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
++  resolveMissingOfficialExternalChannelPluginRepairHints: () => [],
++}));
++import { webHandlers } from "./web.js";
++
++const Channel = { Weixin: "openclaw-weixin", QQ: "qqbot" } as const;
++const Method = { Start: "web.login.start", Wait: "web.login.wait" } as const;
++
++function provider(id: string) {
++  return {
++    id,
++    gatewayMethods: [Method.Start, Method.Wait],
++    gateway: {
++      loginWithQrStart: vi.fn(async () => ({
++        qrDataUrl: "qr",
++        sessionKey: "session",
++        message: "scan",
++      })),
++      loginWithQrWait: vi.fn(async () => ({ connected: true, accountId: "account" })),
++    },
++  };
++}
++
++async function invoke(
++  method: (typeof Method)[keyof typeof Method],
++  params: Record<string, unknown>,
++) {
++  const respond = vi.fn();
++  const context = {
++    stopChannel: vi.fn(),
++    startChannel: vi.fn(),
++    getRuntimeConfig: () => ({}),
++    getRuntimeSnapshot: () => ({
++      channels: { [Channel.Weixin]: { running: true }, [Channel.QQ]: { running: true } },
++      channelAccounts: {},
++    }),
++  };
++  await webHandlers[method]!({
++    params,
++    respond,
++    context,
++  } as unknown as GatewayRequestHandlerOptions);
++  return { respond, context };
++}
++
++describe("channel-scoped web login", () => {
++  beforeEach(() => vi.clearAllMocks());
++
++  it.each([false, true])(
++    "routes start and wait to Weixin regardless of provider order (reverse=%s)",
++    async (reverse) => {
++      const qq = provider(Channel.QQ);
++      const weixin = provider(Channel.Weixin);
++      mocks.listChannelPlugins.mockReturnValue(reverse ? [weixin, qq] : [qq, weixin]);
++      const start = await invoke(Method.Start, { channel: Channel.Weixin, force: true });
++      expect(start.respond).toHaveBeenCalledWith(
++        true,
++        expect.objectContaining({ sessionKey: "session" }),
++        undefined,
++      );
++      expect(start.context.stopChannel).toHaveBeenCalledExactlyOnceWith(Channel.Weixin, undefined);
++      expect(qq.gateway.loginWithQrStart).not.toHaveBeenCalled();
++      const wait = await invoke(Method.Wait, { channel: Channel.Weixin, accountId: "session" });
++      expect(weixin.gateway.loginWithQrWait).toHaveBeenCalledWith(
++        expect.objectContaining({ accountId: "session" }),
++      );
++      expect(wait.context.startChannel).toHaveBeenCalledExactlyOnceWith(Channel.Weixin, "session");
++      expect(qq.gateway.loginWithQrWait).not.toHaveBeenCalled();
++    },
++  );
++
++  it.each([Method.Start, Method.Wait])(
++    "rejects ambiguous, missing or invalid channels before side effects in %s",
++    async (method) => {
++      const qq = provider(Channel.QQ);
++      const weixin = provider(Channel.Weixin);
++      mocks.listChannelPlugins.mockReturnValue([qq, weixin]);
++      for (const channel of [undefined, "missing", "", " ", 42]) {
++        const { respond, context } = await invoke(method, {
++          ...(channel === undefined ? {} : { channel }),
++          ...(method === Method.Start ? { force: true } : {}),
++        });
++        expect(respond).toHaveBeenCalledWith(
++          false,
++          undefined,
++          expect.objectContaining({ code: "INVALID_REQUEST" }),
++        );
++        expect(context.startChannel).not.toHaveBeenCalled();
++        expect(context.stopChannel).not.toHaveBeenCalled();
++      }
++      for (const item of [qq, weixin]) {
++        expect(item.gateway.loginWithQrStart).not.toHaveBeenCalled();
++        expect(item.gateway.loginWithQrWait).not.toHaveBeenCalled();
++      }
++    },
++  );
++
++  it("retains single-provider compatibility and allows explicitly selecting QQ", async () => {
++    const qq = provider(Channel.QQ);
++    mocks.listChannelPlugins.mockReturnValue([qq]);
++    const legacy = await invoke(Method.Start, {});
++    expect(legacy.respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
++    mocks.listChannelPlugins.mockReturnValue([provider(Channel.Weixin), qq]);
++    const selected = await invoke(Method.Start, { channel: Channel.QQ });
++    expect(selected.respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
++    expect(qq.gateway.loginWithQrStart).toHaveBeenCalledTimes(2);
++  });
++
++  it("accepts channel in both closed schemas without weakening unrelated validation", () => {
++    for (const validate of [validateWebLoginStartParams, validateWebLoginWaitParams]) {
++      expect(validate({ channel: Channel.Weixin, accountId: "session" })).toBe(true);
++      expect(validate({ channel: "" })).toBe(false);
++      expect(validate({ channel: Channel.Weixin, unrelated: true })).toBe(false);
++    }
++  });
++});

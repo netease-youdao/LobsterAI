@@ -143,10 +143,10 @@ describe('conversationOptionMatchesValue', () => {
   // delivery dropdown highlight/select the group without confusing it with the
   // DM sibling (previously the target was auto-resolved and not user-selectable).
   test('disambiguates a group target from a DM sibling on the same bot', () => {
-    const groupId = 'bot1:group:12345@popo.netease.com';
-    const dmId = 'bot1:direct:67890@popo.netease.com';
+    const groupId = 'bot1:group:zhangsan@popo.example.com';
+    const dmId = 'bot1:direct:lisi@popo.example.com';
     expect(conversationOptionMatchesValue('popo', groupId, groupId)).toBe(true);
-    expect(conversationOptionMatchesValue('popo', groupId, '12345@popo.netease.com')).toBe(true);
+    expect(conversationOptionMatchesValue('popo', groupId, 'zhangsan@popo.example.com')).toBe(true);
     expect(conversationOptionMatchesValue('popo', groupId, dmId)).toBe(false);
     expect(conversationOptionMatchesValue('popo', dmId, groupId)).toBe(false);
   });
@@ -172,7 +172,7 @@ describe('formatConversationOptionLabel', () => {
   test('derives name and kind from the conversation id when fields are missing', () => {
     const label = formatConversationOptionLabel({
       ...baseOption,
-      conversationId: 'bot1:group:12345@popo.netease.com',
+      conversationId: 'bot1:group:12345@popo.example.com',
     });
     expect(label).toBe(`${i18nService.t('scheduledTasksConvKindGroup')} · 12345`);
   });

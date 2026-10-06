@@ -1,4 +1,3 @@
-import { AuthSubscriptionStatus } from '@shared/auth/constants';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 
@@ -8,21 +7,38 @@ import { RootState } from '../store';
 
 type CampaignKind = 'reset' | 'promo';
 
+interface CampaignCandidate {
+  kind: CampaignKind;
+  campaignCode?: string;
+  expiresAt?: string;
+  storageKey: string;
+}
+
 const todayKey = () => {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 };
 
-const storageKeyFor = (userKey: string, kind: CampaignKind) => (
-  `credits_reset_campaign_manual_dismissed.${userKey}.${kind}.${todayKey()}`
+const storageKeyFor = (userKey: string, kind: CampaignKind, campaignCode?: string) => (
+  `credits_reset_campaign_manual_dismissed.${userKey}.${kind}.${campaignCode ?? 'legacy'}.${todayKey()}`
 );
+
+const formatExpiry = (expiresAt?: string): string => {
+  if (!expiresAt) return '';
+  const datePart = expiresAt.split('T')[0];
+  if (!datePart) return expiresAt;
+  const [year, month, day] = datePart.split('-');
+  if (!year || !month || !day) return datePart;
+  return i18nService.getLanguage() === 'en'
+    ? `${year}-${month}-${day}`
+    : `${Number(month)}月${Number(day)}日`;
+};
 
 const CreditsResetCampaignFloat: React.FC = () => {
   const user = useSelector((state: RootState) => state.auth.user);
-  const quota = useSelector((state: RootState) => state.auth.quota);
   const profileSummary = useSelector((state: RootState) => state.auth.profileSummary);
   const [, forceLanguageRefresh] = useState(0);
-  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
+  const [dismissedKeys, setDismissedKeys] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     const unsubscribe = i18nService.subscribe(() => {
@@ -31,51 +47,65 @@ const CreditsResetCampaignFloat: React.FC = () => {
     return unsubscribe;
   }, []);
 
-  const campaignKind = useMemo<CampaignKind | null>(() => {
-    if (!profileSummary) return null;
-    if (profileSummary.creditsResetCampaign?.active === false) return null;
-    if ((profileSummary.availableResetCount ?? 0) > 0) return 'reset';
-    if (quota?.subscriptionStatus === AuthSubscriptionStatus.Active) return null;
-    if ((profileSummary.availablePromoSubscriptionCount ?? 0) > 0) return 'promo';
-    return null;
-  }, [profileSummary, quota?.subscriptionStatus]);
-
   const userKey = profileSummary?.id?.toString()
     ?? user?.id?.toString()
     ?? user?.userId
     ?? user?.yid
     ?? 'anonymous';
 
-  const currentStorageKey = campaignKind ? storageKeyFor(userKey, campaignKind) : null;
+  const candidates = useMemo<CampaignCandidate[]>(() => {
+    const status = profileSummary?.creditsResetCampaign;
+    if (!status) return [];
+    const entitlements = status.resetEntitlements?.length
+      ? [...status.resetEntitlements].sort((a, b) => a.expiresAt.localeCompare(b.expiresAt))
+      : (profileSummary.availableResetCount ?? 0) > 0
+        ? [{ campaignCode: status.campaignCode, expiresAt: status.endAt }]
+        : [];
+    if (entitlements.length > 0) {
+      return entitlements.map((entitlement) => ({
+        kind: 'reset' as const,
+        campaignCode: entitlement.campaignCode,
+        expiresAt: entitlement.expiresAt,
+        storageKey: storageKeyFor(userKey, 'reset', entitlement.campaignCode),
+      }));
+    }
+    if ((profileSummary.availablePromoSubscriptionCount ?? 0) > 0) {
+      return [{
+        kind: 'promo',
+        storageKey: storageKeyFor(userKey, 'promo', status.campaignCode),
+      }];
+    }
+    return [];
+  }, [profileSummary, userKey]);
+
+  const candidateKey = candidates.map((candidate) => candidate.storageKey).join('|');
 
   useEffect(() => {
-    if (!currentStorageKey) {
-      setDismissedKey(null);
-      return;
-    }
-    setDismissedKey(localStorage.getItem(currentStorageKey) === '1' ? currentStorageKey : null);
-  }, [currentStorageKey]);
+    const keys = candidateKey ? candidateKey.split('|') : [];
+    setDismissedKeys(new Set(keys.filter((key) => localStorage.getItem(key) === '1')));
+  }, [candidateKey]);
 
-  if (!campaignKind || !currentStorageKey || dismissedKey === currentStorageKey) {
-    return null;
-  }
+  const candidate = candidates.find((item) => !dismissedKeys.has(item.storageKey));
+  if (!candidate) return null;
 
   const dismissToday = () => {
-    localStorage.setItem(currentStorageKey, '1');
-    setDismissedKey(currentStorageKey);
+    localStorage.setItem(candidate.storageKey, '1');
+    setDismissedKeys((current) => new Set(current).add(candidate.storageKey));
   };
 
   const openActivity = async () => {
-    await window.electron.shell.openExternal(getPortalCreditsResetActivityUrl());
+    await window.electron.shell.openExternal(
+      getPortalCreditsResetActivityUrl(candidate.kind === 'reset' ? candidate.campaignCode : undefined),
+    );
   };
 
-  const title = i18nService.t(campaignKind === 'reset'
+  const title = i18nService.t(candidate.kind === 'reset'
     ? 'authCreditsResetFloatTitle'
     : 'authPromoSubscriptionFloatTitle');
-  const desc = i18nService.t(campaignKind === 'reset'
-    ? 'authCreditsResetFloatDesc'
-    : 'authPromoSubscriptionFloatDesc');
-  const action = i18nService.t(campaignKind === 'reset'
+  const desc = candidate.kind === 'reset'
+    ? i18nService.t('authCreditsResetFloatDescWithExpiry').replace('{date}', formatExpiry(candidate.expiresAt))
+    : i18nService.t('authPromoSubscriptionFloatDesc');
+  const action = i18nService.t(candidate.kind === 'reset'
     ? 'authCreditsResetFloatAction'
     : 'authPromoSubscriptionFloatAction');
 

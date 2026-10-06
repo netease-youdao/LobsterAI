@@ -1,0 +1,11 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="soccer ball icon">
+  <g stroke="currentColor" stroke-width="3.25" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="32" cy="32" r="24"/>
+    <path d="M32 19L43 27L39 40H25L21 27L32 19Z"/>
+    <path d="M32 8V19"/>
+    <path d="M55 26L43 27"/>
+    <path d="M46 51L39 40"/>
+    <path d="M18 51L25 40"/>
+    <path d="M9 26L21 27"/>
+  </g>
+</svg>

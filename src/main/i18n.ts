@@ -16,6 +16,24 @@ export type LanguageType = 'zh' | 'en';
 
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    browserPasskeyChooseAccountTitle: '使用通行密钥',
+    browserPasskeyChooseAccountMessage: '选择用于登录 {site} 的账号',
+    browserPasskeyUnnamedAccount: '已保存的账号',
+    browserPasskeyCancel: '取消',
+    xaiAuthMigrationPending: '请等待 AI 引擎完成认证数据升级后，再更改 xAI 登录；若升级失败，请先修复引擎。',
+    xaiAuthStoreFailed: '无法访问 xAI 认证存储，请检查 AI 引擎状态后重试。',
+    openClawStartupMigrationFailed: 'AI 引擎状态升级失败：{error}',
+    openClawPluginVerificationFailed: 'AI 引擎插件校验失败，已停止自动重启。请处理以下插件错误后重试：\n{error}',
+    openClawStartupMigrationRefused: 'AI 引擎启动迁移未完成，已停止自动重启。请先处理以下旧数据，再重新启动网关：\n{error}',
+    openClawStartupCompatibilityRepairing: '正在备份并修复旧版网关状态…',
+    openClawRepairCommandTimeout: '修复命令 {command} 等待 {seconds} 秒后超时，修复已停止。诊断记录：{path}',
+    openClawRepairCommandFailed: '修复命令 {command} 未完成。诊断记录：{path}',
+    openClawDreamingStateRepairing: '正在备份并处理旧版记忆状态…',
+    openClawRuntimeFilesMissing: 'AI 引擎运行文件缺失或无法读取，已停止启动。请退出应用，使用包含修复的最新安装包覆盖安装后重试。',
+    // DeepSeek Harness (experimental)
+    dshWorkbenchTitle: 'DeepSeek Harness 工作台（实验）',
+    dshPlanProviderName: '套餐',
+
     // Tray menu
     trayShowWindow: '打开 LobsterAI',
     trayNewTask: '新建任务',
@@ -23,12 +41,54 @@ const translations: Record<LanguageType, Record<string, string>> = {
     trayCompletedTaskTooltip: 'LobsterAI - {count} 个任务已完成',
     traySettings: '设置',
     trayQuit: '退出',
+
+    // Quit confirmation (native dialog shown on user-initiated quit)
+    appQuitConfirmTitle: '退出 LobsterAI？',
+    appQuitConfirmDetail: 'LobsterAI 关闭期间，定时任务不会运行，也无法回复 IM 消息。',
+    appQuitConfirmUnsafeMarkdown: '有文档修改尚未保存，也尚未备份。退出后这些修改将丢失。请取消退出，返回文档保存修改。',
+    appQuitConfirmQuit: '退出',
+    appQuitConfirmCancel: '取消',
     taskCompletionNotificationTitle: '任务已完成',
     taskCompletionNotificationBody: '有任务已完成，点击查看结果',
     taskCompletionOverlayDescription: '有任务已完成',
+    permissionNotificationTitle: '等待你的确认',
+    permissionNotificationBody: 'Agent 请求执行 {toolName}，等待你的确认',
+    permissionNotificationBodyGeneric: 'Agent 请求执行操作，等待你的确认',
+    questionNotificationTitle: '等待你的回答',
+    questionNotificationBody: '需要你回答问题后才能继续',
+    browserCredentialApprovalHeader: '保存的登录信息',
+    browserCredentialApprovalTitle: '允许 Agent 自动登录',
+    browserCredentialApprovalSubtitle: 'LobsterAI 将在隔离页面中填写，密码不会提供给 Agent。',
+    browserCredentialApprovalQuestion: '是否允许 Agent 使用账号 {username} 登录 {origin}？',
+    browserCredentialApprovalReason: 'Agent 给出的原因：{reason}',
+    browserCredentialApprovalAllow: '允许并继续',
+    browserCredentialApprovalAllowDescription: '自动填写已保存的账号密码并继续当前任务',
+    browserCredentialApprovalDeny: '拒绝',
+    browserCredentialApprovalDenyDescription: '不使用保存的登录信息',
+    browserCredentialSelectionQuestion: '选择允许 Agent 用于登录 {origin} 的账号',
+    browserCredentialSelectionTitle: '选择登录账号',
+    browserCredentialSelectionSubtitle: '选定后，LobsterAI 将自动完成账号密码填写。',
+    browserCredentialSelectionDescription: '使用该账号继续登录',
+    contextMenuCut: '剪切',
+    contextMenuCopy: '复制',
+    contextMenuPaste: '粘贴',
+    contextMenuSelectAll: '全选',
+    agentBrowserMenuScreenshot: '截图',
+    agentBrowserMenuNewBlankPage: '空白页',
+    agentBrowserMenuZoom: '缩放',
+    agentBrowserMenuZoomOut: '缩小',
+    agentBrowserMenuResetZoom: '重置为 100%',
+    agentBrowserMenuZoomIn: '放大',
+    agentBrowserMenuClearCookies: '清除 Cookie',
+    agentBrowserMenuClearCache: '清除缓存',
+    agentBrowserMenuUnavailable: '浏览器窗口当前不可用。',
+    agentBrowserRuntimeUnavailable: 'Agent 浏览器暂不可用，请稍后重试。',
+    agentBrowserMenuOpenFailed: '无法打开浏览器菜单。',
+    agentBrowserZoomFailed: '调整浏览器缩放失败。',
 
     // Session titles (created by ChannelSessionSync)
     coworkDefaultSessionTitle: '新对话',
+    coworkWorkspaceChangesTitle: '工作区变更',
     cronSessionPrefix: '定时',
     channelPrefixFeishu: '飞书',
     channelPrefixDingtalk: '钉钉',
@@ -48,6 +108,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Thinking-only hint
     taskThinkingOnly:
       '[模型未输出内容] 模型已完成思考但未生成可见回复。你可以继续对话，让模型重新输出结果。',
+    taskOutputTruncated:
+      '[输出未完成] 模型已达到本次输出长度上限。部分结果已保留，但任务未确认完成；你可以继续对话以从中断处继续。',
 
     // Feishu bot install
     feishuVerifyCredentialsFailed: '凭证验证失败，请检查 App ID 和 App Secret 是否正确',
@@ -55,32 +117,76 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork error messages (shared with renderer via classifyErrorKey)
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请检查配置。',
+    coworkErrorSubagentSummaryFailed: '子任务已完成，但主 Agent 未能恢复汇总。请继续对话以重试汇总。',
+    coworkErrorLobsterAILoginExpired: '登录状态已过期，请重新登录后继续使用 LobsterAI 套餐模型。',
     coworkErrorOAuthInvalid: 'OAuth 授权已失效或权限不足，请重新授权后重试。',
     coworkErrorModelAccessDenied: '当前账号无权访问该模型，请切换模型或检查服务商账号权限。',
     coworkErrorQuotaExhausted:
       '积分额度已用完，请升级套餐后继续使用。[立即升级/充值](https://lobsterai.youdao.com/portal#/pricing)',
     coworkErrorFreeQuotaExhausted:
       '积分额度已用完，请升级套餐后继续使用。[立即升级/充值](https://lobsterai.youdao.com/portal#/pricing)',
+    coworkErrorEnterpriseMemberQuotaExhausted: '当前团队成员周期额度已用完。',
+    coworkErrorEnterprisePoolExhausted: '当前团队积分池已用完。',
+    coworkErrorEnterpriseCreditBatchesExpired: '当前团队积分批次已全部过期。',
     coworkErrorInsufficientBalance: 'API 余额不足，请充值后重试。',
+    coworkErrorModelServiceUnavailable: '该模型服务暂不可用，请切换模型或稍后重试。',
+    coworkErrorProviderCooldown: '模型凭据暂时处于冷却期，请稍后重试或切换其他服务商。',
     coworkErrorInputTooLong: '输入内容过长，超出模型上下文限制。',
     coworkErrorMessageTooLarge:
       '本次消息过大，请减少附件、压缩图片或拆分提交。（单次整体需小于 30MB）',
     coworkErrorCouldNotProcessPdf: '无法处理 PDF 文件。',
     coworkErrorModelNotFound: '请求的模型不存在或不可用。',
     coworkGatewaySessionSyncTimeout: 'OpenClaw 引擎响应缓慢，消息尚未发送。请等待 1~2 分钟后重新发送；若频繁出现，请检查系统内存与磁盘占用，并将 LobsterAI 加入杀毒软件白名单。',
+    coworkErrorTranscriptOversized: '该任务的历史记录过大。为保护 AI 引擎，本次消息未发送；请新建任务继续，原任务记录仍会保留。',
+    coworkErrorGatewayHeapOutOfMemory: '本地 AI 引擎内存不足并已自动重启。当前任务可能过大，请等待恢复后在新任务中继续。',
     coworkErrorGatewayDisconnected: 'AI 引擎连接中断，请重试。',
     coworkErrorServiceRestart: 'AI 引擎正在重启，请稍后重试。',
     coworkErrorGatewayDraining: 'AI 引擎正在重启中，请稍等片刻后重试。',
+    openClawConfigApplyPending: 'OpenClaw 正在应用配置，请稍后重试。',
+    openClawConfigApplyOverdue:
+      'OpenClaw 正在等待活动任务结束后应用配置。请完成或停止活动任务，然后重试。',
+    coworkErrorModelResponseTimeout: '模型响应超时，请稍后重试。',
     coworkErrorNetworkError: '网络连接失败，请检查网络设置。',
     coworkErrorRateLimit: '请求过于频繁，请稍后再试。',
+    coworkErrorModelOverloaded: '模型服务当前繁忙或容量不足，请稍后重试。',
     coworkErrorContentFiltered: '内容未通过安全审核，请修改后重试。',
+    coworkErrorToolLoopBlocked:
+      '检测到 AI 在重复执行同一个工具调用且没有新的进展（通常是在等待一个耗时较长的后台任务），本轮已被安全停止。后台任务可能仍在运行，可以继续发消息让 AI 接着处理。',
+    coworkErrorModelRoutedToPlan:
+      '当前任务选择的模型是「{requested}」，但 AI 引擎把它解析成了套餐模型「{resolved}」。为避免误用套餐额度，这条消息没有发送。请重新选择模型后重试；如果仍然出现，请重启 LobsterAI。',
+    coworkErrorRunUsedPlanModel:
+      '这一轮本应使用你选择的「{requested}」，但 AI 引擎实际调用了套餐模型「{actual}」并且失败了，所以出现了套餐相关的报错。请重新选择模型后重试；如果仍然出现，请重启 LobsterAI。',
+    coworkErrorOutputLimitReached:
+      '模型单次回复达到了输出长度上限，任务没有完成。可以继续发消息让它从中断处接着做；如果反复出现，可以让它分段完成，比如分批写入文件、用脚本生成大段数据。',
+    coworkErrorOutputLimitReachedWithSettings:
+      '模型单次回复达到了输出长度上限，任务没有完成。可以继续发消息让它从中断处接着做；如果反复出现，可以在模型设置中调大「最大输出 Token」，或让它分段完成，比如分批写入文件、用脚本生成大段数据。',
     coworkErrorServerError: '服务端出现错误，请稍后重试。',
     coworkErrorEngineNotReady: 'AI 引擎正在启动中，请稍等几秒后重试。',
+    serverModelMetadataUnavailable: '套餐模型信息暂不可用，请刷新后重试。',
+    serverModelRuntimeProfileUnsupported: '该套餐模型的任务兼容配置不受当前版本支持。',
+    serverModelToolCallingUnavailable: '该模型尚未开放任务工具调用。',
+    serverModelAgenticNotReady: '该模型正在进行任务能力验证，请稍后再试。',
     coworkErrorModelStreamEmptySseData:
       '模型流式响应格式异常：模型服务返回了空的 SSE data 帧。请稍后重试，或检查当前模型代理配置。',
     coworkErrorModelStreamOnlyEmptySseData:
       '模型流式响应一直为空：模型服务连续返回空的 SSE data 帧。请稍后重试，或检查当前模型代理配置。',
     coworkErrorUnknown: '任务执行出错，请重试。如果问题持续出现，请检查模型配置。',
+    coworkBtwDisconnected: 'AI 引擎连接中断，顺便问问未能完成。',
+    coworkBtwTimeout: '顺便问问等待回答超时，请重试。',
+    coworkBtwInvalidResult: 'AI 引擎返回了无效的顺便问问结果。',
+    coworkBtwFailed: '顺便问问回答失败，请重试。',
+    coworkBtwRequestRequired: '会话、运行标识和问题不能为空。',
+    coworkBtwInvalidIdentifier: '顺便问问的会话或运行标识无效。',
+    coworkBtwQuestionRequired: '请输入顺便问问的问题。',
+    coworkBtwSingleLine: '顺便问问暂时只支持单行问题。',
+    coworkBtwResultTruncated: '（回答过长，已截断）',
+    coworkBtwAlreadyPending: '当前对话已有一个正在回答的顺便问问。',
+    coworkBtwRunConflict: '顺便问问的运行标识与现有任务冲突。',
+    coworkBtwSessionNotFound: '找不到会话 {sessionId}。',
+    coworkBtwUnavailable: '当前运行时暂不支持顺便问问。',
+    coworkBtwSubmitFailed: '提交顺便问问失败。',
+    coworkBtwNoPending: '找不到正在回答的顺便问问。',
+    coworkBtwStopFailed: '停止顺便问问失败，请重试。',
     imErrorPrefix: '处理消息时出错',
 
     // Exec approval continuation
@@ -97,6 +203,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Auth quota
     authPlanFree: '免费',
     authPlanStandard: '标准',
+    enterpriseAccountContextMismatchTitle: '团队身份已失效',
+    enterpriseAccountContextMismatchMessage:
+      '当前团队身份与登录凭证不一致。相关图片和视频任务已停止轮询，请重新登录或重新选择团队身份后再试。',
+    enterpriseAccountContextMismatchConfirm: '知道了',
+    authAccountChanged: '登录账号已发生变化，请重试。',
+    authLoginRequired: '请先登录后再试。',
+    mediaTaskAccountMismatch: '该媒体任务属于其他账号，无法操作。',
+    enterpriseMediaQuotaUnavailable: '当前团队的媒体生成额度暂不可用。',
 
     // Data migration dialogs
     dataMigrationBackupDialogTitle: '备份 LobsterAI 数据',
@@ -201,6 +315,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Weixin
     imWeixinNotEnabled: '微信渠道当前未启用。',
+    imWeixinQrSessionExpired: '本次微信扫码已结束，请重新获取二维码。',
+    imWeixinGatewayUnavailable: 'AI 引擎尚未连接，请启动引擎后重新扫码。',
+    imWeixinQrInvalidResponse: '未能获取有效的微信二维码，请重试；若持续失败，请更新应用。',
+    openClawConfigSyncFailed: 'AI 引擎配置同步失败，请重试。',
     imWeixinEnableSuggestion: '请启用微信渠道后重新测试连通性。',
     imWeixinConfigReady: '微信配置已就绪。',
     imWeixinOpenClawHint:
@@ -288,9 +406,31 @@ const translations: Record<LanguageType, Record<string, string>> = {
     emailTestSuccess: '连接测试成功！',
     emailTestFailed: '连接测试失败：{error}',
 
+    htmlShareAccessModeUpdateFailed: '访问方式更新失败。',
+    htmlShareStatusUpdateFailed: '分享开关更新失败。',
+    nodeDeploymentAccessStatusApplyFailed: '服务已部署，但访问状态更新失败：{message}',
+
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    openClawRepairCommandTimeout: 'Repair command {command} timed out after {seconds} seconds. Repair has stopped. Diagnostics: {path}',
+    openClawRepairCommandFailed: 'Repair command {command} did not complete. Diagnostics: {path}',
+    browserPasskeyChooseAccountTitle: 'Use a passkey',
+    browserPasskeyChooseAccountMessage: 'Choose an account to sign in to {site}',
+    browserPasskeyUnnamedAccount: 'Saved account',
+    browserPasskeyCancel: 'Cancel',
+    xaiAuthMigrationPending: 'Wait for the AI engine credential migration to finish before changing xAI login. If migration failed, repair the engine first.',
+    xaiAuthStoreFailed: 'Unable to access the xAI credential store. Check the AI engine status and retry.',
+    openClawStartupMigrationFailed: 'AI engine state migration failed: {error}',
+    openClawPluginVerificationFailed: 'AI engine plugin verification failed. Automatic restarts stopped. Fix the plugin error and retry:\n{error}',
+    openClawStartupMigrationRefused: 'AI engine startup migrations did not complete. Automatic restarts stopped. Handle the legacy data below, then restart the gateway:\n{error}',
+    openClawStartupCompatibilityRepairing: 'Backing up and repairing legacy gateway state…',
+    openClawDreamingStateRepairing: 'Backing up and handling legacy memory state…',
+    openClawRuntimeFilesMissing: 'AI engine runtime files are missing or unreadable. Startup has stopped. Quit the app and reinstall using the latest installer containing the fix, then try again.',
+    // DeepSeek Harness (experimental)
+    dshWorkbenchTitle: 'DeepSeek Harness Workbench (Experimental)',
+    dshPlanProviderName: 'Plan',
+
     // Tray menu
     trayShowWindow: 'Open LobsterAI',
     trayNewTask: 'New Task',
@@ -298,12 +438,54 @@ const translations: Record<LanguageType, Record<string, string>> = {
     trayCompletedTaskTooltip: 'LobsterAI - {count} completed task(s)',
     traySettings: 'Settings',
     trayQuit: 'Quit',
+
+    // Quit confirmation (native dialog shown on user-initiated quit)
+    appQuitConfirmTitle: 'Quit LobsterAI?',
+    appQuitConfirmDetail: 'While LobsterAI is closed, scheduled tasks will not run and IM messages will not be answered.',
+    appQuitConfirmUnsafeMarkdown: 'Some document changes have not been saved or backed up. Quitting will lose these changes. Cancel and return to the document to save your changes.',
+    appQuitConfirmQuit: 'Quit',
+    appQuitConfirmCancel: 'Cancel',
     taskCompletionNotificationTitle: 'Task Complete',
     taskCompletionNotificationBody: 'A task has finished. Click to view the result.',
     taskCompletionOverlayDescription: 'Task complete',
+    permissionNotificationTitle: 'Waiting for Your Confirmation',
+    permissionNotificationBody: 'The agent requests to run {toolName} and is waiting for your confirmation.',
+    permissionNotificationBodyGeneric: 'The agent requests to run an action and is waiting for your confirmation.',
+    questionNotificationTitle: 'Waiting for Your Answer',
+    questionNotificationBody: 'Waiting for your answer to continue.',
+    browserCredentialApprovalHeader: 'Saved login',
+    browserCredentialApprovalTitle: 'Allow Agent sign-in',
+    browserCredentialApprovalSubtitle: 'LobsterAI fills the isolated page without revealing the password to the Agent.',
+    browserCredentialApprovalQuestion: 'Allow the Agent to sign in to {origin} as {username}?',
+    browserCredentialApprovalReason: 'Reason from the Agent: {reason}',
+    browserCredentialApprovalAllow: 'Allow and continue',
+    browserCredentialApprovalAllowDescription: 'Fill the saved username and password and continue the current task',
+    browserCredentialApprovalDeny: 'Deny',
+    browserCredentialApprovalDenyDescription: 'Do not use the saved login',
+    browserCredentialSelectionQuestion: 'Choose an account the Agent may use to sign in to {origin}',
+    browserCredentialSelectionTitle: 'Choose a sign-in account',
+    browserCredentialSelectionSubtitle: 'LobsterAI will fill the selected account automatically.',
+    browserCredentialSelectionDescription: 'Continue with this account',
+    contextMenuCut: 'Cut',
+    contextMenuCopy: 'Copy',
+    contextMenuPaste: 'Paste',
+    contextMenuSelectAll: 'Select All',
+    agentBrowserMenuScreenshot: 'Screenshot',
+    agentBrowserMenuNewBlankPage: 'Blank page',
+    agentBrowserMenuZoom: 'Zoom',
+    agentBrowserMenuZoomOut: 'Zoom out',
+    agentBrowserMenuResetZoom: 'Reset to 100%',
+    agentBrowserMenuZoomIn: 'Zoom in',
+    agentBrowserMenuClearCookies: 'Clear Cookie',
+    agentBrowserMenuClearCache: 'Clear cache',
+    agentBrowserMenuUnavailable: 'The browser window is unavailable.',
+    agentBrowserRuntimeUnavailable: 'The Agent browser is temporarily unavailable. Try again later.',
+    agentBrowserMenuOpenFailed: 'Failed to open the browser menu.',
+    agentBrowserZoomFailed: 'Failed to adjust browser zoom.',
 
     // Session titles
     coworkDefaultSessionTitle: 'New Chat',
+    coworkWorkspaceChangesTitle: 'Workspace changes',
     cronSessionPrefix: 'Cron',
     channelPrefixFeishu: 'Feishu',
     channelPrefixDingtalk: 'DingTalk',
@@ -332,6 +514,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Thinking-only hint
     taskThinkingOnly:
       '[No output] The model finished thinking but did not generate a visible reply. You can continue the conversation to ask it to output the result.',
+    taskOutputTruncated:
+      '[Output incomplete] The model reached the output limit for this response. The partial result was preserved, but the task is not confirmed complete. Continue the conversation to resume.',
 
     // Feishu bot install
     feishuVerifyCredentialsFailed:
@@ -340,34 +524,84 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork error messages
     coworkErrorAuthInvalid: 'Invalid or expired API key. Please check your configuration.',
+    coworkErrorSubagentSummaryFailed: 'Subtasks finished, but the main agent could not resume the summary. Send a follow-up to retry.',
+    coworkErrorLobsterAILoginExpired:
+      'Your login session has expired. Sign in again to continue using LobsterAI plan models.',
     coworkErrorOAuthInvalid: 'OAuth authorization is invalid or missing required access. Re-authenticate and try again.',
     coworkErrorModelAccessDenied: 'This account is not allowed to access the selected model. Switch models or check provider account permissions.',
     coworkErrorQuotaExhausted:
       'Your credits have been used up. Upgrade your plan to continue.\n\n[Upgrade or recharge](https://lobsterai.youdao.com/portal#/pricing)',
     coworkErrorFreeQuotaExhausted:
       'Your credits have been used up. Upgrade your plan to continue.\n\n[Upgrade or recharge](https://lobsterai.youdao.com/portal#/pricing)',
+    coworkErrorEnterpriseMemberQuotaExhausted: 'The current team member period quota has been used up.',
+    coworkErrorEnterprisePoolExhausted: 'The current team credit pool has been used up.',
+    coworkErrorEnterpriseCreditBatchesExpired: 'All credit batches for the current team have expired.',
     coworkErrorInsufficientBalance: 'Insufficient API balance. Please top up and try again.',
+    coworkErrorModelServiceUnavailable: 'This model service is temporarily unavailable. Switch models or try again later.',
+    coworkErrorProviderCooldown: 'The model credentials are temporarily in cooldown. Try again later or switch providers.',
     coworkErrorInputTooLong: 'Input too long, exceeding model context limit.',
     coworkErrorMessageTooLarge:
       'This message is too large. Reduce attachments, compress images, or split it up. (Keep each message under about 30 MB.)',
     coworkErrorCouldNotProcessPdf: 'Unable to process the PDF file.',
     coworkErrorModelNotFound: 'The requested model does not exist or is unavailable.',
     coworkGatewaySessionSyncTimeout: 'The OpenClaw engine is responding slowly and your message has not been sent. Please wait a minute or two and resend. If this happens frequently, check system memory and disk usage, and add LobsterAI to your antivirus allowlist.',
+    coworkErrorTranscriptOversized: 'This task history is too large. The message was not sent to protect the AI engine. Continue in a new task; the original task will be preserved.',
+    coworkErrorGatewayHeapOutOfMemory: 'The local AI engine ran out of memory and is restarting automatically. This task may be too large; wait for recovery and continue in a new task.',
     coworkErrorGatewayDisconnected: 'AI engine connection lost. Please retry.',
     coworkErrorServiceRestart: 'AI engine is restarting. Please try again later.',
     coworkErrorGatewayDraining: 'AI engine is restarting. Please wait a moment and try again.',
+    openClawConfigApplyPending: 'OpenClaw is applying configuration. Please try again shortly.',
+    openClawConfigApplyOverdue:
+      'OpenClaw is waiting for active tasks to finish before applying configuration. Complete or stop the active tasks, then try again.',
+    coworkErrorModelResponseTimeout: 'The model response timed out. Please try again.',
     coworkErrorNetworkError: 'Network connection failed. Please check your network settings.',
     coworkErrorRateLimit: 'Too many requests. Please try again later.',
+    coworkErrorModelOverloaded:
+      'The model service is temporarily busy or at capacity. Please try again later.',
     coworkErrorContentFiltered:
       'Content did not pass the safety review. Please modify and try again.',
+    coworkErrorToolLoopBlocked:
+      'This turn was stopped safely because the AI kept repeating the same tool call with no new progress (usually while waiting on a slow background task). The background task may still be running — send another message to continue.',
+    coworkErrorModelRoutedToPlan:
+      'This task is set to {requested}, but the AI engine resolved it to the plan model {resolved}. The message was not sent, so your plan quota is not used by mistake. Reselect the model and try again; if this keeps happening, restart LobsterAI.',
+    coworkErrorRunUsedPlanModel:
+      'This turn should have used your selected model {requested}, but the AI engine called the plan model {actual} instead, and that call failed. That is why a plan error appeared. Reselect the model and try again; if this keeps happening, restart LobsterAI.',
+    coworkErrorOutputLimitReached:
+      'The model hit its output length limit before finishing this task. Send another message to let it continue where it stopped. If this keeps happening, ask it to work in smaller steps, such as writing files in batches or generating large data with a script.',
+    coworkErrorOutputLimitReachedWithSettings:
+      'The model hit its output length limit before finishing this task. Send another message to let it continue where it stopped. If this keeps happening, raise Max Output Tokens in the model settings, or ask it to work in smaller steps, such as writing files in batches or generating large data with a script.',
     coworkErrorServerError: 'Server error occurred. Please try again later.',
     coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
+    serverModelMetadataUnavailable:
+      'Package model information is temporarily unavailable. Refresh and try again.',
+    serverModelRuntimeProfileUnsupported:
+      'This package model task profile is not supported by the current version.',
+    serverModelToolCallingUnavailable:
+      'Agent tool calling is not enabled for this model yet.',
+    serverModelAgenticNotReady:
+      'This model is still undergoing agent capability validation. Please try again later.',
     coworkErrorModelStreamEmptySseData:
       'Model stream format error: the model service returned an empty SSE data frame. Please retry later or check the current model proxy configuration.',
     coworkErrorModelStreamOnlyEmptySseData:
       'Model stream stayed empty: the model service kept returning empty SSE data frames. Please retry later or check the current model proxy configuration.',
     coworkErrorUnknown:
       'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
+    coworkBtwDisconnected: 'The AI engine disconnected before the BTW side question completed.',
+    coworkBtwTimeout: 'The BTW side question timed out. Please try again.',
+    coworkBtwInvalidResult: 'The AI engine returned an invalid BTW side-question result.',
+    coworkBtwFailed: 'The BTW side question failed. Please try again.',
+    coworkBtwRequestRequired: 'Session, run id, and BTW side question are required.',
+    coworkBtwInvalidIdentifier: 'The BTW session or run identifier is invalid.',
+    coworkBtwQuestionRequired: 'Enter a BTW side question.',
+    coworkBtwSingleLine: 'BTW side questions currently support one line only.',
+    coworkBtwResultTruncated: '(Answer truncated because it was too long.)',
+    coworkBtwAlreadyPending: 'This conversation already has a pending BTW side question.',
+    coworkBtwRunConflict: 'The BTW side-question run id conflicts with an existing run.',
+    coworkBtwSessionNotFound: 'Session {sessionId} was not found.',
+    coworkBtwUnavailable: 'BTW side questions are unavailable in the current runtime.',
+    coworkBtwSubmitFailed: 'Failed to submit the BTW side question.',
+    coworkBtwNoPending: 'No pending BTW side question was found.',
+    coworkBtwStopFailed: 'Failed to stop the BTW side question. Please try again.',
     imErrorPrefix: 'Error processing message',
 
     // Exec approval continuation
@@ -385,6 +619,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Auth quota
     authPlanFree: 'Free',
     authPlanStandard: 'Standard',
+    enterpriseAccountContextMismatchTitle: 'Team identity expired',
+    enterpriseAccountContextMismatchMessage:
+      'Your team identity no longer matches the login credentials. Related image and video polling has stopped. Sign in again or choose a team identity before retrying.',
+    enterpriseAccountContextMismatchConfirm: 'OK',
+    authAccountChanged: 'The signed-in account changed. Try again.',
+    authLoginRequired: 'Sign in and try again.',
+    mediaTaskAccountMismatch: 'This media task belongs to another account.',
+    enterpriseMediaQuotaUnavailable: 'Media generation quota is unavailable for this team.',
 
     // Data migration dialogs
     dataMigrationBackupDialogTitle: 'Back Up LobsterAI Data',
@@ -512,6 +754,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Weixin
     imWeixinNotEnabled: 'WeChat channel is not currently enabled.',
+    imWeixinQrSessionExpired: 'This WeChat login session has ended. Please request a new QR code.',
+    imWeixinGatewayUnavailable: 'The AI engine is not connected. Start the engine and try scanning again.',
+    imWeixinQrInvalidResponse: 'Could not get a valid WeChat QR code. Try again; if this continues, update the app.',
+    openClawConfigSyncFailed: 'Failed to sync the AI engine configuration. Please try again.',
     imWeixinEnableSuggestion: 'Please enable the WeChat channel and test connectivity again.',
     imWeixinConfigReady: 'WeChat configuration is ready.',
     imWeixinOpenClawHint:
@@ -605,6 +851,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     testConnection: 'Test Connection',
     emailTestSuccess: 'Connection test successful!',
     emailTestFailed: 'Connection test failed: {error}',
+
+    htmlShareAccessModeUpdateFailed: 'Failed to update access mode.',
+    htmlShareStatusUpdateFailed: 'Failed to update share access.',
+    nodeDeploymentAccessStatusApplyFailed:
+      'The service was deployed, but its access settings could not be updated: {message}',
 
     'enterprise.updateBlocked': 'Updates are managed by enterprise',
   },

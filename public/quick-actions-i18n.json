@@ -13,10 +13,10 @@
           "description": "行业趋势与竞品分析调研报告",
           "prompt": "制作一份行业调研分析报告 PPT,涵盖以下板块:\n\n1. 调研背景与目的说明\n2. 行业整体发展现状与市场规模\n3. 主要竞品对比分析(功能、定价、用户口碑)\n4. 目标用户画像与核心需求洞察\n5. 行业趋势与机会点总结\n6. 可落地的策略建议\n\n风格要求:数据驱动,图表丰富,观点有理有据,适合团队内部分享讨论。"
         },
-        "pptx-education": {
-          "label": "教育教学",
-          "description": "课堂教学课件与知识讲解",
-          "prompt": "制作一套关于「太阳系与行星探索」的科普教学课件,适合中学生课堂使用,包含:\n\n1. 太阳系全景概览\n2. 八大行星的基本特征对比(大小、距离、温度等)\n3. 地球的特殊性——为什么适合生命存在\n4. 人类探索太空的重要里程碑\n5. 课堂互动问答环节(设计 3-4 道思考题)\n6. 拓展阅读推荐\n\n风格要求:生动活泼,配色明快,内容由浅入深,激发学生好奇心与探索欲。"
+        "pptx-training": {
+          "label": "培训课件",
+          "description": "新员工入职与业务培训课件",
+          "prompt": "制作一套「新员工入职培训」课件 PPT,包含以下内容:\n\n1. 公司介绍与文化价值观\n2. 组织架构与各部门职责\n3. 核心业务流程讲解(用流程图呈现)\n4. 常用办公工具与系统使用指引\n5. 考勤、报销等制度速览\n6. 新人 30/60/90 天成长路径\n7. 互动问答与联系人清单\n\n风格要求:亲切专业,重点突出,图文结合,帮助新人快速融入团队。"
         },
         "pptx-ai-intro": {
           "label": "人工智能入门",
@@ -50,28 +50,28 @@
         }
       }
     },
-    "education": {
-      "label": "教育学习",
+    "doc-writing": {
+      "label": "文档写作",
       "prompts": {
-        "edu-english-words": {
-          "label": "英语单词学习",
-          "description": "高效记忆英语单词",
-          "prompt": "我正在准备英语四级考试,请帮我整理一份高频核心词汇学习清单,要求:\n\n1. 挑选 20 个高频必考单词\n2. 每个单词给出音标、中文释义和一个简短例句\n3. 按主题分组(如校园生活、工作职场、科技等)\n4. 在最后给出一组小测验题,帮助我自测记忆效果"
+        "doc-meeting-minutes": {
+          "label": "会议纪要整理",
+          "description": "把录音转写或零散记录整理成规范纪要",
+          "prompt": "请根据我提供的会议记录(录音转写或零散笔记),帮我整理一份规范的会议纪要 Word 文档:\n\n1. 会议主题、时间、参会人员\n2. 按议题归纳讨论要点与结论\n3. 待办事项清单(明确负责人和截止时间)\n4. 需要上级决策或跨部门协调的事项单独列出\n5. 排版清晰,可直接发给参会人确认"
         },
-        "edu-math-explain": {
-          "label": "数学题讲解",
-          "description": "数学难题的详细解题过程",
-          "prompt": "请用简单易懂的方式讲解以下数学知识:\n\n题目:一元二次方程 2x² + 3x - 5 = 0 的求解\n\n要求:\n1. 先回顾一元二次方程的一般形式和求根公式\n2. 一步步展示完整的代入和计算过程\n3. 用判别式分析根的情况\n4. 最后验算答案是否正确\n5. 再出一道类似的练习题让我巩固"
+        "doc-weekly-report": {
+          "label": "周报生成",
+          "description": "把工作要点整理成一份拿得出手的周报",
+          "prompt": "请根据我提供的本周工作要点,帮我生成一份结构清晰的周报 Word 文档:\n\n1. 本周核心进展(按项目分组,突出结果和数据)\n2. 遇到的问题与风险,以及应对措施\n3. 需要的支持与协调事项\n4. 下周工作计划(按优先级排列)\n\n要求:语言简洁专业,避免流水账,让主管一眼看到重点。"
         },
-        "edu-essay-writing": {
-          "label": "作文写作辅导",
-          "description": "提升写作能力与技巧",
-          "prompt": "请以「我最难忘的一次旅行」为题,帮我进行作文写作辅导:\n\n1. 先给出一个清晰的写作提纲(开头、正文、结尾的结构建议)\n2. 分享 3 个让文章更生动的写作技巧(如细节描写、感官描写、借景抒情)\n3. 写一段示范开头,展示如何吸引读者\n4. 列出 5 个可以用在这篇作文中的好词好句\n5. 提醒常见的写作问题和避坑要点"
+        "doc-proposal": {
+          "label": "方案文档撰写",
+          "description": "项目方案与立项报告的框架与初稿",
+          "prompt": "请帮我撰写一份项目方案 Word 文档,我会提供项目的基本想法,请按以下结构完成初稿:\n\n1. 项目背景与要解决的问题\n2. 目标与预期收益(尽量可量化)\n3. 方案设计与实施路径\n4. 里程碑计划与时间表(用表格呈现)\n5. 所需资源与预算估算\n6. 风险分析与应对预案\n\n要求:逻辑严谨,详略得当,适合提交给管理层评审。"
         },
-        "edu-knowledge-explain": {
-          "label": "知识点科普",
-          "description": "用通俗语言解释复杂知识",
-          "prompt": "请用通俗易懂的语言给我科普「光合作用」这个知识点:\n\n1. 用一句话概括光合作用是什么\n2. 用生活中的类比来解释它的原理\n3. 画出光合作用的简要过程(文字版流程图)\n4. 说明光合作用对地球和人类的重要意义\n5. 提出 3 个思考题,帮助我加深理解"
+        "doc-polish": {
+          "label": "公文与邮件润色",
+          "description": "通知、公告、邮件的专业化改写",
+          "prompt": "请帮我润色我提供的文稿(通知、公告或重要邮件),要求:\n\n1. 保留原意,修正语病和错别字\n2. 调整为正式、得体的商务语气\n3. 优化段落结构,重点信息前置\n4. 给出修改说明,标注主要改动之处\n5. 如内容缺少关键要素(时间、对象、行动要求),提醒我补充"
         }
       }
     },
@@ -90,8 +90,8 @@
         },
         "web-event": {
           "label": "活动邀请函",
-          "description": "聚会、婚礼或活动的在线邀请页",
-          "prompt": "帮我制作一个生日派对的在线邀请函网页。\n\n活动信息:\n- 主题:「Leo的30岁生日派对」\n- 时间:2025年8月15日 周六 晚上7:00\n- 地点:星光花园餐厅 三楼露台\n\n页面内容:\n- 开场动画:标题渐入,彩色纸屑飘落效果\n- 邀请语:一段温馨的邀请文字\n- 活动安排:时间轴展示派对流程(签到、晚宴、游戏、蛋糕、自由交流)\n- 着装建议:休闲正装,配色参考图占位\n- 交通指引:地址信息和停车提示\n- RSVP确认:\"我会参加\"和\"很遗憾不能到\"两个按钮\n\n设计风格:\n浪漫活泼、深蓝色星空背景、金色点缀文字、充满庆祝氛围。页面要适合手机浏览。"
+          "description": "年会、发布会或团建的在线邀请页",
+          "prompt": "帮我制作一个公司年会的在线邀请函网页。\n\n活动信息:\n- 主题:「星辰科技 2026 年会·星光之夜」\n- 时间:2027年1月22日 周五 晚上6:30\n- 地点:城市之光大酒店 三层宴会厅\n\n页面内容:\n- 开场动画:标题渐入,金色粒子飘落效果\n- 邀请语:一段热情的邀请文字\n- 活动安排:时间轴展示流程(签到、晚宴、颁奖、抽奖、文艺表演)\n- 着装建议:正装出席,配色参考图占位\n- 交通指引:地址信息和停车提示\n- RSVP确认:\"准时参加\"和\"无法出席\"两个按钮\n\n设计风格:\n喜庆大气、深蓝色星空背景、金色点缀文字、充满仪式感。页面要适合手机浏览。"
         },
         "web-survey": {
           "label": "调查问卷",
@@ -115,10 +115,10 @@
           "description": "Industry trends and competitor analysis report",
           "prompt": "Create an industry research and analysis report PPT covering the following sections:\n\n1. Research background and objectives\n2. Overall industry development status and market size\n3. Main competitor comparison (features, pricing, user reputation)\n4. Target user persona and core needs insights\n5. Industry trends and opportunities summary\n6. Actionable strategy recommendations\n\nStyle requirements: Data-driven, rich in charts, well-reasoned viewpoints, suitable for internal team sharing and discussion."
         },
-        "pptx-education": {
-          "label": "Educational Presentation",
-          "description": "Classroom teaching slides and knowledge explanation",
-          "prompt": "Create a popular science teaching courseware about \"Solar System and Planetary Exploration\" suitable for middle school classroom use, including:\n\n1. Overview of the Solar System\n2. Comparison of basic characteristics of the eight planets (size, distance, temperature, etc.)\n3. Earth's uniqueness - why it is suitable for life\n4. Important milestones in human space exploration\n5. Classroom interactive Q&A session (design 3-4 thinking questions)\n6. Extended reading recommendations\n\nStyle requirements: Vivid and lively, bright colors, content from shallow to deep, stimulating students' curiosity and desire to explore."
+        "pptx-training": {
+          "label": "Training Deck",
+          "description": "Onboarding and internal training slides",
+          "prompt": "Create a \"New Employee Onboarding\" training deck PPT, including:\n\n1. Company introduction and culture values\n2. Organizational structure and department responsibilities\n3. Core business process walkthrough (presented with flowcharts)\n4. Guide to commonly used office tools and systems\n5. Quick overview of attendance, expense and other policies\n6. 30/60/90-day growth path for new hires\n7. Interactive Q&A and contact list\n\nStyle requirements: Friendly and professional, well-highlighted key points, combining text and visuals, helping new hires integrate into the team quickly."
         },
         "pptx-ai-intro": {
           "label": "Introduction to AI",
@@ -152,28 +152,28 @@
         }
       }
     },
-    "education": {
-      "label": "Education & Learning",
+    "doc-writing": {
+      "label": "Write Documents",
       "prompts": {
-        "edu-english-words": {
-          "label": "English Vocabulary",
-          "description": "Efficiently memorize English words",
-          "prompt": "I am preparing for the CET-4 exam. Please help me organize a high-frequency core vocabulary learning list with the following requirements:\n\n1. Select 20 high-frequency must-know words\n2. Provide phonetic symbols, Chinese definitions, and a short example sentence for each word\n3. Group by theme (such as campus life, work, technology, etc.)\n4. Provide a quiz at the end to help me test my memory"
+        "doc-meeting-minutes": {
+          "label": "Meeting Minutes",
+          "description": "Turn transcripts or scattered notes into standard minutes",
+          "prompt": "Based on the meeting record I provide (audio transcript or scattered notes), help me organize a standard meeting minutes Word document:\n\n1. Meeting topic, time, and attendees\n2. Summarize discussion points and conclusions by agenda item\n3. Action item list (with clear owners and deadlines)\n4. List items requiring management decisions or cross-team coordination separately\n5. Clean layout, ready to send to attendees for confirmation"
         },
-        "edu-math-explain": {
-          "label": "Math Problem Explanation",
-          "description": "Detailed solution process for math problems",
-          "prompt": "Please explain the following mathematical knowledge in an easy-to-understand way:\n\nProblem: Solve the quadratic equation 2x² + 3x - 5 = 0\n\nRequirements:\n1. First review the general form of quadratic equations and the quadratic formula\n2. Show the complete substitution and calculation process step by step\n3. Analyze the nature of roots using the discriminant\n4. Finally verify if the answer is correct\n5. Provide a similar practice problem for me to consolidate"
+        "doc-weekly-report": {
+          "label": "Weekly Report",
+          "description": "Turn work notes into a presentable weekly report",
+          "prompt": "Based on the key work items I provide, help me generate a well-structured weekly report Word document:\n\n1. Core progress this week (grouped by project, highlighting results and data)\n2. Problems and risks encountered, with countermeasures\n3. Support and coordination needed\n4. Next week's work plan (ordered by priority)\n\nRequirements: Concise and professional language, avoid trivial listing, let managers see the highlights at a glance."
         },
-        "edu-essay-writing": {
-          "label": "Essay Writing Guidance",
-          "description": "Improve writing skills and techniques",
-          "prompt": "Please provide essay writing guidance on the topic \"My Most Unforgettable Trip\":\n\n1. First provide a clear writing outline (structural suggestions for introduction, body, and conclusion)\n2. Share 3 techniques to make the article more vivid (such as detailed description, sensory description, scene-based emotion)\n3. Write a sample opening paragraph to show how to attract readers\n4. List 5 good words and sentences that can be used in this essay\n5. Remind common writing problems and pitfalls to avoid"
+        "doc-proposal": {
+          "label": "Project Proposal",
+          "description": "Complete framework and first draft for proposals",
+          "prompt": "Please help me write a project proposal Word document. I will provide the basic idea; please complete a draft with the following structure:\n\n1. Project background and the problem to solve\n2. Goals and expected benefits (quantified where possible)\n3. Solution design and implementation path\n4. Milestone plan and timeline (presented in a table)\n5. Required resources and budget estimate\n6. Risk analysis and contingency plans\n\nRequirements: Rigorous logic, well-balanced detail, suitable for management review."
         },
-        "edu-knowledge-explain": {
-          "label": "Knowledge Explanation",
-          "description": "Explain complex knowledge in simple language",
-          "prompt": "Please explain the concept of \"photosynthesis\" in easy-to-understand language:\n\n1. Summarize what photosynthesis is in one sentence\n2. Explain the principle with everyday life analogies\n3. Draw a simple process of photosynthesis (text-based flowchart)\n4. Explain the importance of photosynthesis for Earth and humanity\n5. Propose 3 thinking questions to help me deepen my understanding"
+        "doc-polish": {
+          "label": "Polish Documents",
+          "description": "Professional rewrite of notices, announcements and emails",
+          "prompt": "Please polish the draft I provide (notice, announcement, or important email):\n\n1. Keep the original meaning, fix grammar issues and typos\n2. Adjust to a formal, appropriate business tone\n3. Improve paragraph structure, putting key information first\n4. Provide revision notes marking the main changes\n5. If key elements are missing (time, audience, required actions), remind me to add them"
         }
       }
     },
@@ -192,8 +192,8 @@
         },
         "web-event": {
           "label": "Event Invitation",
-          "description": "Online invitation page for parties, weddings or events",
-          "prompt": "Help me create an online invitation webpage for a birthday party.\n\nEvent information:\n- Theme: \"Leo's 30th Birthday Party\"\n- Time: Saturday, August 15, 2025, 7:00 PM\n- Location: Starlight Garden Restaurant, 3rd Floor Terrace\n\nPage content:\n- Opening animation: Title fade-in, colorful confetti falling effect\n- Invitation message: A warm invitation text\n- Event schedule: Timeline showing party flow (check-in, dinner, games, cake, free socializing)\n- Dress code: Business casual, color reference image placeholder\n- Transportation guide: Address information and parking tips\n- RSVP confirmation: \"I will attend\" and \"Regrettably cannot attend\" two buttons\n\nDesign style:\nRomantic and lively, dark blue starry background, gold accent text, full of celebration atmosphere. Page should be mobile-friendly."
+          "description": "Online invitation page for annual parties, launches or team events",
+          "prompt": "Help me create an online invitation webpage for a company annual party.\n\nEvent information:\n- Theme: \"Starfield Tech 2026 Annual Party - Starlight Night\"\n- Time: Friday, January 22, 2027, 6:30 PM\n- Location: City Light Grand Hotel, 3rd Floor Ballroom\n\nPage content:\n- Opening animation: Title fade-in, golden particle falling effect\n- Invitation message: A warm invitation text\n- Event schedule: Timeline showing the flow (check-in, dinner, awards, lucky draw, performances)\n- Dress code: Formal attire, color reference image placeholder\n- Transportation guide: Address information and parking tips\n- RSVP confirmation: \"Will attend\" and \"Cannot attend\" two buttons\n\nDesign style:\nFestive and elegant, dark blue starry background, gold accent text, full of ceremony. Page should be mobile-friendly."
         },
         "web-survey": {
           "label": "Survey Questionnaire",

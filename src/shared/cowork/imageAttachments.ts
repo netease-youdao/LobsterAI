@@ -1,6 +1,13 @@
 export const COWORK_IMAGE_ATTACHMENT_MAX_BYTES = 30 * 1000 * 1000;
 export const COWORK_IMAGE_ATTACHMENT_PREVIEW_FALLBACK_MAX_BYTES = 512 * 1024;
 
+export const CoworkImageAttachmentRole = {
+  /** Browser-annotation screenshot attached only as model transport. */
+  BrowserAnnotation: 'browser-annotation',
+} as const;
+export type CoworkImageAttachmentRole =
+  typeof CoworkImageAttachmentRole[keyof typeof CoworkImageAttachmentRole];
+
 export type CoworkImageAttachmentPayload = {
   name: string;
   mimeType: string;
@@ -9,6 +16,7 @@ export type CoworkImageAttachmentPayload = {
   localPath?: string;
   previewMimeType?: string;
   previewBase64Data?: string;
+  role?: CoworkImageAttachmentRole;
 };
 
 export type CoworkImageAttachmentPreview = {
@@ -19,7 +27,22 @@ export type CoworkImageAttachmentPreview = {
   originalSizeBytes: number;
   localPath?: string;
   isPreview: true;
+  role?: CoworkImageAttachmentRole;
 };
+
+/** Historical transport images predate the role marker; match their fixed name pattern. */
+const LEGACY_BROWSER_ANNOTATION_IMAGE_NAME_PREFIXES = [
+  '浏览器注释截图-',
+  'Browser annotation screenshot-',
+];
+
+export function isBrowserAnnotationTransportImage(
+  image: Pick<CoworkImageAttachmentPayload, 'name' | 'role'>,
+): boolean {
+  if (image.role === CoworkImageAttachmentRole.BrowserAnnotation) return true;
+  const name = image.name ?? '';
+  return LEGACY_BROWSER_ANNOTATION_IMAGE_NAME_PREFIXES.some(prefix => name.startsWith(prefix));
+}
 
 export type CoworkImageAttachmentSizeValidation = {
   ok: boolean;
@@ -75,6 +98,7 @@ export function buildCoworkImageAttachmentPreview(
       originalMimeType: attachment.mimeType,
       originalSizeBytes: sizeValidation.sizeBytes,
       ...(attachment.localPath ? { localPath: attachment.localPath } : {}),
+      ...(attachment.role ? { role: attachment.role } : {}),
       isPreview: true,
     };
   }
@@ -87,6 +111,7 @@ export function buildCoworkImageAttachmentPreview(
       originalMimeType: attachment.mimeType,
       originalSizeBytes: sizeValidation.sizeBytes,
       ...(attachment.localPath ? { localPath: attachment.localPath } : {}),
+      ...(attachment.role ? { role: attachment.role } : {}),
       isPreview: true,
     };
   }

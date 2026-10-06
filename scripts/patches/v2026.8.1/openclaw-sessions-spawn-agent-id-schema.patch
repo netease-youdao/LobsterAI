@@ -1,0 +1,104 @@
+diff --git a/src/agents/tools/sessions-spawn-tool.ts b/src/agents/tools/sessions-spawn-tool.ts
+--- a/src/agents/tools/sessions-spawn-tool.ts
++++ b/src/agents/tools/sessions-spawn-tool.ts
+@@ -20,6 +20,7 @@
+   formatAcpInheritedToolAllowError,
+   formatAcpInheritedToolDenyError,
+ } from "../inherited-tool-deny.js";
++import { resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
+ import { optionalStringEnum } from "../schema/typebox.js";
+ import type { SpawnedToolContext } from "../spawned-context.js";
+ import { getSubagentDeliveryBacklogPressure } from "../subagents/registry/subagent-registry.js";
+@@ -156,6 +157,8 @@
+   threadAvailable: boolean;
+   subagentThreadAvailable: boolean;
+   swarmEnabled: boolean;
++  requireAgentId: boolean;
++  requireSubagentAgentId: boolean;
+ }) {
+   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
+   const schema = {
+@@ -175,7 +178,13 @@
+       params.acpAvailable ? SESSIONS_SPAWN_RUNTIMES : (["subagent"] as const),
+       { description: 'Runtime; visible=true requires "subagent".' },
+     ),
+-    agentId: Type.Optional(Type.String()),
++    agentId: params.requireAgentId
++      ? Type.String({ description: "Required target agent ID; use agents_list to find allowed agents." })
++      : Type.Optional(Type.String({
++          description: params.requireSubagentAgentId
++            ? "Required for subagent spawns without a configured collector default; use agents_list to find allowed agents."
++            : "Target agent ID; omitted subagent targets use the requesting agent.",
++        })),
+     model: Type.Optional(Type.String()),
+     runTimeoutSeconds: Type.Optional(
+       Type.Integer({
+@@ -334,6 +343,14 @@
+     opts?.requesterAgentIdOverride ?? parseAgentSessionKey(opts?.agentSessionKey)?.agentId;
+   const swarmConfig = resolveSwarmConfig(opts?.config, requesterAgentId);
+   const visibilityCfg = opts?.config ?? getRuntimeConfig();
++  const policyAgentId = resolveSessionAgentId({
++    config: visibilityCfg,
++    sessionKey: opts?.agentSessionKey,
++    agentId: opts?.requesterAgentIdOverride,
++  });
++  const requireSubagentAgentId =
++    resolveAgentConfig(visibilityCfg, policyAgentId)?.subagents?.requireAgentId ??
++    visibilityCfg.agents?.defaults?.subagents?.requireAgentId ?? false;
+   const sessionToolsVisibility = resolveEffectiveSessionToolsVisibility({
+     cfg: visibilityCfg,
+     sandboxed: opts?.sandboxed === true,
+@@ -359,6 +376,10 @@
+       spawnRestricted: restrictToSpawned,
+     }),
+     parameters: createSessionsSpawnToolSchema({
++      // ACP and swarm collectors have their own configured default target.
++      // Keep those contracts intact when this schema exposes both runtimes.
++      requireAgentId: requireSubagentAgentId && !acpAvailable && !(swarmConfig.enabled && swarmConfig.defaultAgentId),
++      requireSubagentAgentId,
+       acpAvailable,
+       threadAvailable,
+       subagentThreadAvailable: threadAvailability.subagent,
+diff --git a/src/agents/tools/sessions-spawn-tool.test.ts b/src/agents/tools/sessions-spawn-tool.test.ts
+--- a/src/agents/tools/sessions-spawn-tool.test.ts
++++ b/src/agents/tools/sessions-spawn-tool.test.ts
+@@ -335,6 +335,39 @@
+     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+     expect(callGateway).not.toHaveBeenCalled();
++  });
++
++  it.each([
++    { agent: "main", required: true },
++    { agent: "reviewer", required: false },
++    { agent: "writer", required: true },
++  ])("aligns agentId schema with $agent collaboration policy", ({ agent, required }) => {
++    const tool = createSessionsSpawnTool({
++      agentSessionKey: `agent:${agent}:dashboard:test`,
++      config: {
++        acp: { enabled: false },
++        agents: {
++          defaults: { subagents: { requireAgentId: true } },
++          list: [{ id: "reviewer", subagents: { requireAgentId: false } }],
++        },
++      },
++    });
++    const schema = tool.parameters as { required?: string[]; properties?: Record<string, { description?: string }> };
++    expect(schema.required?.includes("agentId") ?? false).toBe(required);
++    if (required) expect(schema.properties?.agentId?.description).toContain("agents_list");
++  });
++
++  it("keeps agentId optional without an explicit-target policy", () => {
++    const tool = createSessionsSpawnTool({ config: { acp: { enabled: false } } });
++    expect((tool.parameters as { required?: string[] }).required).not.toContain("agentId");
++  });
++
++  it("keeps the ACP default target usable alongside explicit subagent targets", () => {
++    registerAcpBackendForTest();
++    const tool = createSessionsSpawnTool({ config: {
++      agents: { defaults: { subagents: { requireAgentId: true } } },
++    } });
++    expect((tool.parameters as { required?: string[] }).required).not.toContain("agentId");
+   });
+ 
+   it("hides ACP runtime affordances when ACP policy is disabled", () => {

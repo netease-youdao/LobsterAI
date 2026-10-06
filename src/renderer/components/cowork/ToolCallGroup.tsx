@@ -1,11 +1,13 @@
-import { CheckIcon } from '@heroicons/react/24/outline';
 import Lottie from 'lottie-react';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import mediaGeneratingAnimation from '../../assets/lottie/media-generating.json';
 import { i18nService } from '../../services/i18n';
 import { selectIsStreaming } from '../../store/selectors/coworkSelectors';
+import { ActivityPlanDetail } from './ActivityPlanDetail';
+import { ActivityLiveDetailLine, ActivityStepLine } from './ActivityStepLine';
+import { ActivityEntryVariant, ActivityStepKind } from './constants';
 import {
   bucketLength,
   getMessageLineCount,
@@ -13,7 +15,13 @@ import {
 } from './conversationAnalytics';
 import DiffView, { extractDiffFromToolInput } from './DiffView';
 import {
+  type ConsolidatedItem,
+  formatElapsedDuration,
   formatToolInput,
+  getActivityCurrentActionText,
+  getActivityLiveDetail,
+  getActivityStepDoneLabel,
+  getActivityStepKind,
   getLargeToolResultSummary,
   getRetainedMediaPollCount,
   getToolDisplayName,
@@ -27,58 +35,35 @@ import {
   isMediaGenerateRunning,
   isMediaStatusPoll,
   isMediaStatusPollRunning,
+  isPlanToolName,
   isTodoWriteToolName,
+  isToolGroupSettled,
   normalizeToolName,
-  type ParsedTodoItem,
+  parseActivityPlan,
   parseMediaStreamingInfo,
-  parseTodoWriteItems,
-  type TodoStatus,
   type ToolGroupItem,
   truncatePreview,
 } from './messageDisplayUtils';
-
-// ── TodoWriteInputView ───────────────────────────────────────────────────────
-
-const TodoWriteInputView: React.FC<{ items: ParsedTodoItem[] }> = ({ items }) => {
-  const getStatusCheckboxClass = (status: TodoStatus): string => {
-    switch (status) {
-      case 'completed':
-        return 'bg-green-500/10 border-green-500 text-green-500';
-      case 'in_progress':
-        return 'bg-transparent border-blue-500';
-      case 'pending':
-      case 'unknown':
-      default:
-        return 'bg-transparent border-border';
-    }
-  };
-
-  return (
-    <div className="space-y-2">
-      {items.map((item, index) => (
-        <div
-          key={`todo-item-${index}`}
-          className="flex items-start gap-2"
-        >
-          <span className={`mt-0.5 h-4 w-4 rounded-[4px] border flex-shrink-0 inline-flex items-center justify-center ${getStatusCheckboxClass(item.status)}`}>
-            {item.status === 'completed' && <CheckIcon className="h-3 w-3 stroke-[2.5]" />}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className={`text-xs whitespace-pre-wrap break-words leading-5 ${
-              item.status === 'completed'
-                ? 'text-muted'
-                : 'text-foreground'
-            }`}>
-              {item.primaryText}
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-};
+import { DiffStatsBadge, getToolGroupDiffStats } from './toolDiffStats';
 
 // ── ToolCallGroup ────────────────────────────────────────────────────────────
+
+// Live elapsed time for a running tool call; appears after a short delay so
+// quick calls don't flash a counter.
+const TOOL_ELAPSED_APPEAR_DELAY_MS = 2000;
+
+const ToolRunningElapsed: React.FC<{ startTimestamp: number }> = ({ startTimestamp }) => {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const elapsedMs = now - startTimestamp;
+  if (elapsedMs < TOOL_ELAPSED_APPEAR_DELAY_MS) return null;
+  return <span className="tabular-nums"> · {formatElapsedDuration(elapsedMs)}</span>;
+};
 
 const ToolCallGroup: React.FC<{
   group: ToolGroupItem;
@@ -86,12 +71,22 @@ const ToolCallGroup: React.FC<{
   mapDisplayText?: (value: string) => string;
   retainedMediaPollCounts?: Map<string, number>;
   footer?: React.ReactNode;
+  /**
+   * 'timeline' renders the classic dot row; 'row' the step's own line among
+   * a run's steps, opening onto its content (the command and its output, a
+   * diff, ...).
+   */
+  variant?: 'timeline' | ActivityEntryVariant;
+  /** Whether the row reads as the step running right now; defaults to the step still running. */
+  isLive?: boolean;
 }> = ({
   group,
   isLastInSequence = true,
   mapDisplayText,
   retainedMediaPollCounts,
   footer,
+  variant = 'timeline',
+  isLive,
 }) => {
   const { toolUse, toolResult } = group;
   const shouldExpandByDefault = isMediaStatusPoll(group);
@@ -101,11 +96,16 @@ const ToolCallGroup: React.FC<{
   const toolInput = toolUse.metadata?.toolInput;
   const isCronTool = isCronToolName(rawToolName);
   const isTodoWriteTool = isTodoWriteToolName(rawToolName);
-  const todoItems = isTodoWriteTool ? parseTodoWriteItems(toolInput) : null;
+  const activityPlan = isPlanToolName(rawToolName) ? parseActivityPlan(rawToolName, toolInput) : null;
   const mapText = mapDisplayText ?? ((value: string) => value);
   const toolInputDisplayRaw = formatToolInput(rawToolName, toolInput);
   const toolInputDisplay = toolInputDisplayRaw ? mapText(toolInputDisplayRaw) : null;
-  const toolInputSummaryRaw = getToolInputSummary(rawToolName, toolInput) ?? toolInputDisplayRaw;
+  // A placeholder step whose arguments are still streaming has no input to
+  // summarize yet; an empty "{}" would only look like a broken call.
+  const isGenerating = Boolean(toolUse.metadata?.isGenerating);
+  const toolInputSummaryRaw = isGenerating
+    ? null
+    : getToolInputSummary(rawToolName, toolInput) ?? toolInputDisplayRaw;
   const toolInputSummary = toolInputSummaryRaw ? mapText(toolInputSummaryRaw) : null;
   const [isExpanded, setIsExpanded] = useState(shouldExpandByDefault);
   const collapsedToolResult = useMemo(
@@ -146,6 +146,11 @@ const ToolCallGroup: React.FC<{
     [rawToolName, toolInput],
   );
   const isEditWithDiff = diffDataList !== null && diffDataList.length > 0;
+  // A step is live until its result is final: a streaming result keeps the
+  // pulse and shows the latest output line instead of a line count.
+  const isRunning = isSessionStreaming && !isToolGroupSettled(group);
+  const liveDetail = isRunning ? getActivityLiveDetail({ type: 'tool_group', group }) : null;
+  const diffStats = useMemo(() => getToolGroupDiffStats(group), [group]);
   const reportToolToggle = (nextExpanded: boolean) => {
     const resultLength = toolResultDisplayRaw.length || collapsedToolResult?.text?.length || 0;
     reportConversationBlockAction({
@@ -167,69 +172,19 @@ const ToolCallGroup: React.FC<{
     });
   };
 
-  return (
-    <div className="relative py-1">
-      {!isLastInSequence && (
-        <div className="absolute left-[3.5px] top-[14px] bottom-[-8px] w-px bg-border" />
-      )}
-      <button
-        onClick={() => {
-          const nextExpanded = !isExpanded;
-          reportToolToggle(nextExpanded);
-          setIsExpanded(nextExpanded);
-        }}
-        className="w-full flex items-start gap-2 text-left group relative z-10"
-      >
-        <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
-          !toolResult && isSessionStreaming
-            ? 'bg-blue-500 animate-pulse'
-            : !toolResult
-              ? 'bg-blue-500'
-              : isToolError
-                ? 'bg-red-500'
-                : 'bg-green-500'
-        }`} />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium text-secondary">
-              {toolName}
-            </span>
-            {toolInputSummary && (
-              <code className="text-code text-muted font-mono truncate max-w-full">
-                {toolInputSummary}
-              </code>
-            )}
-          </div>
-          {toolResult && !isTodoWriteTool && (hasToolResultText || showNoDetailError) && (
-            <div className={`text-xs mt-0.5 ${
-              hasToolResultText
-                ? 'text-muted'
-                : showNoDetailError
-                  ? 'text-red-500/80'
-                  : 'text-muted'
-            }`}>
-              {hasToolResultText
-                ? toolResultSummary
-                : toolResultFallback}
-            </div>
-          )}
-          {!toolResult && isSessionStreaming && (
-            <div className="text-xs text-muted mt-0.5">
-              {i18nService.t('coworkToolRunning')}
-            </div>
-          )}
-        </div>
-      </button>
-      {footer && (
-        <div className="ml-4 mt-2">
-          {footer}
-        </div>
-      )}
+  const handleToggle = () => {
+    const nextExpanded = !isExpanded;
+    reportToolToggle(nextExpanded);
+    setIsExpanded(nextExpanded);
+  };
+
+  const renderMediaRunningIndicators = (containerClass: string) => (
+    <>
       {isMediaGenerateRunning(group) && isSessionStreaming && (() => {
         const streamingInfo = parseMediaStreamingInfo(group);
         const pollCount = streamingInfo.pollCount ?? getRetainedMediaPollCount(streamingInfo, retainedMediaPollCounts);
         return (
-          <div className="ml-4 mt-2 flex items-center gap-2">
+          <div className={`${containerClass} flex items-center gap-2`}>
             <Lottie
               animationData={mediaGeneratingAnimation}
               loop
@@ -257,7 +212,7 @@ const ToolCallGroup: React.FC<{
         const mediaToolName = group.toolUse.metadata?.toolName || '';
         const isVideo = normalizeToolName(mediaToolName) === 'lobsteraivideogenerate';
         return (
-          <div className="ml-4 mt-2 flex items-center gap-2 flex-wrap">
+          <div className={`${containerClass} flex items-center gap-2 flex-wrap`}>
             <Lottie
               animationData={mediaGeneratingAnimation}
               loop
@@ -278,9 +233,12 @@ const ToolCallGroup: React.FC<{
           </div>
         );
       })()}
-      {isExpanded && (
-        <div className="ml-4 mt-2">
-          {isBashTool ? (
+    </>
+  );
+
+  const renderDetailBody = () => (
+    <>
+      {isBashTool ? (
             <div className="rounded-lg overflow-hidden border border-border">
               <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surfaceInset">
                 <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
@@ -313,8 +271,8 @@ const ToolCallGroup: React.FC<{
                 )}
               </div>
             </div>
-          ) : isTodoWriteTool && todoItems ? (
-            <TodoWriteInputView items={todoItems} />
+          ) : activityPlan ? (
+            <ActivityPlanDetail plan={activityPlan} mapDisplayText={mapDisplayText} />
           ) : isEditWithDiff && diffDataList ? (
             <div className="space-y-2">
               {diffDataList.map((diff, idx) => (
@@ -378,6 +336,131 @@ const ToolCallGroup: React.FC<{
               )}
             </div>
           )}
+    </>
+  );
+
+  if (variant === ActivityEntryVariant.Row) {
+    const stepItem: ConsolidatedItem = { type: 'tool_group', group };
+    const isRowLive = isLive ?? isRunning;
+    const stepKind = getActivityStepKind(stepItem);
+    const rowLiveDetail = isRowLive && !isExpanded ? getActivityLiveDetail(stepItem) : null;
+    // A file being written already shows its growing +N/-M count; a timer
+    // beside it says nothing more. Commands keep theirs.
+    const showRunningElapsed = isRunning && stepKind !== ActivityStepKind.Edit;
+    // Terminal output and diffs carry their own frame; anything else gets one
+    // so it does not float loose under the step line.
+    const hasOwnFrame = isBashTool || isEditWithDiff;
+    return (
+      <div>
+        <ActivityStepLine
+          kind={stepKind}
+          label={mapText(isRowLive ? getActivityCurrentActionText(stepItem) : getActivityStepDoneLabel(stepItem))}
+          isLive={isRowLive}
+          hasError={isToolError}
+          isExpanded={isExpanded}
+          onToggle={handleToggle}
+          trailing={(
+            <>
+              {diffStats && <DiffStatsBadge stats={diffStats} className="text-sm" />}
+              {showRunningElapsed && (
+                <span className="flex-shrink-0 text-xs text-muted">
+                  <ToolRunningElapsed startTimestamp={toolUse.timestamp} />
+                </span>
+              )}
+            </>
+          )}
+        />
+        {rowLiveDetail && (
+          <ActivityLiveDetailLine
+            detail={{ ...rowLiveDetail, text: mapText(rowLiveDetail.text) }}
+            kind={stepKind}
+          />
+        )}
+        {footer && (
+          <div className="mt-2">
+            {footer}
+          </div>
+        )}
+        {renderMediaRunningIndicators('mt-1')}
+        {isExpanded && (
+          <div className={`activity-row-detail mt-1.5 ${hasOwnFrame ? '' : 'rounded-lg border border-border px-4 py-3'}`}>
+            {renderDetailBody()}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative py-1">
+      {!isLastInSequence && (
+        <div className="absolute left-[3.5px] top-[14px] bottom-[-8px] w-px bg-border" />
+      )}
+      <button
+        onClick={handleToggle}
+        className="w-full flex items-start gap-2 text-left group relative z-10"
+      >
+        <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
+          isRunning
+            ? 'bg-blue-500 animate-pulse'
+            : !toolResult
+              ? 'bg-blue-500'
+              : isToolError
+                ? 'bg-red-500'
+                : 'bg-green-500'
+        }`} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`text-sm font-medium text-secondary ${isRunning ? 'shimmer-text' : ''}`}>
+              {toolName}
+            </span>
+            {toolInputSummary && (
+              <code className="text-code text-muted font-mono truncate max-w-full">
+                {toolInputSummary}
+              </code>
+            )}
+            {diffStats && <DiffStatsBadge stats={diffStats} className="text-xs" />}
+          </div>
+          {toolResult && !isRunning && !isTodoWriteTool && (hasToolResultText || showNoDetailError) && (
+            <div className={`text-xs mt-0.5 ${
+              hasToolResultText
+                ? 'text-muted'
+                : showNoDetailError
+                  ? 'text-red-500/80'
+                  : 'text-muted'
+            }`}>
+              {hasToolResultText
+                ? toolResultSummary
+                : toolResultFallback}
+            </div>
+          )}
+          {isRunning && (
+            <div className="mt-0.5 flex min-w-0 items-baseline text-xs text-muted">
+              {liveDetail?.kind === 'output' ? (
+                <span className="min-w-0 truncate font-mono" data-activity-live-detail="output">
+                  {liveDetail.text}
+                </span>
+              ) : (
+                <span className="flex-shrink-0">
+                  {i18nService.t(isGenerating ? 'coworkActivityLiveGenerating' : 'coworkToolRunning')}
+                </span>
+              )}
+              <span className="flex-shrink-0 whitespace-pre">
+                <ToolRunningElapsed startTimestamp={toolUse.timestamp} />
+              </span>
+            </div>
+          )}
+        </div>
+      </button>
+      {footer && (
+        <div className="ml-4 mt-2">
+          {footer}
+        </div>
+      )}
+      {renderMediaRunningIndicators('ml-4 mt-2')}
+      {isExpanded && (
+        <div className="ml-4 mt-2">
+          {renderDetailBody()}
         </div>
       )}
     </div>

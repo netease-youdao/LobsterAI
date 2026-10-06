@@ -2,7 +2,7 @@ import { describe, test } from 'vitest';
 
 import { expectCurrentOpenClawPatchMissing, expectPatchContains } from './patchTestUtils';
 
-describe('final OpenClaw 6.1 patch decisions', () => {
+describe('final OpenClaw v2026.8.1 patch decisions', () => {
   test('carries aborted tool loop breaker because upstream generic loop detection is not enough', () => {
     expectPatchContains('openclaw-aborted-tool-loop-breaker.patch', [
       'ABORTED_TOOL_LOOP_CRITICAL_THRESHOLD',
@@ -14,7 +14,7 @@ describe('final OpenClaw 6.1 patch decisions', () => {
 
   test('carries prompt segment fallback skip because derivePromptSegments is diagnostic-only', () => {
     expectPatchContains('openclaw-skip-derive-prompt-segments-deadloop.patch', [
-      'skip derivePromptSegments fallback',
+      'Prompt segmentation is trace-only',
       'const promptSegments = runResult.meta?.promptSegments',
     ]);
   });

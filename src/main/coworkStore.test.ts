@@ -22,9 +22,15 @@ import BetterSqlite3 from 'better-sqlite3';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
 import { AgentAvatarSvg, DefaultAgentAvatarIcon, encodeAgentAvatarIcon } from '../shared/agent/avatar';
-import { CoworkForkMode } from '../shared/cowork/constants';
+import {
+  COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
+  COWORK_SEARCH_MESSAGE_PAGE_MAX_CONTENT_BYTES,
+  CoworkForkMode,
+} from '../shared/cowork/constants';
+import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
+import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -42,12 +48,14 @@ function setupDb(): void {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       claude_session_id TEXT,
+      scheduled_task_id TEXT,
       status TEXT NOT NULL DEFAULT 'idle',
       pinned INTEGER NOT NULL DEFAULT 0,
       pin_order INTEGER,
       cwd TEXT NOT NULL,
       system_prompt TEXT NOT NULL DEFAULT '',
       model_override TEXT NOT NULL DEFAULT '',
+      thinking_level TEXT NOT NULL DEFAULT '',
       execution_mode TEXT NOT NULL DEFAULT 'local',
       active_skill_ids TEXT,
       agent_id TEXT DEFAULT 'main',
@@ -65,6 +73,12 @@ function setupDb(): void {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS subagent_runs (
+      id TEXT PRIMARY KEY,
+      parent_session_id TEXT,
+      child_cowork_session_id TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS cowork_messages (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
@@ -78,9 +92,31 @@ function setupDb(): void {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS library_artifact_sessions (
+      artifact_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      PRIMARY KEY (artifact_id, session_id)
+    );
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS cowork_config (
       key TEXT PRIMARY KEY,
-      value TEXT
+      value TEXT,
+      updated_at INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS im_session_mappings (
+      im_conversation_id TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      cowork_session_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL DEFAULT 'main',
+      openclaw_session_key TEXT,
+      created_at INTEGER NOT NULL,
+      last_active_at INTEGER NOT NULL,
+      PRIMARY KEY (im_conversation_id, platform, agent_id)
     );
   `);
 
@@ -92,12 +128,15 @@ function setupDb(): void {
       system_prompt TEXT NOT NULL DEFAULT '',
       identity TEXT NOT NULL DEFAULT '',
       model TEXT NOT NULL DEFAULT '',
+      thinking_level TEXT NOT NULL DEFAULT '',
       working_directory TEXT NOT NULL DEFAULT '',
       icon TEXT NOT NULL DEFAULT '',
       skill_ids TEXT NOT NULL DEFAULT '[]',
+      subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]',
       enabled INTEGER NOT NULL DEFAULT 1,
       pinned INTEGER NOT NULL DEFAULT 0,
       pin_order INTEGER,
+      sort_order INTEGER,
       is_default INTEGER NOT NULL DEFAULT 0,
       source TEXT NOT NULL DEFAULT 'custom',
       preset_id TEXT NOT NULL DEFAULT '',
@@ -215,6 +254,194 @@ test('getSession returns all messages when one has corrupt metadata', () => {
   expect(nullMsg.metadata).toBeUndefined();
 });
 
+test('getSessionSearchMessagePage keeps absolute mixed-message offsets without returning metadata or tool content', () => {
+  const sid = 'search-page-session';
+  insertSession(sid);
+
+  insertMessage('user-0', sid, 'user', 'first visible message', '{"localMediaAttachments":[{"localPath":"/large/path.png"}]}', 1);
+  insertMessage('tool-1', sid, 'tool_result', 'x'.repeat(20_000), '{"large":"metadata"}', 2);
+  insertMessage('thinking-2', sid, 'assistant', 'private chain of thought', '{"isThinking":true,"large":"metadata"}', 3);
+  insertMessage('assistant-3', sid, 'assistant', 'visible response', '{"large":"metadata"}', 4);
+  insertMessage('system-4', sid, 'system', 'large system payload', null, 5);
+  insertMessage('user-5', sid, 'user', 'last visible message', null, 6);
+
+  const countMessagesSpy = vi.spyOn(store, 'countSessionMessages');
+  const firstPage = store.getSessionSearchMessagePage(sid, 3, 0);
+  expect(firstPage).toEqual({
+    messages: [{
+      id: 'user-0',
+      type: 'user',
+      content: 'first visible message',
+      timestamp: expect.any(Number),
+      absoluteMessageIndex: 0,
+    }],
+    offset: 0,
+    nextOffset: 3,
+    nextCursor: {
+      sortValue: 3,
+      createdAt: expect.any(Number),
+      rowId: expect.any(Number),
+    },
+    total: 6,
+  });
+
+  expect(store.getSessionSearchMessagePage(
+    sid,
+    3,
+    3,
+    firstPage.nextCursor,
+    firstPage.total,
+  )).toEqual({
+    messages: [
+      {
+        id: 'assistant-3',
+        type: 'assistant',
+        content: 'visible response',
+        timestamp: expect.any(Number),
+        absoluteMessageIndex: 3,
+      },
+      {
+        id: 'user-5',
+        type: 'user',
+        content: 'last visible message',
+        timestamp: expect.any(Number),
+        absoluteMessageIndex: 5,
+      },
+    ],
+    offset: 3,
+    nextOffset: 6,
+    nextCursor: {
+      sortValue: 6,
+      createdAt: expect.any(Number),
+      rowId: expect.any(Number),
+    },
+    total: 6,
+  });
+  expect(countMessagesSpy).toHaveBeenCalledTimes(1);
+});
+
+test('getSessionSearchMessagePage treats corrupt assistant metadata as non-thinking', () => {
+  const sid = 'search-corrupt-metadata-session';
+  insertSession(sid);
+  insertMessage('assistant-corrupt', sid, 'assistant', 'still searchable', '{broken', 1);
+
+  expect(store.getSessionSearchMessagePage(sid, 10, 0).messages).toEqual([{
+    id: 'assistant-corrupt',
+    type: 'assistant',
+    content: 'still searchable',
+    timestamp: expect.any(Number),
+    absoluteMessageIndex: 0,
+  }]);
+});
+
+test('getSessionSearchMessagePage bounds user and assistant content while preserving an over-limit sentinel', () => {
+  const sid = 'search-content-limit-session';
+  insertSession(sid);
+  const projectedLength = COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS + 1;
+  const userContent = `${'u'.repeat(projectedLength)}user tail`;
+  const assistantContent = `${'a'.repeat(projectedLength)}assistant tail`;
+  insertMessage('oversized-user', sid, 'user', userContent, null, 1);
+  insertMessage('oversized-assistant', sid, 'assistant', assistantContent, null, 2);
+
+  const messages = store.getSessionSearchMessagePage(sid, 10, 0).messages;
+
+  expect(messages).toHaveLength(2);
+  expect(messages[0].content).toBe(userContent.slice(0, projectedLength));
+  expect(messages[1].content).toBe(assistantContent.slice(0, projectedLength));
+  expect(messages.every(message => message.content.length === projectedLength)).toBe(true);
+});
+
+test('getSessionSearchMessagePage leaves UTF-16 surrogate overflow detectable by the renderer', () => {
+  const sid = 'search-surrogate-limit-session';
+  insertSession(sid);
+  const content = '🦞'.repeat(
+    Math.floor(COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS / 2) + 1,
+  );
+  insertMessage('oversized-surrogate-user', sid, 'user', content, null, 1);
+
+  const [message] = store.getSessionSearchMessagePage(sid, 10, 0).messages;
+
+  // SQLite SUBSTR counts Unicode code points, while JavaScript String.length
+  // counts UTF-16 code units. Returning this bounded value still crosses the
+  // renderer's explicit per-message limit instead of silently truncating it.
+  expect(message.content).toBe(content);
+  expect(message.content.length).toBeGreaterThan(
+    COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
+  );
+});
+
+test('getSessionSearchMessagePage enforces its aggregate UTF-8 payload budget without losing page progress', () => {
+  const sid = 'search-page-payload-limit-session';
+  insertSession(sid);
+  const fullSizeMessage = 'p'.repeat(
+    COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
+  );
+  const messagesAtLimit = Math.floor(
+    COWORK_SEARCH_MESSAGE_PAGE_MAX_CONTENT_BYTES
+      / COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
+  );
+  for (let index = 0; index < messagesAtLimit; index += 1) {
+    insertMessage(`payload-${index}`, sid, 'user', fullSizeMessage, null, index + 1);
+  }
+
+  const exactLimitPage = store.getSessionSearchMessagePage(sid, 20, 0);
+  expect(exactLimitPage.messages).toHaveLength(messagesAtLimit);
+  expect(exactLimitPage.messages.reduce(
+    (total, message) => total + Buffer.byteLength(message.content, 'utf8'),
+    0,
+  )).toBe(COWORK_SEARCH_MESSAGE_PAGE_MAX_CONTENT_BYTES);
+
+  insertMessage('payload-overflow', sid, 'user', 'x', null, messagesAtLimit + 1);
+  const overLimitPage = store.getSessionSearchMessagePage(sid, 20, 0);
+
+  expect(overLimitPage.messages).toEqual([{
+    id: 'payload-0',
+    type: 'user',
+    content: expect.any(String),
+    timestamp: expect.any(Number),
+    absoluteMessageIndex: 0,
+  }]);
+  expect(overLimitPage.messages[0].content).toHaveLength(
+    COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS + 1,
+  );
+  expect(overLimitPage).toMatchObject({
+    offset: 0,
+    nextOffset: messagesAtLimit + 1,
+    nextCursor: {
+      sortValue: messagesAtLimit + 1,
+      createdAt: expect.any(Number),
+      rowId: expect.any(Number),
+    },
+    total: messagesAtLimit + 1,
+  });
+});
+
+test('getSessionSearchMessagePage keyset cursor preserves ROWID order for legacy ties', () => {
+  const sid = 'search-keyset-tie-session';
+  insertSession(sid);
+  for (let index = 0; index < 5; index += 1) {
+    insertMessage(`tie-${index}`, sid, 'user', `message ${index}`, null, index + 1, 100);
+  }
+  db.prepare('UPDATE cowork_messages SET sequence = NULL WHERE session_id = ?').run(sid);
+
+  const firstPage = store.getSessionSearchMessagePage(sid, 2, 0);
+  const secondPage = store.getSessionSearchMessagePage(sid, 2, 2, firstPage.nextCursor);
+  const thirdPage = store.getSessionSearchMessagePage(sid, 2, 4, secondPage.nextCursor);
+
+  expect([
+    ...firstPage.messages,
+    ...secondPage.messages,
+    ...thirdPage.messages,
+  ].map(message => [message.id, message.absoluteMessageIndex])).toEqual([
+    ['tie-0', 0],
+    ['tie-1', 1],
+    ['tie-2', 2],
+    ['tie-3', 3],
+    ['tie-4', 4],
+  ]);
+  expect(thirdPage.nextOffset).toBe(5);
+});
+
 test('searchSessions finds matching titles beyond the recent page', () => {
   for (let index = 0; index < 105; index += 1) {
     insertSession(`recent-${index}`, 'main', `Recent filler ${index}`, 2000 + index);
@@ -231,6 +458,85 @@ test('searchSessions finds matching titles beyond the recent page', () => {
 
   expect(results.map((session) => session.id)).toEqual(['deep-match']);
   expect(store.countSearchSessions({ query: 'history search needle' })).toBe(1);
+});
+
+test('scheduled task sessions preserve their task id in session details and list summaries', () => {
+  const session = store.createSession(
+    'Daily summary',
+    '/tmp',
+    '',
+    'local',
+    [],
+    'main',
+    '',
+    { scheduledTaskId: 'job-daily-summary' },
+  );
+
+  expect(session.scheduledTaskId).toBe('job-daily-summary');
+  expect(store.getSession(session.id)?.scheduledTaskId).toBe('job-daily-summary');
+  expect(store.listSessions(10, 0, 'main')[0]?.scheduledTaskId).toBe('job-daily-summary');
+  expect(store.searchSessions({ query: 'Daily summary' })[0]?.scheduledTaskId).toBe(
+    'job-daily-summary',
+  );
+
+  insertSession('newer-fork', 'main', 'Forked daily summary', Date.now() + 10_000);
+  db.prepare(
+    `UPDATE cowork_sessions
+     SET scheduled_task_id = ?, parent_session_id = ?
+     WHERE id = ?`,
+  ).run('job-daily-summary', session.id, 'newer-fork');
+
+  expect(store.getSessionIdByScheduledTaskId('job-daily-summary', 'main')).toBe(session.id);
+  expect(store.getSessionIdByScheduledTaskId('job-daily-summary', 'other-agent')).toBeNull();
+});
+
+test('list and search session summaries include IM platform from mappings', () => {
+  insertSession('weixin-session', 'main', '[微信] group:o9cq', 2_000);
+  insertSession('regular-session', 'main', '[微信] user-written title', 1_000);
+  db.prepare(
+    `INSERT INTO im_session_mappings (
+      im_conversation_id,
+      platform,
+      cowork_session_id,
+      agent_id,
+      openclaw_session_key,
+      created_at,
+      last_active_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    'group:o9cq',
+    'weixin',
+    'weixin-session',
+    'main',
+    'agent:main:openclaw-weixin:group:o9cq',
+    1_000,
+    2_000,
+  );
+
+  const listed = store.listSessions(10, 0);
+  expect(listed.find((session) => session.id === 'weixin-session')?.imPlatform).toBe('weixin');
+  expect(listed.find((session) => session.id === 'regular-session')?.imPlatform).toBeNull();
+
+  const searched = store.searchSessions({ query: 'group:o9cq', limit: 10, offset: 0 });
+  expect(searched[0]?.imPlatform).toBe('weixin');
+});
+
+test('scheduled task session lookup uses a stable newest-created top-level session', () => {
+  insertSession('older-session', 'main', 'Older daily summary', 1_000);
+  insertSession('newer-session', 'main', 'Newer daily summary', 2_000);
+  db.prepare(
+    `UPDATE cowork_sessions
+     SET scheduled_task_id = ?
+     WHERE id IN (?, ?)`,
+  ).run('job-daily-summary', 'older-session', 'newer-session');
+
+  // A user interaction may update an older history row. It must not change the
+  // canonical destination chosen for future scheduled runs.
+  db.prepare('UPDATE cowork_sessions SET updated_at = ? WHERE id = ?')
+    .run(3_000, 'older-session');
+
+  expect(store.getSessionIdByScheduledTaskId('job-daily-summary', 'main'))
+    .toBe('newer-session');
 });
 
 test('searchSessions preserves pinned ordering and pagination', () => {
@@ -460,6 +766,74 @@ test('replaceConversationMessages ignores assistant-only entries for the updated
   expect(store.getSession(sid)?.updatedAt).toBe(2000);
 });
 
+test('getRecentConversationMessages reads beyond the session page and excludes non-conversation messages', () => {
+  const sid = 'sess-recent-conversation';
+  insertSession(sid);
+
+  for (let index = 1; index <= 31; index += 1) {
+    insertMessage(
+      `msg-${index}`,
+      sid,
+      index % 2 === 0 ? 'assistant' : 'user',
+      `message ${index}`,
+      '{}',
+      index,
+      index,
+    );
+  }
+  insertMessage('tool-32', sid, 'tool_use', 'ignored tool', '{}', 32, 32);
+
+  expect(store.getSession(sid)?.messages).toHaveLength(30);
+  expect(store.getRecentConversationMessages(sid, 50).map(message => message.content)).toEqual(
+    Array.from({ length: 31 }, (_, index) => `message ${index + 1}`),
+  );
+  expect(store.getRecentConversationMessages(sid, 3).map(message => message.content)).toEqual([
+    'message 29',
+    'message 30',
+    'message 31',
+  ]);
+  expect(store.getAllConversationMessages(sid).map(message => message.content)).toEqual(
+    Array.from({ length: 31 }, (_, index) => `message ${index + 1}`),
+  );
+  expect(store.getRecentConversationMessages(sid, 0)).toEqual([]);
+  expect(store.getRecentConversationMessages(sid, Number.POSITIVE_INFINITY)).toEqual([]);
+});
+
+test('getTurnStartTimestampAt finds where the turn of a paged window began', () => {
+  const sid = 'sess-turn-start';
+  insertSession(sid);
+  insertMessage('user-1', sid, 'user', 'long task', null, 1, 1000);
+  for (let index = 2; index <= 40; index += 1) {
+    insertMessage(`tool-${index}`, sid, index % 2 === 0 ? 'tool_use' : 'tool_result', 'step', null, index, index * 1000);
+  }
+  insertMessage('user-2', sid, 'user', 'follow up', null, 41, 50_000);
+  insertMessage('assistant-2', sid, 'assistant', 'answer', null, 42, 51_000);
+
+  // The default page starts mid-way through the first turn.
+  const firstPage = store.getSession(sid, 30);
+  expect(firstPage?.messagesOffset).toBe(12);
+  expect(firstPage?.messages[0]?.type).not.toBe('user');
+  expect(store.getTurnStartTimestampAt(sid, 12)).toBe(1000);
+
+  expect(store.getTurnStartTimestampAt(sid, 40)).toBe(50_000);
+  expect(store.getTurnStartTimestampAt(sid, 41)).toBe(50_000);
+  expect(store.getTurnStartTimestampAt(sid, -1)).toBeNull();
+  expect(store.getTurnStartTimestampAt('missing-session', 3)).toBeNull();
+});
+
+test('getTurnStartTimestampAt uses the earliest time when a channel user message is stamped late', () => {
+  const sid = 'sess-turn-start-channel';
+  insertSession(sid);
+  insertMessage('assistant-0', sid, 'assistant', 'before any request', null, 1, 500);
+  insertMessage('user-1', sid, 'user', 'from IM', null, 2, 3000);
+  insertMessage('assistant-1', sid, 'assistant', 'streamed first', null, 3, 2000);
+  insertMessage('tool-1', sid, 'tool_use', 'exec', null, 4, 4000);
+
+  expect(store.getTurnStartTimestampAt(sid, 3)).toBe(2000);
+  // Without an earlier user message the turn starts at its first message.
+  expect(store.getTurnStartTimestampAt(sid, 0)).toBe(500);
+});
+
 test('getSession returns all messages when ALL have corrupt metadata', () => {
   const sid = 'sess-2';
   insertSession(sid);
@@ -601,6 +975,24 @@ test('updateSession can patch model override without refreshing the session upda
   expect(session?.updatedAt).toBe(1000);
 });
 
+test('create and update session persist the selected thinking level', () => {
+  const session = store.createSession(
+    'Thinking session',
+    '/tmp',
+    '',
+    'local',
+    [],
+    'main',
+    'lobsterai-server/deepseek-v4-flash',
+    { thinkingLevel: 'high' },
+  );
+
+  expect(store.getSession(session.id)?.thinkingLevel).toBe('high');
+
+  store.updateSession(session.id, { thinkingLevel: 'max' }, { touchUpdatedAt: false });
+  expect(store.getSession(session.id)?.thinkingLevel).toBe('max');
+});
+
 test('updateSession can rename without refreshing the session updated time', () => {
   const sid = 'sess-title-only';
   insertSession(sid);
@@ -617,20 +1009,32 @@ test('deleteSession removes messages without relying on foreign key cascade', ()
   const sid = 'sess-delete-hard';
   insertSession(sid);
   insertMessage('msg-delete-hard', sid, 'user', 'remove me', '{}', 1);
+  db.prepare(`
+    INSERT INTO library_artifact_sessions (artifact_id, session_id) VALUES (?, ?)
+  `).run('artifact-delete-hard', sid);
 
-  store.deleteSession(sid);
+  const affectedArtifactIds = store.deleteSession(sid);
 
   expect(store.getSession(sid)).toBeNull();
   const messageCount = db
     .prepare('SELECT COUNT(*) AS count FROM cowork_messages WHERE session_id = ?')
     .get(sid) as { count: number };
   expect(messageCount.count).toBe(0);
+  const relationCount = db
+    .prepare('SELECT COUNT(*) AS count FROM library_artifact_sessions WHERE session_id = ?')
+    .get(sid) as { count: number };
+  expect(relationCount.count).toBe(0);
+  expect(affectedArtifactIds).toEqual(['artifact-delete-hard']);
 });
 
 test('forkSession copies stable history and records fork metadata', () => {
   const sid = 'sess-fork-source';
   insertSession(sid);
-  insertMessage('msg-user', sid, 'user', 'start here', '{"keep":true}', 1, 1000);
+  insertMessage('msg-user', sid, 'user', 'start here', JSON.stringify({
+    keep: true,
+    [OpenClawCronRunMetadataKey.SessionKey]: 'agent:main:cron:job-1:run:run-1',
+    [OpenClawCronRunMetadataKey.EntryIndex]: 0,
+  }), 1, 1000);
   insertMessage(
     'msg-streaming',
     sid,
@@ -849,20 +1253,25 @@ test('forkSession prefers a new compaction bridge over an inherited summary', ()
   expect(summaries[0].content).toBe('Newer compacted context.');
 });
 
-test('agent CRUD stores working directory independently', () => {
+test('agent CRUD stores model preferences and working directory independently', () => {
   const agent = store.createAgent({
     name: 'Docs Agent',
     model: 'openai/gpt-4o',
+    thinkingLevel: 'high',
     workingDirectory: '/tmp/docs-project',
   });
 
+  expect(agent.thinkingLevel).toBe('high');
   expect(agent.workingDirectory).toBe('/tmp/docs-project');
 
   const updated = store.updateAgent(agent.id, {
+    thinkingLevel: 'max',
     workingDirectory: '/tmp/docs-next',
   });
 
+  expect(updated?.thinkingLevel).toBe('max');
   expect(updated?.workingDirectory).toBe('/tmp/docs-next');
+  expect(store.getAgent(agent.id)?.thinkingLevel).toBe('max');
   expect(store.getAgent(agent.id)?.workingDirectory).toBe('/tmp/docs-next');
 });
 
@@ -947,16 +1356,77 @@ test('agent unpinning clears pin order', () => {
   expect(unpinned?.pinOrder).toBeNull();
 });
 
+test('reorderAgents persists explicit agent order', () => {
+  const first = store.createAgent({ name: 'First Sort Agent' });
+  const second = store.createAgent({ name: 'Second Sort Agent' });
+  const third = store.createAgent({ name: 'Third Sort Agent' });
+
+  const reordered = store.reorderAgents([third.id, first.id, second.id]);
+
+  expect(reordered.map(agent => agent.id).slice(0, 3)).toEqual([third.id, first.id, second.id]);
+  expect(reordered.find(agent => agent.id === third.id)?.sortOrder).toBe(1);
+  expect(reordered.find(agent => agent.id === first.id)?.sortOrder).toBe(2);
+  expect(reordered.find(agent => agent.id === second.id)?.sortOrder).toBe(3);
+});
+
 test('getConfig defaults skipMissedJobs to true when config is missing', () => {
   const config = store.getConfig();
 
   expect(config.skipMissedJobs).toBe(true);
 });
 
-test('getConfig defaults OpenClaw heartbeat to enabled when config is missing', () => {
+test('getConfig defaults OpenClaw heartbeat to disabled when config is missing', () => {
   const config = store.getConfig();
 
-  expect(config.openClawHeartbeatEnabled).toBe(true);
+  expect(config.openClawHeartbeatEnabled).toBe(false);
+});
+
+test('defaults automatic skill review to disabled for users without the setting', () => {
+  store.setConfig({ openClawHeartbeatEnabled: true });
+
+  expect(store.getConfig().openClawSkillReviewEnabled).toBe(false);
+});
+
+test('persists skill review opt-in and opt-out independently of other settings', () => {
+  store.setConfig({ openClawSkillReviewEnabled: true });
+  store.setConfig({ openClawHeartbeatEnabled: true });
+  const reloadedStore = new CoworkStore(db);
+
+  expect(reloadedStore.getConfig()).toMatchObject({
+    openClawSkillReviewEnabled: true,
+    openClawHeartbeatEnabled: true,
+  });
+
+  reloadedStore.setConfig({ openClawSkillReviewEnabled: false });
+  expect(new CoworkStore(db).getConfig()).toMatchObject({
+    openClawSkillReviewEnabled: false,
+    openClawHeartbeatEnabled: true,
+  });
+});
+
+test('defaults memory flush to disabled for users without the setting', () => {
+  store.setConfig({ openClawHeartbeatEnabled: true, openClawSkillReviewEnabled: true });
+
+  expect(store.getConfig().openClawMemoryFlushEnabled).toBe(false);
+});
+
+test('persists memory flush opt-in and opt-out independently of other maintenance settings', () => {
+  store.setConfig({ openClawMemoryFlushEnabled: true });
+  store.setConfig({ openClawHeartbeatEnabled: true, openClawSkillReviewEnabled: true });
+  const reloadedStore = new CoworkStore(db);
+
+  expect(reloadedStore.getConfig()).toMatchObject({
+    openClawMemoryFlushEnabled: true,
+    openClawHeartbeatEnabled: true,
+    openClawSkillReviewEnabled: true,
+  });
+
+  reloadedStore.setConfig({ openClawMemoryFlushEnabled: false });
+  expect(new CoworkStore(db).getConfig()).toMatchObject({
+    openClawMemoryFlushEnabled: false,
+    openClawHeartbeatEnabled: true,
+    openClawSkillReviewEnabled: true,
+  });
 });
 
 test('backfillEmptyAgentModels assigns the current default model to empty agents only', () => {
@@ -977,4 +1447,183 @@ test('backfillEmptyAgentModels assigns the current default model to empty agents
     ['stockexpert', 'qwen3.5-plus'],
     ['writer', 'deepseek-v3.2'],
   ]);
+});
+
+test('session projection notifications cover creation, fork and listener disposal after commit', () => {
+  const events: SessionProjectionChanges[] = [];
+  const unsubscribe = store.onSessionProjectionChanges(changes => {
+    expect(db.inTransaction).toBe(false);
+    events.push(changes);
+  });
+  const source = store.createSession('Source', '/tmp');
+  const fork = store.forkSession({ sourceSessionId: source.id });
+  expect(events.map(event => event.changedSessionIds)).toEqual([[source.id], [fork.id]]);
+  unsubscribe();
+  store.updateSession(source.id, { title: 'After unsubscribe' });
+  expect(events).toHaveLength(2);
+});
+
+test('projection notifications follow actual changes, including forced touches and backward user times', () => {
+  insertSession('projection', 'main', 'Original', 1000);
+  const events: SessionProjectionChanges[] = [];
+  store.onSessionProjectionChanges(changes => events.push(changes));
+  store.updateSession('projection', { status: 'idle' });
+  store.updateSession('projection', { modelOverride: 'other' });
+  store.addMessage('projection', { type: 'assistant', content: 'stream' });
+  store.addMessage('projection', { type: 'tool_use', content: 'tool' });
+  store.setSessionPinned('projection', true);
+  expect(events).toHaveLength(0);
+  store.updateSession('projection', { title: 'Renamed' });
+  expect(store.getSession('projection')?.updatedAt).toBe(1000);
+  store.updateSession('projection', {}, { touchUpdatedAt: true });
+  store.addMessage('projection', { type: 'user', content: 'backwards' }, 500.25);
+  expect(store.getSession('projection')?.updatedAt).toBe(500.25);
+  store.updateSession('projection', { status: 'completed' });
+  expect(events.map(event => event.changedSessionIds)).toEqual(
+    Array.from({ length: 4 }, () => ['projection']),
+  );
+});
+
+test.each([true, false])('insertMessageBeforeId notifies once with existing target=%s', existing => {
+  insertSession('insert-projection', 'main', 'Original', 1000);
+  if (existing) insertMessage('target', 'insert-projection', 'assistant', 'reply', null, 1);
+  const listener = vi.fn();
+  store.onSessionProjectionChanges(listener);
+  store.insertMessageBeforeId('insert-projection', 'target', { type: 'user', content: 'prompt' });
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect(listener.mock.calls[0][0].changedSessionIds).toEqual(['insert-projection']);
+});
+
+test.each([true, false])('history replacement only notifies newer fractional user times (conversation=%s)', conversation => {
+  insertSession('history-projection', 'main', 'Original', 5000);
+  const listener = vi.fn();
+  store.onSessionProjectionChanges(listener);
+  const replace = (timestamp: number) => {
+    if (conversation) {
+      store.replaceConversationMessages('history-projection', [{ role: 'user', text: 'prompt', timestamp }]);
+    } else {
+      store.replaceSessionMessages('history-projection', [{ type: 'user', content: 'prompt', timestamp }]);
+    }
+  };
+  replace(3000.25);
+  expect(listener).not.toHaveBeenCalled();
+  replace(6000.75);
+  expect(store.getSession('history-projection')?.updatedAt).toBe(6000.75);
+  expect(listener).toHaveBeenCalledTimes(1);
+});
+
+test('resetRunningSessions batches changed projections and leaves no-op reset silent', () => {
+  insertSession('reset-a', 'main', 'A', 1);
+  insertSession('reset-b', 'main', 'B', 1);
+  db.prepare("UPDATE cowork_sessions SET status = 'running'").run();
+  const listener = vi.fn();
+  store.onSessionProjectionChanges(listener);
+  expect(store.resetRunningSessions()).toBe(2);
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect(listener.mock.calls[0][0].changedSessionIds.sort()).toEqual(['reset-a', 'reset-b']);
+  expect(store.resetRunningSessions()).toBe(0);
+  expect(listener).toHaveBeenCalledTimes(1);
+});
+
+test('subagent upsert notifies creation and actual repeated running timestamp writes', () => {
+  insertSession('parent-projection');
+  const listener = vi.fn();
+  store.onSessionProjectionChanges(listener);
+  const options = {
+    id: 'child-projection',
+    parentSessionId: 'parent-projection',
+    childSessionKey: 'child-key',
+    title: 'Child',
+    agentId: 'main',
+  };
+  store.upsertSubagentChildSession(options);
+  db.prepare('UPDATE cowork_sessions SET updated_at = 1 WHERE id = ?').run(options.id);
+  store.upsertSubagentChildSession(options);
+  expect(listener).toHaveBeenCalledTimes(2);
+  expect(listener.mock.calls.map(call => call[0].changedSessionIds)).toEqual([[options.id], [options.id]]);
+});
+
+test('outer session transaction publishes final values once and drops rollback or reverted writes', () => {
+  insertSession('transaction-projection', 'main', 'Original', 1000);
+  const listener = vi.fn();
+  store.onSessionProjectionChanges(listener);
+  store.runSessionTransaction(() => {
+    store.updateSession('transaction-projection', { title: 'Temporary' });
+    store.runSessionTransaction(() => store.updateSession('transaction-projection', { title: 'Original' }));
+    expect(listener).not.toHaveBeenCalled();
+  });
+  expect(listener).not.toHaveBeenCalled();
+  expect(() => store.runSessionTransaction(() => {
+    store.updateSession('transaction-projection', { title: 'Rolled back' });
+    throw new Error('rollback');
+  })).toThrow('rollback');
+  expect(store.getSession('transaction-projection')?.title).toBe('Original');
+  expect(listener).not.toHaveBeenCalled();
+  store.runSessionTransaction(() => {
+    store.updateSession('transaction-projection', { title: 'Committed' });
+    store.addMessage('transaction-projection', { type: 'user', content: 'New' }, 2000);
+    expect(listener).not.toHaveBeenCalled();
+  });
+  expect(listener).toHaveBeenCalledTimes(1);
+});
+
+test.each([false, true])('single and batch deletions publish unique artifact/session IDs once (batch=%s)', batch => {
+  insertSession('delete-a');
+  insertSession('delete-b');
+  db.prepare('INSERT INTO library_artifact_sessions (artifact_id, session_id) VALUES (?, ?)').run('shared-file', 'delete-a');
+  db.prepare('INSERT INTO library_artifact_sessions (artifact_id, session_id) VALUES (?, ?)').run('shared-file', 'delete-b');
+  const listener = vi.fn();
+  store.onSessionProjectionChanges(listener);
+  if (batch) store.deleteSessions(['delete-a', 'delete-a', 'delete-b']);
+  else store.deleteSession('delete-a');
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect(listener.mock.calls[0][0]).toEqual({
+    changedSessionIds: [],
+    deletedSessionIds: batch ? ['delete-a', 'delete-b'] : ['delete-a'],
+    affectedArtifactIds: ['shared-file'],
+  });
+});
+
+test.each([false, true])('agent transaction preserves deleted artifact IDs (orphan cleanup=%s)', orphanCleanup => {
+  if (!orphanCleanup) store.createAgent({ id: 'projection-agent', name: 'Agent' });
+  insertSession('agent-session', 'projection-agent');
+  db.prepare('INSERT INTO library_artifact_sessions (artifact_id, session_id) VALUES (?, ?)').run('agent-file', 'agent-session');
+  const listener = vi.fn(changes => {
+    expect(db.inTransaction).toBe(false);
+    expect(store.getSession('agent-session')).toBeNull();
+    expect(Boolean(store.getAgent('projection-agent'))).toBe(orphanCleanup);
+    return changes;
+  });
+  store.onSessionProjectionChanges(listener);
+  if (orphanCleanup) store.createAgent({ id: 'projection-agent', name: 'Agent' });
+  else expect(store.deleteAgent('projection-agent')).toBe(true);
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect(listener.mock.calls[0][0]).toEqual({
+    changedSessionIds: [],
+    deletedSessionIds: ['agent-session'],
+    affectedArtifactIds: ['agent-file'],
+  });
+});
+
+
+test('sidebar hides historical self-spawns while preserving expert work, forks and direct access', () => {
+  const parent = store.createSession('parent', '/tmp', '', 'local', [], 'main');
+  const self = store.createSession('child self', '/tmp', '', 'local', [], 'main');
+  const expert = store.createSession('child expert', '/tmp', '', 'local', [], 'writer');
+  const fork = store.createSession('child fork', '/tmp', '', 'local', [], 'main');
+  for (const child of [self, expert, fork]) {
+    db.prepare('UPDATE cowork_sessions SET parent_session_id = ? WHERE id = ?').run(parent.id, child.id);
+  }
+  for (const child of [self, expert]) {
+    db.prepare('INSERT INTO subagent_runs VALUES (?, ?, ?)').run(child.id, parent.id, child.id);
+  }
+  expect(store.listSessions(100).map(session => session.id)).toEqual(expect.arrayContaining([parent.id, expert.id, fork.id]));
+  expect(store.listSessions(100).map(session => session.id)).not.toContain(self.id);
+  expect(store.countSessions()).toBe(3);
+  expect(store.countSessions('main')).toBe(2);
+  expect(store.searchSessions({ query: 'child' }).map(session => session.id)).not.toContain(self.id);
+  expect(store.searchSessions({ query: 'child', agentId: 'main' }).map(session => session.id)).toEqual([fork.id]);
+  expect(store.countSearchSessions({ query: 'child' })).toBe(2);
+  expect(store.countSearchSessions({ query: 'child', agentId: 'main' })).toBe(1);
+  expect(store.getSession(self.id)?.id).toBe(self.id);
 });

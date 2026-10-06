@@ -1,11 +1,15 @@
 import { describe, expect, test } from 'vitest';
 
 import { ShareDeploymentCandidateSource } from '../../shared/shareDeployment/constants';
+import { type Artifact, ArtifactTypeValue } from '../types/artifact';
 import {
   dedupeArtifactsForDisplay,
   hasToolResultMediaAssets,
+  isIgnoredArtifactPath,
+  isPathInsideDirectory,
   normalizeArtifactFilePath,
   normalizeFilePathForDedup,
+  orderArtifactsByReplyReferences,
   parseFileLinksFromMessage,
   parseFilePathsFromText,
   parseLocalServiceUrlsFromText,
@@ -13,6 +17,7 @@ import {
   parseToolArtifact,
   parseToolResultMediaArtifacts,
   shouldParseFilePathsFromToolResult,
+  toAbsoluteArtifactPath,
 } from './artifactParser';
 
 describe('normalizeArtifactFilePath', () => {
@@ -94,6 +99,45 @@ describe('parseFileLinksFromMessage', () => {
     expect(artifacts[0].type).toBe('video');
     expect(artifacts[0].filePath).toBe('/home/user/project/generated-video.mp4');
   });
+
+  test('accepts plain absolute POSIX path links without file:// scheme', () => {
+    const content = '改好了：[随便写一个 Markdown.md](/Users/admin/project012/随便写一个 Markdown.md)';
+    const artifacts = parseFileLinksFromMessage(content, 'msg1', 'sess1');
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].type).toBe('markdown');
+    expect(artifacts[0].filePath).toBe('/Users/admin/project012/随便写一个 Markdown.md');
+  });
+
+  test('accepts Windows absolute path links with backslashes', () => {
+    const content = '[周报.docx](D:\\工作文档\\周报.docx)';
+    const artifacts = parseFileLinksFromMessage(content, 'msg1', 'sess1');
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].type).toBe('document');
+    expect(artifacts[0].filePath).toBe('D:\\工作文档\\周报.docx');
+  });
+
+  test('accepts relative path links with a separator', () => {
+    const content = '[报告](./output/report.html)';
+    const artifacts = parseFileLinksFromMessage(content, 'msg1', 'sess1');
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].type).toBe('html');
+    expect(artifacts[0].filePath).toBe('./output/report.html');
+  });
+
+  test('ignores web, mailto, anchor, and localhost links', () => {
+    const content = [
+      '[文档](https://example.com/report.pdf)',
+      '[邮件](mailto:user@example.com)',
+      '[章节](#section)',
+      '[预览](http://localhost:3000/index.html)',
+    ].join('\n');
+    expect(parseFileLinksFromMessage(content, 'msg1', 'sess1')).toHaveLength(0);
+  });
+
+  test('ignores bare-name links without any separator', () => {
+    const content = '[a.md](a.md)';
+    expect(parseFileLinksFromMessage(content, 'msg1', 'sess1')).toHaveLength(0);
+  });
 });
 
 describe('parseFilePathsFromText', () => {
@@ -118,6 +162,27 @@ describe('parseFilePathsFromText', () => {
     expect(artifacts).toHaveLength(1);
     expect(artifacts[0].type).toBe('video');
     expect(artifacts[0].filePath).toBe('/home/user/project/generated-video.webm');
+  });
+
+  test('detects bare html file paths', () => {
+    const content = '页面已生成 /home/user/project/dist/index.html 完成';
+    const artifacts = parseFilePathsFromText(content, 'msg1', 'sess1');
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].type).toBe('html');
+    expect(artifacts[0].filePath).toBe('/home/user/project/dist/index.html');
+  });
+
+  test('detects bare Windows backslash paths', () => {
+    const content = '文件已保存到 D:\\工作文档\\月报\\使用Agent.html';
+    const artifacts = parseFilePathsFromText(content, 'msg1', 'sess1');
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].type).toBe('html');
+    expect(artifacts[0].filePath).toBe('D:\\工作文档\\月报\\使用Agent.html');
+  });
+
+  test('does not detect remote https image URLs as local paths', () => {
+    const content = '图片在 https://example.com/assets/generated.png 上';
+    expect(parseFilePathsFromText(content, 'msg1', 'sess1')).toHaveLength(0);
   });
 });
 
@@ -173,11 +238,11 @@ describe('parseToolResultMediaArtifacts', () => {
     expect(artifacts[0].filePath).toBeUndefined();
   });
 
-  test('skips remote-only video assets because video preview requires a local file', () => {
+  test('keeps remote-only video assets as legacy generated-video candidates', () => {
     const toolResultMsg = {
       id: 'result1',
       type: 'tool_result' as const,
-      content: 'Generated video',
+      content: 'Saved generated video:',
       timestamp: Date.now(),
       metadata: {
         toolResultDetails: {
@@ -192,8 +257,34 @@ describe('parseToolResultMediaArtifacts', () => {
       },
     };
     const artifacts = parseToolResultMediaArtifacts(toolResultMsg, 'sess1');
-    expect(artifacts).toHaveLength(0);
-    expect(hasToolResultMediaAssets(toolResultMsg)).toBe(false);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].remoteUrl).toBe('https://example.com/generated.mp4?signature=temporary');
+    expect(artifacts[0].legacyGeneratedVideoCandidate).toBe(true);
+    expect(hasToolResultMediaAssets(toolResultMsg)).toBe(true);
+  });
+
+  test('does not mark arbitrary tool video output as a generated-video share candidate', () => {
+    const toolResultMsg = {
+      id: 'result1',
+      type: 'tool_result' as const,
+      content: 'Video processing complete',
+      timestamp: Date.now(),
+      metadata: {
+        toolResultDetails: {
+          assets: [
+            {
+              type: 'video',
+              url: 'https://example.com/processed.mp4',
+              mimeType: 'video/mp4',
+            },
+          ],
+        },
+      },
+    };
+
+    const artifacts = parseToolResultMediaArtifacts(toolResultMsg, 'sess1');
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].legacyGeneratedVideoCandidate).toBeUndefined();
   });
 
   test('prefers local filePath for persisted generated videos', () => {
@@ -204,6 +295,7 @@ describe('parseToolResultMediaArtifacts', () => {
       timestamp: Date.now(),
       metadata: {
         toolResultDetails: {
+          taskId: '321',
           assets: [
             {
               type: 'video',
@@ -211,6 +303,7 @@ describe('parseToolResultMediaArtifacts', () => {
               filePath: '/home/user/project/generated-video.mp4',
               mimeType: 'video/mp4',
               filename: 'generated-video.mp4',
+              outputIndex: 4,
             },
           ],
         },
@@ -222,6 +315,11 @@ describe('parseToolResultMediaArtifacts', () => {
     expect(artifacts[0].content).toBe('');
     expect(artifacts[0].remoteUrl).toBe('https://example.com/generated.mp4?signature=temporary');
     expect(artifacts[0].filePath).toBe('/home/user/project/generated-video.mp4');
+    expect(artifacts[0].mediaOrigin).toEqual({
+      type: 'generated_video',
+      taskId: '321',
+      outputIndex: 4,
+    });
   });
 
   test('detects media assets in tool result metadata', () => {
@@ -278,6 +376,46 @@ describe('dedupeArtifactsForDisplay', () => {
     expect(artifacts).toHaveLength(1);
     expect(artifacts[0].id).toBe(metadataArtifacts[0].id);
     expect(artifacts[0].remoteUrl).toBe('https://example.com/generated.mp4?signature=temporary');
+  });
+
+  test('preserves generated-video provenance when a later assistant file link has the same path', () => {
+    const metadataArtifacts = parseToolResultMediaArtifacts({
+      id: 'system-result',
+      type: 'system' as const,
+      content: 'Saved generated video',
+      timestamp: 1,
+      metadata: {
+        toolResultDetails: {
+          taskId: '206',
+          mediaType: 'video',
+          assets: [
+            {
+              type: 'video',
+              url: 'https://example.com/generated.mp4?signature=temporary',
+              filePath: '/home/user/project/generated-video.mp4',
+              filename: 'generated-video.mp4',
+              outputIndex: 0,
+            },
+          ],
+        },
+      },
+    }, 'sess1');
+    const linkArtifacts = parseFileLinksFromMessage(
+      '[generated-video.mp4](file:///home/user/project/generated-video.mp4)',
+      'assistant-result',
+      'sess1',
+    ).map(artifact => ({ ...artifact, createdAt: 2 }));
+
+    const artifacts = dedupeArtifactsForDisplay([...metadataArtifacts, ...linkArtifacts]);
+
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].id).toBe(metadataArtifacts[0].id);
+    expect(artifacts[0].remoteUrl).toBe('https://example.com/generated.mp4?signature=temporary');
+    expect(artifacts[0].mediaOrigin).toEqual({
+      type: 'generated_video',
+      taskId: '206',
+      outputIndex: 0,
+    });
   });
 
   test('replaces remote media artifact with local persisted version sharing the same url', () => {
@@ -462,6 +600,90 @@ describe('dedupeArtifactsForDisplay', () => {
     ]);
 
     expect(artifacts.map(artifact => artifact.id)).toEqual(['service-3000', 'service-5174']);
+  });
+});
+
+describe('orderArtifactsByReplyReferences', () => {
+  const projectDir = '/Users/admin/claude-3-5-sonnet-ppt';
+  const makeFileArtifact = (
+    id: string,
+    messageId: string,
+    fileName: string,
+    type: Artifact['type'],
+  ): Artifact => ({
+    id,
+    messageId,
+    sessionId: 'sess1',
+    type,
+    title: fileName,
+    content: '',
+    fileName,
+    filePath: `${projectDir}/${fileName}`,
+    createdAt: 1,
+  });
+  const orderForDisplay = (rawArtifacts: Artifact[], replyMessageIds: string[]) =>
+    orderArtifactsByReplyReferences(dedupeArtifactsForDisplay(rawArtifacts), rawArtifacts, replyMessageIds)
+      .map(artifact => artifact.fileName);
+
+  test('puts the files the final reply links ahead of an intermediate generated image', () => {
+    const coverArt = makeFileArtifact('cover', 'image-tool-result', 'sonnet35-cover-art.png', ArtifactTypeValue.Image);
+    const replyLinks = parseFileLinksFromMessage(
+      [
+        'PPT 已完成。',
+        `- [Claude Sonnet 3.5 介绍.pptx](${projectDir}/Claude Sonnet 3.5 介绍.pptx)`,
+        `- [预览 PDF](${projectDir}/preview.pdf)`,
+        `- [缩略图总览](${projectDir}/thumbnails.png)`,
+      ].join('\n'),
+      'final-reply',
+      'sess1',
+    );
+
+    expect(orderForDisplay([coverArt, ...replyLinks], ['final-reply'])).toEqual([
+      'Claude Sonnet 3.5 介绍.pptx',
+      'preview.pdf',
+      'thumbnails.png',
+      'sonnet35-cover-art.png',
+    ]);
+  });
+
+  test('ranks the latest reply first and keeps unreferenced files in detection order', () => {
+    const rawArtifacts = [
+      makeFileArtifact('notes', 'tool-use-1', 'notes.txt', ArtifactTypeValue.Text),
+      makeFileArtifact('draft', 'reply-1', 'draft.md', ArtifactTypeValue.Markdown),
+      makeFileArtifact('chart', 'tool-result-2', 'chart.png', ArtifactTypeValue.Image),
+      makeFileArtifact('report', 'reply-2', 'report.pdf', ArtifactTypeValue.Document),
+    ];
+
+    expect(orderForDisplay(rawArtifacts, ['reply-1', 'reply-2'])).toEqual([
+      'report.pdf',
+      'draft.md',
+      'notes.txt',
+      'chart.png',
+    ]);
+  });
+
+  test('matches a reply link that display dedupe merged into a card from a tool step', () => {
+    const generatedImage = makeFileArtifact('generated', 'image-tool-result', 'hero.png', ArtifactTypeValue.Image);
+    const writtenPage = makeFileArtifact('written', 'tool-use-1', 'index.html', ArtifactTypeValue.Html);
+    const [linkedPage] = parseFileLinksFromMessage(
+      `打开 [index.html](file://${projectDir}/index.html) 查看。`,
+      'final-reply',
+      'sess1',
+    );
+    const rawArtifacts = [generatedImage, writtenPage, linkedPage];
+
+    expect(dedupeArtifactsForDisplay(rawArtifacts)).toHaveLength(2);
+    expect(orderForDisplay(rawArtifacts, ['final-reply'])).toEqual(['index.html', 'hero.png']);
+  });
+
+  test('keeps the detection order when no reply links a file', () => {
+    const artifacts = [
+      makeFileArtifact('first', 'tool-use-1', 'first.png', ArtifactTypeValue.Image),
+      makeFileArtifact('second', 'tool-use-2', 'second.pdf', ArtifactTypeValue.Document),
+    ];
+
+    expect(orderArtifactsByReplyReferences(artifacts, artifacts, ['final-reply'])).toBe(artifacts);
+    expect(orderArtifactsByReplyReferences(artifacts, artifacts, [])).toBe(artifacts);
   });
 });
 
@@ -739,6 +961,149 @@ describe('parseToolArtifact', () => {
 
     expect(normalizeFilePathForDedup(toolPath))
       .toBe(normalizeFilePathForDedup(linkArtifacts[0].filePath!));
+  });
+
+  test('extracts file path from Edit tool input', () => {
+    const toolUseMsg = {
+      id: 'tool1',
+      type: 'tool_use' as const,
+      content: '',
+      timestamp: Date.now(),
+      metadata: {
+        toolName: 'Edit',
+        toolUseId: 'tu1',
+        toolInput: { file_path: '/Users/admin/project012/随便写一个 Markdown.md', old_string: 'a', new_string: 'b' },
+      },
+    };
+    const artifact = parseToolArtifact(toolUseMsg, undefined, 'sess1');
+    expect(artifact).not.toBeNull();
+    expect(artifact!.type).toBe('markdown');
+    expect(artifact!.filePath).toBe('/Users/admin/project012/随便写一个 Markdown.md');
+    expect(artifact!.messageId).toBe('tool1');
+  });
+
+  test('extracts file path from lowercase edit tool with path key', () => {
+    const toolUseMsg = {
+      id: 'tool2',
+      type: 'tool_use' as const,
+      content: '',
+      timestamp: Date.now(),
+      metadata: {
+        toolName: 'edit',
+        toolUseId: 'tu2',
+        toolInput: { path: 'D:\\workspace\\notes.md' },
+      },
+    };
+    const artifact = parseToolArtifact(toolUseMsg, undefined, 'sess1');
+    expect(artifact).not.toBeNull();
+    expect(artifact!.filePath).toBe('D:\\workspace\\notes.md');
+  });
+
+  test('supports MultiEdit and create_file tool names', () => {
+    for (const toolName of ['MultiEdit', 'create_file', 'multi_edit']) {
+      const artifact = parseToolArtifact({
+        id: `tool-${toolName}`,
+        type: 'tool_use' as const,
+        content: '',
+        timestamp: Date.now(),
+        metadata: {
+          toolName,
+          toolUseId: `tu-${toolName}`,
+          toolInput: { file_path: '/tmp/out/report.md' },
+        },
+      }, undefined, 'sess1');
+      expect(artifact, toolName).not.toBeNull();
+    }
+  });
+
+  test('returns null for edit tool when the tool result errored', () => {
+    const toolUseMsg = {
+      id: 'tool3',
+      type: 'tool_use' as const,
+      content: '',
+      timestamp: Date.now(),
+      metadata: {
+        toolName: 'Edit',
+        toolUseId: 'tu3',
+        toolInput: { file_path: '/tmp/out/report.md' },
+      },
+    };
+    const toolResultMsg = {
+      id: 'result3',
+      type: 'tool_result' as const,
+      content: 'failed',
+      timestamp: Date.now(),
+      metadata: { toolUseId: 'tu3', isError: true },
+    };
+    expect(parseToolArtifact(toolUseMsg, toolResultMsg, 'sess1')).toBeNull();
+  });
+
+  test('returns null for delete-style and shell tools', () => {
+    for (const toolName of ['delete_file', 'remove', 'Bash', 'exec', 'Read']) {
+      const artifact = parseToolArtifact({
+        id: `tool-${toolName}`,
+        type: 'tool_use' as const,
+        content: '',
+        timestamp: Date.now(),
+        metadata: {
+          toolName,
+          toolUseId: `tu-${toolName}`,
+          toolInput: { file_path: '/tmp/out/report.md' },
+        },
+      }, undefined, 'sess1');
+      expect(artifact, toolName).toBeNull();
+    }
+  });
+});
+
+describe('toAbsoluteArtifactPath', () => {
+  test('keeps absolute POSIX and Windows paths unchanged', () => {
+    expect(toAbsoluteArtifactPath('/home/user/a.md', '/cwd')).toBe('/home/user/a.md');
+    expect(toAbsoluteArtifactPath('D:\\ws\\a.md', '/cwd')).toBe('D:\\ws\\a.md');
+  });
+
+  test('strips file:// prefixes and Windows leading slash', () => {
+    expect(toAbsoluteArtifactPath('file:///D:/ws/a.md', '/cwd')).toBe('D:/ws/a.md');
+    expect(toAbsoluteArtifactPath('file:///home/user/a.md', '/cwd')).toBe('/home/user/a.md');
+  });
+
+  test('joins relative paths to the session cwd', () => {
+    expect(toAbsoluteArtifactPath('output/report.html', '/Users/admin/project')).toBe('/Users/admin/project/output/report.html');
+    expect(toAbsoluteArtifactPath('./output/report.html', '/Users/admin/project/')).toBe('/Users/admin/project/output/report.html');
+  });
+
+  test('returns relative path unchanged without a cwd', () => {
+    expect(toAbsoluteArtifactPath('output/report.html')).toBe('output/report.html');
+  });
+});
+
+describe('isIgnoredArtifactPath', () => {
+  test('ignores .cowork-temp, node_modules, .git, and hidden segments', () => {
+    expect(isIgnoredArtifactPath('/cwd/.cowork-temp/draft.md')).toBe(true);
+    expect(isIgnoredArtifactPath('D:\\ws\\.cowork-temp\\draft.md')).toBe(true);
+    expect(isIgnoredArtifactPath('/cwd/node_modules/pkg/readme.md')).toBe(true);
+    expect(isIgnoredArtifactPath('/cwd/.git/config.md')).toBe(true);
+    expect(isIgnoredArtifactPath('/cwd/sub/.hidden/report.md')).toBe(true);
+    expect(isIgnoredArtifactPath('/cwd/sub/.env.md')).toBe(true);
+  });
+
+  test('keeps normal deliverable paths', () => {
+    expect(isIgnoredArtifactPath('/cwd/output/report.md')).toBe(false);
+    expect(isIgnoredArtifactPath('./output/report.md')).toBe(false);
+    expect(isIgnoredArtifactPath('~/Desktop/report.md')).toBe(false);
+    expect(isIgnoredArtifactPath('D:\\工作文档\\周报.docx')).toBe(false);
+  });
+});
+
+describe('isPathInsideDirectory', () => {
+  test('detects containment case-insensitively across separators', () => {
+    expect(isPathInsideDirectory('/Users/Admin/Project/a.md', '/users/admin/project')).toBe(true);
+    expect(isPathInsideDirectory('D:\\ws\\out\\a.md', 'D:/WS')).toBe(true);
+  });
+
+  test('rejects paths outside the directory and prefix collisions', () => {
+    expect(isPathInsideDirectory('/Users/admin/other/a.md', '/Users/admin/project')).toBe(false);
+    expect(isPathInsideDirectory('/Users/admin/project2/a.md', '/Users/admin/project')).toBe(false);
   });
 });
 

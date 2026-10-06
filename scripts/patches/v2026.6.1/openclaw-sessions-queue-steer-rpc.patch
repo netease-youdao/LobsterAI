@@ -1,0 +1,99 @@
+--- a/src/gateway/methods/core-descriptors.ts
++++ b/src/gateway/methods/core-descriptors.ts
+@@ -213,6 +213,7 @@
+   { name: "sessions.usage.logs", scope: "operator.read", advertise: false },
+   { name: "poll", scope: "operator.write", advertise: false },
+   { name: "sessions.steer", scope: "operator.write", advertise: false },
++  { name: "sessions.queueSteer", scope: "operator.write", advertise: false },
+   { name: "push.test", scope: "operator.write", advertise: false },
+   { name: "push.web.vapidPublicKey", scope: "operator.write", advertise: false },
+   { name: "push.web.subscribe", scope: "operator.write", advertise: false },
+--- a/src/gateway/server-methods/sessions.ts
++++ b/src/gateway/server-methods/sessions.ts
+@@ -41,7 +41,9 @@
+ } from "../../agents/agent-scope.js";
+ import {
+   abortEmbeddedAgentRun,
++  formatEmbeddedAgentQueueFailureSummary,
+   isEmbeddedAgentRunActive,
++  queueEmbeddedAgentMessageWithOutcomeAsync,
+   waitForEmbeddedAgentRunEnd,
+ } from "../../agents/embedded-agent-runner/runs.js";
+ import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
+@@ -2002,6 +2004,76 @@
+       isWebchatConnect,
+       interruptIfActive: true,
+     });
++  },
++  "sessions.queueSteer": async ({ params, respond, context }) => {
++    if (!assertValidParams(params, validateSessionsSendParams, "sessions.queueSteer", respond)) {
++      return;
++    }
++    const p = params;
++    const key = requireSessionKey((p as { key?: unknown }).key, respond);
++    if (!key) {
++      return;
++    }
++    const cfg = context.getRuntimeConfig();
++    const requestedAgent = resolveRequestedGlobalAgentId(
++      cfg,
++      key,
++      (p as { agentId?: string }).agentId,
++    );
++    if (!requestedAgent.ok) {
++      respond(false, undefined, requestedAgent.error);
++      return;
++    }
++
++    const loaded = loadSessionEntry(key, { agentId: requestedAgent.agentId });
++    const { entry, canonicalKey } = loaded;
++    const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey);
++    if (deletedAgentId !== null) {
++      respond(
++        false,
++        undefined,
++        errorShape(
++          ErrorCodes.INVALID_REQUEST,
++          `Agent "${deletedAgentId}" no longer exists in configuration`,
++        ),
++      );
++      return;
++    }
++    if (!entry?.sessionId) {
++      respond(
++        false,
++        undefined,
++        errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
++      );
++      return;
++    }
++
++    const message = (p as { message: string }).message;
++    const queueOptions = {
++      steeringMode: "all" as const,
++      debounceMs: 0,
++      waitForTranscriptCommit: true,
++    };
++    let outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
++      entry.sessionId,
++      message,
++      queueOptions,
++    );
++    if (!outcome.queued && outcome.reason === "transcript_commit_wait_unsupported") {
++      outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(entry.sessionId, message, {
++        steeringMode: "all",
++        debounceMs: 0,
++      });
++    }
++
++    if (outcome.queued) {
++      respond(true, { ...outcome, sessionKey: canonicalKey });
++      return;
++    }
++    respond(false, outcome, errorShape(
++      ErrorCodes.UNAVAILABLE,
++      formatEmbeddedAgentQueueFailureSummary(outcome) ?? "active run queue rejected",
++    ));
+   },
+   "sessions.abort": async ({ req, params, respond, context, client, isWebchatConnect }) => {
+     if (!assertValidParams(params, validateSessionsAbortParams, "sessions.abort", respond)) {

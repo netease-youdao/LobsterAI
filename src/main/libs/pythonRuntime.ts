@@ -1,8 +1,9 @@
 import { app } from 'electron';
-import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+
 import { cpRecursiveSync } from '../fsCompat';
+import { repairPipShims } from './pythonPipShim';
 
 const PYTHON_RUNTIME_DIR_NAME = 'python-win';
 const PYTHON_RUNTIME_STATE_FILE = 'runtime.json';
@@ -32,19 +33,6 @@ function hasPipSupport(rootDir: string): boolean {
     fs.existsSync(path.join(rootDir, PIP_MODULE_MAIN_REL_PATH))
     || fs.existsSync(path.join(rootDir, PIP_MODULE_INIT_REL_PATH));
   return hasCommand && hasModuleShim;
-}
-
-function findPythonExecutable(rootDir: string): string | null {
-  const candidates = [
-    path.join(rootDir, 'python.exe'),
-    path.join(rootDir, 'python3.exe'),
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
 }
 
 function readEmbedPthFiles(rootDir: string): string[] {
@@ -244,6 +232,17 @@ export function appendPythonRuntimeToEnv(env: Record<string, string | undefined>
   return env;
 }
 
+function convergeUserPipShims(userRoot: string): void {
+  try {
+    const { changed } = repairPipShims(userRoot);
+    if (changed.length > 0) {
+      console.log(`[python-runtime] Converged pip shim files: ${changed.join(', ')}`);
+    }
+  } catch (error) {
+    console.warn('[python-runtime] Failed to converge pip shim files:', error);
+  }
+}
+
 export async function ensurePythonRuntimeReady(): Promise<{ success: boolean; error?: string }> {
   if (process.platform !== 'win32') {
     return { success: true };
@@ -257,6 +256,7 @@ export async function ensurePythonRuntimeReady(): Promise<{ success: boolean; er
       } catch (error) {
         console.warn('[python-runtime] Failed to normalize user runtime _pth:', error);
       }
+      convergeUserPipShims(userRoot);
     }
     const userHealth = runtimeHealth(userRoot);
     if (userHealth.ok) {
@@ -289,6 +289,7 @@ export async function ensurePythonRuntimeReady(): Promise<{ success: boolean; er
     fs.mkdirSync(path.dirname(userRoot), { recursive: true });
     cpRecursiveSync(bundledRoot, userRoot, { force: true, dereference: true });
     ensureEmbedSitePackages(userRoot);
+    convergeUserPipShims(userRoot);
 
     const syncedHealth = runtimeHealth(userRoot);
     if (!syncedHealth.ok) {
@@ -306,86 +307,6 @@ export async function ensurePythonRuntimeReady(): Promise<{ success: boolean; er
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error('[python-runtime] Failed to ensure runtime ready:', message);
-    return { success: false, error: message };
-  }
-}
-
-function runPythonCommand(
-  pythonExe: string,
-  args: string[],
-  rootDir: string
-): { ok: boolean; detail?: string } {
-  const env = {
-    ...process.env,
-    PATH: appendWindowsPath(process.env.PATH, [rootDir, path.join(rootDir, 'Scripts')]),
-  };
-  const result = spawnSync(pythonExe, args, {
-    cwd: rootDir,
-    encoding: 'utf-8',
-    stdio: 'pipe',
-    timeout: 60_000,
-    env,
-    windowsHide: true,
-  });
-  if (result.status === 0) {
-    return { ok: true };
-  }
-  const detail = (result.stderr || result.stdout || '').trim();
-  return { ok: false, detail: detail || `exit code ${String(result.status)}` };
-}
-
-function tryBootstrapPip(rootDir: string): { ok: boolean; detail?: string } {
-  const pythonExe = findPythonExecutable(rootDir);
-  if (!pythonExe) {
-    return { ok: false, detail: 'python executable not found in runtime root' };
-  }
-
-  const ensurePipResult = runPythonCommand(pythonExe, ['-m', 'ensurepip', '--upgrade'], rootDir);
-  if (!ensurePipResult.ok) {
-    return ensurePipResult;
-  }
-
-  const pipVersionResult = runPythonCommand(pythonExe, ['-m', 'pip', '--version'], rootDir);
-  if (!pipVersionResult.ok) {
-    return pipVersionResult;
-  }
-
-  return { ok: true };
-}
-
-export async function ensurePythonPipReady(): Promise<{ success: boolean; error?: string }> {
-  if (process.platform !== 'win32') {
-    return { success: true };
-  }
-
-  const runtimeReady = await ensurePythonRuntimeReady();
-  if (!runtimeReady.success) {
-    return runtimeReady;
-  }
-
-  try {
-    const userRoot = getUserPythonRoot();
-    const userHealth = runtimeHealth(userRoot, { requirePip: true });
-    if (userHealth.ok) {
-      return { success: true };
-    }
-
-    const bootstrapResult = tryBootstrapPip(userRoot);
-    if (bootstrapResult.ok) {
-      const finalHealth = runtimeHealth(userRoot, { requirePip: true });
-      if (finalHealth.ok) {
-        console.log('[python-runtime] ensurepip successfully restored pip in user runtime');
-        return { success: true };
-      }
-    }
-
-    const errorDetail = bootstrapResult.detail ? ` (${bootstrapResult.detail})` : '';
-    const message = `pip is unavailable in bundled runtime${errorDetail}`;
-    console.error(`[python-runtime] ${message}`);
-    return { success: false, error: message };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error('[python-runtime] Failed to ensure pip ready:', message);
     return { success: false, error: message };
   }
 }

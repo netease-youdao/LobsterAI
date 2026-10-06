@@ -1,5 +1,9 @@
 # DeepSeek 长会话缓存稳定性修复设计文档
 
+> 2026-07-30 更新：用户升级后再次出现长会话缓存命中率从接近 100% 降至约 57% 的生产回归。实时请求恢复前缀稳定投影；固定聚合上限只保留在持久化恢复和上下文溢出恢复路径。
+>
+> 诊断状态：根因定位已完成，`DeepSeekCacheProbe` 临时 patch 已从正式补丁集删除。
+
 ## 1. 概述
 
 ### 1.1 问题
@@ -58,17 +62,17 @@ message[46]: 40,886 -> 40,454 -> 39,715 -> 30,920 bytes
 2. 区分 system/message replay、tool inventory 和其他顶层参数变化。
 3. 将请求指纹与 provider 返回的 `input`、`cacheRead` 和 `stopReason` 关联。
 4. 同时覆盖直接 DeepSeek 和 `lobsterai-server` 套餐 DeepSeek V4 模型。
-5. 保证实时请求中未变化的历史 tool result 保持字节稳定，同时继续限制单条超大结果和保留 overflow recovery 能力。
+5. 保证实时请求中未变化的历史 tool result 保持字节稳定，同时继续限制单条超大结果，并保留持久化和 overflow recovery 的聚合保护。
 
 ## 3. 实现方案
 
-诊断 patch：
+历史诊断 patch（已从正式补丁目录删除，不进入生产 runtime）：
 
 ```text
 scripts/patches/v2026.6.1/zz-openclaw-deepseek-cache-probe.patch
 ```
 
-诊断点位于 `openai-transport-stream.ts`：完成 `onPayload`、code-mode 和兼容性调整后，在 OpenAI SDK 发出最终请求前记录 request probe；stream 完成或失败时记录 result probe。
+该文件名只用于保留本次定位记录。诊断点曾位于 `openai-transport-stream.ts`：完成 `onPayload`、code-mode 和兼容性调整后，在 OpenAI SDK 发出最终请求前记录 request probe；stream 完成或失败时记录 result probe。根因确认后，patch 文件和 apply validator 均已删除。
 
 仅当 `provider/model` 标识匹配 DeepSeek V4 时启用。日志统一使用：
 
@@ -101,14 +105,17 @@ scripts/patches/v2026.6.1/openclaw-live-tool-result-cache-stability.patch
 
 该 patch 定向移植上游提交 `a60947fb3e` 的缓存稳定性改动：
 
-- 实时 prompt projection 传入 `aggregateMaxCharsOverride=null`，关闭会随历史增长而重新分配的聚合截断；
+- 正常实时 prompt projection 传入 `aggregateMaxCharsOverride=null`，关闭会随历史增长而重新分配的聚合截断；
 - 继续对每条 tool result 应用 `toolResultMaxChars`，DeepSeek V4 当前仍为 64,000 字符；
+- projection 只修改 request-local clone，持久化 session history 不被改写；
 - 持久化 session recovery 和 context overflow recovery 继续使用聚合预算，不改变其防溢出行为；
 - 增加“历史增长后既有 projection 保持字节一致”的回归测试。
 
-这不是关闭 tool result 防护。它只把固定总预算从正常实时请求路径移除，避免为了节省尚未溢出的上下文而反复改写可缓存历史；真正接近上下文上限时仍由既有 precheck、compaction 和 recovery 处理。
+这不是关闭 tool result 防护。它只把固定总预算从正常实时请求路径移除，避免在尚未触发上下文溢出时反复改写可缓存历史；单条结果限制、上下文 precheck、compaction 和 recovery 路径仍负责控制请求大小。本补丁不承担会话级积分止损。
 
-## 4. 复现与修复验证
+## 4. 历史复现与修复验证
+
+以下 probe 步骤只描述本次临时诊断过程；普通开发和正式构建不会产生这些日志。如需重新定位新的缓存问题，应在隔离诊断分支重新建立临时 probe，验证后再次删除，不能把它放回版本化生产 patch 集。
 
 1. 重新构建并启动 OpenClaw runtime。
 2. 打开上述已有长会话，发送短消息，例如“继续阅读”。
@@ -130,10 +137,11 @@ Select-String -Path "$env:APPDATA\LobsterAI\openclaw\logs\gateway-*.log" -Patter
 
 修复后预期可见：
 
-- 实时截断日志不再包含 `aggregateBudgetChars`；
-- 未超过单条 64,000 字符上限的历史 tool message 不再被截断；
-- 相邻请求的既有 messages 构成完整稳定前缀，通常表现为 `firstDiff=-1`；
-- 缓存命中率随新增尾部消息小幅变化，而不再固定丢失约一半前缀。
+- 正常实时截断日志不再包含 `aggregateBudgetChars=256000`；
+- 单条 tool result 仍不超过 64,000 字符；
+- 新增 tool result 后，已有 messages 仍是下一次请求的完整稳定前缀，通常表现为 `firstDiff=-1`；
+- 缓存命中率随新增尾部消息小幅变化，不再因为历史中段被重写而固定丢失大段前缀；
+- 进入持久化恢复或 context overflow recovery 时，聚合保护仍然生效。
 
 ## 5. 判读规则
 
@@ -151,8 +159,8 @@ Select-String -Path "$env:APPDATA\LobsterAI\openclaw\logs\gateway-*.log" -Patter
 - 不输出消息正文、tool description/schema、API key、URL query 或 headers。
 - session id 只输出 SHA-256 截断值。
 - hash 用于同一进程内比较，不作为安全签名。
-- 使用 warn 级别是为了确保本地复现日志可见；定位完成后应删除该 patch，不随正式修复长期保留。
-- 正式保留的是 `openclaw-live-tool-result-cache-stability.patch`；诊断 patch 仅用于本轮端侧复验。
+- 临时诊断曾使用 warn 级别确保本地复现日志可见；定位完成后已删除，不随正式修复保留。
+- 正式只保留 `openclaw-live-tool-result-cache-stability.patch`；生产 runtime 不包含 `DeepSeekCacheProbe`。
 
 ## 7. 验收标准
 
@@ -160,7 +168,7 @@ Select-String -Path "$env:APPDATA\LobsterAI\openclaw\logs\gateway-*.log" -Patter
 2. `src/agents/embedded-agent-runner/tool-result-truncation.test.ts` 通过新增的字节稳定性用例。
 3. `src/agents/openai-transport-stream.test.ts` 通过。
 4. 连续新增 tool result 时，既有实时 prompt projection 不发生二次截断或 hash 变化。
-5. 单条超过 `toolResultMaxChars` 的结果仍被截断，持久化和 overflow recovery 的聚合保护仍然生效。
-6. 非 DeepSeek V4 模型不产生 probe 日志。
-7. 直接 DeepSeek V4 和套餐 DeepSeek V4 均产生 request/result 日志。
-8. 日志不包含用户正文和 tool schema 原文。
+5. 单条超过 `toolResultMaxChars` 的结果仍被截断，原始 session history 不变，持久化和 overflow recovery 的聚合保护仍然生效。
+6. 版本化生产 patch 集和正式 runtime 不包含 `DeepSeekCacheProbe`。
+7. 如在隔离诊断分支临时重建 probe，必须同时覆盖直接 DeepSeek V4 和套餐 DeepSeek V4，且不得进入正式 patch 清单。
+8. 临时诊断日志不包含用户正文和 tool schema 原文。

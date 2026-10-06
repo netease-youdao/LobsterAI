@@ -1,4 +1,6 @@
-import { parseImConversationId, PlatformRegistry } from '../../../shared/platform';
+import { ImPeerKind, parseImConversationId, PlatformRegistry } from '../../../shared/platform';
+import type { Platform } from '../../im/types';
+import { resolveAgentBinding } from '../../libs/openclawChannelSessionSync';
 
 export interface ScheduledTaskHelperDeps {
   getIMGatewayManager: () => {
@@ -7,6 +9,8 @@ export interface ScheduledTaskHelperDeps {
 }
 
 let deps: ScheduledTaskHelperDeps | null = null;
+
+const WECOM_PLATFORM: Platform = 'wecom';
 
 export function initScheduledTaskHelpers(d: ScheduledTaskHelperDeps): void {
   deps = d;
@@ -131,6 +135,13 @@ interface GatewaySessionRowLike {
   lastTo?: unknown;
   lastAccountId?: unknown;
   deliveryContext?: { channel?: unknown; to?: unknown; accountId?: unknown } | null;
+  origin?: {
+    provider?: unknown;
+    surface?: unknown;
+    chatType?: unknown;
+    to?: unknown;
+    accountId?: unknown;
+  } | null;
 }
 
 export interface ImDeliveryHints {
@@ -142,6 +153,15 @@ export interface ImDeliveryHints {
 
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function isAccountlessGroupOrChannel(
+  parsed: ReturnType<typeof parseImConversationId>,
+): boolean {
+  return !parsed.accountId && (
+    parsed.peerKind === ImPeerKind.Group ||
+    parsed.peerKind === ImPeerKind.Channel
+  );
 }
 
 /**
@@ -163,7 +183,8 @@ export function resolveImDeliveryHintsFromSessions(params: {
   preferredAccountId?: string;
 }): ImDeliveryHints | null {
   const platform = PlatformRegistry.platformOfChannel(params.channel);
-  const peerLower = params.peerId.trim().toLowerCase();
+  const requestedPeer = parseImConversationId(params.peerId);
+  const peerLower = requestedPeer.peerId.trim().toLowerCase();
   if (!platform || !peerLower) return null;
 
   interface Candidate {
@@ -182,7 +203,8 @@ export function resolveImDeliveryHintsFromSessions(params: {
       asNonEmptyString(session.channel);
     if (!rowChannel || PlatformRegistry.platformOfChannel(rowChannel) !== platform) continue;
     const to = asNonEmptyString(session.lastTo) ?? asNonEmptyString(context?.to);
-    if (!to || to.toLowerCase() !== peerLower) continue;
+    const toPeer = to ? parseImConversationId(to).peerId : '';
+    if (!to || toPeer.toLowerCase() !== peerLower) continue;
     candidates.push({
       to,
       accountId: asNonEmptyString(session.lastAccountId) ?? asNonEmptyString(context?.accountId),
@@ -206,6 +228,68 @@ export function resolveImDeliveryHintsFromSessions(params: {
 }
 
 /**
+ * Restores a case-sensitive native group id from inbound session origin
+ * metadata. OpenClaw lowercases channel peer ids in session keys, but providers
+ * such as WeCom and DingTalk require their opaque group ids unchanged.
+ *
+ * This is deliberately narrower than `resolveImDeliveryHintsFromSessions`:
+ * only group origins from the requested platform are considered, an explicitly
+ * selected account must match, and conflicting native ids are rejected.
+ */
+export function resolveGroupDeliveryTargetFromSessions(params: {
+  sessions: readonly unknown[];
+  platform: Platform;
+  peerId: string;
+  preferredAccountId?: string;
+}): string | null {
+  const requestedPeer = parseImConversationId(params.peerId).peerId.trim().toLowerCase();
+  const preferredAccountId = params.preferredAccountId?.trim();
+  if (!requestedPeer) return null;
+
+  const nativeTargets = new Set<string>();
+  for (const row of params.sessions) {
+    if (!row || typeof row !== 'object') continue;
+    const origin = (row as GatewaySessionRowLike).origin;
+    if (!origin || origin.chatType !== ImPeerKind.Group) continue;
+
+    const originChannel = asNonEmptyString(origin.provider) ?? asNonEmptyString(origin.surface);
+    if (!originChannel || PlatformRegistry.platformOfChannel(originChannel) !== params.platform) {
+      continue;
+    }
+
+    const originAccountId = asNonEmptyString(origin.accountId);
+    if (preferredAccountId && originAccountId !== preferredAccountId) continue;
+
+    const originTo = asNonEmptyString(origin.to);
+    if (!originTo) continue;
+    const colonIndex = originTo.indexOf(':');
+    const prefix = colonIndex > 0 ? originTo.slice(0, colonIndex) : '';
+    const withoutChannel = prefix && PlatformRegistry.platformOfChannel(prefix) === params.platform
+      ? originTo.slice(colonIndex + 1)
+      : originTo;
+    const parsedTarget = parseImConversationId(withoutChannel);
+    if (parsedTarget.peerKind && parsedTarget.peerKind !== ImPeerKind.Group) continue;
+    const nativePeer = parsedTarget.peerId.trim();
+    if (!nativePeer || nativePeer.toLowerCase() !== requestedPeer) continue;
+    nativeTargets.add(nativePeer);
+  }
+
+  return nativeTargets.size === 1 ? [...nativeTargets][0] : null;
+}
+
+/** Backward-compatible WeCom wrapper for existing callers and tests. */
+export function resolveWecomGroupDeliveryTargetFromSessions(params: {
+  sessions: readonly unknown[];
+  peerId: string;
+  preferredAccountId?: string;
+}): string | null {
+  return resolveGroupDeliveryTargetFromSessions({
+    ...params,
+    platform: WECOM_PLATFORM,
+  });
+}
+
+/**
  * Resolves the agent bound to a delivery-target conversation from IM session
  * mappings (sorted by lastActiveAt DESC). IM conversations can be bound to a
  * non-main agent; a scheduled delivery must run under that agent so the
@@ -216,9 +300,31 @@ export function resolveConversationAgentIdFromMappings(
   mappings: ReadonlyArray<{ imConversationId: string; agentId?: string }>,
   to: string,
   preferredAccountId?: string,
+  options?: {
+    platform?: Platform;
+    platformAgentBindings?: Record<string, string>;
+  },
 ): string | null {
   const peer = parseImConversationId(to).peerId.trim().toLowerCase();
   if (!peer) return null;
+
+  const preferredAgentId = preferredAccountId && options?.platform
+    ? resolveAgentBinding(
+      options.platformAgentBindings,
+      options.platform,
+      preferredAccountId,
+    )
+    : null;
+
+  if (preferredAgentId) {
+    for (const mapping of mappings) {
+      const parsed = parseImConversationId(mapping.imConversationId);
+      if (parsed.peerId.trim().toLowerCase() !== peer) continue;
+      if (!isAccountlessGroupOrChannel(parsed)) continue;
+      const agentId = mapping.agentId?.trim();
+      if (agentId === preferredAgentId) return agentId;
+    }
+  }
 
   let firstMatch: string | null = null;
   for (const mapping of mappings) {
@@ -227,6 +333,13 @@ export function resolveConversationAgentIdFromMappings(
     const agentId = mapping.agentId?.trim();
     if (!agentId) continue;
     if (preferredAccountId && parsed.accountId === preferredAccountId) return agentId;
+    if (
+      preferredAgentId &&
+      isAccountlessGroupOrChannel(parsed) &&
+      agentId === preferredAgentId
+    ) {
+      return agentId;
+    }
     firstMatch = firstMatch ?? agentId;
   }
   return firstMatch;
@@ -239,7 +352,7 @@ export function resolveConversationAgentIdFromMappings(
  * targets. Input must be sorted by lastActiveAt DESC (listSessionMappings
  * order); the first (most recent) row per peer wins.
  */
-export function dedupeConversationMappings<T extends { imConversationId: string }>(
+export function dedupeConversationMappings<T extends { imConversationId: string; agentId?: string }>(
   mappings: readonly T[],
 ): T[] {
   const seen = new Set<string>();
@@ -247,10 +360,68 @@ export function dedupeConversationMappings<T extends { imConversationId: string 
   for (const mapping of mappings) {
     const parsed = parseImConversationId(mapping.imConversationId);
     if (parsed.peerId.toLowerCase().endsWith(':heartbeat')) continue;
-    const key = `${parsed.peerKind ?? ''}:${parsed.peerId.toLowerCase()}`;
+    const key = `${mapping.agentId ?? ''}:${parsed.peerKind ?? ''}:${parsed.peerId.toLowerCase()}`;
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(mapping);
   }
   return result;
+}
+
+/**
+ * Narrows account-less group mappings for a selected multi-instance bot.
+ *
+ * OpenClaw's canonical group session keys are scoped by agent + channel +
+ * group id, e.g. `agent:<agentId>:feishu:group:<chatId>`. They intentionally
+ * do not include accountId, so persisted group conversation ids cannot be
+ * filtered by account prefix like direct chats. When the scheduled-task form
+ * already selected a bot instance, use that instance's current agent binding
+ * as the best available group ownership signal.
+ */
+export function filterConversationMappingsForSelectedAccount<
+  T extends { imConversationId: string; agentId?: string },
+>(
+  mappings: readonly T[],
+  platform: Platform,
+  accountId: string | undefined,
+  platformAgentBindings: Record<string, string> | undefined,
+): T[] {
+  const selectedAccountId = accountId?.trim();
+  if (!selectedAccountId) return [...mappings];
+  if (!platformAgentBindings) return [...mappings];
+
+  const selectedAgentId = resolveAgentBinding(
+    platformAgentBindings,
+    platform,
+    selectedAccountId,
+  );
+
+  const filtered = mappings.filter((mapping) => {
+    const parsed = parseImConversationId(mapping.imConversationId);
+    if (parsed.accountId) return true;
+    if (
+      parsed.peerKind !== ImPeerKind.Group &&
+      parsed.peerKind !== ImPeerKind.Channel
+    ) {
+      return true;
+    }
+    const mappingAgentId = mapping.agentId?.trim();
+    return !mappingAgentId || mappingAgentId === selectedAgentId;
+  });
+
+  const accountlessGroupPeers = new Set(
+    filtered
+      .map((mapping) => parseImConversationId(mapping.imConversationId))
+      .filter(isAccountlessGroupOrChannel)
+      .map(parsed => parsed.peerId.trim().toLowerCase())
+      .filter(Boolean),
+  );
+
+  if (accountlessGroupPeers.size === 0) return filtered;
+
+  return filtered.filter((mapping) => {
+    const parsed = parseImConversationId(mapping.imConversationId);
+    if (!parsed.accountId || parsed.peerKind !== ImPeerKind.Direct) return true;
+    return !accountlessGroupPeers.has(parsed.peerId.trim().toLowerCase());
+  });
 }

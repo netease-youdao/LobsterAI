@@ -1,10 +1,30 @@
+import crypto from 'crypto';
 import { net } from 'electron';
 import http from 'http';
 
 import { isLobsterAIQuotaExhaustedError } from '../../common/coworkErrorClassify';
+import {
+  AuthRefreshOutcome,
+  AuthRefreshReason,
+  type AuthRefreshReason as AuthRefreshReasonValue,
+  type AuthTokenRefreshResult,
+} from '../../shared/auth/constants';
+import { EnterpriseApiErrorCode } from '../../shared/enterpriseAccount/constants';
+import {
+  LOBSTERAI_CLIENT_CAPABILITIES,
+  LOBSTERAI_CLIENT_CAPABILITIES_HEADER,
+  LOBSTERAI_CLIENT_VERSION_HEADER,
+} from '../../shared/providers/modelRuntimeProfiles';
+import type { EnterpriseAuthSessionSnapshot } from '../enterpriseAccount/membershipRevocation';
+import { listenOnLoopback } from './loopbackListen';
 
 const PROXY_BIND_HOST = '127.0.0.1';
+// Header names OpenAI-, Anthropic- and Google-style clients use for the provider key.
+const INBOUND_API_KEY_HEADERS = ['x-api-key', 'x-goog-api-key', 'api-key'] as const;
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1']);
+const UNAUTHORIZED_WARN_INTERVAL_MS = 60_000;
 const RECENT_QUOTA_ERROR_TTL_MS = 30_000;
+const MAX_PROXY_SSE_SCAN_BUFFER_CHARS = 1_048_576;
 const GEMINI_FALLBACK_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
 
 let proxyServer: http.Server | null = null;
@@ -13,13 +33,40 @@ let recentQuotaError: OpenClawTokenProxyQuotaError | null = null;
 
 // Injected dependencies
 let tokenGetter: (() => { accessToken: string; refreshToken: string } | null) | null = null;
-let tokenRefresher: ((reason: string) => Promise<string | null>) | null = null;
+let tokenRefresher: (
+  (reason: AuthRefreshReasonValue) => Promise<AuthTokenRefreshResult>
+) | null = null;
 let serverBaseUrlGetter: (() => string) | null = null;
+let accountContextHeadersGetter: (() => Record<string, string>) | null = null;
+let sessionKeyGetter: (() => string | null) | null = null;
+let clientVersionGetter: (() => string) | null = null;
+let enterpriseAuthSessionSnapshotGetter: (() => EnterpriseAuthSessionSnapshot | null) | null = null;
+let enterpriseMembershipRevokedHandler: (
+  (event: OpenClawTokenProxyMembershipRevocationEvent) => void
+) | null = null;
+let inboundAuthTokenGetter: (() => string | null) | null = null;
+let lastUnauthorizedWarnAt = 0;
+
+export type OpenClawTokenProxyMembershipRevocationEvent = {
+  code: number;
+  requestSession: EnterpriseAuthSessionSnapshot;
+};
 
 export type OpenClawTokenProxyConfig = {
   getAuthTokens: () => { accessToken: string; refreshToken: string } | null;
-  refreshToken: (reason: string) => Promise<string | null>;
+  refreshToken: (reason: AuthRefreshReasonValue) => Promise<AuthTokenRefreshResult>;
   getServerBaseUrl: () => string;
+  getAccountContextHeaders?: () => Record<string, string>;
+  getSessionKey?: () => string | null;
+  getClientVersion: () => string;
+  getEnterpriseAuthSessionSnapshot?: () => EnterpriseAuthSessionSnapshot | null;
+  onEnterpriseMembershipRevoked?: (
+    event: OpenClawTokenProxyMembershipRevocationEvent
+  ) => void;
+  /** Port from the previous launch; an ephemeral port is used when it is taken. */
+  preferredPort?: number | null;
+  /** Shared secret that OpenClaw and dsh send as the provider API key. */
+  getInboundAuthToken?: () => string | null;
 };
 
 type OpenClawTokenProxyQuotaError = {
@@ -28,51 +75,60 @@ type OpenClawTokenProxyQuotaError = {
   capturedAt: number;
 };
 
+let proxyStartPromise: Promise<{ port: number }> | null = null;
+
 export function startOpenClawTokenProxy(config: OpenClawTokenProxyConfig): Promise<{ port: number }> {
   tokenGetter = config.getAuthTokens;
   tokenRefresher = config.refreshToken;
   serverBaseUrlGetter = config.getServerBaseUrl;
+  accountContextHeadersGetter = config.getAccountContextHeaders ?? null;
+  sessionKeyGetter = config.getSessionKey ?? null;
+  clientVersionGetter = config.getClientVersion;
+  enterpriseAuthSessionSnapshotGetter = config.getEnterpriseAuthSessionSnapshot ?? null;
+  enterpriseMembershipRevokedHandler = config.onEnterpriseMembershipRevoked ?? null;
+  inboundAuthTokenGetter = config.getInboundAuthToken ?? null;
 
-  return new Promise((resolve, reject) => {
-    if (proxyServer) {
-      if (proxyPort) {
-        resolve({ port: proxyPort });
-        return;
-      }
-      reject(new Error('Token proxy is starting'));
-      return;
-    }
-
+  if (proxyServer && proxyPort) return Promise.resolve({ port: proxyPort });
+  if (proxyStartPromise) return proxyStartPromise;
+  proxyStartPromise = (async () => {
     const server = http.createServer(handleRequest);
-
-    server.listen(0, PROXY_BIND_HOST, () => {
-      const addr = server.address();
-      if (addr && typeof addr === 'object') {
-        proxyPort = addr.port;
-        proxyServer = server;
-        console.log(`[OpenClawTokenProxy] started on ${PROXY_BIND_HOST}:${proxyPort}`);
-        resolve({ port: proxyPort });
-      } else {
-        server.close();
-        reject(new Error('Failed to bind token proxy'));
-      }
-    });
-
-    server.on('error', (err) => {
-      console.error('[OpenClawTokenProxy] server error:', err);
-      reject(err);
-    });
+    try {
+      const { port, reused } = await listenOnLoopback(server, PROXY_BIND_HOST, config.preferredPort);
+      server.on('error', (err) => {
+        console.error('[OpenClawTokenProxy] server error:', err);
+      });
+      proxyPort = port;
+      proxyServer = server;
+      console.log(`[OpenClawTokenProxy] started on ${PROXY_BIND_HOST}:${port}${reused ? ' (reused port)' : ''}`);
+      return { port };
+    } catch (error) {
+      console.error('[OpenClawTokenProxy] server error:', error);
+      server.close();
+      throw error;
+    }
+  })().finally(() => {
+    proxyStartPromise = null;
   });
+  return proxyStartPromise;
 }
 
 export function stopOpenClawTokenProxy(): void {
   if (proxyServer) {
     proxyServer.close();
-    proxyServer = null;
-    proxyPort = null;
-    recentQuotaError = null;
     console.log('[OpenClawTokenProxy] stopped');
   }
+  proxyServer = null;
+  proxyPort = null;
+  recentQuotaError = null;
+  tokenGetter = null;
+  tokenRefresher = null;
+  serverBaseUrlGetter = null;
+  accountContextHeadersGetter = null;
+  sessionKeyGetter = null;
+  clientVersionGetter = null;
+  enterpriseAuthSessionSnapshotGetter = null;
+  enterpriseMembershipRevokedHandler = null;
+  inboundAuthTokenGetter = null;
 }
 
 export function getOpenClawTokenProxyPort(): number | null {
@@ -102,10 +158,117 @@ function collectRequestBody(req: http.IncomingMessage): Promise<Buffer> {
   });
 }
 
+function shouldRefreshLobsterAIToken(status: number): boolean {
+  return status === 401;
+}
+
+function isTemporaryAuthRefreshFailure(result: AuthTokenRefreshResult): boolean {
+  return result.outcome === AuthRefreshOutcome.TransientFailure;
+}
+
+function writeTemporaryAuthRefreshFailure(res: http.ServerResponse): void {
+  res.writeHead(503, {
+    'Content-Type': 'application/json',
+    'Retry-After': '1',
+  });
+  res.end(JSON.stringify({
+    error: {
+      message: 'Login verification is temporarily unavailable. Please retry.',
+      type: 'service_unavailable',
+      code: 'auth_refresh_temporarily_unavailable',
+    },
+  }));
+}
+
+function isProxySessionKeyCurrent(
+  expectedSessionKey: string | null,
+  getCurrentSessionKey: (() => string | null) | null,
+): boolean {
+  return getCurrentSessionKey === null || getCurrentSessionKey() === expectedSessionKey;
+}
+
+function writeAuthSessionChanged(res: http.ServerResponse): void {
+  res.writeHead(409, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: {
+      message: 'The authenticated account changed while the request was running.',
+      type: 'authentication_error',
+      code: 'auth_session_changed',
+    },
+  }));
+}
+
+/** Rejects DNS-rebinding requests that reach the loopback socket under a foreign host name. */
+function isLoopbackHostHeader(host: string | undefined): boolean {
+  if (!host) return false;
+  const hostname = host.startsWith('[')
+    ? host.slice(1, host.indexOf(']'))
+    : host.split(':')[0];
+  return LOOPBACK_HOSTNAMES.has(hostname.toLowerCase());
+}
+
+function extractInboundProxyTokens(headers: http.IncomingHttpHeaders): string[] {
+  const tokens: string[] = [];
+  const bearer = /^Bearer\s+(\S+)\s*$/i.exec(headers.authorization ?? '');
+  if (bearer) tokens.push(bearer[1]);
+  for (const name of INBOUND_API_KEY_HEADERS) {
+    const value = headers[name];
+    if (typeof value === 'string' && value.trim()) tokens.push(value.trim());
+  }
+  return tokens;
+}
+
+/** Only callers holding the proxy token may spend the signed-in account. */
+function isInboundRequestAuthorized(headers: http.IncomingHttpHeaders, expectedToken: string | null): boolean {
+  if (!expectedToken) return true;
+  const expected = Buffer.from(expectedToken);
+  return extractInboundProxyTokens(headers).some(token => {
+    const candidate = Buffer.from(token);
+    return candidate.length === expected.length && crypto.timingSafeEqual(candidate, expected);
+  });
+}
+
+function rejectInboundRequest(req: http.IncomingMessage, res: http.ServerResponse, status: 401 | 403, code: string): void {
+  const now = Date.now();
+  if (now - lastUnauthorizedWarnAt >= UNAUTHORIZED_WARN_INTERVAL_MS) {
+    lastUnauthorizedWarnAt = now;
+    const presented = [
+      ...(req.headers.authorization ? ['authorization'] : []),
+      ...INBOUND_API_KEY_HEADERS.filter(name => req.headers[name]),
+    ];
+    const pathname = (req.url ?? '/').split('?')[0];
+    console.warn(`[OpenClawTokenProxy] rejected ${req.method ?? 'GET'} ${pathname}: ${code} (auth headers: ${presented.join(',') || 'none'})`);
+  }
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: {
+      message: status === 403 ? 'Requests must target the loopback proxy address.' : 'Unauthorized: invalid or missing proxy token.',
+      type: 'authentication_error',
+      code,
+    },
+  }));
+}
+
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!isLoopbackHostHeader(req.headers.host)) {
+    rejectInboundRequest(req, res, 403, 'proxy_host_not_loopback');
+    return;
+  }
+  if (!isInboundRequestAuthorized(req.headers, inboundAuthTokenGetter?.() ?? null)) {
+    rejectInboundRequest(req, res, 401, 'invalid_proxy_token');
+    return;
+  }
   try {
     const tokens = tokenGetter?.();
     const serverBaseUrl = serverBaseUrlGetter?.();
+    const requestSessionKey = sessionKeyGetter?.() ?? null;
+    const requestEnterpriseSession = enterpriseAuthSessionSnapshotGetter?.() ?? null;
+    const inspectionContext = requestEnterpriseSession && enterpriseMembershipRevokedHandler
+      ? {
+        requestEnterpriseSession,
+        onEnterpriseMembershipRevoked: enterpriseMembershipRevokedHandler,
+      }
+      : undefined;
 
     if (!tokens?.accessToken || !serverBaseUrl) {
       res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -123,19 +286,73 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     const upstreamPath = `/api/proxy${req.url || '/'}`;
     const upstreamUrl = `${serverBaseUrl}${upstreamPath}`;
 
-    const result = await forwardRequest(upstreamUrl, req.method || 'POST', tokens.accessToken, upstreamBody, req.headers);
+    const clientVersion = clientVersionGetter?.() ?? '';
+    let result = await forwardRequest(
+      upstreamUrl,
+      req.method || 'POST',
+      tokens.accessToken,
+      upstreamBody,
+      req.headers,
+      clientVersion,
+    );
+    if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)) {
+      cancelUpstreamResult(result);
+      writeAuthSessionChanged(res);
+      return;
+    }
 
-    if ((result.status === 401 || result.status === 403) && tokenRefresher) {
-      console.log(`[OpenClawTokenProxy] received ${result.status}, attempting token refresh`);
-      const newToken = await tokenRefresher('openclaw-proxy');
-      if (newToken) {
-        const retryResult = await forwardRequest(upstreamUrl, req.method || 'POST', newToken, upstreamBody, req.headers);
-        pipeResponse(retryResult, res);
+    if (shouldRefreshLobsterAIToken(result.status) && tokenRefresher) {
+      const latestAccessToken = tokenGetter?.()?.accessToken;
+      if (latestAccessToken && latestAccessToken !== tokens.accessToken) {
+        result = await forwardRequest(
+          upstreamUrl,
+          req.method || 'POST',
+          latestAccessToken,
+          upstreamBody,
+          req.headers,
+          clientVersion,
+        );
+        if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)) {
+          cancelUpstreamResult(result);
+          writeAuthSessionChanged(res);
+          return;
+        }
+        if (result.status !== 401) {
+          pipeResponse(result, res, inspectionContext);
+          return;
+        }
+      }
+
+      console.log('[OpenClawTokenProxy] received 401, attempting token refresh');
+      const refreshResult = await tokenRefresher(AuthRefreshReason.OpenClawProxy);
+      if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)) {
+        writeAuthSessionChanged(res);
+        return;
+      }
+      if (refreshResult.accessToken) {
+        const retryResult = await forwardRequest(
+          upstreamUrl,
+          req.method || 'POST',
+          refreshResult.accessToken,
+          upstreamBody,
+          req.headers,
+          clientVersion,
+        );
+        if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)) {
+          cancelUpstreamResult(retryResult);
+          writeAuthSessionChanged(res);
+          return;
+        }
+        pipeResponse(retryResult, res, inspectionContext);
+        return;
+      }
+      if (isTemporaryAuthRefreshFailure(refreshResult)) {
+        writeTemporaryAuthRefreshFailure(res);
         return;
       }
     }
 
-    pipeResponse(result, res);
+    pipeResponse(result, res, inspectionContext);
   } catch (err) {
     console.error('[OpenClawTokenProxy] request handling error:', err);
     if (!res.headersSent) {
@@ -151,6 +368,28 @@ type UpstreamResult = {
   body: NodeJS.ReadableStream | Buffer;
   isStream: boolean;
 };
+
+function cancelUpstreamResult(result: UpstreamResult): void {
+  if (Buffer.isBuffer(result.body)) return;
+  const body = result.body as NodeJS.ReadableStream & {
+    cancel?: (reason?: unknown) => Promise<void>;
+    destroy?: () => void;
+    destroyed?: boolean;
+  };
+  try {
+    if (typeof body.destroy === 'function' && !body.destroyed) {
+      body.destroy();
+      return;
+    }
+    if (typeof body.cancel === 'function') {
+      void body.cancel('Authenticated account changed').catch(error => {
+        console.debug('[OpenClawTokenProxy] stale upstream cancellation failed:', error);
+      });
+    }
+  } catch (error) {
+    console.debug('[OpenClawTokenProxy] stale upstream cancellation failed:', error);
+  }
+}
 
 type ParsedProxySSEPacket = {
   event: string;
@@ -325,6 +564,121 @@ function parseProxySSEPacket(packet: string): ParsedProxySSEPacket {
   };
 }
 
+const ProxySSETerminalKind = {
+  Done: 'done',
+  FinishReason: 'finish_reason',
+  MessageStop: 'message_stop',
+  Error: 'error',
+} as const;
+type ProxySSETerminalKindValue =
+  typeof ProxySSETerminalKind[keyof typeof ProxySSETerminalKind];
+
+const PROXY_SSE_TERMINAL_KIND_PRIORITY: Record<ProxySSETerminalKindValue, number> = {
+  [ProxySSETerminalKind.FinishReason]: 1,
+  [ProxySSETerminalKind.MessageStop]: 2,
+  [ProxySSETerminalKind.Done]: 3,
+  [ProxySSETerminalKind.Error]: 4,
+};
+
+// Tracks SSE completion without logging individual chunks. Upstream connection
+// resets can surface as a clean 'end' with no terminal packet, which downstream
+// OpenClaw would otherwise treat as a completed turn.
+type ProxyResponseInspectionContext = {
+  requestEnterpriseSession: EnterpriseAuthSessionSnapshot;
+  onEnterpriseMembershipRevoked: (
+    event: OpenClawTokenProxyMembershipRevocationEvent
+  ) => void;
+};
+
+type ProxySSEStreamScanState = {
+  sawTerminalPacket: boolean;
+  terminalKind: ProxySSETerminalKindValue | null;
+  eventCount: number;
+  startedAt: number;
+  downstreamClosedAt: number | null;
+  downstreamCancellationRequested: boolean;
+  upstreamSettled: boolean;
+  inspectionContext?: ProxyResponseInspectionContext;
+  membershipRevocationNotified: boolean;
+};
+
+function createProxySSEStreamScanState(
+  now = Date.now(),
+  inspectionContext?: ProxyResponseInspectionContext,
+): ProxySSEStreamScanState {
+  return {
+    sawTerminalPacket: false,
+    terminalKind: null,
+    eventCount: 0,
+    startedAt: now,
+    downstreamClosedAt: null,
+    downstreamCancellationRequested: false,
+    upstreamSettled: false,
+    inspectionContext,
+    membershipRevocationNotified: false,
+  };
+}
+
+function classifyTerminalProxySSEPacket(
+  packet: ParsedProxySSEPacket,
+): ProxySSETerminalKindValue | null {
+  const { event, payload } = packet;
+  if (!payload) {
+    return null;
+  }
+  if (event === 'error') {
+    return ProxySSETerminalKind.Error;
+  }
+  if (payload === '[DONE]') {
+    return ProxySSETerminalKind.Done;
+  }
+  // Explicit upstream error payloads must pass through untouched so the client
+  // receives the error details instead of a connection reset.
+  if (event === 'message_stop') {
+    return ProxySSETerminalKind.MessageStop;
+  }
+
+  try {
+    const parsed = JSON.parse(payload) as unknown;
+    if (!isRecord(parsed)) {
+      return null;
+    }
+    if (parsed.type === 'error' || parsed.error != null) {
+      return ProxySSETerminalKind.Error;
+    }
+    if (parsed.type === 'message_stop') {
+      return ProxySSETerminalKind.MessageStop;
+    }
+    for (const choice of toArray(parsed.choices)) {
+      if (isRecord(choice) && choice.finish_reason != null && choice.finish_reason !== '') {
+        return ProxySSETerminalKind.FinishReason;
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function isTerminalProxySSEPacket(packet: ParsedProxySSEPacket): boolean {
+  return classifyTerminalProxySSEPacket(packet) !== null;
+}
+
+function recordProxySSETerminalKind(
+  scanState: ProxySSEStreamScanState,
+  terminalKind: ProxySSETerminalKindValue,
+): void {
+  scanState.sawTerminalPacket = true;
+  if (
+    scanState.terminalKind === null
+    || PROXY_SSE_TERMINAL_KIND_PRIORITY[terminalKind]
+      > PROXY_SSE_TERMINAL_KIND_PRIORITY[scanState.terminalKind]
+  ) {
+    scanState.terminalKind = terminalKind;
+  }
+}
+
 function findSSEPacketBoundary(buffer: string): { index: number; separatorLength: number } | null {
   const match = /\r?\n\r?\n/.exec(buffer);
   if (!match || typeof match.index !== 'number') {
@@ -336,10 +690,12 @@ function findSSEPacketBoundary(buffer: string): { index: number; separatorLength
   };
 }
 
-function extractQuotaErrorFromProxyErrorPayload(
+type StructuredProxyError = Omit<OpenClawTokenProxyQuotaError, 'capturedAt'>;
+
+function extractStructuredProxyError(
   payload: string,
   event = '',
-): Omit<OpenClawTokenProxyQuotaError, 'capturedAt'> | null {
+): StructuredProxyError | null {
   if (!payload || payload === '[DONE]') {
     return null;
   }
@@ -352,21 +708,71 @@ function extractQuotaErrorFromProxyErrorPayload(
 
     const message = getErrorMessage(parsed);
     const code = getErrorCode(parsed);
-    const isErrorPayload = event === 'error' || parsed.type === 'error' || parsed.error != null;
-    const searchable = `${message} ${code ?? ''} ${payload}`;
-    if (isErrorPayload && isLobsterAIQuotaExhaustedError(searchable)) {
-      return {
-        message: message || payload,
-        ...(code !== undefined ? { code } : {}),
-      };
+    const isErrorPayload = event === 'error'
+      || parsed.type === 'error'
+      || parsed.error != null
+      || (!event && code !== undefined && String(code) !== '0');
+    if (!isErrorPayload) {
+      return null;
     }
+
+    return {
+      message: message || payload,
+      ...(code !== undefined ? { code } : {}),
+    };
   } catch {
-    if (event === 'error' && isLobsterAIQuotaExhaustedError(payload)) {
-      return { message: payload };
-    }
+    return null;
+  }
+}
+
+function extractQuotaErrorFromProxyErrorPayload(
+  payload: string,
+  event = '',
+): StructuredProxyError | null {
+  const proxyError = extractStructuredProxyError(payload, event);
+  if (proxyError) {
+    const searchable = `${proxyError.message} ${proxyError.code ?? ''} ${payload}`;
+    return isLobsterAIQuotaExhaustedError(searchable) ? proxyError : null;
+  }
+  return event === 'error' && isLobsterAIQuotaExhaustedError(payload)
+    ? { message: payload }
+    : null;
+}
+
+function isEnterpriseMembershipRevocationError(error: StructuredProxyError | null): boolean {
+  if (!error || error.code === undefined) {
+    return false;
+  }
+  if (typeof error.code === 'number') {
+    return error.code === EnterpriseApiErrorCode.NotMember;
+  }
+  if (/^\d+$/.test(error.code.trim())) {
+    return Number(error.code.trim()) === EnterpriseApiErrorCode.NotMember;
+  }
+  return false;
+}
+
+function notifyEnterpriseMembershipRevoked(
+  error: StructuredProxyError | null,
+  scanState?: ProxySSEStreamScanState,
+): void {
+  if (
+    !isEnterpriseMembershipRevocationError(error)
+    || !scanState?.inspectionContext
+    || scanState.membershipRevocationNotified
+  ) {
+    return;
   }
 
-  return null;
+  scanState.membershipRevocationNotified = true;
+  try {
+    scanState.inspectionContext.onEnterpriseMembershipRevoked({
+      code: EnterpriseApiErrorCode.NotMember,
+      requestSession: scanState.inspectionContext.requestEnterpriseSession,
+    });
+  } catch (error) {
+    console.warn('[OpenClawTokenProxy] failed to invalidate revoked enterprise session:', error);
+  }
 }
 
 function extractQuotaErrorFromProxySSEPacket(
@@ -383,7 +789,36 @@ function rememberQuotaError(error: Omit<OpenClawTokenProxyQuotaError, 'capturedA
   };
 }
 
-function scanProxySSEBufferForQuotaError(buffer: string, now = Date.now()): string {
+function inspectProxySSEPacket(
+  packet: string,
+  now: number,
+  scanState?: ProxySSEStreamScanState,
+): void {
+  const parsed = parseProxySSEPacket(packet);
+  const proxyError = extractStructuredProxyError(parsed.payload, parsed.event);
+  const quotaError = extractQuotaErrorFromProxyErrorPayload(parsed.payload, parsed.event);
+  if (quotaError) {
+    rememberQuotaError(quotaError, now);
+  }
+  notifyEnterpriseMembershipRevoked(proxyError, scanState);
+  if (!scanState) {
+    return;
+  }
+
+  if (parsed.event || parsed.payload) {
+    scanState.eventCount += 1;
+  }
+  const terminalKind = classifyTerminalProxySSEPacket(parsed);
+  if (terminalKind) {
+    recordProxySSETerminalKind(scanState, terminalKind);
+  }
+}
+
+function scanProxySSEBufferForQuotaError(
+  buffer: string,
+  now = Date.now(),
+  scanState?: ProxySSEStreamScanState,
+): string {
   let remaining = buffer;
   let boundary = findSSEPacketBoundary(remaining);
 
@@ -391,33 +826,48 @@ function scanProxySSEBufferForQuotaError(buffer: string, now = Date.now()): stri
     const packet = remaining.slice(0, boundary.index);
     remaining = remaining.slice(boundary.index + boundary.separatorLength);
 
-    const quotaError = extractQuotaErrorFromProxySSEPacket(packet);
-    if (quotaError) {
-      rememberQuotaError(quotaError, now);
-    }
+    inspectProxySSEPacket(packet, now, scanState);
 
     boundary = findSSEPacketBoundary(remaining);
   }
 
-  return remaining;
+  return remaining.length <= MAX_PROXY_SSE_SCAN_BUFFER_CHARS
+    ? remaining
+    : remaining.slice(-MAX_PROXY_SSE_SCAN_BUFFER_CHARS);
 }
 
-function flushProxySSEBufferForQuotaError(buffer: string, now = Date.now()): void {
-  const remaining = scanProxySSEBufferForQuotaError(buffer, now);
+function flushProxySSEBufferForQuotaError(
+  buffer: string,
+  now = Date.now(),
+  scanState?: ProxySSEStreamScanState,
+): void {
+  const remaining = scanProxySSEBufferForQuotaError(buffer, now, scanState);
   if (!remaining.trim()) {
     return;
   }
-  const quotaError = extractQuotaErrorFromProxySSEPacket(remaining);
-  if (quotaError) {
-    rememberQuotaError(quotaError, now);
-  }
+  inspectProxySSEPacket(remaining, now, scanState);
 }
 
-function scanProxyBodyForQuotaError(body: Buffer, now = Date.now()): void {
+function scanProxyBodyForQuotaError(
+  body: Buffer,
+  now = Date.now(),
+  inspectionContext?: ProxyResponseInspectionContext,
+): void {
   const text = body.toString('utf8');
+  const proxyError = extractStructuredProxyError(text);
   const quotaError = extractQuotaErrorFromProxyErrorPayload(text);
   if (quotaError) {
     rememberQuotaError(quotaError, now);
+  }
+  if (isEnterpriseMembershipRevocationError(proxyError) && inspectionContext) {
+    try {
+      inspectionContext.onEnterpriseMembershipRevoked({
+        code: EnterpriseApiErrorCode.NotMember,
+        requestSession: inspectionContext.requestEnterpriseSession,
+      });
+    } catch (error) {
+      console.warn('[OpenClawTokenProxy] failed to invalidate revoked enterprise session:', error);
+    }
   }
 }
 
@@ -427,16 +877,20 @@ async function forwardRequest(
   accessToken: string,
   body: Buffer,
   incomingHeaders: http.IncomingHttpHeaders,
+  clientVersion: string,
 ): Promise<UpstreamResult> {
-  const headers: Record<string, string> = {
-    'Authorization': `Bearer ${accessToken}`,
-    'Content-Type': incomingHeaders['content-type'] || 'application/json',
-  };
-
-  // Forward accept header for SSE streaming
-  if (incomingHeaders.accept) {
-    headers['Accept'] = incomingHeaders.accept;
+  let accountContextHeaders: Record<string, string> = {};
+  try {
+    accountContextHeaders = accountContextHeadersGetter?.() ?? {};
+  } catch (error) {
+    console.warn('[OpenClawTokenProxy] failed to read account context headers; forwarding with token only:', error);
   }
+  const headers = buildUpstreamRequestHeaders(
+    accessToken,
+    incomingHeaders,
+    clientVersion,
+    accountContextHeaders,
+  );
 
   const resp = await net.fetch(url, {
     method,
@@ -470,13 +924,39 @@ async function forwardRequest(
   };
 }
 
-function pipeResponse(result: UpstreamResult, res: http.ServerResponse): void {
+function buildUpstreamRequestHeaders(
+  accessToken: string,
+  incomingHeaders: http.IncomingHttpHeaders,
+  clientVersion: string,
+  accountContextHeaders: Record<string, string> = {},
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    ...accountContextHeaders,
+    'Authorization': `Bearer ${accessToken}`,
+    'Content-Type': incomingHeaders['content-type'] || 'application/json',
+    [LOBSTERAI_CLIENT_CAPABILITIES_HEADER]: LOBSTERAI_CLIENT_CAPABILITIES,
+    [LOBSTERAI_CLIENT_VERSION_HEADER]: clientVersion,
+  };
+
+  // Forward accept header for SSE streaming
+  if (incomingHeaders.accept) {
+    headers['Accept'] = incomingHeaders.accept;
+  }
+
+  return headers;
+}
+
+function pipeResponse(
+  result: UpstreamResult,
+  res: http.ServerResponse,
+  inspectionContext?: ProxyResponseInspectionContext,
+): void {
   res.writeHead(result.status, result.headers);
 
   if (result.isStream) {
-    pipeStreamingResponseWithQuotaScan(result.body, res);
+    pipeStreamingResponseWithQuotaScan(result.body, res, inspectionContext);
   } else if (Buffer.isBuffer(result.body)) {
-    scanProxyBodyForQuotaError(result.body);
+    scanProxyBodyForQuotaError(result.body, Date.now(), inspectionContext);
     res.end(result.body);
   } else {
     pipeWebReadableResponseWithQuotaScan(result.body as unknown as ReadableStream<Uint8Array>, res);
@@ -494,73 +974,236 @@ function isNodeReadableStream(body: unknown): body is NodeJS.ReadableStream {
 function pipeStreamingResponseWithQuotaScan(
   body: NodeJS.ReadableStream | Buffer,
   res: http.ServerResponse,
+  inspectionContext?: ProxyResponseInspectionContext,
 ): void {
   if (Buffer.isBuffer(body)) {
-    scanProxyBodyForQuotaError(body);
+    scanProxyBodyForQuotaError(body, Date.now(), inspectionContext);
     res.end(body);
     return;
   }
 
+  // SSE responses must end with a terminal packet ([DONE], finish_reason, or an
+  // error payload). Anything else is a truncated stream and must not be
+  // presented to the client as a cleanly completed response.
+  const scanState = createProxySSEStreamScanState(Date.now(), inspectionContext);
+
   if (isNodeReadableStream(body)) {
-    pipeNodeReadableResponseWithQuotaScan(body, res);
+    pipeNodeReadableResponseWithQuotaScan(body, res, scanState);
     return;
   }
 
-  pipeWebReadableResponseWithQuotaScan(body as unknown as ReadableStream<Uint8Array>, res);
+  pipeWebReadableResponseWithQuotaScan(body as unknown as ReadableStream<Uint8Array>, res, scanState);
+}
+
+// Destroying the response mid-stream aborts the chunked encoding, so the
+// client observes a network error instead of a clean end and can retry or
+// surface the failure. res.destroy() must stay argument-less: passing an error
+// would re-emit it on the response with no listener attached.
+function abortProxyResponse(res: http.ServerResponse): void {
+  if (res.destroyed) {
+    return;
+  }
+  res.destroy();
+}
+
+function formatProxySSEOutcome(
+  outcome: string,
+  scanState: ProxySSEStreamScanState,
+  now = Date.now(),
+): string {
+  const durationMs = Math.max(0, now - scanState.startedAt);
+  const downstreamClosedAfterMs = scanState.downstreamClosedAt === null
+    ? 'none'
+    : Math.max(0, scanState.downstreamClosedAt - scanState.startedAt);
+  return `[OpenClawTokenProxy] upstream SSE outcome=${outcome}`
+    + ` terminal=${scanState.terminalKind ?? 'none'}`
+    + ` events=${scanState.eventCount}`
+    + ` durationMs=${durationMs}`
+    + ` downstreamClosedAfterMs=${downstreamClosedAfterMs}`;
+}
+
+function observeProxyResponseClose(
+  res: http.ServerResponse,
+  cancelUpstream: () => boolean,
+  scanState?: ProxySSEStreamScanState,
+): void {
+  res.on('close', () => {
+    if (
+      scanState
+      && (scanState.upstreamSettled || scanState.downstreamClosedAt !== null)
+    ) {
+      return;
+    }
+    if (scanState) {
+      scanState.downstreamClosedAt = Date.now();
+    }
+    const cancellationRequested = cancelUpstream();
+    if (scanState && cancellationRequested) {
+      scanState.downstreamCancellationRequested = true;
+      console.debug(formatProxySSEOutcome('downstream_closed_upstream_cancelled', scanState));
+    }
+  });
+}
+
+function writeProxyResponseChunk(
+  res: http.ServerResponse,
+  chunk: Buffer | Uint8Array,
+): void {
+  if (!res.destroyed && !res.writableEnded) {
+    res.write(chunk);
+  }
+}
+
+function endProxyResponseAfterScan(
+  res: http.ServerResponse,
+  scanState?: ProxySSEStreamScanState,
+): void {
+  if (scanState) {
+    scanState.upstreamSettled = true;
+  }
+  if (scanState?.downstreamCancellationRequested) {
+    return;
+  }
+  if (scanState && scanState.downstreamClosedAt !== null) {
+    if (scanState.terminalKind === ProxySSETerminalKind.Error) {
+      console.error(formatProxySSEOutcome('late_error_after_downstream_close', scanState));
+    } else if (scanState.sawTerminalPacket) {
+      console.warn(formatProxySSEOutcome('late_completion_after_downstream_close', scanState));
+    } else {
+      console.error(formatProxySSEOutcome('incomplete_end_after_downstream_close', scanState));
+    }
+    return;
+  }
+  if (scanState && !scanState.sawTerminalPacket) {
+    console.error(formatProxySSEOutcome('unexpected_eof', scanState));
+    abortProxyResponse(res);
+    return;
+  }
+  if (!res.destroyed && !res.writableEnded) {
+    res.end();
+  }
+}
+
+function abortProxyResponseAfterReadError(
+  res: http.ServerResponse,
+  error: unknown,
+  scanState?: ProxySSEStreamScanState,
+): void {
+  if (scanState) {
+    scanState.upstreamSettled = true;
+    if (scanState.downstreamCancellationRequested) {
+      return;
+    }
+    const outcome = scanState.downstreamClosedAt === null
+      ? 'transport_error'
+      : 'transport_error_after_downstream_close';
+    console.error(formatProxySSEOutcome(outcome, scanState), error);
+  } else {
+    console.error('[OpenClawTokenProxy] upstream stream read error', error);
+  }
+  abortProxyResponse(res);
 }
 
 function pipeNodeReadableResponseWithQuotaScan(
   stream: NodeJS.ReadableStream,
   res: http.ServerResponse,
+  scanState?: ProxySSEStreamScanState,
 ): void {
   const decoder = new TextDecoder();
   let sseBuffer = '';
+  let upstreamSettled = false;
+
+  observeProxyResponseClose(res, () => {
+    if (upstreamSettled) {
+      return false;
+    }
+    const destroyableStream = stream as NodeJS.ReadableStream & {
+      destroy?: () => void;
+      destroyed?: boolean;
+    };
+    if (typeof destroyableStream.destroy !== 'function' || destroyableStream.destroyed) {
+      return false;
+    }
+    try {
+      destroyableStream.destroy();
+      return true;
+    } catch (error) {
+      console.debug('[OpenClawTokenProxy] upstream stream cancellation failed:', error);
+      return false;
+    }
+  }, scanState);
+  res.on('error', (err) => {
+    console.debug('[OpenClawTokenProxy] response write error:', err);
+  });
 
   stream.on('data', (chunk: Buffer | Uint8Array | string) => {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     sseBuffer = scanProxySSEBufferForQuotaError(
       sseBuffer + decoder.decode(buffer, { stream: true }),
+      Date.now(),
+      scanState,
     );
-    res.write(buffer);
+    writeProxyResponseChunk(res, buffer);
   });
 
   stream.on('end', () => {
+    upstreamSettled = true;
     const tail = decoder.decode();
-    flushProxySSEBufferForQuotaError(sseBuffer + tail);
-    res.end();
+    flushProxySSEBufferForQuotaError(sseBuffer + tail, Date.now(), scanState);
+    endProxyResponseAfterScan(res, scanState);
   });
 
   stream.on('error', (err) => {
-    console.error('[OpenClawTokenProxy] stream read error:', err);
-    res.end();
+    upstreamSettled = true;
+    flushProxySSEBufferForQuotaError(sseBuffer + decoder.decode(), Date.now(), scanState);
+    abortProxyResponseAfterReadError(res, err, scanState);
   });
 }
 
 function pipeWebReadableResponseWithQuotaScan(
   webStream: ReadableStream<Uint8Array>,
   res: http.ServerResponse,
+  scanState?: ProxySSEStreamScanState,
 ): void {
   const reader = webStream.getReader();
   const decoder = new TextDecoder();
   let sseBuffer = '';
+  let upstreamSettled = false;
+
+  observeProxyResponseClose(res, () => {
+    if (upstreamSettled) {
+      return false;
+    }
+    void reader.cancel('Downstream response closed').catch((error) => {
+      console.debug('[OpenClawTokenProxy] upstream stream cancellation failed:', error);
+    });
+    return true;
+  }, scanState);
+  res.on('error', (err) => {
+    console.debug('[OpenClawTokenProxy] response write error:', err);
+  });
 
   const pump = (): void => {
     reader.read().then(({ done, value }) => {
       if (done) {
+        upstreamSettled = true;
         const tail = decoder.decode();
-        flushProxySSEBufferForQuotaError(sseBuffer + tail);
-        res.end();
+        flushProxySSEBufferForQuotaError(sseBuffer + tail, Date.now(), scanState);
+        endProxyResponseAfterScan(res, scanState);
         return;
       }
 
       sseBuffer = scanProxySSEBufferForQuotaError(
         sseBuffer + decoder.decode(value, { stream: true }),
+        Date.now(),
+        scanState,
       );
-      res.write(value);
+      writeProxyResponseChunk(res, value);
       pump();
     }).catch((err) => {
-      console.error('[OpenClawTokenProxy] stream read error:', err);
-      res.end();
+      upstreamSettled = true;
+      flushProxySSEBufferForQuotaError(sseBuffer + decoder.decode(), Date.now(), scanState);
+      abortProxyResponseAfterReadError(res, err, scanState);
     });
   };
 
@@ -568,11 +1211,28 @@ function pipeWebReadableResponseWithQuotaScan(
 }
 
 export const __openClawTokenProxyTestUtils = {
+  extractInboundProxyTokens,
+  isInboundRequestAuthorized,
+  isLoopbackHostHeader,
+  extractStructuredProxyError,
   extractQuotaErrorFromProxyErrorPayload,
   extractQuotaErrorFromProxySSEPacket,
   hydrateGeminiChatCompletionsBody,
   hydrateGeminiToolCallThoughtSignatures,
+  buildUpstreamRequestHeaders,
   scanProxySSEBufferForQuotaError,
   flushProxySSEBufferForQuotaError,
   rememberQuotaError,
+  isEnterpriseMembershipRevocationError,
+  ProxySSETerminalKind,
+  classifyTerminalProxySSEPacket,
+  createProxySSEStreamScanState,
+  isTerminalProxySSEPacket,
+  parseProxySSEPacket,
+  pipeNodeReadableResponseWithQuotaScan,
+  pipeWebReadableResponseWithQuotaScan,
+  pipeStreamingResponseWithQuotaScan,
+  isTemporaryAuthRefreshFailure,
+  isProxySessionKeyCurrent,
+  shouldRefreshLobsterAIToken,
 };

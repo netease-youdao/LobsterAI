@@ -26,6 +26,7 @@ describe('normalizeAuthQuota', () => {
       subscriptionStatus: AuthSubscriptionStatus.Free,
       creditsRemaining: 0,
       hasPaidCredits: true,
+      mediaGenerationEntitled: true,
     }));
     expect(authQuotaGateStateFromQuota(quota)).toEqual({
       subscriptionStatus: AuthSubscriptionStatus.Free,
@@ -45,6 +46,7 @@ describe('normalizeAuthQuota', () => {
       subscriptionStatus: AuthSubscriptionStatus.Active,
       creditsRemaining: 4900,
       hasPaidCredits: true,
+      mediaGenerationEntitled: true,
     }));
     expect(authQuotaGateStateFromQuota(quota).mediaGenerationEntitled).toBe(true);
   });
@@ -61,8 +63,86 @@ describe('normalizeAuthQuota', () => {
     expect(quota).toEqual(expect.objectContaining({
       creditsRemaining: 0,
       hasPaidCredits: true,
+      mediaGenerationEntitled: true,
     }));
     expect(authQuotaGateStateFromQuota(quota).mediaGenerationEntitled).toBe(true);
+  });
+
+  test('normalizes enterprise member quota without enabling out-of-scope media models', () => {
+    const quota = normalizeAuthQuota({
+      planName: '团队版',
+      subscriptionStatus: 'enterprise',
+      creditsLimit: 8000,
+      creditsUsed: 4480,
+      creditsRemaining: 3520,
+      hasPaidCredits: false,
+      mediaGenerationEntitled: false,
+    }, labels);
+
+    expect(quota).toEqual(expect.objectContaining({
+      planName: '团队版',
+      subscriptionStatus: 'enterprise',
+      creditsLimit: 8000,
+      creditsUsed: 4480,
+      creditsRemaining: 3520,
+    }));
+    expect(authQuotaGateStateFromQuota(quota).mediaGenerationEntitled).toBe(false);
+  });
+
+  test('uses the Team display name when an enterprise quota omits planName', () => {
+    const quota = normalizeAuthQuota({
+      subscriptionStatus: 'enterprise',
+      creditsLimit: 8000,
+      creditsUsed: 0,
+    }, labels);
+
+    expect(quota.planName).toBe('Team');
+    expect(quota.subscriptionStatus).toBe('enterprise');
+  });
+
+  test('honors explicit enterprise media entitlement without a personal subscription', () => {
+    const quota = normalizeAuthQuota({
+      planName: '团队版',
+      subscriptionStatus: 'enterprise',
+      creditsLimit: 8000,
+      creditsUsed: 4480,
+      hasPaidCredits: true,
+      mediaGenerationEntitled: true,
+    }, labels);
+
+    expect(quota).toEqual(expect.objectContaining({
+      subscriptionStatus: 'enterprise',
+      hasPaidCredits: true,
+      mediaGenerationEntitled: true,
+    }));
+    expect(authQuotaGateStateFromQuota(quota).mediaGenerationEntitled).toBe(true);
+  });
+
+  test('does not infer enterprise media entitlement from paid credits alone', () => {
+    const quota = normalizeAuthQuota({
+      planName: '团队版',
+      subscriptionStatus: AuthSubscriptionStatus.Enterprise,
+      creditsLimit: 8000,
+      creditsUsed: 0,
+      hasPaidCredits: true,
+    }, labels);
+
+    expect(quota.hasPaidCredits).toBe(true);
+    expect(quota.mediaGenerationEntitled).toBe(false);
+  });
+
+  test('lets an explicit false entitlement override paid-credit compatibility', () => {
+    const quota = normalizeAuthQuota({
+      planName: '团队版',
+      subscriptionStatus: 'enterprise',
+      creditsLimit: 8000,
+      creditsUsed: 0,
+      hasPaidCredits: true,
+      mediaGenerationEntitled: false,
+    }, labels);
+
+    expect(quota.mediaGenerationEntitled).toBe(false);
+    expect(authQuotaGateStateFromQuota(quota).mediaGenerationEntitled).toBe(false);
   });
 
   test('uses a non-entitled free state as the default reset state', () => {

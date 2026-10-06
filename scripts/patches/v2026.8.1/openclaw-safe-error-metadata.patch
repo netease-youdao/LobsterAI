@@ -1,0 +1,229 @@
+diff --git a/src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts b/src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts
+index 545ae34a..ec711046 100644
+--- a/src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts
++++ b/src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts
+@@ -255,10 +255,10 @@ describe("handleAgentEnd", () => {
+     expect(userFacingLifecycleText).toContain("LLM request failed.");
+     expect(onAgentEvent).toHaveBeenCalledWith({
+       stream: "lifecycle",
+-      data: {
++      data: expect.objectContaining({
+         phase: "error",
+         error: "LLM request failed.",
+-      },
++      }),
+     });
+   });
+
+@@ -285,10 +285,10 @@ describe("handleAgentEnd", () => {
+     expect(userFacingLifecycleText).not.toContain("LLM error server_error");
+     expect(onAgentEvent).toHaveBeenCalledWith({
+       stream: "lifecycle",
+-      data: {
++      data: expect.objectContaining({
+         phase: "error",
+         error: "LLM request failed.",
+-      },
++      }),
+     });
+   });
+
+@@ -316,11 +316,11 @@ describe("handleAgentEnd", () => {
+     );
+     expect(onAgentEvent).toHaveBeenCalledWith({
+       stream: "lifecycle",
+-      data: {
++      data: expect.objectContaining({
+         phase: "error",
+         error: "LLM request failed: connection refused by the provider endpoint.",
+         livenessState: "blocked",
+-      },
++      }),
+     });
+   });
+
+@@ -476,14 +476,19 @@ describe("handleAgentEnd", () => {
+   });
+
+   it("attaches raw provider error metadata and includes model/provider in console output", async () => {
+-    const ctx = createContext({
+-      role: "assistant",
+-      stopReason: "error",
+-      provider: "anthropic",
+-      model: "claude-test",
+-      errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+-      content: [{ type: "text", text: "" }],
+-    });
++    const onAgentEvent = vi.fn();
++    const ctx = createContext(
++      {
++        role: "assistant",
++        stopReason: "error",
++        provider: "anthropic",
++        model: "claude-test",
++        errorMessage:
++          '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
++        content: [{ type: "text", text: "" }],
++      },
++      { onAgentEvent },
++    );
+
+     const warnMeta = await handleAgentEndAndReadWarnMeta(ctx);
+     expect(warnMeta.event).toBe("embedded_run_agent_end");
+@@ -497,6 +502,17 @@ describe("handleAgentEnd", () => {
+     expect(warnMeta.consoleMessage).toBe(
+       'embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment. rawError={"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+     );
++    expect(onAgentEvent).toHaveBeenCalledWith({
++      stream: "lifecycle",
++      data: expect.objectContaining({
++        phase: "error",
++        provider: "anthropic",
++        model: "claude-test",
++        failoverReason: "overloaded",
++        providerRuntimeFailureKind: "timeout",
++        providerErrorType: "overloaded_error",
++      }),
++    });
+   });
+
+   it("sanitizes model and provider before writing consoleMessage", async () => {
+@@ -541,10 +557,10 @@ describe("handleAgentEnd", () => {
+     expect(meta.rawErrorPreview).toBe("x-api-key: ***");
+     expect(onAgentEvent).toHaveBeenCalledWith({
+       stream: "lifecycle",
+-      data: {
++      data: expect.objectContaining({
+         phase: "error",
+         error: "LLM request failed.",
+-      },
++      }),
+     });
+   });
+
+@@ -1231,9 +1247,9 @@ describe("handleAgentEnd", () => {
+     expect(onAgentEvent).toHaveBeenCalledWith({
+       stream: "lifecycle",
+-      data: {
++      data: expect.objectContaining({
+         phase: "error",
+         error: "LLM request failed: connection refused by the provider endpoint.",
+-      },
++      }),
+     });
+   });
+
+diff --git a/src/agents/embedded-agent-subscribe.handlers.lifecycle.ts b/src/agents/embedded-agent-subscribe.handlers.lifecycle.ts
+index db5dd1d2..823274b5 100644
+--- a/src/agents/embedded-agent-subscribe.handlers.lifecycle.ts
++++ b/src/agents/embedded-agent-subscribe.handlers.lifecycle.ts
+@@ -69,6 +69,7 @@ export function handleAgentEnd(
+   const lastAssistant = ctx.state.lastAssistant;
+   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
+   let lifecycleErrorText: string | undefined;
++  let lifecycleErrorMetadata: Record<string, string> | undefined;
+   // Terminal delivery does not depend on streamed text alone: when the streamed
+   // assistant texts are empty, payload building falls back to the completed
+   // assistant message's visible text, so such a turn still reaches the user.
+@@ -165,6 +166,23 @@ export function handleAgentEnd(
+         provider: lastAssistant.provider,
+       }).textPreview ?? GENERIC_ASSISTANT_ERROR_TEXT;
+     lifecycleErrorText = safeErrorText;
++    lifecycleErrorMetadata = {
++      ...(failoverReason ? { failoverReason } : {}),
++      ...(lastAssistant.model ? { model: lastAssistant.model } : {}),
++      ...(lastAssistant.provider ? { provider: lastAssistant.provider } : {}),
++      ...(observedError.providerRuntimeFailureKind
++        ? { providerRuntimeFailureKind: observedError.providerRuntimeFailureKind }
++        : {}),
++      ...(observedError.providerErrorType
++        ? { providerErrorType: observedError.providerErrorType }
++        : {}),
++      ...(observedError.httpCode ? { httpCode: observedError.httpCode } : {}),
++      ...(observedError.rawErrorHash ? { rawErrorHash: observedError.rawErrorHash } : {}),
++      ...(observedError.rawErrorFingerprint
++        ? { rawErrorFingerprint: observedError.rawErrorFingerprint }
++        : {}),
++      ...(observedError.requestIdHash ? { requestIdHash: observedError.requestIdHash } : {}),
++    };
+     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
+     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
+     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
+@@ -230,6 +248,7 @@ export function handleAgentEnd(
+       data: {
+         phase,
+         ...errorData,
++        ...lifecycleErrorMetadata,
+         ...terminalMeta,
+         ...(livenessState ? { livenessState } : {}),
+         ...(replayInvalid ? { replayInvalid } : {}),
+@@ -245,6 +264,7 @@ export function handleAgentEnd(
+           data: {
+             phase,
+             ...errorData,
++            ...lifecycleErrorMetadata,
+             ...terminalMeta,
+             ...(livenessState ? { livenessState } : {}),
+             ...(replayInvalid ? { replayInvalid } : {}),
+diff --git a/src/gateway/server-chat.ts b/src/gateway/server-chat.ts
+index b662e9e5..4be5dbef 100644
+--- a/src/gateway/server-chat.ts
++++ b/src/gateway/server-chat.ts
+@@ -90,6 +90,33 @@ const CHAT_STATE_BY_TERMINAL_CLASSIFICATION = {
+   failure: "error",
+ } as const;
+ const RESTART_RECOVERY_LIFECYCLE_PHASES = new Set(["start", "end", "error"]);
++const SAFE_CHAT_ERROR_METADATA_KEYS = [
++  "provider",
++  "model",
++  "failoverReason",
++  "providerRuntimeFailureKind",
++  "providerErrorType",
++  "httpCode",
++  "rawErrorHash",
++  "rawErrorFingerprint",
++  "requestIdHash",
++] as const;
++
++function extractSafeChatErrorMetadata(data: unknown): Record<string, string> | undefined {
++  if (!data || typeof data !== "object" || Array.isArray(data)) {
++    return undefined;
++  }
++
++  const source = data as Record<string, unknown>;
++  const metadata: Record<string, string> = {};
++  for (const key of SAFE_CHAT_ERROR_METADATA_KEYS) {
++    const value = source[key];
++    if (typeof value === "string" && value.trim()) {
++      metadata[key] = value;
++    }
++  }
++  return Object.keys(metadata).length > 0 ? metadata : undefined;
++}
+
+ function readChatRunStartupPhase(value: unknown): ChatRunStartupPhase | undefined {
+   switch (value) {
+@@ -773,6 +800,7 @@ export function createAgentEventHandler({
+               firstAssistantTimingEntry: finished,
+               abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
+               yielded: yieldedWaiting ? true : undefined,
++              errorMetadata: extractSafeChatErrorMetadata(evt.data),
+             },
+           );
+         }
+@@ -1130,6 +1158,7 @@ export function createAgentEventHandler({
+       firstAssistantTimingEntry?: ChatRunEntry;
+       abortErrorMessage?: string;
+       yielded?: true;
++      errorMetadata?: Record<string, string>;
+     },
+   ) => {
+     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
+@@ -1180,6 +1209,7 @@ export function createAgentEventHandler({
+       errorMessage: error ? formatForLog(error) : undefined,
+       ...(errorKind && { errorKind }),
+       ...(stopReason && { stopReason }),
++      ...opts?.errorMetadata,
+     };
+     sendChatPayload(sessionKey, payload, opts);
+   };

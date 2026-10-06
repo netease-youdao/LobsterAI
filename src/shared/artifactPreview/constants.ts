@@ -4,6 +4,10 @@ export const ArtifactPreviewIpc = {
   DestroySession: 'artifact:destroyPreviewSession',
   ClearBrowserCookies: 'artifact:browser:clearCookies',
   ClearBrowserCache: 'artifact:browser:clearCache',
+  SaveBrowserAnnotationAsset: 'artifact:browserAnnotation:asset:save',
+  ReadBrowserAnnotationAsset: 'artifact:browserAnnotation:asset:read',
+  DeleteBrowserAnnotationAsset: 'artifact:browserAnnotation:asset:delete',
+  DeleteBrowserAnnotationBatchAssets: 'artifact:browserAnnotation:asset:deleteBatch',
 } as const;
 
 export type ArtifactPreviewIpc = typeof ArtifactPreviewIpc[keyof typeof ArtifactPreviewIpc];

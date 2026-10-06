@@ -1,0 +1,712 @@
+diff --git a/src/agents/agent-tool-definition-adapter.ts b/src/agents/agent-tool-definition-adapter.ts
+index 06d4599f72..7cbbc8cde9 100644
+--- a/src/agents/agent-tool-definition-adapter.ts
++++ b/src/agents/agent-tool-definition-adapter.ts
+@@ -4,6 +4,7 @@ import { redactToolDetail } from "../logging/redact.js";
+ import { isPlainObject } from "../utils.js";
+ import type { HookContext } from "./agent-tools.before-tool-call.js";
+ import {
++  appendLoopWarningToToolResult,
+   buildBlockedToolResult,
+   isToolWrappedWithBeforeToolCallHook,
+   isBeforeToolCallBlockedError,
+@@ -362,6 +363,7 @@ export function toToolDefinitions(
+       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
+         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+         let executeParams = params;
++        let loopWarning: string | undefined;
+         try {
+           if (!beforeHookWrapped) {
+             const preparedParams = await prepareToolParamsBeforeHook({
+@@ -391,10 +393,15 @@ export function toToolDefinitions(
+                 return buildBlockedToolResult({
+                   reason: hookOutcome.reason,
+                   deniedReason: hookOutcome.deniedReason,
++                  ...(hookOutcome.blockDetector ? { blockDetector: hookOutcome.blockDetector } : {}),
++                  ...(hookOutcome.terminateRun !== undefined
++                    ? { terminateRun: hookOutcome.terminateRun }
++                    : {}),
+                 });
+               }
+               throw new Error(hookOutcome.reason);
+             }
++            loopWarning = hookOutcome.loopWarning;
+             executeParams = reconcileCodeModeExecBeforeHookParams({
+               tool,
+               originalParams: preparedParams,
+@@ -413,7 +420,7 @@ export function toToolDefinitions(
+             toolName: normalizedName,
+             result: rawResult,
+           });
+-          return result;
++          return loopWarning ? appendLoopWarningToToolResult(result, loopWarning) : result;
+         } catch (err) {
+           if (signal?.aborted) {
+             throw err;
+@@ -512,6 +519,10 @@ export function toClientToolDefinitions(
+               return buildBlockedToolResult({
+                 reason: outcome.reason,
+                 deniedReason: outcome.deniedReason,
++                ...(outcome.blockDetector ? { blockDetector: outcome.blockDetector } : {}),
++                ...(outcome.terminateRun !== undefined
++                  ? { terminateRun: outcome.terminateRun }
++                  : {}),
+               });
+             }
+             throw new Error(outcome.reason);
+diff --git a/src/agents/agent-tools.before-tool-call.blocked-result.test.ts b/src/agents/agent-tools.before-tool-call.blocked-result.test.ts
+index 5ebacc250d..4b5ae1ff5e 100644
+--- a/src/agents/agent-tools.before-tool-call.blocked-result.test.ts
++++ b/src/agents/agent-tools.before-tool-call.blocked-result.test.ts
+@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
+ import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
+
+ describe("buildBlockedToolResult", () => {
+-  it("terminates critical tool-loop vetoes", () => {
++  it("terminates tool-loop vetoes from legacy callers that omit terminateRun", () => {
+     const result = buildBlockedToolResult({
+       reason: "CRITICAL: repeated tool call detected",
+       deniedReason: "tool-loop",
+@@ -11,6 +11,41 @@ describe("buildBlockedToolResult", () => {
+     expect(result.details).toMatchObject({
+       status: "blocked",
+       deniedReason: "tool-loop",
++      terminateRun: true,
++    });
++    expect(result.terminate).toBe(true);
++  });
++
++  it("keeps soft tool-loop vetoes non-terminating and visible to the model", () => {
++    const result = buildBlockedToolResult({
++      reason: "CRITICAL: stuck polling loop",
++      deniedReason: "tool-loop",
++      blockDetector: "known_poll_no_progress",
++      terminateRun: false,
++    });
++
++    expect(result.details).toMatchObject({
++      status: "blocked",
++      deniedReason: "tool-loop",
++      blockDetector: "known_poll_no_progress",
++    });
++    expect((result.details as { terminateRun?: boolean }).terminateRun).toBeUndefined();
++    expect(result.terminate).toBeUndefined();
++  });
++
++  it("terminates hard tool-loop vetoes", () => {
++    const result = buildBlockedToolResult({
++      reason: "CRITICAL: circuit breaker",
++      deniedReason: "tool-loop",
++      blockDetector: "global_circuit_breaker",
++      terminateRun: true,
++    });
++
++    expect(result.details).toMatchObject({
++      status: "blocked",
++      deniedReason: "tool-loop",
++      blockDetector: "global_circuit_breaker",
++      terminateRun: true,
+     });
+     expect(result.terminate).toBe(true);
+   });
+diff --git a/src/agents/agent-tools.before-tool-call.e2e.test.ts b/src/agents/agent-tools.before-tool-call.e2e.test.ts
+index d03d2106a1..f31e09a585 100644
+--- a/src/agents/agent-tools.before-tool-call.e2e.test.ts
++++ b/src/agents/agent-tools.before-tool-call.e2e.test.ts
+@@ -18,9 +18,10 @@ import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers
+ import {
+   getBeforeToolCallPolicyDiagnosticState,
+   runBeforeToolCallHook,
++  TOOL_LOOP_VETO_STREAK_TERMINATE_THRESHOLD,
+   wrapToolWithBeforeToolCallHook,
+ } from "./agent-tools.before-tool-call.js";
+-import { CRITICAL_THRESHOLD } from "./tool-loop-detection.js";
++import { CRITICAL_THRESHOLD, WARNING_THRESHOLD } from "./tool-loop-detection.js";
+ import type { AnyAgentTool } from "./tools/common.js";
+ import { callGatewayTool } from "./tools/gateway.js";
+
+@@ -210,7 +211,11 @@ describe("before_tool_call loop detection behavior", () => {
+     expect(loopEvent?.toolName).toBe(params.toolName);
+   }
+
+-  function expectToolLoopBlockedResult(result: unknown, expectedReason: string) {
++  function expectToolLoopBlockedResult(
++    result: unknown,
++    expectedReason: string,
++    options: { terminated?: boolean } = {},
++  ) {
+     const record = requireRecord(result, "tool result");
+     const content = requireArray(record.content, "tool result content");
+     const textContent = requireRecord(content[0], "tool result content item");
+@@ -220,7 +225,13 @@ describe("before_tool_call loop detection behavior", () => {
+     expect(details.status).toBe("blocked");
+     expect(details.deniedReason).toBe("tool-loop");
+     expect(String(details.reason)).toContain(expectedReason);
+-    expect(record.terminate).toBe(true);
++    if (options.terminated) {
++      expect(details.terminateRun).toBe(true);
++      expect(record.terminate).toBe(true);
++    } else {
++      expect(details.terminateRun).toBeUndefined();
++      expect(record.terminate).toBeUndefined();
++    }
+   }
+
+   async function expectUnblockedToolExecution(
+@@ -272,6 +283,62 @@ describe("before_tool_call loop detection behavior", () => {
+     expectToolLoopBlockedResult(result, "CRITICAL");
+   });
+
++  it("escalates repeated blocked poll calls to run termination", async () => {
++    const { tool, params } = createNoProgressProcessFixture("sess-escalate");
++
++    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
++      await expectUnblockedToolExecution(tool, `poll-${i}`, params);
++    }
++
++    for (let i = 0; i < TOOL_LOOP_VETO_STREAK_TERMINATE_THRESHOLD - 1; i += 1) {
++      const result = await tool.execute(`poll-blocked-${i}`, params, undefined, undefined);
++      expectToolLoopBlockedResult(result, "CRITICAL");
++    }
++
++    const result = await tool.execute("poll-blocked-final", params, undefined, undefined);
++    expectToolLoopBlockedResult(result, "Session execution blocked", { terminated: true });
++  });
++
++  it("resets veto escalation when a non-vetoed call runs in between", async () => {
++    const { tool, params } = createNoProgressProcessFixture("sess-reset");
++
++    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
++      await expectUnblockedToolExecution(tool, `poll-${i}`, params);
++    }
++
++    for (let i = 0; i < TOOL_LOOP_VETO_STREAK_TERMINATE_THRESHOLD - 1; i += 1) {
++      const result = await tool.execute(`poll-blocked-${i}`, params, undefined, undefined);
++      expectToolLoopBlockedResult(result, "CRITICAL");
++    }
++
++    // Changing the arguments is not vetoed and resets the escalation streak.
++    await expectUnblockedToolExecution(tool, "poll-other", {
++      action: "poll",
++      sessionId: "sess-reset-other",
++    });
++
++    const result = await tool.execute("poll-blocked-again", params, undefined, undefined);
++    expectToolLoopBlockedResult(result, "CRITICAL");
++  });
++
++  it("appends a loop warning to the tool result at the warning threshold", async () => {
++    const { tool, params } = createNoProgressProcessFixture("sess-warn");
++
++    for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
++      await expectUnblockedToolExecution(tool, `poll-${i}`, params);
++    }
++
++    const result = await tool.execute(`poll-${WARNING_THRESHOLD}`, params, undefined, undefined);
++    const record = requireRecord(result, "tool result");
++    const details = requireRecord(record.details, "tool result details");
++    expect(details.status).toBe("running");
++    const content = requireArray(record.content, "tool result content");
++    const warningBlock = requireRecord(content[content.length - 1], "loop warning block");
++    expect(warningBlock.type).toBe("text");
++    expect(String(warningBlock.text)).toContain("WARNING");
++    expect(String(warningBlock.text)).toContain("increase wait time");
++  });
++
+   it("does nothing when loopDetection.enabled is false", async () => {
+     const execute = vi.fn().mockResolvedValue({
+       content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
+diff --git a/src/agents/agent-tools.before-tool-call.ts b/src/agents/agent-tools.before-tool-call.ts
+index 47026d650c..213d78cc22 100644
+--- a/src/agents/agent-tools.before-tool-call.ts
++++ b/src/agents/agent-tools.before-tool-call.ts
+@@ -118,12 +118,18 @@ type HookOutcome =
+       deniedReason?: HookBlockedReason;
+       reason: string;
+       params?: unknown;
++      /** Loop detector that produced a tool-loop veto. */
++      blockDetector?: string;
++      /** Whether a tool-loop veto must terminate the run instead of only blocking the call. */
++      terminateRun?: boolean;
+     }
+   | {
+       blocked: false;
+       params: unknown;
+       approvalResolution?: PluginApprovalResolution;
+       deferredApproval?: DeferredPluginToolApproval;
++      /** Loop-detector warning to surface to the model alongside the tool result. */
++      loopWarning?: string;
+     };
+ type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
+
+@@ -677,18 +683,26 @@ async function resolveSkillWorkshopApprovalForFinalParams(params: {
+ export function buildBlockedToolResult(params: {
+   reason: string;
+   deniedReason?: HookBlockedReason;
++  blockDetector?: string;
++  terminateRun?: boolean;
+ }) {
+   const deniedReason = params.deniedReason ?? "plugin-before-tool-call";
+-  // Critical loop vetoes must end the run instead of inviting another provider
+-  // turn. A post-turn hook separately covers mixed batches where a successful
+-  // sibling prevents immediate batch termination.
+-  const terminateRun = deniedReason === "tool-loop";
++  // Only hard tool-loop vetoes (aborted-tool storms, global circuit breaker,
++  // or repeated blocked attempts) end the run instead of inviting another
++  // provider turn; soft loop vetoes stay visible to the model so it can change
++  // course. Callers that predate the terminateRun flag keep the legacy
++  // behavior of terminating every tool-loop veto. A post-turn hook separately
++  // covers mixed batches where a successful sibling prevents immediate batch
++  // termination.
++  const terminateRun = params.terminateRun ?? deniedReason === "tool-loop";
+   return {
+     content: [{ type: "text" as const, text: params.reason }],
+     details: {
+       status: "blocked",
+       deniedReason,
+       reason: params.reason,
++      ...(params.blockDetector ? { blockDetector: params.blockDetector } : {}),
++      ...(terminateRun ? { terminateRun: true } : {}),
+     },
+     ...(terminateRun ? { terminate: true } : {}),
+   };
+@@ -724,7 +738,9 @@ function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: n
+     state.toolLoopWarningBuckets = new Map();
+   }
+   const bucket = Math.floor(count / LOOP_WARNING_BUCKET_SIZE);
+-  const lastBucket = state.toolLoopWarningBuckets.get(warningKey) ?? 0;
++  // Default to -1 so the first bucket (counts below LOOP_WARNING_BUCKET_SIZE)
++  // still emits once; a 0 default silently swallowed every early warning.
++  const lastBucket = state.toolLoopWarningBuckets.get(warningKey) ?? -1;
+   if (bucket <= lastBucket) {
+     return false;
+   }
+@@ -738,6 +754,31 @@ function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: n
+   return true;
+ }
+
++function isToolLoopBlockedResult(result: unknown): boolean {
++  if (!isPlainObject(result)) {
++    return false;
++  }
++  const details = (result as { details?: unknown }).details;
++  return isPlainObject(details) && (details as { deniedReason?: unknown }).deniedReason === "tool-loop";
++}
++
++/**
++ * Append a loop-detector warning to a tool result so the model sees it.
++ * Must run only after the raw result was recorded for loop detection —
++ * injecting first would change the result hash and reset no-progress streaks.
++ */
++export function appendLoopWarningToToolResult<T extends { content?: unknown }>(
++  result: T,
++  loopWarning: string,
++): T {
++  const content = (result as { content?: unknown }).content;
++  const blocks = Array.isArray(content) ? content : [];
++  return {
++    ...result,
++    content: [...blocks, { type: "text" as const, text: loopWarning }],
++  } as T;
++}
++
+ async function recordLoopOutcome(args: {
+   ctx?: HookContext;
+   toolName: string;
+@@ -749,6 +790,12 @@ async function recordLoopOutcome(args: {
+   if (!args.ctx?.sessionKey && !args.ctx?.sessionId) {
+     return;
+   }
++  // Synthetic loop-veto results are not real tool outcomes. Recording them
++  // would break identical-result streaks (their text embeds a changing count),
++  // stalling escalation to the circuit breaker.
++  if (isToolLoopBlockedResult(args.result)) {
++    return;
++  }
+   let recordedOutcome: ToolOutcomeObservation | undefined;
+   try {
+     const { getDiagnosticSessionState, recordToolCallOutcome } = await loadBeforeToolCallRuntime();
+@@ -780,87 +827,173 @@ async function recordLoopOutcome(args: {
+   }
+ }
+
+-export async function runBeforeToolCallHook(args: {
++/**
++ * Consecutive critical loop vetoes for the same run+tool before the veto
++ * escalates to run termination. Gives the model a few visible chances to
++ * change course after the first block instead of killing the run outright.
++ */
++export const TOOL_LOOP_VETO_STREAK_TERMINATE_THRESHOLD = 6;
++
++function bumpToolLoopVetoStreak(state: SessionState, key: string): number {
++  const streaks = (state.toolLoopVetoStreaks ??= new Map());
++  const next = (streaks.get(key) ?? 0) + 1;
++  streaks.delete(key);
++  streaks.set(key, next);
++  if (streaks.size > MAX_LOOP_WARNING_KEYS) {
++    const oldest = streaks.keys().next().value;
++    if (oldest) {
++      streaks.delete(oldest);
++    }
++  }
++  return next;
++}
++
++function resetToolLoopVetoStreak(state: SessionState, key: string): void {
++  state.toolLoopVetoStreaks?.delete(key);
++}
++
++type ToolLoopGateResult = {
++  veto?: Extract<HookOutcome, { blocked: true }>;
++  loopWarning?: string;
++};
++
++async function evaluateToolLoopGate(args: {
+   toolName: string;
+   params: unknown;
+-  toolKind?: PluginHookToolKind;
+-  toolInputKind?: PluginHookToolInputKind;
+   toolCallId?: string;
+   ctx?: HookContext;
+-  signal?: AbortSignal;
+-  approvalMode?: "request" | "report" | "defer";
+-}): Promise<HookOutcome> {
+-  const toolName = normalizeToolName(args.toolName || "tool");
+-  const params = args.params;
++}): Promise<ToolLoopGateResult> {
++  if (!args.ctx?.sessionKey) {
++    return {};
++  }
++  const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
++    await loadBeforeToolCallRuntime();
++  const sessionState = getDiagnosticSessionState({
++    sessionKey: args.ctx.sessionKey,
++    sessionId: args.ctx.sessionId,
++  });
+
+-  if (args.ctx?.sessionKey) {
+-    const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
+-      await loadBeforeToolCallRuntime();
+-    const sessionState = getDiagnosticSessionState({
++  const loopScope = args.ctx.runId ? { runId: args.ctx.runId } : undefined;
++  const loopResult = detectToolCallLoop(
++    sessionState,
++    args.toolName,
++    args.params,
++    args.ctx.loopDetection,
++    loopScope,
++  );
++
++  const vetoStreakKey = `${args.ctx.runId ?? "no-run"}:${args.toolName}`;
++  if (loopResult.stuck && loopResult.level === "critical") {
++    const vetoStreak = bumpToolLoopVetoStreak(sessionState, vetoStreakKey);
++    const terminateRun =
++      loopResult.hardStop === true ||
++      vetoStreak >= TOOL_LOOP_VETO_STREAK_TERMINATE_THRESHOLD;
++    // Escalated soft vetoes gain the hard-stop copy so downstream consumers
++    // (and users) see that the session was intentionally blocked.
++    const reason =
++      terminateRun && loopResult.hardStop !== true
++        ? `${loopResult.message} Session execution blocked to prevent resource waste.`
++        : loopResult.message;
++    log.error(`Blocking ${args.toolName} due to critical loop: ${reason}`);
++    logToolLoopAction({
+       sessionKey: args.ctx.sessionKey,
+       sessionId: args.ctx.sessionId,
++      toolName: args.toolName,
++      level: "critical",
++      action: "block",
++      detector: loopResult.detector,
++      count: loopResult.count,
++      message: reason,
++      pairedToolName: loopResult.pairedToolName,
+     });
++    return {
++      veto: {
++        blocked: true,
++        kind: "veto",
++        deniedReason: "tool-loop",
++        reason,
++        params: args.params,
++        blockDetector: loopResult.detector,
++        terminateRun,
++      },
++    };
++  }
++
++  resetToolLoopVetoStreak(sessionState, vetoStreakKey);
++
++  let loopWarning: string | undefined;
++  if (loopResult.stuck) {
++    loopWarning = loopResult.message;
++    const baseWarningKey = loopResult.warningKey ?? `${loopResult.detector}:${args.toolName}`;
++    const warningKey = args.ctx.runId ? `${args.ctx.runId}:${baseWarningKey}` : baseWarningKey;
++    if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
++      log.warn(`Loop warning for ${args.toolName}: ${loopResult.message}`);
++      logToolLoopAction({
++        sessionKey: args.ctx.sessionKey,
++        sessionId: args.ctx.sessionId,
++        toolName: args.toolName,
++        level: "warning",
++        action: "warn",
++        detector: loopResult.detector,
++        count: loopResult.count,
++        message: loopResult.message,
++        pairedToolName: loopResult.pairedToolName,
++      });
++    }
++  }
+
+-    const loopScope = args.ctx.runId ? { runId: args.ctx.runId } : undefined;
+-    const loopResult = detectToolCallLoop(
++  if (args.ctx.loopDetection?.enabled !== false) {
++    recordToolCall(
+       sessionState,
+-      toolName,
+-      params,
++      args.toolName,
++      args.params,
++      args.toolCallId,
+       args.ctx.loopDetection,
+       loopScope,
+     );
++  }
+
+-    if (loopResult.stuck) {
+-      if (loopResult.level === "critical") {
+-        log.error(`Blocking ${toolName} due to critical loop: ${loopResult.message}`);
+-        logToolLoopAction({
+-          sessionKey: args.ctx.sessionKey,
+-          sessionId: args.ctx.sessionId,
+-          toolName,
+-          level: "critical",
+-          action: "block",
+-          detector: loopResult.detector,
+-          count: loopResult.count,
+-          message: loopResult.message,
+-          pairedToolName: loopResult.pairedToolName,
+-        });
+-        return {
+-          blocked: true,
+-          kind: "veto",
+-          deniedReason: "tool-loop",
+-          reason: loopResult.message,
+-          params,
+-        };
+-      }
+-      const baseWarningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
+-      const warningKey = args.ctx.runId ? `${args.ctx.runId}:${baseWarningKey}` : baseWarningKey;
+-      if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
+-        log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
+-        logToolLoopAction({
+-          sessionKey: args.ctx.sessionKey,
+-          sessionId: args.ctx.sessionId,
+-          toolName,
+-          level: "warning",
+-          action: "warn",
+-          detector: loopResult.detector,
+-          count: loopResult.count,
+-          message: loopResult.message,
+-          pairedToolName: loopResult.pairedToolName,
+-        });
+-      }
+-    }
++  return loopWarning ? { loopWarning } : {};
++}
+
+-    if (args.ctx.loopDetection?.enabled !== false) {
+-      recordToolCall(
+-        sessionState,
+-        toolName,
+-        params,
+-        args.toolCallId,
+-        args.ctx.loopDetection,
+-        loopScope,
+-      );
+-    }
++export async function runBeforeToolCallHook(args: {
++  toolName: string;
++  params: unknown;
++  toolKind?: PluginHookToolKind;
++  toolInputKind?: PluginHookToolInputKind;
++  toolCallId?: string;
++  ctx?: HookContext;
++  signal?: AbortSignal;
++  approvalMode?: "request" | "report" | "defer";
++}): Promise<HookOutcome> {
++  const loopGate = await evaluateToolLoopGate({
++    toolName: normalizeToolName(args.toolName || "tool"),
++    params: args.params,
++    ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
++    ...(args.ctx ? { ctx: args.ctx } : {}),
++  });
++  if (loopGate.veto) {
++    return loopGate.veto;
++  }
++  const outcome = await runBeforeToolCallPluginHooks(args);
++  if (!outcome.blocked && loopGate.loopWarning) {
++    return { ...outcome, loopWarning: loopGate.loopWarning };
+   }
++  return outcome;
++}
++
++async function runBeforeToolCallPluginHooks(args: {
++  toolName: string;
++  params: unknown;
++  toolKind?: PluginHookToolKind;
++  toolInputKind?: PluginHookToolInputKind;
++  toolCallId?: string;
++  ctx?: HookContext;
++  signal?: AbortSignal;
++  approvalMode?: "request" | "report" | "defer";
++}): Promise<HookOutcome> {
++  const toolName = normalizeToolName(args.toolName || "tool");
++  const params = args.params;
+
+   const hookRunner = getGlobalHookRunner();
+   try {
+@@ -1160,6 +1293,8 @@ export function wrapToolWithBeforeToolCallHook(
+         const blockedResult = buildBlockedToolResult({
+           reason: outcome.reason,
+           deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
++          ...(outcome.blockDetector ? { blockDetector: outcome.blockDetector } : {}),
++          ...(outcome.terminateRun !== undefined ? { terminateRun: outcome.terminateRun } : {}),
+         });
+         await recordLoopOutcome({
+           ctx,
+@@ -1204,7 +1339,7 @@ export function wrapToolWithBeforeToolCallHook(
+       }
+       const startedAt = Date.now();
+       try {
+-        const result = await execute(toolCallId, executeParams, signal, onUpdate);
++        let result = await execute(toolCallId, executeParams, signal, onUpdate);
+         const durationMs = Date.now() - startedAt;
+         await recordLoopOutcome({
+           ctx,
+@@ -1213,6 +1348,9 @@ export function wrapToolWithBeforeToolCallHook(
+           toolCallId,
+           result,
+         });
++        if (outcome.loopWarning) {
++          result = appendLoopWarningToToolResult(result, outcome.loopWarning);
++        }
+         const skillMatch = findSkillUsageMatch({
+           toolName: normalizedToolName,
+           toolParams: executeParams,
+diff --git a/src/agents/sessions/sdk.ts b/src/agents/sessions/sdk.ts
+index 0c8aa7873e..19ceae40cb 100644
+--- a/src/agents/sessions/sdk.ts
++++ b/src/agents/sessions/sdk.ts
+@@ -393,10 +393,14 @@ export async function createAgentSession(
+     shouldStopAfterTurn: (context) => {
+       // Agent-core only ends a tool batch immediately when every result has
+       // terminate: true. A post-turn check also covers a critical loop veto
+-      // emitted beside a normal result in a mixed parallel batch.
++      // emitted beside a normal result in a mixed parallel batch. Soft loop
++      // vetoes (terminateRun unset) stay visible to the model so it can
++      // change course instead of ending the run.
+       for (const message of context.toolResults) {
+-        const details = message.details as { deniedReason?: string } | undefined;
+-        if (details?.deniedReason === "tool-loop") {
++        const details = message.details as
++          | { deniedReason?: string; terminateRun?: boolean }
++          | undefined;
++        if (details?.deniedReason === "tool-loop" && details.terminateRun === true) {
+           return true;
+         }
+       }
+diff --git a/src/agents/tool-loop-detection.ts b/src/agents/tool-loop-detection.ts
+index 7833fcb73f..2af8992843 100644
+--- a/src/agents/tool-loop-detection.ts
++++ b/src/agents/tool-loop-detection.ts
+@@ -29,6 +29,13 @@ type LoopDetectionResult =
+       message: string;
+       pairedToolName?: string;
+       warningKey?: string;
++      /**
++       * True for last-resort detectors whose critical veto must terminate the
++       * run immediately (aborted-tool storms, global circuit breaker). Other
++       * critical vetoes only block the call so the model can change course;
++       * repeated blocked attempts escalate to termination in the hook layer.
++       */
++      hardStop?: boolean;
+     };
+
+ export const TOOL_CALL_HISTORY_SIZE = 30;
+@@ -560,6 +567,7 @@ export function detectToolCallLoop(
+       count: noProgressStreak,
+       message: `CRITICAL: ${toolName} has repeated identical no-progress outcomes ${noProgressStreak} times. Session execution blocked by global circuit breaker to prevent runaway loops.`,
+       warningKey: `global:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
++      hardStop: true,
+     };
+   }
+
+@@ -574,6 +582,7 @@ export function detectToolCallLoop(
+       count: abortedLoop.total,
+       message: `CRITICAL: tool calls have returned aborted outcomes ${abortedLoop.total} times. Session execution blocked to prevent runaway retry loops.`,
+       warningKey: `aborted-total:${abortedLoop.total}`,
++      hardStop: true,
+     };
+   }
+
+@@ -588,6 +597,7 @@ export function detectToolCallLoop(
+       count: abortedLoop.signatureStreak,
+       message: `CRITICAL: ${toolName} has returned aborted outcomes ${abortedLoop.signatureStreak} times for identical arguments. Session execution blocked to prevent runaway retry loops.`,
+       warningKey: `aborted:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "aborted"}`,
++      hardStop: true,
+     };
+   }
+
+@@ -616,7 +626,7 @@ export function detectToolCallLoop(
+       level: "critical",
+       detector: "known_poll_no_progress",
+       count: noProgressStreak,
+-      message: `CRITICAL: Called ${toolName} with identical arguments and no progress ${noProgressStreak} times. This appears to be a stuck polling loop. Session execution blocked to prevent resource waste.`,
++      message: `CRITICAL: Called ${toolName} with identical arguments and no progress ${noProgressStreak} times, so this call was blocked as a stuck polling loop. Wait significantly longer before checking again, try a different approach, or report the current status to the user. Repeating the same blocked call will end this run.`,
+       warningKey: `poll:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
+     };
+   }
+@@ -654,7 +664,7 @@ export function detectToolCallLoop(
+       level: "critical",
+       detector: "ping_pong",
+       count: pingPong.count,
+-      message: `CRITICAL: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls) with no progress. This appears to be a stuck ping-pong loop. Session execution blocked to prevent resource waste.`,
++      message: `CRITICAL: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls) with no progress, so this call was blocked as a stuck ping-pong loop. Break the pattern: change your approach or report the current status to the user. Repeating the same blocked pattern will end this run.`,
+       pairedToolName: pingPong.pairedToolName,
+       warningKey: pingPongWarningKey,
+     };
+@@ -692,7 +702,7 @@ export function detectToolCallLoop(
+       level: "critical",
+       detector: "generic_repeat",
+       count: noProgressStreak,
+-      message: `CRITICAL: Called ${toolName} with identical arguments and identical outcomes ${noProgressStreak} times. Session execution blocked to prevent runaway loops.`,
++      message: `CRITICAL: Called ${toolName} with identical arguments and identical outcomes ${noProgressStreak} times, so this call was blocked as a repetition loop. Change the arguments or approach, or report the current status to the user. Repeating the same blocked call will end this run.`,
+       warningKey: `generic:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
+     };
+   }
+diff --git a/src/logging/diagnostic-session-state.ts b/src/logging/diagnostic-session-state.ts
+index 6dafdd06ef..949d729f8f 100644
+--- a/src/logging/diagnostic-session-state.ts
++++ b/src/logging/diagnostic-session-state.ts
+@@ -13,6 +13,8 @@ export type SessionState = {
+   activeQueuedTurn?: boolean;
+   toolCallHistory?: ToolCallRecord[];
+   toolLoopWarningBuckets?: Map<string, number>;
++  /** Consecutive critical loop vetoes per run+tool; drives escalation to run termination. */
++  toolLoopVetoStreaks?: Map<string, number>;
+   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
+ };
+
+@@ -128,6 +130,12 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
+       buckets.set(bucket, Math.max(buckets.get(bucket) ?? 0, count));
+     }
+   }
++  if (source.toolLoopVetoStreaks?.size) {
++    const streaks = (target.toolLoopVetoStreaks ??= new Map());
++    for (const [key, count] of source.toolLoopVetoStreaks) {
++      streaks.set(key, Math.max(streaks.get(key) ?? 0, count));
++    }
++  }
+   if (source.commandPollCounts?.size) {
+     const counts = (target.commandPollCounts ??= new Map());
+     for (const [command, value] of source.commandPollCounts) {

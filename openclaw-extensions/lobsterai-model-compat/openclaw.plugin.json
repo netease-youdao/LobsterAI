@@ -1,0 +1,72 @@
+{
+  "id": "lobsterai-model-compat",
+  "name": "LobsterAI Model Compatibility",
+  "description": "Applies explicit LobsterAI-managed model runtime profiles.",
+  "providers": ["lobsterai-model-compat"],
+  "activation": {
+    "onStartup": true,
+    "onProviders": ["lobsterai-server"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "modelProfiles": {
+        "type": "object",
+        "minProperties": 1,
+        "propertyNames": {
+          "pattern": "^[^/\\s]+/[^\\s]+$"
+        },
+        "additionalProperties": {
+          "type": "string",
+          "enum": ["moonshot-kimi-k3"]
+        }
+      },
+      "thinkingProfiles": {
+        "type": "object",
+        "minProperties": 1,
+        "propertyNames": {
+          "pattern": "^[^/\\s]+/[^\\s]+$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "options": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "level": {
+                    "type": "string",
+                    "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+                  },
+                  "openclawLevel": {
+                    "type": "string",
+                    "enum": ["off", "minimal", "low", "medium", "high", "xhigh"]
+                  }
+                },
+                "required": ["level", "openclawLevel"]
+              }
+            },
+            "defaultLevel": {
+              "type": "string",
+              "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+            },
+            "requestOptionsVersion": {
+              "type": "integer",
+              "enum": [1]
+            }
+          },
+          "required": ["options", "defaultLevel"]
+        }
+      }
+    },
+    "anyOf": [
+      { "required": ["modelProfiles"] },
+      { "required": ["thinkingProfiles"] }
+    ]
+  }
+}

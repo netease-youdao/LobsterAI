@@ -1,0 +1,857 @@
+diff --git a/node_modules/app-builder-lib/out/targets/differentialUpdateInfoBuilder.js b/node_modules/app-builder-lib/out/targets/differentialUpdateInfoBuilder.js
+index 0a88df9..16d7c77 100644
+--- a/node_modules/app-builder-lib/out/targets/differentialUpdateInfoBuilder.js
++++ b/node_modules/app-builder-lib/out/targets/differentialUpdateInfoBuilder.js
+@@ -2,8 +2,10 @@
+ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.createBlockmap = exports.appendBlockmap = exports.configureDifferentialAwareArchiveOptions = exports.createNsisWebDifferentialUpdateInfo = exports.BLOCK_MAP_FILE_SUFFIX = void 0;
+ const builder_util_1 = require("builder-util");
++const fs_1 = require("fs/promises");
+ const path = require("path");
+ const appBuilder_1 = require("../util/appBuilder");
++const hash_1 = require("../util/hash");
+ exports.BLOCK_MAP_FILE_SUFFIX = ".blockmap";
+ function createNsisWebDifferentialUpdateInfo(artifactPath, packageFiles) {
+     if (packageFiles == null) {
+@@ -58,6 +60,30 @@ function configureDifferentialAwareArchiveOptions(archiveOptions) {
+ }
+ exports.configureDifferentialAwareArchiveOptions = configureDifferentialAwareArchiveOptions;
+ async function appendBlockmap(file) {
++    if (process.env.LOBSTERAI_REUSE_NSIS_WEB_PACKAGE === "1") {
++        const fileStat = await (0, fs_1.stat)(file);
++        if (fileStat.size < 4) {
++            throw new Error(`Cannot reuse embedded block map from ${file}: file is too small`);
++        }
++        const footer = Buffer.allocUnsafe(4);
++        const handle = await (0, fs_1.open)(file, "r");
++        try {
++            await handle.read(footer, 0, footer.length, fileStat.size - footer.length);
++        }
++        finally {
++            await handle.close();
++        }
++        const blockMapSize = footer.readUInt32BE(0);
++        if (blockMapSize <= 0 || blockMapSize + footer.length >= fileStat.size) {
++            throw new Error(`Cannot reuse embedded block map from ${file}: invalid footer size ${blockMapSize}`);
++        }
++        builder_util_1.log.info({ file: builder_util_1.log.filePath(file) }, "reusing existing embedded block map");
++        return {
++            size: fileStat.size,
++            blockMapSize,
++            sha512: await (0, hash_1.hashFile)(file),
++        };
++    }
+     builder_util_1.log.info({ file: builder_util_1.log.filePath(file) }, "building embedded block map");
+     return await (0, appBuilder_1.executeAppBuilderAsJson)(["blockmap", "--input", file, "--compression", "deflate"]);
+ }
+diff --git a/node_modules/app-builder-lib/out/targets/nsis/WebInstallerTarget.js b/node_modules/app-builder-lib/out/targets/nsis/WebInstallerTarget.js
+index 9b75baa..e018ea7 100644
+--- a/node_modules/app-builder-lib/out/targets/nsis/WebInstallerTarget.js
++++ b/node_modules/app-builder-lib/out/targets/nsis/WebInstallerTarget.js
+@@ -23,8 +23,11 @@ class WebInstallerTarget extends NsisTarget_1.NsisTarget {
+                 throw new Error("Cannot compute app package download URL");
+             }
+             appPackageUrl = (0, PublishManager_1.computeDownloadUrl)(publishConfigs[0], null, packager);
++            // Computed URLs point at a directory, so the NSIS template appends the
++            // package file name. An explicit appPackageUrl is used verbatim, as the
++            // option documentation states ("it is full URL").
++            defines.APP_PACKAGE_URL_IS_INCOMPLETE = null;
+         }
+-        defines.APP_PACKAGE_URL_IS_INCOMPLETE = null;
+         defines.APP_PACKAGE_URL = appPackageUrl;
+     }
+     get installerFilenamePattern() {
+diff --git a/node_modules/app-builder-lib/templates/nsis/assistedInstaller.nsh b/node_modules/app-builder-lib/templates/nsis/assistedInstaller.nsh
+index b7f4752..e11b58f 100644
+--- a/node_modules/app-builder-lib/templates/nsis/assistedInstaller.nsh
++++ b/node_modules/app-builder-lib/templates/nsis/assistedInstaller.nsh
+@@ -43,6 +43,18 @@
+     !insertmacro customPageAfterChangeDir
+   !endif
+ 
++  # In-app update (--updated): the previous install directory may already be
++  # renamed away by customCheckAppRunning, so a mid-install cancel would leave
++  # the user with no working app at all. Disable the Cancel button for the
++  # whole install-files page in that mode.
++  Function instFilesShow
++    ${if} ${isUpdated}
++      GetDlgItem $0 $HWNDPARENT 2
++      EnableWindow $0 0
++    ${endif}
++  FunctionEnd
++  !define MUI_PAGE_CUSTOMFUNCTION_SHOW instFilesShow
++
+   !insertmacro MUI_PAGE_INSTFILES
+   !ifmacrodef customFinishPage
+     !insertmacro customFinishPage
+@@ -60,6 +72,9 @@
+       !define MUI_FINISHPAGE_RUN
+       !define MUI_FINISHPAGE_RUN_FUNCTION "StartApp"
+     !endif
++    # In-app update: no finish page either -- the app is relaunched by the
++    # install section itself (isForceRun), so the update ends hands-free.
++    !insertmacro skipPageIfUpdated
+     !insertmacro MUI_PAGE_FINISH
+   !endif
+ !else
+diff --git a/node_modules/app-builder-lib/templates/nsis/include/extractAppPackage.nsh b/node_modules/app-builder-lib/templates/nsis/include/extractAppPackage.nsh
+index f5470bf..56c07cb 100644
+--- a/node_modules/app-builder-lib/templates/nsis/include/extractAppPackage.nsh
++++ b/node_modules/app-builder-lib/templates/nsis/include/extractAppPackage.nsh
+@@ -66,36 +66,90 @@
+ !macroend
+ 
+ !macro arm64_app_files
+-  File /oname=$PLUGINSDIR\app-arm64.${COMPRESSION_METHOD} "${APP_ARM64}"
++  # Staging (package file + 7z-out tree) defaults to the NSIS temp dir; a
++  # custom hook may repoint it before anything is materialized (e.g. at the
++  # install drive when the temp drive is too full to hold the payload).
++  StrCpy $appPackageStagingDir "$PLUGINSDIR"
++  !ifmacrodef customSelectAppPackageStagingDir
++    !insertmacro customSelectAppPackageStagingDir
++  !endif
++  !ifmacrodef customAppPackageMaterializeStart
++    !insertmacro customAppPackageMaterializeStart
++  !endif
++  File /oname=$appPackageStagingDir\app-arm64.${COMPRESSION_METHOD} "${APP_ARM64}"
++  !ifmacrodef customAppPackageMaterializeEnd
++    !insertmacro customAppPackageMaterializeEnd
++  !endif
+ !macroend
+ 
+ !macro x64_app_files
+-  File /oname=$PLUGINSDIR\app-64.${COMPRESSION_METHOD} "${APP_64}"
++  # Staging (package file + 7z-out tree) defaults to the NSIS temp dir; a
++  # custom hook may repoint it before anything is materialized (e.g. at the
++  # install drive when the temp drive is too full to hold the payload).
++  StrCpy $appPackageStagingDir "$PLUGINSDIR"
++  !ifmacrodef customSelectAppPackageStagingDir
++    !insertmacro customSelectAppPackageStagingDir
++  !endif
++  !ifmacrodef customAppPackageMaterializeStart
++    !insertmacro customAppPackageMaterializeStart
++  !endif
++  File /oname=$appPackageStagingDir\app-64.${COMPRESSION_METHOD} "${APP_64}"
++  !ifmacrodef customAppPackageMaterializeEnd
++    !insertmacro customAppPackageMaterializeEnd
++  !endif
+ !macroend
+ 
+ !macro ia32_app_files
+-  File /oname=$PLUGINSDIR\app-32.${COMPRESSION_METHOD} "${APP_32}"
++  # Staging (package file + 7z-out tree) defaults to the NSIS temp dir; a
++  # custom hook may repoint it before anything is materialized (e.g. at the
++  # install drive when the temp drive is too full to hold the payload).
++  StrCpy $appPackageStagingDir "$PLUGINSDIR"
++  !ifmacrodef customSelectAppPackageStagingDir
++    !insertmacro customSelectAppPackageStagingDir
++  !endif
++  !ifmacrodef customAppPackageMaterializeStart
++    !insertmacro customAppPackageMaterializeStart
++  !endif
++  File /oname=$appPackageStagingDir\app-32.${COMPRESSION_METHOD} "${APP_32}"
++  !ifmacrodef customAppPackageMaterializeEnd
++    !insertmacro customAppPackageMaterializeEnd
++  !endif
+ !macroend
+ 
+ !macro decompress
+   !ifdef ZIP_COMPRESSION
+-    nsisunz::Unzip "$PLUGINSDIR\app-$packageArch.zip" "$INSTDIR"
++    nsisunz::Unzip "$appPackageStagingDir\app-$packageArch.zip" "$INSTDIR"
+     Pop $R0
+-    StrCmp $R0 "success" +3
++    ${if} $R0 != "success"
+       MessageBox MB_OK|MB_ICONEXCLAMATION "$(decompressionFailed)$\n$R0"
++      !ifmacrodef customBeforeInstallerQuit
++        !insertmacro customBeforeInstallerQuit "zip-decompression-failed"
++      !endif
+       Quit
++    ${endIf}
+   !else
+-    !insertmacro extractUsing7za "$PLUGINSDIR\app-$packageArch.7z"
++    !insertmacro extractUsing7za "$appPackageStagingDir\app-$packageArch.7z"
+   !endif
+ !macroend
+ 
+ !macro extractUsing7za FILE
+   Push $OUTDIR
+-  CreateDirectory "$PLUGINSDIR\7z-out"
++  # The web-installer path reaches this macro without the embedded-package
++  # materialize step that initializes the staging directory.
++  StrCmp $appPackageStagingDir "" 0 +2
++    StrCpy $appPackageStagingDir "$PLUGINSDIR"
++  CreateDirectory "$appPackageStagingDir\7z-out"
+   ClearErrors
+-  SetOutPath "$PLUGINSDIR\7z-out"
++  SetOutPath "$appPackageStagingDir\7z-out"
++  !ifmacrodef customAppPackageExtractStart
++    !insertmacro customAppPackageExtractStart "staging" "${FILE}"
++  !endif
+   Nsis7z::Extract "${FILE}"
+   Pop $R0
++  !ifmacrodef customAppPackageExtractEnd
++    # Nsis7z does not push a result. $R0 is the saved OUTDIR restored below.
++    !insertmacro customAppPackageExtractEnd "staging" "unchecked"
++  !endif
+   SetOutPath $R0
+ 
+   # Retry counter
+@@ -105,8 +159,23 @@
+     IntOp $R1 $R1 + 1
+ 
+     # Attempt to copy files in atomic way
+-    CopyFiles /SILENT "$PLUGINSDIR\7z-out\*" $OUTDIR
+-    IfErrors 0 DoneExtract7za
++    !ifmacrodef customAppPackageCopyStart
++      !insertmacro customAppPackageCopyStart
++    !endif
++    # Timing/log hooks may touch NSIS' error flag. Only CopyFiles itself may
++    # decide whether this attempt enters the retry path.
++    ClearErrors
++    CopyFiles /SILENT "$appPackageStagingDir\7z-out\*" $OUTDIR
++    IfErrors CopyExtract7zaFailed
++    !ifmacrodef customAppPackageCopyEnd
++      !insertmacro customAppPackageCopyEnd "success"
++    !endif
++    Goto DoneExtract7za
++
++    CopyExtract7zaFailed:
++    !ifmacrodef customAppPackageCopyEnd
++      !insertmacro customAppPackageCopyEnd "error"
++    !endif
+ 
+     DetailPrint `Can't modify "${PRODUCT_NAME}"'s files.`
+     ${if} $R1 < 5
+@@ -122,12 +191,21 @@
+ 
+     # Clear the temporary folder first to make sure we don't use twice as
+     # much disk space.
+-    RMDir /r "$PLUGINSDIR\7z-out"
++    RMDir /r "$appPackageStagingDir\7z-out"
+ 
++    !ifmacrodef customAppPackageExtractStart
++      !insertmacro customAppPackageExtractStart "fallback-direct" "${FILE}"
++    !endif
+     Nsis7z::Extract "${FILE}"
++    !ifmacrodef customAppPackageExtractEnd
++      !insertmacro customAppPackageExtractEnd "fallback-direct" "unchecked"
++    !endif
+     Goto DoneExtract7za
+ 
+   AbortExtract7za:
++    !ifmacrodef customBeforeInstallerQuit
++      !insertmacro customBeforeInstallerQuit "payload-copy-aborted"
++    !endif
+     Quit
+ 
+   RetryExtract7za:
+diff --git a/node_modules/app-builder-lib/templates/nsis/include/installUtil.nsh b/node_modules/app-builder-lib/templates/nsis/include/installUtil.nsh
+index 4736774..9797651 100644
+--- a/node_modules/app-builder-lib/templates/nsis/include/installUtil.nsh
++++ b/node_modules/app-builder-lib/templates/nsis/include/installUtil.nsh
+@@ -126,7 +126,10 @@ Function handleUninstallResult
+   Return
+ 
+   ${if} $R0 != 0
+-    MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0"
++    # /S is a zero-UI contract: NSIS shows MessageBox even in silent mode
++    # unless a silent default is declared, so silent channel installs must
++    # fail through SetErrorLevel alone instead of a stuck dialog.
++    MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0" /SD IDOK
+     DetailPrint `Uninstall was not successful. Uninstaller error code: $R0.`
+     SetErrorLevel 2
+     Quit
+diff --git a/node_modules/app-builder-lib/templates/nsis/include/installer.nsh b/node_modules/app-builder-lib/templates/nsis/include/installer.nsh
+index 34e91df..968f2a1 100644
+--- a/node_modules/app-builder-lib/templates/nsis/include/installer.nsh
++++ b/node_modules/app-builder-lib/templates/nsis/include/installer.nsh
+@@ -11,86 +11,62 @@
+     File /r "${APP_BUILD_DIR}\*.*"
+   !else
+     !ifdef APP_PACKAGE_URL
+-      Var /GLOBAL packageFile
+-      Var /GLOBAL isPackageFileExplicitlySpecified
+-
+-      ${StdUtils.GetParameter} $packageFile "package-file" ""
+-      ${if} $packageFile == ""
+-        !ifdef APP_64_NAME
+-          !ifdef APP_32_NAME
+-            !ifdef APP_ARM64_NAME
+-              ${if} ${IsNativeARM64}
+-                StrCpy $packageFile "${APP_ARM64_NAME}"
+-                StrCpy $1 "${APP_ARM64_HASH}"
+-              ${elseif} ${IsNativeAMD64}
+-                StrCpy $packageFile "${APP_64_NAME}"
+-                StrCpy $1 "${APP_64_HASH}"
+-              ${else}
+-                StrCpy $packageFile "${APP_32_NAME}"
+-                StrCpy $1 "${APP_32_HASH}"
+-              ${endif}
+-            !else
+-              ${if} ${RunningX64}
+-                StrCpy $packageFile "${APP_64_NAME}"
+-                StrCpy $1 "${APP_64_HASH}"
+-              ${else}
+-                StrCpy $packageFile "${APP_32_NAME}"
+-                StrCpy $1 "${APP_32_HASH}"
+-              ${endif}
+-            !endif
+-          !else
+-            StrCpy $packageFile "${APP_64_NAME}"
+-            StrCpy $1 "${APP_64_HASH}"
+-          !endif
+-        !else
+-          StrCpy $packageFile "${APP_32_NAME}"
+-          StrCpy $1 "${APP_32_HASH}"
+-        !endif
+-        StrCpy $4 "$packageFile"
+-        StrCpy $packageFile "$EXEDIR/$packageFile"
+-        StrCpy $isPackageFileExplicitlySpecified "false"
+-      ${else}
+-        StrCpy $isPackageFileExplicitlySpecified "true"
+-      ${endIf}
+-
+-      # we do not check file hash is specifed explicitly using --package-file because it is clear that user definitely want to use this file and it is user responsibility to check
+-      # 1. auto-updater uses --package-file and validates checksum
+-      # 2. user can user another package file (use case - one installer suitable for any app version (use latest version))
+-      ${if} ${FileExists} "$packageFile"
+-        ${if} $isPackageFileExplicitlySpecified == "true"
+-          Goto fun_extract
+-        ${else}
+-          ${StdUtils.HashFile} $3 "SHA2-512" "$packageFile"
+-          ${if} $3 == $1
+-            Goto fun_extract
+-          ${else}
+-            MessageBox MB_OK "Package file $4 found locally, but checksum doesn't match — expected $1, actual $3.$\r$\nLocal file is ignored and package will be downloaded from Internet."
+-          ${endIf}
+-        ${endIf}
+-      ${endIf}
+-
+-      !insertmacro downloadApplicationFiles
+-
+-      fun_extract:
+-        !insertmacro extractUsing7za "$packageFile"
++      # $packageFile was resolved and verified by acquireWebPackage at the top
++      # of the install section, before anything destructive ran.
++
++      # The extraction below stages the tree in $appPackageStagingDir\7z-out
++      # (see extractUsing7za) even though no embedded package is materialized,
++      # so run the same staging-drive preflight as the offline installer:
++      # relocate staging to the install drive or stop before a full temp
++      # drive lets Nsis7z silently truncate the staged tree.
++      StrCpy $appPackageStagingDir "$PLUGINSDIR"
++      !ifmacrodef customSelectAppPackageStagingDir
++        !insertmacro customSelectAppPackageStagingDir
++      !endif
++      !insertmacro extractUsing7za "$packageFile"
+ 
+-        # electron always uses per user app data
+-        ${if} $installMode == "all"
+-          SetShellVarContext current
+-        ${endif}
++      # electron always uses per user app data
++      ${if} $installMode == "all"
++        SetShellVarContext current
++      ${endif}
+ 
++      !ifmacrodef customInstallerCacheCopyStart
++        !insertmacro customInstallerCacheCopyStart "package"
++      !endif
++      # A cache hit is already in place; moving it onto itself would risk the
++      # moveFile copy+delete fallback destroying the cached payload.
++      ${if} $packageFile != "$LOCALAPPDATA\${APP_PACKAGE_STORE_FILE}"
+         !insertmacro moveFile "$packageFile" "$LOCALAPPDATA\${APP_PACKAGE_STORE_FILE}"
++        !ifmacrodef customInstallerCacheCopyEnd
++          !insertmacro customInstallerCacheCopyEnd "package" "completed"
++        !endif
++      ${else}
++        !ifmacrodef customInstallerCacheCopyEnd
++          !insertmacro customInstallerCacheCopyEnd "package" "reused"
++        !endif
++      ${endif}
+ 
+-        ${if} $installMode == "all"
+-          SetShellVarContext all
+-        ${endif}
++      ${if} $installMode == "all"
++        SetShellVarContext all
++      ${endif}
+     !else
+       !insertmacro extractEmbeddedAppPackage
+       # electron always uses per user app data
+       ${if} $installMode == "all"
+         SetShellVarContext current
+       ${endif}
++      !ifmacrodef customInstallerCacheCopyStart
++        !insertmacro customInstallerCacheCopyStart "installer"
++      !endif
+       !insertmacro copyFile "$EXEPATH" "$LOCALAPPDATA\${APP_INSTALLER_STORE_FILE}"
++      !ifmacrodef customInstallerCacheCopyEnd
++        IfErrors InstallerCacheCopyFailed
++        !insertmacro customInstallerCacheCopyEnd "installer" "success"
++        Goto InstallerCacheCopyDone
++        InstallerCacheCopyFailed:
++        !insertmacro customInstallerCacheCopyEnd "installer" "error"
++        InstallerCacheCopyDone:
++      !endif
+       ${if} $installMode == "all"
+         SetShellVarContext all
+       ${endif}
+@@ -138,9 +114,18 @@
+ 
+   # allow user to define ESTIMATED_SIZE to avoid GetSize call
+   !ifdef ESTIMATED_SIZE
++    !ifmacrodef customEstimatedSizeKnown
++      !insertmacro customEstimatedSizeKnown "${ESTIMATED_SIZE}"
++    !endif
+     IntFmt $0 "0x%08X" ${ESTIMATED_SIZE}
+   !else
++    !ifmacrodef customEstimatedSizeScanStart
++      !insertmacro customEstimatedSizeScanStart
++    !endif
+     ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
++    !ifmacrodef customEstimatedSizeScanEnd
++      !insertmacro customEstimatedSizeScanEnd "$0"
++    !endif
+     IntFmt $0 "0x%08X" $0
+   !endif
+ 
+diff --git a/node_modules/app-builder-lib/templates/nsis/include/webPackage.nsh b/node_modules/app-builder-lib/templates/nsis/include/webPackage.nsh
+index 8ec0be3..d059db8 100644
+--- a/node_modules/app-builder-lib/templates/nsis/include/webPackage.nsh
++++ b/node_modules/app-builder-lib/templates/nsis/include/webPackage.nsh
+@@ -1,6 +1,7 @@
+ !macro downloadApplicationFiles
+   Var /GLOBAL packageUrl
+   Var /GLOBAL packageArch
++  Var /GLOBAL webDownloadAttempt
+ 
+   StrCpy $packageUrl "${APP_PACKAGE_URL}"
+   StrCpy $packageArch "${APP_PACKAGE_URL}"
+@@ -39,26 +40,215 @@
+     StrCpy $packageArch "32"
+   ${endif}
+ 
++  # The page's own progress bar (IDC_PROGRESS = 1004) stays frozen during the
++  # plugin call, so hide it while downloading: the inetc panel is then the only
++  # progress bar on the page. Restored after the transfer for the install phase.
++  FindWindow $R8 "#32770" "" $HWNDPARENT
++  GetDlgItem $R9 $R8 1004
++  ShowWindow $R9 0
++
++  # Explicit WinINet timeouts (seconds): without them inetc inherits only the
++  # system defaults and a half-open connection can block the transfer thread
++  # forever -- the installer then sits at 0% CPU with no way to finish.
++  StrCpy $webDownloadAttempt 0
++
+   download:
+-  inetc::get /USERAGENT "electron-builder (Mozilla)" /HEADER "X-Arch: $packageArch" /RESUME "" "$packageUrl" "$PLUGINSDIR\package.7z" /END
++  IntOp $webDownloadAttempt $webDownloadAttempt + 1
++  !ifmacrodef customWebPackageDownloadStart
++    !insertmacro customWebPackageDownloadStart "proxy"
++  !endif
++  inetc::get /CONNECTTIMEOUT 30 /RECEIVETIMEOUT 60 /USERAGENT "electron-builder (Mozilla)" /HEADER "X-Arch: $packageArch" /CANCELTEXT "${U+53D6}${U+6D88}" /QUESTION "${U+786E}${U+5B9A}${U+8981}${U+53D6}${U+6D88}${U+4E0B}${U+8F7D}${U+5417}${U+FF1F}" /RESUME "${U+7F51}${U+7EDC}${U+8FDE}${U+63A5}${U+4E2D}${U+65AD}${U+FF0C}${U+8BF7}${U+68C0}${U+67E5}${U+7F51}${U+7EDC}${U+540E}${U+70B9}${U+51FB}${U+201C}${U+91CD}${U+8BD5}${U+201D}${U+7EE7}${U+7EED}${U+4E0B}${U+8F7D}${U+3002}" /TRANSLATE "${U+6B63}${U+5728}${U+4E0B}${U+8F7D} LobsterAI ${U+5B89}${U+88C5}${U+5305}" "${U+6B63}${U+5728}${U+8FDE}${U+63A5}${U+670D}${U+52A1}${U+5668}${U+2026}" "${U+79D2}" "${U+5206}${U+949F}" "${U+5C0F}${U+65F6}" "" "${U+5DF2}${U+4E0B}${U+8F7D} %dkB${U+FF08}%d%%${U+FF09}${U+FF0C}${U+5171} %dkB ${U+2014} %d.%01dkB/s" "${U+FF0C}${U+5269}${U+4F59}${U+7EA6} %d %s" "$packageUrl" "$PLUGINSDIR\package.7z" /END
+   Pop $0
++  !ifmacrodef customWebPackageDownloadEnd
++    !insertmacro customWebPackageDownloadEnd "proxy" "$0"
++  !endif
+ 
+   ${if} $0 == "Cancelled"
++    SetErrorLevel 1
++    !ifmacrodef customBeforeInstallerQuit
++      !insertmacro customBeforeInstallerQuit "web-package-download-cancelled"
++    !endif
+     Quit
+   ${endif}
+ 
+   ${if} $0 != "OK"
+     # try without proxy
+-    inetc::get /NOPROXY /USERAGENT "electron-builder (Mozilla)" /HEADER "X-Arch: $packageArch" /RESUME "" "$packageUrl" "$PLUGINSDIR\package.7z" /END
++    !ifmacrodef customWebPackageDownloadStart
++      !insertmacro customWebPackageDownloadStart "noproxy"
++    !endif
++    inetc::get /NOPROXY /CONNECTTIMEOUT 30 /RECEIVETIMEOUT 60 /USERAGENT "electron-builder (Mozilla)" /HEADER "X-Arch: $packageArch" /CANCELTEXT "${U+53D6}${U+6D88}" /QUESTION "${U+786E}${U+5B9A}${U+8981}${U+53D6}${U+6D88}${U+4E0B}${U+8F7D}${U+5417}${U+FF1F}" /RESUME "${U+7F51}${U+7EDC}${U+8FDE}${U+63A5}${U+4E2D}${U+65AD}${U+FF0C}${U+8BF7}${U+68C0}${U+67E5}${U+7F51}${U+7EDC}${U+540E}${U+70B9}${U+51FB}${U+201C}${U+91CD}${U+8BD5}${U+201D}${U+7EE7}${U+7EED}${U+4E0B}${U+8F7D}${U+3002}" /TRANSLATE "${U+6B63}${U+5728}${U+4E0B}${U+8F7D} LobsterAI ${U+5B89}${U+88C5}${U+5305}" "${U+6B63}${U+5728}${U+8FDE}${U+63A5}${U+670D}${U+52A1}${U+5668}${U+2026}" "${U+79D2}" "${U+5206}${U+949F}" "${U+5C0F}${U+65F6}" "" "${U+5DF2}${U+4E0B}${U+8F7D} %dkB${U+FF08}%d%%${U+FF09}${U+FF0C}${U+5171} %dkB ${U+2014} %d.%01dkB/s" "${U+FF0C}${U+5269}${U+4F59}${U+7EA6} %d %s" "$packageUrl" "$PLUGINSDIR\package.7z" /END
+     Pop $0
++    !ifmacrodef customWebPackageDownloadEnd
++      !insertmacro customWebPackageDownloadEnd "noproxy" "$0"
++    !endif
++  ${endif}
++
++  # Verify the transfer before it may replace anything: a truncated or
++  # corrupted download counts as a failed attempt (re-downloaded by the retry
++  # logic below) and must never reach extraction.
++  ${if} $0 == "OK"
++  ${andIf} $webPackageExpectedHash != ""
++    !ifmacrodef customWebPackageVerifyStart
++      !insertmacro customWebPackageVerifyStart
++    !endif
++    ${StdUtils.HashFile} $3 "SHA2-512" "$PLUGINSDIR\package.7z"
++    ${if} $3 == $webPackageExpectedHash
++      !ifmacrodef customWebPackageVerifyEnd
++        !insertmacro customWebPackageVerifyEnd "ok"
++      !endif
++    ${else}
++      !ifmacrodef customWebPackageVerifyEnd
++        !insertmacro customWebPackageVerifyEnd "mismatch"
++      !endif
++      Delete "$PLUGINSDIR\package.7z"
++      StrCpy $0 "Checksum Mismatch"
++    ${endif}
+   ${endif}
+ 
+   ${if} $0 == "Cancelled"
++    SetErrorLevel 1
++    !ifmacrodef customBeforeInstallerQuit
++      !insertmacro customBeforeInstallerQuit "web-package-download-cancelled"
++    !endif
+     quit
+   ${elseif} $0 != "OK"
+-    Messagebox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Unable to download application package from $packageUrl (status: $0).$\r$\n$\r$\nPlease check your internet connection and retry." IDRETRY download
++    ${if} ${Silent}
++      # Unattended installs retry a bounded number of times and then exit.
++      # No dialog may ever block a silent install, /SD or not.
++      ${if} $webDownloadAttempt < 3
++        Sleep 5000
++        Goto download
++      ${endif}
++    ${else}
++      Messagebox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${U+4E0B}${U+8F7D}${U+5B89}${U+88C5}${U+7EC4}${U+4EF6}${U+5931}${U+8D25}${U+FF08}${U+72B6}${U+6001}${U+FF1A}$0${U+FF09}${U+3002}$\r$\n$\r$\n${U+8BF7}${U+68C0}${U+67E5}${U+7F51}${U+7EDC}${U+8FDE}${U+63A5}${U+540E}${U+70B9}${U+51FB}${U+201C}${U+91CD}${U+8BD5}${U+201D}${U+3002}" /SD IDCANCEL IDRETRY download
++    ${endif}
++    # Exit code 4: web package download failed after all attempts. Non-zero so
++    # the invoking channel (e.g. a bound silent install) can detect the failure
++    # instead of treating the default Quit code 0 as success.
++    SetErrorLevel 4
++    !ifmacrodef customBeforeInstallerQuit
++      !insertmacro customBeforeInstallerQuit "web-package-download-failed"
++    !endif
+     Quit
+   ${endif}
+ 
++  ShowWindow $R9 5
++
+   StrCpy $packageFile "$PLUGINSDIR\package.7z"
+ !macroend
++
++# Acquire the web payload BEFORE anything destructive runs. Inserted at the
++# top of the install section, ahead of CHECK_APP_RUNNING and
++# uninstallOldVersion: a failed or cancelled download leaves the previous
++# installation fully intact. (Previously the old app was already uninstalled
++# by the time the download started, so a download failure stranded the user
++# with no usable app at all.)
++# Resolution order: explicit --package-file, sibling package next to the
++# installer, cached payload from a previous install, network download.
++!macro acquireWebPackage
++  Var /GLOBAL packageFile
++  Var /GLOBAL isPackageFileExplicitlySpecified
++  Var /GLOBAL webPackageExpectedHash
++
++  !ifmacrodef customWebPackageAcquireStart
++    !insertmacro customWebPackageAcquireStart
++  !endif
++
++  # we do not check file hash if specified explicitly using --package-file because it is clear that user definitely want to use this file and it is user responsibility to check
++  # 1. auto-updater uses --package-file and validates checksum
++  # 2. user can use another package file (use case - one installer suitable for any app version (use latest version))
++  ${StdUtils.GetParameter} $packageFile "package-file" ""
++  ${if} $packageFile == ""
++    !ifdef APP_64_NAME
++      !ifdef APP_32_NAME
++        !ifdef APP_ARM64_NAME
++          ${if} ${IsNativeARM64}
++            StrCpy $packageFile "${APP_ARM64_NAME}"
++            StrCpy $webPackageExpectedHash "${APP_ARM64_HASH}"
++          ${elseif} ${IsNativeAMD64}
++            StrCpy $packageFile "${APP_64_NAME}"
++            StrCpy $webPackageExpectedHash "${APP_64_HASH}"
++          ${else}
++            StrCpy $packageFile "${APP_32_NAME}"
++            StrCpy $webPackageExpectedHash "${APP_32_HASH}"
++          ${endif}
++        !else
++          ${if} ${RunningX64}
++            StrCpy $packageFile "${APP_64_NAME}"
++            StrCpy $webPackageExpectedHash "${APP_64_HASH}"
++          ${else}
++            StrCpy $packageFile "${APP_32_NAME}"
++            StrCpy $webPackageExpectedHash "${APP_32_HASH}"
++          ${endif}
++        !endif
++      !else
++        StrCpy $packageFile "${APP_64_NAME}"
++        StrCpy $webPackageExpectedHash "${APP_64_HASH}"
++      !endif
++    !else
++      StrCpy $packageFile "${APP_32_NAME}"
++      StrCpy $webPackageExpectedHash "${APP_32_HASH}"
++    !endif
++    StrCpy $4 "$packageFile"
++    StrCpy $packageFile "$EXEDIR/$packageFile"
++    StrCpy $isPackageFileExplicitlySpecified "false"
++  ${else}
++    StrCpy $isPackageFileExplicitlySpecified "true"
++    StrCpy $webPackageExpectedHash ""
++  ${endIf}
++
++  ${if} $isPackageFileExplicitlySpecified == "true"
++    ${if} ${FileExists} "$packageFile"
++      !ifmacrodef customWebPackageAcquireEnd
++        !insertmacro customWebPackageAcquireEnd "explicit"
++      !endif
++      Goto LobsterWebPackageReady
++    ${endif}
++  ${else}
++    # sibling package next to the installer (channel co-download layout)
++    ${if} ${FileExists} "$packageFile"
++      ${StdUtils.HashFile} $3 "SHA2-512" "$packageFile"
++      ${if} $3 == $webPackageExpectedHash
++        !ifmacrodef customWebPackageAcquireEnd
++          !insertmacro customWebPackageAcquireEnd "sibling"
++        !endif
++        Goto LobsterWebPackageReady
++      ${else}
++        # /SD keeps a stale sibling package from blocking silent installs
++        MessageBox MB_OK "Package file $4 found locally, but checksum doesn't match ${U+2014} expected $webPackageExpectedHash, actual $3.$\r$\nLocal file is ignored and package will be downloaded from Internet." /SD IDOK
++      ${endIf}
++    ${endIf}
++
++    # cached payload from a previous install or attempt: the hash acts as the
++    # version gate (the store file name is version-less), and a match makes a
++    # channel retry install with zero download
++    ${if} $webPackageExpectedHash != ""
++      ${if} $installMode == "all"
++        SetShellVarContext current
++      ${endif}
++      ${if} ${FileExists} "$LOCALAPPDATA\${APP_PACKAGE_STORE_FILE}"
++        ${StdUtils.HashFile} $3 "SHA2-512" "$LOCALAPPDATA\${APP_PACKAGE_STORE_FILE}"
++        ${if} $3 == $webPackageExpectedHash
++          StrCpy $packageFile "$LOCALAPPDATA\${APP_PACKAGE_STORE_FILE}"
++          ${if} $installMode == "all"
++            SetShellVarContext all
++          ${endif}
++          !ifmacrodef customWebPackageAcquireEnd
++            !insertmacro customWebPackageAcquireEnd "cache"
++          !endif
++          Goto LobsterWebPackageReady
++        ${endif}
++      ${endif}
++      ${if} $installMode == "all"
++        SetShellVarContext all
++      ${endif}
++    ${endif}
++  ${endIf}
++
++  !insertmacro downloadApplicationFiles
++  !ifmacrodef customWebPackageAcquireEnd
++    !insertmacro customWebPackageAcquireEnd "download"
++  !endif
++
++  LobsterWebPackageReady:
++!macroend
+diff --git a/node_modules/app-builder-lib/templates/nsis/installSection.nsh b/node_modules/app-builder-lib/templates/nsis/installSection.nsh
+index 053772f..adc8ad4 100644
+--- a/node_modules/app-builder-lib/templates/nsis/installSection.nsh
++++ b/node_modules/app-builder-lib/templates/nsis/installSection.nsh
+@@ -11,6 +11,28 @@ StrCpy $appExe "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+ # must be called before uninstallOldVersion
+ !insertmacro setLinkVars
+ 
++# Preserve the user's shortcut choices while the old app executable still
++# exists. A custom update fast path may rename $INSTDIR in CHECK_APP_RUNNING.
++Var /GLOBAL keepShortcuts
++StrCpy $keepShortcuts "false"
++!insertMacro setIsTryToKeepShortcuts
++${if} $isTryToKeepShortcuts == "true"
++  ReadRegStr $R1 SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" KeepShortcuts
++
++  ${if} $R1 == "true"
++  ${andIf} ${FileExists} "$appExe"
++    StrCpy $keepShortcuts "true"
++  ${endIf}
++${endif}
++
++!ifdef APP_PACKAGE_URL
++  # Acquire (and verify) the web payload before CHECK_APP_RUNNING and
++  # uninstallOldVersion run anything destructive: a failed download must
++  # leave the previous installation fully intact instead of stranding the
++  # user with the old app uninstalled and the new one never downloaded.
++  !insertmacro acquireWebPackage
++!endif
++
+ !ifdef ONE_CLICK
+   !ifdef HEADER_ICO
+     File /oname=$PLUGINSDIR\installerHeaderico.ico "${HEADER_ICO}"
+@@ -37,26 +59,26 @@ StrCpy $appExe "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+   ${endif}
+ !endif
+ 
+-Var /GLOBAL keepShortcuts
+-StrCpy $keepShortcuts "false"
+-!insertMacro setIsTryToKeepShortcuts
+-${if} $isTryToKeepShortcuts == "true"
+-  ReadRegStr $R1 SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" KeepShortcuts
+-
+-  ${if} $R1 == "true"
+-  ${andIf} ${FileExists} "$appExe"
+-    StrCpy $keepShortcuts "true"
+-  ${endIf}
+-${endif}
+-
+-!insertmacro uninstallOldVersion SHELL_CONTEXT
+-!insertmacro handleUninstallResult SHELL_CONTEXT
++!ifmacrodef customUninstallOldVersion
++  !insertmacro customUninstallOldVersion SHELL_CONTEXT
++!else
++  !insertmacro uninstallOldVersion SHELL_CONTEXT
++  !insertmacro handleUninstallResult SHELL_CONTEXT
++!endif
+ 
+ ${if} $installMode == "all"
+-  !insertmacro uninstallOldVersion HKEY_CURRENT_USER
+-  !insertmacro handleUninstallResult HKEY_CURRENT_USER
++  !ifmacrodef customUninstallOldVersion
++    !insertmacro customUninstallOldVersion HKEY_CURRENT_USER
++  !else
++    !insertmacro uninstallOldVersion HKEY_CURRENT_USER
++    !insertmacro handleUninstallResult HKEY_CURRENT_USER
++  !endif
+ ${endIf}
+ 
++!ifmacrodef customAfterUninstallOldVersions
++  !insertmacro customAfterUninstallOldVersions
++!endif
++
+ SetOutPath $INSTDIR
+ 
+ !ifdef UNINSTALLER_ICON
+@@ -64,6 +86,9 @@ SetOutPath $INSTDIR
+ !endif
+ 
+ !insertmacro installApplicationFiles
++!ifmacrodef customBeforeRegistryAddInstallInfo
++  !insertmacro customBeforeRegistryAddInstallInfo
++!endif
+ !insertmacro registryAddInstallInfo
+ !insertmacro addStartMenuLink $keepShortcuts
+ !insertmacro addDesktopLink $keepShortcuts
+@@ -102,9 +127,13 @@ ${endIf}
+   !endif
+   !insertmacro quitSuccess
+ !else
+-  # for assisted installer run only if silent, because assisted installer has run after finish option
++  # for assisted installer run only if silent or updated, because otherwise the
++  # assisted installer has its run-after-finish option; in updated mode the
++  # finish page is skipped, so this is what relaunches the app.
+   ${if} ${isForceRun}
+-  ${andIf} ${Silent}
+-    !insertmacro doStartApp
++    ${if} ${Silent}
++    ${orIf} ${isUpdated}
++      !insertmacro doStartApp
++    ${endIf}
+   ${endIf}
+ !endif
+diff --git a/node_modules/app-builder-lib/templates/nsis/installer.nsi b/node_modules/app-builder-lib/templates/nsis/installer.nsi
+index 1b88a9d..515662e 100644
+--- a/node_modules/app-builder-lib/templates/nsis/installer.nsi
++++ b/node_modules/app-builder-lib/templates/nsis/installer.nsi
+@@ -25,6 +25,11 @@ Var oldMenuDirectory
+ !else
+   Var appExe
+   Var launchLink
++  # Where the embedded app package is materialized and unpacked before the
++  # copy into $INSTDIR. Defaults to $PLUGINSDIR (see extractAppPackage.nsh);
++  # a customSelectAppPackageStagingDir macro may repoint it at a directory on
++  # the install drive when the temp drive cannot hold the extracted payload.
++  Var appPackageStagingDir
+ !endif
+ 
+ !ifdef ONE_CLICK
+@@ -33,8 +38,24 @@ Var oldMenuDirectory
+   !include "assistedInstaller.nsh"
+ !endif
+ 
++!ifmacrodef customInstallerUserAbort
++  !define MUI_CUSTOMFUNCTION_ABORT lobsterCustomInstallerUserAbort
++!endif
++
+ !insertmacro addLangs
+ 
++!ifmacrodef customInstallerUserAbort
++  Function lobsterCustomInstallerUserAbort
++    !insertmacro customInstallerUserAbort
++  FunctionEnd
++!endif
++
++!ifmacrodef customInstallerFailed
++  Function .onInstFailed
++    !insertmacro customInstallerFailed
++  FunctionEnd
++!endif
++
+ !ifmacrodef customHeader
+   !insertmacro customHeader
+ !endif
+diff --git a/node_modules/app-builder-lib/templates/nsis/multiUser.nsh b/node_modules/app-builder-lib/templates/nsis/multiUser.nsh
+index 3de631b..a8d88cb 100644
+--- a/node_modules/app-builder-lib/templates/nsis/multiUser.nsh
++++ b/node_modules/app-builder-lib/templates/nsis/multiUser.nsh
+@@ -27,16 +27,16 @@ Var installMode
+     ${if} $perUserInstallationFolder != ""
+       StrCpy $INSTDIR $perUserInstallationFolder
+     ${else}
++      # Upstream queried SHGetKnownFolderPath(FOLDERID_UserProgramFiles) here
++      # and read the returned string with a fixed-size System struct read of
++      # NSIS_MAX_STRLEN wide chars: with the 8192-char build that reads 16KB
++      # out of a ~100-byte CoTaskMem block and faults as soon as the next page
++      # is unmapped -- the System.dll+0x1581 crash on fresh per-user installs
++      # (electron-builder#7921, never fixed upstream). The value was discarded
++      # anyway because System::Store L restored $0 afterwards. Use the default
++      # location directly: identical behaviour, no out-of-bounds read, and no
++      # leaked NSIS stack entry.
+       StrCpy $0 "$LocalAppData\Programs"
+-      System::Store S
+-      # Win7 has a per-user programfiles known folder and this can be a non-default location
+-      System::Call 'SHELL32::SHGetKnownFolderPath(g "${FOLDERID_UserProgramFiles}", i ${KF_FLAG_CREATE}, p 0, *p .r2)i.r1'
+-      ${If} $1 == 0
+-        System::Call '*$2(&w${NSIS_MAX_STRLEN} .s)'
+-        StrCpy $0 $1
+-        System::Call 'OLE32::CoTaskMemFree(p r2)'
+-      ${endif}
+-      System::Store L
+       StrCpy $INSTDIR "$0\${APP_FILENAME}"
+     ${endif}
+ 
+diff --git a/node_modules/app-builder-lib/templates/nsis/multiUserUi.nsh b/node_modules/app-builder-lib/templates/nsis/multiUserUi.nsh
+index 52a83df..0500e4e 100644
+--- a/node_modules/app-builder-lib/templates/nsis/multiUserUi.nsh
++++ b/node_modules/app-builder-lib/templates/nsis/multiUserUi.nsh
+@@ -36,6 +36,28 @@ Var isForceCurrentInstall
+ 			Abort
+ 		${endIf}
+ 
++		!ifndef BUILD_UNINSTALLER
++			# In-app update (--updated): reuse the mode of the existing installation
++			# instead of asking again -- the user already chose at first install.
++			# With both or neither modes present, fall through to the normal page.
++			${if} ${isUpdated}
++				${if} $hasPerUserInstallation == "1"
++				${andIf} $hasPerMachineInstallation == "0"
++					!insertmacro setInstallModePerUser
++					Abort
++				${elseIf} $hasPerUserInstallation == "0"
++				${andIf} $hasPerMachineInstallation == "1"
++					${IfNot} ${UAC_IsAdmin}
++						ShowWindow $HWNDPARENT ${SW_HIDE}
++						!insertmacro UAC_RunElevated
++						Quit
++					${endIf}
++					!insertmacro setInstallModePerAllUsers
++					Abort
++				${endIf}
++			${endif}
++		!endif
++
+ 		StrCpy $isForceMachineInstall "0"
+ 		StrCpy $isForceCurrentInstall "0"
+ 		!ifmacrodef customInstallmode

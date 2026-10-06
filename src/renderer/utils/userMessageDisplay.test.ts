@@ -4,8 +4,8 @@ import { parseUserMessageForDisplay } from './userMessageDisplay';
 
 // ─── Helpers ────────────────────────────────────────────────
 
-const WIN_INBOUND = String.raw`C:\Users\yangwn\AppData\Roaming\LobsterAI\openclaw\state\media\inbound`;
-const MAC_INBOUND = '/Users/yangwn/Library/Application Support/LobsterAI/openclaw/state/media/inbound';
+const WIN_INBOUND = String.raw`C:\Users\zhangsan\AppData\Roaming\LobsterAI\openclaw\state\media\inbound`;
+const MAC_INBOUND = '/Users/zhangsan/Library/Application Support/LobsterAI/openclaw/state/media/inbound';
 
 const fileImg = (dir: string, name: string) => `${dir}${dir.includes('\\') ? '\\' : '/'}${name}`;
 
@@ -39,7 +39,7 @@ describe('passthrough (no transformation)', () => {
   });
 
   test('file path NOT in inbound directory unchanged', () => {
-    const msg = String.raw`C:\Users\yangwn\Desktop\screenshot.jpg`;
+    const msg = String.raw`C:\Users\zhangsan\Desktop\screenshot.jpg`;
     expect(parseUserMessageForDisplay(msg)).toBe(msg);
   });
 });
@@ -233,7 +233,7 @@ describe('Pattern B: 飞书 (Feishu) — full content', () => {
     const input = [
       `[media attached: ${imgPath} (image/jpeg) | ${imgPath}]`,
       'To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths - they are blocked for security. Keep caption in the text body.',
-      'System: [2026-04-27 15:54:25 GMT+8] Feishu[41f9d3b5] DM | ou_a17d2d2850e3d7a4cb4db0eeaf9cebd3 [msg:om_x100, image, 1 attachment(s)]',
+      'System: [2026-04-27 15:54:25 GMT+8] Feishu[bot-1] DM | ou_zhangsan [msg:om_x100, image, 1 attachment(s)]',
       '',
       imgPath,
     ].join('\n');

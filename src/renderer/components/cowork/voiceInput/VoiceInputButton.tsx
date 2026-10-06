@@ -42,7 +42,7 @@ const VoiceInputButton: React.FC<VoiceInputButtonProps> = ({
     : unavailable
         ? 'cursor-not-allowed text-secondary/40 opacity-60'
         : isQuotaExhausted
-          ? 'text-secondary/30 hover:bg-surface-raised'
+          ? 'text-secondary hover:bg-surface-raised hover:text-foreground'
         : loginRequired
           ? 'text-secondary hover:bg-surface-raised hover:text-foreground'
         : 'text-secondary hover:bg-surface-raised hover:text-foreground';

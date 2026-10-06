@@ -30,11 +30,14 @@ const dotClasses: Record<TaskDisplayStatus, string> = {
 interface TaskStatusChipProps {
   status: TaskDisplayStatus;
   className?: string;
+  /** Optional hover tooltip, e.g. "Last run · 2026/7/17 15:07". */
+  title?: string;
 }
 
 /** Compact status pill: spinner while running, colored dot otherwise. */
-const TaskStatusChip: React.FC<TaskStatusChipProps> = ({ status, className }) => (
+const TaskStatusChip: React.FC<TaskStatusChipProps> = ({ status, className, title }) => (
   <span
+    title={title}
     className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${chipClasses[status]} ${className ?? ''}`}
   >
     {status === TaskDisplayStatus.Running ? (

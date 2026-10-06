@@ -4,15 +4,155 @@
 
 import { spawn, ChildProcess } from 'child_process';
 import { existsSync, mkdirSync, accessSync, constants } from 'fs';
+import { randomBytes } from 'crypto';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { chromium } from 'playwright-core';
 import { BrowserConfig } from '../config';
 
 export interface BrowserInstance {
-  process: ChildProcess;
-  pid: number;
+  /** Child process handle; null for adopted instances not spawned by this server */
+  process: ChildProcess | null;
+  /** Process id; null when unknown (adopted instances) */
+  pid: number | null;
   cdpPort: number;
   startTime: number;
+  /** True when the instance was discovered on the CDP port instead of spawned */
+  adopted: boolean;
+}
+
+/**
+ * Thrown when the CDP port is already owned by another browser instance.
+ * Callers should adopt the existing instance instead of spawning a new one.
+ */
+export class CdpPortInUseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CdpPortInUseError';
+  }
+}
+
+/**
+ * Probe whether a CDP HTTP endpoint answers on the given port.
+ */
+export async function isCdpEndpointReachable(port: number, timeoutMs: number = 1500): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Wrap an already-running CDP browser (e.g. a Chrome that outlived a bridge
+ * server restart) as a managed instance without spawning a duplicate.
+ */
+export function adoptBrowser(cdpPort: number, pid: number | null = null): BrowserInstance {
+  return {
+    process: null,
+    pid,
+    cdpPort,
+    startTime: Date.now(),
+    adopted: true
+  };
+}
+
+export interface CdpEndpointProbe {
+  /** Whether a Playwright automation client can actually attach */
+  attachable: boolean;
+  /** OS pid of the owning browser process, when the endpoint reports it */
+  browserPid: number | null;
+}
+
+/**
+ * Deep-probe an existing CDP endpoint. /json/version reachability is not
+ * enough to adopt a browser: a wedged Chrome can answer HTTP while rejecting
+ * every automation client, which would poison all subsequent connects.
+ */
+export async function probeCdpEndpoint(cdpPort: number): Promise<CdpEndpointProbe> {
+  let browser;
+  try {
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`, { timeout: 5000 });
+  } catch {
+    return { attachable: false, browserPid: null };
+  }
+
+  try {
+    const session = await browser.newBrowserCDPSession();
+    const info = await session.send('SystemInfo.getProcessInfo');
+    const browserProcess = info.processInfo.find(item => item.type === 'browser');
+    return {
+      attachable: true,
+      browserPid: typeof browserProcess?.id === 'number' ? browserProcess.id : null
+    };
+  } catch {
+    // Attached but could not read SystemInfo — still adoptable.
+    return { attachable: true, browserPid: null };
+  } finally {
+    try {
+      await browser.close();
+    } catch {
+      // Disconnect failures are irrelevant here.
+    }
+  }
+}
+
+/**
+ * Best-effort shutdown of a CDP browser that answers HTTP but rejects
+ * Playwright attachment. Uses a raw WebSocket so the shutdown does not depend
+ * on the attach handshake that already failed. Returns true when the endpoint
+ * is confirmed gone.
+ */
+export async function closeUnattachableCdpBrowser(cdpPort: number): Promise<boolean> {
+  if (typeof WebSocket === 'undefined') {
+    console.warn('[Browser] Global WebSocket unavailable; cannot close unattachable browser via CDP');
+    return false;
+  }
+
+  let wsUrl: string | undefined;
+  try {
+    const response = await fetch(`http://127.0.0.1:${cdpPort}/json/version`, {
+      signal: AbortSignal.timeout(2000)
+    });
+    const data = await response.json() as { webSocketDebuggerUrl?: string };
+    wsUrl = data.webSocketDebuggerUrl;
+  } catch {
+    // Endpoint died in the meantime — treat as closed below.
+  }
+
+  if (wsUrl) {
+    await new Promise<void>(resolve => {
+      const socket = new WebSocket(wsUrl as string);
+      const timer = setTimeout(() => {
+        try {
+          socket.close();
+        } catch {
+          // Ignore teardown failures on timeout.
+        }
+        resolve();
+      }, 4000);
+      const settle = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      socket.onopen = () => socket.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+      // The browser dropping the socket after Browser.close is the success signal.
+      socket.onclose = settle;
+      socket.onerror = settle;
+    });
+  }
+
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (!(await isCdpEndpointReachable(cdpPort, 800))) {
+      return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  return false;
 }
 
 /**
@@ -120,6 +260,60 @@ function resolveHeadlessMode(configHeadless: boolean): boolean {
 }
 
 /**
+ * Confirm the CDP endpoint we just probed belongs to the Chrome we spawned.
+ * waitForCDP only checks that SOMETHING answers on the port; if our spawn lost
+ * a bind race, the answer comes from the winner and our Chrome would linger as
+ * an unmanaged headed window. A pid mismatch means exactly that.
+ */
+async function verifySpawnOwnsCdpPort(cdpPort: number, browserProcess: ChildProcess): Promise<void> {
+  const probe = await probeCdpEndpoint(cdpPort);
+  const ownerPid = probe.browserPid;
+
+  if (ownerPid === null) {
+    // Could not determine the owner (endpoint died mid-check or SystemInfo is
+    // unavailable). The pre-spawn probe already rejected occupied ports, so
+    // fail open rather than killing a legitimately spawned browser.
+    console.warn(`[Browser] Could not verify CDP port ${cdpPort} owner; assuming this spawn owns it`);
+    return;
+  }
+
+  if (ownerPid === browserProcess.pid) {
+    return;
+  }
+
+  throw new CdpPortInUseError(
+    `CDP port ${cdpPort} is served by another browser process ` +
+    `(owner pid=${ownerPid}, spawned pid=${browserProcess.pid ?? 'unknown'})`
+  );
+}
+
+/**
+ * SIGTERM a spawned Chrome and escalate to SIGKILL if it does not exit in time.
+ */
+async function terminateSpawnedProcess(browserProcess: ChildProcess): Promise<void> {
+  if (browserProcess.exitCode !== null || browserProcess.signalCode !== null) {
+    return;
+  }
+
+  browserProcess.kill('SIGTERM');
+
+  await new Promise<void>(resolve => {
+    const timeout = setTimeout(() => {
+      if (browserProcess.exitCode === null && browserProcess.signalCode === null) {
+        console.log(`[Browser] Force killing browser (PID: ${browserProcess.pid ?? 'unknown'})`);
+        browserProcess.kill('SIGKILL');
+      }
+      resolve();
+    }, 5000);
+
+    browserProcess.once('exit', () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+  });
+}
+
+/**
  * Wait for CDP port to become available
  */
 async function waitForCDP(port: number, browserProcess: ChildProcess, timeoutMs: number = 10000): Promise<void> {
@@ -161,11 +355,20 @@ async function waitForCDP(port: number, browserProcess: ChildProcess, timeoutMs:
 export async function launchBrowser(config: BrowserConfig): Promise<BrowserInstance> {
   const chromePath = config.chromePath || getChromePath();
   const cdpPort = config.cdpPort;
+
+  // Refuse to spawn when the CDP port already has a live endpoint: the new
+  // Chrome could never bind it and would linger as an unmanaged headed window.
+  // Callers catch CdpPortInUseError and adopt the existing instance instead.
+  if (await isCdpEndpointReachable(cdpPort)) {
+    throw new CdpPortInUseError(`CDP port ${cdpPort} already has a reachable browser instance`);
+  }
+
   const runtimeChromeFlags = resolveRuntimeChromeFlags(config.chromeFlags || []);
   const runtimeHeadless = resolveHeadlessMode(config.headless);
 
   // Create a temporary user data directory if not provided
-  const userDataDir = config.userDataDir || join(tmpdir(), `chrome-cdp-${Date.now()}`);
+  const userDataDir = config.userDataDir
+    || join(tmpdir(), `chrome-cdp-${Date.now()}-${randomBytes(4).toString('hex')}`);
   if (!existsSync(userDataDir)) {
     mkdirSync(userDataDir, { recursive: true });
   }
@@ -224,12 +427,16 @@ export async function launchBrowser(config: BrowserConfig): Promise<BrowserInsta
 
   console.log(`[Browser] Chrome started with PID: ${browserProcess.pid}`);
 
-  // Wait for CDP to be ready
+  // Wait for CDP to be ready, then confirm the endpoint belongs to this spawn.
   try {
     await waitForCDP(cdpPort, browserProcess, 20000); // Increased timeout to 20 seconds
+    await verifySpawnOwnsCdpPort(cdpPort, browserProcess);
     console.log(`[Browser] CDP ready on port ${cdpPort}`);
   } catch (error) {
-    browserProcess.kill();
+    await terminateSpawnedProcess(browserProcess);
+    if (error instanceof CdpPortInUseError) {
+      throw error;
+    }
     const baseMessage = error instanceof Error ? error.message : String(error);
     if (recentStderr.length > 0) {
       const tail = recentStderr.slice(-5).join(' | ');
@@ -242,36 +449,96 @@ export async function launchBrowser(config: BrowserConfig): Promise<BrowserInsta
     process: browserProcess,
     pid: browserProcess.pid,
     cdpPort,
-    startTime: Date.now()
+    startTime: Date.now(),
+    adopted: false
   };
+}
+
+/**
+ * Close an adopted browser we have no process handle for by asking Chrome to
+ * shut itself down over CDP.
+ */
+async function closeAdoptedBrowser(cdpPort: number): Promise<void> {
+  console.log(`[Browser] Closing adopted browser via CDP (port: ${cdpPort})`);
+
+  let browser;
+  try {
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`, { timeout: 5000 });
+  } catch {
+    console.log('[Browser] Adopted browser CDP is unreachable, nothing to close');
+    return;
+  }
+
+  try {
+    const session = await browser.newBrowserCDPSession();
+    await session.send('Browser.close');
+  } catch (error) {
+    // Browser.close tears the CDP connection down while the browser exits,
+    // which can surface as a send error; log it for diagnostics only.
+    console.warn(`[Browser] CDP Browser.close reported: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    try {
+      await browser.close();
+    } catch {
+      // Connection is already gone when the browser exited.
+    }
+  }
+
+  console.log('[Browser] Adopted browser closed');
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function terminateProcessByPid(pid: number): Promise<void> {
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    return;
+  }
+
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (!isPidAlive(pid)) {
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+
+  console.log(`[Browser] Force killing browser (PID: ${pid})`);
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // Already gone.
+  }
 }
 
 /**
  * Close browser instance
  */
 export async function closeBrowser(instance: BrowserInstance): Promise<void> {
-  if (instance.process && !instance.process.killed) {
-    console.log(`[Browser] Closing browser (PID: ${instance.pid})`);
-    instance.process.kill('SIGTERM');
-
-    // Wait for graceful shutdown
-    await new Promise<void>(resolve => {
-      const timeout = setTimeout(() => {
-        if (!instance.process.killed) {
-          console.log(`[Browser] Force killing browser (PID: ${instance.pid})`);
-          instance.process.kill('SIGKILL');
-        }
-        resolve();
-      }, 5000);
-
-      instance.process.on('exit', () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-    });
-
-    console.log(`[Browser] Browser closed`);
+  if (!instance.process) {
+    if (!instance.adopted) {
+      return;
+    }
+    await closeAdoptedBrowser(instance.cdpPort);
+    if (instance.pid !== null && isPidAlive(instance.pid)) {
+      // CDP close did not take effect; escalate via signals since we know the pid.
+      console.warn(`[Browser] Adopted browser (PID: ${instance.pid}) survived CDP close, terminating by signal`);
+      await terminateProcessByPid(instance.pid);
+    }
+    return;
   }
+
+  console.log(`[Browser] Closing browser (PID: ${instance.pid})`);
+  await terminateSpawnedProcess(instance.process);
+  console.log(`[Browser] Browser closed`);
 }
 
 /**
@@ -281,5 +548,9 @@ export function isBrowserRunning(instance: BrowserInstance | null): boolean {
   if (!instance) {
     return false;
   }
-  return instance.process && !instance.process.killed;
+  if (!instance.process) {
+    // Adopted instances have no process handle; CDP reachability decides liveness.
+    return instance.adopted;
+  }
+  return !instance.process.killed;
 }

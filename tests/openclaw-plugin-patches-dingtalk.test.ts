@@ -6,6 +6,7 @@ import { describe, expect, test } from 'vitest';
 
 const {
   findDingtalkDistMessageHandlers,
+  findDingtalkDistRuntimeBundles,
   patchDingtalk,
 } = require('../scripts/openclaw-plugin-patches/dingtalk.cjs');
 
@@ -52,6 +53,58 @@ describe('openclaw DingTalk plugin patches', () => {
     expect(findDingtalkDistMessageHandlers(pluginDir)).toEqual([
       path.join(distDir, 'message-handler-abc123.mjs'),
     ]);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  test('finds hashed dist runtime bundles', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dingtalk-plugin-patch-'));
+    const pluginDir = path.join(tempDir, 'dingtalk-connector');
+    const distDir = path.join(pluginDir, 'dist');
+    fs.mkdirSync(distDir, { recursive: true });
+    fs.writeFileSync(path.join(distDir, 'runtime-abc123.mjs'), 'export {};\n');
+    fs.writeFileSync(path.join(distDir, 'runtime-abc123.d.mts'), 'export {};\n');
+    fs.writeFileSync(path.join(distDir, 'message-handler-abc123.mjs'), 'export {};\n');
+
+    expect(findDingtalkDistRuntimeBundles(pluginDir)).toEqual([
+      path.join(distDir, 'runtime-abc123.mjs'),
+    ]);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  test('propagates failed outbound text sends from source and dist channel runtimes', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dingtalk-plugin-patch-'));
+    const pluginDir = path.join(tempDir, 'dingtalk-connector');
+    const sourceChannel = path.join(pluginDir, 'src', 'channel.ts');
+    const distRuntime = path.join(pluginDir, 'dist', 'runtime-test.mjs');
+    fs.mkdirSync(path.dirname(sourceChannel), { recursive: true });
+    fs.mkdirSync(path.dirname(distRuntime), { recursive: true });
+    const outboundSource = [
+      'const result = await sendTextToDingTalk({',
+      '  config: resolvedConfig,',
+      '  target: to,',
+      '  text,',
+      '  replyToId,',
+      '});',
+      'return {',
+      '  channel: CHANNEL_ID,',
+      '  messageId: result.processQueryKey ?? result.cardInstanceId ?? "unknown",',
+      '};',
+    ].join('\n');
+    fs.writeFileSync(sourceChannel, outboundSource);
+    fs.writeFileSync(distRuntime, outboundSource);
+
+    patchDingtalk({ runtimeExtensionsDir: tempDir, log: () => {} });
+    patchDingtalk({ runtimeExtensionsDir: tempDir, log: () => {} });
+
+    for (const patchedPath of [sourceChannel, distRuntime]) {
+      const patched = fs.readFileSync(patchedPath, 'utf-8');
+      expect(patched).toContain('dingtalk_outbound_error_propagation_patch');
+      expect(patched.match(/dingtalk_outbound_error_propagation_patch/g)).toHaveLength(1);
+      expect(patched).toContain("result.error || 'DingTalk outbound send failed'");
+      expect(patched.indexOf('if (!result.ok)')).toBeLessThan(patched.indexOf('return {'));
+    }
 
     fs.rmSync(tempDir, { recursive: true, force: true });
   });

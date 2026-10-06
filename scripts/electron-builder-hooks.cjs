@@ -1,13 +1,26 @@
 'use strict';
 
 const path = require('path');
-const { existsSync, readdirSync, statSync, mkdirSync, readFileSync, rmSync, cpSync, lstatSync } = require('fs');
+const { existsSync, readdirSync, statSync, mkdirSync, readFileSync, rmSync, cpSync, lstatSync, writeFileSync } = require('fs');
 const { spawnSync } = require('child_process');
 const asar = require('@electron/asar');
+const { Arch } = require('builder-util');
+const { OPENCLAW_BUNDLE_ASSET_TARGETS } = require('./openclaw-bundle-assets.cjs');
 const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-python-runtime.js');
 const { syncLocalOpenClawExtensions } = require('./sync-local-openclaw-extensions.cjs');
 const { packMultipleSources } = require('./pack-openclaw-tar.cjs');
-const { DIST_DIFFS_EXTENSION_DIR, DIST_EXTENSIONS_DIR, summarizeGatewayAsarEntries } = require('./openclaw-runtime-packaging.cjs');
+const {
+  DIST_DIFFS_EXTENSION_DIR,
+  DIST_EXTENSIONS_DIR,
+  resolvePreinstalledPluginDir,
+  summarizeGatewayAsarEntries,
+  verifyRuntimeBundledPlugin,
+} = require('./openclaw-runtime-packaging.cjs');
+const { collectHostPeerLeftovers, measureDirectorySize } = require('./openclaw-plugin-host-peer-leftovers.cjs');
+const { verifyOpenClawPluginSdkBridge } = require('./openclaw-plugin-sdk-bridge.cjs');
+const { createOpenClawWindowsPayload } = require('./openclaw-windows-payload.cjs');
+const { pruneOpenClawMacPayload } = require('./openclaw-mac-payload.cjs');
+const { configureBetterSqlite3MacPayload } = require('./better-sqlite3-mac-payload.cjs');
 
 function isWindowsTarget(context) {
   return context?.electronPlatformName === 'win32';
@@ -107,9 +120,11 @@ function verifyPreinstalledPlugins(runtimeRoot, buildHint) {
 
   for (const plugin of plugins) {
     if (!plugin.id) continue;
-    const pluginDir = path.join(extensionsDir, plugin.id);
+    const pluginDir = resolvePreinstalledPluginDir(runtimeRoot, plugin);
     if (!existsSync(pluginDir)) {
       missing.push(plugin.id);
+    } else {
+      verifyRuntimeBundledPlugin(runtimeRoot, plugin);
     }
   }
 
@@ -121,7 +136,51 @@ function verifyPreinstalledPlugins(runtimeRoot, buildHint) {
     );
   }
 
+  verifyNoHostPeerLeftovers(extensionsDir, plugins.filter(plugin => plugin.runtimeBundled !== true));
+  verifyNoHostPeerLeftovers(
+    path.join(runtimeRoot, DIST_EXTENSIONS_DIR),
+    plugins.filter(plugin => plugin.runtimeBundled === true),
+  );
+
   console.log(`[electron-builder-hooks] Verified ${plugins.length} preinstalled OpenClaw plugin(s).`);
+}
+
+// A plugin whose node_modules still carries the openclaw peer dependency tree
+// adds hundreds of MB to the installer (see openclaw-plugin-host-peer-leftovers.cjs).
+// openclaw:prune removes it; anything left here means the runtime was not
+// rebuilt through the normal chain, so fail instead of shipping it silently.
+const PLUGIN_SIZE_WARN_BYTES = 100 * 1024 * 1024;
+
+function verifyNoHostPeerLeftovers(extensionsDir, plugins) {
+  const problems = [];
+  for (const plugin of plugins) {
+    if (!plugin.id) continue;
+    const pluginDir = path.join(extensionsDir, plugin.id);
+    if (!existsSync(pluginDir)) continue;
+
+    const leftovers = collectHostPeerLeftovers(pluginDir);
+    if (leftovers.length > 0) {
+      const preview = leftovers.slice(0, 3).map((item) => item.location).join(', ');
+      const more = leftovers.length > 3 ? ` and ${leftovers.length - 3} more` : '';
+      problems.push(`${plugin.id}: ${preview}${more}`);
+    }
+
+    const sizeBytes = measureDirectorySize(pluginDir);
+    if (sizeBytes > PLUGIN_SIZE_WARN_BYTES) {
+      console.warn(
+        `[electron-builder-hooks] Preinstalled OpenClaw plugin ${plugin.id} is `
+        + `${(sizeBytes / 1024 / 1024).toFixed(1)} MB; check its node_modules before shipping.`,
+      );
+    }
+  }
+
+  if (problems.length > 0) {
+    throw new Error(
+      '[electron-builder-hooks] Preinstalled OpenClaw plugins still contain openclaw peer dependency trees: '
+      + problems.join('; ')
+      + '. Run `npm run openclaw:prune`, or delete vendor/openclaw-plugins/<id> and re-run `npm run openclaw:plugins`.',
+    );
+  }
 }
 
 function hasCompiledLocalExtension(runtimeRoot, extensionId) {
@@ -161,7 +220,7 @@ function precompileLocalExtensions(runtimeRoot, buildHint) {
 }
 
 function ensureBundledLocalExtensions(runtimeRoot, buildHint) {
-  const requiredLocalExtensions = ['mcp-bridge', 'ask-user-question', 'lobster-media-generation'];
+  const requiredLocalExtensions = ['mcp-bridge', 'ask-user-question', 'lobster-media-generation', 'lobster-decision'];
   const missingCompiledExtensions = requiredLocalExtensions.filter(
     (extensionId) => !hasCompiledLocalExtension(runtimeRoot, extensionId),
   );
@@ -197,6 +256,11 @@ function ensureBundledOpenClawRuntime(context) {
 
   const requiredExternalPaths = [
     path.join(runtimeRoot, 'node_modules'),
+    path.join(runtimeRoot, 'openclaw-startup-state-migration.mjs'),
+    path.join(runtimeRoot, 'openclaw-gateway-repair.mjs'),
+    path.join(runtimeRoot, 'lobsterai-repair-plugins.json'),
+    path.join(runtimeRoot, 'openclaw-xai-auth-store.mjs'),
+    path.join(runtimeRoot, 'openclaw-startup-compat.mjs'),
   ];
   const missingExternal = requiredExternalPaths.filter((candidate) => !existsSync(candidate));
   if (missingExternal.length > 0) {
@@ -209,6 +273,7 @@ function ensureBundledOpenClawRuntime(context) {
 
   // Verify preinstalled plugins are present in the runtime extensions directory
   verifyPreinstalledPlugins(runtimeRoot, buildHint);
+  verifyOpenClawPluginSdkBridge(runtimeRoot);
 
   // Verify gateway-bundle.mjs exists and is reasonably sized.
   // Without it, Windows first-launch falls back to loading ~1100 ESM modules
@@ -227,6 +292,17 @@ function ensureBundledOpenClawRuntime(context) {
       '[electron-builder-hooks] gateway-bundle.mjs is suspiciously small ('
       + gatewayBundleStat.size
       + ' bytes, expected ~27MB). Rebuild with: `npm run openclaw:bundle`.',
+    );
+  }
+
+  const missingBundleAssets = OPENCLAW_BUNDLE_ASSET_TARGETS
+    .map((target) => path.join(runtimeRoot, target.targetFile))
+    .filter((candidate) => !existsSync(candidate));
+  if (missingBundleAssets.length > 0) {
+    throw new Error(
+      '[electron-builder-hooks] Bundled OpenClaw runtime is missing gateway bundle assets: '
+      + missingBundleAssets.join(', ')
+      + '. Run `npm run openclaw:bundle` before packaging.',
     );
   }
 
@@ -522,7 +598,112 @@ function installSkillDependencies() {
   console.log(`[electron-builder-hooks] Skill dependencies: ${installedCount} installed, ${skippedCount} skipped, ${failedCount} failed`);
 }
 
+function directoryTotalFileBytes(rootDir) {
+  let total = 0;
+  const stack = [rootDir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    let entries;
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      try {
+        total += statSync(fullPath).size;
+      } catch {
+        // Unreadable entries are ignored; the result feeds an MB-granularity
+        // estimate that already carries an explicit safety margin.
+      }
+    }
+  }
+  return total;
+}
+
+/**
+ * Emit the build-time payload size metadata consumed by scripts/nsis-installer.nsh
+ * (via `!include "${PROJECT_DIR}\build-tar\win-installer-payload-size.nsh"`).
+ *
+ * The NSIS installer needs two numbers that only exist at packaging time:
+ *  - the exact byte size of win-resources.tar, so the installer can detect a
+ *    silently truncated Nsis7z staging tree before committing anything
+ *    (field case 2026-08-25: a full temp drive truncated the tar mid-file
+ *    while Nsis7z::Extract reported nothing);
+ *  - the total unpacked payload size in MB, so the installer can preflight
+ *    free space on the staging drive and relocate staging to the install
+ *    drive when the temp drive cannot hold the extracted tree.
+ *
+ * MB values are used for the space math because NSIS integers are 32-bit
+ * signed and the unpacked tree exceeds 2 GB in bytes. The exact tar byte
+ * size stays a string compared verbatim (System::Call reads the on-disk
+ * size as a 64-bit decimal string).
+ */
+function writeWindowsPayloadSizeFragment(context) {
+  const toMb = (bytes) => Math.ceil(bytes / (1024 * 1024));
+  const buildTarDir = path.join(__dirname, '..', 'build-tar');
+  const tarPath = path.join(buildTarDir, 'win-resources.tar');
+  if (!existsSync(tarPath)) {
+    throw new Error(
+      `[electron-builder-hooks] ${tarPath} is missing in afterPack; beforePack should have packed it. `
+      + 'The NSIS installer cannot be built without its payload size metadata.',
+    );
+  }
+  const tarBytes = statSync(tarPath).size;
+
+  // The copy electron-builder placed into the app directory (via
+  // win.extraResources) is what actually ships inside the 7z payload. A size
+  // mismatch here means the build machine itself truncated the copy — fail
+  // the build instead of baking the wrong "expected" size into the installer.
+  const packagedTarPath = path.join(context.appOutDir, 'resources', 'win-resources.tar');
+  if (!existsSync(packagedTarPath)) {
+    throw new Error(
+      `[electron-builder-hooks] ${packagedTarPath} is missing from the packed app; `
+      + 'win.extraResources should have copied build-tar/win-resources.tar there.',
+    );
+  }
+  const packagedTarBytes = statSync(packagedTarPath).size;
+  if (packagedTarBytes !== tarBytes) {
+    throw new Error(
+      `[electron-builder-hooks] win-resources.tar size mismatch: build-tar copy is ${tarBytes} bytes `
+      + `but the packed app copy is ${packagedTarBytes} bytes. The build machine likely ran out of disk `
+      + 'space while copying extraResources.',
+    );
+  }
+
+  const unpackedBytes = directoryTotalFileBytes(context.appOutDir);
+  if (tarBytes <= 0 || unpackedBytes < tarBytes) {
+    throw new Error(
+      `[electron-builder-hooks] Implausible payload sizes (tar=${tarBytes} bytes, unpacked=${unpackedBytes} bytes); `
+      + 'the app directory must contain at least the tar it ships.',
+    );
+  }
+
+  const fragmentPath = path.join(buildTarDir, 'win-installer-payload-size.nsh');
+  const fragment = [
+    '; Generated by scripts/electron-builder-hooks.cjs (afterPack). Do not edit or commit.',
+    '; Consumed by scripts/nsis-installer.nsh for staging preflight and payload validation.',
+    `!define LOBSTER_WIN_RESOURCES_TAR_BYTES "${tarBytes}"`,
+    `!define LOBSTER_WIN_RESOURCES_TAR_MB "${toMb(tarBytes)}"`,
+    `!define LOBSTER_PAYLOAD_UNPACKED_MB "${toMb(unpackedBytes)}"`,
+    '',
+  ].join('\r\n');
+  writeFileSync(fragmentPath, fragment);
+  console.log(
+    '[electron-builder-hooks] Wrote NSIS payload size fragment: '
+    + `tar=${tarBytes} bytes (${toMb(tarBytes)} MB), unpacked=${toMb(unpackedBytes)} MB -> ${fragmentPath}`,
+  );
+}
+
 async function beforePack(context) {
+  configureBetterSqlite3MacPayload(context);
   ensureBundledOpenClawRuntime(context);
   // Install skill dependencies first (for all platforms)
   installSkillDependencies();
@@ -536,11 +717,13 @@ async function beforePack(context) {
     mkdirSync(buildTarDir, { recursive: true });
 
     const outputTar = path.join(buildTarDir, 'win-resources.tar');
+    const runtimeRoot = path.join(__dirname, '..', 'vendor', 'openclaw-runtime', 'current');
     const sources = [
       {
         label: 'OpenClaw runtime',
-        dir: path.join(__dirname, '..', 'vendor', 'openclaw-runtime', 'current'),
+        dir: runtimeRoot,
         prefix: 'cfmind',
+        ...createOpenClawWindowsPayload(runtimeRoot, resolveOpenClawRuntimeTargetId(context)),
       },
       {
         label: 'SKILLs',
@@ -587,11 +770,25 @@ async function beforePack(context) {
 }
 
 async function afterPack(context) {
+  if (isWindowsTarget(context)) {
+    // afterPack runs after extraResources are in place and before the NSIS
+    // targets archive appOutDir, so the sizes measured here are exactly what
+    // the installer will stage at install time.
+    writeWindowsPayloadSizeFragment(context);
+  }
+
   if (isMacTarget(context)) {
     const appName = context.packager.appInfo.productFilename;
     const appPath = path.join(context.appOutDir, `${appName}.app`);
 
     if (existsSync(appPath)) {
+      // Universal merging requires matching native file paths in both inputs.
+      // Keep its existing layout, including the intermediate per-arch hooks.
+      const universalBuild = context.arch === Arch.universal
+        || context.packager.info?.options?.targets?.get(context.packager.platform)?.has(Arch.universal);
+      if (!universalBuild) {
+        pruneOpenClawMacPayload(appPath, resolveOpenClawRuntimeTargetId(context));
+      }
       // Remove all .bin directories (symlinks) before signing to prevent codesign failures
       removeAllBinDirsInCfmind(appPath);
       applyMacIconFix(appPath);
@@ -599,6 +796,11 @@ async function afterPack(context) {
       console.warn(`[electron-builder-hooks] App not found at ${appPath}, skipping icon fix`);
     }
   }
+
+  // Windows binaries need no extra handling here: with win.sign configured,
+  // electron-builder routes the app exe, uninstaller and installer through
+  // scripts/win-sign.cjs, and the NSIS target's CopyElevateHelper signs
+  // resources/elevate.exe itself (see app-builder-lib nsisUtil.js).
 }
 
 module.exports = {

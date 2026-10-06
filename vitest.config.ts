@@ -12,5 +12,8 @@ export default defineConfig({
   test: {
     include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
     environment: 'node',
+    // I/O-heavy suites (sqlite fixtures, tar archives) can exceed the 5s
+    // default on loaded CI runners; 20s keeps hung tests detectable.
+    testTimeout: 20000,
   },
 });

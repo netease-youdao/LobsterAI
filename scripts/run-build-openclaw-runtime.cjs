@@ -10,14 +10,26 @@ function commandExists(command) {
   return result.status === 0;
 }
 
+// WSL's bash launchers live either under WindowsApps (Store stub) or inside
+// the Windows directory itself (e.g. C:\Windows\System32\bash.exe). Git Bash
+// never installs into either location.
+function isWslBashPath(candidate) {
+  const lower = candidate.toLowerCase();
+  if (lower.includes('windowsapps')) return true;
+  const systemRoot = (process.env.SystemRoot || process.env.windir || 'C:\\Windows')
+    .replace(/[\\/]+$/, '')
+    .toLowerCase();
+  return lower.startsWith(`${systemRoot}\\`);
+}
+
 function resolveBashExecutable(rootDir) {
   if (process.platform !== 'win32') {
     return commandExists('bash') ? 'bash' : null;
   }
 
   // On Windows, we must use Git Bash (MSYS2), NOT WSL's bash.
-  // WSL bash (WindowsApps\bash.exe) runs in a separate Linux environment and
-  // cannot access Windows-installed node, npm, pnpm, etc.
+  // WSL bash runs in a separate Linux environment and cannot access
+  // Windows-installed node, npm, pnpm, etc.
 
   // 1. Check all bash locations, prefer Git Bash over WSL bash.
   try {
@@ -27,7 +39,7 @@ function resolveBashExecutable(rootDir) {
     });
     if (result.status === 0 && result.stdout) {
       const paths = result.stdout.trim().split(/\r?\n/).map(p => p.trim()).filter(Boolean);
-      const gitBash = paths.find(p => !p.toLowerCase().includes('windowsapps'));
+      const gitBash = paths.find(p => !isWslBashPath(p));
       if (gitBash) return gitBash;
     }
   } catch {}

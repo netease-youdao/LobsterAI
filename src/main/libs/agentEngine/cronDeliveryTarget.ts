@@ -3,6 +3,7 @@ export interface CronDeliveredTarget {
   channel: string;
   to: string;
   accountId?: string;
+  agentId?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -37,5 +38,16 @@ export function extractCronDeliveredTarget(payload: unknown): CronDeliveredTarge
       ? resolved.accountId.trim()
       : undefined;
 
-  return { channel, to, ...(accountId ? { accountId } : {}) };
+  const job = isRecord(payload.job) ? payload.job : null;
+  const jobAgentId = typeof job?.agentId === 'string' ? job.agentId.trim() : '';
+  const sessionKey = typeof payload.sessionKey === 'string' ? payload.sessionKey.trim() : '';
+  const sessionAgentId = sessionKey.match(/^agent:([^:]+):cron:/i)?.[1]?.trim() ?? '';
+  const agentId = jobAgentId || sessionAgentId || undefined;
+
+  return {
+    channel,
+    to,
+    ...(accountId ? { accountId } : {}),
+    ...(agentId ? { agentId } : {}),
+  };
 }

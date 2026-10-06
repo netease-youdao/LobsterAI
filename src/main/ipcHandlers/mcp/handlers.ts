@@ -1,11 +1,22 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { app, BrowserWindow, ipcMain, session } from 'electron';
 import https from 'https';
 
 import { McpIpcChannel } from '../../../shared/mcp/constants';
+import {
+  McpToolDiscoveryErrorCode,
+  type McpToolDiscoveryResult,
+} from '../../../shared/mcp/toolDiscovery';
 import { normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
 import { OpenClawConfigImpact } from '../../libs/openclawConfigImpact';
 import type { McpRuntime } from '../../mcp/mcpRuntime';
 import type { McpServerFormData } from '../../mcp/mcpStore';
+import {
+  discoverMcpTools,
+  McpToolDiscoveryError,
+  McpToolDiscoveryTimeoutMs,
+  normalizeMcpToolDiscoveryRequest,
+} from '../../mcp/mcpToolDiscovery';
 import { startQichachaMcpApiKeyLogin } from '../../mcp/qichachaMcpAuth';
 
 export interface McpHandlerDeps {
@@ -47,11 +58,15 @@ function syncMcpConfig(
 ): void {
   syncOpenClawConfig({
     reason,
-    expectedImpact: OpenClawConfigImpact.Restart,
+    expectedImpact: OpenClawConfigImpact.Sync,
   }).catch(err =>
     console.error('[MCP] config sync error:', err),
   );
 }
+
+// Remote MCP probes follow the app's proxy settings, like other main-process fetches.
+const sessionFetch: FetchLike = (url, init) =>
+  session.defaultSession.fetch(url instanceof URL ? url.href : url, init);
 
 function normalizeMcpServerInput(data: Partial<McpServerFormData>): Partial<McpServerFormData> {
   if (
@@ -151,6 +166,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         env?: Record<string, string>;
         url?: string;
         headers?: Record<string, string>;
+        toolFilter?: McpServerFormData['toolFilter'];
+        supportsParallelToolCalls?: boolean;
       },
     ) => {
       try {
@@ -186,6 +203,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         env?: Record<string, string>;
         url?: string;
         headers?: Record<string, string>;
+        toolFilter?: McpServerFormData['toolFilter'];
+        supportsParallelToolCalls?: boolean;
       },
     ) => {
       try {
@@ -310,6 +329,48 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       };
     }
   });
+
+  ipcMain.handle(
+    McpIpcChannel.ListTools,
+    async (_event, rawRequest: unknown): Promise<McpToolDiscoveryResult> => {
+      const request = normalizeMcpToolDiscoveryRequest(rawRequest);
+      if (typeof request === 'string') {
+        return { success: false, code: McpToolDiscoveryErrorCode.InvalidRequest, error: request };
+      }
+      const startedAt = Date.now();
+      const timeoutMs = request.transportType === 'stdio'
+        ? McpToolDiscoveryTimeoutMs.Stdio
+        : McpToolDiscoveryTimeoutMs.Remote;
+      try {
+        const launch = await getMcpRuntime().resolveToolDiscoveryLaunch(request);
+        const tools = await discoverMcpTools(launch, {
+          timeoutMs,
+          fetch: sessionFetch,
+          clientVersion: app.getVersion(),
+        });
+        const durationMs = Date.now() - startedAt;
+        console.log(`[MCP] listed ${tools.length} tool(s) from "${request.name}" (${request.transportType}) in ${durationMs}ms`);
+        return { success: true, tools, durationMs };
+      } catch (error) {
+        const failure = error instanceof McpToolDiscoveryError
+          ? error
+          : new McpToolDiscoveryError(
+            McpToolDiscoveryErrorCode.Failed,
+            error instanceof Error ? error.message : String(error),
+          );
+        // First line only: the rest is the server's stderr, which may echo secrets.
+        console.warn(
+          `[MCP] tool discovery failed for "${request.name}" (${request.transportType}, ${failure.code}) after ${Date.now() - startedAt}ms: ${failure.message.split('\n')[0].slice(0, 300)}`,
+        );
+        return {
+          success: false,
+          code: failure.code,
+          error: failure.message,
+          ...(failure.timeoutMs ? { timeoutMs: failure.timeoutMs } : {}),
+        };
+      }
+    },
+  );
 
   ipcMain.handle(McpIpcChannel.ConnectQichacha, async (event) => {
     try {

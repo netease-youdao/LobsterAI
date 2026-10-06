@@ -45,6 +45,47 @@ const PIP_RUNTIME_ARCHIVE_REL_PATH = path.join('tools', 'pip.pyz');
 const PIP_MODULE_MAIN_REL_PATH = path.join('Lib', 'site-packages', 'pip', '__main__.py');
 const PIP_MODULE_INIT_REL_PATH = path.join('Lib', 'site-packages', 'pip', '__init__.py');
 
+// Canonical pip shim/wrapper content. src/main/libs/pythonPipShim.ts keeps the
+// TypeScript copy used for user-runtime self-repair at app startup;
+// src/main/libs/pythonPipShim.test.ts asserts both copies stay byte-identical.
+const PIP_SHIM_OWNERSHIP_MARKER = 'pip.pyz';
+const PIP_SHIM_MAIN_TEMPLATE = [
+  'import pathlib',
+  'import runpy',
+  'import sys',
+  '',
+  'root = pathlib.Path(__file__).resolve().parents[3]',
+  "pip_pyz = root / 'tools' / 'pip.pyz'",
+  'if not pip_pyz.exists():',
+  "    raise SystemExit(f'pip runtime archive missing: {pip_pyz}')",
+  '',
+  '# Ensure pip imports resolve to the zipapp payload, not this shim package.',
+  'sys.path.insert(0, str(pip_pyz))',
+  'for name in list(sys.modules):',
+  "    if name == 'pip' or name.startswith('pip.'):",
+  '        del sys.modules[name]',
+  '',
+  "sys.argv[0] = 'pip'",
+  "runpy.run_module('pip', run_name='__main__', alter_sys=True)",
+  '',
+].join('\n');
+const PIP_SHIM_INIT_TEMPLATE = '';
+const PIP_WRAPPER_CMD_TEMPLATE = [
+  '@echo off',
+  'setlocal',
+  'set "PYROOT=%~dp0.."',
+  '"%PYROOT%\\python.exe" -m pip %*',
+  '',
+].join('\r\n');
+const PIP_WRAPPER_SH_TEMPLATE = [
+  '#!/usr/bin/env bash',
+  'set -euo pipefail',
+  'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+  'PYROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"',
+  'exec "${PYROOT}/python.exe" -m pip "$@"',
+  '',
+].join('\n');
+
 function hasPipCommand(rootDir) {
   return PIP_EXECUTABLE_CANDIDATES.some((relPath) => fs.existsSync(path.join(rootDir, relPath)));
 }
@@ -132,32 +173,41 @@ function writeFileIfChanged(filePath, content) {
 
 function createPipWrappers(rootDir) {
   const scriptsDir = path.join(rootDir, 'Scripts');
-  const pipCmd = [
-    '@echo off',
-    'setlocal',
-    'set "PYROOT=%~dp0.."',
-    '"%PYROOT%\\python.exe" -m pip %*',
-    '',
-  ].join('\r\n');
-  const pipSh = [
-    '#!/usr/bin/env bash',
-    'set -euo pipefail',
-    'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
-    'PYROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"',
-    'exec "${PYROOT}/python.exe" -m pip "$@"',
-    '',
-  ].join('\n');
-
-  writeFileIfChanged(path.join(scriptsDir, 'pip.cmd'), pipCmd);
-  writeFileIfChanged(path.join(scriptsDir, 'pip3.cmd'), pipCmd);
-  writeFileIfChanged(path.join(scriptsDir, 'pip'), pipSh);
-  writeFileIfChanged(path.join(scriptsDir, 'pip3'), pipSh);
+  writeFileIfChanged(path.join(scriptsDir, 'pip.cmd'), PIP_WRAPPER_CMD_TEMPLATE);
+  writeFileIfChanged(path.join(scriptsDir, 'pip3.cmd'), PIP_WRAPPER_CMD_TEMPLATE);
+  writeFileIfChanged(path.join(scriptsDir, 'pip'), PIP_WRAPPER_SH_TEMPLATE);
+  writeFileIfChanged(path.join(scriptsDir, 'pip3'), PIP_WRAPPER_SH_TEMPLATE);
   try {
     fs.chmodSync(path.join(scriptsDir, 'pip'), 0o755);
     fs.chmodSync(path.join(scriptsDir, 'pip3'), 0o755);
   } catch {
     // Ignore chmod failures on filesystems without POSIX modes.
   }
+}
+
+// Converge LobsterAI-owned pip shim files to the current templates. Guarded by
+// an ownership marker so a real pip package (copied from a host Python or
+// installed by get-pip) is never overwritten. Returns whether the shim layout
+// is LobsterAI-owned.
+function convergePipShimFiles(rootDir) {
+  const mainPath = path.join(rootDir, PIP_MODULE_MAIN_REL_PATH);
+  let existingMain = null;
+  try {
+    existingMain = fs.readFileSync(mainPath, 'utf8');
+  } catch {
+    existingMain = null;
+  }
+
+  const ownsShim = existingMain === null
+    ? isNonEmptyFile(path.join(rootDir, PIP_RUNTIME_ARCHIVE_REL_PATH))
+    : existingMain.includes(PIP_SHIM_OWNERSHIP_MARKER);
+  if (!ownsShim) {
+    return false;
+  }
+
+  writeFileIfChanged(mainPath, PIP_SHIM_MAIN_TEMPLATE);
+  writeFileIfChanged(path.join(rootDir, PIP_MODULE_INIT_REL_PATH), PIP_SHIM_INIT_TEMPLATE);
+  return true;
 }
 
 function tryCopyPipFromHostPython(rootDir) {
@@ -235,6 +285,13 @@ async function ensurePipPayload(rootDir, options = {}) {
   const required = options.required !== false;
   const existingPipHealth = checkRuntimeHealth(rootDir, { requirePip: true });
   if (existingPipHealth.ok) {
+    // The health check only tests file existence, which can hide a stale shim
+    // from an earlier build (e.g. a cached resources/python-win). Converge
+    // LobsterAI-owned shim/wrapper files to the current templates before
+    // accepting the runtime as prepared.
+    if (convergePipShimFiles(rootDir)) {
+      createPipWrappers(rootDir);
+    }
     return;
   }
 
@@ -271,32 +328,7 @@ async function ensurePipPayload(rootDir, options = {}) {
     }
   }
 
-  const pipModuleDir = path.join(rootDir, 'Lib', 'site-packages', 'pip');
-  const pipInitPath = path.join(pipModuleDir, '__init__.py');
-  const pipMainPath = path.join(pipModuleDir, '__main__.py');
-  const pipMain = [
-    'import pathlib',
-    'import runpy',
-    'import sys',
-    '',
-    'root = pathlib.Path(__file__).resolve().parents[3]',
-    "pip_pyz = root / 'tools' / 'pip.pyz'",
-    'if not pip_pyz.exists():',
-    "    raise SystemExit(f'pip runtime archive missing: {pip_pyz}')",
-    '',
-    '# Ensure pip imports resolve to the zipapp payload, not this shim package.',
-    'sys.path.insert(0, str(pip_pyz))',
-    'for name in list(sys.modules):',
-    "    if name == 'pip' or name.startswith('pip.'):",
-    '        del sys.modules[name]',
-    '',
-    "sys.argv[0] = 'pip'",
-    "runpy.run_module('pip', run_name='__main__', alter_sys=True)",
-    '',
-  ].join('\n');
-
-  writeFileIfChanged(pipInitPath, '');
-  writeFileIfChanged(pipMainPath, pipMain);
+  convergePipShimFiles(rootDir);
   createPipWrappers(rootDir);
 
   const finalHealth = checkRuntimeHealth(rootDir, { requirePip: true });
@@ -671,4 +703,10 @@ module.exports = {
   ensurePortablePythonRuntime,
   findPortablePythonExecutable,
   checkRuntimeHealth,
+  convergePipShimFiles,
+  createPipWrappers,
+  PIP_SHIM_MAIN_TEMPLATE,
+  PIP_SHIM_INIT_TEMPLATE,
+  PIP_WRAPPER_CMD_TEMPLATE,
+  PIP_WRAPPER_SH_TEMPLATE,
 };

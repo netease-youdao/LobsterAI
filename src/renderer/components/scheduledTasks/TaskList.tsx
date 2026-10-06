@@ -1,7 +1,6 @@
 import {
   ClockIcon,
   EllipsisVerticalIcon,
-  MagnifyingGlassIcon,
   PlayIcon,
   PlusIcon,
 } from '@heroicons/react/24/outline';
@@ -15,6 +14,7 @@ import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
 import { selectTask, setViewMode } from '../../store/slices/scheduledTaskSlice';
+import { MANAGEMENT_BODY_TEXT, MANAGEMENT_TITLE_TEXT } from '../common/managementTypography';
 import EditIcon from '../icons/EditIcon';
 import TrashIcon from '../icons/TrashIcon';
 import { getTaskAnalyticsParams, reportScheduledTaskAction } from './analytics';
@@ -27,24 +27,22 @@ import {
 } from './taskTemplates';
 import TaskToggle from './TaskToggle';
 import {
+  formatDateTimeMinute,
   formatNextRunRelative,
   formatScheduleLabel,
   getTaskDisplayStatus,
   getTaskPromptText,
 } from './utils';
 
-const listPageClass = 'px-6 py-5 sm:px-8 lg:px-10';
-const listContentClass = 'mx-auto w-full max-w-[880px]';
-/** Show the search field only once the list is big enough for it to help. */
-const SEARCH_VISIBLE_MIN_TASKS = 6;
+const cardGridClass = 'grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3';
 const menuWidthPx = 144;
 const menuHeightEstimatePx = 156;
 const menuEdgeGapPx = 8;
 const menuTriggerGapPx = 4;
 const menuItemClassName =
-  'flex w-full items-center gap-2 whitespace-nowrap px-3 py-2 text-left text-[13px] text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.05]';
+  `flex w-full items-center gap-2 whitespace-nowrap px-3 py-2 text-left ${MANAGEMENT_BODY_TEXT} text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.05]`;
 const destructiveMenuItemClassName =
-  'flex w-full items-center gap-2 whitespace-nowrap px-3 py-2 text-left text-[13px] text-red-500 transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.05]';
+  `flex w-full items-center gap-2 whitespace-nowrap px-3 py-2 text-left ${MANAGEMENT_BODY_TEXT} text-red-500 transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.05]`;
 const menuIconClassName = 'h-3.5 w-3.5';
 
 interface MenuPosition {
@@ -209,24 +207,30 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onRequestDelete }) => {
     <div
       role="button"
       tabIndex={0}
-      className="group flex cursor-pointer flex-col rounded-xl border border-border bg-surface p-4 transition hover:border-primary/35 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+      className="group flex cursor-pointer flex-col rounded-xl border border-border bg-surface p-4 shadow-subtle transition hover:border-primary/50 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       onClick={handleSelectTask}
       onKeyDown={handleCardKeyDown}
     >
       <div className="flex items-start justify-between gap-3">
         <h3
-          className={`min-w-0 flex-1 truncate text-sm font-semibold ${
+          className={`min-w-0 flex-1 truncate ${MANAGEMENT_TITLE_TEXT} font-semibold ${
             task.enabled ? 'text-foreground' : 'text-secondary'
           }`}
         >
           {task.name}
         </h3>
         <div className="flex shrink-0 items-center gap-1">
-          <TaskToggle enabled={task.enabled} onToggle={() => void handleToggleTask()} />
+          <TaskToggle
+            enabled={task.enabled}
+            onToggle={() => void handleToggleTask()}
+            title={i18nService.t(task.enabled ? 'scheduledTasksEnabled' : 'scheduledTasksDisabled')}
+          />
           <div className="relative">
             <button
               ref={menuButtonRef}
               type="button"
+              aria-label={i18nService.t('scheduledTasksMoreActions')}
+              title={i18nService.t('scheduledTasksMoreActions')}
               onClick={event => {
                 event.stopPropagation();
                 setShowMenu(value => {
@@ -302,7 +306,7 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onRequestDelete }) => {
         </div>
       </div>
 
-      <p className="mt-1.5 min-h-[40px] text-[13px] leading-5 text-secondary line-clamp-2">
+      <p className={`mt-1.5 min-h-[40px] ${MANAGEMENT_BODY_TEXT} leading-5 text-secondary line-clamp-2`}>
         {task.description || promptText}
       </p>
 
@@ -314,7 +318,14 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onRequestDelete }) => {
             {nextRunLabel && <span className="text-secondary/60"> · {nextRunLabel}</span>}
           </span>
         </div>
-        <TaskStatusChip status={displayStatus} />
+        <TaskStatusChip
+          status={displayStatus}
+          title={
+            task.state.lastRunAtMs
+              ? `${i18nService.t('scheduledTasksLastRun')} · ${formatDateTimeMinute(new Date(task.state.lastRunAtMs))}`
+              : undefined
+          }
+        />
       </div>
     </div>
   );
@@ -322,17 +333,27 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onRequestDelete }) => {
 
 interface TemplateGalleryProps {
   onCreateFromTemplate: (template: ScheduledTaskTemplate) => void;
+  /** When set, append a dashed "start from scratch" tile to the grid. */
+  onCreateBlank?: () => void;
+  /** Hide the section label when the gallery is the page's main content. */
+  showHeader?: boolean;
 }
 
-const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onCreateFromTemplate }) => (
+const TemplateGallery: React.FC<TemplateGalleryProps> = ({
+  onCreateFromTemplate,
+  onCreateBlank,
+  showHeader = true,
+}) => (
   <div>
-    <div className="mb-3 flex items-center gap-3">
-      <span className="text-xs font-medium text-secondary">
-        {i18nService.t('scheduledTasksTemplatesSection')}
-      </span>
-      <div className="h-px flex-1 bg-border-subtle" />
-    </div>
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+    {showHeader && (
+      <div className="mb-3 flex items-center gap-3">
+        <span className="text-xs font-medium text-secondary">
+          {i18nService.t('scheduledTasksTemplatesSection')}
+        </span>
+        <div className="h-px flex-1 bg-border-subtle" />
+      </div>
+    )}
+    <div className={cardGridClass}>
       {SCHEDULED_TASK_TEMPLATES.map(template => {
         const Icon = templateIconComponents[template.icon];
         return (
@@ -340,13 +361,13 @@ const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onCreateFromTemplate 
             key={template.id}
             type="button"
             onClick={() => onCreateFromTemplate(template)}
-            className="group flex items-start gap-3 rounded-xl border border-transparent p-3 text-left transition hover:border-border hover:bg-surface"
+            className="group flex items-start gap-3 rounded-xl border border-border bg-surface p-3 text-left shadow-subtle transition hover:border-primary/50 hover:shadow-card"
           >
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-secondary transition-colors group-hover:bg-primary/10 group-hover:text-primary">
               <Icon className="h-[18px] w-[18px]" />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-foreground">
+              <div className={`truncate ${MANAGEMENT_TITLE_TEXT} font-medium text-foreground`}>
                 {i18nService.t(template.titleKey)}
               </div>
               <div className="mt-0.5 text-xs leading-5 text-secondary line-clamp-2">
@@ -360,17 +381,41 @@ const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onCreateFromTemplate 
           </button>
         );
       })}
+      {onCreateBlank && (
+        <button
+          type="button"
+          onClick={onCreateBlank}
+          className="group flex items-start gap-3 rounded-xl border border-dashed border-border p-3 text-left transition hover:border-primary/50 hover:bg-surface"
+        >
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-secondary transition-colors group-hover:bg-primary/10 group-hover:text-primary">
+            <PlusIcon className="h-[18px] w-[18px]" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className={`truncate ${MANAGEMENT_TITLE_TEXT} font-medium text-foreground`}>
+              {i18nService.t('scheduledTasksBlankCreate')}
+            </div>
+            <div className="mt-0.5 text-xs leading-5 text-secondary line-clamp-2">
+              {i18nService.t('scheduledTasksBlankCreateHint')}
+            </div>
+          </div>
+        </button>
+      )}
     </div>
   </div>
 );
 
 interface TaskListProps {
+  /** Search text owned by the page toolbar so it can also drive the history tab. */
+  searchText: string;
+  onClearSearch: () => void;
   onRequestDelete: (taskId: string, taskName: string, source?: string) => void;
   onCreateNew: () => void;
   onCreateFromTemplate: (template: ScheduledTaskTemplate) => void;
 }
 
 const TaskList: React.FC<TaskListProps> = ({
+  searchText,
+  onClearSearch,
   onRequestDelete,
   onCreateNew,
   onCreateFromTemplate,
@@ -378,7 +423,6 @@ const TaskList: React.FC<TaskListProps> = ({
   const tasks = useSelector((state: RootState) => state.scheduledTask.tasks);
   const status = useSelector((state: RootState) => state.scheduledTask.taskListStatus);
   const error = useSelector((state: RootState) => state.scheduledTask.taskListError);
-  const [searchText, setSearchText] = React.useState('');
 
   // Re-render every 30s so the relative "next run" labels on the cards stay
   // honest while the list is left open.
@@ -416,87 +460,93 @@ const TaskList: React.FC<TaskListProps> = ({
     );
   }, [normalizedSearch, sortedTasks]);
 
+  if (status === ScheduledTaskDataStatus.Loading) {
+    return (
+      <div className={cardGridClass} aria-hidden="true">
+        {Array.from({ length: 4 }).map((_, idx) => (
+          <div key={idx} className="animate-pulse rounded-xl border border-border bg-surface p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="h-4 w-1/2 rounded bg-surface-raised" />
+              <div className="h-4 w-8 rounded-full bg-surface-raised" />
+            </div>
+            <div className="mt-3 space-y-2">
+              <div className="h-3 w-full rounded bg-surface-raised" />
+              <div className="h-3 w-2/3 rounded bg-surface-raised" />
+            </div>
+            <div className="mt-4 flex items-center justify-between">
+              <div className="h-3 w-1/3 rounded bg-surface-raised" />
+              <div className="h-4 w-12 rounded-full bg-surface-raised" />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   if (status !== ScheduledTaskDataStatus.Ready) {
     return (
-      <div className={listPageClass}>
-        <div className={listContentClass}>
-          <ScheduledTaskDataState
-            status={status}
-            error={error}
-            onRetry={() => {
-              reportScheduledTaskAction('retry_load_tasks', {
-                source: 'scheduled_tasks_list',
-                result: 'retry',
-              });
-              void scheduledTaskService.loadTasks();
-            }}
-          />
-        </div>
-      </div>
+      <ScheduledTaskDataState
+        status={status}
+        error={error}
+        onRetry={() => {
+          reportScheduledTaskAction('retry_load_tasks', {
+            source: 'scheduled_tasks_list',
+            result: 'retry',
+          });
+          void scheduledTaskService.loadTasks();
+        }}
+      />
     );
   }
 
   if (tasks.length === 0) {
     return (
-      <div className={listPageClass}>
-        <div className={`${listContentClass} space-y-8`}>
-          <div className="flex flex-col items-center rounded-xl border border-dashed border-border px-6 py-12 text-center">
-            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
-              <ClockIcon className="h-7 w-7 text-primary" />
-            </div>
-            <p className="text-sm font-semibold text-foreground">
-              {i18nService.t('scheduledTasksEmptyState')}
-            </p>
-            <p className="mt-1 text-xs text-secondary">
-              {i18nService.t('scheduledTasksEmptyHint')}
-            </p>
-            <button
-              type="button"
-              onClick={onCreateNew}
-              className="mt-5 inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
-            >
-              <PlusIcon className="h-4 w-4" />
-              {i18nService.t('scheduledTasksNewTask')}
-            </button>
+      <div className="space-y-5">
+        {/* First-run funnel: a compact intro, then templates as the primary creation path. */}
+        <div className="flex flex-col items-center pt-4 text-center">
+          <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+            <ClockIcon className="h-6 w-6 text-primary" />
           </div>
-          <TemplateGallery onCreateFromTemplate={onCreateFromTemplate} />
+          <p className="text-base font-semibold text-foreground">
+            {i18nService.t('scheduledTasksEmptyState')}
+          </p>
+          <p className="mt-1 text-sm text-secondary">
+            {i18nService.t('scheduledTasksEmptyHint')}
+          </p>
         </div>
+        <TemplateGallery
+          onCreateFromTemplate={onCreateFromTemplate}
+          onCreateBlank={onCreateNew}
+          showHeader={false}
+        />
       </div>
     );
   }
 
   return (
-    <div className={listPageClass}>
-      <div className={`${listContentClass} space-y-8`}>
-        <div className="space-y-3">
-          {tasks.length >= SEARCH_VISIBLE_MIN_TASKS && (
-            <div className="relative">
-              <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-secondary/60" />
-              <input
-                type="text"
-                value={searchText}
-                onChange={event => setSearchText(event.target.value)}
-                placeholder={i18nService.t('scheduledTasksSearchPlaceholder')}
-                className="h-9 w-full rounded-lg border border-border bg-surface pl-9 pr-3 text-sm text-foreground placeholder:text-secondary/60 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/20"
-              />
-            </div>
-          )}
-
-          {visibleTasks.length === 0 ? (
-            <div className="rounded-xl border border-border px-6 py-10 text-center text-sm text-secondary">
-              {i18nService.t('scheduledTasksSearchNoResults')}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {visibleTasks.map(task => (
-                <TaskCard key={task.id} task={task} onRequestDelete={onRequestDelete} />
-              ))}
-            </div>
-          )}
+    <div className="space-y-8">
+      {visibleTasks.length === 0 ? (
+        <div className="flex flex-col items-center rounded-xl border border-border px-6 py-10 text-center">
+          <p className="text-sm text-secondary">
+            {i18nService.t('scheduledTasksSearchNoResults')}
+          </p>
+          <button
+            type="button"
+            onClick={onClearSearch}
+            className="mt-3 text-sm text-primary transition-colors hover:text-primary-hover"
+          >
+            {i18nService.t('scheduledTasksClearSearch')}
+          </button>
         </div>
+      ) : (
+        <div className={cardGridClass}>
+          {visibleTasks.map(task => (
+            <TaskCard key={task.id} task={task} onRequestDelete={onRequestDelete} />
+          ))}
+        </div>
+      )}
 
-        <TemplateGallery onCreateFromTemplate={onCreateFromTemplate} />
-      </div>
+      <TemplateGallery onCreateFromTemplate={onCreateFromTemplate} />
     </div>
   );
 };

@@ -11,12 +11,13 @@ import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { imService } from '../../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
+import { resolveThinkingLevelForModel } from '../../services/modelThinkingLevelMemory';
 import type { RootState } from '../../store';
 import type { Model } from '../../store/slices/modelSlice';
 import type { PresetAgent } from '../../types/agent';
 import type { DingTalkInstanceConfig, DiscordInstanceConfig, FeishuInstanceConfig, IMGatewayConfig, NimInstanceConfig, PopoInstanceConfig, QQInstanceConfig, TelegramInstanceConfig, WecomInstanceConfig } from '../../types/im';
 import type { Skill } from '../../types/skill';
-import { getAgentDisplayNameById } from '../../utils/agentDisplay';
+import { getAgentDisplayName, getAgentDisplayNameById } from '../../utils/agentDisplay';
 import { toOpenClawModelRef } from '../../utils/openclawModelRef';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 import Modal from '../common/Modal';
@@ -92,6 +93,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
   const [model, setModel] = useState<Model | null>(null);
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [skillIds, setSkillIds] = useState<string[]>([]);
+  const [subagentAllowAgentIds, setSubagentAllowAgentIds] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
   const [presetTemplates, setPresetTemplates] = useState<PresetAgent[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
@@ -128,9 +130,10 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
     if ((model ? toOpenClawModelRef(model) : '') !== initialModelRef.current) changedFields.push('model');
     if (workingDirectory !== initialWorkingDirectoryRef.current) changedFields.push('workingDirectory');
     if (skillIds.length > 0) changedFields.push('skillIds');
+    if (subagentAllowAgentIds.length > 0) changedFields.push('subagentAllowAgentIds');
     if (boundKeys.size > 0) changedFields.push('imBindings');
     return changedFields;
-  }, [boundKeys.size, description, icon, identity, model, name, skillIds.length, systemPrompt, userInfo, workingDirectory]);
+  }, [boundKeys.size, description, icon, identity, model, name, skillIds.length, subagentAllowAgentIds.length, systemPrompt, userInfo, workingDirectory]);
 
   const isDirty = useCallback((): boolean => {
     return getChangedFields().length > 0;
@@ -243,6 +246,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
     setModel(globalSelectedModel ?? null);
     setWorkingDirectory(defaultWorkingDirectory);
     setSkillIds([]);
+    setSubagentAllowAgentIds([]);
     setActiveTab(AgentDetailTab.Identity);
     setShowUnsavedConfirm(false);
     setShowTemplatePicker(false);
@@ -252,10 +256,6 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
       activeTab: AgentDetailTab.Identity,
       isDirty: false,
       template: null,
-    });
-    void coworkService.readBootstrapFile('USER.md').then((content) => {
-      initialUserInfoRef.current = content;
-      setUserInfo(content);
     });
     imService.loadConfig().then((cfg) => {
       if (cfg) setImConfig(cfg);
@@ -287,6 +287,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
     setModel(null);
     setWorkingDirectory('');
     setSkillIds([]);
+    setSubagentAllowAgentIds([]);
     setActiveTab(AgentDetailTab.Identity);
     setShowTemplatePicker(false);
     setSelectedTemplate(null);
@@ -368,31 +369,26 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
     });
     setCreating(true);
     try {
-      if (userInfo !== initialUserInfoRef.current) {
-        const userInfoSaved = await coworkService.writeBootstrapFile('USER.md', userInfo);
-        if (!userInfoSaved) {
-          reportAgentCreateAction('create_failed', {
-            changedFields,
-            errorCode: 'user_info_write_failed',
-            includeConfigDetails: true,
-            isDirty: changedFields.length > 0,
-            result: 'failed',
-          });
-          window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentCreateFailed') }));
-          return;
-        }
-      }
       const agent = await agentService.createAgent({
         name: name.trim(),
         description: description.trim(),
         systemPrompt: systemPrompt.trim(),
         identity: identity.trim(),
         model: model ? toOpenClawModelRef(model) : '',
+        thinkingLevel: resolveThinkingLevelForModel(model),
         workingDirectory: workingDirectory.trim(),
         icon: icon.trim() || undefined,
         skillIds,
+        subagentAllowAgentIds,
       });
       if (agent) {
+        if (userInfo !== initialUserInfoRef.current) {
+          const userInfoSaved = await coworkService.writeBootstrapFile('USER.md', userInfo, { agentId: agent.id });
+          if (!userInfoSaved) {
+            console.warn(`[AgentCreateModal] failed to save USER.md for agent ${agent.id}`);
+            window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentSaveFailed') }));
+          }
+        }
         // Save IM bindings after agent is created
         if (boundKeys.size > 0 && imConfig) {
           const currentBindings = { ...(imConfig.settings?.platformAgentBindings || {}) };
@@ -469,6 +465,19 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
     return getAgentDisplayNameById(aid, agents);
   };
 
+  const availableSubagentAgents = agents
+    .filter((candidate) => candidate.enabled)
+    .sort((left, right) => getAgentDisplayName(left).localeCompare(getAgentDisplayName(right)));
+
+  const handleToggleSubagentAllowAgent = (targetAgentId: string) => {
+    setSubagentAllowAgentIds((current) => {
+      if (current.includes(targetAgentId)) {
+        return current.filter(id => id !== targetAgentId);
+      }
+      return [...current, targetAgentId];
+    });
+  };
+
   const renderToggle = (isOn: boolean) => (
     <div
       className={`relative w-9 h-5 rounded-full transition-colors ${
@@ -488,6 +497,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
     { key: AgentDetailTab.Prompt, label: i18nService.t('coworkBootstrapSoulTitle') },
     { key: AgentDetailTab.User, label: i18nService.t('coworkBootstrapUserTitle') },
     { key: AgentDetailTab.Skills, label: i18nService.t('agentTabSkills') },
+    { key: AgentDetailTab.Collaboration, label: i18nService.t('agentTabCollaboration') },
     { key: AgentDetailTab.Im, label: i18nService.t('agentTabIM') },
   ];
 
@@ -509,6 +519,59 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
         aria-label={ariaLabel}
         className="min-h-0 flex-1 w-full resize-none border border-transparent bg-transparent text-sm leading-6 text-foreground placeholder:text-secondary/45 focus:outline-none"
       />
+    </div>
+  );
+
+  const renderCollaborationSettings = () => (
+    <div className="h-full overflow-y-auto">
+      <div className="mb-4">
+        <div className="text-sm font-semibold text-foreground">
+          {i18nService.t('agentSubagentsTitle')}
+        </div>
+        <p className="mt-1 text-xs leading-5 text-secondary">
+          {i18nService.t('agentSubagentsHint')}
+        </p>
+      </div>
+      {availableSubagentAgents.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-secondary">
+          {i18nService.t('agentSubagentsEmpty')}
+        </div>
+      ) : (
+        <div className="space-y-1">
+          {availableSubagentAgents.map((candidate) => {
+            const checked = subagentAllowAgentIds.includes(candidate.id);
+            return (
+              <label
+                key={candidate.id}
+                className="flex cursor-pointer items-center justify-between gap-4 rounded-lg px-3 py-2.5 transition-colors hover:bg-surface-raised"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-sm">
+                    <span className="font-medium text-secondary">
+                      {getAgentDisplayName(candidate).slice(0, 1).toUpperCase()}
+                    </span>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-foreground">
+                      {getAgentDisplayName(candidate)}
+                    </div>
+                    <div className="truncate text-xs text-secondary">
+                      {candidate.id}
+                    </div>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => handleToggleSubagentAllowAgent(candidate.id)}
+                  className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                  aria-label={getAgentDisplayName(candidate)}
+                />
+              </label>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 
@@ -606,6 +669,8 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
         {activeTab === AgentDetailTab.Skills && (
           <AgentSkillSelector selectedSkillIds={skillIds} onChange={setSkillIds} />
         )}
+
+        {activeTab === AgentDetailTab.Collaboration && renderCollaborationSettings()}
 
         {activeTab === AgentDetailTab.Im && (
           <div className="h-full overflow-y-auto">

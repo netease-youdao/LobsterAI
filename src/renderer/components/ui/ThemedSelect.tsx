@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
 import { ChevronDownIcon } from '@heroicons/react/24/outline';
+import React, { useEffect, useRef, useState } from 'react';
 
 interface ThemedSelectProps {
   id: string;
@@ -61,8 +61,8 @@ const ThemedSelect: React.FC<ThemedSelectProps> = ({
             aria-haspopup="listbox"
             aria-expanded={isOpen}
           >
-            <span>{selectedOption?.label || value}</span>
-            <ChevronDownIcon className="w-4 h-4 ml-2" />
+            <span className="min-w-0 truncate text-left">{selectedOption?.label || value}</span>
+            <ChevronDownIcon className="w-4 h-4 ml-2 shrink-0" />
           </button>
 
           {isOpen && (

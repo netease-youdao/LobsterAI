@@ -1,3 +1,4 @@
+import { OpenClawCronRunMetadataKey } from '../../../shared/cowork/openclawCronSessionKey';
 import type { CoworkMessage } from '../../coworkStore';
 import {
   extractGatewayHistoryEntries,
@@ -14,19 +15,20 @@ export type CronRunLocalHistoryEntry = CronRunHistoryEntry & {
   id: string;
 };
 
-const CronRunHistoryMetadataKey = {
-  SessionKey: 'openclawCronRunSessionKey',
-  EntryIndex: 'openclawCronRunEntryIndex',
-} as const;
-
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 };
 
 export const getCronRunHistorySessionKey = (metadata: unknown): string | null => {
   if (!isRecord(metadata)) return null;
-  const value = metadata[CronRunHistoryMetadataKey.SessionKey];
+  const value = metadata[OpenClawCronRunMetadataKey.SessionKey];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+};
+
+export const getCronRunHistoryEntryIndex = (metadata: unknown): number | null => {
+  if (!isRecord(metadata)) return null;
+  const value = metadata[OpenClawCronRunMetadataKey.EntryIndex];
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
 };
 
 const withCronRunHistoryMetadata = (
@@ -37,8 +39,8 @@ const withCronRunHistoryMetadata = (
   ...entry,
   metadata: {
     ...(entry.metadata ?? {}),
-    [CronRunHistoryMetadataKey.SessionKey]: sessionKey,
-    [CronRunHistoryMetadataKey.EntryIndex]: entryIndex,
+    [OpenClawCronRunMetadataKey.SessionKey]: sessionKey,
+    [OpenClawCronRunMetadataKey.EntryIndex]: entryIndex,
   },
 });
 
@@ -148,4 +150,21 @@ export const findCronRunHistoryLocalMatch = (
     const importedSessionKey = getCronRunHistorySessionKey(entry.metadata);
     return !importedSessionKey || importedSessionKey === sessionKey;
   });
+};
+
+export const findCronRunHistoryLocalIndexMatch = (
+  authoritative: CronRunHistoryEntry,
+  localEntries: ReadonlyArray<CronRunLocalHistoryEntry>,
+  usedLocalMessageIds: ReadonlySet<string>,
+  sessionKey: string,
+): CronRunLocalHistoryEntry | undefined => {
+  const authoritativeIndex = getCronRunHistoryEntryIndex(authoritative.metadata);
+  if (authoritativeIndex === null) return undefined;
+
+  return localEntries.find((entry) => (
+    !usedLocalMessageIds.has(entry.id)
+    && entry.role === authoritative.role
+    && getCronRunHistorySessionKey(entry.metadata) === sessionKey
+    && getCronRunHistoryEntryIndex(entry.metadata) === authoritativeIndex
+  ));
 };

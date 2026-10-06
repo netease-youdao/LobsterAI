@@ -2,13 +2,26 @@
  * Shared types, constants, and utility functions for model/provider settings.
  * Used by both Settings.tsx and ModelSettingsSection.tsx.
  */
-import { ProviderAuthType, ProviderName, ProviderRegistry } from '../../../shared/providers';
-import { type AppConfig, defaultConfig } from '../../config';
+import {
+  ModelRuntimeProfile,
+  ModelRuntimeProfileSource,
+  normalizeModelIdForComparison,
+  OpenClawApi,
+  ProviderAuthType,
+  ProviderName,
+  ProviderRegistry,
+  resolveModelRuntimeProfile,
+} from '../../../shared/providers';
+import { type AppConfig, defaultConfig, isCustomProvider } from '../../config';
 import { i18nService } from '../../services/i18n';
 
 export const CUSTOM_PROVIDER_KEYS = [
   'custom_0', 'custom_1', 'custom_2', 'custom_3', 'custom_4',
   'custom_5', 'custom_6', 'custom_7', 'custom_8', 'custom_9',
+  'custom_10', 'custom_11', 'custom_12', 'custom_13', 'custom_14',
+  'custom_15', 'custom_16', 'custom_17', 'custom_18', 'custom_19',
+  'custom_20', 'custom_21', 'custom_22', 'custom_23', 'custom_24',
+  'custom_25', 'custom_26', 'custom_27', 'custom_28', 'custom_29',
 ] as const;
 
 export const providerKeys = [
@@ -22,6 +35,48 @@ export type ProviderType = BuiltinProviderType | CustomProviderType;
 export type ProvidersConfig = NonNullable<AppConfig['providers']>;
 export type ProviderConfig = ProvidersConfig[string];
 export type Model = NonNullable<ProviderConfig['models']>[number];
+
+export const hasEquivalentProviderModelId = (
+  models: Array<Pick<Model, 'id'>>,
+  modelId: string,
+  excludedModelId?: string | null,
+): boolean => {
+  const trimmedModelId = modelId.trim();
+  const normalizedModelId = normalizeModelIdForComparison(modelId);
+  if (!trimmedModelId) {
+    return false;
+  }
+  return models.some(model => (
+    model.id !== excludedModelId
+    && (
+      model.id.trim() === trimmedModelId
+      || (
+        normalizedModelId === 'kimik3'
+        && normalizeModelIdForComparison(model.id) === normalizedModelId
+      )
+    )
+  ));
+};
+
+export const MAX_OUTPUT_TOKENS_MIN = 1024;
+export const MAX_OUTPUT_TOKENS_MAX = 2_000_000;
+
+/**
+ * Parses the optional per-model output cap from the model editor. Empty input
+ * returns undefined so the cap is inferred; anything that is not an integer in
+ * the supported range returns null.
+ */
+export const parseMaxOutputTokensInput = (input: string): number | null | undefined => {
+  const normalized = input.trim().replace(/[\s,_]/g, '');
+  if (!normalized) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(normalized)) {
+    return null;
+  }
+  const value = Number(normalized);
+  return value >= MAX_OUTPUT_TOKENS_MIN && value <= MAX_OUTPUT_TOKENS_MAX ? value : null;
+};
 
 export const resolveModelSupportsImageForProvider = (
   providerName: string,
@@ -92,12 +147,22 @@ export const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'o
   return null;
 };
 
-export const getEffectiveApiFormat = (provider: string, value: unknown): 'anthropic' | 'openai' | 'gemini' => (
-  getFixedApiFormatForProvider(provider) ?? normalizeApiFormat(value)
-);
+export const getEffectiveApiFormat = (provider: string, value: unknown): 'anthropic' | 'openai' | 'gemini' => {
+  // Older/imported Moonshot configs can still contain the Anthropic route.
+  // Respect that persisted transport so Settings and connection tests do not
+  // claim K3 OpenAI compatibility while main actually runs Anthropic.
+  if (provider === ProviderName.Moonshot && value === 'anthropic') {
+    return 'anthropic';
+  }
+  return getFixedApiFormatForProvider(provider) ?? normalizeApiFormat(value);
+};
 
-export const shouldShowApiFormatSelector = (provider: string): boolean => (
+export const shouldShowApiFormatSelector = (
+  provider: string,
+  value?: unknown,
+): boolean => (
   getFixedApiFormatForProvider(provider) === null
+  || (provider === ProviderName.Moonshot && value === 'anthropic')
 );
 
 export const getProviderDefaultBaseUrl = (
@@ -230,3 +295,45 @@ export const shouldUseMaxCompletionTokensForOpenAI = (provider: string, modelId?
 };
 
 export const CONNECTIVITY_TEST_TOKEN_BUDGET = 64;
+
+export const buildOpenAIConnectionTestRequestBody = (options: {
+  provider: ProviderType;
+  model: Pick<Model, 'id'>;
+  useResponsesApi: boolean;
+}): Record<string, unknown> => {
+  if (options.useResponsesApi) {
+    return {
+      model: options.model.id,
+      input: [{ role: 'user', content: [{ type: 'input_text', text: 'Hi' }] }],
+      max_output_tokens: CONNECTIVITY_TEST_TOKEN_BUDGET,
+    };
+  }
+
+  const runtimeProfile = resolveModelRuntimeProfile({
+    source: isCustomProvider(options.provider)
+      ? ModelRuntimeProfileSource.Custom
+      : ModelRuntimeProfileSource.BuiltIn,
+    providerId: options.provider,
+    modelId: options.model.id,
+    api: OpenClawApi.OpenAICompletions,
+  });
+  if (runtimeProfile === ModelRuntimeProfile.MoonshotKimiK3) {
+    return {
+      model: options.model.id,
+      messages: [{ role: 'user', content: 'Hi' }],
+      max_tokens: CONNECTIVITY_TEST_TOKEN_BUDGET,
+      reasoning_effort: 'max',
+    };
+  }
+
+  const body: Record<string, unknown> = {
+    model: options.model.id,
+    messages: [{ role: 'user', content: 'Hi' }],
+  };
+  if (shouldUseMaxCompletionTokensForOpenAI(options.provider, options.model.id)) {
+    body.max_completion_tokens = CONNECTIVITY_TEST_TOKEN_BUDGET;
+  } else {
+    body.max_tokens = CONNECTIVITY_TEST_TOKEN_BUDGET;
+  }
+  return body;
+};

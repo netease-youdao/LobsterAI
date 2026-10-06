@@ -1,0 +1,269 @@
+diff --git a/packages/agent-core/src/agent-loop.test.ts b/packages/agent-core/src/agent-loop.test.ts
+index 40cde4d624..f8d860a36f 100644
+--- a/packages/agent-core/src/agent-loop.test.ts
++++ b/packages/agent-core/src/agent-loop.test.ts
+@@ -1,7 +1,20 @@
++import { Type } from "typebox";
+ import { describe, expect, it } from "vitest";
+-import { agentLoop, agentLoopContinue } from "./agent-loop.js";
+-import type { Message, Model } from "./llm.js";
+-import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, StreamFn } from "./types.js";
++import { agentLoop, agentLoopContinue, runAgentLoop } from "./agent-loop.js";
++import {
++  type AssistantMessage,
++  createAssistantMessageEventStream,
++  type Message,
++  type Model,
++} from "./llm.js";
++import type {
++  AgentContext,
++  AgentEvent,
++  AgentLoopConfig,
++  AgentMessage,
++  AgentTool,
++  StreamFn,
++} from "./types.js";
+ 
+ const model: Model = {
+   id: "test-model",
+@@ -72,3 +85,147 @@ describe("agentLoop EventStream failures", () => {
+     expectTerminalFailure(events, result);
+   });
+ });
++
++function makeAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
++  return {
++    role: "assistant",
++    content,
++    api: model.api,
++    provider: model.provider,
++    model: model.id,
++    usage: {
++      input: 0,
++      output: 0,
++      cacheRead: 0,
++      cacheWrite: 0,
++      totalTokens: 0,
++      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++    },
++    stopReason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
++    timestamp: 1,
++  };
++}
++
++describe("agentLoop abort boundaries", () => {
++  it("does not request another model turn after a tool aborts the run", async () => {
++    const controller = new AbortController();
++    let streamCalls = 0;
++    const streamFn: StreamFn = () => {
++      streamCalls += 1;
++      if (streamCalls > 1) {
++        throw new Error("model was called after abort");
++      }
++      const stream = createAssistantMessageEventStream();
++      queueMicrotask(() => {
++        const message = makeAssistantMessage([
++          { type: "toolCall", id: "call-abort", name: "abort_tool", arguments: {} },
++        ]);
++        stream.push({ type: "done", reason: "toolUse", message });
++        stream.end();
++      });
++      return stream;
++    };
++    const abortTool: AgentTool = {
++      name: "abort_tool",
++      label: "abort_tool",
++      description: "Abort the active run",
++      parameters: Type.Object({}, { additionalProperties: false }),
++      execute: async () => {
++        controller.abort(new Error("user aborted"));
++        return {
++          content: [{ type: "text", text: "aborted" }],
++          details: { aborted: true },
++        };
++      },
++    };
++    const events: AgentEvent[] = [];
++
++    const messages = await runAgentLoop(
++      [{ role: "user", content: "abort during tool", timestamp: 1 }],
++      {
++        systemPrompt: "",
++        messages: [],
++        tools: [abortTool],
++      },
++      config,
++      (event) => {
++        events.push(event);
++      },
++      controller.signal,
++      streamFn,
++    );
++
++    expect(streamCalls).toBe(1);
++    expect(messages.map((message) => message.role)).toEqual([
++      "user",
++      "assistant",
++      "toolResult",
++      "assistant",
++    ]);
++    expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
++    expect(events.at(-1)).toMatchObject({ type: "agent_end" });
++  });
++
++  it("does not request another model turn when an async turn hook aborts the run", async () => {
++    const controller = new AbortController();
++    let streamCalls = 0;
++    const streamFn: StreamFn = () => {
++      streamCalls += 1;
++      if (streamCalls > 1) {
++        throw new Error("model was called after abort");
++      }
++      const stream = createAssistantMessageEventStream();
++      queueMicrotask(() => {
++        const message = makeAssistantMessage([
++          { type: "toolCall", id: "call-hook-abort", name: "hook_abort", arguments: {} },
++        ]);
++        stream.push({ type: "done", reason: "toolUse", message });
++        stream.end();
++      });
++      return stream;
++    };
++    const hookTool: AgentTool = {
++      name: "hook_abort",
++      label: "hook_abort",
++      description: "Allow the turn hook to abort the active run",
++      parameters: Type.Object({}, { additionalProperties: false }),
++      execute: async () => ({
++        content: [{ type: "text", text: "hook result" }],
++        details: { name: "hook_abort" },
++      }),
++    };
++    const events: AgentEvent[] = [];
++
++    const messages = await runAgentLoop(
++      [{ role: "user", content: "abort from hook", timestamp: 1 }],
++      {
++        systemPrompt: "",
++        messages: [],
++        tools: [hookTool],
++      },
++      {
++        ...config,
++        prepareNextTurn: async () => {
++          await Promise.resolve();
++          controller.abort(new Error("user aborted"));
++          return undefined;
++        },
++      },
++      (event) => {
++        events.push(event);
++      },
++      controller.signal,
++      streamFn,
++    );
++
++    expect(streamCalls).toBe(1);
++    expect(messages.map((message) => message.role)).toEqual([
++      "user",
++      "assistant",
++      "toolResult",
++      "assistant",
++    ]);
++    expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
++    expect(events.at(-1)).toMatchObject({ type: "agent_end" });
++  });
++});
+diff --git a/packages/agent-core/src/agent-loop.ts b/packages/agent-core/src/agent-loop.ts
+index 05e8177ded..7409b4f2a4 100644
+--- a/packages/agent-core/src/agent-loop.ts
++++ b/packages/agent-core/src/agent-loop.ts
+@@ -222,8 +222,32 @@ async function runLoop(
+   let currentContext = initialContext;
+   let config = initialConfig;
+   let firstTurn = true;
++  let turnOpen = true;
+   // Check for steering messages at start (user may have typed while waiting)
+   let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
++  const stopIfAborted = async (): Promise<boolean> => {
++    if (!signal?.aborted) {
++      return false;
++    }
++    // Persist an aborted assistant outcome so session post-processing does not
++    // compact or continue from the preceding toolUse message.
++    const abortedMessage = createLoopFailureMessage(
++      config,
++      signal.reason instanceof Error ? signal.reason : new Error("Agent run aborted"),
++      true,
++    );
++    newMessages.push(abortedMessage);
++    if (!turnOpen) {
++      await emit({ type: "turn_start" });
++      turnOpen = true;
++    }
++    await emit({ type: "message_start", message: abortedMessage });
++    await emit({ type: "message_end", message: abortedMessage });
++    await emit({ type: "turn_end", message: abortedMessage, toolResults: [] });
++    turnOpen = false;
++    await emit({ type: "agent_end", messages: newMessages });
++    return true;
++  };
+ 
+   // Outer loop: continues when queued follow-up messages arrive after agent would stop
+   while (true) {
+@@ -231,8 +255,13 @@ async function runLoop(
+ 
+     // Inner loop: process tool calls and steering messages
+     while (hasMoreToolCalls || pendingMessages.length > 0) {
++      if (await stopIfAborted()) {
++        return;
++      }
++
+       if (!firstTurn) {
+         await emit({ type: "turn_start" });
++        turnOpen = true;
+       } else {
+         firstTurn = false;
+       }
+@@ -247,6 +276,10 @@ async function runLoop(
+         }
+       }
+ 
++      if (await stopIfAborted()) {
++        return;
++      }
++
+       // Stream assistant response
+       const message = await streamAssistantResponse(
+         currentContext,
+@@ -287,6 +320,10 @@ async function runLoop(
+       }
+ 
+       await emit({ type: "turn_end", message, toolResults });
++      turnOpen = false;
++      if (await stopIfAborted()) {
++        return;
++      }
+ 
+       const nextTurnContext = {
+         message,
+@@ -307,6 +344,9 @@ async function runLoop(
+                 : nextTurnSnapshot.thinkingLevel,
+         });
+       }
++      if (await stopIfAborted()) {
++        return;
++      }
+ 
+       if (
+         await config.shouldStopAfterTurn?.({
+@@ -321,6 +361,9 @@ async function runLoop(
+       }
+ 
+       pendingMessages = (await config.getSteeringMessages?.()) || [];
++      if (await stopIfAborted()) {
++        return;
++      }
+     }
+ 
+     const followUpMessages = (await config.getFollowUpMessages?.()) || [];

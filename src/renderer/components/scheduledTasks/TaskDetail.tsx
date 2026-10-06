@@ -56,6 +56,12 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
   const displayStatus = getTaskDisplayStatus(task);
   const isRunning = displayStatus === 'running';
   const runningAtMs = task.state.runningAtMs;
+  const runActionLabel = i18nService.t(
+    isRunning ? 'scheduledTasksStatusRunning' : 'scheduledTasksRun',
+  );
+  // The banner is the single live "running" indicator; while it is visible the
+  // header chip would duplicate it, so the chip only shows non-running status.
+  const showRunningBanner = isRunning && Boolean(runningAtMs);
 
   // Tick every second while the task is running so the elapsed label stays live.
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -208,7 +214,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
         <div className="min-w-0">
           <div className="flex items-center gap-2.5">
             <h2 className="truncate text-xl font-semibold text-foreground">{task.name}</h2>
-            <TaskStatusChip status={displayStatus} />
+            {!showRunningBanner && <TaskStatusChip status={displayStatus} />}
           </div>
           {task.description && (
             <p className="mt-1 whitespace-pre-wrap text-sm text-secondary">{task.description}</p>
@@ -219,19 +225,11 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
             type="button"
             onClick={() => void handleRunManually()}
             disabled={isRunning}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-primary"
+            className="rounded-lg p-2 text-secondary transition-colors hover:bg-primary/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-secondary"
+            title={runActionLabel}
+            aria-label={runActionLabel}
           >
-            {isRunning ? (
-              <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
-                <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round" className="opacity-75" />
-              </svg>
-            ) : (
-              <PlayIcon className="h-4 w-4" />
-            )}
-            {isRunning
-              ? i18nService.t('scheduledTasksStatusRunning')
-              : i18nService.t('scheduledTasksRun')}
+            <PlayIcon className="h-4 w-4" />
           </button>
           <TaskToggle
             enabled={task.enabled}
@@ -259,7 +257,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
       </div>
 
       {/* Live running banner */}
-      {isRunning && runningAtMs && (
+      {showRunningBanner && runningAtMs && (
         <div className="flex items-center gap-2 rounded-lg border border-blue-500/20 bg-blue-500/[0.07] px-3 py-2 text-sm text-blue-600 dark:text-blue-400">
           <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
             <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />

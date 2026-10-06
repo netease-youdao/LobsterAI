@@ -31,16 +31,99 @@ describe('OpenClaw extension manifests', () => {
     expect(readContractTools('ask-user-question')).toEqual(['AskUserQuestion']);
   });
 
-  test('declares LobsterAI media generation agent tool contracts', () => {
+  test('declares LobsterAI media generation and skin agent tool contracts', () => {
     expect(readContractTools('lobster-media-generation')).toEqual([
       'lobsterai_image_generate',
       'lobsterai_video_generate',
+      'lobsterai_skin_manage',
     ]);
+  });
+
+  test('declares the experimental decision model agent tool contract', () => {
+    expect(readContractTools('lobster-decision')).toEqual(['decision_evaluate']);
   });
 
   test('declares TypeScript entries for local extensions that are precompiled for packaging', () => {
     expect(readPackageOpenClawExtensions('mcp-bridge')).toEqual(['./index.ts']);
     expect(readPackageOpenClawExtensions('ask-user-question')).toEqual(['./index.ts']);
     expect(readPackageOpenClawExtensions('lobster-media-generation')).toEqual(['./index.ts']);
+    expect(readPackageOpenClawExtensions('lobster-decision')).toEqual(['./index.ts']);
+    expect(readPackageOpenClawExtensions('lobsterai-model-compat')).toEqual(['./index.ts']);
+  });
+
+  test('declares a strict allowlisted model-profile config for LobsterAI compatibility', () => {
+    const manifest = readManifest('lobsterai-model-compat');
+    expect(manifest.providers).toEqual(['lobsterai-model-compat']);
+    // The v2026.8.1 Gateway only imports provider plugins whose provider ids are
+    // referenced by configured agent models; the "lobsterai-server" API owner hint
+    // is not consulted, and runs cannot lazy-load plugins inside a prepared plugin
+    // generation. Startup activation keeps the compatibility owner in every
+    // Gateway generation so package and custom K3 hooks apply from the first run.
+    expect(manifest.activation).toEqual({
+      onStartup: true,
+      onProviders: ['lobsterai-server'],
+    });
+    expect(manifest.configSchema).toEqual({
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        modelProfiles: {
+          type: 'object',
+          minProperties: 1,
+          propertyNames: {
+            pattern: '^[^/\\s]+/[^\\s]+$',
+          },
+          additionalProperties: {
+            type: 'string',
+            enum: ['moonshot-kimi-k3'],
+          },
+        },
+        thinkingProfiles: {
+          type: 'object',
+          minProperties: 1,
+          propertyNames: {
+            pattern: '^[^/\\s]+/[^\\s]+$',
+          },
+          additionalProperties: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              options: {
+                type: 'array',
+                minItems: 1,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    level: {
+                      type: 'string',
+                      enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+                    },
+                    openclawLevel: {
+                      type: 'string',
+                      enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+                    },
+                  },
+                  required: ['level', 'openclawLevel'],
+                },
+              },
+              defaultLevel: {
+                type: 'string',
+                enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+              },
+              requestOptionsVersion: {
+                type: 'integer',
+                enum: [1],
+              },
+            },
+            required: ['options', 'defaultLevel'],
+          },
+        },
+      },
+      anyOf: [
+        { required: ['modelProfiles'] },
+        { required: ['thinkingProfiles'] },
+      ],
+    });
   });
 });

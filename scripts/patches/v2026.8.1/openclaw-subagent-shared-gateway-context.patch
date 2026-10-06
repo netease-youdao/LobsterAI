@@ -1,0 +1,55 @@
+diff --git a/src/plugins/runtime/gateway-request-scope.ts b/src/plugins/runtime/gateway-request-scope.ts
+--- a/src/plugins/runtime/gateway-request-scope.ts
++++ b/src/plugins/runtime/gateway-request-scope.ts
+@@ -82,10 +82,20 @@
+   owners: readonly object[],
+ ): GatewayContextResolver | undefined {
+   const first = owners[0] ? gatewayContextResolvers.get(owners[0]) : undefined;
+-  // Absence permits ambient routing; incompatible owners must retain a rejecting binding.
+-  return owners.every((owner) => gatewayContextResolvers.get(owner) === first)
+-    ? first
+-    : () => undefined;
++  const resolvers = owners.map((owner) => gatewayContextResolvers.get(owner));
++  if (resolvers.every((resolver) => resolver === first)) {
++    return first;
++  }
++  // Different lifecycle-fenced closures may still belong to the same Gateway.
++  // Resolve every owner on each dispatch so a retired or unbound owner cannot
++  // borrow another owner's live context (or fall back to ambient routing).
++  return () => {
++    const context = first?.();
++    if (!context) {
++      return undefined;
++    }
++    return resolvers.every((resolver) => resolver?.() === context) ? context : undefined;
++  };
+ }
+ 
+ /**
+diff --git a/src/agents/subagents/registry/subagent-gateway-context-binding.test.ts b/src/agents/subagents/registry/subagent-gateway-context-binding.test.ts
+--- a/src/agents/subagents/registry/subagent-gateway-context-binding.test.ts
++++ b/src/agents/subagents/registry/subagent-gateway-context-binding.test.ts
+@@ -41,6 +41,23 @@
+     },
+   );
+ 
++  it("accepts separate fenced resolvers for one Gateway and rechecks every owner", () => {
++    const first = {};
++    const second = {};
++    const context = { owner: "gateway-a" } as never;
++    let firstLive = true;
++    let secondLive = true;
++    bindGatewayContextResolver(first, () => firstLive ? context : undefined);
++    bindGatewayContextResolver(second, () => secondLive ? context : undefined);
++    const shared = getSharedGatewayContextResolver([first, second]);
++    expect(shared?.()).toBe(context);
++    secondLive = false;
++    expect(shared?.()).toBeUndefined();
++    secondLive = true;
++    firstLive = false;
++    expect(shared?.()).toBeUndefined();
++  });
++
+   it("preserves a shared owner and leaves wholly unbound batches unbound", () => {
+     const first = {};
+     const second = {};

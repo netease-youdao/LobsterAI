@@ -1,0 +1,282 @@
+OpenClaw v2026.8.1: normalize duplicate legacy session headers during migration.
+
+Import and validation share first-header identity handling. Raw row indexes and
+archived JSONL bytes are preserved; non-header identity collisions remain blocking.
+Base: ea806575e6450e4d1efdfc72c19f04be982a1b9b.
+
+diff --git a/src/commands/doctor-session-sqlite-readers.ts b/src/commands/doctor-session-sqlite-readers.ts
+index ad50ea265cf..378547ac26f 100644
+--- a/src/commands/doctor-session-sqlite-readers.ts
++++ b/src/commands/doctor-session-sqlite-readers.ts
+@@ -71,10 +71,8 @@ export function countTranscriptEventsForPath(
+   }
+   let events = 0;
+   try {
+-    for (const line of iterateJsonlLinesSync(transcriptPath)) {
+-      if (!parseJsonlLine(line)) {
+-        continue;
+-      }
++    const transcript = iterateTranscriptEvents(transcriptPath, false);
++    while (!transcript.next().done) {
+       events += 1;
+     }
+     return { status: "ok", events };
+@@ -267,17 +265,31 @@ function* iterateTranscriptEvents(
+   allowMalformedPrefix: boolean,
+ ): Generator<{ event: FileEntry; originalIndex: number }> {
+   let originalIndex = 0;
++  let firstSessionHeader: Record<string, unknown> | undefined;
+   try {
+     for (const line of iterateJsonlLinesSync(transcriptPath)) {
+       const parsed = parseJsonlLine(line);
+       if (!parsed) {
+         continue;
+       }
++      // Keep raw indexes for v1 compaction links even when a repeated header is skipped.
++      const eventIndex = originalIndex++;
++      if (isRecord(parsed) && parsed.type === "session") {
++        // Legacy writers could append another header for the same session. SQLite
++        // keeps the first identity; import and validation must count it only once.
++        if (
++          typeof parsed.id === "string" &&
++          parsed.id.trim() &&
++          parsed.id === firstSessionHeader?.id
++        ) {
++          continue;
++        }
++        firstSessionHeader ??= parsed;
++      }
+       yield {
+         event: normalizeLoadedFileEntry(parsed as FileEntry),
+-        originalIndex,
++        originalIndex: eventIndex,
+       };
+-      originalIndex += 1;
+     }
+   } catch (error) {
+     if (!allowMalformedPrefix || error instanceof TranscriptImportLimitError) {
+diff --git a/src/commands/doctor-session-sqlite-duplicate-headers.test.ts b/src/commands/doctor-session-sqlite-duplicate-headers.test.ts
+new file mode 100644
+index 00000000000..00f9ed747e9
+--- /dev/null
++++ b/src/commands/doctor-session-sqlite-duplicate-headers.test.ts
+@@ -0,0 +1,219 @@
++import fs from "node:fs";
++import path from "node:path";
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
++import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.js";
++import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
++import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
++import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
++import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
++
++const tempDirs = useAutoCleanupTempDirTracker(afterEach);
++const sessionId = "legacy-session";
++const sessionKey = "agent:main:main";
++const header = {
++  type: "session",
++  version: 3,
++  id: sessionId,
++  timestamp: "2026-04-16T08:42:53.333Z",
++  cwd: "/application/runtime",
++};
++
++afterEach(() => {
++  closeOpenClawAgentDatabasesForTest();
++  closeOpenClawStateDatabaseForTest();
++  vi.unstubAllEnvs();
++});
++
++function message(id: string, role: string, text: string, parentId: string | null = null) {
++  return {
++    type: "message",
++    id,
++    parentId,
++    message: { role, content: [{ type: "text", text }] },
++  };
++}
++
++function createLegacyStore(events: unknown[]) {
++  const stateDir = tempDirs.make("openclaw-doctor-duplicate-headers-");
++  const sessionDir = path.join(stateDir, "agents", "main", "sessions");
++  const storePath = path.join(sessionDir, "sessions.json");
++  const transcriptPath = path.join(sessionDir, `${sessionId}.jsonl`);
++  const peerPath = path.join(sessionDir, "peer-session.jsonl");
++  const configPath = path.join(stateDir, "openclaw.json");
++  const originalTranscript = `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
++  const peerEvents = [{ ...header, id: "peer-session" }, message("peer-message", "user", "peer")];
++  fs.mkdirSync(sessionDir, { recursive: true });
++  fs.writeFileSync(configPath, "{}\n", { mode: 0o600 });
++  fs.writeFileSync(transcriptPath, originalTranscript, { mode: 0o600 });
++  fs.writeFileSync(peerPath, `${peerEvents.map((event) => JSON.stringify(event)).join("\n")}\n`, {
++    mode: 0o600,
++  });
++  fs.writeFileSync(
++    storePath,
++    JSON.stringify({
++      [sessionKey]: { sessionId, updatedAt: 1, sessionFile: transcriptPath },
++      "agent:main:peer": {
++        sessionId: "peer-session",
++        updatedAt: 1,
++        sessionFile: peerPath,
++      },
++    }),
++    { mode: 0o600 },
++  );
++  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
++  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
++  const env = { ...process.env };
++  const scope = { agentId: "main", env, sessionId, sessionKey, storePath };
++  const options = { env, mode: "import" as const, store: storePath };
++  return { options, originalTranscript, peerEvents, peerPath, scope, storePath, transcriptPath };
++}
++
++describe("legacy session headers in SQLite migration", () => {
++  it.each(["fresh", "partial", "already imported"] as const)(
++    "archives duplicate headers and healthy peers after %s import without losing messages",
++    async (existing) => {
++      // A legacy injected reply was written before the buffered original header.
++      // The two headers share identity but intentionally differ in metadata.
++      const events = [
++        header,
++        {
++          ...message("injected", "assistant", "injected reply"),
++          message: {
++            ...message("injected", "assistant", "injected reply").message,
++            provider: "openclaw",
++            model: "gateway-injected",
++          },
++        },
++        { ...header, timestamp: "2026-04-16T08:42:50.809Z", cwd: "/original/workspace" },
++        { type: "model_change", id: "model", parentId: null, provider: "test", modelId: "test" },
++        { type: "thinking_level_change", id: "thinking", parentId: "model", thinkingLevel: "off" },
++        { type: "custom", id: "snapshot", parentId: "thinking", customType: "snapshot" },
++        message("user", "user", "question", "snapshot"),
++        { type: "custom", id: "metadata", parentId: "user", customType: "metadata" },
++        message("answer", "assistant", "answer", "metadata"),
++      ];
++      const store = createLegacyStore(events);
++      const expected = events.filter((_, index) => index !== 2);
++      let seededEvents = 0;
++      if (existing !== "fresh") {
++        const seed = existing === "partial" ? events.slice(0, 2) : events;
++        // Seed through the real importer, including the old writer's identity dedupe.
++        const seeded = await importSqliteSessionRows({
++          ...store.scope,
++          entry: { sessionId, updatedAt: 1 },
++          readTranscriptEvents: (append) => seed.forEach(append),
++        });
++        seededEvents = seeded.transcriptEvents;
++        closeOpenClawAgentDatabasesForTest();
++      }
++
++      const report = await runDoctorSessionSqlite(store.options);
++
++      expect(report.targets[0]?.issues).toEqual([]);
++      expect(report.totals).toMatchObject({
++        importedEntries: 2,
++        importedTranscriptEvents: 10 - seededEvents,
++        archivedTranscriptFiles: 2,
++        archivedLegacyStoreFiles: 1,
++      });
++      expect(loadTranscriptEventsSync(store.scope)).toEqual(expected);
++      expect(
++        loadTranscriptEventsSync({
++          ...store.scope,
++          sessionId: "peer-session",
++          sessionKey: "agent:main:peer",
++        }),
++      ).toEqual(store.peerEvents);
++      expect(fs.existsSync(store.storePath)).toBe(false);
++      expect(fs.existsSync(store.transcriptPath)).toBe(false);
++      expect(fs.existsSync(store.peerPath)).toBe(false);
++      const archivedBytes = report.targets[0]!.archivedTranscriptFiles.map((filePath) =>
++        fs.readFileSync(filePath),
++      );
++      expect(archivedBytes).toContainEqual(Buffer.from(store.originalTranscript));
++
++      const retry = await runDoctorSessionSqlite(store.options);
++      expect(retry.totals).toMatchObject({ importedTranscriptEvents: 0, issues: 0 });
++      expect(loadTranscriptEventsSync(store.scope)).toEqual(expected);
++    },
++  );
++
++  it.each(["same payload", "different payload"])(
++    "keeps non-header identity collisions blocking (%s)",
++    async (payload) => {
++      const firstMessage = message("collision", "user", "first message");
++      const collision =
++        payload === "same payload"
++          ? firstMessage
++          : message("collision", "user", "different message");
++      const store = createLegacyStore([
++        header,
++        firstMessage,
++        { ...header, cwd: "/other" },
++        collision,
++      ]);
++
++      for (const attempt of [0, 1]) {
++        const report = await runDoctorSessionSqlite(store.options);
++        expect(report.targets[0]?.issues).toContainEqual({
++          code: "sqlite_transcript_count_mismatch",
++          message: "SQLite transcript has 2 events; source has 3.",
++          sessionKey,
++        });
++        expect(report.totals).toMatchObject({
++          importedTranscriptEvents: attempt === 0 ? 4 : 0,
++          archivedTranscriptFiles: 0,
++          archivedLegacyStoreFiles: 0,
++        });
++        expect(fs.existsSync(store.storePath)).toBe(true);
++        expect(fs.existsSync(store.peerPath)).toBe(true);
++        expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(store.originalTranscript);
++      }
++    },
++  );
++
++  it("preserves session headers with a different identity", async () => {
++    const events = [
++      header,
++      { ...header, id: "other-session" },
++      message("user", "user", "question"),
++    ];
++    const store = createLegacyStore(events);
++
++    const report = await runDoctorSessionSqlite(store.options);
++
++    expect(report.targets[0]?.issues).toEqual([]);
++    expect(report.totals.importedTranscriptEvents).toBe(5);
++    expect(loadTranscriptEventsSync(store.scope)).toEqual(events);
++  });
++
++  it("preserves original v1 compaction indexes across skipped headers", async () => {
++    const legacyHeader = { ...header, version: 1 };
++    const store = createLegacyStore([
++      legacyHeader,
++      { type: "message", message: { role: "assistant", content: "injected reply" } },
++      { ...legacyHeader, cwd: "/original/workspace" },
++      { type: "message", message: { role: "user", content: "kept message" } },
++      { type: "compaction", summary: "summary", firstKeptEntryIndex: 3, tokensBefore: 42 },
++    ]);
++
++    const report = await runDoctorSessionSqlite(store.options);
++
++    expect(report.targets[0]?.issues).toEqual([]);
++    const events = loadTranscriptEventsSync(store.scope) as Array<{
++      id: string;
++      type: string;
++      parentId?: string;
++      firstKeptEntryId?: string;
++    }>;
++    expect(events).toHaveLength(4);
++    expect(events[3]).toMatchObject({
++      type: "compaction",
++      firstKeptEntryId: events[2]!.id,
++      parentId: events[2]!.id,
++    });
++    expect(events[3]).not.toHaveProperty("firstKeptEntryIndex");
++    expect(events[0]).toMatchObject({ type: "session", version: 3 });
++  });
++});

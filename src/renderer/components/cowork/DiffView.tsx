@@ -325,6 +325,22 @@ export interface DiffData {
   newStr: string;
 }
 
+export interface DiffStats {
+  added: number;
+  removed: number;
+}
+
+/** Added/removed line counts for a single old/new pair (same diff as the view). */
+export function computeDiffStats(oldStr: string, newStr: string): DiffStats {
+  let added = 0;
+  let removed = 0;
+  for (const line of computeDiffLines(oldStr, newStr)) {
+    if (line.type === 'added') added += 1;
+    else if (line.type === 'removed') removed += 1;
+  }
+  return { added, removed };
+}
+
 /**
  * Try to extract diff data from an Edit/MultiEdit tool input.
  * Returns null if the tool input does not contain recognizable diff data.

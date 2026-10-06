@@ -1,5 +1,5 @@
-﻿diff --git a/src/config/types.cron.ts b/src/config/types.cron.ts
-index ecef5dfcf8..e9456cc7c8 100644
+diff --git a/src/config/types.cron.ts b/src/config/types.cron.ts
+index ecef5dfcf..e9456cc7c 100644
 --- a/src/config/types.cron.ts
 +++ b/src/config/types.cron.ts
 @@ -30,6 +30,8 @@ export type CronFailureDestinationConfig = {
@@ -23,20 +23,278 @@ index fee88ce6c8..343073c008 100644
          store: z.string().optional(),
          maxConcurrentRuns: z.number().int().positive().optional(),
          retry: z
+diff --git a/src/cron/service/jobs.ts b/src/cron/service/jobs.ts
+index 215af06c9..3d1a4c863 100644
+--- a/src/cron/service/jobs.ts
++++ b/src/cron/service/jobs.ts
+@@ -592,7 +592,11 @@ function walkSchedulableJobs(
+   return changed;
+ }
+ 
+-function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob; nowMs: number }) {
++export function recomputeJobNextRunAtMs(params: {
++  state: CronServiceState;
++  job: CronJob;
++  nowMs: number;
++}) {
+   let changed = false;
+   try {
+     let newNext = computeJobNextRunAtMs(params.job, params.nowMs);
+diff --git a/src/cron/service/timer.skip-missed-jobs.test.ts b/src/cron/service/timer.skip-missed-jobs.test.ts
+new file mode 100644
+index 000000000..6b940bca1
+--- /dev/null
++++ b/src/cron/service/timer.skip-missed-jobs.test.ts
+@@ -0,0 +1,167 @@
++import { describe, expect, it, vi } from "vitest";
++import {
++  createDefaultIsolatedRunner,
++  createDueIsolatedJob,
++  setupCronRegressionFixtures,
++} from "../../../test/helpers/cron/service-regression-fixtures.js";
++import { saveCronStore } from "../store.js";
++import type { CronJob } from "../types.js";
++import { createCronServiceState, type CronServiceDeps } from "./state.js";
++import { onTimer, runMissedJobs } from "./timer.js";
++
++const fixtures = setupCronRegressionFixtures({ prefix: "cron-skip-missed-jobs-" });
++
++const LAST_RUN_AT = Date.parse("2026-07-11T15:07:00.000Z");
++const MISSED_SLOT_AT = Date.parse("2026-07-12T15:07:00.000Z");
++const STARTUP_AT = Date.parse("2026-07-12T21:09:00.000Z");
++const NEXT_SLOT_AT = Date.parse("2026-07-13T15:07:00.000Z");
++const EVERY_MS = 2 * 60 * 60 * 1_000;
++
++function createMissedDailyCronJob(id: string): CronJob {
++  return {
++    id,
++    name: id,
++    enabled: true,
++    createdAtMs: LAST_RUN_AT - 86_400_000,
++    updatedAtMs: LAST_RUN_AT,
++    schedule: { kind: "cron", expr: "7 15 * * *", tz: "UTC", staggerMs: 0 },
++    sessionTarget: "isolated",
++    wakeMode: "next-heartbeat",
++    payload: { kind: "agentTurn", message: id },
++    delivery: { mode: "none" },
++    state: { lastRunAtMs: LAST_RUN_AT, lastRunStatus: "ok", nextRunAtMs: MISSED_SLOT_AT },
++  };
++}
++
++function createMissedEveryJob(id: string): CronJob {
++  const lastRunAtMs = STARTUP_AT - 3 * EVERY_MS;
++  return {
++    id,
++    name: id,
++    enabled: true,
++    createdAtMs: lastRunAtMs - EVERY_MS,
++    updatedAtMs: lastRunAtMs,
++    schedule: { kind: "every", everyMs: EVERY_MS, anchorMs: lastRunAtMs },
++    sessionTarget: "isolated",
++    wakeMode: "next-heartbeat",
++    payload: { kind: "agentTurn", message: id },
++    delivery: { mode: "none" },
++    state: { lastRunAtMs, lastRunStatus: "ok", nextRunAtMs: lastRunAtMs + EVERY_MS },
++  };
++}
++
++function createStartupState(params: {
++  storePath: string;
++  skipMissedJobs?: boolean;
++  log?: CronServiceDeps["log"];
++}) {
++  const runIsolatedAgentJob = createDefaultIsolatedRunner();
++  const enqueueSystemEvent = vi.fn();
++  const state = createCronServiceState({
++    cronEnabled: true,
++    storePath: params.storePath,
++    log: params.log ?? {
++      info: () => {},
++      warn: () => {},
++      error: () => {},
++      debug: () => {},
++    },
++    nowMs: () => STARTUP_AT,
++    enqueueSystemEvent,
++    requestHeartbeat: vi.fn(),
++    runIsolatedAgentJob,
++    ...(params.skipMissedJobs === undefined
++      ? {}
++      : { cronConfig: { skipMissedJobs: params.skipMissedJobs } }),
++  });
++  return { state, runIsolatedAgentJob, enqueueSystemEvent };
++}
++
++function requireJob(state: { store?: { jobs?: CronJob[] } | null }, id: string): CronJob {
++  const job = state.store?.jobs?.find((candidate) => candidate.id === id);
++  if (!job) {
++    throw new Error(`expected cron job ${id}`);
++  }
++  return job;
++}
++
++describe("cron startup skipMissedJobs", () => {
++  it("fast-forwards missed recurring jobs instead of replaying them", async () => {
++    const store = fixtures.makeStorePath();
++    await saveCronStore(store.storePath, {
++      version: 1,
++      jobs: [createMissedDailyCronJob("missed-daily"), createMissedEveryJob("missed-every")],
++    });
++    const logInfo = vi.fn();
++    const { state, runIsolatedAgentJob, enqueueSystemEvent } = createStartupState({
++      storePath: store.storePath,
++      skipMissedJobs: true,
++      log: { info: logInfo, warn: () => {}, error: () => {}, debug: () => {} },
++    });
++
++    await runMissedJobs(state, { deferAgentTurnJobs: true });
++
++    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
++    expect(enqueueSystemEvent).not.toHaveBeenCalled();
++    const dailyJob = requireJob(state, "missed-daily");
++    expect(dailyJob.state.nextRunAtMs).toBe(NEXT_SLOT_AT);
++    const everyJob = requireJob(state, "missed-every");
++    const everyNext = everyJob.state.nextRunAtMs ?? 0;
++    expect(everyNext).toBeGreaterThan(STARTUP_AT);
++    expect(everyNext).toBeLessThanOrEqual(STARTUP_AT + EVERY_MS);
++    const skipLog = logInfo.mock.calls.find(
++      (call) => call[1] === "cron: skipping missed jobs after restart",
++    );
++    expect(skipLog?.[0]).toMatchObject({ skipMissedJobs: true, skippedCount: 2 });
++
++    // The first regular tick must not pick the fast-forwarded jobs back up.
++    await onTimer(state);
++    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
++    expect(enqueueSystemEvent).not.toHaveBeenCalled();
++  });
++
++  it("keeps missed one-shot jobs on the default catch-up path", async () => {
++    const store = fixtures.makeStorePath();
++    await saveCronStore(store.storePath, {
++      version: 1,
++      jobs: [
++        createMissedDailyCronJob("missed-daily"),
++        createDueIsolatedJob({
++          id: "missed-one-shot",
++          nowMs: LAST_RUN_AT,
++          nextRunAtMs: MISSED_SLOT_AT,
++        }),
++      ],
++    });
++    const { state, runIsolatedAgentJob } = createStartupState({
++      storePath: store.storePath,
++      skipMissedJobs: true,
++    });
++
++    await runMissedJobs(state);
++
++    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
++    const oneShotJob = requireJob(state, "missed-one-shot");
++    expect(oneShotJob.state.lastStatus).toBe("ok");
++    const dailyJob = requireJob(state, "missed-daily");
++    expect(dailyJob.state.lastStatus).toBeUndefined();
++    expect(dailyJob.state.nextRunAtMs).toBe(NEXT_SLOT_AT);
++  });
++
++  it("catches up missed recurring jobs when skipMissedJobs is not enabled", async () => {
++    const store = fixtures.makeStorePath();
++    await saveCronStore(store.storePath, {
++      version: 1,
++      jobs: [createMissedDailyCronJob("missed-daily")],
++    });
++    const { state, runIsolatedAgentJob } = createStartupState({
++      storePath: store.storePath,
++    });
++
++    await runMissedJobs(state);
++
++    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
++    const dailyJob = requireJob(state, "missed-daily");
++    expect(dailyJob.state.lastStatus).toBe("ok");
++  });
++});
 diff --git a/src/cron/service/timer.ts b/src/cron/service/timer.ts
-index 28dc6a0b21..4a29c08fe7 100644
+index 28dc6a0b2..b45920d65 100644
 --- a/src/cron/service/timer.ts
 +++ b/src/cron/service/timer.ts
-@@ -1124,6 +1124,13 @@ async function planStartupCatchup(
+@@ -54,6 +54,7 @@ import {
+   hasScheduledNextRunAtMs,
+   isJobEnabled,
+   nextWakeAtMs,
++  recomputeJobNextRunAtMs,
+   recomputeNextRunsForMaintenance,
+   recordScheduleComputeError,
+   resolveJobErrorBackoffUntilMs,
+@@ -1115,6 +1116,46 @@ export async function runMissedJobs(
+   await applyStartupCatchupOutcomes(state, plan, outcomes);
+ }
+ 
++/**
++ * Fast-forwards recurring (cron/every) jobs whose slots were missed while the
++ * gateway was offline, advancing nextRunAtMs to the next occurrence from now
++ * (cron.skipMissedJobs). One-shot ("at") jobs are left untouched so they keep
++ * the default startup catch-up semantics. Returns the fast-forwarded job ids
++ * so the caller can exclude them from the catch-up plan; the caller persists.
++ */
++function fastForwardMissedRecurringJobs(
++  state: CronServiceState,
++  opts?: { skipJobIds?: ReadonlySet<string> },
++): ReadonlySet<string> {
++  const now = state.deps.nowMs();
++  const missed = collectRunnableJobs(state, now, {
++    skipJobIds: opts?.skipJobIds,
++    skipAtIfAlreadyRan: true,
++    allowCronMissedRunByLastRun: true,
++  }).filter((job) => job.schedule.kind !== "at");
++  const skippedJobs: Array<{
++    jobId: string;
++    name: string;
++    previousNextRunAtMs: number | undefined;
++    nextRunAtMs: number | undefined;
++  }> = [];
++  for (const job of missed) {
++    const previousNextRunAtMs = job.state.nextRunAtMs;
++    recomputeJobNextRunAtMs({ state, job, nowMs: now });
++    skippedJobs.push({
++      jobId: job.id,
++      name: job.name,
++      previousNextRunAtMs,
++      nextRunAtMs: job.state.nextRunAtMs,
++    });
++  }
++  state.deps.log.info(
++    { skipMissedJobs: true, skippedCount: skippedJobs.length, skippedJobs },
++    "cron: skipping missed jobs after restart",
++  );
++  return new Set(skippedJobs.map((entry) => entry.jobId));
++}
++
+ async function planStartupCatchup(
+   state: CronServiceState,
+   opts?: { skipJobIds?: ReadonlySet<string>; deferAgentTurnJobs?: boolean },
+@@ -1124,6 +1165,26 @@ async function planStartupCatchup(
      state.deps.maxMissedJobsPerRestart ?? DEFAULT_MAX_MISSED_JOBS_PER_RESTART,
    );
    return locked(state, async () => {
 +    if (state.deps.cronConfig?.skipMissedJobs === true) {
-+      state.deps.log.info(
-+        { skipMissedJobs: true },
-+        "cron: skipping missed jobs after restart",
-+      );
-+      return { candidates: [], deferredJobs: [] };
++      // skipMissedJobs: fast-forward recurring jobs whose slots became due
++      // while the gateway was offline, so neither startup catch-up nor the
++      // first regular timer tick replays them. Returning an empty plan alone
++      // is not enough — the maintenance recompute intentionally preserves
++      // past-due nextRunAtMs values (#13992), so the first tick would still
++      // pick these jobs up. One-shot ("at") jobs keep the default catch-up
++      // semantics: a user-scheduled single reminder must not be dropped.
++      await ensureLoaded(state, { skipRecompute: true });
++      const fastForwardedJobIds = state.store
++        ? fastForwardMissedRecurringJobs(state, { skipJobIds: opts?.skipJobIds })
++        : new Set<string>();
++      if (fastForwardedJobIds.size > 0) {
++        await persist(state);
++        opts = {
++          ...opts,
++          skipJobIds: new Set([...(opts?.skipJobIds ?? []), ...fastForwardedJobIds]),
++        };
++      }
 +    }
      await ensureLoaded(state, { skipRecompute: true });
      if (!state.store) {

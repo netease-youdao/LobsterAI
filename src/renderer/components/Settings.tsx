@@ -10,11 +10,26 @@ import {
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
 import { DataMigrationRestoreStatus } from '../../shared/dataMigration/constants';
-import { normalizeNotificationSettings } from '../../shared/notifications/constants';
-import { OpenClawEnginePhase, OpenClawGatewayRepairErrorCode } from '../../shared/openclawEngine/constants';
-import { ProviderAuthType, ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
-import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, normalizeFontPreference, ShortcutAction, type ShortcutConfig } from '../config';
+import type { DecisionModelConfigUpdate } from '../../shared/decisionModel/constants';
+import {
+  normalizeNotificationSettings,
+  TaskCompletionNotificationMode,
+} from '../../shared/notifications/constants';
+import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
+import {
+  applyModelRuntimeProfileMetadata,
+  findKimiK3ReservedCustomParamKeys,
+  ModelRuntimeProfileSource,
+  OpenClawApi,
+  ProviderAuthType,
+  ProviderName,
+  ProviderRegistry,
+  resolveCodingPlanBaseUrl,
+  resolveModelRuntimeProfile,
+} from '../../shared/providers';
+import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, isCustomProvider, normalizeFontPreference, resolveArtifactAutoPreviewEnabled, ShortcutAction, type ShortcutConfig } from '../config';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
+import { useSkin } from '../providers/SkinProvider';
 import { apiService } from '../services/api';
 import { configService } from '../services/config';
 import { coworkService } from '../services/cowork';
@@ -22,8 +37,15 @@ import { decryptSecret, decryptWithPassword, EncryptedPayload, encryptWithPasswo
 import { i18nService, LanguageType } from '../services/i18n';
 import { imService } from '../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
-import { formatShortcutForDisplay, getShortcutConflictSignature, matchesShortcut } from '../services/shortcuts';
-import { themeService } from '../services/theme';
+import { resolveOpenClawRepairError, resolveOpenClawRepairHistoryWarning } from '../services/openclawRepair';
+import { clearPendingPublishingConversionAttribution } from '../services/publishingConversionAttribution';
+import { clearPublishingSubscriptionRecoveryAnalytics } from '../services/publishingSubscriptionRecovery';
+import { formatShortcutForDisplay, getShortcutConflictSignature, isTextEditingSafeShortcut, matchesShortcut } from '../services/shortcuts';
+import {
+  type ThemeDefaultChangedDetail,
+  themeService,
+  ThemeServiceEvent,
+} from '../services/theme';
 import { applyTypographyPreferences } from '../services/typography';
 import type { RootState } from '../store';
 import { selectCoworkConfig } from '../store/selectors/coworkSelectors';
@@ -31,6 +53,7 @@ import { setAvailableModels } from '../store/slices/modelSlice';
 import type {
   CoworkAgentEngine,
   CoworkMemoryStats,
+  CoworkTempDirPreview,
   CoworkUserMemoryEntry,
   OpenClawEngineStatus,
   OpenClawGatewayRepairResult,
@@ -38,8 +61,11 @@ import type {
 } from '../types/cowork';
 import { OpenClawSessionKeepAlive as OpenClawSessionKeepAliveValues } from '../types/cowork';
 import Modal from './common/Modal';
+import DreamingRecoveryNotice from './cowork/DreamingRecoveryNotice';
 import DreamingSettingsSection from './cowork/DreamingSettingsSection';
 import EmbeddingSettingsSection from './cowork/EmbeddingSettingsSection';
+import DecisionModelExperimentalSettings from './DecisionModelExperimentalSettings';
+import DshExperimentalSettings from './DshExperimentalSettings';
 import ErrorMessage from './ErrorMessage';
 import BrainIcon from './icons/BrainIcon';
 import EditIcon from './icons/EditIcon';
@@ -51,6 +77,7 @@ import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle 
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
 import {
   buildOpenAICompatibleChatCompletionsUrl,
+  buildOpenAIConnectionTestRequestBody,
   buildOpenAIResponsesUrl,
   CONNECTIVITY_TEST_TOKEN_BUDGET,
   CUSTOM_PROVIDER_KEYS,
@@ -59,8 +86,12 @@ import {
   getEffectiveApiFormat,
   getOpenClawProviderIdForConfig,
   getProviderDefaultBaseUrl,
+  hasEquivalentProviderModelId,
   hasProviderAuthConfigured,
+  MAX_OUTPUT_TOKENS_MAX,
+  MAX_OUTPUT_TOKENS_MIN,
   type Model,
+  parseMaxOutputTokensInput,
   type ProviderConfig,
   providerKeys,
   providerRequiresApiKey,
@@ -69,14 +100,16 @@ import {
   resolveBaseUrl,
   resolveModelSupportsImageForProvider,
   shouldAutoSwitchProviderBaseUrl,
-  shouldUseMaxCompletionTokensForOpenAI,
   shouldUseOpenAIResponsesForProvider,
 } from './settings/modelProviderUtils';
 import ModelSettingsSection, { DeleteProviderConfirmDialog, ModelEditorDialog } from './settings/ModelSettingsSection';
+import { resolveSettingsEscapeAction, SettingsEscapeAction } from './settings/settingsEscape';
 import EmailSkillConfig from './skills/EmailSkillConfig';
+import SkinPresentationScope from './skin/SkinPresentationScope';
+import SkinSettingsSection from './skin/SkinSettingsSection';
 import ThemedSelect from './ui/ThemedSelect';
 
-type TabType = 'general' | 'appearance' | 'coworkAgentEngine' | 'model' | 'browserWebAccess' | 'coworkMemory' | 'coworkDreaming' | 'shortcuts' | 'im' | 'email' | 'plugins' | 'about';
+type TabType = 'general' | 'appearance' | 'coworkAgentEngine' | 'model' | 'browserWebAccess' | 'coworkMemory' | 'coworkDreaming' | 'shortcuts' | 'im' | 'email' | 'plugins' | 'experimental' | 'about';
 
 const waitForNextPaint = (): Promise<void> => new Promise(resolve => {
   window.requestAnimationFrame(() => {
@@ -272,9 +305,11 @@ const serializeProviderModelsForAnalyticsDiff = (providerConfig?: ProviderConfig
     contextWindow: model.contextWindow,
     customParams: sortAnalyticsObject(model.customParams),
     id: model.id,
+    maxTokens: model.maxTokens,
     name: model.name,
     supportsImage: model.supportsImage === true,
     supportsThinking: model.supportsThinking === true,
+    supportsVideo: model.supportsVideo === true,
   })))
 );
 
@@ -751,7 +786,6 @@ const SETTINGS_TAB_SHORTCUT_COMMANDS: ShortcutCommandDefinition[] = [
   { key: ShortcutAction.OpenSettingsMemory, tabLabelKey: 'coworkMemoryTitle' },
   { key: ShortcutAction.OpenSettingsDreaming, tabLabelKey: 'coworkMemoryTabDreaming' },
   { key: ShortcutAction.OpenSettingsPlugins, tabLabelKey: 'pluginsTab' },
-  { key: ShortcutAction.OpenSettingsShortcuts, tabLabelKey: 'shortcuts' },
   { key: ShortcutAction.OpenSettingsAbout, tabLabelKey: 'about' },
 ].map(command => ({
   ...command,
@@ -806,6 +840,11 @@ const SHORTCUT_COMMAND_GROUPS: Array<{
         key: ShortcutAction.ShowCurrentAgentTasks,
         labelKey: 'shortcutShowCurrentAgentTasks',
         descriptionKey: 'shortcutDescShowCurrentAgentTasks',
+      },
+      {
+        key: ShortcutAction.CollapseCurrentAgentTasks,
+        labelKey: 'shortcutCollapseCurrentAgentTasks',
+        descriptionKey: 'shortcutDescCollapseCurrentAgentTasks',
       },
       ...AGENT_TASK_SLOT_COMMANDS,
     ],
@@ -872,6 +911,7 @@ export type SettingsOpenOptions = {
 
 interface SettingsProps extends SettingsOpenOptions {
   onClose: () => void;
+  onStartAiSkin?: (text: string, kitId: string) => void;
   initialTabRequestId?: number;
   onUpdateFound?: (info: AppUpdateInfo) => void;
   enterpriseConfig?: {
@@ -1273,10 +1313,33 @@ const SettingsToggleRow: React.FC<{
         onClick={onToggle}
       />
     </div>
-    <p className="mt-3 text-sm text-secondary">
+    <p className="mt-1 text-sm text-secondary">
       {description}
     </p>
   </div>
+);
+
+// Groups related settings rows into a labeled card (label above a bordered,
+// divider-separated card). Used to categorize the General settings tab.
+const SettingsGroup: React.FC<{
+  title: string;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+}> = ({ title, children, footer }) => (
+  <section className="space-y-2.5">
+    <h4 className="px-1 text-xs font-semibold uppercase tracking-wider text-secondary">
+      {title}
+    </h4>
+    <div className="divide-y divide-border rounded-xl border border-border bg-surface">
+      {children}
+    </div>
+    {footer}
+  </section>
+);
+
+// A single padded row inside a SettingsGroup card.
+const SettingsRow: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="px-4 py-3.5">{children}</div>
 );
 
 const SettingsNumberInputRow: React.FC<{
@@ -1320,6 +1383,7 @@ const SettingsNumberInputRow: React.FC<{
 
 const Settings: React.FC<SettingsProps> = ({
   onClose,
+  onStartAiSkin,
   initialTab,
   initialTabRequestId,
   notice,
@@ -1329,18 +1393,28 @@ const Settings: React.FC<SettingsProps> = ({
   enterpriseConfig,
 }) => {
   const dispatch = useDispatch();
+  const {
+    activeSkin,
+    isAppearanceChanging,
+    selectThemeById,
+    selectThemeMode,
+  } = useSkin();
   // 状态
   const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
-  const [themeId, setThemeId] = useState<string>(themeService.getThemeId());
+  const [themeId, setThemeId] = useState<string>(themeService.getDefaultThemeId());
   const [uiFontSize, setUiFontSize] = useState<number>(FontPreferences.UiFontSizeDefault);
   const [codeFontSize, setCodeFontSize] = useState<number>(FontPreferences.CodeFontSizeDefault);
   const [language, setLanguage] = useState<LanguageType>('zh');
+  const [artifactAutoPreviewEnabled, setArtifactAutoPreviewEnabled] = useState(true);
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
   const [sqliteAutoBackupEnabled, setSqliteAutoBackupEnabled] = useState(false);
   const [usageAnalyticsEnabled, setUsageAnalyticsEnabled] = useState(true);
-  const [taskCompletionNotificationsEnabled, setTaskCompletionNotificationsEnabled] = useState(true);
+  const [taskCompletionNotificationMode, setTaskCompletionNotificationMode] =
+    useState<TaskCompletionNotificationMode>(TaskCompletionNotificationMode.Unfocused);
+  const [permissionNotificationsEnabled, setPermissionNotificationsEnabled] = useState(true);
+  const [questionNotificationsEnabled, setQuestionNotificationsEnabled] = useState(true);
   const [browserWebAccess, setBrowserWebAccess] = useState<BrowserWebAccessConfig>(() => ({
     ...defaultBrowserWebAccessConfig,
     webFetch: { ...defaultBrowserWebAccessConfig.webFetch },
@@ -1365,15 +1439,33 @@ const Settings: React.FC<SettingsProps> = ({
   const [pendingDeleteProvider, setPendingDeleteProvider] = useState<ProviderType | null>(null);
   const [isImportingProviders, setIsImportingProviders] = useState(false);
   const [isExportingProviders, setIsExportingProviders] = useState(false);
-  const initialThemeRef = useRef<'light' | 'dark' | 'system'>(themeService.getTheme());
-  const initialThemeIdRef = useRef<string>(themeService.getThemeId());
+  const initialThemeIdRef = useRef<string>(themeService.getDefaultThemeId());
   const initialUiFontSizeRef = useRef<number>(FontPreferences.UiFontSizeDefault);
   const initialCodeFontSizeRef = useRef<number>(FontPreferences.CodeFontSizeDefault);
   const initialLanguageRef = useRef<LanguageType>(i18nService.getLanguage());
   const didSaveRef = useRef(false);
 
+  useEffect(() => {
+    const handleDefaultThemeChanged = (event: Event) => {
+      const detail = (event as CustomEvent<ThemeDefaultChangedDetail>).detail;
+      if (!detail) {
+        return;
+      }
+
+      setTheme(detail.mode);
+      setThemeId(detail.themeId);
+    };
+
+    window.addEventListener(ThemeServiceEvent.DefaultChanged, handleDefaultThemeChanged);
+    return () => {
+      window.removeEventListener(ThemeServiceEvent.DefaultChanged, handleDefaultThemeChanged);
+    };
+  }, []);
+
   // Plugin settings handle (deferred save)
   const pluginsSettingsRef = useRef<PluginsSettingsHandle>(null);
+  // Unsaved edits from the experimental decision model card (deferred save)
+  const decisionModelDraftRef = useRef<DecisionModelConfigUpdate | null>(null);
 
   // Add state for active provider
   const [activeProvider, setActiveProvider] = useState<ProviderType>(getDefaultActiveProvider());
@@ -1452,6 +1544,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [newModelSupportsImage, setNewModelSupportsImage] = useState(false);
   const [newModelSupportsThinking, setNewModelSupportsThinking] = useState(false);
   const [newModelContextWindow, setNewModelContextWindow] = useState<number | undefined>(undefined);
+  const [newModelMaxTokens, setNewModelMaxTokens] = useState<string>('');
   const [newModelCustomParams, setNewModelCustomParams] = useState<string>('');
   const [modelFormError, setModelFormError] = useState<string | null>(null);
 
@@ -1560,7 +1653,9 @@ const Settings: React.FC<SettingsProps> = ({
         reportAboutAction('check_update', 'update_found');
       }
 
-      if (result.state.info) {
+      // A download already running in the background reports its progress on
+      // this button; opening the update dialog on top of it only adds noise.
+      if (result.state.info && result.state.status !== AppUpdateStatus.Downloading) {
         onUpdateFound?.(result.state.info);
       }
     } catch {
@@ -1576,7 +1671,7 @@ const Settings: React.FC<SettingsProps> = ({
     }
   }, [appVersion, authUser, updateCheckStatus, onUpdateFound]);
 
-  const updateButtonLabel = useMemo(() => {
+  const updateButtonLabel = (() => {
     if (
       updateCheckStatus === 'downloading' &&
       appUpdateState?.progress?.percent != null &&
@@ -1590,7 +1685,7 @@ const Settings: React.FC<SettingsProps> = ({
     if (updateCheckStatus === 'upToDate') return i18nService.t('updateUpToDate');
     if (updateCheckStatus === 'error') return i18nService.t('updateCheckFailed');
     return i18nService.t('checkForUpdate');
-  }, [appUpdateState?.progress?.percent, updateCheckStatus]);
+  })();
 
   const handleOpenUserManual = useCallback(() => {
     reportAboutAction('open_user_manual', 'success');
@@ -1654,7 +1749,17 @@ const Settings: React.FC<SettingsProps> = ({
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
   const [skipMissedJobs, setSkipMissedJobs] = useState<boolean>(coworkConfig.skipMissedJobs ?? true);
-  const [openClawHeartbeatEnabled, setOpenClawHeartbeatEnabled] = useState<boolean>(coworkConfig.openClawHeartbeatEnabled ?? true);
+  const [tempStorageUsageBytes, setTempStorageUsageBytes] = useState<number | null>(null);
+  const [tempStorageCleanableBytes, setTempStorageCleanableBytes] = useState<number | null>(null);
+  const [isCleaningTempStorage, setIsCleaningTempStorage] = useState<boolean>(false);
+  const [tempStorageCleanResult, setTempStorageCleanResult] = useState<string | null>(null);
+  const [isLoadingTempCleanPreview, setIsLoadingTempCleanPreview] = useState<boolean>(false);
+  const [tempCleanPreviewDirs, setTempCleanPreviewDirs] = useState<CoworkTempDirPreview[]>([]);
+  const [tempCleanSelection, setTempCleanSelection] = useState<Record<string, boolean>>({});
+  const [showTempCleanConfirm, setShowTempCleanConfirm] = useState<boolean>(false);
+  const [openClawHeartbeatEnabled, setOpenClawHeartbeatEnabled] = useState<boolean>(coworkConfig.openClawHeartbeatEnabled ?? false);
+  const [openClawSkillReviewEnabled, setOpenClawSkillReviewEnabled] = useState<boolean>(coworkConfig.openClawSkillReviewEnabled ?? false);
+  const [openClawMemoryFlushEnabled, setOpenClawMemoryFlushEnabled] = useState<boolean>(coworkConfig.openClawMemoryFlushEnabled ?? false);
   const [embeddingEnabled, setEmbeddingEnabled] = useState<boolean>(coworkConfig.embeddingEnabled ?? false);
   const [embeddingProvider, setEmbeddingProvider] = useState<string>(coworkConfig.embeddingProvider ?? 'openai');
   const [embeddingModel, setEmbeddingModel] = useState<string>(coworkConfig.embeddingModel ?? '');
@@ -1696,7 +1801,9 @@ const Settings: React.FC<SettingsProps> = ({
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
     setSkipMissedJobs(coworkConfig.skipMissedJobs ?? true);
-    setOpenClawHeartbeatEnabled(coworkConfig.openClawHeartbeatEnabled ?? true);
+    setOpenClawHeartbeatEnabled(coworkConfig.openClawHeartbeatEnabled ?? false);
+    setOpenClawSkillReviewEnabled(coworkConfig.openClawSkillReviewEnabled ?? false);
+    setOpenClawMemoryFlushEnabled(coworkConfig.openClawMemoryFlushEnabled ?? false);
     setEmbeddingEnabled(coworkConfig.embeddingEnabled ?? false);
     setEmbeddingProvider(coworkConfig.embeddingProvider ?? 'openai');
     setEmbeddingModel(coworkConfig.embeddingModel ?? '');
@@ -1716,6 +1823,8 @@ const Settings: React.FC<SettingsProps> = ({
     coworkConfig.openClawSessionPolicy?.keepAlive,
     coworkConfig.skipMissedJobs,
     coworkConfig.openClawHeartbeatEnabled,
+    coworkConfig.openClawSkillReviewEnabled,
+    coworkConfig.openClawMemoryFlushEnabled,
     coworkConfig.embeddingEnabled,
     coworkConfig.embeddingProvider,
     coworkConfig.embeddingModel,
@@ -1728,6 +1837,90 @@ const Settings: React.FC<SettingsProps> = ({
     coworkConfig.dreamingModel,
     coworkConfig.dreamingTimezone,
   ]);
+
+  const refreshTempStorageUsage = useCallback(async () => {
+    try {
+      const result = await window.electron?.cowork?.getTempStorageUsage();
+      if (result?.success) {
+        setTempStorageUsageBytes(result.bytes ?? 0);
+        setTempStorageCleanableBytes(result.cleanableBytes ?? 0);
+      }
+    } catch (err) {
+      console.debug('Failed to measure cowork temp storage:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'general') return;
+    void refreshTempStorageUsage();
+  }, [activeTab, refreshTempStorageUsage]);
+
+  // Opens the guardian-style confirmation dialog: scan first, show exactly
+  // what would be removed per directory, and only delete what the user
+  // confirms.
+  const handleOpenTempCleanConfirm = useCallback(async () => {
+    if (isLoadingTempCleanPreview || isCleaningTempStorage) return;
+    setIsLoadingTempCleanPreview(true);
+    setTempStorageCleanResult(null);
+    try {
+      const result = await window.electron?.cowork?.getTempStorageUsage();
+      if (!result?.success) {
+        setTempStorageCleanResult(i18nService.t('coworkTempCleanFailed'));
+        return;
+      }
+      const dirs = result.dirs ?? [];
+      setTempStorageUsageBytes(result.bytes ?? 0);
+      setTempStorageCleanableBytes(result.cleanableBytes ?? 0);
+      setTempCleanPreviewDirs(dirs);
+      const selection: Record<string, boolean> = {};
+      for (const dir of dirs) {
+        selection[dir.cwd] = !dir.isActive && dir.cleanableFiles > 0;
+      }
+      setTempCleanSelection(selection);
+      setShowTempCleanConfirm(true);
+    } catch (err) {
+      console.error('Failed to preview cowork temp storage:', err);
+      setTempStorageCleanResult(i18nService.t('coworkTempCleanFailed'));
+    } finally {
+      setIsLoadingTempCleanPreview(false);
+    }
+  }, [isCleaningTempStorage, isLoadingTempCleanPreview]);
+
+  const tempCleanSelectedDirs = useMemo(
+    () => tempCleanPreviewDirs.filter(dir => tempCleanSelection[dir.cwd] && !dir.isActive && dir.cleanableFiles > 0),
+    [tempCleanPreviewDirs, tempCleanSelection],
+  );
+  const tempCleanSelectedBytes = useMemo(
+    () => tempCleanSelectedDirs.reduce((sum, dir) => sum + dir.cleanableBytes, 0),
+    [tempCleanSelectedDirs],
+  );
+
+  const handleConfirmTempClean = useCallback(async () => {
+    if (isCleaningTempStorage || tempCleanSelectedDirs.length === 0) return;
+    setIsCleaningTempStorage(true);
+    setTempStorageCleanResult(null);
+    try {
+      const result = await window.electron?.cowork?.cleanTempStorage({
+        cwds: tempCleanSelectedDirs.map(dir => dir.cwd),
+      });
+      if (result?.success) {
+        setTempStorageCleanResult(
+          i18nService.t('coworkTempCleanedResult')
+            .replace('{count}', String(result.deletedFiles ?? 0))
+            .replace('{size}', formatBackupSize(result.freedBytes ?? 0) || '0 B'),
+        );
+        setShowTempCleanConfirm(false);
+        void refreshTempStorageUsage();
+      } else {
+        setTempStorageCleanResult(i18nService.t('coworkTempCleanFailed'));
+      }
+    } catch (err) {
+      console.error('Failed to clean cowork temp storage:', err);
+      setTempStorageCleanResult(i18nService.t('coworkTempCleanFailed'));
+    } finally {
+      setIsCleaningTempStorage(false);
+    }
+  }, [isCleaningTempStorage, refreshTempStorageUsage, tempCleanSelectedDirs]);
 
   useEffect(() => () => {
     if (emailCopiedTimerRef.current != null) {
@@ -1795,20 +1988,28 @@ const Settings: React.FC<SettingsProps> = ({
         FontPreferences.CodeFontSizeMin,
         FontPreferences.CodeFontSizeMax,
       );
-      initialThemeRef.current = config.theme;
+      const defaultThemeId = themeService.getDefaultThemeId();
+      initialThemeIdRef.current = defaultThemeId;
       initialUiFontSizeRef.current = resolvedUiFontSize;
       initialCodeFontSizeRef.current = resolvedCodeFontSize;
       initialLanguageRef.current = config.language;
       setTheme(config.theme);
+      setThemeId(defaultThemeId);
       setUiFontSize(resolvedUiFontSize);
       setCodeFontSize(resolvedCodeFontSize);
       setLanguage(config.language);
+      setArtifactAutoPreviewEnabled(
+        resolveArtifactAutoPreviewEnabled(config.artifactAutoPreviewEnabled),
+      );
       setUseSystemProxy(config.useSystemProxy ?? false);
       setSqliteAutoBackupEnabled(config.sqliteAutoBackupEnabled === true);
       setUsageAnalyticsEnabled(config.usageAnalyticsEnabled !== false);
-      setTaskCompletionNotificationsEnabled(
-        normalizeNotificationSettings(config.notificationSettings).taskCompletionNotificationsEnabled,
-      );
+      {
+        const notificationSettings = normalizeNotificationSettings(config.notificationSettings);
+        setTaskCompletionNotificationMode(notificationSettings.taskCompletionNotificationMode);
+        setPermissionNotificationsEnabled(notificationSettings.permissionNotificationsEnabled);
+        setQuestionNotificationsEnabled(notificationSettings.questionNotificationsEnabled);
+      }
       setBrowserWebAccess(normalizeBrowserWebAccessConfig(config.browserWebAccess));
       const savedTestMode = config.app?.testMode ?? false;
       setTestMode(savedTestMode);
@@ -2044,8 +2245,6 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   useEffect(() => {
-    const initialThemeId = initialThemeIdRef.current;
-    const initialTheme = initialThemeRef.current;
     const initialUiFontSize = initialUiFontSizeRef.current;
     const initialCodeFontSize = initialCodeFontSizeRef.current;
     const initialLanguage = initialLanguageRef.current;
@@ -2053,7 +2252,6 @@ const Settings: React.FC<SettingsProps> = ({
       if (didSaveRef.current) {
         return;
       }
-      themeService.restoreTheme(initialThemeId, initialTheme);
       applyTypographyPreferences({
         uiFontSize: initialUiFontSize,
         codeFontSize: initialCodeFontSize,
@@ -2152,7 +2350,7 @@ const Settings: React.FC<SettingsProps> = ({
     // Find the first unused custom slot
     const usedKeys = new Set(Object.keys(providers));
     const newKey = CUSTOM_PROVIDER_KEYS.find(k => !usedKeys.has(k));
-    if (!newKey) return; // All 10 slots used
+    if (!newKey) return; // All custom provider slots used
     setProviders(prev => ({
       ...prev,
       [newKey]: {
@@ -2172,6 +2370,10 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelName('');
     setNewModelId('');
     setNewModelSupportsImage(false);
+    setNewModelSupportsThinking(false);
+    setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
+    setNewModelCustomParams('');
     setModelFormError(null);
   };
 
@@ -2646,7 +2848,9 @@ const Settings: React.FC<SettingsProps> = ({
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled
     || skipMissedJobs !== (coworkConfig.skipMissedJobs ?? true)
-    || openClawHeartbeatEnabled !== (coworkConfig.openClawHeartbeatEnabled ?? true)
+    || openClawHeartbeatEnabled !== (coworkConfig.openClawHeartbeatEnabled ?? false)
+    || openClawSkillReviewEnabled !== (coworkConfig.openClawSkillReviewEnabled ?? false)
+    || openClawMemoryFlushEnabled !== (coworkConfig.openClawMemoryFlushEnabled ?? false)
     || openClawSessionKeepAlive !== (coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays)
     || embeddingEnabled !== (coworkConfig.embeddingEnabled ?? false)
     || embeddingProvider !== (coworkConfig.embeddingProvider ?? 'openai')
@@ -2774,17 +2978,12 @@ const Settings: React.FC<SettingsProps> = ({
 
   const resolveOpenClawRepairMessage = (result: OpenClawGatewayRepairResult): string => {
     if (result.success) {
-      return result.backupPath
+      const message = result.backupPath
         ? i18nService.t('openClawRepairSuccess')
         : i18nService.t('openClawRepairSuccessNoBackup');
+      return [message, resolveOpenClawRepairHistoryWarning(result)].filter(Boolean).join('\n');
     }
-    if (result.errorCode === OpenClawGatewayRepairErrorCode.Busy) {
-      return i18nService.t('openClawRepairBusyError');
-    }
-    if (result.errorCode === OpenClawGatewayRepairErrorCode.ConfigApplyPending) {
-      return i18nService.t('openClawRepairConfigApplyPendingError');
-    }
-    return result.error?.trim() || i18nService.t('openClawRepairFailed');
+    return resolveOpenClawRepairError(result, false);
   };
 
   const handleConfirmOpenClawRepair = useCallback(async () => {
@@ -3176,6 +3375,7 @@ const Settings: React.FC<SettingsProps> = ({
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (isSaving || isAppearanceChanging) return;
     setIsSaving(true);
     setError(null);
 
@@ -3206,7 +3406,9 @@ const Settings: React.FC<SettingsProps> = ({
         ? normalizeProvidersForSettingsSave(previousConfig.providers as ProvidersConfig)
         : normalizedProviders;
       const previousSkipMissedJobs = coworkConfig.skipMissedJobs ?? true;
-      const previousOpenClawHeartbeatEnabled = coworkConfig.openClawHeartbeatEnabled ?? true;
+      const previousOpenClawHeartbeatEnabled = coworkConfig.openClawHeartbeatEnabled ?? false;
+      const previousOpenClawSkillReviewEnabled = coworkConfig.openClawSkillReviewEnabled ?? false;
+      const previousOpenClawMemoryFlushEnabled = coworkConfig.openClawMemoryFlushEnabled ?? false;
       const previousAgentEngine = coworkConfig.agentEngine || 'openclaw';
       const previousOpenClawSessionKeepAlive = coworkConfig.openClawSessionPolicy?.keepAlive
         || OpenClawSessionKeepAliveValues.ThirtyDays;
@@ -3238,9 +3440,12 @@ const Settings: React.FC<SettingsProps> = ({
         dreamingEnabled,
         dreamingFrequency,
       };
-      const previousTaskCompletionNotificationsEnabled = normalizeNotificationSettings(
+      const previousNotificationSettings = normalizeNotificationSettings(
         previousConfig.notificationSettings,
-      ).taskCompletionNotificationsEnabled;
+      );
+      const previousArtifactAutoPreviewEnabled = resolveArtifactAutoPreviewEnabled(
+        previousConfig.artifactAutoPreviewEnabled,
+      );
       const previousThemeId = initialThemeIdRef.current;
       const previousUiFontSize = normalizeFontPreference(
         previousConfig.uiFontSize,
@@ -3266,12 +3471,15 @@ const Settings: React.FC<SettingsProps> = ({
         uiFontSize,
         codeFontSize,
         language,
+        artifactAutoPreviewEnabled,
         useSystemProxy,
         sqliteAutoBackupEnabled,
         usageAnalyticsEnabled,
-        notificationSettings: {
-          taskCompletionNotificationsEnabled,
-        },
+        notificationSettings: normalizeNotificationSettings({
+          taskCompletionNotificationMode,
+          permissionNotificationsEnabled,
+          questionNotificationsEnabled,
+        }),
         browserWebAccess: normalizedBrowserWebAccess,
         shortcuts,
         app: {
@@ -3280,8 +3488,17 @@ const Settings: React.FC<SettingsProps> = ({
         },
       });
 
-      // 应用主题
-      themeService.setTheme(theme);
+      if (!usageAnalyticsEnabled) {
+        clearPendingPublishingConversionAttribution();
+        clearPublishingSubscriptionRecoveryAnalytics();
+      }
+
+      if (previousArtifactAutoPreviewEnabled !== artifactAutoPreviewEnabled) {
+        console.log(
+          `[Settings] artifact auto-preview preference updated: enabled=${artifactAutoPreviewEnabled}`,
+        );
+      }
+
       applyTypographyPreferences({ uiFontSize, codeFontSize });
 
       // 应用语言
@@ -3317,12 +3534,29 @@ const Settings: React.FC<SettingsProps> = ({
       dispatch(setAvailableModels(allModels));
 
       if (hasCoworkConfigChanges) {
+        if (previousOpenClawHeartbeatEnabled !== openClawHeartbeatEnabled) {
+          console.log(
+            `[Settings] updating OpenClaw heartbeat: enabled=${openClawHeartbeatEnabled}, previous=${previousOpenClawHeartbeatEnabled}`,
+          );
+        }
+        if (previousOpenClawSkillReviewEnabled !== openClawSkillReviewEnabled) {
+          console.log(
+            `[Settings] updating OpenClaw skill review: enabled=${openClawSkillReviewEnabled}, previous=${previousOpenClawSkillReviewEnabled}`,
+          );
+        }
+        if (previousOpenClawMemoryFlushEnabled !== openClawMemoryFlushEnabled) {
+          console.log(
+            `[Settings] updating OpenClaw memory flush: enabled=${openClawMemoryFlushEnabled}, previous=${previousOpenClawMemoryFlushEnabled}`,
+          );
+        }
         const updated = await coworkService.updateConfig({
           agentEngine: coworkAgentEngine,
           memoryEnabled: coworkMemoryEnabled,
           memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
           skipMissedJobs,
           openClawHeartbeatEnabled,
+          openClawSkillReviewEnabled,
+          openClawMemoryFlushEnabled,
           embeddingEnabled,
           embeddingProvider,
           embeddingModel,
@@ -3364,9 +3598,23 @@ const Settings: React.FC<SettingsProps> = ({
         }
       }
 
+      // Decision model edits save with the dialog, so switching the tool on
+      // or off restarts the gateway once, on Save, rather than per field.
+      if (decisionModelDraftRef.current) {
+        await window.electron.decisionModel.saveConfig(decisionModelDraftRef.current);
+        decisionModelDraftRef.current = null;
+      }
+
       if (usageAnalyticsEnabled) {
         if (previousConfig.language !== language) {
           reportGeneralSettingChanged('language', language, previousConfig.language);
+        }
+        if (previousArtifactAutoPreviewEnabled !== artifactAutoPreviewEnabled) {
+          reportGeneralSettingChanged(
+            'artifactAutoPreviewEnabled',
+            artifactAutoPreviewEnabled,
+            previousArtifactAutoPreviewEnabled,
+          );
         }
         if ((previousConfig.useSystemProxy ?? false) !== useSystemProxy) {
           reportGeneralSettingChanged('useSystemProxy', useSystemProxy, previousConfig.useSystemProxy ?? false);
@@ -3378,11 +3626,25 @@ const Settings: React.FC<SettingsProps> = ({
             previousConfig.sqliteAutoBackupEnabled === true,
           );
         }
-        if (previousTaskCompletionNotificationsEnabled !== taskCompletionNotificationsEnabled) {
+        if (previousNotificationSettings.taskCompletionNotificationMode !== taskCompletionNotificationMode) {
           reportGeneralSettingChanged(
-            'taskCompletionNotificationsEnabled',
-            taskCompletionNotificationsEnabled,
-            previousTaskCompletionNotificationsEnabled,
+            'taskCompletionNotificationMode',
+            taskCompletionNotificationMode,
+            previousNotificationSettings.taskCompletionNotificationMode,
+          );
+        }
+        if (previousNotificationSettings.permissionNotificationsEnabled !== permissionNotificationsEnabled) {
+          reportGeneralSettingChanged(
+            'permissionNotificationsEnabled',
+            permissionNotificationsEnabled,
+            previousNotificationSettings.permissionNotificationsEnabled,
+          );
+        }
+        if (previousNotificationSettings.questionNotificationsEnabled !== questionNotificationsEnabled) {
+          reportGeneralSettingChanged(
+            'questionNotificationsEnabled',
+            questionNotificationsEnabled,
+            previousNotificationSettings.questionNotificationsEnabled,
           );
         }
         if (previousSkipMissedJobs !== skipMissedJobs) {
@@ -3417,11 +3679,25 @@ const Settings: React.FC<SettingsProps> = ({
             previousOpenClawHeartbeatEnabled,
           );
         }
+        if (previousOpenClawSkillReviewEnabled !== openClawSkillReviewEnabled) {
+          reportAgentEngineSettingChanged(
+            'openClawSkillReviewEnabled',
+            openClawSkillReviewEnabled,
+            previousOpenClawSkillReviewEnabled,
+          );
+        }
         if (previousOpenClawSessionKeepAlive !== openClawSessionKeepAlive) {
           reportAgentEngineSettingChanged(
             'openClawSessionKeepAlive',
             openClawSessionKeepAlive,
             previousOpenClawSessionKeepAlive,
+          );
+        }
+        if (previousOpenClawMemoryFlushEnabled !== openClawMemoryFlushEnabled) {
+          reportAgentEngineSettingChanged(
+            'openClawMemoryFlushEnabled',
+            openClawMemoryFlushEnabled,
+            previousOpenClawMemoryFlushEnabled,
           );
         }
         const memorySettingsSummary = buildMemorySettingAnalyticsSummary(
@@ -3467,7 +3743,8 @@ const Settings: React.FC<SettingsProps> = ({
       didSaveRef.current = true;
       onClose();
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'Failed to save settings');
+      console.error('[Settings] failed to save settings:', error);
+      setError(error instanceof Error ? error.message : i18nService.t('failedToSaveSettings'));
     } finally {
       setIsSaving(false);
     }
@@ -3578,11 +3855,20 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
 
-  const handleEditModel = (modelId: string, modelName: string, supportsImage?: boolean, supportsThinking?: boolean, contextWindow?: number, customParams?: Record<string, unknown>) => {
+  const handleEditModel = (
+    modelId: string,
+    modelName: string,
+    supportsImage?: boolean,
+    supportsThinking?: boolean,
+    contextWindow?: number,
+    customParams?: Record<string, unknown>,
+    maxTokens?: number,
+  ) => {
     setIsAddingModel(false);
     setIsEditingModel(true);
     setEditingModelId(modelId);
@@ -3591,6 +3877,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(!!supportsImage);
     setNewModelSupportsThinking(!!supportsThinking);
     setNewModelContextWindow(contextWindow);
+    setNewModelMaxTokens(maxTokens !== undefined ? String(maxTokens) : '');
     setNewModelCustomParams(
       customParams && Object.keys(customParams).length > 0
         ? JSON.stringify(customParams, null, 2)
@@ -3638,10 +3925,12 @@ const Settings: React.FC<SettingsProps> = ({
       : newModelName.trim();
 
     const currentModels = providers[activeProvider].models ?? [];
-    const duplicateModel = currentModels.find(
-      model => model.id === modelId && (!isEditingModel || model.id !== editingModelId)
+    const hasDuplicateModel = hasEquivalentProviderModelId(
+      currentModels,
+      modelId,
+      isEditingModel ? editingModelId : null,
     );
-    if (duplicateModel) {
+    if (hasDuplicateModel) {
       setModelFormError(i18nService.t('modelIdExists'));
       return;
     }
@@ -3662,20 +3951,84 @@ const Settings: React.FC<SettingsProps> = ({
       }
     }
 
-    const nextModel = {
-      id: modelId,
-      name: modelName,
+    const providerConfig = providers[activeProvider];
+    const effectiveApiFormat = getEffectiveApiFormat(
+      activeProvider,
+      providerConfig.apiFormat,
+    );
+    const runtimeProfile = resolveModelRuntimeProfile({
+      source: isCustomProvider(activeProvider)
+        ? ModelRuntimeProfileSource.Custom
+        : ModelRuntimeProfileSource.BuiltIn,
+      providerId: activeProvider,
+      modelId,
+      api: effectiveApiFormat === 'openai'
+        ? OpenClawApi.OpenAICompletions
+        : OpenClawApi.AnthropicMessages,
+    });
+    const conflictingCustomParamKeys = runtimeProfile
+      ? findKimiK3ReservedCustomParamKeys(parsedCustomParams)
+      : [];
+    if (conflictingCustomParamKeys.length > 0) {
+      setModelFormError(
+        i18nService.t('kimiK3CustomParamsConflict').replace(
+          '{keys}',
+          conflictingCustomParamKeys.join(', '),
+        ),
+      );
+      return;
+    }
+
+    // Runtime profiles own the output cap, so the (hidden) field is ignored there.
+    const parsedMaxTokens = runtimeProfile
+      ? undefined
+      : parseMaxOutputTokensInput(newModelMaxTokens);
+    if (parsedMaxTokens === null) {
+      setModelFormError(
+        i18nService.t('maxOutputTokensInvalid')
+          .replace('{min}', String(MAX_OUTPUT_TOKENS_MIN))
+          .replace('{max}', String(MAX_OUTPUT_TOKENS_MAX)),
+      );
+      return;
+    }
+
+    const editingModel = currentModels.find(model => model.id === editingModelId);
+    const resolvedProfileMetadata = applyModelRuntimeProfileMetadata({
       supportsImage: ProviderRegistry.resolveModelSupportsImage(
         activeProvider,
         modelId,
         newModelSupportsImage,
       ),
-      ...(ProviderRegistry.resolveModelSupportsThinking(
+      supportsVideo: ProviderRegistry.resolveModelSupportsVideo(
+        activeProvider,
+        modelId,
+        editingModel?.supportsVideo,
+      ),
+      supportsThinking: ProviderRegistry.resolveModelSupportsThinking(
         activeProvider,
         modelId,
         newModelSupportsThinking,
-      ) ? { supportsThinking: true } : {}),
-      ...(newModelContextWindow !== undefined ? { contextWindow: newModelContextWindow } : {}),
+      ),
+      contextWindow: newModelContextWindow,
+      // An empty field falls back to the registry default instead of the
+      // previously saved value, so clearing it restores automatic inference.
+      maxTokens: parsedMaxTokens ?? ProviderRegistry.resolveModelMaxTokens(
+        activeProvider,
+        modelId,
+      ),
+    }, runtimeProfile);
+    const nextModel = {
+      id: modelId,
+      name: modelName,
+      supportsImage: resolvedProfileMetadata.supportsImage ?? false,
+      ...(resolvedProfileMetadata.supportsThinking ? { supportsThinking: true } : {}),
+      ...(resolvedProfileMetadata.contextWindow !== undefined
+        ? { contextWindow: resolvedProfileMetadata.contextWindow }
+        : {}),
+      ...(resolvedProfileMetadata.supportsVideo ? { supportsVideo: true } : {}),
+      ...(resolvedProfileMetadata.maxTokens !== undefined
+        ? { maxTokens: resolvedProfileMetadata.maxTokens }
+        : {}),
       ...(parsedCustomParams && Object.keys(parsedCustomParams).length > 0
         ? { customParams: parsedCustomParams }
         : {}),
@@ -3699,6 +4052,8 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelId('');
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
+    setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -3712,6 +4067,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -3722,9 +4078,45 @@ const Settings: React.FC<SettingsProps> = ({
       handleCancelModelEdit();
       return;
     }
-    if (e.key === 'Enter') {
+    // Plain Enter must keep its default behavior (e.g. newline in the custom
+    // params textarea); only Cmd/Ctrl+Enter saves from the keyboard.
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       handleSaveNewModel();
+    }
+  };
+
+  // Escape dismisses the innermost stacked layer and closes the panel last.
+  // Dialogs rendered through Modal handle Escape themselves.
+  const handleEscape = () => {
+    const resolution = resolveSettingsEscapeAction({
+      isBlocked: isBackingUpOpenClawData
+        || isRestoringOpenClawData
+        || isRepairingOpenClaw
+        || isCleaningTempStorage
+        || isShortcutInputActive(),
+      layers: [
+        { isOpen: pendingDeleteProvider !== null, dismiss: () => setPendingDeleteProvider(null) },
+        { isOpen: isAddingModel || isEditingModel, dismiss: handleCancelModelEdit },
+        { isOpen: isTestResultModalOpen, dismiss: () => setIsTestResultModalOpen(false) },
+        { isOpen: showOpenClawRepairConfirm, dismiss: () => setShowOpenClawRepairConfirm(false) },
+        { isOpen: showTempCleanConfirm, dismiss: () => setShowTempCleanConfirm(false) },
+        {
+          isOpen: showOpenClawDataRestoreConfirm,
+          dismiss: () => setShowOpenClawDataRestoreConfirm(false),
+        },
+        { isOpen: showMemoryModal, dismiss: resetCoworkMemoryEditor },
+      ],
+    });
+
+    switch (resolution.action) {
+      case SettingsEscapeAction.DismissLayer:
+        resolution.dismiss();
+        return;
+      case SettingsEscapeAction.ClosePanel:
+        guardedClose();
+        return;
+      default:
     }
   };
 
@@ -3869,23 +4261,11 @@ const Settings: React.FC<SettingsProps> = ({
           headers['User-Agent'] = 'GitHubCopilotChat/0.26.7';
           headers['Openai-Intent'] = 'conversation-panel';
         }
-        const openAIRequestBody: Record<string, unknown> = useResponsesApi
-          ? {
-              model: firstModel.id,
-              input: [{ role: 'user', content: [{ type: 'input_text', text: 'Hi' }] }],
-              max_output_tokens: CONNECTIVITY_TEST_TOKEN_BUDGET,
-            }
-          : {
-              model: firstModel.id,
-              messages: [{ role: 'user', content: 'Hi' }],
-            };
-        if (!useResponsesApi && shouldUseMaxCompletionTokensForOpenAI(testingProvider, firstModel.id)) {
-          openAIRequestBody.max_completion_tokens = CONNECTIVITY_TEST_TOKEN_BUDGET;
-        } else {
-          if (!useResponsesApi) {
-            openAIRequestBody.max_tokens = CONNECTIVITY_TEST_TOKEN_BUDGET;
-          }
-        }
+        const openAIRequestBody = buildOpenAIConnectionTestRequestBody({
+          provider: testingProvider,
+          model: firstModel,
+          useResponsesApi,
+        });
         response = await window.electron.api.fetch({
           url: openaiUrl,
           method: 'POST',
@@ -4236,6 +4616,7 @@ const Settings: React.FC<SettingsProps> = ({
       { key: 'coworkMemory' as TabType,   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
       { key: 'coworkDreaming' as TabType, label: i18nService.t('coworkMemoryTabDreaming'), icon: <DreamingTabIcon className="h-5 w-5" /> },
       { key: 'plugins' as TabType,        label: i18nService.t('pluginsTab'),     icon: <PlugIcon className="h-5 w-5" /> },
+      { key: 'experimental' as TabType,   label: i18nService.t('experimentalTab'), icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3v6.4c0 .35-.09.68-.27.98l-4.4 7.34A2 2 0 0 0 6.8 20.75h10.4a2 2 0 0 0 1.72-3.03l-4.4-7.34a1.9 1.9 0 0 1-.27-.98V3M8.25 3h7.5M7.5 14.25h9" /></svg> },
       { key: 'shortcuts' as TabType,      label: i18nService.t('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
       { key: 'about' as TabType,          label: i18nService.t('about'),          icon: <InformationCircleIcon className="h-5 w-5" /> },
     ];
@@ -4255,10 +4636,14 @@ const Settings: React.FC<SettingsProps> = ({
 
   useEffect(() => {
     const handleSettingsTabShortcut = (event: KeyboardEvent) => {
-      if (event.repeat || isShortcutInputActive() || isTextEditingActive()) return;
+      if (event.repeat || isShortcutInputActive()) return;
 
+      const isTextEditing = isTextEditingActive();
       const command = SETTINGS_TAB_SHORTCUT_COMMANDS.find((candidate) => {
-        return matchesShortcut(event, shortcuts[candidate.key]);
+        const binding = shortcuts[candidate.key];
+        // While typing, only run shortcuts carrying a Cmd/Ctrl modifier so plain keys keep inserting text.
+        if (isTextEditing && !isTextEditingSafeShortcut(binding)) return false;
+        return matchesShortcut(event, binding);
       });
       if (!command) return;
 
@@ -4289,6 +4674,32 @@ const Settings: React.FC<SettingsProps> = ({
     });
   }, [uiFontSize]);
 
+  const handleThemeModeSelection = useCallback(async (
+    mode: 'light' | 'dark' | 'system',
+  ) => {
+    setError(null);
+    try {
+      const selection = await selectThemeMode(mode);
+      setTheme(selection.mode);
+      setThemeId(selection.themeId);
+    } catch (selectionError) {
+      console.error('[Settings] Failed to select the default theme mode', selectionError);
+      setError(i18nService.t('themeApplyFailed'));
+    }
+  }, [selectThemeMode]);
+
+  const handleThemeIdSelection = useCallback(async (nextThemeId: string) => {
+    setError(null);
+    try {
+      const selection = await selectThemeById(nextThemeId);
+      setTheme(selection.mode);
+      setThemeId(selection.themeId);
+    } catch (selectionError) {
+      console.error('[Settings] Failed to select the default color theme', selectionError);
+      setError(i18nService.t('themeApplyFailed'));
+    }
+  }, [selectThemeById]);
+
   const renderAppearanceSettings = () => (
     <div className="space-y-8">
       <div>
@@ -4296,19 +4707,16 @@ const Settings: React.FC<SettingsProps> = ({
           {i18nService.t('appearance')}
         </h4>
 
-        <div className="grid grid-cols-3 gap-3 mb-4">
+        <div className="grid max-w-xl grid-cols-3 gap-3 mb-4">
           {(['light', 'dark', 'system'] as const).map((mode) => {
-            const isSelected = theme === mode;
+            const isSelected = !activeSkin && theme === mode;
             return (
               <button
                 key={mode}
                 type="button"
-                onClick={() => {
-                  setTheme(mode);
-                  themeService.setTheme(mode);
-                  setThemeId(themeService.getThemeId());
-                }}
-                className="flex flex-col items-center rounded-xl border-2 p-3 transition-colors cursor-pointer"
+                onClick={() => void handleThemeModeSelection(mode)}
+                disabled={isAppearanceChanging}
+                className="flex flex-col items-center rounded-xl border-2 p-3 transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60"
                 style={{
                   borderColor: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-border)',
                   backgroundColor: isSelected ? 'var(--lobster-primary-muted)' : undefined,
@@ -4317,20 +4725,20 @@ const Settings: React.FC<SettingsProps> = ({
                 <svg viewBox="0 0 120 80" className="w-full h-auto rounded-md mb-2 overflow-hidden" xmlns="http://www.w3.org/2000/svg">
                   {mode === 'light' && (
                     <>
-                      <rect width="120" height="80" fill="#F8F9FB" />
-                      <rect x="0" y="0" width="30" height="80" fill="#EBEDF0" />
-                      <rect x="4" y="8" width="22" height="4" rx="2" fill="#C8CBD0" />
-                      <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D5D7DB" />
-                      <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D5D7DB" />
-                      <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D5D7DB" />
+                      <rect width="120" height="80" fill="#F9F9F9" />
+                      <rect x="0" y="0" width="30" height="80" fill="#EDEDED" />
+                      <rect x="4" y="8" width="22" height="4" rx="2" fill="#CBCBCB" />
+                      <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D8D8D8" />
+                      <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D8D8D8" />
+                      <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D8D8D8" />
                       <rect x="36" y="8" width="78" height="64" rx="4" fill="#FFFFFF" />
-                      <rect x="42" y="16" width="50" height="4" rx="2" fill="#D5D7DB" />
-                      <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="46" width="40" height="4" rx="2" fill="#D5D7DB" />
-                      <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="60" width="58" height="3" rx="1.5" fill="#E2E4E7" />
+                      <rect x="42" y="16" width="50" height="4" rx="2" fill="#D8D8D8" />
+                      <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="46" width="40" height="4" rx="2" fill="#D8D8D8" />
+                      <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="60" width="58" height="3" rx="1.5" fill="#E5E5E5" />
                     </>
                   )}
                   {mode === 'dark' && (
@@ -4362,19 +4770,19 @@ const Settings: React.FC<SettingsProps> = ({
                         </clipPath>
                       </defs>
                       <g clipPath="url(#left-half)">
-                        <rect width="120" height="80" fill="#F8F9FB" />
-                        <rect x="0" y="0" width="30" height="80" fill="#EBEDF0" />
-                        <rect x="4" y="8" width="22" height="4" rx="2" fill="#C8CBD0" />
-                        <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D5D7DB" />
-                        <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D5D7DB" />
-                        <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D5D7DB" />
+                        <rect width="120" height="80" fill="#F9F9F9" />
+                        <rect x="0" y="0" width="30" height="80" fill="#EDEDED" />
+                        <rect x="4" y="8" width="22" height="4" rx="2" fill="#CBCBCB" />
+                        <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D8D8D8" />
+                        <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D8D8D8" />
+                        <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D8D8D8" />
                         <rect x="36" y="8" width="78" height="64" rx="4" fill="#FFFFFF" />
-                        <rect x="42" y="16" width="50" height="4" rx="2" fill="#D5D7DB" />
-                        <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E2E4E7" />
-                        <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E2E4E7" />
-                        <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E2E4E7" />
-                        <rect x="42" y="46" width="40" height="4" rx="2" fill="#D5D7DB" />
-                        <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E2E4E7" />
+                        <rect x="42" y="16" width="50" height="4" rx="2" fill="#D8D8D8" />
+                        <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E5E5E5" />
+                        <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E5E5E5" />
+                        <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E5E5E5" />
+                        <rect x="42" y="46" width="40" height="4" rx="2" fill="#D8D8D8" />
+                        <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E5E5E5" />
                       </g>
                       <g clipPath="url(#right-half)">
                         <rect width="120" height="80" fill="#0F1117" />
@@ -4408,21 +4816,16 @@ const Settings: React.FC<SettingsProps> = ({
         </h4>
         {(() => {
           const allThemes = themeService.getAllThemes();
-          const classicThemes = allThemes.filter(t => t.meta.id === 'classic-light' || t.meta.id === 'classic-dark');
-          const otherThemes = allThemes.filter(t => t.meta.id !== 'classic-light' && t.meta.id !== 'classic-dark');
           const renderTile = (t: import('../theme').ThemeDefinition) => {
-            const isSelected = themeId === t.meta.id;
+            const isSelected = !activeSkin && themeId === t.meta.id;
             const [bg, c1, c2, c3] = t.meta.preview;
             return (
               <button
                 key={t.meta.id}
                 type="button"
-                onClick={() => {
-                  themeService.setThemeById(t.meta.id);
-                  setThemeId(t.meta.id);
-                  setTheme(t.meta.appearance as 'light' | 'dark');
-                }}
-                className="flex flex-col items-center rounded-xl border-2 p-2 transition-colors cursor-pointer"
+                onClick={() => void handleThemeIdSelection(t.meta.id)}
+                disabled={isAppearanceChanging}
+                className="flex flex-col items-center rounded-xl border-2 p-2 transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60"
                 style={{
                   borderColor: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-border)',
                   backgroundColor: isSelected ? 'var(--lobster-primary-muted)' : undefined,
@@ -4442,16 +4845,13 @@ const Settings: React.FC<SettingsProps> = ({
             );
           };
           return (
-            <>
-              <div className="grid grid-cols-2 gap-3 mb-3">
-                {classicThemes.map(renderTile)}
-              </div>
-              <div className="grid grid-cols-4 gap-3">
-                {otherThemes.map(renderTile)}
-              </div>
-            </>
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3">
+              {allThemes.map(renderTile)}
+            </div>
           );
         })()}
+
+        <SkinSettingsSection onStartAiSkin={onStartAiSkin} />
 
         <div className="mt-5 divide-y divide-border rounded-xl border border-border bg-surface">
           <div className="px-4 py-3">
@@ -4483,138 +4883,277 @@ const Settings: React.FC<SettingsProps> = ({
 
   const renderTabContent = () => {
     switch(activeTab) {
+      case 'experimental':
+        return (
+          <div className="space-y-4">
+            <DshExperimentalSettings />
+            <DecisionModelExperimentalSettings draftRef={decisionModelDraftRef} />
+          </div>
+        );
       case 'general':
         return (
           <div className="space-y-8">
-            {/* Language Section */}
-            <div className="flex items-center justify-between">
-              <h4 className="text-sm font-medium text-foreground">
-                {i18nService.t('language')}
-              </h4>
-              <div className="w-[140px] shrink-0">
-                <ThemedSelect
-                  id="language"
-                  value={language}
-                  onChange={(value) => {
-                    const nextLanguage = value as LanguageType;
-                    setLanguage(nextLanguage);
-                    i18nService.setLanguage(nextLanguage, { persist: false });
+            {/* Group: General basics */}
+            <SettingsGroup title={i18nService.t('settingsGroupBasics')}>
+              <SettingsRow>
+                <div className="flex items-center justify-between gap-4">
+                  <h4 className="text-sm font-medium text-foreground">
+                    {i18nService.t('language')}
+                  </h4>
+                  <div className="w-[140px] shrink-0">
+                    <ThemedSelect
+                      id="language"
+                      value={language}
+                      onChange={(value) => {
+                        const nextLanguage = value as LanguageType;
+                        setLanguage(nextLanguage);
+                        i18nService.setLanguage(nextLanguage, { persist: false });
+                      }}
+                      options={[
+                        { value: 'zh', label: i18nService.t('chinese') },
+                        { value: 'en', label: i18nService.t('english') }
+                      ]}
+                    />
+                  </div>
+                </div>
+              </SettingsRow>
+
+              <SettingsRow>
+                <SettingsToggleRow
+                  title={i18nService.t('artifactAutoPreviewEnabled')}
+                  description={i18nService.t('artifactAutoPreviewEnabledDescription')}
+                  checked={artifactAutoPreviewEnabled}
+                  onToggle={() => {
+                    setArtifactAutoPreviewEnabled((previous) => !previous);
                   }}
-                  options={[
-                    { value: 'zh', label: i18nService.t('chinese') },
-                    { value: 'en', label: i18nService.t('english') }
-                  ]}
                 />
-              </div>
-            </div>
+              </SettingsRow>
 
-            <SettingsToggleRow
-              title={i18nService.t('autoLaunch')}
-              description={i18nService.t('autoLaunchDescription')}
-              checked={autoLaunch}
-              disabled={isUpdatingAutoLaunch}
-              onToggle={async () => {
-                if (isUpdatingAutoLaunch) return;
-                const next = !autoLaunch;
-                setIsUpdatingAutoLaunch(true);
-                try {
-                  console.log(`[Renderer][Settings] updating auto-launch setting: requested=${next}`);
-                  const result = await window.electron.autoLaunch.set(next);
-                  console.log(
-                    `[Renderer][Settings] auto-launch update result: success=${result.success}, enabled=${result.enabled ?? 'unknown'}, error=${result.error ?? 'none'}`,
-                  );
-                  if (result.success) {
-                    const previous = autoLaunch;
-                    const actualEnabled = result.enabled ?? next;
-                    setAutoLaunchState(actualEnabled);
-                    reportGeneralSettingChanged('autoLaunch', actualEnabled, previous);
-                  } else {
-                    if (typeof result.enabled === 'boolean') {
-                      setAutoLaunchState(result.enabled);
+              <SettingsRow>
+                <SettingsToggleRow
+                  title={i18nService.t('autoLaunch')}
+                  description={i18nService.t('autoLaunchDescription')}
+                  checked={autoLaunch}
+                  disabled={isUpdatingAutoLaunch}
+                  onToggle={async () => {
+                    if (isUpdatingAutoLaunch) return;
+                    const next = !autoLaunch;
+                    setIsUpdatingAutoLaunch(true);
+                    try {
+                      console.log(`[Renderer][Settings] updating auto-launch setting: requested=${next}`);
+                      const result = await window.electron.autoLaunch.set(next);
+                      console.log(
+                        `[Renderer][Settings] auto-launch update result: success=${result.success}, enabled=${result.enabled ?? 'unknown'}, error=${result.error ?? 'none'}`,
+                      );
+                      if (result.success) {
+                        const previous = autoLaunch;
+                        const actualEnabled = result.enabled ?? next;
+                        setAutoLaunchState(actualEnabled);
+                        reportGeneralSettingChanged('autoLaunch', actualEnabled, previous);
+                      } else {
+                        if (typeof result.enabled === 'boolean') {
+                          setAutoLaunchState(result.enabled);
+                        }
+                        setError(getAutoLaunchErrorMessage(result.errorCode));
+                      }
+                    } catch (err) {
+                      console.error('Failed to set auto-launch:', err);
+                      setError(i18nService.t('autoLaunchUpdateFailed'));
+                    } finally {
+                      setIsUpdatingAutoLaunch(false);
                     }
-                    setError(getAutoLaunchErrorMessage(result.errorCode));
-                  }
-                } catch (err) {
-                  console.error('Failed to set auto-launch:', err);
-                  setError(i18nService.t('autoLaunchUpdateFailed'));
-                } finally {
-                  setIsUpdatingAutoLaunch(false);
-                }
-              }}
-            />
+                  }}
+                />
+              </SettingsRow>
 
-            <SettingsToggleRow
-              title={i18nService.t('preventSleep')}
-              description={i18nService.t('preventSleepDescription')}
-              checked={preventSleep}
-              disabled={isUpdatingPreventSleep}
-              onToggle={async () => {
-                if (isUpdatingPreventSleep) return;
-                const next = !preventSleep;
-                setIsUpdatingPreventSleep(true);
-                try {
-                  const result = await window.electron.preventSleep.set(next);
-                  if (result.success) {
-                    const previous = preventSleep;
-                    setPreventSleepState(next);
-                    reportGeneralSettingChanged('preventSleep', next, previous);
-                  } else {
-                    setError(result.error || 'Failed to update prevent-sleep setting');
-                  }
-                } catch (err) {
-                  console.error('Failed to set prevent-sleep:', err);
-                  setError('Failed to update prevent-sleep setting');
-                } finally {
-                  setIsUpdatingPreventSleep(false);
-                }
-              }}
-            />
+              <SettingsRow>
+                <SettingsToggleRow
+                  title={i18nService.t('preventSleep')}
+                  description={i18nService.t('preventSleepDescription')}
+                  checked={preventSleep}
+                  disabled={isUpdatingPreventSleep}
+                  onToggle={async () => {
+                    if (isUpdatingPreventSleep) return;
+                    const next = !preventSleep;
+                    setIsUpdatingPreventSleep(true);
+                    try {
+                      const result = await window.electron.preventSleep.set(next);
+                      if (result.success) {
+                        const previous = preventSleep;
+                        setPreventSleepState(next);
+                        reportGeneralSettingChanged('preventSleep', next, previous);
+                      } else {
+                        setError(result.error || 'Failed to update prevent-sleep setting');
+                      }
+                    } catch (err) {
+                      console.error('Failed to set prevent-sleep:', err);
+                      setError('Failed to update prevent-sleep setting');
+                    } finally {
+                      setIsUpdatingPreventSleep(false);
+                    }
+                  }}
+                />
+              </SettingsRow>
 
-            <SettingsToggleRow
-              title={i18nService.t('useSystemProxy')}
-              description={i18nService.t('useSystemProxyDescription')}
-              checked={useSystemProxy}
-              onToggle={() => {
-                setUseSystemProxy((prev) => !prev);
-              }}
-            />
+              <SettingsRow>
+                <SettingsToggleRow
+                  title={i18nService.t('useSystemProxy')}
+                  description={i18nService.t('useSystemProxyDescription')}
+                  checked={useSystemProxy}
+                  onToggle={() => {
+                    setUseSystemProxy((prev) => !prev);
+                  }}
+                />
+              </SettingsRow>
+            </SettingsGroup>
 
-            <SettingsToggleRow
-              title={i18nService.t('sqliteAutoBackupEnabled')}
-              description={i18nService.t('sqliteAutoBackupEnabledDescription')}
-              checked={sqliteAutoBackupEnabled}
-              onToggle={() => {
-                setSqliteAutoBackupEnabled((prev) => !prev);
-              }}
-            />
+            {/* Group: Notifications */}
+            <SettingsGroup
+              title={i18nService.t('settingsGroupNotifications')}
+              footer={
+                (window.electron.platform === 'win32' ||
+                  (window.electron.platform === 'darwin' && !import.meta.env.DEV)) && (
+                  <p className="px-1 text-xs text-secondary">
+                    {i18nService.t('notificationSystemPermissionHint')}{' '}
+                    <button
+                      type="button"
+                      className="text-primary hover:underline"
+                      onClick={() => {
+                        void window.electron.appInfo.openSystemNotificationSettings?.();
+                      }}
+                    >
+                      {i18nService.t('openSystemNotificationSettings')}
+                    </button>
+                  </p>
+                )
+              }
+            >
+              <SettingsRow>
+                <div>
+                  <div className="flex items-center justify-between gap-4">
+                    <h4 className="min-w-0 flex-1 text-sm font-medium text-foreground">
+                      {i18nService.t('taskCompletionNotificationMode')}
+                    </h4>
+                    <div className="w-[180px] shrink-0">
+                      <ThemedSelect
+                        id="task-completion-notification-mode"
+                        value={taskCompletionNotificationMode}
+                        onChange={(value) => {
+                          setTaskCompletionNotificationMode(value as TaskCompletionNotificationMode);
+                        }}
+                        options={[
+                          {
+                            value: TaskCompletionNotificationMode.Always,
+                            label: i18nService.t('taskCompletionNotificationModeAlways'),
+                          },
+                          {
+                            value: TaskCompletionNotificationMode.Unfocused,
+                            label: i18nService.t('taskCompletionNotificationModeUnfocused'),
+                          },
+                          {
+                            value: TaskCompletionNotificationMode.Off,
+                            label: i18nService.t('taskCompletionNotificationModeOff'),
+                          },
+                        ]}
+                      />
+                    </div>
+                  </div>
+                  <p className="mt-1 text-sm text-secondary">
+                    {i18nService.t('taskCompletionNotificationModeDescription')}
+                  </p>
+                </div>
+              </SettingsRow>
 
-            <SettingsToggleRow
-              title={i18nService.t('taskCompletionNotifications')}
-              description={i18nService.t('taskCompletionNotificationsDescription')}
-              checked={taskCompletionNotificationsEnabled}
-              onToggle={() => {
-                setTaskCompletionNotificationsEnabled((prev) => !prev);
-              }}
-            />
+              <SettingsRow>
+                <SettingsToggleRow
+                  title={i18nService.t('permissionNotifications')}
+                  description={i18nService.t('permissionNotificationsDescription')}
+                  checked={permissionNotificationsEnabled || questionNotificationsEnabled}
+                  onToggle={() => {
+                    const nextEnabled = !(permissionNotificationsEnabled || questionNotificationsEnabled);
+                    setPermissionNotificationsEnabled(nextEnabled);
+                    setQuestionNotificationsEnabled(nextEnabled);
+                  }}
+                />
+              </SettingsRow>
+            </SettingsGroup>
 
-            <SettingsToggleRow
-              title={i18nService.t('skipMissedJobs')}
-              description={i18nService.t('skipMissedJobsDescription')}
-              checked={skipMissedJobs}
-              onToggle={() => {
-                setSkipMissedJobs((prev) => !prev);
-              }}
-            />
+            {/* Group: Scheduled tasks */}
+            <SettingsGroup title={i18nService.t('scheduledTasks')}>
+              <SettingsRow>
+                <SettingsToggleRow
+                  title={i18nService.t('skipMissedJobs')}
+                  description={i18nService.t('skipMissedJobsDescription')}
+                  checked={skipMissedJobs}
+                  onToggle={() => {
+                    setSkipMissedJobs((prev) => !prev);
+                  }}
+                />
+              </SettingsRow>
+            </SettingsGroup>
 
-            <SettingsToggleRow
-              title={i18nService.t('usageAnalyticsEnabled')}
-              description={i18nService.t('usageAnalyticsEnabledDescription')}
-              checked={usageAnalyticsEnabled}
-              onToggle={() => {
-                setUsageAnalyticsEnabled((prev) => !prev);
-              }}
-            />
+            {/* Group: Data & privacy */}
+            <SettingsGroup title={i18nService.t('settingsGroupDataPrivacy')}>
+              <SettingsRow>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <h4 className="text-sm font-medium text-foreground">
+                      {i18nService.t('coworkTempUsageTitle')}
+                    </h4>
+                    <p className="mt-1 text-sm text-secondary">
+                      {tempStorageUsageBytes === null
+                        ? i18nService.t('coworkTempUsageLoading')
+                        : i18nService.t('coworkTempUsageLabel')
+                            .replace('{size}', formatBackupSize(tempStorageUsageBytes) || '0 B')
+                            .replace(
+                              '{cleanable}',
+                              formatBackupSize(tempStorageCleanableBytes ?? 0) || '0 B',
+                            )}
+                    </p>
+                    <p className="mt-1 text-sm text-secondary">
+                      {i18nService.t('coworkTempUsageManualNote')}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleOpenTempCleanConfirm();
+                    }}
+                    disabled={isLoadingTempCleanPreview || isCleaningTempStorage || tempStorageCleanableBytes === 0}
+                    className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isLoadingTempCleanPreview
+                      ? i18nService.t('coworkTempPreviewLoading')
+                      : i18nService.t('coworkTempCleanNow')}
+                  </button>
+                </div>
+                {tempStorageCleanResult && (
+                  <p className="mt-2 text-sm text-secondary">{tempStorageCleanResult}</p>
+                )}
+              </SettingsRow>
 
+              <SettingsRow>
+                <SettingsToggleRow
+                  title={i18nService.t('sqliteAutoBackupEnabled')}
+                  description={i18nService.t('sqliteAutoBackupEnabledDescription')}
+                  checked={sqliteAutoBackupEnabled}
+                  onToggle={() => {
+                    setSqliteAutoBackupEnabled((prev) => !prev);
+                  }}
+                />
+              </SettingsRow>
+
+              <SettingsRow>
+                <SettingsToggleRow
+                  title={i18nService.t('usageAnalyticsEnabled')}
+                  description={i18nService.t('usageAnalyticsEnabledDescription')}
+                  checked={usageAnalyticsEnabled}
+                  onToggle={() => {
+                    setUsageAnalyticsEnabled((prev) => !prev);
+                  }}
+                />
+              </SettingsRow>
+            </SettingsGroup>
           </div>
         );
 
@@ -4729,6 +5268,68 @@ const Settings: React.FC<SettingsProps> = ({
                         </div>
                         <p className="mt-1.5 text-[13px] leading-5 text-secondary">
                           {i18nService.t('openClawHeartbeatEnabledDescription')}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-border bg-surface p-4">
+                    <div className="flex items-start gap-3.5">
+                      <span
+                        className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors ${
+                          openClawSkillReviewEnabled
+                            ? 'bg-primary-muted text-primary'
+                            : 'bg-surface-raised text-secondary'
+                        }`}
+                      >
+                        <ArrowPathRoundedSquareIcon className="h-5 w-5" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-3">
+                          <h4 className="min-w-0 text-sm font-medium leading-5 text-foreground">
+                            {i18nService.t('openClawSkillReviewEnabled')}
+                          </h4>
+                          <SettingsSwitch
+                            checked={openClawSkillReviewEnabled}
+                            label={i18nService.t('openClawSkillReviewEnabled')}
+                            onClick={() => {
+                              setOpenClawSkillReviewEnabled((prev) => !prev);
+                            }}
+                          />
+                        </div>
+                        <p className="mt-1.5 text-[13px] leading-5 text-secondary">
+                          {i18nService.t('openClawSkillReviewEnabledDescription')}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-border bg-surface p-4">
+                    <div className="flex items-start gap-3.5">
+                      <span
+                        className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors ${
+                          openClawMemoryFlushEnabled
+                            ? 'bg-primary-muted text-primary'
+                            : 'bg-surface-raised text-secondary'
+                        }`}
+                      >
+                        <BrainIcon className="h-5 w-5" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-3">
+                          <h4 className="min-w-0 text-sm font-medium leading-5 text-foreground">
+                            {i18nService.t('openClawMemoryFlushEnabled')}
+                          </h4>
+                          <SettingsSwitch
+                            checked={openClawMemoryFlushEnabled}
+                            label={i18nService.t('openClawMemoryFlushEnabled')}
+                            onClick={() => {
+                              setOpenClawMemoryFlushEnabled((prev) => !prev);
+                            }}
+                          />
+                        </div>
+                        <p className="mt-1.5 text-[13px] leading-5 text-secondary">
+                          {i18nService.t('openClawMemoryFlushEnabledDescription')}
                         </p>
                       </div>
                     </div>
@@ -4854,6 +5455,10 @@ const Settings: React.FC<SettingsProps> = ({
                     </div>
                   </div>
                 </section>
+
+                {openClawEngineStatus?.dreamingRecovery && (
+                  <DreamingRecoveryNotice summary={openClawEngineStatus.dreamingRecovery} />
+                )}
 
                 {openClawRepairResult && (
                   <div className={`rounded-lg border px-3 py-3 text-sm ${openClawRepairResult.success
@@ -5061,6 +5666,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <Modal
                       isOpen
                       onClose={() => setCoworkMemoryRawMode(false)}
+                      onEscape={() => setCoworkMemoryRawMode(false)}
                       overlayClassName="fixed inset-0 z-[60] flex items-center justify-center bg-black/10 dark:bg-black/50 p-6"
                       className="flex h-[min(720px,calc(100vh-48px))] w-[min(960px,calc(100vw-48px))] flex-col overflow-hidden rounded-xl border border-surface bg-surface shadow-[0_12px_40px_rgba(0,0,0,0.16)]"
                     >
@@ -5477,11 +6083,14 @@ const Settings: React.FC<SettingsProps> = ({
   return (
     <Modal
       onClose={guardedClose}
+      onEscape={handleEscape}
       overlayClassName="fixed inset-0 z-50 modal-backdrop flex items-center justify-center p-3 sm:p-4"
-      className="w-[calc(100vw-1.5rem)] max-w-[900px] min-w-0 sm:w-[calc(100vw-2rem)]"
+      className="w-[calc(100vw-1.5rem)] min-w-0 sm:w-[85vw] max-w-[1200px]"
     >
-      <div
-        className="relative flex h-[80vh] max-h-[calc(100vh-2rem)] w-full min-w-0 rounded-2xl border-border border shadow-modal overflow-hidden modal-content"
+      <SkinPresentationScope
+        enabled
+        data-skin-settings="true"
+        className="relative flex h-[min(90vh,calc(100vh-6rem))] w-full min-w-0 rounded-2xl border-border border shadow-modal overflow-hidden modal-content"
         onClick={handleSettingsClick}
       >
         {/* Left sidebar */}
@@ -5566,7 +6175,7 @@ const Settings: React.FC<SettingsProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSaving}
+                  disabled={isSaving || isAppearanceChanging}
                   className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
                 >
                   {isSaving ? i18nService.t('saving') : i18nService.t('save')}
@@ -5591,8 +6200,11 @@ const Settings: React.FC<SettingsProps> = ({
           setNewModelSupportsThinking={setNewModelSupportsThinking}
           newModelContextWindow={newModelContextWindow}
           setNewModelContextWindow={setNewModelContextWindow}
+          newModelMaxTokens={newModelMaxTokens}
+          setNewModelMaxTokens={setNewModelMaxTokens}
           newModelCustomParams={newModelCustomParams}
           setNewModelCustomParams={setNewModelCustomParams}
+          activeProviderConfig={providers[activeProvider]}
           modelFormError={modelFormError}
           setModelFormError={setModelFormError}
           handleSaveNewModel={handleSaveNewModel}
@@ -5654,6 +6266,113 @@ const Settings: React.FC<SettingsProps> = ({
                       ? i18nService.t('openClawRepairRunning')
                       : i18nService.t('openClawRepairConfirmAction')}
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showTempCleanConfirm && (
+            <div
+              className="absolute inset-0 z-30 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
+              onClick={() => {
+                if (!isCleaningTempStorage) setShowTempCleanConfirm(false);
+              }}
+            >
+              <div
+                className="bg-surface border-border border rounded-2xl shadow-xl w-full max-w-lg"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="px-5 pt-5 pb-4 border-b border-border">
+                  <div className="flex items-center gap-3">
+                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                      <TrashIcon className="h-5 w-5" />
+                    </span>
+                    <h3 className="text-base font-semibold text-foreground">
+                      {i18nService.t('coworkTempCleanDialogTitle')}
+                    </h3>
+                  </div>
+                </div>
+
+                <div className="space-y-3 px-5 py-4">
+                  <p className="text-sm text-secondary">
+                    {i18nService.t('coworkTempCleanDialogIntro')}
+                  </p>
+                  {tempCleanPreviewDirs.length === 0 ? (
+                    <p className="rounded-xl border border-border px-3 py-3 text-sm text-secondary">
+                      {i18nService.t('coworkTempCleanDialogEmpty')}
+                    </p>
+                  ) : (
+                    <div className="max-h-64 overflow-y-auto rounded-xl border border-border divide-y divide-border">
+                      {tempCleanPreviewDirs.map((dir) => {
+                        const selectable = !dir.isActive && dir.cleanableFiles > 0;
+                        return (
+                          <label
+                            key={dir.cwd}
+                            className={`flex items-start gap-3 px-3 py-2.5 ${selectable ? 'cursor-pointer hover:bg-surface-raised' : 'opacity-60'}`}
+                          >
+                            <input
+                              type="checkbox"
+                              className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 accent-primary disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600"
+                              checked={Boolean(tempCleanSelection[dir.cwd]) && selectable}
+                              disabled={!selectable || isCleaningTempStorage}
+                              onChange={(e) => {
+                                setTempCleanSelection(prev => ({ ...prev, [dir.cwd]: e.target.checked }));
+                              }}
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm text-foreground" title={dir.tempDir}>
+                                {dir.tempDir}
+                              </span>
+                              <span className="mt-0.5 block text-xs text-secondary">
+                                {dir.isActive
+                                  ? i18nService.t('coworkTempCleanDialogActiveTag')
+                                  : dir.cleanableFiles > 0
+                                    ? i18nService.t('coworkTempCleanDialogPerDir')
+                                        .replace('{size}', formatBackupSize(dir.cleanableBytes) || '0 B')
+                                        .replace('{count}', String(dir.cleanableFiles))
+                                    : i18nService.t('coworkTempCleanDialogProtectedOnly')}
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p className="text-xs text-secondary">
+                    {i18nService.t('coworkTempCleanDialogProtectedNote')}
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 px-5 pb-5">
+                  <span className="text-sm text-secondary">
+                    {i18nService.t('coworkTempCleanDialogTotal').replace(
+                      '{size}',
+                      formatBackupSize(tempCleanSelectedBytes) || '0 B',
+                    )}
+                  </span>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowTempCleanConfirm(false)}
+                      disabled={isCleaningTempStorage}
+                      className="px-3 py-1.5 text-sm text-foreground hover:bg-surface-raised rounded-xl border border-border disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {i18nService.t('cancel')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { void handleConfirmTempClean(); }}
+                      disabled={isCleaningTempStorage || tempCleanSelectedDirs.length === 0}
+                      className="inline-flex items-center justify-center gap-2 px-3 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-xl disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                    >
+                      {isCleaningTempStorage
+                        ? <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                        : <TrashIcon className="h-4 w-4" />}
+                      {isCleaningTempStorage
+                        ? i18nService.t('coworkTempCleaning')
+                        : i18nService.t('coworkTempCleanDialogConfirm')}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -5799,7 +6518,7 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
-      </div>
+      </SkinPresentationScope>
     </Modal>
   );
 };

@@ -6,6 +6,11 @@ export {
   getAsrErrorMessage,
 } from './errors';
 export {
+  applyVoiceInputQuotaConsumption,
+  calculateVoiceInputConsumedSeconds,
+  type VoiceInputQuotaSnapshot,
+} from './quota';
+export {
   type RealtimeVoiceInputSession,
   startRealtimeVoiceInput,
 } from './realtimeAsrClient';

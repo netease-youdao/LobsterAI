@@ -1,7 +1,14 @@
 import { EventEmitter } from 'events';
 
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
+import type {
+  CoworkBtwAbortResponse,
+  CoworkBtwSubmitResponse,
+} from '../../../shared/cowork/btw';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
+import { OpenClawQuestion } from '../../../shared/cowork/openclawQuestion';
+import { type OpenClawProgressCard, ProgressCardEvent } from '../../../shared/cowork/progressCard';
+import type { CoworkSteerResponse } from '../../../shared/cowork/steer';
 import type {
   CoworkAgentEngine,
   CoworkContextUsage,
@@ -75,6 +82,33 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     }
   }
 
+  async submitSteer(sessionId: string, text: string, clientSteerId: string): Promise<CoworkSteerResponse> {
+    const engine = this.safeResolveEngine();
+    this.sessionEngine.set(sessionId, engine);
+    if (!this.runtime.submitSteer) {
+      throw new Error(`Steer is not supported by engine: ${engine}`);
+    }
+    return this.runtime.submitSteer(sessionId, text, clientSteerId);
+  }
+
+  async submitBtw(sessionId: string, question: string, runId: string): Promise<CoworkBtwSubmitResponse> {
+    const engine = this.safeResolveEngine();
+    this.sessionEngine.set(sessionId, engine);
+    if (!this.runtime.submitBtw) {
+      throw new Error(`BTW side questions are not supported by engine: ${engine}`);
+    }
+    return this.runtime.submitBtw(sessionId, question, runId);
+  }
+
+  async abortBtw(sessionId: string, runId: string): Promise<CoworkBtwAbortResponse> {
+    const engine = this.safeResolveEngine();
+    this.sessionEngine.set(sessionId, engine);
+    if (!this.runtime.abortBtw) {
+      throw new Error(`Stopping BTW side questions is not supported by engine: ${engine}`);
+    }
+    return this.runtime.abortBtw(sessionId, runId);
+  }
+
   async runGoalCommand(sessionId: string, command: string): Promise<CoworkGoal | null> {
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
@@ -91,6 +125,14 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       throw new Error(`Session patch is not supported by engine: ${engine}`);
     }
     return this.runtime.patchSession(sessionId, patch);
+  }
+
+  async getProgressCard(sessionId: string): Promise<OpenClawProgressCard | null> {
+    return this.runtime.getProgressCard ? this.runtime.getProgressCard(sessionId) : null;
+  }
+
+  async dismissProgressCard(sessionId: string, revision: number): Promise<OpenClawProgressCard | null> {
+    return this.runtime.dismissProgressCard ? this.runtime.dismissProgressCard(sessionId, revision) : null;
   }
 
   async getContextUsage(sessionId: string): Promise<CoworkContextUsage | null> {
@@ -129,7 +171,11 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     this.requestSession.clear();
   }
 
-  respondToPermission(requestId: string, result: PermissionResult): void {
+  respondToPermission(requestId: string, result: PermissionResult): void | Promise<void> {
+    if (requestId.startsWith(OpenClawQuestion.RequestIdPrefix)) {
+      // Native answers must be acknowledged before the renderer dismisses the question.
+      return this.runtime.respondToPermission(requestId, result);
+    }
     const engine = this.requestEngine.get(requestId);
     if (engine) {
       this.runtime.respondToPermission(requestId, result);
@@ -145,6 +191,15 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
 
   isSessionActive(sessionId: string): boolean {
     return this.runtime.isSessionActive(sessionId);
+  }
+
+  getPendingQuestions() {
+    return this.runtime.getPendingQuestions?.() ?? [];
+  }
+
+  getActiveSessionIds(): string[] {
+    return Array.from(this.sessionEngine.keys())
+      .filter((sessionId) => this.runtime.isSessionActive(sessionId));
   }
 
   getSessionConfirmationMode(sessionId: string): 'modal' | 'text' | null {
@@ -197,6 +252,15 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       this.emit('sessionStatus', sessionId, status);
     });
 
+    runtime.on('btwResult', (sessionId, result) => {
+      this.sessionEngine.set(sessionId, engine);
+      this.emit('btwResult', sessionId, result);
+    });
+
+    runtime.on(ProgressCardEvent.Changed, (sessionId) => {
+      this.emit(ProgressCardEvent.Changed, sessionId);
+    });
+
     runtime.on('contextUsageUpdate', (sessionId, usage) => {
       this.sessionEngine.set(sessionId, engine);
       this.emit('contextUsageUpdate', sessionId, usage);
@@ -212,6 +276,12 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       this.requestEngine.set(request.requestId, engine);
       this.requestSession.set(request.requestId, sessionId);
       this.emit('permissionRequest', sessionId, request);
+    });
+
+    runtime.on('permissionResolved', (sessionId, requestId) => {
+      this.requestEngine.delete(requestId);
+      this.requestSession.delete(requestId);
+      this.emit('permissionResolved', sessionId, requestId);
     });
 
     runtime.on('complete', (sessionId, claudeSessionId) => {

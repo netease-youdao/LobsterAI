@@ -1,8 +1,10 @@
-import { ExclamationTriangleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ExclamationTriangleIcon, MinusIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useState } from 'react';
 
+import { ASK_USER_QUESTION_TOOL_NAME } from '../../../shared/cowork/constants';
 import { i18nService } from '../../services/i18n';
 import type { CoworkPermissionRequest, CoworkPermissionResult } from '../../types/cowork';
+import { stripQuestionRecommendation } from './questionOptionLabel';
 
 type DangerLevel = 'safe' | 'caution' | 'destructive';
 
@@ -71,6 +73,9 @@ function detectDangerLevelFromCommand(command: string): DangerLevel {
 interface CoworkPermissionModalProps {
   permission: CoworkPermissionRequest;
   onRespond: (result: CoworkPermissionResult) => void;
+  onMinimize?: () => void;
+  /** Keep the modal mounted (so in-progress answers survive) but visually hidden while minimized. */
+  hidden?: boolean;
 }
 
 type QuestionOption = {
@@ -185,11 +190,13 @@ const resolveConfirmModeButtons = (question: QuestionItem): { primary: QuestionO
 const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   permission,
   onRespond,
+  onMinimize,
+  hidden = false,
 }) => {
   const toolInput = useMemo(() => permission.toolInput ?? {}, [permission.toolInput]);
 
   const questions = useMemo<QuestionItem[]>(() => {
-    if (permission.toolName !== 'AskUserQuestion') return [];
+    if (permission.toolName !== ASK_USER_QUESTION_TOOL_NAME) return [];
     if (!toolInput || typeof toolInput !== 'object') return [];
     const rawQuestions = (toolInput as Record<string, unknown>).questions;
     if (!Array.isArray(rawQuestions)) return [];
@@ -307,7 +314,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
       ? detectDangerLevelFromCommand(requestedCommand) !== 'safe'
       : /\b(delete|remove|rm|unlink|rmdir|erase|del)\b/i.test(questionText) || /删除|移除/.test(questionText);
 
-    if (permission.toolName === 'AskUserQuestion' && looksLikeDeleteQuestion) {
+    if (permission.toolName === ASK_USER_QUESTION_TOOL_NAME && looksLikeDeleteQuestion) {
       return { dangerLevel: 'caution' as DangerLevel, dangerReasonText: i18nService.t('dangerReasonFileDelete') };
     }
     if (permission.toolName !== 'Bash') {
@@ -412,7 +419,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
+    <div className={`fixed inset-0 z-50 items-center justify-center modal-backdrop ${hidden ? 'hidden' : 'flex'}`}>
       <div className="modal-content w-fit min-w-[28rem] max-w-[calc(100vw-2rem)] mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-3 px-6 py-4 border-b border-border">
@@ -442,10 +449,23 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                   : i18nService.t('coworkPermissionDescription')}
             </p>
           </div>
+          {onMinimize && (
+            <button
+              type="button"
+              onClick={onMinimize}
+              className="p-2 rounded-lg hover:bg-surface-raised text-secondary transition-colors"
+              aria-label={i18nService.t('coworkPermissionMinimize')}
+              title={i18nService.t('coworkPermissionMinimize')}
+            >
+              <MinusIcon className="h-5 w-5" />
+            </button>
+          )}
           <button
+            type="button"
             onClick={handleDeny}
             className="p-2 rounded-lg hover:bg-surface-raised text-secondary transition-colors"
-            aria-label="Close"
+            aria-label={i18nService.t('coworkPermissionCancel')}
+            title={i18nService.t('coworkPermissionCancel')}
           >
             <XMarkIcon className="h-5 w-5" />
           </button>
@@ -593,14 +613,14 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
             onClick={isConfirmMode && confirmModeButtons ? () => handleConfirmModeSelect(confirmModeButtons.secondary.label) : handleDeny}
             className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
           >
-            {isConfirmMode && confirmModeButtons ? confirmModeButtons.secondary.label : denyButtonLabel}
+            {isConfirmMode && confirmModeButtons ? stripQuestionRecommendation(confirmModeButtons.secondary.label) : denyButtonLabel}
           </button>
           <button
             onClick={handleApprove}
             disabled={!isComplete}
             className="px-4 py-2 text-sm font-medium rounded-lg bg-primary hover:bg-primary-hover text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isConfirmMode && confirmModeButtons ? confirmModeButtons.primary.label : approveButtonLabel}
+            {isConfirmMode && confirmModeButtons ? stripQuestionRecommendation(confirmModeButtons.primary.label) : approveButtonLabel}
           </button>
         </div>
       </div>

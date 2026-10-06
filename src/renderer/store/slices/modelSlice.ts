@@ -1,5 +1,8 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { ProviderName } from '@shared/providers/constants';
+import type { LobsterAIRequestCapability } from '@shared/providers/lobsterAIRequestOptions';
+import type { ModelRuntimeProfile } from '@shared/providers/modelRuntimeProfiles';
+import type { ModelThinkingConfig } from '@shared/providers/modelThinking';
 
 import { defaultConfig, getProviderDisplayName } from '../../config';
 import { resolveOpenClawModelRef } from '../../utils/openclawModelRef';
@@ -10,14 +13,22 @@ export interface Model {
   provider?: string; // 模型所属的提供商
   providerKey?: string; // 模型所属的提供商 key（用于唯一标识）
   openClawProviderId?: string; // OpenClaw runtime provider id
+  runtimeProfile?: ModelRuntimeProfile; // 受控的运行时兼容档案
   supportsImage?: boolean;
+  supportsVideo?: boolean;
   supportsThinking?: boolean;
+  thinkingConfig?: ModelThinkingConfig;
+  requestCapabilities?: LobsterAIRequestCapability[];
+  supportsToolCalling?: boolean;
+  agenticReady?: boolean;
   contextWindow?: number;
+  maxTokens?: number;
   isServerModel?: boolean; // 是否为服务端套餐模型
   serverApiFormat?: string; // 服务端模型的 API 格式 ("openai" | "anthropic")
   explicitContextCache?: boolean; // 是否支持服务端显式上下文缓存
   description?: string; // 模型能力简介
   costMultiplier?: number; // 积分消耗倍率 (1.0=标准)
+  moreModel?: boolean; // 是否收起到“更多模型”分组
   accessible?: boolean; // false = 模型可见但用户无权使用（置灰）
   restrictionHint?: string; // 限制提示（如 "订阅套餐/购买加油包可用"）
 }

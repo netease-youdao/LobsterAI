@@ -84,6 +84,13 @@ blockquote {
   contain-intrinsic-size: 500px;
 }
 
+/* While exporting the conversation as an image, hide the scrollbar so the
+   programmatic scrolling does not bake scrollbar thumbs into the capture.
+   scrollbar-gutter keeps the reserved width, so layout does not shift. */
+.cowork-export-capturing::-webkit-scrollbar {
+  display: none;
+}
+
 .artifact-preview-card-group {
   background-color: #ffffff;
 }
@@ -105,38 +112,44 @@ blockquote {
 }
 
 :root {
-  --lobster-ui-font-size: 14px;
-  --lobster-code-font-size: 12px;
-  /* 445 mirrors Codex/VS Code body weight (--vscode-font-weight: 445): between
-     Regular and Medium on variable system fonts (SF Pro, modern PingFang SC);
-     falls back to the nearest static face (e.g. 400 for Microsoft YaHei). */
-  --lobster-ui-font-weight-normal: 445;
+  /* Pre-JS fallbacks; must match what applyTypographyPreferences() emits for
+     the default preferences (UiFontSizeDefault 15 over the 14px baseline),
+     otherwise text visibly resizes right after startup. */
+  --lobster-ui-font-size: 15px;
+  --lobster-code-font-size: 14px;
+  /* Keep body text at Regular 400. On macOS, PingFang SC is a variable font
+     whose weight axis tops out at 600 and markdown <strong> renders at 600, so
+     any heavier body weight (e.g. the 445 VS Code uses) collapses the contrast
+     between normal and bold CJK text. Static fonts such as Microsoft YaHei
+     resolve to 400 either way. */
+  --lobster-ui-font-weight-normal: 400;
   --lobster-ui-font-weight-medium: 500;
-  --lobster-text-xs: 12px;
-  --lobster-text-sm: 14px;
-  --lobster-text-base: 16px;
-  --lobster-text-lg: 18px;
-  --lobster-text-xl: 20px;
-  --lobster-text-2xl: 24px;
-  --lobster-text-3xl: 30px;
-  --lobster-text-4xl: 36px;
+  --lobster-text-xs: 13px;
+  --lobster-text-sm: 15px;
+  --lobster-text-base: 17px;
+  --lobster-text-lg: 19px;
+  --lobster-text-xl: 21px;
+  --lobster-text-2xl: 26px;
+  --lobster-text-3xl: 32px;
+  --lobster-text-4xl: 39px;
   --lobster-text-markdown: 15px;
-  --lobster-text-markdownH2: 17px;
-  --lobster-text-markdownH4: 15px;
-  --lobster-text-promptLarge: 15px;
-  --lobster-text-sidebarCompact: 13px;
-  --lobster-leading-xs: 16px;
-  --lobster-leading-sm: 20px;
-  --lobster-leading-base: 24px;
-  --lobster-leading-lg: 28px;
-  --lobster-leading-xl: 28px;
-  --lobster-leading-2xl: 32px;
-  --lobster-leading-3xl: 36px;
-  --lobster-leading-4xl: 40px;
-  --lobster-leading-markdown: 26px;
+  --lobster-text-markdownH2: 19px;
+  --lobster-text-markdownH3: 17px;
+  --lobster-text-markdownH4: 16px;
+  --lobster-text-promptLarge: 16px;
+  --lobster-text-sidebarCompact: 14px;
+  --lobster-leading-xs: 17px;
+  --lobster-leading-sm: 21px;
+  --lobster-leading-base: 26px;
+  --lobster-leading-lg: 30px;
+  --lobster-leading-xl: 30px;
+  --lobster-leading-2xl: 34px;
+  --lobster-leading-3xl: 39px;
+  --lobster-leading-4xl: 43px;
+  --lobster-leading-markdown: 24px;
   --lobster-leading-markdownCompact: 23px;
-  --lobster-leading-prompt: 22px;
-  --lobster-leading-promptLarge: 23px;
+  --lobster-leading-prompt: 24px;
+  --lobster-leading-promptLarge: 25px;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Helvetica Neue', 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.6;
   font-weight: var(--lobster-ui-font-weight-normal);
@@ -157,6 +170,22 @@ samp {
   font-size: var(--lobster-code-font-size);
   line-height: calc(var(--lobster-code-font-size) + 8px);
   font-weight: 400;
+}
+
+/* Detail bodies inside activity-group rows stay one step below the row
+   title (text-xs), even when the user raises the code font size, so the
+   header > row > detail hierarchy always holds. */
+.activity-row-detail {
+  --lobster-activity-detail-font-size: min(
+    var(--lobster-code-font-size),
+    calc(var(--lobster-text-xs) - 1px)
+  );
+  font-size: var(--lobster-activity-detail-font-size);
+}
+
+.activity-row-detail .text-code {
+  font-size: var(--lobster-activity-detail-font-size);
+  line-height: calc(var(--lobster-activity-detail-font-size) + 8px);
 }
 
 .text-markdown-body {
@@ -619,29 +648,195 @@ select::-ms-expand {
   animation: shimmer 1.5s infinite;
 }
 
-/* Streaming activity bar */
-.streaming-bar {
-  position: relative;
-  height: 2px;
-  overflow: hidden;
-  border-radius: 1px;
-  background: var(--lobster-primary-muted);
+/* Busy-state activity indicator: breathing dot + shimmering status text */
+.activity-indicator-dot {
+  animation: activity-dot-breathe 1.8s ease-in-out infinite;
 }
-.streaming-bar::before {
+
+.startup-credit-entry-gift {
+  animation: startup-credit-entry-gift-wiggle 1.42s cubic-bezier(0.22, 0.9, 0.3, 1) 0.28s 2 both;
+  transform-origin: 50% 70%;
+}
+
+.sidebar-login-rainbow {
+  position: relative;
+  isolation: isolate;
+  overflow: visible;
+  border: 1.3px solid transparent;
+  color: #ffffff;
+  background:
+    linear-gradient(#121213, #121213) padding-box,
+    linear-gradient(#121213 50%, rgba(18, 18, 19, 0.6) 80%, rgba(18, 18, 19, 0)) border-box,
+    linear-gradient(
+      90deg,
+      hsl(0, 100%, 63%),
+      hsl(30, 100%, 63%),
+      hsl(60, 100%, 63%),
+      hsl(120, 100%, 63%),
+      hsl(180, 100%, 63%),
+      hsl(240, 100%, 63%),
+      hsl(300, 100%, 63%),
+      hsl(360, 100%, 63%)
+    ) border-box;
+  background-size: 200% 100%;
+  animation: sidebar-login-rainbow 3.6s linear infinite;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10);
+}
+
+.sidebar-login-rainbow::before {
   content: '';
   position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  width: 40%;
-  border-radius: 1px;
-  background: linear-gradient(90deg, transparent 0%, var(--lobster-primary) 50%, transparent 100%);
-  opacity: 0.7;
-  animation: streaming-slide 1.5s ease-in-out infinite;
+  left: 50%;
+  bottom: -20%;
+  z-index: -1;
+  width: 60%;
+  height: 20%;
+  transform: translateX(-50%);
+  border-radius: 9999px;
+  pointer-events: none;
+  opacity: 0.75;
+  filter: blur(0.5rem);
+  background: linear-gradient(
+    90deg,
+    hsl(0, 100%, 63%),
+    hsl(30, 100%, 63%),
+    hsl(60, 100%, 63%),
+    hsl(120, 100%, 63%),
+    hsl(180, 100%, 63%),
+    hsl(240, 100%, 63%),
+    hsl(300, 100%, 63%),
+    hsl(360, 100%, 63%)
+  );
+  background-size: 200% 100%;
+  animation: sidebar-login-rainbow 3.6s linear infinite;
 }
-/* Streaming bar glow uses primary color */
-.streaming-bar::before {
-  box-shadow: 0 0 6px var(--lobster-primary-muted);
+
+.sidebar-login-rainbow:hover {
+  filter: brightness(1.08);
+}
+
+.sidebar-login-rainbow:active {
+  transform: scale(0.98);
+}
+
+.dark .sidebar-login-rainbow {
+  color: #121213;
+  background:
+    linear-gradient(#ffffff, #ffffff) padding-box,
+    linear-gradient(rgba(255, 255, 255, 0.9) 36%, rgba(255, 255, 255, 0.24) 70%, rgba(255, 255, 255, 0)) border-box,
+    linear-gradient(
+      90deg,
+      hsl(0, 100%, 63%),
+      hsl(30, 100%, 63%),
+      hsl(60, 100%, 63%),
+      hsl(120, 100%, 63%),
+      hsl(180, 100%, 63%),
+      hsl(240, 100%, 63%),
+      hsl(300, 100%, 63%),
+      hsl(360, 100%, 63%)
+    ) border-box;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.20),
+    0 0 12px rgba(255, 255, 255, 0.08);
+}
+
+.dark .sidebar-login-rainbow::before {
+  opacity: 0.92;
+  filter: blur(0.42rem) saturate(1.18);
+}
+
+.chat-login-experience-action::before {
+  bottom: -14%;
+  height: 12%;
+  filter: blur(0.36rem);
+}
+
+.dark .chat-login-experience-action::before {
+  filter: blur(0.32rem) saturate(1.18);
+}
+
+@keyframes sidebar-login-rainbow {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+@keyframes activity-dot-breathe {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+}
+
+.shimmer-text {
+  background-image: linear-gradient(
+    100deg,
+    var(--lobster-text-secondary) 0%,
+    var(--lobster-text-secondary) 42%,
+    var(--lobster-text-primary) 50%,
+    var(--lobster-text-secondary) 58%,
+    var(--lobster-text-secondary) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: shimmer-text-sweep 2.4s linear infinite;
+}
+
+@keyframes shimmer-text-sweep {
+  0% { background-position: 175% 0; }
+  100% { background-position: -75% 0; }
+}
+
+@keyframes startup-credit-entry-gift-wiggle {
+  0%, 100% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+  16% {
+    transform: translateY(-1px) rotate(-4deg) scale(1.045);
+  }
+  30% {
+    transform: translateY(-1px) rotate(3.5deg) scale(1.055);
+  }
+  44% {
+    transform: translateY(0) rotate(-2deg) scale(1.025);
+  }
+  58% {
+    transform: translateY(0) rotate(1deg) scale(1.01);
+  }
+  72% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-text {
+    animation: none;
+    background-image: none;
+    background-clip: border-box;
+    -webkit-background-clip: border-box;
+    color: inherit;
+  }
+  .activity-indicator-dot {
+    animation: none;
+    opacity: 0.7;
+  }
+  .startup-credit-entry-gift {
+    animation: none;
+  }
+  .sidebar-login-rainbow,
+  .sidebar-login-rainbow::before {
+    animation: none;
+    background-position: 100% 50%;
+  }
 }
 
 .context-compaction-progress {
@@ -665,14 +860,54 @@ select::-ms-expand {
   animation: context-compaction-slide 1.1s ease-in-out infinite;
 }
 
+.persistence-operation-progress {
+  position: relative;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: var(--lobster-primary-muted);
+}
+
+.persistence-operation-progress::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -45%;
+  height: 100%;
+  width: 45%;
+  border-radius: inherit;
+  background: var(--lobster-primary);
+  animation: context-compaction-slide 1.1s ease-in-out infinite;
+}
+
+::highlight(cowork-conversation-search-match) {
+  color: inherit;
+  background-color: rgba(255, 106, 0, 0.24);
+}
+
+::highlight(cowork-conversation-search-active) {
+  color: #1f160f;
+  background-color: #ff6a00;
+}
+
+.cowork-conversation-search-fallback {
+  border-radius: 0.5rem;
+  outline: 2px solid rgba(255, 106, 0, 0.72);
+  outline-offset: 3px;
+}
+
 @keyframes context-compaction-slide {
   0% { left: -55%; }
   100% { left: 100%; }
 }
 
-@keyframes streaming-slide {
-  0% { left: -40%; }
-  100% { left: 100%; }
+@media (prefers-reduced-motion: reduce) {
+  .persistence-operation-progress::before {
+    left: 0;
+    width: 100%;
+    animation: none;
+    opacity: 0.65;
+  }
 }
 
 .voice-input-wave-bar {

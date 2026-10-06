@@ -1,0 +1,316 @@
+diff --git a/packages/agent-core/src/agent.critical-tool-loop.test.ts b/packages/agent-core/src/agent.critical-tool-loop.test.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/agent-core/src/agent.critical-tool-loop.test.ts
+@@ -0,0 +1,174 @@
++import { Type } from "typebox";
++import { describe, expect, it } from "vitest";
++import { agentLoop } from "./agent-loop.js";
++import { Agent } from "./agent.js";
++import {
++  type AssistantMessage,
++  createAssistantMessageEventStream,
++  type Message,
++  type Model,
++} from "./llm.js";
++import type { AgentEvent, AgentLoopConfig, AgentTool, StreamFn } from "./types.js";
++
++const model: Model = {
++  id: "test-model",
++  name: "Test Model",
++  api: "test-api",
++  provider: "test-provider",
++  baseUrl: "https://example.test",
++  reasoning: false,
++  input: ["text"],
++  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++  contextWindow: 1000,
++  maxTokens: 1000,
++};
++
++const config: AgentLoopConfig = {
++  model,
++  convertToLlm: (messages) => messages as Message[],
++};
++
++function makeAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
++  return {
++    role: "assistant",
++    content,
++    api: model.api,
++    provider: model.provider,
++    model: model.id,
++    usage: {
++      input: 0,
++      output: 0,
++      cacheRead: 0,
++      cacheWrite: 0,
++      totalTokens: 0,
++      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++    },
++    stopReason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
++    timestamp: 1,
++  };
++}
++
++function createCriticalTool(name: string): AgentTool {
++  return {
++    name,
++    label: name,
++    description: "critical loop veto",
++    parameters: Type.Object({}, { additionalProperties: false }),
++    execute: async () => ({
++      content: [{ type: "text", text: "CRITICAL: tool loop" }],
++      details: {
++        status: "blocked",
++        deniedReason: "tool-loop",
++        reason: "CRITICAL: tool loop",
++      },
++      terminate: true,
++    }),
++  };
++}
++
++function shouldStopOnCriticalToolLoop(context: {
++  toolResults: Array<{ details?: unknown }>;
++}): boolean {
++  return context.toolResults.some((message) => {
++    const details = message.details as { deniedReason?: string } | undefined;
++    return details?.deniedReason === "tool-loop";
++  });
++}
++
++describe("critical tool-loop termination", () => {
++  it("stops a mixed parallel batch after normal sibling tools finish", async () => {
++    const executed: string[] = [];
++    let providerTurns = 0;
++    const streamFn: StreamFn = () => {
++      providerTurns += 1;
++      const stream = createAssistantMessageEventStream();
++      queueMicrotask(() => {
++        const message =
++          providerTurns === 1
++            ? makeAssistantMessage([
++                { type: "toolCall", id: "call-veto", name: "veto_tool", arguments: {} },
++                { type: "toolCall", id: "call-normal", name: "normal_tool", arguments: {} },
++              ])
++            : makeAssistantMessage([{ type: "text", text: "should not reach" }]);
++        stream.push({
++          type: "done",
++          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
++          message,
++        });
++        stream.end();
++      });
++      return stream;
++    };
++    const normalTool: AgentTool = {
++      name: "normal_tool",
++      label: "normal_tool",
++      description: "normal tool",
++      parameters: Type.Object({}, { additionalProperties: false }),
++      execute: async () => {
++        executed.push("normal_tool");
++        return { content: [{ type: "text", text: "ok" }], details: { status: "ok" } };
++      },
++    };
++
++    const stream = agentLoop(
++      [{ role: "user", content: "run", timestamp: 1 }],
++      { systemPrompt: "", messages: [], tools: [createCriticalTool("veto_tool"), normalTool] },
++      { ...config, shouldStopAfterTurn: shouldStopOnCriticalToolLoop },
++      undefined,
++      streamFn,
++    );
++    const events: AgentEvent[] = [];
++    for await (const event of stream) {
++      events.push(event);
++    }
++
++    expect(providerTurns).toBe(1);
++    expect(executed).toEqual(["normal_tool"]);
++    expect(events.filter((event) => event.type === "agent_end")).toHaveLength(1);
++  });
++
++  it("forwards Agent.shouldStopAfterTurn and prevents a second provider turn", async () => {
++    let providerTurns = 0;
++    let shouldStopCalls = 0;
++    const streamFn: StreamFn = () => {
++      providerTurns += 1;
++      const stream = createAssistantMessageEventStream();
++      queueMicrotask(() => {
++        const message =
++          providerTurns === 1
++            ? makeAssistantMessage([
++                { type: "toolCall", id: "call-loop", name: "loop_tool", arguments: {} },
++              ])
++            : makeAssistantMessage([{ type: "text", text: "should not reach" }]);
++        stream.push({
++          type: "done",
++          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
++          message,
++        });
++        stream.end();
++      });
++      return stream;
++    };
++    const agent = new Agent({
++      initialState: { model, tools: [createCriticalTool("loop_tool")] },
++      streamFn,
++      shouldStopAfterTurn: (context) => {
++        shouldStopCalls += 1;
++        return shouldStopOnCriticalToolLoop(context);
++      },
++    });
++    let agentEndCount = 0;
++    agent.subscribe((event) => {
++      if (event.type === "agent_end") {
++        agentEndCount += 1;
++      }
++    });
++
++    await agent.prompt("trigger");
++    await agent.waitForIdle();
++
++    expect(providerTurns).toBe(1);
++    expect(shouldStopCalls).toBe(1);
++    expect(agentEndCount).toBe(1);
++  });
++});
+diff --git a/packages/agent-core/src/agent.ts b/packages/agent-core/src/agent.ts
+--- a/packages/agent-core/src/agent.ts
++++ b/packages/agent-core/src/agent.ts
+@@ -22,6 +22,7 @@ import type {
+   BeforeToolCallContext,
+   BeforeToolCallResult,
+   QueueMode,
++  ShouldStopAfterTurnContext,
+   StreamFn,
+   ToolExecutionMode,
+ } from "./types.js";
+@@ -128,6 +129,8 @@ export interface AgentOptions {
+     context: AfterToolCallContext,
+     signal?: AbortSignal,
+   ) => Promise<AfterToolCallResult | undefined>;
++  /** Hook that may stop the agent loop after a turn completes. */
++  shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext) => boolean | Promise<boolean>;
+   /** Hook that may update model, reasoning, or context after a turn. */
+   prepareNextTurn?: (
+     signal?: AbortSignal,
+@@ -223,6 +226,7 @@ export class Agent {
+     context: AfterToolCallContext,
+     signal?: AbortSignal,
+   ) => Promise<AfterToolCallResult | undefined>;
++  public shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext) => boolean | Promise<boolean>;
+   public prepareNextTurn?: (
+     signal?: AbortSignal,
+   ) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
+@@ -249,6 +253,7 @@ export class Agent {
+     this.onResponse = options.onResponse;
+     this.beforeToolCall = options.beforeToolCall;
+     this.afterToolCall = options.afterToolCall;
++    this.shouldStopAfterTurn = options.shouldStopAfterTurn;
+     this.prepareNextTurn = options.prepareNextTurn;
+     this.steeringQueue = new PendingMessageQueue(options.steeringMode ?? "one-at-a-time");
+     this.followUpQueue = new PendingMessageQueue(options.followUpMode ?? "one-at-a-time");
+@@ -480,6 +485,7 @@ export class Agent {
+       toolExecution: this.toolExecution,
+       beforeToolCall: this.beforeToolCall,
+       afterToolCall: this.afterToolCall,
++      shouldStopAfterTurn: this.shouldStopAfterTurn,
+       prepareNextTurn: this.prepareNextTurn
+         ? async () => await this.prepareNextTurn?.(this.signal)
+         : undefined,
+diff --git a/src/agents/agent-tools.before-tool-call.blocked-result.test.ts b/src/agents/agent-tools.before-tool-call.blocked-result.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/agents/agent-tools.before-tool-call.blocked-result.test.ts
+@@ -0,0 +1,34 @@
++import { describe, expect, it } from "vitest";
++import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
++
++describe("buildBlockedToolResult", () => {
++  it("terminates critical tool-loop vetoes", () => {
++    const result = buildBlockedToolResult({
++      reason: "CRITICAL: repeated tool call detected",
++      deniedReason: "tool-loop",
++    });
++
++    expect(result.details).toMatchObject({
++      status: "blocked",
++      deniedReason: "tool-loop",
++    });
++    expect(result.terminate).toBe(true);
++  });
++
++  it.each(["plugin-before-tool-call", "plugin-approval"] as const)(
++    "keeps %s vetoes non-terminating",
++    (deniedReason) => {
++      const result = buildBlockedToolResult({ reason: "denied", deniedReason });
++
++      expect(result.details.deniedReason).toBe(deniedReason);
++      expect(result.terminate).toBeUndefined();
++    },
++  );
++
++  it("keeps the default plugin veto non-terminating", () => {
++    const result = buildBlockedToolResult({ reason: "denied" });
++
++    expect(result.details.deniedReason).toBe("plugin-before-tool-call");
++    expect(result.terminate).toBeUndefined();
++  });
++});
+diff --git a/src/agents/agent-tools.before-tool-call.e2e.test.ts b/src/agents/agent-tools.before-tool-call.e2e.test.ts
+--- a/src/agents/agent-tools.before-tool-call.e2e.test.ts
++++ b/src/agents/agent-tools.before-tool-call.e2e.test.ts
+@@ -220,4 +220,5 @@ describe("before_tool_call loop detection behavior", () => {
+     expect(details.status).toBe("blocked");
+     expect(details.deniedReason).toBe("tool-loop");
+     expect(String(details.reason)).toContain(expectedReason);
++    expect(record.terminate).toBe(true);
+   }
+diff --git a/src/agents/agent-tools.before-tool-call.ts b/src/agents/agent-tools.before-tool-call.ts
+--- a/src/agents/agent-tools.before-tool-call.ts
++++ b/src/agents/agent-tools.before-tool-call.ts
+@@ -678,12 +678,18 @@ export function buildBlockedToolResult(params: {
+   reason: string;
+   deniedReason?: HookBlockedReason;
+ }) {
++  const deniedReason = params.deniedReason ?? "plugin-before-tool-call";
++  // Critical loop vetoes must end the run instead of inviting another provider
++  // turn. A post-turn hook separately covers mixed batches where a successful
++  // sibling prevents immediate batch termination.
++  const terminateRun = deniedReason === "tool-loop";
+   return {
+     content: [{ type: "text" as const, text: params.reason }],
+     details: {
+       status: "blocked",
+-      deniedReason: params.deniedReason ?? "plugin-before-tool-call",
++      deniedReason,
+       reason: params.reason,
+     },
++    ...(terminateRun ? { terminate: true } : {}),
+   };
+ }
+diff --git a/src/agents/sessions/sdk.ts b/src/agents/sessions/sdk.ts
+--- a/src/agents/sessions/sdk.ts
++++ b/src/agents/sessions/sdk.ts
+@@ -390,6 +390,18 @@ export async function createAgentSession(
+           }),
+       );
+     },
++    shouldStopAfterTurn: (context) => {
++      // Agent-core only ends a tool batch immediately when every result has
++      // terminate: true. A post-turn check also covers a critical loop veto
++      // emitted beside a normal result in a mixed parallel batch.
++      for (const message of context.toolResults) {
++        const details = message.details as { deniedReason?: string } | undefined;
++        if (details?.deniedReason === "tool-loop") {
++          return true;
++        }
++      }
++      return false;
++    },
+     sessionId: sessionManager.getSessionId(),
+     transformContext: async (messages) => {
+       const runner = extensionRunnerRef.current;

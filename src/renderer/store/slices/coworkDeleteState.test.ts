@@ -12,6 +12,10 @@ const createState = () => ({
     one: [{ id: 'snippet-one' }],
     two: [{ id: 'snippet-two' }],
   },
+  draftBrowserAnnotationBatches: {
+    one: [{ id: 'batch-one' }],
+    two: [{ id: 'batch-two' }],
+  },
 });
 
 test('removeSessionFromState removes selected text draft snippets', () => {
@@ -22,6 +26,9 @@ test('removeSessionFromState removes selected text draft snippets', () => {
   expect(state.draftSelectedTextSnippets).toEqual({
     two: [{ id: 'snippet-two' }],
   });
+  expect(state.draftBrowserAnnotationBatches).toEqual({
+    two: [{ id: 'batch-two' }],
+  });
 });
 
 test('removeSessionsFromState removes selected text draft snippets', () => {
@@ -30,4 +37,5 @@ test('removeSessionsFromState removes selected text draft snippets', () => {
   removeSessionsFromState(state, ['one', 'two']);
 
   expect(state.draftSelectedTextSnippets).toEqual({});
+  expect(state.draftBrowserAnnotationBatches).toEqual({});
 });

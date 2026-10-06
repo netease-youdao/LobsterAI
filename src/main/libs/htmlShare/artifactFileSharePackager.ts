@@ -9,7 +9,11 @@ import { fileURLToPath } from 'url';
 import { TextDecoder } from 'util';
 import yazl from 'yazl';
 
-import { HtmlShareSourceType } from '../../../shared/htmlShare/constants';
+import {
+  HtmlShareFailureKind,
+  HtmlShareSourceType,
+} from '../../../shared/htmlShare/constants';
+import { createHtmlShareSizeError } from './htmlShareError';
 
 const MAX_CLIENT_ARCHIVE_BYTES = 22 * 1024 * 1024;
 const MAX_CLIENT_SINGLE_FILE_BYTES = 20 * 1024 * 1024;
@@ -23,6 +27,7 @@ const MAX_CLIENT_TEXT_ASSET_COUNT = 100;
 const MAX_REMOTE_REDIRECTS = 3;
 const MARKDOWN_ASSET_PREFIX = '_lobster_assets/';
 const MARKDOWN_MANIFEST_FILE = '_lobster_share_manifest.json';
+const INVALID_ARCHIVE_FILE_NAME_CHARS = /[\u0000-\u001f\u007f<>:"/\\|?*]/g;
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
 const MARKDOWN_IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']);
@@ -96,9 +101,9 @@ function extensionFromName(fileName: string | undefined): string {
 }
 
 function cleanFileName(fileName: string, fallback: string): string {
-  const baseName = path.basename(fileName).replace(/[\\/]/g, '').trim();
-  const cleaned = baseName.replace(/[^A-Za-z0-9._-]/g, '_');
-  return cleaned || fallback;
+  const baseName = path.basename(fileName.replace(/\\/g, '/')).normalize('NFC').trim();
+  const cleaned = baseName.replace(INVALID_ARCHIVE_FILE_NAME_CHARS, '_');
+  return cleaned && cleaned !== '.' && cleaned !== '..' ? cleaned : fallback;
 }
 
 function imageMagicExtension(bytes: Buffer): string | null {
@@ -238,7 +243,15 @@ async function downloadRemoteImage(remoteUrl: string): Promise<LoadedArtifactFil
       }
       const declaredLength = Number(response.headers.get('content-length') || '0');
       if (declaredLength > MAX_CLIENT_SINGLE_FILE_BYTES) {
-        throw new Error('Image exceeds the share size limit.');
+        throw createHtmlShareSizeError(
+          HtmlShareFailureKind.FileTooLarge,
+          'Image exceeds the share size limit.',
+          {
+            fileName: cleanFileName(path.basename(currentUrl.pathname), 'image'),
+            limitBytes: MAX_CLIENT_SINGLE_FILE_BYTES,
+            actualBytes: declaredLength,
+          },
+        );
       }
       const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
       if (contentType && !IMAGE_CONTENT_TYPES[contentType]) {
@@ -246,7 +259,15 @@ async function downloadRemoteImage(remoteUrl: string): Promise<LoadedArtifactFil
       }
       const bytes = Buffer.from(await response.arrayBuffer());
       if (bytes.length > MAX_CLIENT_SINGLE_FILE_BYTES) {
-        throw new Error('Image exceeds the share size limit.');
+        throw createHtmlShareSizeError(
+          HtmlShareFailureKind.FileTooLarge,
+          'Image exceeds the share size limit.',
+          {
+            fileName: cleanFileName(path.basename(currentUrl.pathname), 'image'),
+            limitBytes: MAX_CLIENT_SINGLE_FILE_BYTES,
+            actualBytes: bytes.length,
+          },
+        );
       }
       return {
         bytes,
@@ -272,7 +293,15 @@ async function loadArtifactFile(input: ArtifactFileSharePackageInput): Promise<L
         ? MAX_CLIENT_DOCUMENT_FILE_BYTES
         : MAX_CLIENT_SINGLE_FILE_BYTES;
     if (stat.size > maxBytes) {
-      throw new Error('Artifact exceeds the share size limit.');
+      throw createHtmlShareSizeError(
+        HtmlShareFailureKind.FileTooLarge,
+        'Artifact exceeds the share size limit.',
+        {
+          fileName: input.fileName || path.basename(resolvedPath),
+          limitBytes: maxBytes,
+          actualBytes: stat.size,
+        },
+      );
     }
     return {
       bytes: await fs.promises.readFile(resolvedPath),
@@ -445,7 +474,15 @@ function normalizeDocumentFile(loaded: LoadedArtifactFile): LoadedArtifactFile {
     throw new Error('Current document type is not supported for sharing.');
   }
   if (loaded.bytes.length > MAX_CLIENT_DOCUMENT_FILE_BYTES) {
-    throw new Error('Artifact exceeds the share size limit.');
+    throw createHtmlShareSizeError(
+      HtmlShareFailureKind.FileTooLarge,
+      'Artifact exceeds the share size limit.',
+      {
+        fileName: loaded.fileName,
+        limitBytes: MAX_CLIENT_DOCUMENT_FILE_BYTES,
+        actualBytes: loaded.bytes.length,
+      },
+    );
   }
   if (!matchesDocumentMagic(extension, loaded.bytes)) {
     throw new Error('Document extension does not match the file content.');
@@ -472,7 +509,14 @@ function assertTextContent(bytes: Buffer): string {
     throw new Error('Text artifact contains unsupported binary content.');
   }
   if (bytes.length > MAX_CLIENT_TEXT_FILE_BYTES) {
-    throw new Error('Text artifact exceeds the share size limit.');
+    throw createHtmlShareSizeError(
+      HtmlShareFailureKind.FileTooLarge,
+      'Text artifact exceeds the share size limit.',
+      {
+        limitBytes: MAX_CLIENT_TEXT_FILE_BYTES,
+        actualBytes: bytes.length,
+      },
+    );
   }
   return text;
 }
@@ -681,8 +725,22 @@ async function collectMarkdownLocalAssets(markdown: string, filePath?: string): 
 
   const uniqueAssets = Array.from(new Map(assets.map(asset => [asset.relativePath, asset])).values());
   const totalAssetBytes = uniqueAssets.reduce((sum, asset) => sum + asset.bytes.length, 0);
-  if (uniqueAssets.length > MAX_CLIENT_TEXT_ASSET_COUNT || totalAssetBytes > MAX_CLIENT_TEXT_TOTAL_ASSET_BYTES) {
-    throw new Error('Markdown image assets exceed the share size limit.');
+  if (uniqueAssets.length > MAX_CLIENT_TEXT_ASSET_COUNT) {
+    throw createHtmlShareSizeError(
+      HtmlShareFailureKind.FileCountExceeded,
+      'Markdown image assets exceed the share count limit.',
+      { limitCount: MAX_CLIENT_TEXT_ASSET_COUNT },
+    );
+  }
+  if (totalAssetBytes > MAX_CLIENT_TEXT_TOTAL_ASSET_BYTES) {
+    throw createHtmlShareSizeError(
+      HtmlShareFailureKind.TotalSizeExceeded,
+      'Markdown image assets exceed the share size limit.',
+      {
+        limitBytes: MAX_CLIENT_TEXT_TOTAL_ASSET_BYTES,
+        actualBytes: totalAssetBytes,
+      },
+    );
   }
   return { assets, omittedAssets };
 }
@@ -762,7 +820,14 @@ async function writeSingleFileZip(file: LoadedArtifactFile): Promise<{ archivePa
         ? MAX_CLIENT_DOCUMENT_ARCHIVE_BYTES
         : MAX_CLIENT_ARCHIVE_BYTES;
     if (stat.size > maxArchiveBytes) {
-      throw new Error('Share archive exceeds the size limit.');
+      throw createHtmlShareSizeError(
+        HtmlShareFailureKind.ArchiveSizeExceeded,
+        'Share archive exceeds the size limit.',
+        {
+          limitBytes: maxArchiveBytes,
+          actualBytes: stat.size,
+        },
+      );
     }
     const archiveBytes = await fs.promises.readFile(archivePath);
     return {
@@ -822,7 +887,14 @@ async function writeMarkdownZip(file: LoadedArtifactFile): Promise<{
 
     const stat = await fs.promises.stat(archivePath);
     if (stat.size > MAX_CLIENT_TEXT_ARCHIVE_BYTES) {
-      throw new Error('Share archive exceeds the size limit.');
+      throw createHtmlShareSizeError(
+        HtmlShareFailureKind.ArchiveSizeExceeded,
+        'Share archive exceeds the size limit.',
+        {
+          limitBytes: MAX_CLIENT_TEXT_ARCHIVE_BYTES,
+          actualBytes: stat.size,
+        },
+      );
     }
     return {
       archivePath,
@@ -851,7 +923,15 @@ export async function packageArtifactFile(
         ? MAX_CLIENT_TEXT_FILE_BYTES
       : MAX_CLIENT_SINGLE_FILE_BYTES;
   if (loaded.bytes.length > maxBytes) {
-    throw new Error('Artifact exceeds the share size limit.');
+    throw createHtmlShareSizeError(
+      HtmlShareFailureKind.FileTooLarge,
+      'Artifact exceeds the share size limit.',
+      {
+        fileName: loaded.fileName,
+        limitBytes: maxBytes,
+        actualBytes: loaded.bytes.length,
+      },
+    );
   }
   if (input.sourceType === HtmlShareSourceType.MarkdownFile) {
     const normalized = normalizeMarkdownFile(loaded);

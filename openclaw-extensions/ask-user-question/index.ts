@@ -1,6 +1,8 @@
 import { Type } from '@sinclair/typebox';
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 
+import { isAskUserQuestionCandidateSessionKey } from './sessionKey';
+
 /**
  * AskUserQuestion plugin for OpenClaw.
  *
@@ -23,6 +25,8 @@ type QuestionOption = {
 };
 
 type Question = {
+  /** Optional stable identifier; defaults to `question-<n>` by position. */
+  id?: string;
   question: string;
   header?: string;
   options: QuestionOption[];
@@ -33,9 +37,15 @@ type AskUserInput = {
   questions: Question[];
 };
 
+type AskUserCallbackInput = AskUserInput & {
+  sessionKey?: string;
+};
+
 type AskUserResponse = {
   behavior: 'allow' | 'deny';
   answers?: Record<string, string>;
+  /** Questions the user explicitly skipped; they carry neither an answer nor approval. */
+  skippedQuestionIds?: string[];
 };
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -57,7 +67,11 @@ const QuestionOptionSchema = Type.Object({
   description: Type.Optional(Type.String({ description: 'Explanation of what this option means.' })),
 });
 
+const questionId = (question: Question, index: number): string =>
+  question.id ?? `question-${index + 1}`;
+
 const QuestionSchema = Type.Object({
+  id: Type.Optional(Type.String({ minLength: 1, description: 'Stable identifier for this question.' })),
   question: Type.String({ description: 'The question to ask. Should be clear and end with a question mark.' }),
   header: Type.Optional(Type.String({ description: 'Short label displayed as a tag (max 12 chars). Examples: "Auth method", "Confirm".' })),
   options: Type.Array(QuestionOptionSchema, {
@@ -78,7 +92,7 @@ const AskUserQuestionSchema = Type.Object({
 
 async function askUser(
   config: PluginConfig,
-  input: AskUserInput,
+  input: AskUserCallbackInput,
 ): Promise<AskUserResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
@@ -104,10 +118,30 @@ async function askUser(
       return { behavior: 'deny' };
     }
 
-    const parsed = JSON.parse(text);
+    const parsed: unknown = JSON.parse(text);
+    if (!isRecord(parsed) || parsed.behavior !== 'allow') return { behavior: 'deny' };
+    if (parsed.answers !== undefined && (!isRecord(parsed.answers)
+      || Object.values(parsed.answers).some((answer) => typeof answer !== 'string'))) {
+      throw new Error('AskUserQuestion callback returned invalid answers.');
+    }
+    const answers = parsed.answers as Record<string, string> | undefined;
+    const skipped = parsed.skippedQuestionIds;
+    const questionsById = new Map(input.questions.map((question, index) => [questionId(question, index), question]));
+    if (skipped !== undefined && (!Array.isArray(skipped)
+      || skipped.some((id) => typeof id !== 'string' || !questionsById.has(id))
+      || new Set(skipped).size !== skipped.length)) {
+      throw new Error('AskUserQuestion callback returned invalid skipped question IDs.');
+    }
+    for (const id of (skipped as string[] | undefined) ?? []) {
+      const question = questionsById.get(id)!;
+      if (answers && Object.prototype.hasOwnProperty.call(answers, question.question) && answers[question.question].trim()) {
+        throw new Error('AskUserQuestion callback both answered and skipped the same question.');
+      }
+    }
     return {
-      behavior: parsed?.behavior === 'allow' ? 'allow' : 'deny',
-      answers: isRecord(parsed?.answers) ? parsed.answers as Record<string, string> : undefined,
+      behavior: 'allow',
+      ...(answers !== undefined ? { answers } : {}),
+      ...(skipped !== undefined ? { skippedQuestionIds: skipped as string[] } : {}),
     };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
@@ -135,15 +169,14 @@ const plugin = {
       return;
     }
 
-    // Use a factory so the tool is only available for desktop (webchat) sessions.
+    // Use a factory so the tool is only available for LobsterAI local-session candidates.
     // IM channel sessions (qqbot, dingtalk, weixin, feishu, etc.) get null → tool hidden.
     api.registerTool((ctx) => {
-      // Only enable for LobsterAI desktop sessions (sessionKey starts with 'agent:main:lobsterai:').
+      // Enable for LobsterAI desktop sessions across agents and delegated child sessions.
       // IM channel sessions (dingtalk, qqbot, weixin, feishu, wecom, etc.) should not have this tool
       // so the model executes delete commands directly without confirmation on IM.
       const sessionKey = ctx.sessionKey ?? '';
-      const isLocalDesktop = sessionKey.startsWith('agent:main:lobsterai:');
-      if (!isLocalDesktop) {
+      if (!isAskUserQuestionCandidateSessionKey(sessionKey)) {
         return null;
       }
 
@@ -167,7 +200,7 @@ const plugin = {
         }
 
         try {
-          const response = await askUser(config, input);
+          const response = await askUser(config, { ...input, sessionKey });
 
           if (response.behavior === 'deny') {
             return {
@@ -175,14 +208,19 @@ const plugin = {
             };
           }
 
-          const answerLines = response.answers
-            ? Object.entries(response.answers)
-                .map(([q, a]) => `${q}: ${a}`)
-                .join('\n')
-            : 'User approved.';
+          const answerLines = Object.entries(response.answers ?? {}).map(([q, a]) => `${q}: ${a}`);
+          for (const [index, question] of input.questions.entries()) {
+            if (response.skippedQuestionIds?.includes(questionId(question, index))) {
+              answerLines.push(`${question.question}: (skipped by user; no answer or approval given)`);
+            }
+          }
 
           return {
-            content: [{ type: 'text', text: answerLines }],
+            content: [{
+              type: 'text',
+              text: answerLines.join('\n') || 'No answers were provided; no user approval was given.',
+            }],
+            details: { answers: response.answers ?? {}, skippedQuestionIds: response.skippedQuestionIds ?? [] },
           };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

@@ -1,20 +1,33 @@
 import { CheckIcon } from '@heroicons/react/24/outline';
+import {
+  createAccountOwnerKey,
+  isEnterpriseAccountOwnerKey,
+} from '@shared/auth/accountOwner';
+import { AuthSubscriptionStatus } from '@shared/auth/constants';
+import { EnterpriseAccountMode } from '@shared/enterpriseAccount/constants';
 import { canonicalizeMediaModelId, GPT_IMAGE_2_MODEL_ID, mediaModelDisplayName } from '@shared/mediaModelAliases';
 import { ProviderName } from '@shared/providers';
 import Lottie from 'lottie-react';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { EnterpriseQuotaPrompt } from '../../features/enterpriseAccount/components/EnterpriseQuotaPrompt';
+import {
+  enterpriseMediaAccountSnapshotsMatch,
+  MediaGenerationAccessReason,
+  resolveMediaGenerationAccess,
+} from '../../features/enterpriseAccount/mediaAccess';
 import { getProviderIcon, ProviderIconId } from '../../providers/uiRegistry';
 import { authService } from '../../services/auth';
 import { i18nService } from '../../services/i18n';
 import { localStore } from '../../services/store';
-import { RootState } from '../../store';
+import { RootState, store } from '../../store';
 import { setMediaModels, setMediaSelection } from '../../store/slices/coworkSlice';
 import type { MediaGenerationMode, MediaModel } from '../../types/mediaGeneration';
 import MagicIcon from '../icons/MagicIcon';
 import mediaGenAnimation from '../icons/MediaGenIcon.json';
+import { resolvePopoverPlacement } from './popoverPlacement';
 
 interface SavedMediaSelection {
   image?: { modelId: string; modelName: string };
@@ -22,6 +35,36 @@ interface SavedMediaSelection {
 }
 
 const MEDIA_SELECTION_KV_KEY = 'media_selection';
+// The model list needs room for the longest name next to a price such as
+// "x30-60 积分/张输出图"; the login/subscribe prompt cards keep a compact width.
+const MEDIA_MODEL_LIST_PANEL_WIDTH = 400;
+const MEDIA_PROMPT_PANEL_WIDTH = 240;
+const MEDIA_PANEL_ESTIMATED_HEIGHT = 380;
+const EMPTY_MEDIA_MODELS: { image: MediaModel[]; video: MediaModel[] } = {
+  image: [],
+  video: [],
+};
+
+const logMediaModelPickerDiagnostic = (
+  level: 'debug' | 'warn',
+  message: string,
+  error?: unknown,
+): void => {
+  const errorMessage = error === undefined
+    ? ''
+    : `: ${error instanceof Error ? error.message : String(error)}`;
+  const resolvedMessage = `${message}${errorMessage}`.replace(/\s+/g, ' ').trim().slice(0, 500);
+  if (level === 'warn') {
+    console.warn(`[MediaModelPicker] ${resolvedMessage}`);
+  } else {
+    console.debug(`[MediaModelPicker] ${resolvedMessage}`);
+  }
+  try {
+    window.electron?.log?.fromRenderer?.(level, 'MediaModelPicker', resolvedMessage);
+  } catch {
+    // Diagnostics must not interrupt model selection or local persistence.
+  }
+};
 
 type MediaIconKey = ProviderName | ProviderIconId;
 
@@ -64,6 +107,47 @@ const isSameSavedMediaSelection = (
   && left?.video?.modelName === right.video?.modelName
 );
 
+const pendingSavedMediaSelectionLoads = new Map<
+  string,
+  Promise<SavedMediaSelection | null>
+>();
+
+const getMediaSelectionStoreKey = (ownerAccountKey: string): string => (
+  `${MEDIA_SELECTION_KV_KEY}:${ownerAccountKey}`
+);
+
+const loadSavedMediaSelection = (
+  ownerAccountKey: string,
+): Promise<SavedMediaSelection | null> => {
+  const pending = pendingSavedMediaSelectionLoads.get(ownerAccountKey);
+  if (pending) return pending;
+
+  const selectionStoreKey = getMediaSelectionStoreKey(ownerAccountKey);
+  const load = (async () => {
+    const scopedSelection = await localStore.getItem<SavedMediaSelection>(selectionStoreKey);
+    if (scopedSelection !== null) return scopedSelection;
+
+    const legacySelection = await localStore.getItem<SavedMediaSelection>(MEDIA_SELECTION_KV_KEY);
+    if (legacySelection === null) return null;
+
+    const normalizedSelection = normalizeSavedMediaSelection(legacySelection);
+    try {
+      await localStore.setItem(selectionStoreKey, normalizedSelection);
+      await localStore.removeItem(MEDIA_SELECTION_KV_KEY);
+      logMediaModelPickerDiagnostic('debug', 'migrated legacy media selection to the current account');
+    } catch (error) {
+      logMediaModelPickerDiagnostic('warn', 'failed to persist account-scoped media selection', error);
+    }
+    return normalizedSelection;
+  })().finally(() => {
+    if (pendingSavedMediaSelectionLoads.get(ownerAccountKey) === load) {
+      pendingSavedMediaSelectionLoads.delete(ownerAccountKey);
+    }
+  });
+  pendingSavedMediaSelectionLoads.set(ownerAccountKey, load);
+  return load;
+};
+
 const MEDIA_ICON_HINTS: Array<{ pattern: RegExp; iconKey: MediaIconKey }> = [
   { pattern: /gpt[\s-]*image[\s-]*2|canvas[\s-]*20/i, iconKey: ProviderName.OpenAI },
   { pattern: /nano[\s-]*banana[\s-]*(?:2|pro)|nano[\s-]*banan[\s-]*(?:2|pro)|banana[\s-]*(?:2|pro)/i, iconKey: ProviderIconId.Banana },
@@ -74,6 +158,21 @@ const MEDIA_ICON_HINTS: Array<{ pattern: RegExp; iconKey: MediaIconKey }> = [
   { pattern: /happyhorse|happy.horse/i, iconKey: ProviderIconId.HappyHorse },
 ];
 
+interface MediaPricingTierConfig {
+  label?: string;
+  resolution?: string;
+  duration?: number;
+  audio?: boolean;
+  hasVideoInput?: boolean;
+  outputPixelsMin?: number | string;
+  outputPixelsMax?: number | string;
+  costYuan?: number | string;
+  outputCostYuan?: number | string;
+  credits?: number | string;
+  outputCredits?: number | string;
+  pricePerMillionTokens?: number | string;
+}
+
 interface MediaPricingConfig {
   billingUnit?: string;
   adapterType?: string;
@@ -82,17 +181,17 @@ interface MediaPricingConfig {
   usdToCny?: number | string;
   unitLabel?: string;
   upstreamModelId?: string;
+  inputCostYuan?: number | string;
+  inputCredits?: number | string;
+  freeInputImageCount?: number | string;
+  inputFreeCount?: number | string;
+  freeInputImages?: number | string;
+  outputCostYuan?: number | string;
+  outputCredits?: number | string;
   usagePricing?: TokenUsagePricing;
   estimatedUsage?: EstimatedTokenUsage;
   defaultParams?: Record<string, unknown>;
-  tiers?: Array<{
-    resolution?: string;
-    duration?: number;
-    audio?: boolean;
-    hasVideoInput?: boolean;
-    costYuan?: number;
-    pricePerMillionTokens?: number;
-  }>;
+  tiers?: MediaPricingTierConfig[];
 }
 
 interface TokenUsagePricing {
@@ -217,6 +316,10 @@ const isTokenBillingModel = (model: MediaModel): boolean => {
   return getPricingConfig(model)?.billingUnit === 'per_token';
 };
 
+const isImageIoBillingModel = (model: MediaModel): boolean => {
+  return getPricingConfig(model)?.billingUnit === 'per_image_io';
+};
+
 const getNormalizedClientEstimateKeys = (model: MediaModel): string[] => {
   const pricing = getPricingConfig(model);
   return [
@@ -314,12 +417,88 @@ const formatEstimatedCredits = (credits: number): string => {
   return Math.max(1, Math.round(credits)).toString();
 };
 
+const pricingCredits = (creditsValue: unknown, costYuanValue: unknown): number | undefined => {
+  const directCredits = toFiniteNumber(creditsValue);
+  if (directCredits != null) return directCredits;
+  const costYuan = toFiniteNumber(costYuanValue);
+  if (costYuan != null) return costYuan * CREDITS_PER_CNY;
+  return undefined;
+};
+
+const tierCredits = (tier: MediaPricingTierConfig): number => {
+  const credits = pricingCredits(tier.outputCredits ?? tier.credits, tier.outputCostYuan ?? tier.costYuan);
+  if (credits != null) return credits;
+  const pricePerMillionTokens = toFiniteNumber(tier.pricePerMillionTokens);
+  if (pricePerMillionTokens != null) return pricePerMillionTokens * CREDITS_PER_CNY;
+  return 0;
+};
+
+const formatPixelCount = (pixels: number): string => {
+  if (i18nService.getLanguage() === 'zh') {
+    if (pixels >= 10_000) return `${formatCreditAmount(pixels / 10_000)}万`;
+    return formatCreditAmount(pixels);
+  }
+  if (pixels >= 1_000_000) return `${formatCreditAmount(pixels / 1_000_000)}M`;
+  if (pixels >= 1_000) return `${formatCreditAmount(pixels / 1_000)}K`;
+  return formatCreditAmount(pixels);
+};
+
+const formatOutputPixelTierLabel = (tier: MediaPricingTierConfig): string => {
+  if (tier.label) return tier.label;
+  const min = toFiniteNumber(tier.outputPixelsMin);
+  const max = toFiniteNumber(tier.outputPixelsMax);
+  const isZh = i18nService.getLanguage() === 'zh';
+  if (min != null && max != null) {
+    return isZh
+      ? `输出图${formatPixelCount(min)}-${formatPixelCount(max)}像素`
+      : `Output ${formatPixelCount(min)}-${formatPixelCount(max)} pixels`;
+  }
+  if (max != null) {
+    return isZh
+      ? `输出图≤${formatPixelCount(max)}像素`
+      : `Output ≤ ${formatPixelCount(max)} pixels`;
+  }
+  if (min != null) {
+    return isZh
+      ? `输出图>${formatPixelCount(min - 1)}像素`
+      : `Output > ${formatPixelCount(min - 1)} pixels`;
+  }
+  return isZh ? '输出图' : 'Output image';
+};
+
+const getImageIoOutputTierCredits = (pricing?: MediaPricingConfig): number[] => {
+  const tierCreditsList = pricing?.tiers
+    ?.map(tier => tierCredits(tier))
+    .filter(credits => credits > 0) ?? [];
+  if (tierCreditsList.length > 0) return tierCreditsList;
+  const outputCredits = pricingCredits(pricing?.outputCredits, pricing?.outputCostYuan);
+  return outputCredits != null && outputCredits > 0 ? [outputCredits] : [];
+};
+
+const getFreeInputImageCount = (pricing?: MediaPricingConfig): number => {
+  const freeCount = toFiniteNumber(
+    pricing?.freeInputImageCount ?? pricing?.inputFreeCount ?? pricing?.freeInputImages,
+  );
+  if (freeCount == null || freeCount <= 0) return 0;
+  return Math.floor(freeCount);
+};
+
 const getModelPriceLabel = (model: MediaModel): string | null => {
   if (model.mediaType !== 'image') return null;
   if (isTokenBillingModel(model)) {
     const estimatedCredits = getEstimatedRequestCredits(model);
     if (!estimatedCredits) return null;
     return `≈${formatEstimatedCredits(estimatedCredits)} ${i18nService.t('authCreditsUnit')}/${model.unitLabel || '次'}`;
+  }
+  if (isImageIoBillingModel(model)) {
+    const outputTierCredits = getImageIoOutputTierCredits(getPricingConfig(model));
+    if (outputTierCredits.length === 0) return null;
+    const minCredits = Math.min(...outputTierCredits);
+    const maxCredits = Math.max(...outputTierCredits);
+    const creditRange = minCredits === maxCredits
+      ? formatCreditAmount(minCredits)
+      : `${formatCreditAmount(minCredits)}-${formatCreditAmount(maxCredits)}`;
+    return `x${creditRange} ${i18nService.t('authCreditsUnit')}/${model.unitLabel || '张输出图'}`;
   }
   const unitCredits = toFiniteNumber(model.unitCredits);
   if (!unitCredits || unitCredits <= 0) return null;
@@ -350,6 +529,51 @@ const getTokenPricingRows = (model: MediaModel): Array<{ label: string; creditsP
       };
     })
     .filter((row): row is { label: string; creditsPerMillion: number } => row !== null);
+};
+
+const getImageIoPricingRows = (model: MediaModel): Array<{ label: string; credits: number; unitLabel: string }> => {
+  const pricing = getPricingConfig(model);
+  if (pricing?.billingUnit !== 'per_image_io') return [];
+  const rows: Array<{ label: string; credits: number; unitLabel: string }> = [];
+  const inputCredits = pricingCredits(pricing.inputCredits, pricing.inputCostYuan);
+  if (inputCredits != null && inputCredits > 0) {
+    const freeInputImageCount = getFreeInputImageCount(pricing);
+    rows.push({
+      label: (() => {
+        const isZh = i18nService.getLanguage() === 'zh';
+        if (freeInputImageCount === 1) return isZh ? '输入图（首张免费）' : 'Input image (first free)';
+        if (freeInputImageCount > 1) return isZh
+          ? `输入图（前${freeInputImageCount}张免费）`
+          : `Input image (first ${freeInputImageCount} free)`;
+        return isZh ? '输入图' : 'Input image';
+      })(),
+      credits: inputCredits,
+      unitLabel: i18nService.getLanguage() === 'zh' ? '张输入图' : 'input image',
+    });
+  }
+
+  const outputUnitLabel = model.unitLabel || pricing.unitLabel || (i18nService.getLanguage() === 'zh' ? '张输出图' : 'output image');
+  pricing.tiers?.forEach((tier) => {
+    const credits = tierCredits(tier);
+    if (credits <= 0) return;
+    rows.push({
+      label: formatOutputPixelTierLabel(tier),
+      credits,
+      unitLabel: outputUnitLabel,
+    });
+  });
+
+  if (!pricing.tiers || pricing.tiers.length === 0) {
+    const outputCredits = pricingCredits(pricing.outputCredits, pricing.outputCostYuan);
+    if (outputCredits != null && outputCredits > 0) {
+      rows.push({
+        label: i18nService.getLanguage() === 'zh' ? '输出图' : 'Output image',
+        credits: outputCredits,
+        unitLabel: outputUnitLabel,
+      });
+    }
+  }
+  return rows;
 };
 
 const formatChineseEstimateScope = (config: ClientEstimateConfig): string => {
@@ -421,19 +645,85 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
   const [hoveredModel, setHoveredModel] = useState<MediaModel | null>(null);
   const [hoverCardStyle, setHoverCardStyle] = useState<React.CSSProperties>({});
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fetchRequestIdRef = useRef(0);
 
   const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
+  const authUser = useSelector((state: RootState) => state.auth.user);
   const authQuota = useSelector((state: RootState) => state.auth.quota);
-  const canUseMediaGeneration = isLoggedIn && (authQuota?.subscriptionStatus === 'active' || authQuota?.hasPaidCredits === true);
+  const ownerAccountKey = useSelector((state: RootState) => state.auth.ownerAccountKey);
+  const accountGeneration = useSelector((state: RootState) => state.auth.accountGeneration);
+  const enterpriseContext = useSelector((state: RootState) => state.enterpriseAccount.context);
+  const ownerMarksEnterpriseAccount = isEnterpriseAccountOwnerKey(ownerAccountKey);
+  const isEnterpriseAccount = ownerMarksEnterpriseAccount
+    || enterpriseContext !== null
+    || authQuota?.subscriptionStatus === AuthSubscriptionStatus.Enterprise
+    || authQuota?.accountMode === EnterpriseAccountMode.Enterprise;
+  const enterpriseContextOwnerAccountKey = createAccountOwnerKey({
+    user: authUser,
+    enterpriseId: enterpriseContext?.enterpriseId,
+  });
+  const enterpriseQuotaOwnerAccountKey = createAccountOwnerKey({
+    user: authUser,
+    enterpriseId: authQuota?.enterpriseId,
+  });
+  const enterpriseAccountSnapshotsMatch = enterpriseMediaAccountSnapshotsMatch({
+    isEnterpriseAccount,
+    ownerAccountKey,
+    contextOwnerAccountKey: enterpriseContextOwnerAccountKey,
+    quotaOwnerAccountKey: enterpriseQuotaOwnerAccountKey,
+    quotaAccountMode: authQuota?.accountMode,
+    quotaEnterpriseId: authQuota?.enterpriseId,
+    contextEnterpriseId: enterpriseContext?.enterpriseId,
+  });
+  const mediaAccess = resolveMediaGenerationAccess({
+    isLoggedIn,
+    quota: authQuota,
+    isEnterpriseAccount,
+    enterpriseAccountSnapshotsMatch,
+    enterpriseQuotaAvailable: enterpriseContext?.quotaStatus.available,
+  });
+  const canUseMediaGeneration = mediaAccess.allowed;
+  const showsModelList = isLoggedIn && canUseMediaGeneration;
+  const desiredPanelWidth = showsModelList ? MEDIA_MODEL_LIST_PANEL_WIDTH : MEDIA_PROMPT_PANEL_WIDTH;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [panelPlacement, setPanelPlacement] = useState(() => ({
+    alignEnd: false,
+    width: desiredPanelWidth,
+  }));
 
-  const mediaModels = useSelector((state: RootState) => state.cowork.mediaModels);
+  const cachedMediaModels = useSelector((state: RootState) => state.cowork.mediaModels);
+  const mediaModelsOwnerAccountKey = useSelector(
+    (state: RootState) => state.cowork.mediaModelsOwnerAccountKey,
+  );
+  const mediaModels = ownerAccountKey === mediaModelsOwnerAccountKey
+    ? cachedMediaModels
+    : EMPTY_MEDIA_MODELS;
+  const mediaModelsRef = useRef(mediaModels);
+  mediaModelsRef.current = mediaModels;
   const selection = useSelector((state: RootState) => state.cowork.mediaSelection[draftKey]);
 
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
+  const isAccountScopeCurrent = useCallback((
+    expectedOwnerAccountKey: string,
+    expectedGeneration: number,
+  ): boolean => {
+    const currentAuthState = store.getState().auth;
+    return (
+      currentAuthState.ownerAccountKey === expectedOwnerAccountKey
+      && currentAuthState.accountGeneration === expectedGeneration
+    );
+  }, []);
 
   const fetchModels = useCallback(async () => {
-    const hasCachedModels = mediaModels.image.length > 0 || mediaModels.video.length > 0;
+    if (!ownerAccountKey) return;
+    const requestOwnerAccountKey = ownerAccountKey;
+    const requestGeneration = accountGeneration;
+    const requestId = ++fetchRequestIdRef.current;
+    const selectionStoreKey = getMediaSelectionStoreKey(requestOwnerAccountKey);
+    const currentMediaModels = mediaModelsRef.current;
+    const hasCachedModels = currentMediaModels.image.length > 0
+      || currentMediaModels.video.length > 0;
     if (!hasCachedModels) {
       setIsLoading(true);
     }
@@ -442,20 +732,33 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
         window.electron.media.getModels('image'),
         window.electron.media.getModels('video'),
       ]);
-      if (!imageResult.success) console.warn('[MediaModelPicker] image models fetch failed:', imageResult.error);
-      if (!videoResult.success) console.warn('[MediaModelPicker] video models fetch failed:', videoResult.error);
+      if (
+        fetchRequestIdRef.current !== requestId
+        || !isAccountScopeCurrent(requestOwnerAccountKey, requestGeneration)
+      ) return;
+      if (!imageResult.success) {
+        logMediaModelPickerDiagnostic('warn', 'image models fetch failed', imageResult.error);
+      }
+      if (!videoResult.success) {
+        logMediaModelPickerDiagnostic('warn', 'video models fetch failed', videoResult.error);
+      }
       const imageModels = ((imageResult.models || []) as MediaModel[]).map(normalizeMediaModel);
       const videoModels = ((videoResult.models || []) as MediaModel[]).map(normalizeMediaModel);
       dispatch(setMediaModels({
         image: imageModels,
         video: videoModels,
+        ownerAccountKey: requestOwnerAccountKey,
       }));
       const currentSelection = selectionRef.current;
       if (!currentSelection || currentSelection.mode === 'none') {
-        const rawSaved = await localStore.getItem<SavedMediaSelection>(MEDIA_SELECTION_KV_KEY);
+        const rawSaved = await loadSavedMediaSelection(requestOwnerAccountKey);
+        if (
+          fetchRequestIdRef.current !== requestId
+          || !isAccountScopeCurrent(requestOwnerAccountKey, requestGeneration)
+        ) return;
         const saved = normalizeSavedMediaSelection(rawSaved);
         if (!isSameSavedMediaSelection(rawSaved, saved)) {
-          localStore.setItem(MEDIA_SELECTION_KV_KEY, saved);
+          await localStore.setItem(selectionStoreKey, saved);
         }
         const imageEntry = saved?.image;
         const videoEntry = saved?.video;
@@ -487,17 +790,58 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
         }
       }
     } catch (err) {
-      console.error('[MediaModelPicker] Failed to fetch models:', err);
+      logMediaModelPickerDiagnostic('warn', 'failed to fetch models', err);
     } finally {
-      setIsLoading(false);
+      if (
+        fetchRequestIdRef.current === requestId
+        && isAccountScopeCurrent(requestOwnerAccountKey, requestGeneration)
+      ) {
+        setIsLoading(false);
+      }
     }
-  }, [dispatch, draftKey, mediaModels.image.length, mediaModels.video.length]);
+  }, [
+    accountGeneration,
+    dispatch,
+    draftKey,
+    isAccountScopeCurrent,
+    ownerAccountKey,
+  ]);
+
+  useEffect(() => {
+    fetchRequestIdRef.current += 1;
+    setIsLoading(false);
+  }, [accountGeneration, ownerAccountKey]);
 
   useEffect(() => {
     if (isOpen && canUseMediaGeneration) {
       fetchModels();
     }
   }, [isOpen, canUseMediaGeneration, fetchModels]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    // The panel grows rightward from the trigger; flip it (or cap its width)
+    // when a clipping ancestor such as a narrow chat pane cannot fit it.
+    const updatePlacement = () => {
+      const container = containerRef.current;
+      if (!container) return;
+      const placement = resolvePopoverPlacement(container, {
+        preferredAlign: 'left',
+        estimatedHeight: MEDIA_PANEL_ESTIMATED_HEIGHT,
+        desiredWidth: desiredPanelWidth,
+      });
+      const next = {
+        alignEnd: placement.alignSide === 'right',
+        width: placement.maxWidth ?? desiredPanelWidth,
+      };
+      setPanelPlacement(current => (
+        current.alignEnd === next.alignEnd && current.width === next.width ? current : next
+      ));
+    };
+    updatePlacement();
+    window.addEventListener('resize', updatePlacement);
+    return () => window.removeEventListener('resize', updatePlacement);
+  }, [isOpen, desiredPanelWidth]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -513,48 +857,86 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
   }, [isOpen]);
 
   useEffect(() => {
-    if (selection && selection.mode !== 'none') return;
+    if (
+      !ownerAccountKey
+      || !canUseMediaGeneration
+      || (selection && selection.mode !== 'none')
+    ) {
+      return;
+    }
 
     let cancelled = false;
-    (async () => {
-      const rawSaved = await localStore.getItem<SavedMediaSelection>(MEDIA_SELECTION_KV_KEY);
-      const saved = normalizeSavedMediaSelection(rawSaved);
-      if (!isSameSavedMediaSelection(rawSaved, saved)) {
-        localStore.setItem(MEDIA_SELECTION_KV_KEY, saved);
-      }
-      if (cancelled) return;
-      const imageEntry = saved?.image;
-      const videoEntry = saved?.video;
-      if (imageEntry && videoEntry) {
-        dispatch(setMediaSelection({
-          draftKey,
-          selection: {
-            mode: 'auto',
-            modelId: imageEntry.modelId,
-            modelName: imageEntry.modelName,
-            imageModelId: imageEntry.modelId,
-            videoModelId: videoEntry.modelId,
-          },
-        }));
-      } else if (imageEntry) {
-        dispatch(setMediaSelection({
-          draftKey,
-          selection: { mode: 'image', modelId: imageEntry.modelId, modelName: imageEntry.modelName },
-        }));
-      } else if (videoEntry) {
-        dispatch(setMediaSelection({
-          draftKey,
-          selection: { mode: 'video', modelId: videoEntry.modelId, modelName: videoEntry.modelName },
-        }));
-        setActiveTab('video');
+    const restoreOwnerAccountKey = ownerAccountKey;
+    const restoreGeneration = accountGeneration;
+    const selectionStoreKey = getMediaSelectionStoreKey(restoreOwnerAccountKey);
+    void (async () => {
+      try {
+        const rawSaved = await loadSavedMediaSelection(restoreOwnerAccountKey);
+        const saved = normalizeSavedMediaSelection(rawSaved);
+        if (!isSameSavedMediaSelection(rawSaved, saved)) {
+          await localStore.setItem(selectionStoreKey, saved);
+        }
+        if (
+          cancelled
+          || !isAccountScopeCurrent(restoreOwnerAccountKey, restoreGeneration)
+        ) {
+          return;
+        }
+        const imageEntry = saved.image;
+        const videoEntry = saved.video;
+        if (imageEntry && videoEntry) {
+          dispatch(setMediaSelection({
+            draftKey,
+            selection: {
+              mode: 'auto',
+              modelId: imageEntry.modelId,
+              modelName: imageEntry.modelName,
+              imageModelId: imageEntry.modelId,
+              videoModelId: videoEntry.modelId,
+            },
+          }));
+        } else if (imageEntry) {
+          dispatch(setMediaSelection({
+            draftKey,
+            selection: { mode: 'image', modelId: imageEntry.modelId, modelName: imageEntry.modelName },
+          }));
+        } else if (videoEntry) {
+          dispatch(setMediaSelection({
+            draftKey,
+            selection: { mode: 'video', modelId: videoEntry.modelId, modelName: videoEntry.modelName },
+          }));
+          setActiveTab('video');
+        }
+      } catch (error) {
+        logMediaModelPickerDiagnostic('warn', 'failed to restore saved media selection', error);
       }
     })();
     return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftKey, dispatch]);
+  }, [
+    accountGeneration,
+    canUseMediaGeneration,
+    dispatch,
+    draftKey,
+    isAccountScopeCurrent,
+    ownerAccountKey,
+    selection,
+  ]);
 
   const handleSelect = async (mode: MediaGenerationMode, model?: MediaModel) => {
-    const saved = normalizeSavedMediaSelection(await localStore.getItem<SavedMediaSelection>(MEDIA_SELECTION_KV_KEY));
+    if (!ownerAccountKey) return;
+    const selectionOwnerAccountKey = ownerAccountKey;
+    const selectionGeneration = accountGeneration;
+    const selectionStoreKey = getMediaSelectionStoreKey(selectionOwnerAccountKey);
+    let saved: SavedMediaSelection;
+    try {
+      saved = normalizeSavedMediaSelection(
+        await loadSavedMediaSelection(selectionOwnerAccountKey),
+      );
+    } catch (error) {
+      logMediaModelPickerDiagnostic('warn', 'failed to load saved media selection', error);
+      saved = {};
+    }
+    if (!isAccountScopeCurrent(selectionOwnerAccountKey, selectionGeneration)) return;
     const currentModelId = mode === 'image'
       ? canonicalizeMediaModelId(selection?.imageModelId ?? (selection?.mode === 'image' ? selection?.modelId : undefined))
       : canonicalizeMediaModelId(selection?.videoModelId ?? (selection?.mode === 'video' ? selection?.modelId : undefined));
@@ -565,7 +947,12 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     } else if (model) {
       saved[mode as 'image' | 'video'] = { modelId: model.modelId, modelName: model.displayName };
     }
-    localStore.setItem(MEDIA_SELECTION_KV_KEY, saved);
+    try {
+      await localStore.setItem(selectionStoreKey, saved);
+    } catch (error) {
+      logMediaModelPickerDiagnostic('warn', 'failed to save media selection', error);
+    }
+    if (!isAccountScopeCurrent(selectionOwnerAccountKey, selectionGeneration)) return;
 
     const hasImage = !!saved.image;
     const hasVideo = !!saved.video;
@@ -605,6 +992,10 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     setIsOpen(false);
     const { getPortalPricingUrl } = await import('../../services/endpoints');
     await window.electron.shell.openExternal(getPortalPricingUrl());
+  };
+
+  const handleEnterpriseRefresh = async () => {
+    await authService.refreshQuota();
   };
 
   const handleModelHover = (model: MediaModel, event: React.MouseEvent<HTMLButtonElement>) => {
@@ -656,6 +1047,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
 
   useEffect(() => {
     return () => {
+      fetchRequestIdRef.current += 1;
       if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     };
   }, []);
@@ -669,9 +1061,12 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     const tiers = pricing?.tiers;
     const billingUnit = pricing?.billingUnit;
     const tokenPricingRows = getTokenPricingRows(hoveredModel);
+    const imageIoPricingRows = getImageIoPricingRows(hoveredModel);
     const tokenBillingEstimateNotes = getTokenBillingEstimateNotes(hoveredModel);
 
-    const formatTierLabel = (tier: { resolution?: string; duration?: number; audio?: boolean; hasVideoInput?: boolean }) => {
+    const formatTierLabel = (tier: MediaPricingTierConfig) => {
+      if (tier.label) return tier.label;
+      if (tier.outputPixelsMin != null || tier.outputPixelsMax != null) return formatOutputPixelTierLabel(tier);
       const parts: string[] = [];
       if (tier.resolution) parts.push(tier.resolution);
       if (tier.duration) parts.push(`${tier.duration}秒`);
@@ -679,12 +1074,6 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
       if (tier.hasVideoInput === true) parts.push('含视频输入');
       if (tier.hasVideoInput === false) parts.push('不含视频输入');
       return parts.join(' ') || '-';
-    };
-
-    const tierCredits = (tier: { costYuan?: number; pricePerMillionTokens?: number }) => {
-      if (tier.pricePerMillionTokens != null) return Math.round(tier.pricePerMillionTokens * 100);
-      if (tier.costYuan != null) return Math.round(tier.costYuan * 100);
-      return 0;
     };
 
     const tierUnitSuffix = billingUnit === 'per_second' ? '秒'
@@ -719,7 +1108,33 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
             {desc}
           </div>
         )}
-        {tokenPricingRows.length > 0 ? (
+        {imageIoPricingRows.length > 0 ? (
+          <>
+            <table className="mt-2 w-full text-[10px] text-secondary border-collapse">
+              <thead>
+                <tr className="border-b border-border/50">
+                  <th className="text-left font-medium py-0.5 pr-2">{i18nService.t('mediaTierSpecLabel')}</th>
+                  <th className="text-right font-medium py-0.5">{i18nService.t('authCreditsUnit')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {imageIoPricingRows.map((row) => (
+                  <tr key={`${row.label}-${row.unitLabel}`}>
+                    <td className="py-0.5 pr-2">{row.label}</td>
+                    <td className="text-right py-0.5">
+                      {formatCreditAmount(row.credits)}/{row.unitLabel}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="mt-1.5 text-[9px] leading-3 text-tertiary">
+              {i18nService.getLanguage() === 'zh'
+                ? '输出图按实际返回的图片尺寸分层计费。'
+                : 'Output image billing is tiered by the actual returned image size.'}
+            </div>
+          </>
+        ) : tokenPricingRows.length > 0 ? (
           <>
             <table className="mt-2 w-full text-[10px] text-secondary border-collapse">
               <thead>
@@ -849,6 +1264,29 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
       );
     }
 
+    if (
+      mediaAccess.reason === MediaGenerationAccessReason.EnterpriseQuotaUnavailable
+      && enterpriseContext?.quotaStatus.reason
+    ) {
+      return (
+        <div className="px-2 pb-2">
+          <EnterpriseQuotaPrompt
+            reason={enterpriseContext.quotaStatus.reason}
+            surface="home"
+          />
+        </div>
+      );
+    }
+
+    if (isEnterpriseAccount && !canUseMediaGeneration) {
+      return renderPromptPanel(
+        i18nService.t('enterpriseMediaUnavailableTitle'),
+        i18nService.t('enterpriseMediaUnavailableDesc'),
+        i18nService.t('enterpriseMediaRetry'),
+        () => { void handleEnterpriseRefresh(); },
+      );
+    }
+
     if (!canUseMediaGeneration) {
       return renderPromptPanel(
         i18nService.t('mediaSubscribeTitle'),
@@ -896,8 +1334,8 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
           </div>
         </div>
 
-        {/* Model List */}
-        <div className="max-h-72 overflow-y-auto py-1">
+        {/* Model List: max-h-80 fits eight rows, so a typical list needs no scrollbar. */}
+        <div className="max-h-80 overflow-y-auto px-1.5 py-1">
           {isLoading ? (
             <div className="px-2 py-3 text-center text-xs text-secondary">
               {i18nService.t('mediaLoadingModels')}
@@ -913,8 +1351,10 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
                   || (selection?.mode === 'image' && canonicalizeMediaModelId(selection?.modelId) === model.modelId))
                 : (canonicalizeMediaModelId(selection?.videoModelId) === model.modelId
                   || (selection?.mode === 'video' && canonicalizeMediaModelId(selection?.modelId) === model.modelId));
-              const priceLabel = getModelPriceLabel(model);
-              const discountLabel = getModelDiscountLabel(model);
+              const priceLabel = activeTab === 'image' ? getModelPriceLabel(model) : null;
+              const discountLabel = activeTab === 'image' ? getModelDiscountLabel(model) : null;
+              // Name and discount tag take the remaining width; the price sits in
+              // a right-aligned column next to a fixed check slot.
               return (
                 <button
                   key={model.modelId}
@@ -922,24 +1362,31 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
                   onClick={() => handleSelect(activeTab, model)}
                   onMouseEnter={(e) => handleModelHover(model, e)}
                   onMouseLeave={handleModelHoverEnd}
-                  className={`flex w-full items-center gap-2.5 rounded px-2 py-2 text-left text-xs transition-colors hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover ${isSelected ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''}`}
+                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors ${
+                    isSelected ? 'bg-surface-raised' : 'hover:bg-surface-raised'
+                  }`}
                 >
-                  <span className="shrink-0 h-4 w-4 [&_svg]:h-4 [&_svg]:w-4">{resolveMediaModelIcon(model)}</span>
-                  <span className="min-w-0 truncate text-[13px] font-normal leading-5">{model.displayName}</span>
-                  {activeTab === 'image' && priceLabel && (
-                    <span className="shrink-0 text-[11px] text-secondary whitespace-nowrap">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center [&_svg]:h-[18px] [&_svg]:w-[18px]">
+                    {resolveMediaModelIcon(model)}
+                  </span>
+                  <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <span className={`min-w-0 truncate text-[13px] leading-5 ${isSelected ? 'font-medium' : 'font-normal'}`}>
+                      {model.displayName}
+                    </span>
+                    {discountLabel && (
+                      <span className="shrink-0 rounded bg-red-500/10 px-1 py-0.5 text-[10px] font-medium leading-3 text-red-500">
+                        {discountLabel}
+                      </span>
+                    )}
+                  </span>
+                  {priceLabel && (
+                    <span className="shrink-0 whitespace-nowrap text-[11px] leading-4 text-secondary tabular-nums">
                       {priceLabel}
                     </span>
                   )}
-                  {activeTab === 'image' && discountLabel && (
-                    <span className="shrink-0 rounded bg-red-500/10 px-1 py-0.5 text-[9px] font-medium leading-3 text-red-500">
-                      {discountLabel}
-                    </span>
-                  )}
-                  <span className="flex-1" />
-                  {isSelected && (
-                    <CheckIcon className="h-4 w-4 shrink-0 text-emerald-500" />
-                  )}
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                    {isSelected && <CheckIcon className="h-4 w-4 text-primary" strokeWidth={2.5} />}
+                  </span>
                 </button>
               );
             })
@@ -950,7 +1397,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
   };
 
   return (
-    <div className="relative">
+    <div ref={containerRef} className="relative">
       <button
         ref={buttonRef}
         type="button"
@@ -968,7 +1415,8 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
       {isOpen && (
         <div
           ref={dropdownRef}
-          className="absolute bottom-full left-0 z-50 mb-1 w-60 rounded-xl border border-border bg-surface shadow-popover overflow-hidden"
+          style={{ width: panelPlacement.width }}
+          className={`absolute bottom-full ${panelPlacement.alignEnd ? 'right-0' : 'left-0'} z-50 mb-1 rounded-xl border border-border bg-surface shadow-popover overflow-hidden`}
         >
           {renderDropdownContent()}
         </div>

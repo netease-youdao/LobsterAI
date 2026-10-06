@@ -1,7 +1,15 @@
+import { stripNullChars } from './text';
+
 export const CoworkSelectedTextSource = {
   AssistantMessage: 'assistant',
   ArtifactMarkdown: 'artifact_markdown',
   ArtifactText: 'artifact_text',
+  /** Cells of a workbook open in the Excel editor; the title names the sheet and range. */
+  ArtifactSheet: 'artifact_sheet',
+  /** Text selected in a document open in the Word editor. */
+  ArtifactWord: 'artifact_word',
+  /** Text of a presentation open in the PowerPoint editor; the title names the slide and shape. */
+  ArtifactSlides: 'artifact_slides',
 } as const;
 
 export type CoworkSelectedTextSource =
@@ -52,7 +60,7 @@ const normalizeOptionalOffset = (value: unknown): number | undefined => (
 
 const normalizeOptionalText = (value: unknown, maxLength = 512): string | undefined => {
   if (typeof value !== 'string') return undefined;
-  const text = value.trim();
+  const text = stripNullChars(value).trim();
   if (!text) return undefined;
   return text.slice(0, maxLength);
 };
@@ -60,7 +68,7 @@ const normalizeOptionalText = (value: unknown, maxLength = 512): string | undefi
 const normalizeSnippet = (value: unknown): CoworkSelectedTextSnippet | null => {
   if (!isRecord(value)) return null;
   const id = typeof value.id === 'string' ? value.id.trim() : '';
-  const text = typeof value.text === 'string' ? value.text.trim() : '';
+  const text = typeof value.text === 'string' ? stripNullChars(value.text).trim() : '';
   const sourceMessageId = typeof value.sourceMessageId === 'string'
     ? value.sourceMessageId.trim()
     : '';
@@ -98,6 +106,9 @@ const normalizeSnippet = (value: unknown): CoworkSelectedTextSnippet | null => {
   if (
     sourceType === CoworkSelectedTextSource.ArtifactMarkdown
     || sourceType === CoworkSelectedTextSource.ArtifactText
+    || sourceType === CoworkSelectedTextSource.ArtifactSheet
+    || sourceType === CoworkSelectedTextSource.ArtifactWord
+    || sourceType === CoworkSelectedTextSource.ArtifactSlides
   ) {
     const normalizedSourceId = explicitSourceId || artifactId;
     if (!normalizedSourceId) return null;
@@ -169,6 +180,18 @@ const getSnippetHeading = (snippet: CoworkSelectedTextSnippet, index: number): s
   if (sourceType === CoworkSelectedTextSource.ArtifactText) {
     const title = snippet.sourceTitle?.trim() || 'text file';
     return `[Excerpt ${index + 1} from text file ${title}]`;
+  }
+  if (sourceType === CoworkSelectedTextSource.ArtifactSheet) {
+    const title = snippet.sourceTitle?.trim() || 'spreadsheet';
+    return `[Excerpt ${index + 1} from spreadsheet ${title} (tab-separated cells as shown; excel_read gives formulas and more)]`;
+  }
+  if (sourceType === CoworkSelectedTextSource.ArtifactWord) {
+    const title = snippet.sourceTitle?.trim() || 'Word document';
+    return `[Excerpt ${index + 1} from Word document ${title} (word_read gives its paragraph ids)]`;
+  }
+  if (sourceType === CoworkSelectedTextSource.ArtifactSlides) {
+    const title = snippet.sourceTitle?.trim() || 'presentation';
+    return `[Excerpt ${index + 1} from presentation ${title} (ppt_read gives its slides and shape ids)]`;
   }
   return `[Excerpt ${index + 1} from assistant message]`;
 };

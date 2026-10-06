@@ -2,16 +2,19 @@ import { ArrowRightIcon } from '@heroicons/react/24/outline';
 import React from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { i18nService } from '../../services/i18n';
 import { RootState } from '../../store';
 import { selectPrompt } from '../../store/slices/quickActionSlice';
 import type { LocalizedPrompt, LocalizedQuickAction } from '../../types/quickAction';
+import XMarkIcon from '../icons/XMarkIcon';
 
 interface PromptPanelProps {
   action: LocalizedQuickAction;
   onPromptSelect: (prompt: string, promptId: string) => void;
+  onClose?: () => void;
 }
 
-const PromptPanel: React.FC<PromptPanelProps> = ({ action, onPromptSelect }) => {
+const PromptPanel: React.FC<PromptPanelProps> = ({ action, onPromptSelect, onClose }) => {
   const dispatch = useDispatch();
   const selectedPromptId = useSelector(
     (state: RootState) => state.quickAction.selectedPromptId
@@ -27,12 +30,23 @@ const PromptPanel: React.FC<PromptPanelProps> = ({ action, onPromptSelect }) => 
   }
 
   return (
-    <div className="w-full animate-fade-in-up">
+    <div data-skin-prompt-panel="true" className="w-full animate-fade-in-up">
       {/* 标题 */}
-      <div className="mb-2.5 px-0.5">
+      <div className="mb-2.5 flex items-center justify-between px-0.5">
         <span className="text-xs font-medium text-secondary">
           {action.label}
         </span>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={i18nService.t('coworkQuickActionCollapse')}
+            title={i18nService.t('coworkQuickActionCollapse')}
+            className="flex h-5 w-5 items-center justify-center rounded-md text-secondary transition-colors duration-150 hover:bg-surface-raised hover:text-foreground"
+          >
+            <XMarkIcon className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
 
       {/* 提示词卡片网格 */}

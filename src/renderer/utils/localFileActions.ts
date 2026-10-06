@@ -45,6 +45,15 @@ const logLocalFileActionFailure = (
     filePath,
     result?.error,
   );
+  try {
+    window.electron?.log?.fromRenderer?.(
+      'warn',
+      'LocalFileActions',
+      `${operation} failed; reason=${result?.reason || 'unknown'}${result?.error ? `; error=${result.error}` : ''}`,
+    );
+  } catch {
+    // Diagnostics must not alter the user-visible file action result.
+  }
 };
 
 export const openLocalPathWithToast = async (
@@ -59,6 +68,15 @@ export const openLocalPathWithToast = async (
     return false;
   } catch (error) {
     console.warn('[LocalFileActions] failed to open local path because the shell call threw:', filePath, error);
+    try {
+      window.electron?.log?.fromRenderer?.(
+        'warn',
+        'LocalFileActions',
+        `open threw; error=${error instanceof Error ? error.message : String(error)}`,
+      );
+    } catch {
+      // Best-effort diagnostics only.
+    }
     showToast(i18nService.t(fallbackKey));
     return false;
   }
@@ -76,6 +94,15 @@ export const revealLocalPathWithToast = async (
     return false;
   } catch (error) {
     console.warn('[LocalFileActions] failed to reveal local path because the shell call threw:', filePath, error);
+    try {
+      window.electron?.log?.fromRenderer?.(
+        'warn',
+        'LocalFileActions',
+        `reveal threw; error=${error instanceof Error ? error.message : String(error)}`,
+      );
+    } catch {
+      // Best-effort diagnostics only.
+    }
     showToast(i18nService.t(fallbackKey));
     return false;
   }

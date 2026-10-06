@@ -1,11 +1,21 @@
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
+import type { CoworkBrowserAnnotationMessageBatch } from '../../../shared/cowork/browserAnnotations';
+import type {
+  CoworkBtwAbortResponse,
+  CoworkBtwEntry,
+  CoworkBtwSubmitResponse,
+} from '../../../shared/cowork/btw';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import type { CoworkImageAttachmentPayload } from '../../../shared/cowork/imageAttachments';
+import type { OpenClawProgressCard } from '../../../shared/cowork/progressCard';
+import { ProgressCardEvent } from '../../../shared/cowork/progressCard';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
+import type { CoworkSteerResponse } from '../../../shared/cowork/steer';
 import type {
   KitReference,
   ResolvedKitCapabilities,
 } from '../../../shared/kit/constants';
+import type { SkinWorkflowKind } from '../../../shared/skin/constants';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
 
 export type CoworkAgentEngine = 'openclaw';
@@ -37,10 +47,13 @@ export interface CoworkRuntimeEvents {
   message: (sessionId: string, message: CoworkMessage, beforeMessageId?: string) => void;
   messageUpdate: (sessionId: string, messageId: string, content: string, metadata?: Record<string, unknown>) => void;
   sessionStatus: (sessionId: string, status: CoworkSessionStatus) => void;
+  btwResult: (sessionId: string, result: CoworkBtwEntry) => void;
   goalUpdate: (sessionId: string, goal: CoworkGoal | null) => void;
+  [ProgressCardEvent.Changed]: (sessionId: string) => void;
   contextUsageUpdate: (sessionId: string, usage: CoworkContextUsage) => void;
   contextMaintenance: (sessionId: string, active: boolean) => void;
   permissionRequest: (sessionId: string, request: PermissionRequest) => void;
+  permissionResolved: (sessionId: string, requestId: string) => void;
   complete: (sessionId: string, claudeSessionId: string | null) => void;
   error: (sessionId: string, error: string) => void;
   sessionStopped: (sessionId: string) => void;
@@ -109,8 +122,10 @@ export type CoworkStartOptions = {
   imageAttachments?: CoworkImageAttachment[];
   agentId?: string;
   mediaSelection?: CoworkMediaSelection;
+  workflowKind?: SkinWorkflowKind;
   mediaReferences?: CoworkMediaAttachmentRef[];
   selectedTextSnippets?: CoworkSelectedTextSnippet[];
+  browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
 };
 
 export type CoworkContinueOptions = {
@@ -123,12 +138,15 @@ export type CoworkContinueOptions = {
   resolvedKitCapabilities?: ResolvedKitCapabilities;
   imageAttachments?: CoworkImageAttachment[];
   mediaSelection?: CoworkMediaSelection;
+  workflowKind?: SkinWorkflowKind;
   mediaReferences?: CoworkMediaAttachmentRef[];
   selectedTextSnippets?: CoworkSelectedTextSnippet[];
+  browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
 };
 
 export interface CoworkSessionPatchResult {
   modelOverride?: string;
+  thinkingLevel?: string;
 }
 
 export interface CoworkRuntime {
@@ -142,14 +160,20 @@ export interface CoworkRuntime {
   ): this;
   startSession(sessionId: string, prompt: string, options?: CoworkStartOptions): Promise<void>;
   continueSession(sessionId: string, prompt: string, options?: CoworkContinueOptions): Promise<void>;
+  submitBtw?(sessionId: string, question: string, runId: string): Promise<CoworkBtwSubmitResponse>;
+  abortBtw?(sessionId: string, runId: string): Promise<CoworkBtwAbortResponse>;
+  submitSteer?(sessionId: string, text: string, clientSteerId: string): Promise<CoworkSteerResponse>;
   runGoalCommand?(sessionId: string, command: string): Promise<CoworkGoal | null>;
   patchSession?(sessionId: string, patch: OpenClawSessionPatch): Promise<CoworkSessionPatchResult | void>;
+  getProgressCard?(sessionId: string): Promise<OpenClawProgressCard | null>;
+  dismissProgressCard?(sessionId: string, revision: number): Promise<OpenClawProgressCard | null>;
   getContextUsage?(sessionId: string): Promise<CoworkContextUsage | null>;
   compactContext?(sessionId: string): Promise<{ compacted: boolean; reason?: string; usage?: CoworkContextUsage | null }>;
   getForkCompactionSummary?(sessionId: string, beforeCreatedAt?: number): Promise<CoworkForkCompactionSummary | null>;
   stopSession(sessionId: string): void;
   stopAllSessions(): void;
-  respondToPermission(requestId: string, result: PermissionResult): void;
+  respondToPermission(requestId: string, result: PermissionResult): void | Promise<void>;
+  getPendingQuestions?(): Array<PermissionRequest & { sessionId: string }>;
   isSessionActive(sessionId: string): boolean;
   getSessionConfirmationMode(sessionId: string): 'modal' | 'text' | null;
   deleteSubagentSession?(parentSessionId: string, runId: string): Promise<boolean>;

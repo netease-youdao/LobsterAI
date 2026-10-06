@@ -28,6 +28,7 @@ type OpenClawApprovalControllerOptions = {
   isSessionActive: (sessionId: string) => boolean;
   continueSession: (sessionId: string, prompt: string) => Promise<void>;
   emitPermissionRequest: (sessionId: string, request: PermissionRequest) => void;
+  emitPermissionResolved: (sessionId: string, requestId: string) => void;
   emitError: (sessionId: string, error: string) => void;
 };
 
@@ -41,6 +42,11 @@ export class OpenClawApprovalController {
     if (!pending) {
       return;
     }
+
+    // The user made a decision; downstream listeners (e.g. desktop
+    // notifications) should treat the request as settled even if the gateway
+    // resolve call below fails.
+    this.options.emitPermissionResolved(pending.sessionId, requestId);
 
     const decision = resolveApprovalDecision(pending, result);
     const client = this.options.getGatewayClient();
@@ -128,7 +134,11 @@ export class OpenClawApprovalController {
   handleExecApprovalResolved(payload: unknown): void {
     const requestId = parseApprovalResolvedPayload(payload);
     if (!requestId) return;
+    const pending = this.pendingApprovals.get(requestId);
     this.pendingApprovals.delete(requestId);
+    if (pending) {
+      this.options.emitPermissionResolved(pending.sessionId, requestId);
+    }
   }
 
   handlePluginApprovalRequested(payload: unknown): void {
@@ -166,7 +176,11 @@ export class OpenClawApprovalController {
   handlePluginApprovalResolved(payload: unknown): void {
     const requestId = parseApprovalResolvedPayload(payload);
     if (!requestId) return;
+    const pending = this.pendingApprovals.get(requestId);
     this.pendingApprovals.delete(requestId);
+    if (pending) {
+      this.options.emitPermissionResolved(pending.sessionId, requestId);
+    }
   }
 
   clearBySession(sessionId: string): void {

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { store } from '../store';
 import { setAgents, setCurrentAgentId } from '../store/slices/agentSlice';
+import { clearCurrentSession } from '../store/slices/coworkSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../store/slices/skillSlice';
 import type { Agent } from '../types/agent';
 import { agentService } from './agent';
@@ -17,9 +18,11 @@ const makeAgent = (overrides: Partial<Agent> = {}): Agent => ({
   systemPrompt: '',
   identity: '',
   model: '',
+  thinkingLevel: '',
   workingDirectory: '',
   icon: '',
   skillIds: [],
+  subagentAllowAgentIds: [],
   enabled: true,
   pinned: false,
   pinOrder: null,
@@ -34,6 +37,7 @@ const makeAgent = (overrides: Partial<Agent> = {}): Agent => ({
 beforeEach(() => {
   store.dispatch(setAgents([]));
   store.dispatch(setCurrentAgentId('main'));
+  store.dispatch(clearCurrentSession());
   store.dispatch(clearActiveSkills());
   vi.restoreAllMocks();
   delete (globalThis as { window?: unknown }).window;
@@ -47,6 +51,7 @@ describe('agentService.updateAgent', () => {
       description: '',
       icon: '',
       model: '',
+      thinkingLevel: '',
       workingDirectory: '',
       enabled: true,
       pinned: false,
@@ -54,6 +59,7 @@ describe('agentService.updateAgent', () => {
       isDefault: false,
       source: 'custom',
       skillIds: [],
+      subagentAllowAgentIds: [],
     }]));
     store.dispatch(setCurrentAgentId('agent-1'));
 
@@ -71,13 +77,14 @@ describe('agentService.updateAgent', () => {
     expect(store.getState().skill.activeSkillIds).toEqual(['docx', 'web-search']);
   });
 
-  test('does not clear active skills when only model is updated', async () => {
+  test('persists model and thinking level together without clearing active skills', async () => {
     store.dispatch(setAgents([{
       id: 'agent-1',
       name: 'Agent 1',
       description: '',
       icon: '',
       model: '',
+      thinkingLevel: '',
       workingDirectory: '',
       enabled: true,
       pinned: false,
@@ -85,6 +92,7 @@ describe('agentService.updateAgent', () => {
       isDefault: false,
       source: 'custom',
       skillIds: [],
+      subagentAllowAgentIds: [],
     }]));
     store.dispatch(setCurrentAgentId('agent-1'));
     store.dispatch(setActiveSkillIds(['user-selected-skill']));
@@ -92,14 +100,22 @@ describe('agentService.updateAgent', () => {
     (globalThis as { window?: unknown }).window = {
       electron: {
         agents: {
-          update: vi.fn().mockResolvedValue(makeAgent({ model: 'new-model', skillIds: [] })),
+          update: vi.fn().mockResolvedValue(makeAgent({
+            model: 'new-model',
+            thinkingLevel: 'max',
+            skillIds: [],
+          })),
         },
       },
     };
 
-    await agentService.updateAgent('agent-1', { model: 'new-model' });
+    await agentService.updateAgent('agent-1', {
+      model: 'new-model',
+      thinkingLevel: 'max',
+    });
 
     // Active skills should remain untouched since skillIds was not in the update
+    expect(store.getState().agent.agents[0].thinkingLevel).toBe('max');
     expect(store.getState().skill.activeSkillIds).toEqual(['user-selected-skill']);
   });
 
@@ -110,6 +126,7 @@ describe('agentService.updateAgent', () => {
       description: '',
       icon: '',
       model: '',
+      thinkingLevel: '',
       workingDirectory: '',
       enabled: true,
       pinned: false,
@@ -117,6 +134,7 @@ describe('agentService.updateAgent', () => {
       isDefault: false,
       source: 'custom',
       skillIds: ['docx'],
+      subagentAllowAgentIds: [],
     }]));
     store.dispatch(setCurrentAgentId('agent-2'));
     store.dispatch(setActiveSkillIds(['xlsx']));
@@ -132,6 +150,26 @@ describe('agentService.updateAgent', () => {
     await agentService.updateAgent('agent-1', { skillIds: ['docx', 'web-search'] });
 
     expect(store.getState().skill.activeSkillIds).toEqual(['xlsx']);
+  });
+});
+
+describe('agentService.switchAgent', () => {
+  test('preserves the target conversation presentation during a cross-agent session switch', () => {
+    store.dispatch(setAgents([makeAgent({ id: 'agent-2' })]));
+
+    agentService.switchAgent('agent-2', { targetSessionId: 'session-2' });
+
+    expect(store.getState().agent.currentAgentId).toBe('agent-2');
+    expect(store.getState().cowork.currentSession).toBeNull();
+    expect(store.getState().cowork.sessionNavigationTargetId).toBe('session-2');
+  });
+
+  test('clears a stale navigation target for a plain agent switch', () => {
+    store.dispatch(clearCurrentSession({ sessionNavigationTargetId: 'session-2' }));
+
+    agentService.switchAgent('main');
+
+    expect(store.getState().cowork.sessionNavigationTargetId).toBeNull();
   });
 });
 

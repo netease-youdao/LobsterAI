@@ -122,9 +122,9 @@ test('redacts email-like account names in public metadata', withTempDir(async te
   try {
     const account = {
       id: 'qq',
-      name: '1036829855@qq.com',
+      name: 'zhangsan@example.com',
       enabled: true,
-      email: '1036829855@qq.com',
+      email: 'zhangsan@example.com',
       password: 'secret',
       imapHost: 'imap.qq.com',
       imapPort: 993,
@@ -133,13 +133,13 @@ test('redacts email-like account names in public metadata', withTempDir(async te
     };
 
     const listed = module.redactAccount(account);
-    assert.equal(listed.name, '10***@qq.com');
-    assert.equal(listed.email, '10***@qq.com');
+    assert.equal(listed.name, 'zh***@example.com');
+    assert.equal(listed.email, 'zh***@example.com');
     assert.equal(listed.password, undefined);
 
     const result = module.withAccountResult(account, { success: true });
-    assert.equal(result.accountName, '10***@qq.com');
-    assert.equal(result.email, '10***@qq.com');
+    assert.equal(result.accountName, 'zh***@example.com');
+    assert.equal(result.email, 'zh***@example.com');
   } finally {
     restore();
   }

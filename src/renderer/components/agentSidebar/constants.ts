@@ -1,5 +1,6 @@
 export const AgentSidebarIndicator = {
   None: 'none',
+  PendingPermission: 'pending_permission',
   Running: 'running',
   CompletedUnread: 'completed_unread',
 } as const;
@@ -13,5 +14,5 @@ export const AgentSidebarPreferenceKey = {
 
 export const AgentSidebarPageSize = {
   Preview: 6,
-  AllBatch: 100,
+  ExpandBatch: 10,
 } as const;

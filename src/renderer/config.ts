@@ -1,4 +1,4 @@
-import { type ProviderConfig,ProviderRegistry } from '@shared/providers';
+import { type ProviderConfig, ProviderRegistry } from '@shared/providers';
 
 import {
   type BrowserWebAccessConfig,
@@ -22,6 +22,7 @@ export const ShortcutAction = {
   PreviousAgent: 'previousAgent',
   NextAgent: 'nextAgent',
   ShowCurrentAgentTasks: 'showCurrentAgentTasks',
+  CollapseCurrentAgentTasks: 'collapseCurrentAgentTasks',
   OpenAgentTask1: 'openAgentTask1',
   OpenAgentTask2: 'openAgentTask2',
   OpenAgentTask3: 'openAgentTask3',
@@ -57,13 +58,19 @@ export type ShortcutConfig = Record<ShortcutAction, string> & {
 };
 
 export const FontPreferences = {
-  UiFontSizeDefault: 14,
+  UiFontSizeDefault: 15,
   UiFontSizeMin: 11,
   UiFontSizeMax: 16,
-  CodeFontSizeDefault: 12,
+  CodeFontSizeDefault: 14,
   CodeFontSizeMin: 8,
   CodeFontSizeMax: 24,
 } as const;
+
+// Bump to force-reset every stored uiFontSize / codeFontSize to the current
+// default one more time. hydrateStoredConfig persists the applied versions, so
+// each version resets at most once and later user choices survive upgrades.
+export const UI_FONT_SIZE_MIGRATION_VERSION = 1;
+export const CODE_FONT_SIZE_MIGRATION_VERSION = 1;
 
 export const normalizeFontPreference = (
   value: unknown,
@@ -82,6 +89,8 @@ export const normalizeFontPreference = (
   return Math.min(max, Math.max(min, Math.round(numericValue)));
 };
 
+export const resolveArtifactAutoPreviewEnabled = (value: unknown): boolean => value !== false;
+
 // 配置类型定义
 export interface AppConfig {
   // API 配置
@@ -95,6 +104,10 @@ export interface AppConfig {
       id: string;
       name: string;
       supportsImage?: boolean;
+      supportsVideo?: boolean;
+      supportsThinking?: boolean;
+      contextWindow?: number;
+      maxTokens?: number;
     }>;
     defaultModel: string;
     defaultModelProvider?: string;
@@ -103,14 +116,22 @@ export interface AppConfig {
   providerModelMigrationVersions?: Record<string, number>;
   // 主题配置
   theme: 'light' | 'dark' | 'system';
+  // Optional for configs created before exact default theme persistence was introduced.
+  themeId?: string;
   // UI 字号配置
   uiFontSize?: number;
+  // 已应用的 UI 字号强制重置版本(见 UI_FONT_SIZE_MIGRATION_VERSION)
+  uiFontSizeMigrationVersion?: number;
   // 代码字体大小配置
   codeFontSize?: number;
+  // 已应用的代码字号强制重置版本(见 CODE_FONT_SIZE_MIGRATION_VERSION)
+  codeFontSizeMigrationVersion?: number;
   // 语言配置
   language: 'zh' | 'en';
   // 是否使用系统代理
   useSystemProxy: boolean;
+  // 是否在生成可预览内容后自动打开 Artifact 预览面板
+  artifactAutoPreviewEnabled?: boolean;
   // 是否启用 SQLite 自动备份与恢复
   sqliteAutoBackupEnabled?: boolean;
   // 是否允许发送基础产品使用统计
@@ -165,9 +186,12 @@ export const defaultConfig: AppConfig = {
   providers: buildDefaultProviders(),
   theme: 'system',
   uiFontSize: FontPreferences.UiFontSizeDefault,
+  uiFontSizeMigrationVersion: UI_FONT_SIZE_MIGRATION_VERSION,
   codeFontSize: FontPreferences.CodeFontSizeDefault,
+  codeFontSizeMigrationVersion: CODE_FONT_SIZE_MIGRATION_VERSION,
   language: 'zh',
   useSystemProxy: false,
+  artifactAutoPreviewEnabled: true,
   sqliteAutoBackupEnabled: false,
   usageAnalyticsEnabled: true,
   notificationSettings: defaultNotificationSettings,
@@ -195,6 +219,7 @@ export const defaultConfig: AppConfig = {
     [ShortcutAction.PreviousAgent]: '',
     [ShortcutAction.NextAgent]: '',
     [ShortcutAction.ShowCurrentAgentTasks]: '',
+    [ShortcutAction.CollapseCurrentAgentTasks]: '',
     [ShortcutAction.OpenAgentTask1]: '',
     [ShortcutAction.OpenAgentTask2]: '',
     [ShortcutAction.OpenAgentTask3]: '',

@@ -17,45 +17,132 @@ import { getAgentDisplayNameById } from '../utils/agentDisplay';
 import {
   type AgentSidebarBatchItem,
   AgentSidebarBatchItemKind,
-  type AgentSidebarSubagentBatchItem,
   createSessionBatchKey,
 } from './agentSidebar/batchSelection';
 import MyAgentSidebarTree from './agentSidebar/MyAgentSidebarTree';
+import SidebarTaskFilterButton, { SIDEBAR_TASK_FILTER_ENABLED } from './agentSidebar/SidebarTaskFilterButton';
+import SidebarTaskSearchButton from './agentSidebar/SidebarTaskSearchButton';
 import Modal from './common/Modal';
-import { CoworkUiEvent } from './cowork/constants';
+import {
+  type CoworkTaskSearchRequestEventDetail,
+  CoworkTaskSearchRequestSource,
+  CoworkUiEvent,
+} from './cowork/constants';
 import CoworkSearchModal from './cowork/CoworkSearchModal';
 import Cog6ToothIcon from './icons/Cog6ToothIcon';
 import ComposeIcon from './icons/ComposeIcon';
 import SidebarAutomationIcon from './icons/SidebarAutomationIcon';
 import SidebarKitsIcon from './icons/SidebarKitsIcon';
-import SidebarMcpIcon from './icons/SidebarMcpIcon';
-import SidebarSearchIcon from './icons/SidebarSearchIcon';
+import SidebarLibraryIcon from './icons/SidebarLibraryIcon';
 import SidebarToggleIcon from './icons/SidebarToggleIcon';
 import SkillIcon from './icons/SkillIcon';
 import TrashIcon from './icons/TrashIcon';
 import LoginButton from './LoginButton';
-import SidebarAdBanner from './SidebarAdBanner';
+import LowCreditPurchaseOfferCard from './LowCreditPurchaseOfferCard';
+import SidebarExperienceSlot from './SidebarExperienceSlot';
+import { useSidebarPurchaseGuide } from './useSidebarPurchaseGuide';
 
 interface SidebarProps {
   onShowSettings: () => void;
   onShowLogin?: () => void;
-  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'kits' | 'mcp';
+  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'kits' | 'mcp' | 'library';
   onShowSkills: () => void;
   onShowCowork: () => void;
   onShowScheduledTasks: () => void;
   onShowKits: () => void;
-  onShowMcp: () => void;
+  onShowLibrary: () => void;
   onNewChat: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
-  updateBadge?: React.ReactNode;
+  isTaskFilterActive: boolean;
+  hasUnreadCompletedTasks: boolean;
+  onToggleTaskFilter: () => void;
+  onTaskFilterSummaryChange: (hasUnreadCompletedTasks: boolean) => void;
+  onWidthChange?: (width: number) => void;
+  updateNotice?: React.ReactNode;
+  /** The expanded update card owns the sidebar bottom; temporarily hide the
+   * promo banner while preserving it for a smooth return after collapse. */
+  hideAdBanner?: boolean;
   hideLogin?: boolean;
+  isEngineStartupOverlayVisible?: boolean;
 }
 
-const DEFAULT_SIDEBAR_WIDTH = 244;
+const DEFAULT_SIDEBAR_WIDTH = 260;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 420;
 const SIDEBAR_COLLAPSE_TRANSITION_MS = 200;
+const SIDEBAR_LOGIN_PROMO_TIP_DURATION_MS = 5000;
+const SIDEBAR_LOGIN_PROMO_TIP_FADE_MS = 220;
+
+const SidebarPromoStar: React.FC<{ className?: string; idPrefix: string }> = ({
+  className,
+  idPrefix,
+}) => (
+  <svg
+    className={className}
+    viewBox="0 0 24 24"
+    fill="none"
+    aria-hidden="true"
+    focusable="false"
+  >
+    <defs>
+      <filter id={`${idPrefix}-soft-shadow`} x="-45%" y="-45%" width="190%" height="190%">
+        <feDropShadow dx="0" dy="2.5" stdDeviation="2.2" floodColor="#ffb300" floodOpacity="0.42" />
+      </filter>
+      <radialGradient id={`${idPrefix}-glow`} cx="54%" cy="58%" r="52%">
+        <stop offset="0%" stopColor="#fff070" stopOpacity="0.95" />
+        <stop offset="100%" stopColor="#ffc400" stopOpacity="0" />
+      </radialGradient>
+      <radialGradient id={`${idPrefix}-fill`} cx="31%" cy="25%" r="78%">
+        <stop offset="0%" stopColor="#fffbd1" />
+        <stop offset="26%" stopColor="#fff26b" />
+        <stop offset="62%" stopColor="#ffd51c" />
+        <stop offset="100%" stopColor="#ffae00" />
+      </radialGradient>
+      <radialGradient id={`${idPrefix}-shine`} cx="31%" cy="24%" r="42%">
+        <stop offset="0%" stopColor="#ffffff" stopOpacity="0.9" />
+        <stop offset="46%" stopColor="#fff8a8" stopOpacity="0.55" />
+        <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+      </radialGradient>
+      <radialGradient id={`${idPrefix}-lower-shade`} cx="72%" cy="78%" r="62%">
+        <stop offset="0%" stopColor="#f19a00" stopOpacity="0.46" />
+        <stop offset="58%" stopColor="#f7ae00" stopOpacity="0.18" />
+        <stop offset="100%" stopColor="#ffd92e" stopOpacity="0" />
+      </radialGradient>
+      <linearGradient id={`${idPrefix}-rim`} x1="5" y1="4" x2="18" y2="20">
+        <stop offset="0%" stopColor="#ffffff" stopOpacity="0.68" />
+        <stop offset="44%" stopColor="#fff5a3" stopOpacity="0.2" />
+        <stop offset="100%" stopColor="#ffb000" stopOpacity="0" />
+      </linearGradient>
+    </defs>
+    <path
+      d="M12 1.1c1.42 5.5 4.9 9.02 10.9 10.9-6 1.88-9.48 5.4-10.9 10.9C10.58 17.4 7.1 13.88 1.1 12 7.1 10.12 10.58 6.6 12 1.1Z"
+      fill={`url(#${idPrefix}-glow)`}
+      opacity="0.7"
+      transform="scale(1.1 1.08) translate(-1.1 -0.95)"
+    />
+    <path
+      d="M12 1.35c1.36 5.3 4.76 8.7 10.65 10.65C16.76 13.95 13.36 17.35 12 22.65 10.64 17.35 7.24 13.95 1.35 12 7.24 10.05 10.64 6.65 12 1.35Z"
+      fill={`url(#${idPrefix}-fill)`}
+      filter={`url(#${idPrefix}-soft-shadow)`}
+    />
+    <path
+      d="M12 1.35c1.36 5.3 4.76 8.7 10.65 10.65C16.76 13.95 13.36 17.35 12 22.65 10.64 17.35 7.24 13.95 1.35 12 7.24 10.05 10.64 6.65 12 1.35Z"
+      fill={`url(#${idPrefix}-lower-shade)`}
+    />
+    <path
+      d="M10.6 4.55c.62 2.55 2.45 4.42 5.12 5.22-2.88.52-4.83 2.42-5.48 5.33-.52-2.72-2.25-4.48-4.92-5.16 2.65-.72 4.42-2.55 5.28-5.39Z"
+      fill={`url(#${idPrefix}-shine)`}
+    />
+    <path
+      d="M12 2.7c1.12 4.45 4.08 7.42 8.9 9.3-4.82 1.88-7.78 4.85-8.9 9.3-1.12-4.45-4.08-7.42-8.9-9.3 4.82-1.88 7.78-4.85 8.9-9.3Z"
+      fill="none"
+      stroke={`url(#${idPrefix}-rim)`}
+      strokeWidth="0.65"
+    />
+  </svg>
+);
+
 const normalizeAgentId = (agentId?: string | null) => agentId?.trim() || AgentId.Main;
 const SidebarNewFeatureBadge = {
   KitsDismissedVersionKey: 'sidebar.kitsNewFeatureBadge.dismissedVersion',
@@ -63,10 +150,12 @@ const SidebarNewFeatureBadge = {
   KitsVersion: '2026-06-05',
 } as const;
 const sidebarNavItemClassName =
-  'w-full inline-flex h-7 items-center gap-2 rounded-md px-1.5 text-left text-sm font-normal text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
+  'w-full inline-flex h-9 items-center gap-2.5 rounded-full px-2 text-left text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
 const activeSidebarNavItemClassName =
-  `${sidebarNavItemClassName} bg-black/[0.06] font-medium hover:bg-black/[0.06] dark:bg-white/[0.07] dark:hover:bg-white/[0.07]`;
-const sidebarCreateIconClassName = 'h-4 w-4 shrink-0';
+  `${sidebarNavItemClassName} bg-black/[0.05] hover:bg-black/[0.05] dark:bg-white/[0.07] dark:hover:bg-white/[0.07]`;
+const sidebarNavIconClassName = 'h-[18px] w-[18px] shrink-0 text-foreground/75';
+const sidebarBottomIconButtonClassName =
+  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-foreground/80 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
 
 type SidebarAnalyticsSource = 'home_sidebar' | 'home_agent_sidebar';
 
@@ -124,6 +213,33 @@ const reportSidebarAction = (
   });
 };
 
+const writeSidebarRendererLog = (
+  level: 'debug' | 'warn',
+  message: string,
+  error?: unknown,
+): void => {
+  try {
+    window.electron?.log?.fromRenderer?.(level, 'Sidebar', message);
+  } catch (logError) {
+    const logErrorMessage = logError instanceof Error ? logError.message : String(logError);
+    console.debug(`[Sidebar] renderer log unavailable: ${logErrorMessage}`, error);
+  }
+};
+
+const logTaskSearchRequest = (
+  source: CoworkTaskSearchRequestSource,
+  activeView: SidebarProps['activeView'],
+): void => {
+  try {
+    const message = `task search requested source=${source} activeView=${activeView} platform=${window.electron?.platform ?? 'unknown'}`;
+    console.debug(`[Sidebar] ${message}`);
+    writeSidebarRendererLog('debug', message);
+  } catch (error) {
+    // Task search must remain available when renderer diagnostic logging fails.
+    console.debug('[Sidebar] task search diagnostic logging unavailable:', error);
+  }
+};
+
 const Sidebar: React.FC<SidebarProps> = ({
   onShowSettings,
   activeView,
@@ -131,17 +247,28 @@ const Sidebar: React.FC<SidebarProps> = ({
   onShowCowork,
   onShowScheduledTasks,
   onShowKits,
-  onShowMcp,
+  onShowLibrary,
   onNewChat,
   isCollapsed,
   onToggleCollapse,
-  updateBadge,
+  isTaskFilterActive,
+  hasUnreadCompletedTasks,
+  onToggleTaskFilter,
+  onTaskFilterSummaryChange,
+  onWidthChange,
+  updateNotice,
+  hideAdBanner,
   hideLogin,
+  isEngineStartupOverlayVisible = false,
 }) => {
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const agents = useSelector((state: RootState) => state.agent.agents);
+  const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
+  const isAuthLoading = useSelector((state: RootState) => state.auth.isLoading);
   const sessions = useSelector(selectCoworkSessions);
   const currentSessionId = useSelector(selectCurrentSessionId);
+  // The home page is the "new task" view, so its nav item reads as selected there.
+  const isNewTaskViewActive = activeView === 'cowork' && !currentSessionId;
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isBatchMode, setIsBatchMode] = useState(false);
   const [batchAgentId, setBatchAgentId] = useState<string | null>(null);
@@ -154,11 +281,21 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [agentScrollEdges, setAgentScrollEdges] = useState({ top: false, bottom: false });
   const [isSidebarBannerVisible, setIsSidebarBannerVisible] = useState(false);
   const [showKitsNewBadge, setShowKitsNewBadge] = useState(false);
+  const [showLoginPromoTip, setShowLoginPromoTip] = useState(true);
+  const [isLoginPromoTipFading, setIsLoginPromoTipFading] = useState(false);
   const isResizingRef = useRef(false);
   const resizeStartXRef = useRef(0);
   const resizeStartWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH);
   const agentScrollContainerRef = useRef<HTMLDivElement>(null);
-  const isMac = window.electron.platform === 'darwin';
+  const purchaseGuide = useSidebarPurchaseGuide();
+  const canShowPurchaseGuide = !isCollapsed && !isBatchMode && !hideLogin && !isEngineStartupOverlayVisible;
+  const paymentGuideVisible = canShowPurchaseGuide && purchaseGuide.candidate !== null;
+  const paymentGuideOwnsSlot = canShowPurchaseGuide && (paymentGuideVisible || purchaseGuide.loading);
+  const isWindows = window.electron.platform === 'win32';
+  const showHeaderRow = !isWindows;
+  const showLoginPromo = !hideLogin && !isAuthLoading && !isLoggedIn;
+  const shouldShowLoginPromoTip = showLoginPromo && showLoginPromoTip;
+  const shouldReserveLoginPromoTipSpace = shouldShowLoginPromoTip;
   const batchSelectableKeySet = useMemo(
     () => new Set(batchSelectableItems.map((item) => item.key)),
     [batchSelectableItems],
@@ -182,13 +319,10 @@ const Sidebar: React.FC<SidebarProps> = ({
     const selectedSessionCount = selectedItems.filter(
       (item) => item.kind === AgentSidebarBatchItemKind.Session,
     ).length;
-    const selectedSubagentCount = selectedItems.filter(
-      (item) => item.kind === AgentSidebarBatchItemKind.Subagent,
-    ).length;
     return {
       selectedCount: selectedItems.length,
       selectedSessionCount,
-      selectedSubagentCount,
+      selectedSubagentCount: 0,
       selectableCount: batchSelectableItems.length,
     };
   }, [batchSelectableItemByKey, batchSelectableItems.length, batchSelectableKeySet, selectedKeys]);
@@ -215,6 +349,49 @@ const Sidebar: React.FC<SidebarProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    if (!showLoginPromo) {
+      setShowLoginPromoTip(true);
+      setIsLoginPromoTipFading(false);
+      return undefined;
+    }
+
+    if (isEngineStartupOverlayVisible) {
+      if (showLoginPromoTip) {
+        const message = 'pausing login promo tip auto-hide while engine startup overlay is visible';
+        console.debug(`[Sidebar] ${message}`);
+        writeSidebarRendererLog('debug', message);
+        setIsLoginPromoTipFading(false);
+      }
+      return undefined;
+    }
+
+    if (!showLoginPromoTip) {
+      return undefined;
+    }
+
+    const startMessage = 'starting login promo tip auto-hide timer';
+    console.debug(`[Sidebar] ${startMessage}`);
+    writeSidebarRendererLog('debug', startMessage);
+
+    const hideTimer = window.setTimeout(() => {
+      const message = 'auto hiding login promo tip';
+      console.debug(`[Sidebar] ${message}`);
+      writeSidebarRendererLog('debug', message);
+      setIsLoginPromoTipFading(true);
+    }, SIDEBAR_LOGIN_PROMO_TIP_DURATION_MS);
+
+    const removeTimer = window.setTimeout(() => {
+      setShowLoginPromoTip(false);
+      setIsLoginPromoTipFading(false);
+    }, SIDEBAR_LOGIN_PROMO_TIP_DURATION_MS + SIDEBAR_LOGIN_PROMO_TIP_FADE_MS);
+
+    return () => {
+      window.clearTimeout(hideTimer);
+      window.clearTimeout(removeTimer);
+    };
+  }, [isEngineStartupOverlayVisible, showLoginPromo, showLoginPromoTip]);
+
   const dismissKitsNewBadge = useCallback(() => {
     if (!showKitsNewBadge) return;
     setShowKitsNewBadge(false);
@@ -228,16 +405,22 @@ const Sidebar: React.FC<SidebarProps> = ({
       });
   }, [showKitsNewBadge]);
 
+  const openTaskSearch = useCallback((source: CoworkTaskSearchRequestSource) => {
+    logTaskSearchRequest(source, activeView);
+    onShowCowork();
+    setIsSearchOpen(true);
+  }, [activeView, onShowCowork]);
+
   useEffect(() => {
-    const handleSearch = () => {
-      onShowCowork();
-      setIsSearchOpen(true);
+    const handleSearch = (event: Event) => {
+      const detail = (event as CustomEvent<CoworkTaskSearchRequestEventDetail>).detail;
+      openTaskSearch(detail?.source ?? CoworkTaskSearchRequestSource.UiEvent);
     };
     window.addEventListener(CoworkUiEvent.ShortcutSearch, handleSearch);
     return () => {
       window.removeEventListener(CoworkUiEvent.ShortcutSearch, handleSearch);
     };
-  }, [onShowCowork]);
+  }, [openTaskSearch]);
 
   useEffect(() => {
     if (!isCollapsed) return;
@@ -251,12 +434,16 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const handleSelectSession = async (session: CoworkSessionSummary) => {
     const agentId = session.agentId?.trim() || AgentId.Main;
-    if (agentId !== currentAgentId) {
-      agentService.switchAgent(agentId);
-      await coworkService.loadSessions(agentId);
+    try {
+      if (agentId !== currentAgentId) {
+        agentService.switchAgent(agentId, { targetSessionId: session.id });
+        await coworkService.loadSessions(agentId);
+      }
+      onShowCowork();
+      await coworkService.loadSession(session.id);
+    } finally {
+      coworkService.finishSessionNavigation(session.id);
     }
-    onShowCowork();
-    await coworkService.loadSession(session.id);
   };
 
   const handleEnterBatchMode = useCallback((sessionId: string, agentId: string) => {
@@ -384,45 +571,33 @@ const Sidebar: React.FC<SidebarProps> = ({
       .filter((item): item is AgentSidebarBatchItem => Boolean(item));
     if (items.length === 0) return;
 
-    const subagentItems = items.filter(
-      (item): item is AgentSidebarSubagentBatchItem => item.kind === AgentSidebarBatchItemKind.Subagent,
-    );
     const sessionIds = items
       .filter((item) => item.kind === AgentSidebarBatchItemKind.Session)
       .map((item) => item.sessionId);
     const selectedSessionCount = sessionIds.length;
-    const selectedSubagentCount = subagentItems.length;
 
     reportSidebarAction('batch_delete_submit', {
       source: 'home_agent_sidebar',
       agentType: batchAgentId === AgentId.Main ? 'main' : 'custom',
       selectedCount: items.length,
       selectedSessionCount,
-      selectedSubagentCount,
+      selectedSubagentCount: 0,
       selectableCount: batchSelectableItems.length,
     });
-
-    const deletedSubagents: AgentSidebarSubagentBatchItem[] = [];
-    for (const item of subagentItems) {
-      const deleted = await coworkService.deleteSubagentSession(item.parentSessionId, item.runId);
-      if (deleted) {
-        deletedSubagents.push(item);
-      }
-    }
 
     let deletedSessions = false;
     if (sessionIds.length > 0) {
       deletedSessions = await coworkService.deleteSessions(sessionIds);
     }
 
-    if (!deletedSessions && deletedSubagents.length === 0) {
+    if (!deletedSessions) {
       reportSidebarAction('batch_delete_failed', {
         source: 'home_agent_sidebar',
         agentType: batchAgentId === AgentId.Main ? 'main' : 'custom',
         result: 'failed',
         selectedCount: items.length,
         selectedSessionCount,
-        selectedSubagentCount,
+        selectedSubagentCount: 0,
         selectableCount: batchSelectableItems.length,
       });
       return;
@@ -433,7 +608,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       result: 'success',
       selectedCount: items.length,
       selectedSessionCount,
-      selectedSubagentCount,
+      selectedSubagentCount: 0,
       selectableCount: batchSelectableItems.length,
     });
     if (deletedSessions) {
@@ -470,7 +645,9 @@ const Sidebar: React.FC<SidebarProps> = ({
         onToggleCollapse();
         return;
       }
-      setSidebarWidth(Math.min(MAX_SIDEBAR_WIDTH, nextWidth));
+      const clampedWidth = Math.min(MAX_SIDEBAR_WIDTH, nextWidth);
+      setSidebarWidth(clampedWidth);
+      onWidthChange?.(clampedWidth);
     };
 
     const handleMouseUp = () => {
@@ -483,7 +660,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-  }, [isCollapsed, onToggleCollapse, sidebarWidth]);
+  }, [isCollapsed, onToggleCollapse, onWidthChange, sidebarWidth]);
 
   useEffect(() => {
     return () => {
@@ -510,6 +687,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
+      data-skin-sidebar="true"
       className={`relative shrink-0 overflow-hidden bg-surface-raised ${
         isResizing ? '' : 'sidebar-transition'
       }`}
@@ -525,40 +703,56 @@ const Sidebar: React.FC<SidebarProps> = ({
         }}
       >
       <div className="pt-3 pb-3">
-        <div className="draggable sidebar-header-drag h-8 flex items-center justify-between px-3">
-          <div className={`${isMac ? 'pl-[68px]' : ''}`}>{updateBadge}</div>
-          <button
-            type="button"
-            onClick={onToggleCollapse}
-            className="non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-            aria-label={isCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
-          >
-            <SidebarToggleIcon className="h-4 w-4" isCollapsed={isCollapsed} />
-          </button>
-        </div>
+        {showHeaderRow && (
+          <div className="draggable sidebar-header-drag h-8 flex items-center justify-end px-3">
+            {!isWindows && (
+              <>
+                <button
+                  type="button"
+                  onClick={onToggleCollapse}
+                  className="non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors"
+                  aria-label={isCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
+                >
+                  <SidebarToggleIcon className="h-[18px] w-[18px]" isCollapsed={isCollapsed} />
+                </button>
+                {!isCollapsed && (
+                  <>
+                    <SidebarTaskSearchButton
+                      onClick={() => {
+                        reportSidebarAction('open_search', { activeView, isCollapsed });
+                        openTaskSearch(CoworkTaskSearchRequestSource.SidebarHeader);
+                      }}
+                      className="non-draggable"
+                      label={i18nService.t('search')}
+                    />
+                    {SIDEBAR_TASK_FILTER_ENABLED && activeView === 'cowork' && (
+                      <SidebarTaskFilterButton
+                        isActive={isTaskFilterActive}
+                        hasUnreadCompletedTasks={hasUnreadCompletedTasks}
+                        label={i18nService.t('sidebarFilter')}
+                        onClick={onToggleTaskFilter}
+                        className="non-draggable"
+                      />
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        )}
         <div className="mt-[5px] space-y-0.5 px-3">
           <button
             type="button"
+            data-onboarding-target="new-task"
             onClick={() => {
               reportSidebarAction('new_task', { activeView, isCollapsed });
               onNewChat();
             }}
-            className={sidebarNavItemClassName}
+            className={isNewTaskViewActive ? activeSidebarNavItemClassName : sidebarNavItemClassName}
+            aria-current={isNewTaskViewActive ? 'page' : undefined}
           >
-            <ComposeIcon className={sidebarCreateIconClassName} />
+            <ComposeIcon className={sidebarNavIconClassName} />
             {i18nService.t('newChat')}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              reportSidebarAction('open_search', { activeView, isCollapsed });
-              onShowCowork();
-              setIsSearchOpen(true);
-            }}
-            className={sidebarNavItemClassName}
-          >
-            <SidebarSearchIcon className="h-4 w-4 shrink-0" />
-            {i18nService.t('search')}
           </button>
           <button
             type="button"
@@ -570,7 +764,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             className={activeView === 'scheduledTasks' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
             aria-current={activeView === 'scheduledTasks' ? 'page' : undefined}
           >
-            <SidebarAutomationIcon className="h-4 w-4 shrink-0" />
+            <SidebarAutomationIcon className={sidebarNavIconClassName} />
             {i18nService.t('scheduledTasks')}
           </button>
           <button
@@ -584,7 +778,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             className={activeView === 'kits' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
             aria-current={activeView === 'kits' ? 'page' : undefined}
           >
-            <SidebarKitsIcon className="h-4 w-4 shrink-0" />
+            <SidebarKitsIcon className={sidebarNavIconClassName} />
             <span className="min-w-0 truncate">{i18nService.t('kits')}</span>
             {showKitsNewBadge && (
               <span className="inline-flex h-4 shrink-0 items-center rounded-[4px] bg-[#ff4f6d] px-1.5 text-[10px] font-semibold leading-none text-white">
@@ -599,32 +793,32 @@ const Sidebar: React.FC<SidebarProps> = ({
               setIsSearchOpen(false);
               onShowSkills();
             }}
-            className={activeView === 'skills' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
-            aria-current={activeView === 'skills' ? 'page' : undefined}
+            className={activeView === 'skills' || activeView === 'mcp' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
+            aria-current={activeView === 'skills' || activeView === 'mcp' ? 'page' : undefined}
           >
-            <SkillIcon className="h-4 w-4 shrink-0" />
-            {i18nService.t('skills')}
+            <SkillIcon className={sidebarNavIconClassName} />
+            <span className="min-w-0 truncate">{i18nService.t('skillsAndConnectors')}</span>
           </button>
           <button
             type="button"
             onClick={() => {
-              reportSidebarAction('open_mcp', { activeView, isCollapsed });
+              reportSidebarAction('open_library', { activeView, isCollapsed });
               setIsSearchOpen(false);
-              onShowMcp();
+              onShowLibrary();
             }}
-            className={activeView === 'mcp' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
-            aria-current={activeView === 'mcp' ? 'page' : undefined}
+            className={activeView === 'library' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
+            aria-current={activeView === 'library' ? 'page' : undefined}
           >
-            <SidebarMcpIcon className="h-4 w-4 shrink-0" />
-            {i18nService.t('mcpServers')}
+            <SidebarLibraryIcon className={sidebarNavIconClassName} />
+            <span className="min-w-0 truncate">{i18nService.t('librarySidebarTitle')}</span>
           </button>
         </div>
       </div>
       <div className="relative min-h-0 flex-1">
         <div
           ref={agentScrollContainerRef}
-          className={`scrollbar-hidden h-full overflow-y-auto px-2.5 ${
-            isSidebarBannerVisible && !isBatchMode ? 'pb-[104px]' : 'pb-10'
+          className={`scrollbar-hidden h-full overflow-y-auto px-[18px] ${
+            isSidebarBannerVisible && !isBatchMode ? 'pb-[128px]' : 'pb-10'
           }`}
           onScroll={handleAgentScroll}
         >
@@ -633,7 +827,9 @@ const Sidebar: React.FC<SidebarProps> = ({
             batchAgentId={batchAgentId}
             deletedSessionIds={deletedSessionIds}
             selectedKeys={selectedKeys}
+            isTaskFilterActive={isTaskFilterActive}
             onShowCowork={onShowCowork}
+            onTaskFilterSummaryChange={onTaskFilterSummaryChange}
             onTaskSelected={(params) => {
               console.debug('[Sidebar] reporting agent sidebar task selection analytics');
               void reportYdAnalyzer({
@@ -656,7 +852,10 @@ const Sidebar: React.FC<SidebarProps> = ({
           />
         </div>
         {!isBatchMode && (
-          <SidebarAdBanner onVisibleChange={setIsSidebarBannerVisible} />
+          <SidebarExperienceSlot
+            hidden={hideAdBanner || paymentGuideOwnsSlot}
+            onVisibleChange={setIsSidebarBannerVisible}
+          />
         )}
         <div
           className={`pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-gradient-to-b from-surface-raised to-transparent transition-opacity duration-150 ${
@@ -682,6 +881,18 @@ const Sidebar: React.FC<SidebarProps> = ({
         currentSessionId={currentSessionId}
         onSelectSession={handleSelectSession}
       />
+      {!isBatchMode && (updateNotice || paymentGuideVisible) && (
+        <div className="non-draggable px-3 pt-1.5">
+          <div hidden={paymentGuideOwnsSlot}>{updateNotice}</div>
+          {paymentGuideVisible && purchaseGuide.candidate && (
+            <LowCreditPurchaseOfferCard
+              offer={purchaseGuide.candidate.offer}
+              variant={purchaseGuide.candidate.variant}
+              onClose={purchaseGuide.dismiss}
+            />
+          )}
+        </div>
+      )}
       {isBatchMode ? (
         <div className="border-t border-border/60 px-3 pb-3 pt-2">
           <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
@@ -726,22 +937,55 @@ const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
       ) : (
-        <div className="pb-2 pt-2">
-          <div className="flex items-center gap-1 pl-3 pr-2 pt-1">
+        <div
+          className={`pb-2.5 transition-[padding-top] duration-200 ease-out ${
+            shouldReserveLoginPromoTipSpace ? 'pt-3.5' : 'pt-2'
+          }`}
+        >
+          <div className="flex items-end pl-3 pr-2 pt-1">
             {!hideLogin && (
-              <div className="flex-1 min-w-0">
-                <LoginButton />
+              <div
+                className={`relative shrink-0 transition-[padding-top] duration-200 ease-out ${
+                  shouldReserveLoginPromoTipSpace ? 'pt-9' : ''
+                }`}
+              >
+                {shouldShowLoginPromoTip && (
+                  <div
+                    className={`pointer-events-none absolute left-0 top-0 z-10 inline-flex h-7 w-max max-w-[10.5rem] items-center rounded-lg rounded-bl-[3px] bg-gradient-to-r from-[#ff3f67] to-[#f6538d] pl-3 pr-8 text-[13px] font-semibold leading-none text-white shadow-[0_5px_14px_rgba(255,63,103,0.24)] transition-all duration-[220ms] ease-out ${
+                      isLoginPromoTipFading ? 'translate-y-1 opacity-0' : 'translate-y-0 opacity-100'
+                    }`}
+                    aria-hidden="true"
+                  >
+                    <span className="min-w-0 whitespace-nowrap">
+                      {i18nService.t('sidebarLoginFreeToken')}
+                    </span>
+                    <SidebarPromoStar
+                      idPrefix="sidebar-login-promo-star-small"
+                      className="absolute right-[8px] top-[2px] h-4 w-4 drop-shadow-[0_2px_5px_rgba(255,193,7,0.58)]"
+                    />
+                    <SidebarPromoStar
+                      idPrefix="sidebar-login-promo-star-large"
+                      className="absolute -bottom-[5px] -right-[7px] h-6 w-6 drop-shadow-[0_5px_10px_rgba(255,178,0,0.52)]"
+                    />
+                    <span className="absolute -bottom-1 left-8 h-2.5 w-3 rotate-45 rounded-[2px] bg-[#ff3f67]" />
+                  </div>
+                )}
+                <LoginButton
+                  contentLeftOffset={isCollapsed ? 0 : sidebarWidth}
+                  loggedOutVariant="sidebarPromo"
+                />
               </div>
             )}
-            <button
-              type="button"
-              onClick={() => onShowSettings()}
-              className={`inline-flex h-7 items-center justify-start gap-1.5 rounded-md px-1.5 text-sm font-normal text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04] ${hideLogin ? 'w-full' : 'shrink-0'}`}
-              aria-label={i18nService.t('settings')}
-            >
-              <Cog6ToothIcon className="h-4 w-4 shrink-0" />
-              {i18nService.t('settings')}
-            </button>
+            <div className="ml-auto flex shrink-0 items-center justify-end">
+              <button
+                type="button"
+                onClick={() => onShowSettings()}
+                className={sidebarBottomIconButtonClassName}
+                aria-label={i18nService.t('settings')}
+              >
+                <Cog6ToothIcon className="h-[18px] w-[18px] shrink-0" />
+              </button>
+            </div>
           </div>
         </div>
       )}

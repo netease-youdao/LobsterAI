@@ -1,33 +1,57 @@
 import React from 'react';
 
-import { AppUpdateStatus, type AppUpdateStatus as AppUpdateStatusValue } from '../../../shared/appUpdate/constants';
+import { type AppUpdateRuntimeState, AppUpdateStatus } from '../../../shared/appUpdate/constants';
 import { i18nService } from '../../services/i18n';
+import { isAppUpdateReadyToInstall } from './appUpdateNoticeState';
 
 interface AppUpdateBadgeProps {
-  latestVersion: string;
-  status: AppUpdateStatusValue;
+  updateState: AppUpdateRuntimeState;
   onClick: () => void;
 }
 
-const AppUpdateBadge: React.FC<AppUpdateBadgeProps> = ({ latestVersion, status, onClick }) => {
-  const label = status === AppUpdateStatus.Ready
+/**
+ * Compact header pill used where the sidebar card has no room (collapsed
+ * sidebar, Windows title bar). Downloads never show here; see
+ * shouldShowAppUpdateNotice for when the badge is mounted at all.
+ */
+const AppUpdateBadge: React.FC<AppUpdateBadgeProps> = ({ updateState, onClick }) => {
+  const updateInfo = updateState.info;
+  if (!updateInfo) return null;
+
+  const { latestVersion } = updateInfo;
+  const isReady = isAppUpdateReadyToInstall(updateState);
+  const isError = updateState.status === AppUpdateStatus.Error;
+
+  const label = isReady
     ? i18nService.t('updateReadyPill')
-    : status === AppUpdateStatus.Downloading
-      ? i18nService.t('updateDownloadingPill')
-      : status === AppUpdateStatus.Error
-        ? i18nService.t('updateErrorPill')
-        : i18nService.t('updateAvailablePill');
+    : isError
+      ? i18nService.t('updateErrorPill')
+      : i18nService.t('updateAvailablePill');
+
+  const tone = isReady
+    ? 'border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-600 hover:bg-emerald-500/[0.14] dark:text-emerald-400'
+    : isError
+      ? 'border-red-500/30 bg-red-500/[0.07] text-red-500 hover:bg-red-500/[0.12]'
+      : 'border-primary/25 bg-primary/[0.08] text-primary hover:bg-primary/[0.14]';
+  const dotTone = isReady ? 'bg-emerald-500' : isError ? 'bg-red-500' : 'bg-primary';
 
   return (
     <button
       type="button"
       onClick={onClick}
-      className="non-draggable inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/12 px-3 py-1 text-xs font-medium text-emerald-600 hover:bg-emerald-500/18 dark:text-emerald-400 transition-colors whitespace-nowrap"
-      title={`${label} ${latestVersion}`}
-      aria-label={`${label} ${latestVersion}`}
+      className={`non-draggable inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full border pl-2 pr-2.5 text-xs font-medium transition-colors ${tone}`}
+      title={`${label} v${latestVersion}`}
+      aria-label={`${label} v${latestVersion}`}
     >
-      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
+      <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
+        <span
+          className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 ${dotTone}`}
+          style={{ animationDuration: '2.4s' }}
+        />
+        <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${dotTone}`} />
+      </span>
       <span>{label}</span>
+      {!isError && <span className="opacity-70">v{latestVersion}</span>}
     </button>
   );
 };

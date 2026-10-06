@@ -100,6 +100,7 @@ test('channel sync reuses one local session for run-scoped cron session keys', (
     id: `cron-session-${++nextId}`,
     title,
     claudeSessionId: null,
+    scheduledTaskId: null,
     status: 'idle' as const,
     pinned: false,
     cwd,
@@ -131,6 +132,7 @@ test('channel sync reuses one local session for run-scoped cron session keys', (
     resolveJobName,
   });
 
+  expect(sync.resolveSession('agent:ops:cron:daily-monitor:run:probe')).toBeNull();
   expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor:run:run-1')).toBe('cron-session-1');
   expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor:run:run-2')).toBe('cron-session-1');
   expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor')).toBe('cron-session-1');
@@ -144,27 +146,137 @@ test('channel sync reuses one local session for run-scoped cron session keys', (
     'local',
     [],
     'ops',
+    '',
+    { scheduledTaskId: 'daily-monitor' },
   );
   expect(getDefaultCwd).toHaveBeenCalledWith('ops');
   expect(resolveJobName).toHaveBeenCalledWith('daily-monitor');
+
+  const internalState = sync as unknown as {
+    syncedSessionKeys: Map<string, string>;
+    rejectedKeys: Set<string>;
+  };
+  expect(Array.from(internalState.syncedSessionKeys.entries())).toEqual([
+    ['agent:ops:cron:daily-monitor', 'cron-session-1'],
+  ]);
+  expect(internalState.rejectedKeys.size).toBe(0);
+});
+
+test('channel sync reuses a persisted scheduled task session after restart', () => {
+  const getSessionIdByScheduledTaskId = vi.fn(() => 'persisted-cron-session');
+  const getSession = vi.fn(() => ({
+    id: 'persisted-cron-session',
+    title: '[Cron] Daily Monitor',
+    claudeSessionId: null,
+    scheduledTaskId: 'daily-monitor',
+    status: 'completed' as const,
+    pinned: false,
+    cwd: '/repo/old',
+    systemPrompt: '',
+    modelOverride: '',
+    executionMode: 'local' as const,
+    activeSkillIds: [],
+    agentId: 'ops',
+    messages: [],
+    messagesOffset: 0,
+    totalMessages: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  const updateSession = vi.fn();
+  const createSession = vi.fn(() => {
+    throw new Error('createSession should not be called for a persisted scheduled task session');
+  });
+  const sync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      getSession,
+      getSessionIdByScheduledTaskId,
+      updateSession,
+      createSession,
+    },
+    imStore: {
+      getSessionMapping: () => null,
+      updateSessionLastActive: () => {},
+      deleteSessionMapping: () => {},
+      createSessionMapping: () => {},
+    },
+    getDefaultCwd: () => '/repo/ops',
+  });
+
+  expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor:run:run-1')).toBe(
+    'persisted-cron-session',
+  );
+  expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor:run:run-2')).toBe(
+    'persisted-cron-session',
+  );
+  expect(getSessionIdByScheduledTaskId).toHaveBeenCalledTimes(1);
+  expect(getSessionIdByScheduledTaskId).toHaveBeenCalledWith('daily-monitor', 'ops');
+  expect(getSession).toHaveBeenCalledWith('persisted-cron-session', 0);
+  expect(updateSession).toHaveBeenCalledWith(
+    'persisted-cron-session',
+    { cwd: '/repo/ops' },
+    { touchUpdatedAt: false },
+  );
+  expect(createSession).not.toHaveBeenCalled();
+});
+
+test('channel sync replaces a stale persisted scheduled task lookup', () => {
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const createSession = vi.fn(() => ({ id: 'replacement-cron-session' }));
+  const sync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      getSession: () => null,
+      getSessionIdByScheduledTaskId: () => 'deleted-cron-session',
+      createSession,
+    },
+    imStore: {
+      getSessionMapping: () => null,
+      updateSessionLastActive: () => {},
+      deleteSessionMapping: () => {},
+      createSessionMapping: () => {},
+    },
+    getDefaultCwd: () => '/repo/ops',
+    resolveJobName: () => 'Daily Monitor',
+  });
+
+  try {
+    expect(sync.resolveOrCreateCronSession('agent:ops:cron:daily-monitor:run:run-1'))
+      .toBe('replacement-cron-session');
+    expect(createSession).toHaveBeenCalledWith(
+      expect.stringContaining('Daily Monitor'),
+      '/repo/ops',
+      '',
+      'local',
+      [],
+      'ops',
+      '',
+      { scheduledTaskId: 'daily-monitor' },
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[ChannelSessionSync] ignored stale persisted cron session lookup:',
+      expect.objectContaining({ sessionId: 'deleted-cron-session' }),
+    );
+  } finally {
+    warnSpy.mockRestore();
+  }
 });
 
 test('channel sync resolves the conversation record for a delivery target', () => {
   const knownSessions = new Set(['weixin-live', 'feishu-live']);
   const mappings = [
     {
-      imConversationId: '91fcaf18cb3a-im-bot:direct:o9cq809zec25-4jlkdw3ahtkpe9c@im.wechat',
+      imConversationId: 'weixin-bot-1:direct:wxid_zhangsan@im.wechat',
       platform: 'weixin',
       coworkSessionId: 'weixin-live',
       agentId: 'main',
       openClawSessionKey:
-        'agent:main:openclaw-weixin:91fcaf18cb3a-im-bot:direct:o9cq809zec25-4jlkdw3ahtkpe9c@im.wechat',
+        'agent:main:openclaw-weixin:weixin-bot-1:direct:wxid_zhangsan@im.wechat',
       createdAt: 1,
       lastActiveAt: 3,
     },
     {
       // Stale mapping from a replaced bot account without a session key.
-      imConversationId: 'direct:o9cq809zec25-4jlkdw3ahtkpe9c@im.wechat',
+      imConversationId: 'direct:wxid_zhangsan@im.wechat',
       platform: 'weixin',
       coworkSessionId: 'weixin-old',
       agentId: 'main',
@@ -203,13 +315,13 @@ test('channel sync resolves the conversation record for a delivery target', () =
   expect(
     sync.resolveConversationByDeliveryTarget(
       'openclaw-weixin',
-      'o9cq809ZEC25-4jLkdw3AHTKPE9c@im.wechat',
-      '91fcaf18cb3a-im-bot',
+      'WxId_ZhangSan@im.wechat',
+      'weixin-bot-1',
     ),
   ).toEqual({
     sessionId: 'weixin-live',
     sessionKey:
-      'agent:main:openclaw-weixin:91fcaf18cb3a-im-bot:direct:o9cq809zec25-4jlkdw3ahtkpe9c@im.wechat',
+      'agent:main:openclaw-weixin:weixin-bot-1:direct:wxid_zhangsan@im.wechat',
   });
 
   expect(sync.resolveConversationByDeliveryTarget('feishu', 'ou_c167')).toEqual({
@@ -220,6 +332,199 @@ test('channel sync resolves the conversation record for a delivery target', () =
   // Unknown peers and unknown channels resolve to nothing.
   expect(sync.resolveConversationByDeliveryTarget('feishu', 'ou_unknown')).toBe(null);
   expect(sync.resolveConversationByDeliveryTarget('not-a-channel', 'ou_c167')).toBe(null);
+});
+
+test('channel sync resolves account-less group delivery target by selected bot binding', () => {
+  const knownSessions = new Set(['feishu-main-group', 'feishu-bound-group']);
+  const mappings = [
+    {
+      imConversationId: 'group:oc_zhangsan_group',
+      platform: 'feishu',
+      coworkSessionId: 'feishu-main-group',
+      agentId: 'main',
+      openClawSessionKey: 'agent:main:feishu:group:oc_zhangsan_group',
+      createdAt: 1,
+      lastActiveAt: 3,
+    },
+    {
+      imConversationId: 'group:oc_zhangsan_group',
+      platform: 'feishu',
+      coworkSessionId: 'feishu-bound-group',
+      agentId: 'agent-feishu-bot-1',
+      openClawSessionKey:
+        'agent:agent-feishu-bot-1:feishu:group:oc_zhangsan_group',
+      createdAt: 1,
+      lastActiveAt: 2,
+    },
+  ];
+  const sync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      getSession: (id: string) => (knownSessions.has(id) ? { id } : null),
+      createSession: () => {
+        throw new Error('createSession should not be called in this test');
+      },
+    },
+    imStore: {
+      getSessionMapping: () => null,
+      getIMSettings: () => ({
+        platformAgentBindings: {
+          'feishu:feishu-bot-1': 'agent-feishu-bot-1',
+        },
+      }),
+      updateSessionLastActive: () => {},
+      deleteSessionMapping: () => {},
+      createSessionMapping: () => {},
+      listSessionMappings: (platform: string) =>
+        mappings.filter(m => m.platform === platform),
+    },
+    getDefaultCwd: () => '/tmp',
+  });
+
+  expect(
+    sync.resolveConversationByDeliveryTarget(
+      'feishu',
+      'oc_zhangsan_group',
+      'feishu-bot-1',
+    ),
+  ).toEqual({
+    sessionId: 'feishu-bound-group',
+    sessionKey: 'agent:agent-feishu-bot-1:feishu:group:oc_zhangsan_group',
+  });
+});
+
+test('channel sync resolves Feishu group delivery mirrors as separate direct conversations', () => {
+  const createSession = vi.fn((
+    title: string,
+    cwd: string,
+    systemPrompt: string,
+    executionMode: 'local',
+    activeSkillIds: string[],
+    agentId: string,
+  ) => ({
+    id: 'feishu-mirror-direct',
+    title,
+    claudeSessionId: null,
+    status: 'idle' as const,
+    pinned: false,
+    cwd,
+    systemPrompt,
+    modelOverride: '',
+    executionMode,
+    activeSkillIds,
+    agentId,
+    messages: [],
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  const createSessionMapping = vi.fn();
+  const updateSessionOpenClawSessionKey = vi.fn();
+  const updateSessionLastActive = vi.fn();
+  const mappings = [
+    {
+      imConversationId: 'group:oc_zhangsan_group',
+      platform: 'feishu',
+      coworkSessionId: 'feishu-bound-group',
+      agentId: 'agent-feishu-bot-1',
+      openClawSessionKey:
+        'agent:agent-feishu-bot-1:feishu:group:oc_zhangsan_group',
+      createdAt: 1,
+      lastActiveAt: 2,
+    },
+  ];
+  const sync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      getSession: (id: string) => (id === 'feishu-bound-group' ? { id } : null),
+      createSession,
+    },
+    imStore: {
+      getSessionMappingByOpenClawSessionKey: (sessionKey: string) =>
+        mappings.find(m => m.openClawSessionKey === sessionKey) ?? null,
+      getSessionMapping: (conversationId: string, platform: string, agentId?: string) =>
+        mappings.find(m =>
+          m.imConversationId === conversationId &&
+          m.platform === platform &&
+          (!agentId || m.agentId === agentId),
+        ) ?? null,
+      updateSessionOpenClawSessionKey,
+      updateSessionLastActive,
+      deleteSessionMapping: () => {},
+      createSessionMapping,
+      listSessionMappings: (platform: string) =>
+        mappings.filter(m => m.platform === platform),
+    },
+    getDefaultCwd: () => '/tmp/agent-feishu-bot-1',
+  });
+
+  const directMirrorKey = 'agent:agent-feishu-bot-1:feishu:feishu-bot-1:direct:oc_zhangsan_group';
+  expect(
+    sync.resolveOrCreateConversationForDeliveryMirror(
+      'feishu',
+      'oc_zhangsan_group',
+      'feishu-bot-1',
+      'agent-feishu-bot-1',
+    ),
+  ).toEqual({
+    sessionId: 'feishu-mirror-direct',
+    sessionKey: directMirrorKey,
+  });
+  expect(createSession).toHaveBeenCalledWith(
+    expect.any(String),
+    '/tmp/agent-feishu-bot-1',
+    '',
+    'local',
+    [],
+    'agent-feishu-bot-1',
+  );
+  expect(createSessionMapping).toHaveBeenCalledWith(
+    'feishu-bot-1:direct:oc_zhangsan_group',
+    'feishu',
+    'feishu-mirror-direct',
+    'agent-feishu-bot-1',
+    directMirrorKey,
+  );
+  expect(updateSessionOpenClawSessionKey).not.toHaveBeenCalled();
+  expect(updateSessionLastActive).not.toHaveBeenCalled();
+});
+
+test('channel sync keeps non-Feishu delivery mirror resolution unchanged', () => {
+  const sync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      getSession: (id: string) => (id === 'weixin-live' ? { id } : null),
+      createSession: () => {
+        throw new Error('createSession should not be called in this test');
+      },
+    },
+    imStore: {
+      getSessionMapping: () => null,
+      updateSessionLastActive: () => {},
+      deleteSessionMapping: () => {},
+      createSessionMapping: () => {},
+      listSessionMappings: () => [{
+        imConversationId: 'weixin-bot-1:direct:wxid_zhangsan@im.wechat',
+        platform: 'weixin',
+        coworkSessionId: 'weixin-live',
+        agentId: 'main',
+        openClawSessionKey:
+          'agent:main:openclaw-weixin:weixin-bot-1:direct:wxid_zhangsan@im.wechat',
+        createdAt: 1,
+        lastActiveAt: 1,
+      }],
+    },
+    getDefaultCwd: () => '/tmp',
+  });
+
+  expect(
+    sync.resolveOrCreateConversationForDeliveryMirror(
+      'openclaw-weixin',
+      'WxId_ZhangSan@im.wechat',
+      'weixin-bot-1',
+      'main',
+    ),
+  ).toEqual({
+    sessionId: 'weixin-live',
+    sessionKey:
+      'agent:main:openclaw-weixin:weixin-bot-1:direct:wxid_zhangsan@im.wechat',
+  });
 });
 
 test('channel sync suppresses local cron sessions for IM-announce jobs', () => {
@@ -235,6 +540,7 @@ test('channel sync suppresses local cron sessions for IM-announce jobs', () => {
     id: `cron-session-${++nextId}`,
     title,
     claudeSessionId: null,
+    scheduledTaskId: null,
     status: 'idle' as const,
     pinned: false,
     cwd,
@@ -425,7 +731,7 @@ test('channel sync backfills the real OpenClaw session key for existing mappings
   const sessionKey = 'agent:main:feishu:dm:ou_123';
 
   expect(sync.resolveOrCreateSession(sessionKey)).toBe('cowork-1');
-  expect(updateSessionOpenClawSessionKey).toHaveBeenCalledWith('dm:ou_123', 'feishu', sessionKey);
+  expect(updateSessionOpenClawSessionKey).toHaveBeenCalledWith('dm:ou_123', 'feishu', sessionKey, 'main');
 });
 
 test('channel sync corrects existing mapping cwd from the current bound agent', () => {
@@ -486,6 +792,137 @@ test('channel sync corrects existing mapping cwd from the current bound agent', 
   );
 });
 
+test('channel sync creates separate local sessions for the same group under different agents', () => {
+  let nextId = 0;
+  const mappings: Array<{
+    imConversationId: string;
+    platform: 'feishu';
+    coworkSessionId: string;
+    agentId: string;
+    openClawSessionKey?: string;
+    createdAt: number;
+    lastActiveAt: number;
+  }> = [
+    {
+      imConversationId: 'group:oc_sanitized',
+      platform: 'feishu',
+      coworkSessionId: 'cowork-main',
+      agentId: 'main',
+      openClawSessionKey: 'agent:main:feishu:group:oc_sanitized',
+      createdAt: 1,
+      lastActiveAt: 1,
+    },
+  ];
+  const createSession = vi.fn(((
+    title: string,
+    cwd: string,
+    systemPrompt: string,
+    executionMode: 'local',
+    activeSkillIds: string[],
+    agentId: string,
+  ) => ({
+    id: `cowork-${++nextId}`,
+    title,
+    claudeSessionId: null,
+    status: 'idle' as const,
+    pinned: false,
+    cwd,
+    systemPrompt,
+    modelOverride: '',
+    executionMode,
+    activeSkillIds,
+    agentId,
+    messages: [],
+    createdAt: 1,
+    updatedAt: 1,
+  })));
+  const sync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      getSession: (id: string) => (
+        id === 'cowork-main'
+          ? {
+            id,
+            title: '[Feishu] group:oc_sanitized',
+            claudeSessionId: null,
+            status: 'idle',
+            pinned: false,
+            cwd: '/repo/main',
+            systemPrompt: '',
+            modelOverride: '',
+            executionMode: 'local',
+            activeSkillIds: [],
+            agentId: 'main',
+            messages: [],
+            createdAt: 1,
+            updatedAt: 1,
+          }
+          : null
+      ),
+      createSession,
+    },
+    imStore: {
+      getIMSettings: () => ({
+        skillsEnabled: true,
+        platformAgentBindings: {
+          feishu: 'main',
+        },
+      }),
+      getSessionMappingByOpenClawSessionKey: (sessionKey: string) =>
+        mappings.find(mapping => mapping.openClawSessionKey === sessionKey) ?? null,
+      getSessionMapping: (conversationId: string, platform: 'feishu', agentId?: string) =>
+        mappings.find(mapping =>
+          mapping.imConversationId === conversationId
+          && mapping.platform === platform
+          && (!agentId || mapping.agentId === agentId),
+        ) ?? null,
+      updateSessionLastActive: () => {},
+      deleteSessionMapping: () => {},
+      createSessionMapping: (
+        imConversationId: string,
+        platform: 'feishu',
+        coworkSessionId: string,
+        agentId: string,
+        openClawSessionKey: string,
+      ) => {
+        mappings.push({
+          imConversationId,
+          platform,
+          coworkSessionId,
+          agentId,
+          openClawSessionKey,
+          createdAt: 1,
+          lastActiveAt: 1,
+        });
+      },
+    },
+    getDefaultCwd: (agentId?: string) => `/repo/${agentId || 'main'}`,
+  });
+
+  expect(sync.isCurrentBindingKey('agent:agent-2:feishu:group:oc_sanitized')).toBe(true);
+  expect(sync.resolveOrCreateSession('agent:agent-2:feishu:group:oc_sanitized')).toBe('cowork-1');
+
+  expect(createSession).toHaveBeenCalledWith(
+    expect.any(String),
+    '/repo/agent-2',
+    '',
+    'local',
+    [],
+    'agent-2',
+  );
+  expect(mappings).toEqual([
+    expect.objectContaining({
+      coworkSessionId: 'cowork-main',
+      agentId: 'main',
+      openClawSessionKey: 'agent:main:feishu:group:oc_sanitized',
+    }),
+    expect.objectContaining({
+      coworkSessionId: 'cowork-1',
+      agentId: 'agent-2',
+      openClawSessionKey: 'agent:agent-2:feishu:group:oc_sanitized',
+    }),
+  ]);
+});
+
 // --- buildChannelDisplayName ---
 
 test('buildChannelDisplayName strips email domain and removes direct prefix', () => {
@@ -493,15 +930,15 @@ test('buildChannelDisplayName strips email domain and removes direct prefix', ()
 });
 
 test('buildChannelDisplayName keeps group prefix', () => {
-  expect(buildChannelDisplayName('group:3911967@popo.netease.com')).toBe('group:3911967');
+  expect(buildChannelDisplayName('group:zhangsan@popo.example.com')).toBe('group:zhangsan');
 });
 
 test('buildChannelDisplayName handles account:direct:peer format', () => {
-  expect(buildChannelDisplayName('bot1:direct:zhangsan@corp.netease.com')).toBe('zhangsan');
+  expect(buildChannelDisplayName('bot1:direct:zhangsan@corp.example.com')).toBe('zhangsan');
 });
 
 test('buildChannelDisplayName handles account:group:peer format', () => {
-  expect(buildChannelDisplayName('bot1:group:12345@popo.netease.com')).toBe('group:12345');
+  expect(buildChannelDisplayName('bot1:group:lisi@popo.example.com')).toBe('group:lisi');
 });
 
 test('buildChannelDisplayName handles channel peerKind', () => {

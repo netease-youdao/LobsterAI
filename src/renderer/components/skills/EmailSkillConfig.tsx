@@ -1000,6 +1000,7 @@ const EmailSkillConfig: React.FC = () => {
       {pendingDeleteAccount && (
         <Modal
           onClose={() => setPendingDeleteAccountId(null)}
+          onEscape={() => setPendingDeleteAccountId(null)}
           overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
           className="w-full max-w-sm rounded-xl border border-border bg-surface p-5 shadow-2xl"
         >

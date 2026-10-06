@@ -6,7 +6,7 @@
 
 LobsterAI 需要增加产品使用日志上报能力，帮助项目维护者了解应用安装、核心功能入口和关键交互的使用情况，为功能优化、兼容性改进和开发优先级提供数据依据。
 
-当前关注的数据包括用户选择和使用的技能、MCP、专家套件、模型来源与模型类型、设置项、Agent、定时任务、会话输入框、消息交互、artifact/浏览器预览以及其他核心功能的使用情况。具体事件名称、触发时机和业务参数已在本文 2.4 中维护，后续新增事件继续按同一规范补充。
+当前关注的数据包括用户选择和使用的技能、MCP、专家套件、模型来源与模型类型、设置项、Agent、定时任务、会话输入框、IM 消息提交、消息交互、artifact/浏览器预览以及其他核心功能的使用情况。具体事件名称、触发时机和业务参数已在本文 2.4 中维护，后续新增事件继续按同一规范补充。
 
 当前实现已建立独立、统一的日志请求入口，集中处理日志服务地址、通用参数、用户标识、时间戳、基础环境信息、使用统计开关和网络请求，避免各业务模块自行拼接和发送日志。
 
@@ -35,19 +35,27 @@ LobsterAI 需要增加产品使用日志上报能力，帮助项目维护者了�
 
 ### 2.1 文件位置
 
-日志请求实现在：
+共享事件常量和 Renderer 日志请求实现在：
 
 ```text
+src/shared/analytics/constants.ts
 src/renderer/services/logReporter.ts
+```
+
+主进程日志请求实现在：
+
+```text
+src/main/libs/mainLogReporter.ts
 ```
 
 对应单元测试位于：
 
 ```text
 src/renderer/services/logReporter.test.ts
+src/main/libs/mainLogReporter.test.ts
 ```
 
-业务调用方统一通过 `reportYdAnalyzer()` 发送事件。当前已接入计划模式、应用启动、技能、MCP、专家套件、模型选择、设置页和 IM 机器人等入口；具体事件列表见下文 2.4。
+Renderer 业务调用方统一通过 `reportYdAnalyzer()` 发送事件。必须在主进程生命周期中触发的事件通过 `MainLogReporter.report()` 发送。两条路径复用相同的事件名、服务配置、通用参数和使用统计开关，任一上报失败都不得阻断原业务流程。当前已接入计划模式、应用启动、技能、MCP、专家套件、模型选择、设置页和 IM 机器人等入口；具体事件列表见下文 2.4。
 
 ### 2.2 日志服务配置
 
@@ -82,15 +90,15 @@ export const LogReporterActionPrefix = {
 | `_npid` | 通用配置 | 产品 ID，当前为 `wisdom` |
 | `_ncat` | 通用配置 | 日志分类，当前为 `actions` |
 | `action` | 业务调用方 | 事件名称，不能为空且必须以 `lobsterai_` 开头 |
-| `app_version` | Electron 应用信息 | 当前应用版本；首次上报前异步读取并缓存，读取失败时为空字符串 |
-| `os_platform` | Preload 暴露的运行环境 | 当前系统平台，例如 `darwin`、`win32`、`linux` |
-| `os_arch` | Preload 暴露的运行环境 | 当前系统架构，例如 `arm64`、`x64` |
+| `app_version` | Electron 应用信息 | 当前应用版本；Renderer 首次上报前异步读取并缓存，主进程直接读取，读取失败时为空字符串 |
+| `os_platform` | 运行环境 | 当前系统平台，例如 `darwin`、`win32`、`linux` |
+| `os_arch` | 运行环境 | 当前系统架构，例如 `arm64`、`x64` |
 | `language` | 应用配置 | 当前应用语言 |
 | `uuid` | 本地安装 ID | 复用现有 `installation_uuid`，未登录时也可用于安装维度统计；读取失败时不发送 |
 | `firstKeyfrom` | 渠道归因 | 复用现有首次渠道归因；读取失败时不发送 |
 | `latestKeyfrom` | 渠道归因 | 复用现有最近渠道归因；读取失败时不发送 |
-| `is_logged_in` | Redux 登录态 | 当前是否存在登录用户 `yid` |
-| `log_Usid` | Redux 登录态 | 当前用户的 `yid`，未登录时为空字符串 |
+| `is_logged_in` | 登录态 | 当前是否存在登录用户 `yid`；Renderer 从 Redux 读取，主进程从已有 `auth_user` 读取 |
+| `log_Usid` | 登录态 | 当前用户的 `yid`，未登录时为空字符串 |
 | `uts` | 日志模块 | `Date.now()` 生成的毫秒时间戳 |
 | 其他参数 | 业务调用方 | 当前事件特有的字符串、数字或布尔值参数 |
 
@@ -285,6 +293,28 @@ export const LogReporterActionPrefix = {
   - `sessionId`：string，当前会话 ID；仅 `target=session` 时发送。
   - `isServerModel`：boolean，是否为服务端套餐模型。
 - 隐私边界：不上传 provider API Key、base URL、鉴权类型或其他模型凭证配置。
+
+#### 2.4.6.1 `lobsterai_plan_model_catalog_action`
+
+- 状态：已实现。
+- 触发时机：用户在设置页点击「套餐模型」tab、切换套餐模型分类、点击「购买套餐」并完成外链打开尝试后发送。
+- 事件含义：统计套餐模型入口使用、模型分类浏览偏好和购买套餐入口转化。
+- 业务参数：
+  - `source`：string，触发来源。当前取值包括 `settings_sidebar`、`settings_shortcut`、`settings_plan_model_catalog`。
+  - `actionType`：string，动作类型。当前取值包括 `open_tab`、`category_change`、`open_pricing`。
+  - `previousTab`：string，切换前设置 tab；仅 `open_tab` 时发送。
+  - `targetTab`：string，目标设置 tab；仅 `open_tab` 时发送，当前为 `planModelIntro`。
+  - `activeCategory`：string，触发时当前套餐模型分类。当前取值包括 `text`、`image`、`video`。
+  - `previousCategory`：string，切换前套餐模型分类；仅分类切换时发送。
+  - `targetCategory`：string，目标套餐模型分类；仅分类切换时发送。
+  - `visibleModelCount`：number，触发动作时当前或目标分类下可见模型数量。
+  - `textModelCount` / `imageModelCount` / `videoModelCount`：number，当前目录中各分类模型数量。
+  - `totalModelCount`：number，当前目录模型总数。
+  - `result`：string，动作结果。当前取值为 `success` 或 `failed`；仅 `open_pricing` 时发送。
+  - `errorCode`：string，失败分类。当前取值包括 `open_external_failed`、`unknown`；仅 `open_pricing` 失败时发送。
+- 隐私边界：
+  - 不上传模型 ID、模型展示名称、模型说明、套餐购买 URL、外链打开错误详情或用户账号信息。
+  - 模型目录相关字段只记录分类和数量，用于分析入口与分类浏览行为。
 
 #### 2.4.7 `lobsterai_general_setting_changed`
 
@@ -625,18 +655,44 @@ export const LogReporterActionPrefix = {
 #### 2.4.28 `lobsterai_account_menu_action`
 
 - 状态：已实现。
-- 触发时机：用户在首页左下角「我的」入口执行主动动作后发送。包括未登录点击登录、已登录打开/关闭账号菜单、展开/收起剩余额度、打开用量概览、打开充值页、打开邀请页、退出登录。
+- 触发时机：用户在首页左下角「我的」入口执行主动动作后发送。包括未登录点击登录、已登录打开/关闭账号菜单、展开/收起剩余额度、打开用量概览、打开充值页、打开套餐升级页、打开邀请页、退出登录。
 - 事件含义：统计账号菜单入口的使用情况和常用路径。
 - 业务参数：
   - `source`：string，触发来源。当前固定为 `home_account_menu`。
-  - `actionType`：string，动作类型。当前取值包括 `login`、`open_menu`、`close_menu`、`expand_credits`、`collapse_credits`、`open_usage_overview`、`open_recharge`、`open_invitation`、`logout`。
+  - `actionType`：string，动作类型。当前取值包括 `login`、`open_menu`、`close_menu`、`retry_profile_summary`、`open_credits_detail`、`expand_credits`、`collapse_credits`、`open_usage_overview`、`open_recharge`、`open_recharge_failed`、`open_plan_upgrade`、`open_invitation`、`open_credits_reset_campaign`、`open_credits_final_reward`、`logout`。
   - `result`：string，动作结果。当前取值为 `success` 或 `failed`；仅登录、打开外链和退出登录等异步动作发送。
+  - `errorCode`：string，失败分类。当前取值包括 `open_external_failed`、`unknown`；当前仅充值外链打开失败发送。
   - `isLoggedIn`：boolean，触发动作时是否处于登录态。
   - `hasCredits`：boolean，当前账号摘要中是否存在额度明细。
   - `creditItemCount`：number，当前账号摘要中的额度明细数量。
+  - `accountMode`：string，当前账号模式。当前取值为 `personal`、`enterprise` 或 `unknown`；当前仅套餐升级入口发送。
+  - `subscriptionStatus`：string，当前订阅状态。当前取值沿用账号 quota，例如 `free`、`active`、`enterprise`；当前仅套餐升级入口发送。
+  - `planTier`：string，当前套餐档位的规范化枚举。当前取值包括 `basic`、`standard`、`advanced`、`professional`、`excellent`、`enterprise`、`unknown`；当前仅套餐升级入口发送。
+  - `hasSubscriptionPlan`：boolean，当前账号摘要中是否存在 `subscription` 类型权益；当前仅套餐升级入口发送。
+  - `canUpgrade`：boolean，当前展示状态下是否允许继续升级；当前仅套餐升级入口发送。
 - 隐私边界：
-  - 不上传手机号、手机号后四位、昵称、头像 URL、具体剩余额度数值、额度明细 label、额度类型、到期时间、Portal URL、登录 URL 或退出登录错误详情。
+  - 不上传手机号、手机号后四位、昵称、头像 URL、具体剩余额度数值、额度明细 label、套餐展示文案、套餐到期时间、Portal URL、登录 URL 或退出登录错误详情。
   - 额度相关字段只记录是否有额度明细和明细数量，不记录资产金额。
+  - 套餐相关字段只记录规范化档位、订阅状态和是否可升级，不记录用户可见套餐名称或权益明细。
+
+#### 2.4.28.1 `lobsterai_daily_check_in_action`
+
+- 状态：已实现。
+- 触发时机：用户点击首页右上角或左下角「我的」浮层里的每日积分礼领取入口后发送。领取请求成功、已领取、需登录、活动不可用或领取失败时补充结果事件。
+- 事件含义：统计每日积分礼两个入口的领取转化、登录拦截和失败情况。
+- 业务参数：
+  - `source`：string，触发来源。当前取值为 `home_header` 或 `account_menu`。
+  - `actionType`：string，动作类型。当前取值包括 `claim_click`、`login_required`、`claim_success`、`claim_already_claimed`、`claim_unavailable`、`claim_failed`。
+  - `result`：string，动作结果。当前取值为 `success` 或 `failed`；仅结果类动作发送。
+  - `activityCode`：string，活动编码。
+  - `configRevision`：number，活动配置版本。
+  - `isLoggedIn`：boolean，触发动作时是否处于客户端登录态。
+  - `isAuthenticated`：boolean，活动上下文是否已通过服务端认证。
+  - `canClaim`：boolean，点击时活动上下文是否允许领取。
+  - `errorCode`：string，失败分类。当前取值包括 `login_required`、`already_claimed`、`not_active`、`not_found`、`revision_mismatch`、`action_invalid`、`config_invalid`、`server_error`、`unknown`；仅失败、已领取或不可用等结果发送。
+- 隐私边界：
+  - 不上传手机号、昵称、头像 URL、活动展示文案、奖励积分数值、已领取积分数值、有效期、登录 URL、接口错误详情或用户账号标识。
+  - 活动字段只记录活动编码、配置版本、来源和状态类枚举，用于统计入口转化和问题分类。
 
 #### 2.4.29 `lobsterai_sidebar_action`
 
@@ -1051,6 +1107,96 @@ export const LogReporterActionPrefix = {
   - 不上传完整本地路径、完整 URL、URL query、文件名全文、HTML/代码/图片/文档内容、sessionId、artifactId、messageId、App 可执行路径或错误详情。
   - 会上传 artifact 类型、扩展名、标题长度、来源、打开目标、App 展示名称、tab/面板状态、浏览器 URL 类型、设备/缩放参数和动作结果，用于分析 artifact 预览链路是否被用户持续使用。
 
+#### 2.4.41 `lobsterai_im_prompt_submit`
+
+- 状态：已实现。
+- 触发时机：OpenClaw 接收到 IM channel 消息、成功创建对应 Agent turn，并发送 `sessions.changed phase=start` 后，LobsterAI 将 channel 映射到本地会话并发送事件。对于仍通过 `agent` / `chat` 事件创建本地 ActiveTurn 的兼容链路，在 ActiveTurn 创建后使用同一方法回退触发。两条路径共享 run ID 去重，同一 run 的重复生命周期事件、恢复重试或双路径命中不重复发送；进程内仅保留最近 2000 个已上报 run ID，避免去重集合随运行时间无限增长。
+- 事件含义：统计从 IM 侧成功进入 Agent 执行链路的任务提交量，并区分平台、新任务/续聊和 Agent 路由。该事件不替代 `lobsterai_prompt_submit`；后者继续只统计桌面端首页和历史对话输入框提交。
+- 排除范围：
+  - 不统计桌面端 managed session、定时任务、子 Agent 会话、心跳、通知投递镜像或失效 Agent 绑定产生的事件。
+  - 消息在进入 Agent turn 前被 IM 平台、OpenClaw 插件或权限策略拒绝时不发送。
+  - Agent turn 创建后的模型、工具或回复失败不改变本事件的成功提交口径。
+- 业务参数：
+  - `source`：string，当前固定为 `openclaw_channel`。
+  - `platform`：string，归一化后的 IM 平台，例如 `weixin`、`dingtalk`、`feishu`、`telegram`、`discord`、`email`。
+  - `conversationState`：string，当前取值为 `new_task` 或 `continue_session`。创建 turn 前本地映射会话中不存在历史助手消息时为 `new_task`，否则为 `continue_session`。
+  - `agentId`：string，实际承接该 IM turn 的 Agent ID。
+  - `isMainAgent`：boolean，是否由主 Agent 承接。
+- 发送与容错口径：
+  - 事件由主进程直接发送，不依赖 Renderer 窗口是否已加载。
+  - 使用与 Renderer 相同的 `usageAnalyticsEnabled` 开关、安装 ID、渠道归因、登录态和基础环境参数。
+  - 采用 fire-and-forget；单次请求最多等待 10 秒，主进程同时最多保留 20 个日志请求，超出并发上限、超时或失败时只写警告日志，不重试、不影响 IM 消息处理、Agent 执行或回复投递。
+  - 读取使用统计开关失败时按关闭处理，本次事件直接跳过，避免在无法确认用户设置时发送请求。
+- 隐私边界：
+  - 不上传 IM 消息正文、prompt hash、会话 ID、session key、run ID、群 ID、用户 ID、账号 ID、实例 ID、Agent 名称、附件内容、文件名、本地路径或错误详情。
+  - 只上传平台、会话状态和 Agent 路由等结构化摘要。
+
+#### 2.4.42 `lobsterai_experimental_setting_changed`
+
+- 状态：已实现。
+- 触发时机：用户在「设置 -> 实验功能」切换 DeepSeek Harness（dsh）开关，Renderer 等待 `dsh:setEnabled` IPC 成功返回后发送。IPC 失败不发送；新值与旧值相同（例如重复点击）不发送。
+- 事件含义：统计主动试用实验功能的用户规模。开启事件的去重安装数即"主动试用过 dsh 的人数"，关闭事件用于观察试用后的放弃比例。
+- 业务参数：
+  - `settingKey`：string，变更的实验功能设置项 key。当前取值为 `dshEnabled`。
+  - `settingValue`：boolean，变更后的值。
+  - `previousValue`：boolean，变更前的值。
+  - `source`：string，触发来源。当前固定为 `settings_experimental`。
+- 发送与容错口径：
+  - 事件由 Renderer 通过 `reportYdAnalyzer()` 发送，与其他设置页事件走同一条 `api:fetch` 链路、使用统计开关和通用参数；本地主日志中只有 `[Renderer][LogReporter] sending/sent event …` 的 debug 行可用于核对。
+  - 采用 fire-and-forget，上报失败只写警告日志，不影响开关写入、运行时停止或 OpenClaw 配置同步。
+  - 实现位于 `src/renderer/services/dshAnalytics.ts`，由 `DshExperimentalSettings` 调用。
+- 隐私边界：不上传 dsh home 路径、runtime 路径、provider 配置或模型信息。
+
+#### 2.4.43 `lobsterai_dsh_action`
+
+- 状态：已实现。
+- 触发时机：用户在「设置 -> 实验功能」点击「打开工作台」，Renderer 等待 `dsh:openWorkbench` IPC 返回后发送一次。引擎就绪并成功打开或聚焦工作台窗口时发送 `success`；功能未开启、runtime 安装失败、引擎启动失败或窗口打开异常时发送 `failed`。首次打开包含 runtime 下载和解包，仍只在最终结果产生后发送一次，下载进度不单独上报。
+- 事件含义：统计 dsh 工作台的实际使用情况。`result=success` 的当日去重安装数除以当日任意事件的去重安装数即工作台日渗透率；该口径只统计用户主动打开工作台，不统计主 Agent 通过 `dsh_code_task` 的自动委托。
+- 业务参数：
+  - `actionType`：string，动作类型。当前取值为 `open_workbench`。
+  - `source`：string，触发来源。当前固定为 `settings_experimental`。
+  - `phaseBefore`：string，点击时的引擎状态，点击后通过 `dsh:getState` 即时读取（读取失败时退回卡片轮询到的状态）。当前取值包括 `not_installed`、`stopped`、`installing`、`starting`、`ready`、`failed`，用于区分首次安装打开和热打开。
+  - `result`：string，动作结果。当前取值为 `success` 或 `failed`。
+  - `errorCode`：string，失败分类；仅失败时发送。失败后 Renderer 通过 `dsh:getState` 读取引擎状态，仅当状态处于 `failed` / `not_installed` 终态时采用其 `DshEngineErrorCode`（`runtime_missing`、`runtime_invalid`、`install_failed`、`spawn_failed`、`ready_timeout`、`crashed_early`、`plugin_load_failed`）；主进程以"功能未开启"拒绝时为 `not_enabled`；其余情况为 `unknown`。
+  - `errorDetail`：string，脱敏后的错误摘要；仅失败且存在错误对象时发送。用于区分 `install_failed` 背后的具体原因（校验和不匹配、HTTP 状态码、tar 不可用、解包不完整等）。
+- 错误摘要脱敏规则（`src/renderer/services/dshAnalytics.ts` 的 `sanitizeDshErrorDetail`）：
+  - 去掉 Electron IPC 包装前缀 `Error invoking remote method 'dsh:openWorkbench': `。
+  - 按平台惯例识别 home 目录（`/Users/<name>`、`/home/<name>`、`<盘符>:\Users\<name>`，用户名允许包含空格，正反斜杠均识别）并替换为 `~`，保留其后的相对路径便于定位。
+  - 其他绝对路径（两段以上的 POSIX 路径、带盘符的 Windows 路径）替换为 `<path>`。
+  - URL 去掉 query 和 fragment，只保留 origin 和 path。
+  - 连续空白折叠为单个空格，超过 200 字符截断并以 `…` 结尾。
+  - 引擎启动失败时主进程只把子进程日志尾巴写入本地日志，IPC 错误信息中不含子进程输出，因此 `errorDetail` 也不包含。
+- 发送与容错口径：
+  - 事件由 Renderer 通过 `reportYdAnalyzer()` 发送，与开关事件相同，走 `api:fetch` 链路，本地主日志中只有 `[Renderer][LogReporter]` 的 debug 行可用于核对。
+  - 采用 fire-and-forget，上报失败不影响工作台打开流程或错误提示展示。
+- 隐私边界：
+  - 该事件是本文"不上传错误详情"约定的明确例外：只上传经上述规则脱敏和截断后的错误摘要，不上传完整文件路径、完整 URL、子进程日志、provider 配置、API Key 或工作台 URL。
+  - 不上传工作台内的会话内容、prompt 或文件内容。
+
+#### 2.4.44 `lobsterai_onboarding_action`
+
+- 状态：已实现。
+- 触发时机：新用户引导页曝光、点击下一步/跳过/开始体验、浏览器登录跳转结果、登录回调观察、登录后等待/完成 OpenClaw 网关重启、跳转登录但未登录返回客户端、新人任务打开结果、新人任务本地流式动画开始/结束、普通登录引导弹窗开始体验按钮点击，以及新人任务输入框上的二次登录按钮点击和登录跳转结果。
+- 事件含义：统计新用户引导漏斗、登录转化、新人任务触达和二次登录入口效果。
+- 业务参数：
+  - `actionType`：string，动作类型。当前取值包括 `guide_exposure`、`guide_next_click`、`guide_skip_click`、`guide_start_experience_click`、`chat_login_experience_start_click`、`login_redirect_result`、`auth_callback_observed`、`login_success_wait_gateway`、`login_success_gateway_settled`、`login_return_without_auth`、`welcome_task_open_result`、`welcome_stream_start`、`welcome_stream_complete`、`welcome_task_start_experience_click`、`welcome_task_login_redirect_result`。
+  - `source`：string，触发来源。当前取值包括 `first_run_gate`、`new_user_onboarding`、`chat_login_experience_prompt`、`skip`、`start_experience_login_callback`、`start_experience_window_focus_without_login`、`start_experience_dom_focus_without_login`、`start_experience_visibility_without_login`、`new_user_welcome_task`。
+  - `step`：string，引导步骤。当前取值为 `new_task` 或 `prompt_input`，仅引导页相关动作发送。
+  - `nextStep`：string，下一步引导步骤，仅点击下一步时发送。
+  - `result`：string，动作结果。当前取值为 `success` 或 `failed`，仅登录跳转或新人任务打开结果发送。
+  - `errorCode`：string，失败分类；仅失败时发送。当前取值包括 `login_redirect_failed`、`seed_failed`、`error`、`unknown`。
+  - `created`：boolean，新人任务是否为本次新建；仅新人任务打开成功时发送。
+  - `phase`：string，OpenClaw 网关阶段；仅登录后等待/完成网关重启时发送。
+  - `sawStartup`：boolean，是否观察到 OpenClaw 进入启动阶段；仅登录后完成网关等待时发送。
+  - `pendingAge`：number，跳转登录后未登录返回客户端时的等待毫秒数，四舍五入到整数。
+  - `charCount`：number，新人任务欢迎消息长度；仅本地流式动画开始/结束时发送。
+- 发送与容错口径：
+  - 事件由 Renderer 通过 `reportYdAnalyzer()` 发送，统一使用 `LogReporterAction.OnboardingAction`，走现有 `api:fetch` 链路、使用统计开关和通用参数。
+  - 采用 fire-and-forget，上报失败不影响引导页展示、登录跳转、新人任务创建或本地流式动画。
+  - 本地调试日志只记录动作类型，不记录完整事件参数。
+  - 新人任务流式动画只在开始和结束时发送事件，不按字符、分片或动画帧上报。
+- 隐私边界：不上传引导输入文案、新人任务欢迎正文、用户回复内容、会话 ID、用户 ID、文件名、本地路径、URL、token、API Key 或错误详情；`charCount` 只表示消息长度，不包含正文。
+
 ### 2.5 请求流程
 
 ```text
@@ -1067,9 +1213,22 @@ export const LogReporterActionPrefix = {
 
 `uuid` 复用已有 `installation_uuid`，不新增数据库表或迁移脚本。`firstKeyfrom` 和 `latestKeyfrom` 复用主进程现有渠道归因服务，并通过只读 IPC 暴露给 Renderer 日志模块。上述参数读取失败时不会阻断日志请求，只会省略对应字段。
 
-日志请求失败时只记录警告并返回 `false`，不会向调用方抛出异常，也不会阻断原业务流程。
+日志请求失败时只记录警告并返回 `false`，不会向调用方抛出异常，也不会阻断原业务流程。主进程请求设置 10 秒超时、20 个并发上限且不重试，避免网络长期无响应或 IM 短时高流量时积累未完成请求。
 
-Renderer 调试日志只记录事件 `action` 和请求结果，不记录完整请求地址或事件参数。主进程的通用 API 请求日志会移除 URL query 和 fragment 后再写入本地日志，避免 `log_Usid` 和事件参数进入本地日志文件。
+Renderer 调试日志只记录事件 `action` 和请求结果，不记录完整请求地址或事件参数。主进程的通用 `api:fetch` 请求日志对日志服务地址（`isAnalyticsEndpointUrl()`）不再记录请求和响应行，避免每个事件在本地主日志中额外产生流水；其他请求仍会在移除 URL query 和 fragment 后写入本地日志，`log_Usid` 和事件参数不会进入本地日志文件。网络异常仍按原有 `[api:fetch] … -> ERROR` 记录，便于排查。
+
+主进程事件不经过 Renderer 或 `api:fetch` IPC，流程如下：
+
+```text
+主进程业务模块
+  -> MainLogReporter.report(params)
+  -> 校验 action 和 usageAnalyticsEnabled
+  -> 补充通用参数、安装 ID、渠道归因、用户 ID、时间戳和基础环境参数
+  -> Electron session.fetch(GET)
+  -> 返回 true 或 false
+```
+
+主进程调试日志同样只记录事件 `action` 和请求结果，不记录完整请求地址、业务参数或用户标识。
 
 ### 2.6 设置开关
 
@@ -1081,7 +1240,7 @@ Renderer 调试日志只记录事件 `action` 和请求结果，不记录完整�
 
 配置字段为 `usageAnalyticsEnabled`，存储在现有 `app_config` 中，默认值为 `true`。老用户本地配置中没有该字段时，按开启处理，不需要新增数据库表或迁移脚本。
 
-用户关闭后，`reportYdAnalyzer()` 在发送请求前直接跳过并返回 `false`，不会访问日志服务。该跳过行为只写入一条 Renderer debug 日志，不影响业务流程。
+用户关闭后，`reportYdAnalyzer()` 和 `MainLogReporter.report()` 都会在发送请求前直接跳过并返回 `false`，不会访问日志服务。该跳过行为只写入 debug 日志，不影响业务流程。
 
 用户可见文案应避免使用“日志上报”，避免误解为上传本地日志文件。当前中文文案为：
 

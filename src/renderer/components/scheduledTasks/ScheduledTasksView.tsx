@@ -1,5 +1,7 @@
+import { XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { ScheduledTaskDataStatus } from '../../../scheduledTask/constants';
@@ -7,9 +9,16 @@ import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
 import { selectTask, setViewMode } from '../../store/slices/scheduledTaskSlice';
+import {
+  MANAGEMENT_BODY_TEXT,
+  MANAGEMENT_META_TEXT,
+  MANAGEMENT_PAGE_TITLE_TEXT,
+  MANAGEMENT_TITLE_TEXT,
+} from '../common/managementTypography';
 import ComposeIcon from '../icons/ComposeIcon';
+import PlusCircleIcon from '../icons/PlusCircleIcon';
+import SearchIcon from '../icons/SearchIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
-import WindowTitleBar from '../window/WindowTitleBar';
 import AllRunsHistory from './AllRunsHistory';
 import { getTaskAnalyticsParams, reportScheduledTaskAction } from './analytics';
 import DeleteConfirmModal from './DeleteConfirmModal';
@@ -27,9 +36,6 @@ interface ScheduledTasksViewProps {
 
 type TabType = 'tasks' | 'history';
 
-const pageGutterClass = 'px-6 sm:px-8 lg:px-10';
-const pageContentClass = 'mx-auto w-full max-w-[880px]';
-
 type DeleteTaskInfo = {
   id: string;
   name: string;
@@ -45,6 +51,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
 }) => {
   const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
+  const isWindows = window.electron.platform === 'win32';
   const viewMode = useSelector((state: RootState) => state.scheduledTask.viewMode);
   const selectedTaskId = useSelector((state: RootState) => state.scheduledTask.selectedTaskId);
   const tasks = useSelector((state: RootState) => state.scheduledTask.tasks);
@@ -52,6 +59,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
   const selectedTask = selectedTaskId ? (tasks.find(t => t.id === selectedTaskId) ?? null) : null;
   const [activeTab, setActiveTab] = useState<TabType>('tasks');
+  const [searchText, setSearchText] = useState('');
   const [createTemplate, setCreateTemplate] = useState<ScheduledTaskTemplate | null>(null);
   const [deleteTaskInfo, setDeleteTaskInfo] = useState<DeleteTaskInfo | null>(null);
   const isFormDirtyRef = useRef(false);
@@ -198,11 +206,14 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   const showTabs = viewMode === 'list' && !selectedTaskId;
 
   return (
-    <div className="flex flex-col h-full">
+    <div
+      data-skin-management-page="true"
+      className="relative z-10 flex flex-col bg-background h-full"
+    >
       {/* Header */}
       <div className="draggable flex h-12 items-center justify-between px-4 border-b border-border shrink-0">
         <div className="flex items-center space-x-3 h-8">
-          {isSidebarCollapsed && (
+          {isSidebarCollapsed && !isWindows && (
             <div className={`non-draggable flex items-center gap-1 ${isMac ? 'pl-[68px]' : ''}`}>
               <button
                 type="button"
@@ -230,108 +241,143 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
               <ArrowLeftIcon className="h-5 w-5" />
             </button>
           )}
-          <h1 className="text-lg font-semibold text-foreground">
+          <h1 className={`${MANAGEMENT_PAGE_TITLE_TEXT} font-semibold text-foreground`}>
             {i18nService.t('scheduledTasksTitle')}
           </h1>
         </div>
-        <WindowTitleBar inline />
       </div>
 
-      {/* Page header: title + subtitle + tabs + New Task button */}
-      {showTabs && (
-        <div className="shrink-0">
-          <div className={`${pageGutterClass} pt-5 pb-1`}>
-            <div className={pageContentClass}>
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <h2 className="text-xl font-semibold text-foreground">
-                    {i18nService.t('scheduledTasksTitle')}
-                  </h2>
-                  <p className="mt-1 text-sm text-secondary">
-                    {i18nService.t('scheduledTasksPageSubtitle')}
-                  </p>
-                </div>
-                {activeTab === 'tasks' && (
+      {/* List mode mirrors the other management pages (Kits / Skills):
+          description, then a sticky search + action + tabs toolbar. */}
+      {showTabs ? (
+        <div className="flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable]">
+          <div className="mx-auto w-full max-w-[1120px] px-8 py-6">
+            <div className="space-y-4">
+              <p className={`${MANAGEMENT_BODY_TEXT} pb-2 text-secondary`}>
+                {i18nService.t('scheduledTasksPageSubtitle')}
+              </p>
+
+              {/* Sticky toolbar: Search + New Task + tabs */}
+              <div
+                data-skin-management-toolbar="true"
+                className="sticky top-0 z-10 space-y-4 bg-background pb-2"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="relative flex-1">
+                    <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-secondary" />
+                    <input
+                      type="text"
+                      value={searchText}
+                      onChange={e => setSearchText(e.target.value)}
+                      placeholder={i18nService.t('scheduledTasksSearchPlaceholder')}
+                      className="w-full pl-9 pr-8 py-2 text-sm rounded-xl bg-surface text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                    {searchText && (
+                      <button
+                        type="button"
+                        onClick={() => setSearchText('')}
+                        aria-label={i18nService.t('scheduledTasksClearSearch')}
+                        title={i18nService.t('scheduledTasksClearSearch')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                      >
+                        <XCircleIconSolid className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                  {/* Unlike the skills page, creating is THE primary action here,
+                      so the button keeps the loud primary fill. The transparent
+                      border keeps its height in lockstep with the search input. */}
                   <button
                     type="button"
                     onClick={handleCreateNew}
                     disabled={taskListStatus !== ScheduledTaskDataStatus.Ready}
-                    className="shrink-0 rounded-lg bg-primary px-3.5 py-1.5 text-[14px] font-medium leading-5 text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-primary"
+                    className="px-3 py-2 text-sm rounded-xl border border-transparent transition-colors bg-primary text-white hover:bg-primary-hover flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-primary"
                   >
-                    {i18nService.t('scheduledTasksNewTask')}
+                    <PlusCircleIcon className="h-4 w-4" />
+                    <span>{i18nService.t('scheduledTasksNewTask')}</span>
                   </button>
-                )}
+                </div>
+
+                {/* Tasks / History tabs */}
+                <div className="flex items-center border-b border-border">
+                  {(['tasks', 'history'] as const).map(tab => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => handleTabChange(tab)}
+                      className={`relative px-2.5 pb-2.5 pt-0.5 ${MANAGEMENT_TITLE_TEXT} font-semibold transition-colors ${
+                        activeTab === tab
+                          ? 'text-foreground'
+                          : 'text-secondary hover:text-foreground'
+                      }`}
+                    >
+                      {i18nService.t(
+                        tab === 'tasks' ? 'scheduledTasksTabTasks' : 'scheduledTasksTabHistory',
+                      )}
+                      {tab === 'tasks' && tasks.length > 0 && (
+                        <span className={`ml-1.5 rounded-full bg-surface-raised px-1.5 py-0.5 ${MANAGEMENT_META_TEXT} font-medium text-secondary`}>
+                          {tasks.length}
+                        </span>
+                      )}
+                      <div
+                        className={`absolute bottom-[-1px] left-0 right-0 h-0.5 rounded-full transition-colors ${
+                          activeTab === tab ? 'bg-primary' : 'bg-transparent'
+                        }`}
+                      />
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="mt-4 inline-flex rounded-lg bg-surface-raised p-0.5">
-                {(['tasks', 'history'] as const).map(tab => (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => handleTabChange(tab)}
-                    className={`rounded-md px-3.5 py-1 text-[13px] leading-5 transition-colors ${
-                      activeTab === tab
-                        ? 'bg-surface text-foreground shadow-subtle font-medium'
-                        : 'text-secondary hover:text-foreground'
-                    }`}
-                  >
-                    {i18nService.t(
-                      tab === 'tasks' ? 'scheduledTasksTabTasks' : 'scheduledTasksTabHistory',
-                    )}
-                  </button>
-                ))}
-              </div>
+
+              {activeTab === 'history' ? (
+                <AllRunsHistory searchText={searchText} />
+              ) : (
+                <TaskList
+                  searchText={searchText}
+                  onClearSearch={() => setSearchText('')}
+                  onRequestDelete={handleRequestDelete}
+                  onCreateNew={handleCreateNew}
+                  onCreateFromTemplate={handleCreateFromTemplate}
+                />
+              )}
             </div>
           </div>
         </div>
+      ) : (
+        <div
+          className={`flex-1 min-h-0 ${viewMode === 'create' || viewMode === 'edit' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}
+        >
+          {viewMode === 'create' && (
+            <TaskForm
+              mode="create"
+              initialTemplate={createTemplate}
+              onCancel={handleBackToList}
+              onSaved={newTaskId => {
+                setCreateTemplate(null);
+                if (newTaskId) {
+                  dispatch(selectTask(newTaskId));
+                  dispatch(setViewMode('detail'));
+                } else {
+                  handleBackToList();
+                }
+              }}
+              onDirtyChange={handleFormDirtyChange}
+            />
+          )}
+          {viewMode === 'edit' && selectedTask && (
+            <TaskForm
+              mode="edit"
+              task={selectedTask}
+              onCancel={handleEditCancel}
+              onSaved={() => dispatch(setViewMode('detail'))}
+              onDirtyChange={handleFormDirtyChange}
+            />
+          )}
+          {viewMode === 'detail' && selectedTask && (
+            <TaskDetail task={selectedTask} onRequestDelete={handleRequestDelete} />
+          )}
+        </div>
       )}
-
-      {/* Content */}
-      <div
-        className={`flex-1 min-h-0 ${viewMode === 'create' || viewMode === 'edit' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}
-      >
-        {showTabs && activeTab === 'history' ? (
-          <AllRunsHistory />
-        ) : (
-          <>
-            {viewMode === 'list' && (
-              <TaskList
-                onRequestDelete={handleRequestDelete}
-                onCreateNew={handleCreateNew}
-                onCreateFromTemplate={handleCreateFromTemplate}
-              />
-            )}
-            {viewMode === 'create' && (
-              <TaskForm
-                mode="create"
-                initialTemplate={createTemplate}
-                onCancel={handleBackToList}
-                onSaved={newTaskId => {
-                  setCreateTemplate(null);
-                  if (newTaskId) {
-                    dispatch(selectTask(newTaskId));
-                    dispatch(setViewMode('detail'));
-                  } else {
-                    handleBackToList();
-                  }
-                }}
-                onDirtyChange={handleFormDirtyChange}
-              />
-            )}
-            {viewMode === 'edit' && selectedTask && (
-              <TaskForm
-                mode="edit"
-                task={selectedTask}
-                onCancel={handleEditCancel}
-                onSaved={() => dispatch(setViewMode('detail'))}
-                onDirtyChange={handleFormDirtyChange}
-              />
-            )}
-            {viewMode === 'detail' && selectedTask && (
-              <TaskDetail task={selectedTask} onRequestDelete={handleRequestDelete} />
-            )}
-          </>
-        )}
-      </div>
 
       {/* Delete confirmation modal */}
       {deleteTaskInfo && (
@@ -343,53 +389,55 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
       )}
 
       {/* Unsaved changes confirmation overlay (back arrow) */}
-      {showLeaveConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35">
-          <div
-            role="dialog"
-            aria-modal="true"
-            onClick={e => e.stopPropagation()}
-            className="w-full max-w-sm rounded-2xl bg-background border-border border shadow-modal p-5"
-          >
-            <h4 className="text-sm font-semibold text-foreground mb-2">
-              {i18nService.t('taskFormUnsavedChanges')}
-            </h4>
-            <p className="text-sm text-secondary mb-4">{i18nService.t('taskFormLeaveConfirm')}</p>
-            <div className="flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  reportScheduledTaskAction('form_unsaved_confirm_cancel', {
-                    source: 'scheduled_tasks_view',
-                    activeTab,
-                    viewMode,
-                  });
-                  setShowLeaveConfirm(false);
-                }}
-                className="px-4 py-2 text-sm rounded-lg text-secondary hover:bg-surface-raised transition-colors border border-border"
-              >
-                {i18nService.t('taskFormStay')}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowLeaveConfirm(false);
-                  reportScheduledTaskAction('form_unsaved_confirm_submit', {
-                    source: 'scheduled_tasks_view',
-                    activeTab,
-                    viewMode,
-                  });
-                  pendingBackActionRef.current?.();
-                  pendingBackActionRef.current = null;
-                }}
-                className="px-4 py-2 text-sm font-medium bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
-              >
-                {i18nService.t('taskFormLeave')}
-              </button>
+      {showLeaveConfirm &&
+        createPortal(
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35">
+            <div
+              role="dialog"
+              aria-modal="true"
+              onClick={e => e.stopPropagation()}
+              className="w-full max-w-sm rounded-2xl bg-background border-border border shadow-modal p-5"
+            >
+              <h4 className="text-sm font-semibold text-foreground mb-2">
+                {i18nService.t('taskFormUnsavedChanges')}
+              </h4>
+              <p className="text-sm text-secondary mb-4">{i18nService.t('taskFormLeaveConfirm')}</p>
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    reportScheduledTaskAction('form_unsaved_confirm_cancel', {
+                      source: 'scheduled_tasks_view',
+                      activeTab,
+                      viewMode,
+                    });
+                    setShowLeaveConfirm(false);
+                  }}
+                  className="px-4 py-2 text-sm rounded-lg text-secondary hover:bg-surface-raised transition-colors border border-border"
+                >
+                  {i18nService.t('taskFormStay')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowLeaveConfirm(false);
+                    reportScheduledTaskAction('form_unsaved_confirm_submit', {
+                      source: 'scheduled_tasks_view',
+                      activeTab,
+                      viewMode,
+                    });
+                    pendingBackActionRef.current?.();
+                    pendingBackActionRef.current = null;
+                  }}
+                  className="px-4 py-2 text-sm font-medium bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                >
+                  {i18nService.t('taskFormLeave')}
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 };

@@ -5,6 +5,11 @@ import { i18nService } from '@/services/i18n';
 import type { Artifact, ArtifactType } from '@/types/artifact';
 
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
+import { ArtifactPreviewGlobeIcon } from './ArtifactPreviewIdentity';
+import {
+  getPreviewCardDescriptor,
+  PreviewCardIconKind,
+} from './previewCardPolicy';
 
 const t = (key: string) => i18nService.t(key);
 
@@ -31,7 +36,7 @@ const TYPE_LABEL_KEYS: Record<ArtifactType, string> = {
   markdown: 'artifactTypeMarkdown',
   text: 'artifactTypeText',
   code: 'artifactCode',
-  'local-service': 'artifactTypeHtml',
+  'local-service': 'artifactTypeLocalService',
 };
 
 function getShortPath(filePath: string): string {
@@ -102,6 +107,7 @@ const FileDirectoryView: React.FC<FileDirectoryViewProps> = ({ artifacts, select
               idx === 0 || artifact.type !== sortedAndFiltered[idx - 1].type
             );
             const fileName = artifact.fileName || artifact.title;
+            const descriptor = getPreviewCardDescriptor(artifact);
             return (
               <React.Fragment key={artifact.id}>
                 {showGroupHeader && (
@@ -114,7 +120,11 @@ const FileDirectoryView: React.FC<FileDirectoryViewProps> = ({ artifacts, select
                   className={`flex items-center gap-2 px-3 py-2 cursor-pointer text-sm transition-colors
                     ${artifact.id === selectedId ? 'bg-primary/10 text-primary' : 'hover:bg-surface text-foreground'}`}
                 >
-                  <FileTypeIcon fileName={fileName} className="h-4 w-4 shrink-0" />
+                  {descriptor.iconKind === PreviewCardIconKind.Globe ? (
+                    <ArtifactPreviewGlobeIcon className="h-4 w-4 shrink-0 text-primary" />
+                  ) : (
+                    <FileTypeIcon fileName={descriptor.iconFileName} className="h-4 w-4 shrink-0" />
+                  )}
                   <div className="flex-1 min-w-0">
                     <div className="truncate">
                       {fileName}

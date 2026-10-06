@@ -4,7 +4,7 @@ index 077593828b..eae686a64b 100644
 +++ b/src/agents/embedded-agent-runner/run/attempt.ts
 @@ -542,8 +542,6 @@ export {
  };
- 
+
  const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 -const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
 -
@@ -77,7 +77,7 @@ index cf9d51c627..db91f7095b 100644
 +    expect(messages).toEqual([...prefix, ...suffix]);
 +  });
  });
- 
+
  describe("truncateOversizedToolResultsInSession", () => {
 diff --git a/src/agents/embedded-agent-runner/tool-result-truncation.ts b/src/agents/embedded-agent-runner/tool-result-truncation.ts
 index 848b3d5f0d..464e27a45b 100644

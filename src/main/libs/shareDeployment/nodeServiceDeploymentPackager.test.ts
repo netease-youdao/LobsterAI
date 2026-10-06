@@ -1,3 +1,4 @@
+import extractZip from 'extract-zip';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -18,7 +19,12 @@ vi.mock('electron', () => ({
   },
 }));
 
-import { ShareDeploymentKind, ShareDeploymentPackageManager } from '../../../shared/shareDeployment/constants';
+import {
+  ShareDeploymentKind,
+  ShareDeploymentPackageManager,
+  ShareDeploymentPersistenceBindingKind,
+  ShareDeploymentPersistenceProvider,
+} from '../../../shared/shareDeployment/constants';
 import { packageNodeServiceDeployment } from './nodeServiceDeploymentPackager';
 
 const tempDirectories: string[] = [];
@@ -81,6 +87,7 @@ describe('packageNodeServiceDeployment', () => {
         'fs.mkdirSync(".next/standalone", { recursive: true });',
         'fs.mkdirSync(".next/static", { recursive: true });',
         'fs.writeFileSync(".next/standalone/server.js", "console.log(\\"server\\")");',
+        'fs.writeFileSync(".next/standalone/.env.production", "SECRET=test");',
         'fs.writeFileSync(".next/static/app.js", "console.log(\\"static\\")");',
       ].join('\n'),
     );
@@ -97,6 +104,8 @@ describe('packageNodeServiceDeployment', () => {
       expect(result.analysis.startCommand).toBe('node server.js');
       expect(result.deploymentKind).toBe(ShareDeploymentKind.NodeService);
       expect(result.totalFiles).toBe(2);
+      expect(result.analysis.excludedCount).toBeGreaterThan(0);
+      expect(result.analysis.warnings.join('\n')).not.toContain('excluded from the deployment package');
 
       await fs.promises.rm(path.dirname(result.archivePath), { recursive: true, force: true });
     } finally {
@@ -106,6 +115,56 @@ describe('packageNodeServiceDeployment', () => {
         process.env.NODE_ENV = previousNodeEnv;
       }
     }
+  });
+
+  test('includes selected service data in Next standalone packages', async () => {
+    const projectDirectory = await makeTempProject({
+      name: 'next-persistence-service',
+      scripts: {
+        build: 'node build.js',
+      },
+      dependencies: {
+        next: '14.0.0',
+      },
+    });
+    await writeFile(
+      projectDirectory,
+      'build.js',
+      [
+        'const fs = require("fs");',
+        'fs.mkdirSync(".next/standalone", { recursive: true });',
+        'fs.mkdirSync(".next/static", { recursive: true });',
+        'fs.writeFileSync(".next/standalone/server.js", "console.log(\\"server\\")");',
+        'fs.writeFileSync(".next/static/app.js", "console.log(\\"static\\")");',
+      ].join('\n'),
+    );
+    await writeFile(projectDirectory, 'data/seed.json', '{"version":2}');
+
+    const result = await packageNodeServiceDeployment({
+      projectDirectory,
+      localServiceUrl: 'http://localhost:3000',
+      installCommand: '',
+      buildCommand: 'node build.js',
+      port: 3000,
+      persistence: {
+        enabled: true,
+        provider: ShareDeploymentPersistenceProvider.Filesystem,
+        bindings: [{
+          appPath: 'data',
+          dataPath: 'data',
+          kind: ShareDeploymentPersistenceBindingKind.Directory,
+        }],
+      },
+    });
+    const extractedDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lobster-node-package-extract-'));
+    tempDirectories.push(extractedDirectory);
+    await extractZip(result.archivePath, { dir: extractedDirectory });
+
+    expect(result.totalFiles).toBe(3);
+    await expect(fs.promises.readFile(path.join(extractedDirectory, 'data/seed.json'), 'utf8'))
+      .resolves.toBe('{"version":2}');
+
+    await fs.promises.rm(path.dirname(result.archivePath), { recursive: true, force: true });
   });
 
   test('packages static framework builds as static site output', async () => {

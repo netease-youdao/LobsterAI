@@ -112,7 +112,7 @@ register(['.pdf'], { icon: PdfIcon, color: '#FF0000', label: 'PDF' });
 // Archive
 register(['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2'], { icon: ArchiveIcon, color: '#F59E0B', label: 'Archive' });
 // Code
-register(['.js', '.ts', '.tsx', '.jsx', '.py', '.java', '.go', '.rs', '.c', '.cpp', '.h', '.css', '.html', '.xml', '.sh', '.bat', '.rb', '.php', '.swift', '.kt'], { icon: CodeFileIcon, color: '#8B5CF6', label: 'Code' });
+register(['.js', '.ts', '.tsx', '.jsx', '.py', '.java', '.go', '.rs', '.c', '.cpp', '.h', '.css', '.html', '.htm', '.xml', '.sh', '.bat', '.rb', '.php', '.swift', '.kt'], { icon: CodeFileIcon, color: '#8B5CF6', label: 'Code' });
 // Text / Config
 register(['.txt', '.md', '.log', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.env', '.gitignore'], { icon: TextFileIcon, color: '#6B7280', label: 'Text' });
 // Subtitle

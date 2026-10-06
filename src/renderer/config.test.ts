@@ -90,6 +90,18 @@ test('defaultConfig gives DeepSeek V4 models 1M context', () => {
   ]);
 });
 
+test('defaultConfig puts Kimi K3 first for Moonshot', () => {
+  expect(defaultConfig.providers?.[ProviderName.Moonshot]?.models?.[0]).toEqual({
+    id: 'kimi-k3',
+    name: 'Kimi K3',
+    supportsImage: true,
+    supportsVideo: true,
+    supportsThinking: true,
+    contextWindow: 1_048_576,
+    maxTokens: 1_048_576,
+  });
+});
+
 test('defaultConfig limits Xiaomi models to V2.5 with 1M context', () => {
   expect(defaultConfig.providers?.[ProviderName.Xiaomi]?.models).toEqual([
     { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },

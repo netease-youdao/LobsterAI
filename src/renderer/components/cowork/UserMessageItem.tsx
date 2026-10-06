@@ -1,8 +1,12 @@
 import { PhotoIcon } from '@heroicons/react/24/outline';
+import type { CoworkBrowserAnnotationMessageBatch } from '@shared/cowork/browserAnnotations';
 import React, { useCallback, useMemo, useState } from 'react';
 
 import { hasGoalSettingMessageMetadata } from '../../../common/goalCommandDisplay';
-import type { CoworkImageAttachmentPreview } from '../../../shared/cowork/imageAttachments';
+import {
+  type CoworkImageAttachmentPreview,
+  isBrowserAnnotationTransportImage,
+} from '../../../shared/cowork/imageAttachments';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
 import type { KitReference } from '../../../shared/kit/constants';
 import { copyTextToClipboard } from '../../services/clipboard';
@@ -13,11 +17,16 @@ import type { MarketplaceKit } from '../../types/kit';
 import type { Skill } from '../../types/skill';
 import { formatMessageDateTime } from '../../utils/tokenFormat';
 import { parseUserMessageForDisplay } from '../../utils/userMessageDisplay';
+import { extractUserMessageFileAttachments } from '../../utils/userMessageFileAttachments';
 import EditIcon from '../icons/EditIcon';
 import GoalIcon from '../icons/GoalIcon';
 import MessageCopyIcon from '../icons/MessageCopyIcon';
 import SidebarKitsIcon from '../icons/SidebarKitsIcon';
 import SkillIcon from '../icons/SkillIcon';
+import BrowserAnnotationAttachmentBadge from './BrowserAnnotationAttachmentBadge';
+import BrowserAnnotationMessageAttachments, {
+  type BrowserAnnotationAttachmentOpenPayload,
+} from './BrowserAnnotationMessageAttachments';
 import { reportConversationMessageAction } from './conversationAnalytics';
 import ImagePreviewModal, { type ImagePreviewSource } from './ImagePreviewModal';
 import {
@@ -28,6 +37,7 @@ import {
 } from './messageDisplayUtils';
 import SelectedTextSnippetBadge from './SelectedTextSnippetBadge';
 import UserMessageContent from './UserMessageContent';
+import UserMessageFileAttachments from './UserMessageFileAttachments';
 
 // ── CopyButton (local) ──────────────────────────────────────────────────────
 
@@ -122,7 +132,7 @@ const UserMessageSkillBadges: React.FC<{ skills: Skill[] }> = ({ skills }) => {
       {skills.map(skill => (
         <div
           key={skill.id}
-          className="inline-flex h-7 max-w-[240px] items-center gap-1.5 rounded-md bg-primary-muted px-2.5 text-[13px] font-normal leading-none text-foreground"
+          className="inline-flex h-7 max-w-[240px] items-center gap-1.5 rounded-md bg-primary-muted px-2.5 text-[13px] font-normal leading-5 text-foreground"
           title={skill.description}
         >
           <SkillIcon className="h-3.5 w-3.5 shrink-0 text-primary" />
@@ -145,7 +155,7 @@ const UserMessageKitBadges: React.FC<{ kitReferences: KitReference[] }> = ({ kit
         return (
           <div
             key={kitReference.uri || kitReference.id}
-            className="inline-flex h-7 max-w-[240px] items-center gap-1.5 rounded-md bg-primary-muted px-2.5 text-[13px] font-normal leading-none text-foreground"
+            className="inline-flex h-7 max-w-[240px] items-center gap-1.5 rounded-md bg-primary-muted px-2.5 text-[13px] font-normal leading-5 text-foreground"
             title={kitReference.uri}
           >
             <SidebarKitsIcon className="h-3.5 w-3.5 shrink-0 text-primary" />
@@ -179,9 +189,13 @@ const UserMessageItem: React.FC<{
   message: CoworkMessage;
   skills: Skill[];
   marketplaceKits?: MarketplaceKit[];
+  /** Session the message belongs to; used to resolve browser annotation screenshot assets. */
+  sessionId?: string;
   onReEdit?: (message: CoworkMessage) => void;
   onLocateSelectedText?: (sourceMessageId: string) => void;
-}> = React.memo(({ message, skills, marketplaceKits = [], onReEdit, onLocateSelectedText }) => {
+  /** Opens the annotation restore view in the artifact panel. */
+  onOpenAnnotation?: (message: CoworkMessage, payload: BrowserAnnotationAttachmentOpenPayload) => void;
+}> = React.memo(({ message, skills, marketplaceKits = [], sessionId, onReEdit, onLocateSelectedText, onOpenAnnotation }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ImagePreviewSource | null>(null);
   const modelLabel = getMessageModelLabel(message.metadata);
@@ -199,12 +213,12 @@ const UserMessageItem: React.FC<{
 
   const metadata = message.metadata as CoworkMessageMetadata | undefined;
   const isGoalSettingMessage = hasGoalSettingMessageMetadata(metadata);
-  const displayContent = useMemo(
-    () => parseUserMessageForDisplay(message.content || '', {
+  const { text: displayContent, attachments: fileAttachments } = useMemo(
+    () => extractUserMessageFileAttachments(parseUserMessageForDisplay(message.content || '', {
       localMediaAttachments: Array.isArray(metadata?.localMediaAttachments)
         ? metadata.localMediaAttachments
         : [],
-    }),
+    })),
     [message.content, metadata?.localMediaAttachments]
   );
 
@@ -219,13 +233,23 @@ const UserMessageItem: React.FC<{
     : buildKitReferences(messageKitIds, marketplaceKits);
 
   const selectedTextSnippets = (metadata?.selectedTextSnippets ?? []) as CoworkSelectedTextSnippet[];
+  const browserAnnotations = (metadata?.browserAnnotations ?? []) as CoworkBrowserAnnotationMessageBatch[];
+  const browserAnnotationCount = browserAnnotations.reduce(
+    (total, batch) => total + batch.annotations.length,
+    0,
+  );
   const imageAttachmentPreviews = Array.isArray(metadata?.imageAttachmentPreviews)
     ? metadata.imageAttachmentPreviews as CoworkImageAttachmentPreview[]
     : [];
   const legacyImageAttachments = (metadata?.imageAttachments ?? []) as CoworkImageAttachment[];
-  const displayImageAttachments = imageAttachmentPreviews.length > 0
+  const allImageAttachments = imageAttachmentPreviews.length > 0
     ? imageAttachmentPreviews
     : legacyImageAttachments;
+  // Annotation transport screenshots already render as numbered annotation
+  // cards; keep them out of the regular attachment row.
+  const displayImageAttachments = browserAnnotationCount > 0
+    ? allImageAttachments.filter(image => !isBrowserAnnotationTransportImage(image))
+    : allImageAttachments;
   const hasCapabilityBadges = messageKitReferences.length > 0 || messageSkills.length > 0;
   const handleImagePreviewOpen = useCallback((image: ImagePreviewSource) => {
     reportConversationMessageAction({
@@ -241,6 +265,23 @@ const UserMessageItem: React.FC<{
     });
     onReEdit?.(message);
   }, [message, onReEdit]);
+  const handleFileAttachmentReveal = useCallback(() => {
+    reportConversationMessageAction({
+      actionType: 'reveal_message_file',
+      message,
+    });
+  }, [message]);
+  const handleOpenAnnotationAttachment = useCallback((payload: BrowserAnnotationAttachmentOpenPayload) => {
+    reportConversationMessageAction({
+      actionType: 'open_message_annotation',
+      message,
+    });
+    if (onOpenAnnotation) {
+      onOpenAnnotation(message, payload);
+      return;
+    }
+    setExpandedImage({ src: payload.src, name: payload.name });
+  }, [message, onOpenAnnotation]);
 
   return (
     <div
@@ -255,9 +296,29 @@ const UserMessageItem: React.FC<{
         <div>
           <div className="flex items-start gap-3 flex-row-reverse">
             <div className="w-full min-w-0 flex flex-col items-end">
-              <div className="w-fit max-w-full rounded-2xl px-4 py-2.5 bg-surface text-foreground shadow-subtle">
+              <div className="w-fit max-w-full rounded-2xl px-4 py-2.5 bg-chat-user text-chat-user-foreground shadow-subtle">
+                {browserAnnotationCount > 0 && sessionId && (
+                  <BrowserAnnotationMessageAttachments
+                    draftKey={sessionId}
+                    batches={browserAnnotations}
+                    onOpen={handleOpenAnnotationAttachment}
+                    className="mb-2"
+                  />
+                )}
+                {browserAnnotationCount > 0 && (
+                  <div className={(selectedTextSnippets.length > 0 || displayContent?.trim() || displayImageAttachments.length > 0 || fileAttachments.length > 0 || hasCapabilityBadges) ? 'mb-2' : ''}>
+                    <BrowserAnnotationAttachmentBadge
+                      draftKey={sessionId ?? ''}
+                      batches={browserAnnotations}
+                      align="right"
+                      onPreviewImage={setExpandedImage}
+                      onOpenAnnotation={handleOpenAnnotationAttachment}
+                      readOnly
+                    />
+                  </div>
+                )}
                 {selectedTextSnippets.length > 0 && (
-                  <div className={(displayContent?.trim() || displayImageAttachments.length > 0 || hasCapabilityBadges) ? 'mb-2' : ''}>
+                  <div className={(displayContent?.trim() || displayImageAttachments.length > 0 || fileAttachments.length > 0 || hasCapabilityBadges) ? 'mb-2' : ''}>
                     <SelectedTextSnippetBadge
                       snippets={selectedTextSnippets}
                       align="right"
@@ -266,7 +327,7 @@ const UserMessageItem: React.FC<{
                   </div>
                 )}
                 {hasCapabilityBadges && (
-                  <div className={(displayContent?.trim() || displayImageAttachments.length > 0) ? 'mb-2' : ''}>
+                  <div className={(displayContent?.trim() || displayImageAttachments.length > 0 || fileAttachments.length > 0) ? 'mb-2' : ''}>
                     <UserMessageCapabilityBadges
                       kitReferences={messageKitReferences}
                       skills={messageSkills}
@@ -274,11 +335,13 @@ const UserMessageItem: React.FC<{
                   </div>
                 )}
                 {displayContent?.trim() && (
-                  <UserMessageContent
-                    content={displayContent}
-                    className="max-w-none"
-                    onImageClick={handleImagePreviewOpen}
-                  />
+                  <div data-cowork-search-message-id={message.id}>
+                    <UserMessageContent
+                      content={displayContent}
+                      className="max-w-none"
+                      onImageClick={handleImagePreviewOpen}
+                    />
+                  </div>
                 )}
                 {displayImageAttachments.length > 0 && (
                   <div className={`flex flex-wrap gap-2 ${displayContent?.trim() ? 'mt-2' : ''}`}>
@@ -302,6 +365,13 @@ const UserMessageItem: React.FC<{
                       </div>
                     ))}
                   </div>
+                )}
+                {fileAttachments.length > 0 && (
+                  <UserMessageFileAttachments
+                    attachments={fileAttachments}
+                    className={(displayContent?.trim() || displayImageAttachments.length > 0) ? 'mt-2' : ''}
+                    onReveal={handleFileAttachmentReveal}
+                  />
                 )}
               </div>
               <div className="flex w-full items-center justify-end gap-2">

@@ -14,7 +14,7 @@
           "id": "pptx-content-research"
         },
         {
-          "id": "pptx-education"
+          "id": "pptx-training"
         },
         {
           "id": "pptx-ai-intro"
@@ -42,22 +42,22 @@
       ]
     },
     {
-      "id": "education",
-      "icon": "AcademicCapIcon",
+      "id": "doc-writing",
+      "icon": "DocumentTextIcon",
       "color": "#10B981",
-      "skillMapping": "frontend-design",
+      "skillMapping": "docx",
       "prompts": [
         {
-          "id": "edu-english-words"
+          "id": "doc-meeting-minutes"
         },
         {
-          "id": "edu-math-explain"
+          "id": "doc-weekly-report"
         },
         {
-          "id": "edu-essay-writing"
+          "id": "doc-proposal"
         },
         {
-          "id": "edu-knowledge-explain"
+          "id": "doc-polish"
         }
       ]
     },

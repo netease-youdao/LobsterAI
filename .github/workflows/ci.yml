@@ -30,6 +30,7 @@ jobs:
           filters: |
             renderer:
               - 'src/renderer/**'
+              - 'src/shared/**'
               - 'vite.config.ts'
               - 'tsconfig.json'
               - 'tailwind.config.js'
@@ -37,8 +38,11 @@ jobs:
             main:
               - 'src/main/**'
               - 'src/common/**'
+              - 'src/shared/**'
               - 'electron-tsconfig.json'
               - 'src/main/preload.ts'
+              - 'scripts/*openclaw*'
+              - 'scripts/patches/**'
             skills:
               - 'SKILLs/**'
             scripts:
@@ -80,7 +84,10 @@ jobs:
           if [ -n "$FILES" ]; then
             echo "Linting changed files:"
             echo "$FILES"
-            echo "$FILES" | xargs -d '\n' npx eslint --ext ts,tsx --report-unused-disable-directives --max-warnings 0
+            # --no-warn-ignored: changed-file lists can include paths the eslint
+            # config deliberately ignores (e.g. SKILLs/); skip them silently
+            # instead of failing --max-warnings 0 with "File ignored" warnings.
+            echo "$FILES" | xargs -d '\n' npx eslint --ext ts,tsx --report-unused-disable-directives --max-warnings 0 --no-warn-ignored
           else
             echo "No TypeScript files changed, skipping lint"
           fi

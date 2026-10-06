@@ -67,6 +67,39 @@ describe('startAuthLocalCallback', () => {
     }
   });
 
+  test('reuses the active callback so a repeated login does not invalidate the first page', async () => {
+    const codes: string[] = [];
+    const firstCallback = await startAuthLocalCallback({
+      onCode: code => codes.push(code),
+    });
+    const secondCallback = await startAuthLocalCallback({ onCode: () => {} });
+
+    expect(secondCallback.redirectUri).toBe(firstCallback.redirectUri);
+    expect(secondCallback.state).toBe(firstCallback.state);
+
+    const response = await fetch(
+      `${firstCallback.redirectUri}?code=first-page-code&state=${firstCallback.state}`,
+    );
+
+    expect(response.status).toBe(200);
+    expect(codes).toEqual(['first-page-code']);
+  });
+
+  test('coalesces callback servers that start concurrently', async () => {
+    const codes: string[] = [];
+    const [firstCallback, secondCallback] = await Promise.all([
+      startAuthLocalCallback({ onCode: code => codes.push(code) }),
+      startAuthLocalCallback({ onCode: () => {} }),
+    ]);
+
+    try {
+      expect(secondCallback.redirectUri).toBe(firstCallback.redirectUri);
+      expect(secondCallback.state).toBe(firstCallback.state);
+    } finally {
+      await firstCallback.close();
+    }
+  });
+
   test('delivers code when callback path and state are valid', async () => {
     const codes: string[] = [];
     const callback = await startAuthLocalCallback({

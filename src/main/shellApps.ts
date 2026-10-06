@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import type { ShellGetBrowserAppsInput } from '../shared/shell/constants';
+import { resolveShellAppFileIconSize } from './shellAppIconPolicy';
 
 export interface AppInfo {
   name: string;
@@ -16,14 +17,57 @@ export interface AppInfo {
 }
 
 const appCache = new Map<string, AppInfo[]>();
+const pendingAppFetches = new Map<string, Promise<AppInfo[]>>();
+const browserAppsCache = new Map<string, AppInfo[]>();
+const pendingBrowserAppFetches = new Map<string, Promise<AppInfo[]>>();
+const iconDataUrlCache = new Map<string, string>();
+const MAX_FILE_APP_CACHE_ENTRIES = 64;
+const MAX_BROWSER_APP_CACHE_ENTRIES = 32;
+const MAX_ICON_DATA_URL_CACHE_ENTRIES = 128;
+
+const getBoundedCacheEntry = <K, V>(cache: Map<K, V>, key: K): V | undefined => {
+  const value = cache.get(key);
+  if (value === undefined) return undefined;
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
+};
+
+const setBoundedCacheEntry = <K, V>(
+  cache: Map<K, V>,
+  key: K,
+  value: V,
+  maxEntries: number,
+): void => {
+  // Refresh insertion order so frequently reused entries survive FIFO
+  // eviction without retaining every project or extension for process life.
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > maxEntries) {
+    const oldestKey = cache.keys().next().value as K | undefined;
+    if (oldestKey === undefined) break;
+    cache.delete(oldestKey);
+  }
+};
 
 export async function getAppsForFile(filePath: string): Promise<AppInfo[]> {
   const ext = path.extname(filePath).toLowerCase();
   if (!ext) return [];
 
-  const cached = appCache.get(ext);
+  const cached = getBoundedCacheEntry(appCache, ext);
   if (cached) return cached;
 
+  const pending = pendingAppFetches.get(ext);
+  if (pending) return pending;
+
+  const fetchPromise = fetchAppsForFile(filePath, ext).finally(() => {
+    pendingAppFetches.delete(ext);
+  });
+  pendingAppFetches.set(ext, fetchPromise);
+  return fetchPromise;
+}
+
+async function fetchAppsForFile(filePath: string, ext: string): Promise<AppInfo[]> {
   let apps: AppInfo[] = [];
   try {
     switch (process.platform) {
@@ -48,13 +92,28 @@ export async function getAppsForFile(filePath: string): Promise<AppInfo[]> {
     delete a.iconPath;
   }
 
-  if (apps.length > 0) {
-    appCache.set(ext, apps);
-  }
+  // Empty results are valid too. Caching them avoids repeatedly probing the
+  // OS for an unsupported extension every time an artifact card mounts.
+  setBoundedCacheEntry(appCache, ext, apps, MAX_FILE_APP_CACHE_ENTRIES);
   return apps;
 }
 
 export async function getBrowserApps(input: ShellGetBrowserAppsInput = {}): Promise<AppInfo[]> {
+  const cacheKey = input.projectDirectory?.trim() || '';
+  const cached = getBoundedCacheEntry(browserAppsCache, cacheKey);
+  if (cached) return cached;
+
+  const pending = pendingBrowserAppFetches.get(cacheKey);
+  if (pending) return pending;
+
+  const fetchPromise = fetchBrowserApps(input, cacheKey).finally(() => {
+    pendingBrowserAppFetches.delete(cacheKey);
+  });
+  pendingBrowserAppFetches.set(cacheKey, fetchPromise);
+  return fetchPromise;
+}
+
+async function fetchBrowserApps(input: ShellGetBrowserAppsInput, cacheKey: string): Promise<AppInfo[]> {
   await ensureBrowserProbeFile();
   const browserProbeFile = await findProjectHtmlProbeFile(input.projectDirectory) ?? BROWSER_APPS_PROBE_FILE;
   const apps = await getAppsForFile(browserProbeFile);
@@ -71,6 +130,12 @@ export async function getBrowserApps(input: ShellGetBrowserAppsInput = {}): Prom
   for (const appInfo of result) {
     delete appInfo.iconPath;
   }
+  setBoundedCacheEntry(
+    browserAppsCache,
+    cacheKey,
+    result,
+    MAX_BROWSER_APP_CACHE_ENTRIES,
+  );
   return result;
 }
 
@@ -707,6 +772,7 @@ function parseDesktopEntry(content: string): Record<string, string> {
 
 async function fetchIcons(apps: AppInfo[]): Promise<void> {
   const tasks = apps.map(async (appInfo) => {
+    if (appInfo.icon) return;
     try {
       const icon = await extractIcon(appInfo);
       if (icon) appInfo.icon = icon;
@@ -717,20 +783,45 @@ async function fetchIcons(apps: AppInfo[]): Promise<void> {
   await Promise.all(tasks);
 }
 
+// Rendered at up to ~18px CSS (36px retina); 64px keeps payloads small and crisp.
+const ICON_RASTER_SIZE = '64';
+
 async function extractIcon(appInfo: AppInfo): Promise<string | null> {
   // macOS: use sips to convert .icns → PNG → data URL
   const macOSIconPath = process.platform === 'darwin'
     ? appInfo.iconPath || findMacOSAppIconPath(appInfo.path)
     : undefined;
+  const cacheKey = macOSIconPath || appInfo.path;
+  const cached = getBoundedCacheEntry(iconDataUrlCache, cacheKey);
+  if (cached) return cached;
   if (macOSIconPath && fs.existsSync(macOSIconPath)) {
     const png = await icnsToPng(macOSIconPath);
-    if (png) return png;
+    if (png) {
+      setBoundedCacheEntry(
+        iconDataUrlCache,
+        cacheKey,
+        png,
+        MAX_ICON_DATA_URL_CACHE_ENTRIES,
+      );
+      return png;
+    }
   }
-  // Fallback (mainly Windows): use Electron's app.getFileIcon
+  // Electron does not support the "large" file icon size on macOS.
   try {
     if (!app.isReady()) return null;
-    const img = await app.getFileIcon(appInfo.path, { size: 'normal' });
-    if (!img.isEmpty()) return img.toDataURL();
+    const img = await app.getFileIcon(appInfo.path, {
+      size: resolveShellAppFileIconSize(process.platform),
+    });
+    if (!img.isEmpty()) {
+      const dataUrl = img.toDataURL();
+      setBoundedCacheEntry(
+        iconDataUrlCache,
+        cacheKey,
+        dataUrl,
+        MAX_ICON_DATA_URL_CACHE_ENTRIES,
+      );
+      return dataUrl;
+    }
   } catch {
     // ignore
   }
@@ -741,7 +832,11 @@ async function icnsToPng(icnsPath: string): Promise<string | null> {
   const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lobsterai-app-icon-'));
   const pngPath = path.join(tmpDir, 'icon.png');
   try {
-    await execFileAsync('/usr/bin/sips', ['-s', 'format', 'png', icnsPath, '--out', pngPath], 5000);
+    await execFileAsync(
+      '/usr/bin/sips',
+      ['-s', 'format', 'png', '-z', ICON_RASTER_SIZE, ICON_RASTER_SIZE, icnsPath, '--out', pngPath],
+      5000,
+    );
     const buf = await fs.promises.readFile(pngPath);
     if (buf.byteLength === 0) return null;
     return `data:image/png;base64,${buf.toString('base64')}`;

@@ -10,6 +10,8 @@ import yazl from 'yazl';
 import {
   ShareDeploymentKind,
   ShareDeploymentPackageManager,
+  type ShareDeploymentPersistence,
+  ShareDeploymentPersistenceBindingKind,
   type ShareDeploymentProjectAnalysis,
 } from '../../../shared/shareDeployment/constants';
 import { getNodeToolEnv } from '../coworkUtil';
@@ -52,6 +54,7 @@ export interface NodeServiceDeploymentPackageInput {
   buildCommand?: string;
   startCommand?: string;
   port?: number;
+  persistence?: ShareDeploymentPersistence;
 }
 
 export interface NodeServiceDeploymentPackageResult {
@@ -440,6 +443,76 @@ function normalizeRelativeArchiveName(value: string): string | null {
   return normalized;
 }
 
+async function includePersistenceEntries(
+  collection: NodeServicePackageCollection,
+  sourceEntries: NodeServicePackageEntry[],
+  projectDirectory: string,
+  persistence?: ShareDeploymentPersistence,
+): Promise<NodeServicePackageCollection> {
+  if (!persistence?.enabled || persistence.bindings.length === 0) {
+    return collection;
+  }
+
+  const selectedEntries = new Map<string, NodeServicePackageEntry>();
+  for (const binding of persistence.bindings) {
+    const appPath = normalizeRelativeArchiveName(binding.appPath);
+    if (!appPath) continue;
+    const directoryPrefix = `${appPath}/`;
+    for (const entry of sourceEntries) {
+      const selected = binding.kind === ShareDeploymentPersistenceBindingKind.Directory
+        ? entry.archiveName.startsWith(directoryPrefix)
+        : entry.archiveName === appPath;
+      if (selected) {
+        selectedEntries.set(entry.archiveName, entry);
+      }
+    }
+  }
+
+  if (selectedEntries.size === 0) {
+    return collection;
+  }
+
+  const entriesByArchiveName = new Map(
+    collection.entries.map(entry => [entry.archiveName, entry]),
+  );
+  let totalBytes = collection.totalBytes;
+  for (const sourceEntry of selectedEntries.values()) {
+    if (entriesByArchiveName.has(sourceEntry.archiveName)) continue;
+    const absolutePath = path.join(projectDirectory, sourceEntry.archiveName);
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.stat(absolutePath);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) continue;
+    entriesByArchiveName.set(sourceEntry.archiveName, {
+      absolutePath,
+      archiveName: sourceEntry.archiveName,
+      size: stat.size,
+    });
+    totalBytes += stat.size;
+  }
+
+  const blockers = [...collection.blockers];
+  if (entriesByArchiveName.size > NODE_SERVICE_DEPLOYMENT_LIMITS.MaxFiles) {
+    blockers.push(`Project has more than ${NODE_SERVICE_DEPLOYMENT_LIMITS.MaxFiles} files after exclusions.`);
+  }
+  if (totalBytes > NODE_SERVICE_DEPLOYMENT_LIMITS.MaxDeploymentTotalBytes) {
+    blockers.push(
+      `Project files exceed ${Math.floor(NODE_SERVICE_DEPLOYMENT_LIMITS.MaxDeploymentTotalBytes / 1024 / 1024)}MB after exclusions.`,
+    );
+  }
+
+  return {
+    ...collection,
+    entries: Array.from(entriesByArchiveName.values())
+      .sort((a, b) => a.archiveName.localeCompare(b.archiveName)),
+    totalBytes,
+    blockers,
+  };
+}
+
 function nodeStartCommandEntryName(command: string): string | null {
   const tokens = shellTokens(command.trim());
   if (tokens.length < 2) return null;
@@ -589,9 +662,7 @@ async function collectNextStandaloneDeploymentPackageEntries(
     entries: Array.from(entriesByArchiveName.values()).sort((a, b) => a.archiveName.localeCompare(b.archiveName)),
     totalBytes: state.totalBytes,
     excludedCount: state.excludedCount,
-    warnings: state.excludedCount > 0
-      ? [`${state.excludedCount} files or directories will be excluded from the deployment package.`]
-      : [],
+    warnings: [],
     blockers: state.blockers,
   };
 }
@@ -616,9 +687,7 @@ async function collectNitroDeploymentPackageEntries(
     entries: Array.from(entriesByArchiveName.values()).sort((a, b) => a.archiveName.localeCompare(b.archiveName)),
     totalBytes: state.totalBytes,
     excludedCount: state.excludedCount,
-    warnings: state.excludedCount > 0
-      ? [`${state.excludedCount} files or directories will be excluded from the deployment package.`]
-      : [],
+    warnings: [],
     blockers: state.blockers,
   };
 }
@@ -800,6 +869,15 @@ export async function packageNodeServiceDeployment(
       if (isGeneratedOptimizedStartCommand(effectiveStartCommand) && fallbackStartCommand) {
         effectiveStartCommand = fallbackStartCommand;
       }
+    }
+
+    if (deploymentKind === ShareDeploymentKind.NodeService) {
+      deploymentPackage = await includePersistenceEntries(
+        deploymentPackage,
+        plan.entries,
+        projectDir,
+        input.persistence ?? plan.analysis.persistence,
+      );
     }
 
     if (deploymentPackage.blockers.length) {

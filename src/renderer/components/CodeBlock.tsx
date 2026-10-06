@@ -21,7 +21,7 @@ import {
   SearchQuery,
   setSearchQuery,
 } from '@codemirror/search';
-import { Compartment, EditorState,Extension } from '@codemirror/state';
+import { Compartment, EditorState,Extension, Prec } from '@codemirror/state';
 import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark';
 import {
   crosshairCursor,
@@ -40,12 +40,31 @@ import { createPortal } from 'react-dom';
 
 import { copyTextToClipboard } from '../services/clipboard';
 import { i18nService } from '../services/i18n';
+import { registerVirtualSearchText } from '../utils/searchDomProjection';
 import {
   bucketLength,
   getMessageLineCount,
   reportConversationBlockAction,
 } from './cowork/conversationAnalytics';
 import Tooltip, { TooltipAlign, TooltipPosition } from './ui/Tooltip';
+
+const VirtualizedCodeSearchProjection: React.FC<{ text: string }> = ({ text }) => {
+  const markerRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    const marker = markerRef.current;
+    if (!marker) return undefined;
+    return registerVirtualSearchText(marker, text);
+  }, [text]);
+
+  return (
+    <span
+      ref={markerRef}
+      data-cowork-search-virtual-text="true"
+      aria-hidden="true"
+    />
+  );
+};
 
 const CodeBlockIcon: React.FC<{
   className?: string;
@@ -781,6 +800,15 @@ const darkThemeExt = EditorView.theme({
   },
 }, { dark: true });
 
+/**
+ * Chat snippets sit right under a borderless header row, so the top padding
+ * goes. Earlier themes win in CodeMirror, hence the precedence bump over
+ * baseTheme.
+ */
+const compactSnippetTheme = Prec.highest(EditorView.theme({
+  '.cm-content': { padding: '2px 0 12px' },
+}));
+
 /** Syntax highlighting must follow the theme: One Dark on dark, One Light on light. */
 const syntaxHighlightExt = (isDark: boolean): Extension =>
   syntaxHighlighting(isDark ? oneDarkHighlightStyle : oneLightHighlightStyle);
@@ -811,12 +839,6 @@ const lightThemeExt = EditorView.theme({
 // only truly huge blocks fall back to the plain <pre> rendering below.
 const CODE_BLOCK_LINE_LIMIT = 1000;
 const CODE_BLOCK_CHAR_LIMIT = 100000;
-
-/** Prose-like fenced content reads better with word wrap enabled by default. */
-const WRAP_BY_DEFAULT_LANGUAGES = new Set(['markdown', 'md', 'mdx', 'text', 'txt', 'plaintext', 'plain', 'log']);
-
-const shouldWrapByDefault = (lang: string | null): boolean =>
-  !lang || WRAP_BY_DEFAULT_LANGUAGES.has(lang);
 
 /**
  * Maps language identifiers (as they appear in fenced code blocks) to their
@@ -919,7 +941,7 @@ interface CodeFullscreenModalProps {
 }
 
 const CodeFullscreenModal: React.FC<CodeFullscreenModalProps> = ({ code, lang, isDark, onAction, onClose }) => {
-  const [wrap, setWrap] = useState(() => shouldWrapByDefault(lang));
+  const [wrap, setWrap] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
   const viewRef = useRef<EditorView | null>(null);
@@ -982,9 +1004,10 @@ const CodeFullscreenModal: React.FC<CodeFullscreenModalProps> = ({ code, lang, i
 
   const t = (key: string) => i18nService.t(key as any);
 
+  // Keep the portal interactive when it overlaps Electron title-bar drag regions.
   return createPortal(
     <div
-      className="fixed inset-0 z-[200] flex flex-col"
+      className="non-draggable fixed inset-0 z-[200] flex flex-col"
       style={{ backgroundColor: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
@@ -1072,17 +1095,18 @@ const HeaderButton: React.FC<{
   ariaLabel: string;
   active?: boolean;
   children: React.ReactNode;
-}> = ({ onClick, ariaLabel, active = false, children }) => (
+}> = ({ onClick, ariaLabel, active, children }) => (
   <button
     type="button"
     onClick={onClick}
     className={[
       'inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors',
       active
-        ? 'bg-surface text-foreground'
-        : 'text-secondary hover:bg-surface hover:text-foreground',
+        ? 'bg-foreground/[0.06] text-foreground'
+        : 'text-secondary hover:bg-foreground/[0.06] hover:text-foreground',
     ].join(' ')}
     aria-label={ariaLabel}
+    aria-pressed={active}
   >
     {children}
   </button>
@@ -1104,6 +1128,7 @@ const DiffView: React.FC<DiffViewProps> = ({ original, modified, langSupport, is
   const extensions = useMemo(() => {
     const exts: Extension[] = [
       baseTheme,
+      compactSnippetTheme,
       isDark ? darkThemeExt : lightThemeExt,
       syntaxHighlightExt(isDark),
       EditorView.editable.of(false),
@@ -1159,6 +1184,7 @@ interface UseCodeMirrorViewOptions {
   doc: string;
   isDark: boolean;
   wrap: boolean;
+  compact: boolean;
   langSupport: LanguageSupport | null;
   onSearchOpenChange: (open: boolean) => void;
 }
@@ -1168,6 +1194,7 @@ function useCodeMirrorView({
   doc,
   isDark,
   wrap,
+  compact,
   langSupport,
   onSearchOpenChange,
 }: UseCodeMirrorViewOptions): EditorView | null {
@@ -1204,9 +1231,9 @@ function useCodeMirrorView({
         EditorView.editable.of(false),
         EditorState.readOnly.of(true),
 
-        // Line numbers + fold gutter
-        lineNumbers(),
-        foldGutter(),
+        // Chat blocks are plain snippets; line numbers and folding live in
+        // the fullscreen reader. Fixed per instance.
+        compact ? compactSnippetTheme : [lineNumbers(), foldGutter()],
 
         // Bracket matching, selection highlight
         bracketMatching(),
@@ -1309,6 +1336,7 @@ interface CodeMirrorEditorProps {
   doc: string;
   isDark: boolean;
   wrap: boolean;
+  compact?: boolean;
   langSupport: LanguageSupport | null;
   onViewReady: (view: EditorView | null) => void;
   onSearchOpenChange: (open: boolean) => void;
@@ -1318,6 +1346,7 @@ const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
   doc,
   isDark,
   wrap,
+  compact = false,
   langSupport,
   onViewReady,
   onSearchOpenChange,
@@ -1329,6 +1358,7 @@ const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
     doc,
     isDark,
     wrap,
+    compact,
     langSupport,
     onSearchOpenChange,
   });
@@ -1356,7 +1386,7 @@ interface CodeBlockProps {
   [key: string]: any;
 }
 
-const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...props }) => {
+const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, inline, ...props }) => {
   const normalizedClassName = Array.isArray(className)
     ? className.join(' ')
     : className || '';
@@ -1364,8 +1394,8 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
   const hasPosition =
     node?.position?.start?.line != null && node?.position?.end?.line != null;
   const isInline =
-    typeof props.inline === 'boolean'
-      ? props.inline
+    typeof inline === 'boolean'
+      ? inline
       : hasPosition
         ? node.position.start.line === node.position.end.line
         : !match;
@@ -1397,7 +1427,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
 
   const [isCopied, setIsCopied] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
-  const [wrap, setWrap] = useState(() => shouldWrapByDefault(rawLang));
+  const [wrap, setWrap] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
@@ -1506,8 +1536,11 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
   // Inline code
   // -------------------------------------------------------------------------
   if (isInline) {
+    // Sized relative to the surrounding text: monospace glyphs are wider and
+    // taller than the CJK/UI face, so the absolute code font size made inline
+    // spans read larger than the body text, in headings and in small print.
     const inlineClassName = [
-      'inline rounded-[5px] bg-foreground/[0.06] px-[0.35em] py-[0.12em] text-code font-mono text-foreground/90 break-words [box-decoration-break:clone]',
+      'inline rounded-[0.3em] bg-foreground/[0.05] px-[0.3em] py-[0.1em] font-mono text-[0.875em] leading-[1.2] text-foreground/90 break-words [box-decoration-break:clone]',
       normalizedClassName,
     ]
       .filter(Boolean)
@@ -1531,7 +1564,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
     : match[1];
 
   return (
-    <div className="my-3 rounded-lg overflow-hidden border border-border bg-surface-raised/40 relative">
+    <div className="group/code relative my-3 overflow-hidden rounded-xl border border-border bg-surface-raised/40">
       {/* Fullscreen modal */}
       {fullscreen && (
         <CodeFullscreenModal
@@ -1542,57 +1575,63 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
           onClose={handleCloseFullscreen}
         />
       )}
-      {/* Header */}
-      <div className="bg-surface-raised/70 border-b border-border-subtle px-3.5 py-1.5 text-xs text-secondary font-medium flex items-center justify-between">
-        <span className="font-mono opacity-70">{displayLang}</span>
-        <div className="flex items-center gap-0.5">
-          {/* Collapse / expand the entire code body */}
-          <CodeBlockTooltip content={collapsed ? i18nService.t('codeBlockExpand') : i18nService.t('codeBlockCollapse')}>
-            <HeaderButton
-              onClick={handleToggleCollapse}
-              ariaLabel={collapsed ? i18nService.t('codeBlockExpand') : i18nService.t('codeBlockCollapse')}
-              active={collapsed}
-            >
-              {collapsed ? (
-                <ChevronIcon className="h-[18px] w-[18px]" direction="down" />
-              ) : (
-                <ChevronIcon className="h-[18px] w-[18px]" direction="up" />
-              )}
-            </HeaderButton>
-          </CodeBlockTooltip>
-          {/* Word wrap toggle */}
-          <CodeBlockTooltip content={wrap ? i18nService.t('codeBlockWordWrapOff') : i18nService.t('codeBlockWordWrap')}>
-            <HeaderButton
-              onClick={handleToggleWrap}
-              ariaLabel={wrap ? i18nService.t('codeBlockWordWrapOff') : i18nService.t('codeBlockWordWrap')}
-              active={wrap}
-            >
-              <WrapTextIcon className="h-[18px] w-[18px]" />
-            </HeaderButton>
-          </CodeBlockTooltip>
-          {/* Fullscreen expand */}
-          <CodeBlockTooltip content={i18nService.t('codeBlockFullscreen')}>
-            <HeaderButton onClick={handleOpenFullscreen} ariaLabel={i18nService.t('codeBlockFullscreen')}>
-              <FullscreenIcon className="h-[18px] w-[18px]" />
-            </HeaderButton>
-          </CodeBlockTooltip>
+      {/* Header: language label plus copy; the other tools appear on hover/focus */}
+      <div
+        className="flex h-9 items-center justify-between gap-2 pl-3.5 pr-1.5 text-xs"
+        data-cowork-search-exclude="true"
+      >
+        <span className="min-w-0 truncate font-mono text-muted">{displayLang}</span>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <div
+            className={`flex items-center gap-0.5 transition-opacity duration-150 ${
+              collapsed
+                ? 'opacity-100'
+                : 'opacity-0 group-hover/code:opacity-100 group-focus-within/code:opacity-100'
+            }`}
+          >
+            {/* Collapse / expand the entire code body */}
+            <CodeBlockTooltip content={collapsed ? i18nService.t('codeBlockExpand') : i18nService.t('codeBlockCollapse')}>
+              <HeaderButton
+                onClick={handleToggleCollapse}
+                ariaLabel={collapsed ? i18nService.t('codeBlockExpand') : i18nService.t('codeBlockCollapse')}
+              >
+                <ChevronIcon className="h-4 w-4" direction={collapsed ? 'down' : 'up'} />
+              </HeaderButton>
+            </CodeBlockTooltip>
+            {/* Word wrap toggle */}
+            <CodeBlockTooltip content={wrap ? i18nService.t('codeBlockWordWrapOff') : i18nService.t('codeBlockWordWrap')}>
+              <HeaderButton
+                onClick={handleToggleWrap}
+                ariaLabel={wrap ? i18nService.t('codeBlockWordWrapOff') : i18nService.t('codeBlockWordWrap')}
+                active={wrap}
+              >
+                <WrapTextIcon className="h-4 w-4" />
+              </HeaderButton>
+            </CodeBlockTooltip>
+            {/* Fullscreen expand */}
+            <CodeBlockTooltip content={i18nService.t('codeBlockFullscreen')}>
+              <HeaderButton onClick={handleOpenFullscreen} ariaLabel={i18nService.t('codeBlockFullscreen')}>
+                <FullscreenIcon className="h-4 w-4" />
+              </HeaderButton>
+            </CodeBlockTooltip>
+            {/* Save to file */}
+            <CodeBlockTooltip content={i18nService.t('saveToFile')}>
+              <HeaderButton onClick={handleSave} ariaLabel={i18nService.t('saveToFile')}>
+                {isSaved ? (
+                  <CheckCodeIcon className="h-4 w-4 text-green-500" />
+                ) : (
+                  <DownloadIcon className="h-4 w-4" />
+                )}
+              </HeaderButton>
+            </CodeBlockTooltip>
+          </div>
           {/* Copy */}
           <CodeBlockTooltip content={i18nService.t('copyToClipboard')}>
             <HeaderButton onClick={handleCopy} ariaLabel={i18nService.t('copyToClipboard')}>
               {isCopied ? (
-                <CheckCodeIcon className="h-[18px] w-[18px] text-green-500" />
+                <CheckCodeIcon className="h-4 w-4 text-green-500" />
               ) : (
-                <CopyCodeIcon className="h-[18px] w-[18px]" />
-              )}
-            </HeaderButton>
-          </CodeBlockTooltip>
-          {/* Save to file */}
-          <CodeBlockTooltip content={i18nService.t('saveToFile')}>
-            <HeaderButton onClick={handleSave} ariaLabel={i18nService.t('saveToFile')}>
-              {isSaved ? (
-                <CheckCodeIcon className="h-[18px] w-[18px] text-green-500" />
-              ) : (
-                <DownloadIcon className="h-[18px] w-[18px]" />
+                <CopyCodeIcon className="h-4 w-4" />
               )}
             </HeaderButton>
           </CodeBlockTooltip>
@@ -1600,30 +1639,36 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
       </div>
 
       {/* Body - hidden when collapsed */}
+      {shouldUseCodeMirror && (
+        <VirtualizedCodeSearchProjection text={codeText} />
+      )}
       {!collapsed &&
         (shouldUseCodeMirror ? (
-          isDiffBlock && diffParsed ? (
-            <DiffView
-              original={diffParsed.original}
-              modified={diffParsed.modified}
-              langSupport={langSupport}
-              isDark={isDark}
-              wrap={wrap}
-            />
-          ) : (
-            <CodeMirrorEditor
-              doc={trimmedCodeText}
-              isDark={isDark}
-              wrap={wrap}
-              langSupport={langSupport}
-              onViewReady={ignoreCodeMirrorView}
-              onSearchOpenChange={ignoreSearchOpenChange}
-            />
-          )
+          <div data-cowork-search-exclude="true">
+            {isDiffBlock && diffParsed ? (
+              <DiffView
+                original={diffParsed.original}
+                modified={diffParsed.modified}
+                langSupport={langSupport}
+                isDark={isDark}
+                wrap={wrap}
+              />
+            ) : (
+              <CodeMirrorEditor
+                doc={trimmedCodeText}
+                isDark={isDark}
+                wrap={wrap}
+                compact
+                langSupport={langSupport}
+                onViewReady={ignoreCodeMirrorView}
+                onSearchOpenChange={ignoreSearchOpenChange}
+              />
+            )}
+          </div>
         ) : (
           <div className="m-0 overflow-x-auto text-code">
             <code
-              className={`block px-4 py-3 font-mono text-foreground/90 ${
+              className={`block px-3.5 pb-3 pt-0.5 font-mono text-foreground/90 ${
                 wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre w-max min-w-full'
               }`}
             >

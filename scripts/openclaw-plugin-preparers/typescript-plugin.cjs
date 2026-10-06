@@ -43,7 +43,9 @@ function buildNpmPackEnv() {
 function npmPackDirectory(sourceDir, outputDir) {
   const isWin = process.platform === 'win32';
   const npmBin = isWin ? 'npm.cmd' : 'npm';
-  const args = ['pack', sourceDir, '--pack-destination', outputDir];
+  // The directory is an already-published package, so lifecycle scripts such
+  // as prepack/postpack must not run again; they would mutate package.json.
+  const args = ['pack', sourceDir, '--pack-destination', outputDir, '--ignore-scripts'];
 
   const result = spawnSync(npmBin, args, {
     encoding: 'utf-8',
@@ -160,8 +162,7 @@ function patchTypeScriptPluginPackageDirectory(packageDir, opts = {}) {
   return { changed: true, compiledEntries };
 }
 
-function prepareTypeScriptPluginPackage(inputTgzPath, outputDir, opts = {}) {
-  const packageLabel = opts.packageLabel || 'OpenClaw plugin';
+function extractPluginTarball(inputTgzPath, outputDir, packageLabel = 'OpenClaw plugin') {
   if (!fs.existsSync(inputTgzPath)) {
     throw new Error(`${packageLabel} package tarball not found: ${inputTgzPath}`);
   }
@@ -173,6 +174,12 @@ function prepareTypeScriptPluginPackage(inputTgzPath, outputDir, opts = {}) {
     strip: 1,
     sync: true,
   });
+  return sourceDir;
+}
+
+function prepareTypeScriptPluginPackage(inputTgzPath, outputDir, opts = {}) {
+  const packageLabel = opts.packageLabel || 'OpenClaw plugin';
+  const sourceDir = extractPluginTarball(inputTgzPath, outputDir, packageLabel);
 
   const result = patchTypeScriptPluginPackageDirectory(sourceDir, opts);
   if (!result.changed) {
@@ -184,6 +191,10 @@ function prepareTypeScriptPluginPackage(inputTgzPath, outputDir, opts = {}) {
 }
 
 module.exports = {
+  extractPluginTarball,
+  npmPackDirectory,
   patchTypeScriptPluginPackageDirectory,
   prepareTypeScriptPluginPackage,
+  readJsonFile,
+  writeJsonFile,
 };

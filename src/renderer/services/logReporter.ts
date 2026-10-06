@@ -1,76 +1,33 @@
-import { store } from '../store';
+import type { PublishingIdentityType } from '@shared/publishing/constants';
+
+import {
+  type LogEventAction,
+  LogReporterAction,
+  LogReporterActionPrefix,
+  LogReporterCategory,
+  LogReporterEndpoint,
+  LogReporterEntry,
+  LogReporterProduct,
+} from '../../shared/analytics/constants';
+import {
+  type AnalyticsIdentitySnapshot,
+  getAnalyticsIdentitySnapshot,
+} from './analyticsIdentity';
 import { configService } from './config';
 import { getInstallationId } from './installationId';
 
-export const LogReporterEndpoint = {
-  YoudaoAnalyzer: 'https://rlogs.youdao.com/rlog.php',
-} as const;
-
-export const LogReporterProduct = {
-  LobsterAI: 'wisdom',
-} as const;
-
-export const LogReporterCategory = {
-  Actions: 'actions',
-} as const;
-
-export const LogReporterActionPrefix = {
-  LobsterAI: 'lobsterai_',
-} as const;
-
-export const LogReporterAction = {
-  AgentCreateAction: 'lobsterai_agent_create_action',
-  AgentSettingsAction: 'lobsterai_agent_settings_action',
-  AgentEngineMaintenanceAction: 'lobsterai_agent_engine_maintenance_action',
-  AgentEngineSettingChanged: 'lobsterai_agent_engine_setting_changed',
-  AboutAction: 'lobsterai_about_action',
-  AccountMenuAction: 'lobsterai_account_menu_action',
-  AppStarted: 'lobsterai_app_started',
-  AppearanceSettingChanged: 'lobsterai_appearance_setting_changed',
-  ArtifactPreviewAction: 'lobsterai_artifact_preview_action',
-  BrowserSettingChanged: 'lobsterai_browser_setting_changed',
-  CustomModelConnectionTested: 'lobsterai_custom_model_connection_tested',
-  CustomModelSettingsSaved: 'lobsterai_custom_model_settings_saved',
-  ConversationBlockAction: 'lobsterai_conversation_block_action',
-  ConversationMessageAction: 'lobsterai_conversation_message_action',
-  ConversationNavigationAction: 'lobsterai_conversation_navigation_action',
-  DreamingSettingChanged: 'lobsterai_dreaming_setting_changed',
-  EmailSkillConnectionTested: 'lobsterai_email_skill_connection_tested',
-  EmailSkillSettingsSaved: 'lobsterai_email_skill_settings_saved',
-  ExpertKitAction: 'lobsterai_expert_kit_action',
-  ExpertKitSelected: 'lobsterai_expert_kit_selected',
-  GeneralSettingChanged: 'lobsterai_general_setting_changed',
-  ImConnectionTested: 'lobsterai_im_connection_tested',
-  ImGatewayToggled: 'lobsterai_im_gateway_toggled',
-  ImInstanceChanged: 'lobsterai_im_instance_changed',
-  ImSettingsSaved: 'lobsterai_im_settings_saved',
-  MemoryEntryChanged: 'lobsterai_memory_entry_changed',
-  MemorySettingChanged: 'lobsterai_memory_setting_changed',
-  McpEnabled: 'lobsterai_mcp_enabled',
-  McpAction: 'lobsterai_mcp_action',
-  ModelSelected: 'lobsterai_model_selected',
-  PlanModeEnabled: 'lobsterai_plan_mode_enabled',
-  PluginAction: 'lobsterai_plugin_action',
-  PluginSettingsSaved: 'lobsterai_plugin_settings_saved',
-  PromptControlAction: 'lobsterai_prompt_control_action',
-  PromptSubmit: 'lobsterai_prompt_submit',
-  PromptTemplateAction: 'lobsterai_prompt_template_action',
-  ShortcutSettingChanged: 'lobsterai_shortcut_setting_changed',
-  SidebarAction: 'lobsterai_sidebar_action',
-  SkillAction: 'lobsterai_skill_action',
-  SkillEnabled: 'lobsterai_skill_enabled',
-  ScheduledTaskAction: 'lobsterai_scheduled_task_action',
-  TaskSearchAction: 'lobsterai_task_search_action',
-  UsageAnalyticsEnabled: 'lobsterai_usage_analytics_enabled',
-} as const;
-
-export const LogReporterEntry = {
-  PromptToolsMenu: 'prompt_tools_menu',
-} as const;
+export {
+  LogReporterAction,
+  LogReporterActionPrefix,
+  LogReporterCategory,
+  LogReporterEndpoint,
+  LogReporterEntry,
+  LogReporterProduct,
+};
 
 type LogParamValue = string | number | boolean | null | undefined;
 
-export type LogEventAction = `${typeof LogReporterActionPrefix.LobsterAI}${string}`;
+export type { LogEventAction };
 
 export type LogEventParams = Record<string, LogParamValue> & {
   action: LogEventAction;
@@ -84,11 +41,17 @@ const logCommons = {
 export interface BuildLogUrlOptions {
   appVersion?: string;
   arch?: string;
+  environment?: string;
+  eventId?: string;
   firstKeyfrom?: string;
+  identityType?: PublishingIdentityType;
   installationId?: string | null;
+  isLoggedIn?: boolean;
+  isSubscriber?: boolean;
   language?: string;
   latestKeyfrom?: string;
   platform?: string;
+  subscriptionStatus?: string;
   userId?: string;
   timestamp?: number;
 }
@@ -104,6 +67,33 @@ let cachedInstallationId: string | null = null;
 let installationIdPromise: Promise<string | null> | null = null;
 let cachedKeyfromAttribution: LogKeyfromAttribution | null = null;
 let keyfromAttributionPromise: Promise<LogKeyfromAttribution | null> | null = null;
+
+interface PendingAnalyticsEvent {
+  params: LogEventParams;
+  identity: AnalyticsIdentitySnapshot;
+  eventId: string;
+  timestamp: number;
+}
+
+export interface ReportYdAnalyzerOptions {
+  /**
+   * Identity at the product touchpoint being attributed. This is intentionally
+   * narrow: user/session identity and all other common fields still come from
+   * the reporter's trusted event-time snapshot.
+   */
+  touchpointIdentityType?: PublishingIdentityType;
+}
+
+const PendingAnalyticsQueueLimit = 500;
+const PendingAnalyticsRetryDelayMs = 1_000;
+const pendingAnalyticsEvents: PendingAnalyticsEvent[] = [];
+let pendingAnalyticsFlushTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingAnalyticsFlushPromise: Promise<void> | null = null;
+
+const createEventId = (): string => (
+  globalThis.crypto?.randomUUID?.()
+  ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+);
 
 const writeReporterLog = (level: 'debug' | 'warn', message: string, error?: unknown): void => {
   if (level === 'warn') {
@@ -148,6 +138,7 @@ const getInstallationIdForAnalytics = async (): Promise<string | null> => {
     installationIdPromise = getInstallationId()
       .then(id => {
         cachedInstallationId = id;
+        if (!id) installationIdPromise = null;
         return cachedInstallationId;
       })
       .catch(error => {
@@ -204,10 +195,18 @@ export const buildLogUrl = (
 ): string => {
   const url = new URL(LogReporterEndpoint.YoudaoAnalyzer);
   const config = configService.getConfig();
-  const userId = options.userId ?? store.getState().auth.user?.yid ?? '';
+  const identity = getAnalyticsIdentitySnapshot();
+  const userId = options.userId ?? identity.userId;
+  const isLoggedIn = options.isLoggedIn ?? userId.trim().length > 0;
   const firstKeyfrom = options.firstKeyfrom ?? cachedKeyfromAttribution?.firstKeyfrom;
   const latestKeyfrom = options.latestKeyfrom ?? cachedKeyfromAttribution?.latestKeyfrom;
   const installationId = options.installationId ?? cachedInstallationId;
+  const environment = options.environment
+    ?? (config.app?.testMode
+      ? 'test'
+      : config.app?.isDevelopment
+        ? 'development'
+        : 'production');
   const logParams: Record<string, LogParamValue> = {
     ...params,
     ...logCommons,
@@ -215,11 +214,18 @@ export const buildLogUrl = (
     os_platform: options.platform ?? getWindowPlatform(),
     os_arch: options.arch ?? getWindowArch(),
     language: options.language ?? config.language,
+    environment,
+    eventId: options.eventId ?? createEventId(),
     uuid: installationId,
     firstKeyfrom,
     latestKeyfrom,
-    is_logged_in: userId.trim().length > 0,
+    keyfrom: latestKeyfrom,
+    is_logged_in: isLoggedIn,
     log_Usid: userId,
+    user_id: userId || undefined,
+    identityType: options.identityType ?? identity.identityType,
+    is_subscriber: options.isSubscriber ?? identity.isSubscriber,
+    subscriptionStatus: options.subscriptionStatus ?? identity.subscriptionStatus,
     uts: options.timestamp ?? Date.now(),
   };
 
@@ -232,7 +238,105 @@ export const buildLogUrl = (
   return url.href;
 };
 
-export const reportYdAnalyzer = async (params: LogEventParams): Promise<boolean> => {
+const createPendingEvent = (
+  params: LogEventParams,
+  options: ReportYdAnalyzerOptions,
+): PendingAnalyticsEvent => {
+  const identity = getAnalyticsIdentitySnapshot();
+  return {
+    params: { ...params },
+    identity: options.touchpointIdentityType
+      ? { ...identity, identityType: options.touchpointIdentityType }
+      : identity,
+    eventId: createEventId(),
+    timestamp: Date.now(),
+  };
+};
+
+const sendPendingEvent = async (
+  event: PendingAnalyticsEvent,
+): Promise<'sent' | 'uuid_unavailable' | 'failed'> => {
+  await Promise.all([
+    getWindowAppVersion(),
+    getInstallationIdForAnalytics(),
+    getWindowKeyfromAttribution(),
+  ]);
+  if (!cachedInstallationId) return 'uuid_unavailable';
+
+  try {
+    writeReporterLog('debug', `sending event ${event.params.action}`);
+    const response = await window.electron.api.fetch({
+      url: buildLogUrl(event.params, {
+        eventId: event.eventId,
+        identityType: event.identity.identityType,
+        installationId: cachedInstallationId,
+        isLoggedIn: event.identity.isLoggedIn,
+        isSubscriber: event.identity.isSubscriber,
+        subscriptionStatus: event.identity.subscriptionStatus,
+        timestamp: event.timestamp,
+        userId: event.identity.userId,
+      }),
+      method: 'GET',
+      headers: {},
+    });
+    if (!response.ok) {
+      writeReporterLog(
+        'warn',
+        `event ${event.params.action} failed with status ${response.status}`,
+      );
+      return 'failed';
+    }
+    writeReporterLog('debug', `sent event ${event.params.action} successfully`);
+    return 'sent';
+  } catch (error) {
+    writeReporterLog('warn', `event ${event.params.action} failed`, error);
+    return 'failed';
+  }
+};
+
+const schedulePendingAnalyticsFlush = (): void => {
+  if (pendingAnalyticsFlushTimer || pendingAnalyticsEvents.length === 0) return;
+  pendingAnalyticsFlushTimer = globalThis.setTimeout(() => {
+    pendingAnalyticsFlushTimer = null;
+    void flushPendingAnalyticsEvents();
+  }, PendingAnalyticsRetryDelayMs);
+};
+
+const enqueuePendingAnalyticsEvent = (event: PendingAnalyticsEvent): void => {
+  if (pendingAnalyticsEvents.length >= PendingAnalyticsQueueLimit) {
+    pendingAnalyticsEvents.shift();
+    writeReporterLog('warn', 'dropped the oldest pending event because the queue is full');
+  }
+  pendingAnalyticsEvents.push(event);
+  schedulePendingAnalyticsFlush();
+};
+
+const flushPendingAnalyticsEvents = async (): Promise<void> => {
+  if (pendingAnalyticsFlushPromise) return pendingAnalyticsFlushPromise;
+  pendingAnalyticsFlushPromise = (async () => {
+    while (
+      pendingAnalyticsEvents.length > 0
+      && configService.getConfig().usageAnalyticsEnabled !== false
+    ) {
+      const event = pendingAnalyticsEvents[0];
+      const result = await sendPendingEvent(event);
+      if (result === 'uuid_unavailable') break;
+      pendingAnalyticsEvents.shift();
+    }
+    if (configService.getConfig().usageAnalyticsEnabled === false) {
+      pendingAnalyticsEvents.splice(0, pendingAnalyticsEvents.length);
+    }
+  })().finally(() => {
+    pendingAnalyticsFlushPromise = null;
+    schedulePendingAnalyticsFlush();
+  });
+  return pendingAnalyticsFlushPromise;
+};
+
+export const reportYdAnalyzer = async (
+  params: LogEventParams,
+  options: ReportYdAnalyzerOptions = {},
+): Promise<boolean> => {
   if (configService.getConfig().usageAnalyticsEnabled === false) {
     writeReporterLog('debug', `skipped event ${params.action} because usage analytics is disabled`);
     return false;
@@ -248,28 +352,12 @@ export const reportYdAnalyzer = async (params: LogEventParams): Promise<boolean>
     return false;
   }
 
-  try {
-    await Promise.all([
-      getWindowAppVersion(),
-      getInstallationIdForAnalytics(),
-      getWindowKeyfromAttribution(),
-    ]);
-    writeReporterLog('debug', `sending event ${params.action}`);
-    const response = await window.electron.api.fetch({
-      url: buildLogUrl(params),
-      method: 'GET',
-      headers: {},
-    });
-
-    if (!response.ok) {
-      writeReporterLog('warn', `event ${params.action} failed with status ${response.status}`);
-      return false;
-    }
-
-    writeReporterLog('debug', `sent event ${params.action} successfully`);
+  const event = createPendingEvent(params, options);
+  const result = await sendPendingEvent(event);
+  if (result === 'uuid_unavailable') {
+    enqueuePendingAnalyticsEvent(event);
+    writeReporterLog('debug', `queued event ${params.action} until the installation uuid is ready`);
     return true;
-  } catch (error) {
-    writeReporterLog('warn', `event ${params.action} failed`, error);
-    return false;
   }
+  return result === 'sent';
 };

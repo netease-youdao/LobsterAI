@@ -1,3 +1,9 @@
+import {
+  type PromptAnalyticsConversationState as PromptAnalyticsConversationStateValue,
+  PromptAnalyticsConversationState as SharedPromptAnalyticsConversationState,
+  type PromptAnalyticsSurface as PromptAnalyticsSurfaceValue,
+  PromptAnalyticsSurface as SharedPromptAnalyticsSurface,
+} from '../../../shared/analytics/constants';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
 import { resolveLocalizedText } from '../../services/skill';
 import type { Model } from '../../store/slices/modelSlice';
@@ -6,21 +12,10 @@ import type { Skill } from '../../types/skill';
 
 type PromptAnalyticsValue = string | number | boolean | null | undefined;
 
-export const PromptAnalyticsSurface = {
-  Home: 'home',
-  Conversation: 'conversation',
-} as const;
-
-export type PromptAnalyticsSurface =
-  typeof PromptAnalyticsSurface[keyof typeof PromptAnalyticsSurface];
-
-export const PromptAnalyticsConversationState = {
-  NewTask: 'new_task',
-  ContinueSession: 'continue_session',
-} as const;
-
-export type PromptAnalyticsConversationState =
-  typeof PromptAnalyticsConversationState[keyof typeof PromptAnalyticsConversationState];
+export const PromptAnalyticsConversationState = SharedPromptAnalyticsConversationState;
+export const PromptAnalyticsSurface = SharedPromptAnalyticsSurface;
+export type PromptAnalyticsConversationState = PromptAnalyticsConversationStateValue;
+export type PromptAnalyticsSurface = PromptAnalyticsSurfaceValue;
 
 export const getPromptAnalyticsSurface = (sessionId?: string): PromptAnalyticsSurface =>
   sessionId ? PromptAnalyticsSurface.Conversation : PromptAnalyticsSurface.Home;

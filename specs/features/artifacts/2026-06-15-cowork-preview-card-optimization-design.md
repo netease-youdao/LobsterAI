@@ -8,7 +8,7 @@
 
 1. 卡片默认背景偏灰，和输入框、消息区视觉层级不一致。
 2. 多数卡片使用通用类型图标，文件格式识别度不够。
-3. HTML 网站类输出没有突出“网站名称”，仍容易被 `index.html` 等文件名主导。
+3. HTML 网页类输出没有突出页面标题，仍容易被 `index.html` 等文件名主导。
 4. 多个文件一次性平铺展示，文件较多时占用对话空间。
 5. “打开方式”菜单需要保持现有系统应用和打开所在文件夹能力，但视觉和 HTML 特殊入口需要统一。
 6. 已有预览卡片之间的标题、副标题、图标和操作区样式不一致。
@@ -19,11 +19,11 @@
 
 1. 统一当前所有对话窗预览卡片的默认态、悬停态、标题、副标题、图标和操作区样式。
 2. PRD 中列举的 11 类文件作为重点验收样例：HTML、MD、PDF、DOCX、XLSX、CSV、PPTX、PNG、GIF、JPG、JPEG。
-3. HTML 网站卡片使用“网站名称”作为主标题，打开行为沿用当前内置浏览器链路。
+3. HTML 网页卡片使用页面标题作为主标题，展示为“网页”和紫色代码文件图标，打开行为沿用当前内置浏览器链路。
 4. 文件多于 3 个时默认折叠，只展示 3 个卡片和“显示另外 N 个”的展开入口。
 5. 非 HTML 文件的“打开方式”下拉菜单内容保持与当前实现一致：展示系统默认应用、系统可打开应用和打开所在文件夹。
 6. HTML 文件的打开方式菜单中，第一项固定展示内置浏览器入口；中文文案为“有道龙虾浏览器”，英文文案为“LobsterAI Browser”，后续系统应用只展示浏览器类应用；系统应用最多展示 5 个。
-7. 对右边栏浏览器预览做信息展示优化：浏览器 tab 标题展示网站名称，地址栏展示文件地址并去掉左侧文件/网站 icon，地址栏聚焦时默认全选当前地址。
+7. 对右边栏浏览器预览做信息展示优化：浏览器 tab 标题展示页面标题，地址栏展示文件地址并去掉左侧文件/网站 icon，地址栏聚焦时默认全选当前地址。
 8. 不修改右侧 ArtifactPanel 的预览渲染、文件列表、分享、注释、设备工具栏等功能能力。
 9. 卡片点击、打开方式和本地文件打开行为保持现有语义。
 10. 新增 UI 文案必须进入 renderer i18n 的中英文资源。
@@ -44,9 +44,9 @@
 | --- | --- | --- |
 | 默认态 | 背景调整为 `#FFFFFF` | 对话窗卡片使用白色底，不再使用灰色填充。深色模式沿用现有 surface token，但层级应接近输入框。 |
 | 悬停态 | 背景调整为 `#FBFBFB` | hover 仅改变卡片填充色，不改变尺寸和布局。 |
-| 图标 | icon 优先使用文件格式默认图标，也可使用“文件格式 + 颜色” | 使用现有 `FileTypeIcon` 作为默认文件图标来源，HTML 网站使用网站/地球图标。 |
-| 标题 | HTML 为网站名称，普通文件为文件名 | HTML 特殊处理，其他类型用文件名。 |
-| 副标题 | HTML 为“网站”，普通文件为“文件类型 · 扩展名” | 扩展名使用大写，文件名保留原大小写。 |
+| 图标 | icon 优先使用文件格式默认图标，也可使用“文件格式 + 颜色” | 使用现有 `FileTypeIcon` 作为默认文件图标来源；HTML 网页使用紫色代码文件图标，本地服务使用地球图标。 |
+| 标题 | HTML 为页面标题，普通文件为文件名 | HTML 特殊处理，其他类型用文件名。 |
+| 副标题 | HTML 为“网页”，本地服务为“本地服务”，普通文件为“文件类型 · 扩展名” | 扩展名使用大写，文件名保留原大小写。 |
 | 操作区 | 右侧展示“打开”或“打开方式” | 沿用当前交互语义；非 HTML 打开方式菜单只展示系统应用和打开所在文件夹；HTML 额外把内置浏览器入口放在第一项，中文显示“有道龙虾浏览器”、英文显示“LobsterAI Browser”，后续系统应用只展示浏览器类应用；系统应用最多展示 5 个。 |
 
 ### 2.2 多卡片展示
@@ -59,16 +59,17 @@ PRD 明确要求“当前最多展示 3 个，更多折叠起来，点击显示�
 4. 展开状态只作用于当前 turn，不影响其他 turn。
 5. 会话重新加载后默认回到折叠态。
 
-### 2.3 HTML 网站卡片
+### 2.3 HTML 网页卡片
 
 HTML 是 PRD 中的特殊类型：
 
-1. 主标题不是文件名，而是根据生成内容提炼的网站名称。
-2. 副标题固定为“网站”。
+1. 主标题不是文件名，而是根据生成内容提炼的页面标题。
+2. 副标题固定为“网页”。
 3. 文件可能仍叫 `index.html`，但对话窗卡片不应展示 `index.html` 作为主标题。
 4. 点击卡片时继续沿用当前内置浏览器打开链路。
 5. 对话窗 HTML 卡片的“打开方式”菜单中，第一项展示内置浏览器入口（中文“有道龙虾浏览器”，英文“LobsterAI Browser”），然后才是系统浏览器应用和打开所在文件夹。
-6. 右边栏浏览器预览同步做展示优化：tab 标题显示网站名称，地址栏显示文件地址且不展示左侧 icon；不改变浏览器预览加载逻辑。
+6. 右边栏浏览器预览同步做展示优化：tab 标题显示页面标题，地址栏显示文件地址且不展示左侧 icon；不改变浏览器预览加载逻辑。
+7. HTML 网页文件不是部署网站；只有 `local-service` 或明确的部署网站实体才使用地球图标。
 
 ### 2.4 优化覆盖范围
 
@@ -78,7 +79,7 @@ PRD 标题注明“文件卡片样式支持范围 共 11 个”，这些类型�
 
 | 序号 | 文件类型 | 格式 | Artifact 类型 | 是否显示打开方式菜单 | 默认打开 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 网站 | HTML | `html` | 是 | 有道龙虾浏览器 |
+| 1 | 网页 | HTML | `html` | 是 | 有道龙虾浏览器 |
 | 2 | 文档 | MD | `markdown` | 沿用当前行为 | 右侧预览 |
 | 3 | 文档 | PDF | `document` | 沿用当前行为 | 右侧预览 |
 | 4 | 文档 | DOCX | `document` | 沿用当前行为 | 右侧预览 |
@@ -119,11 +120,11 @@ PRD 图片中标注的其他类型可作为后续展示范围参考，但本次�
 
 ## 3. 用户场景
 
-### 场景 1: 生成 HTML 网站后展示网站卡片
+### 场景 1: 生成 HTML 网页后展示网页卡片
 
 **Given** AI 生成了 `/project/happy-wishes/index.html`，Artifact 类型为 `html`。
 **When** 对话窗展示该 turn 的文件卡片。
-**Then** 卡片主标题显示“愿大家天天都开心”这类网站名称，副标题显示“网站”，点击卡片在有道龙虾浏览器中打开。
+**Then** 卡片主标题显示“愿大家天天都开心”这类页面标题，副标题显示“网页”，使用紫色代码文件图标，点击卡片在有道龙虾浏览器中打开。
 
 ### 场景 2: 同一轮生成多个文件
 
@@ -147,7 +148,7 @@ PRD 图片中标注的其他类型可作为后续展示范围参考，但本次�
 
 **Given** 用户把鼠标悬停在任意支持卡片上。
 **When** hover 状态生效。
-**Then** 卡片背景变为 `#FBFBFB`，布局不抖动；普通文件副标题切换为“打开预览”，HTML/网站卡片副标题切换为“在有道龙虾浏览器中打开”。
+**Then** 卡片背景变为 `#FBFBFB`，布局不抖动；普通文件副标题切换为“打开预览”，HTML 网页和本地服务卡片副标题切换为“在有道龙虾浏览器中打开”。
 
 ### 场景 6: 右边栏浏览器预览 HTML 文件
 
@@ -169,7 +170,7 @@ PRD 图片中标注的其他类型可作为后续展示范围参考，但本次�
 
 ### 场景 9: HTML 打开方式菜单
 
-**Given** 用户看到 `pond-frog.html` 这类 HTML 网站卡片。
+**Given** 用户看到 `pond-frog.html` 这类 HTML 网页卡片。
 **When** 用户点击“打开方式”。
 **Then** 第一项展示“有道龙虾浏览器”或英文环境的 “LobsterAI Browser”；后续系统应用只展示浏览器类应用，最多 5 个，不展示 Code、Cursor、Sublime Text、TextEdit 等文本编辑器。
 
@@ -201,6 +202,7 @@ src/renderer/components/artifacts/previewCardPolicy.ts
 ```typescript
 interface PreviewCardDescriptor {
   displayKind: PreviewCardDisplayKind;
+  iconKind: PreviewCardIconKind;
   extensionLabel?: string;
   title: string;
   subtitle: string;
@@ -211,13 +213,13 @@ interface PreviewCardDescriptor {
 }
 ```
 
-`PreviewCardDisplayKind` 和 `PreviewCardOpenAction` 必须使用 `as const` 常量对象定义，遵守仓库字符串常量规则。文件扩展名来自文件名，可作为展示值归一化处理，不需要为所有扩展名新增常量。
+`PreviewCardDisplayKind`、`PreviewCardIconKind` 和 `PreviewCardOpenAction` 必须使用 `as const` 常量对象定义，遵守仓库字符串常量规则。文件扩展名来自文件名，可作为展示值归一化处理，不需要为所有扩展名新增常量。
 
 ### FR-2: 标题和副标题规则
 
 | 类型 | 主标题 | 副标题 | Hover 副标题 |
 | --- | --- | --- | --- |
-| HTML | 网站名称 | 网站 | 在有道龙虾浏览器中打开 / Open in LobsterAI Browser |
+| HTML | 页面标题 | 网页 | 在有道龙虾浏览器中打开 / Open in LobsterAI Browser |
 | MD | 文件名 | 文档 · MD | 打开预览 |
 | PDF | 文件名 | 文档 · PDF | 打开预览 |
 | DOCX | 文件名 | 文档 · DOCX | 打开预览 |
@@ -234,12 +236,12 @@ interface PreviewCardDescriptor {
 | Mermaid | 文件名或标题 | 图表 | 打开预览 |
 | Code | 文件名 | 代码 · 扩展名 | 打开预览 |
 | Text/Log | 文件名 | 文本 · 扩展名 | 打开预览 |
-| Local service | 服务名或 URL | 网站 | 在有道龙虾浏览器中打开 / Open in LobsterAI Browser |
+| Local service | 服务名或 URL | 本地服务 | 在有道龙虾浏览器中打开 / Open in LobsterAI Browser |
 
-HTML 网站名称来源优先级：
+HTML 页面标题来源优先级：
 
 1. `artifact.title` 中非文件名的标题。
-2. 已有 Artifact 字段中可用的网站标题信息，若后续链路已经补充。
+2. 已有 Artifact 字段中可用的页面标题信息，若后续链路已经补充。
 3. HTML `<title>` 或首个主要标题，若能在卡片展示层低成本读取且不影响右侧预览。
 4. 文件名兜底，例如 `index.html`。
 
@@ -271,8 +273,9 @@ HTML 网站名称来源优先级：
 
 1. 普通文件使用 `FileTypeIcon`，避免继续维护 `ArtifactPreviewCard` 内的多套手写 SVG。
 2. 图标颜色由扩展名决定，例如 PDF 红、Word 蓝、Excel 绿、PPT 橙、图片灰或蓝。
-3. HTML 网站使用网站图标，不使用通用代码图标。
+3. HTML 网页使用 `FileTypeIcon` 的紫色代码文件图标；本地服务使用地球图标。
 4. 图标仅作为视觉辅助，不能替代标题和副标题。
+5. 图标语义与打开动作解耦：HTML 虽使用文件图标，默认动作仍然是在内置浏览器中打开。
 
 ### FR-5: 多卡片折叠
 
@@ -289,7 +292,7 @@ HTML 网站名称来源优先级：
 排序建议：
 
 1. 保留 artifact 产生顺序作为主顺序。
-2. HTML 网站优先展示在首位。
+2. HTML 网页优先展示在首位。
 3. 展示粒度按 assistant turn 计算：同一回复内同一路径只展示一张卡片；不同回复即使指向同一个文件，也分别在各自回复后展示卡片。
 4. 右侧 ArtifactPanel 的文件列表和 tab 去重继续沿用当前策略，不因对话流重复展示卡片而新增功能性变化。
 5. 当多个回复中的卡片指向同一个预览文件时，点击任一卡片都需要解析到右侧 ArtifactPanel 当前保留的 canonical artifact，避免旧卡片 id 被会话级去重后找不到而回退到文件列表。
@@ -368,7 +371,11 @@ HTML 网站名称来源优先级：
 | `artifactPreviewCardOpenWith` | 打开方式 | Open with |
 | `artifactPreviewCardLobsterBrowser` | 有道龙虾浏览器 | LobsterAI Browser |
 | `artifactPreviewCardOpenInLobsterBrowser` | 在有道龙虾浏览器中打开 | Open in LobsterAI Browser |
+| `artifactTypeHtml` | 网页 | Web page |
+| `artifactTypeLocalService` | 本地服务 | Local service |
 | `artifactFileKindWebsite` | 网站 | Website |
+| `artifactFileKindWebPage` | 网页 | Web page |
+| `artifactFileKindLocalService` | 本地服务 | Local service |
 | `artifactFileKindDocument` | 文档 | Document |
 | `artifactFileKindSpreadsheet` | 电子表格 | Spreadsheet |
 | `artifactFileKindPresentation` | 幻灯片 | Presentation |
@@ -395,7 +402,8 @@ HTML 网站名称来源优先级：
 
 ```typescript
 export const PreviewCardDisplayKind = {
-  Website: 'website',
+  WebPage: 'web_page',
+  LocalService: 'local_service',
   Document: 'document',
   Spreadsheet: 'spreadsheet',
   Presentation: 'presentation',
@@ -406,9 +414,14 @@ export const PreviewCardDisplayKind = {
   Text: 'text',
   File: 'file',
 } as const;
+
+export const PreviewCardIconKind = {
+  File: 'file',
+  Globe: 'globe',
+} as const;
 ```
 
-消费者使用 `PreviewCardDisplayKind.Website`，不直接比较 `'website'`。
+消费者使用 `PreviewCardDisplayKind.WebPage` 和 `PreviewCardDisplayKind.LocalService`，不直接比较裸字符串。图标通过 `PreviewCardIconKind` 独立表达，避免图标分类改变默认打开动作。
 
 ### 5.2 ArtifactPreviewCard 改造
 
@@ -416,7 +429,7 @@ export const PreviewCardDisplayKind = {
 
 1. 删除或减少组件内部手写类型 SVG，使用 `FileTypeIcon`。
 2. 接收 `PreviewCardDescriptor` 或在组件内部通过策略模块生成 descriptor。
-3. 使用 descriptor 的 `subtitle` 和 `hoverSubtitle` 切换悬停文案；普通文件 hover 显示“打开预览”，HTML/网站 hover 显示“在有道龙虾浏览器中打开”。
+3. 使用 descriptor 的 `subtitle` 和 `hoverSubtitle` 切换悬停文案；普通文件 hover 显示“打开预览”，HTML 网页和本地服务 hover 显示“在有道龙虾浏览器中打开”。
 4. 将卡片主体和操作按钮拆开，避免按钮嵌套和点击冒泡问题。
 5. 非 HTML “打开方式”菜单沿用当前系统应用和打开所在文件夹内容。
 6. HTML 文件在系统应用列表第一项插入内置浏览器入口，中文显示“有道龙虾浏览器”、英文显示“LobsterAI Browser”，后续只展示浏览器类应用，系统浏览器最多展示 5 个。
@@ -438,11 +451,11 @@ export const PreviewCardDisplayKind = {
 8. 卡片点击打开预览时仍需要和右侧面板的会话级去重结果对齐：如果当前卡片 artifact 已被去重淘汰，则打开同文件 canonical artifact 的预览 tab。
 9. `CoworkSessionDetail` 传给 `AssistantTurnBlock` 的 `turnArtifacts` 使用当前会话原始 artifact 列表按 turn 过滤，避免提前使用会话级展示去重结果导致旧回复卡片消失。
 
-### 5.4 HTML 网站名称
+### 5.4 HTML 页面标题
 
 首版实现优先使用现有 artifact 字段，不新增主进程 HTML 解析：
 
-1. 如果 `artifact.title` 不是文件名且不是空，作为网站名称。
+1. 如果 `artifact.title` 不是文件名且不是空，作为页面标题。
 2. 如果 `artifact.title` 是 `index.html` 或其他文件名，尝试从 `artifact.fileName` 之外的消息上下文获取标题，此步骤可后续补充。
 3. 兜底使用文件名，避免空标题。
 
@@ -507,7 +520,7 @@ export const PreviewCardDisplayKind = {
 | 文件很多 | 默认折叠，展开后允许换行，不影响消息正文阅读 |
 | 连续回复更新同一文件 | 每个回复后都展示该文件卡片；同一回复内重复路径只保留一张；点击任一卡片都打开右侧面板保留的 canonical 预览 |
 | HTML 系统应用返回文本编辑器 | `shellApps.ts` 对 `.html`/`.htm` 只保留浏览器类应用，过滤 Code、Cursor、Sublime Text、TextEdit 等编辑器 |
-| Local service 卡片 hover | 视为网站类卡片，hover 副标题显示“在有道龙虾浏览器中打开”/“Open in LobsterAI Browser” |
+| Local service 卡片 hover | 作为本地服务卡片，使用地球图标，hover 副标题显示“在有道龙虾浏览器中打开”/“Open in LobsterAI Browser” |
 | 地址栏按钮显示后焦点离开 | 点击地址栏外、焦点移出地址栏或窗口失焦时隐藏外部浏览器打开按钮 |
 | Office/PDF 顶部系统应用打开按钮 | 保持原有通用外部打开 icon 和系统应用打开行为，不复用浏览器地址栏专用 icon |
 | 窄屏或小窗口 | 卡片宽度跟随容器，标题截断，操作区不挤压标题到不可读 |
@@ -519,7 +532,9 @@ export const PreviewCardDisplayKind = {
 | --- | --- |
 | `src/main/shellApps.ts` | HTML/HTM 系统应用过滤为浏览器类应用，系统应用最多返回 5 个 |
 | `src/renderer/components/artifacts/ArtifactPreviewCard.tsx` | 卡片视觉、图标、hover 副标题、打开方式菜单、默认点击行为 |
-| `src/renderer/components/artifacts/previewCardPolicy.ts` | 新增展示策略、标题副标题和打开动作描述 |
+| `src/renderer/components/artifacts/previewCardPolicy.ts` | 拆分网页与本地服务展示类型，独立描述图标、标题副标题和打开动作 |
+| `src/renderer/components/artifacts/ArtifactPreviewIdentity.tsx` | 按独立 `iconKind` 为网页显示文件图标、为本地服务显示地球图标 |
+| `src/renderer/components/artifacts/FileDirectoryView.tsx` | 文件目录同步“网页/本地服务”的类型文案和图标语义 |
 | `src/renderer/components/artifacts/ArtifactPanel.tsx` | 浏览器 tab label、页面标题读取、地址栏 icon 移除、地址栏聚焦全选、外部打开入口移动到地址栏右侧内嵌按钮；Office/PDF 顶部通用打开按钮保持原 icon |
 | `src/renderer/components/cowork/AssistantTurnBlock.tsx` | 多卡片折叠、展开入口、卡片展示 descriptor 生成 |
 | `src/renderer/components/cowork/CoworkSessionDetail.tsx` | HTML 浏览器预览上下文、右边栏浏览器 tab 标题和地址传递、按原始 artifact 列表为每个 turn 提供卡片 |
@@ -532,7 +547,7 @@ export const PreviewCardDisplayKind = {
 ## 8. 验收标准
 
 1. 当前所有已有对话窗预览卡片均套用统一样式；HTML、MD、PDF、DOCX、XLSX、CSV、PPTX、PNG、GIF、JPG、JPEG 作为重点验收样例。
-2. HTML 卡片主标题展示网站名称，副标题展示“网站”，点击默认进入有道龙虾浏览器。
+2. HTML 卡片主标题展示页面标题，副标题展示“网页”，使用紫色代码文件图标，点击默认进入有道龙虾浏览器。
 3. 普通文件卡片主标题展示文件名，副标题展示“类型 · 扩展名”，扩展名为大写。
 4. 浅色模式默认态卡片背景为白色，hover 背景为 `#FBFBFB`；深色模式 hover 只轻微提亮，无布局抖动。
 5. 文件图标能按扩展名区分颜色和样式，不再全部使用通用 icon。
@@ -540,7 +555,7 @@ export const PreviewCardDisplayKind = {
 7. 非 HTML 文件的“打开方式”菜单内容与当前菜单一致，只展示系统应用和打开所在文件夹。
 8. HTML 文件的“打开方式”菜单第一项中文展示“有道龙虾浏览器”、英文展示“LobsterAI Browser”，后续只展示浏览器类系统应用并可正常打开，浏览器类系统应用最多 5 个。
 9. HTML 文件的系统应用列表不展示 Code、Cursor、Sublime Text、TextEdit 等文本编辑器。
-10. 普通文件卡片 hover 时副标题显示“打开预览”；HTML/网站卡片 hover 时副标题显示“在有道龙虾浏览器中打开”。
+10. 普通文件卡片 hover 时副标题显示“打开预览”；HTML 网页和本地服务卡片 hover 时副标题显示“在有道龙虾浏览器中打开”。
 11. 没有 filePath 的内容型 artifact 仍可按当前卡片主体行为打开预览，系统应用项不出现或不可用。
 12. 右侧 ArtifactPanel 的预览渲染、文件列表、分享、注释和工具栏功能不发生变化。
 13. 连续两个模型回复都引用或更新同一个预览文件时，两个回复后都展示该文件卡片。
@@ -561,5 +576,5 @@ export const PreviewCardDisplayKind = {
 ## 9. 待确认
 
 1. “任务完成后自动打开预览”在 PRD 中被标注为问题，首版建议不自动打开，只保留用户点击卡片打开，避免打断对话阅读。
-2. HTML 网站名称是否需要由 agent 明确写入 metadata，还是由前端解析 `<title>`，需要结合 OpenClaw 输出结构再定。
+2. HTML 页面标题是否需要由 agent 明确写入 metadata，还是由前端解析 `<title>`，需要结合 OpenClaw 输出结构再定。
 3. 非 PRD 11 类但现有已经展示的卡片，只做样式统一；后续是否补充更精细的类型名称和图标，需要新的 PRD 明确。

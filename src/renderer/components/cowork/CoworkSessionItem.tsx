@@ -12,6 +12,12 @@ import ListChecksIcon from '../icons/ListChecksIcon';
 import PencilSquareIcon from '../icons/PencilSquareIcon';
 import PushPinIcon from '../icons/PushPinIcon';
 import TrashIcon from '../icons/TrashIcon';
+import {
+  getIMSessionDisplayTitle,
+  getIMSessionPlatformIconClassName,
+  getIMSessionPlatformLabel,
+  getIMSessionPlatformLogo,
+} from './imSessionDisplay';
 
 interface CoworkSessionItemProps {
   session: CoworkSessionSummary;
@@ -97,9 +103,14 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   onToggleSelection,
   onEnterBatchMode,
 }) => {
+  const baseDisplayTitle = stripGoalCommandPrefixForDisplay(session.title).trim() || session.title;
+  const displayTitle = getIMSessionDisplayTitle(baseDisplayTitle, session.imPlatform).title;
+  const imPlatformLogo = getIMSessionPlatformLogo(session.imPlatform);
+  const imPlatformLabel = getIMSessionPlatformLabel(session.imPlatform);
+  const imPlatformIconClassName = getIMSessionPlatformIconClassName(session.imPlatform);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
-  const [renameValue, setRenameValue] = useState(session.title);
+  const [renameValue, setRenameValue] = useState(displayTitle);
   const [menuPosition, setMenuPosition] = useState<{ right: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const actionButtonRef = useRef<HTMLButtonElement>(null);
@@ -108,10 +119,10 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
 
   useEffect(() => {
     if (!isRenaming) {
-      setRenameValue(session.title);
+      setRenameValue(displayTitle);
       ignoreNextBlurRef.current = false;
     }
-  }, [isRenaming, session.title]);
+  }, [displayTitle, isRenaming]);
 
   const calculateMenuPosition = useCallback((height: number) => {
     const rect = actionButtonRef.current?.getBoundingClientRect();
@@ -153,15 +164,15 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     ignoreNextBlurRef.current = false;
     setIsRenaming(true);
     setShowConfirmDelete(false);
-    setRenameValue(session.title);
+    setRenameValue(displayTitle);
     setMenuPosition(null);
-  }, [session.title]);
+  }, [displayTitle]);
 
   const handleRenameSave = (e?: React.SyntheticEvent) => {
     e?.stopPropagation();
     ignoreNextBlurRef.current = true;
     const nextTitle = renameValue.trim();
-    if (nextTitle && nextTitle !== session.title) {
+    if (nextTitle && nextTitle !== displayTitle) {
       onRename(nextTitle);
     }
     setIsRenaming(false);
@@ -170,7 +181,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   const handleRenameCancel = (e?: React.MouseEvent | React.KeyboardEvent) => {
     e?.stopPropagation();
     ignoreNextBlurRef.current = true;
-    setRenameValue(session.title);
+    setRenameValue(displayTitle);
     setIsRenaming(false);
   };
 
@@ -256,7 +267,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   const showUnreadIndicator = !showRunningIndicator && hasUnread;
   const showStatusIndicator = showRunningIndicator || showUnreadIndicator;
   const showRelativeTime = !showStatusIndicator;
-  const displayTitle = stripGoalCommandPrefixForDisplay(session.title).trim() || session.title;
+  const titleRowGapClassName = showStatusIndicator || imPlatformLogo ? 'gap-2' : 'gap-0';
   const batchLabel = i18nService.t('batchOperations');
   const goalStatusLabel = session.goal ? getGoalStatusLabel(session.goal) : null;
   const goalTitle = session.goal ? `${goalStatusLabel}: ${session.goal.objective}` : undefined;
@@ -316,7 +327,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
           </div>
         )}
         <div className="flex-1 min-w-0">
-          <div className={`flex items-center mb-1 ${showStatusIndicator ? 'gap-2' : 'gap-0'}`}>
+          <div className={`flex items-center mb-1 ${titleRowGapClassName}`}>
             {/* Status indicator */}
             {showStatusIndicator && (
               <span
@@ -344,9 +355,26 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
                 className="flex-1 min-w-0 rounded-lg border border-border bg-background px-2 py-1 text-sm font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
               />
             ) : (
-              <h3 className="text-sm font-medium text-foreground truncate">
-                {displayTitle}
-              </h3>
+              <>
+                {imPlatformLogo && imPlatformLabel && (
+                  <span
+                    className="inline-flex h-4 w-4 shrink-0 items-center justify-center"
+                    role="img"
+                    title={imPlatformLabel}
+                    aria-label={imPlatformLabel}
+                  >
+                    <img
+                      src={imPlatformLogo}
+                      alt=""
+                      className={imPlatformIconClassName}
+                      draggable={false}
+                    />
+                  </span>
+                )}
+                <h3 className="min-w-0 flex-1 text-sm font-medium text-foreground truncate">
+                  {displayTitle}
+                </h3>
+              </>
             )}
           </div>
           <div className="flex min-w-0 items-center gap-2 text-xs text-secondary">

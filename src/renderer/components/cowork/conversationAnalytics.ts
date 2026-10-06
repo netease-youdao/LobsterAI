@@ -113,7 +113,7 @@ export const reportConversationNavigationAction = (options: ConversationNavigati
 
 export interface ConversationBlockActionOptions {
   actionType: string;
-  blockType: 'code' | 'thinking' | 'proposed_plan' | 'tool';
+  blockType: 'code' | 'thinking' | 'proposed_plan' | 'tool' | 'activity_group' | 'turn_process';
   params?: Record<string, ConversationAnalyticsValue>;
 }
 

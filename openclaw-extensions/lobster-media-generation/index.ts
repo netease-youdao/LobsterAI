@@ -2,6 +2,13 @@ import { Type } from '@sinclair/typebox';
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 
 import { isLobsterAiDesktopSessionKey } from './sessionKey';
+import {
+  type MediaStatusPollPolicy,
+  type MediaStatusResponse,
+  type MediaStatusType,
+  type MediaStatusUpdate,
+  pollMediaStatus,
+} from './statusPolling';
 
 type PluginConfig = {
   callbackUrl: string;
@@ -18,24 +25,54 @@ type MediaToolRequest = {
   };
 };
 
-type MediaToolResponse = {
-  content: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  details?: Record<string, unknown>;
+type MediaToolResponse = MediaStatusResponse;
+
+const DEFAULT_TIMEOUT_MS = 150_000;
+
+const STATUS_REQUEST_TIMEOUT_MS = 150_000;
+
+const IMAGE_STATUS_POLL_POLICY: MediaStatusPollPolicy = {
+  timeoutMs: 30 * 60_000,
+  fastIntervalMs: 5_000,
+  slowIntervalMs: 15_000,
+  mediumIntervalMs: 30_000,
+  idleIntervalMs: 60_000,
+  fastPollCount: 12,
+  slowPollCount: 12,
+  mediumPollCount: 20,
 };
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+const VIDEO_STATUS_POLL_POLICY: MediaStatusPollPolicy = {
+  timeoutMs: 36_000_000,
+  fastIntervalMs: 10_000,
+  slowIntervalMs: 30_000,
+  mediumIntervalMs: 120_000,
+  idleIntervalMs: 600_000,
+  fastPollCount: 6,
+  slowPollCount: 18,
+  mediumPollCount: 10,
+};
 
-// Video polling configuration
-const VIDEO_POLL_TIMEOUT_MS = 36_000_000; // 10 hours
-const VIDEO_POLL_FAST_MS = 10_000;
-const VIDEO_POLL_SLOW_MS = 30_000;
-const VIDEO_POLL_MEDIUM_MS = 120_000;
-const VIDEO_POLL_IDLE_MS = 600_000;
-const VIDEO_POLL_FAST_COUNT = 6;
-const VIDEO_POLL_SLOW_COUNT = 18;
-const VIDEO_POLL_MEDIUM_COUNT = 10;
-const VIDEO_STATUS_REQUEST_TIMEOUT_MS = 30_000;
+const MediaToolName = {
+  ImageGenerate: 'lobsterai_image_generate',
+  VideoGenerate: 'lobsterai_video_generate',
+  SkinManage: 'lobsterai_skin_manage',
+} as const;
+
+const MediaToolAction = {
+  Generate: 'generate',
+  List: 'list',
+  Status: 'status',
+  Cancel: 'cancel',
+} as const;
+
+const SkinManageAction = {
+  CreateDraft: 'create_draft',
+  RegisterAsset: 'register_asset',
+  Status: 'status',
+  Apply: 'apply',
+  Deactivate: 'deactivate',
+} as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -64,6 +101,15 @@ const sanitizeArgsForLog = (args: Record<string, unknown>): Record<string, unkno
     durationSeconds: args.durationSeconds,
   };
 };
+
+const sanitizeSkinArgsForLog = (args: Record<string, unknown>): Record<string, unknown> => ({
+  action: typeof args.action === 'string' ? args.action : '',
+  skinId: typeof args.skinId === 'string' ? args.skinId : '',
+  slot: typeof args.slot === 'string' ? args.slot : '',
+  nameLength: typeof args.name === 'string' ? args.name.length : 0,
+  baseThemeId: typeof args.baseThemeId === 'string' ? args.baseThemeId : '',
+  hasSourcePath: typeof args.sourcePath === 'string' && args.sourcePath.length > 0,
+});
 
 const parsePluginConfig = (value: unknown): PluginConfig => {
   const raw = isRecord(value) ? value : {};
@@ -121,40 +167,43 @@ async function callMediaBridge(
   }
 }
 
-function getPollInterval(pollCount: number): number {
-  if (pollCount < VIDEO_POLL_FAST_COUNT) return VIDEO_POLL_FAST_MS;
-  if (pollCount < VIDEO_POLL_FAST_COUNT + VIDEO_POLL_SLOW_COUNT) return VIDEO_POLL_SLOW_MS;
-  if (pollCount < VIDEO_POLL_FAST_COUNT + VIDEO_POLL_SLOW_COUNT + VIDEO_POLL_MEDIUM_COUNT) return VIDEO_POLL_MEDIUM_MS;
-  return VIDEO_POLL_IDLE_MS;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function isTerminalStatus(status: string): boolean {
-  return status === 'succeeded' || status === 'failed' || status === 'cancelled';
-}
-
-function readPollCount(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
-}
-
-function extractResponseText(response: MediaToolResponse): string {
-  return response.content
-    .map(item => item.text)
-    .filter(text => typeof text === 'string' && text.trim())
-    .join('\n')
-    .trim();
+async function executeMediaStatusPolling(options: {
+  config: PluginConfig;
+  mediaType: MediaStatusType;
+  policy: MediaStatusPollPolicy;
+  tool: string;
+  taskId: string;
+  toolCallId: string;
+  sessionKey: string;
+  signal?: AbortSignal;
+  onUpdate?: (result: MediaStatusUpdate) => void;
+  log: (message: string) => void;
+}): Promise<MediaToolResponse> {
+  const statusConfig: PluginConfig = {
+    ...options.config,
+    requestTimeoutMs: Math.max(options.config.requestTimeoutMs, STATUS_REQUEST_TIMEOUT_MS),
+  };
+  return pollMediaStatus({
+    mediaType: options.mediaType,
+    taskId: options.taskId,
+    toolCallId: options.toolCallId,
+    policy: options.policy,
+    signal: options.signal,
+    onUpdate: options.onUpdate,
+    log: message => options.log(`[lobster-media-generation] ${message}`),
+    requestStatus: () => callMediaBridge(statusConfig, {
+      tool: options.tool,
+      args: { action: MediaToolAction.Status, taskId: options.taskId },
+      context: { sessionKey: options.sessionKey, toolCallId: options.toolCallId },
+    }),
+  });
 }
 
 const ImageGenerateSchema = Type.Object({
   action: Type.Optional(Type.Union([
-    Type.Literal('generate'),
-    Type.Literal('list'),
-    Type.Literal('status'),
+    Type.Literal(MediaToolAction.Generate),
+    Type.Literal(MediaToolAction.List),
+    Type.Literal(MediaToolAction.Status),
   ], { description: 'Action to perform. Default: generate.' })),
   prompt: Type.Optional(Type.String({ description: 'Text prompt describing the image to generate.' })),
   model: Type.Optional(Type.String({ description: 'Model ID for generation. Use action=list to see available models.' })),
@@ -177,10 +226,10 @@ const ImageGenerateSchema = Type.Object({
 
 const VideoGenerateSchema = Type.Object({
   action: Type.Optional(Type.Union([
-    Type.Literal('generate'),
-    Type.Literal('list'),
-    Type.Literal('status'),
-    Type.Literal('cancel'),
+    Type.Literal(MediaToolAction.Generate),
+    Type.Literal(MediaToolAction.List),
+    Type.Literal(MediaToolAction.Status),
+    Type.Literal(MediaToolAction.Cancel),
   ], { description: 'Action to perform. Default: generate.' })),
   prompt: Type.Optional(Type.String({ description: 'Text prompt describing the video to generate. Chinese and English supported.' })),
   model: Type.Optional(Type.String({ description: 'Model ID for generation. Use action="list" to see available models and their supported parameters.' })),
@@ -194,7 +243,7 @@ const VideoGenerateSchema = Type.Object({
   video: Type.Optional(Type.String({ description: 'Single reference video absolute file path, URL, or data URL (for video-to-video generation). If a media reference mapping is provided, use the mapped path; do not pass @ media tokens.' })),
   videos: Type.Optional(Type.Array(Type.String(), { description: 'Multiple reference video absolute file paths, URLs, or data URLs. If a media reference mapping is provided, use mapped paths; do not pass @ media tokens.' })),
   videoRoles: Type.Optional(Type.Array(Type.String(), { description: 'Role for each video: "reference_video".' })),
-  aspectRatio: Type.Optional(Type.String({ description: 'Aspect ratio: "16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive". Valid values depend on model — use action="list" to check.' })),
+  aspectRatio: Type.Optional(Type.String({ description: 'Aspect ratio: "16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive". Valid values depend on model; use action="list" to check.' })),
   resolution: Type.Optional(Type.String({ description: 'Resolution: "480p", "720p", "768P", "1080p". Valid values depend on model.' })),
   durationSeconds: Type.Optional(Type.Number({ description: 'Video duration in seconds. Valid range depends on model (e.g. Seedance 2.0: 4-15, MiniMax Hailuo: 6 or 10). Use -1 for auto. Use action="list" to check.', minimum: -1, maximum: 60 })),
   audio: Type.Optional(Type.Boolean({ description: 'Whether to generate synchronized audio (speech, sound effects, background music). Default: true.' })),
@@ -207,10 +256,68 @@ const VideoGenerateSchema = Type.Object({
   providerOptions: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: 'Model-specific options passed through to the provider (e.g. prompt_optimizer, fast_pretreatment, priority, draft).' })),
 });
 
+const SkinPresentationPaletteSchema = Type.Object({
+  canvas: Type.String({ description: 'Cowork canvas color as #RRGGBB.' }),
+  panel: Type.String({ description: 'Sidebar and prompt surface color as #RRGGBB.' }),
+  panelRaised: Type.String({ description: 'Raised surface color as #RRGGBB.' }),
+  accent: Type.String({ description: 'Primary decorative accent as #RRGGBB.' }),
+  accentForeground: Type.String({ description: 'Readable foreground color on the accent as #RRGGBB.' }),
+  accentAlt: Type.String({ description: 'Secondary decorative accent as #RRGGBB.' }),
+  foreground: Type.String({ description: 'Primary readable text color as #RRGGBB.' }),
+  muted: Type.String({ description: 'Secondary readable text color as #RRGGBB.' }),
+  border: Type.String({ description: 'Subtle skin border color as #RRGGBB.' }),
+}, { additionalProperties: false });
+
+const SkinPresentationSchema = Type.Object({
+  mode: Type.Literal('immersive_shell'),
+  palette: SkinPresentationPaletteSchema,
+  art: Type.Optional(Type.Object({
+    focusX: Type.Number({ minimum: 0, maximum: 1, description: 'Horizontal backdrop focal point.' }),
+    focusY: Type.Number({ minimum: 0, maximum: 1, description: 'Vertical backdrop focal point.' }),
+  }, { additionalProperties: false })),
+  effects: Type.Optional(Type.Object({
+    particleDensity: Type.Union([
+      Type.Literal('none'),
+      Type.Literal('sparse'),
+    ]),
+  }, { additionalProperties: false })),
+}, { additionalProperties: false });
+
+const SkinManageSchema = Type.Union([
+  Type.Object({
+    action: Type.Literal(SkinManageAction.CreateDraft),
+    name: Type.String({ description: 'User-visible skin name.' }),
+    baseThemeId: Type.Optional(Type.String({
+      description: 'Legacy compatibility metadata. It does not control the light or dark appearance inferred from presentation colors.',
+    })),
+    presentation: Type.Optional(SkinPresentationSchema),
+  }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal(SkinManageAction.RegisterAsset),
+    skinId: Type.String({ description: 'Skin draft ID returned by create_draft.' }),
+    slot: Type.Union([
+      Type.Literal('workspace.backdrop'),
+      Type.Literal('home.emblem'),
+    ], { description: 'Fixed skin asset slot.' }),
+    sourcePath: Type.String({ description: 'Absolute path of the generated local image.' }),
+  }),
+  Type.Object({
+    action: Type.Literal(SkinManageAction.Status),
+    skinId: Type.String({ description: 'Skin draft ID returned by create_draft.' }),
+  }),
+  Type.Object({
+    action: Type.Literal(SkinManageAction.Apply),
+    skinId: Type.String({ description: 'Ready skin draft ID to activate.' }),
+  }),
+  Type.Object({
+    action: Type.Literal(SkinManageAction.Deactivate),
+  }),
+], { description: 'Trusted desktop skin operation to perform.' });
+
 const plugin = {
   id: 'lobster-media-generation',
   name: 'LobsterMediaGeneration',
-  description: 'Image and video generation tools powered by LobsterAI server.',
+  description: 'Image/video generation and AI skin management tools powered by LobsterAI.',
   configSchema: {
     parse(value: unknown): PluginConfig {
       return parsePluginConfig(value);
@@ -230,28 +337,59 @@ const plugin = {
       }
 
       return {
-        name: 'lobsterai_image_generate',
+        name: MediaToolName.ImageGenerate,
         label: 'Image Generation',
         description: [
           'Generate images using LobsterAI server.',
           'Supports text-to-image and image-to-image generation.',
           'If the system prompt includes a LobsterAI media reference mapping, use mapped file paths or URLs in image/images arguments and never pass @ media tokens as tool argument values.',
           'Use action="list" to see available models and their capabilities.',
-          'Use action="status" with taskId to check async task progress.',
+          'Use action="status" with taskId once; that call adaptively polls until the task reaches a terminal state. Do not busy-poll status yourself.',
           'Requires an active subscription with available image generation quota.',
         ].join(' '),
         parameters: ImageGenerateSchema,
-        async execute(id: string, params: unknown) {
+        async execute(
+          id: string,
+          params: unknown,
+          signal?: AbortSignal,
+          onUpdate?: (result: MediaStatusUpdate) => void,
+        ) {
           const args = (params ?? {}) as Record<string, unknown>;
+          const action = typeof args.action === 'string' ? args.action : MediaToolAction.Generate;
+          if (action === MediaToolAction.Status) {
+            const taskId = typeof args.taskId === 'string' ? args.taskId : '';
+            if (!taskId) {
+              return { content: [{ type: 'text', text: 'taskId is required for status action.' }], isError: true };
+            }
+            try {
+              return await executeMediaStatusPolling({
+                config,
+                mediaType: 'image',
+                policy: IMAGE_STATUS_POLL_POLICY,
+                tool: MediaToolName.ImageGenerate,
+                taskId,
+                toolCallId: id,
+                sessionKey,
+                signal,
+                onUpdate,
+                log: message => api.logger.info(message),
+              });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              api.logger.info(`[lobster-media-generation] image status failed: toolCallId=${id} error=${message}`);
+              return { content: [{ type: 'text', text: `Image status check failed: ${message}` }], isError: true };
+            }
+          }
+
           try {
-            api.logger.info(`[lobster-media-generation] image tool callback started: toolCallId=${id} args=${JSON.stringify(sanitizeArgsForLog(args))}`);
+            api.logger.info(`[lobster-media-generation] image tool (${action}) started: toolCallId=${id} args=${JSON.stringify(sanitizeArgsForLog(args))}`);
             const startedAt = Date.now();
             const result = await callMediaBridge(config, {
-              tool: 'lobsterai_image_generate',
+              tool: MediaToolName.ImageGenerate,
               args,
               context: { sessionKey, toolCallId: id },
             });
-            api.logger.info(`[lobster-media-generation] image tool callback completed: toolCallId=${id} elapsedMs=${Date.now() - startedAt} isError=${result.isError === true}`);
+            api.logger.info(`[lobster-media-generation] image tool (${action}) completed: toolCallId=${id} elapsedMs=${Date.now() - startedAt} isError=${result.isError === true}`);
             return result;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -269,7 +407,7 @@ const plugin = {
       }
 
       return {
-        name: 'lobsterai_video_generate',
+        name: MediaToolName.VideoGenerate,
         label: 'Video Generation',
         description: [
           'Generate videos using LobsterAI server.',
@@ -280,105 +418,40 @@ const plugin = {
           'WORKFLOW: You MUST follow this three-step process:',
           'Step 1: Call with action="list" to see available models, their capabilities and supported parameters.',
           'Step 2: Call with action="generate" with chosen model and parameters. Returns a taskId.',
-          'Step 3: Call with action="status" and the taskId. The tool will automatically poll with optimal intervals until completion — do NOT call status repeatedly yourself.',
+          'Step 3: Call with action="status" and the taskId. The tool will automatically poll with optimal intervals until completion; do NOT call status repeatedly yourself.',
           'Use action="cancel" with taskId only if the user explicitly requests cancellation. Note: only queued tasks can be cancelled; running tasks cannot be cancelled.',
           'Requires an active subscription with available video generation quota.',
         ].join(' '),
         parameters: VideoGenerateSchema,
-        async execute(id: string, params: unknown, _signal?: AbortSignal, onUpdate?: (result: { content: Array<{type: string; text: string}>; details?: Record<string, unknown> }) => void) {
+        async execute(
+          id: string,
+          params: unknown,
+          signal?: AbortSignal,
+          onUpdate?: (result: MediaStatusUpdate) => void,
+        ) {
           const args = (params ?? {}) as Record<string, unknown>;
-          const action = typeof args.action === 'string' ? args.action : 'generate';
+          const action = typeof args.action === 'string' ? args.action : MediaToolAction.Generate;
 
           // status action: poll with adaptive intervals until terminal
-          if (action === 'status') {
+          if (action === MediaToolAction.Status) {
             const taskId = typeof args.taskId === 'string' ? args.taskId : '';
             if (!taskId) {
               return { content: [{ type: 'text', text: 'taskId is required for status action.' }], isError: true };
             }
 
             try {
-              api.logger.info(`[lobster-media-generation] video status polling started: toolCallId=${id} taskId=${taskId}`);
-              const startedAt = Date.now();
-              const statusConfig: PluginConfig = { ...config, requestTimeoutMs: VIDEO_STATUS_REQUEST_TIMEOUT_MS };
-              let pollCount = 0;
-              let upstreamTaskId: string | undefined;
-              let firstStatusOutput: string | undefined;
-              let latestReportedPollCount = 0;
-
-              while (true) {
-                const elapsed = Date.now() - startedAt;
-                if (elapsed >= VIDEO_POLL_TIMEOUT_MS) {
-                  api.logger.info(`[lobster-media-generation] video status poll timeout: toolCallId=${id} taskId=${taskId} elapsedMs=${elapsed} pollCount=${pollCount}`);
-                  return {
-                    content: [{ type: 'text', text: `Video generation timed out after ${Math.round(elapsed / 60_000)} minutes.\nTask ID: ${upstreamTaskId || taskId}\nYou can check status later with action="status".` }],
-                    isError: true,
-                    details: { taskId, upstreamTaskId, status: 'timeout', pollCount: latestReportedPollCount || pollCount },
-                  };
-                }
-
-                if (pollCount > 0) {
-                  const interval = getPollInterval(pollCount - 1);
-                  await sleep(interval);
-                }
-
-                pollCount++;
-
-                try {
-                  const statusResult = await callMediaBridge(statusConfig, {
-                    tool: 'lobsterai_video_generate',
-                    args: { action: 'status', taskId },
-                    context: { sessionKey, toolCallId: id },
-                  });
-
-                  const statusDetails = statusResult.details ?? {};
-                  const currentStatus = statusDetails.status as string | undefined;
-                  const reportedPollCount = readPollCount(statusDetails.pollCount) ?? pollCount;
-                  latestReportedPollCount = Math.max(latestReportedPollCount, reportedPollCount);
-                  if (!upstreamTaskId && statusDetails.upstreamTaskId) {
-                    upstreamTaskId = String(statusDetails.upstreamTaskId);
-                  }
-                  const statusOutput = extractResponseText(statusResult);
-                  if (!firstStatusOutput && statusOutput) {
-                    firstStatusOutput = statusOutput;
-                  }
-
-                  if (onUpdate) {
-                    onUpdate({
-                      content: [{ type: 'text', text: firstStatusOutput || `Task ID: ${upstreamTaskId || taskId}` }],
-                      details: {
-                        taskId,
-                        upstreamTaskId,
-                        pollCount: latestReportedPollCount,
-                        ...(currentStatus ? { status: currentStatus } : {}),
-                        ...(firstStatusOutput ? { firstStatusOutput } : {}),
-                        isMediaStatusPolling: true,
-                        mediaType: 'video',
-                      },
-                    });
-                  }
-
-                  if (currentStatus && isTerminalStatus(currentStatus)) {
-                    api.logger.info(`[lobster-media-generation] video status poll complete: toolCallId=${id} taskId=${taskId} status=${currentStatus} elapsedMs=${Date.now() - startedAt} pollCount=${pollCount}`);
-                    return {
-                      ...statusResult,
-                      details: {
-                        ...statusResult.details,
-                        taskId,
-                        upstreamTaskId,
-                        pollCount: latestReportedPollCount,
-                      },
-                    };
-                  }
-
-                  if (pollCount % 6 === 0) {
-                    const progress = statusDetails.progress ?? 'unknown';
-                    api.logger.info(`[lobster-media-generation] video status poll progress: toolCallId=${id} taskId=${taskId} pollCount=${pollCount} progress=${progress} elapsedMs=${Date.now() - startedAt}`);
-                  }
-                } catch (pollError) {
-                  const pollMsg = pollError instanceof Error ? pollError.message : String(pollError);
-                  api.logger.info(`[lobster-media-generation] video status poll error (will retry): toolCallId=${id} taskId=${taskId} pollCount=${pollCount} error=${pollMsg}`);
-                }
-              }
+              return await executeMediaStatusPolling({
+                config,
+                mediaType: 'video',
+                policy: VIDEO_STATUS_POLL_POLICY,
+                tool: MediaToolName.VideoGenerate,
+                taskId,
+                toolCallId: id,
+                sessionKey,
+                signal,
+                onUpdate,
+                log: message => api.logger.info(message),
+              });
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
               api.logger.info(`[lobster-media-generation] video status failed: toolCallId=${id} error=${message}`);
@@ -391,7 +464,7 @@ const plugin = {
             api.logger.info(`[lobster-media-generation] video tool (${action}) started: toolCallId=${id} args=${JSON.stringify(sanitizeArgsForLog(args))}`);
             const startedAt = Date.now();
             const result = await callMediaBridge(config, {
-              tool: 'lobsterai_video_generate',
+              tool: MediaToolName.VideoGenerate,
               args,
               context: { sessionKey, toolCallId: id },
             });
@@ -406,7 +479,50 @@ const plugin = {
       };
     });
 
-    api.logger.info('[lobster-media-generation] registered lobsterai_image_generate and lobsterai_video_generate tools.');
+    api.registerTool((ctx) => {
+      const sessionKey = ctx.sessionKey ?? '';
+      if (!isLobsterAiDesktopSessionKey(sessionKey)) {
+        return null;
+      }
+
+      return {
+        name: MediaToolName.SkinManage,
+        label: 'AI Skin Management',
+        description: [
+          'Create and manage a LobsterAI AI skin pack through the trusted desktop callback.',
+          'This tool manages drafts and assets; it does not generate images.',
+          'For a new pack, call create_draft with a name and an optional validated immersive-shell presentation first.',
+          'LobsterAI deterministically infers a preferred light or dark appearance from presentation colors and applies it through the existing theme system; do not choose a color theme ID.',
+          'Only allow-listed application and conversation title bars may use presentation colors. Page layout, system icons, and arbitrary CSS are never skin-controlled.',
+          'Register only generated local files returned by an image tool.',
+          'The only supported asset slots are workspace.backdrop followed by home.emblem.',
+          'Use register_asset with skinId, slot, and sourcePath after each generation succeeds.',
+          'Use status to verify readiness and apply only after the draft is ready. Deactivating removes custom imagery and presentation styling while keeping the current color theme.',
+        ].join(' '),
+        parameters: SkinManageSchema,
+        async execute(id: string, params: unknown) {
+          const args = (params ?? {}) as Record<string, unknown>;
+          const action = typeof args.action === 'string' ? args.action : '';
+          try {
+            api.logger.info(`[lobster-media-generation] skin tool (${action}) started: toolCallId=${id} args=${JSON.stringify(sanitizeSkinArgsForLog(args))}`);
+            const startedAt = Date.now();
+            const result = await callMediaBridge(config, {
+              tool: MediaToolName.SkinManage,
+              args,
+              context: { sessionKey, toolCallId: id },
+            });
+            api.logger.info(`[lobster-media-generation] skin tool (${action}) completed: toolCallId=${id} elapsedMs=${Date.now() - startedAt} isError=${result.isError === true}`);
+            return result;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            api.logger.info(`[lobster-media-generation] skin tool (${action}) failed: toolCallId=${id} error=${message}`);
+            return { content: [{ type: 'text', text: `Skin management failed: ${message}` }], isError: true };
+          }
+        },
+      };
+    });
+
+    api.logger.info('[lobster-media-generation] registered lobsterai_image_generate, lobsterai_video_generate, and lobsterai_skin_manage tools.');
   },
 };
 

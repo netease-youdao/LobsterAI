@@ -15,6 +15,15 @@ export const OpenClawSessionSendPolicy = {
 export type OpenClawSessionSendPolicy =
   typeof OpenClawSessionSendPolicy[keyof typeof OpenClawSessionSendPolicy];
 
+export const OpenClawSessionReasoningLevel = {
+  Off: 'off',
+  On: 'on',
+  Stream: 'stream',
+} as const;
+
+export type OpenClawSessionReasoningLevel =
+  typeof OpenClawSessionReasoningLevel[keyof typeof OpenClawSessionReasoningLevel];
+
 export interface OpenClawSessionPatch {
   model?: string | null;
   thinkingLevel?: string | null;

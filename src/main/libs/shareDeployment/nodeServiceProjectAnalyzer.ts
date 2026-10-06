@@ -10,6 +10,8 @@ import {
   type ShareDeploymentDetectCandidatesInput,
   ShareDeploymentKind,
   ShareDeploymentPackageManager,
+  ShareDeploymentPersistenceBindingKind,
+  ShareDeploymentPersistenceProvider,
   type ShareDeploymentProjectAnalysis,
   type ShareDeploymentProjectCandidate,
 } from '../../../shared/shareDeployment/constants';
@@ -26,6 +28,9 @@ export const NODE_SERVICE_DEPLOYMENT_LIMITS = {
 
 const PACKAGE_JSON_FILE_NAME = 'package.json';
 const STATIC_SITE_ENTRY_FILE = 'index.html';
+const DEFAULT_PERSISTENCE_QUOTA_BYTES = 100 * 1024 * 1024;
+const PERSISTENCE_ROOT_DIRECTORY_NAMES = new Set(['data', 'uploads', 'storage']);
+const PERSISTENCE_DATABASE_EXTENSIONS = new Set(['.db', '.sqlite', '.sqlite3']);
 
 const COMMON_BLOCKED_DIRECTORY_NAMES = [
   '.git',
@@ -74,8 +79,6 @@ const BLOCKED_FILE_NAMES = new Set([
   'pnpm-debug.log',
 ]);
 
-const PROJECT_CANDIDATE_SCAN_MAX_DEPTH = 3;
-const PROJECT_CANDIDATE_SCAN_MAX_DIRECTORIES = 300;
 const NEXT_STANDALONE_START_COMMAND = 'node server.js';
 const NITRO_OUTPUT_START_COMMAND = 'node .output/server/index.mjs';
 const STATIC_BUILD_START_COMMAND = 'node server.js';
@@ -145,8 +148,15 @@ export interface NodeServicePackageCollection {
   entries: NodeServicePackageEntry[];
   totalBytes: number;
   excludedCount: number;
+  persistence?: ShareDeploymentProjectAnalysis['persistence'];
   warnings: string[];
   blockers: string[];
+}
+
+interface PersistenceCandidate {
+  appPath: string;
+  kind: ShareDeploymentPersistenceBindingKind;
+  sizeBytes: number;
 }
 
 function normalizeArchiveName(value: string): string {
@@ -175,6 +185,18 @@ function isSecretLikeFileName(name: string): boolean {
 
 function isBlockedFileName(name: string): boolean {
   return BLOCKED_FILE_NAMES.has(name) || isEnvFileName(name) || isSecretLikeFileName(name);
+}
+
+function isRootPersistenceDirectory(relativeParts: string[]): boolean {
+  return relativeParts.length === 1 && PERSISTENCE_ROOT_DIRECTORY_NAMES.has(relativeParts[0]);
+}
+
+function isPersistenceDatabaseFile(relativeParts: string[], fileName: string): boolean {
+  return relativeParts.length <= 2 && PERSISTENCE_DATABASE_EXTENSIONS.has(path.extname(fileName).toLowerCase());
+}
+
+function persistenceDataPath(relativePath: string): string {
+  return normalizeArchiveName(relativePath);
 }
 
 function isBlockedPathPart(part: string, blockedDirectoryNames: Set<string>): boolean {
@@ -530,10 +552,28 @@ async function collectPackageEntries(
   maxTotalBytes: number,
 ): Promise<NodeServicePackageCollection> {
   const entries: NodeServicePackageEntry[] = [];
-  const warnings: string[] = [];
+  const persistenceCandidates = new Map<string, PersistenceCandidate>();
   const blockers: string[] = [];
   let totalBytes = 0;
   let excludedCount = 0;
+
+  function addPersistenceCandidate(
+    relativePath: string,
+    kind: ShareDeploymentPersistenceBindingKind,
+    sizeBytes: number,
+  ): void {
+    const archiveName = normalizeArchiveName(relativePath);
+    const previous = persistenceCandidates.get(archiveName);
+    if (previous) {
+      previous.sizeBytes += sizeBytes;
+      return;
+    }
+    persistenceCandidates.set(archiveName, {
+      appPath: archiveName,
+      kind,
+      sizeBytes,
+    });
+  }
 
   async function walk(directory: string): Promise<void> {
     if (blockers.length > 0) return;
@@ -566,6 +606,11 @@ async function collectPackageEntries(
 
       const stat = await fs.promises.stat(absolutePath);
       totalBytes += stat.size;
+      if (relativeParts.length > 1 && isRootPersistenceDirectory([relativeParts[0]])) {
+        addPersistenceCandidate(relativeParts[0], ShareDeploymentPersistenceBindingKind.Directory, stat.size);
+      } else if (isPersistenceDatabaseFile(relativeParts, child.name)) {
+        addPersistenceCandidate(relativePath, ShareDeploymentPersistenceBindingKind.File, stat.size);
+      }
       entries.push({
         absolutePath,
         archiveName: normalizeArchiveName(relativePath),
@@ -586,15 +631,28 @@ async function collectPackageEntries(
 
   await walk(projectDirectory);
 
-  if (excludedCount > 0) {
-    warnings.push(`${excludedCount} files or directories will be excluded from the deployment package.`);
-  }
+  const persistenceBindings = Array.from(persistenceCandidates.values())
+    .sort((a, b) => a.appPath.localeCompare(b.appPath))
+    .map(candidate => ({
+      appPath: candidate.appPath,
+      dataPath: persistenceDataPath(candidate.appPath),
+      kind: candidate.kind,
+      sizeBytes: candidate.sizeBytes,
+    }));
 
   return {
     entries: entries.sort((a, b) => a.archiveName.localeCompare(b.archiveName)),
     totalBytes,
     excludedCount,
-    warnings,
+    persistence: persistenceBindings.length
+      ? {
+          enabled: true,
+          provider: ShareDeploymentPersistenceProvider.Filesystem,
+          quotaBytes: DEFAULT_PERSISTENCE_QUOTA_BYTES,
+          bindings: persistenceBindings,
+        }
+      : undefined,
+    warnings: [],
     blockers,
   };
 }
@@ -613,7 +671,6 @@ export async function collectStaticSiteDeploymentPackageEntries(
   projectDirectory: string,
 ): Promise<NodeServicePackageCollection> {
   const entries: NodeServicePackageEntry[] = [];
-  const warnings: string[] = [];
   const blockers: string[] = [];
   let totalBytes = 0;
   let excludedCount = 0;
@@ -672,15 +729,11 @@ export async function collectStaticSiteDeploymentPackageEntries(
 
   await walk(projectDirectory);
 
-  if (excludedCount > 0) {
-    warnings.push(`${excludedCount} files or directories will be excluded from the static deployment package.`);
-  }
-
   return {
     entries: entries.sort((a, b) => a.archiveName.localeCompare(b.archiveName)),
     totalBytes,
     excludedCount,
-    warnings,
+    warnings: [],
     blockers,
   };
 }
@@ -752,6 +805,7 @@ export async function buildNodeServiceProjectPackagePlan(
         entries: [],
         totalBytes: 0,
         excludedCount: 0,
+        persistence: undefined,
         warnings: [],
         blockers: [],
       };
@@ -773,6 +827,7 @@ export async function buildNodeServiceProjectPackagePlan(
     totalFiles: collected.entries.length,
     totalBytes: collected.totalBytes,
     excludedCount: collected.excludedCount,
+    persistence: collected.persistence,
     warnings: [...warnings, ...collected.warnings],
     blockers: [...blockers, ...collected.blockers],
   };
@@ -824,13 +879,11 @@ async function getPidListeningOnPort(port: number): Promise<string | null> {
 
 async function getProcessCwd(pid: string): Promise<string | null> {
   if (process.platform === 'win32') return null;
-  if (process.platform === 'darwin') {
-    const procCwd = `/proc/${pid}/cwd`;
-    try {
-      return await fs.promises.realpath(procCwd);
-    } catch {
-      // macOS does not expose /proc by default; fall through to lsof.
-    }
+  const procCwd = `/proc/${pid}/cwd`;
+  try {
+    return await fs.promises.realpath(procCwd);
+  } catch {
+    // Linux normally resolves /proc directly; macOS and restricted systems fall through to lsof.
   }
   try {
     const { stdout } = await execFileAsync('lsof', ['-a', '-p', pid, '-d', 'cwd', '-Fn'], {
@@ -879,57 +932,6 @@ async function pushUsableInputCandidate(
     ...candidate,
     directory,
   });
-}
-
-async function findWorkspaceChildProjectCandidates(
-  workingDirectory?: string,
-): Promise<ShareDeploymentProjectCandidate[]> {
-  if (!workingDirectory?.trim()) return [];
-
-  const root = path.resolve(workingDirectory.trim());
-  try {
-    const stat = await fs.promises.stat(root);
-    if (!stat.isDirectory() || isBlockedRootDirectory(root)) return [];
-  } catch {
-    return [];
-  }
-
-  const candidates: ShareDeploymentProjectCandidate[] = [];
-  let visitedDirectories = 0;
-
-  async function walk(directory: string, depth: number): Promise<void> {
-    if (depth > PROJECT_CANDIDATE_SCAN_MAX_DEPTH) return;
-    if (visitedDirectories >= PROJECT_CANDIDATE_SCAN_MAX_DIRECTORIES) return;
-
-    let children: fs.Dirent[];
-    try {
-      children = await fs.promises.readdir(directory, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const child of children) {
-      if (visitedDirectories >= PROJECT_CANDIDATE_SCAN_MAX_DIRECTORIES) return;
-      if (!child.isDirectory() || child.isSymbolicLink()) continue;
-      if (isBlockedPathPart(child.name, SOURCE_BLOCKED_DIRECTORY_NAMES)) continue;
-
-      const childDirectory = path.join(directory, child.name);
-      visitedDirectories += 1;
-      if (await isUsableProjectDirectory(childDirectory)) {
-        pushUniqueCandidate(candidates, {
-          directory: childDirectory,
-          source: ShareDeploymentCandidateSource.WorkspaceChild,
-          confidence: Math.max(50, 76 - depth * 6),
-          reason: 'Found a deployable project under the current workspace directory.',
-        });
-      }
-
-      await walk(childDirectory, depth + 1);
-    }
-  }
-
-  await walk(root, 1);
-  return candidates;
 }
 
 export async function detectNodeServiceProjectCandidates(
@@ -1014,9 +1016,7 @@ export async function detectNodeServiceProjectCandidates(
       : null,
   );
 
-  for (const childProjectCandidate of await findWorkspaceChildProjectCandidates(input.workingDirectory)) {
-    pushUniqueCandidate(candidates, childProjectCandidate);
-  }
-
-  return candidates.sort((a, b) => b.confidence - a.confidence);
+  // Preserve the fallback stages instead of globally re-sorting by confidence:
+  // listening process -> session context -> previous selection -> working directory.
+  return candidates;
 }

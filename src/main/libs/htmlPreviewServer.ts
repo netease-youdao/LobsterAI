@@ -331,14 +331,29 @@ export async function startHtmlPreviewServer(): Promise<number> {
 export async function stopHtmlPreviewServer(): Promise<void> {
   if (!server) return;
 
+  const activeServer = server;
+  server = null;
+  serverPort = null;
+  sessions.clear();
+
+  // Bounded shutdown: server.close() waits for open preview connections
+  // (e.g. a renderer webview keeping keep-alive sockets), so force-close
+  // stragglers after a short drain window and cap the total wait.
   return new Promise((resolve) => {
-    server!.close(() => {
+    let settled = false;
+    let drainTimer: ReturnType<typeof setTimeout> | null = null;
+    let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      if (drainTimer) clearTimeout(drainTimer);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
       console.log('[HtmlPreviewServer] Stopped');
-      server = null;
-      serverPort = null;
-      sessions.clear();
       resolve();
-    });
+    };
+    drainTimer = setTimeout(() => activeServer.closeAllConnections(), 1_000);
+    deadlineTimer = setTimeout(settle, 3_000);
+    activeServer.close(() => settle());
   });
 }
 

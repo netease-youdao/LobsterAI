@@ -1,14 +1,20 @@
 // 删除重复的类型声明，使用全局类型定义
 export interface LocalStore {
   getItem<T>(key: string): Promise<T | null>;
+  getItemStrict<T>(key: string): Promise<T | null>;
   setItem<T>(key: string, value: T): Promise<void>;
   removeItem(key: string): Promise<void>;
 }
 
 class LocalStoreService implements LocalStore {
+  async getItemStrict<T>(key: string): Promise<T | null> {
+    const value = await window.electron.store.get(key);
+    return value ?? null;
+  }
+
   async getItem<T>(key: string): Promise<T | null> {
     try {
-      const value = await window.electron.store.get(key);
+      const value = await this.getItemStrict<T>(key);
       return value || null;
     } catch (error) {
       console.error('Failed to get item from store:', error);
@@ -35,4 +41,4 @@ class LocalStoreService implements LocalStore {
   }
 }
 
-export const localStore = new LocalStoreService(); 
+export const localStore = new LocalStoreService();

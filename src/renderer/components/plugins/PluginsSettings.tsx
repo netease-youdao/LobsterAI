@@ -1,5 +1,5 @@
-import { ArrowPathIcon, ArrowUpCircleIcon, Cog6ToothIcon,PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
-import { useCallback, useEffect, useImperativeHandle, useRef,useState } from 'react';
+import { ArrowPathIcon, ArrowUpCircleIcon, Cog6ToothIcon, PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
@@ -299,11 +299,25 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
     setConfirmUninstall(null);
   };
 
+  const closeInstallModal = useCallback(() => {
+    setShowInstallModal(false);
+    setInstallError(null);
+    setInstallLog('');
+  }, []);
+
   const handleInstall = async () => {
     if (!form.spec.trim()) return;
     setInstalling(true);
     setInstallError(null);
     setInstallLog('');
+    const installSource = form.source;
+    const hasRegistry = installSource === 'npm' ? form.registry.trim().length > 0 : undefined;
+    const hasVersion = form.version.trim().length > 0;
+    console.debug('[PluginsSettings] plugin install requested', {
+      source: installSource,
+      hasRegistry,
+      hasVersion,
+    });
 
     const params: {
       source: 'npm' | 'clawhub' | 'git' | 'local';
@@ -322,25 +336,41 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
       if (form.version.trim()) params.version = form.version.trim();
     }
 
-    const result = await window.electron?.plugins.install(params);
-    setInstalling(false);
+    try {
+      const result = await window.electron?.plugins.install(params);
+      console.debug('[PluginsSettings] plugin install completed', {
+        source: installSource,
+        ok: Boolean(result?.ok),
+        errorLength: result?.ok ? 0 : result?.error?.length ?? 0,
+      });
 
-    if (result?.ok) {
-      setShowInstallModal(false);
-      setForm({ source: 'npm', spec: '', registry: '', version: '' });
-      loadPlugins();
-      reportPluginAction('install', 'success', {
-        hasRegistry: form.source === 'npm' ? form.registry.trim().length > 0 : undefined,
-        hasVersion: form.version.trim().length > 0,
-        installSource: form.source,
-      });
-    } else {
-      setInstallError(result?.error || i18nService.t('pluginsInstallFailed'));
+      if (result?.ok) {
+        closeInstallModal();
+        setForm({ source: 'npm', spec: '', registry: '', version: '' });
+        loadPlugins();
+        reportPluginAction('install', 'success', {
+          hasRegistry,
+          hasVersion,
+          installSource,
+        });
+      } else {
+        setInstallError(result?.error || i18nService.t('pluginsInstallFailed'));
+        reportPluginAction('install', 'failed', {
+          hasRegistry,
+          hasVersion,
+          installSource,
+        });
+      }
+    } catch (error) {
+      console.error('[PluginsSettings] plugin install IPC failed:', error);
+      setInstallError(error instanceof Error ? error.message : i18nService.t('pluginsInstallFailed'));
       reportPluginAction('install', 'failed', {
-        hasRegistry: form.source === 'npm' ? form.registry.trim().length > 0 : undefined,
-        hasVersion: form.version.trim().length > 0,
-        installSource: form.source,
+        hasRegistry,
+        hasVersion,
+        installSource,
       });
+    } finally {
+      setInstalling(false);
     }
   };
 
@@ -410,16 +440,65 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
     }
   };
 
+  // This overlay must be shared by both the plugin list and config sub-view.
+  const unsavedChangesDialog = showUnsavedConfirm ? (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="plugins-unsaved-title"
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/35 px-4"
+    >
+      <div className="w-full max-w-sm rounded-2xl bg-background border border-border shadow-modal p-5">
+        <h4 id="plugins-unsaved-title" className="text-sm font-semibold text-foreground mb-2">
+          {i18nService.t('pluginsUnsavedTitle')}
+        </h4>
+        <p className="text-sm text-secondary mb-4">
+          {i18nService.t('pluginsUnsavedMessage')}
+        </p>
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              setShowUnsavedConfirm(false);
+              pendingLeaveActionRef.current = null;
+            }}
+            className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+          >
+            {i18nService.t('pluginsUnsavedStay')}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setShowUnsavedConfirm(false);
+              // Reset dirty state so subsequent navigation is not blocked
+              setPendingToggles(new Map());
+              setPendingConfigs(new Map());
+              const action = pendingLeaveActionRef.current;
+              pendingLeaveActionRef.current = null;
+              action?.();
+            }}
+            className="px-4 py-2 text-sm font-medium rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity"
+          >
+            {i18nService.t('pluginsUnsavedDiscard')}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   // Sub-view: Plugin config page
   if (configPluginId) {
     return (
-      <PluginConfigPage
-        pluginId={configPluginId}
-        onBack={() => setConfigPluginId(null)}
-        initialConfig={pendingConfigs.get(configPluginId)}
-        onConfigChange={handleConfigChange}
-        onConfigLoaded={handleConfigLoaded}
-      />
+      <>
+        <PluginConfigPage
+          pluginId={configPluginId}
+          onBack={() => setConfigPluginId(null)}
+          initialConfig={pendingConfigs.get(configPluginId)}
+          onConfigChange={handleConfigChange}
+          onConfigLoaded={handleConfigLoaded}
+        />
+        {unsavedChangesDialog}
+      </>
     );
   }
 
@@ -605,39 +684,96 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
 
       {/* Install Modal */}
       {showInstallModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-background border border-border rounded-xl shadow-lg w-full max-w-md p-6">
-            <h3 className="text-base font-semibold text-foreground mb-4">
-              {i18nService.t('pluginsInstallTitle')}
-            </h3>
-
-            {/* Source selector */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-foreground mb-1">
-                {i18nService.t('pluginsSource')}
-              </label>
-              <div className="flex gap-1 flex-wrap">
-                {(['npm', 'clawhub', 'git', 'local', 'openclaw'] as PluginSource[]).map(src => (
-                  <button
-                    key={src}
-                    type="button"
-                    onClick={() => setForm(f => ({ ...f, source: src, spec: '' }))}
-                    className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
-                      form.source === src
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-surface-raised text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    {sourceLabel(src)}
-                  </button>
-                ))}
-              </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="plugins-install-title"
+            className="flex max-h-[calc(100vh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-xl border border-border bg-background shadow-lg"
+          >
+            <div className="flex shrink-0 items-center justify-between gap-4 px-6 pt-6 pb-4">
+              <h3 id="plugins-install-title" className="text-base font-semibold text-foreground">
+                {i18nService.t('pluginsInstallTitle')}
+              </h3>
+              <button
+                type="button"
+                onClick={closeInstallModal}
+                className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-surface-raised hover:text-foreground"
+                title={i18nService.t('cancel')}
+                aria-label={i18nService.t('cancel')}
+              >
+                <XMarkIcon className="h-5 w-5" />
+              </button>
             </div>
 
-            {/* Dynamic fields based on source */}
-            <div className="space-y-3">
-              {form.source === 'npm' && (
-                <>
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
+              {/* Source selector */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-foreground mb-1">
+                  {i18nService.t('pluginsSource')}
+                </label>
+                <div className="flex gap-1 flex-wrap">
+                  {(['npm', 'clawhub', 'git', 'local', 'openclaw'] as PluginSource[]).map(src => (
+                    <button
+                      key={src}
+                      type="button"
+                      onClick={() => setForm(f => ({ ...f, source: src, spec: '' }))}
+                      className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+                        form.source === src
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-surface-raised text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      {sourceLabel(src)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Dynamic fields based on source */}
+              <div className="space-y-3">
+                {form.source === 'npm' && (
+                  <>
+                    <div>
+                      <label className="block text-xs font-medium text-muted-foreground mb-1">
+                        {i18nService.t('pluginsPackageName')}
+                      </label>
+                      <input
+                        type="text"
+                        value={form.spec}
+                        onChange={e => setForm(f => ({ ...f, spec: e.target.value }))}
+                        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                        placeholder="e.g. nsp-clawguard"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-muted-foreground mb-1">
+                        {i18nService.t('pluginsVersion')}
+                      </label>
+                      <input
+                        type="text"
+                        value={form.version}
+                        onChange={e => setForm(f => ({ ...f, version: e.target.value }))}
+                        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                        placeholder={i18nService.t('pluginsVersionPlaceholder')}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-muted-foreground mb-1">
+                        {i18nService.t('pluginsRegistry')}
+                      </label>
+                      <input
+                        type="text"
+                        value={form.registry}
+                        onChange={e => setForm(f => ({ ...f, registry: e.target.value }))}
+                        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                        placeholder={i18nService.t('pluginsRegistryPlaceholder')}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {form.source === 'clawhub' && (
                   <div>
                     <label className="block text-xs font-medium text-muted-foreground mb-1">
                       {i18nService.t('pluginsPackageName')}
@@ -647,177 +783,138 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
                       value={form.spec}
                       onChange={e => setForm(f => ({ ...f, spec: e.target.value }))}
                       className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                      placeholder="e.g. nsp-clawguard"
+                      placeholder="e.g. openclaw-codex-app-server"
                     />
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-muted-foreground mb-1">
-                      {i18nService.t('pluginsVersion')}
-                    </label>
-                    <input
-                      type="text"
-                      value={form.version}
-                      onChange={e => setForm(f => ({ ...f, version: e.target.value }))}
-                      className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                      placeholder={i18nService.t('pluginsVersionPlaceholder')}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-muted-foreground mb-1">
-                      {i18nService.t('pluginsRegistry')}
-                    </label>
-                    <input
-                      type="text"
-                      value={form.registry}
-                      onChange={e => setForm(f => ({ ...f, registry: e.target.value }))}
-                      className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                      placeholder={i18nService.t('pluginsRegistryPlaceholder')}
-                    />
-                  </div>
-                </>
-              )}
+                )}
 
-              {form.source === 'clawhub' && (
-                <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1">
-                    {i18nService.t('pluginsPackageName')}
-                  </label>
-                  <input
-                    type="text"
-                    value={form.spec}
-                    onChange={e => setForm(f => ({ ...f, spec: e.target.value }))}
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                    placeholder="e.g. openclaw-codex-app-server"
-                  />
-                </div>
-              )}
+                {form.source === 'git' && (
+                  <>
+                    <div>
+                      <label className="block text-xs font-medium text-muted-foreground mb-1">
+                        {i18nService.t('pluginsGitUrl')}
+                      </label>
+                      <input
+                        type="text"
+                        value={form.spec}
+                        onChange={e => setForm(f => ({ ...f, spec: e.target.value }))}
+                        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                        placeholder={i18nService.t('pluginsGitUrlPlaceholder')}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-muted-foreground mb-1">
+                        {i18nService.t('pluginsVersion')}
+                      </label>
+                      <input
+                        type="text"
+                        value={form.version}
+                        onChange={e => setForm(f => ({ ...f, version: e.target.value }))}
+                        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                        placeholder="tag / branch / commit"
+                      />
+                    </div>
+                  </>
+                )}
 
-              {form.source === 'git' && (
-                <>
+                {form.source === 'local' && (
                   <div>
                     <label className="block text-xs font-medium text-muted-foreground mb-1">
-                      {i18nService.t('pluginsGitUrl')}
+                      {i18nService.t('pluginsLocalPath')}
                     </label>
                     <input
                       type="text"
                       value={form.spec}
                       onChange={e => setForm(f => ({ ...f, spec: e.target.value }))}
                       className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                      placeholder={i18nService.t('pluginsGitUrlPlaceholder')}
+                      placeholder="C:\\path\\to\\plugin or ./plugin.tgz"
                     />
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-muted-foreground mb-1">
-                      {i18nService.t('pluginsVersion')}
-                    </label>
-                    <input
-                      type="text"
-                      value={form.version}
-                      onChange={e => setForm(f => ({ ...f, version: e.target.value }))}
-                      className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                      placeholder="tag / branch / commit"
-                    />
-                  </div>
-                </>
-              )}
+                )}
 
-              {form.source === 'local' && (
-                <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1">
-                    {i18nService.t('pluginsLocalPath')}
-                  </label>
-                  <input
-                    type="text"
-                    value={form.spec}
-                    onChange={e => setForm(f => ({ ...f, spec: e.target.value }))}
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                    placeholder="C:\\path\\to\\plugin or ./plugin.tgz"
-                  />
-                </div>
-              )}
+                {form.source === 'openclaw' && (
+                  <div className="text-center py-4">
+                    <p className="text-sm text-muted-foreground mb-3">
+                      {i18nService.t('pluginsSyncDesc')}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleDiscover}
+                      disabled={syncing}
+                      className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <ArrowPathIcon className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+                      {syncing ? i18nService.t('pluginsSyncing') : i18nService.t('pluginsSyncButton')}
+                    </button>
 
-              {form.source === 'openclaw' && (
-                <div className="text-center py-4">
-                  <p className="text-sm text-muted-foreground mb-3">
-                    {i18nService.t('pluginsSyncDesc')}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleDiscover}
-                    disabled={syncing}
-                    className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <ArrowPathIcon className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-                    {syncing ? i18nService.t('pluginsSyncing') : i18nService.t('pluginsSyncButton')}
-                  </button>
-
-                  {/* Inline discover results */}
-                  {discoverResult !== null && !syncing && (
-                    <div className="mt-4 text-left">
-                      {discoverResult.length > 0 ? (
-                        <>
-                          <p className="text-sm text-foreground mb-2">
-                            {i18nService.t('pluginsSyncFound').replace('{count}', String(discoverResult.length))}
+                    {/* Inline discover results */}
+                    {discoverResult !== null && !syncing && (
+                      <div className="mt-4 text-left">
+                        {discoverResult.length > 0 ? (
+                          <>
+                            <p className="text-sm text-foreground mb-2">
+                              {i18nService.t('pluginsSyncFound').replace('{count}', String(discoverResult.length))}
+                            </p>
+                            <div className="mb-3 max-h-32 overflow-y-auto rounded-md border border-border bg-surface-raised p-2">
+                              {discoverResult.map(id => (
+                                <div key={id} className="text-xs text-foreground py-0.5 font-mono">{id}</div>
+                              ))}
+                            </div>
+                            <div className="flex justify-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setDiscoverResult(null)}
+                                className="px-3 py-1.5 text-xs rounded-md border border-border text-foreground hover:bg-surface-raised transition-colors"
+                              >
+                                {i18nService.t('pluginsSyncSkip')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  closeInstallModal();
+                                  setDiscoverResult(null);
+                                  runSync();
+                                }}
+                                className="px-3 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                              >
+                                {i18nService.t('pluginsSyncNow')}
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">
+                            {i18nService.t('pluginsSyncNone')}
                           </p>
-                          <div className="mb-3 max-h-32 overflow-y-auto rounded-md border border-border bg-surface-raised p-2">
-                            {discoverResult.map(id => (
-                              <div key={id} className="text-xs text-foreground py-0.5 font-mono">{id}</div>
-                            ))}
-                          </div>
-                          <div className="flex justify-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setDiscoverResult(null)}
-                              className="px-3 py-1.5 text-xs rounded-md border border-border text-foreground hover:bg-surface-raised transition-colors"
-                            >
-                              {i18nService.t('pluginsSyncSkip')}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setShowInstallModal(false);
-                                setDiscoverResult(null);
-                                runSync();
-                              }}
-                              className="px-3 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-                            >
-                              {i18nService.t('pluginsSyncNow')}
-                            </button>
-                          </div>
-                        </>
-                      ) : (
-                        <p className="text-sm text-muted-foreground">
-                          {i18nService.t('pluginsSyncNone')}
-                        </p>
-                      )}
-                    </div>
-                  )}
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Install Log */}
+              {form.source !== 'openclaw' && (installing || installLog) && (
+                <pre
+                  ref={logRef}
+                  className="mt-3 max-h-40 overflow-y-auto rounded-md border border-border bg-surface-raised p-2 font-mono text-xs text-muted-foreground whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+                >
+                  {installLog || 'Waiting...'}
+                </pre>
+              )}
+
+              {/* Error */}
+              {form.source !== 'openclaw' && installError && (
+                <div className="mt-3 max-h-44 overflow-y-auto rounded-md bg-destructive/10 p-2 text-xs text-destructive whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                  {installError}
                 </div>
               )}
             </div>
 
-            {/* Install Log */}
-            {form.source !== 'openclaw' && (installing || installLog) && (
-              <pre
-                ref={logRef}
-                className="mt-3 text-xs font-mono bg-surface-raised border border-border rounded-md p-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-muted-foreground"
-              >
-                {installLog || 'Waiting...'}
-              </pre>
-            )}
-
-            {/* Error */}
-            {form.source !== 'openclaw' && installError && (
-              <div className="mt-3 text-xs text-destructive bg-destructive/10 rounded-md p-2">
-                {installError}
-              </div>
-            )}
-
             {/* Actions */}
-            <div className="flex justify-end gap-2 mt-6">
+            <div className="flex shrink-0 justify-end gap-2 border-t border-border px-6 py-4">
               <button
                 type="button"
-                onClick={() => { setShowInstallModal(false); setInstallError(null); setInstallLog(''); }}
+                onClick={closeInstallModal}
                 className="px-4 py-2 text-sm rounded-md border border-border text-foreground hover:bg-surface-raised transition-colors"
               >
                 {i18nService.t('cancel')}
@@ -909,46 +1006,7 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
         </div>
       )}
 
-      {/* Unsaved changes confirmation dialog */}
-      {showUnsavedConfirm && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/35 px-4">
-          <div className="w-full max-w-sm rounded-2xl bg-background border border-border shadow-modal p-5">
-            <h4 className="text-sm font-semibold text-foreground mb-2">
-              {i18nService.t('pluginsUnsavedTitle')}
-            </h4>
-            <p className="text-sm text-secondary mb-4">
-              {i18nService.t('pluginsUnsavedMessage')}
-            </p>
-            <div className="flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowUnsavedConfirm(false);
-                  pendingLeaveActionRef.current = null;
-                }}
-                className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-              >
-                {i18nService.t('pluginsUnsavedStay')}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowUnsavedConfirm(false);
-                  // Reset dirty state so subsequent navigation is not blocked
-                  setPendingToggles(new Map());
-                  setPendingConfigs(new Map());
-                  const action = pendingLeaveActionRef.current;
-                  pendingLeaveActionRef.current = null;
-                  action?.();
-                }}
-                className="px-4 py-2 text-sm font-medium rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity"
-              >
-                {i18nService.t('pluginsUnsavedDiscard')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {unsavedChangesDialog}
     </div>
   );
 }

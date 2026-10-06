@@ -177,6 +177,30 @@ describe('OpenClaw config impact classification', () => {
     });
   });
 
+  test.each([true, false])('syncs memory flush changes without a gateway restart (enabled: %s)', (enabled) => {
+    const result = classifyCoworkConfigChange(
+      { openClawMemoryFlushEnabled: !enabled },
+      { openClawMemoryFlushEnabled: enabled },
+    );
+
+    expect(result).toEqual({
+      impact: OpenClawConfigImpact.Sync,
+      reasons: [OpenClawConfigImpactReason.CoworkOpenClawConfig],
+    });
+  });
+
+  test.each([true, false])('syncs skill review changes without a gateway restart (enabled: %s)', (enabled) => {
+    const result = classifyCoworkConfigChange(
+      { openClawSkillReviewEnabled: !enabled },
+      { openClawSkillReviewEnabled: enabled },
+    );
+
+    expect(result).toEqual({
+      impact: OpenClawConfigImpact.Sync,
+      reasons: [OpenClawConfigImpactReason.CoworkOpenClawConfig],
+    });
+  });
+
   test('classifies dreaming changes as restart', () => {
     const result = classifyCoworkConfigChange(
       { dreamingEnabled: false, dreamingFrequency: '0 3 * * *' },
@@ -231,6 +255,20 @@ describe('OpenClaw config impact classification', () => {
       impact: OpenClawConfigImpact.Restart,
       reasons: [OpenClawConfigImpactReason.ImConfig],
     });
+  });
+
+  test('keeps IM binding saves as restart when removing an unrelated restart reason', () => {
+    const imDecision = classifyImOpenClawConfigChange(
+      createStableConfigFingerprint({ settings: { platformAgentBindings: {} } }),
+      createStableConfigFingerprint({ settings: { platformAgentBindings: { qq: 'worker' } } }),
+    );
+    const combined = mergeImpactDecision(imDecision, {
+      impact: OpenClawConfigImpact.Restart,
+      reasons: [OpenClawConfigImpactReason.AppUseSystemProxy],
+    });
+
+    expect(removeImpactDecisionReasons(combined, [OpenClawConfigImpactReason.AppUseSystemProxy]))
+      .toEqual({ impact: OpenClawConfigImpact.Restart, reasons: [OpenClawConfigImpactReason.ImConfig] });
   });
 
   test('classifies forced IM sync as restart even without fingerprint diff', () => {

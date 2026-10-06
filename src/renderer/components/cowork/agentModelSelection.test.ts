@@ -1,7 +1,14 @@
+import { LobsterAIRequestCapability } from '@shared/providers/lobsterAIRequestOptions';
+import { ModelThinkingLevel } from '@shared/providers/modelThinking';
 import { describe, expect, test } from 'vitest';
 
 import type { Model } from '../../store/slices/modelSlice';
-import { resolveAgentModelSelection, resolveEffectiveModel } from './agentModelSelection';
+import {
+  resolveAgentModelSelection,
+  resolveAgentStartModel,
+  resolveEffectiveModel,
+  resolveModelThinkingLevel,
+} from './agentModelSelection';
 
 const models: Model[] = [
   { id: 'gpt-4o', name: 'GPT-4o', providerKey: 'openai' },
@@ -14,6 +21,48 @@ const models: Model[] = [
 
 const visionModel: Model = { id: 'qwen3.5-plus', name: 'Qwen3.5 Plus', providerKey: 'qwen', supportsImage: true };
 const nonVisionModel: Model = { id: 'glm-5.1', name: 'GLM 5.1', providerKey: 'zhipu', supportsImage: false };
+const configurableThinkingModel: Model = {
+  id: 'deepseek-v4-flash',
+  name: 'DeepSeek V4 Flash',
+  providerKey: 'lobsterai-server',
+  requestCapabilities: [LobsterAIRequestCapability.OptionsV1],
+  thinkingConfig: {
+    options: [
+      { level: ModelThinkingLevel.Off, openclawLevel: 'off' },
+      { level: ModelThinkingLevel.High, openclawLevel: 'high' },
+      { level: ModelThinkingLevel.Max, openclawLevel: 'xhigh' },
+    ],
+    defaultLevel: ModelThinkingLevel.High,
+  },
+};
+
+describe('resolveModelThinkingLevel', () => {
+  test('keeps a persisted level supported by the selected model', () => {
+    expect(resolveModelThinkingLevel(
+      configurableThinkingModel,
+      ModelThinkingLevel.Off,
+    )).toBe(ModelThinkingLevel.Off);
+  });
+
+  test('falls back to the model default when persisted data is empty or unsupported', () => {
+    expect(resolveModelThinkingLevel(configurableThinkingModel, '')).toBe(ModelThinkingLevel.High);
+    expect(resolveModelThinkingLevel(
+      configurableThinkingModel,
+      ModelThinkingLevel.Low,
+    )).toBe(ModelThinkingLevel.High);
+  });
+
+  test('does not attach a thinking level to models without configuration', () => {
+    expect(resolveModelThinkingLevel(nonVisionModel, ModelThinkingLevel.Max)).toBeUndefined();
+  });
+
+  test('does not attach a thinking level after the server withdraws request-options support', () => {
+    expect(resolveModelThinkingLevel(
+      { ...configurableThinkingModel, requestCapabilities: undefined },
+      ModelThinkingLevel.High,
+    )).toBeUndefined();
+  });
+});
 
 describe('resolveAgentModelSelection', () => {
   test('uses explicit agent model when present', () => {
@@ -172,5 +221,61 @@ describe('resolveEffectiveModel', () => {
 
     expect(result?.id).toBe('glm-5.1');
     expect(result?.supportsImage).toBe(false);
+  });
+});
+
+describe('resolveAgentStartModel', () => {
+  const customQwen: Model = { id: 'qwen3.8-max', name: 'Qwen Max', providerKey: 'qwen' };
+  const customGlm: Model = { id: 'glm-5.1', name: 'GLM 5.1', providerKey: 'zhipu' };
+  const planFlash: Model = { id: 'qwen3.8-flash', name: 'Flash', providerKey: 'lobsterai-server', isServerModel: true };
+  const planMaxLocked: Model = {
+    id: 'qwen3.8-max', name: 'Qwen Max Plan', providerKey: 'lobsterai-server', isServerModel: true, accessible: false,
+  };
+
+  test('starts with the configured model when it is usable', () => {
+    expect(resolveAgentStartModel({
+      agentModel: 'qwen/qwen3.8-max',
+      availableModels: [customQwen, planFlash],
+      selectedModel: customQwen,
+    })).toEqual({ model: customQwen, unavailableModelRef: null, crossesBillingSide: false });
+  });
+
+  test('blocks a missing custom model from silently becoming a plan model', () => {
+    expect(resolveAgentStartModel({
+      agentModel: 'qwen/qwen3.8-max',
+      availableModels: [planMaxLocked, planFlash],
+      selectedModel: planFlash,
+    })).toEqual({ model: planFlash, unavailableModelRef: 'qwen/qwen3.8-max', crossesBillingSide: true });
+  });
+
+  test('blocks a locked plan model from silently becoming a custom model', () => {
+    expect(resolveAgentStartModel({
+      agentModel: 'lobsterai-server/qwen3.8-max',
+      availableModels: [planMaxLocked, customGlm],
+      selectedModel: customGlm,
+    }).crossesBillingSide).toBe(true);
+  });
+
+  test('keeps silent fallback within one billing side and while the plan catalog is not loaded', () => {
+    expect(resolveAgentStartModel({
+      agentModel: 'qwen/qwen3.8-max',
+      availableModels: [customGlm],
+      selectedModel: customGlm,
+    })).toEqual({ model: customGlm, unavailableModelRef: 'qwen/qwen3.8-max', crossesBillingSide: false });
+    expect(resolveAgentStartModel({
+      agentModel: 'lobsterai-server/qwen3.8-max',
+      availableModels: [planMaxLocked, planFlash],
+      selectedModel: planFlash,
+    }).crossesBillingSide).toBe(false);
+    expect(resolveAgentStartModel({
+      agentModel: 'lobsterai-server/qwen3.8-max',
+      availableModels: [customGlm],
+      selectedModel: customGlm,
+    }).crossesBillingSide).toBe(false);
+  });
+
+  test('uses the global selection when the agent has no model', () => {
+    expect(resolveAgentStartModel({ agentModel: '', availableModels: [planFlash], selectedModel: planFlash }))
+      .toEqual({ model: planFlash, unavailableModelRef: null, crossesBillingSide: false });
   });
 });

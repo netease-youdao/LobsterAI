@@ -2,7 +2,12 @@ import {
   ShareDeploymentCandidateSource,
   type ShareDeploymentProjectCandidate,
 } from '../../shared/shareDeployment/constants';
-import { type Artifact, type ArtifactType, ArtifactTypeValue } from '../types/artifact';
+import {
+  type Artifact,
+  ArtifactMediaOriginType,
+  type ArtifactType,
+  ArtifactTypeValue,
+} from '../types/artifact';
 import type { CoworkMessage } from '../types/cowork';
 
 /**
@@ -57,6 +62,60 @@ export function normalizeProjectDirectoryForDedup(projectDirectory: string): str
     normalized = normalized.slice(0, -1);
   }
   return normalized.toLowerCase();
+}
+
+/**
+ * Resolve a detected artifact path to an absolute path, mirroring the
+ * resolution used when loading artifact files from disk: strip file:
+ * prefixes, keep absolute paths as-is, and join relative paths to the
+ * session working directory.
+ */
+export function toAbsoluteArtifactPath(filePath: string, cwd?: string): string {
+  let rawPath = filePath;
+  if (rawPath.startsWith('file:///')) {
+    rawPath = rawPath.slice(7);
+  } else if (rawPath.startsWith('file://')) {
+    rawPath = rawPath.slice(7);
+  } else if (rawPath.startsWith('file:/')) {
+    rawPath = rawPath.slice(5);
+  }
+  // Strip leading / before Windows drive letter (e.g. /D:/path from file:///D:/path)
+  if (/^\/[A-Za-z]:/.test(rawPath)) {
+    rawPath = rawPath.slice(1);
+  }
+  if (rawPath.startsWith('/') || /^[A-Za-z]:/.test(rawPath) || rawPath.startsWith('~')) {
+    return rawPath;
+  }
+  const base = cwd?.trim().replace(/[\\/]+$/, '');
+  if (!base) return rawPath;
+  return `${base}/${rawPath.replace(/^\.\//, '')}`;
+}
+
+/**
+ * Directories whose contents are intermediate/tooling files and must not
+ * surface as deliverable artifact cards. Dot-prefixed segments (.cowork-temp,
+ * .git, hidden files) are ignored by rule; this set covers non-dot names.
+ */
+const IGNORED_ARTIFACT_DIRECTORY_NAMES = new Set(['node_modules']);
+
+export function isIgnoredArtifactPath(filePath: string): boolean {
+  const normalized = normalizeArtifactFilePath(filePath).replace(/\\/g, '/');
+  const segments = normalized
+    .split('/')
+    .filter(segment => segment && segment !== '.' && segment !== '..' && segment !== '~');
+  return segments.some(segment => {
+    const lower = segment.toLowerCase();
+    return lower.startsWith('.') || IGNORED_ARTIFACT_DIRECTORY_NAMES.has(lower);
+  });
+}
+
+export function isPathInsideDirectory(filePath: string, directory: string): boolean {
+  const file = normalizeFilePathForDedup(filePath);
+  const dir = normalizeProjectDirectoryForDedup(directory);
+  if (!file || !dir) return false;
+  if (file === dir) return true;
+  const prefix = dir.endsWith('/') ? dir : `${dir}/`;
+  return file.startsWith(prefix);
 }
 
 export function getLocalServicePortIdentityKey(url?: string): string {
@@ -115,6 +174,18 @@ function getLocalServiceProjectConfidence(
   return defaultProjectDirectory && normalizedProjectDirectory === defaultProjectDirectory ? 0 : 1;
 }
 
+function getGeneratedVideoOriginConfidence(artifact: Artifact): number {
+  if (artifact.type !== ArtifactTypeValue.Video) return 0;
+  if (artifact.mediaOrigin?.type === ArtifactMediaOriginType.GeneratedVideo) return 2;
+  if (
+    artifact.legacyGeneratedVideoCandidate
+    && /^https:\/\//i.test(artifact.remoteUrl?.trim() || '')
+  ) {
+    return 1;
+  }
+  return 0;
+}
+
 export const shouldPreferArtifactForDisplay = (
   candidate: Artifact,
   current: Artifact,
@@ -129,6 +200,12 @@ export const shouldPreferArtifactForDisplay = (
     if (candidateProjectConfidence !== currentProjectConfidence) {
       return candidateProjectConfidence > currentProjectConfidence;
     }
+  }
+
+  const candidateGeneratedVideoOriginConfidence = getGeneratedVideoOriginConfidence(candidate);
+  const currentGeneratedVideoOriginConfidence = getGeneratedVideoOriginConfidence(current);
+  if (candidateGeneratedVideoOriginConfidence !== currentGeneratedVideoOriginConfidence) {
+    return candidateGeneratedVideoOriginConfidence > currentGeneratedVideoOriginConfidence;
   }
 
   const currentHasFileProtocol = Boolean(current.filePath && /^file:/i.test(current.filePath));
@@ -174,6 +251,60 @@ export function dedupeArtifactsForDisplay(
   }
 
   return result;
+}
+
+/**
+ * Put the artifacts a turn's replies point at first, so the deliverable the
+ * user asked for leads the card list instead of whatever was produced
+ * earliest (a generated image, a helper file). The latest reply ranks first,
+ * each reply keeping the order it lists its files in; everything else
+ * follows in detection order.
+ *
+ * `rawArtifacts` are the turn's artifacts before display dedupe: a reply's
+ * link may have been merged into a card detected from a tool step, so
+ * references are matched by identity key rather than by artifact id.
+ */
+export function orderArtifactsByReplyReferences(
+  displayArtifacts: Artifact[],
+  rawArtifacts: Artifact[],
+  replyMessageIds: readonly string[],
+): Artifact[] {
+  if (displayArtifacts.length < 2 || replyMessageIds.length === 0) return displayArtifacts;
+
+  const rawArtifactsByMessageId = new Map<string, Artifact[]>();
+  for (const artifact of rawArtifacts) {
+    const messageArtifacts = rawArtifactsByMessageId.get(artifact.messageId);
+    if (messageArtifacts) {
+      messageArtifacts.push(artifact);
+    } else {
+      rawArtifactsByMessageId.set(artifact.messageId, [artifact]);
+    }
+  }
+
+  const referenceRankByKey = new Map<string, number>();
+  let rank = 0;
+  for (let index = replyMessageIds.length - 1; index >= 0; index -= 1) {
+    for (const artifact of rawArtifactsByMessageId.get(replyMessageIds[index]) ?? []) {
+      for (const key of getArtifactIdentityKeys(artifact)) {
+        if (!referenceRankByKey.has(key)) referenceRankByKey.set(key, rank);
+      }
+      rank += 1;
+    }
+  }
+  if (referenceRankByKey.size === 0) return displayArtifacts;
+
+  const unreferencedRank = rank;
+  return displayArtifacts
+    .map((artifact, index) => ({
+      artifact,
+      index,
+      rank: Math.min(
+        unreferencedRank,
+        ...getArtifactIdentityKeys(artifact).map(key => referenceRankByKey.get(key) ?? unreferencedRank),
+      ),
+    }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map(entry => entry.artifact);
 }
 
 export function resolveArtifactIdForDisplay(
@@ -245,9 +376,6 @@ export function hasToolResultMediaAssets(toolResultMsg: CoworkMessage | undefine
     const url = typeof item.url === 'string' ? item.url.trim() : '';
     const filePath = typeof item.filePath === 'string' ? item.filePath.trim() : '';
     const localPath = typeof item.localPath === 'string' ? item.localPath.trim() : '';
-    if (item.type === 'video') {
-      return Boolean(filePath || localPath);
-    }
     return Boolean(url || filePath || localPath);
   });
 }
@@ -291,7 +419,7 @@ const MARKDOWN_LINK_RE = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi;
 const FILE_MARKDOWN_LINK_RE = /\[([^\]]+)\]\((file:\/\/[^)\s]+)\)/gi;
 const LOCAL_SERVICE_TRAILING_PUNCTUATION_RE = /[.,;:!?，。；：！？、]+$/;
 const PROJECT_DIRECTORY_LABEL_RE = /(?:项目目录|项目路径|工程目录|工作目录|project\s+directory|project\s+path|working\s+directory)\s*[:：]\s*([^\n]+)|(?:项目位置|项目位于)\s*(?:[:：]|为|是|在)?\s*([^\n]+)/gi;
-const CD_COMMAND_RE = /(?:^|\n)\s*(?:[$>]\s*)?cd(?:\s+\/d)?\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([^\n;&|]+))/gi;
+const CD_COMMAND_RE = /(?:^|\n|;|&&|\|\|)\s*(?:[$>]\s*)?cd(?:\s+\/d)?\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([^\s\n;&|]+))/gi;
 const FILE_LIKE_PATH_EXTENSION_RE = /\.[A-Za-z0-9]{1,12}$/;
 
 
@@ -519,7 +647,7 @@ function selectBestProjectDirectoryCandidate(
   return [...candidates].sort((a, b) => b.confidence - a.confidence)[0];
 }
 
-function collectProjectDirectoryCandidatesFromText(
+export function collectProjectDirectoryCandidatesFromText(
   messageContent: string,
   fallbackProjectDirectory?: string,
   messageId?: string,
@@ -616,7 +744,7 @@ export function normalizeLocalServiceOrigin(url: string): string {
   }
 }
 
-function isLocalServiceUrl(url: string): boolean {
+export function isLocalServiceUrl(url: string): boolean {
   try {
     const parsed = new URL(trimLocalServiceUrl(url));
     const isHttp = parsed.protocol === 'http:' || parsed.protocol === 'https:';
@@ -753,15 +881,53 @@ export function parseMediaTokensFromText(
   return artifacts;
 }
 
-const FILE_LINK_RE = /\[([^\]]+)\]\(file:\/\/([^)]+)\)/g;
+const ANY_MARKDOWN_LINK_RE = /\[([^\]]*)\]\(([^)]+)\)/g;
 const REMOTE_MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
+
+/**
+ * Resolve a markdown link href to a local file path, or null when the href
+ * is not a local path (web URL, anchor, mail link, ...). Accepts file://
+ * URLs, absolute POSIX/Windows paths, ~-prefixed paths, and relative paths
+ * that contain a separator. Bare names without any separator are rejected
+ * as too ambiguous. Mirrors the href forms the message renderer treats as
+ * local file links.
+ */
+function resolveLocalHrefPath(rawHref: string): string | null {
+  let href = rawHref.trim();
+  if (href.startsWith('<') && href.endsWith('>')) {
+    href = href.slice(1, -1).trim();
+  }
+  if (!href || href.startsWith('#') || href.startsWith('//')) return null;
+  if (/^(?:file|localfile):/i.test(href)) {
+    let decoded = href;
+    try {
+      decoded = decodeURIComponent(href);
+    } catch {
+      // Keep the original value if it contains a literal percent sign.
+    }
+    return normalizeArtifactFilePath(decoded) || null;
+  }
+  const isWindowsAbsolute = /^[A-Za-z]:[\\/]/.test(href);
+  // Any other scheme (http:, https:, mailto:, tel:, ...) is not a local path.
+  if (!isWindowsAbsolute && /^[a-z][a-z0-9+.-]*:/i.test(href)) return null;
+
+  const candidate = normalizeArtifactFilePath(href);
+  if (!candidate) return null;
+  const isPosixAbsolute = candidate.startsWith('/');
+  const isHomePath = candidate === '~' || candidate.startsWith('~/') || candidate.startsWith('~\\');
+  const hasSeparator = candidate.includes('/') || candidate.includes('\\');
+  if (isPosixAbsolute || isWindowsAbsolute || isHomePath || hasSeparator) {
+    return candidate;
+  }
+  return null;
+}
 const REMOTE_IMAGE_URL_RE = /(?:^|[\s<("'`])(https?:\/\/[^\s<>"'`)]*\.(?:png|jpe?g|gif|webp|bmp|avif)(?:\?[^\s<>"'`)]*)?)(?:[\s>)"'`]|$)/gi;
 
 export function stripFileLinksFromText(text: string): string {
   return text.replace(/\[([^\]]+)\]\(file:\/\/([^)]+)\)/g, '');
 }
 
-const BARE_FILE_PATH_RE = /(?:^|[\s"'`(])(\/?(?:[^\s"'`()\[\]]+\/)+[^\s"'`()\[\]]+\.(?:png|jpe?g|gif|webp|bmp|avif|mp4|webm|mov|docx|xlsx|pptx|pdf|md|txt|log|csv))(?:[\s"'`)]|$)/gm;
+const BARE_FILE_PATH_RE = /(?:^|[\s"'`(])((?:\/|[A-Za-z]:[\\/])?(?:[^\s"'`()\[\]\\/]+[\\/]+)+[^\s"'`()\[\]\\/]+\.(?:png|jpe?g|gif|webp|bmp|avif|mp4|webm|mov|docx|xlsx|pptx|pdf|md|txt|log|csv|html?|svg))(?:[\s"'`)]|$)/gm;
 
 export function parseFilePathsFromText(
   messageContent: string,
@@ -777,7 +943,12 @@ export function parseFilePathsFromText(
   let index = 0;
 
   while ((match = re.exec(messageContent)) !== null) {
-    const filePath = normalizeArtifactFilePath(match[1]);
+    const rawMatch = match[1];
+    // Skip URL fragments (e.g. https://host/image.png) — remote images are
+    // handled separately; only file: pseudo-URLs are local paths here.
+    if (/:\/\//.test(rawMatch) && !/^file:/i.test(rawMatch.trim())) continue;
+
+    const filePath = normalizeArtifactFilePath(rawMatch);
 
     const ext = getFileExtension(filePath);
     const artifactType = getArtifactTypeFromExtension(ext);
@@ -811,18 +982,14 @@ export function parseFileLinksFromMessage(
   if (!messageContent) return [];
 
   const artifacts: Artifact[] = [];
-  const re = new RegExp(FILE_LINK_RE.source, 'g');
+  const re = new RegExp(ANY_MARKDOWN_LINK_RE.source, 'g');
   let match: RegExpExecArray | null;
   let index = 0;
 
   while ((match = re.exec(messageContent)) !== null) {
     const linkText = match[1];
-    let filePath: string;
-    try {
-      filePath = normalizeArtifactFilePath(decodeURIComponent(match[2]));
-    } catch {
-      filePath = normalizeArtifactFilePath(match[2]);
-    }
+    const filePath = resolveLocalHrefPath(match[2]);
+    if (!filePath) continue;
     const ext = getFileExtension(filePath);
     const artifactType = getArtifactTypeFromExtension(ext);
     if (!artifactType) continue;
@@ -900,8 +1067,17 @@ export function parseToolResultMediaArtifacts(
   const details = toolResultMsg.metadata.toolResultDetails;
   if (!details || typeof details !== 'object' || Array.isArray(details)) return [];
 
-  const assets = (details as Record<string, unknown>).assets;
+  const detailsRecord = details as Record<string, unknown>;
+  const assets = detailsRecord.assets;
   if (!Array.isArray(assets)) return [];
+  const taskIdValue = detailsRecord.taskId;
+  const taskId = (typeof taskIdValue === 'string' || typeof taskIdValue === 'number')
+    && /^[1-9]\d*$/.test(String(taskIdValue).trim())
+    ? String(taskIdValue).trim()
+    : undefined;
+  const isLegacyGeneratedVideoResult = detailsRecord.mediaType === 'video'
+    || /^Saved generated videos?:/i.test(toolResultMsg.content.trim())
+    || /^Video generation succeeded\./i.test(toolResultMsg.content.trim());
 
   const artifacts: Artifact[] = [];
   for (let index = 0; index < assets.length; index++) {
@@ -919,8 +1095,12 @@ export function parseToolResultMediaArtifacts(
       : typeof item.localPath === 'string' && item.localPath.trim()
         ? normalizeArtifactFilePath(item.localPath)
         : '';
-    if (artifactType === 'video' && !filePath) continue;
     if (!url && !filePath) continue;
+    const outputIndex = typeof item.outputIndex === 'number'
+      && Number.isInteger(item.outputIndex)
+      && item.outputIndex >= 0
+      ? item.outputIndex
+      : index;
 
     const filename = typeof item.filename === 'string' && item.filename.trim()
       ? item.filename.trim()
@@ -937,7 +1117,19 @@ export function parseToolResultMediaArtifacts(
       content: filePath ? '' : url,
       fileName: filename,
       ...(filePath ? { filePath } : {}),
-      ...(filePath && url ? { remoteUrl: url } : {}),
+      ...(url ? { remoteUrl: url } : {}),
+      ...(artifactType === 'video' && taskId
+        ? {
+            mediaOrigin: {
+              type: ArtifactMediaOriginType.GeneratedVideo,
+              taskId,
+              outputIndex,
+            },
+          }
+        : {}),
+      ...(artifactType === 'video' && !taskId && url && isLegacyGeneratedVideoResult
+        ? { legacyGeneratedVideoCandidate: true }
+        : {}),
       source: 'tool',
       createdAt: toolResultMsg.timestamp || Date.now(),
     });
@@ -946,7 +1138,21 @@ export function parseToolResultMediaArtifacts(
   return artifacts;
 }
 
-const WRITE_TOOL_NAMES = new Set(['write', 'writefile', 'write_file']);
+/**
+ * Tool names (after normalizeToolName: lowercased, underscores/spaces
+ * stripped) whose tool input names a file the turn created or updated.
+ * Covers both write-style and edit-style tools so edited deliverables get
+ * artifact cards without relying on the model linking them in its reply.
+ */
+const WRITE_TOOL_NAMES = new Set([
+  'write',
+  'writefile',
+  'write_file',
+  'edit',
+  'editfile',
+  'multiedit',
+  'createfile',
+]);
 
 /**
  * Tool names whose tool_result content may contain bare file paths that should

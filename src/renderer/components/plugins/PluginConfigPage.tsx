@@ -1,5 +1,5 @@
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
-import { useCallback,useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
 import { SchemaForm } from '../im/SchemaForm';
@@ -55,6 +55,9 @@ export default function PluginConfigPage({ pluginId, onBack, initialConfig, onCo
   const [schema, setSchema] = useState<ConfigSchemaData | null>(null);
   const [configValue, setConfigValue] = useState<Record<string, unknown>>(initialConfig ?? {});
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+  // The parent echoes every local edit through initialConfig. Only its mount-time
+  // presence decides whether the backend value should initialize this editor.
+  const hasPendingConfigOnMountRef = useRef(initialConfig !== undefined);
 
   const loadSchema = useCallback(async () => {
     setLoading(true);
@@ -65,7 +68,7 @@ export default function PluginConfigPage({ pluginId, onBack, initialConfig, onCo
         setSchema(result.schema);
         const loadedConfig = result.config ?? {};
         // If parent already has a pending config for this plugin, use that instead
-        if (!initialConfig) {
+        if (!hasPendingConfigOnMountRef.current) {
           setConfigValue(loadedConfig);
         }
         // Notify parent about the initial config from backend
@@ -77,7 +80,7 @@ export default function PluginConfigPage({ pluginId, onBack, initialConfig, onCo
       setError(i18nService.t('pluginsConfigLoadError'));
     }
     setLoading(false);
-  }, [pluginId, initialConfig, onConfigLoaded]);
+  }, [pluginId, onConfigLoaded]);
 
   useEffect(() => {
     loadSchema();

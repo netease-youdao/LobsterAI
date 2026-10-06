@@ -10,11 +10,25 @@ vi.mock('../services/store', () => ({
 }));
 
 import {
-  getSidebarBannerStorageKey,
+  type ClientBanner,
+  createSidebarBannerDismissState,
+  getLegacySidebarBannerStorageKey,
+  getSidebarBannerDismissStateKey,
   readSidebarBannerDismissState,
   saveSidebarBannerDismissState,
-  shouldShowSidebarBanner,
+  shouldShowSidebarBanners,
 } from './sidebarAdBannerState';
+
+const banner = (
+  id: number,
+  updatedAt: string,
+): ClientBanner => ({
+  id,
+  activityDescription: `Banner ${id}`,
+  linkUrl: `https://lobsterai.youdao.com/banner/${id}`,
+  imageUrl: `https://nos.example.com/banner-${id}.png`,
+  updatedAt,
+});
 
 describe('sidebar ad banner state', () => {
   beforeEach(() => {
@@ -22,83 +36,97 @@ describe('sidebar ad banner state', () => {
     storeMock.setItem.mockReset();
   });
 
-  test('stores close state by sidebar slot version, not by user or current slide', () => {
-    expect(getSidebarBannerStorageKey([
-      {
-        id: 42,
-        activityDescription: '邀请好友赚积分',
-        linkUrl: 'https://lobsterai.youdao.com/invitation',
-        imageUrl: 'https://nos.example.com/banner.png',
-        updatedAt: '2026-07-02T10:00:00',
-      },
-      {
-        id: 43,
-        activityDescription: '新活动',
-        linkUrl: 'https://lobsterai.youdao.com/activity',
-        imageUrl: 'https://nos.example.com/banner-2.png',
-        updatedAt: '2026-07-03T10:00:00',
-      },
-    ])).toBe('client_sidebar_banner.desktop_sidebar.42:2026-07-02T10:00:00.43:2026-07-03T10:00:00');
+  test('hides the group until a banner is added or updated', () => {
+    const first = banner(42, '2026-07-02T10:00:00');
+    const second = banner(43, '2026-07-03T10:00:00');
+    const dismissed = createSidebarBannerDismissState(
+      [first, second],
+      null,
+      1_788_000_000_000,
+    );
+
+    expect(shouldShowSidebarBanners([first, second], dismissed)).toBe(false);
+    expect(shouldShowSidebarBanners([first], dismissed)).toBe(false);
+    expect(shouldShowSidebarBanners([], dismissed)).toBe(false);
+    expect(shouldShowSidebarBanners([
+      first,
+      second,
+      banner(44, '2026-07-04T10:00:00'),
+    ], dismissed)).toBe(true);
+    expect(shouldShowSidebarBanners([
+      banner(42, '2026-07-05T10:00:00'),
+      second,
+    ], dismissed)).toBe(true);
   });
 
-  test('changes close key when a banner is added or updated', () => {
-    const firstVersion = getSidebarBannerStorageKey([
-      {
-        id: 42,
-        activityDescription: '邀请好友赚积分',
-        linkUrl: 'https://lobsterai.youdao.com/invitation',
-        imageUrl: 'https://nos.example.com/banner.png',
-        updatedAt: '2026-07-02T10:00:00',
-      },
-    ]);
-    const updatedVersion = getSidebarBannerStorageKey([
-      {
-        id: 42,
-        activityDescription: '邀请好友赚积分',
-        linkUrl: 'https://lobsterai.youdao.com/invitation',
-        imageUrl: 'https://nos.example.com/banner.png',
-        updatedAt: '2026-07-03T10:00:00',
-      },
-    ]);
-    const addedVersion = getSidebarBannerStorageKey([
-      {
-        id: 42,
-        activityDescription: '邀请好友赚积分',
-        linkUrl: 'https://lobsterai.youdao.com/invitation',
-        imageUrl: 'https://nos.example.com/banner.png',
-        updatedAt: '2026-07-02T10:00:00',
-      },
-      {
-        id: 43,
-        activityDescription: '新活动',
-        linkUrl: 'https://lobsterai.youdao.com/activity',
-        imageUrl: 'https://nos.example.com/banner-2.png',
-        updatedAt: '2026-07-03T10:00:00',
-      },
-    ]);
+  test('closing again records every currently active banner version', () => {
+    const first = banner(42, '2026-07-02T10:00:00');
+    const second = banner(43, '2026-07-03T10:00:00');
+    const firstClose = createSidebarBannerDismissState([first], null, 100);
+    const secondClose = createSidebarBannerDismissState(
+      [first, second],
+      firstClose,
+      200,
+    );
 
-    expect(updatedVersion).not.toBe(firstVersion);
-    expect(addedVersion).not.toBe(firstVersion);
+    expect(secondClose).toEqual({
+      closedAt: 200,
+      dismissedBannerVersions: [
+        '42:2026-07-02T10:00:00',
+        '43:2026-07-03T10:00:00',
+      ],
+    });
   });
 
-  test('shows by default and hides permanently after manual close', () => {
-    expect(shouldShowSidebarBanner(null)).toBe(true);
-    expect(shouldShowSidebarBanner({ closedAt: 1_788_000_000_000 })).toBe(false);
-  });
+  test('persists the accumulated state under one placement key', async () => {
+    const state = createSidebarBannerDismissState([
+      banner(42, '2026-07-02T10:00:00'),
+    ], null, 1_788_000_000_000);
 
-  test('persists manual close state through the sqlite-backed kv store', async () => {
-    await saveSidebarBannerDismissState('client_sidebar_banner.42.v1', 1_788_000_000_000);
+    await saveSidebarBannerDismissState(state);
 
     expect(storeMock.setItem).toHaveBeenCalledWith(
-      'client_sidebar_banner.42.v1',
-      { closedAt: 1_788_000_000_000 }
+      getSidebarBannerDismissStateKey(),
+      state,
     );
   });
 
-  test('reads manual close state from the sqlite-backed kv store', async () => {
-    storeMock.getItem.mockResolvedValue({ closedAt: 1_788_000_000_000 });
+  test('reads the accumulated close state', async () => {
+    const state = {
+      closedAt: 1_788_000_000_000,
+      dismissedBannerVersions: ['42:2026-07-02T10:00:00'],
+    };
+    storeMock.getItem.mockResolvedValueOnce(state);
 
-    await expect(readSidebarBannerDismissState('client_sidebar_banner.42.v1'))
-      .resolves.toEqual({ closedAt: 1_788_000_000_000 });
+    await expect(readSidebarBannerDismissState([
+      banner(42, '2026-07-02T10:00:00'),
+    ])).resolves.toEqual(state);
+  });
+
+  test('migrates the legacy whole-list close key without reopening', async () => {
+    const banners = [
+      banner(42, '2026-07-02T10:00:00'),
+      banner(43, '2026-07-03T10:00:00'),
+    ];
+    storeMock.getItem.mockImplementation((key: string) => {
+      if (key === getLegacySidebarBannerStorageKey(banners)) {
+        return Promise.resolve({ closedAt: 1_788_000_000_000 });
+      }
+      return Promise.resolve(null);
+    });
+
+    const state = await readSidebarBannerDismissState(banners);
+
+    expect(state).toEqual({
+      closedAt: 1_788_000_000_000,
+      dismissedBannerVersions: [
+        '42:2026-07-02T10:00:00',
+        '43:2026-07-03T10:00:00',
+      ],
+    });
+    expect(storeMock.setItem).toHaveBeenCalledWith(
+      getSidebarBannerDismissStateKey(),
+      state,
+    );
   });
 });

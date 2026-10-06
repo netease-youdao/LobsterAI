@@ -9,6 +9,9 @@ import renderer from 'vite-plugin-electron-renderer';
 // PORT lets tooling (e.g. browser preview) assign a free port; electron:dev
 // pins 5175 via the --port CLI flag, which overrides server.port anyway.
 const devPort = Number(process.env.PORT ?? '') || 5175;
+// Keep production and development dependency transforms aligned with Electron.
+// The Word layout engine initializes HarfBuzz with top-level await.
+const rendererTarget = 'es2022';
 const katexVersion = process.env.npm_package_dependencies_katex?.replace(/^[~^]/, '') || '0.16.0';
 const pdfJsAssetRoot = path.resolve(__dirname, 'node_modules/pdfjs-dist');
 const pdfJsPublicPath = '/pdfjs/';
@@ -104,10 +107,8 @@ export default defineConfig({
             },
           },
         },
-        onstart() {
-          // Signal that the main process bundle is ready for electron to load
-          fs.writeFileSync('dist-electron/.electron-ready', '');
-        },
+        // package.json starts Electron after all five output files stabilize.
+        onstart() {},
       },
       {
         // 预加载脚本入口文件
@@ -121,10 +122,50 @@ export default defineConfig({
         },
         onstart() {},
       },
+      {
+        // Sandboxed webview preload used only for browser annotations.
+        entry: 'src/main/browserAnnotationPreload.ts',
+        vite: {
+          build: {
+            sourcemap: true,
+            outDir: 'dist-electron',
+            minify: false,
+          },
+        },
+        onstart() {},
+      },
+      {
+        // Sandboxed preload used only by the isolated saved-credential login view.
+        entry: 'src/main/browserCredentials/agentBrowserCredentialPreload.ts',
+        vite: {
+          build: {
+            sourcemap: true,
+            outDir: 'dist-electron',
+            minify: false,
+          },
+        },
+        onstart() {},
+      },
+      {
+        // Sandboxed preload that observes manual login submissions without exposing secrets to pages.
+        entry: 'src/main/browserCredentials/manualCredentialCapturePreload.ts',
+        vite: {
+          build: {
+            sourcemap: true,
+            outDir: 'dist-electron',
+            minify: false,
+          },
+        },
+        onstart() {},
+      },
     ]),
     renderer(),
   ],
   base: process.env.NODE_ENV === 'development' ? '/' : './',
+  // The syntax-highlighting worker loads grammars on demand; ES module workers allow that code splitting.
+  worker: {
+    format: 'es',
+  },
   resolve: {
     alias: {
       '@shared': path.resolve(__dirname, './src/shared'),
@@ -132,10 +173,18 @@ export default defineConfig({
     },
   },
   build: {
+    target: rendererTarget,
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: true,
     minify: false,
+    rollupOptions: {
+      // library-thumbnail.html is built by vite.thumbnail.config.ts so the
+      // sandboxed thumbnail page never shares chunks with the app entry.
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+      },
+    },
   },
   server: {
     port: devPort,
@@ -148,12 +197,21 @@ export default defineConfig({
       usePolling: false,
       // Ignore vendor/ to prevent dev reload when plugins are installed into
       // vendor/openclaw-runtime/.../third-party-extensions/
-      ignored: ['**/vendor/**'],
+      // Skip temporary trees (which may contain circular junctions) and Electron output.
+      // Anchor artifacts/ (repo-root scratch output) so src/renderer/components/artifacts/ still
+      // hot-reloads; chokidar never matches relative globs, and a directory path covers its subtree.
+      ignored: [
+        '**/vendor/**',
+        '**/.work/**',
+        path.resolve(__dirname, 'artifacts'),
+        '**/dist-electron/**',
+      ],
     },
   },
   optimizeDeps: {
     exclude: ['electron', '@larksuite/openclaw-lark-tools', '@larksuite/openclaw-lark'],
     esbuildOptions: {
+      target: rendererTarget,
       define: {
         __VERSION__: JSON.stringify(katexVersion),
       },

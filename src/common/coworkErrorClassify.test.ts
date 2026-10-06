@@ -1,6 +1,7 @@
-import { expect,test } from 'vitest';
+import { expect, test } from 'vitest';
 
-import { classifyErrorKey, isLobsterAIQuotaExhaustedError } from './coworkErrorClassify';
+import { ProviderName } from '../shared/providers/constants';
+import { classifyErrorKey, CoworkErrorI18nKey, isLobsterAIQuotaExhaustedError } from './coworkErrorClassify';
 
 const classifyError = (error: string) => classifyErrorKey(error) ?? error;
 
@@ -59,6 +60,25 @@ test('auth: auth scope maps to model access denied', () => {
 });
 
 // ==================== Billing errors ====================
+
+test('billing: a local inline-key cooldown preserves its actual cause', () => {
+  const message = 'Inline API key for provider "lobsterai-server" is temporarily disabled after a provider auth/billing failure. Retry after about 300 minutes, or switch to a different auth profile/API key.';
+  expect(classifyErrorKey(message)).toBe(CoworkErrorI18nKey.ProviderCooldown);
+});
+
+test('billing: LobsterAI upstream balance errors do not tell users to recharge', () => {
+  expect(classifyErrorKey('insufficient balance', ProviderName.LobsteraiServer))
+    .toBe(CoworkErrorI18nKey.ModelServiceUnavailable);
+  expect(classifyErrorKey('insufficient balance', ProviderName.Moonshot))
+    .toBe(CoworkErrorI18nKey.InsufficientBalance);
+  expect(classifyErrorKey('{"error":{"code":50203,"message":"insufficient balance"}}'))
+    .toBe(CoworkErrorI18nKey.ModelServiceUnavailable);
+});
+
+test.each([40200, 40201, 40202])('billing: LobsterAI user quota code %s still requires quota recovery', (code) => {
+  expect(classifyErrorKey(JSON.stringify({ error: { code, message: 'billing failure' } }), ProviderName.LobsteraiServer))
+    .toBe(CoworkErrorI18nKey.QuotaExhausted);
+});
 
 test('billing: DeepSeek insufficient_balance', () => {
   expect(classifyError('insufficient_balance: Your account does not have enough balance')).toBe('coworkErrorInsufficientBalance');
@@ -181,6 +201,18 @@ test('gateway: client disconnected', () => {
   expect(classifyError('client disconnected')).toBe('coworkErrorGatewayDisconnected');
 });
 
+test('gateway: oversized active transcript has a dedicated recovery message', () => {
+  expect(classifyError(
+    'OPENCLAW_ACTIVE_TRANSCRIPT_OVERSIZED: active OpenClaw transcript is 70000000 bytes',
+  )).toBe('coworkErrorTranscriptOversized');
+});
+
+test('gateway: heap OOM is not classified as a generic disconnect', () => {
+  expect(classifyError(
+    'OpenClaw gateway failed: gatewayFailureKind=heap_out_of_memory; code=134',
+  )).toBe('coworkErrorGatewayHeapOutOfMemory');
+});
+
 test('gateway: session patch timeout before send', () => {
   expect(classifyError('gateway request timeout for sessions.patch')).toBe('coworkGatewaySessionSyncTimeout');
 });
@@ -229,12 +261,30 @@ test('rate: too many requests', () => {
   expect(classifyError('Too many requests, please slow down')).toBe('coworkErrorRateLimit');
 });
 
-test('rate: Anthropic overloaded', () => {
-  expect(classifyError('overloaded_error: Overloaded')).toBe('coworkErrorRateLimit');
+test('capacity: Anthropic overloaded', () => {
+  expect(classifyError('overloaded_error: Overloaded')).toBe('coworkErrorModelOverloaded');
+});
+
+test('capacity: Qwen inner 503 system-capacity throttle wins over too-many-requests wording', () => {
+  expect(classifyError(
+    '<503> InternalError.Algo: An error occurred in model serving, error message is: '
+      + '[Too many requests. Your requests are being throttled due to system capacity limits. Please try again later.]',
+  )).toBe('coworkErrorModelOverloaded');
 });
 
 test('rate: Gemini RESOURCE_EXHAUSTED', () => {
   expect(classifyError('RESOURCE_EXHAUSTED: quota exceeded')).toBe('coworkErrorRateLimit');
+});
+
+// ==================== Model response timeouts ====================
+
+test('model response timeout: OpenClaw idle timeout', () => {
+  expect(classifyError('LLM idle timeout (330s): no response from model'))
+    .toBe('coworkErrorModelResponseTimeout');
+});
+
+test('model response timeout: OpenClaw request timeout', () => {
+  expect(classifyError('LLM request timed out.')).toBe('coworkErrorModelResponseTimeout');
 });
 
 // ==================== Network errors ====================

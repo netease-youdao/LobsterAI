@@ -1,165 +1,16 @@
 import { McpRegistryEntry, McpRegistryEntryKind } from '../types/mcp';
 
 /**
- * Built-in MCP server registry.
- * These are popular, mainstream MCP servers that users can install with one click.
- * Each entry is a template — the user fills in required config (API keys, paths)
- * before it is saved to the database.
+ * App-managed MCP registry entries.
+ *
+ * Marketplace content comes from the server (`mcpService.fetchMarketplace`,
+ * cached in localStorage between sessions) — it is deliberately NOT mirrored
+ * here, so there is a single source of truth for names, descriptions and the
+ * server list itself. This file only holds entries the server payload cannot
+ * express: flows managed by the app, such as the Qichacha OAuth bundle, which
+ * `mergeMarketplaceRegistry` re-inserts into whatever the server returns.
  */
 export const mcpRegistry: McpRegistryEntry[] = [
-  // ── Search ──────────────────────────────────────────────
-  {
-    id: 'tavily',
-    name: 'Tavily',
-    descriptionKey: 'mcpDesc_tavily',
-    category: 'search',
-    categoryKey: 'mcpCategorySearch',
-    transportType: 'stdio',
-    command: 'npx',
-    defaultArgs: ['-y', 'tavily-mcp@latest'],
-    requiredEnvKeys: ['TAVILY_API_KEY'],
-  },
-
-  // ── Developer Tools ─────────────────────────────────────
-  {
-    id: 'github',
-    name: 'GitHub',
-    descriptionKey: 'mcpDesc_github',
-    category: 'developer',
-    categoryKey: 'mcpCategoryDeveloper',
-    transportType: 'stdio',
-    command: 'npx',
-    defaultArgs: ['-y', '@modelcontextprotocol/server-github'],
-    requiredEnvKeys: ['GITHUB_PERSONAL_ACCESS_TOKEN'],
-  },
-  {
-    id: 'gitlab',
-    name: 'GitLab',
-    descriptionKey: 'mcpDesc_gitlab',
-    category: 'developer',
-    categoryKey: 'mcpCategoryDeveloper',
-    transportType: 'stdio',
-    command: 'npx',
-    defaultArgs: ['-y', '@modelcontextprotocol/server-gitlab'],
-    requiredEnvKeys: ['GITLAB_PERSONAL_ACCESS_TOKEN'],
-    optionalEnvKeys: ['GITLAB_API_URL'],
-  },
-  {
-    id: 'context7',
-    name: 'Context7',
-    descriptionKey: 'mcpDesc_context7',
-    category: 'developer',
-    categoryKey: 'mcpCategoryDeveloper',
-    transportType: 'stdio',
-    command: 'npx',
-    defaultArgs: ['-y', '@upstash/context7-mcp@latest'],
-  },
-
-  // ── Productivity ────────────────────────────────────────
-  {
-    id: 'google-drive',
-    name: 'Google Drive',
-    descriptionKey: 'mcpDesc_google_drive',
-    category: 'productivity',
-    categoryKey: 'mcpCategoryProductivity',
-    transportType: 'stdio',
-    command: 'npx',
-    defaultArgs: ['-y', '@modelcontextprotocol/server-gdrive'],
-    optionalEnvKeys: ['GDRIVE_CREDENTIALS_PATH'],
-  },
-  {
-    id: 'gmail',
-    name: 'Gmail',
-    descriptionKey: 'mcpDesc_gmail',
-    category: 'productivity',
-    categoryKey: 'mcpCategoryProductivity',
-    transportType: 'stdio',
-    command: 'npx',
-    defaultArgs: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
-    requiredEnvKeys: ['GMAIL_CLIENT_ID', 'GMAIL_CLIENT_SECRET', 'GMAIL_REDIRECT_URI'],
-  },
-  {
-    id: 'google-calendar',
-    name: 'Google Calendar',
-    descriptionKey: 'mcpDesc_google_calendar',
-    category: 'productivity',
-    categoryKey: 'mcpCategoryProductivity',
-    transportType: 'stdio',
-    command: 'npx',
-    defaultArgs: ['-y', '@cocal/google-calendar-mcp'],
-    requiredEnvKeys: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI'],
-  },
-  {
-    id: 'notion',
-    name: 'Notion',
-    descriptionKey: 'mcpDesc_notion',
-    category: 'productivity',
-    categoryKey: 'mcpCategoryProductivity',
-    transportType: 'stdio',
-    command: 'npx',
-    defaultArgs: ['-y', '@notionhq/notion-mcp-server'],
-    requiredEnvKeys: ['OPENAPI_MCP_HEADERS'],
-  },
-  {
-    id: 'slack',
-    name: 'Slack',
-    descriptionKey: 'mcpDesc_slack',
-    category: 'productivity',
-    categoryKey: 'mcpCategoryProductivity',
-    transportType: 'stdio',
-    command: 'npx',
-    defaultArgs: ['-y', '@modelcontextprotocol/server-slack'],
-    requiredEnvKeys: ['SLACK_BOT_TOKEN', 'SLACK_TEAM_ID'],
-  },
-  {
-    id: 'todoist',
-    name: 'TodoList',
-    descriptionKey: 'mcpDesc_todoist',
-    category: 'productivity',
-    categoryKey: 'mcpCategoryProductivity',
-    transportType: 'stdio',
-    command: 'npx',
-    defaultArgs: ['-y', 'todoist-mcp@latest'],
-    requiredEnvKeys: ['TODOIST_API_TOKEN'],
-  },
-
-  // ── Browser ─────────────────────────────────────────────
-  {
-    id: 'playwright',
-    name: 'Playwright',
-    descriptionKey: 'mcpDesc_playwright',
-    category: 'browser',
-    categoryKey: 'mcpCategoryBrowser',
-    transportType: 'stdio',
-    command: 'npx',
-    defaultArgs: ['-y', '@executeautomation/playwright-mcp-server'],
-  },
-
-  // ── Design ──────────────────────────────────────────────
-  {
-    id: 'canva',
-    name: 'Canva',
-    descriptionKey: 'mcpDesc_canva',
-    category: 'design',
-    categoryKey: 'mcpCategoryDesign',
-    transportType: 'stdio',
-    command: 'npx',
-    defaultArgs: ['-y', '@iflow-mcp/mattcoatsworth-canva-mcp-server'],
-    requiredEnvKeys: ['CANVA_API_KEY'],
-  },
-
-  // ── Data & API ──────────────────────────────────────────
-  {
-    id: 'firecrawl',
-    name: 'Firecrawl',
-    descriptionKey: 'mcpDesc_firecrawl',
-    category: 'data-api',
-    categoryKey: 'mcpCategoryDataApi',
-    transportType: 'stdio',
-    command: 'npx',
-    defaultArgs: ['-y', 'firecrawl-mcp@latest'],
-    requiredEnvKeys: ['FIRECRAWL_API_KEY'],
-  },
   {
     id: 'qichacha',
     name: '企查查',
@@ -176,7 +27,8 @@ export const mcpRegistry: McpRegistryEntry[] = [
 ];
 
 /**
- * All available categories with their i18n keys.
+ * Category fallbacks with their i18n keys, used until the server list (which
+ * carries its own localized names) has loaded.
  */
 export const mcpCategories = [
   { id: 'all', key: 'mcpCategoryAll' },

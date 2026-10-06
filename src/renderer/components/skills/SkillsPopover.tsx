@@ -8,7 +8,7 @@ import { RootState } from '../../store';
 import { Skill } from '../../types/skill';
 import Cog6ToothIcon from '../icons/Cog6ToothIcon';
 import SearchIcon from '../icons/SearchIcon';
-import SkillIcon from '../icons/SkillIcon';
+import SkillIconTile from './SkillIconTile';
 
 interface SkillsPopoverProps {
   isOpen: boolean;
@@ -42,16 +42,24 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
   const shouldUseFallbackDescription = i18nReady || i18nService.getLanguage() !== 'zh';
 
-  // Filter enabled skills based on search query
-  const filteredSkills = skills
-    .filter(s => s.enabled)
-    .filter(s => {
-      const query = searchQuery.toLowerCase();
-      const description = shouldUseFallbackDescription
-        ? skillService.getLocalizedSkillDescription(s.id, s.name, s.description)
-        : '';
-      return s.name.toLowerCase().includes(query) || description.toLowerCase().includes(query);
-    });
+  // Filter enabled skills based on search query, grouped so user-added
+  // skills always list before the built-in ones.
+  const matchesQuery = (s: Skill) => {
+    const query = searchQuery.toLowerCase();
+    const description = shouldUseFallbackDescription
+      ? skillService.getLocalizedSkillDescription(s.id, s.name, s.description)
+      : '';
+    return s.name.toLowerCase().includes(query) || description.toLowerCase().includes(query);
+  };
+  const enabledSkills = skills.filter(s => s.enabled);
+  const myFilteredSkills = enabledSkills
+    .filter(s => !s.isBuiltIn)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .filter(matchesQuery);
+  const builtInFilteredSkills = enabledSkills
+    .filter(s => s.isBuiltIn)
+    .filter(matchesQuery);
+  const filteredSkills = [...myFilteredSkills, ...builtInFilteredSkills];
 
   // Load localized skill descriptions from marketplace/localSkill metadata.
   useEffect(() => {
@@ -130,6 +138,61 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
     onClose();
   };
 
+  const renderSkillItem = (skill: Skill) => {
+    const isActive = activeSkillIds.includes(skill.id);
+    const description = shouldUseFallbackDescription
+      ? skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)
+      : '';
+    const displayName = skillService.getLocalizedSkillName(skill.id, skill.name);
+    return (
+      <button
+        key={skill.id}
+        onClick={() => handleSelectSkill(skill)}
+        className={asSubmenu
+          ? `w-full flex items-start gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors ${
+            isActive ? 'bg-surface-raised' : 'hover:bg-surface-raised'
+          }`
+          : `w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors ${
+            isActive ? 'dark:bg-primary/10 bg-primary/10' : 'hover:bg-primary/10 dark:hover:bg-primary/10'
+          }`}
+      >
+        <SkillIconTile
+          icon={skillService.getSkillIcon(skill.id)}
+          className={asSubmenu ? 'mt-[2px] h-[22px] w-[22px] rounded-md' : 'mt-0.5 h-7 w-7 rounded-lg'}
+          iconClassName={asSubmenu ? 'h-[13px] w-[13px]' : 'h-4 w-4'}
+        />
+        <div className="flex-1 min-w-0">
+          <div className={asSubmenu ? 'flex min-w-0 items-center gap-1.5' : 'flex items-center gap-2'}>
+            <span className={asSubmenu
+              ? 'min-w-0 truncate text-[13px] font-semibold leading-5 text-foreground'
+              : `text-sm font-medium truncate ${
+                isActive ? 'text-primary' : 'text-foreground'
+              }`}
+            >
+              {displayName}
+            </span>
+            {skill.isOfficial && (
+              <span className={asSubmenu
+                ? 'flex-shrink-0 rounded bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium leading-none text-secondary'
+                : 'px-1.5 py-0.5 text-[10px] font-medium rounded bg-primary/10 text-primary flex-shrink-0'}
+              >
+                {i18nService.t('official')}
+              </span>
+            )}
+          </div>
+          {description && (
+            <p className={asSubmenu ? 'mt-0.5 truncate text-[12px] leading-4 text-secondary' : 'text-xs text-secondary truncate mt-0.5'}>
+              {description}
+            </p>
+          )}
+        </div>
+        {isActive && (
+          <CheckIcon className={asSubmenu ? 'mt-1 h-3.5 w-3.5 flex-shrink-0 text-primary' : 'mt-1 h-4 w-4 flex-shrink-0 text-primary'} />
+        )}
+      </button>
+    );
+  };
+
   if (!isOpen) return null;
 
   const popoverClassName = asSubmenu
@@ -150,6 +213,9 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
   const emptyStateClassName = asSubmenu
     ? 'flex h-[50px] items-center justify-center px-3 text-center text-[13px] leading-5 text-secondary'
     : 'px-4 py-6 text-center text-sm text-secondary';
+  const groupLabelClassName = asSubmenu
+    ? 'px-2.5 pt-2 pb-1 text-[10px] font-semibold text-secondary'
+    : 'px-3 pt-2 pb-1 text-[10px] font-semibold text-secondary';
 
   return (
     <div
@@ -183,64 +249,20 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
             {i18nService.t('noSkillsAvailable')}
           </div>
         ) : (
-          filteredSkills.map((skill) => {
-            const isActive = activeSkillIds.includes(skill.id);
-            const description = shouldUseFallbackDescription
-              ? skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)
-              : '';
-            return (
-              <button
-                key={skill.id}
-                onClick={() => handleSelectSkill(skill)}
-                className={asSubmenu
-                  ? `w-full flex items-start gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors ${
-                    isActive ? 'bg-surface-raised' : 'hover:bg-surface-raised'
-                  }`
-                  : `w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors ${
-                    isActive ? 'dark:bg-primary/10 bg-primary/10' : 'hover:bg-primary/10 dark:hover:bg-primary/10'
-                  }`}
-              >
-                <div className={asSubmenu
-                  ? `mt-[3px] flex h-5 w-5 flex-shrink-0 items-center justify-center ${
-                    isActive ? 'text-foreground' : 'text-secondary'
-                  }`
-                  : `mt-0.5 w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                    isActive ? 'bg-primary/10 text-primary' : 'bg-surface-raised'
-                  }`}
-                >
-                  <SkillIcon className={asSubmenu ? 'h-[18px] w-[18px]' : `h-4 w-4 ${isActive ? '' : 'text-secondary'}`} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className={asSubmenu ? 'flex min-w-0 items-center gap-1.5' : 'flex items-center gap-2'}>
-                    <span className={asSubmenu
-                      ? 'min-w-0 truncate text-[13px] font-semibold leading-5 text-foreground'
-                      : `text-sm font-medium truncate ${
-                        isActive ? 'text-primary' : 'text-foreground'
-                      }`}
-                    >
-                      {skill.name}
-                    </span>
-                    {skill.isOfficial && (
-                      <span className={asSubmenu
-                        ? 'flex-shrink-0 rounded bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium leading-none text-secondary'
-                        : 'px-1.5 py-0.5 text-[10px] font-medium rounded bg-primary/10 text-primary flex-shrink-0'}
-                      >
-                        {i18nService.t('official')}
-                      </span>
-                    )}
-                  </div>
-                  {description && (
-                    <p className={asSubmenu ? 'mt-0.5 truncate text-[12px] leading-4 text-secondary' : 'text-xs text-secondary truncate mt-0.5'}>
-                      {description}
-                    </p>
-                  )}
-                </div>
-                {isActive && (
-                  <CheckIcon className={asSubmenu ? 'mt-1 h-3.5 w-3.5 flex-shrink-0 text-primary' : 'mt-1 h-4 w-4 flex-shrink-0 text-primary'} />
-                )}
-              </button>
-            );
-          })
+          <>
+            {myFilteredSkills.length > 0 && (
+              <>
+                <div className={groupLabelClassName}>{i18nService.t('skillGroupMine')}</div>
+                {myFilteredSkills.map(renderSkillItem)}
+              </>
+            )}
+            {builtInFilteredSkills.length > 0 && (
+              <>
+                <div className={groupLabelClassName}>{i18nService.t('skillGroupBuiltIn')}</div>
+                {builtInFilteredSkills.map(renderSkillItem)}
+              </>
+            )}
+          </>
         )}
       </div>
 

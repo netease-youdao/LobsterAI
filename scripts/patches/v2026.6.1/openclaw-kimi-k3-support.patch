@@ -1,0 +1,625 @@
+diff --git a/extensions/moonshot/index.test.ts b/extensions/moonshot/index.test.ts
+index fcc29a30f81ee44be242fc864a189021a6fd86e2..b72e852c3ea5c7225e46cbe3edae7a86c2bae833 100644
+--- a/extensions/moonshot/index.test.ts
++++ b/extensions/moonshot/index.test.ts
+@@ -88,4 +88,49 @@ describe("moonshot provider plugin", () => {
+       thinking: { type: "disabled" },
+     });
+   });
++
++  it.each(["kimi-k3", "Kimi_K3", "kimi.k3"])(
++    "exposes Kimi K3 alias %s as an always-max-thinking modern model",
++    async (modelId) => {
++    const provider = await registerSingleProviderPlugin(plugin);
++    const capturedStream = createCapturedThinkingConfigStream();
++    const wrapped = provider.wrapStreamFn?.({
++      provider: "moonshot",
++      modelId,
++      thinkingLevel: "off",
++      streamFn: capturedStream.streamFn,
++    } as never);
++
++    void wrapped?.(
++      {
++        api: "openai-completions",
++        provider: "moonshot",
++        id: modelId,
++      } as Model<"openai-completions">,
++      { messages: [] } as Context,
++      {},
++    );
++
++    expect(
++      provider.resolveThinkingProfile?.({
++        provider: "moonshot",
++        modelId,
++      } as never),
++    ).toEqual({
++      levels: [{ id: "max", label: "max" }],
++      defaultLevel: "max",
++      preserveWhenCatalogReasoningFalse: true,
++    });
++    expect(
++      provider.isModernModelRef?.({
++        provider: "moonshot",
++        modelId,
++      } as never),
++    ).toBe(true);
++    expect(capturedStream.getCapturedPayload()).toEqual({
++      config: { thinkingConfig: { thinkingBudget: -1 } },
++      reasoning_effort: "max",
++    });
++    },
++  );
+ });
+diff --git a/extensions/moonshot/index.ts b/extensions/moonshot/index.ts
+index f5991c20094fe7220600782d31b7c4008196b454..456d180f253de385fc4120db6e647d8a08e57894 100644
+--- a/extensions/moonshot/index.ts
++++ b/extensions/moonshot/index.ts
+@@ -13,6 +13,9 @@ import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
+ 
+ const PROVIDER_ID = "moonshot";
+ 
++const isKimiK3ModelId = (modelId: string): boolean =>
++  modelId.trim().toLowerCase().replace(/[^a-z0-9]/g, "") === "kimik3";
++
+ export default defineSingleProviderPluginEntry({
+   id: PROVIDER_ID,
+   name: "Moonshot Provider",
+@@ -67,13 +70,21 @@ export default defineSingleProviderPluginEntry({
+       dropReasoningFromHistory: false,
+     }),
+     ...MOONSHOT_THINKING_STREAM_HOOKS,
+-    resolveThinkingProfile: () => ({
+-      levels: [
+-        { id: "off", label: "off" },
+-        { id: "low", label: "on" },
+-      ],
+-      defaultLevel: "off",
+-    }),
++    resolveThinkingProfile: ({ modelId }) =>
++      isKimiK3ModelId(modelId)
++        ? {
++            levels: [{ id: "max", label: "max" }],
++            defaultLevel: "max",
++            preserveWhenCatalogReasoningFalse: true,
++          }
++        : {
++            levels: [
++              { id: "off", label: "off" },
++              { id: "low", label: "on" },
++            ],
++            defaultLevel: "off",
++          },
++    isModernModelRef: ({ modelId }) => isKimiK3ModelId(modelId),
+   },
+   register(api) {
+     api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);
+diff --git a/extensions/moonshot/openclaw.plugin.json b/extensions/moonshot/openclaw.plugin.json
+index 19fb589beba1d9e988d08a5f182366c68b1500f1..781e590bd7fc9db6e63e36620e06f7e0781d5122 100644
+--- a/extensions/moonshot/openclaw.plugin.json
++++ b/extensions/moonshot/openclaw.plugin.json
+@@ -63,6 +63,36 @@
+               "cacheWrite": 0
+             }
+           },
++          {
++            "id": "kimi-k3",
++            "name": "Kimi K3",
++            "reasoning": true,
++            "thinkingLevelMap": {
++              "off": null,
++              "minimal": "max",
++              "low": "max",
++              "medium": "max",
++              "high": "max",
++              "xhigh": "max",
++              "max": "max"
++            },
++            "input": ["text", "image", "video"],
++            "contextWindow": 1048576,
++            "maxTokens": 8192,
++            "cost": {
++              "input": 0,
++              "output": 0,
++              "cacheRead": 0,
++              "cacheWrite": 0
++            },
++            "compat": {
++              "maxTokensField": "max_tokens",
++              "supportsUsageInStreaming": false,
++              "requiresStringContent": true,
++              "supportsReasoningEffort": true,
++              "supportedReasoningEfforts": ["minimal", "low", "medium", "high", "xhigh", "max"]
++            }
++          },
+           {
+             "id": "kimi-k2.5",
+             "name": "Kimi K2.5",
+diff --git a/extensions/moonshot/provider-catalog.test.ts b/extensions/moonshot/provider-catalog.test.ts
+index 4644acf91ad4dc2ad94294b33f99a1b1fc4e0a57..e5715b0b6f8118fc8af7794dc8f914c036dc21b4 100644
+--- a/extensions/moonshot/provider-catalog.test.ts
++++ b/extensions/moonshot/provider-catalog.test.ts
+@@ -40,6 +40,7 @@ describe("moonshot provider catalog", () => {
+     expect(provider.api).toBe("openai-completions");
+     expect(provider.models.map((model) => model.id)).toEqual([
+       "kimi-k2.6",
++      "kimi-k3",
+       "kimi-k2.5",
+       "kimi-k2-thinking",
+       "kimi-k2-thinking-turbo",
+@@ -51,6 +52,28 @@ describe("moonshot provider catalog", () => {
+       cacheRead: 0.16,
+       cacheWrite: 0,
+     });
++    expect(requireMoonshotModel(provider, "kimi-k3")).toMatchObject({
++      reasoning: true,
++      thinkingLevelMap: {
++        off: null,
++        minimal: "max",
++        low: "max",
++        medium: "max",
++        high: "max",
++        xhigh: "max",
++        max: "max",
++      },
++      input: ["text", "image", "video"],
++      contextWindow: 1_048_576,
++      maxTokens: 8192,
++      compat: {
++        maxTokensField: "max_tokens",
++        supportsUsageInStreaming: false,
++        requiresStringContent: true,
++        supportsReasoningEffort: true,
++        supportedReasoningEfforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
++      },
++    });
+     expect(requireMoonshotModel(provider, "kimi-k2.5").cost).toEqual({
+       input: 0.6,
+       output: 3,
+@@ -64,6 +87,11 @@ describe("moonshot provider catalog", () => {
+     expect(
+       requireMoonshotCompat(requireFirstMoonshotModel(defaultProvider)).supportsUsageInStreaming,
+     ).toBe(true);
++    expect(
++      requireMoonshotCompat(
++        requireMoonshotModel(defaultProvider, "kimi-k3"),
++      ).supportsUsageInStreaming,
++    ).toBe(false);
+ 
+     const cnProvider = applyMoonshotNativeStreamingUsageCompat({
+       ...buildMoonshotProvider(),
+diff --git a/extensions/moonshot/provider-catalog.ts b/extensions/moonshot/provider-catalog.ts
+index a4083434f282688432a543e6e04ead8dc2c2c543..ff0f659fc13b4e38c8d2f5afcc202f8156170ef2 100644
+--- a/extensions/moonshot/provider-catalog.ts
++++ b/extensions/moonshot/provider-catalog.ts
+@@ -9,6 +9,16 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
+ export const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+ export const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
+ export const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.6";
++const KIMI_K3_MODEL_ID = "kimi-k3";
++const KIMI_K3_THINKING_LEVEL_MAP = {
++  off: null,
++  minimal: "max",
++  low: "max",
++  medium: "max",
++  high: "max",
++  xhigh: "max",
++  max: "max",
++} as const;
+ 
+ export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
+   return supportsNativeStreamingUsageCompat({
+@@ -20,15 +30,43 @@ export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
+ export function applyMoonshotNativeStreamingUsageCompat(
+   provider: ModelProviderConfig,
+ ): ModelProviderConfig {
+-  return applyProviderNativeStreamingUsageCompat({
++  const normalized = applyProviderNativeStreamingUsageCompat({
+     providerId: "moonshot",
+     providerConfig: provider,
+   });
++  return {
++    ...normalized,
++    models: normalized.models.map((model) =>
++      model.id.trim().toLowerCase() === "kimi-k3"
++        ? {
++            ...model,
++            compat: {
++              ...model.compat,
++              supportsUsageInStreaming: false,
++            },
++          }
++        : model,
++    ),
++  };
+ }
+ 
+ export function buildMoonshotProvider(): ModelProviderConfig {
+-  return buildManifestModelProviderConfig({
++  const provider = buildManifestModelProviderConfig({
+     providerId: "moonshot",
+     catalog: manifest.modelCatalog.providers.moonshot,
+   });
++  // The v2026.6.1 manifest-catalog normalizer only preserves text/image and
++  // omits thinkingLevelMap. Restore the K3 runtime-only fields explicitly.
++  return {
++    ...provider,
++    models: provider.models.map((model) =>
++      model.id === KIMI_K3_MODEL_ID
++        ? {
++            ...model,
++            input: ["text", "image", "video"],
++            thinkingLevelMap: KIMI_K3_THINKING_LEVEL_MAP,
++          }
++        : model,
++    ),
++  };
+ }
+diff --git a/src/agents/sessions/model-registry.ts b/src/agents/sessions/model-registry.ts
+index ae657114a72769115c30191628d9f74a1664d2e9..6359f831f79a593d050ead0a9bd17d19b35760cb 100644
+--- a/src/agents/sessions/model-registry.ts
++++ b/src/agents/sessions/model-registry.ts
+@@ -159,7 +159,16 @@ const ModelDefinitionSchema = Type.Object({
+   baseUrl: Type.Optional(Type.String({ minLength: 1 })),
+   reasoning: Type.Optional(Type.Boolean()),
+   thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
+-  input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
++  input: Type.Optional(
++    Type.Array(
++      Type.Union([
++        Type.Literal("text"),
++        Type.Literal("image"),
++        Type.Literal("video"),
++        Type.Literal("audio"),
++      ]),
++    ),
++  ),
+   cost: Type.Optional(
+     Type.Object({
+       input: Type.Number(),
+diff --git a/src/config/zod-schema.core.ts b/src/config/zod-schema.core.ts
+index 73fd382641e31bd583dc43413b74372c2c2fb684..48d55eff0be7fbaed54706762d679ae3529514d3 100644
+--- a/src/config/zod-schema.core.ts
++++ b/src/config/zod-schema.core.ts
+@@ -340,6 +340,19 @@ const ModelMediaInputSchema = z
+   })
+   .strict();
+ 
++const ThinkingLevelMapSchema = z
++  .object({
++    off: z.string().min(1).nullable().optional(),
++    minimal: z.string().min(1).nullable().optional(),
++    low: z.string().min(1).nullable().optional(),
++    medium: z.string().min(1).nullable().optional(),
++    high: z.string().min(1).nullable().optional(),
++    xhigh: z.string().min(1).nullable().optional(),
++    max: z.string().min(1).nullable().optional(),
++  })
++  .strict()
++  .optional();
++
+ const ModelDefinitionSchema = z
+   .object({
+     id: z.string().min(1),
+@@ -377,6 +390,7 @@ const ModelDefinitionSchema = z
+     contextWindow: z.number().positive().optional(),
+     contextTokens: z.number().int().positive().optional(),
+     maxTokens: z.number().positive().optional(),
++    thinkingLevelMap: ThinkingLevelMapSchema,
+     params: z.record(z.string(), z.unknown()).optional(),
+     agentRuntime: ModelAgentRuntimePolicySchema,
+     headers: z.record(z.string(), z.string()).optional(),
+diff --git a/src/config/zod-schema.models.test.ts b/src/config/zod-schema.models.test.ts
+index aad35819d9281f886fb53238f60cbd3071b4d64e..d3764b8251b0b353ac52a49cbda95f24d4d67a81 100644
+--- a/src/config/zod-schema.models.test.ts
++++ b/src/config/zod-schema.models.test.ts
+@@ -22,4 +22,62 @@ describe("ModelsConfigSchema", () => {
+ 
+     expect(result.success).toBe(true);
+   });
++
++  it("accepts the complete Kimi K3 thinking-level map and compat profile", () => {
++    const result = ModelsConfigSchema.safeParse({
++      providers: {
++        moonshot: {
++          baseUrl: "https://api.moonshot.cn/v1",
++          api: "openai-completions",
++          models: [
++            {
++              id: "kimi-k3",
++              name: "Kimi K3",
++              api: "openai-completions",
++              reasoning: true,
++              input: ["text", "image", "video"],
++              contextWindow: 1_048_576,
++              maxTokens: 8192,
++              thinkingLevelMap: {
++                off: null,
++                minimal: "max",
++                low: "max",
++                medium: "max",
++                high: "max",
++                xhigh: "max",
++                max: "max",
++              },
++              compat: {
++                maxTokensField: "max_tokens",
++                supportsUsageInStreaming: false,
++                requiresStringContent: true,
++                supportsReasoningEffort: true,
++                supportedReasoningEfforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
++              },
++            },
++          ],
++        },
++      },
++    });
++
++    expect(result.success).toBe(true);
++  });
++
++  it.each([
++    { label: "unknown key", thinkingLevelMap: { turbo: "max" } },
++    { label: "invalid value", thinkingLevelMap: { high: 1 } },
++    { label: "empty mapped value", thinkingLevelMap: { high: "" } },
++  ])("rejects an invalid thinking-level map: $label", ({ thinkingLevelMap }) => {
++    const result = ModelsConfigSchema.safeParse({
++      providers: {
++        moonshot: {
++          baseUrl: "https://api.moonshot.cn/v1",
++          api: "openai-completions",
++          models: [{ id: "kimi-k3", name: "Kimi K3", thinkingLevelMap }],
++        },
++      },
++    });
++
++    expect(result.success).toBe(false);
++  });
+ });
+diff --git a/src/llm/providers/stream-wrappers/moonshot-thinking.ts b/src/llm/providers/stream-wrappers/moonshot-thinking.ts
+index a33b6a606f1c1f2e774a94843aea1ebc74375f38..7dd415e40435b879f15de89adc33c3549cd34732 100644
+--- a/src/llm/providers/stream-wrappers/moonshot-thinking.ts
++++ b/src/llm/providers/stream-wrappers/moonshot-thinking.ts
+@@ -7,6 +7,14 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
+ type MoonshotThinkingType = "enabled" | "disabled";
+ type MoonshotThinkingKeep = "all";
+ const MOONSHOT_THINKING_KEEP_MODEL_ID = "kimi-k2.6";
++const MOONSHOT_PROVIDER_ID = "moonshot";
++const MOONSHOT_K3_FIXED_SAMPLING_FIELDS = [
++  "temperature",
++  "top_p",
++  "n",
++  "presence_penalty",
++  "frequency_penalty",
++] as const;
+ const llmRuntimeLoader = createLazyImportLoader(() => import("openclaw/plugin-sdk/llm"));
+ 
+ async function loadDefaultStreamFn(): Promise<StreamFn> {
+@@ -89,6 +97,85 @@ export function resolveMoonshotThinkingKeep(params: {
+   return normalizeMoonshotThinkingKeep(params.configuredThinking);
+ }
+ 
++function asPayloadRecord(value: unknown): Record<string, unknown> | undefined {
++  return value && typeof value === "object" && !Array.isArray(value)
++    ? (value as Record<string, unknown>)
++    : undefined;
++}
++
++function isMoonshotKimiK3ModelId(value: string): boolean {
++  return normalizeOptionalLowercaseString(value)?.replace(/[^a-z0-9]/g, "") === "kimik3";
++}
++
++function sanitizeMoonshotKimiK3Payload(payload: Record<string, unknown>): void {
++  delete payload.thinking;
++  delete payload.reasoningEffort;
++  payload.reasoning_effort = "max";
++  for (const field of MOONSHOT_K3_FIXED_SAMPLING_FIELDS) {
++    delete payload[field];
++  }
++  ensureMoonshotToolCallReasoningContent(payload);
++}
++
++function ensureMoonshotToolCallReasoningContent(payload: Record<string, unknown>): void {
++  if (!Array.isArray(payload.messages)) {
++    return;
++  }
++  for (const message of payload.messages) {
++    const record = asPayloadRecord(message);
++    if (
++      record?.role !== "assistant" ||
++      !Array.isArray(record.tool_calls) ||
++      record.tool_calls.length === 0 ||
++      "reasoning_content" in record
++    ) {
++      continue;
++    }
++    record.reasoning_content = "";
++  }
++}
++
++function sanitizeMoonshotKimiK3AfterCaller(
++  value: unknown,
++  fallbackPayload: Record<string, unknown>,
++): unknown {
++  sanitizeMoonshotKimiK3Payload(asPayloadRecord(value) ?? fallbackPayload);
++  return value;
++}
++
++/**
++ * Applies the Kimi K3 OpenAI-compatible request contract to a model that an
++ * owning provider plugin has already selected explicitly.
++ */
++export function createMoonshotKimiK3Wrapper(baseStreamFn: StreamFn | undefined): StreamFn {
++  return async (model, context, options) => {
++    const underlying = baseStreamFn ?? (await loadDefaultStreamFn());
++    const originalOnPayload = options?.onPayload;
++    return underlying(
++      { ...model, reasoning: true },
++      context,
++      {
++        ...options,
++        reasoning: "max",
++        onPayload: (payload, payloadModel) => {
++          const payloadRecord = asPayloadRecord(payload);
++          if (!payloadRecord) {
++            return originalOnPayload?.(payload, payloadModel);
++          }
++          sanitizeMoonshotKimiK3Payload(payloadRecord);
++          const result = originalOnPayload?.(payload, payloadModel);
++          if (result && typeof (result as Promise<unknown>).then === "function") {
++            return Promise.resolve(result).then((resolved) =>
++              sanitizeMoonshotKimiK3AfterCaller(resolved, payloadRecord),
++            );
++          }
++          return sanitizeMoonshotKimiK3AfterCaller(result, payloadRecord);
++        },
++      },
++    );
++  };
++}
++
+ /** @deprecated Moonshot provider-owned stream helper; do not use from third-party plugins. */
+ export function createMoonshotThinkingWrapper(
+   baseStreamFn: StreamFn | undefined,
+@@ -97,6 +184,12 @@ export function createMoonshotThinkingWrapper(
+ ): StreamFn {
+   return async (model, context, options) => {
+     const underlying = baseStreamFn ?? (await loadDefaultStreamFn());
++    const isDirectMoonshotKimiK3 =
++      normalizeOptionalLowercaseString(model.provider) === MOONSHOT_PROVIDER_ID &&
++      isMoonshotKimiK3ModelId(model.id);
++    if (isDirectMoonshotKimiK3) {
++      return createMoonshotKimiK3Wrapper(underlying)(model, context, options);
++    }
+     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+       let effectiveThinkingType = normalizeMoonshotThinkingType(payloadObj.thinking);
+ 
+diff --git a/src/plugin-sdk/provider-stream-shared.ts b/src/plugin-sdk/provider-stream-shared.ts
+index 84db5d046a885ef201a6972f3527fab5639a7a7c..207546f9e3e72d9b39f47d105f6ea1ce27bd13ca 100644
+--- a/src/plugin-sdk/provider-stream-shared.ts
++++ b/src/plugin-sdk/provider-stream-shared.ts
+@@ -884,6 +884,7 @@ export {
+ } from "../agents/anthropic-payload-policy.js";
+ export { applyAnthropicEphemeralCacheControlMarkers } from "../llm/providers/stream-wrappers/anthropic-cache-control-payload.js";
+ export {
++  createMoonshotKimiK3Wrapper,
+   createMoonshotThinkingWrapper,
+   resolveMoonshotThinkingType,
+ } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
+diff --git a/src/plugin-sdk/provider-stream.test.ts b/src/plugin-sdk/provider-stream.test.ts
+index eb5b697af19a933bca7dc1fbd61aa681ce3e2cb2..1c31448f7e995a75602a6c82080673a3e57c914d 100644
+--- a/src/plugin-sdk/provider-stream.test.ts
++++ b/src/plugin-sdk/provider-stream.test.ts
+@@ -4,6 +4,7 @@ import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js"
+ import { VERSION } from "../version.js";
+ import {
+   composeProviderStreamWrappers as composeProviderStreamWrappersShared,
++  createMoonshotKimiK3Wrapper,
+   createMoonshotThinkingWrapper as createMoonshotThinkingWrapperShared,
+   createPlainTextToolCallCompatWrapper as createPlainTextToolCallCompatWrapperShared,
+   createToolStreamWrapper as createToolStreamWrapperShared,
+@@ -104,6 +105,91 @@ describe("composeProviderStreamWrappers", () => {
+   });
+ });
+ 
++describe("createMoonshotKimiK3Wrapper", () => {
++  it("reapplies the K3 payload contract after an async caller replacement", async () => {
++    let finalPayload: Record<string, unknown> | undefined;
++    let callerSawReasoningContent: unknown;
++    const pinnedToolChoice = { type: "function", function: { name: "read" } };
++    const baseStreamFn: StreamFn = async (model, _context, options) => {
++      const payload = {
++        model: model.id,
++        messages: [
++          {
++            role: "assistant",
++            tool_calls: [{ id: "call_before", type: "function" }],
++          },
++        ],
++      };
++      const replacement = await options?.onPayload?.(payload, model);
++      finalPayload = requireRecord(replacement ?? payload, "final payload");
++      return {} as never;
++    };
++    const wrapped = createMoonshotKimiK3Wrapper(baseStreamFn);
++
++    await wrapped(
++      { api: "openai-completions", provider: "custom_0", id: "my-kimi-prod" } as never,
++      {} as never,
++      {
++        onPayload: async (payload) => {
++          const messages = requireRecord(payload, "caller payload").messages as Array<
++            Record<string, unknown>
++          >;
++          callerSawReasoningContent = messages[0]?.reasoning_content;
++          return {
++            model: "my-kimi-prod",
++            messages: [
++              {
++                role: "assistant",
++                tool_calls: [{ id: "call_after", type: "function" }],
++              },
++              { role: "assistant", content: "plain answer" },
++              {
++                role: "assistant",
++                tool_calls: [{ id: "call_native", type: "function" }],
++                reasoning_content: "native reasoning",
++              },
++            ],
++            thinking: { type: "disabled" },
++            reasoningEffort: "low",
++            reasoning_effort: "low",
++            temperature: 0,
++            top_p: 0.5,
++            n: 2,
++            presence_penalty: 1,
++            frequency_penalty: 1,
++            tool_choice: pinnedToolChoice,
++          };
++        },
++      },
++    );
++
++    const payload = requirePayload(finalPayload);
++    expect(callerSawReasoningContent).toBe("");
++    expect(payload).not.toHaveProperty("thinking");
++    expect(payload).not.toHaveProperty("reasoningEffort");
++    expect(payload.reasoning_effort).toBe("max");
++    expect(payload).not.toHaveProperty("temperature");
++    expect(payload).not.toHaveProperty("top_p");
++    expect(payload).not.toHaveProperty("n");
++    expect(payload).not.toHaveProperty("presence_penalty");
++    expect(payload).not.toHaveProperty("frequency_penalty");
++    expect(payload.tool_choice).toEqual(pinnedToolChoice);
++    expect(payload.messages).toEqual([
++      {
++        role: "assistant",
++        tool_calls: [{ id: "call_after", type: "function" }],
++        reasoning_content: "",
++      },
++      { role: "assistant", content: "plain answer" },
++      {
++        role: "assistant",
++        tool_calls: [{ id: "call_native", type: "function" }],
++        reasoning_content: "native reasoning",
++      },
++    ]);
++  });
++});
++
+ describe("buildProviderStreamFamilyHooks", () => {
+   it("covers the stream family matrix", async () => {
+     let capturedPayload: Record<string, unknown> | undefined;
+diff --git a/src/plugin-sdk/provider-stream.ts b/src/plugin-sdk/provider-stream.ts
+index e79c0a69552e16009cbf2a98a39ae712b22eac7d..958e69fb3853011b01215a42ec5820ed10c9b6c7 100644
+--- a/src/plugin-sdk/provider-stream.ts
++++ b/src/plugin-sdk/provider-stream.ts
+@@ -32,6 +32,7 @@ export {
+   applyAnthropicPayloadPolicyToParams,
+   composeProviderStreamWrappers,
+   createAnthropicThinkingPrefillPayloadWrapper,
++  createMoonshotKimiK3Wrapper,
+   createMoonshotThinkingWrapper,
+   createPlainTextToolCallCompatWrapper,
+   createToolStreamWrapper,

@@ -14,7 +14,6 @@ import LazyRenderTurn from './LazyRenderTurn';
 import {
   buildConversationTurns,
   buildDisplayItems,
-  hasRenderableAssistantContent,
 } from './messageDisplayUtils';
 import UserMessageItem from './UserMessageItem';
 
@@ -74,8 +73,9 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
             assistantItems: [],
           }}
           resolveLocalFilePath={resolveLocalFilePath}
-          showTypingIndicator
+          showActivityIndicator
           showCopyButtons={false}
+          isStreamingTurn
         />
       </div>
     );
@@ -85,8 +85,8 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
     <div className={className}>
       {turns.map((turn, index) => {
         const isLastTurn = index === turns.length - 1;
-        const showTypingIndicator = isStreaming && isLastTurn && !hasRenderableAssistantContent(turn);
-        const showAssistantBlock = turn.assistantItems.length > 0 || showTypingIndicator;
+        const showActivityIndicator = isStreaming && isLastTurn;
+        const showAssistantBlock = turn.assistantItems.length > 0 || showActivityIndicator;
         const alwaysRender = index >= turns.length - 3;
 
         // Compute per-turn artifacts
@@ -126,8 +126,9 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
                   mapDisplayText={mapDisplayText}
                   localServiceDirectory={localServiceDirectory}
                   onOpenLocalService={onOpenLocalService}
-                  showTypingIndicator={showTypingIndicator}
+                  showActivityIndicator={showActivityIndicator}
                   showCopyButtons={!isStreaming || !isLastTurn}
+                  isStreamingTurn={isStreaming && isLastTurn}
                 />
               </div>
             )}

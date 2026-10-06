@@ -1,4 +1,19 @@
 import { type ApiFormat,type ProviderConfig, ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
+import {
+  type LobsterAIRequestCapability,
+  parseLobsterAIRequestCapabilities,
+} from '../../shared/providers/lobsterAIRequestOptions';
+import {
+  applyModelRuntimeProfileMetadata,
+  ModelRuntimeProfile,
+  type ModelRuntimeProfile as ModelRuntimeProfileType,
+  normalizeModelIdForComparison,
+  parseModelRuntimeProfile,
+} from '../../shared/providers/modelRuntimeProfiles';
+import {
+  type ModelThinkingConfig,
+  parseModelThinkingConfig,
+} from '../../shared/providers/modelThinking';
 import type { SqliteStore } from '../sqliteStore';
 import type { CoworkApiConfig } from './coworkConfigStore';
 import { type AnthropicApiFormat,normalizeProviderApiFormat } from './coworkFormatTransform';
@@ -35,8 +50,10 @@ type ProviderModelConfig = {
   id: string;
   name: string;
   supportsImage?: boolean;
+  supportsVideo?: boolean;
   supportsThinking?: boolean;
   contextWindow?: number;
+  maxTokens?: number;
   customParams?: Record<string, unknown>;
 };
 
@@ -44,8 +61,10 @@ type ProviderModelInputConfig = {
   id: string;
   name?: string;
   supportsImage?: boolean;
+  supportsVideo?: boolean;
   supportsThinking?: boolean;
   contextWindow?: number;
+  maxTokens?: number;
   customParams?: Record<string, unknown>;
 };
 
@@ -54,10 +73,60 @@ export type ServerModelMetadata = {
   modelName?: string;
   provider?: string;
   apiFormat?: string;
+  runtimeProfile?: ModelRuntimeProfileType;
   supportsImage?: boolean;
+  supportsVideo?: boolean;
   supportsThinking?: boolean;
+  thinkingConfig?: ModelThinkingConfig;
+  requestCapabilities?: LobsterAIRequestCapability[];
+  supportsToolCalling?: boolean;
+  agenticReady?: boolean;
   contextWindow?: number;
+  maxTokens?: number;
   explicitContextCache?: boolean;
+};
+
+type CachedServerModelMetadata = Omit<ServerModelMetadata, 'modelId'> & {
+  invalidRuntimeProfile?: boolean;
+};
+
+export type ServerModelMetadataInput =
+  Omit<ServerModelMetadata, 'runtimeProfile' | 'thinkingConfig' | 'requestCapabilities'>
+  & { runtimeProfile?: unknown; thinkingConfig?: unknown; requestCapabilities?: unknown };
+
+export const ServerModelRunGateReason = {
+  MetadataMissing: 'metadata_missing',
+  RuntimeProfileMissing: 'runtime_profile_missing',
+  RuntimeProfileUnsupported: 'runtime_profile_unsupported',
+  TransportUnsupported: 'transport_unsupported',
+  ToolCallingUnavailable: 'tool_calling_unavailable',
+  AgenticNotReady: 'agentic_not_ready',
+} as const;
+
+export type ServerModelRunGateReason =
+  typeof ServerModelRunGateReason[keyof typeof ServerModelRunGateReason];
+
+export type ServerModelRunGateResult =
+  | { allowed: true; metadata: ServerModelMetadata }
+  | { allowed: false; reason: ServerModelRunGateReason };
+
+const KIMI_K3_SERVER_MODEL_IDS = new Set([
+  'kimik3',
+  'kimik3youdaoinner',
+]);
+
+export const isKnownPackageKimiK3ModelId = (modelId: string): boolean =>
+  modelId.trim().toLowerCase() === 'kimi-k3-youdaoinner';
+
+const isServerKimiK3Candidate = (
+  metadata: Pick<ServerModelMetadataInput, 'modelId' | 'modelName' | 'provider'>,
+): boolean => {
+  const normalizedProvider = metadata.provider?.trim().toLowerCase();
+  const normalizedName = metadata.modelName
+    ? normalizeModelIdForComparison(metadata.modelName)
+    : '';
+  return KIMI_K3_SERVER_MODEL_IDS.has(normalizeModelIdForComparison(metadata.modelId))
+    || (normalizedProvider === 'moonshot' && normalizedName === 'kimik3');
 };
 
 export type ApiConfigResolution = {
@@ -67,10 +136,15 @@ export type ApiConfigResolution = {
     providerName: string;
     authType?: ProviderConfig['authType'];
     codingPlanEnabled: boolean;
+    runtimeProfile?: ModelRuntimeProfileType;
     supportsImage?: boolean;
+    supportsVideo?: boolean;
     supportsThinking?: boolean;
+    thinkingConfig?: ModelThinkingConfig;
+    requestCapabilities?: LobsterAIRequestCapability[];
     modelName?: string;
     contextWindow?: number;
+    maxTokens?: number;
   };
 };
 
@@ -97,10 +171,14 @@ export function setServerBaseUrlGetter(getter: () => string): void {
 
 // Cached server model metadata (populated when auth:getModels is called).
 // Keyed by modelId -> server-provided metadata used for OpenClaw config sync.
-let serverModelMetadataCache: Map<string, Omit<ServerModelMetadata, 'modelId'>> = new Map();
+let serverModelMetadataCache: Map<string, CachedServerModelMetadata> = new Map();
+
+type ComparableServerModelMetadata =
+  Omit<ServerModelMetadata, 'runtimeProfile'>
+  & { runtimeProfile?: string };
 
 const serializeServerModelMetadata = (
-  models: ServerModelMetadata[],
+  models: ComparableServerModelMetadata[],
 ): string => JSON.stringify(
   models
     .map((model) => ({
@@ -108,35 +186,93 @@ const serializeServerModelMetadata = (
       modelName: model.modelName,
       provider: model.provider,
       apiFormat: model.apiFormat,
+      runtimeProfile: model.runtimeProfile,
       supportsImage: model.supportsImage,
+      supportsVideo: model.supportsVideo,
       supportsThinking: model.supportsThinking,
+      thinkingConfig: model.thinkingConfig,
+      requestCapabilities: model.requestCapabilities,
+      supportsToolCalling: model.supportsToolCalling,
+      agenticReady: model.agenticReady,
       contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
       explicitContextCache: model.explicitContextCache,
     }))
     .sort((a, b) => a.modelId.localeCompare(b.modelId)),
 );
 
-export function updateServerModelMetadata(models: ServerModelMetadata[]): boolean {
-  const previous = serializeServerModelMetadata(getAllServerModelMetadata());
-  const nextCache = new Map(models.map(m => [m.modelId, {
-    modelName: m.modelName,
-    provider: m.provider,
-    apiFormat: m.apiFormat,
-    supportsImage: m.supportsImage,
-    supportsThinking: m.supportsThinking,
-    contextWindow: m.contextWindow,
-    explicitContextCache: m.explicitContextCache,
-  }]));
-  const next = serializeServerModelMetadata(Array.from(nextCache.entries()).map(([modelId, meta]) => ({
-    modelId,
-    modelName: meta.modelName,
-    provider: meta.provider,
-    apiFormat: meta.apiFormat,
-    supportsImage: meta.supportsImage,
-    supportsThinking: meta.supportsThinking,
-    contextWindow: meta.contextWindow,
-    explicitContextCache: meta.explicitContextCache,
-  })));
+const getComparableServerModelMetadata = (
+  cache: Map<string, CachedServerModelMetadata>,
+): ComparableServerModelMetadata[] => Array.from(cache.entries()).map(([modelId, meta]) => ({
+  modelId,
+  modelName: meta.modelName,
+  provider: meta.provider,
+  apiFormat: meta.apiFormat,
+  runtimeProfile: meta.invalidRuntimeProfile ? '__invalid__' : meta.runtimeProfile,
+  supportsImage: meta.supportsImage,
+  supportsVideo: meta.supportsVideo,
+  supportsThinking: meta.supportsThinking,
+  thinkingConfig: meta.thinkingConfig,
+  requestCapabilities: meta.requestCapabilities,
+  supportsToolCalling: meta.supportsToolCalling,
+  agenticReady: meta.agenticReady,
+  contextWindow: meta.contextWindow,
+  maxTokens: meta.maxTokens,
+  explicitContextCache: meta.explicitContextCache,
+}));
+
+export function updateServerModelMetadata(models: ServerModelMetadataInput[]): boolean {
+  const previous = serializeServerModelMetadata(
+    getComparableServerModelMetadata(serverModelMetadataCache),
+  );
+  const nextCache = new Map<string, CachedServerModelMetadata>();
+  for (const model of models) {
+    const modelId = model.modelId?.trim();
+    if (!modelId) continue;
+
+    const runtimeProfile = parseModelRuntimeProfile(model.runtimeProfile);
+    const hasRuntimeProfileValue = model.runtimeProfile !== undefined
+      && model.runtimeProfile !== null
+      && model.runtimeProfile !== '';
+    const invalidRuntimeProfile = hasRuntimeProfileValue && !runtimeProfile;
+    if (invalidRuntimeProfile) {
+      console.warn(
+        `[ClaudeSettings] ignored unsupported runtime profile for server model "${modelId}".`,
+      );
+    }
+    const runtimeMetadata = applyModelRuntimeProfileMetadata({
+      supportsImage: model.supportsImage,
+      supportsVideo: model.supportsVideo,
+      supportsThinking: model.supportsThinking,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+    }, runtimeProfile);
+    const thinkingConfig = runtimeMetadata.supportsThinking === true
+      ? parseModelThinkingConfig(model.thinkingConfig)
+      : undefined;
+    const requestCapabilities = parseLobsterAIRequestCapabilities(model.requestCapabilities);
+
+    nextCache.set(modelId, {
+      modelName: model.modelName,
+      provider: model.provider,
+      apiFormat: model.apiFormat,
+      runtimeProfile,
+      ...(invalidRuntimeProfile
+        ? { invalidRuntimeProfile: true }
+        : {}),
+      supportsImage: runtimeMetadata.supportsImage,
+      supportsVideo: runtimeMetadata.supportsVideo,
+      supportsThinking: runtimeMetadata.supportsThinking,
+      thinkingConfig,
+      requestCapabilities,
+      supportsToolCalling: model.supportsToolCalling,
+      agenticReady: model.agenticReady,
+      contextWindow: runtimeMetadata.contextWindow,
+      maxTokens: runtimeMetadata.maxTokens,
+      explicitContextCache: model.explicitContextCache,
+    });
+  }
+  const next = serializeServerModelMetadata(getComparableServerModelMetadata(nextCache));
   serverModelMetadataCache = nextCache;
   return previous !== next;
 }
@@ -151,11 +287,88 @@ export function getAllServerModelMetadata(): ServerModelMetadata[] {
     modelName: meta.modelName,
     provider: meta.provider,
     apiFormat: meta.apiFormat,
+    runtimeProfile: meta.runtimeProfile,
     supportsImage: meta.supportsImage,
+    supportsVideo: meta.supportsVideo,
     supportsThinking: meta.supportsThinking,
+    thinkingConfig: meta.thinkingConfig,
+    requestCapabilities: meta.requestCapabilities,
+    supportsToolCalling: meta.supportsToolCalling,
+    agenticReady: meta.agenticReady,
     contextWindow: meta.contextWindow,
+    maxTokens: meta.maxTokens,
     explicitContextCache: meta.explicitContextCache,
   }));
+}
+
+export function getServerModelMetadata(modelId: string): ServerModelMetadata | null {
+  const normalizedModelId = modelId.trim();
+  if (!normalizedModelId) return null;
+  const metadata = serverModelMetadataCache.get(normalizedModelId);
+  if (!metadata) return null;
+  return {
+    modelId: normalizedModelId,
+    modelName: metadata.modelName,
+    provider: metadata.provider,
+    apiFormat: metadata.apiFormat,
+    runtimeProfile: metadata.runtimeProfile,
+    supportsImage: metadata.supportsImage,
+    supportsVideo: metadata.supportsVideo,
+    supportsThinking: metadata.supportsThinking,
+    thinkingConfig: metadata.thinkingConfig,
+    requestCapabilities: metadata.requestCapabilities,
+    supportsToolCalling: metadata.supportsToolCalling,
+    agenticReady: metadata.agenticReady,
+    contextWindow: metadata.contextWindow,
+    maxTokens: metadata.maxTokens,
+    explicitContextCache: metadata.explicitContextCache,
+  };
+}
+
+export function evaluateServerModelRunGate(modelId: string): ServerModelRunGateResult {
+  const normalizedModelId = modelId.trim();
+  const cachedMetadata = normalizedModelId
+    ? serverModelMetadataCache.get(normalizedModelId)
+    : undefined;
+  if (!cachedMetadata) {
+    return { allowed: false, reason: ServerModelRunGateReason.MetadataMissing };
+  }
+  if (cachedMetadata.invalidRuntimeProfile) {
+    return {
+      allowed: false,
+      reason: ServerModelRunGateReason.RuntimeProfileUnsupported,
+    };
+  }
+
+  const metadata = getServerModelMetadata(normalizedModelId);
+  if (!metadata) {
+    return { allowed: false, reason: ServerModelRunGateReason.MetadataMissing };
+  }
+  if (!metadata.runtimeProfile) {
+    if (isServerKimiK3Candidate(metadata)) {
+      return {
+        allowed: false,
+        reason: ServerModelRunGateReason.RuntimeProfileMissing,
+      };
+    }
+    return { allowed: true, metadata };
+  }
+  if (metadata.runtimeProfile !== ModelRuntimeProfile.MoonshotKimiK3) {
+    return {
+      allowed: false,
+      reason: ServerModelRunGateReason.RuntimeProfileUnsupported,
+    };
+  }
+  if (metadata.apiFormat?.trim().toLowerCase() !== 'openai') {
+    return { allowed: false, reason: ServerModelRunGateReason.TransportUnsupported };
+  }
+  if (metadata.supportsToolCalling !== true) {
+    return { allowed: false, reason: ServerModelRunGateReason.ToolCallingUnavailable };
+  }
+  if (metadata.agenticReady !== true) {
+    return { allowed: false, reason: ServerModelRunGateReason.AgenticNotReady };
+  }
+  return { allowed: true, metadata };
 }
 
 function buildServerFallbackModels(effectiveModelId: string): NonNullable<LocalProviderConfig['models']> {
@@ -163,8 +376,10 @@ function buildServerFallbackModels(effectiveModelId: string): NonNullable<LocalP
     id: model.modelId,
     name: model.modelName || model.modelId,
     supportsImage: model.supportsImage,
+    supportsVideo: model.supportsVideo,
     supportsThinking: model.supportsThinking,
     contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
   }));
 
   if (!models.some(model => model.id === effectiveModelId)) {
@@ -173,8 +388,10 @@ function buildServerFallbackModels(effectiveModelId: string): NonNullable<LocalP
       id: effectiveModelId,
       name: cachedMeta?.modelName || effectiveModelId,
       supportsImage: cachedMeta?.supportsImage,
+      supportsVideo: cachedMeta?.supportsVideo,
       supportsThinking: cachedMeta?.supportsThinking,
       contextWindow: cachedMeta?.contextWindow,
+      maxTokens: cachedMeta?.maxTokens,
     });
   }
 
@@ -195,6 +412,16 @@ function normalizeProviderModels(providerName: string, models?: ProviderModelInp
         model.id,
         model.supportsThinking,
       );
+      const supportsVideo = ProviderRegistry.resolveModelSupportsVideo(
+        providerName,
+        model.id,
+        model.supportsVideo,
+      );
+      const maxTokens = ProviderRegistry.resolveModelMaxTokens(
+        providerName,
+        model.id,
+        model.maxTokens,
+      );
       return {
         ...model,
         name: model.name || model.id,
@@ -203,8 +430,10 @@ function normalizeProviderModels(providerName: string, models?: ProviderModelInp
           model.id,
           model.supportsImage,
         ),
+        ...(supportsVideo ? { supportsVideo } : {}),
         ...(supportsThinking ? { supportsThinking } : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(maxTokens !== undefined ? { maxTokens } : {}),
       };
     });
 }
@@ -222,10 +451,15 @@ type MatchedProvider = {
   modelId: string;
   apiFormat: AnthropicApiFormat;
   baseURL: string;
+  runtimeProfile?: ModelRuntimeProfileType;
   supportsImage?: boolean;
+  supportsVideo?: boolean;
   supportsThinking?: boolean;
+  thinkingConfig?: ModelThinkingConfig;
+  requestCapabilities?: LobsterAIRequestCapability[];
   modelName?: string;
   contextWindow?: number;
+  maxTokens?: number;
 };
 
 function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown): AnthropicApiFormat {
@@ -283,6 +517,7 @@ function tryLobsteraiServerFallback(modelId?: string): MatchedProvider | null {
     apiFormat: effectiveApiFormat,
     supportsImage: cachedMeta?.supportsImage,
     supportsThinking: cachedMeta?.supportsThinking,
+    thinkingConfig: cachedMeta?.thinkingConfig,
   });
   return {
     providerName: ProviderName.LobsteraiServer,
@@ -290,10 +525,15 @@ function tryLobsteraiServerFallback(modelId?: string): MatchedProvider | null {
     modelId: effectiveModelId,
     apiFormat: effectiveApiFormat,
     baseURL,
+    runtimeProfile: cachedMeta?.runtimeProfile,
     supportsImage: cachedMeta?.supportsImage,
+    supportsVideo: cachedMeta?.supportsVideo,
     supportsThinking: cachedMeta?.supportsThinking,
+    thinkingConfig: cachedMeta?.thinkingConfig,
+    requestCapabilities: cachedMeta?.requestCapabilities,
     modelName: cachedMeta?.modelName,
     contextWindow: cachedMeta?.contextWindow,
+    maxTokens: cachedMeta?.maxTokens,
   };
 }
 
@@ -438,9 +678,11 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       apiFormat,
       baseURL,
       supportsImage: matchedModel?.supportsImage,
+      supportsVideo: matchedModel?.supportsVideo,
       supportsThinking: matchedModel?.supportsThinking,
       modelName: matchedModel?.name,
       contextWindow: matchedModel?.contextWindow,
+      maxTokens: matchedModel?.maxTokens,
     },
   };
 }
@@ -490,8 +732,15 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
       providerMetadata: {
         providerName: matched.providerName,
         codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
+        runtimeProfile: matched.runtimeProfile,
         supportsImage: matched.supportsImage,
+        supportsVideo: matched.supportsVideo,
         supportsThinking: matched.supportsThinking,
+        thinkingConfig: matched.thinkingConfig,
+        requestCapabilities: matched.requestCapabilities,
+        modelName: matched.modelName,
+        contextWindow: matched.contextWindow,
+        maxTokens: matched.maxTokens,
       },
     };
   }
@@ -529,6 +778,15 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
     providerMetadata: {
       providerName: matched.providerName,
       codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
+      runtimeProfile: matched.runtimeProfile,
+      supportsImage: matched.supportsImage,
+      supportsVideo: matched.supportsVideo,
+      supportsThinking: matched.supportsThinking,
+      thinkingConfig: matched.thinkingConfig,
+      requestCapabilities: matched.requestCapabilities,
+      modelName: matched.modelName,
+      contextWindow: matched.contextWindow,
+      maxTokens: matched.maxTokens,
     },
   };
 }
@@ -577,8 +835,17 @@ export function resolveRawApiConfig(): ApiConfigResolution {
   }
 
   console.log('[ClaudeSettings] resolved raw API config:', JSON.stringify({
-    ...matched,
-    providerConfig: { ...matched.providerConfig, apiKey: apiKey ? '***' : '' },
+    providerName: matched.providerName,
+    modelId: matched.modelId,
+    apiFormat: effectiveApiFormat,
+    runtimeProfile: matched.runtimeProfile,
+    supportsImage: matched.supportsImage,
+    supportsVideo: matched.supportsVideo,
+    supportsThinking: matched.supportsThinking,
+    contextWindow: matched.contextWindow,
+    maxTokens: matched.maxTokens,
+    codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
+    authType: matched.providerConfig.authType,
   }));
   // OpenClaw's gateway requires a non-empty apiKey for every provider — even
   // local servers (Ollama, vLLM, etc.) that don't enforce auth.  When the user
@@ -597,10 +864,15 @@ export function resolveRawApiConfig(): ApiConfigResolution {
       providerName: matched.providerName,
       authType: matched.providerConfig.authType,
       codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
+      runtimeProfile: matched.runtimeProfile,
       supportsImage: matched.supportsImage,
+      supportsVideo: matched.supportsVideo,
       supportsThinking: matched.supportsThinking,
+      thinkingConfig: matched.thinkingConfig,
+      requestCapabilities: matched.requestCapabilities,
       modelName: matched.modelName,
       contextWindow: matched.contextWindow,
+      maxTokens: matched.maxTokens,
     },
   };
 }
@@ -680,6 +952,35 @@ export type ProviderRawConfig = {
   codingPlanEnabled: boolean;
   models: ProviderModelConfig[];
 };
+
+export type ProviderSourceEntry = {
+  providerName: string;
+  codingPlanEnabled: boolean;
+  authType?: ProviderConfig['authType'];
+  displayName?: string;
+};
+
+/**
+ * Lightweight view of every configured provider (enabled or not) for
+ * classifying which Settings entry a runtime error's provider id belongs to.
+ */
+export function listProviderSourceEntries(): ProviderSourceEntry[] {
+  const sqliteStore = getStore();
+  const appConfig = sqliteStore?.get<AppConfig>('app_config');
+  if (!appConfig?.providers) return [];
+
+  const entries: ProviderSourceEntry[] = [];
+  for (const [providerName, providerConfig] of Object.entries(appConfig.providers)) {
+    if (!providerConfig) continue;
+    entries.push({
+      providerName,
+      codingPlanEnabled: !!providerConfig.codingPlanEnabled,
+      authType: providerConfig.authType,
+      displayName: providerConfig.displayName?.trim() || undefined,
+    });
+  }
+  return entries;
+}
 
 export function resolveAllEnabledProviderConfigs(): ProviderRawConfig[] {
   const sqliteStore = getStore();

@@ -45,6 +45,16 @@
   ],
   "extraResources": [
     {
+      "from": "resources/word-licenses",
+      "to": "licenses/word",
+      "filter": ["NOTICE.txt", "manifest.json"]
+    },
+    {
+      "from": "resources/sheet-licenses",
+      "to": "licenses/sheet",
+      "filter": ["NOTICE.txt", "manifest.json"]
+    },
+    {
       "from": ".keyfrom-build",
       "to": "keyfrom",
       "filter": [
@@ -260,10 +270,11 @@
     "oneClick": false,
     "allowToChangeInstallationDirectory": true,
     "runAfterFinish": true,
-    "deleteAppDataOnUninstall": true,
+    "deleteAppDataOnUninstall": false,
     "include": "scripts/nsis-installer.nsh"
   },
-  "electronVersion": "40.2.1",
+  "electronVersion": "43.5.0",
+  "npmRebuild": false,
   "asarUnpack": [
     "node_modules/@img/**",
     "node_modules/better-sqlite3/**",

@@ -1,0 +1,51 @@
+diff --git a/src/agents/embedded-agent-live-edit-diff.test.ts b/src/agents/embedded-agent-live-edit-diff.test.ts
+index e58f76b0..679a6275 100644
+--- a/src/agents/embedded-agent-live-edit-diff.test.ts
++++ b/src/agents/embedded-agent-live-edit-diff.test.ts
+@@ -111,4 +111,26 @@ describe("updateLiveEditDiffProgress", () => {
+     ).toBeUndefined();
+     expect(state.has("read-1")).toBe(false);
+   });
++
++  it("counts OpenAI-compatible completions arguments buffered in partialArgs", () => {
++    vi.useFakeTimers();
++    vi.setSystemTime(3_000);
++    const state = new Map();
++    const block = {
++      type: "toolCall",
++      id: "call_00_write",
++      name: "write",
++      arguments: {},
++      partialArgs: '{"path":"page.html","content":"<html>\\n<body>\\n',
++    };
++
++    expect(
++      updateLiveEditDiffProgress(state, {
++        type: "toolcall_delta",
++        contentIndex: 0,
++        delta: "<body>\\n",
++        partial: { role: "assistant", content: [block] },
++      }),
++    ).toEqual({ toolCallId: "call_00_write", name: "write", diff: { added: 2, removed: 0 } });
++  });
+ });
+diff --git a/src/agents/embedded-agent-live-edit-diff.ts b/src/agents/embedded-agent-live-edit-diff.ts
+index 6b528dfc..d17b0b91 100644
+--- a/src/agents/embedded-agent-live-edit-diff.ts
++++ b/src/agents/embedded-agent-live-edit-diff.ts
+@@ -76,7 +76,14 @@ export function updateLiveEditDiffProgress(
+   const toolCallId = typeof block?.id === "string" ? block.id : "";
+   const name = typeof block?.name === "string" ? block.name : "";
+   const kind = resolveFileMutationToolName(name);
+-  const partialJson = typeof block?.partialJson === "string" ? block.partialJson : "";
++  // Anthropic and Responses streams buffer arguments in `partialJson`;
++  // OpenAI-compatible completions (and Mistral) buffer them in `partialArgs`.
++  const partialJson =
++    typeof block?.partialJson === "string"
++      ? block.partialJson
++      : typeof block?.partialArgs === "string"
++        ? block.partialArgs
++        : "";
+   if (!toolCallId || !kind || !partialJson) {
+     return undefined;
+   }

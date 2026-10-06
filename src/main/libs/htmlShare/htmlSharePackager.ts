@@ -5,7 +5,10 @@ import path from 'path';
 import { pipeline } from 'stream/promises';
 import yazl from 'yazl';
 
+import { COWORK_TEMP_DIR_NAME } from '../../../shared/cowork/constants';
+import { HtmlShareFailureKind } from '../../../shared/htmlShare/constants';
 import { scanHtmlDependencies } from './htmlDependencyScanner';
+import { createHtmlShareSizeError } from './htmlShareError';
 
 const MAX_CLIENT_ARCHIVE_BYTES = 20 * 1024 * 1024;
 const MAX_CLIENT_TOTAL_BYTES = 100 * 1024 * 1024;
@@ -25,7 +28,7 @@ const EXCLUDED_DIRECTORY_NAMES = new Set([
   'coverage',
 ]);
 
-const COWORK_TEMP_DIRECTORY_NAME = '.cowork-temp';
+const COWORK_TEMP_DIRECTORY_NAME = COWORK_TEMP_DIR_NAME;
 
 const SENSITIVE_DIRECTORY_NAMES = new Set([
   COWORK_TEMP_DIRECTORY_NAME,
@@ -174,14 +177,26 @@ async function buildStaticFileEntries(
   filePaths: string[],
 ): Promise<StaticFileEntry[]> {
   if (filePaths.length > MAX_CLIENT_FILE_COUNT) {
-    throw new Error(`Too many files to share. The limit is ${MAX_CLIENT_FILE_COUNT}.`);
+    throw createHtmlShareSizeError(
+      HtmlShareFailureKind.FileCountExceeded,
+      `Too many files to share. The limit is ${MAX_CLIENT_FILE_COUNT}.`,
+      { limitCount: MAX_CLIENT_FILE_COUNT },
+    );
   }
 
   const entries: StaticFileEntry[] = [];
   for (const filePath of filePaths) {
     const stat = await fs.promises.stat(filePath);
     if (stat.size > MAX_CLIENT_SINGLE_FILE_BYTES) {
-      throw new Error(`File is too large to share: ${path.relative(archiveRoot, filePath)}`);
+      throw createHtmlShareSizeError(
+        HtmlShareFailureKind.FileTooLarge,
+        `File is too large to share: ${path.relative(archiveRoot, filePath)}`,
+        {
+          fileName: path.basename(filePath),
+          limitBytes: MAX_CLIENT_SINGLE_FILE_BYTES,
+          actualBytes: stat.size,
+        },
+      );
     }
     entries.push({
       absolutePath: filePath,
@@ -192,7 +207,14 @@ async function buildStaticFileEntries(
 
   const totalBytes = entries.reduce((sum, entry) => sum + entry.size, 0);
   if (totalBytes > MAX_CLIENT_TOTAL_BYTES) {
-    throw new Error(`Share content is too large. The limit is ${Math.floor(MAX_CLIENT_TOTAL_BYTES / 1024 / 1024)}MB.`);
+    throw createHtmlShareSizeError(
+      HtmlShareFailureKind.TotalSizeExceeded,
+      `Share content is too large. The limit is ${Math.floor(MAX_CLIENT_TOTAL_BYTES / 1024 / 1024)}MB.`,
+      {
+        limitBytes: MAX_CLIENT_TOTAL_BYTES,
+        actualBytes: totalBytes,
+      },
+    );
   }
 
   return entries.sort((a, b) => a.archiveName.localeCompare(b.archiveName));
@@ -219,7 +241,14 @@ async function writeZip(entries: StaticFileEntry[]): Promise<{ archivePath: stri
 
   const stat = await fs.promises.stat(archivePath);
   if (stat.size > MAX_CLIENT_ARCHIVE_BYTES) {
-    throw new Error(`Share archive is too large. The limit is ${Math.floor(MAX_CLIENT_ARCHIVE_BYTES / 1024 / 1024)}MB.`);
+    throw createHtmlShareSizeError(
+      HtmlShareFailureKind.ArchiveSizeExceeded,
+      `Share archive is too large. The limit is ${Math.floor(MAX_CLIENT_ARCHIVE_BYTES / 1024 / 1024)}MB.`,
+      {
+        limitBytes: MAX_CLIENT_ARCHIVE_BYTES,
+        actualBytes: stat.size,
+      },
+    );
   }
 
   const buffer = await fs.promises.readFile(archivePath);

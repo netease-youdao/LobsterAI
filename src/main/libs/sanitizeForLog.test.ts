@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
-import { sanitizeUrlForLog, SENSITIVE_LOG_KEY_PATTERN, serializeForLog } from './sanitizeForLog';
+import { LogReporterEndpoint } from '../../shared/analytics/constants';
+import { isAnalyticsEndpointUrl, sanitizeUrlForLog, SENSITIVE_LOG_KEY_PATTERN, serializeForLog } from './sanitizeForLog';
 
 // ---------------------------------------------------------------------------
 // SENSITIVE_LOG_KEY_PATTERN — make sure every expected key variant matches
@@ -152,5 +153,28 @@ describe('sanitizeUrlForLog', () => {
 
   test('returns a safe marker for invalid URLs', () => {
     expect(sanitizeUrlForLog('not a URL')).toBe('[invalid-url]');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isAnalyticsEndpointUrl — api:fetch skips its traffic log for these
+// ---------------------------------------------------------------------------
+describe('isAnalyticsEndpointUrl', () => {
+  test('matches the analyzer endpoint regardless of query or fragment', () => {
+    expect(isAnalyticsEndpointUrl(LogReporterEndpoint.YoudaoAnalyzer)).toBe(true);
+    expect(isAnalyticsEndpointUrl(`${LogReporterEndpoint.YoudaoAnalyzer}?_npid=wisdom&action=lobsterai_app_started&uts=1`)).toBe(true);
+    expect(isAnalyticsEndpointUrl(`${LogReporterEndpoint.YoudaoAnalyzer}#x`)).toBe(true);
+  });
+
+  test('does not match other hosts, paths, or schemes', () => {
+    expect(isAnalyticsEndpointUrl('https://lobsterai-server.youdao.com/api/user/profile-summary?uuid=1')).toBe(false);
+    expect(isAnalyticsEndpointUrl('https://rlogs.youdao.com/other.php')).toBe(false);
+    expect(isAnalyticsEndpointUrl('http://rlogs.youdao.com/rlog.php')).toBe(false);
+    expect(isAnalyticsEndpointUrl('https://rlogs.youdao.com.evil.example/rlog.php')).toBe(false);
+  });
+
+  test('returns false for unparsable input', () => {
+    expect(isAnalyticsEndpointUrl('not a url')).toBe(false);
+    expect(isAnalyticsEndpointUrl('')).toBe(false);
   });
 });

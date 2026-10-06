@@ -1,18 +1,22 @@
+import {
+  LOBSTERAI_CLIENT_CAPABILITIES,
+  LOBSTERAI_CLIENT_CAPABILITIES_HEADER,
+  LOBSTERAI_CLIENT_VERSION_HEADER,
+} from '../../shared/providers/modelRuntimeProfiles';
 import { authQuotaGateStateFromQuota, normalizeAuthQuota } from '../authQuota';
-import { updateServerModelMetadata } from './claudeSettings';
+import {
+  type ServerModelMetadataInput,
+  updateServerModelMetadata,
+} from './claudeSettings';
 
-export type ServerModelEntry = {
-  modelId: string;
-  supportsImage?: boolean;
-  supportsThinking?: boolean;
-  contextWindow?: number;
-};
+export type ServerModelEntry = ServerModelMetadataInput;
 
 export type StartupCacheWarmupDeps = {
   serverBaseUrl: string;
   fetchWithAuth: (url: string, options?: RequestInit) => Promise<Response>;
   appendKeyfromQuery: (url: string) => string;
   cachedSubscriptionStatus: string;
+  clientVersion: string;
   t: (key: string) => string;
 };
 
@@ -22,6 +26,14 @@ export type StartupCacheWarmupResult = {
 };
 
 const WARMUP_TIMEOUT = 5000;
+
+export const buildServerModelCapabilityHeaders = (
+  clientVersion: string,
+): Record<string, string> => ({
+  Accept: 'application/json',
+  [LOBSTERAI_CLIENT_CAPABILITIES_HEADER]: LOBSTERAI_CLIENT_CAPABILITIES,
+  [LOBSTERAI_CLIENT_VERSION_HEADER]: clientVersion,
+});
 
 /**
  * Pre-warm quota and model caches so provider resolution and config sync
@@ -33,7 +45,14 @@ const WARMUP_TIMEOUT = 5000;
  * syncOpenClawConfig calls during the gateway startup window.
  */
 export async function runStartupCacheWarmup(deps: StartupCacheWarmupDeps): Promise<StartupCacheWarmupResult> {
-  const { serverBaseUrl, fetchWithAuth, appendKeyfromQuery, cachedSubscriptionStatus, t } = deps;
+  const {
+    serverBaseUrl,
+    fetchWithAuth,
+    appendKeyfromQuery,
+    cachedSubscriptionStatus,
+    clientVersion,
+    t,
+  } = deps;
 
   let subscriptionStatus = cachedSubscriptionStatus;
   let mediaGenerationEntitled = false;
@@ -64,6 +83,7 @@ export async function runStartupCacheWarmup(deps: StartupCacheWarmupDeps): Promi
       try {
         const url = appendKeyfromQuery(`${serverBaseUrl}/api/models/available`);
         const resp = await fetchWithAuth(url, {
+          headers: buildServerModelCapabilityHeaders(clientVersion),
           signal: AbortSignal.timeout(WARMUP_TIMEOUT),
         });
         if (!resp.ok) return;

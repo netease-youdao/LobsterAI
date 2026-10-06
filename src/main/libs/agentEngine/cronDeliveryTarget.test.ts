@@ -10,16 +10,17 @@ function finishedPayload(overrides: Record<string, unknown> = {}): Record<string
     delivered: true,
     deliveryStatus: 'delivered',
     delivery: {
-      intended: { channel: 'openclaw-weixin', to: 'o9cq809ZEC25@im.wechat' },
+      intended: { channel: 'openclaw-weixin', to: 'WxId_ZhangSan@im.wechat' },
       resolved: {
         ok: true,
         channel: 'openclaw-weixin',
-        to: 'o9cq809ZEC25@im.wechat',
-        accountId: '91fcaf18cb3a-im-bot',
+        to: 'WxId_ZhangSan@im.wechat',
+        accountId: 'weixin-bot-1',
         source: 'explicit',
       },
       delivered: true,
     },
+    sessionKey: 'agent:main:cron:job-1:run:run-1',
     ...overrides,
   };
 }
@@ -28,9 +29,21 @@ describe('extractCronDeliveredTarget', () => {
   test('extracts the resolved target from a delivered finished event', () => {
     expect(extractCronDeliveredTarget(finishedPayload())).toEqual({
       channel: 'openclaw-weixin',
-      to: 'o9cq809ZEC25@im.wechat',
-      accountId: '91fcaf18cb3a-im-bot',
+      to: 'WxId_ZhangSan@im.wechat',
+      accountId: 'weixin-bot-1',
+      agentId: 'main',
     });
+  });
+
+  test('prefers the job agent over the run session key agent', () => {
+    expect(
+      extractCronDeliveredTarget(
+        finishedPayload({
+          job: { agentId: 'agent-feishu-bot-1' },
+          sessionKey: 'agent:main:cron:job-1:run:run-1',
+        }),
+      ),
+    ).toMatchObject({ agentId: 'agent-feishu-bot-1' });
   });
 
   test('ignores non-finished and undelivered events', () => {
@@ -69,6 +82,10 @@ describe('extractCronDeliveredTarget', () => {
         resolved: { channel: 'feishu', to: 'ou_c167', accountId: '  ' },
       },
     });
-    expect(extractCronDeliveredTarget(payload)).toEqual({ channel: 'feishu', to: 'ou_c167' });
+    expect(extractCronDeliveredTarget(payload)).toEqual({
+      channel: 'feishu',
+      to: 'ou_c167',
+      agentId: 'main',
+    });
   });
 });

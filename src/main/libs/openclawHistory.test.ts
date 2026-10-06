@@ -88,10 +88,10 @@ describe('openclawHistory', () => {
       extractGatewayHistoryEntry({
         role: 'user',
         content: '[Image]\nDescription:\nA sticker.',
-        MediaPath: String.raw`C:\Users\yangwn\AppData\Roaming\LobsterAI\openclaw\state\media\inbound\a.jpg`,
+        MediaPath: String.raw`C:\Users\zhangsan\AppData\Roaming\LobsterAI\openclaw\state\media\inbound\a.jpg`,
         MediaPaths: [
-          String.raw`C:\Users\yangwn\AppData\Roaming\LobsterAI\openclaw\state\media\inbound\a.jpg`,
-          String.raw`C:\Users\yangwn\AppData\Roaming\LobsterAI\openclaw\state\media\inbound\b.png`,
+          String.raw`C:\Users\zhangsan\AppData\Roaming\LobsterAI\openclaw\state\media\inbound\a.jpg`,
+          String.raw`C:\Users\zhangsan\AppData\Roaming\LobsterAI\openclaw\state\media\inbound\b.png`,
         ],
         MediaType: 'image/jpeg',
         MediaTypes: ['image/jpeg', 'image/png'],
@@ -101,11 +101,11 @@ describe('openclawHistory', () => {
       text: '[Image]\nDescription:\nA sticker.',
       mediaAttachments: [
         {
-          localPath: String.raw`C:\Users\yangwn\AppData\Roaming\LobsterAI\openclaw\state\media\inbound\a.jpg`,
+          localPath: String.raw`C:\Users\zhangsan\AppData\Roaming\LobsterAI\openclaw\state\media\inbound\a.jpg`,
           mimeType: 'image/jpeg',
         },
         {
-          localPath: String.raw`C:\Users\yangwn\AppData\Roaming\LobsterAI\openclaw\state\media\inbound\b.png`,
+          localPath: String.raw`C:\Users\zhangsan\AppData\Roaming\LobsterAI\openclaw\state\media\inbound\b.png`,
           mimeType: 'image/png',
         },
       ],

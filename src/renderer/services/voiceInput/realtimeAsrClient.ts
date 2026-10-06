@@ -3,10 +3,13 @@ import {
   AsrLangType,
   type AsrRealtimeEvent,
   AsrRealtimeEventType,
-  type AsrRealtimeSessionData,
 } from '../../../shared/asr/constants';
 import { VOICE_INPUT_TARGET_SAMPLE_RATE } from './constants';
 import { AsrClientError, getFallbackAsrErrorMessage } from './errors';
+import {
+  calculateVoiceInputConsumedSeconds,
+  type VoiceInputQuotaSnapshot,
+} from './quota';
 import {
   type RealtimeVoiceRecordingSession,
   startRealtimeVoiceRecording,
@@ -19,11 +22,9 @@ const PCM16_BYTES_PER_SAMPLE = 2;
 export interface RealtimeVoiceInputSession {
   stop: () => Promise<string>;
   cancel: () => void;
+  getConsumedSeconds: () => number;
   maxSessionSeconds: number;
-  quota: Pick<
-    AsrRealtimeSessionData,
-    'usedSecondsToday' | 'remainingSecondsToday' | 'limitSecondsToday'
-  >;
+  quota: VoiceInputQuotaSnapshot;
 }
 
 interface StartRealtimeVoiceInputOptions {
@@ -335,5 +336,8 @@ export const startRealtimeVoiceInput = async ({
       recorder?.cancel();
       closeSocket();
     },
+    getConsumedSeconds: () => calculateVoiceInputConsumedSeconds(
+      recorder?.getOutputSampleCount() ?? 0,
+    ),
   };
 };

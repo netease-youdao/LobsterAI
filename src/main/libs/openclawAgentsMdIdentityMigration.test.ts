@@ -195,7 +195,7 @@ describe('cleanupLegacyAgentsMdIdentityBlockInWorkspace', () => {
     }
     expect(fs.readFileSync(agentsMdPath, 'utf8')).not.toContain('## Identity（必须遵守）');
     expect(fs.readFileSync(result.backupPath, 'utf8')).toBe(original);
-    expect(result.backupPath).toContain('.lobsterai/migrations');
+    expect(result.backupPath).toContain(path.join('.lobsterai', 'migrations'));
   });
 
   test('skips when AGENTS.md does not exist', () => {

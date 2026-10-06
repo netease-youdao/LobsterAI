@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'vitest';
 
 import {
+  BrowserCredentialSaveMode,
+  BrowserCredentialUseMode,
+} from '../browserCredentials/constants';
+import {
+  BrowserDisplayMode,
   BrowserNetworkMode,
   BrowserProfileMode,
   normalizeBrowserCdpUrl,
@@ -65,6 +70,7 @@ describe('browser web access constants', () => {
 
     expect(config.browserEnabled).toBe(false);
     expect(config.profileMode).toBe(BrowserProfileMode.User);
+    expect(config.displayMode).toBe(BrowserDisplayMode.External);
     expect(config.networkMode).toBe(BrowserNetworkMode.Strict);
     expect(config.allowedHostnames).toEqual(['https://localhost:8443']);
     expect(config.blockedHostnames).toEqual(['https://tracking.example']);
@@ -76,5 +82,48 @@ describe('browser web access constants', () => {
       timeoutSeconds: 30,
       readability: false,
     });
+  });
+
+  test('defaults to external display while preserving explicit display choices', () => {
+    expect(normalizeBrowserWebAccessConfig(undefined).displayMode).toBe(
+      BrowserDisplayMode.External,
+    );
+    expect(normalizeBrowserWebAccessConfig({ headless: false }).displayMode).toBe(
+      BrowserDisplayMode.External,
+    );
+    expect(normalizeBrowserWebAccessConfig({ headless: true }).displayMode).toBe(
+      BrowserDisplayMode.External,
+    );
+    expect(normalizeBrowserWebAccessConfig({
+      displayMode: BrowserDisplayMode.External,
+      headless: true,
+    }).displayMode).toBe(BrowserDisplayMode.External);
+    expect(normalizeBrowserWebAccessConfig({
+      displayMode: BrowserDisplayMode.InApp,
+    }).displayMode).toBe(BrowserDisplayMode.InApp);
+  });
+
+  test('defaults saved login use to per-use approval and preserves an explicit policy', () => {
+    expect(normalizeBrowserWebAccessConfig(undefined).credentialUseMode).toBe(
+      BrowserCredentialUseMode.AlwaysAsk,
+    );
+    expect(normalizeBrowserWebAccessConfig({
+      credentialUseMode: BrowserCredentialUseMode.OncePerTask,
+    }).credentialUseMode).toBe(BrowserCredentialUseMode.OncePerTask);
+    expect(normalizeBrowserWebAccessConfig({
+      credentialUseMode: 'invalid' as BrowserCredentialUseMode,
+    }).credentialUseMode).toBe(BrowserCredentialUseMode.AlwaysAsk);
+  });
+
+  test('offers to save manual logins by default and preserves an explicit policy', () => {
+    expect(normalizeBrowserWebAccessConfig(undefined).credentialSaveMode).toBe(
+      BrowserCredentialSaveMode.Ask,
+    );
+    expect(normalizeBrowserWebAccessConfig({
+      credentialSaveMode: BrowserCredentialSaveMode.Never,
+    }).credentialSaveMode).toBe(BrowserCredentialSaveMode.Never);
+    expect(normalizeBrowserWebAccessConfig({
+      credentialSaveMode: 'invalid' as BrowserCredentialSaveMode,
+    }).credentialSaveMode).toBe(BrowserCredentialSaveMode.Ask);
   });
 });

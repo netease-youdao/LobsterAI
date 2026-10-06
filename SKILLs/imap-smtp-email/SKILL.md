@@ -2,7 +2,7 @@
 name: imap-smtp-email
 description: Read and send email via IMAP/SMTP. Check for new/unread messages, fetch content, search mailboxes, mark as read/unread, and send emails with attachments. Works with any IMAP/SMTP server including Gmail, Outlook, 163.com, vip.163.com, 126.com, vip.126.com, 188.com, and vip.188.com.
 official: true
-version: 1.0.6
+version: 1.0.7
 ---
 
 # IMAP/SMTP Email Tool
@@ -230,6 +230,7 @@ npm install
 - Store credentials in `.env` (add to `.gitignore`)
 - For Gmail: use App Password if 2FA is enabled
 - For 163.com: use authorization code (授权码), not account password
+- Downloaded attachment filenames are normalized to a safe local filename and cannot create directories outside the account/UID download folder.
 
 ## Troubleshooting
 

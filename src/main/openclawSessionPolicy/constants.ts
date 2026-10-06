@@ -21,7 +21,6 @@ export const DEFAULT_OPENCLAW_SESSION_POLICY_CONFIG: OpenClawSessionPolicyConfig
 export const OPENCLAW_SESSION_MAINTENANCE = {
   pruneAfter: '365d',
   maxEntries: 1000000,
-  rotateBytes: '1gb',
 } as const;
 
 export const OpenClawSessionPolicyIpc = {

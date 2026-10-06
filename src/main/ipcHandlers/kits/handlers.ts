@@ -35,6 +35,7 @@ import {
 import { cpRecursiveSync } from '../../fsCompat';
 import { OpenClawConfigImpact } from '../../libs/openclawConfigImpact';
 import type { SkillManager } from '../../skills/skillManager';
+import { createSkinPackKitLifecycle } from '../../skins/skinPackKitLifecycle';
 import type { SqliteStore } from '../../sqliteStore';
 
 const KITS_INSTALLED_KEY: KitStoreKey = KitStoreKeyValue.Installed;
@@ -99,39 +100,6 @@ type InstalledKitsMap = Record<string, InstalledKitRecord>;
 const normalizeCapabilityList = (value: unknown): unknown[] => (
   Array.isArray(value) ? value : []
 );
-
-function appendBuiltInKitsToStoreResponse(data: string): string {
-  if (!isComputerUseKitSupportedPlatform()) {
-    return data;
-  }
-
-  const parsed = JSON.parse(data) as Record<string, unknown>;
-  const valueContainer = (parsed as { data?: { value?: unknown } }).data;
-  const rawValue = valueContainer?.value;
-  if (!valueContainer || !rawValue) {
-    return data;
-  }
-
-  const value = typeof rawValue === 'string'
-    ? JSON.parse(rawValue) as Record<string, unknown>
-    : rawValue as Record<string, unknown>;
-  const kits = Array.isArray(value.kits) ? value.kits : [];
-  const withoutDuplicate = kits.filter((kit) => (
-    !kit
-    || typeof kit !== 'object'
-    || (kit as Record<string, unknown>).id !== ComputerUseKitId.BuiltIn
-  ));
-
-  const nextValue = {
-    ...value,
-    kits: [
-      ...withoutDuplicate,
-      buildComputerUseMarketplaceKit(),
-    ],
-  };
-  valueContainer.value = typeof rawValue === 'string' ? JSON.stringify(nextValue) : nextValue;
-  return JSON.stringify(parsed);
-}
 
 const normalizeLocalizedText = (value: unknown): string | LocalizedText | undefined => {
   if (typeof value === 'string') {
@@ -252,6 +220,15 @@ function notifySkillsChanged(): void {
 
 export function registerKitHandlers(deps: KitHandlerDeps): void {
   const { getStore, getKitStoreUrl, getSkillManager, syncOpenClawConfig } = deps;
+  const skinPackKitLifecycle = createSkinPackKitLifecycle({
+    getStore,
+    getSkillManager,
+    notifySkillsChanged,
+    syncOpenClawConfig,
+  });
+  const getAdditionalBuiltInKits = (): Record<string, unknown>[] => (
+    isComputerUseKitSupportedPlatform() ? [buildComputerUseMarketplaceKit()] : []
+  );
 
   // Fetch kit store catalog from overmind
   ipcMain.handle('kits:fetchStore', async () => {
@@ -275,10 +252,17 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
         req.on('error', reject);
         req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
       });
-      return { success: true, data: appendBuiltInKitsToStoreResponse(data) };
+      return {
+        success: true,
+        data: skinPackKitLifecycle.appendToStoreResponse(data, getAdditionalBuiltInKits()),
+      };
     } catch (error) {
       console.error('[KitStore] fetch failed:', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to fetch kit store' };
+      return {
+        success: true,
+        data: skinPackKitLifecycle.buildOfflineStoreResponse(getAdditionalBuiltInKits()),
+        warning: error instanceof Error ? error.message : 'Failed to fetch kit store',
+      };
     }
   });
 
@@ -318,6 +302,10 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
       }
       if (computerUseBundleDescriptor && bundleUrl !== computerUseBundleDescriptor.bundle) {
         throw new Error('Computer Use kit bundle URL does not match the built-in catalog entry');
+      }
+      const skinPackInstallResult = await skinPackKitLifecycle.installIfHandled({ kitId, bundleUrl });
+      if (skinPackInstallResult !== undefined) {
+        return skinPackInstallResult;
       }
 
       // 1. Download zip
@@ -471,6 +459,11 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
     let skillWatchingStopped = false;
     let skillWatchingRestarted = false;
     try {
+      const skinPackUninstallResult = await skinPackKitLifecycle.uninstallIfHandled(kitId);
+      if (skinPackUninstallResult !== undefined) {
+        return skinPackUninstallResult;
+      }
+
       const installedMap = getInstalledKitsMap(getStore());
       const kitRecord = installedMap[kitId];
       if (!kitRecord) {
@@ -516,7 +509,6 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
           throw new Error(syncResult.error || 'OpenClaw config sync failed after Computer Use uninstall');
         }
       }
-
       // Notify
       skillManager.startWatching();
       skillWatchingRestarted = true;

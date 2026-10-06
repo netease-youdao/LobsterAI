@@ -28,7 +28,7 @@ const SKILL_FILE_NAME = 'SKILL.md';
 const SKILL_STATE_KEY = 'skills_state';
 const COMPUTER_USE_RESOURCE_DIR = 'computer-use';
 const KIT_ARCHIVE_ENV = 'LOBSTER_COMPUTER_USE_KIT_ARCHIVE';
-const COMPUTER_USE_KIT_ICON_URL = 'https://ydhardwarecommon.nosdn.127.net/f02f8c2d2af8b1f88426327944f6e1f5.png';
+const COMPUTER_USE_KIT_ICON_URL = 'https://ydhardwarecommon.nosdn.127.net/c0c9390a70b99645de82a673a66d5ae1.png';
 const COMPUTER_USE_MCP_REF = {
   id: ComputerUseKitId.BuiltIn,
   name: 'Computer Use',

@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 export const TooltipPosition = {
   Top: 'top',
@@ -50,7 +50,11 @@ const Tooltip: React.FC<TooltipProps> = ({
 
   const showTooltip = useCallback(() => {
     if (disabled) return;
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
     timeoutRef.current = setTimeout(() => {
+      timeoutRef.current = null;
       setIsVisible(true);
     }, delay);
   }, [delay, disabled]);
@@ -63,11 +67,24 @@ const Tooltip: React.FC<TooltipProps> = ({
     setIsVisible(false);
   }, []);
 
+  useEffect(() => () => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+  }, []);
+
   return (
     <div
       className={`relative ${className}`}
       onMouseEnter={showTooltip}
       onMouseLeave={hideTooltip}
+      onFocusCapture={showTooltip}
+      onBlurCapture={hideTooltip}
+      onKeyDownCapture={(event) => {
+        if (event.key === 'Escape') {
+          hideTooltip();
+        }
+      }}
     >
       {children}
       {isVisible && content && (
@@ -76,7 +93,7 @@ const Tooltip: React.FC<TooltipProps> = ({
           style={{ maxWidth }}
           className={`absolute z-[100] pointer-events-none rounded-md border border-border
             bg-surface-overlay px-2 py-1 text-[11px] leading-4 text-foreground shadow-lg
-            ${multiline ? 'whitespace-pre-wrap break-words' : 'whitespace-nowrap'}
+            ${multiline ? 'w-max whitespace-pre-wrap break-words text-left' : 'whitespace-nowrap'}
             backdrop-blur-sm ${positionClassName} ${alignClassName}`}
         >
           {content}

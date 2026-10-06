@@ -1,10 +1,15 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
 import {
+  ShareDeploymentCandidateSource,
+  type ShareDeploymentProjectCandidate,
+} from '../../../shared/shareDeployment/constants';
+import {
   dedupeArtifactsForDisplay,
   dedupeArtifactsWithinMessages,
   getLocalServicePortIdentityKey,
   normalizeFilePathForDedup,
+  normalizeProjectDirectoryForDedup,
   resolveArtifactIdForDisplay,
   shouldPreferArtifactForDisplay,
 } from '../../services/artifactParser';
@@ -24,7 +29,9 @@ export type ArtifactContentView = typeof ArtifactContentView[keyof typeof Artifa
 export const ArtifactSpecialTab = {
   FileList: 'fileList',
   Browser: 'browser',
+  AgentBrowser: 'agentBrowser',
   Subagents: 'subagents',
+  UserAttachment: 'userAttachment',
 } as const;
 export type ArtifactSpecialTab = typeof ArtifactSpecialTab[keyof typeof ArtifactSpecialTab];
 
@@ -37,10 +44,17 @@ export interface ArtifactPreviewTab {
   openedAt: number;
 }
 
-interface AddArtifactPayload {
+export interface AddArtifactPayload {
   sessionId: string;
   artifact: Artifact;
   defaultProjectDirectory?: string;
+}
+
+interface UpdateLocalServiceProjectMetadataPayload {
+  sessionId: string;
+  artifactId: string;
+  projectDirectory: string;
+  projectCandidates: ShareDeploymentProjectCandidate[];
 }
 
 interface ArtifactState {
@@ -71,6 +85,62 @@ const isMediaArtifact = (artifact: Artifact): boolean => (
 
 const isSameMessageArtifact = (left: Artifact, right: Artifact): boolean =>
   left.messageId === right.messageId;
+
+const LOCAL_SERVICE_RESOLVED_CANDIDATE_SOURCES = new Set<string>([
+  ShareDeploymentCandidateSource.Process,
+  ShareDeploymentCandidateSource.ProcessCwd,
+  ShareDeploymentCandidateSource.Cache,
+  ShareDeploymentCandidateSource.ArtifactMetadata,
+  ShareDeploymentCandidateSource.Workspace,
+  ShareDeploymentCandidateSource.WorkspaceChild,
+]);
+
+const hasResolvedLocalServiceProjectMetadata = (artifact: Artifact): boolean => (
+  artifact.type === ArtifactTypeValue.LocalService &&
+  Boolean(artifact.localService?.projectCandidates?.some(candidate =>
+    LOCAL_SERVICE_RESOLVED_CANDIDATE_SOURCES.has(candidate.source)
+  ))
+);
+
+const getLocalServiceContextCandidateKey = (artifact: Artifact): string => (
+  artifact.localService?.projectCandidates
+    ?.filter(candidate => !LOCAL_SERVICE_RESOLVED_CANDIDATE_SOURCES.has(candidate.source))
+    .map(candidate => [
+      candidate.source,
+      normalizeProjectDirectoryForDedup(candidate.directory),
+      candidate.messageId || '',
+      candidate.confidence,
+    ].join(':'))
+    .join('|') ?? ''
+);
+
+const preserveResolvedLocalServiceProjectMetadata = (
+  current: Artifact,
+  next: Artifact,
+): Artifact => {
+  if (
+    current.type !== ArtifactTypeValue.LocalService ||
+    next.type !== ArtifactTypeValue.LocalService ||
+    !hasResolvedLocalServiceProjectMetadata(current) ||
+    !current.localService ||
+    !next.localService
+  ) {
+    return next;
+  }
+  if (getLocalServiceContextCandidateKey(current) !== getLocalServiceContextCandidateKey(next)) {
+    return next;
+  }
+  return {
+    ...next,
+    localService: {
+      ...next.localService,
+      projectDirectory:
+        current.localService.projectDirectory ?? next.localService?.projectDirectory,
+      projectCandidates:
+        current.localService.projectCandidates ?? next.localService?.projectCandidates,
+    },
+  };
+};
 
 const findArtifactSessionId = (state: ArtifactState, artifactId: string): string | null => {
   for (const [sessionId, artifacts] of Object.entries(state.artifactsBySession)) {
@@ -177,7 +247,8 @@ const artifactSlice = createSlice({
       if (existing >= 0) {
         const old = state.artifactsBySession[sessionId][existing];
         if (artifact.content || !old.content || artifact.contentVersion !== old.contentVersion) {
-          state.artifactsBySession[sessionId][existing] = artifact;
+          state.artifactsBySession[sessionId][existing] =
+            preserveResolvedLocalServiceProjectMetadata(old, artifact);
         }
       } else {
         if (artifact.type === ArtifactTypeValue.LocalService) {
@@ -255,6 +326,36 @@ const artifactSlice = createSlice({
       }
     },
 
+    /**
+     * Keep a file opened from a message link, which no card covers, in the
+     * session so the panel can show it. Unlike addArtifact this is not a
+     * detection, so the library does not index it.
+     */
+    addLinkedFileArtifact(state, action: PayloadAction<{ sessionId: string; artifact: Artifact }>) {
+      const { sessionId, artifact } = action.payload;
+      if (!state.artifactsBySession[sessionId]) {
+        state.artifactsBySession[sessionId] = [];
+      }
+      const artifacts = state.artifactsBySession[sessionId];
+      const existingIndex = artifacts.findIndex(item => item.id === artifact.id);
+      if (existingIndex >= 0) {
+        artifacts[existingIndex] = artifact;
+      } else {
+        artifacts.push(artifact);
+      }
+    },
+
+    updateLocalServiceProjectMetadata(
+      state,
+      action: PayloadAction<UpdateLocalServiceProjectMetadataPayload>,
+    ) {
+      const { sessionId, artifactId, projectDirectory, projectCandidates } = action.payload;
+      const artifact = state.artifactsBySession[sessionId]?.find(item => item.id === artifactId);
+      if (artifact?.type !== ArtifactTypeValue.LocalService || !artifact.localService) return;
+      artifact.localService.projectDirectory = projectDirectory;
+      artifact.localService.projectCandidates = projectCandidates;
+    },
+
     selectArtifact(state, action: PayloadAction<string | null>) {
       const artifactId = action.payload;
       if (!artifactId) {
@@ -287,7 +388,17 @@ const artifactSlice = createSlice({
       setPanelOpen(state, action.payload.sessionId, true);
     },
 
+    activateArtifactAgentBrowserTab(state, action: PayloadAction<{ sessionId: string }>) {
+      activatePreviewTab(state, action.payload.sessionId, null);
+      setPanelOpen(state, action.payload.sessionId, true);
+    },
+
     activateArtifactSubagentTab(state, action: PayloadAction<{ sessionId: string }>) {
+      activatePreviewTab(state, action.payload.sessionId, null);
+      setPanelOpen(state, action.payload.sessionId, true);
+    },
+
+    activateArtifactUserAttachmentTab(state, action: PayloadAction<{ sessionId: string }>) {
       activatePreviewTab(state, action.payload.sessionId, null);
       setPanelOpen(state, action.payload.sessionId, true);
     },
@@ -354,10 +465,14 @@ const artifactSlice = createSlice({
 export const {
   setSessionArtifacts,
   addArtifact,
+  addLinkedFileArtifact,
+  updateLocalServiceProjectMetadata,
   selectArtifact,
   openArtifactPreviewTab,
   activateArtifactBrowserTab,
+  activateArtifactAgentBrowserTab,
   activateArtifactSubagentTab,
+  activateArtifactUserAttachmentTab,
   activateArtifactPreviewTab,
   activateArtifactFileListTab,
   closeArtifactPreviewTab,

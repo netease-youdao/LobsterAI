@@ -1,20 +1,51 @@
-import { ApiFormat, type ProviderConfig, ProviderName, ProviderRegistry } from '@shared/providers';
+import {
+  ApiFormat,
+  applyModelRuntimeProfileMetadata,
+  ModelRuntimeProfileSource,
+  normalizeModelIdForComparison as getProviderModelIdentity,
+  OpenClawApi,
+  type ProviderConfig,
+  ProviderName,
+  ProviderRegistry,
+  resolveModelRuntimeProfile,
+} from '@shared/providers';
 
 import { normalizeBrowserWebAccessConfig } from '../../shared/browserWebAccess/constants';
 import { normalizeNotificationSettings } from '../../shared/notifications/constants';
 import {
   AppConfig,
+  CODE_FONT_SIZE_MIGRATION_VERSION,
   CONFIG_KEYS,
   defaultConfig,
   FontPreferences,
   isCustomProvider,
   normalizeFontPreference,
+  resolveArtifactAutoPreviewEnabled,
   ShortcutAction,
   type ShortcutConfig,
+  UI_FONT_SIZE_MIGRATION_VERSION,
 } from '../config';
 import { localStore } from './store';
 
+export const ConfigServiceEvent = {
+  Updated: 'config-updated',
+} as const;
+
+export type ConfigServiceEvent = typeof ConfigServiceEvent[keyof typeof ConfigServiceEvent];
+
 type ProviderModel = NonNullable<ProviderConfig['models']>[number];
+
+const getCanonicalProviderModelId = (providerKey: string, modelId: string): string => {
+  const identity = getProviderModelIdentity(modelId);
+  if (!identity) {
+    return modelId;
+  }
+
+  const canonicalModel = ProviderRegistry.get(providerKey)?.defaultModels.find(
+    model => getProviderModelIdentity(model.id) === identity,
+  );
+  return canonicalModel?.id ?? modelId;
+};
 
 const getFixedProviderApiFormat = (providerKey: string): ApiFormat | null => {
   const def = ProviderRegistry.get(providerKey);
@@ -69,26 +100,69 @@ const normalizeProviderApiFormat = (providerKey: string, apiFormat: unknown): 'a
 const normalizeProviderModels = (
   providerKey: string,
   models: ProviderConfig['models'],
+  providerContext: Pick<ProviderConfig, 'apiFormat'>,
 ): ProviderConfig['models'] => models?.map(model => {
+  const {
+    compatibilityMode: _legacyCompatibilityMode,
+    ...modelWithoutCompatibilityMode
+  } = model as typeof model & { compatibilityMode?: unknown };
+  const canonicalModelId = getCanonicalProviderModelId(providerKey, model.id);
   const contextWindow = ProviderRegistry.resolveModelContextWindow(
     providerKey,
-    model.id,
+    canonicalModelId,
     model.contextWindow,
   );
   const supportsThinking = ProviderRegistry.resolveModelSupportsThinking(
     providerKey,
-    model.id,
+    canonicalModelId,
     model.supportsThinking,
   );
-  return {
-    ...model,
+  const supportsVideo = ProviderRegistry.resolveModelSupportsVideo(
+    providerKey,
+    canonicalModelId,
+    model.supportsVideo,
+  );
+  const maxTokens = ProviderRegistry.resolveModelMaxTokens(
+    providerKey,
+    canonicalModelId,
+    model.maxTokens,
+  );
+  const runtimeProfile = resolveModelRuntimeProfile({
+    source: isCustomProvider(providerKey)
+      ? ModelRuntimeProfileSource.Custom
+      : ModelRuntimeProfileSource.BuiltIn,
+    providerId: providerKey,
+    modelId: canonicalModelId,
+    api: providerContext.apiFormat === ApiFormat.OpenAI
+      ? OpenClawApi.OpenAICompletions
+      : OpenClawApi.AnthropicMessages,
+  });
+  const runtimeMetadata = applyModelRuntimeProfileMetadata({
     supportsImage: ProviderRegistry.resolveModelSupportsImage(
       providerKey,
-      model.id,
+      canonicalModelId,
       model.supportsImage,
     ),
-    ...(supportsThinking ? { supportsThinking } : {}),
-    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    supportsVideo,
+    supportsThinking,
+    contextWindow,
+    maxTokens,
+  }, runtimeProfile);
+  return {
+    ...modelWithoutCompatibilityMode,
+    supportsImage: runtimeMetadata.supportsImage ?? false,
+    ...(runtimeMetadata.supportsVideo || model.supportsVideo !== undefined
+      ? { supportsVideo: runtimeMetadata.supportsVideo }
+      : {}),
+    ...(runtimeMetadata.supportsThinking
+      ? { supportsThinking: runtimeMetadata.supportsThinking }
+      : {}),
+    ...(runtimeMetadata.contextWindow !== undefined
+      ? { contextWindow: runtimeMetadata.contextWindow }
+      : {}),
+    ...(runtimeMetadata.maxTokens !== undefined
+      ? { maxTokens: runtimeMetadata.maxTokens }
+      : {}),
   };
 });
 
@@ -98,15 +172,21 @@ const normalizeProvidersConfig = (providers: AppConfig['providers']): AppConfig[
   }
 
   return Object.fromEntries(
-    Object.entries(providers).map(([providerKey, providerConfig]) => [
-      providerKey,
-      {
+    Object.entries(providers).map(([providerKey, providerConfig]) => {
+      const baseUrl = normalizeProviderBaseUrl(providerKey, providerConfig.baseUrl);
+      const apiFormat = normalizeProviderApiFormat(providerKey, providerConfig.apiFormat);
+      return [
+        providerKey,
+        {
         ...providerConfig,
-        baseUrl: normalizeProviderBaseUrl(providerKey, providerConfig.baseUrl),
-        apiFormat: normalizeProviderApiFormat(providerKey, providerConfig.apiFormat),
-        models: normalizeProviderModels(providerKey, providerConfig.models),
-      },
-    ])
+          baseUrl,
+          apiFormat,
+          models: normalizeProviderModels(providerKey, providerConfig.models, {
+            apiFormat,
+          }),
+        },
+      ];
+    })
   ) as AppConfig['providers'];
 };
 
@@ -325,6 +405,46 @@ const ADDED_PROVIDER_MODELS: Record<string, { models: ProviderModel[]; position:
   },
 };
 
+// Model batches added after the original v1 migration. Keep these separate so
+// upgrading does not re-add older defaults that a user intentionally removed.
+const RECENT_PROVIDER_MODEL_MIGRATIONS: Record<string, {
+  version: number;
+  models: ProviderModel[];
+  position: 'start' | 'end';
+}> = {
+  [ProviderName.Moonshot]: {
+    version: 2,
+    models: [
+      {
+        id: 'kimi-k3',
+        name: 'Kimi K3',
+        supportsImage: true,
+        supportsVideo: true,
+        supportsThinking: true,
+        contextWindow: 1_048_576,
+        maxTokens: 1_048_576,
+      },
+    ],
+    position: 'start',
+  },
+  [ProviderName.OpenAI]: {
+    version: 2,
+    models: [
+      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', supportsImage: true, supportsThinking: true, contextWindow: 1_050_000 },
+      { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', supportsImage: true, supportsThinking: true, contextWindow: 1_050_000 },
+      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', supportsImage: true, supportsThinking: true, contextWindow: 1_050_000 },
+    ],
+    position: 'start',
+  },
+  [ProviderName.Xai]: {
+    version: 1,
+    models: [
+      { id: 'grok-4.5', name: 'Grok 4.5', supportsImage: true, supportsThinking: true, contextWindow: 500_000 },
+    ],
+    position: 'start',
+  },
+};
+
 const markCurrentProviderModelMigrationsApplied = (
   versions: AppConfig['providerModelMigrationVersions'],
 ): NonNullable<AppConfig['providerModelMigrationVersions']> => {
@@ -335,16 +455,25 @@ const markCurrentProviderModelMigrationsApplied = (
       ADDED_PROVIDER_MODELS_MIGRATION_VERSION,
     );
   });
+  Object.entries(RECENT_PROVIDER_MODEL_MIGRATIONS).forEach(([providerKey, migration]) => {
+    nextVersions[providerKey] = Math.max(
+      nextVersions[providerKey] ?? 0,
+      migration.version,
+    );
+  });
   return nextVersions;
 };
 
 const getNewlyAppliedProviderModelMigrations = (
   previousVersions: AppConfig['providerModelMigrationVersions'],
   nextVersions: AppConfig['providerModelMigrationVersions'],
-): string[] => Object.keys(ADDED_PROVIDER_MODELS).filter(
-  providerKey => (previousVersions?.[providerKey] ?? 0) < ADDED_PROVIDER_MODELS_MIGRATION_VERSION
-    && (nextVersions?.[providerKey] ?? 0) >= ADDED_PROVIDER_MODELS_MIGRATION_VERSION
-);
+): string[] => {
+  const latestVersions = markCurrentProviderModelMigrationsApplied(undefined);
+  return Object.entries(latestVersions)
+    .filter(([providerKey, version]) => (previousVersions?.[providerKey] ?? 0) < version
+      && (nextVersions?.[providerKey] ?? 0) >= version)
+    .map(([providerKey]) => providerKey);
+};
 
 const PROVIDER_MODEL_CONTEXT_WINDOW_OVERRIDES: Record<string, Record<string, number>> = {
   [ProviderName.Minimax]: {
@@ -401,10 +530,12 @@ const alignProviderModelOrder = (
     return models;
   }
 
-  const defaultOrder = new Map(defaultModels.map((model, index) => [model.id, index]));
+  const defaultOrder = new Map(
+    defaultModels.map((model, index) => [getProviderModelIdentity(model.id), index]),
+  );
   return [...models].sort((a, b) => {
-    const aOrder = defaultOrder.get(a.id);
-    const bOrder = defaultOrder.get(b.id);
+    const aOrder = defaultOrder.get(getProviderModelIdentity(a.id));
+    const bOrder = defaultOrder.get(getProviderModelIdentity(b.id));
     if (aOrder === undefined && bOrder === undefined) return 0;
     if (aOrder === undefined) return 1;
     if (bOrder === undefined) return -1;
@@ -446,14 +577,19 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
             // Inject added models (for existing users who already have saved config)
             const addedConfig = ADDED_PROVIDER_MODELS[providerKey];
             const existingIds = new Set(
-              (mergedProvider.models as Array<{ id: string }> | undefined)?.map(model => model.id) ?? []
+              (mergedProvider.models as Array<{ id: string }> | undefined)
+                ?.map(model => getProviderModelIdentity(model.id)) ?? []
             );
-            const hasAnyAddedModel = addedConfig?.models.some(model => existingIds.has(model.id)) ?? false;
+            const hasAnyAddedModel = addedConfig?.models.some(
+              model => existingIds.has(getProviderModelIdentity(model.id)),
+            ) ?? false;
             const hasAppliedAddedModelsMigration =
               (providerModelMigrationVersions[providerKey] ?? 0) >= ADDED_PROVIDER_MODELS_MIGRATION_VERSION
               || hasAnyAddedModel;
             if (addedConfig && mergedProvider.models && !hasAppliedAddedModelsMigration) {
-              const newModels = addedConfig.models.filter(m => !existingIds.has(m.id));
+              const newModels = addedConfig.models.filter(
+                model => !existingIds.has(getProviderModelIdentity(model.id)),
+              );
               if (newModels.length > 0) {
                 mergedProvider.models = addedConfig.position === 'start'
                   ? [...newModels, ...mergedProvider.models]
@@ -461,7 +597,32 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
               }
             }
             if (addedConfig && mergedProvider.models) {
-              providerModelMigrationVersions[providerKey] = ADDED_PROVIDER_MODELS_MIGRATION_VERSION;
+              providerModelMigrationVersions[providerKey] = Math.max(
+                providerModelMigrationVersions[providerKey] ?? 0,
+                ADDED_PROVIDER_MODELS_MIGRATION_VERSION,
+              );
+            }
+            const recentMigration = RECENT_PROVIDER_MODEL_MIGRATIONS[providerKey];
+            const hasAppliedRecentMigration = recentMigration
+              && (providerModelMigrationVersions[providerKey] ?? 0) >= recentMigration.version;
+            if (recentMigration && mergedProvider.models && !hasAppliedRecentMigration) {
+              const recentExistingIds = new Set(
+                (mergedProvider.models as Array<{ id: string }>).map(
+                  model => getProviderModelIdentity(model.id),
+                ),
+              );
+              const newModels = recentMigration.models.filter(
+                model => !recentExistingIds.has(getProviderModelIdentity(model.id)),
+              );
+              if (newModels.length > 0) {
+                mergedProvider.models = recentMigration.position === 'start'
+                  ? [...newModels, ...mergedProvider.models]
+                  : [...mergedProvider.models, ...newModels];
+              }
+              providerModelMigrationVersions[providerKey] = Math.max(
+                providerModelMigrationVersions[providerKey] ?? 0,
+                recentMigration.version,
+              );
             }
             if (mergedProvider.models) {
               mergedProvider.models = applyProviderModelContextWindowOverrides(
@@ -474,13 +635,18 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
               );
             }
             const migratedProvider = migrateProviderDefaultApiFormat(providerKey, mergedProvider);
+            const baseUrl = normalizeProviderBaseUrl(providerKey, migratedProvider.baseUrl);
+            const apiFormat = normalizeProviderApiFormat(providerKey, migratedProvider.apiFormat);
             return {
               ...migratedProvider,
-              baseUrl: normalizeProviderBaseUrl(providerKey, migratedProvider.baseUrl),
-              apiFormat: normalizeProviderApiFormat(providerKey, migratedProvider.apiFormat),
+              baseUrl,
+              apiFormat,
               models: normalizeProviderModels(
                 providerKey,
                 migratedProvider.models as ProviderConfig['models'],
+                {
+                  apiFormat,
+                },
               ),
             };
           })(),
@@ -515,17 +681,34 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
     shortcuts: normalizeShortcutsConfig(storedConfig.shortcuts),
     providers: mergedProviders as AppConfig['providers'],
     providerModelMigrationVersions,
-    uiFontSize: normalizeFontPreference(
-      storedConfig.uiFontSize,
-      FontPreferences.UiFontSizeDefault,
-      FontPreferences.UiFontSizeMin,
-      FontPreferences.UiFontSizeMax,
+    // One-time forced resets to the current defaults (see
+    // *_FONT_SIZE_MIGRATION_VERSION); afterwards the stored choice wins.
+    uiFontSize: (storedConfig.uiFontSizeMigrationVersion ?? 0) >= UI_FONT_SIZE_MIGRATION_VERSION
+      ? normalizeFontPreference(
+        storedConfig.uiFontSize,
+        FontPreferences.UiFontSizeDefault,
+        FontPreferences.UiFontSizeMin,
+        FontPreferences.UiFontSizeMax,
+      )
+      : FontPreferences.UiFontSizeDefault,
+    uiFontSizeMigrationVersion: Math.max(
+      storedConfig.uiFontSizeMigrationVersion ?? 0,
+      UI_FONT_SIZE_MIGRATION_VERSION,
     ),
-    codeFontSize: normalizeFontPreference(
-      storedConfig.codeFontSize,
-      FontPreferences.CodeFontSizeDefault,
-      FontPreferences.CodeFontSizeMin,
-      FontPreferences.CodeFontSizeMax,
+    codeFontSize: (storedConfig.codeFontSizeMigrationVersion ?? 0) >= CODE_FONT_SIZE_MIGRATION_VERSION
+      ? normalizeFontPreference(
+        storedConfig.codeFontSize,
+        FontPreferences.CodeFontSizeDefault,
+        FontPreferences.CodeFontSizeMin,
+        FontPreferences.CodeFontSizeMax,
+      )
+      : FontPreferences.CodeFontSizeDefault,
+    codeFontSizeMigrationVersion: Math.max(
+      storedConfig.codeFontSizeMigrationVersion ?? 0,
+      CODE_FONT_SIZE_MIGRATION_VERSION,
+    ),
+    artifactAutoPreviewEnabled: resolveArtifactAutoPreviewEnabled(
+      storedConfig.artifactAutoPreviewEnabled,
     ),
     browserWebAccess: normalizeBrowserWebAccessConfig(storedConfig.browserWebAccess),
     notificationSettings: normalizeNotificationSettings(storedConfig.notificationSettings),
@@ -534,22 +717,28 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
 
 class ConfigService {
   private config: AppConfig = defaultConfig;
+  private initGeneration = 0;
 
   async init() {
+    const initGeneration = ++this.initGeneration;
     try {
-      const storedConfig = await localStore.getItem<AppConfig>(CONFIG_KEYS.APP_CONFIG);
+      const storedConfig = await localStore.getItemStrict<AppConfig>(CONFIG_KEYS.APP_CONFIG);
+      if (initGeneration !== this.initGeneration) return;
       if (!storedConfig) {
         console.warn('[ConfigService] init: no stored config found, using defaults');
       }
       if (storedConfig) {
         const previousMigrationVersions = storedConfig.providerModelMigrationVersions;
-        this.config = hydrateStoredConfig(storedConfig);
-        if (JSON.stringify(this.config) !== JSON.stringify(storedConfig)) {
+        const hydratedConfig = hydrateStoredConfig(storedConfig);
+        if (initGeneration !== this.initGeneration) return;
+        this.config = hydratedConfig;
+        if (JSON.stringify(hydratedConfig) !== JSON.stringify(storedConfig)) {
           try {
-            await localStore.setItem(CONFIG_KEYS.APP_CONFIG, this.config);
+            await localStore.setItem(CONFIG_KEYS.APP_CONFIG, hydratedConfig);
+            if (initGeneration !== this.initGeneration) return;
             const appliedProviders = getNewlyAppliedProviderModelMigrations(
               previousMigrationVersions,
-              this.config.providerModelMigrationVersions,
+              hydratedConfig.providerModelMigrationVersions,
             );
             if (appliedProviders.length > 0) {
               console.log(`[ConfigService] applied provider model migrations for ${appliedProviders.join(', ')}`);
@@ -561,6 +750,7 @@ class ConfigService {
       }
     } catch (error) {
       console.error('[ConfigService] init failed:', error);
+      throw error;
     }
   }
 
@@ -569,12 +759,17 @@ class ConfigService {
   }
 
   async updateConfig(newConfig: Partial<AppConfig>) {
+    // An explicit user/service write must win over any startup read that is
+    // still in flight after App's timeout-based recovery moved on.
+    this.initGeneration += 1;
     const normalizedProviders = normalizeProvidersConfig(newConfig.providers as AppConfig['providers'] | undefined);
 
     // Read-modify-write: use the latest stored value as the base to avoid
     // overwriting fields (e.g. providers) with stale in-memory defaults when
     // only a subset of config is being updated.
-    const stored = await localStore.getItem<AppConfig>(CONFIG_KEYS.APP_CONFIG);
+    // Never turn a transient IPC/storage failure into a full write based on
+    // in-memory defaults: that could overwrite an existing user's config.
+    const stored = await localStore.getItemStrict<AppConfig>(CONFIG_KEYS.APP_CONFIG);
     const base = stored ? hydrateStoredConfig(stored) : this.config;
 
     this.config = omitLegacyVoiceInputConfig({
@@ -604,7 +799,7 @@ class ConfigService {
       ),
     } as AppConfig);
     await localStore.setItem(CONFIG_KEYS.APP_CONFIG, this.config);
-    window.dispatchEvent(new CustomEvent('config-updated'));
+    window.dispatchEvent(new CustomEvent(ConfigServiceEvent.Updated));
   }
 
   getApiConfig() {

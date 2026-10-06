@@ -3,6 +3,31 @@ import type { Artifact } from '@/types/artifact';
 
 type ArtifactAnalyticsValue = string | number | boolean | null | undefined;
 
+export const ArtifactPreviewActionSource = {
+  ConversationArtifactCard: 'conversation_artifact_card',
+  ConversationMessageLink: 'conversation_message_link',
+  ArtifactPanel: 'artifact_panel',
+  ArtifactBrowser: 'artifact_browser',
+  LibraryList: 'library_list',
+  LibraryPreview: 'library_preview',
+} as const;
+
+export type ArtifactPreviewActionSource =
+  (typeof ArtifactPreviewActionSource)[keyof typeof ArtifactPreviewActionSource];
+
+export const ArtifactPublishEntryPoint = {
+  PreviewCard: 'preview_card',
+  ArtifactToolbar: 'artifact_toolbar',
+  BrowserToolbar: 'browser_toolbar',
+  LibraryMenu: 'library_menu',
+  LibrarySettings: 'library_settings',
+  LibraryToolbar: 'library_toolbar',
+  SubscriptionRecoveryCta: 'subscription_recovery_cta',
+} as const;
+
+export type ArtifactPublishEntryPoint =
+  (typeof ArtifactPublishEntryPoint)[keyof typeof ArtifactPublishEntryPoint];
+
 const bucketLength = (length: number): string => {
   if (length <= 0) return '0';
   if (length <= 100) return '1_100';
@@ -66,7 +91,7 @@ export const getArtifactAnalyticsParams = (
 
 export interface ReportArtifactPreviewActionOptions {
   actionType: string;
-  source: 'conversation_artifact_card' | 'artifact_panel' | 'artifact_browser';
+  source: ArtifactPreviewActionSource;
   artifact?: Artifact | null;
   params?: Record<string, ArtifactAnalyticsValue>;
 }

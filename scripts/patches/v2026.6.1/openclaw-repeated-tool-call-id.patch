@@ -1,0 +1,971 @@
+diff --git a/src/agents/embedded-agent-runner/replay-history.ts b/src/agents/embedded-agent-runner/replay-history.ts
+index 565668573bf92617a67ab471ec0415b13f0c3f3f..764aafa81eeafd55a44f38d48f3af2e9f7aa0132 100644
+--- a/src/agents/embedded-agent-runner/replay-history.ts
++++ b/src/agents/embedded-agent-runner/replay-history.ts
+@@ -864,8 +864,9 @@ export async function sanitizeSessionHistory(params: {
+     "session:history",
+     {
+       sanitizeMode: policy.sanitizeMode,
+-      sanitizeToolCallIds:
+-        policy.sanitizeToolCallIds && !allowProviderOwnedThinkingReplay && !isOpenAIResponsesApi,
++      // Pair raw provider-id occurrences before rewriting ids. On a damaged transcript,
++      // FIFO id rewriting can otherwise bind a later-adjacent result to an older call.
++      sanitizeToolCallIds: false,
+       toolCallIdMode: policy.toolCallIdMode,
+       preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+       preserveSignatures: policy.preserveSignatures,
+@@ -918,24 +919,21 @@ export async function sanitizeSessionHistory(params: {
+         ),
+       )
+     : sanitizedToolCalls;
++  const pairedToolCalls =
++    !isOpenAIResponsesApi && policy.repairToolUseResultPairing
++      ? sanitizeToolUseResultPairing(openAISafeToolCalls, {
++          erroredAssistantResultPolicy: "drop",
++        })
++      : openAISafeToolCalls;
+   const sanitizedToolIds =
+     policy.sanitizeToolCallIds && policy.toolCallIdMode
+-      ? sanitizeToolCallIdsForCloudCodeAssist(openAISafeToolCalls, policy.toolCallIdMode, {
++      ? sanitizeToolCallIdsForCloudCodeAssist(pairedToolCalls, policy.toolCallIdMode, {
+           preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+           preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
+           allowedToolNames: params.allowedToolNames,
+         })
+-      : openAISafeToolCalls;
+-  // Gemini/Anthropic-class providers also require tool results to stay adjacent
+-  // to their assistant tool calls. They do not use Codex's "aborted" text, but
+-  // the same ordering repair is live-tested with Gemini 3 Flash.
+-  const repairedTools =
+-    !isOpenAIResponsesApi && policy.repairToolUseResultPairing
+-      ? sanitizeToolUseResultPairing(sanitizedToolIds, {
+-          erroredAssistantResultPolicy: "drop",
+-        })
+-      : sanitizedToolIds;
+-  const sanitizedToolResults = stripToolResultDetails(repairedTools);
++      : pairedToolCalls;
++  const sanitizedToolResults = stripToolResultDetails(sanitizedToolIds);
+   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
+     stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
+   );
+diff --git a/src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.test.ts b/src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.test.ts
+index 87b67bf81c28acdfb39ba50e1f0c9061611ffa4f..86ea690d6b2652c6b7c65a84b200fa7b33ac35d2 100644
+--- a/src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.test.ts
++++ b/src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.test.ts
+@@ -894,6 +894,108 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
+     });
+   });
+ 
++  it("pairs repeated raw ids before assigning provider-safe occurrence ids", () => {
++    const rawId = "exec_0";
++    const out = sanitizeReplayToolCallIdsForStream({
++      messages: [
++        {
++          role: "assistant",
++          content: [{ type: "toolUse", id: rawId, name: "exec", input: { cmd: "first" } }],
++        } as never,
++        {
++          role: "assistant",
++          content: [{ type: "toolUse", id: rawId, name: "exec", input: { cmd: "second" } }],
++        } as never,
++        {
++          role: "toolResult",
++          toolCallId: rawId,
++          toolUseId: rawId,
++          toolName: "exec",
++          content: [{ type: "text", text: "second result" }],
++          isError: false,
++        } as never,
++      ],
++      mode: "strict",
++      repairToolUseResultPairing: true,
++    });
++
++    expect(out.map((message) => message.role)).toEqual([
++      "assistant",
++      "toolResult",
++      "assistant",
++      "toolResult",
++    ]);
++    expect(assistantToolUseSummaries(out[0])).toEqual([
++      { type: "toolUse", id: "exec0", name: "exec" },
++    ]);
++    expect(toolResultSummary(out[1])).toMatchObject({
++      toolCallId: "exec0",
++      isError: true,
++    });
++    expect(assistantToolUseSummaries(out[2])).toEqual([
++      { type: "toolUse", id: "exec02", name: "exec" },
++    ]);
++    expect(toolResultSummary(out[3])).toEqual({
++      role: "toolResult",
++      toolCallId: "exec02",
++      toolUseId: "exec02",
++      toolName: "exec",
++      isError: false,
++    });
++    expect(requireToolResultMessage(out[3]).content).toEqual([
++      { type: "text", text: "second result" },
++    ]);
++  });
++
++  it("keeps same-turn repeated calls and results aligned after id rewriting", () => {
++    const rawId = "exec_0";
++    const out = sanitizeReplayToolCallIdsForStream({
++      messages: [
++        {
++          role: "assistant",
++          content: [
++            { type: "toolUse", id: rawId, name: "exec", input: { cmd: "first" } },
++            { type: "toolUse", id: rawId, name: "exec", input: { cmd: "second" } },
++          ],
++        } as never,
++        {
++          role: "toolResult",
++          toolCallId: rawId,
++          toolUseId: rawId,
++          toolName: "exec",
++          content: [{ type: "text", text: "first result" }],
++          isError: false,
++        } as never,
++        {
++          role: "toolResult",
++          toolCallId: rawId,
++          toolUseId: rawId,
++          toolName: "exec",
++          content: [{ type: "text", text: "second result" }],
++          isError: false,
++        } as never,
++      ],
++      mode: "strict",
++      repairToolUseResultPairing: true,
++    });
++
++    expect(out.map((message) => message.role)).toEqual(["assistant", "toolResult", "toolResult"]);
++    expect(assistantToolUseSummaries(out[0])).toEqual([
++      { type: "toolUse", id: "exec0", name: "exec" },
++      { type: "toolUse", id: "exec02", name: "exec" },
++    ]);
++    expect(toolResultSummary(out[1])).toMatchObject({
++      toolCallId: "exec0",
++      toolUseId: "exec0",
++      isError: false,
++    });
++    expect(toolResultSummary(out[2])).toMatchObject({
++      toolCallId: "exec02",
++      toolUseId: "exec02",
++      isError: false,
++    });
++  });
++
+   it("preserves signed-thinking replay ids when requested by provider policy", () => {
+     const rawId = "call_1";
+     const out = sanitizeReplayToolCallIdsForStream({
+diff --git a/src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.ts b/src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.ts
+index 9012eecff5cb6c86eddf4f42bc8897f863e1417f..26a676e2185862b5dc79158339746115e98b218e 100644
+--- a/src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.ts
++++ b/src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.ts
+@@ -1153,15 +1153,14 @@ export function sanitizeReplayToolCallIdsForStream(params: {
+   preserveReplaySafeThinkingToolCallIds?: boolean;
+   repairToolUseResultPairing?: boolean;
+ }): AgentMessage[] {
+-  const sanitized = sanitizeToolCallIdsForCloudCodeAssist(params.messages, params.mode, {
++  const paired = params.repairToolUseResultPairing
++    ? sanitizeToolUseResultPairing(params.messages)
++    : params.messages;
++  return sanitizeToolCallIdsForCloudCodeAssist(paired, params.mode, {
+     preserveNativeAnthropicToolUseIds: params.preserveNativeAnthropicToolUseIds,
+     preserveReplaySafeThinkingToolCallIds: params.preserveReplaySafeThinkingToolCallIds,
+     allowedToolNames: params.allowedToolNames,
+   });
+-  if (!params.repairToolUseResultPairing) {
+-    return sanitized;
+-  }
+-  return sanitizeToolUseResultPairing(sanitized);
+ }
+ 
+ export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
+diff --git a/src/agents/session-transcript-repair.test.ts b/src/agents/session-transcript-repair.test.ts
+index d2efe3dbc321d51c1ba23411d7d265966a35c49f..aebbf4371c89ff10cecd622f8cae829fa4006429 100644
+--- a/src/agents/session-transcript-repair.test.ts
++++ b/src/agents/session-transcript-repair.test.ts
+@@ -418,6 +418,222 @@ describe("sanitizeToolUseResultPairing", () => {
+   });
+ });
+ 
++describe("repairToolUseResultPairing repeated per-turn ids", () => {
++  function makeAssistant(id: string, stopReason: "toolUse" | "error" = "toolUse") {
++    return {
++      role: "assistant" as const,
++      content: [{ type: "toolCall", id, name: "exec", arguments: {} }],
++      stopReason,
++    };
++  }
++
++  function makeResult(id: string, text: string, isError = false) {
++    return {
++      role: "toolResult" as const,
++      toolCallId: id,
++      toolName: "exec",
++      content: [{ type: "text", text }],
++      isError,
++    };
++  }
++
++  function resultTexts(messages: AgentMessage[]) {
++    return messages
++      .filter((message) => message.role === "toolResult")
++      .map((message) => message.content.find((block) => block.type === "text")?.text);
++  }
++
++  it("preserves valid repeated ids across assistant turns without allocating", () => {
++    const input = castAgentMessages([
++      makeAssistant("exec_0"),
++      makeResult("exec_0", "first"),
++      { role: "user", content: "next" },
++      makeAssistant("exec_0"),
++      makeResult("exec_0", "second"),
++    ]);
++
++    const result = repairToolUseResultPairing(input);
++
++    expect(result.messages).toBe(input);
++    expect(result.added).toHaveLength(0);
++    expect(result.droppedDuplicateCount).toBe(0);
++    expect(resultTexts(result.messages)).toEqual(["first", "second"]);
++  });
++
++  it("preserves every repeated-id occurrence within one assistant turn", () => {
++    const input = castAgentMessages([
++      {
++        role: "assistant",
++        content: [
++          { type: "toolCall", id: "exec_0", name: "exec", arguments: { cmd: "first" } },
++          { type: "toolCall", id: "exec_0", name: "exec", arguments: { cmd: "second" } },
++        ],
++        stopReason: "toolUse",
++      },
++      makeResult("exec_0", "first"),
++      makeResult("exec_0", "second"),
++    ]);
++
++    const result = repairToolUseResultPairing(input);
++
++    expect(result.messages).toBe(input);
++    expect(result.added).toHaveLength(0);
++    expect(result.droppedDuplicateCount).toBe(0);
++    expect(resultTexts(result.messages)).toEqual(["first", "second"]);
++  });
++
++  it("synthesizes a later repeated-id occurrence without dropping the replacement", () => {
++    const input = castAgentMessages([
++      makeAssistant("exec_0"),
++      makeResult("exec_0", "first"),
++      { role: "user", content: "next" },
++      makeAssistant("exec_0"),
++    ]);
++
++    const first = repairToolUseResultPairing(input);
++    const second = repairToolUseResultPairing(first.messages);
++
++    expect(first.added).toHaveLength(1);
++    expect(first.messages.map((message) => message.role)).toEqual([
++      "assistant",
++      "toolResult",
++      "user",
++      "assistant",
++      "toolResult",
++    ]);
++    expect(resultTexts(first.messages)).toEqual(["first", DEFAULT_MISSING_TOOL_RESULT_TEXT]);
++    expect(second.messages).toBe(first.messages);
++  });
++
++  it("keeps a later turn's adjacent repeated-id result local", () => {
++    const input = castAgentMessages([
++      makeAssistant("exec_0"),
++      makeAssistant("exec_0"),
++      makeResult("exec_0", "second"),
++    ]);
++
++    const result = repairToolUseResultPairing(input);
++
++    expect(result.added).toHaveLength(1);
++    expect(resultTexts(result.messages)).toEqual([DEFAULT_MISSING_TOOL_RESULT_TEXT, "second"]);
++  });
++
++  it("does not guess between repeated ids when multiple delayed results are ambiguous", () => {
++    const input = castAgentMessages([
++      makeAssistant("exec_0"),
++      makeAssistant("exec_0"),
++      makeResult("exec_0", "locally first"),
++      makeResult("exec_0", "ambiguous extra"),
++    ]);
++
++    const result = repairToolUseResultPairing(input);
++
++    expect(result.added).toHaveLength(1);
++    expect(result.droppedDuplicateCount).toBe(1);
++    expect(resultTexts(result.messages)).toEqual([
++      DEFAULT_MISSING_TOOL_RESULT_TEXT,
++      "locally first",
++    ]);
++  });
++
++  it("treats an unresolved failed occurrence as an ambiguity blocker", () => {
++    const input = castAgentMessages([
++      makeAssistant("exec_0"),
++      makeAssistant("exec_0", "error"),
++      makeAssistant("write_0"),
++      makeResult("exec_0", "ambiguous displaced output"),
++      makeResult("write_0", "write output"),
++    ]);
++
++    const result = repairToolUseResultPairing(input, {
++      erroredAssistantResultPolicy: "drop",
++    });
++
++    expect(result.droppedOrphanCount).toBe(1);
++    expect(result.messages.map((message) => message.role)).toEqual([
++      "assistant",
++      "toolResult",
++      "assistant",
++      "toolResult",
++    ]);
++    expect(resultTexts(result.messages)).toEqual([
++      DEFAULT_MISSING_TOOL_RESULT_TEXT,
++      "write output",
++    ]);
++    expect(JSON.stringify(result.messages)).not.toContain("ambiguous displaced output");
++  });
++
++  it("drops a failed turn and its local repeated-id result without leaking it backward", () => {
++    const input = castAgentMessages([
++      makeAssistant("exec_0"),
++      makeAssistant("exec_0", "error"),
++      makeResult("exec_0", "failed turn output", true),
++      { role: "user", content: "retry" },
++    ]);
++
++    const result = repairToolUseResultPairing(input, {
++      erroredAssistantResultPolicy: "drop",
++    });
++
++    expect(result.added).toHaveLength(1);
++    expect(result.messages.map((message) => message.role)).toEqual([
++      "assistant",
++      "toolResult",
++      "user",
++    ]);
++    expect(resultTexts(result.messages)).toEqual([DEFAULT_MISSING_TOOL_RESULT_TEXT]);
++    expect(JSON.stringify(result.messages)).not.toContain("failed turn output");
++  });
++
++  it("moves a uniquely attributable normalized record only once", () => {
++    const input = castAgentMessages([
++      makeAssistant("call_read"),
++      {
++        role: "assistant",
++        content: [{ type: "toolCall", id: "call_write", name: "write", arguments: {} }],
++      },
++      {
++        ...makeResult("call_read", "late read"),
++        toolName: "   ",
++      },
++      {
++        ...makeResult("call_write", "write output"),
++        toolName: "write",
++      },
++    ]);
++
++    const result = repairToolUseResultPairing(input);
++
++    expect(result.added).toHaveLength(0);
++    expect(resultTexts(result.messages)).toEqual(["late read", "write output"]);
++    expect(
++      result.messages.filter(
++        (message) => message.role === "toolResult" && message.toolCallId === "call_read",
++      ),
++    ).toHaveLength(1);
++    expect(
++      result.messages.find(
++        (message) => message.role === "toolResult" && message.toolCallId === "call_read",
++      ),
++    ).toMatchObject({ toolName: "exec" });
++  });
++
++  it("handles a long valid repeated-id transcript as an unchanged linear pass", () => {
++    const input = castAgentMessages(
++      Array.from({ length: 1_000 }, (_, index) => [
++        makeAssistant(`exec_${index % 4}`),
++        makeResult(`exec_${index % 4}`, `result ${index}`),
++      ]).flat(),
++    );
++
++    const result = repairToolUseResultPairing(input);
++
++    expect(result.messages).toBe(input);
++    expect(result.added).toHaveLength(0);
++    expect(result.droppedDuplicateCount).toBe(0);
++  });
++});
++
+ describe("repairToolUseResultPairing prefers real result over synthetic error", () => {
+   function makeSyntheticResult(toolCallId: string) {
+     return {
+diff --git a/src/agents/session-transcript-repair.ts b/src/agents/session-transcript-repair.ts
+index 8091047aa9b4d95b062316c588cc6872c3cbee03..3db1edacda1c137f5fbc839945bf4bde28cdf26d 100644
+--- a/src/agents/session-transcript-repair.ts
++++ b/src/agents/session-transcript-repair.ts
+@@ -473,267 +473,242 @@ function assistantHasToolCalls(message: AgentMessage): boolean {
+   return extractToolCallsFromAssistant(message).length > 0;
+ }
+ 
+-function findLaterMatchingToolResult(params: {
+-  messages: AgentMessage[];
+-  startIndex: number;
+-  toolCallId: string;
+-  toolName?: string;
+-  toolCalls: Array<{ id: string; name?: string }>;
+-  seenToolResultIds: Set<string>;
+-}): Extract<AgentMessage, { role: "toolResult" }> | undefined {
+-  for (let index = params.startIndex; index < params.messages.length; index += 1) {
+-    const candidate = params.messages[index];
+-    if (!candidate || typeof candidate !== "object" || candidate.role !== "toolResult") {
+-      continue;
+-    }
+-    const normalizedLegacyResult = normalizeLegacyToolResultId(candidate, params.toolCalls);
+-    const id = extractToolResultId(normalizedLegacyResult);
+-    if (!id || id !== params.toolCallId || params.seenToolResultIds.has(id)) {
+-      continue;
+-    }
+-    return normalizeToolResultName(normalizedLegacyResult, params.toolName);
+-  }
+-  return undefined;
+-}
+-
+-export function repairToolUseResultPairing(
+-  messages: AgentMessage[],
+-  options?: ToolUseResultPairingOptions,
+-): ToolUseRepairReport {
+-  // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not
+-  // immediately followed by matching tool results. Session files can end up with results
+-  // displaced (e.g. after user turns) or duplicated. Repair by:
+-  // - moving matching toolResult messages directly after their assistant toolCall turn
+-  // - inserting synthetic error toolResults for missing ids
+-  // - dropping duplicate toolResults for the same id (anywhere in the transcript)
+-  const out: AgentMessage[] = [];
+-  const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
+-  const seenToolResultIds = new Set<string>();
+-  const toolResultPositions = new Map<string, number>();
+-  let droppedDuplicateCount = 0;
+-  let droppedOrphanCount = 0;
+-  let moved = false;
+-  let changed = false;
++type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
+ 
+-  const pushToolResult = (msg: Extract<AgentMessage, { role: "toolResult" }>) => {
+-    const id = extractToolResultId(msg);
+-    if (id && seenToolResultIds.has(id)) {
+-      const existingIdx = toolResultPositions.get(id);
+-      if (existingIdx !== undefined) {
+-        const existing = out[existingIdx];
+-        if (
+-          existing &&
+-          isSyntheticMissingToolResult(existing as Extract<AgentMessage, { role: "toolResult" }>) &&
+-          !isSyntheticMissingToolResult(msg)
+-        ) {
+-          out[existingIdx] = msg;
+-          const addedIdx = added.findIndex((a) => extractToolResultId(a) === id);
+-          if (addedIdx !== -1) {
+-            added.splice(addedIdx, 1);
+-          }
+-          droppedDuplicateCount += 1;
+-          changed = true;
+-          return;
+-        }
+-      }
+-      droppedDuplicateCount += 1;
+-      changed = true;
+-      return;
+-    }
+-    if (id) {
+-      seenToolResultIds.add(id);
+-      toolResultPositions.set(id, out.length);
+-    }
+-    out.push(msg);
+-  };
++type ToolResultRecord = {
++  result: ToolResultMessage;
++  id?: string;
++};
+ 
+-  for (let i = 0; i < messages.length; i += 1) {
+-    const msg = messages[i];
+-    if (!msg || typeof msg !== "object") {
+-      out.push(msg);
+-      continue;
+-    }
++type ToolCallOccurrence = {
++  id: string;
++  name?: string;
++  result?: ToolResultMessage;
++};
+ 
+-    const role = (msg as { role?: unknown }).role;
+-    if (role !== "assistant") {
+-      // Tool results must only appear directly after the matching assistant tool call turn.
+-      // Any "free-floating" toolResult entries in session history can make strict providers
+-      // (Anthropic-compatible APIs, MiniMax, Cloud Code Assist) reject the entire request.
+-      if (role !== "toolResult") {
+-        out.push(msg);
+-      } else {
+-        droppedOrphanCount += 1;
+-        changed = true;
+-      }
+-      continue;
+-    }
++type SameIdOccurrenceGroup = {
++  occurrences: ToolCallOccurrence[];
++  nextUnfilledIndex: number;
++  syntheticOccurrences: ToolCallOccurrence[];
++  nextSyntheticIndex: number;
++};
+ 
+-    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
++type ToolUseFrame = {
++  startIndex: number;
++  endIndex: number;
++  assistant: Extract<AgentMessage, { role: "assistant" }>;
++  remainder: AgentMessage[];
++  unclaimedResults: ToolResultRecord[];
++  occurrences: ToolCallOccurrence[];
++  failed: boolean;
++};
+ 
+-    const toolCalls = extractToolCallsFromAssistant(assistant);
+-    if (toolCalls.length === 0) {
+-      out.push(msg);
+-      continue;
++function buildToolUseFrames(messages: AgentMessage[], onDuplicate: () => void): ToolUseFrame[] {
++  const frameStartIndexes: number[] = [];
++  for (const [index, message] of messages.entries()) {
++    if (message && typeof message === "object" && assistantHasToolCalls(message)) {
++      frameStartIndexes.push(index);
+     }
++  }
+ 
+-    const toolCallIds = new Set<string>();
+-    const toolCallNamesById = new Map<string, string>();
++  return frameStartIndexes.map((startIndex, frameIndex) => {
++    const assistant = messages[startIndex] as Extract<AgentMessage, { role: "assistant" }>;
++    const toolCalls = extractToolCallsFromAssistant(assistant);
++    const occurrences: ToolCallOccurrence[] = [];
++    const occurrencesById = new Map<string, SameIdOccurrenceGroup>();
+     for (const toolCall of toolCalls) {
+-      toolCallIds.add(toolCall.id);
+-      if (typeof toolCall.name === "string") {
+-        toolCallNamesById.set(toolCall.id, toolCall.name);
++      const occurrence: ToolCallOccurrence = { id: toolCall.id, name: toolCall.name };
++      occurrences.push(occurrence);
++      const sameIdGroup = occurrencesById.get(toolCall.id);
++      if (sameIdGroup) {
++        sameIdGroup.occurrences.push(occurrence);
++      } else {
++        occurrencesById.set(toolCall.id, {
++          occurrences: [occurrence],
++          nextUnfilledIndex: 0,
++          syntheticOccurrences: [],
++          nextSyntheticIndex: 0,
++        });
+       }
+     }
+ 
+-    const spanResultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
++    const endIndex = frameStartIndexes[frameIndex + 1] ?? messages.length;
+     const remainder: AgentMessage[] = [];
++    const unclaimedResults: ToolResultRecord[] = [];
+ 
+-    let j = i + 1;
+-    for (; j < messages.length; j += 1) {
+-      const next = messages[j];
+-      if (!next || typeof next !== "object") {
+-        remainder.push(next);
++    for (let index = startIndex + 1; index < endIndex; index += 1) {
++      const message = messages[index];
++      if (!message || typeof message !== "object") {
++        continue;
++      }
++      if (message.role !== "toolResult") {
++        remainder.push(message);
+         continue;
+       }
+ 
+-      const nextRole = (next as { role?: unknown }).role;
+-      if (nextRole === "assistant") {
+-        if (assistantHasToolCalls(next)) {
+-          break;
+-        }
+-        remainder.push(next);
++      const legacyNormalized = normalizeLegacyToolResultId(message, toolCalls);
++      const id = extractToolResultId(legacyNormalized);
++      const sameIdGroup = id ? occurrencesById.get(id) : undefined;
++      if (!id || !sameIdGroup) {
++        unclaimedResults.push({ result: legacyNormalized, id: id ?? undefined });
+         continue;
+       }
+ 
+-      if (nextRole === "toolResult") {
+-        const toolResult = normalizeLegacyToolResultId(
+-          next as Extract<AgentMessage, { role: "toolResult" }>,
+-          toolCalls,
++      const unfilledOccurrence = sameIdGroup.occurrences[sameIdGroup.nextUnfilledIndex];
++      if (unfilledOccurrence) {
++        unfilledOccurrence.result = normalizeToolResultName(
++          legacyNormalized,
++          unfilledOccurrence.name,
+         );
+-        const id = extractToolResultId(toolResult);
+-        if (id && seenToolResultIds.has(id)) {
+-          pushToolResult(normalizeToolResultName(toolResult, toolCallNamesById.get(id)));
+-          continue;
+-        }
+-        if (id && toolCallIds.has(id)) {
+-          if (toolResult !== next) {
+-            changed = true;
+-          }
+-          const normalizedToolResult = normalizeToolResultName(
+-            toolResult,
+-            toolCallNamesById.get(id),
+-          );
+-          if (normalizedToolResult !== toolResult) {
+-            changed = true;
+-          }
+-          const existingSpan = spanResultsById.get(id);
+-          if (!existingSpan) {
+-            spanResultsById.set(id, normalizedToolResult);
+-          } else if (
+-            isSyntheticMissingToolResult(existingSpan) &&
+-            !isSyntheticMissingToolResult(normalizedToolResult)
+-          ) {
+-            spanResultsById.set(id, normalizedToolResult);
+-            droppedDuplicateCount += 1;
+-            changed = true;
+-          } else {
+-            droppedDuplicateCount += 1;
+-            changed = true;
+-          }
+-          continue;
++        sameIdGroup.nextUnfilledIndex += 1;
++        if (isSyntheticMissingToolResult(unfilledOccurrence.result)) {
++          sameIdGroup.syntheticOccurrences.push(unfilledOccurrence);
+         }
++        continue;
+       }
+ 
+-      // Drop tool results that don't match the current assistant tool calls.
+-      if (nextRole !== "toolResult") {
+-        remainder.push(next);
+-      } else {
+-        droppedOrphanCount += 1;
+-        changed = true;
++      onDuplicate();
++      if (!isSyntheticMissingToolResult(legacyNormalized)) {
++        const replaceableOccurrence =
++          sameIdGroup.syntheticOccurrences[sameIdGroup.nextSyntheticIndex];
++        if (replaceableOccurrence) {
++          sameIdGroup.nextSyntheticIndex += 1;
++          replaceableOccurrence.result = normalizeToolResultName(
++            legacyNormalized,
++            replaceableOccurrence.name,
++          );
++        }
+       }
+     }
+ 
+-    // Aborted/errored assistant turns should never synthesize missing tool results, but
+-    // the replay sanitizer can still legitimately retain real tool results for surviving
+-    // tool calls in the same turn after malformed siblings are dropped.
+     const stopReason = (assistant as { stopReason?: string }).stopReason;
+-    if (stopReason === "error" || stopReason === "aborted") {
+-      if (!shouldDropErroredAssistantResults(options)) {
+-        out.push(msg);
+-        for (const toolCall of toolCalls) {
+-          const result = spanResultsById.get(toolCall.id);
+-          if (!result) {
+-            continue;
+-          }
+-          pushToolResult(result);
++    const failed = stopReason === "error" || stopReason === "aborted";
++
++    return {
++      startIndex,
++      endIndex,
++      assistant,
++      remainder,
++      unclaimedResults,
++      occurrences,
++      failed,
++    };
++  });
++}
++
++export function repairToolUseResultPairing(
++  messages: AgentMessage[],
++  options?: ToolUseResultPairingOptions,
++): ToolUseRepairReport {
++  // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not
++  // immediately followed by matching tool results. Session files can end up with results
++  // displaced (e.g. after user turns) or duplicated. Repair by:
++  // - moving matching toolResult messages directly after their assistant toolCall turn
++  // - inserting synthetic error toolResults for missing ids
++  // - dropping duplicate toolResults for the same tool-call occurrence
++  // Provider ids are opaque and can legitimately repeat on later assistant turns.
++  const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
++  let droppedDuplicateCount = 0;
++  let droppedOrphanCount = 0;
++  const frames = buildToolUseFrames(messages, () => {
++    droppedDuplicateCount += 1;
++  });
++
++  // Cross-frame recovery is intentionally conservative. A displaced result is moved only
++  // when exactly one still-unresolved call occurrence can own it; repeated ids otherwise
++  // make attribution unknowable, and guessing would feed the model the wrong tool output.
++  const unresolvedById = new Map<string, ToolCallOccurrence[]>();
++  for (const frame of frames) {
++    for (const occurrence of frame.occurrences) {
++      if (!occurrence.result || isSyntheticMissingToolResult(occurrence.result)) {
++        const unresolved = unresolvedById.get(occurrence.id);
++        if (unresolved) {
++          unresolved.push(occurrence);
++        } else {
++          unresolvedById.set(occurrence.id, [occurrence]);
+         }
+-      } else if (spanResultsById.size > 0) {
+-        changed = true;
+-      } else {
+-        changed = true;
+-      }
+-      for (const rem of remainder) {
+-        out.push(rem);
+       }
+-      i = j - 1;
+-      continue;
+     }
+ 
+-    out.push(msg);
++    for (const record of frame.unclaimedResults) {
++      if (!record.id) {
++        droppedOrphanCount += 1;
++        continue;
++      }
++      const candidates = (unresolvedById.get(record.id) ?? []).filter(
++        (candidate) =>
++          !candidate.result ||
++          (isSyntheticMissingToolResult(candidate.result) &&
++            !isSyntheticMissingToolResult(record.result)),
++      );
++      if (candidates.length !== 1) {
++        droppedOrphanCount += 1;
++        continue;
++      }
+ 
+-    if (spanResultsById.size > 0 && remainder.length > 0) {
+-      // Preserve real late-arriving results before synthesizing missing siblings;
+-      // otherwise parallel tool replay can replace useful output with repair noise.
+-      moved = true;
+-      changed = true;
++      const [candidate] = candidates;
++      if (!candidate) {
++        droppedOrphanCount += 1;
++        continue;
++      }
++      if (candidate.result) {
++        droppedDuplicateCount += 1;
++      }
++      candidate.result = normalizeToolResultName(record.result, candidate.name);
+     }
++  }
+ 
+-    for (const call of toolCalls) {
+-      const existing = spanResultsById.get(call.id);
+-      if (existing) {
+-        pushToolResult(existing);
+-      } else {
+-        const laterResult = findLaterMatchingToolResult({
+-          messages,
+-          startIndex: j,
+-          toolCallId: call.id,
+-          toolName: call.name,
+-          toolCalls,
+-          seenToolResultIds,
+-        });
+-        if (laterResult) {
+-          moved = true;
+-          changed = true;
+-          pushToolResult(laterResult);
+-        } else {
+-          const missing = makeMissingToolResult({
+-            toolCallId: call.id,
+-            toolName: call.name,
+-            text: options?.missingToolResultText,
+-          });
+-          added.push(missing);
+-          changed = true;
+-          pushToolResult(missing);
+-        }
++  const out: AgentMessage[] = [];
++  let cursor = 0;
++  const pushUnframedRange = (endIndex: number) => {
++    for (; cursor < endIndex; cursor += 1) {
++      const message = messages[cursor];
++      if (!message || typeof message !== "object") {
++        continue;
++      }
++      if (message.role === "toolResult") {
++        droppedOrphanCount += 1;
++        continue;
+       }
++      out.push(message);
+     }
++  };
+ 
+-    for (const rem of remainder) {
+-      if (!rem || typeof rem !== "object") {
+-        out.push(rem);
+-        continue;
++  for (const frame of frames) {
++    pushUnframedRange(frame.startIndex);
++    cursor = frame.endIndex;
++
++    if (!(frame.failed && shouldDropErroredAssistantResults(options))) {
++      out.push(frame.assistant);
++      for (const occurrence of frame.occurrences) {
++        if (occurrence.result) {
++          out.push(occurrence.result);
++          continue;
++        }
++        if (frame.failed) {
++          continue;
++        }
++        const missing = makeMissingToolResult({
++          toolCallId: occurrence.id,
++          toolName: occurrence.name,
++          text: options?.missingToolResultText,
++        });
++        occurrence.result = missing;
++        added.push(missing);
++        out.push(missing);
+       }
+-      out.push(rem);
+     }
+-    i = j - 1;
++    out.push(...frame.remainder);
+   }
++  pushUnframedRange(messages.length);
+ 
+-  const changedOrMoved = changed || moved;
++  const changed =
++    out.length !== messages.length || out.some((message, index) => message !== messages[index]);
+   return {
+-    messages: changedOrMoved ? out : messages,
++    messages: changed ? out : messages,
+     added,
+     droppedDuplicateCount,
+     droppedOrphanCount,
+-    moved: changedOrMoved,
++    moved: changed,
+   };
+ }
+diff --git a/src/agents/transport-message-transform.test.ts b/src/agents/transport-message-transform.test.ts
+index 453ffa0cd1b03f7922d752c44ebdc3adaf56d1e1..5b846e65b79464d05c4d63520a464e2f39a54092 100644
+--- a/src/agents/transport-message-transform.test.ts
++++ b/src/agents/transport-message-transform.test.ts
+@@ -250,6 +250,35 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
+     expect(JSON.stringify(result)).not.toContain("call_error");
+   });
+ 
++  it("does not reassign a dropped errored turn's repeated-id result to an older turn", () => {
++    const messages: Context["messages"] = [
++      assistantToolCall("call_repeated"),
++      assistantToolCall("call_repeated", "exec", "error"),
++      {
++        role: "toolResult",
++        toolCallId: "call_repeated",
++        toolName: "exec",
++        content: [{ type: "text", text: "failed turn output" }],
++        isError: true,
++        timestamp: Date.now(),
++      },
++      { role: "user", content: "retry after error", timestamp: Date.now() },
++    ];
++
++    const result = transformTransportMessages(
++      messages,
++      makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
++    );
++
++    expect(result.map((message) => message.role)).toEqual(["assistant", "toolResult", "user"]);
++    expect(requireToolResultMessage(result[1])).toMatchObject({
++      toolCallId: "call_repeated",
++      isError: true,
++      content: [{ type: "text", text: "No result provided" }],
++    });
++    expect(JSON.stringify(result)).not.toContain("failed turn output");
++  });
++
+   it("still synthesizes missing tool results for Anthropic transports", () => {
+     const messages: Context["messages"] = [
+       assistantToolCall("call_anthropic_1"),
+diff --git a/src/agents/transport-message-transform.ts b/src/agents/transport-message-transform.ts
+index cf68052e15174b56b2eefab12910dca9b7085872..23ac6ad1d29253605b7a662f7de6ec62b53c3550 100644
+--- a/src/agents/transport-message-transform.ts
++++ b/src/agents/transport-message-transform.ts
+@@ -37,6 +37,15 @@ function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
+   return message.stopReason === "error" || message.stopReason === "aborted";
+ }
+ 
++function failedAssistantHasToolCalls(message: Context["messages"][number]): boolean {
++  return (
++    message.role === "assistant" &&
++    (message.stopReason === "error" || message.stopReason === "aborted") &&
++    Array.isArray(message.content) &&
++    message.content.some((block) => block.type === "toolCall")
++  );
++}
++
+ export function transformTransportMessages(
+   messages: Context["messages"],
+   model: Model,
+@@ -125,10 +134,18 @@ export function transformTransportMessages(
+     }
+     return { ...msg, content };
+   });
+-  // Preserve the old transport replay filter: failed streamed turns can contain
+-  // partial text, partial tool calls, or both, and strict providers can treat
+-  // them as valid assistant context on retry unless we drop the whole turn.
+-  const replayable = transformed.filter((msg) => !isFailedAssistantTurn(msg));
++  // Pairing-aware transports must let shared repair see errored tool-call frames and
++  // their adjacent results together; pre-filtering the call can misattribute its result
++  // to an older turn that reused the same provider id.
++  const replayable = transformed.filter((_, index) => {
++    const original = messages[index];
++    if (!original) {
++      return true;
++    }
++    return allowSyntheticToolResults
++      ? !isFailedAssistantTurn(original) || failedAssistantHasToolCalls(original)
++      : !isFailedAssistantTurn(original);
++  });
+ 
+   if (!allowSyntheticToolResults) {
+     return replayable;
+@@ -136,8 +153,7 @@ export function transformTransportMessages(
+ 
+   // The local transport transform can synthesize missing results, but it does not move
+   // displaced real results back before an intervening user turn. Shared repair
+-  // handles both, while preserving the previous transport behavior of dropping
+-  // aborted/error assistant tool-call turns before replaying strict providers.
++  // handles both and drops aborted/error turns together with their owned results.
+   return repairToolUseResultPairing(replayable, {
+     erroredAssistantResultPolicy: "drop",
+     missingToolResultText: syntheticToolResultText,

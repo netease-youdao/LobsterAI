@@ -8,8 +8,7 @@
 
 const Imap = require('imap');
 const { simpleParser } = require('mailparser');
-const path = require('path');
-const fs = require('fs');
+const { storeEmailAttachments } = require('./attachment-storage');
 const {
   createImapConfig,
   getTargetAccounts,
@@ -30,6 +29,16 @@ const IMAP_OPERATION_TIMEOUT_MS = Math.max(
   1000,
   parseInt(process.env.EMAIL_IMAP_OPERATION_TIMEOUT_MS || '30000', 10) || 30000
 );
+const ATTACHMENT_FILENAME_LOG_LIMIT = 200;
+const ATTACHMENT_RENAME_LOG_LIMIT = 20;
+
+function formatAttachmentFilenameForLog(value) {
+  const filename = String(value ?? '');
+  const truncated = filename.length > ATTACHMENT_FILENAME_LOG_LIMIT
+    ? `${filename.slice(0, ATTACHMENT_FILENAME_LOG_LIMIT)}...`
+    : filename;
+  return JSON.stringify(truncated);
+}
 
 // Parse command-line arguments
 function parseArgs() {
@@ -359,31 +368,48 @@ async function downloadAttachments(account, uid, mailbox = account.mailbox || 'I
       };
     }
 
-    // Create output directory if it doesn't exist
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
+    let downloaded;
+    try {
+      downloaded = storeEmailAttachments({
+        attachments: parsed.attachments,
+        outputDir,
+        accountId: account.id,
+        uid,
+        specificFilename,
+      });
+    } catch (error) {
+      console.error(
+        `[imap-download] Failed to store attachments:`
+        + ` account=${formatAttachmentFilenameForLog(account.id)},`
+        + ` uid=${formatAttachmentFilenameForLog(uid)}`,
+        error
+      );
+      throw error;
     }
-
-    const downloaded = [];
-
-    for (const attachment of parsed.attachments) {
-      // If specificFilename is provided, only download matching attachment
-      if (specificFilename && attachment.filename !== specificFilename) {
-        continue;
+    let renamedAttachmentCount = 0;
+    downloaded.forEach((attachment) => {
+      if (attachment.originalFilename === undefined) {
+        return;
       }
-      if (attachment.content) {
-        const accountOutputDir = path.join(outputDir, account.id, String(uid));
-        if (!fs.existsSync(accountOutputDir)) {
-          fs.mkdirSync(accountOutputDir, { recursive: true });
-        }
-        const filePath = path.join(accountOutputDir, attachment.filename);
-        fs.writeFileSync(filePath, attachment.content);
-        downloaded.push({
-          filename: attachment.filename,
-          path: filePath,
-          size: attachment.size,
-        });
+      renamedAttachmentCount += 1;
+      if (renamedAttachmentCount > ATTACHMENT_RENAME_LOG_LIMIT) {
+        return;
       }
+      console.warn(
+        `[imap-security] Stored attachment with a safe filename:`
+        + ` account=${formatAttachmentFilenameForLog(account.id)},`
+        + ` uid=${formatAttachmentFilenameForLog(uid)},`
+        + ` original=${formatAttachmentFilenameForLog(attachment.originalFilename)},`
+        + ` stored=${formatAttachmentFilenameForLog(attachment.filename)}`
+      );
+    });
+    if (renamedAttachmentCount > ATTACHMENT_RENAME_LOG_LIMIT) {
+      console.warn(
+        `[imap-security] Omitted additional safe-filename logs:`
+        + ` account=${formatAttachmentFilenameForLog(account.id)},`
+        + ` uid=${formatAttachmentFilenameForLog(uid)},`
+        + ` omitted=${renamedAttachmentCount - ATTACHMENT_RENAME_LOG_LIMIT}`
+      );
     }
 
     // If specific file was requested but not found

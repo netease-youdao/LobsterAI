@@ -59,6 +59,15 @@ function checkTasksForAnomalies(tasks: ScheduledTask[]): void {
   showToast(msg);
 }
 
+function describeRunFilter(filter?: RunFilter): Record<string, string | undefined> | null {
+  if (!filter) return null;
+  return {
+    startDate: filter.startDate,
+    endDate: filter.endDate,
+    status: filter.status,
+  };
+}
+
 export class ScheduledTaskService {
   private cleanupFns: (() => void)[] = [];
   private initialized = false;
@@ -310,25 +319,56 @@ export class ScheduledTaskService {
     const requestId = this.allRunsRequestId + 1;
     this.allRunsRequestId = requestId;
     try {
+      console.debug('[ScheduledTasks] loading all run history', {
+        limit,
+        offset,
+        initial: isInitialRequest,
+        filter: describeRunFilter(filter),
+      });
       const result = await api.listAllRuns(limit, offset, filter);
       if (this.allRunsRequestId !== requestId) return;
       if (result.ready === false) {
+        console.debug('[ScheduledTasks] all run history request deferred; gateway is not ready', {
+          limit,
+          offset,
+          filter: describeRunFilter(filter),
+        });
         store.dispatch(setAllRunsStatus(ScheduledTaskDataStatus.Starting));
         return;
       }
       if (result.success && result.runs) {
         const hasMore = (result.runs as unknown[]).length >= (limit ?? 50);
+        console.debug('[ScheduledTasks] loaded all run history', {
+          limit,
+          offset,
+          returnedCount: result.runs.length,
+          hasMore,
+          filter: describeRunFilter(filter),
+        });
         if (offset && offset > 0) {
           store.dispatch(appendAllRuns({ runs: result.runs, hasMore }));
         } else {
           store.dispatch(setAllRuns({ runs: result.runs, hasMore }));
         }
       } else if (isInitialRequest) {
-        store.dispatch(setAllRunsError(result.error || 'Failed to load scheduled task history'));
+        const message = result.error || 'Failed to load scheduled task history';
+        console.warn('[ScheduledTasks] all run history request failed', {
+          limit,
+          offset,
+          filter: describeRunFilter(filter),
+          error: message,
+        });
+        store.dispatch(setAllRunsError(message));
       }
     } catch (err: unknown) {
       if (this.allRunsRequestId !== requestId) return;
       const message = err instanceof Error ? err.message : String(err);
+      console.warn('[ScheduledTasks] all run history request threw', {
+        limit,
+        offset,
+        filter: describeRunFilter(filter),
+        error: message,
+      });
       if (isInitialRequest) {
         store.dispatch(setAllRunsError(message));
       }

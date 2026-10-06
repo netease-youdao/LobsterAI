@@ -1,0 +1,23 @@
+diff --git a/src/plugins/install-package.ts b/src/plugins/install-package.ts
+index fbb6203b..fb9784c9 100644
+--- a/src/plugins/install-package.ts
++++ b/src/plugins/install-package.ts
+@@ -42,6 +42,9 @@ const PLUGIN_ARCHIVE_ROOT_MARKERS = [
+   "plugin.json",
+ ];
+
++// Large signed plugin archives can take several minutes to scan and unpack on Windows.
++const DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS = process.platform === "win32" ? 900_000 : 120_000;
++
+ function pickPackageInstallCommonParams(
+   params: InternalPackageInstallCommonParams,
+ ): InternalPackageInstallCommonParams {
+@@ -367,7 +370,7 @@ export async function installPluginFromArchive(
+ ): Promise<InstallPluginResult> {
+   const runtime = await loadPluginInstallRuntime();
+   const logger = params.logger ?? defaultLogger;
+-  const timeoutMs = params.timeoutMs ?? 120_000;
++  const timeoutMs = params.timeoutMs ?? DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS;
+   const mode = params.mode ?? "install";
+   const installPolicyRequest = params.installPolicyRequest ?? {
+     kind: "plugin-archive",

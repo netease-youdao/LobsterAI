@@ -24,6 +24,7 @@ function createSession(messages: CoworkMessage[]): CoworkSession {
     id: 'session-1',
     title: 'Long export',
     claudeSessionId: null,
+    scheduledTaskId: null,
     status: CoworkSessionStatusValue.Completed,
     pinned: false,
     cwd: '/tmp/project',

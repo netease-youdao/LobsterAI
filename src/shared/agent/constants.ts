@@ -9,6 +9,7 @@ export const AgentIpcChannel = {
   Get: 'agents:get',
   Create: 'agents:create',
   Update: 'agents:update',
+  Reorder: 'agents:reorder',
   Delete: 'agents:delete',
   CleanupLegacyIdentityBlock: 'agents:cleanupLegacyIdentityBlock',
   Presets: 'agents:presets',

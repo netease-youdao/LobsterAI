@@ -1,5 +1,18 @@
 import type { CoworkSessionStatus } from '../../coworkStore';
 
+export function resolveChannelSessionTerminalStatus(rawStatus: string): CoworkSessionStatus | null {
+  if (
+    rawStatus === 'failed' ||
+    rawStatus === 'killed' ||
+    rawStatus === 'timeout' ||
+    rawStatus === 'error'
+  ) {
+    return 'error';
+  }
+  if (rawStatus === 'done' || rawStatus === 'completed') return 'completed';
+  return null;
+}
+
 /**
  * Decides the next local status for a channel-synced session from a gateway
  * `sessions.list` row.
@@ -21,15 +34,8 @@ export function resolveChannelSessionNextStatus(input: {
   const { hasActiveRun, rawStatus, currentStatus } = input;
 
   if (hasActiveRun === true) return 'running';
-  if (
-    rawStatus === 'failed' ||
-    rawStatus === 'killed' ||
-    rawStatus === 'timeout' ||
-    rawStatus === 'error'
-  ) {
-    return 'error';
-  }
-  if (rawStatus === 'done' || rawStatus === 'completed') return 'completed';
+  const terminalStatus = resolveChannelSessionTerminalStatus(rawStatus);
+  if (terminalStatus) return terminalStatus;
   if (hasActiveRun === false) {
     return currentStatus === 'running' ? 'completed' : null;
   }

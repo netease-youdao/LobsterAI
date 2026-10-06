@@ -10,8 +10,9 @@
  * Usage:
  *   node scripts/apply-openclaw-patches.cjs [openclaw-src-dir]
  *
- * If openclaw-src-dir is not specified, defaults to ../openclaw relative to
- * the LobsterAI project root.
+ * If openclaw-src-dir is not specified, OPENCLAW_SRC is used when present,
+ * otherwise the source defaults to ../openclaw relative to the LobsterAI
+ * project root.
  *
  * Safe to run multiple times — already-applied patches are skipped.
  */
@@ -24,7 +25,9 @@ const path = require('path');
 const rootDir = path.resolve(__dirname, '..');
 const openclawSrc = process.argv[2]
   ? path.resolve(process.argv[2])
-  : path.resolve(rootDir, '..', 'openclaw');
+  : process.env.OPENCLAW_SRC
+    ? path.resolve(process.env.OPENCLAW_SRC)
+    : path.resolve(rootDir, '..', 'openclaw');
 
 // Read pinned openclaw version from package.json.
 const pkg = require(path.join(rootDir, 'package.json'));
@@ -62,7 +65,218 @@ if (patchFiles.length === 0) {
 
 console.log(`[apply-openclaw-patches] Applying patches for openclaw ${openclawVersion} (${patchFiles.length} file(s))`);
 
-const strongPatchValidators = {
+const legacyStrongPatchValidators = {
+  'openclaw-terminate-run-on-critical-tool-loop.patch': [
+    {
+      file: 'packages/agent-core/src/agent.ts',
+      snippets: [
+        'ShouldStopAfterTurnContext',
+        'this.shouldStopAfterTurn = options.shouldStopAfterTurn',
+        'shouldStopAfterTurn: this.shouldStopAfterTurn',
+      ],
+    },
+    {
+      file: 'src/agents/agent-tools.before-tool-call.ts',
+      snippets: [
+        // zz-openclaw-tool-loop-soft-vetoes.patch rewrites this line to
+        // `params.terminateRun ?? deniedReason === "tool-loop"`; validate the
+        // stable core expression only.
+        'deniedReason === "tool-loop"',
+        '...(terminateRun ? { terminate: true } : {})',
+      ],
+    },
+    {
+      file: 'src/agents/sessions/sdk.ts',
+      snippets: [
+        'shouldStopAfterTurn: (context) => {',
+        'details?.deniedReason === "tool-loop"',
+      ],
+    },
+    {
+      file: 'packages/agent-core/src/agent.critical-tool-loop.test.ts',
+      snippets: [
+        'stops a mixed parallel batch after normal sibling tools finish',
+        'expect(providerTurns).toBe(1)',
+        'expect(shouldStopCalls).toBe(1)',
+      ],
+    },
+    {
+      file: 'src/agents/agent-tools.before-tool-call.blocked-result.test.ts',
+      snippets: [
+        // Test name comes from zz-openclaw-tool-loop-soft-vetoes.patch, which
+        // rewrites this file after the terminate patch creates it.
+        'terminates tool-loop vetoes from legacy callers',
+        'keeps %s vetoes non-terminating',
+        'expect(result.terminate).toBe(true)',
+      ],
+    },
+  ],
+  'zz-openclaw-tool-loop-soft-vetoes.patch': [
+    {
+      file: 'src/agents/agent-tools.before-tool-call.ts',
+      snippets: [
+        'TOOL_LOOP_VETO_STREAK_TERMINATE_THRESHOLD',
+        'appendLoopWarningToToolResult',
+        'evaluateToolLoopGate',
+      ],
+    },
+    {
+      file: 'src/agents/tool-loop-detection.ts',
+      snippets: [
+        'hardStop: true',
+        'Repeating the same blocked call will end this run.',
+      ],
+    },
+    {
+      file: 'src/agents/sessions/sdk.ts',
+      snippets: [
+        'details.terminateRun === true',
+      ],
+    },
+    {
+      file: 'src/logging/diagnostic-session-state.ts',
+      snippets: [
+        'toolLoopVetoStreaks',
+      ],
+    },
+  ],
+  'openclaw-stop-loop-after-aborted-tool-run.patch': [
+    {
+      file: 'packages/agent-core/src/agent-loop.ts',
+      snippets: [
+        'const stopIfAborted = async (): Promise<boolean> => {',
+        'signal.reason instanceof Error ? signal.reason : new Error("Agent run aborted")',
+        'await emit({ type: "turn_end", message: abortedMessage, toolResults: [] });',
+        'if (await stopIfAborted())',
+      ],
+    },
+    {
+      file: 'packages/agent-core/src/agent-loop.test.ts',
+      snippets: [
+        'does not request another model turn after a tool aborts the run',
+        'does not request another model turn when an async turn hook aborts the run',
+        'expect(streamCalls).toBe(1)',
+      ],
+    },
+  ],
+  'openclaw-kimi-k3-support.patch': [
+    {
+      file: 'src/llm/providers/stream-wrappers/moonshot-thinking.ts',
+      snippets: [
+        'ensureMoonshotToolCallReasoningContent',
+        'export function createMoonshotKimiK3Wrapper',
+        'payload.reasoning_effort = "max"',
+      ],
+    },
+    {
+      file: 'src/config/zod-schema.core.ts',
+      snippets: [
+        'thinkingLevelMap: ThinkingLevelMapSchema',
+      ],
+    },
+    {
+      file: 'src/agents/sessions/model-registry.ts',
+      snippets: [
+        'Type.Literal("video")',
+        'Type.Literal("audio")',
+      ],
+    },
+    {
+      file: 'src/config/zod-schema.models.test.ts',
+      snippets: [
+        'rejects an invalid thinking-level map: $label',
+      ],
+    },
+    {
+      file: 'src/plugin-sdk/provider-stream.test.ts',
+      snippets: [
+        'reapplies the K3 payload contract after an async caller replacement',
+        'expect(callerSawReasoningContent).toBe("")',
+      ],
+    },
+  ],
+  'openclaw-lobsterai-model-compat-api.patch': [
+    {
+      file: 'src/config/types.models.ts',
+      snippets: [
+        'LOBSTERAI_MODEL_COMPAT_API = "lobsterai-model-compat"',
+        'export const MODEL_TRANSPORT_APIS',
+        'api?: ModelTransportApi',
+      ],
+    },
+    {
+      file: 'src/config/zod-schema.core.ts',
+      snippets: [
+        'const ModelTransportApiSchema = z.enum(MODEL_TRANSPORT_APIS)',
+        'api: ModelTransportApiSchema.optional()',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/model.inline-provider.test.ts',
+      snippets: [
+        'keeps a provider API owner out of model transport resolution',
+        'api: "lobsterai-model-compat"',
+      ],
+    },
+    {
+      file: 'src/config/zod-schema.model-api-owner.test.ts',
+      snippets: [
+        'rejects arbitrary provider API owner strings',
+        'rejects recursive model-level compatibility ownership',
+      ],
+    },
+  ],
+  'openclaw-openai-compatible-replay-errors.patch': [
+    {
+      file: 'src/llm/utils/provider-error.ts',
+      snippets: [
+        'export function formatProviderError',
+        'const MAX_ERROR_BODY_LENGTH = 4000',
+      ],
+    },
+    {
+      file: 'src/llm/providers/transform-messages.null-content.test.ts',
+      snippets: [
+        'normalizes null or missing content before provider transforms',
+      ],
+    },
+    {
+      file: 'src/llm/providers/openai-completions.test.ts',
+      snippets: [
+        'surfaces HTTP response body text from OpenAI-compatible errors',
+      ],
+    },
+  ],
+  'openclaw-repeated-tool-call-id.patch': [
+    {
+      file: 'src/agents/session-transcript-repair.ts',
+      snippets: [
+        'type ToolCallOccurrence = {',
+        'function buildToolUseFrames',
+        'Provider ids are opaque and can legitimately repeat',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/replay-history.ts',
+      snippets: [
+        'sanitizeToolCallIds: false',
+        'const pairedToolCalls =',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.test.ts',
+      snippets: [
+        'pairs repeated raw ids before assigning provider-safe occurrence ids',
+        'keeps same-turn repeated calls and results aligned after id rewriting',
+      ],
+    },
+    {
+      file: 'src/agents/transport-message-transform.test.ts',
+      snippets: [
+        "does not reassign a dropped errored turn's repeated-id result to an older turn",
+      ],
+    },
+  ],
   'openclaw-dashscope-context-cache.patch': [
     {
       file: 'src/agents/embedded-agent-runner/prompt-cache-retention.ts',
@@ -140,6 +354,10 @@ const strongPatchValidators = {
       snippets: [
         'truncateOversizedToolResultsInMessages(\n            activeSession.messages,',
         'promptToolResultMaxChars,\n            null,',
+        'truncateOversizedToolResultsInMessages(\n                    messages,\n                    contextTokenBudget,\n                    promptToolResultMaxChars,\n                    null,',
+      ],
+      forbiddenSnippets: [
+        'promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER',
       ],
     },
     {
@@ -153,17 +371,6 @@ const strongPatchValidators = {
     {
       file: 'src/agents/embedded-agent-runner/tool-result-truncation.test.ts',
       snippets: ['keeps prompt projections byte-stable as history grows'],
-    },
-  ],
-  'zz-openclaw-deepseek-cache-probe.patch': [
-    {
-      file: 'src/agents/openai-transport-stream.ts',
-      snippets: [
-        'DEEPSEEK_CACHE_PROBE_LOG_PREFIX = "[DeepSeekCacheProbe]"',
-        'logDeepSeekCacheRequestProbe',
-        'logDeepSeekCacheProbeResult',
-        'cacheRead / promptTokens',
-      ],
     },
   ],
   'zz-openclaw-task-cwd-system-prompt.patch': [
@@ -205,6 +412,947 @@ const strongPatchValidators = {
   ],
 };
 
+const v20260801StrongPatchValidators = {
+  'openclaw-gateway-fast-path-rejection-handler.patch': [
+    {
+      file: 'src/cli/run-main.ts',
+      snippets: ['let unhandledRejectionHandlerInstalled = false;', 'if (!unhandledRejectionHandlerInstalled) {'],
+      orderedSnippets: [
+        'if (isGatewayRunFastPathArgv(normalizedArgv)) {',
+        'installUnhandledRejectionHandler();',
+        'unhandledRejectionHandlerInstalled = true;',
+        '(await tryRunGatewayRunFastPath(normalizedArgv, startupTrace))',
+      ],
+    },
+  ],
+  'openclaw-browser-navigation-error-containment.patch': [
+    {
+      file: 'extensions/browser/src/browser/pw-session-navigation.ts',
+      snippets: [
+        'const NAVIGATION_GUARD_CLEANUP_TIMEOUT_MS = 1_000;',
+        'const stopSignal = new Promise<void>',
+        'requestKind === "subframe" && isTransientNetworkError(err)',
+        'await cleanupGuard();',
+        'throw toErrorObject(guardError.error, "Non-Error thrown");',
+      ],
+    },
+    {
+      file: 'extensions/browser/src/browser/pw-session-navigation.rejection.test.ts',
+      snippets: [
+        'browser navigation callback rejection ownership',
+        'isolates subframe %s while preserving a successful main document',
+        'aborts pending DNS at navigation timeout and observes its late %s',
+      ],
+    },
+  ],
+  'openclaw-browser-cdp-dispatch-rejection.patch': [
+    {
+      file: 'extensions/browser/src/browser/pw-session-cdp-transport.ts',
+      snippets: [
+        'void Promise.resolve(onMessage(message)).catch((error: unknown) => {',
+        'closeTransportSocket(formatErrorMessage(error));',
+      ],
+    },
+  ],
+  'openclaw-transcript-replay-validation.patch': [
+    {
+      file: 'packages/ai/src/transcript-replay-validation.ts',
+      snippets: [
+        'export function sanitizeReplayMessages(',
+        'export function prepareReplayMessages(',
+        'typeof value === "string" && value.trim().length > 0',
+        'preserveLegacyToolResults',
+        'locations.length < 8',
+        '[transcript-replay] Invalid historical fields omitted:',
+      ],
+    },
+    {
+      file: 'packages/ai/src/transcript-transform.ts',
+      snippets: ['prepareReplayMessages(messages).map(', 'if (block.type !== "toolCall")'],
+    },
+    {
+      file: 'packages/ai/src/internal/shared.ts',
+      snippets: ['export * from "../transcript-replay-validation.js";'],
+    },
+    {
+      file: 'src/agents/transport-message-transform.ts',
+      snippets: [
+        'const validated = prepareReplayMessages(messages,',
+        'preserveLegacyToolResults: allowSyntheticToolResults',
+        'const original = validated[index];',
+      ],
+    },
+  ],
+  'openclaw-compaction-summary-format.patch': [
+    {
+      file: 'packages/agent-core/src/harness/compaction/compaction.ts',
+      snippets: [
+        'export type CompactionSummaryPrompt =',
+        'summaryPrompt?: CompactionSummaryPrompt',
+        'const selectedPrompt =',
+        'summaryPrompt?.kind === "turn-prefix" ? 0.5 : 0.8',
+      ],
+      forbiddenSnippets: ['const prompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;'],
+    },
+    {
+      file: 'src/agents/agent-hooks/compaction-safeguard.ts',
+      snippets: ['customInstructions: correctiveInstructions,'],
+      orderedSnippets: [
+        'messages: pruned.droppedMessagesList,',
+        'summaryPrompt: { kind: "custom", instructions: structuredInstructions },',
+        'messages: messagesToSummarize,',
+        'summaryPrompt: { kind: "custom", instructions: structuredInstructions },',
+        'customInstructions: correctiveInstructions,',
+        'summaryPrompt: { kind: "turn-prefix" },',
+      ],
+      forbiddenSnippets: ['TURN_PREFIX_SUMMARIZATION_PROMPT,'],
+    },
+    {
+      file: 'src/agents/compaction.ts',
+      snippets: ['summaryPrompt?: CompactionSummaryPrompt;', 'params.summaryPrompt,'],
+    },
+    {
+      file: 'src/agents/sessions/compaction/compaction.ts',
+      snippets: ['summaryPrompt?: CompactionSummaryPrompt,', '      summaryPrompt,'],
+    },
+    ...[
+      'packages/agent-core/src/index.ts',
+      'src/agents/runtime/index.ts',
+      'src/plugin-sdk/agent-core.ts',
+    ].map((file) => ({ file, snippets: ['CompactionSummaryPrompt,'] })),
+    {
+      file: 'src/agents/compaction.summary-format.test.ts',
+      snippets: [
+        'retains $kind format through chunk updates and stage merge',
+        'retains caller format and previous summary when oversized history needs fallback',
+      ],
+    },
+    {
+      file: 'src/agents/agent-hooks/compaction-safeguard.test.ts',
+      snippets: ['sends one authoritative safeguard summary format (prefix=%s)'],
+    },
+  ],
+  'openclaw-compaction-summary-section-order.patch': [
+    {
+      file: 'src/agents/agent-hooks/compaction-safeguard-quality.ts',
+      snippets: [
+        'const seenSections = new Set<number>()',
+        'if (seenSections.has(nextSectionIndex))',
+        'if (seenSections.size !== REQUIRED_SUMMARY_SECTIONS.length)',
+      ],
+      forbiddenSnippets: ['const nextHeading = REQUIRED_SUMMARY_SECTIONS[sectionIndex + 1]'],
+    },
+    {
+      file: 'src/agents/agent-hooks/compaction-safeguard.test.ts',
+      snippets: ['retains audit facts under suffix pressure for every ordering of complete summary sections'],
+    },
+  ],
+  'openclaw-lobsterai-startup-recovery.patch': [
+    {
+      file: 'src/agents/main-session-recovery/main-session-restart-recovery-marking.ts',
+      snippets: ['const LOBSTERAI_SESSION_PREFIX = "lobsterai:"'],
+      orderedSnippets: [
+        'export async function markStartupOrphanedMainSessionsForRecovery',
+        'entry.abortedLastRun === true',
+        'hasCurrentProcessOwner({',
+        'if (isMainRestartRecoveryAggregateTerminalOnly(entry))',
+        'return { action: "retire_terminal" }',
+        'parseAgentSessionKey(sessionKey)?.rest ?? sessionKey.trim()',
+        'sessionNamespace.startsWith(LOBSTERAI_SESSION_PREFIX)',
+        'sessionNamespace.slice(LOBSTERAI_SESSION_PREFIX.length).trim()',
+        'return undefined',
+        'return { action: "mark" }',
+      ],
+    },
+    {
+      file: 'src/agents/main-session-recovery/main-session-restart-recovery.test.ts',
+      snippets: [
+        'does not revive unmarked $age running session $sessionKey',
+        'preserves explicit recovery of $sessionKey across consecutive gateway restarts',
+        'retires terminal-only managed recovery residue before skipping new orphan marks',
+        'keeps upstream orphan recovery for unrelated namespace %s',
+      ],
+    },
+  ],
+  'openclaw-aborted-tool-loop-breaker.patch': [
+    {
+      file: 'src/agents/embedded-agent-runner/replay-history.ts',
+      snippets: [
+        'MAX_PRESERVED_ABORTED_TOOL_HISTORY_PAIRS = 3',
+        'function sanitizeAbortedToolLoopHistory',
+        'const sanitizedAbortedToolLoops = sanitizeAbortedToolLoopHistory',
+      ],
+    },
+    {
+      file: 'src/agents/tool-loop-detection.ts',
+      snippets: [
+        'ABORTED_TOOL_LOOP_CRITICAL_THRESHOLD = 8',
+        'ABORTED_TOOL_LOOP_TOTAL_THRESHOLD = 20',
+        'if (abortedLoop.total >= ABORTED_TOOL_LOOP_TOTAL_THRESHOLD)',
+      ],
+    },
+    {
+      file: 'src/agents/tool-loop-detection.test.ts',
+      snippets: ['blocks repeated aborted tool results before the generic critical threshold'],
+    },
+  ],
+  'openclaw-browser-blocked-hostnames.patch': [
+    {
+      file: 'extensions/browser/src/browser/config.ts',
+      snippets: ['blockedHostnames: normalizeStringList(rawPolicy?.blockedHostnames)'],
+    },
+    {
+      file: 'src/infra/net/ssrf.ts',
+      snippets: [
+        'blockedHostnames?: string[]',
+        'function isHostnameBlockedByPolicy',
+        'Blocked hostname (configured blocklist)',
+      ],
+    },
+    {
+      file: 'src/infra/net/ssrf.pinning.test.ts',
+      snippets: ['blocks configured hostnames before DNS lookup', 'supports wildcard hostname blocklist patterns'],
+    },
+  ],
+  'openclaw-chat-send-cwd-decoupling.patch': [
+    {
+      file: 'packages/gateway-protocol/src/schema/logs-chat.ts',
+      snippets: ['cwd: Type.Optional(Type.String())'],
+    },
+    {
+      file: 'src/gateway/server-methods/chat-send-agent-dispatch.ts',
+      snippets: ['cwd: normalizeOptionalText(p.cwd)'],
+    },
+    {
+      file: 'packages/gateway-protocol/src/index.test.ts',
+      snippets: ['cwd: "/tmp/work"'],
+    },
+  ],
+  'openclaw-cli-startup-metadata-windows-timeout.patch': [
+    {
+      file: 'scripts/write-cli-startup-metadata.ts',
+      snippets: [
+        'Cold plugin discovery can exceed two minutes when two help renders contend on Windows.',
+        'process.platform === "win32" ? 300_000 : 120_000',
+      ],
+    },
+  ],
+  'openclaw-cron-skip-missed-jobs.patch': [
+    {
+      file: 'src/config/types.cron.ts',
+      snippets: ['skipMissedJobs?: boolean'],
+    },
+    {
+      file: 'src/cron/service/timer-catchup.ts',
+      snippets: [
+        'function fastForwardMissedRecurringJobs',
+        'state.deps.cronConfig?.skipMissedJobs === true',
+      ],
+    },
+    {
+      file: 'src/cron/service/timer.skip-missed-jobs.test.ts',
+      snippets: ['fast-forwards missed recurring jobs instead of replaying them'],
+    },
+  ],
+  'openclaw-exec-command-description.patch': [
+    {
+      file: 'src/agents/bash-tools.schemas.ts',
+      snippets: [
+        "in the user's language; shown to the user instead of the command.",
+        'description: execSchema.properties.description,',
+      ],
+    },
+  ],
+  'openclaw-im-bound-agent-run-cwd.patch': [
+    {
+      file: 'src/agents/agent-scope-config.ts',
+      snippets: ['export function resolveAgentRunCwd', 'cfg.agents?.defaults?.cwd?.trim()'],
+    },
+    {
+      file: 'src/auto-reply/reply/get-reply.ts',
+      snippets: [
+        'resolveAgentRunCwd(cfg, agentId, optsWithCommandQueueOverride?.cwd) ?? workspaceDir',
+        'cwd: runCwd',
+      ],
+    },
+    {
+      file: 'src/config/zod-schema.agent-runtime.ts',
+      snippets: ['cwd: z.string().optional()'],
+    },
+  ],
+  'openclaw-lancedb-optional-transformers.patch': [
+    {
+      file: 'pnpm-workspace.yaml',
+      snippets: ['"@lancedb/lancedb>@huggingface/transformers": "-"'],
+    },
+    {
+      file: 'pnpm-lock.yaml',
+      snippets: ["'@lancedb/lancedb>@huggingface/transformers': '-'"],
+      forbiddenSnippets: [
+        "'@huggingface/transformers@3.0.2':",
+        'onnxruntime-node@1.19.2:',
+      ],
+    },
+  ],
+  'openclaw-live-edit-diff-partial-args.patch': [
+    {
+      file: 'src/agents/embedded-agent-live-edit-diff.ts',
+      snippets: [
+        ': typeof block?.partialArgs === "string"',
+        '? block.partialArgs',
+      ],
+    },
+  ],
+  'openclaw-lobsterai-model-compat-api.patch': [
+    {
+      file: 'src/config/types.models.ts',
+      snippets: [
+        'LOBSTERAI_MODEL_COMPAT_API = "lobsterai-model-compat"',
+        'export const MODEL_TRANSPORT_APIS',
+        'export const MODEL_APIS = [...MODEL_TRANSPORT_APIS, LOBSTERAI_MODEL_COMPAT_API]',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/model.inline-provider.ts',
+      snippets: ['function resolveInlineProviderTransport'],
+    },
+    {
+      file: 'src/config/zod-schema.model-api-owner.test.ts',
+      snippets: [
+        'accepts the LobsterAI owner while models keep explicit transports',
+        'rejects compatibility ownership at model level',
+      ],
+    },
+  ],
+  'openclaw-malformed-tool-call-continuation.patch': [
+    {
+      file: 'src/agents/embedded-agent-runner/run/malformed-tool-call-recovery.ts',
+      snippets: [
+        'export const MALFORMED_TOOL_CALL_RETRY_LIMIT = 2',
+        'export function isMalformedToolCallAssistantTurn',
+        'export function continueAfterMalformedToolCall',
+        'malformed tool call rejected before execution:',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/terminal-resolution.ts',
+      snippets: ['!settledTurnFinalizationAttempted && continueAfterMalformedToolCall(input)'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts',
+      snippets: ['isMalformedToolCallAssistantTurn('],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/terminal-retry-state.ts',
+      snippets: ['malformedToolCallAttempts: 0'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/terminal-resolution.malformed-tool-call.test.ts',
+      snippets: [
+        "continues a side-effecting turn after the provider's tool call is rejected",
+        'does not request isolated finalization for a rejected tool call',
+      ],
+    },
+  ],
+  'openclaw-openai-compatible-cache-control.patch': [
+    {
+      file: 'packages/ai/src/transports/openai-completions-params.ts',
+      snippets: [
+        'function resolveAnthropicCacheControl',
+        'compat.cacheControlFormat !== "anthropic"',
+        'function applyAnthropicCacheControl',
+        'preserveSystemPromptCacheBoundary: cacheControl !== undefined',
+      ],
+    },
+    {
+      file: 'packages/ai/src/transports/openai-completions-params.cache-and-compat.test.ts',
+      snippets: ['adds Anthropic cache-control markers for opted-in compatible providers'],
+    },
+  ],
+  'openclaw-openai-completions-output-budget.patch': [
+    {
+      file: 'packages/ai/src/transports/openai-completions-params.ts',
+      snippets: ['const MIN_USEFUL_OUTPUT_TOKENS = 16'],
+      orderedSnippets: [
+        'clampedMaxTokens >= effectiveContextTokens',
+        'const remainingBudget = Math.floor(effectiveContextTokens - estimatedInputTokens - 1)',
+        'remainingBudget < MIN_USEFUL_OUTPUT_TOKENS',
+        'Context overflow: insufficient estimated output budget',
+      ],
+      forbiddenSnippets: ['Math.max(1, effectiveContextTokens - estimatedInputTokens - 1)'],
+    },
+    {
+      file: 'packages/ai/src/transports/openai-completions-output-budget.test.ts',
+      snippets: [
+        'preserves the ordinary requested output budget',
+        'uses a strict HTTP endpoint to distinguish an estimate from actual prompt usage',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts',
+      snippets: ['bounds compaction recovery for an output budget rejection'],
+    },
+  ],
+  'openclaw-openai-completions-tool-call-repair.patch': [
+    {
+      file: 'packages/ai/src/providers/openai-completions-tool-calls.ts',
+      snippets: [
+        'const MALFORMED_TOOL_CALL_DIAGNOSTIC_TYPE = "malformed_tool_call_arguments"',
+        'repairStringLiterals: true',
+        'readMalformedToolCallArgumentsDiagnostics(error)',
+      ],
+      forbiddenSnippets: ['finalizeTerminalToolCallArguments(toolCalls, (call) => call.partialArgs);'],
+    },
+    {
+      file: 'packages/ai/src/transports/transport-stream-shared.ts',
+      snippets: [
+        'function repairTerminalToolCallArguments',
+        'class MalformedToolCallArgumentsError extends Error',
+        'export function readMalformedToolCallArgumentsDiagnostics',
+      ],
+    },
+    {
+      file: 'packages/ai/src/utils/json-parse.ts',
+      snippets: ['preserveValidControlEscapes'],
+    },
+    {
+      file: 'packages/ai/src/transports/openai-completions-stream.ts',
+      snippets: ['providerStopReason: finishReason,'],
+    },
+    {
+      file: 'packages/ai/src/providers/openai-completions.legacy-function-call.test.ts',
+      snippets: ['repairs a complete modern tool terminal with $reason'],
+    },
+  ],
+  'openclaw-plugin-archive-windows-timeout.patch': [
+    {
+      file: 'src/plugins/install-package.ts',
+      snippets: [
+        'Large signed plugin archives can take several minutes to scan and unpack on Windows.',
+        'DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS = process.platform === "win32" ? 900_000 : 120_000',
+        'params.timeoutMs ?? DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS',
+      ],
+    },
+  ],
+  'openclaw-project-memory-negative-probe.patch': [
+    {
+      file: 'src/agents/project-memory-bootstrap.ts',
+      snippets: [
+        'runtime.probeProjectMemoryPresence',
+        'if (presence === "none")',
+        'Any uncertainty preserves the existing',
+      ],
+    },
+    {
+      file: 'extensions/memory-core/src/project-memory-probe.ts',
+      snippets: [
+        'PROJECT_MEMORY_SOURCE_MAX_BYTES',
+        'The bootstrap consumer only admits curated candidates',
+        'return probeProjectMemorySource(path.join(workspaceDir, "MEMORY.md"))',
+      ],
+    },
+    {
+      file: 'src/plugin-sdk/agent-scope-runtime.ts',
+      snippets: ['resolveAgentWorkspaceDir'],
+    },
+    {
+      file: 'extensions/memory-core/src/project-memory-probe.test.ts',
+      snippets: [
+        'proves absence when the canonical source does not exist',
+        'reports possible project memory without duplicating candidate filtering',
+        'fails open when the canonical source cannot be safely inspected',
+      ],
+    },
+    {
+      file: 'src/agents/project-memory-bootstrap.test.ts',
+      snippets: [
+        'skips full manager initialization when the runtime proves project memory is absent',
+        'fails open to the existing manager path when the project-memory probe throws',
+      ],
+    },
+  ],
+  'openclaw-provider-auth-warm-cooperative-exit.patch': [
+    {
+      file: 'src/agents/model-provider-auth.ts',
+      snippets: [
+        'PROVIDER_AUTH_WARM_EXIT_GRACE_MS = 2_000',
+        'const terminateFallback = setTimeout',
+      ],
+    },
+    {
+      file: 'src/agents/model-provider-auth.worker.ts',
+      snippets: ['Avoid an Electron worker-isolate teardown race', 'process.exit(0)'],
+    },
+  ],
+  'openclaw-provider-fetch-transient-retry.patch': [
+    {
+      file: 'src/agents/provider-transport-fetch.ts',
+      snippets: [
+        'TRANSIENT_PROVIDER_FETCH_RETRY_DELAY_MS = 750',
+        'function isTransientProviderFetchTransportError',
+        'function shouldRetryProviderFetch',
+        '[model-fetch] transient transport failure; retrying provider=',
+      ],
+    },
+    {
+      file: 'src/agents/provider-transport-fetch.test.ts',
+      snippets: [
+        'retries a replayable request once after a transient transport failure',
+        'does not retry a transient failure when the body cannot be replayed',
+      ],
+    },
+  ],
+  'openclaw-run-failure-detail.patch': [
+    {
+      file: 'src/auto-reply/reply/agent-runner-failure-reply.ts',
+      snippets: ['text: formatForwardedExternalRunFailureText(normalizedMessage)'],
+      forbiddenSnippets: ['options?.includeDetails\n      ? formatForwardedExternalRunFailureText'],
+    },
+    {
+      file: 'src/auto-reply/reply/agent-runner-failure-reply.test.ts',
+      snippets: ['forwards sanitized failure detail even when verbose details are not requested'],
+    },
+  ],
+  'openclaw-safe-error-metadata.patch': [
+    {
+      file: 'src/agents/embedded-agent-subscribe.handlers.lifecycle.ts',
+      snippets: ['let lifecycleErrorMetadata', '...lifecycleErrorMetadata'],
+    },
+    {
+      file: 'src/gateway/server-chat.ts',
+      snippets: [
+        'const SAFE_CHAT_ERROR_METADATA_KEYS = [',
+        'function extractSafeChatErrorMetadata',
+        'errorMetadata: extractSafeChatErrorMetadata(evt.data)',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts',
+      snippets: ['providerRuntimeFailureKind: "timeout"', 'providerErrorType: "overloaded_error"'],
+    },
+  ],
+  'openclaw-session-goal-rpc.patch': [
+    {
+      file: 'packages/gateway-protocol/src/schema/sessions-goal.ts',
+      snippets: ['SessionsGoalCompatParamsSchema', 'Type.Literal("blocked")'],
+    },
+    {
+      file: 'src/gateway/server-methods/sessions-goal.ts',
+      snippets: [
+        'async function handleSessionGoalCompat',
+        'method: "sessions.goal"',
+        'createSessionGoal',
+        'updateSessionGoalStatus',
+      ],
+    },
+    {
+      file: 'src/gateway/server-methods/sessions-goal.test.ts',
+      snippets: ['keeps the LobsterAI compatibility RPC as a mutation-only Goal surface'],
+    },
+  ],
+  'openclaw-shell-snapshot-electron-node-env.patch': [
+    {
+      file: 'src/agents/shell-snapshot.ts',
+      snippets: [
+        'const IS_ELECTRON_RUNTIME = Boolean(process.versions.electron)',
+        'function buildEnvCaptureNodeCommand',
+        'ELECTRON_RUN_AS_NODE=1',
+      ],
+    },
+  ],
+  'openclaw-skip-disabled-web-search-discovery.patch': [
+    {
+      file: 'src/secrets/runtime-web-tools.ts',
+      snippets: [
+        'const searchEnabled = search?.enabled !== false',
+        'searchEnabled && hasPluginWebSearchConfig',
+        'searchEnabled && (search || hasPluginWebSearchConfig)',
+      ],
+      forbiddenSnippets: ['if (search || hasPluginWebSearchConfig)'],
+    },
+    {
+      file: 'src/secrets/runtime-fast-path.ts',
+      snippets: [
+        'const searchExplicitlyDisabled = web?.search?.enabled === false',
+        '"search" in webRecord && !searchExplicitlyDisabled',
+      ],
+    },
+    {
+      file: 'src/secrets/runtime-web-tools.test.ts',
+      snippets: ['skips provider discovery when web search is explicitly disabled'],
+    },
+    {
+      file: 'src/secrets/runtime.fast-path.test.ts',
+      snippets: ['uses the fast path when web %s is explicitly disabled'],
+    },
+  ],
+  'openclaw-skip-derive-prompt-segments-deadloop.patch': [
+    {
+      file: 'src/auto-reply/reply/agent-runner-result-complete.ts',
+      snippets: [
+        'Prompt segmentation is trace-only',
+        'const promptSegments = runResult.meta?.promptSegments',
+      ],
+      forbiddenSnippets: ['derivePromptSegments(rawUserText)'],
+    },
+  ],
+  'openclaw-subagent-cleanup-finalize-best-effort.patch': [
+    {
+      file: 'src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts',
+      snippets: [
+        'const emitCompletionEndedHookBestEffort',
+        'failed to emit subagent ended hook during cleanup',
+        '"announced-cleanup-finalize"',
+      ],
+    },
+    {
+      file: 'src/shared/runtime-import.ts',
+      snippets: ['GATEWAY_BUNDLE_BASENAME = "gateway-bundle.mjs"', './dist/${joined.slice(2)}'],
+    },
+    {
+      file: 'src/agents/subagents/registry/subagent-registry-lifecycle.test.ts',
+      snippets: ['does not reject cleanup after bookkeeping when the ended hook throws'],
+    },
+  ],
+  'openclaw-view-image-task-cwd.patch': [
+    {
+      file: 'src/agents/openclaw-tools.ts',
+      snippets: ['cwd: options?.cwd'],
+    },
+    {
+      file: 'src/agents/tools/image-tool.ts',
+      snippets: [
+        'const runtimeCwd = options?.cwd?.trim() || options?.workspaceDir',
+        'return resolve(runtimeCwd, normalizedRef)',
+        'containmentRoot: sandboxConfig ? undefined : (options?.fsPolicy?.root ?? runtimeCwd)',
+      ],
+    },
+    {
+      file: 'src/agents/tools/media-tool-shared.ts',
+      snippets: [
+        'containmentRoot?: string',
+        'return containmentRoot ? [containmentRoot] : workspaceDir ? [workspaceDir] : []',
+      ],
+    },
+    {
+      file: 'src/agents/tools/image-tool.test.ts',
+      snippets: ['resolves and authorizes local image paths against the runtime cwd'],
+    },
+  ],
+  'openclaw-windows-file-path-redaction.patch': [
+    {
+      file: 'src/agents/embedded-agent-error-observation.ts',
+      snippets: [
+        'return redactToolPayloadTextWithConfig(text, {',
+      ],
+    },
+    {
+      file: 'src/logging/redact-patterns.ts',
+      snippets: [
+        'export const AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN',
+      ],
+    },
+    {
+      file: 'src/logging/redact-file-path.ts',
+      snippets: [
+        'export function isAwsSecretFilePathMatch',
+        'const FILE_PATH_CONTEXT_LIMIT = 4096',
+        'const hasFilenameContinuation =',
+        'start >= tokenStart',
+      ],
+    },
+    {
+      file: 'src/logging/redact.ts',
+      snippets: [
+        'const bareAwsSecretPatterns = new WeakSet<RegExp>()',
+        'builtIn && raw === AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN',
+        'builtInPatternStarts.set(patterns, custom.length)',
+        'builtInPatternStarts.set(patterns, 0)',
+        'isAwsSecretFilePathMatch(',
+        'context?.input ?? ""',
+        'match.index + fullMatch.length - selected.value.length',
+      ],
+    },
+    {
+      file: 'src/logging/redact.test.ts',
+      snippets: ['const windowsPath = "C:/Users/tester/lobsterai/project/chinajoy-ppt/deck.pptx"'],
+    },
+    {
+      file: 'src/logging/redact-file-path.test.ts',
+      snippets: [
+        'keeps custom and registered secret rules authoritative inside paths',
+        'still masks explicitly labeled path-shaped credentials',
+      ],
+    },
+  ],
+  'zz-openclaw-task-cwd-system-prompt.patch': [
+    {
+      file: 'src/agents/system-prompt.ts',
+      snippets: [
+        'runtimeCwd?: string',
+        'const hasSeparateRuntimeCwd =',
+        '"## Directory Roles"',
+        '`Task working directory: ${sanitizedRuntimeCwd}`',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts',
+      snippets: ['runtimeCwd: params.effectiveCwd'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/prepared-compaction-runtime.ts',
+      snippets: ['runtimeCwd: effectiveCwd'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt.cwd-split.test.ts',
+      snippets: ['expect(promptCall?.runtimeCwd).toBe(taskRepo)'],
+    },
+  ],
+  'openclaw-active-exec-sessions-runtime-context.patch': [
+    {
+      file: 'src/agents/runtime-facts-prompt.ts',
+      snippets: [
+        'export function buildActiveProcessSessionRuntimeFacts',
+        'export const ACTIVE_EXEC_SESSIONS_HEADER = "Active exec sessions:"',
+      ],
+    },
+    {
+      file: 'src/agents/system-prompt.ts',
+      snippets: [
+        'Before input: process log; log/poll shows waitingForInput/stdinWritable. Lost id: process list.',
+      ],
+      forbiddenSnippets: ['activeProcessSessions', 'buildActiveProcessSessionReferenceLines'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts',
+      snippets: ['senderIsOwner: attempt.senderIsOwner,'],
+      forbiddenSnippets: ['listActiveProcessSessionReferences', 'activeProcessSessions'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt-prompt-build.ts',
+      snippets: [
+        'buildActiveProcessSessionRuntimeFacts({',
+        '!input.capabilityToolNames.has("process")',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt-settle.ts',
+      snippets: [
+        'capabilityToolNames: toolSearchRunPlan.capabilityToolNames',
+        'sandboxSessionKey: input.setup.sandboxSessionKey',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt-prompt-context.test.ts',
+      snippets: [
+        'carries background process snapshots as hidden runtime context, not system prompt',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/system-prompt.test.ts',
+      snippets: ['keeps process guidance static and never renders background process snapshots'],
+    },
+  ],
+  'openclaw-omit-default-model-from-system-prompt.patch': [
+    {
+      file: 'src/agents/system-prompt.ts',
+      snippets: ['runtimeInfo?.model ?'],
+      forbiddenSnippets: ['default_model='],
+    },
+    {
+      file: 'src/auto-reply/reply/session-reset-prompt.ts',
+      snippets: ['Execute your Session Startup sequence now'],
+      forbiddenSnippets: ['default_model'],
+    },
+    {
+      file: 'src/agents/system-prompt-default-model.test.ts',
+      snippets: [
+        'provider requests stable when another session changes the default model',
+        'expect(payload).toEqual(originalPayload)',
+        'still reports a change to the actual running model',
+      ],
+    },
+  ],
+  'openclaw-managed-npm-junction-cleanup.patch': [
+    {
+      file: 'src/commands/doctor-plugin-registry.ts',
+      snippets: ['removeManagedNpmPackages(stale, removeManagedNpmDependency)'],
+      forbiddenSnippets: ['fs.rmSync(params.packageDir'],
+    },
+    {
+      file: 'src/commands/doctor-plugin-npm-cleanup.ts',
+      snippets: [
+        'fs.lstatSync(target, { throwIfNoEntry: false })',
+        'fs.unlinkSync(target)',
+        'fs.rmdirSync(target)',
+        '".openclaw-npm-cleanup-"',
+        'fs.renameSync(entry.packageDir, stagedDir)',
+        'fs.copyFileSync(backupPath, filePath)',
+        'cleanupQuarantines(quarantines.values())',
+        'Managed npm cleanup rollback failed; recovery files retained at',
+      ],
+      forbiddenSnippets: ['fs.rmSync('],
+    },
+    {
+      file: 'src/commands/doctor-plugin-registry.cleanup.test.ts',
+      snippets: [
+        'removes stale packages without deleting nested junction targets',
+        'restores the $layout batch after a destructive $name write failure',
+        'retains original metadata and reports recovery paths when restoring a snapshot fails',
+        'persists all retirements and reports retained quarantine when payload cleanup fails',
+      ],
+    },
+  ],
+  'openclaw-memory-sidecar-archive-generations.patch': [
+    {
+      file: 'extensions/memory-core/src/migration/doctor-memory-sidecar.ts',
+      snippets: [
+        'archiveRoot = await root(path.dirname(params.source.legacyPath)',
+        'archiveSuffix = generation === 1 ? ".migrated" : `.migrated.${generation}`',
+        'await fs.lstat(`${params.source.legacyPath}${suffix}${archiveSuffix}`)',
+        'await archiveRoot.move(path.basename(sourcePath), path.basename(archivedPath))',
+        'path.basename(entry.archivedPath),',
+        'path.basename(entry.sourcePath),',
+      ],
+      forbiddenSnippets: [
+        'Left migrated Memory Core legacy memory index sidecar in place because',
+      ],
+    },
+    {
+      file: 'extensions/memory-core/doctor-contract-api.test.ts',
+      snippets: [
+        'archives a conflicting sidecar despite an existing archive and converges on retry',
+        'preserves the SQLite journal family across archive and retry',
+        'does not overwrite an archive created after generation selection',
+      ],
+    },
+  ],
+  'openclaw-sqlite-readonly-result-file.patch': [
+    {
+      file: 'src/infra/sqlite-readonly-location.ts',
+      snippets: [
+        'const resultPath = await createSqliteReadOnlyResultFile();',
+        'const resultPath = createSqliteReadOnlyResultFileSync();',
+        'readSqliteReadOnlyWorkerResult(params.resultPath, params.stderr)',
+        'removeTempDirectory(path.dirname(resultPath));',
+        'stderr: result.stderr ?? "", resultPath',
+      ],
+    },
+    {
+      file: 'src/infra/sqlite-readonly-location.worker.ts',
+      snippets: [
+        'process.argv[5] !== SQLITE_READONLY_RESULT_FILE_ARG',
+        'writeSqliteReadOnlyResultFile(resultPath, { ok: true, location: prepared.location });',
+        'prepared.cleanup();',
+      ],
+    },
+    {
+      file: 'src/infra/sqlite-readonly-result-file.ts',
+      snippets: [
+        'createPrivateSqliteTempDirectory(',
+        'createPrivateSqliteTempDirectorySync(',
+        'identity.nlink !== 1n',
+        'MAX_RESULT_BYTES + 1',
+        'flag: "wx"',
+        'mode: 0o600',
+      ],
+    },
+  ],
+  'openclaw-windows-private-directory-native.patch': [
+    {
+      file: 'src/infra/windows-private-directory.ts',
+      snippets: [
+        'const koffi: typeof import("koffi").default = require("koffi");',
+        'export function createPrivateWindowsDirectory(directoryPath: string): void {',
+        'export function createProfileScopedWindowsDirectory(',
+        'export function isWindowsPathInsideUserProfile(',
+      ],
+    },
+    {
+      file: 'src/infra/sqlite-private-directory.ts',
+      snippets: ['import { createPrivateWindowsDirectory } from "./windows-private-directory.js";'],
+      forbiddenSnippets: [
+        'Add-Type -TypeDefinition',
+        'resolveSystemBin("powershell")',
+        'OpenClawPrivateDirectory',
+      ],
+    },
+  ],
+  'openclaw-workspace-attestation-quarantine.patch': [
+    {
+      file: 'src/infra/state-migrations.workspace-setup.ts',
+      snippets: [
+        'isRecoverableWorkspaceAttestation(params.source, snapshot)',
+        'backupCorruptWorkspaceAttestation({',
+        'remainingMessage: "legacy workspace source remains after quarantine cleanup"',
+      ],
+    },
+    {
+      file: 'src/infra/state-migrations.workspace-attestation-recovery.ts',
+      snippets: [
+        'snapshot.size === snapshot.raw.length',
+        'await sourceRoot.create(relativePath, bytes, { mode: 0o600 })',
+        'workspace attestation backup verification failed',
+        'attestation recovery requires existing workspace content',
+      ],
+    },
+  ],
+};
+
+v20260801StrongPatchValidators['zzz-openclaw-plugin-degraded-startup.patch'] = [
+  {
+    file: 'src/commands/doctor-config-preflight-startup.ts',
+    snippets: [
+      'setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins)',
+      'params.startupMigrationWarnings.length > 0',
+      'throwStartupMigrationIdentityChanged()',
+    ],
+    forbiddenSnippets: ['pluginConvergence.blockingDiagnostic'],
+  },
+  {
+    file: 'src/commands/doctor-config-preflight-plugin-verification.ts',
+    snippets: ['failures: convergence.smokeFailures', 'failures: smoke.failures'],
+    forbiddenSnippets: ['blockingDiagnostic', '&& Boolean(failure.installPath)'],
+  },
+  {
+    file: 'src/plugins/discovery-availability.ts',
+    snippets: ['configDisposition: "preserve"', 'errorCode', 'createUnavailablePluginConfigPreserver'],
+  },
+  {
+    file: 'src/config/validation.ts',
+    snippets: ['availability.createUnavailablePluginConfigPreserver'],
+  },
+  {
+    file: 'src/plugins/doctor-compatibility-migration.ts',
+    snippets: ['cloneConfigWithResolutionFacts(params.config)', 'config: params.config, changes: [], warnings: [warning]'],
+  },
+  {
+    file: 'src/flows/plugin-health-availability.ts',
+    snippets: ['error instanceof HealthCheckRegistrationError', 'describePluginAvailabilityFailure'],
+  },
+];
+
+v20260801StrongPatchValidators['openclaw-skip-turn-replay-after-model-call.patch'] = [
+  {
+    file: 'src/auto-reply/reply/agent-runner-error-handler.ts',
+    snippets: ['  modelCallStarted: boolean;'],
+    orderedSnippets: [
+      '!params.overloadRetryState.modelCallStarted &&',
+      'params.overloadRetryState.retryCount < MAX_OVERLOAD_RETRIES',
+      '!params.overloadRetryState.modelCallStarted &&',
+      'params.consumeTransientHttpRetry()',
+    ],
+  },
+  {
+    file: 'src/auto-reply/reply/agent-runner-execution.ts',
+    snippets: ['overloadRetryState.modelCallStarted = true;', 'modelCallStarted: false,'],
+  },
+];
+
+const strongPatchValidators = openclawVersion === 'v2026.8.1'
+  ? v20260801StrongPatchValidators
+  : legacyStrongPatchValidators;
+
 function collectMissingStrongPatchSnippets(patchFile) {
   const validators = strongPatchValidators[patchFile];
   if (!validators) {
@@ -224,6 +1372,20 @@ function collectMissingStrongPatchSnippets(patchFile) {
       if (!source.includes(snippet)) {
         missing.push(`${validator.file}: missing ${JSON.stringify(snippet)}`);
       }
+    }
+    for (const snippet of validator.forbiddenSnippets ?? []) {
+      if (source.includes(snippet)) {
+        missing.push(`${validator.file}: contains forbidden ${JSON.stringify(snippet)}`);
+      }
+    }
+    let orderedSearchOffset = 0;
+    for (const snippet of validator.orderedSnippets ?? []) {
+      const index = source.indexOf(snippet, orderedSearchOffset);
+      if (index < 0) {
+        missing.push(`${validator.file}: missing ordered ${JSON.stringify(snippet)}`);
+        break;
+      }
+      orderedSearchOffset = index + snippet.length;
     }
   }
   return missing;

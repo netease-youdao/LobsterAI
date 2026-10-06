@@ -18,7 +18,12 @@ class FakeDb {
 
   pragma(_name: string) {
     // Report migrated columns as already present to skip ALTER TABLE migrations.
-    return [{ name: 'agent_id' }, { name: 'openclaw_session_key' }];
+    return [
+      { name: 'im_conversation_id', pk: 1 },
+      { name: 'platform', pk: 2 },
+      { name: 'agent_id', pk: 3 },
+      { name: 'openclaw_session_key', pk: 0 },
+    ];
   }
 
   prepare(sql: string) {
@@ -50,12 +55,14 @@ class FakeDb {
             created_at: Number(params[5]),
             last_active_at: Number(params[6]),
           };
-          this.mappings.set(this.mappingKey(row.im_conversation_id, row.platform), row);
+          this.mappings.set(this.mappingKey(row.im_conversation_id, row.platform, row.agent_id), row);
           this.writeCount++;
           return;
         }
-        if (sql.includes('UPDATE im_session_mappings SET openclaw_session_key = ?')) {
-          const key = this.mappingKey(String(params[2]), String(params[3]));
+        if (sql.includes('UPDATE im_session_mappings') && sql.includes('SET openclaw_session_key = ?')) {
+          const key = params.length >= 5
+            ? this.mappingKey(String(params[2]), String(params[3]), String(params[4]))
+            : this.findMappingKey(String(params[2]), String(params[3]));
           const row = this.mappings.get(key);
           if (row) {
             row.openclaw_session_key = String(params[0]);
@@ -64,8 +71,10 @@ class FakeDb {
           this.writeCount++;
           return;
         }
-        if (sql.includes('UPDATE im_session_mappings SET cowork_session_id = ?')) {
-          const key = this.mappingKey(String(params[4]), String(params[5]));
+        if (sql.includes('UPDATE im_session_mappings') && sql.includes('SET cowork_session_id = ?')) {
+          const key = params.length >= 7
+            ? this.mappingKey(String(params[4]), String(params[5]), String(params[6]))
+            : this.findMappingKey(String(params[4]), String(params[5]));
           const row = this.mappings.get(key);
           if (row) {
             row.cowork_session_id = String(params[0]);
@@ -78,8 +87,10 @@ class FakeDb {
           this.writeCount++;
           return;
         }
-        if (sql.includes('UPDATE im_session_mappings SET last_active_at = ?')) {
-          const key = this.mappingKey(String(params[1]), String(params[2]));
+        if (sql.includes('UPDATE im_session_mappings') && sql.includes('SET last_active_at = ?')) {
+          const key = params.length >= 4
+            ? this.mappingKey(String(params[1]), String(params[2]), String(params[3]))
+            : this.findMappingKey(String(params[1]), String(params[2]));
           const row = this.mappings.get(key);
           if (row) {
             row.last_active_at = Number(params[0]);
@@ -88,7 +99,16 @@ class FakeDb {
           return;
         }
         if (sql.includes('DELETE FROM im_session_mappings WHERE im_conversation_id = ?')) {
-          this.mappings.delete(this.mappingKey(String(params[0]), String(params[1])));
+          if (params.length >= 3) {
+            this.mappings.delete(this.mappingKey(String(params[0]), String(params[1]), String(params[2])));
+          } else {
+            for (const key of Array.from(this.mappings.keys())) {
+              const row = this.mappings.get(key);
+              if (row?.im_conversation_id === params[0] && row.platform === params[1]) {
+                this.mappings.delete(key);
+              }
+            }
+          }
           this.writeCount++;
           return;
         }
@@ -110,8 +130,15 @@ class FakeDb {
           const value = this.store.get(String(params[0]));
           return value !== undefined ? { value } : undefined;
         }
-        if (sql.includes('FROM im_session_mappings WHERE im_conversation_id = ?')) {
-          return this.mappings.get(this.mappingKey(String(params[0]), String(params[1])));
+        if (sql.includes('FROM im_session_mappings WHERE openclaw_session_key = ?')) {
+          const target = String(params[0]);
+          return Array.from(this.mappings.values()).find(row => row.openclaw_session_key === target);
+        }
+        if (sql.includes('FROM im_session_mappings') && sql.includes('im_conversation_id = ?')) {
+          if (params.length >= 3) {
+            return this.mappings.get(this.mappingKey(String(params[0]), String(params[1]), String(params[2])));
+          }
+          return this.mappings.get(this.findMappingKey(String(params[0]), String(params[1])));
         }
         if (sql.includes('FROM im_session_mappings WHERE cowork_session_id = ?')) {
           const target = String(params[0]);
@@ -131,8 +158,17 @@ class FakeDb {
     };
   }
 
-  private mappingKey(imConversationId: string, platform: string) {
-    return `${platform}\0${imConversationId}`;
+  private mappingKey(imConversationId: string, platform: string, agentId: string) {
+    return `${platform}\0${imConversationId}\0${agentId}`;
+  }
+
+  private findMappingKey(imConversationId: string, platform: string): string {
+    for (const [key, row] of this.mappings.entries()) {
+      if (row.im_conversation_id === imConversationId && row.platform === platform) {
+        return key;
+      }
+    }
+    return this.mappingKey(imConversationId, platform, 'main');
   }
 
   getValue(key: string) {
@@ -208,6 +244,41 @@ test('IMStore persists OpenClaw session keys in IM session mappings', () => {
     coworkSessionId: 'cowork-2',
     agentId: 'agent-2',
     openClawSessionKey: 'agent:agent-2:openclaw-weixin:bot-1:direct:user-1',
+  });
+});
+
+test('IMStore distinguishes the same conversation under different agents', () => {
+  const db = new FakeDb();
+  const store = new IMStore(db as unknown as ConstructorParameters<typeof IMStore>[0]);
+
+  store.createSessionMapping(
+    'group:oc_sanitized',
+    'feishu',
+    'cowork-main',
+    'main',
+    'agent:main:feishu:group:oc_sanitized',
+  );
+  store.createSessionMapping(
+    'group:oc_sanitized',
+    'feishu',
+    'cowork-agent',
+    'agent-2',
+    'agent:agent-2:feishu:group:oc_sanitized',
+  );
+
+  expect(store.getSessionMapping('group:oc_sanitized', 'feishu', 'main')).toMatchObject({
+    coworkSessionId: 'cowork-main',
+    agentId: 'main',
+  });
+  expect(store.getSessionMapping('group:oc_sanitized', 'feishu', 'agent-2')).toMatchObject({
+    coworkSessionId: 'cowork-agent',
+    agentId: 'agent-2',
+  });
+  expect(
+    store.getSessionMappingByOpenClawSessionKey('agent:agent-2:feishu:group:oc_sanitized'),
+  ).toMatchObject({
+    coworkSessionId: 'cowork-agent',
+    agentId: 'agent-2',
   });
 });
 

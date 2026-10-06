@@ -11,6 +11,7 @@ import { CoworkSessionStatusValue, type CoworkSessionSummary } from '../../types
 import { getAgentDisplayNameById } from '../../utils/agentDisplay';
 import { formatAgentTaskRelativeTime } from '../agentSidebar/time';
 import Modal from '../common/Modal';
+import SkinPresentationScope from '../skin/SkinPresentationScope';
 
 const SEARCH_SESSION_LIMIT = 100;
 const SEARCH_DEBOUNCE_MS = 180;
@@ -278,12 +279,15 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
     <Modal
       onClose={handleClose}
       overlayClassName="fixed inset-0 z-50 flex items-start justify-center bg-black/10 px-6 pt-[14vh] backdrop-blur-[1px] dark:bg-black/30"
-      className="modal-content w-full max-w-[640px] overflow-hidden rounded-[18px] border border-border bg-white shadow-modal dark:bg-surface"
+      className="w-full max-w-[640px]"
     >
-      <div
+      <SkinPresentationScope
+        enabled
+        data-skin-task-search="true"
         role="dialog"
         aria-modal="true"
         aria-label={i18nService.t('search')}
+        className="modal-content overflow-hidden rounded-[18px] border border-border bg-white shadow-modal dark:bg-surface"
       >
         <div className="flex items-center gap-3 border-b border-border px-4">
           <MagnifyingGlassIcon className="h-5 w-5 shrink-0 text-secondary/70" />
@@ -342,6 +346,7 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
                       navigationSourceRef.current = 'pointer';
                       if (activeIndex !== index) setActiveIndex(index);
                     }}
+                    data-skin-search-result-active={isActive ? 'true' : undefined}
                     className={`flex h-9 w-full items-center gap-3 rounded-lg px-2.5 text-left text-[13px] transition-colors ${
                       isActive
                         ? 'bg-black/[0.05] text-foreground dark:bg-white/[0.08]'
@@ -405,7 +410,7 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
             <span>{i18nService.t('searchHintOpen')}</span>
           </span>
         </div>
-      </div>
+      </SkinPresentationScope>
     </Modal>
   );
 };

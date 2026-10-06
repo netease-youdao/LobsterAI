@@ -1,5 +1,6 @@
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import React from 'react';
+import { createPortal } from 'react-dom';
 
 import { i18nService } from '../../services/i18n';
 
@@ -14,7 +15,7 @@ const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
   onConfirm,
   onCancel,
 }) => {
-  return (
+  const modal = (
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center"
       onClick={onCancel}
@@ -57,6 +58,12 @@ const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') {
+    return modal;
+  }
+
+  return createPortal(modal, document.body);
 };
 
 export default DeleteConfirmModal;

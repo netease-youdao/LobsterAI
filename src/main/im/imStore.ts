@@ -80,6 +80,18 @@ interface SessionMappingRow {
   last_active_at: number;
 }
 
+function mapSessionMappingRow(row: SessionMappingRow): IMSessionMapping {
+  return {
+    imConversationId: row.im_conversation_id,
+    platform: row.platform as Platform,
+    coworkSessionId: row.cowork_session_id,
+    agentId: row.agent_id || 'main',
+    ...(row.openclaw_session_key ? { openClawSessionKey: row.openclaw_session_key } : {}),
+    createdAt: row.created_at,
+    lastActiveAt: row.last_active_at,
+  };
+}
+
 function deriveNimRuntimeAccountIdForInstance(
   inst: Pick<NimInstanceConfig, 'nimToken' | 'appKey' | 'account'>,
 ): string | null {
@@ -131,10 +143,11 @@ export class IMStore {
         im_conversation_id TEXT NOT NULL,
         platform TEXT NOT NULL,
         cowork_session_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL DEFAULT 'main',
         openclaw_session_key TEXT,
         created_at INTEGER NOT NULL,
         last_active_at INTEGER NOT NULL,
-        PRIMARY KEY (im_conversation_id, platform)
+        PRIMARY KEY (im_conversation_id, platform, agent_id)
       );
     `,
       )
@@ -155,6 +168,82 @@ export class IMStore {
         .prepare('ALTER TABLE im_session_mappings ADD COLUMN openclaw_session_key TEXT')
         .run();
     }
+    this.ensureAgentScopedSessionMappingPrimaryKey(mappingCols);
+    this.db
+      .prepare(
+        'CREATE INDEX IF NOT EXISTS idx_im_session_mappings_openclaw_session_key ON im_session_mappings(openclaw_session_key) WHERE openclaw_session_key IS NOT NULL',
+      )
+      .run();
+    this.db
+      .prepare(
+        'CREATE INDEX IF NOT EXISTS idx_im_session_mappings_cowork_session_id ON im_session_mappings(cowork_session_id)',
+      )
+      .run();
+  }
+
+  private ensureAgentScopedSessionMappingPrimaryKey(
+    mappingCols: Array<{ name: string; pk?: number }>,
+  ): void {
+    const pkCols = mappingCols
+      .filter(col => typeof col.pk === 'number' && col.pk > 0)
+      .sort((a, b) => (a.pk ?? 0) - (b.pk ?? 0))
+      .map(col => col.name);
+
+    // Test fakes and some old sqlite adapters may not expose pk metadata. In
+    // that case skip the rebuild; real SQLite returns pk ordinals here.
+    if (pkCols.length === 0 || pkCols.includes('agent_id')) {
+      return;
+    }
+
+    const migrate = this.db.transaction(() => {
+      this.db.prepare('DROP TABLE IF EXISTS im_session_mappings_agent_scope_new').run();
+      this.db
+        .prepare(
+          `
+        CREATE TABLE im_session_mappings_agent_scope_new (
+          im_conversation_id TEXT NOT NULL,
+          platform TEXT NOT NULL,
+          cowork_session_id TEXT NOT NULL,
+          agent_id TEXT NOT NULL DEFAULT 'main',
+          openclaw_session_key TEXT,
+          created_at INTEGER NOT NULL,
+          last_active_at INTEGER NOT NULL,
+          PRIMARY KEY (im_conversation_id, platform, agent_id)
+        );
+      `,
+        )
+        .run();
+      this.db
+        .prepare(
+          `
+        INSERT OR REPLACE INTO im_session_mappings_agent_scope_new (
+          im_conversation_id,
+          platform,
+          cowork_session_id,
+          agent_id,
+          openclaw_session_key,
+          created_at,
+          last_active_at
+        )
+        SELECT
+          im_conversation_id,
+          platform,
+          cowork_session_id,
+          COALESCE(NULLIF(agent_id, ''), 'main'),
+          openclaw_session_key,
+          created_at,
+          last_active_at
+        FROM im_session_mappings;
+      `,
+        )
+        .run();
+      this.db.prepare('DROP TABLE im_session_mappings').run();
+      this.db
+        .prepare('ALTER TABLE im_session_mappings_agent_scope_new RENAME TO im_session_mappings')
+        .run();
+    });
+
+    migrate();
   }
 
   /**
@@ -1713,24 +1802,49 @@ export class IMStore {
   // ==================== Session Mapping Operations ====================
 
   /**
-   * Get session mapping by IM conversation ID and platform
+   * Get session mapping by IM conversation ID and platform.
+   *
+   * When agentId is provided, this is an agent-scoped lookup. Calls without
+   * agentId keep legacy behavior and return the most recent mapping for the
+   * conversation, preferring the main agent when timestamps tie.
    */
-  getSessionMapping(imConversationId: string, platform: Platform): IMSessionMapping | null {
+  getSessionMapping(
+    imConversationId: string,
+    platform: Platform,
+    agentId?: string,
+  ): IMSessionMapping | null {
+    const normalizedAgentId = agentId?.trim();
+    const row = normalizedAgentId
+      ? this.db
+        .prepare(
+          'SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at FROM im_session_mappings WHERE im_conversation_id = ? AND platform = ? AND agent_id = ?',
+        )
+        .get(imConversationId, platform, normalizedAgentId) as SessionMappingRow | undefined
+      : this.db
+        .prepare(
+          `SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at
+           FROM im_session_mappings
+           WHERE im_conversation_id = ? AND platform = ?
+           ORDER BY last_active_at DESC, CASE WHEN agent_id = 'main' THEN 0 ELSE 1 END
+           LIMIT 1`,
+        )
+        .get(imConversationId, platform) as SessionMappingRow | undefined;
+    return row ? mapSessionMappingRow(row) : null;
+  }
+
+  /**
+   * Find the IM mapping that owns a real OpenClaw channel session key.
+   */
+  getSessionMappingByOpenClawSessionKey(openClawSessionKey: string): IMSessionMapping | null {
+    const normalizedKey = openClawSessionKey.trim();
+    if (!normalizedKey) return null;
+
     const row = this.db
       .prepare(
-        'SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at FROM im_session_mappings WHERE im_conversation_id = ? AND platform = ?',
+        'SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at FROM im_session_mappings WHERE openclaw_session_key = ? ORDER BY last_active_at DESC LIMIT 1',
       )
-      .get(imConversationId, platform) as SessionMappingRow | undefined;
-    if (!row) return null;
-    return {
-      imConversationId: row.im_conversation_id,
-      platform: row.platform as Platform,
-      coworkSessionId: row.cowork_session_id,
-      agentId: row.agent_id || 'main',
-      ...(row.openclaw_session_key ? { openClawSessionKey: row.openclaw_session_key } : {}),
-      createdAt: row.created_at,
-      lastActiveAt: row.last_active_at,
-    };
+      .get(normalizedKey) as SessionMappingRow | undefined;
+    return row ? mapSessionMappingRow(row) : null;
   }
 
   /**
@@ -1742,16 +1856,7 @@ export class IMStore {
         'SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at FROM im_session_mappings WHERE cowork_session_id = ? LIMIT 1',
       )
       .get(coworkSessionId) as SessionMappingRow | undefined;
-    if (!row) return null;
-    return {
-      imConversationId: row.im_conversation_id,
-      platform: row.platform as Platform,
-      coworkSessionId: row.cowork_session_id,
-      agentId: row.agent_id || 'main',
-      ...(row.openclaw_session_key ? { openClawSessionKey: row.openclaw_session_key } : {}),
-      createdAt: row.created_at,
-      lastActiveAt: row.last_active_at,
-    };
+    return row ? mapSessionMappingRow(row) : null;
   }
 
   /**
@@ -1785,11 +1890,27 @@ export class IMStore {
   /**
    * Update last active time for a session mapping
    */
-  updateSessionLastActive(imConversationId: string, platform: Platform): void {
+  updateSessionLastActive(imConversationId: string, platform: Platform, agentId?: string): void {
     const now = Date.now();
+    const normalizedAgentId = agentId?.trim();
+    if (normalizedAgentId) {
+      this.db
+        .prepare(
+          'UPDATE im_session_mappings SET last_active_at = ? WHERE im_conversation_id = ? AND platform = ? AND agent_id = ?',
+        )
+        .run(now, imConversationId, platform, normalizedAgentId);
+      return;
+    }
     this.db
       .prepare(
-        'UPDATE im_session_mappings SET last_active_at = ? WHERE im_conversation_id = ? AND platform = ?',
+        `UPDATE im_session_mappings
+         SET last_active_at = ?
+         WHERE rowid = (
+           SELECT rowid FROM im_session_mappings
+           WHERE im_conversation_id = ? AND platform = ?
+           ORDER BY last_active_at DESC, CASE WHEN agent_id = 'main' THEN 0 ELSE 1 END
+           LIMIT 1
+         )`,
       )
       .run(now, imConversationId, platform);
   }
@@ -1804,12 +1925,37 @@ export class IMStore {
     newCoworkSessionId: string,
     newAgentId: string,
     newOpenClawSessionKey?: string,
+    existingAgentId?: string,
   ): void {
     const now = Date.now();
     const normalizedOpenClawSessionKey = newOpenClawSessionKey?.trim() || null;
+    const normalizedExistingAgentId = existingAgentId?.trim();
+    if (normalizedExistingAgentId) {
+      this.db
+        .prepare(
+          'UPDATE im_session_mappings SET cowork_session_id = ?, agent_id = ?, openclaw_session_key = COALESCE(?, openclaw_session_key), last_active_at = ? WHERE im_conversation_id = ? AND platform = ? AND agent_id = ?',
+        )
+        .run(
+          newCoworkSessionId,
+          newAgentId,
+          normalizedOpenClawSessionKey,
+          now,
+          imConversationId,
+          platform,
+          normalizedExistingAgentId,
+        );
+      return;
+    }
     this.db
       .prepare(
-        'UPDATE im_session_mappings SET cowork_session_id = ?, agent_id = ?, openclaw_session_key = COALESCE(?, openclaw_session_key), last_active_at = ? WHERE im_conversation_id = ? AND platform = ?',
+        `UPDATE im_session_mappings
+         SET cowork_session_id = ?, agent_id = ?, openclaw_session_key = COALESCE(?, openclaw_session_key), last_active_at = ?
+         WHERE rowid = (
+           SELECT rowid FROM im_session_mappings
+           WHERE im_conversation_id = ? AND platform = ?
+           ORDER BY last_active_at DESC, CASE WHEN agent_id = 'main' THEN 0 ELSE 1 END
+           LIMIT 1
+         )`,
       )
       .run(newCoworkSessionId, newAgentId, normalizedOpenClawSessionKey, now, imConversationId, platform);
   }
@@ -1818,15 +1964,32 @@ export class IMStore {
     imConversationId: string,
     platform: Platform,
     openClawSessionKey: string,
+    agentId?: string,
   ): void {
     const normalizedKey = openClawSessionKey.trim();
     if (!normalizedKey) {
       return;
     }
     const now = Date.now();
+    const normalizedAgentId = agentId?.trim();
+    if (normalizedAgentId) {
+      this.db
+        .prepare(
+          'UPDATE im_session_mappings SET openclaw_session_key = ?, last_active_at = ? WHERE im_conversation_id = ? AND platform = ? AND agent_id = ?',
+        )
+        .run(normalizedKey, now, imConversationId, platform, normalizedAgentId);
+      return;
+    }
     this.db
       .prepare(
-        'UPDATE im_session_mappings SET openclaw_session_key = ?, last_active_at = ? WHERE im_conversation_id = ? AND platform = ?',
+        `UPDATE im_session_mappings
+         SET openclaw_session_key = ?, last_active_at = ?
+         WHERE rowid = (
+           SELECT rowid FROM im_session_mappings
+           WHERE im_conversation_id = ? AND platform = ?
+           ORDER BY last_active_at DESC, CASE WHEN agent_id = 'main' THEN 0 ELSE 1 END
+           LIMIT 1
+         )`,
       )
       .run(normalizedKey, now, imConversationId, platform);
   }
@@ -1834,7 +1997,16 @@ export class IMStore {
   /**
    * Delete a session mapping
    */
-  deleteSessionMapping(imConversationId: string, platform: Platform): void {
+  deleteSessionMapping(imConversationId: string, platform: Platform, agentId?: string): void {
+    const normalizedAgentId = agentId?.trim();
+    if (normalizedAgentId) {
+      this.db
+        .prepare(
+          'DELETE FROM im_session_mappings WHERE im_conversation_id = ? AND platform = ? AND agent_id = ?',
+        )
+        .run(imConversationId, platform, normalizedAgentId);
+      return;
+    }
     this.db
       .prepare('DELETE FROM im_session_mappings WHERE im_conversation_id = ? AND platform = ?')
       .run(imConversationId, platform);
@@ -1899,14 +2071,6 @@ export class IMStore {
     }
 
     const rows = this.db.prepare(query).all(...params) as SessionMappingRow[];
-    return rows.map(row => ({
-      imConversationId: row.im_conversation_id,
-      platform: row.platform as Platform,
-      coworkSessionId: row.cowork_session_id,
-      agentId: row.agent_id || 'main',
-      ...(row.openclaw_session_key ? { openClawSessionKey: row.openclaw_session_key } : {}),
-      createdAt: row.created_at,
-      lastActiveAt: row.last_active_at,
-    }));
+    return rows.map(mapSessionMappingRow);
   }
 }

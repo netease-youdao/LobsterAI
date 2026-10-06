@@ -12,5 +12,12 @@
     <true/>
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <!-- Runtimes fetched after install (dsh under userData) live outside the
+         bundle, so their native addons keep the upstream ad-hoc signature.
+         Library validation refuses to map a different Team ID into a hardened
+         process, which kills the child on boot; the archives are pinned by
+         sha256 in package.json, so trust comes from the digest instead. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
 </dict>
 </plist>

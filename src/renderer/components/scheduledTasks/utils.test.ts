@@ -91,7 +91,7 @@ describe('formatElapsedDuration', () => {
 });
 
 describe('conversationOptionMatchesValue', () => {
-  const conversationId = '91fcaf18cb3a-im-bot:direct:o9cq809zec25-4jlkdw3ahtkpe9c@im.wechat';
+  const conversationId = 'weixin-bot-1:direct:wxid_zhangsan@im.wechat';
 
   test('matches the saved bare peer id regardless of casing', () => {
     // Saved targets carry the channel-native casing while conversation ids
@@ -100,7 +100,7 @@ describe('conversationOptionMatchesValue', () => {
       conversationOptionMatchesValue(
         'openclaw-weixin',
         conversationId,
-        'o9cq809ZEC25-4jLkdw3AHTKPE9c@im.wechat',
+        'WxId_ZhangSan@im.wechat',
       ),
     ).toBe(true);
   });
@@ -113,7 +113,7 @@ describe('conversationOptionMatchesValue', () => {
       conversationOptionMatchesValue(
         'openclaw-weixin',
         conversationId,
-        'direct:o9cq809zec25-4jlkdw3ahtkpe9c@im.wechat',
+        'direct:wxid_zhangsan@im.wechat',
       ),
     ).toBe(true);
   });
@@ -130,7 +130,7 @@ describe('channelOptionMatchesSelection', () => {
   test('single-instance options match regardless of the saved accountId', () => {
     const option = { value: 'openclaw-weixin', label: 'WeChat' };
     expect(channelOptionMatchesSelection(option, 'openclaw-weixin', undefined)).toBe(true);
-    expect(channelOptionMatchesSelection(option, 'openclaw-weixin', '91fcaf18cb3a-im-bot')).toBe(
+    expect(channelOptionMatchesSelection(option, 'openclaw-weixin', 'weixin-bot-1')).toBe(
       true,
     );
     expect(channelOptionMatchesSelection(option, 'telegram', undefined)).toBe(false);
@@ -146,7 +146,7 @@ describe('channelOptionMatchesSelection', () => {
 
 describe('formatDeliveryLabel', () => {
   const conversation: ScheduledTaskConversationOption = {
-    conversationId: '91fcaf18cb3a-im-bot:direct:o9cq809zec25-4jlkdw3ahtkpe9c@im.wechat',
+    conversationId: 'weixin-bot-1:direct:wxid_zhangsan@im.wechat',
     platform: 'weixin',
     coworkSessionId: 'session-1',
     lastActiveAt: 1,
@@ -159,12 +159,12 @@ describe('formatDeliveryLabel', () => {
       {
         mode: DeliveryMode.Announce,
         channel: 'openclaw-weixin',
-        to: 'o9cq809ZEC25-4jLkdw3AHTKPE9c@im.wechat',
+        to: 'WxId_ZhangSan@im.wechat',
       },
       { conversations: [conversation] },
     );
     expect(label).toContain('张三');
-    expect(label).not.toContain('o9cq809ZEC25');
+    expect(label).not.toContain('WxId_ZhangSan');
   });
 
   test('falls back to the parsed target when no conversation matches', () => {

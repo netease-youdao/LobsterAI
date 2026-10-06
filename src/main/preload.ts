@@ -1,23 +1,77 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
+import {
+  type ActivityHostExecuteActionInput,
+  type ActivityHostGetContextInput,
+  type ActivityHostGetSlotInput,
+  ActivityIpc,
+} from '../shared/activity/constants';
 import { AgentIpcChannel, AgentLegacyIdentityCleanupStatus } from '../shared/agent/constants';
 import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
+import { MarkdownFileIpc, type SaveMarkdownFileRequest } from '../shared/artifactPreview/markdownEditing';
+import { ReviewIpc, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
+import type { ReviewSourceRequest } from '../shared/artifactPreview/reviewSource';
 import {
   AsrIpcChannel,
   type AsrRealtimeSessionRequest,
 } from '../shared/asr/constants';
-import { AuthIpcChannel } from '../shared/auth/constants';
-import { BrowserIpc, type BrowserRuntimeProfile } from '../shared/browserWebAccess/constants';
+import {
+  AuthIpcChannel,
+  type AuthLifecycleEvent,
+  type AuthSessionChangedEvent,
+} from '../shared/auth/constants';
+import {
+  type BrowserCredentialAvailabilityResponse,
+  type BrowserCredentialDeleteRequest,
+  BrowserCredentialIpc,
+  type BrowserCredentialListResponse,
+  type BrowserCredentialMutationResponse,
+  type BrowserCredentialSaveRequest,
+} from '../shared/browserCredentials/constants';
+import {
+  type AgentBrowserCredentialSavePromptRequest,
+  type AgentBrowserHostMenuRequest,
+  type AgentBrowserHostMenuResponse,
+  type AgentBrowserHostNavigateRequest,
+  type AgentBrowserHostPageRequest,
+  type AgentBrowserHostRequest,
+  type AgentBrowserHostResponse,
+  type AgentBrowserHostSetViewRequest,
+  type AgentBrowserHostStateEvent,
+  type AgentBrowserHostZoomRequest,
+  BrowserIpc,
+  type BrowserRuntimeProfile,
+} from '../shared/browserWebAccess/constants';
+import type { BrowserPasskeyRequest } from '../shared/browserWebAccess/passkeys';
 import { ClipboardIpc } from '../shared/clipboard/constants';
-import { CoworkIpcChannel } from '../shared/cowork/constants';
+import type { CoworkBrowserAnnotationMessageBatch } from '../shared/cowork/browserAnnotations';
+import type {
+  CoworkBtwAbortRequest,
+  CoworkBtwAbortResponse,
+  CoworkBtwEntry,
+  CoworkBtwSubmitRequest,
+  CoworkBtwSubmitResponse,
+} from '../shared/cowork/btw';
+import {
+  CoworkIpcChannel,
+  type CoworkSessionsChangedPayload,
+} from '../shared/cowork/constants';
+import type { CoworkSearchMessageCursor } from '../shared/cowork/search';
 import { DataMigrationIpc } from '../shared/dataMigration/constants';
+import { type DecisionModelConfigUpdate, DecisionModelIpcChannel } from '../shared/decisionModel/constants';
 import { DialogIpc } from '../shared/dialog/constants';
+import { DshIpcChannel } from '../shared/dshEngine/constants';
+import {
+  EnterpriseAccountIpcChannel,
+  type EnterpriseQuotaRequestType,
+} from '../shared/enterpriseAccount/constants';
 import {
   type HtmlShareAccessMode,
+  type HtmlShareAnalyticsInput,
   type HtmlShareConfigurableStatus,
   HtmlShareIpc,
   type HtmlShareSourceType,
@@ -28,12 +82,25 @@ import type {
   KitSkillMetadata,
   ResolvedKitCapabilities,
 } from '../shared/kit/constants';
+import { LibraryIpc } from '../shared/library/constants';
+import type {
+  LibraryArtifactCandidate,
+  LibraryBackfillState,
+  LibraryChangedPayload,
+  LibraryCloudListOptions,
+  LibraryFavoriteInput,
+  LibraryGetLocalItemsInput,
+  LibraryLocalListOptions,
+  LibraryLocalTaskGroupsOptions,
+  LibraryLocalTaskItemsOptions,
+} from '../shared/library/types';
 import {
   type ListLocalWebServicesOptions,
   type LocalWebService,
   LocalWebServicesIpc,
 } from '../shared/localWebServices/constants';
 import { McpIpcChannel } from '../shared/mcp/constants';
+import type { McpToolDiscoveryRequest } from '../shared/mcp/toolDiscovery';
 import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
@@ -41,11 +108,34 @@ import {
   type ShareDeploymentAnalyzeProjectInput,
   type ShareDeploymentCreateNodeInput,
   type ShareDeploymentDetectCandidatesInput,
+  type ShareDeploymentDownloadPersistenceInput,
   type ShareDeploymentGetByLocalServiceInput,
   ShareDeploymentIpc,
+  type ShareDeploymentSelectPersistencePathInput,
 } from '../shared/shareDeployment/constants';
 import { type ShellGetBrowserAppsInput, ShellIpc } from '../shared/shell/constants';
+import {
+  type SiteAnalyticsOptions,
+  type SiteDeploymentQuotaOptions,
+  SiteIpc,
+  type SiteListOptions,
+  type SiteQuotaReservationInput,
+  type SiteUpdateAccessModeInput,
+  type SiteUpdateAccessStatusInput,
+  type SiteUpdateTitleInput,
+} from '../shared/site/constants';
+import { SkinIpc } from '../shared/skin/constants';
+import type {
+  SkinApplyResponse,
+  SkinBindThemeResponse,
+  SkinDeactivateResponse,
+  SkinDeleteResponse,
+  SkinGetActiveResponse,
+  SkinListResponse,
+} from '../shared/skin/types';
+import { SubscriptionTrialIpc } from '../shared/subscriptionTrial/constants';
 import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
+import { createOfficeBridges } from './office/officePreloadBridges';
 import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 
@@ -103,6 +193,7 @@ contextBridge.exposeInMainWorld('electron', {
     setEnabledByRegistryId: (options: { registryId: string; enabled: boolean }) =>
       ipcRenderer.invoke(McpIpcChannel.SetEnabledByRegistryId, options),
     retryLaunchResolution: (id: string) => ipcRenderer.invoke(McpIpcChannel.RetryLaunchResolution, id),
+    listTools: (request: McpToolDiscoveryRequest) => ipcRenderer.invoke(McpIpcChannel.ListTools, request),
     fetchMarketplace: () => ipcRenderer.invoke(McpIpcChannel.FetchMarketplace),
     connectQichacha: () => ipcRenderer.invoke(McpIpcChannel.ConnectQichacha),
     onChanged: (callback: () => void) => {
@@ -126,12 +217,39 @@ contextBridge.exposeInMainWorld('electron', {
     uninstall: (kitId: string) => ipcRenderer.invoke('kits:uninstall', kitId),
     listInstalled: () => ipcRenderer.invoke('kits:listInstalled'),
   },
+  skin: {
+    getActive: (): Promise<SkinGetActiveResponse> => ipcRenderer.invoke(SkinIpc.GetActive),
+    list: (): Promise<SkinListResponse> => ipcRenderer.invoke(SkinIpc.List),
+    apply: (skinId: string, boundThemeId?: string): Promise<SkinApplyResponse> =>
+      ipcRenderer.invoke(SkinIpc.Apply, skinId, boundThemeId),
+    bindTheme: (skinId: string, themeId: string): Promise<SkinBindThemeResponse> =>
+      ipcRenderer.invoke(SkinIpc.BindTheme, skinId, themeId),
+    deactivate: (): Promise<SkinDeactivateResponse> => ipcRenderer.invoke(SkinIpc.Deactivate),
+    delete: (skinId: string): Promise<SkinDeleteResponse> => ipcRenderer.invoke(SkinIpc.Delete, skinId),
+    onChanged: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(SkinIpc.Changed, handler);
+      return () => ipcRenderer.removeListener(SkinIpc.Changed, handler);
+    },
+  },
   permissions: {
     checkCalendar: () => ipcRenderer.invoke(PermissionIpcChannel.CheckCalendar),
     requestCalendar: () => ipcRenderer.invoke(PermissionIpcChannel.RequestCalendar),
   },
   enterprise: {
     getConfig: () => ipcRenderer.invoke('enterprise:getConfig'),
+  },
+  enterpriseAccount: {
+    getContext: () => ipcRenderer.invoke(EnterpriseAccountIpcChannel.GetContext),
+    getIdentities: () => ipcRenderer.invoke(EnterpriseAccountIpcChannel.GetIdentities),
+    requestQuotaIncrease: (enterpriseId: number, requestType: EnterpriseQuotaRequestType) => (
+      ipcRenderer.invoke(EnterpriseAccountIpcChannel.RequestQuotaIncrease, enterpriseId, requestType)
+    ),
+    onContextInvalidated: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(EnterpriseAccountIpcChannel.ContextInvalidated, handler);
+      return () => ipcRenderer.removeListener(EnterpriseAccountIpcChannel.ContextInvalidated, handler);
+    },
   },
   api: {
     // 普通 API 请求（非流式）
@@ -226,6 +344,19 @@ contextBridge.exposeInMainWorld('electron', {
   generateSessionTitle: (userInput: string | null) =>
     ipcRenderer.invoke('generate-session-title', userInput),
   getRecentCwds: (limit?: number) => ipcRenderer.invoke('get-recent-cwds', limit),
+  dsh: {
+    getState: () => ipcRenderer.invoke(DshIpcChannel.GetState),
+    getConfig: () => ipcRenderer.invoke(DshIpcChannel.GetConfig),
+    setEnabled: (enabled: boolean) => ipcRenderer.invoke(DshIpcChannel.SetEnabled, enabled),
+    openWorkbench: () => ipcRenderer.invoke(DshIpcChannel.OpenWorkbench),
+    stop: () => ipcRenderer.invoke(DshIpcChannel.Stop),
+  },
+  decisionModel: {
+    getConfig: () => ipcRenderer.invoke(DecisionModelIpcChannel.GetConfig),
+    saveConfig: (update: DecisionModelConfigUpdate) => ipcRenderer.invoke(DecisionModelIpcChannel.SaveConfig, update),
+    testConnection: (draft: DecisionModelConfigUpdate) =>
+      ipcRenderer.invoke(DecisionModelIpcChannel.TestConnection, draft),
+  },
   openclaw: {
     engine: {
       getStatus: () => ipcRenderer.invoke(OpenClawEngineIpc.GetStatus),
@@ -262,6 +393,64 @@ contextBridge.exposeInMainWorld('electron', {
       listProfiles: () => ipcRenderer.invoke(BrowserIpc.ListProfiles),
       test: (options?: { profile?: BrowserRuntimeProfile }) => ipcRenderer.invoke(BrowserIpc.Test, options),
       resetProfile: (options?: { profile?: BrowserRuntimeProfile }) => ipcRenderer.invoke(BrowserIpc.ResetProfile, options),
+      getHostState: (request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.GetHostState, request),
+      setHostView: (request: AgentBrowserHostSetViewRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.SetHostView, request),
+      navigateHost: (request: AgentBrowserHostNavigateRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.NavigateHost, request),
+      goBackHost: (request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.GoBackHost, request),
+      goForwardHost: (request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.GoForwardHost, request),
+      reloadHost: (request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.ReloadHost, request),
+      stopHost: (request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.StopHost, request),
+      createHostPage: (request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.CreateHostPage, request),
+      selectHostPage: (request: AgentBrowserHostPageRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.SelectHostPage, request),
+      closeHostPage: (request: AgentBrowserHostPageRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.CloseHostPage, request),
+      showHostMenu: (request: AgentBrowserHostMenuRequest): Promise<AgentBrowserHostMenuResponse> =>
+        ipcRenderer.invoke(BrowserIpc.ShowHostMenu, request),
+      captureHostScreenshot: (request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.CaptureHostScreenshot, request),
+      setHostZoom: (request: AgentBrowserHostZoomRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.SetHostZoom, request),
+      clearHostCookies: (request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.ClearHostCookies, request),
+      clearHostCache: (request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.ClearHostCache, request),
+      dismissCredentialLoginStatus: (
+        request?: AgentBrowserHostRequest,
+      ): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.DismissCredentialLoginStatus, request),
+      resolveCredentialSavePrompt: (
+        request: AgentBrowserCredentialSavePromptRequest,
+      ): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.ResolveCredentialSavePrompt, request),
+      resolvePasskey: (request: BrowserPasskeyRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.ResolvePasskey, request),
+      onHostState: (callback: (event: AgentBrowserHostStateEvent) => void) => {
+        const handler = (_event: Electron.IpcRendererEvent, hostEvent: AgentBrowserHostStateEvent) =>
+          callback(hostEvent);
+        ipcRenderer.on(BrowserIpc.HostState, handler);
+        return () => ipcRenderer.removeListener(BrowserIpc.HostState, handler);
+      },
+      credentials: {
+        getAvailability: (): Promise<BrowserCredentialAvailabilityResponse> =>
+          ipcRenderer.invoke(BrowserCredentialIpc.GetAvailability),
+        requestAccess: (): Promise<BrowserCredentialAvailabilityResponse> =>
+          ipcRenderer.invoke(BrowserCredentialIpc.RequestAccess),
+        list: (): Promise<BrowserCredentialListResponse> =>
+          ipcRenderer.invoke(BrowserCredentialIpc.List),
+        save: (request: BrowserCredentialSaveRequest): Promise<BrowserCredentialMutationResponse> =>
+          ipcRenderer.invoke(BrowserCredentialIpc.Save, request),
+        delete: (request: BrowserCredentialDeleteRequest): Promise<BrowserCredentialMutationResponse> =>
+          ipcRenderer.invoke(BrowserCredentialIpc.Delete, request),
+      },
     },
     dataMigration: {
       backup: () => ipcRenderer.invoke(DataMigrationIpc.Backup),
@@ -285,9 +474,11 @@ contextBridge.exposeInMainWorld('electron', {
       systemPrompt?: string;
       identity?: string;
       model?: string;
+      thinkingLevel?: string;
       workingDirectory?: string;
       icon?: string;
       skillIds?: string[];
+      subagentAllowAgentIds?: string[];
       source?: string;
       presetId?: string;
     }) => {
@@ -302,15 +493,22 @@ contextBridge.exposeInMainWorld('electron', {
         systemPrompt?: string;
         identity?: string;
         model?: string;
+        thinkingLevel?: string;
         workingDirectory?: string;
         icon?: string;
         skillIds?: string[];
+        subagentAllowAgentIds?: string[];
         enabled?: boolean;
         pinned?: boolean;
+        sortOrder?: number | null;
       },
     ) => {
       const result = await ipcRenderer.invoke(AgentIpcChannel.Update, id, updates);
       return result?.success ? result.agent : null;
+    },
+    reorder: async (agentIds: string[]) => {
+      const result = await ipcRenderer.invoke(AgentIpcChannel.Reorder, agentIds);
+      return result?.success ? result.agents : null;
     },
     cleanupLegacyIdentityBlock: async (id: string) => {
       const result = await ipcRenderer.invoke(AgentIpcChannel.CleanupLegacyIdentityBlock, id);
@@ -348,9 +546,11 @@ contextBridge.exposeInMainWorld('electron', {
       kitIds?: string[];
       kitReferences?: KitReference[];
       resolvedKitCapabilities?: ResolvedKitCapabilities;
-      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       agentId?: string;
       modelOverride?: string;
+      thinkingLevel?: string;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string }; mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; dataUrl?: string; role?: string }>;
     }) => ipcRenderer.invoke('cowork:session:start', options),
@@ -363,7 +563,8 @@ contextBridge.exposeInMainWorld('electron', {
       kitIds?: string[];
       kitReferences?: KitReference[];
       resolvedKitCapabilities?: ResolvedKitCapabilities;
-      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
       mediaReferences?: Array<{
@@ -378,12 +579,19 @@ contextBridge.exposeInMainWorld('electron', {
         dataUrl?: string; role?: string;
       }>;
     }) => ipcRenderer.invoke('cowork:session:continue', options),
+    submitBtw: (options: CoworkBtwSubmitRequest): Promise<CoworkBtwSubmitResponse> =>
+      ipcRenderer.invoke(CoworkIpcChannel.SubmitBtw, options),
+    abortBtw: (options: CoworkBtwAbortRequest): Promise<CoworkBtwAbortResponse> =>
+      ipcRenderer.invoke(CoworkIpcChannel.AbortBtw, options),
+    submitSteer: (options: { sessionId: string; text: string; clientSteerId: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.SubmitSteer, options),
     runGoalCommand: (options: { sessionId: string; command: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.GoalCommand, options),
-    stopSession: (sessionId: string) => ipcRenderer.invoke('cowork:session:stop', sessionId),
-    deleteSession: (sessionId: string) => ipcRenderer.invoke('cowork:session:delete', sessionId),
+    stopSession: (sessionId: string) =>
+      ipcRenderer.invoke(CoworkIpcChannel.StopSession, sessionId),
+    deleteSession: (sessionId: string) => ipcRenderer.invoke(CoworkIpcChannel.DeleteSession, sessionId),
     deleteSessions: (sessionIds: string[]) =>
-      ipcRenderer.invoke('cowork:session:deleteBatch', sessionIds),
+      ipcRenderer.invoke(CoworkIpcChannel.DeleteSessions, sessionIds),
     setSessionPinned: (options: { sessionId: string; pinned: boolean }) =>
       ipcRenderer.invoke('cowork:session:pin', options),
     renameSession: (options: { sessionId: string; title: string }) =>
@@ -396,6 +604,10 @@ contextBridge.exposeInMainWorld('electron', {
     getSession: (sessionId: string) => ipcRenderer.invoke('cowork:session:get', sessionId),
     markSessionViewed: (sessionId: string) =>
       ipcRenderer.invoke(CoworkIpcChannel.MarkSessionViewed, sessionId),
+    setActiveSession: (sessionId: string | null) =>
+      ipcRenderer.invoke(CoworkIpcChannel.SetActiveSession, sessionId),
+    seedNewUserWelcomeTask: (options: { title: string; content: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.SeedNewUserWelcomeTask, options),
     notifyOpenSessionFromNotificationReady: () =>
       ipcRenderer.invoke(CoworkIpcChannel.OpenSessionFromNotificationReady),
     remoteManaged: (sessionId: string) =>
@@ -404,8 +616,25 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:session:list', options),
     getSessionMessages: (options: { sessionId: string; limit?: number; offset?: number }) =>
       ipcRenderer.invoke('cowork:session:getMessages', options),
+    getSessionSearchMessages: (options: {
+      sessionId: string;
+      limit?: number;
+      offset?: number;
+      cursor?: CoworkSearchMessageCursor;
+      knownTotal?: number;
+    }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.GetSessionSearchMessages, options),
     getSessionMessageRailIndex: (sessionId: string) =>
       ipcRenderer.invoke(CoworkIpcChannel.GetSessionMessageRailIndex, sessionId),
+    getProgressCard: (sessionId: string) =>
+      ipcRenderer.invoke(CoworkIpcChannel.GetProgressCard, sessionId),
+    dismissProgressCard: (sessionId: string, revision: number) =>
+      ipcRenderer.invoke(CoworkIpcChannel.DismissProgressCard, sessionId, revision),
+    onProgressCardChanged: (callback: (event: { sessionId: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string }) => callback(data);
+      ipcRenderer.on(CoworkIpcChannel.ProgressCardChanged, handler);
+      return () => ipcRenderer.removeListener(CoworkIpcChannel.ProgressCardChanged, handler);
+    },
     getContextUsage: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:contextUsage', sessionId),
     compactContext: (sessionId: string) =>
@@ -435,16 +664,18 @@ contextBridge.exposeInMainWorld('electron', {
     }) => ipcRenderer.invoke(CoworkIpcChannel.SubTaskHistory, options),
     listSubagentSessions: (parentSessionId: string) =>
       ipcRenderer.invoke(CoworkIpcChannel.SubagentList, { parentSessionId }),
+    listSubagentSessionsByAgent: (options: { agentId: string; limit?: number; offset?: number }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.SubagentListByAgent, options),
     deleteSubagentSession: (options: { parentSessionId: string; runId: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.SubagentDelete, options),
 
     // Media task management
     cancelMediaTask: (taskId: string) =>
-      ipcRenderer.invoke('cowork:media:cancel', taskId),
+      ipcRenderer.invoke(CoworkIpcChannel.CancelMediaTask, taskId),
 
     // Permission handling
     respondToPermission: (options: { requestId: string; result: any }) =>
-      ipcRenderer.invoke('cowork:permission:respond', options),
+      ipcRenderer.invoke(CoworkIpcChannel.PermissionRespond, options),
 
     // Configuration
     getConfig: () => ipcRenderer.invoke('cowork:config:get'),
@@ -459,6 +690,8 @@ contextBridge.exposeInMainWorld('electron', {
       memoryUserMemoriesMaxItems?: number;
       skipMissedJobs?: boolean;
       openClawHeartbeatEnabled?: boolean;
+      openClawSkillReviewEnabled?: boolean;
+      openClawMemoryFlushEnabled?: boolean;
       embeddingEnabled?: boolean;
       embeddingProvider?: string;
       embeddingModel?: string;
@@ -466,7 +699,12 @@ contextBridge.exposeInMainWorld('electron', {
       embeddingVectorWeight?: number;
       embeddingRemoteBaseUrl?: string;
       embeddingRemoteApiKey?: string;
-    }) => ipcRenderer.invoke('cowork:config:set', config),
+    }) => ipcRenderer.invoke(CoworkIpcChannel.ConfigSet, config),
+
+    // Session temp storage (.cowork-temp) maintenance
+    getTempStorageUsage: () => ipcRenderer.invoke(CoworkIpcChannel.TempStorageUsage),
+    cleanTempStorage: (options?: { cwds?: string[] }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.TempStorageClean, options),
     listMemoryEntries: (input: {
       query?: string;
       status?: 'created' | 'stale' | 'deleted' | 'all';
@@ -491,9 +729,10 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.MemoryWriteRaw, input),
     getDreamingStatus: () => ipcRenderer.invoke('cowork:dreaming:status'),
     getDreamDiary: () => ipcRenderer.invoke('cowork:dreaming:diary'),
-    readBootstrapFile: (filename: string) => ipcRenderer.invoke('cowork:bootstrap:read', filename),
-    writeBootstrapFile: (filename: string, content: string) =>
-      ipcRenderer.invoke('cowork:bootstrap:write', filename, content),
+    readBootstrapFile: (filename: string, options?: { agentId?: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.BootstrapRead, filename, options),
+    writeBootstrapFile: (filename: string, content: string, options?: { agentId?: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.BootstrapWrite, filename, content, options),
     // Stream event listeners
     onStreamMessage: (callback: (data: { sessionId: string; message: any; beforeMessageId?: string }) => void) => {
       const handler = (_event: any, data: { sessionId: string; message: any; beforeMessageId?: string }) => callback(data);
@@ -540,6 +779,16 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on(CoworkIpcChannel.StreamGoal, handler);
       return () => ipcRenderer.removeListener(CoworkIpcChannel.StreamGoal, handler);
     },
+    onStreamBtwResult: (
+      callback: (data: { sessionId: string; result: CoworkBtwEntry }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: { sessionId: string; result: CoworkBtwEntry },
+      ) => callback(data);
+      ipcRenderer.on(CoworkIpcChannel.StreamBtwResult, handler);
+      return () => ipcRenderer.removeListener(CoworkIpcChannel.StreamBtwResult, handler);
+    },
     onStreamContextMaintenance: (
       callback: (data: { sessionId: string; active: boolean }) => void,
     ) => {
@@ -552,10 +801,11 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on('cowork:stream:permission', handler);
       return () => ipcRenderer.removeListener('cowork:stream:permission', handler);
     },
+    getPendingQuestions: () => ipcRenderer.invoke(CoworkIpcChannel.GetPendingQuestions),
     onStreamPermissionDismiss: (callback: (data: { requestId: string }) => void) => {
       const handler = (_event: any, data: { requestId: string }) => callback(data);
-      ipcRenderer.on('cowork:stream:permissionDismiss', handler);
-      return () => ipcRenderer.removeListener('cowork:stream:permissionDismiss', handler);
+      ipcRenderer.on(CoworkIpcChannel.StreamPermissionDismiss, handler);
+      return () => ipcRenderer.removeListener(CoworkIpcChannel.StreamPermissionDismiss, handler);
     },
     onStreamComplete: (
       callback: (data: { sessionId: string; claudeSessionId: string | null }) => void,
@@ -570,10 +820,10 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on('cowork:stream:error', handler);
       return () => ipcRenderer.removeListener('cowork:stream:error', handler);
     },
-    onSessionsChanged: (callback: () => void) => {
-      const handler = () => callback();
-      ipcRenderer.on('cowork:sessions:changed', handler);
-      return () => ipcRenderer.removeListener('cowork:sessions:changed', handler);
+    onSessionsChanged: (callback: (data?: CoworkSessionsChangedPayload) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data?: CoworkSessionsChangedPayload) => callback(data);
+      ipcRenderer.on(CoworkIpcChannel.SessionsChanged, handler);
+      return () => ipcRenderer.removeListener(CoworkIpcChannel.SessionsChanged, handler);
     },
     onSessionModelOverrideChanged: (
       callback: (data: { sessionId: string; modelOverride: string }) => void,
@@ -588,6 +838,10 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener(CoworkIpcChannel.OpenSessionFromNotification, handler);
     },
   },
+  workspaceReview: {
+    read: (input: ReviewScopeRequest) => ipcRenderer.invoke(ReviewIpc.Read, input),
+    source: (input: ReviewSourceRequest) => ipcRenderer.invoke(ReviewIpc.Source, input),
+  },
   dialog: {
     selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
     selectFile: (options?: {
@@ -598,6 +852,7 @@ contextBridge.exposeInMainWorld('electron', {
       title?: string;
       filters?: { name: string; extensions: string[] }[];
     }) => ipcRenderer.invoke('dialog:selectFiles', options),
+    getPathForFile: (file: File) => webUtils.getPathForFile(file),
     saveInlineFile: (options: {
       dataBase64: string;
       fileName?: string;
@@ -610,8 +865,12 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(DialogIpc.StatFile, filePath),
     readTextFile: (filePath: string) =>
       ipcRenderer.invoke(DialogIpc.ReadTextFile, filePath),
-    generateThumbnail: (filePath: string) =>
-      ipcRenderer.invoke('dialog:generateThumbnail', filePath),
+    saveFileCopy: (filePath: string) =>
+      ipcRenderer.invoke(DialogIpc.SaveFileCopy, filePath),
+    generateThumbnail: (request: import('../shared/library/thumbnail').LibraryThumbnailGenerateRequest) =>
+      ipcRenderer.invoke(DialogIpc.GenerateThumbnail, request),
+    cancelThumbnail: (requestId: string) =>
+      ipcRenderer.invoke(DialogIpc.CancelThumbnail, requestId),
     showMessageBox: (options: {
       message: string;
       type?: 'none' | 'info' | 'error' | 'question' | 'warning';
@@ -689,29 +948,115 @@ contextBridge.exposeInMainWorld('electron', {
       artifactId?: string;
       filePath?: string;
     }) => ipcRenderer.invoke(HtmlShareIpc.GetByArtifactFile, options),
+    createFromGeneratedVideo: (options: {
+      taskId: string;
+      outputIndex: number;
+      sessionId: string;
+      artifactId: string;
+      title: string;
+      accessMode?: HtmlShareAccessMode;
+    }) => ipcRenderer.invoke(HtmlShareIpc.CreateFromGeneratedVideo, options),
+    getGeneratedVideoSource: (options: { taskId: string; outputIndex: number }) =>
+      ipcRenderer.invoke(HtmlShareIpc.GetGeneratedVideoSource, options),
+    resolveLegacyGeneratedVideoSource: (options: { resultUrl: string }) =>
+      ipcRenderer.invoke(HtmlShareIpc.ResolveLegacyGeneratedVideoSource, options),
+    getBySource: (options: {
+      sourceType: HtmlShareSourceType;
+      clientSourceKey: string;
+    }) => ipcRenderer.invoke(HtmlShareIpc.GetBySource, options),
     updateStatus: (options: { shareId: string; status: HtmlShareConfigurableStatus }) =>
       ipcRenderer.invoke(HtmlShareIpc.UpdateStatus, options),
     updateAccessMode: (options: { shareId: string; accessMode: HtmlShareAccessMode }) =>
       ipcRenderer.invoke(HtmlShareIpc.UpdateAccessMode, options),
     disable: (shareId: string) => ipcRenderer.invoke(HtmlShareIpc.Disable, shareId),
+    deletePermanently: (shareId: string) =>
+      ipcRenderer.invoke(HtmlShareIpc.DeletePermanently, shareId),
     get: (shareId: string) => ipcRenderer.invoke(HtmlShareIpc.Get, shareId),
+    getQuota: () => ipcRenderer.invoke(HtmlShareIpc.GetQuota),
+    getTrialPolicy: () => ipcRenderer.invoke(HtmlShareIpc.GetTrialPolicy),
+    getAnalytics: (options: HtmlShareAnalyticsInput) =>
+      ipcRenderer.invoke(HtmlShareIpc.GetAnalytics, options),
   },
   shareDeployment: {
     detectProjectCandidates: (options: ShareDeploymentDetectCandidatesInput) =>
       ipcRenderer.invoke(ShareDeploymentIpc.DetectProjectCandidates, options),
     analyzeProjectDirectory: (options: ShareDeploymentAnalyzeProjectInput) =>
       ipcRenderer.invoke(ShareDeploymentIpc.AnalyzeProjectDirectory, options),
+    selectPersistencePath: (options: ShareDeploymentSelectPersistencePathInput) =>
+      ipcRenderer.invoke(ShareDeploymentIpc.SelectPersistencePath, options),
     createNodeDeployment: (options: ShareDeploymentCreateNodeInput) =>
       ipcRenderer.invoke(ShareDeploymentIpc.CreateNodeDeployment, options),
     get: (deploymentId: string) => ipcRenderer.invoke(ShareDeploymentIpc.Get, deploymentId),
     getByLocalService: (options: ShareDeploymentGetByLocalServiceInput) =>
       ipcRenderer.invoke(ShareDeploymentIpc.GetByLocalService, options),
+    getPersistence: (deploymentId: string) =>
+      ipcRenderer.invoke(ShareDeploymentIpc.GetPersistence, deploymentId),
+    downloadPersistenceArchive: (options: ShareDeploymentDownloadPersistenceInput) =>
+      ipcRenderer.invoke(ShareDeploymentIpc.DownloadPersistenceArchive, options),
+  },
+  sites: {
+    list: (options: SiteListOptions = {}) => ipcRenderer.invoke(SiteIpc.List, options),
+    get: (shareId: string) => ipcRenderer.invoke(SiteIpc.Get, shareId),
+    updateTitle: (input: SiteUpdateTitleInput) => ipcRenderer.invoke(SiteIpc.UpdateTitle, input),
+    updateAccessMode: (input: SiteUpdateAccessModeInput) =>
+      ipcRenderer.invoke(SiteIpc.UpdateAccessMode, input),
+    updateAccessStatus: (input: SiteUpdateAccessStatusInput) =>
+      ipcRenderer.invoke(SiteIpc.UpdateAccessStatus, input),
+    delete: (shareId: string) => ipcRenderer.invoke(SiteIpc.Delete, shareId),
+    getAnalytics: (shareId: string, options: SiteAnalyticsOptions = {}) =>
+      ipcRenderer.invoke(SiteIpc.GetAnalytics, shareId, options),
+    getDeploymentQuota: (options: SiteDeploymentQuotaOptions = {}) =>
+      ipcRenderer.invoke(SiteIpc.GetDeploymentQuota, options),
+    createQuotaReservation: (input: SiteQuotaReservationInput) =>
+      ipcRenderer.invoke(SiteIpc.CreateQuotaReservation, input),
+    releaseQuotaReservation: (reservationId: string) =>
+      ipcRenderer.invoke(SiteIpc.ReleaseQuotaReservation, reservationId),
+  },
+  library: {
+    listLocal: (options: LibraryLocalListOptions = {}) =>
+      ipcRenderer.invoke(LibraryIpc.ListLocal, options),
+    listLocalTaskGroups: (options: LibraryLocalTaskGroupsOptions = {}) =>
+      ipcRenderer.invoke(LibraryIpc.ListLocalTaskGroups, options),
+    listLocalTaskItems: (options: LibraryLocalTaskItemsOptions) =>
+      ipcRenderer.invoke(LibraryIpc.ListLocalTaskItems, options),
+    listCloud: (options: LibraryCloudListOptions = {}) =>
+      ipcRenderer.invoke(LibraryIpc.ListCloud, options),
+    getLocalItems: (input: LibraryGetLocalItemsInput) =>
+      ipcRenderer.invoke(LibraryIpc.GetLocalItems, input),
+    getLocalDetail: (itemId: string) =>
+      ipcRenderer.invoke(LibraryIpc.GetLocalDetail, itemId),
+    recordCandidates: (candidates: LibraryArtifactCandidate[]) =>
+      ipcRenderer.invoke(LibraryIpc.RecordCandidates, candidates),
+    addLocalFiles: (filePaths: string[]) =>
+      ipcRenderer.invoke(LibraryIpc.AddLocalFiles, filePaths),
+    setFavorite: (input: LibraryFavoriteInput) =>
+      ipcRenderer.invoke(LibraryIpc.SetFavorite, input),
+    openLocal: (itemId: string) => ipcRenderer.invoke(LibraryIpc.OpenLocal, itemId),
+    revealLocal: (itemId: string) => ipcRenderer.invoke(LibraryIpc.RevealLocal, itemId),
+    repairIndex: () => ipcRenderer.invoke(LibraryIpc.RepairIndex),
+    getIndexStatus: () => ipcRenderer.invoke(LibraryIpc.GetIndexStatus),
+    getBackfillState: () => ipcRenderer.invoke(LibraryIpc.GetBackfillState),
+    setBackfillState: (state: LibraryBackfillState) =>
+      ipcRenderer.invoke(LibraryIpc.SetBackfillState, state),
+    onChanged: (callback: (payload: LibraryChangedPayload) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: LibraryChangedPayload) => {
+        callback(payload);
+      };
+      ipcRenderer.on(LibraryIpc.Changed, handler);
+      return () => ipcRenderer.removeListener(LibraryIpc.Changed, handler);
+    },
   },
   asr: {
     createRealtimeSession: (options: AsrRealtimeSessionRequest) =>
       ipcRenderer.invoke(AsrIpcChannel.CreateRealtimeSession, options),
   },
   artifact: {
+    office: createOfficeBridges(ipcRenderer),
+    markdown: {
+      read: (filePath: string) => ipcRenderer.invoke(MarkdownFileIpc.Read, filePath),
+      save: (request: SaveMarkdownFileRequest) => ipcRenderer.invoke(MarkdownFileIpc.Save, request),
+      setHasUnsafeEdits: (hasUnsafeEdits: boolean) => ipcRenderer.send(MarkdownFileIpc.SetUnsafeEdits, hasUnsafeEdits),
+    },
     watchFile: (filePath: string) => ipcRenderer.invoke('artifact:watchFile', filePath),
     unwatchFile: (filePath: string) => ipcRenderer.invoke('artifact:unwatchFile', filePath),
     onFileChanged: (callback: (data: { filePath: string }) => void) => {
@@ -742,6 +1087,14 @@ contextBridge.exposeInMainWorld('electron', {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
     },
+    saveBrowserAnnotationAsset: (input: unknown) =>
+      ipcRenderer.invoke(ArtifactPreviewIpc.SaveBrowserAnnotationAsset, input),
+    readBrowserAnnotationAsset: (input: unknown) =>
+      ipcRenderer.invoke(ArtifactPreviewIpc.ReadBrowserAnnotationAsset, input),
+    deleteBrowserAnnotationAsset: (input: unknown) =>
+      ipcRenderer.invoke(ArtifactPreviewIpc.DeleteBrowserAnnotationAsset, input),
+    deleteBrowserAnnotationBatchAssets: (input: unknown) =>
+      ipcRenderer.invoke(ArtifactPreviewIpc.DeleteBrowserAnnotationBatchAssets, input),
     listLocalWebServices: (options?: ListLocalWebServicesOptions) =>
       ipcRenderer.invoke(LocalWebServicesIpc.List, options) as Promise<LocalWebService[]>,
   },
@@ -758,14 +1111,28 @@ contextBridge.exposeInMainWorld('electron', {
     getSystemLocale: () => ipcRenderer.invoke('app:getSystemLocale'),
     getKeyfromAttribution: () => ipcRenderer.invoke(AppIpcChannel.GetKeyfromAttribution),
     relaunch: () => ipcRenderer.invoke('app:relaunch'),
+    openSystemNotificationSettings: () =>
+      ipcRenderer.invoke(AppIpcChannel.OpenSystemNotificationSettings),
+  },
+  subscriptionTrial: {
+    status: () => ipcRenderer.invoke(SubscriptionTrialIpc.Status),
+  },
+  activity: {
+    getSlot: (input: ActivityHostGetSlotInput) =>
+      ipcRenderer.invoke(ActivityIpc.HostGetSlot, input),
+    getContext: (input: ActivityHostGetContextInput) =>
+      ipcRenderer.invoke(ActivityIpc.HostGetContext, input),
+    executeAction: (input: ActivityHostExecuteActionInput) =>
+      ipcRenderer.invoke(ActivityIpc.HostExecuteAction, input),
   },
   appUpdate: {
     getState: () => ipcRenderer.invoke(AppUpdateIpc.GetState),
     checkNow: (options?: { manual?: boolean; userId?: string | null }) =>
       ipcRenderer.invoke(AppUpdateIpc.CheckNow, options),
     retryDownload: () => ipcRenderer.invoke(AppUpdateIpc.RetryDownload),
-    cancelDownload: () => ipcRenderer.invoke(AppUpdateIpc.CancelDownload),
     installReady: () => ipcRenderer.invoke(AppUpdateIpc.InstallReady),
+    getCompletedUpdate: () => ipcRenderer.invoke(AppUpdateIpc.GetCompletedUpdate),
+    getActiveWorkloads: () => ipcRenderer.invoke(AppUpdateIpc.GetActiveWorkloads),
     onStateChanged: (callback: (data: any) => void) => {
       const handler = (_event: any, data: any) => callback(data);
       ipcRenderer.on(AppUpdateIpc.StateChanged, handler);
@@ -959,6 +1326,8 @@ contextBridge.exposeInMainWorld('electron', {
 
     // Execution
     runManually: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.RunManually, id),
+    resendWeixinReport: (taskId: string, runId: string) =>
+      ipcRenderer.invoke(ScheduledTaskIpc.ResendWeixinReport, taskId, runId),
     stop: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.Stop, id),
 
     // Run history
@@ -1001,18 +1370,21 @@ contextBridge.exposeInMainWorld('electron', {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
   },
   auth: {
-    login: (loginUrl?: string) => ipcRenderer.invoke('auth:login', { loginUrl }),
-    exchange: (code: string) => ipcRenderer.invoke('auth:exchange', { code }),
-    getUser: () => ipcRenderer.invoke('auth:getUser'),
-    getQuota: () => ipcRenderer.invoke('auth:getQuota'),
-    logout: () => ipcRenderer.invoke('auth:logout'),
-    refreshToken: () => ipcRenderer.invoke('auth:refreshToken'),
-    getAccessToken: () => ipcRenderer.invoke('auth:getAccessToken'),
-    getModels: () => ipcRenderer.invoke('auth:getModels'),
+    login: (loginUrl?: string) => ipcRenderer.invoke(AuthIpcChannel.Login, { loginUrl }),
+    exchange: (code: string) => ipcRenderer.invoke(AuthIpcChannel.Exchange, { code }),
+    getUser: () => ipcRenderer.invoke(AuthIpcChannel.GetUser),
+    getQuota: () => ipcRenderer.invoke(AuthIpcChannel.GetQuota),
+    logout: () => ipcRenderer.invoke(AuthIpcChannel.Logout),
+    refreshToken: () => ipcRenderer.invoke(AuthIpcChannel.RefreshToken),
+    getAccessToken: () => ipcRenderer.invoke(AuthIpcChannel.GetAccessToken),
+    getModels: () => ipcRenderer.invoke(AuthIpcChannel.GetModels),
     getPricingCatalog: () => ipcRenderer.invoke(AuthIpcChannel.GetPricingCatalog),
-    getProfileSummary: () => ipcRenderer.invoke('auth:getProfileSummary'),
-    getActiveClientBanner: () => ipcRenderer.invoke('auth:getActiveClientBanner'),
-    getActiveClientBanners: () => ipcRenderer.invoke('auth:getActiveClientBanners'),
+    getProfileSummary: () => ipcRenderer.invoke(AuthIpcChannel.GetProfileSummary),
+    claimCreditsFinalReward: (campaignCode: string) =>
+      ipcRenderer.invoke(AuthIpcChannel.ClaimCreditsFinalReward, { campaignCode }),
+    getActiveClientBanner: () => ipcRenderer.invoke(AuthIpcChannel.GetActiveClientBanner),
+    getActiveClientBanners: () => ipcRenderer.invoke(AuthIpcChannel.GetActiveClientBanners),
+    getClientBannerSnapshot: () => ipcRenderer.invoke(AuthIpcChannel.GetClientBannerSnapshot),
     getPendingCallback: () => ipcRenderer.invoke(AuthIpcChannel.GetPendingCallback),
     onCallback: (callback: (data: { code: string }) => void) => {
       const handler = (_event: any, data: { code: string }) => callback(data);
@@ -1021,13 +1393,23 @@ contextBridge.exposeInMainWorld('electron', {
     },
     onQuotaChanged: (callback: () => void) => {
       const handler = () => callback();
-      ipcRenderer.on('auth:quotaChanged', handler);
-      return () => ipcRenderer.removeListener('auth:quotaChanged', handler);
+      ipcRenderer.on(AuthIpcChannel.QuotaChanged, handler);
+      return () => ipcRenderer.removeListener(AuthIpcChannel.QuotaChanged, handler);
+    },
+    onSessionChanged: (callback: (event: AuthSessionChangedEvent) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: AuthSessionChangedEvent) => callback(data);
+      ipcRenderer.on(AuthIpcChannel.SessionChanged, handler);
+      return () => ipcRenderer.removeListener(AuthIpcChannel.SessionChanged, handler);
+    },
+    onLifecycleEvent: (callback: (event: AuthLifecycleEvent) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: AuthLifecycleEvent) => callback(data);
+      ipcRenderer.on(AuthIpcChannel.LifecycleEvent, handler);
+      return () => ipcRenderer.removeListener(AuthIpcChannel.LifecycleEvent, handler);
     },
   },
   media: {
     getModels: (type: 'image' | 'video') =>
-      ipcRenderer.invoke('media:getModels', type) as Promise<{ success: boolean; models?: unknown[]; error?: string }>,
+      ipcRenderer.invoke(CoworkIpcChannel.GetMediaModels, type) as Promise<{ success: boolean; models?: unknown[]; error?: string }>,
     getTaskStatus: (taskId: number, type: 'image' | 'video') =>
       ipcRenderer.invoke('media:getTaskStatus', taskId, type) as Promise<{ success: boolean; task?: unknown; error?: string }>,
   },

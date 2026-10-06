@@ -9,6 +9,11 @@ export interface CoworkSubagentRuntimeAdapter {
     sessionKey?: string,
   ) => Promise<unknown>;
   listSubagentRuns: (parentSessionId: string) => unknown[];
+  listSubagentRunsByAgent: (
+    agentId: string,
+    limit: number,
+    offset: number,
+  ) => { runs: unknown[]; hasMore: boolean };
 }
 
 export interface CoworkSubagentEngineRouter {
@@ -59,6 +64,20 @@ export function registerCoworkSubagentHandlers(deps: CoworkSubagentHandlerDeps):
     const runs = adapter.listSubagentRuns(options.parentSessionId);
     return { success: true, runs };
   });
+
+  ipcMain.handle(
+    CoworkIpcChannel.SubagentListByAgent,
+    async (_event, options: { agentId: string; limit?: number; offset?: number }) => {
+      const adapter = getOpenClawRuntimeAdapter();
+      if (!adapter) return { success: true, runs: [], hasMore: false };
+      const result = adapter.listSubagentRunsByAgent(
+        options.agentId,
+        options.limit ?? 20,
+        options.offset ?? 0,
+      );
+      return { success: true, ...result };
+    },
+  );
 
   ipcMain.handle(
     CoworkIpcChannel.SubagentDelete,

@@ -1,11 +1,12 @@
 {
   "id": "lobster-media-generation",
   "name": "LobsterMediaGeneration",
-  "description": "Image and video generation tools powered by LobsterAI server.",
+  "description": "Image/video generation and AI skin management tools powered by LobsterAI.",
   "contracts": {
     "tools": [
       "lobsterai_image_generate",
-      "lobsterai_video_generate"
+      "lobsterai_video_generate",
+      "lobsterai_skin_manage"
     ]
   },
   "configSchema": {

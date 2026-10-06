@@ -1,0 +1,288 @@
+diff --git a/src/agents/embedded-agent-runner/model.inline-provider.test.ts b/src/agents/embedded-agent-runner/model.inline-provider.test.ts
+index 615a7530f945371c2da4f3be226d5abbf71b83e9..4df0a310e9dd3807bab78ae192ad3e7e8881574a 100644
+--- a/src/agents/embedded-agent-runner/model.inline-provider.test.ts
++++ b/src/agents/embedded-agent-runner/model.inline-provider.test.ts
+@@ -107,6 +107,26 @@ describe("buildInlineProviderModels", () => {
+     ]);
+   });
+ 
++  it("keeps a provider API owner out of model transport resolution", () => {
++    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
++      custom: {
++        baseUrl: "https://gateway.example.com/v1",
++        api: "lobsterai-model-compat",
++        models: [
++          { ...makeModel("kimi-k3"), api: "openai-completions" },
++          makeModel("missing-transport"),
++        ],
++      },
++    };
++
++    const result = buildInlineProviderModels(providers);
++
++    expect(result.map((model) => ({ id: model.id, api: model.api }))).toEqual([
++      { id: "kimi-k3", api: "openai-completions" },
++      { id: "missing-transport", api: undefined },
++    ]);
++  });
++
+   it("inherits both baseUrl and api from provider config", () => {
+     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+       custom: {
+diff --git a/src/agents/embedded-agent-runner/model.inline-provider.ts b/src/agents/embedded-agent-runner/model.inline-provider.ts
+index 3c447314e55bf0669329f483416b30c8b40b3b54..7a5610874fee0eb1a198629cc02bd95e579b9ada 100644
+--- a/src/agents/embedded-agent-runner/model.inline-provider.ts
++++ b/src/agents/embedded-agent-runner/model.inline-provider.ts
+@@ -115,7 +115,7 @@ export function resolveProviderModelInput(params: {
+   return normalizedInput.length > 0 ? normalizedInput : ["text"];
+ }
+ 
+-function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: string }): {
++function resolveInlineProviderTransport(params: { api?: unknown; baseUrl?: string }): {
+   api?: Api;
+   baseUrl?: string;
+ } {
+@@ -128,7 +128,7 @@ function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: st
+ }
+ 
+ export function buildInlineProviderModels(
+-  providers: Record<string, InlineProviderConfig>,
++  providers: Record<string, InlineProviderConfig | ModelProviderConfig>,
+ ): InlineModelEntry[] {
+   return Object.entries(providers).flatMap(([providerId, entry]) => {
+     const trimmed = providerId.trim();
+diff --git a/src/agents/embedded-agent-runner/model.ts b/src/agents/embedded-agent-runner/model.ts
+index 04893a71490c2c342bcb60d248302a9f90189662..c939d4d781c883aee9af311b3b5f4d122db827ea 100644
+--- a/src/agents/embedded-agent-runner/model.ts
++++ b/src/agents/embedded-agent-runner/model.ts
+@@ -1,5 +1,9 @@
+ import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+-import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
++import type {
++  ModelCompatConfig,
++  ModelMediaInputConfig,
++  ModelProviderConfig,
++} from "../../config/types.models.js";
+ import type { OpenClawConfig } from "../../config/types.openclaw.js";
+ import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registry.js";
+ import type { Api, Model } from "../../llm/types.js";
+@@ -413,7 +417,7 @@ function matchesProviderScopedModelId(params: {
+ }
+ 
+ function findInlineModelMatch(params: {
+-  providers: Record<string, InlineProviderConfig>;
++  providers: Record<string, ModelProviderConfig>;
+   provider: string;
+   modelId: string;
+ }) {
+@@ -438,6 +442,17 @@ function findInlineModelMatch(params: {
+ 
+ export { buildModelAliasLines, buildInlineProviderModels };
+ 
++function toInlineProviderConfig(providerConfig: ModelProviderConfig): InlineProviderConfig {
++  const api = normalizeResolvedTransportApi(providerConfig.api);
++  if (api === providerConfig.api) {
++    return providerConfig as InlineProviderConfig;
++  }
++  return {
++    ...providerConfig,
++    api,
++  };
++}
++
+ function resolveConfiguredProviderConfig(
+   cfg: OpenClawConfig | undefined,
+   provider: string,
+@@ -448,9 +463,12 @@ function resolveConfiguredProviderConfig(
+   }
+   const exactProviderConfig = configuredProviders[provider];
+   if (exactProviderConfig) {
+-    return exactProviderConfig;
++    return toInlineProviderConfig(exactProviderConfig);
+   }
+-  return findNormalizedProviderValue(configuredProviders, provider);
++  const normalizedProviderConfig = findNormalizedProviderValue(configuredProviders, provider);
++  return normalizedProviderConfig
++    ? toInlineProviderConfig(normalizedProviderConfig)
++    : undefined;
+ }
+ 
+ function isModelsAddMetadataModel(params: {
+diff --git a/src/config/types.models.ts b/src/config/types.models.ts
+index 307188c91a34fc0b38f371fc8548f52a416bd4dc..07109bedb50ed5334c0c070ab5f277f8e1212f26 100644
+--- a/src/config/types.models.ts
++++ b/src/config/types.models.ts
+@@ -8,7 +8,9 @@ import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
+ import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
+ import type { SecretInput } from "./types.secrets.js";
+ 
+-export const MODEL_APIS = [
++export const LOBSTERAI_MODEL_COMPAT_API = "lobsterai-model-compat";
++
++export const MODEL_TRANSPORT_APIS = [
+   "openai-completions",
+   "openai-responses",
+   "openai-chatgpt-responses",
+@@ -21,6 +23,12 @@ export const MODEL_APIS = [
+   "azure-openai-responses",
+ ] as const;
+ 
++export const MODEL_APIS = [
++  ...MODEL_TRANSPORT_APIS,
++  LOBSTERAI_MODEL_COMPAT_API,
++] as const;
++
++export type ModelTransportApi = (typeof MODEL_TRANSPORT_APIS)[number];
+ export type ModelApi = (typeof MODEL_APIS)[number];
+ 
+ type SupportedOpenAICompatFields = Pick<
+@@ -123,7 +131,7 @@ export type ModelProviderLocalServiceConfig = {
+ export type ModelDefinitionConfig = {
+   id: string;
+   name: string;
+-  api?: ModelApi;
++  api?: ModelTransportApi;
+   baseUrl?: string;
+   reasoning: boolean;
+   input: Array<"text" | "image" | "video" | "audio">;
+diff --git a/src/config/zod-schema.core.ts b/src/config/zod-schema.core.ts
+index 73fd382641e31bd583dc43413b74372c2c2fb684..84bf8ded9aa8906686b36a6212fd6b5cc6332f38 100644
+--- a/src/config/zod-schema.core.ts
++++ b/src/config/zod-schema.core.ts
+@@ -9,7 +9,7 @@ import {
+   isValidFileSecretRefId,
+ } from "../secrets/ref-contract.js";
+ import type { ModelCompatConfig } from "./types.models.js";
+-import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
++import { MODEL_APIS, MODEL_THINKING_FORMATS, MODEL_TRANSPORT_APIS } from "./types.models.js";
+ import type { MediaToolsConfig } from "./types.tools.js";
+ import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
+ import { sensitive } from "./zod-schema.sensitive.js";
+@@ -201,6 +201,7 @@ export const SecretsConfigSchema = z
+   .optional();
+ 
+ const ModelApiSchema = z.enum(MODEL_APIS);
++const ModelTransportApiSchema = z.enum(MODEL_TRANSPORT_APIS);
+ 
+ const ModelCompatSchema = z
+   .object({
+@@ -344,7 +345,7 @@ const ModelDefinitionSchema = z
+   .object({
+     id: z.string().min(1),
+     name: z.string().min(1),
+-    api: ModelApiSchema.optional(),
++    api: ModelTransportApiSchema.optional(),
+     baseUrl: z.string().min(1).optional(),
+     reasoning: z.boolean().optional(),
+     input: z
+diff --git a/src/config/zod-schema.model-api-owner.test.ts b/src/config/zod-schema.model-api-owner.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..b9e3f2e07c99c6ae1813e7c704b0f311b8ca438a
+--- /dev/null
++++ b/src/config/zod-schema.model-api-owner.test.ts
+@@ -0,0 +1,61 @@
++import { describe, expect, it } from "vitest";
++import { ModelsConfigSchema } from "./zod-schema.core.js";
++
++describe("ModelsConfigSchema provider API owners", () => {
++  it("accepts the exact LobsterAI provider owner while models keep explicit transports", () => {
++    const result = ModelsConfigSchema.safeParse({
++      providers: {
++        custom_0: {
++          baseUrl: "https://gateway.example.com/v1",
++          api: "lobsterai-model-compat",
++          models: [
++            {
++              id: "kimi-k3",
++              name: "Kimi K3",
++              api: "openai-completions",
++            },
++            {
++              id: "plain-model",
++              name: "Plain Model",
++              api: "anthropic-messages",
++            },
++          ],
++        },
++      },
++    });
++
++    expect(result.success).toBe(true);
++  });
++
++  it("rejects arbitrary provider API owner strings", () => {
++    const result = ModelsConfigSchema.safeParse({
++      providers: {
++        custom_0: {
++          baseUrl: "https://gateway.example.com/v1",
++          api: "arbitrary-plugin-owner",
++          models: [{ id: "model", name: "Model", api: "openai-completions" }],
++        },
++      },
++    });
++
++    expect(result.success).toBe(false);
++  });
++
++  it("rejects recursive model-level compatibility ownership", () => {
++    const result = ModelsConfigSchema.safeParse({
++      providers: {
++        custom_0: {
++          baseUrl: "https://gateway.example.com/v1",
++          api: "lobsterai-model-compat",
++          models: [{
++            id: "kimi-k3",
++            name: "Kimi K3",
++            api: "lobsterai-model-compat",
++          }],
++        },
++      },
++    });
++
++    expect(result.success).toBe(false);
++  });
++});
+diff --git a/src/plugins/provider-config-owner.test.ts b/src/plugins/provider-config-owner.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d77bed074006ae3ae74597418a2619090ef010c5
+--- /dev/null
++++ b/src/plugins/provider-config-owner.test.ts
+@@ -0,0 +1,38 @@
++import { describe, expect, it } from "vitest";
++import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
++
++describe("resolveProviderConfigApiOwnerHint", () => {
++  it("routes the exact LobsterAI compatibility owner without changing model transports", () => {
++    const config = {
++      models: {
++        providers: {
++          custom_0: {
++            baseUrl: "https://gateway.example.com/v1",
++            api: "lobsterai-model-compat",
++            models: [
++              {
++                id: "kimi-k3",
++                name: "Kimi K3",
++                api: "openai-completions",
++              },
++              {
++                id: "plain-model",
++                name: "Plain Model",
++                api: "anthropic-messages",
++              },
++            ],
++          },
++        },
++      },
++    };
++
++    expect(resolveProviderConfigApiOwnerHint({
++      provider: "custom_0",
++      config: config as never,
++    })).toBe("lobsterai-model-compat");
++    expect(config.models.providers.custom_0.models.map((model) => model.api)).toEqual([
++      "openai-completions",
++      "anthropic-messages",
++    ]);
++  });
++});

@@ -1,0 +1,311 @@
+OpenClaw v2026.8.1: retain older memory-index archives without blocking startup.
+
+Base: ea806575e6450e4d1efdfc72c19f04be982a1b9b.
+
+The memory-core migration already resolves derived-index conflicts by keeping
+canonical per-agent SQLite rows. An existing main.sqlite.migrated nevertheless
+leaves the legacy sidecar active and emits a warning, which startup preflight
+treats as fatal on every retry.
+
+Follow the numbered .migrated.2 convention of archiveLegacyStateSource, but
+choose one free generation for the entire SQLite family (database/WAL/SHM/journal).
+Preserve all earlier archives, use no-clobber moves and rollback, and retain
+normal blocking behavior on import or filesystem failures. This belongs in the
+plugin migration owner, not in LobsterAI's config repair or startup helper.
+
+diff --git a/extensions/memory-core/doctor-contract-api.test.ts b/extensions/memory-core/doctor-contract-api.test.ts
+index 42502c822d1..2accfedb9a4 100644
+--- a/extensions/memory-core/doctor-contract-api.test.ts
++++ b/extensions/memory-core/doctor-contract-api.test.ts
+@@ -2102,4 +2102,205 @@ describe("memory-core doctor dreaming migration", () => {
+   });
+
++  it("archives a conflicting sidecar despite an existing archive and converges on retry", async () => {
++    const stateDir = path.join(rootDir, "state");
++    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
++    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
++    await writeLegacyMemorySidecar(legacyPath);
++    await createCanonicalMemoryIndex(agentPath, "canonical memory remains authoritative");
++    const originalBytes = await fs.readFile(legacyPath);
++    const oldArchive = Buffer.from("an earlier migration backup; preserve it");
++    await fs.writeFile(`${legacyPath}.migrated`, oldArchive);
++    const canonicalRows = readMemoryRows(agentPath);
++
++    const migration = legacyMemoryIndexMigration();
++    const result = await migration.migrateLegacyState(migrationParams());
++
++    expect(result.warnings).toEqual([]);
++    expect(result.changes).toContain(
++      `Archived Memory Core legacy memory index sidecar -> ${legacyPath}.migrated.2`,
++    );
++    expect(readMemoryRows(agentPath)).toEqual(canonicalRows);
++    await expect(fs.readFile(`${legacyPath}.migrated`)).resolves.toEqual(oldArchive);
++    await expect(fs.readFile(`${legacyPath}.migrated.2`)).resolves.toEqual(originalBytes);
++    await expect(fs.access(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
++    expect(await migration.detectLegacyState(migrationParams())).toBeNull();
++    expect(await migration.migrateLegacyState(migrationParams())).toEqual({
++      changes: [],
++      warnings: [],
++    });
++  });
++
++  it.each(["", "-wal", "-shm", "-journal"])(
++    "selects one unused archive generation when %s has an older backup",
++    async (suffix) => {
++      const legacyPath = path.join(rootDir, "state", "memory", "main.sqlite");
++      await writeLegacyMemorySidecar(legacyPath);
++      const originalBytes = await fs.readFile(legacyPath);
++      await fs.writeFile(`${legacyPath}.migrated`, "first archive");
++      const occupied = `${legacyPath}${suffix}.migrated.2`;
++      await fs.writeFile(occupied, "second archive companion");
++
++      const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
++
++      expect(result.warnings).toEqual([]);
++      expect(result.changes).toContain(
++        `Archived Memory Core legacy memory index sidecar -> ${legacyPath}.migrated.3`,
++      );
++      await expect(fs.readFile(`${legacyPath}.migrated.3`)).resolves.toEqual(originalBytes);
++      await expect(fs.readFile(`${legacyPath}.migrated`, "utf8")).resolves.toBe("first archive");
++      await expect(fs.readFile(occupied, "utf8")).resolves.toBe("second archive companion");
++      expect(await legacyMemoryIndexMigration().detectLegacyState(migrationParams())).toBeNull();
++    },
++  );
++
++  it("preserves an identical older backup while importing the current sidecar", async () => {
++    const legacyPath = path.join(rootDir, "state", "memory", "main.sqlite");
++    await writeLegacyMemorySidecar(legacyPath);
++    const bytes = await fs.readFile(legacyPath);
++    await fs.writeFile(`${legacyPath}.migrated`, bytes);
++
++    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
++
++    expect(result.warnings).toEqual([]);
++    await expect(fs.readFile(`${legacyPath}.migrated`)).resolves.toEqual(bytes);
++    await expect(fs.readFile(`${legacyPath}.migrated.2`)).resolves.toEqual(bytes);
++    expect(await legacyMemoryIndexMigration().detectLegacyState(migrationParams())).toBeNull();
++  });
++
++  it("preserves a directory occupying an archive name", async () => {
++    const legacyPath = path.join(rootDir, "state", "memory", "main.sqlite");
++    await writeLegacyMemorySidecar(legacyPath);
++    await fs.mkdir(`${legacyPath}.migrated`);
++
++    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
++
++    expect(result.warnings).toEqual([]);
++    expect((await fs.lstat(`${legacyPath}.migrated`)).isDirectory()).toBe(true);
++    await expect(fs.access(`${legacyPath}.migrated.2`)).resolves.toBeUndefined();
++  });
++
++  it("retains the sidecar when archive inspection fails and succeeds on retry", async () => {
++    const legacyPath = path.join(rootDir, "state", "memory", "main.sqlite");
++    await writeLegacyMemorySidecar(legacyPath);
++    const bytes = await fs.readFile(legacyPath);
++    const realLstat = fs.lstat;
++    const probe = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
++      if (String(args[0]) === `${legacyPath}.migrated`) {
++        throw Object.assign(new Error("injected archive inspection failure"), { code: "EACCES" });
++      }
++      return realLstat(...args);
++    });
++
++    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
++    probe.mockRestore();
++
++    expect(result.warnings.join(" ")).toContain("injected archive inspection failure");
++    await expect(fs.readFile(legacyPath)).resolves.toEqual(bytes);
++    expect(
++      (await legacyMemoryIndexMigration().migrateLegacyState(migrationParams())).warnings,
++    ).toEqual([]);
++    expect(await legacyMemoryIndexMigration().detectLegacyState(migrationParams())).toBeNull();
++  });
++
++  it("does not overwrite an archive created after generation selection", async () => {
++    const legacyPath = path.join(rootDir, "state", "memory", "main.sqlite");
++    await writeLegacyMemorySidecar(legacyPath);
++    const bytes = await fs.readFile(legacyPath);
++    await fs.writeFile(`${legacyPath}.migrated`, "first archive");
++    const realLstat = fs.lstat;
++    let checked = 0;
++    const probe = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
++      try {
++        return await realLstat(...args);
++      } catch (err) {
++        if (String(args[0]).startsWith(legacyPath) && String(args[0]).endsWith(".migrated.2")) {
++          checked++;
++          if (checked === 4) {
++            await fs.writeFile(`${legacyPath}.migrated.2`, "concurrent archive");
++          }
++        }
++        throw err;
++      }
++    });
++
++    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
++    probe.mockRestore();
++
++    expect(result.warnings.join(" ")).toContain("Failed archiving");
++    await expect(fs.readFile(legacyPath)).resolves.toEqual(bytes);
++    await expect(fs.readFile(`${legacyPath}.migrated.2`, "utf8")).resolves.toBe(
++      "concurrent archive",
++    );
++    expect(
++      (await legacyMemoryIndexMigration().migrateLegacyState(migrationParams())).warnings,
++    ).toEqual([]);
++    await expect(fs.readFile(`${legacyPath}.migrated.3`)).resolves.toEqual(bytes);
++  });
++
++  it.each([false, true])(
++    "preserves the SQLite journal family across archive and retry (race=%s)",
++    async (race) => {
++      const legacyPath = path.join(rootDir, "state", "memory", "main.sqlite");
++      await writeLegacyMemorySidecar(legacyPath);
++      const db = new DatabaseSync(legacyPath);
++      try {
++        db.exec(
++          "PRAGMA journal_mode=PERSIST; UPDATE chunks SET text = 'persistent journal fixture'",
++        );
++      } finally {
++        db.close();
++      }
++      const bytes = await fs.readFile(legacyPath);
++      const journal = await fs.readFile(`${legacyPath}-journal`);
++      expect(journal.length).toBeGreaterThan(0);
++      await fs.writeFile(`${legacyPath}.migrated`, "first archive");
++      const realLstat = fs.lstat;
++      let checked = 0;
++      const probe = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
++        try {
++          return await realLstat(...args);
++        } catch (err) {
++          if (
++            race &&
++            String(args[0]).startsWith(legacyPath) &&
++            String(args[0]).endsWith(".migrated.2")
++          ) {
++            checked++;
++            if (checked === 4) {
++              await fs.writeFile(`${legacyPath}-journal.migrated.2`, "concurrent journal archive");
++            }
++          }
++          throw err;
++        }
++      });
++      const migration = legacyMemoryIndexMigration();
++      const result = await migration.migrateLegacyState(migrationParams());
++      probe.mockRestore();
++
++      if (race) {
++        expect(result.warnings.join(" ")).toContain("Failed archiving");
++        // The main database was moved before the journal collision. It must
++        // be restored alongside the journal, without replacing the contender.
++        await expect(fs.readFile(legacyPath)).resolves.toEqual(bytes);
++        await expect(fs.readFile(`${legacyPath}-journal`)).resolves.toEqual(journal);
++        await expect(fs.access(`${legacyPath}.migrated.2`)).rejects.toMatchObject({
++          code: "ENOENT",
++        });
++        await expect(fs.readFile(`${legacyPath}-journal.migrated.2`, "utf8")).resolves.toBe(
++          "concurrent journal archive",
++        );
++        expect((await migration.migrateLegacyState(migrationParams())).warnings).toEqual([]);
++      } else {
++        expect(result.warnings).toEqual([]);
++      }
++      const suffix = race ? ".migrated.3" : ".migrated.2";
++      await expect(fs.readFile(`${legacyPath}${suffix}`)).resolves.toEqual(bytes);
++      await expect(fs.readFile(`${legacyPath}-journal${suffix}`)).resolves.toEqual(journal);
++      await expect(fs.readFile(`${legacyPath}.migrated`, "utf8")).resolves.toBe("first archive");
++      await expect(fs.access(`${legacyPath}-journal`)).rejects.toMatchObject({ code: "ENOENT" });
++      expect(await migration.detectLegacyState(migrationParams())).toBeNull();
++    },
++  );
++
+   it("archives conflicting custom derived indexes without creating a retry copy", async () => {
+     const stateDir = path.join(rootDir, "state");
+diff --git a/extensions/memory-core/src/migration/doctor-memory-sidecar.ts b/extensions/memory-core/src/migration/doctor-memory-sidecar.ts
+index e5a35125913..2d99ac5e360 100644
+--- a/extensions/memory-core/src/migration/doctor-memory-sidecar.ts
++++ b/extensions/memory-core/src/migration/doctor-memory-sidecar.ts
+@@ -3,4 +3,5 @@ import type { Dirent } from "node:fs";
+ import fs from "node:fs/promises";
+ import path from "node:path";
++import { root, type Root } from "@openclaw/fs-safe";
+ import { reclaimDefinitelyStaleFileLock } from "openclaw/plugin-sdk/file-lock";
+ import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-fs";
+@@ -208,15 +209,36 @@ async function archiveLegacyMemorySidecar(params: {
+     return;
+   }
+-  const existingArchives = (
+-    await Promise.all(
+-      existingSources.map(async (sourcePath) => {
+-        const archivedPath = `${sourcePath}.migrated`;
+-        return (await legacyStateFileExists(archivedPath)) ? archivedPath : null;
+-      }),
+-    )
+-  ).filter((filePath): filePath is string => filePath !== null);
+-  if (existingArchives.length > 0) {
++  let archiveRoot: Root;
++  let archiveSuffix = ".migrated";
++  try {
++    archiveRoot = await root(path.dirname(params.source.legacyPath), {
++      hardlinks: "reject",
++      symlinks: "reject",
++    });
++    // Import/canonical conflict resolution has already completed. Keep earlier
++    // backups and select one free generation for the entire SQLite family,
++    // including companions absent from this source, so generations cannot mix.
++    for (let generation = 1; ; generation++) {
++      archiveSuffix = generation === 1 ? ".migrated" : `.migrated.${generation}`;
++      const occupied = await Promise.all(
++        LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
++          try {
++            await fs.lstat(`${params.source.legacyPath}${suffix}${archiveSuffix}`);
++            return true;
++          } catch (err) {
++            if ((err as NodeJS.ErrnoException).code === "ENOENT") {
++              return false;
++            }
++            throw err;
++          }
++        }),
++      );
++      if (!occupied.some(Boolean)) {
++        break;
++      }
++    }
++  } catch (err) {
+     params.warnings.push(
+-      `Left migrated Memory Core legacy memory index sidecar in place because ${existingArchives[0]} already exists`,
++      `Failed preparing Memory Core legacy memory index archive for ${params.source.legacyPath}: ${String(err)}`,
+     );
+     return;
+@@ -224,7 +246,9 @@ async function archiveLegacyMemorySidecar(params: {
+   const renamed: Array<{ sourcePath: string; archivedPath: string }> = [];
+   for (const sourcePath of existingSources) {
+-    const archivedPath = `${sourcePath}.migrated`;
++    const archivedPath = `${sourcePath}${archiveSuffix}`;
+     try {
+-      await fs.rename(sourcePath, archivedPath);
++      // move defaults to no-clobber, including a destination created after the
++      // generation check. Rollback uses the same rule to preserve new sources.
++      await archiveRoot.move(path.basename(sourcePath), path.basename(archivedPath));
+       renamed.push({ sourcePath, archivedPath });
+     } catch (err) {
+@@ -235,5 +259,8 @@ async function archiveLegacyMemorySidecar(params: {
+             !(await legacyStateFileExists(entry.sourcePath))
+           ) {
+-            await fs.rename(entry.archivedPath, entry.sourcePath);
++            await archiveRoot.move(
++              path.basename(entry.archivedPath),
++              path.basename(entry.sourcePath),
++            );
+           }
+         } catch (rollbackErr) {
+@@ -250,5 +277,5 @@ async function archiveLegacyMemorySidecar(params: {
+   }
+   params.changes.push(
+-    `Archived Memory Core legacy memory index sidecar -> ${params.source.legacyPath}.migrated`,
++    `Archived Memory Core legacy memory index sidecar -> ${params.source.legacyPath}${archiveSuffix}`,
+   );
+ }

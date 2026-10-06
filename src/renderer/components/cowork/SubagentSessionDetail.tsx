@@ -1,8 +1,11 @@
 import { ArrowLeftIcon } from '@heroicons/react/20/solid';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
 
 import { i18nService } from '../../services/i18n';
+import type { RootState } from '../../store';
 import type { CoworkMessage, SubagentSessionSummary } from '../../types/cowork';
+import { getSubagentDisplayName } from '../../utils/subagentDisplay';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ConversationTurnsView from './ConversationTurnsView';
@@ -18,11 +21,13 @@ interface SubagentSessionDetailProps {
 
 const SubagentSessionDetail: React.FC<SubagentSessionDetailProps> = ({ subagent, onBack, isSidebarCollapsed, onToggleSidebar, onNewChat, updateBadge }) => {
   const isMac = window.electron.platform === 'darwin';
+  const isWindows = window.electron.platform === 'win32';
   const [messages, setMessages] = useState<CoworkMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<'running' | 'done' | 'error'>(subagent.status);
   const contentRef = useRef<HTMLDivElement>(null);
   const prevMessageCountRef = useRef(0);
+  const agents = useSelector((state: RootState) => state.agent.agents);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -75,7 +80,9 @@ const SubagentSessionDetail: React.FC<SubagentSessionDetailProps> = ({ subagent,
   }, [fetchHistory, fetchStatus, status]);
 
   // Use agent name as title to avoid duplicating the task content shown in conversation
-  const displayTitle = subagent.agentId ?? subagent.label ?? 'Subagent';
+  const displayTitle = useMemo(() => {
+    return getSubagentDisplayName(subagent, agents);
+  }, [agents, subagent]);
 
   // When messages are empty but task exists, synthesize a user message so
   // the view shows the initial prompt instead of "暂无对话记录"
@@ -95,7 +102,7 @@ const SubagentSessionDetail: React.FC<SubagentSessionDetailProps> = ({ subagent,
       {/* Header */}
       <div className="draggable flex h-12 items-center gap-3 border-b border-border px-4 bg-background shrink-0">
         <div className="non-draggable flex items-center gap-2">
-          {isSidebarCollapsed && (
+          {isSidebarCollapsed && !isWindows && (
             <div className={`flex items-center gap-1 mr-1 ${isMac ? 'pl-[68px]' : ''}`}>
               <button
                 type="button"

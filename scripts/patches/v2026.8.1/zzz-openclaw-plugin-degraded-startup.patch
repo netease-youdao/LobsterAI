@@ -1,0 +1,2496 @@
+diff --git a/src/cli/update-cli/post-core-plugin-convergence.test.ts b/src/cli/update-cli/post-core-plugin-convergence.test.ts
+index b619c024009..1b667423866 100644
+--- a/src/cli/update-cli/post-core-plugin-convergence.test.ts
++++ b/src/cli/update-cli/post-core-plugin-convergence.test.ts
+@@ -511,7 +511,6 @@ describe("runPostCorePluginConvergence", () => {
+           : [],
+       });
+       const result = await runStartupUpgradeConvergence({ cfg, env: {} });
+-      expect(result.blockingDiagnostic).toBeNull();
+       expect(result.quarantinedPlugins).toEqual(
+         missingPayload
+           ? [expect.objectContaining({ pluginId, state: "configured-unavailable" })]
+@@ -525,7 +524,7 @@ describe("runPostCorePluginConvergence", () => {
+     },
+   );
+ 
+-  it("still blocks startup when failed repair leaves no verifiable payload owner", async () => {
++  it("starts degraded when failed repair leaves an installed plugin without a payload path", async () => {
+     const pluginId = "document-skills";
+     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+       changes: [],
+@@ -541,8 +540,9 @@ describe("runPostCorePluginConvergence", () => {
+       cfg: { plugins: { entries: { [pluginId]: { enabled: true } } } },
+       env: {},
+     });
+-    expect(result.blockingDiagnostic).toMatchObject({ kind: "plugin-verification" });
+-    expect(result.quarantinedPlugins).toEqual([]);
++    expect(result.quarantinedPlugins).toEqual([
++      expect.objectContaining({ pluginId, state: "configured-unavailable" }),
++    ]);
+   });
+ 
+   it("keeps inactive repair failures nonblocking", async () => {
+@@ -713,7 +713,7 @@ describe("runPostCorePluginConvergence", () => {
+     const message =
+       'Plugin "brave" failed post-core payload smoke check (unreadable-package-json): Could not read package.json at /p/brave/package.json: EACCES: permission denied';
+     const guidance = [
+-      "Fix file access for /p/brave/package.json so it is readable by the user running OpenClaw. For EACCES or EPERM, correct its ownership or permissions; otherwise resolve the reported filesystem I/O error, then retry.",
++      `Fix file access for ${path.join("/p/brave", "package.json")} so it is readable by the user running OpenClaw. For EACCES or EPERM, correct its ownership or permissions; otherwise resolve the reported filesystem I/O error, then retry.`,
+       "Run `openclaw plugins inspect brave --runtime --json` for details.",
+     ];
+     expect(result.warnings).toStrictEqual([
+diff --git a/src/commands/doctor-config-preflight-plugin-verification.test.ts b/src/commands/doctor-config-preflight-plugin-verification.test.ts
+index 5d4ba490459..2729bf6047c 100644
+--- a/src/commands/doctor-config-preflight-plugin-verification.test.ts
++++ b/src/commands/doctor-config-preflight-plugin-verification.test.ts
+@@ -1,19 +1,77 @@
+-import { describe, expect, it } from "vitest";
+-import { formatStartupPluginVerificationFailure } from "./doctor-config-preflight-plugin-verification.js";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { PLUGIN_AVAILABILITY_POLICY } from "../plugins/runtime-degraded-state.js";
+ 
+-describe("formatStartupPluginVerificationFailure", () => {
+-  it("uses install-neutral gateway restart guidance", () => {
+-    expect(
+-      formatStartupPluginVerificationFailure({
+-        kind: "plugin-verification",
+-        messages: ['Plugin "discord" has no install path.'],
+-      }),
+-    ).toBe(
+-      [
+-        "OpenClaw plugin verification failed; refusing to report the gateway ready.",
+-        '- Plugin "discord" has no install path.',
+-        "Resolve the plugin verification errors above, then restart the Gateway.",
+-      ].join("\n"),
++const mocks = vi.hoisted(() => ({ converge: vi.fn(), verify: vi.fn() }));
++vi.mock("./doctor/shared/startup-plugin-convergence-plan.js", () => ({
++  planStartupPluginConvergence: async () => ({ required: true, installRecords: {} }),
++}));
++vi.mock("../cli/update-cli/post-core-plugin-convergence.js", () => ({
++  runPostCorePluginConvergence: mocks.converge,
++}));
++vi.mock("../cli/update-cli/active-plugin-payload-validation.js", () => ({
++  runActivePluginPayloadSmokeCheck: mocks.verify,
++}));
++vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
++
++const { runStartupUpgradeConvergence, refreshStartupPluginQuarantine } =
++  await import("./doctor-config-preflight-plugin-verification.js");
++
++describe("configured plugin availability at startup", () => {
++  beforeEach(() => vi.clearAllMocks());
++
++  it.each(["memory-tencentdb", "another-plugin"])(
++    "retains config and quarantines %s after update and peer-link repair failures",
++    async (pluginId) => {
++      const cfg = { plugins: { entries: { [pluginId]: { enabled: true, config: { keep: 42 } } } } };
++      const before = structuredClone(cfg);
++      mocks.converge.mockResolvedValue({
++        changes: [],
++        warnings: [
++          {
++            pluginId,
++            reason: "package repair failed",
++            message: "Failed to update plugin",
++            guidance: [],
++          },
++        ],
++        smokeFailures: [
++          {
++            pluginId,
++            reason: "missing-openclaw-peer-link",
++            detail: "missing host link",
++            installPath: "/plugins/broken",
++          },
++        ],
++      });
++      const result = await runStartupUpgradeConvergence({ cfg, env: {} });
++      expect(result.warnings).toEqual(["Failed to update plugin"]);
++      expect(result.quarantinedPlugins).toEqual([
++        expect.objectContaining({ pluginId, state: PLUGIN_AVAILABILITY_POLICY.state }),
++      ]);
++      expect(cfg).toEqual(before);
++    },
++  );
++
++  it("keeps a pathless installed record unavailable across a current checkpoint", async () => {
++    mocks.verify.mockResolvedValue({
++      failures: [
++        { pluginId: "pathless", reason: "missing-install-path", detail: "Install path missing" },
++      ],
++    });
++    const result = await refreshStartupPluginQuarantine({
++      cfg: { plugins: { entries: { pathless: { enabled: true } } } },
++      env: {},
++    });
++    expect(result.quarantinedPlugins).toEqual([
++      expect.objectContaining({ pluginId: "pathless", state: PLUGIN_AVAILABILITY_POLICY.state }),
++    ]);
++    expect(mocks.converge).not.toHaveBeenCalled();
++  });
++
++  it("does not turn an unexpected convergence exception into a successful boot", async () => {
++    mocks.converge.mockRejectedValue(new Error("state database is unreadable"));
++    await expect(runStartupUpgradeConvergence({ cfg: {}, env: {} })).rejects.toThrow(
++      "state database is unreadable",
+     );
+   });
+ });
+diff --git a/src/commands/doctor-config-preflight-plugin-verification.ts b/src/commands/doctor-config-preflight-plugin-verification.ts
+index 23be3f7fe92..ff94664c8f4 100644
+--- a/src/commands/doctor-config-preflight-plugin-verification.ts
++++ b/src/commands/doctor-config-preflight-plugin-verification.ts
+@@ -11,13 +11,8 @@ import {
+ import { resolveCompatibilityHostVersion } from "../version.js";
+ import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
+ 
+-type StartupPluginVerificationDiagnostic = {
+-  kind: "plugin-verification";
+-  messages: string[];
+-};
+-
+ type StartupPluginConvergenceResult = {
+-  blockingDiagnostic: StartupPluginVerificationDiagnostic | null;
++  warnings?: string[];
+   quarantinedPlugins: DegradedPlugin[];
+ };
+ 
+@@ -59,10 +54,8 @@ function buildStartupPluginQuarantine(params: {
+   failures: readonly PluginPayloadSmokeFailure[];
+ }): DegradedPlugin[] {
+   return buildDegradedPluginsFromVerificationFailures(
+-    params.failures.filter(
+-      (failure) =>
+-        Boolean(failure.installPath) &&
+-        isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
++    params.failures.filter((failure) =>
++      isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
+     ),
+   );
+ }
+@@ -83,7 +76,7 @@ export async function runStartupUpgradeConvergence(params: {
+ }): Promise<StartupPluginConvergenceResult> {
+   const plan = await planStartupPluginVerification(params);
+   if (!plan.required) {
+-    return { blockingDiagnostic: null, quarantinedPlugins: [] };
++    return { quarantinedPlugins: [] };
+   }
+   const { runPostCorePluginConvergence } = await measureDoctorConfigPreflightStep(
+     "plugin-convergence-import",
+@@ -120,27 +113,8 @@ export async function runStartupUpgradeConvergence(params: {
+     cfg: params.cfg,
+     failures: convergence.smokeFailures,
+   });
+-  const nonBlockingWarningKeys = new Set(
+-    convergence.smokeFailures
+-      .filter(
+-        (failure) =>
+-          Boolean(failure.installPath) ||
+-          !isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
+-      )
+-      .map((failure) => JSON.stringify([failure.pluginId, `${failure.reason}: ${failure.detail}`])),
+-  );
+-  const blockingMessages = convergence.warnings
+-    .filter(
+-      (warning) =>
+-        !warning.pluginId ||
+-        !nonBlockingWarningKeys.has(JSON.stringify([warning.pluginId, warning.reason])),
+-    )
+-    .map((warning) => `${warning.message} ${warning.guidance.join(" ")}`.trim());
+   return {
+-    blockingDiagnostic:
+-      blockingMessages.length > 0
+-        ? { kind: "plugin-verification", messages: blockingMessages }
+-        : null,
++    ...(warnings.length > 0 ? { warnings } : {}),
+     quarantinedPlugins,
+   };
+ }
+@@ -152,7 +126,7 @@ export async function refreshStartupPluginQuarantine(params: {
+ }): Promise<StartupPluginConvergenceResult> {
+   const plan = await planStartupPluginVerification(params);
+   if (!plan.required) {
+-    return { blockingDiagnostic: null, quarantinedPlugins: [] };
++    return { quarantinedPlugins: [] };
+   }
+   const { runActivePluginPayloadSmokeCheck } = await measureDoctorConfigPreflightStep(
+     "plugin-payload-verification-import",
+@@ -199,29 +173,7 @@ function mapStartupPluginQuarantineRefresh(params: {
+   failures: readonly PluginPayloadSmokeFailure[];
+ }): StartupPluginConvergenceResult {
+   const quarantinedPlugins = buildStartupPluginQuarantine(params);
+-  const blockingFailures = params.failures.filter(
+-    (failure) =>
+-      !failure.installPath &&
+-      isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
+-  );
+   return {
+-    blockingDiagnostic:
+-      blockingFailures.length > 0
+-        ? {
+-            kind: "plugin-verification",
+-            messages: blockingFailures.map(formatStartupPluginSmokeFailure),
+-          }
+-        : null,
+     quarantinedPlugins,
+   };
+ }
+-
+-export function formatStartupPluginVerificationFailure(
+-  diagnostic: StartupPluginVerificationDiagnostic,
+-): string {
+-  return [
+-    "OpenClaw plugin verification failed; refusing to report the gateway ready.",
+-    ...diagnostic.messages.map((message) => `- ${message}`),
+-    "Resolve the plugin verification errors above, then restart the Gateway.",
+-  ].join("\n");
+-}
+diff --git a/src/commands/doctor-config-preflight-startup.ts b/src/commands/doctor-config-preflight-startup.ts
+index 8af492c03df..3deb31501fc 100644
+--- a/src/commands/doctor-config-preflight-startup.ts
++++ b/src/commands/doctor-config-preflight-startup.ts
+@@ -12,7 +12,6 @@ import {
+ } from "./doctor-config-preflight-checkpoint.js";
+ import type { DoctorConfigPreflightPluginSnapshotRead } from "./doctor-config-preflight-plugin-index.js";
+ import {
+-  formatStartupPluginVerificationFailure,
+   refreshStartupPluginQuarantine,
+   runStartupUpgradeConvergence,
+ } from "./doctor-config-preflight-plugin-verification.js";
+@@ -110,11 +109,6 @@ export async function completeStartupMigrationPreflight(params: {
+             ...(params.measure ? { measure: params.measure } : {}),
+           });
+       setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins);
+-      if (pluginConvergence.blockingDiagnostic) {
+-        throwStartupMigrationRefusal(
+-          formatStartupPluginVerificationFailure(pluginConvergence.blockingDiagnostic),
+-        );
+-      }
+       if (params.shouldRecordStartupCheckpoint) {
+         const convergedSnapshotRead = await params.readConfigSnapshotForPreflight(false);
+         const convergedBaseConfig =
+diff --git a/src/commands/doctor-config-preflight.state-migration.test.ts b/src/commands/doctor-config-preflight.state-migration.test.ts
+index 52aa5e02dd8..2b92c29ce56 100644
+--- a/src/commands/doctor-config-preflight.state-migration.test.ts
++++ b/src/commands/doctor-config-preflight.state-migration.test.ts
+@@ -742,7 +742,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+     expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+   });
+ 
+-  it("keeps ownerless install-record failures blocking", async () => {
++  it("starts degraded when an installed plugin has no payload path", async () => {
+     needsStartupMigrationCheckpoint.mockReturnValue(true);
+     queueConfigSnapshot(
+       {
+@@ -764,7 +764,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+         warnings: [],
+         issues: [],
+       },
+-      3,
++      4,
+     );
+     runPostCorePluginConvergence.mockResolvedValueOnce(
+       makeStartupConvergenceResult({
+@@ -787,12 +787,12 @@ describe("runDoctorConfigPreflight state migration", () => {
+       }),
+     );
+ 
+-    await expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
+-      'Plugin "discord" has no install path.',
+-    );
++    await runDoctorConfigPreflight(startupCheckpointOptions);
+ 
+-    expect(listActiveDegradedPlugins()).toEqual([]);
+-    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
++    expect(listActiveDegradedPlugins()).toEqual([
++      expect.objectContaining({ pluginId: "discord", state: "configured-unavailable" }),
++    ]);
++    expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();
+   });
+ 
+   it("checkpoints startup migrations without loading plugin convergence when the plan is empty", async () => {
+@@ -898,7 +898,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+   });
+ 
+-  it("blocks gateway readiness when plugin repair warnings remain", async () => {
++  it("checkpoints readiness and reports plugin repair warnings", async () => {
+     needsStartupMigrationCheckpoint.mockReturnValue(true);
+     runPostCorePluginConvergence.mockResolvedValueOnce(
+       makeStartupConvergenceResult({
+@@ -912,20 +912,14 @@ describe("runDoctorConfigPreflight state migration", () => {
+       }),
+     );
+ 
+-    await expect(
+-      runDoctorConfigPreflight({
+-        migrateLegacyConfig: false,
+-        invalidConfigNote: false,
+-        requireStartupMigrationCheckpoint: true,
+-      }),
+-    ).rejects.toThrow("Configured plugin discord is not installed");
++    await runDoctorConfigPreflight(startupCheckpointOptions);
+ 
+     expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({
+       env: acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env,
+       identity: expectMigrationIdentity(),
+       lease: startupMigrationLease,
+     });
+-    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
++    expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();
+     expect(note).toHaveBeenCalledWith(
+       "- Configured plugin discord is not installed. Run `openclaw update repair` to retry plugin repair.",
+       "Doctor warnings",
+diff --git a/src/commands/doctor-lint.missing-load-path.test.ts b/src/commands/doctor-lint.missing-load-path.test.ts
+new file mode 100644
+index 00000000000..bd81600a60d
+--- /dev/null
++++ b/src/commands/doctor-lint.missing-load-path.test.ts
+@@ -0,0 +1,130 @@
++import fs from "node:fs";
++import path from "node:path";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
++import { createConfigIO } from "../config/config.js";
++import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
++import type { OpenClawConfig } from "../config/types.openclaw.js";
++import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
++import { resetPluginCache } from "../plugins/plugin-cache.js";
++import { withEnvAsync } from "../test-utils/env.js";
++import { runDoctorLintCli } from "./doctor-lint.js";
++import { maybeRepairInvalidPluginConfig } from "./doctor/shared/invalid-plugin-config.js";
++import { repairStaleAgentModelRefs } from "./doctor/shared/stale-agent-model-ref-repair.js";
++import { maybeRepairStalePluginConfig } from "./doctor/shared/stale-plugin-config.js";
++import { createTestRuntime } from "./test-runtime-config-helpers.js";
++
++const tempDirs = useAutoCleanupTempDirTracker(afterEach);
++afterEach(resetPluginCache);
++beforeEach(clearHealthChecksForTest);
++afterEach(clearHealthChecksForTest);
++
++describe("Doctor candidate discovery with unavailable configured load paths", () => {
++  it.each([
++    { associated: false, postPlugin: false },
++    { associated: true, postPlugin: false },
++    { associated: true, postPlugin: true },
++  ])(
++    "preserves uninspected config and reports a typed warning (associated: $associated, post-plugin: $postPlugin)",
++    async ({ associated, postPlugin }) => {
++      const root = tempDirs.make("openclaw-missing-load-path-");
++      const missingPath = path.join(root, "unmounted-plugins");
++      const configPath = path.join(root, "openclaw.json");
++      const config: OpenClawConfig = {
++        gateway: { mode: "local" },
++        agents: { defaults: { workspace: root } },
++        plugins: { load: { paths: [missingPath, missingPath] } },
++      };
++      if (associated) {
++        const fallback = path.join(root, "fallback-owner");
++        fs.mkdirSync(fallback);
++        fs.writeFileSync(path.join(fallback, "index.js"), "export default { register() {} };\n");
++        fs.writeFileSync(
++          path.join(fallback, "openclaw.plugin.json"),
++          JSON.stringify({
++            id: "custom-owner",
++            contracts: { tools: ["custom-tool"] },
++            configSchema: {
++              type: "object",
++              properties: { trigger: { type: "object" } },
++              additionalProperties: false,
++            },
++          }),
++        );
++        config.plugins = {
++          ...config.plugins,
++          load: { paths: [missingPath, missingPath, fallback] },
++          allow: ["custom-owner"],
++          deny: ["custom-disabled"],
++          entries: {
++            "custom-owner": { config: { nested: { retained: "verbatim" }, trigger: {} } },
++          },
++          slots: { memory: "custom-memory" },
++        };
++        config.channels = { "custom-channel": { enabled: true, retained: "verbatim" } };
++        config.agents!.defaults!.heartbeat = { target: "custom-channel" };
++        config.agents!.defaults!.model = { primary: "custom-provider/model" };
++        config.agents!.defaults!.models = { "custom-provider/model": {} };
++        config.tools = { web: { search: { provider: "custom-search" } } };
++      }
++      const authored = `// Preserve authored whitespace and uninspected settings.\n${JSON.stringify(config, null, 4)}\n`;
++      fs.writeFileSync(configPath, authored);
++      await withEnvAsync(
++        {
++          OPENCLAW_STATE_DIR: path.join(root, "state"),
++          OPENCLAW_CONFIG_PATH: configPath,
++          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
++          OPENCLAW_UPDATE_IN_PROGRESS: "0",
++          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
++          OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: postPlugin ? "1" : "0",
++        },
++        async () => {
++          const snapshot = await createConfigIO({
++            env: process.env,
++            configPath,
++            observe: false,
++          }).readConfigFileSnapshot();
++          expect(snapshot.issues).toEqual([]);
++          expect(snapshot.valid).toBe(true);
++          expect(snapshot.warnings).toContainEqual(
++            expect.objectContaining({
++              path: "plugins.load.paths",
++              code: "configured-plugin-path-unavailable",
++              source: missingPath,
++            }),
++          );
++          expect(maybeRepairStalePluginConfig(config).config).toEqual(config);
++          expect(maybeRepairInvalidPluginConfig(config).config).toEqual(config);
++          expect(applyPluginAutoEnable({ config }).config).toEqual(config);
++          expect(repairStaleAgentModelRefs(config).config).toEqual(config);
++          const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
++          try {
++            expect(
++              await runDoctorLintCli(createTestRuntime(), {
++                json: true,
++                severityMin: "error",
++                onlyIds: ["core/doctor/final-config-validation"],
++              }),
++            ).toBe(0);
++            const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
++            expect(report).toMatchObject({ ok: true, checksRun: 1, findings: [] });
++            expect(report.warnings).toContainEqual(
++              expect.objectContaining({
++                requirement: "configured-plugin-path-unavailable",
++                severity: "warning",
++                source: missingPath,
++                fixHint: "openclaw doctor --fix",
++              }),
++            );
++            expect(
++              report.warnings.map((warning: { message: string }) => warning.message).join("\n"),
++            ).toContain("Uninspected plugin configuration is preserved");
++          } finally {
++            stdout.mockRestore();
++          }
++          expect(fs.readFileSync(configPath, "utf8")).toBe(authored);
++        },
++      );
++    },
++  );
++});
+diff --git a/src/commands/doctor-lint.plugin-path-inspection.test.ts b/src/commands/doctor-lint.plugin-path-inspection.test.ts
+new file mode 100644
+index 00000000000..6d1ceac1ab4
+--- /dev/null
++++ b/src/commands/doctor-lint.plugin-path-inspection.test.ts
+@@ -0,0 +1,111 @@
++import assert from "node:assert/strict";
++import fs from "node:fs";
++import path from "node:path";
++import { afterEach, beforeEach, expect, it, vi } from "vitest";
++import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
++import { createConfigIO } from "../config/config.js";
++import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
++import type { OpenClawConfig } from "../config/types.openclaw.js";
++import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
++import { discoverConfiguredPluginLoadPaths } from "../plugins/discovery.js";
++import { resetPluginCache } from "../plugins/plugin-cache.js";
++import { withEnvAsync } from "../test-utils/env.js";
++import { runDoctorLintCli } from "./doctor-lint.js";
++import { maybeRepairInvalidPluginConfig } from "./doctor/shared/invalid-plugin-config.js";
++import { maybeRepairStalePluginConfig } from "./doctor/shared/stale-plugin-config.js";
++import { createTestRuntime } from "./test-runtime-config-helpers.js";
++
++const tempDirs = useAutoCleanupTempDirTracker(afterEach);
++beforeEach(clearHealthChecksForTest);
++afterEach(() => {
++  resetPluginCache();
++  clearHealthChecksForTest();
++  vi.restoreAllMocks();
++});
++
++it.skipIf(process.platform === "win32").each([false, true])(
++  "preserves chmod-000 plugin config through Doctor (blocked ancestor: %s)",
++  async (blockedAncestor) => {
++    const root = tempDirs.make("openclaw-plugin-inspection-");
++    const privateDirectory = path.join(root, "private-plugins");
++    const pluginPath = blockedAncestor ? path.join(privateDirectory, "child") : privateDirectory;
++    const configPath = path.join(root, "openclaw.json");
++    const config: OpenClawConfig = {
++      gateway: { mode: "local" },
++      agents: { defaults: { workspace: root } },
++      plugins: {
++        load: { paths: [pluginPath] },
++        entries: { custom: { config: { retained: "uninspected" } } },
++      },
++    };
++    const authored = `// Keep my formatting.\n${JSON.stringify(config, null, 4)}\n`;
++    fs.writeFileSync(configPath, authored);
++    fs.mkdirSync(pluginPath, { recursive: true });
++    fs.chmodSync(privateDirectory, 0);
++    try {
++      await withEnvAsync(
++        {
++          OPENCLAW_STATE_DIR: path.join(root, "state"),
++          OPENCLAW_CONFIG_PATH: configPath,
++          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
++          OPENCLAW_UPDATE_IN_PROGRESS: "0",
++          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
++          OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
++        },
++        async () => {
++          const [diagnostic] = discoverConfiguredPluginLoadPaths({
++            loadPaths: [pluginPath],
++          }).diagnostics;
++          assert(diagnostic, "Discovery must report the failed inspection");
++          expect(diagnostic).toMatchObject({
++            code: "configured-plugin-path-inspection-failed",
++            configDisposition: "preserve",
++            errorCode: "EACCES",
++            source: pluginPath,
++            message: expect.stringContaining("EACCES: permission denied"),
++          });
++          const snapshot = await createConfigIO({
++            configPath,
++            observe: false,
++          }).readConfigFileSnapshot();
++          expect(snapshot.valid).toBe(true);
++          expect(snapshot.warnings).toContainEqual(
++            expect.objectContaining({
++              code: diagnostic.code,
++              errorCode: "EACCES",
++              message: diagnostic.message,
++            }),
++          );
++          expect(maybeRepairStalePluginConfig(config).config).toEqual(config);
++          expect(maybeRepairInvalidPluginConfig(config).config).toEqual(config);
++          expect(applyPluginAutoEnable({ config }).config).toEqual(config);
++          const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
++          expect(
++            await runDoctorLintCli(createTestRuntime(), {
++              json: true,
++              severityMin: "error",
++              onlyIds: ["core/doctor/final-config-validation"],
++            }),
++          ).toBe(0);
++          const reportText = String(stdout.mock.calls.at(-1)?.[0]);
++          stdout.mockRestore();
++          const report = JSON.parse(reportText);
++          expect(report).toMatchObject({ ok: true, checksRun: 1, findings: [] });
++          expect(report.warnings).toContainEqual(
++            expect.objectContaining({
++              requirement: diagnostic.code,
++              errorCode: "EACCES",
++              severity: "warning",
++              source: pluginPath,
++              message: diagnostic.message,
++              fixHint: `Fix permissions on ${pluginPath}, then run \`openclaw doctor --fix\`.`,
++            }),
++          );
++          expect(fs.readFileSync(configPath, "utf8")).toBe(authored);
++        },
++      );
++    } finally {
++      fs.chmodSync(privateDirectory, 0o700);
++    }
++  },
++);
+diff --git a/src/commands/doctor-lint.test.ts b/src/commands/doctor-lint.test.ts
+index e78ad3ae027..f234f3dfd69 100644
+--- a/src/commands/doctor-lint.test.ts
++++ b/src/commands/doctor-lint.test.ts
+@@ -32,7 +32,11 @@ vi.mock("../config/config.js", async (importOriginal) => {
+   mocks.actualReadConfigFileSnapshot.mockImplementation(actual.readConfigFileSnapshot);
+   return {
+     ...actual,
+-    readConfigFileSnapshot: mocks.readConfigFileSnapshot,
++    readConfigFileSnapshot: async (...args: unknown[]) => ({
++      issues: [],
++      warnings: [],
++      ...(await mocks.readConfigFileSnapshot(...args)),
++    }),
+   };
+ });
+ vi.mock("../infra/sqlite-readonly-location.js", async (importOriginal) => {
+@@ -145,7 +149,7 @@ describe("runDoctorLintCli", () => {
+     mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([gatewayCheck]);
+     const registerChecks = vi
+       .spyOn(bundledHealthChecks, "registerBundledHealthChecks")
+-      .mockImplementation(() => {});
++      .mockReturnValue([]);
+     const resolveStateMode = vi
+       .spyOn(bundledHealthChecks, "resolveBundledHealthCheckPluginStateMode")
+       .mockReturnValue("direct");
+@@ -614,7 +618,8 @@ describe("runDoctorLintCli", () => {
+       mocks.actualReadConfigFileSnapshot(...args),
+     );
+     const inspectSourceConfig = vi.fn(async (ctx: { cfg: OpenClawConfig }) => {
+-      expect(ctx.cfg.agents?.defaults?.workspace).toBe(path.join(stateDir, "workspace"));
++      const actualWorkspace = path.normalize(ctx.cfg.agents?.defaults?.workspace ?? "");
++      expect(actualWorkspace).toBe(path.join(stateDir, "workspace"));
+       return [];
+     });
+     registerHealthCheck({
+@@ -626,16 +631,12 @@ describe("runDoctorLintCli", () => {
+ 
+     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+     try {
+-      await expect(
+-        runDoctorLintCli(runtime, {
+-          json: true,
+-          severityMin: "error",
+-          onlyIds: [
+-            "memory-core/managed-local-embedding-setup",
+-            "test/source-config-interpolation",
+-          ],
+-        }),
+-      ).resolves.toBe(0);
++      const exitCode = await runDoctorLintCli(runtime, {
++        json: true,
++        severityMin: "error",
++        onlyIds: ["memory-core/managed-local-embedding-setup", "test/source-config-interpolation"],
++      });
++      expect(exitCode, String(stdout.mock.calls.at(-1)?.[0])).toBe(0);
+       expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+         ok: true,
+         checksRun: 2,
+diff --git a/src/commands/doctor-lint.ts b/src/commands/doctor-lint.ts
+index 959ae79a273..0d9c3d60692 100644
+--- a/src/commands/doctor-lint.ts
++++ b/src/commands/doctor-lint.ts
+@@ -9,7 +9,7 @@ import {
+   registerBundledHealthChecks,
+   resolveBundledHealthCheckPluginStateMode,
+ } from "../flows/bundled-health-checks.js";
+-import { configValidationIssuesToHealthFindings } from "../flows/doctor-core-checks.js";
++import { configValidationIssuesToHealthFindings } from "../flows/doctor-config-validation-findings.js";
+ import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
+ import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
+ import {
+@@ -25,6 +25,7 @@ import {
+   type HealthCheckContext,
+   type HealthFinding,
+ } from "../flows/health-checks.js";
++import { pluginAvailabilityHealthChecks } from "../flows/plugin-health-availability.js";
+ import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
+ import {
+   resolvePluginInstallRoots,
+@@ -203,13 +204,13 @@ async function executeDoctorLint(
+     allowExecSecretRefs: opts.allowExec === true,
+     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
+   };
+-  registerBundledHealthChecks({
++  const availabilityFindings = registerBundledHealthChecks({
+     cfg: snapshot.config,
+     cwd: ctx.cwd,
+     env: stateView.pluginMetadataEnv,
+     runWithPluginStateSnapshot: stateView.runWithPluginStateSnapshot,
+   });
+-  const registeredExtensionChecks = listExtensionHealthChecksForDoctor([]);
++  const registeredExtensionChecks = listExtensionHealthChecksForDoctor([], availabilityFindings);
+   const onlyRegisteredExtensionChecks =
+     opts.onlyIds !== undefined &&
+     opts.onlyIds.length > 0 &&
+@@ -219,11 +220,15 @@ async function executeDoctorLint(
+     : await resolveDoctorContributionHealthChecks();
+   const extensionChecks = onlyRegisteredExtensionChecks
+     ? registeredExtensionChecks
+-    : listExtensionHealthChecksForDoctor(coreChecks);
++    : listExtensionHealthChecksForDoctor(coreChecks, availabilityFindings);
+   const coreCtx = { ...ctx, deep: opts.deep === true };
+ 
+   const runOpts: DoctorLintRunOptions = {
+-    checks: [...coreChecks.map((check) => withCoreLintContext(check, coreCtx)), ...extensionChecks],
++    checks: [
++      ...coreChecks.map((check) => withCoreLintContext(check, coreCtx)),
++      ...extensionChecks,
++      ...pluginAvailabilityHealthChecks(availabilityFindings),
++    ],
+     includeAllChecks: opts.includeAllChecks === true,
+     ...(opts.skipIds && opts.skipIds.length > 0 ? { skipIds: opts.skipIds } : {}),
+     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
+@@ -242,6 +247,7 @@ async function executeDoctorLint(
+           checksRun: result.checksRun,
+           checksSkipped: result.checksSkipped,
+           findings: visible,
++          warnings: result.findings.filter((finding) => finding.severity === "warning"),
+         });
+         return;
+       }
+@@ -379,6 +385,7 @@ function writeJsonResult(result: {
+   checksRun: number;
+   checksSkipped: number;
+   findings: readonly HealthFinding[];
++  warnings?: readonly HealthFinding[];
+ }): void {
+   process.stdout.write(
+     JSON.stringify({
+@@ -386,6 +393,7 @@ function writeJsonResult(result: {
+       checksRun: result.checksRun,
+       checksSkipped: result.checksSkipped,
+       findings: result.findings.map(toJsonFinding),
++      warnings: (result.warnings ?? []).map(toJsonFinding),
+     }) + "\n",
+   );
+ }
+@@ -396,6 +404,7 @@ function toJsonFinding(f: HealthFinding): Record<string, unknown> {
+     severity: f.severity,
+     message: f.message,
+     ...(f.source !== undefined ? { source: f.source } : {}),
++    ...(f.errorCode !== undefined ? { errorCode: f.errorCode } : {}),
+     ...(f.path !== undefined ? { path: f.path } : {}),
+     ...(f.line !== undefined ? { line: f.line } : {}),
+     ...(f.column !== undefined ? { column: f.column } : {}),
+diff --git a/src/commands/doctor/shared/automatic-startup-config-repair.ts b/src/commands/doctor/shared/automatic-startup-config-repair.ts
+index cc24fdc3ff8..981a169768c 100644
+--- a/src/commands/doctor/shared/automatic-startup-config-repair.ts
++++ b/src/commands/doctor/shared/automatic-startup-config-repair.ts
+@@ -64,16 +64,21 @@ export function planStartupConfigRepair(
+     authoredRaw: snapshot.parsed,
+     resolvedRaw: snapshot.sourceConfig,
+   });
++  const validation = config ? validateConfigObjectWithPlugins(config) : undefined;
+   if (
+     !config ||
+     isDeepStrictEqual(config, snapshot.sourceConfig) ||
+-    !validateConfigObjectWithPlugins(config).ok ||
++    !validation?.ok ||
+     findDoctorLegacyConfigIssues(config, config).length > 0
+   ) {
+     return null;
+   }
+ 
+-  return buildStartupConfigRepairPlan(snapshot, config, changes);
++  return buildStartupConfigRepairPlan(
++    { ...snapshot, warnings: validation.warnings },
++    config,
++    changes,
++  );
+ }
+ 
+ /**
+diff --git a/src/commands/doctor/shared/bundled-plugin-load-paths.availability.test.ts b/src/commands/doctor/shared/bundled-plugin-load-paths.availability.test.ts
+new file mode 100644
+index 00000000000..33f6824571c
+--- /dev/null
++++ b/src/commands/doctor/shared/bundled-plugin-load-paths.availability.test.ts
+@@ -0,0 +1,72 @@
++import fs from "node:fs";
++import path from "node:path";
++import { afterEach, beforeEach, expect, it } from "vitest";
++import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
++import type { OpenClawConfig } from "../../../config/types.openclaw.js";
++import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
++import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
++import { maybeRepairBundledPluginLoadPaths } from "./bundled-plugin-load-paths.js";
++
++const tempDirs = useAutoCleanupTempDirTracker(afterEach);
++beforeEach(clearPluginMetadataLifecycleCaches);
++afterEach(clearPluginMetadataLifecycleCaches);
++
++it("preserves missing packaged aliases while removing inspected aliases and retaining custom duplicates", () => {
++  const stateDir = tempDirs.make("openclaw-alias-availability-");
++  const bundledRoot = path.join(
++    stateDir,
++    "current",
++    "node_modules",
++    "openclaw",
++    "dist",
++    "extensions",
++  );
++  const healthyAlias = path.join(bundledRoot, "alias-demo");
++  fs.mkdirSync(healthyAlias, { recursive: true });
++  fs.writeFileSync(
++    path.join(healthyAlias, "openclaw.plugin.json"),
++    JSON.stringify({ id: "alias-demo", configSchema: {} }),
++  );
++  fs.writeFileSync(
++    path.join(healthyAlias, "package.json"),
++    JSON.stringify({
++      name: "@fixture/alias-demo",
++      version: "1.0.0",
++      openclaw: { extensions: ["./index.cjs"] },
++    }),
++  );
++  fs.writeFileSync(path.join(healthyAlias, "index.cjs"), "module.exports = {};\n");
++  const missingAlias = path.join(
++    stateDir,
++    "old",
++    "node_modules",
++    "openclaw",
++    "dist",
++    "extensions",
++    "alias-demo",
++  );
++  const customPath = path.join(stateDir, "custom-plugin");
++  const paths = [missingAlias, healthyAlias, customPath, customPath];
++  const config: OpenClawConfig = { plugins: { load: { paths } } };
++  const env = {
++    ...process.env,
++    HOME: stateDir,
++    OPENCLAW_HOME: stateDir,
++    OPENCLAW_STATE_DIR: stateDir,
++    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
++    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
++    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
++    OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
++    OPENCLAW_DEV_SOURCE_ROOT: "",
++  };
++  const discovery = discoverConfiguredPluginLoadPaths({ loadPaths: paths, env });
++  expect(discovery.diagnostics).toContainEqual(
++    expect.objectContaining({ source: missingAlias, configDisposition: "preserve" }),
++  );
++
++  const result = maybeRepairBundledPluginLoadPaths(config, env);
++  expect(result.config.plugins?.load?.paths).toEqual([missingAlias, customPath, customPath]);
++  expect(result.changes).toEqual([
++    `- plugins.load.paths: removed bundled alias-demo path alias ${healthyAlias}`,
++  ]);
++});
+diff --git a/src/commands/doctor/shared/bundled-plugin-load-paths.ts b/src/commands/doctor/shared/bundled-plugin-load-paths.ts
+index 248fbd71ee7..9152c408b7d 100644
+--- a/src/commands/doctor/shared/bundled-plugin-load-paths.ts
++++ b/src/commands/doctor/shared/bundled-plugin-load-paths.ts
+@@ -11,6 +11,8 @@ import {
+   parsePackagedBundledPluginPath,
+ } from "../../../plugins/bundled-load-path-aliases.js";
+ import { resolveBundledPluginSources } from "../../../plugins/bundled-sources.js";
++import { findUninspectedPluginDiagnostic } from "../../../plugins/discovery-availability.js";
++import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
+ import { resolveUserPath } from "../../../utils.js";
+ 
+ type BundledPluginLoadPathHit = {
+@@ -70,12 +72,27 @@ export function scanBundledPluginLoadPathMigrations(
+     }
+   }
+ 
++  const { diagnostics } = discoverConfiguredPluginLoadPaths({
++    loadPaths: rawPaths.filter((rawPath): rawPath is string => typeof rawPath === "string"),
++    env,
++  });
+   const hits: BundledPluginLoadPathHit[] = [];
+   for (const rawPath of rawPaths) {
+     if (typeof rawPath !== "string") {
+       continue;
+     }
+     const normalized = normalizeBundledLookupPath(resolveUserPath(rawPath, env));
++    if (
++      findUninspectedPluginDiagnostic(
++        diagnostics.filter(
++          (diagnostic) =>
++            diagnostic.source !== undefined &&
++            normalizeBundledLookupPath(diagnostic.source) === normalized,
++        ),
++      )
++    ) {
++      continue;
++    }
+     const match = bundledPathMap.get(normalized);
+     if (!match) {
+       const oldPackaged = parsePackagedBundledPluginPath(normalized);
+@@ -147,7 +164,6 @@ export function maybeRepairBundledPluginLoadPaths(
+   const removable = new Set(
+     hits.map((hit) => normalizeBundledLookupPath(resolveUserPath(hit.fromPath, env))),
+   );
+-  const seen = new Set<string>();
+   const rewritten: Array<(typeof paths)[number]> = [];
+   for (const entry of paths) {
+     if (typeof entry !== "string") {
+@@ -158,10 +174,6 @@ export function maybeRepairBundledPluginLoadPaths(
+     if (removable.has(resolved)) {
+       continue;
+     }
+-    if (seen.has(resolved)) {
+-      continue;
+-    }
+-    seen.add(resolved);
+     rewritten.push(entry);
+   }
+ 
+diff --git a/src/commands/doctor/shared/channel-doctor.ts b/src/commands/doctor/shared/channel-doctor.ts
+index 85fdc524d7d..12603f42a29 100644
+--- a/src/commands/doctor/shared/channel-doctor.ts
++++ b/src/commands/doctor/shared/channel-doctor.ts
+@@ -14,6 +14,8 @@ import type {
+ } from "../../../channels/plugins/types.adapters.js";
+ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+ import { isUnresolvedSecretInputError } from "../../../config/types.secrets.js";
++import { findUninspectedPluginDiagnostic } from "../../../plugins/discovery-availability.js";
++import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
+ import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
+ 
+ type ChannelDoctorEntry = {
+@@ -260,6 +262,18 @@ function appendChannelDoctorMutation(
+   return currentCfg;
+ }
+ 
++function preserveUnavailableChannelConfig(
++  context: ChannelDoctorLookupContext,
++): ChannelDoctorConfigMutation | undefined {
++  if (!context.cfg.plugins?.load?.paths?.length) {
++    return undefined;
++  }
++  const warning = findUninspectedPluginDiagnostic(
++    loadManifestMetadataSnapshot({ config: context.cfg, env: context.env }).diagnostics,
++  );
++  return warning ? { config: context.cfg, changes: [], warnings: [warning.message] } : undefined;
++}
++
+ /** Build cached empty-allowlist hooks backed by channel doctor adapters. */
+ export function createChannelDoctorEmptyAllowlistPolicyHooks(
+   context: ChannelDoctorLookupContext,
+@@ -292,6 +306,10 @@ export async function runChannelDoctorConfigSequences(params: {
+   env: NodeJS.ProcessEnv;
+   shouldRepair: boolean;
+ }): Promise<ChannelDoctorSequenceResult> {
++  const preserved = preserveUnavailableChannelConfig(params);
++  if (preserved) {
++    return { changeNotes: [], warningNotes: preserved.warnings ?? [] };
++  }
+   const changeNotes: string[] = [];
+   const warningNotes: string[] = [];
+   for (const entry of listChannelDoctorEntries(collectConfiguredChannelIds(params.cfg), {
+@@ -313,6 +331,10 @@ export function collectChannelDoctorCompatibilityMutations(
+   cfg: OpenClawConfig,
+   options: { env?: NodeJS.ProcessEnv } = {},
+ ): ChannelDoctorConfigMutation[] {
++  const preserved = preserveUnavailableChannelConfig({ cfg, env: options.env });
++  if (preserved) {
++    return [preserved];
++  }
+   const channelIds = collectConfiguredChannelIds(cfg);
+   const mutations: ChannelDoctorConfigMutation[] = [];
+   let nextCfg = cfg;
+@@ -328,6 +350,10 @@ export async function collectChannelDoctorStaleConfigMutations(
+   cfg: OpenClawConfig,
+   options: { env?: NodeJS.ProcessEnv; channelIds?: readonly string[] } = {},
+ ): Promise<ChannelDoctorConfigMutation[]> {
++  const preserved = preserveUnavailableChannelConfig({ cfg, env: options.env });
++  if (preserved) {
++    return [preserved];
++  }
+   const mutations: ChannelDoctorConfigMutation[] = [];
+   let nextCfg = cfg;
+   const channelIds = options.channelIds ?? collectConfiguredChannelIds(cfg);
+@@ -395,6 +421,10 @@ export async function collectChannelDoctorRepairMutations(params: {
+   doctorFixCommand: string;
+   env?: NodeJS.ProcessEnv;
+ }): Promise<ChannelDoctorConfigMutation[]> {
++  const preserved = preserveUnavailableChannelConfig(params);
++  if (preserved) {
++    return [preserved];
++  }
+   const mutations: ChannelDoctorConfigMutation[] = [];
+   let nextCfg = params.cfg;
+   for (const entry of listChannelDoctorEntries(collectConfiguredChannelIds(params.cfg), {
+diff --git a/src/commands/doctor/shared/channel-legacy-config-migrate.ts b/src/commands/doctor/shared/channel-legacy-config-migrate.ts
+index 73f1a793ccd..34db176fe94 100644
+--- a/src/commands/doctor/shared/channel-legacy-config-migrate.ts
++++ b/src/commands/doctor/shared/channel-legacy-config-migrate.ts
+@@ -4,6 +4,10 @@ import { isChannelConfigMetadataKey } from "../../../channels/config-metadata.js
+ import { getBootstrapChannelPlugin } from "../../../channels/plugins/bootstrap-registry.js";
+ import { loadBundledChannelDoctorContractApi } from "../../../channels/plugins/doctor-contract-api.js";
+ import type { OpenClawConfig } from "../../../config/types.js";
++import { createSubsystemLogger } from "../../../logging/subsystem.js";
++import { findUninspectedPluginDiagnostic } from "../../../plugins/discovery-availability.js";
++import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
++import { applyPluginDoctorCompatibilityMigration } from "../../../plugins/doctor-compatibility-migration.js";
+ import {
+   applyPluginDoctorCompatibilityMigrations,
+   collectDoctorConfigRepairPluginIds,
+@@ -11,6 +15,8 @@ import {
+ import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
+ import { isRecord } from "./legacy-config-record-shared.js";
+ 
++const log = createSubsystemLogger("plugins/doctor-contracts");
++
+ type ChannelDoctorCompatibilityMutation = {
+   config: OpenClawConfig;
+   changes: string[];
+@@ -108,6 +114,16 @@ export function applyChannelDoctorCompatibilityMigrations(
+   changes: string[];
+ } {
+   let nextCfg = cfg as OpenClawConfig;
++  const loadPaths = nextCfg.plugins?.load?.paths ?? [];
++  if (loadPaths.length > 0) {
++    const warning = findUninspectedPluginDiagnostic(
++      discoverConfiguredPluginLoadPaths({ loadPaths }).diagnostics,
++    );
++    if (warning) {
++      log.warn(warning.message);
++      return { next: cfg, changes: [] };
++    }
++  }
+   const changes: string[] = [];
+   migrateHeartbeatVisibility(cfg, changes);
+   const unresolvedChannelIds: string[] = [];
+@@ -116,12 +132,18 @@ export function applyChannelDoctorCompatibilityMigrations(
+     configEntryPolicy: "raw",
+     sort: "codepoint",
+   })) {
+-    const normalizeCompatibilityConfig = resolveBundledChannelCompatibilityNormalizer(channelId);
+-    if (!normalizeCompatibilityConfig) {
+-      unresolvedChannelIds.push(channelId);
+-      continue;
+-    }
+-    const mutation = normalizeCompatibilityConfig({ cfg: nextCfg });
++    const mutation = applyPluginDoctorCompatibilityMigration({
++      pluginId: channelId,
++      config: nextCfg,
++      normalize: ({ cfg: candidate }) => {
++        const normalize = resolveBundledChannelCompatibilityNormalizer(channelId);
++        if (!normalize) {
++          unresolvedChannelIds.push(channelId);
++          return { config: candidate, changes: [] };
++        }
++        return normalize({ cfg: candidate });
++      },
++    });
+     if (!mutation || mutation.changes.length === 0) {
+       continue;
+     }
+diff --git a/src/commands/doctor/shared/stale-agent-model-ref-repair.ts b/src/commands/doctor/shared/stale-agent-model-ref-repair.ts
+index 4a6f62a08d0..5d8c2f26a34 100644
+--- a/src/commands/doctor/shared/stale-agent-model-ref-repair.ts
++++ b/src/commands/doctor/shared/stale-agent-model-ref-repair.ts
+@@ -1,4 +1,3 @@
+-// Doctor-only repair for agent model refs whose provider is no longer available.
+ import fs from "node:fs";
+ import path from "node:path";
+ import { isRecord } from "@openclaw/normalization-core/record-coerce";
+@@ -12,6 +11,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+ import { normalizeProviderId } from "../../../agents/model-selection.js";
+ import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
+ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
++import { hasIncompletePluginDiscovery } from "../../../plugins/discovery-availability.js";
+ import { resolvePluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
+ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+ import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
+@@ -63,10 +63,10 @@ function collectPluginProviderIds(
+         env: options.env ?? process.env,
+         allowWorkspaceScopedCurrent: true,
+       });
+-    if (snapshot.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
++    if (hasIncompletePluginDiscovery(snapshot.diagnostics)) {
+       return {
+         warnings: [
+-          "Skipped stale agent model reference repair because plugin discovery reported errors.",
++          "Skipped stale agent model reference repair because plugin discovery is incomplete; uninspected configuration is preserved.",
+         ],
+       };
+     }
+diff --git a/src/commands/doctor/shared/stale-plugin-config.ts b/src/commands/doctor/shared/stale-plugin-config.ts
+index 8231e40aa0c..8912d46e0e7 100644
+--- a/src/commands/doctor/shared/stale-plugin-config.ts
++++ b/src/commands/doctor/shared/stale-plugin-config.ts
+@@ -5,6 +5,7 @@ import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../age
+ import { CHANNEL_IDS } from "../../../channels/ids.js";
+ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+ import { normalizePluginId } from "../../../plugins/config-state.js";
++import { hasIncompletePluginDiscovery } from "../../../plugins/discovery-availability.js";
+ import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
+ import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
+ import {
+@@ -87,7 +88,7 @@ function collectPluginRegistryState(
+     officialIds,
+     knownChannelIds,
+     missingInstalledIds: new Set([...installedIds].filter((pluginId) => !knownIds.has(pluginId))),
+-    hasDiscoveryErrors: registry.diagnostics.some((diag) => diag.level === "error"),
++    hasDiscoveryErrors: hasIncompletePluginDiscovery(registry.diagnostics),
+   };
+ }
+ 
+diff --git a/src/config/config.plugin-validation.test.ts b/src/config/config.plugin-validation.test.ts
+index 36f607c05db..820853a9ebe 100644
+--- a/src/config/config.plugin-validation.test.ts
++++ b/src/config/config.plugin-validation.test.ts
+@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+ import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
+ import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
+ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
++import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+ import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
+ import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
+ import { validateConfigObjectWithPlugins as validateConfigObjectWithPluginsRaw } from "./validation.js";
+@@ -289,6 +290,7 @@ describe("config plugin validation", () => {
+   });
+ 
+   afterAll(async () => {
++    closeOpenClawStateDatabaseForTest();
+     await fs.rm(fixtureRoot, { recursive: true, force: true });
+   });
+ 
+@@ -347,12 +349,10 @@ describe("config plugin validation", () => {
+   });
+ 
+   it("reports missing plugin refs across entries and allowlist surfaces", () => {
+-    const missingPath = path.join(suiteHome, "missing-plugin-dir");
+     const res = validateInSuite({
+       agents: { list: [{ id: "openclaw" }] },
+       plugins: {
+         enabled: true,
+-        load: { paths: [missingPath] },
+         entries: { "missing-plugin": { enabled: true } },
+         allow: ["missing-allow"],
+         deny: ["missing-deny"],
+diff --git a/src/config/plugin-auto-enable.shared.ts b/src/config/plugin-auto-enable.shared.ts
+index fddf38e1b4e..ade18d1c476 100644
+--- a/src/config/plugin-auto-enable.shared.ts
++++ b/src/config/plugin-auto-enable.shared.ts
+@@ -23,6 +23,7 @@ import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registr
+ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+ import { normalizePluginsConfig } from "../plugins/config-state.js";
+ import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
++import { findUninspectedPluginDiagnostic } from "../plugins/discovery-availability.js";
+ import type { PluginDiscoveryResult } from "../plugins/discovery.js";
+ import { collectConfiguredSpeechProviderIds } from "../plugins/gateway-startup-speech-providers.js";
+ import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+@@ -1083,7 +1084,10 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
+   const changes: string[] = [];
+   const autoEnabledReasons = new Map<string, string[]>();
+ 
+-  if (next.plugins?.enabled === false) {
++  if (
++    next.plugins?.enabled === false ||
++    findUninspectedPluginDiagnostic(params.manifestRegistry.diagnostics)
++  ) {
+     return { config: next, changes, autoEnabledReasons: {} };
+   }
+ 
+diff --git a/src/config/types.openclaw.ts b/src/config/types.openclaw.ts
+index a430e326b80..7f00082b203 100644
+--- a/src/config/types.openclaw.ts
++++ b/src/config/types.openclaw.ts
+@@ -256,6 +256,10 @@ export type ResolvedSourceConfig = BrandedConfigState<"resolved-source">;
+ export type RuntimeConfig = BrandedConfigState<"runtime">;
+ 
+ export type ConfigValidationIssue = {
++  errorCode?: string;
++  fixHint?: string;
++  code?: import("../plugins/manifest-types.js").PluginDiagnosticCode;
++  source?: string;
+   /** Dot-path to the invalid or legacy config value. */
+   path: string;
+   /** Structured validator path used internally for lossless source diagnostics. */
+diff --git a/src/config/validation-plugin-config.ts b/src/config/validation-plugin-config.ts
+index 3d89fc17968..9ed353a3cbf 100644
+--- a/src/config/validation-plugin-config.ts
++++ b/src/config/validation-plugin-config.ts
+@@ -7,6 +7,7 @@ import {
+   resolveMemorySlotDecision,
+ } from "../plugins/config-state.js";
+ import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
++import { findUninspectedPluginDiagnostic } from "../plugins/discovery-availability.js";
+ import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
+ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+ import {
+@@ -160,6 +161,10 @@ export function validateExplicitPluginConfig(params: {
+     issues,
+     warnings,
+   } = params;
++  // An unavailable configured path may override any discovered plugin's schema.
++  if (findUninspectedPluginDiagnostic(registry.diagnostics)) {
++    return;
++  }
+   const blockedPluginDiagnostics = new Map<string, { message: string; source?: string }>();
+   const blockedPluginDiagnosticsWithSource: Array<{ message: string; source: string }> = [];
+   const normalizeBlockedDiagnosticPath = (value: string | undefined): string => {
+diff --git a/src/config/validation.ts b/src/config/validation.ts
+index 9e431ef8cd8..ceaed700af4 100644
+--- a/src/config/validation.ts
++++ b/src/config/validation.ts
+@@ -7,6 +7,7 @@ import type { ChannelDmAllowFromMode } from "../channels/plugins/dm-access.js";
+ import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
+ import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
+ import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
++import * as availability from "../plugins/discovery-availability.js";
+ import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
+ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+@@ -255,6 +256,10 @@ function validateConfigObjectWithPluginsBase(
+     }
+     registryDiagnosticsPushed = true;
+     for (const diag of registry.diagnostics) {
++      if (diag.configDisposition === "preserve") {
++        warnings.push(availability.pluginDiagnosticToConfigWarning(diag, "plugins.load.paths"));
++        continue;
++      }
+       const explicitPath = diag.pluginId
+         ? resolveExplicitPluginReferencePath(explicitPluginReferences, diag.pluginId)
+         : undefined;
+@@ -287,6 +292,10 @@ function validateConfigObjectWithPluginsBase(
+   };
+ 
+   const ensureLoadedRegistryInfo = (): RegistryInfo => registryInfo ?? loadValidationRegistry();
++  const preserveUnavailableConfig = availability.createUnavailablePluginConfigPreserver(
++    () => ensureLoadedRegistryInfo().registry.diagnostics,
++    warnings,
++  );
+ 
+   const ensureCompatPluginIds = (): ReadonlySet<string> => {
+     if (compatPluginIds) {
+@@ -483,7 +492,7 @@ function validateConfigObjectWithPluginsBase(
+       return;
+     }
+     const activeProviderIds = collectActiveWebSearchProviderIds();
+-    if (activeProviderIds.includes(trimmed)) {
++    if (activeProviderIds.includes(trimmed) || preserveUnavailableConfig(issuePath)) {
+       return;
+     }
+     const installCatalogEntry = resolveWebSearchInstallCatalogEntries().find(
+@@ -605,7 +614,7 @@ function validateConfigObjectWithPluginsBase(
+   if (config.channels && isRecord(config.channels)) {
+     for (const key of Object.keys(config.channels)) {
+       const trimmed = key.trim();
+-      if (!trimmed) {
++      if (!trimmed || preserveUnavailableConfig(`channels.${trimmed}`)) {
+         continue;
+       }
+       if (!allowedChannels.has(trimmed)) {
+@@ -690,7 +699,7 @@ function validateConfigObjectWithPluginsBase(
+         }
+       }
+     }
+-    if (!heartbeatChannelIds.has(normalized)) {
++    if (!heartbeatChannelIds.has(normalized) && !preserveUnavailableConfig(issuePath)) {
+       issues.push({ path: issuePath, message: `unknown heartbeat target: ${target}` });
+     }
+   };
+diff --git a/src/flows/bundled-health-checks.test.ts b/src/flows/bundled-health-checks.test.ts
+index 6f6c26f7e97..a80d8b18b6f 100644
+--- a/src/flows/bundled-health-checks.test.ts
++++ b/src/flows/bundled-health-checks.test.ts
+@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ import type { OpenClawConfig } from "../config/types.openclaw.js";
+-import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
+ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+ import { loadPluginManifest } from "../plugins/manifest.js";
+ import type { ProviderPolicySurface } from "../plugins/provider-policy-surface.js";
+@@ -503,12 +502,12 @@ describe("registerBundledHealthChecks", () => {
+     if (state === "broken-api") {
+       writeFileSync(join(workspaceDir, "api.js"), 'throw new Error("selected artifact failed");');
+     }
+-    expect(() => registerBundledHealthChecks({ cfg: codexConfig, cwd: workspaceDir })).toThrow(
+-      state === "broken-api"
+-        ? "selected artifact failed"
+-        : state === "missing-export"
+-          ? TypeError
+-          : MissingPublicSurfaceError,
++    expect(registerBundledHealthChecks({ cfg: codexConfig, cwd: workspaceDir })).toContainEqual(
++      expect.objectContaining({
++        source: "codex",
++        severity: "warning",
++        message: expect.stringContaining("unavailable"),
++      }),
+     );
+     expect(getHealthCheck("codex/managed-app-server")).toBeUndefined();
+     expect(mocks.registerCodexManagedAppServerDoctorChecks).not.toHaveBeenCalled();
+diff --git a/src/flows/bundled-health-checks.ts b/src/flows/bundled-health-checks.ts
+index df8793eda8c..91e59863dd8 100644
+--- a/src/flows/bundled-health-checks.ts
++++ b/src/flows/bundled-health-checks.ts
+@@ -20,6 +20,8 @@ import {
+ import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
+ import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
+ import { getHealthCheck, registerHealthCheck } from "./health-check-registry.js";
++import type { HealthFinding } from "./health-checks.js";
++import { collectPluginHealthAvailability } from "./plugin-health-availability.js";
+ 
+ type EmbeddingProviderSetupInspectionResult =
+   | Awaited<ReturnType<InspectEmbeddingProviderSetup>>
+@@ -77,7 +79,13 @@ export function resolveBundledHealthCheckPluginStateMode(
+   ) {
+     return "direct";
+   }
+-  const isolatedIds = new Set(loadMemoryCoreHealthApi().pluginStateIsolatedDoctorCheckIds ?? []);
++  let isolatedIds: Set<string>;
++  try {
++    isolatedIds = new Set(loadMemoryCoreHealthApi().pluginStateIsolatedDoctorCheckIds ?? []);
++  } catch {
++    // Registration reports the unavailable API; retain private-state inspection.
++    return "isolated";
++  }
+   const skippedIds = new Set(selection.skipIds ?? []);
+   const selectedOnlyIds = [...new Set(selection.onlyIds ?? [])].filter((id) => !skippedIds.has(id));
+   const selectedIsolatedIds =
+@@ -101,77 +109,88 @@ export function registerBundledHealthChecks(params: {
+   runWithPluginStateSnapshot?: <T>(
+     run: (pluginMetadataEnv: NodeJS.ProcessEnv) => Promise<T>,
+   ) => Promise<T>;
+-}): void {
++}): HealthFinding[] {
++  const findings: HealthFinding[] = [];
+   const env = params.env ?? process.env;
+-  loadMemoryCoreHealthApi().registerMemoryCoreDoctorChecks?.({
+-    getHealthCheck,
+-    registerHealthCheck,
+-    async inspectEmbeddingProviderSetup(providerParams) {
+-      const inspect = async (pluginMetadataEnv: NodeJS.ProcessEnv) => {
+-        const manifestRegistry: PluginManifestRegistry =
+-          loadPluginManifestRegistryForPluginRegistry({
+-            config: params.cfg,
+-            workspaceDir: params.cwd,
+-            env: pluginMetadataEnv,
+-          });
+-        const inspector = resolveProviderPolicySurface(providerParams.provider, {
+-          manifestRegistry,
+-        })?.inspectEmbeddingProviderSetup;
+-        return inspector
+-          ? await inspector({ ...providerParams, env: pluginMetadataEnv })
+-          : undefined;
+-      };
+-      return params.runWithPluginStateSnapshot
+-        ? await params.runWithPluginStateSnapshot(inspect)
+-        : await inspect(env);
+-    },
+-    memoryCoreActive: isMemoryCoreActive(params.cfg),
++  collectPluginHealthAvailability(findings, "memory-core", () => {
++    loadMemoryCoreHealthApi().registerMemoryCoreDoctorChecks?.({
++      getHealthCheck,
++      registerHealthCheck,
++      async inspectEmbeddingProviderSetup(providerParams) {
++        const inspect = async (pluginMetadataEnv: NodeJS.ProcessEnv) => {
++          const manifestRegistry: PluginManifestRegistry =
++            loadPluginManifestRegistryForPluginRegistry({
++              config: params.cfg,
++              workspaceDir: params.cwd,
++              env: pluginMetadataEnv,
++            });
++          const inspector = resolveProviderPolicySurface(providerParams.provider, {
++            manifestRegistry,
++          })?.inspectEmbeddingProviderSetup;
++          return inspector
++            ? await inspector({ ...providerParams, env: pluginMetadataEnv })
++            : undefined;
++        };
++        return params.runWithPluginStateSnapshot
++          ? await params.runWithPluginStateSnapshot(inspect)
++          : await inspect(env);
++      },
++      memoryCoreActive: isMemoryCoreActive(params.cfg),
++    });
+   });
+   if (shouldRegisterCodexManagedHealth(params.cfg)) {
+-    const registry = loadPluginManifestRegistryForPluginRegistry({
+-      config: params.cfg,
+-      workspaceDir: params.cwd,
+-      env,
+-      pluginIds: ["codex"],
++    collectPluginHealthAvailability(findings, "codex", () => {
++      const registry = loadPluginManifestRegistryForPluginRegistry({
++        config: params.cfg,
++        workspaceDir: params.cwd,
++        env,
++        pluginIds: ["codex"],
++      });
++      const owner = registry.plugins.find((plugin) => plugin.id === "codex");
++      // Doctor must inspect the selected runtime's artifact, including official external installs.
++      // A bundled-first lookup can inspect a different version or bypass the selected owner's trust.
++      if (!owner || (owner.origin !== "bundled" && owner.trustedOfficialInstall !== true)) {
++        throw new MissingPublicSurfaceError(
++          "Unable to resolve Codex doctor health API: install the official Codex plugin with openclaw plugins install @openclaw/codex",
++        );
++      }
++      // Retained stable plugins can predate health APIs while an upgrade awaits capability consent.
++      // Only load an advertised surface; a broken declaration must still fail visibly.
++      if (owner.doctorHealthChecks === true) {
++        loadPluginPublicArtifactModuleSync<
++          Required<Pick<BundledHealthApi, "registerCodexManagedAppServerDoctorChecks">>
++        >({
++          pluginRoot: owner.rootDir,
++          artifactBasename: "api.js",
++          origin: owner.origin === "bundled" ? "bundled" : "global",
++        }).registerCodexManagedAppServerDoctorChecks({ getHealthCheck, registerHealthCheck });
++      }
+     });
+-    const owner = registry.plugins.find((plugin) => plugin.id === "codex");
+-    // Doctor must inspect the selected runtime's artifact, including official external installs.
+-    // A bundled-first lookup can inspect a different version or bypass the selected owner's trust.
+-    if (!owner || (owner.origin !== "bundled" && owner.trustedOfficialInstall !== true)) {
+-      throw new MissingPublicSurfaceError(
+-        "Unable to resolve Codex doctor health API: install the official Codex plugin with openclaw plugins install @openclaw/codex",
+-      );
+-    }
+-    // Retained stable plugins can predate health APIs while an upgrade awaits capability consent.
+-    // Only load an advertised surface; a broken declaration must still fail visibly.
+-    if (owner.doctorHealthChecks === true) {
+-      loadPluginPublicArtifactModuleSync<
+-        Required<Pick<BundledHealthApi, "registerCodexManagedAppServerDoctorChecks">>
+-      >({
+-        pluginRoot: owner.rootDir,
+-        artifactBasename: "api.js",
+-        origin: owner.origin === "bundled" ? "bundled" : "global",
+-      }).registerCodexManagedAppServerDoctorChecks({ getHealthCheck, registerHealthCheck });
+-    }
+   }
+   if (shouldRegisterPolicyHealth(params)) {
+-    loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+-      dirName: "policy",
+-      artifactBasename: "api.js",
+-    }).registerPolicyDoctorChecks?.({ registerHealthCheck });
++    collectPluginHealthAvailability(findings, "policy", () => {
++      loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
++        dirName: "policy",
++        artifactBasename: "api.js",
++      }).registerPolicyDoctorChecks?.({ registerHealthCheck });
++    });
+   }
+   if (shouldRegisterPluginHealth(params.cfg, "cua-computer")) {
+-    loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+-      dirName: "cua-computer",
+-      artifactBasename: "api.js",
+-    }).registerCuaDriverDoctorChecks?.({ registerHealthCheck });
++    collectPluginHealthAvailability(findings, "cua-computer", () => {
++      loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
++        dirName: "cua-computer",
++        artifactBasename: "api.js",
++      }).registerCuaDriverDoctorChecks?.({ registerHealthCheck });
++    });
+   }
+-  registerBundledWorkerProviderHealthChecks(params, env);
++  registerBundledWorkerProviderHealthChecks(params, env, findings);
++  return findings;
+ }
+ 
+ function registerBundledWorkerProviderHealthChecks(
+   params: { cfg: OpenClawConfig; cwd?: string },
+   env: NodeJS.ProcessEnv,
++  findings: HealthFinding[],
+ ): void {
+   const providerIds = collectConfiguredWorkerProviderIds(params.cfg);
+   if (providerIds.length === 0) {
+@@ -182,10 +201,12 @@ function registerBundledWorkerProviderHealthChecks(
+     listBundledWorkerProviderOwners(manifestRegistry, providerIds).map((owner) => owner.pluginId),
+   );
+   for (const pluginId of pluginIds) {
+-    loadBundledPluginPublicArtifactModuleFromCandidatesSync<WorkerProviderHealthApi>({
+-      dirName: pluginId,
+-      artifactCandidates: ["doctor-health-api.js"],
+-    })?.registerWorkerProviderDoctorChecks?.({ getHealthCheck, registerHealthCheck });
++    collectPluginHealthAvailability(findings, pluginId, () => {
++      loadBundledPluginPublicArtifactModuleFromCandidatesSync<WorkerProviderHealthApi>({
++        dirName: pluginId,
++        artifactCandidates: ["doctor-health-api.js"],
++      })?.registerWorkerProviderDoctorChecks?.({ getHealthCheck, registerHealthCheck });
++    });
+   }
+ }
+ 
+diff --git a/src/flows/doctor-config-validation-findings.ts b/src/flows/doctor-config-validation-findings.ts
+new file mode 100644
+index 00000000000..aa1c5c91fb1
+--- /dev/null
++++ b/src/flows/doctor-config-validation-findings.ts
+@@ -0,0 +1,40 @@
++import type { ConfigValidationIssue } from "../config/types.openclaw.js";
++import { isConfiguredPluginPathDiagnosticCode } from "../plugins/discovery-availability.js";
++import { PLUGIN_AVAILABILITY_POLICY } from "../plugins/runtime-degraded-state.js";
++import type { HealthFinding } from "./health-checks.js";
++
++export const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
++
++export function configValidationIssuesToHealthFindings(
++  issues: readonly ConfigValidationIssue[],
++): readonly HealthFinding[] {
++  return issues.map(
++    (issue): HealthFinding => ({
++      checkId: FINAL_CONFIG_VALIDATION_CHECK_ID,
++      severity: "error",
++      message: issue.message,
++      path: issue.path || "<root>",
++    }),
++  );
++}
++
++export function configValidationWarningsToHealthFindings(
++  warnings: readonly ConfigValidationIssue[],
++): readonly HealthFinding[] {
++  return warnings
++    .filter(
++      (warning) =>
++        isConfiguredPluginPathDiagnosticCode(warning.code) && warning.path === "plugins.load.paths",
++    )
++    .map((warning) => ({
++      checkId: FINAL_CONFIG_VALIDATION_CHECK_ID,
++      severity: PLUGIN_AVAILABILITY_POLICY.severity,
++      target: PLUGIN_AVAILABILITY_POLICY.state,
++      requirement: warning.code,
++      source: warning.source,
++      errorCode: warning.errorCode,
++      message: warning.message,
++      path: warning.path,
++      fixHint: warning.fixHint ?? PLUGIN_AVAILABILITY_POLICY.repairCommand,
++    }));
++}
+diff --git a/src/flows/doctor-core-checks.ts b/src/flows/doctor-core-checks.ts
+index 976fafb4847..f726ce1c0b2 100644
+--- a/src/flows/doctor-core-checks.ts
++++ b/src/flows/doctor-core-checks.ts
+@@ -30,7 +30,7 @@ import {
+   resolveKnownModelRefMigrationTarget,
+ } from "../commands/doctor/shared/codex-route-warnings.js";
+ import { isDefaultInstallIdentity } from "../config/paths.js";
+-import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
++import type { OpenClawConfig } from "../config/types.openclaw.js";
+ import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
+ import type { CronListPageResult } from "../cron/service/list-page-types.js";
+ import type { CronJob } from "../cron/types.js";
+@@ -43,6 +43,11 @@ import type { SecurityAuditFinding } from "../security/audit.types.js";
+ import type { SkillStatusEntry } from "../skills/discovery/status.js";
+ import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
+ import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
++import {
++  FINAL_CONFIG_VALIDATION_CHECK_ID,
++  configValidationIssuesToHealthFindings,
++  configValidationWarningsToHealthFindings,
++} from "./doctor-config-validation-findings.js";
+ import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
+ import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
+ import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
+@@ -58,9 +63,10 @@ import type {
+   HealthRepairContext,
+ } from "./health-checks.js";
+ 
++export { configValidationIssuesToHealthFindings } from "./doctor-config-validation-findings.js";
++
+ const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
+ const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
+-const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
+ const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
+ const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
+ const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
+@@ -254,19 +260,6 @@ const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
+   listGatewayCronJobs: listGatewayCronJobsWithRuntime,
+ };
+ 
+-export function configValidationIssuesToHealthFindings(
+-  issues: readonly ConfigValidationIssue[],
+-): readonly HealthFinding[] {
+-  return issues.map(
+-    (issue): HealthFinding => ({
+-      checkId: FINAL_CONFIG_VALIDATION_CHECK_ID,
+-      severity: "error",
+-      message: issue.message,
+-      path: issue.path || "<root>",
+-    }),
+-  );
+-}
+-
+ const gatewayConfigCheck: HealthCheck = {
+   id: "core/doctor/gateway-config",
+   kind: "core",
+@@ -1295,10 +1288,13 @@ const finalConfigValidationCheck: HealthCheck = {
+   async detect() {
+     const { readConfigFileSnapshot } = await import("../config/config.js");
+     const snap = await readConfigFileSnapshot({ observe: false });
+-    if (!snap.exists || snap.valid) {
++    if (!snap.exists) {
+       return [];
+     }
+-    return configValidationIssuesToHealthFindings(snap.issues);
++    return [
++      ...configValidationIssuesToHealthFindings(snap.issues),
++      ...configValidationWarningsToHealthFindings(snap.warnings),
++    ];
+   },
+ };
+ 
+diff --git a/src/flows/doctor-health-contribution-core.ts b/src/flows/doctor-health-contribution-core.ts
+index 7d198988b92..cfbb79baff4 100644
+--- a/src/flows/doctor-health-contribution-core.ts
++++ b/src/flows/doctor-health-contribution-core.ts
+@@ -35,10 +35,15 @@ export async function runStructuredHealthRepairs(
+   const { note } = await import("../../packages/terminal-core/src/note.js");
+ 
+   const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
+-  registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
+-  const checks = listExtensionHealthChecksForDoctor(await resolveCoreChecks()).map(
+-    defineSplitHealthCheckInput,
+-  );
++  const availabilityFindings = registerBundledHealthChecks({
++    cfg: ctx.cfg,
++    cwd: workspaceDir,
++    env: ctx.env,
++  });
++  const checks = listExtensionHealthChecksForDoctor(
++    await resolveCoreChecks(),
++    availabilityFindings,
++  ).map(defineSplitHealthCheckInput);
+   const result = await runDoctorHealthRepairs(
+     withDoctorHealthCheckFacts(ctx, {
+       mode: "fix" as const,
+@@ -53,8 +58,9 @@ export async function runStructuredHealthRepairs(
+   if (result.changes.length > 0) {
+     note(result.changes.join("\n"), "Doctor changes");
+   }
+-  if (result.warnings.length > 0) {
+-    note(result.warnings.join("\n"), "Doctor warnings");
++  const warnings = [...availabilityFindings.map((finding) => finding.message), ...result.warnings];
++  if (warnings.length > 0) {
++    note(warnings.join("\n"), "Doctor warnings");
+   }
+ }
+ 
+diff --git a/src/flows/health-check-registry.ts b/src/flows/health-check-registry.ts
+index 9642e2de02f..ed49644b000 100644
+--- a/src/flows/health-check-registry.ts
++++ b/src/flows/health-check-registry.ts
+@@ -1,5 +1,5 @@
+ // Health check registry stores doctor health checks by identifier.
+-import type { HealthCheck } from "./health-checks.js";
++import type { HealthCheck, HealthFinding } from "./health-checks.js";
+ 
+ // Process-local registry populated by core and plugin doctor checks.
+ const REGISTRY = new Map<string, HealthCheck>();
+@@ -29,6 +29,7 @@ export function listHealthChecks(): readonly HealthCheck[] {
+ /** Returns registered extension checks after rejecting any reserved core doctor id claims. */
+ export function listExtensionHealthChecksForDoctor(
+   coreChecks: readonly Pick<HealthCheck, "id">[],
++  unavailablePlugins: readonly HealthFinding[] = [],
+ ): readonly HealthCheck[] {
+   const coreIds = new Set(coreChecks.map((check) => check.id));
+   const registeredChecks = listHealthChecks();
+@@ -37,7 +38,27 @@ export function listExtensionHealthChecksForDoctor(
+       throw new HealthCheckRegistrationError(check.id);
+     }
+   }
+-  return registeredChecks.filter((check) => check.kind !== "core");
++  const checks: HealthCheck[] = [];
++  for (const check of registeredChecks) {
++    if (check.kind === "core") {
++      continue;
++    }
++    const unavailable = unavailablePlugins.find(
++      (finding) => finding.source !== undefined && finding.source === check.source,
++    );
++    // Preserve selection without executing stale callbacks from an unavailable owner.
++    // The registered check remains intact for a later, healthy invocation.
++    checks.push(
++      unavailable
++        ? {
++            ...check,
++            detect: async () => [{ ...unavailable, checkId: check.id }],
++            repair: undefined,
++          }
++        : check,
++    );
++  }
++  return checks;
+ }
+ 
+ /** Looks up a registered health check by its stable id. */
+diff --git a/src/flows/health-checks.ts b/src/flows/health-checks.ts
+index 4126399afe2..457a23f31ed 100644
+--- a/src/flows/health-checks.ts
++++ b/src/flows/health-checks.ts
+@@ -37,6 +37,7 @@ export interface HealthFinding {
+   readonly severity: HealthFindingSeverity;
+   readonly message: string;
+   readonly source?: string;
++  readonly errorCode?: string;
+   readonly path?: string;
+   readonly line?: number;
+   readonly column?: number;
+diff --git a/src/flows/plugin-health-availability.test.ts b/src/flows/plugin-health-availability.test.ts
+new file mode 100644
+index 00000000000..c6e403035cd
+--- /dev/null
++++ b/src/flows/plugin-health-availability.test.ts
+@@ -0,0 +1,43 @@
++import { afterEach, expect, it, vi } from "vitest";
++import {
++  clearHealthChecksForTest,
++  HealthCheckRegistrationError,
++  listExtensionHealthChecksForDoctor,
++  registerHealthCheck,
++} from "./health-check-registry.js";
++import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
++import { collectPluginHealthAvailability } from "./plugin-health-availability.js";
++
++afterEach(clearHealthChecksForTest);
++
++it("quarantines stale callbacks for one invocation and restores them when the owner recovers", async () => {
++  const detect = vi.fn().mockResolvedValue([]);
++  const repair = vi.fn();
++  registerHealthCheck({
++    id: "fixture/health",
++    kind: "plugin",
++    source: "fixture",
++    description: "fixture",
++    detect,
++    repair,
++  });
++  const findings: HealthFinding[] = [];
++  collectPluginHealthAvailability(findings, "fixture", () => {
++    throw new Error("missing doctor API");
++  });
++  const [unavailable] = listExtensionHealthChecksForDoctor([], findings);
++  expect(await unavailable.detect({} as HealthCheckContext)).toEqual([
++    expect.objectContaining({ severity: "warning", source: "fixture" }),
++  ]);
++  expect(unavailable.repair).toBeUndefined();
++  expect(detect).not.toHaveBeenCalled();
++  expect(listExtensionHealthChecksForDoctor([])[0].detect).toBe(detect);
++});
++
++it("keeps duplicate registration errors fatal", () => {
++  expect(() =>
++    collectPluginHealthAvailability([], "fixture", () => {
++      throw new HealthCheckRegistrationError("core/doctor/reserved");
++    }),
++  ).toThrow(HealthCheckRegistrationError);
++});
+diff --git a/src/flows/plugin-health-availability.ts b/src/flows/plugin-health-availability.ts
+new file mode 100644
+index 00000000000..4447d592809
+--- /dev/null
++++ b/src/flows/plugin-health-availability.ts
+@@ -0,0 +1,39 @@
++import { formatErrorMessage } from "../infra/errors.js";
++import { describePluginAvailabilityFailure } from "../plugins/runtime-degraded-state.js";
++import { HealthCheckRegistrationError } from "./health-check-registry.js";
++import type { HealthCheck, HealthFinding } from "./health-checks.js";
++
++const PLUGIN_AVAILABILITY_CHECK_ID = "core/doctor/plugin-availability";
++
++/** Registration failures are availability findings; registered checks still own data errors. */
++export function collectPluginHealthAvailability(
++  findings: HealthFinding[],
++  pluginId: string,
++  register: () => void,
++): void {
++  try {
++    register();
++  } catch (error) {
++    if (error instanceof HealthCheckRegistrationError) {
++      throw error;
++    }
++    findings.push({
++      checkId: PLUGIN_AVAILABILITY_CHECK_ID,
++      ...describePluginAvailabilityFailure(pluginId, formatErrorMessage(error)),
++    });
++  }
++}
++
++export function pluginAvailabilityHealthChecks(findings: readonly HealthFinding[]): HealthCheck[] {
++  return findings.length === 0
++    ? []
++    : [
++        {
++          id: PLUGIN_AVAILABILITY_CHECK_ID,
++          kind: "core",
++          source: "doctor",
++          description: "Configured plugin Doctor APIs are available.",
++          detect: async () => findings,
++        },
++      ];
++}
+diff --git a/src/infra/update-runner-types.ts b/src/infra/update-runner-types.ts
+index 53697610446..a6750cef596 100644
+--- a/src/infra/update-runner-types.ts
++++ b/src/infra/update-runner-types.ts
+@@ -54,6 +54,8 @@ export type UpdateRunResult = {
+       changed: boolean;
+       warnings?: Array<{
+         pluginId?: string;
++        source?: string;
++        errorCode?: string;
+         reason: string;
+         message: string;
+         guidance: string[];
+diff --git a/src/plugin-sdk/health.ts b/src/plugin-sdk/health.ts
+index 48dea1bf875..9b4c2c0782e 100644
+--- a/src/plugin-sdk/health.ts
++++ b/src/plugin-sdk/health.ts
+@@ -4,7 +4,7 @@
+ export { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+ export { readConfigFileSnapshot } from "../config/config.js";
+ export type { OpenClawConfig } from "../config/types.openclaw.js";
+-export { configValidationIssuesToHealthFindings } from "../flows/doctor-core-checks.js";
++export { configValidationIssuesToHealthFindings } from "../flows/doctor-config-validation-findings.js";
+ export {
+   exitCodeFromFindings,
+   runDoctorLintChecks,
+diff --git a/src/plugins/discovery-availability.ts b/src/plugins/discovery-availability.ts
+new file mode 100644
+index 00000000000..ff2ab46edb5
+--- /dev/null
++++ b/src/plugins/discovery-availability.ts
+@@ -0,0 +1,124 @@
++import type fs from "node:fs";
++import type { ConfigValidationIssue } from "../config/types.openclaw.js";
++import {
++  extractErrorCode,
++  formatErrorMessageWithCode,
++  isMissingPathError,
++} from "../infra/errors.js";
++import type { PluginDiagnostic } from "./manifest-types.js";
++import {
++  pluginCacheExistsSync,
++  pluginCacheStatSync,
++  readPluginCacheDirectory,
++} from "./plugin-cache-files.js";
++import type { PluginOrigin } from "./plugin-origin.types.js";
++import { PLUGIN_AVAILABILITY_POLICY } from "./runtime-degraded-state.js";
++
++const CONFIGURED_PLUGIN_PATH_UNAVAILABLE = "configured-plugin-path-unavailable";
++const CONFIGURED_PLUGIN_PATH_INSPECTION_FAILED = "configured-plugin-path-inspection-failed";
++
++export function isConfiguredPluginPathDiagnosticCode(code: unknown) {
++  return (
++    code === CONFIGURED_PLUGIN_PATH_UNAVAILABLE || code === CONFIGURED_PLUGIN_PATH_INSPECTION_FAILED
++  );
++}
++
++export function pluginPathFailureDiagnostic(
++  source: string,
++  origin: PluginOrigin,
++  error: unknown,
++): PluginDiagnostic {
++  if (origin === "config" && !isMissingPathError(error)) {
++    const errorCode = extractErrorCode(error) ?? "UNKNOWN";
++    const recovery =
++      errorCode === "EACCES" || errorCode === "EPERM"
++        ? `Fix permissions on ${source}`
++        : errorCode === "ELOOP"
++          ? `Fix the symbolic link loop at ${source}`
++          : `Resolve the filesystem inspection error on ${source}`;
++    const fixHint = `${recovery}, then run \`${PLUGIN_AVAILABILITY_POLICY.repairCommand}\`.`;
++    return {
++      level: "warn",
++      code: CONFIGURED_PLUGIN_PATH_INSPECTION_FAILED,
++      configDisposition: "preserve",
++      errorCode,
++      source,
++      fixHint,
++      message: `Configured plugin load path inspection failed: ${source} (${formatErrorMessageWithCode(error)}). Uninspected plugin configuration is preserved. ${fixHint}`,
++    };
++  }
++  return origin === "config"
++    ? {
++        level: "warn",
++        code: CONFIGURED_PLUGIN_PATH_UNAVAILABLE,
++        configDisposition: "preserve",
++        source,
++        message: `Configured plugin load path is unavailable: ${source}. Uninspected plugin configuration is preserved. Restore access to the path, then run \`${PLUGIN_AVAILABILITY_POLICY.repairCommand}\`.`,
++      }
++    : { level: "error", source, message: `plugin path not found: ${source}` };
++}
++
++export function inspectPluginLoadPath(
++  source: string,
++  origin: PluginOrigin,
++  diagnostics: PluginDiagnostic[],
++): fs.Stats | null {
++  try {
++    const stat = pluginCacheStatSync(source, origin === "config");
++    if (!stat && !pluginCacheExistsSync(source)) {
++      diagnostics.push(pluginPathFailureDiagnostic(source, origin, undefined));
++    }
++    // Inspect selected directories before bundled provenance can replace their config origin.
++    if (origin === "config" && stat) {
++      if (stat.isDirectory()) {
++        readPluginCacheDirectory(source);
++      } else if (!stat.isFile()) {
++        throw Object.assign(new Error("Plugin load path is not a regular file or directory"), {
++          code: "ERR_INVALID_FILE_TYPE",
++        });
++      }
++    }
++    return stat;
++  } catch (error) {
++    diagnostics.push(pluginPathFailureDiagnostic(source, origin, error));
++    return null;
++  }
++}
++
++/** Consumers consult discovery's disposition without reclassifying availability. */
++export function findUninspectedPluginDiagnostic(diagnostics: readonly PluginDiagnostic[]) {
++  return diagnostics.find((diagnostic) => diagnostic.configDisposition === "preserve");
++}
++
++/** Delay owner-specific validation while discovery cannot inspect configured plugin inputs. */
++export function createUnavailablePluginConfigPreserver(
++  getDiagnostics: () => readonly PluginDiagnostic[],
++  warnings: ConfigValidationIssue[],
++) {
++  return (issuePath: string): boolean => {
++    const diagnostic = findUninspectedPluginDiagnostic(getDiagnostics());
++    if (diagnostic) {
++      warnings.push(pluginDiagnosticToConfigWarning(diagnostic, issuePath));
++    }
++    return diagnostic !== undefined;
++  };
++}
++
++/** Project the recorded fact onto a config surface whose owner could not be inspected. */
++export function pluginDiagnosticToConfigWarning(diagnostic: PluginDiagnostic, path: string) {
++  return {
++    path,
++    message: diagnostic.message,
++    code: diagnostic.code,
++    source: diagnostic.source,
++    ...(diagnostic.errorCode ? { errorCode: diagnostic.errorCode } : {}),
++    ...(diagnostic.fixHint ? { fixHint: diagnostic.fixHint } : {}),
++  };
++}
++
++/** Missing metadata cannot prove that authored plugin configuration is stale. */
++export function hasIncompletePluginDiscovery(diagnostics: readonly PluginDiagnostic[]): boolean {
++  return diagnostics.some(
++    (diagnostic) => diagnostic.level === "error" || diagnostic.configDisposition === "preserve",
++  );
++}
+diff --git a/src/plugins/discovery.path-inspection.test.ts b/src/plugins/discovery.path-inspection.test.ts
+new file mode 100644
+index 00000000000..e664e048db6
+--- /dev/null
++++ b/src/plugins/discovery.path-inspection.test.ts
+@@ -0,0 +1,58 @@
++import fs from "node:fs";
++import path from "node:path";
++import { afterEach, expect, it, vi } from "vitest";
++import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
++import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
++import { pluginCacheStatSync } from "./plugin-cache-files.js";
++import { resetPluginCache } from "./plugin-cache.js";
++
++const tempDirs = useAutoCleanupTempDirTracker(afterEach);
++afterEach(() => {
++  vi.restoreAllMocks();
++  resetPluginCache();
++});
++
++it.each([
++  { code: "ENOENT", reason: "configured-plugin-path-unavailable" },
++  { code: "ENOTDIR", reason: "configured-plugin-path-unavailable" },
++  { code: "not-found", reason: "configured-plugin-path-unavailable" },
++  { code: "EACCES", reason: "configured-plugin-path-inspection-failed" },
++  { code: "EPERM", reason: "configured-plugin-path-inspection-failed" },
++  { code: "EIO", reason: "configured-plugin-path-inspection-failed" },
++  { code: "ELOOP", reason: "configured-plugin-path-inspection-failed" },
++  { code: undefined, reason: "configured-plugin-path-inspection-failed" },
++])("classifies directory inspection by code $code, not message text", ({ code, reason }) => {
++  const root = tempDirs.make("openclaw-directory-failure-");
++  const readDirectory = fs.readdirSync;
++  vi.spyOn(fs, "readdirSync").mockImplementation((target, options) => {
++    if (target === root) {
++      throw Object.assign(new Error("ENOENT: misleading message"), { code });
++    }
++    return readDirectory.call(fs, target, options);
++  });
++  const result = discoverConfiguredPluginLoadPaths({ loadPaths: [root] });
++  expect(result.candidates).toEqual([]);
++  expect(result.diagnostics).toEqual([
++    expect.objectContaining({ code: reason, configDisposition: "preserve" }),
++  ]);
++  if (reason === "configured-plugin-path-inspection-failed") {
++    expect(result.diagnostics[0]).toMatchObject({
++      errorCode: code ?? "UNKNOWN",
++      message: expect.stringContaining("misleading message"),
++    });
++  }
++});
++
++it.skipIf(process.platform === "win32")("retains a cached stat failure's ELOOP diagnosis", () => {
++  const root = tempDirs.make("openclaw-stat-failure-");
++  const loop = path.join(root, "loop");
++  fs.symlinkSync(loop, loop);
++  expect(pluginCacheStatSync(loop)).toBeNull();
++  expect(discoverConfiguredPluginLoadPaths({ loadPaths: [loop] }).diagnostics).toEqual([
++    expect.objectContaining({
++      code: "configured-plugin-path-inspection-failed",
++      errorCode: "ELOOP",
++      configDisposition: "preserve",
++    }),
++  ]);
++});
+diff --git a/src/plugins/discovery.ts b/src/plugins/discovery.ts
+index 472d42c6240..b74302a4825 100644
+--- a/src/plugins/discovery.ts
++++ b/src/plugins/discovery.ts
+@@ -23,6 +23,7 @@ import {
+   recordPluginCandidateInstallOwner,
+   resolvePluginCandidateInstallOwner,
+ } from "./candidate-install-owner.js";
++import { inspectPluginLoadPath, pluginPathFailureDiagnostic } from "./discovery-availability.js";
+ import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
+ import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+ import { hashStableJson } from "./installed-plugin-index-hash.js";
+@@ -1055,11 +1056,15 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
+         left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+       );
+     } catch (err) {
+-      diagnostics.push({
+-        level: "warn",
+-        message: `failed to read extensions dir: ${params.dir} (${String(err)})`,
+-        source: params.dir,
+-      });
++      diagnostics.push(
++        params.origin === "config"
++          ? pluginPathFailureDiagnostic(params.dir, params.origin, err)
++          : {
++              level: "warn",
++              message: `failed to read extensions dir: ${params.dir} (${String(err)})`,
++              source: params.dir,
++            },
++      );
+       return;
+     }
+ 
+@@ -1131,16 +1136,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
+     scanFiles?: boolean;
+   }) {
+     const resolved = resolveUserPath(params.rawPath, env);
+-    if (!pluginCacheExistsSync(resolved)) {
+-      diagnostics.push({
+-        level: "error",
+-        message: `plugin path not found: ${resolved}`,
+-        source: resolved,
+-      });
+-      return;
+-    }
+-
+-    const stat = pluginCacheStatSync(resolved);
++    const stat = inspectPluginLoadPath(resolved, params.origin, diagnostics);
+     if (!stat) {
+       return;
+     }
+diff --git a/src/plugins/doctor-compatibility-migration.test.ts b/src/plugins/doctor-compatibility-migration.test.ts
+new file mode 100644
+index 00000000000..08ff49d9e7c
+--- /dev/null
++++ b/src/plugins/doctor-compatibility-migration.test.ts
+@@ -0,0 +1,34 @@
++import { describe, expect, it } from "vitest";
++import type { OpenClawConfig } from "../config/types.js";
++import { applyPluginDoctorCompatibilityMigration } from "./doctor-compatibility-migration.js";
++
++describe("plugin config repair isolation", () => {
++  it("discards partial mutations when a plugin throws and permits the next owner", () => {
++    const config: OpenClawConfig = {
++      plugins: { entries: { broken: { config: { retained: 42 } } } },
++    };
++    const before = structuredClone(config);
++    const failed = applyPluginDoctorCompatibilityMigration({
++      pluginId: "broken",
++      config,
++      normalize: ({ cfg }) => {
++        delete cfg.plugins!.entries!.broken;
++        throw new Error("fixture config hook failure");
++      },
++    });
++    expect(config).toEqual(before);
++    expect(failed.config).toBe(config);
++    expect(failed.changes).toEqual([]);
++    expect(failed.warnings).toEqual([expect.stringContaining("fixture config hook failure")]);
++    const healthy = applyPluginDoctorCompatibilityMigration({
++      pluginId: "healthy",
++      config: failed.config,
++      normalize: ({ cfg }) => ({
++        config: { ...cfg, gateway: { mode: "local" } },
++        changes: ["Updated healthy owner"],
++      }),
++    });
++    expect(healthy.config.plugins).toEqual(before.plugins);
++    expect(healthy.config.gateway?.mode).toBe("local");
++  });
++});
+diff --git a/src/plugins/doctor-compatibility-migration.ts b/src/plugins/doctor-compatibility-migration.ts
+new file mode 100644
+index 00000000000..497b84b827f
+--- /dev/null
++++ b/src/plugins/doctor-compatibility-migration.ts
+@@ -0,0 +1,25 @@
++import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
++import type { OpenClawConfig } from "../config/types.js";
++import { formatErrorMessage } from "../infra/errors.js";
++import { createSubsystemLogger } from "../logging/subsystem.js";
++import type { PluginDoctorCompatibilityNormalizer } from "./doctor-contract-module.js";
++
++const log = createSubsystemLogger("plugins/doctor-contracts");
++
++/** Pure config hooks own a private candidate; state-writing migration refusals stay separate. */
++export function applyPluginDoctorCompatibilityMigration(params: {
++  pluginId: string;
++  config: OpenClawConfig;
++  normalize: PluginDoctorCompatibilityNormalizer;
++}): { config: OpenClawConfig; changes: string[]; warnings?: string[] } {
++  const candidate = cloneConfigWithResolutionFacts(params.config);
++  try {
++    const mutation = params.normalize({ cfg: candidate });
++    return mutation?.changes.length ? mutation : { config: params.config, changes: [] };
++  } catch (error) {
++    const warning = `Plugin "${params.pluginId}" config repair failed: ${formatErrorMessage(error)}. Its config was preserved; run \`openclaw doctor --fix\` after repairing the plugin.`;
++    // v8.1 legacy preview callers do not all carry a warnings collection.
++    log.warn(warning);
++    return { config: params.config, changes: [], warnings: [warning] };
++  }
++}
+diff --git a/src/plugins/doctor-contract-module.ts b/src/plugins/doctor-contract-module.ts
+index 1cbcb7489d5..5f94c15a27f 100644
+--- a/src/plugins/doctor-contract-module.ts
++++ b/src/plugins/doctor-contract-module.ts
+@@ -115,7 +115,7 @@ export type PluginDoctorContractModule = {
+   stateMigrations?: unknown;
+ };
+ 
+-type PluginDoctorCompatibilityNormalizer = (params: { cfg: OpenClawConfig }) => {
++export type PluginDoctorCompatibilityNormalizer = (params: { cfg: OpenClawConfig }) => {
+   config: OpenClawConfig;
+   changes: string[];
+ };
+diff --git a/src/plugins/doctor-contract-registry.ts b/src/plugins/doctor-contract-registry.ts
+index 5274dd7efc6..a25329664e7 100644
+--- a/src/plugins/doctor-contract-registry.ts
++++ b/src/plugins/doctor-contract-registry.ts
+@@ -16,6 +16,9 @@ import type { BundledChannelLegacyStateMigrationDetector } from "../plugin-sdk/c
+ import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/doctor-migration-plan-adapter.js";
+ import { hasPluginConfigMigrationSource } from "./config-contract-matches.js";
+ import { normalizePluginsConfig } from "./config-state.js";
++import { findUninspectedPluginDiagnostic } from "./discovery-availability.js";
++import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
++import { applyPluginDoctorCompatibilityMigration } from "./doctor-compatibility-migration.js";
+ import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
+ import {
+   coercePluginDoctorContractModule,
+@@ -340,6 +343,16 @@ function resolvePluginDoctorContracts(params: {
+   env?: NodeJS.ProcessEnv;
+   pluginIds?: readonly string[];
+ }): PluginDoctorContractEntry[] {
++  const loadPaths = params.config?.plugins?.load?.paths ?? [];
++  if (params.surface === "configRepair" && loadPaths.length > 0) {
++    const warning = findUninspectedPluginDiagnostic(
++      discoverConfiguredPluginLoadPaths({ loadPaths, env: params.env }).diagnostics,
++    );
++    if (warning) {
++      log.warn(warning.message);
++      return [];
++    }
++  }
+   const records = resolvePluginDoctorManifestRecords(params);
+   const entries = loadPluginDoctorContractEntries({
+     records,
+@@ -586,10 +599,14 @@ export function applyPluginDoctorCompatibilityMigrations(
+     config: params?.config ?? cfg,
+     surface: "configRepair",
+   })) {
+-    const mutation = entry.normalizeCompatibilityConfig?.({ cfg: nextCfg });
+-    if (!mutation || mutation.changes.length === 0) {
++    if (!entry.normalizeCompatibilityConfig) {
+       continue;
+     }
++    const mutation = applyPluginDoctorCompatibilityMigration({
++      pluginId: entry.pluginId,
++      config: nextCfg,
++      normalize: entry.normalizeCompatibilityConfig,
++    });
+     nextCfg = mutation.config;
+     changes.push(...mutation.changes);
+   }
+diff --git a/src/plugins/doctor-contract-registry.unavailable-path.test.ts b/src/plugins/doctor-contract-registry.unavailable-path.test.ts
+new file mode 100644
+index 00000000000..f81ae4dcabb
+--- /dev/null
++++ b/src/plugins/doctor-contract-registry.unavailable-path.test.ts
+@@ -0,0 +1,69 @@
++import fs from "node:fs";
++import path from "node:path";
++import { afterEach, beforeEach, expect, it } from "vitest";
++import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
++import type { OpenClawConfig } from "../config/types.openclaw.js";
++import { applyPluginDoctorCompatibilityMigrations } from "./doctor-contract-registry.js";
++import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
++
++const tempDirs = useAutoCleanupTempDirTracker(afterEach);
++beforeEach(clearPluginDoctorContractRegistryCache);
++afterEach(clearPluginDoctorContractRegistryCache);
++
++it.each([false, true])(
++  "preserves uninspected config before a known plugin migration when another path is unavailable=%s",
++  (unavailable) => {
++    const stateDir = tempDirs.make("openclaw-doctor-unavailable-path-");
++    const pluginRoot = path.join(stateDir, "known-plugin");
++    fs.mkdirSync(pluginRoot);
++    fs.writeFileSync(
++      path.join(pluginRoot, "openclaw.plugin.json"),
++      JSON.stringify({
++        id: "known-plugin",
++        configSchema: {},
++        doctorContract: { configRepair: true },
++      }),
++    );
++    fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n");
++    fs.writeFileSync(
++      path.join(pluginRoot, "doctor-contract-api.cjs"),
++      `module.exports = {
++  normalizeCompatibilityConfig({ cfg }) {
++    const next = structuredClone(cfg);
++    delete next.plugins.entries["known-plugin"].config.authored;
++    return { config: next, changes: ["Removed the legacy plugin setting."] };
++  },
++};\n`,
++    );
++    const config: OpenClawConfig = {
++      plugins: {
++        load: {
++          paths: [...(unavailable ? [path.join(stateDir, "missing-override")] : []), pluginRoot],
++        },
++        entries: { "known-plugin": { enabled: true, config: { authored: "preserve me" } } },
++      },
++    };
++    const configPath = path.join(stateDir, "openclaw.json");
++    const rawConfig = JSON.stringify(config, null, 2) + "\n";
++    fs.writeFileSync(configPath, rawConfig);
++    const result = applyPluginDoctorCompatibilityMigrations(config, {
++      config,
++      env: {
++        ...process.env,
++        HOME: stateDir,
++        OPENCLAW_HOME: stateDir,
++        OPENCLAW_STATE_DIR: stateDir,
++        OPENCLAW_CONFIG_PATH: configPath,
++        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
++      },
++    });
++
++    if (unavailable) {
++      expect(result).toEqual({ config, changes: [] });
++      expect(JSON.stringify(result.config, null, 2) + "\n").toBe(rawConfig);
++    } else {
++      expect(result.changes).toEqual(["Removed the legacy plugin setting."]);
++      expect(result.config.plugins?.entries?.["known-plugin"]?.config).toEqual({});
++    }
++  },
++);
+diff --git a/src/plugins/installed-plugin-index-store.availability.test.ts b/src/plugins/installed-plugin-index-store.availability.test.ts
+new file mode 100644
+index 00000000000..14c53becc73
+--- /dev/null
++++ b/src/plugins/installed-plugin-index-store.availability.test.ts
+@@ -0,0 +1,60 @@
++import path from "node:path";
++import { afterEach, expect, it } from "vitest";
++import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
++import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
++import { pluginPathFailureDiagnostic } from "./discovery-availability.js";
++import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
++import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
++import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
++import {
++  INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
++  INSTALLED_PLUGIN_INDEX_VERSION,
++  type InstalledPluginIndex,
++} from "./installed-plugin-index.js";
++import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
++
++const tempDirs = useAutoCleanupTempDirTracker(afterEach);
++afterEach(async () => {
++  clearPluginMetadataLifecycleCaches();
++  closeOpenClawStateDatabaseForTest();
++});
++
++it("retains discovery's preserve disposition when the installed index is reopened from SQLite", async () => {
++  const stateDir = tempDirs.make("openclaw-index-availability-");
++  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
++  const discovery = discoverConfiguredPluginLoadPaths({
++    loadPaths: [path.join(stateDir, "missing-plugin")],
++    env,
++  });
++  expect(discovery.diagnostics).toEqual([
++    expect.objectContaining({
++      code: "configured-plugin-path-unavailable",
++      configDisposition: "preserve",
++    }),
++  ]);
++  const index: InstalledPluginIndex = {
++    version: INSTALLED_PLUGIN_INDEX_VERSION,
++    hostContractVersion: "2026.9.4",
++    compatRegistryVersion: "availability-fixture",
++    migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
++    policyHash: "availability-fixture",
++    generatedAtMs: 1,
++    installRecords: {},
++    plugins: [],
++    diagnostics: [
++      ...discovery.diagnostics,
++      pluginPathFailureDiagnostic(
++        path.join(stateDir, "unreadable-plugin"),
++        "config",
++        Object.assign(new Error("Filesystem device error"), { code: "EIO" }),
++      ),
++      { level: "warn", message: "Existing diagnostics retain an absent disposition." },
++    ],
++  };
++  await writePersistedInstalledPluginIndex(index, { env, stateDir });
++  clearPluginMetadataLifecycleCaches();
++  closeOpenClawStateDatabaseForTest();
++
++  const reopened = readPersistedInstalledPluginIndexSync({ env, stateDir });
++  expect(reopened?.diagnostics).toEqual(index.diagnostics);
++});
+diff --git a/src/plugins/installed-plugin-index-store.ts b/src/plugins/installed-plugin-index-store.ts
+index 63c350b117f..51d73c2d7f2 100644
+--- a/src/plugins/installed-plugin-index-store.ts
++++ b/src/plugins/installed-plugin-index-store.ts
+@@ -100,6 +100,9 @@ const PluginDiagnosticSchema = z.object({
+   pluginId: z.string().optional(),
+   source: z.string().optional(),
+   code: z.string().optional(),
++  configDisposition: z.literal("preserve").optional(),
++  errorCode: z.string().optional(),
++  fixHint: z.string().optional(),
+ });
+ 
+ const InstalledPluginIndexSchema = z.object({
+diff --git a/src/plugins/manifest-types.ts b/src/plugins/manifest-types.ts
+index 0991526250f..cd9284ff8b1 100644
+--- a/src/plugins/manifest-types.ts
++++ b/src/plugins/manifest-types.ts
+@@ -30,6 +30,8 @@ export type PluginBundleFormat = "agent" | "codex" | "claude" | "cursor";
+ export type PluginDiagnosticCode =
+   | "backup-resource-declaration-invalid"
+   | "channel-setup-failure"
++  | "configured-plugin-path-inspection-failed"
++  | "configured-plugin-path-unavailable"
+   | "dashboard-declaration-invalid"
+   | "plugin-verification"
+   | "workspace-scope-omitted";
+@@ -41,6 +43,9 @@ export type PluginDiagnostic = {
+   pluginId?: string;
+   source?: string;
+   code?: PluginDiagnosticCode;
++  configDisposition?: "preserve";
++  errorCode?: string;
++  fixHint?: string;
+ };
+ 
+ export type PluginManifestChannelConfig = {
+diff --git a/src/plugins/plugin-cache-files.ts b/src/plugins/plugin-cache-files.ts
+index c287f24879a..f95b0e379e5 100644
+--- a/src/plugins/plugin-cache-files.ts
++++ b/src/plugins/plugin-cache-files.ts
+@@ -74,16 +74,21 @@ export function refreshPluginCacheStat(targetPath: string): fs.Stats | null {
+   return pluginCacheStatSync(targetPath);
+ }
+ 
+-export function pluginCacheStatSync(targetPath: string): fs.Stats | null {
++export function pluginCacheStatSync(targetPath: string, throwOnError = false): fs.Stats | null {
+   const facts = pathFacts(targetPath);
+   if (facts.stat === undefined) {
++    facts.statError = undefined;
+     try {
+       facts.stat = fs.statSync(targetPath);
+       facts.exists = true;
+-    } catch {
++    } catch (error) {
++      facts.statError = error;
+       facts.stat = null;
+     }
+   }
++  if (facts.stat === null && throwOnError) {
++    throw facts.statError;
++  }
+   return facts.stat;
+ }
+ 
+diff --git a/src/plugins/plugin-cache-files.types.ts b/src/plugins/plugin-cache-files.types.ts
+index ba13df654c6..1e9c16d8bb3 100644
+--- a/src/plugins/plugin-cache-files.types.ts
++++ b/src/plugins/plugin-cache-files.types.ts
+@@ -32,6 +32,7 @@ export type PluginPathCacheEntry = {
+   realpath?: string | null;
+   nativeRealpath?: string | null;
+   stat?: fs.Stats | null;
++  statError?: unknown;
+   lstat?: fs.Stats | null;
+ };
+ 
+diff --git a/src/plugins/runtime-degraded-state.ts b/src/plugins/runtime-degraded-state.ts
+index f2c55848f5b..edd271007a5 100644
+--- a/src/plugins/runtime-degraded-state.ts
++++ b/src/plugins/runtime-degraded-state.ts
+@@ -2,6 +2,21 @@ import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+ 
+ /** Boot-stable quarantine state for configured plugins whose payload failed verification. */
+ 
++export const PLUGIN_AVAILABILITY_POLICY = {
++  state: "configured-unavailable",
++  severity: "warning",
++  repairCommand: "openclaw doctor --fix",
++} as const;
++
++/** Availability findings share one disposition across startup and Doctor lint. */
++export function describePluginAvailabilityFailure(pluginId: string, detail: string) {
++  return {
++    source: pluginId,
++    severity: PLUGIN_AVAILABILITY_POLICY.severity,
++    message: `Plugin "${pluginId}" is unavailable: ${detail} Run \`${PLUGIN_AVAILABILITY_POLICY.repairCommand}\`.`,
++  };
++}
++
+ export type PluginVerificationFailureReason =
+   | "missing-install-path"
+   | "missing-package-dir"
+@@ -28,7 +43,7 @@ type PublicPluginVerificationDiagnostic = Pick<
+ 
+ export type DegradedPlugin = {
+   pluginId: string;
+-  state: "configured-unavailable";
++  state: typeof PLUGIN_AVAILABILITY_POLICY.state;
+   diagnostic: PluginVerificationDiagnostic;
+ };
+ 
+@@ -61,7 +76,7 @@ export function buildDegradedPluginsFromVerificationFailures(
+     }
+     degraded.set(failure.pluginId, {
+       pluginId: failure.pluginId,
+-      state: "configured-unavailable",
++      state: PLUGIN_AVAILABILITY_POLICY.state,
+       diagnostic: {
+         kind: "plugin-verification",
+         reason: failure.reason,
+diff --git a/src/plugins/setup-registry.ts b/src/plugins/setup-registry.ts
+index 1686f1769fd..2ff06dab51e 100644
+--- a/src/plugins/setup-registry.ts
++++ b/src/plugins/setup-registry.ts
+@@ -11,6 +11,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
+ import { createSubsystemLogger } from "../logging/subsystem.js";
+ import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
+ import { hasPluginConfigMigrationSource } from "./config-contract-matches.js";
++import { findUninspectedPluginDiagnostic } from "./discovery-availability.js";
++import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
++import { applyPluginDoctorCompatibilityMigration } from "./doctor-compatibility-migration.js";
+ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+ import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
+ import { getPluginCache, getPluginCacheRoot } from "./plugin-cache.js";
+@@ -792,6 +795,14 @@ export function runPluginSetupConfigMigrations(params: {
+   config: OpenClawConfig;
+   changes: string[];
+ } {
++  const loadPaths = params.config.plugins?.load?.paths ?? [];
++  const warning = findUninspectedPluginDiagnostic(
++    discoverConfiguredPluginLoadPaths({ loadPaths, env: params.env }).diagnostics,
++  );
++  if (warning) {
++    log.warn(warning.message);
++    return { config: params.config, changes: [] };
++  }
+   let next = params.config;
+   const changes: string[] = [];
+   const pluginIds = resolveRelevantSetupMigrationPluginIds(params);
+@@ -805,7 +816,11 @@ export function runPluginSetupConfigMigrations(params: {
+     env: params.env,
+     pluginIds,
+   }).configMigrations) {
+-    const migration = entry.migrate(next);
++    const migration = applyPluginDoctorCompatibilityMigration({
++      pluginId: entry.pluginId,
++      config: next,
++      normalize: ({ cfg }) => entry.migrate(cfg) ?? { config: cfg, changes: [] },
++    });
+     if (!migration || migration.changes.length === 0) {
+       continue;
+     }

@@ -15,6 +15,42 @@ export function isRegistryBundleEntry(entry: McpRegistryEntry): boolean {
   return entry.kind === McpRegistryEntryKind.Bundle;
 }
 
+/** UI language code, as returned by the renderer i18n service. */
+export type McpLanguage = 'zh' | 'en';
+
+function pickLocalized(
+  language: McpLanguage,
+  zh: string | undefined,
+  en: string | undefined,
+): string {
+  const preferred = language === 'zh' ? zh : en;
+  const fallback = language === 'zh' ? en : zh;
+  return (preferred?.trim() || fallback?.trim() || '');
+}
+
+/**
+ * Display name for a marketplace entry. `name` is the English name, so only a
+ * Chinese variant is carried separately; entries without one keep showing it.
+ */
+export function getRegistryEntryDisplayName(
+  entry: McpRegistryEntry,
+  language: McpLanguage,
+): string {
+  if (language === 'zh') {
+    const localizedName = entry.name_zh?.trim();
+    if (localizedName) return localizedName;
+  }
+  return entry.name;
+}
+
+/** Localized description, falling back to the other language when one is missing. */
+export function getRegistryEntryLocalizedDescription(
+  entry: McpRegistryEntry,
+  language: McpLanguage,
+): string {
+  return pickLocalized(language, entry.description_zh, entry.description_en);
+}
+
 function getMarketplaceInsertionIndex(position: number | undefined, listLength: number): number {
   if (position === undefined || !Number.isFinite(position)) return listLength;
   const zeroBasedPosition = Math.max(0, Math.trunc(position) - 1);
