@@ -23,6 +23,7 @@ import {
   getCurrentComputerUseKitBundleDescriptor,
   getInstalledKitsMap,
   isComputerUseKitSupportedPlatform,
+  promptComputerUseAccessibilityPermission,
   removeComputerUseSkillArtifacts,
   resolveBundledComputerUseKitArchivePath,
 } from '../../computerUse/computerUseKit';
@@ -309,9 +310,6 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
     let skillWatchingStopped = false;
     let skillWatchingRestarted = false;
     try {
-      if (isComputerUseKit && !isComputerUseKitSupportedPlatform()) {
-        throw new Error(`Computer Use kit is only available on ${getComputerUseSupportedPlatformLabel()}.`);
-      }
       const computerUseBundleDescriptor = isComputerUseKit
         ? getCurrentComputerUseKitBundleDescriptor()
         : null;
@@ -437,6 +435,7 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
         if (!syncResult.success) {
           throw new Error(syncResult.error || 'OpenClaw config sync failed after Computer Use install');
         }
+        promptComputerUseAccessibilityPermission();
       }
 
       // 7. Notify after all installation work and Computer Use config sync are complete.

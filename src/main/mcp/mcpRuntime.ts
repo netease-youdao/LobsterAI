@@ -3,7 +3,7 @@ import { app, BrowserWindow } from 'electron';
 import path from 'path';
 
 import { McpIpcChannel } from '../../shared/mcp/constants';
-import { isComputerUseKitInstalled } from '../computerUse/computerUseKit';
+import { isComputerUseKitInstalled, syncComputerUseSkillFromRuntime } from '../computerUse/computerUseKit';
 import { resolveComputerUseMcpServer } from '../computerUse/computerUseMcpServer';
 import { installComputerUseRuntime } from '../computerUse/computerUseRuntime';
 import { getElectronNodeRuntimePath } from '../libs/coworkUtil';
@@ -295,13 +295,18 @@ export class McpRuntime {
       const installResult = await installComputerUseRuntime();
       if (!installResult.success) {
         console.warn(`[MCP] failed to install Computer Use runtime: ${installResult.error || 'unknown error'}`);
+      } else {
+        try {
+          syncComputerUseSkillFromRuntime(this.deps.getStore(), installResult.paths?.skillDir);
+        } catch (error) {
+          console.warn('[MCP] failed to refresh the Computer Use skill from its runtime:', error);
+        }
       }
     }
 
     const computerUseServer = shouldEnableComputerUse
       ? resolveComputerUseMcpServer({
         askUserCallbackUrl,
-        bridgeSecret: this.bridgeSecret,
         electronNodePath: electronPath,
       })
       : null;

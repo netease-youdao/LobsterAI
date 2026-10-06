@@ -1,10 +1,9 @@
-import { app } from 'electron';
+import { app, systemPreferences } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
 import {
   ComputerUseKitBundle,
-  ComputerUseKitBundleArchive,
   ComputerUseKitBundleIntegrity,
   ComputerUseKitId,
   ComputerUseKitMetadata,
@@ -18,14 +17,17 @@ import {
 } from '../../shared/kit/constants';
 import type { SqliteStore } from '../sqliteStore';
 import {
+  ComputerUseRuntimePlatform,
   ComputerUseRuntimeTarget,
   getCurrentComputerUseRuntimeDescriptor,
   isComputerUseRuntimeSupportedPlatform,
 } from './computerUseRuntime';
 
 const SKILLS_DIR_NAME = 'SKILLs';
+const SKILL_FILE_NAME = 'SKILL.md';
 const SKILL_STATE_KEY = 'skills_state';
 const COMPUTER_USE_RESOURCE_DIR = 'computer-use';
+const KIT_ARCHIVE_ENV = 'LOBSTER_COMPUTER_USE_KIT_ARCHIVE';
 const COMPUTER_USE_KIT_ICON_URL = 'https://ydhardwarecommon.nosdn.127.net/f02f8c2d2af8b1f88426327944f6e1f5.png';
 const COMPUTER_USE_MCP_REF = {
   id: ComputerUseKitId.BuiltIn,
@@ -45,7 +47,6 @@ export interface ComputerUseKitBundleDescriptor {
 
 const ComputerUseKitBundlesByRuntimeTarget = {
   [ComputerUseRuntimeTarget.MacArm64]: {
-    archiveName: ComputerUseKitBundleArchive.MacArm64,
     bundle: ComputerUseKitBundle.MacArm64,
     sha256: ComputerUseKitBundleIntegrity.MacArm64.Sha256,
     sizeBytes: ComputerUseKitBundleIntegrity.MacArm64.SizeBytes,
@@ -66,7 +67,11 @@ function isFile(filePath: string): boolean {
 }
 
 export function isComputerUseKitSupportedPlatform(): boolean {
-  return isComputerUseRuntimeSupportedPlatform();
+  const descriptor = getCurrentComputerUseKitBundleDescriptor();
+  if (!descriptor || !isComputerUseRuntimeSupportedPlatform()) {
+    return false;
+  }
+  return !descriptor.archiveName || resolveBundledComputerUseKitArchivePath(descriptor) !== null;
 }
 
 export function getCurrentComputerUseKitBundleDescriptor(): ComputerUseKitBundleDescriptor | null {
@@ -77,6 +82,10 @@ export function getCurrentComputerUseKitBundleDescriptor(): ComputerUseKitBundle
 export function resolveBundledComputerUseKitArchivePath(
   descriptor: ComputerUseKitBundleDescriptor,
 ): string | null {
+  const envArchivePath = process.env[KIT_ARCHIVE_ENV]?.trim();
+  if (envArchivePath && isFile(envArchivePath)) {
+    return envArchivePath;
+  }
   if (!descriptor.archiveName) {
     return null;
   }
@@ -159,9 +168,68 @@ function getUserComputerUseSkillDir(): string {
   return path.join(app.getPath('userData'), SKILLS_DIR_NAME, ComputerUseSkillId.BuiltIn);
 }
 
+/**
+ * Refreshes the installed Computer Use skill from the skill copy shipped inside the
+ * runtime, and moves the kit record to the runtime version, so runtime upgrades do
+ * not leave a stale SKILL.md or a "reinstall required" notice behind.
+ */
+export function syncComputerUseSkillFromRuntime(
+  store: SqliteStore,
+  runtimeSkillDir: string | undefined,
+): boolean {
+  const runtime = getCurrentComputerUseRuntimeDescriptor();
+  const installedMap = getInstalledKitsMap(store);
+  const record = installedMap[ComputerUseKitId.BuiltIn];
+  if (!runtime || !record || !runtimeSkillDir) {
+    return false;
+  }
+  const sourceSkill = path.join(runtimeSkillDir, SKILL_FILE_NAME);
+  if (!isFile(sourceSkill)) {
+    return false;
+  }
+  const skillId = record.skills?.skillIds?.[0] ?? ComputerUseSkillId.BuiltIn;
+  const targetDir = path.join(app.getPath('userData'), SKILLS_DIR_NAME, skillId);
+  const targetSkill = path.join(targetDir, SKILL_FILE_NAME);
+  const source = fs.readFileSync(sourceSkill, 'utf8');
+  const current = isFile(targetSkill) ? fs.readFileSync(targetSkill, 'utf8') : '';
+  let changed = false;
+  if (current !== source) {
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(targetSkill, source, 'utf8');
+    changed = true;
+    console.log(`[ComputerUseKit] refreshed skill ${skillId} from runtime ${runtime.version}`);
+  }
+  if (record.version !== runtime.version) {
+    installedMap[ComputerUseKitId.BuiltIn] = { ...record, version: runtime.version };
+    store.set(KitStoreKey.Installed, installedMap);
+    changed = true;
+  }
+  return changed;
+}
+
 export function removeComputerUseSkillArtifacts(store: SqliteStore): void {
   fs.rmSync(getUserComputerUseSkillDir(), { recursive: true, force: true });
   const stateMap = store.get<SkillStateMap>(SKILL_STATE_KEY) ?? {};
   delete stateMap[ComputerUseSkillId.BuiltIn];
   store.set(SKILL_STATE_KEY, stateMap);
+}
+
+/**
+ * macOS: ask for Accessibility right after the kit is installed, so the system prompt
+ * appears while the user is looking at Computer Use rather than mid-task. The helper
+ * inherits LobsterAI's permission, and requests Screen Recording on first capture.
+ */
+export function promptComputerUseAccessibilityPermission(): boolean {
+  if (process.platform !== ComputerUseRuntimePlatform.MacOS) {
+    return true;
+  }
+  try {
+    if (systemPreferences.isTrustedAccessibilityClient(false)) {
+      return true;
+    }
+    systemPreferences.isTrustedAccessibilityClient(true);
+  } catch (error) {
+    console.warn('[ComputerUseKit] failed to request macOS Accessibility permission:', error);
+  }
+  return false;
 }

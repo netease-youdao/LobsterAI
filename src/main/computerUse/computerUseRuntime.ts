@@ -8,6 +8,8 @@ import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { promisify } from 'util';
 
+import { getLanguage, type LanguageType } from '../i18n';
+
 export const ComputerUseRuntimeId = {
   BuiltIn: 'computer-use',
 } as const;
@@ -36,7 +38,7 @@ export type ComputerUseRuntimeArch =
   typeof ComputerUseRuntimeArch[keyof typeof ComputerUseRuntimeArch];
 
 export const ComputerUseRuntimeMode = {
-  MacMcpApp: 'mac-mcp-app',
+  MacHelper: 'mac-helper',
   WindowsHelper: 'windows-helper',
 } as const;
 export type ComputerUseRuntimeMode =
@@ -68,14 +70,14 @@ export const ComputerUseRuntimes = {
   },
   [ComputerUseRuntimeTarget.MacArm64]: {
     id: ComputerUseRuntimeId.BuiltIn,
-    version: '1.0.809',
+    version: '0.2.0',
     platform: ComputerUseRuntimePlatform.MacOS,
     arch: ComputerUseRuntimeArch.Arm64,
     target: ComputerUseRuntimeTarget.MacArm64,
-    archiveName: 'lobsterai-computer-use-runtime-mac-arm64-1.0.809.zip',
-    downloadUrl: null as string | null,
-    sha256: '27b33c1516da73238f8230e4e1b9f733651a8ac5c480bfd020081d0eda2e8e4e',
-    sizeBytes: 29464751,
+    archiveName: 'lobsterai-computer-use-runtime-mac-arm64-0.2.0.zip',
+    downloadUrl: 'https://ydschool-video.nosdn.127.net/1791257239528lobsterai-computer-use-runtime-mac-arm64-0.2.0.zip',
+    sha256: 'd649d5ebcbad99d40a47c96726cca88c0cb6073fe708e06ca8db9ca4257493a0',
+    sizeBytes: 210653,
   },
 } as const satisfies Record<ComputerUseRuntimeTarget, ComputerUseRuntimeDescriptor>;
 
@@ -91,22 +93,34 @@ export type ComputerUseRuntimeStatus =
 export const ComputerUseHelperConfig = {
   AccentColor: '#339cff',
   Direction: 'ltr',
-  Locale: 'zh-CN',
-  EscToCancel: '按 Esc 取消',
-  UsingComputer: 'LobsterAI正在使用你的电脑',
 } as const;
 export type ComputerUseHelperConfig =
   typeof ComputerUseHelperConfig[keyof typeof ComputerUseHelperConfig];
 
+/** Overlay strings shown by the platform helper while Computer Use is active. */
+export const ComputerUseHelperStrings = {
+  zh: {
+    locale: 'zh-CN',
+    escToCancel: '按 Esc 取消',
+    usingComputer: 'LobsterAI正在使用你的电脑',
+    stopped: '已停止电脑操作',
+  },
+  en: {
+    locale: 'en-US',
+    escToCancel: 'Press Esc to stop',
+    usingComputer: 'LobsterAI is using your computer',
+    stopped: 'Computer Use stopped',
+  },
+} as const satisfies Record<LanguageType, Record<string, string>>;
+
 export interface ComputerUseRuntimePaths {
   clientModulePath?: string;
   helperExePath?: string;
-  mcpArgs?: string[];
-  mcpCommandPath?: string;
-  mcpCwd?: string;
   mode: ComputerUseRuntimeMode;
   rootDir: string;
   runtimePackageRoot?: string;
+  /** Skill shipped inside the runtime, used to refresh an installed kit on upgrade. */
+  skillDir?: string;
 }
 
 export interface ComputerUseRuntimeInspection {
@@ -125,6 +139,7 @@ const RUNTIME_STATE_FILE = 'runtime.json';
 const COMPUTER_USE_RESOURCE_DIR = 'computer-use';
 const RUNTIME_ARCHIVE_ENV = 'LOBSTER_COMPUTER_USE_RUNTIME_ARCHIVE';
 const SUPPORTED_PLATFORM_LABEL = 'Windows x64 or macOS arm64';
+const STALE_STAGING_DIR_MS = 60 * 60 * 1000;
 const execFileAsync = promisify(execFile);
 
 function isFile(filePath: string): boolean {
@@ -188,17 +203,19 @@ export function getComputerUseHelperStateHome(): string {
   return path.join(app.getPath('userData'), 'computer-use-helper');
 }
 
-export function ensureComputerUseHelperStateHome(): string {
+export function ensureComputerUseHelperStateHome(language: LanguageType = getLanguage()): string {
   const stateHome = getComputerUseHelperStateHome();
   const configDir = path.join(stateHome, 'computer-use');
   const configPath = path.join(configDir, 'config.json');
+  const strings = ComputerUseHelperStrings[language] ?? ComputerUseHelperStrings.zh;
   const config = {
     accentColor: ComputerUseHelperConfig.AccentColor,
     direction: ComputerUseHelperConfig.Direction,
-    locale: ComputerUseHelperConfig.Locale,
+    locale: strings.locale,
     strings: {
-      escToCancel: ComputerUseHelperConfig.EscToCancel,
-      usingComputer: ComputerUseHelperConfig.UsingComputer,
+      escToCancel: strings.escToCancel,
+      usingComputer: strings.usingComputer,
+      stopped: strings.stopped,
     },
   };
   const content = `${JSON.stringify(config, null, 2)}\n`;
@@ -240,11 +257,11 @@ function readManifestRuntimeMode(
   descriptor: ComputerUseRuntimeDescriptor,
 ): ComputerUseRuntimeMode {
   const value = manifest?.mode;
-  if (value === ComputerUseRuntimeMode.MacMcpApp || value === ComputerUseRuntimeMode.WindowsHelper) {
+  if (value === ComputerUseRuntimeMode.MacHelper || value === ComputerUseRuntimeMode.WindowsHelper) {
     return value;
   }
   return descriptor.platform === ComputerUseRuntimePlatform.MacOS
-    ? ComputerUseRuntimeMode.MacMcpApp
+    ? ComputerUseRuntimeMode.MacHelper
     : ComputerUseRuntimeMode.WindowsHelper;
 }
 
@@ -270,21 +287,11 @@ function readManifestRelativePath(
   return path.join(...parts);
 }
 
-function readManifestStringList(
-  manifest: Record<string, unknown> | null,
-  key: string,
-): string[] | null {
-  const value = manifest?.[key];
-  if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) {
-    return null;
-  }
-  return value.map(item => item.trim()).filter(Boolean);
-}
-
-function inspectWindowsHelperRuntime(
+function inspectHelperRuntime(
   rootDir: string,
   manifest: Record<string, unknown> | null,
   missing: string[],
+  mode: ComputerUseRuntimeMode,
 ): ComputerUseRuntimePaths | null {
   const runtimePackageRootRelativePath = readManifestRelativePath(manifest, 'runtimePackageRoot');
   const helperRelativePath = readManifestRelativePath(manifest, 'helper');
@@ -322,54 +329,15 @@ function inspectWindowsHelperRuntime(
     return null;
   }
 
+  const skillRelativePath = readManifestRelativePath(manifest, 'skill');
+  const skillDir = skillRelativePath ? path.join(rootDir, skillRelativePath) : '';
   return {
     clientModulePath,
     helperExePath,
-    mode: ComputerUseRuntimeMode.WindowsHelper,
+    mode,
     rootDir,
     runtimePackageRoot,
-  };
-}
-
-function inspectMacMcpAppRuntime(
-  rootDir: string,
-  manifest: Record<string, unknown> | null,
-  missing: string[],
-): ComputerUseRuntimePaths | null {
-  const mcpCommandRelativePath = readManifestRelativePath(manifest, 'mcpCommand');
-  const mcpCwdRelativePath = readManifestRelativePath(manifest, 'mcpCwd');
-  const mcpArgs = readManifestStringList(manifest, 'mcpArgs');
-
-  if (!mcpCommandRelativePath) {
-    missing.push(`${RUNTIME_STATE_FILE}:mcpCommand`);
-  }
-  if (!mcpCwdRelativePath) {
-    missing.push(`${RUNTIME_STATE_FILE}:mcpCwd`);
-  }
-  if (!mcpArgs) {
-    missing.push(`${RUNTIME_STATE_FILE}:mcpArgs`);
-  }
-
-  const mcpCommandPath = mcpCommandRelativePath ? path.join(rootDir, mcpCommandRelativePath) : '';
-  const mcpCwd = mcpCwdRelativePath ? path.join(rootDir, mcpCwdRelativePath) : '';
-
-  if (mcpCommandRelativePath && !isFile(mcpCommandPath)) {
-    missing.push(mcpCommandRelativePath);
-  }
-  if (mcpCwdRelativePath && !isDirectory(mcpCwd)) {
-    missing.push(mcpCwdRelativePath);
-  }
-
-  if (missing.length > 0 || !mcpArgs) {
-    return null;
-  }
-
-  return {
-    mcpArgs,
-    mcpCommandPath,
-    mcpCwd,
-    mode: ComputerUseRuntimeMode.MacMcpApp,
-    rootDir,
+    ...(skillDir && isFile(path.join(skillDir, 'SKILL.md')) ? { skillDir } : {}),
   };
 }
 
@@ -401,9 +369,7 @@ export function inspectComputerUseRuntime(
   }
 
   const mode = readManifestRuntimeMode(manifest, descriptor);
-  const paths = mode === ComputerUseRuntimeMode.MacMcpApp
-    ? inspectMacMcpAppRuntime(effectiveRootDir, manifest, missing)
-    : inspectWindowsHelperRuntime(effectiveRootDir, manifest, missing);
+  const paths = inspectHelperRuntime(effectiveRootDir, manifest, missing, mode);
 
   if (!paths) {
     return {
@@ -465,7 +431,7 @@ async function downloadRuntimeArchive(
   if (!descriptor.downloadUrl) {
     throw new Error(
       `Computer Use runtime archive is not bundled for ${descriptor.target}. `
-      + `Run scripts/extract-computer-use-mac-runtime.cjs or set ${RUNTIME_ARCHIVE_ENV}.`,
+      + `Configure downloadUrl or set ${RUNTIME_ARCHIVE_ENV}.`,
     );
   }
 
@@ -532,6 +498,7 @@ export async function installComputerUseRuntime(
 
   const current = inspectComputerUseRuntime(undefined, descriptor);
   if (current.paths) {
+    await removeStaleComputerUseRuntimes(descriptor);
     return { success: true, paths: current.paths };
   }
 
@@ -572,6 +539,7 @@ export async function installComputerUseRuntime(
     }
 
     console.log(`[ComputerUseRuntime] runtime installed successfully for ${descriptor.target}`);
+    await removeStaleComputerUseRuntimes(descriptor);
     return { success: true, paths: installed.paths };
   } catch (error) {
     await fs.promises.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
@@ -579,6 +547,55 @@ export async function installComputerUseRuntime(
     console.error('[ComputerUseRuntime] runtime installation failed:', error);
     return { success: false, error: message };
   }
+}
+
+/**
+ * Removes runtime versions and cached archives left behind by earlier releases.
+ * Only the current descriptor's version directory and archive are kept.
+ */
+export async function removeStaleComputerUseRuntimes(
+  descriptor: ComputerUseRuntimeDescriptor,
+): Promise<string[]> {
+  const removed: string[] = [];
+  const targetDir = path.join(getComputerUseRuntimeBaseDir(), descriptor.target);
+  const downloadsDir = path.join(getComputerUseRuntimeBaseDir(), 'downloads');
+  const removeEntry = async (entryPath: string): Promise<void> => {
+    try {
+      await fs.promises.rm(entryPath, { recursive: true, force: true });
+      removed.push(entryPath);
+    } catch (error) {
+      console.warn(`[ComputerUseRuntime] failed to remove stale runtime entry ${entryPath}:`, error);
+    }
+  };
+
+  const versionEntries = await fs.promises.readdir(targetDir).catch(() => [] as string[]);
+  for (const entry of versionEntries) {
+    if (entry === descriptor.version) {
+      continue;
+    }
+    const entryPath = path.join(targetDir, entry);
+    if (entry.includes('.tmp-')) {
+      // Another install may still be extracting into this staging directory.
+      const stat = await fs.promises.stat(entryPath).catch((): null => null);
+      if (stat && Date.now() - stat.mtimeMs < STALE_STAGING_DIR_MS) {
+        continue;
+      }
+    }
+    await removeEntry(entryPath);
+  }
+
+  const archivePrefix = `lobsterai-computer-use-runtime-${descriptor.target}-`;
+  const archiveEntries = await fs.promises.readdir(downloadsDir).catch(() => [] as string[]);
+  for (const entry of archiveEntries) {
+    if (entry.startsWith(archivePrefix) && entry !== descriptor.archiveName) {
+      await removeEntry(path.join(downloadsDir, entry));
+    }
+  }
+
+  if (removed.length > 0) {
+    console.log(`[ComputerUseRuntime] removed ${removed.length} stale runtime entr${removed.length === 1 ? 'y' : 'ies'} for ${descriptor.target}`);
+  }
+  return removed;
 }
 
 export async function uninstallComputerUseRuntime(): Promise<void> {
