@@ -3,19 +3,12 @@
  * (MIT, see third-party-notices/openclaw-progress-card-LICENSE.txt) by way of
  * netease-youdao/LobsterAI#2758. The Gateway's card stays authoritative.
  */
-import {
-  CheckIcon,
-  ChevronRightIcon,
-  ClipboardDocumentListIcon,
-  ClockIcon,
-  PauseCircleIcon,
-  XCircleIcon,
-  XMarkIcon,
-} from '@heroicons/react/24/outline';
-import React, { useEffect, useId, useState } from 'react';
+import { ChevronUpIcon, ClipboardDocumentListIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { type OpenClawProgressCard as ProgressCard, ProgressCardStepStatus } from '../../../shared/cowork/progressCard';
 import { i18nService } from '../../services/i18n';
+import { readProgressCardExpanded, rememberProgressCardExpanded } from '../../services/progressCardExpansion';
 import type { CoworkSessionStatus } from '../../types/cowork';
 import {
   getProgressCardOutcome,
@@ -31,7 +24,25 @@ const OUTCOME_LABEL_KEYS: Partial<Record<ProgressCardOutcome, string>> = {
   [ProgressCardOutcome.Failed]: 'progressCardFailed',
 };
 
+/** Header glyph color for how the run stands. */
+const OUTCOME_TONE_CLASSES: Record<ProgressCardOutcome, string> = {
+  [ProgressCardOutcome.Running]: 'text-primary',
+  [ProgressCardOutcome.Complete]: 'text-success',
+  [ProgressCardOutcome.TurnEnded]: 'text-secondary',
+  [ProgressCardOutcome.Stopped]: 'text-secondary',
+  [ProgressCardOutcome.Failed]: 'text-destructive',
+};
+
+const STEP_TEXT_CLASSES: Record<ProgressCardStepStatus, string> = {
+  [ProgressCardStepStatus.Completed]: 'text-muted line-through decoration-muted/60',
+  [ProgressCardStepStatus.InProgress]: 'font-medium text-foreground',
+  [ProgressCardStepStatus.Pending]: 'text-secondary',
+};
+
 const UPDATED_TIME_TICK_MS = 30_000;
+// The pie is a stroke as wide as the circle it traces, so it fills a disc of twice this radius.
+const PIE_RADIUS = 2.5;
+const PIE_CIRCUMFERENCE = 2 * Math.PI * PIE_RADIUS;
 
 const formatUpdatedAt = (updatedAt: number, now: number): string => {
   const minutes = Math.floor(Math.max(0, now - updatedAt) / 60_000);
@@ -46,46 +57,110 @@ const formatUpdatedAt = (updatedAt: number, now: number): string => {
   );
 };
 
-const Spinner: React.FC = () => (
-  <span
-    className="block h-[1em] w-[1em] animate-spin rounded-full border-[1.5px] border-border border-t-secondary motion-reduce:animate-none"
-    aria-hidden="true"
-  />
+/** All glyphs share a 16-unit box so the header icon and step markers line up in one column. */
+const Glyph: React.FC<{ className?: string; children: React.ReactNode }> = ({ className = '', children }) => (
+  <svg viewBox="0 0 16 16" className={`block ${className}`} aria-hidden="true">
+    {children}
+  </svg>
+);
+
+const Spinner: React.FC<{ className?: string }> = ({ className = '' }) => (
+  <Glyph className={`animate-spin motion-reduce:animate-none ${className}`}>
+    <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.75" opacity="0.2" />
+    <path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+  </Glyph>
+);
+
+/** The share of finished steps as a pie inside a ring, filling clockwise from twelve o'clock. */
+const ProgressPie: React.FC<{ fraction: number; className?: string }> = ({ fraction, className = '' }) => (
+  <Glyph className={className}>
+    <circle cx="8" cy="8" r="6.75" fill="none" stroke="currentColor" strokeWidth="1.5" />
+    {fraction > 0 && (
+      <circle
+        cx="8"
+        cy="8"
+        r={PIE_RADIUS}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={PIE_RADIUS * 2}
+        strokeDasharray={`${fraction * PIE_CIRCUMFERENCE} ${PIE_CIRCUMFERENCE}`}
+        transform="rotate(-90 8 8)"
+        className="transition-[stroke-dasharray] duration-500 ease-out"
+      />
+    )}
+  </Glyph>
+);
+
+const CheckBadge: React.FC<{ className?: string }> = ({ className = '' }) => (
+  <Glyph className={className}>
+    <circle cx="8" cy="8" r="7" fill="currentColor" />
+    <path
+      d="M5.25 8.25 7.1 10.1 10.75 6.25"
+      fill="none"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="stroke-surface"
+    />
+  </Glyph>
 );
 
 const StepMarker: React.FC<{ status: ProgressCardStepStatus; outcome: ProgressCardOutcome }> = ({ status, outcome }) => {
+  const size = 'h-3.5 w-3.5';
   if (status === ProgressCardStepStatus.Completed) {
-    return <CheckIcon className="h-[1em] w-[1em] text-green-600 dark:text-green-400" />;
+    return <CheckBadge className={`${size} text-muted`} />;
   }
-  if (status === ProgressCardStepStatus.InProgress) {
-    if (outcome === ProgressCardOutcome.Running) return <Spinner />;
-    if (outcome === ProgressCardOutcome.Failed) return <XCircleIcon className="h-[1em] w-[1em] text-red-500/80" />;
-    return <PauseCircleIcon className="h-[1em] w-[1em] text-muted" />;
+  if (status === ProgressCardStepStatus.Pending) {
+    return (
+      <Glyph className={`${size} text-muted`}>
+        <circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      </Glyph>
+    );
   }
-  return <ClockIcon className="h-[1em] w-[1em] text-muted" />;
+  if (outcome === ProgressCardOutcome.Running) {
+    return <Spinner className={`${size} text-primary`} />;
+  }
+  if (outcome === ProgressCardOutcome.Failed) {
+    return (
+      <Glyph className={`${size} text-destructive`}>
+        <circle cx="8" cy="8" r="7" fill="currentColor" />
+        <path d="M8 4.75v3.75" fill="none" strokeWidth="1.6" strokeLinecap="round" className="stroke-surface" />
+        <circle cx="8" cy="11" r="0.9" className="fill-surface" />
+      </Glyph>
+    );
+  }
+  // Started but no longer being worked on: half full.
+  return (
+    <Glyph className={`${size} text-secondary`}>
+      <circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M8 3.5a4.5 4.5 0 0 1 0 9z" fill="currentColor" />
+    </Glyph>
+  );
 };
 
 /**
  * The agent's progress card as a tab attached to the top of the composer,
  * like the goal status bar: one line — the step being worked on, its
  * position, and how the run stands — that opens onto the note and the whole
- * checklist. It starts open while the agent works on it and closed
- * otherwise; the user's own toggle wins after that. A card the agent is no
- * longer working on can be closed, which clears it in the Gateway.
+ * checklist. Whether it is open is up to the user alone (see
+ * progressCardExpansion). A card the agent is no longer working on can be
+ * closed, which clears it in the Gateway.
  */
 export const OpenClawProgressCardView: React.FC<{
   card: ProgressCard;
   sessionStatus: CoworkSessionStatus;
+  isExpanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
   /** The composer is in its compact size (artifact panel open). */
   compact?: boolean;
   onDismiss?: () => void;
-}> = ({ card, sessionStatus, compact = false, onDismiss }) => {
+}> = ({ card, sessionStatus, isExpanded, onExpandedChange, compact = false, onDismiss }) => {
   const summary = getProgressCardSummary(card);
   const outcome = getProgressCardOutcome(summary, sessionStatus);
-  const [expandedByUser, setExpandedByUser] = useState<boolean | null>(null);
-  const isExpanded = expandedByUser ?? outcome === ProgressCardOutcome.Running;
   const [now, setNow] = useState(() => Date.now());
   const bodyId = useId();
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const currentStepRef = useRef<HTMLLIElement>(null);
 
   useEffect(() => {
     if (!isExpanded) return undefined;
@@ -94,7 +169,20 @@ export const OpenClawProgressCardView: React.FC<{
     return () => window.clearInterval(timer);
   }, [isExpanded]);
 
+  // A long checklist scrolls; keep the step being worked on in view as it advances.
+  useEffect(() => {
+    const body = bodyRef.current;
+    const step = currentStepRef.current;
+    if (!isExpanded || !body || !step) return;
+    const top = step.offsetTop;
+    const bottom = top + step.offsetHeight;
+    if (top < body.scrollTop || bottom > body.scrollTop + body.clientHeight) {
+      body.scrollTop = top - (body.clientHeight - step.offsetHeight) / 2;
+    }
+  }, [isExpanded, summary.position]);
+
   const steps = card.steps ?? [];
+  const isRunning = outcome === ProgressCardOutcome.Running;
   const headline = summary.isComplete
     ? i18nService.t('progressCardAllDone').replace('{total}', String(summary.total))
     : summary.currentStep ?? summary.note ?? '';
@@ -108,13 +196,16 @@ export const OpenClawProgressCardView: React.FC<{
     outcomeLabelKey ? i18nService.t(outcomeLabelKey) : null,
     isExpanded ? formatUpdatedAt(card.updatedAt, now) : null,
   ].filter(Boolean).join(' · ');
-  const canDismiss = Boolean(onDismiss) && outcome !== ProgressCardOutcome.Running;
+  const canDismiss = Boolean(onDismiss) && !isRunning;
 
-  const leadingIcon = outcome === ProgressCardOutcome.Running
-    ? <Spinner />
-    : outcome === ProgressCardOutcome.Complete
-      ? <CheckIcon className="h-[1em] w-[1em] text-green-600 dark:text-green-400" />
-      : <ClipboardDocumentListIcon className="h-[1em] w-[1em]" />;
+  const toneClass = OUTCOME_TONE_CLASSES[outcome];
+  const leadingIcon = summary.isComplete
+    ? <CheckBadge className={`h-4 w-4 ${toneClass}`} />
+    : summary.total > 0
+      ? <ProgressPie fraction={summary.doneCount / summary.total} className={`h-4 w-4 ${toneClass}`} />
+      : isRunning
+        ? <Spinner className={`h-4 w-4 ${toneClass}`} />
+        : <ClipboardDocumentListIcon className="h-4 w-4 text-secondary" />;
 
   return (
     <section
@@ -122,30 +213,32 @@ export const OpenClawProgressCardView: React.FC<{
       aria-label={i18nService.t('progressCardTitle')}
       data-progress-card={outcome}
     >
-      <div className="flex min-w-0 items-center gap-1 px-2.5 py-1.5">
+      <div className="flex min-w-0 items-center gap-1 py-1 pl-2.5 pr-1.5">
         <button
           type="button"
-          onClick={() => setExpandedByUser(!isExpanded)}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          onClick={() => onExpandedChange(!isExpanded)}
+          className="group flex min-h-7 min-w-0 flex-1 items-center gap-2 text-left"
           aria-expanded={isExpanded}
           aria-controls={bodyId}
         >
-          <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-sm" aria-hidden="true">
-            {leadingIcon}
-          </span>
+          <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center">{leadingIcon}</span>
           <span className="flex-shrink-0 font-semibold text-foreground">{i18nService.t('progressCardTitle')}</span>
-          <span className="min-w-0 flex-1 truncate">{isExpanded ? '' : headline}</span>
+          <span className={`min-w-0 flex-1 truncate ${isRunning && !isExpanded ? 'shimmer-text' : ''}`}>
+            {isExpanded ? '' : headline}
+          </span>
           {meta && <span className="flex-shrink-0 tabular-nums text-muted">{meta}</span>}
-          <ChevronRightIcon
-            className={`h-3.5 w-3.5 flex-shrink-0 text-muted transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
-            aria-hidden="true"
-          />
+          <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-muted transition-colors group-hover:bg-surface group-hover:text-foreground">
+            <ChevronUpIcon
+              className={`h-3.5 w-3.5 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
+              aria-hidden="true"
+            />
+          </span>
         </button>
         {canDismiss && (
           <button
             type="button"
             onClick={onDismiss}
-            className="flex-shrink-0 rounded-md p-1 text-secondary transition-colors hover:bg-surface hover:text-foreground"
+            className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface hover:text-foreground"
             title={i18nService.t('progressCardDismiss')}
             aria-label={i18nService.t('progressCardDismiss')}
           >
@@ -155,27 +248,29 @@ export const OpenClawProgressCardView: React.FC<{
       </div>
       {isExpanded && (
         <div
+          ref={bodyRef}
           id={bodyId}
-          className="max-h-[min(280px,35vh)] overflow-y-auto overscroll-contain px-3 pb-2.5 [overflow-wrap:anywhere]"
+          className="relative max-h-[min(300px,38vh)] animate-fade-in overflow-y-auto overscroll-contain pb-3 pl-2.5 pr-4 [mask-image:linear-gradient(to_bottom,#000_calc(100%_-_12px),transparent)] [overflow-wrap:anywhere]"
           data-progress-card-body
         >
-          {card.markdown && <ProgressCardMarkdown content={card.markdown} />}
+          {card.markdown && (
+            <div className={`pl-6 ${steps.length > 0 ? 'mb-2' : ''}`}>
+              <ProgressCardMarkdown content={card.markdown} />
+            </div>
+          )}
           {steps.length > 0 && (
-            <ol className="mt-1 space-y-1">
+            <ol className="space-y-1">
               {steps.map((step, index) => (
                 <li
                   key={`${index}-${step.step}`}
-                  className={`flex items-start gap-2 leading-5 ${
-                    step.status === ProgressCardStepStatus.InProgress
-                      ? 'text-foreground'
-                      : step.status === ProgressCardStepStatus.Completed ? 'text-muted' : 'text-secondary'
-                  }`}
+                  ref={index === summary.position - 1 ? currentStepRef : undefined}
+                  className="flex items-start gap-2 leading-5"
                   data-status={step.status}
                 >
-                  <span className="flex h-5 w-4 flex-shrink-0 items-center justify-center text-sm" aria-hidden="true">
+                  <span className="flex h-5 w-4 flex-shrink-0 items-center justify-center" aria-hidden="true">
                     <StepMarker status={step.status} outcome={outcome} />
                   </span>
-                  <span className="min-w-0">{step.step}</span>
+                  <span className={`min-w-0 transition-colors ${STEP_TEXT_CLASSES[step.status]}`}>{step.step}</span>
                 </li>
               ))}
             </ol>
@@ -193,12 +288,19 @@ const OpenClawProgressCard: React.FC<{
   compact?: boolean;
 }> = ({ sessionId, sessionStatus, compact }) => {
   const { card, dismiss } = useOpenClawProgressCard(sessionId);
+  const [isExpanded, setIsExpanded] = useState(readProgressCardExpanded);
+  const handleExpandedChange = useCallback((expanded: boolean) => {
+    setIsExpanded(expanded);
+    rememberProgressCardExpanded(expanded);
+  }, []);
   if (!card) return null;
   return (
     <div className="relative z-10 -mb-px">
       <OpenClawProgressCardView
         card={card}
         sessionStatus={sessionStatus}
+        isExpanded={isExpanded}
+        onExpandedChange={handleExpandedChange}
         compact={compact}
         onDismiss={() => void dismiss(card.revision)}
       />
