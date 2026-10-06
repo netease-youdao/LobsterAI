@@ -11,7 +11,7 @@ export const ComputerUseSkillId = {
 export type ComputerUseSkillId = typeof ComputerUseSkillId[keyof typeof ComputerUseSkillId];
 
 export const ComputerUseKitBundle = {
-  MacArm64: 'https://ydschool-video.nosdn.127.net/1791257244537lobsterai-computer-use-skill-mac-arm64-0.2.0.zip',
+  MacArm64: 'https://ydschool-video.nosdn.127.net/1791282471603lobsterai-computer-use-skill-mac-arm64-0.2.1.zip',
   WindowsX64: 'https://ydhardwarebusiness.nosdn.127.net/2fa564627a3f1a0f3acedbc771d15f12.zip',
 } as const;
 export type ComputerUseKitBundle =

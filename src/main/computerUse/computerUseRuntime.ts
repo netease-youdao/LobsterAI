@@ -70,14 +70,14 @@ export const ComputerUseRuntimes = {
   },
   [ComputerUseRuntimeTarget.MacArm64]: {
     id: ComputerUseRuntimeId.BuiltIn,
-    version: '0.2.0',
+    version: '0.2.1',
     platform: ComputerUseRuntimePlatform.MacOS,
     arch: ComputerUseRuntimeArch.Arm64,
     target: ComputerUseRuntimeTarget.MacArm64,
-    archiveName: 'lobsterai-computer-use-runtime-mac-arm64-0.2.0.zip',
-    downloadUrl: 'https://ydschool-video.nosdn.127.net/1791257239528lobsterai-computer-use-runtime-mac-arm64-0.2.0.zip',
-    sha256: 'd649d5ebcbad99d40a47c96726cca88c0cb6073fe708e06ca8db9ca4257493a0',
-    sizeBytes: 210653,
+    archiveName: 'lobsterai-computer-use-runtime-mac-arm64-0.2.1.zip',
+    downloadUrl: 'https://ydschool-video.nosdn.127.net/1791282449345lobsterai-computer-use-runtime-mac-arm64-0.2.1.zip',
+    sha256: '3f3d3694ddc1242834778885bee0a7442ff06f9febc7388e6f94c8340a187053',
+    sizeBytes: 211310,
   },
 } as const satisfies Record<ComputerUseRuntimeTarget, ComputerUseRuntimeDescriptor>;
 
