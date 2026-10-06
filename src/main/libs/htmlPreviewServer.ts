@@ -281,14 +281,49 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
 
   const resolvedPath = path.resolve(session.rootDir, relativePath);
 
-  // Path traversal protection
+  // Lexical path traversal protection. This alone does not stop a symlink
+  // placed inside rootDir from pointing anywhere else on disk, since it only
+  // inspects the string form of the path, never what it resolves to on the
+  // filesystem; the realpath-based check below closes that gap.
   if (!resolvedPath.startsWith(session.rootDir)) {
     res.writeHead(403);
     res.end('Forbidden');
     return;
   }
 
-  streamFile(resolvedPath, res);
+  streamFileWithinRoot(resolvedPath, session.rootDir, res);
+}
+
+/**
+ * Resolves symlinks on both the requested path and the session root before
+ * streaming, and rejects if the real target escapes the real root. A plain
+ * lexical containment check (resolvedPath.startsWith(rootDir)) passes for a
+ * symlink located inside rootDir regardless of what it points to, since
+ * fs.stat/fs.createReadStream (used by streamFile) follow symlinks; only
+ * checking the canonical path closes that gap.
+ */
+function streamFileWithinRoot(resolvedPath: string, rootDir: string, res: http.ServerResponse): void {
+  fs.realpath(resolvedPath, (pathErr, realTarget) => {
+    if (pathErr) {
+      res.writeHead(404);
+      res.end('Not Found');
+      return;
+    }
+    fs.realpath(rootDir, (rootErr, realRoot) => {
+      if (rootErr) {
+        res.writeHead(403);
+        res.end('Forbidden');
+        return;
+      }
+      const relative = path.relative(realRoot, realTarget);
+      if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
+        res.writeHead(403);
+        res.end('Forbidden');
+        return;
+      }
+      streamFile(realTarget, res);
+    });
+  });
 }
 
 export async function startHtmlPreviewServer(): Promise<number> {

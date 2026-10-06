@@ -523,7 +523,7 @@ import {
 import { runLegacyWeixinAllowFromMigration } from './libs/openclawWeixinPairingMigration';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
-import { isAnalyticsEndpointUrl, sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
+import { isAnalyticsEndpointUrl, redactBodyForLog, sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
 import { packageNodeServiceDeployment } from './libs/shareDeployment/nodeServiceDeploymentPackager';
 import {
   analyzeNodeServiceProjectDirectory,
@@ -13561,7 +13561,7 @@ if (!gotTheLock) {
       const logTraffic = !isAnalyticsEndpointUrl(options.url);
       if (logTraffic) {
         console.log(
-          `[api:fetch] ${options.method} ${sanitizedUrl}, headers: ${serializeForLog(options.headers)}, body: ${options.body}`,
+          `[api:fetch] ${options.method} ${sanitizedUrl}, headers: ${serializeForLog(options.headers)}, body: ${redactBodyForLog(options.body)}`,
         );
       }
 
@@ -13597,7 +13597,7 @@ if (!gotTheLock) {
         if (logTraffic) {
           console.log(
             `[api:fetch] ${options.method} ${sanitizedUrl} -> ${result.status} ${result.statusText}`,
-            typeof result.data === 'object' ? JSON.stringify(result.data) : result.data,
+            typeof result.data === 'object' ? serializeForLog(result.data) : redactBodyForLog(result.data),
           );
         }
 
