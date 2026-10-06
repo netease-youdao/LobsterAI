@@ -666,7 +666,11 @@ export class PluginManager {
           if (isHiddenPlugin(pluginId, hiddenIds)) continue;
           if (syncedIds.has(pluginId)) continue;
 
-          const configEntry = configEntries[pluginId] as { enabled?: boolean; config?: Record<string, unknown> } | undefined;
+          const configEntry = configEntries[pluginId] as {
+            enabled?: boolean;
+            config?: Record<string, unknown>;
+            hooks?: Record<string, unknown>;
+          } | undefined;
           const enabled = configEntry?.enabled !== false;
           const version = readPluginVersion(pluginDir);
 
@@ -677,12 +681,19 @@ export class PluginManager {
             version,
             enabled,
             installedAt: Date.now(),
+            ...(configEntry?.hooks && typeof configEntry.hooks === 'object'
+              ? { hooks: configEntry.hooks }
+              : {}),
           });
 
           // Sync config values from openclaw.json if present
           if (configEntry?.config && typeof configEntry.config === 'object'
             && Object.keys(configEntry.config).length > 0) {
             this.store.setUserPluginConfig(pluginId, configEntry.config);
+          }
+          if (configEntry?.hooks && typeof configEntry.hooks === 'object'
+            && Object.keys(configEntry.hooks).length > 0) {
+            this.store.setUserPluginHooks(pluginId, configEntry.hooks);
           }
 
           synced.push(pluginId);
@@ -699,7 +710,11 @@ export class PluginManager {
       if (isHiddenPlugin(pluginId, hiddenIds)) continue;
       if (syncedIds.has(pluginId)) continue;
 
-      const configEntry = configEntries[pluginId] as { enabled?: boolean; config?: Record<string, unknown> } | undefined;
+      const configEntry = configEntries[pluginId] as {
+        enabled?: boolean;
+        config?: Record<string, unknown>;
+        hooks?: Record<string, unknown>;
+      } | undefined;
       const enabled = configEntry?.enabled !== false;
 
       this.store.addUserPlugin({
@@ -709,6 +724,9 @@ export class PluginManager {
         version: undefined,
         enabled,
         installedAt: Date.now(),
+        ...(configEntry?.hooks && typeof configEntry.hooks === 'object'
+          ? { hooks: configEntry.hooks }
+          : {}),
       });
 
       // Sync config values from openclaw.json if present
@@ -716,9 +734,32 @@ export class PluginManager {
         && Object.keys(configEntry.config).length > 0) {
         this.store.setUserPluginConfig(pluginId, configEntry.config);
       }
+      if (configEntry?.hooks && typeof configEntry.hooks === 'object'
+        && Object.keys(configEntry.hooks).length > 0) {
+        this.store.setUserPluginHooks(pluginId, configEntry.hooks);
+      }
 
       synced.push(pluginId);
       syncedIds.add(pluginId);
+    }
+
+    // Refresh hooks (and config) for plugins already tracked in SQLite so a
+    // later syncToDisk rewrite does not drop OpenClaw entry.hooks.
+    for (const plugin of existingPlugins) {
+      if (isHiddenPlugin(plugin.pluginId, hiddenIds)) continue;
+      const configEntry = configEntries[plugin.pluginId] as {
+        config?: Record<string, unknown>;
+        hooks?: Record<string, unknown>;
+      } | undefined;
+      if (!configEntry) continue;
+      if (configEntry.config && typeof configEntry.config === 'object'
+        && Object.keys(configEntry.config).length > 0) {
+        this.store.setUserPluginConfig(plugin.pluginId, configEntry.config);
+      }
+      if (configEntry.hooks && typeof configEntry.hooks === 'object'
+        && Object.keys(configEntry.hooks).length > 0) {
+        this.store.setUserPluginHooks(plugin.pluginId, configEntry.hooks);
+      }
     }
 
     if (synced.length > 0) {

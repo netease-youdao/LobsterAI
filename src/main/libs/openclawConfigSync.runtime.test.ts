@@ -2793,6 +2793,54 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.plugins.allow).toContain('xai');
   });
 
+  test('preserves user plugin hooks across syncToDisk rewrites (#2654)', async () => {
+    const hooks = {
+      before_tool_call: [{ type: 'command', command: 'echo before' }],
+    };
+    fs.writeFileSync(configPath, `${JSON.stringify({
+      gateway: { mode: 'local', port: 18789 },
+      plugins: {
+        entries: {
+          'user-hook-plugin': {
+            enabled: true,
+            config: { apiKey: 'sk-keep' },
+            hooks,
+          },
+        },
+        allow: ['user-hook-plugin'],
+      },
+    }, null, 2)}\n`, 'utf8');
+
+    const sync = await createSync({
+      getUserPlugins: () => [{
+        pluginId: 'user-hook-plugin',
+        enabled: true,
+        config: { apiKey: 'sk-keep' },
+        hooks,
+      }],
+    });
+
+    expect(sync.sync('hooks-preserve').ok).toBe(true);
+    const first = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(first.plugins.entries['user-hook-plugin']).toEqual({
+      enabled: true,
+      config: { apiKey: 'sk-keep' },
+      hooks,
+    });
+
+    // Fallback: hooks still on disk, store only returns enabled+config.
+    const syncWithoutStoredHooks = await createSync({
+      getUserPlugins: () => [{
+        pluginId: 'user-hook-plugin',
+        enabled: true,
+        config: { apiKey: 'sk-keep' },
+      }],
+    });
+    expect(syncWithoutStoredHooks.sync('hooks-preserve-from-disk').ok).toBe(true);
+    const second = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(second.plugins.entries['user-hook-plugin'].hooks).toEqual(hooks);
+  });
+
   test('keeps memory-core selected and explicitly disables dreaming when dreaming is off', async () => {
     fs.writeFileSync(configPath, JSON.stringify({
       plugins: {
