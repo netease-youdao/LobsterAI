@@ -11,7 +11,7 @@ export const ComputerUseSkillId = {
 export type ComputerUseSkillId = typeof ComputerUseSkillId[keyof typeof ComputerUseSkillId];
 
 export const ComputerUseKitBundle = {
-  MacArm64: 'https://ydschool-video.nosdn.127.net/1791282471603lobsterai-computer-use-skill-mac-arm64-0.2.1.zip',
+  MacArm64: 'https://ydschool-video.nosdn.127.net/1791322104350lobsterai-computer-use-skill-mac-arm64-0.2.2.zip',
   WindowsX64: 'https://ydhardwarebusiness.nosdn.127.net/2fa564627a3f1a0f3acedbc771d15f12.zip',
 } as const;
 export type ComputerUseKitBundle =
@@ -19,8 +19,8 @@ export type ComputerUseKitBundle =
 
 export const ComputerUseKitBundleIntegrity = {
   MacArm64: {
-    Sha256: '133b6db94a87d9c3544c9c120162df6adbe61ad807e59ca20f8ec359adb48844',
-    SizeBytes: 2586,
+    Sha256: '2dc658dae293661e7459b9c386d3b300c4aa369fbaf2ad062e1102751404fc66',
+    SizeBytes: 2729,
   },
   WindowsX64: {
     Sha256: '8e214e06aef9d764d13351d9739ff0049d324dedecf29fa82d8d3a39d1e9da03',

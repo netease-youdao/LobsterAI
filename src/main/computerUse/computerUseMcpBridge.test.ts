@@ -283,4 +283,22 @@ describe('Computer Use MCP bridge (macOS behavior)', () => {
     expect(blocks[1]).toContain('[1] button "Add"');
     expect(blocks[2]).toBe('document_text:\nGroceries\nmilk');
   });
+
+  test('forwards a reduced screenshot scale and omits the default', async () => {
+    const bridge = await startBridge({ answer: 'allow' });
+
+    const tools = await bridge.listTools() as Array<{ name: string; inputSchema?: { properties?: Record<string, unknown> } }>;
+    const windowStateTool = tools.find(tool => tool.name === 'get_window_state');
+    expect(windowStateTool?.inputSchema?.properties).toHaveProperty('scale');
+
+    await bridge.call('get_window_state', { window: NOTES_WINDOW, scale: 0.5 });
+    await bridge.call('get_window_state', { window: NOTES_WINDOW, scale: 1 });
+    await bridge.call('get_window_state', { window: NOTES_WINDOW });
+    const requests = bridge.clientCalls().filter(call => call.method === 'get_window_state');
+    expect(requests.map(call => call.params.scale)).toEqual([0.5, undefined, undefined]);
+
+    const rejected = await bridge.call('get_window_state', { window: NOTES_WINDOW, scale: 0.05 });
+    expect(rejected.isError).toBe(true);
+    expect(bridge.clientCalls().filter(call => call.method === 'get_window_state')).toHaveLength(3);
+  });
 });

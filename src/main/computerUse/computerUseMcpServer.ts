@@ -502,6 +502,8 @@ const CoordinateSpaceSchema = z.enum(['screenshot_pixels', 'window_points']);
 const DeliverySchema = z.enum(['auto', 'background', 'foreground', 'hid', 'pid'])
   .describe('auto (default): background element actions first, briefly using the real pointer/keyboard only when needed. background: never take over the pointer or activate apps. foreground: always use real input on the activated window.');
 const ScreenshotIdSchema = z.string().optional().describe('screenshots[].id from get_window_state; coordinates are pixels in that image.');
+const ScreenshotScaleSchema = z.number().min(0.1).max(1).optional()
+  .describe('Screenshot scale in [0.1, 1]. 1 (default) returns the full screenshot; 0.5 returns half the width and height (about a quarter of the image tokens). Use a smaller scale to check coarse UI state and keep 1 to read small text or hit small targets. Coordinates are always pixels in the returned screenshot (pass its screenshotId), so a scaled screenshot needs no conversion.');
 const ExpectTextSchema = z.string().optional().describe('Optional text that should appear (or disappear with expect_gone) after the action; the call fails if it is not observed.');
 const DEFAULT_INCLUDE_TEXT = IS_MAC;
 
@@ -874,14 +876,20 @@ registerTool('get_window', 'Refresh a window handle returned by list_windows or 
   return successText(result);
 });
 
-registerTool('get_window_state', 'Capture a window: a screenshot (image) and an accessibility outline whose [index] entries can be passed as element_index together with state_id. Call it again after the UI changes.', {
+const GetWindowStateSchema = {
   window: WindowSchema,
   include_screenshot: z.boolean().optional().default(true),
   include_text: z.boolean().optional().default(DEFAULT_INCLUDE_TEXT).describe('Include the accessibility outline, focused element, and readable text.'),
   max_nodes: z.number().int().positive().optional().describe('Maximum outline elements (default 350).'),
   text_limit: z.number().int().positive().optional().describe('Maximum characters of document_text (default 6000).'),
   state_id: z.string().optional(),
-}, async ({ window, include_screenshot = true, include_text = DEFAULT_INCLUDE_TEXT, max_nodes, text_limit, state_id }) => {
+};
+// The macOS helper records each screenshot's pixel size, so scaled pixels map back to points.
+if (IS_MAC) {
+  GetWindowStateSchema.scale = ScreenshotScaleSchema;
+}
+
+registerTool('get_window_state', 'Capture a window: a screenshot (image) and an accessibility outline whose [index] entries can be passed as element_index together with state_id. Call it again after the UI changes.', GetWindowStateSchema, async ({ window, include_screenshot = true, include_text = DEFAULT_INCLUDE_TEXT, max_nodes, text_limit, state_id, scale }) => {
   const request = {
     window: clientWindow(window),
     include_screenshot,
@@ -893,6 +901,9 @@ registerTool('get_window_state', 'Capture a window: a screenshot (image) and an 
   }
   if (text_limit !== undefined) {
     request.text_limit = text_limit;
+  }
+  if (IS_MAC && scale !== undefined && scale < 1) {
+    request.scale = scale;
   }
   const state = await client.get_window_state(request);
   rememberWindows([state?.window]);
