@@ -40,11 +40,13 @@ import { CoworkSteerRejectReason, CoworkSteerStatus } from '../../../shared/cowo
 import { OpenClawTranscriptSafetyLimit } from '../../../shared/openclawTranscript/constants';
 import { ProviderName } from '../../../shared/providers/constants';
 import { setLanguage, t } from '../../i18n';
+import { getServerApiBaseUrl } from '../endpoints';
 import { OpenClawChannelSessionSync } from '../openclawChannelSessionSync';
 import {
   __openClawTokenProxyTestUtils,
   consumeRecentOpenClawTokenProxyQuotaError,
 } from '../openclawTokenProxy';
+import { setSystemProxyEnabled } from '../systemProxy';
 import { AgentEventStream, AgentLifecyclePhase, OpenClawChatState, OpenClawGatewayEvent, OpenClawGatewayMethod } from './constants';
 import { ContinuityCapsuleSource } from './coworkContinuityCapsule';
 import {
@@ -733,6 +735,46 @@ test('resolveOpenClawRuntimeErrorMessage preserves customer-managed provider bil
     failoverReason: 'billing',
     rawErrorPreview: 'insufficient balance',
   })).toBe(t('coworkErrorInsufficientBalance'));
+});
+
+test('resolveOpenClawRuntimeErrorMessage reports proxy-relayed connection failures as network errors', () => {
+  const message = 'HTTP 502: LobsterAI proxy upstream request failed: net::ERR_HTTP2_PING_FAILED';
+  const planMetadata = {
+    provider: ProviderName.LobsteraiServer,
+    failoverReason: 'timeout',
+    providerRuntimeFailureKind: 'timeout',
+    rawErrorPreview: '502 LobsterAI proxy upstream request failed: net::ERR_HTTP2_PING_FAILED',
+  };
+  const host = new URL(getServerApiBaseUrl()).host;
+  try {
+    setSystemProxyEnabled(false);
+    expect(resolveOpenClawRuntimeErrorMessage(message, planMetadata))
+      .toBe(t('coworkErrorNetworkError'));
+
+    setSystemProxyEnabled(true);
+    expect(resolveOpenClawRuntimeErrorMessage(message, planMetadata))
+      .toBe(t('coworkErrorNetworkErrorViaSystemProxy', { host }));
+    // A custom provider may depend on the proxy, so it keeps the generic copy.
+    expect(resolveOpenClawRuntimeErrorMessage(message, {
+      ...planMetadata,
+      provider: ProviderName.Moonshot,
+    })).toBe(t('coworkErrorNetworkError'));
+  } finally {
+    setSystemProxyEnabled(false);
+  }
+});
+
+test('system proxy network copy survives renderer re-classification in every language', () => {
+  try {
+    for (const language of ['zh', 'en'] as const) {
+      setLanguage(language);
+      const copy = t('coworkErrorNetworkErrorViaSystemProxy', { host: 'lobsterai-server.youdao.com' });
+      expect(copy).toContain('lobsterai-server.youdao.com');
+      expect(classifyErrorKey(copy)).toBeNull();
+    }
+  } finally {
+    setLanguage('zh');
+  }
 });
 
 test('resolveOpenClawRuntimeErrorMessage does not classify persisted cooldowns as billing failures', () => {

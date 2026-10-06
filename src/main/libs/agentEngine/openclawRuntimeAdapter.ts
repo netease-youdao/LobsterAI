@@ -96,6 +96,7 @@ import { MediaGenerationTool } from '../../mediaGenerationPolicy';
 import type { SubagentMessageStore } from '../../subagentMessageStore';
 import type { SubagentRunStore } from '../../subagentRunStore';
 import { setCoworkProxySessionId } from '../coworkOpenAICompatProxy';
+import { getServerApiBaseUrl } from '../endpoints';
 import { extractOpenClawAssistantStreamParts,extractOpenClawAssistantStreamText } from '../openclawAssistantText';
 import {
   buildManagedSessionKey,
@@ -131,6 +132,7 @@ import {
 import { buildOpenClawLocalTimeContextPrompt } from '../openclawLocalTimeContextPrompt';
 import { resolveOpenClawThinkingLevelForModel } from '../openclawModelThinkingLevels';
 import { consumeRecentOpenClawTokenProxyQuotaError } from '../openclawTokenProxy';
+import { isSystemProxyEnabled } from '../systemProxy';
 import {
   findRedundantFinalPrefixMessageId,
   findReusableCommittedAssistantMessageId,
@@ -1770,6 +1772,17 @@ function isLobsterAILoginExpiredMetadata(
     || metadata.providerRuntimeFailureKind?.trim() === 'auth_invalid_token';
 }
 
+const DEFAULT_LOBSTERAI_SERVER_HOST = 'lobsterai-server.youdao.com';
+
+/** Host users must route directly in their proxy app to reach the LobsterAI plan service. */
+function resolveLobsterAIServerHost(): string {
+  try {
+    return new URL(getServerApiBaseUrl()).host || DEFAULT_LOBSTERAI_SERVER_HOST;
+  } catch {
+    return DEFAULT_LOBSTERAI_SERVER_HOST;
+  }
+}
+
 export function resolveOpenClawRuntimeErrorMessage(
   errorMessage: string,
   metadata?: OpenClawSafeRuntimeErrorMetadata,
@@ -1857,6 +1870,15 @@ export function resolveOpenClawRuntimeError(
           enterpriseQuotaError,
         );
       }
+    }
+    if (
+      classifiedKey === CoworkErrorI18nKey.NetworkError
+      && metadata?.provider?.trim() === ProviderName.LobsteraiServer
+      && isSystemProxyEnabled()
+    ) {
+      return buildResolvedRuntimeError(t(CoworkErrorI18nKey.NetworkErrorViaSystemProxy, {
+        host: resolveLobsterAIServerHost(),
+      }));
     }
     return buildResolvedRuntimeError(t(classifiedKey));
   }

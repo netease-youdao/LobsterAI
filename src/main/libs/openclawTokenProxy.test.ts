@@ -9,6 +9,8 @@ vi.mock('electron', () => ({
   net: { fetch: vi.fn() },
 }));
 
+import { net } from 'electron';
+
 import {
   __openClawTokenProxyTestUtils,
   consumeRecentOpenClawTokenProxyQuotaError,
@@ -727,6 +729,59 @@ test('requires the proxy token through any provider API key header', () => {
   expect(authorized({ authorization: token })).toBe(false);
   // Without a configured token the proxy keeps its previous open behavior.
   expect(testUtils.isInboundRequestAuthorized({}, null)).toBe(true);
+});
+
+test('keeps the Chromium net error name when the upstream request fails before headers', () => {
+  expect(JSON.parse(testUtils.buildUpstreamRequestFailureBody(
+    new Error('net::ERR_HTTP2_PING_FAILED'),
+  ))).toEqual({
+    error: {
+      message: 'LobsterAI proxy upstream request failed: net::ERR_HTTP2_PING_FAILED',
+      type: 'upstream_network_error',
+      code: 'ERR_HTTP2_PING_FAILED',
+    },
+  });
+  expect(JSON.parse(testUtils.buildUpstreamRequestFailureBody(new TypeError('boom'))))
+    .toEqual({ error: 'Token proxy upstream error' });
+});
+
+test('the running proxy relays an upstream network failure as a structured 502', async () => {
+  const token = 'c'.repeat(48);
+  const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.mocked(net.fetch).mockRejectedValueOnce(new Error('net::ERR_HTTP2_PING_FAILED'));
+  const { port } = await startOpenClawTokenProxy({
+    getAuthTokens: () => ({ accessToken: 'access', refreshToken: 'refresh' }),
+    refreshToken: vi.fn(),
+    getServerBaseUrl: () => 'https://server.example',
+    getClientVersion: () => 'test',
+    getInboundAuthToken: () => token,
+  });
+  try {
+    const response = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const req = http.request({
+        host: '127.0.0.1',
+        port,
+        method: 'POST',
+        path: '/v1/chat/completions',
+        headers: { authorization: `Bearer ${token}` },
+      }, res => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => { body += chunk; });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+      });
+      req.on('error', reject);
+      req.end('{}');
+    });
+    expect(response.status).toBe(502);
+    expect(JSON.parse(response.body).error).toMatchObject({
+      type: 'upstream_network_error',
+      code: 'ERR_HTTP2_PING_FAILED',
+    });
+  } finally {
+    stopOpenClawTokenProxy();
+    errorSpy.mockRestore();
+  }
 });
 
 test('the running proxy rejects foreign hosts and missing tokens before touching the account', async () => {

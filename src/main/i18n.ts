@@ -147,6 +147,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'OpenClaw 正在等待活动任务结束后应用配置。请完成或停止活动任务，然后重试。',
     coworkErrorModelResponseTimeout: '模型响应超时，请稍后重试。',
     coworkErrorNetworkError: '网络连接失败，请检查网络设置。',
+    coworkErrorNetworkErrorViaSystemProxy:
+      '网络连接中断。你开启了“使用系统代理”，请求在经过代理软件转发时中断。请在代理软件里把 {host} 设为直连，或在设置中关闭“使用系统代理”后重试。',
     coworkErrorRateLimit: '请求过于频繁，请稍后再试。',
     coworkErrorModelOverloaded: '模型服务当前繁忙或容量不足，请稍后重试。',
     coworkErrorContentFiltered: '内容未通过安全审核，请修改后重试。',
@@ -554,6 +556,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'OpenClaw is waiting for active tasks to finish before applying configuration. Complete or stop the active tasks, then try again.',
     coworkErrorModelResponseTimeout: 'The model response timed out. Please try again.',
     coworkErrorNetworkError: 'Network connection failed. Please check your network settings.',
+    coworkErrorNetworkErrorViaSystemProxy:
+      'The network connection was interrupted while going through your system proxy. In your proxy app, route {host} directly (DIRECT), or turn off "Use System Proxy" in Settings, then try again.',
     coworkErrorRateLimit: 'Too many requests. Please try again later.',
     coworkErrorModelOverloaded:
       'The model service is temporarily busy or at capacity. Please try again later.',
