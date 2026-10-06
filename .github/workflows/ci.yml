@@ -23,7 +23,7 @@ jobs:
       scripts: ${{ steps.changes.outputs.scripts }}
       docs: ${{ steps.changes.outputs.docs }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v3
         id: changes
         with:
@@ -56,7 +56,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-node@v4
@@ -98,7 +98,7 @@ jobs:
     if: ${{ needs.changed-files.outputs.renderer == 'true' || github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: '24.x'
@@ -121,7 +121,7 @@ jobs:
     if: ${{ needs.changed-files.outputs.main == 'true' || github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: '24.x'
@@ -144,7 +144,7 @@ jobs:
     if: ${{ needs.changed-files.outputs.skills == 'true' || github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: '24.x'
@@ -161,7 +161,7 @@ jobs:
     needs: [build-main]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: '24.x'
