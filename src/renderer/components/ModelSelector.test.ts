@@ -165,6 +165,10 @@ test('shrinks the model list so group tabs and footer stay visible in short wind
   expect(resolveDropdownListMaxHeight(341, true, true)).toBe(257);
 });
 
+test('reserves space for the search field before sizing the scrollable list', () => {
+  expect(resolveDropdownListMaxHeight(341, true, true, 48)).toBe(209);
+});
+
 test('keeps at least three model rows visible when space is extremely tight', () => {
   expect(resolveDropdownListMaxHeight(50, true, true)).toBe(116);
 });

@@ -4,6 +4,7 @@ import {
   ChevronRightIcon,
   ClockIcon,
   LockClosedIcon,
+  MagnifyingGlassIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import {
@@ -29,6 +30,8 @@ import { RootState } from '../store';
 import type { Model } from '../store/slices/modelSlice';
 import { getModelIdentityKey, isSameModelIdentity, setSelectedModel } from '../store/slices/modelSlice';
 import Modal from './common/Modal';
+import GroupedModelList from './modelSelector/GroupedModelList';
+import { groupModelChoices } from './modelSelector/modelGroups';
 import ModelThinkingMenu, {
   getModelThinkingLevelLabel,
 } from './modelSelector/ModelThinkingMenu';
@@ -60,7 +63,7 @@ interface ModelSelectorProps {
   thinkingLevel?: ModelThinkingLevelType | null;
 }
 
-const DROPDOWN_MAX_HEIGHT = 380; // list max-h-72 plus the tab area and current-model footer
+const DROPDOWN_MAX_HEIGHT = 430; // model list plus tabs, search and current-model footer
 const DROPDOWN_WIDTH = 300;
 const MODEL_ITEM_HEIGHT = 36; // px-3 py-2 row with a 20px line
 const LIST_VERTICAL_PADDING = 8; // scroll container py-1
@@ -71,6 +74,7 @@ const DROPDOWN_TRIGGER_GAP = 4; // matches mt-1/mb-1 and the +4 offset in portal
 const DROPDOWN_TABS_BLOCK_HEIGHT = 49; // group tabs block: p-2 + p-0.5 + py-1.5 + leading-4 + border-b
 const DROPDOWN_FOOTER_HEIGHT = 33; // current-model footer: py-2 + leading-4 + border-t
 const DROPDOWN_BORDER_HEIGHT = 2;
+const DROPDOWN_SEARCH_HEIGHT = 48;
 const HOVER_CARD_WIDTH = 220;
 const HOVER_CARD_VIEWPORT_MARGIN = 8;
 const HOVER_CLOSE_DELAY = 180;
@@ -242,8 +246,9 @@ export function resolveDropdownListMaxHeight(
   availableSpace: number,
   hasGroupTabs: boolean,
   hasCurrentModelFooter: boolean,
+  searchHeight = 0,
 ): number {
-  const chromeHeight = DROPDOWN_BORDER_HEIGHT
+  const chromeHeight = DROPDOWN_BORDER_HEIGHT + searchHeight
     + (hasGroupTabs ? DROPDOWN_TABS_BLOCK_HEIGHT : 0)
     + (hasCurrentModelFooter ? DROPDOWN_FOOTER_HEIGHT : 0);
   return Math.min(Math.max(availableSpace - chromeHeight, LIST_MIN_HEIGHT), LIST_MAX_HEIGHT);
@@ -406,6 +411,13 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   thinkingLevel,
 }) => {
   const dispatch = useDispatch();
+  React.useSyncExternalStore(
+    React.useCallback(listener => i18nService.subscribe(listener), []),
+    () => i18nService.getLanguage(),
+    () => i18nService.getLanguage(),
+  );
+  const [query, setQuery] = React.useState('');
+  const searchRef = React.useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = React.useState(false);
   const [resolvedDirection, setResolvedDirection] = React.useState<'up' | 'down'>('down');
   const [portalStyle, setPortalStyle] = React.useState<React.CSSProperties>({});
@@ -562,7 +574,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const availableSpace = (direction === 'up'
       ? rect.top - topBoundary
       : bottomBoundary - rect.bottom) - DROPDOWN_TRIGGER_GAP - DROPDOWN_VIEWPORT_MARGIN;
-    return resolveDropdownListMaxHeight(availableSpace, shouldShowGroupTabs, showCurrentModelFooter);
+    return resolveDropdownListMaxHeight(availableSpace, shouldShowGroupTabs, showCurrentModelFooter, DROPDOWN_SEARCH_HEIGHT);
   }, [portal, shouldShowGroupTabs, showCurrentModelFooter]);
 
   const updatePortalPosition = React.useCallback((direction: 'up' | 'down') => {
@@ -662,6 +674,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       setMoreModelsExpanded(
         selectedModel?.moreModel === true && getModelGroup(selectedModel) === preferredGroup,
       );
+      setQuery('');
       setIsOpen(true);
     } else {
       setIsOpen(false);
@@ -731,7 +744,14 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   };
 
   React.useEffect(() => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    setHoveredModel(null);
+    setIsThinkingMenuOpen(false);
+  }, [query, visibleGroup]);
+
+  React.useEffect(() => {
     if (!isOpen) {
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
       setHoveredModel(null);
       setIsThinkingMenuOpen(false);
     }
@@ -778,13 +798,16 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       if (event.key !== 'Escape') return;
       if (isThinkingMenuOpen) {
         setIsThinkingMenuOpen(false);
+      } else if (query) {
+        setQuery('');
+        searchRef.current?.focus();
       } else {
         setIsOpen(false);
       }
     };
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [isOpen, isThinkingMenuOpen]);
+  }, [isOpen, isThinkingMenuOpen, query]);
 
   React.useEffect(() => () => {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
@@ -942,7 +965,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     setIsThinkingMenuOpen(true);
   };
 
-  const renderModelItem = (model: Model) => {
+  const renderModelItem = (model: Model, label?: string) => {
     const selected = isSelected(model);
     const agenticBlocked = isModelAgenticBlocked(model);
     const restricted = model.accessible === false;
@@ -959,6 +982,8 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         onMouseLeave={handleModelHoverEnd}
         onFocus={(event) => handleModelHover(model, event.currentTarget, 0)}
         onBlur={handleModelHoverEnd}
+        title={`${model.name} · ${model.provider ?? model.providerKey ?? ''} · ${model.id}`}
+        aria-label={label ? `${model.name} · ${label} · ${model.id}` : undefined}
         aria-disabled={blocked}
         aria-haspopup={thinkingSelectionEnabled && hasThinkingProtocol ? 'menu' : undefined}
         className={`w-full px-3 py-2 text-left dark:text-claude-darkText text-claude-text flex items-center gap-2.5 transition-colors ${
@@ -973,7 +998,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
           {renderProviderIcon(model)}
         </span>
         <span className={`min-w-0 truncate text-[13px] leading-5 ${selected ? 'font-medium' : 'font-normal'}`}>
-          {model.name}
+          {label ?? model.name}
         </span>
         {hasThinkingProtocol && model.thinkingConfig && (
           <span className="shrink-0 text-[11px] font-medium text-secondary whitespace-nowrap">
@@ -1007,21 +1032,22 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     );
   };
 
-  const renderModelRows = (models: Model[]) => {
-    const accessibleModels = models.filter(model => model.accessible !== false);
-    const restrictedModels = models.filter(model => model.accessible === false);
+  const renderModelRows = (models: Model[], section: string) => {
     return (
-      <>
-        {accessibleModels.map(renderModelItem)}
-        {restrictedModels.length > 0 && (
-          <div>{restrictedModels.map(renderModelItem)}</div>
-        )}
-      </>
+      <GroupedModelList
+        key={`${visibleGroup}:${section}`}
+        models={models}
+        query={query}
+        isSelected={isSelected}
+        renderModel={renderModelItem}
+        renderIcon={renderProviderIcon}
+      />
     );
   };
 
   const renderMoreModelsSection = () => {
     if (visibleSections.moreModels.length === 0) return null;
+    if (query.trim()) return renderModelRows(visibleSections.moreModels, 'more');
     const handleToggle = () => {
       const nextExpanded = !moreModelsExpanded;
       revealMoreModelsOnExpandRef.current = nextExpanded;
@@ -1040,7 +1066,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             className={`h-4 w-4 shrink-0 text-secondary transition-transform ${moreModelsExpanded ? 'rotate-180' : ''}`}
           />
         </button>
-        {moreModelsExpanded && renderModelRows(visibleSections.moreModels)}
+        {moreModelsExpanded && renderModelRows(visibleSections.moreModels, 'more')}
       </div>
     );
   };
@@ -1217,6 +1243,20 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       className={`${portal ? '' : `absolute ${dropdownPositionClass} ${dropdownAlignmentClass}`} w-[300px] bg-surface rounded-xl popover-enter shadow-popover z-50 border-border border overflow-hidden`}
     >
       {shouldShowGroupTabs && renderGroupTabs()}
+      <div className="px-2 py-2">
+        <div className="flex h-8 items-center gap-2 rounded-lg bg-surface-raised px-2.5">
+          <MagnifyingGlassIcon className="h-4 w-4 shrink-0 text-secondary" />
+          <input
+            ref={searchRef}
+            type="search"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder={i18nService.t('modelSelectorSearch')}
+            aria-label={i18nService.t('modelSelectorSearch')}
+            className="min-w-0 flex-1 bg-transparent text-[12px] text-foreground outline-none placeholder:text-secondary"
+          />
+        </div>
+      </div>
       <div
         ref={scrollContainerRef}
         style={{
@@ -1239,8 +1279,13 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             {!selectedModel && <CheckIcon className="h-4 w-4 shrink-0 text-primary" strokeWidth={2.5} />}
           </button>
         )}
-        {renderModelRows(visibleSections.primaryModels)}
+        {renderModelRows(visibleSections.primaryModels, 'primary')}
         {renderMoreModelsSection()}
+        {query.trim() && groupModelChoices(visibleModels, query).length === 0 && (
+          <div role="status" className="px-3 py-6 text-center text-[12px] text-secondary">
+            {i18nService.t('modelSelectorNoMatches')}
+          </div>
+        )}
       </div>
       {renderCurrentModelFooter()}
     </div>
