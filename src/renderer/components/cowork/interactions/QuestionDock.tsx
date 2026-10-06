@@ -108,6 +108,10 @@ export function QuestionDockCard({ request, queueCount = 1, onRespond, onMinimiz
 
   const index = Math.min(draft.step, request.questions.length - 1);
   const question = request.questions[index];
+  const longQuestion = question.title.length > 240 || question.title.split('\n').length > 4;
+  const heading = question.displayTitle || (longQuestion ? t('coworkQuestionDockWaiting') : question.title);
+  const description = (question.displayTitle && question.displayTitle !== question.title) || longQuestion
+    ? question.title : '';
   const recommendedIndex = question.options.findIndex((option) => isRecommendedOption(option.label));
   const lastStep = index === request.questions.length - 1;
   const freeText = draft.freeText[question.id] ?? '';
@@ -314,7 +318,7 @@ export function QuestionDockCard({ request, queueCount = 1, onRespond, onMinimiz
       }}
     >
       <header>
-        <h2>{question.title}</h2>
+        <h2>{heading}</h2>
         <nav aria-label={t('coworkQuestionDockNavigation')}>
           <button
             type="button"
@@ -338,6 +342,13 @@ export function QuestionDockCard({ request, queueCount = 1, onRespond, onMinimiz
           </button>
         </nav>
       </header>
+      {question.subtitle && <p className="cowork-question-subtitle">{question.subtitle}</p>}
+      {description && (longQuestion ? (
+        <details key={question.id} className="cowork-question-details">
+          <summary>{t('coworkQuestionDockFullDescription')}</summary>
+          <div className="cowork-question-description">{description}</div>
+        </details>
+      ) : <div className="cowork-question-description">{description}</div>)}
       <div className="cowork-question-page" key={question.id}>
         {question.multiSelect && <p className="cowork-question-hint">{t('coworkQuestionWizardMultiSelectHint')}</p>}
         <div role="group" aria-label={question.title}>

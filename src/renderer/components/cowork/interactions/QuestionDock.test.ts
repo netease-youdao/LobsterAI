@@ -52,6 +52,32 @@ describe('QuestionDockCard', () => {
   test('is not rendered while hidden', () => {
     expect(renderCard(plugin, { hidden: true })).toBe('');
   });
+
+  test.each(['A detailed question. '.repeat(20), 'First\nSecond\nThird\nFourth\nFifth'])('keeps long questions available behind a compact heading', (question) => {
+    const html = renderCard({ ...plugin, toolInput: { questions: [{ question, options }] } });
+    expect(html).toContain('<h2>coworkQuestionDockWaiting</h2>');
+    expect(html).toContain('<details class="cowork-question-details">');
+    expect(html).toContain('<summary>coworkQuestionDockFullDescription</summary>');
+    expect(html).toContain(`<div class="cowork-question-description">${question}</div>`);
+    expect(html.match(/class="cowork-question-option/g)).toHaveLength(2);
+  });
+
+  test('uses a native header while keeping the full short question visible', () => {
+    const html = renderCard(native({ questionId: 'style', header: 'Style', question: 'Which style?', options }));
+    expect(html).toContain('<h2>Style</h2>');
+    expect(html).toContain('<div class="cowork-question-description">Which style?</div>');
+    expect(html).not.toContain('<details');
+  });
+
+  test('shows plugin titles and subtitles without treating question content as HTML', () => {
+    const html = renderCard({ ...plugin, toolInput: { questions: [{
+      title: 'Choose a layout', subtitle: 'Compare the available options', question: '<script>example</script>', options,
+    }] } });
+    expect(html).toContain('<h2>Choose a layout</h2>');
+    expect(html).toContain('Compare the available options</p>');
+    expect(html).toContain('&lt;script&gt;example&lt;/script&gt;</div>');
+    expect(html).not.toContain('<script>');
+  });
 });
 
 describe('QuestionDock', () => {

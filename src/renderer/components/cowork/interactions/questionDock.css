@@ -8,10 +8,13 @@
   padding: 16px 12px 12px;
   margin: 0 0 12px;
   min-width: 0;
+  max-height: min(65dvh, 640px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .cowork-question-dock header { display: flex; align-items: flex-start; gap: 16px; padding: 4px 12px 16px; }
-.cowork-question-dock h2 { flex: 1; min-width: 0; font-size: 16px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
-.cowork-question-dock nav { display: flex; align-items: center; gap: 6px; color: var(--lobster-text-secondary); white-space: nowrap; font-size: 12px; }
+.cowork-question-dock h2 { max-height: 5em; overflow-y: auto; flex: 1; min-width: 0; font-size: 16px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.cowork-question-dock nav { flex-shrink: 0; display: flex; align-items: center; gap: 6px; color: var(--lobster-text-secondary); white-space: nowrap; font-size: 12px; }
 .cowork-question-dock button { transition: background-color 120ms, color 120ms, opacity 120ms; }
 .cowork-question-dock button:disabled { opacity: .4; cursor: default; }
 .cowork-question-dock button:focus-visible, .cowork-question-dock textarea:focus-visible { outline: 2px solid var(--lobster-primary); outline-offset: 2px; }
@@ -54,3 +57,11 @@
 @media (prefers-reduced-motion: reduce) {
   .cowork-question-dock * { animation: none !important; transition: none !important; }
 }
+
+/* Preserve the complete prompt while keeping choices and dismissal reachable. */
+.cowork-question-subtitle { margin: -6px 12px 12px; font-size: 13px; line-height: 1.5; color: var(--lobster-text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.cowork-question-details { margin: 0 12px 12px; font-size: 13px; }
+.cowork-question-details summary { cursor: pointer; padding: 4px 0; }
+.cowork-question-details summary:focus-visible { outline: 2px solid var(--lobster-primary); outline-offset: 2px; }
+.cowork-question-description { max-height: min(18dvh, 180px); overflow-y: auto; overscroll-behavior: contain; white-space: pre-wrap; overflow-wrap: anywhere; padding: 4px 12px 12px; font-size: 13px; line-height: 1.6; }
+.cowork-question-details .cowork-question-description { padding: 8px 0; }
