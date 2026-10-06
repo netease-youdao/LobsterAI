@@ -41,7 +41,7 @@ Examples:
 
 Environment:
   WEB_SEARCH_SERVER   Bridge Server URL (default: http://127.0.0.1:8923)
-  WEB_SEARCH_ENGINE   Preferred engine: auto|google|bing (default: auto)
+  WEB_SEARCH_ENGINE   Preferred engine: auto|google|bing|parallel (default: auto)
   WEB_SEARCH_CLEANUP  Set to 1 to close browser after each search (default: keep alive)
 
 EOF
@@ -77,7 +77,7 @@ http_request() {
 
   # On Windows Git Bash/MSYS/Cygwin, prefer Node fetch to avoid codepage-related
   # corruption for non-ASCII payloads in curl/wget command-line arguments.
-  if ! is_windows_bash; then
+  if ! is_windows_bash && [ "${WEB_SEARCH_ENGINE:-auto}" != "parallel" ]; then
     if command -v curl > /dev/null 2>&1; then
       if [ "$METHOD" = "GET" ]; then
         if curl -s -f "$URL" 2>/dev/null; then
@@ -114,19 +114,32 @@ http_request() {
 
   env "${HTTP_NODE_ENV_PREFIX[@]}" "$HTTP_NODE_CMD" "${HTTP_NODE_ARGS[@]}" - "$METHOD" "$URL" "$BODY" <<'NODE'
 const [method, url, body] = process.argv.slice(2);
+const parallel = process.env.WEB_SEARCH_ENGINE === 'parallel';
 
 (async () => {
   try {
     const init = { method };
+    if (parallel) init.signal = AbortSignal.timeout(35000);
     if (method !== 'GET') {
       init.headers = { 'Content-Type': 'application/json' };
       init.body = body ?? '';
     }
     const response = await fetch(url, init);
-    if (!response.ok) {
+    if (!response.ok && !parallel) {
       process.exit(22);
     }
-    process.stdout.write(await response.text());
+    if (parallel && response.body) {
+      let bytes = 0;
+      const chunks = [];
+      for await (const chunk of response.body) {
+        bytes += chunk.byteLength;
+        if (bytes > 1024 * 1024) throw new Error('Bridge response exceeded 1 MiB');
+        chunks.push(Buffer.from(chunk));
+      }
+      process.stdout.write(Buffer.concat(chunks).toString('utf8'));
+    } else {
+      process.stdout.write(await response.text());
+    }
   } catch {
     process.exit(1);
   }
@@ -437,6 +450,11 @@ search() {
   SEARCH_RESPONSE=$(http_post_json "$ACTIVE_SERVER_URL/api/search" "$SEARCH_PAYLOAD" || true)
 
   if ! echo "$SEARCH_RESPONSE" | grep -q '"success":true'; then
+    if [ "$ENGINE" = "parallel" ]; then
+      echo -e "${RED}✗ Parallel search failed${NC}" >&2
+      echo "$SEARCH_RESPONSE" >&2
+      return 1
+    fi
     if [ "$ATTEMPT" -eq 1 ] && is_iconv_runtime_error "$SEARCH_RESPONSE"; then
       if repair_server_runtime; then
         if CONNECTION_ID="$(get_connection 2)"; then
@@ -469,6 +487,26 @@ search() {
 
   echo -e "${GREEN}✓ Found $TOTAL results in ${DURATION}ms (engine: ${ENGINE_USED})${NC}" >&2
   echo "" >&2
+
+  if [ "$ENGINE" = "parallel" ]; then
+    if ! resolve_http_node_runtime; then
+      echo -e "${RED}✗ Node/Electron runtime is required for Parallel output${NC}" >&2
+      return 1
+    fi
+    env "${HTTP_NODE_ENV_PREFIX[@]}" "$HTTP_NODE_CMD" "${HTTP_NODE_ARGS[@]}" - "$SEARCH_RESPONSE" <<'NODE'
+const { data } = JSON.parse(process.argv[2]);
+// Entities preserve literal evidence through Markdown and LobsterAI math normalization.
+const markdownText = (text) => text.replace(/[\\`*_~$\[\]()<>&#|]/g, (character) => `&#${character.charCodeAt(0)};`);
+console.log(`# Search Results: ${markdownText(data.query)}\n\n**Query:** ${markdownText(data.query)}  \n**Engine:** ${data.engine}  \n**Results:** ${data.totalResults}  \n**Time:** ${data.duration}ms\n`);
+for (const warning of data.warnings || []) console.log(`**Warning:** ${markdownText(warning)}\n`);
+for (const result of data.results) {
+  const label = markdownText(result.url);
+  const target = markdownText(new URL(result.url).href);
+  console.log(`---\n\n## ${markdownText(result.title)}\n\n**URL:** [${label}](${target})\n\n${markdownText(result.snippet)}\n`);
+}
+NODE
+    return $?
+  fi
 
   # Format results as Markdown
   echo "# Search Results: $QUERY"
@@ -545,8 +583,10 @@ main() {
 
   # Get connection
   local CONNECTION_ID=""
-  if ! CONNECTION_ID="$(get_connection)"; then
-    exit 1
+  if [ "${WEB_SEARCH_ENGINE:-auto}" != "parallel" ]; then
+    if ! CONNECTION_ID="$(get_connection)"; then
+      exit 1
+    fi
   fi
 
   # Perform search
@@ -560,7 +600,7 @@ main() {
   # Chrome which steals window focus).  Set WEB_SEARCH_CLEANUP=1 to force
   # cleanup after each search.
   # Legacy: WEB_SEARCH_NO_CLEANUP=1 is now a no-op (kept for compatibility).
-  if [ "${WEB_SEARCH_CLEANUP:-}" = "1" ]; then
+  if [ "${WEB_SEARCH_CLEANUP:-}" = "1" ] && [ "${WEB_SEARCH_ENGINE:-auto}" != "parallel" ]; then
     cleanup_browser "$CONNECTION_ID"
   fi
 
