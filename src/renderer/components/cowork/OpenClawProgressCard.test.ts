@@ -29,9 +29,18 @@ const allDone: OpenClawProgressCard = {
   steps: card.steps!.map((step) => ({ ...step, status: ProgressCardStepStatus.Completed })),
 };
 
-const render = (value: OpenClawProgressCard, status: CoworkSessionStatus, onDismiss?: () => void): string => (
-  renderToStaticMarkup(React.createElement(OpenClawProgressCardView, { card: value, sessionStatus: status, onDismiss }))
-);
+const render = (
+  value: OpenClawProgressCard,
+  status: CoworkSessionStatus,
+  onDismiss?: () => void,
+  isExpanded = false,
+): string => renderToStaticMarkup(React.createElement(OpenClawProgressCardView, {
+  card: value,
+  sessionStatus: status,
+  isExpanded,
+  onExpandedChange: () => undefined,
+  onDismiss,
+}));
 
 test('the summary follows the step being worked on', () => {
   expect(getProgressCardSummary(card)).toMatchObject({
@@ -56,14 +65,34 @@ test('an unfinished card reads as its session run: running, turn ended, stopped,
     .toBe(ProgressCardOutcome.Complete);
 });
 
-test('while the agent works on it the card is open, with no close button', () => {
+test('while the agent works on it the card stays one line, with no close button', () => {
   const html = render(card, CoworkSessionStatusValue.Running, () => undefined);
-  expect(html).toContain('aria-expanded="true"');
+  expect(html).toContain('aria-expanded="false"');
+  expect(html).toContain('确定设计语言与内容大纲');
   expect(html).toContain('第 2/3 步');
+  expect(html).not.toContain('data-progress-card-body');
+  expect(html).not.toContain('关闭任务进度');
+});
+
+test('opened, the card shows the note, the whole checklist, and when it was updated', () => {
+  const html = render(card, CoworkSessionStatusValue.Running, () => undefined, true);
+  expect(html).toContain('aria-expanded="true"');
   expect(html).toContain('刚刚更新');
   expect(html).toContain('data-progress-card-body');
+  expect(html).toContain('Anthropic 公司介绍 PPT');
   expect(html).toContain('生成封面配图');
-  expect(html).not.toContain('关闭任务进度');
+});
+
+test('the header pie fills with the share of steps done, and done steps are struck through', () => {
+  const html = render(card, CoworkSessionStatusValue.Running, undefined, true);
+  const [, filled, whole] = /stroke-dasharray="([\d.]+) ([\d.]+)"/.exec(html) ?? [];
+  expect(Number(filled) / Number(whole)).toBeCloseTo(1 / 3);
+  const stepItems = Object.fromEntries(
+    [...html.matchAll(/<li[^>]*data-status="(\w+)"[^>]*>[\s\S]*?<\/li>/g)].map(([item, status]) => [status, item]),
+  );
+  expect(stepItems[ProgressCardStepStatus.Completed]).toContain('line-through');
+  expect(stepItems[ProgressCardStepStatus.InProgress]).not.toContain('line-through');
+  expect(stepItems[ProgressCardStepStatus.Pending]).not.toContain('line-through');
 });
 
 test('once the run ends the card folds to one line that says so and can be closed', () => {
