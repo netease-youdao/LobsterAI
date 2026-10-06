@@ -239,7 +239,7 @@ async function repairPlugins(options: CompatibilityRepairOptions, report: OpenCl
         // Only replace the ledger entry for a missing managed install from a
         // previous profile. Never mutate external files or adopt custom installs.
         if (!isPreviousManagedPluginPath({ ...options, installPath: record.installPath, pluginId: plugin.id, packageName: plugin.packageName })
-          || !isMissingUnaliasedPluginPath(record.installPath)) continue;
+          || !isMissingUnaliasedPluginPath(record.installPath, options.stateDir)) continue;
       }
     }
     const manifest = readConfig(path.join(plugin.root, 'package.json'));
