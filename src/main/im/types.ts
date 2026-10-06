@@ -247,9 +247,6 @@ export interface DiscordMultiInstanceStatus {
 
 // ==================== NIM (NetEase IM) Types ====================
 
-export type NimTeamPolicy = 'open' | 'allowlist' | 'disabled';
-export type NimSessionType = 'p2p' | 'team' | 'superTeam';
-
 export interface NimP2pConfig {
   policy: 'open' | 'allowlist' | 'disabled';
   allowFrom?: (string | number)[];
@@ -950,15 +947,6 @@ export const DEFAULT_DISCORD_STATUS: DiscordGatewayStatus = {
   startedAt: null,
   lastError: null,
   botUsername: null,
-  lastInboundAt: null,
-  lastOutboundAt: null,
-};
-
-export const DEFAULT_NIM_STATUS: NimGatewayStatus = {
-  connected: false,
-  startedAt: null,
-  lastError: null,
-  botAccount: null,
   lastInboundAt: null,
   lastOutboundAt: null,
 };
