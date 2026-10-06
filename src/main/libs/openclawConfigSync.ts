@@ -1742,6 +1742,7 @@ export interface ResolvedMcpServer {
   transportType: 'stdio' | 'sse' | 'http';
   command?: string;
   args?: string[];
+  cwd?: string;
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
@@ -1809,6 +1810,7 @@ function buildOpenClawMcpServers(
       case 'stdio':
         if (server.command) entry.command = server.command;
         if (server.args?.length) entry.args = server.args;
+        if (server.cwd) entry.cwd = server.cwd;
         if (server.env && Object.keys(server.env).length > 0) entry.env = server.env;
         break;
       case 'sse':

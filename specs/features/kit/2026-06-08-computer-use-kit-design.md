@@ -8,7 +8,7 @@ Computer Use MVP 阶段为了快速验证能力，LobsterAI 直接内置并启�
 
 1. 用户没有明确的启用/关闭入口，无法通过产品 UI 管理 Computer Use。
 2. `computer-use` skill 如果默认出现在 `SKILLs/` 目录下，会被 OpenClaw 的 skill 发现逻辑扫描到，导致未安装状态仍可能被模型感知。
-3. Computer Use 不只是 skill，还包含全局 MCP server 和本地 Windows helper runtime/exe，安装与卸载边界比普通 kit 更复杂。
+3. Computer Use 不只是 skill，还包含全局 MCP server 和本地平台 helper runtime/exe，安装与卸载边界比普通 kit 更复杂。
 4. 安装、卸载过程中如果过早触发 `openclaw.json` 同步和网关重启，可能出现 skill/exe/MCP 还未全部就位时网关已经重启的时序问题。
 
 因此需要把 Computer Use 封装成一个内置 kit：它在 Kit 市场中展示得像普通市场 kit，但安装时额外处理 runtime 和 MCP；未安装时不在本地 skill 目录落任何 `computer-use` skill 文件。
@@ -67,7 +67,7 @@ Computer Use MVP 阶段为了快速验证能力，LobsterAI 直接内置并启�
 
 - 客户端在 `kits:fetchStore` 获取远端 Kit 市场数据后，向 `kits` 列表追加 Computer Use built-in kit。
 - 追加前按 `id` 去重，避免远端同名 kit 与内置 kit 重复展示。
-- 仅在支持的平台展示：当前为 Windows x64。
+- 仅在支持的平台展示：Windows x64 和 macOS arm64 都通过远程 runtime 包安装；macOS arm64 的包由独立源码项目构建后上传到 NOS/CDN。
 - 内置 entry 使用与市场 kit 一致的数据结构：
   - `id`
   - `name`
@@ -82,7 +82,7 @@ Computer Use MVP 阶段为了快速验证能力，LobsterAI 直接内置并启�
 ### FR-2: Skill Bundle 安装复用现有 Kit 流程
 
 - Computer Use skill 不随仓库默认放在 `SKILLs/computer-use` 下。
-- 内置 kit 的 `skills.bundle` 指向公开 CDN 上的 zip 包。
+- 内置 kit 的 `skills.bundle` 指向公开 CDN/NOS 上的 zip 包；macOS arm64 的 skill 包由独立源码项目构建后上传。
 - 安装流程继续使用通用 kit 逻辑：
   1. 下载 zip。
   2. 解压到临时目录。
@@ -95,7 +95,7 @@ Computer Use MVP 阶段为了快速验证能力，LobsterAI 直接内置并启�
 ### FR-3: Runtime/Exe 安装
 
 - Computer Use kit 安装时必须安装本地 helper runtime。
-- runtime 包含 Windows helper exe 和 MCP server 运行所需的 runtime package。
+- runtime 包含平台 helper 可执行文件和 MCP server 运行所需的 runtime package。
 - runtime 安装应在 skill 拷贝前完成；如果 runtime 安装失败，不应留下已安装的 `computer-use` skill。
 - runtime 已存在且校验通过时可以复用。
 - runtime 安装结果不作为独立用户可见 kit，只作为 Computer Use kit 的本地依赖。
@@ -105,7 +105,7 @@ Computer Use MVP 阶段为了快速验证能力，LobsterAI 直接内置并启�
 - Computer Use MCP 是全局 MCP，安装 Computer Use kit 后由 OpenClaw 配置同步逻辑自动注入。
 - 未安装 Computer Use kit 时，MCP runtime 不返回 Computer Use built-in server。
 - MCP 注入条件至少包括：
-  - 当前平台为 Windows。
+  - 当前平台有可用的 Computer Use runtime descriptor。
   - AskUser callback server 已启动并有 callback URL。
   - `kits_installed` 中存在 Computer Use kit 安装记录。
   - runtime 可安装或已安装。
@@ -248,7 +248,7 @@ OpenClaw 配置同步前会刷新 MCP resolved server cache。Computer Use MCP s
 
 ```typescript
 const shouldEnableComputerUse =
-  process.platform === 'win32'
+  isComputerUseRuntimeSupportedPlatform()
   && askUserCallbackUrl !== null
   && isComputerUseKitInstalled(store);
 ```
@@ -258,6 +258,48 @@ const shouldEnableComputerUse =
 1. 调用 `installComputerUseRuntime()`，确保 runtime 可用。
 2. 调用 `resolveComputerUseMcpServer()` 生成 stdio server。
 3. 将 server 追加进 OpenClaw resolved servers。
+
+### 4.6 macOS clean-room runtime source
+
+macOS Computer Use runtime 不从第三方安装包或 app bundle 中抽取，而是由独立源码项目（`lobsterai-computer-use-runtime`）构建 LobsterAI 自有 runtime archive：
+
+```text
+runtime.json
+node_modules/@lobsterai/computer-use/
+  package.json
+  bin/macos/lobster-computer-use
+  dist/macos/computer_use_client.js
+skill/computer-use/SKILL.md
+```
+
+源码项目职责：
+
+- Swift helper 只使用 Apple 公开的 Accessibility、Screen Capture、CoreGraphics、AppKit 与 Text Input Source API。
+- TypeScript client 通过 JSON line 协议包装 helper，向 MCP bridge 暴露与 Windows helper 对齐的方法，并把 bridge 的回合元信息（`_meta`）透传给 helper；诊断日志写入 `LOBSTER_COMPUTER_USE_LOG_DIR`（不记录输入的文本）。
+- 构建脚本产出 runtime zip 和 skill zip，并生成 size/sha256；runtime zip 内同时携带 `skill/computer-use`，用于 runtime 升级时刷新已安装 kit 的 skill。
+- `SKILL.md` 必须带 YAML frontmatter（`name: computer-use` 与 `description`），否则 OpenClaw 会以 `description is required` 跳过该 skill。
+
+交互与投递策略（`delivery`）：
+
+- `get_window_state` 返回截图（JPEG）和带索引的可访问性 outline（`[12] button "保存" @410,88`，`@x,y` 为截图像素坐标），索引绑定 `state_id`；只列出可视区域内的元素，滚出视野的内容汇总为 `… N more items`。Electron/Chromium 应用首次观察时设置 `AXManualAccessibility`，等待网页树就绪。
+- 默认 `auto`：优先在后台执行语义动作，不移动用户鼠标、不切换前台应用（AXPress、聚焦输入框、选中行、`set_value`、滚动条滚动、文本选区实现的 `cmd+a`、可访问性文本插入或投递到目标进程的键盘事件）。
+- macOS 只接受真实输入的场景（画布/自绘区域的坐标点击、拖拽、无滚动条的滚轮、后台应用的 `cmd+…` 菜单快捷键）会短暂激活目标窗口、使用真实鼠标/键盘，并在完成后把鼠标放回原位。
+- `delivery: "background"` 时上述场景直接失败而不接管；环境变量 `LOBSTER_COMPUTER_USE_FOREGROUND_FALLBACK=never` 可把它设为默认。
+- 按键解析严格：支持 cmd/ctrl/alt/shift/fn 及 `Control_L`、`Page_Down` 等别名，未知按键或修饰键直接报错，不会退化为输入错误字符。通过键盘事件输入文本时，若当前是中文等输入法，临时切换到 ASCII 键盘布局，结束后恢复。
+
+授权、停止与权限：
+
+- 应用授权：macOS client 不调用 `nodeRepl.createElicitation`，因此由 MCP bridge 在 `get_window_state`、各类输入动作和 `launch_app` 前统一做按应用授权（按应用名与 bundle id 记忆，会话内只问一次）。授权文案跟随应用语言（`LOBSTER_COMPUTER_USE_LOCALE`）。`launch_app` 先 `resolve_app` 解析出真实（本地化）应用名再弹窗，不存在的应用直接报错不弹窗。
+- 黑名单在授权前生效：终端类、密码管理器、钥匙串、系统认证弹窗、活动监视器等直接拒绝；LobsterAI 自身窗口（`LOBSTER_COMPUTER_USE_SELF_PID` / `LOBSTER_COMPUTER_USE_SELF_APP`）不出现在窗口列表中且不可操作，避免 agent 操作自己的授权卡片。
+- 停止：helper 在操作期间显示「LobsterAI正在使用你的电脑 · 按 Esc 取消」HUD；HUD 可见期间按下物理 Esc，helper 写入 bridge 约定的中断标记，下一次工具调用返回停止信息并开启新回合。合成事件带标记，不会误触发。
+- 权限：helper 继承 LobsterAI.app 的 TCC 身份。Kit 安装完成后主进程请求「辅助功能」权限；首次截图时 helper 请求「屏幕录制」权限；`check_permissions` 返回缺失项与修复指引，`request_permissions` 打开对应的系统设置面板；缺少辅助功能时输入类动作明确报错，而不是报告成功。
+
+运维：
+
+- `installComputerUseRuntime()` 成功后删除旧版本 runtime 目录和旧下载包（保留正在解压的临时目录）。
+- runtime 安装/复用后，若 kit 已安装，用 runtime 内的 `skill/computer-use/SKILL.md` 刷新用户目录中的 skill，并把 kit 安装记录升级到 runtime 版本，避免出现「需要重新安装」提示。
+- MCP server env 中的 bridge secret 写为 `${LOBSTER_MCP_BRIDGE_SECRET}` 占位符，由 OpenClaw 加载配置时从网关环境替换，不在 `openclaw.json` 中落明文。
+- `wait_for_text` / `expect_text` 最长等待 45s，低于 OpenClaw 默认 60s 的 MCP 请求超时。
 
 当 `shouldEnableComputerUse` 为 false：
 
@@ -311,7 +353,11 @@ Computer Use kit 写入 `kits_installed` 的结构与普通 kit 保持一致：
 
 | 场景 | 处理方式 |
 |------|----------|
-| 平台不是 Windows x64 | Kit 市场不追加 Computer Use built-in entry；MCP resolver 也不返回 Computer Use server |
+| 平台不是 Windows x64 或 macOS arm64 | Kit 市场不追加 Computer Use built-in entry；MCP resolver 也不返回 Computer Use server |
+| macOS 未授予辅助功能/屏幕录制 | 工具返回缺失项和系统设置路径；`request_permissions` 打开对应面板；授权后新的 helper 进程生效 |
+| 用户拒绝某个应用的授权 | 该应用的动作直接失败并提示模型不要重试；本会话不再询问 |
+| macOS 后台无法投递的输入 | 默认短暂前台接管并恢复鼠标；`delivery: "background"` 时直接失败 |
+| runtime 升级后 skill 过期 | runtime 内携带的 skill 自动刷新已安装 skill 和安装记录版本 |
 | skill bundle 下载失败 | 安装失败，不写 skill、不写安装记录、不触发 OpenClaw 同步 |
 | skill bundle size/sha256 不匹配 | 安装失败，删除临时文件，不写 skill、不写安装记录 |
 | bundle 中没有 `SKILL.md` | 安装失败，不安装 runtime，不写安装记录 |

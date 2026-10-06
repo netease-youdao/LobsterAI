@@ -158,6 +158,13 @@
           "!**/test/**",
           "!**/__tests__/**"
         ]
+      },
+      {
+        "from": "resources/computer-use",
+        "to": "computer-use",
+        "filter": [
+          "*.zip"
+        ]
       }
     ]
   },

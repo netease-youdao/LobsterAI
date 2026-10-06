@@ -5,7 +5,7 @@ import path from 'path';
 import { ASK_USER_QUESTION_TOOL_NAME, SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../shared/cowork/constants';
 import { McpIpcChannel } from '../../shared/mcp/constants';
 import type { McpToolDiscoveryRequest } from '../../shared/mcp/toolDiscovery';
-import { isComputerUseKitInstalled } from '../computerUse/computerUseKit';
+import { isComputerUseKitInstalled, syncComputerUseSkillFromRuntime } from '../computerUse/computerUseKit';
 import { resolveComputerUseMcpServer } from '../computerUse/computerUseMcpServer';
 import { installComputerUseRuntime } from '../computerUse/computerUseRuntime';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath } from '../libs/coworkUtil';
@@ -466,13 +466,18 @@ export class McpRuntime {
       const installResult = await installComputerUseRuntime();
       if (!installResult.success) {
         console.warn(`[MCP] failed to install Computer Use runtime: ${installResult.error || 'unknown error'}`);
+      } else {
+        try {
+          syncComputerUseSkillFromRuntime(this.deps.getStore(), installResult.paths?.skillDir);
+        } catch (error) {
+          console.warn('[MCP] failed to refresh the Computer Use skill from its runtime:', error);
+        }
       }
     }
 
     const computerUseServer = shouldEnableComputerUse
       ? resolveComputerUseMcpServer({
         askUserCallbackUrl,
-        bridgeSecret: this.bridgeSecret,
         electronNodePath: electronPath,
       })
       : null;
