@@ -2130,6 +2130,17 @@ const Settings: React.FC<SettingsProps> = ({
               baseUrl: config.api.baseUrl
             }
           }));
+        } else if (normalizedApiBaseUrl.includes('requesty.ai')) {
+          setActiveProvider('requesty');
+          setProviders(prev => ({
+            ...prev,
+            requesty: {
+              ...prev.requesty,
+              enabled: true,
+              apiKey: config.api.key,
+              baseUrl: config.api.baseUrl
+            }
+          }));
         } else if (normalizedApiBaseUrl.includes('googleapis')) {
           setActiveProvider('gemini');
           setProviders(prev => ({
