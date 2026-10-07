@@ -1,0 +1,1923 @@
+diff --git a/src/auto-reply/reply/dispatch-from-config.lifecycle.ts b/src/auto-reply/reply/dispatch-from-config.lifecycle.ts
+index fd959b97..087716fc 100644
+--- a/src/auto-reply/reply/dispatch-from-config.lifecycle.ts
++++ b/src/auto-reply/reply/dispatch-from-config.lifecycle.ts
+@@ -252,6 +252,7 @@ export function createDispatchReplyOperationCoordinator(params: {
+   routeThreadId?: string | number;
+ }) {
+   let dispatchReplyOperation: ReplyOperation | undefined;
++  let admittedExpectedSessionId: string | undefined;
+   let dispatchAbortOperation: ReplyOperation | undefined;
+   let preDispatchAbortOperation: ReplyOperation | undefined;
+   let preDispatchLifecycleAdmission: SessionWorkAdmissionLease | undefined;
+@@ -447,8 +448,13 @@ export function createDispatchReplyOperationCoordinator(params: {
+     let admission = await admitReplyTurn({
+       sessionKey: params.dispatchOperationSessionKey,
+       sessionId: operationSessionId,
+-      expectedSessionId: params.resolveOperationExpectedSessionId(),
+-      expectedActiveOperation: params.initialDispatchReplyOperation,
++      expectedSessionId:
++        params.replyOptions?.expectedExistingSessionId ??
++        params.resolveOperationExpectedSessionId(),
++      expectedActiveOperations: [
++        params.replyOptions?.expectedActiveReplyOperation,
++        params.initialDispatchReplyOperation,
++      ].filter((operation): operation is ReplyOperation => operation !== undefined),
+       storePath: params.operationSessionStoreEntry.storePath,
+       kind: replyTurnKind,
+       resetTriggered: dispatchResetTriggered,
+@@ -496,8 +502,13 @@ export function createDispatchReplyOperationCoordinator(params: {
+         admission = await admitReplyTurn({
+           sessionKey: params.dispatchOperationSessionKey,
+           sessionId: operationSessionId,
+-          expectedSessionId: params.resolveOperationExpectedSessionId(),
+-          expectedActiveOperation: params.initialDispatchReplyOperation,
++          expectedSessionId:
++            params.replyOptions?.expectedExistingSessionId ??
++            params.resolveOperationExpectedSessionId(),
++          expectedActiveOperations: [
++            params.replyOptions?.expectedActiveReplyOperation,
++            params.initialDispatchReplyOperation,
++          ].filter((operation): operation is ReplyOperation => operation !== undefined),
+           storePath: params.operationSessionStoreEntry.storePath,
+           kind: replyTurnKind,
+           resetTriggered: dispatchResetTriggered,
+@@ -513,6 +524,10 @@ export function createDispatchReplyOperationCoordinator(params: {
+         });
+       }
+     }
++    admittedExpectedSessionId =
++      admission.status === "owned"
++        ? admission.operation.sessionId
++        : admission.sessionEntry?.sessionId;
+     if (admission.status === "skipped") {
+       if (allowActiveResolution && admission.reason === "active-run") {
+         preDispatchAbortOperation = admission.activeOperation;
+@@ -634,6 +649,9 @@ export function createDispatchReplyOperationCoordinator(params: {
+   };
+   const getReplyOptions = (): DispatchFromConfigParams["replyOptions"] => {
+     const abortSignal = getDispatchAbortSignal();
++    const expectedExistingSessionId = params.replyOptions?.expectedExistingSessionId
++      ? (dispatchReplyOperation?.sessionId ?? admittedExpectedSessionId)
++      : undefined;
+     const onAgentRunStart: NonNullable<
+       NonNullable<DispatchFromConfigParams["replyOptions"]>["onAgentRunStart"]
+     > = (...args) => {
+@@ -651,6 +669,7 @@ export function createDispatchReplyOperationCoordinator(params: {
+     };
+     return {
+       ...params.replyOptions,
++      ...(expectedExistingSessionId ? { expectedExistingSessionId } : {}),
+       ...(abortSignal
+         ? {
+             abortSignal,
+diff --git a/src/auto-reply/reply/get-reply.types.ts b/src/auto-reply/reply/get-reply.types.ts
+index 77972c7b..dd8e99f4 100644
+--- a/src/auto-reply/reply/get-reply.types.ts
++++ b/src/auto-reply/reply/get-reply.types.ts
+@@ -25,6 +25,7 @@ type InternalReplySessionOptions = {
+   /** Host-stamped exact-run capability for late Codex creator-authority capture. */
+   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
+   expectedExistingSessionId?: string;
++  expectedActiveReplyOperation?: ReplyOperation;
+   /** First dispatch only: admission created this exact pinned session before reply initialization. */
+   newlyCreatedSessionId?: string;
+   onDeliberateSilentTerminalReply?: () => void;
+diff --git a/src/auto-reply/reply/reply-run-registry.contracts.ts b/src/auto-reply/reply/reply-run-registry.contracts.ts
+index c4e8d5a2..3b1ec581 100644
+--- a/src/auto-reply/reply/reply-run-registry.contracts.ts
++++ b/src/auto-reply/reply/reply-run-registry.contracts.ts
+@@ -246,6 +246,7 @@ export type ReplyOperation = {
+   readonly lastActivityAtMs: number;
+   /** True when this operation has owned the supplied session ID. */
+   hasOwnedSessionId(sessionId: string): boolean;
++  captureOwnedSessionIds(): Set<string>;
+   recordActivity(): void;
+   setPhase(
+     next:
+diff --git a/src/auto-reply/reply/reply-run-registry.operation.ts b/src/auto-reply/reply/reply-run-registry.operation.ts
+index b52b601a..74cb2875 100644
+--- a/src/auto-reply/reply/reply-run-registry.operation.ts
++++ b/src/auto-reply/reply/reply-run-registry.operation.ts
+@@ -26,6 +26,7 @@ import {
+   attachedBackendByOperation,
+   clearReplyRunState,
+   createUserAbortError,
++  forceClearReplyOperation,
+   evictReplyOperationByOperation,
+   expireReplyOperationByOperation,
+   flushReplyOperationAfterClear,
+@@ -150,10 +151,11 @@ export function createReplyOperation(params: {
+           currentSessionId,
+           afterClearBarrier,
+           followupAdmissionBarrierTimeout,
++          operation,
+         )
+       : pendingClearBarrier;
+     pendingClearBarrier = undefined;
+-    updateFollowupAdmissionSessionId(currentSessionKey, currentSessionId);
++    updateFollowupAdmissionSessionId(currentSessionKey, currentSessionId, operation);
+     // Recovery-owner handoff must begin before the old slot wakes a successor;
+     // otherwise that successor can snapshot durable state the handoff then mutates.
+     startReplyOperationSuccessorBarriers(operation);
+@@ -266,6 +268,9 @@ export function createReplyOperation(params: {
+     get lastActivityAtMs() {
+       return lastActivityAtMs;
+     },
++    captureOwnedSessionIds() {
++      return new Set(ownedSessionIds);
++    },
+     hasOwnedSessionId(candidateSessionId) {
+       const normalizedSessionId = normalizeOptionalString(candidateSessionId);
+       return normalizedSessionId ? ownedSessionIds.has(normalizedSessionId) : false;
+@@ -389,7 +394,7 @@ export function createReplyOperation(params: {
+       registerWaitSessionId(currentSessionKey, currentSessionId);
+       currentSessionId = normalizedNextSessionId;
+       ownedSessionIds.add(currentSessionId);
+-      updateFollowupAdmissionSessionId(currentSessionKey, currentSessionId);
++      updateFollowupAdmissionSessionId(currentSessionKey, currentSessionId, operation);
+       updateSuccessorAdmissionSessionId(operation, currentSessionId);
+       replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
+       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
+@@ -591,6 +596,7 @@ export function createReplyOperation(params: {
+         currentSessionId,
+         options.afterClearBarrier,
+         options.followupAdmissionBarrierTimeout,
++        operation,
+       );
+     }
+     const backend = getAttachedBackend(operation);
+@@ -730,12 +736,3 @@ export function expireStaleReplyOperation(
+ ): boolean {
+   return expireReplyOperationByOperation.get(operation)?.(reason, options) ?? false;
+ }
+-
+-export function forceClearReplyOperation(operation: ReplyOperation, cause?: unknown): boolean {
+-  if (replyRunState.activeRunsByKey.get(operation.key) !== operation) {
+-    return false;
+-  }
+-  operation.fail("run_failed", cause);
+-  operation.complete();
+-  return true;
+-}
+diff --git a/src/auto-reply/reply/reply-run-registry.registry.ts b/src/auto-reply/reply/reply-run-registry.registry.ts
+index e7bac86c..83d696d8 100644
+--- a/src/auto-reply/reply/reply-run-registry.registry.ts
++++ b/src/auto-reply/reply/reply-run-registry.registry.ts
+@@ -15,13 +15,10 @@ import {
+   type ReplyRunRegistry,
+ } from "./reply-run-registry.contracts.js";
+ import { resolveReplyMessageInjectionRejection } from "./reply-run-registry.message-injection.js";
+-import {
+-  createReplyOperation,
+-  expireStaleReplyOperation,
+-  forceClearReplyOperation,
+-} from "./reply-run-registry.operation.js";
++import { createReplyOperation, expireStaleReplyOperation } from "./reply-run-registry.operation.js";
+ import {
+   clearReplyRunState,
++  forceClearReplyOperation,
+   evictReplyOperationByOperation,
+   getAttachedBackend,
+   isReplyOperationPreBackendPhase,
+@@ -32,6 +29,8 @@ import {
+   resolveReplyRunForCurrentSessionId,
+   resolveReplyRunWaitKey,
+   type ReplyRunAdmissionBarrier,
++  type ReplyRunAdmissionSource,
++  mergeReplyRunAdmissionSource,
+ } from "./reply-run-registry.state.js";
+ 
+ type ReplyOperationStaleReason = replyRunSettle.ReplyOperationStaleReason;
+@@ -288,20 +287,21 @@ async function waitForReplyRunAdmissionBarrier(params: {
+   sessionKey: string;
+   signal?: AbortSignal;
+   timeoutMs?: number | null;
+-}): Promise<{ settled: boolean; sessionId?: string }> {
++}): Promise<{ settled: boolean; sessionId?: string; sources?: ReplyRunAdmissionSource[] }> {
+   const deadline =
+     typeof params.timeoutMs === "number"
+       ? Date.now() +
+         resolveTimerTimeoutMs(params.timeoutMs, params.minimumTimeoutMs, params.minimumTimeoutMs)
+       : undefined;
+   let sessionId: string | undefined;
++  const sources = new Map<ReplyRunAdmissionSource["databaseIdentity"], ReplyRunAdmissionSource>();
+   while (true) {
+     if (params.signal?.aborted) {
+       return { settled: false };
+     }
+     const barrier = params.barriersByKey.get(params.sessionKey);
+     if (!barrier) {
+-      return { settled: true, sessionId };
++      return { settled: true, sessionId, sources: [...sources.values()] };
+     }
+     const remainingMs = deadline === undefined ? undefined : deadline - Date.now();
+     if (remainingMs !== undefined && remainingMs <= 0) {
+@@ -341,6 +341,15 @@ async function waitForReplyRunAdmissionBarrier(params: {
+       return { settled: false };
+     }
+     sessionId = barrier.sessionId;
++    for (const source of barrier.sources?.values() ?? []) {
++      sources.set(
++        source.databaseIdentity,
++        mergeReplyRunAdmissionSource(
++          { ...source, sessionIds: new Set(source.sessionIds) },
++          sources.get(source.databaseIdentity),
++        ),
++      );
++    }
+   }
+ }
+ 
+@@ -348,7 +357,7 @@ export async function waitForReplyRunFollowupAdmission(
+   sessionKey: string,
+   timeoutMs: number,
+   opts?: { signal?: AbortSignal },
+-): Promise<{ settled: boolean; sessionId?: string }> {
++): Promise<{ settled: boolean; sessionId?: string; sources?: ReplyRunAdmissionSource[] }> {
+   const normalizedSessionKey = normalizeOptionalString(sessionKey);
+   return normalizedSessionKey
+     ? await waitForReplyRunAdmissionBarrier({
+@@ -365,7 +374,7 @@ export async function waitForReplyRunSuccessorAdmission(
+   sessionKey: string,
+   timeoutMs?: number | null,
+   opts?: { signal?: AbortSignal },
+-): Promise<{ settled: boolean; sessionId?: string }> {
++): Promise<{ settled: boolean; sessionId?: string; sources?: ReplyRunAdmissionSource[] }> {
+   const normalizedSessionKey = normalizeOptionalString(sessionKey);
+   return normalizedSessionKey
+     ? await waitForReplyRunAdmissionBarrier({
+diff --git a/src/auto-reply/reply/reply-run-registry.state.ts b/src/auto-reply/reply/reply-run-registry.state.ts
+index 3c4051ce..18566416 100644
+--- a/src/auto-reply/reply/reply-run-registry.state.ts
++++ b/src/auto-reply/reply/reply-run-registry.state.ts
+@@ -7,8 +7,10 @@ import {
+   markDiagnosticRunProgress,
+   resolveRunStaleThresholdMs,
+ } from "../../logging/diagnostic-run-activity.js";
++import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+ import { createDeferredCore } from "../../shared/deferred.js";
+ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
++import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+ import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
+ import type { ReplyOperationStaleReason } from "./reply-run-finalization-lease.js";
+ import {
+@@ -18,6 +20,17 @@ import {
+   type ReplyOperationPhase,
+ } from "./reply-run-registry.contracts.js";
+ 
++export type ReplyRunAdmissionSource = {
++  operation: ReplyOperation;
++  sessionId: string;
++  sessionIds: Set<string>;
++  databaseIdentity?: OpenClawAgentDatabaseIdentity;
++};
++type ReplyOperationAdmission = {
++  lease?: SessionWorkAdmissionLease;
++  databaseIdentity?: OpenClawAgentDatabaseIdentity;
++};
++
+ type ReplyRunWaiter = {
+   finish: (ended: boolean) => void;
+   timer?: NodeJS.Timeout;
+@@ -26,6 +39,7 @@ type ReplyRunWaiter = {
+ export type ReplyRunAdmissionBarrier = {
+   settled: Promise<void>;
+   sessionId: string;
++  sources?: Map<OpenClawAgentDatabaseIdentity | undefined, ReplyRunAdmissionSource>;
+ };
+ 
+ type ReplyRunState = {
+@@ -38,6 +52,7 @@ type ReplyRunState = {
+   successorAdmissionBarriersByKey: Map<string, ReplyRunAdmissionBarrier>;
+   evictOperationByOperation?: WeakMap<ReplyOperation, () => void>;
+   executionStartedOperations?: WeakSet<ReplyOperation>;
++  lifecycleAdmissionByOperation?: WeakMap<ReplyOperation, ReplyOperationAdmission>;
+ };
+ 
+ const REPLY_RUN_STATE_KEY = Symbol.for("openclaw.replyRunRegistry");
+@@ -53,6 +68,8 @@ export const replyRunState = resolveGlobalSingleton<ReplyRunState>(REPLY_RUN_STA
+   evictOperationByOperation: new WeakMap<ReplyOperation, () => void>(),
+   executionStartedOperations: new WeakSet<ReplyOperation>(),
+ }));
++export const lifecycleAdmissionByOperation = (replyRunState.lifecycleAdmissionByOperation ??=
++  new WeakMap<ReplyOperation, ReplyOperationAdmission>());
+ replyRunState.followupAdmissionBarriersByKey ??= new Map();
+ replyRunState.successorAdmissionBarriersByKey ??= new Map();
+ export const evictReplyOperationByOperation =
+@@ -216,15 +233,79 @@ export function runAfterReplyOperationClear(
+   afterClearCallbacksByOperation.set(operation, callbacks);
+ }
+ 
++export function isReplyOperationAbortedForRestart(operation: ReplyOperation): boolean {
++  return operation.result?.kind === "aborted" && operation.result.code === "aborted_for_restart";
++}
++
++export function mergeReplyRunAdmissionSource<T extends ReplyRunAdmissionSource>(
++  source: T,
++  previous?: ReplyRunAdmissionSource,
++): T {
++  if (
++    previous &&
++    !isReplyOperationAbortedForRestart(previous.operation) &&
++    previous.databaseIdentity === source.databaseIdentity &&
++    source.sessionIds.has(previous.sessionId)
++  ) {
++    return { ...source, sessionIds: new Set([...previous.sessionIds, ...source.sessionIds]) };
++  }
++  return source;
++}
++
++function captureBarrierSources(
++  previous: ReplyRunAdmissionBarrier | undefined,
++  operation?: ReplyOperation,
++) {
++  const sources = new Map(previous?.sources);
++  if (operation) {
++    const databaseIdentity = lifecycleAdmissionByOperation.get(operation)?.databaseIdentity;
++    sources.set(
++      databaseIdentity,
++      mergeReplyRunAdmissionSource(
++        {
++          operation,
++          sessionId: operation.sessionId,
++          sessionIds: operation.captureOwnedSessionIds(),
++          databaseIdentity,
++        },
++        sources.get(databaseIdentity),
++      ),
++    );
++  }
++  return sources;
++}
++
++function updateBarrierSource(barrier: ReplyRunAdmissionBarrier, operation: ReplyOperation) {
++  const databaseIdentity = lifecycleAdmissionByOperation.get(operation)?.databaseIdentity;
++  const previous = barrier.sources?.get(databaseIdentity);
++  // Rekeying must not let a barrier acquire history from a different lane.
++  if (previous?.operation === operation) {
++    barrier.sources?.set(
++      databaseIdentity,
++      mergeReplyRunAdmissionSource(
++        {
++          ...previous,
++          sessionId: operation.sessionId,
++          sessionIds: operation.captureOwnedSessionIds(),
++        },
++        previous,
++      ),
++    );
++  }
++}
++
+ function registerSuccessorAdmissionBarrier(
+   sessionKey: string,
+   sessionId: string,
+   barrier: Promise<void>,
++  operation: ReplyOperation,
+ ): ReplyRunAdmissionBarrier {
+   const barriersByKey = replyRunState.successorAdmissionBarriersByKey;
+-  const previous = barriersByKey.get(sessionKey)?.settled;
+-  const settled = previous ? Promise.all([previous, barrier]).then(() => undefined) : barrier;
+-  const entry = { settled, sessionId };
++  const previous = barriersByKey.get(sessionKey);
++  const settled = previous
++    ? Promise.all([previous.settled, barrier]).then(() => undefined)
++    : barrier;
++  const entry = { settled, sessionId, sources: captureBarrierSources(previous, operation) };
+   barriersByKey.set(sessionKey, entry);
+   void settled.then(() => {
+     if (barriersByKey.get(sessionKey) === entry) {
+@@ -246,7 +327,12 @@ export function registerReplyOperationSuccessorBarrier(params: {
+   for (const sessionKey of new Set(params.sessionKeys.map(normalizeOptionalString))) {
+     if (sessionKey) {
+       barriers.add(
+-        registerSuccessorAdmissionBarrier(sessionKey, params.sessionId, settlement.promise),
++        registerSuccessorAdmissionBarrier(
++          sessionKey,
++          params.sessionId,
++          settlement.promise,
++          params.operation,
++        ),
+       );
+     }
+   }
+@@ -304,6 +390,7 @@ export function updateSuccessorAdmissionSessionId(
+     }
+     for (const barrier of group.barriers) {
+       barrier.sessionId = sessionId;
++      updateBarrierSource(barrier, operation);
+     }
+   }
+ }
+@@ -386,12 +473,15 @@ export function registerFollowupAdmissionBarrier(
+   sessionId: string,
+   barrier: PromiseLike<unknown>,
+   timeout: number | ReplyFollowupAdmissionBarrierTimeoutPolicy = REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
++  operation?: ReplyOperation,
+ ): ReplyRunAdmissionBarrier {
+   const barriersByKey = replyRunState.followupAdmissionBarriersByKey;
+-  const previous = barriersByKey.get(sessionKey)?.settled;
++  const previous = barriersByKey.get(sessionKey);
+   const current = waitForReplyBarrierSettlement(barrier, timeout);
+-  const settled = previous ? Promise.all([previous, current]).then(() => undefined) : current;
+-  const entry = { settled, sessionId };
++  const settled = previous
++    ? Promise.all([previous.settled, current]).then(() => undefined)
++    : current;
++  const entry = { settled, sessionId, sources: captureBarrierSources(previous, operation) };
+   barriersByKey.set(sessionKey, entry);
+   void settled.then(() => {
+     if (barriersByKey.get(sessionKey) === entry) {
+@@ -401,10 +491,17 @@ export function registerFollowupAdmissionBarrier(
+   return entry;
+ }
+ 
+-export function updateFollowupAdmissionSessionId(sessionKey: string, sessionId: string): void {
++export function updateFollowupAdmissionSessionId(
++  sessionKey: string,
++  sessionId: string,
++  operation?: ReplyOperation,
++): void {
+   const barrier = replyRunState.followupAdmissionBarriersByKey.get(sessionKey);
+   if (barrier) {
+     barrier.sessionId = sessionId;
++    if (operation) {
++      updateBarrierSource(barrier, operation);
++    }
+   }
+ }
+ 
+@@ -466,3 +563,12 @@ export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
+     !waitingForHumanInput
+   );
+ }
++
++export function forceClearReplyOperation(operation: ReplyOperation, cause?: unknown): boolean {
++  if (replyRunState.activeRunsByKey.get(operation.key) !== operation) {
++    return false;
++  }
++  operation.fail("run_failed", cause);
++  operation.complete();
++  return true;
++}
+diff --git a/src/auto-reply/reply/reply-run-registry.test.ts b/src/auto-reply/reply/reply-run-registry.test.ts
+index fdb315f0..1207a01e 100644
+--- a/src/auto-reply/reply/reply-run-registry.test.ts
++++ b/src/auto-reply/reply/reply-run-registry.test.ts
+@@ -954,13 +954,13 @@ describe("reply run registry", () => {
+       }
+       const timedWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
+       await vi.advanceTimersByTimeAsync(100);
+-      await expect(timedWait).resolves.toEqual({ settled: false });
++      await expect(timedWait).resolves.toMatchObject({ settled: false });
+ 
+       const requestWait = waitForReplyRunSuccessorAdmission(requestKey, 100);
+       const canonicalWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
+       releaseFirstBarrier();
+       for (const wait of [requestWait, canonicalWait]) {
+-        await expect(wait).resolves.toEqual({
++        await expect(wait).resolves.toMatchObject({
+           settled: true,
+           sessionId: "rotated-alias-session",
+         });
+@@ -969,7 +969,7 @@ describe("reply run registry", () => {
+         ReplyRunSuccessorAdmissionBlockedError,
+       );
+       releaseSecondBarrier();
+-      await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toEqual({
++      await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toMatchObject({
+         settled: true,
+         sessionId: "rotated-alias-session",
+       });
+diff --git a/src/auto-reply/reply/reply-run-registry.ts b/src/auto-reply/reply/reply-run-registry.ts
+index 3416ab90..a3c0ca13 100644
+--- a/src/auto-reply/reply/reply-run-registry.ts
++++ b/src/auto-reply/reply/reply-run-registry.ts
+@@ -17,11 +17,7 @@ export {
+   finalizeReplyMessageInjectionAttempt,
+   resolveReplyBackendQueueMessageMismatch,
+ } from "./reply-run-registry.message-injection.js";
+-export {
+-  createReplyOperation,
+-  expireStaleReplyOperation,
+-  forceClearReplyOperation,
+-} from "./reply-run-registry.operation.js";
++export { createReplyOperation, expireStaleReplyOperation } from "./reply-run-registry.operation.js";
+ export {
+   abortActiveReplyRuns,
+   abortReplyRunBySessionId,
+@@ -47,6 +43,7 @@ export {
+   waitForReplyRunSuccessorAdmission,
+ } from "./reply-run-registry.registry.js";
+ export {
++  forceClearReplyOperation,
+   hasReplyOperationExecutionStarted,
+   isReplyRunAbortableForSignal,
+   isReplyRunEvidenceStale,
+diff --git a/src/auto-reply/reply/reply-turn-admission.test.ts b/src/auto-reply/reply/reply-turn-admission.test.ts
+index 1f21324c..b3b811af 100644
+--- a/src/auto-reply/reply/reply-turn-admission.test.ts
++++ b/src/auto-reply/reply/reply-turn-admission.test.ts
+@@ -1242,10 +1242,11 @@ describe("reply turn admission", () => {
+     const sessionId = "pre-compact-session";
+     const nextSessionId = "post-compact-session";
+     const storePath = createSessionStoreFor(sessionKey, sessionId);
+-    const active = createTestReplyOperation({
+-      sessionKey,
+-      sessionId,
+-    });
++    const owner = await admitTestReplyTurn({ sessionKey, sessionId, storePath });
++    if (owner.status !== "owned") {
++      throw new Error("Fixture requires physical database admission");
++    }
++    const active = owner.operation;
+     active.setPhase("preflight_compacting");
+ 
+     const admitted = admitTestReplyTurn({
+@@ -1278,10 +1279,11 @@ describe("reply turn admission", () => {
+     const sessionId = "pre-compact-session";
+     const nextSessionId = "post-compact-session";
+     const storePath = createSessionStoreFor(sessionKey, sessionId);
+-    const active = createTestReplyOperation({
+-      sessionKey,
+-      sessionId,
+-    });
++    const owner = await admitTestReplyTurn({ sessionKey, sessionId, storePath });
++    if (owner.status !== "owned") {
++      throw new Error("Fixture requires physical database admission");
++    }
++    const active = owner.operation;
+     active.setPhase("preflight_compacting");
+     active.updateSessionId(nextSessionId);
+     await replaceSessionEntry({ sessionKey, storePath }, {
+@@ -1294,7 +1296,7 @@ describe("reply turn admission", () => {
+       sessionKey,
+       sessionId,
+       expectedSessionId: sessionId,
+-      expectedActiveOperation: active,
++      expectedActiveOperations: [active],
+       storePath,
+     });
+ 
+@@ -1310,10 +1312,11 @@ describe("reply turn admission", () => {
+     const sessionId = "pre-compact-session";
+     const nextSessionId = "post-compact-session";
+     const storePath = createSessionStoreFor(sessionKey, sessionId);
+-    const active = createTestReplyOperation({
+-      sessionKey,
+-      sessionId,
+-    });
++    const owner = await admitTestReplyTurn({ sessionKey, sessionId, storePath });
++    if (owner.status !== "owned") {
++      throw new Error("Fixture requires physical database admission");
++    }
++    const active = owner.operation;
+     active.setPhase("preflight_compacting");
+     active.updateSessionId(nextSessionId);
+     await replaceSessionEntry({ sessionKey, storePath }, {
+@@ -1379,10 +1382,11 @@ describe("reply turn admission", () => {
+     const sessionId = "pre-compact-session";
+     const nextSessionId = "post-compact-session";
+     const storePath = createSessionStoreFor(sessionKey, sessionId);
+-    const active = createTestReplyOperation({
+-      sessionKey,
+-      sessionId,
+-    });
++    const owner = await admitTestReplyTurn({ sessionKey, sessionId, storePath });
++    if (owner.status !== "owned") {
++      throw new Error("Fixture requires physical database admission");
++    }
++    const active = owner.operation;
+     active.setPhase("preflight_compacting");
+     active.updateSessionId(nextSessionId);
+     await replaceSessionEntry({ sessionKey, storePath }, {
+@@ -1390,12 +1394,13 @@ describe("reply turn admission", () => {
+       updatedAt: Date.now(),
+     } as SessionEntry);
+     finish(active);
++    active.complete();
+ 
+     const result = await admitTestReplyTurn({
+       sessionKey,
+       sessionId,
+       expectedSessionId: sessionId,
+-      expectedActiveOperation: active,
++      expectedActiveOperations: [active],
+       storePath,
+     });
+ 
+diff --git a/src/auto-reply/reply/reply-turn-admission.ts b/src/auto-reply/reply/reply-turn-admission.ts
+index af5f638e..a8e2ec23 100644
+--- a/src/auto-reply/reply/reply-turn-admission.ts
++++ b/src/auto-reply/reply/reply-turn-admission.ts
+@@ -13,7 +13,10 @@ import {
+   SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
+   SessionRestartRecoveryTombstoneError,
+ } from "../../config/sessions/lifecycle.js";
+-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
++import {
++  loadSessionEntry,
++  readSessionDatabaseIdentity,
++} from "../../config/sessions/session-accessor.js";
+ import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
+ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+ import { formatErrorMessage } from "../../infra/errors.js";
+@@ -26,6 +29,7 @@ import {
+   beginSessionWorkAdmission,
+   type SessionWorkAdmissionLease,
+ } from "../../sessions/session-lifecycle-admission.js";
++import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+ import {
+   createReplyOperation,
+   expireStaleReplyOperation,
+@@ -45,7 +49,11 @@ import {
+   waitForReplyRunFollowupAdmission,
+   waitForReplyRunSuccessorAdmission,
+ } from "./reply-run-registry.js";
+-import { isReplyRunWaitingForHumanInput } from "./reply-run-registry.state.js";
++import {
++  isReplyRunWaitingForHumanInput,
++  lifecycleAdmissionByOperation,
++} from "./reply-run-registry.state.js";
++import { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
+ 
+ /** Admission result for a reply turn attempting to own the session run slot. */
+ type ReplyTurnAdmission =
+@@ -54,13 +62,13 @@ type ReplyTurnAdmission =
+       status: "skipped";
+       reason: "active-run" | "aborted" | "lifecycle-invalidated";
+       activeOperation?: ReplyOperation;
++      sessionEntry?: SessionEntry;
+       lifecycleAdmission?: SessionWorkAdmissionLease;
+     };
+ 
+ class QueuedFollowupLifecycleInvalidatedError extends Error {}
+ 
+ const log = createSubsystemLogger("auto-reply/reply-turn-admission");
+-const lifecycleAdmissionByOperation = new WeakMap<ReplyOperation, SessionWorkAdmissionLease>();
+ 
+ async function releaseReplyRecoveryOwner(
+   lease: MainSessionRecoveryOwnerLease | undefined,
+@@ -85,7 +93,7 @@ export async function runWithReplyOperationLifecycleAdmission<T>(
+   run: () => Promise<T>,
+ ): Promise<T> {
+   const admission = lifecycleAdmissionByOperation.get(operation);
+-  return admission ? await admission.run(run) : await run();
++  return admission?.lease ? await admission.lease.run(run) : await run();
+ }
+ 
+ function rejectLifecycleInvalidatedWork(params: {
+@@ -143,7 +151,7 @@ type ReplyTurnAdmissionParams = {
+   sessionKey: string;
+   sessionId: string;
+   expectedSessionId?: string;
+-  expectedActiveOperation?: ReplyOperation;
++  expectedActiveOperations?: readonly ReplyOperation[];
+   storePath?: string;
+   kind: ReplyTurnKind;
+   resetTriggered: boolean;
+@@ -170,6 +178,11 @@ export async function admitReplyTurn(
+ ): Promise<ReplyTurnAdmission> {
+   let sessionId = params.sessionId;
+   let expectedSessionId = params.expectedSessionId;
++  const rotations = createReplyTurnRotationEvidence({
++    sessionKey: params.sessionKey,
++    expectedActiveOperations: params.expectedActiveOperations,
++    activeAtAdmission: replyRunRegistry.get(params.sessionKey),
++  });
+   const waitTimeoutMs =
+     params.waitTimeoutMs ??
+     (params.kind === "queued_followup" ? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS : undefined);
+@@ -177,6 +190,14 @@ export async function admitReplyTurn(
+     if (isAbortSignalAborted(params.upstreamAbortSignal)) {
+       return { status: "skipped", reason: "aborted" };
+     }
++    const storelessRotation = !params.storePath ? rotations.takeStorelessRotation() : undefined;
++    if (storelessRotation) {
++      if (expectedSessionId && !storelessRotation.sessionIds.has(expectedSessionId)) {
++        return { status: "skipped", reason: "lifecycle-invalidated" };
++      }
++      sessionId = storelessRotation.sessionId;
++      expectedSessionId = expectedSessionId ? storelessRotation.sessionId : undefined;
++    }
+     if (isReplyRunSuccessorAdmissionBlocked(params.sessionKey)) {
+       if (params.kind === "heartbeat") {
+         return { status: "skipped", reason: "active-run" };
+@@ -192,16 +213,14 @@ export async function admitReplyTurn(
+           reason: isAbortSignalAborted(params.upstreamAbortSignal) ? "aborted" : "active-run",
+         };
+       }
+-      sessionId = successorAdmission.sessionId ?? sessionId;
+-      if (expectedSessionId && successorAdmission.sessionId) {
+-        expectedSessionId = successorAdmission.sessionId;
+-      }
++      rotations.recordBarrierSources(successorAdmission.sources);
+       continue;
+     }
+     try {
+       const storePath = params.storePath;
+       let operation: ReplyOperation | undefined;
+       let admittedSessionEntry: InternalSessionEntry | undefined;
++      let admittedDatabaseIdentity: OpenClawAgentDatabaseIdentity | undefined;
+       let recoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
+       let interruptedBeforeOperation = false;
+       const admission = storePath
+@@ -215,6 +234,10 @@ export async function admitReplyTurn(
+               params.onLifecycleInterrupt?.();
+             },
+             assertAllowed: () => {
++              admittedDatabaseIdentity = readSessionDatabaseIdentity({
++                storePath,
++                sessionKey: params.sessionKey,
++              });
+               const currentEntry = loadSessionEntry({
+                 storePath,
+                 sessionKey: params.sessionKey,
+@@ -227,29 +250,11 @@ export async function admitReplyTurn(
+                   message: `Session "${params.sessionKey}" was deleted while starting work. Retry.`,
+                 });
+               }
+-              const registeredOperation = replyRunRegistry.get(params.sessionKey);
+-              const rotationOperation = [registeredOperation, params.expectedActiveOperation].find(
+-                (candidate) => {
+-                  if (
+-                    !candidate ||
+-                    !expectedSessionId ||
+-                    currentEntry?.sessionId !== candidate.sessionId ||
+-                    !candidate.hasOwnedSessionId(expectedSessionId)
+-                  ) {
+-                    return false;
+-                  }
+-                  if (
+-                    candidate.result?.kind === "aborted" &&
+-                    candidate.result.code === "aborted_for_restart"
+-                  ) {
+-                    return false;
+-                  }
+-                  return candidate === registeredOperation || candidate.result !== null;
+-                },
+-              );
+-              const activeOperationRotatedExpectedSession = Boolean(
+-                rotationOperation && currentEntry?.sessionId === rotationOperation.sessionId,
+-              );
++              const activeOperationRotatedExpectedSession = rotations.hasExpectedSessionRotation({
++                expectedSessionId,
++                sessionId: currentEntry?.sessionId,
++                databaseIdentity: admittedDatabaseIdentity,
++              });
+               if (
+                 expectedSessionId &&
+                 currentEntry?.sessionId !== expectedSessionId &&
+@@ -354,6 +359,7 @@ export async function admitReplyTurn(
+             reason: "active-run",
+             activeOperation: replyRunRegistry.get(params.sessionKey),
+             lifecycleAdmission: admission,
++            ...(admittedSessionEntry ? { sessionEntry: admittedSessionEntry } : {}),
+           };
+         }
+         admission?.release();
+@@ -368,7 +374,10 @@ export async function admitReplyTurn(
+         // stays registered via its own after-clear callback (release is
+         // idempotent), so both identities free on operation clear.
+         retainReplyOperationUntilComplete(operation);
+-        lifecycleAdmissionByOperation.set(operation, admission);
++        lifecycleAdmissionByOperation.set(operation, {
++          lease: admission,
++          databaseIdentity: admittedDatabaseIdentity,
++        });
+         let recoveryOwnerRelease: Promise<MainSessionRecoveryPendingTarget | undefined> | undefined;
+         const releaseRecoveryOwner = () =>
+           (recoveryOwnerRelease ??= releaseReplyRecoveryOwner(recoveryOwnerLease));
+@@ -381,7 +390,10 @@ export async function admitReplyTurn(
+           });
+         }
+         runAfterReplyOperationClear(operation, () => {
+-          lifecycleAdmissionByOperation.delete(operation);
++          const retained = lifecycleAdmissionByOperation.get(operation);
++          if (retained) {
++            retained.lease = undefined;
++          }
+           // Keep reset/delete behind durable owner release and its writer lock.
+           void releaseRecoveryOwner().then((pendingTarget) => {
+             admission.release();
+@@ -422,10 +434,7 @@ export async function admitReplyTurn(
+             reason: isAbortSignalAborted(params.upstreamAbortSignal) ? "aborted" : "active-run",
+           };
+         }
+-        sessionId = followupAdmission.sessionId ?? sessionId;
+-        if (expectedSessionId && followupAdmission.sessionId) {
+-          expectedSessionId = followupAdmission.sessionId;
+-        }
++        rotations.recordBarrierSources(followupAdmission.sources);
+         continue;
+       }
+       if (!(error instanceof ReplyRunAlreadyActiveError)) {
+@@ -468,18 +477,10 @@ export async function admitReplyTurn(
+         };
+       }
+       if (activeOperation) {
+-        sessionId = activeOperation.sessionId;
+-        // In-lane compaction may rotate the active operation's persisted ID.
+-        // Lifecycle reset aborts use a distinct result and must stay invalidated.
+-        if (
+-          expectedSessionId &&
+-          !(
+-            activeOperation.result?.kind === "aborted" &&
+-            activeOperation.result.code === "aborted_for_restart"
+-          )
+-        ) {
+-          expectedSessionId = activeOperation.sessionId;
+-        }
++        rotations.recordCompletedOperation(
++          activeOperation,
++          lifecycleAdmissionByOperation.get(activeOperation)?.databaseIdentity,
++        );
+       }
+     }
+   }
+diff --git a/src/auto-reply/reply/reply-turn-compaction-handoff.test.ts b/src/auto-reply/reply/reply-turn-compaction-handoff.test.ts
+new file mode 100644
+index 00000000..bff882f5
+--- /dev/null
++++ b/src/auto-reply/reply/reply-turn-compaction-handoff.test.ts
+@@ -0,0 +1,171 @@
++import { copyFileSync, renameSync } from "node:fs";
++import path from "node:path";
++import { afterEach, describe, expect, it } from "vitest";
++import { createDeferred } from "../../../test/helpers/promise.js";
++import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
++import {
++  replaceSessionEntrySync,
++  replaceSessionEntry,
++} from "../../config/sessions/session-accessor.js";
++import type { ReplyOperation } from "./reply-run-registry.js";
++import { testing } from "./reply-run-registry.test-support.js";
++import { admitReplyTurn } from "./reply-turn-admission.js";
++
++const dirs = useAutoCleanupTempDirTracker(afterEach);
++afterEach(() => testing.resetReplyRunRegistry());
++const sessionKey = "agent:main:compaction-handoff";
++function store(sessionId: string) {
++  const storePath = path.join(dirs.make("compaction-handoff-"), "sessions.sqlite");
++  replaceSessionEntrySync({ storePath, sessionKey }, { sessionId, updatedAt: Date.now() });
++  return storePath;
++}
++async function owner(storePath: string, sessionId: string) {
++  const result = await admitReplyTurn({
++    storePath,
++    sessionKey,
++    sessionId,
++    expectedSessionId: sessionId,
++    kind: "visible",
++    resetTriggered: false,
++  });
++  if (result.status !== "owned") {
++    throw new Error("Expected owned fixture");
++  }
++  return result.operation;
++}
++async function compact(storePath: string, operation: ReplyOperation, sessionId: string) {
++  await replaceSessionEntry({ storePath, sessionKey }, { sessionId, updatedAt: Date.now() });
++  operation.updateSessionId(sessionId);
++}
++async function finish(operation: ReplyOperation) {
++  operation.complete();
++  await operation.ownerSettlement;
++}
++describe("accepted turn compaction lineage", () => {
++  it("continues through two completed owners captured before asynchronous preparation", async () => {
++    const storePath = store("a");
++    const first = await owner(storePath, "a");
++    await compact(storePath, first, "b");
++    await finish(first);
++    const second = await owner(storePath, "b");
++    await compact(storePath, second, "c");
++    await finish(second);
++    const result = await admitReplyTurn({
++      storePath,
++      sessionKey,
++      sessionId: "a",
++      expectedSessionId: "a",
++      expectedActiveOperations: [first, second],
++      kind: "visible",
++      resetTriggered: false,
++    });
++    expect(result.status).toBe("owned");
++    if (result.status === "owned") {
++      expect(result.operation.sessionId).toBe("c");
++      await finish(result.operation);
++    }
++  });
++  it("rejects a completed predecessor from another physical database with identical IDs", async () => {
++    const foreignPath = store("a");
++    const localPath = store("b");
++    const first = await owner(foreignPath, "a");
++    await compact(foreignPath, first, "b");
++    await finish(first);
++    await expect(
++      admitReplyTurn({
++        storePath: localPath,
++        sessionKey,
++        sessionId: "a",
++        expectedSessionId: "a",
++        expectedActiveOperations: [first],
++        kind: "visible",
++        resetTriggered: false,
++      }),
++    ).rejects.toThrow(/changed while starting work/i);
++  });
++  it("rejects physical replacement of a retained connection's pathname", async () => {
++    const storePath = store("a");
++    const replacementPath = store("b");
++    const first = await owner(storePath, "a");
++    await compact(storePath, first, "b");
++    await finish(first);
++    renameSync(storePath, `${storePath}.old`);
++    copyFileSync(replacementPath, storePath);
++    await expect(
++      admitReplyTurn({
++        storePath,
++        sessionKey,
++        sessionId: "a",
++        expectedSessionId: "a",
++        expectedActiveOperations: [first],
++        kind: "visible",
++        resetTriggered: false,
++      }),
++    ).rejects.toThrow(/database changed while starting work/i);
++  });
++  it("retains connected compactions across pending followup barriers", async () => {
++    const storePath = store("a");
++    const first = await owner(storePath, "a");
++    await compact(storePath, first, "b");
++    const firstBarrier = createDeferred();
++    const secondBarrier = createDeferred();
++    first.completeWithAfterClearBarrier(firstBarrier.promise);
++    const second = await owner(storePath, "b");
++    await compact(storePath, second, "c");
++    second.completeWithAfterClearBarrier(secondBarrier.promise);
++    const pending = admitReplyTurn({
++      storePath,
++      sessionKey,
++      sessionId: "a",
++      expectedSessionId: "a",
++      expectedActiveOperations: [first, second],
++      kind: "queued_followup",
++      resetTriggered: false,
++    });
++    firstBarrier.resolve();
++    secondBarrier.resolve();
++    const result = await pending;
++    expect(result.status).toBe("owned");
++    if (result.status === "owned") {
++      expect(result.operation.sessionId).toBe("c");
++      await finish(result.operation);
++    }
++  });
++  it.each(["replacement", "restart", "cancelled"])(
++    "does not execute accepted work after %s",
++    async (scenario) => {
++      const storePath = store("a");
++      const first = await owner(storePath, "a");
++      await replaceSessionEntry(
++        { storePath, sessionKey },
++        { sessionId: "b", updatedAt: Date.now() },
++      );
++      if (scenario !== "replacement") {
++        first.updateSessionId("b");
++      }
++      if (scenario === "restart") {
++        first.abortForRestart();
++      }
++      await finish(first);
++      const controller = new AbortController();
++      if (scenario === "cancelled") {
++        controller.abort();
++      }
++      const pending = admitReplyTurn({
++        storePath,
++        sessionKey,
++        sessionId: "a",
++        expectedSessionId: "a",
++        expectedActiveOperations: [first],
++        kind: "visible",
++        resetTriggered: false,
++        upstreamAbortSignal: controller.signal,
++      });
++      if (scenario === "cancelled") {
++        expect(await pending).toMatchObject({ status: "skipped", reason: "aborted" });
++      } else {
++        await expect(pending).rejects.toThrow(/changed while starting work/i);
++      }
++    },
++  );
++});
+diff --git a/src/auto-reply/reply/reply-turn-rotation.ts b/src/auto-reply/reply/reply-turn-rotation.ts
+new file mode 100644
+index 00000000..f4cabdc8
+--- /dev/null
++++ b/src/auto-reply/reply/reply-turn-rotation.ts
+@@ -0,0 +1,116 @@
++import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
++import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
++import {
++  isReplyOperationAbortedForRestart,
++  lifecycleAdmissionByOperation,
++  mergeReplyRunAdmissionSource,
++  type ReplyRunAdmissionSource,
++} from "./reply-run-registry.state.js";
++
++type ReplyRotationSource = ReplyRunAdmissionSource & { fromBarrier: boolean };
++
++/** Retains invocation-local lineage evidence; the admission owner decides whether work may start. */
++export function createReplyTurnRotationEvidence(params: {
++  sessionKey: string;
++  /** Observed predecessors, from oldest to newest. */
++  expectedActiveOperations?: readonly ReplyOperation[];
++  activeAtAdmission?: ReplyOperation;
++}) {
++  const waitedRotations = new Map<ReplyRotationSource["databaseIdentity"], ReplyRotationSource>();
++  // Barrier snapshots retain their source lane after rekeying; active owners do not.
++  const isCurrent = (source: ReplyRotationSource) =>
++    !isReplyOperationAbortedForRestart(source.operation) &&
++    (source.fromBarrier ||
++      (source.operation.key === params.sessionKey &&
++        (source.operation === replyRunRegistry.get(params.sessionKey) ||
++          source.operation.result !== null)));
++  const mergeWaitedRotation = (source: ReplyRotationSource) => {
++    const previous = waitedRotations.get(source.databaseIdentity);
++    // Candidate joins must not mutate history or acquire IDs from later rekeys.
++    return mergeReplyRunAdmissionSource(
++      source,
++      previous && isCurrent(previous)
++        ? { ...previous, sessionIds: new Set(previous.sessionIds) }
++        : undefined,
++    );
++  };
++
++  return {
++    recordBarrierSources(sources: ReplyRunAdmissionSource[] = []) {
++      for (const source of sources) {
++        waitedRotations.set(
++          source.databaseIdentity,
++          mergeWaitedRotation({
++            ...source,
++            sessionIds: new Set(source.sessionIds),
++            fromBarrier: true,
++          }),
++        );
++      }
++    },
++    recordCompletedOperation(
++      operation: ReplyOperation,
++      databaseIdentity: OpenClawAgentDatabaseIdentity | undefined,
++    ) {
++      waitedRotations.set(
++        databaseIdentity,
++        mergeWaitedRotation({
++          operation,
++          sessionId: operation.sessionId,
++          sessionIds: operation.captureOwnedSessionIds(),
++          databaseIdentity,
++          fromBarrier: false,
++        }),
++      );
++    },
++    takeStorelessRotation(): { sessionId: string; sessionIds: ReadonlySet<string> } | undefined {
++      const source = waitedRotations.get(undefined);
++      waitedRotations.delete(undefined);
++      return source && isCurrent(source) ? source : undefined;
++    },
++    hasExpectedSessionRotation(target: {
++      expectedSessionId: string | undefined;
++      sessionId: string | undefined;
++      databaseIdentity: OpenClawAgentDatabaseIdentity | undefined;
++    }): boolean {
++      const registeredOperation = replyRunRegistry.get(params.sessionKey);
++      const rotationSources = [...waitedRotations.values()];
++      for (const candidate of new Set([
++        ...(params.expectedActiveOperations ?? []),
++        params.activeAtAdmission,
++        registeredOperation,
++      ])) {
++        if (candidate) {
++          let source = mergeWaitedRotation({
++            operation: candidate,
++            sessionId: candidate.sessionId,
++            sessionIds: candidate.captureOwnedSessionIds(),
++            databaseIdentity: lifecycleAdmissionByOperation.get(candidate)?.databaseIdentity,
++            fromBarrier: false,
++          });
++          if (!isCurrent(source)) {
++            continue;
++          }
++          for (const previous of rotationSources) {
++            if (isCurrent(previous)) {
++              source = mergeReplyRunAdmissionSource(source, {
++                ...previous,
++                sessionIds: new Set(previous.sessionIds),
++              });
++            }
++          }
++          rotationSources.push(source);
++        }
++      }
++      return rotationSources.some(
++        (source) =>
++          target.expectedSessionId &&
++          target.databaseIdentity !== undefined &&
++          source.databaseIdentity === target.databaseIdentity &&
++          target.sessionId === source.sessionId &&
++          isCurrent(source) &&
++          source.sessionIds.has(target.expectedSessionId),
++      );
++    },
++  };
++}
+diff --git a/src/auto-reply/reply/test-helpers.ts b/src/auto-reply/reply/test-helpers.ts
+index cf4a008b..3f093410 100644
+--- a/src/auto-reply/reply/test-helpers.ts
++++ b/src/auto-reply/reply/test-helpers.ts
+@@ -45,6 +45,7 @@ export function createMockReplyOperation(
+     startedAtMs: Date.now(),
+     lastActivityAtMs: Date.now(),
+     hasOwnedSessionId: vi.fn((candidate: string) => candidate === sessionId),
++    captureOwnedSessionIds: () => new Set([sessionId]),
+     recordActivity: vi.fn(),
+     setPhase: vi.fn(),
+     markWaitingForDeferredMaintenance: vi.fn(),
+diff --git a/src/config/sessions/session-accessor.database-identity.ts b/src/config/sessions/session-accessor.database-identity.ts
+new file mode 100644
+index 00000000..87f319c1
+--- /dev/null
++++ b/src/config/sessions/session-accessor.database-identity.ts
+@@ -0,0 +1,11 @@
++import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
++import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
++import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
++import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
++
++/** Read identity from the same database owner used by the session accessor. */
++export function readSessionDatabaseIdentity(scope: SessionAccessScope) {
++  return readOpenClawAgentDatabaseIdentity(
++    openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope))),
++  );
++}
+diff --git a/src/config/sessions/session-accessor.ts b/src/config/sessions/session-accessor.ts
+index b47c6336..ced9a9fa 100644
+--- a/src/config/sessions/session-accessor.ts
++++ b/src/config/sessions/session-accessor.ts
+@@ -5,6 +5,7 @@
+  * Runtime callers import this barrel instead of storage-specific modules.
+  */
+ export * from "./session-history.js";
++export { readSessionDatabaseIdentity } from "./session-accessor.database-identity.js";
+ export {
+   listSessionPendingInputs,
+   readSessionPendingInput,
+diff --git a/src/gateway/server-methods/chat-send-admission.ts b/src/gateway/server-methods/chat-send-admission.ts
+index ebb4ad54..bffcd275 100644
+--- a/src/gateway/server-methods/chat-send-admission.ts
++++ b/src/gateway/server-methods/chat-send-admission.ts
+@@ -8,6 +8,7 @@ import {
+   isReplyRunAbortableForSignal,
+   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+   replyRunRegistry,
++  type ReplyOperation,
+ } from "../../auto-reply/reply/reply-run-registry.js";
+ import { resolveSessionWorkStartError } from "../../config/sessions.js";
+ import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
+@@ -167,6 +168,7 @@ export async function admitChatSend(params: {
+     }
+   };
+   let admittedSessionId = backingSessionId ?? clientRunId;
++  let expectedActiveReplyOperation: ReplyOperation | undefined;
+   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+   let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
+   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
+@@ -330,6 +332,7 @@ export async function admitChatSend(params: {
+       return;
+     }
+     admittedSessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
++    expectedActiveReplyOperation = replyRunRegistry.get(activeRunScopeKey);
+     if (request.goalOperation?.action === "start" && !latestEntry && !requestedSessionId) {
+       const creationError = authorizeGatewaySessionCreation({
+         cfg: latestSession.cfg,
+@@ -636,6 +639,7 @@ export async function admitChatSend(params: {
+     value: {
+       activeRunAbort,
+       admittedSessionId,
++      expectedActiveReplyOperation,
+       initialSessionEntry,
+       chatSendTraceAttributes,
+       cleanupAdmittedRun,
+diff --git a/src/gateway/server-methods/chat-send-agent-dispatch.ts b/src/gateway/server-methods/chat-send-agent-dispatch.ts
+index 4acef61c..4ca15505 100644
+--- a/src/gateway/server-methods/chat-send-agent-dispatch.ts
++++ b/src/gateway/server-methods/chat-send-agent-dispatch.ts
+@@ -11,6 +11,7 @@ import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/
+ import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
+ import type { ReplyMessageInjectionAttempt } from "../../auto-reply/reply/reply-run-registry.js";
+ import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
++import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
+ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+ import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
+ import { isOperatorUiClient } from "../../utils/message-channel.js";
+@@ -43,12 +44,12 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
+ import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
+ import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
+ import { applyChatSendManagedMedia, type prepareChatSendUserTurn } from "./chat-send-user-turn.js";
+-import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
+ import {
+   emitOperatorChatSendServerTiming,
+   roundedChatSendTimingMs,
+   type ChatSendServerTimingPhase,
+ } from "./chat-server-timing.js";
++import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
+ import type { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
+ import { emitSessionsChanged } from "./session-change-event.js";
+ import { prepareSessionWorkspace } from "./session-create-project.js";
+@@ -301,6 +302,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
+                   ? { taskSuggestionDeliveryMode: "gateway" as const }
+                   : {}),
+                 requestedSessionId,
++                expectedActiveReplyOperation: admission.expectedActiveReplyOperation,
+                 ...(restartSafeAdmission
+                   ? {
+                       expectedExistingSessionId: admittedSessionId,
+@@ -314,6 +316,18 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
+                 onSessionPrepared: (binding) => {
+                   if (binding.sessionKey === sessionKey) {
+                     userTurn.setAcceptedSessionId(binding.sessionId);
++                    // Preserve the accepted run/controller while its verified conversation rotates.
++                    if (
++                      activeRunAbort.entry &&
++                      context.chatAbortControllers.get(clientRunId) === activeRunAbort.entry
++                    ) {
++                      activeRunAbort.entry.sessionId = binding.sessionId;
++                      registerAgentRunContext(clientRunId, {
++                        sessionKey,
++                        sessionId: binding.sessionId,
++                        lifecycleGeneration: admission.lifecycleGeneration,
++                      });
++                    }
+                   }
+                 },
+                 abortSignal: activeRunAbort.controller.signal,
+diff --git a/src/gateway/server-methods/chat-send-compaction-handoff.test.ts b/src/gateway/server-methods/chat-send-compaction-handoff.test.ts
+new file mode 100644
+index 00000000..cd331c65
+--- /dev/null
++++ b/src/gateway/server-methods/chat-send-compaction-handoff.test.ts
+@@ -0,0 +1,325 @@
++import { isRecord } from "@openclaw/normalization-core/record-coerce";
++import { expect, it, vi } from "vitest";
++import { createDeferred } from "../../../test/helpers/promise.js";
++import * as dispatch from "../../auto-reply/dispatch.js";
++import * as dispatchRuntimeLoaders from "../../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
++import type { InternalGetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
++import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
++import {
++  replyRunRegistry,
++  type ReplyOperation,
++} from "../../auto-reply/reply/reply-run-registry.js";
++import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
++import { initSessionState } from "../../auto-reply/reply/session.js";
++import {
++  appendTranscriptMessage,
++  loadTranscriptEvents,
++  replaceSessionEntry,
++} from "../../config/sessions/session-accessor.js";
++import { ensureProfileForEmail } from "../../state/user-profiles.js";
++import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
++import { createGatewayRequestContext } from "../server-request-context.js";
++import { makeContextParams } from "../server-request-context.test-support.js";
++import { resolveSessionMutationAuthorization } from "../session-sharing.js";
++import * as chatDispatch from "./chat-send-agent-dispatch.js";
++import { handleChatSend } from "./chat-send-handler.js";
++import type { GatewayClient } from "./types.js";
++
++type DispatchOptions = Parameters<typeof dispatch.dispatchInboundMessageWithProjectedDispatcher>[0];
++type ChatDispatchParams = Parameters<typeof chatDispatch.startChatDispatch>[0];
++
++it.each([
++  "compaction",
++  "active-compaction",
++  "successive-compactions",
++  "replacement",
++  "foreign-store",
++  "restart",
++  "cancelled",
++] as const)(
++  "retains the accepted chat target while preparation outlives its predecessor: %s",
++  async (scenario) => {
++    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
++      const agentId = "main";
++      const sessionKey = "agent:main:compaction-handoff";
++      const initialSessionId = "before-compaction";
++      const nextSessionId = "after-compaction";
++      const finalSessionId =
++        scenario === "successive-compactions" ? "after-second-compaction" : nextSessionId;
++      const runId = `accepted-before-compaction-${scenario}`;
++      const message = "Continue the existing task with this exact input.";
++      const storePath = state.statePath("sessions.sqlite");
++      const scope = { agentId, sessionKey, storePath };
++      await state.writeConfig({
++        agents: { defaults: { workspace: state.workspaceDir } },
++        plugins: { enabled: false },
++        session: { store: storePath },
++      });
++      const profile = ensureProfileForEmail("compaction-handoff@example.test");
++      const entry = {
++        sessionId: initialSessionId,
++        updatedAt: Date.now(),
++        createdActor: { type: "human", source: "profile", id: profile.id } as const,
++      };
++      await replaceSessionEntry(scope, entry);
++      // Prior tool results are already durable. Continuing the accepted input must
++      // neither rerun that owner nor append a second copy of its tool result.
++      await appendTranscriptMessage(
++        { ...scope, sessionId: initialSessionId },
++        {
++          message: {
++            role: "toolResult",
++            toolCallId: "completed-tool-before-compaction",
++            toolName: "fixture_tool",
++            content: [{ type: "text", text: "Already completed exactly once." }],
++            isError: false,
++            timestamp: Date.now(),
++          },
++        },
++      );
++      const completedToolHistory = await loadTranscriptEvents({
++        ...scope,
++        sessionId: initialSessionId,
++      });
++      const predecessorScope = {
++        ...scope,
++        storePath: scenario === "foreign-store" ? state.statePath("foreign.sqlite") : storePath,
++      };
++      if (scenario === "foreign-store") {
++        await replaceSessionEntry(predecessorScope, entry);
++      }
++      const previousAdmission = await admitReplyTurn({
++        ...predecessorScope,
++        sessionId: initialSessionId,
++        kind: "visible",
++        resetTriggered: false,
++      });
++      if (previousAdmission.status !== "owned") {
++        throw new Error("fixture requires the predecessor's real physical database admission");
++      }
++      const predecessor = previousAdmission.operation;
++      predecessor.setPhase("running");
++
++      const client: GatewayClient = {
++        connId: "compaction-handoff-client",
++        authenticatedUserProfile: {
++          profileId: profile.id,
++          displayName: null,
++          hasAvatar: false,
++          updatedAt: 1,
++        },
++        connect: {
++          minProtocol: 1,
++          maxProtocol: 1,
++          role: "operator",
++          scopes: ["operator.read", "operator.write", "operator.admin"],
++          client: { id: "cli", version: "test", platform: "test", mode: "cli" },
++        },
++      };
++      const context = createGatewayRequestContext(makeContextParams());
++      const prepared = createDeferred<DispatchOptions>();
++      const releasePreparation = createDeferred();
++      const capturedSuccessor = createDeferred();
++      const releaseRuntimePlugins = createDeferred();
++      const sharedDispatchSettled = createDeferred();
++      const originalDispatch = dispatch.dispatchInboundMessageWithProjectedDispatcher;
++      const originalLoadRuntimePlugins = dispatchRuntimeLoaders.loadRuntimePlugins;
++      const holdRuntimePlugins =
++        scenario === "successive-compactions"
++          ? vi.spyOn(dispatchRuntimeLoaders, "loadRuntimePlugins").mockImplementation(async () => {
++              capturedSuccessor.resolve();
++              await releaseRuntimePlugins.promise;
++              return await originalLoadRuntimePlugins();
++            })
++          : undefined;
++      const observeChatDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
++      let owned: ChatDispatchParams | undefined;
++      let successor: ReplyOperation | undefined;
++      let originalRegistration:
++        | ChatDispatchParams["admission"]["activeRunAbort"]["entry"]
++        | undefined;
++      const resolver = vi.fn<InternalGetReplyFromConfig>(async (ctx, options, cfg) => {
++        if (!options || !cfg || !owned || !originalRegistration) {
++          throw new Error("fixture requires the original accepted chat dispatch");
++        }
++        expect(ctx.BodyForAgent).toBe(message);
++        expect(options.runId).toBe(runId);
++        expect(options.expectedExistingSessionId).toBe(finalSessionId);
++        const initialized = await initSessionState({
++          ctx: finalizeInboundContext(ctx),
++          cfg,
++          commandAuthorized: ctx.CommandAuthorized === true,
++          expectedExistingSessionId: options.expectedExistingSessionId,
++          requestedSessionId: options.requestedSessionId,
++          signal: options.abortSignal,
++        });
++        expect(initialized.sessionId).toBe(finalSessionId);
++        options.onSessionPrepared?.({
++          sessionKey: initialized.sessionKey,
++          sessionId: initialized.sessionId,
++          storePath: initialized.storePath,
++        });
++        expect(context.chatAbortControllers.get(runId)).toBe(originalRegistration);
++        expect(originalRegistration.sessionId).toBe(finalSessionId);
++        await options.userTurnTranscriptRecorder?.persistApproved();
++        return { text: "Continued in the compacted conversation." };
++      });
++      const holdPreparation = vi
++        .spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher")
++        .mockImplementation(async (options) => {
++          prepared.resolve(options);
++          await releasePreparation.promise;
++          try {
++            return await originalDispatch({ ...options, replyResolver: resolver });
++          } finally {
++            sharedDispatchSettled.resolve();
++          }
++        });
++      try {
++        const params = { sessionKey, sessionId: initialSessionId, message, idempotencyKey: runId };
++        const authorization = resolveSessionMutationAuthorization({
++          client,
++          context,
++          method: "chat.send",
++          requestParams: params,
++        });
++        expect(authorization.error).toBeNull();
++        const respond = vi.fn();
++        await handleChatSend({
++          params,
++          req: { type: "req", id: runId, method: "chat.send" },
++          respond,
++          context,
++          client,
++          sessionMutationAuthorization: authorization.authorization,
++          isWebchatConnect: () => false,
++        });
++        expect(respond).toHaveBeenCalledWith(
++          true,
++          expect.objectContaining({ runId, status: "started" }),
++          undefined,
++          expect.anything(),
++        );
++        await prepared.promise;
++        owned = observeChatDispatch.mock.calls.at(-1)?.[0];
++        if (!owned) {
++          throw new Error("chat.send did not start detached dispatch");
++        }
++        originalRegistration = owned.admission.activeRunAbort.entry;
++        expect(originalRegistration.sessionId).toBe(initialSessionId);
++
++        await replaceSessionEntry(scope, { ...entry, sessionId: nextSessionId });
++        if (scenario === "foreign-store") {
++          await replaceSessionEntry(predecessorScope, { ...entry, sessionId: nextSessionId });
++        }
++        if (scenario !== "replacement") {
++          predecessor.updateSessionId(nextSessionId);
++        }
++        if (scenario === "restart") {
++          predecessor.abortForRestart();
++        }
++        if (scenario === "active-compaction") {
++          expect(replyRunRegistry.get(sessionKey)).toBe(predecessor);
++        } else {
++          predecessor.complete();
++          await predecessor.ownerSettlement;
++          expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
++        }
++        if (scenario === "cancelled") {
++          owned.admission.activeRunAbort.controller.abort();
++        }
++        if (scenario === "successive-compactions") {
++          const successorAdmission = await admitReplyTurn({
++            ...scope,
++            sessionId: nextSessionId,
++            expectedSessionId: nextSessionId,
++            kind: "visible",
++            resetTriggered: false,
++          });
++          if (successorAdmission.status !== "owned") {
++            throw new Error("fixture requires the successor's real physical database admission");
++          }
++          successor = successorAdmission.operation;
++          successor.setPhase("running");
++        }
++        releasePreparation.resolve();
++        if (successor) {
++          // Gather retains this newer owner before its existing plugin-loading await.
++          await capturedSuccessor.promise;
++          await replaceSessionEntry(scope, { ...entry, sessionId: finalSessionId });
++          successor.updateSessionId(finalSessionId);
++          successor.complete();
++          await successor.ownerSettlement;
++          expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
++          releaseRuntimePlugins.resolve();
++        }
++        await sharedDispatchSettled.promise;
++        await vi.waitFor(() => expect(context.chatAbortControllers.has(runId)).toBe(false));
++
++        if (
++          scenario === "compaction" ||
++          scenario === "active-compaction" ||
++          scenario === "successive-compactions"
++        ) {
++          expect(context.broadcast).not.toHaveBeenCalledWith(
++            "chat",
++            expect.objectContaining({ runId, state: "error" }),
++            expect.anything(),
++          );
++          expect(resolver).toHaveBeenCalledOnce();
++          expect(originalRegistration.sessionId).toBe(finalSessionId);
++          expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
++            ok: true,
++            payload: { runId, status: "ok" },
++          });
++          const duplicateResponse = vi.fn();
++          await handleChatSend({
++            params,
++            req: { type: "req", id: `${runId}-duplicate`, method: "chat.send" },
++            respond: duplicateResponse,
++            context,
++            client,
++            sessionMutationAuthorization: authorization.authorization,
++            isWebchatConnect: () => false,
++          });
++          expect(duplicateResponse).toHaveBeenCalledWith(
++            true,
++            expect.objectContaining({ runId }),
++            undefined,
++            expect.anything(),
++          );
++          expect(resolver).toHaveBeenCalledOnce();
++          expect(await loadTranscriptEvents({ ...scope, sessionId: initialSessionId })).toEqual(
++            completedToolHistory,
++          );
++          const transcript = await loadTranscriptEvents({ ...scope, sessionId: finalSessionId });
++          expect(
++            transcript.filter(
++              (event) =>
++                isRecord(event) &&
++                event.type === "message" &&
++                isRecord(event.message) &&
++                event.message.role === "user",
++            ),
++          ).toHaveLength(1);
++        } else {
++          expect(resolver).not.toHaveBeenCalled();
++          expect(originalRegistration.sessionId).toBe(initialSessionId);
++        }
++      } finally {
++        predecessor.complete();
++        successor?.complete();
++        releasePreparation.resolve();
++        releaseRuntimePlugins.resolve();
++        if (owned) {
++          await sharedDispatchSettled.promise;
++          await vi.waitFor(() => expect(context.chatAbortControllers.has(runId)).toBe(false));
++          owned.admission.cleanupAdmittedRun();
++        }
++        holdPreparation.mockRestore();
++        holdRuntimePlugins?.mockRestore();
++        observeChatDispatch.mockRestore();
++      }
++    });
++  },
++);
+diff --git a/src/gateway/server-request-context.test-support.ts b/src/gateway/server-request-context.test-support.ts
+new file mode 100644
+index 00000000..be69e384
+--- /dev/null
++++ b/src/gateway/server-request-context.test-support.ts
+@@ -0,0 +1,112 @@
++import { vi } from "vitest";
++import { createChatRunState } from "./server-chat-state.js";
++import type { GatewayServerLiveState } from "./server-live-state.js";
++import { createGatewayRequestContext } from "./server-request-context.js";
++
++type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext>[0];
++type TestCronState = GatewayServerLiveState["cronState"];
++
++export function makeCronState(overrides: Partial<TestCronState> = {}): TestCronState {
++  return {
++    cron: { start: vi.fn(), stop: vi.fn() } as never,
++    storePath: "/tmp/cron",
++    cronEnabled: true,
++    reconcileExitWatchers: vi.fn(async () => {}),
++    reconcileStreamWatchers: vi.fn(async () => {}),
++    stopStreamWatchers: vi.fn(async () => {}),
++    reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
++    ...overrides,
++  };
++}
++
++export function makeContextParams(
++  overrides: Partial<GatewayRequestContextParams> = {},
++): GatewayRequestContextParams {
++  const config = {} as never;
++  const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
++    cronState: makeCronState({
++      cron: { start: vi.fn(), stop: vi.fn() } as never,
++      storePath: "/tmp/cron",
++    }),
++  };
++  return {
++    deps: {} as never,
++    runtimeState,
++    getRuntimeConfig: vi.fn(() => config),
++    getGatewayMethodRegistry: vi.fn(() => ({}) as never),
++    sessionCompanion: {} as never,
++    sessionObserver: {} as never,
++    resolveTerminalLaunchPolicy: vi.fn(() => ({
++      ok: false as const,
++      block: { kind: "disabled" as const },
++    })),
++    isTerminalEnabled: vi.fn(() => false),
++    execApprovalManager: undefined,
++    pluginApprovalManager: undefined,
++    validateAgentRuntimeApprovalAuthority: () => false,
++    listSessionPendingApprovals: undefined,
++    loadGatewayModelCatalog: vi.fn(async () => []),
++    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
++      agentId: "main",
++      agentDir: "/tmp/model-catalog-agent",
++      catalogComplete: false,
++      workspaceDir: "/tmp/model-catalog-workspace",
++      config,
++      entries: [],
++      routeVariants: [],
++    })),
++    readChatMetadata: vi.fn(async () => ({ swarmEnabled: false })),
++    getHealthCache: vi.fn(() => null),
++    refreshHealthSnapshot: vi.fn(async () => ({}) as never),
++    logHealth: { error: vi.fn() },
++    logGateway: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
++    incrementPresenceVersion: vi.fn(() => 1),
++    getHealthVersion: vi.fn(() => 1),
++    broadcast: vi.fn(),
++    broadcastToConnIds: vi.fn(),
++    nodeSendToSession: vi.fn(),
++    nodeSendToAllSubscribed: vi.fn(),
++    nodeSubscribe: vi.fn(),
++    nodeUnsubscribe: vi.fn(),
++    nodeUnsubscribeAll: vi.fn(),
++    hasConnectedTalkNode: vi.fn(async () => false),
++    clients: new Set(),
++    isConnectionActive: vi.fn(() => false),
++    enforceSharedGatewayAuthGenerationForConfigWrite: vi.fn(),
++    nodeRegistry: { invalidateConnectionForPairingChange: vi.fn() } as never,
++    agentRunSeq: new Map(),
++    chatAbortControllers: new Map(),
++    chatQueuedTurns: new Map(),
++    chatRunState: createChatRunState(),
++    addChatRun: vi.fn(),
++    removeChatRun: vi.fn(),
++    subscribeSessionEvents: vi.fn(),
++    unsubscribeSessionEvents: vi.fn(),
++    subscribeSessionMessageEvents: vi.fn(),
++    unsubscribeSessionMessageEvents: vi.fn(),
++    unsubscribeAllSessionEvents: vi.fn(),
++    getSessionEventSubscriberConnIds: vi.fn(() => new Set<string>()),
++    registerToolEventRecipient: vi.fn(),
++    dedupe: new Map(),
++    wizardSessions: new Map(),
++    systemAgentSessions: new Map(),
++    findRunningWizard: vi.fn(() => null),
++    purgeWizardSession: vi.fn(),
++    getRuntimeSnapshot: vi.fn(() => ({}) as never),
++    startChannel: vi.fn(async () => undefined),
++    stopChannel: vi.fn(async () => undefined),
++    markChannelLoggedOut: vi.fn(),
++    wizardRunner: vi.fn(async () => undefined),
++    channelWizardRunner: vi.fn(async () => undefined),
++    broadcastVoiceWakeChanged: vi.fn(),
++    broadcastVoiceWakeRoutingChanged: vi.fn(),
++    notifyPluginMetadataChanged: vi.fn(),
++    getConfigReloaderHotReloadStatus: vi.fn(() => undefined),
++    unavailableGatewayMethods: new Set(),
++    ...overrides,
++    configRevisionProjector: overrides.configRevisionProjector ?? {
++      projectRawHash: (hash) => hash,
++      projectResolvedHash: (hash) => hash,
++    },
++  };
++}
+diff --git a/src/gateway/server-request-context.test.ts b/src/gateway/server-request-context.test.ts
+index 06667582..a14e1d68 100644
+--- a/src/gateway/server-request-context.test.ts
++++ b/src/gateway/server-request-context.test.ts
+@@ -15,119 +15,11 @@ import {
+   resolveUserProfileId,
+ } from "../state/user-profiles.js";
+ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+-import { createChatRunState } from "./server-chat-state.js";
+ import type { GatewayServerLiveState } from "./server-live-state.js";
+ import { createGatewayRequestContext } from "./server-request-context.js";
++import { makeContextParams, makeCronState } from "./server-request-context.test-support.js";
+ import type { GatewayWsClient } from "./server/ws-types.js";
+ 
+-type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext>[0];
+-type TestCronState = GatewayServerLiveState["cronState"];
+-
+-function makeCronState(overrides: Partial<TestCronState> = {}): TestCronState {
+-  return {
+-    cron: { start: vi.fn(), stop: vi.fn() } as never,
+-    storePath: "/tmp/cron",
+-    cronEnabled: true,
+-    reconcileExitWatchers: vi.fn(async () => {}),
+-    reconcileStreamWatchers: vi.fn(async () => {}),
+-    stopStreamWatchers: vi.fn(async () => {}),
+-    reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+-    ...overrides,
+-  };
+-}
+-
+-function makeContextParams(
+-  overrides: Partial<GatewayRequestContextParams> = {},
+-): GatewayRequestContextParams {
+-  const config = {} as never;
+-  const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
+-    cronState: makeCronState({
+-      cron: { start: vi.fn(), stop: vi.fn() } as never,
+-      storePath: "/tmp/cron",
+-    }),
+-  };
+-  return {
+-    deps: {} as never,
+-    runtimeState,
+-    getRuntimeConfig: vi.fn(() => config),
+-    getGatewayMethodRegistry: vi.fn(() => ({}) as never),
+-    sessionCompanion: {} as never,
+-    sessionObserver: {} as never,
+-    resolveTerminalLaunchPolicy: vi.fn(() => ({
+-      ok: false as const,
+-      block: { kind: "disabled" as const },
+-    })),
+-    isTerminalEnabled: vi.fn(() => false),
+-    execApprovalManager: undefined,
+-    pluginApprovalManager: undefined,
+-    validateAgentRuntimeApprovalAuthority: () => false,
+-    listSessionPendingApprovals: undefined,
+-    loadGatewayModelCatalog: vi.fn(async () => []),
+-    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
+-      agentId: "main",
+-      agentDir: "/tmp/model-catalog-agent",
+-      catalogComplete: false,
+-      workspaceDir: "/tmp/model-catalog-workspace",
+-      config,
+-      entries: [],
+-      routeVariants: [],
+-    })),
+-    readChatMetadata: vi.fn(async () => ({ swarmEnabled: false })),
+-    getHealthCache: vi.fn(() => null),
+-    refreshHealthSnapshot: vi.fn(async () => ({}) as never),
+-    logHealth: { error: vi.fn() },
+-    logGateway: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
+-    incrementPresenceVersion: vi.fn(() => 1),
+-    getHealthVersion: vi.fn(() => 1),
+-    broadcast: vi.fn(),
+-    broadcastToConnIds: vi.fn(),
+-    nodeSendToSession: vi.fn(),
+-    nodeSendToAllSubscribed: vi.fn(),
+-    nodeSubscribe: vi.fn(),
+-    nodeUnsubscribe: vi.fn(),
+-    nodeUnsubscribeAll: vi.fn(),
+-    hasConnectedTalkNode: vi.fn(async () => false),
+-    clients: new Set(),
+-    isConnectionActive: vi.fn(() => false),
+-    enforceSharedGatewayAuthGenerationForConfigWrite: vi.fn(),
+-    nodeRegistry: { invalidateConnectionForPairingChange: vi.fn() } as never,
+-    agentRunSeq: new Map(),
+-    chatAbortControllers: new Map(),
+-    chatQueuedTurns: new Map(),
+-    chatRunState: createChatRunState(),
+-    addChatRun: vi.fn(),
+-    removeChatRun: vi.fn(),
+-    subscribeSessionEvents: vi.fn(),
+-    unsubscribeSessionEvents: vi.fn(),
+-    subscribeSessionMessageEvents: vi.fn(),
+-    unsubscribeSessionMessageEvents: vi.fn(),
+-    unsubscribeAllSessionEvents: vi.fn(),
+-    getSessionEventSubscriberConnIds: vi.fn(() => new Set<string>()),
+-    registerToolEventRecipient: vi.fn(),
+-    dedupe: new Map(),
+-    wizardSessions: new Map(),
+-    systemAgentSessions: new Map(),
+-    findRunningWizard: vi.fn(() => null),
+-    purgeWizardSession: vi.fn(),
+-    getRuntimeSnapshot: vi.fn(() => ({}) as never),
+-    startChannel: vi.fn(async () => undefined),
+-    stopChannel: vi.fn(async () => undefined),
+-    markChannelLoggedOut: vi.fn(),
+-    wizardRunner: vi.fn(async () => undefined),
+-    channelWizardRunner: vi.fn(async () => undefined),
+-    broadcastVoiceWakeChanged: vi.fn(),
+-    broadcastVoiceWakeRoutingChanged: vi.fn(),
+-    notifyPluginMetadataChanged: vi.fn(),
+-    getConfigReloaderHotReloadStatus: vi.fn(() => undefined),
+-    unavailableGatewayMethods: new Set(),
+-    ...overrides,
+-    configRevisionProjector: overrides.configRevisionProjector ?? {
+-      projectRawHash: (hash) => hash,
+-      projectResolvedHash: (hash) => hash,
+-    },
+-  };
+-}
+-
+ function makeGatewayClient(params: {
+   connId: string;
+   clientId: (typeof GATEWAY_CLIENT_IDS)[keyof typeof GATEWAY_CLIENT_IDS];
+diff --git a/src/state/openclaw-agent-db-identity.ts b/src/state/openclaw-agent-db-identity.ts
+new file mode 100644
+index 00000000..d0fb9305
+--- /dev/null
++++ b/src/state/openclaw-agent-db-identity.ts
+@@ -0,0 +1,48 @@
++import { statSync } from "node:fs";
++import type { DatabaseSync } from "node:sqlite";
++import { resolveGlobalSingleton } from "../shared/global-singleton.js";
++
++export type OpenClawAgentDatabaseIdentity = string | symbol;
++const identities = resolveGlobalSingleton(
++  Symbol.for("openclaw.agentDatabaseIdentities"),
++  () =>
++    new WeakMap<
++      DatabaseSync,
++      { identity: OpenClawAgentDatabaseIdentity; filename: string; birthtime?: bigint }
++    >(),
++);
++
++/** Capture the physical file at open, never by resolving a predecessor's path later. */
++export function registerOpenClawAgentDatabaseIdentity(db: DatabaseSync): void {
++  const filename = db.location() ?? "";
++  const file = filename ? statSync(filename, { bigint: true }) : undefined;
++  identities.set(db, {
++    identity: file ? `${file.dev}:${file.ino}` : Symbol("incognito-agent-database"),
++    filename,
++    birthtime: file?.birthtimeNs,
++  });
++}
++
++/** A cached connection cannot prove continuity after its pathname has been replaced. */
++export function readOpenClawAgentDatabaseIdentity(database: {
++  db: DatabaseSync;
++  path: string;
++}): OpenClawAgentDatabaseIdentity {
++  const captured = identities.get(database.db);
++  if (!captured || !database.db.isOpen) {
++    throw new Error("Session database identity is unavailable");
++  }
++  if (typeof captured.identity === "symbol") {
++    return captured.identity;
++  }
++  const current = statSync(database.path, { bigint: true, throwIfNoEntry: false });
++  if (
++    !current ||
++    database.db.location() !== captured.filename ||
++    `${current.dev}:${current.ino}` !== captured.identity ||
++    current.birthtimeNs !== captured.birthtime
++  ) {
++    throw new Error("Session database changed while starting work. Retry.");
++  }
++  return captured.identity;
++}
+diff --git a/src/state/openclaw-agent-db.ts b/src/state/openclaw-agent-db.ts
+index 799117a0..763a351e 100644
+--- a/src/state/openclaw-agent-db.ts
++++ b/src/state/openclaw-agent-db.ts
+@@ -35,6 +35,7 @@ import type {
+   OpenClawAgentDatabaseOptions,
+   OpenClawAgentDatabaseOwnerInspection,
+ } from "./openclaw-agent-db-contract.js";
++import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
+ import {
+   AGENT_DATABASE_MAINTENANCE_LEASE,
+   assertNoOpenClawAgentDatabaseLeases,
+@@ -261,6 +262,7 @@ export function openOpenClawAgentDatabase(
+     // After the collision probe, this sentinel is only a cache key: SQLite opens :memory:,
+     // and no directory, lease, registry row, WAL sidecar, or file write may be created.
+     const db = openNodeSqliteDatabase(":memory:");
++    registerOpenClawAgentDatabaseIdentity(db);
+     configureSqlitePreSchemaPragmas(db, {
+       busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+     });
+@@ -324,6 +326,7 @@ export function openOpenClawAgentDatabase(
+     // pressure the 65th open would otherwise fail before eviction could run.
+     evictLruAgentDatabaseHandles();
+     const db = openNodeSqliteDatabase(pathname);
++    registerOpenClawAgentDatabaseIdentity(db);
+     enableNodeSqliteKyselyStatementCache(db);
+     openedDb = db;
+     // Eviction churn must avoid migration/convergence and registry busy waits.

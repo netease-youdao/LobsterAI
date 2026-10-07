@@ -1,0 +1,682 @@
+diff --git a/src/agents/prepared-model-catalog-worker-boundary.test.ts b/src/agents/prepared-model-catalog-worker-boundary.test.ts
+new file mode 100644
+index 00000000..94c7f051
+--- /dev/null
++++ b/src/agents/prepared-model-catalog-worker-boundary.test.ts
+@@ -0,0 +1,12 @@
++import { expect, it, vi } from "vitest";
++
++vi.mock("node:worker_threads", () => ({ parentPort: null, workerData: undefined }));
++
++vi.mock("./prepared-model-catalog-worker.js", () => {
++  throw new Error("worker imported host-side catalog orchestration");
++});
++
++it("loads the worker task entry without host-side orchestration", async () => {
++  const worker = await import("./prepared-model-catalog.worker.js");
++  expect(typeof worker.runPreparedModelCatalogWorkerRequest).toBe("function");
++});
+diff --git a/src/agents/prepared-model-catalog-worker-contract.ts b/src/agents/prepared-model-catalog-worker-contract.ts
+new file mode 100644
+index 00000000..bc50dbc5
+--- /dev/null
++++ b/src/agents/prepared-model-catalog-worker-contract.ts
+@@ -0,0 +1,83 @@
++/** Serializable worker protocol and generation identity, without host orchestration. */
++import { stableStringify } from "@openclaw/normalization-core";
++import type { serializeConfigResolutionFacts } from "../config/resolution-facts.js";
++import { sha256Base64Url } from "../infra/crypto-digest.js";
++import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
++import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
++import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
++import type { AuthProfileStore } from "./auth-profiles/types.js";
++import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
++import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
++
++const fingerprintPreparedRuntimeFacts = (value: unknown): string =>
++  sha256Base64Url(stableStringify(value));
++
++export type PreparedModelCatalogWorkerInput = Readonly<{
++  kind: "catalog";
++  generationFingerprint: string;
++  input: PreparedModelRuntimeInput;
++  sourceConfigForSecrets: PreparedModelRuntimeInput["config"];
++  configResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
++  sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
++  authStore: AuthProfileStore;
++  providerIds: readonly string[];
++  pluginMetadataSnapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">;
++}>;
++
++export type PreparedModelWorkerRequest =
++  | Readonly<{ requestId: number; kind: "catalog" }>
++  | Readonly<{
++      requestId: number;
++      kind: "auth-refresh";
++      profileIds?: readonly string[];
++      providerIds: readonly string[];
++    }>;
++export type PreparedModelWorkerResult =
++  | Readonly<{
++      status: "ok";
++      requestId: number;
++      kind: "catalog";
++      generationFingerprint: string;
++      snapshot: ModelCatalogSnapshot;
++      authStore: AuthProfileStore;
++      authModes: PreparedAgentCredentialModes;
++    }>
++  | Readonly<{
++      status: "ok";
++      requestId: number;
++      kind: "auth-refresh";
++      generationFingerprint: string;
++      authStore: AuthProfileStore;
++      authModes: PreparedAgentCredentialModes;
++    }>
++  | Readonly<{ status: "failed"; requestId: number; error: string }>;
++
++function fingerprintPreparedModelCatalogPlugins(snapshot: PluginMetadataSnapshot): string {
++  return fingerprintPreparedRuntimeFacts({
++    config: snapshot.configFingerprint ?? null,
++    index: resolveInstalledManifestRegistryIndexFingerprint(snapshot.index),
++    pluginIds: snapshot.pluginIds ?? null,
++    policy: snapshot.policyHash,
++    workspaceDir: snapshot.workspaceDir ?? null,
++  });
++}
++
++export function fingerprintPreparedModelCatalogGeneration(params: {
++  input: PreparedModelRuntimeInput;
++  sourceConfigForSecrets: PreparedModelRuntimeInput["config"];
++  configResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
++  sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
++  authStore: AuthProfileStore;
++  providerIds: readonly string[];
++  pluginMetadataSnapshot: PluginMetadataSnapshot;
++}): string {
++  return fingerprintPreparedRuntimeFacts({
++    input: params.input,
++    sourceConfigForSecrets: params.sourceConfigForSecrets,
++    configResolutionFacts: params.configResolutionFacts,
++    sourceConfigResolutionFacts: params.sourceConfigResolutionFacts,
++    authStore: params.authStore,
++    providerIds: params.providerIds,
++    pluginFingerprint: fingerprintPreparedModelCatalogPlugins(params.pluginMetadataSnapshot),
++  });
++}
+diff --git a/src/agents/prepared-model-catalog-worker.ts b/src/agents/prepared-model-catalog-worker.ts
+index 87ca46c6..805956dd 100644
+--- a/src/agents/prepared-model-catalog-worker.ts
++++ b/src/agents/prepared-model-catalog-worker.ts
+@@ -1,4 +1,3 @@
+-/** Runs complete model-catalog discovery outside the Gateway event loop. */
+ import path from "node:path";
+ import { fileURLToPath, pathToFileURL } from "node:url";
+ import { Worker } from "node:worker_threads";
+@@ -7,12 +6,16 @@ import {
+   serializeConfigResolutionFacts,
+ } from "../config/resolution-facts.js";
+ import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
+-import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
+ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+-import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+ import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
+-import type { AuthProfileStore } from "./auth-profiles/types.js";
+ import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
++/** Runs complete model-catalog discovery outside the Gateway event loop. */
++import {
++  fingerprintPreparedModelCatalogGeneration,
++  type PreparedModelCatalogWorkerInput,
++  type PreparedModelWorkerRequest,
++  type PreparedModelWorkerResult,
++} from "./prepared-model-catalog-worker-contract.js";
+ import {
+   setPreparedModelFullCatalogAuth,
+   type PreparedModelRuntimeAuth,
+@@ -20,30 +23,16 @@ import {
+ } from "./prepared-model-runtime-auth.js";
+ import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
+ import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+-import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
+ import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
+ import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
+ 
+-export type PreparedModelCatalogWorkerInput = Readonly<{
+-  kind: "catalog";
+-  generationFingerprint: string;
+-  input: PreparedModelRuntimeInput;
+-  sourceConfigForSecrets: PreparedModelRuntimeInput["config"];
+-  configResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
+-  sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
+-  authStore: AuthProfileStore;
+-  providerIds: readonly string[];
+-  pluginMetadataSnapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">;
+-}>;
++export { fingerprintPreparedModelCatalogGeneration } from "./prepared-model-catalog-worker-contract.js";
++export type {
++  PreparedModelCatalogWorkerInput,
++  PreparedModelWorkerRequest,
++  PreparedModelWorkerResult,
++} from "./prepared-model-catalog-worker-contract.js";
+ 
+-export type PreparedModelWorkerRequest =
+-  | Readonly<{ requestId: number; kind: "catalog" }>
+-  | Readonly<{
+-      requestId: number;
+-      kind: "auth-refresh";
+-      profileIds?: readonly string[];
+-      providerIds: readonly string[];
+-    }>;
+ type PreparedModelWorkerRequestInput =
+   | Readonly<{ kind: "catalog" }>
+   | Readonly<{
+@@ -52,61 +41,11 @@ type PreparedModelWorkerRequestInput =
+       providerIds: readonly string[];
+     }>;
+ 
+-export type PreparedModelWorkerResult =
+-  | Readonly<{
+-      status: "ok";
+-      requestId: number;
+-      kind: "catalog";
+-      generationFingerprint: string;
+-      snapshot: ModelCatalogSnapshot;
+-      authStore: AuthProfileStore;
+-      authModes: PreparedAgentCredentialModes;
+-    }>
+-  | Readonly<{
+-      status: "ok";
+-      requestId: number;
+-      kind: "auth-refresh";
+-      generationFingerprint: string;
+-      authStore: AuthProfileStore;
+-      authModes: PreparedAgentCredentialModes;
+-    }>
+-  | Readonly<{ status: "failed"; requestId: number; error: string }>;
+-
+ // Cold source/plugin loading can take well over a minute. Three minutes preserves exact full-view
+ // discovery while bounding a wedged provider; expiry rejects and never returns partial results.
+ const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
+ const PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS = 25;
+ 
+-function fingerprintPreparedModelCatalogPlugins(snapshot: PluginMetadataSnapshot): string {
+-  return fingerprintPreparedRuntimeFacts({
+-    config: snapshot.configFingerprint ?? null,
+-    index: resolveInstalledManifestRegistryIndexFingerprint(snapshot.index),
+-    pluginIds: snapshot.pluginIds ?? null,
+-    policy: snapshot.policyHash,
+-    workspaceDir: snapshot.workspaceDir ?? null,
+-  });
+-}
+-
+-export function fingerprintPreparedModelCatalogGeneration(params: {
+-  input: PreparedModelRuntimeInput;
+-  sourceConfigForSecrets: PreparedModelRuntimeInput["config"];
+-  configResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
+-  sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
+-  authStore: AuthProfileStore;
+-  providerIds: readonly string[];
+-  pluginMetadataSnapshot: PluginMetadataSnapshot;
+-}): string {
+-  return fingerprintPreparedRuntimeFacts({
+-    input: params.input,
+-    sourceConfigForSecrets: params.sourceConfigForSecrets,
+-    configResolutionFacts: params.configResolutionFacts,
+-    sourceConfigResolutionFacts: params.sourceConfigResolutionFacts,
+-    authStore: params.authStore,
+-    providerIds: params.providerIds,
+-    pluginFingerprint: fingerprintPreparedModelCatalogPlugins(params.pluginMetadataSnapshot),
+-  });
+-}
+-
+ export function createPreparedModelCatalogWorkerInput(params: {
+   agentFacts: PreparedModelRuntimeAgentFacts;
+   pluginMetadataSnapshot: PluginMetadataSnapshot;
+diff --git a/src/agents/prepared-model-catalog.worker.ts b/src/agents/prepared-model-catalog.worker.ts
+index 356d58cf..983986aa 100644
+--- a/src/agents/prepared-model-catalog.worker.ts
++++ b/src/agents/prepared-model-catalog.worker.ts
+@@ -26,7 +26,7 @@ import {
+   type PreparedModelCatalogWorkerInput,
+   type PreparedModelWorkerRequest,
+   type PreparedModelWorkerResult,
+-} from "./prepared-model-catalog-worker.js";
++} from "./prepared-model-catalog-worker-contract.js";
+ import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
+ import { AuthStorage } from "./sessions/auth-storage.js";
+ 
+diff --git a/src/commands/doctor-config-preflight.plugin-persistence.test.ts b/src/commands/doctor-config-preflight.plugin-persistence.test.ts
+index 08879fd6..6c25a3a1 100644
+--- a/src/commands/doctor-config-preflight.plugin-persistence.test.ts
++++ b/src/commands/doctor-config-preflight.plugin-persistence.test.ts
+@@ -479,16 +479,21 @@ describe("Doctor plugin persistence", () => {
+         let identity: ReturnType<typeof resolveMigrationCheckpointIdentity> = null;
+         // Pin the build input, not the result: source-only runtimes intentionally cannot record.
+         // Identity, lease, formatting, and SQLite behavior still use the real checkpoint owner.
++        const realCheckpointStatus = migrationCheckpoint.readMigrationCheckpointStatus;
+         const realNeedsCheckpoint = migrationCheckpoint.needsStateMigrationCheckpoint;
+         const realRecordCheckpoint = migrationCheckpoint.recordSuccessfulStateMigrations;
+         const needsCheckpoint = vi
+           .spyOn(migrationCheckpoint, "needsStateMigrationCheckpoint")
+           .mockImplementation((params) => realNeedsCheckpoint({ ...params, buildIdentity }));
++        const checkpointStatus = vi
++          .spyOn(migrationCheckpoint, "readMigrationCheckpointStatus")
++          .mockImplementation((params) => realCheckpointStatus({ ...params, buildIdentity }));
+         const recordCheckpoint = vi
+           .spyOn(migrationCheckpoint, "recordSuccessfulStateMigrations")
+           .mockImplementation((params) => realRecordCheckpoint({ ...params, buildIdentity }));
+         onTestFinished(() => {
+           needsCheckpoint.mockRestore();
++          checkpointStatus.mockRestore();
+           recordCheckpoint.mockRestore();
+         });
+         const readStateCheckpoint = () => {
+diff --git a/src/commands/doctor-config-preflight.state-migration.test.ts b/src/commands/doctor-config-preflight.state-migration.test.ts
+index 2b92c29c..284c2a5c 100644
+--- a/src/commands/doctor-config-preflight.state-migration.test.ts
++++ b/src/commands/doctor-config-preflight.state-migration.test.ts
+@@ -77,8 +77,9 @@ const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
+ const collectCronCodexRuntimePolicyTargetsReadOnly = vi.hoisted(() =>
+   vi.fn(async () => ({ targets: [] as Array<{ modelRef: string }>, warnings: [] as string[] })),
+ );
+-const needsStateMigrationCheckpoint = vi.hoisted(() => vi.fn(() => false));
+-const needsStartupMigrationCheckpoint = vi.hoisted(() => vi.fn(() => false));
++const readMigrationCheckpointStatus = vi.hoisted(() =>
++  vi.fn<() => "stale" | "state-current" | "startup-current">(() => "startup-current"),
++);
+ const startupMigrationLeaseHeartbeat = vi.hoisted(() => vi.fn());
+ const startupMigrationLeaseRelease = vi.hoisted(() => vi.fn());
+ const startupMigrationLeaseAssertOwnedInTransaction = vi.hoisted(() => vi.fn());
+@@ -206,8 +207,7 @@ vi.mock("./doctor/cron/legacy-repair.js", () => ({
+ 
+ vi.mock("../infra/startup-migration-checkpoint.js", () => ({
+   acquireStartupMigrationLeaseWithWait,
+-  needsStateMigrationCheckpoint,
+-  needsStartupMigrationCheckpoint,
++  readMigrationCheckpointStatus,
+   recordSuccessfulStateMigrations,
+   recordSuccessfulStartupMigrations,
+ }));
+@@ -260,8 +260,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+     findDoctorLegacyConfigIssues.mockReset();
+     findDoctorLegacyConfigIssues.mockReturnValue([]);
+     setActiveDegradedPlugins([]);
+-    needsStartupMigrationCheckpoint.mockReturnValue(false);
+-    needsStateMigrationCheckpoint.mockImplementation(() => needsStartupMigrationCheckpoint());
++    readMigrationCheckpointStatus.mockReturnValue("startup-current");
+     runPostCorePluginConvergence.mockResolvedValue(makeStartupConvergenceResult());
+     planStartupPluginConvergence.mockResolvedValue({ required: true, installRecords: {} });
+     planPristineStartupStateMigrations.mockReturnValue({
+@@ -343,7 +342,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+       measuredStages.push(name);
+       return await run();
+     };
+-    needsStartupMigrationCheckpoint.mockReturnValue(false);
++    readMigrationCheckpointStatus.mockReturnValue("startup-current");
+ 
+     await runDoctorConfigPreflight({
+       migrateState: true,
+@@ -371,7 +370,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+     { name: "leaves the checkpoint stale after a warning", needed: true, warnings: ["warning"] },
+   ])("$name", async ({ needed, warnings }) => {
+     vi.clearAllMocks();
+-    needsStateMigrationCheckpoint.mockReturnValue(needed);
++    readMigrationCheckpointStatus.mockReturnValue(needed ? "stale" : "state-current");
+     autoMigrateLegacyStateDir.mockResolvedValue({
+       migrated: false,
+       skipped: false,
+@@ -435,7 +434,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("does not touch the startup checkpoint before the startup guard accepts", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+ 
+     await expect(
+       runDoctorConfigPreflight({
+@@ -446,13 +445,13 @@ describe("runDoctorConfigPreflight state migration", () => {
+       }),
+     ).rejects.toThrow("selected config changed during startup");
+ 
+-    expect(needsStartupMigrationCheckpoint).not.toHaveBeenCalled();
++    expect(readMigrationCheckpointStatus).not.toHaveBeenCalled();
+     expect(acquireStartupMigrationLeaseWithWait).not.toHaveBeenCalled();
+     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+   });
+ 
+   it("releases the startup lease when the fresh config guard rejects", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-original-state";
+     let leaseEnv: NodeJS.ProcessEnv | undefined;
+@@ -498,7 +497,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("releases the startup lease before propagating a deferred service exit", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     const deferredExit = new ExitError(78);
+     const beforeStateMigrations = vi
+       .fn<(_snapshot?: Record<string, unknown>) => Promise<boolean>>()
+@@ -582,8 +581,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("rechecks the checkpoint after acquisition before running migrations", async () => {
+-    needsStateMigrationCheckpoint.mockReturnValueOnce(true).mockReturnValue(false);
+-    needsStartupMigrationCheckpoint.mockReturnValueOnce(true).mockReturnValue(false);
++    readMigrationCheckpointStatus.mockReturnValueOnce("stale").mockReturnValue("startup-current");
+ 
+     await runDoctorConfigPreflight(startupCheckpointOptions);
+ 
+@@ -596,7 +594,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("pins startup plugin convergence without re-persisting the installed record snapshot", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     const previousHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+     process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = "2026.7.2-beta.7";
+ 
+@@ -618,7 +616,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("repairs managed host links before plugin state migration", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     const migrationOrder: string[] = [];
+     maybeRepairPluginOpenClawHostLinks.mockImplementationOnce(async ({ env, prompter }) => {
+       migrationOrder.push("host-links");
+@@ -637,7 +635,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("refuses startup when fresh plugin migration inputs change during convergence", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     pluginMigrationFingerprint.mockImplementation((allowCurrentPluginMetadata) =>
+       runPostCorePluginConvergence.mock.calls.length > 0 && allowCurrentPluginMetadata === false
+         ? "plugin-migrations-after"
+@@ -660,7 +658,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("records the authoritative startup checkpoint after notices and runtime replacement", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     pluginMigrationFingerprint.mockImplementation((allowCurrentPluginMetadata) =>
+       runPostCorePluginConvergence.mock.calls.length > 0 && allowCurrentPluginMetadata !== false
+         ? "plugin-migrations-runtime-current"
+@@ -687,7 +685,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("checkpoints after a dreaming conflict is archived without a migration warning", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     autoMigrateLegacyPluginDoctorState.mockResolvedValueOnce({
+       migrated: true,
+       skipped: false,
+@@ -743,7 +741,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("starts degraded when an installed plugin has no payload path", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     queueConfigSnapshot(
+       {
+         exists: true,
+@@ -796,7 +794,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("checkpoints startup migrations without loading plugin convergence when the plan is empty", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     planStartupPluginConvergence.mockResolvedValueOnce({ required: false, installRecords: {} });
+ 
+     await runDoctorConfigPreflight({
+@@ -814,7 +812,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("skips legacy migration loading for a prepared pristine state root", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     planStartupPluginConvergence.mockResolvedValueOnce({ required: false, installRecords: {} });
+     const beforeStateMigrations = vi.fn(async () => true);
+ 
+@@ -839,7 +837,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("runs only plugin-owned migrations for a pristine core state root", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     planPristineStartupStateMigrations.mockReturnValueOnce({
+       skipAllStateMigrations: false,
+       skipCoreStateMigrations: true,
+@@ -862,7 +860,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("retains the prepared core-state fact and explicit Doctor repair authority", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+ 
+     await runDoctorConfigPreflight({
+       migrateLegacyConfig: false,
+@@ -880,9 +878,8 @@ describe("runDoctorConfigPreflight state migration", () => {
+     });
+   });
+ 
+-  it("blocks gateway readiness when state migration warnings outlive the startup checkpoint", async () => {
+-    needsStateMigrationCheckpoint.mockReturnValue(true);
+-    needsStartupMigrationCheckpoint.mockReturnValue(false);
++  it("blocks gateway readiness when required state migrations report warnings", async () => {
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     autoMigrateLegacyStateDir.mockResolvedValueOnce({
+       migrated: false,
+       skipped: false,
+@@ -899,7 +896,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("checkpoints readiness and reports plugin repair warnings", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     runPostCorePluginConvergence.mockResolvedValueOnce(
+       makeStartupConvergenceResult({
+         warnings: [
+@@ -928,7 +925,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("quarantines a plugin payload verification failure and checkpoints readiness", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     queueConfigSnapshot(
+       {
+         exists: true,
+@@ -1002,7 +999,7 @@ describe("runDoctorConfigPreflight state migration", () => {
+   });
+ 
+   it("does not checkpoint startup migrations when the config snapshot is invalid", async () => {
+-    needsStartupMigrationCheckpoint.mockReturnValue(true);
++    readMigrationCheckpointStatus.mockReturnValue("stale");
+     queueConfigSnapshot(
+       {
+         exists: true,
+diff --git a/src/commands/doctor-config-preflight.test.ts b/src/commands/doctor-config-preflight.test.ts
+index 85c3e495..8e9e980a 100644
+--- a/src/commands/doctor-config-preflight.test.ts
++++ b/src/commands/doctor-config-preflight.test.ts
+@@ -42,6 +42,7 @@ vi.mock("../infra/startup-migration-checkpoint.js", async (importActual) => {
+     ((params?: P) => fn({ buildIdentity: "test-build", ...params } as P)) as typeof fn;
+   return {
+     ...actual,
++    readMigrationCheckpointStatus: pin(actual.readMigrationCheckpointStatus),
+     needsStartupMigrationCheckpoint: pin(actual.needsStartupMigrationCheckpoint),
+     needsStateMigrationCheckpoint: pin(actual.needsStateMigrationCheckpoint),
+     recordSuccessfulStartupMigrations: pin(actual.recordSuccessfulStartupMigrations),
+diff --git a/src/commands/doctor-config-preflight.ts b/src/commands/doctor-config-preflight.ts
+index 206771fe..8efd861d 100644
+--- a/src/commands/doctor-config-preflight.ts
++++ b/src/commands/doctor-config-preflight.ts
+@@ -171,18 +171,18 @@ export async function runDoctorConfigPreflight(
+       baseConfig: snapshot.sourceConfig ?? snapshot.config ?? {},
+       pluginMigrationFingerprint,
+     });
+-    shouldRecordStateCheckpoint =
+-      stateMigrationsRequested &&
+-      checkpoint.needsStateMigrationCheckpoint({
+-        env: startupMigrationEnv,
+-        identity: migrationCheckpointIdentity,
+-      });
+-    shouldRecordStartupCheckpoint =
+-      gatewayStartupCheckpointRequired &&
+-      checkpoint.needsStartupMigrationCheckpoint({
++    shouldRecordStateCheckpoint = stateMigrationsRequested;
++    shouldRecordStartupCheckpoint = gatewayStartupCheckpointRequired;
++    if (shouldRecordStateCheckpoint || shouldRecordStartupCheckpoint) {
++      // Each physical checkpoint open verifies the complete database. Share this read
++      // between the two decisions, but retain every later refresh under the lease.
++      const status = checkpoint.readMigrationCheckpointStatus({
+         env: startupMigrationEnv,
+         identity: migrationCheckpointIdentity,
+       });
++      shouldRecordStateCheckpoint &&= status === "stale";
++      shouldRecordStartupCheckpoint &&= status !== "startup-current";
++    }
+     shouldPersistRefreshedPluginIndex = needsRefreshedPluginIndexPersistence(snapshotRead);
+   };
+   const ensureStartupMigrationLease = async () => {
+diff --git a/src/infra/startup-migration-checkpoint.test.ts b/src/infra/startup-migration-checkpoint.test.ts
+index 4d790777..6e0a6b0a 100644
+--- a/src/infra/startup-migration-checkpoint.test.ts
++++ b/src/infra/startup-migration-checkpoint.test.ts
+@@ -28,6 +28,7 @@ import {
+   needsStateMigrationCheckpoint,
+   needsStartupMigrationCheckpoint,
+   readStartupMigrationVersion,
++  readMigrationCheckpointStatus,
+   recordSuccessfulStateMigrations,
+   recordSuccessfulStartupMigrations,
+   STARTUP_MIGRATION_LEASE_TTL_MS,
+@@ -717,3 +718,80 @@ describe("startup migration checkpoint", () => {
+     expect(row).toBeUndefined();
+   });
+ });
++
++describe("combined migration checkpoint inspection", () => {
++  function fixture() {
++    return {
++      env: { OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-combined-checkpoint-") },
++      buildIdentity: "combined-test-build",
++      identity: migrationIdentity,
++    };
++  }
++
++  it("reads both decisions with one verified SQLite connection and observes later changes", () => {
++    const params = fixture();
++    recordSuccessfulStartupMigrations(params);
++    // A legacy gateway marker proves both scopes without a separate state marker.
++    const legacy = new (requireNodeSqlite().DatabaseSync)(
++      resolveOpenClawStateSqlitePath(params.env),
++    );
++    try {
++      legacy.exec("DELETE FROM schema_meta WHERE meta_key = 'state-migrations'");
++    } finally {
++      legacy.close();
++    }
++    const prepare = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "prepare");
++    const scans = () =>
++      prepare.mock.calls.filter(([sql]) => /PRAGMA integrity_check/i.test(sql)).length;
++    expect(needsStateMigrationCheckpoint(params)).toBe(false);
++    expect(needsStartupMigrationCheckpoint(params)).toBe(false);
++    const separateScans = scans();
++    prepare.mockClear();
++    expect(readMigrationCheckpointStatus(params)).toBe("startup-current");
++    expect(scans()).toBe(1);
++    expect(separateScans).toBe(3);
++    prepare.mockRestore();
++
++    const db = new (requireNodeSqlite().DatabaseSync)(resolveOpenClawStateSqlitePath(params.env));
++    try {
++      db.exec("DELETE FROM schema_meta WHERE meta_key = 'startup-migrations'");
++    } finally {
++      db.close();
++    }
++    expect(readMigrationCheckpointStatus(params)).toBe("stale");
++    recordSuccessfulStateMigrations(params);
++    expect(readMigrationCheckpointStatus(params)).toBe("state-current");
++    recordSuccessfulStartupMigrations(params);
++    expect(readMigrationCheckpointStatus(params)).toBe("startup-current");
++    for (const field of Object.keys(migrationIdentity)) {
++      expect(
++        readMigrationCheckpointStatus({
++          ...params,
++          identity: { ...migrationIdentity, [field]: "changed" },
++        }),
++      ).toBe("stale");
++    }
++    expect(readMigrationCheckpointStatus({ ...params, buildIdentity: "new-build" })).toBe("stale");
++  });
++
++  it("requires migrations for missing markers and absent provenance without creating a database", () => {
++    const params = fixture();
++    expect(readMigrationCheckpointStatus({ ...params, buildIdentity: null })).toBe("stale");
++    expect(existsSync(resolveOpenClawStateSqlitePath(params.env))).toBe(false);
++    expect(readMigrationCheckpointStatus(params)).toBe("stale");
++  });
++
++  it("still rejects failed referential integrity before trusting checkpoint markers", () => {
++    const params = fixture();
++    recordSuccessfulStartupMigrations(params);
++    const db = new (requireNodeSqlite().DatabaseSync)(resolveOpenClawStateSqlitePath(params.env));
++    try {
++      db.exec(
++        "PRAGMA foreign_keys = OFF; CREATE TABLE combined_parent(id INTEGER PRIMARY KEY); CREATE TABLE combined_child(parent_id INTEGER REFERENCES combined_parent(id)); INSERT INTO combined_child VALUES(1)",
++      );
++    } finally {
++      db.close();
++    }
++    expect(() => readMigrationCheckpointStatus(params)).toThrow("foreign_key_check failed");
++  });
++});
+diff --git a/src/infra/startup-migration-checkpoint.ts b/src/infra/startup-migration-checkpoint.ts
+index 4dfd0e3f..3fa6eb37 100644
+--- a/src/infra/startup-migration-checkpoint.ts
++++ b/src/infra/startup-migration-checkpoint.ts
+@@ -312,6 +312,39 @@ function needsMigrationCheckpoint(
+   return readMigrationCheckpoint(env, metaKey) !== checkpoint;
+ }
+ 
++/** Read both migration scopes through one integrity-verified physical connection. */
++export function readMigrationCheckpointStatus(
++  params: MigrationCheckpointParams = {},
++): "stale" | "state-current" | "startup-current" {
++  const buildIdentity =
++    params.buildIdentity === undefined
++      ? resolveStartupMigrationBuildIdentity()
++      : params.buildIdentity;
++  const checkpoint = formatStartupMigrationCheckpoint({
++    buildIdentity,
++    identity: params.identity,
++    version: params.version ?? VERSION,
++  });
++  if (checkpoint === null) {
++    return "stale";
++  }
++  return withStartupMigrationCheckpointDatabase(params.env ?? process.env, (db) => {
++    const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
++    const current = executeSqliteQuerySync(
++      db,
++      stateDb
++        .selectFrom("schema_meta")
++        .select(["meta_key as metaKey", "app_version as appVersion"])
++        .where("meta_key", "in", [STATE_MIGRATION_META_KEY, STARTUP_MIGRATION_META_KEY]),
++    ).rows.filter((row) => row.appVersion === checkpoint);
++    // Gateway completion also certifies state migration; state completion alone does not.
++    if (current.some((row) => row.metaKey === STARTUP_MIGRATION_META_KEY)) {
++      return "startup-current";
++    }
++    return current.length > 0 ? "state-current" : "stale";
++  });
++}
++
+ export function needsStartupMigrationCheckpoint(params: MigrationCheckpointParams = {}): boolean {
+   return needsMigrationCheckpoint(STARTUP_MIGRATION_META_KEY, params);
+ }
