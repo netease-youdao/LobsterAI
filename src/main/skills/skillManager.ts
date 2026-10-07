@@ -1992,15 +1992,6 @@ export class SkillManager {
         const targetDir = path.join(root, entry.skillKey);
         if (fs.existsSync(targetDir)) continue;
         cpRecursiveSync(srcDir, targetDir);
-        // Record OpenClaw source path so we can remove it on delete
-        try {
-          const metaPath = path.join(targetDir, '_meta.json');
-          const meta = fs.existsSync(metaPath)
-            ? JSON.parse(fs.readFileSync(metaPath, 'utf8'))
-            : {};
-          meta.openclawSourceDir = srcDir;
-          fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n', 'utf8');
-        } catch { /* best-effort */ }
         // Respect disabled state from OpenClaw
         if (entry.disabled) {
           const state = this.loadSkillStateMap();
