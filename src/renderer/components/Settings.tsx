@@ -29,6 +29,7 @@ import {
 } from '../../shared/providers';
 import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, isCustomProvider, normalizeFontPreference, resolveArtifactAutoPreviewEnabled, ShortcutAction, type ShortcutConfig } from '../config';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
+import { OPEN_SOURCE_ENTERPRISE_UI_KEY } from '../constants/openSource';
 import { useSkin } from '../providers/SkinProvider';
 import { apiService } from '../services/api';
 import { configService } from '../services/config';
@@ -74,6 +75,7 @@ import PlugIcon from './icons/PlugIcon';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import IMSettings from './im/IMSettings';
 import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle } from './plugins/PluginsSettings';
+import { AboutOpenSourceAction, AboutOpenSourceRows, AboutOpenSourceStarPrompt } from './settings/AboutOpenSource';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
 import {
   buildOpenAICompatibleChatCompletionsUrl,
@@ -699,6 +701,10 @@ const reportAboutAction = (
     result,
     missingEntryCount: options.missingEntryCount,
   });
+};
+
+const reportAboutOpenSourceAction = (action: AboutOpenSourceAction): void => {
+  reportAboutAction(action, 'success');
 };
 
 const reportAgentEngineSettingChanged = (
@@ -1557,6 +1563,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [testModeUnlocked, setTestModeUnlocked] = useState(false);
   const [updateCheckStatus, setUpdateCheckStatus] = useState<'idle' | 'checking' | 'upToDate' | 'error' | 'downloading' | 'ready'>('idle');
   const [appUpdateState, setAppUpdateState] = useState<AppUpdateRuntimeState | null>(null);
+  const showOpenSourceEntries = enterpriseConfig?.ui?.[OPEN_SOURCE_ENTERPRISE_UI_KEY] !== 'hide';
 
   useEffect(() => {
     window.electron.appInfo.getVersion().then(setAppVersion);
@@ -5969,6 +5976,7 @@ const Settings: React.FC<SettingsProps> = ({
                   )}
                 </div>
               </div>
+              {showOpenSourceEntries && <AboutOpenSourceRows onAction={reportAboutOpenSourceAction} />}
               <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 border-b border-border">
                 <span className="shrink-0 text-sm text-foreground">{i18nService.t('aboutContactEmail')}</span>
                 <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
@@ -6037,6 +6045,8 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
               )}
             </div>
+
+            {showOpenSourceEntries && <AboutOpenSourceStarPrompt onAction={reportAboutOpenSourceAction} />}
 
             {/* Footer */}
             <div className="mt-auto w-full pt-14 pb-2 flex flex-col items-center">
