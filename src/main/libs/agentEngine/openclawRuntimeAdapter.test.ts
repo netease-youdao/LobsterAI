@@ -20,6 +20,7 @@ import {
   ContextCompactionStatus,
   CoworkSystemMessageKind,
 } from '../../../common/coworkSystemMessages';
+import { buildScheduledTaskEnginePrompt } from '../../../scheduledTask/enginePrompt';
 import {
   BrowserControlRequestMethod,
   OpenClawBrowserGatewayMethod,
@@ -3363,6 +3364,7 @@ function createRunTurnAdapter(options: {
   autoFinalizeChatSend?: boolean;
   holdChatSend?: boolean;
   stateDir?: string;
+  defaultSystemPrompt?: string;
 } = {}) {
   const session = {
     id: 'session-1',
@@ -3428,6 +3430,9 @@ function createRunTurnAdapter(options: {
       }
       : null),
     updateAgent: () => {},
+    ...(options.defaultSystemPrompt !== undefined
+      ? { getConfig: () => ({ systemPrompt: options.defaultSystemPrompt }) }
+      : {}),
   };
   const engineManager = {
     startGateway: async () => ({ phase: 'running', message: '' }),
@@ -4002,6 +4007,85 @@ test('normal conversation does not receive plan mode instructions', async () => 
   expect(chatSendRequests[0].params.message).not.toContain('# Plan Mode');
   expect(chatSendRequests[0].params.message).not.toContain('[Plan Mode reminder]');
   expect(chatSendRequests[0].params.message).not.toContain('[Plan Mode recovery instruction]');
+});
+
+const withAgentsMdStateDir = async (
+  agentsMdBody: string,
+  run: (stateDir: string) => Promise<void>,
+): Promise<void> => {
+  const stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-system-prompt-dedup-')));
+  try {
+    fs.mkdirSync(path.join(stateDir, 'workspace-main'), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, 'workspace-main', 'AGENTS.md'),
+      `# AGENTS.md\n\n<!-- LobsterAI managed: do not edit below this line -->\n\n${agentsMdBody}\n`,
+      'utf8',
+    );
+    await run(stateDir);
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+};
+
+test('system prompt injection skips sections that AGENTS.md already delivers', async () => {
+  const defaultSystemPrompt = '# Style\n- Keep replies concise and direct.';
+  const scheduledTaskPrompt = buildScheduledTaskEnginePrompt();
+  await withAgentsMdStateDir(
+    `## System Prompt\n\n${defaultSystemPrompt}\n\n${scheduledTaskPrompt}`,
+    async (stateDir) => {
+      const { adapter, requests } = createRunTurnAdapter({ stateDir, defaultSystemPrompt });
+
+      await adapter.continueSession('session-1', 'Summarize this folder', {
+        systemPrompt: [scheduledTaskPrompt, '## Selected skills\n- Use the docx skill.', defaultSystemPrompt].join('\n\n'),
+      });
+
+      const message = requests.find((request) => request.method === 'chat.send')?.params.message;
+      expect(message).toContain('[LobsterAI system instructions]');
+      expect(message).toContain('- Use the docx skill.');
+      expect(message).not.toContain('Keep replies concise and direct.');
+      expect(message).not.toContain('## Scheduled Tasks');
+    },
+  );
+});
+
+test('system prompt injection replaces earlier instructions when AGENTS.md covers the whole prompt', async () => {
+  const defaultSystemPrompt = '# Style\n- Keep replies concise and direct.';
+  const scheduledTaskPrompt = buildScheduledTaskEnginePrompt();
+  await withAgentsMdStateDir(
+    `## System Prompt\n\n${defaultSystemPrompt}\n\n${scheduledTaskPrompt}`,
+    async (stateDir) => {
+      const { adapter, requests } = createRunTurnAdapter({ stateDir, defaultSystemPrompt });
+
+      await adapter.continueSession('session-1', 'Hello', {
+        systemPrompt: [scheduledTaskPrompt, defaultSystemPrompt].join('\n\n'),
+      });
+
+      const message = requests.find((request) => request.method === 'chat.send')?.params.message;
+      expect(message).toContain('If earlier LobsterAI system instructions exist, replace them with this version.');
+      expect(message).toContain('No session-specific instructions apply; follow the workspace instructions in AGENTS.md.');
+      expect(message).not.toContain('Keep replies concise and direct.');
+      expect(message).not.toContain('## Scheduled Tasks');
+    },
+  );
+});
+
+test('system prompt injection keeps AGENTS.md sections when OpenClaw would truncate the file', async () => {
+  const defaultSystemPrompt = '# Style\n- Keep replies concise and direct.';
+  const scheduledTaskPrompt = buildScheduledTaskEnginePrompt();
+  await withAgentsMdStateDir(
+    `${'Long user notes. '.repeat(1_500)}\n\n## System Prompt\n\n${defaultSystemPrompt}\n\n${scheduledTaskPrompt}`,
+    async (stateDir) => {
+      const { adapter, requests } = createRunTurnAdapter({ stateDir, defaultSystemPrompt });
+
+      await adapter.continueSession('session-1', 'Hello', {
+        systemPrompt: [scheduledTaskPrompt, defaultSystemPrompt].join('\n\n'),
+      });
+
+      const message = requests.find((request) => request.method === 'chat.send')?.params.message;
+      expect(message).toContain('Keep replies concise and direct.');
+      expect(message).toContain('## Scheduled Tasks');
+    },
+  );
 });
 
 test('annotation-only turn persists structured metadata and builds a trust-separated prompt', async () => {
