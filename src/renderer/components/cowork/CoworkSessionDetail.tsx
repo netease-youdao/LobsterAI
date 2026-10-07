@@ -168,6 +168,7 @@ import {
   isAtConversationSessionBottom,
   isWheelScrollingAwayFromBottom,
   shouldAutoScrollForPosition,
+  shouldKeepBottomOnViewportResize,
   shouldLoadNewerConversationMessages,
 } from './conversationScrollPolicy';
 import {
@@ -187,6 +188,7 @@ import CoworkBtwFloatingPanel from './CoworkBtwFloatingPanel';
 import CoworkConversationSearch from './CoworkConversationSearch';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
 import QuestionDock from './interactions/QuestionDock';
+import { isQuestionDockRequest } from './interactions/questionDockModel';
 import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
 import {
   buildConversationTurns,
@@ -5871,6 +5873,29 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     }
   }, [messagesLength, lastMessageContent, isContextCompacting, isStreaming, shouldAutoScroll, turns.length]);
 
+  // A shorter viewport (the question dock or a taller prompt input taking room
+  // below it) fires no scroll event of its own, so keep a reader who follows the
+  // conversation at its newest content instead of letting it slide out of view.
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+    let viewportHeight = container.clientHeight;
+    const resizeObserver = new ResizeObserver(() => {
+      const previousHeight = viewportHeight;
+      viewportHeight = container.clientHeight;
+      if (viewportHeight === previousHeight || isExportingImageRef.current || isNavigatingRef.current) return;
+      if (!shouldKeepBottomOnViewportResize(
+        shouldAutoScrollRef.current,
+        container.scrollHeight - container.scrollTop - previousHeight,
+        userDetachedFromBottomRef.current,
+        conversationSearchViewportLockedRef.current,
+      )) return;
+      container.scrollTop = container.scrollHeight;
+    });
+    resizeObserver.observe(container);
+    return () => resizeObserver.disconnect();
+  }, [currentSession?.id]);
+
 
   if (!currentSession) {
     return null;
@@ -5914,6 +5939,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     !isViewportAtSessionBottom
     || (!shouldAutoScroll && !isConversationSearchOpen)
   );
+  // The question dock already separates the conversation from the prompt, so a
+  // short trailing spacer keeps the newest lines in the smaller viewport.
+  const hasDockedQuestion = pendingPermissions.some((permission) => (
+    permission.sessionId === currentSession.id && isQuestionDockRequest(permission)
+  ));
   const expandedConversationPreview = getExpandedConversationPreview(currentSession.messages);
   const resolvedRailIndex = currentRailIndex < 0 || currentRailIndex >= railItems.length
     ? railItems.length - 1
@@ -6494,7 +6524,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               </div>
             </div>
           )}
-          <div className="h-20" />
+          <div className={hasDockedQuestion ? 'h-4' : 'h-20'} />
         </div>
 
         {/* Turn Navigation Rail — to the left of scrollbar */}
