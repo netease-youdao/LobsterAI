@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { updatePluginSkillIdsFromReport } from '../../skills';
-import type { SkillManager } from '../../skills/skillManager';
+import { normalizeSkillDownloadOptions, type SkillManager } from '../../skills/skillManager';
 
 export interface SkillHandlerDeps {
   getSkillManager: () => SkillManager;
@@ -88,8 +88,8 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
     }
   });
 
-  ipcMain.handle('skills:download', async (_event, source: string) => {
-    return getSkillManager().downloadSkill(source);
+  ipcMain.handle('skills:download', async (_event, source: string, options?: unknown) => {
+    return getSkillManager().downloadSkill(source, normalizeSkillDownloadOptions(options));
   });
 
   ipcMain.handle('skills:upgrade', async (_event, skillId: string, downloadUrl: string) => {

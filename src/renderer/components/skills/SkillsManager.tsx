@@ -14,7 +14,7 @@ import { i18nService } from '../../services/i18n';
 import { compareVersions,resolveLocalizedText, skillService } from '../../services/skill';
 import { RootState } from '../../store';
 import { setSkills } from '../../store/slices/skillSlice';
-import { MarketplaceSkill, MarketTag,Skill } from '../../types/skill';
+import { MarketplaceSkill, MarketTag, Skill, SkillImportConflict } from '../../types/skill';
 import { CARD_ACTION_PILL_CLASS, DETAIL_ACTION_PILL_CLASS } from '../common/actionPillStyles';
 import CardOverflowMenu, { type CardOverflowMenuItem } from '../common/CardOverflowMenu';
 import CardToggle from '../common/CardToggle';
@@ -96,6 +96,12 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
   const [selectedMarketplaceSkill, setSelectedMarketplaceSkill] = useState<MarketplaceSkill | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [skillPendingDelete, setSkillPendingDelete] = useState<Skill | null>(null);
+  const [pendingOverwriteImport, setPendingOverwriteImport] = useState<{
+    source: string;
+    sourceType: DirectImportSource;
+    conflicts: SkillImportConflict[];
+  } | null>(null);
+  const [isConfirmingOverwrite, setIsConfirmingOverwrite] = useState(false);
   const [isDeletingSkill, setIsDeletingSkill] = useState(false);
   const [securityReport, setSecurityReport] = useState<SkillSecurityReportData | null>(null);
   const [pendingInstallId, setPendingInstallId] = useState<string | null>(null);
@@ -415,8 +421,21 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
       importTab,
       activeTab,
     });
-    const result = await skillService.downloadSkill(trimmedSource);
+    // Ask before replacing an installed skill with the same ID instead of silently
+    // installing a second copy as `<id>-1`.
+    const result = await skillService.downloadSkill(trimmedSource, { onConflict: 'ask' });
     setIsDownloadingSkill(false);
+    if (result.overwriteConflicts?.length) {
+      setPendingOverwriteImport({ source: trimmedSource, sourceType, conflicts: result.overwriteConflicts });
+      return;
+    }
+    handleImportResult(result, sourceType);
+  };
+
+  const handleImportResult = (
+    result: Awaited<ReturnType<typeof skillService.downloadSkill>>,
+    sourceType: DirectImportSource,
+  ) => {
     console.log('[SkillsManager] downloadSkill result:', JSON.stringify({
       success: result.success,
       error: result.error,
@@ -457,6 +476,25 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
     setSkillDownloadSource('');
     setIsAddSkillMenuOpen(false);
     setIsRemoteImportOpen(false);
+  };
+
+  const handleCancelOverwriteImport = () => {
+    if (isConfirmingOverwrite) return;
+    setPendingOverwriteImport(null);
+  };
+
+  const handleConfirmOverwriteImport = async () => {
+    if (!pendingOverwriteImport || isConfirmingOverwrite) return;
+    const { source, sourceType } = pendingOverwriteImport;
+    setIsConfirmingOverwrite(true);
+    setSkillActionError('');
+    try {
+      const result = await skillService.downloadSkill(source, { onConflict: 'overwrite' });
+      handleImportResult(result, sourceType);
+    } finally {
+      setIsConfirmingOverwrite(false);
+      setPendingOverwriteImport(null);
+    }
   };
 
   const handleUploadSkillZip = async () => {
@@ -2032,6 +2070,55 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary-hover transition-colors disabled:opacity-50"
               >
                 {isDownloadingSkill ? i18nService.t('importingSkill') : i18nService.t('importSkill')}
+              </button>
+            </div>
+        </Modal>
+      , document.body)}
+
+      {pendingOverwriteImport && createPortal(
+        <Modal onClose={handleCancelOverwriteImport} overlayClassName="fixed inset-0 z-[60] flex items-center justify-center bg-black/60" className="w-full max-w-sm mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-5">
+            <div className="text-lg font-semibold text-foreground">
+              {i18nService.t('skillImportConflictTitle')}
+            </div>
+            <p className="mt-2 text-sm text-secondary">
+              {i18nService.t('skillImportConflictMessage')}
+            </p>
+            <div className="mt-3 space-y-2">
+              {pendingOverwriteImport.conflicts.map((conflict) => {
+                const installedSkill = skills.find(skill => skill.id === conflict.id);
+                const displayName = installedSkill
+                  ? skillService.getLocalizedSkillName(installedSkill.id, installedSkill.name)
+                  : conflict.id;
+                return (
+                  <div key={conflict.id} className="rounded-xl border border-border bg-surface-raised px-3 py-2">
+                    <div className="text-sm font-medium text-foreground truncate">{displayName}</div>
+                    <div className={`mt-0.5 ${MANAGEMENT_META_TEXT} text-muted`}>
+                      {i18nService.t('skillImportConflictVersion')
+                        .replace('{installed}', conflict.installedVersion || '-')
+                        .replace('{incoming}', conflict.incomingVersion || '-')}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleCancelOverwriteImport}
+                disabled={isConfirmingOverwrite}
+                className="px-3 py-1.5 text-xs rounded-lg border border-border text-secondary hover:bg-surface-raised transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {i18nService.t('cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmOverwriteImport}
+                disabled={isConfirmingOverwrite}
+                className="px-3 py-1.5 text-xs rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isConfirmingOverwrite
+                  ? i18nService.t('importingSkill')
+                  : i18nService.t('skillImportConflictConfirm')}
               </button>
             </div>
         </Modal>

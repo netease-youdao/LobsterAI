@@ -184,6 +184,7 @@ import type {
 } from '../../shared/skin/types';
 import type { SubscriptionTrialBridge } from '../../shared/subscriptionTrial/constants';
 import type { CoworkTempDirPreview } from './cowork';
+import type { SkillDownloadOptions, SkillImportConflict } from './skill';
 interface ApiResponse {
   ok: boolean;
   status: number;
@@ -681,12 +682,13 @@ interface IElectronAPI {
       enabled: boolean;
     }) => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;
     delete: (id: string) => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;
-    download: (source: string) => Promise<{
+    download: (source: string, options?: SkillDownloadOptions) => Promise<{
       success: boolean;
       skills?: Skill[];
       error?: string;
       auditReport?: any;
       pendingInstallId?: string;
+      overwriteConflicts?: SkillImportConflict[];
     }>;
     upgrade: (
       skillId: string,
