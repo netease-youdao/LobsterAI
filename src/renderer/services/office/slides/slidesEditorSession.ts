@@ -23,7 +23,7 @@ import {
 import { placeCaret, readEditedParagraphs, selectAllIn, selectionIn, setSelectionIn, type TextPosition, wordAt } from './slidesTextEditing';
 import { readTheme } from './slidesTheme';
 import { SlidesThumbnailList } from './slidesThumbnails';
-import { browserXmlCodec, EMU_PER_PX } from './slidesXml';
+import { browserXmlCodec, EMU_PER_PX, pxFromEmu } from './slidesXml';
 
 const AUTOSAVE_DELAY_MS = 700;
 /** Typing reaches the file this long after the last key, as one undo step per edit. */
@@ -37,6 +37,8 @@ const MIN_SHAPE_PX = 4;
 /** Arrow keys move a shape this far at 100%; with Alt, Ctrl or Cmd one pixel. */
 const NUDGE_PX = 8;
 const ZOOM_LIMITS = { min: 0.25, max: 4 } as const;
+/** Fitting goes below the smallest zoom step, so a narrow stage still shows the whole slide. */
+const MIN_FIT_ZOOM = 0.1;
 const PX_PER_PT = 96 / 72;
 /** The theme colors in the order of Office's color menus. */
 const THEME_PALETTE = ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'];
@@ -174,11 +176,12 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
   private version = 0;
   private selectionFrame = 0;
   private readonly slideList = new SlidesThumbnailList({
-    draw: (ref, frame, width) => this.drawThumbnail(ref, frame, width),
+    draw: (ref, frame) => this.drawThumbnail(ref, frame),
     select: index => this.selectSlide(index),
     move: (from, to) => this.moveSlide(from, to),
     remove: () => this.deleteSlide(),
     editable: () => this.editable,
+    toggle: () => this.toggleSlideList(),
   });
   private readonly stage = element('div', 'lobster-slides-stage');
   private readonly canvas = element('div', 'lobster-slides-canvas');
@@ -209,11 +212,14 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
     this.notes.spellcheck = false;
     const main = element('div', 'lobster-slides-main');
     main.append(this.stage, this.notes);
-    this.host.append(this.slideList.element, main);
+    this.host.append(this.slideList.pane, main);
 
-    this.resizeObserver = new ResizeObserver(() => {
+    this.resizeObserver = new ResizeObserver(entries => {
+      // The editor's width sizes the thumbnails; the stage's size, a fitted zoom.
+      if (entries.some(entry => entry.target === this.host)) this.fitSlideList();
       if (this.zoomMode === SlidesZoomMode.Fit) this.applyZoom();
     });
+    this.resizeObserver.observe(this.host);
     this.resizeObserver.observe(this.stage);
     this.stage.addEventListener('pointerdown', this.onStagePointerDown);
     this.stage.addEventListener('dblclick', this.onStageDoubleClick);
@@ -243,7 +249,9 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
   };
 
   private applyLabels(): void {
-    this.slideList.setLabel(t('slidesList'));
+    this.slideList.setLabels({
+      list: t('slidesList'), title: t('slidesPaneTitle'), show: t('slidesShowThumbnails'), hide: t('slidesHideThumbnails'),
+    });
     this.stage.setAttribute('aria-label', t('slidesStage'));
     this.notes.placeholder = t('slidesNotesPlaceholder');
     this.notes.setAttribute('aria-label', t('slidesNotes'));
@@ -300,6 +308,7 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
   }
 
   protected override shown(): () => void {
+    this.fitSlideList();
     const frame = requestAnimationFrame(() => this.applyZoom());
     return () => {
       cancelAnimationFrame(frame);
@@ -425,17 +434,16 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
 
   private renderThumbnails(): void {
     const pkg = this.pkg;
-    this.slideList.render(pkg ? slideRefs(pkg) : [], this.currentSlideId, pkg ? slideSize(pkg) : { cx: 16, cy: 9 });
+    const size = pkg ? slideSize(pkg) : undefined;
+    this.slideList.render(pkg ? slideRefs(pkg) : [], this.currentSlideId,
+      size ? { width: pxFromEmu(size.cx), height: pxFromEmu(size.cy) } : { width: 16, height: 9 });
   }
 
-  private drawThumbnail(ref: SlideRef, frame: HTMLElement, width: number): void {
+  private drawThumbnail(ref: SlideRef, frame: HTMLElement): void {
     if (!this.pkg) return;
     try {
       const view = buildSlideView(this.pkg, ref.part);
-      const slide = renderSlide(view, { image: this.imageUrl, editing: false, labels: this.labels() });
-      slide.style.transformOrigin = '0 0';
-      slide.style.transform = `scale(${width / view.width})`;
-      frame.replaceChildren(slide);
+      frame.replaceChildren(renderSlide(view, { image: this.imageUrl, editing: false, labels: this.labels() }));
     } catch (error) {
       console.debug('[SlidesEditor] Could not draw a thumbnail:', error);
     }
@@ -445,13 +453,28 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
     this.slideList.redraw(slideId);
   }
 
+  /** Shows or hides the thumbnails for this presentation; every presentation opens with them shown. */
+  private toggleSlideList(): void {
+    const shown = !this.slideList.shown;
+    // Focus in a list that goes away moves to the slide, so the arrow keys keep turning slides.
+    const focused = !shown && this.slideList.element.contains(document.activeElement);
+    this.slideList.setShown(shown);
+    if (focused) this.stage.focus({ preventScroll: true });
+  }
+
+  /** Thumbnails sized to the editor's width, so a narrow panel keeps most of it for the slide. */
+  private fitSlideList(): void {
+    const width = this.host.clientWidth;
+    if (width > 0) this.slideList.fit(width);
+  }
+
   private fitZoom(): number | undefined {
     const view = this.view;
     const width = this.stage.clientWidth - STAGE_PADDING * 2;
     const height = this.stage.clientHeight - STAGE_PADDING * 2;
     if (!view || width <= 0 || height <= 0) return undefined;
     // Rounded down: a fit rounded up overflows the stage by a few pixels and shows scroll bars.
-    return Math.max(ZOOM_LIMITS.min, Math.min(ZOOM_LIMITS.max, Math.floor(Math.min(width / view.width, height / view.height) * 100) / 100));
+    return Math.max(MIN_FIT_ZOOM, Math.min(ZOOM_LIMITS.max, Math.floor(Math.min(width / view.width, height / view.height) * 100) / 100));
   }
 
   private applyZoom(): void {
@@ -1137,8 +1160,8 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
       else this.undo();
       return;
     }
-    // The slide list handles its own keys.
-    if (this.slideList.element.contains(event.target as Node)) return;
+    // The slide pane handles its own keys.
+    if (this.slideList.pane.contains(event.target as Node)) return;
     const shape = this.selectedShape();
     if (!shape) {
       if (key === 'Tab') { stop(); this.selectNextShape(event.shiftKey ? -1 : 1); }
