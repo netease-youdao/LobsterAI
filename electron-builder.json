@@ -260,9 +260,12 @@
   "npmRebuild": false,
   "asarUnpack": [
     "node_modules/@img/**",
+    "node_modules/@koromix/**",
     "node_modules/better-sqlite3/**",
+    "node_modules/koffi/**",
     "node_modules/node-nim/**",
-    "node_modules/npm/**"
+    "node_modules/npm/**",
+    "node_modules/selection-hook/**"
   ],
   "asar": true
 }

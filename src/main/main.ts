@@ -219,6 +219,7 @@ import { BrowserCredentialApprovalService } from './browserCredentials/browserCr
 import { BrowserCredentialService } from './browserCredentials/browserCredentialService';
 import { getRecentComputerUseLogEntries } from './computerUse/computerUseLogs';
 import { type CoworkForkContextMessage, type CoworkMessage, CoworkStore } from './coworkStore';
+import { DesktopCompanionManager } from './desktopCompanion/desktopCompanionManager';
 import {
   buildEnterpriseAccountRequestHeaders,
   clearEnterpriseAccountContext,
@@ -4045,6 +4046,7 @@ const getNotificationIconPath = (): string | null => {
 let mainWindow: BrowserWindow | null = null;
 let dataMigrationRestoreWindow: BrowserWindow | null = null;
 let desktopNotificationManager: DesktopNotificationManager | null = null;
+let desktopCompanionManager: DesktopCompanionManager | null = null;
 let ensureMainWindowForReason: ((reason: string) => BrowserWindow | null) | null = null;
 let isOpenSessionFromNotificationReady = false;
 let pendingOpenSessionFromNotificationId: string | null = null;
@@ -13948,7 +13950,13 @@ if (!gotTheLock) {
       const initLang = getStore().get<{ language?: string }>('app_config')?.language;
       setLanguage(initLang === 'en' ? 'en' : 'zh');
       // 窗口就绪后创建系统托盘
-      createTray(() => mainWindow);
+      createTray(() => mainWindow, {
+        isEnabled: () => desktopCompanionManager?.getState().preferences.enabled ?? false,
+        toggleEnabled: () => desktopCompanionManager?.setPreferences({
+          enabled: !desktopCompanionManager.getState().preferences.enabled,
+        }),
+        openPanel: () => desktopCompanionManager?.togglePanel(),
+      });
 
       // Start cron polling after the window is ready.
       (async () => {
@@ -14245,6 +14253,8 @@ if (!gotTheLock) {
     unsubscribeLibrarySessionChanges = null;
     libraryIndexService?.stop();
     libraryThumbnailRenderer.dispose();
+    desktopCompanionManager?.dispose();
+    desktopCompanionManager = null;
 
     // Close the SQLite database to flush the WAL and release the file lock.
     try {
@@ -14759,6 +14769,23 @@ if (!gotTheLock) {
     console.log('[Main] initApp: creating window');
     createWindow();
     profiler.measure('createWindow');
+    desktopCompanionManager = new DesktopCompanionManager({
+      store: getStore(),
+      preloadPath: PRELOAD_PATH,
+      rendererDirectory: path.join(__dirname, '../dist'),
+      devServerUrl: isDev ? DEV_SERVER_URL : undefined,
+      getMainWindow: () => mainWindow,
+      onPreferencesChanged: () => updateTrayMenu(() => mainWindow),
+      openMain: sessionId => {
+        if (sessionId) pendingOpenSessionFromNotificationId = sessionId;
+        focusMainWindowForReason('desktop companion');
+        flushOpenSessionFromNotification();
+      },
+      openSettings: () => {
+        focusMainWindowForReason('desktop companion settings');
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:openSettings');
+      },
+    });
     console.log('[Main] initApp: window created');
 
     // ── Step 2-4: Skill bootstrap (non-blocking) ────────────────────
@@ -14969,9 +14996,8 @@ if (!gotTheLock) {
         if (!mainWindow.isFocused()) mainWindow.focus();
         return;
       }
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow();
-      }
+      // Companion windows can remain alive after the main window closes.
+      createWindow();
     });
   };
 

@@ -61,6 +61,7 @@ import { OpenClawSessionKeepAlive as OpenClawSessionKeepAliveValues } from '../t
 import Modal from './common/Modal';
 import DreamingSettingsSection from './cowork/DreamingSettingsSection';
 import EmbeddingSettingsSection from './cowork/EmbeddingSettingsSection';
+import DesktopCompanionSettings from './desktopCompanion/DesktopCompanionSettings';
 import DshExperimentalSettings from './DshExperimentalSettings';
 import ErrorMessage from './ErrorMessage';
 import BrainIcon from './icons/BrainIcon';
@@ -4969,6 +4970,8 @@ const Settings: React.FC<SettingsProps> = ({
                 />
               </SettingsRow>
             </SettingsGroup>
+
+            <DesktopCompanionSettings />
 
             {/* Group: Notifications */}
             <SettingsGroup

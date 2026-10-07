@@ -9,6 +9,13 @@ let contextMenu: Menu | null = null;
 let clickHandler: (() => void) | null = null;
 let rightClickHandler: (() => void) | null = null;
 let trayReminder: TrayReminderState = { count: 0 };
+let companionActions: TrayCompanionActions | undefined;
+
+interface TrayCompanionActions {
+  isEnabled(): boolean;
+  toggleEnabled(): void;
+  openPanel(): void;
+}
 
 export interface TrayReminderState {
   count: number;
@@ -84,6 +91,16 @@ function buildContextMenu(getWindow: () => BrowserWindow | null): Menu {
       },
     },
     { type: 'separator' },
+    ...(companionActions ? [
+      { label: t('desktopCompanionOpenPanel'), click: () => companionActions?.openPanel() },
+      {
+        label: t('desktopCompanionEnable'),
+        type: 'checkbox' as const,
+        checked: companionActions.isEnabled(),
+        click: () => companionActions?.toggleEnabled(),
+      },
+      { type: 'separator' as const },
+    ] : []),
     {
       label: labels.settings,
       click: () => {
@@ -105,8 +122,10 @@ function buildContextMenu(getWindow: () => BrowserWindow | null): Menu {
   ]);
 }
 
-export function createTray(getWindow: () => BrowserWindow | null): Tray {
+export function createTray(getWindow: () => BrowserWindow | null, actions?: TrayCompanionActions): Tray {
+  companionActions = actions ?? companionActions;
   if (tray) {
+    updateTrayMenu(getWindow);
     return tray;
   }
 
@@ -174,6 +193,7 @@ export function destroyTray(): void {
     clickHandler = null;
     rightClickHandler = null;
     trayReminder = { count: 0 };
+    companionActions = undefined;
   }
 }
 

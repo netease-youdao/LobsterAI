@@ -70,6 +70,7 @@ import type {
   DataMigrationLastRestoreResponse,
   DataMigrationRestoreScheduleResult,
 } from '../../shared/dataMigration/constants';
+import type { DesktopCompanionBridge } from '../../shared/desktopCompanion/constants';
 import type { EnterpriseQuotaRequestType } from '../../shared/enterpriseAccount/constants';
 import type {
   EnterpriseAccountContext,
@@ -651,6 +652,7 @@ interface HtmlShareResult {
 }
 
 interface IElectronAPI {
+  desktopCompanion: DesktopCompanionBridge;
   platform: string;
   arch: string;
   store: {
