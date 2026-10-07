@@ -74,6 +74,11 @@ export const buildMediaGenerationTurnInstruction = (
     'IMPORTANT: Do NOT read or use the "seedance" or "seedream" skills for this request.',
     'The LobsterAI media generation tools (lobsterai_image_generate / lobsterai_video_generate) replace those skills when a media model is selected.',
     'Do not run any skill scripts for image or video generation. Use only the lobsterai_* tools specified below.',
+    'The media model selection stays active across messages. Call a media generation tool only when the current user message asks for new or edited media; for questions, discussion, or other tasks, reply in plain text without calling it.',
+    'If the user asked to stop or pause image or video generation, that request stays in effect for later messages until the user explicitly asks for media again.',
+    'If you ask the user to confirm or clarify anything about the media in this turn, wait for the answer before calling action="generate".',
+    'The prompt argument must describe the visual content to generate. Never pass a refusal, a status update, or instructions such as "no image is needed" as the prompt, and never call the tool just to say that nothing will be generated.',
+    'Invoke media generation only through a real tool call. Never simulate a call with shell commands, echo, or by printing the tool name.',
   ];
 
   if (selection.mode === 'image') {

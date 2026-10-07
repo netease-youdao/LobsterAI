@@ -65,6 +65,30 @@ describe('buildMediaGenerationTurnInstruction', () => {
     expect(instruction).not.toContain('OpenClaw-native image_generate tool');
   });
 
+  test.each([
+    { mode: 'image' as const, imageModelId: 'image-model' },
+    { mode: 'video' as const, videoModelId: 'video-model' },
+    { mode: 'auto' as const, imageModelId: 'image-model', videoModelId: 'video-model' },
+  ])('tells the model to generate only when the current message asks for media ($mode)', (selection) => {
+    const instruction = buildMediaGenerationTurnInstruction(selection);
+
+    expect(instruction).toContain('only when the current user message asks for new or edited media');
+    expect(instruction).toContain('stays in effect for later messages');
+    expect(instruction).toContain('wait for the answer before calling action="generate"');
+    expect(instruction).toContain('must describe the visual content to generate');
+    expect(instruction).toContain('Never simulate a call with shell commands');
+  });
+
+  test('does not add media intent rules to the skin pack workflow', () => {
+    const instruction = buildMediaGenerationTurnInstruction(
+      { mode: 'image', imageModelId: 'image-model' },
+      false,
+      SkinWorkflowKind.SkinPack,
+    );
+
+    expect(instruction).not.toContain('only when the current user message asks for new or edited media');
+  });
+
   test('preserves the media-skill fallback when LobsterAI tools are unavailable', () => {
     const instruction = buildMediaGenerationTurnInstruction(undefined, true);
 
