@@ -1,16 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthRefreshFailureKind, AuthSessionStatus } from '../../shared/auth/constants';
 import { AuthSessionRequestError } from '../libs/authSessionManager';
 import { RemoteNetworkError } from './remoteNetworkError';
 import { RemoteNetworkFailure } from './remoteNetworkProtocol';
 import {
+  remoteDiagnosticLog,
+  RemoteInputDiagnostic,
   remoteSyncErrorMetadata,
   remoteSyncEventMetadata,
   remoteSyncRequestId,
   remoteSyncRequestMetadata,
   remoteSyncResultMetadata,
 } from './remoteSyncLog';
+
+const logged = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+vi.mock('./remoteLogSink', () => ({ enqueueRemoteLog: (_level: string, _message: string, fields: Record<string, unknown>) => { logged.push(fields); } }));
+beforeEach(() => { logged.length = 0; });
 
 const requestId = '6dac1fc3-8d89-40f0-98c5-eb753c18062c';
 const privateText = 'private conversation /Users/test/private.txt Bearer secret-token';
@@ -118,5 +124,32 @@ describe('safe authenticated transport diagnostics', () => {
     cause.cause.code = privateText;
     expect(remoteSyncErrorMetadata(error)).not.toHaveProperty('transportSystemCode');
     expect(JSON.stringify(remoteSyncErrorMetadata(error))).not.toContain(privateText);
+  });
+});
+
+
+describe('local input diagnostics', () => {
+  it('allows finite input stages and reasons without admitting raw errors, paths or credentials', () => {
+    remoteDiagnosticLog(RemoteInputDiagnostic.Event, { preparationId: 'prep', assetId: 'asset', transportRequestId: requestId,
+      stage: 'validate', result: 'failed', reason: RemoteInputDiagnostic.HashMismatch, actualBytes: 5, expectedBytes: 5, elapsedMs: 17,
+      path: privateText, claimToken: privateText, body: privateText, sha256: privateText, arbitrary: privateText });
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({ event: RemoteInputDiagnostic.Event, preparationId: 'prep', assetId: 'asset', transportRequestId: requestId,
+      stage: 'validate', result: 'failed', reason: RemoteInputDiagnostic.HashMismatch, actualBytes: 5, expectedBytes: 5, elapsedMs: 17 });
+    remoteDiagnosticLog(RemoteInputDiagnostic.Event, { preparationId: privateText, assetId: privateText, transportRequestId: 'arbitrary-id',
+      stage: privateText, reason: privateText, error: new Error(privateText), actualBytes: -1, expectedBytes: Infinity });
+    expect(logged[1]).not.toHaveProperty('preparationId'); expect(logged[1]).not.toHaveProperty('assetId');
+    expect(logged[1]).not.toHaveProperty('stage'); expect(logged[1]).not.toHaveProperty('reason');
+    expect(logged[1]).not.toHaveProperty('transportRequestId'); expect(logged[1]).not.toHaveProperty('actualBytes');
+    expect(JSON.stringify(logged)).not.toContain(privateText);
+  });
+  it('does not suppress failures for a different preparation, asset or stage', () => {
+    const fields = { preparationId: 'dedup-prep', assetId: 'dedup-asset', stage: 'download', result: 'failed', reason: 'REQUEST_FAILED' };
+    remoteDiagnosticLog(RemoteInputDiagnostic.Event, fields, 'warn');
+    remoteDiagnosticLog(RemoteInputDiagnostic.Event, fields, 'warn');
+    remoteDiagnosticLog(RemoteInputDiagnostic.Event, { ...fields, preparationId: 'dedup-other-prep' }, 'warn');
+    remoteDiagnosticLog(RemoteInputDiagnostic.Event, { ...fields, assetId: 'dedup-other-asset' }, 'warn');
+    remoteDiagnosticLog(RemoteInputDiagnostic.Event, { ...fields, stage: 'decode' }, 'warn');
+    expect(logged).toHaveLength(4);
   });
 });

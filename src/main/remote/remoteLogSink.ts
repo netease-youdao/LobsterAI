@@ -7,6 +7,7 @@ const QUEUE_LIMIT = 1024;
 const GENERAL_LIMIT = 768;
 const LINE_BYTES = 4096;
 const RETRY_MS = 30000;
+const SLOW_REQUEST_MS = 1000;
 
 /** One asynchronous writer, at most two 10 MiB files. No renderer/network/console fallback. */
 export function createRemoteFileWriter(directory: string, maximum = FILE_BYTES): (text: string) => Promise<void> {
@@ -46,8 +47,18 @@ export class RemoteLogQueue {
     try {
       if (this.clock() < this.retryAt) { this.dropped++; return; }
       const event = typeof fields.event === 'string' ? fields.event : '';
-      if (level === 'debug' && ((event === 'remote.request.completed' && fields.result === 'success')
-        || message === '[RemoteSync] Request started' || message === '[RemoteSync] Request succeeded')) {
+      const succeeded = message === '[RemoteSync] Request succeeded';
+      const completed = succeeded || event === 'remote.request.completed';
+      const elapsed = fields.elapsedMs ?? fields.durationMs;
+      const slow = completed && typeof elapsed === 'number' && Number.isFinite(elapsed) && elapsed >= SLOW_REQUEST_MS;
+      const batchSuccess = succeeded && fields.operation === 'batch';
+      if (batchSuccess) {
+        // One compact receipt per batch correlates even fast requests with delayed local dispatch.
+        const { events: _events, ...summary } = fields;
+        fields = summary;
+      }
+      if (level === 'debug' && !batchSuccess && !slow && ((event === 'remote.request.completed' && fields.result === 'success')
+        || message === '[RemoteSync] Request started' || succeeded)) {
         const requestId = typeof fields.requestId === 'string' ? fields.requestId : '';
         let bucket = 0; for (const ch of requestId) bucket = (bucket * 31 + ch.charCodeAt(0)) >>> 0;
         if (!requestId || bucket % 100 !== 0) return;

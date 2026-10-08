@@ -191,6 +191,83 @@ describe('supervised remote network transport', () => {
     expect(children[0].messages.filter(message => message.type === Message.Fetch)).toHaveLength(0);
     const next = request(transport, '/sync/batches'); await settle(); success(children[0]); await next;
   });
+  it('keeps streamed downloads in their background slot until confirmed cancellation', async () => {
+    const { transport, children } = fixture(), abort = new AbortController();
+    const downloading = request(transport, '/input-assets/asset-1/content', { signal: abort.signal }); await settle();
+    const child = children[0], id = child.request().id;
+    child.reply({ type: Message.StreamStart, id, status: 200, headers: { 'content-type': 'image/png' } });
+    const response = await downloading, reader = response.body!.getReader();
+    expect(child.messages.filter(message => message.type === Message.StreamPull)).toHaveLength(0);
+    const first = reader.read(); await settle();
+    child.reply({ type: Message.StreamChunk, id, seq: 0, body: Buffer.from([137,80,78,71]).toString('base64') });
+    expect((await first).value).toEqual(Buffer.from([137,80,78,71]));
+    expect(child.messages.filter(message => message.type === Message.StreamPull)).toHaveLength(1);
+    const next = reader.read(); abort.abort(); await expect(next).rejects.toThrow('CANCELLED');
+    expect(child.messages.some(message => message.type === Message.Cancel && message.id === id)).toBe(true);
+    await expect(request(transport, '/sync/batches')).rejects.toThrow('ADMISSION_BUSY');
+    child.reply({ type: Message.Result, id, error: RemoteNetworkFailure.Cancelled });
+    const normal = request(transport, '/sync/batches'); await settle();
+    success(child, child.messages.filter(message => message.type === Message.Fetch).at(-1).id); await normal;
+  });
+  it.each(['renew', 'result'] as const)('keeps preparation %s independent from its active binary download', async operation => {
+    const { transport, children } = fixture();
+    const downloading = request(transport, '/input-assets/asset-1/content'); await settle();
+    const child = children[0], id = child.request().id;
+    child.reply({ type: Message.StreamStart, id, status: 200, headers: {} });
+    const response = await downloading;
+    const queued = transport.queuedFetch(base + '/sync/batches');
+    const control = request(transport, `/input-preparations/prep-1/${operation}`, { method: 'POST' }); await settle();
+    expect(child.messages.filter(message => message.type === Message.Fetch)).toHaveLength(2);
+    const renewal = child.messages.find(message => message.url?.endsWith(`/${operation}`));
+    expect(renewal).toBeDefined(); success(child, renewal.id); await control;
+    await response.body!.cancel(); child.reply({ type: Message.Result, id, error: RemoteNetworkFailure.Cancelled }); await settle();
+    success(child, child.messages.filter(message => message.type === Message.Fetch).at(-1).id); await queued;
+  });
+  it('rejects legacy text-encoded binary success while preserving JSON authorization errors', async () => {
+    const { transport, children } = fixture();
+    const downloading = request(transport, '/input-assets/asset-1/content'); await settle();
+    const child = children[0]; success(child, undefined, { body: 'corrupted binary', jsonValid: false });
+    await expect(downloading).rejects.toThrow('RESPONSE_INVALID');
+    const denied = request(transport, '/input-assets/asset-1/content'); await settle();
+    success(child, child.messages.filter(message => message.type === Message.Fetch).at(-1).id, { status: 401, json: { code: 40100 } });
+    const response = await denied;
+    expect(response.status).toBe(401); expect(await response.clone().json()).toEqual({ code: 40100 });
+  });
+  it('errors an already returned download body when the child exits', async () => {
+    const { transport, children } = fixture();
+    const downloading = request(transport, '/input-assets/asset-1/content'); await settle();
+    const child = children[0], id = child.request().id;
+    child.reply({ type: Message.StreamStart, id, status: 200, headers: {} });
+    const reader = (await downloading).body!.getReader(), next = reader.read();
+    child.exit(); await expect(next).rejects.toThrow('WORKER_EXIT');
+  });
+  it.each(['unsolicited', 'oversized', 'invalid-base64', 'wrong-sequence'] as const)('rejects invalid streamed chunks: %s', async failure => {
+    const { transport, children } = fixture();
+    const downloading = request(transport, '/input-assets/asset-1/content'); await settle();
+    const child = children[0], id = child.request().id;
+    child.reply({ type: Message.StreamStart, id, status: 200, headers: {} });
+    const reader = (await downloading).body!.getReader();
+    const read = failure === 'unsolicited' ? undefined : reader.read(); await settle();
+    child.reply({ type: Message.StreamChunk, id, seq: failure === 'wrong-sequence' ? 1 : 0,
+      body: failure === 'oversized' ? Buffer.alloc(Limit.BinaryChunkBytes + 1).toString('base64') : failure === 'invalid-base64' ? '!!!' : 'YQ==' });
+    await expect(read || reader.read()).rejects.toThrow('RESPONSE_INVALID');
+    expect(child.messages.some(message => message.type === Message.Cancel)).toBe(true);
+  });
+  it('rejects binary start on a non-download route and releases cancellation at an EOF race', async () => {
+    const { transport, children } = fixture();
+    const wrongRoute = request(transport); await settle();
+    const child = children[0], wrongId = child.request().id;
+    child.reply({ type: Message.StreamStart, id: wrongId, status: 200, headers: {} });
+    await expect(wrongRoute).rejects.toThrow('RESPONSE_INVALID');
+    child.reply({ type: Message.Result, id: wrongId, error: RemoteNetworkFailure.Cancelled });
+    const downloading = request(transport, '/input-assets/asset-1/content'); await settle();
+    const id = child.messages.filter(message => message.type === Message.Fetch).at(-1).id;
+    child.reply({ type: Message.StreamStart, id, status: 200, headers: {} });
+    await (await downloading).body!.cancel();
+    child.reply({ type: Message.StreamEnd, id, bytes: 0 });
+    const next = request(transport, '/sync/batches'); await settle();
+    success(child, child.messages.filter(message => message.type === Message.Fetch).at(-1).id); await next;
+  });
   it('fences replaced sockets and acknowledges only current parsed frames', async () => {
     const { transport, children } = fixture(); const first = transport.socket('wss://example.com/api/remote/v1/ws');
     const oldMessage = vi.fn(); first.addEventListener('message', oldMessage); await settle();

@@ -5,6 +5,7 @@ import path from 'path';
 import { expect, it, vi } from 'vitest';
 import vm from 'vm';
 
+import { remoteNetworkBinaryDownload } from './remoteNetworkProtocol';
 import { currentRemoteExecution, SessionCommandService } from './sessionCommandService';
 
 it('wires the real desktop IPC through its actor-aware service when every optional remote initializer fails', async () => {
@@ -45,4 +46,39 @@ it('wires the real desktop IPC through its actor-aware service when every option
   expect(authObservers.size).toBe(3);
   await expect(handlers.get('cowork:session:start')!(null, {})).resolves.toEqual({ owner });
   expect(localStore.assertAgentAccess).toHaveBeenCalledWith('main', owner);
+});
+
+
+it('preserves successful JSON attachment streams while still checking enterprise API errors', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'main.ts'), 'utf8');
+  const wrapper = source.slice(source.indexOf('  const fetchWithAuth = async'), source.indexOf('  let sessionDeletionService:'));
+  const revoked = vi.fn(), session = { userId: 'owner' };
+  let response: Response;
+  const sandbox = {
+    authSessionManager: { fetchWithAuth: vi.fn(async () => response) },
+    captureEnterpriseAuthSessionSnapshot: () => session, remoteNetworkBinaryDownload,
+    readEnterpriseApiErrorCode: (value: { code?: number }) => value.code,
+    EnterpriseApiErrorCode: { NotMember: 40301 },
+    handleEnterpriseMembershipRevocation: revoked,
+    resolveEnterpriseMembershipRevocationSource: () => 'remote',
+  };
+  const fetchWithAuth = vm.runInNewContext(transformSync(`${wrapper}
+fetchWithAuth;`, { loader: 'ts', format: 'cjs' }).code, sandbox);
+  const assetUrl = 'https://example.invalid/api/remote/v1/input-assets/asset/content?preparationId=prepared';
+  const pull = vi.fn(controller => { controller.enqueue(new TextEncoder().encode('{"code":40301}')); controller.close(); });
+  response = new Response(new ReadableStream({ pull }, { highWaterMark: 0 }), { headers: { 'content-type': 'application/json' } });
+  const clone = vi.spyOn(response, 'clone');
+  const downloaded = await fetchWithAuth(assetUrl);
+  expect(downloaded).toBe(response); expect(clone).not.toHaveBeenCalled(); expect(pull).not.toHaveBeenCalled();
+  expect(revoked).not.toHaveBeenCalled();
+  expect(await downloaded.text()).toBe('{"code":40301}');
+
+  for (const [url, status] of [[assetUrl, 403], ['https://example.invalid/api/remote/v1/capabilities', 200]] as const) {
+    response = new Response('{"code":40301}', { status, headers: { 'content-type': 'application/json' } });
+    const original = response;
+    expect(await fetchWithAuth(url)).toBe(original);
+    expect(await original.text()).toBe('{"code":40301}');
+  }
+  expect(revoked).toHaveBeenCalledTimes(2);
+  expect(revoked).toHaveBeenLastCalledWith({ code: 40301, source: 'remote', requestSession: session });
 });

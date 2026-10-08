@@ -52,6 +52,41 @@ describe('optional remote diagnostics', () => {
     expect(text).toContain('remote.log.truncated');
     expect(text.split('\n').every(line => Buffer.byteLength(line) < 4096)).toBe(true);
   });
+  it('keeps compact batch receipts even when a fast request would not be sampled', async () => {
+    const writes: string[] = [], queue = new RemoteLogQueue(async text => { writes.push(text); });
+    const fields = { requestId: 'a', operation: 'batch', batchId: 'batch-1', elapsedMs: 50,
+      requestStartedAt: '2026-10-08T10:12:56.900Z', transportRequestedAt: '2026-10-08T10:12:56.901Z',
+      firstSourceSeq: '29', lastSourceSeq: '35', events: [{ eventId: 'event-1' }] };
+    queue.enqueue('debug', '[RemoteSync] Request started', fields);
+    queue.enqueue('debug', '[RemoteSync] Request succeeded', fields);
+    await turn();
+    const lines = writes.join('').trim().split('\n').map(line => JSON.parse(line));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ level: 'debug', message: '[RemoteSync] Request succeeded', fields: {
+      requestId: fields.requestId, operation: 'batch', batchId: 'batch-1', elapsedMs: 50,
+      requestStartedAt: fields.requestStartedAt, transportRequestedAt: fields.transportRequestedAt,
+      firstSourceSeq: '29', lastSourceSeq: '35',
+    } });
+    expect(lines[0].fields).not.toHaveProperty('events');
+    expect(fields.events).toHaveLength(1);
+  });
+  it('preserves slow successful requests without changing ordinary success sampling', async () => {
+    const writes: string[] = [], queue = new RemoteLogQueue(async text => { writes.push(text); });
+    for (const elapsedMs of [50, 999, 1000, 28000, Number.NaN, Number.POSITIVE_INFINITY]) {
+      queue.enqueue('debug', '[RemoteSync] Request succeeded', { requestId: 'a', operation: 'live_projection', elapsedMs });
+      queue.enqueue('debug', '[RemoteDiagnostic]', { event: 'remote.request.completed', requestId: 'a', result: 'success', durationMs: elapsedMs });
+    }
+    // The stable sample bucket for this ID is retained for both start and success.
+    queue.enqueue('debug', '[RemoteSync] Request started', { requestId: 'd', operation: 'live_projection' });
+    queue.enqueue('debug', '[RemoteSync] Request succeeded', { requestId: 'd', operation: 'live_projection', elapsedMs: 50 });
+    await turn();
+    const lines = writes.join('').trim().split('\n').map(line => JSON.parse(line));
+    expect(lines).toHaveLength(6);
+    expect(lines.filter(line => line.fields.requestId === 'a').map(line => line.fields.elapsedMs ?? line.fields.durationMs))
+      .toEqual([1000, 1000, 28000, 28000]);
+    expect(lines.filter(line => line.fields.requestId === 'd').map(line => line.message))
+      .toEqual(['[RemoteSync] Request started', '[RemoteSync] Request succeeded']);
+  });
   it('rotates only its own two files and survives restarting with an existing current file', async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'lobsterai-remote-log-')); directories.push(directory);
     let writer = createRemoteFileWriter(directory, 64);

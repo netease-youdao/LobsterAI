@@ -1,6 +1,10 @@
-import { remoteNetworkCapacities, RemoteNetworkFailure as Failure, type RemoteNetworkLane, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message, remoteNetworkRequestLane } from './remoteNetworkProtocol';
+import { remoteNetworkBinaryDownload,remoteNetworkCapacities, RemoteNetworkFailure as Failure, type RemoteNetworkLane, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message, remoteNetworkRequestLane } from './remoteNetworkProtocol';
 
-const requests = new Map<string, { controller: AbortController; lane: RemoteNetworkLane }>();
+interface Request {
+  controller: AbortController; lane: RemoteNetworkLane;
+  stream?: { next: number; credit: boolean; wake?: () => void };
+}
+const requests = new Map<string, Request>();
 let socket: WebSocket | null = null;
 let socketId: string | null = null;
 let frameSeq = 0, windowStart = Date.now(), framesInWindow = 0;
@@ -29,6 +33,38 @@ function closeSocket(code = 1000): void {
   try { previous?.close(); } catch { /* Process exit remains available to the supervisor. */ }
   if (id) emit({ type: Message.SocketClosed, id, code });
 }
+async function binaryResponse(id: string, request: Request, response: Response, headers: Record<string, string>): Promise<number> {
+  const size = headers['content-length'];
+  const stream = request.stream = { next: 0, credit: false } as NonNullable<Request['stream']>;
+  const reader = response.body?.getReader();
+  let chunk: Uint8Array | undefined, offset = 0, bytes = 0;
+  const aborted = (): void => { stream.wake?.(); };
+  request.controller.signal.addEventListener('abort', aborted);
+  try {
+    if (size !== undefined && (!/^\d+$/u.test(size) || Number(size) > Limit.BinaryBytes)) throw new Error(Failure.ResponseBudget);
+    emit({ type: Message.StreamStart, id, status: response.status, headers });
+    while (true) {
+      if (!stream.credit && !request.controller.signal.aborted) await new Promise<void>(resolve => { stream.wake = resolve; });
+      stream.wake = undefined;
+      if (request.controller.signal.aborted) throw new Error(Failure.Cancelled);
+      stream.credit = false;
+      while (!chunk || offset === chunk.byteLength) {
+        const next = await reader?.read();
+        if (!next || next.done) return bytes;
+        chunk = next.value; offset = 0;
+      }
+      const length = Math.min(Limit.BinaryChunkBytes, chunk.byteLength - offset);
+      bytes += length;
+      if (bytes > Limit.BinaryBytes) throw new Error(Failure.ResponseBudget);
+      const body = Buffer.from(chunk.buffer, chunk.byteOffset + offset, length).toString('base64');
+      offset += length;
+      emit({ type: Message.StreamChunk, id, seq: stream.next++, body });
+    }
+  } finally {
+    request.controller.signal.removeEventListener('abort', aborted);
+    try { await reader?.cancel(); } catch { /* Preserve the transfer error. */ } finally { reader?.releaseLock(); }
+  }
+}
 async function fetchRequest(message: any): Promise<void> {
   const { id } = message;
   if (!validId(id) || requests.has(id)) return;
@@ -36,8 +72,10 @@ async function fetchRequest(message: any): Promise<void> {
   try { lane = remoteNetworkRequestLane(message.url, message.method); }
   catch { emit({ type: Message.Result, id, error: Failure.RequestInvalid }); return; }
   if (requests.size >= Limit.Requests || [...requests.values()].filter(request => request.lane === lane).length >= remoteNetworkCapacities[lane]) { emit({ type: Message.Result, id, error: Failure.Busy }); return; }
-  const controller = new AbortController(); requests.set(id, { controller, lane });
-  const timer = setTimeout(() => controller.abort(), 30000);
+  const controller = new AbortController(), request: Request = { controller, lane };
+  requests.set(id, request);
+  const binary = remoteNetworkBinaryDownload(message.url, message.method);
+  const timer = setTimeout(() => controller.abort(), binary ? Limit.BinaryTimeoutMs : 30000);
   try {
     const url = new URL(message.url);
     if (url.protocol !== 'https:' || !/^\/api\/remote\/v[1-3]\//u.test(url.pathname)
@@ -51,6 +89,10 @@ async function fetchRequest(message: any): Promise<void> {
       signal: controller.signal, redirect: 'error' });
     const headers = Object.fromEntries(response.headers);
     if (Buffer.byteLength(JSON.stringify(headers)) > Limit.HeaderBytes) throw new Error(Failure.ResponseBudget);
+    if (binary && response.status === 200) {
+      const bytes = await binaryResponse(id, request, response, headers);
+      requests.delete(id); emit({ type: Message.StreamEnd, id, bytes }); return;
+    }
     const chunks: Buffer[] = []; let bytes = 0;
     if (response.body) {
       const reader = response.body.getReader();
@@ -77,6 +119,11 @@ async function fetchRequest(message: any): Promise<void> {
 process.on('message', (message: any) => {
   if (!message || typeof message !== 'object') return;
   if (message.type === Message.Fetch) { void fetchRequest(message); return; }
+  if (message.type === Message.StreamPull && validId(message.id)) {
+    const stream = requests.get(message.id)?.stream;
+    if (stream && message.seq === stream.next && !stream.credit) { stream.credit = true; stream.wake?.(); }
+    return;
+  }
   if (message.type === Message.Cancel && validId(message.id)) { requests.get(message.id)?.controller.abort(); return; }
   if (message.type === Message.Socket && validId(message.id)) {
     closeSocket();

@@ -3,9 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteRunStatus } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
-import { RemoteInputCapability, RemoteInputRecovery } from '../../shared/remote/input';
+import { RemoteInputCapability, RemoteInputReason, RemoteInputRecovery } from '../../shared/remote/input';
+import { RemoteAttachmentError } from './inputPreparationService';
 import { RemoteBridge } from './remoteBridge';
+import { RemoteInputError } from './remoteModelCatalog';
 import { RemoteStore } from './remoteStore';
+import * as syncLog from './remoteSyncLog';
 
 const initialOwner = { userId: 'poll-user', scopeKey: 'personal' };
 const dispose: Array<() => void> = [];
@@ -30,7 +33,7 @@ async function fixture() {
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
   const store = new RemoteStore(db);
   let owner = initialOwner;
-  const request = vi.fn(async (_owner, path: string) => {
+  const request = vi.fn(async (_owner, path: string, _init?: RequestInit) => {
     if (path.endsWith('/connection-tickets')) return response({ wsUrl: 'wss://example.com/api/remote/v1/ws?ticket=test' });
     if (path.includes('/v1/devices/pc/input-preparations?')) return response({ items: [], nextCursor: null });
     if (path.includes('/commands?') || path.endsWith('/claim')) return response({ items: [], nextCursor: null });
@@ -87,6 +90,30 @@ describe('remote background polling', () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(count('/input-preparations/claim')).toBe(2);
     expect(count('/commands/claim')).toBe(3);
+  });
+  it('keeps a deferred terminal reply deadline ahead of the real idle polling cycle', async () => {
+    const { bridge, store, sync, count } = await fixture();
+    store.setWake(() => {});
+    bridge.targetId = bridge.targets.activateLegacy({ owner: initialOwner, deviceId: 'pc', allowPartialLegacy: true }).targetId;
+    store.setProjectionIdentity(bridge.targetId, initialOwner, 'pc'); store.setFileEnvironment(bridge.targetId);
+    startOwnedRun(store); store.updateRun('running', RemoteRunStatus.Succeeded);
+    const now = Date.now();
+    sync.mockClear();
+    sync.mockImplementationOnce(async () => { bridge.taskSync.defer(bridge.taskContext(), 'running', 5000); })
+      .mockImplementation(async () => {
+        const snapshot = store.snapshot('running'), row = store.sync('running')!;
+        store.bindRemote('running', row.session_id, 'pc');
+        store.acknowledge('running', 'pc', row.session_id, snapshot.baseSourceSeq, '1', true, snapshot.snapshotEpoch);
+        bridge.taskSync.progress(bridge.taskContext(), 'running', true);
+      });
+    bridge.schedule(0); await vi.advanceTimersByTimeAsync(0);
+    expect(sync).toHaveBeenCalledOnce(); expect(bridge.scheduledAt).toBe(now + 5000);
+    await vi.advanceTimersByTimeAsync(4999); expect(sync).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1); expect(sync).toHaveBeenCalledTimes(2);
+    expect(bridge.taskSync.candidates(bridge.taskContext())).toEqual([]);
+    expect(count('/commands/claim')).toBe(1);
+    await vi.advanceTimersByTimeAsync(24999); expect(sync).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1); expect(count('/commands/claim')).toBe(2);
   });
   it('continues claiming commands while optional input model publication is stalled', async () => {
     const { bridge,count } = await fixture();
@@ -393,4 +420,88 @@ it.each([500, 403])('retains the v2 recovery context on shared or authentication
   expect(request.mock.calls.some(([, path]) => path.includes('/v2/devices/pc/input-preparations?'))).toBe(true);
   expect(request.mock.calls.some(([, path]) => path.includes('/v1/devices/pc/input-preparations?'))).toBe(false);
   expect(count('/commands/claim')).toBeGreaterThan(0);
+});
+
+
+describe('input preparation failure boundaries', () => {
+  it.each([
+    [new RemoteInputError(RemoteInputReason.Asset), 'ASSET_UNAVAILABLE'],
+    [new RemoteAttachmentError(), 'ATTACHMENT_INVALID'],
+    [new RemoteInputError(RemoteInputReason.Invalid), 'PREPARATION_FAILED'],
+    [new RemoteInputError(RemoteInputReason.ModelUnavailable), RemoteInputReason.ModelUnavailable],
+  ])('reports only existing server reasons for %s', async (error, expectedReason) => {
+    const { bridge, request } = await fixture();
+    bridge.deps.input.preparations.prepare.mockRejectedValue(error);
+    const original = request.getMockImplementation()!;
+    let submitted: any;
+    request.mockImplementation(async (owner, path, init) => {
+      if (path.endsWith('/input-preparations/claim')) return response({ items: [{ preparationId: 'prep', claimId: 'claim',
+        claimToken: 'token', statusVersion: '1', claimUntil: new Date(Date.now() + 60000).toISOString() }] });
+      if (path.endsWith('/input-preparations/prep/result')) { submitted = JSON.parse(String(init!.body)); return response({}); }
+      return original(owner, path, init);
+    });
+    await expect(bridge.prepareInputs()).resolves.toBe(true);
+    expect(submitted).toMatchObject({ status: 'failed', reason: expectedReason, claimId: 'claim', claimToken: 'token', connectionGeneration: '1' });
+  });
+  it.each([false, true])('cancels a returned asset stream before rejecting stale preparation context (cancel fails: %s)', async cancelFails => {
+    const { bridge, request } = await fixture();
+    const requestId = 'b3f873cc-d277-4a4a-a6a9-af7a508e53ad';
+    const cancel = vi.fn(async () => { if (cancelFails) throw new Error('cancel failed'); });
+    const assetResponse = new Response(new ReadableStream({ cancel }));
+    bridge.deps.input.preparations.prepare.mockImplementation(async (_owner: unknown, _device: string, _claim: unknown, download: (id: string, requestId: string) => Promise<Response>) => {
+      await expect(download('asset', requestId)).rejects.toThrow(RemoteInputReason.Account);
+      throw new RemoteInputError(RemoteInputReason.Account);
+    });
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (owner, path, init) => {
+      if (path.endsWith('/input-preparations/claim')) return response({ items: [{ preparationId: 'prep', claimId: 'claim',
+        claimToken: 'token', statusVersion: '1', claimUntil: new Date(Date.now() + 60000).toISOString() }] });
+      if (path.includes('/input-assets/asset/content')) {
+        expect(new Headers(init!.headers).get(syncLog.REMOTE_SYNC_REQUEST_ID_HEADER)).toBe(requestId);
+        bridge.generation = '2'; return assetResponse;
+      }
+      return original(owner, path, init);
+    });
+    await expect(bridge.prepareInputs()).resolves.toBe(false);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(request.mock.calls.some(([, path]) => path.endsWith('/input-preparations/prep/result'))).toBe(false);
+  });
+  it('retains a local failure checkpoint when server ready reporting fails', async () => {
+    const { bridge, request } = await fixture();
+    const diagnostic = vi.spyOn(syncLog, 'remoteDiagnosticLog').mockImplementation(() => {});
+    bridge.deps.input.preparations.prepare.mockResolvedValue({ preparationId: 'prep', resolvedInput: {}, inputDigest: 'digest' });
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (owner, path, init) => {
+      if (path.endsWith('/input-preparations/claim')) return response({ items: [{ preparationId: 'prep', claimId: 'claim',
+        claimToken: 'token', statusVersion: '1', claimUntil: new Date(Date.now() + 60000).toISOString() }] });
+      if (path.endsWith('/input-preparations/prep/result')) return new Response(JSON.stringify({ code: 503, message: 'private failure' }), { status: 503 });
+      return original(owner, path, init);
+    });
+    await expect(bridge.prepareInputs()).rejects.toThrow();
+    expect(diagnostic).toHaveBeenCalledWith(syncLog.RemoteInputDiagnostic.Event, expect.objectContaining({ preparationId: 'prep',
+      stage: 'server_ready', result: 'failed', reason: 'REQUEST_FAILED', elapsedMs: expect.any(Number) }), 'warn');
+    expect(request.mock.calls.filter(([, path]) => path.endsWith('/input-preparations/prep/result'))).toHaveLength(1);
+  });
+});
+
+
+it('does not misclassify a local ready commit failure as a failed server report', async () => {
+  const { bridge, request } = await fixture();
+  const diagnostic = vi.spyOn(syncLog, 'remoteDiagnosticLog').mockImplementation(() => {});
+  bridge.deps.input.preparations.prepare.mockResolvedValue({ preparationId: 'prep', resolvedInput: {}, inputDigest: 'digest' });
+  const commitFailure = new Error('private local failure');
+  bridge.deps.input.preparations.confirmReady = vi.fn(() => { throw commitFailure; });
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (owner, path, init) => {
+    if (path.endsWith('/input-preparations/claim')) return response({ items: [{ preparationId: 'prep', claimId: 'claim',
+      claimToken: 'token', statusVersion: '1', claimUntil: new Date(Date.now() + 60000).toISOString() }] });
+    if (path.endsWith('/input-preparations/prep/result')) return response({ readyExpiresAt: new Date(Date.now() + 60000).toISOString() });
+    return original(owner, path, init);
+  });
+  await expect(bridge.prepareInputs()).rejects.toBe(commitFailure);
+  expect(diagnostic).toHaveBeenCalledWith(syncLog.RemoteInputDiagnostic.Event, expect.objectContaining({ preparationId: 'prep',
+    stage: 'server_ready', result: 'success', transportRequestId: expect.any(String) }));
+  expect(diagnostic).toHaveBeenCalledWith(syncLog.RemoteInputDiagnostic.Event, expect.objectContaining({ preparationId: 'prep',
+    stage: 'local_commit', result: 'failed', reason: 'STORAGE_UNAVAILABLE' }), 'warn');
+  expect(request.mock.calls.filter(([, path]) => path.endsWith('/input-preparations/prep/result'))).toHaveLength(1);
 });

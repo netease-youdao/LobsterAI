@@ -20,7 +20,7 @@ import { RemoteTelemetryEvent } from '../../shared/remote/telemetry';
 import type { AgentOwnerStore } from '../agentOwnership';
 import { OwnershipAssociationStore, type OwnershipClaimBlocks } from '../ownershipAssociationStore';
 import { payloadHash, remoteError, sameOwner, stableJson } from './canonical';
-import type { InputPreparationService } from './inputPreparationService';
+import { type InputPreparationService,RemoteAttachmentError } from './inputPreparationService';
 import type { RemoteIdentity } from './installationIdentity';
 import { type AgentWorkspace,RemoteAgentCatalog, RemoteAgentError } from './remoteAgentCatalog';
 import { approvalCommandError, RemoteApprovalError } from './remoteApproval';
@@ -40,7 +40,7 @@ import { RemoteSyncStateError, retentionSequence } from './remoteRetention';
 import { RemoteSessionDeletionClient, type SessionDeletionDependencies } from './remoteSessionDeletionClient';
 import { type ProjectionRecord, RemoteStore, type SyncRow } from './remoteStore';
 import { RemoteSyncAdmissionBudgetError } from './remoteSyncAdmission';
-import { REMOTE_SYNC_REQUEST_ID_HEADER, remoteDiagnosticLog, remoteLogMessage, remoteSyncErrorMetadata, remoteSyncRequestId, remoteSyncRequestMetadata, remoteSyncResultMetadata } from './remoteSyncLog';
+import { REMOTE_SYNC_REQUEST_ID_HEADER, remoteDiagnosticLog, RemoteInputDiagnostic, remoteLogMessage, remoteSyncErrorMetadata, remoteSyncRequestId, remoteSyncRequestMetadata, remoteSyncResultMetadata } from './remoteSyncLog';
 import { RemoteSyncTargetActivationKind, RemoteSyncTargetStore } from './remoteSyncTargetStore';
 import { SyncTelemetry } from './remoteSyncTelemetry';
 import { classifyTaskSyncFailure, isSharedSyncFailure } from './remoteTaskSyncPolicy';
@@ -852,7 +852,8 @@ export class RemoteBridge {
     const requestId = randomUUID();
     const startedAt = performance.now();
     let stage = 'prepare', httpStatus: number | null = null, responseRequestId: string | null = null;
-    const context = { ...sync, requestId, deviceId: this.registration?.deviceId ?? null };
+    let transportRequestedAt: string | null = null;
+    const context = { ...sync, requestId, requestStartedAt: new Date().toISOString(), deviceId: this.registration?.deviceId ?? null };
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json',
         ...remoteSyncTargetHeaders(pathname === '/capabilities' ? null : this.registration?.syncTarget ?? this.discoveredTarget) };
@@ -867,7 +868,9 @@ export class RemoteBridge {
         headers['X-Remote-Device-Credential'] = `${this.registration.deviceId}.${this.deps.identity.deviceKey}`;
       }
       const encoded = encodedBody ?? (body === undefined ? undefined : stableJson(body));
-      if (sync) remoteLogMessage('debug', '[RemoteSync] Request started', { ...context, requestBytes: encoded ? Buffer.byteLength(encoded) : 0 });
+      // This is the transport submission time; the worker/auth layer may still queue the request.
+      transportRequestedAt = new Date().toISOString();
+      if (sync) remoteLogMessage('debug', '[RemoteSync] Request started', { ...context, transportRequestedAt, requestBytes: encoded ? Buffer.byteLength(encoded) : 0 });
       stage = 'transport';
       const response = await this.deps.request(owner, `/api/remote/v${version}${pathname}`, { method, headers, body: encoded, signal: AbortSignal.timeout(timeoutMs ?? (pathname.startsWith('/control/') || pathname.startsWith('/sync/live-') ? 10000 : 20000)) });
       httpStatus = response.status;
@@ -887,7 +890,7 @@ export class RemoteBridge {
       if ((pathname === '/sync/batches' || pathname.startsWith('/sync/imports')) && this.historyCircuitProbe && Date.now() >= this.historyRetryAt) {
         this.historyCircuitProbe = false; this.historyCircuitDelay = 30000; this.historyTransportFailures = [];
       }
-      if (sync) remoteLogMessage('debug', '[RemoteSync] Request succeeded', { ...context, responseRequestId, httpStatus,
+      if (sync) remoteLogMessage('debug', '[RemoteSync] Request succeeded', { ...context, transportRequestedAt, responseRequestId, httpStatus,
         elapsedMs: performance.now() - startedAt, result: remoteSyncResultMetadata(result.data) });
       // Only the failed endpoint's successful retry proves HTTP recovery. A pong or unrelated request does not.
       if (!this.suspended && pathname !== '/connection-tickets' && this.errorRequestKey === requestKey) {
@@ -914,7 +917,7 @@ export class RemoteBridge {
       telemetry.finish(remoteRequestTelemetryOutcome(error, stage), { requestId, httpStatus, ...remoteSyncErrorMetadata(error), failureStage: remoteRequestTelemetryFailureStage(error, stage) });
       remoteDiagnosticLog('remote.request.completed', { requestId, durationMs: performance.now() - startedAt, result: 'failed', error }, 'warn');
       if (error !== null && typeof error === 'object') this.requestErrorKeys.set(error, requestKey);
-      if (sync) remoteLogMessage('debug', '[RemoteSync] Request failed', { ...context, stage, responseRequestId, httpStatus,
+      if (sync) remoteLogMessage('debug', '[RemoteSync] Request failed', { ...context, transportRequestedAt, stage, responseRequestId, httpStatus,
         elapsedMs: performance.now() - startedAt, error: remoteSyncErrorMetadata(error) });
       throw error;
     }
@@ -1342,12 +1345,21 @@ export class RemoteBridge {
     }).finally(() => {
       if (this.historyWork === work) this.historyWork = null;
       this.changed();
-      try {
-        const context = this.taskContext();
-        if (current() && context && this.taskSync.candidates(context, 1).length) this.schedule(Math.max(500, this.historyRetryAt - Date.now()));
-      } catch (error) { remoteDiagnosticLog('remote.sync.task_deferred', { lane: 'history', reason: 'STORAGE_UNAVAILABLE', error }, 'warn'); }
+      this.scheduleHistorySync(current);
     });
     this.historyWork = work;
+  }
+  private scheduleHistorySync(current: () => boolean): void {
+    try {
+      if (!current()) return;
+      const context = this.taskContext();
+      if (!context) return;
+      const now = Date.now();
+      const deadline = this.taskSync.candidates(context, 1).length ? now : this.taskSync.nextRetryAt(context);
+      if (deadline === null) return;
+      // Keep long server retry bounds intact without overflowing Node's timer range.
+      this.schedule(Math.min(2_147_483_647, Math.max(500, deadline - now, this.historyRetryAt - now)));
+    } catch (error) { remoteDiagnosticLog('remote.sync.task_deferred', { lane: 'history', reason: 'STORAGE_UNAVAILABLE', error }, 'warn'); }
   }
   private recordSuccessfulSync(): void {
     if (this.owner) this.deps.store.put(`lastSuccessfulSync:${this.owner.userId}:${this.owner.scopeKey}`, new Date().toISOString());
@@ -1398,7 +1410,10 @@ export class RemoteBridge {
     if (!this.projectionWork) {
       const work = this.deps.store.flushProjections().catch(error => {
         remoteLogMessage('warn', '[RemoteSync] Projection scheduler deferred', remoteSyncErrorMetadata(error));
-      }).finally(() => { if (this.projectionWork === work) this.projectionWork = null; });
+      }).finally(() => {
+        if (this.projectionWork === work) this.projectionWork = null;
+        if (!this.historyWork) this.scheduleHistorySync(current);
+      });
       this.projectionWork = work;
     }
     const rows = stepwise ? this.prioritizeExpiringImports(this.taskSync.candidates(context)) : this.deps.store.sessions(context.owner);
@@ -1476,7 +1491,12 @@ export class RemoteBridge {
         && projectionFailure.retry_at < Number.MAX_SAFE_INTEGER) { this.taskSync.defer(context, id, 1000); return; }
       throw new RemoteTaskDataError(projectionFailure.reason);
     }
-    if (this.deps.store.projectionPublishing(id) || this.ownershipSyncBlocked(id)) { this.taskSync.defer(context, id, 5000); return; }
+    const publishing = this.deps.store.projectionPublishing(id);
+    if (publishing || this.ownershipSyncBlocked(id)) {
+      this.taskSync.defer(context, id, 5000);
+      this.logSyncSkipped(row, publishing ? 'projection_publishing' : 'ownership_sync_blocked', this.taskSync.get(context, id)?.next_retry_at ?? null);
+      return;
+    }
     const state = this.taskSync.get(context, id);
     if (previous?.blocked && state?.phase !== 'reconciling' && !state?.failure_count) throw new RemoteSyncStateError('Persisted synchronization safety block requires task review');
     if (!this.generation && !row.device_id) { this.taskSync.defer(context, id, 5000); return; }
@@ -1549,7 +1569,8 @@ export class RemoteBridge {
     this.syncSkipReasons.delete(id);
     this.deps.store.afterCommit(() => telemetry.emit(RemoteTelemetryEvent.Acknowledged, { operationId: batchId, phase: 'acknowledged', businessStatus: 'committed',
       ackSourceSeq: result.committedSourceSeq, streamEpoch: row.stream_epoch, syncProtocolVersion: row.sync_protocol_version }));
-    remoteLogMessage('debug', '[RemoteSync] Batch acknowledged locally', { localSessionId: id, batchId, ...remoteSyncResultMetadata(result) });
+    remoteLogMessage('debug', '[RemoteSync] Batch acknowledged locally', { localSessionId: id, batchId,
+      requestId: this.telemetryRequestIds.get(result) ?? null, ...remoteSyncResultMetadata(result) });
   }
   private async failSession(row: SyncRow, error: unknown, current: () => boolean, context: TaskSyncContext): Promise<void> {
     if (isSharedSyncFailure(error)) throw error;
@@ -2145,6 +2166,8 @@ export class RemoteBridge {
       let renewal: Promise<void> | null = null;
       let leaseFailed = false;
       let readySent = false;
+      let readyStartedAt = 0;
+      let readyStage = 'server_ready';
       const proof = (): Record<string, unknown> => ({ connectionGeneration: generation, claimId: claim.claimId, claimToken: claim.claimToken,
         expectedStatusVersion: claim.statusVersion, ...(claim.grantVersion ? { grantVersion: claim.grantVersion } : {}) });
       const timer = setInterval(() => {
@@ -2156,35 +2179,47 @@ export class RemoteBridge {
       }, 10000);
       const permitted = (): boolean => current() && !leaseFailed && Date.now() < Date.parse(claim.claimUntil);
       try {
-        const prepared = await input.preparations.prepare(owner, deviceId, claim, async assetId => {
-          if (!permitted()) throw new Error('Input preparation context changed');
+        const prepared = await input.preparations.prepare(owner, deviceId, claim, async (assetId, requestId) => {
+          if (!permitted()) throw new RemoteInputError(RemoteInputReason.Account);
           const result = await this.deps.request(owner,
           `/api/remote/v1/input-assets/${encodeURIComponent(assetId)}/content?preparationId=${encodeURIComponent(claim.preparationId)}`, {
             method: 'GET', redirect: 'error', signal: AbortSignal.timeout(120000), headers: { ...targetHeaders,
               'X-Remote-Device-Credential': `${deviceId}.${this.deps.identity.deviceKey}`,
               'X-Remote-Input-Claim-Id': claim.claimId, 'X-Remote-Input-Claim-Token': claim.claimToken,
-              'X-Remote-Connection-Generation': generation,
+              'X-Remote-Connection-Generation': generation, [REMOTE_SYNC_REQUEST_ID_HEADER]: requestId,
             },
           });
-          if (!permitted()) throw new Error('Input preparation context changed');
+          if (!permitted()) {
+            try { await result.body?.cancel(); } catch { /* Context revocation retains precedence. */ }
+            throw new RemoteInputError(RemoteInputReason.Account);
+          }
           return result;
         }, permitted);
         clearInterval(timer); if (renewal) await renewal;
         if (!permitted()) return false;
-        readySent = true;
+        readySent = true; readyStartedAt = Date.now();
         const receipt = await this.api(`/input-preparations/${claim.preparationId}/result`, 'POST', { ...proof(), status: RemoteInputStatus.Ready,
           resolvedInput: prepared.resolvedInput, inputDigest: prepared.inputDigest });
+        remoteDiagnosticLog(RemoteInputDiagnostic.Event, { preparationId: claim.preparationId, stage: 'server_ready', result: 'success',
+          elapsedMs: Date.now() - readyStartedAt, transportRequestId: this.telemetryRequestIds.get(receipt) });
         if (current() && receipt.readyExpiresAt) {
+          readyStage = 'local_commit';
           input.preparations.confirmReady(prepared.preparationId, owner, deviceId, receipt.readyExpiresAt);
           captureRemoteTelemetry({ remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey, deviceId }).emit(RemoteTelemetryEvent.Preparation, {
             preparationId: prepared.preparationId, direction: 'input_download', phase: 'server_ready', outcome: 'confirmed' });
         }
       } catch (error) {
         clearInterval(timer); if (renewal) await renewal;
-        if (readySent) throw error;
+        if (readySent) {
+          remoteDiagnosticLog(RemoteInputDiagnostic.Event, { preparationId: claim.preparationId, stage: readyStage, result: 'failed',
+            reason: readyStage === 'server_ready' ? 'REQUEST_FAILED' : 'STORAGE_UNAVAILABLE', elapsedMs: Date.now() - readyStartedAt, error }, 'warn');
+          throw error;
+        }
         if (!permitted()) return false;
         const allowed = new Set<string>([RemoteInputReason.ModelUnavailable, RemoteInputReason.ModelChanged, RemoteInputReason.AgentUnavailable, RemoteInputReason.Workspace, RemoteInputReason.Version]);
-        const reason = error instanceof RemoteInputError && allowed.has(error.reason) ? error.reason : 'PREPARATION_FAILED';
+        const reason = error instanceof RemoteAttachmentError ? 'ATTACHMENT_INVALID'
+          : error instanceof RemoteInputError && error.reason === RemoteInputReason.Asset ? 'ASSET_UNAVAILABLE'
+          : error instanceof RemoteInputError && allowed.has(error.reason) ? error.reason : 'PREPARATION_FAILED';
         await this.api(`/input-preparations/${claim.preparationId}/result`, 'POST', { ...proof(), status: RemoteInputStatus.Failed, reason });
       } finally { clearInterval(timer); }
     }

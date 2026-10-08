@@ -9,16 +9,19 @@ import type { RemoteOwner } from '../../shared/remote/constants';
 import { RemoteInputIntent, RemoteInputMode, RemoteInputReason, type RemotePreparationClaim } from '../../shared/remote/input';
 import type { CoworkStore } from '../coworkStore';
 import { payloadHash } from './canonical';
-import { InputPreparationService, type LocalPreparedInput } from './inputPreparationService';
+import { InputPreparationService, type LocalPreparedInput,RemoteAttachmentError } from './inputPreparationService';
 import type { RemoteAgentCatalog } from './remoteAgentCatalog';
 import { RemoteFileTelemetry as Telemetry } from './remoteFileTelemetry';
 import { RemoteModelCatalog } from './remoteModelCatalog';
+import * as syncLog from './remoteSyncLog';
 import * as telemetryApi from './remoteTelemetry';
 
 const emitted: Array<{ event: string; fields: Record<string, unknown> }> = [];
+const diagnostics: Array<Record<string, unknown>> = [];
 const requests: Array<{ fields: Record<string, unknown>; result?: string }> = [];
 beforeEach(() => {
-  emitted.length = 0; requests.length = 0;
+  emitted.length = 0; requests.length = 0; diagnostics.length = 0;
+  vi.spyOn(syncLog, 'remoteDiagnosticLog').mockImplementation((event, fields) => { diagnostics.push({ event, ...fields }); });
   vi.spyOn(telemetryApi, 'captureRemoteTelemetry').mockImplementation((base = {}) => ({
     emit: (event, fields = {}) => { emitted.push({ event, fields: { ...base, ...fields } }); },
     request: fields => {
@@ -406,4 +409,65 @@ it('isolates a malformed local ready manifest without hiding shared storage erro
   expect(values.get('inputPreparation:bad')).toMatchObject({ preparationId: 'bad' });
   vi.spyOn(deps.store.remote, 'get').mockImplementation(() => { throw new Error('SQLITE_IOERR'); });
   expect(() => service.recoverReceipt(receipt, owner, 'pc')).toThrow('SQLITE_IOERR');
+});
+
+
+it.each(['other', 'shorter-content'])('records local integrity diagnostics with the actual request ID and no private payload for %s', async body => {
+  const { service, claim, attach, cwd } = fixture(); attach('hello');
+  let requestId: string | undefined;
+  await expect(service.prepare(owner, 'pc', claim, async (_asset, id) => { requestId = id; return new Response(body); }, () => true)).rejects.toThrow(RemoteInputReason.Asset);
+  expect(syncLog.remoteSyncRequestId(requestId)).toBe(requestId);
+  expect(diagnostics).toContainEqual(expect.objectContaining({ event: syncLog.RemoteInputDiagnostic.Event,
+    preparationId: 'prep', assetId: 'asset', transportRequestId: requestId, stage: 'validate', result: 'failed',
+    actualBytes: Buffer.byteLength(body), expectedBytes: 5,
+    reason: body.length === 5 ? syncLog.RemoteInputDiagnostic.HashMismatch : syncLog.RemoteInputDiagnostic.SizeMismatch,
+    elapsedMs: expect.any(Number) }));
+  const logged = JSON.stringify(diagnostics);
+  for (const secret of ['hello', body, cwd, 'report.txt', claim.claimToken, claim.attachments![0].sha256]) expect(logged).not.toContain(secret);
+});
+it.each(['context', 'status', 'open'])('cancels an unconsumed asset body on %s failure', async failure => {
+  const { service, claim, attach, setActor, values } = fixture(); attach('hello');
+  const cancel = vi.fn();
+  const stream = new ReadableStream<Uint8Array>({ cancel });
+  const error = Object.assign(new Error('private cache path'), { code: 'ENOSPC' });
+  if (failure === 'open') vi.spyOn(fs, 'open').mockRejectedValueOnce(error);
+  const result = service.prepare(owner, 'pc', claim, async () => {
+    if (failure === 'context') setActor(null);
+    return new Response(stream, { status: failure === 'status' ? 503 : 200 });
+  }, () => true);
+  if (failure === 'open') await expect(result).rejects.toBe(error);
+  else await expect(result).rejects.toThrow(failure === 'context' ? RemoteInputReason.Account : RemoteInputReason.Asset);
+  expect(cancel).toHaveBeenCalledOnce(); expect(stream.locked).toBe(false);
+  expect(values.has('inputPreparation:prep')).toBe(false);
+  expect(diagnostics).toContainEqual(expect.objectContaining({ stage: failure === 'open' ? 'write' : 'download', result: 'failed',
+    reason: failure === 'context' ? RemoteInputReason.Account : failure === 'open' ? 'LOCAL_IO_FAILED' : syncLog.RemoteInputDiagnostic.DownloadRejected }));
+});
+it('preserves the preparation error when an unconsumed body rejects cancellation', async () => {
+  const { service, claim, attach } = fixture(); attach('hello');
+  const error = Object.assign(new Error('private cache path'), { code: 'ENOSPC' });
+  vi.spyOn(fs, 'open').mockRejectedValueOnce(error);
+  const cancel = vi.fn(async () => { throw new Error('private cancel failure'); });
+  await expect(service.prepare(owner, 'pc', claim, async () => new Response(new ReadableStream({ cancel })), () => true)).rejects.toBe(error);
+  expect(cancel).toHaveBeenCalledOnce();
+});
+it('distinguishes attachment decoder rejection from other invalid input and logs the decode stage locally', async () => {
+  const { deps, claim, attach, values } = fixture(); attach('image', RemoteInputIntent.Image);
+  const service = new InputPreparationService({ ...deps, convertImage: async () => { throw new Error(RemoteInputReason.Invalid); } });
+  await expect(service.prepare(owner, 'pc', claim, async () => new Response('image'), () => true)).rejects.toBeInstanceOf(RemoteAttachmentError);
+  expect(diagnostics).toContainEqual(expect.objectContaining({ preparationId: 'prep', assetId: 'asset', stage: 'decode',
+    result: 'failed', reason: syncLog.RemoteInputDiagnostic.ImageInvalid, actualBytes: 5, expectedBytes: 5 }));
+  expect(values.has('inputPreparation:prep')).toBe(false);
+  diagnostics.length = 0;
+  claim.request.input.options = { thinkingLevel: 'invalid-thinking-level' };
+  const failure = await service.prepare(owner, 'pc', claim, vi.fn(), () => true).catch(error => error);
+  expect(failure.message).toBe(RemoteInputReason.Invalid); expect(failure).not.toBeInstanceOf(RemoteAttachmentError);
+  expect(diagnostics).toContainEqual(expect.objectContaining({ stage: 'validate', result: 'failed', reason: RemoteInputReason.Invalid }));
+});
+it('records successful download, validation, image decode and local commit as separate checkpoints', async () => {
+  const { deps, claim, attach } = fixture(); attach('image', RemoteInputIntent.Image);
+  const service = new InputPreparationService({ ...deps, convertImage: async source => ({ path: source, mimeType: 'image/png' }) });
+  await service.prepare(owner, 'pc', claim, async () => new Response('image'), () => true);
+  expect(diagnostics.map(value => [value.stage, value.result])).toEqual([
+    ['download', 'success'], ['validate', 'success'], ['decode', 'success'], ['local_commit', 'success'],
+  ]);
 });

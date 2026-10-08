@@ -386,22 +386,46 @@ describe('AuthSessionManager authenticated fetch', () => {
 describe('authenticated transport isolation', () => {
   test('uses the supplied transport for requests and retries while refresh stays on the auth transport', async () => {
     const authFetch = vi.fn(async (_url: string) => new Response(JSON.stringify({ code: 0, data: { accessToken: 'new', refreshToken: 'refresh-new' } })));
-    const transport = vi.fn(async (_url: string, init?: RequestInit) => new Response(null, {
-      status: new Headers(init?.headers).get('Authorization') === 'Bearer new' ? 200 : 401,
-    }));
+    const transport = vi.fn(async (_url: string, init?: RequestInit) => {
+      const authenticated = new Headers(init?.headers).get('Authorization') === 'Bearer new';
+      return new Response(JSON.stringify(authenticated ? { code: 0, data: { items: [] } } : { code: 40101 }), {
+        status: authenticated ? 200 : 401, headers: { 'Content-Type': 'application/json' },
+      });
+    });
     const { manager } = createTestManager({ fetch: authFetch });
-    expect((await manager.fetchWithAuth('https://server.example/api/remote/poll', {}, transport)).status).toBe(200);
+    const response = await manager.fetchWithAuth('https://server.example/api/remote/poll', {}, transport);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ code: 0, data: { items: [] } });
     expect(authFetch).toHaveBeenCalledOnce();
     expect(authFetch.mock.calls[0][0]).toContain('/api/auth/refresh');
     expect(transport).toHaveBeenCalledTimes(2);
   });
-  test('rejects a supplied transport response after the account changes', async () => {
+  test.each(['resolved', 'rejected', 'pending'] as const)('cancels a stale response without waiting for %s cleanup', async cleanup => {
     let session = 'a';
     const authFetch = vi.fn();
     const { manager } = createTestManager({ fetch: authFetch, getSessionKey: () => session });
+    const cancel = vi.fn(() => cleanup === 'pending' ? new Promise<void>(() => {})
+      : cleanup === 'rejected' ? Promise.reject(new Error('Cleanup unavailable')) : undefined);
+    const response = new Response(new ReadableStream({ cancel }));
     await expect(manager.fetchWithAuth('https://server.example/api/remote/poll', {}, async () => {
-      session = 'b'; return new Response(null);
-    })).rejects.toBeInstanceOf(AuthSessionRequestError);
+      session = 'b'; return response;
+    })).rejects.toMatchObject({ status: AuthSessionStatus.TemporarilyUnavailable });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(authFetch).not.toHaveBeenCalled();
+  });
+  test('returns a current binary stream without consuming or cloning its body', async () => {
+    const authFetch = vi.fn();
+    const { manager } = createTestManager({ fetch: authFetch });
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+    const cancel = vi.fn();
+    const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+      controller.enqueue(bytes); controller.close();
+    });
+    const original = new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }));
+    const response = await manager.fetchWithAuth('https://server.example/api/remote/v1/input-assets/asset/content', {}, async () => original);
+    expect(response).toBe(original);
+    expect(pull).not.toHaveBeenCalled(); expect(cancel).not.toHaveBeenCalled();
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
     expect(authFetch).not.toHaveBeenCalled();
   });
 });

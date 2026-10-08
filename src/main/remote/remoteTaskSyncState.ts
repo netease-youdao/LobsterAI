@@ -61,7 +61,10 @@ export class RemoteTaskSyncState {
       db.exec('ALTER TABLE remote_sync_task_state ADD COLUMN recovery_probe_version INTEGER NOT NULL DEFAULT 0');
     }
     db.exec(`CREATE INDEX IF NOT EXISTS idx_remote_sync_task_recovery
-      ON remote_sync_task_state(owner_user_id,owner_scope_key,target_key,device_id,recovery_probe_version,local_session_id);`);
+      ON remote_sync_task_state(owner_user_id,owner_scope_key,target_key,device_id,recovery_probe_version,local_session_id);
+      CREATE INDEX IF NOT EXISTS idx_remote_sync_task_retry_deadline
+      ON remote_sync_task_state(owner_user_id,owner_scope_key,target_key,device_id,MAX(next_retry_at,server_retry_at),local_session_id)
+      WHERE phase NOT IN ('isolated','closed');`);
   }
   private report(context: TaskSyncContext, id: string, stage: string, outcome: string, reason?: string): void {
     try {
@@ -268,6 +271,13 @@ export class RemoteTaskSyncState {
     return admitted;
   }
   candidates(context: TaskSyncContext, limit = 50): SyncRow[] {
+    return this.pendingCandidates(context, limit, false);
+  }
+  /** A future deadline uses the same pending/admission scope without granting early eligibility. */
+  nextRetryAt(context: TaskSyncContext): number | null {
+    return this.pendingCandidates(context, 1, true)[0]?.retry_at ?? null;
+  }
+  private pendingCandidates(context: TaskSyncContext, limit: number, future: boolean): Array<SyncRow & { retry_at: number }> {
     const admissionTables = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('remote_sync_session_admissions','remote_sync_admission_evidence','remote_sync_targets')").all();
     const needsAdmission = admissionTables.length === 3 ? `OR EXISTS(SELECT 1 FROM remote_sync_session_admissions a
       JOIN remote_sync_targets target ON target.target_id=a.target_id AND target.owner_user_id=o.owner_user_id AND target.owner_scope_key=o.owner_scope_key
@@ -279,17 +289,26 @@ export class RemoteTaskSyncState {
         AND NOT EXISTS(SELECT 1 FROM remote_sync_session_admissions a WHERE a.target_id=? AND a.local_session_id=s.local_id
           AND a.owner_user_id=o.owner_user_id AND a.owner_scope_key=o.owner_scope_key AND a.device_id=? AND a.admission='verified'))` : '';
     const admissionArgs = needsAdmission ? [context.target, context.deviceId, `admission:${context.target}`, context.target, context.deviceId] : [];
-    return this.db.prepare(`SELECT s.* FROM remote_sync s JOIN cowork_session_ownership o ON o.session_id=s.local_id
+    const deadline = 'MAX(t.next_retry_at,t.server_retry_at)';
+    const source = future ? `remote_sync_task_state t INDEXED BY idx_remote_sync_task_retry_deadline
+      JOIN remote_sync s ON s.local_id=t.local_session_id
+      JOIN cowork_session_ownership o ON o.session_id=s.local_id AND o.owner_user_id=t.owner_user_id AND o.owner_scope_key=t.owner_scope_key`
+      : `remote_sync s JOIN cowork_session_ownership o ON o.session_id=s.local_id
       LEFT JOIN remote_sync_task_state t ON t.owner_user_id=o.owner_user_id AND t.owner_scope_key=o.owner_scope_key
         AND t.target_key=? AND t.device_id=? AND t.local_session_id=s.local_id
-      LEFT JOIN remote_session_revisions r ON r.session_id=s.local_id
-      WHERE o.owner_user_id=? AND o.owner_scope_key=? AND o.ownership_status='confirmed'
-        AND (t.phase IS NULL OR (t.phase NOT IN ('isolated','closed') AND t.next_retry_at<=? AND t.server_retry_at<=?))
+      LEFT JOIN remote_session_revisions r ON r.session_id=s.local_id`;
+    const scope = future ? 't.target_key=? AND t.device_id=? AND t.owner_user_id=? AND t.owner_scope_key=?'
+      : 'o.owner_user_id=? AND o.owner_scope_key=?';
+    const eligibility = future ? `t.phase NOT IN ('isolated','closed') AND ${deadline}>? AND ${deadline}<?
+      AND NOT EXISTS(SELECT 1 FROM remote_state closed WHERE closed.key='deletionClosed:'||s.local_id)`
+      : "t.phase IS NULL OR (t.phase NOT IN ('isolated','closed') AND t.next_retry_at<=? AND t.server_retry_at<=?)";
+    return this.db.prepare(`SELECT s.*,${deadline} AS retry_at FROM ${source}
+      WHERE ${scope} AND o.ownership_status='confirmed' AND (${eligibility})
         AND (s.needs_snapshot=1 OR s.source_seq>s.ack_seq OR EXISTS(SELECT 1 FROM remote_dirty d WHERE d.session_id=s.local_id)
           OR EXISTS(SELECT 1 FROM remote_state x WHERE x.key='import:'||s.local_id OR x.key='syncFailure:'||s.local_id)
           OR t.phase='reconciling' ${needsAdmission})
-      ORDER BY COALESCE(t.last_served_at,0),COALESCE(r.dirty_at,0),s.local_id LIMIT ?`)
-      .all(context.target, context.deviceId, context.owner.userId, context.owner.scopeKey, this.now(), this.now(), ...admissionArgs, Math.max(1, Math.min(50, Number.isFinite(limit) ? Math.floor(limit) : 50))) as SyncRow[];
+      ORDER BY ${future ? `${deadline},t.local_session_id` : 'COALESCE(t.last_served_at,0),COALESCE(r.dirty_at,0),s.local_id'} LIMIT ?`)
+      .all(context.target, context.deviceId, context.owner.userId, context.owner.scopeKey, this.now(), future ? NEVER : this.now(), ...admissionArgs, Math.max(1, Math.min(50, Number.isFinite(limit) ? Math.floor(limit) : 50))) as Array<SyncRow & { retry_at: number }>;
   }
   health(context: TaskSyncContext, admitted: (sessionId: string) => boolean = () => true,
     visible: (sessionId: string) => boolean = () => true): TaskSyncHealth {

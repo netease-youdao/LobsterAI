@@ -622,6 +622,7 @@ import { RemoteImageDecoder } from './remote/remoteImageDecoder';
 import { listRemoteInputModels } from './remote/remoteInputModels';
 import { RemoteLocalGc } from './remote/remoteLocalGc';
 import { RemoteModelCatalog } from './remote/remoteModelCatalog';
+import { remoteNetworkBinaryDownload } from './remote/remoteNetworkProtocol';
 import { remoteNetworkTransport } from './remote/remoteNetworkTransport';
 import { RemoteSecurityCoordinator } from './remote/remoteSecurityCoordinator';
 import { RemoteSecurityJournal, RemoteSecurityJournalWorkerIo } from './remote/remoteSecurityJournal';
@@ -5745,6 +5746,8 @@ if (!gotTheLock) {
     const response = await authSessionManager.fetchWithAuth(url, options, transport);
     if (
       requestEnterpriseSession
+      // A successful asset can itself be a JSON file; never clone/parse its byte stream as an API envelope.
+      && !(response.status === 200 && remoteNetworkBinaryDownload(url, options?.method))
       && response.headers.get('content-type')?.includes('application/json')
     ) {
       try {

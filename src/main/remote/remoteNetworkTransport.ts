@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 
 import { RemoteTelemetryEvent as TelemetryEvent } from '../../shared/remote/telemetry';
 import { RemoteNetworkError } from './remoteNetworkError';
-import { remoteNetworkCapacities as capacities, RemoteNetworkFailure as Failure, remoteNetworkFailureValue, type RemoteNetworkLane as Lane, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message, remoteNetworkRequestLane as requestLane, type RemoteSocket } from './remoteNetworkProtocol';
+import { remoteNetworkBinaryDownload, remoteNetworkCapacities as capacities, RemoteNetworkFailure as Failure, remoteNetworkFailureValue, type RemoteNetworkLane as Lane, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message, remoteNetworkRequestLane as requestLane, type RemoteSocket } from './remoteNetworkProtocol';
 import { remoteDiagnosticLog } from './remoteSyncLog';
 import { captureRemoteTelemetry, type RemoteTelemetryRequestTracker } from './remoteTelemetry';
 import { currentRemoteTelemetryRequest, withRemoteTelemetryRequest } from './remoteTelemetryTransport';
@@ -12,6 +12,8 @@ import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 interface QueuedRequest { lane: Lane; bytes: number; start(): void; cancel(): void }
 interface Pending {
   lane: Lane; resolve(response: Response): void; reject(error: Error): void;
+  cancel(error?: RemoteNetworkError): void; binary: boolean;
+  stream?: { controller: ReadableStreamDefaultController<Uint8Array>; seq: number; bytes: number; waiting: boolean; consumed?: () => void };
   removeAbort(): void; cancelled: boolean; dispatched: boolean; transportStarted: boolean; telemetry?: RemoteTelemetryRequestTracker;
 }
 const parsedResponses = new WeakMap<Response, { valid: boolean; value: unknown }>();
@@ -115,7 +117,7 @@ export class RemoteNetworkTransport {
       this.retirementObserver.unref?.();
       try { child.kill('SIGKILL'); } catch { /* Keep the exact child fenced until absence is confirmed. */ }
     }
-    for (const request of this.pending.values()) { request.removeAbort(); request.reject(new RemoteNetworkError(Failure.WorkerExit)); }
+    for (const request of this.pending.values()) { request.removeAbort(); this.reject(request, new RemoteNetworkError(Failure.WorkerExit)); }
     this.pending.clear();
     for (const request of [...this.queue]) request.cancel();
     const socket = this.currentSocket; this.currentSocket = null;
@@ -147,6 +149,54 @@ export class RemoteNetworkTransport {
       child.send(message, error => { if (error) this.failed(child, 'WORKER_IPC_FAILURE'); });
     } catch { this.failed(child, 'WORKER_IPC_FAILURE'); throw new RemoteNetworkError(Failure.IpcFailed); }
   }
+  private reject(request: Pending, error: RemoteNetworkError): void {
+    request.reject(error);
+    if (request.stream) {
+      try { request.stream.controller.error(error); } catch { /* The consumer may already have cancelled. */ }
+      request.stream.consumed?.(); request.stream.consumed = undefined;
+    }
+  }
+  private streamMessage(message: any): void {
+    const request = this.pending.get(message.id); if (!request) return;
+    if (request.cancelled) {
+      if (message.type === Message.StreamEnd) { this.pending.delete(message.id); request.removeAbort(); queueMicrotask(() => this.drain()); }
+      return;
+    }
+    try {
+      if (!request.binary) throw new RemoteNetworkError(Failure.ResponseInvalid);
+      if (message.type === Message.StreamStart) {
+        if (request.stream || message.status !== 200 || !message.headers || typeof message.headers !== 'object'
+          || Buffer.byteLength(JSON.stringify(message.headers)) > Limit.HeaderBytes) throw new RemoteNetworkError(Failure.ResponseInvalid);
+        const length = message.headers['content-length'];
+        if (length !== undefined && (typeof length !== 'string' || !/^\d+$/u.test(length) || Number(length) > Limit.BinaryBytes)) throw new RemoteNetworkError(Failure.ResponseBudget);
+        const body = new ReadableStream<Uint8Array>({
+          start: controller => { request.stream = { controller, seq: 0, bytes: 0, waiting: false }; },
+          pull: () => new Promise<void>(resolve => {
+            const stream = request.stream!; stream.waiting = true; stream.consumed = resolve;
+            try { this.send({ type: Message.StreamPull, id: message.id, seq: stream.seq }); }
+            catch { request.cancel(); }
+          }),
+          cancel: () => { request.cancel(); },
+        }, { highWaterMark: 0 });
+        request.resolve(new Response(body, { status: 200, headers: message.headers })); return;
+      }
+      const stream = request.stream;
+      if (!stream || !stream.waiting) throw new RemoteNetworkError(Failure.ResponseInvalid);
+      if (message.type === Message.StreamEnd) {
+        if (message.bytes !== stream.bytes) throw new RemoteNetworkError(Failure.ResponseInvalid);
+        this.pending.delete(message.id); request.removeAbort(); stream.controller.close();
+        stream.consumed?.(); stream.consumed = undefined; queueMicrotask(() => this.drain()); return;
+      }
+      if (message.seq !== stream.seq || typeof message.body !== 'string' || message.body.length > 4 * Math.ceil(Limit.BinaryChunkBytes / 3)
+        || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(message.body)) throw new RemoteNetworkError(Failure.ResponseInvalid);
+      const chunk = Buffer.from(message.body, 'base64');
+      if (!chunk.length || chunk.length > Limit.BinaryChunkBytes || chunk.toString('base64') !== message.body) throw new RemoteNetworkError(Failure.ResponseInvalid);
+      stream.bytes += chunk.length;
+      if (stream.bytes > Limit.BinaryBytes) throw new RemoteNetworkError(Failure.ResponseBudget);
+      stream.waiting = false; stream.seq++; stream.controller.enqueue(chunk);
+      stream.consumed?.(); stream.consumed = undefined;
+    } catch (error) { request.cancel(error instanceof RemoteNetworkError ? error : new RemoteNetworkError(Failure.ResponseInvalid)); }
+  }
   private receive(message: any): void {
     if (!message || typeof message !== 'object') return;
     if (message.type === Message.Alive) {
@@ -162,13 +212,14 @@ export class RemoteNetworkTransport {
       }
       return;
     }
+    if ([Message.StreamStart, Message.StreamChunk, Message.StreamEnd].includes(message.type)) { this.streamMessage(message); return; }
     if (message.type === Message.Result) {
       const request = this.pending.get(message.id); if (!request) return;
       this.pending.delete(message.id); request.removeAbort(); queueMicrotask(() => this.drain());
       if (request.cancelled) return;
-      if (message.error) { request.reject(new RemoteNetworkError(remoteNetworkFailureValue(message.error) ?? Failure.RequestFailed)); return; }
+      if (message.error || request.stream) { this.reject(request, new RemoteNetworkError(message.error ? remoteNetworkFailureValue(message.error) ?? Failure.RequestFailed : Failure.ResponseInvalid)); return; }
       try {
-        if (typeof message.body !== 'string' || Buffer.byteLength(message.body) > Limit.BodyBytes || !Number.isInteger(message.status)
+        if (request.binary && message.status === 200 || typeof message.body !== 'string' || Buffer.byteLength(message.body) > Limit.BodyBytes || !Number.isInteger(message.status)
           || message.status < 200 || message.status > 599 || Buffer.byteLength(JSON.stringify(message.headers || {})) > Limit.HeaderBytes) throw new RemoteNetworkError(Failure.ResponseInvalid);
         request.resolve(responseFromWorker(message));
       } catch { request.reject(new RemoteNetworkError(Failure.ResponseInvalid)); }
@@ -189,7 +240,7 @@ export class RemoteNetworkTransport {
   }
   readonly fetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
     const telemetry = currentRemoteTelemetryRequest();
-    const lane = requestLane(url, options.method);
+    const lane = requestLane(url, options.method), binary = remoteNetworkBinaryDownload(url, options.method);
     if (this.pending.size >= Limit.Requests || [...this.pending.values()].filter(value => value.lane === lane).length >= capacities[lane])
       throw new RemoteNetworkError(Failure.AdmissionBusy);
     if (options.body !== undefined && options.body !== null && typeof options.body !== 'string') throw new RemoteNetworkError(Failure.RequestInvalid);
@@ -199,24 +250,25 @@ export class RemoteNetworkTransport {
     const id = randomUUID();
     return new Promise<Response>((resolve, reject) => {
       const signal = options.signal;
-      const cancel = (): void => {
+      const cancel = (error = new RemoteNetworkError(Failure.Cancelled)): void => {
         const item = this.pending.get(id); if (!item || item.cancelled) return;
-        item.cancelled = true; reject(new RemoteNetworkError(Failure.Cancelled));
+        item.cancelled = true; this.reject(item, error);
         if (!item.dispatched) {
           this.pending.delete(id); item.removeAbort(); queueMicrotask(() => this.drain()); return;
         }
         if (this.child?.connected) { try { this.send({ type: Message.Cancel, id }); } catch { /* Worker failure rejects and releases every pending slot. */ } }
       };
-      this.pending.set(id, { lane, resolve, reject, cancelled: false, dispatched: false, transportStarted: false, telemetry, removeAbort: () => signal?.removeEventListener('abort', cancel) });
-      signal?.addEventListener('abort', cancel, { once: true });
+      const aborted = (): void => cancel();
+      this.pending.set(id, { lane, binary, resolve, reject, cancel, cancelled: false, dispatched: false, transportStarted: false, telemetry, removeAbort: () => signal?.removeEventListener('abort', aborted) });
+      signal?.addEventListener('abort', aborted, { once: true });
       if (signal?.aborted) cancel();
       if (!this.pending.has(id)) return;
       void this.ensure().then(() => {
         if (!this.pending.has(id)) return;
-        if (this.pending.get(id)!.cancelled) { this.pending.delete(id); signal?.removeEventListener('abort', cancel); this.drain(); return; }
+        if (this.pending.get(id)!.cancelled) { this.pending.delete(id); signal?.removeEventListener('abort', aborted); this.drain(); return; }
         this.pending.get(id)!.dispatched = true;
         this.send({ type: Message.Fetch, id, url, method: options.method || 'GET', headers, ...(typeof options.body === 'string' ? { body: options.body } : {}) });
-      }).catch(error => { this.pending.delete(id); signal?.removeEventListener('abort', cancel); reject(error instanceof RemoteNetworkError ? error : new RemoteNetworkError(Failure.WorkerUnavailable)); this.drain(); });
+      }).catch(error => { this.pending.delete(id); signal?.removeEventListener('abort', aborted); reject(error instanceof RemoteNetworkError ? error : new RemoteNetworkError(Failure.WorkerUnavailable)); this.drain(); });
     });
   };
   /** Admission waits for an actual permit release; it never spins on the worker's Busy response. */
@@ -272,7 +324,7 @@ export class RemoteNetworkTransport {
     this.epoch++;
     for (const request of [...this.queue]) request.cancel();
     if (this.child) { this.failed(this.child, 'WORKER_DISPOSE'); return; }
-    for (const request of this.pending.values()) { request.removeAbort(); request.reject(new RemoteNetworkError(Failure.Cancelled)); }
+    for (const request of this.pending.values()) { request.removeAbort(); this.reject(request, new RemoteNetworkError(Failure.Cancelled)); }
     this.pending.clear();
     this.currentSocket?.close();
   }

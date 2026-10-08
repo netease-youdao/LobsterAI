@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { fork } from 'child_process';
+import { createHash } from 'crypto';
 import fs from 'fs';
 import { createRequire } from 'module';
 import os from 'os';
@@ -11,6 +12,7 @@ import { Worker } from 'worker_threads';
 import { remoteWorkerBuilds } from '../../../remote-workers.config';
 import { RemoteHistoryJob } from './remoteHistoryJob';
 import { RemoteLiveProjectionJob } from './remoteLiveProjectionJob';
+import { RemoteNetworkLimit as NetworkLimit } from './remoteNetworkProtocol';
 import { RemoteNetworkTransport } from './remoteNetworkTransport';
 import { RemoteStore } from './remoteStore';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
@@ -100,6 +102,82 @@ describe('independent packaged remote workers', () => {
       }
     } finally { transport.dispose(); }
   });
+  it('preserves binary input asset bytes in the packaged network child', async () => {
+    const fixture = path.join(root, 'binary-network-fixture.cjs');
+    fs.writeFileSync(fixture, `
+      global.fetch = async () => new Response(Buffer.from([137,80,78,71,13,10,26,10]), {headers:{'content-type':'image/png'}});
+      require(${JSON.stringify(path.join(output, RemoteWorkerFile.Network))});
+    `);
+    const transport = new RemoteNetworkTransport(fork, fixture);
+    try {
+      const response = await transport.fetch('https://example.com/api/remote/v1/input-assets/asset-1/content?preparationId=prep-1');
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from([137,80,78,71,13,10,26,10]));
+    } finally { transport.dispose(); }
+  });
+  it('streams large input downloads with backpressure, cancellation, limits and independent controls', async () => {
+    const fixture = path.join(root, 'streaming-network-fixture.cjs');
+    fs.writeFileSync(fixture, `
+      const stats = {pulls:0,cancelled:0,started:0};
+      global.fetch = async (url, options) => {
+        const mode = new URL(url).searchParams.get('mode');
+        if (!mode) return new Response(JSON.stringify({code:0,data:stats}));
+        if (mode === 'unauthorized') return new Response(JSON.stringify({code:40100}),{status:401,headers:{'content-type':'application/json'}});
+        stats.started++;
+        const total = mode === 'oversized-stream' ? ${NetworkLimit.BinaryBytes + 1} : 3*1024*1024+123;
+        let sent = 0, abort;
+        const body = new ReadableStream({
+          start(controller) {
+            abort = () => {stats.cancelled++;controller.error(new DOMException('Aborted','AbortError'));};
+            options.signal.addEventListener('abort',abort,{once:true});
+          },
+          pull(controller) {
+            stats.pulls++;
+            if (sent === total) {options.signal.removeEventListener('abort',abort);controller.close();return;}
+            const bytes = Buffer.alloc(Math.min(65536,total-sent));
+            for (let i=0;i<bytes.length;i++) bytes[i]=(sent+i)%251;
+            sent+=bytes.length;controller.enqueue(bytes);
+          },
+          cancel() {stats.cancelled++;options.signal.removeEventListener('abort',abort);}
+        },{highWaterMark:0});
+        return new Response(body,{headers:{'content-type':mode==='json-file'?'application/json':'image/png',
+          ...(mode === 'oversized-header' ? {'content-length':'${NetworkLimit.BinaryBytes + 1}'} : {})}});
+      };
+      require(${JSON.stringify(path.join(output, RemoteWorkerFile.Network))});
+    `);
+    const transport = new RemoteNetworkTransport(fork, fixture);
+    const prefix = 'https://example.com/api/remote/v1';
+    const asset = (mode: string) => `${prefix}/input-assets/asset-1/content?preparationId=prep-1&mode=${mode}`;
+    const stats = async () => (await (await transport.fetch(`${prefix}/capabilities`)).json()).data;
+    try {
+      const large = await transport.fetch(asset('large'));
+      expect((await stats()).pulls).toBe(0);
+      const reader = large.body!.getReader(), first = await reader.read();
+      expect(first.value).toHaveLength(NetworkLimit.BinaryChunkBytes);
+      expect((await stats()).pulls).toBe(1);
+      // A queued file occupies no additional transfer slot; controls proceed while consumption pauses.
+      let secondStarted = false;
+      const second = transport.queuedFetch(asset('json-file')).then(response => { secondStarted = true; return response; });
+      expect((await stats()).started).toBe(1); expect(secondStarted).toBe(false);
+      await reader.cancel();
+      const response = await second;
+      const actual = Buffer.from(await response.arrayBuffer());
+      const expected = Buffer.alloc(3 * 1024 * 1024 + 123);
+      for (let i = 0; i < expected.length; i++) expected[i] = i % 251;
+      expect(actual.length).toBe(expected.length);
+      expect(createHash('sha256').update(actual).digest('hex')).toBe(createHash('sha256').update(expected).digest('hex'));
+      expect((await stats()).cancelled).toBeGreaterThan(0);
+      const denied = await transport.fetch(asset('unauthorized'));
+      expect(denied.status).toBe(401); expect(await denied.clone().json()).toEqual({ code: 40100 });
+      await expect(transport.fetch(asset('oversized-header'))).rejects.toThrow('RESPONSE_BUDGET');
+      const oversized = await transport.fetch(asset('oversized-stream'));
+      let bytes = 0;
+      await expect((async () => {
+        for await (const chunk of oversized.body as unknown as AsyncIterable<Uint8Array>) bytes += chunk.byteLength;
+      })()).rejects.toThrow('RESPONSE_BUDGET');
+      expect(bytes).toBe(NetworkLimit.BinaryBytes);
+      expect((await stats()).started).toBe(4);
+    } finally { transport.dispose(); }
+  }, 15000);
   it('starts file and security workers from the same paths used by the bundled main process', async () => {
     const directory = path.join(root, 'cache', 'owner', 'scope');
     const file = await invoke(RemoteWorkerFile.FileSnapshot, undefined, { id: 1, kind: 'input', args: { directory, base64: Buffer.from('immutable').toString('base64') }, cancel: new SharedArrayBuffer(4) });

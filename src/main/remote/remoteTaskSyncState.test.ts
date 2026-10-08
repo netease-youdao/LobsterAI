@@ -39,6 +39,37 @@ function fixture() {
 }
 const transport = { phase: TaskSyncPhase.Backoff, scope: 'service', reason: 'TRANSPORT' };
 
+describe('task retry scheduling', () => {
+  it('finds future pending work without making it eligible early', () => {
+    const f = fixture(); f.add('later'); f.state.defer(context, 'later', 5000);
+    expect(f.state.candidates(context)).toHaveLength(0);
+    expect(f.state.nextRetryAt(context)).toBe(5000);
+    f.at(4999); expect(f.state.nextRetryAt(context)).toBe(5000);
+    f.at(5000); expect(f.state.candidates(context).map(row => row.local_id)).toEqual(['later']);
+    expect(f.state.nextRetryAt(context)).toBeNull();
+  });
+  it('honors server lower bounds and excludes other owners, closed, deleted and completed tasks', () => {
+    const f = fixture();
+    f.add('server'); f.state.fail(context, 'server', { ...transport, retryAfterMs: 100000 });
+    f.db.prepare('UPDATE remote_sync_task_state SET next_retry_at=10 WHERE local_session_id=?').run('server');
+    for (const id of ['closed', 'isolated', 'deleted', 'complete']) { f.add(id); f.state.defer(context, id, 1000); }
+    f.state.fail(context, 'closed', { phase: TaskSyncPhase.Closed, scope: 'session', reason: 'SESSION_DELETED' });
+    f.state.fail(context, 'isolated', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'RECORD_INVALID' });
+    f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run('deletionClosed:deleted', 'true');
+    f.db.prepare('UPDATE remote_sync SET needs_snapshot=0 WHERE local_id=?').run('complete');
+    const other = { ...context, owner: { userId: 'another', scopeKey: 'personal' } };
+    f.add('another', other.owner); f.state.defer(other, 'another', 500);
+    expect(f.state.nextRetryAt(context)).toBe(100000);
+    expect(f.state.nextRetryAt({ ...context, deviceId: 'other-device' })).toBeNull();
+    expect(f.state.nextRetryAt({ ...context, target: 'other-target' })).toBeNull();
+  });
+  it('returns no deadline for idle state or an indefinite safety wait', () => {
+    const f = fixture(); expect(f.state.nextRetryAt(context)).toBeNull();
+    f.add('s'); f.state.defer(context, 's', Number.MAX_SAFE_INTEGER);
+    expect(f.state.nextRetryAt(context)).toBeNull();
+  });
+});
+
 describe('task fault isolation persistence', () => {
   it('permits only a targeted local projection probe before independently reconciling a repaired task', () => {
     const f = fixture(); f.add('s');
@@ -110,6 +141,7 @@ describe('task fault isolation persistence', () => {
   it('migrates an older task ledger without shortening its existing retry deadline', () => {
     const f = fixture(); f.add('s');
     const value = f.state.fail(context, 's', transport);
+    f.db.exec('DROP INDEX idx_remote_sync_task_retry_deadline');
     f.db.exec('ALTER TABLE remote_sync_task_state DROP COLUMN server_retry_at');
     f.db.exec('UPDATE remote_sync_task_state SET manual_retry_at=0');
     const migrated = f.create();

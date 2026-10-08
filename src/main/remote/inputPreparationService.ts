@@ -12,7 +12,13 @@ import type { RemoteAgentCatalog } from './remoteAgentCatalog';
 import { captureRemoteFileTelemetry, remoteFileRequestFailure, remoteFileRequestFailureFields, RemoteFileTelemetry as Telemetry,remoteFileTelemetryReason } from './remoteFileTelemetry';
 import type { RemoteImageContext } from './remoteImageDecoder';
 import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
+import { remoteDiagnosticLog,RemoteInputDiagnostic } from './remoteSyncLog';
 import { withRemoteTelemetryRequest } from './remoteTelemetryTransport';
+
+// Only attachment decoding/representation failures qualify for the server attachment reason.
+export class RemoteAttachmentError extends RemoteInputError {
+  constructor() { super(RemoteInputReason.Invalid); }
+}
 
 interface FileIdentity { realPath: string; dev: string; ino: string; size: number; mtimeMs: number }
 interface InputImagePreview { mimeType: string; base64Data: string }
@@ -149,10 +155,18 @@ export class InputPreparationService {
   }
   private sessionInputVersion(sessionId: string): string { return this.deps.store.remote.inputVersion(sessionId); }
   async prepare(owner: RemoteOwner, deviceId: string, claim: RemotePreparationClaim,
-    download: (assetId: string) => Promise<Response>, current: () => boolean): Promise<LocalPreparedInput> {
+    download: (assetId: string, requestId: string) => Promise<Response>, current: () => boolean): Promise<LocalPreparedInput> {
     const telemetry = captureRemoteFileTelemetry(owner, { device_id: deviceId, direction: Telemetry.InputDownload,
       operation_id: claim.preparationId, operation_kind: 'input_preparation', preparation_id: claim.preparationId });
     let phase: string = Telemetry.Validate;
+    const startedAt = Date.now();
+    let assetId: string | undefined, transportRequestId: string | undefined;
+    let actualBytes: number | undefined, expectedBytes: number | undefined, failureReason: string | undefined;
+    let decoding = false;
+    const diagnostic = (stage: string, result: 'success' | 'failed', reason?: string): void => {
+      remoteDiagnosticLog(RemoteInputDiagnostic.Event, { preparationId: claim.preparationId, assetId, transportRequestId,
+        stage, result, reason, actualBytes, expectedBytes, elapsedMs: Date.now() - startedAt }, result === 'failed' ? 'warn' : 'debug');
+    };
     try {
       const targetId = this.targetId(), epoch = this.operationEpoch;
       const check = (): void => this.assertOwner(owner, () => current() && this.deps.getTargetId?.() === targetId && this.operationEpoch === epoch);
@@ -166,6 +180,7 @@ export class InputPreparationService {
         await this.validateFiles(previous, check);
         check();
         telemetry.emit(Telemetry.Input, { phase: Telemetry.LocalReady, outcome: Telemetry.Succeeded });
+        diagnostic(Telemetry.LocalReady, 'success');
         return previous;
       }
       const store = this.deps.store;
@@ -226,6 +241,8 @@ export class InputPreparationService {
       try {
         check();
         for (const asset of attachments) {
+          assetId = asset.assetId; transportRequestId = randomUUID();
+          actualBytes = 0; expectedBytes = Number(asset.sizeBytes); failureReason = undefined;
           check();
           const extension = path.extname(asset.fileName).replace(/[^.a-zA-Z0-9]/gu, '').slice(0, 12);
           const filePath = path.join(folder, `${randomUUID()}${extension}`);
@@ -236,8 +253,9 @@ export class InputPreparationService {
           let bytesRead = 0;
           try {
             phase = Telemetry.Download;
-            response = await withRemoteTelemetryRequest(transfer, () => download(asset.assetId)); check();
+            response = await withRemoteTelemetryRequest(transfer, () => download(asset.assetId, transportRequestId!)); check();
             if (response.status !== 200 || !response.body) {
+              failureReason = RemoteInputDiagnostic.DownloadRejected;
               transfer.finish(response.status === 200 ? 'response_invalid' : 'response_rejected', { http_status: response.status, failure_stage: response.status === 200 ? 'protocol' : 'http' });
               throw new RemoteInputError(RemoteInputReason.Asset);
             }
@@ -247,8 +265,8 @@ export class InputPreparationService {
             try {
               consuming = true; phase = Telemetry.Download;
               for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-                consuming = false; check(); count += chunk.byteLength; bytesRead = count; phase = Telemetry.Validate;
-                if (count > Number(asset.sizeBytes)) throw new RemoteInputError(RemoteInputReason.Asset);
+                consuming = false; check(); count += chunk.byteLength; bytesRead = count; actualBytes = count; phase = Telemetry.Validate;
+                if (count > Number(asset.sizeBytes)) { failureReason = RemoteInputDiagnostic.SizeMismatch; throw new RemoteInputError(RemoteInputReason.Asset); }
                 hash.update(chunk);
                 phase = Telemetry.Write;
                 let offset = 0;
@@ -261,8 +279,11 @@ export class InputPreparationService {
               }
               consuming = false;
               transfer.finish('transfer_http_ok', { http_status: response.status, response_bytes: count });
+              diagnostic(Telemetry.Download, 'success');
               phase = Telemetry.Validate;
-              if (count !== Number(asset.sizeBytes) || hash.digest('hex') !== asset.sha256) throw new RemoteInputError(RemoteInputReason.Asset);
+              if (count !== Number(asset.sizeBytes)) { failureReason = RemoteInputDiagnostic.SizeMismatch; throw new RemoteInputError(RemoteInputReason.Asset); }
+              if (hash.digest('hex') !== asset.sha256) { failureReason = RemoteInputDiagnostic.HashMismatch; throw new RemoteInputError(RemoteInputReason.Asset); }
+              diagnostic(Telemetry.Validate, 'success');
               telemetry.emit(Telemetry.Input, { phase: Telemetry.Validate, outcome: Telemetry.Succeeded, asset_id: asset.assetId });
               phase = Telemetry.Write;
               await handle.sync();
@@ -270,6 +291,7 @@ export class InputPreparationService {
             check(); await fs.rename(temporary, filePath); check();
             const file: LocalAsset = { assetId: asset.assetId, version: asset.version, path: filePath, identity: identity(filePath) };
             if (asset.intent === RemoteInputIntent.Image) {
+              decoding = true;
               let image = { path: filePath, mimeType: asset.mimeType };
               if (this.deps.convertImage) {
                 try {
@@ -277,16 +299,17 @@ export class InputPreparationService {
                     { current: () => { try { check(); return true; } catch { return false; } } });
                 } catch (error) {
                   check(); // Account/claim revocation takes precedence over a decoder failure.
-                  if (error instanceof Error && error.message === RemoteInputReason.Invalid) throw new RemoteInputError(RemoteInputReason.Invalid);
+                  if (error instanceof Error && error.message === RemoteInputReason.Invalid) throw new RemoteAttachmentError();
                   throw error;
                 }
                 check();
               }
-              if (!imageMimes.has(image.mimeType)) throw new RemoteInputError(RemoteInputReason.Invalid);
+              if (!imageMimes.has(image.mimeType)) throw new RemoteAttachmentError();
               file.imagePath = image.path; file.imageMime = image.mimeType; file.imageIdentity = identity(image.path);
               file.preview = await this.imagePreview(image.path, check) || null;
               frameBytes += 4 * Math.ceil(file.imageIdentity.size / 3);
-              if (frameBytes > imageFrameBytes) throw new RemoteInputError(RemoteInputReason.Invalid);
+              if (frameBytes > imageFrameBytes) throw new RemoteAttachmentError();
+              diagnostic('decode', 'success'); decoding = false;
             }
             files.push(file);
             telemetry.emit(Telemetry.Input, { phase: Telemetry.Write, outcome: Telemetry.Succeeded, asset_id: asset.assetId });
@@ -296,8 +319,14 @@ export class InputPreparationService {
               : consuming ? 'transport_failed' : 'local_processing_failed';
             transfer.finish(result, { ...remoteFileRequestFailureFields(result, error, response), response_bytes: bytesRead });
             throw error;
+          } finally {
+            // Rejecting headers/context/open can happen before for-await takes ownership.
+            if (response?.body && !response.body.locked) {
+              try { await response.body.cancel(); } catch { /* Preserve the original result. */ }
+            }
           }
         }
+        assetId = undefined; transportRequestId = undefined; actualBytes = undefined; expectedBytes = undefined;
         check();
         const prepared: LocalPreparedInput = { preparationId: claim.preparationId, owner, deviceId, requestHash: payloadHash(request),
           ...(targetId ? { targetId } : {}),
@@ -307,11 +336,15 @@ export class InputPreparationService {
         this.validate(prepared, owner, deviceId, false);
         phase = Telemetry.LocalCommit;
         this.deps.store.remote.put(this.key(claim.preparationId), prepared);
+        diagnostic(Telemetry.LocalCommit, 'success');
         telemetry.emit(Telemetry.Input, { phase: Telemetry.LocalReady, outcome: Telemetry.Succeeded, attachment_count: files.length });
         return prepared;
       } catch (error) { await fs.rm(folder, { recursive: true, force: true }); throw error; }
     } catch (error) {
       telemetry.emit(Telemetry.Input, { phase, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) });
+      diagnostic(decoding ? 'decode' : phase, 'failed', error instanceof RemoteAttachmentError ? RemoteInputDiagnostic.ImageInvalid
+        : error instanceof RemoteInputError && error.reason === RemoteInputReason.Account ? RemoteInputReason.Account
+        : failureReason ?? remoteFileTelemetryReason(error));
       throw error;
     }
   }

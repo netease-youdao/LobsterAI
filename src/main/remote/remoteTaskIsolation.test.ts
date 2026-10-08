@@ -12,7 +12,7 @@ import { RemoteStore } from './remoteStore';
 
 const owner = { userId: 'isolation-owner', scopeKey: 'personal' };
 const dispose: Array<() => void> = [];
-afterEach(() => { dispose.splice(0).reverse().forEach(fn => fn()); vi.restoreAllMocks(); });
+afterEach(() => { dispose.splice(0).reverse().forEach(fn => fn()); vi.restoreAllMocks(); vi.useRealTimers(); });
 const ok = (data: unknown): Response => new Response(JSON.stringify({ code: 0, data }));
 function fixture() {
   const db = new Database(':memory:'); dispose.push(() => db.close());
@@ -58,6 +58,67 @@ function fixture() {
   const acknowledged = (id: string): boolean => store.sync(id)!.source_seq === store.sync(id)!.ack_seq;
   return { db, store, bridge, request, add, acknowledged };
 }
+
+describe('history wake deadlines', () => {
+  function scheduledFixture() {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-08T10:12:27Z'));
+    const f = fixture();
+    f.bridge.schedule.mockRestore();
+    // Exercise the real history scheduler while the command lane remains idle.
+    const tick = vi.spyOn(f.bridge, 'tick').mockImplementation(async () => { f.bridge.startHistorySync(); });
+    return { ...f, tick };
+  }
+  it('publishes after a five-second projection deferral without waiting for the idle command poll', async () => {
+    const f = scheduledFixture(); f.add('tail');
+    vi.spyOn(f.store, 'projectionPublishing').mockReturnValueOnce(true).mockReturnValue(false);
+    f.bridge.schedule(30000); f.bridge.startHistorySync(); await f.bridge.historyWork;
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'tail').next_retry_at).toBe(Date.now() + 5000);
+    expect(f.request).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(4999); expect(f.request).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1); await f.bridge.historyWork;
+    expect(f.acknowledged('tail')).toBe(true); expect(f.request).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(f.tick).toHaveBeenCalledOnce(); expect(f.request).toHaveBeenCalledOnce();
+  });
+  it('wakes when an asynchronous projection publishes after an empty history scan', async () => {
+    const f = scheduledFixture(); f.add('tail');
+    f.bridge.startHistorySync(); await f.bridge.historyWork; expect(f.acknowledged('tail')).toBe(true);
+    f.request.mockClear();
+    let release!: () => void;
+    vi.spyOn(f.store, 'flushProjections').mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    f.bridge.startHistorySync(); await f.bridge.historyWork;
+    expect(vi.getTimerCount()).toBe(0);
+    f.store.transaction(() => {
+      f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,NULL,3,2)').run('tail-final', 'tail', 'assistant', 'Final text');
+      f.store.project('tail');
+    });
+    release(); await f.bridge.projectionWork;
+    await vi.advanceTimersByTimeAsync(500); await f.bridge.historyWork;
+    expect(f.acknowledged('tail')).toBe(true); expect(f.request).toHaveBeenCalledOnce();
+  });
+  it('preserves future server and service retry bounds without an idle hot loop', async () => {
+    const f = scheduledFixture(); f.add('tail');
+    const context = f.bridge.taskContext(), now = Date.now();
+    f.bridge.taskSync.fail(context, 'tail', { phase: 'backoff', scope: 'service', reason: 'TRANSPORT', retryAfterMs: 90000 });
+    f.bridge.historyRetryAt = now + 100000;
+    f.bridge.scheduleHistorySync(f.bridge.syncContext());
+    await vi.advanceTimersByTimeAsync(99999); expect(f.request).not.toHaveBeenCalled(); expect(f.tick).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1); await f.bridge.historyWork;
+    expect(f.acknowledged('tail')).toBe(true); expect(f.request).toHaveBeenCalledOnce();
+    f.bridge.startHistorySync(); await f.bridge.historyWork; await f.bridge.projectionWork;
+    await vi.advanceTimersByTimeAsync(60000); expect(f.tick).toHaveBeenCalledOnce();
+  });
+  it.each(['stopped', 'account', 'projection'] as const)('does not wake from a stale projection context: %s', async reason => {
+    const f = scheduledFixture();
+    const current = f.bridge.syncContext();
+    f.add('tail'); f.bridge.taskSync.defer(f.bridge.taskContext(), 'tail', 5000);
+    if (reason === 'stopped') f.bridge.stop();
+    else if (reason === 'account') f.bridge.accountGeneration++;
+    else f.bridge.projectionVersion++;
+    f.bridge.scheduleHistorySync(current);
+    expect(vi.getTimerCount()).toBe(0); expect(f.request).not.toHaveBeenCalled();
+  });
+});
 
 describe('task synchronization isolation', () => {
   it.each([false, true].flatMap(conflict => [

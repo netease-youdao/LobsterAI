@@ -203,6 +203,9 @@ export class AuthSessionManager {
           headers,
         });
         if (this.getSessionKey() !== sessionKey) {
+          // A streamed response may still hold a transport permit after its headers arrive.
+          // Cleanup must not delay rejecting a response from an obsolete auth session.
+          try { void response.body?.cancel().catch((): void => undefined); } catch { /* Preserve the auth rejection. */ }
           throw new AuthSessionRequestError(
             AuthSessionStatus.TemporarilyUnavailable,
             'Auth session changed while the authenticated request was running',

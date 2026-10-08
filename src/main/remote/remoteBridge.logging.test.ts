@@ -47,12 +47,17 @@ const batchBody = () => ({ batchId: 'batch-1', deviceId: 'desktop', localSession
 
 function syncing() {
   const value = fixture();
-  const { store, request } = value;
+  const { bridge, store, request } = value;
+  store.put(`settings:${owner.userId}:${owner.scopeKey}`, { enabled: true, name: 'Desktop', settingsVersion: '1', workspaces: [] });
+  const target = bridge.targets.activateLegacy({ owner, deviceId: 'desktop', allowPartialLegacy: true });
+  bridge.targetId = target.targetId;
+  store.setProjectionIdentity(target.targetId, owner, 'desktop'); store.setFileEnvironment(target.targetId);
   store.transaction(() => {
     store.db.prepare('INSERT INTO cowork_sessions VALUES (?, ?, 1, 1, ?)').run('sync-task', privateText, 'idle');
     store.assignNew('sync-task', owner, 'local_create');
     store.db.prepare('INSERT INTO cowork_messages VALUES (?, ?, ?, ?, ?, 1, 1)').run('message-1', 'sync-task', 'user', privateText, '{}');
     store.db.prepare('INSERT INTO cowork_messages VALUES (?, ?, ?, ?, ?, 2, 2)').run('message-2', 'sync-task', 'assistant', privateText, '{}');
+    store.project('sync-task');
   });
   request.mockImplementation(async (_actor, pathname, init) => {
     const body = init.body ? JSON.parse(String(init.body)) : {};
@@ -90,6 +95,9 @@ describe('remote sync request logging', () => {
     expect(success).toMatchObject({ requestId: id, operation: 'batch', responseRequestId: echo === 'valid' ? id : null, httpStatus: 200,
       result: { sessionId: 'session', committedSourceSeq: '7', committedSeq: '11' } });
     expect(start.events[0]).toMatchObject({ sourceSeq: '7', revision: '2' });
+    expect(Number.isFinite(Date.parse(start.requestStartedAt))).toBe(true);
+    expect(Date.parse(start.transportRequestedAt)).toBeGreaterThanOrEqual(Date.parse(start.requestStartedAt));
+    expect(success).toMatchObject({ requestStartedAt: start.requestStartedAt, transportRequestedAt: start.transportRequestedAt, elapsedMs: expect.any(Number) });
     expect(warning).not.toHaveBeenCalled();
     expect(JSON.stringify(debug.mock.calls)).not.toContain(privateText);
   });
@@ -112,6 +120,7 @@ describe('remote sync request logging', () => {
       const start = debug.mock.calls.find(([message]) => message === '[RemoteSync] Request started')![1];
       const failed = debug.mock.calls.find(([message]) => message === '[RemoteSync] Request failed')![1];
       expect(start.requestId).toBe(id);
+      expect(failed).toMatchObject({ requestStartedAt: start.requestStartedAt, transportRequestedAt: start.transportRequestedAt, elapsedMs: expect.any(Number) });
       expect(failed).toMatchObject({ requestId: id, operation: 'batch',
         stage: failure === 'network' || failure === 'timeout' ? 'transport' : 'response' });
       if (failure === 'business') expect(failed.error).toMatchObject({ code: 47025, httpStatus: 409, requestId: id,
@@ -130,7 +139,7 @@ describe('remote sync request logging', () => {
     expect(request).not.toHaveBeenCalled();
     const failed = debug.mock.calls.find(([message]) => message === '[RemoteSync] Request failed')![1];
     expect(remoteSyncRequestId(failed.requestId)).toBe(failed.requestId);
-    expect(failed).toMatchObject({ operation: 'batch', stage: 'prepare',
+    expect(failed).toMatchObject({ operation: 'batch', stage: 'prepare', transportRequestedAt: null,
       error: { validation: 'Remote payload must contain finite JSON values' } });
     expect(JSON.stringify(debug.mock.calls)).not.toContain(privateText);
   });
@@ -159,6 +168,7 @@ describe('remote sync persistence logging', () => {
       store.db.prepare('INSERT INTO cowork_messages VALUES (?, ?, ?, ?, ?, 3, 3)').run('message-3', 'sync-task', 'user', privateText, '{}');
       store.db.prepare('INSERT INTO cowork_messages VALUES (?, ?, ?, ?, ?, 4, 4)').run('message-4', 'sync-task', 'assistant', privateText, '{}');
       store.db.prepare('UPDATE cowork_sessions SET updated_at=4 WHERE id=?').run('sync-task');
+      store.project('sync-task');
     });
     expect(store.pending('sync-task').length).toBeGreaterThan(0);
     await bridge.syncSessions();
@@ -172,6 +182,9 @@ describe('remote sync persistence logging', () => {
     const ids = request.mock.calls.map(call => call[2].headers[REMOTE_SYNC_REQUEST_ID_HEADER]);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids.every(id => remoteSyncRequestId(id) === id)).toBe(true);
+    const batchRequest = request.mock.calls.find(call => call[1].endsWith('/sync/batches'))!;
+    expect(debug.mock.calls.find(([message]) => message === '[RemoteSync] Batch acknowledged locally')![1])
+      .toMatchObject({ requestId: batchRequest[2].headers[REMOTE_SYNC_REQUEST_ID_HEADER] });
     expect(JSON.stringify(debug.mock.calls)).not.toContain(privateText);
   });
 

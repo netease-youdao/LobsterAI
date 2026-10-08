@@ -1,8 +1,10 @@
 export const RemoteNetworkMessage = {
+  StreamStart: 'stream_start', StreamPull: 'stream_pull', StreamChunk: 'stream_chunk', StreamEnd: 'stream_end',
   Fetch: 'fetch', FetchStarted: 'fetch_started', Result: 'result', Cancel: 'cancel', Socket: 'socket', Frame: 'frame', FrameAck: 'frame_ack',
   SocketSend: 'socket_send', SocketClose: 'socket_close', SocketOpened: 'socket_opened', SocketClosed: 'socket_closed', Alive: 'alive',
 } as const;
 export const RemoteNetworkLimit = { Requests: 6, BodyBytes: 2 * 1024 * 1024, HeaderBytes: 16 * 1024,
+  BinaryBytes: 100 * 1024 * 1024, BinaryChunkBytes: 64 * 1024, BinaryTimeoutMs: 120000,
   JsonDepth: 32, JsonNodes: 20000, FrameBytes: 64 * 1024, FramesPending: 16, FramesPerSecond: 60, SocketBufferedBytes: 64 * 1024, WorkerMemoryMb: 128 } as const;
 export interface RemoteSocket {
   readonly readyState: number;
@@ -24,9 +26,18 @@ export const RemoteNetworkFailure = {
 export type RemoteNetworkFailure = typeof RemoteNetworkFailure[keyof typeof RemoteNetworkFailure];
 export type RemoteNetworkLane = 'control' | 'live' | 'background';
 export const remoteNetworkCapacities = { control: 3, live: 2, background: 1 } as const;
+/** Only immutable input asset downloads use binary IPC; errors keep the JSON response contract. */
+export function remoteNetworkBinaryDownload(url: string, method = 'GET'): boolean {
+  const parsed = new URL(url);
+  return parsed.protocol === 'https:' && method.toUpperCase() === 'GET'
+    && /^\/api\/remote\/v1\/input-assets\/[A-Za-z0-9_-]{1,64}\/content$/u.test(parsed.pathname);
+}
 /** Keep the supervisor and worker on the same physical admission policy. */
 export function remoteNetworkRequestLane(url: string, method = 'GET'): RemoteNetworkLane {
   const path = new URL(url).pathname;
+  if (remoteNetworkBinaryDownload(url, method)) return 'background';
+  // A download must never occupy the permit needed to renew its preparation lease or report its result.
+  if (method.toUpperCase() === 'POST' && /^\/api\/remote\/v1\/input-preparations\/[^/]+\/(?:renew|result)$/u.test(path)) return 'control';
   if (method.toUpperCase() === 'GET' && /^\/api\/remote\/v[12]\/devices\/[^/]+\/input-preparations$/u.test(path)) return 'background';
   const receipt = method.toUpperCase() === 'GET' && (/^\/api\/remote\/v3\/sync\/(?:state|(?:recoveries|live-projections|mode-activations)\/[^/]+)$/u.test(path)
     || /^\/api\/remote\/v1\/sync\/imports\/[^/]+$/u.test(path));

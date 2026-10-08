@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 
 import { RemoteSyncConflict } from '../../shared/remote/constants';
+import { RemoteInputReason } from '../../shared/remote/input';
 import { enqueueRemoteLog } from './remoteLogSink';
 import { remoteTransportErrorMetadata } from './remoteNetworkError';
 import { RemoteNetworkFailure } from './remoteNetworkProtocol';
@@ -118,7 +119,14 @@ function remoteOperationMetadata(pathname: string, raw: unknown): Record<string,
     exactSourcePrefix: sequence(body.exactSourcePrefix), resolvedSourceSeq: sequence(body.resolvedSourceSeq) };
 }
 
+export const RemoteInputDiagnostic = {
+  Event: 'remote.input.preparation',
+  SizeMismatch: 'CONTENT_SIZE_MISMATCH', HashMismatch: 'CONTENT_HASH_MISMATCH',
+  DownloadRejected: 'ASSET_DOWNLOAD_REJECTED', ImageInvalid: 'IMAGE_DECODE_INVALID',
+} as const;
+const inputStages = new Set(['download', 'validate', 'decode', 'write', 'local_commit', 'local_ready', 'server_ready']);
 const diagnosticEvents = new Set([
+  RemoteInputDiagnostic.Event,
   'remote.connection.changed', 'remote.request.completed', 'remote.record.quarantined', 'remote.record.probe', 'remote.record.recovered',
   'remote.publication.sealed', 'remote.publication.acknowledged', 'remote.publication.unknown',
   'remote.sync.round', 'remote.sync.task_deferred', 'remote.history.recovery_started', 'remote.history.committed', 'remote.history.deferred',
@@ -128,10 +136,10 @@ const diagnosticEvents = new Set([
   'desktop.message.persisted', 'desktop.message.persist_failed', 'desktop.action.decided', 'desktop.action.dispatched',
   'desktop.action.reconciled', 'desktop.account_transition.changed',
 ]);
-const diagnosticIds = new Set(['requestId','connectionId','connectionGeneration','generation','localSessionId','sessionId','commandId','runId','operationId','writerGeneration','objectId','revision','jobId','transitionId']);
-const diagnosticNumbers = new Set(['durationMs','elapsedMs','count','bytes','retryAttempt','nextRetryAt','retryAfterMs','scanned','processed','isolated','firstSeenAt','lastSeenAt']);
+const diagnosticIds = new Set(['requestId','connectionId','connectionGeneration','generation','localSessionId','sessionId','commandId','runId','operationId','writerGeneration','objectId','revision','jobId','transitionId','preparationId','assetId','transportRequestId']);
+const diagnosticNumbers = new Set(['durationMs','elapsedMs','count','bytes','retryAttempt','nextRetryAt','retryAfterMs','scanned','processed','isolated','firstSeenAt','lastSeenAt','actualBytes','expectedBytes']);
 const diagnosticValues = new Set(['desktop','mobile','im','cron','control','live','history','files','transport','success','failed','unknown','deferred','corrupt','active','ready','blocked','fencing','stopping','validating','recovery_required','prepared','executing','applied','rejected','accepted','superseded','starting','running','waiting_approval','waiting_local','waiting_user','succeeded','cancelled','interrupted','complete','error']);
-const diagnosticReasons = new Set(['RECORD_INVALID','ENCODING_FAILED','STORAGE_UNAVAILABLE','REQUEST_FAILED','CONTEXT_CHANGED','EXECUTION_UNKNOWN','DEPENDENCY_UNAVAILABLE','STATE_CHANGED','REMOTE_AVAILABILITY_RECORD_INVALID']);
+const diagnosticReasons = new Set([...Object.values(RemoteInputReason), RemoteInputDiagnostic.SizeMismatch, RemoteInputDiagnostic.HashMismatch, RemoteInputDiagnostic.DownloadRejected, RemoteInputDiagnostic.ImageInvalid, 'LOCAL_IO_FAILED', 'FILE_OPERATION_FAILED','RECORD_INVALID','ENCODING_FAILED','STORAGE_UNAVAILABLE','REQUEST_FAILED','CONTEXT_CHANGED','EXECUTION_UNKNOWN','DEPENDENCY_UNAVAILABLE','STATE_CHANGED','REMOTE_AVAILABILITY_RECORD_INVALID']);
 const diagnosticWindows = new Map<string, { at: number; count: number }>();
 /** Never let diagnostic output or an injected logger change a committed business result. */
 export function remoteLogMessage(level: 'debug' | 'warn' | 'error' | 'info', message: string, fields: Record<string, unknown>): void {
@@ -149,14 +157,16 @@ export function remoteDiagnosticLog(event: string, fields: Record<string, unknow
   if (!diagnosticEvents.has(event)) return;
   const clean: Record<string, unknown> = { event, timestamp: new Date().toISOString(), component: 'desktop' };
   for (const [key, value] of Object.entries(fields)) {
-    if (diagnosticIds.has(key)) { const safe = key === 'requestId' ? remoteSyncRequestId(value) : id(value); if (safe) clean[key] = safe; }
+    if (diagnosticIds.has(key)) { const safe = key === 'requestId' || key === 'transportRequestId' ? remoteSyncRequestId(value) : id(value); if (safe) clean[key] = safe; }
     else if (diagnosticNumbers.has(key) && typeof value === 'number' && Number.isFinite(value) && value >= 0) clean[key] = value;
     else if (['origin','lane','status','result'].includes(key) && typeof value === 'string' && diagnosticValues.has(value)) clean[key] = value;
+    else if (key === 'stage' && typeof value === 'string' && inputStages.has(value)) clean[key] = value;
     else if (key === 'reason' && typeof value === 'string' && diagnosticReasons.has(value)) clean[key] = value;
     else if (key === 'error') clean.error = remoteSyncErrorMetadata(value);
   }
   if (level === 'warn' || event === 'remote.record.quarantined') {
     const key = createHash('sha256').update(JSON.stringify({ event, lane: clean.lane, sessionId: clean.localSessionId ?? clean.sessionId,
+      preparationId: clean.preparationId, assetId: clean.assetId, stage: clean.stage,
       objectId: clean.objectId, operationId: clean.operationId, commandId: clean.commandId, reason: clean.reason })).digest('hex');
     const previous = diagnosticWindows.get(key), now = Date.now();
     if (previous && now - previous.at < 60000) { previous.count++; return; }
