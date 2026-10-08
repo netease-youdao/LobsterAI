@@ -42,12 +42,25 @@
 .cowork-question-skip { margin-left: auto; }
 .cowork-question-submit { background: var(--lobster-foreground); color: var(--lobster-background); }
 .cowork-question-hint { font-size: 12px; color: var(--lobster-text-secondary); padding: 4px 12px; }
-.cowork-question-restore { display: flex; align-items: center; gap: 8px; padding: 8px 4px; margin-bottom: 6px; color: var(--lobster-text-secondary); font-size: 13px; }
-.cowork-question-restore svg { width: 16px; height: 16px; }
+.cowork-question-dock nav .cowork-question-collapse { margin-left: 4px; }
+/* Collapsed: one row that keeps the title and chevron where the expanded header shows them. */
+.cowork-question-dock.is-collapsed { padding: 6px; }
+.cowork-question-expand {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 40px;
+  padding: 6px 23px 6px 18px; border-radius: 18px; text-align: left;
+}
+.cowork-question-expand:hover { background: var(--lobster-surface-raised); }
+.cowork-question-expand strong {
+  flex: 1; min-width: 0; font-size: 16px; font-weight: 600; line-height: 1.5;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cowork-question-expand span { font-size: 12px; white-space: nowrap; }
+.cowork-question-expand span, .cowork-question-expand svg { color: var(--lobster-text-secondary); }
 @keyframes cowork-question-page-in { from { opacity: .55; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
 @container (max-width: 520px) {
   .cowork-question-dock header { gap: 8px; padding-inline: 4px; }
-  .cowork-question-dock h2 { font-size: 14px; }
+  .cowork-question-dock h2, .cowork-question-expand strong { font-size: 14px; }
+  .cowork-question-expand { padding-inline: 10px 15px; }
   .cowork-question-dock footer { flex-wrap: wrap; padding-inline: 4px; }
   .cowork-question-dock textarea { flex-basis: 100%; }
 }
