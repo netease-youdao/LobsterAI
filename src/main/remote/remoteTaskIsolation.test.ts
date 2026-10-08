@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthRefreshFailureKind, AuthSessionStatus } from '../../shared/auth/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
+import { RemoteInputReason } from '../../shared/remote/input';
 import { AuthSessionRequestError } from '../libs/authSessionManager';
 import { RemoteApiError, RemoteBridge } from './remoteBridge';
 import { RemoteNetworkError } from './remoteNetworkError';
@@ -59,12 +60,15 @@ function fixture() {
 }
 
 describe('task synchronization isolation', () => {
-  it.each([false, true])('verifies the original stream before resuming a legacy isolated task (conflict: %s)', async conflict => {
+  it.each([false, true].flatMap(conflict => [
+    { conflict, reason: 'REMOTE_TASK_SYNC_FAILED', probe: 0 },
+    { conflict, reason: RemoteInputReason.Version, probe: 1 },
+  ]))('verifies the original stream before resuming $reason (conflict: $conflict)', async ({ conflict, reason, probe }) => {
     const f = fixture(); f.add('legacy-isolated');
     const context = f.bridge.taskContext(), row = f.store.sync('legacy-isolated')!;
-    f.bridge.taskSync.fail(context, row.local_id, { phase: 'isolated', scope: 'session', reason: 'REMOTE_TASK_SYNC_FAILED' });
-    f.db.prepare('UPDATE remote_sync_task_state SET recovery_probe_version=0 WHERE local_session_id=?').run(row.local_id);
-    f.store.put(`syncFailure:${row.local_id}`, { blocked: true, reason: 'REMOTE_TASK_SYNC_FAILED' });
+    f.bridge.taskSync.fail(context, row.local_id, { phase: 'isolated', scope: 'session', reason });
+    f.db.prepare('UPDATE remote_sync_task_state SET recovery_probe_version=? WHERE local_session_id=?').run(probe, row.local_id);
+    f.store.put(`syncFailure:${row.local_id}`, { blocked: true, reason });
     const original = f.store.pending(row.local_id), usual = f.request.getMockImplementation()!;
     f.request.mockImplementation(async (actor, pathname, init) => {
       if (pathname.includes('/sync/state?')) return ok({ deviceId: 'desktop', sessionId: conflict ? 'another-session' : row.session_id,

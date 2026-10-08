@@ -211,7 +211,7 @@ export class SessionCommandService {
       const item = this.input!.models.resolveRuntime(actor, deviceId, runtimeRef).item;
       const summary = { modelRef: item.modelRef, version: item.version, source: item.source, displayName: item.displayName,
         providerLabel: item.providerLabel, thinkingLevel: session.thinkingLevel || null };
-      this.store.remote.inputVersion(sessionId); this.store.remote.put(`inputModel:${sessionId}`, summary); return summary;
+      this.store.remote.setInputModel(sessionId, summary); return summary;
     } catch { return null; }
   }
   private preparedInput(command: RemoteCommand, owner: RemoteOwner): LocalPreparedInput | null {
@@ -493,8 +493,8 @@ export class SessionCommandService {
             if (!sameOwner(entry.owner, this.getOwner())) throw new Error('Account changed during model application');
             this.store.updateSession(localId, { modelOverride: options.modelOverride, thinkingLevel: parseModelThinkingLevel(options.thinkingLevel) || '' }, { touchUpdatedAt: false });
           }
-          const afterVersion = this.store.remote.inputVersion(localId);
           this.store.remote.transaction(() => {
+            const afterVersion = sameInputTarget() ? this.store.remote.setInputModel(localId, inputModel) : this.store.remote.inputVersion(localId);
             if (entry.command.type === 'send_message') {
               const fence = this.store.remote.get<InputFence>(`inputFence:${localId}`);
               if (fence?.operationId !== entry.command.commandId || fence.syncTargetId !== syncTargetId) throw new RemoteInputError(RemoteInputReason.Busy);
@@ -503,7 +503,6 @@ export class SessionCommandService {
             this.store.remote.put(inputOperationKey(entry.command.commandId, syncTargetId), { phase: 'model_applied', beforeVersion, afterVersion });
             // The gateway patch is a local fact; its old service references are not the new target's projection.
             if (sameInputTarget()) {
-              this.store.remote.put(`inputModel:${localId}`, inputModel);
               this.store.remote.put(`inputRun:${entry.runId}`, { input: preparedInput.resolvedInput, inputModel });
             }
             this.store.remote.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(localId);

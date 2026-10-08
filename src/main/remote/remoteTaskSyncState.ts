@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { createHash } from 'crypto';
 
 import { type RemoteOwner, type RemoteSyncTaskIssue, RemoteSyncTaskIssueStatus } from '../../shared/remote/constants';
+import { RemoteInputReason } from '../../shared/remote/input';
 import { projectionFault, projectionProbeEligible } from './remoteProjectionFaults';
 import type { SyncRow } from './remoteStore';
 import { emitCommittedTelemetry, SyncTelemetry } from './remoteSyncTelemetry';
@@ -31,7 +32,8 @@ interface RepairLedger { attempts: string[]; times: number[] }
 const NEVER = Number.MAX_SAFE_INTEGER;
 const DAY = 86400000;
 const RECOVERY_PROBE_VERSION = 1;
-const legacyProbeReasons = new Set([TaskSyncFailureReason.RetryHintInvalid, 'REMOTE_TASK_SYNC_FAILED', 'REMOTE_IMPORT_CONTEXT_CHANGED', 'REMOTE_PROJECTION_CONTEXT_CHANGED']);
+const INPUT_MODEL_RECOVERY_PROBE_VERSION = 3;
+const legacyProbeReasons = new Set([TaskSyncFailureReason.RetryHintInvalid, 'REMOTE_TASK_SYNC_FAILED', 'REMOTE_IMPORT_CONTEXT_CHANGED', 'REMOTE_PROJECTION_CONTEXT_CHANGED', RemoteInputReason.Version]);
 const identity = (context: TaskSyncContext): string[] => [context.owner.userId, context.owner.scopeKey, context.target, context.deviceId];
 
 /** Scheduling hints never replace source watermarks, immutable operations or admission evidence. */
@@ -130,14 +132,16 @@ export class RemoteTaskSyncState {
     const size = Math.max(1, Math.min(50, Number.isSafeInteger(limit) ? limit : 50));
     return this.db.transaction(() => {
       const rows = this.db.prepare(`SELECT * FROM remote_sync_task_state WHERE owner_user_id=? AND owner_scope_key=?
-        AND target_key=? AND device_id=? AND (recovery_probe_version=0 OR recovery_probe_version=1 AND reason='REMOTE_RETRY_HINT_INVALID') AND phase<>'ready'
-        ORDER BY local_session_id LIMIT ?`).all(...identity(context), size + 1) as TaskSyncRecord[];
+        AND target_key=? AND device_id=? AND (recovery_probe_version=0 OR recovery_probe_version=1 AND reason='REMOTE_RETRY_HINT_INVALID'
+          OR recovery_probe_version>=0 AND recovery_probe_version<? AND reason=?) AND phase<>'ready'
+        ORDER BY local_session_id LIMIT ?`).all(...identity(context), INPUT_MODEL_RECOVERY_PROBE_VERSION, RemoteInputReason.Version, size + 1) as TaskSyncRecord[];
       const promotedIds: string[] = [];
       for (const value of rows.slice(0, size)) {
         const id = value.local_session_id;
         // Mark every evaluated legacy row, including permanent/corrupt failures. A later
         // failure or restart cannot silently grant another automatic compatibility attempt.
-        const probeVersion = value.reason === TaskSyncFailureReason.RetryHintInvalid ? 2 : RECOVERY_PROBE_VERSION;
+        const probeVersion = value.reason === RemoteInputReason.Version ? INPUT_MODEL_RECOVERY_PROBE_VERSION
+          : value.reason === TaskSyncFailureReason.RetryHintInvalid ? 2 : RECOVERY_PROBE_VERSION;
         const marked = this.db.prepare(`UPDATE remote_sync_task_state SET recovery_probe_version=?
           WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?
             AND recovery_probe_version=?`).run(probeVersion, ...this.args(context, id), value.recovery_probe_version);
@@ -212,7 +216,8 @@ export class RemoteTaskSyncState {
     const retry = ['isolated', 'closed'].includes(phase) ? NEVER : Math.max(serverRetryAt, Math.min(NEVER, Math.ceil(now + delay)));
     this.db.prepare(`UPDATE remote_sync_task_state SET phase=?,next_retry_at=?,failure_count=?,reason=?,scope=?,fingerprint=?,server_retry_at=?,recovery_probe_version=?
       WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?`)
-      .run(phase, retry, count, failure.reason.slice(0, 160), failure.scope, fingerprint, serverRetryAt, RECOVERY_PROBE_VERSION, ...this.args(context, id));
+      .run(phase, retry, count, failure.reason.slice(0, 160), failure.scope, fingerprint, serverRetryAt,
+        failure.reason === RemoteInputReason.Version ? INPUT_MODEL_RECOVERY_PROBE_VERSION : RECOVERY_PROBE_VERSION, ...this.args(context, id));
     this.report(context, id, SyncTelemetry.Stage.TaskState,
       phase === TaskSyncPhase.Isolated ? SyncTelemetry.Outcome.Blocked : SyncTelemetry.Outcome.Deferred,
       failure.reason);

@@ -51,7 +51,8 @@ function fixture(create = false, initialTargetId: string | null = null) {
     if (targetId !== initialTargetId) throw new Error('Old model reference is unavailable on the current target');
     return { item: { modelRef: 'new-model', version: '1', source: 'custom', displayName: 'Chat', providerLabel: 'Custom' } };
   });
-  const models = { resolve: resolveModel } as unknown as RemoteModelCatalog;
+  const resolveRuntimeModel = vi.fn(() => resolveModel());
+  const models = { resolve: resolveModel, resolveRuntime: resolveRuntimeModel } as unknown as RemoteModelCatalog;
   service.configureInput({ preparations, models, getDeviceId: () => 'pc', getTargetId: () => targetId });
   const send = vi.fn(async () => { assertRemoteExecutionPermit(); markRemoteExecutionDispatched(); return { success: true }; });
   service.configure(options => service.submit(options, true, send), options => service.submit(options, false, send));
@@ -62,7 +63,7 @@ function fixture(create = false, initialTargetId: string | null = null) {
     status: 'claimed', statusVersion: '1', expiresAt: new Date(Date.now() + 60000).toISOString() };
   const binding = remote.transaction(() => service.prepare(command, owner, create ? cwd : null));
   const entry: InboxEntry = { targetId: targetId ?? undefined, command, owner, ...binding, state: 'executing', result: null };
-  return { service, remote, runtime, send, entry, store, resolveModel, switchTarget(next: string | null) { targetId = next; } };
+  return { service, remote, runtime, send, entry, store, resolveModel, resolveRuntimeModel, switchTarget(next: string | null) { targetId = next; } };
 }
 it('starts a v2 task with the frozen session model and thinking override', async () => {
   const { service, entry, store, runtime, send } = fixture(true);
@@ -147,4 +148,18 @@ it('rejects tampered prepared references before creating a run or patching the g
   const changed = structuredClone(entry.command); changed.request.payload.resolvedInput.text = 'changed';
   expect(() => service.prepare(changed, owner, null)).toThrow(RemoteInputReason.Stale);
   expect(runtime.patchSession).not.toHaveBeenCalled();
+});
+
+
+it('refreshes the desktop model catalog summary at a new input version', () => {
+  const f = fixture();
+  const first = f.service.recordCurrentInputModel('local');
+  expect(first).toMatchObject({ modelRef: 'new-model', version: '1', thinkingLevel: 'low' });
+  expect(f.remote.inputVersion('local')).toBe('1');
+  expect(f.service.recordCurrentInputModel('local')).toEqual(first);
+  expect(f.remote.inputVersion('local')).toBe('1');
+  f.resolveRuntimeModel.mockReturnValueOnce({ item: { modelRef: 'new-model', version: '2', source: 'custom', displayName: 'Chat', providerLabel: 'Custom' } });
+  expect(f.service.recordCurrentInputModel('local')).toEqual({ ...first, version: '2' });
+  expect(f.remote.inputVersion('local')).toBe('2');
+  expect(f.remote.get('inputModel:local')).toEqual({ ...first, version: '2' });
 });

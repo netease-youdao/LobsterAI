@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteSyncTaskIssueStatus } from '../../shared/remote/constants';
+import { RemoteInputReason } from '../../shared/remote/input';
 import { finishProjectionFault, grantProjectionProbe, initializeProjectionFaults, projectionFault, recordProjectionFault } from './remoteProjectionFaults';
 import { SyncTelemetry } from './remoteSyncTelemetry';
 import { RemoteTaskSyncState, type TaskSyncContext, TaskSyncFailureReason, TaskSyncPhase } from './remoteTaskSyncState';
@@ -179,6 +180,24 @@ describe('task fault isolation persistence', () => {
     expect(f.state.get(context, 's')?.phase).toBe(TaskSyncPhase.Reconciling);
     expect(f.db.prepare("SELECT value FROM remote_state WHERE key='import:s'").get()).toEqual({ value: '{original' });
     expect(f.state.reconcileLegacyFailures(context, () => true).scanned).toBe(0);
+  });
+  it('probes an old input metadata conflict once and keeps later conflicts isolated across restarts', () => {
+    const f = fixture(); f.add('s');
+    const failure = { phase: TaskSyncPhase.Isolated, scope: 'session', reason: RemoteInputReason.Version };
+    f.state.fail(context, 's', failure);
+    // Current failures do not inherit the compatibility grant for older client versions.
+    expect(f.state.reconcileLegacyFailures(context, () => true).scanned).toBe(0);
+    f.db.exec('UPDATE remote_sync_task_state SET recovery_probe_version=1; UPDATE remote_sync SET source_seq=117,ack_seq=109');
+    f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run('import:s', '{original immutable operation');
+    const before = f.state.get(context, 's')!;
+    expect(f.state.reconcileLegacyFailures(context, () => true).promotedIds).toEqual(['s']);
+    expect(f.state.get(context, 's')).toMatchObject({ phase: TaskSyncPhase.Reconciling, recovery_probe_version: 3,
+      failure_count: before.failure_count, repair_json: before.repair_json, fingerprint: before.fingerprint });
+    expect(f.db.prepare('SELECT source_seq,ack_seq FROM remote_sync').get()).toEqual({ source_seq: 117, ack_seq: 109 });
+    expect(f.db.prepare('SELECT value FROM remote_state').get()).toEqual({ value: '{original immutable operation' });
+    f.state.resumeAfterVerification(context, 's'); f.state.fail(context, 's', failure);
+    expect(f.create().reconcileLegacyFailures(context, () => true).scanned).toBe(0);
+    expect(f.state.get(context, 's')).toMatchObject({ phase: TaskSyncPhase.Isolated, failure_count: 2 });
   });
   it('schedules clean legacy tasks that still need admission or failure migration without touching corrupt operation JSON', () => {
     const f = fixture();

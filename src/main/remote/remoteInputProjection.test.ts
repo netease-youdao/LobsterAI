@@ -99,3 +99,59 @@ it('does not add reasons to legacy file projections or expose another account ca
   expect(JSON.stringify(changed)).not.toContain(RemoteFileReason.Size);
   expect(JSON.stringify(changed)).not.toContain('private.txt');
 });
+
+
+it('advances model metadata versions without rewriting already sealed history events', () => {
+  const store = fixture();
+  const model = { modelRef: 'model', version: '4', source: 'subscription', displayName: 'Chat', providerLabel: 'LobsterAI', thinkingLevel: 'low' };
+  expect(store.setInputModel('s', model)).toBe('1');
+  const sealed = store.pending('s');
+  expect(store.setInputModel('s', { ...model, version: '5' })).toBe('2');
+  expect(store.get('inputModel:s')).toEqual({ ...model, version: '5' });
+  expect(store.pending('s').slice(0, sealed.length)).toEqual(sealed);
+  const latest = store.snapshot('s').records.find(record => record.eventType === 'session.upsert')!.payload.session;
+  expect(latest).toMatchObject({ inputVersion: '2', inputModel: { version: '5' } });
+  expect(store.setInputModel('s', { ...model, version: '5' })).toBe('2');
+  expect(store.inputVersion('s')).toBe('2');
+});
+
+it('commits a configuration change and its model summary under one input version', () => {
+  const store = fixture();
+  const model = { modelRef: 'model', version: '4', thinkingLevel: 'low' };
+  store.setInputModel('s', model);
+  store.transaction(() => {
+    store.db.prepare('UPDATE cowork_sessions SET thinking_level=? WHERE id=?').run('high', 's');
+    expect(store.setInputModel('s', { ...model, thinkingLevel: 'high' })).toBe('2');
+  });
+  expect(store.inputVersion('s')).toBe('2');
+  expect(store.get('inputModel:s')).toEqual({ ...model, thinkingLevel: 'high' });
+});
+
+it('rolls back both input version and summary when persisting the model fails', () => {
+  const store = fixture();
+  const model = { modelRef: 'model', version: '4' };
+  store.setInputModel('s', model);
+  const sealed = store.pending('s');
+  store.db.exec("CREATE TRIGGER reject_model BEFORE INSERT ON remote_state WHEN NEW.key='inputModel:s' BEGIN SELECT RAISE(ABORT, 'model write failed'); END");
+  expect(() => store.setInputModel('s', { ...model, version: '5' })).toThrow('model write failed');
+  expect(store.inputVersion('s')).toBe('1');
+  expect(store.get('inputModel:s')).toEqual(model);
+  expect(store.pending('s')).toEqual(sealed);
+});
+
+
+it('keeps configuration signature, version and previous model together when version refresh fails', () => {
+  const store = fixture();
+  const model = { modelRef: 'model', version: '4', thinkingLevel: 'low' };
+  store.setInputModel('s', model);
+  const signature = store.get('inputSignature:s');
+  store.db.prepare('UPDATE cowork_sessions SET thinking_level=? WHERE id=?').run('high', 's');
+  store.db.exec("CREATE TRIGGER reject_version BEFORE INSERT ON remote_state WHEN NEW.key='inputVersion:s' BEGIN SELECT RAISE(ABORT, 'version write failed'); END");
+  expect(() => store.inputVersion('s')).toThrow('version write failed');
+  expect(store.get('inputVersion:s')).toBe('1');
+  expect(store.get('inputSignature:s')).toBe(signature);
+  expect(store.get('inputModel:s')).toEqual(model);
+  store.db.exec('DROP TRIGGER reject_version');
+  expect(store.inputVersion('s')).toBe('2');
+  expect(store.get('inputModel:s')).toBeNull();
+});

@@ -738,16 +738,32 @@ export class RemoteStore {
     return owner && this.agentSummary ? this.agentSummary(sessionId, owner) : null;
   }
   inputVersion(sessionId: string): string {
-    const row = this.db.prepare('SELECT model_override,thinking_level FROM cowork_sessions WHERE id=?').get(sessionId);
-    if (!row) return '0';
-    const signature = payloadHash(row);
-    const previous = this.get<string>(`inputSignature:${sessionId}`);
-    let version = this.get<string>(`inputVersion:${sessionId}`) || '0';
-    if (previous !== signature) {
-      if (previous !== null) { version = String(BigInt(version) + 1n); this.remove(`inputModel:${sessionId}`); }
-      this.put(`inputSignature:${sessionId}`, signature); this.put(`inputVersion:${sessionId}`, version);
-    }
-    return version;
+    return this.transaction(() => {
+      const row = this.db.prepare('SELECT model_override,thinking_level FROM cowork_sessions WHERE id=?').get(sessionId);
+      if (!row) return '0';
+      const signature = payloadHash(row);
+      const previous = this.get<string>(`inputSignature:${sessionId}`);
+      let version = this.get<string>(`inputVersion:${sessionId}`) || '0';
+      if (previous !== signature) {
+        if (previous !== null) { version = String(BigInt(version) + 1n); this.remove(`inputModel:${sessionId}`); }
+        this.put(`inputSignature:${sessionId}`, signature); this.put(`inputVersion:${sessionId}`, version);
+      }
+      return version;
+    });
+  }
+  /** Model catalog metadata can change without changing the local runtime configuration. */
+  setInputModel(sessionId: string, model: Record<string, unknown> | null): string {
+    return this.transaction(() => {
+      const before = this.get<string>(`inputVersion:${sessionId}`) || '0';
+      let version = this.inputVersion(sessionId);
+      if (stableJson(this.get(`inputModel:${sessionId}`)) !== stableJson(model)) {
+        // A configuration change observed in this transaction already advances the version.
+        if (version === before) version = String(BigInt(version) + 1n);
+        this.put(`inputVersion:${sessionId}`, version);
+        this.put(`inputModel:${sessionId}`, model);
+      }
+      return version;
+    });
   }
   get<T>(key: string): T | null {
     const row = this.db.prepare('SELECT value FROM remote_state WHERE key=?').get(key) as { value: string } | undefined;
