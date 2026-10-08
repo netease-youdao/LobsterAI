@@ -2,6 +2,10 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import https from 'https';
 
 import { McpIpcChannel } from '../../../shared/mcp/constants';
+import {
+  getStdioCommandValidationMessage,
+  validateStdioCommand,
+} from '../../../shared/mcp/stdio';
 import { normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
 import { OpenClawConfigImpact } from '../../libs/openclawConfigImpact';
 import type { McpRuntime } from '../../mcp/mcpRuntime';
@@ -54,6 +58,13 @@ function syncMcpConfig(
 }
 
 function normalizeMcpServerInput(data: Partial<McpServerFormData>): Partial<McpServerFormData> {
+  if (data.transportType === 'stdio' || (data.transportType === undefined && data.command !== undefined)) {
+    const validation = validateStdioCommand(data.command, data.args);
+    if (!validation.ok) {
+      throw new Error(getStdioCommandValidationMessage(validation));
+    }
+  }
+
   if (
     (data.transportType === 'sse' || data.transportType === 'http')
     && data.url !== undefined

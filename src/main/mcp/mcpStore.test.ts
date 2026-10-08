@@ -118,4 +118,44 @@ describe('McpStore', () => {
     expect(updated?.args).toBeUndefined();
     expect(updated?.env).toBeUndefined();
   });
+
+  test('rejects invalid stdio commands on create', () => {
+    expect(() =>
+      store.createServer({
+        name: 'invalid-stdio',
+        description: '',
+        transportType: 'stdio',
+        command: 'npx -y evil',
+      }),
+    ).toThrow(/arguments must be listed separately/);
+    expect(store.listServers()).toEqual([]);
+  });
+
+  test('rejects invalid stdio commands on update without changing the record', () => {
+    const server = store.createServer({
+      name: 'valid-stdio',
+      description: '',
+      transportType: 'stdio',
+      command: 'node',
+      args: ['server.js'],
+    });
+
+    expect(() => store.updateServer(server.id, { command: 'node; calc' })).toThrow(
+      /shell metacharacters/,
+    );
+    expect(store.getServer(server.id)).toMatchObject({
+      command: 'node',
+      args: ['server.js'],
+    });
+  });
+
+  test('skips legacy invalid stdio servers in enabled server resolution', () => {
+    db!.exec(`
+      INSERT INTO mcp_servers (id, name, description, enabled, transport_type, config_json, created_at, updated_at)
+      VALUES ('legacy-invalid', 'Legacy Invalid', '', 1, 'stdio', '{"command":"npx -y evil","args":[]}', 1, 1)
+    `);
+
+    expect(store.getEnabledServers()).toEqual([]);
+    expect(store.listServers()).toHaveLength(1);
+  });
 });

@@ -11,6 +11,10 @@ import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
+import {
+  getStdioCommandValidationMessage,
+  validateStdioCommand,
+} from '../../shared/mcp/stdio';
 import type { McpServerRecord } from '../mcp/mcpStore';
 import { getElectronNodeRuntimePath } from './coworkUtil';
 import { findSpawnableSystemNodePath } from './nodeRuntime';
@@ -142,6 +146,12 @@ function isNodeCommand(normalized: string): 'node' | 'npx' | 'npm' | null {
  */
 export async function resolveStdioCommand(server: McpServerRecord): Promise<ResolvedStdioCommand> {
   const stdioCommand = server.command || '';
+  const stdioValidation = validateStdioCommand(server.command, server.args);
+  if (!stdioValidation.ok) {
+    throw new Error(
+      `MCP stdio command for "${server.name}" is invalid: ${getStdioCommandValidationMessage(stdioValidation)}`,
+    );
+  }
   let effectiveCommand = stdioCommand;
   const stdioArgs = server.args || [];
   let effectiveArgs = [...stdioArgs];
