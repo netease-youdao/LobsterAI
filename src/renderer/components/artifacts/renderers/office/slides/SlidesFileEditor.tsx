@@ -1,5 +1,6 @@
 import './slidesEditor.css';
 
+import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { i18nService } from '@/services/i18n';
@@ -13,6 +14,7 @@ import {
 } from '../common/OfficeEditorShell';
 import { useRegisterOfficePreviewZoomControls } from '../common/OfficePreviewActionsContext';
 import { OfficeZoom } from '../common/OfficeZoomControls';
+import { OfficeToolbarButton } from '../common/toolbar/OfficeToolbar';
 import { SlidesToolbar } from './SlidesToolbar';
 
 const t = (key: string) => i18nService.t(key);
@@ -80,9 +82,7 @@ function ActiveSlidesEditor({ session, onAddToChat }: { session: SlidesEditorSes
   }), [session, zoom]);
   useRegisterOfficePreviewZoomControls(zoomControls);
   const readOnly = state.readOnlyReasons.length > 0;
-  const position = session.currentIndex >= 0
-    ? t('slidesPosition').replace('{current}', String(session.currentIndex + 1)).replace('{total}', String(session.slideCount))
-    : '';
+  const index = session.currentIndex;
 
   return (
     <OfficeEditorShell document={document} state={state} labels={SLIDES_LABELS} className="lobster-slides-editor"
@@ -92,7 +92,19 @@ function ActiveSlidesEditor({ session, onAddToChat }: { session: SlidesEditorSes
         </div>
       )}
       toolbar={<SlidesToolbar session={session} disabled={state.needsResolution || !state.ready} />}
-      footerStart={<span>{position}</span>}
+      footerStart={index >= 0 ? (
+        <div className="lobster-slides-nav">
+          <OfficeToolbarButton label="slidesPrevious" disabled={index === 0} onClick={() => session.selectSlide(index - 1)}>
+            <ChevronLeftIcon className="h-3.5 w-3.5" />
+          </OfficeToolbarButton>
+          <span className="lobster-slides-nav-position">
+            {t('slidesPosition').replace('{current}', String(index + 1)).replace('{total}', String(session.slideCount))}
+          </span>
+          <OfficeToolbarButton label="slidesNext" disabled={index >= session.slideCount - 1} onClick={() => session.selectSlide(index + 1)}>
+            <ChevronRightIcon className="h-3.5 w-3.5" />
+          </OfficeToolbarButton>
+        </div>
+      ) : undefined}
       footerEnd={readOnly ? undefined : <span>{t('slidesEditHint')}</span>}>
       <div className="lobster-slides-frame" ref={frame} onPointerUp={chat.handlePointerUp}>
         <div className="lobster-slides-mount" ref={host} />

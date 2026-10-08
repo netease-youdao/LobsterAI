@@ -4,30 +4,49 @@
 /* A definite height also while parked offscreen, so the slide list scrolls and draws lazily. */
 .lobster-slides-workspace { flex: 1; min-width: 0; min-height: 0; height: 100%; display: flex; }
 
-/* Slide list */
+/* Slide pane: a heading and the button that hides the thumbnails, over the thumbnails. Hidden, the
+   pane narrows to a strip that keeps the button, now pointing the other way. */
+.lobster-slides-pane { flex-shrink: 0; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid rgba(128, 128, 128, .18); }
+.lobster-slides-pane-header { flex-shrink: 0; height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 0 4px 0 10px; }
+.lobster-slides-pane-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; opacity: .7; }
+.lobster-slides-pane .lobster-slides-pane-toggle { flex-shrink: 0; width: 22px; height: 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center; opacity: .75; }
+.lobster-slides-pane .lobster-slides-pane-toggle:hover { opacity: 1; }
+.lobster-slides-pane-toggle svg { width: 14px; height: 14px; }
+.lobster-slides-pane-collapsed .lobster-slides-pane-header { padding: 0 4px; }
+.lobster-slides-pane-collapsed .lobster-slides-pane-title { display: none; }
+.lobster-slides-pane-collapsed .lobster-slides-pane-toggle svg { transform: scaleX(-1); }
+
+/* Slide list. It is as wide as its thumbnails, whose width, proportions and scale the list sets for
+   the editor's width; the scroll bar keeps its own gutter, so nothing scrolls sideways. */
 .lobster-slides-thumbnails {
-  width: 184px;
-  flex-shrink: 0;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 10px 8px 10px 4px;
+  padding: 4px 4px 10px;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  border-right: 1px solid rgba(128, 128, 128, .18);
+  scrollbar-gutter: stable;
   outline: none;
 }
+.lobster-slides-thumbnails[hidden] { display: none; }
 .lobster-slides-thumb { display: flex; align-items: flex-start; gap: 6px; cursor: pointer; }
 .lobster-slides-thumb-number { width: 18px; flex-shrink: 0; padding-top: 2px; font-size: 11px; text-align: right; opacity: .65; }
 .lobster-slides-thumb-hidden { text-decoration: line-through; }
 .lobster-slides-thumb-frame {
   position: relative;
   flex-shrink: 0;
+  box-sizing: content-box;
+  width: var(--lobster-slides-thumb-width, 150px);
+  aspect-ratio: var(--lobster-slides-thumb-ratio, 16 / 9);
   overflow: hidden;
   background: #fff;
   border: 1px solid rgba(128, 128, 128, .3);
   border-radius: 3px;
 }
+.lobster-slides-thumb-frame > .lobster-slide { transform-origin: 0 0; transform: scale(var(--lobster-slides-thumb-scale, 1)); }
 .lobster-slides-thumb:hover .lobster-slides-thumb-frame { border-color: rgba(128, 128, 128, .6); }
 .lobster-slides-thumb[aria-selected="true"] .lobster-slides-thumb-frame { outline: 2px solid #d35230; outline-offset: 1px; }
 .lobster-slides-drop-before { box-shadow: 0 -5px 0 -3px #d35230; }
@@ -63,6 +82,12 @@
   outline: none;
 }
 .dark .lobster-slides-stage { background: #26292d; }
+
+/* Footer: the slide position between previous and next. The buttons overhang the footer's padding
+   so the footer keeps the height it has in the other editors. */
+.lobster-slides-nav { display: flex; align-items: center; gap: 2px; margin: -4px 0; }
+.lobster-office-footer .lobster-slides-nav button { width: 22px; height: 22px; padding: 0; border: 0; display: inline-flex; align-items: center; justify-content: center; }
+.lobster-slides-nav-position { margin: 0 2px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* Selection: a frame with resize handles over the drawn slide. */
 .lobster-slides-selection { position: absolute; z-index: 2; box-sizing: border-box; border: 1px solid #2b79d0; pointer-events: none; transform-origin: center; }
