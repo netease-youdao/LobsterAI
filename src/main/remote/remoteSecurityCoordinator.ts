@@ -18,6 +18,11 @@ export class RemoteSecurityCoordinator {
   private recoveryAttempts = 0;
   private nextRecoveryAt = 0;
   private closed = false;
+  private readonly recoveryTimer: ReturnType<typeof setInterval>;
+  recoveryState(): { required: boolean; attempts: number; nextAttemptAt: number; recovering: boolean } {
+    return { required: !!this.failure || this.store.needsSecurityRecovery(), attempts: this.recoveryAttempts,
+      nextAttemptAt: this.nextRecoveryAt, recovering: !!this.recovery };
+  }
   constructor(private store: RemoteStore, private journal: RemoteSecurityJournal, private identity: RemoteIdentity, checkpoint: number) {
     const telemetry = captureRemoteTelemetry({ domain: 'security_journal' });
     const storedIdentity = store.get<string>('databaseInstance');
@@ -35,6 +40,15 @@ export class RemoteSecurityCoordinator {
       telemetry.emit(SyncTelemetry.Event.Admission, { fromState: 'initializing', toState: 'blocked', reason: SyncTelemetry.Reason.EvidenceUnknown });
       console.warn('[RemoteSecurity] Mobile execution requires local recovery', { reason: 'security_evidence_unknown' });
     });
+    // Evidence may become unknown in the store without a coordinator commit failing.
+    // Keep a single low-frequency probe alive after the initial retry burst is exhausted.
+    this.recoveryTimer = setInterval(() => {
+      try {
+        if (!this.closed && !this.waiting && !this.recovery && Date.now() >= this.nextRecoveryAt
+          && (this.failure || this.store.needsSecurityRecovery())) void this.recover().catch((): void => undefined);
+      } catch { this.nextRecoveryAt = Date.now() + 60000; }
+    }, 1000);
+    this.recoveryTimer.unref?.();
   }
   private evidence() {
     return { head: this.store.get<RemoteSecurityCommit>('securityJournalHead'), restored: false,
@@ -43,6 +57,7 @@ export class RemoteSecurityCoordinator {
   private async validateOwnership(identity: RemoteIdentity, migrated: boolean, legacyVerified: boolean): Promise<void> {
     let cursor = '';
     while (true) {
+      if (this.closed) throw new RemoteSecurityJournalError('Security coordinator is closed');
       const rows = this.store.db.prepare(`SELECT session_id,owner_user_id,owner_scope_key FROM cowork_session_ownership
         WHERE ownership_status='confirmed' AND session_id>? ORDER BY session_id LIMIT 24`).all(cursor) as Array<{ session_id: string; owner_user_id: string; owner_scope_key: string }>;
       if (!rows.length) return;
@@ -87,12 +102,16 @@ export class RemoteSecurityCoordinator {
     });
     await this.classifyRunCorruption();
     await this.classifyQuestionEvidence();
-    this.store.setSecurityRecoveryRequired(false); remoteDiagnostics.record('security.recovered');
+    if (this.closed) throw new RemoteSecurityJournalError('Security coordinator is closed');
+    this.store.setSecurityRecoveryRequired(false);
+    if (this.store.needsSecurityRecovery()) throw new RemoteSecurityJournalError('Local security evidence requires recovery');
+    remoteDiagnostics.record('security.recovered');
     telemetry.emit(SyncTelemetry.Event.Admission, { fromState: 'initializing', toState: 'ready', reason: SyncTelemetry.Reason.None });
   }
   private async classifyQuestionEvidence(): Promise<void> {
     let cursor: string | null = '';
     do {
+      if (this.closed) throw new RemoteSecurityJournalError('Security coordinator is closed');
       cursor = this.store.questionEvidence.backfill((sessionId, owner) => {
         const proof = this.store.get<{ operationId: string; signature: string }>(`ownershipProof:${sessionId}`);
         return !!proof && this.journal.verifyOwnership({ sessionId, ownerUserId: owner.userId, scopeKey: owner.scopeKey,
@@ -104,6 +123,7 @@ export class RemoteSecurityCoordinator {
   private async classifyRunCorruption(): Promise<void> {
     let cursor: string | null = '';
     do {
+      if (this.closed) throw new RemoteSecurityJournalError('Security coordinator is closed');
       cursor = this.store.classifyRunCorruption((sessionId, owner) => {
         const proof = this.store.get<{ operationId: string; signature: string }>(`ownershipProof:${sessionId}`);
         return !!proof && this.journal.verifyOwnership({ sessionId, ownerUserId: owner.userId, scopeKey: owner.scopeKey,
@@ -118,7 +138,8 @@ export class RemoteSecurityCoordinator {
   }
   async available(): Promise<void> {
     await this.ready;
-    if (this.failure && !this.waiting && !this.closed && this.recoveryAttempts < 4 && Date.now() >= this.nextRecoveryAt) await this.recover();
+    if ((this.failure || this.store.needsSecurityRecovery()) && !this.waiting && !this.closed && Date.now() >= this.nextRecoveryAt) await this.recover();
+    if (this.closed) throw new RemoteSecurityJournalError('Security coordinator is closed');
     if (this.failure) throw this.failure;
     if (this.store.needsSecurityRecovery()) throw new RemoteSecurityJournalError('Local security evidence requires recovery');
   }
@@ -127,7 +148,10 @@ export class RemoteSecurityCoordinator {
     if (this.recovery) return this.recovery;
     if (this.waiting || this.closed) return Promise.reject(new RemoteSecurityJournalError('Security operations are still active'));
     this.recoveryAttempts++;
-    this.nextRecoveryAt = Date.now() + [1000, 5000, 15000, 60000][Math.min(this.recoveryAttempts - 1, 3)]!;
+    this.nextRecoveryAt = Date.now() + Math.ceil([1000, 5000, 15000, 60000][Math.min(this.recoveryAttempts - 1, 3)]! * (0.8 + Math.random() * 0.4));
+    remoteDiagnostics.gauge('security.recoveryAttempts', this.recoveryAttempts);
+    remoteDiagnostics.gauge('security.nextRecoveryAt', this.nextRecoveryAt);
+    remoteDiagnostics.gauge('security.recovering', 1);
     const operation = (async () => {
       try {
         await this.ready;
@@ -138,15 +162,21 @@ export class RemoteSecurityCoordinator {
         if (this.closed) throw new RemoteSecurityJournalError('Security coordinator is closed');
         await this.classifyRunCorruption();
         await this.classifyQuestionEvidence();
+        if (this.closed) throw new RemoteSecurityJournalError('Security coordinator is closed');
         this.store.setSecurityRecoveryRequired(false);
+        if (this.store.needsSecurityRecovery()) throw new RemoteSecurityJournalError('Local security evidence requires recovery');
         this.failure = null;
-        this.recoveryAttempts = 0;
+        this.recoveryAttempts = 0; this.nextRecoveryAt = 0;
+        remoteDiagnostics.gauge('security.recoveryAttempts', 0); remoteDiagnostics.gauge('security.nextRecoveryAt', 0);
         remoteDiagnostics.record('security.recovered');
       } catch (error) {
         this.failure = error instanceof Error ? error : new RemoteSecurityJournalError('Execution durability is unknown');
         this.store.setSecurityRecoveryRequired(true);
       }
-    })().finally(() => { if (this.recovery === operation) this.recovery = null; });
+    })().finally(() => {
+      if (this.recovery === operation) this.recovery = null;
+      remoteDiagnostics.gauge('security.recovering', 0);
+    });
     this.recovery = operation;
     return operation;
   }
@@ -178,5 +208,5 @@ export class RemoteSecurityCoordinator {
     this.queue = work;
     return work;
   }
-  close(): void { this.closed = true; this.journal.close(); }
+  close(): void { this.closed = true; clearInterval(this.recoveryTimer); this.journal.close(); }
 }

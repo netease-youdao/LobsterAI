@@ -21,6 +21,9 @@ const taskPrefixes = ['import', 'run', 'runHistory', 'inputFence', 'question', '
 const controlPrefixes = ['inbox:', 'syncRunTarget:', 'inputOperation:', 'sessionDeletion:', 'inputPreparation:', 'questionDecision:'];
 const sharedPrefixes = [...controlPrefixes, 'desktopAsset:', 'fileOutput:'];
 const matchesSession = (key: string, id: string): boolean => taskPrefixes.some(prefix => key === `${prefix}:${id}` || key.startsWith(`${prefix}:${id}:`));
+const stateIdentitySql = (field: string): string => `CASE WHEN json_valid(value) THEN CASE
+  WHEN json_type(value,'$.${field}')='text' AND length(json_extract(value,'$.${field}'))<=256 THEN json_extract(value,'$.${field}') END END`;
+const invalidInboxSql = "CASE WHEN json_valid(value) THEN json_type(value)<>'object' ELSE 1 END";
 
 /** Durable admission is separate from delivery ACKs and retry state. Original evidence is never overwritten. */
 export class RemoteSyncAdmissionStore {
@@ -39,6 +42,12 @@ export class RemoteSyncAdmissionStore {
         owner_user_id TEXT NOT NULL,owner_scope_key TEXT NOT NULL,phase TEXT NOT NULL,table_index INTEGER NOT NULL,
         row_cursor INTEGER NOT NULL,task_cursor TEXT NOT NULL,previous_target TEXT,epoch INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS idx_remote_admission_jobs_owner ON remote_sync_admission_jobs(owner_user_id,owner_scope_key,phase);`);
+    // These indexes contain derived lookup keys only. Original request, ACK and
+    // owner evidence stays in remote_state and is verified again before admission.
+    for (const field of ['localSessionId', 'remoteSessionId', 'sessionId']) store.db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_remote_admission_${field} ON remote_state(${stateIdentitySql(field)},key)`);
+    store.db.exec(`CREATE INDEX IF NOT EXISTS idx_remote_admission_invalid_inbox ON remote_state(key)
+      WHERE key>='inbox:' AND key<'inbox;' AND ${invalidInboxSql}=1`);
   }
   job(targetId: string): AdmissionJob | null {
     return (this.store.db.prepare('SELECT * FROM remote_sync_admission_jobs WHERE target_id=?').get(targetId) as AdmissionJob | undefined) || null;
@@ -193,7 +202,10 @@ export class RemoteSyncAdmissionStore {
   }
   isPristine(row: SyncRow, targetId?: string): boolean {
     if (row.device_id || row.ack_seq || row.server_seq !== '0' || row.sync_protocol_version !== 1 || row.stream_epoch || row.sync_environment && row.sync_environment !== targetId) return false;
-    for (const item of this.states()) {
+    // Unknown execution evidence still prevents proving a task pristine. The
+    // partial index makes this check independent of unrelated healthy history.
+    if (this.store.db.prepare(`SELECT 1 FROM remote_state WHERE key>='inbox:' AND key<'inbox;' AND ${invalidInboxSql}=1 LIMIT 1`).get()) return false;
+    for (const item of this.associatedStates(row, targetId || '')) {
       if (item.key === `import:${row.local_id}` || item.key === `localGcDeleted:${row.local_id}` || item.key === `deletionClosed:${row.local_id}`) return false;
       if (item.key === `runCommand:${row.local_id}` && parse(item.value) !== null) return false;
       if (item.key === `run:${row.local_id}` || item.key.startsWith(`runHistory:${row.local_id}:`)) {
@@ -204,11 +216,40 @@ export class RemoteSyncAdmissionStore {
       }
       if (!sharedPrefixes.some(prefix => item.key.startsWith(prefix))) continue;
       const value = parse(item.value);
-      // Unattributable execution evidence cannot establish that a local row was never remotely controlled.
-      if (!record(value)) { if (item.key.startsWith('inbox:')) return false; continue; }
-      if (value.localSessionId === row.local_id || value.remoteSessionId === row.session_id || value.sessionId === row.session_id) return false;
+      if (record(value) && (value.localSessionId === row.local_id || value.remoteSessionId === row.session_id || value.sessionId === row.session_id)) return false;
     }
     return true;
+  }
+  /** Bounded seeks for one task; never materialize every remote_state body per task. */
+  private *associatedStates(row: SyncRow, targetId: string): Iterable<StateRow> {
+    if (row.local_id.length > 256 || row.session_id.length > 256) throw new RemoteSyncAdmissionBudgetError(targetId);
+    const selectors: Array<{ where: string; params: string[] }> = [];
+    for (const prefix of [...taskPrefixes, 'runCommand']) {
+      const key = `${prefix}:${row.local_id}`;
+      selectors.push({ where: 'key=?', params: [key] }, { where: 'key>=? AND key<?', params: [`${key}:`, `${key};`] });
+    }
+    for (const field of ['localSessionId', 'remoteSessionId', 'sessionId']) selectors.push({
+      where: `${stateIdentitySql(field)}=?`, params: [field === 'localSessionId' ? row.local_id : row.session_id],
+    });
+    const seen = new Set<string>(), started = performance.now(); let bytes = 0;
+    for (const selector of selectors) {
+      let cursor = '';
+      while (true) {
+        if (performance.now() - started > admissionBudget.durationMs) throw new RemoteSyncAdmissionBudgetError(targetId);
+        const page = this.store.db.prepare(`SELECT key,octet_length(value) AS bytes,
+          CASE WHEN octet_length(value)<=${admissionBudget.recordBytes} THEN value END AS value FROM remote_state
+          WHERE ${selector.where} AND key>? ORDER BY key LIMIT 32`).all(...selector.params, cursor) as Array<{ key: string; bytes: number; value: string | null }>;
+        if (!page.length) break;
+        for (const item of page) {
+          cursor = item.key;
+          if (seen.has(item.key)) continue;
+          seen.add(item.key); bytes += item.bytes;
+          if (item.value === null || seen.size > admissionBudget.rows || bytes > admissionBudget.bytes) throw new RemoteSyncAdmissionBudgetError(targetId);
+          yield { key: item.key, value: item.value };
+        }
+        if (page.length < 32) break;
+      }
+    }
   }
   controlBlocked(targetId: string): boolean {
     return !!this.store.db.prepare('SELECT 1 FROM remote_sync_admission_control_barriers WHERE target_id=? LIMIT 1').get(targetId);
@@ -269,7 +310,7 @@ export class RemoteSyncAdmissionStore {
   }
   validateAssociated(owner: RemoteOwner, deviceId: string, targetId: string, row: SyncRow, previousId?: string): void {
     const runIds = new Set<string>();
-    for (const item of this.states()) {
+    for (const item of this.associatedStates(row, targetId)) {
       const direct = matchesSession(item.key, row.local_id);
       const value = parse(item.value);
       if (direct && !record(value)) throw new RemoteSyncStateError('Task synchronization evidence is malformed');

@@ -12,6 +12,7 @@ import { archivedRemoteSyncReferences } from './remoteSyncTargetStore';
 import { SyncTelemetry } from './remoteSyncTelemetry';
 import { captureRemoteTelemetry } from './remoteTelemetry';
 
+const Scan = { Deleted: 'localGcScan:deleted', File: 'localGcScan:file' } as const;
 const Prefix = { Deleted: 'localGcDeleted:', File: 'localGcFile:', Receipt: 'localGcReceipt:' } as const;
 const Phase = { Eligible: 'eligible', Deleting: 'deleting', Deleted: 'deleted' } as const;
 const GRACE_MS = 24 * 60 * 60_000;
@@ -27,6 +28,9 @@ interface Tombstone {
 }
 interface CacheFile { owner: RemoteOwner; localSessionId: string; filePath: string; inputDeviceId?: string; phase: typeof Phase[keyof typeof Phase] }
 type JsonRecord = Record<string, any>;
+const record = (value: unknown): value is JsonRecord => !!value && typeof value === 'object' && !Array.isArray(value);
+class GcRecordError extends Error {}
+
 
 /** Called inside the existing core deletion transaction, before removing the session. */
 export function recordRemoteSessionDeletion(store: RemoteStore, sessionId: string, now = Date.now()): void {
@@ -89,18 +93,47 @@ export class RemoteLocalGc {
   private running = false;
   private cursor = '';
   private fileCursor = '';
-  constructor(private readonly deps: Dependencies) {}
+  private readonly invalidRecords = new Map<string, number>();
+  constructor(private readonly deps: Dependencies) {
+    const cursor = (key: string): string => {
+      try { const value = deps.store.get<unknown>(key); return typeof value === 'string' ? value : ''; }
+      catch (error) { if (!(error instanceof SyntaxError)) throw error; return ''; }
+    };
+    this.cursor = cursor(Scan.Deleted); this.fileCursor = cursor(Scan.File);
+  }
+  private damaged(key: string): void {
+    const fingerprint = payloadHash(key), now = Date.now();
+    if (now - (this.invalidRecords.get(fingerprint) || 0) < 60_000) return;
+    if (this.invalidRecords.size >= 64) this.invalidRecords.delete(this.invalidRecords.keys().next().value!);
+    this.invalidRecords.set(fingerprint, now);
+    console.warn('[RemoteGc] Invalid record retained', { fingerprint });
+  }
+  private localError(error: unknown, key: string): boolean {
+    if (!(error instanceof SyntaxError) && !(error instanceof GcRecordError) && !(error instanceof TypeError)
+      && !(error instanceof Error && ['REMOTE_RUN_EVIDENCE_INVALID', 'REMOTE_QUESTION_EVIDENCE_INVALID'].includes(error.message))) return false;
+    this.damaged(key); return true;
+  }
   start(): void {
     if (this.timer) return;
     this.timer = setInterval(() => { void this.sweep().catch(() => console.warn('[RemoteGc] Cache cleanup deferred')); }, 60_000);
     this.timer.unref?.();
   }
   stop(): void { if (this.timer) clearInterval(this.timer); this.timer = null; }
-  private entries<T>(prefix: string, after = '', limit = PAGE): Array<{ key: string; value: T }> {
-    return (this.deps.store.db.prepare('SELECT key,value FROM remote_state WHERE key>=? AND key<? AND key>? ORDER BY key LIMIT ?')
-      .all(prefix, `${prefix}\uffff`, after, limit) as Array<{ key: string; value: string }>).map(row => ({ key: row.key, value: JSON.parse(row.value) as T }));
+  private entries<T>(prefix: string, after = '', limit = PAGE): Array<{ key: string; value: T | null }> {
+    return (this.deps.store.db.prepare('SELECT key,CASE WHEN length(CAST(value AS BLOB))<=1048576 THEN value END AS value FROM remote_state WHERE key>=? AND key<? AND key>? ORDER BY key LIMIT ?')
+      .all(prefix, `${prefix}\uffff`, after, limit) as Array<{ key: string; value: string | null }>).map(row => {
+        try {
+          if (row.value === null || Buffer.byteLength(row.value) > 1024 * 1024) throw new GcRecordError();
+          const value: unknown = JSON.parse(row.value);
+          if (!record(value)) throw new GcRecordError();
+          return { key: row.key, value: value as T };
+        } catch (error) { if (!this.localError(error, row.key)) throw error; return { key: row.key, value: null }; }
+      });
   }
   private valid(tombstone: Tombstone): boolean {
+    if (!record(tombstone) || !record(tombstone.owner) || typeof tombstone.localSessionId !== 'string'
+      || typeof tombstone.sessionId !== 'string' || typeof tombstone.deviceId !== 'string'
+      || !Number.isSafeInteger(tombstone.sourceHighWatermark) || !Number.isFinite(tombstone.deletedAt)) throw new GcRecordError();
     const store = this.deps.store, sync = store.sync(tombstone.localSessionId);
     const closed = store.get<{ operationId: string; deletionVersion: string; receiptId: string; receiptDigest: string }>(`${RemoteDeletion.Closed}${tombstone.localSessionId}`);
     return sameOwner(tombstone.owner, this.deps.owner()) && sameOwner(tombstone.owner, store.owner(tombstone.localSessionId))
@@ -119,26 +152,50 @@ export class RemoteLocalGc {
       && !store.db.prepare('SELECT 1 FROM cowork_sessions WHERE id=?').get(tombstone.localSessionId)
       && !store.projectionPublishing(tombstone.localSessionId);
   }
-  private blocked(sessionId: string): boolean {
+  private async blocked(sessionId: string): Promise<boolean> {
     const store = this.deps.store, run = store.run(sessionId);
     if (run && !terminalRuns.has(run.status)) return true;
     if (store.get(`inputFence:${sessionId}`) || store.get(`${RemoteDeletion.Fence}${sessionId}`)) return true;
     const imported = store.get<JsonRecord>(`import:${sessionId}`);
     if (imported && !terminalImports.has(imported.state)) return true;
     const approvals = this.entries<JsonRecord>(`approval:${sessionId}:`, '', 101);
-    if (approvals.length > 100 || approvals.some(row => row.value.status === 'pending' || row.value.resolution?.phase === 'unknown')) return true;
+    if (approvals.length > 100 || approvals.some(row => !row.value || row.value.status === 'pending' || row.value.resolution?.phase === 'unknown')) return true;
+    if (!store.questionEvidenceHealthy(sessionId)) return true;
     if (store.db.prepare(`SELECT 1 FROM remote_state WHERE
-      (key LIKE ? AND (json_extract(value,'$.status')='pending' OR json_extract(value,'$.resolution.phase')='unknown'))
-      OR (key LIKE 'questionDecision:%' AND json_extract(value,'$.state.sessionId')=?
-        AND (json_extract(value,'$.state.status')='pending' OR json_extract(value,'$.state.resolution.phase')='unknown')) LIMIT 1`)
+      (key LIKE ? AND CASE WHEN json_valid(value) THEN
+        json_extract(value,'$.status')='pending' OR json_extract(value,'$.resolution.phase')='unknown' ELSE 1 END)
+      OR (key LIKE 'questionDecision:%' AND CASE WHEN json_valid(value) THEN
+        json_extract(value,'$.state.sessionId')=? AND
+          (json_extract(value,'$.state.status')='pending' OR json_extract(value,'$.state.resolution.phase')='unknown') ELSE 0 END) LIMIT 1`)
       .get(`question:${sessionId}:%`, sessionId)) return true;
-    // A bounded admission check deliberately retains data when old command history is huge.
-    // It does not parse an unlimited inbox on the main thread to gain disk space.
-    const inbox = this.entries<JsonRecord>('inbox:', '', 501);
-    if (inbox.length > 500) return true;
-    return inbox.some(({ value }) => value.localSessionId === sessionId
+    return this.scanReferences('inbox:', value => value.localSessionId === sessionId
       && (!terminalCommands.has(value.state) || !terminalCommands.has(value.command?.status)));
   }
+  /** A complete scan is valid only if no DB write occurred across any yielded page.
+   * High water bounds the work even if another task keeps appending commands. */
+  private databaseVersion(): string {
+    return JSON.stringify([this.deps.store.db.prepare('SELECT total_changes() AS n').get(), this.deps.store.db.pragma('data_version', { simple: true })]);
+  }
+  private async scanReferences(prefix: string, referenced: (value: JsonRecord) => boolean): Promise<boolean> {
+    const db = this.deps.store.db;
+    const started = this.databaseVersion();
+    const last = db.prepare('SELECT key FROM remote_state WHERE key>=? AND key<? ORDER BY key DESC LIMIT 1')
+      .get(prefix, `${prefix}\uffff`) as { key: string } | undefined;
+    if (!last) return false;
+    let after = '';
+    while (true) {
+      const rows = this.entries<JsonRecord>(prefix, after, 50);
+      for (const row of rows) {
+        if (row.key > last.key) break;
+        if (!row.value || referenced(row.value)) return true;
+        after = row.key;
+      }
+      if (rows.length < 50 || after >= last.key) return this.databaseVersion() !== started;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      if (this.databaseVersion() !== started || this.deps.enabled?.() === false || this.deps.store.needsSecurityRecovery()) return true;
+    }
+  }
+
   private deleteBodyPage(table: string, sessionId: string, extra = ''): number {
     // Table names are a closed internal list; each statement commits at most PAGE rows.
     return this.deps.store.db.prepare(`DELETE FROM ${table} WHERE rowid IN
@@ -184,31 +241,34 @@ export class RemoteLocalGc {
     for (const row of rows) {
       tombstone.jobCursor = row.key;
       const job = row.value;
-      const inputRun = this.inputRunBelongsToSession(row.key, job, tombstone.localSessionId);
-      const preparation = row.key.startsWith('inputPreparation:');
-      const command = preparation ? this.preparationCommand(job) : null;
-      const preparationTarget = job.targetId ?? command?.targetId;
-      if (preparation && typeof preparationTarget === 'string' && preparationTarget !== tombstone.environment
-        && (tombstone.environment === null || !samePersistedRemoteEnvironment(store,
-          { owner: tombstone.owner, deviceId: tombstone.deviceId }, preparationTarget, tombstone.environment))) continue;
-      if ((!inputRun && job.localSessionId !== tombstone.localSessionId && !(preparation && command?.localSessionId === tombstone.localSessionId)) || !sameOwner(job.owner, tombstone.owner)) continue;
-      if (inputRun && !Array.isArray(job.attachments)) { tombstone.jobsBlocked = true; continue; }
-      if (preparation && (!this.deps.inputCacheRoot || !command || !terminalCommands.has(command.state) || !terminalCommands.has(command.command?.status)
-        || job.deviceId !== tombstone.deviceId || !Array.isArray(job.files))) { tombstone.jobsBlocked = true; continue; }
-      if (row.key.startsWith('fileOutput:') && (!Array.isArray(job.queue) || !tombstone.completionReceipt && (job.queue.length || job.rename))) { tombstone.jobsBlocked = true; continue; }
-      if (row.key.startsWith('desktopAsset:') && job.availability !== 'ready' && !tombstone.completionReceipt) { tombstone.jobsBlocked = true; continue; }
-      const files: string[] = [];
-      if (typeof job.snapshot?.path === 'string') files.push(job.snapshot.path);
-      if (preparation) for (const file of job.files) { if (typeof file.path === 'string') files.push(file.path); if (typeof file.imagePath === 'string') files.push(file.imagePath); }
-      if (inputRun) for (const item of job.attachments || []) if (typeof item.snapshot?.path === 'string') files.push(item.snapshot.path);
-      if (tombstone.completionReceipt && row.key.startsWith('fileOutput:')) for (const publication of job.queue || []) if (typeof publication.snapshot?.path === 'string') files.push(publication.snapshot.path);
-      const receipt = { keyHash: payloadHash(row.key), payloadHash: payloadHash(job), owner: job.owner,
-        localSessionId: tombstone.localSessionId, assetId: job.assetId || job.uploadedAsset?.assetId || null,
-        artifactId: job.artifactId || null, uploadRequestId: job.uploadRequestId || null,
-        completedPublications: job.completedPublications || [], preparationId: job.preparationId || null,
-        boundCommandId: job.boundCommandId || null, requestHash: job.requestHash || null, inputDigest: job.inputDigest || null, cleanedAt: Date.now() };
-      store.db.transaction(() => { store.put(`${Prefix.Receipt}${payloadHash(row.key)}`, receipt);
-        this.stageFiles(tombstone, files, preparation ? job.deviceId : undefined); store.remove(row.key); })();
+      if (!job) { tombstone.jobsBlocked = true; continue; }
+      try {
+        const inputRun = this.inputRunBelongsToSession(row.key, job, tombstone.localSessionId);
+        const preparation = row.key.startsWith('inputPreparation:');
+        const command = preparation ? this.preparationCommand(job) : null;
+        const preparationTarget = job.targetId ?? command?.targetId;
+        if (preparation && typeof preparationTarget === 'string' && preparationTarget !== tombstone.environment
+          && (tombstone.environment === null || !samePersistedRemoteEnvironment(store,
+            { owner: tombstone.owner, deviceId: tombstone.deviceId }, preparationTarget, tombstone.environment))) continue;
+        if ((!inputRun && job.localSessionId !== tombstone.localSessionId && !(preparation && command?.localSessionId === tombstone.localSessionId)) || !sameOwner(job.owner, tombstone.owner)) continue;
+        if (inputRun && !Array.isArray(job.attachments)) { tombstone.jobsBlocked = true; continue; }
+        if (preparation && (!this.deps.inputCacheRoot || !command || !terminalCommands.has(command.state) || !terminalCommands.has(command.command?.status)
+          || job.deviceId !== tombstone.deviceId || !Array.isArray(job.files))) { tombstone.jobsBlocked = true; continue; }
+        if (row.key.startsWith('fileOutput:') && (!Array.isArray(job.queue) || !tombstone.completionReceipt && (job.queue.length || job.rename))) { tombstone.jobsBlocked = true; continue; }
+        if (row.key.startsWith('desktopAsset:') && job.availability !== 'ready' && !tombstone.completionReceipt) { tombstone.jobsBlocked = true; continue; }
+        const files: string[] = [];
+        if (typeof job.snapshot?.path === 'string') files.push(job.snapshot.path);
+        if (preparation) for (const file of job.files) { if (typeof file.path === 'string') files.push(file.path); if (typeof file.imagePath === 'string') files.push(file.imagePath); }
+        if (inputRun) for (const item of job.attachments || []) if (typeof item.snapshot?.path === 'string') files.push(item.snapshot.path);
+        if (tombstone.completionReceipt && row.key.startsWith('fileOutput:')) for (const publication of job.queue || []) if (typeof publication.snapshot?.path === 'string') files.push(publication.snapshot.path);
+        const receipt = { keyHash: payloadHash(row.key), payloadHash: payloadHash(job), owner: job.owner,
+          localSessionId: tombstone.localSessionId, assetId: job.assetId || job.uploadedAsset?.assetId || null,
+          artifactId: job.artifactId || null, uploadRequestId: job.uploadRequestId || null,
+          completedPublications: job.completedPublications || [], preparationId: job.preparationId || null,
+          boundCommandId: job.boundCommandId || null, requestHash: job.requestHash || null, inputDigest: job.inputDigest || null, cleanedAt: Date.now() };
+        store.db.transaction(() => { store.put(`${Prefix.Receipt}${payloadHash(row.key)}`, receipt);
+          this.stageFiles(tombstone, files, preparation ? job.deviceId : undefined); store.remove(row.key); })();
+      } catch (error) { if (!this.localError(error, row.key)) throw error; tombstone.jobsBlocked = true; }
     }
     if (rows.length < PAGE) tombstone.jobCursor = prefixes[index + 1] || 'done';
     if (tombstone.jobCursor !== 'done') return false;
@@ -224,20 +284,27 @@ export class RemoteLocalGc {
     try {
       const rows = this.entries<Tombstone>(Prefix.Deleted, this.cursor, 5);
       for (const { key, value } of rows) {
-        this.cursor = key;
-        if (value.phase === Phase.Deleted || value.ackAt === null || !Number.isFinite(value.ackAt)
-          || Math.max(value.deletedAt, value.ackAt) + GRACE_MS > now || !this.valid(value) || this.blocked(value.localSessionId)) {
-          skipped++; continue;
-        }
-        value.phase = Phase.Deleting; this.deps.store.put(key, value);
-        let page = this.deleteBodyPage('remote_projection', value.localSessionId, "AND object_key<>'deleted'"); removed += page;
-        if (!page) { page = this.deleteBodyPage('remote_reply_contents', value.localSessionId); removed += page; }
-        if (!page) { page = this.deleteBodyPage('remote_reply_chunks', value.localSessionId); removed += page; }
-        if (!page) { page = this.deleteBodyPage('remote_outbox', value.localSessionId, `AND source_seq<=${value.completionReceipt ? value.sourceHighWatermark : value.ackSourceSeq}`); removed += page; }
-        if (!page && this.trimJobs(value)) value.phase = Phase.Deleted;
-        this.deps.store.put(key, value);
+        this.cursor = key; this.deps.store.put(Scan.Deleted, key);
+        if (!value) { skipped++; continue; }
+        try {
+          const version = this.databaseVersion();
+          if (value.phase === Phase.Deleted || value.ackAt === null || !Number.isFinite(value.ackAt)
+            || Math.max(value.deletedAt, value.ackAt) + GRACE_MS > now || !this.valid(value) || await this.blocked(value.localSessionId)) {
+            skipped++; continue;
+          }
+          this.deps.store.db.transaction(() => {
+            if (version !== this.databaseVersion() || !this.valid(value)) { skipped++; return; }
+            value.phase = Phase.Deleting; this.deps.store.put(key, value);
+            let page = this.deleteBodyPage('remote_projection', value.localSessionId, "AND object_key<>'deleted'"); removed += page;
+            if (!page) { page = this.deleteBodyPage('remote_reply_contents', value.localSessionId); removed += page; }
+            if (!page) { page = this.deleteBodyPage('remote_reply_chunks', value.localSessionId); removed += page; }
+            if (!page) { page = this.deleteBodyPage('remote_outbox', value.localSessionId, `AND source_seq<=${value.completionReceipt ? value.sourceHighWatermark : value.ackSourceSeq}`); removed += page; }
+            if (!page && this.trimJobs(value)) value.phase = Phase.Deleted;
+            this.deps.store.put(key, value);
+          })();
+        } catch (error) { if (!this.localError(error, key)) throw error; skipped++; }
       }
-      if (rows.length < 5) this.cursor = '';
+      if (rows.length < 5) { this.cursor = ''; this.deps.store.put(Scan.Deleted, ''); }
       await this.files();
       remoteDiagnostics.record('gc.rows', removed);
       completed = true;
@@ -249,13 +316,12 @@ export class RemoteLocalGc {
       this.running = false;
     }
   }
-  private referenced(filePath: string): boolean {
+  private async referenced(filePath: string): Promise<boolean> {
+    const version = this.databaseVersion();
     if (archivedRemoteSyncReferences(this.deps.store).paths.has(filePath)) return true;
-    for (const prefix of ['desktopAsset:', DESKTOP_INPUT_RUN_PREFIX, 'fileOutput:', 'inputPreparation:']) {
-      const rows = this.entries<JsonRecord>(prefix, '', 501);
-      if (rows.length > 500 || rows.some(row => stableJson(row.value).includes(filePath))) return true;
-    }
-    return false;
+    for (const prefix of ['desktopAsset:', DESKTOP_INPUT_RUN_PREFIX, 'fileOutput:', 'inputPreparation:'])
+      if (await this.scanReferences(prefix, value => stableJson(value).includes(filePath))) return true;
+    return version !== this.databaseVersion();
   }
   private fileDirectories(value: CacheFile): string[] | null {
     const root = path.resolve(value.inputDeviceId ? this.deps.inputCacheRoot || '' : this.deps.cacheRoot);
@@ -273,36 +339,44 @@ export class RemoteLocalGc {
     const telemetry = captureRemoteTelemetry({ operationKind: SyncTelemetry.Kind.Cleanup, lane: 'files' });
     const rows = this.entries<CacheFile>(Prefix.File, this.fileCursor, 5);
     for (const { key, value } of rows) {
-      this.fileCursor = key;
-      if (value.phase === Phase.Deleted || !sameOwner(value.owner, this.deps.owner()) || this.deps.enabled?.() === false
-        || this.deps.store.needsSecurityRecovery() || this.referenced(value.filePath)) continue;
-      const tombstone = this.deps.store.get<Tombstone>(`${Prefix.Deleted}${value.localSessionId}`);
-      if (!tombstone || !this.valid(tombstone) || this.blocked(value.localSessionId)) continue;
-      value.phase = Phase.Deleting; this.deps.store.put(key, value);
+      this.fileCursor = key; this.deps.store.put(Scan.File, key);
+      if (!value) continue;
       try {
-        const directories = this.fileDirectories(value);
-        if (!directories) continue;
-        // Never follow symlinks at any owned path component or remove a directory.
-        for (const directory of directories) {
-          const stat = await fs.lstat(directory);
-          if (!stat.isDirectory() || stat.isSymbolicLink() || await fs.realpath(directory) !== directory) throw new Error('Unsafe cache directory');
+        if (!record(value.owner) || typeof value.filePath !== 'string' || !path.isAbsolute(value.filePath)
+          || typeof value.localSessionId !== 'string') throw new GcRecordError();
+        if (value.phase === Phase.Deleted || !sameOwner(value.owner, this.deps.owner()) || this.deps.enabled?.() === false
+          || this.deps.store.needsSecurityRecovery() || await this.referenced(value.filePath)) continue;
+        const tombstone = this.deps.store.get<Tombstone>(`${Prefix.Deleted}${value.localSessionId}`);
+        if (!tombstone || !this.valid(tombstone) || await this.blocked(value.localSessionId)) continue;
+        value.phase = Phase.Deleting; this.deps.store.put(key, value);
+        try {
+          const directories = this.fileDirectories(value);
+          if (!directories) continue;
+          // Never follow symlinks at any owned path component or remove a directory.
+          for (const directory of directories) {
+            const stat = await fs.lstat(directory);
+            if (!stat.isDirectory() || stat.isSymbolicLink() || await fs.realpath(directory) !== directory) throw new Error('Unsafe cache directory');
+          }
+          const stat = await fs.lstat(value.filePath);
+          if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Unsafe cache file');
+          const version = this.databaseVersion();
+          if (await this.referenced(value.filePath) || await this.blocked(value.localSessionId)
+            || version !== this.databaseVersion() || !sameOwner(value.owner, this.deps.owner()) || !this.valid(tombstone)) continue;
+          await fs.unlink(value.filePath);
+          remoteDiagnostics.record('gc.bytes', stat.size);
+          this.deps.store.put(key, { ...value, phase: Phase.Deleted });
+          telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Cleanup, outcome: SyncTelemetry.Outcome.Completed,
+            localSessionId: value.localSessionId, remoteOwnerId: value.owner.userId, ownerScopeId: value.owner.scopeKey, count: 1 });
+        } catch (error) {
+          if (String((error as NodeJS.ErrnoException).code || '').startsWith('SQLITE_')) throw error;
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') this.deps.store.put(key, { ...value, phase: Phase.Deleted });
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') telemetry.emit(SyncTelemetry.Event.Stage,
+            { stage: SyncTelemetry.Stage.Cleanup, outcome: SyncTelemetry.Outcome.Deferred, localSessionId: value.localSessionId,
+              remoteOwnerId: value.owner.userId, ownerScopeId: value.owner.scopeKey, reason: SyncTelemetry.Reason.StorageUnavailable });
+          // Retry a bounded page later; failure does not escape into local task operations.
         }
-        const stat = await fs.lstat(value.filePath);
-        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Unsafe cache file');
-        if (!sameOwner(value.owner, this.deps.owner()) || !this.valid(tombstone) || this.referenced(value.filePath)) continue;
-        await fs.unlink(value.filePath);
-        remoteDiagnostics.record('gc.bytes', stat.size);
-        this.deps.store.put(key, { ...value, phase: Phase.Deleted });
-        telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Cleanup, outcome: SyncTelemetry.Outcome.Completed,
-          localSessionId: value.localSessionId, remoteOwnerId: value.owner.userId, ownerScopeId: value.owner.scopeKey, count: 1 });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') this.deps.store.put(key, { ...value, phase: Phase.Deleted });
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') telemetry.emit(SyncTelemetry.Event.Stage,
-          { stage: SyncTelemetry.Stage.Cleanup, outcome: SyncTelemetry.Outcome.Deferred, localSessionId: value.localSessionId,
-            remoteOwnerId: value.owner.userId, ownerScopeId: value.owner.scopeKey, reason: SyncTelemetry.Reason.StorageUnavailable });
-        // Retry a bounded page later; failure does not escape into local task operations.
-      }
+      } catch (error) { if (!this.localError(error, key)) throw error; }
     }
-    if (rows.length < 5) this.fileCursor = '';
+    if (rows.length < 5) { this.fileCursor = ''; this.deps.store.put(Scan.File, ''); }
   }
 }

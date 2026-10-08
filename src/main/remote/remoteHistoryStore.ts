@@ -4,6 +4,7 @@ import path from 'path';
 
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { payloadHash, sameOwner, stableJson } from './canonical';
+import { assertRemoteSidecarHeadroom } from './remoteSidecarHeadroom';
 import type { RemoteStore } from './remoteStore';
 import { SyncTelemetry } from './remoteSyncTelemetry';
 import { captureRemoteTelemetry, remoteTelemetryEvent } from './remoteTelemetry';
@@ -227,6 +228,7 @@ export class RemoteHistoryStore {
       const body = stableJson(operation), bytes = Buffer.byteLength(body);
       const used = db.prepare("SELECT COALESCE(SUM(CASE WHEN state='pending' THEN bytes ELSE 0 END),0) AS pending,COALESCE(SUM(bytes),0) AS total FROM history_operations").get() as { pending: number; total: number };
       if (bytes > 1024 * 1024 || used.pending + bytes > 32 * 1024 * 1024 || used.total + bytes > 96 * 1024 * 1024) throw new RemoteHistoryUnavailable('REMOTE_HISTORY_OPERATION_BUDGET');
+      assertRemoteSidecarHeadroom(db.name, bytes, 1024 * 1024);
       db.prepare('INSERT INTO history_operations VALUES(?,?,?,?,?,?,?)').run(value.id,...contextKey(value.context),body,bytes,'pending');
       inserted = true;
       return operation;

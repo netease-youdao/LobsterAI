@@ -10,6 +10,7 @@ import type { CoworkStore } from '../coworkStore';
 import { payloadHash, sameOwner } from './canonical';
 import type { RemoteAgentCatalog } from './remoteAgentCatalog';
 import { captureRemoteFileTelemetry, remoteFileRequestFailure, remoteFileRequestFailureFields, RemoteFileTelemetry as Telemetry,remoteFileTelemetryReason } from './remoteFileTelemetry';
+import type { RemoteImageContext } from './remoteImageDecoder';
 import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
 import { withRemoteTelemetryRequest } from './remoteTelemetryTransport';
 
@@ -28,11 +29,12 @@ interface Dependencies {
   store: CoworkStore; models: RemoteModelCatalog; cacheRoot: string; getOwner(): RemoteOwner | null;
   getTargetId?(): string | null;
   getDefaultModel(): string; getAgentCatalog(): RemoteAgentCatalog | null;
-  createImagePreview?(filePath: string): Promise<InputImagePreview | undefined>;
-  convertImage?(filePath: string, mimeType: string, targetPath: string, maximumBytes: number): Promise<{ path: string; mimeType: string }>;
+  createImagePreview?(filePath: string, context?: RemoteImageContext): Promise<InputImagePreview | undefined>;
+  convertImage?(filePath: string, mimeType: string, targetPath: string, maximumBytes: number, context?: RemoteImageContext): Promise<{ path: string; mimeType: string }>;
 }
 const maxPreviewBytes = 128 * 1024;
-const previewTimeoutMs = 750;
+// Includes cold sandbox renderer startup; timeout aborts the decoder, not just its waiter.
+const previewTimeoutMs = 2500;
 const imageMimes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const maxFileBytes = 100 * 1024 * 1024;
 const maxTotalBytes = 256 * 1024 * 1024;
@@ -117,14 +119,16 @@ export class InputPreparationService {
     if (!this.deps.createImagePreview) return undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let preview: InputImagePreview | undefined;
+    const abort = new AbortController();
+    const current = (): boolean => { try { check(); return true; } catch { return false; } };
     try {
       preview = await Promise.race([
-        this.deps.createImagePreview(filePath),
-        new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), previewTimeoutMs); }),
+        this.deps.createImagePreview(filePath, { current, signal: abort.signal }),
+        new Promise<undefined>(resolve => { timer = setTimeout(() => { abort.abort(); resolve(undefined); }, previewTimeoutMs); }),
       ]);
     } catch {
       console.warn('[RemoteInput] Image preview unavailable; retaining file attachment');
-    } finally { if (timer) clearTimeout(timer); }
+    } finally { if (timer) clearTimeout(timer); abort.abort(); }
     check(); // A failed preview must not swallow a revoked execution/account permit.
     if (!preview || !imageMimes.has(preview.mimeType) || !preview.base64Data
       || preview.base64Data.length > 4 * Math.ceil(maxPreviewBytes / 3)
@@ -268,7 +272,15 @@ export class InputPreparationService {
             if (asset.intent === RemoteInputIntent.Image) {
               let image = { path: filePath, mimeType: asset.mimeType };
               if (this.deps.convertImage) {
-                image = await this.deps.convertImage(filePath, asset.mimeType, path.join(folder, `${randomUUID()}.png`), Math.floor((imageFrameBytes - frameBytes) / 4) * 3); check();
+                try {
+                  image = await this.deps.convertImage(filePath, asset.mimeType, path.join(folder, `${randomUUID()}.png`), Math.floor((imageFrameBytes - frameBytes) / 4) * 3,
+                    { current: () => { try { check(); return true; } catch { return false; } } });
+                } catch (error) {
+                  check(); // Account/claim revocation takes precedence over a decoder failure.
+                  if (error instanceof Error && error.message === RemoteInputReason.Invalid) throw new RemoteInputError(RemoteInputReason.Invalid);
+                  throw error;
+                }
+                check();
               }
               if (!imageMimes.has(image.mimeType)) throw new RemoteInputError(RemoteInputReason.Invalid);
               file.imagePath = image.path; file.imageMime = image.mimeType; file.imageIdentity = identity(image.path);

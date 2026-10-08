@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import path from 'path';
 
 import { payloadHash, stableJson } from './canonical';
+import { assertRemoteSidecarHeadroom } from './remoteSidecarHeadroom';
 import { emitCommittedTelemetry, observeSyncCommit, SyncTelemetry } from './remoteSyncTelemetry';
 import { captureRemoteTelemetry, remoteTelemetryEvent } from './remoteTelemetry';
 
@@ -233,6 +234,7 @@ export class RemoteAvailabilityStore {
       if (bytes > (value.pathname ? 256 : 1024) * 1024 || used.active + bytes > laneLimit
         || used.task + bytes > laneLimit - 1024 * 1024 || total.bytes + bytes + RECEIPT_RESERVE_BYTES > LEDGER_REQUEST_BYTES)
         throw new Error('REMOTE_AVAILABILITY_QUEUE_BUDGET');
+      assertRemoteSidecarHeadroom(this.db.name, bytes, RECEIPT_RESERVE_BYTES);
       this.db.prepare('INSERT INTO availability_requests(key,lane,scope,local_id,body,bytes,object_id,object_kind,request_hash) VALUES(?,?,?,?,?,?,?,?,?)')
         .run(value.key, value.lane, value.scope, value.localId, body, bytes, identifier(value.body.objectId) ? value.body.objectId : null,
           ['message','tool'].includes(value.body.objectKind) ? value.body.objectKind : null, payloadHash(value));

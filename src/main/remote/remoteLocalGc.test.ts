@@ -29,7 +29,7 @@ function fixture(environment: string | null = null) {
   db.prepare('INSERT INTO remote_projection VALUES (?,?,?,?,?)').run('s', 'message:m', 'hash', 1, JSON.stringify({ content: 'secret body' }));
   db.prepare('INSERT INTO remote_reply_chunks VALUES (?,?,?,?)').run('s', 'sha', 'body', 4);
   db.prepare('INSERT INTO remote_object_state VALUES (?,?,?,?)').run('s', 'message:m', 1, JSON.stringify({ ordinal: '1', digest: 'hash' }));
-  store.put('run:s', { runId: 'r', status: 'succeeded' });
+  store.put('run:s', { runId: 'r', statusVersion: '1', status: 'succeeded' });
   store.put('approval:s:a', { status: 'approved' });
   store.put('inbox:command', { localSessionId: 's', state: 'applied', command: { status: 'applied', requestHash: 'unchanged' } });
   const deps = { store, cacheRoot: root, inputCacheRoot: path.join(root, 'inputs'), owner: () => actor };
@@ -113,7 +113,7 @@ describe('deleted remote session local GC', () => {
   });
   it.each(['run', 'inbox', 'approval', 'question', 'question-fact', 'import', 'publication', 'recovery'])('retains caches for %s blockers', async blocker => {
     const f = fixture(); f.ack();
-    if (blocker === 'run') f.store.put('run:s', { runId: 'r', status: 'running' });
+    if (blocker === 'run') f.store.put('run:s', { runId: 'r', statusVersion: '1', status: 'running' });
     if (blocker === 'inbox') f.store.put('inbox:command', { localSessionId: 's', state: 'unknown', command: { status: 'received' } });
     if (blocker === 'approval') f.store.put('approval:s:a', { status: 'pending' });
     if (blocker === 'question') f.store.put('question:s:q', { status: 'pending', resolution: { phase: 'unknown' } });
@@ -250,7 +250,7 @@ describe('deleted remote session local GC', () => {
     fs.mkdirSync(folder, { recursive: true }); const file = path.join(folder, 'download.txt'); fs.writeFileSync(file, 'input');
     f.store.put('inputPreparation:prepared', { owner, deviceId: 'device', boundCommandId: 'command', preparationId: 'prepared', files: [{ path: file }] });
     if (reason === 'unknown-command') f.store.put('inbox:command', { localSessionId: 's', state: 'unknown', command: { status: 'received' } });
-    if (reason === 'unknown-run') f.store.put('run:s', { runId: 'r', status: 'reconciling' });
+    if (reason === 'unknown-run') f.store.put('run:s', { runId: 'r', statusVersion: '1', status: 'reconciling' });
     if (reason === 'other-owner') f.actor(other);
     await finish(f.gc); expect(fs.readFileSync(file, 'utf8')).toBe('input'); expect(f.store.get('inputPreparation:prepared')).toBeDefined();
   });
@@ -269,4 +269,63 @@ describe('deleted remote session local GC', () => {
     await finish(f.gc); expect(fs.readFileSync(original, 'utf8')).toBe('original'); expect(fs.lstatSync(snapshot).isSymbolicLink()).toBe(true);
     expect(f.store.get('desktopAsset:unknown')).toBeDefined();
   });
+});
+
+
+it('advances past invalid tombstones and job JSON while preserving the damaged bytes', async () => {
+  const f = fixture(); f.ack();
+  f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run('localGcDeleted:000-bad', '{');
+  f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run('desktopAsset:000-bad', '{');
+  f.store.put('desktopAsset:good', { owner, localSessionId: 's', availability: 'ready' });
+  await finish(f.gc);
+  expect(f.body().n).toBe(0);
+  expect(f.store.get('desktopAsset:good')).toBeNull();
+  expect(f.db.prepare('SELECT value FROM remote_state WHERE key=?').get('desktopAsset:000-bad')).toEqual({ value: '{' });
+  expect(f.db.prepare('SELECT value FROM remote_state WHERE key=?').get('localGcDeleted:000-bad')).toEqual({ value: '{' });
+});
+
+it('allows healthy deletion with more than 500 unrelated commands and retains unknown commands', async () => {
+  const f = fixture(); f.ack();
+  for (let i = 0; i < 600; i++) f.store.put(`inbox:other:${i}`, { localSessionId: 'other', state: 'executing', command: { status: 'received' } });
+  await finish(f.gc); expect(f.body().n).toBe(0);
+  expect(f.store.get('inbox:other:1')).toMatchObject({ state: 'executing' });
+});
+
+it('invalidates yielded command scans when a previously visited command becomes unresolved', async () => {
+  const f = fixture(); f.ack();
+  for (let i = 0; i < 110; i++) f.store.put(`inbox:z:${i}`, { localSessionId: 'other', state: 'applied', command: { status: 'applied' } });
+  const sweep = f.gc.sweep(day + 2000);
+  f.store.put('inbox:command', { localSessionId: 's', state: 'unknown', command: { status: 'received' } });
+  await sweep; expect(f.body().n).toBe(1);
+});
+
+it('does not consume a shared database failure as one corrupt task', async () => {
+  const f = fixture(); f.ack();
+  f.db.exec('DROP TABLE remote_projection');
+  await expect(f.gc.sweep(day + 2000)).rejects.toThrow();
+});
+
+it('restores the raw row cursor across GC restarts even if the first page is damaged', async () => {
+  const f = fixture(); f.ack();
+  for (let i = 0; i < 6; i++) f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run(`localGcDeleted:0${i}`, '{');
+  await f.gc.sweep(day + 2000); expect(f.body().n).toBe(1);
+  const restarted = new RemoteLocalGc(f.deps);
+  await restarted.sweep(day + 2000); expect(f.body().n).toBe(0);
+});
+
+
+it.each([true, false])('isolates damaged question records only with authenticated task attribution (bound=%s)', async bound => {
+  const f = fixture(); f.ack();
+  if (bound) {
+    f.store.configureQuestionEvidence({ sign: fact => payloadHash(fact), verify: (fact, signature) => payloadHash(fact) === signature });
+    f.store.transaction(() => {
+      f.db.prepare("INSERT INTO cowork_sessions VALUES ('other','title',1,1,'idle')").run();
+      f.store.assignNew('other', owner, 'local_create');
+    });
+    f.store.put('questionDecision:bad', { binding: { owner }, state: { sessionId: 'other', runId: 'r-other', questionId: 'q', status: 'pending' } });
+    expect(f.store.questionEvidence.binding('questionDecision:bad')?.sessionId).toBe('other');
+    f.db.prepare("UPDATE remote_state SET value='{' WHERE key='questionDecision:bad'").run();
+  } else f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run('questionDecision:bad', '{');
+  await finish(f.gc); expect(f.body().n).toBe(bound ? 0 : 1);
+  expect(f.db.prepare("SELECT value FROM remote_state WHERE key='questionDecision:bad'").get()).toEqual({ value: '{' });
 });

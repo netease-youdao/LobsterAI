@@ -21,7 +21,7 @@ import { RemoteProjectionCoordinator } from './remoteProjectionCoordinator';
 import { finishProjectionFault, grantProjectionProbe, initializeProjectionFaults, projectionFault, recordProjectionFault } from './remoteProjectionFaults';
 import { initializeRemoteProjectionSchema } from './remoteProjectionSchema';
 import type { ProjectionWork } from './remoteProjectionWorker';
-import { type QuestionEvidenceAuthenticator,RemoteQuestionEvidence, remoteQuestionEvidenceDigest } from './remoteQuestionEvidence';
+import { type QuestionEvidenceAuthenticator,questionIdSql,questionSessionSql, RemoteQuestionEvidence, remoteQuestionEvidenceDigest } from './remoteQuestionEvidence';
 import { isPublicReplyMessage, redactReplyText,replyAppendDelta, replyBlockId, replyBlocks, replyChunks, replyToolState } from './remoteReplyProjection';
 import { RemoteSyncStateError, retentionEventId, retentionSequence, safeSourceSequence } from './remoteRetention';
 import type { RemoteSecurityCommit } from './remoteSecurityJournal';
@@ -188,9 +188,12 @@ export class RemoteStore {
   private readonly projectionTargetContexts = new WeakMap<ProjectionWork, string>();
   constructor(readonly db: Database.Database, private readonly options: { deferredProjection?: boolean; restoreRuns?: boolean; projectionWorkerPath?: string; deferSynchronization?: boolean } = {}) {
     this.history = new RemoteHistoryStore(this);
-    RemoteHistoryStore.initializeCore(db);
     this.databaseHealth = options.deferredProjection && db.name !== ':memory:' && options.restoreRuns !== false ? new RemoteDatabaseHealth(db.name) : null;
-    db.exec(`
+    // Core ownership, execution, ACK/identity and source revisions migrate atomically.
+    // A failed core migration must never leave an apparently usable half-upgraded store.
+    db.transaction(() => {
+      RemoteHistoryStore.initializeCore(db);
+      db.exec(`
       CREATE TABLE IF NOT EXISTS remote_corrupt_state(key TEXT PRIMARY KEY,value TEXT NOT NULL,detected_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS local_execution_dispatch(session_id TEXT PRIMARY KEY,run_id TEXT NOT NULL,origin TEXT NOT NULL,
         owner_hash TEXT NOT NULL,boot_id TEXT NOT NULL,phase TEXT NOT NULL,version INTEGER NOT NULL);
@@ -222,17 +225,15 @@ export class RemoteStore {
       source_purge_seq: "TEXT NOT NULL DEFAULT '0'", event_purge_seq: "TEXT NOT NULL DEFAULT '0'", migration_frozen: 'INTEGER NOT NULL DEFAULT 0' })) {
       if (!syncColumns.has(name)) db.exec(`ALTER TABLE remote_sync ADD COLUMN ${name} ${declaration}`);
     }
-    this.questionEvidence = new RemoteQuestionEvidence(this);
     initializeAvailabilitySource(db);
-    this.replyProjectionSupported = this.get<boolean>('replyProjectionMode') === true;
-    this.questionProjectionSupported = this.get<boolean>('questionProjectionMode:default') === true;
     // Upgrade old triggers before any local mutation; optional projections must never own core writes.
     db.transaction(() => {
       for (const table of ['cowork_sessions', 'cowork_messages']) {
         const sid = table === 'cowork_sessions' ? 'id' : 'session_id';
         for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
           const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
-          db.exec(`CREATE TRIGGER IF NOT EXISTS remote_revision_${table}_${operation.toLowerCase()}
+          db.exec(`DROP TRIGGER IF EXISTS remote_revision_${table}_${operation.toLowerCase()};
+            CREATE TRIGGER remote_revision_${table}_${operation.toLowerCase()}
             AFTER ${operation} ON ${table} BEGIN
             INSERT INTO remote_session_revisions(session_id,revision,dirty_at) VALUES (${ref}.${sid},1,CAST(strftime('%s','now') AS INTEGER)*1000)
             ON CONFLICT(session_id) DO UPDATE SET dirty_at=CASE WHEN revision=clean_revision THEN excluded.dirty_at ELSE dirty_at END,revision=revision+1; END;
@@ -259,11 +260,13 @@ export class RemoteStore {
           ON CONFLICT(session_id) DO UPDATE SET revision=revision+1; END;`);
       }
     })();
+    db.prepare('UPDATE remote_write_context SET trusted=0 WHERE id=1').run();
+    })();
+    this.questionEvidence = new RemoteQuestionEvidence(this);
     if (!options.deferSynchronization) {
       try { this.initializeSynchronization(); }
       catch (error) { console.warn('[RemoteSync] Optional synchronization initialization deferred', error); }
     }
-    db.prepare('UPDATE remote_write_context SET trusted=0 WHERE id=1').run();
     // Large histories are reconciled in bounded pages after the shell can start.
     if (options.restoreRuns !== false) {
       if (options.deferredProjection) {
@@ -290,6 +293,10 @@ export class RemoteStore {
   initializeSynchronization(): void {
     if (this.synchronizationReady) return;
     this.db.transaction(() => {
+      // Display/projection preferences can quarantine malformed old values. This optional
+      // repair is deliberately outside construction of the desktop execution store.
+      this.replyProjectionSupported = this.get<boolean>('replyProjectionMode') === true;
+      this.questionProjectionSupported = this.get<boolean>('questionProjectionMode:default') === true;
       initializeAvailabilityProjectionSources(this.db);
       initializeRemoteProjectionSchema(this.db);
       initializeProjectionFaults(this.db);
@@ -620,12 +627,12 @@ export class RemoteStore {
       : currentRunId ? this.currentDecisionValues<RemoteQuestionState>(`question:${sessionId}:`, sessionId, currentRunId)
         : this.entries<RemoteQuestionState>(`question:${sessionId}:`).map(row => row.value);
     const values = new Map(projected.map(value => [value.questionId, value]));
-    const selection = questionIds ? ` AND CASE WHEN json_valid(s.value) THEN json_extract(s.value,'$.state.questionId') END IN (${questionIds.map(() => '?').join(',')})` : '';
+    const selection = questionIds ? ` AND ${questionIdSql} IN (${questionIds.map(() => '?').join(',')})` : '';
     const facts = this.db.prepare(`SELECT s.key,CASE WHEN octet_length(s.value)<=32768 THEN s.value END AS value,
       octet_length(s.value) AS bytes FROM remote_state s
-      WHERE s.key>='questionDecision:' AND s.key<'questionDecision;'
-      AND (CASE WHEN json_valid(s.value) THEN json_extract(s.value,'$.state.sessionId') END=? OR s.key IN (SELECT value FROM json_each(?)))${selection}${questionIds ? ' LIMIT 65' : ''}`)
-      .all(sessionId, JSON.stringify(this.questionEvidence.sessionKeys(sessionId)), ...(questionIds || [])) as Array<{ key: string; value: string | null; bytes: number }>;
+      WHERE s.key IN (SELECT key FROM remote_state WHERE key>='questionDecision:' AND key<'questionDecision;'
+        AND ${questionSessionSql}=?${selection} UNION SELECT value FROM json_each(?))${questionIds ? ' LIMIT 65' : ''}`)
+      .all(sessionId, ...(questionIds || []), JSON.stringify(this.questionEvidence.sessionKeys(sessionId))) as Array<{ key: string; value: string | null; bytes: number }>;
     if (questionIds && (facts.length > 64 || facts.some(row => row.value === null)
       || facts.reduce((sum, row) => sum + row.bytes, selectedBytes) > 1024 * 1024)) throw new Error('REMOTE_CONTROL_DECISION_BUDGET');
     for (const row of facts) {
@@ -758,6 +765,7 @@ export class RemoteStore {
   put(key: string, value: unknown): void {
     if (this.depth === 0 && (this.advanceCheckpoint || /^(approval|question|questionDecision|localApprovalBlocker):/u.test(key))) { this.transaction(() => this.put(key, value)); return; }
     const parts = key.split(':');
+    if (parts[0] === 'questionDecision') this.questionEvidence.assertIdentity(key, value);
     if (parts[0] === 'run' && parts[1] && this.messageBindings.get(parts[1])?.runId !== (value as RemoteRun)?.runId) this.messageBindings.delete(parts[1]);
     if (parts[1] && ['deletionGuard', 'run', 'runHistory', 'control', 'approval', 'question', 'localApprovalBlocker', 'inputModel', 'inputVersion', 'inputSignature'].includes(parts[0])) {
       this.touchProjection(parts[1]); touchAvailabilityControl(this.db, parts[1]);
@@ -780,7 +788,10 @@ export class RemoteStore {
       if (id) markAvailabilityControl(this.db, parts[1], `${type}:${id}`);
     }
     if (parts[0] === 'questionDecision') {
-      this.questionEvidence.record(key, value);
+      // Signed attribution is reconstructible. A full/broken optional table must
+      // never turn a committed local answer into an apparent failed answer.
+      this.questionEvidence.stageAttribution(key, value);
+      this.afterCommit(() => this.questionEvidence.record(key, value));
       const sessionId = (value as { state?: { sessionId?: string } }).state?.sessionId;
       if (sessionId) { this.touchProjection(sessionId); touchAvailabilityControl(this.db, sessionId); this.markProjectionDirty(sessionId); }
     }

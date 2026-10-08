@@ -247,3 +247,38 @@ it('rolls back a failed optional schema phase and still constructs the desktop s
   expect(() => store.transaction(() => db.prepare("INSERT INTO cowork_sessions VALUES('core','Core',1,1,'idle')").run())).not.toThrow();
   expect(() => store.beginRun('core')).not.toThrow();
 });
+
+
+it('does not run optional preference repair during desktop construction', () => {
+  const { db } = fixture();
+  db.prepare('INSERT INTO remote_state VALUES (?,?)').run('replyProjectionMode', '{');
+  db.exec(`CREATE TRIGGER fail_optional_repair BEFORE DELETE ON remote_state
+    WHEN OLD.key='replyProjectionMode' BEGIN SELECT RAISE(ABORT,'optional repair unavailable'); END;`);
+  const reopened = new RemoteStore(db, { deferredProjection: true, deferSynchronization: true, restoreRuns: false });
+  expect(() => reopened.initializeSynchronization()).toThrow('optional repair unavailable');
+  expect(() => reopened.transaction(() => {
+    db.prepare("INSERT INTO cowork_sessions VALUES('local','Local',1,1,'idle')").run();
+    reopened.assignNew('local', owner, 'local_create');
+  })).not.toThrow();
+  expect(() => reopened.beginRun('local')).not.toThrow();
+  expect(db.prepare("SELECT value FROM remote_state WHERE key='replyProjectionMode'").get()).toEqual({ value: '{' });
+});
+
+it('rolls back a failed core upgrade rather than leaving half-migrated execution tables', () => {
+  const db = new Database(':memory:'); databases.push(db);
+  db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY); CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT);
+    CREATE VIEW remote_sync AS SELECT 1 AS incompatible;`);
+  expect(() => new RemoteStore(db, { deferredProjection: true, deferSynchronization: true })).toThrow();
+  expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name='local_execution_dispatch'").get()).toBeUndefined();
+  expect(db.prepare("SELECT type FROM sqlite_master WHERE name='remote_sync'").get()).toEqual({ type: 'view' });
+});
+
+it('replaces pre-upgrade core triggers that still reference an optional cache', () => {
+  const { db } = fixture();
+  db.exec(`DROP TRIGGER remote_revision_cowork_messages_insert;
+    CREATE TRIGGER remote_revision_cowork_messages_insert AFTER INSERT ON cowork_messages BEGIN
+      INSERT INTO removed_optional_cache VALUES(NEW.id); END;`);
+  const reopened = new RemoteStore(db, { deferredProjection: true, deferSynchronization: true, restoreRuns: false });
+  expect(() => reopened.transaction(() => db.prepare("INSERT INTO cowork_messages VALUES('m','s','assistant','ok',NULL,2,1)").run())).not.toThrow();
+  expect(reopened.projectionRevision('s')).toBe(1);
+});

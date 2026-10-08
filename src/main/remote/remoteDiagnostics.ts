@@ -3,6 +3,7 @@ import { monitorEventLoopDelay } from 'perf_hooks';
 const counterNames = ['projection.completed', 'projection.failed', 'projection.bytes', 'worker.failed', 'security.recovered',
   'security.unknown', 'fence.released', 'fence.unknown', 'cache.rebuilt', 'gc.rows', 'gc.bytes', 'files.failed', 'files.completed'] as const;
 const gaugeNames = ['pendingSessions', 'oldestPendingAgeMs', 'projection.queue', 'files.queue', 'files.cacheBytes', 'cache.bytes',
+  'security.recoveryAttempts', 'security.nextRecoveryAt', 'security.recovering',
   'control.waitMs', 'projection.durationMs', 'files.queueWaitMs', 'files.durationMs', 'main.durationMs'] as const;
 type Counter = typeof counterNames[number];
 type Gauge = typeof gaugeNames[number];

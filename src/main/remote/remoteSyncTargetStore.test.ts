@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { createHash } from 'crypto';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
@@ -8,7 +8,7 @@ import { RemoteRetention, type RetentionState } from '../../shared/remote/retent
 import { RemoteSyncTarget, type RemoteSyncTargetIdentity } from '../../shared/remote/syncTarget';
 import { stableJson } from './canonical';
 import { RemoteStore } from './remoteStore';
-import { RemoteSyncAdmissionBudgetError } from './remoteSyncAdmission';
+import { RemoteSyncAdmissionBudgetError, RemoteSyncAdmissionStore } from './remoteSyncAdmission';
 import { archivedRemoteSyncReferences, RemoteSyncTargetActivationKind, remoteSyncTargetId, RemoteSyncTargetStore } from './remoteSyncTargetStore';
 
 const owner = { userId: 'user', scopeKey: 'personal' }, other = { userId: 'other', scopeKey: 'personal' };
@@ -519,4 +519,35 @@ describe('per-session synchronization admission', () => {
     expect(f.store.sync('s')!.ack_seq).toBe(0);
     expect(f.store.get('syncRunTarget:local-run')).toBe(target.targetId);
   });
+});
+
+
+test('task admission seeks its own evidence without decoding unrelated keyspace', () => {
+  const f = fixture(); f.add('good'); f.add('bad');
+  f.db.transaction(() => {
+    for (let i = 0; i < 6000; i++) f.db.prepare('INSERT INTO remote_state VALUES (?,?)')
+      .run(`unrelated:${i}`, JSON.stringify({ localSessionId: 'other-history', detail: 'retained' }));
+  })();
+  const admissions = new RemoteSyncAdmissionStore(f.store), parse = vi.spyOn(JSON, 'parse');
+  try {
+    expect(admissions.isPristine(f.store.sync('good')!)).toBe(true);
+    admissions.validateAssociated(owner, 'device-a', 'target', f.store.sync('good')!);
+    expect(parse.mock.calls.length).toBeLessThan(20);
+  } finally { parse.mockRestore(); }
+  f.store.put('inbox:unknown', { localSessionId: 'bad', owner, remoteSessionId: f.store.sync('bad')!.session_id });
+  expect(admissions.isPristine(f.store.sync('bad')!)).toBe(false);
+  expect(admissions.isPristine(f.store.sync('good')!)).toBe(true);
+  f.db.prepare("UPDATE remote_state SET value='{' WHERE key='inbox:unknown'").run();
+  expect(admissions.isPristine(f.store.sync('good')!)).toBe(false);
+});
+
+test('an oversized associated record cannot be mistaken for an absent record', () => {
+  const f = fixture(); f.add('bad'); f.add('good');
+  const raw = JSON.stringify({ localSessionId: 'bad', detail: 'x'.repeat(1024 * 1024) });
+  f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run('inbox:large', raw);
+  const admissions = new RemoteSyncAdmissionStore(f.store);
+  expect(() => admissions.validateAssociated(owner, 'device-a', 'target', f.store.sync('bad')!)).toThrow(RemoteSyncAdmissionBudgetError);
+  expect(() => admissions.validateAssociated(owner, 'device-a', 'target', f.store.sync('good')!)).not.toThrow();
+  expect(admissions.isPristine(f.store.sync('good')!)).toBe(true);
+  expect(f.db.prepare("SELECT value FROM remote_state WHERE key='inbox:large'").get()).toEqual({ value: raw });
 });

@@ -264,7 +264,7 @@ it('adds desktop previews when executing a preparation saved by an older client'
   const restarted = new InputPreparationService({ ...deps, createImagePreview });
   const options = await restarted.executionOptions(prepared, () => undefined);
   expect(options.imageAttachments[0].previewBase64Data).toBe('cHJldmlldw==');
-  expect(createImagePreview).toHaveBeenCalledWith(prepared.files[0].imagePath);
+  expect(createImagePreview).toHaveBeenCalledWith(prepared.files[0].imagePath, expect.objectContaining({ current: expect.any(Function), signal: expect.any(AbortSignal) }));
 });
 it('retains visible filenames and original model images when thumbnail generation fails or exceeds its budget', async () => {
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -308,7 +308,7 @@ it('times out optional thumbnails without blocking a mobile image command', asyn
   try {
     const executing = resumed.executionOptions(prepared, () => undefined);
     await started;
-    await vi.advanceTimersByTimeAsync(750);
+    await vi.advanceTimersByTimeAsync(2500);
     const options = await executing;
     expect(options.imageAttachments).toHaveLength(1);
     expect(options.prompt).toContain('report.txt');
@@ -356,4 +356,14 @@ it('counts a failed body stream once and never reports a completed transfer', as
     pull(controller) { controller.error(new Error('stream disconnected')); },
   })), () => true)).rejects.toThrow('stream disconnected');
   expect(requests.filter(request => request.fields.operation === 'input_asset_content').map(request => request.result)).toEqual(['transport_failed']);
+});
+
+
+it('preserves account cancellation when required image decoding also fails', async () => {
+  const { deps, claim, attach, setActor, values } = fixture(); attach('image', RemoteInputIntent.Image);
+  const service = new InputPreparationService({ ...deps, convertImage: async () => {
+    setActor({ userId: 'B', scopeKey: 'personal' }); throw new Error('INPUT_UNSUPPORTED');
+  } });
+  await expect(service.prepare(owner, 'pc', claim, async () => new Response('image'), () => true)).rejects.toThrow(RemoteInputReason.Account);
+  expect(values.has('inputPreparation:prep')).toBe(false);
 });

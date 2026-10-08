@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { payloadHash } from './canonical';
 import type { RemoteIdentity } from './installationIdentity';
@@ -21,7 +21,8 @@ class MemoryIo implements RemoteSecurityJournalIo {
   close(): void {}
 }
 const databases: Database.Database[] = [];
-afterEach(() => { for (const db of databases.splice(0)) db.close(); });
+const coordinators: RemoteSecurityCoordinator[] = [];
+afterEach(() => { for (const coordinator of coordinators.splice(0)) coordinator.close(); vi.useRealTimers(); for (const db of databases.splice(0)) db.close(); });
 function fixture() {
   const db = new Database(':memory:'); databases.push(db);
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT);
@@ -30,7 +31,7 @@ function fixture() {
   const create = (id: string): void => store.transaction(() => {
     db.prepare("INSERT INTO cowork_sessions VALUES (?,'Task',1,1,'idle')").run(id); store.assignNew(id, owner, 'local_create');
   });
-  const security = () => new RemoteSecurityCoordinator(store, new RemoteSecurityJournal(identity, io, true), identity, 0);
+  const security = () => { const value = new RemoteSecurityCoordinator(store, new RemoteSecurityJournal(identity, io, true), identity, 0); coordinators.push(value); return value; };
   return { db, io, create, security, store: () => store, reopen: () => { store = new RemoteStore(db, { deferredProjection: true }); } };
 }
 
@@ -177,4 +178,37 @@ it.each([false, true])('mobile damaged-run scoping requires original signed comm
     expect(f.store().hasCompleteExecutionHistory()).toBe(false);
     expect(f.store().get('inbox:command')).toMatchObject({ state: 'executing' });
   }
+});
+
+
+it('automatically recovers a store-only request without a failed coordinator operation', async () => {
+  const f = fixture(); const security = f.security(); await security.available();
+  f.store().setSecurityRecoveryRequired(true);
+  await security.available();
+  expect(security.recoveryState()).toMatchObject({ required: false, attempts: 0, recovering: false });
+  expect(f.store().needsSecurityRecovery()).toBe(false);
+});
+
+it('continues background evidence probes after four failures and never replays the apply closure', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+  const f = fixture(); const security = f.security(); await security.available();
+  let applications = 0;
+  f.io.failWrite = f.io.writes + 2;
+  await expect(security.commit('original', {}, () => { applications++; })).rejects.toThrow();
+  f.io.failWrite = 0;
+  const restart = vi.spyOn(f.io, 'restart').mockRejectedValue(new Error('temporary storage failure'));
+  for (let i = 0; i < 6; i++) { await security.recover(); await vi.advanceTimersByTimeAsync(75000); }
+  expect(security.recoveryState().attempts).toBeGreaterThan(4);
+  restart.mockResolvedValue();
+  await vi.advanceTimersByTimeAsync(75000);
+  await vi.waitFor(() => expect(security.recoveryState().required).toBe(false));
+  expect(applications).toBe(1);
+});
+
+it('does not release evidence or restart again after coordinator close', async () => {
+  const f = fixture(); const security = f.security(); await security.available();
+  f.store().setSecurityRecoveryRequired(true); security.close();
+  await expect(security.available()).rejects.toThrow('closed');
+  await expect(security.recover()).rejects.toThrow();
+  expect(f.store().needsSecurityRecovery()).toBe(true);
 });

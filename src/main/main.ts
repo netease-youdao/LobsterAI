@@ -618,6 +618,7 @@ import { createRemoteDatabaseFence,loadRemoteIdentity } from './remote/installat
 import { RemoteAccountTransition } from './remote/remoteAccountTransition';
 import { RemoteBridge } from './remote/remoteBridge';
 import { withRemoteConnectionAccount } from './remote/remoteConnectionIpc';
+import { RemoteImageDecoder } from './remote/remoteImageDecoder';
 import { listRemoteInputModels } from './remote/remoteInputModels';
 import { RemoteLocalGc } from './remote/remoteLocalGc';
 import { RemoteModelCatalog } from './remote/remoteModelCatalog';
@@ -5813,26 +5814,14 @@ if (!gotTheLock) {
     const models = new RemoteModelCatalog(getCoworkStore().remote, () => listRemoteInputModels({
       token: getAuthTokens()?.accessToken || null, baseURL: getServerApiBaseUrl(),
     }), () => remoteBridge?.getSyncTargetId() ?? null);
+    const imageDecoder = new RemoteImageDecoder();
     const preparations = new InputPreparationService({
       store: getCoworkStore(), models, cacheRoot: path.join(app.getPath('userData'), 'remote-inputs'),
       getOwner: getCurrentRemoteOwner, getDefaultModel: resolveDefaultAgentModelRef,
       getTargetId: () => remoteBridge?.getSyncTargetId() ?? null,
       getAgentCatalog: () => remoteBridge?.getInputAgentCatalog() || null,
-      createImagePreview: async filePath => {
-        const thumbnail = await nativeImage.createThumbnailFromPath(filePath, { width: 256, height: 256 });
-        const size = thumbnail.getSize();
-        if (thumbnail.isEmpty() || size.width > 512 || size.height > 512) return undefined;
-        const jpeg = thumbnail.toJPEG(70);
-        return { mimeType: 'image/jpeg', base64Data: jpeg.toString('base64') };
-      },
-      convertImage: async (filePath, _mimeType, targetPath, maximumBytes) => {
-        const decoded = nativeImage.createFromPath(filePath);
-        if (decoded.isEmpty()) throw new Error('INPUT_UNSUPPORTED');
-        const encoded = decoded.toPNG();
-        if (encoded.byteLength > maximumBytes) throw new Error('INPUT_UNSUPPORTED');
-        await fs.promises.writeFile(targetPath, encoded, { flag: 'wx', mode: 0o600 });
-        return { path: targetPath, mimeType: 'image/png' };
-      },
+      createImagePreview: (filePath, context) => imageDecoder.preview(filePath, context!),
+      convertImage: (filePath, _mimeType, targetPath, maximumBytes, context) => imageDecoder.convert(filePath, targetPath, maximumBytes, context!),
     });
     remoteSessionCommands!.configureInput({ models, preparations, getDeviceId: () => remoteBridge?.state().deviceId,
       getTargetId: () => remoteBridge?.getSyncTargetId() ?? null });
@@ -6012,10 +6001,15 @@ if (!gotTheLock) {
         remoteCredentialsAllowed = true;
       }).catch(error => {
         console.warn('[RemoteAccount] Execution remains fenced', error);
-        if (generation !== fenceGeneration || attempt >= 3) return;
+        if (generation !== fenceGeneration || isQuitting) return;
+        const delay = Math.ceil([1000, 5000, 15000, 60000][Math.min(attempt, 3)] * (0.8 + Math.random() * 0.4));
+        try {
+          getStore().set(accountFenceKey, { version: 1, phase: 'pending', ownerHash: payloadHash(next),
+            attempts: attempt + 1, nextAttemptAt: Date.now() + delay });
+        } catch { /* The in-memory gate remains closed until the durable marker can be restored. */ }
         fenceRetry = setTimeout(() => {
-          if (generation === fenceGeneration && (next === null ? getCurrentRemoteOwner() === null : sameOwner(next, getCurrentRemoteOwner()))) queueAccountFence(next, attempt + 1);
-        }, [1000, 5000, 15000][attempt]);
+          if (!isQuitting && generation === fenceGeneration && (next === null ? getCurrentRemoteOwner() === null : sameOwner(next, getCurrentRemoteOwner()))) queueAccountFence(next, attempt + 1);
+        }, delay);
         fenceRetry.unref?.();
       });
       try {

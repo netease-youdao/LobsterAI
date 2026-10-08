@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { type AvailabilityRequest, RemoteAvailabilityStore } from './remoteAvailabilityStore';
 
@@ -123,4 +123,18 @@ describe('availability activity and terminal evidence budgets', () => {
     const accounting = ledger.db.prepare('SELECT SUM(active_bytes) AS bytes FROM availability_usage').get();
     expect(accounting).toEqual(ledger.db.prepare('SELECT SUM(length(CAST(body AS BLOB))) AS bytes FROM availability_requests').get());
   });
+});
+
+
+it('pauses only new remote requests when disk headroom is exhausted', () => {
+  const { ledger, core } = fixture(); ledger.saveRequest(pending);
+  const statfs = vi.spyOn(fs, 'statfsSync').mockReturnValue({ bavail: 1, bsize: 1 } as ReturnType<typeof fs.statfsSync>);
+  try {
+    expect(ledger.saveRequest(pending)).toEqual(pending);
+    expect(() => ledger.saveRequest({ ...pending, key: 'new-publication' })).toThrow('REMOTE_SIDECAR_STORAGE_BUDGET');
+    expect(ledger.request('new-publication')).toBeNull();
+    expect(ledger.request(pending.key)).toEqual(pending);
+    expect(() => core.exec("CREATE TABLE desktop_messages(body TEXT); INSERT INTO desktop_messages VALUES('local save')")).not.toThrow();
+  } finally { statfs.mockRestore(); }
+  expect(() => ledger.saveRequest({ ...pending, key: 'new-publication' })).not.toThrow();
 });

@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 
 import { stableJson } from './canonical';
+import { questionSessionSql, questionStatusSql } from './remoteQuestionEvidence';
 import { redactReplyText } from './remoteReplyProjection';
 import type { ProjectionRecord, RemoteRun, RemoteStore } from './remoteStore';
 
@@ -23,13 +24,15 @@ export function initializeAvailabilitySource(db: Database.Database): void {
     db.exec(`DROP TRIGGER IF EXISTS remote_live_tool_${operation.toLowerCase()};
       CREATE TRIGGER remote_live_tool_${operation.toLowerCase()} AFTER ${operation} ON cowork_messages WHEN ${ref}.type IN ('tool_use','tool_result') BEGIN
       INSERT INTO remote_live_tools VALUES(${ref}.session_id,${toolId},1) ON CONFLICT(session_id,tool_id) DO UPDATE SET revision=revision+1; END;
-      CREATE TRIGGER IF NOT EXISTS remote_live_message_${operation.toLowerCase()} AFTER ${operation} ON cowork_messages BEGIN
+      DROP TRIGGER IF EXISTS remote_live_message_${operation.toLowerCase()};
+      CREATE TRIGGER remote_live_message_${operation.toLowerCase()} AFTER ${operation} ON cowork_messages BEGIN
       INSERT INTO remote_live_revisions VALUES(${ref}.session_id,${ref}.id,1,${operation === 'DELETE' ? 1 : 0})
       ON CONFLICT(session_id,object_id) DO UPDATE SET revision=revision+1,deleted=excluded.deleted;
       ${operation === 'DELETE' ? `INSERT INTO remote_control_revisions VALUES(OLD.session_id,1) ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
         INSERT INTO remote_control_pending SELECT OLD.session_id,'message.deleted:'||OLD.id,revision FROM remote_control_revisions WHERE session_id=OLD.session_id
         ON CONFLICT(session_id,object_key) DO UPDATE SET revision=excluded.revision;` : ''} END;
-      CREATE TRIGGER IF NOT EXISTS remote_control_session_${operation.toLowerCase()} AFTER ${operation} ON cowork_sessions BEGIN
+      DROP TRIGGER IF EXISTS remote_control_session_${operation.toLowerCase()};
+      CREATE TRIGGER remote_control_session_${operation.toLowerCase()} AFTER ${operation} ON cowork_sessions BEGIN
       INSERT INTO remote_control_revisions VALUES(${ref}.id,1)
       ON CONFLICT(session_id) DO UPDATE SET revision=revision+1; END;`);
   }
@@ -98,7 +101,7 @@ export function availabilityControlSnapshot(store: RemoteStore, localId: string,
     if (!options.incremental) {
       const privateRows = store.db.prepare(`SELECT json_extract(value,'$.state.questionId') AS id FROM remote_state
         WHERE key>='questionDecision:' AND key<'questionDecision;'
-          AND CASE WHEN octet_length(value)>32768 THEN 0 WHEN json_valid(value) THEN json_extract(value,'$.state.sessionId')=? AND json_extract(value,'$.state.status')='pending' ELSE 0 END LIMIT ?`)
+          AND ${questionSessionSql}=? AND ${questionStatusSql}='pending' LIMIT ?`)
         .all(localId, limit) as Array<{ id: string }>;
       questionIds.push(...privateRows.map(item => item.id).filter(id => !questionIds.includes(id)));
     }

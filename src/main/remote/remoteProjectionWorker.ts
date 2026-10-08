@@ -7,7 +7,7 @@ import { parentPort, workerData } from 'worker_threads';
 import type { RemoteAgentSummary, RemoteOwner } from '../../shared/remote/constants';
 import { sameOwner } from './canonical';
 import { type ArtifactProjectionJob,projectRemoteArtifacts } from './remoteArtifactProjection';
-import { remoteQuestionEvidenceDigest } from './remoteQuestionEvidence';
+import { questionSessionSql, remoteQuestionEvidenceDigest } from './remoteQuestionEvidence';
 import { RemoteStore } from './remoteStore';
 
 export interface ProjectionWork {
@@ -64,7 +64,7 @@ function materialize(work: ProjectionWork): { revision: number; sourceSeq: numbe
         if (work.questionEvidenceDigest) {
           if (remoteQuestionEvidenceDigest(source) !== work.questionEvidenceDigest) throw new Error('REMOTE_PROJECTION_CONTEXT_CHANGED');
         } else if (source.prepare("SELECT 1 FROM remote_state WHERE key LIKE 'questionDecision:%' AND NOT json_valid(value) LIMIT 1").get()) throw new Error('REMOTE_QUESTION_EVIDENCE_UNAVAILABLE');
-        copy('remote_state', "SELECT * FROM remote_state WHERE key LIKE 'questionDecision:%' AND CASE WHEN json_valid(value) THEN json_extract(value,'$.state.sessionId') END=?", [work.sessionId]);
+        copy('remote_state', `SELECT * FROM remote_state WHERE key>='questionDecision:' AND key<'questionDecision;' AND ${questionSessionSql}=?`, [work.sessionId]);
         const runIds = new Set<string>();
         const messageIds: string[] = [];
         for (const row of target.prepare("SELECT value FROM remote_state WHERE key LIKE 'run:%' OR key LIKE 'runHistory:%' OR key LIKE 'questionDecision:%'").iterate() as Iterable<{ value: string }>) {
