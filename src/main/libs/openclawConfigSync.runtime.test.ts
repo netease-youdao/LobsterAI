@@ -15,6 +15,7 @@ import { OpenClawSkillReviewMode } from '../../shared/openclawEngine/constants';
 import { OpenClawProviderId, ProviderName } from '../../shared/providers';
 import { DEFAULT_DISCORD_OPENCLAW_CONFIG, DEFAULT_QQ_CONFIG, DiscordDmPolicy } from '../im/types';
 import { OpenClawAgentOwnership } from './openclawAgentModels';
+import { OPENCLAW_MEMORY_CORE_PLUGIN_ID } from './openclawConfigSync';
 import { OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
 
 vi.mock('electron', () => ({
@@ -216,6 +217,18 @@ describe('OpenClawConfigSync runtime config output', () => {
       ...overrides,
     } as never);
   };
+
+  test('prepares a changed proxy config without publishing it to the live watcher', async () => {
+    const sync = await createSync();
+    expect(sync.sync('bootstrap')).toMatchObject({ ok: true });
+    const original = fs.readFileSync(configPath, 'utf8');
+    mockRuntimeState.proxyPort = 4121;
+    mockRuntimeState.serverModels = [{ modelId: 'deepseek-flash', provider: 'deepseek', apiFormat: 'openai-completions' }];
+    const prepared = sync.prepare('proxy-rebound');
+    expect(prepared).toMatchObject({ ok: true, changed: true });
+    expect(prepared.target?.raw).toContain('4121');
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(original);
+  });
 
   test('enables channel scheduling without promoting IM senders to global owners', async () => {
     fs.writeFileSync(configPath, JSON.stringify({
@@ -513,10 +526,30 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(_meta?.migrations?.modelPolicyAllowlist).toBeUndefined();
     expect(config).toEqual({
       gateway: { mode: 'local' },
+      plugins: { allow: [OPENCLAW_MEMORY_CORE_PLUGIN_ID] },
       skills: { workshop: { autonomous: { mode: OpenClawSkillReviewMode.Off } } },
       agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
     });
     expect(sync.sync('repeat-start')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test('adds the first-start plugin allowlist to an existing minimal config', async () => {
+    fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: 'local' } }));
+    const apiConfig = mockRuntimeState.rawApiConfig.config;
+    mockRuntimeState.rawApiConfig.config = null;
+    const sync = await createSync();
+
+    expect(sync.sync('no-model')).toMatchObject({ ok: true, changed: true });
+    const minimal = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(minimal.plugins).toEqual({ allow: [OPENCLAW_MEMORY_CORE_PLUGIN_ID] });
+    expect(sync.sync('repeat-start')).toMatchObject({ ok: true, changed: false });
+
+    mockRuntimeState.rawApiConfig.config = apiConfig;
+    expect(sync.sync('model-configured')).toMatchObject({ ok: true, changed: true });
+    const configured = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(configured.plugins.allow).toContain(OPENCLAW_MEMORY_CORE_PLUGIN_ID);
+    expect(configured.plugins.allow).toContain(OpenClawQQPlugin.Id);
+    expect(configured.models.providers).not.toEqual({});
   });
 
   test('still removes plugin-index-managed installs when no model is available', async () => {
@@ -1910,6 +1943,25 @@ describe('OpenClawConfigSync runtime config output', () => {
         },
       },
     }));
+  });
+
+  test('keeps the plan provider without a placeholder model while the plan catalog is empty', async () => {
+    mockRuntimeState.proxyPort = 56646;
+    mockRuntimeState.serverModels = [];
+
+    const sync = await createSync();
+    expect(sync.sync('signed-out-custom-primary')).toMatchObject({ ok: true });
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    // Agents bound to plan models still route to the token proxy.
+    expect(config.models.providers['lobsterai-server']).toMatchObject({
+      baseUrl: 'http://127.0.0.1:56646/v1',
+      models: [],
+    });
+    // No plan model borrows the custom primary's ID (openai/gpt-test).
+    expect(Object.keys(config.agents.defaults.models ?? {}).filter(ref => ref.startsWith('lobsterai-server/')))
+      .toEqual([]);
+    expect(JSON.stringify(config.agents.defaults.modelPolicy ?? {})).not.toContain('lobsterai-server/');
   });
 
   test('writes explicit cache params for Anthropic, Qwen, and custom providers', async () => {
@@ -3876,6 +3928,56 @@ describe('OpenClawConfigSync runtime config output', () => {
     });
   });
 
+  test('registers the LobsterAI Office editor tools as native MCP servers', async () => {
+    const { OpenClawConfigSync } = await import('./openclawConfigSync');
+    const { OFFICE_EDITORS } = await import('../../shared/office/editors');
+    const launch = (server: string) => ({
+      command: '/Applications/LobsterAI.app/Contents/MacOS/LobsterAI',
+      args: [`/state/generated/${server}-mcp/${server}-mcp-server.mjs`],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    });
+    const serverNames = OFFICE_EDITORS.map(editor => editor.agent.serverName);
+    // An editor whose bridge is down is simply missing from the servers it reports.
+    let available = serverNames;
+    const sync = new OpenClawConfigSync({
+      engineManager: {
+        getConfigPath: () => configPath,
+        getGatewayToken: () => 'gateway-token',
+        getStateDir: () => stateDir,
+        getBaseDir: () => tmpDir,
+      } as never,
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: '',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        memoryEnabled: false,
+        memoryImplicitUpdateEnabled: false,
+        memoryLlmJudgeEnabled: false,
+        memoryGuardLevel: 'balanced',
+        memoryUserMemoriesMaxItems: 100,
+        skipMissedJobs: false,
+      }),
+      getOfficeMcpServers: () => Object.fromEntries(available.map(server => [server, launch(server)])),
+      isEnterprise: () => false,
+      getPopoInstances: () => [],
+      getNeteaseBeeChanConfig: () => null,
+      getWeixinConfig: () => null,
+      getIMSettings: () => null,
+      getSkillsList: () => [],
+      getAgents: () => [],
+    } as never);
+    expect(sync.sync('office-editor-tools').ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    for (const server of serverNames) expect(config.mcp.servers[server]).toEqual(launch(server));
+
+    available = serverNames.slice(1);
+    expect(sync.sync('office-editor-tools-partly-unavailable').ok).toBe(true);
+    const withoutBridge = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(withoutBridge.mcp.servers[serverNames[0]]).toBeUndefined();
+    for (const server of available) expect(withoutBridge.mcp.servers[server]).toEqual(launch(server));
+  });
+
   test('writes browser and web fetch access settings', async () => {
     const { setSystemProxyEnabled } = await import('./systemProxy');
     const {
@@ -4139,6 +4241,39 @@ describe('OpenClawConfigSync runtime config output', () => {
         'x-client-id': 'client-456',
       },
     });
+  });
+
+  test('passes toolFilter and supportsParallelToolCalls through to mcp.servers', async () => {
+    const sync = await createSync({
+      getResolvedMcpServers: () => [
+        {
+          name: 'docs-server',
+          transportType: 'http',
+          url: 'https://mcp.example.com/mcp',
+          toolFilter: { include: ['doc.get', 'sheet.*', '', '  '] },
+          supportsParallelToolCalls: true,
+        },
+        {
+          name: 'plain-tools',
+          transportType: 'stdio',
+          command: 'node',
+          args: ['server.js'],
+          // An empty filter means "not configured" and must not emit toolFilter.
+          toolFilter: { include: [], exclude: [] },
+        },
+      ],
+    });
+
+    const result = sync.sync('mcp-passthrough');
+
+    expect(result.ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.mcp.servers['docs-server'].toolFilter).toEqual({
+      include: ['doc.get', 'sheet.*'],
+    });
+    expect(config.mcp.servers['docs-server'].supportsParallelToolCalls).toBe(true);
+    expect(config.mcp.servers['plain-tools']).not.toHaveProperty('toolFilter');
+    expect(config.mcp.servers['plain-tools']).not.toHaveProperty('supportsParallelToolCalls');
   });
 });
 

@@ -149,6 +149,7 @@ import SidebarSearchIcon from '../icons/SidebarSearchIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
+import { MarkdownLinkOpenerContext } from '../markdownLinkOpener';
 import { type ToastEventDetail } from '../Toast';
 import { resolveAgentModelSelection, useAgentSelectedModel } from './agentModelSelection';
 import ArtifactPreviewTabItem from './ArtifactPreviewTabItem';
@@ -167,6 +168,7 @@ import {
   isAtConversationSessionBottom,
   isWheelScrollingAwayFromBottom,
   shouldAutoScrollForPosition,
+  shouldKeepBottomOnViewportResize,
   shouldLoadNewerConversationMessages,
 } from './conversationScrollPolicy';
 import {
@@ -186,6 +188,7 @@ import CoworkBtwFloatingPanel from './CoworkBtwFloatingPanel';
 import CoworkConversationSearch from './CoworkConversationSearch';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
 import QuestionDock from './interactions/QuestionDock';
+import { isQuestionDockRequest } from './interactions/questionDockModel';
 import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
 import {
   buildConversationTurns,
@@ -194,9 +197,11 @@ import {
   COWORK_DETAIL_CONTENT_CLASS,
   COWORK_DETAIL_GUTTER_CLASS,
   getTurnMessageIds,
+  getTurnReplyMessageIds,
   MEDIA_TOKEN_DISPLAY_RE,
   type ToolGroupItem,
 } from './messageDisplayUtils';
+import OpenClawProgressCard from './OpenClawProgressCard';
 import { parseProposedPlanBlock } from './proposedPlanParser';
 import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
 import { buildSelectedSkillRoutingPrompt } from './selectedSkillRoutingPrompt';
@@ -210,6 +215,7 @@ import {
 } from './sessionExport';
 import SubagentSpawnCard from './SubagentSpawnCard';
 import { useCoworkConversationSearch } from './useCoworkConversationSearch';
+import { useCoworkMarkdownLinkOpener } from './useCoworkMarkdownLinkOpener';
 import UserMessageContent from './UserMessageContent';
 import UserMessageItem from './UserMessageItem';
 interface CoworkSessionDetailProps {
@@ -3019,6 +3025,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setSessionBrowserLocalServiceContext,
   ]);
 
+  const markdownLinkOpener = useCoworkMarkdownLinkOpener({
+    sessionId,
+    cwd: currentSession?.cwd,
+    sessionArtifacts,
+    onOpenHtmlFile: handleOpenHtmlFileInBrowser,
+    onOpenLocalService: handleOpenLocalServiceArtifact,
+  });
+
   const handleDeployLocalServiceArtifact = useCallback((artifact: Artifact) => {
     if (!sessionId || artifact.type !== ArtifactTypeValue.LocalService) return;
     const url = (artifact.url || artifact.content || '').trim();
@@ -5694,7 +5708,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     );
     const artifact = selectAutoPreviewArtifact(
       turnArtifacts,
-      { defaultProjectDirectory: currentSession.cwd },
+      {
+        defaultProjectDirectory: currentSession.cwd,
+        replyMessageIds: getTurnReplyMessageIds(pendingTurn),
+      },
     );
     if (!artifact) return;
 
@@ -5857,6 +5874,29 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     }
   }, [messagesLength, lastMessageContent, isContextCompacting, isStreaming, shouldAutoScroll, turns.length]);
 
+  // A shorter viewport (the question dock or a taller prompt input taking room
+  // below it) fires no scroll event of its own, so keep a reader who follows the
+  // conversation at its newest content instead of letting it slide out of view.
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+    let viewportHeight = container.clientHeight;
+    const resizeObserver = new ResizeObserver(() => {
+      const previousHeight = viewportHeight;
+      viewportHeight = container.clientHeight;
+      if (viewportHeight === previousHeight || isExportingImageRef.current || isNavigatingRef.current) return;
+      if (!shouldKeepBottomOnViewportResize(
+        shouldAutoScrollRef.current,
+        container.scrollHeight - container.scrollTop - previousHeight,
+        userDetachedFromBottomRef.current,
+        conversationSearchViewportLockedRef.current,
+      )) return;
+      container.scrollTop = container.scrollHeight;
+    });
+    resizeObserver.observe(container);
+    return () => resizeObserver.disconnect();
+  }, [currentSession?.id]);
+
 
   if (!currentSession) {
     return null;
@@ -5900,6 +5940,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     !isViewportAtSessionBottom
     || (!shouldAutoScroll && !isConversationSearchOpen)
   );
+  // The question dock already separates the conversation from the prompt, so a
+  // short trailing spacer keeps the newest lines in the smaller viewport.
+  const hasDockedQuestion = pendingPermissions.some((permission) => (
+    permission.sessionId === currentSession.id && isQuestionDockRequest(permission)
+  ));
   const expandedConversationPreview = getExpandedConversationPreview(currentSession.messages);
   const resolvedRailIndex = currentRailIndex < 0 || currentRailIndex >= railItems.length
     ? railItems.length - 1
@@ -6054,11 +6099,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   return (
     <ArtifactFileShareProvider sessionId={currentSession.id}>
+    <MarkdownLinkOpenerContext.Provider value={markdownLinkOpener}>
       <div className="flex-1 flex flex-col h-full overflow-hidden">
       {/* Header — spans full width */}
       <div
         data-skin-session-titlebar="true"
-        className={`draggable relative z-30 flex h-12 shrink-0 items-center justify-between overflow-visible border-b border-border bg-background ${
+        className={`draggable relative z-30 flex h-12 shrink-0 items-center justify-between overflow-visible bg-background ${
+          isArtifactPanelVisible ? 'border-b border-border' : ''
+        } ${
           isArtifactPanelExpanded ? 'pl-0 pr-4' : 'px-4'
         }`}
       >
@@ -6477,7 +6525,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               </div>
             </div>
           )}
-          <div className="h-20" />
+          <div className={hasDockedQuestion ? 'h-4' : 'h-20'} />
         </div>
 
         {/* Turn Navigation Rail — to the left of scrollbar */}
@@ -6852,6 +6900,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               })}
             />
           )}
+          {currentSession && (
+            <OpenClawProgressCard
+              key={currentSession.id}
+              sessionId={currentSession.id}
+              sessionStatus={currentSession.status}
+              compact={isArtifactPanelExpanded}
+            />
+          )}
           {showExternalGoalStatusBar && (
             <div className={`relative z-10 ${showExternalSteerPreview ? 'mb-1.5' : '-mb-px'}`}>
               <div ref={setGoalStatusBarPortalTarget} />
@@ -7021,6 +7077,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     )}
       </div>
       </div>
+    </MarkdownLinkOpenerContext.Provider>
     </ArtifactFileShareProvider>
   );
 };

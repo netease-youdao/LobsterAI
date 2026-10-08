@@ -7,8 +7,6 @@ import https from 'https';
 import path from 'path';
 
 import {
-  ComputerUseKitBundle,
-  ComputerUseKitBundleIntegrity,
   ComputerUseKitId,
 } from '../../../shared/computerUse/constants';
 import type {
@@ -21,11 +19,16 @@ import { KitStoreKey as KitStoreKeyValue } from '../../../shared/kit/constants';
 import {
   buildComputerUseMarketplaceKit,
   buildInstalledComputerUseKitRecord,
+  type ComputerUseKitBundleDescriptor,
+  getCurrentComputerUseKitBundleDescriptor,
   getInstalledKitsMap,
   isComputerUseKitSupportedPlatform,
+  promptComputerUseAccessibilityPermission,
   removeComputerUseSkillArtifacts,
+  resolveBundledComputerUseKitArchivePath,
 } from '../../computerUse/computerUseKit';
 import {
+  getComputerUseSupportedPlatformLabel,
   installComputerUseRuntime,
   uninstallComputerUseRuntime,
 } from '../../computerUse/computerUseRuntime';
@@ -62,6 +65,19 @@ function downloadBuffer(url: string): Promise<Buffer> {
     req.on('error', reject);
     req.on('timeout', () => { req.destroy(); reject(new Error('Download timeout')); });
   });
+}
+
+async function loadComputerUseKitBundle(
+  descriptor: ComputerUseKitBundleDescriptor,
+): Promise<Buffer> {
+  const bundledArchivePath = resolveBundledComputerUseKitArchivePath(descriptor);
+  if (bundledArchivePath) {
+    return fs.promises.readFile(bundledArchivePath);
+  }
+  if (descriptor.archiveName) {
+    throw new Error(`Computer Use kit bundle archive is not bundled: ${descriptor.archiveName}`);
+  }
+  return downloadBuffer(descriptor.bundle);
 }
 
 export interface KitHandlerDeps {
@@ -278,11 +294,14 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
     let skillWatchingStopped = false;
     let skillWatchingRestarted = false;
     try {
-      if (isComputerUseKit && bundleUrl !== ComputerUseKitBundle.BuiltIn) {
-        throw new Error('Computer Use kit bundle URL does not match the built-in catalog entry');
+      const computerUseBundleDescriptor = isComputerUseKit
+        ? getCurrentComputerUseKitBundleDescriptor()
+        : null;
+      if (isComputerUseKit && !computerUseBundleDescriptor) {
+        throw new Error(`Computer Use kit is only available on ${getComputerUseSupportedPlatformLabel()}.`);
       }
-      if (isComputerUseKit && !isComputerUseKitSupportedPlatform()) {
-        throw new Error('Computer Use kit is only available on Windows x64.');
+      if (computerUseBundleDescriptor && bundleUrl !== computerUseBundleDescriptor.bundle) {
+        throw new Error('Computer Use kit bundle URL does not match the built-in catalog entry');
       }
       const skinPackInstallResult = await skinPackKitLifecycle.installIfHandled({ kitId, bundleUrl });
       if (skinPackInstallResult !== undefined) {
@@ -291,12 +310,14 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
 
       // 1. Download zip
       tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-kit-'));
-      const buffer = await downloadBuffer(bundleUrl);
-      if (isComputerUseKit) {
-        if (buffer.length !== ComputerUseKitBundleIntegrity.SizeBytes) {
+      const buffer = computerUseBundleDescriptor
+        ? await loadComputerUseKitBundle(computerUseBundleDescriptor)
+        : await downloadBuffer(bundleUrl);
+      if (computerUseBundleDescriptor) {
+        if (buffer.length !== computerUseBundleDescriptor.sizeBytes) {
           throw new Error('Computer Use kit bundle size verification failed');
         }
-        if (sha256Buffer(buffer) !== ComputerUseKitBundleIntegrity.Sha256) {
+        if (sha256Buffer(buffer) !== computerUseBundleDescriptor.sha256) {
           throw new Error('Computer Use kit bundle checksum verification failed');
         }
       }
@@ -402,6 +423,7 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
         if (!syncResult.success) {
           throw new Error(syncResult.error || 'OpenClaw config sync failed after Computer Use install');
         }
+        promptComputerUseAccessibilityPermission();
       }
 
       // 7. Notify after all installation work and Computer Use config sync are complete.

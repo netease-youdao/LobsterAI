@@ -45,6 +45,16 @@
   ],
   "extraResources": [
     {
+      "from": "resources/word-licenses",
+      "to": "licenses/word",
+      "filter": ["NOTICE.txt", "manifest.json"]
+    },
+    {
+      "from": "resources/sheet-licenses",
+      "to": "licenses/sheet",
+      "filter": ["NOTICE.txt", "manifest.json"]
+    },
+    {
       "from": ".keyfrom-build",
       "to": "keyfrom",
       "filter": [
@@ -147,6 +157,13 @@
           "!**/tests/**",
           "!**/test/**",
           "!**/__tests__/**"
+        ]
+      },
+      {
+        "from": "resources/computer-use",
+        "to": "computer-use",
+        "filter": [
+          "*.zip"
         ]
       }
     ]
@@ -261,7 +278,6 @@
   "asarUnpack": [
     "node_modules/@img/**",
     "node_modules/better-sqlite3/**",
-    "node_modules/node-nim/**",
     "node_modules/npm/**"
   ],
   "asar": true

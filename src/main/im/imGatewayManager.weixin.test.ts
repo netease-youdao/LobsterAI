@@ -4,7 +4,6 @@ import { WeixinPlugin, WeixinQrLoginTimeout } from '../../shared/im/weixin';
 import { DEFAULT_WEIXIN_CONFIG } from './types';
 
 vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd(), getPath: () => '/private/tmp' } }));
-vi.mock('./nimGateway', () => ({ NimGateway: class {} }));
 vi.mock('./imStore', () => ({
   IMStore: class {
     private config = { weixin: { ...DEFAULT_WEIXIN_CONFIG } };

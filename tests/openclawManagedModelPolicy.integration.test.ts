@@ -146,7 +146,7 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw model policy roundtrip', () => {
     expect((await startup()).stdout).toContain('"status":"skipped"');
   }, 240_000);
 
-  test('migrates legacy policy, starts the gateway, and converges after config.set and model changes', async () => {
+  test('migrates legacy policy, starts the gateway, and converges after config.apply and model changes', async () => {
     const workspace = path.join(stateDir, 'workspace-main');
     const makeConfig = (ids: string[]) => ({
       gateway: {
@@ -233,7 +233,7 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw model policy roundtrip', () => {
         const desired = withManagedOpenClawModelPolicy(makeConfig(ids), readConfig());
         const snapshot = await call(OpenClawConfigRpcMethod.Get);
         expect(snapshot.valid).toBe(true);
-        const result = await call(OpenClawConfigRpcMethod.Set, { raw: JSON.stringify(desired), baseHash: snapshot.hash });
+        const result = await call(OpenClawConfigRpcMethod.Apply, { raw: JSON.stringify(desired), baseHash: snapshot.hash });
         expect(result.ok).toBe(true);
         const persisted = readConfig();
         expect(persisted.agents.defaults.modelPolicy).toEqual({ allow: ids.map(id => `fixture/${id}`) });

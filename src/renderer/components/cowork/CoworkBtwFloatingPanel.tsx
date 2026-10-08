@@ -237,7 +237,7 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
           return (
             <article key={entry.runId} className="space-y-2">
               <div className="group flex flex-col items-end">
-                <div className="w-fit max-w-[85%] rounded-2xl bg-surface px-4 py-2.5 text-sm whitespace-pre-wrap break-words text-foreground shadow-subtle">
+                <div className="w-fit max-w-[85%] rounded-2xl bg-chat-user px-4 py-2.5 text-sm whitespace-pre-wrap break-words text-chat-user-foreground shadow-subtle">
                   {entrySelectedTextSnippets.length > 0 && (
                     <div className={entry.question ? 'mb-2' : undefined}>
                       <SelectedTextSnippetBadge

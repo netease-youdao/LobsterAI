@@ -63,6 +63,60 @@ describe('Markdown rendering across messages and document previews', () => {
     expect($('a').attr('href')).toBe('');
   });
 
+  test('renders details and summary as a collapsible block with Markdown body', () => {
+    const $ = render([
+      '<details> <summary>证据补充（**原文**与接口）</summary>',
+      '',
+      '内置文案原文：`/access/invite`',
+      '',
+      '- 开关 A',
+      '- 开关 B',
+      '',
+      '</details>',
+      '',
+      '**想用上，按这个顺序试**',
+    ].join('\n'));
+    expect($('details')).toHaveLength(1);
+    expect($('details').attr('open')).toBeUndefined();
+    expect($('details > summary').text()).toBe('证据补充（原文与接口）');
+    expect($('details > summary strong').text()).toBe('原文');
+    expect($('details code').text()).toBe('/access/invite');
+    expect($('details li')).toHaveLength(2);
+    expect($('details + p strong').text()).toBe('想用上，按这个顺序试');
+    expect($.root().text()).not.toMatch(/<\/?(details|summary)/);
+  });
+
+  test('parses details content swallowed by an HTML block and keeps trailing text outside', () => {
+    const $ = render('<details open>\n<summary>\n标题\n</summary>\n- a\n- b\n</details>\nafter');
+    expect($('details').attr('open')).toBeDefined();
+    expect($('summary').text()).toBe('标题');
+    expect($('details li')).toHaveLength(2);
+    expect($('details').next('p').text()).toBe('after');
+  });
+
+  test('supports nested, quoted, list, and still-streaming details blocks', () => {
+    const $ = render('- 项\n\n  <details>\n  <summary>外层</summary>\n\n  <details><summary>内层</summary>\n\n  内容\n\n> <details><summary>引用</summary>\n>\n> 引用内容');
+    expect($('li > details > summary').text()).toBe('外层');
+    expect($('li > details details > summary').text()).toBe('内层');
+    expect($('li details details p').text()).toBe('内容');
+    expect($('blockquote details summary').text()).toBe('引用');
+    expect($('blockquote details p').text()).toBe('引用内容');
+  });
+
+  test('only enables details and summary tags without arbitrary attributes', () => {
+    const $ = render('<details onclick="alert(1)" style="x"><summary onclick="alert(2)"><b>标题</b></summary>\n\n<div onclick="x">正文</div>\n\n</details>\n\n```html\n<details><summary>源码</summary></details>\n```');
+    expect($('details')).toHaveLength(1);
+    expect($('[onclick], [style], div[onclick]')).toHaveLength(0);
+    expect($('summary').text()).toBe('标题');
+    expect($('pre').text()).toBe('<details><summary>源码</summary></details>\n');
+  });
+
+  test('falls back to a localized summary label when summary is missing', () => {
+    const $ = render('<details>\n\n只有正文\n\n</details>');
+    expect($('summary').text().trim()).not.toBe('');
+    expect($('details p').text()).toBe('只有正文');
+  });
+
   test.each([
     ['fenced', '```tex\n$$a\nb$$\n\\(x\\)\n```', '$$a\nb$$\n\\(x\\)\n'],
     ['tilde fenced', '~~~text\n$$a\nb$$\n~~~', '$$a\nb$$\n'],

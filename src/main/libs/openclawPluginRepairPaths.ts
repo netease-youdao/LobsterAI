@@ -34,12 +34,23 @@ export function isPreviousManagedPluginPath(options: {
   return false;
 }
 
-/** Probe without following links; permission errors are not evidence of a missing install. */
-export function isMissingUnaliasedPluginPath(installPath: string): boolean {
+function isSameOrAncestorPath(directory: string, target: string): boolean {
+  const relative = path.relative(directory, target);
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+/**
+ * Probe without following links; permission errors are not evidence of a missing install.
+ * The active state directory and its ancestors are not probed: the running profile
+ * already resolves through any link there, such as macOS /var or a relocated AppData.
+ */
+export function isMissingUnaliasedPluginPath(installPath: string, activeStateDir?: string): boolean {
   const resolved = path.resolve(installPath);
+  const trustedRoot = activeStateDir ? path.resolve(activeStateDir) : undefined;
   let current = path.parse(resolved).root;
   for (const part of resolved.slice(current.length).split(path.sep)) {
     current = path.join(current, part);
+    if (trustedRoot && isSameOrAncestorPath(current, trustedRoot)) continue;
     try {
       const stat = fs.lstatSync(current);
       if (stat.isSymbolicLink() || !stat.isDirectory()) return false;

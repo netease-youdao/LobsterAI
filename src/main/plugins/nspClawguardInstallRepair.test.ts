@@ -14,9 +14,15 @@ const roots: string[] = [];
 const databases: DatabaseSync[] = [];
 const id = NSP_CLAWGUARD.Id;
 
-function fixture(release: typeof NSP_CLAWGUARD.Releases[number] = NSP_CLAWGUARD.Releases[0]) {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'nsp-install-repair-'));
-  roots.push(userData);
+function fixture(release: typeof NSP_CLAWGUARD.Releases[number] = NSP_CLAWGUARD.Releases[0], linkedAncestor = false) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nsp-install-repair-')));
+  roots.push(root);
+  if (linkedAncestor) {
+    // An app-data folder relocated through a symlink or Windows junction.
+    fs.mkdirSync(path.join(root, 'relocated'));
+    fs.symlinkSync(path.join(root, 'relocated'), path.join(root, 'app-data'), 'junction');
+  }
+  const userData = linkedAncestor ? path.join(root, 'app-data', 'LobsterAI') : root;
   const stateDir = path.join(userData, 'openclaw', 'state');
   const configPath = path.join(stateDir, 'openclaw.json');
   const pluginDir = path.join(userData, 'third-party-extensions', id);
@@ -87,6 +93,17 @@ test.each(NSP_CLAWGUARD.Releases)('reconciles old 2.4.13 receipt to existing $ve
   expect(await f.run()).toEqual([]);
   expect(f.owners.write).toHaveBeenCalledTimes(1);
   expect(f.options.backups).toHaveLength(1);
+});
+
+test.each(['missing-old-install', 'linked-old-install'])('checks links only below a linked app-data ancestor: %s', async state => {
+  const f = fixture(NSP_CLAWGUARD.Releases[0], true);
+  if (state === 'linked-old-install') {
+    fs.mkdirSync(path.dirname(f.oldPath), { recursive: true });
+    fs.symlinkSync(path.join(path.dirname(f.oldPath), 'absent'), f.oldPath, 'junction');
+  }
+  const repaired = state === 'missing-old-install' ? 1 : 0;
+  expect(await f.run()).toHaveLength(repaired);
+  expect(f.owners.write).toHaveBeenCalledTimes(repaired);
 });
 
 test.each(['disabled', 'all-disabled', 'not-allowed', 'denied', 'external-load'])('skips %s before reading installation records', async state => {

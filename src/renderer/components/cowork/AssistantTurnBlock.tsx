@@ -15,7 +15,7 @@ import type { CoworkGoal } from '../../../shared/cowork/goal';
 import { getCoworkTurnUsage } from '../../../shared/cowork/llmTurnUsage';
 import purchaseOfferFirstBadge from '../../assets/purchase-offer-first.svg';
 import purchaseOfferLimitedBadge from '../../assets/purchase-offer-limited.svg';
-import { dedupeArtifactsForDisplay } from '../../services/artifactParser';
+import { dedupeArtifactsForDisplay, orderArtifactsByReplyReferences } from '../../services/artifactParser';
 import { getPortalPricingUrl } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
 import { type LogEventAction, LogReporterAction } from '../../services/logReporter';
@@ -73,6 +73,7 @@ import {
   getTurnActivityFingerprint,
   getTurnAnswerStartIndex,
   getTurnEndTimestamp,
+  getTurnReplyMessageIds,
   getTurnStartTimestamp,
   getVideoPathArtifacts,
   getVisibleAssistantItems,
@@ -636,12 +637,16 @@ const AssistantTurnBlock: React.FC<{
   );
   const artifactCards = useMemo(
     () => artifacts
-      ? dedupeArtifactsForDisplay(
+      ? orderArtifactsByReplyReferences(
+          dedupeArtifactsForDisplay(
+            artifacts,
+            { defaultProjectDirectory: localServiceDirectory },
+          ),
           artifacts,
-          { defaultProjectDirectory: localServiceDirectory },
+          getTurnReplyMessageIds(turn),
         )
       : [],
-    [artifacts, localServiceDirectory],
+    [artifacts, localServiceDirectory, turn],
   );
   const visibleArtifactCards = useMemo(() => {
     return artifactCardsExpanded ? artifactCards : artifactCards.slice(0, 3);

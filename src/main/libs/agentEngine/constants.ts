@@ -28,6 +28,7 @@ export const OpenClawGatewayMethod = {
 } as const;
 
 export const OpenClawGatewayEvent = {
+  Shutdown: 'shutdown',
   ChatSideResult: 'chat.side_result',
   SessionsChanged: 'sessions.changed',
   SubagentSettleFailed: 'lobsterai.subagent.settle_failed',

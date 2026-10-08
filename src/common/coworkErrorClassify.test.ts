@@ -321,6 +321,21 @@ test('network: socket hang up', () => {
   expect(classifyError('request failed: socket hang up')).toBe('coworkErrorNetworkError');
 });
 
+test('network: Chromium net error relayed by the token proxy as HTTP 502', () => {
+  expect(classifyError(
+    'HTTP 502: LobsterAI proxy upstream request failed: net::ERR_HTTP2_PING_FAILED',
+  )).toBe('coworkErrorNetworkError');
+  expect(classifyError(
+    '502 LobsterAI proxy upstream request failed: net::ERR_PROXY_CONNECTION_FAILED',
+  )).toBe('coworkErrorNetworkError');
+});
+
+test('network: Chromium certificate error is not mistaken for an invalid credential', () => {
+  expect(classifyError(
+    'HTTP 502: LobsterAI proxy upstream request failed: net::ERR_CERT_AUTHORITY_INVALID',
+  )).toBe('coworkErrorNetworkError');
+});
+
 // ==================== Server errors ====================
 
 test('server: internal server error', () => {

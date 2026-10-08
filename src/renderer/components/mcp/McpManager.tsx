@@ -36,6 +36,7 @@ import McpCard from './McpCard';
 import McpDetailModal, { type McpDetailInfoRow, type McpDetailStat } from './McpDetailModal';
 import McpServerFormModal from './McpServerFormModal';
 import { MCP_TAB_LABEL_KEYS, MCP_TAB_ORDER, McpTab } from './mcpTabs';
+import { describeMcpToolFilter } from './mcpToolFilterLabels';
 
 const TRANSPORT_BADGE_COLORS: Record<string, string> = {
   stdio: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
@@ -959,6 +960,9 @@ const McpManager: React.FC = () => {
     if (envKeys) info.push({ label: i18nService.t('mcpDetailEnvKeys'), value: envKeys, mono: true });
     const headerKeys = getKeyListValue(server.headers);
     if (headerKeys) info.push({ label: i18nService.t('mcpDetailHeaders'), value: headerKeys, mono: true });
+    if (server.toolFilter) {
+      info.push({ label: i18nService.t('mcpDetailTools'), value: describeMcpToolFilter(server.toolFilter) });
+    }
     if (launchStatusLabel) {
       info.push({
         label: i18nService.t('mcpDetailLaunch'),

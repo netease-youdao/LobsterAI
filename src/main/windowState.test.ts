@@ -9,6 +9,9 @@ import {
   resolveInitialAppWindowState,
 } from './windowState';
 
+// 13-inch MacBook (1440×900) with the Dock visible: height is the tight dimension.
+const LAPTOP_WORK_AREA = { x: 0, y: 25, width: 1440, height: 801 };
+
 test('resolveInitialAppWindowState uses the centered default size on large displays', () => {
   const state = resolveInitialAppWindowState(undefined, [
     { x: 0, y: 0, width: 2560, height: 1440 },
@@ -23,15 +26,27 @@ test('resolveInitialAppWindowState uses the centered default size on large displ
   });
 });
 
-test('resolveInitialAppWindowState scales the default size to fit smaller displays', () => {
+test('resolveInitialAppWindowState keeps the default width when only the height is tight', () => {
+  const state = resolveInitialAppWindowState(undefined, [LAPTOP_WORK_AREA]);
+
+  expect(state).toEqual({
+    x: 80,
+    y: 26,
+    width: DEFAULT_APP_WINDOW_WIDTH,
+    height: DEFAULT_APP_WINDOW_HEIGHT,
+    isMaximized: false,
+  });
+});
+
+test('resolveInitialAppWindowState fits the default size to smaller displays', () => {
   const state = resolveInitialAppWindowState(undefined, [
     { x: 0, y: 0, width: 1000, height: 650 },
   ]);
 
   expect(state.width).toBe(952);
-  expect(state.height).toBe(600);
+  expect(state.height).toBe(650);
   expect(state.x).toBe(24);
-  expect(state.y).toBe(25);
+  expect(state.y).toBe(0);
 });
 
 test('resolveInitialAppWindowState restores stored bounds on their matching display', () => {
@@ -52,17 +67,47 @@ test('resolveInitialAppWindowState restores stored bounds on their matching disp
   });
 });
 
-test('resolveInitialAppWindowState scales stale large-display bounds into the visible work area', () => {
+test('resolveInitialAppWindowState keeps stored bounds that fit the work area', () => {
+  const state = resolveInitialAppWindowState(
+    { x: 115, y: 25, width: 1201, height: 800 },
+    [LAPTOP_WORK_AREA],
+  );
+
+  expect(state).toEqual({
+    x: 115,
+    y: 25,
+    width: 1201,
+    height: 800,
+    isMaximized: false,
+  });
+});
+
+test('resolveInitialAppWindowState clamps only the overflowing dimension of stored bounds', () => {
+  const state = resolveInitialAppWindowState(
+    { x: 80, y: 26, width: 1280, height: 870 },
+    [LAPTOP_WORK_AREA],
+  );
+
+  expect(state).toEqual({
+    x: 80,
+    y: 25,
+    width: 1280,
+    height: 801,
+    isMaximized: false,
+  });
+});
+
+test('resolveInitialAppWindowState fits stale large-display bounds into the visible work area', () => {
   const state = resolveInitialAppWindowState(
     { x: 3000, y: 2000, width: 2048, height: 1360 },
     [{ x: 0, y: 0, width: 1440, height: 900 }],
   );
 
   expect(state).toEqual({
-    x: 79,
-    y: 24,
-    width: 1283,
-    height: 852,
+    x: 24,
+    y: 0,
+    width: 1392,
+    height: 900,
     isMaximized: false,
   });
 });

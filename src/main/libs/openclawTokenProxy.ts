@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { net } from 'electron';
 import http from 'http';
 
@@ -23,12 +24,21 @@ import {
 } from '../../shared/providers/modelRuntimeProfiles';
 import type { EnterpriseAuthSessionSnapshot } from '../enterpriseAccount/membershipRevocation';
 import { createLlmSpanId, createLlmTraceId } from './llmTrace';
+import { listenOnLoopback } from './loopbackListen';
 
 const PROXY_BIND_HOST = '127.0.0.1';
+// Header names OpenAI-, Anthropic- and Google-style clients use for the provider key.
+const INBOUND_API_KEY_HEADERS = ['x-api-key', 'x-goog-api-key', 'api-key'] as const;
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1']);
+const UNAUTHORIZED_WARN_INTERVAL_MS = 60_000;
 const RECENT_QUOTA_ERROR_TTL_MS = 30_000;
 const MAX_PROXY_SSE_SCAN_BUFFER_CHARS = 1_048_576;
 const GEMINI_FALLBACK_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
 const MAX_TRACE_STATS_ENTRIES = 500;
+const PROXY_UPSTREAM_ERROR_MESSAGE = 'Token proxy upstream error';
+const PROXY_UPSTREAM_NETWORK_ERROR_TYPE = 'upstream_network_error';
+// Electron net.fetch rejects with Chromium's net error name, e.g. "net::ERR_HTTP2_PING_FAILED".
+const CHROMIUM_NET_ERROR_PATTERN = /\bnet::(ERR_[A-Z0-9_]+)\b/;
 
 let proxyServer: http.Server | null = null;
 let proxyPort: number | null = null;
@@ -48,6 +58,8 @@ let enterpriseAuthSessionSnapshotGetter: (() => EnterpriseAuthSessionSnapshot | 
 let enterpriseMembershipRevokedHandler: (
   (event: OpenClawTokenProxyMembershipRevocationEvent) => void
 ) | null = null;
+let inboundAuthTokenGetter: (() => string | null) | null = null;
+let lastUnauthorizedWarnAt = 0;
 
 export type OpenClawTokenProxyMembershipRevocationEvent = {
   code: number;
@@ -65,6 +77,10 @@ export type OpenClawTokenProxyConfig = {
   onEnterpriseMembershipRevoked?: (
     event: OpenClawTokenProxyMembershipRevocationEvent
   ) => void;
+  /** Port from the previous launch; an ephemeral port is used when it is taken. */
+  preferredPort?: number | null;
+  /** Shared secret that OpenClaw and dsh send as the provider API key. */
+  getInboundAuthToken?: () => string | null;
 };
 
 type OpenClawTokenProxyQuotaError = {
@@ -112,6 +128,8 @@ const ProxyRequestOutcome = {
 } as const;
 type ProxyRequestOutcomeValue = typeof ProxyRequestOutcome[keyof typeof ProxyRequestOutcome];
 
+let proxyStartPromise: Promise<{ port: number }> | null = null;
+
 export function startOpenClawTokenProxy(config: OpenClawTokenProxyConfig): Promise<{ port: number }> {
   tokenGetter = config.getAuthTokens;
   tokenRefresher = config.refreshToken;
@@ -121,37 +139,30 @@ export function startOpenClawTokenProxy(config: OpenClawTokenProxyConfig): Promi
   clientVersionGetter = config.getClientVersion;
   enterpriseAuthSessionSnapshotGetter = config.getEnterpriseAuthSessionSnapshot ?? null;
   enterpriseMembershipRevokedHandler = config.onEnterpriseMembershipRevoked ?? null;
+  inboundAuthTokenGetter = config.getInboundAuthToken ?? null;
 
-  return new Promise((resolve, reject) => {
-    if (proxyServer) {
-      if (proxyPort) {
-        resolve({ port: proxyPort });
-        return;
-      }
-      reject(new Error('Token proxy is starting'));
-      return;
-    }
-
+  if (proxyServer && proxyPort) return Promise.resolve({ port: proxyPort });
+  if (proxyStartPromise) return proxyStartPromise;
+  proxyStartPromise = (async () => {
     const server = http.createServer(handleRequest);
-
-    server.listen(0, PROXY_BIND_HOST, () => {
-      const addr = server.address();
-      if (addr && typeof addr === 'object') {
-        proxyPort = addr.port;
-        proxyServer = server;
-        console.log(`[OpenClawTokenProxy] started on ${PROXY_BIND_HOST}:${proxyPort}`);
-        resolve({ port: proxyPort });
-      } else {
-        server.close();
-        reject(new Error('Failed to bind token proxy'));
-      }
-    });
-
-    server.on('error', (err) => {
-      console.error('[OpenClawTokenProxy] server error:', err);
-      reject(err);
-    });
+    try {
+      const { port, reused } = await listenOnLoopback(server, PROXY_BIND_HOST, config.preferredPort);
+      server.on('error', (err) => {
+        console.error('[OpenClawTokenProxy] server error:', err);
+      });
+      proxyPort = port;
+      proxyServer = server;
+      console.log(`[OpenClawTokenProxy] started on ${PROXY_BIND_HOST}:${port}${reused ? ' (reused port)' : ''}`);
+      return { port };
+    } catch (error) {
+      console.error('[OpenClawTokenProxy] server error:', error);
+      server.close();
+      throw error;
+    }
+  })().finally(() => {
+    proxyStartPromise = null;
   });
+  return proxyStartPromise;
 }
 
 export function stopOpenClawTokenProxy(): void {
@@ -171,6 +182,7 @@ export function stopOpenClawTokenProxy(): void {
   clientVersionGetter = null;
   enterpriseAuthSessionSnapshotGetter = null;
   enterpriseMembershipRevokedHandler = null;
+  inboundAuthTokenGetter = null;
 }
 
 export function getOpenClawTokenProxyPort(): number | null {
@@ -318,7 +330,66 @@ function writeAuthSessionChanged(res: http.ServerResponse): void {
   }));
 }
 
+/** Rejects DNS-rebinding requests that reach the loopback socket under a foreign host name. */
+function isLoopbackHostHeader(host: string | undefined): boolean {
+  if (!host) return false;
+  const hostname = host.startsWith('[')
+    ? host.slice(1, host.indexOf(']'))
+    : host.split(':')[0];
+  return LOOPBACK_HOSTNAMES.has(hostname.toLowerCase());
+}
+
+function extractInboundProxyTokens(headers: http.IncomingHttpHeaders): string[] {
+  const tokens: string[] = [];
+  const bearer = /^Bearer\s+(\S+)\s*$/i.exec(headers.authorization ?? '');
+  if (bearer) tokens.push(bearer[1]);
+  for (const name of INBOUND_API_KEY_HEADERS) {
+    const value = headers[name];
+    if (typeof value === 'string' && value.trim()) tokens.push(value.trim());
+  }
+  return tokens;
+}
+
+/** Only callers holding the proxy token may spend the signed-in account. */
+function isInboundRequestAuthorized(headers: http.IncomingHttpHeaders, expectedToken: string | null): boolean {
+  if (!expectedToken) return true;
+  const expected = Buffer.from(expectedToken);
+  return extractInboundProxyTokens(headers).some(token => {
+    const candidate = Buffer.from(token);
+    return candidate.length === expected.length && crypto.timingSafeEqual(candidate, expected);
+  });
+}
+
+function rejectInboundRequest(req: http.IncomingMessage, res: http.ServerResponse, status: 401 | 403, code: string): void {
+  const now = Date.now();
+  if (now - lastUnauthorizedWarnAt >= UNAUTHORIZED_WARN_INTERVAL_MS) {
+    lastUnauthorizedWarnAt = now;
+    const presented = [
+      ...(req.headers.authorization ? ['authorization'] : []),
+      ...INBOUND_API_KEY_HEADERS.filter(name => req.headers[name]),
+    ];
+    const pathname = (req.url ?? '/').split('?')[0];
+    console.warn(`[OpenClawTokenProxy] rejected ${req.method ?? 'GET'} ${pathname}: ${code} (auth headers: ${presented.join(',') || 'none'})`);
+  }
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: {
+      message: status === 403 ? 'Requests must target the loopback proxy address.' : 'Unauthorized: invalid or missing proxy token.',
+      type: 'authentication_error',
+      code,
+    },
+  }));
+}
+
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!isLoopbackHostHeader(req.headers.host)) {
+    rejectInboundRequest(req, res, 403, 'proxy_host_not_loopback');
+    return;
+  }
+  if (!isInboundRequestAuthorized(req.headers, inboundAuthTokenGetter?.() ?? null)) {
+    rejectInboundRequest(req, res, 401, 'invalid_proxy_token');
+    return;
+  }
   let requestTrace: ProxyRequestTrace | undefined;
   try {
     const tokens = tokenGetter?.();
@@ -430,9 +501,29 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     finishProxyRequest(requestTrace, ProxyRequestOutcome.ProxyError);
     if (!res.headersSent) {
       res.writeHead(502, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Token proxy upstream error' }));
+      res.end(buildUpstreamRequestFailureBody(err));
     }
   }
+}
+
+/**
+ * Body for a request that failed before upstream response headers arrived.
+ * Network failures keep their Chromium error name so the client can tell a
+ * broken connection apart from an error returned by the server.
+ */
+function buildUpstreamRequestFailureBody(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const netErrorName = CHROMIUM_NET_ERROR_PATTERN.exec(message)?.[1];
+  if (!netErrorName) {
+    return JSON.stringify({ error: PROXY_UPSTREAM_ERROR_MESSAGE });
+  }
+  return JSON.stringify({
+    error: {
+      message: `LobsterAI proxy upstream request failed: net::${netErrorName}`,
+      type: PROXY_UPSTREAM_NETWORK_ERROR_TYPE,
+      code: netErrorName,
+    },
+  });
 }
 
 type UpstreamResult = {
@@ -1337,6 +1428,10 @@ export const __openClawTokenProxyTestUtils = {
   finishProxyRequest,
   ProxyRequestOutcome,
   resetTraceStats: () => traceStatsById.clear(),
+  buildUpstreamRequestFailureBody,
+  extractInboundProxyTokens,
+  isInboundRequestAuthorized,
+  isLoopbackHostHeader,
   extractStructuredProxyError,
   extractQuotaErrorFromProxyErrorPayload,
   extractQuotaErrorFromProxySSEPacket,

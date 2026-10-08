@@ -1,2 +1,9 @@
 # Force LF line endings for shell scripts (required for bash on all platforms)
 *.sh text eol=lf
+
+# These licenses and notices are verified byte-for-byte during prebuild.
+src/renderer/assets/office-fonts/OFL-*.txt text eol=lf
+resources/word-licenses/** text eol=lf
+resources/sheet-licenses/** text eol=lf
+# This generated notice includes upstream text with mixed line endings.
+resources/sheet-licenses/NOTICE.txt -text -eol
