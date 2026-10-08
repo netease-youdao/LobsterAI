@@ -1127,6 +1127,14 @@ contextBridge.exposeInMainWorld('electron', {
     openSystemNotificationSettings: () =>
       ipcRenderer.invoke(AppIpcChannel.OpenSystemNotificationSettings),
   },
+  openWith: {
+    consumePaths: () => ipcRenderer.invoke(AppIpcChannel.ConsumeOpenWithPaths),
+    onPathsAvailable: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(AppIpcChannel.OpenWithPathsAvailable, handler);
+      return () => ipcRenderer.removeListener(AppIpcChannel.OpenWithPathsAvailable, handler);
+    },
+  },
   subscriptionTrial: {
     status: () => ipcRenderer.invoke(SubscriptionTrialIpc.Status),
   },

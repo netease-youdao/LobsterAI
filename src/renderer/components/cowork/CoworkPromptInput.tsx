@@ -138,6 +138,7 @@ import {
   useAgentSelectedModel,
 } from './agentModelSelection';
 import AttachmentCard from './AttachmentCard';
+import { isImagePath } from './attachmentPaths';
 import BrowserAnnotationAttachmentBadge from './BrowserAnnotationAttachmentBadge';
 import ChatLoginExperienceModal from './ChatLoginExperienceModal';
 import { getClipboardAttachmentFiles } from './clipboardAttachments';
@@ -293,15 +294,6 @@ const reportModelSelected = (
 // CoworkAttachment is aliased from the Redux-persisted DraftAttachment type
 // so that attachment state survives view switches (cowork ↔ skills, etc.)
 type CoworkAttachment = DraftAttachment;
-
-const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.tiff', '.tif', '.ico', '.avif']);
-
-const isImagePath = (filePath: string): boolean => {
-  const dotIndex = filePath.lastIndexOf('.');
-  if (dotIndex === -1) return false;
-  const ext = filePath.slice(dotIndex).toLowerCase();
-  return IMAGE_EXTENSIONS.has(ext);
-};
 
 const isImageMimeType = (mimeType: string): boolean => {
   return mimeType.startsWith('image/');

@@ -2995,6 +2995,206 @@ FunctionEnd
   NewInstallPrevalidateDone:
 !macroend
 
+; -- Explorer "Open with" --
+; Windows lists an app under "Open with" per extension only: its ProgID is a
+; value under Software\Classes\.<ext>\OpenWithProgids, and no supported key
+; covers every file. Only that value is added, so the default app of each type
+; stays as it is. The app receives the path as a command-line argument (see
+; src/main/libs/openWithPathQueue.ts). The ProgID has no type description, so
+; Explorer keeps naming the files "<EXT> File" even if a user makes LobsterAI
+; their default app.
+!define LOBSTER_OPEN_WITH_PROGID "LobsterAI.File"
+
+; The one list of extensions, expanded once to register and once to remove.
+!macro LobsterOpenWithExtensions OP
+  ; Documents
+  !insertmacro ${OP} "pdf"
+  !insertmacro ${OP} "doc"
+  !insertmacro ${OP} "docx"
+  !insertmacro ${OP} "docm"
+  !insertmacro ${OP} "dot"
+  !insertmacro ${OP} "dotx"
+  !insertmacro ${OP} "rtf"
+  !insertmacro ${OP} "odt"
+  !insertmacro ${OP} "wps"
+  !insertmacro ${OP} "wpt"
+  !insertmacro ${OP} "ofd"
+  !insertmacro ${OP} "xps"
+  ; Spreadsheets
+  !insertmacro ${OP} "xls"
+  !insertmacro ${OP} "xlsx"
+  !insertmacro ${OP} "xlsm"
+  !insertmacro ${OP} "xlsb"
+  !insertmacro ${OP} "xlt"
+  !insertmacro ${OP} "xltx"
+  !insertmacro ${OP} "csv"
+  !insertmacro ${OP} "tsv"
+  !insertmacro ${OP} "ods"
+  !insertmacro ${OP} "et"
+  ; Presentations
+  !insertmacro ${OP} "ppt"
+  !insertmacro ${OP} "pptx"
+  !insertmacro ${OP} "pptm"
+  !insertmacro ${OP} "pps"
+  !insertmacro ${OP} "ppsx"
+  !insertmacro ${OP} "pot"
+  !insertmacro ${OP} "potx"
+  !insertmacro ${OP} "odp"
+  !insertmacro ${OP} "dps"
+  ; E-books and mail
+  !insertmacro ${OP} "epub"
+  !insertmacro ${OP} "mobi"
+  !insertmacro ${OP} "azw3"
+  !insertmacro ${OP} "eml"
+  !insertmacro ${OP} "msg"
+  ; Text, markup and data
+  !insertmacro ${OP} "txt"
+  !insertmacro ${OP} "md"
+  !insertmacro ${OP} "markdown"
+  !insertmacro ${OP} "log"
+  !insertmacro ${OP} "rst"
+  !insertmacro ${OP} "adoc"
+  !insertmacro ${OP} "tex"
+  !insertmacro ${OP} "json"
+  !insertmacro ${OP} "jsonl"
+  !insertmacro ${OP} "xml"
+  !insertmacro ${OP} "yaml"
+  !insertmacro ${OP} "yml"
+  !insertmacro ${OP} "toml"
+  !insertmacro ${OP} "ini"
+  !insertmacro ${OP} "cfg"
+  !insertmacro ${OP} "conf"
+  !insertmacro ${OP} "html"
+  !insertmacro ${OP} "htm"
+  !insertmacro ${OP} "mht"
+  !insertmacro ${OP} "mhtml"
+  !insertmacro ${OP} "css"
+  !insertmacro ${OP} "srt"
+  !insertmacro ${OP} "vtt"
+  ; Source code
+  !insertmacro ${OP} "js"
+  !insertmacro ${OP} "mjs"
+  !insertmacro ${OP} "cjs"
+  !insertmacro ${OP} "jsx"
+  !insertmacro ${OP} "ts"
+  !insertmacro ${OP} "tsx"
+  !insertmacro ${OP} "vue"
+  !insertmacro ${OP} "py"
+  !insertmacro ${OP} "ipynb"
+  !insertmacro ${OP} "java"
+  !insertmacro ${OP} "kt"
+  !insertmacro ${OP} "go"
+  !insertmacro ${OP} "rs"
+  !insertmacro ${OP} "c"
+  !insertmacro ${OP} "h"
+  !insertmacro ${OP} "cc"
+  !insertmacro ${OP} "cpp"
+  !insertmacro ${OP} "hpp"
+  !insertmacro ${OP} "cs"
+  !insertmacro ${OP} "swift"
+  !insertmacro ${OP} "rb"
+  !insertmacro ${OP} "php"
+  !insertmacro ${OP} "pl"
+  !insertmacro ${OP} "lua"
+  !insertmacro ${OP} "r"
+  !insertmacro ${OP} "dart"
+  !insertmacro ${OP} "scala"
+  !insertmacro ${OP} "sql"
+  !insertmacro ${OP} "sh"
+  !insertmacro ${OP} "ps1"
+  !insertmacro ${OP} "bat"
+  !insertmacro ${OP} "cmd"
+  ; Images
+  !insertmacro ${OP} "png"
+  !insertmacro ${OP} "jpg"
+  !insertmacro ${OP} "jpeg"
+  !insertmacro ${OP} "jfif"
+  !insertmacro ${OP} "gif"
+  !insertmacro ${OP} "webp"
+  !insertmacro ${OP} "bmp"
+  !insertmacro ${OP} "tif"
+  !insertmacro ${OP} "tiff"
+  !insertmacro ${OP} "heic"
+  !insertmacro ${OP} "heif"
+  !insertmacro ${OP} "avif"
+  !insertmacro ${OP} "ico"
+  !insertmacro ${OP} "svg"
+  !insertmacro ${OP} "psd"
+  ; Audio
+  !insertmacro ${OP} "mp3"
+  !insertmacro ${OP} "wav"
+  !insertmacro ${OP} "m4a"
+  !insertmacro ${OP} "aac"
+  !insertmacro ${OP} "flac"
+  !insertmacro ${OP} "ogg"
+  !insertmacro ${OP} "opus"
+  !insertmacro ${OP} "wma"
+  !insertmacro ${OP} "amr"
+  ; Video
+  !insertmacro ${OP} "mp4"
+  !insertmacro ${OP} "mov"
+  !insertmacro ${OP} "m4v"
+  !insertmacro ${OP} "avi"
+  !insertmacro ${OP} "mkv"
+  !insertmacro ${OP} "webm"
+  !insertmacro ${OP} "wmv"
+  !insertmacro ${OP} "flv"
+  !insertmacro ${OP} "3gp"
+  !insertmacro ${OP} "mpg"
+  !insertmacro ${OP} "mpeg"
+  ; Archives
+  !insertmacro ${OP} "zip"
+  !insertmacro ${OP} "rar"
+  !insertmacro ${OP} "7z"
+  !insertmacro ${OP} "tar"
+  !insertmacro ${OP} "gz"
+  !insertmacro ${OP} "tgz"
+  !insertmacro ${OP} "bz2"
+  !insertmacro ${OP} "xz"
+!macroend
+
+!macro LobsterOpenWithAddExtension EXT
+  WriteRegStr SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithProgids" "${LOBSTER_OPEN_WITH_PROGID}" ""
+!macroend
+
+; Removes only LobsterAI's value; the extension key and the other apps listed
+; under it stay.
+!macro LobsterOpenWithRemoveExtension EXT
+  DeleteRegValue SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithProgids" "${LOBSTER_OPEN_WITH_PROGID}"
+!macroend
+
+; Installer only ($appExe). SHELL_CONTEXT follows the install mode: HKCU for a
+; per-user install, HKLM for all users.
+!macro LobsterRegisterOpenWith
+  ClearErrors
+  WriteRegStr SHELL_CONTEXT "Software\Classes\${LOBSTER_OPEN_WITH_PROGID}\DefaultIcon" "" "$appExe,0"
+  WriteRegStr SHELL_CONTEXT "Software\Classes\${LOBSTER_OPEN_WITH_PROGID}\shell\open\command" "" '"$appExe" "%1"'
+  ; Also backs "Choose another app" for types outside the list.
+  WriteRegStr SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}" "FriendlyAppName" "${PRODUCT_NAME}"
+  WriteRegStr SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}\shell\open\command" "" '"$appExe" "%1"'
+  !insertmacro LobsterOpenWithExtensions LobsterOpenWithAddExtension
+  StrCpy $0 "registered"
+  IfErrors 0 +2
+    StrCpy $0 "write-failed"
+  ; SHCNE_ASSOCCHANGED: Explorer re-reads the associations.
+  System::Call 'shell32::SHChangeNotify(i, i, i, i) v (0x08000000, 0, 0, 0)'
+  FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
+  FileSeek $2 0 END
+  !insertmacro GetTimestamp $8
+  FileWrite $2 "$8 phase=open-with-registration attempt_id=$lobsterInstallerAttemptId status=$0 progid=${LOBSTER_OPEN_WITH_PROGID}$\r$\n"
+  FileClose $2
+!macroend
+
+; Runs for real uninstalls and for the old version's uninstaller during an
+; update; the new version's customInstall registers again afterwards, so an
+; update never leaves entries pointing at a removed install location.
+!macro LobsterUnregisterOpenWith
+  !insertmacro LobsterOpenWithExtensions LobsterOpenWithRemoveExtension
+  DeleteRegKey SHELL_CONTEXT "Software\Classes\${LOBSTER_OPEN_WITH_PROGID}"
+  DeleteRegKey SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}"
+  System::Call 'shell32::SHChangeNotify(i, i, i, i) v (0x08000000, 0, 0, 0)'
+!macroend
+
 ; Standard post-registry electron-builder hook. All fallible extraction,
 ; restoration, Defender rebalancing and validation completed in
 ; customBeforeRegistryAddInstallInfo. This hook only commits the already
@@ -3052,6 +3252,7 @@ FunctionEnd
     Quit
 
   InstallFinalizeComplete:
+  !insertmacro LobsterRegisterOpenWith
   FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
   FileSeek $2 0 END
   !insertmacro GetTimestamp $8
@@ -3067,6 +3268,8 @@ FunctionEnd
 ; uninstalls. Merely opening the uninstaller no longer kills the running app.
 
 !macro customUnInstall
+  !insertmacro LobsterUnregisterOpenWith
+
   ; -- Remove Windows Defender Exclusion on uninstall --
   ; Clean up every exclusion any installer version may have added: the
   ; current permanent set, the SKILLs entry from older versions, the

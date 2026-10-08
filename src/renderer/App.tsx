@@ -82,6 +82,7 @@ import {
 import { LogReporterAction, reportYdAnalyzer } from './services/logReporter';
 import { installOfficeAgentBridges } from './services/office/officeFormats';
 import { getOnboardingErrorCode, reportOnboardingAction } from './services/onboardingAnalytics';
+import { resolveOpenWithAttachments } from './services/openWith';
 import { scheduledTaskService } from './services/scheduledTask';
 import { isTextEditingSafeShortcut, matchesShortcut } from './services/shortcuts';
 import { themeService } from './services/theme';
@@ -95,6 +96,7 @@ import {
 } from './store/selectors/coworkSelectors';
 import { openArtifactPreviewTab } from './store/slices/artifactSlice';
 import {
+  addDraftAttachment,
   clearDraftAttachments,
   clearDraftSelectedTextSnippets,
   setDraftCollaborationMode,
@@ -1867,6 +1869,45 @@ const App: React.FC = () => {
     void window.electron.cowork.notifyOpenSessionFromNotificationReady?.();
     return unsubscribe;
   }, []);
+
+  // macOS Finder "Open With" and Dock drops: start a new task with the items
+  // attached, keeping whatever the home draft already holds.
+  useEffect(() => {
+    const openWith = window.electron.openWith;
+    // A dev renderer can hot-reload ahead of an older preload.
+    if (!isInitialized || !openWith) return;
+    const attachOpenWithPaths = async () => {
+      try {
+        const paths = await openWith.consumePaths();
+        if (paths.length === 0) return;
+        const attachments = await resolveOpenWithAttachments(
+          paths,
+          filePath => window.electron.dialog.statFile(filePath),
+        );
+        if (attachments.length === 0) {
+          console.warn('[OpenWith] none of the opened items could be read.');
+          return;
+        }
+        coworkService.clearSession({ restoreAgentSkills: true });
+        dispatch(clearSelection());
+        setShowSettings(false);
+        setMainView('cowork');
+        attachments.forEach(attachment => {
+          dispatch(addDraftAttachment({ draftKey: '__home__', attachment }));
+        });
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, { detail: { clear: false } }));
+        }, 0);
+      } catch (error) {
+        console.error('[OpenWith] failed to attach opened items:', error);
+      }
+    };
+    const unsubscribe = openWith.onPathsAvailable(() => {
+      void attachOpenWithPaths();
+    });
+    void attachOpenWithPaths();
+    return unsubscribe;
+  }, [dispatch, isInitialized]);
 
   // Tell the main process which session is currently visible so desktop
   // notifications for that session can be suppressed and cleared.

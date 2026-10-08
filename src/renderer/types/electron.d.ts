@@ -1661,6 +1661,11 @@ interface IElectronAPI {
     relaunch: () => Promise<void>;
     openSystemNotificationSettings: () => Promise<{ success: boolean; error?: string }>;
   };
+  /** Files and folders macOS asked LobsterAI to open (Finder "Open With", Dock drops). */
+  openWith: {
+    consumePaths: () => Promise<string[]>;
+    onPathsAvailable: (callback: () => void) => () => void;
+  };
   appUpdate: {
     getState: () => Promise<AppUpdateRuntimeState>;
     checkNow: (options?: {
