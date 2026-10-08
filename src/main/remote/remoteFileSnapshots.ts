@@ -89,7 +89,7 @@ function pump(): void {
   if (terminating || active !== null || !pending.size) return;
   const [id, item] = pending.entries().next().value!;
   try { item.assertAllowed(); }
-  catch { settle(id, unavailable()); pump(); return; }
+  catch (error) { settle(id, error instanceof Error ? error : unavailable()); pump(); return; }
   let current: Worker;
   try { current = getWorker(); }
   catch { settle(id, unavailable()); pump(); return; }

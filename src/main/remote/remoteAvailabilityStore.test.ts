@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { advanceAvailabilityMigration, AvailabilityMigration } from './remoteAvailabilityMigration';
 import { type AvailabilityRequest, RemoteAvailabilityStore } from './remoteAvailabilityStore';
 
 const cleanup: Array<() => void> = [];
@@ -137,4 +138,58 @@ it('pauses only new remote requests when disk headroom is exhausted', () => {
     expect(() => core.exec("CREATE TABLE desktop_messages(body TEXT); INSERT INTO desktop_messages VALUES('local save')")).not.toThrow();
   } finally { statfs.mockRestore(); }
   expect(() => ledger.saveRequest({ ...pending, key: 'new-publication' })).not.toThrow();
+});
+
+ describe('bounded ledger migration', () => {
+  it('resumes hash and usage pages across restart while the single core connection remains writable', async () => {
+    const { ledger, core, file } = fixture();
+    for (let i = 0; i < 70; i++) ledger.saveRequest({ ...pending, key: `old-${i}`, body: { objectId: `m-${i}`, objectKind: 'message' } });
+    ledger.close();
+    const old = new Database(file);
+    old.exec(`DROP TRIGGER availability_usage_insert; DROP TRIGGER availability_usage_update; DROP TRIGGER availability_usage_delete;
+      DROP TABLE availability_usage; DROP TABLE availability_migration; UPDATE availability_requests SET request_hash=NULL`);
+    old.close();
+    const current = new RemoteAvailabilityStore(core); cleanup.push(() => current.close());
+    expect(() => current.pending(pending.scope, 'live')).toThrow(AvailabilityMigration.Pending);
+    const inspect = new Database(file);
+    expect(inspect.prepare('SELECT count(*) AS n FROM availability_requests WHERE request_hash IS NOT NULL').get()).toEqual({ n: 32 });
+    expect(() => current.pending(pending.scope, 'live')).toThrow(AvailabilityMigration.Pending);
+    expect(inspect.prepare('SELECT count(*) AS n FROM availability_requests WHERE request_hash IS NOT NULL').get()).toEqual({ n: 32 });
+    inspect.close(); current.close();
+    core.exec('CREATE TABLE local_progress(id INTEGER PRIMARY KEY)');
+    core.prepare('INSERT INTO local_progress VALUES(1)').run();
+    let ready = false;
+    for (let turn = 0; turn < 10 && !ready; turn++) {
+      try { ready = current.pending(pending.scope, 'live').length > 0; }
+      catch (error) { expect((error as Error).message).toBe(AvailabilityMigration.Pending); }
+      if (!ready) await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    expect(ready).toBe(true);
+    expect(current.request('old-69')?.body.objectId).toBe('m-69');
+    expect(current.db.prepare('SELECT SUM(reserved_bytes) AS bytes FROM availability_usage').get()).toEqual({ bytes: 70 * 64 * 1024 });
+    current.close(); expect(core.open).toBe(true);
+  });
+  it('rejects first locator adoption inside a local transaction instead of opening a second writable core connection', () => {
+    const { core } = fixture(); const ledger = new RemoteAvailabilityStore(core); cleanup.push(() => ledger.close());
+    expect(() => core.transaction(() => ledger.db)()).toThrow('REMOTE_CONTROL_LEDGER_CORE_TRANSACTION');
+    expect(core.open).toBe(true);
+    expect(ledger.db.open).toBe(true);
+  });
+ });
+
+it('advances past deeply nested legacy JSON without manufacturing a hash or suppressing SQL failure', () => {
+  const db = new Database(':memory:'); cleanup.push(() => db.close());
+  db.exec(`CREATE TABLE availability_requests(key TEXT PRIMARY KEY,lane TEXT,scope TEXT,local_id TEXT,body TEXT,
+    request_hash TEXT,object_id TEXT,object_kind TEXT,resolution_body TEXT,resolution_receipt TEXT)`);
+  const deep = '{"body":{},"nested":' + '['.repeat(20_000) + '0' + ']'.repeat(20_000) + '}';
+  const insert = db.prepare("INSERT INTO availability_requests(key,lane,scope,local_id,body) VALUES(?,'live','owner','session',?)");
+  insert.run('bad', deep);
+  for (let i = 0; i < 70; i++) insert.run(`good-${i}`, JSON.stringify({ body: { objectId: `m-${i}`, objectKind: 'message' } }));
+  let ready = false;
+  for (let turn = 0; turn < 12 && !ready; turn++) ready = advanceAvailabilityMigration(db);
+  expect(ready).toBe(true);
+  expect(db.prepare("SELECT request_hash,body FROM availability_requests WHERE key='bad'").get()).toEqual({ request_hash: null, body: deep });
+  expect(db.prepare('SELECT count(*) AS count FROM availability_requests WHERE request_hash IS NOT NULL').get()).toEqual({ count: 70 });
+  db.exec('DROP TABLE availability_usage');
+  expect(() => advanceAvailabilityMigration(db)).toThrow('REMOTE_AVAILABILITY_USAGE_MISSING');
 });

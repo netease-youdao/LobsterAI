@@ -38,7 +38,7 @@ function request(transport: RemoteNetworkTransport, path = '/capabilities', init
 function success(child: Child, id = child.request().id, extra: Record<string, unknown> = {}) {
   child.reply({ type: Message.Result, id, status: 200, headers: {}, body: '{"code":0}', jsonValid: true, json: { code: 0 }, ...extra });
 }
-beforeEach(() => { vi.spyOn(console, 'info').mockImplementation(() => {}); vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+beforeEach(() => { vi.spyOn(process, 'kill').mockReturnValue(true); vi.spyOn(console, 'info').mockImplementation(() => {}); vi.spyOn(console, 'warn').mockImplementation(() => {}); });
 afterEach(async () => { transports.splice(0).forEach(transport => transport.dispose()); await settle(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('supervised remote network transport', () => {
@@ -153,17 +153,43 @@ describe('supervised remote network transport', () => {
     const closed = vi.fn(); socket.addEventListener('close', closed); await settle();
     children[0].autoExit = false; children[0].emit('error', new Error('private error'));
     await expect(first).rejects.toThrow('WORKER_EXIT'); expect(closed).toHaveBeenCalledWith({ code: 1006 });
-    const next = request(transport); await settle(); expect(spawn).toHaveBeenCalledTimes(1);
-    children[0].exit(); await settle(); expect(spawn).toHaveBeenCalledTimes(2);
+    await expect(request(transport)).rejects.toThrow('WORKER_UNAVAILABLE'); expect(spawn).toHaveBeenCalledTimes(1);
+    children[0].exit(); await settle();
+    const next = request(transport); await settle(); expect(spawn).toHaveBeenCalledTimes(2);
     success(children[0]); success(children[1]); expect(await (await next).json()).toEqual({ code: 0 });
   });
   it('does not resurrect disposed work while an earlier process is still retiring', async () => {
     const { transport, children, spawn } = fixture(); const original = request(transport); await settle();
     children[0].autoExit = false; children[0].emit('error', new Error()); await expect(original).rejects.toThrow('WORKER_EXIT');
-    const obsolete = request(transport); transport.socket('wss://example.com/api/remote/v1/ws'); await settle();
+    const obsolete = request(transport); transport.socket('wss://example.com/api/remote/v1/ws');
     transport.dispose(); await expect(obsolete).rejects.toThrow('CANCELLED'); children[0].exit(); await settle();
     expect(spawn).toHaveBeenCalledTimes(1);
     const current = request(transport); await settle(); expect(spawn).toHaveBeenCalledTimes(2); success(children[1]); await current;
+  });
+  it('returns promptly while exit is unknown and recovers after OS absence without an exit event', async () => {
+    vi.useFakeTimers();
+    const { transport, children, spawn } = fixture(); const first = request(transport); await settle();
+    children[0].autoExit = false;
+    children[0].kill.mockImplementation(() => { throw new Error('Kill unavailable'); });
+    children[0].emit('error', new Error()); await expect(first).rejects.toThrow('WORKER_EXIT');
+    for (let i = 0; i < 10; i++) await expect(request(transport)).rejects.toThrow('WORKER_UNAVAILABLE');
+    vi.mocked(process.kill).mockImplementation(() => { throw Object.assign(new Error(), { code: 'EPERM' }); });
+    await vi.advanceTimersByTimeAsync(10000);
+    await expect(request(transport)).rejects.toThrow('WORKER_UNAVAILABLE'); expect(spawn).toHaveBeenCalledTimes(1);
+    vi.mocked(process.kill).mockImplementation(() => { throw Object.assign(new Error(), { code: 'ESRCH' }); });
+    await vi.advanceTimersByTimeAsync(1000);
+    const next = request(transport); await settle(); expect(spawn).toHaveBeenCalledTimes(2);
+    children[0].exit(); // A late old event cannot retire the new child.
+    success(children[1]); await next;
+  });
+  it('releases a cancelled request before IPC dispatch and does not start a worker for an already aborted request', async () => {
+    const { transport, children, spawn } = fixture(); const aborted = new AbortController(); aborted.abort();
+    await expect(request(transport, '/sync/batches', { signal: aborted.signal })).rejects.toThrow('CANCELLED');
+    expect(spawn).not.toHaveBeenCalled();
+    const abort = new AbortController(); const cancelled = request(transport, '/sync/batches', { signal: abort.signal });
+    abort.abort(); await expect(cancelled).rejects.toThrow('CANCELLED'); await settle();
+    expect(children[0].messages.filter(message => message.type === Message.Fetch)).toHaveLength(0);
+    const next = request(transport, '/sync/batches'); await settle(); success(children[0]); await next;
   });
   it('fences replaced sockets and acknowledges only current parsed frames', async () => {
     const { transport, children } = fixture(); const first = transport.socket('wss://example.com/api/remote/v1/ws');

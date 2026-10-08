@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteRunStatus } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
-import { RemoteInputCapability } from '../../shared/remote/input';
+import { RemoteInputCapability, RemoteInputRecovery } from '../../shared/remote/input';
 import { RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
 
@@ -32,6 +32,7 @@ async function fixture() {
   let owner = initialOwner;
   const request = vi.fn(async (_owner, path: string) => {
     if (path.endsWith('/connection-tickets')) return response({ wsUrl: 'wss://example.com/api/remote/v1/ws?ticket=test' });
+    if (path.includes('/v1/devices/pc/input-preparations?')) return response({ items: [], nextCursor: null });
     if (path.includes('/commands?') || path.endsWith('/claim')) return response({ items: [], nextCursor: null });
     throw new Error(`Unexpected request ${path}`);
   });
@@ -311,4 +312,85 @@ describe('poisoned control records', () => {
     expect(bridge.generation).toBe('1');
     expect(store.db.prepare("SELECT value FROM remote_state WHERE key='inbox:bad-command'").get()).toEqual({ value: '{' });
   });
+});
+
+it('keeps input claims and commands progressing while isolated recovery is stalled, then preserves unresolved identity', async () => {
+  const { bridge, request, count } = await fixture();
+  const original = request.getMockImplementation()!;
+  let release!: (value: Response) => void;
+  bridge.capabilitySnapshot = { capabilities: [RemoteInputRecovery.Capability] };
+  bridge.deps.input.preparations.retainRecoveryDiagnostic = vi.fn();
+  bridge.deps.input.preparations.recoverReceipt = vi.fn();
+  request.mockImplementation((owner, path) => path.includes('/v2/devices/pc/input-preparations?')
+    ? new Promise<Response>(resolve => { release = resolve; }) : original(owner, path));
+  bridge.schedule(0); await vi.advanceTimersByTimeAsync(0);
+  const inputBefore = count('/input-preparations/claim'), commandBefore = count('/commands/claim');
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(count('/input-preparations/claim')).toBeGreaterThan(inputBefore);
+  expect(count('/commands/claim')).toBeGreaterThan(commandBefore);
+  release(response({ items: [{ preparationId: 'healthy', status: 'ready' }], unresolvedItems: [
+    { preparationId: 'bad', diagnostic: { kind: RemoteInputRecovery.Unavailable, retryAfterMs: 30_000 } }], nextCursor: null, scanComplete: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(bridge.deps.input.preparations.retainRecoveryDiagnostic).toHaveBeenCalledWith('bad', initialOwner, 'pc');
+  expect(bridge.deps.input.preparations.recoverReceipt).toHaveBeenCalledWith({ preparationId: 'healthy', status: 'ready' }, initialOwner, 'pc');
+});
+it('never calls recovery v2 without capability negotiation', async () => {
+  const { request } = await fixture();
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(request.mock.calls.some(([, path]) => path.includes('/v2/devices/'))).toBe(false);
+  expect(request.mock.calls.some(([, path]) => path.includes('/v1/devices/pc/input-preparations?'))).toBe(true);
+});
+
+it('restarts an expired v2 cursor without treating its error as an empty recovery page', async () => {
+  const { bridge, request } = await fixture();
+  const original = request.getMockImplementation()!;
+  bridge.capabilitySnapshot = { capabilities: [RemoteInputRecovery.Capability] };
+  bridge.deps.input.preparations.retainRecoveryDiagnostic = vi.fn();
+  bridge.deps.input.preparations.recoverReceipt = vi.fn();
+  let pages = 0;
+  request.mockImplementation((owner, path) => {
+    if (!path.includes('/v2/devices/pc/input-preparations?')) return original(owner, path);
+    pages++;
+    return Promise.resolve(pages === 1 ? response({ items: [], unresolvedItems: [], nextCursor: 'continuation', scanComplete: false })
+      : new Response(JSON.stringify({ code: 47008, message: 'CURSOR_EXPIRED' }), { status: 410 }));
+  });
+  bridge.schedule(0); await vi.advanceTimersByTimeAsync(251);
+  expect(pages).toBe(2);
+  expect(bridge.inputRecoveryCursor).toBeNull();
+  expect(bridge.deps.input.preparations.retainRecoveryDiagnostic).not.toHaveBeenCalled();
+  expect(bridge.deps.input.preparations.recoverReceipt).not.toHaveBeenCalled();
+});
+
+it.each([404, 47017, 47000])('falls back to an independent v1 cursor only after explicit unsupported %s', async code => {
+  const { bridge, request } = await fixture();
+  const original = request.getMockImplementation()!;
+  bridge.capabilitySnapshot = { capabilities: [RemoteInputRecovery.Capability] };
+  bridge.deps.input.preparations.retainRecoveryDiagnostic = vi.fn();
+  bridge.deps.input.preparations.recoverReceipt = vi.fn();
+  request.mockClear();
+  request.mockImplementation((owner, path) => {
+    if (path.includes('/v2/devices/pc/input-preparations?'))
+      return Promise.resolve(new Response(JSON.stringify({ code, message: 'unsupported' }), { status: code === 47017 ? 409 : 404 }));
+    if (path.includes('/v1/devices/pc/input-preparations?')) return Promise.resolve(response({
+      items: [{ preparationId: 'healthy', status: 'ready' }], nextCursor: null }));
+    return original(owner, path);
+  });
+  bridge.schedule(0); await vi.advanceTimersByTimeAsync(1);
+  const recovery = request.mock.calls.filter(([, path]) => path.includes('/input-preparations?'));
+  expect(recovery.map(([, path]) => path.match(/\/v[12]\//u)?.[0])).toEqual(['/v2/', '/v1/']);
+  expect(recovery[1][1]).not.toContain('cursor=');
+  expect(bridge.deps.input.preparations.recoverReceipt).toHaveBeenCalledWith({ preparationId: 'healthy', status: 'ready' }, initialOwner, 'pc');
+  expect(bridge.deps.input.preparations.retainRecoveryDiagnostic).not.toHaveBeenCalled();
+});
+it.each([500, 403])('retains the v2 recovery context on shared or authentication HTTP %s failure', async status => {
+  const { bridge, request, count } = await fixture();
+  const original = request.getMockImplementation()!;
+  bridge.capabilitySnapshot = { capabilities: [RemoteInputRecovery.Capability] };
+  request.mockClear();
+  request.mockImplementation((owner, path) => path.includes('/v2/devices/pc/input-preparations?')
+    ? Promise.resolve(new Response(JSON.stringify({ code: status, message: 'failed' }), { status })) : original(owner, path));
+  bridge.schedule(0); await vi.advanceTimersByTimeAsync(30_001);
+  expect(request.mock.calls.some(([, path]) => path.includes('/v2/devices/pc/input-preparations?'))).toBe(true);
+  expect(request.mock.calls.some(([, path]) => path.includes('/v1/devices/pc/input-preparations?'))).toBe(false);
+  expect(count('/commands/claim')).toBeGreaterThan(0);
 });

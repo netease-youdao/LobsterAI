@@ -11,7 +11,7 @@ import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, REMOTE_PROTOCOL
 import { RemoteDeletion } from '../../shared/remote/deletions';
 import type { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteFileCapability } from '../../shared/remote/files';
-import { RemoteInputCapability, RemoteInputReason, RemoteInputStatus, type RemotePreparationClaim } from '../../shared/remote/input';
+import { RemoteInputCapability, RemoteInputReason, RemoteInputRecovery, type RemoteInputRecoveryPage, RemoteInputStatus, type RemotePreparationClaim } from '../../shared/remote/input';
 import { type QuestionDecisionOutcome, RemoteQuestion } from '../../shared/remote/questions';
 import { REMOTE_REPLY_PROJECTION_VERSION, REMOTE_REPLY_SYNC_DELAY_MS,RemoteReplyCapability } from '../../shared/remote/reply';
 import { RemoteRetention, type RetentionImport, type RetentionState } from '../../shared/remote/retention';
@@ -195,6 +195,12 @@ export class RemoteBridge {
   private inputCapabilities: string[] = [];
   private lastInputPublish = 0;
   private inputWork: Promise<void> | null = null;
+  private inputRecoveryWork: Promise<void> | null = null;
+  private inputRecoveryAt = 0;
+  private inputRecoveryContext = '';
+  private inputRecoveryScope = '';
+  private inputRecoveryFallbackUntil = 0;
+  private inputRecoveryCursor: string | null = null;
   private optionalPublishWork: Promise<void> | null = null;
   private commandPollAt = 0;
   private commandRetryAt = 0;
@@ -684,6 +690,7 @@ export class RemoteBridge {
           throw error;
         }
       }
+      this.startInputRecovery();
       this.startOptionalPublications(owner, accountGeneration);
       this.startDeletionSync();
       this.startHistorySync();
@@ -853,6 +860,8 @@ export class RemoteBridge {
       if (this.capabilitySnapshot?.capabilities?.includes('sync_diagnostics_v1')) headers['X-Remote-Sync-Diagnostics'] = '1';
       // Capability discovery always uses v1 so an older server can negotiate safely.
       if (pathname !== '/capabilities' && this.projectionVersion > 1) headers['X-Remote-Projection-Version'] = String(this.projectionVersion);
+      if (version === 2 && /\/devices\/[^/]+\/input-preparations(?:\?|$)/u.test(pathname) && this.generation)
+        headers['X-Remote-Connection-Generation'] = this.generation;
       if (registrationRequired) {
         if (!this.registration) throw new Error('Device is not registered');
         headers['X-Remote-Device-Credential'] = `${this.registration.deviceId}.${this.deps.identity.deviceKey}`;
@@ -1480,6 +1489,7 @@ export class RemoteBridge {
       const remote = await this.readSyncState(this.deps.store.sync(id)!, true);
       if (!current()) return;
       if (remote?.deleted) { this.taskSync.fail(context, id, { phase: 'closed', scope: 'session', reason: 'SESSION_DELETED' }); return; }
+      if (this.sessionChecks.size >= 1024) this.sessionChecks.delete(this.sessionChecks.values().next().value!);
       this.sessionChecks.add(id);
       // Manual retry revalidates safety; it does not clear an unresolved corruption budget.
       if (state?.phase === 'reconciling') {
@@ -2059,6 +2069,61 @@ export class RemoteBridge {
       this.deps.store.put(this.inboxKey(entry), entry);
     }
     this.deps.store.put(`commandFailure:${entry.command.commandId}`, { code: (error as RemoteApiError).code });
+  }
+  private startInputRecovery(): void {
+    if (!this.generation || !this.deps.input || !this.inputCapabilities.includes(RemoteInputCapability.Schema)) return;
+    const scope = stableJson([this.accountGeneration, this.targetId, this.registration?.deviceId, this.generation, this.deps.getApiBaseUrl()]);
+    if (scope !== this.inputRecoveryScope) { this.inputRecoveryScope = scope; this.inputRecoveryFallbackUntil = 0; }
+    const version = this.capabilitySnapshot?.capabilities?.includes(RemoteInputRecovery.Capability) && Date.now() >= this.inputRecoveryFallbackUntil ? 2 : 1;
+    const context = stableJson([scope, version]);
+    if (context !== this.inputRecoveryContext) { this.inputRecoveryContext = context; this.inputRecoveryCursor = null; this.inputRecoveryAt = 0; }
+    if (this.inputRecoveryWork || Date.now() < this.inputRecoveryAt) return;
+    this.inputRecoveryAt = Date.now() + IDLE_POLL_MS;
+    const work = this.recoverInputs(context, version).catch(error => {
+      if (context !== this.inputRecoveryContext) return;
+      const unsupported = error instanceof RemoteApiError && (error.httpStatus === 404 || [404, 47017].includes(error.code));
+      if (version === 2 && unsupported) {
+        this.inputRecoveryFallbackUntil = Date.now() + 5 * IDLE_POLL_MS;
+        this.inputRecoveryAt = 0; return;
+      }
+      // Expired cursors restart enumeration; neither absence nor a failed page clears evidence.
+      if (error instanceof RemoteApiError && [47008, 47019].includes(error.code)) this.inputRecoveryCursor = null;
+      this.inputRecoveryAt = Date.now() + (unsupported ? 5 * IDLE_POLL_MS : IDLE_POLL_MS);
+    }).finally(() => {
+      if (this.inputRecoveryWork === work) this.inputRecoveryWork = null;
+      if (!this.stopped && context === this.inputRecoveryContext) this.schedule(Math.max(0, this.inputRecoveryAt - Date.now()));
+    });
+    this.inputRecoveryWork = work;
+  }
+  private async recoverInputs(context: string, version: 1 | 2): Promise<void> {
+    const owner = this.owner, deviceId = this.registration?.deviceId, generation = this.generation;
+    const preparations = this.deps.input?.preparations, epoch = this.accountGeneration, route = this.deps.getApiBaseUrl(), target = this.targetId;
+    if (!owner || !deviceId || !generation || !preparations) return;
+    const current = (): boolean => !this.stopped && epoch === this.accountGeneration && generation === this.generation
+      && target === this.targetId && route === this.deps.getApiBaseUrl() && sameOwner(owner, this.owner)
+      && sameOwner(owner, this.deps.getOwner()) && context === this.inputRecoveryContext && this.settings().enabled;
+    const cursor = this.inputRecoveryCursor;
+    const page = await this.api(`/devices/${encodeURIComponent(deviceId)}/input-preparations?limit=${RemoteInputRecovery.Limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+      'GET', undefined, true, version) as RemoteInputRecoveryPage;
+    // v1 is an atomic page. It does not have unresolvedItems or scanComplete.
+    if (version === 1 && page) { page.unresolvedItems = []; page.scanComplete = page.nextCursor === null; }
+    if (!current()) return;
+    const id = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(value);
+    if (!page || !Array.isArray(page.items) || !Array.isArray(page.unresolvedItems)
+      || page.items.length + page.unresolvedItems.length > RemoteInputRecovery.Limit
+      || ![true, false].includes(page.scanComplete) || !(page.nextCursor === null || typeof page.nextCursor === 'string' && page.nextCursor.length > 0 && page.nextCursor.length <= 8192)
+      || page.scanComplete !== (page.nextCursor === null) || page.nextCursor !== null && page.nextCursor === cursor
+      || page.items.some(item => !item || !id(item.preparationId))
+      || page.unresolvedItems.some(item => !item || !id(item.preparationId) || item.diagnostic?.kind !== RemoteInputRecovery.Unavailable))
+      throw new Error('REMOTE_INPUT_RECOVERY_PAGE_INVALID');
+    const ids = [...page.items, ...page.unresolvedItems].map(item => item.preparationId);
+    if (new Set(ids).size !== ids.length) throw new Error('REMOTE_INPUT_RECOVERY_PAGE_INVALID');
+    for (const item of page.items) preparations.recoverReceipt(item, owner, deviceId);
+    for (const item of page.unresolvedItems) preparations.retainRecoveryDiagnostic(item.preparationId, owner, deviceId);
+    if (!current()) return;
+    this.inputRecoveryCursor = page.nextCursor;
+    // One bounded page per turn; page completion does not enumerate a set to delete locally.
+    this.inputRecoveryAt = Date.now() + (page.scanComplete ? IDLE_POLL_MS : 250);
   }
   private async prepareInputs(): Promise<boolean> {
     const input = this.deps.input;

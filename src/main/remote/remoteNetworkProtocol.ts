@@ -27,6 +27,7 @@ export const remoteNetworkCapacities = { control: 3, live: 2, background: 1 } as
 /** Keep the supervisor and worker on the same physical admission policy. */
 export function remoteNetworkRequestLane(url: string, method = 'GET'): RemoteNetworkLane {
   const path = new URL(url).pathname;
+  if (method.toUpperCase() === 'GET' && /^\/api\/remote\/v[12]\/devices\/[^/]+\/input-preparations$/u.test(path)) return 'background';
   const receipt = method.toUpperCase() === 'GET' && (/^\/api\/remote\/v3\/sync\/(?:state|(?:recoveries|live-projections|mode-activations)\/[^/]+)$/u.test(path)
     || /^\/api\/remote\/v1\/sync\/imports\/[^/]+$/u.test(path));
   const abort = /^\/api\/remote\/(?:v3\/sync\/recoveries|v1\/sync\/imports)\/[^/]+\/abort$/u.test(path);

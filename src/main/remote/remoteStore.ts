@@ -13,6 +13,7 @@ import type { DesktopInputRun } from './desktopInputMetadata';
 import { remoteArtifactReasons } from './remoteArtifactProjection';
 import { initializeAvailabilityProjectionSources, initializeAvailabilitySource, markAvailabilityControl, touchAvailabilityControl } from './remoteAvailabilitySource';
 import type { InboxEntry } from './remoteBridge';
+import { replaceCoreTrigger } from './remoteCoreTriggers';
 import { RemoteDatabaseHealth } from './remoteDatabaseHealth';
 import { samePersistedRemoteEnvironment } from './remoteEnvironmentMigration';
 import { RemoteHistoryStore } from './remoteHistoryStore';
@@ -192,7 +193,6 @@ export class RemoteStore {
     // Core ownership, execution, ACK/identity and source revisions migrate atomically.
     // A failed core migration must never leave an apparently usable half-upgraded store.
     db.transaction(() => {
-      RemoteHistoryStore.initializeCore(db);
       db.exec(`
       CREATE TABLE IF NOT EXISTS remote_corrupt_state(key TEXT PRIMARY KEY,value TEXT NOT NULL,detected_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS local_execution_dispatch(session_id TEXT PRIMARY KEY,run_id TEXT NOT NULL,origin TEXT NOT NULL,
@@ -232,14 +232,12 @@ export class RemoteStore {
         const sid = table === 'cowork_sessions' ? 'id' : 'session_id';
         for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
           const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
-          db.exec(`DROP TRIGGER IF EXISTS remote_revision_${table}_${operation.toLowerCase()};
-            CREATE TRIGGER remote_revision_${table}_${operation.toLowerCase()}
+          replaceCoreTrigger(db, `CREATE TRIGGER remote_revision_${table}_${operation.toLowerCase()}
             AFTER ${operation} ON ${table} BEGIN
             INSERT INTO remote_session_revisions(session_id,revision,dirty_at) VALUES (${ref}.${sid},1,CAST(strftime('%s','now') AS INTEGER)*1000)
-            ON CONFLICT(session_id) DO UPDATE SET dirty_at=CASE WHEN revision=clean_revision THEN excluded.dirty_at ELSE dirty_at END,revision=revision+1; END;
-            DROP TRIGGER IF EXISTS remote_content_${table}_${operation.toLowerCase()};
-            DROP TRIGGER IF EXISTS remote_${table}_${operation.toLowerCase()};
-            CREATE TRIGGER remote_${table}_${operation.toLowerCase()} AFTER ${operation} ON ${table} BEGIN
+            ON CONFLICT(session_id) DO UPDATE SET dirty_at=CASE WHEN revision=clean_revision THEN excluded.dirty_at ELSE dirty_at END,revision=revision+1; END;`);
+          db.exec(`DROP TRIGGER IF EXISTS remote_content_${table}_${operation.toLowerCase()}`);
+          replaceCoreTrigger(db, `CREATE TRIGGER remote_${table}_${operation.toLowerCase()} AFTER ${operation} ON ${table} BEGIN
             UPDATE cowork_session_ownership SET ownership_status='quarantined'
             WHERE session_id=${ref}.${sid} AND (SELECT trusted FROM remote_write_context WHERE id=1)=0; END;`);
         }
@@ -249,12 +247,11 @@ export class RemoteStore {
         const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
         db.exec(`DROP TRIGGER IF EXISTS remote_content_library_relation_${operation.toLowerCase()};
           DROP TRIGGER IF EXISTS remote_content_library_artifact_${operation.toLowerCase()};
-          DROP TRIGGER IF EXISTS remote_library_relation_${operation.toLowerCase()};
-          DROP TRIGGER IF EXISTS remote_library_artifact_${operation.toLowerCase()};
-          CREATE TRIGGER remote_library_relation_${operation.toLowerCase()} AFTER ${operation} ON library_artifact_sessions BEGIN
+          `);
+        replaceCoreTrigger(db, `CREATE TRIGGER remote_library_relation_${operation.toLowerCase()} AFTER ${operation} ON library_artifact_sessions BEGIN
           INSERT INTO remote_session_revisions(session_id,revision,dirty_at) VALUES (${ref}.session_id,1,CAST(strftime('%s','now') AS INTEGER)*1000)
-          ON CONFLICT(session_id) DO UPDATE SET revision=revision+1; END;
-          CREATE TRIGGER remote_library_artifact_${operation.toLowerCase()} AFTER ${operation} ON library_local_artifacts BEGIN
+          ON CONFLICT(session_id) DO UPDATE SET revision=revision+1; END;`);
+        replaceCoreTrigger(db, `CREATE TRIGGER remote_library_artifact_${operation.toLowerCase()} AFTER ${operation} ON library_local_artifacts BEGIN
           INSERT INTO remote_session_revisions(session_id,revision,dirty_at)
           SELECT session_id,1,CAST(strftime('%s','now') AS INTEGER)*1000 FROM library_artifact_sessions WHERE artifact_id=${ref}.id
           ON CONFLICT(session_id) DO UPDATE SET revision=revision+1; END;`);
@@ -293,6 +290,7 @@ export class RemoteStore {
   initializeSynchronization(): void {
     if (this.synchronizationReady) return;
     this.db.transaction(() => {
+      RemoteHistoryStore.initializeCore(this.db);
       // Display/projection preferences can quarantine malformed old values. This optional
       // repair is deliberately outside construction of the desktop execution store.
       this.replyProjectionSupported = this.get<boolean>('replyProjectionMode') === true;
@@ -813,6 +811,10 @@ export class RemoteStore {
     }
   }
   remove(key: string): void { this.db.prepare('DELETE FROM remote_state WHERE key=?').run(key); }
+  countKeys(prefix: string, limit: number): number {
+    return (this.db.prepare('SELECT COUNT(*) AS count FROM (SELECT 1 FROM remote_state WHERE key>=? AND key<? LIMIT ?)')
+      .get(prefix, `${prefix}\uffff`, Math.max(1, Math.min(1000, limit))) as { count: number }).count;
+  }
   entries<T>(prefix: string, after?: string, limit?: number): Array<{ key: string; value: T }> {
     const rows = after !== undefined || limit !== undefined
       ? this.db.prepare('SELECT key,value FROM remote_state WHERE key LIKE ? AND key>? ORDER BY key LIMIT ?')

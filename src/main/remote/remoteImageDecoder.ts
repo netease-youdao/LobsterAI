@@ -5,6 +5,7 @@ import { constants, promises as fs } from 'fs';
 import { inspectRemoteImage, RemoteImageBudget } from './remoteImageHeader';
 
 export interface RemoteImageContext { current(): boolean; signal?: AbortSignal }
+interface DecoderLease { exitConfirmed: boolean; finished: boolean }
 interface DecodedImage { base64Data: string; mimeType: string; width: number; height: number }
 
 // This function is serialized into a separate sandboxed Chromium renderer. No Node APIs,
@@ -32,24 +33,27 @@ async function decodeInRenderer(base64: string, mimeType: string, preview: boole
  * The lane stays reserved until the OS confirms the exact child gone; an unconfirmed exit
  * disables further decoding rather than accumulating stuck renderers. */
 export class RemoteImageDecoder {
-  private static busy = false;
-  private exitConfirmed = true;
-  private async exclusive<T>(run: () => Promise<T>): Promise<T> {
-    if (RemoteImageDecoder.busy) throw new Error('INPUT_UNSUPPORTED');
-    RemoteImageDecoder.busy = true; this.exitConfirmed = true;
-    try { return await run(); }
-    finally { if (this.exitConfirmed) RemoteImageDecoder.busy = false; }
+  private static active: DecoderLease | null = null;
+  private async exclusive<T>(run: (lease: DecoderLease) => Promise<T>): Promise<T> {
+    if (RemoteImageDecoder.active) throw new Error('INPUT_UNSUPPORTED');
+    const lease: DecoderLease = { exitConfirmed: true, finished: false };
+    RemoteImageDecoder.active = lease;
+    try { return await run(lease); }
+    finally { lease.finished = true; this.release(lease); }
+  }
+  private release(lease: DecoderLease): void {
+    if (lease.finished && lease.exitConfirmed && RemoteImageDecoder.active === lease) RemoteImageDecoder.active = null;
   }
   private alive(pid: number): boolean {
     try { process.kill(pid, 0); return true; }
     catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
   }
   async preview(filePath: string, context: RemoteImageContext): Promise<DecodedImage> {
-    return this.exclusive(() => this.decode(filePath, true, 128 * 1024, context));
+    return this.exclusive(lease => this.decode(filePath, true, 128 * 1024, context, lease));
   }
   async convert(filePath: string, targetPath: string, maximumBytes: number, context: RemoteImageContext): Promise<{ path: string; mimeType: string }> {
-    return this.exclusive(async () => {
-      const result = await this.decode(filePath, false, maximumBytes, context);
+    return this.exclusive(async lease => {
+      const result = await this.decode(filePath, false, maximumBytes, context, lease);
       if (!context.current() || context.signal?.aborted) throw new Error('INPUT_UNSUPPORTED');
       const bytes = Buffer.from(result.base64Data, 'base64');
       const header = inspectRemoteImage(bytes);
@@ -64,7 +68,7 @@ export class RemoteImageDecoder {
       } finally { await fs.rm(temporary, { force: true }); }
     });
   }
-  private async decode(filePath: string, preview: boolean, maximumBytes: number, context: RemoteImageContext): Promise<DecodedImage> {
+  private async decode(filePath: string, preview: boolean, maximumBytes: number, context: RemoteImageContext, lease: DecoderLease): Promise<DecodedImage> {
     const current = (): boolean => { try { return context.current() && !context.signal?.aborted; } catch { return false; } };
     if (!current() || !Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) throw new Error('INPUT_UNSUPPORTED');
     let window: BrowserWindow | undefined, pid = 0, gone = false;
@@ -90,11 +94,12 @@ export class RemoteImageDecoder {
       } finally { await handle.close(); }
       const header = inspectRemoteImage(input);
       if (!current()) throw new Error('INPUT_UNSUPPORTED');
-      this.exitConfirmed = false;
       window = new BrowserWindow({ show: false, width: 1, height: 1, skipTaskbar: true,
         webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true,
           partition: `remote-image-${randomUUID()}`, devTools: false, backgroundThrottling: false,
           spellcheck: false, enableWebSQL: false, disableDialogs: true, navigateOnDragDrop: false } });
+      // A constructor failure has not created an owned renderer to retire.
+      lease.exitConfirmed = false;
       const renderer = window.webContents;
       renderer.setWindowOpenHandler(() => ({ action: 'deny' }));
       renderer.on('will-navigate', event => event.preventDefault());
@@ -131,17 +136,30 @@ export class RemoteImageDecoder {
     } finally {
       if (timer) clearTimeout(timer); if (watchdog) clearInterval(watchdog);
       if (cancel) context.signal?.removeEventListener('abort', cancel);
-      if (window && !window.isDestroyed()) {
-        pid ||= window.webContents.getOSProcessId();
-        if (pid && !gone) window.webContents.forcefullyCrashRenderer();
-        window.destroy();
-      }
+      const retire = (): void => {
+        if (!window) return;
+        try { if (!window.isDestroyed()) pid ||= window.webContents.getOSProcessId(); } catch { /* PID can arrive later. */ }
+        try { if (!window.isDestroyed() && pid && !gone) window.webContents.forcefullyCrashRenderer(); } catch { /* Destruction is still attempted. */ }
+        try { if (!window.isDestroyed()) window.destroy(); } catch { /* Keep the lane and retry retirement below. */ }
+      };
+      const confirmExit = (): boolean => {
+        if (window?.isDestroyed() && pid && !this.alive(pid)) lease.exitConfirmed = true;
+        this.release(lease);
+        return lease.exitConfirmed;
+      };
+      retire();
       const deadline = Date.now() + 5000;
-      while (pid && this.alive(pid) && Date.now() < deadline)
+      while (pid && !confirmExit() && Date.now() < deadline)
         await new Promise(resolve => setTimeout(resolve, 25));
-      // Missing Chromium metrics or a still-unassigned PID is not exit confirmation.
-      // Retain the lane on unknown termination, including an unfinished loadURL.
-      if (window && pid && !this.alive(pid)) this.exitConfirmed = true;
+      if (!confirmExit()) {
+        // Missing metrics/PID and an expired wait are never exit confirmation.
+        // Continue observing after the caller returns, without creating another renderer.
+        const observer = setInterval(() => {
+          retire();
+          if (confirmExit()) clearInterval(observer);
+        }, 1000);
+        observer.unref?.();
+      }
     }
   }
 }

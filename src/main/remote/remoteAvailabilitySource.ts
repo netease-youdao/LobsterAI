@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 
 import { stableJson } from './canonical';
+import { replaceCoreTrigger } from './remoteCoreTriggers';
 import { questionSessionSql, questionStatusSql } from './remoteQuestionEvidence';
 import { redactReplyText } from './remoteReplyProjection';
 import type { ProjectionRecord, RemoteRun, RemoteStore } from './remoteStore';
@@ -8,6 +9,7 @@ import type { ProjectionRecord, RemoteRun, RemoteStore } from './remoteStore';
 const terminal = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
 /** Durable source versions and deletion identities belong to the core commit; cloud projection revisions are separate. */
 export function initializeAvailabilitySource(db: Database.Database): void {
+  db.transaction(() => {
   db.exec(`CREATE TABLE IF NOT EXISTS remote_live_revisions(
     session_id TEXT NOT NULL, object_id TEXT NOT NULL, revision INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(session_id,object_id));
@@ -15,27 +17,23 @@ export function initializeAvailabilitySource(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS remote_control_revisions(session_id TEXT PRIMARY KEY,revision INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS remote_control_pending(session_id TEXT NOT NULL,object_key TEXT NOT NULL,revision INTEGER NOT NULL,PRIMARY KEY(session_id,object_key));
     CREATE INDEX IF NOT EXISTS idx_remote_live_revision_session ON remote_live_revisions(session_id,revision,object_id);`);
-  // Refresh this new feature's trigger when upgrading a pre-release database.
-  db.exec('DROP TRIGGER IF EXISTS remote_live_message_delete');
   for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
     const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
     const toolId = `COALESCE(CASE WHEN json_valid(${ref}.metadata) THEN COALESCE(json_extract(${ref}.metadata,'$.toolUseId'),json_extract(${ref}.metadata,'$.toolCallId')) END,${ref}.id)`;
     // Replace pre-upgrade triggers before any desktop write; they wrote an optional join cache.
-    db.exec(`DROP TRIGGER IF EXISTS remote_live_tool_${operation.toLowerCase()};
-      CREATE TRIGGER remote_live_tool_${operation.toLowerCase()} AFTER ${operation} ON cowork_messages WHEN ${ref}.type IN ('tool_use','tool_result') BEGIN
-      INSERT INTO remote_live_tools VALUES(${ref}.session_id,${toolId},1) ON CONFLICT(session_id,tool_id) DO UPDATE SET revision=revision+1; END;
-      DROP TRIGGER IF EXISTS remote_live_message_${operation.toLowerCase()};
-      CREATE TRIGGER remote_live_message_${operation.toLowerCase()} AFTER ${operation} ON cowork_messages BEGIN
+    replaceCoreTrigger(db, `CREATE TRIGGER remote_live_tool_${operation.toLowerCase()} AFTER ${operation} ON cowork_messages WHEN ${ref}.type IN ('tool_use','tool_result') BEGIN
+      INSERT INTO remote_live_tools VALUES(${ref}.session_id,${toolId},1) ON CONFLICT(session_id,tool_id) DO UPDATE SET revision=revision+1; END;`);
+    replaceCoreTrigger(db, `CREATE TRIGGER remote_live_message_${operation.toLowerCase()} AFTER ${operation} ON cowork_messages BEGIN
       INSERT INTO remote_live_revisions VALUES(${ref}.session_id,${ref}.id,1,${operation === 'DELETE' ? 1 : 0})
       ON CONFLICT(session_id,object_id) DO UPDATE SET revision=revision+1,deleted=excluded.deleted;
       ${operation === 'DELETE' ? `INSERT INTO remote_control_revisions VALUES(OLD.session_id,1) ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
         INSERT INTO remote_control_pending SELECT OLD.session_id,'message.deleted:'||OLD.id,revision FROM remote_control_revisions WHERE session_id=OLD.session_id
-        ON CONFLICT(session_id,object_key) DO UPDATE SET revision=excluded.revision;` : ''} END;
-      DROP TRIGGER IF EXISTS remote_control_session_${operation.toLowerCase()};
-      CREATE TRIGGER remote_control_session_${operation.toLowerCase()} AFTER ${operation} ON cowork_sessions BEGIN
+        ON CONFLICT(session_id,object_key) DO UPDATE SET revision=excluded.revision;` : ''} END;`);
+    replaceCoreTrigger(db, `CREATE TRIGGER remote_control_session_${operation.toLowerCase()} AFTER ${operation} ON cowork_sessions BEGIN
       INSERT INTO remote_control_revisions VALUES(${ref}.id,1)
       ON CONFLICT(session_id) DO UPDATE SET revision=revision+1; END;`);
   }
+  })();
 }
 /** Derived membership only: original messages plus durable object/tool revisions remain in core. */
 export function initializeAvailabilityProjectionSources(db: Database.Database): void {

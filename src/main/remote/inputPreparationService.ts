@@ -5,7 +5,7 @@ import path from 'path';
 import { AgentId } from '../../shared/agent/constants';
 import { COWORK_IMAGE_ATTACHMENT_PREVIEW_FALLBACK_MAX_BYTES, type CoworkImageAttachmentPayload, estimateBase64DecodedBytes } from '../../shared/cowork/imageAttachments';
 import { REMOTE_TEXT_BYTES, type RemoteOwner } from '../../shared/remote/constants';
-import { RemoteInputIntent, RemoteInputMode, RemoteInputReason, type RemotePreparationClaim, type RemoteResolvedInput } from '../../shared/remote/input';
+import { RemoteInputIntent, RemoteInputMode, RemoteInputReason, RemoteInputRecovery, type RemoteInputRecoveryReceipt, type RemotePreparationClaim, type RemoteResolvedInput } from '../../shared/remote/input';
 import type { CoworkStore } from '../coworkStore';
 import { payloadHash, sameOwner } from './canonical';
 import type { RemoteAgentCatalog } from './remoteAgentCatalog';
@@ -353,6 +353,47 @@ export class InputPreparationService {
     if (!Number.isFinite(expiry)) throw new RemoteInputError(RemoteInputReason.Stale);
     prepared.expiresAt = Math.min(prepared.expiresAt, expiry);
     this.deps.store.remote.put(this.key(id), prepared);
+  }
+  private recoveryKey(id: string, owner: RemoteOwner, deviceId: string): string {
+    return `inputRecoveryDiagnostic:${JSON.stringify([this.targetId(), owner.userId, owner.scopeKey, deviceId, id])}`;
+  }
+  /** Diagnostic only: never changes a preparation, dispatch fence or command outcome. */
+  retainRecoveryDiagnostic(id: string, owner: RemoteOwner, deviceId: string): void {
+    this.assertOwner(owner, () => true);
+    const key = this.recoveryKey(id, owner, deviceId);
+    let previous: unknown;
+    try { previous = this.deps.store.remote.get(key); }
+    catch (error) { if (error instanceof SyntaxError) return; throw error; }
+    if (!previous && this.deps.store.remote.countKeys('inputRecoveryDiagnostic:', RemoteInputRecovery.DiagnosticLimit) >= RemoteInputRecovery.DiagnosticLimit)
+      throw new Error('REMOTE_INPUT_RECOVERY_DIAGNOSTIC_BUDGET');
+    this.deps.store.remote.put(key, { preparationId: id, owner, deviceId, targetId: this.targetId(), kind: RemoteInputRecovery.Unavailable });
+  }
+  /** Reconcile an existing manifest only; server enumeration never authorizes execution. */
+  recoverReceipt(receipt: RemoteInputRecoveryReceipt, owner: RemoteOwner, deviceId: string): boolean {
+    this.assertOwner(owner, () => true);
+    let prepared: LocalPreparedInput | null;
+    try { prepared = this.deps.store.remote.get<LocalPreparedInput>(this.key(receipt.preparationId)); }
+    catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      this.retainRecoveryDiagnostic(receipt.preparationId, owner, deviceId); return false;
+    }
+    if (!prepared || receipt.status !== 'ready' || !receipt.readyExpiresAt) return false;
+    const summary = receipt.targetSummary;
+    let matches = false;
+    try { matches = payloadHash(prepared.resolvedInput) === prepared.inputDigest
+      && payloadHash(summary?.resolvedInput) === prepared.inputDigest && (!receipt.request || payloadHash(receipt.request) === prepared.requestHash); }
+    catch { /* Malformed local/server value is isolated without changing the manifest. */ }
+    if (prepared.cacheCleanup || prepared.preparationId !== receipt.preparationId || !/^[a-f0-9]{64}$/u.test(prepared.requestHash)
+      || !prepared.resolvedInput || typeof prepared.resolvedInput !== 'object' || !Number.isFinite(prepared.expiresAt)
+      || prepared.targetId !== this.targetId() || !sameOwner(prepared.owner, owner) || prepared.deviceId !== deviceId
+      || summary?.deviceId !== deviceId || !summary.resolvedInput || typeof summary.resolvedInput !== 'object' || prepared.inputDigest !== receipt.inputDigest
+      || !matches
+      || prepared.boundCommandId !== (receipt.boundCommandId ?? null) || !Number.isFinite(Date.parse(receipt.readyExpiresAt))) {
+      this.retainRecoveryDiagnostic(receipt.preparationId, owner, deviceId); return false;
+    }
+    this.confirmReady(receipt.preparationId, owner, deviceId, receipt.readyExpiresAt);
+    this.deps.store.remote.remove(this.recoveryKey(receipt.preparationId, owner, deviceId));
+    return true;
   }
   private async validateFiles(prepared: LocalPreparedInput, check: () => void): Promise<void> {
     for (const file of prepared.files) {

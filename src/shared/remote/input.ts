@@ -43,3 +43,17 @@ export const RemoteInputOperationPhase = {
   Prepared: 'prepared', Dispatched: 'dispatched', Confirmed: 'confirmed',
   KnownNotApplied: 'known_not_applied', Unknown: 'unknown',
 } as const;
+
+/** Recovery is a server capability, not a desktop execution capability. */
+export const RemoteInputRecovery = { Capability: 'isolated_input_recovery_v1', Unavailable: 'stored_data_unavailable',
+  Limit: 20, RetryMs: 30_000, DiagnosticLimit: 200 } as const;
+export interface RemoteInputRecoveryReceipt {
+  preparationId: string; status: string; inputDigest?: string; readyExpiresAt?: string; boundCommandId?: string | null;
+  request?: RemoteInputRequest;
+  targetSummary?: { deviceId?: string; sessionId?: string | null; resolvedInput?: RemoteResolvedInput | null };
+}
+export interface RemoteInputRecoveryPage {
+  items: RemoteInputRecoveryReceipt[];
+  unresolvedItems: Array<{ preparationId: string; sessionId?: string; diagnostic: { kind: string; retryAfterMs: number } }>;
+  nextCursor: string | null; scanComplete: boolean;
+}

@@ -43,6 +43,7 @@ function fixture(getTargetId?: () => string | null) {
   const remote = { get: <T>(key: string): T | null => values.get(key) as T ?? null,
     put: (key: string, value: unknown) => values.set(key, structuredClone(value)),
     remove: (key: string) => values.delete(key),
+    countKeys: (prefix: string, limit: number) => Math.min(limit, [...values.keys()].filter(key => key.startsWith(prefix)).length),
     entries: (prefix: string, after = '', limit = 50) => [...values.entries()].filter(([key]) => key.startsWith(prefix) && key > after).sort(([a], [b]) => a.localeCompare(b)).slice(0, limit).map(([key, value]) => ({ key, value })),
     owner: () => owner, localSessionId: () => session?.id, inputVersion: () => '0', controlVersion: () => '4' };
   const store = { remote, assertAgentAccess: vi.fn(), getAgent: () => ({ model: 'provider/model', thinkingLevel: 'high', enabled }),
@@ -366,4 +367,43 @@ it('preserves account cancellation when required image decoding also fails', asy
   } });
   await expect(service.prepare(owner, 'pc', claim, async () => new Response('image'), () => true)).rejects.toThrow(RemoteInputReason.Account);
   expect(values.has('inputPreparation:prep')).toBe(false);
+});
+
+it('retains unresolved input diagnostics across restart and clears only a matching ready receipt', async () => {
+  const { service, deps, claim, values } = fixture(() => Target.First);
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  service.retainRecoveryDiagnostic('prep', owner, 'pc');
+  const diagnosticKeys = () => [...values.keys()].filter(key => key.startsWith('inputRecoveryDiagnostic:'));
+  const reopened = new InputPreparationService(deps);
+  const receipt = { preparationId: 'prep', status: 'ready', inputDigest: prepared.inputDigest,
+    readyExpiresAt: new Date(prepared.expiresAt).toISOString(), boundCommandId: null,
+    targetSummary: { deviceId: 'pc', resolvedInput: prepared.resolvedInput } };
+  expect(reopened.recoverReceipt({ ...receipt, inputDigest: 'wrong' }, owner, 'pc')).toBe(false);
+  expect(diagnosticKeys()).toHaveLength(1);
+  expect(reopened.recoverReceipt({ ...receipt, boundCommandId: 'unknown-command' }, owner, 'pc')).toBe(false);
+  expect(diagnosticKeys()).toHaveLength(1);
+  expect(reopened.recoverReceipt(receipt, owner, 'pc')).toBe(true);
+  expect(diagnosticKeys()).toHaveLength(0);
+  expect(reopened.read('prep', owner, 'pc').boundCommandId).toBeNull();
+  expect(reopened.read('prep', owner, 'pc').inputDigest).toBe(prepared.inputDigest);
+});
+it('never clears diagnostics for absent or terminal preparations and never recreates manifests from receipts', () => {
+  const { service, values } = fixture(() => Target.First);
+  service.retainRecoveryDiagnostic('missing', owner, 'pc');
+  expect(service.recoverReceipt({ preparationId: 'missing', status: 'failed' }, owner, 'pc')).toBe(false);
+  expect([...values.keys()].filter(key => key.startsWith('inputRecoveryDiagnostic:'))).toHaveLength(1);
+  expect([...values.keys()].filter(key => key.startsWith('inputPreparation:'))).toHaveLength(0);
+});
+
+it('isolates a malformed local ready manifest without hiding shared storage errors', async () => {
+  const { service, deps, claim, values } = fixture();
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  values.set('inputPreparation:bad', { ...prepared, preparationId: 'bad', resolvedInput: undefined });
+  const receipt = { preparationId: 'bad', status: 'ready', inputDigest: prepared.inputDigest,
+    readyExpiresAt: new Date(prepared.expiresAt).toISOString(), targetSummary: { deviceId: 'pc', resolvedInput: prepared.resolvedInput } };
+  expect(service.recoverReceipt(receipt, owner, 'pc')).toBe(false);
+  expect(service.recoverReceipt({ ...receipt, preparationId: 'prep' }, owner, 'pc')).toBe(true);
+  expect(values.get('inputPreparation:bad')).toMatchObject({ preparationId: 'bad' });
+  vi.spyOn(deps.store.remote, 'get').mockImplementation(() => { throw new Error('SQLITE_IOERR'); });
+  expect(() => service.recoverReceipt(receipt, owner, 'pc')).toThrow('SQLITE_IOERR');
 });

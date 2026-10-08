@@ -63,3 +63,10 @@ describe('file snapshot worker scheduling', () => {
     expect(await first).toBe('healthy');
   });
 });
+
+it('preserves a revoked authorization before dispatch without spawning a worker', async () => {
+  const { verifyRemoteFileSnapshot } = await import('./remoteFileSnapshots');
+  let checks = 0;
+  await expect(verifyRemoteFileSnapshot(snapshot, () => ++checks < 2)).rejects.toThrow('FILE_ACCESS_DENIED');
+  expect(state.workers).toHaveLength(0);
+});

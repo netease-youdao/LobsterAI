@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import path from 'path';
 
 import { payloadHash, stableJson } from './canonical';
+import { advanceAvailabilityMigration, AvailabilityMigration } from './remoteAvailabilityMigration';
 import { assertRemoteSidecarHeadroom } from './remoteSidecarHeadroom';
 import { emitCommittedTelemetry, observeSyncCommit, SyncTelemetry } from './remoteSyncTelemetry';
 import { captureRemoteTelemetry, remoteTelemetryEvent } from './remoteTelemetry';
@@ -40,20 +41,36 @@ function decode(body: string): Record<string, any> {
 export class RemoteAvailabilityStore {
   private database: Database.Database | null = null;
   private telemetryStorageBlocked = false;
-  constructor(private readonly coreDatabase: string) {}
+  constructor(private readonly coreDatabase: string | Database.Database) {}
+  private migrationReady = false;
+  private migrationResume: ReturnType<typeof setImmediate> | null = null;
+  private ready(database: Database.Database): Database.Database {
+    if (this.migrationResume) throw new Error(AvailabilityMigration.Pending);
+    if (!this.migrationReady) this.migrationReady = advanceAvailabilityMigration(database);
+    if (!this.migrationReady) {
+      this.migrationResume = setImmediate(() => { this.migrationResume = null; }); this.migrationResume.unref?.();
+      throw new Error(AvailabilityMigration.Pending);
+    }
+    if (this.telemetryStorageBlocked) remoteTelemetryEvent(SyncTelemetry.Event.Admission,
+      { domain: 'control', fromState: 'blocked', toState: 'ready', reason: SyncTelemetry.Reason.None });
+    this.telemetryStorageBlocked = false;
+    return database;
+  }
   get db(): Database.Database {
-    if (this.database?.open) return this.database;
+    if (this.database?.open) return this.ready(this.database);
     let core: Database.Database | null = null, database: Database.Database | null = null;
     try {
       let locator: { ledger_id: string; phase: string } | undefined;
-      if (this.coreDatabase !== ':memory:') {
-        core = new Database(this.coreDatabase, { fileMustExist: true, timeout: 100 });
+      const coreFilename = typeof this.coreDatabase === 'string' ? this.coreDatabase : this.coreDatabase.name;
+      if (coreFilename !== ':memory:') {
+        if (typeof this.coreDatabase !== 'string' && this.coreDatabase.inTransaction) throw new Error('REMOTE_CONTROL_LEDGER_CORE_TRANSACTION');
+        core = typeof this.coreDatabase === 'string' ? new Database(coreFilename, { fileMustExist: true, timeout: 100 }) : this.coreDatabase;
         core.pragma('synchronous = FULL');
         core.exec(`CREATE TABLE IF NOT EXISTS remote_control_ledger_locator(id INTEGER PRIMARY KEY CHECK(id=1),ledger_id TEXT NOT NULL,phase TEXT NOT NULL)`);
         core.prepare("INSERT OR IGNORE INTO remote_control_ledger_locator VALUES(1,?,'prepared')").run(randomUUID());
         locator = core.prepare('SELECT ledger_id,phase FROM remote_control_ledger_locator WHERE id=1').get() as { ledger_id: string; phase: string };
       }
-      const filename = this.coreDatabase === ':memory:' ? ':memory:' : path.join(path.dirname(this.coreDatabase), 'remote-control.sqlite');
+      const filename = coreFilename === ':memory:' ? ':memory:' : path.join(path.dirname(coreFilename), 'remote-control.sqlite');
       database = new Database(filename, { fileMustExist: locator?.phase === 'ready', timeout: 100 });
       database.pragma('journal_mode = WAL'); database.pragma('synchronous = FULL'); database.pragma('busy_timeout = 100');
       const identityTable = database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='availability_identity'").get();
@@ -81,53 +98,18 @@ export class RemoteAvailabilityStore {
         if (!columns.has(column)) database.exec(`ALTER TABLE availability_requests ADD COLUMN ${column} TEXT`);
       }
       database.exec('CREATE INDEX IF NOT EXISTS idx_availability_request_object ON availability_requests(scope,lane,local_id,object_kind,object_id)');
-      database.transaction(() => {
-        for (const row of database!.prepare('SELECT key,body FROM availability_requests WHERE request_hash IS NULL').iterate() as Iterable<{ key: string; body: string }>) {
-          let saved: Record<string, any>;
-          try { saved = decode(row.body); } catch { continue; /* Keep undecodable legacy evidence. */ }
-          const content = saved.body;
-          if (!record(content)) continue;
-          database!.prepare('UPDATE availability_requests SET object_id=?,object_kind=?,request_hash=? WHERE key=?')
-              .run(identifier(content.objectId) ? content.objectId : null, ['message','tool'].includes(content.objectKind) ? content.objectKind : null,
-                payloadHash(saved), row.key);
-        }
-      })();
-      const usageExists = database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='availability_usage'").get();
-      database.transaction(() => {
-        database!.exec(`CREATE TABLE IF NOT EXISTS availability_usage(lane TEXT NOT NULL,scope TEXT NOT NULL,local_id TEXT NOT NULL,
-          active_bytes INTEGER NOT NULL,archive_bytes INTEGER NOT NULL,reserved_bytes INTEGER NOT NULL,PRIMARY KEY(lane,scope,local_id));`);
-        const usage = (alias: string): string[] => {
-          const bytes = `length(CAST(${alias}.body AS BLOB))+COALESCE(length(CAST(${alias}.resolution_body AS BLOB)),0)`;
-          return [`CASE WHEN ${alias}.resolution_receipt IS NULL THEN ${bytes} ELSE 0 END`,
-            `CASE WHEN ${alias}.resolution_receipt IS NULL THEN 0 ELSE ${bytes}+length(CAST(${alias}.resolution_receipt AS BLOB)) END`,
-            `CASE WHEN ${alias}.resolution_receipt IS NULL THEN ${RECEIPT_RESERVE_BYTES} ELSE 0 END`];
-        };
-        if (!usageExists) database!.exec(`INSERT INTO availability_usage SELECT lane,scope,local_id,
-          SUM(${usage('availability_requests').join('),SUM(')}) FROM availability_requests GROUP BY lane,scope,local_id`);
-        for (const event of ['INSERT', 'UPDATE', 'DELETE']) {
-          const subtract = event === 'INSERT' ? '' : `UPDATE availability_usage SET ${['active_bytes','archive_bytes','reserved_bytes']
-            .map((column, index) => `${column}=${column}-(${usage('OLD')[index]})`).join(',')}
-            WHERE lane=OLD.lane AND scope=OLD.scope AND local_id=OLD.local_id;`;
-          const add = event === 'DELETE' ? '' : `INSERT INTO availability_usage VALUES(NEW.lane,NEW.scope,NEW.local_id,${usage('NEW').join(',')})
-            ON CONFLICT(lane,scope,local_id) DO UPDATE SET active_bytes=active_bytes+excluded.active_bytes,
-              archive_bytes=archive_bytes+excluded.archive_bytes,reserved_bytes=reserved_bytes+excluded.reserved_bytes;`;
-          database!.exec(`CREATE TRIGGER IF NOT EXISTS availability_usage_${event.toLowerCase()} AFTER ${event} ON availability_requests BEGIN ${subtract}${add} END;`);
-        }
-      })();
       // The locator commits before any caller can send a request sealed in this ledger.
       core?.prepare("UPDATE remote_control_ledger_locator SET phase='ready' WHERE id=1 AND phase='prepared'").run();
       this.database = database;
-      if (this.telemetryStorageBlocked) remoteTelemetryEvent(SyncTelemetry.Event.Admission,
-        { domain: 'control', fromState: 'blocked', toState: 'ready', reason: SyncTelemetry.Reason.None });
-      this.telemetryStorageBlocked = false;
-      return database;
+      return this.ready(database);
     } catch (error) {
       if (!this.telemetryStorageBlocked) remoteTelemetryEvent(SyncTelemetry.Event.Admission,
         { domain: 'control', fromState: 'unknown', toState: 'blocked', reason: SyncTelemetry.Reason.StorageUnavailable });
       this.telemetryStorageBlocked = true;
-      database?.close(); throw error;
+      if (!(error instanceof Error && error.message === AvailabilityMigration.Pending)) { database?.close(); this.database = null; }
+      throw error;
     }
-    finally { core?.close(); }
+    finally { if (typeof this.coreDatabase === 'string') core?.close(); }
   }
   health(scope: string): { sessions: number; pendingSessions: number; degraded: boolean } {
     const sessions = this.db.prepare('SELECT COUNT(*) AS count FROM availability_sessions WHERE scope=?').get(scope) as { count: number };
@@ -139,7 +121,10 @@ export class RemoteAvailabilityStore {
     const corrupt = this.db.prepare('SELECT 1 FROM availability_sessions WHERE scope=? AND NOT json_valid(body) LIMIT 1').get(scope);
     return { sessions: sessions.count, pendingSessions: pending.count, degraded: !!faults || !!corrupt };
   }
-  close(): void { this.database?.close(); this.database = null; }
+  close(): void {
+    if (this.migrationResume) clearImmediate(this.migrationResume); this.migrationResume = null;
+    this.database?.close(); this.database = null; this.migrationReady = false;
+  }
   session(scope: string, localId: string): AvailabilitySession | null {
     const row = this.db.prepare('SELECT body FROM availability_sessions WHERE scope=? AND local_id=?').get(scope, localId) as { body: string } | undefined;
     if (!row) return null;
@@ -155,9 +140,11 @@ export class RemoteAvailabilityStore {
     return !!this.db.prepare('SELECT 1 FROM availability_sessions WHERE scope=? AND local_id=?').get(scope, localId);
   }
   saveSession(value: AvailabilitySession): void {
+    if (!this.hasSession(value.scope, value.localId)) assertRemoteSidecarHeadroom(this.db.name, Buffer.byteLength(stableJson(value)), RECEIPT_RESERVE_BYTES);
     this.db.prepare('INSERT INTO availability_sessions VALUES(?,?,?) ON CONFLICT(scope,local_id) DO UPDATE SET body=excluded.body').run(value.scope, value.localId, stableJson(value));
   }
   private decodeRequest(row: { key: string; lane: string; scope: string; local_id: string; body: string; request_hash: string | null }): AvailabilityRequest {
+    if (typeof row.body !== 'string') throw new AvailabilityRecordError();
     const value = decode(row.body);
     if (value.key !== row.key || value.lane !== row.lane || value.scope !== row.scope || value.localId !== row.local_id
       || !record(value.body) || typeof value.pathname !== 'string' || !['GET','POST','PUT'].includes(value.method)
@@ -172,7 +159,7 @@ export class RemoteAvailabilityStore {
   }
   scanPending(scope: string, lane: 'control' | 'live', localId: string, after = '', limit = 32): { rows: AvailabilityRequestRow[]; nextCursor: string | null } {
     const size = Math.max(1, Math.min(100, limit));
-    const raw = this.db.prepare('SELECT * FROM availability_requests WHERE scope=? AND lane=? AND local_id=? AND resolution_receipt IS NULL AND key>? ORDER BY key LIMIT ?')
+    const raw = this.db.prepare('SELECT key,lane,scope,local_id,object_id,object_kind,request_hash,CASE WHEN octet_length(body)<=1048576 THEN body ELSE NULL END AS body FROM availability_requests WHERE scope=? AND lane=? AND local_id=? AND resolution_receipt IS NULL AND key>? ORDER BY key LIMIT ?')
       .all(scope, lane, localId, after, size) as any[];
     const rows: AvailabilityRequestRow[] = raw.map(row => {
       const identity = { key: row.key, localId: row.local_id, objectId: row.object_id, objectKind: row.object_kind };
@@ -286,6 +273,7 @@ export class RemoteAvailabilityStore {
   }
   objectFault(scope: string, localId: string, objectKey: string, fingerprint: string, now = Date.now()): void {
     const previous = this.db.prepare('SELECT * FROM availability_faults WHERE scope=? AND local_id=? AND object_key=?').get(scope, localId, objectKey) as any;
+    if (!previous) assertRemoteSidecarHeadroom(this.db.name, Buffer.byteLength(objectKey) + 256, 0);
     const sameWindow = previous && previous.fingerprint === fingerprint && now - previous.window_start < 86400000;
     const attempts = sameWindow ? previous.attempts + 1 : 1, start = sameWindow ? previous.window_start : now;
     const next = attempts >= 2 ? start + 86400000 : now + 300000;
@@ -299,6 +287,7 @@ export class RemoteAvailabilityStore {
     return row ? { sourceRevision: row.source_revision, result: JSON.parse(row.result) } : null;
   }
   skipObject(scope: string, localId: string, objectKey: string, sourceRevision: string): void {
+    assertRemoteSidecarHeadroom(this.db.name, Buffer.byteLength(objectKey) + 256, RECEIPT_RESERVE_BYTES);
     this.db.prepare(`INSERT INTO availability_objects VALUES(?,?,?,?,?) ON CONFLICT(scope,local_id,object_id)
       DO UPDATE SET source_revision=excluded.source_revision,result=excluded.result`).run(scope, localId, objectKey, sourceRevision, stableJson({ state: 'local_only' }));
   }

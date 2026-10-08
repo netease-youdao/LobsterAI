@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { RemoteHistoryStore } from './remoteHistoryStore';
 import { RemoteStore } from './remoteStore';
 
 vi.mock('./remoteSyncLog', async importOriginal => ({ ...await importOriginal<typeof import('./remoteSyncLog')>(), remoteDiagnosticLog: vi.fn() }));
@@ -282,3 +283,22 @@ it('replaces pre-upgrade core triggers that still reference an optional cache', 
   expect(() => reopened.transaction(() => db.prepare("INSERT INTO cowork_messages VALUES('m','s','assistant','ok',NULL,2,1)").run())).not.toThrow();
   expect(reopened.projectionRevision('s')).toBe(1);
 });
+
+ it('defers a broken history locator schema without weakening healthy desktop core writes', () => {
+  const db = new Database(':memory:'); databases.push(db);
+  db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT);
+    CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER)`);
+  const migrate = vi.spyOn(RemoteHistoryStore, 'initializeCore').mockImplementation(() => { throw new Error('optional history schema unavailable'); });
+  const store = new RemoteStore(db, { deferSynchronization: true, restoreRuns: false });
+  expect(() => store.initializeSynchronization()).toThrow('optional history schema unavailable');
+  migrate.mockRestore();
+  store.transaction(() => { db.exec("INSERT INTO cowork_sessions VALUES('s','Task',1,1,'idle')"); store.assignNew('s', owner, 'local_create'); });
+  expect(() => store.beginRun('s')).not.toThrow();
+  expect(store.owner('s')).toEqual(owner);
+ });
+ it('does not rebuild unchanged core triggers on subsequent startup', () => {
+  const { db } = fixture();
+  const version = db.pragma('schema_version', { simple: true });
+  new RemoteStore(db, { deferredProjection: true, deferSynchronization: true, restoreRuns: false });
+  expect(db.pragma('schema_version', { simple: true })).toBe(version);
+ });

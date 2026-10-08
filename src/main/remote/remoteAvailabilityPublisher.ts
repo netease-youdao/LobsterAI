@@ -5,6 +5,7 @@ import { payloadHash, stableJson } from './canonical';
 import { availabilityControlSnapshot,type ControlSnapshot } from './remoteAvailabilitySource';
 import { AvailabilityReadState, type AvailabilityRequest, type AvailabilitySession, RemoteAvailabilityStore } from './remoteAvailabilityStore';
 import { type HistoryContext, type HistoryOperation,HistoryPreparation } from './remoteHistoryStore';
+import { recentLiveCandidates } from './remoteLiveCandidates';
 import { RemoteLiveProjectionJob } from './remoteLiveProjectionJob';
 import { recoveryEvents, recoveryRequired, recoverySourceManifest } from './remoteRecoveryProof';
 import type { CoreRemoteBinding, RemoteStore } from './remoteStore';
@@ -44,9 +45,14 @@ export class RemoteAvailabilityPublisher {
   private readonly liveScan = new Map<string, number>();
   private readonly scanOffsets = new Map<string, number>();
   private readonly contentRepresentations = new Map<string, string>();
-  constructor(private readonly deps: Dependencies) { this.ledger = new RemoteAvailabilityStore(deps.store.db.name); }
+  constructor(private readonly deps: Dependencies) { this.ledger = new RemoteAvailabilityStore(deps.store.db); }
+  private deferHistory(key: string, until: number): void {
+    for (const [entry, expiry] of this.historyRetry) if (expiry <= Date.now()) this.historyRetry.delete(entry);
+    if (this.historyRetry.size >= 1024 && !this.historyRetry.has(key)) this.historyRetry.delete(this.historyRetry.keys().next().value!);
+    this.historyRetry.set(key, until);
+  }
   start(): void { this.stopped = false; this.wake(); }
-  stop(): void { this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null; this.encoder.cancel(); this.contentRepresentations.clear(); }
+  stop(): void { this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null; this.encoder.cancel(); this.contentRepresentations.clear(); this.historyRetry.clear(); this.pendingCursors.clear(); this.liveScan.clear(); this.scanOffsets.clear(); this.failures.clear(); }
   dispose(): void { this.stop(); this.ledger.close(); }
   ownsHistory(localId: string): boolean {
     const context = this.deps.context();
@@ -452,7 +458,7 @@ export class RemoteAvailabilityPublisher {
         const prepared = history.prepareResult(historyContext);
         if (prepared.kind === HistoryPreparation.StorageDeferred) return;
         if (prepared.kind !== HistoryPreparation.Ready) {
-          if (prepared.kind === HistoryPreparation.TaskBlocked) this.historyRetry.set(key, prepared.retryAt);
+          if (prepared.kind === HistoryPreparation.TaskBlocked) this.deferHistory(key, prepared.retryAt);
           continue;
         }
         const session = prepared.session;
@@ -461,7 +467,7 @@ export class RemoteAvailabilityPublisher {
           if (!context.historySupported) continue;
           const metadata = history.legacyMetadata(historyContext);
           if (metadata.sourceSeq === metadata.exactAckSeq || BigInt(metadata.sourceSeq) <= BigInt(session.resolvedSourceSeq)) {
-            this.historyRetry.set(key, Date.now() + 30 * 60_000); continue;
+            this.deferHistory(key, Date.now() + 30 * 60_000); continue;
           }
           const query = new URLSearchParams({ deviceId: context.deviceId, sessionId: state.sessionId, localSessionId: state.localId,
             writerGeneration: state.writerGeneration, mode: 'online', connectionGeneration: context.generation });
@@ -469,7 +475,7 @@ export class RemoteAvailabilityPublisher {
           if (!this.current(context)) return;
           const after = String(server.historyResolvedSourceSeq);
           if (!/^(0|[1-9][0-9]*)$/u.test(after) || !server.streamEpoch) throw new Error('REMOTE_HISTORY_STATE_INVALID');
-          if (BigInt(after) >= BigInt(metadata.sourceSeq)) { this.historyRetry.set(key, Date.now() + 30 * 60_000); continue; }
+          if (BigInt(after) >= BigInt(metadata.sourceSeq)) { this.deferHistory(key, Date.now() + 30 * 60_000); continue; }
           // At most 64 archived events / 512 KiB enter one attempt; unknown events stop only history.
           const rows = history.legacySourcePage(historyContext,after,metadata.sourceSeq,64);
           if (!rows.length) throw new Error('REMOTE_HISTORY_SOURCE_EVIDENCE_MISSING');
@@ -539,7 +545,7 @@ export class RemoteAvailabilityPublisher {
         remoteDiagnosticLog('remote.history.deferred', { localSessionId: row.local_id, lane: 'history', error, reason: 'REQUEST_FAILED' }, 'warn');
         if (error instanceof SyntaxError || (error instanceof Error && /REMOTE_(RECOVERY|HISTORY)_.*(EVIDENCE|UNCOVERED|CONFLICT|MISSING|INVALID)/u.test(error.message)))
           this.ledger.objectFault(context.scope,row.local_id,'history-recovery',payloadHash(remoteSyncErrorMetadata(error)));
-        this.historyRetry.set(key,Date.now() + Math.max(status === 400 || status === 409 ? 30 * 60_000 : 60_000,Number((error as { retryAfterMs?: number }).retryAfterMs) || 0));
+        this.deferHistory(key,Date.now() + Math.max(status === 400 || status === 409 ? 30 * 60_000 : 60_000,Number((error as { retryAfterMs?: number }).retryAfterMs) || 0));
       }
     }
   }
@@ -656,23 +662,7 @@ export class RemoteAvailabilityPublisher {
           continue;
         }
         const rowStart = sent;
-      // Seed only a bounded recent window. Old history is handled by explicit recovery, never by this live lane.
-      this.deps.store.db.prepare(`INSERT INTO remote_live_revisions(session_id,object_id,revision,deleted)
-        SELECT session_id,id,1,0 FROM (SELECT session_id,id FROM cowork_messages WHERE session_id=? ORDER BY sequence DESC LIMIT 64) WHERE 1
-        ON CONFLICT(session_id,object_id) DO NOTHING`).run(row.local_id);
-      this.deps.store.db.prepare(`INSERT INTO remote_live_tool_sources(session_id,message_id,tool_id)
-        SELECT session_id,id,COALESCE(CASE WHEN json_valid(metadata) THEN COALESCE(json_extract(metadata,'$.toolUseId'),json_extract(metadata,'$.toolCallId')) END,id)
-        FROM (SELECT session_id,id,metadata FROM cowork_messages WHERE session_id=? AND type IN ('tool_use','tool_result') ORDER BY sequence DESC LIMIT 64) WHERE 1
-        ON CONFLICT(session_id,message_id) DO UPDATE SET tool_id=excluded.tool_id`).run(row.local_id);
-      this.deps.store.db.prepare(`INSERT INTO remote_live_tools SELECT DISTINCT session_id,tool_id,1 FROM remote_live_tool_sources WHERE session_id=?
-        ON CONFLICT(session_id,tool_id) DO NOTHING`).run(row.local_id);
-      const candidates = this.deps.store.db.prepare(`SELECT r.object_id,r.revision,'message' AS kind,m.sequence AS position
-        FROM remote_live_revisions r JOIN cowork_messages m ON m.id=r.object_id AND m.session_id=r.session_id
-        WHERE r.session_id=? AND r.deleted=0 AND m.type IN ('user','assistant','system','tool_use','tool_result')
-        UNION ALL SELECT t.tool_id AS object_id,t.revision,'tool' AS kind,MAX(m.sequence) AS position
-        FROM remote_live_tools t JOIN remote_live_tool_sources ts ON ts.session_id=t.session_id AND ts.tool_id=t.tool_id
-        JOIN cowork_messages m ON m.session_id=ts.session_id AND m.id=ts.message_id WHERE t.session_id=? GROUP BY t.tool_id
-        ORDER BY position DESC,kind DESC LIMIT 64`).all(row.local_id,row.local_id) as Array<{ object_id: string; revision: number; kind: 'message' | 'tool' }>;
+        const candidates = recentLiveCandidates(this.deps.store.db, row.local_id);
         // Corrupt body bytes cannot hide the original operation or let a newer version bypass it.
         const page = this.ledger.scanPending(context.scope, 'live', row.local_id, this.pendingCursors.get(taskKey));
         if (page.nextCursor) this.pendingCursors.set(taskKey, page.nextCursor); else this.pendingCursors.delete(taskKey);

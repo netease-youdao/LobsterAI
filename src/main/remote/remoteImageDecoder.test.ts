@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ windows: [] as any[], metrics: [] as any[], response: null as any, stop: true, pid: 12345, loading: false }));
+const mocks = vi.hoisted(() => ({ windows: [] as any[], metrics: [] as any[], response: null as any, stop: true, pid: 12345, loading: false, constructorFails: false, destroyFails: false }));
 vi.mock('electron', () => ({
   app: { getAppMetrics: () => mocks.metrics },
   BrowserWindow: class {
@@ -18,9 +18,9 @@ vi.mock('electron', () => ({
         if (mocks.stop) { mocks.metrics = []; this.webContents.emit('render-process-gone'); }
       }),
     });
-    constructor(readonly options: unknown) { mocks.windows.push(this); mocks.metrics = [{ pid: 12345, memory: { workingSetSize: 1000 } }]; }
+    constructor(readonly options: unknown) { if (mocks.constructorFails) throw new Error('Window failed'); mocks.windows.push(this); mocks.metrics = [{ pid: 12345, memory: { workingSetSize: 1000 } }]; }
     isDestroyed(): boolean { return this.destroyed; }
-    destroy(): void { this.destroyed = true; }
+    destroy(): void { if (mocks.destroyFails) throw new Error('Destroy failed'); this.destroyed = true; }
     async loadURL(): Promise<void> { if (mocks.loading) await new Promise<void>(() => undefined); }
   },
 }));
@@ -32,7 +32,7 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
 let root: string, input: string;
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-image-test-')); input = path.join(root, 'input.png'); fs.writeFileSync(input, png);
-  mocks.windows = []; mocks.stop = true; mocks.metrics = []; mocks.pid = 12345; mocks.loading = false;
+  mocks.windows = []; mocks.stop = true; mocks.metrics = []; mocks.pid = 12345; mocks.loading = false; mocks.constructorFails = false; mocks.destroyFails = false;
   vi.spyOn(process, 'kill').mockImplementation(pid => {
     if (mocks.metrics.some(value => value.pid === pid)) return true;
     throw Object.assign(new Error('Exited'), { code: 'ESRCH' });
@@ -71,6 +71,31 @@ describe('remote image admission and renderer lifetime', () => {
     expect(mocks.windows[0].options.webPreferences).toMatchObject({ sandbox: true, contextIsolation: true, nodeIntegration: false });
     expect(mocks.windows[0].webContents.forcefullyCrashRenderer).toHaveBeenCalledOnce();
     expect(mocks.metrics).toEqual([]);
+  });
+  it('releases the lane when BrowserWindow construction fails before a renderer is owned', async () => {
+    mocks.constructorFails = true;
+    await expect(new RemoteImageDecoder().convert(input, path.join(root, 'failed.png'), 1000, { current: () => true })).rejects.toThrow('Window failed');
+    mocks.constructorFails = false;
+    await expect(new RemoteImageDecoder().convert(input, path.join(root, 'ok.png'), 1000, { current: () => true })).resolves.toMatchObject({ mimeType: 'image/png' });
+  });
+  it('continues retirement after the bounded wait and admits decoding only after confirmed absence', async () => {
+    const decoder = new RemoteImageDecoder(), abort = new AbortController();
+    mocks.stop = true; mocks.destroyFails = true; mocks.response = new Promise(() => undefined);
+    const pending = decoder.convert(input, path.join(root, 'cancelled.png'), 1000, { current: () => true, signal: abort.signal });
+    const rejected = expect(pending).rejects.toThrow('INPUT_UNSUPPORTED');
+    await vi.waitFor(() => expect(mocks.windows[0]?.webContents.executeJavaScript).toHaveBeenCalledOnce());
+    vi.useFakeTimers(); abort.abort(); await vi.advanceTimersByTimeAsync(5100); await rejected;
+    await expect(new RemoteImageDecoder().preview(input, { current: () => true })).rejects.toThrow('INPUT_UNSUPPORTED');
+    expect(mocks.windows).toHaveLength(1);
+    expect(mocks.metrics).toEqual([]); // Renderer gone alone cannot release an undestroyed window.
+    mocks.destroyFails = false; mocks.stop = true;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mocks.windows[0].destroyed).toBe(true);
+    vi.useRealTimers();
+    mocks.response = { base64Data: png.toString('base64'), mimeType: 'image/png', width: 1, height: 1 };
+    await expect(new RemoteImageDecoder().convert(input, path.join(root, 'recovered.png'), 1000, { current: () => true })).resolves.toMatchObject({ mimeType: 'image/png' });
+    expect(mocks.windows).toHaveLength(2);
+    expect(fs.existsSync(path.join(root, 'cancelled.png'))).toBe(false);
   });
   it('rejects forged or over-budget decoder output and preserves any existing destination', async () => {
     const target = path.join(root, 'out.png'); fs.writeFileSync(target, 'existing');
@@ -120,7 +145,7 @@ describe('remote image admission and renderer lifetime', () => {
       await vi.waitFor(() => expect(mocks.windows[0].webContents.executeJavaScript).toHaveBeenCalledOnce());
       vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('Unobservable'), { code: 'EPERM' }); });
     }
-    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     abort.abort(); await vi.advanceTimersByTimeAsync(5100); await rejected;
     await expect(new Decoder().preview(input, { current: () => true })).rejects.toThrow('INPUT_UNSUPPORTED');
     expect(mocks.windows).toHaveLength(1);
