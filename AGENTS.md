@@ -219,6 +219,11 @@ Key modules:
   migrations, and local metadata.
 - `src/main/mcp/`: MCP server storage, runtime, marketplace, and launch
   resolution.
+- `src/main/office/`: in-place Office editors (Word, Excel, PowerPoint): file
+  store, package admission, agent tool bridge and MCP servers, all driven by
+  `MAIN_OFFICE_FORMATS`. See
+  `specs/features/office-editing/2026-09-28-office-module-architecture.md`
+  before adding a format.
 
 Security model:
 - Renderer uses `src/main/preload.ts` and `contextBridge`.
@@ -246,6 +251,9 @@ Main areas:
   session UI.
 - `src/renderer/components/artifacts/`: artifact panel, badges, preview cards,
   renderers, and file directory view.
+- `src/renderer/services/office/` and
+  `src/renderer/components/artifacts/renderers/office/`: Office editor
+  sessions, agent handlers, editor shell, toolbars and previews.
 - `src/renderer/components/scheduledTasks/`: scheduled task list, form, detail,
   run history, and template UI.
 - `src/renderer/components/im/`: IM platform settings and multi-instance UI.
@@ -264,6 +272,7 @@ Useful shared areas:
 - `src/shared/auth/`
 - `src/shared/cowork/`
 - `src/shared/artifactPreview/`
+- `src/shared/office/` (`OFFICE_EDITORS`, the Office editor table)
 - `src/shared/mcp/`
 - `src/shared/providers/`
 - `src/shared/platform/`

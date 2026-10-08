@@ -37,6 +37,31 @@ export const CoworkShortcutDirection = {
 export type CoworkShortcutDirection =
   typeof CoworkShortcutDirection[keyof typeof CoworkShortcutDirection];
 
+/** How one step renders inside an activity run. */
+export const ActivityEntryVariant = {
+  /** The step's own compact line, expandable for its detail. */
+  Row: 'row',
+} as const;
+
+export type ActivityEntryVariant = typeof ActivityEntryVariant[keyof typeof ActivityEntryVariant];
+
+/** What a step line's leading icon depicts; thinking lines carry no icon. */
+export const ActivityStepKind = {
+  Thinking: 'thinking',
+  Command: 'command',
+  Read: 'read',
+  Edit: 'edit',
+  Search: 'search',
+  Web: 'web',
+  Media: 'media',
+  Agent: 'agent',
+  Todo: 'todo',
+  Schedule: 'schedule',
+  Tool: 'tool',
+} as const;
+
+export type ActivityStepKind = typeof ActivityStepKind[keyof typeof ActivityStepKind];
+
 export interface CoworkOpenShareOptionsEventDetail {
   sessionId: string;
 }

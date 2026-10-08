@@ -117,6 +117,7 @@ PATCH_HASH=""
 if [[ -d "$PATCHES_DIR" ]]; then
   PATCH_HASH=$(cat "$PATCHES_DIR"/*.patch 2>/dev/null | sha256sum | cut -d' ' -f1)
 fi
+BUILD_SCRIPT_HASH=$(cat "$SCRIPT_DIR/build-openclaw-runtime.sh" "$SCRIPT_DIR/pack-openclaw-workspace-deps.cjs" | sha256sum | cut -d' ' -f1)
 
 if [[ -n "$DESIRED_VERSION" && "${OPENCLAW_FORCE_BUILD:-}" != "1" ]]; then
   BUILD_INFO="$OUT_DIR/runtime-build-info.json"
@@ -135,7 +136,14 @@ try {
 } catch {}
 READPH
     )
-    if [[ "$BUILT_VERSION" == "$DESIRED_VERSION" && "$BUILT_PATCH_HASH" == "$PATCH_HASH" ]]; then
+    BUILT_SCRIPT_HASH=$(node - "$BUILD_INFO" <<'READSH'
+try {
+  const info = require(process.argv[2]);
+  console.log(info.buildScriptHash || '');
+} catch {}
+READSH
+    )
+    if [[ "$BUILT_VERSION" == "$DESIRED_VERSION" && "$BUILT_PATCH_HASH" == "$PATCH_HASH" && "$BUILT_SCRIPT_HASH" == "$BUILD_SCRIPT_HASH" ]]; then
       if [[ -d "$OUT_DIR/node_modules" && -f "$OUT_DIR/gateway.asar" && -f "$OUT_DIR/dist/control-ui/index.html" ]]; then
         echo "[openclaw-runtime] Already built for $DESIRED_VERSION (target=$TARGET_ID, patchHash=${PATCH_HASH:0:12}…), skipping."
         echo "[openclaw-runtime] Use OPENCLAW_FORCE_BUILD=1 to force rebuild."
@@ -145,6 +153,9 @@ READPH
     fi
     if [[ "$BUILT_VERSION" == "$DESIRED_VERSION" && "$BUILT_PATCH_HASH" != "$PATCH_HASH" ]]; then
       echo "[openclaw-runtime] Patches changed (was=${BUILT_PATCH_HASH:0:12}…, now=${PATCH_HASH:0:12}…), rebuilding."
+    fi
+    if [[ "$BUILT_VERSION" == "$DESIRED_VERSION" && "$BUILT_SCRIPT_HASH" != "$BUILD_SCRIPT_HASH" ]]; then
+      echo "[openclaw-runtime] Runtime build scripts changed; rebuilding."
     fi
   fi
   echo "[openclaw-runtime] Pinned version: $DESIRED_VERSION (current build: ${BUILT_VERSION:-none})"
@@ -207,7 +218,7 @@ cp -R "$PKG_DIR" "$OUT_DIR"
 
 # Save build metadata for traceability.
 # Use `node -` so stdin is treated as script and the following args remain user args.
-node - "$OUT_DIR" "$OPENCLAW_SRC" "$TARGET_ID" "$ELECTRON_ROOT" "$PATCH_HASH" <<'NODE'
+node - "$OUT_DIR" "$OPENCLAW_SRC" "$TARGET_ID" "$ELECTRON_ROOT" "$PATCH_HASH" "$BUILD_SCRIPT_HASH" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
@@ -216,6 +227,7 @@ const src = process.argv[3];
 const target = process.argv[4];
 const electronRoot = process.argv[5];
 const patchHash = process.argv[6] || '';
+const buildScriptHash = process.argv[7] || '';
 
 // Read pinned version from package.json
 let openclawVersion = '';
@@ -241,6 +253,7 @@ const meta = {
   openclawVersion,
   openclawCommit,
   patchHash,
+  buildScriptHash,
 };
 fs.writeFileSync(path.join(outDir, 'runtime-build-info.json'), JSON.stringify(meta, null, 2) + '\n');
 NODE
@@ -251,6 +264,10 @@ rm -rf node_modules package-lock.json
 
 # Avoid npm peer resolution conflicts caused by dev-only lint toolchain.
 npm pkg delete devDependencies >/dev/null 2>&1 || true
+
+# The root tarball contains registry versions for workspace dependencies. Use
+# locally built packages so patches under packages/ survive runtime installation.
+node "$ELECTRON_ROOT/scripts/pack-openclaw-workspace-deps.cjs" "$OPENCLAW_SRC" "$OUT_DIR"
 
 echo "[openclaw-runtime] npm target platform=$NPM_TARGET_PLATFORM arch=$NPM_TARGET_ARCH"
 # @mistralai/mistralai@2.6.4 treats the OpenTelemetry API as an optional peer,

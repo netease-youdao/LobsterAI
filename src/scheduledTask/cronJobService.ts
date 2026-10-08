@@ -15,6 +15,7 @@ import {
   IpcChannel,
   OpenClawSystemPayloadKind,
   PayloadKind,
+  RunDeliveryStatus,
   ScheduleKind,
   TaskStatus,
 } from './constants';
@@ -494,7 +495,7 @@ export function mapGatewayJob(job: GatewayJob): ScheduledTask {
   };
 }
 
-export function mapGatewayRun(entry: GatewayRunLogEntry): ScheduledTaskRun {
+export function mapGatewayRun(entry: GatewayRunLogEntry, delivery?: GatewayDelivery): ScheduledTaskRun {
   let status =
     entry.action && entry.action !== 'finished'
       ? TaskStatus.Running
@@ -531,6 +532,8 @@ export function mapGatewayRun(entry: GatewayRunLogEntry): ScheduledTaskRun {
     error: status === TaskStatus.Success ? null : (entry.error ?? null),
     summary: entry.summary ?? null,
     deliveryError: entry.deliveryError ?? null,
+    deliveryStatus: Object.values(RunDeliveryStatus).find(value => value === entry.deliveryStatus) ?? null,
+    deliveryChannel: delivery?.mode === DeliveryMode.Announce ? delivery.channel ?? null : null,
   };
 }
 
@@ -794,7 +797,7 @@ export class CronJobService {
       if (entries.length === 0) break;
 
       for (const entry of entries) {
-        const run = mapGatewayRun(entry);
+        const run = mapGatewayRun(entry, job?.delivery);
         if (!matchesFilter(run)) continue;
         if (skippedVisible < visibleOffset) {
           skippedVisible += 1;
@@ -845,6 +848,7 @@ export class CronJobService {
       jobs.filter(job => isInternalScheduledTaskJob(job)).map(job => job.id),
     );
     const nameMap = new Map(jobs.map(job => [job.id, job.name]));
+    const deliveryMap = new Map(jobs.map(job => [job.id, job.delivery]));
     const visibleRuns: Array<{ entry: GatewayRunLogEntry; run: ScheduledTaskRun }> = [];
     let skippedVisible = 0;
     let rawOffset = 0;
@@ -866,7 +870,7 @@ export class CronJobService {
 
       for (const entry of entries) {
         if (internalJobIds.has(entry.jobId)) continue;
-        const run = mapGatewayRun(entry);
+        const run = mapGatewayRun(entry, deliveryMap.get(entry.jobId));
         if (!matchesFilter(run)) continue;
         if (skippedVisible < visibleOffset) {
           skippedVisible += 1;

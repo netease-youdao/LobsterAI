@@ -536,7 +536,7 @@ describe('configService provider migrations', () => {
       supportsVideo: true,
       supportsThinking: true,
       contextWindow: 1_048_576,
-      maxTokens: 8_192,
+      maxTokens: 1_048_576,
     });
     expect(savedConfig.providerModelMigrationVersions?.[ProviderName.Moonshot]).toBe(2);
   });
@@ -581,7 +581,7 @@ describe('configService provider migrations', () => {
         supportsVideo: true,
         supportsThinking: true,
         contextWindow: 1_048_576,
-        maxTokens: 8_192,
+        maxTokens: 1_048_576,
         customParams: { service_tier: 'priority' },
       },
     ]);
@@ -626,7 +626,7 @@ describe('configService provider migrations', () => {
       supportsVideo: true,
       supportsThinking: true,
       contextWindow: 1_048_576,
-      maxTokens: 8_192,
+      maxTokens: 1_048_576,
     });
   });
 
@@ -678,7 +678,7 @@ describe('configService provider migrations', () => {
       supportsVideo: true,
       supportsThinking: true,
       contextWindow: 1_048_576,
-      maxTokens: 8_192,
+      maxTokens: 1_048_576,
     });
     expect(models[1]).not.toHaveProperty('compatibilityMode');
   });

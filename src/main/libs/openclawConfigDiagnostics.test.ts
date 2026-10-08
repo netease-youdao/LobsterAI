@@ -9,7 +9,7 @@ let tempDir: string;
 let configPath: string;
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-lock-diagnostics-'));
+  tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-lock-diagnostics-')));
   configPath = path.join(tempDir, 'openclaw.json');
   fs.writeFileSync(configPath, '{"apiKey":"must-not-be-logged"}');
 });
@@ -21,7 +21,7 @@ afterEach(() => {
 
 describe('read-only config lock diagnostics', () => {
   test('reports a live owner and reclaim metadata without reading config contents', () => {
-    const payload = JSON.stringify({ pid: process.pid, createdAt: '2026-09-08T00:00:00Z', startTime: 1234, secret: 'private' });
+    const payload = JSON.stringify({ pid: process.pid, createdAt: '2026-09-08T00:00:00Z', startTime: 1234, secret: 'lock-secret-must-not-be-logged' });
     fs.writeFileSync(`${configPath}.lock`, payload);
     fs.mkdirSync(`${configPath}.lock.reclaim`);
     const snapshot = inspectOpenClawConfigLock(configPath);
@@ -30,7 +30,7 @@ describe('read-only config lock diagnostics', () => {
       ownerIsApp: true, ownerStartTime: 1234, ownerCreatedAt: '2026-09-08T00:00:00.000Z',
     });
     expect(snapshot.reclaim.kind).toBe(DiagnosticPathKind.Directory);
-    expect(JSON.stringify(snapshot)).not.toMatch(/must-not-be-logged|private/);
+    expect(JSON.stringify(snapshot)).not.toMatch(/must-not-be-logged/);
     expect(fs.readFileSync(`${configPath}.lock`, 'utf8')).toBe(payload);
     expect(fs.existsSync(`${configPath}.lock.reclaim`)).toBe(true);
   });

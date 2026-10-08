@@ -1,4 +1,4 @@
-import { McpServerFormData, McpTransportType } from '../types/mcp';
+import { McpServerFormData, McpToolFilter, McpTransportType } from '../types/mcp';
 
 /**
  * Parser for the de-facto standard MCP JSON config format used by
@@ -50,6 +50,30 @@ const toStringRecord = (value: unknown): Record<string, string> => {
     }
   }
   return result;
+};
+
+// Optional per-server knobs shared by both transports. toolFilter follows
+// OpenClaw's mcp.servers.*.toolFilter shape; Gemini CLI style includeTools /
+// excludeTools spellings are accepted as aliases since users paste configs
+// written for other clients.
+const toOptionalServerKnobs = (
+  rawConfig: Record<string, unknown>,
+): Pick<McpServerFormData, 'toolFilter' | 'supportsParallelToolCalls'> => {
+  const rawFilter = isPlainObject(rawConfig.toolFilter) ? rawConfig.toolFilter : {};
+  const include = toStringArray(rawFilter.include ?? rawConfig.includeTools);
+  const exclude = toStringArray(rawFilter.exclude ?? rawConfig.excludeTools);
+  const toolFilter: McpToolFilter | undefined =
+    include.length > 0 || exclude.length > 0
+      ? {
+        ...(include.length > 0 ? { include } : {}),
+        ...(exclude.length > 0 ? { exclude } : {}),
+      }
+      : undefined;
+  const rawParallel = rawConfig.supportsParallelToolCalls ?? rawConfig.supports_parallel_tool_calls;
+  return {
+    ...(toolFilter ? { toolFilter } : {}),
+    ...(typeof rawParallel === 'boolean' ? { supportsParallelToolCalls: rawParallel } : {}),
+  };
 };
 
 const HTTP_TRANSPORT_ALIASES = new Set(['http', 'streamable-http', 'streamable_http', 'streamablehttp']);
@@ -126,6 +150,7 @@ export function parseMcpServersJson(input: string): McpJsonImportResult {
         command,
         args: toStringArray(rawConfig.args),
         env: toStringRecord(rawConfig.env),
+        ...toOptionalServerKnobs(rawConfig),
       });
     } else if (url) {
       servers.push({
@@ -134,6 +159,7 @@ export function parseMcpServersJson(input: string): McpJsonImportResult {
         transportType: resolveRemoteTransport(rawConfig.type ?? rawConfig.transport, url),
         url,
         headers: toStringRecord(rawConfig.headers),
+        ...toOptionalServerKnobs(rawConfig),
       });
     } else {
       return { ok: false, code: McpJsonImportErrorCode.EntryInvalid, detail: name };

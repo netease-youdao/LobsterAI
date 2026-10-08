@@ -73,6 +73,12 @@ function setupDb(): void {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS subagent_runs (
+      id TEXT PRIMARY KEY,
+      parent_session_id TEXT,
+      child_cowork_session_id TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS cowork_messages (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
@@ -791,6 +797,41 @@ test('getRecentConversationMessages reads beyond the session page and excludes n
   );
   expect(store.getRecentConversationMessages(sid, 0)).toEqual([]);
   expect(store.getRecentConversationMessages(sid, Number.POSITIVE_INFINITY)).toEqual([]);
+});
+
+test('getTurnStartTimestampAt finds where the turn of a paged window began', () => {
+  const sid = 'sess-turn-start';
+  insertSession(sid);
+  insertMessage('user-1', sid, 'user', 'long task', null, 1, 1000);
+  for (let index = 2; index <= 40; index += 1) {
+    insertMessage(`tool-${index}`, sid, index % 2 === 0 ? 'tool_use' : 'tool_result', 'step', null, index, index * 1000);
+  }
+  insertMessage('user-2', sid, 'user', 'follow up', null, 41, 50_000);
+  insertMessage('assistant-2', sid, 'assistant', 'answer', null, 42, 51_000);
+
+  // The default page starts mid-way through the first turn.
+  const firstPage = store.getSession(sid, 30);
+  expect(firstPage?.messagesOffset).toBe(12);
+  expect(firstPage?.messages[0]?.type).not.toBe('user');
+  expect(store.getTurnStartTimestampAt(sid, 12)).toBe(1000);
+
+  expect(store.getTurnStartTimestampAt(sid, 40)).toBe(50_000);
+  expect(store.getTurnStartTimestampAt(sid, 41)).toBe(50_000);
+  expect(store.getTurnStartTimestampAt(sid, -1)).toBeNull();
+  expect(store.getTurnStartTimestampAt('missing-session', 3)).toBeNull();
+});
+
+test('getTurnStartTimestampAt uses the earliest time when a channel user message is stamped late', () => {
+  const sid = 'sess-turn-start-channel';
+  insertSession(sid);
+  insertMessage('assistant-0', sid, 'assistant', 'before any request', null, 1, 500);
+  insertMessage('user-1', sid, 'user', 'from IM', null, 2, 3000);
+  insertMessage('assistant-1', sid, 'assistant', 'streamed first', null, 3, 2000);
+  insertMessage('tool-1', sid, 'tool_use', 'exec', null, 4, 4000);
+
+  expect(store.getTurnStartTimestampAt(sid, 3)).toBe(2000);
+  // Without an earlier user message the turn starts at its first message.
+  expect(store.getTurnStartTimestampAt(sid, 0)).toBe(500);
 });
 
 test('getSession returns all messages when ALL have corrupt metadata', () => {
@@ -1562,4 +1603,27 @@ test.each([false, true])('agent transaction preserves deleted artifact IDs (orph
     deletedSessionIds: ['agent-session'],
     affectedArtifactIds: ['agent-file'],
   });
+});
+
+
+test('sidebar hides historical self-spawns while preserving expert work, forks and direct access', () => {
+  const parent = store.createSession('parent', '/tmp', '', 'local', [], 'main');
+  const self = store.createSession('child self', '/tmp', '', 'local', [], 'main');
+  const expert = store.createSession('child expert', '/tmp', '', 'local', [], 'writer');
+  const fork = store.createSession('child fork', '/tmp', '', 'local', [], 'main');
+  for (const child of [self, expert, fork]) {
+    db.prepare('UPDATE cowork_sessions SET parent_session_id = ? WHERE id = ?').run(parent.id, child.id);
+  }
+  for (const child of [self, expert]) {
+    db.prepare('INSERT INTO subagent_runs VALUES (?, ?, ?)').run(child.id, parent.id, child.id);
+  }
+  expect(store.listSessions(100).map(session => session.id)).toEqual(expect.arrayContaining([parent.id, expert.id, fork.id]));
+  expect(store.listSessions(100).map(session => session.id)).not.toContain(self.id);
+  expect(store.countSessions()).toBe(3);
+  expect(store.countSessions('main')).toBe(2);
+  expect(store.searchSessions({ query: 'child' }).map(session => session.id)).not.toContain(self.id);
+  expect(store.searchSessions({ query: 'child', agentId: 'main' }).map(session => session.id)).toEqual([fork.id]);
+  expect(store.countSearchSessions({ query: 'child' })).toBe(2);
+  expect(store.countSearchSessions({ query: 'child', agentId: 'main' })).toBe(1);
+  expect(store.getSession(self.id)?.id).toBe(self.id);
 });

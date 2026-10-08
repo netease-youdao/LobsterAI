@@ -9,6 +9,9 @@ import renderer from 'vite-plugin-electron-renderer';
 // PORT lets tooling (e.g. browser preview) assign a free port; electron:dev
 // pins 5175 via the --port CLI flag, which overrides server.port anyway.
 const devPort = Number(process.env.PORT ?? '') || 5175;
+// Keep production and development dependency transforms aligned with Electron.
+// The Word layout engine initializes HarfBuzz with top-level await.
+const rendererTarget = 'es2022';
 const katexVersion = process.env.npm_package_dependencies_katex?.replace(/^[~^]/, '') || '0.16.0';
 const pdfJsAssetRoot = path.resolve(__dirname, 'node_modules/pdfjs-dist');
 const pdfJsPublicPath = '/pdfjs/';
@@ -92,7 +95,7 @@ export default defineConfig({
             minify: false,
             rollupOptions: {
               external: (id) => {
-                const staticExternals = ['better-sqlite3', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'node-nim', 'nim-web-sdk-ng'];
+                const staticExternals = ['better-sqlite3', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate'];
                 if (staticExternals.includes(id)) return true;
                 if (id.startsWith('@larksuite/openclaw-lark-tools') || id.startsWith('@larksuite/openclaw-lark')) return true;
                 return false;
@@ -159,6 +162,10 @@ export default defineConfig({
     renderer(),
   ],
   base: process.env.NODE_ENV === 'development' ? '/' : './',
+  // The syntax-highlighting worker loads grammars on demand; ES module workers allow that code splitting.
+  worker: {
+    format: 'es',
+  },
   resolve: {
     alias: {
       '@shared': path.resolve(__dirname, './src/shared'),
@@ -166,6 +173,7 @@ export default defineConfig({
     },
   },
   build: {
+    target: rendererTarget,
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: true,
@@ -190,12 +198,21 @@ export default defineConfig({
       usePolling: false,
       // Ignore vendor/ to prevent dev reload when plugins are installed into
       // vendor/openclaw-runtime/.../third-party-extensions/
-      ignored: ['**/vendor/**'],
+      // Skip temporary trees (which may contain circular junctions) and Electron output.
+      // Anchor artifacts/ (repo-root scratch output) so src/renderer/components/artifacts/ still
+      // hot-reloads; chokidar never matches relative globs, and a directory path covers its subtree.
+      ignored: [
+        '**/vendor/**',
+        '**/.work/**',
+        path.resolve(__dirname, 'artifacts'),
+        '**/dist-electron/**',
+      ],
     },
   },
   optimizeDeps: {
     exclude: ['electron', '@larksuite/openclaw-lark-tools', '@larksuite/openclaw-lark'],
     esbuildOptions: {
+      target: rendererTarget,
       define: {
         __VERSION__: JSON.stringify(katexVersion),
       },

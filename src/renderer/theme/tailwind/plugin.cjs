@@ -44,6 +44,10 @@ module.exports = plugin(function () {
           overlay:     withAlpha('--lobster-surface-overlay'),
           inset:       withAlpha('--lobster-surface-raised'),  // alias
         },
+        'chat-user': {
+          DEFAULT:     withAlpha('--lobster-chat-user'),
+          foreground:  withAlpha('--lobster-chat-user-foreground'),
+        },
         border: {
           DEFAULT:     withAlpha('--lobster-border'),
           subtle:      withAlpha('--lobster-border-subtle'),

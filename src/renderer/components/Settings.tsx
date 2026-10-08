@@ -10,11 +10,12 @@ import {
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
 import { DataMigrationRestoreStatus } from '../../shared/dataMigration/constants';
+import type { DecisionModelConfigUpdate } from '../../shared/decisionModel/constants';
 import {
   normalizeNotificationSettings,
   TaskCompletionNotificationMode,
 } from '../../shared/notifications/constants';
-import { OpenClawEnginePhase, OpenClawGatewayRepairErrorCode } from '../../shared/openclawEngine/constants';
+import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import {
   applyModelRuntimeProfileMetadata,
   findKimiK3ReservedCustomParamKeys,
@@ -28,6 +29,7 @@ import {
 } from '../../shared/providers';
 import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, isCustomProvider, normalizeFontPreference, resolveArtifactAutoPreviewEnabled, ShortcutAction, type ShortcutConfig } from '../config';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
+import { OPEN_SOURCE_ENTERPRISE_UI_KEY } from '../constants/openSource';
 import { useSkin } from '../providers/SkinProvider';
 import { apiService } from '../services/api';
 import { configService } from '../services/config';
@@ -36,6 +38,7 @@ import { decryptSecret, decryptWithPassword, EncryptedPayload, encryptWithPasswo
 import { i18nService, LanguageType } from '../services/i18n';
 import { imService } from '../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
+import { resolveOpenClawRepairError, resolveOpenClawRepairHistoryWarning } from '../services/openclawRepair';
 import { clearPendingPublishingConversionAttribution } from '../services/publishingConversionAttribution';
 import { clearPublishingSubscriptionRecoveryAnalytics } from '../services/publishingSubscriptionRecovery';
 import { formatShortcutForDisplay, getShortcutConflictSignature, isTextEditingSafeShortcut, matchesShortcut } from '../services/shortcuts';
@@ -59,8 +62,10 @@ import type {
 } from '../types/cowork';
 import { OpenClawSessionKeepAlive as OpenClawSessionKeepAliveValues } from '../types/cowork';
 import Modal from './common/Modal';
+import DreamingRecoveryNotice from './cowork/DreamingRecoveryNotice';
 import DreamingSettingsSection from './cowork/DreamingSettingsSection';
 import EmbeddingSettingsSection from './cowork/EmbeddingSettingsSection';
+import DecisionModelExperimentalSettings from './DecisionModelExperimentalSettings';
 import DesktopCompanionSettings from './desktopCompanion/DesktopCompanionSettings';
 import DshExperimentalSettings from './DshExperimentalSettings';
 import ErrorMessage from './ErrorMessage';
@@ -71,6 +76,7 @@ import PlugIcon from './icons/PlugIcon';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import IMSettings from './im/IMSettings';
 import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle } from './plugins/PluginsSettings';
+import { AboutOpenSourceAction, AboutOpenSourceRows, AboutOpenSourceStarPrompt } from './settings/AboutOpenSource';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
 import {
   buildOpenAICompatibleChatCompletionsUrl,
@@ -85,7 +91,10 @@ import {
   getProviderDefaultBaseUrl,
   hasEquivalentProviderModelId,
   hasProviderAuthConfigured,
+  MAX_OUTPUT_TOKENS_MAX,
+  MAX_OUTPUT_TOKENS_MIN,
   type Model,
+  parseMaxOutputTokensInput,
   type ProviderConfig,
   providerKeys,
   providerRequiresApiKey,
@@ -693,6 +702,10 @@ const reportAboutAction = (
     result,
     missingEntryCount: options.missingEntryCount,
   });
+};
+
+const reportAboutOpenSourceAction = (action: AboutOpenSourceAction): void => {
+  reportAboutAction(action, 'success');
 };
 
 const reportAgentEngineSettingChanged = (
@@ -1458,6 +1471,8 @@ const Settings: React.FC<SettingsProps> = ({
 
   // Plugin settings handle (deferred save)
   const pluginsSettingsRef = useRef<PluginsSettingsHandle>(null);
+  // Unsaved edits from the experimental decision model card (deferred save)
+  const decisionModelDraftRef = useRef<DecisionModelConfigUpdate | null>(null);
 
   // Add state for active provider
   const [activeProvider, setActiveProvider] = useState<ProviderType>(getDefaultActiveProvider());
@@ -1536,6 +1551,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [newModelSupportsImage, setNewModelSupportsImage] = useState(false);
   const [newModelSupportsThinking, setNewModelSupportsThinking] = useState(false);
   const [newModelContextWindow, setNewModelContextWindow] = useState<number | undefined>(undefined);
+  const [newModelMaxTokens, setNewModelMaxTokens] = useState<string>('');
   const [newModelCustomParams, setNewModelCustomParams] = useState<string>('');
   const [modelFormError, setModelFormError] = useState<string | null>(null);
 
@@ -1548,6 +1564,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [testModeUnlocked, setTestModeUnlocked] = useState(false);
   const [updateCheckStatus, setUpdateCheckStatus] = useState<'idle' | 'checking' | 'upToDate' | 'error' | 'downloading' | 'ready'>('idle');
   const [appUpdateState, setAppUpdateState] = useState<AppUpdateRuntimeState | null>(null);
+  const showOpenSourceEntries = enterpriseConfig?.ui?.[OPEN_SOURCE_ENTERPRISE_UI_KEY] !== 'hide';
 
   useEffect(() => {
     window.electron.appInfo.getVersion().then(setAppVersion);
@@ -2363,6 +2380,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -2968,17 +2986,12 @@ const Settings: React.FC<SettingsProps> = ({
 
   const resolveOpenClawRepairMessage = (result: OpenClawGatewayRepairResult): string => {
     if (result.success) {
-      return result.backupPath
+      const message = result.backupPath
         ? i18nService.t('openClawRepairSuccess')
         : i18nService.t('openClawRepairSuccessNoBackup');
+      return [message, resolveOpenClawRepairHistoryWarning(result)].filter(Boolean).join('\n');
     }
-    if (result.errorCode === OpenClawGatewayRepairErrorCode.Busy) {
-      return i18nService.t('openClawRepairBusyError');
-    }
-    if (result.errorCode === OpenClawGatewayRepairErrorCode.ConfigApplyPending) {
-      return i18nService.t('openClawRepairConfigApplyPendingError');
-    }
-    return result.error?.trim() || i18nService.t('openClawRepairFailed');
+    return resolveOpenClawRepairError(result, false);
   };
 
   const handleConfirmOpenClawRepair = useCallback(async () => {
@@ -3593,6 +3606,13 @@ const Settings: React.FC<SettingsProps> = ({
         }
       }
 
+      // Decision model edits save with the dialog, so switching the tool on
+      // or off restarts the gateway once, on Save, rather than per field.
+      if (decisionModelDraftRef.current) {
+        await window.electron.decisionModel.saveConfig(decisionModelDraftRef.current);
+        decisionModelDraftRef.current = null;
+      }
+
       if (usageAnalyticsEnabled) {
         if (previousConfig.language !== language) {
           reportGeneralSettingChanged('language', language, previousConfig.language);
@@ -3843,6 +3863,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -3854,6 +3875,7 @@ const Settings: React.FC<SettingsProps> = ({
     supportsThinking?: boolean,
     contextWindow?: number,
     customParams?: Record<string, unknown>,
+    maxTokens?: number,
   ) => {
     setIsAddingModel(false);
     setIsEditingModel(true);
@@ -3863,6 +3885,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(!!supportsImage);
     setNewModelSupportsThinking(!!supportsThinking);
     setNewModelContextWindow(contextWindow);
+    setNewModelMaxTokens(maxTokens !== undefined ? String(maxTokens) : '');
     setNewModelCustomParams(
       customParams && Object.keys(customParams).length > 0
         ? JSON.stringify(customParams, null, 2)
@@ -3964,6 +3987,19 @@ const Settings: React.FC<SettingsProps> = ({
       return;
     }
 
+    // Runtime profiles own the output cap, so the (hidden) field is ignored there.
+    const parsedMaxTokens = runtimeProfile
+      ? undefined
+      : parseMaxOutputTokensInput(newModelMaxTokens);
+    if (parsedMaxTokens === null) {
+      setModelFormError(
+        i18nService.t('maxOutputTokensInvalid')
+          .replace('{min}', String(MAX_OUTPUT_TOKENS_MIN))
+          .replace('{max}', String(MAX_OUTPUT_TOKENS_MAX)),
+      );
+      return;
+    }
+
     const editingModel = currentModels.find(model => model.id === editingModelId);
     const resolvedProfileMetadata = applyModelRuntimeProfileMetadata({
       supportsImage: ProviderRegistry.resolveModelSupportsImage(
@@ -3982,10 +4018,11 @@ const Settings: React.FC<SettingsProps> = ({
         newModelSupportsThinking,
       ),
       contextWindow: newModelContextWindow,
-      maxTokens: ProviderRegistry.resolveModelMaxTokens(
+      // An empty field falls back to the registry default instead of the
+      // previously saved value, so clearing it restores automatic inference.
+      maxTokens: parsedMaxTokens ?? ProviderRegistry.resolveModelMaxTokens(
         activeProvider,
         modelId,
-        editingModel?.maxTokens,
       ),
     }, runtimeProfile);
     const nextModel = {
@@ -4024,6 +4061,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -4037,6 +4075,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -4694,20 +4733,20 @@ const Settings: React.FC<SettingsProps> = ({
                 <svg viewBox="0 0 120 80" className="w-full h-auto rounded-md mb-2 overflow-hidden" xmlns="http://www.w3.org/2000/svg">
                   {mode === 'light' && (
                     <>
-                      <rect width="120" height="80" fill="#F8F9FB" />
-                      <rect x="0" y="0" width="30" height="80" fill="#EBEDF0" />
-                      <rect x="4" y="8" width="22" height="4" rx="2" fill="#C8CBD0" />
-                      <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D5D7DB" />
-                      <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D5D7DB" />
-                      <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D5D7DB" />
+                      <rect width="120" height="80" fill="#F9F9F9" />
+                      <rect x="0" y="0" width="30" height="80" fill="#EDEDED" />
+                      <rect x="4" y="8" width="22" height="4" rx="2" fill="#CBCBCB" />
+                      <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D8D8D8" />
+                      <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D8D8D8" />
+                      <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D8D8D8" />
                       <rect x="36" y="8" width="78" height="64" rx="4" fill="#FFFFFF" />
-                      <rect x="42" y="16" width="50" height="4" rx="2" fill="#D5D7DB" />
-                      <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="46" width="40" height="4" rx="2" fill="#D5D7DB" />
-                      <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="60" width="58" height="3" rx="1.5" fill="#E2E4E7" />
+                      <rect x="42" y="16" width="50" height="4" rx="2" fill="#D8D8D8" />
+                      <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="46" width="40" height="4" rx="2" fill="#D8D8D8" />
+                      <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="60" width="58" height="3" rx="1.5" fill="#E5E5E5" />
                     </>
                   )}
                   {mode === 'dark' && (
@@ -4739,19 +4778,19 @@ const Settings: React.FC<SettingsProps> = ({
                         </clipPath>
                       </defs>
                       <g clipPath="url(#left-half)">
-                        <rect width="120" height="80" fill="#F8F9FB" />
-                        <rect x="0" y="0" width="30" height="80" fill="#EBEDF0" />
-                        <rect x="4" y="8" width="22" height="4" rx="2" fill="#C8CBD0" />
-                        <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D5D7DB" />
-                        <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D5D7DB" />
-                        <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D5D7DB" />
+                        <rect width="120" height="80" fill="#F9F9F9" />
+                        <rect x="0" y="0" width="30" height="80" fill="#EDEDED" />
+                        <rect x="4" y="8" width="22" height="4" rx="2" fill="#CBCBCB" />
+                        <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D8D8D8" />
+                        <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D8D8D8" />
+                        <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D8D8D8" />
                         <rect x="36" y="8" width="78" height="64" rx="4" fill="#FFFFFF" />
-                        <rect x="42" y="16" width="50" height="4" rx="2" fill="#D5D7DB" />
-                        <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E2E4E7" />
-                        <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E2E4E7" />
-                        <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E2E4E7" />
-                        <rect x="42" y="46" width="40" height="4" rx="2" fill="#D5D7DB" />
-                        <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E2E4E7" />
+                        <rect x="42" y="16" width="50" height="4" rx="2" fill="#D8D8D8" />
+                        <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E5E5E5" />
+                        <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E5E5E5" />
+                        <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E5E5E5" />
+                        <rect x="42" y="46" width="40" height="4" rx="2" fill="#D8D8D8" />
+                        <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E5E5E5" />
                       </g>
                       <g clipPath="url(#right-half)">
                         <rect width="120" height="80" fill="#0F1117" />
@@ -4853,7 +4892,12 @@ const Settings: React.FC<SettingsProps> = ({
   const renderTabContent = () => {
     switch(activeTab) {
       case 'experimental':
-        return <DshExperimentalSettings />;
+        return (
+          <div className="space-y-4">
+            <DshExperimentalSettings />
+            <DecisionModelExperimentalSettings draftRef={decisionModelDraftRef} />
+          </div>
+        );
       case 'general':
         return (
           <div className="space-y-8">
@@ -5422,6 +5466,10 @@ const Settings: React.FC<SettingsProps> = ({
                   </div>
                 </section>
 
+                {openClawEngineStatus?.dreamingRecovery && (
+                  <DreamingRecoveryNotice summary={openClawEngineStatus.dreamingRecovery} />
+                )}
+
                 {openClawRepairResult && (
                   <div className={`rounded-lg border px-3 py-3 text-sm ${openClawRepairResult.success
                     ? 'border-green-200 bg-green-50 text-green-700 dark:border-green-900/60 dark:bg-green-950/30 dark:text-green-300'
@@ -5931,6 +5979,7 @@ const Settings: React.FC<SettingsProps> = ({
                   )}
                 </div>
               </div>
+              {showOpenSourceEntries && <AboutOpenSourceRows onAction={reportAboutOpenSourceAction} />}
               <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 border-b border-border">
                 <span className="shrink-0 text-sm text-foreground">{i18nService.t('aboutContactEmail')}</span>
                 <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
@@ -5999,6 +6048,8 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
               )}
             </div>
+
+            {showOpenSourceEntries && <AboutOpenSourceStarPrompt onAction={reportAboutOpenSourceAction} />}
 
             {/* Footer */}
             <div className="mt-auto w-full pt-14 pb-2 flex flex-col items-center">
@@ -6162,6 +6213,8 @@ const Settings: React.FC<SettingsProps> = ({
           setNewModelSupportsThinking={setNewModelSupportsThinking}
           newModelContextWindow={newModelContextWindow}
           setNewModelContextWindow={setNewModelContextWindow}
+          newModelMaxTokens={newModelMaxTokens}
+          setNewModelMaxTokens={setNewModelMaxTokens}
           newModelCustomParams={newModelCustomParams}
           setNewModelCustomParams={setNewModelCustomParams}
           activeProviderConfig={providers[activeProvider]}

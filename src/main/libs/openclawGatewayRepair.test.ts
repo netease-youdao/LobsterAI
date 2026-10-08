@@ -3,10 +3,12 @@ import os from 'os';
 import path from 'path';
 import { afterEach, expect, test } from 'vitest';
 
+import { OpenClawEngineErrorCode } from '../../shared/openclawEngine/constants';
 import {
   backupOpenClawConfig,
   getOpenClawGatewayRepairBusyError,
   OPENCLAW_GATEWAY_REPAIR_BUSY_ERROR,
+  preserveOpenClawConfigForStartupRecovery,
   resolveOpenClawConfigBackupPath,
 } from './openclawGatewayRepair';
 
@@ -17,6 +19,24 @@ const makeTempDir = (): string => {
   tempDirs.push(dir);
   return dir;
 };
+
+test('Quick Repair retains legacy discovery data even before a failure code was captured', () => {
+  const configPath = path.join(makeTempDir(), 'openclaw.json');
+  fs.writeFileSync(configPath, JSON.stringify({ plugins: { bundledDiscovery: 'compat' } }));
+  expect(preserveOpenClawConfigForStartupRecovery(configPath)).toBe(true);
+  expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).plugins.bundledDiscovery).toBe('compat');
+});
+
+test('a binding recovery failure retains regenerated config without the old field', () => {
+  const configPath = path.join(makeTempDir(), 'openclaw.json');
+  fs.writeFileSync(configPath, '{}');
+  expect(preserveOpenClawConfigForStartupRecovery(configPath, OpenClawEngineErrorCode.StartupCompatibilityFailed)).toBe(true);
+  expect(preserveOpenClawConfigForStartupRecovery(configPath, OpenClawEngineErrorCode.MemoryDreamingMigrationFailed)).toBe(true);
+  expect(preserveOpenClawConfigForStartupRecovery(configPath, OpenClawEngineErrorCode.StartupMigrationRefused)).toBe(true);
+  expect(preserveOpenClawConfigForStartupRecovery(configPath)).toBe(false);
+  fs.writeFileSync(configPath, 'invalid JSON');
+  expect(preserveOpenClawConfigForStartupRecovery(configPath)).toBe(false);
+});
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {

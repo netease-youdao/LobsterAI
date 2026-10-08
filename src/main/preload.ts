@@ -13,6 +13,8 @@ import { AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
 import { MarkdownFileIpc, type SaveMarkdownFileRequest } from '../shared/artifactPreview/markdownEditing';
+import { ReviewIpc, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
+import type { ReviewSourceRequest } from '../shared/artifactPreview/reviewSource';
 import {
   AsrIpcChannel,
   type AsrRealtimeSessionRequest,
@@ -44,6 +46,7 @@ import {
   BrowserIpc,
   type BrowserRuntimeProfile,
 } from '../shared/browserWebAccess/constants';
+import type { BrowserPasskeyRequest } from '../shared/browserWebAccess/passkeys';
 import { ClipboardIpc } from '../shared/clipboard/constants';
 import type { CoworkBrowserAnnotationMessageBatch } from '../shared/cowork/browserAnnotations';
 import type {
@@ -59,6 +62,7 @@ import {
 } from '../shared/cowork/constants';
 import type { CoworkSearchMessageCursor } from '../shared/cowork/search';
 import { DataMigrationIpc } from '../shared/dataMigration/constants';
+import { type DecisionModelConfigUpdate, DecisionModelIpcChannel } from '../shared/decisionModel/constants';
 import {
   type CompanionGaze,
   type CompanionQuickAnswerEvent,
@@ -104,6 +108,7 @@ import {
   LocalWebServicesIpc,
 } from '../shared/localWebServices/constants';
 import { McpIpcChannel } from '../shared/mcp/constants';
+import type { McpToolDiscoveryRequest } from '../shared/mcp/toolDiscovery';
 import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
@@ -136,7 +141,9 @@ import type {
   SkinGetActiveResponse,
   SkinListResponse,
 } from '../shared/skin/types';
+import { SubscriptionTrialIpc } from '../shared/subscriptionTrial/constants';
 import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
+import { createOfficeBridges } from './office/officePreloadBridges';
 import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 
@@ -235,6 +242,7 @@ contextBridge.exposeInMainWorld('electron', {
     setEnabledByRegistryId: (options: { registryId: string; enabled: boolean }) =>
       ipcRenderer.invoke(McpIpcChannel.SetEnabledByRegistryId, options),
     retryLaunchResolution: (id: string) => ipcRenderer.invoke(McpIpcChannel.RetryLaunchResolution, id),
+    listTools: (request: McpToolDiscoveryRequest) => ipcRenderer.invoke(McpIpcChannel.ListTools, request),
     fetchMarketplace: () => ipcRenderer.invoke(McpIpcChannel.FetchMarketplace),
     connectQichacha: () => ipcRenderer.invoke(McpIpcChannel.ConnectQichacha),
     onChanged: (callback: () => void) => {
@@ -392,6 +400,12 @@ contextBridge.exposeInMainWorld('electron', {
     openWorkbench: () => ipcRenderer.invoke(DshIpcChannel.OpenWorkbench),
     stop: () => ipcRenderer.invoke(DshIpcChannel.Stop),
   },
+  decisionModel: {
+    getConfig: () => ipcRenderer.invoke(DecisionModelIpcChannel.GetConfig),
+    saveConfig: (update: DecisionModelConfigUpdate) => ipcRenderer.invoke(DecisionModelIpcChannel.SaveConfig, update),
+    testConnection: (draft: DecisionModelConfigUpdate) =>
+      ipcRenderer.invoke(DecisionModelIpcChannel.TestConnection, draft),
+  },
   openclaw: {
     engine: {
       getStatus: () => ipcRenderer.invoke(OpenClawEngineIpc.GetStatus),
@@ -466,6 +480,8 @@ contextBridge.exposeInMainWorld('electron', {
         request: AgentBrowserCredentialSavePromptRequest,
       ): Promise<AgentBrowserHostResponse> =>
         ipcRenderer.invoke(BrowserIpc.ResolveCredentialSavePrompt, request),
+      resolvePasskey: (request: BrowserPasskeyRequest): Promise<AgentBrowserHostResponse> =>
+        ipcRenderer.invoke(BrowserIpc.ResolvePasskey, request),
       onHostState: (callback: (event: AgentBrowserHostStateEvent) => void) => {
         const handler = (_event: Electron.IpcRendererEvent, hostEvent: AgentBrowserHostStateEvent) =>
           callback(hostEvent);
@@ -475,6 +491,8 @@ contextBridge.exposeInMainWorld('electron', {
       credentials: {
         getAvailability: (): Promise<BrowserCredentialAvailabilityResponse> =>
           ipcRenderer.invoke(BrowserCredentialIpc.GetAvailability),
+        requestAccess: (): Promise<BrowserCredentialAvailabilityResponse> =>
+          ipcRenderer.invoke(BrowserCredentialIpc.RequestAccess),
         list: (): Promise<BrowserCredentialListResponse> =>
           ipcRenderer.invoke(BrowserCredentialIpc.List),
         save: (request: BrowserCredentialSaveRequest): Promise<BrowserCredentialMutationResponse> =>
@@ -577,7 +595,7 @@ contextBridge.exposeInMainWorld('electron', {
       kitIds?: string[];
       kitReferences?: KitReference[];
       resolvedKitCapabilities?: ResolvedKitCapabilities;
-      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       agentId?: string;
       modelOverride?: string;
@@ -594,7 +612,7 @@ contextBridge.exposeInMainWorld('electron', {
       kitIds?: string[];
       kitReferences?: KitReference[];
       resolvedKitCapabilities?: ResolvedKitCapabilities;
-      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
@@ -657,6 +675,15 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.GetSessionSearchMessages, options),
     getSessionMessageRailIndex: (sessionId: string) =>
       ipcRenderer.invoke(CoworkIpcChannel.GetSessionMessageRailIndex, sessionId),
+    getProgressCard: (sessionId: string) =>
+      ipcRenderer.invoke(CoworkIpcChannel.GetProgressCard, sessionId),
+    dismissProgressCard: (sessionId: string, revision: number) =>
+      ipcRenderer.invoke(CoworkIpcChannel.DismissProgressCard, sessionId, revision),
+    onProgressCardChanged: (callback: (event: { sessionId: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string }) => callback(data);
+      ipcRenderer.on(CoworkIpcChannel.ProgressCardChanged, handler);
+      return () => ipcRenderer.removeListener(CoworkIpcChannel.ProgressCardChanged, handler);
+    },
     getContextUsage: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:contextUsage', sessionId),
     compactContext: (sessionId: string) =>
@@ -859,6 +886,10 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on(CoworkIpcChannel.OpenSessionFromNotification, handler);
       return () => ipcRenderer.removeListener(CoworkIpcChannel.OpenSessionFromNotification, handler);
     },
+  },
+  workspaceReview: {
+    read: (input: ReviewScopeRequest) => ipcRenderer.invoke(ReviewIpc.Read, input),
+    source: (input: ReviewSourceRequest) => ipcRenderer.invoke(ReviewIpc.Source, input),
   },
   dialog: {
     selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
@@ -1069,6 +1100,7 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(AsrIpcChannel.CreateRealtimeSession, options),
   },
   artifact: {
+    office: createOfficeBridges(ipcRenderer),
     markdown: {
       read: (filePath: string) => ipcRenderer.invoke(MarkdownFileIpc.Read, filePath),
       save: (request: SaveMarkdownFileRequest) => ipcRenderer.invoke(MarkdownFileIpc.Save, request),
@@ -1130,6 +1162,9 @@ contextBridge.exposeInMainWorld('electron', {
     relaunch: () => ipcRenderer.invoke('app:relaunch'),
     openSystemNotificationSettings: () =>
       ipcRenderer.invoke(AppIpcChannel.OpenSystemNotificationSettings),
+  },
+  subscriptionTrial: {
+    status: () => ipcRenderer.invoke(SubscriptionTrialIpc.Status),
   },
   activity: {
     getSlot: (input: ActivityHostGetSlotInput) =>
@@ -1340,6 +1375,8 @@ contextBridge.exposeInMainWorld('electron', {
 
     // Execution
     runManually: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.RunManually, id),
+    resendWeixinReport: (taskId: string, runId: string) =>
+      ipcRenderer.invoke(ScheduledTaskIpc.ResendWeixinReport, taskId, runId),
     stop: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.Stop, id),
 
     // Run history

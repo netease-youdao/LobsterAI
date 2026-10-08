@@ -168,6 +168,12 @@ ID 精确等于 `kimik3` 时应用 `moonshot-kimi-k3`。`my-kimi-prod` 等任意
 
 该配置来自 Kimi 官方 OpenClaw 指南。服务端或用户不能覆盖这些 transport 字段。
 
+> 2026-09-22 更新：`maxTokens` 由 8192 改为 1048576，与 OpenClaw `v2026.8.1` 内置 Moonshot
+> 目录一致。8192 不是 OpenClaw 的限制，而是 Kimi 官方 OpenClaw 指南给出的“单次回复上限”；
+> K3 API 文档写明 `max_completion_tokens` 默认 131072、最大 1048576。本次为产品决策，
+> 取代 §1.4 第 6 条和 §11.3 的“不提高 8192”约定；已有用户的官方 K3 条目会由 renderer 的
+> 能力修复逻辑自动刷新到新值，套餐与自定义 K3 通过 runtime profile 一起生效。
+
 ### 2.4 本次发版不默认使用 OpenClaw Beta
 
 截至 2026-07-23，包含 K3 核心修复的版本为 `v2026.7.2-beta.3`。本次生产发版的默认方案是：
@@ -198,6 +204,23 @@ lobsterai-model-compat
 3. 仅对映射为 `moonshot-kimi-k3` 的模型应用 K3 wrapper 和 replay policy。
 4. 对同一 Provider 下其他模型完全 passthrough。
 5. 复用 OpenClaw 上游 K3 实现，不复制一份容易漂移的私有协议代码。
+
+> 2026-09-22 更新：升级到 OpenClaw `v2026.8.1` 后，上游把 K3 请求契约合并进了
+> `createMoonshotThinkingWrapper`，且只对 `provider === "moonshot"` 生效，不再导出
+> `createMoonshotKimiK3Wrapper`；随之退役的 `openclaw-kimi-k3-support.patch` 曾是该
+> 导出的唯一来源，扩展因此在 Gateway 启动时加载失败。第 5 条改为：扩展在
+> `kimiK3StreamWrapper.ts` 内自行维护与上游 `sanitizeAlwaysThinkingPayload`、
+> `ensureMoonshotToolCallReasoningContent` 相同的契约，不再依赖 SDK 导出。
+> `tests/openclaw-extensions/pluginSdkImportContract.test.ts` 用
+> `openclaw-extensions/plugin-sdk-exports.json` 校验本地扩展对 SDK 的具名导入；
+> 重建 runtime 后执行 `npm run openclaw:sdk-contract` 刷新该快照。
+>
+> 同日发现第二个 8.1 差异：Gateway 启动和热重载只会导入“配置里被 agent 模型引用到的
+> provider id”对应的插件，`lobsterai-server` 不对应任何插件，`api` owner 提示在启动计划里
+> 不会被查询；而运行发生在已准备好的 plugin generation 内，不允许按需加载。结果是套餐模型的
+> 首次运行拿不到本扩展的 hook。修法是在 `openclaw.plugin.json` 声明
+> `activation.onStartup: true` 与 `activation.onProviders: ["lobsterai-server"]`，让扩展进入
+> 每一代 Gateway 插件集合；`plugins.entries` 里的显式 `enabled: true` 仍是前提。
 
 它不负责：
 
@@ -1243,6 +1266,8 @@ OpenClaw patch 自带的 targeted tests 也必须通过。
 自定义或套餐 Provider 可能同时包含多种模型。插件必须用完整模型引用精确守卫，非 K3 passthrough 是硬性回归门禁。
 
 ### 11.3 8192 输出截断
+
+> 2026-09-22 更新：见 §2.3 的更新说明，上限已改为 1048576，本节保留为历史记录。
 
 本期遵循 Kimi 官方 OpenClaw 配置，不自行提高上限。如果代表性 Agent 任务仍高频达到 `length`，则本次发版不得以“提高 token 上限”静默掩盖，需要单独评估延迟、费用和官方兼容性。
 

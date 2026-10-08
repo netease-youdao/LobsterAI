@@ -45,6 +45,16 @@
   ],
   "extraResources": [
     {
+      "from": "resources/word-licenses",
+      "to": "licenses/word",
+      "filter": ["NOTICE.txt", "manifest.json"]
+    },
+    {
+      "from": "resources/sheet-licenses",
+      "to": "licenses/sheet",
+      "filter": ["NOTICE.txt", "manifest.json"]
+    },
+    {
       "from": ".keyfrom-build",
       "to": "keyfrom",
       "filter": [
@@ -147,6 +157,13 @@
           "!**/tests/**",
           "!**/test/**",
           "!**/__tests__/**"
+        ]
+      },
+      {
+        "from": "resources/computer-use",
+        "to": "computer-use",
+        "filter": [
+          "*.zip"
         ]
       }
     ]
@@ -263,7 +280,6 @@
     "node_modules/@koromix/**",
     "node_modules/better-sqlite3/**",
     "node_modules/koffi/**",
-    "node_modules/node-nim/**",
     "node_modules/npm/**",
     "node_modules/selection-hook/**"
   ],

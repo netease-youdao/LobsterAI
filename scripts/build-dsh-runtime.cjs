@@ -77,6 +77,14 @@ const PATCH_SENTINELS = [
     occurrences: 2,
   },
   {
+    // The same fix once dsh 0.1.5 moved CreateProcess into its own package;
+    // the second site now also carries every ordinary Windows subprocess.
+    patch: '01-win32-process-hide-console.cjs',
+    file: 'node_modules/@deepseek-ai/dsh-win32-process/lib/index.js',
+    expect: 'wShowWindow: 0,',
+    occurrences: 2,
+  },
+  {
     patch: '02-picker-electron-safe-path-read.cjs',
     file: 'node_modules/@deepseek-ai/dsh-host-directory-picker-native/lib/worker.cjs',
     // koffi.view() over native memory aborts under Electron's sandboxed V8, so

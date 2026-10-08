@@ -1,7 +1,8 @@
 import 'katex/dist/katex.min.css';
 import 'katex/contrib/mhchem';
 
-import React, { useMemo, useState } from 'react';
+import { ChevronRightIcon } from '@heroicons/react/24/outline';
+import React, { useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 // @ts-ignore
 import rehypeKatex from 'rehype-katex';
@@ -14,12 +15,19 @@ import { i18nService } from '../services/i18n';
 import { normalizeShellFilePath } from '../services/shellAppsCache';
 import { showShellFailureToast, showToast } from '../utils/localFileActions';
 import { transformMarkdownTextSegments } from '../utils/markdownCodeSegments';
+import { remarkDetailsBlocks } from '../utils/remarkDetailsBlocks';
+import { remarkMarkdownLayout } from '../utils/remarkMarkdownLayout';
+import { remarkPandocInlineMath } from '../utils/remarkPandocInlineMath';
 import CodeBlock from './CodeBlock';
 import LocalFileContextMenu from './common/LocalFileContextMenu';
+import { type MarkdownLinkOpener, useMarkdownLinkOpener } from './markdownLinkOpener';
 
 const SAFE_URL_PROTOCOLS = new Set(['http', 'https', 'mailto', 'tel', 'file', 'localfile', 'kit']);
 const INTERNAL_URL_PROTOCOLS = new Set(['kit']);
-const LINK_CLASS_NAME = 'text-primary hover:text-primary-hover hover:underline underline-offset-2 transition-colors break-words [overflow-wrap:anywhere]';
+// no-underline and the inherited weight override @tailwindcss/typography, whose
+// `.prose a` rule otherwise underlines every link at weight 500 (lighter than
+// the surrounding text inside **bold**).
+const LINK_CLASS_NAME = 'text-primary no-underline [font-weight:inherit] decoration-primary/40 underline-offset-[3px] hover:text-primary-hover hover:underline transition-colors break-words [overflow-wrap:anywhere]';
 const LARGE_MARKDOWN_RENDER_THRESHOLD = 8 * 1024;
 const LARGE_MARKDOWN_PREVIEW_HEAD_LENGTH = 4 * 1024;
 const LARGE_MARKDOWN_PREVIEW_TAIL_LENGTH = 8 * 1024;
@@ -321,7 +329,7 @@ const isRemoteOrInlineImageSrc = (src: string): boolean => {
   return /^(?:https?|data|blob):/i.test(src);
 };
 
-const resolveMarkdownImageSrc = (
+export const resolveMarkdownImageSrc = (
   src: unknown,
   alt: unknown,
   resolveLocalFilePath?: (href: string, text: string) => string | null
@@ -400,6 +408,19 @@ const findFallbackPathFromContext = (
   return null;
 };
 
+const openLocalFileInApp = async (
+  linkOpener: MarkdownLinkOpener | null,
+  filePath: string,
+): Promise<boolean> => {
+  if (!linkOpener) return false;
+  try {
+    return await linkOpener.openLocalFile(filePath);
+  } catch (error) {
+    console.warn('[MarkdownContent] Failed to open local file in app, using the system app instead:', error);
+    return false;
+  }
+};
+
 interface LocalFileLinkProps {
   filePath: string;
   isDirectory: boolean;
@@ -418,22 +439,28 @@ const LocalFileLink: React.FC<LocalFileLinkProps> = ({
   children,
 }) => {
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
+  const anchorRef = useRef<HTMLAnchorElement>(null);
+  const linkOpener = useMarkdownLinkOpener();
 
-  const handleClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
-    e.preventDefault();
-    const anchor = e.currentTarget;
+  const openLink = async () => {
     try {
+      if (!isDirectory && await openLocalFileInApp(linkOpener, filePath)) {
+        return;
+      }
       const result = await window.electron.shell.openPath(filePath);
       if (result?.success) {
         return;
       }
 
       const fallbackPath = findFallbackPathFromContext(
-        anchor,
+        anchorRef.current,
         linkText,
         resolveLocalFilePath
       );
       if (fallbackPath) {
+        if (await openLocalFileInApp(linkOpener, fallbackPath)) {
+          return;
+        }
         const fallbackResult = await window.electron.shell.openPath(fallbackPath);
         if (!fallbackResult?.success) {
           console.error('Failed to open file (fallback):', fallbackPath, fallbackResult?.error);
@@ -449,6 +476,11 @@ const LocalFileLink: React.FC<LocalFileLinkProps> = ({
     }
   };
 
+  const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    void openLink();
+  };
+
   const handleContextMenu = (e: React.MouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
     e.stopPropagation();
@@ -458,6 +490,7 @@ const LocalFileLink: React.FC<LocalFileLinkProps> = ({
   return (
     <>
       <a
+        ref={anchorRef}
         href={toFileHref(filePath)}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
@@ -472,10 +505,52 @@ const LocalFileLink: React.FC<LocalFileLinkProps> = ({
           filePath={filePath}
           isDirectory={isDirectory}
           position={menuPosition}
+          onOpen={linkOpener ? () => { void openLink(); } : undefined}
           onClose={() => setMenuPosition(null)}
         />
       )}
     </>
+  );
+};
+
+interface ExternalLinkProps {
+  href: string;
+  anchorProps: Record<string, unknown>;
+  children: React.ReactNode;
+}
+
+const ExternalLink: React.FC<ExternalLinkProps> = ({ href, anchorProps, children }) => {
+  const linkOpener = useMarkdownLinkOpener();
+
+  const handleClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (linkOpener?.openWebLink(href)) {
+      e.preventDefault();
+      return;
+    }
+
+    const openExternal = (window as any)?.electron?.shell?.openExternal;
+    if (typeof openExternal !== 'function') {
+      return;
+    }
+
+    e.preventDefault();
+    const opened = await openExternalViaDefaultBrowser(href);
+    if (!opened) {
+      openExternalViaAnchorFallback(href);
+    }
+  };
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={handleClick}
+      className={LINK_CLASS_NAME}
+      {...anchorProps}
+    >
+      {children}
+    </a>
   );
 };
 
@@ -534,10 +609,10 @@ const createMarkdownComponents = (
       {children}
     </blockquote>
   ),
-  pre: ({ node: _node, className: _className, children }: any) => (
-    <>{children}</>
-  ),
-  code: CodeBlock,
+  pre: ({ children }: any) => React.isValidElement<React.ComponentProps<typeof CodeBlock>>(children)
+    ? <CodeBlock {...children.props} inline={false} />
+    : <>{children}</>,
+  code: (props: any) => <CodeBlock {...props} inline />,
   table: ({ node: _node, className: _className, children, ...props }: any) => (
     <div className={`${spacing === 'compact' ? 'my-2' : 'my-4'} overflow-x-auto rounded-xl border border-border`}>
       <table className="border-collapse w-full" {...props}>
@@ -560,13 +635,13 @@ const createMarkdownComponents = (
       {children}
     </tr>
   ),
-  th: ({ node: _node, className: _className, children, ...props }: any) => (
-    <th className="px-4 py-2 text-left font-semibold text-foreground" {...props}>
+  th: ({ node: _node, className: _className, children, align, style, ...props }: any) => (
+    <th className="px-4 py-2 align-top text-left font-semibold text-foreground" style={{ ...style, textAlign: align ?? style?.textAlign }} {...props}>
       {children}
     </th>
   ),
-  td: ({ node: _node, className: _className, children, ...props }: any) => (
-    <td className="px-4 py-2 text-foreground" {...props}>
+  td: ({ node: _node, className: _className, children, align, style, ...props }: any) => (
+    <td className="px-4 py-2 align-top text-foreground" style={{ ...style, textAlign: align ?? style?.textAlign }} {...props}>
       {children}
     </td>
   ),
@@ -583,6 +658,28 @@ const createMarkdownComponents = (
       />
     );
   },
+  details: ({ node: _node, className: _className, children, ...props }: any) => {
+    // remarkDetailsBlocks always puts <summary> first; the rest is the collapsible body.
+    const [summary, ...body] = React.Children.toArray(children);
+    return (
+      <details className={`${spacing === 'compact' ? 'my-2' : 'my-3'} first:mt-0 last:mb-0 overflow-hidden rounded-xl border border-border bg-surface-raised/30 text-foreground`} {...props}>
+        {summary}
+        {body.length > 0 && (
+          <div className={`border-t border-border ${spacing === 'compact' ? 'px-3 py-2' : 'px-4 py-3'}`}>
+            {body}
+          </div>
+        )}
+      </details>
+    );
+  },
+  summary: ({ node: _node, className: _className, children, ...props }: any) => (
+    <summary className={`flex cursor-pointer select-none list-none items-center gap-1.5 font-medium text-foreground transition-colors hover:bg-surface-raised/60 [&::-webkit-details-marker]:hidden ${spacing === 'compact' ? 'px-3 py-1.5' : 'px-4 py-2.5'}`} {...props}>
+      <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted transition-transform duration-150 [details[open]>summary>&]:rotate-90" aria-hidden="true" />
+      <span className="min-w-0 break-words">
+        {React.Children.count(children) > 0 ? children : i18nService.t('markdownDetailsSummary')}
+      </span>
+    </summary>
+  ),
   hr: ({ node: _node, ...props }: any) => (
     <hr className={`${spacing === 'compact' ? 'my-2' : 'my-5'} border-border`} {...props} />
   ),
@@ -628,30 +725,10 @@ const createMarkdownComponents = (
     }
 
     if (isExternalLink) {
-      const handleExternalClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
-        const openExternal = (window as any)?.electron?.shell?.openExternal;
-        if (typeof openExternal !== 'function') {
-          return;
-        }
-
-        e.preventDefault();
-        const opened = await openExternalViaDefaultBrowser(hrefValue);
-        if (!opened) {
-          openExternalViaAnchorFallback(hrefValue);
-        }
-      };
-
       return (
-        <a
-          href={hrefValue}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={handleExternalClick}
-          className={LINK_CLASS_NAME}
-          {...props}
-        >
+        <ExternalLink href={hrefValue} anchorProps={props}>
           {children}
-        </a>
+        </ExternalLink>
       );
     }
 
@@ -700,7 +777,10 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
     if (useLargePreview) {
       return '';
     }
-    return normalizeDisplayMath(convertLatexMathDelimiters(encodeFileUrlsInMarkdown(content)));
+    if (!content.includes('file://') && !content.includes('\\(')
+      && !content.includes('\\[') && !content.includes('$$')) return content;
+    return transformMarkdownTextSegments(content, segment =>
+      normalizeDisplayMath(convertSegmentLatexDelimiters(encodeFileUrlsInMarkdown(segment))));
   }, [content, useLargePreview]);
 
   if (useLargePreview) {
@@ -728,7 +808,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
   }
 
   return (
-    <div className={`markdown-content min-w-0 max-w-full ${markdownTextClassName} ${className}`}>
+    <div className={`markdown-content min-w-0 max-w-full whitespace-normal ${markdownTextClassName} ${className}`}>
       {canUseLargePreview && isExpanded && (
         <div className="mb-2 flex justify-end">
           <button
@@ -741,7 +821,13 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
         </div>
       )}
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
+        remarkPlugins={[
+          [remarkGfm, { singleTilde: false }],
+          remarkMath,
+          remarkPandocInlineMath,
+          remarkDetailsBlocks,
+          remarkMarkdownLayout,
+        ]}
         rehypePlugins={[rehypeKatex]}
         urlTransform={safeUrlTransform}
         components={components}

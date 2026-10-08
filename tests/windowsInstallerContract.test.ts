@@ -1002,6 +1002,22 @@ describe('Windows installer hardening contracts', () => {
     );
   });
 
+  test('materializes Skills backup file records as objects before summing their size', () => {
+    // Windows PowerShell 5.1 Measure-Object -Property cannot read keys of a
+    // hashtable/[ordered] dictionary; under ErrorActionPreference=Stop that
+    // aborts the whole Skills backup. The records must be PSCustomObjects.
+    const fileRecords = installerInclude.slice(
+      installerInclude.indexOf('$$files = @('),
+      installerInclude.indexOf('$$payload = [ordered]@{'),
+    );
+
+    expect(fileRecords).toContain('[PSCustomObject][ordered]@{');
+    expect(fileRecords).not.toMatch(/ForEach-Object \{\\\s*\[ordered\]@\{/);
+    expect(installerInclude).toContain(
+      'totalBytes = [long](($$files | Measure-Object -Property length -Sum).Sum)',
+    );
+  });
+
   test('drives Skills backup state from helper exit codes, never stdout text', () => {
     const defines: Record<string, string> = {};
     for (const match of installerInclude.matchAll(
@@ -1029,6 +1045,75 @@ describe('Windows installer hardening contracts', () => {
     // output with its trailing CRLF, so an exact text comparison silently
     // fails (the 2026.7.23 spurious legacy-restore-backup-missing bug).
     expect(installerInclude).not.toMatch(/StrCmp \$1 "legacy-/);
+  });
+
+  test('tells users which Skills folders to move when the backup aborts the update', () => {
+    // In-app updaters hit this dialog; the old English-only status text left
+    // them stuck. The helper lists the folders before copying anything, and
+    // the dialog names them plus the per-user skills root to move them to.
+    const helperStart = installerInclude.indexOf('$$userSkills = @(');
+    const namesWrite = installerInclude.indexOf(
+      'try { [IO.File]::WriteAllText($$env:LOBSTERAI_SKILL_NAMES_FILE, (@($$userSkills.Name | Sort-Object) -join \\", \\"), (New-Object -TypeName Text.UnicodeEncoding -ArgumentList $$false, $$false)) } catch { };',
+    );
+    const copyPhase = installerInclude.indexOf('$$phase = \\"backup-copy\\";', helperStart);
+    expect(helperStart).toBeGreaterThan(-1);
+    // Display-only and self-contained: written during inspect with its own
+    // catch, so a failed write can never become legacy-inspect-failed.
+    expect(namesWrite).toBeGreaterThan(helperStart);
+    expect(namesWrite).toBeLessThan(copyPhase);
+
+    const namesEnvSet = installerInclude.indexOf(
+      'SetEnvironmentVariable(t "LOBSTERAI_SKILL_NAMES_FILE", t "$PLUGINSDIR\\${LOBSTER_LEGACY_SKILL_NAMES_FILE}")',
+    );
+    const namesEnvClear = installerInclude.indexOf(
+      'SetEnvironmentVariable(t "LOBSTERAI_SKILL_NAMES_FILE", t "")',
+    );
+    expect(namesEnvSet).toBeGreaterThan(-1);
+    expect(namesEnvSet).toBeLessThan(helperStart);
+    expect(namesEnvClear).toBeGreaterThan(copyPhase);
+
+    const failedAbort = installerInclude.indexOf('SkillBackupFailedAbort:');
+    const abort = installerInclude.slice(
+      failedAbort,
+      installerInclude.indexOf('SkillBackupValidated:', failedAbort),
+    );
+    expect(abort).toContain(
+      'FileOpen $9 "$PLUGINSDIR\\${LOBSTER_LEGACY_SKILL_NAMES_FILE}" r',
+    );
+    expect(abort).toContain('FileReadUTF16LE $9 $lobsterLegacySkillNames');
+    expect(abort).toContain('StrCmp $LANGUAGE "${LOBSTER_LANGID_SIMPCHINESE}" SkillBackupAbortDialogZh');
+    expect(abort).toContain('StrCmp $LANGUAGE "${LOBSTER_LANGID_TRADCHINESE}" SkillBackupAbortDialogZh');
+    for (const variant of ['MOVE_EN', 'RETRY_EN', 'MOVE_ZH', 'RETRY_ZH']) {
+      expect(abort).toContain(
+        `MessageBox MB_OK|MB_ICONEXCLAMATION "\${LOBSTER_SKILL_BACKUP_ABORT_${variant}}" /SD IDOK`,
+      );
+    }
+    // The dialog only explains; the update still fails closed.
+    expect(abort.trimEnd().split('\n').slice(-2).map((line) => line.trim())).toEqual([
+      'SetErrorLevel 2',
+      'Quit',
+    ]);
+
+    const dialogText = (variant: string): string => {
+      const match = installerInclude.match(
+        new RegExp(`^!define LOBSTER_SKILL_BACKUP_ABORT_${variant} "(.*)"$`, 'm'),
+      );
+      expect(match, variant).not.toBeNull();
+      return match?.[1] ?? '';
+    };
+    for (const variant of ['MOVE_EN', 'MOVE_ZH']) {
+      const text = dialogText(variant);
+      expect(text).toContain('$INSTDIR\\resources\\SKILLs');
+      expect(text).toContain('%APPDATA%\\LobsterAI\\SKILLs');
+      expect(text).toContain('$lobsterLegacySkillNames');
+      expect(text).toContain('$lobsterLegacySkillsStatus');
+    }
+    for (const variant of ['RETRY_EN', 'RETRY_ZH']) {
+      const text = dialogText(variant);
+      expect(text).not.toContain('$lobsterLegacySkillNames');
+      expect(text).toContain('$APPDATA\\LobsterAI\\install-timing.log');
+      expect(text).toContain('$lobsterLegacySkillsStatus');
+    }
   });
 
   test('re-checks the attempt manifest after a verified backup before replacing the old install', () => {

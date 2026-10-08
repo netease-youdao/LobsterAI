@@ -1,0 +1,266 @@
+diff --git a/src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts b/src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts
+index 6c4c92aae75..968547a9ebf 100644
+--- a/src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts
++++ b/src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts
+@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
+ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+ import { createHookRunner } from "../plugins/hooks.js";
+ import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-fixtures.js";
++import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+ import {
+   __testing,
+   handleAgentEnd,
+@@ -483,13 +484,13 @@ describe("handleAgentEnd", () => {
+         stopReason: "error",
+         provider: "anthropic",
+         model: "claude-test",
+-        errorMessage:
+-          '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
++        errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+         content: [{ type: "text", text: "" }],
+       },
+       { onAgentEvent },
+     );
+ 
++    ctx.params.messageChannel = INTERNAL_MESSAGE_CHANNEL;
+     const warnMeta = await handleAgentEndAndReadWarnMeta(ctx);
+     expect(warnMeta.event).toBe("embedded_run_agent_end");
+     expect(warnMeta.runId).toBe("run-1");
+@@ -511,6 +512,8 @@ describe("handleAgentEnd", () => {
+         failoverReason: "overloaded",
+         providerRuntimeFailureKind: "timeout",
+         providerErrorType: "overloaded_error",
++        rawErrorPreview: warnMeta.rawErrorPreview,
++        providerErrorMessagePreview: "Overloaded",
+       }),
+     });
+   });
+@@ -548,6 +551,7 @@ describe("handleAgentEnd", () => {
+       },
+       { onAgentEvent },
+     );
++    ctx.params.messageChannel = INTERNAL_MESSAGE_CHANNEL;
+ 
+     await handleAgentEnd(ctx);
+ 
+@@ -560,10 +564,34 @@ describe("handleAgentEnd", () => {
+       data: expect.objectContaining({
+         phase: "error",
+         error: "LLM request failed.",
++        rawErrorPreview: "x-api-key: ***",
+       }),
+     });
++    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain(
++      "sk-abcdefghijklmnopqrstuvwxyz123456",
++    );
+   });
+ 
++  it.each([undefined, "telegram", "feishu"])(
++    "keeps error previews out of %s channel callbacks",
++    async (channel) => {
++      const onAgentEvent = vi.fn();
++      const ctx = createContext(
++        {
++          role: "assistant",
++          stopReason: "error",
++          content: [],
++          errorMessage: "SECRET_CANARY_69737",
++        },
++        { onAgentEvent },
++      );
++      ctx.params.messageChannel = channel;
++      await handleAgentEnd(ctx);
++      expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("SECRET_CANARY_69737");
++      expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("rawErrorPreview");
++    },
++  );
++
+   it("logs runtime failure kind for missing-scope auth errors", async () => {
+     const ctx = createContext({
+       role: "assistant",
+diff --git a/src/agents/embedded-agent-subscribe.handlers.lifecycle.ts b/src/agents/embedded-agent-subscribe.handlers.lifecycle.ts
+index 1f1e2bb514e..c06287b3ba3 100644
+--- a/src/agents/embedded-agent-subscribe.handlers.lifecycle.ts
++++ b/src/agents/embedded-agent-subscribe.handlers.lifecycle.ts
+@@ -4,6 +4,7 @@
+ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+ import { emitAgentEvent } from "../infra/agent-events.js";
++import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+ import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
+ import { sanitizeForConsole } from "./console-sanitize.js";
+ import {
+@@ -166,6 +167,9 @@ export function handleAgentEnd(
+         provider: lastAssistant.provider,
+       }).textPreview ?? GENERIC_ASSISTANT_ERROR_TEXT;
+     lifecycleErrorText = safeErrorText;
++    // Desktop technical details use the redacted observation preview. External
++    // channel callbacks retain generic errors without arbitrary provider text.
++    const includeErrorPreviews = ctx.params.messageChannel === INTERNAL_MESSAGE_CHANNEL;
+     lifecycleErrorMetadata = {
+       ...(failoverReason ? { failoverReason } : {}),
+       ...(lastAssistant.model ? { model: lastAssistant.model } : {}),
+@@ -177,6 +181,12 @@ export function handleAgentEnd(
+         ? { providerErrorType: observedError.providerErrorType }
+         : {}),
+       ...(observedError.httpCode ? { httpCode: observedError.httpCode } : {}),
++      ...(includeErrorPreviews && observedError.rawErrorPreview
++        ? { rawErrorPreview: observedError.rawErrorPreview }
++        : {}),
++      ...(includeErrorPreviews && observedError.providerErrorMessagePreview
++        ? { providerErrorMessagePreview: observedError.providerErrorMessagePreview }
++        : {}),
+       ...(observedError.rawErrorHash ? { rawErrorHash: observedError.rawErrorHash } : {}),
+       ...(observedError.rawErrorFingerprint
+         ? { rawErrorFingerprint: observedError.rawErrorFingerprint }
+diff --git a/src/auto-reply/reply/agent-lifecycle-terminal.test.ts b/src/auto-reply/reply/agent-lifecycle-terminal.test.ts
+new file mode 100644
+index 00000000000..3307f1e7a55
+--- /dev/null
++++ b/src/auto-reply/reply/agent-lifecycle-terminal.test.ts
+@@ -0,0 +1,68 @@
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { emitAgentEvent } from "../../infra/agent-events.js";
++import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
++
++vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent: vi.fn() }));
++
++const detail = {
++  provider: "lobsterai-server",
++  model: "deepseek-v4-pro",
++  rawErrorPreview: "Cannot read properties of undefined (reading 'trim')",
++  providerErrorMessagePreview: "Provider diagnostic",
++  httpCode: "500",
++  providerErrorType: "server_error",
++  providerRuntimeFailureKind: "unclassified",
++  failoverReason: "server_error",
++  rawErrorHash: "sha256:fixture",
++};
++
++function createBackstop() {
++  return createAgentLifecycleTerminalBackstop({
++    runId: "run-error-detail",
++    sessionKey: "agent:main:fixture",
++    getLifecycleGeneration: () => "generation-fixture",
++    resolveTerminationFields: () => ({}),
++  });
++}
++
++describe("deferred lifecycle error details", () => {
++  beforeEach(() => vi.clearAllMocks());
++
++  it("preserves safe previews through finishing to the outer terminal event", () => {
++    const backstop = createBackstop();
++    backstop.note({
++      stream: "lifecycle",
++      data: {
++        phase: "finishing",
++        error: "LLM request failed.",
++        ...detail,
++        headers: { authorization: "private" },
++        rawError: "private provider body",
++      },
++    });
++    backstop.emit("error", new Error(backstop.getDeferredError()));
++    expect(emitAgentEvent).toHaveBeenCalledWith(
++      expect.objectContaining({
++        data: expect.objectContaining({ phase: "error", error: "LLM request failed.", ...detail }),
++      }),
++    );
++    const data = vi.mocked(emitAgentEvent).mock.calls[0]?.[0].data;
++    expect(data).not.toHaveProperty("headers");
++    expect(data).not.toHaveProperty("rawError");
++  });
++
++  it.each(["end", "error"] as const)("clears earlier error details on retry before %s", (phase) => {
++    const backstop = createBackstop();
++    backstop.note({
++      stream: "lifecycle",
++      data: { phase: "finishing", error: "old error", ...detail },
++    });
++    backstop.note({ stream: "lifecycle", data: { phase: "start" } });
++    backstop.emit(phase, phase === "error" ? new Error("new error") : {});
++    expect(backstop.getDeferredError()).toBeUndefined();
++    const data = vi.mocked(emitAgentEvent).mock.calls[0]?.[0].data;
++    for (const key of Object.keys(detail)) {
++      expect(data).not.toHaveProperty(key);
++    }
++  });
++});
+diff --git a/src/auto-reply/reply/agent-lifecycle-terminal.ts b/src/auto-reply/reply/agent-lifecycle-terminal.ts
+index 340063173a3..4c7fc977694 100644
+--- a/src/auto-reply/reply/agent-lifecycle-terminal.ts
++++ b/src/auto-reply/reply/agent-lifecycle-terminal.ts
+@@ -21,6 +21,19 @@ const DEFERRED_TERMINAL_METADATA_KEYS = [
+   "aborted",
+   "livenessState",
+   "replayInvalid",
++  // The embedded runner emits finishing before the outer terminal. Preserve
++  // its bounded, redacted observations through that deferred boundary.
++  "provider",
++  "model",
++  "failoverReason",
++  "providerRuntimeFailureKind",
++  "providerErrorType",
++  "httpCode",
++  "rawErrorPreview",
++  "providerErrorMessagePreview",
++  "rawErrorHash",
++  "rawErrorFingerprint",
++  "requestIdHash",
+ ] as const;
+ 
+ export function resolveAgentLifecycleTerminalMetadata(meta: unknown): Record<string, unknown> {
+diff --git a/src/gateway/server-chat.agent-events.test.ts b/src/gateway/server-chat.agent-events.test.ts
+index 9f6493cbd01..be572d3774d 100644
+--- a/src/gateway/server-chat.agent-events.test.ts
++++ b/src/gateway/server-chat.agent-events.test.ts
+@@ -4472,6 +4472,35 @@ describe("agent event handler", () => {
+     expect(nodePayload).not.toHaveProperty("message");
+   });
+ 
++  it("forwards safe lifecycle error previews to chat subscribers", () => {
++    const { broadcast, nodeSendToSession, handler } = createHarness({
++      resolveSessionKeyForRun: () => "session-error-detail",
++      lifecycleErrorRetryGraceMs: 0,
++    });
++    registerAgentRunContext("run-error-detail", { sessionKey: "session-error-detail" });
++    const detail = {
++      provider: "lobsterai-server",
++      model: "deepseek-v4-pro",
++      rawErrorPreview: "Cannot read properties of undefined (reading 'trim')",
++      providerErrorMessagePreview: "Provider diagnostic",
++    };
++    emitAgentEvent(handler, "run-error-detail", "lifecycle", {
++      phase: "error",
++      error: "LLM request failed.",
++      ...detail,
++      rawError: "private provider body",
++      headers: { authorization: "private" },
++    });
++    for (const payload of [
++      chatBroadcastCalls(broadcast).at(-1)?.[1],
++      sessionChatCalls(nodeSendToSession).at(-1)?.[2],
++    ]) {
++      expect(payload).toMatchObject({ state: "error", ...detail });
++      expect(payload).not.toHaveProperty("rawError");
++      expect(payload).not.toHaveProperty("headers");
++    }
++  });
++
+   it("suppresses delayed lifecycle chat errors for active chat.send runs while still cleaning up", () => {
+     vi.useFakeTimers();
+     const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
+diff --git a/src/gateway/server-chat.ts b/src/gateway/server-chat.ts
+index 67cab29dcae..0f5ffa7c86d 100644
+--- a/src/gateway/server-chat.ts
++++ b/src/gateway/server-chat.ts
+@@ -97,6 +97,8 @@ const SAFE_CHAT_ERROR_METADATA_KEYS = [
+   "providerRuntimeFailureKind",
+   "providerErrorType",
+   "httpCode",
++  "rawErrorPreview",
++  "providerErrorMessagePreview",
+   "rawErrorHash",
+   "rawErrorFingerprint",
+   "requestIdHash",

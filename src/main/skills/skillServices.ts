@@ -12,6 +12,9 @@ import { getElectronNodeRuntimePath } from '../libs/coworkUtil';
 import { resolveNodeRuntimeForSpawn } from '../libs/nodeRuntime';
 import { appendPythonRuntimeToEnv } from '../libs/pythonRuntime';
 
+const WEB_SEARCH_STOP_TIMEOUT_MS = 2_000;
+const WEB_SEARCH_STOP_POLL_INTERVAL_MS = 50;
+
 /**
  * Resolve the user's login shell PATH on macOS/Linux.
  * Packaged Electron apps on macOS don't inherit the user's shell profile,
@@ -402,13 +405,23 @@ export class SkillServiceManager {
         }
       }
 
+      // Most services exit promptly. Wait only while the process is alive,
+      // rather than adding a fixed two seconds to every application quit.
+      const deadline = Date.now() + WEB_SEARCH_STOP_TIMEOUT_MS;
+      while (this.isWebSearchServiceRunning()) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          console.warn(`[SkillServices] Web Search service did not stop within ${WEB_SEARCH_STOP_TIMEOUT_MS}ms (PID: ${this.webSearchPid})`);
+          // Keep the PID available so a later attempt can still find the service.
+          return;
+        }
+        await new Promise(resolve => setTimeout(resolve, Math.min(WEB_SEARCH_STOP_POLL_INTERVAL_MS, remaining)));
+      }
+
       const pidFile = path.join(skillPath, '.server.pid');
       if (fs.existsSync(pidFile)) {
         fs.unlinkSync(pidFile);
       }
-
-      // Wait for graceful shutdown
-      await new Promise(resolve => setTimeout(resolve, 2000));
 
       console.log('[SkillServices] Web Search Bridge Server stopped');
       this.webSearchPid = null;

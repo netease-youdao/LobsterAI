@@ -54,6 +54,7 @@ import {
   ContinuityCapsuleSource,
   type CoworkContinuityCapsule,
 } from './libs/agentEngine/coworkContinuityCapsule';
+import { VISIBLE_COWORK_SESSION_SQL } from './libs/agentEngine/subagent/sessionVisibility';
 import {
   type SessionProjection,
   type SessionProjectionChanges,
@@ -460,6 +461,12 @@ export interface UpdateAgentRequest {
 }
 
 
+/** Live +N/-M line counts streamed while a file tool call's arguments are generated. */
+export interface CoworkLiveEditDiff {
+  added: number;
+  removed: number;
+}
+
 export interface CoworkMessageMetadata {
   toolName?: string;
   toolInput?: Record<string, unknown>;
@@ -470,6 +477,9 @@ export interface CoworkMessageMetadata {
   isError?: boolean;
   isStreaming?: boolean;
   isFinal?: boolean;
+  /** True while the model is still streaming this tool call's arguments. */
+  isGenerating?: boolean;
+  liveEditDiff?: CoworkLiveEditDiff;
   skillIds?: string[];
   kitIds?: string[];
   kitReferences?: KitReference[];
@@ -534,6 +544,11 @@ export interface CoworkSession {
   messagesOffset: number;
   /** Total number of messages stored for this session. */
   totalMessages: number;
+  /**
+   * Start of the turn the first loaded message belongs to, when that turn
+   * began before `messagesOffset`. Filled in for the renderer only.
+   */
+  leadingTurnStartTimestamp?: number | null;
   parentSessionId?: string | null;
   forkedFromMessageId?: string | null;
   forkedAt?: number | null;
@@ -1652,11 +1667,11 @@ export class CoworkStore {
   countSessions(agentId?: string): number {
     if (agentId) {
       const row = this.db
-        .prepare("SELECT COUNT(*) as count FROM cowork_sessions WHERE COALESCE(NULLIF(TRIM(agent_id), ''), 'main') = ?")
+        .prepare(`SELECT COUNT(*) as count FROM cowork_sessions s WHERE COALESCE(NULLIF(TRIM(s.agent_id), ''), 'main') = ? AND ${VISIBLE_COWORK_SESSION_SQL}`)
         .get(agentId) as { count: number } | undefined;
       return row?.count || 0;
     }
-    const row = this.db.prepare('SELECT COUNT(*) as count FROM cowork_sessions').get() as
+    const row = this.db.prepare(`SELECT COUNT(*) as count FROM cowork_sessions s WHERE ${VISIBLE_COWORK_SESSION_SQL}`).get() as
       | { count: number }
       | undefined;
     return row?.count || 0;
@@ -1671,6 +1686,7 @@ export class CoworkStore {
         SELECT ${summaryColumns}
         FROM cowork_sessions s
         WHERE COALESCE(NULLIF(TRIM(s.agent_id), ''), 'main') = ?
+          AND ${VISIBLE_COWORK_SESSION_SQL}
         ORDER BY s.pinned DESC,
           CASE WHEN s.pinned = 1 THEN COALESCE(s.pin_order, s.updated_at, s.created_at) END ASC,
           CASE WHEN s.pinned = 0 THEN s.updated_at END DESC,
@@ -1684,6 +1700,7 @@ export class CoworkStore {
         `
         SELECT ${summaryColumns}
         FROM cowork_sessions s
+        WHERE ${VISIBLE_COWORK_SESSION_SQL}
         ORDER BY s.pinned DESC,
           CASE WHEN s.pinned = 1 THEN COALESCE(s.pin_order, s.updated_at, s.created_at) END ASC,
           CASE WHEN s.pinned = 0 THEN s.updated_at END DESC,
@@ -1707,9 +1724,10 @@ export class CoworkStore {
         .prepare(
           `
           SELECT COUNT(*) as count
-          FROM cowork_sessions
-          WHERE title LIKE ? ESCAPE '\\'
-            AND COALESCE(NULLIF(TRIM(agent_id), ''), 'main') = ?
+          FROM cowork_sessions s
+          WHERE s.title LIKE ? ESCAPE '\\'
+          AND ${VISIBLE_COWORK_SESSION_SQL}
+            AND COALESCE(NULLIF(TRIM(s.agent_id), ''), 'main') = ?
         `,
         )
         .get(pattern, options.agentId) as { count: number } | undefined;
@@ -1720,8 +1738,9 @@ export class CoworkStore {
       .prepare(
         `
         SELECT COUNT(*) as count
-        FROM cowork_sessions
-        WHERE title LIKE ? ESCAPE '\\'
+        FROM cowork_sessions s
+        WHERE s.title LIKE ? ESCAPE '\\'
+          AND ${VISIBLE_COWORK_SESSION_SQL}
       `,
       )
       .get(pattern) as { count: number } | undefined;
@@ -1743,6 +1762,7 @@ export class CoworkStore {
         SELECT ${summaryColumns}
         FROM cowork_sessions s
         WHERE s.title LIKE ? ESCAPE '\\'
+          AND ${VISIBLE_COWORK_SESSION_SQL}
           AND COALESCE(NULLIF(TRIM(s.agent_id), ''), 'main') = ?
         ORDER BY s.pinned DESC,
           CASE WHEN s.pinned = 1 THEN COALESCE(s.pin_order, s.updated_at, s.created_at) END ASC,
@@ -1758,6 +1778,7 @@ export class CoworkStore {
         SELECT ${summaryColumns}
         FROM cowork_sessions s
         WHERE s.title LIKE ? ESCAPE '\\'
+          AND ${VISIBLE_COWORK_SESSION_SQL}
         ORDER BY s.pinned DESC,
           CASE WHEN s.pinned = 1 THEN COALESCE(s.pin_order, s.updated_at, s.created_at) END ASC,
           CASE WHEN s.pinned = 0 THEN s.updated_at END DESC,
@@ -1855,6 +1876,41 @@ export class CoworkStore {
       timestamp: row.created_at,
       metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
     }));
+  }
+
+  /**
+   * Start of the turn that the message at `position` (paging order) belongs
+   * to: the earliest timestamp from the latest user message at or before that
+   * position up to the position itself. A paged window can begin mid-turn, and
+   * the renderer needs this to time that turn without loading its first messages.
+   */
+  getTurnStartTimestampAt(sessionId: string, position: number): number | null {
+    if (!Number.isInteger(position) || position < 0) return null;
+    const rows = this.db
+      .prepare<[string, number], { type: string; created_at: number }>(
+        `
+        SELECT type, created_at
+        FROM (
+          SELECT type, created_at, sequence, ROWID as rowid_
+          FROM cowork_messages
+          WHERE session_id = ?
+          ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, ROWID ASC
+          LIMIT ?
+        )
+        ORDER BY COALESCE(sequence, created_at) DESC, created_at DESC, rowid_ DESC
+      `,
+      )
+      .iterate(sessionId, position + 1);
+
+    let start: number | null = null;
+    for (const row of rows) {
+      const timestamp = normalizeMessageTimestamp(Number(row.created_at));
+      if (timestamp != null) {
+        start = start == null ? timestamp : Math.min(start, timestamp);
+      }
+      if (row.type === 'user') break;
+    }
+    return start;
   }
 
   /**

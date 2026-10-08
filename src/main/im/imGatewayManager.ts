@@ -1,13 +1,13 @@
 /**
  * IM Gateway Manager
- * Unified manager for DingTalk, Feishu, NIM gateways
- * and Telegram, Discord, QQ, WeCom, Weixin, POPO, NeteaseBee via OpenClaw
+ * Unified manager for DingTalk, Feishu, NIM, Telegram, Discord, QQ, WeCom,
+ * Weixin, POPO and NeteaseBee, all of which run via OpenClaw
  */
 
 import Database from 'better-sqlite3';
 import { EventEmitter } from 'events';
 
-import { classifyErrorKey } from '../../common/coworkErrorClassify';
+import { WeixinPlugin, WeixinQrLoginTimeout } from '../../shared/im/weixin';
 import type { CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
@@ -27,7 +27,6 @@ import type {
 } from './imScheduledTaskHandler';
 import { createIMScheduledTaskRequestDetector } from './imScheduledTaskHandler';
 import { IMStore } from './imStore';
-import { NimGateway } from './nimGateway';
 import {
   IMConnectivityCheck,
   IMConnectivityTestResult,
@@ -37,9 +36,10 @@ import {
   IMMessage,
   Platform,
 } from './types';
+import { WeixinPluginActivation } from './weixinPluginActivation';
 
 const DINGTALK_OPENCLAW_CHANNEL = 'dingtalk-connector';
-const WEIXIN_OPENCLAW_CHANNEL = 'openclaw-weixin';
+const WEIXIN_OPENCLAW_CHANNEL = WeixinPlugin.Id;
 const WEIXIN_ALREADY_CONNECTED_MESSAGE = '已连接过此 OpenClaw';
 
 const CONNECTIVITY_TIMEOUT_MS = 10_000;
@@ -49,7 +49,7 @@ type GatewayClientLike = {
   request: <T = Record<string, unknown>>(
     method: string,
     params?: unknown,
-    opts?: { expectFinal?: boolean },
+    opts?: { expectFinal?: boolean; timeoutMs?: number | null },
   ) => Promise<T>;
 };
 
@@ -120,7 +120,7 @@ export interface IMGatewayManagerOptions {
   ensureCoworkReady?: () => Promise<void>;
   syncOpenClawConfig?: (
     reason?: string,
-    options?: { restartGatewayIfRunning?: boolean },
+    options?: { restartGatewayIfRunning?: boolean; requireSuccess?: boolean },
   ) => Promise<void>;
   ensureOpenClawGatewayConnected?: () => Promise<void>;
   getOpenClawGatewayClient?: () => GatewayClientLike | null;
@@ -134,7 +134,11 @@ export interface IMGatewayManagerOptions {
 }
 
 export class IMGatewayManager extends EventEmitter {
-  private nimGateway: NimGateway;
+  private readonly weixinPluginActivation = new WeixinPluginActivation(async () => {
+    if (!this.getConfig().weixin?.enabled) {
+      await this.syncOpenClawConfig?.('weixin-qr-plugin-activation', { restartGatewayIfRunning: true, requireSuccess: true });
+    }
+  });
   private imStore: IMStore;
   private chatHandler: IMChatHandler | null = null;
   private coworkHandler: IMCoworkHandler | null = null;
@@ -142,7 +146,7 @@ export class IMGatewayManager extends EventEmitter {
   private getSkillsPrompt: (() => Promise<string | null>) | null = null;
   private ensureCoworkReady: (() => Promise<void>) | null = null;
   private syncOpenClawConfig:
-    | ((reason?: string, options?: { restartGatewayIfRunning?: boolean }) => Promise<void>)
+    | ((reason?: string, options?: { restartGatewayIfRunning?: boolean; requireSuccess?: boolean }) => Promise<void>)
     | null = null;
   private ensureOpenClawGatewayConnected: (() => Promise<void>) | null = null;
   private getOpenClawGatewayClient: (() => GatewayClientLike | null) | null = null;
@@ -169,7 +173,6 @@ export class IMGatewayManager extends EventEmitter {
     super();
 
     this.imStore = new IMStore(db);
-    this.nimGateway = new NimGateway();
 
     // Store Cowork dependencies if provided
     if (options?.coworkRuntime && options?.coworkStore) {
@@ -238,104 +241,6 @@ export class IMGatewayManager extends EventEmitter {
   }): void {
     this.getLLMConfig = options.getLLMConfig;
     this.getSkillsPrompt = options.getSkillsPrompt ?? null;
-
-    // Set up message handlers for gateways
-    this.setupMessageHandlers();
-  }
-
-  /**
-   * Set up message handlers for both gateways
-   */
-  private setupMessageHandlers(): void {
-    const messageHandler = async (
-      message: IMMessage,
-      replyFn: (text: string) => Promise<void>
-    ): Promise<void> => {
-      // Persist notification target whenever we receive a message
-      this.persistNotificationTarget(message.platform);
-
-      try {
-        let response: string;
-
-        // Always use Cowork mode if handler is available
-        if (this.coworkHandler) {
-          if (this.ensureCoworkReady) {
-            await this.ensureCoworkReady();
-          }
-          console.log('[IMGatewayManager] Using Cowork mode for message processing');
-          response = await this.coworkHandler.processMessage(message);
-        } else {
-          // Fallback to regular chat handler
-          if (!this.chatHandler) {
-            this.updateChatHandler();
-          }
-
-          if (!this.chatHandler) {
-            throw new Error('Chat handler not available');
-          }
-
-          response = await this.chatHandler.processMessage(message);
-        }
-
-        await replyFn(response);
-      } catch (error: any) {
-        console.error(`[IMGatewayManager] Error processing message: ${error.message}`);
-        // Don't send "Replaced by a newer IM request" error to user, just log it
-        if (error.message === 'Replaced by a newer IM request') {
-          return;
-        }
-        // Send error message to user
-        try {
-          const errorKey = classifyErrorKey(error.message);
-          const friendlyMessage = errorKey ? t(errorKey) : error.message;
-          await replyFn(`${t('imErrorPrefix')}: ${friendlyMessage}`);
-        } catch (replyError) {
-          console.error(`[IMGatewayManager] Failed to send error reply: ${replyError}`);
-        }
-      }
-    };
-
-    this.nimGateway.setMessageCallback(messageHandler);
-  }
-
-  /**
-   * Persist the notification target for a platform after receiving a message.
-   */
-  private persistNotificationTarget(platform: Platform): void {
-    try {
-      let target: any = null;
-      if (platform === 'nim') {
-        target = this.nimGateway.getNotificationTarget();
-      }
-      // WeCom runs via OpenClaw; notification target not managed locally
-      // Weixin runs via OpenClaw; notification target not managed locally
-      // POPO runs via OpenClaw; notification target not managed locally
-      if (target != null) {
-        this.imStore.setNotificationTarget(platform, target);
-      }
-    } catch (err: any) {
-      console.warn(`[IMGatewayManager] Failed to persist notification target for ${platform}:`, err.message);
-    }
-  }
-
-  /**
-   * Restore notification target from SQLite after gateway starts.
-   */
-  private restoreNotificationTarget(platform: Platform): void {
-    try {
-      const target = this.imStore.getNotificationTarget(platform);
-      if (target == null) return;
-
-      if (platform === 'nim') {
-        this.nimGateway.setNotificationTarget(target);
-      }
-      // WeCom runs via OpenClaw; notification target not managed locally
-      // Weixin runs via OpenClaw; notification target not managed locally
-      // POPO runs via OpenClaw; notification target not managed locally
-      console.log(`[IMGatewayManager] Restored notification target for ${platform}`);
-    } catch (err: any) {
-      console.warn(`[IMGatewayManager] Failed to restore notification target for ${platform}:`, err.message);
-    }
   }
 
   /**
@@ -401,6 +306,7 @@ export class IMGatewayManager extends EventEmitter {
   ): void {
     const previousConfig = this.imStore.getConfig();
     this.imStore.setConfig(config);
+    if (config.weixin?.enabled === false) this.weixinPluginActivation.cancel();
 
     // Update chat handler if settings changed
     if (config.settings) {
@@ -966,9 +872,6 @@ export class IMGatewayManager extends EventEmitter {
       await this.ensureOpenClawGatewayConnected?.();
       return;
     }
-
-    // Restore persisted notification target
-    this.restoreNotificationTarget(platform);
   }
 
   async stopGateway(platform: Platform): Promise<void> {
@@ -1095,6 +998,7 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   async stopAll(): Promise<void> {
+    this.weixinPluginActivation.cancel();
     // All platforms run via OpenClaw; nothing to stop directly
   }
 
@@ -1642,29 +1546,36 @@ export class IMGatewayManager extends EventEmitter {
    * Returns the QR code data URL and a session key for polling.
    */
   async weixinQrLoginStart(): Promise<WeixinQrLoginStartResult> {
-    const client = this.getOpenClawGatewayClient?.();
-    if (!client) {
+    return this.weixinPluginActivation.start(async () => {
       await this.ensureOpenClawGatewayReady?.();
-      const retryClient = this.getOpenClawGatewayClient?.();
-      if (!retryClient) {
-        return { message: 'OpenClaw Gateway is not running. Please start OpenClaw engine first.' };
-      }
-      return this.doWeixinQrLoginStart(retryClient);
-    }
-    return this.doWeixinQrLoginStart(client);
+      const client = this.getOpenClawGatewayClient?.();
+      if (!client) throw new Error(t('imWeixinGatewayUnavailable'));
+      return this.doWeixinQrLoginStart(client);
+    });
+  }
+
+  isWeixinQrLoginActive(): boolean {
+    return this.weixinPluginActivation.isActive();
   }
 
   private async doWeixinQrLoginStart(client: GatewayClientLike): Promise<WeixinQrLoginStartResult> {
     try {
       const result = await client.request<WeixinQrLoginStartResult>(
-        'web.login.start',
-        { force: true, timeoutMs: 300000, verbose: true },
+        WeixinPlugin.LoginStart,
+        { channel: WeixinPlugin.Id, force: true, timeoutMs: WeixinQrLoginTimeout.Start, verbose: true },
+        { timeoutMs: WeixinQrLoginTimeout.Start + WeixinQrLoginTimeout.RpcGrace },
       );
+      if (typeof result?.qrDataUrl !== 'string' || !result.qrDataUrl.trim()) {
+        throw new Error(result?.message || t('imWeixinQrInvalidResponse'));
+      }
+      if (typeof result.sessionKey !== 'string' || !result.sessionKey.trim()) {
+        throw new Error(t('imWeixinQrInvalidResponse'));
+      }
       console.log('[IMGatewayManager] Weixin QR login start result:', result.message);
       return result;
     } catch (err) {
       console.error('[IMGatewayManager] Weixin QR login start failed:', err);
-      return { message: `Failed to start Weixin login: ${String(err)}` };
+      throw err;
     }
   }
 
@@ -1672,22 +1583,29 @@ export class IMGatewayManager extends EventEmitter {
    * Wait for Weixin QR code scan completion via OpenClaw Gateway RPC.
    */
   async weixinQrLoginWait(sessionKey?: string): Promise<WeixinQrLoginWaitResult> {
+    return this.weixinPluginActivation.wait(sessionKey, assertCurrent => this.waitForWeixinQrLogin(sessionKey, assertCurrent));
+  }
+
+  private async waitForWeixinQrLogin(sessionKey: string | undefined, assertCurrent: () => void): Promise<WeixinQrLoginWaitResult> {
     const client = this.getOpenClawGatewayClient?.();
     if (!client) {
       return { connected: false, message: 'OpenClaw Gateway is not connected.' };
     }
     try {
       const result = await client.request<WeixinQrLoginWaitResult>(
-        'web.login.wait',
+        WeixinPlugin.LoginWait,
         // OpenClaw's current web.login.wait schema has no sessionKey field, so
         // the QR flow still has to pass the plugin session key through accountId.
-        { timeoutMs: 480000, ...(sessionKey ? { accountId: sessionKey } : {}) },
+        { channel: WeixinPlugin.Id, timeoutMs: WeixinQrLoginTimeout.Wait, ...(sessionKey ? { accountId: sessionKey } : {}) },
+        // The plugin timeout is an RPC parameter, not the client's default 30s deadline.
+        { timeoutMs: WeixinQrLoginTimeout.Wait + WeixinQrLoginTimeout.RpcGrace },
       );
       const alreadyConnected = result.alreadyConnected === true
         || isWeixinAlreadyConnectedMessage(result.message);
       const configuredAccountId = this.getConfig().weixin?.accountId?.trim() || undefined;
       const resolvedAccountId = result.accountId
         ?? (alreadyConnected ? configuredAccountId ?? await this.resolveWeixinRuntimeAccountId(client) : undefined);
+      assertCurrent();
       console.log('[IMGatewayManager] Weixin QR login wait completed:', JSON.stringify({
         connected: result.connected,
         alreadyConnected,

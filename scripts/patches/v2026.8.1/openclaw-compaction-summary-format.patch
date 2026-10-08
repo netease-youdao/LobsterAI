@@ -1,0 +1,593 @@
+diff --git a/packages/agent-core/src/harness/compaction/compaction.ts b/packages/agent-core/src/harness/compaction/compaction.ts
+--- a/packages/agent-core/src/harness/compaction/compaction.ts
++++ b/packages/agent-core/src/harness/compaction/compaction.ts
+@@ -657,6 +657,11 @@ async function runSummarizationCompletion(params: {
+   return ok(summary);
+ }
+
++/** Caller-owned formats replace the default headings; focus remains additive. */
++export type CompactionSummaryPrompt =
++  | { kind: "turn-prefix" }
++  | { kind: "custom"; instructions: string };
++
+ /** Generate or update a conversation summary for compaction. */
+ export async function generateSummary(
+   currentMessages: AgentMessage[],
+@@ -670,12 +675,27 @@ export async function generateSummary(
+   thinkingLevel?: ThinkingLevel,
+   streamFn?: StreamFn,
+   runtime?: AgentCoreCompletionRuntimeDeps,
++  summaryPrompt?: CompactionSummaryPrompt,
+ ): Promise<Result<string, CompactionError>> {
+   const maxTokens = Math.min(
+-    Math.floor(0.8 * reserveTokens),
++    Math.floor((summaryPrompt?.kind === "turn-prefix" ? 0.5 : 0.8) * reserveTokens),
+     model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
+   );
+-  const prompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
++  const selectedPrompt =
++    summaryPrompt?.kind === "turn-prefix"
++      ? TURN_PREFIX_SUMMARIZATION_PROMPT
++      : summaryPrompt?.instructions;
++  const prompt = summaryPrompt
++    ? [
++        previousSummary &&
++          "Update the previous summary with the new conversation. Preserve relevant facts, decisions, and unresolved asks; remove stale or duplicate detail. Use the format below.",
++        selectedPrompt,
++      ]
++        .filter(Boolean)
++        .join("\n\n")
++    : previousSummary
++      ? UPDATE_SUMMARIZATION_PROMPT
++      : SUMMARIZATION_PROMPT;
+   return await runSummarizationCompletion({
+     messages: currentMessages,
+     prompt,
+@@ -689,7 +709,8 @@ export async function generateSummary(
+     thinkingLevel,
+     streamFn,
+     runtime,
+-    errorLabel: "Summarization",
++    errorLabel:
++      summaryPrompt?.kind === "turn-prefix" ? "Turn prefix summarization" : "Summarization",
+   });
+ }
+
+@@ -856,7 +877,7 @@ export function prepareCompaction(
+   });
+ }
+
+-export const TURN_PREFIX_SUMMARIZATION_PROMPT = `This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
++const TURN_PREFIX_SUMMARIZATION_PROMPT = `This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
+
+ Summarize the prefix to provide context for the retained suffix:
+
+@@ -936,24 +957,20 @@ export async function compact(
+
+   let latestContext = "";
+   if (summarizeTurnPrefix) {
+-    const maxTokens = Math.min(
+-      Math.floor(0.5 * settings.reserveTokens),
+-      model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
+-    );
+-    const turnPrefixResult = await runSummarizationCompletion({
+-      messages: turnPrefixMessages,
+-      prompt: TURN_PREFIX_SUMMARIZATION_PROMPT,
+-      customInstructions,
++    const turnPrefixResult = await generateSummary(
++      turnPrefixMessages,
+       model,
+-      maxTokens,
++      settings.reserveTokens,
+       apiKey,
+       headers,
+       signal,
++      customInstructions,
++      undefined,
+       thinkingLevel,
+       streamFn,
+       runtime,
+-      errorLabel: "Turn prefix summarization",
+-    });
++      { kind: "turn-prefix" },
++    );
+     if (!turnPrefixResult.ok) {
+       return err(turnPrefixResult.error);
+     }
+diff --git a/packages/agent-core/src/index.ts b/packages/agent-core/src/index.ts
+--- a/packages/agent-core/src/index.ts
++++ b/packages/agent-core/src/index.ts
+@@ -44,6 +44,7 @@ export {
+   type CompactionPreparation,
+   type CompactionResult,
+   type CompactionSettings,
++  type CompactionSummaryPrompt,
+   type ContextUsageEstimate,
+ } from "./harness/compaction/compaction.js";
+ export * from "./harness/utils/truncate.js";
+diff --git a/src/agents/agent-hooks/compaction-safeguard.ts b/src/agents/agent-hooks/compaction-safeguard.ts
+--- a/src/agents/agent-hooks/compaction-safeguard.ts
++++ b/src/agents/agent-hooks/compaction-safeguard.ts
+@@ -8,7 +8,6 @@ import {
+   capCompactionSummary,
+   MAX_COMPACTION_SUMMARY_CHARS,
+   SUMMARY_TRUNCATED_MARKER,
+-  TURN_PREFIX_SUMMARIZATION_PROMPT,
+ } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+ import {
+   computeFileLists,
+@@ -1214,7 +1213,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
+                   ...llmSummaryParams,
+                   messages: pruned.droppedMessagesList,
+                   maxChunkTokens: droppedMaxChunkTokens,
+-                  customInstructions: structuredInstructions,
++                  summaryPrompt: { kind: "custom", instructions: structuredInstructions },
+                   previousSummary,
+                 });
+               } catch (droppedError) {
+@@ -1291,9 +1290,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
+                   ...llmSummaryParams,
+                   messages: messagesToSummarize,
+                   maxChunkTokens,
+-                  customInstructions: [structuredInstructions, correctiveInstructions]
+-                    .filter(Boolean)
+-                    .join("\n\n"),
++                  summaryPrompt: { kind: "custom", instructions: structuredInstructions },
++                  customInstructions: correctiveInstructions,
+                   previousSummary: effectivePreviousSummary,
+                 })
+               : buildStructuredFallbackSummary(effectivePreviousSummary);
+@@ -1308,11 +1306,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
+               ...llmSummaryParams,
+               messages: turnPrefixMessages,
+               maxChunkTokens,
+-              customInstructions: [
+-                TURN_PREFIX_SUMMARIZATION_PROMPT,
+-                splitTurnFocus,
+-                correctiveInstructions,
+-              ]
++              summaryPrompt: { kind: "turn-prefix" },
++              customInstructions: [splitTurnFocus, correctiveInstructions]
+                 .filter(Boolean)
+                 .join("\n\n"),
+               previousSummary: undefined,
+diff --git a/src/agents/compaction.ts b/src/agents/compaction.ts
+--- a/src/agents/compaction.ts
++++ b/src/agents/compaction.ts
+@@ -23,7 +23,12 @@ import {
+ } from "./compaction-planning.js";
+ import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
+ import { isTimeoutError } from "./failover-error.js";
+-import type { AgentMessage, StreamFn, ThinkingLevel } from "./runtime/index.js";
++import type {
++  AgentMessage,
++  CompactionSummaryPrompt,
++  StreamFn,
++  ThinkingLevel,
++} from "./runtime/index.js";
+ import type { SessionModelUsageSink } from "./sessions/compaction/runtime.js";
+ import type { ExtensionContext } from "./sessions/index.js";
+ import { generateSummary } from "./sessions/index.js";
+@@ -76,6 +81,7 @@ type CompactionSummaryParams = {
+   maxChunkTokens: number;
+   contextWindow: number;
+   customInstructions?: string;
++  summaryPrompt?: CompactionSummaryPrompt;
+   summarizationInstructions?: CompactionSummarizationInstructions;
+   previousSummary?: string;
+   thinkingLevel?: ThinkingLevel;
+@@ -140,6 +146,7 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
+             params.thinkingLevel,
+             params.streamFn,
+             params.usageSink,
++            params.summaryPrompt,
+           ),
+         {
+           attempts: 3,
+diff --git a/src/agents/sessions/compaction/compaction.ts b/src/agents/sessions/compaction/compaction.ts
+--- a/src/agents/sessions/compaction/compaction.ts
++++ b/src/agents/sessions/compaction/compaction.ts
+@@ -21,6 +21,7 @@ import {
+   type CompactionPreparation,
+   type CompactionResult,
+   type CompactionSettings,
++  type CompactionSummaryPrompt,
+   type ContextUsageEstimate,
+   type Result,
+   type AgentMessage,
+@@ -76,6 +77,7 @@ export async function generateSummary(
+   thinkingLevel?: ThinkingLevel,
+   streamFn?: StreamFn,
+   usageSink?: SessionModelUsageSink,
++  summaryPrompt?: CompactionSummaryPrompt,
+ ): Promise<string> {
+   return unwrapCompactionResult(
+     await generateSummaryCore(
+@@ -90,6 +92,7 @@ export async function generateSummary(
+       thinkingLevel,
+       streamFn,
+       createCompactionRuntime(usageSink),
++      summaryPrompt,
+     ),
+   );
+ }
+diff --git a/src/agents/runtime/index.ts b/src/agents/runtime/index.ts
+--- a/src/agents/runtime/index.ts
++++ b/src/agents/runtime/index.ts
+@@ -46,6 +46,7 @@ export type {
+   CompactionPreparation,
+   CompactionResult,
+   CompactionSettings,
++  CompactionSummaryPrompt,
+   ContextUsageEstimate,
+   FileOperations,
+   Result,
+diff --git a/src/plugin-sdk/agent-core.ts b/src/plugin-sdk/agent-core.ts
+--- a/src/plugin-sdk/agent-core.ts
++++ b/src/plugin-sdk/agent-core.ts
+@@ -73,6 +73,7 @@ export type {
+   CompactionPreparation,
+   CompactionResult,
+   CompactionSettings,
++  CompactionSummaryPrompt,
+   ContextUsageEstimate,
+   FileOperations,
+   Result,
+diff --git a/src/agents/compaction.summary-format.test.ts b/src/agents/compaction.summary-format.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/agents/compaction.summary-format.test.ts
+@@ -0,0 +1,121 @@
++import type { CompactionSummaryPrompt, StreamFn } from "openclaw/plugin-sdk/agent-core";
++import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
++import { describe, expect, it } from "vitest";
++import { summarizeInStages } from "./compaction.js";
++import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
++
++const model: Model = {
++  id: "summary-model",
++  name: "Summary Model",
++  api: "openai-completions",
++  provider: "openai",
++  baseUrl: "https://example.test",
++  reasoning: false,
++  input: ["text"],
++  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++  contextWindow: 2_000,
++  maxTokens: 1_000,
++};
++
++describe("compaction summary format propagation", () => {
++  it.each([
++    {
++      kind: "custom",
++      instructions: "Use exactly these headings:\n## Decisions\n## Pending user asks",
++    },
++    { kind: "turn-prefix" },
++  ] satisfies CompactionSummaryPrompt[])(
++    "retains $kind format through chunk updates and stage merge",
++    async (summaryPrompt) => {
++      const requests: string[] = [];
++      const streamFn: StreamFn = (_model, context, options) => {
++        requests.push(JSON.stringify(context));
++        expect(options?.maxTokens).toBe(summaryPrompt.kind === "turn-prefix" ? 500 : 800);
++        const stream = createAssistantMessageEventStream();
++        stream.push({
++          type: "done",
++          reason: "stop",
++          message: makeAgentAssistantMessage({
++            content: [{ type: "text", text: `summary-${requests.length}` }],
++          }),
++        });
++        stream.end();
++        return stream;
++      };
++      const result = await summarizeInStages({
++        messages: Array.from({ length: 4 }, (_, index) => ({
++          role: "user" as const,
++          content: `receipt_${index}: ${"Keep the deployment decision. ".repeat(20)}`,
++          timestamp: index + 1,
++        })),
++        model,
++        apiKey: "test-key",
++        signal: new AbortController().signal,
++        reserveTokens: 1_000,
++        maxChunkTokens: 200,
++        contextWindow: 2_000,
++        summaryPrompt,
++        customInstructions: "Preserve the canary decision.",
++        streamFn,
++      });
++      expect(result).toBe(`summary-${requests.length}`);
++      expect(requests.some((request) => request.includes("<previous-summary>"))).toBe(true);
++      expect(requests.at(-1)).toContain("Merge these partial summaries");
++      for (const request of requests) {
++        expect(request).toContain(
++          summaryPrompt.kind === "turn-prefix" ? "## Original Request" : "## Pending user asks",
++        );
++        expect(request).not.toContain("## Goal");
++        expect(request).not.toContain("UPDATE the Progress section");
++        expect(request).toContain("Preserve the canary decision.");
++        expect(request).toContain("Preserve all opaque identifiers exactly");
++      }
++    },
++  );
++
++  it("retains caller format and previous summary when oversized history needs fallback", async () => {
++    const requests: string[] = [];
++    const streamFn: StreamFn = (_model, context) => {
++      requests.push(JSON.stringify(context));
++      if (requests.length === 1) {
++        throw new Error("request timed out");
++      }
++      const stream = createAssistantMessageEventStream();
++      stream.push({
++        type: "done",
++        reason: "stop",
++        message: makeAgentAssistantMessage({
++          content: [{ type: "text", text: "retained summary" }],
++        }),
++      });
++      stream.end();
++      return stream;
++    };
++    const result = await summarizeInStages({
++      messages: [
++        { role: "user", content: "x".repeat(6_000), timestamp: 1 },
++        { role: "user", content: "Keep receipt_90210", timestamp: 2 },
++      ],
++      model,
++      apiKey: "test-key",
++      signal: new AbortController().signal,
++      reserveTokens: 1_000,
++      maxChunkTokens: 10_000,
++      contextWindow: 2_000,
++      parts: 1,
++      summaryPrompt: { kind: "custom", instructions: "Use ## Decisions and ## Pending user asks." },
++      previousSummary: "Earlier canary decision.",
++      streamFn,
++    });
++    expect(result).toContain("retained summary");
++    expect(requests).toHaveLength(2);
++    expect(requests[1]).not.toContain("x".repeat(6_000));
++    expect(requests[1]).toContain("Keep receipt_90210");
++    for (const request of requests) {
++      expect(request).toContain("## Pending user asks");
++      expect(request).not.toContain("## Goal");
++      expect(request).toContain("Earlier canary decision.");
++      expect(request).toContain("<previous-summary>");
++    }
++  });
++});
+diff --git a/src/agents/agent-hooks/compaction-safeguard.test.ts b/src/agents/agent-hooks/compaction-safeguard.test.ts
+--- a/src/agents/agent-hooks/compaction-safeguard.test.ts
++++ b/src/agents/agent-hooks/compaction-safeguard.test.ts
+@@ -2004,11 +2004,12 @@ describe("compaction-safeguard recent-turn preservation", () => {
+     expect(result.compaction?.firstKeptEntryId).toBe("entry-1");
+     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+     const droppedCall = requireRecord(mockCallArg(mockSummarizeInStages));
+-    expect(droppedCall?.customInstructions).toContain(
++    const droppedPrompt = requireRecord(droppedCall.summaryPrompt).instructions;
++    expect(droppedPrompt).toContain(
+       "Produce a compact, factual summary with these exact section headings:",
+     );
+-    expect(droppedCall?.customInstructions).toContain("## Decisions");
+-    expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
++    expect(droppedPrompt).toContain("## Decisions");
++    expect(droppedPrompt).toContain("Keep security caveats.");
+     const mainCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
+     expect(JSON.stringify(mainCall?.messages)).toContain("dropped history summary");
+     expect(messagesToSummarize).toStrictEqual(transcriptBefore);
+@@ -2159,69 +2160,98 @@ describe("compaction-safeguard recent-turn preservation", () => {
+     expect(summaryCall.headers?.["x-initiator"]).toBe("user");
+   });
+
+-  it("sends safeguard summaries through the prepared model execution context", async () => {
+-    testing.setSummarizeInStagesForTest(actualCompactionModule.summarizeInStages);
+-    const sessionManager = stubSessionManager();
+-    const model = createAnthropicModelFixture({
+-      api: "test-api" as never,
+-      baseUrl: "",
+-      reasoning: true,
+-    });
+-    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+-
+-    const providerPrompts: string[] = [];
+-    const streamFn: StreamFn = (_activeModel, context, options) => {
+-      expect(options?.reasoning).toBe("high");
+-      providerPrompts.push(JSON.stringify(context));
+-      const stream = createAssistantMessageEventStream();
+-      stream.push({
+-        type: "done",
+-        reason: "stop",
+-        message: {
+-          role: "assistant",
+-          content: [{ type: "text", text: "provider summary" }],
+-          api: model.api,
+-          provider: model.provider,
+-          model: model.id,
+-          usage: {
+-            input: 0,
+-            output: 0,
+-            cacheRead: 0,
+-            cacheWrite: 0,
+-            totalTokens: 0,
+-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++  it.each([false, true])(
++    "sends one authoritative safeguard summary format (prefix=%s)",
++    async (prefix) => {
++      testing.setSummarizeInStagesForTest(actualCompactionModule.summarizeInStages);
++      const sessionManager = stubSessionManager();
++      const model = createAnthropicModelFixture({
++        api: "test-api" as never,
++        baseUrl: "",
++        reasoning: true,
++      });
++      setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
++
++      const providerPrompts: string[] = [];
++      const providerBudgets: Array<number | undefined> = [];
++      const streamFn: StreamFn = (_activeModel, context, options) => {
++        expect(options?.reasoning).toBe("high");
++        providerPrompts.push(JSON.stringify(context));
++        providerBudgets.push(options?.maxTokens);
++        const stream = createAssistantMessageEventStream();
++        stream.push({
++          type: "done",
++          reason: "stop",
++          message: {
++            role: "assistant",
++            content: [{ type: "text", text: "provider summary" }],
++            api: model.api,
++            provider: model.provider,
++            model: model.id,
++            usage: {
++              input: 0,
++              output: 0,
++              cacheRead: 0,
++              cacheWrite: 0,
++              totalTokens: 0,
++              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++            },
++            stopReason: "stop",
++            timestamp: 1,
+           },
+-          stopReason: "stop",
+-          timestamp: 1,
+-        },
++        });
++        stream.end();
++        return stream;
++      };
++      const mockContext = createCompactionContext({
++        sessionManager,
++        getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" }),
+       });
+-      stream.end();
+-      return stream;
+-    };
+-    const mockContext = createCompactionContext({
+-      sessionManager,
+-      getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" }),
+-    });
+-    const compactionHandler = createCompactionHandler();
+-    const event = {
+-      ...createCompactionEvent({ messageText: "summarize me", tokensBefore: 1_000 }),
+-      thinkingLevel: "high" as const,
+-      streamFn,
+-    };
+-    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+-      reserveTokens: 4_000,
+-    };
+-
+-    const result = (await compactionHandler(event, mockContext)) as {
+-      cancel?: boolean;
+-      compaction?: { summary?: string };
+-    };
+-
+-    expect(result.cancel).not.toBe(true);
+-    expect(result.compaction?.summary).toContain("provider summary");
+-    expect(providerPrompts).toHaveLength(1);
+-    expect(providerPrompts[0]).toContain("[User]: summarize me");
+-  });
++      const compactionHandler = createCompactionHandler();
++      const event = {
++        ...createCompactionEvent({
++          messageText: "summarize me: receipt_90210",
++          tokensBefore: 1_000,
++        }),
++        customInstructions: "Keep the deployment decision.",
++        thinkingLevel: "high" as const,
++        streamFn,
++      };
++      (event.preparation as { settings?: { reserveTokens: number } }).settings = {
++        reserveTokens: 4_000,
++      };
++      const preparation = {
++        ...event.preparation,
++        isSplitTurn: prefix,
++        messagesToSummarize: prefix ? [] : event.preparation.messagesToSummarize,
++        turnPrefixMessages: prefix ? event.preparation.messagesToSummarize : [],
++        previousSummary: prefix ? undefined : "Earlier deployment decision: use canary staging.",
++      };
++
++      const result = (await compactionHandler({ ...event, preparation }, mockContext)) as {
++        cancel?: boolean;
++        compaction?: { summary?: string };
++      };
++
++      expect(result.cancel).not.toBe(true);
++      expect(result.compaction?.summary).toContain("provider summary");
++      expect(providerPrompts).toHaveLength(1);
++      expect(providerPrompts[0]).toContain("[User]: summarize me");
++      expect(providerPrompts[0]).toContain("receipt_90210");
++      expect(providerPrompts[0]).toContain("Keep the deployment decision.");
++      expect(providerPrompts[0]).toContain("Preserve all opaque identifiers exactly");
++      expect(providerPrompts[0]).not.toContain("## Goal");
++      expect(providerPrompts[0]).not.toContain("## Constraints & Preferences");
++      expect(providerPrompts[0]).toContain(prefix ? "## Original Request" : "## Pending user asks");
++      expect(providerPrompts[0]).not.toContain(
++        prefix ? "## Pending user asks" : "## Original Request",
++      );
++      expect(providerBudgets).toEqual([prefix ? 2_000 : 3_200]);
++      if (!prefix) {
++        expect(providerPrompts[0]).toContain("Earlier deployment decision: use canary staging.");
++      }
++    },
++  );
+
+   it("surfaces a total provider failure and leaves the safeguard transcript unchanged", async () => {
+     testing.setSummarizeInStagesForTest(actualCompactionModule.summarizeInStages);
+@@ -2854,13 +2884,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
+     expectCanonicalSummaryHeadingsOnce(summary);
+     expect(auditSummaryQuality({ summary, identifiers: [identifier], latestAsk }).ok).toBe(true);
+     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+-    const historyCall = requireRecord(mockCallArg(mockSummarizeInStages));
+-    expect(historyCall.customInstructions).not.toContain("belongs to a split turn");
+-    const prefixCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
+-    expect(prefixCall.customInstructions).toContain("## Original Request");
+-    expect(prefixCall.customInstructions).not.toContain(
+-      "Produce a compact, factual summary with these exact section headings",
+-    );
+
+     const redistillMessages = prependPreviousSummaryForRedistill({
+       messages: [{ role: "user", content: "continue", timestamp: 3 }],
+@@ -3358,7 +3381,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
+
+     const finalSummary = expectCompactionResult(result).summary;
+     const historyCall = requireRecord(mockCallArg(mockSummarizeInStages));
+-    expect(historyCall.customInstructions).not.toContain("belongs to a split turn");
++    expect(requireRecord(historyCall.summaryPrompt).instructions).not.toContain(
++      "belongs to a split turn",
++    );
+     expect(finalSummary).toContain(`## Pending user asks\n${latestAsk}`);
+     expectCanonicalSummaryHeadingsOnce(finalSummary);
+     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+@@ -3805,9 +3830,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
+
+     expect(result).toEqual({ cancel: true });
+     expect(mockSummarizeInStages).toHaveBeenCalledTimes(3);
+-    expect(requireRecord(mockCallArg(mockSummarizeInStages, 1)).customInstructions).toContain(
+-      "## Original Request",
+-    );
+     expect(requireRecord(mockCallArg(mockSummarizeInStages, 2)).customInstructions).toContain(
+       "Quality check feedback",
+     );
+diff --git a/packages/agent-core/src/harness/compaction/compaction.test.ts b/packages/agent-core/src/harness/compaction/compaction.test.ts
+--- a/packages/agent-core/src/harness/compaction/compaction.test.ts
++++ b/packages/agent-core/src/harness/compaction/compaction.test.ts
+@@ -1038,6 +1038,14 @@ describe("split-turn compaction", () => {
+         expect(prompt).toContain(focus);
+         expect(prompt.indexOf(focus)).toBeGreaterThan(prompt.lastIndexOf("</conversation>"));
+       }
++      if (prefix) {
++        expect(prompts.at(-1)).toContain("## Original Request");
++        expect(prompts.at(-1)).not.toContain("## Goal");
++      }
++      if (history) {
++        expect(prompts[0]).toContain("## Goal");
++        expect(prompts[0]).not.toContain("## Original Request");
++      }
+     },
+   );
+ });

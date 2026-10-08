@@ -174,6 +174,7 @@ export interface ModelSettingsSectionProps {
     supportsThinking?: boolean,
     contextWindow?: number,
     customParams?: Record<string, unknown>,
+    maxTokens?: number,
   ) => void;
   handleDeleteModel: (modelId: string) => void;
 }
@@ -192,6 +193,8 @@ export interface ModelEditorDialogProps {
   setNewModelSupportsThinking: (v: boolean) => void;
   newModelContextWindow: number | undefined;
   setNewModelContextWindow: (v: number | undefined) => void;
+  newModelMaxTokens: string;
+  setNewModelMaxTokens: (v: string) => void;
   newModelCustomParams: string;
   setNewModelCustomParams: (v: string) => void;
   activeProviderConfig: ProviderConfig;
@@ -216,6 +219,8 @@ export const ModelEditorDialog: React.FC<ModelEditorDialogProps> = ({
   setNewModelSupportsThinking,
   newModelContextWindow,
   setNewModelContextWindow,
+  newModelMaxTokens,
+  setNewModelMaxTokens,
   newModelCustomParams,
   setNewModelCustomParams,
   activeProviderConfig,
@@ -474,6 +479,35 @@ export const ModelEditorDialog: React.FC<ModelEditorDialogProps> = ({
                 </p>
               </div>
             </div>
+            {!usesKimiK3RuntimeProfile && (
+              <div className="flex items-start gap-3">
+                <label
+                  htmlFor={`${activeProvider}-maxOutputTokens`}
+                  className="w-24 shrink-0 text-xs font-medium text-secondary pt-2 text-right"
+                >
+                  {i18nService.t('maxOutputTokens')}
+                </label>
+                <div className="flex-1 min-w-0">
+                  <input
+                    id={`${activeProvider}-maxOutputTokens`}
+                    type="text"
+                    inputMode="numeric"
+                    value={newModelMaxTokens}
+                    onChange={(e) => {
+                      setNewModelMaxTokens(e.target.value);
+                      if (modelFormError) {
+                        setModelFormError(null);
+                      }
+                    }}
+                    placeholder={i18nService.t('maxOutputTokensPlaceholder')}
+                    className="w-24 rounded-lg bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-2.5 py-1 text-xs text-center tabular-nums"
+                  />
+                  <p className="mt-1 text-[11px] text-muted">
+                    {i18nService.t('maxOutputTokensHint')}
+                  </p>
+                </div>
+              </div>
+            )}
             <div className="flex items-start gap-3">
               <label className="w-24 shrink-0 text-xs font-medium text-secondary pt-2 text-right">
                 {i18nService.t('customParams')}
@@ -2123,6 +2157,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                               model.supportsThinking,
                               model.contextWindow,
                               model.customParams,
+                              model.maxTokens,
                             )}
                             className="p-0.5 text-secondary hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity"
                           >

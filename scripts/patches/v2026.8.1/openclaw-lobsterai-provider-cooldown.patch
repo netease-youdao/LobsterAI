@@ -1,0 +1,98 @@
+diff --git a/src/agents/auth-profiles/usage-state.ts b/src/agents/auth-profiles/usage-state.ts
+index 097adc848d1..8b288f06a3d 100644
+--- a/src/agents/auth-profiles/usage-state.ts
++++ b/src/agents/auth-profiles/usage-state.ts
+@@ -34,7 +34,11 @@ export function resetAuthProfileFailureState(
+ /** Returns true for providers whose auth-profile cooldowns are provider-managed. */
+ export function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
+   const normalized = normalizeProviderId(provider ?? "");
+-  return normalized === "openrouter" || normalized === "kilocode";
++  // LobsterAI's proxy owns login refresh and user quota enforcement. Its shared
++  // proxy credential must not disable unrelated models after one upstream fails.
++  return (
++    normalized === "openrouter" || normalized === "kilocode" || normalized === "lobsterai-server"
++  );
+ }
+ 
+ // Per-attempt transient failures (#87462, #116464): block only the failing
+diff --git a/src/agents/auth-profiles/usage.test.ts b/src/agents/auth-profiles/usage.test.ts
+index 8db010cd1fa..f6831c11aa1 100644
+--- a/src/agents/auth-profiles/usage.test.ts
++++ b/src/agents/auth-profiles/usage.test.ts
+@@ -1207,6 +1207,23 @@ describe("markAuthProfileFailure — locked update failure", () => {
+ });
+ 
+ describe("markInlineProviderApiKeyFailure", () => {
++  it.each(["auth", "auth_permanent", "billing"] as const)(
++    "does not persist a LobsterAI proxy cooldown after %s",
++    async (reason) => {
++      const store = makeStore(undefined);
++
++      await markInlineProviderApiKeyFailure({
++        store,
++        provider: "lobsterai-server",
++        reason,
++        modelId: "upstream-model-a",
++      });
++
++      expect(store.usageStats).toBeUndefined();
++      expect(storeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
++    },
++  );
++
+   it("does not cool an inline key after a provider timeout", async () => {
+     const store = makeStore(undefined);
+ 
+diff --git a/src/agents/model-auth.profiles.test.ts b/src/agents/model-auth.profiles.test.ts
+index ab8ef75260d..088a557605c 100644
+--- a/src/agents/model-auth.profiles.test.ts
++++ b/src/agents/model-auth.profiles.test.ts
+@@ -1388,6 +1388,48 @@ describe("getApiKeyForModelCore", () => {
+     expect(resolved.profileId).toBeUndefined();
+   });
+ 
++  it.each(["literal", "env-secret-ref"] as const)(
++    "resolves LobsterAI proxy auth despite a persisted billing cooldown with %s",
++    async (credentialSource) => {
++      await withEnvAsync({ LOBSTER_PROXY_TOKEN: "proxy-managed" }, async () => {
++        const provider = "lobsterai-server";
++        const store: AuthProfileStore = {
++          version: 1,
++          profiles: {},
++          usageStats: {
++            [resolveInlineProviderApiKeyUsageId(provider)]: {
++              disabledUntil: Date.now() + 5 * 60 * 60_000,
++              disabledReason: "billing",
++            },
++          },
++        };
++        const cfg: OpenClawConfig = {
++          models: {
++            providers: {
++              [provider]: {
++                baseUrl: "http://127.0.0.1:12345/v1",
++                api: "openai-completions",
++                apiKey:
++                  credentialSource === "literal"
++                    ? "proxy-managed"
++                    : { source: "env", provider: "default", id: "LOBSTER_PROXY_TOKEN" },
++                models: [],
++              },
++            },
++          },
++        };
++
++        await expect(resolveApiKeyForProviderCore({ provider, store, cfg })).resolves.toMatchObject(
++          {
++            apiKey: "proxy-managed",
++            mode: "api-key",
++          },
++        );
++        await expect(hasAvailableAuthForProvider({ provider, store, cfg })).resolves.toBe(true);
++      });
++    },
++  );
++
+   it("blocks explicit configured apiKey while its inline provider cooldown is active", async () => {
+     const usageId = resolveInlineProviderApiKeyUsageId("demo-local");
+     await expect(

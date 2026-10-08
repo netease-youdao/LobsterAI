@@ -10,6 +10,9 @@ import type {
 } from '../../shared/activity/constants';
 import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
 import type { MarkdownFileBridge } from '../../shared/artifactPreview/markdownEditing';
+import type { ReviewScopeRequest } from '../../shared/artifactPreview/reviewScopes';
+import type { ReviewSourceRequest, ReviewSourceResponse } from '../../shared/artifactPreview/reviewSource';
+import type { ResolvedArtifactOutput } from '../../shared/artifactPreview/workspace';
 import type {
   AsrRealtimeSessionRequest,
   AsrRealtimeSessionResult,
@@ -42,6 +45,7 @@ import type {
   BrowserDiagnosticResult,
   BrowserRuntimeProfile,
 } from '../../shared/browserWebAccess/constants';
+import type { BrowserPasskeyRequest } from '../../shared/browserWebAccess/passkeys';
 import type {
   BrowserAnnotationRect,
   BrowserAnnotationScreenshotRef,
@@ -60,6 +64,7 @@ import type {
   CoworkSessionsChangedPayload,
 } from '../../shared/cowork/constants';
 import type { CoworkGoal } from '../../shared/cowork/goal';
+import type { ProgressCardResponse } from '../../shared/cowork/progressCard';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
 import type {
   CoworkSearchMessage,
@@ -70,6 +75,11 @@ import type {
   DataMigrationLastRestoreResponse,
   DataMigrationRestoreScheduleResult,
 } from '../../shared/dataMigration/constants';
+import type {
+  DecisionModelConfigUpdate,
+  DecisionModelConfigView,
+  DecisionModelTestResult,
+} from '../../shared/decisionModel/constants';
 import type { DesktopCompanionBridge } from '../../shared/desktopCompanion/constants';
 import type { EnterpriseQuotaRequestType } from '../../shared/enterpriseAccount/constants';
 import type {
@@ -121,11 +131,14 @@ import type {
   ListLocalWebServicesOptions,
   LocalWebService,
 } from '../../shared/localWebServices/constants';
+import type { McpToolDiscoveryRequest, McpToolDiscoveryResult } from '../../shared/mcp/toolDiscovery';
+import type { OfficeBridges } from '../../shared/office/editors';
 import type {
   OpenClawEngineErrorCode,
   OpenClawEnginePhase as SharedOpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
 } from '../../shared/openclawEngine/constants';
+import type { OpenClawRepairStage } from '../../shared/openclawEngine/repair';
 import type {
   PublishingQuota,
   PublishingQuotaErrorData,
@@ -173,6 +186,7 @@ import type {
   SkinGetActiveResponse,
   SkinListResponse,
 } from '../../shared/skin/types';
+import type { SubscriptionTrialBridge } from '../../shared/subscriptionTrial/constants';
 import type { CoworkTempDirPreview } from './cowork';
 interface ApiResponse {
   ok: boolean;
@@ -214,6 +228,8 @@ interface CoworkSession {
   messages: CoworkMessage[];
   messagesOffset: number;
   totalMessages: number;
+  /** Start of the turn the first loaded message belongs to, when it began before messagesOffset. */
+  leadingTurnStartTimestamp?: number | null;
   parentSessionId?: string | null;
   forkedFromMessageId?: string | null;
   forkedAt?: number | null;
@@ -383,9 +399,12 @@ interface OpenClawGatewayRepairResult {
   status?: OpenClawEngineStatus;
   originalPath?: string;
   backupPath?: string;
+  quarantinedSessionStoreCount?: number;
   error?: string;
   errorCode?: OpenClawGatewayRepairErrorCode;
   recoverable?: boolean;
+  failedStage?: OpenClawRepairStage;
+  failurePath?: string;
 }
 
 interface OpenClawSessionPolicyConfig {
@@ -747,6 +766,7 @@ interface IElectronAPI {
     retryLaunchResolution: (
       id: string,
     ) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
+    listTools: (request: McpToolDiscoveryRequest) => Promise<McpToolDiscoveryResult>;
     fetchMarketplace: () => Promise<{
       success: boolean;
       data?: McpMarketplaceData;
@@ -870,6 +890,11 @@ interface IElectronAPI {
     openWorkbench: () => Promise<{ url: string }>;
     stop: () => Promise<{ phase: string; port: number | null; version: string | null; errorCode: string | null }>;
   };
+  decisionModel: {
+    getConfig: () => Promise<DecisionModelConfigView>;
+    saveConfig: (update: DecisionModelConfigUpdate) => Promise<DecisionModelConfigView>;
+    testConnection: (draft: DecisionModelConfigUpdate) => Promise<DecisionModelTestResult>;
+  };
   openclaw: {
     engine: {
       getStatus: () => Promise<{ success: boolean; status?: OpenClawEngineStatus; error?: string }>;
@@ -930,8 +955,10 @@ interface IElectronAPI {
         request: AgentBrowserCredentialSavePromptRequest,
       ) => Promise<AgentBrowserHostResponse>;
       onHostState: (callback: (event: AgentBrowserHostStateEvent) => void) => () => void;
+      resolvePasskey: (request: BrowserPasskeyRequest) => Promise<AgentBrowserHostResponse>;
       credentials: {
         getAvailability: () => Promise<BrowserCredentialAvailabilityResponse>;
+        requestAccess: () => Promise<BrowserCredentialAvailabilityResponse>;
         list: () => Promise<BrowserCredentialListResponse>;
         save: (request: BrowserCredentialSaveRequest) => Promise<BrowserCredentialMutationResponse>;
         delete: (request: BrowserCredentialDeleteRequest) => Promise<BrowserCredentialMutationResponse>;
@@ -966,7 +993,7 @@ interface IElectronAPI {
       kitIds?: string[];
       kitReferences?: KitReference[];
       resolvedKitCapabilities?: ResolvedKitCapabilities;
-      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       agentId?: string;
       modelOverride?: string;
@@ -990,7 +1017,7 @@ interface IElectronAPI {
       kitIds?: string[];
       kitReferences?: KitReference[];
       resolvedKitCapabilities?: ResolvedKitCapabilities;
-      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
@@ -1065,6 +1092,9 @@ interface IElectronAPI {
       hasMore?: boolean;
       error?: string;
     }>;
+    getProgressCard: (sessionId: string) => Promise<ProgressCardResponse>;
+    dismissProgressCard: (sessionId: string, revision: number) => Promise<ProgressCardResponse>;
+    onProgressCardChanged: (callback: (event: { sessionId: string }) => void) => () => void;
     getContextUsage: (
       sessionId: string,
     ) => Promise<{
@@ -1092,6 +1122,8 @@ interface IElectronAPI {
       messages?: CoworkMessage[];
       offset?: number;
       total?: number;
+      /** Start of the turn the page's first message belongs to (see CoworkSession). */
+      leadingTurnStartTimestamp?: number | null;
       error?: string;
     }>;
     getSessionSearchMessages: (options: {
@@ -1290,6 +1322,10 @@ interface IElectronAPI {
     onSessionModelOverrideChanged?: (
       callback: (data: { sessionId: string; modelOverride: string }) => void,
     ) => () => void;
+  };
+  workspaceReview: {
+    read: (input: ReviewScopeRequest) => Promise<ResolvedArtifactOutput | null>;
+    source: (input: ReviewSourceRequest) => Promise<ReviewSourceResponse | null>;
   };
   dialog: {
     selectDirectory: () => Promise<{ success: boolean; path: string | null }>;
@@ -1558,6 +1594,7 @@ interface IElectronAPI {
     createRealtimeSession: (options: AsrRealtimeSessionRequest) => Promise<AsrRealtimeSessionResult>;
   };
   artifact: {
+    office: OfficeBridges;
     markdown: MarkdownFileBridge;
     watchFile: (filePath: string) => Promise<void>;
     unwatchFile: (filePath: string) => Promise<void>;
@@ -1925,6 +1962,7 @@ interface IElectronAPI {
       error?: string;
     }>;
     runManually: (id: string) => Promise<{ success: boolean; error?: string }>;
+    resendWeixinReport: (taskId: string, runId: string) => Promise<{ success: boolean; error?: string }>;
     stop: (id: string) => Promise<{ success: boolean; error?: string }>;
     listRuns: (
       taskId: string,
@@ -1990,6 +2028,7 @@ interface IElectronAPI {
       error?: string;
     }>;
   };
+  subscriptionTrial: SubscriptionTrialBridge;
   activity: {
     getSlot: (
       input: ActivityHostGetSlotInput,
@@ -2009,6 +2048,7 @@ interface IElectronAPI {
       success: boolean;
       user?: import('../store/slices/authSlice').UserProfile;
       quota?: import('../store/slices/authSlice').UserQuota;
+      purchaseOffer?: import('../store/slices/authSlice').LowCreditPurchaseOffer | null;
       enterpriseContext?: EnterpriseAccountContext | null;
       error?: string;
     }>;
@@ -2019,11 +2059,13 @@ interface IElectronAPI {
       cachedUser?: import('../store/slices/authSlice').UserProfile | null;
       user?: import('../store/slices/authSlice').UserProfile;
       quota?: import('../store/slices/authSlice').UserQuota | null;
+      purchaseOffer?: import('../store/slices/authSlice').LowCreditPurchaseOffer | null;
       enterpriseContext?: EnterpriseAccountContext | null;
     }>;
     getQuota: () => Promise<{
       success: boolean;
       quota?: import('../store/slices/authSlice').UserQuota;
+      purchaseOffer?: import('../store/slices/authSlice').LowCreditPurchaseOffer | null;
       enterpriseContext?: EnterpriseAccountContext | null;
     }>;
     logout: () => Promise<{ success: boolean }>;

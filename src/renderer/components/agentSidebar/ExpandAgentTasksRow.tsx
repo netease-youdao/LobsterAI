@@ -18,12 +18,12 @@ const ExpandAgentTasksRow: React.FC<ExpandAgentTasksRowProps> = ({
   onSecondaryClick,
 }) => {
   return (
-    <div className="-ml-[6px] flex h-7 w-[calc(100%+12px)] items-center gap-5 rounded-md pl-[38px] pr-2.5 text-[length:var(--lobster-text-sidebarCompact)] font-normal">
+    <div className="-ml-[6px] flex h-8 w-[calc(100%+12px)] items-center gap-5 rounded-full pl-9 pr-2.5 text-xs font-normal">
       <button
         type="button"
         onClick={onClick}
         disabled={isLoading}
-        className="min-w-0 text-left text-secondary transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+        className="min-w-0 text-left text-secondary/80 transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
       >
         {isLoading ? i18nService.t('loading') : label}
       </button>
@@ -31,7 +31,7 @@ const ExpandAgentTasksRow: React.FC<ExpandAgentTasksRowProps> = ({
         <button
           type="button"
           onClick={onSecondaryClick}
-          className="min-w-0 text-left text-secondary transition-colors hover:text-foreground"
+          className="min-w-0 text-left text-secondary/80 transition-colors hover:text-foreground"
         >
           {secondaryLabel}
         </button>

@@ -3,6 +3,7 @@
 import { execFile } from 'node:child_process';
 import { createCipheriv, createHash } from 'node:crypto';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -17,9 +18,17 @@ import {
   type OpenClawStartupMigrationReport,
   OpenClawStartupMigrationStatus,
 } from '../src/shared/openclawEngine/startupMigration';
+import {
+  OPENCLAW_XAI_AUTH_STORE_ENTRY,
+  type OpenClawXaiAuthStore,
+  XAI_AUTH_CREDENTIAL_TYPE,
+  XAI_AUTH_PROVIDER,
+  type XaiOAuthCredential,
+} from '../src/shared/openclawEngine/xaiAuthStore';
 
 const runtimeRoot = process.env.OPENCLAW_STARTUP_MIGRATION_RUNTIME;
 const execFileAsync = promisify(execFile);
+const runtimeRequire = createRequire(import.meta.url);
 const profileId = 'lobsterai-server:fixture';
 const fixtureCredential = {
   type: 'api_key', provider: 'lobsterai-server', key: 'synthetic-api-key-only',
@@ -153,6 +162,22 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw auth profile migration', () => {
     configBytes = fs.readFileSync(configPath, 'utf8');
   }
 
+  test('identifies unrelated config paths without exposing values or archiving credentials', async () => {
+    const config = JSON.parse(configBytes);
+    const secretValue = 'synthetic-secret-that-must-not-appear';
+    config.gateway = { reload: { mode: secretValue } };
+    configBytes = JSON.stringify(config, null, 2);
+    fs.writeFileSync(configPath, configBytes);
+    const source = writeSource('auth-profiles.json', { version: 1, profiles: { [profileId]: fixtureCredential } });
+
+    const result = await migrate();
+    expect(result.code).toBe(1);
+    expect(result.report.warnings.join('\n')).toContain('gateway.reload.mode');
+    expect(JSON.stringify(result.report)).not.toContain(secretValue);
+    expect(fs.readFileSync(source.source, 'utf8')).toBe(source.bytes);
+    expect(archives(source.source)).toEqual([]);
+  });
+
   test('migrates the configured non-main agent credentials and rotation state without running Doctor', async () => {
     const sources = [
       writeSource('auth-profiles.json', { version: 1, profiles: { [profileId]: fixtureCredential } }),
@@ -190,6 +215,89 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw auth profile migration', () => {
     } });
     expectArchived(source);
     expect((await migrate()).report.status).toBe(OpenClawStartupMigrationStatus.Skipped);
+  });
+
+  test('recovers a dead bare-PID xAI lock, preserves its bytes and imports the credentials once', async () => {
+    const mainDir = path.join(stateDir, 'agents/main/agent');
+    const source = writeSource('auth-profiles.json', { version: 1, profiles: { [profileId]: fixtureCredential } }, mainDir);
+    const lockPath = `${source.source}.lock`;
+    const deadPid = '2147483647';
+    fs.writeFileSync(lockPath, deadPid);
+    const result = await migrate();
+    expect(result.code, JSON.stringify(result.report)).toBe(0);
+    expect(result.report.changes.join('\n')).toContain('Recovered legacy xAI auth lock');
+    const backups = fs.readdirSync(mainDir).filter(name => name.startsWith('auth-profiles.json.lock.legacy-pid-'));
+    expect(backups).toHaveLength(1);
+    expect(fs.readFileSync(path.join(mainDir, backups[0]), 'utf8')).toBe(deadPid);
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expectArchived(source);
+    expect(readStore(mainDir).secrets).toMatchObject({ profiles: { [profileId]: fixtureCredential } });
+    expect((await migrate()).report.status).toBe(OpenClawStartupMigrationStatus.Skipped);
+    expect(fs.readdirSync(mainDir).filter(name => name.startsWith('auth-profiles.json.lock.legacy-pid-'))).toEqual(backups);
+  });
+
+  test('retains a bare-PID auth lock owned by a live process and reports the cause', async () => {
+    const mainDir = path.join(stateDir, 'agents/main/agent');
+    const source = writeSource('auth-profiles.json', { version: 1, profiles: { [profileId]: fixtureCredential } }, mainDir);
+    const lockPath = `${source.source}.lock`;
+    const owner = String(process.pid);
+    fs.writeFileSync(lockPath, owner);
+    const result = await migrate();
+    expect(result.code).toBe(1);
+    expect(result.report.warnings.join('\n')).toContain(`pid=${owner}`);
+    expect(fs.readFileSync(lockPath, 'utf8')).toBe(owner);
+    expect(fs.readFileSync(source.source, 'utf8')).toBe(source.bytes);
+    expect(archives(source.source)).toEqual([]);
+    expect(fs.readdirSync(mainDir).some(name => name.includes('.legacy-pid-'))).toBe(false);
+  });
+
+  test('migrated xAI login survives account replacement and logout preserves other providers and state', async () => {
+    const mainDir = path.join(stateDir, 'agents/main/agent');
+    const xaiId = 'xai:migration-fixture';
+    const xaiCredential: XaiOAuthCredential = {
+      type: XAI_AUTH_CREDENTIAL_TYPE, provider: XAI_AUTH_PROVIDER,
+      access: 'synthetic-xai-access', refresh: 'synthetic-xai-refresh',
+      expires: 1000, email: 'xai@example.invalid', idToken: 'synthetic-id-token',
+    };
+    const source = writeSource('auth-profiles.json', { version: 1, profiles: {
+      [profileId]: fixtureCredential, [xaiId]: xaiCredential,
+    } }, mainDir);
+    writeSource('auth-state.json', {
+      ...fixtureState,
+      order: { ...fixtureState.order, [XAI_AUTH_PROVIDER]: [xaiId] },
+      lastGood: { ...fixtureState.lastGood, [XAI_AUTH_PROVIDER]: xaiId },
+      usageStats: { ...fixtureState.usageStats, [xaiId]: { lastUsed: 1, errorCount: 3 } },
+    }, mainDir);
+    fs.writeFileSync(`${source.source}.lock`, '2147483647');
+    expect((await migrate()).code).toBe(0);
+    const owner = runtimeRequire(path.join(runtimeRoot!, OPENCLAW_XAI_AUTH_STORE_ENTRY)) as OpenClawXaiAuthStore;
+    expect(owner.readStatus(stateDir)).toEqual({ loggedIn: true, email: xaiCredential.email, expiresAt: 1000 });
+    expectArchived(source);
+    owner.replaceCredential(stateDir, 'xai:replacement', { ...xaiCredential, email: 'replacement@example.invalid' });
+    expect(owner.readStatus(stateDir).email).toBe('replacement@example.invalid');
+    expect(readStore(mainDir).secrets).toMatchObject({ profiles: {
+      [profileId]: fixtureCredential, 'xai:replacement': { ...xaiCredential, email: 'replacement@example.invalid' },
+    } });
+    owner.logout(stateDir);
+    expect(owner.readStatus(stateDir)).toEqual({ loggedIn: false });
+    expect(readStore(mainDir)).toEqual({
+      secrets: { version: 1, profiles: { [profileId]: fixtureCredential } }, state: fixtureState,
+    });
+    expect((await migrate()).report.status).toBe(OpenClawStartupMigrationStatus.Skipped);
+    expect(fs.existsSync(source.source)).toBe(false);
+    expect(fs.existsSync(`${source.source}.lock`)).toBe(false);
+  });
+
+  test.each(['', '{', '0', '-1', '2147483648'])('leaves an ambiguous legacy lock untouched: %j', async (raw) => {
+    const mainDir = path.join(stateDir, 'agents/main/agent');
+    const source = writeSource('auth-profiles.json', { version: 1, profiles: { [profileId]: fixtureCredential } }, mainDir);
+    const lockPath = `${source.source}.lock`;
+    fs.writeFileSync(lockPath, raw);
+    const result = await migrate();
+    expect(result.code).toBe(1);
+    expect(result.report.warnings.join('\n')).toContain('file lock timeout');
+    expect(fs.readFileSync(lockPath, 'utf8')).toBe(raw);
+    expect(fs.readFileSync(source.source, 'utf8')).toBe(source.bytes);
   });
 
   test('keeps existing SQLite credentials and state when a conflicting legacy file reappears', async () => {

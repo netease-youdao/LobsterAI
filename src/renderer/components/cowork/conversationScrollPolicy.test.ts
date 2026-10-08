@@ -8,6 +8,7 @@ import {
   isAtConversationSessionBottom,
   isWheelScrollingAwayFromBottom,
   shouldAutoScrollForPosition,
+  shouldKeepBottomOnViewportResize,
   shouldLoadNewerConversationMessages,
 } from './conversationScrollPolicy';
 
@@ -26,6 +27,16 @@ describe('conversationScrollPolicy', () => {
   test('keeps auto-scroll disabled while programmatic navigation owns the viewport', () => {
     expect(shouldAutoScrollForPosition(0, true, true)).toBe(false);
     expect(shouldAutoScrollForPosition(0, false, true)).toBe(false);
+  });
+
+  test('keeps a following reader at the bottom when the viewport shrinks under them', () => {
+    expect(shouldKeepBottomOnViewportResize(true, 400, false, false)).toBe(true);
+    // A same-frame scroll event already measured the smaller viewport and turned following off.
+    expect(shouldKeepBottomOnViewportResize(false, -64, false, false)).toBe(true);
+    expect(shouldKeepBottomOnViewportResize(false, CONVERSATION_AUTO_SCROLL_THRESHOLD + 1, false, false)).toBe(false);
+    // A reader who scrolled up on purpose, or a locked search viewport, stays where it is.
+    expect(shouldKeepBottomOnViewportResize(false, CONVERSATION_AUTO_SCROLL_REATTACH_THRESHOLD + 1, true, false)).toBe(false);
+    expect(shouldKeepBottomOnViewportResize(false, 0, false, true)).toBe(false);
   });
 
   test('distinguishes a paged window bottom from the real session bottom', () => {

@@ -54,6 +54,7 @@ import {
   setMessageRailIndex,
   setMessageRailIndexLoading,
   setMessageWindow,
+  setOpenClawRepairing,
   setRemoteManaged,
   setSessions,
   setStreaming,
@@ -93,6 +94,7 @@ import {
 import { i18nService } from './i18n';
 import { restoreNativeQuestionPermissions } from './nativeQuestionRecovery';
 import { reportOnboardingAction } from './onboardingAnalytics';
+import { resolveOpenClawRepairHistoryWarning } from './openclawRepair';
 
 const STREAM_ERROR_DUPLICATE_WINDOW_MS = 10_000;
 
@@ -162,6 +164,7 @@ class CoworkService {
   private initialized = false;
   private openClawStatus: OpenClawEngineStatus | null = null;
   private openClawStatusListeners = new Set<(status: OpenClawEngineStatus) => void>();
+  private openClawRepairPromise: Promise<OpenClawGatewayRepairResult> | null = null;
   private openClawEngineListenerAttached = false;
   private latestLoadSessionsRequestId = 0;
   private latestLoadSessionRequestId = 0;
@@ -1809,6 +1812,7 @@ class CoworkService {
                 messages: pageResult.messages,
                 messagesOffset: returnedOffset,
                 totalMessages: pageResult.total ?? session.totalMessages,
+                leadingTurnStartTimestamp: pageResult.leadingTurnStartTimestamp ?? null,
               };
               this.logDiagnostic(
                 'debug',
@@ -1935,6 +1939,7 @@ class CoworkService {
         messages: result.messages,
         messagesOffset: result.offset ?? offset,
         totalMessages: result.total ?? totalMessages,
+        leadingTurnStartTimestamp: result.leadingTurnStartTimestamp ?? null,
         preserveCurrentTotal: store.getState().cowork.currentSession!.totalMessages > totalMessages,
       }));
       return true;
@@ -1986,7 +1991,12 @@ class CoworkService {
         );
         return false;
       }
-      store.dispatch(prependMessages({ sessionId, messages: result.messages, newOffset }));
+      store.dispatch(prependMessages({
+        sessionId,
+        messages: result.messages,
+        newOffset,
+        leadingTurnStartTimestamp: result.leadingTurnStartTimestamp ?? null,
+      }));
       const nextCount = store.getState().cowork.currentSession?.messages.length ?? currentMessageCount;
       this.logDiagnostic(
         'info',
@@ -2393,6 +2403,8 @@ class CoworkService {
   }
 
   async repairOpenClawGatewayState(): Promise<OpenClawGatewayRepairResult> {
+    if (this.openClawRepairPromise) return this.openClawRepairPromise;
+
     const engineApi = window.electron?.openclaw?.engine;
     if (!engineApi?.repairGatewayState) {
       return {
@@ -2400,14 +2412,40 @@ class CoworkService {
         error: i18nService.t('openClawRepairApiUnavailable'),
       };
     }
-    const result = await engineApi.repairGatewayState();
-    if (result?.status) {
-      this.notifyOpenClawStatus(result.status);
+    // Own the loading state here so it survives Settings closing and also
+    // covers Quick Repair. Gateway phase changes are not repair completion.
+    const repairPromise = Promise.resolve().then(async () => {
+      const result = await engineApi.repairGatewayState();
+      const historyWarning = result && resolveOpenClawRepairHistoryWarning(result);
+      if (historyWarning) {
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: {
+            message: historyWarning,
+            actionLabel: result.backupPath ? i18nService.t('openClawRepairViewBackup') : undefined,
+            onAction: result.backupPath ? () => {
+              void window.electron.shell.showItemInFolder(result.backupPath!).catch(error => {
+                console.error('[Cowork] Failed to reveal repair backup:', error);
+              });
+            } : undefined,
+          },
+        }));
+      }
+      if (result?.status) {
+        this.notifyOpenClawStatus(result.status);
+      }
+      return result ?? {
+        success: false,
+        error: i18nService.t('openClawRepairFailed'),
+      };
+    });
+    this.openClawRepairPromise = repairPromise;
+    store.dispatch(setOpenClawRepairing(true));
+    try {
+      return await repairPromise;
+    } finally {
+      this.openClawRepairPromise = null;
+      store.dispatch(setOpenClawRepairing(false));
     }
-    return result ?? {
-      success: false,
-      error: i18nService.t('openClawRepairFailed'),
-    };
   }
 
   async generateSessionTitle(prompt: string | null): Promise<string | null> {

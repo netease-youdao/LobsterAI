@@ -7,9 +7,14 @@ import { useMemo } from 'react';
 import { useSelector } from 'react-redux';
 
 import type { RootState } from '../../store';
-import { type Model, selectAgentSelectedModel } from '../../store/slices/modelSlice';
+import { isSameModelIdentity, type Model, selectAgentSelectedModel } from '../../store/slices/modelSlice';
 import type { CoworkAgentEngine } from '../../types/cowork';
-import { resolveOpenClawModelRef } from '../../utils/openclawModelRef';
+import {
+  getModelBillingSide,
+  getModelRefBillingSide,
+  ModelBillingSide,
+  resolveOpenClawModelRef,
+} from '../../utils/openclawModelRef';
 
 type ResolveAgentModelSelectionInput = {
   sessionModel?: string;
@@ -87,6 +92,56 @@ export function resolveAgentModelSelection({
   }
 
   return { selectedModel: fallbackModel, usesFallback: true, hasInvalidExplicitModel: false };
+}
+
+type AgentStartModelResult = {
+  /** The model a new session would start with. */
+  model: Model | null;
+  /** The agent's configured model, when that is not what the session would start with. */
+  unavailableModelRef: string | null;
+  /** Starting would silently swap plan billing and the user's own provider billing. */
+  crossesBillingSide: boolean;
+};
+
+/**
+ * A new session starts with the agent's resolved selection, which falls back
+ * when the configured model is missing or not accessible. Within one billing
+ * side that fallback stays silent; across plan and custom billing the user
+ * must choose, because the other side spends a different account.
+ */
+export function resolveAgentStartModel({
+  agentModel,
+  availableModels,
+  selectedModel,
+}: {
+  agentModel: string;
+  availableModels: Model[];
+  selectedModel: Model | null;
+}): AgentStartModelResult {
+  const agentModelRef = agentModel.trim();
+  if (!agentModelRef) return { model: selectedModel, unavailableModelRef: null, crossesBillingSide: false };
+
+  const configuredModel = resolveOpenClawModelRef(agentModelRef, availableModels);
+  if (
+    configuredModel
+    && configuredModel.accessible !== false
+    && selectedModel
+    && isSameModelIdentity(configuredModel, selectedModel)
+  ) {
+    return { model: selectedModel, unavailableModelRef: null, crossesBillingSide: false };
+  }
+
+  const configuredSide = getModelRefBillingSide(agentModelRef)
+    ?? (configuredModel ? getModelBillingSide(configuredModel) : null);
+  // Before the plan catalog loads, a missing plan model says nothing about its availability.
+  const planCatalogLoaded = availableModels.some(model => getModelBillingSide(model) === ModelBillingSide.Plan);
+  const crossesBillingSide = Boolean(
+    selectedModel
+    && configuredSide
+    && getModelBillingSide(selectedModel) !== configuredSide
+    && (configuredSide !== ModelBillingSide.Plan || planCatalogLoaded),
+  );
+  return { model: selectedModel, unavailableModelRef: agentModelRef, crossesBillingSide };
 }
 
 /**

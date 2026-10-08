@@ -36,7 +36,7 @@ export const KIMI_K3_RUNTIME_PROFILE = {
   reasoning: true,
   input: ['text', 'image', 'video'],
   contextWindow: 1_048_576,
-  maxTokens: 8_192,
+  maxTokens: 1_048_576,
   thinkingLevelMap: {
     off: null as null,
     minimal: 'max',

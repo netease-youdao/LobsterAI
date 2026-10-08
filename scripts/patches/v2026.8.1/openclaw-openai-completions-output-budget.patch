@@ -1,0 +1,351 @@
+diff --git a/packages/ai/src/transports/openai-completions-params.ts b/packages/ai/src/transports/openai-completions-params.ts
+--- a/packages/ai/src/transports/openai-completions-params.ts
++++ b/packages/ai/src/transports/openai-completions-params.ts
+@@ -97,12 +97,15 @@
+
+ const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
+ const OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE = 8_000;
++const MIN_USEFUL_OUTPUT_TOKENS = 16;
+
+ // Used only to bound `max_completion_tokens` below the effective context cap
+ // for strict OpenAI-compatible servers (e.g. vLLM, StepFun). The CJK-aware
+ // helper avoids undercounting non-Latin prompts enough to trigger server-side
+-// context rejections; wrong-high here just trims output a little. Estimate the
+-// final shaped payload, not the raw context, so compat transforms and dropped
++// context rejections when the configured output cap occupies the whole window.
++// Ordinary output caps are left to usage-based compaction and provider overflow
++// recovery: a wrong-high character estimate must not silently starve generation.
++// Estimate the final shaped payload, not the raw context, so compat transforms and dropped
+ // replay turns are reflected in the output cap.
+ function estimateOpenAICompletionsInputTokens(payload: {
+   messages?: unknown;
+@@ -393,12 +396,13 @@
+   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+   const cacheControl = resolveAnthropicCacheControl(compat, cacheRetention);
+   const cacheOptOutIndexes = new Set<number>();
+-  const completionsContext = context.systemPrompt && !cacheControl
+-    ? {
+-        ...context,
+-        systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
+-      }
+-    : context;
++  const completionsContext =
++    context.systemPrompt && !cacheControl
++      ? {
++          ...context,
++          systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
++        }
++      : context;
+   let messages = convertMessages(model as never, completionsContext, compat as never, {
+     cacheOptOutIndexes,
+     preserveSystemPromptCacheBoundary: cacheControl !== undefined,
+@@ -527,10 +531,20 @@
+     if (
+       compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
+       clampedMaxTokens !== undefined &&
+-      effectiveContextTokens !== undefined
++      effectiveContextTokens !== undefined &&
++      clampedMaxTokens >= effectiveContextTokens
+     ) {
+       const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
+-      const remainingBudget = Math.max(1, effectiveContextTokens - estimatedInputTokens - 1);
++      const remainingBudget = Math.floor(effectiveContextTokens - estimatedInputTokens - 1);
++      // This is a local estimate, not an observed provider token count. Keep it
++      // out of "requested N tokens" diagnostics used by overflow calibration.
++      // Surface a recoverable error instead of a successful but empty 1-token turn.
++      if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
++        throw new Error(
++          `Context overflow: insufficient estimated output budget for ${model.provider}/${model.id} ` +
++            `(effectiveContext=${effectiveContextTokens}, estimatedInput=${estimatedInputTokens}).`,
++        );
++      }
+       if (clampedMaxTokens > remainingBudget) {
+         clampedMaxTokens = remainingBudget;
+         emitModelTransportDebug(
+diff --git a/packages/ai/src/transports/openai-completions-output-budget.test.ts b/packages/ai/src/transports/openai-completions-output-budget.test.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/ai/src/transports/openai-completions-output-budget.test.ts
+@@ -0,0 +1,240 @@
++import { createServer } from "node:http";
++import type { Context } from "@openclaw/llm-core";
++import { describe, expect, it } from "vitest";
++import { isContextOverflow } from "../utils/overflow.js";
++import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
++import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
++import { makeCompletionsModel } from "./openai-completions.test-support.js";
++
++const model = makeCompletionsModel({
++  id: "kimi-k2.7-code",
++  provider: "lobsterai-server",
++  baseUrl: "https://proxy.example.com/v1",
++  contextWindow: 262_144,
++  maxTokens: 8_192,
++});
++
++function longContext(): Context {
++  // Synthetic shape: chars/4 * 1.25 rounds to 263,233, exceeding the window.
++  // The incident's provider-reported prompt usage was only 207,868 tokens.
++  return { messages: [{ role: "user", content: "x".repeat(842_344), timestamp: 1 }] };
++}
++
++describe("OpenAI-compatible output budget recovery", () => {
++  it.each(["max_tokens", "max_completion_tokens"] as const)(
++    "preserves the ordinary requested output budget in %s despite a high heuristic estimate",
++    (maxTokensField) => {
++      const params = buildOpenAICompletionsParams(
++        { ...model, compat: { maxTokensField } },
++        longContext(),
++        { maxTokens: 8_192 },
++      );
++      expect(params[maxTokensField]).toBe(8_192);
++    },
++  );
++
++  it("does not gradually shorten output as a conversation approaches the estimated limit", () => {
++    for (const chars of [810_000, 820_000, 830_000, 840_000, 850_000]) {
++      const params = buildOpenAICompletionsParams(
++        model,
++        { messages: [{ role: "user", content: "x".repeat(chars), timestamp: 1 }] },
++        undefined,
++      );
++      expect(params.max_completion_tokens).toBe(8_192);
++    }
++  });
++
++  it("preserves explicitly small output caps", () => {
++    for (const maxTokens of [1, 2, 64]) {
++      const params = buildOpenAICompletionsParams(model, longContext(), { maxTokens });
++      expect(params.max_completion_tokens).toBe(maxTokens);
++    }
++  });
++
++  it("still enforces the model output cap before considering the context window", () => {
++    const params = buildOpenAICompletionsParams(model, longContext(), { maxTokens: 400_000 });
++    expect(params.max_completion_tokens).toBe(8_192);
++  });
++
++  it("preserves model params output caps that are below the window", () => {
++    const params = buildOpenAICompletionsParams(
++      { ...model, params: { max_completion_tokens: 16_384 } } as typeof model,
++      longContext(),
++      undefined,
++    );
++    expect(params.max_completion_tokens).toBe(16_384);
++  });
++
++  it("does not silently starve requests with large tools, structured output, or CJK text", () => {
++    const params = buildOpenAICompletionsParams(
++      model,
++      {
++        messages: [{ role: "user", content: "你好世界".repeat(60_000), timestamp: 1 }],
++        tools: [
++          { name: "lookup", description: "x".repeat(100_000), parameters: { type: "object" } },
++        ],
++      },
++      { maxTokens: 8_192, responseFormat: { type: "json_object" } },
++    );
++    expect(params.max_completion_tokens).toBe(8_192);
++    expect(params.tools).toHaveLength(1);
++  });
++
++  it("rejects an exhausted estimate when the configured output cap occupies the entire window", () => {
++    expect(() =>
++      buildOpenAICompletionsParams(
++        { ...model, maxTokens: model.contextWindow },
++        longContext(),
++        undefined,
++      ),
++    ).toThrow("Context overflow");
++  });
++
++  it("does not submit an almost exhausted full-window cap as a one-token completion", () => {
++    expect(() =>
++      buildOpenAICompletionsParams(
++        { ...model, contextWindow: 1_000, maxTokens: 1_000 },
++        { messages: [{ role: "user", content: "x".repeat(3_193), timestamp: 1 }] },
++        undefined,
++      ),
++    ).toThrow("Context overflow");
++  });
++
++  it("preserves reasoning replay without charging it against the requested output cap", () => {
++    const params = buildOpenAICompletionsParams(
++      { ...model, compat: { requiresReasoningContentOnAssistantMessages: true } },
++      {
++        messages: [
++          { role: "user", content: "continue", timestamp: 1 },
++          {
++            role: "assistant",
++            api: model.api,
++            provider: model.provider,
++            model: model.id,
++            content: [
++              {
++                type: "thinking",
++                thinking: "x".repeat(900_000),
++                thinkingSignature: "reasoning_content",
++              },
++              { type: "text", text: "OK" },
++            ],
++            usage: {
++              input: 207_868,
++              output: 2,
++              cacheRead: 0,
++              cacheWrite: 0,
++              totalTokens: 207_870,
++              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++            },
++            stopReason: "stop",
++            timestamp: 2,
++          },
++          { role: "user", content: "continue", timestamp: 3 },
++        ],
++      },
++      { maxTokens: 8_192 },
++    );
++    expect(params.max_completion_tokens).toBe(8_192);
++    const assistant = (params.messages as Array<{ role: string; reasoning_content?: string }>).find(
++      (message) => message.role === "assistant",
++    );
++    expect(assistant?.reasoning_content?.length).toBe(900_000);
++  });
++
++  it.each([207_868, 260_000])(
++    "uses a strict HTTP endpoint to distinguish an estimate from actual prompt usage (%i)",
++    async (promptTokens) => {
++      const requests: Array<{
++        messages: Array<{ content: string }>;
++        max_completion_tokens: number;
++      }> = [];
++      const server = createServer((request, response) => {
++        let body = "";
++        request.setEncoding("utf8");
++        request.on("data", (chunk: string) => {
++          body += chunk;
++        });
++        request.on("end", () => {
++          const payload = JSON.parse(body) as (typeof requests)[number];
++          requests.push(payload);
++          // Controlled tokenizer result, derived from incident magnitudes rather
++          // than pretending ASCII character counts reproduce Kimi tokenization.
++          const input = (payload.messages[0]?.content.length ?? 0) > 10_000 ? promptTokens : 1_000;
++          if (input + payload.max_completion_tokens > model.contextWindow) {
++            response.writeHead(400, { "content-type": "application/json" });
++            response.end(
++              JSON.stringify({
++                error: {
++                  type: "invalid_request_error",
++                  code: "context_length_exceeded",
++                  message: `This model's maximum context length is 262144 tokens. However, you requested ${input + payload.max_completion_tokens} tokens (${input} in the messages, ${payload.max_completion_tokens} in the completion).`,
++                },
++              }),
++            );
++            return;
++          }
++          const starved = payload.max_completion_tokens < 16;
++          response.writeHead(200, { "content-type": "text/event-stream" });
++          response.end(
++            `data: ${JSON.stringify({
++              id: "chatcmpl-budget-test",
++              object: "chat.completion.chunk",
++              model: model.id,
++              choices: [
++                {
++                  index: 0,
++                  delta: starved ? { reasoning_content: "." } : { content: "OK" },
++                  finish_reason: starved ? "length" : "stop",
++                },
++              ],
++              usage: { prompt_tokens: input, completion_tokens: 2, total_tokens: input + 2 },
++            })}\n\ndata: [DONE]\n\n`,
++          );
++        });
++      });
++      await new Promise<void>((resolve) => {
++        server.listen(0, "127.0.0.1", resolve);
++      });
++      try {
++        const address = server.address();
++        if (!address || typeof address === "string") {
++          throw new Error("Missing loopback address");
++        }
++        const liveModel = { ...model, baseUrl: `http://127.0.0.1:${address.port}/v1` };
++        const stream = createOpenAICompletionsTransportStreamFn();
++        const options = { apiKey: "test-key", maxTokens: 8_192, maxRetries: 0 };
++        const result = await (await stream(liveModel, longContext(), options)).result();
++        expect(requests).toHaveLength(1);
++        expect(requests[0]?.max_completion_tokens).toBe(8_192);
++        if (promptTokens === 207_868) {
++          expect(result.stopReason).toBe("stop");
++          expect(result.content).toEqual(
++            expect.arrayContaining([expect.objectContaining({ type: "text", text: "OK" })]),
++          );
++        } else {
++          expect(result.stopReason).toBe("error");
++          expect(isContextOverflow(result, model.contextWindow)).toBe(true);
++          const recovered = await (
++            await stream(
++              liveModel,
++              {
++                messages: [
++                  { role: "user", content: "Compacted conversation. Continue.", timestamp: 2 },
++                ],
++              },
++              options,
++            )
++          ).result();
++          expect(recovered.stopReason).toBe("stop");
++          expect(requests.map((request) => request.max_completion_tokens)).toEqual([8_192, 8_192]);
++        }
++      } finally {
++        server.closeAllConnections();
++        await new Promise<void>((resolve, reject) => {
++          server.close((error) => (error ? reject(error) : resolve()));
++        });
++      }
++    },
++  );
++});
+diff --git a/src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts b/src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts
+--- a/src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts
++++ b/src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts
+@@ -257,6 +257,38 @@
+     expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
+   });
+
++  it.each([
++    "400 This model's maximum context length is 262144 tokens. However, you requested 268192 tokens (260000 in the messages, 8192 in the completion).",
++    "400 Your request exceeded model token limit: 262144 (requested: 268192)",
++    "Context overflow: insufficient estimated output budget for fixture/model (effectiveContext=262144, estimatedInput=263233).",
++  ])("bounds compaction recovery for an output budget rejection: %s", async (errorMessage) => {
++    const state = createEmbeddedRunContextRecoveryState();
++    const assistantOverflowCandidate = makeAssistantMessage({ stopReason: "error", errorMessage });
++    for (let attempt = 0; attempt < 3; attempt += 1) {
++      const result = await recoverEmbeddedRunOverflow(
++        makeInput({
++          state,
++          promptError: null,
++          assistantOverflowCandidate,
++          assistantErrorText: errorMessage,
++          contextTokenBudget: 262_144,
++        }),
++      );
++      expect(result).toEqual({ action: "retry" });
++    }
++    const result = await recoverEmbeddedRunOverflow(
++      makeInput({
++        state,
++        promptError: null,
++        assistantOverflowCandidate,
++        assistantErrorText: errorMessage,
++        contextTokenBudget: 262_144,
++      }),
++    );
++    expect(result).toMatchObject({ action: "surface", kind: "context_overflow" });
++    expect(mocks.compact).toHaveBeenCalledTimes(3);
++  });
++
+   it("does not compact after an ambiguous bodyless 400", async () => {
+     const assistantOverflowCandidate = makeAssistantMessage({
+       stopReason: "error",

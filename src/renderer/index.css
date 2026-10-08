@@ -117,10 +117,12 @@ blockquote {
      otherwise text visibly resizes right after startup. */
   --lobster-ui-font-size: 15px;
   --lobster-code-font-size: 14px;
-  /* 445 mirrors Codex/VS Code body weight (--vscode-font-weight: 445): between
-     Regular and Medium on variable system fonts (SF Pro, modern PingFang SC);
-     falls back to the nearest static face (e.g. 400 for Microsoft YaHei). */
-  --lobster-ui-font-weight-normal: 445;
+  /* Keep body text at Regular 400. On macOS, PingFang SC is a variable font
+     whose weight axis tops out at 600 and markdown <strong> renders at 600, so
+     any heavier body weight (e.g. the 445 VS Code uses) collapses the contrast
+     between normal and bold CJK text. Static fonts such as Microsoft YaHei
+     resolve to 400 either way. */
+  --lobster-ui-font-weight-normal: 400;
   --lobster-ui-font-weight-medium: 500;
   --lobster-text-xs: 13px;
   --lobster-text-sm: 15px;
