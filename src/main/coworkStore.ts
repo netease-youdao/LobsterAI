@@ -23,6 +23,12 @@ import {
   type CoworkGoal,
   normalizeCoworkGoal,
 } from '../shared/cowork/goal';
+import {
+  type CoworkLlmTrace,
+  type CoworkTurnUsage,
+  type CoworkTurnUsageAnchor,
+  getCoworkTurnUsage,
+} from '../shared/cowork/llmTurnUsage';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import {
   COWORK_RAIL_TOOLTIP_PREVIEW_MAX_LENGTH,
@@ -499,6 +505,10 @@ export interface CoworkMessageMetadata {
     mimeType?: string;
     name?: string;
   }>;
+  /** User messages: trace carried by every model request of the turn. */
+  llmTrace?: CoworkLlmTrace;
+  /** User messages: credits and tokens the turn consumed on LobsterAI models. */
+  turnUsage?: CoworkTurnUsage;
   [key: string]: unknown;
 }
 
@@ -549,6 +559,7 @@ export interface CoworkSession {
    * began before `messagesOffset`. Filled in for the renderer only.
    */
   leadingTurnStartTimestamp?: number | null;
+  leadingTurnUsage?: CoworkTurnUsageAnchor | null;
   parentSessionId?: string | null;
   forkedFromMessageId?: string | null;
   forkedAt?: number | null;
@@ -1368,6 +1379,51 @@ export class CoworkStore {
     return this.getMessageForkBoundary(sessionId, messageId)?.createdAt ?? null;
   }
 
+  getMessage(sessionId: string, messageId: string): CoworkMessage | null {
+    const row = this.getOne<CoworkMessageRow>(
+      'SELECT id, type, content, metadata, created_at, sequence FROM cowork_messages WHERE session_id = ? AND id = ?',
+      [sessionId, messageId],
+    );
+    return row ? this.parseStoredMessage(sessionId, row) : null;
+  }
+
+  getLatestUserMessage(sessionId: string): CoworkMessage | null {
+    const row = this.getOne<CoworkMessageRow>(
+      `
+      SELECT id, type, content, metadata, created_at, sequence
+      FROM cowork_messages
+      WHERE session_id = ? AND type = 'user'
+      ORDER BY
+        COALESCE(sequence, created_at) DESC,
+        created_at DESC,
+        ROWID DESC
+      LIMIT 1
+    `,
+      [sessionId],
+    );
+    return row ? this.parseStoredMessage(sessionId, row) : null;
+  }
+
+  private parseStoredMessage(sessionId: string, row: CoworkMessageRow): CoworkMessage {
+    let metadata: Record<string, unknown> | undefined;
+    if (row.metadata) {
+      try {
+        metadata = JSON.parse(row.metadata);
+      } catch {
+        console.warn(
+          `[CoworkStore] corrupt metadata detected for message ${row.id} in session ${sessionId}, discarding metadata`,
+        );
+      }
+    }
+    return {
+      id: row.id,
+      type: row.type as CoworkMessageType,
+      content: row.content,
+      timestamp: row.created_at,
+      metadata,
+    };
+  }
+
   private shouldCopyForkContextMessage(
     message: CoworkForkContextMessage,
     forkBoundary: CoworkForkBoundary | null,
@@ -1884,14 +1940,19 @@ export class CoworkStore {
    * position up to the position itself. A paged window can begin mid-turn, and
    * the renderer needs this to time that turn without loading its first messages.
    */
-  getTurnStartTimestampAt(sessionId: string, position: number): number | null {
-    if (!Number.isInteger(position) || position < 0) return null;
+  getTurnContextAt(sessionId: string, position: number): {
+    startTimestamp: number | null;
+    usageAnchor: CoworkTurnUsageAnchor | null;
+  } {
+    if (!Number.isInteger(position) || position < 0) {
+      return { startTimestamp: null, usageAnchor: null };
+    }
     const rows = this.db
-      .prepare<[string, number], { type: string; created_at: number }>(
+      .prepare<[string, number], { id: string; type: string; created_at: number; metadata: string | null }>(
         `
-        SELECT type, created_at
+        SELECT id, type, created_at, CASE WHEN type = 'user' THEN metadata ELSE NULL END AS metadata
         FROM (
-          SELECT type, created_at, sequence, ROWID as rowid_
+          SELECT id, type, created_at, metadata, sequence, ROWID as rowid_
           FROM cowork_messages
           WHERE session_id = ?
           ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, ROWID ASC
@@ -1903,14 +1964,34 @@ export class CoworkStore {
       .iterate(sessionId, position + 1);
 
     let start: number | null = null;
+    let usageAnchor: CoworkTurnUsageAnchor | null = null;
+    let firstRow = true;
     for (const row of rows) {
       const timestamp = normalizeMessageTimestamp(Number(row.created_at));
       if (timestamp != null) {
         start = start == null ? timestamp : Math.min(start, timestamp);
       }
-      if (row.type === 'user') break;
+      if (row.type === 'user') {
+        if (!firstRow) {
+          let turnUsage: CoworkTurnUsage | null = null;
+          if (row.metadata) {
+            try {
+              turnUsage = getCoworkTurnUsage(JSON.parse(row.metadata));
+            } catch {
+              // A malformed user message cannot supply a saved usage summary.
+            }
+          }
+          usageAnchor = { userMessageId: row.id, turnUsage };
+        }
+        break;
+      }
+      firstRow = false;
     }
-    return start;
+    return { startTimestamp: start, usageAnchor };
+  }
+
+  getTurnStartTimestampAt(sessionId: string, position: number): number | null {
+    return this.getTurnContextAt(sessionId, position).startTimestamp;
   }
 
   /**

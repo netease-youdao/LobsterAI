@@ -56,6 +56,7 @@ import {
   formatCoworkImageAttachmentLimit,
   validateCoworkImageAttachmentSize,
 } from '../../../shared/cowork/imageAttachments';
+import { type CoworkLlmTrace, getCoworkLlmTrace } from '../../../shared/cowork/llmTurnUsage';
 import {
   parseOpenClawCronSessionKey,
   resolveOpenClawCronRunHistoryKey,
@@ -97,6 +98,7 @@ import type { SubagentMessageStore } from '../../subagentMessageStore';
 import type { SubagentRunStore } from '../../subagentRunStore';
 import { setCoworkProxySessionId } from '../coworkOpenAICompatProxy';
 import { getServerApiBaseUrl } from '../endpoints';
+import { createCoworkLlmTrace, createLlmTraceparent } from '../llmTrace';
 import { extractOpenClawAssistantStreamParts,extractOpenClawAssistantStreamText } from '../openclawAssistantText';
 import {
   buildManagedSessionKey,
@@ -493,7 +495,7 @@ type GatewayClientLike = {
   request: <T = Record<string, unknown>>(
     method: string,
     params?: unknown,
-    opts?: { expectFinal?: boolean; timeoutMs?: number | null },
+    opts?: { expectFinal?: boolean; timeoutMs?: number | null; traceparent?: string },
   ) => Promise<T>;
 };
 
@@ -733,6 +735,8 @@ type ActiveTurn = {
   planModeSafetyRecoveryDeadlineMs?: number;
   /** Timestamp when this turn was created (for abort diagnostics). */
   startedAtMs: number;
+  /** W3C trace id carried by every model request of this turn (client log -> server log -> usage ledger). */
+  llmTraceId?: string;
   firstResponseTiming: FirstResponseTiming;
   knownRunIds: Set<string>;
   /** Prevents duplicate IM prompt analytics when a later event supplies the real run id. */
@@ -4860,18 +4864,20 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         agentId,
         question: normalizedQuestion,
       });
+      const btwTrace = createCoworkLlmTrace();
       console.log(
         '[CoworkBtw] submitting side question.',
         `Session ${normalizedSessionId}.`,
         `Run ${normalizedRunId}.`,
         `OpenClaw key ${sessionKey}.`,
+        `Trace ${btwTrace.traceId}.`,
         `Question chars ${normalizedQuestion.length}.`,
         `Active main turn ${this.activeTurns.has(normalizedSessionId) ? 'yes' : 'no'}.`,
       );
       const sendResult = await this.requireGatewayClient().request<Record<string, unknown>>(
         OpenClawGatewayMethod.ChatSend,
         chatSendParams,
-        { timeoutMs: 90_000 },
+        { timeoutMs: 90_000, traceparent: createLlmTraceparent(btwTrace.traceId) },
       );
       const returnedRunId = typeof sendResult?.runId === 'string' ? sendResult.runId.trim() : '';
       if (returnedRunId && !this.addPendingBtwRunAlias(pending, returnedRunId)) {
@@ -5658,7 +5664,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       ?? 'modal';
     this.confirmationModeBySession.set(sessionId, confirmationMode);
 
+    let llmTrace: CoworkLlmTrace;
     if (!options.skipInitialUserMessage) {
+      llmTrace = createCoworkLlmTrace();
       const messageSkillIds = options.messageSkillIds ?? options.skillIds;
       const imageAttachmentPreviews = buildCoworkImageAttachmentPreviews(options.imageAttachments);
       const goalSettingMetadata = buildGoalSettingMessageMetadata(prompt);
@@ -5692,12 +5700,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const userMessage = this.store.addMessage(sessionId, {
         type: 'user',
         content: prompt,
-        metadata,
+        metadata: { ...metadata, llmTrace },
       });
       this.refreshContinuityCapsule(sessionId, ContinuityCapsuleSource.UserMessage, {
         sourceMessageId: userMessage.id,
       });
       this.emit('message', sessionId, userMessage);
+    } else {
+      llmTrace = this.ensureLatestUserMessageLlmTrace(session);
     }
 
     const agentId = options.agentId || session.agentId || 'main';
@@ -5890,6 +5900,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       contextMaintenanceToolCallIds: new Set(),
       planModeSuppressedToolCallIds: new Set(),
       startedAtMs: Date.now(),
+      llmTraceId: llmTrace.traceId,
       firstResponseTiming,
       stopRequested: false,
       thinking: createOpenClawThinkingTurnState(),
@@ -5908,7 +5919,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     const client = this.requireGatewayClient();
     try {
-      console.log('[OpenClawRuntime] chat.send params:', { sessionKey, messageLength: outboundMessage.length, runId });
+      console.log('[OpenClawRuntime] chat.send params:', {
+        sessionKey,
+        messageLength: outboundMessage.length,
+        runId,
+        traceId: llmTrace.traceId,
+      });
       console.log('[OpenClawRuntime] chat.send imageAttachments diagnosis:', {
         hasImageAttachments: !!options.imageAttachments,
         imageAttachmentsCount: options.imageAttachments?.length ?? 0,
@@ -5942,7 +5958,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const sendResult = await client.request<Record<string, unknown>>(
         OpenClawGatewayMethod.ChatSend,
         chatSendParams,
-        { timeoutMs: 90_000 },
+        { timeoutMs: 90_000, traceparent: createLlmTraceparent(llmTrace.traceId) },
       );
       const chatSendElapsedMs = Date.now() - chatSendStartMs;
       firstResponseTiming.chatSendAckAtMs = Date.now();
@@ -8440,6 +8456,34 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     return true;
   }
 
+  /**
+   * Turns whose user message was stored before the run starts (new sessions,
+   * goal continuations) keep the trace on that message, so every run grouped
+   * under it in the UI is summarized with the same trace.
+   */
+  private ensureLatestUserMessageLlmTrace(session: CoworkSession): CoworkLlmTrace {
+    let userMessage: CoworkMessage | undefined;
+    for (let i = session.messages.length - 1; i >= 0; i--) {
+      if (session.messages[i].type === 'user') {
+        userMessage = session.messages[i];
+        break;
+      }
+    }
+    const existing = getCoworkLlmTrace(userMessage?.metadata);
+    if (existing) return existing;
+    const trace = createCoworkLlmTrace();
+    if (userMessage) {
+      const metadata: CoworkMessageMetadata = { ...(userMessage.metadata ?? {}), llmTrace: trace };
+      this.store.updateMessage(session.id, userMessage.id, { metadata });
+      userMessage.metadata = metadata;
+    }
+    return trace;
+  }
+
+  private buildTurnTraceparentOption(turn: ActiveTurn): { traceparent?: string } {
+    return turn.llmTraceId ? { traceparent: createLlmTraceparent(turn.llmTraceId) } : {};
+  }
+
   private resolveAssistantMessageIdForUsage(sessionId: string, preferredMessageId?: string | null): string | undefined {
     const session = this.store.getSession(sessionId);
     if (!session) {
@@ -10336,7 +10380,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const sendResult = await this.requireGatewayClient().request<Record<string, unknown>>(
         'chat.send',
         chatSendParams,
-        { timeoutMs: 90_000 },
+        { timeoutMs: 90_000, ...this.buildTurnTraceparentOption(turn) },
       );
       const returnedRunId = typeof sendResult?.runId === 'string' ? sendResult.runId.trim() : '';
       if (returnedRunId) this.bindRunIdToTurn(sessionId, returnedRunId);
@@ -10536,7 +10580,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const sendResult = await this.requireGatewayClient().request<Record<string, unknown>>(
         OpenClawGatewayMethod.ChatSend,
         chatSendParams,
-        { timeoutMs: 90_000 },
+        { timeoutMs: 90_000, ...this.buildTurnTraceparentOption(turn) },
       );
       if (this.activeTurns.get(sessionId) !== turn || turn.stopRequested || turn.runId !== recoveryRunId) return;
       const returnedRunId = typeof sendResult?.runId === 'string' ? sendResult.runId.trim() : '';

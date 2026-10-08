@@ -60,6 +60,7 @@ import {
   CoworkIpcChannel,
   type CoworkSessionsChangedPayload,
 } from '../shared/cowork/constants';
+import type { CoworkTurnUsage } from '../shared/cowork/llmTurnUsage';
 import type { CoworkSearchMessageCursor } from '../shared/cowork/search';
 import { DataMigrationIpc } from '../shared/dataMigration/constants';
 import { type DecisionModelConfigUpdate, DecisionModelIpcChannel } from '../shared/decisionModel/constants';
@@ -587,6 +588,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.SubmitSteer, options),
     runGoalCommand: (options: { sessionId: string; command: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.GoalCommand, options),
+    refreshTurnUsage: (options: { sessionId: string; messageId: string }): Promise<CoworkTurnUsage | null> =>
+      ipcRenderer.invoke(CoworkIpcChannel.RefreshTurnUsage, options),
     stopSession: (sessionId: string) =>
       ipcRenderer.invoke(CoworkIpcChannel.StopSession, sessionId),
     deleteSession: (sessionId: string) => ipcRenderer.invoke(CoworkIpcChannel.DeleteSession, sessionId),
@@ -778,6 +781,16 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_event: any, data: { sessionId: string; goal: any }) => callback(data);
       ipcRenderer.on(CoworkIpcChannel.StreamGoal, handler);
       return () => ipcRenderer.removeListener(CoworkIpcChannel.StreamGoal, handler);
+    },
+    onStreamTurnUsage: (
+      callback: (data: { sessionId: string; messageId: string; turnUsage: CoworkTurnUsage }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: { sessionId: string; messageId: string; turnUsage: CoworkTurnUsage },
+      ) => callback(data);
+      ipcRenderer.on(CoworkIpcChannel.StreamTurnUsage, handler);
+      return () => ipcRenderer.removeListener(CoworkIpcChannel.StreamTurnUsage, handler);
     },
     onStreamBtwResult: (
       callback: (data: { sessionId: string; result: CoworkBtwEntry }) => void,

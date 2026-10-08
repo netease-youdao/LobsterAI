@@ -91,6 +91,8 @@ export const CoworkIpcChannel = {
   SessionsChanged: 'cowork:sessions:changed',
   StreamBtwResult: 'cowork:stream:btwResult',
   StreamGoal: 'cowork:stream:goal',
+  StreamTurnUsage: 'cowork:stream:turnUsage',
+  RefreshTurnUsage: 'cowork:turnUsage:refresh',
   MemoryReadRaw: 'cowork:memory:readRaw',
   MemoryWriteRaw: 'cowork:memory:writeRaw',
   BootstrapRead: 'cowork:bootstrap:read',

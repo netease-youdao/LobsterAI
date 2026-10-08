@@ -362,6 +362,7 @@ import {
   ensureCoworkTempGitignore,
   findCoworkTempRoot,
 } from './libs/coworkTempJanitor';
+import { CoworkTurnUsageService } from './libs/coworkTurnUsage';
 import {
   ensureElectronNodeShim,
   generateSessionTitle,
@@ -523,6 +524,7 @@ import { readOpenClawRepairQuarantinedStoreCount } from './libs/openclawRepairPr
 import { collectReferencedEnvVarNames, pickReferencedSecretEnvVars } from './libs/openclawSecretEnv';
 import {
   getOpenClawTokenProxyPort,
+  getOpenClawTokenProxyTraceStats,
   startOpenClawTokenProxy,
   stopOpenClawTokenProxy,
 } from './libs/openclawTokenProxy';
@@ -2460,6 +2462,14 @@ const bootstrapOpenClawEngine = async (
 // Injected after the auth session manager is created. This keeps gateway startup
 // able to await an in-flight refresh without exposing refresh internals globally.
 let waitForPendingTokenRefresh: () => Promise<void> = async () => {};
+// Created with the auth session manager; settles each finished turn's LLM usage from the server ledger.
+let coworkTurnUsageService: CoworkTurnUsageService | null = null;
+
+const settleCoworkTurnUsage = (sessionId: string): void => {
+  void coworkTurnUsageService?.settleLatestTurn(sessionId).catch((error) => {
+    console.warn(`[TurnUsage] settlement failed for session ${sessionId}.`, error);
+  });
+};
 
 const ensureOpenClawRunningForCowork = async () => {
   const configApplyStatus = await waitForOpenClawConfigApply('cowork engine startup');
@@ -3742,6 +3752,7 @@ const bindCoworkRuntimeForwarder = (): void => {
     skinRuntimeController?.handleRuntimeComplete(sessionId);
     mediaReferencesBySession.delete(sessionId);
     getDesktopNotificationManager().handleComplete(sessionId);
+    settleCoworkTurnUsage(sessionId);
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(win => {
       if (win.isDestroyed()) return;
@@ -3766,6 +3777,8 @@ const bindCoworkRuntimeForwarder = (): void => {
     mediaTurnAccountScopeBySession.delete(sessionId);
     skinRuntimeController?.handleRuntimeError(sessionId);
     mediaReferencesBySession.delete(sessionId);
+    // A failed turn may still have consumed credits before it stopped.
+    settleCoworkTurnUsage(sessionId);
     // Mark session as error in store so the .catch() fallback can detect duplicates.
     try {
       getCoworkStore().updateSession(sessionId, { status: 'error' });
@@ -5722,6 +5735,21 @@ if (!gotTheLock) {
     }
     return response;
   };
+
+  coworkTurnUsageService = new CoworkTurnUsageService({
+    getStore: () => getCoworkStore(),
+    fetchWithAuth,
+    hasAuthTokens: () => Boolean(getAuthTokens()?.accessToken),
+    buildServerUrl: pathWithQuery => appendKeyfromQuery(`${getServerApiBaseUrl()}${pathWithQuery}`),
+    getTraceStats: getOpenClawTokenProxyTraceStats,
+    emitTurnUsage: (event) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(CoworkIpcChannel.StreamTurnUsage, event);
+        }
+      }
+    },
+  });
 
   type AvailableServerModel = ServerModelMetadataInput & {
     modelId: string;
@@ -10164,6 +10192,16 @@ if (!gotTheLock) {
     return reviewSources.read(input);
   });
 
+  ipcMain.handle(
+    CoworkIpcChannel.RefreshTurnUsage,
+    async (_event, options: { sessionId?: unknown; messageId?: unknown } | undefined) => {
+      const sessionId = typeof options?.sessionId === 'string' ? options.sessionId.trim() : '';
+      const messageId = typeof options?.messageId === 'string' ? options.messageId.trim() : '';
+      if (!sessionId || !messageId || !coworkTurnUsageService) return null;
+      return coworkTurnUsageService.refresh(sessionId, messageId);
+    },
+  );
+
   ipcMain.handle(CoworkIpcChannel.StopSession, async (_event, sessionId: string) => {
     try {
       const runtime = getCoworkEngineRouter();
@@ -10478,7 +10516,9 @@ if (!gotTheLock) {
           `[CoworkIPC] loaded session ${sessionId}; returned ${session.messages.length} of ${session.totalMessages} messages from offset ${session.messagesOffset}.`,
         );
         if (session.messagesOffset > 0) {
-          session.leadingTurnStartTimestamp = store.getTurnStartTimestampAt(sessionId, session.messagesOffset);
+          const leadingTurn = store.getTurnContextAt(sessionId, session.messagesOffset);
+          session.leadingTurnStartTimestamp = leadingTurn.startTimestamp;
+          session.leadingTurnUsage = leadingTurn.usageAnchor;
         }
       } else {
         console.warn(`[CoworkIPC] session ${sessionId} was not found during load.`);
@@ -10554,10 +10594,17 @@ if (!gotTheLock) {
         console.log(
           `[CoworkIPC] loaded message page for session ${sessionId}; returned ${messages.length} of ${total} messages from offset ${offset} with limit ${limit}.`,
         );
-        const leadingTurnStartTimestamp = offset > 0 && messages.length > 0
-          ? store.getTurnStartTimestampAt(sessionId, offset)
+        const leadingTurn = offset > 0 && messages.length > 0
+          ? store.getTurnContextAt(sessionId, offset)
           : null;
-        return { success: true, messages, offset, total, leadingTurnStartTimestamp };
+        return {
+          success: true,
+          messages,
+          offset,
+          total,
+          leadingTurnStartTimestamp: leadingTurn?.startTimestamp ?? null,
+          leadingTurnUsage: leadingTurn?.usageAnchor ?? null,
+        };
       } catch (error) {
         return {
           success: false,

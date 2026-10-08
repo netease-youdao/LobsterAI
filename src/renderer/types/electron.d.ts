@@ -64,6 +64,7 @@ import type {
   CoworkSessionsChangedPayload,
 } from '../../shared/cowork/constants';
 import type { CoworkGoal } from '../../shared/cowork/goal';
+import type { CoworkTurnUsage, CoworkTurnUsageAnchor } from '../../shared/cowork/llmTurnUsage';
 import type { ProgressCardResponse } from '../../shared/cowork/progressCard';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
 import type {
@@ -229,6 +230,7 @@ interface CoworkSession {
   totalMessages: number;
   /** Start of the turn the first loaded message belongs to, when it began before messagesOffset. */
   leadingTurnStartTimestamp?: number | null;
+  leadingTurnUsage?: CoworkTurnUsageAnchor | null;
   parentSessionId?: string | null;
   forkedFromMessageId?: string | null;
   forkedAt?: number | null;
@@ -1050,6 +1052,7 @@ interface IElectronAPI {
       code?: string;
       engineStatus?: OpenClawEngineStatus;
     }>;
+    refreshTurnUsage?: (options: { sessionId: string; messageId: string }) => Promise<CoworkTurnUsage | null>;
     stopSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSessions: (sessionIds: string[]) => Promise<{ success: boolean; error?: string }>;
@@ -1122,6 +1125,7 @@ interface IElectronAPI {
       total?: number;
       /** Start of the turn the page's first message belongs to (see CoworkSession). */
       leadingTurnStartTimestamp?: number | null;
+      leadingTurnUsage?: CoworkTurnUsageAnchor | null;
       error?: string;
     }>;
     getSessionSearchMessages: (options: {
@@ -1298,6 +1302,9 @@ interface IElectronAPI {
     ) => () => void;
     onStreamGoal?: (
       callback: (data: { sessionId: string; goal: CoworkGoal | null }) => void,
+    ) => () => void;
+    onStreamTurnUsage?: (
+      callback: (data: { sessionId: string; messageId: string; turnUsage: CoworkTurnUsage }) => void,
     ) => () => void;
     onStreamBtwResult?: (
       callback: (data: { sessionId: string; result: CoworkBtwEntry }) => void,
