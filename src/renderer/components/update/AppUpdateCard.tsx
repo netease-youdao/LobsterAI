@@ -9,12 +9,12 @@ import {
   saveUpdateCardCollapsedVersion,
   shouldExpandUpdateCard,
 } from './appUpdateCardState';
+import { isAppUpdateReadyToInstall } from './appUpdateNoticeState';
 
 interface AppUpdateCardProps {
   updateState: AppUpdateRuntimeState;
   onUpdate: () => Promise<void> | void;
   onShowDetails: () => void;
-  onCancelDownload: () => Promise<void> | void;
   /** Reports whether the full card (not the collapsed pill) is showing, so the
    * sidebar can yield the bottom promo slot to it. */
   onExpandedChange?: (expanded: boolean) => void;
@@ -50,11 +50,15 @@ const logCollapsePreferenceFailure = (action: string, error: unknown): void => {
   }
 };
 
+/**
+ * Sidebar notice for an update that needs the user: ready to restart, waiting
+ * for a manual download, or failed. Downloads never show here — they run
+ * silently and the card appears once the installer is verified.
+ */
 const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
   updateState,
   onUpdate,
   onShowDetails,
-  onCancelDownload,
   onExpandedChange,
 }) => {
   // undefined = persisted collapse state still loading; render nothing to
@@ -92,13 +96,11 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
   if (!updateInfo || collapsedVersion === undefined) return null;
 
   const { latestVersion, changeLog } = updateInfo;
-  const isDownloading = updateState.status === AppUpdateStatus.Downloading;
   const isInstalling = updateState.status === AppUpdateStatus.Installing;
   const isError = updateState.status === AppUpdateStatus.Error;
-  const isReady = updateState.status === AppUpdateStatus.Ready && updateState.readyFilePath != null;
-  const percent = updateState.progress?.percent != null
-    ? Math.round(updateState.progress.percent * 100)
-    : null;
+  // A routine re-check keeps the verified installer but cannot launch it yet.
+  const isChecking = updateState.status === AppUpdateStatus.Checking;
+  const isReady = isAppUpdateReadyToInstall(updateState);
 
   const lang = i18nService.getLanguage();
   const currentLog = changeLog?.[lang];
@@ -135,11 +137,7 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
   };
 
   if (!isExpanded) {
-    const pillLabel = isDownloading
-      ? `${i18nService.t('updateDownloadingPill')}${percent != null ? ` ${percent}%` : ''}`
-      : isInstalling
-        ? i18nService.t('updateInstallingShort')
-        : title;
+    const pillLabel = isInstalling ? i18nService.t('updateInstallingShort') : title;
     const pillTone = isReady || isInstalling
       ? 'border-emerald-500/25 bg-emerald-500/[0.07] hover:bg-emerald-500/[0.12]'
       : isError
@@ -161,7 +159,7 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
       >
         <PingDot dotClassName={pillDot} />
         <span className="truncate">{pillLabel}</span>
-        {!isDownloading && !isInstalling && (
+        {!isInstalling && (
           <span className="shrink-0 text-secondary">v{latestVersion}</span>
         )}
         <ChevronUpIcon className="ml-auto h-3.5 w-3.5 shrink-0 text-secondary" aria-hidden="true" />
@@ -220,53 +218,25 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
         </ul>
       ) : null}
 
-      {isDownloading ? (
-        <div className="mt-3">
-          <div className="h-1.5 overflow-hidden rounded-full bg-primary/15">
-            {percent != null ? (
-              <div
-                className="h-full rounded-full bg-primary transition-all duration-300"
-                style={{ width: `${percent}%` }}
-              />
-            ) : (
-              <div className="h-full w-full animate-pulse rounded-full bg-primary/60" />
-            )}
-          </div>
-          <div className="mt-1.5 flex items-center justify-between text-xs text-secondary">
-            <span>
-              {i18nService.t('updateDownloadingPill')}
-              {percent != null ? ` ${percent}%` : ''}
-            </span>
-            <button
-              type="button"
-              onClick={() => void onCancelDownload()}
-              className="transition-colors hover:text-foreground"
-            >
-              {i18nService.t('updateDownloadCancel')}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={() => void handlePrimary()}
-          disabled={isActing || isInstalling}
-          className={`mt-3 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg text-sm font-medium text-white transition-all active:scale-[0.98] disabled:opacity-70 ${
-            isReady || isInstalling
-              ? 'bg-emerald-600 hover:bg-emerald-500'
-              : 'bg-primary hover:bg-primary-hover'
-          }`}
-        >
-          {(isActing || isInstalling) && <Spinner />}
-          {isInstalling
-            ? i18nService.t('updateInstallingShort')
-            : isReady
-              ? i18nService.t('updateRestartNow')
-              : isError
-                ? i18nService.t('updateRetry')
-                : i18nService.t('updateAvailableConfirm')}
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={() => void handlePrimary()}
+        disabled={isActing || isInstalling || isChecking}
+        className={`mt-3 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg text-sm font-medium text-white transition-all active:scale-[0.98] disabled:opacity-70 ${
+          isReady || isInstalling
+            ? 'bg-emerald-600 hover:bg-emerald-500'
+            : 'bg-primary hover:bg-primary-hover'
+        }`}
+      >
+        {(isActing || isInstalling) && <Spinner />}
+        {isInstalling
+          ? i18nService.t('updateInstallingShort')
+          : isReady
+            ? i18nService.t('updateRestartNow')
+            : isError
+              ? i18nService.t('updateRetry')
+              : i18nService.t('updateAvailableConfirm')}
+      </button>
 
       <button
         type="button"

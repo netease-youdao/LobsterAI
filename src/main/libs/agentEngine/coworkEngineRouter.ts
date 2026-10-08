@@ -6,6 +6,7 @@ import type {
   CoworkBtwSubmitResponse,
 } from '../../../shared/cowork/btw';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
+import { OpenClawQuestion } from '../../../shared/cowork/openclawQuestion';
 import type { CoworkSteerResponse } from '../../../shared/cowork/steer';
 import type {
   CoworkAgentEngine,
@@ -161,7 +162,11 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     this.requestSession.clear();
   }
 
-  respondToPermission(requestId: string, result: PermissionResult): void {
+  respondToPermission(requestId: string, result: PermissionResult): void | Promise<void> {
+    if (requestId.startsWith(OpenClawQuestion.RequestIdPrefix)) {
+      // Native answers must be acknowledged before the renderer dismisses the question.
+      return this.runtime.respondToPermission(requestId, result);
+    }
     const engine = this.requestEngine.get(requestId);
     if (engine) {
       this.runtime.respondToPermission(requestId, result);
@@ -177,6 +182,10 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
 
   isSessionActive(sessionId: string): boolean {
     return this.runtime.isSessionActive(sessionId);
+  }
+
+  getPendingQuestions() {
+    return this.runtime.getPendingQuestions?.() ?? [];
   }
 
   getActiveSessionIds(): string[] {

@@ -8,7 +8,11 @@ import type {
   ActivityResult,
   ActivitySlotResponse,
 } from '../../shared/activity/constants';
-import type { AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
+import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
+import type { MarkdownFileBridge } from '../../shared/artifactPreview/markdownEditing';
+import type { ReviewScopeRequest } from '../../shared/artifactPreview/reviewScopes';
+import type { ReviewSourceRequest, ReviewSourceResponse } from '../../shared/artifactPreview/reviewSource';
+import type { ResolvedArtifactOutput } from '../../shared/artifactPreview/workspace';
 import type {
   AsrRealtimeSessionRequest,
   AsrRealtimeSessionResult,
@@ -21,9 +25,27 @@ import type {
   AuthSessionStatus,
 } from '../../shared/auth/constants';
 import type {
+  BrowserCredentialAvailabilityResponse,
+  BrowserCredentialDeleteRequest,
+  BrowserCredentialListResponse,
+  BrowserCredentialMutationResponse,
+  BrowserCredentialSaveRequest,
+} from '../../shared/browserCredentials/constants';
+import type {
+  AgentBrowserCredentialSavePromptRequest,
+  AgentBrowserHostMenuRequest,
+  AgentBrowserHostMenuResponse,
+  AgentBrowserHostNavigateRequest,
+  AgentBrowserHostPageRequest,
+  AgentBrowserHostRequest,
+  AgentBrowserHostResponse,
+  AgentBrowserHostSetViewRequest,
+  AgentBrowserHostStateEvent,
+  AgentBrowserHostZoomRequest,
   BrowserDiagnosticResult,
   BrowserRuntimeProfile,
 } from '../../shared/browserWebAccess/constants';
+import type { BrowserPasskeyRequest } from '../../shared/browserWebAccess/passkeys';
 import type {
   BrowserAnnotationRect,
   BrowserAnnotationScreenshotRef,
@@ -52,6 +74,11 @@ import type {
   DataMigrationLastRestoreResponse,
   DataMigrationRestoreScheduleResult,
 } from '../../shared/dataMigration/constants';
+import type {
+  DecisionModelConfigUpdate,
+  DecisionModelConfigView,
+  DecisionModelTestResult,
+} from '../../shared/decisionModel/constants';
 import type { EnterpriseQuotaRequestType } from '../../shared/enterpriseAccount/constants';
 import type {
   EnterpriseAccountContext,
@@ -65,6 +92,8 @@ import type {
   HtmlShareAnalyticsResult,
   HtmlShareConfigurableStatus,
   HtmlShareDisabledSource,
+  HtmlShareFailureDetails,
+  HtmlShareFailureKind,
   HtmlSharePermanentDeleteResult,
   HtmlShareSourceType,
   HtmlShareStatus,
@@ -89,6 +118,10 @@ import type {
   LibraryLocalDetailData,
   LibraryLocalListData,
   LibraryLocalListOptions,
+  LibraryLocalTaskGroupsData,
+  LibraryLocalTaskGroupsOptions,
+  LibraryLocalTaskItemsData,
+  LibraryLocalTaskItemsOptions,
   LibraryRecordCandidatesData,
   LibraryResult,
 } from '../../shared/library/types';
@@ -101,9 +134,11 @@ import type {
   OpenClawEnginePhase as SharedOpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
 } from '../../shared/openclawEngine/constants';
+import type { OpenClawRepairStage } from '../../shared/openclawEngine/repair';
 import type {
   PublishingQuota,
   PublishingQuotaErrorData,
+  PublishingSubscriptionRecoveryMode,
   PublishingTrialPolicy,
 } from '../../shared/publishing/constants';
 import type {
@@ -147,6 +182,7 @@ import type {
   SkinGetActiveResponse,
   SkinListResponse,
 } from '../../shared/skin/types';
+import type { SubscriptionTrialBridge } from '../../shared/subscriptionTrial/constants';
 import type { CoworkTempDirPreview } from './cowork';
 interface ApiResponse {
   ok: boolean;
@@ -188,6 +224,8 @@ interface CoworkSession {
   messages: CoworkMessage[];
   messagesOffset: number;
   totalMessages: number;
+  /** Start of the turn the first loaded message belongs to, when it began before messagesOffset. */
+  leadingTurnStartTimestamp?: number | null;
   parentSessionId?: string | null;
   forkedFromMessageId?: string | null;
   forkedAt?: number | null;
@@ -251,6 +289,8 @@ interface CoworkConfig {
   memoryUserMemoriesMaxItems: number;
   skipMissedJobs: boolean;
   openClawHeartbeatEnabled: boolean;
+  openClawSkillReviewEnabled: boolean;
+  openClawMemoryFlushEnabled: boolean;
   embeddingEnabled: boolean;
   embeddingProvider: string;
   embeddingModel: string;
@@ -274,6 +314,8 @@ type CoworkConfigUpdate = Partial<
     | 'memoryUserMemoriesMaxItems'
     | 'skipMissedJobs'
     | 'openClawHeartbeatEnabled'
+    | 'openClawSkillReviewEnabled'
+    | 'openClawMemoryFlushEnabled'
     | 'embeddingEnabled'
     | 'embeddingProvider'
     | 'embeddingModel'
@@ -353,9 +395,12 @@ interface OpenClawGatewayRepairResult {
   status?: OpenClawEngineStatus;
   originalPath?: string;
   backupPath?: string;
+  quarantinedSessionStoreCount?: number;
   error?: string;
   errorCode?: OpenClawGatewayRepairErrorCode;
   recoverable?: boolean;
+  failedStage?: OpenClawRepairStage;
+  failurePath?: string;
 }
 
 interface OpenClawSessionPolicyConfig {
@@ -608,12 +653,15 @@ interface HtmlShareResult {
   updatedAt?: string;
   contentUpdatedAt?: string;
   accessExpiresAt?: string | null;
+  subscriptionRecoveryMode?: PublishingSubscriptionRecoveryMode;
   disabledAt?: string | null;
   disabledReason?: string | null;
   disabledSource?: HtmlShareDisabledSource | null;
   restoredByUpdate?: boolean;
   error?: string;
   code?: number;
+  failureKind?: HtmlShareFailureKind;
+  details?: HtmlShareFailureDetails;
   quota?: PublishingQuotaErrorData;
   warnings?: string[];
 }
@@ -836,6 +884,11 @@ interface IElectronAPI {
     openWorkbench: () => Promise<{ url: string }>;
     stop: () => Promise<{ phase: string; port: number | null; version: string | null; errorCode: string | null }>;
   };
+  decisionModel: {
+    getConfig: () => Promise<DecisionModelConfigView>;
+    saveConfig: (update: DecisionModelConfigUpdate) => Promise<DecisionModelConfigView>;
+    testConnection: (draft: DecisionModelConfigUpdate) => Promise<DecisionModelTestResult>;
+  };
   openclaw: {
     engine: {
       getStatus: () => Promise<{ success: boolean; status?: OpenClawEngineStatus; error?: string }>;
@@ -874,6 +927,36 @@ interface IElectronAPI {
       listProfiles: () => Promise<{ success: boolean; profiles?: unknown[]; error?: string }>;
       test: (options?: { profile?: BrowserRuntimeProfile }) => Promise<BrowserDiagnosticResult>;
       resetProfile: (options?: { profile?: BrowserRuntimeProfile }) => Promise<{ success: boolean; result?: Record<string, unknown>; error?: string }>;
+      getHostState: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
+      setHostView: (request: AgentBrowserHostSetViewRequest) => Promise<AgentBrowserHostResponse>;
+      navigateHost: (request: AgentBrowserHostNavigateRequest) => Promise<AgentBrowserHostResponse>;
+      goBackHost: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
+      goForwardHost: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
+      reloadHost: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
+      stopHost: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
+      createHostPage: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
+      selectHostPage: (request: AgentBrowserHostPageRequest) => Promise<AgentBrowserHostResponse>;
+      closeHostPage: (request: AgentBrowserHostPageRequest) => Promise<AgentBrowserHostResponse>;
+      showHostMenu: (request: AgentBrowserHostMenuRequest) => Promise<AgentBrowserHostMenuResponse>;
+      captureHostScreenshot: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
+      setHostZoom: (request: AgentBrowserHostZoomRequest) => Promise<AgentBrowserHostResponse>;
+      clearHostCookies: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
+      clearHostCache: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
+      dismissCredentialLoginStatus: (
+        request?: AgentBrowserHostRequest,
+      ) => Promise<AgentBrowserHostResponse>;
+      resolveCredentialSavePrompt: (
+        request: AgentBrowserCredentialSavePromptRequest,
+      ) => Promise<AgentBrowserHostResponse>;
+      onHostState: (callback: (event: AgentBrowserHostStateEvent) => void) => () => void;
+      resolvePasskey: (request: BrowserPasskeyRequest) => Promise<AgentBrowserHostResponse>;
+      credentials: {
+        getAvailability: () => Promise<BrowserCredentialAvailabilityResponse>;
+        requestAccess: () => Promise<BrowserCredentialAvailabilityResponse>;
+        list: () => Promise<BrowserCredentialListResponse>;
+        save: (request: BrowserCredentialSaveRequest) => Promise<BrowserCredentialMutationResponse>;
+        delete: (request: BrowserCredentialDeleteRequest) => Promise<BrowserCredentialMutationResponse>;
+      };
     };
     dataMigration: {
       backup: () => Promise<DataMigrationBackupResult>;
@@ -988,6 +1071,12 @@ interface IElectronAPI {
     setActiveSession: (
       sessionId: string | null,
     ) => Promise<{ success: boolean; error?: string }>;
+    seedNewUserWelcomeTask: (options: { title: string; content: string }) => Promise<{
+      success: boolean;
+      session?: CoworkSession;
+      created?: boolean;
+      error?: string;
+    }>;
     remoteManaged: (
       sessionId: string,
     ) => Promise<{ success: boolean; remoteManaged: boolean; error?: string }>;
@@ -1024,6 +1113,8 @@ interface IElectronAPI {
       messages?: CoworkMessage[];
       offset?: number;
       total?: number;
+      /** Start of the turn the page's first message belongs to (see CoworkSession). */
+      leadingTurnStartTimestamp?: number | null;
       error?: string;
     }>;
     getSessionSearchMessages: (options: {
@@ -1211,6 +1302,7 @@ interface IElectronAPI {
       callback: (data: { sessionId: string; request: CoworkPermissionRequest }) => void,
     ) => () => void;
     onStreamPermissionDismiss: (callback: (data: { requestId: string }) => void) => () => void;
+    getPendingQuestions?: () => Promise<CoworkPermissionRequest[]>;
     onStreamComplete: (
       callback: (data: { sessionId: string; claudeSessionId: string | null }) => void,
     ) => () => void;
@@ -1221,6 +1313,10 @@ interface IElectronAPI {
     onSessionModelOverrideChanged?: (
       callback: (data: { sessionId: string; modelOverride: string }) => void,
     ) => () => void;
+  };
+  workspaceReview: {
+    read: (input: ReviewScopeRequest) => Promise<ResolvedArtifactOutput | null>;
+    source: (input: ReviewSourceRequest) => Promise<ReviewSourceResponse | null>;
   };
   dialog: {
     selectDirectory: () => Promise<{ success: boolean; path: string | null }>;
@@ -1259,8 +1355,11 @@ interface IElectronAPI {
       filePath: string,
     ) => Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }>;
     generateThumbnail: (
-      filePath: string,
-    ) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
+      request: import('../../shared/library/thumbnail').LibraryThumbnailGenerateRequest,
+    ) => Promise<import('../../shared/library/thumbnail').LibraryThumbnailGenerateResponse>;
+    cancelThumbnail: (
+      requestId: string,
+    ) => Promise<{ success: boolean; canceled: boolean }>;
     showMessageBox: (options: {
       message: string;
       type?: 'none' | 'info' | 'error' | 'question' | 'warning';
@@ -1348,6 +1447,36 @@ interface IElectronAPI {
       artifactId?: string;
       filePath?: string;
     }) => Promise<{ success: boolean; share?: HtmlShareResult | null; error?: string; code?: number }>;
+    createFromGeneratedVideo: (options: {
+      taskId: string;
+      outputIndex: number;
+      sessionId: string;
+      artifactId: string;
+      title: string;
+      accessMode?: HtmlShareAccessMode;
+    }) => Promise<HtmlShareResult>;
+    getGeneratedVideoSource: (options: {
+      taskId: string;
+      outputIndex: number;
+    }) => Promise<{
+      success: boolean;
+      share?: HtmlShareResult | null;
+      state?: string;
+      assetStatus?: string;
+      retryAfterMs?: number;
+      failureReason?: string;
+      error?: string;
+      code?: number;
+    }>;
+    resolveLegacyGeneratedVideoSource: (options: {
+      resultUrl: string;
+    }) => Promise<{
+      success: boolean;
+      taskId?: string;
+      outputIndex?: number;
+      error?: string;
+      code?: number;
+    }>;
     getBySource: (options: {
       sourceType: HtmlShareSourceType;
       clientSourceKey: string;
@@ -1420,6 +1549,12 @@ interface IElectronAPI {
     listLocal: (
       options?: LibraryLocalListOptions,
     ) => Promise<LibraryResult<LibraryLocalListData>>;
+    listLocalTaskGroups: (
+      options?: LibraryLocalTaskGroupsOptions,
+    ) => Promise<LibraryResult<LibraryLocalTaskGroupsData>>;
+    listLocalTaskItems: (
+      options: LibraryLocalTaskItemsOptions,
+    ) => Promise<LibraryResult<LibraryLocalTaskItemsData>>;
     listCloud: (
       options?: LibraryCloudListOptions,
     ) => Promise<LibraryResult<LibraryCloudListData>>;
@@ -1450,6 +1585,7 @@ interface IElectronAPI {
     createRealtimeSession: (options: AsrRealtimeSessionRequest) => Promise<AsrRealtimeSessionResult>;
   };
   artifact: {
+    markdown: MarkdownFileBridge;
     watchFile: (filePath: string) => Promise<void>;
     unwatchFile: (filePath: string) => Promise<void>;
     onFileChanged: (callback: (data: { filePath: string }) => void) => () => void;
@@ -1517,9 +1653,9 @@ interface IElectronAPI {
       userId?: string | null;
     }) => Promise<AppUpdateCheckResult>;
     retryDownload: () => Promise<{ success: boolean; state: AppUpdateRuntimeState }>;
-    cancelDownload: () => Promise<{ success: boolean; state: AppUpdateRuntimeState }>;
     installReady: () => Promise<{ success: boolean; state: AppUpdateRuntimeState; error?: string }>;
     getCompletedUpdate: () => Promise<{ version: string | null }>;
+    getActiveWorkloads: () => Promise<AppUpdateActiveWorkloads>;
     onStateChanged: (callback: (data: AppUpdateRuntimeState) => void) => () => void;
   };
   log: {
@@ -1816,6 +1952,7 @@ interface IElectronAPI {
       error?: string;
     }>;
     runManually: (id: string) => Promise<{ success: boolean; error?: string }>;
+    resendWeixinReport: (taskId: string, runId: string) => Promise<{ success: boolean; error?: string }>;
     stop: (id: string) => Promise<{ success: boolean; error?: string }>;
     listRuns: (
       taskId: string,
@@ -1881,6 +2018,7 @@ interface IElectronAPI {
       error?: string;
     }>;
   };
+  subscriptionTrial: SubscriptionTrialBridge;
   activity: {
     getSlot: (
       input: ActivityHostGetSlotInput,
@@ -1900,6 +2038,7 @@ interface IElectronAPI {
       success: boolean;
       user?: import('../store/slices/authSlice').UserProfile;
       quota?: import('../store/slices/authSlice').UserQuota;
+      purchaseOffer?: import('../store/slices/authSlice').LowCreditPurchaseOffer | null;
       enterpriseContext?: EnterpriseAccountContext | null;
       error?: string;
     }>;
@@ -1910,11 +2049,13 @@ interface IElectronAPI {
       cachedUser?: import('../store/slices/authSlice').UserProfile | null;
       user?: import('../store/slices/authSlice').UserProfile;
       quota?: import('../store/slices/authSlice').UserQuota | null;
+      purchaseOffer?: import('../store/slices/authSlice').LowCreditPurchaseOffer | null;
       enterpriseContext?: EnterpriseAccountContext | null;
     }>;
     getQuota: () => Promise<{
       success: boolean;
       quota?: import('../store/slices/authSlice').UserQuota;
+      purchaseOffer?: import('../store/slices/authSlice').LowCreditPurchaseOffer | null;
       enterpriseContext?: EnterpriseAccountContext | null;
     }>;
     logout: () => Promise<{ success: boolean }>;

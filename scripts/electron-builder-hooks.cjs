@@ -4,10 +4,23 @@ const path = require('path');
 const { existsSync, readdirSync, statSync, mkdirSync, readFileSync, rmSync, cpSync, lstatSync, writeFileSync } = require('fs');
 const { spawnSync } = require('child_process');
 const asar = require('@electron/asar');
+const { Arch } = require('builder-util');
+const { OPENCLAW_BUNDLE_ASSET_TARGETS } = require('./openclaw-bundle-assets.cjs');
 const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-python-runtime.js');
 const { syncLocalOpenClawExtensions } = require('./sync-local-openclaw-extensions.cjs');
 const { packMultipleSources } = require('./pack-openclaw-tar.cjs');
-const { DIST_DIFFS_EXTENSION_DIR, DIST_EXTENSIONS_DIR, summarizeGatewayAsarEntries } = require('./openclaw-runtime-packaging.cjs');
+const {
+  DIST_DIFFS_EXTENSION_DIR,
+  DIST_EXTENSIONS_DIR,
+  resolvePreinstalledPluginDir,
+  summarizeGatewayAsarEntries,
+  verifyRuntimeBundledPlugin,
+} = require('./openclaw-runtime-packaging.cjs');
+const { collectHostPeerLeftovers, measureDirectorySize } = require('./openclaw-plugin-host-peer-leftovers.cjs');
+const { verifyOpenClawPluginSdkBridge } = require('./openclaw-plugin-sdk-bridge.cjs');
+const { createOpenClawWindowsPayload } = require('./openclaw-windows-payload.cjs');
+const { pruneOpenClawMacPayload } = require('./openclaw-mac-payload.cjs');
+const { configureBetterSqlite3MacPayload } = require('./better-sqlite3-mac-payload.cjs');
 
 function isWindowsTarget(context) {
   return context?.electronPlatformName === 'win32';
@@ -107,9 +120,11 @@ function verifyPreinstalledPlugins(runtimeRoot, buildHint) {
 
   for (const plugin of plugins) {
     if (!plugin.id) continue;
-    const pluginDir = path.join(extensionsDir, plugin.id);
+    const pluginDir = resolvePreinstalledPluginDir(runtimeRoot, plugin);
     if (!existsSync(pluginDir)) {
       missing.push(plugin.id);
+    } else {
+      verifyRuntimeBundledPlugin(runtimeRoot, plugin);
     }
   }
 
@@ -121,7 +136,51 @@ function verifyPreinstalledPlugins(runtimeRoot, buildHint) {
     );
   }
 
+  verifyNoHostPeerLeftovers(extensionsDir, plugins.filter(plugin => plugin.runtimeBundled !== true));
+  verifyNoHostPeerLeftovers(
+    path.join(runtimeRoot, DIST_EXTENSIONS_DIR),
+    plugins.filter(plugin => plugin.runtimeBundled === true),
+  );
+
   console.log(`[electron-builder-hooks] Verified ${plugins.length} preinstalled OpenClaw plugin(s).`);
+}
+
+// A plugin whose node_modules still carries the openclaw peer dependency tree
+// adds hundreds of MB to the installer (see openclaw-plugin-host-peer-leftovers.cjs).
+// openclaw:prune removes it; anything left here means the runtime was not
+// rebuilt through the normal chain, so fail instead of shipping it silently.
+const PLUGIN_SIZE_WARN_BYTES = 100 * 1024 * 1024;
+
+function verifyNoHostPeerLeftovers(extensionsDir, plugins) {
+  const problems = [];
+  for (const plugin of plugins) {
+    if (!plugin.id) continue;
+    const pluginDir = path.join(extensionsDir, plugin.id);
+    if (!existsSync(pluginDir)) continue;
+
+    const leftovers = collectHostPeerLeftovers(pluginDir);
+    if (leftovers.length > 0) {
+      const preview = leftovers.slice(0, 3).map((item) => item.location).join(', ');
+      const more = leftovers.length > 3 ? ` and ${leftovers.length - 3} more` : '';
+      problems.push(`${plugin.id}: ${preview}${more}`);
+    }
+
+    const sizeBytes = measureDirectorySize(pluginDir);
+    if (sizeBytes > PLUGIN_SIZE_WARN_BYTES) {
+      console.warn(
+        `[electron-builder-hooks] Preinstalled OpenClaw plugin ${plugin.id} is `
+        + `${(sizeBytes / 1024 / 1024).toFixed(1)} MB; check its node_modules before shipping.`,
+      );
+    }
+  }
+
+  if (problems.length > 0) {
+    throw new Error(
+      '[electron-builder-hooks] Preinstalled OpenClaw plugins still contain openclaw peer dependency trees: '
+      + problems.join('; ')
+      + '. Run `npm run openclaw:prune`, or delete vendor/openclaw-plugins/<id> and re-run `npm run openclaw:plugins`.',
+    );
+  }
 }
 
 function hasCompiledLocalExtension(runtimeRoot, extensionId) {
@@ -161,7 +220,7 @@ function precompileLocalExtensions(runtimeRoot, buildHint) {
 }
 
 function ensureBundledLocalExtensions(runtimeRoot, buildHint) {
-  const requiredLocalExtensions = ['mcp-bridge', 'ask-user-question', 'lobster-media-generation'];
+  const requiredLocalExtensions = ['mcp-bridge', 'ask-user-question', 'lobster-media-generation', 'lobster-decision'];
   const missingCompiledExtensions = requiredLocalExtensions.filter(
     (extensionId) => !hasCompiledLocalExtension(runtimeRoot, extensionId),
   );
@@ -197,6 +256,11 @@ function ensureBundledOpenClawRuntime(context) {
 
   const requiredExternalPaths = [
     path.join(runtimeRoot, 'node_modules'),
+    path.join(runtimeRoot, 'openclaw-startup-state-migration.mjs'),
+    path.join(runtimeRoot, 'openclaw-gateway-repair.mjs'),
+    path.join(runtimeRoot, 'lobsterai-repair-plugins.json'),
+    path.join(runtimeRoot, 'openclaw-xai-auth-store.mjs'),
+    path.join(runtimeRoot, 'openclaw-startup-compat.mjs'),
   ];
   const missingExternal = requiredExternalPaths.filter((candidate) => !existsSync(candidate));
   if (missingExternal.length > 0) {
@@ -209,6 +273,7 @@ function ensureBundledOpenClawRuntime(context) {
 
   // Verify preinstalled plugins are present in the runtime extensions directory
   verifyPreinstalledPlugins(runtimeRoot, buildHint);
+  verifyOpenClawPluginSdkBridge(runtimeRoot);
 
   // Verify gateway-bundle.mjs exists and is reasonably sized.
   // Without it, Windows first-launch falls back to loading ~1100 ESM modules
@@ -227,6 +292,17 @@ function ensureBundledOpenClawRuntime(context) {
       '[electron-builder-hooks] gateway-bundle.mjs is suspiciously small ('
       + gatewayBundleStat.size
       + ' bytes, expected ~27MB). Rebuild with: `npm run openclaw:bundle`.',
+    );
+  }
+
+  const missingBundleAssets = OPENCLAW_BUNDLE_ASSET_TARGETS
+    .map((target) => path.join(runtimeRoot, target.targetFile))
+    .filter((candidate) => !existsSync(candidate));
+  if (missingBundleAssets.length > 0) {
+    throw new Error(
+      '[electron-builder-hooks] Bundled OpenClaw runtime is missing gateway bundle assets: '
+      + missingBundleAssets.join(', ')
+      + '. Run `npm run openclaw:bundle` before packaging.',
     );
   }
 
@@ -627,6 +703,7 @@ function writeWindowsPayloadSizeFragment(context) {
 }
 
 async function beforePack(context) {
+  configureBetterSqlite3MacPayload(context);
   ensureBundledOpenClawRuntime(context);
   // Install skill dependencies first (for all platforms)
   installSkillDependencies();
@@ -640,11 +717,13 @@ async function beforePack(context) {
     mkdirSync(buildTarDir, { recursive: true });
 
     const outputTar = path.join(buildTarDir, 'win-resources.tar');
+    const runtimeRoot = path.join(__dirname, '..', 'vendor', 'openclaw-runtime', 'current');
     const sources = [
       {
         label: 'OpenClaw runtime',
-        dir: path.join(__dirname, '..', 'vendor', 'openclaw-runtime', 'current'),
+        dir: runtimeRoot,
         prefix: 'cfmind',
+        ...createOpenClawWindowsPayload(runtimeRoot, resolveOpenClawRuntimeTargetId(context)),
       },
       {
         label: 'SKILLs',
@@ -703,6 +782,13 @@ async function afterPack(context) {
     const appPath = path.join(context.appOutDir, `${appName}.app`);
 
     if (existsSync(appPath)) {
+      // Universal merging requires matching native file paths in both inputs.
+      // Keep its existing layout, including the intermediate per-arch hooks.
+      const universalBuild = context.arch === Arch.universal
+        || context.packager.info?.options?.targets?.get(context.packager.platform)?.has(Arch.universal);
+      if (!universalBuild) {
+        pruneOpenClawMacPayload(appPath, resolveOpenClawRuntimeTargetId(context));
+      }
       // Remove all .bin directories (symlinks) before signing to prevent codesign failures
       removeAllBinDirsInCfmind(appPath);
       applyMacIconFix(appPath);

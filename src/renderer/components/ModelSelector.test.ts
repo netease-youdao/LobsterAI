@@ -13,8 +13,26 @@ import {
   resolveHoverCardTop,
   resolveNestedCascadePlacement,
   resolvePickerThinkingLevel,
+  shouldRenderSelectedModelUnavailableFallback,
   supportsConfigurableModelThinkingProtocol,
 } from './ModelSelector';
+
+test('keeps a logged-in stale server model visible only while the model list is empty', () => {
+  const selectedModel = {
+    id: 'deepseek-v4-flash',
+    name: 'DeepSeek V4 Flash',
+    isServerModel: true,
+  };
+
+  expect(shouldRenderSelectedModelUnavailableFallback(0, selectedModel, true)).toBe(true);
+  expect(shouldRenderSelectedModelUnavailableFallback(1, selectedModel, true)).toBe(false);
+  expect(shouldRenderSelectedModelUnavailableFallback(0, selectedModel, false)).toBe(false);
+  expect(shouldRenderSelectedModelUnavailableFallback(0, {
+    id: 'deepseek-v4-flash',
+    name: 'DeepSeek V4 Flash',
+  }, true)).toBe(false);
+  expect(shouldRenderSelectedModelUnavailableFallback(0, null, true)).toBe(false);
+});
 
 test('keeps primary and more-model order stable while moving the folded group last', () => {
   const primaryFirst = { id: 'primary-1', name: 'Primary 1' };

@@ -5,9 +5,8 @@
 //   (the shape a per-file CDN hands out) -> install into a fresh base
 //   -> render LobsterAI provider settings -> boot the INSTALLED runtime
 //   -> load a profile-local external ESM plugin through the production launcher
-//   -> RPC-assert the provider/model are live (form A surface)
-//   -> boot again with a mock OpenAI upstream and drive the dsh_code_task MCP
-//      server through a real MCP client (form B delegation loop)
+//   -> RPC-assert the provider/model are live (the workbench surface)
+//   -> boot again through the production launcher and keep that host live
 //   -> open the native directory picker and assert the OS dialog really shows
 //      (win32 only) -> tear the home down and assert the runtime survived it.
 // Every step is a hard assertion; exit 0 means the whole flow works.
@@ -55,8 +54,8 @@ function resolveHostTargetId() {
   return null;
 }
 
-// Minimal OpenAI-compatible chat-completions upstream. Streams a fixed answer
-// so the delegated dsh agent completes a real turn with zero external calls.
+// Minimal OpenAI-compatible chat-completions upstream. It backs the rendered
+// provider so the boot below has a reachable endpoint with zero external calls.
 function startMockLlmServer(answerText) {
   const server = http.createServer((request, response) => {
     if (!request.url || !request.url.includes('/chat/completions')) {
@@ -106,18 +105,28 @@ function startMockLlmServer(answerText) {
   });
 }
 
-// Boots through the same launcher used by DshEngineManager and resolves once
-// the web server answers; the caller owns the returned child.
+// Boots through the same launcher, arguments, and launch-token exchange that
+// DshEngineManager uses, and resolves once the web server serves the session;
+// the caller owns the returned child and uses the cookie for RPCs.
 function bootDsh(installedRoot, dshHome, extraEnv) {
   const electronPath = require('electron');
-  const { spawnDshProcess } = require(path.join(rootDir, 'dist-electron', 'main', 'libs', 'dshProcessLauncher.js'));
+  const libsDir = path.join(rootDir, 'dist-electron', 'main', 'libs');
+  const { spawnDshProcess } = require(path.join(libsDir, 'dshProcessLauncher.js'));
+  const { buildDshWebArgs } = require(path.join(libsDir, 'dshRuntime.js'));
+  const { exchangeDshLaunchToken, parseDshWebLaunchUrl, probeDshWebIndex, redactDshWebToken } = require(
+    path.join(libsDir, 'dshWebAuth.js')
+  );
   const entry = path.join(installedRoot, 'lib', 'bin.js');
   const port = 31400 + Math.floor(Math.random() * 400);
   const child = spawnDshProcess({
     executablePath: electronPath,
-    args: [entry, 'web', '--port', String(port)],
+    args: buildDshWebArgs(entry, port),
     cwd: installedRoot,
     env: { ...process.env, ...extraEnv, DSH_HOME: dshHome, DSH_TELEMETRY_DISABLED: '1' },
+  });
+  // fail() exits on the spot; never leave a live dsh behind.
+  process.once('exit', () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
   });
   let output = '';
   for (const stream of [child.stdout, child.stderr]) {
@@ -127,25 +136,34 @@ function bootDsh(installedRoot, dshHome, extraEnv) {
       if (output.length > 100_000) output = output.slice(-50_000);
     });
   }
+  let launchUrl = null;
+  let stdoutText = '';
+  child.stdout.on('data', (chunk) => {
+    if (launchUrl) return;
+    stdoutText += chunk;
+    // Complete lines only: a chunk can end inside the token.
+    const lines = stdoutText.split(/\r?\n/);
+    stdoutText = lines.pop();
+    for (const line of lines) launchUrl = launchUrl || parseDshWebLaunchUrl(line, port);
+  });
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
-    const poll = () => {
+    const poll = async () => {
       if (child.exitCode !== null) {
-        reject(new Error(`dsh exited before ready (code=${child.exitCode})\n${output}`));
+        reject(new Error(`dsh exited before ready (code=${child.exitCode})\n${redactDshWebToken(output)}`));
         return;
       }
       if (Date.now() - startedAt > 90_000) {
         child.kill('SIGKILL');
-        reject(new Error(`dsh not ready in 90s\n${output}`));
+        reject(new Error(`dsh not ready in 90s\n${redactDshWebToken(output)}`));
         return;
       }
-      http
-        .get({ host: '127.0.0.1', port, path: '/', timeout: 2_000 }, (response) => {
-          response.resume();
-          if (response.statusCode === 200) resolve({ child, port, url: `http://127.0.0.1:${port}` });
-          else setTimeout(poll, 400);
-        })
-        .on('error', () => setTimeout(poll, 400));
+      const cookie = launchUrl ? await exchangeDshLaunchToken(launchUrl) : null;
+      if (cookie && (await probeDshWebIndex(port, cookie)) === 200) {
+        resolve({ child, port, cookie, url: `http://127.0.0.1:${port}` });
+        return;
+      }
+      setTimeout(poll, 400);
     };
     setTimeout(poll, 400);
   });
@@ -155,16 +173,21 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Fires a unary RPC without waiting for it: the picker call stays open for as
 // long as the operator stares at the dialog, so the test needs the live request
-// object to abort it.
-function startRpc(port, method, timeoutMs) {
-  const body = JSON.stringify({ type: 'client-request', rpcId: `e2e-${method}`, method, payload: {} });
+// object to abort it. `method` is a Typert Remote endpoint (`<namespace>/<method>`)
+// and every /api request needs the booted session's cookie.
+function startRpc(booted, method, timeoutMs) {
+  const body = JSON.stringify({ type: 'client-request', rpcId: `e2e-${method}`, method, payload: { args: {} } });
   const request = http.request({
     host: '127.0.0.1',
-    port,
+    port: booted.port,
     path: `/api/${method}`,
     method: 'POST',
     timeout: timeoutMs,
-    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+      Cookie: booted.cookie,
+    },
   });
   const settled = new Promise((resolve) => {
     request.on('response', (response) => {
@@ -288,17 +311,17 @@ function assertExternalPluginMarker(markerPath, launcher) {
 // the modal `Show`, and any breakage there (a missing worker file, a runtime
 // that cannot load koffi, a child that is not run as Node) surfaces as an
 // instant "worker exited before reporting a result" instead of a dialog.
-async function assertNativeDirectoryPicker(port) {
+async function assertNativeDirectoryPicker(booted) {
   const baseline = countPickerDialogs();
   log('   a folder dialog will appear for a few seconds — the test closes it');
 
-  const pick = startRpc(port, 'host.pickDirectory', 60_000);
+  const pick = startRpc(booted, 'directoryPicker/pick', 60_000);
   let settled = null;
   void pick.settled.then((outcome) => (settled = outcome));
 
   await delay(4_000);
   if (settled) {
-    fail(`host.pickDirectory answered instead of opening a dialog: ${String(settled.raw).slice(0, 400)}`);
+    fail(`directoryPicker/pick answered instead of opening a dialog: ${String(settled.raw).slice(0, 400)}`);
   }
   const whileOpen = countPickerDialogs();
   if (whileOpen !== baseline + 1) {
@@ -323,10 +346,10 @@ async function main() {
   const targetId = resolveHostTargetId();
   if (!targetId) fail(`Unsupported host platform: ${process.platform}`);
 
-  // [1/9] Fresh compiled modules — installer/client/MCP server run from dist-electron.
+  // [1/8] Fresh compiled modules — installer/client run from dist-electron.
   step('compile electron main', 'npm', ['run', 'compile:electron']);
 
-  // [2/9] Build (idempotent via runtime-build-info cache) and pack when stale.
+  // [2/8] Build (idempotent via runtime-build-info cache) and pack when stale.
   step(`build runtime ${targetId}`, process.execPath, [path.join(rootDir, 'scripts', 'build-dsh-runtime.cjs'), targetId]);
 
   const buildInfo = JSON.parse(
@@ -350,7 +373,7 @@ async function main() {
     log(`>> pack skipped (manifest current: ${manifestName})`);
   }
 
-  // [3/9] Install exactly like a shipped app does: one absolute URL plus the
+  // [3/8] Install exactly like a shipped app does: one absolute URL plus the
   // digest the app itself carries, verified before extraction.
   const { installDshRuntime, resolveDshArtifactFromConfig, resolveDshArtifactFromManifest } = require(
     path.join(rootDir, 'dist-electron', 'main', 'libs', 'dshRuntimeInstaller.js')
@@ -416,9 +439,9 @@ async function main() {
   const fromManifest = resolveDshArtifactFromManifest(distDir, manifestName);
   if (fromManifest.sha256 !== artifact.sha256) fail('manifest and config descriptors disagree');
 
-  // [4/9] Start the mock LLM upstream, then render a LobsterAI provider that
+  // [4/8] Start the mock LLM upstream, then render a LobsterAI provider that
   // points at it — settings.yaml on disk, the API key only in the child env.
-  const ANSWER = 'E2E delegation OK: the mock coding agent finished the task.';
+  const ANSWER = 'E2E mock upstream answer.';
   const mock = await startMockLlmServer(ANSWER);
   log(`>> mock OpenAI upstream at 127.0.0.1:${mock.port}`);
 
@@ -448,7 +471,7 @@ async function main() {
   const written = await writeDshManagedSettings(dshHome, managed);
   log(`>> provider settings rendered at ${written.settingsPath}`);
 
-  // [5/9] Boot the installed runtime and assert provider + model over RPC.
+  // [5/8] Boot the installed runtime and assert provider + model over RPC.
   step(
     'boot installed runtime (web smoke + provider RPC assertions)',
     process.execPath,
@@ -467,11 +490,11 @@ async function main() {
   );
   assertExternalPluginMarker(externalPluginMarker, 'runtime smoke launcher');
 
-  // [6/9] Boot again through the production launcher for the delegation loop
-  // (the verify step owns its own child and exits; the MCP test needs a live
-  // host). Requiring a fresh marker proves this second child loaded the plugin.
+  // [6/8] Boot again through the production launcher (the verify step owns
+  // its own child and exits; the picker step needs a live host). Requiring a
+  // fresh marker proves this second child loaded the plugin.
   fs.rmSync(externalPluginMarker, { force: true });
-  log('>> boot installed runtime for form-B delegation');
+  log('>> boot installed runtime through the production launcher');
   const booted = await bootDsh(installed.root, dshHome, {
     ...managed.envVars,
     DSH_E2E_PLUGIN_MARKER: externalPluginMarker,
@@ -483,50 +506,7 @@ async function main() {
   assertExternalPluginMarker(externalPluginMarker, 'production launcher');
   log(`   dsh live at ${booted.url}`);
 
-  // [7/9] Drive the dsh_code_task MCP server through a real MCP client.
-  const { DshCodeMcpServer } = require(path.join(rootDir, 'dist-electron', 'main', 'libs', 'dshCodeMcpServer.js'));
-  const taskCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-e2e-task-'));
-  const mcpServer = new DshCodeMcpServer({
-    ensureEngineReady: async () => booted.url,
-    getDefaultCwd: () => taskCwd,
-    getDefaultModel: () => ({ provider: 'lobsterai-e2e-fake', model: 'e2e-model' }),
-  });
-  const mcpUrl = await mcpServer.start();
-  log(`>> dsh-code MCP server at ${mcpUrl}`);
-
-  const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
-  const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
-  const mcpClient = new Client({ name: 'e2e-client', version: '1.0.0' });
-  await mcpClient.connect(new StreamableHTTPClientTransport(new URL(mcpUrl)));
-
-  const toolList = await mcpClient.listTools();
-  const toolNames = (toolList.tools ?? []).map((tool) => tool.name);
-  if (!toolNames.includes('dsh_code_task')) {
-    fail(`dsh_code_task missing from MCP tools: ${toolNames.join(', ')}`);
-  }
-  log(`   tools/list OK: ${toolNames.join(', ')}`);
-
-  log('   calling dsh_code_task (delegated turn through mock LLM)...');
-  const callResult = await mcpClient.callTool({
-    name: 'dsh_code_task',
-    arguments: { prompt: 'Reply with the fixed acknowledgement.', timeout_s: 120 },
-  });
-  const resultText = (callResult.content ?? [])
-    .filter((block) => block.type === 'text')
-    .map((block) => block.text)
-    .join('\n');
-  if (callResult.isError) {
-    fail(`dsh_code_task returned isError. Text: ${resultText.slice(0, 800)}`);
-  }
-  if (!resultText.includes('E2E delegation OK')) {
-    fail(`dsh_code_task text missing mock answer. Got: ${resultText.slice(0, 800)}`);
-  }
-  if (!resultText.includes('[dsh session:')) {
-    fail(`dsh_code_task text missing session footer. Got: ${resultText.slice(0, 800)}`);
-  }
-  log('   dsh_code_task delegation loop OK (mock answer + session footer present)');
-
-  // [8/9] Native workspace picker. Only win32 drives a spawned dialog worker;
+  // [7/8] Native workspace picker. Only win32 drives a spawned dialog worker;
   // the mac/linux backends shell out to osascript/zenity, which this step does
   // not cover.
   if (process.platform === 'win32') {
@@ -540,7 +520,7 @@ async function main() {
       [path.join(rootDir, 'scripts', 'verify-dsh-picker-path-read.cjs'), installed.root],
       { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } }
     );
-    await assertNativeDirectoryPicker(booted.port);
+    await assertNativeDirectoryPicker(booted);
   } else {
     log(`>> directory picker step skipped: no spawned-dialog backend on ${process.platform}`);
   }
@@ -552,9 +532,7 @@ async function main() {
     path.join(rootDir, 'scripts', 'verify-dsh-remove-tree.cjs'),
   ], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
 
-  // [9/9] Cleanup.
-  await mcpClient.close();
-  await mcpServer.stop();
+  // [8/8] Cleanup.
   booted.child.kill('SIGTERM');
   await new Promise((resolve) => {
     booted.child.once('exit', resolve);
@@ -583,8 +561,7 @@ async function main() {
   log(`   home teardown left the runtime intact (${runtimeFilesAfter} files)`);
 
   removeTree(installBase);
-  removeTree(taskCwd);
-  log('E2E foundation + delegation flow passed.');
+  log('E2E foundation flow passed.');
   process.exit(0);
 }
 

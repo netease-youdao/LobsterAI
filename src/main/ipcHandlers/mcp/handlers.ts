@@ -51,7 +51,7 @@ function syncMcpConfig(
 ): void {
   syncOpenClawConfig({
     reason,
-    expectedImpact: OpenClawConfigImpact.Restart,
+    expectedImpact: OpenClawConfigImpact.Sync,
   }).catch(err =>
     console.error('[MCP] config sync error:', err),
   );

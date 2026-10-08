@@ -41,6 +41,7 @@ import {
   CoworkSteerStatus,
 } from '../../../shared/cowork/steer';
 import { agentService } from '../../services/agent';
+import { authService } from '../../services/auth';
 import { configService, ConfigServiceEvent } from '../../services/config';
 import { coworkService } from '../../services/cowork';
 import { buildCoworkCapabilitySelection } from '../../services/coworkCapabilitySelection';
@@ -57,6 +58,7 @@ import {
   LogReporterEntry,
   reportYdAnalyzer,
 } from '../../services/logReporter';
+import { getOnboardingErrorCode, reportOnboardingAction } from '../../services/onboardingAnalytics';
 import { resolveLocalizedText, skillService } from '../../services/skill';
 import { RootState } from '../../store';
 import { selectDraftPrompts } from '../../store/selectors/coworkSelectors';
@@ -92,6 +94,7 @@ import {
 } from '../../store/slices/coworkSlice';
 import { setActiveKitIds, toggleActiveKit } from '../../store/slices/kitSlice';
 import type { Model } from '../../store/slices/modelSlice';
+import { isSameModelIdentity } from '../../store/slices/modelSlice';
 import { setActiveSkillIds, setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
 import { CoworkCollaborationMode, CoworkImageAttachment } from '../../types/cowork';
 import type { MediaAttachmentRef } from '../../types/mediaGeneration';
@@ -135,6 +138,7 @@ import {
 } from './agentModelSelection';
 import AttachmentCard from './AttachmentCard';
 import BrowserAnnotationAttachmentBadge from './BrowserAnnotationAttachmentBadge';
+import ChatLoginExperienceModal from './ChatLoginExperienceModal';
 import { getClipboardAttachmentFiles } from './clipboardAttachments';
 import { CoworkUiEvent } from './constants';
 import FolderSelectorPopover from './FolderSelectorPopover';
@@ -454,6 +458,7 @@ interface CoworkPromptInputProps {
   canSteer?: boolean;
   /** When true, hides attachment/skill buttons but keeps the input box visible (disabled) */
   remoteManaged?: boolean;
+  showNewUserWelcomeLoginOverlay?: boolean;
 }
 
 const EMPTY_ATTACHMENTS: CoworkAttachment[] = [];
@@ -490,6 +495,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       steerPreviewPortalTarget,
       canSteer = false,
       remoteManaged = false,
+      showNewUserWelcomeLoginOverlay = false,
     } = props;
     const dispatch = useDispatch();
     const draftKey = sessionId || '__home__';
@@ -546,6 +552,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const [goalEditDraft, setGoalEditDraft] = useState('');
     const [goalEditSaving, setGoalEditSaving] = useState(false);
     const [modelAccessPrompt, setModelAccessPrompt] = useState<ModelAccessPromptKind | null>(null);
+    const [showChatLoginExperiencePrompt, setShowChatLoginExperiencePrompt] = useState(false);
+    const [chatLoginExperiencePending, setChatLoginExperiencePending] = useState(false);
     const [showVoiceLoginPrompt, setShowVoiceLoginPrompt] = useState(false);
     const [showVoiceQuotaPrompt, setShowVoiceQuotaPrompt] = useState(false);
     const [isLargeToolbarCompact, setIsLargeToolbarCompact] = useState(false);
@@ -675,6 +683,13 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     agentSelectedModel,
     globalSelectedModel: currentAgentSelectedModel,
   });
+  const effectiveModelIsAvailable = useMemo(() => (
+    !!effectiveSelectedModel
+    && availableModels.some(model => isSameModelIdentity(model, effectiveSelectedModel))
+  ), [availableModels, effectiveSelectedModel]);
+  const modelSelectionRefreshPending = isLoggedIn
+    && availableModels.length === 0
+    && effectiveSelectedModel?.isServerModel === true;
   const effectiveThinkingLevel = resolveModelThinkingLevel(
     effectiveSelectedModel,
     sessionId && currentSession?.id === sessionId
@@ -682,11 +697,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       : currentAgent?.thinkingLevel,
   );
   const modelSupportsImage = !!effectiveSelectedModel?.supportsImage;
+  const hasAccessibleUserModel = useMemo(
+    () => availableModels.some(model => !model.isServerModel && model.accessible !== false),
+    [availableModels],
+  );
 
   const resolveSubmitModelAccessPrompt = useCallback((): ModelAccessPromptKind | null => {
-    const hasAccessibleUserModel = availableModels.some(
-      model => !model.isServerModel && model.accessible !== false
-    );
     if (!isLoggedIn && !hasAccessibleUserModel) {
       return ModelAccessPromptKind.Login;
     }
@@ -701,10 +717,69 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     }
     return null;
   }, [
-    availableModels,
     effectiveSelectedModel,
+    hasAccessibleUserModel,
     isLoggedIn,
   ]);
+
+  const handleChatLoginExperienceStart = useCallback(async (
+    source: 'chat_login_experience_prompt' | 'new_user_welcome_task' = 'chat_login_experience_prompt',
+  ) => {
+    if (chatLoginExperiencePending) return;
+    const isNewUserWelcomeTaskSource = source === 'new_user_welcome_task';
+    if (isNewUserWelcomeTaskSource) {
+      reportOnboardingAction('welcome_task_start_experience_click', {
+        source: 'new_user_welcome_task',
+      });
+    } else {
+      reportOnboardingAction('chat_login_experience_start_click', {
+        source: 'chat_login_experience_prompt',
+      });
+    }
+    setChatLoginExperiencePending(true);
+    logPromptModelSelection(
+      'debug',
+      `${source} primary action clicked; starting login handoff`,
+    );
+    try {
+      const result = await authService.login();
+      if (!result.success) {
+        throw new Error(result.error || i18nService.t('welcomeLoginFailed'));
+      }
+      logPromptModelSelection(
+        'debug',
+        `${source} login handoff succeeded`,
+      );
+      if (isNewUserWelcomeTaskSource) {
+        reportOnboardingAction('welcome_task_login_redirect_result', {
+          source: 'new_user_welcome_task',
+          result: 'success',
+        });
+      }
+      setShowChatLoginExperiencePrompt(false);
+      setChatLoginExperiencePending(false);
+    } catch (error) {
+      logPromptModelSelection(
+        'warn',
+        `${source} login handoff failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      if (isNewUserWelcomeTaskSource) {
+        reportOnboardingAction('welcome_task_login_redirect_result', {
+          source: 'new_user_welcome_task',
+          result: 'failed',
+          errorCode: getOnboardingErrorCode(error),
+        });
+      }
+      showToast(i18nService.t('welcomeLoginFailed'));
+      setChatLoginExperiencePending(false);
+    }
+  }, [chatLoginExperiencePending]);
+
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    setShowChatLoginExperiencePrompt(false);
+    setChatLoginExperiencePending(false);
+  }, [isLoggedIn]);
 
   const {
     handleVoiceInput,
@@ -1646,6 +1721,29 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       : CoworkCollaborationMode.Default;
 
     const accessPrompt = resolveSubmitModelAccessPrompt();
+    if (!effectiveModelIsAvailable && accessPrompt !== ModelAccessPromptKind.Login) {
+      const message = `blocked submit because selected model is unavailable; refreshPending=${modelSelectionRefreshPending}; model=${effectiveSelectedModel?.id ?? 'none'}; provider=${effectiveSelectedModel?.providerKey ?? 'none'}`;
+      console.debug(`[CoworkPromptInput] ${message}`);
+      try {
+        window.electron?.log?.fromRenderer?.('debug', 'CoworkPromptInput', message);
+      } catch {
+        // Diagnostics only.
+      }
+      reportPromptControl('submit_blocked', {
+        blockedReason: 'model_unavailable',
+        modelRefreshPending: modelSelectionRefreshPending,
+        submitMethod: effectiveSubmitMethod,
+        ...getPromptTextAnalyticsParams(trimmedValue),
+        ...getPromptCapabilityAnalyticsParams(),
+      });
+      showToast(i18nService.t(
+        modelSelectionRefreshPending
+          ? 'coworkModelRefreshing'
+          : 'coworkModelSettingsRequired',
+      ));
+      return;
+    }
+
     if (accessPrompt) {
       reportPromptControl('submit_blocked', {
         blockedReason: 'model_access_required',
@@ -1654,6 +1752,18 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         ...getPromptTextAnalyticsParams(trimmedValue),
         ...getPromptCapabilityAnalyticsParams(),
       });
+      if (
+        accessPrompt === ModelAccessPromptKind.Login
+        && !isLoggedIn
+        && !hasAccessibleUserModel
+      ) {
+        logPromptModelSelection(
+          'debug',
+          'showing chat login experience prompt because submit requires login and no custom model is configured',
+        );
+        setShowChatLoginExperiencePrompt(true);
+        return;
+      }
       setModelAccessPrompt(accessPrompt);
       return;
     }
@@ -1853,7 +1963,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     resetGoalInput(false);
     draftStartedAnalyticsRef.current = false;
     inputSourceOverrideRef.current = null;
-  }, [value, steerInputActive, steerValue, isVoiceRecording, stopVoiceRecordingAndRecognize, goalInputActive, goalInputMode, resetGoalInput, isStreaming, canSteer, remoteManaged, disabled, submitDisabled, isPatchingModel, onSubmit, onGoalCommand, activeSkillIds, skills, activeKitIds, marketplaceKits, installedKits, attachments, browserAnnotationBatches, showFolderSelector, workingDirectory, dispatch, draftKey, selectedTextSnippets, pendingSteers.length, resolveSubmitModelAccessPrompt, isPlanMode, planConfirmation, reportPromptControl, getPromptCapabilityAnalyticsParams, getPromptContextAnalyticsParams, getPromptInputSource, goal, sessionId, preparePromptPayload, modelSupportsImage, queuedMediaSelection, authOwnerAccountKey, authAccountGeneration]);
+  }, [value, steerInputActive, steerValue, isVoiceRecording, stopVoiceRecordingAndRecognize, goalInputActive, goalInputMode, resetGoalInput, isStreaming, canSteer, remoteManaged, disabled, submitDisabled, isPatchingModel, onSubmit, onGoalCommand, activeSkillIds, skills, activeKitIds, marketplaceKits, installedKits, attachments, browserAnnotationBatches, showFolderSelector, workingDirectory, dispatch, draftKey, selectedTextSnippets, pendingSteers.length, resolveSubmitModelAccessPrompt, isLoggedIn, hasAccessibleUserModel, isPlanMode, planConfirmation, reportPromptControl, getPromptCapabilityAnalyticsParams, getPromptContextAnalyticsParams, getPromptInputSource, goal, sessionId, preparePromptPayload, modelSupportsImage, queuedMediaSelection, authOwnerAccountKey, authAccountGeneration, effectiveModelIsAvailable, modelSelectionRefreshPending, effectiveSelectedModel?.id, effectiveSelectedModel?.providerKey]);
   handleSubmitRef.current = handleSubmit;
 
   const handleSelectSkill = useCallback((skill: Skill) => {
@@ -2722,7 +2832,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     && !isVoiceRecognizing
     && !isPatchingModel
     && !agentModelIsInvalid
+    && (effectiveModelIsAvailable || resolveSubmitModelAccessPrompt() === ModelAccessPromptKind.Login)
     && (!!activeTextareaValue.trim() || (!steerInputActive && (hasAttachments || browserAnnotationBatches.length > 0)));
+  const showNewUserWelcomeLockOverlay = showNewUserWelcomeLoginOverlay && !isLoggedIn;
   const enhancedContainerClass = isDraggingFiles
     ? `${containerClass} ring-2 ring-primary/50 border-primary/60`
     : containerClass;
@@ -2780,7 +2892,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         alignDropdownToTriggerEnd={useHomeContextLayout}
         portal={showReadOnlyContext}
         triggerMaxWidthClassName={largeModelTriggerMaxWidthClassName}
-        disabled={isPatchingModel || isPersistingAgentModel}
+        disabled={isPatchingModel || isPersistingAgentModel || modelSelectionRefreshPending}
         thinkingLevel={effectiveThinkingLevel ?? null}
         value={agentModelIsInvalid && currentSession?.modelOverride
           ? { id: '__invalid__', name: currentSession.modelOverride.split('/').pop() || currentSession.modelOverride } as Model
@@ -3059,6 +3171,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const largeSubmitButton = (
     <button
       type="button"
+      data-onboarding-target={isLarge && useHomeContextLayout ? 'home-prompt-send' : undefined}
       onClick={() => handleSubmit('button')}
       disabled={!canUseSubmitButton}
       className={`flex ${largeSendButtonSizeClass} shrink-0 items-center justify-center rounded-full transition-all ${
@@ -3467,6 +3580,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       )}
         <textarea
           ref={textareaRef}
+          data-onboarding-target={isLarge && useHomeContextLayout ? 'home-prompt-textarea' : undefined}
           value={activeTextareaValue}
         onChange={handleTextareaChange}
         onFocus={handleTextareaFocus}
@@ -3535,9 +3649,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const voiceQuotaLimitSeconds = asrQuota.limitSecondsToday
     ?? (isAsrSubscribed ? DEFAULT_SUBSCRIBED_ASR_LIMIT_SECONDS : DEFAULT_FREE_ASR_LIMIT_SECONDS);
   const voiceQuotaLimitText = formatVoiceInputQuotaLimit(voiceQuotaLimitSeconds);
+  const voiceSubscribedQuotaLimitText = formatVoiceInputQuotaLimit(DEFAULT_SUBSCRIBED_ASR_LIMIT_SECONDS);
   const voiceQuotaDescription = i18nService
     .t(isAsrSubscribed ? 'voiceInputQuotaExhaustedSubscribedDesc' : 'voiceInputQuotaExhaustedFreeDesc')
-    .replace('{limit}', voiceQuotaLimitText);
+    .replace('{limit}', voiceQuotaLimitText)
+    .replace('{subscriptionLimit}', voiceSubscribedQuotaLimitText);
   const handleVoiceQuotaPrimary = async () => {
     if (isAsrSubscribed) {
       setShowVoiceQuotaPrompt(false);
@@ -3657,10 +3773,28 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             {i18nService.t('coworkDropFileHint')}
           </div>
         )}
+        {showNewUserWelcomeLockOverlay && (
+          <div className="absolute inset-0 z-40 flex items-center justify-center rounded-[inherit] bg-white/75 backdrop-blur-[1.5px] dark:bg-black/45">
+            <button
+              type="button"
+              onClick={() => { void handleChatLoginExperienceStart('new_user_welcome_task'); }}
+              disabled={chatLoginExperiencePending}
+              className="sidebar-login-rainbow chat-login-experience-action relative inline-flex h-9 w-[8.5rem] items-center justify-center whitespace-nowrap rounded-lg px-5 text-base font-medium leading-none transition-[filter,transform] disabled:cursor-wait disabled:opacity-75"
+              aria-label={i18nService.t('newUserWelcomeInputLockedLabel')}
+            >
+              <span className="relative">
+                {i18nService.t('newUserOnboardingStartExperience')}
+              </span>
+            </button>
+          </div>
+        )}
         {isLarge ? (
           useHomeContextLayout ? (
             <>
-              <div className="relative z-10 rounded-2xl border border-border bg-surface shadow-card transition-[border-color,box-shadow] duration-200 focus-within:border-primary/35 focus-within:shadow-elevated">
+              <div
+                data-onboarding-target="home-prompt"
+                className="relative z-10 rounded-2xl border border-border bg-surface shadow-card transition-[border-color,box-shadow] duration-200 focus-within:border-primary/35 focus-within:shadow-elevated"
+              >
                 {largeAttachmentPreview}
                 {selectedTextSnippetPreview}
                 {browserAnnotationPreview}
@@ -3948,6 +4082,16 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         )}
       </div>
       {readOnlyContextRow}
+      {showChatLoginExperiencePrompt && (
+        <ChatLoginExperienceModal
+          loginPending={chatLoginExperiencePending}
+          onClose={() => {
+            setShowChatLoginExperiencePrompt(false);
+            setChatLoginExperiencePending(false);
+          }}
+          onStart={() => { void handleChatLoginExperienceStart(); }}
+        />
+      )}
       {modelAccessPrompt && (
         <ModelAccessPromptModal
           promptKind={modelAccessPrompt}

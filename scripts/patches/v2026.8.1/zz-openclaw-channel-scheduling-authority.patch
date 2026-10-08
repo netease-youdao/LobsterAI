@@ -1,0 +1,623 @@
+diff --git a/src/agents/tools/cron-tool.ts b/src/agents/tools/cron-tool.ts
+index 022f9583b..02b669ba8 100644
+--- a/src/agents/tools/cron-tool.ts
++++ b/src/agents/tools/cron-tool.ts
+@@ -448,21 +448,28 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
+               const hasTarget =
+                 (typeof delivery?.channel === "string" && delivery.channel.trim()) ||
+                 (typeof delivery?.to === "string" && delivery.to.trim());
+-              const shouldInfer =
+-                (deliveryValue == null || delivery) &&
+-                (mode === "" || mode === "announce") &&
+-                !hasTarget;
+-              if (shouldInfer) {
++              const canInfer =
++                (deliveryValue == null || delivery) && (mode === "" || mode === "announce");
++              if (canInfer) {
+                 const inferred = resolveCronCreationDelivery({
+                   cfg: runtimeConfig,
+                   currentDeliveryContext: opts.currentDeliveryContext,
+                   agentSessionKey: opts.agentSessionKey,
+                 });
+-                if (inferred) {
++                if (inferred && !hasTarget) {
+                   (job as { delivery?: unknown }).delivery = {
+                     ...inferred,
+                     ...delivery,
+                   } satisfies CronDelivery;
++                } else if (
++                  inferred?.accountId &&
++                  delivery &&
++                  !delivery.accountId &&
++                  normalizeLowercaseStringOrEmpty(delivery.channel) === inferred.channel
++                ) {
++                  // An explicit recipient still uses the active channel account.
++                  // Do not inherit a thread or override an explicit account/other channel.
++                  delivery.accountId = inferred.accountId;
+                 }
+               }
+             }
+diff --git a/src/agents/tools/cron-tool.test.ts b/src/agents/tools/cron-tool.test.ts
+index bda81feb7..0e0b84438 100644
+--- a/src/agents/tools/cron-tool.test.ts
++++ b/src/agents/tools/cron-tool.test.ts
+@@ -2561,6 +2561,36 @@ describe("cron tool", () => {
+     expect(delivery?.to).toBeUndefined();
+   });
+ 
++  it.each([
++    { channel: "feishu", mode: "announce", expectedAccount: "bot-a" },
++    { channel: "feishu", mode: "announce", accountId: "bot-b", expectedAccount: "bot-b" },
++    { channel: "telegram", mode: "announce", expectedAccount: undefined },
++    { channel: "feishu", mode: "none", expectedAccount: undefined },
++  ])("preserves channel account routing for an explicit recipient: %j", async (testCase) => {
++    const delivery = {
++      mode: testCase.mode,
++      channel: testCase.channel,
++      to: "user:other-recipient",
++      ...(testCase.accountId ? { accountId: testCase.accountId } : {}),
++    };
++    expect(
++      await executeAddAndReadDelivery({
++        callId: "call-explicit-recipient-account",
++        agentSessionKey: "agent:main:feishu:bot-a:direct:sender",
++        currentDeliveryContext: {
++          channel: "feishu",
++          to: "user:sender",
++          accountId: "bot-a",
++          threadId: "current-thread",
++        },
++        delivery,
++      }),
++    ).toEqual({
++      ...delivery,
++      ...(testCase.expectedAccount ? { accountId: testCase.expectedAccount } : {}),
++    });
++  });
++
+   it("does not let current delivery context override explicit delivery targets", async () => {
+     expect(
+       await executeAddAndReadDelivery({
+diff --git a/src/gateway/cron-creator-authority-grant.ts b/src/gateway/cron-creator-authority-grant.ts
+index c0a228113..c2e57916b 100644
+--- a/src/gateway/cron-creator-authority-grant.ts
++++ b/src/gateway/cron-creator-authority-grant.ts
+@@ -4,6 +4,7 @@ import {
+   normalizeCronScheduledToolCallerOrigin,
+   type CronScheduledToolCallerOrigin,
+ } from "../cron/scheduled-tool-policy.js";
++import { resolveGlobalMap } from "../shared/global-singleton.js";
+ 
+ export type CronCreatorAuthorityGrant = Readonly<{
+   runId: string;
+@@ -26,7 +27,16 @@ type CronCreatorAuthorityGrantEntry = {
+   onOperationAbort?: () => void;
+ };
+ 
+-const grantsByToken = new Map<string, CronCreatorAuthorityGrantEntry>();
++// Bundled gateway handlers and plugin SDK chunks must redeem the same grants.
++const grantsByToken = resolveGlobalMap<string, CronCreatorAuthorityGrantEntry>(
++  Symbol.for("openclaw.cronCreatorAuthorityGrants"),
++  (grants) => {
++    for (const { scope } of grants.values()) {
++      revokeCronCreatorAuthorityRunScope(scope);
++    }
++    grants.clear();
++  },
++);
+ 
+ function expiredAuthorityError(): Error & { status: number } {
+   return Object.assign(
+diff --git a/src/gateway/cron-creator-authority-grant.test.ts b/src/gateway/cron-creator-authority-grant.test.ts
+index 2c842366f..8bc015891 100644
+--- a/src/gateway/cron-creator-authority-grant.test.ts
++++ b/src/gateway/cron-creator-authority-grant.test.ts
+@@ -1,4 +1,5 @@
+ import { describe, expect, it, vi } from "vitest";
++import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+ import {
+   consumeCronCreatorAuthorityGrant,
+   createCronCreatorAuthorityRunScope,
+@@ -7,6 +8,36 @@ import {
+ } from "./cron-creator-authority-grant.js";
+ 
+ describe("cron creator authority grants", () => {
++  it("revokes pending grants and detaches operation listeners on gateway restart", async () => {
++    const scope = createCronCreatorAuthorityRunScope("restart-run");
++    const operation = new AbortController();
++    const removeListener = vi.spyOn(operation.signal, "removeEventListener");
++    const grant = mintCronCreatorAuthorityGrant(scope, operation.signal);
++    await drainGlobalSingletonLifecycleState("restart");
++    expect(scope.active).toBe(false);
++    expect(scope.signal.aborted).toBe(true);
++    expect(scope.grantTokens.size).toBe(0);
++    expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
++    expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow("no longer active");
++  });
++
++  it("shares single-use grants and revocation across gateway and SDK module copies", async () => {
++    vi.resetModules();
++    const sdk = await import("./cron-creator-authority-grant.js");
++    const scope = sdk.createCronCreatorAuthorityRunScope("sdk-run");
++    try {
++      const grant = sdk.mintCronCreatorAuthorityGrant(scope);
++      expect(() => consumeCronCreatorAuthorityGrant(grant)).not.toThrow();
++      expect(() => sdk.consumeCronCreatorAuthorityGrant(grant)).toThrow("no longer active");
++      const pending = sdk.mintCronCreatorAuthorityGrant(scope);
++      revokeCronCreatorAuthorityRunScope(scope);
++      expect(() => sdk.consumeCronCreatorAuthorityGrant(pending)).toThrow("no longer active");
++      expect(scope.grantTokens.size).toBe(0);
++    } finally {
++      sdk.revokeCronCreatorAuthorityRunScope(scope);
++    }
++  });
++
+   it("consumes an exact live grant only once", () => {
+     const scope = createCronCreatorAuthorityRunScope("run-1");
+     const grant = mintCronCreatorAuthorityGrant(scope);
+diff --git a/src/agents/cron-creator-authority-context.test.ts b/src/agents/cron-creator-authority-context.test.ts
+index 74db01477..02cae8cb0 100644
+--- a/src/agents/cron-creator-authority-context.test.ts
++++ b/src/agents/cron-creator-authority-context.test.ts
+@@ -1,11 +1,39 @@
+-import { describe, expect, it } from "vitest";
++import { describe, expect, it, vi } from "vitest";
+ import {
+   bindActiveOperatorTurnAuthority,
++  bindActiveCronCreatorAuthorityResolver,
+   createCronCreatorAuthorityCapability,
+   runWithCronCreatorAuthorityCapability,
++  runWithCronCreatorAuthorityCapabilityResolver,
+ } from "./cron-creator-authority-context.js";
+ 
+ describe("bindActiveOperatorTurnAuthority", () => {
++  it("preserves scheduling-only restrictions across gateway and SDK module copies", async () => {
++    vi.resetModules();
++    const sdk = await import("./cron-creator-authority-context.js");
++    const capability = createCronCreatorAuthorityCapability(
++      "sdk-channel-run",
++      { kind: "external", channel: "feishu" },
++      { schedulingOnly: true },
++    )!;
++    await runWithCronCreatorAuthorityCapability(capability, async () => {
++      sdk.runWithCronCreatorAuthorityCapabilityResolver({
++        capability,
++        runId: "sdk-channel-run",
++        resolve: async () => ({
++          tools: ["read"],
++          provenance: { version: 1, source: "final-executable-surface" },
++        }),
++        run: () => {
++          expect(sdk.bindActiveOperatorTurnAuthority("sdk-channel-run")).toBeUndefined();
++          expect(sdk.bindActiveCronCreatorAuthorityResolver("sdk-channel-run")).toBeTypeOf(
++            "function",
++          );
++        },
++      });
++    });
++  });
++
+   it("binds an explicit exact-run origin and expires retained authority", async () => {
+     const capability = createCronCreatorAuthorityCapability("owner-run", {
+       kind: "external",
+@@ -26,6 +54,28 @@ describe("bindActiveOperatorTurnAuthority", () => {
+     expect(() => retained?.assertActive()).toThrow();
+   });
+ 
++  it("keeps channel scheduling authority separate from operator authority and revokes it", async () => {
++    const capability = createCronCreatorAuthorityCapability(
++      "channel-run",
++      { kind: "external", channel: "feishu" },
++      { schedulingOnly: true },
++    )!;
++    const resolver = runWithCronCreatorAuthorityCapabilityResolver({
++      capability,
++      runId: "channel-run",
++      resolve: async () => ({
++        tools: ["read"],
++        provenance: { version: 1, source: "final-executable-surface" },
++      }),
++      run: () => bindActiveCronCreatorAuthorityResolver("channel-run"),
++    })!;
++    await runWithCronCreatorAuthorityCapability(capability, async () => {
++      expect(bindActiveOperatorTurnAuthority("channel-run")).toBeUndefined();
++      await expect(resolver()).resolves.toMatchObject({ tools: ["read"] });
++    });
++    await expect(resolver()).rejects.toThrow("no longer active");
++  });
++
+   it("does not promote an unknown active origin", async () => {
+     const capability = createCronCreatorAuthorityCapability("unknown-run");
+     if (!capability) {
+diff --git a/src/agents/cron-creator-authority-context.ts b/src/agents/cron-creator-authority-context.ts
+index 0b6c3ebe7..e34242912 100644
+--- a/src/agents/cron-creator-authority-context.ts
++++ b/src/agents/cron-creator-authority-context.ts
+@@ -8,6 +8,8 @@ import {
+   revokeCronCreatorAuthorityRunScope,
+   type CronCreatorAuthorityRunScope,
+ } from "../gateway/cron-creator-authority-grant.js";
++import { resolveGlobalSingleton } from "../shared/global-singleton.js";
++import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
+ import type {
+   CronCreatorToolAuthorityMaterialization,
+   CronToolOptions,
+@@ -26,14 +28,25 @@ type CronCreatorAuthorityResolverScope = {
+ /** Opaque in-process capability minted only by an admitted exact run. */
+ export type CronCreatorAuthorityCapability = CronCreatorAuthorityRunScope;
+ 
++const schedulingOnlyAuthorities = resolveGlobalSingleton(
++  Symbol.for("openclaw.cronSchedulingOnlyAuthorities"),
++  () => new WeakSet<CronCreatorAuthorityCapability>(),
++);
++
+ export function createCronCreatorAuthorityCapability(
+   runId: string,
+   callerOrigin: CronScheduledToolCallerOrigin = { kind: "unknown" },
++  options?: { schedulingOnly?: boolean },
+ ): CronCreatorAuthorityCapability | undefined {
+   const normalizedRunId = runId.trim();
+-  return normalizedRunId
+-    ? createCronCreatorAuthorityRunScope(normalizedRunId, callerOrigin)
+-    : undefined;
++  if (!normalizedRunId) {
++    return undefined;
++  }
++  const capability = createCronCreatorAuthorityRunScope(normalizedRunId, callerOrigin);
++  if (options?.schedulingOnly) {
++    schedulingOnlyAuthorities.add(capability);
++  }
++  return capability;
+ }
+ 
+ const activeCronCreatorAuthority = new AsyncLocalStorage<CronCreatorAuthorityRunScope>();
+@@ -42,6 +55,7 @@ const activeCronCreatorAuthorityResolver =
+ 
+ export function shouldAdmitFreshChannelOwnerCronAuthority(params: {
+   senderIsOwner: boolean;
++  allowChannelScheduling?: boolean;
+   messageProvider?: string;
+   senderId?: string;
+   isHeartbeat: boolean;
+@@ -51,7 +65,9 @@ export function shouldAdmitFreshChannelOwnerCronAuthority(params: {
+   suppressNextUserMessagePersistence?: boolean;
+ }): boolean {
+   return (
+-    params.senderIsOwner &&
++    (params.senderIsOwner ||
++      (params.allowChannelScheduling === true &&
++        Boolean(params.messageProvider && isDeliverableMessageChannel(params.messageProvider)))) &&
+     Boolean(params.messageProvider) &&
+     Boolean(normalizeOptionalString(params.senderId)) &&
+     !params.isHeartbeat &&
+@@ -186,7 +202,8 @@ export function bindActiveOperatorTurnAuthority(runId: string | undefined):
+     !normalizedRunId ||
+     authority?.active !== true ||
+     authority.runId !== normalizedRunId ||
+-    authority.callerOrigin.kind === "unknown"
++    authority.callerOrigin.kind === "unknown" ||
++    schedulingOnlyAuthorities.has(authority)
+   ) {
+     return undefined;
+   }
+diff --git a/src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts b/src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts
+index 5e2ca70be..22f988f83 100644
+--- a/src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts
+@@ -18,6 +18,7 @@ import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
+ import { getChannelAgentToolMeta } from "../../channel-tools.js";
+ import type { CodeModeSkill } from "../../code-mode-skills.js";
+ import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
++import { runWithCronCreatorAuthorityCapabilityResolver } from "../../cron-creator-authority-context.js";
+ import {
+   isLocalModelLeanEnabled,
+   resolveLocalModelLeanPreserveToolNames,
+@@ -37,6 +38,7 @@ import {
+ } from "../../tool-search.js";
+ import { resolveAgentToolSurfacePlan } from "../../tool-surface-plan.js";
+ import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
++import { INCOMPLETE_CRON_CREATOR_AUTHORITY_MESSAGE } from "../../tools/cron-tool-creator-cap.js";
+ import type {
+   CronCreatorToolAllowlistEntry,
+   CronToolsAllowCaptureRef,
+@@ -246,7 +248,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
+   const constructedToolsRaw = !shouldConstructTools
+     ? []
+     : (() => {
+-        const allTools = createOpenClawCodingTools({
++        const toolOptions: OpenClawCodingToolsOptions = {
+           agentId: params.sessionAgentId,
+           ...toolRunContext,
+           messageChannel: attempt.messageChannel,
+@@ -369,6 +371,18 @@ export function prepareEmbeddedAttemptToolBase(params: {
+           conversationCapabilityProfile: runtimeCapabilityProfile,
+           scheduledToolPolicy: attempt.scheduledToolPolicy,
+           onYield: params.onYield,
++        };
++        const allTools = runWithCronCreatorAuthorityCapabilityResolver({
++          capability: attempt.cronCreatorAuthorityCapability,
++          runId: attempt.runId,
++          resolve: async () => {
++            const provenance = cronCreatorToolAllowlistCaptureRef.value;
++            if (!provenance) {
++              throw new Error(INCOMPLETE_CRON_CREATOR_AUTHORITY_MESSAGE);
++            }
++            return { tools: [...cronCreatorToolAllowlist], provenance };
++          },
++          run: () => createOpenClawCodingTools(toolOptions),
+         });
+         // The built-in harness retains its existing authoritative wrappers.
+         // Only plugin harnesses receive and require the projected host capability.
+diff --git a/src/agents/embedded-agent-runner/run/attempt-tool-prepare.cron-authority.test.ts b/src/agents/embedded-agent-runner/run/attempt-tool-prepare.cron-authority.test.ts
+new file mode 100644
+index 000000000..107c351ac
+--- /dev/null
++++ b/src/agents/embedded-agent-runner/run/attempt-tool-prepare.cron-authority.test.ts
+@@ -0,0 +1,86 @@
++import { describe, expect, it, vi } from "vitest";
++import "../../test-helpers/fast-bash-tools.js";
++import "../../test-helpers/fast-coding-tools.js";
++import "../../test-helpers/fast-openclaw-tools.js";
++import {
++  createCronCreatorAuthorityCapability,
++  runWithCronCreatorAuthorityCapability,
++} from "../../cron-creator-authority-context.js";
++import { createOpenClawTools } from "../../openclaw-tools.js";
++import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
++
++type Preparation = Parameters<typeof prepareEmbeddedAttemptToolBase>[0];
++function prepare(
++  capability?: Preparation["attempt"]["cronCreatorAuthorityCapability"],
++  deny?: string[],
++) {
++  return prepareEmbeddedAttemptToolBase({
++    agentDir: process.cwd(),
++    effectiveCwd: process.cwd(),
++    effectiveWorkspace: process.cwd(),
++    resolvedWorkspace: process.cwd(),
++    sandboxSessionKey: "agent:main:feishu:direct:sender",
++    sessionAgentId: "main",
++    markCoreToolStage: () => {},
++    onYield: () => {},
++    runAbortController: new AbortController(),
++    codeModeSkills: [],
++    skillUsagePaths: [],
++    attempt: {
++      runId: "channel-run",
++      sessionKey: "agent:main:feishu:direct:sender",
++      senderId: "sender",
++      senderIsOwner: false,
++      messageChannel: "feishu",
++      agentAccountId: "bot-account",
++      provider: "openai",
++      modelId: "gpt-4.1",
++      model: { id: "gpt-4.1", provider: "openai", api: "openai-completions", input: ["text"] },
++      config: { tools: { deny } },
++      admittedRunContext: {},
++      cronCreatorAuthorityCapability: capability,
++    },
++  } as Preparation);
++}
++
++describe("built-in attempt channel scheduling authority", () => {
++  it("retains only automations, waits for the final tool capture and expires with the run", async () => {
++    const capability = createCronCreatorAuthorityCapability(
++      "channel-run",
++      { kind: "external", channel: "feishu" },
++      { schedulingOnly: true },
++    )!;
++    let resolver: NonNullable<
++      Parameters<typeof createOpenClawTools>[0]
++    >["resolveCronCreatorToolAuthority"];
++    await runWithCronCreatorAuthorityCapability(capability, async () => {
++      const prepared = prepare(capability);
++      const names = prepared.toolsRaw.map((tool) => tool.name);
++      expect(names).toContain("automations");
++      expect(names).not.toContain("gateway");
++      expect(names).not.toContain("openclaw");
++      resolver = vi.mocked(createOpenClawTools).mock.lastCall?.[0]?.resolveCronCreatorToolAuthority;
++      expect(resolver).toBeTypeOf("function");
++      await expect(resolver!()).rejects.toThrow("complete model-callable tool surface");
++      prepared.cronCreatorToolAllowlist.splice(0, prepared.cronCreatorToolAllowlist.length, "read");
++      prepared.cronCreatorToolAllowlistCaptureRef.value = {
++        version: 1,
++        source: "final-executable-surface",
++      };
++      await expect(resolver!()).resolves.toMatchObject({ tools: ["read"] });
++    });
++    await expect(resolver!()).rejects.toThrow("no longer active");
++  });
++
++  it("does not admit missing or mismatched capabilities and preserves explicit denies", () => {
++    expect(prepare().toolsRaw.map((tool) => tool.name)).not.toContain("automations");
++    const wrongRun = createCronCreatorAuthorityCapability("other-run")!;
++    expect(prepare(wrongRun).toolsRaw.map((tool) => tool.name)).not.toContain("automations");
++    const capability = createCronCreatorAuthorityCapability("channel-run")!;
++    runWithCronCreatorAuthorityCapability(capability, () => {
++      expect(prepare(capability, ["automations"]).toolsRaw.map((tool) => tool.name)).not.toContain(
++        "automations",
++      );
++    });
++  });
++});
+diff --git a/src/auto-reply/reply/get-reply-run-execute.test.ts b/src/auto-reply/reply/get-reply-run-execute.test.ts
+index d324a2d31..5083af920 100644
+--- a/src/auto-reply/reply/get-reply-run-execute.test.ts
++++ b/src/auto-reply/reply/get-reply-run-execute.test.ts
+@@ -17,6 +17,34 @@ describe("fresh channel owner cron authority admission", () => {
+     },
+   );
+ 
++  it.each(["feishu", "telegram", "discord"])(
++    "admits a non-owner channel turn only with scheduling enabled: %s",
++    (messageProvider) => {
++      const turn = { ...BASE, senderIsOwner: false, messageProvider };
++      expect(shouldAdmitFreshChannelOwnerCronAuthority(turn)).toBe(false);
++      expect(
++        shouldAdmitFreshChannelOwnerCronAuthority({ ...turn, allowChannelScheduling: false }),
++      ).toBe(false);
++      expect(
++        shouldAdmitFreshChannelOwnerCronAuthority({ ...turn, allowChannelScheduling: true }),
++      ).toBe(true);
++    },
++  );
++
++  it.each(["webchat", "cron", "heartbeat", "webhook", "sessions_send", "unknown-channel"])(
++    "does not grant channel scheduling to internal or unknown sources: %s",
++    (messageProvider) => {
++      expect(
++        shouldAdmitFreshChannelOwnerCronAuthority({
++          ...BASE,
++          senderIsOwner: false,
++          messageProvider,
++          allowChannelScheduling: true,
++        }),
++      ).toBe(false);
++    },
++  );
++
+   it.each([
+     { name: "non-owner", overrides: { senderIsOwner: false } },
+     { name: "missing provider", overrides: { messageProvider: undefined } },
+@@ -28,5 +56,15 @@ describe("fresh channel owner cron authority admission", () => {
+     { name: "replayed turn", overrides: { suppressNextUserMessagePersistence: true } },
+   ])("rejects $name", ({ overrides }) => {
+     expect(shouldAdmitFreshChannelOwnerCronAuthority({ ...BASE, ...overrides })).toBe(false);
++    if (overrides.senderIsOwner !== false) {
++      expect(
++        shouldAdmitFreshChannelOwnerCronAuthority({
++          ...BASE,
++          senderIsOwner: false,
++          allowChannelScheduling: true,
++          ...overrides,
++        }),
++      ).toBe(false);
++    }
+   });
+ });
+diff --git a/src/auto-reply/reply/get-reply-run-execute.ts b/src/auto-reply/reply/get-reply-run-execute.ts
+index 7734e35c9..041ee3ba2 100644
+--- a/src/auto-reply/reply/get-reply-run-execute.ts
++++ b/src/auto-reply/reply/get-reply-run-execute.ts
+@@ -440,8 +440,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission)
+       approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
+       sessionFile: preparedSessionState.sessionFile,
+       workspaceDir,
+-      cwd:
+-        normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ?? cwd,
++      cwd: normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ?? cwd,
+       permissionMode: preparedSessionState.sessionEntry?.permissionMode,
+       sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
+       config: cfg,
+@@ -545,6 +544,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission)
+ 
+   const admitFreshChannelOwnerCronAuthority = shouldAdmitFreshChannelOwnerCronAuthority({
+     senderIsOwner: command.senderIsOwner,
++    allowChannelScheduling: cfg.cron?.allowChannelScheduling,
+     messageProvider,
+     senderId: sessionCtx.SenderId,
+     isHeartbeat,
+@@ -559,10 +559,11 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission)
+   const inheritedCronCreatorAuthorityCapability = opts?.cronCreatorAuthorityCapability;
+   const createdCronCreatorAuthorityCapability =
+     !inheritedCronCreatorAuthorityCapability && authorityRunId && messageProvider
+-      ? createCronCreatorAuthorityCapability(authorityRunId, {
+-          kind: "external",
+-          channel: messageProvider,
+-        })
++      ? createCronCreatorAuthorityCapability(
++          authorityRunId,
++          { kind: "external", channel: messageProvider },
++          { schedulingOnly: !command.senderIsOwner },
++        )
+       : undefined;
+   const cronCreatorAuthorityCapability =
+     inheritedCronCreatorAuthorityCapability ?? createdCronCreatorAuthorityCapability;
+diff --git a/src/config/schema.help.automation.ts b/src/config/schema.help.automation.ts
+index d66fbddce..a95cad999 100644
+--- a/src/config/schema.help.automation.ts
++++ b/src/config/schema.help.automation.ts
+@@ -91,6 +91,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
+   "session.maintenance.highWaterBytes":
+     "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks. A value that resolves to zero falls back to the default; negative values are invalid. Disable the budget with maxDiskBytes instead.",
+   cron: "Global scheduler settings for stored automations, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling automation volume or integrating external webhook receivers.",
++  "cron.allowChannelScheduling":
++    "Allows fresh user messages admitted by a channel access policy to create automations with their existing tool permissions. Does not grant global owner or operator authority. Disabled by default.",
+   "cron.enabled":
+     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",
+   "cron.skipMissedJobs":
+diff --git a/src/config/schema.labels.ts b/src/config/schema.labels.ts
+index 93f540f9c..85f4dc1a7 100644
+--- a/src/config/schema.labels.ts
++++ b/src/config/schema.labels.ts
+@@ -793,6 +793,7 @@ export const FIELD_LABELS: Record<string, string> = {
+   "session.maintenance.highWaterBytes": "Session Disk High-water Target",
+   cron: "Automations",
+   "cron.enabled": "Automations Enabled",
++  "cron.allowChannelScheduling": "Allow Channel Scheduling",
+   "cron.skipMissedJobs": "Skip Missed Recurring Automations",
+   "cron.webhookToken": "Automations Webhook Bearer Token",
+   "cron.webhookSsrfPolicy": "Automations Webhook SSRF Policy",
+diff --git a/src/config/types.cron.ts b/src/config/types.cron.ts
+index 14fa14f1a..353c80e92 100644
+--- a/src/config/types.cron.ts
++++ b/src/config/types.cron.ts
+@@ -22,6 +22,8 @@ export type CronFailureDestinationConfig = {
+ 
+ export type CronConfig = {
+   enabled?: boolean;
++  /** Allow fresh channel-admitted user turns to schedule with their existing tool authority. */
++  allowChannelScheduling?: boolean;
+   /** Skip startup catch-up for recurring jobs that became due while the gateway was offline. */
+   skipMissedJobs?: boolean;
+   triggers?: {
+diff --git a/src/config/zod-schema.cron-channel-scheduling.test.ts b/src/config/zod-schema.cron-channel-scheduling.test.ts
+new file mode 100644
+index 000000000..96bc66310
+--- /dev/null
++++ b/src/config/zod-schema.cron-channel-scheduling.test.ts
+@@ -0,0 +1,19 @@
++import { describe, expect, it } from "vitest";
++import { OpenClawSchema } from "./zod-schema.js";
++
++describe("channel scheduling opt-in", () => {
++  it("defaults off and accepts explicit booleans", () => {
++    expect(OpenClawSchema.parse({ cron: {} }).cron?.allowChannelScheduling).toBeUndefined();
++    for (const enabled of [false, true]) {
++      expect(
++        OpenClawSchema.parse({ cron: { allowChannelScheduling: enabled } }).cron
++          ?.allowChannelScheduling,
++      ).toBe(enabled);
++    }
++  });
++  it("rejects non-boolean settings", () => {
++    expect(OpenClawSchema.safeParse({ cron: { allowChannelScheduling: "true" } }).success).toBe(
++      false,
++    );
++  });
++});
+diff --git a/src/config/zod-schema.root-shape.ts b/src/config/zod-schema.root-shape.ts
+index 58f75ebb7..4133f18a2 100644
+--- a/src/config/zod-schema.root-shape.ts
++++ b/src/config/zod-schema.root-shape.ts
+@@ -33,11 +33,11 @@ import {
+ } from "./zod-schema.root-support.js";
+ import { sensitive } from "./zod-schema.sensitive.js";
+ import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
++import { TelemetryConfigSchema } from "./zod-schema.telemetry.js";
+ 
+ const BrowserSsrFPolicyConfigSchema = SsrFPolicyConfigSchema.extend({
+   blockedHostnames: z.array(z.string()).optional(),
+ });
+-import { TelemetryConfigSchema } from "./zod-schema.telemetry.js";
+ 
+ // OpenTelemetry instrument names start with an ASCII letter and allow only these characters.
+ // The 128-character prefix cap leaves ample room within the dependency's 255-character name cap.
+@@ -324,6 +324,7 @@ export const OpenClawSchemaShape = {
+   cron: z
+     .strictObject({
+       enabled: z.boolean().optional(),
++      allowChannelScheduling: z.boolean().optional(),
+       skipMissedJobs: z.boolean().optional(),
+       triggers: z
+         .strictObject({

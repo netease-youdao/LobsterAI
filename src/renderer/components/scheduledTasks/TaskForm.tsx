@@ -4,6 +4,7 @@ import {
   BellSlashIcon,
   CheckIcon,
 } from '@heroicons/react/24/outline';
+import { isWeixinChannel } from '@shared/im/weixin';
 import { PlatformRegistry } from '@shared/platform';
 import React, { useEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -1470,6 +1471,11 @@ const TaskForm: React.FC<TaskFormProps> = ({
             ) : (
               <p className={hintClass}>
                 {i18nService.t('scheduledTasksFormNotifySelectConversationHint')}
+              </p>
+            )}
+            {isWeixinChannel(form.notifyChannel) && (
+              <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">
+                {i18nService.t('scheduledTasksFormNotifyWeixinLimitHint')}
               </p>
             )}
           </div>

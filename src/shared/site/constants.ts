@@ -4,6 +4,7 @@ import type {
   PublishingIdentityType,
   PublishingQuotaErrorData,
   PublishingResourceKind,
+  PublishingSubscriptionRecoveryMode,
 } from '../publishing/constants';
 
 export const SiteIpc = {
@@ -98,6 +99,8 @@ export interface SiteListItem {
   lastAccessedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+  expiresAt?: string | null;
+  subscriptionRecoveryMode?: PublishingSubscriptionRecoveryMode;
 }
 
 export interface SiteDeploymentEvent {
@@ -139,7 +142,6 @@ export interface SiteDetail extends SiteListItem {
   statusReason?: string | null;
   failureCode?: string | null;
   failureMessage?: string | null;
-  expiresAt?: string | null;
 }
 
 export interface SiteListOptions {

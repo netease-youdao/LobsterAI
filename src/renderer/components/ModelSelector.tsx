@@ -32,6 +32,8 @@ import Modal from './common/Modal';
 import ModelThinkingMenu, {
   getModelThinkingLevelLabel,
 } from './modelSelector/ModelThinkingMenu';
+import { useModelPurchaseOffer } from './modelSelector/useModelPurchaseOffer';
+import PurchaseOfferCountdown from './PurchaseOfferCountdown';
 
 interface ModelSelectorProps {
   dropdownDirection?: 'up' | 'down' | 'auto';
@@ -108,6 +110,16 @@ export const countVisibleModelSelectorRows = (
     + (moreModelsExpanded ? sections.moreModels.length : 0);
 };
 
+export const shouldRenderSelectedModelUnavailableFallback = (
+  availableModelCount: number,
+  selectedModel: Model | null | undefined,
+  isLoggedIn: boolean,
+): selectedModel is Model & { isServerModel: true } => (
+  isLoggedIn
+  && availableModelCount === 0
+  && selectedModel?.isServerModel === true
+);
+
 export interface ModelSelectorChangeMeta {
   group: ModelSelectorGroup;
   thinkingLevel?: ModelThinkingLevelType;
@@ -139,6 +151,7 @@ export const ModelAccessPromptModal: React.FC<ModelAccessPromptModalProps> = ({
 }) => {
   const agenticNotReadyPrompt = promptKind === ModelAccessPromptKind.AgenticNotReady;
   const loginPrompt = promptKind === ModelAccessPromptKind.Login;
+  const purchaseOffer = useModelPurchaseOffer(promptKind === ModelAccessPromptKind.Subscribe, onClose);
   const resolvedTitleKey = titleKey ?? (
     agenticNotReadyPrompt
       ? 'modelSelectorAgenticNotReadyTitle'
@@ -156,9 +169,10 @@ export const ModelAccessPromptModal: React.FC<ModelAccessPromptModalProps> = ({
   );
 
   const openSubscriptionPage = async () => {
+    const pricingUrl = purchaseOffer.getPricingUrl();
+    if (!pricingUrl) return;
     onClose();
-    const { getPortalPricingUrl } = await import('../services/endpoints');
-    await window.electron.shell.openExternal(getPortalPricingUrl());
+    await window.electron.shell.openExternal(pricingUrl);
   };
 
   const handlePrimary = async () => {
@@ -186,8 +200,13 @@ export const ModelAccessPromptModal: React.FC<ModelAccessPromptModalProps> = ({
             {i18nService.t(resolvedTitleKey)}
           </div>
           <div className="mt-1.5 text-sm leading-5 text-secondary">
-            {i18nService.t(resolvedDescriptionKey)}
+            {purchaseOffer.description ?? i18nService.t(resolvedDescriptionKey)}
           </div>
+          {purchaseOffer.offer?.expiresAtEpochMs != null && (
+            <div className="mt-3">
+              <PurchaseOfferCountdown offer={purchaseOffer.offer} />
+            </div>
+          )}
         </div>
         <button
           type="button"
@@ -201,7 +220,8 @@ export const ModelAccessPromptModal: React.FC<ModelAccessPromptModalProps> = ({
       <button
         type="button"
         onClick={() => { void handlePrimary(); }}
-        className="mt-5 w-full rounded-lg bg-primary px-3 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary/90"
+        disabled={purchaseOffer.isRefreshing}
+        className="mt-5 w-full rounded-lg bg-primary px-3 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-wait disabled:opacity-50"
       >
         {i18nService.t(resolvedPrimaryButtonKey)}
       </button>
@@ -456,6 +476,41 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const stableListMinHeight = shouldShowGroupTabs
     ? Math.min(largestGroupRowCount * MODEL_ITEM_HEIGHT + LIST_VERTICAL_PADDING, LIST_MAX_HEIGHT)
     : undefined;
+  const showSelectedModelUnavailableFallback = shouldRenderSelectedModelUnavailableFallback(
+    availableModels.length,
+    selectedModel,
+    isLoggedIn,
+  );
+  const selectedModelUnavailableFallbackLogKey = showSelectedModelUnavailableFallback
+    ? `${selectedModel.providerKey ?? ''}:${selectedModel.id}`
+    : '';
+  const selectedModelUnavailableFallbackLogKeyRef = React.useRef('');
+  const triggerMaxWidthClass = triggerMaxWidthClassName ?? (compact ? 'max-w-[220px]' : 'max-w-[280px]');
+  const triggerClassName = compact
+    ? `space-x-1.5 px-2 py-1 rounded-lg ${triggerMaxWidthClass}`
+    : `space-x-2 px-3 py-1.5 rounded-xl ${triggerMaxWidthClass}`;
+  const triggerTextClassName = compact
+    ? 'font-normal text-[13px] leading-5'
+    : 'font-medium text-sm';
+  const triggerIconClassName = compact ? 'h-3.5 w-3.5' : 'h-4 w-4';
+  const resolveModelIconProviderKey = (model: Model): string => {
+    const providerKey = model.providerKey?.trim();
+    if (providerKey && providerKey !== ProviderName.LobsteraiServer) return providerKey;
+
+    const searchableText = `${model.name} ${model.id}`;
+    return MODEL_ICON_PROVIDER_HINTS.find(({ pattern }) => pattern.test(searchableText))?.providerName
+      ?? providerKey
+      ?? '';
+  };
+  const renderProviderIcon = (model: Model): React.ReactNode => {
+    const icon = getProviderIcon(resolveModelIconProviderKey(model));
+    if (!React.isValidElement<{ className?: string }>(icon)) return icon;
+
+    const existingClassName = icon.props.className ? `${icon.props.className} ` : '';
+    return React.cloneElement(icon, {
+      className: `${existingClassName}${MODEL_ICON_CLASS_NAME}`,
+    });
+  };
 
   // 点击外部区域关闭下拉框
   React.useEffect(() => {
@@ -736,8 +791,48 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     if (hoverCloseTimerRef.current) clearTimeout(hoverCloseTimerRef.current);
   }, []);
 
+  React.useEffect(() => {
+    if (!showSelectedModelUnavailableFallback) {
+      selectedModelUnavailableFallbackLogKeyRef.current = '';
+      return;
+    }
+    if (selectedModelUnavailableFallbackLogKeyRef.current === selectedModelUnavailableFallbackLogKey) {
+      return;
+    }
+    selectedModelUnavailableFallbackLogKeyRef.current = selectedModelUnavailableFallbackLogKey;
+    const message = `preserving stale server model display while authenticated model list is empty: ${selectedModelUnavailableFallbackLogKey}`;
+    console.debug(`[ModelSelector] ${message}`);
+    try {
+      window.electron?.log?.fromRenderer?.('debug', 'ModelSelector', message);
+    } catch {
+      // Diagnostics only.
+    }
+  }, [
+    selectedModelUnavailableFallbackLogKey,
+    showSelectedModelUnavailableFallback,
+  ]);
+
   // 如果没有可用模型，显示提示
   if (availableModels.length === 0) {
+    if (showSelectedModelUnavailableFallback) {
+      return (
+        <div ref={containerRef} className="relative cursor-wait">
+          <button
+            type="button"
+            disabled
+            aria-disabled="true"
+            className={`flex min-w-0 items-center overflow-hidden text-foreground transition-colors disabled:cursor-wait disabled:opacity-70 ${triggerClassName}`}
+          >
+            <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center text-secondary">
+              {renderProviderIcon(selectedModel)}
+            </span>
+            <span className={`${triggerTextClassName} min-w-0 truncate`}>{selectedModel.name}</span>
+            <ChevronDownIcon className={`${triggerIconClassName} shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary`} />
+          </button>
+        </div>
+      );
+    }
+
     return (
       <div className="px-3 py-1.5 rounded-xl bg-surface text-secondary text-sm">
         {i18nService.t('modelSelectorNoModels')}
@@ -754,32 +849,6 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     if (!selectedModel) return false;
     return isSameModelIdentity(model, selectedModel);
   };
-  const resolveModelIconProviderKey = (model: Model): string => {
-    const providerKey = model.providerKey?.trim();
-    if (providerKey && providerKey !== ProviderName.LobsteraiServer) return providerKey;
-
-    const searchableText = `${model.name} ${model.id}`;
-    return MODEL_ICON_PROVIDER_HINTS.find(({ pattern }) => pattern.test(searchableText))?.providerName
-      ?? providerKey
-      ?? '';
-  };
-  const renderProviderIcon = (model: Model): React.ReactNode => {
-    const icon = getProviderIcon(resolveModelIconProviderKey(model));
-    if (!React.isValidElement<{ className?: string }>(icon)) return icon;
-
-    const existingClassName = icon.props.className ? `${icon.props.className} ` : '';
-    return React.cloneElement(icon, {
-      className: `${existingClassName}${MODEL_ICON_CLASS_NAME}`,
-    });
-  };
-  const triggerMaxWidthClass = triggerMaxWidthClassName ?? (compact ? 'max-w-[220px]' : 'max-w-[280px]');
-  const triggerClassName = compact
-    ? `space-x-1.5 px-2 py-1 rounded-lg ${triggerMaxWidthClass}`
-    : `space-x-2 px-3 py-1.5 rounded-xl ${triggerMaxWidthClass}`;
-  const triggerTextClassName = compact
-    ? 'font-normal text-[13px] leading-5'
-    : 'font-medium text-sm';
-  const triggerIconClassName = compact ? 'h-3.5 w-3.5' : 'h-4 w-4';
 
   const cancelHoverClose = () => {
     if (hoverCloseTimerRef.current) {

@@ -15,9 +15,11 @@ import {
   LibraryIpc,
   LibraryItemKind,
   LibraryLimits,
+  LibraryLocalSort,
   LibraryOrigin,
   LibrarySort,
 } from '../../shared/library/constants';
+import { isLibraryIdentifier, LibraryLocalDataError } from '../../shared/library/localOrdering';
 import type {
   LibraryArtifactCandidate,
   LibraryBackfillState,
@@ -30,6 +32,7 @@ import type {
 import { listLibraryCloudItems } from './libraryCloudClient';
 import { LibraryIndexService } from './libraryIndexService';
 import { decodeLibraryLocalCursor, LibraryLocalStore } from './libraryLocalStore';
+import { normalizeLibraryTaskGroupsOptions, normalizeLibraryTaskItemsOptions } from './libraryLocalTaskQuery';
 
 export interface LibraryIpcDependencies {
   localStore: LibraryLocalStore;
@@ -53,10 +56,10 @@ const normalizeCloudOwnerScope = (value: unknown): string | null => {
 };
 
 const requireItemId = (value: unknown): string => {
-  if (typeof value !== 'string' || !value.trim() || value.length > 200) {
+  if (!isLibraryIdentifier(value)) {
     throw new Error('Invalid library item identifier.');
   }
-  return value.trim();
+  return value;
 };
 
 export const normalizeLibraryTargetItemIds = (value: unknown): string[] => {
@@ -74,30 +77,30 @@ export const normalizeLibraryTargetItemIds = (value: unknown): string[] => {
   return [...new Set(input.itemIds.map(requireItemId))];
 };
 
-const normalizeLocalListOptions = (value: unknown): LibraryLocalListOptions => {
+export const normalizeLocalListOptions = (value: unknown): LibraryLocalListOptions => {
   if (value === undefined || value === null) return {};
   if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid list options.');
   const input = value as Record<string, unknown>;
   if (input.category !== undefined && !isLibraryCategory(input.category)) {
     throw new Error('Invalid library category.');
   }
-  if (input.sort !== undefined && input.sort !== LibrarySort.RecentlyUpdated) {
+  if (input.sort !== undefined && input.sort !== LibraryLocalSort.RecentTask) {
     throw new Error('Invalid library sort.');
   }
-  const cursor = typeof input.cursor === 'string' && input.cursor.trim()
-    ? input.cursor.trim()
-    : undefined;
-  if (cursor && !decodeLibraryLocalCursor(cursor)) throw new Error('Invalid library cursor.');
+  const cursor = input.cursor;
+  if (cursor !== undefined && (typeof cursor !== 'string' || !decodeLibraryLocalCursor(cursor))) {
+    throw new LibraryLocalDataError(LibraryErrorCode.InvalidCursor, 'Invalid library cursor.');
+  }
   return {
     ...(input.category ? { category: input.category as LibraryLocalListOptions['category'] } : {}),
     ...(typeof input.keyword === 'string'
       ? { keyword: input.keyword.slice(0, LibraryLimits.MaxKeywordLength) }
       : {}),
-    ...(cursor ? { cursor } : {}),
+    ...(typeof cursor === 'string' ? { cursor } : {}),
     ...(typeof input.pageSize === 'number' && Number.isInteger(input.pageSize)
       ? { pageSize: input.pageSize }
       : {}),
-    ...(input.sort ? { sort: LibrarySort.RecentlyUpdated } : {}),
+    ...(input.sort ? { sort: LibraryLocalSort.RecentTask } : {}),
     ...(typeof input.favoritesOnly === 'boolean'
       ? { favoritesOnly: input.favoritesOnly }
       : {}),
@@ -222,12 +225,34 @@ export const registerLibraryIpcHandlers = ({
   getServerApiBaseUrl,
   fetchWithAuth,
 }: LibraryIpcDependencies): void => {
+  ipcMain.handle(LibraryIpc.ListLocalTaskGroups, (_event, input: unknown) => {
+    try {
+      return success(localStore.listTaskGroups(normalizeLibraryTaskGroupsOptions(input)));
+    } catch (error) {
+      return failure(
+        error instanceof LibraryLocalDataError ? error.code : LibraryErrorCode.Internal,
+        error instanceof Error ? error.message : 'Invalid local task groups request.',
+      );
+    }
+  });
+
+  ipcMain.handle(LibraryIpc.ListLocalTaskItems, (_event, input: unknown) => {
+    try {
+      return success(localStore.listTaskItems(normalizeLibraryTaskItemsOptions(input)));
+    } catch (error) {
+      return failure(
+        error instanceof LibraryLocalDataError ? error.code : LibraryErrorCode.Internal,
+        error instanceof Error ? error.message : 'Invalid local task items request.',
+      );
+    }
+  });
+
   ipcMain.handle(LibraryIpc.ListLocal, (_event, input: unknown) => {
     try {
       return success(localStore.list(normalizeLocalListOptions(input)));
     } catch (error) {
       return failure(
-        LibraryErrorCode.InvalidInput,
+        error instanceof LibraryLocalDataError ? error.code : LibraryErrorCode.InvalidInput,
         error instanceof Error ? error.message : 'Invalid local library request.',
       );
     }
@@ -260,7 +285,7 @@ export const registerLibraryIpcHandlers = ({
       return success(localStore.getVisibleItems(normalizeLibraryTargetItemIds(input)));
     } catch (error) {
       return failure(
-        LibraryErrorCode.InvalidInput,
+        error instanceof LibraryLocalDataError ? error.code : LibraryErrorCode.InvalidInput,
         error instanceof Error ? error.message : 'Invalid library item request.',
       );
     }
@@ -274,7 +299,7 @@ export const registerLibraryIpcHandlers = ({
         : failure(LibraryErrorCode.NotFound, 'Library item was not found.');
     } catch (error) {
       return failure(
-        LibraryErrorCode.InvalidInput,
+        error instanceof LibraryLocalDataError ? error.code : LibraryErrorCode.InvalidInput,
         error instanceof Error ? error.message : 'Invalid library item.',
       );
     }
@@ -338,7 +363,11 @@ export const registerLibraryIpcHandlers = ({
         itemId,
         favorite: input.favorite,
       });
-      indexService.notifyChange({ reason: LibraryChangeReason.Favorite, itemIds: [itemId] });
+      indexService.notifyChange({
+        reason: LibraryChangeReason.Favorite,
+        itemKind: input.itemKind,
+        itemIds: [itemId],
+      });
       return success({ favorite: input.favorite });
     } catch (error) {
       return failure(

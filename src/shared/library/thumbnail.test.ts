@@ -3,8 +3,14 @@ import { describe, expect, test } from 'vitest';
 import { LibraryArtifactType } from './constants';
 import {
   createLibraryThumbnailRenderRequest,
+  getLibraryThumbnailFailureDetails,
+  isLibraryDirectPngThumbnailExtension,
   isLibraryRasterThumbnailExtension,
+  isLibraryThumbnailFailureRetryable,
   LibraryThumbnailDimensions,
+  LibraryThumbnailError,
+  LibraryThumbnailFailureCode,
+  LibraryThumbnailFailureStage,
 } from './thumbnail';
 
 describe('library thumbnail render request', () => {
@@ -46,7 +52,48 @@ describe('library thumbnail render request', () => {
     },
   );
 
-  test('keeps SVG on the isolated document renderer path', () => {
+  test('keeps SVG out of the raster-only source policy', () => {
     expect(isLibraryRasterThumbnailExtension('.svg')).toBe(false);
+  });
+
+  test.each(['.svg', '.pdf', '.md', '.txt', '.css', '.mp4', '.xlsx', '.mmd'])(
+    'routes %s through direct PNG output',
+    extension => {
+      expect(isLibraryDirectPngThumbnailExtension(extension)).toBe(true);
+    },
+  );
+
+  test.each(['.html', '.docx', '.pptx'])(
+    'keeps %s on the committed presentation path',
+    extension => {
+      expect(isLibraryDirectPngThumbnailExtension(extension)).toBe(false);
+    },
+  );
+
+  test('maps stable thumbnail failure codes to diagnostic stages', () => {
+    const failure = getLibraryThumbnailFailureDetails(new LibraryThumbnailError(
+      LibraryThumbnailFailureCode.PptxMediaTimeout,
+      'media timed out',
+      { slideCount: 10, sourceHasVisualContent: true },
+    ));
+
+    expect(failure).toEqual({
+      code: LibraryThumbnailFailureCode.PptxMediaTimeout,
+      stage: LibraryThumbnailFailureStage.PptxMedia,
+      message: 'media timed out',
+      metrics: { slideCount: 10, sourceHasVisualContent: true },
+    });
+  });
+
+  test('retries transient renderer failures but not permanent source failures', () => {
+    expect(isLibraryThumbnailFailureRetryable(
+      LibraryThumbnailFailureCode.PresentationTimeout,
+    )).toBe(true);
+    expect(isLibraryThumbnailFailureRetryable(
+      LibraryThumbnailFailureCode.UnsupportedFormat,
+    )).toBe(false);
+    expect(isLibraryThumbnailFailureRetryable(
+      LibraryThumbnailFailureCode.SourceTooLarge,
+    )).toBe(false);
   });
 });

@@ -167,7 +167,8 @@ export interface CoworkRuntime {
   getForkCompactionSummary?(sessionId: string, beforeCreatedAt?: number): Promise<CoworkForkCompactionSummary | null>;
   stopSession(sessionId: string): void;
   stopAllSessions(): void;
-  respondToPermission(requestId: string, result: PermissionResult): void;
+  respondToPermission(requestId: string, result: PermissionResult): void | Promise<void>;
+  getPendingQuestions?(): Array<PermissionRequest & { sessionId: string }>;
   isSessionActive(sessionId: string): boolean;
   getSessionConfirmationMode(sessionId: string): 'modal' | 'text' | null;
   deleteSubagentSession?(parentSessionId: string, runId: string): Promise<boolean>;

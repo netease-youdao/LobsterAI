@@ -15,6 +15,25 @@ export const PublishingIdentityType = {
 export type PublishingIdentityType =
   (typeof PublishingIdentityType)[keyof typeof PublishingIdentityType];
 
+export const PublishingSubscriptionRecoveryMode = {
+  None: 'none',
+  Automatic: 'automatic',
+  RedeployRequired: 'redeploy_required',
+} as const;
+
+export type PublishingSubscriptionRecoveryMode =
+  typeof PublishingSubscriptionRecoveryMode[keyof typeof PublishingSubscriptionRecoveryMode];
+
+export const normalizePublishingSubscriptionRecoveryMode = (
+  value: unknown,
+): PublishingSubscriptionRecoveryMode => (
+  Object.values(PublishingSubscriptionRecoveryMode).includes(
+    value as PublishingSubscriptionRecoveryMode,
+  )
+    ? value as PublishingSubscriptionRecoveryMode
+    : PublishingSubscriptionRecoveryMode.None
+);
+
 export const PublishingCountMode = {
   Total: 'total',
   Active: 'active',

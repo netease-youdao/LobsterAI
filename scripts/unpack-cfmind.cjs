@@ -239,11 +239,17 @@ try {
     }
   }
 
+  const gatewayBundlePath = path.join(destDir, 'cfmind', 'gateway-bundle.mjs');
   const requiredResourceChecks = [
     {
       name: 'cfmind-entry',
       ok: ['gateway-bundle.mjs', 'openclaw.mjs']
         .some(fileName => fs.existsSync(path.join(destDir, 'cfmind', fileName))),
+    },
+    {
+      name: 'cfmind-bundle-assets',
+      ok: !fs.existsSync(gatewayBundlePath)
+        || fs.existsSync(path.join(destDir, 'cfmind', 'web-tree-sitter.wasm')),
     },
     {
       name: 'skills-content',

@@ -1,4 +1,5 @@
 export const CoworkSystemMessageKind = {
+  EmptyResponse: 'empty_response',
   ContextCompaction: 'context_compaction',
   ForkCompactionSummary: 'fork_compaction_summary',
 } as const;

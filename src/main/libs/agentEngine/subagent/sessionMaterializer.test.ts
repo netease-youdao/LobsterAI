@@ -34,19 +34,42 @@ const createMaterializer = (overrides: Partial<ConstructorParameters<typeof Suba
 };
 
 describe('SubagentSessionMaterializer', () => {
-  test('does not materialize self-target subagent sessions', () => {
+  test.each(['subagent', 'dashboard'])('does not materialize self-target %s sessions', (kind) => {
     const { materializer } = createMaterializer();
 
     expect(materializer.shouldMaterialize({
       runId: 'call-self',
       parentSessionId: 'parent-main',
-      childSessionKey: 'agent:main:subagent:self-1',
+      childSessionKey: `agent:main:${kind}:self-1`,
       agentId: 'main',
       task: 'write essay',
       label: 'essay-writer-1',
       status: 'running',
       createdAt: 1,
     })).toBe(false);
+  });
+
+  test.each(['subagent', 'dashboard'])('preserves cross-agent %s delegation', (kind) => {
+    const { materializer } = createMaterializer();
+    expect(materializer.shouldMaterialize({
+      runId: 'cross-agent', parentSessionId: 'parent-main',
+      childSessionKey: `agent:writer:${kind}:child`, agentId: 'writer',
+      task: 'review', label: null, status: 'running', createdAt: 1,
+    })).toBe(true);
+  });
+
+  test.each([
+    ['writer', false],
+    ['main', true],
+    ['reviewer', true],
+  ] as const)('resolves a writer parent delegating to %s', (agentId, expected) => {
+    const { materializer, store } = createMaterializer();
+    store.getSession.mockReturnValue({ id: 'parent-writer', agentId: 'writer', status: 'running' });
+    expect(materializer.shouldMaterialize({
+      runId: 'delegate', parentSessionId: 'parent-writer',
+      childSessionKey: `agent:${agentId}:dashboard:child`, agentId,
+      task: 'review', label: null, status: 'running', createdAt: 1,
+    })).toBe(expected);
   });
 
   test('materializes delegated subagent sessions and starts history sync', async () => {

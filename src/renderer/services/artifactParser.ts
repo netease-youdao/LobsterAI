@@ -2,7 +2,12 @@ import {
   ShareDeploymentCandidateSource,
   type ShareDeploymentProjectCandidate,
 } from '../../shared/shareDeployment/constants';
-import { type Artifact, type ArtifactType, ArtifactTypeValue } from '../types/artifact';
+import {
+  type Artifact,
+  ArtifactMediaOriginType,
+  type ArtifactType,
+  ArtifactTypeValue,
+} from '../types/artifact';
 import type { CoworkMessage } from '../types/cowork';
 
 /**
@@ -169,6 +174,18 @@ function getLocalServiceProjectConfidence(
   return defaultProjectDirectory && normalizedProjectDirectory === defaultProjectDirectory ? 0 : 1;
 }
 
+function getGeneratedVideoOriginConfidence(artifact: Artifact): number {
+  if (artifact.type !== ArtifactTypeValue.Video) return 0;
+  if (artifact.mediaOrigin?.type === ArtifactMediaOriginType.GeneratedVideo) return 2;
+  if (
+    artifact.legacyGeneratedVideoCandidate
+    && /^https:\/\//i.test(artifact.remoteUrl?.trim() || '')
+  ) {
+    return 1;
+  }
+  return 0;
+}
+
 export const shouldPreferArtifactForDisplay = (
   candidate: Artifact,
   current: Artifact,
@@ -183,6 +200,12 @@ export const shouldPreferArtifactForDisplay = (
     if (candidateProjectConfidence !== currentProjectConfidence) {
       return candidateProjectConfidence > currentProjectConfidence;
     }
+  }
+
+  const candidateGeneratedVideoOriginConfidence = getGeneratedVideoOriginConfidence(candidate);
+  const currentGeneratedVideoOriginConfidence = getGeneratedVideoOriginConfidence(current);
+  if (candidateGeneratedVideoOriginConfidence !== currentGeneratedVideoOriginConfidence) {
+    return candidateGeneratedVideoOriginConfidence > currentGeneratedVideoOriginConfidence;
   }
 
   const currentHasFileProtocol = Boolean(current.filePath && /^file:/i.test(current.filePath));
@@ -299,9 +322,6 @@ export function hasToolResultMediaAssets(toolResultMsg: CoworkMessage | undefine
     const url = typeof item.url === 'string' ? item.url.trim() : '';
     const filePath = typeof item.filePath === 'string' ? item.filePath.trim() : '';
     const localPath = typeof item.localPath === 'string' ? item.localPath.trim() : '';
-    if (item.type === 'video') {
-      return Boolean(filePath || localPath);
-    }
     return Boolean(url || filePath || localPath);
   });
 }
@@ -993,8 +1013,17 @@ export function parseToolResultMediaArtifacts(
   const details = toolResultMsg.metadata.toolResultDetails;
   if (!details || typeof details !== 'object' || Array.isArray(details)) return [];
 
-  const assets = (details as Record<string, unknown>).assets;
+  const detailsRecord = details as Record<string, unknown>;
+  const assets = detailsRecord.assets;
   if (!Array.isArray(assets)) return [];
+  const taskIdValue = detailsRecord.taskId;
+  const taskId = (typeof taskIdValue === 'string' || typeof taskIdValue === 'number')
+    && /^[1-9]\d*$/.test(String(taskIdValue).trim())
+    ? String(taskIdValue).trim()
+    : undefined;
+  const isLegacyGeneratedVideoResult = detailsRecord.mediaType === 'video'
+    || /^Saved generated videos?:/i.test(toolResultMsg.content.trim())
+    || /^Video generation succeeded\./i.test(toolResultMsg.content.trim());
 
   const artifacts: Artifact[] = [];
   for (let index = 0; index < assets.length; index++) {
@@ -1012,8 +1041,12 @@ export function parseToolResultMediaArtifacts(
       : typeof item.localPath === 'string' && item.localPath.trim()
         ? normalizeArtifactFilePath(item.localPath)
         : '';
-    if (artifactType === 'video' && !filePath) continue;
     if (!url && !filePath) continue;
+    const outputIndex = typeof item.outputIndex === 'number'
+      && Number.isInteger(item.outputIndex)
+      && item.outputIndex >= 0
+      ? item.outputIndex
+      : index;
 
     const filename = typeof item.filename === 'string' && item.filename.trim()
       ? item.filename.trim()
@@ -1030,7 +1063,19 @@ export function parseToolResultMediaArtifacts(
       content: filePath ? '' : url,
       fileName: filename,
       ...(filePath ? { filePath } : {}),
-      ...(filePath && url ? { remoteUrl: url } : {}),
+      ...(url ? { remoteUrl: url } : {}),
+      ...(artifactType === 'video' && taskId
+        ? {
+            mediaOrigin: {
+              type: ArtifactMediaOriginType.GeneratedVideo,
+              taskId,
+              outputIndex,
+            },
+          }
+        : {}),
+      ...(artifactType === 'video' && !taskId && url && isLegacyGeneratedVideoResult
+        ? { legacyGeneratedVideoCandidate: true }
+        : {}),
       source: 'tool',
       createdAt: toolResultMsg.timestamp || Date.now(),
     });

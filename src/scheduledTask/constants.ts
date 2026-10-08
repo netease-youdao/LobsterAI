@@ -26,6 +26,15 @@ export const PayloadKind = {
 } as const;
 export type PayloadKind = typeof PayloadKind[keyof typeof PayloadKind];
 
+// OpenClaw owns these payload kinds and creates their cron jobs internally.
+// They must not be exposed as editable LobsterAI scheduled tasks.
+export const OpenClawSystemPayloadKind = {
+  Heartbeat: 'heartbeat',
+  SkillCollectionReview: 'skillCollectionReview',
+} as const;
+export type OpenClawSystemPayloadKind =
+  typeof OpenClawSystemPayloadKind[keyof typeof OpenClawSystemPayloadKind];
+
 // ─── Delivery Mode ──────────────────────────────────────────────────────────
 export const DeliveryMode = {
   None: 'none',
@@ -80,6 +89,14 @@ export const TaskStatus = {
 } as const;
 export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];
 
+export const RunDeliveryStatus = {
+  Delivered: 'delivered',
+  NotDelivered: 'not-delivered',
+  NotRequested: 'not-requested',
+  Unknown: 'unknown',
+} as const;
+export type RunDeliveryStatus = typeof RunDeliveryStatus[keyof typeof RunDeliveryStatus];
+
 export const ScheduledTaskDataStatus = {
   Starting: 'starting',
   Loading: 'loading',
@@ -123,6 +140,7 @@ export const IpcChannel = {
   Delete: 'scheduledTask:delete',
   Toggle: 'scheduledTask:toggle',
   RunManually: 'scheduledTask:runManually',
+  ResendWeixinReport: 'scheduledTask:resendWeixinReport',
   Stop: 'scheduledTask:stop',
   ListRuns: 'scheduledTask:listRuns',
   CountRuns: 'scheduledTask:countRuns',

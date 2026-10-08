@@ -1,8 +1,8 @@
 /**
- * McpBridgeServer — lightweight HTTP callback endpoint for OpenClaw's ask-user-question plugin.
+ * McpBridgeServer — authenticated loopback callbacks shared by OpenClaw integrations.
  *
- * Provides a /askuser endpoint that OpenClaw calls to show user confirmation dialogs.
- * Binds to 127.0.0.1 only (local traffic).
+ * Provides AskUser, media-generation, decision-model, and in-app browser
+ * endpoints. Binds to 127.0.0.1 only and requires the per-process bridge secret.
  */
 import crypto from 'crypto';
 import http from 'http';
@@ -11,11 +11,13 @@ import net from 'net';
 import { serializeForLog } from './sanitizeForLog';
 
 const log = (level: string, msg: string) => {
-  const formatted = `[AskUser:HTTP][${level}] ${msg}`;
+  const formatted = `[McpBridge:HTTP][${level}] ${msg}`;
   if (level === 'ERROR') {
     console.error(formatted);
   } else if (level === 'WARN') {
     console.warn(formatted);
+  } else if (level === 'DEBUG') {
+    console.debug(formatted);
   } else {
     console.log(formatted);
   }
@@ -25,6 +27,7 @@ export type AskUserRequest = {
   requestId: string;
   sessionKey?: string;
   questions: Array<{
+    id?: string;
     question: string;
     header?: string;
     title?: string;
@@ -37,6 +40,7 @@ export type AskUserRequest = {
 export type AskUserResponse = {
   behavior: 'allow' | 'deny';
   answers?: Record<string, string>;
+  skippedQuestionIds?: string[];
 };
 
 type PendingAskUser = {
@@ -60,6 +64,36 @@ export type MediaGenerationResponse = {
   details?: Record<string, unknown>;
 };
 
+export type BrowserToolRequest = {
+  tool: string;
+  args: Record<string, unknown>;
+};
+
+export type BrowserToolResponse = {
+  content: Array<Record<string, unknown>>;
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+};
+
+export type DecisionToolRequest = {
+  args: Record<string, unknown>;
+  context: {
+    sessionKey: string;
+    toolCallId: string;
+  };
+};
+
+export type DecisionToolResponse = {
+  content: Array<{ type: string; text: string }>;
+  isError?: boolean;
+  details?: Record<string, unknown>;
+};
+
+export type DecisionToolHandler = (
+  request: DecisionToolRequest,
+  signal: AbortSignal,
+) => Promise<DecisionToolResponse>;
+
 export class McpBridgeServer {
   private server: http.Server | null = null;
   private _port: number | null = null;
@@ -68,6 +102,8 @@ export class McpBridgeServer {
   private onAskUserCallback: ((request: AskUserRequest) => void) | null = null;
   private onAskUserDismissCallback: ((requestId: string) => void) | null = null;
   private onMediaGenerationCallback: ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>) | null = null;
+  private onBrowserToolCallback: ((request: BrowserToolRequest) => Promise<BrowserToolResponse>) | null = null;
+  private onDecisionToolCallback: DecisionToolHandler | null = null;
 
   constructor(secret: string) {
     this.secret = secret;
@@ -84,6 +120,14 @@ export class McpBridgeServer {
 
   get mediaCallbackUrl(): string | null {
     return this._port ? `http://127.0.0.1:${this._port}/media-generation/tool` : null;
+  }
+
+  get browserCallbackUrl(): string | null {
+    return this._port ? `http://127.0.0.1:${this._port}/browser/tool` : null;
+  }
+
+  get decisionCallbackUrl(): string | null {
+    return this._port ? `http://127.0.0.1:${this._port}/decision/tool` : null;
   }
 
   /**
@@ -108,6 +152,18 @@ export class McpBridgeServer {
    */
   onMediaGeneration(callback: (request: MediaGenerationRequest) => Promise<MediaGenerationResponse>): void {
     this.onMediaGenerationCallback = callback;
+  }
+
+  onBrowserTool(callback: (request: BrowserToolRequest) => Promise<BrowserToolResponse>): void {
+    this.onBrowserToolCallback = callback;
+  }
+
+  /**
+   * Register a callback for decision_evaluate tool requests. The signal
+   * aborts when the plugin drops the connection (tool call cancelled).
+   */
+  onDecisionTool(callback: DecisionToolHandler): void {
+    this.onDecisionToolCallback = callback;
   }
 
   /**
@@ -239,6 +295,16 @@ export class McpBridgeServer {
       return;
     }
 
+    if (req.url?.startsWith('/browser/tool')) {
+      await this.handleBrowserTool(req, res);
+      return;
+    }
+
+    if (req.url?.startsWith('/decision/tool')) {
+      await this.handleDecisionTool(req, res);
+      return;
+    }
+
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not found' }));
   }
@@ -348,6 +414,91 @@ export class McpBridgeServer {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ content: [{ type: 'text', text: `Media generation error: ${errMsg}` }], isError: true }));
       }
+    }
+  }
+
+  private async handleBrowserTool(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const startedAt = Date.now();
+    try {
+      const body = await this.readBody(req);
+      const request = JSON.parse(body) as BrowserToolRequest;
+      if (typeof request.tool !== 'string' || !request.tool.trim()) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          content: [{ type: 'text', text: 'Missing browser tool name.' }],
+          isError: true,
+        }));
+        return;
+      }
+      if (!this.onBrowserToolCallback) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          content: [{ type: 'text', text: 'LobsterAI in-app browser is not ready.' }],
+          isError: true,
+        }));
+        return;
+      }
+
+      const result = await this.onBrowserToolCallback({
+        tool: request.tool,
+        args: request.args && typeof request.args === 'object' && !Array.isArray(request.args)
+          ? request.args
+          : {},
+      });
+      log('DEBUG', `Browser tool "${request.tool}" completed in ${Date.now() - startedAt}ms`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log('ERROR', `Browser tool request failed after ${Date.now() - startedAt}ms: ${message}`);
+      if (!res.writableEnded) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          content: [{ type: 'text', text: `LobsterAI browser error: ${message}` }],
+          isError: true,
+        }));
+      }
+    }
+  }
+
+  private async handleDecisionTool(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    res.on('close', () => {
+      if (!res.writableFinished) controller.abort();
+    });
+    const reply = (status: number, payload: DecisionToolResponse) => {
+      if (res.writableEnded || res.destroyed) return;
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(payload));
+    };
+
+    try {
+      const body = await this.readBody(req);
+      const request = JSON.parse(body) as Partial<DecisionToolRequest> | null;
+      const args = request?.args;
+      if (!args || typeof args !== 'object' || Array.isArray(args)) {
+        reply(400, { content: [{ type: 'text', text: 'Missing decision tool arguments.' }], isError: true });
+        return;
+      }
+      if (!this.onDecisionToolCallback) {
+        reply(503, { content: [{ type: 'text', text: 'The decision model service is not ready yet.' }], isError: true });
+        return;
+      }
+
+      const result = await this.onDecisionToolCallback({
+        args,
+        context: {
+          sessionKey: typeof request?.context?.sessionKey === 'string' ? request.context.sessionKey : '',
+          toolCallId: typeof request?.context?.toolCallId === 'string' ? request.context.toolCallId : '',
+        },
+      }, controller.signal);
+      log('DEBUG', `Decision tool completed in ${Date.now() - startedAt}ms with isError=${result.isError ?? false}`);
+      reply(200, result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log('ERROR', `Decision tool request failed after ${Date.now() - startedAt}ms: ${message}`);
+      reply(500, { content: [{ type: 'text', text: `Decision model error: ${message}` }], isError: true });
     }
   }
 

@@ -1,6 +1,7 @@
 import {
   CheckCircleIcon,
   ChevronRightIcon,
+  ExclamationTriangleIcon,
   MinusCircleIcon,
   XCircleIcon,
   XMarkIcon,
@@ -9,6 +10,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import { TaskStatus } from '../../../scheduledTask/constants';
+import { hasRunDeliveryFailure } from '../../../scheduledTask/runDelivery';
+import { createRunFilter } from '../../../scheduledTask/runFilter';
 import type { RunFilter, ScheduledTask, ScheduledTaskRun } from '../../../scheduledTask/types';
 import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
@@ -62,15 +65,6 @@ const RunStatusIcon: React.FC<{ status: TaskStatus }> = ({ status }) => {
   return <MinusCircleIcon className="h-4 w-4 shrink-0 text-yellow-500" />;
 };
 
-function applyClientFilter(runs: ScheduledTaskRun[], filter: RunFilter): ScheduledTaskRun[] {
-  return runs.filter(run => {
-    if (filter.status && run.status !== filter.status) return false;
-    if (filter.startDate && run.startedAt < filter.startDate + 'T00:00:00') return false;
-    if (filter.endDate && run.startedAt > filter.endDate + 'T23:59:59') return false;
-    return true;
-  });
-}
-
 const EMPTY_FILTER: RunFilter = {};
 
 const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ task, runs }) => {
@@ -85,7 +79,7 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ task, runs }) => {
   const hasActiveFilter = Boolean(filter.startDate || filter.endDate || filter.status);
 
   const displayedRuns = useMemo(
-    () => (hasActiveFilter ? applyClientFilter(runs, filter) : runs),
+    () => (hasActiveFilter ? runs.filter(createRunFilter(filter)) : runs),
     [runs, filter, hasActiveFilter],
   );
   const taskAnalyticsParams = useMemo(
@@ -218,7 +212,8 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ task, runs }) => {
       ) : (
         <div className="divide-y divide-border/50">
           {displayedRuns.map(run => {
-            const canView = Boolean(run.sessionId || run.sessionKey || run.summary || run.error);
+            const deliveryFailed = hasRunDeliveryFailure(run, task.delivery);
+            const canView = Boolean(run.sessionId || run.sessionKey || run.summary || run.error || deliveryFailed);
             return (
               <button
                 key={run.id}
@@ -234,10 +229,18 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ task, runs }) => {
                 }}
                 className="flex w-full items-center gap-3 rounded-md px-2 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-surface-raised/60 disabled:cursor-default"
               >
-                <RunStatusIcon status={run.status} />
+                {deliveryFailed
+                  ? <ExclamationTriangleIcon className="h-4 w-4 shrink-0 text-amber-500" />
+                  : <RunStatusIcon status={run.status} />}
                 <span className="shrink-0 text-sm text-foreground">
                   {formatDateTime(new Date(run.startedAt))}
                 </span>
+                {deliveryFailed && (
+                  <span className="min-w-0 flex-1 truncate text-xs text-amber-600 dark:text-amber-400">
+                    {i18nService.t(run.status === TaskStatus.Success
+                      ? 'scheduledTasksReportReadyDeliveryFailed' : 'scheduledTasksDeliveryFailed')}
+                  </span>
+                )}
                 {run.status === 'error' && run.error && (
                   <span
                     className="min-w-0 flex-1 truncate text-xs text-red-500"
@@ -278,6 +281,8 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ task, runs }) => {
           sessionKey={viewingRun.sessionKey}
           runSummary={viewingRun.summary}
           runError={viewingRun.error}
+          run={viewingRun}
+          task={task}
           onClose={() => setViewingRun(null)}
         />
       )}

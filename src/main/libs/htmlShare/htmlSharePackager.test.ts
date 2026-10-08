@@ -4,6 +4,10 @@ import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, test } from 'vitest';
 
+import {
+  HtmlShareErrorCode,
+  HtmlShareFailureKind,
+} from '../../../shared/htmlShare/constants';
 import { packageHtmlFile } from './htmlSharePackager';
 
 const tempRoots: string[] = [];
@@ -177,5 +181,23 @@ describe('htmlSharePackager', () => {
       'Blocked referenced resource: .openclaw/state.js',
       'Blocked referenced resource: memory/day.md',
     ]);
+  });
+
+  test('returns a structured failure when a referenced file exceeds the existing limit', async () => {
+    const root = await createTempRoot();
+    const assetPath = path.join(root, 'large.png');
+    await writeFile(path.join(root, 'index.html'), '<img src="large.png">');
+    await writeFile(assetPath, Buffer.from([0]));
+    await fs.promises.truncate(assetPath, 10 * 1024 * 1024 + 1);
+
+    await expect(packageHtmlFile(path.join(root, 'index.html'))).rejects.toMatchObject({
+      code: HtmlShareErrorCode.TooLarge,
+      failureKind: HtmlShareFailureKind.FileTooLarge,
+      details: {
+        fileName: 'large.png',
+        limitBytes: 10 * 1024 * 1024,
+        actualBytes: 10 * 1024 * 1024 + 1,
+      },
+    });
   });
 });

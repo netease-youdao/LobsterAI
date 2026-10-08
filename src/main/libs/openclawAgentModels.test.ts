@@ -37,9 +37,9 @@ describe('buildAgentEntry', () => {
 
     expect(result).toMatchObject({
       id: 'main',
-      default: true,
       model: { primary: 'lobsterai-server/deepseek-v3.2' },
     });
+    expect(result).not.toHaveProperty('default');
   });
 
   test('rewrites stale OpenAI Codex model.primary when available providers moved it', () => {

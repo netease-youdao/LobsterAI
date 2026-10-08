@@ -7,11 +7,13 @@ import { McpIpcChannel } from '../../shared/mcp/constants';
 import { isComputerUseKitInstalled } from '../computerUse/computerUseKit';
 import { resolveComputerUseMcpServer } from '../computerUse/computerUseMcpServer';
 import { installComputerUseRuntime } from '../computerUse/computerUseRuntime';
-import { resolveDshCodeMcpServerForConfig } from '../ipcHandlers/dsh/handlers';
 import { getElectronNodeRuntimePath } from '../libs/coworkUtil';
 import {
   type AskUserRequest,
   type AskUserResponse,
+  type BrowserToolRequest,
+  type BrowserToolResponse,
+  type DecisionToolHandler,
   McpBridgeServer,
   type MediaGenerationRequest,
   type MediaGenerationResponse,
@@ -49,6 +51,10 @@ export class McpRuntime {
   private mediaGenerationHandler:
     | ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>)
     | null = null;
+  private browserToolHandler:
+    | ((request: BrowserToolRequest) => Promise<BrowserToolResponse>)
+    | null = null;
+  private decisionToolHandler: DecisionToolHandler | null = null;
 
   constructor(private readonly deps: McpRuntimeDeps) {}
 
@@ -68,7 +74,7 @@ export class McpRuntime {
         reason => {
           this.deps.syncOpenClawConfig({
             reason,
-            expectedImpact: OpenClawConfigImpact.Restart,
+            expectedImpact: OpenClawConfigImpact.Sync,
           }).catch(err =>
             console.error('[MCP] config sync error after launch resolution:', err),
           );
@@ -88,12 +94,31 @@ export class McpRuntime {
     this.mediaGenerationHandler = handler;
   }
 
+  setBrowserToolHandler(
+    handler: (request: BrowserToolRequest) => Promise<BrowserToolResponse>,
+  ): void {
+    this.browserToolHandler = handler;
+    this.bridgeServer?.onBrowserTool(handler);
+  }
+
+  setDecisionToolHandler(handler: DecisionToolHandler): void {
+    this.decisionToolHandler = handler;
+  }
+
   getAskUserCallbackUrl(): string | null {
     return this.bridgeServer?.askUserCallbackUrl ?? null;
   }
 
   getMediaCallbackUrl(): string | null {
     return this.bridgeServer?.mediaCallbackUrl ?? null;
+  }
+
+  getBrowserCallbackUrl(): string | null {
+    return this.bridgeServer?.browserCallbackUrl ?? null;
+  }
+
+  getDecisionCallbackUrl(): string | null {
+    return this.bridgeServer?.decisionCallbackUrl ?? null;
   }
 
   getBridgeSecret(): string {
@@ -181,6 +206,20 @@ export class McpRuntime {
       }
       return await this.mediaGenerationHandler(request);
     });
+
+    this.bridgeServer.onDecisionTool(async (request, signal) => {
+      if (!this.decisionToolHandler) {
+        return {
+          content: [{ type: 'text', text: 'The decision model service is not ready yet.' }],
+          isError: true,
+        };
+      }
+      return await this.decisionToolHandler(request, signal);
+    });
+
+    if (this.browserToolHandler) {
+      this.bridgeServer.onBrowserTool(this.browserToolHandler);
+    }
   }
 
   async askUserInternal(
@@ -341,16 +380,6 @@ export class McpRuntime {
     if (computerUseServer) {
       resolved.push(computerUseServer);
       builtInCount++;
-    }
-
-    try {
-      const dshCodeServer = await resolveDshCodeMcpServerForConfig(this.deps.getStore());
-      if (dshCodeServer) {
-        resolved.push(dshCodeServer);
-        builtInCount++;
-      }
-    } catch (err) {
-      console.warn('[MCP] failed to resolve built-in dsh-code server (non-fatal):', err);
     }
 
     console.log(

@@ -266,7 +266,6 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
                 {entry.status === CoworkBtwStatus.Pending && (
                   <ActivityIndicator
                     fingerprint={entry.runId}
-                    hasContent={false}
                     startTimestamp={entry.createdAt}
                   />
                 )}

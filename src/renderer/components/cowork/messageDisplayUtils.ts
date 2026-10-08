@@ -13,6 +13,7 @@ import { hasToolResultMediaAssets, normalizeFilePathForDedup } from '../../servi
 import { i18nService } from '../../services/i18n';
 import type { Artifact } from '../../types/artifact';
 import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
+import { ActivityStepKind } from './constants';
 import type { MediaPollingGroup } from './MediaPollingIndicator';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -46,6 +47,17 @@ export type ConversationTurn = {
   id: string;
   userMessage: CoworkMessage | null;
   assistantItems: AssistantTurnItem[];
+  /**
+   * Set on turns without their own user message: when the work they continue
+   * started — the previous turn after a context compaction split, or a turn
+   * that began before the loaded message window.
+   */
+  inheritedStartTimestamp?: number | null;
+};
+
+export type BuildConversationTurnsOptions = {
+  /** For a partial message window: start of the turn its first message belongs to. */
+  leadingTurnStartTimestamp?: number | null;
 };
 
 export const getTurnMessageIds = (turn: ConversationTurn): Set<string> => {
@@ -330,6 +342,13 @@ export const getToolInputSummary = (
       return getToolInputString(input, ['description', 'task']);
     case 'webfetch':
       return getToolInputString(input, ['url']);
+    case 'image':
+      return getToolInputString(input, ['path', 'file_path', 'filePath', 'url']);
+    case 'browser': {
+      const action = getToolInputString(input, ['action']);
+      const target = getToolInputString(input, ['url', 'name', 'selector', 'text']);
+      return [action, target ? truncatePreview(target, 60) : null].filter(Boolean).join(' · ') || null;
+    }
     case 'process': {
       const action = getToolInputString(input, ['action']);
       const sessionId = getToolInputString(input, ['sessionId', 'session_id']);
@@ -424,6 +443,34 @@ export const getActivityIndicatorStatusText = (
     return i18nService.t('coworkModelResponseWaitingLong');
   }
   return i18nService.t(hasContent ? 'coworkProcessing' : 'coworkThinking');
+};
+
+/**
+ * Phase words shown while the model is silent, rotated by the activity indicator so the
+ * status keeps moving instead of sitting on "Thinking" for a minute. The first entry is
+ * always the plain thinking label, so the initial render matches getActivityIndicatorStatusText.
+ */
+export const getThinkingPhaseLabels = (): string[] => {
+  const phases = i18nService.t('coworkThinkingPhases')
+    .split('|')
+    .map(phase => phase.trim())
+    .filter(Boolean);
+  return phases.length > 0 ? phases : [i18nService.t('coworkThinking')];
+};
+
+export const isToolGroupSettled = (group: ToolGroupItem): boolean => {
+  const meta = group.toolResult?.metadata;
+  if (!group.toolResult) return false;
+  return !(meta?.isStreaming && !meta?.isFinal);
+};
+
+/** Tool steps of this turn that already have a final result; shown next to the live timer. */
+export const countTurnCompletedSteps = (turn: ConversationTurn): number => {
+  let count = 0;
+  for (const item of turn.assistantItems) {
+    if (item.type === 'tool_group' && isToolGroupSettled(item.group)) count += 1;
+  }
+  return count;
 };
 
 export const formatElapsedDuration = (elapsedMs: number): string => {
@@ -528,13 +575,12 @@ export const hasRenderableAssistantContent = (turn: ConversationTurn): boolean =
 );
 
 // True when the turn contains an element that carries its own running
-// animation (pulsing pending-tool row, media generation lottie, streaming
-// thinking block). The turn-level activity indicator stays hidden for these
-// so at most one element animates at a time.
+// state (pending or still-streaming tool step, media generation, streaming
+// thinking block). Kept in step with ActivityGroupBlock's live-item check.
 export const turnHasSelfIndicatingActivity = (turn: ConversationTurn): boolean =>
   turn.assistantItems.some(item => {
     if (item.type === 'tool_group') {
-      return !item.group.toolResult
+      return !isToolGroupSettled(item.group)
         || isMediaGenerateRunning(item.group)
         || isMediaStatusPollRunning(item.group);
     }
@@ -543,10 +589,11 @@ export const turnHasSelfIndicatingActivity = (turn: ConversationTurn): boolean =
       && Boolean(item.message.metadata?.isStreaming);
   });
 
-// Earliest message timestamp in the turn — the stable start time for the
-// activity indicator's elapsed counter. Falls back across the user message
-// and assistant items so orphan turns (e.g. after context compaction) keep
-// a stable start across remounts; null when the turn has no timestamps yet.
+// Earliest timestamp of the turn — the stable start time for the activity
+// indicator's elapsed counter and the duration line. Orphan turns (after a
+// context compaction split, or at the start of a partial message window)
+// inherit the start of the work they continue, so the counter neither resets
+// nor depends on how much history is loaded; null without any timestamps.
 export const getTurnStartTimestamp = (turn: ConversationTurn): number | null => {
   let earliest: number | null = null;
   const consider = (value: unknown) => {
@@ -554,6 +601,7 @@ export const getTurnStartTimestamp = (turn: ConversationTurn): number | null => 
       earliest = earliest == null ? value : Math.min(earliest, value);
     }
   };
+  consider(turn.inheritedStartTimestamp);
   consider(turn.userMessage?.timestamp);
   for (const item of turn.assistantItems) {
     if (item.type === 'tool_group') {
@@ -585,6 +633,18 @@ export const getTurnEndTimestamp = (turn: ConversationTurn): number | null => {
     consider(item.message.timestamp);
   }
   return latest;
+};
+
+// Failed tool steps in a turn. Reported to analytics only: the folded
+// duration line stays neutral, and the expanded rows mark each failure.
+export const countTurnFailedSteps = (turn: ConversationTurn): number => {
+  let failed = 0;
+  for (const item of turn.assistantItems) {
+    if (item.type !== 'tool_group') continue;
+    const metadata = item.group.toolResult?.metadata;
+    if (metadata?.isError || metadata?.error) failed += 1;
+  }
+  return failed;
 };
 
 /** Localized duration for the collapsed-process line, e.g. "21分钟 45秒" / "21m 45s". */
@@ -677,17 +737,24 @@ export const buildDisplayItems = (messages: CoworkMessage[]): DisplayItem[] => {
   return items;
 };
 
-export const buildConversationTurns = (items: DisplayItem[]): ConversationTurn[] => {
+export const buildConversationTurns = (
+  items: DisplayItem[],
+  options: BuildConversationTurnsOptions = {},
+): ConversationTurn[] => {
   const turns: ConversationTurn[] = [];
   let currentTurn: ConversationTurn | null = null;
   let orphanIndex = 0;
 
   const ensureTurn = (anchorMessageId?: string): ConversationTurn => {
     if (currentTurn) return currentTurn;
+    const previousTurn = turns[turns.length - 1];
     const orphanTurn: ConversationTurn = {
       id: anchorMessageId ? `orphan-${anchorMessageId}` : `orphan-${orphanIndex++}`,
       userMessage: null,
       assistantItems: [],
+      inheritedStartTimestamp: previousTurn
+        ? getTurnStartTimestamp(previousTurn)
+        : options.leadingTurnStartTimestamp ?? null,
     };
     turns.push(orphanTurn);
     currentTurn = orphanTurn;
@@ -1201,11 +1268,18 @@ export type ConsolidatedRenderChunk =
   | { kind: 'activity_group'; entries: ActivityChunkEntry[] };
 
 /**
- * Every run of consecutive work items collapses, even a run of one, so
- * assistant turns read as summary lines interleaved with text (Claude
- * Code app style) instead of mixing collapsed groups with raw tool rows.
+ * Every run of consecutive work items becomes one activity run, even a run
+ * of one, so assistant turns read as light step lines interleaved with text
+ * instead of mixing activity runs with raw tool rows.
  */
 export const ACTIVITY_GROUP_MIN_ITEMS = 1;
+
+/** Stable React key for a work item, shared by a run and its step lines. */
+export const getConsolidatedItemKey = (item: ConsolidatedItem): string => {
+  if (item.type === 'media_polling_group') return `media-${item.group.taskId}`;
+  if (item.type === 'tool_group') return item.group.toolUse.id;
+  return item.message.id;
+};
 
 /**
  * Work items that read as intermediate agent activity rather than answer
@@ -1354,12 +1428,14 @@ const countActivityCategories = (items: ConsolidatedItem[]): ActivityCategoryCou
 /**
  * Natural-language summary for a collapsed activity group, e.g.
  * "运行了 3 个命令、读取了 2 个文件" / "Ran 3 commands, read 2 files".
- * A single-step group shows the concrete action ("Read App.tsx") instead.
+ * A group with a single step shows that concrete action ("Read App.tsx")
+ * instead, even with thoughts folded around it; "调用了 1 次工具" would
+ * only hide which tool it was.
  */
 export const getActivityGroupHeaderLabel = (items: ConsolidatedItem[]): string => {
-  if (items.length === 1 && items[0].type !== 'assistant') {
-    const step = getActivityStepDisplay(items[0]);
-    return step.summary ? `${step.name} ${step.summary}` : step.name;
+  const steps = items.filter((item) => item.type !== 'assistant');
+  if (steps.length === 1) {
+    return getActivityStepDoneLabel(steps[0]);
   }
   const counts = countActivityCategories(items);
   const segment = (count: number, oneKey: string, manyKey: string): string =>
@@ -1385,13 +1461,39 @@ export const getActivityGroupHeaderLabel = (items: ConsolidatedItem[]): string =
   return joined.charAt(0).toUpperCase() + joined.slice(1);
 };
 
+const SHELL_COMMAND_DESCRIPTION_MAX_CHARS = 80;
+
+/**
+ * Plain-language summary the model attached to a shell call (the exec
+ * tool's `description` argument, e.g. "检查 Node.js 版本"). Step labels show
+ * it instead of the raw command, which reads as noise to office users; the
+ * command itself stays one click away in the step detail.
+ */
+export const getShellCommandDescription = (
+  rawToolName: string | undefined,
+  toolInput: Record<string, unknown> | undefined,
+): string | null => {
+  if (!isBashLikeToolName(rawToolName) || !toolInput) return null;
+  const description = toTrimmedString(toolInput.description);
+  return description
+    ? truncatePreview(description.replace(/\s+/g, ' '), SHELL_COMMAND_DESCRIPTION_MAX_CHARS)
+    : null;
+};
+
 export type ActivityStepDisplay = { name: string; summary: string | null };
 
-/** Compact one-line row label for a tool step; file tools show just the basename. */
+/**
+ * Compact one-line row label for a tool step; file tools show just the
+ * basename, and a described shell call reads as its summary alone.
+ */
 export const getToolStepDisplay = (
   rawToolName: string | undefined,
   toolInput: Record<string, unknown> | undefined,
 ): ActivityStepDisplay => {
+  const commandDescription = getShellCommandDescription(rawToolName, toolInput);
+  if (commandDescription) {
+    return { name: commandDescription, summary: null };
+  }
   const name = getToolDisplayName(rawToolName);
   let summary = getToolInputSummary(rawToolName, toolInput);
   if (summary) {
@@ -1423,7 +1525,8 @@ export const getActivityStepDisplay = (item: ConsolidatedItem): ActivityStepDisp
 
 /**
  * Live header text while the current step is still running: a verb phrase
- * mirroring the Claude Code app ("Editing Settings.tsx", "正在运行 npm test").
+ * mirroring the Claude Code app ("Editing Settings.tsx", "正在读取 notes.md");
+ * shell steps show the model's plain-language summary of the command.
  */
 export const getActivityCurrentActionText = (item: ConsolidatedItem): string => {
   if (item.type === 'assistant') {
@@ -1448,15 +1551,25 @@ export const getActivityCurrentActionText = (item: ConsolidatedItem): string => 
     if (normalized === 'sessionsspawn') {
       return i18nService.t('coworkActivityLiveSpawnSubagent');
     }
-    const { summary } = getToolStepDisplay(toolName, item.group.toolUse.metadata?.toolInput);
+    // While its arguments stream the file is not named yet; the step reads
+    // as the write or edit it is, matching the status line below the turn.
+    if (item.group.toolUse.metadata?.isGenerating) {
+      return i18nService.t(
+        WRITE_TOOL_NAMES.has(normalized) ? 'coworkActivityLiveWriteGeneric' : 'coworkActivityLiveEditGeneric',
+      );
+    }
+    const toolInput = item.group.toolUse.metadata?.toolInput;
+    // A shell step never names its raw command here; that lives in the detail.
+    if (isBashLikeToolName(toolName)) {
+      return getShellCommandDescription(toolName, toolInput)
+        ?? i18nService.t('coworkActivityLiveCommandGeneric');
+    }
+    const { summary } = getToolStepDisplay(toolName, toolInput);
     const verb = (templateKey: string, genericKey: string): string => (
       summary
         ? i18nService.t(templateKey).replace('{target}', summary)
         : i18nService.t(genericKey)
     );
-    if (isBashLikeToolName(toolName)) {
-      return verb('coworkActivityLiveCommand', 'coworkActivityLiveCommandGeneric');
-    }
     if (READ_TOOL_NAMES.has(normalized)) {
       return verb('coworkActivityLiveRead', 'coworkActivityLiveReadGeneric');
     }
@@ -1470,4 +1583,243 @@ export const getActivityCurrentActionText = (item: ConsolidatedItem): string => 
   }
   const { name, summary } = getActivityStepDisplay(item);
   return summary ? `${name} ${summary}` : name;
+};
+
+/** Live +N/-M counts of a tool call whose arguments are still being generated. */
+export const getLiveEditDiff = (message: CoworkMessage): { added: number; removed: number } | null => {
+  if (!message.metadata?.isGenerating) return null;
+  const diff = message.metadata.liveEditDiff;
+  if (!diff || typeof diff.added !== 'number' || typeof diff.removed !== 'number') return null;
+  return { added: diff.added, removed: diff.removed };
+};
+
+export type ActivityLiveDetail =
+  | { kind: 'reasoning'; text: string }
+  | { kind: 'output'; text: string };
+
+const ACTIVITY_LIVE_DETAIL_MAX_CHARS = 220;
+
+const getTextTail = (value: string, maxChars: number): string => {
+  const collapsed = value.replace(/\s+/g, ' ').trim();
+  return collapsed.length <= maxChars ? collapsed : `…${collapsed.slice(-maxChars)}`;
+};
+
+const getLastNonEmptyLine = (value: string): string => {
+  const lines = value.split('\n');
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index].trim();
+    if (line) return line;
+  }
+  return '';
+};
+
+/**
+ * Muted line under the live activity header showing what the running step
+ * is doing right now: the tail of streaming reasoning, or the latest line a
+ * command printed. It keeps the screen moving through the two longest
+ * silent stretches of a run. Null when the header already says it all.
+ */
+export const getActivityLiveDetail = (item: ConsolidatedItem): ActivityLiveDetail | null => {
+  if (item.type === 'assistant') {
+    if (!item.message.metadata?.isThinking) return null;
+    const text = getTextTail(item.message.content, ACTIVITY_LIVE_DETAIL_MAX_CHARS);
+    return text ? { kind: 'reasoning', text } : null;
+  }
+  if (item.type !== 'tool_group' || !item.group.toolResult) return null;
+  const rawName = item.group.toolUse.metadata?.toolName;
+  if (!isBashLikeToolName(typeof rawName === 'string' ? rawName : undefined)) return null;
+  const line = getLastNonEmptyLine(normalizeToolResultText(getToolResultRawText(item.group.toolResult)));
+  return line ? { kind: 'output', text: truncatePreview(line, ACTIVITY_LIVE_DETAIL_MAX_CHARS) } : null;
+};
+
+/**
+ * Whether a work item still carries its own running state: a tool step with
+ * no result or a result that is still streaming, media generation in flight,
+ * or an assistant message that is still streaming.
+ */
+export const isActivityItemLive = (item: ConsolidatedItem): boolean => {
+  if (item.type === 'tool_group') {
+    return !isToolGroupSettled(item.group)
+      || isMediaGenerateRunning(item.group)
+      || isMediaStatusPollRunning(item.group);
+  }
+  if (item.type === 'media_polling_group') {
+    return !item.group.isComplete;
+  }
+  return item.type === 'assistant' && Boolean(item.message.metadata?.isStreaming);
+};
+
+/**
+ * Identity and length of a still-streaming thought or reply, or null for
+ * anything else. It changes whenever that text grows, so a stall timer keyed
+ * on it measures how long the model has gone without writing more of it.
+ */
+export const getStreamingTextSignature = (item: ConsolidatedItem | null): string | null => {
+  if (!item || item.type !== 'assistant' || !item.message.metadata?.isStreaming) return null;
+  return `${item.message.id}:${item.message.content.length}`;
+};
+
+/**
+ * A file step shown while its arguments were still streaming whose tool never
+ * started: the run stopped mid-generation, so nothing was written. Once the
+ * turn is no longer running it has nothing left to show.
+ */
+export const isAbandonedToolPlaceholder = (item: AssistantTurnItem): boolean => (
+  item.type === 'tool_group'
+  && item.group.toolUse.metadata?.isGenerating === true
+  && !item.group.toolResult
+);
+
+const FILE_SEARCH_TOOL_NAMES = new Set(['glob', 'grep', 'find', 'ls', 'search', 'searchfiles', 'filesearch', 'listdir']);
+const WEB_SEARCH_TOOL_NAMES = new Set(['websearch', 'searchweb']);
+const WEB_FETCH_TOOL_NAMES = new Set(['webfetch', 'fetch', 'fetchurl', 'fetchpage']);
+const BROWSER_TOOL_NAMES = new Set(['browser', 'agentbrowser']);
+const MEMORY_TOOL_NAMES = new Set(['memorysearch', 'memoryget']);
+const ASK_USER_TOOL_NAMES = new Set(['askuser', 'askuserquestion', 'btw']);
+const SUBAGENT_IO_TOOL_NAMES = new Set(['sessionssend', 'sessionsread', 'sessionshistory', 'sessionslist', 'sessionsresume']);
+const MESSAGE_TOOL_NAMES = new Set(['message', 'sendmessage']);
+const IMAGE_VIEW_TOOL_NAMES = new Set(['image', 'viewimage']);
+const FILE_PATH_INPUT_KEYS = ['file_path', 'path', 'filePath', 'target_file', 'targetFile'];
+
+/** Reads under a skills directory are the agent studying its instructions, not the user's files. */
+const isSkillInstructionPath = (value: string | null): boolean => (
+  value !== null && /(^|[\\/])skills[\\/]/i.test(value)
+);
+
+/**
+ * Short phrase for the status line describing what the running step is
+ * doing right now ("Running a command", "Reading skill instructions").
+ * Unlike getActivityCurrentActionText it never names the target, because
+ * the activity header above already does.
+ */
+export const getActivityLiveStatusText = (item: ConsolidatedItem): string => {
+  if (item.type === 'assistant') {
+    return i18nService.t(item.message.metadata?.isThinking ? 'coworkThinking' : 'coworkActivityStatusReplying');
+  }
+  if (item.type === 'media_polling_group') {
+    return i18nService.t(
+      normalizeToolName(item.group.toolName) === 'lobsteraivideogenerate' ? 'mediaGeneratingVideo' : 'mediaGeneratingImage',
+    );
+  }
+  if (item.type !== 'tool_group') {
+    return i18nService.t('coworkActivityStatusTool');
+  }
+  const rawName = item.group.toolUse.metadata?.toolName;
+  const toolName = typeof rawName === 'string' ? rawName : undefined;
+  const normalized = toolName ? normalizeToolName(toolName) : '';
+  if (normalized === 'lobsteraivideogenerate') {
+    return i18nService.t('mediaGeneratingVideo');
+  }
+  if (normalized === 'lobsteraiimagegenerate') {
+    return i18nService.t('mediaGeneratingImage');
+  }
+  const toolInput = item.group.toolUse.metadata?.toolInput;
+  if (item.group.toolUse.metadata?.isGenerating) {
+    return i18nService.t(
+      WRITE_TOOL_NAMES.has(normalized) ? 'coworkActivityStatusWriting' : 'coworkActivityStatusEditing',
+    );
+  }
+  if (isBashLikeToolName(toolName)) return i18nService.t('coworkActivityStatusCommand');
+  if (normalized === 'process') return i18nService.t('coworkActivityStatusCommandOutput');
+  if (READ_TOOL_NAMES.has(normalized)) {
+    const path = toolInput ? getToolInputString(toolInput, FILE_PATH_INPUT_KEYS) : null;
+    return i18nService.t(isSkillInstructionPath(path) ? 'coworkActivityStatusReadingSkill' : 'coworkActivityStatusReading');
+  }
+  if (WRITE_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusWriting');
+  if (EDIT_ONLY_TOOL_NAMES.has(normalized) || normalized === 'applypatch') return i18nService.t('coworkActivityStatusEditing');
+  if (FILE_SEARCH_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusSearchingFiles');
+  if (WEB_SEARCH_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusSearchingWeb');
+  if (WEB_FETCH_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusFetchingWeb');
+  if (BROWSER_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusBrowser');
+  if (MEMORY_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusMemory');
+  if (isTodoWriteToolName(toolName)) return i18nService.t('coworkActivityStatusTodo');
+  if (ASK_USER_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusAsking');
+  if (isCronToolName(toolName)) return i18nService.t('coworkActivityStatusCron');
+  if (normalized === 'sessionsspawn') return i18nService.t('coworkActivityLiveSpawnSubagent');
+  if (normalized === 'sessionsyield') return i18nService.t('coworkActivityLiveWaitSubagents');
+  if (SUBAGENT_IO_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusSubagentIo');
+  if (MESSAGE_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusMessaging');
+  if (IMAGE_VIEW_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusViewingImage');
+  return i18nService.t('coworkActivityStatusTool');
+};
+
+const MEDIA_GENERATE_TOOL_NAMES = new Set(['lobsteraivideogenerate', 'lobsteraiimagegenerate']);
+const SUBAGENT_TOOL_NAMES = new Set(['sessionsspawn', 'sessionsyield', ...SUBAGENT_IO_TOOL_NAMES]);
+
+/** Which icon a step line leads with; thinking lines carry none. */
+export const getActivityStepKind = (item: ConsolidatedItem): ActivityStepKind => {
+  if (item.type === 'assistant') return ActivityStepKind.Thinking;
+  if (item.type === 'media_polling_group') return ActivityStepKind.Media;
+  if (item.type !== 'tool_group') return ActivityStepKind.Tool;
+  const rawName = item.group.toolUse.metadata?.toolName;
+  const toolName = typeof rawName === 'string' ? rawName : undefined;
+  const normalized = toolName ? normalizeToolName(toolName) : '';
+  if (isBashLikeToolName(toolName) || normalized === 'process') return ActivityStepKind.Command;
+  if (READ_TOOL_NAMES.has(normalized)) return ActivityStepKind.Read;
+  if (EDIT_TOOL_NAMES.has(normalized) || normalized === 'applypatch') return ActivityStepKind.Edit;
+  if (FILE_SEARCH_TOOL_NAMES.has(normalized) || MEMORY_TOOL_NAMES.has(normalized)) return ActivityStepKind.Search;
+  if (
+    WEB_SEARCH_TOOL_NAMES.has(normalized)
+    || WEB_FETCH_TOOL_NAMES.has(normalized)
+    || BROWSER_TOOL_NAMES.has(normalized)
+  ) {
+    return ActivityStepKind.Web;
+  }
+  if (MEDIA_GENERATE_TOOL_NAMES.has(normalized) || IMAGE_VIEW_TOOL_NAMES.has(normalized)) return ActivityStepKind.Media;
+  if (SUBAGENT_TOOL_NAMES.has(normalized)) return ActivityStepKind.Agent;
+  if (isTodoWriteToolName(toolName)) return ActivityStepKind.Todo;
+  if (isCronToolName(toolName)) return ActivityStepKind.Schedule;
+  return ActivityStepKind.Tool;
+};
+
+/**
+ * Icon for a folded run's summary line: the kind its label leads with
+ * (commands, then file reads, then edits, as getActivityGroupHeaderLabel
+ * orders them), else the first other tool step's kind.
+ */
+export const getActivityGroupStepKind = (items: ConsolidatedItem[]): ActivityStepKind => {
+  const kinds = items.map(getActivityStepKind);
+  const leadKind = [ActivityStepKind.Command, ActivityStepKind.Read, ActivityStepKind.Edit]
+    .find((kind) => kinds.includes(kind));
+  return leadKind ?? kinds.find((kind) => kind !== ActivityStepKind.Thinking) ?? ActivityStepKind.Thinking;
+};
+
+/**
+ * Past-tense phrase for one finished step on its own line ("读取了 App.tsx",
+ * "Read App.tsx"): the settled counterpart of getActivityCurrentActionText.
+ */
+export const getActivityStepDoneLabel = (item: ConsolidatedItem): string => {
+  if (item.type === 'assistant') {
+    return i18nService.t('coworkActivityThoughtProcess');
+  }
+  if (item.type === 'media_polling_group') {
+    return i18nService.t(
+      normalizeToolName(item.group.toolName) === 'lobsteraivideogenerate' ? 'coworkActivityDoneVideo' : 'coworkActivityDoneImage',
+    );
+  }
+  if (item.type !== 'tool_group') {
+    return getActivityStepDisplay(item).name;
+  }
+  const rawName = item.group.toolUse.metadata?.toolName;
+  const toolName = typeof rawName === 'string' ? rawName : undefined;
+  const normalized = toolName ? normalizeToolName(toolName) : '';
+  if (normalized === 'lobsteraivideogenerate') return i18nService.t('coworkActivityDoneVideo');
+  if (normalized === 'lobsteraiimagegenerate') return i18nService.t('coworkActivityDoneImage');
+  if (normalized === 'sessionsspawn') return i18nService.t('coworkActivityDoneSpawnSubagent');
+  if (normalized === 'sessionsyield') return i18nService.t('coworkToolWaitingSubagents');
+  const toolInput = item.group.toolUse.metadata?.toolInput;
+  if (isBashLikeToolName(toolName)) {
+    return getShellCommandDescription(toolName, toolInput)
+      ?? i18nService.t('coworkActivityDoneCommandGeneric');
+  }
+  const { summary } = getToolStepDisplay(toolName, toolInput);
+  const verb = (templateKey: string, genericKey: string): string => (
+    summary
+      ? i18nService.t(templateKey).replace('{target}', summary)
+      : i18nService.t(genericKey)
+  );
+  if (READ_TOOL_NAMES.has(normalized)) return verb('coworkActivityDoneRead', 'coworkActivityDoneReadGeneric');
+  if (WRITE_TOOL_NAMES.has(normalized)) return verb('coworkActivityDoneWrite', 'coworkActivityDoneWriteGeneric');
+  if (EDIT_ONLY_TOOL_NAMES.has(normalized)) return verb('coworkActivityDoneEdit', 'coworkActivityDoneEditGeneric');
+  return i18nService.t('coworkActivityDoneTool').replace('{target}', getToolDisplayName(toolName));
 };

@@ -75,6 +75,14 @@ function readJsonFile(filePath: string): JsonRecord | null {
 
 function resolveConfiguredAgentEntries(config: JsonRecord): JsonRecord[] {
   const agents = isRecord(config.agents) ? config.agents : null;
+  const configuredEntries = isRecord(agents?.entries)
+    ? Object.entries(agents.entries)
+      .filter(([, entry]) => isRecord(entry))
+      .map(([id, entry]) => ({ id, ...(entry as JsonRecord) }))
+    : [];
+  if (configuredEntries.length > 0) {
+    return configuredEntries;
+  }
   const list = Array.isArray(agents?.list) ? agents.list : [];
   const entries = list.filter((entry): entry is JsonRecord => (
     isRecord(entry) && typeof entry.id === 'string' && Boolean(entry.id.trim())
@@ -83,16 +91,31 @@ function resolveConfiguredAgentEntries(config: JsonRecord): JsonRecord[] {
 }
 
 function resolveDefaultMemorySearchConfig(config: JsonRecord): JsonRecord | null {
+  const memory = isRecord(config.memory) ? config.memory : null;
+  if (isRecord(memory?.search)) {
+    return memory.search;
+  }
   const agents = isRecord(config.agents) ? config.agents : null;
   const defaults = isRecord(agents?.defaults) ? agents.defaults : null;
-  return isRecord(defaults?.memorySearch) ? defaults.memorySearch : null;
+  if (isRecord(defaults?.memorySearch)) {
+    return defaults.memorySearch;
+  }
+  return isRecord(config.memorySearch) ? config.memorySearch : null;
+}
+
+function resolveAgentMemorySearchConfig(agentEntry: JsonRecord): JsonRecord | null {
+  const memory = isRecord(agentEntry.memory) ? agentEntry.memory : null;
+  if (isRecord(memory?.search)) {
+    return memory.search;
+  }
+  return isRecord(agentEntry.memorySearch) ? agentEntry.memorySearch : null;
 }
 
 function mergeMemorySearchConfig(
   defaults: JsonRecord | null,
   agentEntry: JsonRecord,
 ): JsonRecord | null {
-  const overrides = isRecord(agentEntry.memorySearch) ? agentEntry.memorySearch : null;
+  const overrides = resolveAgentMemorySearchConfig(agentEntry);
   if (!overrides) {
     return defaults;
   }

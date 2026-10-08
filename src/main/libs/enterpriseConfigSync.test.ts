@@ -3,6 +3,9 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { AgentId } from '../../shared/agent/constants';
+import { OpenClawAgentOwnership } from './openclawAgentModels';
+
 const electronPaths = vi.hoisted(() => ({
   userData: '',
   home: '',
@@ -43,6 +46,68 @@ describe('enterpriseConfigSync', () => {
     expect(typeof mod.resolveEnterpriseConfigPath).toBe('function');
     expect(typeof mod.syncEnterpriseConfig).toBe('function');
     expect(typeof mod.mergeOpenClawConfigs).toBe('function');
+  });
+
+  test('merges legacy enterprise agents without restoring default markers', async () => {
+    const { mergeOpenClawConfigs } = await import('./enterpriseConfigSync');
+    const enterprise = { agents: { list: [
+      { id: 'main', default: true, identity: { name: 'Enterprise Main' } },
+      { id: 'worker', default: false, skills: ['enterprise-skill'] },
+    ] } };
+    const merged = mergeOpenClawConfigs({ agents: {
+      ownership: OpenClawAgentOwnership.Explicit,
+      defaults: { systemAgent: { agentId: 'main' } },
+      entries: { main: { workspace: '/state/workspace-main' }, worker: { workspace: '/state/workspace-worker' } },
+    } }, enterprise);
+    expect(merged.agents).toEqual({
+      ownership: OpenClawAgentOwnership.Explicit,
+      defaults: { systemAgent: { agentId: 'main' } },
+      entries: {
+        main: { workspace: '/state/workspace-main', identity: { name: 'Enterprise Main' } },
+        worker: { workspace: '/state/workspace-worker', skills: ['enterprise-skill'] },
+      },
+    });
+    expect(enterprise.agents.list[0].default).toBe(true);
+    expect(() => mergeOpenClawConfigs(merged, { agents: { list: [{ default: true }] } }))
+      .toThrow('Invalid legacy agent roster');
+  });
+
+  test.each([undefined, 'worker'])(
+    'retains fixed-store ownership after enterprise merging (explicit owner: %s)', async (owner) => {
+      const { mergeOpenClawConfigs } = await import('./enterpriseConfigSync');
+      const runtime = { agents: {
+        ownership: OpenClawAgentOwnership.Explicit,
+        entries: { main: {}, worker: {} },
+        defaults: { systemAgent: { agentId: AgentId.Main } },
+      } };
+      const enterprise = {
+        session: { store: '/enterprise/shared.sqlite' },
+        ...(owner ? { agents: { defaults: { sessionStore: { agentId: owner } } } } : {}),
+      };
+      const merged = mergeOpenClawConfigs(runtime, enterprise);
+      expect(merged).toMatchObject({
+        agents: { defaults: { sessionStore: { agentId: owner ?? AgentId.Main } } },
+        session: enterprise.session,
+      });
+      expect(mergeOpenClawConfigs(merged, enterprise)).toEqual(merged);
+      expect(runtime.agents.defaults).not.toHaveProperty('sessionStore');
+    },
+  );
+
+  test('does not pin an owner for enterprise per-agent store templates', async () => {
+    const { mergeOpenClawConfigs } = await import('./enterpriseConfigSync');
+    const merged = mergeOpenClawConfigs({ agents: { entries: { main: {}, worker: {} } } }, {
+      session: { store: '/enterprise/{agentId}/sessions.json' },
+    });
+    expect(merged).not.toHaveProperty('agents.defaults.sessionStore');
+  });
+
+  test('preserves an explicit enterprise retired-main owner even for per-agent stores', async () => {
+    const { mergeOpenClawConfigs } = await import('./enterpriseConfigSync');
+    const merged = mergeOpenClawConfigs({ agents: { entries: { main: {}, worker: {} } } }, {
+      agents: { defaults: { sessionStore: { agentId: 'worker' } } },
+    });
+    expect(merged).toMatchObject({ agents: { defaults: { sessionStore: { agentId: 'worker' } } } });
   });
 
   test('manifest with all sync disabled parses correctly', () => {

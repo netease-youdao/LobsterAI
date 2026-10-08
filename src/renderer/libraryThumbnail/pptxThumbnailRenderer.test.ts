@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 
+import { LibraryThumbnailFailureCode } from '../../shared/library/thumbnail';
 import {
   type PptxPreviewModuleLike,
   renderPptxFirstSlide,
@@ -45,8 +46,42 @@ describe('PPTX library thumbnail rendering', () => {
     expect(renderSingleSlide).toHaveBeenCalledTimes(1);
     expect(renderSingleSlide).toHaveBeenCalledWith(0);
     expect(preview).not.toHaveBeenCalled();
-    expect(result).toEqual({ previewer, slide, slideCount: 12 });
+    expect(result).toEqual({
+      previewer,
+      slide,
+      slideCount: 12,
+      sourceHasVisualContent: false,
+      sourceVisualElementCount: 0,
+    });
     expect(destroy).not.toHaveBeenCalled();
+  });
+
+  test('reports source content before the first slide DOM is captured', async () => {
+    const slide = {} as HTMLElement;
+    const previewer = {
+      slideCount: 2,
+      wrapper: {
+        querySelector: () => slide,
+        firstElementChild: null,
+      } as unknown as HTMLElement,
+      load: async () => ({
+        slides: [{
+          nodes: [{ source: { 'p:txBody': { 'a:p': { 'a:t': 'Visible title' } } } }],
+        }],
+      }),
+      renderSingleSlide: vi.fn(),
+      destroy: vi.fn(),
+    };
+
+    const result = await renderPptxFirstSlide(
+      { init: () => previewer } as PptxPreviewModuleLike,
+      {} as HTMLElement,
+      new ArrayBuffer(8),
+      640,
+    );
+
+    expect(result.sourceHasVisualContent).toBe(true);
+    expect(result.sourceVisualElementCount).toBe(1);
   });
 
   test('destroys the previewer when the deck has no slides', async () => {
@@ -93,6 +128,9 @@ describe('PPTX library thumbnail rendering', () => {
     await expect(waitForPptxImageReady(image, 5)).rejects.toThrow(
       'PPTX image decoding timed out',
     );
+    await expect(waitForPptxImageReady(image, 5)).rejects.toMatchObject({
+      code: LibraryThumbnailFailureCode.PptxMediaTimeout,
+    });
   });
 
   test('reports slide media readiness after fonts and images finish', async () => {
@@ -119,6 +157,7 @@ describe('PPTX library thumbnail rendering', () => {
     await expect(readiness).resolves.toEqual({
       imageCount: 1,
       decodedImageCount: 1,
+      domHasVisualContent: true,
       hasVisualContent: true,
     });
   });
@@ -132,6 +171,7 @@ describe('PPTX library thumbnail rendering', () => {
     await expect(waitForPptxSlideReady(slide, Promise.resolve(), 20)).resolves.toEqual({
       imageCount: 0,
       decodedImageCount: 0,
+      domHasVisualContent: false,
       hasVisualContent: false,
     });
   });
@@ -163,5 +203,12 @@ describe('PPTX library thumbnail rendering', () => {
       async () => undefined,
       3,
     )).rejects.toThrow('PPTX slide layout did not stabilize');
+    await expect(waitForPptxSlideLayout(
+      slide,
+      async () => undefined,
+      3,
+    )).rejects.toMatchObject({
+      code: LibraryThumbnailFailureCode.PptxLayoutUnstable,
+    });
   });
 });

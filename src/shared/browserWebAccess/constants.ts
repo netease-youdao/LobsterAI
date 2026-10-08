@@ -1,3 +1,14 @@
+import {
+  type BrowserCredentialLoginState,
+  type BrowserCredentialSaveDecision,
+  BrowserCredentialSaveMode,
+  type BrowserCredentialSaveMode as BrowserCredentialSaveModeValue,
+  type BrowserCredentialSavePrompt,
+  BrowserCredentialUseMode,
+  type BrowserCredentialUseMode as BrowserCredentialUseModeValue,
+} from '../browserCredentials/constants';
+import type { BrowserPasskeyNotice } from './passkeys';
+
 export const BrowserProfileMode = {
   Managed: 'managed',
   User: 'user',
@@ -8,10 +19,49 @@ export type BrowserProfileMode = typeof BrowserProfileMode[keyof typeof BrowserP
 
 export const BrowserRuntimeProfile = {
   Managed: 'openclaw',
+  InApp: 'lobster-in-app',
   User: 'user',
 } as const;
 
 export type BrowserRuntimeProfile = typeof BrowserRuntimeProfile[keyof typeof BrowserRuntimeProfile];
+
+export const AgentBrowserPartition = {
+  Default: 'persist:lobster-agent-browser',
+} as const;
+
+export type AgentBrowserPartition =
+  typeof AgentBrowserPartition[keyof typeof AgentBrowserPartition];
+
+export const AgentBrowserPageUrl = {
+  Blank: 'about:blank',
+} as const;
+
+export const AgentBrowserZoom = {
+  Min: 0.25,
+  Max: 3,
+  Step: 0.1,
+  Default: 1,
+} as const;
+
+export const AgentBrowserHostMenuAction = {
+  CaptureScreenshot: 'capture-screenshot',
+  NewBlankPage: 'new-blank-page',
+  ZoomOut: 'zoom-out',
+  ResetZoom: 'reset-zoom',
+  ZoomIn: 'zoom-in',
+  ClearCookies: 'clear-cookies',
+  ClearCache: 'clear-cache',
+} as const;
+
+export type AgentBrowserHostMenuAction =
+  typeof AgentBrowserHostMenuAction[keyof typeof AgentBrowserHostMenuAction];
+
+export const BrowserDisplayMode = {
+  InApp: 'in-app',
+  External: 'external',
+} as const;
+
+export type BrowserDisplayMode = typeof BrowserDisplayMode[keyof typeof BrowserDisplayMode];
 
 export const BrowserNetworkMode = {
   ProxyCompatible: 'proxy-compatible',
@@ -50,9 +100,49 @@ export const BrowserIpc = {
   ListProfiles: 'openclaw:browser:listProfiles',
   Test: 'openclaw:browser:test',
   ResetProfile: 'openclaw:browser:resetProfile',
+  GetHostState: 'openclaw:browser:getHostState',
+  SetHostView: 'openclaw:browser:setHostView',
+  NavigateHost: 'openclaw:browser:navigateHost',
+  GoBackHost: 'openclaw:browser:goBackHost',
+  GoForwardHost: 'openclaw:browser:goForwardHost',
+  ReloadHost: 'openclaw:browser:reloadHost',
+  StopHost: 'openclaw:browser:stopHost',
+  CreateHostPage: 'openclaw:browser:createHostPage',
+  SelectHostPage: 'openclaw:browser:selectHostPage',
+  CloseHostPage: 'openclaw:browser:closeHostPage',
+  ShowHostMenu: 'openclaw:browser:showHostMenu',
+  CaptureHostScreenshot: 'openclaw:browser:captureHostScreenshot',
+  SetHostZoom: 'openclaw:browser:setHostZoom',
+  ClearHostCookies: 'openclaw:browser:clearHostCookies',
+  ClearHostCache: 'openclaw:browser:clearHostCache',
+  DismissCredentialLoginStatus: 'openclaw:browser:dismissCredentialLoginStatus',
+  ResolveCredentialSavePrompt: 'openclaw:browser:resolveCredentialSavePrompt',
+  ResolvePasskey: 'openclaw:browser:resolvePasskey',
+  HostState: 'openclaw:browser:hostState',
 } as const;
 
 export type BrowserIpc = typeof BrowserIpc[keyof typeof BrowserIpc];
+
+export const BrowserControlRequestMethod = {
+  Get: 'GET',
+  Post: 'POST',
+  Delete: 'DELETE',
+} as const;
+
+export type BrowserControlRequestMethod =
+  typeof BrowserControlRequestMethod[keyof typeof BrowserControlRequestMethod];
+
+export const OpenClawBrowserGatewayMethod = {
+  Request: 'browser.request',
+} as const;
+
+export interface BrowserControlGatewayRequest {
+  method: BrowserControlRequestMethod;
+  path: string;
+  query?: Record<string, string>;
+  body?: unknown;
+  timeoutMs?: number;
+}
 
 export interface BrowserWebFetchConfig {
   enabled: boolean;
@@ -68,12 +158,15 @@ export interface BrowserWebFetchConfig {
 export interface BrowserWebAccessConfig {
   browserEnabled: boolean;
   profileMode: BrowserProfileMode;
+  displayMode: BrowserDisplayMode;
   networkMode: BrowserNetworkMode;
   followGlobalProxy: boolean;
   allowedHostnames: string[];
   blockedHostnames: string[];
   snapshotMode: BrowserSnapshotMode;
   evaluateEnabled: boolean;
+  credentialUseMode: BrowserCredentialUseModeValue;
+  credentialSaveMode: BrowserCredentialSaveModeValue;
   executablePath?: string;
   cdpUrl?: string;
   headless?: boolean;
@@ -82,6 +175,101 @@ export interface BrowserWebAccessConfig {
   remoteCdpHandshakeTimeoutMs?: number;
   extraArgs?: string[];
   webFetch: BrowserWebFetchConfig;
+}
+
+export const AgentBrowserToolPhase = {
+  Start: 'start',
+  Update: 'update',
+  Result: 'result',
+} as const;
+
+export type AgentBrowserToolPhase =
+  typeof AgentBrowserToolPhase[keyof typeof AgentBrowserToolPhase];
+
+export interface AgentBrowserToolEvent {
+  sessionId: string;
+  phase: AgentBrowserToolPhase;
+  action?: string;
+  profile?: string;
+  targetId?: string;
+  isError?: boolean;
+}
+
+export interface AgentBrowserHostTab {
+  pageId: number;
+  title: string;
+  url: string;
+  selected: boolean;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  zoomFactor: number;
+}
+
+export interface AgentBrowserHostState {
+  tabs: AgentBrowserHostTab[];
+  selectedPageId?: number;
+  visible: boolean;
+  updatedAt: number;
+  credentialLogin?: BrowserCredentialLoginState;
+  credentialSavePrompt?: BrowserCredentialSavePrompt;
+  passkey?: BrowserPasskeyNotice;
+  error?: string;
+}
+
+export interface AgentBrowserHostStateEvent {
+  sessionId?: string;
+  state: AgentBrowserHostState;
+}
+
+export interface AgentBrowserHostRequest {
+  sessionId?: string;
+}
+
+export interface AgentBrowserHostSetViewRequest extends AgentBrowserHostRequest {
+  visible: boolean;
+  bounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+}
+
+export interface AgentBrowserHostNavigateRequest extends AgentBrowserHostRequest {
+  url: string;
+}
+
+export interface AgentBrowserHostPageRequest extends AgentBrowserHostRequest {
+  pageId: number;
+}
+
+export interface AgentBrowserHostZoomRequest extends AgentBrowserHostRequest {
+  factor: number;
+}
+
+export interface AgentBrowserHostMenuRequest extends AgentBrowserHostRequest {
+  x: number;
+  y: number;
+  darkMode: boolean;
+}
+
+export interface AgentBrowserHostMenuResponse {
+  success: boolean;
+  action?: AgentBrowserHostMenuAction;
+  zoomFactor?: number;
+  error?: string;
+}
+
+export interface AgentBrowserCredentialSavePromptRequest extends AgentBrowserHostRequest {
+  requestId: string;
+  decision: BrowserCredentialSaveDecision;
+}
+
+export interface AgentBrowserHostResponse {
+  success: boolean;
+  state?: AgentBrowserHostState;
+  error?: string;
 }
 
 export interface BrowserDiagnosticResultStep {
@@ -100,12 +288,15 @@ export interface BrowserDiagnosticResult {
 export const defaultBrowserWebAccessConfig: BrowserWebAccessConfig = {
   browserEnabled: true,
   profileMode: BrowserProfileMode.Managed,
+  displayMode: BrowserDisplayMode.External,
   networkMode: BrowserNetworkMode.ProxyCompatible,
   followGlobalProxy: true,
   allowedHostnames: [],
   blockedHostnames: [],
   snapshotMode: BrowserSnapshotMode.Efficient,
   evaluateEnabled: true,
+  credentialUseMode: BrowserCredentialUseMode.AlwaysAsk,
+  credentialSaveMode: BrowserCredentialSaveMode.Ask,
   webFetch: {
     enabled: true,
     followGlobalProxy: true,
@@ -329,12 +520,27 @@ export const normalizeBrowserWebAccessConfig = (
   const profileMode = Object.values(BrowserProfileMode).includes(value?.profileMode as BrowserProfileMode)
     ? value?.profileMode as BrowserProfileMode
     : defaultBrowserWebAccessConfig.profileMode;
+  const displayMode = Object.values(BrowserDisplayMode).includes(value?.displayMode as BrowserDisplayMode)
+    ? value?.displayMode as BrowserDisplayMode
+    : value?.headless === false
+      ? BrowserDisplayMode.External
+      : defaultBrowserWebAccessConfig.displayMode;
   const networkMode = Object.values(BrowserNetworkMode).includes(value?.networkMode as BrowserNetworkMode)
     ? value?.networkMode as BrowserNetworkMode
     : defaultBrowserWebAccessConfig.networkMode;
   const snapshotMode = Object.values(BrowserSnapshotMode).includes(value?.snapshotMode as BrowserSnapshotMode)
     ? value?.snapshotMode as BrowserSnapshotMode
     : defaultBrowserWebAccessConfig.snapshotMode;
+  const credentialUseMode = Object.values(BrowserCredentialUseMode).includes(
+    value?.credentialUseMode as BrowserCredentialUseModeValue,
+  )
+    ? value?.credentialUseMode as BrowserCredentialUseModeValue
+    : defaultBrowserWebAccessConfig.credentialUseMode;
+  const credentialSaveMode = Object.values(BrowserCredentialSaveMode).includes(
+    value?.credentialSaveMode as BrowserCredentialSaveModeValue,
+  )
+    ? value?.credentialSaveMode as BrowserCredentialSaveModeValue
+    : defaultBrowserWebAccessConfig.credentialSaveMode;
   const executablePath = normalizeOptionalString(value?.executablePath);
   const cdpUrl = normalizeBrowserCdpUrl(value?.cdpUrl);
   const remoteCdpTimeoutMs = normalizeOptionalNumber(value?.remoteCdpTimeoutMs);
@@ -348,15 +554,17 @@ export const normalizeBrowserWebAccessConfig = (
   return {
     browserEnabled: value?.browserEnabled ?? defaultBrowserWebAccessConfig.browserEnabled,
     profileMode,
+    displayMode,
     networkMode,
     followGlobalProxy: value?.followGlobalProxy ?? defaultBrowserWebAccessConfig.followGlobalProxy,
     allowedHostnames: normalizeBrowserHostnameList(value?.allowedHostnames),
     blockedHostnames: normalizeBrowserHostnameList(value?.blockedHostnames),
     snapshotMode,
     evaluateEnabled: value?.evaluateEnabled ?? defaultBrowserWebAccessConfig.evaluateEnabled,
+    credentialUseMode,
+    credentialSaveMode,
     ...(executablePath ? { executablePath } : {}),
     ...(cdpUrl ? { cdpUrl } : {}),
-    ...(value?.headless === true ? { headless: true } : {}),
     ...(value?.attachOnly === true ? { attachOnly: true } : {}),
     ...(remoteCdpTimeoutMs ? { remoteCdpTimeoutMs } : {}),
     ...(remoteCdpHandshakeTimeoutMs ? { remoteCdpHandshakeTimeoutMs } : {}),

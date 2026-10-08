@@ -54,11 +54,18 @@ export const LogReporterAction = {
   ImPromptSubmit: 'lobsterai_im_prompt_submit',
   ImSettingsSaved: 'lobsterai_im_settings_saved',
   LibraryAction: 'lobsterai_library_action',
+  LowCreditSidebarOfferExposure: 'lobsterai_low_credit_sidebar_offer_exposure',
+  LowCreditSidebarRechargeClick: 'lobsterai_low_credit_sidebar_recharge_click',
+  LowCreditSidebarSubscriptionClick: 'lobsterai_low_credit_sidebar_subscription_click',
+  LowCreditSidebarCloseClick: 'lobsterai_low_credit_sidebar_close_click',
+  LowCreditTaskOfferExposure: 'lobsterai_low_credit_task_offer_exposure',
+  LowCreditTaskPurchaseClick: 'lobsterai_low_credit_task_purchase_click',
   MemoryEntryChanged: 'lobsterai_memory_entry_changed',
   MemorySettingChanged: 'lobsterai_memory_setting_changed',
   McpEnabled: 'lobsterai_mcp_enabled',
   McpAction: 'lobsterai_mcp_action',
   ModelSelected: 'lobsterai_model_selected',
+  OnboardingAction: 'lobsterai_onboarding_action',
   PlanModeEnabled: 'lobsterai_plan_mode_enabled',
   PluginAction: 'lobsterai_plugin_action',
   PluginSettingsSaved: 'lobsterai_plugin_settings_saved',
@@ -66,6 +73,9 @@ export const LogReporterAction = {
   PublishingDialogExposure: 'lobsterai_publishing_dialog_exposure',
   PublishingEntryAction: 'lobsterai_publishing_entry_action',
   PublishingOperationResult: 'lobsterai_publishing_operation_result',
+  PublishingRecoveryCtaAction: 'lobsterai_publishing_recovery_cta_action',
+  PublishingRecoveryCtaExposure: 'lobsterai_publishing_recovery_cta_exposure',
+  PublishingRecoveryResult: 'lobsterai_publishing_recovery_result',
   PublishingSubscriptionObserved: 'lobsterai_publishing_subscription_observed',
   PublishShareResult: 'lobsterai_publish_share_result',
   PublishCopyShareLink: 'lobsterai_publish_copy_share_link',
@@ -80,12 +90,43 @@ export const LogReporterAction = {
   PromptTemplateAction: 'lobsterai_prompt_template_action',
   ShortcutSettingChanged: 'lobsterai_shortcut_setting_changed',
   SidebarAction: 'lobsterai_sidebar_action',
+  SubscriptionTrialUnlockClick: 'lobsterai_subscription_trial_unlock_click',
   SkillAction: 'lobsterai_skill_action',
   SkillEnabled: 'lobsterai_skill_enabled',
   ScheduledTaskAction: 'lobsterai_scheduled_task_action',
   TaskSearchAction: 'lobsterai_task_search_action',
   UsageAnalyticsEnabled: 'lobsterai_usage_analytics_enabled',
 } as const;
+
+export const PublishingRecoveryAnalyticsInteractionType = {
+  RecoveryCta: 'recovery_cta',
+} as const;
+
+export type PublishingRecoveryAnalyticsInteractionType =
+  typeof PublishingRecoveryAnalyticsInteractionType[
+    keyof typeof PublishingRecoveryAnalyticsInteractionType
+  ];
+
+export const PublishingRecoveryAnalyticsSurface = {
+  TaskFileShareDialog: 'task_file_share_dialog',
+  TaskSiteDeploymentDialog: 'task_site_deployment_dialog',
+  LibraryCloudList: 'library_cloud_list',
+  LibraryFileDetail: 'library_file_detail',
+  LibrarySiteDetail: 'library_site_detail',
+} as const;
+
+export type PublishingRecoveryAnalyticsSurface =
+  typeof PublishingRecoveryAnalyticsSurface[keyof typeof PublishingRecoveryAnalyticsSurface];
+
+export const PublishingRecoveryAnalyticsOutcome = {
+  Restored: 'restored',
+  RedeployReady: 'redeploy_ready',
+  RetryExhausted: 'retry_exhausted',
+  ResourceUnavailable: 'resource_unavailable',
+} as const;
+
+export type PublishingRecoveryAnalyticsOutcome =
+  typeof PublishingRecoveryAnalyticsOutcome[keyof typeof PublishingRecoveryAnalyticsOutcome];
 
 export type LogEventAction = `${typeof LogReporterActionPrefix.LobsterAI}${string}`;
 

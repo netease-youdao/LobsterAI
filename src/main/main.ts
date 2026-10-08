@@ -14,6 +14,7 @@ import {
   powerMonitor,
   powerSaveBlocker,
   protocol,
+  safeStorage,
   session,
   shell,
   type WebContents,
@@ -42,8 +43,11 @@ import {
 } from '../shared/analytics/constants';
 import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode, AppSettingsIpc } from '../shared/appSettings/constants';
-import { AppUpdateIpc } from '../shared/appUpdate/constants';
+import { type AppUpdateActiveWorkloads, AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
+import { ReviewIpc, ReviewScope, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
+import type { ReviewSourceRequest } from '../shared/artifactPreview/reviewSource';
+import { buildWorkspaceChangesArtifact } from '../shared/artifactPreview/workspaceChanges';
 import { createAccountOwnerKey } from '../shared/auth/accountOwner';
 import {
   AuthIpcChannel,
@@ -56,14 +60,30 @@ import {
   AuthSessionStatus,
 } from '../shared/auth/constants';
 import {
+  type AgentBrowserCredentialSavePromptRequest,
+  AgentBrowserHostMenuAction,
+  type AgentBrowserHostMenuRequest,
+  type AgentBrowserHostMenuResponse,
+  type AgentBrowserHostNavigateRequest,
+  type AgentBrowserHostPageRequest,
+  type AgentBrowserHostRequest,
+  type AgentBrowserHostResponse,
+  type AgentBrowserHostSetViewRequest,
+  type AgentBrowserHostZoomRequest,
+  AgentBrowserZoom,
+  type BrowserControlGatewayRequest,
+  BrowserControlRequestMethod,
   type BrowserDiagnosticResultStep,
   BrowserDiagnosticStatus,
   BrowserDiagnosticStep,
+  BrowserDisplayMode,
   BrowserIpc,
+  BrowserNetworkMode,
   BrowserRuntimeProfile,
   type BrowserWebAccessConfig,
   normalizeBrowserWebAccessConfig,
 } from '../shared/browserWebAccess/constants';
+import type { BrowserPasskeyRequest } from '../shared/browserWebAccess/passkeys';
 import { ClipboardIpc } from '../shared/clipboard/constants';
 import {
   type CoworkBrowserAnnotationMessageBatch,
@@ -91,6 +111,7 @@ import {
   CoworkContextUsageSource,
   CoworkForkMode,
   CoworkIpcChannel,
+  CoworkOnboardingMessageKind,
 } from '../shared/cowork/constants';
 import {
   buildCoworkImageAttachmentPreviews,
@@ -98,6 +119,7 @@ import {
   formatCoworkImageAttachmentLimit,
   validateCoworkImageAttachmentSize,
 } from '../shared/cowork/imageAttachments';
+import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import { containsPlanModePrompt } from '../shared/cowork/planMode';
 import type { CoworkSearchMessageCursor } from '../shared/cowork/search';
 import {
@@ -139,7 +161,15 @@ import type {
   ResolvedKitCapabilities,
 } from '../shared/kit/constants';
 import { KitStoreKey } from '../shared/kit/constants';
-import { LibraryChangeReason, LibraryIpc } from '../shared/library/constants';
+import { LibraryIpc } from '../shared/library/constants';
+import {
+  getLibraryThumbnailFailureDetails,
+  isLibraryThumbnailFailureRetryable,
+  LibraryThumbnailError,
+  LibraryThumbnailFailureCode,
+  type LibraryThumbnailGenerateRequest,
+  type LibraryThumbnailGenerateResponse,
+} from '../shared/library/thumbnail';
 import type { LibraryChangedPayload } from '../shared/library/types';
 import {
   type ListLocalWebServicesOptions,
@@ -155,8 +185,10 @@ import {
 } from '../shared/notifications/constants';
 import {
   OpenClawEngineIpc,
+  OpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
 } from '../shared/openclawEngine/constants';
+import { OpenClawRepairPhase, OpenClawRepairStage } from '../shared/openclawEngine/repair';
 import { PlatformRegistry } from '../shared/platform';
 import type { ProviderConfig } from '../shared/providers';
 import {
@@ -189,7 +221,12 @@ import { APP_NAME, APP_USER_MODEL_ID, DB_FILENAME } from './appConstants';
 import { createLocalFileProtocolResponse } from './artifactLocalFileProtocol';
 import { authQuotaGateStateFromQuota, AuthSubscriptionStatus, createDefaultAuthQuotaGateState, normalizeAuthQuota } from './authQuota';
 import { type AutoLaunchStatus, getAutoLaunchStatus, isAutoLaunched, setAutoLaunchEnabled } from './autoLaunchManager';
+import { BrowserCredentialApprovalService } from './browserCredentials/browserCredentialApprovalService';
+import { BrowserCredentialService } from './browserCredentials/browserCredentialService';
 import { getRecentComputerUseLogEntries } from './computerUse/computerUseLogs';
+import { readEnvironmentSnapshot } from './conversation/environmentSnapshot';
+import { WorkspaceReviewSourceStore } from './conversation/reviewSource';
+import { isScopedReview, ScopedReviewStore } from './conversation/scopedReview';
 import { type CoworkForkContextMessage, type CoworkMessage, CoworkStore } from './coworkStore';
 import {
   buildEnterpriseAccountRequestHeaders,
@@ -232,10 +269,13 @@ import type {
 import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
 import { registerAsrIpcHandlers } from './ipcHandlers/asr';
+import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
+import { isDecisionModelFeatureActive, registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
 import { ensureDshEngineReady, registerDshHandlers } from './ipcHandlers/dsh/handlers';
 import { registerEnterpriseAccountHandlers } from './ipcHandlers/enterpriseAccount';
 import { registerKitHandlers } from './ipcHandlers/kits';
+import { hasUnsafeMarkdownEdits, registerMarkdownEditingHandlers } from './ipcHandlers/markdownEditing';
 import { registerMcpHandlers } from './ipcHandlers/mcp';
 import { registerNimQrLoginHandlers } from './ipcHandlers/nimQrLogin';
 import { registerPermissionIpcHandlers } from './ipcHandlers/permissions/handlers';
@@ -245,21 +285,33 @@ import {
   initCronJobServiceManager,
   initScheduledTaskHelpers,
   migrateScheduledTaskAnnounceJobs,
+  peekCronJobService,
   registerScheduledTaskHandlers,
 } from './ipcHandlers/scheduledTask';
 import { registerSessionDiagnosticsHandlers } from './ipcHandlers/sessionDiagnostics';
 import { registerSiteIpcHandlers } from './ipcHandlers/site';
 import { registerSkillHandlers } from './ipcHandlers/skills';
+import { registerSubscriptionTrialIpcHandlers } from './ipcHandlers/subscriptionTrial';
 import { LibraryIndexService } from './library/libraryIndexService';
 import { registerLibraryIpcHandlers } from './library/libraryIpc';
 import { LibraryLocalStore } from './library/libraryLocalStore';
+import { AgentBrowserHost } from './libs/agentBrowserHost';
+import { showAgentBrowserHostMenu } from './libs/agentBrowserHostMenu';
 import {
   type CoworkAgentEngine,
   CoworkEngineRouter,
   OpenClawRuntimeAdapter,
   type PermissionResult,
 } from './libs/agentEngine';
+import {
+  appQuitConfirmationGate,
+  AppQuitRequestVerdict,
+  quitAppWithoutConfirmation,
+  showAppQuitConfirmation,
+} from './libs/appQuitConfirmation';
+import { hideAppWindowsForQuit } from './libs/appQuitWindows';
 import { AppUpdateCoordinator, INSTALLATION_UUID_KEY } from './libs/appUpdateCoordinator';
+import { AppUpdateGrayClient, type AppUpdateGraySession } from './libs/appUpdateGrayClient';
 import { AuthCallbackRouter } from './libs/authCallbackRouter';
 import {
   appendCallbackReturnTo,
@@ -310,6 +362,7 @@ import {
   findCoworkTempRoot,
 } from './libs/coworkTempJanitor';
 import {
+  ensureElectronNodeShim,
   generateSessionTitle,
   getElectronNodeRuntimePath,
   probeCoworkModelReadiness,
@@ -350,16 +403,23 @@ import {
   packageArtifactFile,
 } from './libs/htmlShare/artifactFileSharePackager';
 import {
+  createGeneratedVideoShare,
   deleteHtmlSharePermanently,
+  getGeneratedVideoShareSource,
   getHtmlShareAnalytics,
   getHtmlShareBySource,
   getHtmlShareQuota,
   getPublishingTrialPolicy,
+  resolveLegacyGeneratedVideoSource,
   updateHtmlShare,
   updateHtmlShareAccessMode,
   updateHtmlShareStatus,
   uploadHtmlShare,
 } from './libs/htmlShare/htmlShareClient';
+import {
+  sanitizeOptionalHtmlShareContent,
+  serializeHtmlShareFailure,
+} from './libs/htmlShare/htmlShareError';
 import { packageHtmlFile } from './libs/htmlShare/htmlSharePackager';
 import {
   buildArtifactFileClientSourceKey,
@@ -369,9 +429,18 @@ import {
 import { getKeyfromAttribution, initializeKeyfromAttribution } from './libs/keyfromAttribution';
 import { LibraryThumbnailRenderer } from './libs/libraryThumbnailRenderer';
 import { LibraryThumbnailService } from './libs/libraryThumbnailService';
-import { isLikelyBlankThumbnailBitmap } from './libs/libraryThumbnailValidation';
+import { shouldRejectNativeLibraryThumbnail } from './libs/libraryThumbnailValidation';
+import {
+  resolveLobsterBrowserMcpCommand,
+  resolveLobsterBrowserMcpStdioLaunch,
+} from './libs/lobsterBrowserMcpServer';
 import { exportLogsZip } from './libs/logExport';
 import { MainLogReporter } from './libs/mainLogReporter';
+import {
+  createDevelopmentMainWindowLoadRecovery,
+  type DevelopmentMainWindowLoadRecovery,
+  MainWindowLoadErrorCode,
+} from './libs/mainWindowLoadRecovery';
 import { inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
 import {
   migrateAgentModelRefs,
@@ -387,9 +456,13 @@ import {
   DEFAULT_MANAGED_AGENT_ID,
   OpenClawChannelSessionSync,
 } from './libs/openclawChannelSessionSync';
+import { createOpenClawRepairBackupDirectory, OpenClawRepairFailure, runOpenClawCompatibilityRepair, runOpenClawDoctorRepair } from './libs/openclawCompatibilityRepair';
 import {
   CONFIG_DELIVERY_FALLBACK_REASON_PREFIX,
+  DEFERRED_SYNC_REASON_PREFIX,
   deliverOpenClawConfigToGateway,
+  isConfigDeliveryFallbackReason,
+  mergeDeferredGatewayRestartReason,
   OpenClawConfigDeliveryMode,
 } from './libs/openclawConfigDelivery';
 import {
@@ -401,12 +474,23 @@ import {
   OpenClawConfigImpactReason,
   removeImpactDecisionReasons,
 } from './libs/openclawConfigImpact';
+import {
+  ConfigDiagnosticErrorKind,
+  ConfigDiagnosticOutcome,
+  ConfigDiagnosticStage,
+  ConfigWorkloadState,
+  observeConfigRecovery,
+  writeConfigDiagnostic,
+} from './libs/openclawConfigObservation';
 import { buildProviderSelection, OpenClawConfigSync } from './libs/openclawConfigSync';
+import { getRecentOpenClawDailyLogEntries } from './libs/openclawDailyLogs';
 import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
 import {
   backupOpenClawConfig,
   getOpenClawGatewayRepairBusyError,
+  preserveOpenClawConfigForStartupRecovery,
 } from './libs/openclawGatewayRepair';
+import { OpenClawImConfigRestartTracker } from './libs/openclawImConfigRestart';
 import {
   getCoworkParentSessionId,
   resolveCoworkSessionIdByOpenClawSessionKey,
@@ -430,12 +514,14 @@ import {
   migrateLegacyOpenClawPluginInstalls,
   OpenClawPluginInstallMigrationStatus,
 } from './libs/openclawPluginInstallMigration';
+import { readOpenClawRepairQuarantinedStoreCount } from './libs/openclawRepairPreflight';
 import { collectReferencedEnvVarNames, pickReferencedSecretEnvVars } from './libs/openclawSecretEnv';
 import {
   getOpenClawTokenProxyPort,
   startOpenClawTokenProxy,
   stopOpenClawTokenProxy,
 } from './libs/openclawTokenProxy';
+import { runLegacyWeixinAllowFromMigration } from './libs/openclawWeixinPairingMigration';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { isAnalyticsEndpointUrl, sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
@@ -511,7 +597,9 @@ import {
   saveOpenClawSessionPolicyConfig,
 } from './openclawSessionPolicy/store';
 import { registerVoiceInputPermissionHandler } from './permissions/voiceInputPermission';
+import { patchEnabledNspClawguard } from './plugins/nspClawguardCompatibility';
 import { isHiddenUserPluginId } from './plugins/pluginManager';
+import type { SkillChangeBatch } from './skills/skillChangeDiagnostics';
 import { SkillManager } from './skills/skillManager';
 import { getSkillServiceManager } from './skills/skillServices';
 import {
@@ -643,6 +731,24 @@ interface HtmlShareGetByArtifactFileInput {
   sessionId?: string;
   artifactId?: string;
   filePath?: string;
+}
+
+interface HtmlShareCreateFromGeneratedVideoInput {
+  taskId: string;
+  outputIndex: number;
+  sessionId: string;
+  artifactId: string;
+  title: string;
+  accessMode?: HtmlShareAccessModeValue;
+}
+
+interface HtmlShareGetGeneratedVideoSourceInput {
+  taskId: string;
+  outputIndex: number;
+}
+
+interface HtmlShareResolveLegacyGeneratedVideoSourceInput {
+  resultUrl: string;
 }
 
 interface HtmlShareGetBySourceInput {
@@ -837,9 +943,8 @@ function sanitizeCreateFromArtifactFileInput(input: unknown): HtmlShareCreateFro
     accessMode: sanitizeHtmlShareAccessMode(source.accessMode, HtmlShareAccessMode.Code),
     fileName: sanitizeOptionalHtmlShareString(source.fileName, 'fileName', 255),
     filePath: sanitizeOptionalHtmlShareString(source.filePath, 'filePath', 4096),
-    content: sanitizeOptionalHtmlShareString(
+    content: sanitizeOptionalHtmlShareContent(
       source.content,
-      'content',
       MAX_ARTIFACT_SHARE_CONTENT_CHARS,
     ),
     remoteUrl: sanitizeOptionalHtmlShareString(source.remoteUrl, 'remoteUrl', 4096),
@@ -878,6 +983,71 @@ function sanitizeGetByArtifactFileInput(input: unknown): HtmlShareGetByArtifactF
     throw new Error('Artifact share lookup source is required.');
   }
   return options;
+}
+
+function sanitizeGeneratedVideoTaskId(value: unknown): string {
+  const taskId = sanitizeHtmlShareString(value, 'taskId', 19);
+  if (!/^[1-9]\d*$/.test(taskId)) {
+    throw new Error('taskId must be a positive decimal identifier.');
+  }
+  return taskId;
+}
+
+function sanitizeGeneratedVideoOutputIndex(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 9999) {
+    throw new Error('outputIndex must be a non-negative integer.');
+  }
+  return value;
+}
+
+function sanitizeCreateFromGeneratedVideoInput(
+  input: unknown,
+): HtmlShareCreateFromGeneratedVideoInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid generated video share request.');
+  }
+  const source = input as Record<string, unknown>;
+  return {
+    taskId: sanitizeGeneratedVideoTaskId(source.taskId),
+    outputIndex: sanitizeGeneratedVideoOutputIndex(source.outputIndex),
+    sessionId: sanitizeHtmlShareString(source.sessionId, 'sessionId', 128),
+    artifactId: sanitizeHtmlShareString(source.artifactId, 'artifactId', 128),
+    title: sanitizeHtmlShareTitle(source.title),
+    accessMode: sanitizeHtmlShareAccessMode(source.accessMode, HtmlShareAccessMode.Code),
+  };
+}
+
+function sanitizeGetGeneratedVideoSourceInput(
+  input: unknown,
+): HtmlShareGetGeneratedVideoSourceInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid generated video share lookup request.');
+  }
+  const source = input as Record<string, unknown>;
+  return {
+    taskId: sanitizeGeneratedVideoTaskId(source.taskId),
+    outputIndex: sanitizeGeneratedVideoOutputIndex(source.outputIndex),
+  };
+}
+
+function sanitizeResolveLegacyGeneratedVideoSourceInput(
+  input: unknown,
+): HtmlShareResolveLegacyGeneratedVideoSourceInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid generated video source resolution request.');
+  }
+  const source = input as Record<string, unknown>;
+  const resultUrl = sanitizeHtmlShareString(source.resultUrl, 'resultUrl', 4096);
+  let parsed: URL;
+  try {
+    parsed = new URL(resultUrl);
+  } catch {
+    throw new Error('resultUrl must be a valid HTTPS URL.');
+  }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+    throw new Error('resultUrl must be a valid HTTPS URL.');
+  }
+  return { resultUrl };
 }
 
 function sanitizeGetHtmlShareBySourceInput(input: unknown): HtmlShareGetBySourceInput {
@@ -1607,30 +1777,6 @@ const buildLogExportFileName = (): string => {
   return `lobsterai-logs-${datePart}-${timePart}.zip`;
 };
 
-const OPENCLAW_DAILY_LOG_RETENTION_DAYS = 7;
-const OPENCLAW_DAILY_LOG_RE = /^openclaw-\d{4}-\d{2}-\d{2}\.log$/;
-
-function getRecentOpenClawDailyLogEntries(
-  logDir: string | null,
-): Array<{ archiveName: string; filePath: string }> {
-  if (!logDir || !fs.existsSync(logDir)) return [];
-
-  const cutoffMs = Date.now() - OPENCLAW_DAILY_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-
-  return fs
-    .readdirSync(logDir)
-    .filter(f => OPENCLAW_DAILY_LOG_RE.test(f))
-    .map(f => ({ archiveName: f, filePath: path.join(logDir, f) }))
-    .filter(({ filePath }) => {
-      try {
-        return fs.statSync(filePath).mtimeMs >= cutoffMs;
-      } catch {
-        return false;
-      }
-    })
-    .sort((a, b) => a.archiveName.localeCompare(b.archiveName));
-}
-
 const truncateIpcString = (value: string, maxChars: number): string => {
   if (value.length <= maxChars) return value;
   return `${value.slice(0, maxChars)}\n...[truncated in main IPC forwarding]`;
@@ -1850,6 +1996,11 @@ const isLinux = process.platform === 'linux';
 const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
 const DEV_SERVER_URL = process.env.ELECTRON_START_URL || 'http://localhost:5175';
+const shouldOpenDevTools =
+  isDev && (
+    process.env.ELECTRON_OPEN_DEVTOOLS === '1'
+    || process.env.ELECTRON_OPEN_DEVTOOLS === 'true'
+  );
 const enableVerboseLogging =
   process.env.ELECTRON_ENABLE_LOGGING === '1' || process.env.ELECTRON_ENABLE_LOGGING === 'true';
 const disableGpu =
@@ -1975,6 +2126,9 @@ let store: SqliteStore | null = null;
 let coworkStore: CoworkStore | null = null;
 let openClawRuntimeAdapter: OpenClawRuntimeAdapter | null = null;
 let coworkEngineRouter: CoworkEngineRouter | null = null;
+let agentBrowserHost: AgentBrowserHost | null = null;
+let browserCredentialService: BrowserCredentialService | null = null;
+let browserCredentialApprovalService: BrowserCredentialApprovalService | null = null;
 let skillManager: SkillManager | null = null;
 let mcpRuntime: McpRuntime | null = null;
 let skinRuntimeController: SkinRuntimeController | null = null;
@@ -1991,8 +2145,10 @@ let coworkRuntimeForwarderBound = false;
 let memoryMigrationDone = false;
 let preventSleepBlockerId: number | null = null;
 let appUpdateCoordinator: AppUpdateCoordinator | null = null;
+let resolveAppUpdateGraySession: () => AppUpdateGraySession | null = () => null;
 let mainLogReporter: MainLogReporter | null = null;
 let libraryIndexService: LibraryIndexService | null = null;
+let unsubscribeLibrarySessionChanges: (() => void) | null = null;
 
 function setPreventSleepBlockerEnabled(enabled: boolean): void {
   if (enabled) {
@@ -2040,6 +2196,63 @@ const getOpenClawEngineManager = (): OpenClawEngineManager => {
   return openClawEngineManager;
 };
 
+const getBrowserCredentialService = (): BrowserCredentialService => {
+  if (!browserCredentialService) {
+    browserCredentialService = new BrowserCredentialService(
+      getStore().getDatabase(),
+      safeStorage,
+      process.platform,
+      getStore(),
+    );
+  }
+  return browserCredentialService;
+};
+
+const getBrowserCredentialApprovalService = (): BrowserCredentialApprovalService => {
+  if (!browserCredentialApprovalService) {
+    browserCredentialApprovalService = new BrowserCredentialApprovalService({
+      askUser: (questions, timeoutMs, options) => getMcpRuntime().askUserInternal(
+        questions,
+        timeoutMs,
+        options,
+      ),
+      translate: t,
+    });
+  }
+  return browserCredentialApprovalService;
+};
+
+const getAgentBrowserHost = (): AgentBrowserHost => {
+  if (!agentBrowserHost) {
+    agentBrowserHost = new AgentBrowserHost({
+      getMainWindow: () => mainWindow,
+      getBrowserConfig: () => getStore().get<AppConfigSettings>('app_config')?.browserWebAccess,
+      useSystemProxy: () => {
+        const appConfig = getStore().get<AppConfigSettings>('app_config');
+        const browserConfig = normalizeBrowserWebAccessConfig(appConfig?.browserWebAccess);
+        return getUseSystemProxyFromConfig(appConfig)
+          && browserConfig.followGlobalProxy
+          && browserConfig.networkMode === BrowserNetworkMode.ProxyCompatible;
+      },
+      emitState: event => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed()) {
+            window.webContents.send(BrowserIpc.HostState, event);
+          }
+        }
+      },
+      credentialService: getBrowserCredentialService(),
+      credentialApprovalService: getBrowserCredentialApprovalService(),
+      resolveSessionKey: sessionId => {
+        const normalizedSessionId = sessionId?.trim();
+        if (!normalizedSessionId) return undefined;
+        return getCoworkStore().getSession(normalizedSessionId, 0)?.claudeSessionId ?? undefined;
+      },
+    });
+  }
+  return agentBrowserHost;
+};
+
 const formatAutoLaunchStatusForLog = (status: AutoLaunchStatus): string => {
   const launchItems = status.launchItems
     ?.map(item => `${item.name}:${item.enabled ? 'enabled' : 'disabled'}:${item.args.join(' ') || '(no-args)'}`)
@@ -2055,7 +2268,13 @@ const formatAutoLaunchStatusForLog = (status: AutoLaunchStatus): string => {
 
 const getAppUpdateCoordinator = (): AppUpdateCoordinator => {
   if (!appUpdateCoordinator) {
-    appUpdateCoordinator = new AppUpdateCoordinator(getStore());
+    appUpdateCoordinator = new AppUpdateCoordinator(getStore(), new AppUpdateGrayClient({
+      getSession: () => resolveAppUpdateGraySession(),
+      getServerBaseUrl: getServerApiBaseUrl,
+      fetch: (url, options) => session.defaultSession.fetch(url, options),
+      platform: process.platform,
+      arch: process.arch,
+    }));
   }
   return appUpdateCoordinator;
 };
@@ -2111,6 +2330,7 @@ const getEngineNotReadyResponse = (status: OpenClawEngineStatus) => {
 const bootstrapOpenClawEngine = async (
   options: { forceReinstall?: boolean; reason?: string } = {},
 ) => {
+  if (openClawManualRepairActive) return getOpenClawEngineManager().getStatus();
   if (openClawBootstrapPromise) {
     return openClawBootstrapPromise;
   }
@@ -2154,21 +2374,27 @@ const bootstrapOpenClawEngine = async (
         console.log(
           `${gwDiagTs()} bootstrap: forceReinstall requested, stopping gateway before reinstall`,
         );
-        await manager.stopGateway();
+        await manager.stopGateway({ restarting: true });
         console.log(`[OpenClaw] bootstrap: stopGateway done (${elapsed()})`);
       }
       const ensuredStatus = await manager.ensureReady();
       console.log(
         `[OpenClaw] bootstrap: ensureReady done (${elapsed()}), phase=${ensuredStatus.phase}`,
       );
-      if (ensuredStatus.phase !== 'ready' && ensuredStatus.phase !== 'running') {
+      if (ensuredStatus.phase !== OpenClawEnginePhase.Ready
+        && ensuredStatus.phase !== OpenClawEnginePhase.Running
+        && ensuredStatus.phase !== OpenClawEnginePhase.Starting) {
         return ensuredStatus;
       }
+      if (isQuitting || isDataMigrationRestoreInProgress) return manager.getStatus();
       const result = await manager.startGateway(`bootstrap:${reason}`);
       console.log(`[OpenClaw] bootstrap completed (${elapsed()}), phase=${result.phase}`);
       return result;
     } catch (error) {
       console.error(`[OpenClaw] bootstrap failed (${reason}, ${elapsed()}):`, error);
+      if (manager.getStatus().phase === OpenClawEnginePhase.Starting) {
+        return manager.setExternalError(error instanceof Error ? error.message : 'OpenClaw startup failed.');
+      }
       return manager.getStatus();
     }
   };
@@ -2259,6 +2485,9 @@ const resolveSessionWorkingDirectory = (options: { cwd?: string; agentId?: strin
   if (explicitWorkingDirectory) return explicitWorkingDirectory;
   return resolveAgentDefaultWorkingDirectory(options.agentId);
 };
+
+const NEW_USER_WELCOME_SESSION_ID_STORE_KEY = 'new_user_welcome_session_id';
+const NEW_USER_WELCOME_CONTENT_MAX_LENGTH = 4000;
 
 const isLobsteraiServerModelRef = (modelRef: string): boolean => {
   const normalized = modelRef.trim();
@@ -2376,6 +2605,7 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
           return null;
         }
       },
+      isWeixinQrLoginActive: () => imGatewayManager?.isWeixinQrLoginActive() ?? false,
       getIMSettings: () => {
         try {
           return getIMGatewayManager().getConfig().settings;
@@ -2397,6 +2627,35 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
       },
       getAskUserCallbackUrl: () => getMcpRuntime().getAskUserCallbackUrl(),
       getMediaCallbackUrl: () => getMcpRuntime().getMediaCallbackUrl(),
+      getDecisionCallbackUrl: () => getMcpRuntime().getDecisionCallbackUrl(),
+      isDecisionModelActive: () => isDecisionModelFeatureActive(getStore()),
+      getBrowserCallbackUrl: () => getMcpRuntime().getBrowserCallbackUrl(),
+      getLobsterBrowserMcpCommand: () => {
+        const mcpRuntime = getMcpRuntime();
+        const bridgeUrl = mcpRuntime.getBrowserCallbackUrl();
+        if (!bridgeUrl) return null;
+        return resolveLobsterBrowserMcpCommand(
+          path.join(getOpenClawEngineManager().getStateDir(), 'generated'),
+          {
+            electronNodeRuntimePath: getElectronNodeRuntimePath(),
+            bridgeUrl,
+            bridgeSecret: mcpRuntime.getBridgeSecret(),
+          },
+        );
+      },
+      getLobsterBrowserMcpStdioLaunch: () => {
+        const mcpRuntime = getMcpRuntime();
+        const bridgeUrl = mcpRuntime.getBrowserCallbackUrl();
+        if (!bridgeUrl) return null;
+        return resolveLobsterBrowserMcpStdioLaunch(
+          path.join(getOpenClawEngineManager().getStateDir(), 'generated'),
+          {
+            electronNodeRuntimePath: getElectronNodeRuntimePath(),
+            bridgeUrl,
+            bridgeSecret: mcpRuntime.getBridgeSecret(),
+          },
+        );
+      },
       getMcpBridgeSecret: () => getMcpRuntime().getBridgeSecret(),
       getAgents: () => getCoworkStore().listAgents(),
       getUserPlugins: () =>
@@ -2431,6 +2690,37 @@ const hasActiveGatewayWorkloads = (): boolean => {
   return false;
 };
 
+const getConfigRestartWorkloads = () => {
+  const runtime = openClawRuntimeAdapter?.getConfigRestartWorkloadSnapshot();
+  let cronBusy: boolean | null = null;
+  try { cronBusy = peekCronJobService()?.hasRunningJobs() ?? null; } catch { /* Observation unavailable. */ }
+  const state = runtime?.state === ConfigWorkloadState.Busy || cronBusy === true
+    ? ConfigWorkloadState.Busy
+    : !runtime || runtime.state === ConfigWorkloadState.Unknown || cronBusy === null
+      ? ConfigWorkloadState.Unknown : ConfigWorkloadState.Idle;
+  return { state, runtime, cronBusy };
+};
+
+let lastConfigRestartWorkloadSignature = '';
+const hasActiveConfigRestartWorkloads = (reason: string, forceLog = false, syncId?: number): boolean => {
+  const workloads = getConfigRestartWorkloads();
+  // Tick/sample ages change on every poll; only log changes in the decision evidence.
+  const signature = JSON.stringify([
+    reason, workloads.state, workloads.cronBusy, workloads.runtime?.connectionGeneration,
+    workloads.runtime?.activeTurns, workloads.runtime?.im.activeSessions, workloads.runtime?.im.staleSessions,
+  ]);
+  if (forceLog || signature !== lastConfigRestartWorkloadSignature) {
+    lastConfigRestartWorkloadSignature = signature;
+    writeConfigDiagnostic({
+      event: 'restart-workload-check', reason, syncId, workloads,
+      blocksAutomaticRestart: workloads.state === ConfigWorkloadState.Busy,
+    });
+  }
+  // Unknown is diagnostic only in stage 1. Only positively observed IM work is
+  // added to the existing ActiveTurn/cron busy condition.
+  return workloads.state === ConfigWorkloadState.Busy;
+};
+
 const clearDeferredRestart = () => {
   if (deferredRestartTimer) {
     clearInterval(deferredRestartTimer);
@@ -2445,8 +2735,12 @@ const clearDeferredRestart = () => {
 
 type SyncOpenClawConfigOptions = {
   reason: string;
+  skillChangeBatch?: SkillChangeBatch;
+  manualRepair?: boolean;
   restartGatewayIfRunning?: boolean;
   expectedImpact?: OpenClawConfigImpact;
+  /** Only ordinary IM saves can reuse a completed restart of this exact config. */
+  imConfigRestartFingerprint?: string;
 };
 
 type SyncOpenClawConfigResult = {
@@ -2467,6 +2761,10 @@ let openClawConfigApplyQueue: Promise<void> = Promise.resolve();
 let openClawConfigApplyState: GatewayConfigApplyState | null = null;
 let openClawConfigApplyGeneration = 0;
 let deferredRestartReason: string | null = null;
+const imConfigRestartTracker = new OpenClawImConfigRestartTracker({
+  getImConfigFingerprint: () => createStableConfigFingerprint(getIMGatewayManager().getConfig()),
+  getGatewayGeneration: () => getOpenClawEngineManager().getGatewayConnectionInfo().generation,
+});
 
 const buildConfigApplyPendingStatus = (message: string): OpenClawEngineStatus => {
   const current = getOpenClawEngineManager().getStatus();
@@ -2507,8 +2805,6 @@ const waitForOpenClawConfigApply = async (context: string): Promise<OpenClawEngi
 
   return null;
 };
-
-const DEFERRED_SYNC_REASON_PREFIX = 'deferred:';
 
 const executeDeferredGatewayRestart = async (reason: string) => {
   clearDeferredRestart();
@@ -2565,11 +2861,12 @@ const selfRestartSatisfiesSync = (
 };
 
 const scheduleDeferredGatewayRestart = (reason: string) => {
+  deferredRestartReason = mergeDeferredGatewayRestartReason(deferredRestartReason, reason);
   // If already scheduled, the latest config is already on disk — just let
   // the existing timer handle the restart.
   if (deferredRestartTimer) {
     console.log(
-      `${gwDiagTs()} scheduleDeferredGatewayRestart: already scheduled, skipping (reason: ${reason})`,
+      `${gwDiagTs()} scheduleDeferredGatewayRestart: already scheduled, keeping reason=${deferredRestartReason}`,
     );
     return;
   }
@@ -2577,11 +2874,10 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
   console.log(
     `${gwDiagTs()} scheduleDeferredGatewayRestart: scheduling deferred restart, polling every ${DEFERRED_RESTART_POLL_MS}ms, overdue threshold ${DEFERRED_RESTART_OVERDUE_MS}ms (reason: ${reason})`,
   );
-  deferredRestartReason = reason;
   deferredRestartOverdue = false;
   deferredRestartTimer = setInterval(() => {
-    if (!hasActiveGatewayWorkloads()) {
-      void executeDeferredGatewayRestart(reason);
+    if (!hasActiveConfigRestartWorkloads(deferredRestartReason ?? reason)) {
+      void executeDeferredGatewayRestart(deferredRestartReason ?? reason);
     }
   }, DEFERRED_RESTART_POLL_MS);
 
@@ -2590,22 +2886,23 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
   // sync every five minutes while a long task is still active.
   deferredRestartTimeout = setTimeout(() => {
     deferredRestartTimeout = null;
-    if (hasActiveGatewayWorkloads()) {
+    if (hasActiveConfigRestartWorkloads(deferredRestartReason ?? reason, true)) {
       deferredRestartOverdue = true;
       console.warn(
-        `${gwDiagTs()} scheduleDeferredGatewayRestart: overdue while workloads remain active; restart stays queued until the first idle poll (reason: ${reason})`,
+        `${gwDiagTs()} scheduleDeferredGatewayRestart: overdue while workloads remain active; restart stays queued until the first idle poll (reason: ${deferredRestartReason ?? reason})`,
       );
       return;
     }
     console.warn(
-      `${gwDiagTs()} scheduleDeferredGatewayRestart: overdue threshold reached after workloads drained; applying queued restart (reason: ${reason})`,
+      `${gwDiagTs()} scheduleDeferredGatewayRestart: overdue threshold reached after workloads drained; applying queued restart (reason: ${deferredRestartReason ?? reason})`,
     );
-    void executeDeferredGatewayRestart(reason);
+    void executeDeferredGatewayRestart(deferredRestartReason ?? reason);
   }, DEFERRED_RESTART_OVERDUE_MS);
 };
 
 const _syncOpenClawConfigImpl = async (
   options: SyncOpenClawConfigOptions = { reason: 'unknown' },
+  syncId = 0,
 ): Promise<SyncOpenClawConfigResult> => {
   const D = gwDiagTs;
   console.log(
@@ -2614,6 +2911,12 @@ const _syncOpenClawConfigImpl = async (
 
   const configSync = getOpenClawConfigSync();
   const manager = getOpenClawEngineManager();
+  // CLI migrations can load user plugins too, so patch before invoking them.
+  const nspClawguardPatched = patchEnabledNspClawguard({
+    plugins: getCoworkStore().listUserPlugins(),
+    userDataDir: app.getPath('userData'),
+    stateDir: manager.getStateDir(),
+  });
   const migrationSecretEnvVars = {
     ...manager.getSecretEnvVars(),
     ...configSync.collectSecretEnvVars(),
@@ -2648,6 +2951,14 @@ const _syncOpenClawConfigImpl = async (
     getMcpRuntime().clearResolvedServersCache();
   }
 
+  // Legacy Weixin pairing allowlists make the pinned runtime refuse readiness
+  // at startup; fold them into the channel config before it is rendered.
+  runLegacyWeixinAllowFromMigration({
+    stateDir: manager.getStateDir(),
+    getStore: () => getIMGatewayManager().getIMStore(),
+  });
+
+  const imConfigFingerprint = imConfigRestartTracker.captureConfig();
   const syncResult = configSync.sync(options.reason);
   console.log(
     `${D()} sync() ok=${syncResult.ok} changed=${syncResult.changed} bindingsChanged=${!!syncResult.bindingsChanged} restartImpact=${syncResult.restartImpact ?? OpenClawConfigImpact.None}`,
@@ -2729,20 +3040,34 @@ const _syncOpenClawConfigImpl = async (
     effectiveConfigChanged
     && options.expectedImpact === OpenClawConfigImpact.Restart;
   const syncRestartImpact =
+    nspClawguardPatched ||
     syncResult.restartImpact === OpenClawConfigImpact.Restart;
+  const imRestartSatisfied = imConfigRestartTracker.isRestartSatisfied(
+    options.imConfigRestartFingerprint,
+    effectiveConfigChanged,
+  );
   const needsHardRestart =
     secretEnvVarsChanged ||
     syncResult.bindingsChanged === true ||
     syncRestartImpact ||
     expectedRestartImpact ||
-    options.restartGatewayIfRunning === true;
+    (options.restartGatewayIfRunning === true && !imRestartSatisfied);
+
+  if (imRestartSatisfied && !needsHardRestart) {
+    console.log('[OpenClawConfigSync] IM config already loaded by a completed gateway restart; skipping duplicate restart.');
+  }
 
   console.log(
     `${D()} needsHardRestart=${needsHardRestart} (envChanged=${secretEnvVarsChanged} bindingsChanged=${!!syncResult.bindingsChanged} configChanged=${effectiveConfigChanged} restartImpact=${syncResult.restartImpact ?? OpenClawConfigImpact.None} expectedRestart=${expectedRestartImpact} restartFlag=${!!options.restartGatewayIfRunning})`,
   );
 
-  if (!needsHardRestart) {
-    if (!effectiveConfigChanged) {
+  const retryDeferredDelivery = options.reason.startsWith(DEFERRED_SYNC_REASON_PREFIX)
+    && isConfigDeliveryFallbackReason(options.reason)
+    && !secretEnvVarsChanged
+    && !syncResult.bindingsChanged
+    && !syncRestartImpact;
+  if (!needsHardRestart || retryDeferredDelivery) {
+    if (!effectiveConfigChanged && !retryDeferredDelivery) {
       console.log(`${D()} ──── NO RESTART, config unchanged. reason=${options.reason}`);
       return {
         success: true,
@@ -2754,18 +3079,37 @@ const _syncOpenClawConfigImpl = async (
     // through config.set for a positive hot-apply ack, or schedule a deferred
     // restart when the RPC path is unavailable.
     const deliveryManager = getOpenClawEngineManager();
+    let payloadDigest: string | undefined;
     const delivery = await deliverOpenClawConfigToGateway({
       reason: options.reason,
       gatewayPhase: deliveryManager.getStatus().phase,
       readConfigFile: () => fs.readFileSync(deliveryManager.getConfigPath(), 'utf8'),
+      configPath: deliveryManager.getConfigPath(),
       ensureRpcClient: async () => (
         openClawRuntimeAdapter ? openClawRuntimeAdapter.ensureGatewayRpcClient() : null
       ),
-      scheduleDeferredRestart: scheduleDeferredGatewayRestart,
+      scheduleDeferredRestart: retryDeferredDelivery ? undefined : scheduleDeferredGatewayRestart,
+      onDiagnostic: event => {
+        if (event.payloadDigest) payloadDigest = event.payloadDigest;
+        const terminal = event.stage === ConfigDiagnosticStage.Complete;
+        const failed = event.outcome === ConfigDiagnosticOutcome.Failed;
+        const warn = (failed && event.errorKind !== ConfigDiagnosticErrorKind.HashConflict)
+          || (event.timeoutMs !== undefined && event.elapsedMs >= event.timeoutMs * 0.8);
+        const workloads = terminal || failed ? getConfigRestartWorkloads() : undefined;
+        writeConfigDiagnostic({
+          syncId, reason: options.reason, skillChangeBatch: options.skillChangeBatch,
+          // Logical host attempt, not the runtime's private wire request ID.
+          hostAttemptId: `${syncId}:${event.attempt}:${event.stage}`,
+          ...event, payloadDigest, workloads,
+          gatewayPid: deliveryManager.getGatewayProcessPid(),
+          gatewayGeneration: deliveryManager.getGatewayProcessGeneration(),
+          observation: terminal && event.evidence && event.actualAction ? observeConfigRecovery({
+            evidence: event.evidence, actualAction: event.actualAction,
+            workloadState: workloads?.state ?? ConfigWorkloadState.Unknown,
+          }) : undefined,
+        }, warn);
+      },
     });
-    console.log(
-      `${D()} ──── NO RESTART, hot delivery mode=${delivery.mode} restartScheduled=${delivery.restartScheduled}. reason=${options.reason}`,
-    );
     if (delivery.mode === OpenClawConfigDeliveryMode.Rejected) {
       return {
         success: false,
@@ -2774,10 +3118,16 @@ const _syncOpenClawConfigImpl = async (
         error: delivery.detail,
       };
     }
-    return {
-      success: true,
-      changed: true,
-    };
+    if (!retryDeferredDelivery || delivery.mode !== OpenClawConfigDeliveryMode.Fallback) {
+      console.log(
+        `${D()} ──── NO RESTART, hot delivery mode=${delivery.mode} restartScheduled=${delivery.restartScheduled}. reason=${options.reason}`,
+      );
+      return {
+        success: true,
+        changed: true,
+      };
+    }
+    console.warn(`${D()} deferred config delivery still failed; retaining queued restart. reason=${options.reason}`);
   }
 
   const status = manager.getStatus();
@@ -2792,7 +3142,7 @@ const _syncOpenClawConfigImpl = async (
     };
   }
 
-  if (hasActiveGatewayWorkloads()) {
+  if (hasActiveConfigRestartWorkloads(options.reason, true, syncId)) {
     console.log(`${D()} ──── RESTART DEFERRED (active workloads). reason=${options.reason}`);
     scheduleDeferredGatewayRestart(options.reason);
     return {
@@ -2806,7 +3156,7 @@ const _syncOpenClawConfigImpl = async (
     // Killing the gateway mid self-restart poisons its single-instance lock
     // (empty lock file → 30s of "gateway already running; lock timeout").
     // Park the demand; the gateway-ready callback re-evaluates it.
-    const requiresRespawn = !selfRestartSatisfiesSync(options, secretEnvVarsChanged);
+    const requiresRespawn = nspClawguardPatched || !selfRestartSatisfiesSync(options, secretEnvVarsChanged);
     pendingSelfRestartReevaluation = {
       reasons: [...(pendingSelfRestartReevaluation?.reasons ?? []), options.reason],
       requiresRespawn: (pendingSelfRestartReevaluation?.requiresRespawn ?? false) || requiresRespawn,
@@ -2822,15 +3172,20 @@ const _syncOpenClawConfigImpl = async (
     };
   }
 
+  if (isQuitting || isDataMigrationRestoreInProgress) {
+    return { success: false, changed: true, status: manager.getStatus() };
+  }
   console.log(
-    `${D()} ──── HARD RESTART EXECUTING. reason=${options.reason}, phase=${status.phase}, port=${status.message?.match(/loopback:(\d+)/)?.[1] ?? 'unknown'}`,
+    `${D()} ──── HARD RESTART EXECUTING. reason=${options.reason}, syncId=${syncId}, phase=${status.phase}, port=${status.message?.match(/loopback:(\d+)/)?.[1] ?? 'unknown'}`,
   );
   if (openClawRuntimeAdapter) {
     openClawRuntimeAdapter.disconnectGatewayClient();
   }
 
-  await manager.stopGateway();
-  const restarted = await manager.startGateway(`config-sync:${options.reason}`);
+  const restarted = await imConfigRestartTracker.restartGateway(
+    imConfigFingerprint,
+    () => manager.restartGateway(`config-sync:${options.reason}`),
+  );
   if (restarted.phase !== 'running') {
     return {
       success: false,
@@ -2838,6 +3193,11 @@ const _syncOpenClawConfigImpl = async (
       status: restarted,
       error: restarted.message || 'Failed to restart OpenClaw gateway after config sync.',
     };
+  }
+  // Restore desktop IM sync even when the next message arrives only on mobile.
+  // Config-driven restarts intentionally suppress the client's auto-reconnect.
+  if (openClawRuntimeAdapter && !isQuitting && !isDataMigrationRestoreInProgress) {
+    await openClawRuntimeAdapter.connectGatewayIfNeeded();
   }
   return {
     success: true,
@@ -2849,12 +3209,34 @@ const _syncOpenClawConfigImpl = async (
 const syncOpenClawConfig = async (
   options: SyncOpenClawConfigOptions = { reason: 'unknown' },
 ): Promise<SyncOpenClawConfigResult> => {
+  // Wait before enqueueing, so a background sync cannot block the repair's
+  // own regeneration behind a promise that is waiting for repair completion.
+  if (openClawManualRepairActive && !options.manualRepair) await openClawManualRepairBarrier;
   const generation = ++openClawConfigApplyGeneration;
+  const enqueuedAt = Date.now();
   const startAfterPrevious = openClawConfigApplyQueue.catch(() => {});
   const restartRequired =
     options.restartGatewayIfRunning === true
     || options.expectedImpact === OpenClawConfigImpact.Restart;
-  const resultPromise = startAfterPrevious.then(() => _syncOpenClawConfigImpl(options));
+  const resultPromise = startAfterPrevious.then(async () => {
+    const startedAt = Date.now();
+    const cpuAtStart = process.cpuUsage();
+    writeConfigDiagnostic({
+      event: 'sync-start', syncId: generation, reason: options.reason,
+      skillChangeBatch: options.skillChangeBatch, queueWaitMs: startedAt - enqueuedAt,
+    });
+    try {
+      return await _syncOpenClawConfigImpl(options, generation);
+    } finally {
+      const cpu = process.cpuUsage(cpuAtStart);
+      writeConfigDiagnostic({
+        event: 'sync-finish', syncId: generation, reason: options.reason,
+        elapsedMs: Date.now() - startedAt, hostPid: process.pid,
+        hostCpuUserMs: cpu.user / 1_000, hostCpuSystemMs: cpu.system / 1_000,
+        hostRssBytes: process.memoryUsage().rss,
+      });
+    }
+  });
   const barrierPromise = resultPromise.then((result) => {
     if (!result.success) {
       throw new Error(result.error || 'OpenClaw config sync failed.');
@@ -2925,15 +3307,20 @@ type OpenClawGatewayRepairResult = {
   status?: OpenClawEngineStatus;
   originalPath: string;
   backupPath?: string;
+  quarantinedSessionStoreCount?: number;
   error?: string;
   errorCode?: OpenClawGatewayRepairErrorCode;
   recoverable?: boolean;
+  failedStage?: OpenClawRepairStage;
+  failurePath?: string;
 };
 
 let openClawGatewayRepairPromise: Promise<OpenClawGatewayRepairResult> | null = null;
+let openClawManualRepairActive = false;
+let openClawManualRepairBarrier: Promise<void> | null = null;
 
 const isOpenClawGatewayRepairSuccess = (status: OpenClawEngineStatus): boolean => {
-  return status.phase === 'running' || status.phase === 'ready';
+  return status.phase === OpenClawEnginePhase.Running;
 };
 
 const buildOpenClawRepairBusyResult = (
@@ -3004,24 +3391,69 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
       return postBootstrapBusyResult;
     }
 
+    let backupPath: string | undefined;
+    let repairStage: OpenClawRepairStage = OpenClawRepairStage.Preparation;
+    let releaseConfigMaintenance: (() => void) | undefined;
     try {
+      openClawManualRepairActive = true;
+      openClawManualRepairBarrier = new Promise<void>(resolve => { releaseConfigMaintenance = resolve; });
+      await openClawConfigApplyQueue;
+      const pendingWork = buildOpenClawRepairBusyResult(originalPath, manager.getStatus());
+      if (pendingWork) return pendingWork;
       console.log('[OpenClawRepair] starting gateway state repair.');
       if (openClawRuntimeAdapter) {
         openClawRuntimeAdapter.disconnectGatewayClient();
       }
 
-      await manager.stopGateway();
-      const backupResult = backupOpenClawConfig(originalPath);
-      if (backupResult.backupPath) {
-        console.log(`[OpenClawRepair] backed up OpenClaw config to ${backupResult.backupPath}.`);
-      } else {
-        console.log('[OpenClawRepair] no OpenClaw config file was present, continuing with regeneration.');
-      }
-
-      const status = await bootstrapOpenClawEngine({
-        forceReinstall: false,
-        reason: 'manual-repair',
+      const preserveConfig = preserveOpenClawConfigForStartupRecovery(originalPath, manager.getStatus().errorCode);
+      await manager.withGatewayStoppedForRepair(async () => {
+        await manager.prepareRuntimeForStartupConfigSync('manual-repair');
+        const ensured = await manager.ensureReady();
+        if (ensured.phase !== OpenClawEnginePhase.Ready) throw new Error(ensured.message || 'OpenClaw runtime is unavailable.');
+        backupPath = createOpenClawRepairBackupDirectory(manager.getBaseDir());
+        const electronNodeRuntimePath = getElectronNodeRuntimePath();
+        const npmBinDir = app.isPackaged
+          ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
+          : path.join(app.getAppPath(), 'node_modules', 'npm', 'bin');
+        const nodeShimDir = ensureElectronNodeShim(electronNodeRuntimePath, npmBinDir);
+        const repairOptions = {
+          stateDir: manager.getStateDir(), configPath: originalPath,
+          runtimeRoot: manager.getRuntimeRoot(), electronNodeRuntimePath,
+          backupDir: backupPath, env: {
+            ...process.env, ...manager.getSecretEnvVars(), ...getOpenClawConfigSync().collectSecretEnvVars(),
+            // Doctor resolves the same auth reference while the gateway is stopped.
+            OPENCLAW_GATEWAY_TOKEN: manager.ensureGatewayToken(),
+            PATH: [nodeShimDir, process.env.PATH || process.env.Path].filter(Boolean).join(path.delimiter),
+            LOBSTERAI_NPM_BIN_DIR: npmBinDir,
+          },
+        };
+        await runOpenClawCompatibilityRepair({ ...repairOptions, phase: OpenClawRepairPhase.LockRecovery });
+        await runOpenClawCompatibilityRepair({ ...repairOptions, phase: OpenClawRepairPhase.Snapshot });
+        await runOpenClawDoctorRepair(repairOptions);
+        await runOpenClawCompatibilityRepair({ ...repairOptions, phase: OpenClawRepairPhase.Recovery });
+        // The snapshot already backs up config. Retain compatibility sources
+        // through migration and config sync instead of regenerating from scratch.
+        repairStage = OpenClawRepairStage.Configuration;
+        if (!preserveConfig) backupOpenClawConfig(originalPath, backupPath);
+        await startAskUserServer();
+        const sync = await syncOpenClawConfig({ reason: 'manual-repair', restartGatewayIfRunning: false, manualRepair: true });
+        if (!sync.success) throw new Error(sync.error || 'OpenClaw config regeneration failed.');
+        await runOpenClawCompatibilityRepair({
+          ...repairOptions, phase: OpenClawRepairPhase.Plugins,
+          env: { ...repairOptions.env, ...manager.getSecretEnvVars() },
+          legacyConfigPath: path.join(backupPath, 'original', 'openclaw.json'),
+        });
       });
+      repairStage = OpenClawRepairStage.Gateway;
+      const started = await manager.startGateway('manual-repair', { retryBlocked: true });
+      // Reconnection can await a token refresh that itself needs config sync.
+      // Release config writers after repair/startup, before awaiting the client.
+      openClawManualRepairActive = false;
+      releaseConfigMaintenance?.();
+      if (isOpenClawGatewayRepairSuccess(started)) {
+        await openClawRuntimeAdapter?.connectGatewayIfNeeded();
+      }
+      const status = manager.getStatus();
       const success = isOpenClawGatewayRepairSuccess(status);
       if (success) {
         console.log('[OpenClawRepair] gateway state repair completed successfully.');
@@ -3032,18 +3464,31 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
       return {
         success,
         status,
-        originalPath: backupResult.originalPath,
-        backupPath: backupResult.backupPath,
+        originalPath,
+        backupPath,
         error: success ? undefined : status.message || 'Failed to restart OpenClaw gateway after repair.',
+        quarantinedSessionStoreCount: readOpenClawRepairQuarantinedStoreCount(backupPath),
+        failedStage: success ? undefined : repairStage,
       };
     } catch (error) {
       console.error('[OpenClawRepair] gateway state repair failed:', error);
+      const message = error instanceof Error ? error.message : 'Failed to repair OpenClaw gateway state.';
+      const failedStage = error instanceof OpenClawRepairFailure ? error.stage : repairStage;
       return {
         success: false,
-        status: manager.getStatus(),
+        status: manager.setExternalError(message),
         originalPath,
-        error: error instanceof Error ? error.message : 'Failed to repair OpenClaw gateway state.',
+        backupPath,
+        error: message,
+        failedStage,
+        failurePath: error instanceof OpenClawRepairFailure ? error.failurePath : undefined,
+        errorCode: failedStage === OpenClawRepairStage.Snapshot ? OpenClawGatewayRepairErrorCode.SnapshotFailed : undefined,
+        quarantinedSessionStoreCount: readOpenClawRepairQuarantinedStoreCount(backupPath),
       };
+    } finally {
+      openClawManualRepairActive = false;
+      releaseConfigMaintenance?.();
+      openClawManualRepairBarrier = null;
     }
   })().finally(() => {
     if (openClawGatewayRepairPromise === promise) {
@@ -3202,6 +3647,13 @@ const bindCoworkRuntimeForwarder = (): void => {
 
   runtime.on('permissionResolved', (_sessionId: string, requestId: string) => {
     getDesktopNotificationManager().handlePermissionResolved(requestId);
+    if (requestId.startsWith(OpenClawQuestion.RequestIdPrefix)) {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(CoworkIpcChannel.StreamPermissionDismiss, { requestId });
+        }
+      }
+    }
   });
 
   runtime.on('sessionStopped', (sessionId: string) => {
@@ -3283,6 +3735,14 @@ const getCoworkEngineRouter = () => {
           onGatewayClientReady: () => {
             getCronJobService().notifyGatewayReady();
             handleGatewaySelfRestartSettled();
+          },
+          onBrowserToolEvent: event => {
+            const displayMode = normalizeBrowserWebAccessConfig(
+              getStore().get<AppConfigSettings>('app_config')?.browserWebAccess,
+            ).displayMode;
+            if (displayMode === BrowserDisplayMode.InApp) {
+              getAgentBrowserHost().handleToolEvent(event);
+            }
           },
         },
         new SubagentRunStore(getStore().getDatabase()),
@@ -3368,7 +3828,7 @@ const getDesktopNotificationManager = (): DesktopNotificationManager => {
         flushOpenSessionFromNotification();
       },
       updateTrayReminder: (count: number, onClick?: () => void) => {
-        updateTrayReminder(() => mainWindow, { count, onClick });
+        updateTrayReminder(() => isQuitting ? null : mainWindow, { count, onClick });
       },
     });
   }
@@ -3399,7 +3859,9 @@ const getMcpRuntime = (): McpRuntime => {
 };
 
 const startAskUserServer = async (): Promise<void> => {
-  await getMcpRuntime().startAskUserServer();
+  const runtime = getMcpRuntime();
+  await runtime.startAskUserServer();
+  runtime.setBrowserToolHandler(request => getAgentBrowserHost().handleToolRequest(request));
 };
 
 const getIMGatewayManager = () => {
@@ -3423,12 +3885,13 @@ const getIMGatewayManager = () => {
       },
       syncOpenClawConfig: async (
         reason?: string,
-        options?: { restartGatewayIfRunning?: boolean },
+        options?: { restartGatewayIfRunning?: boolean; requireSuccess?: boolean },
       ) => {
-        await syncOpenClawConfig({
+        const result = await syncOpenClawConfig({
           reason: reason || 'im-gateway-sync',
           restartGatewayIfRunning: options?.restartGatewayIfRunning,
         });
+        if (options?.requireSuccess && !result.success) throw new Error(result.error || t('openClawConfigSyncFailed'));
       },
       ensureOpenClawGatewayConnected: async () => {
         const configApplyStatus = await waitForOpenClawConfigApply('IM gateway client connection');
@@ -3763,6 +4226,7 @@ const flushOpenSessionFromNotification = (): void => {
 };
 
 const focusMainWindowForReason = (reason: string): void => {
+  if (isQuitting) return;
   const targetWindow = mainWindow && !mainWindow.isDestroyed()
     ? mainWindow
     : ensureMainWindowForReason?.(reason) ?? null;
@@ -4124,9 +4588,24 @@ const hasBrowserWebAccessConfigChanged = (
   previousConfig?: AppConfigSettings,
   nextConfig?: AppConfigSettings,
 ): boolean => {
-  return JSON.stringify(normalizeBrowserWebAccessConfig(previousConfig?.browserWebAccess)) !==
-    JSON.stringify(normalizeBrowserWebAccessConfig(nextConfig?.browserWebAccess));
+  const previousBrowserConfig = normalizeBrowserWebAccessConfig(previousConfig?.browserWebAccess);
+  const nextBrowserConfig = normalizeBrowserWebAccessConfig(nextConfig?.browserWebAccess);
+  return JSON.stringify({
+    ...previousBrowserConfig,
+    credentialUseMode: undefined,
+    credentialSaveMode: undefined,
+  }) !== JSON.stringify({
+    ...nextBrowserConfig,
+    credentialUseMode: undefined,
+    credentialSaveMode: undefined,
+  });
 };
+
+const hasBrowserHostConfigChanged = (
+  previousConfig?: AppConfigSettings,
+  nextConfig?: AppConfigSettings,
+): boolean => JSON.stringify(normalizeBrowserWebAccessConfig(previousConfig?.browserWebAccess)) !==
+  JSON.stringify(normalizeBrowserWebAccessConfig(nextConfig?.browserWebAccess));
 
 const getSqliteAutoBackupEnabledFromConfig = (
   config?: { sqliteAutoBackupEnabled?: boolean },
@@ -4377,6 +4856,9 @@ const scheduleReload = (reason: string, webContents?: WebContents) => {
 const gotTheLock = app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
+  if (isDev) {
+    console.warn('[Main] Development startup skipped: another LobsterAI instance is already running. Quit that instance and restart electron:dev to load the current source.');
+  }
   app.quit();
 } else {
   // Register custom protocol for OAuth callback
@@ -4417,7 +4899,7 @@ if (!gotTheLock) {
   let pendingShowOnFirstFrame = false;
 
   const focusMainWindow = (reason: string) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (isQuitting || !mainWindow || mainWindow.isDestroyed()) return;
     try {
       if (!mainWindow.isVisible() && !hasRenderedFirstFrame) {
         pendingShowOnFirstFrame = true;
@@ -4538,8 +5020,10 @@ if (!gotTheLock) {
         );
       }
       const browserWebAccessChanged = hasBrowserWebAccessConfigChanged(previousAppConfig, nextAppConfig);
-      const systemProxyChanged = getUseSystemProxyFromConfig(previousAppConfig) !==
-        getUseSystemProxyFromConfig(nextAppConfig);
+      const browserHostConfigChanged = hasBrowserHostConfigChanged(previousAppConfig, nextAppConfig);
+      if (browserHostConfigChanged || previousAppConfig?.useSystemProxy !== nextAppConfig?.useSystemProxy) {
+        agentBrowserHost?.refreshConfig();
+      }
       refreshEndpointsTestMode(getStore());
       const impactDecision = classifyAppConfigChange(previousAppConfig, value);
       const proxyChanged = impactDecision.reasons.includes(OpenClawConfigImpactReason.AppUseSystemProxy);
@@ -4553,21 +5037,14 @@ if (!gotTheLock) {
       }
 
       const shouldSyncOpenClawConfig = actionDecision.impact !== OpenClawConfigImpact.None || browserWebAccessChanged;
-      let syncResult: Awaited<ReturnType<typeof syncOpenClawConfig>> | null = null;
       if (shouldSyncOpenClawConfig) {
-        syncResult = await syncOpenClawConfig({
+        const syncResult = await syncOpenClawConfig({
           reason: 'app-config-change',
-          restartGatewayIfRunning: actionDecision.impact === OpenClawConfigImpact.Restart,
+          restartGatewayIfRunning:
+            actionDecision.impact === OpenClawConfigImpact.Restart || browserWebAccessChanged,
         });
         if (!syncResult.success) {
           console.error('[OpenClaw] Failed to sync config after app_config update:', syncResult.error);
-        }
-      }
-      if (syncResult?.success && browserWebAccessChanged && !systemProxyChanged && actionDecision.impact !== OpenClawConfigImpact.Restart) {
-        const engineStatus = getOpenClawEngineManager().getStatus();
-        if (engineStatus.phase === 'running') {
-          console.log(`${gwDiagTs()} browser access settings changed, restarting gateway`);
-          void getOpenClawEngineManager().restartGateway('browser-access-settings-change');
         }
       }
     }
@@ -4641,7 +5118,7 @@ if (!gotTheLock) {
           { archiveName: 'cowork.log', filePath: getCoworkLogPath() },
           ...getRecentComputerUseLogEntries(),
           ...manager.getRecentGatewayLogEntries(),
-          ...getRecentOpenClawDailyLogEntries(manager.getOpenClawDailyLogDir()),
+          ...getRecentOpenClawDailyLogEntries(manager.getOpenClawDailyLogDirs()),
           ...(process.platform === 'win32'
             ? [
                 {
@@ -4740,7 +5217,7 @@ if (!gotTheLock) {
   ipcMain.handle('app:relaunch', () => {
     console.log('[Main] app:relaunch requested, scheduling restart...');
     app.relaunch();
-    app.quit();
+    quitAppWithoutConfirmation('app:relaunch');
   });
 
   // Window control IPC handlers
@@ -5080,6 +5557,13 @@ if (!gotTheLock) {
     if (!getAuthTokens()) return null;
     const scope = getCurrentMediaAccountScope();
     return `${scope?.ownerAccountKey ?? 'unresolved'}:${authAccountGeneration}`;
+  };
+
+  resolveAppUpdateGraySession = () => {
+    const tokens = getAuthTokens();
+    if (!tokens || !getCurrentMediaAccountScope()) return null;
+    const sessionKey = getAuthSessionKey();
+    return sessionKey ? { sessionKey, accessToken: tokens.accessToken, headers: getEnterpriseAccountHeaders() } : null;
   };
 
   const authSessionManager = new AuthSessionManager({
@@ -5713,9 +6197,10 @@ if (!gotTheLock) {
             taskId,
           );
         }
-        const assets = resultUrls.map(url => ({
+        const assets = resultUrls.map((url, outputIndex) => ({
           type: statusMediaType,
           url,
+          outputIndex,
           mimeType: resolveGeneratedMediaAssetMimeType(statusMediaType, url),
         }));
 
@@ -6133,9 +6618,10 @@ if (!gotTheLock) {
         resultCount: resultUrls.length,
         quotaRemaining: task.quotaRemaining,
       }));
-      const assets = resultUrls.map(url => ({
+      const assets = resultUrls.map((url, outputIndex) => ({
         type: mediaType,
         url,
+        outputIndex,
         mimeType: resolveGeneratedMediaAssetMimeType(mediaType, url),
         ...(args.filename ? { filename: args.filename as string } : {}),
       }));
@@ -6223,6 +6709,7 @@ if (!gotTheLock) {
           model: outputModel,
           ...(upstreamModel ? { upstreamModel } : {}),
           ...(modelSelectionReason ? { modelSelectionReason } : {}),
+          mediaType,
           ...(detailsAssets.length > 0 ? { assets: detailsAssets } : {}),
           ...(Object.keys(billing).length > 0 ? { billing } : {}),
         },
@@ -6363,9 +6850,10 @@ if (!gotTheLock) {
             ? task.modelSelectionReason.trim()
             : undefined;
           const displayModel = upstreamModel || outputModel;
-          const assets = resultUrls.map(url => ({
+          const assets = resultUrls.map((url, outputIndex) => ({
             type: tracker.mediaType,
             url,
+            outputIndex,
             mimeType: resolveGeneratedMediaAssetMimeType(tracker.mediaType, url),
           }));
           if (status === 'succeeded' && tracker.mediaType === 'image') {
@@ -6380,7 +6868,9 @@ if (!gotTheLock) {
                 `Saved generated ${persistResult.saved.length === 1 ? 'image' : 'images'}:\n${fileLines.join('\n')}`,
                 {
                   toolResultDetails: {
+                    taskId,
                     status: 'succeeded',
+                    mediaType: 'image',
                     assets: persistResult.saved,
                   },
                 },
@@ -6413,7 +6903,9 @@ if (!gotTheLock) {
                 ].join('\n'),
                 {
                   toolResultDetails: {
+                    taskId,
                     status: 'succeeded',
+                    mediaType: 'video',
                     model: outputModel,
                     ...(upstreamModel ? { upstreamModel } : {}),
                     ...(modelSelectionReason ? { modelSelectionReason } : {}),
@@ -6423,14 +6915,25 @@ if (!gotTheLock) {
               );
             } else {
               const resultLines = resultUrls.map(url => `  - ${url}`);
-              emitMediaTaskMessage(tracker.sessionId, [
-                'Video generation succeeded.',
-                `Task ID: ${taskId}`,
-                `Model: ${displayModel}`,
-                ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
-                ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
-                ...(task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
-              ].join('\n'));
+              emitMediaTaskMessage(
+                tracker.sessionId,
+                [
+                  'Video generation succeeded.',
+                  `Task ID: ${taskId}`,
+                  `Model: ${displayModel}`,
+                  ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
+                  ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
+                  ...(task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
+                ].join('\n'),
+                {
+                  toolResultDetails: {
+                    taskId,
+                    status: 'succeeded',
+                    mediaType: 'video',
+                    assets,
+                  },
+                },
+              );
             }
           } else {
             const resultLines = tracker.mediaType === 'image'
@@ -6752,6 +7255,36 @@ if (!gotTheLock) {
     fetchWithAuth,
   });
 
+  registerSubscriptionTrialIpcHandlers({
+    ipcMain,
+    getMainWindow: () => mainWindow,
+    getServerBaseUrl: getServerApiBaseUrl,
+    getClientVersion: () => app.getVersion(),
+    platform: process.platform,
+    hasAuthTokens: () => getAuthTokens() !== null,
+    fetchPublic: (url, options) => net.fetch(url, options),
+    fetchWithAuth,
+  });
+
+  const activateLowCreditPurchaseOffer = async (): Promise<Record<string, unknown> | null> => {
+    try {
+      const response = await fetchWithAuth(`${getServerApiBaseUrl()}/api/purchase-offers/low-credit/activate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!response.ok) return null;
+      const body = (await response.json()) as {
+        code: number;
+        data?: Record<string, unknown>;
+      };
+      if (body.code !== 0 || !body.data) return null;
+      return { ...body.data, receivedAtEpochMs: Date.now() };
+    } catch (error) {
+      console.warn('[Auth] low-credit purchase offer activation failed:', error);
+      return null;
+    }
+  };
+
   ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {
     const startingTokens = getAuthTokens();
     const startingUser = getAuthUser();
@@ -6842,11 +7375,13 @@ if (!gotTheLock) {
         `[Auth] exchange completed; enterpriseContext=${enterpriseContext ? 'present' : 'absent'}`,
       );
       const quota = normalizeQuota(body.data.quota);
+      const purchaseOffer = await activateLowCreditPurchaseOffer();
       syncOpenClawConfigIfAuthQuotaGateChanged(startingQuotaGateState);
       return {
         success: true,
         user: body.data.user,
         quota,
+        purchaseOffer,
         enterpriseContext,
       };
     } catch (error) {
@@ -6995,11 +7530,13 @@ if (!gotTheLock) {
         `[Auth] profile refresh completed; quota=${quota ? 'present' : 'absent'}; `
         + `enterpriseContext=${enterpriseContext ? 'present' : 'absent'}`,
       );
+      const purchaseOffer = await activateLowCreditPurchaseOffer();
       return {
         success: true,
         status: AuthSessionStatus.Authenticated,
         user: profileBody.data,
         quota,
+        purchaseOffer,
         enterpriseContext,
       };
     } catch (error) {
@@ -7040,9 +7577,12 @@ if (!gotTheLock) {
       syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
       const enterpriseContextResult = await refreshEnterpriseAccountContext();
       if (authAccountGeneration !== requestAccountGeneration) return { success: false };
+      const purchaseOffer = await activateLowCreditPurchaseOffer();
+      if (authAccountGeneration !== requestAccountGeneration) return { success: false };
       return {
         success: true,
         quota,
+        purchaseOffer,
         enterpriseContext: enterpriseContextResult.context,
       };
     } catch {
@@ -7363,10 +7903,7 @@ if (!gotTheLock) {
       return { ...result, warnings: packaged.warnings };
     } catch (error) {
       console.error('[HtmlShare] failed to create share from HTML file:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to create share',
-      };
+      return serializeHtmlShareFailure(error, 'Failed to create share');
     } finally {
       if (archivePath) {
         const archiveDir = path.dirname(archivePath);
@@ -7396,10 +7933,7 @@ if (!gotTheLock) {
       );
     } catch (error) {
       console.error('[HtmlShare] failed to look up share from HTML file:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to load share',
-      };
+      return serializeHtmlShareFailure(error, 'Failed to load share');
     }
   });
 
@@ -7431,10 +7965,7 @@ if (!gotTheLock) {
       return { ...result, warnings: packaged.warnings };
     } catch (error) {
       console.error('[HtmlShare] failed to update share from HTML file:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to update share',
-      };
+      return serializeHtmlShareFailure(error, 'Failed to update share');
     } finally {
       if (archivePath) {
         const archiveDir = path.dirname(archivePath);
@@ -7490,10 +8021,7 @@ if (!gotTheLock) {
       return { ...result, warnings: packaged.warnings };
     } catch (error) {
       console.error('[HtmlShare] failed to create share from artifact file:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to create share',
-      };
+      return serializeHtmlShareFailure(error, 'Failed to create share');
     } finally {
       if (archivePath) {
         const archiveDir = path.dirname(archivePath);
@@ -7523,10 +8051,59 @@ if (!gotTheLock) {
       );
     } catch (error) {
       console.error('[HtmlShare] failed to look up share from artifact file:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to load share',
-      };
+      return serializeHtmlShareFailure(error, 'Failed to load share');
+    }
+  });
+
+  ipcMain.handle(HtmlShareIpc.CreateFromGeneratedVideo, async (_event, input: unknown) => {
+    try {
+      const { scopedFetch } = capturePublishingRequest();
+      const options = sanitizeCreateFromGeneratedVideoInput(input);
+      return await createGeneratedVideoShare(
+        getServerApiBaseUrl(),
+        getHtmlSharePublicBaseUrl(),
+        scopedFetch,
+        options,
+      );
+    } catch (error) {
+      console.error('[HtmlShare] failed to create share from generated video:', error);
+      return serializeHtmlShareFailure(error, 'Failed to create generated video share');
+    }
+  });
+
+  ipcMain.handle(HtmlShareIpc.GetGeneratedVideoSource, async (_event, input: unknown) => {
+    try {
+      const { scopedFetch } = capturePublishingRequest();
+      const options = sanitizeGetGeneratedVideoSourceInput(input);
+      return await getGeneratedVideoShareSource(
+        getServerApiBaseUrl(),
+        getHtmlSharePublicBaseUrl(),
+        scopedFetch,
+        options.taskId,
+        options.outputIndex,
+      );
+    } catch (error) {
+      console.error('[HtmlShare] failed to look up generated video share:', error);
+      return serializeHtmlShareFailure(error, 'Failed to load generated video share');
+    }
+  });
+
+  ipcMain.handle(HtmlShareIpc.ResolveLegacyGeneratedVideoSource, async (_event, input: unknown) => {
+    try {
+      const { scopedFetch } = capturePublishingRequest();
+      const options = sanitizeResolveLegacyGeneratedVideoSourceInput(input);
+      const resultUrlSha256 = crypto
+        .createHash('sha256')
+        .update(options.resultUrl, 'utf8')
+        .digest('hex');
+      return await resolveLegacyGeneratedVideoSource(
+        getServerApiBaseUrl(),
+        scopedFetch,
+        resultUrlSha256,
+      );
+    } catch (error) {
+      console.error('[HtmlShare] failed to resolve legacy generated video source:', error);
+      return serializeHtmlShareFailure(error, 'Failed to verify generated video source');
     }
   });
 
@@ -7542,10 +8119,7 @@ if (!gotTheLock) {
       );
     } catch (error) {
       console.error('[HtmlShare] failed to look up share from source:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to load share',
-      };
+      return serializeHtmlShareFailure(error, 'Failed to load share');
     }
   });
 
@@ -7583,10 +8157,7 @@ if (!gotTheLock) {
       return { ...result, warnings: packaged.warnings };
     } catch (error) {
       console.error('[HtmlShare] failed to update share from artifact file:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to update share',
-      };
+      return serializeHtmlShareFailure(error, 'Failed to update share');
     } finally {
       if (archivePath) {
         const archiveDir = path.dirname(archivePath);
@@ -7615,10 +8186,7 @@ if (!gotTheLock) {
       );
     } catch (error) {
       console.error('[HtmlShare] failed to update share status:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to update share status',
-      };
+      return serializeHtmlShareFailure(error, 'Failed to update share status');
     }
   });
 
@@ -7634,10 +8202,7 @@ if (!gotTheLock) {
       );
     } catch (error) {
       console.error('[HtmlShare] failed to update share access mode:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to update share access mode',
-      };
+      return serializeHtmlShareFailure(error, 'Failed to update share access mode');
     }
   });
 
@@ -8199,7 +8764,7 @@ if (!gotTheLock) {
     }
     try {
       const manager = getOpenClawEngineManager();
-      restartGatewayPromise = manager.restartGateway('ipc-manual');
+      restartGatewayPromise = manager.restartGateway('ipc-manual', { retryBlocked: true });
       const status = await restartGatewayPromise;
       return {
         success: status.phase === 'running' || status.phase === 'ready',
@@ -8315,7 +8880,7 @@ if (!gotTheLock) {
       await releaseRendererWindowsForDataMigrationRestore();
       rendererReleased = true;
       await showDataMigrationRestoreProgressWindow();
-      await runAppCleanup('data migration restore');
+      await runAppCleanup('data migration restore', { requireGatewayStopped: true });
       isCleanupFinished = true;
       isCleanupInProgress = false;
 
@@ -8380,57 +8945,216 @@ if (!gotTheLock) {
     }
   });
 
-  const getBrowserControlBaseUrl = (): string => {
-    const info = getOpenClawEngineManager().getGatewayConnectionInfo();
-    if (!info.port) {
-      throw new Error('OpenClaw gateway port is unavailable.');
-    }
-    return `http://127.0.0.1:${info.port + 2}`;
-  };
-
-  const fetchBrowserControlJson = async <T,>(
-    path: string,
-    options: RequestInit & { timeoutMs?: number } = {},
+  const requestBrowserControl = async <T,>(
+    request: BrowserControlGatewayRequest,
   ): Promise<T> => {
-    const { timeoutMs = 5000, ...requestOptions } = options;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    getCoworkEngineRouter();
+    if (!openClawRuntimeAdapter) {
+      throw new Error(t('agentBrowserRuntimeUnavailable'));
+    }
+    return await openClawRuntimeAdapter.requestBrowserControl(request) as T;
+  };
+
+  const buildBrowserProfileQuery = (profile?: BrowserRuntimeProfile): Record<string, string> | undefined => (
+    profile ? { profile } : undefined
+  );
+
+  registerBrowserCredentialHandlers({
+    ipcMain,
+    getService: getBrowserCredentialService,
+  });
+
+  const runBrowserHostAction = async (
+    action: () => Promise<ReturnType<AgentBrowserHost['getState']>> | ReturnType<AgentBrowserHost['getState']>,
+  ): Promise<AgentBrowserHostResponse> => {
     try {
-      const response = await fetch(`${getBrowserControlBaseUrl()}${path}`, {
-        ...requestOptions,
-        signal: controller.signal,
-      });
-      const text = await response.text();
-      let payload: unknown = null;
-      if (text) {
-        try {
-          payload = JSON.parse(text);
-        } catch {
-          payload = { error: text };
-        }
-      }
-      if (!response.ok) {
-        const errorMessage = payload && typeof payload === 'object' && 'error' in payload
-          ? String((payload as { error?: unknown }).error)
-          : `HTTP ${response.status}`;
-        throw new Error(errorMessage);
-      }
-      return payload as T;
-    } finally {
-      clearTimeout(timer);
+      return { success: true, state: await action() };
+    } catch (error) {
+      console.error('[AgentBrowserHost] In-app browser action failed:', error);
+      const message = error instanceof Error ? error.message : 'LobsterAI in-app browser action failed.';
+      return {
+        success: false,
+        state: {
+          ...getAgentBrowserHost().getState(),
+          error: message,
+        },
+        error: message,
+      };
     }
   };
 
-  const buildBrowserProfileQuery = (profile?: string): string => (
-    profile ? `?profile=${encodeURIComponent(profile)}` : ''
+  ipcMain.handle(
+    BrowserIpc.GetHostState,
+    (_event, _request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().getState()),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.SetHostView,
+    (_event, request?: AgentBrowserHostSetViewRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().setView({
+        sessionId: request?.sessionId,
+        visible: request?.visible === true,
+        bounds: request?.bounds,
+      })),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.NavigateHost,
+    (_event, request?: AgentBrowserHostNavigateRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().navigate(
+        request?.url ?? '',
+        request?.sessionId,
+      )),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.GoBackHost,
+    (): Promise<AgentBrowserHostResponse> => runBrowserHostAction(() => getAgentBrowserHost().goBack()),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.GoForwardHost,
+    (): Promise<AgentBrowserHostResponse> => runBrowserHostAction(() => getAgentBrowserHost().goForward()),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.ReloadHost,
+    (): Promise<AgentBrowserHostResponse> => runBrowserHostAction(() => getAgentBrowserHost().reload()),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.StopHost,
+    (): Promise<AgentBrowserHostResponse> => runBrowserHostAction(() => getAgentBrowserHost().stop()),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.CreateHostPage,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().newPage(request?.sessionId)),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.SelectHostPage,
+    (_event, request?: AgentBrowserHostPageRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().selectPage(
+        request?.pageId ?? 0,
+        request?.sessionId,
+      )),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.CloseHostPage,
+    (_event, request?: AgentBrowserHostPageRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().closePage(request?.pageId ?? 0)),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.ShowHostMenu,
+    (event, request?: AgentBrowserHostMenuRequest): Promise<AgentBrowserHostMenuResponse> => {
+      const targetWindow = BrowserWindow.fromWebContents(event.sender);
+      if (!targetWindow || targetWindow.isDestroyed()) {
+        return Promise.resolve({
+          success: false,
+          error: t('agentBrowserMenuUnavailable'),
+        });
+      }
+
+      const hostState = getAgentBrowserHost().getState();
+      const selectedTab = hostState.tabs.find(tab => tab.pageId === hostState.selectedPageId);
+      return showAgentBrowserHostMenu({
+        targetWindow,
+        position: request,
+        hasPage: Boolean(selectedTab),
+        zoomFactor: selectedTab?.zoomFactor,
+        darkMode: request?.darkMode,
+        onZoomAction: async action => {
+          const host = getAgentBrowserHost();
+          const currentState = host.getState();
+          const currentTab = currentState.tabs.find(tab => tab.pageId === currentState.selectedPageId);
+          if (!currentTab) throw new Error('No LobsterAI browser page is open.');
+          const nextFactor = action === AgentBrowserHostMenuAction.ZoomOut
+            ? currentTab.zoomFactor - AgentBrowserZoom.Step
+            : action === AgentBrowserHostMenuAction.ZoomIn
+              ? currentTab.zoomFactor + AgentBrowserZoom.Step
+              : AgentBrowserZoom.Default;
+          const nextState = host.setZoomFactor(nextFactor, request?.sessionId);
+          return nextState.tabs.find(tab => tab.pageId === nextState.selectedPageId)?.zoomFactor
+            ?? AgentBrowserZoom.Default;
+        },
+      });
+    },
+  );
+
+  ipcMain.handle(
+    BrowserIpc.CaptureHostScreenshot,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(async () => {
+        const host = getAgentBrowserHost();
+        console.debug('[AgentBrowserHost] Capturing the selected page for the clipboard.');
+        const image = await host.captureScreenshot(request?.sessionId);
+        clipboard.writeImage(image);
+        console.debug('[AgentBrowserHost] Browser screenshot copied to the clipboard.');
+        return host.getState();
+      }),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.SetHostZoom,
+    (_event, request?: AgentBrowserHostZoomRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().setZoomFactor(
+        request?.factor ?? Number.NaN,
+        request?.sessionId,
+      )),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.ClearHostCookies,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().clearCookies(request?.sessionId)),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.ClearHostCache,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().clearCache(request?.sessionId)),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.DismissCredentialLoginStatus,
+    (_event, request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => getAgentBrowserHost().dismissCredentialLoginStatus(request?.sessionId)),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.ResolvePasskey,
+    (_event, request?: BrowserPasskeyRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => request
+        ? getAgentBrowserHost().resolvePasskey(request)
+        : getAgentBrowserHost().getState()),
+  );
+
+  ipcMain.handle(
+    BrowserIpc.ResolveCredentialSavePrompt,
+    (_event, request?: AgentBrowserCredentialSavePromptRequest): Promise<AgentBrowserHostResponse> =>
+      runBrowserHostAction(() => {
+        if (!request) {
+          throw new Error('A browser credential save decision is required.');
+        }
+        return getAgentBrowserHost().resolveCredentialSavePrompt(
+          request.requestId,
+          request.decision,
+        );
+      }),
   );
 
   ipcMain.handle(BrowserIpc.GetStatus, async (_event, options?: { profile?: BrowserRuntimeProfile }) => {
     try {
-      const status = await fetchBrowserControlJson<Record<string, unknown>>(
-        `/${buildBrowserProfileQuery(options?.profile)}`,
-        { timeoutMs: 3000 },
-      );
+      const status = await requestBrowserControl<Record<string, unknown>>({
+        method: BrowserControlRequestMethod.Get,
+        path: '/',
+        query: buildBrowserProfileQuery(options?.profile),
+      });
       return { success: true, status };
     } catch (error) {
       return {
@@ -8442,10 +9166,10 @@ if (!gotTheLock) {
 
   ipcMain.handle(BrowserIpc.ListProfiles, async () => {
     try {
-      const result = await fetchBrowserControlJson<{ profiles?: unknown[] }>(
-        '/profiles',
-        { timeoutMs: 5000 },
-      );
+      const result = await requestBrowserControl<{ profiles?: unknown[] }>({
+        method: BrowserControlRequestMethod.Get,
+        path: '/profiles',
+      });
       return { success: true, profiles: result.profiles ?? [] };
     } catch (error) {
       return {
@@ -8458,10 +9182,12 @@ if (!gotTheLock) {
   ipcMain.handle(BrowserIpc.ResetProfile, async (_event, options?: { profile?: BrowserRuntimeProfile }) => {
     try {
       const profile = options?.profile || BrowserRuntimeProfile.Managed;
-      const result = await fetchBrowserControlJson<Record<string, unknown>>(
-        `/reset-profile${buildBrowserProfileQuery(profile)}`,
-        { method: 'POST', timeoutMs: 20000 },
-      );
+      const result = await requestBrowserControl<Record<string, unknown>>({
+        method: BrowserControlRequestMethod.Post,
+        path: '/reset-profile',
+        query: buildBrowserProfileQuery(profile),
+        timeoutMs: 20000,
+      });
       return { success: true, result };
     } catch (error) {
       return {
@@ -8492,10 +9218,10 @@ if (!gotTheLock) {
       addStep(BrowserDiagnosticStep.GatewayStatus, BrowserDiagnosticStatus.Success, 'browserDiagnosticGatewayReady');
 
       try {
-        const profiles = await fetchBrowserControlJson<{ profiles?: unknown[] }>(
-          '/profiles',
-          { timeoutMs: 5000 },
-        );
+        const profiles = await requestBrowserControl<{ profiles?: unknown[] }>({
+          method: BrowserControlRequestMethod.Get,
+          path: '/profiles',
+        });
         addStep(BrowserDiagnosticStep.Profiles, BrowserDiagnosticStatus.Success, 'browserDiagnosticProfilesReady', `${profiles.profiles?.length ?? 0}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -8504,10 +9230,11 @@ if (!gotTheLock) {
       }
 
       try {
-        await fetchBrowserControlJson<Record<string, unknown>>(
-          `/${buildBrowserProfileQuery(profile)}`,
-          { timeoutMs: 5000 },
-        );
+        await requestBrowserControl<Record<string, unknown>>({
+          method: BrowserControlRequestMethod.Get,
+          path: '/',
+          query: buildBrowserProfileQuery(profile),
+        });
         addStep(BrowserDiagnosticStep.BrowserStatus, BrowserDiagnosticStatus.Success, 'browserDiagnosticStatusReady');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -8515,10 +9242,12 @@ if (!gotTheLock) {
       }
 
       try {
-        await fetchBrowserControlJson<Record<string, unknown>>(
-          `/start${buildBrowserProfileQuery(profile)}`,
-          { method: 'POST', timeoutMs: 20000 },
-        );
+        await requestBrowserControl<Record<string, unknown>>({
+          method: BrowserControlRequestMethod.Post,
+          path: '/start',
+          query: buildBrowserProfileQuery(profile),
+          timeoutMs: 20000,
+        });
         addStep(BrowserDiagnosticStep.BrowserStart, BrowserDiagnosticStatus.Success, 'browserDiagnosticStartReady');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -8527,15 +9256,13 @@ if (!gotTheLock) {
       }
 
       try {
-        await fetchBrowserControlJson<Record<string, unknown>>(
-          `/tabs/open${buildBrowserProfileQuery(profile)}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: 'https://example.com' }),
-            timeoutMs: 20000,
-          },
-        );
+        await requestBrowserControl<Record<string, unknown>>({
+          method: BrowserControlRequestMethod.Post,
+          path: '/tabs/open',
+          query: buildBrowserProfileQuery(profile),
+          body: { url: 'https://example.com' },
+          timeoutMs: 20000,
+        });
         addStep(BrowserDiagnosticStep.OpenTestPage, BrowserDiagnosticStatus.Success, 'browserDiagnosticOpenPageReady');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -8554,6 +9281,12 @@ if (!gotTheLock) {
   });
 
   registerMcpHandlers({ getMcpRuntime, syncOpenClawConfig });
+
+  registerDecisionModelHandlers({
+    getStore: () => getStore(),
+    setDecisionToolHandler: handler => getMcpRuntime().setDecisionToolHandler(handler),
+    syncOpenClawConfig,
+  });
 
   registerDshHandlers({
     getStore: () => getStore(),
@@ -8596,7 +9329,6 @@ if (!gotTheLock) {
       return app.getPath('home');
     },
     getWorkbenchTitle: () => t('dshWorkbenchTitle'),
-    syncOpenClawConfig,
   });
 
 
@@ -9327,6 +10059,23 @@ if (!gotTheLock) {
     }
   });
 
+  const reviewSources = new WorkspaceReviewSourceStore(sessionId => getCoworkStore().getSession(sessionId, 0)?.cwd);
+  const scopedReviews = new ScopedReviewStore(sessionId => getCoworkStore().getSession(sessionId, 0)?.cwd);
+  ipcMain.handle(ReviewIpc.Read, async (_event, input: ReviewScopeRequest) => {
+    if (!input || typeof input.sessionId !== 'string' || !Object.values(ReviewScope).includes(input.scope)) return null;
+    const session = getCoworkStore().getSession(input.sessionId, 0);
+    if (!session) return null;
+    if (input.scope === ReviewScope.Repository) {
+      return buildWorkspaceChangesArtifact(input.sessionId, t('coworkWorkspaceChangesTitle'), await readEnvironmentSnapshot(session.cwd));
+    }
+    return scopedReviews.create(input);
+  });
+  ipcMain.handle(ReviewIpc.Source, (_event, input: ReviewSourceRequest) => {
+    if (typeof input?.artifactId !== 'string' || typeof input.sessionId !== 'string' || !getCoworkStore().getSession(input.sessionId, 0)) return null;
+    if (isScopedReview(input.artifactId)) return scopedReviews.readSource(input);
+    return reviewSources.read(input);
+  });
+
   ipcMain.handle(CoworkIpcChannel.StopSession, async (_event, sessionId: string) => {
     try {
       const runtime = getCoworkEngineRouter();
@@ -9371,6 +10120,73 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle(
+    CoworkIpcChannel.SeedNewUserWelcomeTask,
+    async (_event, options: { title?: string; content?: string }) => {
+      try {
+        const title = options.title?.trim();
+        const content = options.content?.trim();
+        if (!title || !content) {
+          return { success: false, error: 'Missing new user welcome task content' };
+        }
+        if (content.length > NEW_USER_WELCOME_CONTENT_MAX_LENGTH) {
+          return { success: false, error: 'New user welcome task content is too long' };
+        }
+
+        const existingSessionId = getStore().get<string>(NEW_USER_WELCOME_SESSION_ID_STORE_KEY);
+        if (existingSessionId) {
+          const coworkStoreInstance = getCoworkStore();
+          const existingSession = coworkStoreInstance.getSession(existingSessionId);
+          if (existingSession) {
+            if (existingSession.title !== title) {
+              coworkStoreInstance.updateSession(existingSessionId, { title }, { touchUpdatedAt: false });
+            }
+            const normalizedExistingSession = existingSession.title === title
+              ? existingSession
+              : { ...existingSession, title };
+            console.debug(`[Onboarding] reused seeded new user welcome task session=${existingSessionId}`);
+            return { success: true, session: normalizedExistingSession, created: false };
+          }
+          console.warn(
+            `[Onboarding] stored new user welcome task session was missing; session=${existingSessionId}`,
+          );
+        }
+
+        const coworkStoreInstance = getCoworkStore();
+        const config = coworkStoreInstance.getConfig();
+        const cwd = resolveSessionWorkingDirectory({ agentId: 'main' });
+        const session = coworkStoreInstance.createSession(
+          title,
+          cwd,
+          config.systemPrompt,
+          config.executionMode || 'local',
+          [],
+          'main',
+          '',
+        );
+        coworkStoreInstance.addMessage(session.id, {
+          type: 'assistant',
+          content,
+          metadata: {
+            kind: CoworkOnboardingMessageKind.NewUserWelcome,
+          },
+        });
+        coworkStoreInstance.updateSession(session.id, { status: 'completed' });
+        getStore().set(NEW_USER_WELCOME_SESSION_ID_STORE_KEY, session.id);
+
+        const sessionWithMessages = coworkStoreInstance.getSession(session.id) || session;
+        console.log(`[Onboarding] seeded new user welcome task session=${session.id}`);
+        return { success: true, session: sessionWithMessages, created: true };
+      } catch (error) {
+        console.warn('[Onboarding] failed to seed new user welcome task:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to seed new user welcome task',
+        };
+      }
+    },
+  );
+
   ipcMain.handle(CoworkIpcChannel.OpenSessionFromNotificationReady, async event => {
     if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
       console.warn('[DesktopNotification] ignored notification open readiness from an unknown renderer');
@@ -9383,17 +10199,11 @@ if (!gotTheLock) {
     return { success: true };
   });
 
-  ipcMain.handle('cowork:session:delete', async (_event, sessionId: string) => {
+  ipcMain.handle(CoworkIpcChannel.DeleteSession, async (_event, sessionId: string) => {
     try {
       getCoworkEngineRouter().stopSession(sessionId);
       const coworkStoreInstance = getCoworkStore();
-      const affectedArtifactIds = coworkStoreInstance.deleteSession(sessionId);
-      if (affectedArtifactIds.length > 0) {
-        libraryIndexService?.notifyChange({
-          reason: LibraryChangeReason.SessionDeleted,
-          itemIds: affectedArtifactIds,
-        });
-      }
+      coworkStoreInstance.deleteSession(sessionId);
       mediaSelectionBySession.delete(sessionId);
       mediaTurnAccountScopeBySession.delete(sessionId);
       skinRuntimeController?.handleSessionDeleted(sessionId);
@@ -9428,20 +10238,14 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:session:deleteBatch', async (_event, sessionIds: string[]) => {
+  ipcMain.handle(CoworkIpcChannel.DeleteSessions, async (_event, sessionIds: string[]) => {
     try {
       const runtime = getCoworkEngineRouter();
       sessionIds.forEach(sessionId => {
         runtime.stopSession(sessionId);
       });
       const coworkStoreInstance = getCoworkStore();
-      const affectedArtifactIds = coworkStoreInstance.deleteSessions(sessionIds);
-      if (affectedArtifactIds.length > 0) {
-        libraryIndexService?.notifyChange({
-          reason: LibraryChangeReason.SessionDeleted,
-          itemIds: affectedArtifactIds,
-        });
-      }
+      coworkStoreInstance.deleteSessions(sessionIds);
       const router = getCoworkEngineRouter();
       for (const sessionId of sessionIds) {
         skinRuntimeController?.handleSessionDeleted(sessionId);
@@ -9579,11 +10383,15 @@ if (!gotTheLock) {
 
   ipcMain.handle('cowork:session:get', async (_event, sessionId: string) => {
     try {
-      const session = getCoworkStore().getSession(sessionId);
+      const store = getCoworkStore();
+      const session = store.getSession(sessionId);
       if (session) {
         console.log(
           `[CoworkIPC] loaded session ${sessionId}; returned ${session.messages.length} of ${session.totalMessages} messages from offset ${session.messagesOffset}.`,
         );
+        if (session.messagesOffset > 0) {
+          session.leadingTurnStartTimestamp = store.getTurnStartTimestampAt(sessionId, session.messagesOffset);
+        }
       } else {
         console.warn(`[CoworkIPC] session ${sessionId} was not found during load.`);
       }
@@ -9658,7 +10466,10 @@ if (!gotTheLock) {
         console.log(
           `[CoworkIPC] loaded message page for session ${sessionId}; returned ${messages.length} of ${total} messages from offset ${offset} with limit ${limit}.`,
         );
-        return { success: true, messages, offset, total };
+        const leadingTurnStartTimestamp = offset > 0 && messages.length > 0
+          ? store.getTurnStartTimestampAt(sessionId, offset)
+          : null;
+        return { success: true, messages, offset, total, leadingTurnStartTimestamp };
       } catch (error) {
         return {
           success: false,
@@ -9962,11 +10773,17 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:permission:respond', async (_event, options: {
+  ipcMain.handle(CoworkIpcChannel.GetPendingQuestions, () => getCoworkEngineRouter().getPendingQuestions());
+
+  ipcMain.handle(CoworkIpcChannel.PermissionRespond, async (_event, options: {
     requestId: string;
     result: PermissionResult;
   }) => {
     try {
+      if (options.requestId?.startsWith(OpenClawQuestion.RequestIdPrefix)) {
+        await getCoworkEngineRouter().respondToPermission(options.requestId, options.result);
+        return { success: true };
+      }
       // Dual-dispatch pattern: permission responses arrive through one IPC channel
       // but may target either of two independent subsystems.
       //
@@ -9983,16 +10800,15 @@ if (!gotTheLock) {
         // AskUserQuestion plugin responses go to the bridge server, not the runtime
         if (options.requestId) {
           const result = options.result;
+          const updatedInput = result.behavior === 'allow' && result.updatedInput && typeof result.updatedInput === 'object'
+            ? (result.updatedInput as Record<string, unknown>)
+            : undefined;
           const askUserResponse: AskUserResponse = {
             behavior: result.behavior === 'allow' ? 'allow' : 'deny',
-            answers:
-              result.behavior === 'allow' &&
-              result.updatedInput &&
-              typeof result.updatedInput === 'object'
-                ? ((result.updatedInput as Record<string, unknown>).answers as
-                    | Record<string, string>
-                    | undefined)
-                : undefined,
+            answers: updatedInput?.answers as Record<string, string> | undefined,
+            skippedQuestionIds: Array.isArray(updatedInput?.skippedQuestionIds)
+              ? (updatedInput.skippedQuestionIds as string[])
+              : undefined,
           };
           getMcpRuntime().resolveAskUser(options.requestId, askUserResponse);
         }
@@ -10448,7 +11264,7 @@ if (!gotTheLock) {
     };
   }
 
-  ipcMain.handle('cowork:config:set', async (_event, config: {
+  ipcMain.handle(CoworkIpcChannel.ConfigSet, async (_event, config: {
     workingDirectory?: string;
     executionMode?: 'auto' | 'local' | 'sandbox';
     agentEngine?: CoworkAgentEngine;
@@ -10459,6 +11275,8 @@ if (!gotTheLock) {
     memoryUserMemoriesMaxItems?: number;
     skipMissedJobs?: boolean;
     openClawHeartbeatEnabled?: boolean;
+    openClawSkillReviewEnabled?: boolean;
+    openClawMemoryFlushEnabled?: boolean;
     embeddingEnabled?: boolean;
     embeddingProvider?: string;
     embeddingModel?: string;
@@ -10502,6 +11320,12 @@ if (!gotTheLock) {
       const normalizedOpenClawHeartbeatEnabled = typeof config.openClawHeartbeatEnabled === 'boolean'
         ? config.openClawHeartbeatEnabled
         : undefined;
+      const normalizedOpenClawSkillReviewEnabled = typeof config.openClawSkillReviewEnabled === 'boolean'
+        ? config.openClawSkillReviewEnabled
+        : undefined;
+      const normalizedOpenClawMemoryFlushEnabled = typeof config.openClawMemoryFlushEnabled === 'boolean'
+        ? config.openClawMemoryFlushEnabled
+        : undefined;
       const normalizedEmbedding = normalizeEmbeddingConfig(config);
       const normalizedConfig: Parameters<CoworkStore['setConfig']>[0] = {
         ...config,
@@ -10514,6 +11338,8 @@ if (!gotTheLock) {
         memoryUserMemoriesMaxItems: normalizedMemoryUserMemoriesMaxItems,
         skipMissedJobs: normalizedSkipMissedJobs,
         openClawHeartbeatEnabled: normalizedOpenClawHeartbeatEnabled,
+        openClawSkillReviewEnabled: normalizedOpenClawSkillReviewEnabled,
+        openClawMemoryFlushEnabled: normalizedOpenClawMemoryFlushEnabled,
         ...normalizedEmbedding,
       };
       const previousConfig = getCoworkStore().getConfig();
@@ -10534,6 +11360,22 @@ if (!gotTheLock) {
       ) {
         console.log(
           `[Cowork] OpenClaw heartbeat setting changed: enabled=${nextConfig.openClawHeartbeatEnabled}, previous=${previousConfig.openClawHeartbeatEnabled}, impact=${impactDecision.impact}`,
+        );
+      }
+      if (
+        normalizedConfig.openClawSkillReviewEnabled !== undefined
+        && previousConfig.openClawSkillReviewEnabled !== nextConfig.openClawSkillReviewEnabled
+      ) {
+        console.log(
+          `[Cowork] OpenClaw skill review setting changed: enabled=${nextConfig.openClawSkillReviewEnabled}, previous=${previousConfig.openClawSkillReviewEnabled}, impact=${impactDecision.impact}`,
+        );
+      }
+      if (
+        normalizedConfig.openClawMemoryFlushEnabled !== undefined
+        && previousConfig.openClawMemoryFlushEnabled !== nextConfig.openClawMemoryFlushEnabled
+      ) {
+        console.log(
+          `[Cowork] OpenClaw memory flush setting changed: enabled=${nextConfig.openClawMemoryFlushEnabled}, previous=${previousConfig.openClawMemoryFlushEnabled}, impact=${impactDecision.impact}`,
         );
       }
       if (impactDecision.impact !== OpenClawConfigImpact.None) {
@@ -10639,7 +11481,8 @@ if (!gotTheLock) {
   let imConfigSyncTimer: ReturnType<typeof setTimeout> | null = null;
   let imConfigSyncRunning = false;
   let imConfigSyncPending = false;
-  let imConfigSyncRestartGatewayIfRunning = false;
+  // Explicit restart demands (including out-of-config login state) cannot be deduplicated.
+  let imConfigSyncForceRestart = false;
   let lastSyncedImOpenClawConfigFingerprint: string | null = null;
   const IM_CONFIG_SYNC_DEBOUNCE_MS = 600;
   type IMConfigSyncOptions = {
@@ -10669,12 +11512,15 @@ if (!gotTheLock) {
 
   const doImConfigSync = async (): Promise<IMConfigSyncResult> => {
     imConfigSyncRunning = true;
-    const restartGatewayIfRunning = imConfigSyncRestartGatewayIfRunning;
-    imConfigSyncRestartGatewayIfRunning = false;
+    const forceRestart = imConfigSyncForceRestart;
+    imConfigSyncForceRestart = false;
     try {
       const syncResult = await syncOpenClawConfig({
         reason: 'im-config-change',
-        restartGatewayIfRunning,
+        restartGatewayIfRunning: true,
+        ...(forceRestart ? {} : {
+          imConfigRestartFingerprint: getCurrentImOpenClawConfigFingerprint(),
+        }),
       });
       if (!syncResult.success) {
         throw new Error(syncResult.error || 'OpenClaw config sync failed.');
@@ -10700,7 +11546,7 @@ if (!gotTheLock) {
     } finally {
       imConfigSyncRunning = false;
       if (imConfigSyncPending) {
-        const restartPendingGatewayIfRunning = imConfigSyncRestartGatewayIfRunning;
+        const restartPendingGatewayIfRunning = imConfigSyncForceRestart;
         imConfigSyncPending = false;
         scheduleImConfigSync({
           restartGatewayIfRunning: restartPendingGatewayIfRunning,
@@ -10711,7 +11557,7 @@ if (!gotTheLock) {
 
   const scheduleImConfigSync = (options: IMConfigSyncOptions = {}) => {
     if (options.restartGatewayIfRunning) {
-      imConfigSyncRestartGatewayIfRunning = true;
+      imConfigSyncForceRestart = true;
     }
     if (imConfigSyncRunning) {
       // A sync is already in progress; mark pending so it re-runs after completion.
@@ -10727,7 +11573,7 @@ if (!gotTheLock) {
 
   const runImConfigSyncNow = async (options: IMConfigSyncOptions = {}): Promise<IMConfigSyncResult> => {
     if (options.restartGatewayIfRunning) {
-      imConfigSyncRestartGatewayIfRunning = true;
+      imConfigSyncForceRestart = true;
     }
     if (imConfigSyncTimer) {
       clearTimeout(imConfigSyncTimer);
@@ -10758,9 +11604,7 @@ if (!gotTheLock) {
 
     if (options.syncGateway) {
       scheduleImConfigSync({
-        restartGatewayIfRunning:
-          options.restartGatewayIfRunning === true
-          || impactDecision.impact === OpenClawConfigImpact.Restart,
+        restartGatewayIfRunning: options.restartGatewayIfRunning === true,
       });
     }
   };
@@ -10811,7 +11655,7 @@ if (!gotTheLock) {
         return { success: true, skipped: true };
       }
       const syncResult = await runImConfigSyncNow({
-        restartGatewayIfRunning: impactDecision.impact === OpenClawConfigImpact.Restart,
+        restartGatewayIfRunning: imConfigRestartOnNextSettingsSave,
       });
       if (!syncResult.success) {
         return { success: false, error: syncResult.error };
@@ -12175,61 +13019,119 @@ if (!gotTheLock) {
         return await libraryThumbnailRenderer.render(filePath, size);
       } catch (rendererError) {
         const extension = path.extname(filePath).toLowerCase();
+        const rendererFailure = getLibraryThumbnailFailureDetails(
+          rendererError,
+          LibraryThumbnailFailureCode.RendererFailed,
+        );
         console.warn('[LibraryThumbnail] Renderer failed; using native fallback', {
           extension,
-          errorType: rendererError instanceof Error ? rendererError.name : 'UnknownError',
+          failureCode: rendererFailure.code,
+          failureStage: rendererFailure.stage,
+          sourceSizeBytes: rendererFailure.metrics?.sourceSizeBytes,
+          slideCount: rendererFailure.metrics?.slideCount,
+          imageCount: rendererFailure.metrics?.imageCount,
+          renderDurationMs: rendererFailure.metrics?.renderDurationMs,
         });
         try {
           const image = await nativeImage.createThumbnailFromPath(filePath, size);
-          if (image.isEmpty()) throw new Error('Thumbnail is empty');
-          if (
-            process.platform === 'win32'
-            && extension === '.pptx'
-            && isLikelyBlankThumbnailBitmap(image.toBitmap())
-          ) {
-            throw new Error('Native PPTX thumbnail is visually blank');
+          if (image.isEmpty()) {
+            throw new LibraryThumbnailError(
+              LibraryThumbnailFailureCode.NativeThumbnailEmpty,
+              'Thumbnail is empty',
+            );
+          }
+          const rendererConfirmedIntentionalBlank = (
+            rendererFailure.metrics?.sourceHasVisualContent === false
+            && rendererFailure.metrics?.domHasVisualContent === false
+          );
+          if (shouldRejectNativeLibraryThumbnail({
+            extension,
+            platform: process.platform,
+            rendererConfirmedIntentionalBlank,
+            getBitmap: () => image.toBitmap(),
+          })) {
+            throw new LibraryThumbnailError(
+              LibraryThumbnailFailureCode.NativeThumbnailBlank,
+              'Native thumbnail is visually blank',
+            );
           }
           return image.toPNG();
         } catch (nativeError) {
+          const nativeFailure = getLibraryThumbnailFailureDetails(
+            nativeError,
+            LibraryThumbnailFailureCode.NativeThumbnailFailed,
+          );
           console.error('[LibraryThumbnail] Renderer and native fallback failed', {
             extension,
-            errorType: nativeError instanceof Error ? nativeError.name : 'UnknownError',
+            rendererFailureCode: rendererFailure.code,
+            rendererFailureStage: rendererFailure.stage,
+            nativeFailureCode: nativeFailure.code,
+            nativeFailureStage: nativeFailure.stage,
+            sourceSizeBytes: rendererFailure.metrics?.sourceSizeBytes,
+            slideCount: rendererFailure.metrics?.slideCount,
           });
-          const rendererMessage = rendererError instanceof Error
-            ? rendererError.message
-            : 'Unknown renderer error';
-          const nativeMessage = nativeError instanceof Error
-            ? nativeError.message
-            : 'Unknown native thumbnail error';
-          throw new Error(
-            `Failed to generate thumbnail (renderer: ${rendererMessage}; native: ${nativeMessage})`,
+          const finalFailure = isLibraryThumbnailFailureRetryable(rendererFailure.code)
+            ? nativeFailure
+            : rendererFailure;
+          throw new LibraryThumbnailError(
+            finalFailure.code,
+            `Failed to generate thumbnail (renderer: ${rendererFailure.message}; native: ${nativeFailure.message})`,
+            rendererFailure.metrics,
           );
         }
       }
     },
     getCacheDirectory: () => path.join(app.getPath('userData'), 'library', 'thumbnails'),
-    maxConcurrency: 3,
+    maxConcurrency: 1,
   });
 
   ipcMain.handle(
     DialogIpc.GenerateThumbnail,
     async (
       _event,
-      filePath?: string,
-    ): Promise<{ success: boolean; dataUrl?: string; error?: string }> => {
+      request?: LibraryThumbnailGenerateRequest,
+    ): Promise<LibraryThumbnailGenerateResponse> => {
       try {
-        if (typeof filePath !== 'string' || !filePath.trim()) {
-          return { success: false, error: 'Missing file path' };
+        if (
+          !request
+          || typeof request.filePath !== 'string'
+          || !request.filePath.trim()
+          || typeof request.requestId !== 'string'
+          || !request.requestId.trim()
+        ) {
+          return {
+            success: false,
+            error: 'Invalid thumbnail request',
+            failureCode: LibraryThumbnailFailureCode.Unknown,
+            retryable: false,
+          };
         }
-        const dataUrl = await libraryThumbnailService.generate(filePath);
+        const dataUrl = await libraryThumbnailService.generate(request.filePath, {
+          requestId: request.requestId,
+          priority: request.priority,
+        });
         return { success: true, dataUrl };
       } catch (error) {
+        const failure = getLibraryThumbnailFailureDetails(error);
         return {
           success: false,
-          error: error instanceof Error ? error.message : 'Failed to generate thumbnail',
+          error: failure.message,
+          failureCode: failure.code,
+          failureStage: failure.stage,
+          retryable: isLibraryThumbnailFailureRetryable(failure.code),
         };
       }
     },
+  );
+
+  ipcMain.handle(
+    DialogIpc.CancelThumbnail,
+    (_event, requestId?: string): { success: boolean; canceled: boolean } => ({
+      success: true,
+      canceled: typeof requestId === 'string' && requestId.trim().length > 0
+        ? libraryThumbnailService.cancel(requestId)
+        : false,
+    }),
   );
 
   const getFileAccessFailureReason = (error: unknown): ShellOpenFailureReasonType => {
@@ -12448,6 +13350,8 @@ if (!gotTheLock) {
     getServerApiBaseUrl,
   });
 
+  registerMarkdownEditingHandlers(() => mainWindow);
+
   // ---- artifact file watching ----
   const fileWatchers = new Map<
     string,
@@ -12612,17 +13516,18 @@ if (!gotTheLock) {
     return { success: true, state };
   });
 
-  ipcMain.handle(AppUpdateIpc.CancelDownload, async () => {
-    const state = getAppUpdateCoordinator().cancelDownload();
-    return { success: true, state };
-  });
-
   ipcMain.handle(AppUpdateIpc.InstallReady, async () => {
     return getAppUpdateCoordinator().installReadyUpdate();
   });
 
   ipcMain.handle(AppUpdateIpc.GetCompletedUpdate, async () => {
     return { version: getAppUpdateCoordinator().consumeCompletedUpdateVersion() };
+  });
+
+  // Installing quits the app, so the renderer asks before interrupting a
+  // running agent turn or scheduled task.
+  ipcMain.handle(AppUpdateIpc.GetActiveWorkloads, async (): Promise<AppUpdateActiveWorkloads> => {
+    return { hasActiveWorkloads: hasActiveGatewayWorkloads() };
   });
 
   // Helper: detect if a URL belongs to GitHub Copilot and apply token refresh on 401.
@@ -12960,6 +13865,7 @@ if (!gotTheLock) {
 
   // 创建主窗口
   const createWindow = () => {
+    if (isQuitting) return;
     // 如果窗口已经存在，就不再创建新窗口
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -13018,6 +13924,7 @@ if (!gotTheLock) {
       autoHideMenuBar: true,
       enableLargerThanScreen: false,
     });
+    const createdMainWindow = mainWindow;
 
     // 设置 macOS Dock 图标（开发模式下 Electron 默认图标不是应用 Logo）
     if (isMac && isDev) {
@@ -13103,9 +14010,9 @@ if (!gotTheLock) {
       }
     };
 
-    // 窗口加载看门狗。一次性 30s 超时救不回被杀软扫描拖慢的首启动(现场案例:
-    // 首次加载超 30s,唯一一次 reload 后再无人接管,窗口永久空白),改为按退避
-    // 重试,封顶后停手保留现场。
+    // Packaged builds keep the bounded watchdog for first launches delayed by
+    // antivirus scanning. Development uses an explicit-failure retry controller
+    // below so an actively loading Vite page is never cancelled by the watchdog.
     const LOAD_WATCHDOG_DELAYS_MS = [30_000, 45_000, 60_000, 90_000];
     let loadRecoveryAttempts = 0;
     let loadWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
@@ -13125,6 +14032,7 @@ if (!gotTheLock) {
       loadWatchdogTimer = setTimeout(() => {
         loadWatchdogTimer = null;
         if (!mainWindow || mainWindow.isDestroyed()) return;
+        if (hasRenderedFirstFrame) return;
         if (!mainWindow.webContents.isLoadingMainFrame()) return;
         if (loadRecoveryAttempts >= LOAD_WATCHDOG_DELAYS_MS.length) {
           console.error(
@@ -13140,13 +14048,15 @@ if (!gotTheLock) {
         scheduleLoadWatchdog();
       }, delay);
     };
-    scheduleLoadWatchdog();
+    if (!isDev) {
+      scheduleLoadWatchdog();
+    }
 
     // 兜底显示:首帧迟迟不来时,宁可让用户看到纯背景色的窗口,也不能看起来
     // "应用没打开"。开机自启保持仅托盘,不弹窗。
     const SHOW_FALLBACK_DELAY_MS = 10_000;
     const showFallbackTimer = setTimeout(() => {
-      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (isQuitting || !mainWindow || mainWindow.isDestroyed()) return;
       if (mainWindow.isVisible() || hasRenderedFirstFrame) return;
       if (isAutoLaunched()) return;
       console.warn(
@@ -13156,10 +14066,30 @@ if (!gotTheLock) {
       mainWindow.show();
     }, SHOW_FALLBACK_DELAY_MS);
 
+    let hasOpenedDevelopmentTools = false;
+    const developmentLoadRecovery: DevelopmentMainWindowLoadRecovery | null = isDev
+      ? createDevelopmentMainWindowLoadRecovery({
+          isTargetAvailable: () => !isQuitting && !createdMainWindow.isDestroyed(),
+          loadDevelopmentUrl: () => createdMainWindow.loadURL(DEV_SERVER_URL),
+          loadErrorPage: () => createdMainWindow.loadFile(
+            path.join(__dirname, '../resources/error.html'),
+          ),
+        })
+      : null;
+
     mainWindow.webContents.on('did-finish-load', () => {
+      developmentLoadRecovery?.handleDidFinishLoad();
       clearLoadWatchdog();
       loadRecoveryAttempts = 0;
       markFirstFrameRendered('did-finish-load');
+      if (
+        shouldOpenDevTools
+        && !hasOpenedDevelopmentTools
+        && !createdMainWindow.isDestroyed()
+      ) {
+        hasOpenedDevelopmentTools = true;
+        createdMainWindow.webContents.openDevTools({ mode: 'detach', activate: false });
+      }
       windowStatePersist.emitState();
       if (openClawEngineManager && !mainWindow?.isDestroyed()) {
         mainWindow.webContents.send(
@@ -13186,6 +14116,10 @@ if (!gotTheLock) {
     mainWindow.on('focus', () => {
       getDesktopNotificationManager().handleWindowFocused();
     });
+    mainWindow.on('show', () => agentBrowserHost?.setWindowVisible(true));
+    mainWindow.on('restore', () => agentBrowserHost?.setWindowVisible(true));
+    mainWindow.on('hide', () => agentBrowserHost?.setWindowVisible(false));
+    mainWindow.on('minimize', () => agentBrowserHost?.setWindowVisible(false));
 
     // 处理渲染进程崩溃或退出
     mainWindow.webContents.on('render-process-gone', (_event, details) => {
@@ -13194,49 +14128,31 @@ if (!gotTheLock) {
       scheduleReload('webContents-crashed');
     });
 
-    if (isDev) {
-      // 开发环境
-      const maxRetries = 3;
-      let retryCount = 0;
-
-      const tryLoadURL = () => {
-        mainWindow?.loadURL(DEV_SERVER_URL).catch(err => {
-          console.error('Failed to load URL:', err);
-          retryCount++;
-
-          if (retryCount < maxRetries) {
-            console.log(`Retrying to load URL (${retryCount}/${maxRetries})...`);
-            setTimeout(tryLoadURL, 3000);
-          } else {
-            console.error('Failed to load URL after maximum retries');
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.loadFile(path.join(__dirname, '../resources/error.html'));
-            }
-          }
-        });
-      };
-
-      tryLoadURL();
-
-      // 打开开发者工具
-      mainWindow.webContents.openDevTools();
-    } else {
-      // 生产环境
-      mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
-    }
-
-    // 添加错误处理
+    // Register failure handling before the first navigation. In development,
+    // the controller deduplicates the event and loadURL promise rejection.
     mainWindow.webContents.on(
       'did-fail-load',
       (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
         if (!isMainFrame) return;
-        console.error('Page failed to load:', errorCode, errorDescription);
-        // 如果加载失败，尝试重新加载
+        if (errorCode === MainWindowLoadErrorCode.Aborted) {
+          developmentLoadRecovery?.handleDidFailLoad({
+            errorCode,
+            errorDescription,
+            isMainFrame,
+            validatedUrl: validatedURL,
+          });
+          return;
+        }
         if (isDev) {
-          setTimeout(() => {
-            scheduleReload('did-fail-load');
-          }, 3000);
-        } else if (loadRecoveryAttempts < LOAD_WATCHDOG_DELAYS_MS.length) {
+          developmentLoadRecovery?.handleDidFailLoad({
+            errorCode,
+            errorDescription,
+            isMainFrame,
+            validatedUrl: validatedURL,
+          });
+        } else {
+          console.error('Page failed to load:', errorCode, errorDescription);
+          if (loadRecoveryAttempts >= LOAD_WATCHDOG_DELAYS_MS.length) return;
           loadRecoveryAttempts++;
           console.warn(
             `[Main] retrying window load after failure (attempt ${loadRecoveryAttempts}/${LOAD_WATCHDOG_DELAYS_MS.length})`,
@@ -13248,6 +14164,10 @@ if (!gotTheLock) {
         }
       },
     );
+    mainWindow.once('ready-to-show', () => {
+      developmentLoadRecovery?.handleFirstPaint();
+      clearLoadWatchdog();
+    });
     mainWindow.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
       if (isMainFrame && !isInPlace) {
         isOpenSessionFromNotificationReady = false;
@@ -13255,13 +14175,23 @@ if (!gotTheLock) {
       authCallbackRouter.handleNavigationStarted({ isMainFrame, isInPlace });
     });
 
+    if (isDev) {
+      developmentLoadRecovery?.start();
+    } else {
+      void createdMainWindow.loadFile(path.join(__dirname, '../dist/index.html')).catch(error => {
+        console.error('[Main] failed to start loading the packaged renderer:', error);
+      });
+    }
+
     // 当窗口关闭时，清除引用
     mainWindow.on('closed', () => {
+      developmentLoadRecovery?.dispose();
       clearLoadWatchdog();
       clearTimeout(showFallbackTimer);
       windowStatePersist.cleanup();
       authCallbackRouter.markRendererUnavailable();
       isOpenSessionFromNotificationReady = false;
+      agentBrowserHost?.setWindowVisible(false);
       mainWindow = null;
     });
 
@@ -13270,6 +14200,7 @@ if (!gotTheLock) {
     // 等待内容加载完成后再显示窗口
     mainWindow.once('ready-to-show', () => {
       clearTimeout(showFallbackTimer);
+      if (isQuitting) return;
       // 开机自启时不显示窗口，仅显示托盘图标
       if (!isAutoLaunched()) {
         mainWindow?.show();
@@ -13279,7 +14210,7 @@ if (!gotTheLock) {
       const initLang = getStore().get<{ language?: string }>('app_config')?.language;
       setLanguage(initLang === 'en' ? 'en' : 'zh');
       // 窗口就绪后创建系统托盘
-      createTray(() => mainWindow);
+      createTray(() => isQuitting ? null : mainWindow);
 
       // Start cron polling after the window is ready.
       (async () => {
@@ -13316,6 +14247,7 @@ if (!gotTheLock) {
   };
 
   ensureMainWindowForReason = (reason: string): BrowserWindow | null => {
+    if (isQuitting) return null;
     if (mainWindow && !mainWindow.isDestroyed()) return mainWindow;
     console.log(`[Main] recreating main window after ${reason}`);
     createWindow();
@@ -13491,7 +14423,10 @@ if (!gotTheLock) {
   // it had to force-exit.
   let currentAppCleanupStep = 'not-started';
 
-  const runAppCleanup = async (reason = 'quit'): Promise<void> => {
+  const runAppCleanup = async (
+    reason = 'quit',
+    options: { requireGatewayStopped?: boolean } = {},
+  ): Promise<void> => {
     const cleanupStartedAt = Date.now();
     console.log(`[Main] App cleanup started for ${reason}`);
     currentAppCleanupStep = 'sync-teardown';
@@ -13503,6 +14438,15 @@ if (!gotTheLock) {
     mediaTurnAccountScopeBySession.clear();
     mediaTasksHandledByStatusPolling.clear();
     mediaStatusPollCounts.clear();
+    const browserHost = agentBrowserHost;
+    agentBrowserHost = null;
+
+    if (browserHost) {
+      currentAppCleanupStep = 'agent-browser-storage';
+      await browserHost.dispose().catch(error => {
+        console.error('[AgentBrowserHost] Failed to flush persistent browser storage on quit:', error);
+      });
+    }
 
     // Stop Cowork sessions without blocking shutdown.
     if (coworkEngineRouter) {
@@ -13533,6 +14477,9 @@ if (!gotTheLock) {
       currentAppCleanupStep = 'openclaw-gateway';
       await openClawEngineManager.stopGateway().catch(error => {
         console.error('[OpenClaw] Failed to stop gateway on quit:', error);
+        // A restore replaces gateway state. Never write over it while an old
+        // process still owns it, even if ordinary app exit is best-effort.
+        if (options.requireGatewayStopped) throw error;
       });
     }
 
@@ -13557,6 +14504,8 @@ if (!gotTheLock) {
     }
 
     sqliteBackupManager?.stopPeriodicBackupLoop();
+    unsubscribeLibrarySessionChanges?.();
+    unsubscribeLibrarySessionChanges = null;
     libraryIndexService?.stop();
     libraryThumbnailRenderer.dispose();
 
@@ -13581,15 +14530,31 @@ if (!gotTheLock) {
   // kill — and that zombie is what the installer later has to hunt down.
   const APP_CLEANUP_WATCHDOG_MS = 10_000;
 
+  // While the quit confirmation is open on macOS, the parentless alert runs a
+  // nested native loop: app.exit() only stops that modal session and the main
+  // loop never quits, leaving a process that ignores every later exit call
+  // (process.exit is mapped to app.exit in Electron's main process, so it is
+  // no escape either). Cleanup has already run by the time this is called, so
+  // killing the process outright is safe; electron-log writes synchronously.
+  const exitAppProcess = (code: number) => {
+    if (isMac && appQuitConfirmationGate.isPromptOpen()) {
+      console.warn(`[Main] quit confirmation prompt still open, killing process instead of app.exit(${code})`);
+      process.kill(process.pid, 'SIGKILL');
+      return;
+    }
+    app.exit(code);
+  };
+
   const runAppCleanupAndExit = (trigger: string) => {
     isCleanupInProgress = true;
     isQuitting = true;
+    hideAppWindowsForQuit();
 
     const watchdog = setTimeout(() => {
       console.error(
         `[Main] App cleanup did not finish within ${APP_CLEANUP_WATCHDOG_MS}ms (trigger=${trigger}, stuck at step: ${currentAppCleanupStep}), forcing exit`,
       );
-      app.exit(1);
+      exitAppProcess(1);
     }, APP_CLEANUP_WATCHDOG_MS);
 
     void runAppCleanup()
@@ -13600,7 +14565,7 @@ if (!gotTheLock) {
         clearTimeout(watchdog);
         isCleanupFinished = true;
         isCleanupInProgress = false;
-        app.exit(0);
+        exitAppProcess(0);
       });
   };
 
@@ -13612,7 +14577,38 @@ if (!gotTheLock) {
       return;
     }
 
-    runAppCleanupAndExit('before-quit');
+    const verdict = appQuitConfirmationGate.resolveQuitRequest();
+    if (verdict === AppQuitRequestVerdict.Ignore) {
+      return;
+    }
+    if (verdict === AppQuitRequestVerdict.Bypass) {
+      runAppCleanupAndExit('before-quit');
+      return;
+    }
+
+    // User-initiated quit (Cmd+Q, app menu, Dock, tray): scheduled tasks and
+    // IM replies stop with the app, so ask first.
+    void showAppQuitConfirmation(hasUnsafeMarkdownEdits)
+      .then(
+        confirmed => confirmed,
+        error => {
+          if (hasUnsafeMarkdownEdits()) {
+            console.error('[Main] quit confirmation prompt failed, retaining unsaved Markdown edits:', error);
+            return false;
+          }
+          // Honor the quit rather than trap the user in a process that cannot
+          // exit because its confirmation prompt is broken.
+          console.error('[Main] quit confirmation prompt failed, quitting without it:', error);
+          return true;
+        },
+      )
+      .then(confirmed => {
+        if (appQuitConfirmationGate.finishPrompt(confirmed)) {
+          runAppCleanupAndExit('before-quit');
+        } else {
+          console.log('[Main] quit cancelled at the confirmation prompt');
+        }
+      });
   });
 
   const handleTerminationSignal = (signal: NodeJS.Signals) => {
@@ -13668,6 +14664,10 @@ if (!gotTheLock) {
       onChanged: emitLibraryChanged,
       getMetadata: key => store?.get(key),
       setMetadata: (key, value) => store?.set(key, value),
+    });
+    unsubscribeLibrarySessionChanges?.();
+    unsubscribeLibrarySessionChanges = getCoworkStore().onSessionProjectionChanges(changes => {
+      libraryIndexService?.notifySessionProjectionChanges(changes);
     });
     registerLibraryIpcHandlers({
       localStore: libraryLocalStore,
@@ -14031,8 +15031,8 @@ if (!gotTheLock) {
 
     // When skills change (install/enable/disable/delete), re-sync AGENTS.md
     // so OpenClaw's IM channel agents pick up the latest skill list.
-    manager.onSkillsChanged(() => {
-      syncOpenClawConfig({ reason: 'skills-changed' }).catch(error => {
+    manager.onSkillsChanged(skillChangeBatch => {
+      syncOpenClawConfig({ reason: 'skills-changed', skillChangeBatch }).catch(error => {
         console.warn('[Main] Failed to sync OpenClaw config after skills change:', error);
       });
     });
@@ -14126,6 +15126,17 @@ if (!gotTheLock) {
       }
     });
 
+    // macOS posts this for logout, restart, and shutdown right before it asks
+    // the app to terminate. The OS already decided the quit, so do not hold
+    // the logout at the confirmation prompt. Windows session end never reaches
+    // `before-quit`, and on Linux a listener would add a logind inhibitor.
+    if (isMac) {
+      powerMonitor.on('shutdown', () => {
+        console.log('[Main] OS logout/shutdown announced, skipping quit confirmation');
+        appQuitConfirmationGate.armBypass();
+      });
+    }
+
     // 首次启动时默认开启开机自启动，并以系统登录项的实际状态回写本地标记。
     if (!getStore().get('auto_launch_initialized')) {
       getStore().set('auto_launch_initialized', true);
@@ -14168,7 +15179,7 @@ if (!gotTheLock) {
       if (currentLanguage !== lastLanguage) {
         lastLanguage = currentLanguage;
         setLanguage(currentLanguage === 'en' ? 'en' : 'zh');
-        updateTrayMenu(() => mainWindow);
+        updateTrayMenu(() => isQuitting ? null : mainWindow);
       }
 
       const previousUseSystemProxy = oldConfig
@@ -14212,7 +15223,7 @@ if (!gotTheLock) {
 
     // 在 macOS 上，当点击 dock 图标时显示已有窗口或重新创建
     app.on('activate', () => {
-      if (isDataMigrationRestoreInProgress) {
+      if (isQuitting || isDataMigrationRestoreInProgress) {
         return;
       }
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -14235,7 +15246,9 @@ if (!gotTheLock) {
       return;
     }
     if (process.platform !== 'darwin') {
-      app.quit();
+      // Only reachable in development (production closes hide to the tray),
+      // and the window is already gone, so there is nothing to cancel back to.
+      quitAppWithoutConfirmation('window-all-closed');
     }
   });
 }

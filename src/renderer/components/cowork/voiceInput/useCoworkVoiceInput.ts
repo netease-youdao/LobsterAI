@@ -3,6 +3,7 @@ import { useDispatch } from 'react-redux';
 
 import { AsrApiCode } from '../../../../shared/asr/constants';
 import {
+  applyVoiceInputQuotaConsumption,
   AsrClientError,
   getAsrErrorMessage,
   type RealtimeVoiceInputSession,
@@ -103,6 +104,22 @@ export const useCoworkVoiceInput = ({
     return true;
   }, [dispatch, onQuotaExhausted]);
 
+  const updateQuotaAfterRecording = useCallback((recording: RealtimeVoiceInputSession) => {
+    const consumedSeconds = recording.getConsumedSeconds();
+    if (consumedSeconds <= 0) return false;
+    const quota = applyVoiceInputQuotaConsumption(recording.quota, consumedSeconds);
+    dispatch(updateAsrQuotaFromSession({
+      dayKey: getLocalAsrQuotaDayKey(),
+      data: quota,
+    }));
+    const quotaExhausted = recording.quota.remainingSecondsToday > 0
+      && quota.remainingSecondsToday <= 0;
+    if (quotaExhausted) {
+      onQuotaExhausted?.();
+    }
+    return quotaExhausted;
+  }, [dispatch, onQuotaExhausted]);
+
   const replaceRealtimeRecognizedVoiceText = useCallback((targetDraftKey: string, recognizedText: string): string | null => {
     const text = recognizedText.trim();
     if (!text) return null;
@@ -162,6 +179,7 @@ export const useCoworkVoiceInput = ({
       const text = await activeRecording.stop();
       if (generation !== voiceInputGenerationRef.current) return null;
       const nextValue = replaceRealtimeRecognizedVoiceText(targetDraftKey, text);
+      updateQuotaAfterRecording(activeRecording);
       logVoiceInputDiagnostic('debug', `realtime voice input was finalized for draft ${targetDraftKey}.`);
       realtimeVoiceBaseValueRef.current = null;
       return nextValue ?? valueRef.current;
@@ -169,7 +187,8 @@ export const useCoworkVoiceInput = ({
       if (generation !== voiceInputGenerationRef.current) return null;
       console.warn('[VoiceInput] voice input recognition failed:', error);
       window.electron?.log?.fromRenderer?.('warn', 'VoiceInput', `voice input recognition failed for draft ${targetDraftKey}.`);
-      const quotaExhausted = markQuotaExhaustedIfNeeded(error);
+      const quotaExhausted = markQuotaExhaustedIfNeeded(error)
+        || updateQuotaAfterRecording(activeRecording);
       if (!quotaExhausted) {
         showToast(getAsrErrorMessage(error));
       }
@@ -185,6 +204,7 @@ export const useCoworkVoiceInput = ({
     clearVoiceAutoStopTimer,
     markQuotaExhaustedIfNeeded,
     replaceRealtimeRecognizedVoiceText,
+    updateQuotaAfterRecording,
   ]);
 
   const handleVoiceInput = useCallback(async () => {

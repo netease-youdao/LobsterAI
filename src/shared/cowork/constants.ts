@@ -57,10 +57,16 @@ export const COWORK_TEMP_DIR_NAME = '.cowork-temp';
 export const COWORK_TEMP_ATTACHMENTS_DIR_NAME = 'attachments';
 
 export const CoworkIpcChannel = {
+  ConfigSet: 'cowork:config:set',
+  PermissionRespond: 'cowork:permission:respond',
+  GetPendingQuestions: 'cowork:question:pending',
+  StreamPermissionDismiss: 'cowork:stream:permissionDismiss',
   CancelMediaTask: 'cowork:media:cancel',
   GetMediaModels: 'media:getModels',
   MediaStatusPollUpdate: 'cowork:media:statusPollUpdate',
   ForkSession: 'cowork:session:fork',
+  DeleteSession: 'cowork:session:delete',
+  DeleteSessions: 'cowork:session:deleteBatch',
   StopSession: 'cowork:session:stop',
   SubTaskHistory: 'cowork:subTask:history',
   SubagentList: 'cowork:subagent:list',
@@ -68,6 +74,7 @@ export const CoworkIpcChannel = {
   SubagentDelete: 'cowork:subagent:delete',
   MarkSessionViewed: 'cowork:session:markViewed',
   SetActiveSession: 'cowork:session:setActive',
+  SeedNewUserWelcomeTask: 'cowork:session:seedNewUserWelcomeTask',
   ExportSessionDiagnostics: 'cowork:session:exportDiagnostics',
   GetSessionMessageRailIndex: 'cowork:session:getMessageRailIndex',
   GetSessionSearchMessages: 'cowork:session:getSearchMessages',
@@ -93,6 +100,12 @@ export type CoworkIpcChannel = typeof CoworkIpcChannel[keyof typeof CoworkIpcCha
 export interface CoworkSessionsChangedPayload {
   sessionIds: string[];
 }
+
+export const CoworkOnboardingMessageKind = {
+  NewUserWelcome: 'new_user_welcome',
+} as const;
+export type CoworkOnboardingMessageKind =
+  typeof CoworkOnboardingMessageKind[keyof typeof CoworkOnboardingMessageKind];
 
 export const CoworkForkMode = {
   None: 'none',

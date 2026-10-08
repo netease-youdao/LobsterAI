@@ -777,7 +777,9 @@ const CoworkView: React.FC<CoworkViewProps> = ({
 
     const runningSessionId = currentSession.id;
     const handleWindowFocus = () => {
-      void coworkService.loadSession(runningSessionId);
+      // A plain load returns only the latest message page, which would drop
+      // the history already on screen mid-run; keep the loaded range instead.
+      void coworkService.loadSession(runningSessionId, { preserveLoadedRange: true });
     };
 
     window.addEventListener('focus', handleWindowFocus);

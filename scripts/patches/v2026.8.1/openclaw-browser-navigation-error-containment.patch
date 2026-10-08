@@ -1,0 +1,426 @@
+diff --git a/extensions/browser/src/browser/pw-session-navigation.ts b/extensions/browser/src/browser/pw-session-navigation.ts
+index d0fa175379d..dbe5a5bbed9 100644
+--- a/extensions/browser/src/browser/pw-session-navigation.ts
++++ b/extensions/browser/src/browser/pw-session-navigation.ts
+@@ -1,3 +1,4 @@
++import { isTransientNetworkError } from "openclaw/plugin-sdk/retry-runtime";
+ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+ import type { Page, Request, Response, Route } from "playwright-core";
+ import { toErrorObject } from "../infra/errors.js";
+@@ -14,6 +15,8 @@ import { markPageRefBlocked, markTargetBlocked, pageTargetInfo } from "./pw-sess
+ 
+ type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
+ 
++const NAVIGATION_GUARD_CLEANUP_TIMEOUT_MS = 1_000;
++
+ /** Classify requests that can navigate the selected page or one of its frames. */
+ function classifyBrowserDocumentNavigationRequest(
+   page: Page,
+@@ -421,33 +424,101 @@ export async function gotoPageWithNavigationGuard(
+     browserProxyMode: opts.browserProxyMode,
+   });
+   let blockedError: unknown = null;
+-
+-  const handler = async (route: Route, request: Request) => {
+-    if (blockedError) {
+-      await route.abort().catch(() => {});
+-      return;
+-    }
+-    const requestKind = classifyBrowserDocumentNavigationRequest(opts.page, request);
+-    if (!requestKind) {
+-      await continueRouteSafely(route);
+-      return;
+-    }
++  let guardError: { error: unknown } | undefined;
++  let guardActive = true;
++  let stopGuard!: () => void;
++  const stopSignal = new Promise<void>((resolve) => {
++    stopGuard = resolve;
++  });
++  const inFlight = new Set<Promise<void>>();
++  const abortRoute = async (route: Route) => {
+     try {
+-      await assertBrowserNavigationAllowed({
+-        url: request.url(),
+-        ...navigationPolicy,
+-      });
+-    } catch (err) {
+-      if (isPolicyDenyNavigationError(err)) {
+-        if (requestKind === "top-level") {
+-          blockedError = err;
++      await route.abort();
++    } catch {
++      // A closed page or an already-handled route needs no further action.
++    }
++  };
++
++  const handler = (route: Route, request: Request): Promise<void> => {
++    const operation = (async () => {
++      // Playwright dispatches route callbacks independently of page.goto. All
++      // failures belong to this navigation, never the process event loop.
++      try {
++        if (!guardActive || blockedError || guardError) {
++          await abortRoute(route);
++          return;
+         }
+-        await route.abort().catch(() => {});
+-        return;
++        const requestKind = classifyBrowserDocumentNavigationRequest(opts.page, request);
++        if (requestKind) {
++          try {
++            const allowed = await Promise.race([
++              assertBrowserNavigationAllowed({
++                url: request.url(),
++                ...navigationPolicy,
++              }).then(() => true),
++              stopSignal.then(() => false),
++            ]);
++            if (!allowed) {
++              await abortRoute(route);
++              return;
++            }
++          } catch (err) {
++            if (isPolicyDenyNavigationError(err)) {
++              if (requestKind === "top-level") {
++                blockedError = err;
++              }
++            } else if (!(requestKind === "subframe" && isTransientNetworkError(err))) {
++              guardError ??= { error: err };
++            }
++            // A failed subframe lookup must not fail a valid main document.
++            // Only lookup errors are isolated: continuation failures below
++            // remain observable even if they carry a transient network code.
++            await abortRoute(route);
++            return;
++          }
++        }
++        if (!guardActive || blockedError || guardError) {
++          await abortRoute(route);
++          return;
++        }
++        await continueRouteSafely(route);
++      } catch (err) {
++        guardError ??= { error: err };
++        await abortRoute(route);
+       }
+-      throw err;
++    })();
++    inFlight.add(operation);
++    const settled = () => {
++      inFlight.delete(operation);
++    };
++    void operation.then(settled, settled);
++    return operation;
++  };
++
++  const cleanupGuard = async (): Promise<unknown> => {
++    // Cancel admission and pending DNS before unroute: its browser-side update
++    // can hang on a lost transport. The losing DNS promise remains observed.
++    guardActive = false;
++    stopGuard();
++    const cleanup = (async () => {
++      const error = await removePageNavigationRequestGuard(opts.page, handler);
++      await Promise.allSettled(inFlight);
++      return error;
++    })();
++    let timer: ReturnType<typeof setTimeout> | undefined;
++    try {
++      return await Promise.race([
++        cleanup,
++        new Promise<Error>((resolve) => {
++          timer = setTimeout(
++            () => resolve(new Error("Browser navigation guard cleanup timed out")),
++            NAVIGATION_GUARD_CLEANUP_TIMEOUT_MS,
++          );
++        }),
++      ]);
++    } finally {
++      clearTimeout(timer);
+     }
+-    await continueRouteSafely(route);
+   };
+ 
+   try {
+@@ -455,7 +526,7 @@ export async function gotoPageWithNavigationGuard(
+   } catch (err) {
+     // Playwright registers the client route before browser-side setup can fail.
+     // Remove this exact handler without replacing the original setup error.
+-    await removePageNavigationRequestGuard(opts.page, handler);
++    await cleanupGuard();
+     throw err;
+   }
+   let response: Response | null = null;
+@@ -469,7 +540,7 @@ export async function gotoPageWithNavigationGuard(
+     navigationError = err;
+   }
+ 
+-  const cleanupError = await removePageNavigationRequestGuard(opts.page, handler);
++  const cleanupError = await cleanupGuard();
+   if (blockedError) {
+     await closeBlockedNavigationTarget({
+       cdpUrl: opts.cdpUrl,
+@@ -478,6 +549,9 @@ export async function gotoPageWithNavigationGuard(
+     });
+     throw toErrorObject(blockedError, "Non-Error thrown");
+   }
++  if (guardError) {
++    throw toErrorObject(guardError.error, "Non-Error thrown");
++  }
+   // A live-page cleanup failure is observable, but the original navigation
+   // error owns the result and must not lose its precedence.
+   if (navigationFailed) {
+diff --git a/extensions/browser/src/browser/pw-session-navigation.rejection.test.ts b/extensions/browser/src/browser/pw-session-navigation.rejection.test.ts
+new file mode 100644
+--- /dev/null
++++ b/extensions/browser/src/browser/pw-session-navigation.rejection.test.ts
+@@ -0,0 +1,250 @@
++import type { Page, Request, Response, Route } from "playwright-core";
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { SsrFBlockedError } from "../infra/net/ssrf.js";
++import * as navigationGuard from "./navigation-guard.js";
++import { gotoPageWithNavigationGuard } from "./pw-session-navigation.js";
++
++vi.mock("./pw-session-connection.js", () => ({
++  markPageRefBlocked: vi.fn(),
++  markTargetBlocked: vi.fn(),
++  pageTargetInfo: vi.fn(async () => ({ targetId: "test-target" })),
++}));
++
++function deferred<T>() {
++  let resolve!: (value: T) => void;
++  let reject!: (error: unknown) => void;
++  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
++    resolve = resolvePromise;
++    reject = rejectPromise;
++  });
++  return { promise, resolve, reject };
++}
++
++function observe<T>(promise: Promise<T>) {
++  return promise.then(
++    (value) => ({ value, error: undefined }),
++    (error: unknown) => ({ value: undefined, error }),
++  );
++}
++
++function navigationFixture() {
++  const load = deferred<Response | null>();
++  const started = deferred<void>();
++  const mainFrame = {};
++  let handler!: (route: Route, request: Request) => Promise<void>;
++  const page = {
++    route: vi.fn(async (_pattern: string, callback: typeof handler) => {
++      handler = callback;
++    }),
++    unroute: vi.fn(async () => {}),
++    goto: vi.fn(() => {
++      started.resolve();
++      return load.promise;
++    }),
++    mainFrame: () => mainFrame,
++    isClosed: () => false,
++    close: vi.fn(async () => {}),
++  };
++  const navigate = () =>
++    observe(
++      gotoPageWithNavigationGuard({
++        // SAFETY: The fixture implements the Page methods used by this navigation owner.
++        page: page as unknown as Page,
++        cdpUrl: "http://127.0.0.1:19222",
++        url: "https://example.test/main",
++        timeoutMs: 1000,
++      }),
++    );
++  const dispatch = (kind: "main" | "subframe" | "resource" = "main") => {
++    const route = {
++      continue: vi.fn(async () => {}),
++      abort: vi.fn(async () => {}),
++    };
++    const request = {
++      frame: () => (kind === "subframe" ? {} : mainFrame),
++      isNavigationRequest: () => kind !== "resource",
++      resourceType: () => (kind === "resource" ? "image" : "document"),
++      url: () => "https://example.test/request",
++    };
++    return {
++      route,
++      // SAFETY: These fixtures implement the Route/Request methods exercised by the guard.
++      start: () => observe(handler(route as unknown as Route, request as unknown as Request)),
++    };
++  };
++  return { page, load, started, navigate, dispatch };
++}
++
++afterEach(() => {
++  vi.restoreAllMocks();
++  vi.useRealTimers();
++});
++
++describe("browser navigation callback rejection ownership", () => {
++  it.each(["ENOTFOUND", "EAI_AGAIN"])(
++    "returns main-frame %s through navigation instead of rejecting the route callback",
++    async (code) => {
++      const dnsError = Object.assign(new Error("DNS lookup failed"), { code });
++      vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockRejectedValue(dnsError);
++      const fixture = navigationFixture();
++      const result = fixture.navigate();
++      await fixture.started.promise;
++      const request = fixture.dispatch();
++      // Playwright dispatches this callback independently of page.goto's promise.
++      const callback = await request.start();
++      fixture.load.reject(new Error("net::ERR_FAILED"));
++      const navigation = await result;
++
++      expect(callback.error).toBeUndefined();
++      expect(request.route.abort).toHaveBeenCalledOnce();
++      expect(request.route.continue).not.toHaveBeenCalled();
++      expect(navigation.error).toBe(dnsError);
++      expect(fixture.page.close).not.toHaveBeenCalled();
++    },
++  );
++
++  it.each(["ENOTFOUND", "EAI_AGAIN"])(
++    "isolates subframe %s while preserving a successful main document",
++    async (code) => {
++      vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockRejectedValue(
++        Object.assign(new Error("DNS lookup failed"), { code }),
++      );
++      const fixture = navigationFixture();
++      const result = fixture.navigate();
++      await fixture.started.promise;
++      const request = fixture.dispatch("subframe");
++      const callback = await request.start();
++      fixture.load.resolve(null);
++
++      expect(callback.error).toBeUndefined();
++      expect(await result).toEqual({ value: null, error: undefined });
++      expect(request.route.abort).toHaveBeenCalledOnce();
++      expect(request.route.continue).not.toHaveBeenCalled();
++      expect(fixture.page.close).not.toHaveBeenCalled();
++    },
++  );
++
++  it.each(["subframe", "resource"] as const)(
++    "contains %s continuation failures without treating them as ignorable DNS errors",
++    async (kind) => {
++      vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockResolvedValue();
++      const fixture = navigationFixture();
++      const result = fixture.navigate();
++      await fixture.started.promise;
++      const request = fixture.dispatch(kind);
++      const transportError = Object.assign(new Error("transport failed"), { code: "ECONNRESET" });
++      request.route.continue.mockRejectedValue(transportError);
++      const callback = await request.start();
++      fixture.load.reject(new Error("net::ERR_FAILED"));
++
++      expect(callback.error).toBeUndefined();
++      expect((await result).error).toBe(transportError);
++      expect(request.route.abort).toHaveBeenCalledOnce();
++    },
++  );
++
++  it.each(["resolve", "reject"] as const)(
++    "aborts pending DNS at navigation timeout and observes its late %s",
++    async (outcome) => {
++      const dns = deferred<void>();
++      vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockReturnValue(dns.promise);
++      const fixture = navigationFixture();
++      const result = fixture.navigate();
++      await fixture.started.promise;
++      const request = fixture.dispatch("subframe");
++      const callback = request.start();
++      const timeoutError = new Error("page.goto timed out");
++      fixture.load.reject(timeoutError);
++      const navigation = await result;
++      const abortedAtReturn = request.route.abort.mock.calls.length;
++      if (outcome === "resolve") {
++        dns.resolve();
++      } else {
++        dns.reject(Object.assign(new Error("late DNS failure"), { code: "ENOTFOUND" }));
++      }
++
++      expect((await callback).error).toBeUndefined();
++      expect(navigation.error).toBe(timeoutError);
++      expect(abortedAtReturn).toBe(1);
++      expect(request.route.continue).not.toHaveBeenCalled();
++    },
++  );
++
++  it("retains main-frame policy denial precedence and closes only the blocked target", async () => {
++    const denied = new SsrFBlockedError("blocked test target");
++    vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockRejectedValue(denied);
++    const fixture = navigationFixture();
++    const result = fixture.navigate();
++    await fixture.started.promise;
++    const request = fixture.dispatch();
++    await request.start();
++    fixture.load.reject(new Error("navigation aborted"));
++
++    expect((await result).error).toBe(denied);
++    expect(fixture.page.close).toHaveBeenCalledOnce();
++    expect(fixture.page.unroute).toHaveBeenCalledWith("**", expect.any(Function));
++  });
++
++  it("surfaces unknown subframe lookup errors without closing the page", async () => {
++    const lookupError = new TypeError("invalid lookup result");
++    vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockRejectedValue(lookupError);
++    const fixture = navigationFixture();
++    const result = fixture.navigate();
++    await fixture.started.promise;
++    const request = fixture.dispatch("subframe");
++    expect((await request.start()).error).toBeUndefined();
++    fixture.load.resolve(null);
++
++    expect((await result).error).toBe(lookupError);
++    expect(request.route.abort).toHaveBeenCalledOnce();
++    expect(fixture.page.close).not.toHaveBeenCalled();
++  });
++
++  it("prefers a concurrent main-frame policy denial over an earlier lookup failure", async () => {
++    const firstLookup = deferred<void>();
++    const secondLookup = deferred<void>();
++    vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed")
++      .mockReturnValueOnce(firstLookup.promise)
++      .mockReturnValueOnce(secondLookup.promise);
++    const fixture = navigationFixture();
++    const result = fixture.navigate();
++    await fixture.started.promise;
++    const firstCallback = fixture.dispatch().start();
++    const secondCallback = fixture.dispatch().start();
++    firstLookup.reject(Object.assign(new Error("DNS lookup failed"), { code: "ENOTFOUND" }));
++    expect((await firstCallback).error).toBeUndefined();
++    const denied = new SsrFBlockedError("blocked concurrent target");
++    secondLookup.reject(denied);
++    expect((await secondCallback).error).toBeUndefined();
++    fixture.load.reject(new Error("net::ERR_FAILED"));
++
++    expect((await result).error).toBe(denied);
++    expect(fixture.page.close).toHaveBeenCalledOnce();
++  });
++
++  it.each(["unroute", "abort"] as const)(
++    "bounds a hanging %s without replacing the navigation error",
++    async (owner) => {
++      vi.useFakeTimers();
++      const never = new Promise<void>(() => {});
++      vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockReturnValue(never);
++      const fixture = navigationFixture();
++      if (owner === "unroute") {
++        fixture.page.unroute.mockReturnValue(never);
++      }
++      const result = fixture.navigate();
++      await fixture.started.promise;
++      const request = fixture.dispatch("subframe");
++      if (owner === "abort") {
++        request.route.abort.mockReturnValue(never);
++      }
++      void request.start();
++      const timeoutError = new Error("page.goto timed out");
++      fixture.load.reject(timeoutError);
++      await vi.runAllTimersAsync();
++
++      expect((await result).error).toBe(timeoutError);
++      expect(request.route.continue).not.toHaveBeenCalled();
++    },
++  );
++});

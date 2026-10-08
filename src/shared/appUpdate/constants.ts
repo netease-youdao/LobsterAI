@@ -21,10 +21,10 @@ export const AppUpdateIpc = {
   GetState: 'appUpdate:getState',
   CheckNow: 'appUpdate:checkNow',
   RetryDownload: 'appUpdate:retryDownload',
-  CancelDownload: 'appUpdate:cancelDownload',
   InstallReady: 'appUpdate:installReady',
   StateChanged: 'appUpdate:stateChanged',
   GetCompletedUpdate: 'appUpdate:getCompletedUpdate',
+  GetActiveWorkloads: 'appUpdate:getActiveWorkloads',
 } as const;
 
 /**
@@ -44,6 +44,18 @@ export const APP_UPDATE_URL_UNTRUSTED_ERROR = 'update-url-untrusted';
 /** Stable marker returned when cached installer bytes fail hash validation. */
 export const APP_UPDATE_FILE_INVALID_ERROR = 'update-file-invalid';
 
+export const APP_UPDATE_GRAY_UNAVAILABLE_ERROR = 'update-gray-unavailable';
+
+export const AppUpdateChannel = { Gray: 'gray' } as const;
+
+/** Local eligibility context only; never contains an access token. */
+export interface AppUpdateGrayContext {
+  sessionKey: string;
+  serverBaseUrl: string;
+  rolloutId: string;
+  policyRevision: number;
+}
+
 export interface ChangeLogEntry {
   title: string;
   content: string[];
@@ -61,6 +73,7 @@ export interface AppUpdateInfo {
   date: string;
   changeLog: { zh: ChangeLogEntry; en: ChangeLogEntry };
   url: string;
+  gray?: AppUpdateGrayContext;
 }
 
 export interface AppUpdateRuntimeState {
@@ -80,6 +93,15 @@ export interface AppUpdateCheckResult {
   state: AppUpdateRuntimeState;
   updateFound: boolean;
   error?: string;
+}
+
+/**
+ * Whether the runtime still has work that installing an update would cut
+ * short: an agent turn streaming in any session (IM-driven ones included) or a
+ * scheduled task run in progress.
+ */
+export interface AppUpdateActiveWorkloads {
+  hasActiveWorkloads: boolean;
 }
 
 export const APP_UPDATE_POLL_INTERVAL_MS = 2 * 60 * 60 * 1000;

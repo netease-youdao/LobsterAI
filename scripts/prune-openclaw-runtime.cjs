@@ -12,6 +12,9 @@
 const fs = require('fs');
 const path = require('path');
 
+const { pruneHostPeerLeftovers } = require('./openclaw-plugin-host-peer-leftovers.cjs');
+const { ensureOpenClawPluginSdkBridge } = require('./openclaw-plugin-sdk-bridge.cjs');
+
 // ─── Strategy 1: File cleanup patterns ───
 
 const PATTERNS_TO_DELETE = [
@@ -102,6 +105,59 @@ const PACKAGES_TO_STUB = [
   // native bindings (e.g. @img/sharp-win32-x64) required by openclaw's image-ops
   // module and by exec-tool scripts that use require('sharp').
 ];
+
+// koffi backs OpenClaw's native Windows private-directory helper
+// (scripts/patches/<version>/openclaw-windows-private-directory-native.patch),
+// which replaced the PowerShell + Add-Type spawn that security software blocks.
+// Windows runtimes keep the real package and its @koromix/koffi-win32-* binary;
+// every other target still ships the stub.
+const KOFFI_PACKAGE = 'koffi';
+const WINDOWS_RUNTIME_TARGET_PREFIX = 'win-';
+// Build-only koffi content that its runtime loader never reads.
+const KOFFI_BUILD_ONLY_PATHS = ['doc', 'vendor', 'CHANGELOG.md', 'cnoke.cjs'];
+
+function readRuntimeTarget(runtimeRoot) {
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(runtimeRoot, 'runtime-build-info.json'), 'utf8'));
+    return typeof info.target === 'string' ? info.target : '';
+  } catch {
+    return '';
+  }
+}
+
+function isWindowsRuntimeTarget(target) {
+  return typeof target === 'string' && target.startsWith(WINDOWS_RUNTIME_TARGET_PREFIX);
+}
+
+function resolvePackagesToStub(target) {
+  return PACKAGES_TO_STUB.filter(pkgName => !(pkgName === KOFFI_PACKAGE && isWindowsRuntimeTarget(target)));
+}
+
+function getPathSize(target) {
+  try {
+    const stat = fs.statSync(target);
+    return stat.isDirectory() ? getDirSize(target) : stat.size;
+  } catch {
+    return 0;
+  }
+}
+
+function trimKoffiBuildFiles(nodeModulesDir, stats) {
+  const koffiDir = path.join(nodeModulesDir, KOFFI_PACKAGE);
+  if (!fs.existsSync(koffiDir)) return [];
+  const removed = [];
+  for (const relative of KOFFI_BUILD_ONLY_PATHS) {
+    const target = path.join(koffiDir, relative);
+    if (!fs.existsSync(target)) continue;
+    const size = getPathSize(target);
+    const isDirectory = fs.statSync(target).isDirectory();
+    fs.rmSync(target, { recursive: true, force: true });
+    stats.bytesFreed += size;
+    if (isDirectory) stats.dirsRemoved++; else stats.filesRemoved++;
+    removed.push(relative);
+  }
+  return removed;
+}
 
 const GENERIC_STUB_INDEX_CJS = `// Stub (CJS): this package is not needed for headless gateway operation.
 module.exports = new Proxy({}, {
@@ -292,15 +348,25 @@ function main() {
     );
   }
 
-  // Step 2: Replace large unnecessary packages with stubs
-  for (const pkgName of PACKAGES_TO_STUB) {
+  // Step 2: Replace large unnecessary packages with stubs. Windows runtimes
+  // keep koffi for the native private-directory helper.
+  const runtimeTarget = readRuntimeTarget(runtimeRoot);
+  const packagesToStub = resolvePackagesToStub(runtimeTarget);
+  if (!packagesToStub.includes(KOFFI_PACKAGE)) {
+    const trimmed = trimKoffiBuildFiles(nodeModulesDir, stats);
+    console.log(
+      `[prune-openclaw-runtime] Keeping ${KOFFI_PACKAGE} for ${runtimeTarget}: native Windows private-directory helper` +
+        (trimmed.length > 0 ? ` (trimmed ${trimmed.join(', ')})` : '')
+    );
+  }
+  for (const pkgName of packagesToStub) {
     stubPackage(path.join(nodeModulesDir, pkgName), pkgName, stats);
   }
 
   // Step 2a: Remove orphaned platform-specific binaries for stubbed packages.
   // When a package like @tloncorp/tlon-skill is stubbed, its optionalDependencies
   // (e.g. @tloncorp/tlon-skill-darwin-x64) remain as orphaned siblings.
-  for (const pkgName of PACKAGES_TO_STUB) {
+  for (const pkgName of packagesToStub) {
     if (!pkgName.startsWith('@')) continue;
     const [scope, base] = pkgName.split('/');
     const scopeDir = path.join(nodeModulesDir, scope);
@@ -337,27 +403,27 @@ function main() {
   }
 
   // Step 2c: Remove openclaw SDK duplicates from third-party-extensions.
-  // Plugins like openclaw-qqbot declare openclaw as a peerDependency, and
-  // npm v7+ auto-installs it into the plugin's own node_modules (~226 MB).
-  // At runtime the host gateway already provides the SDK on the module path,
-  // so this copy is redundant and safe to remove.
+  // Plugins that declare openclaw as a required peerDependency get it
+  // auto-installed by npm v7+ into their own node_modules, together with its
+  // whole dependency tree (openclaw@2026.8.x pulls a 300+ MB claude-agent-sdk
+  // binary). The install script now marks that peer optional, but caches
+  // created before that fix still carry the tree, and openclaw >= 2026.8
+  // hoists it next to the plugin's real dependencies. At runtime the host
+  // gateway provides the SDK, so everything only reachable through it goes.
   if (fs.existsSync(thirdPartyDir)) {
     try {
       for (const plugin of fs.readdirSync(thirdPartyDir, { withFileTypes: true })) {
         if (!plugin.isDirectory()) continue;
-        const dupeOC = path.join(thirdPartyDir, plugin.name, 'node_modules', 'openclaw');
-        if (fs.existsSync(dupeOC)) {
-          const size = getDirSize(dupeOC);
-          fs.rmSync(dupeOC, { recursive: true, force: true });
-          stats.bytesFreed += size;
-          stats.dirsRemoved++;
-          console.log(
-            `[prune-openclaw-runtime] Removed duplicate openclaw SDK from ${plugin.name} (${(size / 1024 / 1024).toFixed(1)} MB)`
-          );
-        }
+        const pruned = pruneHostPeerLeftovers(path.join(thirdPartyDir, plugin.name));
+        if (pruned.removed.length === 0) continue;
+        stats.bytesFreed += pruned.bytesFreed;
+        stats.dirsRemoved += pruned.removed.length;
+        console.log(
+          `[prune-openclaw-runtime] Removed ${pruned.removed.length} openclaw peer leftover package(s) from ${plugin.name} (${(pruned.bytesFreed / 1024 / 1024).toFixed(1)} MB)`
+        );
       }
     } catch (err) {
-      console.warn(`[prune-openclaw-runtime] Failed to prune openclaw from third-party-extensions: ${err.message}`);
+      console.warn(`[prune-openclaw-runtime] Failed to prune openclaw peer leftovers from third-party-extensions: ${err.message}`);
     }
   }
 
@@ -378,6 +444,13 @@ function main() {
     } catch { /* ignore */ }
   }
 
+  // Plugins still need native Node SDK resolution after their private host
+  // copies/links are removed, including imports made later by doctor hooks.
+  const sdkBridge = ensureOpenClawPluginSdkBridge(runtimeRoot);
+  console.log(
+    `[prune-openclaw-runtime] SDK bridge: ${sdkBridge.exportCount} exports, ${sdkBridge.bytes} bytes, changed=${sdkBridge.changed}`
+  );
+
   const mbFreed = (stats.bytesFreed / 1024 / 1024).toFixed(1);
   if (stats.extensionsPruned.length > 0) {
     console.log(
@@ -394,7 +467,14 @@ function main() {
 
 module.exports = {
   BUNDLED_EXTENSIONS_TO_KEEP,
+  KOFFI_BUILD_ONLY_PATHS,
+  KOFFI_PACKAGE,
+  PACKAGES_TO_STUB,
+  isWindowsRuntimeTarget,
+  readRuntimeTarget,
+  resolvePackagesToStub,
   shouldKeepBundledExtension,
+  trimKoffiBuildFiles,
 };
 
 if (require.main === module) {

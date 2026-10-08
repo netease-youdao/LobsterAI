@@ -16,16 +16,20 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-          # Issues
-          days-before-issue-stale: 60
-          days-before-issue-close: 14
+          # Issues: only follow up on issues waiting for the reporter (needs-info).
+          # Inactivity alone does not mean an issue is resolved, so other issues are triaged by maintainers.
+          only-issue-labels: "needs-info"
+          days-before-issue-stale: 14
+          days-before-issue-close: 7
           stale-issue-label: "stale"
           stale-issue-message: |
-            This issue has been inactive for 60 days. It will be automatically closed in 14 days unless there is new activity.
+            这个 issue 在等待补充信息，已经 14 天没有更新。如果 7 天内仍没有回复，会自动关闭；补充信息后会继续处理。
 
-            If this issue is still relevant, please leave a comment or update it to keep it open. Thank you!
+            This issue has been waiting for more information for 14 days. It will be closed automatically in 7 days without an update; once the information is added, we'll pick it up again.
           close-issue-message: |
-            This issue was automatically closed due to inactivity. Feel free to reopen it if the problem persists.
+            由于一直没有收到补充信息，这个 issue 已自动关闭。补充信息后可以直接回复或重新打开。
+
+            This issue was closed because the requested information wasn't provided. Feel free to reply or reopen it once you have the details.
 
           # Pull Requests
           days-before-pr-stale: 30

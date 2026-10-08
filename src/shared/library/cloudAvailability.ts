@@ -18,8 +18,8 @@ export const getLibraryCloudAvailability = (
   now = Date.now(),
 ): LibraryCloudAvailability => {
   if (
-    (item.accessExpiresAt !== undefined && item.accessExpiresAt <= now)
-    || (item.effectiveExpiresAt !== undefined && item.effectiveExpiresAt <= now)
+    (typeof item.accessExpiresAt === 'number' && item.accessExpiresAt <= now)
+    || (typeof item.effectiveExpiresAt === 'number' && item.effectiveExpiresAt <= now)
   ) {
     return LibraryCloudAvailabilityFilter.Unavailable;
   }
@@ -39,8 +39,8 @@ export const isLibraryCloudAccessExpired = (
   item: LibraryCloudItem,
   now = Date.now(),
 ): boolean => (
-  (item.accessExpiresAt !== undefined && item.accessExpiresAt <= now)
-  || (item.effectiveExpiresAt !== undefined && item.effectiveExpiresAt <= now)
+  (typeof item.accessExpiresAt === 'number' && item.accessExpiresAt <= now)
+  || (typeof item.effectiveExpiresAt === 'number' && item.effectiveExpiresAt <= now)
   || item.effectiveUnavailableReason === LibraryCloudUnavailableReason.FreeAccessExpired
   || item.effectiveUnavailableReason
     === LibraryCloudUnavailableReason.EntitlementGraceExpired

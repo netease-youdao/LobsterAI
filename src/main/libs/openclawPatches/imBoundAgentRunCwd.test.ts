@@ -10,7 +10,8 @@ describe('openclaw-im-bound-agent-run-cwd.patch', () => {
       'cwd: z.string().optional()',
       'cwd: runCwd',
       'cwd?: string;',
-      'cwd: normalizeOptionalString(sessionEntry?.spawnedCwd) ?? cwd',
+      'normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ??',
+      'resolveAgentRunCwd(cfg, agentId, optsWithCommandQueueOverride?.cwd)',
     ]);
   });
 
@@ -18,7 +19,10 @@ describe('openclaw-im-bound-agent-run-cwd.patch', () => {
     const patchContent = readCurrentOpenClawPatch('openclaw-im-bound-agent-run-cwd.patch');
 
     expect(patchContent).not.toContain('workspaceDir: runCwd');
-    expect(patchContent).toContain('workspaceDir,');
-    expect(patchContent).toContain('cwd: cwd ?? workspaceDir');
+    expect(patchContent).toContain('workspaceDir: configuredWorkspaceDir');
+    expect(patchContent).toContain('cwd: configuredCwd');
+    expect(patchContent).toContain('cwd: runCwd');
+    expect(patchContent).not.toContain('state.cwd');
+    expect(patchContent).not.toContain('+      cwd: normalizeOptionalString(state.sessionEntry');
   });
 });

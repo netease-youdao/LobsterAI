@@ -10,8 +10,14 @@
  *
  * Flow per plugin:
  *   1. Checks a local cache in vendor/openclaw-plugins/{id}/
- *   2. Installs via `openclaw plugins install` if not cached at the right version
- *   3. Copies the plugin into vendor/openclaw-runtime/current/extensions/{id}/
+ *   2. Packs the pinned package and marks its `openclaw` peerDependency
+ *      optional so npm does not download the host package
+ *      (see openclaw-plugin-preparers/host-peer.cjs)
+ *   3. Installs via `openclaw plugins install` if not cached at the right version
+ *   4. Removes any dependency tree that only served the openclaw peer, then
+ *      caches the plugin
+ *   5. Copies into third-party-extensions/{id}, or dist/extensions/{id} for
+ *      explicitly reviewed official runtimeBundled packages
  *
  * Environment variables:
  *   OPENCLAW_SKIP_PLUGINS          – Set to "1" to skip this script entirely
@@ -32,6 +38,14 @@ const {
   NIM_PLUGIN_PACKAGE_ID,
   prepareOpenClawNimPackage,
 } = require('./openclaw-plugin-preparers/nim-channel.cjs');
+const { prepareHostPeerPackage } = require('./openclaw-plugin-preparers/host-peer.cjs');
+const { QQ_PACKAGE_NAME, configureQQRuntimeEntry, prepareQQPackage } = require('./openclaw-plugin-preparers/qqbot.cjs');
+const { pruneHostPeerLeftovers } = require('./openclaw-plugin-host-peer-leftovers.cjs');
+const { resolvePreinstalledPluginDir, verifyRuntimeBundledPlugin } = require('./openclaw-runtime-packaging.cjs');
+
+const OPENCLAW_PLUGIN_INSTALL_TIMEOUT_MS = process.platform === 'win32'
+  ? 20 * 60 * 1000
+  : 5 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -580,9 +594,10 @@ function resolvePluginInstallSource(plugin) {
 }
 
 function buildPluginInstallEnv(plugin) {
-  const env = {
-    npm_config_legacy_peer_deps: 'true',
-  };
+  // Peer handling is not controlled through npm env here: OpenClaw's npm env
+  // builder drops npm_config_legacy_peer_deps before spawning npm. The host
+  // peer is neutralised in the packed manifest instead (prepareHostPeerPackage).
+  const env = {};
 
   // npm 12 blocks transitive Git dependencies by default. NetEase Bee's
   // pinned SDK currently depends on libsignal from GitHub, so opt in only for
@@ -594,9 +609,32 @@ function buildPluginInstallEnv(plugin) {
   return env;
 }
 
+function buildOpenClawPluginInstallArgs(installSpec) {
+  // This script installs only the exact plugin versions reviewed and pinned in
+  // LobsterAI's package.json, so the build itself is the capability-consent
+  // boundary required by OpenClaw v2026.8.1.
+  return ['plugins', 'install', installSpec, '--force', '--accept-capabilities'];
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
+
+function copyPreinstalledPluginToRuntime(cacheDir, runtimeRoot, plugin) {
+  const targetDir = resolvePreinstalledPluginDir(runtimeRoot, plugin);
+  fs.rmSync(targetDir, { recursive: true, force: true });
+  copyDirRecursive(cacheDir, targetDir);
+  fs.rmSync(path.join(targetDir, 'plugin-install-info.json'), { force: true });
+
+  if (plugin.runtimeBundled === true) {
+    // Remove the previous layout as well: plugins.load.paths would discover it
+    // first and Discord would still fail the openKeyedStore trust check.
+    fs.rmSync(path.join(runtimeRoot, 'third-party-extensions', plugin.id), { recursive: true, force: true });
+    pruneHostPeerLeftovers(targetDir);
+    verifyRuntimeBundledPlugin(runtimeRoot, plugin);
+  }
+  return targetDir;
+}
 
 function main() {
   if (process.env.OPENCLAW_SKIP_PLUGINS === '1') {
@@ -634,6 +672,9 @@ function main() {
   // and wasted ~30s on serial load failures.  `third-party-extensions/` is discovered
   // solely via `plugins.load.paths` (origin="config"), bypassing the bundled contract.
   // See openclaw/openclaw#60196.
+  // Official Discord 2026.8.1 satisfies that contract and needs bundled trust
+  // for its Activities stores. Its runtimeBundled declaration opts it into
+  // dist/extensions; all other preinstalls keep the layout above.
   const runtimeExtensionsDir = path.join(runtimeCurrentDir, 'third-party-extensions');
 
   ensureDir(runtimeExtensionsDir);
@@ -645,7 +686,6 @@ function main() {
     const { id, npm: npmSpec, version, optional } = plugin;
     const cacheDir = path.join(pluginCacheBase, id);
     const installInfoPath = path.join(cacheDir, 'plugin-install-info.json');
-    const targetDir = path.join(runtimeExtensionsDir, id);
 
     log(`--- Plugin: ${id} (${npmSpec}@${version}) ---`);
 
@@ -688,7 +728,7 @@ function main() {
         }
 
         if (id === BEE_PACKAGE_NAME || npmSpec === BEE_PACKAGE_NAME) {
-          log('  Preparing NetEase Bee package for OpenClaw 2026.6 runtime install.');
+          log('  Preparing NetEase Bee package for the bundled OpenClaw runtime.');
           if (!fs.existsSync(installSpec) || fs.statSync(installSpec).isDirectory()) {
             installSpec = npmPack(`${BEE_PACKAGE_NAME}@${version}`, plugin.registry, stagingDir);
           }
@@ -696,8 +736,21 @@ function main() {
         }
 
         if (id === NIM_PLUGIN_PACKAGE_ID) {
-          log('  Preparing NIM package for OpenClaw 2026.6 runtime install.');
+          log('  Preparing NIM package for the bundled OpenClaw runtime.');
           installSpec = prepareOpenClawNimPackage(installSpec, stagingDir, { log });
+        }
+
+        if (npmSpec === QQ_PACKAGE_NAME) {
+          installSpec = prepareQQPackage(installSpec, stagingDir);
+        }
+
+        if (fs.existsSync(installSpec) && fs.statSync(installSpec).isFile()) {
+          installSpec = prepareHostPeerPackage(installSpec, stagingDir, {
+            log,
+            packageLabel: npmSpec,
+          });
+        } else {
+          log('  Skipping openclaw peer normalization for a directory install source.');
         }
 
         const installEnv = buildPluginInstallEnv(plugin);
@@ -706,18 +759,17 @@ function main() {
         }
 
         runOpenClawCli(
-          ['plugins', 'install', installSpec, '--force', '--dangerously-force-unsafe-install'],
+          buildOpenClawPluginInstallArgs(installSpec),
           {
             env: {
               OPENCLAW_STATE_DIR: stagingDir,
-              // Prevent npm from auto-installing peerDependencies (npm v7+).
-              // Channel plugins declare openclaw as a peerDep, but the host
-              // gateway already provides the SDK at runtime.  Without this,
-              // npm installs the full openclaw SDK + transitive deps (~738 MB)
-              // into each plugin's node_modules.
               ...installEnv,
             },
             stdio: 'inherit',
+            // OpenClaw scans and extracts large signed plugin archives before
+            // dependency installation; keep the Windows wrapper above the
+            // runtime's extended archive budget so cleanup is not interrupted.
+            timeout: OPENCLAW_PLUGIN_INSTALL_TIMEOUT_MS,
           }
         );
 
@@ -733,6 +785,16 @@ function main() {
         ensureDir(path.dirname(cacheDir));
         copyInstalledPluginToCache(installedDir, cacheDir);
         fixBinSymlinks(cacheDir);
+
+        // Safety net: if npm still materialised the openclaw peer tree (for
+        // example through a nested dependency), drop it before caching.
+        const hostPeerPrune = pruneHostPeerLeftovers(cacheDir);
+        if (hostPeerPrune.removed.length > 0) {
+          log(
+            `  Removed ${hostPeerPrune.removed.length} openclaw peer leftover package(s) ` +
+            `(${(hostPeerPrune.bytesFreed / 1024 / 1024).toFixed(1)} MB) from ${id}.`
+          );
+        }
 
         // Write install info for cache validation
         fs.writeFileSync(
@@ -781,17 +843,9 @@ function main() {
       die(`Plugin cache directory missing after install: ${cacheDir}`);
     }
 
-    // Remove existing target and copy fresh
-    if (fs.existsSync(targetDir)) {
-      fs.rmSync(targetDir, { recursive: true, force: true });
-    }
-    copyDirRecursive(cacheDir, targetDir);
+    if (npmSpec === QQ_PACKAGE_NAME) configureQQRuntimeEntry(cacheDir);
 
-    // Remove the plugin-install-info.json from the target (it's cache metadata only)
-    const targetInfoPath = path.join(targetDir, 'plugin-install-info.json');
-    if (fs.existsSync(targetInfoPath)) {
-      fs.unlinkSync(targetInfoPath);
-    }
+    const targetDir = copyPreinstalledPluginToRuntime(cacheDir, runtimeCurrentDir, plugin);
 
     log(`Installed ${id} -> ${path.relative(rootDir, targetDir)}`);
   }
@@ -806,12 +860,14 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildOpenClawPluginInstallArgs,
   buildNpmPackInvocation,
   buildPluginInstallEnv,
   buildNpmPackEnv,
   buildGitEnv,
   copyDirRecursive,
   copyInstalledPluginToCache,
+  copyPreinstalledPluginToRuntime,
   findInstalledPluginDir,
   gitCloneAndPack,
   isGitSpec,

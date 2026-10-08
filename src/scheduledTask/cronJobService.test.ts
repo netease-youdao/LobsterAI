@@ -7,7 +7,9 @@ vi.mock('electron', () => ({
 import {
   DeliveryMode,
   GatewayStatus,
+  OpenClawSystemPayloadKind,
   PayloadKind,
+  RunDeliveryStatus,
   SessionTarget,
   TaskStatus,
   WakeMode,
@@ -65,12 +67,50 @@ describe('isInternalScheduledTaskJob', () => {
     ).toBe(true);
   });
 
+  test.each(Object.values(OpenClawSystemPayloadKind))(
+    'detects OpenClaw-owned %s jobs',
+    payloadKind => {
+      expect(
+        isInternalScheduledTaskJob(
+          makeGatewayJob({
+            description: '',
+            payload: { kind: payloadKind },
+          }),
+        ),
+      ).toBe(true);
+    },
+  );
+
   test('does not hide regular user tasks', () => {
     expect(isInternalScheduledTaskJob(makeGatewayJob())).toBe(false);
   });
 });
 
 describe('CronJobService internal task filtering', () => {
+  test('hides OpenClaw-owned system jobs from the task list', async () => {
+    const userJob = makeGatewayJob({ id: 'user-job', name: 'User task' });
+    const heartbeatJob = makeGatewayJob({
+      id: 'heartbeat-main',
+      name: 'Heartbeat',
+      payload: { kind: OpenClawSystemPayloadKind.Heartbeat },
+    });
+    const skillReviewJob = makeGatewayJob({
+      id: 'skill-collection-review-main',
+      name: 'Skill collection review',
+      payload: { kind: OpenClawSystemPayloadKind.SkillCollectionReview },
+    });
+    const service = new CronJobService({
+      getGatewayClient: () => ({
+        request: async <T>() => ({ jobs: [heartbeatJob, skillReviewJob, userJob] }) as T,
+      }),
+      ensureGatewayReady: async () => {},
+    });
+
+    const jobs = await service.listJobs();
+
+    expect(jobs.map(job => job.id)).toEqual(['user-job']);
+  });
+
   test('hides memory-core tasks from the task list', async () => {
     const userJob = makeGatewayJob({ id: 'user-job', name: 'User task' });
     const internalJob = makeGatewayJob({
@@ -428,6 +468,25 @@ describe('mapGatewayRun', () => {
     expect(run.error).toBeNull();
     expect(run.summary).toBe('Agent produced a valid summary');
     expect(run.deliveryError).toBe(deliveryError);
+    expect(run.deliveryStatus).toBe(RunDeliveryStatus.NotDelivered);
+  });
+
+  test('retains a best-effort delivery failure even when gateway execution succeeded', () => {
+    const run = mapGatewayRun({
+      ...baseEntry,
+      status: GatewayStatus.Ok,
+      deliveryStatus: RunDeliveryStatus.NotDelivered,
+    });
+    expect(run.status).toBe(TaskStatus.Success);
+    expect(run.deliveryStatus).toBe(RunDeliveryStatus.NotDelivered);
+    expect(run.summary).toBe(baseEntry.summary);
+  });
+
+  test('attaches the channel only when announce delivery is configured', () => {
+    expect(mapGatewayRun(baseEntry, { mode: DeliveryMode.Announce, channel: 'openclaw-weixin' }).deliveryChannel)
+      .toBe('openclaw-weixin');
+    expect(mapGatewayRun(baseEntry, { mode: DeliveryMode.None, channel: 'openclaw-weixin' }).deliveryChannel)
+      .toBeNull();
   });
 
   test('does not suppress error when error differs from deliveryError', () => {

@@ -23,6 +23,7 @@ import type {
   LibraryResult,
   SharedFileItem,
 } from '../../shared/library/types';
+import { normalizePublishingSubscriptionRecoveryMode } from '../../shared/publishing/constants';
 import { SiteKind, SiteStatus } from '../../shared/site/constants';
 import { LibraryLocalStore } from './libraryLocalStore';
 
@@ -57,6 +58,7 @@ interface LibraryCloudApiItem {
   effectiveAvailable?: unknown;
   effectiveExpiresAt?: unknown;
   effectiveUnavailableReason?: unknown;
+  subscriptionRecoveryMode?: unknown;
   sortTime?: unknown;
 }
 
@@ -113,6 +115,10 @@ const readOptionalTimestamp = (value: unknown): number | undefined => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
+const readNullableTimestamp = (value: unknown): number | null | undefined => (
+  value === null ? null : readOptionalTimestamp(value)
+);
+
 const normalizeCloudItem = (
   input: LibraryCloudApiItem,
   favorites: Set<string>,
@@ -130,15 +136,18 @@ const normalizeCloudItem = (
   const clientSourceKey = readString(input.clientSourceKey);
   const latestSession = localStore.resolveCloudSession(sessionId, clientSourceKey);
   const createdAt = readTimestamp(input.createdAt, sortTime);
-  const accessExpiresAt = readOptionalTimestamp(input.accessExpiresAt);
+  const accessExpiresAt = readNullableTimestamp(input.accessExpiresAt);
   const effectiveAvailable = readBoolean(input.effectiveAvailable);
-  const effectiveExpiresAt = readOptionalTimestamp(input.effectiveExpiresAt);
+  const effectiveExpiresAt = readNullableTimestamp(input.effectiveExpiresAt);
   const effectiveUnavailableReason = readString(input.effectiveUnavailableReason);
   const normalizedEffectiveUnavailableReason = Object.values(
     LibraryCloudUnavailableReason,
   ).includes(effectiveUnavailableReason as LibraryCloudUnavailableReason)
     ? effectiveUnavailableReason as LibraryCloudUnavailableReason
     : undefined;
+  const subscriptionRecoveryMode = normalizePublishingSubscriptionRecoveryMode(
+    input.subscriptionRecoveryMode,
+  );
   const effectiveAccessFields = {
     ...(effectiveAvailable === undefined ? {} : { effectiveAvailable }),
     ...(effectiveExpiresAt === undefined ? {} : { effectiveExpiresAt }),
@@ -197,6 +206,7 @@ const normalizeCloudItem = (
         ? { contentUpdatedAt: readString(input.contentUpdatedAt) }
         : {}),
       ...(accessExpiresAt === undefined ? {} : { accessExpiresAt }),
+      ...(subscriptionRecoveryMode === undefined ? {} : { subscriptionRecoveryMode }),
       ...effectiveAccessFields,
     };
     return item;
@@ -244,6 +254,7 @@ const normalizeCloudItem = (
       ...(readString(input.artifactId) ? { artifactId: readString(input.artifactId) } : {}),
       ...(readString(input.updatedAt) ? { updatedAt: readString(input.updatedAt) } : {}),
       ...(accessExpiresAt === undefined ? {} : { accessExpiresAt }),
+      ...(subscriptionRecoveryMode === undefined ? {} : { subscriptionRecoveryMode }),
       ...effectiveAccessFields,
     };
     return item;

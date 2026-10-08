@@ -5,6 +5,7 @@
 
 import { OpenClawGatewayFailureKind } from '../shared/openclawEngine/constants';
 import { OpenClawTranscriptSafetyErrorCode } from '../shared/openclawTranscript/constants';
+import { ProviderName } from '../shared/providers/constants';
 
 export const CoworkErrorI18nKey = {
   AuthInvalid: 'coworkErrorAuthInvalid',
@@ -14,6 +15,8 @@ export const CoworkErrorI18nKey = {
   QuotaExhausted: 'coworkErrorQuotaExhausted',
   FreeQuotaExhausted: 'coworkErrorFreeQuotaExhausted',
   InsufficientBalance: 'coworkErrorInsufficientBalance',
+  ModelServiceUnavailable: 'coworkErrorModelServiceUnavailable',
+  ProviderCooldown: 'coworkErrorProviderCooldown',
   RateLimit: 'coworkErrorRateLimit',
   ModelOverloaded: 'coworkErrorModelOverloaded',
   ModelResponseTimeout: 'coworkErrorModelResponseTimeout',
@@ -33,6 +36,8 @@ const API_KEY_PATTERN = String.raw`(?:api\s*key|api[_-]?key|apikey)`;
 const UNAVAILABLE_NETWORK_CODE_PATTERN = String.raw`(?:ECONNREFUSED|ECONNRESET|ECONNABORTED|ENOTFOUND|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|UND_ERR_[A-Z_]+)`;
 
 const ERROR_RULES: Array<[RegExp, string]> = [
+  // A persisted local cooldown is not a new provider billing/auth failure.
+  [/Inline API key for provider "[^"]+" is temporarily disabled after a provider auth\/billing failure/i, CoworkErrorI18nKey.ProviderCooldown],
   // OAuth / token refresh failures. Must precede generic auth handling.
   [/oauth.*(invalid|expired|failed|error|scope|token|callback|authorization|not completed)|auth[_ ]refresh|refresh[_ ]timeout|callback[_ ](timeout|validation)|token.*(expired|invalid)|invalid.*token|authorization method/i, CoworkErrorI18nKey.OAuthInvalid],
   // Provider/model permission errors. Must precede generic auth handling.
@@ -41,6 +46,8 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   [new RegExp(`authentication[_ ](error|fails?)|${API_KEY_PATTERN}.*(invalid|expired|deleted|inactive|not[_ ]valid|not\\s+valid)|invalid.*${API_KEY_PATTERN}|incorrect.*${API_KEY_PATTERN}|unauthorized|PERMISSION_DENIED|\\b401\\b`, 'i'), CoworkErrorI18nKey.AuthInvalid],
   // LobsterAI plan/free quota. Must precede generic 402/billing handling.
   [LOBSTERAI_QUOTA_EXHAUSTED_PATTERN, CoworkErrorI18nKey.QuotaExhausted],
+  // LobsterAI's UPSTREAM_BALANCE_INSUFFICIENT code belongs to the model service.
+  [/\b50203\b/, CoworkErrorI18nKey.ModelServiceUnavailable],
   // Provider/model capacity failures. Must precede rate-limit matching because
   // capacity errors may also contain phrases such as "too many requests".
   [MODEL_CAPACITY_OVERLOAD_PATTERN, CoworkErrorI18nKey.ModelOverloaded],
@@ -80,9 +87,15 @@ const ERROR_RULES: Array<[RegExp, string]> = [
  * Classify an error string and return the matching i18n key.
  * Returns null if no rule matches (caller should fall back to the original error).
  */
-export function classifyErrorKey(error: string): string | null {
+export function classifyErrorKey(error: string, provider?: string): string | null {
   for (const [pattern, key] of ERROR_RULES) {
-    if (pattern.test(error)) return key;
+    if (pattern.test(error)) {
+      // LobsterAI owns the upstream keys; its user quota has separate codes above.
+      return key === CoworkErrorI18nKey.InsufficientBalance
+        && provider?.trim() === ProviderName.LobsteraiServer
+        ? CoworkErrorI18nKey.ModelServiceUnavailable
+        : key;
+    }
   }
   return null;
 }

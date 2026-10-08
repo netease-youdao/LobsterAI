@@ -10,7 +10,7 @@
   <a href="https://shared.ydstatic.com/market/souti/fihserChatWeb/online/2.0.7/dist/assets/wechat_group-B34qRm1G.png"><img src="https://img.shields.io/badge/-000000?logo=wechat&logoColor=white" alt="Follow LobsterAI on X" /></a>
   <br>
   <img src="https://img.shields.io/badge/macOS%20%7C%20Windows-4493F8?style=flat-square" alt="Supported platforms: macOS and Windows" />
-  <img src="https://img.shields.io/badge/Electron-40-47848F?style=flat-square&logo=electron&logoColor=white" alt="Electron 40" />
+  <img src="https://img.shields.io/badge/Electron-43-47848F?style=flat-square&logo=electron&logoColor=white" alt="Electron 43" />
   <img src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React 18" />
 </p>
 
@@ -111,7 +111,13 @@ LobsterAI 在 `SKILLs/skills.config.json` 中配置了 28 个内置技能，包�
 环境要求：
 
 - Node.js `>=24.15.0 <25`
-- npm
+- npm `>=11.17.0 <12`（旧版本可运行 `npm install -g npm@11.17.0` 升级）
+- git 与 pnpm，首次启动时用于从同级目录 `../openclaw` 构建锁定版本的 OpenClaw runtime
+
+`better-sqlite3@13.0.3` 已包含 Windows、macOS 和 Linux 的 x64/arm64 N-API
+预编译文件。`package.json` 中的 `allowScripts` 配置跳过 npm 对此版本触发的多余编译，
+因此在 Windows 上安装它不需要 Visual Studio C++ Build Tools。其他依赖的安装脚本仍会执行。
+升级 `better-sqlite3` 时需重新检查此配置。
 
 ```bash
 git clone https://github.com/netease-youdao/LobsterAI.git
@@ -181,7 +187,7 @@ npm run dsh:runtime:host
 # 启动一次并验证 Web UI 可访问
 npm run dsh:runtime:verify
 
-# 完整门禁：构建、打包、经 HTTP 安装、启动、跑通委托编码任务
+# 完整门禁：构建、打包、经 HTTP 安装、启动、经 RPC 断言 provider/model
 npm run dsh:e2e
 ```
 
@@ -221,7 +227,7 @@ npm run dsh:runtime:verify-urls mac-arm64
 <summary>升级 dsh 版本</summary>
 
 1. 修改 `package.json` 的 `dsh.version`。
-2. 复制补丁目录：`cp -R scripts/dsh-patches/<旧版本> scripts/dsh-patches/<新版本>`。补丁按版本号查找，目录缺失时**一个补丁都不会应用且不会报错**——Windows 控制台隐藏与目录选择器两个修复会就此静默消失。复制后构建时的 sentinel 会重新校验每个补丁是否仍能落地，上游改动导致失效时会让构建失败。
+2. 在新版本目录尚不存在时复制补丁目录：`cp -R scripts/dsh-patches/<旧版本> scripts/dsh-patches/<新版本>`（`<新版本>` 目录已存在时，`cp` 会把副本嵌套到下一层，构建时一个补丁都找不到）。补丁按版本号查找，目录缺失时**一个补丁都不会应用且不会报错**——Windows 控制台隐藏修复会就此静默消失。复制后构建时的 sentinel 会重新校验每个补丁是否仍能落地，上游挪动代码时构建失败：此时改写补丁目标，并在 `scripts/build-dsh-runtime.cjs` 的 `PATCH_SENTINELS` 中登记新的 sentinel；上游已带上修复则删掉该补丁（目录选择器修复自 0.1.5 起已在上游，控制台隐藏修复自 0.1.6-alpha.2 起在上游）。
 3. 清空 `dsh.runtimes`。残留的旧描述仍能通过摘要校验，于是旧 runtime 会被安装到新版本号命名的目录下。
 4. 按上文重新构建、上传并登记三个平台。
 5. 重跑 `npm run dsh:runtime:verify-urls` 与 `npm run dsh:e2e`。
@@ -235,21 +241,54 @@ npm run dsh:runtime:verify-urls mac-arm64
 <details>
 <summary>构建桌面安装包</summary>
 
+CI 工作流在各自的操作系统上构建对应的安装包（macOS、Windows、Linux），本地打包也请这样做：原生模块按宿主平台编译，`dist:*` 脚本只会构建所请求目标平台的 OpenClaw runtime。
+
+构建机环境要求：
+
+- Node.js `>=24.15.0 <25`。`.npmrc` 开启了 `engine-strict`，其他版本会被 npm 直接拒绝。
+- npm `>=11.17.0 <12`，用于支持依赖安装脚本的按包配置。
+- git 与 pnpm，用于从同级目录 `../openclaw` 构建锁定版本的 OpenClaw runtime（可用 `OPENCLAW_SRC` 指定路径）。
+- Windows：需要 Git for Windows，runtime 构建脚本在它自带的 Git Bash 中运行。没有安装的话，先执行一次 `npm run setup:mingit`，在 `resources/mingit` 准备便携版 Git。
+
+干净构建：
+
 ```bash
-# macOS
-npm run dist:mac
+# 1. 严格按 package-lock.json 安装依赖。
+#    npm ci 会自己清空 node_modules，不要手动删，也不要先跑 npm install：
+#    那样所有依赖会装两遍，还可能改写 lock 文件。
+#    postinstall 会应用 patches/ 下的补丁；better-sqlite3 在 Node.js 和 Electron 中
+#    均使用包内的 N-API 预编译文件。
+npm ci
+
+# 2. 清理旧的构建产物。dist-electron 由 tsc 输出，源文件删掉后旧产物不会自动清理。
+npx rimraf dist dist-electron
+
+# 3. 构建安装包，产物输出到 release/。
+npm run dist:mac            # macOS，宿主架构
 npm run dist:mac:x64
 npm run dist:mac:arm64
 npm run dist:mac:universal
-
-# Windows
-npm run dist:win
-
-# Linux
+npm run dist:win            # Windows x64
 npm run dist:linux
 ```
 
-打包会把 OpenClaw runtime 内置到 `Resources/cfmind`。Windows 构建还会把便携 Python 运行时内置到 `resources/python-win`，终端用户无需手动安装 Python。
+两次构建之间不需要删除 `vendor/`。`vendor/openclaw-runtime/<目标>` 下的 OpenClaw runtime 按锁定版本和补丁哈希缓存，任一变化都会自动重建。只改了构建脚本本身时，用 `OPENCLAW_FORCE_BUILD=1` 强制重建；用 `OPENCLAW_FORCE_PLUGIN_INSTALL=1` 重新下载内置插件。可选插件（POPO、NIM）在其 registry 不可达时只会打印警告并跳过，发布前请检查构建日志。
+
+`dist:*` 脚本还会自动执行以下步骤：
+
+- `openclaw:runtime:<目标>`：构建、打补丁、打包并裁剪 OpenClaw runtime，随安装包内置到 `Resources/cfmind`。
+- 仅 Windows，`verify:installer-patches`：把 `patches/app-builder-lib+*.patch` 重新应用到 `node_modules`，并运行安装器契约测试。`node_modules` 里还留着旧版本补丁时它会失败，例如 `git pull` 之后没有重新安装依赖，此时执行 `npm ci` 后重试。该步骤失败的代码树打出的安装包一律不要发布。
+- 仅 Windows，`setup:python-runtime`：在 `resources/python-win` 准备便携 Python 运行时，终端用户无需手动安装 Python。cfmind、`SKILLs` 和 python-win 会合并成一个 `win-resources.tar` 随安装包分发，安装后再解压。
+
+Windows 渠道包与在线安装器都是对同一条 `dist:win` 链的封装：
+
+```bash
+# 指定渠道的完整安装包
+npm run dist:win:channel -- --keyfrom <渠道> [--silent]
+
+# 在线安装器：一个小体积 stub，安装时从你的 CDN 下载主包
+npm run dist:win:web -- --keyfrom <渠道> [--silent] [--pkg-base-url <CDN 目录> | --pkg-url <主包地址>]
+```
 
 离线或私有源打包可使用：
 
@@ -258,6 +297,8 @@ npm run dist:linux
 - `LOBSTERAI_WINDOWS_EMBED_PYTHON_VERSION`
 - `LOBSTERAI_WINDOWS_EMBED_PYTHON_URL`
 - `LOBSTERAI_WINDOWS_GET_PIP_URL`
+- `LOBSTERAI_PORTABLE_GIT_ARCHIVE`
+- `LOBSTERAI_PORTABLE_GIT_URL`
 
 </details>
 

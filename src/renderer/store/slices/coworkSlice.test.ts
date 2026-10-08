@@ -26,6 +26,7 @@ import coworkReducer, {
   deleteSession,
   finishSessionNavigation,
   openBtwThread,
+  prependMessages,
   setAgentSessions,
   setBtwDraft,
   setBtwSelectedTextSnippets,
@@ -87,6 +88,8 @@ test('defaults hidden OpenClaw session policy to thirty days', () => {
   });
   expect(state.config.skipMissedJobs).toBe(true);
   expect(state.config.openClawHeartbeatEnabled).toBe(false);
+  expect(state.config.openClawSkillReviewEnabled).toBe(false);
+  expect(state.config.openClawMemoryFlushEnabled).toBe(false);
 });
 
 test('clears account-scoped media models and selections together', () => {
@@ -186,6 +189,8 @@ test('setConfig preserves loaded OpenClaw session policy', () => {
     memoryUserMemoriesMaxItems: 12,
     skipMissedJobs: false,
     openClawHeartbeatEnabled: false,
+    openClawSkillReviewEnabled: true,
+    openClawMemoryFlushEnabled: true,
     embeddingEnabled: false,
     embeddingProvider: 'openai',
     embeddingModel: '',
@@ -204,6 +209,8 @@ test('setConfig preserves loaded OpenClaw session policy', () => {
 
   expect(state.config.openClawSessionPolicy.keepAlive).toBe('365d');
   expect(state.config.openClawHeartbeatEnabled).toBe(false);
+  expect(state.config.openClawSkillReviewEnabled).toBe(true);
+  expect(state.config.openClawMemoryFlushEnabled).toBe(true);
 });
 
 test('updateCurrentSessionModelOverride only patches the active session', () => {
@@ -434,6 +441,43 @@ test('setMessageWindow accepts an authoritative lower total when no live message
   }));
 
   expect(state.currentSession?.totalMessages).toBe(10);
+});
+
+test('message window changes keep the leading turn start in step with the window', () => {
+  const initialState = coworkReducer(undefined, setCurrentSession(makeSession({
+    messages: [{ id: 'message-2', type: 'tool_result', content: 'done', timestamp: 30 }],
+    messagesOffset: 2,
+    totalMessages: 3,
+    leadingTurnStartTimestamp: 10,
+  })));
+  expect(initialState.currentSession?.leadingTurnStartTimestamp).toBe(10);
+
+  const olderPage = coworkReducer(initialState, prependMessages({
+    sessionId: 'session-1',
+    messages: [{ id: 'message-1', type: 'tool_use', content: 'exec', timestamp: 20 }],
+    newOffset: 1,
+    leadingTurnStartTimestamp: 10,
+  }));
+  expect(olderPage.currentSession?.leadingTurnStartTimestamp).toBe(10);
+
+  const fullHistory = coworkReducer(olderPage, prependMessages({
+    sessionId: 'session-1',
+    messages: [{ id: 'message-0', type: 'user', content: 'start', timestamp: 10 }],
+    newOffset: 0,
+  }));
+  expect(fullHistory.currentSession?.leadingTurnStartTimestamp).toBeNull();
+
+  const searchWindow = coworkReducer(fullHistory, setMessageWindow({
+    sessionId: 'session-1',
+    messages: [
+      { id: 'message-1', type: 'tool_use', content: 'exec', timestamp: 20 },
+      { id: 'message-2', type: 'tool_result', content: 'done', timestamp: 30 },
+    ],
+    messagesOffset: 1,
+    totalMessages: 3,
+    leadingTurnStartTimestamp: 10,
+  }));
+  expect(searchWindow.currentSession?.leadingTurnStartTimestamp).toBe(10);
 });
 
 test('setCurrentSession releases the previous session detached tail', () => {

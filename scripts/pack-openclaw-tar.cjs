@@ -22,6 +22,7 @@
 const fs = require('fs');
 const path = require('path');
 const tar = require('tar');
+const { createOpenClawWindowsPayload } = require('./openclaw-windows-payload.cjs');
 
 // ── File/dir exclusion rules (same as electron-builder.json filters) ─────────
 
@@ -85,41 +86,48 @@ function shouldExclude(entryPath) {
 
 // ── Pack functions ───────────────────────────────────────────────────────────
 
+function createPackFilter(filter, counts, overrides = {}) {
+  return (filePath, stat) => {
+    const relative = filePath.replace(/\\/g, '/').replace(/^\.\//, '');
+    if (shouldExclude(filePath) || Object.hasOwn(overrides, relative) || (filter && !filter(filePath))) {
+      counts.skipped++;
+      return false;
+    }
+    if (stat.isFile()) counts.totalFiles++;
+    return true;
+  };
+}
+
+function appendOverrides(outputTar, prefix, overrides, counts) {
+  const files = Object.entries(overrides || {});
+  if (!files.length) return;
+  const parent = path.dirname(path.resolve(outputTar));
+  const stage = fs.mkdtempSync(path.join(parent, '.payload-overrides-'));
+  try {
+    for (const [relative, content] of files) {
+      const target = path.resolve(stage, relative);
+      const inside = path.relative(stage, target);
+      if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) {
+        throw new Error(`[pack-openclaw-tar] Invalid payload override path: ${relative}`);
+      }
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content);
+    }
+    tar.replace({ file: outputTar, cwd: stage, prefix, sync: true, filter: createPackFilter(null, counts) }, files.map(([relative]) => relative));
+  } finally {
+    // This directory was allocated by mkdtemp directly beside the output tar.
+    if (path.dirname(stage) !== parent) throw new Error('Payload staging directory escaped its output directory.');
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+}
+
 /**
  * Pack a single source directory into a tar file.
  * The directory contents are stored under `prefix/` in the tar.
+ * Optional filter/overrides use paths relative to sourceDir, without the prefix.
  */
-function packSingleSource(sourceDir, outputTar, prefix) {
-  const entries = [];
-  let skipped = 0;
-
-  // Collect entries, applying exclusion filter
-  function walk(dir, relPrefix) {
-    const items = fs.readdirSync(dir, { withFileTypes: true });
-    items.sort((a, b) => a.name.localeCompare(b.name));
-
-    for (const item of items) {
-      if (item.isSymbolicLink()) continue;
-      const fullPath = path.join(dir, item.name);
-      const relPath = relPrefix ? `${relPrefix}/${item.name}` : item.name;
-
-      if (item.isDirectory()) {
-        if (EXCLUDED_DIRS.has(item.name.toLowerCase())) {
-          skipped++;
-          continue;
-        }
-        walk(fullPath, relPath);
-      } else if (item.isFile()) {
-        if (shouldExclude(item.name)) {
-          skipped++;
-          continue;
-        }
-        entries.push(relPath);
-      }
-    }
-  }
-
-  walk(sourceDir, '');
+function packSingleSource(sourceDir, outputTar, prefix, { filter, overrides } = {}) {
+  const counts = { totalFiles: 0, skipped: 0 };
 
   // Use npm tar to create the archive
   tar.create(
@@ -130,7 +138,7 @@ function packSingleSource(sourceDir, outputTar, prefix) {
       sync: true,
       // Follow symlinks instead of storing them (avoids Windows issues)
       follow: true,
-      filter: (filePath) => !shouldExclude(filePath),
+      filter: createPackFilter(filter, counts, overrides),
     },
     // Pack all top-level entries (tar will recurse)
     fs.readdirSync(sourceDir).filter((name) => {
@@ -138,21 +146,22 @@ function packSingleSource(sourceDir, outputTar, prefix) {
       return true;
     })
   );
+  appendOverrides(outputTar, prefix, overrides, counts);
 
-  return { totalFiles: entries.length, skipped };
+  return counts;
 }
 
 /**
  * Pack multiple source directories into a single tar file.
  * Each source gets its own prefix (root directory name) in the tar.
+ * A source's optional filter only applies within that source directory.
  */
 function packMultipleSources(sources, outputTar) {
-  let totalFiles = 0;
-  let totalSkipped = 0;
+  const counts = { totalFiles: 0, skipped: 0 };
 
   // Pack first source (creates the tar)
   let first = true;
-  for (const { dir, prefix } of sources) {
+  for (const { dir, prefix, filter, overrides } of sources) {
     if (!fs.existsSync(dir)) {
       console.log(`[pack-openclaw-tar]   Skipping ${prefix}: ${dir} not found`);
       continue;
@@ -160,29 +169,13 @@ function packMultipleSources(sources, outputTar) {
 
     console.log(`[pack-openclaw-tar]   Adding ${prefix} ← ${dir}`);
 
-    const entries = [];
-    function countFiles(d) {
-      for (const item of fs.readdirSync(d, { withFileTypes: true })) {
-        if (item.isSymbolicLink()) continue;
-        const fullPath = path.join(d, item.name);
-        if (item.isDirectory()) {
-          if (!EXCLUDED_DIRS.has(item.name.toLowerCase())) countFiles(fullPath);
-        } else if (item.isFile()) {
-          if (!shouldExclude(item.name)) entries.push(item.name);
-          else totalSkipped++;
-        }
-      }
-    }
-    countFiles(dir);
-    totalFiles += entries.length;
-
     const opts = {
       file: outputTar,
       cwd: dir,
       prefix,
       sync: true,
       follow: true,
-      filter: (filePath) => !shouldExclude(filePath),
+      filter: createPackFilter(filter, counts, overrides),
     };
 
     if (first) {
@@ -200,9 +193,10 @@ function packMultipleSources(sources, outputTar) {
         fs.readdirSync(dir).filter((n) => !EXCLUDED_DIRS.has(n.toLowerCase()))
       );
     }
+    appendOverrides(outputTar, prefix, overrides, counts);
   }
 
-  return { totalFiles, skipped: totalSkipped };
+  return counts;
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -218,8 +212,11 @@ function main() {
     // Remove old tar if exists
     if (fs.existsSync(outputTar)) fs.unlinkSync(outputTar);
 
+    const runtimeRoot = path.join(projectRoot, 'vendor', 'openclaw-runtime', 'current');
+    const { target } = JSON.parse(fs.readFileSync(path.join(runtimeRoot, 'runtime-build-info.json'), 'utf8'));
+    if (!target?.startsWith('win-')) throw new Error(`Expected a Windows runtime, found ${target}.`);
     const sources = [
-      { dir: path.join(projectRoot, 'vendor', 'openclaw-runtime', 'current'), prefix: 'cfmind' },
+      { dir: runtimeRoot, prefix: 'cfmind', ...createOpenClawWindowsPayload(runtimeRoot, target) },
       { dir: path.join(projectRoot, 'SKILLs'), prefix: 'SKILLs' },
       { dir: path.join(projectRoot, 'resources', 'python-win'), prefix: 'python-win' },
     ];

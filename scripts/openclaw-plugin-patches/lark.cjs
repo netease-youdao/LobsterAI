@@ -5,6 +5,87 @@ const path = require('path');
 
 const { readJsonFile, writeJsonFile } = require('./common.cjs');
 
+const LARK_NATIVE_MODULE_PATCH_VERSION = '2026.7.16';
+
+function patchNativeModuleCompatibility(larkPluginDir, log) {
+  if (!fs.existsSync(larkPluginDir)) return;
+
+  const pkg = readJsonFile(path.join(larkPluginDir, 'package.json'));
+  if (pkg?.name !== '@larksuite/openclaw-lark' || pkg.version !== LARK_NATIVE_MODULE_PATCH_VERSION) {
+    throw new Error(
+      `openclaw-lark native module patch expects @larksuite/openclaw-lark@${LARK_NATIVE_MODULE_PATCH_VERSION}, found ${pkg?.name ?? 'unknown'}@${pkg?.version ?? 'unknown'}; review the patch`,
+    );
+  }
+  if (pkg.type !== undefined && pkg.type !== 'commonjs') {
+    throw new Error('openclaw-lark native module patch expects CommonJS artifacts; review the patch');
+  }
+
+  // These published CommonJS files retain import.meta.url. Node's native loader
+  // detects ESM syntax and then fails at exports, even in an unexecuted branch.
+  // Windows' jiti fallback hides the problem; fix the artifact for both loaders.
+  const replacements = [
+    [
+      path.join('src', 'core', 'version.js'),
+      'const __filename = (0, node_url_1.fileURLToPath)(import.meta.url);',
+      // Using __filename here would reference the uninitialized local binding.
+      'const __filename = module.filename;',
+    ],
+    [
+      path.join('src', 'core', 'token-store.js'),
+      "const _require = (0, node_module_1.createRequire)(typeof __filename !== 'undefined' ? __filename : import.meta.url);",
+      'const _require = (0, node_module_1.createRequire)(__filename);',
+    ],
+  ];
+  // Validate both files before writing either, including partially patched caches.
+  const updates = replacements.map(([relativePath, before, after]) => {
+    const file = path.join(larkPluginDir, relativePath);
+    if (!fs.existsSync(file)) {
+      throw new Error(`openclaw-lark native module patch: missing ${relativePath}`);
+    }
+    const source = fs.readFileSync(file, 'utf8');
+    const beforeCount = source.split(before).length - 1;
+    const afterCount = source.split(after).length - 1;
+    if (!source.includes('Object.defineProperty(exports, "__esModule", { value: true });')
+      || !((beforeCount === 1 && afterCount === 0) || (beforeCount === 0 && afterCount === 1))) {
+      throw new Error(`openclaw-lark native module patch: unsupported ${relativePath}; review the patch`);
+    }
+    return { file, relativePath, source, patched: source.replace(before, after) };
+  });
+  for (const { file, relativePath, source, patched } of updates) {
+    if (source === patched) continue;
+    fs.writeFileSync(file, patched);
+    log(`Patched openclaw-lark/${relativePath}: native CommonJS module loading`);
+  }
+}
+
+function patchSdkCompatibility(larkPluginDir, log) {
+  // OpenClaw 2026.8.1 removed the SDK root and channel-runtime barrels.
+  // Keep the plugin on the host's public SDK modules and shared runtime state.
+  const replacements = [
+    ['index.js', '"openclaw/plugin-sdk"', '"openclaw/plugin-sdk/plugin-entry"'],
+    [path.join('src', 'card', 'reply-dispatcher.js'), '"openclaw/plugin-sdk/channel-runtime"', '"openclaw/plugin-sdk/channel-reply-pipeline"'],
+    // Session-store helpers moved out of config-runtime. Without this change,
+    // the plugin catches the missing-function error and ignores /verbose state.
+    [path.join('src', 'card', 'tool-use-config.js'), '"openclaw/plugin-sdk/config-runtime"', '"openclaw/plugin-sdk/session-store-runtime"'],
+    // Activated plugins read the current runtime snapshot in 2026.8.1.
+    // The monitor getter runs on inbound events; the client helper also serves tools.
+    ...[
+      path.join('src', 'channel', 'monitor.js'),
+      path.join('src', 'core', 'lark-client.js'),
+    ].map(file => [file, 'LarkClient.runtime.config.loadConfig()', 'LarkClient.runtime.config.current()']),
+  ];
+  for (const [relativePath, before, after] of replacements) {
+    const file = path.join(larkPluginDir, relativePath);
+    if (!fs.existsSync(file)) continue;
+    const source = fs.readFileSync(file, 'utf8');
+    const patched = source.replaceAll(before, after);
+    if (patched !== source) {
+      fs.writeFileSync(file, patched);
+      log(`Patched openclaw-lark/${relativePath}: OpenClaw SDK/runtime compatibility`);
+    }
+  }
+}
+
 const larkToolContracts = [
   'feishu_ask_user_question',
   'feishu_auth',
@@ -255,6 +336,8 @@ function ${patchMarker}(name) {
 
 function patchLark({ runtimeExtensionsDir, log }) {
   const larkPluginDir = path.join(runtimeExtensionsDir, 'openclaw-lark');
+  patchNativeModuleCompatibility(larkPluginDir, log);
+  patchSdkCompatibility(larkPluginDir, log);
   patchDeferredStartup(larkPluginDir, log);
   patchToolContracts(larkPluginDir, log);
   patchFilenameEncoding(larkPluginDir, log);

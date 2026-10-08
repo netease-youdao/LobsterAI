@@ -1,5 +1,8 @@
 # LobsterAI 生图生视频托管工具设计文档
 
+> 模型生成视频的服务端 NOS 持久化、历史任务恢复和客户端分享能力，见
+> [模型生成视频分享设计](../artifacts/2026-09-01-generated-video-share-design.md)。
+
 ## 1. 概述
 
 ### 1.1 背景

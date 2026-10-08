@@ -33,6 +33,25 @@ test('resolveNpmCommand delegates to shared npm runtime resolution', () => {
   expect(nodeRuntimeMocks.resolveNodePackageCliCommand).toHaveBeenCalledWith('npm');
 });
 
+test('passes explicit capability consent to OpenClaw plugin installs', () => {
+  expect(
+    __pluginManagerTestUtils.buildOpenClawPluginInstallArgs(
+      'C:\\LobsterAI\\openclaw.mjs',
+      'C:\\staging\\plugin.tgz',
+    ),
+  ).toEqual([
+    'C:\\LobsterAI\\openclaw.mjs',
+    'plugins',
+    'install',
+    'C:\\staging\\plugin.tgz',
+    '--force',
+    '--accept-capabilities',
+  ]);
+  expect(__pluginManagerTestUtils.openClawPluginInstallTimeoutMs).toBe(
+    process.platform === 'win32' ? 20 * 60 * 1000 : 5 * 60 * 1000,
+  );
+});
+
 test('hides OpenClaw built-in xai provider plugin from user plugin sync', () => {
   expect(isHiddenUserPluginId('xai')).toBe(true);
 });

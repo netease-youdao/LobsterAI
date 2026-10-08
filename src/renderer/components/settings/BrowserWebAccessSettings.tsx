@@ -2,6 +2,13 @@ import { PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useRef, useState } from 'react';
 
 import {
+  BrowserCredentialSaveMode,
+  type BrowserCredentialSaveMode as BrowserCredentialSaveModeValue,
+  BrowserCredentialUseMode,
+  type BrowserCredentialUseMode as BrowserCredentialUseModeValue,
+} from '../../../shared/browserCredentials/constants';
+import {
+  BrowserDisplayMode,
   BrowserNetworkMode,
   BrowserProfileMode,
   type BrowserWebAccessConfig,
@@ -10,6 +17,7 @@ import {
 import { i18nService } from '../../services/i18n';
 import Modal from '../common/Modal';
 import ThemedSelect from '../ui/ThemedSelect';
+import BrowserCredentialSettings from './BrowserCredentialSettings';
 
 interface BrowserWebAccessSettingsProps {
   value: BrowserWebAccessConfig;
@@ -161,6 +169,94 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
     <>
       <div className="space-y-8">
         <SettingRow
+          title={i18nService.t('browserDisplayModeTitle')}
+          description={value.displayMode === BrowserDisplayMode.InApp
+            ? i18nService.t('browserDisplayModeInAppDescription')
+            : i18nService.t('browserDisplayModeExternalDescription')}
+          control={(
+            <div className="w-[300px]">
+              <ThemedSelect
+                id="browser-display-mode"
+                value={value.displayMode}
+                onChange={(mode) => update({ displayMode: mode as BrowserDisplayMode })}
+                options={[
+                  {
+                    value: BrowserDisplayMode.InApp,
+                    label: i18nService.t('browserDisplayModeInApp'),
+                  },
+                  {
+                    value: BrowserDisplayMode.External,
+                    label: i18nService.t('browserDisplayModeExternal'),
+                  },
+                ]}
+              />
+            </div>
+          )}
+        />
+
+        <SettingRow
+          title={i18nService.t('browserCredentialUseModeTitle')}
+          description={value.credentialUseMode === BrowserCredentialUseMode.Disabled
+            ? i18nService.t('browserCredentialUseModeDisabledDescription')
+            : value.credentialUseMode === BrowserCredentialUseMode.OncePerTask
+              ? i18nService.t('browserCredentialUseModeOncePerTaskDescription')
+              : i18nService.t('browserCredentialUseModeAlwaysAskDescription')}
+          control={(
+            <div className="w-[300px]">
+              <ThemedSelect
+                id="browser-credential-use-mode"
+                value={value.credentialUseMode}
+                onChange={(mode) => update({
+                  credentialUseMode: mode as BrowserCredentialUseModeValue,
+                })}
+                options={[
+                  {
+                    value: BrowserCredentialUseMode.AlwaysAsk,
+                    label: i18nService.t('browserCredentialUseModeAlwaysAsk'),
+                  },
+                  {
+                    value: BrowserCredentialUseMode.OncePerTask,
+                    label: i18nService.t('browserCredentialUseModeOncePerTask'),
+                  },
+                  {
+                    value: BrowserCredentialUseMode.Disabled,
+                    label: i18nService.t('browserCredentialUseModeDisabled'),
+                  },
+                ]}
+              />
+            </div>
+          )}
+        />
+
+        <SettingRow
+          title={i18nService.t('browserCredentialSaveModeTitle')}
+          description={value.credentialSaveMode === BrowserCredentialSaveMode.Never
+            ? i18nService.t('browserCredentialSaveModeNeverDescription')
+            : i18nService.t('browserCredentialSaveModeAskDescription')}
+          control={(
+            <div className="w-[300px]">
+              <ThemedSelect
+                id="browser-credential-save-mode"
+                value={value.credentialSaveMode}
+                onChange={(mode) => update({
+                  credentialSaveMode: mode as BrowserCredentialSaveModeValue,
+                })}
+                options={[
+                  {
+                    value: BrowserCredentialSaveMode.Ask,
+                    label: i18nService.t('browserCredentialSaveModeAsk'),
+                  },
+                  {
+                    value: BrowserCredentialSaveMode.Never,
+                    label: i18nService.t('browserCredentialSaveModeNever'),
+                  },
+                ]}
+              />
+            </div>
+          )}
+        />
+
+        <SettingRow
           title={i18nService.t('browserNetworkSectionTitle')}
           description={networkModeDescription}
           control={(
@@ -185,6 +281,8 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
           onAdd={() => openHostnameDialog(HostnameListTarget.BlockedHostnames)}
           onRemove={removeHostname}
         />
+
+        <BrowserCredentialSettings />
 
       </div>
 

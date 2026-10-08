@@ -1,0 +1,120 @@
+/* Preview-card neutrals are intentionally independent of accent and skin surfaces. */
+.library-disclosure-scope {
+  --library-disclosure-background: #fafafa;
+  --library-disclosure-border: #dedede;
+  --library-disclosure-foreground: #626262;
+  --library-disclosure-icon: #797979;
+  --library-disclosure-hover: #f1f1f1;
+  --library-disclosure-hover-border: #d3d3d3;
+  --library-disclosure-hover-foreground: #383838;
+  --library-disclosure-pressed: #e9e9e9;
+  --library-disclosure-pressed-border: #c9c9c9;
+  --library-disclosure-focus: #858585;
+  --library-disclosure-muted: #707070;
+}
+
+.dark .library-disclosure-scope {
+  --library-disclosure-background: #292929;
+  --library-disclosure-border: #484848;
+  --library-disclosure-foreground: #c2c2c2;
+  --library-disclosure-icon: #b3b3b3;
+  --library-disclosure-hover: #333333;
+  --library-disclosure-hover-border: #555555;
+  --library-disclosure-hover-foreground: #eeeeee;
+  --library-disclosure-pressed: #3b3b3b;
+  --library-disclosure-pressed-border: #626262;
+  --library-disclosure-focus: #a3a3a3;
+  --library-disclosure-muted: #aaaaaa;
+}
+
+.library-disclosure-button {
+  color: var(--library-disclosure-foreground);
+  background-color: var(--library-disclosure-background);
+  border-color: var(--library-disclosure-border);
+  transition: background-color 140ms, border-color 140ms, color 140ms;
+}
+
+.library-disclosure-button svg {
+  flex-shrink: 0;
+  color: var(--library-disclosure-icon);
+}
+
+.library-disclosure-button:hover:not(:disabled) {
+  color: var(--library-disclosure-hover-foreground);
+  background-color: var(--library-disclosure-hover);
+  border-color: var(--library-disclosure-hover-border);
+}
+
+.library-disclosure-button:active:not(:disabled) {
+  background-color: var(--library-disclosure-pressed);
+  border-color: var(--library-disclosure-pressed-border);
+}
+
+.library-disclosure-button:focus-visible {
+  outline: 2px solid var(--library-disclosure-focus);
+  outline-offset: 3px;
+}
+
+.library-disclosure-button.library-disclosure-button-secondary {
+  background-color: transparent;
+  border-color: transparent;
+}
+
+.library-disclosure-button-secondary:hover:not(:disabled) {
+  background-color: var(--library-disclosure-hover);
+  border-color: transparent;
+}
+
+.library-disclosure-button-secondary:active:not(:disabled) {
+  background-color: var(--library-disclosure-pressed);
+  border-color: transparent;
+}
+
+.library-disclosure-button.library-disclosure-button-header {
+  min-height: 28px;
+  border-radius: 8px;
+  padding: 3px 7px;
+}
+
+.library-disclosure-remaining {
+  color: var(--library-disclosure-muted);
+}
+
+.library-disclosure-error {
+  color: var(--library-disclosure-foreground);
+}
+
+.library-disclosure-spinner {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--library-disclosure-border);
+  border-top-color: var(--library-disclosure-foreground);
+  border-radius: 50%;
+  animation: library-disclosure-spin 800ms linear infinite;
+}
+
+@keyframes library-disclosure-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (pointer: coarse) {
+  .library-disclosure-scope .library-disclosure-button,
+  .library-disclosure-button.library-disclosure-button-header {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .library-disclosure-button { transition: none; }
+  .library-disclosure-spinner { animation: none; }
+}
+
+@media (forced-colors: active) {
+  .library-disclosure-button {
+    border-color: ButtonText;
+  }
+  .library-disclosure-button:focus-visible {
+    outline-color: Highlight;
+  }
+}

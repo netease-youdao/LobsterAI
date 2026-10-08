@@ -1,8 +1,8 @@
 // IPC + lifecycle wiring for the experimental DeepSeek Harness feature:
-// enable/disable flag, engine state queries, the workbench window (form A),
-// and the dsh-code MCP server registration used by OpenClaw config sync
-// (form B). Keeps all dsh wiring out of main.ts except one register call and
-// one line in McpRuntime.
+// enable/disable flag, engine state queries, and the workbench window. dsh
+// stays independent from the main agent: it is never registered as an MCP
+// server and no task is forwarded to it through LobsterAI. Keeps all dsh
+// wiring out of main.ts except one register call.
 
 import { BrowserWindow, ipcMain } from 'electron';
 import * as fs from 'fs';
@@ -15,7 +15,6 @@ import {
   DshIpcChannel,
 } from '../../../shared/dshEngine/constants';
 import type { ProviderConfig } from '../../../shared/providers/types';
-import { DSH_CODE_MCP_SERVER_NAME, DshCodeMcpServer } from '../../libs/dshCodeMcpServer';
 import { DshManagedSettings, DshPlanProviderInput, renderDshManagedSettings } from '../../libs/dshConfigSync';
 import { getDshEngineManager } from '../../libs/dshEngineManager';
 import {
@@ -24,7 +23,6 @@ import {
   resolveSharedDataHome,
   writeWriterLock,
 } from '../../libs/dshSharedHome';
-import type { ResolvedMcpServer } from '../../libs/openclawConfigSync';
 
 export interface DshStoreLike {
   get<T>(key: string): T | undefined;
@@ -38,11 +36,9 @@ export interface DshHandlerDeps {
   getPlanProvider: () => DshPlanProviderInput | null;
   getDefaultCwd: () => string;
   getWorkbenchTitle: () => string;
-  syncOpenClawConfig: (options: { reason: string; restartGatewayIfRunning?: boolean }) => Promise<unknown>;
 }
 
 let moduleDeps: DshHandlerDeps | null = null;
-let codeMcpServer: DshCodeMcpServer | null = null;
 let workbenchWindow: BrowserWindow | null = null;
 
 // The canonical dsh home. Using it directly — rather than a private copy —
@@ -92,8 +88,9 @@ function computeManagedSettings(): DshManagedSettings | null {
   return renderDshManagedSettings(providers, { preferredDefault, planProvider });
 }
 
-// Starts the engine on demand (settings sync included) and resolves the web
-// URL. Shared by the workbench window and the dsh_code_task tool handler.
+// Starts the engine on demand (settings sync included) and resolves the
+// authenticated web URL for the workbench window. The URL carries the
+// runtime's launch token, so it stays in the main process.
 export async function ensureDshEngineReady(): Promise<string> {
   const manager = getDshEngineManager();
 
@@ -123,27 +120,11 @@ export async function ensureDshEngineReady(): Promise<string> {
       : null
   );
   const state = await manager.start();
-  const url = manager.getWebUrl();
+  const url = manager.getAuthenticatedWebUrl();
   if (!url) {
     throw new Error(`DeepSeek Harness engine failed to start (phase=${state.phase}, error=${state.errorCode ?? 'none'})`);
   }
   return url;
-}
-
-// Called from McpRuntime while resolving servers for OpenClaw config: when the
-// feature is on, make sure the in-process MCP server is listening and hand
-// back its registration row. Mirrors the computer-use built-in pattern.
-export async function resolveDshCodeMcpServerForConfig(store: DshStoreLike): Promise<ResolvedMcpServer | null> {
-  if (!moduleDeps || !isDshFeatureEnabled(store)) return null;
-  if (!codeMcpServer) {
-    codeMcpServer = new DshCodeMcpServer({
-      ensureEngineReady: ensureDshEngineReady,
-      getDefaultCwd: () => moduleDeps?.getDefaultCwd() ?? process.cwd(),
-      getDefaultModel: () => computeManagedSettings()?.defaultModel ?? null,
-    });
-  }
-  const url = await codeMcpServer.start();
-  return { name: DSH_CODE_MCP_SERVER_NAME, transportType: 'http', url };
 }
 
 function closeWorkbenchWindow(): void {
@@ -153,9 +134,19 @@ function closeWorkbenchWindow(): void {
   workbenchWindow = null;
 }
 
+function webOrigin(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
 function openOrFocusWorkbench(url: string, title: string): void {
   if (workbenchWindow && !workbenchWindow.isDestroyed()) {
-    if (workbenchWindow.webContents.getURL() !== url) {
+    // Loading the launch URL redirects to `/`, so compare origins: the same
+    // runtime keeps its session, a restarted one (new port) needs the new URL.
+    if (webOrigin(workbenchWindow.webContents.getURL()) !== webOrigin(url)) {
       void workbenchWindow.loadURL(url);
     }
     if (workbenchWindow.isMinimized()) workbenchWindow.restore();
@@ -185,10 +176,6 @@ function openOrFocusWorkbench(url: string, title: string): void {
 export async function stopDshFeatureRuntimes(): Promise<void> {
   closeWorkbenchWindow();
   await getDshEngineManager().stop();
-  if (codeMcpServer) {
-    await codeMcpServer.stop();
-    codeMcpServer = null;
-  }
 }
 
 export function registerDshHandlers(deps: DshHandlerDeps): void {
@@ -205,13 +192,8 @@ export function registerDshHandlers(deps: DshHandlerDeps): void {
     if (!next) {
       await stopDshFeatureRuntimes();
     }
-    // The dsh-code MCP server enters/leaves OpenClaw's mcp.servers with the
-    // flag, so the toggle re-runs config sync. Note that this restarts a
-    // running gateway either way: the sync classifies any change to the `mcp`
-    // key as restart impact, which forces a hard restart regardless of
-    // restartGatewayIfRunning. Leaving the flag off keeps that decision with
-    // the impact classifier instead of duplicating it here.
-    void deps.syncOpenClawConfig({ reason: 'dsh-feature-toggle' });
+    // Nothing in OpenClaw's config depends on this flag, so the toggle never
+    // touches openclaw.json and never restarts the gateway.
     return { enabled: next };
   });
 
@@ -226,6 +208,6 @@ export function registerDshHandlers(deps: DshHandlerDeps): void {
     }
     const url = await ensureDshEngineReady();
     openOrFocusWorkbench(url, deps.getWorkbenchTitle());
-    return { url };
+    return { url: webOrigin(url) ?? '' };
   });
 }

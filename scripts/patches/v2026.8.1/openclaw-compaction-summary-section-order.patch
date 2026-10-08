@@ -1,0 +1,90 @@
+diff --git a/src/agents/agent-hooks/compaction-safeguard-quality.ts b/src/agents/agent-hooks/compaction-safeguard-quality.ts
+index 2040e47..bc036aa 100644
+--- a/src/agents/agent-hooks/compaction-safeguard-quality.ts
++++ b/src/agents/agent-hooks/compaction-safeguard-quality.ts
+@@ -124,16 +124,26 @@ function parseRequiredSummarySectionContents(summary: string): string[] | null {
+   const contents = REQUIRED_SUMMARY_SECTIONS.map(() => new Array<string>());
+   const preamble: string[] = [];
+   let sectionIndex = -1;
++  const seenSections = new Set<number>();
+
+   for (const line of summary.split(/\r?\n/u)) {
+-    const nextHeading = REQUIRED_SUMMARY_SECTIONS[sectionIndex + 1];
+-    if (nextHeading && line.trim() === nextHeading) {
+-      sectionIndex += 1;
++    // The quality audit accepts each required heading regardless of order.
++    // Keep the same contract when budgeting so a reordered, complete summary
++    // cannot fall back to prefix truncation and lose its audited tail facts.
++    const nextSectionIndex = REQUIRED_SUMMARY_SECTIONS.findIndex(
++      (heading) => line.trim() === heading,
++    );
++    if (nextSectionIndex >= 0) {
++      if (seenSections.has(nextSectionIndex)) {
++        return null;
++      }
++      seenSections.add(nextSectionIndex);
++      sectionIndex = nextSectionIndex;
+       continue;
+     }
+     (sectionIndex < 0 ? preamble : contents[sectionIndex])?.push(line);
+   }
+-  if (sectionIndex !== REQUIRED_SUMMARY_SECTIONS.length - 1) {
++  if (seenSections.size !== REQUIRED_SUMMARY_SECTIONS.length) {
+     return null;
+   }
+   contents[0]?.unshift(...preamble);
+diff --git a/src/agents/agent-hooks/compaction-safeguard.test.ts b/src/agents/agent-hooks/compaction-safeguard.test.ts
+index af8af5b..80cff23 100644
+--- a/src/agents/agent-hooks/compaction-safeguard.test.ts
++++ b/src/agents/agent-hooks/compaction-safeguard.test.ts
+@@ -527,6 +527,50 @@ describe("compaction-safeguard tool failures", () => {
+ });
+
+ describe("compaction-safeguard summary budgets", () => {
++  it("retains audit facts under suffix pressure for every ordering of complete summary sections", () => {
++    const identifier = "/tmp/reordered-compaction-12345678.log";
++    const sections = [
++      ["## Decisions", "Keep the rollout scoped."],
++      ["## Open TODOs", "Run the regression check."],
++      ["## Constraints/Rules", "Retain project boundaries."],
++      ["## Pending user asks", "No pending asks.\n" + "Completed details. ".repeat(1_200)],
++      ["## Exact identifiers", identifier],
++    ];
++    const permutations = (indices: number[]): number[][] =>
++      indices.length === 0
++        ? [[]]
++        : indices.flatMap((index) =>
++            permutations(indices.filter((other) => other !== index)).map((rest) =>
++              [index].concat(rest),
++            ),
++          );
++    const suffix = "\n\n## Tool Failures\n" + "Historical diagnostics. ".repeat(1_000);
++    const orders = permutations(sections.map((_, index) => index));
++    expect(orders).toHaveLength(120);
++
++    for (const order of orders) {
++      const body = order.map((index) => sections[index]?.join("\n")).join("\n\n");
++      expect(
++        auditSummaryQuality({ summary: body, identifiers: [identifier], latestAsk: null }).ok,
++      ).toBe(true);
++      const finalized = budgetCompactionSummary(body, suffix, MAX_COMPACTION_SUMMARY_CHARS, {
++        identifiers: [identifier],
++        latestAsk: null,
++      }) as { summary: string; structuralSummary: string };
++      expect(finalized.summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
++      expect(finalized.summary).toContain(identifier);
++      expect(
++        actualCompactionQualityModule.auditSummaryQuality({
++          summary: finalized.summary,
++          structuralSummary: finalized.structuralSummary,
++          sourceSummaries: [body],
++          identifiers: [identifier],
++          latestAsk: null,
++        }),
++      ).toEqual({ ok: true, reasons: [] });
++    }
++  });
++
+   it("caps file operations summary and reports omitted entries", () => {
+     const readFiles = Array.from(
+       { length: 200 },

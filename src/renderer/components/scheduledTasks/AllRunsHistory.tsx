@@ -3,6 +3,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import { ScheduledTaskDataStatus, TaskStatus } from '../../../scheduledTask/constants';
+import { hasRunDeliveryFailure } from '../../../scheduledTask/runDelivery';
+import { createRunFilter } from '../../../scheduledTask/runFilter';
 import type { RunFilter, ScheduledTaskRunWithName } from '../../../scheduledTask/types';
 import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
@@ -45,18 +47,6 @@ const statusConfig: Record<TaskStatus, { label: string; color: string; activeCol
   },
 };
 
-function applyClientFilter(
-  runs: ScheduledTaskRunWithName[],
-  filter: RunFilter,
-): ScheduledTaskRunWithName[] {
-  return runs.filter(run => {
-    if (filter.status && run.status !== filter.status) return false;
-    if (filter.startDate && run.startedAt < filter.startDate + 'T00:00:00') return false;
-    if (filter.endDate && run.startedAt > filter.endDate + 'T23:59:59') return false;
-    return true;
-  });
-}
-
 const EMPTY_FILTER: RunFilter = {};
 
 interface AllRunsHistoryProps {
@@ -76,7 +66,7 @@ const AllRunsHistory: React.FC<AllRunsHistoryProps> = ({ searchText = '' }) => {
   const normalizedSearch = searchText.trim().toLowerCase();
 
   const displayedRuns = useMemo(() => {
-    let runs = hasActiveFilter ? applyClientFilter(allRuns, filter) : allRuns;
+    let runs = hasActiveFilter ? allRuns.filter(createRunFilter(filter)) : allRuns;
     if (normalizedSearch) {
       runs = runs.filter(run =>
         [run.taskName, run.summary ?? '', run.error ?? '']
@@ -136,7 +126,7 @@ const AllRunsHistory: React.FC<AllRunsHistoryProps> = ({ searchText = '' }) => {
   };
 
   const handleViewSession = (run: ScheduledTaskRunWithName) => {
-    if (run.sessionId || run.sessionKey || run.summary || run.error) {
+    if (run.sessionId || run.sessionKey || run.summary || run.error || hasRunDeliveryFailure(run)) {
       reportScheduledTaskAction('history_view_session', {
         source: 'scheduled_tasks_history',
         ...getRunAnalyticsParams(run),
@@ -257,7 +247,7 @@ const AllRunsHistory: React.FC<AllRunsHistoryProps> = ({ searchText = '' }) => {
           <div className="p-2">
             {displayedRuns.map(run => {
               const cfg = statusConfig[run.status];
-              const canViewRun = run.sessionId || run.sessionKey || run.summary || run.error;
+              const canViewRun = run.sessionId || run.sessionKey || run.summary || run.error || hasRunDeliveryFailure(run);
               return (
                 <div
                   key={run.id}
@@ -305,8 +295,8 @@ const AllRunsHistory: React.FC<AllRunsHistoryProps> = ({ searchText = '' }) => {
                   </div>
 
                   {/* Status */}
-                  <div className={`text-sm font-medium ${cfg.color}`}>
-                    {i18nService.t(cfg.label)}
+                  <div className={`text-sm font-medium ${hasRunDeliveryFailure(run) ? 'text-amber-600 dark:text-amber-400' : cfg.color}`}>
+                    {i18nService.t(hasRunDeliveryFailure(run) ? 'scheduledTasksDeliveryFailed' : cfg.label)}
                   </div>
                 </div>
               );
@@ -334,6 +324,7 @@ const AllRunsHistory: React.FC<AllRunsHistoryProps> = ({ searchText = '' }) => {
           sessionKey={viewingRun.sessionKey}
           runSummary={viewingRun.summary}
           runError={viewingRun.error}
+          run={viewingRun}
           onClose={() => setViewingRun(null)}
         />
       )}

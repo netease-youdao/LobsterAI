@@ -244,7 +244,7 @@ const PROVIDER_DEFINITIONS = [
     region: 'china',
     enPriority: 0,
     defaultModels: [
-      { id: 'kimi-k3', name: 'Kimi K3', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 1_048_576, maxTokens: 8_192 },
+      { id: 'kimi-k3', name: 'Kimi K3', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 1_048_576, maxTokens: 1_048_576 },
       { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsImage: true, supportsThinking: true, contextWindow: 262_144 },
       { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true, supportsThinking: true, contextWindow: 262_144 },
     ],

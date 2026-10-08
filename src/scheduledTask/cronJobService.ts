@@ -13,10 +13,13 @@ import {
   GatewayStatus,
   InternalTaskMarker,
   IpcChannel,
+  OpenClawSystemPayloadKind,
   PayloadKind,
+  RunDeliveryStatus,
   ScheduleKind,
   TaskStatus,
 } from './constants';
+import { createRunFilter } from './runFilter';
 import type {
   RunFilter,
   Schedule,
@@ -59,15 +62,21 @@ type GatewaySchedule = GatewayScheduleAt | GatewayScheduleEvery | GatewaySchedul
 
 type GatewayPayload =
   | {
-      kind: 'agentTurn';
+      kind: typeof PayloadKind.AgentTurn;
       message: string;
       timeoutSeconds?: number;
       model?: string;
       thinking?: string;
     }
   | {
-      kind: 'systemEvent';
+      kind: typeof PayloadKind.SystemEvent;
       text: string;
+    }
+  | {
+      kind: typeof OpenClawSystemPayloadKind.Heartbeat;
+    }
+  | {
+      kind: typeof OpenClawSystemPayloadKind.SkillCollectionReview;
     };
 
 interface GatewayDelivery {
@@ -188,6 +197,13 @@ export function isInternalScheduledTaskJob(job: InternalScheduledTaskCandidate):
   }
 
   const payload = job.payload;
+  if (
+    payload?.kind === OpenClawSystemPayloadKind.Heartbeat ||
+    payload?.kind === OpenClawSystemPayloadKind.SkillCollectionReview
+  ) {
+    return true;
+  }
+
   let payloadText: string | undefined;
   if (payload?.kind === PayloadKind.SystemEvent) {
     payloadText = payload.text;
@@ -227,11 +243,6 @@ function mapGatewayResultStatus(
   if (status === GatewayStatus.Error) return TaskStatus.Error;
   if (status === GatewayStatus.Skipped) return TaskStatus.Skipped;
   return null;
-}
-
-function matchesRunFilter(run: ScheduledTaskRun, filter?: RunFilter): boolean {
-  if (filter?.status && run.status !== filter.status) return false;
-  return true;
 }
 
 /**
@@ -432,6 +443,26 @@ function mapGatewayDeliveryTarget(
   };
 }
 
+function mapGatewayPayload(payload: GatewayPayload): ScheduledTaskPayload {
+  if (payload.kind === PayloadKind.SystemEvent) {
+    return { kind: PayloadKind.SystemEvent, text: payload.text };
+  }
+  if (payload.kind === PayloadKind.AgentTurn) {
+    return {
+      kind: PayloadKind.AgentTurn,
+      message: payload.message,
+      ...(typeof payload.timeoutSeconds === 'number'
+        ? { timeoutSeconds: payload.timeoutSeconds }
+        : {}),
+      ...(payload.model ? { model: payload.model } : {}),
+    };
+  }
+
+  // OpenClaw-owned cron jobs are filtered before mapping. Keep this fallback
+  // non-throwing so unexpected gateway data cannot unmount the scheduled-task UI.
+  return { kind: PayloadKind.SystemEvent, text: '' };
+}
+
 export function mapGatewayJob(job: GatewayJob): ScheduledTask {
   const delivery = job.delivery ?? { mode: DeliveryMode.None };
 
@@ -454,17 +485,7 @@ export function mapGatewayJob(job: GatewayJob): ScheduledTask {
     schedule: mapGatewaySchedule(job.schedule),
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
-    payload:
-      job.payload.kind === PayloadKind.SystemEvent
-        ? { kind: PayloadKind.SystemEvent, text: job.payload.text }
-        : {
-            kind: PayloadKind.AgentTurn,
-            message: job.payload.message,
-            ...(typeof job.payload.timeoutSeconds === 'number'
-              ? { timeoutSeconds: job.payload.timeoutSeconds }
-              : {}),
-            ...(job.payload.model ? { model: job.payload.model } : {}),
-          },
+    payload: mapGatewayPayload(job.payload),
     delivery: mappedDelivery,
     agentId: job.agentId ?? null,
     sessionKey: job.sessionKey ?? null,
@@ -474,7 +495,7 @@ export function mapGatewayJob(job: GatewayJob): ScheduledTask {
   };
 }
 
-export function mapGatewayRun(entry: GatewayRunLogEntry): ScheduledTaskRun {
+export function mapGatewayRun(entry: GatewayRunLogEntry, delivery?: GatewayDelivery): ScheduledTaskRun {
   let status =
     entry.action && entry.action !== 'finished'
       ? TaskStatus.Running
@@ -511,6 +532,8 @@ export function mapGatewayRun(entry: GatewayRunLogEntry): ScheduledTaskRun {
     error: status === TaskStatus.Success ? null : (entry.error ?? null),
     summary: entry.summary ?? null,
     deliveryError: entry.deliveryError ?? null,
+    deliveryStatus: Object.values(RunDeliveryStatus).find(value => value === entry.deliveryStatus) ?? null,
+    deliveryChannel: delivery?.mode === DeliveryMode.Announce ? delivery.channel ?? null : null,
   };
 }
 
@@ -757,7 +780,10 @@ export class CronJobService {
     let rawOffset = 0;
     const pageSize = getGatewayRunPageSize(visibleLimit);
     logGatewayRunPageClamp('job', visibleLimit, visibleOffset, pageSize);
+    const matchesFilter = createRunFilter(filter);
 
+    // cron.runs has no date-range parameters. Filter before counting visible
+    // offsets, and keep scanning: its completion-time order is not start order.
     while (visibleRuns.length < visibleLimit) {
       const requestLimit = getGatewayRunRequestLimit(pageSize, visibleLimit - visibleRuns.length);
       const result = await client.request<{ entries?: GatewayRunLogEntry[] }>('cron.runs', {
@@ -766,15 +792,13 @@ export class CronJobService {
         limit: requestLimit,
         offset: rawOffset,
         sortDir: 'desc',
-        ...(filter?.startDate && { startMs: new Date(filter.startDate + 'T00:00:00').getTime() }),
-        ...(filter?.endDate && { endMs: new Date(filter.endDate + 'T23:59:59').getTime() }),
       });
       const entries = Array.isArray(result.entries) ? result.entries : [];
       if (entries.length === 0) break;
 
       for (const entry of entries) {
-        const run = mapGatewayRun(entry);
-        if (!matchesRunFilter(run, filter)) continue;
+        const run = mapGatewayRun(entry, job?.delivery);
+        if (!matchesFilter(run)) continue;
         if (skippedVisible < visibleOffset) {
           skippedVisible += 1;
           continue;
@@ -824,12 +848,15 @@ export class CronJobService {
       jobs.filter(job => isInternalScheduledTaskJob(job)).map(job => job.id),
     );
     const nameMap = new Map(jobs.map(job => [job.id, job.name]));
+    const deliveryMap = new Map(jobs.map(job => [job.id, job.delivery]));
     const visibleRuns: Array<{ entry: GatewayRunLogEntry; run: ScheduledTaskRun }> = [];
     let skippedVisible = 0;
     let rawOffset = 0;
     const pageSize = getGatewayRunPageSize(visibleLimit);
     logGatewayRunPageClamp('all', visibleLimit, visibleOffset, pageSize);
+    const matchesFilter = createRunFilter(filter);
 
+    // As with job history, apply dates locally before visible pagination.
     while (visibleRuns.length < visibleLimit) {
       const requestLimit = getGatewayRunRequestLimit(pageSize, visibleLimit - visibleRuns.length);
       const result = await client.request<{ entries?: GatewayRunLogEntry[] }>('cron.runs', {
@@ -837,16 +864,14 @@ export class CronJobService {
         limit: requestLimit,
         offset: rawOffset,
         sortDir: 'desc',
-        ...(filter?.startDate && { startMs: new Date(filter.startDate + 'T00:00:00').getTime() }),
-        ...(filter?.endDate && { endMs: new Date(filter.endDate + 'T23:59:59').getTime() }),
       });
       const entries = Array.isArray(result.entries) ? result.entries : [];
       if (entries.length === 0) break;
 
       for (const entry of entries) {
         if (internalJobIds.has(entry.jobId)) continue;
-        const run = mapGatewayRun(entry);
-        if (!matchesRunFilter(run, filter)) continue;
+        const run = mapGatewayRun(entry, deliveryMap.get(entry.jobId));
+        if (!matchesFilter(run)) continue;
         if (skippedVisible < visibleOffset) {
           skippedVisible += 1;
           continue;

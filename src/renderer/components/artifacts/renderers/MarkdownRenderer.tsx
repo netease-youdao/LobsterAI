@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 
 import MarkdownContent from '@/components/MarkdownContent';
+import { i18nService } from '@/services/i18n';
 import type { Artifact } from '@/types/artifact';
 
 import { CoworkSelectedTextSource } from '../../../../shared/cowork/selectedText';
@@ -8,9 +9,11 @@ import {
   type ArtifactSelectedTextContext,
   useArtifactSelectedTextAction,
 } from '../artifactSelectedText';
+import EditableMarkdownFile from './EditableMarkdownFile';
 
 interface MarkdownRendererProps {
   artifact: Artifact;
+  sourceView?: boolean;
   selectedTextContext?: ArtifactSelectedTextContext;
 }
 
@@ -115,7 +118,7 @@ const createMarkdownFileResolver = (
   };
 };
 
-const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ artifact, selectedTextContext }) => {
+const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ artifact, sourceView, selectedTextContext }) => {
   const resolveLocalFilePath = useMemo(
     () => createMarkdownFileResolver(artifact.filePath),
     [artifact.filePath]
@@ -126,26 +129,22 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ artifact, selectedT
     selectedTextContext,
   });
 
-  if (!artifact.content) {
-    return (
-      <div className="flex items-center justify-center h-full text-muted text-sm">
-        No content
-      </div>
-    );
-  }
-
-  return (
-    <div
-      ref={containerRef}
-      onMouseUp={handleMouseUp}
-      className="relative h-full overflow-auto p-6"
-    >
-      {actionButton}
-      <MarkdownContent
-        content={artifact.content}
+  const renderPreview = (content: string) => (
+    <div className="h-full overflow-auto p-6">
+      {content ? <MarkdownContent
+        content={content}
         resolveLocalFilePath={resolveLocalFilePath}
         enableLargePreview={false}
-      />
+      /> : <div className="text-sm text-muted">{i18nService.t('artifactNoContent')}</div>}
+    </div>
+  );
+
+  return (
+    <div ref={containerRef} onMouseUp={handleMouseUp} className="relative h-full">
+      {actionButton}
+      {artifact.filePath && window.electron?.artifact?.markdown
+        ? <EditableMarkdownFile key={artifact.filePath} artifact={artifact} sourceView={sourceView} renderPreview={renderPreview} resolveLocalFilePath={resolveLocalFilePath} />
+        : renderPreview(artifact.content)}
     </div>
   );
 };

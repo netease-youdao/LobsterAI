@@ -16,10 +16,13 @@ export const INSTALLER_RESOURCES_TAR = 'win-resources.tar';
 /** Written after a successful extraction, by the installer or by this module. */
 export const INSTALLER_RESOURCES_MARKER = '.win-resources-extracted';
 
-// Any of these marks the OpenClaw runtime as present. Mirrors the entry
-// candidates of OpenClawEngineManager.resolveOpenClawEntry.
-const RUNTIME_ENTRY_CANDIDATES = [
-  path.join('cfmind', 'gateway-bundle.mjs'),
+const GATEWAY_BUNDLE_ENTRY = path.join('cfmind', 'gateway-bundle.mjs');
+const GATEWAY_BUNDLE_REQUIRED_ASSETS = [path.join('cfmind', 'web-tree-sitter.wasm')];
+
+// Mirrors the fallback candidates of OpenClawEngineManager.resolveOpenClawEntry.
+// The optimized root bundle is only usable when its root-relative assets are
+// present; otherwise recovery must not treat a partial extraction as complete.
+const RUNTIME_FALLBACK_ENTRY_CANDIDATES = [
   path.join('cfmind', 'openclaw.mjs'),
   path.join('cfmind', 'dist', 'entry.js'),
   path.join('cfmind', 'gateway.asar'),
@@ -36,7 +39,7 @@ export interface InstallerResourceRecoveryProgress {
 export interface InstallerResourceRecoveryResult {
   /** True when an extraction was actually started. */
   attempted: boolean;
-  /** True when the runtime entry is present (recovered now, or already intact). */
+  /** True when a complete runtime entry is present (recovered now, or already intact). */
   success: boolean;
   tarPath: string;
   entries?: number;
@@ -44,8 +47,17 @@ export interface InstallerResourceRecoveryResult {
   error?: string;
 }
 
-export const hasBundledRuntimeEntry = (resourcesDir: string): boolean =>
-  RUNTIME_ENTRY_CANDIDATES.some((candidate) => fs.existsSync(path.join(resourcesDir, candidate)));
+export const hasBundledRuntimeEntry = (resourcesDir: string): boolean => {
+  if (fs.existsSync(path.join(resourcesDir, GATEWAY_BUNDLE_ENTRY))) {
+    return GATEWAY_BUNDLE_REQUIRED_ASSETS.every((asset) =>
+      fs.existsSync(path.join(resourcesDir, asset)),
+    );
+  }
+
+  return RUNTIME_FALLBACK_ENTRY_CANDIDATES.some((candidate) =>
+    fs.existsSync(path.join(resourcesDir, candidate)),
+  );
+};
 
 const stringifyError = (error: unknown): string => {
   if (error instanceof Error) return error.message;
@@ -66,7 +78,8 @@ const doRecover = async (
 
   if (!fs.existsSync(tarPath)) {
     console.warn(
-      `[InstallerRecovery] runtime entry is missing and no installer tar is left to recover from ` +
+      `[InstallerRecovery] runtime entry or required bundle assets are missing and no installer tar ` +
+        `is left to recover from ` +
         `(reason=${reason}, extractedMarker=${fs.existsSync(markerPath)}, dir=${resourcesDir})`,
     );
     return { attempted: false, success: false, tarPath, error: 'installer resource tar not found' };
@@ -84,7 +97,8 @@ const doRecover = async (
   let bytes = 0;
   let nextProgressBytes = PROGRESS_LOG_STEP_BYTES;
   console.log(
-    `[InstallerRecovery] runtime entry is missing, extracting ${tarPath} -> ${resourcesDir} ` +
+    `[InstallerRecovery] runtime entry or required bundle assets are missing, extracting ` +
+      `${tarPath} -> ${resourcesDir} ` +
       `(reason=${reason}, tarBytes=${totalBytes})`,
   );
   onProgress?.({ entries: 0, bytes: 0, totalBytes });
@@ -128,7 +142,7 @@ const doRecover = async (
   if (!hasBundledRuntimeEntry(resourcesDir)) {
     console.error(
       `[InstallerRecovery] extraction finished (entries=${entries}, elapsedMs=${elapsedMs}) ` +
-        `but the runtime entry is still missing, keeping ${tarPath}`,
+        `but the runtime entry or required bundle assets are still missing, keeping ${tarPath}`,
     );
     return {
       attempted: true,
@@ -136,7 +150,7 @@ const doRecover = async (
       tarPath,
       entries,
       elapsedMs,
-      error: 'runtime entry still missing after extraction',
+      error: 'runtime entry or required bundle assets are still missing after extraction',
     };
   }
 

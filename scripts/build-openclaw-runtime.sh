@@ -12,6 +12,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ELECTRON_ROOT="${ELECTRON_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 OPENCLAW_SRC="${OPENCLAW_SRC:-$ELECTRON_ROOT/../openclaw}"
 OUT_DIR="${OUT_DIR:-$ELECTRON_ROOT/vendor/openclaw-runtime/$TARGET_ID}"
+MISTRAL_OTEL_API_VERSION="1.9.1"
+PNPM_FETCH_TIMEOUT_MS="${OPENCLAW_PNPM_FETCH_TIMEOUT_MS:-600000}"
 
 TARGET_PLATFORM="${TARGET_ID%%-*}"
 TARGET_ARCH="${TARGET_ID#*-}"
@@ -86,6 +88,13 @@ fi
 
 node -e 'const [a,b,c]=process.versions.node.split(".").map(Number);const ok=a>22||(a===22&&(b>12||(b===12&&c>=0)));if(!ok){console.error(`Node ${process.versions.node} is too old. Require >= 22.12.0`);process.exit(1)}'
 
+# OpenClaw pins its package manager via package.json "packageManager". pnpm
+# downloads that version into its store without running its build scripts, which
+# leaves pnpm v12+ with a placeholder bin instead of its native binary. Repair it
+# here rather than failing at the first `pnpm install` below with an opaque
+# "not recognized as an internal or external command".
+node "$ELECTRON_ROOT/scripts/ensure-pnpm-native-binary.cjs" "$OPENCLAW_SRC"
+
 # ---------------------------------------------------------------------------
 # Build cache: skip if the runtime was already built for the pinned version.
 # On Windows (Git Bash / MSYS2), paths like $ELECTRON_ROOT are Unix-style
@@ -108,6 +117,7 @@ PATCH_HASH=""
 if [[ -d "$PATCHES_DIR" ]]; then
   PATCH_HASH=$(cat "$PATCHES_DIR"/*.patch 2>/dev/null | sha256sum | cut -d' ' -f1)
 fi
+BUILD_SCRIPT_HASH=$(cat "$SCRIPT_DIR/build-openclaw-runtime.sh" "$SCRIPT_DIR/pack-openclaw-workspace-deps.cjs" | sha256sum | cut -d' ' -f1)
 
 if [[ -n "$DESIRED_VERSION" && "${OPENCLAW_FORCE_BUILD:-}" != "1" ]]; then
   BUILD_INFO="$OUT_DIR/runtime-build-info.json"
@@ -126,7 +136,14 @@ try {
 } catch {}
 READPH
     )
-    if [[ "$BUILT_VERSION" == "$DESIRED_VERSION" && "$BUILT_PATCH_HASH" == "$PATCH_HASH" ]]; then
+    BUILT_SCRIPT_HASH=$(node - "$BUILD_INFO" <<'READSH'
+try {
+  const info = require(process.argv[2]);
+  console.log(info.buildScriptHash || '');
+} catch {}
+READSH
+    )
+    if [[ "$BUILT_VERSION" == "$DESIRED_VERSION" && "$BUILT_PATCH_HASH" == "$PATCH_HASH" && "$BUILT_SCRIPT_HASH" == "$BUILD_SCRIPT_HASH" ]]; then
       if [[ -d "$OUT_DIR/node_modules" && -f "$OUT_DIR/gateway.asar" && -f "$OUT_DIR/dist/control-ui/index.html" ]]; then
         echo "[openclaw-runtime] Already built for $DESIRED_VERSION (target=$TARGET_ID, patchHash=${PATCH_HASH:0:12}…), skipping."
         echo "[openclaw-runtime] Use OPENCLAW_FORCE_BUILD=1 to force rebuild."
@@ -137,6 +154,9 @@ READPH
     if [[ "$BUILT_VERSION" == "$DESIRED_VERSION" && "$BUILT_PATCH_HASH" != "$PATCH_HASH" ]]; then
       echo "[openclaw-runtime] Patches changed (was=${BUILT_PATCH_HASH:0:12}…, now=${PATCH_HASH:0:12}…), rebuilding."
     fi
+    if [[ "$BUILT_VERSION" == "$DESIRED_VERSION" && "$BUILT_SCRIPT_HASH" != "$BUILD_SCRIPT_HASH" ]]; then
+      echo "[openclaw-runtime] Runtime build scripts changed; rebuilding."
+    fi
   fi
   echo "[openclaw-runtime] Pinned version: $DESIRED_VERSION (current build: ${BUILT_VERSION:-none})"
 fi
@@ -144,7 +164,18 @@ fi
 echo "[1/7] Building OpenClaw from source: $OPENCLAW_SRC"
 pushd "$OPENCLAW_SRC" >/dev/null
 corepack enable >/dev/null 2>&1 || true
-pnpm install --frozen-lockfile
+echo "[openclaw-runtime] Installing source dependencies (fetch timeout=${PNPM_FETCH_TIMEOUT_MS}ms)"
+PNPM_INSTALL_LOG="$WORK_DIR/pnpm-install.log"
+if ! pnpm install --frozen-lockfile --fetch-timeout "$PNPM_FETCH_TIMEOUT_MS" 2>&1 | tee "$PNPM_INSTALL_LOG"; then
+  if grep -Fq 'Broken lockfile: missing snapshot' "$PNPM_INSTALL_LOG" \
+    && [[ -f node_modules/.pnpm/lock.yaml || -f node_modules/.modules.yaml ]]; then
+    echo "[openclaw-runtime] Detected stale pnpm virtual-store metadata; rebuilding dependency links"
+    rm -f node_modules/.pnpm/lock.yaml node_modules/.modules.yaml
+    pnpm install --frozen-lockfile --fetch-timeout "$PNPM_FETCH_TIMEOUT_MS"
+  else
+    exit 1
+  fi
+fi
 pnpm build
 # Skip release:check — it validates the openclaw npm package for publishing and
 # is not relevant for LobsterAI embedded runtime builds.  On Windows it also
@@ -153,19 +184,18 @@ pnpm build
 echo "[openclaw-runtime] Skipping release:check (not needed for embedded builds)"
 
 echo "[openclaw-runtime] Preparing OpenClaw package metadata"
-node --import tsx --input-type=module - <<'NODE'
-const { writePackageDistInventory } = await import('./src/infra/package-dist-inventory.ts');
-await writePackageDistInventory(process.cwd());
-NODE
-node scripts/test-built-bundled-channel-entry-smoke.mjs
+node --import ./scripts/tsx.mjs scripts/write-package-dist-inventory.ts
+node --import ./scripts/tsx.mjs scripts/test-built-bundled-channel-entry-smoke.mts
 node scripts/package-changelog.mjs prepare
 OPENCLAW_CHANGELOG_PREPARED=1
 
 echo "[2/7] Packing npm tarball"
 # OpenClaw v2026.4.15 removed OPENCLAW_PREPACK_PREPARED support, so running
-# npm lifecycle scripts here would rebuild tsdown through prepack. The metadata
-# and smoke steps that still matter for the embedded tarball are run above.
-npm pack --ignore-scripts --pack-destination "$PACK_DIR"
+# lifecycle scripts here would rebuild tsdown through prepack. The metadata and
+# smoke steps that still matter for the embedded tarball are run above. pnpm's
+# packer is required so v2026.8.1 workspace:* runtime dependencies are rewritten
+# to publishable versions; npm pack leaves them unresolved.
+pnpm --config.ignore-scripts=true pack --pack-destination "$PACK_DIR"
 restore_openclaw_package_changelog
 TARBALL="$(ls -1t "$PACK_DIR"/openclaw-*.tgz | head -n 1)"
 if [[ -z "$TARBALL" || ! -f "$TARBALL" ]]; then
@@ -188,7 +218,7 @@ cp -R "$PKG_DIR" "$OUT_DIR"
 
 # Save build metadata for traceability.
 # Use `node -` so stdin is treated as script and the following args remain user args.
-node - "$OUT_DIR" "$OPENCLAW_SRC" "$TARGET_ID" "$ELECTRON_ROOT" "$PATCH_HASH" <<'NODE'
+node - "$OUT_DIR" "$OPENCLAW_SRC" "$TARGET_ID" "$ELECTRON_ROOT" "$PATCH_HASH" "$BUILD_SCRIPT_HASH" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
@@ -197,6 +227,7 @@ const src = process.argv[3];
 const target = process.argv[4];
 const electronRoot = process.argv[5];
 const patchHash = process.argv[6] || '';
+const buildScriptHash = process.argv[7] || '';
 
 // Read pinned version from package.json
 let openclawVersion = '';
@@ -222,6 +253,7 @@ const meta = {
   openclawVersion,
   openclawCommit,
   patchHash,
+  buildScriptHash,
 };
 fs.writeFileSync(path.join(outDir, 'runtime-build-info.json'), JSON.stringify(meta, null, 2) + '\n');
 NODE
@@ -233,11 +265,21 @@ rm -rf node_modules package-lock.json
 # Avoid npm peer resolution conflicts caused by dev-only lint toolchain.
 npm pkg delete devDependencies >/dev/null 2>&1 || true
 
+# The root tarball contains registry versions for workspace dependencies. Use
+# locally built packages so patches under packages/ survive runtime installation.
+node "$ELECTRON_ROOT/scripts/pack-openclaw-workspace-deps.cjs" "$OPENCLAW_SRC" "$OUT_DIR"
+
 echo "[openclaw-runtime] npm target platform=$NPM_TARGET_PLATFORM arch=$NPM_TARGET_ARCH"
+# @mistralai/mistralai@2.6.4 treats the OpenTelemetry API as an optional peer,
+# but its request path imports the no-op API eagerly. OpenClaw's source install
+# receives it from dev tooling; the production tarball does not. Keep the small
+# pure-JS API in LobsterAI's embedded runtime so the gateway bundle and Mistral
+# provider both remain loadable without enabling the optional OTLP exporters.
 NPM_CONFIG_LEGACY_PEER_DEPS=true \
 npm_config_platform="$NPM_TARGET_PLATFORM" \
 npm_config_arch="$NPM_TARGET_ARCH" \
-npm install --omit=dev --no-audit --no-fund
+npm install --omit=dev --no-audit --no-fund --save-exact \
+  "@opentelemetry/api@$MISTRAL_OTEL_API_VERSION"
 
 # Runtime sanity checks before packing gateway.asar
 [[ -f "openclaw.mjs" ]]

@@ -1,4 +1,5 @@
 import { ASK_USER_QUESTION_TOOL_NAME } from '../cowork/constants';
+import { OpenClawQuestion } from '../cowork/openclawQuestion';
 
 /** When task-completion notifications are shown. */
 export const TaskCompletionNotificationMode = {
@@ -20,7 +21,7 @@ export type WaitingNotificationKind =
 export const classifyWaitingNotificationKind = (
   toolName: string | null | undefined,
 ): WaitingNotificationKind =>
-  toolName === ASK_USER_QUESTION_TOOL_NAME
+  toolName === ASK_USER_QUESTION_TOOL_NAME || toolName === OpenClawQuestion.ToolName
     ? WaitingNotificationKind.Question
     : WaitingNotificationKind.Permission;
 

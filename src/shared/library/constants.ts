@@ -90,6 +90,28 @@ export const LibrarySort = {
 } as const;
 export type LibrarySort = typeof LibrarySort[keyof typeof LibrarySort];
 
+export const LibraryLocalSort = {
+  RecentTask: 'recent_task',
+} as const;
+export type LibraryLocalSort = typeof LibraryLocalSort[keyof typeof LibraryLocalSort];
+
+export const LibraryLocalProtocol = { Version: 2 } as const;
+
+export const LibraryGridProtocol = { Version: 1 } as const;
+
+export const LibraryGridCursorKind = {
+  TaskGroups: 'task_groups',
+  TaskItems: 'task_items',
+} as const;
+
+export const LibraryGridLimits = {
+  PreviewCount: 3,
+  DefaultTaskPageSize: 8,
+  MaxTaskPageSize: 32,
+  ItemPageSize: 24,
+  MaxItemPageSize: 100,
+} as const;
+
 export const LibraryViewMode = {
   Grid: 'grid',
   List: 'list',
@@ -118,6 +140,9 @@ export type LibraryIndexPhase = typeof LibraryIndexPhase[keyof typeof LibraryInd
 
 export const LibraryErrorCode = {
   InvalidInput: 'invalid_input',
+  InvalidCursor: 'invalid_cursor',
+  ProtocolMismatch: 'protocol_mismatch',
+  InvalidLocalData: 'invalid_local_data',
   NotFound: 'not_found',
   NotAvailable: 'not_available',
   PermissionDenied: 'permission_denied',
@@ -133,12 +158,15 @@ export const LibraryChangeReason = {
   Favorite: 'favorite',
   Repair: 'repair',
   SessionDeleted: 'session_deleted',
+  SessionProjectionChanged: 'session_projection_changed',
 } as const;
 export type LibraryChangeReason =
   typeof LibraryChangeReason[keyof typeof LibraryChangeReason];
 
 export const LibraryIpc = {
   ListLocal: 'library:listLocal',
+  ListLocalTaskGroups: 'library:listLocalTaskGroups',
+  ListLocalTaskItems: 'library:listLocalTaskItems',
   ListCloud: 'library:listCloud',
   GetLocalItems: 'library:getLocalItems',
   GetLocalDetail: 'library:getLocalDetail',
@@ -159,6 +187,8 @@ export const LibraryLimits = {
   DefaultPageSize: 24,
   MaxPageSize: 100,
   MaxTargetItemIds: 100,
+  MaxIdentifierLength: 200,
+  MaxLocalCursorLength: 4_096,
   MaxKeywordLength: 100,
   MaxCandidateBatchSize: 100,
   MaxCandidateStringLength: 4096,

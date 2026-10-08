@@ -1,3 +1,4 @@
+import { PublishingIdentityType } from '@shared/publishing/constants';
 import { afterEach, expect, test, vi } from 'vitest';
 
 vi.mock('../store', () => ({
@@ -77,11 +78,13 @@ test('builds a Youdao Analyzer URL with common action parameters', () => {
   expect(result.searchParams.get('uuid')).toBe('installation-uuid');
   expect(result.searchParams.get('firstKeyfrom')).toBe('bilibili');
   expect(result.searchParams.get('latestKeyfrom')).toBe('partner_a');
+  expect(result.searchParams.get('keyfrom')).toBe('partner_a');
   expect(result.searchParams.get('is_logged_in')).toBe('true');
   expect(result.searchParams.get('action')).toBe('lobsterai_skill_enabled');
   expect(result.searchParams.get('skillId')).toBe('xlsx');
   expect(result.searchParams.get('enabled')).toBe('true');
   expect(result.searchParams.get('log_Usid')).toBe('test-user');
+  expect(result.searchParams.get('user_id')).toBe('test-user');
   expect(result.searchParams.get('identityType')).toBe('free');
   expect(result.searchParams.get('is_subscriber')).toBe('false');
   expect(result.searchParams.get('uts')).toBe('123456789');
@@ -102,11 +105,13 @@ test('does not allow event parameters to override common parameters', () => {
       uuid: 'unexpected-uuid',
       firstKeyfrom: 'unexpected-first-keyfrom',
       latestKeyfrom: 'unexpected-latest-keyfrom',
+      keyfrom: 'unexpected-keyfrom',
       is_logged_in: false,
       identityType: 'free',
       is_subscriber: false,
       subscriptionStatus: 'free',
       log_Usid: 'unexpected-user',
+      user_id: 'unexpected-user',
       uts: 1,
     },
     {
@@ -138,11 +143,13 @@ test('does not allow event parameters to override common parameters', () => {
   expect(result.searchParams.get('uuid')).toBe('trusted-uuid');
   expect(result.searchParams.get('firstKeyfrom')).toBe('trusted-first-keyfrom');
   expect(result.searchParams.get('latestKeyfrom')).toBe('trusted-latest-keyfrom');
+  expect(result.searchParams.get('keyfrom')).toBe('trusted-latest-keyfrom');
   expect(result.searchParams.get('is_logged_in')).toBe('true');
   expect(result.searchParams.get('identityType')).toBe('subscription');
   expect(result.searchParams.get('is_subscriber')).toBe('true');
   expect(result.searchParams.get('subscriptionStatus')).toBe('active');
   expect(result.searchParams.get('log_Usid')).toBe('trusted-user');
+  expect(result.searchParams.get('user_id')).toBe('trusted-user');
   expect(result.searchParams.get('uts')).toBe('2');
 });
 
@@ -159,6 +166,7 @@ test('uses the logged-in user and omits empty optional parameters', () => {
   ));
 
   expect(result.searchParams.get('log_Usid')).toBe('stored-user');
+  expect(result.searchParams.get('user_id')).toBe('stored-user');
   expect(result.searchParams.get('language')).toBe('zh');
   expect(result.searchParams.get('is_logged_in')).toBe('true');
   expect(result.searchParams.has('optionalValue')).toBe(false);
@@ -181,6 +189,7 @@ test('marks anonymous events when no user is logged in', () => {
   ));
 
   expect(result.searchParams.get('log_Usid')).toBe('');
+  expect(result.searchParams.has('user_id')).toBe(false);
   expect(result.searchParams.get('is_logged_in')).toBe('false');
 });
 
@@ -222,6 +231,32 @@ test('reports an event through the Electron API bridge', async () => {
   expect(requestUrl.searchParams.get('uuid')).toBe('installation-uuid');
   expect(requestUrl.searchParams.get('firstKeyfrom')).toBe('bilibili');
   expect(requestUrl.searchParams.get('latestKeyfrom')).toBe('partner_a');
+  expect(requestUrl.searchParams.get('keyfrom')).toBe('partner_a');
+  expect(requestUrl.searchParams.get('user_id')).toBe('stored-user');
+});
+
+test('allows only an explicit touchpoint identity override during event capture', async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+  vi.stubGlobal('window', {
+    electron: {
+      api: { fetch: fetchMock },
+    },
+  });
+  vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+
+  await expect(reportYdAnalyzer({
+    action: LogReporterAction.PublishingRecoveryResult,
+    identityType: PublishingIdentityType.Enterprise,
+    log_Usid: 'untrusted-user',
+  }, {
+    touchpointIdentityType: PublishingIdentityType.Subscription,
+  })).resolves.toBe(true);
+
+  const requestUrl = new URL(fetchMock.mock.calls[0][0].url);
+  expect(requestUrl.searchParams.get('identityType')).toBe(PublishingIdentityType.Subscription);
+  expect(requestUrl.searchParams.get('log_Usid')).toBe('stored-user');
+  expect(requestUrl.searchParams.get('is_logged_in')).toBe('true');
+  expect(requestUrl.searchParams.get('is_subscriber')).toBe('false');
 });
 
 test('returns false when the event request is rejected', async () => {

@@ -5,14 +5,18 @@ vi.mock('electron', () => ({
   shell: { openPath: vi.fn(), showItemInFolder: vi.fn() },
 }));
 
-import { LibraryLimits } from '../../shared/library/constants';
-import { normalizeLibraryTargetItemIds } from './libraryIpc';
+import { ipcMain } from 'electron';
+
+import { LibraryErrorCode, LibraryIpc, LibraryLimits, LibraryLocalSort, LibrarySort } from '../../shared/library/constants';
+import { LibraryLocalDataError } from '../../shared/library/localOrdering';
+import type { LibraryIpcDependencies } from './libraryIpc';
+import { normalizeLibraryTargetItemIds, normalizeLocalListOptions, registerLibraryIpcHandlers } from './libraryIpc';
 
 describe('library IPC validation', () => {
-  test('normalizes and deduplicates targeted item identifiers', () => {
+  test('preserves exact identifiers while deduplicating targeted reads', () => {
     expect(normalizeLibraryTargetItemIds({
       itemIds: [' item-1 ', 'item-2', 'item-1'],
-    })).toEqual(['item-1', 'item-2']);
+    })).toEqual([' item-1 ', 'item-2', 'item-1']);
   });
 
   test('rejects empty, oversized, and malformed targeted item batches', () => {
@@ -24,5 +28,46 @@ describe('library IPC validation', () => {
       ),
     })).toThrow();
     expect(() => normalizeLibraryTargetItemIds({ itemIds: ['valid', 1] })).toThrow();
+  });
+
+  test('defaults to the task protocol and rejects cloud sorts and old cursors', () => {
+    expect(normalizeLocalListOptions({})).toEqual({});
+    expect(normalizeLocalListOptions({ sort: LibraryLocalSort.RecentTask })).toEqual({ sort: LibraryLocalSort.RecentTask });
+    expect(() => normalizeLocalListOptions({ sort: LibrarySort.RecentlyUpdated })).toThrow();
+    for (const cursor of ['', 12, '!', Buffer.from(JSON.stringify({ sortTime: 1, itemId: 'old' })).toString('base64url')]) {
+      expect(() => normalizeLocalListOptions({ cursor })).toThrow(expect.objectContaining({ code: LibraryErrorCode.InvalidCursor }));
+    }
+  });
+
+  test('preserves structured cursor and data failures through local IPC', () => {
+    const list = vi.fn(() => { throw new LibraryLocalDataError(LibraryErrorCode.InvalidLocalData, 'Invalid data.'); });
+    registerLibraryIpcHandlers({ localStore: { list }, indexService: {} } as unknown as LibraryIpcDependencies);
+    const call = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === LibraryIpc.ListLocal);
+    expect(call).toBeDefined();
+    const handler = call![1];
+    expect(handler({} as Electron.IpcMainInvokeEvent, {})).toMatchObject({ success: false, code: LibraryErrorCode.InvalidLocalData });
+    expect(handler({} as Electron.IpcMainInvokeEvent, { cursor: 'invalid' })).toMatchObject({ success: false, code: LibraryErrorCode.InvalidCursor });
+  });
+
+  test('routes grid task queries separately and preserves validation, cursor and missing-task failures', () => {
+    vi.mocked(ipcMain.handle).mockClear();
+    const listTaskGroups = vi.fn(() => ({ groups: [] }));
+    const listTaskItems = vi.fn(() => {
+      throw new LibraryLocalDataError(LibraryErrorCode.NotFound, 'Missing task.');
+    });
+    registerLibraryIpcHandlers({
+      localStore: { listTaskGroups, listTaskItems }, indexService: {},
+    } as unknown as LibraryIpcDependencies);
+    const groups = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === LibraryIpc.ListLocalTaskGroups)![1];
+    const items = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === LibraryIpc.ListLocalTaskItems)![1];
+    const event = {} as Electron.IpcMainInvokeEvent;
+    expect(groups(event, undefined)).toMatchObject({ success: true, data: { groups: [] } });
+    expect(groups(event, { taskPageSize: 0 })).toMatchObject({ success: false, code: LibraryErrorCode.InvalidInput });
+    expect(groups(event, { taskCursor: 'invalid' })).toMatchObject({ success: false, code: LibraryErrorCode.InvalidCursor });
+    expect(items(event, {})).toMatchObject({ success: false, code: LibraryErrorCode.InvalidInput });
+    expect(items(event, { sessionId: 'missing' })).toMatchObject({ success: false, code: LibraryErrorCode.NotFound });
+    expect(items(event, { sessionId: 'task', itemCursor: 'invalid' })).toMatchObject({ success: false, code: LibraryErrorCode.InvalidCursor });
+    expect(listTaskGroups).toHaveBeenCalledTimes(1);
+    expect(listTaskItems).toHaveBeenCalledTimes(1);
   });
 });

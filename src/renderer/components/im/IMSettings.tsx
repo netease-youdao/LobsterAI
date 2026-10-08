@@ -125,6 +125,10 @@ const IM_CREDENTIAL_FIELDS = [
   'webhookSecret',
 ] as const;
 
+const MULTI_INSTANCE_CARD_GRID_COLUMNS =
+  'repeat(auto-fit, minmax(min(100%, max(260px, calc((100% - 0.75rem) / 2))), 1fr))';
+const EMPTY_MULTI_INSTANCE_CARD_GRID_COLUMNS = 'minmax(min(100%, 260px), 320px)';
+
 const getIMPlatformKind = (platform: Platform): IMAnalyticsPlatformKind => (
   MULTI_INSTANCE_PLATFORMS.has(platform) ? 'multi_instance' : 'single_instance'
 );
@@ -430,6 +434,7 @@ const IMSettings: React.FC = () => {
   const [weixinAllowFromInput, setWeixinAllowFromInput] = useState<string>('');
   const [isWeixinDmPolicyMenuOpen, setIsWeixinDmPolicyMenuOpen] = useState(false);
   const weixinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const weixinLoginRequestRef = useRef(0);
   const weixinDmPolicyMenuRef = useRef<HTMLDivElement>(null);
   const [_localIp, setLocalIp] = useState<string>('');
   const isMountedRef = useRef(true);
@@ -750,11 +755,13 @@ const IMSettings: React.FC = () => {
   };
 
   const handleWeixinQrLogin = async () => {
+    const requestId = ++weixinLoginRequestRef.current;
+    const isCurrentRequest = () => isMountedRef.current && requestId === weixinLoginRequestRef.current;
     setWeixinQrStatus('loading');
     setWeixinQrError('');
     try {
       const startResult = await window.electron.im.weixinQrLoginStart();
-      if (!isMountedRef.current) return;
+      if (!isCurrentRequest()) return;
 
       if (!startResult.success || !startResult.qrDataUrl) {
         setWeixinQrStatus('error');
@@ -762,18 +769,20 @@ const IMSettings: React.FC = () => {
         return;
       }
 
-      setWeixinQrUrl(startResult.qrDataUrl);
-      setWeixinQrStatus('showing');
       if (!startResult.sessionKey) {
         setWeixinQrStatus('error');
-        setWeixinQrError(i18nService.t('imWeixinQrFailed'));
+        setWeixinQrError(i18nService.t('imWeixinQrInvalidResponse'));
         return;
       }
+      setWeixinQrUrl(startResult.qrDataUrl);
+      setWeixinQrStatus('showing');
+      // Starting a rescan may have stopped the previous channel connection.
+      void imService.loadStatus();
 
       // QR expires in ~2 minutes. Show error and let user retry.
       if (weixinTimerRef.current) clearTimeout(weixinTimerRef.current);
       weixinTimerRef.current = setTimeout(() => {
-        if (!isMountedRef.current) return;
+        if (!isCurrentRequest()) return;
         setWeixinQrStatus('error');
         setWeixinQrError(i18nService.t('imWeixinQrExpired'));
       }, 120000);
@@ -781,8 +790,8 @@ const IMSettings: React.FC = () => {
       // Start polling for scan result
       setWeixinQrStatus('waiting');
       const waitResult = await window.electron.im.weixinQrLoginWait(startResult.sessionKey);
+      if (!isCurrentRequest()) return;
       if (weixinTimerRef.current) { clearTimeout(weixinTimerRef.current); weixinTimerRef.current = null; }
-      if (!isMountedRef.current) return;
 
       if (waitResult.success && (waitResult.connected || waitResult.alreadyConnected)) {
         const accountId = waitResult.accountId || weixinAccountId;
@@ -800,10 +809,13 @@ const IMSettings: React.FC = () => {
         setWeixinQrError(waitResult.message || i18nService.t('imWeixinQrFailed'));
       }
     } catch (err) {
+      if (!isCurrentRequest()) return;
       if (weixinTimerRef.current) { clearTimeout(weixinTimerRef.current); weixinTimerRef.current = null; }
-      if (!isMountedRef.current) return;
       setWeixinQrStatus('error');
       setWeixinQrError(String(err));
+    } finally {
+      // A failed rescan and the existing account's connection are independent.
+      if (isCurrentRequest()) await imService.loadStatus();
     }
   };
 
@@ -1880,7 +1892,14 @@ const IMSettings: React.FC = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(154px,1fr))] gap-3">
+        <div
+          className="grid w-full gap-3"
+          style={{
+            gridTemplateColumns: instances.length > 0
+              ? MULTI_INSTANCE_CARD_GRID_COLUMNS
+              : EMPTY_MULTI_INSTANCE_CARD_GRID_COLUMNS,
+          }}
+        >
           {instances.map((instance) => {
             const instanceStatus = instanceStatuses.find((item) => item.instanceId === instance.instanceId);
             const connected = !!instanceStatus?.connected;
@@ -1899,7 +1918,7 @@ const IMSettings: React.FC = () => {
                     setActiveInstanceForPlatform(platform, instance.instanceId);
                   }
                 }}
-                className="group relative flex min-h-[82px] flex-col rounded-lg border border-border-subtle bg-surface p-3 text-left transition-colors hover:border-primary/40 hover:bg-surface-raised"
+                className="group relative flex min-h-[82px] flex-col justify-center rounded-lg border border-border-subtle bg-surface p-3 text-left transition-colors hover:border-primary/40 hover:bg-surface-raised"
               >
                 {isMenuOpen && (
                   <div
@@ -2888,7 +2907,10 @@ const IMSettings: React.FC = () => {
                     {weixinQrStatus === 'error' && weixinQrError && (
                       <div className="flex items-center justify-center gap-1.5 text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
                         <XCircleIcon className="h-4 w-4 flex-shrink-0" />
-                        {weixinQrError}
+                        <span>
+                          {i18nService.t('imWeixinQrFailed')}
+                          {weixinQrError !== i18nService.t('imWeixinQrFailed') && `: ${weixinQrError}`}
+                        </span>
                       </div>
                     )}
                   </>

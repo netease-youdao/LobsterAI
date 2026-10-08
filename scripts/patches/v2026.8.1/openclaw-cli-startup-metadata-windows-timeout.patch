@@ -1,0 +1,14 @@
+diff --git a/scripts/write-cli-startup-metadata.ts b/scripts/write-cli-startup-metadata.ts
+index f67a8f9a..290ac714 100644
+--- a/scripts/write-cli-startup-metadata.ts
++++ b/scripts/write-cli-startup-metadata.ts
+@@ -39,7 +39,8 @@ const distDir = path.join(rootDir, "dist");
+ const outputPath = path.join(distDir, "cli-startup-metadata.json");
+ const extensionsDir = path.join(rootDir, "extensions");
+ const ROOT_HELP_RENDER_TIMEOUT_MS = 120_000;
+-const COMMAND_HELP_RENDER_TIMEOUT_MS = 120_000;
++// Cold plugin discovery can exceed two minutes when two help renders contend on Windows.
++const COMMAND_HELP_RENDER_TIMEOUT_MS = process.platform === "win32" ? 300_000 : 120_000;
+ const COMMAND_HELP_RENDER_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+ const COMMAND_HELP_RENDER_KILL_GRACE_MS = 5_000;
+ // Cold CLI boots compete for the same module graph, so CPU count is not a safe

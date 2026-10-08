@@ -25,7 +25,7 @@ export default {
       thin: '100',
       extralight: '200',
       light: '300',
-      normal: 'var(--lobster-ui-font-weight-normal, 445)',
+      normal: 'var(--lobster-ui-font-weight-normal, 400)',
       medium: 'var(--lobster-ui-font-weight-medium, 500)',
       semibold: '600',
       bold: '700',

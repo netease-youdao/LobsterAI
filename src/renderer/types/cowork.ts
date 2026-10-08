@@ -20,6 +20,8 @@ import type {
   OpenClawEnginePhase as SharedOpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
 } from '../../shared/openclawEngine/constants';
+import type { OpenClawDreamingRecoverySummary } from '../../shared/openclawEngine/dreamingRecovery';
+import type { OpenClawRepairStage } from '../../shared/openclawEngine/repair';
 import type { Platform } from '../../shared/platform';
 import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 
@@ -67,6 +69,12 @@ export interface OpenClawSessionPolicyConfig {
 }
 
 // Cowork message metadata
+/** Live +N/-M line counts streamed while a file tool call's arguments are generated. */
+export interface CoworkLiveEditDiff {
+  added: number;
+  removed: number;
+}
+
 export interface CoworkMessageMetadata {
   toolName?: string;
   toolInput?: Record<string, unknown>;
@@ -78,6 +86,9 @@ export interface CoworkMessageMetadata {
   isStreaming?: boolean;
   isFinal?: boolean;
   isThinking?: boolean;
+  /** True while the model is still streaming this tool call's arguments. */
+  isGenerating?: boolean;
+  liveEditDiff?: CoworkLiveEditDiff;
   skillIds?: string[];
   kitIds?: string[];
   kitReferences?: KitReference[];
@@ -165,6 +176,11 @@ export interface CoworkSession {
   messagesOffset: number;
   /** Total number of messages stored for this session. */
   totalMessages: number;
+  /**
+   * Start of the turn the first loaded message belongs to, when that turn
+   * began before `messagesOffset`; anchors its elapsed time.
+   */
+  leadingTurnStartTimestamp?: number | null;
   parentSessionId?: string | null;
   forkedFromMessageId?: string | null;
   forkedAt?: number | null;
@@ -190,6 +206,8 @@ export interface CoworkConfig {
   memoryUserMemoriesMaxItems: number;
   skipMissedJobs: boolean;
   openClawHeartbeatEnabled: boolean;
+  openClawSkillReviewEnabled: boolean;
+  openClawMemoryFlushEnabled: boolean;
   embeddingEnabled: boolean;
   embeddingProvider: string;
   embeddingModel: string;
@@ -228,6 +246,8 @@ export type CoworkConfigUpdate = Partial<Pick<
   | 'memoryUserMemoriesMaxItems'
   | 'skipMissedJobs'
   | 'openClawHeartbeatEnabled'
+  | 'openClawSkillReviewEnabled'
+  | 'openClawMemoryFlushEnabled'
   | 'embeddingEnabled'
   | 'embeddingProvider'
   | 'embeddingModel'
@@ -256,6 +276,7 @@ export interface OpenClawEngineStatus {
   progressPercent?: number;
   message?: string;
   errorCode?: OpenClawEngineErrorCode;
+  dreamingRecovery?: OpenClawDreamingRecoverySummary;
   gatewayPort?: number | null;
   gatewayHttpUrl?: string | null;
   canRetry: boolean;
@@ -266,9 +287,12 @@ export interface OpenClawGatewayRepairResult {
   status?: OpenClawEngineStatus;
   originalPath?: string;
   backupPath?: string;
+  quarantinedSessionStoreCount?: number;
   error?: string;
   errorCode?: OpenClawGatewayRepairErrorCode;
   recoverable?: boolean;
+  failedStage?: OpenClawRepairStage;
+  failurePath?: string;
 }
 
 export interface CoworkUserMemoryEntry {
@@ -340,6 +364,13 @@ export interface CoworkForkSessionOptions {
 }
 
 // Subagent session summary for sidebar display
+export const SubagentSessionStatus = {
+  Running: 'running',
+  Done: 'done',
+  Error: 'error',
+} as const;
+export type SubagentSessionStatus = typeof SubagentSessionStatus[keyof typeof SubagentSessionStatus];
+
 export interface SubagentSessionSummary {
   id: string;
   agentId: string | null;
@@ -351,7 +382,7 @@ export interface SubagentSessionSummary {
   parentAgentId?: string | null;
   parentTitle?: string | null;
   parentUpdatedAt?: number | null;
-  status: 'running' | 'done' | 'error';
+  status: SubagentSessionStatus;
   createdAt: number;
   endedAt: number | null;
 }

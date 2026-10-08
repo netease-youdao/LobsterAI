@@ -16,6 +16,10 @@ import {
   publishStagedPluginDirectory,
 } from './pluginInstallPublisher';
 
+const OPENCLAW_PLUGIN_INSTALL_TIMEOUT_MS = process.platform === 'win32'
+  ? 20 * 60 * 1000
+  : 5 * 60 * 1000;
+
 export interface PluginInstallParams {
   source: PluginSource;
   spec: string;
@@ -159,6 +163,12 @@ function runAsync(
 /** Resolve npm command and base args, preferring the bundled npm-cli.js. */
 function resolveNpmCommand(): { command: string; baseArgs: string[]; env: NodeJS.ProcessEnv; shell: boolean } {
   return resolveNodePackageCliCommand('npm');
+}
+
+function buildOpenClawPluginInstallArgs(openclawMjs: string, installSpec: string): string[] {
+  // Clicking Install/Update is LobsterAI's explicit consent boundary for the
+  // selected plugin. OpenClaw v2026.8.1 requires that decision on the CLI too.
+  return [openclawMjs, 'plugins', 'install', installSpec, '--force', '--accept-capabilities'];
 }
 
 /** Humanize a camelCase/snake_case key into a label */
@@ -325,11 +335,13 @@ export class PluginManager {
       }
       const result = await runAsync(
         process.execPath,
-        [openclawMjs, 'plugins', 'install', installSpec, '--force'],
+        buildOpenClawPluginInstallArgs(openclawMjs, installSpec),
         {
           cwd: stagingDir,
           env: installEnv,
-          timeout: 5 * 60 * 1000,
+          // Keep LobsterAI's Windows wrapper above OpenClaw's extended archive
+          // scan budget so a large signed plugin can finish and clean up safely.
+          timeout: OPENCLAW_PLUGIN_INSTALL_TIMEOUT_MS,
           onLog,
         },
       );
@@ -830,6 +842,8 @@ export class PluginManager {
 }
 
 export const __pluginManagerTestUtils = {
+  buildOpenClawPluginInstallArgs,
+  openClawPluginInstallTimeoutMs: OPENCLAW_PLUGIN_INSTALL_TIMEOUT_MS,
   resolveNpmCommand,
 };
 

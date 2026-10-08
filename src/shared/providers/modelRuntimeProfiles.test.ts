@@ -29,7 +29,7 @@ describe('Kimi K3 runtime profile', () => {
       reasoning: true,
       input: ['text', 'image', 'video'],
       contextWindow: 1_048_576,
-      maxTokens: 8_192,
+      maxTokens: 1_048_576,
       thinkingLevelMap: {
         off: null,
         minimal: 'max',
@@ -54,7 +54,7 @@ describe('Kimi K3 runtime profile', () => {
         ],
       },
     });
-    expect(KIMI_K3_RUNTIME_PROFILE.maxTokens).toBe(8_192);
+    expect(KIMI_K3_RUNTIME_PROFILE.maxTokens).toBe(1_048_576);
   });
 
   test('parses only controlled persisted values', () => {
@@ -110,7 +110,7 @@ describe('resolveModelRuntimeProfile', () => {
       supportsVideo: true,
       supportsThinking: true,
       contextWindow: 1_048_576,
-      maxTokens: 8_192,
+      maxTokens: 1_048_576,
     });
   });
 

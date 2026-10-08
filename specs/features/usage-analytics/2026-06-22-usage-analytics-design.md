@@ -1173,6 +1173,30 @@ export const LogReporterActionPrefix = {
   - 该事件是本文"不上传错误详情"约定的明确例外：只上传经上述规则脱敏和截断后的错误摘要，不上传完整文件路径、完整 URL、子进程日志、provider 配置、API Key 或工作台 URL。
   - 不上传工作台内的会话内容、prompt 或文件内容。
 
+#### 2.4.44 `lobsterai_onboarding_action`
+
+- 状态：已实现。
+- 触发时机：新用户引导页曝光、点击下一步/跳过/开始体验、浏览器登录跳转结果、登录回调观察、登录后等待/完成 OpenClaw 网关重启、跳转登录但未登录返回客户端、新人任务打开结果、新人任务本地流式动画开始/结束、普通登录引导弹窗开始体验按钮点击，以及新人任务输入框上的二次登录按钮点击和登录跳转结果。
+- 事件含义：统计新用户引导漏斗、登录转化、新人任务触达和二次登录入口效果。
+- 业务参数：
+  - `actionType`：string，动作类型。当前取值包括 `guide_exposure`、`guide_next_click`、`guide_skip_click`、`guide_start_experience_click`、`chat_login_experience_start_click`、`login_redirect_result`、`auth_callback_observed`、`login_success_wait_gateway`、`login_success_gateway_settled`、`login_return_without_auth`、`welcome_task_open_result`、`welcome_stream_start`、`welcome_stream_complete`、`welcome_task_start_experience_click`、`welcome_task_login_redirect_result`。
+  - `source`：string，触发来源。当前取值包括 `first_run_gate`、`new_user_onboarding`、`chat_login_experience_prompt`、`skip`、`start_experience_login_callback`、`start_experience_window_focus_without_login`、`start_experience_dom_focus_without_login`、`start_experience_visibility_without_login`、`new_user_welcome_task`。
+  - `step`：string，引导步骤。当前取值为 `new_task` 或 `prompt_input`，仅引导页相关动作发送。
+  - `nextStep`：string，下一步引导步骤，仅点击下一步时发送。
+  - `result`：string，动作结果。当前取值为 `success` 或 `failed`，仅登录跳转或新人任务打开结果发送。
+  - `errorCode`：string，失败分类；仅失败时发送。当前取值包括 `login_redirect_failed`、`seed_failed`、`error`、`unknown`。
+  - `created`：boolean，新人任务是否为本次新建；仅新人任务打开成功时发送。
+  - `phase`：string，OpenClaw 网关阶段；仅登录后等待/完成网关重启时发送。
+  - `sawStartup`：boolean，是否观察到 OpenClaw 进入启动阶段；仅登录后完成网关等待时发送。
+  - `pendingAge`：number，跳转登录后未登录返回客户端时的等待毫秒数，四舍五入到整数。
+  - `charCount`：number，新人任务欢迎消息长度；仅本地流式动画开始/结束时发送。
+- 发送与容错口径：
+  - 事件由 Renderer 通过 `reportYdAnalyzer()` 发送，统一使用 `LogReporterAction.OnboardingAction`，走现有 `api:fetch` 链路、使用统计开关和通用参数。
+  - 采用 fire-and-forget，上报失败不影响引导页展示、登录跳转、新人任务创建或本地流式动画。
+  - 本地调试日志只记录动作类型，不记录完整事件参数。
+  - 新人任务流式动画只在开始和结束时发送事件，不按字符、分片或动画帧上报。
+- 隐私边界：不上传引导输入文案、新人任务欢迎正文、用户回复内容、会话 ID、用户 ID、文件名、本地路径、URL、token、API Key 或错误详情；`charCount` 只表示消息长度，不包含正文。
+
 ### 2.5 请求流程
 
 ```text

@@ -1,3 +1,4 @@
+import type { WorkspaceChangesSummary } from '../../shared/artifactPreview/workspace';
 import type { ShareDeploymentProjectCandidate } from '../../shared/shareDeployment/constants';
 
 export const ArtifactTypeValue = {
@@ -15,6 +16,16 @@ export const ArtifactTypeValue = {
 
 export type ArtifactSource = 'inline' | 'tool' | 'file';
 export type ArtifactType = typeof ArtifactTypeValue[keyof typeof ArtifactTypeValue];
+
+export const ArtifactMediaOriginType = {
+  GeneratedVideo: 'generated_video',
+} as const;
+
+export interface GeneratedVideoArtifactOrigin {
+  type: typeof ArtifactMediaOriginType.GeneratedVideo;
+  taskId: string;
+  outputIndex: number;
+}
 
 export interface LocalServiceArtifactMetadata {
   url: string;
@@ -48,7 +59,10 @@ export interface Artifact {
   url?: string;
   localService?: LocalServiceArtifactMetadata;
   contentVersion?: number;
+  workspaceChanges?: WorkspaceChangesSummary;
   remoteUrl?: string;
+  mediaOrigin?: GeneratedVideoArtifactOrigin;
+  legacyGeneratedVideoCandidate?: boolean;
   source?: ArtifactSource;
   createdAt: number;
 }

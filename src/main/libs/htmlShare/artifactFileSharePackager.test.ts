@@ -6,7 +6,11 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { HtmlShareSourceType } from '../../../shared/htmlShare/constants';
+import {
+  HtmlShareErrorCode,
+  HtmlShareFailureKind,
+  HtmlShareSourceType,
+} from '../../../shared/htmlShare/constants';
 import { packageArtifactFile } from './artifactFileSharePackager';
 
 const tempRoots: string[] = [];
@@ -185,5 +189,26 @@ describe('artifactFileSharePackager', () => {
       statSpy.mockRestore();
       mkdtempSpy.mockRestore();
     }
+  });
+
+  test('returns a structured failure when a document exceeds the existing limit', async () => {
+    const root = await createTempRoot();
+    const documentPath = path.join(root, 'large.docx');
+    await writeFile(documentPath, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    await fs.promises.truncate(documentPath, 100 * 1024 * 1024 + 1);
+
+    await expect(packageArtifactFile({
+      sourceType: HtmlShareSourceType.DocumentFile,
+      filePath: documentPath,
+      fileName: 'large.docx',
+    })).rejects.toMatchObject({
+      code: HtmlShareErrorCode.TooLarge,
+      failureKind: HtmlShareFailureKind.FileTooLarge,
+      details: {
+        fileName: 'large.docx',
+        limitBytes: 100 * 1024 * 1024,
+        actualBytes: 100 * 1024 * 1024 + 1,
+      },
+    });
   });
 });

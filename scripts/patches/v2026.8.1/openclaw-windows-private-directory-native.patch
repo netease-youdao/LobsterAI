@@ -1,0 +1,888 @@
+Backport: https://github.com/openclaw/openclaw/commit/d1175e88b46b80d5375522e7ea7977544e20fe6b
+Upstream PR #140593 (v2026.9.3): fix(windows): avoid compiler-triggered gateway startup failures.
+
+v2026.8.1 creates private Windows SQLite staging directories by spawning
+PowerShell with an Add-Type compiler step. Security software or policy that
+refuses `LobsterAI.exe -> powershell.exe` (CreateProcess ACCESS_DENIED, which
+Node reports as `spawn EPERM`) then breaks legacy session import, device
+identity migration, the Gateway write-admission preflight and Doctor itself.
+Create the directory through Koffi and the Win32 security APIs instead, keeping
+the atomic protected DACL and exclusive creation.
+
+LobsterAI addition: when the native helper cannot load (stubbed Koffi or a
+blocked addon), roots inside %USERPROFILE% fall back to exclusive mkdir with the
+inherited owner/SYSTEM/Administrators ACL; every other root stays fail-closed.
+The upstream commit's update-cli restart-helper changes are not needed here.
+Windows runtimes must ship the real koffi package (see prune-openclaw-runtime).
+Retire when the pinned upstream reaches v2026.9.3.
+
+diff --git a/src/infra/sqlite-private-directory.test.ts b/src/infra/sqlite-private-directory.test.ts
+index 5c4d0ca697..2b218145b3 100644
+--- a/src/infra/sqlite-private-directory.test.ts
++++ b/src/infra/sqlite-private-directory.test.ts
+@@ -1,44 +1,12 @@
+ import path from "node:path";
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ import { withEnv } from "../test-utils/env.js";
+-
+-const childProcess = vi.hoisted(() => ({
+-  execFile: vi.fn(),
+-  execFileSync: vi.fn(),
+-}));
+-
+-vi.mock("node:child_process", () => childProcess);
+-vi.mock("./resolve-system-bin.js", () => ({
+-  resolveSystemBin: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+-}));
+-vi.mock("./windows-encoding.js", async (importOriginal) => {
+-  const actual = await importOriginal<typeof import("./windows-encoding.js")>();
+-  return {
+-    ...actual,
+-    decodeWindowsOutputBuffer: (params: { buffer: Buffer }) =>
+-      actual.decodeWindowsOutputBuffer({ ...params, platform: "win32", windowsEncoding: "gbk" }),
+-  };
+-});
+-
+-import {
+-  createPrivateSqliteDirectory,
+-  createPrivateSqliteTempDirectorySync,
+-  resolvePrivateSqliteSnapshotStagingRoot,
+-} from "./sqlite-private-directory.js";
++import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
+ import * as tmpOpenClawDir from "./tmp-openclaw-dir.js";
+ 
+-function errorCause(error: unknown): Error {
+-  expect(error).toBeInstanceOf(Error);
+-  const cause = (error as Error & { cause?: unknown }).cause;
+-  expect(cause).toBeInstanceOf(Error);
+-  return cause as Error;
+-}
+-
+-describe("private Windows SQLite directory diagnostics", () => {
++describe("private SQLite snapshot staging root", () => {
+   afterEach(() => {
+     vi.restoreAllMocks();
+-    childProcess.execFile.mockReset();
+-    childProcess.execFileSync.mockReset();
+   });
+ 
+   it.each([
+@@ -96,82 +64,4 @@ describe("private Windows SQLite directory diagnostics", () => {
+       expect(resolveTempRoot.mock.calls[0]?.[0]?.tmpdir?.()).toBe(expectedRoot);
+     },
+   );
+-
+-  it("reports bounded async stderr without retaining the child-process error", async () => {
+-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+-    const original = Object.assign(
+-      new Error("Command failed: powershell -EncodedCommand secret-payload"),
+-      {
+-        cmd: "powershell -EncodedCommand secret-payload",
+-        code: 7,
+-        killed: true,
+-        signal: "SIGTERM",
+-      },
+-    );
+-    childProcess.execFile.mockImplementation((_file, _args, _options, callback) => {
+-      callback(
+-        original,
+-        Buffer.from("stdout fallback"),
+-        Buffer.concat([
+-          Buffer.from([0xb2, 0xe2, 0xca, 0xd4]),
+-          Buffer.from(
+-            ` useful stderr\n-EncodedCommand secret\nbenign after redaction ${"tail ".repeat(250)}`,
+-          ),
+-        ]),
+-      );
+-    });
+-
+-    const error = await createPrivateSqliteDirectory("C:\\private").catch(
+-      (cause: unknown) => cause,
+-    );
+-    const cause = errorCause(error);
+-    expect(cause.message).toContain("exit=7, killed=true, signal=SIGTERM");
+-    expect(cause.message).toContain("测试");
+-    expect(cause.message).toContain("stderr: 测试 useful stderr");
+-    expect(cause.message).toContain("benign after redaction");
+-    expect(cause.message).not.toContain("stdout fallback");
+-    expect(cause.message).not.toContain("EncodedCommand");
+-    expect(cause.message.length).toBeLessThanOrEqual(1100);
+-    expect(cause).not.toBe(original);
+-    expect((cause as Error & { cause?: unknown; cmd?: unknown }).cause).toBeUndefined();
+-    expect((cause as Error & { cmd?: unknown }).cmd).toBeUndefined();
+-  });
+-
+-  it("reports sync status and string codes from sanitized stderr", () => {
+-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+-    childProcess.execFileSync.mockImplementation(() => {
+-      throw Object.assign(new Error("powershell -EncodedCommand secret"), {
+-        code: "ETIMEDOUT",
+-        status: 1,
+-        stderr: Buffer.from("native directory creation failed"),
+-        stdout: Buffer.from("stdout fallback"),
+-      });
+-    });
+-
+-    let error: unknown;
+-    try {
+-      createPrivateSqliteTempDirectorySync("C:\\root", "stage-");
+-    } catch (cause) {
+-      error = cause;
+-    }
+-    expect(errorCause(error).message).toBe(
+-      "PowerShell failed (status=1, code=ETIMEDOUT); stderr: native directory creation failed",
+-    );
+-  });
+-
+-  it("preserves the EEXIST contract from child output", async () => {
+-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+-    childProcess.execFile.mockImplementation((_file, _args, _options, callback) => {
+-      callback(new Error("failed"), "", "OPENCLAW_SQLITE_DIRECTORY_EXISTS");
+-    });
+-
+-    const error = await createPrivateSqliteDirectory("C:\\existing").catch(
+-      (cause: unknown) => cause,
+-    );
+-    expect(error).toMatchObject({
+-      code: "EEXIST",
+-      message: "Private SQLite directory already exists: C:\\existing",
+-    });
+-    expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
+-  });
+ });
+diff --git a/src/infra/sqlite-private-directory.ts b/src/infra/sqlite-private-directory.ts
+index 237ca39555..7810869929 100644
+--- a/src/infra/sqlite-private-directory.ts
++++ b/src/infra/sqlite-private-directory.ts
+@@ -1,211 +1,20 @@
+ // Creates private SQLite staging directories without pulling higher-level runtime modules.
+-import { execFile, execFileSync } from "node:child_process";
+ import { randomUUID } from "node:crypto";
+ import fsSync from "node:fs";
+ import fs from "node:fs/promises";
+ import path from "node:path";
+ import { resolveRequiredOsHomeDir } from "./home-dir.js";
+-import { resolveSystemBin } from "./resolve-system-bin.js";
+ import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+-import { decodeWindowsOutputBuffer } from "./windows-encoding.js";
+-import {
+-  buildEncodedPowerShellArgs,
+-  buildPowerShellFailureCause,
+-  sanitizePowerShellOutputText,
+-  WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+-} from "./windows-powershell-spawn.js";
++import { createPrivateWindowsDirectory } from "./windows-private-directory.js";
+ 
+ const SQLITE_DIRECTORY_MODE = 0o700;
+-const WINDOWS_DIRECTORY_EXISTS_MARKER = "OPENCLAW_SQLITE_DIRECTORY_EXISTS";
+-
+-// Managed directory creation accepts existing paths. CreateDirectoryW applies the
+-// protected DACL atomically while preserving fail-if-exists semantics.
+-const WINDOWS_PRIVATE_DIRECTORY_NATIVE_SOURCE = `
+-using System;
+-using System.Runtime.InteropServices;
+-
+-public static class OpenClawPrivateDirectory
+-{
+-    [StructLayout(LayoutKind.Sequential)]
+-    private struct SecurityAttributes
+-    {
+-        public int Length;
+-        public IntPtr SecurityDescriptor;
+-        public int InheritHandle;
+-    }
+-
+-    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+-    private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
+-        string securityDescriptor,
+-        uint revision,
+-        out IntPtr convertedSecurityDescriptor,
+-        out uint convertedSecurityDescriptorSize);
+-
+-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+-    private static extern bool CreateDirectoryW(
+-        string path,
+-        ref SecurityAttributes securityAttributes);
+-
+-    [DllImport("kernel32.dll")]
+-    private static extern IntPtr LocalFree(IntPtr memory);
+-
+-    public static int Create(string path, string securityDescriptor)
+-    {
+-        IntPtr descriptor;
+-        uint descriptorSize;
+-        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+-                securityDescriptor,
+-                1,
+-                out descriptor,
+-                out descriptorSize))
+-        {
+-            return Marshal.GetLastWin32Error();
+-        }
+-
+-        try
+-        {
+-            var attributes = new SecurityAttributes
+-            {
+-                Length = Marshal.SizeOf(typeof(SecurityAttributes)),
+-                SecurityDescriptor = descriptor,
+-                InheritHandle = 0,
+-            };
+-            return CreateDirectoryW(path, ref attributes) ? 0 : Marshal.GetLastWin32Error();
+-        }
+-        finally
+-        {
+-            LocalFree(descriptor);
+-        }
+-    }
+-}
+-`;
+-
+-function failureText(value: unknown): string {
+-  const text = Buffer.isBuffer(value)
+-    ? decodeWindowsOutputBuffer({ buffer: value })
+-    : typeof value === "string"
+-      ? value
+-      : "";
+-  return sanitizePowerShellOutputText(text);
+-}
+-
+-function privateDirectoryError(
+-  directoryPath: string,
+-  error: unknown,
+-  stdout?: unknown,
+-  stderr?: unknown,
+-): Error {
+-  const failure = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+-  if (
+-    [error, stderr, stdout, failure.stderr, failure.stdout].some((value) =>
+-      String(value).includes(WINDOWS_DIRECTORY_EXISTS_MARKER),
+-    )
+-  ) {
+-    const existsError = new Error(`Private SQLite directory already exists: ${directoryPath}`);
+-    (existsError as NodeJS.ErrnoException).code = "EEXIST";
+-    return existsError;
+-  }
+-  const cause = buildPowerShellFailureCause({
+-    status: failure.status,
+-    code: failure.code,
+-    killed: failure.killed,
+-    signal: failure.signal,
+-    stderr: failureText(stderr) || failureText(failure.stderr),
+-    stdout: failureText(stdout) || failureText(failure.stdout),
+-  });
+-  return new Error(`Unable to create private Windows SQLite directory: ${directoryPath}`, {
+-    cause,
+-  });
+-}
+-
+-function runPrivateDirectoryPowerShell(
+-  directoryPath: string,
+-  powershell: string,
+-  args: string[],
+-): Promise<void> {
+-  return new Promise((resolve, reject) => {
+-    execFile(
+-      powershell,
+-      args,
+-      {
+-        encoding: "buffer",
+-        maxBuffer: 64 * 1024,
+-        timeout: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+-        windowsHide: true,
+-      },
+-      (error, stdout, stderr) => {
+-        if (error) {
+-          reject(privateDirectoryError(directoryPath, error, stdout, stderr));
+-          return;
+-        }
+-        resolve();
+-      },
+-    );
+-  });
+-}
+-
+-function resolvePrivateDirectoryPowerShell(directoryPath: string): {
+-  args: string[];
+-  powershell: string;
+-} {
+-  const nativeDirectoryPath = path.toNamespacedPath(path.resolve(directoryPath));
+-  const encodedPath = Buffer.from(nativeDirectoryPath, "utf8").toString("base64");
+-  const encodedNativeSource = Buffer.from(WINDOWS_PRIVATE_DIRECTORY_NATIVE_SOURCE, "utf8").toString(
+-    "base64",
+-  );
+-  const command = [
+-    "$ErrorActionPreference = 'Stop'",
+-    `$path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPath}'))`,
+-    `$nativeSource = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedNativeSource}'))`,
+-    "Add-Type -TypeDefinition $nativeSource -Language CSharp",
+-    "$current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User",
+-    "$security = New-Object System.Security.AccessControl.DirectorySecurity",
+-    "$security.SetAccessRuleProtection($true, $false)",
+-    "$security.SetOwner($current)",
+-    "$inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit",
+-    "$propagation = [System.Security.AccessControl.PropagationFlags]::None",
+-    "foreach ($sidValue in @($current.Value, 'S-1-5-18', 'S-1-5-32-544')) { $sid = New-Object System.Security.Principal.SecurityIdentifier($sidValue); $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, $inheritance, $propagation, [System.Security.AccessControl.AccessControlType]::Allow); [void]$security.AddAccessRule($rule) }",
+-    "$sections = [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Access",
+-    "$sddl = $security.GetSecurityDescriptorSddlForm($sections)",
+-    "$errorCode = [OpenClawPrivateDirectory]::Create($path, $sddl)",
+-    `if ($errorCode -eq 80 -or $errorCode -eq 183) { throw '${WINDOWS_DIRECTORY_EXISTS_MARKER}' }`,
+-    "if ($errorCode -ne 0) { $exception = New-Object System.ComponentModel.Win32Exception($errorCode); throw $exception }",
+-  ].join("; ");
+-  const powershell = resolveSystemBin("powershell");
+-  if (!powershell) {
+-    throw new Error("Unable to resolve PowerShell for private Windows SQLite staging.");
+-  }
+-  return {
+-    powershell,
+-    args: buildEncodedPowerShellArgs(command),
+-  };
+-}
+ 
+ export async function createPrivateSqliteDirectory(directoryPath: string): Promise<void> {
+   if (process.platform !== "win32") {
+     await fs.mkdir(directoryPath, { mode: SQLITE_DIRECTORY_MODE });
+     return;
+   }
+-  // This raw Win32 call bypasses Node's automatic long-path normalization.
+-  const { args, powershell } = resolvePrivateDirectoryPowerShell(directoryPath);
+-  await runPrivateDirectoryPowerShell(directoryPath, powershell, args);
+-}
+-
+-function createPrivateSqliteDirectorySync(directoryPath: string): void {
+-  if (process.platform !== "win32") {
+-    fsSync.mkdirSync(directoryPath, { mode: SQLITE_DIRECTORY_MODE });
+-    return;
+-  }
+-  const { args, powershell } = resolvePrivateDirectoryPowerShell(directoryPath);
+-  try {
+-    execFileSync(powershell, args, {
+-      maxBuffer: 64 * 1024,
+-      timeout: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+-      windowsHide: true,
+-    });
+-  } catch (error) {
+-    throw privateDirectoryError(directoryPath, error);
+-  }
++  createPrivateWindowsDirectory(directoryPath);
+ }
+ 
+ export function resolvePrivateSqliteSnapshotStagingRoot(): string {
+@@ -238,6 +47,6 @@ export function createPrivateSqliteTempDirectorySync(rootPath: string, prefix: s
+     return fsSync.mkdtempSync(path.join(rootPath, prefix));
+   }
+   const directoryPath = path.join(rootPath, `${prefix}${randomUUID()}`);
+-  createPrivateSqliteDirectorySync(directoryPath);
++  createPrivateWindowsDirectory(directoryPath);
+   return directoryPath;
+ }
+diff --git a/src/infra/sqlite-private-directory.windows.test.ts b/src/infra/sqlite-private-directory.windows.test.ts
+index 1af44f48dc..161e14ba88 100644
+--- a/src/infra/sqlite-private-directory.windows.test.ts
++++ b/src/infra/sqlite-private-directory.windows.test.ts
+@@ -1,28 +1,97 @@
++import * as childProcess from "node:child_process";
+ import fs from "node:fs/promises";
+ import path from "node:path";
+-import { afterEach, describe, expect, it } from "vitest";
++import { afterEach, describe, expect, it, vi } from "vitest";
+ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+-import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
++
++vi.mock("node:child_process", async (importOriginal) => {
++  const actual = await importOriginal<typeof import("node:child_process")>();
++  return {
++    ...actual,
++    execFile: vi.fn(actual.execFile),
++    execFileSync: vi.fn(actual.execFileSync),
++  };
++});
++
++import {
++  createPrivateSqliteDirectory,
++  createPrivateSqliteTempDirectorySync,
++} from "./sqlite-private-directory.js";
+ 
+ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+ 
+-describe("private SQLite directory creation on Windows", () => {
+-  it.runIf(process.platform === "win32")(
+-    "surfaces native stderr without exposing the encoded command",
+-    async () => {
+-      const root = tempDirs.make("openclaw-sqlite-private-directory-");
+-      const regularFile = path.join(root, "parent-file");
+-      await fs.writeFile(regularFile, "not a directory");
++describe.runIf(process.platform === "win32")("private SQLite directory creation on Windows", () => {
++  afterEach(() => vi.clearAllMocks());
++
++  it("creates protected directories without spawning PowerShell or a compiler", async () => {
++    const root = tempDirs.make("openclaw-sqlite-private-directory-");
++    const asyncPath = path.join(root, "private 测试");
++    await createPrivateSqliteDirectory(asyncPath);
++    const syncPath = createPrivateSqliteTempDirectorySync(root, "sync-");
++    expect(childProcess.execFile).not.toHaveBeenCalled();
++    expect(childProcess.execFileSync).not.toHaveBeenCalled();
+ 
+-      const error = await createPrivateSqliteDirectory(path.join(regularFile, "child")).catch(
+-        (cause: unknown) => cause,
++    for (const directory of [asyncPath, syncPath]) {
++      const script = [
++        `$acl = [IO.Directory]::GetAccessControl('${directory.replaceAll("'", "''")}')`,
++        "$user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
++        "$rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))",
++        "@{ protected = $acl.AreAccessRulesProtected; owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value; user = $user; rules = @($rules | ForEach-Object { @{ sid = $_.IdentityReference.Value; rights = [int]$_.FileSystemRights; inheritance = [int]$_.InheritanceFlags; inherited = $_.IsInherited; allow = [int]$_.AccessControlType } }) } | ConvertTo-Json -Depth 4 -Compress",
++      ].join("; ");
++      const acl = JSON.parse(
++        childProcess.execFileSync(
++          "powershell.exe",
++          ["-NoProfile", "-NonInteractive", "-Command", script],
++          {
++            encoding: "utf8",
++          },
++        ),
+       );
+-      expect(error).toBeInstanceOf(Error);
+-      const child = (error as Error & { cause?: unknown }).cause;
+-      expect(child).toBeInstanceOf(Error);
+-      expect((child as Error).message).toMatch(/\bexit=1\b/u);
+-      expect((child as Error).message).toContain("stderr:");
+-      expect((child as Error).message).not.toContain("EncodedCommand");
+-    },
+-  );
++      expect(acl.protected).toBe(true);
++      expect(acl.owner).toBe(acl.user);
++      expect(acl.rules.map((rule: { sid: string }) => rule.sid).toSorted()).toEqual(
++        [acl.user, "S-1-5-18", "S-1-5-32-544"].toSorted((left, right) => left.localeCompare(right)),
++      );
++      for (const rule of acl.rules) {
++        expect(rule).toMatchObject({ rights: 2032127, inheritance: 3, inherited: false, allow: 0 });
++      }
++      await fs.writeFile(path.join(directory, "synthetic.sqlite"), "synthetic");
++      const listing = childProcess.execFileSync("icacls.exe", [directory], { encoding: "utf8" });
++      expect(listing).toContain("(OI)(CI)(F)");
++      expect(listing).not.toContain("(I)");
++    }
++  });
++
++  it("rejects concurrent creation, existing files, and junctions without modifying them", async () => {
++    const root = tempDirs.make("openclaw-sqlite-private-existing-");
++    const directory = path.join(root, "private");
++    const attempts = await Promise.allSettled([
++      createPrivateSqliteDirectory(directory),
++      createPrivateSqliteDirectory(directory),
++    ]);
++    expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
++    expect(attempts.find((attempt) => attempt.status === "rejected")).toMatchObject({
++      reason: { code: "EEXIST" },
++    });
++    const file = path.join(root, "file");
++    await fs.writeFile(file, "keep");
++    const junction = path.join(root, "junction");
++    await fs.symlink(directory, junction, "junction");
++    for (const existing of [file, junction]) {
++      await expect(createPrivateSqliteDirectory(existing)).rejects.toMatchObject({
++        code: "EEXIST",
++      });
++    }
++    expect(await fs.readFile(file, "utf8")).toBe("keep");
++    expect((await fs.lstat(junction)).isSymbolicLink()).toBe(true);
++  });
++
++  it("reports native failure when the parent is a regular file", async () => {
++    const root = tempDirs.make("openclaw-sqlite-private-failure-");
++    const regularFile = path.join(root, "parent-file");
++    await fs.writeFile(regularFile, "not a directory");
++    await expect(createPrivateSqliteDirectory(path.join(regularFile, "child"))).rejects.toThrow(
++      /CreateDirectoryW.*Win32 error/u,
++    );
++  });
+ });
+diff --git a/src/infra/windows-powershell-spawn.ts b/src/infra/windows-powershell-spawn.ts
+index 3ba9341ec3..026314b2ee 100644
+--- a/src/infra/windows-powershell-spawn.ts
++++ b/src/infra/windows-powershell-spawn.ts
+@@ -5,7 +5,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+ // Fail-closed security gates must out-wait cold starts; this bound only stops true hangs.
+ export const WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS = 60_000;
+ 
+-export function sanitizePowerShellOutputText(text: string): string {
++function sanitizePowerShellOutputText(text: string): string {
+   return truncateUtf16Safe(
+     text
+       .split(/\r?\n/u)
+diff --git a/src/infra/windows-private-directory.test.ts b/src/infra/windows-private-directory.test.ts
+new file mode 100644
+index 0000000000..81b8f42fb4
+--- /dev/null
++++ b/src/infra/windows-private-directory.test.ts
+@@ -0,0 +1,179 @@
++import { afterEach, describe, expect, it, vi } from "vitest";
++import type { ProfileScopedDirectoryDeps } from "./windows-private-directory.js";
++
++const loader = vi.hoisted(() => ({
++  calls: 0,
++  require: (id: string): never => {
++    loader.calls += 1;
++    throw new Error(`Cannot find module '${id}'`);
++  },
++}));
++
++vi.mock("node:module", async (importOriginal) => {
++  const actual = await importOriginal<typeof import("node:module")>();
++  return { ...actual, createRequire: () => loader.require };
++});
++
++type PrivateDirectoryModule = typeof import("./windows-private-directory.js");
++
++async function loadFreshModule(): Promise<PrivateDirectoryModule> {
++  vi.resetModules();
++  return await import("./windows-private-directory.js");
++}
++
++const profile = "C:\\Users\\Alice";
++const realPaths = new Map<string, string>([
++  ["c:\\users\\alice", profile],
++  ["c:\\users\\alice~1", profile],
++  ["c:\\users\\alice~1\\appdata\\local\\temp", "C:\\Users\\Alice\\AppData\\Local\\Temp"],
++  ["c:\\users\\alice\\appdata\\local\\openclaw", "C:\\Users\\Alice\\AppData\\Local\\openclaw"],
++  ["d:\\shared\\temp", "D:\\Shared\\Temp"],
++]);
++const nativeFailure = new Error("koffi is not available in this build");
++
++function createDeps(overrides: Partial<ProfileScopedDirectoryDeps> = {}) {
++  const mkdirSync = vi.fn<(target: string) => void>();
++  const rmSync = vi.fn<(target: string) => void>();
++  const warn = vi.fn<(message: string) => void>();
++  const lstatSync = vi.fn(() => ({ isDirectory: () => true, isSymbolicLink: () => false }));
++  const realpathSync = (target: string): string => {
++    const resolved = realPaths.get(target.toLowerCase());
++    if (!resolved) {
++      throw Object.assign(new Error(`ENOENT: ${target}`), { code: "ENOENT" });
++    }
++    return resolved;
++  };
++  const deps: ProfileScopedDirectoryDeps = {
++    env: { USERPROFILE: profile },
++    realpathSync,
++    mkdirSync,
++    lstatSync,
++    rmSync,
++    warn,
++    ...overrides,
++  };
++  return { deps, mkdirSync, rmSync, warn, lstatSync };
++}
++
++describe("windows private directory profile fallback", () => {
++  afterEach(() => {
++    loader.calls = 0;
++  });
++
++  it("recognizes parents inside the user profile, including 8.3 short names", async () => {
++    const { isWindowsPathInsideUserProfile } = await loadFreshModule();
++    const { deps } = createDeps();
++    expect(
++      isWindowsPathInsideUserProfile(
++        "C:\\Users\\ALICE~1\\AppData\\Local\\Temp\\openclaw-session-import-1",
++        deps,
++      ),
++    ).toBe(true);
++    expect(
++      isWindowsPathInsideUserProfile("C:\\Users\\Alice\\AppData\\Local\\openclaw\\stage-1", deps),
++    ).toBe(true);
++    expect(isWindowsPathInsideUserProfile("C:\\Users\\Alice\\direct-child", deps)).toBe(true);
++    expect(isWindowsPathInsideUserProfile("D:\\Shared\\Temp\\openclaw-x", deps)).toBe(false);
++    expect(isWindowsPathInsideUserProfile("C:\\Users\\AliceOther\\x", deps)).toBe(false);
++    expect(
++      isWindowsPathInsideUserProfile("C:\\Users\\Alice\\x", { ...deps, env: {} }),
++    ).toBe(false);
++    expect(
++      isWindowsPathInsideUserProfile("C:\\Users\\Alice\\x", {
++        ...deps,
++        env: { USERPROFILE: "Users\\Alice" },
++      }),
++    ).toBe(false);
++  });
++
++  it("creates the directory exclusively under the inherited profile ACL", async () => {
++    const { createProfileScopedWindowsDirectory } = await loadFreshModule();
++    const { deps, mkdirSync, lstatSync, rmSync, warn } = createDeps();
++    const directory = "C:\\Users\\ALICE~1\\AppData\\Local\\Temp\\openclaw-session-import-1";
++    createProfileScopedWindowsDirectory(directory, nativeFailure, deps);
++    expect(mkdirSync).toHaveBeenCalledExactlyOnceWith(directory);
++    expect(lstatSync).toHaveBeenCalledExactlyOnceWith(directory);
++    expect(rmSync).not.toHaveBeenCalled();
++    expect(warn).toHaveBeenCalledOnce();
++    expect(warn.mock.calls[0]?.[0]).toContain(nativeFailure.message);
++    expect(warn.mock.calls[0]?.[0]).toContain("C:\\Users\\ALICE~1\\AppData\\Local\\Temp");
++  });
++
++  it("warns once per process across fallback creations", async () => {
++    const { createProfileScopedWindowsDirectory } = await loadFreshModule();
++    const { deps, warn } = createDeps();
++    createProfileScopedWindowsDirectory("C:\\Users\\Alice\\AppData\\Local\\openclaw\\a", nativeFailure, deps);
++    createProfileScopedWindowsDirectory("C:\\Users\\Alice\\AppData\\Local\\openclaw\\b", nativeFailure, deps);
++    expect(warn).toHaveBeenCalledOnce();
++  });
++
++  it("stays fail-closed outside the user profile", async () => {
++    const { createProfileScopedWindowsDirectory } = await loadFreshModule();
++    const { deps, mkdirSync, warn } = createDeps();
++    let error: unknown;
++    try {
++      createProfileScopedWindowsDirectory("D:\\Shared\\Temp\\openclaw-x", nativeFailure, deps);
++    } catch (caught) {
++      error = caught;
++    }
++    expect(error).toBeInstanceOf(Error);
++    expect((error as Error).message).toContain("outside the user profile");
++    expect((error as Error).message).toContain("D:\\Shared\\Temp\\openclaw-x");
++    expect((error as Error & { cause?: unknown }).cause).toBe(nativeFailure);
++    expect(mkdirSync).not.toHaveBeenCalled();
++    expect(warn).not.toHaveBeenCalled();
++  });
++
++  it("propagates exclusive creation failures such as EEXIST", async () => {
++    const { createProfileScopedWindowsDirectory } = await loadFreshModule();
++    const exists = Object.assign(new Error("EEXIST: file already exists"), { code: "EEXIST" });
++    const { deps, rmSync } = createDeps({
++      mkdirSync: () => {
++        throw exists;
++      },
++    });
++    expect(() =>
++      createProfileScopedWindowsDirectory("C:\\Users\\Alice\\AppData\\Local\\openclaw\\a", nativeFailure, deps),
++    ).toThrow(exists);
++    expect(rmSync).not.toHaveBeenCalled();
++  });
++
++  it("removes and rejects a created path that is no longer a plain directory", async () => {
++    const { createProfileScopedWindowsDirectory } = await loadFreshModule();
++    const { deps, rmSync } = createDeps({
++      lstatSync: () => ({ isDirectory: () => true, isSymbolicLink: () => true }),
++    });
++    const directory = "C:\\Users\\Alice\\AppData\\Local\\openclaw\\linked";
++    expect(() => createProfileScopedWindowsDirectory(directory, nativeFailure, deps)).toThrow(
++      /changed after creation/u,
++    );
++    expect(rmSync).toHaveBeenCalledExactlyOnceWith(directory);
++  });
++
++  it("routes a native helper load failure to the profile fallback exactly once", async () => {
++    const { createPrivateWindowsDirectory } = await loadFreshModule();
++    const previousProfile = process.env.USERPROFILE;
++    delete process.env.USERPROFILE;
++    try {
++      for (let attempt = 0; attempt < 2; attempt += 1) {
++        let error: unknown;
++        try {
++          createPrivateWindowsDirectory("D:\\Shared\\Temp\\openclaw-x");
++        } catch (caught) {
++          error = caught;
++        }
++        expect((error as Error).message).toContain("outside the user profile");
++        expect((error as Error & { cause?: Error }).cause?.message).toBe(
++          "Cannot find module 'koffi'",
++        );
++      }
++      expect(loader.calls).toBe(1);
++    } finally {
++      if (previousProfile === undefined) {
++        delete process.env.USERPROFILE;
++      } else {
++        process.env.USERPROFILE = previousProfile;
++      }
++    }
++  });
++});
+diff --git a/src/infra/windows-private-directory.ts b/src/infra/windows-private-directory.ts
+new file mode 100644
+index 0000000000..caf6242346
+--- /dev/null
++++ b/src/infra/windows-private-directory.ts
+@@ -0,0 +1,185 @@
++import fs from "node:fs";
++import { createRequire } from "node:module";
++import path from "node:path";
++
++const require = createRequire(import.meta.url);
++let createDirectory: ((directoryPath: string) => void) | undefined;
++let nativeHelperFailure: Error | undefined;
++let profileFallbackWarned = false;
++
++function loadPrivateDirectoryCreator(): (directoryPath: string) => void {
++  const koffi: typeof import("koffi").default = require("koffi");
++  const kernel32 = koffi.load("kernel32.dll");
++  const advapi32 = koffi.load("advapi32.dll");
++  const attributes = koffi.struct({
++    length: "uint32_t",
++    descriptor: "void *",
++    inheritHandle: "int32_t",
++  });
++  const getLastError = kernel32.func("uint32_t __stdcall GetLastError()");
++  const getCurrentProcess = kernel32.func("void * __stdcall GetCurrentProcess()");
++  const closeHandle = kernel32.func("int32_t __stdcall CloseHandle(void *handle)");
++  const localFree = kernel32.func("void * __stdcall LocalFree(void *memory)");
++  const openToken = advapi32.func(
++    "int32_t __stdcall OpenProcessToken(void *process, uint32_t access, _Out_ void **token)",
++  );
++  const getTokenInformation = advapi32.func(
++    "int32_t __stdcall GetTokenInformation(void *token, int32_t informationClass, _Out_ void *information, uint32_t length, _Out_ uint32_t *required)",
++  );
++  const convertSid = advapi32.func(
++    "int32_t __stdcall ConvertSidToStringSidW(void *sid, _Out_ void **text)",
++  );
++  const convertDescriptor = advapi32.func(
++    "int32_t __stdcall ConvertStringSecurityDescriptorToSecurityDescriptorW(str16 text, uint32_t revision, _Out_ void **descriptor, void *size)",
++  );
++  const create = kernel32.func("__stdcall", "CreateDirectoryW", "int32_t", [
++    "str16",
++    koffi.pointer(attributes),
++  ]);
++  const failure = (operation: string) => {
++    const errorCode: number = getLastError();
++    return Object.assign(new Error(`${operation} failed (Win32 error ${errorCode})`), {
++      code: errorCode === 80 || errorCode === 183 ? "EEXIST" : "EIO",
++      errno: errorCode,
++    });
++  };
++
++  return (directoryPath) => {
++    const token: [bigint | null] = [null];
++    const sidText: [bigint | null] = [null];
++    const descriptor: [bigint | null] = [null];
++    // Read the primary token on each call; directory ownership belongs to the
++    // creating process, not to a username or an environment-provided SID.
++    if (!openToken(getCurrentProcess(), 0x0008, token)) {
++      throw failure("OpenProcessToken");
++    }
++    try {
++      const required: [number] = [0];
++      getTokenInformation(token[0], 1, null, 0, required);
++      if (getLastError() !== 122 || required[0] === 0) {
++        throw failure("GetTokenInformation(size)");
++      }
++      const user = Buffer.alloc(required[0]);
++      if (!getTokenInformation(token[0], 1, user, user.length, required)) {
++        throw failure("GetTokenInformation");
++      }
++      // TOKEN_USER begins with SID_AND_ATTRIBUTES, whose first field is PSID.
++      if (!convertSid(koffi.decode(user, "void *"), sidText)) {
++        throw failure("ConvertSidToStringSidW");
++      }
++      const sid: string = koffi.decode(sidText[0], "char16_t", -1);
++      const sddl = `O:${sid}D:P(A;OICI;FA;;;${sid})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`;
++      if (!convertDescriptor(sddl, 1, descriptor, null)) {
++        throw failure("ConvertStringSecurityDescriptorToSecurityDescriptorW");
++      }
++      // Apply the protected, inheritable DACL during exclusive creation. A
++      // create-then-ACL sequence exposes a race and accepts attacker-owned paths.
++      if (
++        !create(path.toNamespacedPath(path.resolve(directoryPath)), {
++          length: koffi.sizeof(attributes),
++          descriptor: descriptor[0],
++          inheritHandle: 0,
++        })
++      ) {
++        throw failure(`CreateDirectoryW(${directoryPath})`);
++      }
++    } finally {
++      if (descriptor[0] !== null) {
++        localFree(descriptor[0]);
++      }
++      if (sidText[0] !== null) {
++        localFree(sidText[0]);
++      }
++      closeHandle(token[0]);
++    }
++  };
++}
++
++// LobsterAI: the desktop runtime used to ship Koffi as a stub, and security
++// software can refuse to load its native addon. %USERPROFILE% (which contains
++// %LOCALAPPDATA% and the user's %TEMP%) already limits access to the owner,
++// SYSTEM and Administrators, so exclusive creation there inherits an equivalent
++// DACL. Every other root keeps the fail-closed native path.
++export type ProfileScopedDirectoryDeps = {
++  env?: NodeJS.ProcessEnv;
++  realpathSync?: (target: string) => string;
++  mkdirSync?: (target: string) => void;
++  lstatSync?: (target: string) => { isDirectory(): boolean; isSymbolicLink(): boolean };
++  rmSync?: (target: string) => void;
++  warn?: (message: string) => void;
++};
++
++function canonicalWindowsPath(target: string, realpathSync: (target: string) => string): string {
++  let resolved = path.win32.resolve(target);
++  try {
++    // Real paths expand 8.3 short names such as C:\Users\WANGHO~1 from os.tmpdir().
++    resolved = realpathSync(resolved);
++  } catch {
++    // A missing path keeps its lexical form; creation reports the real failure.
++  }
++  return path.win32.normalize(resolved).replace(/[\\/]+$/u, "").toLowerCase();
++}
++
++export function isWindowsPathInsideUserProfile(
++  directoryPath: string,
++  deps: Pick<ProfileScopedDirectoryDeps, "env" | "realpathSync"> = {},
++): boolean {
++  const profile = (deps.env ?? process.env).USERPROFILE?.trim();
++  if (!profile || !path.win32.isAbsolute(profile)) {
++    return false;
++  }
++  const realpathSync = deps.realpathSync ?? fs.realpathSync.native;
++  const root = canonicalWindowsPath(profile, realpathSync);
++  const parent = canonicalWindowsPath(
++    path.win32.dirname(path.win32.resolve(directoryPath)),
++    realpathSync,
++  );
++  return parent === root || parent.startsWith(`${root}\\`);
++}
++
++export function createProfileScopedWindowsDirectory(
++  directoryPath: string,
++  nativeFailure: Error,
++  deps: ProfileScopedDirectoryDeps = {},
++): void {
++  if (!isWindowsPathInsideUserProfile(directoryPath, deps)) {
++    throw new Error(
++      `Unable to create private Windows directory outside the user profile without the native helper: ${directoryPath}`,
++      { cause: nativeFailure },
++    );
++  }
++  if (!profileFallbackWarned) {
++    profileFallbackWarned = true;
++    (deps.warn ?? console.warn)(
++      `[openclaw] Native private directory helper unavailable (${nativeFailure.message}); ` +
++        `relying on the inherited user profile ACL under ${path.win32.dirname(directoryPath)}`,
++    );
++  }
++  const mkdirSync: (target: string) => void = deps.mkdirSync ?? fs.mkdirSync;
++  const lstatSync: (target: string) => { isDirectory(): boolean; isSymbolicLink(): boolean } =
++    deps.lstatSync ?? fs.lstatSync;
++  const rmSync: (target: string) => void =
++    deps.rmSync ?? ((target) => fs.rmSync(target, { force: true }));
++  // Exclusive creation preserves EEXIST semantics; the parent DACL supplies protection.
++  mkdirSync(directoryPath);
++  const created = lstatSync(directoryPath);
++  if (!created.isDirectory() || created.isSymbolicLink()) {
++    rmSync(directoryPath);
++    throw new Error(`Private Windows directory changed after creation: ${directoryPath}`);
++  }
++}
++
++export function createPrivateWindowsDirectory(directoryPath: string): void {
++  if (!createDirectory && !nativeHelperFailure) {
++    try {
++      createDirectory = loadPrivateDirectoryCreator();
++    } catch (error) {
++      nativeHelperFailure = error instanceof Error ? error : new Error(String(error));
++    }
++  }
++  if (createDirectory) {
++    createDirectory(directoryPath);
++    return;
++  }
++  createProfileScopedWindowsDirectory(directoryPath, nativeHelperFailure as Error);
++}

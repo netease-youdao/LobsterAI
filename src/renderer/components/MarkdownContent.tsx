@@ -14,6 +14,7 @@ import { i18nService } from '../services/i18n';
 import { normalizeShellFilePath } from '../services/shellAppsCache';
 import { showShellFailureToast, showToast } from '../utils/localFileActions';
 import { transformMarkdownTextSegments } from '../utils/markdownCodeSegments';
+import { remarkMarkdownLayout } from '../utils/remarkMarkdownLayout';
 import CodeBlock from './CodeBlock';
 import LocalFileContextMenu from './common/LocalFileContextMenu';
 
@@ -534,10 +535,10 @@ const createMarkdownComponents = (
       {children}
     </blockquote>
   ),
-  pre: ({ node: _node, className: _className, children }: any) => (
-    <>{children}</>
-  ),
-  code: CodeBlock,
+  pre: ({ children }: any) => React.isValidElement<React.ComponentProps<typeof CodeBlock>>(children)
+    ? <CodeBlock {...children.props} inline={false} />
+    : <>{children}</>,
+  code: (props: any) => <CodeBlock {...props} inline />,
   table: ({ node: _node, className: _className, children, ...props }: any) => (
     <div className={`${spacing === 'compact' ? 'my-2' : 'my-4'} overflow-x-auto rounded-xl border border-border`}>
       <table className="border-collapse w-full" {...props}>
@@ -560,13 +561,13 @@ const createMarkdownComponents = (
       {children}
     </tr>
   ),
-  th: ({ node: _node, className: _className, children, ...props }: any) => (
-    <th className="px-4 py-2 text-left font-semibold text-foreground" {...props}>
+  th: ({ node: _node, className: _className, children, align, style, ...props }: any) => (
+    <th className="px-4 py-2 align-top text-left font-semibold text-foreground" style={{ ...style, textAlign: align ?? style?.textAlign }} {...props}>
       {children}
     </th>
   ),
-  td: ({ node: _node, className: _className, children, ...props }: any) => (
-    <td className="px-4 py-2 text-foreground" {...props}>
+  td: ({ node: _node, className: _className, children, align, style, ...props }: any) => (
+    <td className="px-4 py-2 align-top text-foreground" style={{ ...style, textAlign: align ?? style?.textAlign }} {...props}>
       {children}
     </td>
   ),
@@ -700,7 +701,10 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
     if (useLargePreview) {
       return '';
     }
-    return normalizeDisplayMath(convertLatexMathDelimiters(encodeFileUrlsInMarkdown(content)));
+    if (!content.includes('file://') && !content.includes('\\(')
+      && !content.includes('\\[') && !content.includes('$$')) return content;
+    return transformMarkdownTextSegments(content, segment =>
+      normalizeDisplayMath(convertSegmentLatexDelimiters(encodeFileUrlsInMarkdown(segment))));
   }, [content, useLargePreview]);
 
   if (useLargePreview) {
@@ -728,7 +732,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
   }
 
   return (
-    <div className={`markdown-content min-w-0 max-w-full ${markdownTextClassName} ${className}`}>
+    <div className={`markdown-content min-w-0 max-w-full whitespace-normal ${markdownTextClassName} ${className}`}>
       {canUseLargePreview && isExpanded && (
         <div className="mb-2 flex justify-end">
           <button
@@ -741,7 +745,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
         </div>
       )}
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
+        remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkMath, remarkMarkdownLayout]}
         rehypePlugins={[rehypeKatex]}
         urlTransform={safeUrlTransform}
         components={components}

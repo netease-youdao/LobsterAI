@@ -19,6 +19,7 @@ let electronNodeRuntimePath = '';
 type TestAgentEntry = {
   id: string;
   default?: boolean;
+  memory?: { search?: Record<string, unknown> };
   memorySearch?: Record<string, unknown>;
 };
 
@@ -39,10 +40,10 @@ function writeConfig(
     configPath,
     `${JSON.stringify({
       gateway: { mode: 'local' },
+      memory: { search: memorySearch },
       agents: {
         defaults: {
           workspace: path.join(stateDir, 'workspace-main'),
-          memorySearch,
         },
         list: agents,
       },
@@ -168,9 +169,11 @@ describe('openclawMemoryIndexMigration', () => {
       { id: 'main', default: true },
       {
         id: 'custom-agent',
-        memorySearch: {
-          provider: 'gemini',
-          model: 'gemini-embedding-001',
+        memory: {
+          search: {
+            provider: 'gemini',
+            model: 'gemini-embedding-001',
+          },
         },
       },
     ]);

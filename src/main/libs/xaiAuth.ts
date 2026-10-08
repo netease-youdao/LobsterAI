@@ -10,12 +10,12 @@
  *       http://127.0.0.1:56121/callback, or
  *   2b. Device-code flow (no loopback callback; used when the port is busy)
  *   3. The credential is persisted into the OpenClaw auth-profiles store
- *      (<stateDir>/agents/main/agent/auth-profiles.json)
+ *      (the canonical SQLite owner selected by the bundled runtime)
  *
  * From there the OpenClaw runtime resolves the Bearer token per request and
  * auto-refreshes it via the xai plugin's refreshOAuth hook — LobsterAI never
- * manages token refresh itself. The store is read with mtime-based cache
- * invalidation, so external writes take effect without a gateway restart.
+ * manages token refresh itself. Writes use OpenClaw transactions and its
+ * credential publication/invalidation contract.
  *
  * The OAuth constants must stay identical to the pinned OpenClaw version:
  * the client id and redirect URI are registered with xAI for the shared
@@ -23,12 +23,18 @@
  */
 
 import crypto from 'crypto';
-import { app, session, shell } from 'electron';
-import fs from 'fs';
+import { session, shell } from 'electron';
 import http from 'http';
-import path from 'path';
 
-import { AgentId } from '../../shared/agent';
+import {
+  XAI_AUTH_CREDENTIAL_TYPE,
+  XAI_AUTH_PROVIDER,
+  type XaiOAuthCredential,
+  type XaiOAuthStatus,
+} from '../../shared/openclawEngine/xaiAuthStore';
+import { getOpenClawXaiAuthStore, getOpenClawXaiStateDir } from './openclawXaiAuthStore';
+
+export type { XaiOAuthStatus } from '../../shared/openclawEngine/xaiAuthStore';
 
 // ─── Constants mirrored from openclaw/extensions/xai/xai-oauth.ts ───────────
 const XAI_OAUTH_CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828';
@@ -49,21 +55,6 @@ const XAI_DEVICE_CODE_DEFAULT_INTERVAL_MS = 5 * 1000;
 const XAI_DEVICE_CODE_MIN_INTERVAL_MS = 1 * 1000;
 const XAI_DEVICE_CODE_SLOW_DOWN_INCREMENT_MS = 5 * 1000;
 const XAI_DEVICE_CODE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code';
-
-const XAI_PROVIDER_ID = 'xai';
-// Matches openclaw's auth-profiles store constants.
-const AUTH_STORE_VERSION = 1;
-const AUTH_PROFILE_FILENAME = 'auth-profiles.json';
-const AUTH_STORE_LOCK_TIMEOUT_MS = 5 * 1000;
-const AUTH_STORE_LOCK_STALE_MS = 30 * 1000;
-
-export interface XaiOAuthStatus {
-  loggedIn: boolean;
-  email?: string;
-  displayName?: string;
-  /** Absolute access-token expiry in ms epoch (informational; the OpenClaw runtime auto-refreshes). */
-  expiresAt?: number;
-}
 
 export interface XaiDeviceCodeInfo {
   userCode: string;
@@ -260,102 +251,6 @@ async function exchangeToken(params: {
 
 // ─── Auth-profiles store access ──────────────────────────────────────────────
 
-/**
- * Default OpenClaw agent dir used by the runtime's auth-profiles store.
- * Non-main agents fall back to the default agent's OAuth profiles, so one
- * credential here covers every agent.
- */
-function getOpenClawDefaultAgentDir(): string {
-  return path.join(app.getPath('userData'), 'openclaw', 'state', 'agents', AgentId.Main, 'agent');
-}
-
-export function getXaiAuthStorePath(): string {
-  return path.join(getOpenClawDefaultAgentDir(), AUTH_PROFILE_FILENAME);
-}
-
-interface AuthProfileStoreFile {
-  version?: number;
-  profiles?: Record<string, Record<string, unknown>>;
-  [key: string]: unknown;
-}
-
-function readAuthStore(): AuthProfileStoreFile | null {
-  try {
-    const raw = fs.readFileSync(getXaiAuthStorePath(), 'utf8');
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? (parsed as AuthProfileStoreFile) : null;
-  } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code !== 'ENOENT') {
-      console.warn('[XaiAuth] failed to read auth-profiles store:', err);
-    }
-    return null;
-  }
-}
-
-function listXaiProfiles(store: AuthProfileStoreFile | null): Array<{ id: string; credential: Record<string, unknown> }> {
-  if (!store?.profiles) return [];
-  return Object.entries(store.profiles)
-    .filter(([, credential]) => (
-      credential
-      && typeof credential === 'object'
-      && (credential as Record<string, unknown>).provider === XAI_PROVIDER_ID
-      && (credential as Record<string, unknown>).type === 'oauth'
-    ))
-    .map(([id, credential]) => ({ id, credential }));
-}
-
-/**
- * Serialize store writes against the OpenClaw runtime using the same
- * `<store>.lock` exclusive-create protocol as openclaw's
- * updateAuthProfileStoreWithLock, so a concurrent gateway-side refresh never
- * interleaves with our read-modify-write.
- */
-async function withAuthStoreLock<T>(fn: () => T): Promise<T> {
-  const storePath = getXaiAuthStorePath();
-  fs.mkdirSync(path.dirname(storePath), { recursive: true, mode: 0o700 });
-  const lockPath = `${storePath}.lock`;
-  const deadline = Date.now() + AUTH_STORE_LOCK_TIMEOUT_MS;
-  for (;;) {
-    try {
-      const fd = fs.openSync(lockPath, 'wx');
-      fs.writeSync(fd, `${process.pid}`);
-      fs.closeSync(fd);
-      break;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err;
-      try {
-        const stat = fs.statSync(lockPath);
-        if (Date.now() - stat.mtimeMs > AUTH_STORE_LOCK_STALE_MS) {
-          fs.rmSync(lockPath, { force: true });
-          continue;
-        }
-      } catch {
-        continue; // lock vanished between openSync and statSync — retry
-      }
-      if (Date.now() > deadline) {
-        throw new Error('Timed out waiting for the OpenClaw auth store lock');
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  try {
-    return fn();
-  } finally {
-    fs.rmSync(lockPath, { force: true });
-  }
-}
-
-function writeAuthStore(store: AuthProfileStoreFile): void {
-  const storePath = getXaiAuthStorePath();
-  fs.writeFileSync(storePath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(storePath, 0o600);
-  } catch {
-    // best-effort on platforms where chmod is a no-op (Windows)
-  }
-}
-
 async function persistXaiCredential(params: {
   tokens: XaiOAuthTokens;
   identity: { email?: string; displayName?: string; accountId?: string };
@@ -365,10 +260,10 @@ async function persistXaiCredential(params: {
 }): Promise<void> {
   // Same key derivation as openclaw's buildAuthProfileId(provider, email ?? accountId).
   const profileName = params.identity.email ?? params.identity.accountId ?? 'default';
-  const profileId = `${XAI_PROVIDER_ID}:${profileName}`;
-  const credential: Record<string, unknown> = {
-    type: 'oauth',
-    provider: XAI_PROVIDER_ID,
+  const profileId = `${XAI_AUTH_PROVIDER}:${profileName}`;
+  const credential: XaiOAuthCredential = {
+    type: XAI_AUTH_CREDENTIAL_TYPE,
+    provider: XAI_AUTH_PROVIDER,
     access: params.tokens.accessToken,
     ...(params.tokens.refreshToken ? { refresh: params.tokens.refreshToken } : {}),
     ...(params.tokens.expiresAt !== undefined ? { expires: params.tokens.expiresAt } : {}),
@@ -388,59 +283,22 @@ async function persistXaiCredential(params: {
     ...(params.identity.accountId ? { accountId: params.identity.accountId } : {}),
   };
 
-  await withAuthStoreLock(() => {
-    const existing = readAuthStore() ?? { version: AUTH_STORE_VERSION, profiles: {} };
-    const profiles: Record<string, Record<string, unknown>> = { ...(existing.profiles ?? {}) };
-    // LobsterAI models a single xAI account: drop any previous xai profiles so
-    // a re-login with another account never leaves a stale credential behind.
-    for (const staleId of listXaiProfiles(existing).map((p) => p.id)) {
-      delete profiles[staleId];
-    }
-    profiles[profileId] = credential;
-    writeAuthStore({
-      ...existing,
-      version: existing.version ?? AUTH_STORE_VERSION,
-      profiles,
-    });
-  });
+  getOpenClawXaiAuthStore().replaceCredential(getOpenClawXaiStateDir(), profileId, credential);
 }
 
 // ─── Public status/logout API ────────────────────────────────────────────────
 
 export function getXaiOAuthStatus(): XaiOAuthStatus {
-  const profile = listXaiProfiles(readAuthStore())[0];
-  if (!profile) return { loggedIn: false };
-  const email = trimNonEmpty(profile.credential.email);
-  const displayName = trimNonEmpty(profile.credential.displayName);
-  const expires = profile.credential.expires;
-  return {
-    loggedIn: true,
-    ...(email ? { email } : {}),
-    ...(displayName ? { displayName } : {}),
-    ...(typeof expires === 'number' && expires > 0 ? { expiresAt: expires } : {}),
-  };
+  return getOpenClawXaiAuthStore().readStatus(getOpenClawXaiStateDir());
 }
 
 export function hasXaiOAuthCredential(): boolean {
   return getXaiOAuthStatus().loggedIn;
 }
 
-/**
- * Remove the persisted xAI credential(s). The running gateway notices the
- * store mtime change on the next auth resolution.
- */
+/** Remove xAI OAuth credentials and their state through the canonical SQLite owner. */
 export async function logoutXai(): Promise<void> {
-  await withAuthStoreLock(() => {
-    const existing = readAuthStore();
-    if (!existing?.profiles) return;
-    const xaiProfileIds = listXaiProfiles(existing).map((p) => p.id);
-    if (xaiProfileIds.length === 0) return;
-    const profiles = { ...existing.profiles };
-    for (const id of xaiProfileIds) {
-      delete profiles[id];
-    }
-    writeAuthStore({ ...existing, profiles });
-  });
+  getOpenClawXaiAuthStore().logout(getOpenClawXaiStateDir());
   console.log('[XaiAuth] xai credentials removed from auth-profiles store');
 }
 

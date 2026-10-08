@@ -8,6 +8,7 @@ import {
   HtmlShareSourceType,
   HtmlShareStatus,
 } from '../../../shared/htmlShare/constants';
+import { normalizePublishingSubscriptionRecoveryMode } from '../../../shared/publishing/constants';
 import {
   type ShareDeploymentCreateNodeInput,
   type ShareDeploymentDownloadPersistenceInput,
@@ -60,7 +61,8 @@ interface ServerShareDeploymentResponse {
   providerResourceId?: string;
   runtimeUrlMasked?: string;
   persistence?: ShareDeploymentRecord['persistence'];
-  expiresAt?: string;
+  expiresAt?: string | null;
+  subscriptionRecoveryMode?: unknown;
   lastAccessedAt?: string;
   failureMessage?: string;
   failureCode?: string;
@@ -292,7 +294,12 @@ function buildDeploymentRecord(
     providerFunctionId: data.providerResourceId,
     providerEndpoint: data.runtimeUrlMasked,
     persistence: data.persistence,
-    expiresAt: data.expiresAt,
+    ...(Object.prototype.hasOwnProperty.call(data, 'expiresAt')
+      ? { expiresAt: data.expiresAt }
+      : {}),
+    subscriptionRecoveryMode: normalizePublishingSubscriptionRecoveryMode(
+      data.subscriptionRecoveryMode,
+    ),
     lastAccessedAt: data.lastAccessedAt,
     errorCode: normalizeDeploymentFailureCode(data.failureCode),
     errorMessage: data.failureMessage,

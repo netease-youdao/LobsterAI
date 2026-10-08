@@ -17,6 +17,7 @@ import {
   CoworkContextUsageRefreshMode,
   type CoworkContextUsageRefreshMode as CoworkContextUsageRefreshModeType,
   CoworkContextUsageSource,
+  CoworkOnboardingMessageKind,
 } from '../../shared/cowork/constants';
 import { normalizeCoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
@@ -53,6 +54,7 @@ import {
   setMessageRailIndex,
   setMessageRailIndexLoading,
   setMessageWindow,
+  setOpenClawRepairing,
   setRemoteManaged,
   setSessions,
   setStreaming,
@@ -90,6 +92,9 @@ import {
   shouldReloadCurrentSessionForChange,
 } from './coworkSessionRefreshPolicy';
 import { i18nService } from './i18n';
+import { restoreNativeQuestionPermissions } from './nativeQuestionRecovery';
+import { reportOnboardingAction } from './onboardingAnalytics';
+import { resolveOpenClawRepairHistoryWarning } from './openclawRepair';
 
 const STREAM_ERROR_DUPLICATE_WINDOW_MS = 10_000;
 
@@ -141,6 +146,8 @@ const CONTEXT_USAGE_AUTO_SUPPRESSION_MS = 5 * 60 * 1000;
 const CONTEXT_USAGE_REFRESH_BACKOFF_MS = 30_000;
 const MANUAL_CONTEXT_COMPACTION_WATCHDOG_MS = 130_000;
 const COWORK_INIT_STAGE_TIMEOUT_MS = 12_000;
+const NEW_USER_WELCOME_STREAM_INTERVAL_MS = 26;
+const NEW_USER_WELCOME_STREAM_CHUNK_SIZE = 2;
 
 const restoreCurrentAgentDefaultSkills = (): void => {
   const state = store.getState();
@@ -157,6 +164,7 @@ class CoworkService {
   private initialized = false;
   private openClawStatus: OpenClawEngineStatus | null = null;
   private openClawStatusListeners = new Set<(status: OpenClawEngineStatus) => void>();
+  private openClawRepairPromise: Promise<OpenClawGatewayRepairResult> | null = null;
   private openClawEngineListenerAttached = false;
   private latestLoadSessionsRequestId = 0;
   private latestLoadSessionRequestId = 0;
@@ -168,6 +176,7 @@ class CoworkService {
   private contextUsageAutoSuppressedUntilBySessionId = new Map<string, number>();
   private contextUsageBackoffUntil = new Map<string, number>();
   private contextCompactionWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+  private newUserWelcomeAnimationTimer: ReturnType<typeof setInterval> | null = null;
   private readonly btwAbortRunIds = new Set<string>();
   private readonly queuedFollowUpCoordinator = new CoworkQueuedFollowUpCoordinator({
     getState: () => store.getState(),
@@ -433,6 +442,9 @@ class CoworkService {
       store.dispatch(dequeuePendingPermission({ requestId }));
     });
     this.streamListenerCleanups.push(permissionDismissCleanup);
+    this.streamListenerCleanups.push(restoreNativeQuestionPermissions(cowork, (request) => {
+      store.dispatch(enqueuePendingPermission(request));
+    }));
 
     // Complete listener
     const completeCleanup = cowork.onStreamComplete(({ sessionId }) => {
@@ -805,6 +817,134 @@ class CoworkService {
           this.queuedFollowUpCoordinator.handleSessionCompleted(session.id);
         }
       });
+    }
+  }
+
+  private clearNewUserWelcomeAnimation(): void {
+    if (this.newUserWelcomeAnimationTimer) {
+      clearInterval(this.newUserWelcomeAnimationTimer);
+      this.newUserWelcomeAnimationTimer = null;
+    }
+  }
+
+  private animateNewUserWelcomeMessage(session: CoworkSession, messageId: string, fullContent: string): void {
+    this.clearNewUserWelcomeAnimation();
+    const characters = Array.from(fullContent);
+    let visibleCount = 0;
+
+    this.logDiagnostic(
+      'debug',
+      `starting new user welcome task stream animation; session=${session.id}; chars=${characters.length}.`,
+    );
+    reportOnboardingAction('welcome_stream_start', {
+      source: 'new_user_welcome_task',
+      charCount: characters.length,
+    });
+
+    this.newUserWelcomeAnimationTimer = setInterval(() => {
+      visibleCount = Math.min(
+        characters.length,
+        visibleCount + NEW_USER_WELCOME_STREAM_CHUNK_SIZE,
+      );
+      const isFinal = visibleCount >= characters.length;
+      store.dispatch(updateMessageContent({
+        sessionId: session.id,
+        messageId,
+        content: characters.slice(0, visibleCount).join(''),
+        metadata: {
+          kind: CoworkOnboardingMessageKind.NewUserWelcome,
+          isStreaming: !isFinal,
+          isFinal,
+        },
+      }));
+
+      if (isFinal) {
+        this.clearNewUserWelcomeAnimation();
+        this.logDiagnostic(
+          'debug',
+          `completed new user welcome task stream animation; session=${session.id}.`,
+        );
+        reportOnboardingAction('welcome_stream_complete', {
+          source: 'new_user_welcome_task',
+          charCount: characters.length,
+        });
+      }
+    }, NEW_USER_WELCOME_STREAM_INTERVAL_MS);
+  }
+
+  private showSession(session: CoworkSession): void {
+    const existsInSessionList = store.getState().cowork.sessions.some(item => item.id === session.id);
+    store.dispatch(existsInSessionList ? setCurrentSession(session) : addSession(session));
+  }
+
+  async seedNewUserWelcomeTask(): Promise<{ session: CoworkSession | null; created?: boolean; error?: string }> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.seedNewUserWelcomeTask) {
+      this.logDiagnostic('warn', 'new user welcome task seed IPC is unavailable.');
+      return { session: null, error: 'Cowork seed welcome task API not available' };
+    }
+
+    try {
+      const result = await cowork.seedNewUserWelcomeTask({
+        title: i18nService.t('newUserWelcomeTaskTitle'),
+        content: i18nService.t('newUserWelcomeTaskContent'),
+      });
+
+      if (!result.success || !result.session) {
+        const error = result.error || 'Failed to seed new user welcome task';
+        this.logDiagnostic('warn', `new user welcome task seed failed: ${error}`);
+        return { session: null, error };
+      }
+
+      const welcomeMessage = result.session.messages.find(message => (
+        message.type === 'assistant'
+        && message.metadata?.kind === CoworkOnboardingMessageKind.NewUserWelcome
+      )) ?? result.session.messages.find(message => message.type === 'assistant');
+
+      if (welcomeMessage) {
+        const animatedSession = {
+          ...result.session,
+          messages: result.session.messages.map(message => (
+            message.id === welcomeMessage.id
+              ? {
+                ...message,
+                content: '',
+                metadata: {
+                  ...message.metadata,
+                  isStreaming: true,
+                  isFinal: false,
+                },
+              }
+              : message
+          )),
+        };
+        this.showSession(animatedSession);
+        this.animateNewUserWelcomeMessage(
+          result.session,
+          welcomeMessage.id,
+          welcomeMessage.content,
+        );
+      } else {
+        this.clearNewUserWelcomeAnimation();
+        this.showSession(result.session);
+      }
+
+      this.logDiagnostic(
+        'info',
+        `new user welcome task ready; session=${result.session.id}; `
+        + `created=${Boolean(result.created)}; animated=${Boolean(welcomeMessage)}.`,
+      );
+      return { session: result.session, created: result.created === true };
+    } catch (error) {
+      this.logDiagnostic(
+        'warn',
+        `new user welcome task seed threw: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+      );
+      return {
+        session: null,
+        error: error instanceof Error ? error.message : 'Failed to seed new user welcome task',
+      };
     }
   }
 
@@ -1672,6 +1812,7 @@ class CoworkService {
                 messages: pageResult.messages,
                 messagesOffset: returnedOffset,
                 totalMessages: pageResult.total ?? session.totalMessages,
+                leadingTurnStartTimestamp: pageResult.leadingTurnStartTimestamp ?? null,
               };
               this.logDiagnostic(
                 'debug',
@@ -1798,6 +1939,7 @@ class CoworkService {
         messages: result.messages,
         messagesOffset: result.offset ?? offset,
         totalMessages: result.total ?? totalMessages,
+        leadingTurnStartTimestamp: result.leadingTurnStartTimestamp ?? null,
         preserveCurrentTotal: store.getState().cowork.currentSession!.totalMessages > totalMessages,
       }));
       return true;
@@ -1849,7 +1991,12 @@ class CoworkService {
         );
         return false;
       }
-      store.dispatch(prependMessages({ sessionId, messages: result.messages, newOffset }));
+      store.dispatch(prependMessages({
+        sessionId,
+        messages: result.messages,
+        newOffset,
+        leadingTurnStartTimestamp: result.leadingTurnStartTimestamp ?? null,
+      }));
       const nextCount = store.getState().cowork.currentSession?.messages.length ?? currentMessageCount;
       this.logDiagnostic(
         'info',
@@ -2256,6 +2403,8 @@ class CoworkService {
   }
 
   async repairOpenClawGatewayState(): Promise<OpenClawGatewayRepairResult> {
+    if (this.openClawRepairPromise) return this.openClawRepairPromise;
+
     const engineApi = window.electron?.openclaw?.engine;
     if (!engineApi?.repairGatewayState) {
       return {
@@ -2263,14 +2412,40 @@ class CoworkService {
         error: i18nService.t('openClawRepairApiUnavailable'),
       };
     }
-    const result = await engineApi.repairGatewayState();
-    if (result?.status) {
-      this.notifyOpenClawStatus(result.status);
+    // Own the loading state here so it survives Settings closing and also
+    // covers Quick Repair. Gateway phase changes are not repair completion.
+    const repairPromise = Promise.resolve().then(async () => {
+      const result = await engineApi.repairGatewayState();
+      const historyWarning = result && resolveOpenClawRepairHistoryWarning(result);
+      if (historyWarning) {
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: {
+            message: historyWarning,
+            actionLabel: result.backupPath ? i18nService.t('openClawRepairViewBackup') : undefined,
+            onAction: result.backupPath ? () => {
+              void window.electron.shell.showItemInFolder(result.backupPath!).catch(error => {
+                console.error('[Cowork] Failed to reveal repair backup:', error);
+              });
+            } : undefined,
+          },
+        }));
+      }
+      if (result?.status) {
+        this.notifyOpenClawStatus(result.status);
+      }
+      return result ?? {
+        success: false,
+        error: i18nService.t('openClawRepairFailed'),
+      };
+    });
+    this.openClawRepairPromise = repairPromise;
+    store.dispatch(setOpenClawRepairing(true));
+    try {
+      return await repairPromise;
+    } finally {
+      this.openClawRepairPromise = null;
+      store.dispatch(setOpenClawRepairing(false));
     }
-    return result ?? {
-      success: false,
-      error: i18nService.t('openClawRepairFailed'),
-    };
   }
 
   async generateSessionTitle(prompt: string | null): Promise<string | null> {
@@ -2302,6 +2477,7 @@ class CoworkService {
   }
 
   destroy(): void {
+    this.clearNewUserWelcomeAnimation();
     this.cleanupListeners();
     this.openClawStatusListeners.clear();
     this.initialized = false;
