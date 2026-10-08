@@ -56,6 +56,7 @@ const RETAINED_PATCHES = [
   'openclaw-subagent-cleanup-finalize-best-effort.patch',
   'openclaw-subagent-shared-gateway-context.patch',
   'openclaw-subagent-settle-failure-event.patch',
+  'openclaw-tolerate-replaced-thinking-catalog-owner.patch',
   'openclaw-transcript-replay-validation.patch',
   'openclaw-view-image-task-cwd.patch',
   'openclaw-web-login-channel-routing.patch',

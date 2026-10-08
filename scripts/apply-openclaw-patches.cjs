@@ -1349,6 +1349,25 @@ v20260801StrongPatchValidators['openclaw-skip-turn-replay-after-model-call.patch
   },
 ];
 
+v20260801StrongPatchValidators['openclaw-tolerate-replaced-thinking-catalog-owner.patch'] = [
+  {
+    file: 'src/agents/prepared-model-catalog.ts',
+    snippets: ['continue;'],
+    // The read-only owner path still throws the same error text, so check the
+    // scoped loader's own sequence instead of forbidding the throw.
+    orderedSnippets: [
+      'async function loadScopedReadOnlyModelCatalog(',
+      'if (!preparedModelRuntimeConfigsMatch(prepared.config, candidate.config)) {',
+      'continue;',
+      'if (isPreparedModelCatalogFull(prepared.modelCatalog)) {',
+    ],
+  },
+  {
+    file: 'src/agents/prepared-model-catalog.scoped-thinking.test.ts',
+    snippets: ['falls back to the scoped catalog while a published owner has the replaced config'],
+  },
+];
+
 const strongPatchValidators = openclawVersion === 'v2026.8.1'
   ? v20260801StrongPatchValidators
   : legacyStrongPatchValidators;

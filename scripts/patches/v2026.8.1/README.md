@@ -609,3 +609,46 @@ runtime. Remove this patch when the pinned upstream contains
 [OpenClaw #134281](https://github.com/openclaw/openclaw/pull/134281) (v2026.9.1
 and later). That change deletes both outer replays and budgets transient
 retries inside the embedded runner, before any visible output.
+
+## Replaced thinking catalog owner (upstream backport)
+
+`openclaw-tolerate-replaced-thinking-catalog-owner.patch` backports the agents
+half of [OpenClaw #127284](https://github.com/openclaw/openclaw/pull/127284),
+merged as `bf599a721784849e350c18ff703c9e75de939e0d` on 2026-09-01. When the
+provider-scoped read-only catalog finds a published owner prepared for another
+config generation, it skips that owner and builds the scoped catalog from the
+turn's own config instead of throwing `PreparedModelCatalogConfigReplacedError`.
+
+Why: before every embedded run, `resolveRunModelHasVision`
+(`agent-runner-run-params.ts`) decides whether the selected model accepts
+images. When the running `openclaw.json` gives that model no `input`, it calls
+`loadProviderScopedThinkingCatalog`, which reaches
+`loadScopedReadOnlyModelCatalog`. In v2026.8.1 a config mismatch there throws.
+The error is not retried and is not a failover reason, and only startup or a
+reload republishes the owner. Every later turn then fails before reply with
+"prepared model catalog owner config was replaced during the read
+(<agentDir>)", `/new` included, until the gateway restarts. On 2026-10-07 a
+Windows QQ user hit this three turns in a row after sending an image. The
+running config carried incomplete plan-model entries (the restart diff changed
+`models`, `agents` and `plugins`), so every turn took this read, and the image
+turn spent almost two minutes loading provider plugins for media understanding.
+The logs do not show which publication replaced the owner; the patch removes
+the failure mode either way.
+
+The upstream wizard half (`setup.finalize`) is omitted because LobsterAI does
+not run onboarding. The read-only owner path in
+`resolvePreparedModelCatalogOwnerSnapshotWithPolicy` keeps its `throw`, as
+upstream does.
+
+Verify with the upstream suite. The new case fails with the user's error
+without the source change:
+
+```sh
+node_modules/.bin/vitest run src/agents/prepared-model-catalog.scoped-thinking.test.ts src/agents/prepared-model-catalog.test.ts
+```
+
+Then run LobsterAI's `replacedThinkingCatalogOwner` test and rebuild the
+runtime. Remove this patch when the pinned upstream reaches v2026.9.1. Later
+releases harden the same reload window: v2026.9.5 (#147001) keeps channel
+replies on the committed publication, and v2026.9.7 (#154462) keeps active
+turns on their admitted generation.
