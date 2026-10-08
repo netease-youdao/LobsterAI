@@ -59,6 +59,11 @@ export interface InboxEntry {
   runId: string | null; state: 'prepared' | 'executing' | 'applied' | 'rejected' | 'unknown'; result: any; preparationError?: any;
 }
 interface Registration { deviceId: string; userId: string; scopeKey: string; metadataVersion: string; syncTarget?: RemoteSyncTargetIdentity }
+class TaskFailurePersistenceError extends Error {
+  constructor(readonly storageError: unknown, readonly failure: ReturnType<typeof classifyTaskSyncFailure>) {
+    super('REMOTE_TASK_FAILURE_PERSISTENCE_UNAVAILABLE');
+  }
+}
 interface LocalSettings { createSessionAvailable?: boolean; enabled: boolean; name: string; workspaces: Array<RemoteWorkspace & { path: string }>; settingsVersion: string }
 interface ControlIntent { createSessionAvailable?: boolean; id: string; enabled: boolean; workspaces: RemoteWorkspace[] }
 interface SettingsChanges { retrySessionId?: string; enabled?: boolean; name?: string; workspace?: { name: string; path: string }; removeWorkspaceId?: string; retry?: boolean }
@@ -122,7 +127,7 @@ export class RemoteBridge {
   private readonly verifiedImports = new Map<string, any>();
   private readonly telemetryRequestIds = new WeakMap<object, string>();
   private readonly sessionChecks = new Set<string>();
-  private readonly taskMemoryBlocks = new Set<string>();
+  private readonly taskMemoryBlocks = new Map<string, { context: TaskSyncContext; failure: ReturnType<typeof classifyTaskSyncFailure>; retryAt: number }>();
   private registration: Registration | null = null;
   private registrationPending: Promise<void> | null = null;
   private socket: RemoteSocket | null = null;
@@ -361,19 +366,19 @@ export class RemoteBridge {
     const oldest = legacyPending.reduce<number | null>((value, row) => row.oldest && (value === null || row.oldest < value) ? row.oldest : value, null);
     const pending = { count: legacyPending.length + (availabilityHealth?.pendingSessions || 0), oldest };
     const recoveryRequired = this.deps.store.needsSecurityRecovery();
-    const projectionFailed = !!this.owner && (this.deps.store.db.prepare(`SELECT f.session_id FROM remote_projection_failures f JOIN cowork_session_ownership o ON o.session_id=f.session_id WHERE o.owner_user_id=? AND o.owner_scope_key=?`).all(this.owner.userId, this.owner.scopeKey) as Array<{ session_id: string }>)
-      .some(row => this.availability.legacyHistoryAllowed(row.session_id));
     const filesHealth = this.files?.health();
     const filesDegraded = filesHealth?.degraded === true;
-    const taskHealth = this.taskContext() ? this.taskSync.health(this.taskContext()!, id => this.sessionAdmitted(id) && this.availability.legacyHistoryAllowed(id)) : undefined;
-    const syncFailed = Boolean(taskHealth?.failedSessions || availabilityHealth?.degraded || !availabilityHealth?.sessions && this.sessionSyncFailed);
+    const taskHealth = this.taskContext() ? this.taskSync.health(this.taskContext()!, id => this.sessionAdmitted(id), id => this.availability.legacyHistoryAllowed(id)) : undefined;
+    const storagePending = [...this.taskMemoryBlocks.values()].some(item => sameOwner(item.context.owner, this.owner)
+      && item.context.target === this.remoteEnvironment() && item.context.deviceId === this.registration?.deviceId);
+    const syncFailed = Boolean(storagePending || taskHealth?.failedSessions || taskHealth?.countsTruncated || availabilityHealth?.degraded || !availabilityHealth?.sessions && this.sessionSyncFailed);
     const reason = recoveryRequired ? RemoteSyncHealthReason.LocalRecovery : this.connectionRemoved ? RemoteSyncHealthReason.Removed : this.quotaBlocked ? RemoteSyncHealthReason.Quota
-      : (syncFailed || projectionFailed) ? RemoteSyncHealthReason.Projection : filesDegraded ? RemoteSyncHealthReason.Files : settings.enabled && !connected ? RemoteSyncHealthReason.Connection : undefined;
+      : storagePending ? RemoteSyncHealthReason.StorageDependency : syncFailed ? RemoteSyncHealthReason.Projection : filesDegraded ? RemoteSyncHealthReason.Files : settings.enabled && !connected ? RemoteSyncHealthReason.Connection : undefined;
     // History scans also run when idle; only outstanding content should change the device's visible sync status.
     const syncHealth: RemoteSyncHealth = {
       ...taskHealth, pendingFiles: filesHealth?.pending ?? 0, admissionDeferred: this.admissionDeferred,
       status: recoveryRequired ? RemoteSyncHealthStatus.Paused : !this.owner || !settings.enabled || this.connectionRemoved || this.quotaBlocked ? RemoteSyncHealthStatus.Paused
-        : syncFailed || projectionFailed || filesDegraded ? RemoteSyncHealthStatus.Degraded : (pending?.count || 0) > 0 || (filesHealth?.pending || 0) > 0 ? RemoteSyncHealthStatus.Syncing : RemoteSyncHealthStatus.Idle,
+        : syncFailed || filesDegraded ? RemoteSyncHealthStatus.Degraded : (pending?.count || 0) > 0 || (filesHealth?.pending || 0) > 0 ? RemoteSyncHealthStatus.Syncing : RemoteSyncHealthStatus.Idle,
       ...(reason ? { reason } : {}), pendingSessions: pending?.count ?? null, oldestPendingAt: pending?.oldest ? new Date(pending.oldest).toISOString() : null,
       lastSuccessfulSyncAt: this.owner ? this.deps.store.get<string>(`lastSuccessfulSync:${this.owner.userId}:${this.owner.scopeKey}`) : null,
       observedAt: new Date().toISOString(),
@@ -1351,6 +1356,26 @@ export class RemoteBridge {
     if (!context) return;
     const current = this.syncContext();
     if (!current()) return;
+    // Failed diagnostic persistence is a bounded dependency, not a permanent process-local skip list.
+    for (const [id, pending] of this.taskMemoryBlocks) {
+      if (pending.retryAt > Date.now() || pending.context.target !== context.target || pending.context.deviceId !== context.deviceId
+        || !sameOwner(pending.context.owner, context.owner)) continue;
+      try {
+        this.deps.store.transaction(() => {
+          if (pending.failure.deferMs !== undefined) this.taskSync.defer(context, id, pending.failure.deferMs);
+          else {
+            const saved = this.taskSync.fail(context, id, pending.failure);
+            this.deps.store.put(`syncFailure:${id}`, { reason: pending.failure.reason,
+              blocked: ['isolated', 'closed'].includes(saved.phase), retryAt: saved.next_retry_at });
+          }
+        });
+        this.taskMemoryBlocks.delete(id);
+      } catch (error) {
+        pending.retryAt = Date.now() + 5000;
+        if (isSharedSyncFailure(error)) throw error;
+      }
+      break; // One persistence probe per turn, before any task resumes.
+    }
     this.taskSync.reconcileProjectionFailures(context, id => this.sessionAdmitted(id) && this.availability.legacyHistoryAllowed(id));
     // Older clients classified wrapped transport errors as permanent task failures.
     // A one-time probe reuses the original mapping/receipt checks; it grants no ACK or execution permission.
@@ -1385,9 +1410,12 @@ export class RemoteBridge {
           if (!current()) return;
           try { await this.failSession(row, error, current, context); }
           catch (recordError) {
-            if (isSharedSyncFailure(recordError)) { sharedFailure = true; throw recordError; }
+            const storageError = recordError instanceof TaskFailurePersistenceError ? recordError.storageError : recordError;
+            if (isSharedSyncFailure(storageError)) { sharedFailure = true; throw recordError; }
             // A broken diagnostic write must not repeatedly execute this task in this process.
-            if (this.taskMemoryBlocks.size < 1000) this.taskMemoryBlocks.add(row.local_id);
+            if (this.taskMemoryBlocks.size >= 1000 && !this.taskMemoryBlocks.has(row.local_id)) throw recordError;
+            this.taskMemoryBlocks.set(row.local_id, { context, failure: recordError instanceof TaskFailurePersistenceError ? recordError.failure : classifyTaskSyncFailure(error), retryAt: Date.now() + 5000 });
+            this.sessionSyncFailed = true;
             remoteLogMessage('warn', '[RemoteSync] Task failure persistence unavailable', { localSessionId: row.local_id, ...remoteSyncErrorMetadata(recordError) });
             if (isSharedSyncFailure(recordError)) { sharedFailure = true; throw recordError; }
           }
@@ -1400,7 +1428,7 @@ export class RemoteBridge {
     if (!current()) return;
     await this.ensureRetentionFence();
     if (!current()) return;
-    this.sessionSyncFailed = this.taskSync.health(context, id => this.availability.legacyHistoryAllowed(id)).failedSessions > 0;
+    this.sessionSyncFailed = this.taskMemoryBlocks.size > 0 || this.taskSync.health(context, id => this.availability.legacyHistoryAllowed(id)).failedSessions > 0;
   }
   private async syncSession(row: SyncRow, current: () => boolean, context: TaskSyncContext, stepwise: boolean): Promise<void> {
     const id = row.local_id;
@@ -1559,9 +1587,15 @@ export class RemoteBridge {
     }
     if (!current()) return;
     if (failure.deferMs !== undefined) { this.taskSync.defer(context, id, failure.deferMs); return; }
-    const saved = this.taskSync.fail(context, id, failure);
-    this.deps.store.put(`syncFailure:${id}`, { ...remoteSyncErrorMetadata(error), code: error instanceof RemoteApiError ? error.code : 47019, reason: failure.reason,
-      blocked: ['isolated', 'closed'].includes(saved.phase), retryAt: saved.next_retry_at });
+    let saved;
+    try {
+      saved = this.deps.store.transaction(() => {
+        const state = this.taskSync.fail(context, id, failure);
+        this.deps.store.put(`syncFailure:${id}`, { ...remoteSyncErrorMetadata(error), code: error instanceof RemoteApiError ? error.code : 47019, reason: failure.reason,
+          blocked: ['isolated', 'closed'].includes(state.phase), retryAt: state.next_retry_at });
+        return state;
+      });
+    } catch (storageError) { throw new TaskFailurePersistenceError(storageError, failure); }
     if (failure.scope === 'service') {
       const now = Date.now();
       this.historyTransportFailures = [...this.historyTransportFailures.filter(item => item.at > now - 30000), { sessionId: id, at: now }].slice(-20);

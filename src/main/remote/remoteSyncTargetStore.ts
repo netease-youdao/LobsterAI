@@ -436,6 +436,22 @@ export class RemoteSyncTargetStore {
       }
     }
     checkBudget();
+    const verified = rows.filter(row => this.admissions.admitted(input.owner, input.deviceId, input.targetId, row.local_id));
+    for (const row of verified) for (const table of ['remote_dirty', 'remote_content_dirty']) this.store.db.prepare(`INSERT OR IGNORE INTO ${table} VALUES (?)`).run(row.local_id);
+    if (verified.length === rows.length && !this.admissions.controlBlocked(input.targetId)) {
+      // Account-wide protocol state can move only after every task and unscoped execution dependency is verified.
+      const environments = this.store.db.prepare('SELECT environment FROM remote_sync_target_aliases WHERE target_id=?').all(input.targetId) as Array<{ environment: string }>;
+      for (const { environment } of environments) {
+        const sourceKey = `retentionFence:${JSON.stringify([environment, input.owner.userId, input.owner.scopeKey, input.deviceId])}`;
+        const targetKey = `retentionFence:${JSON.stringify([input.targetId, input.owner.userId, input.owner.scopeKey, input.deviceId])}`;
+        const source = this.store.db.prepare('SELECT value FROM remote_state WHERE key=?').get(sourceKey) as { value: string } | undefined;
+        const target = this.store.db.prepare('SELECT value FROM remote_state WHERE key=?').get(targetKey) as { value: string } | undefined;
+        if (source && target && source.value !== target.value) throw new RemoteSyncStateError('Conflicting synchronization protocol state');
+        if (source) this.store.db.prepare('INSERT OR IGNORE INTO remote_state VALUES (?,?)').run(targetKey, source.value);
+      }
+      migrateVerifiedRemoteTargetCatalogRouting(this.store, { owner: input.owner, deviceId: input.deviceId, targetId: input.targetId, legacyEnvironments: environments.map(row => row.environment) });
+      materializeRemotePreparedInputSources(this.store, input.owner, input.deviceId);
+    }
     const epoch = (previous?.epoch || 0) + 1;
     this.store.db.prepare('INSERT OR REPLACE INTO remote_sync_target_active VALUES (?,?,?,?)')
       .run(input.owner.userId, input.owner.scopeKey, input.targetId, epoch);
@@ -453,7 +469,7 @@ export class RemoteSyncTargetStore {
         return { ...active, kind: RemoteSyncTargetActivationKind.Unchanged };
       }
       const known = this.store.db.prepare('SELECT * FROM remote_sync_targets WHERE target_id=?').get(input.targetId) as Row | undefined;
-      const checkBudget = !known && !active?.syncTarget && input.allowPartialLegacy ? this.admissions.budget(input.owner, input.targetId, tables) : null;
+      const checkBudget = !known && !active?.syncTarget ? this.admissions.budget(input.owner, input.targetId, tables) : null;
       const rows = this.rows(input.owner);
       if (active && this.admissions.pending(input.owner, active.targetId)) throw new RemoteSyncStateError('Unverified synchronization history prevents changing the service target');
       const changedGeneration = input.syncTarget && this.store.db.prepare(`SELECT 1 FROM remote_sync_targets WHERE owner_user_id=? AND owner_scope_key=?
@@ -463,15 +479,13 @@ export class RemoteSyncTargetStore {
       if (!known && !active?.syncTarget && input.allowPartialLegacy) return this.activatePartial(input, active, rows, checkBudget!);
       const claim = !known && !active?.syncTarget && this.canClaim(rows, input.deviceId, input.legacyStates || []);
       if (!claim && !known && (!input.bootstrap || !input.syncTarget || !active?.syncTarget)) throw new RemoteSyncStateError('Synchronization history requires verified state before binding');
+      if (claim) return this.activatePartial(input, active, rows, checkBudget!);
       this.register(input);
       let kind: RemoteSyncTargetActivationResult['kind'];
-      if (claim) {
-        this.claim(input.owner, input.targetId, input.legacyStates || [], active?.targetId);
-        kind = RemoteSyncTargetActivationKind.Claimed;
-      } else {
+      {
         const priorId = active?.targetId || `legacy:${payloadHash([input.owner.userId, input.owner.scopeKey, 'unconfirmed'])}`;
         if (!active && rows.length) this.register({ owner: input.owner, targetId: priorId, deviceId: '', syncTarget: null });
-        this.tagExecution(input.owner, priorId);
+        this.tagExecution(input.owner, priorId, new Set(), new Set(rows.map(row => row.local_id)));
         if (active || rows.length) this.archive(priorId, input.owner);
         this.clear(input.owner);
         if (known) { this.restore(input.targetId, input.owner); kind = RemoteSyncTargetActivationKind.Restored; }

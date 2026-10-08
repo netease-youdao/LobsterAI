@@ -732,7 +732,9 @@ export class RemoteAvailabilityPublisher {
             sent++; await this.publishLive(context, request); this.failures.delete(key);
           } catch (error) {
             if (!this.current(context)) return;
-            if (encoding) {
+            const transientEncoding = error instanceof Error && (/^REMOTE_LIVE_ENCODER_(?:BUSY|BUDGET|TIMEOUT|CONTEXT_CHANGED|WORKER_EXIT)$/u.test(error.message)
+              || /^(?:SQLITE_(?:BUSY|LOCKED)|EAGAIN|ENOMEM|EMFILE|ENFILE)/u.test(String((error as NodeJS.ErrnoException).code || '')));
+            if (encoding && !transientEncoding) {
               telemetry.emit(SyncTelemetry.Event.Quarantined, { stage: SyncTelemetry.Stage.Projection,
                 outcome: SyncTelemetry.Outcome.Failed, phase: SyncTelemetry.Stage.Projection, failureScope: 'object', objectId: candidate.object_id,
                 objectRevision: String(candidate.revision), reason: SyncTelemetry.Reason.EncodingFailed });

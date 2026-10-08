@@ -566,3 +566,25 @@ it('does not recount an unchanged reconciling outcome when the runtime repeats i
     expect(events.filter(event => event === RemoteTelemetryEvent.OutcomeUnknown)).toHaveLength(1);
   } finally { spy.mockRestore(); }
 });
+
+it('does not interrupt later runtime observers when one task control record cannot be persisted', () => {
+  const { runtime, remote } = fixture();
+  const later = vi.fn(); runtime.on('sessionStatus', later);
+  const persist = vi.spyOn(remote, 'refreshApprovalRunState').mockImplementation(() => { throw new Error('optional decision projection failure'); });
+  expect(() => runtime.emit('sessionStatus', 'local', 'running')).not.toThrow();
+  expect(later).toHaveBeenCalledWith('local', 'running');
+  expect(remote.run('local')?.status).toBe('reconciling');
+  persist.mockRestore();
+});
+
+it('keeps a failed permission observer unknown and still delivers the desktop permission event', () => {
+  const { runtime, remote } = fixture();
+  const later = vi.fn(); runtime.on('permissionRequest', later);
+  const persist = vi.spyOn(remote, 'updateLocalApprovalBlocker').mockImplementation(() => { throw new Error('decision write failed'); });
+  const request = { requestId: 'permission', toolName: 'tool' };
+  expect(() => runtime.emit('permissionRequest', 'local', request)).not.toThrow();
+  expect(later).toHaveBeenCalledWith('local', request);
+  expect(remote.run('local')?.status).toBe('reconciling');
+  expect(runtime.respondToPermissionConfirmed).not.toHaveBeenCalled();
+  persist.mockRestore();
+});

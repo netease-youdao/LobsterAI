@@ -3,6 +3,7 @@ import { Worker } from 'worker_threads';
 
 import { payloadHash, stableJson } from './canonical';
 import type { RemoteIdentity } from './installationIdentity';
+import type { QuestionEvidenceBinding } from './remoteQuestionEvidence';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 
 const VERSION = 1;
@@ -203,5 +204,7 @@ export class RemoteSecurityJournal {
     return this.mac('ownership', { ...fact, identityDigest: this.identityDigest });
   }
   verifyOwnership(fact: Parameters<RemoteSecurityJournal['signOwnership']>[0], proof: string): boolean { return this.equal(proof, this.signOwnership(fact)); }
+  signQuestionBinding(fact: QuestionEvidenceBinding): string { return this.mac('question-binding', { ...fact, identityDigest: this.identityDigest }); }
+  verifyQuestionBinding(fact: QuestionEvidenceBinding, proof: string): boolean { return this.equal(proof, this.signQuestionBinding(fact)); }
   close(): void { this.poisoned = true; this.io.close(); }
 }

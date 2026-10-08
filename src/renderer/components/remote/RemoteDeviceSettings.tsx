@@ -68,7 +68,7 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
   const connectionFailure = remoteConnectionFailure(state);
   const contentStatus = remoteSyncDescription(state);
   const contentLabel = contentStatus === 'remoteTasksSyncFailed'
-    ? t('remoteTasksSyncFailedCount').replace('{count}', String(state?.syncHealth?.failedSessions ?? 0))
+    ? t('remoteTasksSyncFailedCount').replace('{count}', `${state?.syncHealth?.countsTruncated ? '≥' : ''}${state?.syncHealth?.failedSessions ?? 0}`)
     : t(contentStatus ?? 'remoteCurrentDevice');
   const taskIssues = state?.owner && state.enabled && !signInRequired
     ? (state.syncHealth?.taskIssues ?? []).filter(issue => issue.status !== RemoteSyncTaskIssueStatus.Closed).slice(0, 20) : [];

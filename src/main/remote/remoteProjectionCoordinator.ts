@@ -170,7 +170,7 @@ export class RemoteProjectionCoordinator {
           this.store.db.prepare('DELETE FROM remote_content_dirty WHERE session_id=?').run(id);
         }
         this.store.db.prepare('DELETE FROM remote_projection_publications WHERE session_id=?').run(id);
-        this.store.db.prepare('DELETE FROM remote_projection_failures WHERE session_id=?').run(id);
+        this.store.finishProjection(work, result.revision);
       })();
       telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.ProjectionPublish,
         outcome: SyncTelemetry.Outcome.Completed, sourceSeq: String(result.targetSourceSeq), objectRevision: String(result.revision),

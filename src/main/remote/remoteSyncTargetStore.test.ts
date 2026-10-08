@@ -193,6 +193,14 @@ describe('active synchronization target working sets', () => {
     expect(f.store.get('inbox:old')).toEqual({ owner, state: 'unknown' });
   });
 
+  test('full activation preserves unrelated corrupt inbox bytes and still admits a verified task', () => {
+    const f = fixture(); f.add(); f.bind();
+    f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run('inbox:unreadable', '{');
+    const active = f.activate(spaceA, { legacyStates: [f.proof()] });
+    expect(f.targets.isAdmitted(owner, 'device-a', active.targetId, 's')).toBe(true);
+    expect(f.targets.controlAdmissionBlocked(owner, active.targetId)).toBe(true);
+    expect(f.db.prepare("SELECT value FROM remote_state WHERE key='inbox:unreadable'").get()).toEqual({ value: '{' });
+  });
   test('legacy servers require state proof and may upgrade without rewriting pending imports', () => {
     const f = fixture(); f.add(); f.bind();
     const legacy = f.targets.activateLegacy({ owner, deviceId: 'device-a', legacyStates: [f.proof()] });
@@ -203,7 +211,8 @@ describe('active synchronization target working sets', () => {
     expect(upgraded.kind).toBe(RemoteSyncTargetActivationKind.Claimed);
     expect(f.targets.matchesEnvironment(upgraded.targetId, legacy.targetId)).toBe(true);
     expect(f.store.get<any>('import:s').environment).toBe(legacy.targetId);
-    expect(f.store.get<any>('inbox:c').targetId).toBe(upgraded.targetId);
+    expect(f.store.get<any>('inbox:c').targetId).toBe(legacy.targetId);
+    expect(f.targets.controlAdmissionBlocked(owner, upgraded.targetId)).toBe(true);
     expect(() => f.targets.activateLegacy({ owner, deviceId: 'device-a', legacyStates: [f.proof()] })).toThrow('downgraded');
   });
 

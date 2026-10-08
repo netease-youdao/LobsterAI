@@ -6,7 +6,7 @@ import { RemoteImportSnapshotError } from './remoteImportSnapshots';
 import { RemoteNetworkError } from './remoteNetworkError';
 import { RemoteNetworkFailure } from './remoteNetworkProtocol';
 import { classifyTaskSyncFailure, isSharedSyncFailure } from './remoteTaskSyncPolicy';
-import { RemoteTaskDataError, TaskSyncFailureReason, TaskSyncPhase } from './remoteTaskSyncState';
+import { RemoteTaskDataError, TaskSyncPhase } from './remoteTaskSyncState';
 
 describe('task synchronization failure scopes', () => {
   it('isolates local corruption and permission failures instead of stopping all sessions', () => {
@@ -29,7 +29,7 @@ describe('task synchronization failure scopes', () => {
     expect(classifyTaskSyncFailure({ httpStatus: 429, data: { syncDiagnostic: { version: 99, retryAfterMs: -1 } } }).phase).toBe(TaskSyncPhase.Backoff);
     for (const retryAfterMs of [-1, Infinity, NaN, '1000', 1.5]) {
       expect(classifyTaskSyncFailure({ httpStatus: 429, data: { retryAfterMs } }))
-        .toMatchObject({ phase: TaskSyncPhase.Isolated, reason: TaskSyncFailureReason.RetryHintInvalid });
+        .toMatchObject({ phase: TaskSyncPhase.Backoff, reason: 'REMOTE_TRANSPORT_UNAVAILABLE' });
     }
   });
   it('gives authenticated deletion and credential protections priority over untrusted wait hints', () => {

@@ -33,19 +33,18 @@ export function nextFileRetry(previous: RemoteFileRetryState | undefined, error:
   const reason = error instanceof RemoteFileRequestError ? error.serverReason || error.message : error instanceof Error ? error.message : '';
   const failures = (previous?.failures || 0) + 1;
   const waiting = dependencies.has(reason);
-  const transient = error instanceof RemoteFileRequestError
+  const transient = !(error instanceof RemoteFileRequestError) && reason === RemoteFileReason.Transfer || error instanceof RemoteFileRequestError
     && (error.httpStatus === undefined || error.httpStatus === 429 || error.httpStatus >= 500);
   if (!waiting && !transient) return { phase: RemoteFileRetryPhase.Isolated, failures, nextRetryAt: 0, policyVersion };
-  let phase: RemoteFileRetryState['phase'] = waiting ? RemoteFileRetryPhase.Waiting : failures >= 5 ? RemoteFileRetryPhase.Cooldown : RemoteFileRetryPhase.Backoff;
+  const phase: RemoteFileRetryState['phase'] = waiting ? RemoteFileRetryPhase.Waiting : failures >= 5 ? RemoteFileRetryPhase.Cooldown : RemoteFileRetryPhase.Backoff;
   let nextRetryAt = now + (phase === RemoteFileRetryPhase.Backoff
     ? waits[Math.min(failures - 1, waits.length - 1)] * (0.8 + random() * 0.4) : 900_000 + random() * 180_000);
-  let serverRetryAt: number | undefined;
+  let serverRetryAt = previous?.serverRetryAt;
   if (error instanceof RemoteFileRequestError && error.retryAfter) {
     const text = error.retryAfter.trim();
     const deadline = /^\d+$/u.test(text) ? now + Number(text) * 1000 : Date.parse(text);
-    if (!Number.isFinite(deadline) || deadline > Number.MAX_SAFE_INTEGER) {
-      phase = RemoteFileRetryPhase.Isolated; nextRetryAt = 0;
-    } else { serverRetryAt = deadline; nextRetryAt = Math.max(nextRetryAt, deadline); }
+    if (Number.isSafeInteger(deadline) && deadline >= 0) serverRetryAt = Math.max(serverRetryAt || 0, deadline);
   }
+  nextRetryAt = Math.max(nextRetryAt, serverRetryAt || 0);
   return { phase, failures, nextRetryAt: Math.ceil(nextRetryAt), policyVersion, ...(serverRetryAt !== undefined ? { serverRetryAt } : {}) };
 }

@@ -28,6 +28,7 @@ export class RemoteSecurityCoordinator {
     store.setOwnershipSigner((id, userId, scopeKey, operationId) => this.journal.signOwnership({
       sessionId: id, ownerUserId: userId, scopeKey, ownershipRevision: 1, operationId,
     }));
+    store.configureQuestionEvidence({ sign: fact => journal.signQuestionBinding(fact), verify: (fact, proof) => journal.verifyQuestionBinding(fact, proof) });
     this.ready = this.initialize(identity, migrated, legacyVerified).catch(error => {
       this.failure = error instanceof Error ? error : new RemoteSecurityJournalError('Security initialization failed');
       store.setSecurityRecoveryRequired(true); remoteDiagnostics.record('security.unknown');
@@ -85,8 +86,20 @@ export class RemoteSecurityCoordinator {
       this.store.put('securityJournalMigrated', true);
     });
     await this.classifyRunCorruption();
+    await this.classifyQuestionEvidence();
     this.store.setSecurityRecoveryRequired(false); remoteDiagnostics.record('security.recovered');
     telemetry.emit(SyncTelemetry.Event.Admission, { fromState: 'initializing', toState: 'ready', reason: SyncTelemetry.Reason.None });
+  }
+  private async classifyQuestionEvidence(): Promise<void> {
+    let cursor: string | null = '';
+    do {
+      cursor = this.store.questionEvidence.backfill((sessionId, owner) => {
+        const proof = this.store.get<{ operationId: string; signature: string }>(`ownershipProof:${sessionId}`);
+        return !!proof && this.journal.verifyOwnership({ sessionId, ownerUserId: owner.userId, scopeKey: owner.scopeKey,
+          ownershipRevision: 1, operationId: proof.operationId }, proof.signature);
+      }, cursor);
+      if (cursor) await new Promise<void>(resolve => setImmediate(resolve));
+    } while (cursor);
   }
   private async classifyRunCorruption(): Promise<void> {
     let cursor: string | null = '';
@@ -124,6 +137,7 @@ export class RemoteSecurityCoordinator {
         await this.validateOwnership(this.identity, true, false);
         if (this.closed) throw new RemoteSecurityJournalError('Security coordinator is closed');
         await this.classifyRunCorruption();
+        await this.classifyQuestionEvidence();
         this.store.setSecurityRecoveryRequired(false);
         this.failure = null;
         this.recoveryAttempts = 0;

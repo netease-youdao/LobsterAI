@@ -11,6 +11,7 @@ import { matchesRemoteDeletionTargetScope, samePersistedRemoteEnvironment } from
 import { remoteFileTelemetryReason } from './remoteFileTelemetry';
 import { acknowledgeRemoteDeletionCompletion } from './remoteLocalGc';
 import type { RemoteStore } from './remoteStore';
+import { isSharedSyncFailure } from './remoteTaskSyncPolicy';
 import { captureRemoteTelemetry } from './remoteTelemetry';
 import type { SessionDeletionService } from './sessionDeletionService';
 
@@ -103,16 +104,34 @@ export class RemoteSessionDeletionClient {
     this.busy = true; this.nextPoll = Date.now() + 30000;
     try {
       // Page durable work so terminal history never starves an unresolved operation.
-      const entries = this.deps.store.entries<{ key: string }>(RemoteDeletion.Pending, this.cursor, 20);
-      for (const { key, value: reference } of entries) {
-        this.cursor = key;
-        const value = this.deps.store.get<DeletionInbox>(reference.key);
-        if (!value) continue;
-        if (!this.matching(value, context) || terminalOperations.has(value.phase)) continue;
-        this.nextPoll = Math.min(this.nextPoll, Date.now() + 5000);
-        await this.recover(value, available);
+      const cursorKey = `deletionScanCursor:${payloadHash([context.owner, context.environment, context.deviceId])}`;
+      this.cursor = this.deps.store.get<string>(cursorKey) || '';
+      const entries = this.deps.store.scanEntries<{ key: string }>(RemoteDeletion.Pending, { after: this.cursor, limit: 20,
+        validate: (value): value is { key: string } => !!value && typeof value === 'object' && !Array.isArray(value)
+          && typeof (value as { key?: unknown }).key === 'string' && (value as { key: string }).key.startsWith(RemoteDeletion.Inbox) });
+      for (const item of entries.rows) {
+        const faultKey = `deletionScanFault:${payloadHash(item.key)}`;
+        const fault = this.deps.store.get<{ retryAt: number }>(faultKey);
+        if (fault && fault.retryAt > Date.now()) continue;
+        try {
+          if (item.state !== 'valid') throw new Error(item.reason);
+          const row = this.deps.store.scanEntries<DeletionInbox>(item.value.key, { limit: 1 }).rows[0];
+          if (!row || row.key !== item.value.key || row.state !== 'valid' || !row.value?.target || !row.value.operation || !row.value.claim)
+            throw new Error('DELETION_INBOX_RECORD_INVALID');
+          const value = row.value;
+          if (!this.matching(value, context) || terminalOperations.has(value.phase)) continue;
+          this.nextPoll = Math.min(this.nextPoll, Date.now() + 5000);
+          await this.recover(value, available);
+          this.deps.store.remove(faultKey);
+        } catch (error) {
+          if (isSharedSyncFailure(error) || /^SQLITE_/u.test(String((error as { code?: unknown } | null)?.code || ''))) throw error;
+          // Preserve original pending/inbox bytes and fences. A failure grants no deletion permission.
+          this.deps.store.put(faultKey, { retryAt: Date.now() + 30000, reason: 'DELETION_RECONCILE_DEFERRED' });
+          telemetry.emit(TelemetryEvent.SyncStage, { stage: 'reconcile', outcome: 'deferred', reason: remoteFileTelemetryReason(error) });
+        }
       }
-      if (entries.length < 20) this.cursor = '';
+      this.cursor = entries.nextCursor || '';
+      this.deps.store.put(cursorKey, this.cursor);
       const current = this.deps.context();
       if (!available || !this.controlsAdmitted() || !current?.enabled || !current.generation || !sameOwner(context.owner, current.owner)
         || !samePersistedRemoteEnvironment(this.deps.store, current, context.environment, current.environment)) return;
@@ -132,7 +151,8 @@ export class RemoteSessionDeletionClient {
         if (existing && ![Settled, RemoteDeletion.Cancelled].includes(existing.phase)) continue;
         const resume = item.operation.resume;
         if (resume) {
-          const previous = this.deps.store.entries<DeletionInbox>(`${RemoteDeletion.Inbox}${item.operation.operationId}:`, '', 200)
+          const previous = this.deps.store.scanEntries<DeletionInbox>(`${RemoteDeletion.Inbox}${item.operation.operationId}:`, { limit: 100 }).rows
+            .filter((row): row is { key: string; state: 'valid'; value: DeletionInbox } => row.state === 'valid' && !!row.value?.target && !!row.value.operation)
             .map(row => row.value).find(value => value.permit?.permitId === resume.previousPermitId && value.settlementReportId === resume.settlementReportId
               && value.localFenceId === resume.localFenceId && value.stopStatus && terminal.has(value.stopStatus)
               && payloadHash(value.target) === payloadHash(item.target) && payloadHash(value.operation.approvedGuard) === payloadHash(item.operation.approvedGuard));

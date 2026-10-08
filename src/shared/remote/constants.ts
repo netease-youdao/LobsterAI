@@ -42,6 +42,8 @@ export interface RemoteSyncTaskIssue {
 }
 export interface RemoteSyncHealth {
   admissionDeferred?: boolean;
+  /** Counts are lower bounds when the bounded health scan is incomplete. */
+  countsTruncated?: boolean;
   failedSessions?: number;
   retryingSessions?: number;
   isolatedSessions?: number;

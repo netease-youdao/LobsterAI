@@ -264,17 +264,25 @@ export class SessionCommandService {
       throw error;
     } finally { this.configurationLane.delete(sessionId); }
   }
+  private observeControl(sessionId: string, persist: () => void): void {
+    try { persist(); }
+    catch (error) {
+      // Do not interrupt the runtime's later listeners. An unpersisted control event is unknown, never completion.
+      this.observeRun(sessionId, 'reconciling');
+      console.warn('[SessionCommand] Control observation requires recovery', error);
+    }
+  }
   private startHandler: ((options: any) => Promise<any>) | null = null;
   private continueHandler: ((options: any) => Promise<any>) | null = null;
   constructor(private readonly store: CoworkStore, private readonly runtime: CoworkRuntime, private readonly getOwner: () => RemoteOwner | null,
     private readonly ownershipOptions: { gate?: OwnershipOperationGate; getGeneration?: () => number | string; onRecovered?: (sessionId: string) => void } = {}) {
-    runtime.on('sessionStatus', (id, status) => {
+    runtime.on('sessionStatus', (id, status) => this.observeControl(id, () => {
       if (status !== 'running' || !store.remote.db.prepare('SELECT 1 FROM cowork_sessions WHERE id=?').get(id)) return;
       // Anonymous tasks also need per-run approval identity; ownership still controls upload.
       const run = store.remote.run(id);
       if (!run || terminal.has(run.status)) store.remote.beginRun(id);
       store.remote.refreshApprovalRunState(id, true);
-    });
+    }));
     runtime.on(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, (id, gatewayRunId) => {
       try {
         const accepted = store.remote.run(id), mapping = store.remote.get<{ runId: string; remoteRunId: string }>(`gatewayRun:${id}`);
@@ -297,16 +305,16 @@ export class SessionCommandService {
       expire: now => runtime.expirePermissions?.(now),
       close: (sessionId, runId) => runtime.closeSessionPermissions?.(sessionId, runId, 'cancelled'),
     });
-    runtime.on('permissionRequest', (id, request) => this.permission(id, request));
-    runtime.on('permissionState', (id, state) => this.permissionState(id, state));
+    runtime.on('permissionRequest', (id, request) => this.observeControl(id, () => this.permission(id, request)));
+    runtime.on('permissionState', (id, state) => this.observeControl(id, () => this.permissionState(id, state)));
     // A legacy ID-only event proves neither the winning decision nor that the engine resumed.
-    runtime.on('permissionResolved', (id, requestId) => {
+    runtime.on('permissionResolved', (id, requestId) => this.observeControl(id, () => {
       const state = runtime.getPermissionState?.(requestId);
       if (state) this.permissionState(id, state);
       else store.remote.updateLocalApprovalBlocker(id, requestId, null, false);
-    });
+    }));
     // The runtime may have reconstructed dispatching -> unknown before these listeners existed.
-    for (const pending of runtime.listPendingPermissions?.() || []) this.permission(pending.sessionId, pending.request);
+    for (const pending of runtime.listPendingPermissions?.() || []) this.observeControl(pending.sessionId, () => this.permission(pending.sessionId, pending.request));
   }
   configure(start: (options: any) => Promise<any>, resume: (options: any) => Promise<any>): void { this.startHandler = start; this.continueHandler = resume; }
   async submit(options: any, create: boolean, handler: (options: any) => Promise<any>): Promise<any> {

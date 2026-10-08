@@ -231,6 +231,16 @@ it('finishes cleanup when the cache root or account directory is already absent'
   }
 });
 
+it('passes the remaining image frame byte allowance to the image converter before it writes PNG output', async () => {
+  const { deps, claim, attach } = fixture(); attach('image', RemoteInputIntent.Image);
+  const convertImage = vi.fn(async (_source: string, _mimeType: string, _target: string, maximumBytes: number): Promise<{ path: string; mimeType: string }> => {
+    expect(maximumBytes).toBe(Math.floor((29_500_000 - 64 * 1024) / 4) * 3);
+    throw new Error('INPUT_UNSUPPORTED');
+  });
+  const service = new InputPreparationService({ ...deps, convertImage });
+  await expect(service.prepare(owner, 'pc', claim, async () => new Response('image'), () => true)).rejects.toThrow();
+  expect(convertImage).toHaveBeenCalledOnce();
+});
 it('keeps a bounded desktop thumbnail for large mobile images without persisting original image bytes', async () => {
   const { deps, claim, attach } = fixture();
   const original = 'x'.repeat(600 * 1024); attach(original, RemoteInputIntent.Image);

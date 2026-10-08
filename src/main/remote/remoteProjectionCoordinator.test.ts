@@ -67,6 +67,68 @@ describe('desktop core and remote projection isolation', () => {
     expect(f.db.prepare('SELECT * FROM remote_dirty').all()).toEqual([]);
     expect(fs.readdirSync(path.join(f.directory, 'remote-projection-staging'))).toEqual([]);
   });
+  it('recovers an isolated task after real current-revision publication without waiting for an impossible cloud ACK', async () => {
+    const f = fixture(), tasks = new RemoteTaskSyncState(f.db);
+    const context = { owner, target: 'target', deviceId: 'desktop' };
+    f.store.setTaskProjectionEligibility(id => tasks.projectionEligible(context, id));
+    f.store.recordProjectionFailure('task', 'REMOTE_PROJECTION_BUDGET');
+    tasks.fail(context, 'task', { phase: 'isolated', scope: 'session', reason: 'REMOTE_PROJECTION_BUDGET' });
+    expect(tasks.projectionEligible(context, 'task')).toBe(false);
+    await f.store.flushProjections();
+    expect(f.db.prepare('SELECT * FROM remote_projection_failures').all()).toEqual([]);
+    expect(f.store.sync('task')!.ack_seq).toBe(0);
+    expect(f.db.prepare('SELECT clean_revision FROM remote_session_revisions WHERE session_id=?').get('task')).toEqual({ clean_revision: 0 });
+    expect(tasks.health(context)).toMatchObject({ failedSessions: 1, isolatedSessions: 1 });
+    tasks.reconcileProjectionFailures(context, () => true);
+    expect(tasks.get(context, 'task')!.phase).toBe('reconciling');
+    expect(f.store.sync('task')!.ack_seq).toBe(0);
+  });
+  it('does not inherit an old probe grant or publication result after the same task fails again', () => {
+    const f = fixture(), tasks = new RemoteTaskSyncState(f.db);
+    const context = { owner, target: 'target', deviceId: 'desktop' };
+    f.store.setTaskProjectionEligibility(id => tasks.projectionEligible(context, id));
+    f.store.recordProjectionFailure('task', 'REMOTE_PROJECTION_BUDGET');
+    tasks.fail(context, 'task', { phase: 'isolated', scope: 'session', reason: 'REMOTE_PROJECTION_BUDGET' });
+    expect(f.store.requestProjectionRecheck('task').accepted).toBe(true);
+    f.store.refreshProjectionHints(); const work = f.store.nextProjectionWork()!;
+    expect(work).toBeTruthy(); expect(tasks.projectionEligible(context, 'task')).toBe(true);
+    f.store.recordProjectionFailure('task', 'REMOTE_PROJECTION_BUDGET');
+    // Finite legacy retry timestamps and old recheck rows are not independent grants.
+    f.db.prepare('INSERT OR REPLACE INTO remote_projection_rechecks VALUES(?,?)').run('task', 0);
+    f.db.prepare('UPDATE remote_projection_failures SET retry_at=0 WHERE session_id=?').run('task');
+    expect(tasks.projectionEligible(context, 'task')).toBe(false);
+    f.store.finishProjection(work, f.store.projectionRevision('task'));
+    expect(f.db.prepare('SELECT reason FROM remote_projection_failures WHERE session_id=?').get('task')).toBeTruthy();
+    expect(f.store.requestProjectionRecheck('task').accepted).toBe(true);
+    expect(tasks.projectionEligible(context, 'task')).toBe(true);
+    f.db.prepare('UPDATE remote_sync SET sync_environment=? WHERE local_id=?').run('other-target', 'task');
+    expect(tasks.projectionEligible(context, 'task')).toBe(false);
+  });
+  it('retains the failure when a real publication becomes stale and recovers only after publishing the latest revision', async () => {
+    const f = fixture(), tasks = new RemoteTaskSyncState(f.db);
+    const context = { owner, target: 'target', deviceId: 'desktop' };
+    f.store.setTaskProjectionEligibility(id => tasks.projectionEligible(context, id));
+    f.store.recordProjectionFailure('task', 'REMOTE_PROJECTION_BUDGET');
+    tasks.fail(context, 'task', { phase: 'isolated', scope: 'session', reason: 'REMOTE_PROJECTION_BUDGET' });
+    const current = f.store.projectionWorkCurrent.bind(f.store); let changed = false;
+    vi.spyOn(f.store, 'projectionWorkCurrent').mockImplementation(work => {
+      if (!changed && f.store.projectionPublishing('task')) {
+        changed = true;
+        f.store.transaction(() => f.db.prepare("UPDATE cowork_messages SET content='Newer' WHERE id='message'").run());
+      }
+      return current(work);
+    });
+    await f.store.flushProjections();
+    expect(changed).toBe(true);
+    expect(f.db.prepare('SELECT reason FROM remote_projection_failures WHERE session_id=?').get('task')).toBeTruthy();
+    tasks.reconcileProjectionFailures(context, () => true);
+    expect(tasks.get(context, 'task')!.phase).toBe('isolated');
+    await f.store.flushProjections();
+    expect(f.store.snapshot('task').records.find(row => row.payload.message)?.payload.message.blocks[0].text).toBe('Newer');
+    expect(f.db.prepare('SELECT * FROM remote_projection_failures').all()).toEqual([]);
+    tasks.reconcileProjectionFailures(context, () => true);
+    expect(tasks.get(context, 'task')!.phase).toBe('reconciling');
+  });
   it('finishes an admitted publication when only the next scheduling deadline changes', async () => {
     const f = fixture(), taskSync = new RemoteTaskSyncState(f.db);
     const context = { owner, target: 'target', deviceId: 'desktop' };

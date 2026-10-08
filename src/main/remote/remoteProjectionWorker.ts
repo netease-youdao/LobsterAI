@@ -7,10 +7,12 @@ import { parentPort, workerData } from 'worker_threads';
 import type { RemoteAgentSummary, RemoteOwner } from '../../shared/remote/constants';
 import { sameOwner } from './canonical';
 import { type ArtifactProjectionJob,projectRemoteArtifacts } from './remoteArtifactProjection';
+import { remoteQuestionEvidenceDigest } from './remoteQuestionEvidence';
 import { RemoteStore } from './remoteStore';
 
 export interface ProjectionWork {
   database: string; target: string; sessionId: string; owner: RemoteOwner; deviceId: string; environment: string | null;
+  questionEvidenceDigest?: string;
   deletions?: boolean; agent: RemoteAgentSummary | null; approval: boolean; questions: boolean; input: boolean; files: boolean; reply: boolean;
 }
 /** Runs only in a worker: consistent source read, bounded disk materialization, then projection. */
@@ -59,7 +61,9 @@ function materialize(work: ProjectionWork): { revision: number; sourceSeq: numbe
         copy('remote_object_state', 'SELECT * FROM remote_object_state WHERE session_id=?', [work.sessionId]);
         for (const table of ['remote_projection', 'remote_outbox', 'remote_reply_contents', 'remote_reply_chunks']) copy(table, `SELECT * FROM ${table} WHERE session_id=?`, [work.sessionId]);
         copy('remote_state', 'SELECT * FROM remote_state WHERE key LIKE ? OR key LIKE ?', [`%:${work.sessionId}`, `%:${work.sessionId}:%`]);
-        if (source.prepare("SELECT 1 FROM remote_state WHERE key LIKE 'questionDecision:%' AND NOT json_valid(value) LIMIT 1").get()) throw new Error('REMOTE_QUESTION_EVIDENCE_UNAVAILABLE');
+        if (work.questionEvidenceDigest) {
+          if (remoteQuestionEvidenceDigest(source) !== work.questionEvidenceDigest) throw new Error('REMOTE_PROJECTION_CONTEXT_CHANGED');
+        } else if (source.prepare("SELECT 1 FROM remote_state WHERE key LIKE 'questionDecision:%' AND NOT json_valid(value) LIMIT 1").get()) throw new Error('REMOTE_QUESTION_EVIDENCE_UNAVAILABLE');
         copy('remote_state', "SELECT * FROM remote_state WHERE key LIKE 'questionDecision:%' AND CASE WHEN json_valid(value) THEN json_extract(value,'$.state.sessionId') END=?", [work.sessionId]);
         const runIds = new Set<string>();
         const messageIds: string[] = [];

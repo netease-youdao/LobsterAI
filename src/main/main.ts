@@ -5825,10 +5825,12 @@ if (!gotTheLock) {
         const jpeg = thumbnail.toJPEG(70);
         return { mimeType: 'image/jpeg', base64Data: jpeg.toString('base64') };
       },
-      convertImage: async (filePath, _mimeType, targetPath) => {
+      convertImage: async (filePath, _mimeType, targetPath, maximumBytes) => {
         const decoded = nativeImage.createFromPath(filePath);
         if (decoded.isEmpty()) throw new Error('INPUT_UNSUPPORTED');
-        await fs.promises.writeFile(targetPath, decoded.toPNG(), { flag: 'wx', mode: 0o600 });
+        const encoded = decoded.toPNG();
+        if (encoded.byteLength > maximumBytes) throw new Error('INPUT_UNSUPPORTED');
+        await fs.promises.writeFile(targetPath, encoded, { flag: 'wx', mode: 0o600 });
         return { path: targetPath, mimeType: 'image/png' };
       },
     });
@@ -5951,30 +5953,10 @@ if (!gotTheLock) {
     if (typeof requestId !== 'string' || !['approve', 'deny'].includes(decision)) throw new Error('Invalid access decision');
     return initializeRemoteBridge().decide(requestId, decision).then(() => remoteSettingsController?.state() ?? readRemoteState());
   });
-  const initializeRemoteControl = (): void => {
-    try {
-      remoteTelemetryRuntime = initializeRemoteTelemetry({
-        store: getStore(), reporter: getMainLogReporter(), appVersion: app.getVersion(),
-        directory: path.join(app.getPath('userData'), 'remote-telemetry'),
-        getOwner: getCurrentRemoteOwner, getRoute: getServerApiBaseUrl,
-        getTarget: () => remoteBridge?.telemetryIdentity() ?? {},
-        fetch: async (url, signal) => {
-          const response = await session.defaultSession.fetch(url, { method: 'GET', signal, credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer' });
-          const result = { ok: response.ok, status: response.status, retryAfter: response.headers.get('Retry-After') };
-          await response.body?.cancel();
-          return result;
-        },
-      });
-    } catch { /* Diagnostics cannot prevent desktop or remote initialization. */ }
+  const initializeSessionExecutionCore = (): void => {
     // Store-backed services and listeners must wait for initApp's database initialization.
     getCoworkStore().remoteCreationOwner = getCurrentRemoteOwner;
     getSessionDeletionService();
-    try {
-      remoteLocalGc ??= new RemoteLocalGc({ store: getCoworkStore().remote,
-        cacheRoot: path.join(app.getPath('userData'), 'remote-file-uploads'), inputCacheRoot: path.join(app.getPath('userData'), 'remote-inputs'), owner: getCurrentRemoteOwner,
-        enabled: () => !getCoworkStore().remote.needsSecurityRecovery() });
-      remoteLocalGc.start();
-    } catch { console.warn('[RemoteGc] Background cache maintenance unavailable'); }
     remoteSessionCommands = new SessionCommandService(getCoworkStore(), getCoworkEngineRouter(), getCurrentRemoteOwner,
       { getGeneration: () => `${ownershipAccountEpoch}:${authAccountGeneration}`, onRecovered: sessionId => {
         if (!getCoworkStore().canReadSession(sessionId, getCurrentRemoteOwner())) return;
@@ -6010,22 +5992,6 @@ if (!gotTheLock) {
         });
       },
     });
-    remoteSettingsController = new RemoteSettingsController({
-      getRemoteState: readRemoteState,
-      getOwner: getCurrentRemoteOwner,
-      getAccountEpoch: getRemoteAccountEpoch,
-      getKeepAwakePreference: () => getStore().get<boolean>(PREVENT_SLEEP_STORE_KEY),
-      saveKeepAwakePreference: enabled => getStore().set(PREVENT_SLEEP_STORE_KEY, enabled),
-      applyKeepAwake: setPreventSleepBlockerEnabled,
-      isKeepAwakeActive: () => preventSleepBlockerId !== null && powerSaveBlocker.isStarted(preventSleepBlockerId),
-      publish: state => {
-        remoteTelemetryRuntime?.refresh(state);
-        for (const window of BrowserWindow.getAllWindows()) {
-          if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(RemoteIpc.Changed, state);
-        }
-      },
-    });
-    remoteSettingsController.restoreKeepAwake();
     const accountFenceKey = 'remote_account_execution_fence';
     let fenceGeneration = 0;
     let fenceRetry: ReturnType<typeof setTimeout> | undefined;
@@ -6062,7 +6028,6 @@ if (!gotTheLock) {
       const saved = getStore().get<{ version: number; phase: string; ownerHash: string }>(accountFenceKey);
       if (saved !== undefined && saved !== null && (saved.version !== 1 || saved.phase !== 'ready' || saved.ownerHash !== payloadHash(previousRemoteOwner))) queueAccountFence(previousRemoteOwner);
     } catch { queueAccountFence(previousRemoteOwner); }
-    try { initializeRemoteBridge(); } catch { remoteDiagnosticLog('remote.record.quarantined', { lane: 'transport', reason: 'DEPENDENCY_UNAVAILABLE' }, 'warn'); }
     for (const key of ['auth_tokens', LogReporterStoreKey.AuthUser, 'enterprise_account_context']) {
       getStore().onCriticalChange(key, () => {
         const next = getCurrentRemoteOwner();
@@ -6078,9 +6043,52 @@ if (!gotTheLock) {
         catch (error) { console.warn('[RemoteAccount] Task cleanup requires recovery', error); }
         try { remoteBridge?.accountChanged(); }
         catch (error) { console.warn('[RemoteAccount] Optional bridge notification failed', error); }
-        remoteSettingsController?.restoreKeepAwake();
+        try { remoteSettingsController?.restoreKeepAwake(); }
+        catch (error) { console.warn('[RemoteSettings] Optional account notification failed', error); }
       });
     }
+  };
+
+  const initializeRemoteControl = (): void => {
+    try {
+      remoteTelemetryRuntime = initializeRemoteTelemetry({
+        store: getStore(), reporter: getMainLogReporter(), appVersion: app.getVersion(),
+        directory: path.join(app.getPath('userData'), 'remote-telemetry'),
+        getOwner: getCurrentRemoteOwner, getRoute: getServerApiBaseUrl,
+        getTarget: () => remoteBridge?.telemetryIdentity() ?? {},
+        fetch: async (url, signal) => {
+          const response = await session.defaultSession.fetch(url, { method: 'GET', signal, credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer' });
+          const result = { ok: response.ok, status: response.status, retryAfter: response.headers.get('Retry-After') };
+          await response.body?.cancel();
+          return result;
+        },
+      });
+    } catch { /* Diagnostics cannot prevent desktop or remote initialization. */ }
+    try {
+      remoteLocalGc ??= new RemoteLocalGc({ store: getCoworkStore().remote,
+        cacheRoot: path.join(app.getPath('userData'), 'remote-file-uploads'), inputCacheRoot: path.join(app.getPath('userData'), 'remote-inputs'), owner: getCurrentRemoteOwner,
+        enabled: () => !getCoworkStore().remote.needsSecurityRecovery() });
+      remoteLocalGc.start();
+    } catch { console.warn('[RemoteGc] Background cache maintenance unavailable'); }
+    try {
+      remoteSettingsController = new RemoteSettingsController({
+        getRemoteState: readRemoteState,
+        getOwner: getCurrentRemoteOwner,
+        getAccountEpoch: getRemoteAccountEpoch,
+        getKeepAwakePreference: () => getStore().get<boolean>(PREVENT_SLEEP_STORE_KEY),
+        saveKeepAwakePreference: enabled => getStore().set(PREVENT_SLEEP_STORE_KEY, enabled),
+        applyKeepAwake: setPreventSleepBlockerEnabled,
+        isKeepAwakeActive: () => preventSleepBlockerId !== null && powerSaveBlocker.isStarted(preventSleepBlockerId),
+        publish: state => {
+          remoteTelemetryRuntime?.refresh(state);
+          for (const window of BrowserWindow.getAllWindows()) {
+            if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(RemoteIpc.Changed, state);
+          }
+        },
+      });
+      remoteSettingsController.restoreKeepAwake();
+    } catch (error) { console.warn('[RemoteSettings] Optional settings initialization failed', error); }
+    try { initializeRemoteBridge(); } catch { remoteDiagnosticLog('remote.record.quarantined', { lane: 'transport', reason: 'DEPENDENCY_UNAVAILABLE' }, 'warn'); }
   };
 
   registerOwnershipHandlers(() => ownershipAssociations);
@@ -15323,6 +15331,7 @@ if (!gotTheLock) {
 
     initializeKeyfromAttribution(store);
     refreshEndpointsTestMode(store);
+    initializeSessionExecutionCore();
     initializeRemoteControl();
     sqliteBackupManager = new SqliteBackupManager(app.getPath('userData'));
 

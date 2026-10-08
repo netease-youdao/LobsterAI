@@ -204,6 +204,15 @@ describe('availability-first control and current messages', () => {
     const latest = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections').at(-1)![2];
     expect(latest.publicationId).not.toBe(initial.publicationId); expect(latest.sourceObjectRevision).toBe('2');
   });
+  it.each(['BUSY', 'BUDGET', 'CONTEXT_CHANGED', 'WORKER_EXIT'])('retries a transient encoder %s without persisting a corrupt-object fault', async reason => {
+    const f = fixture(); await f.controls();
+    vi.spyOn((f.publisher as any).encoder, 'project').mockRejectedValueOnce(new Error(`REMOTE_LIVE_ENCODER_${reason}`));
+    await f.live();
+    expect(f.publisher.ledger.db.prepare('SELECT * FROM availability_faults').all()).toEqual([]);
+    const now = Date.now(); vi.spyOn(Date, 'now').mockReturnValue(now + 600000);
+    await f.live();
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections' && call[2].objectId === 'message')).toBe(true);
+  });
   it('keeps deterministic rejection local to one display object', async () => {
     const f = fixture();
     f.store.transaction(() => f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,3,2)').run('bad', 'local', 'assistant', 'bad', '{'));

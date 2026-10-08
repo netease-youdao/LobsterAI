@@ -64,6 +64,17 @@ function fixture(localEnvironment = environment, serviceScope = localEnvironment
 }
 
 describe('bidirectional session deletion control lane', () => {
+  it('preserves corrupt pending and inbox records without starving a healthy new claim', async () => {
+    const f = fixture();
+    const badPending = `${RemoteDeletion.Pending}${RemoteDeletion.Inbox}bad:1:claim`;
+    f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run(badPending, '{');
+    f.store.put(`${RemoteDeletion.Pending}${RemoteDeletion.Inbox}broken:1:claim`, { key: `${RemoteDeletion.Inbox}broken:1:claim` });
+    f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run(`${RemoteDeletion.Inbox}broken:1:claim`, '{');
+    await f.client.poll(true, true);
+    expect(f.exists()).toBe(false);
+    expect(f.db.prepare('SELECT value FROM remote_state WHERE key=?').get(badPending)).toEqual({ value: '{' });
+    expect(f.store.entries('deletionScanFault:')).toHaveLength(2);
+  });
   it('keeps an unadmitted task intact without asking for a deletion permit', async () => {
     const f = fixture(); f.active(); f.store.setTaskAdmission(() => false);
     await f.client.poll(true, true);

@@ -18,8 +18,10 @@ import { samePersistedRemoteEnvironment } from './remoteEnvironmentMigration';
 import { RemoteHistoryStore } from './remoteHistoryStore';
 import { acknowledgeRemoteSessionDeletion } from './remoteLocalGc';
 import { RemoteProjectionCoordinator } from './remoteProjectionCoordinator';
+import { finishProjectionFault, grantProjectionProbe, initializeProjectionFaults, projectionFault, recordProjectionFault } from './remoteProjectionFaults';
 import { initializeRemoteProjectionSchema } from './remoteProjectionSchema';
 import type { ProjectionWork } from './remoteProjectionWorker';
+import { type QuestionEvidenceAuthenticator,RemoteQuestionEvidence, remoteQuestionEvidenceDigest } from './remoteQuestionEvidence';
 import { isPublicReplyMessage, redactReplyText,replyAppendDelta, replyBlockId, replyBlocks, replyChunks, replyToolState } from './remoteReplyProjection';
 import { RemoteSyncStateError, retentionEventId, retentionSequence, safeSourceSequence } from './remoteRetention';
 import type { RemoteSecurityCommit } from './remoteSecurityJournal';
@@ -71,6 +73,7 @@ const desktopInputReason = (job: { reason?: unknown; snapshot?: unknown }, captu
 /** Native SQLite transactions commit synchronously; no deferred persistence is allowed here. */
 export class RemoteStore {
   readonly history: RemoteHistoryStore;
+  readonly questionEvidence: RemoteQuestionEvidence;
   private controlAdmission: (() => boolean) | null = null;
   private independentControlReady: ((sessionId: string) => boolean) | null = null;
   setIndependentControlReady(check: (sessionId: string) => boolean): void { this.independentControlReady = check; }
@@ -80,6 +83,7 @@ export class RemoteStore {
   private taskAdmission: ((id: string) => boolean) | null = null;
   private taskProjectionEligibility: ((id: string) => boolean) | null = null;
   private projectionCandidateOffset = 0;
+  private readonly projectionFaultEpochs = new WeakMap<ProjectionWork, string | null>();
   setControlAdmission(check: () => boolean): void { this.controlAdmission = check; }
   areControlsAdmitted(): boolean { try { return this.controlAdmission?.() ?? true; } catch { return false; } }
   setTaskAdmission(check: (id: string) => boolean): void { this.taskAdmission = check; }
@@ -91,7 +95,7 @@ export class RemoteStore {
   private securityRecoveryRequired = false;
   private ownershipSigner: ((sessionId: string, userId: string, scopeKey: string, operationId: string) => string) | null = null;
   setSecurityRecoveryRequired(required: boolean): void {
-    this.securityRecoveryRequired = required || this.hasUnclassifiedRunCorruption();
+    this.securityRecoveryRequired = required || this.hasUnclassifiedRunCorruption() || !this.questionEvidence.healthy();
   }
   private hasUnclassifiedRunCorruption(): boolean {
     for (const row of this.db.prepare("SELECT key,value FROM remote_corrupt_state WHERE key LIKE 'run:%'").iterate() as Iterable<{ key: string; value: string }>) {
@@ -139,11 +143,19 @@ export class RemoteStore {
   setOwnershipSigner(signer: NonNullable<RemoteStore['ownershipSigner']>): void { this.ownershipSigner = signer; }
   private signOwnership(sessionId: string, owner: RemoteOwner): void {
     const operationId = randomUUID();
-    if (!this.ownershipSigner) {
-      this.db.prepare('INSERT OR REPLACE INTO remote_ownership_pending VALUES (?,?,?,?,?)').run(sessionId, owner.userId, owner.scopeKey, operationId, this.get<string>('databaseInstance'));
-      return;
+    if (this.ownershipSigner) {
+      try {
+        const signature = this.ownershipSigner(sessionId, owner.userId, owner.scopeKey, operationId);
+        this.put(`ownershipProof:${sessionId}`, { operationId, signature });
+        return;
+      } catch (error) {
+        // The authenticated local owner is core data. An unavailable remote signer cannot discard it.
+        console.warn('[RemoteSecurity] Ownership signing deferred', error);
+      }
     }
-    this.put(`ownershipProof:${sessionId}`, { operationId, signature: this.ownershipSigner(sessionId, owner.userId, owner.scopeKey, operationId) });
+    let databaseId: string | null = null;
+    try { databaseId = this.get<string>('databaseInstance'); } catch { /* Preserve invalid installation evidence for remote recovery. */ }
+    this.db.prepare('INSERT OR REPLACE INTO remote_ownership_pending VALUES (?,?,?,?,?)').run(sessionId, owner.userId, owner.scopeKey, operationId, databaseId);
   }
   private readonly dispatchBootId = randomUUID();
   private recoveringRuns = false;
@@ -210,6 +222,7 @@ export class RemoteStore {
       source_purge_seq: "TEXT NOT NULL DEFAULT '0'", event_purge_seq: "TEXT NOT NULL DEFAULT '0'", migration_frozen: 'INTEGER NOT NULL DEFAULT 0' })) {
       if (!syncColumns.has(name)) db.exec(`ALTER TABLE remote_sync ADD COLUMN ${name} ${declaration}`);
     }
+    this.questionEvidence = new RemoteQuestionEvidence(this);
     initializeAvailabilitySource(db);
     this.replyProjectionSupported = this.get<boolean>('replyProjectionMode') === true;
     this.questionProjectionSupported = this.get<boolean>('questionProjectionMode:default') === true;
@@ -246,7 +259,10 @@ export class RemoteStore {
           ON CONFLICT(session_id) DO UPDATE SET revision=revision+1; END;`);
       }
     })();
-    if (!options.deferSynchronization) this.initializeSynchronization();
+    if (!options.deferSynchronization) {
+      try { this.initializeSynchronization(); }
+      catch (error) { console.warn('[RemoteSync] Optional synchronization initialization deferred', error); }
+    }
     db.prepare('UPDATE remote_write_context SET trusted=0 WHERE id=1').run();
     // Large histories are reconciled in bounded pages after the shell can start.
     if (options.restoreRuns !== false) {
@@ -273,11 +289,14 @@ export class RemoteStore {
   private readonly messageBindings = new Map<string, { runId: string; commandId: string | null; owner: RemoteOwner | null }>();
   initializeSynchronization(): void {
     if (this.synchronizationReady) return;
-    initializeAvailabilityProjectionSources(this.db);
-    initializeRemoteProjectionSchema(this.db);
-    this.db.exec('CREATE TABLE IF NOT EXISTS remote_projection_worker_budget(session_id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,attempts INTEGER NOT NULL,window_start INTEGER NOT NULL,next_retry INTEGER NOT NULL)');
-    if ((this.db.prepare("SELECT type FROM sqlite_master WHERE name='remote_projection_worker_budget'").get() as { type: string } | undefined)?.type !== 'table') throw new Error('REMOTE_PROJECTION_SCHEMA_INVALID');
-    if (this.options.deferredProjection && this.options.restoreRuns !== false) this.projector ??= new RemoteProjectionCoordinator(this, this.options.projectionWorkerPath);
+    this.db.transaction(() => {
+      initializeAvailabilityProjectionSources(this.db);
+      initializeRemoteProjectionSchema(this.db);
+      initializeProjectionFaults(this.db);
+      this.db.exec('CREATE TABLE IF NOT EXISTS remote_projection_worker_budget(session_id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,attempts INTEGER NOT NULL,window_start INTEGER NOT NULL,next_retry INTEGER NOT NULL)');
+      if ((this.db.prepare("SELECT type FROM sqlite_master WHERE name='remote_projection_worker_budget'").get() as { type: string } | undefined)?.type !== 'table') throw new Error('REMOTE_PROJECTION_SCHEMA_INVALID');
+      if (this.options.deferredProjection && this.options.restoreRuns !== false) this.projector ??= new RemoteProjectionCoordinator(this, this.options.projectionWorkerPath);
+    })();
     this.synchronizationReady = true;
   }
   /** Rebuild only scheduling hints from atomic revisions. No ACK or immutable request is changed. */
@@ -349,6 +368,7 @@ export class RemoteStore {
     }
     if (!this.sync(sessionId) || this.isSyncClosed(sessionId)) return { accepted: false, reason: 'REMOTE_PROJECTION_NOT_READY' };
     this.db.transaction(() => {
+      grantProjectionProbe(this.db, sessionId);
       this.db.prepare('UPDATE remote_projection_failures SET retry_at=? WHERE session_id=?').run(Date.now(), sessionId);
       this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(sessionId);
     })();
@@ -365,10 +385,11 @@ export class RemoteStore {
     this.enabledOwner = work.owner; this.approvalProjectionSupported = work.approval; this.questionProjectionSupported = work.questions; this.inputProjectionSupported = work.input;
     this.fileProjectionSupported = work.files; this.replyProjectionSupported = work.reply; this.fileEnvironment = work.environment; this.deletionProjectionSupported = work.deletions === true;
   }
-  private questionEvidenceHealthy(): boolean {
-    const corrupt = this.db.prepare("SELECT 1 FROM remote_state WHERE key LIKE 'questionDecision:%' AND NOT json_valid(value) LIMIT 1").get();
-    if (corrupt) this.securityRecoveryRequired = true;
-    return !corrupt;
+  configureQuestionEvidence(authenticator: QuestionEvidenceAuthenticator): void { this.questionEvidence.configure(authenticator); }
+  questionEvidenceHealthy(sessionId?: string, currentRunId?: string): boolean {
+    const healthy = this.questionEvidence.healthy(sessionId, currentRunId);
+    if (!healthy) this.securityRecoveryRequired = true;
+    return healthy;
   }
   nextProjectionWork(): ProjectionWork | null {
     if (!this.questionEvidenceHealthy()) return null;
@@ -411,18 +432,19 @@ export class RemoteStore {
           })();
         }
         if (this.deletionProjectionSupported) this.deletionGuard(id);
-        const work: ProjectionWork = { database: this.db.name, target: '', sessionId: id, owner: { ...this.enabledOwner },
+        if (!this.questionEvidenceHealthy(id)) return null;
+        const work: ProjectionWork = { questionEvidenceDigest: remoteQuestionEvidenceDigest(this.db), database: this.db.name, target: '', sessionId: id, owner: { ...this.enabledOwner },
           deviceId: this.projectionIdentity?.deviceId || sync.device_id, environment: this.fileEnvironment || this.projectionIdentity?.environment || null,
           agent: this.agentSummary?.(id, this.enabledOwner) || null, approval: this.approvalProjectionSupported, questions: this.questionProjectionSupported,
           input: this.inputProjectionSupported, files: this.fileProjectionSupported, reply: this.replyProjectionSupported, deletions: this.deletionProjectionSupported };
         this.projectionTargetContexts.set(work, stableJson(activeRemoteSyncTargetContext(this, work.owner)));
+        this.projectionFaultEpochs.set(work, projectionFault(this.db, id)?.epoch ?? null);
         this.projectionCandidateOffset = 0;
         return work;
       } catch (error) {
         if (typeof (error as { code?: unknown })?.code === 'string' && /^SQLITE_(?:CORRUPT|NOTADB|FULL|IOERR)/u.test(String((error as { code: string }).code))) throw error;
         const reason = publication ? 'REMOTE_PROJECTION_PUBLICATION_INVALID' : error instanceof Error ? error.message : 'REMOTE_PROJECTION_FAILED';
         this.recordProjectionFailure(id, reason);
-        if (publication) this.db.prepare('UPDATE remote_projection_failures SET retry_at=? WHERE session_id=?').run(Number.MAX_SAFE_INTEGER, id);
         // The history lane reports the failure for this task, even if the interrupted
         // publisher crashed after removing its former dirty marker.
         this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(id);
@@ -433,7 +455,8 @@ export class RemoteStore {
     return null;
   }
   projectionWorkCurrent(work: ProjectionWork): boolean {
-    return (!this.projectionTargetContexts.has(work) || this.projectionTargetContexts.get(work) === stableJson(activeRemoteSyncTargetContext(this, work.owner)))
+    return (!this.projectionFaultEpochs.has(work) || this.projectionFaultEpochs.get(work) === (projectionFault(this.db, work.sessionId)?.epoch ?? null))
+      && (!this.projectionTargetContexts.has(work) || this.projectionTargetContexts.get(work) === stableJson(activeRemoteSyncTargetContext(this, work.owner)))
       && this.canProjectTask(work.sessionId) && !this.isSyncClosed(work.sessionId) && sameOwner(work.owner, this.enabledOwner) && sameOwner(this.owner(work.sessionId), work.owner)
       && work.approval === this.approvalProjectionSupported && work.questions === this.questionProjectionSupported && work.input === this.inputProjectionSupported
       && work.files === this.fileProjectionSupported && work.reply === this.replyProjectionSupported && (work.deletions === true) === this.deletionProjectionSupported
@@ -449,8 +472,11 @@ export class RemoteStore {
     } catch (error) { this.recordProjectionFailure(sessionId, error instanceof Error ? error.message : 'REMOTE_PROJECTION_FAILED'); }
   }
   recordProjectionFailure(sessionId: string, reason: string): void {
-    this.db.prepare('INSERT OR REPLACE INTO remote_projection_failures VALUES (?,?,?,?)')
-      .run(sessionId, reason, reason === 'REMOTE_PROJECTION_BUDGET' ? Number.MAX_SAFE_INTEGER : Date.now() + 30_000, this.projectionRevision(sessionId));
+    recordProjectionFault(this.db, sessionId, reason, this.projectionRevision(sessionId),
+      ['REMOTE_PROJECTION_BUDGET', 'REMOTE_PROJECTION_PUBLICATION_INVALID'].includes(reason) ? Number.MAX_SAFE_INTEGER : Date.now() + 30_000);
+  }
+  finishProjection(work: ProjectionWork, revision: number): void {
+    finishProjectionFault(this.db, work.sessionId, revision, this.projectionFaultEpochs.get(work) ?? null);
   }
   retainObjectIdentity(sessionId: string, row: { object_key: string; revision: number; record_json: string }): void {
     const record = JSON.parse(row.record_json) as ProjectionRecord;
@@ -580,7 +606,7 @@ export class RemoteStore {
   questionStates(sessionId: string, currentRunId?: string, questionIds?: readonly string[]): RemoteQuestionState[] {
     if (questionIds && (questionIds.length > 64 || questionIds.some(id => typeof id !== 'string' || !id))) throw new Error('REMOTE_QUESTION_SELECTION_INVALID');
     if (questionIds?.length === 0) return [];
-    this.questionEvidenceHealthy();
+    this.questionEvidenceHealthy(sessionId, currentRunId);
     let selectedBytes = 0;
     const selectedQuestion = (id: string): RemoteQuestionState | null => {
       const row = this.db.prepare('SELECT CASE WHEN length(CAST(value AS BLOB))<=32768 THEN value END AS value,length(CAST(value AS BLOB)) AS bytes FROM remote_state WHERE key=?')
@@ -594,16 +620,20 @@ export class RemoteStore {
       : currentRunId ? this.currentDecisionValues<RemoteQuestionState>(`question:${sessionId}:`, sessionId, currentRunId)
         : this.entries<RemoteQuestionState>(`question:${sessionId}:`).map(row => row.value);
     const values = new Map(projected.map(value => [value.questionId, value]));
-    const selection = questionIds ? ` AND CASE WHEN json_valid(value) THEN json_extract(value,'$.state.questionId') END IN (${questionIds.map(() => '?').join(',')})` : '';
-    const facts = this.db.prepare(`SELECT ${questionIds ? 'CASE WHEN length(CAST(value AS BLOB))<=32768 THEN value END' : 'value'} AS value,
-      length(CAST(value AS BLOB)) AS bytes FROM remote_state WHERE key>='questionDecision:' AND key<'questionDecision;'
-      AND CASE WHEN json_valid(value) THEN json_extract(value,'$.state.sessionId') END=?${selection}${questionIds ? ' LIMIT 65' : ''}`)
-      .all(sessionId, ...(questionIds || [])) as Array<{ value: string | null; bytes: number }>;
+    const selection = questionIds ? ` AND CASE WHEN json_valid(s.value) THEN json_extract(s.value,'$.state.questionId') END IN (${questionIds.map(() => '?').join(',')})` : '';
+    const facts = this.db.prepare(`SELECT s.key,CASE WHEN octet_length(s.value)<=32768 THEN s.value END AS value,
+      octet_length(s.value) AS bytes FROM remote_state s
+      WHERE s.key>='questionDecision:' AND s.key<'questionDecision;'
+      AND (CASE WHEN json_valid(s.value) THEN json_extract(s.value,'$.state.sessionId') END=? OR s.key IN (SELECT value FROM json_each(?)))${selection}${questionIds ? ' LIMIT 65' : ''}`)
+      .all(sessionId, JSON.stringify(this.questionEvidence.sessionKeys(sessionId)), ...(questionIds || [])) as Array<{ key: string; value: string | null; bytes: number }>;
     if (questionIds && (facts.length > 64 || facts.some(row => row.value === null)
       || facts.reduce((sum, row) => sum + row.bytes, selectedBytes) > 1024 * 1024)) throw new Error('REMOTE_CONTROL_DECISION_BUDGET');
     for (const row of facts) {
+      if (this.questionEvidence.skip(row.key, sessionId, currentRunId)) continue;
       if (row.value === null) throw new Error('REMOTE_CONTROL_DECISION_BUDGET');
-      const { state, binding } = JSON.parse(row.value) as { state: LocalQuestionState; binding: { owner: RemoteOwner | null } };
+      const value = JSON.parse(row.value);
+      this.questionEvidence.verifyValue(row.key, value);
+      const { state, binding } = value as { state: LocalQuestionState; binding: { owner: RemoteOwner | null } };
       if (currentRunId && state.runId !== currentRunId) continue;
       const owner = this.owner(sessionId);
       if (!binding || (binding.owner !== null || owner !== null) && !sameOwner(binding.owner, owner)) { values.delete(state.questionId); continue; }
@@ -726,7 +756,7 @@ export class RemoteStore {
     }
   }
   put(key: string, value: unknown): void {
-    if (this.depth === 0 && (this.advanceCheckpoint || /^(approval|question|localApprovalBlocker):/u.test(key))) { this.transaction(() => this.put(key, value)); return; }
+    if (this.depth === 0 && (this.advanceCheckpoint || /^(approval|question|questionDecision|localApprovalBlocker):/u.test(key))) { this.transaction(() => this.put(key, value)); return; }
     const parts = key.split(':');
     if (parts[0] === 'run' && parts[1] && this.messageBindings.get(parts[1])?.runId !== (value as RemoteRun)?.runId) this.messageBindings.delete(parts[1]);
     if (parts[1] && ['deletionGuard', 'run', 'runHistory', 'control', 'approval', 'question', 'localApprovalBlocker', 'inputModel', 'inputVersion', 'inputSignature'].includes(parts[0])) {
@@ -750,6 +780,7 @@ export class RemoteStore {
       if (id) markAvailabilityControl(this.db, parts[1], `${type}:${id}`);
     }
     if (parts[0] === 'questionDecision') {
+      this.questionEvidence.record(key, value);
       const sessionId = (value as { state?: { sessionId?: string } }).state?.sessionId;
       if (sessionId) { this.touchProjection(sessionId); touchAvailabilityControl(this.db, sessionId); this.markProjectionDirty(sessionId); }
     }

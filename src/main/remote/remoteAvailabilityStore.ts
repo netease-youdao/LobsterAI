@@ -23,6 +23,9 @@ export type AvailabilityRequestRow = { key: string; localId: string; objectId: s
 class AvailabilityRecordError extends Error {
   constructor() { super('REMOTE_AVAILABILITY_RECORD_INVALID'); }
 }
+// Archived evidence has its own bounded allowance; every admitted request reserves a terminal receipt.
+const RECEIPT_RESERVE_BYTES = 64 * 1024;
+const LEDGER_REQUEST_BYTES = 256 * 1024 * 1024;
 const record = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
 const identifier = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(value);
 function decode(body: string): Record<string, any> {
@@ -86,6 +89,28 @@ export class RemoteAvailabilityStore {
           database!.prepare('UPDATE availability_requests SET object_id=?,object_kind=?,request_hash=? WHERE key=?')
               .run(identifier(content.objectId) ? content.objectId : null, ['message','tool'].includes(content.objectKind) ? content.objectKind : null,
                 payloadHash(saved), row.key);
+        }
+      })();
+      const usageExists = database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='availability_usage'").get();
+      database.transaction(() => {
+        database!.exec(`CREATE TABLE IF NOT EXISTS availability_usage(lane TEXT NOT NULL,scope TEXT NOT NULL,local_id TEXT NOT NULL,
+          active_bytes INTEGER NOT NULL,archive_bytes INTEGER NOT NULL,reserved_bytes INTEGER NOT NULL,PRIMARY KEY(lane,scope,local_id));`);
+        const usage = (alias: string): string[] => {
+          const bytes = `length(CAST(${alias}.body AS BLOB))+COALESCE(length(CAST(${alias}.resolution_body AS BLOB)),0)`;
+          return [`CASE WHEN ${alias}.resolution_receipt IS NULL THEN ${bytes} ELSE 0 END`,
+            `CASE WHEN ${alias}.resolution_receipt IS NULL THEN 0 ELSE ${bytes}+length(CAST(${alias}.resolution_receipt AS BLOB)) END`,
+            `CASE WHEN ${alias}.resolution_receipt IS NULL THEN ${RECEIPT_RESERVE_BYTES} ELSE 0 END`];
+        };
+        if (!usageExists) database!.exec(`INSERT INTO availability_usage SELECT lane,scope,local_id,
+          SUM(${usage('availability_requests').join('),SUM(')}) FROM availability_requests GROUP BY lane,scope,local_id`);
+        for (const event of ['INSERT', 'UPDATE', 'DELETE']) {
+          const subtract = event === 'INSERT' ? '' : `UPDATE availability_usage SET ${['active_bytes','archive_bytes','reserved_bytes']
+            .map((column, index) => `${column}=${column}-(${usage('OLD')[index]})`).join(',')}
+            WHERE lane=OLD.lane AND scope=OLD.scope AND local_id=OLD.local_id;`;
+          const add = event === 'DELETE' ? '' : `INSERT INTO availability_usage VALUES(NEW.lane,NEW.scope,NEW.local_id,${usage('NEW').join(',')})
+            ON CONFLICT(lane,scope,local_id) DO UPDATE SET active_bytes=active_bytes+excluded.active_bytes,
+              archive_bytes=archive_bytes+excluded.archive_bytes,reserved_bytes=reserved_bytes+excluded.reserved_bytes;`;
+          database!.exec(`CREATE TRIGGER IF NOT EXISTS availability_usage_${event.toLowerCase()} AFTER ${event} ON availability_requests BEGIN ${subtract}${add} END;`);
         }
       })();
       // The locator commits before any caller can send a request sealed in this ledger.
@@ -171,17 +196,25 @@ export class RemoteAvailabilityStore {
       if (!row) throw new AvailabilityRecordError();
       if (row.resolution_body) return decode(row.resolution_body);
       const saved = { ...body, resolutionId: randomUUID(), action: 'recover_or_seal' };
+      if (Buffer.byteLength(stableJson(saved)) > RECEIPT_RESERVE_BYTES / 2) throw new AvailabilityRecordError();
       this.db.prepare('UPDATE availability_requests SET resolution_body=? WHERE key=? AND resolution_body IS NULL').run(stableJson(saved), key);
       return saved;
     })();
   }
   completeResolution(scope: string, localId: string, key: string, body: Record<string, unknown>, receipt: Record<string, unknown>): void {
     // Original bytes and unknown object identity remain archived in place. Only a verified terminal proof removes the scheduling barrier.
-    const changed = this.db.prepare(`UPDATE availability_requests SET resolution_receipt=?
-      WHERE key=? AND scope=? AND local_id=? AND lane='live' AND resolution_body=? AND resolution_receipt IS NULL`)
-      .run(stableJson(receipt), key, scope, localId, stableJson(body)).changes;
-    if (!changed) throw new AvailabilityRecordError();
+    const encoded = stableJson(receipt);
+    if (Buffer.byteLength(encoded) > RECEIPT_RESERVE_BYTES / 2 || receipt.publicationId !== key
+      || receipt.sessionId !== body.sessionId || receipt.writerGeneration !== body.writerGeneration
+      || !['sealed_unpublished', 'original_terminal'].includes(String(receipt.state))) throw new AvailabilityRecordError();
+    this.db.transaction(() => {
+      const changed = this.db.prepare(`UPDATE availability_requests SET resolution_receipt=?
+        WHERE key=? AND scope=? AND local_id=? AND lane='live' AND resolution_body=? AND resolution_receipt IS NULL`)
+        .run(encoded, key, scope, localId, stableJson(body)).changes;
+      if (!changed) throw new AvailabilityRecordError();
+    })();
   }
+
   pending(scope: string, lane: 'control' | 'live', localId?: string): AvailabilityRequest[] {
     return (this.db.prepare(`SELECT * FROM availability_requests WHERE scope=? AND lane=? AND resolution_receipt IS NULL ${localId ? 'AND local_id=?' : ''} ORDER BY key LIMIT 32`)
       .all(scope, lane, ...(localId ? [localId] : [])) as any[]).map(row => this.decodeRequest(row));
@@ -190,11 +223,20 @@ export class RemoteAvailabilityStore {
     const previous = this.request(value.key);
     if (previous) return previous;
     const body = stableJson(value), bytes = Buffer.byteLength(body);
-    const used = this.db.prepare('SELECT COALESCE(SUM(bytes),0) AS bytes FROM availability_requests WHERE lane=?').get(value.lane) as { bytes: number };
-    if (bytes > (value.pathname ? 256 : 1024) * 1024 || used.bytes + bytes > (value.lane === 'live' ? 32 : 16) * 1024 * 1024) throw new Error('REMOTE_AVAILABILITY_QUEUE_BUDGET');
-    this.db.prepare('INSERT INTO availability_requests(key,lane,scope,local_id,body,bytes,object_id,object_kind,request_hash) VALUES(?,?,?,?,?,?,?,?,?)')
-      .run(value.key, value.lane, value.scope, value.localId, body, bytes, identifier(value.body.objectId) ? value.body.objectId : null,
-        ['message','tool'].includes(value.body.objectKind) ? value.body.objectKind : null, payloadHash(value));
+    this.db.transaction(() => {
+      const laneLimit = (value.lane === 'live' ? 32 : 16) * 1024 * 1024;
+      const used = this.db.prepare(`SELECT COALESCE(SUM(active_bytes),0) AS active,
+        COALESCE(SUM(CASE WHEN scope=? AND local_id=? THEN active_bytes ELSE 0 END),0) AS task
+        FROM availability_usage WHERE lane=?`).get(value.scope, value.localId, value.lane) as { active: number; task: number };
+      const total = this.db.prepare('SELECT COALESCE(SUM(active_bytes+archive_bytes+reserved_bytes),0) AS bytes FROM availability_usage').get() as { bytes: number };
+      // Keep one maximum legal request available to another task, without increasing either lane limit.
+      if (bytes > (value.pathname ? 256 : 1024) * 1024 || used.active + bytes > laneLimit
+        || used.task + bytes > laneLimit - 1024 * 1024 || total.bytes + bytes + RECEIPT_RESERVE_BYTES > LEDGER_REQUEST_BYTES)
+        throw new Error('REMOTE_AVAILABILITY_QUEUE_BUDGET');
+      this.db.prepare('INSERT INTO availability_requests(key,lane,scope,local_id,body,bytes,object_id,object_kind,request_hash) VALUES(?,?,?,?,?,?,?,?,?)')
+        .run(value.key, value.lane, value.scope, value.localId, body, bytes, identifier(value.body.objectId) ? value.body.objectId : null,
+          ['message','tool'].includes(value.body.objectKind) ? value.body.objectKind : null, payloadHash(value));
+    })();
     const kind = value.lane === 'live' ? SyncTelemetry.Kind.Live
       : value.pathname === '/sync/mode-activations' ? SyncTelemetry.Kind.Activation
         : value.pathname === '/control/facts/batches' ? SyncTelemetry.Kind.Facts : SyncTelemetry.Kind.Bootstrap;
@@ -214,7 +256,21 @@ export class RemoteAvailabilityStore {
     this.updateRequest(value);
   }
   updateRequest(value: AvailabilityRequest): void {
-    this.db.prepare('UPDATE availability_requests SET body=?,request_hash=? WHERE key=?').run(stableJson(value), payloadHash(value), value.key);
+    const body = stableJson(value), bytes = Buffer.byteLength(body);
+    this.db.transaction(() => {
+      const previous = this.request(value.key);
+      if (!previous || previous.scope !== value.scope || previous.localId !== value.localId || previous.lane !== value.lane
+        || previous.attempted && stableJson({ ...previous, attempted: value.attempted }) !== body) throw new AvailabilityRecordError();
+      const delta = bytes - Buffer.byteLength(stableJson(previous));
+      const laneLimit = (value.lane === 'live' ? 32 : 16) * 1024 * 1024;
+      const usage = this.db.prepare(`SELECT COALESCE(SUM(active_bytes+archive_bytes+reserved_bytes),0) AS total,
+        COALESCE(SUM(CASE WHEN lane=? THEN active_bytes ELSE 0 END),0) AS lane,
+        COALESCE(SUM(CASE WHEN lane=? AND scope=? AND local_id=? THEN active_bytes ELSE 0 END),0) AS task FROM availability_usage`)
+        .get(value.lane, value.lane, value.scope, value.localId) as { total: number; lane: number; task: number };
+      if (bytes > (value.pathname ? 256 : 1024) * 1024 || delta > 0 && (usage.total + delta > LEDGER_REQUEST_BYTES
+        || usage.lane + delta > laneLimit || usage.task + delta > laneLimit - 1024 * 1024)) throw new Error('REMOTE_AVAILABILITY_QUEUE_BUDGET');
+      this.db.prepare('UPDATE availability_requests SET body=?,bytes=?,request_hash=? WHERE key=?').run(body, bytes, payloadHash(value), value.key);
+    })();
   }
   archiveBootstrap(scope: string, localId: string, operationId: string, result: unknown): void {
     this.db.transaction(() => {

@@ -7,6 +7,7 @@ export const RemoteWorkerFile = {
   Network: 'remoteNetworkWorker.js',
   SecurityJournal: 'remoteSecurityJournalWorker.js',
   ImportSnapshot: 'remoteImportSnapshotWorker.js',
+  HistoryGuard: 'remoteHistoryGuardWorker.cjs',
 } as const;
 
 /** Vite emits workers beside main.js; tsc emits them beside their unbundled callers.

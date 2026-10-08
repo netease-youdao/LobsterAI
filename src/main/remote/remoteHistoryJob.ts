@@ -1,11 +1,14 @@
 import { type ChildProcess, fork } from 'child_process';
 import { randomUUID } from 'crypto';
 
+import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
+
 interface HistoryReply<T> { jobId: string; result?: T; error?: string }
 /** Encoding has a separate OS process: native heap failure and cancellation cannot kill the control runtime. */
 export class RemoteHistoryJob {
   private child: ChildProcess | null = null;
   private cancelCurrent: (() => void) | null = null;
+  constructor(private readonly guardPath = remoteWorkerPath(RemoteWorkerFile.HistoryGuard)) {}
   cancel(): void { this.cancelCurrent?.(); }
 
   run<T>(workerPath: string, input: unknown, options: {
@@ -18,8 +21,10 @@ export class RemoteHistoryJob {
     return new Promise((resolve, reject) => {
       const jobId = randomUUID();
       const child = fork(workerPath, [], {
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, execArgv: [`--max-old-space-size=${options.memoryMb}`],
-        stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'json',
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        execArgv: [`--max-old-space-size=${options.memoryMb}`, '--require', this.guardPath],
+        // fd 4 belongs to this exact parent lifetime, avoiding PID reuse and orphan writers.
+        stdio: ['ignore', 'ignore', 'ignore', 'ipc', 'overlapped'], serialization: 'json',
       });
       this.child = child;
       let settled = false;

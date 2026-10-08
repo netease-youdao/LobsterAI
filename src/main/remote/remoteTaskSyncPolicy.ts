@@ -4,7 +4,7 @@ import { RemoteImportSnapshotError } from './remoteImportSnapshots';
 import { remoteNetworkFailureCode, remoteTransportCause } from './remoteNetworkError';
 import { RemoteNetworkFailure } from './remoteNetworkProtocol';
 import { RemoteSyncStateError } from './remoteRetention';
-import { RemoteTaskDataError, type TaskSyncFailure, TaskSyncFailureReason } from './remoteTaskSyncState';
+import { RemoteTaskDataError, type TaskSyncFailure } from './remoteTaskSyncState';
 
 export function isSharedSyncFailure(error: unknown): boolean {
   if (error instanceof AuthSessionRequestError && [AuthSessionStatus.Expired, AuthSessionStatus.Unauthenticated].some(status => status === error.status)) return true;
@@ -19,12 +19,11 @@ export function classifyTaskSyncFailure(error: unknown): TaskSyncFailure {
   const reason = typeof data?.reason === 'string' ? data.reason : error instanceof RemoteTaskDataError ? error.message : 'REMOTE_TASK_SYNC_FAILED';
   const hint = data?.syncDiagnostic?.version === 1 ? data.syncDiagnostic : null;
   const hints = [item?.retryAfterMs, data?.retryAfterMs, hint?.retryAfterMs].filter(value => value !== undefined && value !== null);
-  const invalidWait = hints.some(value => typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0);
   const wait = hints.filter((value): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0);
   const retryAfterMs = wait.length ? Math.max(...wait) : undefined;
   if (status === 410 && code === 47010 && reason === 'SESSION_DELETED') return { phase: 'closed', scope: 'session', reason };
   if (isSharedSyncFailure(error)) return { phase: 'isolated', scope: 'device', reason };
-  if (invalidWait) return { phase: 'isolated', scope: 'session', reason: TaskSyncFailureReason.RetryHintInvalid };
+  // Optional scheduling hints cannot turn a transport failure into corrupt task data.
   if (code === 47012) return { phase: 'waiting_dependency', scope: hint?.failureScope === 'session' ? 'session' : 'owner_scope', reason, retryAfterMs };
   const network = remoteNetworkFailureCode(error);
   if (network === RemoteNetworkFailure.AdmissionBusy || network === RemoteNetworkFailure.Busy)

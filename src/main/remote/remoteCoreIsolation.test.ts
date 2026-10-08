@@ -227,3 +227,23 @@ it('keeps tool edits and message deletion durable after optional membership cach
   expect(db.prepare("SELECT object_key FROM remote_control_pending WHERE session_id='s' AND object_key='message.deleted:tool'").get()).toBeTruthy();
   expect(db.prepare("SELECT revision FROM remote_live_tools WHERE session_id='s' AND tool_id='tool'").get()).toEqual({ revision: 3 });
 });
+
+it('preserves the local actor when remote ownership signing fails', () => {
+  const { store, db, create } = fixture();
+  store.setOwnershipSigner(() => { throw new Error('remote signer unavailable'); });
+  expect(() => create('local-only')).not.toThrow();
+  expect(store.owner('local-only')).toEqual(owner);
+  expect(() => store.assertActor('local-only', owner)).not.toThrow();
+  expect(() => store.assertActor('local-only', { userId: 'other', scopeKey: 'personal' })).toThrow();
+  expect(store.get('ownershipProof:local-only')).toBeNull();
+  expect(db.prepare('SELECT owner_user_id FROM remote_ownership_pending WHERE session_id=?').get('local-only')).toEqual({ owner_user_id: owner.userId });
+});
+
+it('rolls back a failed optional schema phase and still constructs the desktop store', () => {
+  const { db } = fixture();
+  db.exec('CREATE VIEW remote_projection AS SELECT 1 AS unavailable');
+  const store = new RemoteStore(db, { deferredProjection: true, restoreRuns: false });
+  expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name='remote_live_tool_sources'").get()).toBeUndefined();
+  expect(() => store.transaction(() => db.prepare("INSERT INTO cowork_sessions VALUES('core','Core',1,1,'idle')").run())).not.toThrow();
+  expect(() => store.beginRun('core')).not.toThrow();
+});

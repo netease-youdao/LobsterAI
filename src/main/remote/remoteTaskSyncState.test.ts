@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteSyncTaskIssueStatus } from '../../shared/remote/constants';
+import { finishProjectionFault, grantProjectionProbe, initializeProjectionFaults, projectionFault, recordProjectionFault } from './remoteProjectionFaults';
 import { SyncTelemetry } from './remoteSyncTelemetry';
 import { RemoteTaskSyncState, type TaskSyncContext, TaskSyncFailureReason, TaskSyncPhase } from './remoteTaskSyncState';
 
@@ -43,17 +44,38 @@ describe('task fault isolation persistence', () => {
     f.db.exec(`ALTER TABLE remote_session_revisions ADD COLUMN revision INTEGER DEFAULT 1;
       ALTER TABLE remote_session_revisions ADD COLUMN clean_revision INTEGER DEFAULT 0;
       CREATE TABLE remote_projection_rechecks(session_id TEXT PRIMARY KEY,next_retry INTEGER);
-      CREATE TABLE remote_projection_failures(session_id TEXT PRIMARY KEY,reason TEXT,retry_at INTEGER);`);
+      CREATE TABLE remote_projection_failures(session_id TEXT PRIMARY KEY,reason TEXT,retry_at INTEGER,revision INTEGER);`);
     f.state.fail(context,'s',{ phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'REMOTE_PROJECTION_BUDGET' });
     expect(f.state.projectionEligible(context,'s')).toBe(false);
-    f.db.prepare('INSERT INTO remote_projection_rechecks VALUES(?,?)').run('s',300000);
-    f.db.prepare('INSERT INTO remote_projection_failures VALUES(?,?,?)').run('s','REMOTE_PROJECTION_BUDGET',1);
+    initializeProjectionFaults(f.db);
+    recordProjectionFault(f.db, 's', 'REMOTE_PROJECTION_BUDGET', 1, Number.MAX_SAFE_INTEGER);
+    grantProjectionProbe(f.db, 's');
     expect(f.state.projectionEligible(context,'s')).toBe(true); expect(f.state.eligible(context,'s')).toBe(false);
     f.state.reconcileProjectionFailures(context,()=>true); expect(f.state.get(context,'s')!.phase).toBe(TaskSyncPhase.Isolated);
-    f.db.prepare('DELETE FROM remote_projection_failures WHERE session_id=?').run('s');
-    f.db.prepare('INSERT INTO remote_session_revisions VALUES(?,?,?,?)').run('s',0,2,2);
+    f.db.prepare('INSERT INTO remote_session_revisions VALUES(?,?,?,?)').run('s',0,2,0);
+    finishProjectionFault(f.db, 's', 2, projectionFault(f.db, 's')!.epoch);
     f.state.reconcileProjectionFailures(context,()=>false); expect(f.state.get(context,'s')!.phase).toBe(TaskSyncPhase.Isolated);
     f.state.reconcileProjectionFailures(context,()=>true); expect(f.state.get(context,'s')!.phase).toBe(TaskSyncPhase.Reconciling);
+  });
+  it('continues recovery past a full page whose independent admission is unavailable', () => {
+    const f = fixture();
+    f.db.exec(`ALTER TABLE remote_session_revisions ADD COLUMN revision INTEGER DEFAULT 1;
+      ALTER TABLE remote_session_revisions ADD COLUMN clean_revision INTEGER DEFAULT 0;
+      CREATE TABLE remote_projection_failures(session_id TEXT PRIMARY KEY,reason TEXT,retry_at INTEGER,revision INTEGER);`);
+    initializeProjectionFaults(f.db);
+    for (let i = 0; i < 17; i++) {
+      const id = `task-${String(i).padStart(2, '0')}`; f.add(id);
+      f.state.fail(context, id, { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'REMOTE_PROJECTION_BUDGET' });
+      f.db.prepare('INSERT INTO remote_session_revisions VALUES(?,?,?,?)').run(id, 0, 1, 0);
+      recordProjectionFault(f.db, id, 'REMOTE_PROJECTION_BUDGET', 1, Number.MAX_SAFE_INTEGER);
+      grantProjectionProbe(f.db, id); finishProjectionFault(f.db, id, 1, projectionFault(f.db, id)!.epoch);
+    }
+    const admitted = (id: string): boolean => { if (id !== 'task-16') throw new Error('Task-specific admission unavailable'); return true; };
+    expect(() => f.state.reconcileProjectionFailures(context, admitted)).not.toThrow();
+    expect(f.state.get(context, 'task-16')!.phase).toBe(TaskSyncPhase.Isolated);
+    f.state.reconcileProjectionFailures(context, admitted);
+    expect(f.state.get(context, 'task-16')!.phase).toBe(TaskSyncPhase.Reconciling);
+    expect(f.state.get(context, 'task-00')!.phase).toBe(TaskSyncPhase.Isolated);
   });
   it('preserves failure counts through restart and state verification, then resets only on publication progress', () => {
     const f = fixture(); f.add('s');
@@ -140,14 +162,23 @@ describe('task fault isolation persistence', () => {
     f.state.progress(context, 's', true);
     expect(f.state.get(context, 's')!.repair_json).toBe('{broken');
   });
-  it('isolates impossible retry waits instead of silently shortening them', () => {
+  it('ignores invalid optional waits and preserves valid long deadlines', () => {
     const f = fixture();
     for (const [index, value] of [NaN, -1, Infinity, Number.MAX_SAFE_INTEGER].entries()) {
       const id = `s${index}`; f.add(id); f.at(1);
       const result = f.state.fail(context, id, { ...transport, retryAfterMs: value });
-      expect(result).toMatchObject({ phase: TaskSyncPhase.Isolated, reason: TaskSyncFailureReason.RetryHintInvalid });
-      expect(f.state.manualRetry(context, id)).toBe(false);
+      expect(result).toMatchObject({ phase: TaskSyncPhase.Backoff, reason: transport.reason });
+      expect(result.server_retry_at).toBe(value === Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : 0);
     }
+  });
+  it('reconciles a proven legacy invalid-hint isolation once without changing original operation bytes', () => {
+    const f = fixture(); f.add('s');
+    f.state.fail(context, 's', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: TaskSyncFailureReason.RetryHintInvalid });
+    f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run('import:s', '{original');
+    expect(f.state.reconcileLegacyFailures(context, () => true).promotedIds).toEqual(['s']);
+    expect(f.state.get(context, 's')?.phase).toBe(TaskSyncPhase.Reconciling);
+    expect(f.db.prepare("SELECT value FROM remote_state WHERE key='import:s'").get()).toEqual({ value: '{original' });
+    expect(f.state.reconcileLegacyFailures(context, () => true).scanned).toBe(0);
   });
   it('schedules clean legacy tasks that still need admission or failure migration without touching corrupt operation JSON', () => {
     const f = fixture();
@@ -197,6 +228,17 @@ describe('task fault isolation persistence', () => {
     expect(f.state.health(context, () => { throw new Error('bad admission'); }).taskIssues.every(issue => !issue.retryable)).toBe(true);
     f.state.manualRetry(context, 'isolated');
     expect(f.state.health(context).taskIssues.find(issue => issue.localSessionId === 'isolated')?.retryable).toBe(false);
+  });
+  it('bounds health visibility work and reports lower-bound counts for more than one page', () => {
+    const f = fixture();
+    for (let i = 0; i < 100; i++) { const id = `own-${String(i).padStart(3, '0')}`; f.add(id); f.state.fail(context, id, transport); }
+    for (let i = 0; i < 100; i++) { const id = `foreign-${i}`; f.add(id, { userId: 'foreign', scopeKey: 'personal' }); f.state.fail(context, id, transport); }
+    const visible = vi.fn(() => true);
+    const health = f.state.health(context, () => true, visible);
+    expect(visible).toHaveBeenCalledTimes(64);
+    expect(health).toMatchObject({ failedSessions: 64, retryingSessions: 64, isolatedSessions: 0, countsTruncated: true, taskIssuesTruncated: true });
+    expect(health.taskIssues).toHaveLength(20);
+    expect(health.taskIssues.every(issue => issue.localSessionId.startsWith('own-'))).toBe(true);
   });
   it('probes migrated ambiguous failures once without changing original operations, ACKs or repair evidence', () => {
     const f = fixture(); f.add('s');

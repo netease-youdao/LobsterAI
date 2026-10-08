@@ -812,8 +812,12 @@ export class CoworkStore {
 
   constructor(db: Database.Database, options: { deferRemoteSynchronization?: boolean } = {}) {
     this.db = db;
-    this.remote = new RemoteStore(db, { deferredProjection: true, deferSynchronization: options.deferRemoteSynchronization });
+    this.remote = new RemoteStore(db, { deferredProjection: true, deferSynchronization: true });
     this.agentOwnership = new AgentOwnerStore(db);
+    if (!options.deferRemoteSynchronization) {
+      try { this.remote.initializeSynchronization(); }
+      catch (error) { console.warn('[CoworkStore] Optional remote synchronization unavailable', error); }
+    }
     this.sessionProjectionNotifications = new SessionProjectionNotifications({
       runTransaction: operation => this.remote.transaction(operation),
       isInTransaction: () => this.db.inTransaction,

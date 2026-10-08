@@ -17,10 +17,11 @@ describe('persistent resource retry policy', () => {
     expect(fileRetryAllowed(restored, now - 1, '2')).toBe(false);
     const throttled = nextFileRetry(undefined, new RemoteFileRequestError('rate limit', 429, '3600'), 0, '1', () => 0);
     expect(throttled.nextRetryAt).toBe(3_600_000);
+    expect(nextFileRetry(throttled, new RemoteFileRequestError('offline', 503, 'invalid'), 1, '1').nextRetryAt).toBe(3_600_000);
   });
   it('does not turn invalid content, identity or an unknown local failure into unlimited retries', () => {
     for (const error of [new SyntaxError('broken JSON'), new Error(RemoteFileReason.Source),
-      new Error(RemoteFileReason.Transfer), new RemoteFileRequestError('forbidden', 403)]) {
+      new RemoteFileRequestError('forbidden', 403), new RemoteFileRequestError(RemoteFileReason.Transfer, 403)]) {
       const state = nextFileRetry(undefined, error, 0, '1');
       expect(state.phase).toBe(RemoteFileRetryPhase.Isolated);
       expect(fileRetryAllowed(state, Number.MAX_SAFE_INTEGER, '2')).toBe(false);
@@ -36,6 +37,7 @@ describe('persistent resource retry policy', () => {
     expect(fileRetryAllowed(waiting, 10, '2')).toBe(true);
     const delayed = nextFileRetry(undefined, new RemoteFileRequestError('offline', 503, '8640000'), 0, '1', () => 0);
     expect(delayed.nextRetryAt).toBe(8_640_000_000);
-    expect(nextFileRetry(undefined, new RemoteFileRequestError('offline', 503, 'invalid'), 0, '1').phase).toBe(RemoteFileRetryPhase.Isolated);
+    expect(nextFileRetry(undefined, new RemoteFileRequestError('offline', 503, 'invalid'), 0, '1').phase).toBe(RemoteFileRetryPhase.Backoff);
+    expect(nextFileRetry(undefined, new Error(RemoteFileReason.Transfer), 0, '1').phase).toBe(RemoteFileRetryPhase.Backoff);
   });
 });

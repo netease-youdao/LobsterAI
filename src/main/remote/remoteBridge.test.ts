@@ -469,6 +469,23 @@ describe('session synchronization recovery', () => {
     expect(bridge.associationSyncState({ kind: OwnershipTargetKind.Task, id: 'sync-task' })).toBe(OwnershipSyncState.Failed);
   });
 
+  it('persists a deferred failure after storage recovery before resuming the original task', async () => {
+    const { bridge, store, requestApi } = syncing();
+    requestApi.mockRejectedValueOnce(new RemoteApiError(503, 'Temporary transport failure', null, 503));
+    vi.spyOn(bridge.taskSync, 'fail').mockImplementationOnce(() => { throw Object.assign(new Error('busy'), { code: 'SQLITE_BUSY' }); });
+    await bridge.syncSessions();
+    expect(bridge.taskMemoryBlocks.size).toBe(1);
+    expect(bridge.state().syncHealth.reason).toBe(RemoteSyncHealthReason.StorageDependency);
+    const operation = store.get<any>('import:sync-task');
+    expect(operation).not.toBeNull();
+    const sent = requestApi.mock.calls.length;
+    bridge.taskMemoryBlocks.get('sync-task').retryAt = 0;
+    await bridge.syncSessions();
+    expect(bridge.taskMemoryBlocks.size).toBe(0);
+    expect(bridge.taskSync.get(bridge.taskContext(), 'sync-task').phase).toBe('backoff');
+    expect(store.get<any>('import:sync-task').importId).toBe(operation.importId);
+    expect(requestApi).toHaveBeenCalledTimes(sent);
+  });
   it('repairs an old failure marker on an acknowledged task before its retry deadline', async () => {
     const { bridge, store, requestApi } = syncing();
     acknowledgeSnapshot(store);

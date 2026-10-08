@@ -29,7 +29,7 @@ interface Dependencies {
   getTargetId?(): string | null;
   getDefaultModel(): string; getAgentCatalog(): RemoteAgentCatalog | null;
   createImagePreview?(filePath: string): Promise<InputImagePreview | undefined>;
-  convertImage?(filePath: string, mimeType: string, targetPath: string): Promise<{ path: string; mimeType: string }>;
+  convertImage?(filePath: string, mimeType: string, targetPath: string, maximumBytes: number): Promise<{ path: string; mimeType: string }>;
 }
 const maxPreviewBytes = 128 * 1024;
 const previewTimeoutMs = 750;
@@ -268,7 +268,7 @@ export class InputPreparationService {
             if (asset.intent === RemoteInputIntent.Image) {
               let image = { path: filePath, mimeType: asset.mimeType };
               if (this.deps.convertImage) {
-                image = await this.deps.convertImage(filePath, asset.mimeType, path.join(folder, `${randomUUID()}.png`)); check();
+                image = await this.deps.convertImage(filePath, asset.mimeType, path.join(folder, `${randomUUID()}.png`), Math.floor((imageFrameBytes - frameBytes) / 4) * 3); check();
               }
               if (!imageMimes.has(image.mimeType)) throw new RemoteInputError(RemoteInputReason.Invalid);
               file.imagePath = image.path; file.imageMime = image.mimeType; file.imageIdentity = identity(image.path);

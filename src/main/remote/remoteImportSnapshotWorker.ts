@@ -53,6 +53,7 @@ function build(work: Extract<ImportSnapshotWork, { operation: 'build' }>): Impor
         const payload = `{"records":[${records.join(',')}]}`;
         const byteSize = Buffer.byteLength(payload), partNo = parts.length;
         if (byteSize > IMPORT_PART_BYTES) throw new Error('REMOTE_IMPORT_RECORD_LIMIT');
+        if (total + byteSize > SNAPSHOT_BYTES) throw new Error('REMOTE_IMPORT_BUDGET');
         const descriptor = fs.openSync(path.join(work.directory, `${partNo}.json`), 'wx', 0o600);
         try { fs.writeFileSync(descriptor, payload); fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
         parts.push({ partNo, payloadHash: hash(payload), byteSize }); total += byteSize;

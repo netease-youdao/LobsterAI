@@ -146,6 +146,18 @@ describe('task synchronization isolation', () => {
     expect(f.acknowledged('a-projecting')).toBe(true);
   });
 
+  it('reports a projection-only failure consistently before a network turn and deduplicates its later task ledger', () => {
+    const f = fixture(); f.add('a-bad'); f.add('b-good');
+    f.store.recordProjectionFailure('a-bad', 'REMOTE_PROJECTION_BUDGET');
+    const before = f.bridge.state();
+    expect(before.syncHealth).toMatchObject({ status: 'degraded', failedSessions: 1, isolatedSessions: 1, retryingSessions: 0 });
+    expect(before.syncHealth.taskIssues.map((issue: { localSessionId: string }) => issue.localSessionId)).toEqual(['a-bad']);
+    expect(before.sessionSyncStatus).toBe('error');
+    f.bridge.taskSync.fail(f.bridge.taskContext(), 'a-bad', { phase: 'isolated', scope: 'session', reason: 'REMOTE_PROJECTION_BUDGET' });
+    expect(f.bridge.state().syncHealth).toMatchObject({ failedSessions: 1, isolatedSessions: 1 });
+    f.bridge.taskSync.fail(f.bridge.taskContext(), 'a-bad', { phase: 'closed', scope: 'session', reason: 'SESSION_DELETED' });
+    expect(f.bridge.state().syncHealth).toMatchObject({ failedSessions: 0, taskIssues: [] });
+  });
   it('isolates a failed interrupted publication instead of deferring it forever', async () => {
     const f = fixture(); f.add('a-bad'); f.add('b-good');
     const before = f.store.sync('a-bad')!;

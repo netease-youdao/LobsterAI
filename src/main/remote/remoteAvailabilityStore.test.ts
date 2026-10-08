@@ -92,3 +92,35 @@ describe('availability request integrity and durable backoff', () => {
     expect(ledger.objectRetryAllowed(pending.scope, pending.localId, 'message:bad', 900000, 'revision-1')).toBe(false);
   });
 });
+
+
+describe('availability activity and terminal evidence budgets', () => {
+  it('archives resolved bytes outside active capacity while preserving raw evidence across reopen', () => {
+    const { ledger } = fixture();
+    const body = { sessionId: 'session', writerGeneration: 'generation' };
+    for (let index = 0; index < 140; index++) {
+      const key = `publication${index}`;
+      ledger.saveRequest({ ...pending, key, body: { bytes: 'x'.repeat(250 * 1024) } });
+      const resolution = ledger.sealResolution(pending.scope, pending.localId, key, body);
+      ledger.completeResolution(pending.scope, pending.localId, key, resolution,
+        { ...body, publicationId: key, state: 'sealed_unpublished', sealId: 'seal' });
+    }
+    ledger.close();
+    expect(ledger.scanPending(pending.scope, 'live', pending.localId).rows).toEqual([]);
+    expect(ledger.request('publication0')?.body.bytes.length).toBe(250 * 1024);
+    ledger.saveRequest({ ...pending, key: 'healthy-task', localId: 'other' });
+    const usage = ledger.db.prepare('SELECT SUM(active_bytes) AS active,SUM(archive_bytes) AS archived FROM availability_usage').get() as { active: number; archived: number };
+    expect(usage.active).toBeLessThan(1024); expect(usage.archived).toBeGreaterThan(32 * 1024 * 1024);
+  });
+  it('accounts attempted metadata changes and keeps a full request available to another task', () => {
+    const { ledger } = fixture(); let count = 0;
+    expect(() => { for (; count < 150; count++) ledger.saveRequest({ ...pending, key: `p${count}`, body: { bytes: 'x'.repeat(250 * 1024) } }); })
+      .toThrow('REMOTE_AVAILABILITY_QUEUE_BUDGET');
+    ledger.saveRequest({ ...pending, key: 'another', localId: 'other', attempted: false });
+    const original = ledger.request('another')!; ledger.attempted(original);
+    const saved = ledger.db.prepare("SELECT bytes,length(CAST(body AS BLOB)) AS actual FROM availability_requests WHERE key='another'").get() as { bytes: number; actual: number };
+    expect(saved.bytes).toBe(saved.actual);
+    const accounting = ledger.db.prepare('SELECT SUM(active_bytes) AS bytes FROM availability_usage').get();
+    expect(accounting).toEqual(ledger.db.prepare('SELECT SUM(length(CAST(body AS BLOB))) AS bytes FROM availability_requests').get());
+  });
+});

@@ -7,6 +7,7 @@ import path from 'path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import type { RemoteQuestionState } from '../../shared/remote/questions';
+import { RemoteSecurityJournal } from './remoteSecurityJournal';
 import { RemoteStore } from './remoteStore';
 
 const owner = { userId: 'A', scopeKey: 'personal' };
@@ -120,8 +121,27 @@ describe('question projection and compatibility', () => {
     expect(store.questionStates('anonymous')).toEqual([]);
   });
   it('invalidates a running worker when question capability changes', () => {
-    const { store } = fixture(true); const work = store.nextProjectionWork()!;
+    const { store } = fixture(true); store.refreshProjectionHints(); const work = store.nextProjectionWork()!;
     expect(store.projectionWorkCurrent(work)).toBe(true); store.setQuestionProjectionSupported(true);
     expect(store.projectionWorkCurrent(work)).toBe(false);
   });
+});
+
+it('projects a healthy task through the real worker while a signed foreign task question is damaged', async () => {
+  const { store, db, question } = fixture(true);
+  const signer = new RemoteSecurityJournal({ installationId: 'install', databaseId: 'db', deviceKey: Buffer.alloc(32, 7).toString('base64url') },
+    { read: async () => ({ current: null, previous: null }), replace: async () => {}, close: () => {} }, true);
+  store.configureQuestionEvidence({ sign: value => signer.signQuestionBinding(value), verify: (value, signature) => signer.verifyQuestionBinding(value, signature) });
+  store.setQuestionProjectionSupported(true);
+  store.updateQuestion('task', question);
+  store.transaction(() => {
+    db.exec("INSERT INTO cowork_sessions VALUES('z-bad','Bad',1,1,'idle')"); store.assignNew('z-bad', owner, 'local_create');
+    store.beginRun('z-bad', 'bad-run');
+    store.put('questionDecision:bad', { state: { ...question, sessionId: 'z-bad', runId: 'bad-run', questionId: 'bad' }, binding: { owner } });
+  });
+  db.prepare("UPDATE remote_state SET value='{' WHERE key='questionDecision:bad'").run();
+  await store.flushProjections();
+  expect(store.snapshot('task').records.some(item => item.eventType === 'question.updated')).toBe(true);
+  expect(store.needsSecurityRecovery()).toBe(false);
+  expect(db.prepare("SELECT value FROM remote_state WHERE key='questionDecision:bad'").get()).toEqual({ value: '{' });
 });

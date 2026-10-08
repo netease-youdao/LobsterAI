@@ -99,6 +99,14 @@ describe('current remote device settings', () => {
     expect(harness.submit.mock.calls).toEqual([[{ retrySessionId: 'task-1' }]]);
   });
 
+  test('marks bounded health counts as lower bounds instead of presenting an exact total', () => {
+    harness.snapshot.state = { ...connected, sessionSyncStatus: RemoteSyncStatus.Error,
+      syncHealth: { status: RemoteSyncHealthStatus.Degraded, reason: RemoteSyncHealthReason.Projection,
+        pendingSessions: 64, failedSessions: 64, countsTruncated: true, taskIssuesTruncated: true,
+        oldestPendingAt: null, lastSuccessfulSyncAt: null, observedAt: '2026-09-23T00:00:00Z' } };
+    expect(render().html).toContain(i18nService.t('remoteTasksSyncFailedCount').replace('{count}', '≥64'));
+  });
+
   test('explains deferred history admission while preserving online status and a reconnect action', () => {
     harness.snapshot.state = { ...connected, sessionSyncStatus: RemoteSyncStatus.Error,
       syncHealth: { status: RemoteSyncHealthStatus.Paused, admissionDeferred: true, failedSessions: 2,

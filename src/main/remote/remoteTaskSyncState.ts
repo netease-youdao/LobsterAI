@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { createHash } from 'crypto';
 
 import { type RemoteOwner, type RemoteSyncTaskIssue, RemoteSyncTaskIssueStatus } from '../../shared/remote/constants';
+import { projectionFault, projectionProbeEligible } from './remoteProjectionFaults';
 import type { SyncRow } from './remoteStore';
 import { emitCommittedTelemetry, SyncTelemetry } from './remoteSyncTelemetry';
 import { captureRemoteTelemetry } from './remoteTelemetry';
@@ -13,7 +14,7 @@ export const TaskSyncPhase = {
 export type TaskSyncPhase = typeof TaskSyncPhase[keyof typeof TaskSyncPhase];
 export const TaskSyncFailureReason = { RetryHintInvalid: 'REMOTE_RETRY_HINT_INVALID' } as const;
 export interface TaskSyncHealth {
-  failedSessions: number; retryingSessions: number; isolatedSessions: number;
+  failedSessions: number; retryingSessions: number; isolatedSessions: number; countsTruncated?: boolean;
   taskIssues: RemoteSyncTaskIssue[]; taskIssuesTruncated: boolean;
 }
 export interface TaskSyncContext { owner: RemoteOwner; target: string; deviceId: string }
@@ -30,11 +31,12 @@ interface RepairLedger { attempts: string[]; times: number[] }
 const NEVER = Number.MAX_SAFE_INTEGER;
 const DAY = 86400000;
 const RECOVERY_PROBE_VERSION = 1;
-const legacyProbeReasons = new Set(['REMOTE_TASK_SYNC_FAILED', 'REMOTE_IMPORT_CONTEXT_CHANGED', 'REMOTE_PROJECTION_CONTEXT_CHANGED']);
+const legacyProbeReasons = new Set([TaskSyncFailureReason.RetryHintInvalid, 'REMOTE_TASK_SYNC_FAILED', 'REMOTE_IMPORT_CONTEXT_CHANGED', 'REMOTE_PROJECTION_CONTEXT_CHANGED']);
 const identity = (context: TaskSyncContext): string[] => [context.owner.userId, context.owner.scopeKey, context.target, context.deviceId];
 
 /** Scheduling hints never replace source watermarks, immutable operations or admission evidence. */
 export class RemoteTaskSyncState {
+  private projectionReconcileCursor = { context: '', id: '' };
   constructor(private readonly db: Database.Database, private readonly now: () => number = Date.now, private readonly random: () => number = Math.random, private readonly afterCommit?: (observer: () => void) => void) {
     db.exec(`CREATE TABLE IF NOT EXISTS remote_sync_task_state (
       owner_user_id TEXT NOT NULL,owner_scope_key TEXT NOT NULL,target_key TEXT NOT NULL,device_id TEXT NOT NULL,local_session_id TEXT NOT NULL,
@@ -89,23 +91,36 @@ export class RemoteTaskSyncState {
     const value = this.get(context, id);
     if (!value || value.phase !== TaskSyncPhase.Isolated && value.phase !== TaskSyncPhase.Closed) return true;
     if (value.phase !== TaskSyncPhase.Isolated || !['REMOTE_PROJECTION_BUDGET','REMOTE_PROJECTION_PUBLICATION_INVALID'].includes(value.reason)) return false;
-    if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_projection_rechecks'").get()) return false;
-    // A recheck grants local encoding only. Task admission, command execution and network reconciliation keep their own guards.
-    return !!this.db.prepare(`SELECT 1 FROM remote_projection_failures f JOIN remote_projection_rechecks r ON r.session_id=f.session_id
-      WHERE f.session_id=? AND f.reason=? AND f.retry_at<?`).get(id, value.reason, NEVER);
+    // A grant is bound to the exact failure and target epoch, never inferred from a retry timestamp.
+    return projectionProbeEligible(this.db, id, value.reason);
   }
   reconcileProjectionFailures(context: TaskSyncContext, canReconcile: (id: string) => boolean): void {
-    if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_projection_rechecks'").get()) return;
-    const rows = this.db.prepare(`SELECT s.local_session_id FROM remote_sync_task_state s
-      JOIN remote_projection_rechecks p ON p.session_id=s.local_session_id
-      JOIN remote_session_revisions r ON r.session_id=s.local_session_id AND r.clean_revision=r.revision
+    if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_projection_faults'").get()) return;
+    const contextKey = JSON.stringify(identity(context));
+    const cursor = this.projectionReconcileCursor.context === contextKey ? this.projectionReconcileCursor.id : '';
+    const rows = this.db.prepare(`SELECT s.local_session_id,s.reason FROM remote_sync_task_state s
+      JOIN remote_projection_faults p ON p.session_id=s.local_session_id AND p.probe_epoch=p.epoch
+      JOIN remote_session_revisions r ON r.session_id=s.local_session_id AND p.published_revision=r.revision
       WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND phase='isolated'
-        AND reason IN ('REMOTE_PROJECTION_BUDGET','REMOTE_PROJECTION_PUBLICATION_INVALID')
-        AND NOT EXISTS(SELECT 1 FROM remote_projection_failures f WHERE f.session_id=s.local_session_id) LIMIT 16`)
-      .all(...identity(context)) as Array<{ local_session_id: string }>;
-    for (const row of rows) if (canReconcile(row.local_session_id)) this.db.prepare(`UPDATE remote_sync_task_state SET phase='reconciling',next_retry_at=server_retry_at
-      WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=? AND phase='isolated'`)
-      .run(...this.args(context,row.local_session_id));
+        AND s.reason IN ('REMOTE_PROJECTION_BUDGET','REMOTE_PROJECTION_PUBLICATION_INVALID')
+        AND NOT EXISTS(SELECT 1 FROM remote_projection_failures f WHERE f.session_id=s.local_session_id)
+        AND s.local_session_id>? ORDER BY s.local_session_id LIMIT 16`)
+      .all(...identity(context), cursor) as Array<{ local_session_id: string; reason: string }>;
+    this.projectionReconcileCursor = { context: contextKey, id: rows.length === 16 ? rows.at(-1)!.local_session_id : '' };
+    for (const row of rows) {
+      try {
+        const fault = projectionFault(this.db, row.local_session_id);
+        if (!fault || fault.reason !== row.reason || fault.probe_epoch !== fault.epoch || !canReconcile(row.local_session_id)) continue;
+      } catch (error) {
+        const code = (error as { code?: unknown } | null)?.code;
+        if (typeof code === 'string' && /^SQLITE_(?:CORRUPT|NOTADB|FULL|IOERR)(?:_|$)/u.test(code)) throw error;
+        continue; // A task-local admission failure must not monopolize the first recovery page.
+      }
+      // Local publication permits remote reconciliation. Only a later cloud ACK marks the revision clean.
+      this.db.prepare(`UPDATE remote_sync_task_state SET phase='reconciling',next_retry_at=server_retry_at
+        WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=? AND phase='isolated'`)
+        .run(...this.args(context,row.local_session_id));
+    }
   }
   /** One compatibility probe for old, ambiguous isolation. This grants scheduling only:
    * the bridge must reconcile original operations and verify the exact remote stream. */
@@ -115,16 +130,17 @@ export class RemoteTaskSyncState {
     const size = Math.max(1, Math.min(50, Number.isSafeInteger(limit) ? limit : 50));
     return this.db.transaction(() => {
       const rows = this.db.prepare(`SELECT * FROM remote_sync_task_state WHERE owner_user_id=? AND owner_scope_key=?
-        AND target_key=? AND device_id=? AND recovery_probe_version=0 AND phase<>'ready'
+        AND target_key=? AND device_id=? AND (recovery_probe_version=0 OR recovery_probe_version=1 AND reason='REMOTE_RETRY_HINT_INVALID') AND phase<>'ready'
         ORDER BY local_session_id LIMIT ?`).all(...identity(context), size + 1) as TaskSyncRecord[];
       const promotedIds: string[] = [];
       for (const value of rows.slice(0, size)) {
         const id = value.local_session_id;
         // Mark every evaluated legacy row, including permanent/corrupt failures. A later
         // failure or restart cannot silently grant another automatic compatibility attempt.
+        const probeVersion = value.reason === TaskSyncFailureReason.RetryHintInvalid ? 2 : RECOVERY_PROBE_VERSION;
         const marked = this.db.prepare(`UPDATE remote_sync_task_state SET recovery_probe_version=?
           WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?
-            AND recovery_probe_version=0`).run(RECOVERY_PROBE_VERSION, ...this.args(context, id));
+            AND recovery_probe_version=?`).run(probeVersion, ...this.args(context, id), value.recovery_probe_version);
         if (marked.changes !== 1 || value.phase !== TaskSyncPhase.Isolated || value.scope !== 'session'
           || !legacyProbeReasons.has(value.reason) || this.ledger(value) === null
           || !Number.isSafeInteger(value.server_retry_at) || value.server_retry_at < 0 || value.server_retry_at === NEVER
@@ -146,7 +162,7 @@ export class RemoteTaskSyncState {
         this.db.prepare(`UPDATE remote_sync_task_state SET phase='reconciling',next_retry_at=server_retry_at
           WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?
             AND phase='isolated' AND scope='session' AND reason=? AND fingerprint=? AND recovery_probe_version=?`)
-          .run(...this.args(context, id), value.reason, value.fingerprint, RECOVERY_PROBE_VERSION);
+          .run(...this.args(context, id), value.reason, value.fingerprint, probeVersion);
         promotedIds.push(id);
       }
       return { promotedIds, scanned: Math.min(size, rows.length), hasMore: rows.length > size };
@@ -188,20 +204,18 @@ export class RemoteTaskSyncState {
     const fingerprint = createHash('sha256').update(JSON.stringify([failure.scope, failure.reason])).digest('hex');
     const count = value.failure_count + 1;
     let phase = failure.phase;
-    const invalidWait = failure.retryAfterMs !== undefined && (!Number.isSafeInteger(failure.retryAfterMs)
-      || failure.retryAfterMs < 0 || failure.retryAfterMs > NEVER - now);
-    if (invalidWait) phase = TaskSyncPhase.Isolated;
-    const serverRetryAt = invalidWait ? NEVER : Math.max(value.server_retry_at, failure.retryAfterMs === undefined ? 0 : now + failure.retryAfterMs);
+    const validWait = failure.retryAfterMs !== undefined && Number.isSafeInteger(failure.retryAfterMs) && failure.retryAfterMs >= 0;
+    const serverRetryAt = Math.max(value.server_retry_at, validWait ? Math.min(NEVER, now + failure.retryAfterMs!) : 0);
     if (phase === 'backoff' && count >= 5) phase = 'cooldown';
     const delay = phase === 'cooldown' || phase === 'waiting_dependency' ? 900000 + Math.floor(this.random() * 180000)
       : [30000, 60000, 120000, 300000][Math.min(3, count - 1)] * (0.8 + this.random() * 0.4);
     const retry = ['isolated', 'closed'].includes(phase) ? NEVER : Math.max(serverRetryAt, Math.min(NEVER, Math.ceil(now + delay)));
     this.db.prepare(`UPDATE remote_sync_task_state SET phase=?,next_retry_at=?,failure_count=?,reason=?,scope=?,fingerprint=?,server_retry_at=?,recovery_probe_version=?
       WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?`)
-      .run(phase, retry, count, invalidWait ? TaskSyncFailureReason.RetryHintInvalid : failure.reason.slice(0, 160), failure.scope, fingerprint, serverRetryAt, RECOVERY_PROBE_VERSION, ...this.args(context, id));
+      .run(phase, retry, count, failure.reason.slice(0, 160), failure.scope, fingerprint, serverRetryAt, RECOVERY_PROBE_VERSION, ...this.args(context, id));
     this.report(context, id, SyncTelemetry.Stage.TaskState,
       phase === TaskSyncPhase.Isolated ? SyncTelemetry.Outcome.Blocked : SyncTelemetry.Outcome.Deferred,
-      invalidWait ? TaskSyncFailureReason.RetryHintInvalid : failure.reason);
+      failure.reason);
     return this.get(context, id)!;
   }
   private ledger(value: TaskSyncRecord): RepairLedger | null {
@@ -272,31 +286,62 @@ export class RemoteTaskSyncState {
       ORDER BY COALESCE(t.last_served_at,0),COALESCE(r.dirty_at,0),s.local_id LIMIT ?`)
       .all(context.target, context.deviceId, context.owner.userId, context.owner.scopeKey, this.now(), this.now(), ...admissionArgs, Math.max(1, Math.min(50, Number.isFinite(limit) ? Math.floor(limit) : 50))) as SyncRow[];
   }
-  health(context: TaskSyncContext, admitted: (sessionId: string) => boolean = () => true): TaskSyncHealth {
-    const visible = `FROM remote_sync_task_state t JOIN cowork_session_ownership o ON o.session_id=t.local_session_id
-      JOIN cowork_sessions s ON s.id=t.local_session_id
+  health(context: TaskSyncContext, admitted: (sessionId: string) => boolean = () => true,
+    visible: (sessionId: string) => boolean = () => true): TaskSyncHealth {
+    const hasProjection = !!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_projection_failures'").get();
+    const ownerFilter = "o.owner_user_id=? AND o.owner_scope_key=? AND o.ownership_status='confirmed'";
+    const notDeleted = "NOT EXISTS(SELECT 1 FROM remote_state closed WHERE closed.key='deletionClosed:'||o.session_id)";
+    const projectionIds = hasProjection ? `SELECT f.session_id AS id FROM cowork_session_ownership o
+      JOIN remote_projection_failures f ON f.session_id=o.session_id JOIN cowork_sessions s ON s.id=o.session_id
+      LEFT JOIN remote_sync_task_state t ON t.local_session_id=f.session_id AND t.owner_user_id=? AND t.owner_scope_key=? AND t.target_key=? AND t.device_id=?
+      WHERE ${ownerFilter} AND ${notDeleted} AND COALESCE(t.phase,'ready')<>'closed' ORDER BY f.session_id LIMIT 65`
+      : 'SELECT NULL AS id WHERE 0';
+    const projectionJoin = hasProjection ? 'LEFT JOIN remote_projection_failures f ON f.session_id=ids.id' : '';
+    const projectionReason = hasProjection ? 'f.reason' : 'NULL';
+    const projectionRetry = hasProjection ? 'f.retry_at' : 'NULL';
+    const projectionVisible = hasProjection ? "f.session_id IS NOT NULL AND COALESCE(t.phase,'ready')<>'closed'" : '0';
+    // Both the summary and issue list derive from this same task set, including failures
+    // discovered by the local worker before a network synchronization turn has run.
+    const rows = this.db.prepare(`WITH task_ids AS (
+      SELECT t.local_session_id AS id FROM remote_sync_task_state t
+      JOIN cowork_session_ownership o ON o.session_id=t.local_session_id JOIN cowork_sessions s ON s.id=o.session_id
       WHERE t.owner_user_id=? AND t.owner_scope_key=? AND t.target_key=? AND t.device_id=?
-        AND o.owner_user_id=t.owner_user_id AND o.owner_scope_key=t.owner_scope_key AND o.ownership_status='confirmed'
-        AND t.phase NOT IN ('ready','closed')`;
-    const counts = this.db.prepare(`SELECT COUNT(*) AS failedSessions,
-      COUNT(CASE WHEN t.phase IN ('backoff','cooldown','waiting_dependency','reconciling','repairing') THEN 1 END) AS retryingSessions,
-      COUNT(CASE WHEN t.phase='isolated' THEN 1 END) AS isolatedSessions ${visible}`)
-      .get(...identity(context)) as Omit<TaskSyncHealth, 'taskIssues' | 'taskIssuesTruncated'>;
-    const rows = this.db.prepare(`SELECT t.*,s.title ${visible}
-      ORDER BY CASE WHEN t.phase='isolated' THEN 0 ELSE 1 END,t.next_retry_at,t.local_session_id LIMIT 21`)
-      .all(...identity(context)) as Array<TaskSyncRecord & { title: string | null }>;
-    const now = this.now();
-    const retryable = (value: TaskSyncRecord): boolean => {
-      try { return this.canRetry(value, now) && admitted(value.local_session_id); }
-      catch { return false; }
-    };
-    return { ...counts, taskIssuesTruncated: rows.length > 20, taskIssues: rows.slice(0, 20).map(value => ({
-      localSessionId: value.local_session_id, title: typeof value.title === 'string' ? value.title.slice(0, 256) : '',
-      status: value.phase === TaskSyncPhase.Isolated ? RemoteSyncTaskIssueStatus.Isolated
-        : value.phase === TaskSyncPhase.Waiting ? RemoteSyncTaskIssueStatus.WaitingDependency
-          : value.phase === TaskSyncPhase.Repairing ? RemoteSyncTaskIssueStatus.Repairing : RemoteSyncTaskIssueStatus.Retrying,
-      ...(value.phase !== TaskSyncPhase.Isolated && value.next_retry_at < NEVER ? { nextRetryAt: value.next_retry_at } : {}),
-      retryable: retryable(value),
-    })) };
+        AND ${ownerFilter} AND ${notDeleted} AND t.phase NOT IN ('ready','closed') ORDER BY t.local_session_id LIMIT 65
+    ), projection_ids AS (${projectionIds}), ids(id) AS (SELECT id FROM task_ids UNION SELECT id FROM projection_ids)
+    SELECT ids.id AS local_session_id,substr(s.title,1,256) AS title,
+      CASE WHEN t.phase NOT IN ('ready','closed') THEN t.phase
+        WHEN ${projectionReason} IN ('REMOTE_PROJECTION_BUDGET','REMOTE_PROJECTION_PUBLICATION_INVALID') THEN 'isolated' ELSE 'backoff' END AS phase,
+      substr(CASE WHEN t.phase NOT IN ('ready','closed') THEN t.reason ELSE ${projectionReason} END,1,160) AS reason,
+      COALESCE(t.scope,'session') AS scope,COALESCE(t.next_retry_at,${projectionRetry},0) AS next_retry_at,
+      COALESCE(t.server_retry_at,0) AS server_retry_at,COALESCE(t.manual_retry_at,-1) AS manual_retry_at,
+      CASE WHEN t.local_session_id IS NULL THEN '{"attempts":[],"times":[]}'
+        WHEN octet_length(t.repair_json)<=4096 THEN t.repair_json ELSE 'null' END AS repair_json
+      FROM ids JOIN cowork_session_ownership o ON o.session_id=ids.id JOIN cowork_sessions s ON s.id=ids.id
+      LEFT JOIN remote_sync_task_state t ON t.local_session_id=ids.id AND t.owner_user_id=? AND t.owner_scope_key=? AND t.target_key=? AND t.device_id=?
+      ${projectionJoin}
+      WHERE o.owner_user_id=? AND o.owner_scope_key=? AND o.ownership_status='confirmed'
+        AND (t.phase NOT IN ('ready','closed') OR (${projectionVisible}))
+        AND NOT EXISTS(SELECT 1 FROM remote_state closed WHERE closed.key='deletionClosed:'||ids.id)
+      ORDER BY CASE WHEN phase='isolated' THEN 0 ELSE 1 END,next_retry_at,ids.id LIMIT 65`)
+      .iterate(...identity(context), context.owner.userId, context.owner.scopeKey,
+        ...(hasProjection ? [...identity(context), context.owner.userId, context.owner.scopeKey] : []),
+        ...identity(context), context.owner.userId, context.owner.scopeKey) as Iterable<TaskSyncRecord & { title: string | null }>;
+    const result: TaskSyncHealth = { failedSessions: 0, retryingSessions: 0, isolatedSessions: 0, taskIssues: [], taskIssuesTruncated: false };
+    const now = this.now(); let scanned = 0;
+    for (const value of rows) {
+      if (scanned++ >= 64) { result.countsTruncated = true; result.taskIssuesTruncated = true; break; }
+      if (!visible(value.local_session_id)) continue;
+      result.failedSessions++;
+      if (value.phase === TaskSyncPhase.Isolated) result.isolatedSessions++; else result.retryingSessions++;
+      if (result.taskIssues.length >= 20) { result.taskIssuesTruncated = true; continue; }
+      let retryable = false;
+      try { retryable = this.canRetry(value, now) && admitted(value.local_session_id); } catch { /* A failed admission check cannot grant retry. */ }
+      result.taskIssues.push({ localSessionId: value.local_session_id, title: typeof value.title === 'string' ? value.title : '',
+        status: value.phase === TaskSyncPhase.Isolated ? RemoteSyncTaskIssueStatus.Isolated
+          : value.phase === TaskSyncPhase.Waiting ? RemoteSyncTaskIssueStatus.WaitingDependency
+            : value.phase === TaskSyncPhase.Repairing ? RemoteSyncTaskIssueStatus.Repairing : RemoteSyncTaskIssueStatus.Retrying,
+        ...(value.phase !== TaskSyncPhase.Isolated && value.next_retry_at < NEVER ? { nextRetryAt: value.next_retry_at } : {}), retryable });
+    }
+    return result;
   }
 }

@@ -265,6 +265,7 @@
     "dist-electron/remoteNetworkWorker.js",
     "dist-electron/remoteSecurityJournalWorker.js",
     "dist-electron/remoteImportSnapshotWorker.js",
+    "dist-electron/remoteHistoryGuardWorker.cjs",
     "node_modules/@img/**",
     "node_modules/better-sqlite3/**",
     "node_modules/node-nim/**",

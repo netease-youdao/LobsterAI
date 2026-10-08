@@ -48,6 +48,11 @@ function hash(file, cancel, expected) {
     check(cancel); return digest.digest('hex');
   } finally { fs.closeSync(fd); }
 }
+function outputPath(args) {
+  if (args.target === undefined) return path.join(args.directory, randomUUID());
+  if (path.dirname(args.target) !== args.directory || !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/u.test(path.basename(args.target))) fail('FILE_SOURCE_CHANGED');
+  return args.target;
+}
 function capture(args, cancel) {
   check(cancel);
   if (!path.isAbsolute(args.source) || fs.lstatSync(args.source).isSymbolicLink()) fail('FILE_SOURCE_CHANGED');
@@ -56,7 +61,7 @@ function capture(args, cancel) {
   if (!before.isFile() || before.size < 1 || before.size > Math.min(args.maximumBytes, 50 * 1024 * 1024)) fail('FILE_TOO_LARGE');
   fs.mkdirSync(args.directory, { recursive: true, mode: 0o700 });
   admit(args.directory, before.size, cancel);
-  const target = path.join(args.directory, randomUUID());
+  const target = outputPath(args);
   try {
     const input = fs.openSync(canonical, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     const output = fs.openSync(target, 'wx', 0o600);
@@ -89,11 +94,13 @@ parentPort.on('message', ({ id, kind, args, cancel }) => {
       if (bytes.length < 1 || bytes.length > 10 * 1024 * 1024) fail('FILE_TOO_LARGE');
       fs.mkdirSync(args.directory, { recursive: true, mode: 0o700 });
       admit(args.directory, bytes.length, cancel);
-      value = path.join(args.directory, randomUUID());
+      value = outputPath(args);
       const fd = fs.openSync(value, 'wx', 0o600);
       try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
       if (Atomics.load(new Int32Array(cancel), 0)) { fs.rmSync(value, { force: true }); fail('FILE_ACCESS_DENIED'); }
     } else fail('FILE_TRANSFER_BUSY');
     parentPort.postMessage({ id, value });
-  } catch (error) { parentPort.postMessage({ id, error: error.message || 'FILE_SOURCE_CHANGED' }); }
+  } catch (error) { parentPort.postMessage({ id, error: error.message || 'FILE_SOURCE_CHANGED',
+    transient: ['FILE_TRANSFER_BUSY', 'FILE_ACCESS_DENIED', 'FINAL_SNAPSHOT_UNAVAILABLE'].includes(error.message)
+      || ['EIO', 'EBUSY', 'EAGAIN', 'EMFILE', 'ENFILE', 'ENOMEM', 'ENOSPC', 'ETIMEDOUT'].includes(error.code) }); }
 });

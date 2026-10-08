@@ -31,7 +31,7 @@ afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 async function invoke(filename: typeof RemoteWorkerFile[keyof typeof RemoteWorkerFile], workerData?: unknown, message?: unknown): Promise<any> {
   if (filename === RemoteWorkerFile.Projection || filename === RemoteWorkerFile.ImportSnapshot) {
-    const result = await new RemoteHistoryJob().run(remoteWorkerPath(filename, archived), workerData, { timeoutMs: 10000, memoryMb: 256, current: () => true, prefix: 'REMOTE_PROJECTION' });
+    const result = await new RemoteHistoryJob(remoteWorkerPath(RemoteWorkerFile.HistoryGuard, archived)).run(remoteWorkerPath(filename, archived), workerData, { timeoutMs: 10000, memoryMb: 256, current: () => true, prefix: 'REMOTE_PROJECTION' });
     return { result };
   }
   const worker = new Worker(remoteWorkerPath(filename, archived), { workerData });

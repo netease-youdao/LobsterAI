@@ -94,9 +94,8 @@ export function availabilityControlSnapshot(store: RemoteStore, localId: string,
     const approvals = decisionRows('approval', requiredApprovals).filter(item => visible(item.runId));
     const publicQuestions = decisionRows('question', requiredQuestions);
     const questionIds = [...new Set([...requiredQuestions, ...publicQuestions.map(item => String(item.questionId))])];
+    if (!store.questionEvidenceHealthy(localId)) throw new Error('REMOTE_CONTROL_DECISION_EVIDENCE_MISSING');
     if (!options.incremental) {
-      if (store.db.prepare("SELECT 1 FROM remote_state WHERE key>='questionDecision:' AND key<'questionDecision;' AND octet_length(value)>32768 LIMIT 1").get())
-        throw new Error('REMOTE_CONTROL_CHECKPOINT_BUDGET');
       const privateRows = store.db.prepare(`SELECT json_extract(value,'$.state.questionId') AS id FROM remote_state
         WHERE key>='questionDecision:' AND key<'questionDecision;'
           AND CASE WHEN octet_length(value)>32768 THEN 0 WHEN json_valid(value) THEN json_extract(value,'$.state.sessionId')=? AND json_extract(value,'$.state.status')='pending' ELSE 0 END LIMIT ?`)

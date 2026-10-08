@@ -154,6 +154,12 @@ describe('immutable import snapshot worker', () => {
   });
   it('stops budget failures until explicit retry instead of re-encoding the same long session', async () => {
     const f = bridgeFixture();
+    const row = f.store.sync('task')!;
+    const target = f.bridge.targets.activateLegacy({ owner, deviceId: 'desktop', legacyStates: [{ localSessionId: row.local_id,
+      deviceId: row.device_id, sessionId: row.session_id, syncProtocolVersion: row.sync_protocol_version, streamEpoch: row.stream_epoch,
+      lastSourceSeq: String(row.ack_seq), lastSeq: row.server_seq, sourcePurgeSeq: row.source_purge_seq, eventPurgeSeq: row.event_purge_seq }] });
+    f.bridge.targetId = target.targetId;
+    f.store.setProjectionIdentity(target.targetId, owner, 'desktop'); f.store.setFileEnvironment(target.targetId);
     const create = vi.spyOn(f.snapshots, 'create').mockRejectedValue(new RemoteImportSnapshotError('REMOTE_IMPORT_BUDGET'));
     await f.bridge.syncSessions();
     expect(f.store.get<any>('syncFailure:task')?.blocked).toBe(true);
