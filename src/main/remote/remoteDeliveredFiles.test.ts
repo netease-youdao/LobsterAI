@@ -4,7 +4,7 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { captureDeliveryBaseline, changedDeliveredFile, deliveredFileLinks } from './remoteDeliveredFiles';
+import { captureDeliveryBaseline, changedDeliveredFile, deliveredFileDeclarations, deliveredFileLinks, RemoteFileDeliveryKind } from './remoteDeliveredFiles';
 
 const roots: string[] = [];
 const current = (): boolean => true;
@@ -196,5 +196,59 @@ describe('explicit delivered file links', () => {
   });
   it('bounds unique declarations to twenty', () => {
     expect(deliveredFileLinks(Array.from({ length: 30 }, (_, index) => `[file](/tmp/${index}.md)`).join('\n'))).toHaveLength(20);
+  });
+});
+
+describe('explicit MEDIA declarations', () => {
+  it('accepts standalone Chinese, space-containing, quoted and local file URL declarations', () => {
+    const first = '/tmp/桌面题目 一.pdf', second = '/tmp/答案 二.pdf';
+    expect(deliveredFileDeclarations(`已经发送。\nMEDIA: ${first}\nMEDIA: \`${second}\`\nMEDIA: ${pathToFileURL(first)}\n后续正文。`)).toEqual([
+      { filePath: first, kind: RemoteFileDeliveryKind.Media }, { filePath: second, kind: RemoteFileDeliveryKind.Media },
+    ]);
+    expect(deliveredFileLinks('MEDIA: "/tmp/quoted.pdf"\nMEDIA: </tmp/angle.pdf>\nMEDIA: file://localhost/tmp/local.pdf'))
+      .toEqual(['/tmp/quoted.pdf', '/tmp/angle.pdf', '/tmp/local.pdf']);
+  });
+
+  it('keeps literal percent sequences in paths and prioritizes MEDIA over a duplicate Markdown reference', () => {
+    expect(deliveredFileDeclarations('[ref](/tmp/a%20b.pdf)\nMEDIA: /tmp/a b.pdf\nMEDIA: /tmp/a%20b.pdf')).toEqual([
+      { filePath: '/tmp/a b.pdf', kind: RemoteFileDeliveryKind.Media },
+      { filePath: '/tmp/a%20b.pdf', kind: RemoteFileDeliveryKind.Media },
+    ]);
+    expect(deliveredFileLinks('MEDIA: file:///tmp/a%20b.pdf\nMEDIA: /tmp/a%GG.pdf')).toEqual(['/tmp/a b.pdf', '/tmp/a%GG.pdf']);
+  });
+
+  it.each([
+    'MEDIA: out.pdf', 'MEDIA: https://example.com/file.pdf', 'MEDIA: file://example.com/file.pdf',
+    'MEDIA: //example.com/file.pdf', 'MEDIA: file:///tmp/a%00.pdf', 'MEDIA: file:///tmp/a%2fb.pdf',
+    '> MEDIA: /tmp/file.pdf', '- MEDIA: /tmp/file.pdf', '1. MEDIA: /tmp/file.pdf',
+    '    MEDIA: /tmp/file.pdf', '	MEDIA: /tmp/file.pdf', '示例 MEDIA: /tmp/file.pdf',
+    '`MEDIA: /tmp/file.pdf`', '`code`MEDIA: /tmp/file.pdf', 'MEDIA: /tmp/file.pdf `example`',
+    '```\nMEDIA: /tmp/file.pdf\n```', '~~~text\nMEDIA: /tmp/file.pdf\n~~~',
+    '`unclosed\nMEDIA: /tmp/file.pdf', '```\nMEDIA: /tmp/file.pdf',
+    '<think>\nMEDIA: /tmp/file.pdf\n</think>', '<thinking>\nMEDIA: /tmp/file.pdf\n</thinking>',
+    '<!--\nMEDIA: /tmp/file.pdf\n-->', '<pre>\nMEDIA: /tmp/file.pdf\n</pre>',
+    '<code>\nMEDIA: /tmp/file.pdf\n</code>',
+  ])('does not upgrade hidden, quoted, code or non-local content to a delivery: %s', content => {
+    expect(deliveredFileDeclarations(content)).toEqual([]);
+  });
+
+  it('resumes only after the hidden region has ended and bounds unique MEDIA declarations', () => {
+    expect(deliveredFileLinks('<think>\nMEDIA: /tmp/hidden.pdf\n</think>\nMEDIA: /tmp/real.pdf\n'
+      + '<!--\nMEDIA: /tmp/comment.pdf\n-->\nMEDIA: /tmp/last.pdf')).toEqual(['/tmp/real.pdf', '/tmp/last.pdf']);
+    expect(deliveredFileLinks(Array.from({ length: 30 }, (_, index) => `MEDIA: /tmp/${index}.pdf`).join('\n'))).toHaveLength(20);
+  });
+
+  it('allows stable existing files only with the explicit delivery flag, retaining boundary checks', async () => {
+    const root = directory(), external = directory(), file = path.join(root, 'existing.pdf');
+    fs.writeFileSync(file, 'existing bytes');
+    const baseline = await captureDeliveryBaseline([root], current);
+    const boundary = Date.now() + 1;
+    expect(await changedDeliveredFile(baseline, file, boundary, current)).toBeNull();
+    expect(await changedDeliveredFile(baseline, file, boundary, current, true)).toMatchObject({ filePath: file, identity: identity(file) });
+    expect(await changedDeliveredFile(baseline, file, boundary, () => false, true)).toBeNull();
+    const outside = path.join(external, 'other.pdf'); fs.writeFileSync(outside, 'outside bytes');
+    expect(await changedDeliveredFile(baseline, outside, Date.now() + 1, current, true)).toBeNull();
+    fs.utimesSync(file, new Date(boundary + 1000), new Date(boundary + 1000));
+    expect(await changedDeliveredFile(baseline, file, boundary, current, true)).toBeNull();
   });
 });

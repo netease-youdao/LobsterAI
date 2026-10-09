@@ -7,7 +7,7 @@ import type { RemoteOwner } from '../../shared/remote/constants';
 import { type RemoteFilePolicy, RemoteFileReason, remoteFileRule } from '../../shared/remote/files';
 import type { LibraryIndexedFile } from '../library/libraryLocalStore';
 import { sameOwner } from './canonical';
-import { captureDeliveryBaseline, changedDeliveredFile, deliveredFileLinks, type DeliveryBaseline } from './remoteDeliveredFiles';
+import { captureDeliveryBaseline, changedDeliveredFile, deliveredFileDeclarations, type DeliveryBaseline, RemoteFileDeliveryKind } from './remoteDeliveredFiles';
 import { captureRemoteFileSnapshot, type RemoteFileSnapshot } from './remoteFileSnapshots';
 import type { RemoteStore } from './remoteStore';
 
@@ -28,14 +28,14 @@ interface PendingRun {
   retryAt: number;
   captured: Set<string>;
 }
-interface DeliveryMessage { id: string; type: string; content: string; metadata: Record<string, unknown> }
+interface DeliveryMessage { id: string; type: string; content: string | null; metadata: Record<string, unknown> }
 const terminal = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
 const writeTools = new Set(['write', 'edit', 'multiedit', 'write_file', 'edit_file', 'create_file']);
 const shellTools = new Set(['exec', 'bash']);
 const MAX_PENDING_RUNS = 32;
 const MAX_FINAL_AGE_MS = 10 * 60_000;
 
-/** Metadata observation never uploads a directory: only changed files explicitly delivered by a completed live run are considered. */
+/** Metadata observation never uploads a directory: explicit live deliveries retain owner, run and immutable-file evidence. */
 export class RemoteDeliveredFileSync {
   private readonly pending = new Map<string, PendingRun>();
   constructor(private readonly deps: DeliveredFileDependencies) {}
@@ -75,9 +75,9 @@ export class RemoteDeliveredFileSync {
   }
 
   private messages(sessionId: string, runId: string): DeliveryMessage[] {
-    const rows = this.deps.store.db.prepare(`SELECT id,type,CASE WHEN type='assistant' THEN substr(content,1,65536) ELSE '' END AS content,metadata FROM cowork_messages
+    const rows = this.deps.store.db.prepare(`SELECT id,type,CASE WHEN type='assistant' THEN CASE WHEN length(content)<=65536 THEN content ELSE NULL END ELSE '' END AS content,metadata FROM cowork_messages
       WHERE session_id=? AND length(metadata)<=65536 AND type IN ('assistant','tool_use','tool_result') ORDER BY sequence DESC LIMIT 160`).all(sessionId) as Array<{
-        id: string; type: string; content: string; metadata: string;
+        id: string; type: string; content: string | null; metadata: string;
       }>;
     return rows.flatMap(row => {
       try {
@@ -85,6 +85,17 @@ export class RemoteDeliveredFileSync {
         return metadata.remoteRunId === runId ? [{ ...row, metadata }] : [];
       } catch { return []; }
     });
+  }
+
+  private declarationCurrent(sessionId: string, runId: string, final: DeliveryMessage): boolean {
+    const row = this.deps.store.db.prepare(`SELECT content,metadata FROM cowork_messages
+      WHERE id=? AND session_id=? AND type='assistant' AND length(content)<=65536 AND length(metadata)<=65536`)
+      .get(final.id, sessionId) as { content: string; metadata: string } | undefined;
+    if (!row || row.content !== final.content) return false;
+    try {
+      const metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+      return metadata.remoteRunId === runId && metadata.isThinking !== true && metadata.isStreaming !== true;
+    } catch { return false; }
   }
 
   private hasSuccessfulProducer(messages: DeliveryMessage[]): boolean {
@@ -114,12 +125,17 @@ export class RemoteDeliveredFileSync {
       const messages = this.messages(sessionId, run.runId);
       const final = messages.find(message => message.type === 'assistant' && message.metadata.isThinking !== true
         && message.metadata.isStreaming !== true);
-      if (!final || !this.hasSuccessfulProducer(messages)) { this.pending.delete(sessionId); continue; }
+      // An oversized latest reply is not a truncated declaration or permission to replay an earlier reply.
+      if (!final || final.content === null) { this.pending.delete(sessionId); continue; }
+      const produced = this.hasSuccessfulProducer(messages);
       let retry = false;
-      for (const filePath of deliveredFileLinks(final.content).slice(0, Math.min(20, policy.limits.maxTaskArtifactCount))) {
+      for (const delivery of deliveredFileDeclarations(final.content).slice(0, Math.min(20, policy.limits.maxTaskArtifactCount))) {
+        const explicitMedia = delivery.kind === RemoteFileDeliveryKind.Media, filePath = delivery.filePath;
+        if (!explicitMedia && !produced) continue;
         if (entry.captured.has(filePath)) continue;
         const valid = (): boolean => entry.current() && current(sessionId)
-          && this.deps.store.run(sessionId)?.finishedAt === run.finishedAt;
+          && this.deps.store.run(sessionId)?.finishedAt === run.finishedAt
+          && (!explicitMedia || this.declarationCurrent(sessionId, run.runId, final));
         let snapshot: RemoteFileSnapshot | undefined;
         let retained = false;
         try {
@@ -127,7 +143,7 @@ export class RemoteDeliveredFileSync {
           const lease = this.deps.access(filePath);
           const assert = (): void => { if (!valid()) throw new Error(RemoteFileReason.Access); lease.assertAllowed(); };
           assert();
-          const receipt = await changedDeliveredFile(entry.baseline, filePath, finishedAt + 1, valid);
+          const receipt = await changedDeliveredFile(entry.baseline, filePath, finishedAt + 1, valid, explicitMedia);
           const detectedType = getLibraryArtifactTypeForExtension(path.extname(filePath));
           if (!receipt || !detectedType || remoteFileRule(policy, path.basename(filePath), receipt.sizeBytes, true)) continue;
           snapshot = await captureRemoteFileSnapshot(filePath, this.deps.cacheRoot, owner, 30 * 1024 * 1024, assert);
@@ -145,7 +161,7 @@ export class RemoteDeliveredFileSync {
               || file.sizeBytes !== stat.size || file.fileMtimeMs !== Math.trunc(stat.mtimeMs)) throw new Error(RemoteFileReason.Source);
           };
           const recorded = await this.deps.recordArtifact({ sessionId, messageId: final.id, filePath, detectedType,
-            relationKind: LibraryRelationKind.Modified, relatedAt: finishedAt, origin: LibraryOrigin.Conversation }, owner, assert, validateIndexed);
+            relationKind: explicitMedia ? LibraryRelationKind.Referenced : LibraryRelationKind.Modified, relatedAt: finishedAt, origin: LibraryOrigin.Conversation }, owner, assert, validateIndexed);
           assert();
           if (!recorded || !accept(sessionId, final.id, run.runId, filePath, snapshot)) throw new Error(RemoteFileReason.Source);
           retained = true;

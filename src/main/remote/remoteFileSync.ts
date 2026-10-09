@@ -204,7 +204,7 @@ export class RemoteFileSync {
       (sessionId, messageId, runId, filePath, snapshot) => {
         const sync = this.deps.store.sync(sessionId);
         if (!sync || sync.device_id !== connection.deviceId) return false;
-        const source = this.sources(sessionId, runId).find(item => item.message_id === messageId && item.file_path === filePath);
+        const source = this.sources(sessionId, runId, { messageId, filePath })[0];
         if (!source) return false;
         const { key, job } = this.getJob(connection, source);
         // The immutable bytes were sealed after completion: publish current/latest, never fabricate a terminal version.
@@ -366,20 +366,25 @@ export class RemoteFileSync {
         touchAvailabilityMessage(this.deps.store.db, job.localSessionId, messageId);
     });
   }
-  private sources(sessionId: string, runId?: string): Source[] {
+  private sources(sessionId: string, runId?: string, delivered?: { messageId: string; filePath: string }): Source[] {
     if (!this.deps.store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='library_local_artifacts'").get()) return [];
     // Only bounded identity metadata is needed for file provenance; never hydrate message bodies.
     const run = "CASE WHEN length(CAST(m.metadata AS BLOB))<=32768 THEN CASE WHEN json_valid(m.metadata) THEN json_extract(m.metadata,'$.remoteRunId') END END";
     const limit = Math.max(1, Math.min(64, this.policy?.limits.maxTaskArtifactCount || 20));
+    // Only the validated explicit-delivery callback may admit an existing reference.
+    // Filter the exact receipt before LIMIT; unrelated references never enter discovery.
+    const relation = delivered ? "r.last_message_id=? AND a.file_path=? AND r.relation_kind IN ('created','modified','referenced')"
+      : "r.relation_kind IN ('created','modified')";
+    const identity: string[] = delivered ? [sessionId, delivered.messageId, delivered.filePath] : [sessionId];
     const rows = this.deps.store.db.prepare(`SELECT candidates.id,candidates.file_path,candidates.file_name,candidates.file_identity,candidates.updated_at,
       m.id AS message_id,${run} AS run_id,candidates.session_id FROM (
         SELECT a.id,a.file_path,a.file_name,a.file_identity,a.updated_at,r.last_message_id,r.session_id FROM library_local_artifacts a
         JOIN library_artifact_sessions r ON r.artifact_id=a.id
-        WHERE r.session_id=? AND r.relation_kind IN ('created','modified') AND a.availability='available'
+        WHERE r.session_id=? AND ${relation} AND a.availability='available'
         ORDER BY a.id LIMIT 64
       ) candidates JOIN cowork_messages m ON m.id=candidates.last_message_id AND m.session_id=candidates.session_id
       WHERE m.type IN ('assistant','tool_result') AND ${runId ? `${run}=?` : `${run} IS NOT NULL`}
-      ORDER BY candidates.id LIMIT ?`).all(...(runId ? [sessionId, runId, limit] : [sessionId, limit])) as Source[];
+      ORDER BY candidates.id LIMIT ?`).all(...identity, ...(runId ? [runId] : []), limit) as Source[];
     return rows.filter(row => safeId(row.run_id) && safeId(row.id) && safeId(row.message_id));
   }
   private getJob(connection: Connection, source: Source): { key: string; job: ArtifactJob } {

@@ -71,9 +71,9 @@ export async function captureDeliveryBaseline(roots: string[], current: () => bo
   return { directories: permitted(current) ? directories.slice() : [], current };
 }
 
-/** A receipt proves a changed, explicitly delivered current file, never historical terminal bytes. */
+/** A receipt proves current stable bytes, never historical terminal bytes. Only an explicit MEDIA declaration may retain an unchanged baseline file. */
 export async function changedDeliveredFile(baseline: DeliveryBaseline, filePath: string, finishedAt: number,
-  current: () => boolean): Promise<{ filePath: string; identity: string; sizeBytes: string } | null> {
+  current: () => boolean, allowUnchanged = false): Promise<{ filePath: string; identity: string; sizeBytes: string } | null> {
   const active = (): boolean => permitted(baseline.current) && permitted(current);
   if (!active() || !path.isAbsolute(filePath) || !Number.isFinite(finishedAt) || finishedAt <= 0) return null;
   const resolved = path.resolve(filePath), root = path.dirname(resolved), name = path.basename(resolved);
@@ -89,7 +89,7 @@ export async function changedDeliveredFile(baseline: DeliveryBaseline, filePath:
       || stat.size < 1 || stat.size > limit || stat.mtimeMs > finishedAt || stat.ctimeMs > finishedAt) return null;
     const identity = fileIdentity(stat);
     if (Object.prototype.hasOwnProperty.call(directory.files, name)
-      && (directory.files[name] === null || directory.files[name] === identity)) return null;
+      && (directory.files[name] === null || !allowUnchanged && directory.files[name] === identity)) return null;
     const after = await fs.promises.lstat(root);
     if (!active() || !after.isDirectory() || after.isSymbolicLink() || directoryIdentity(after) !== directory.identity
       || await fs.promises.realpath(resolved) !== resolved || !active()
@@ -131,27 +131,90 @@ function withoutCode(content: string): string {
   return result;
 }
 
-/** Explicit file/image delivery links only; image syntax also requires an allowed local image extension. */
-export function deliveredFileLinks(content: string): string[] {
-  const links = new Set<string>();
+export const RemoteFileDeliveryKind = { Link: 'link', Media: 'media' } as const;
+export interface RemoteFileDelivery { filePath: string; kind: typeof RemoteFileDeliveryKind[keyof typeof RemoteFileDeliveryKind] }
+
+function localDeliveryPath(target: string, markdown: boolean): string | null {
+  try {
+    let filePath: string;
+    if (/^file:/iu.test(target)) {
+      const url = new URL(target);
+      if (url.protocol !== 'file:' || url.hostname && url.hostname !== 'localhost') return null;
+      filePath = fileURLToPath(url);
+    } else {
+      if (!path.isAbsolute(target) || target.startsWith('//') || markdown && /%2f|%5c/iu.test(target)) return null;
+      // MEDIA holds a literal filesystem path; percent escapes are meaningful only in a file URL/Markdown href.
+      filePath = markdown ? decodeURIComponent(target) : target;
+    }
+    if (!path.isAbsolute(filePath) || /[\u0000-\u001f\u007f]/u.test(filePath)) return null;
+    return path.resolve(filePath);
+  } catch { return null; }
+}
+
+/** MEDIA is a standalone delivery directive, not a path mentioned in prose, code or thinking. */
+function mediaDeliveries(content: string): string[] {
+  const files: string[] = [];
+  let fence: string | undefined, code: string | undefined;
+  const hiddenTags: string[] = [];
+  let comment = false;
+  for (const line of content.split(/\r?\n/u)) {
+    const unquoted = line.replace(/^(?: {0,3}>[ \t]?)+/u, '');
+    if (fence) {
+      const closing = unquoted.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/u)?.[1];
+      if (closing && closing[0] === fence[0] && closing.length >= fence.length) fence = undefined;
+      continue;
+    }
+    const opening = unquoted.match(/^[ \t]*(?:(?:[-+*]|\d+[.)])[ \t]+)?(`{3,}|~{3,})/u)?.[1];
+    if (opening) { fence = opening; continue; }
+    if (/^(?: {4}|\t)/u.test(unquoted)) continue;
+    const visible = !code && !hiddenTags.length && !comment;
+    let hasHiddenMarkup = false;
+    for (const token of line.matchAll(/<!--|-->|`+|<\/?(think|thinking|pre|code)\b[^>]*>/giu)) {
+      if (comment) { if (token[0] === '-->') comment = false; continue; }
+      if (token[0] === '<!--' && !code) { comment = true; hasHiddenMarkup = true; continue; }
+      if (token[0] === '-->') continue;
+      if (token[0][0] === '`') {
+        if (hiddenTags.length) continue;
+        if (code === token[0]) code = undefined;
+        else if (!code) code = token[0];
+      } else if (!code) {
+        hasHiddenMarkup = true;
+        const name = token[1].toLowerCase();
+        if (!token[0].startsWith('</')) hiddenTags.push(name);
+        else if (hiddenTags.at(-1) === name) hiddenTags.pop();
+      }
+    }
+    if (!visible || code || hiddenTags.length || comment || hasHiddenMarkup) continue;
+    const match = /^ {0,3}MEDIA:[ \t]*(.+?)[ \t]*$/iu.exec(line);
+    if (!match) continue;
+    let target = match[1];
+    const quote = target[0], closing = quote === '<' ? '>' : quote;
+    if (['`', '"', "'", '<'].includes(quote)) {
+      if (target.length < 3 || !target.endsWith(closing)) continue;
+      target = target.slice(1, -1);
+    }
+    if (target.includes('`')) continue;
+    const filePath = localDeliveryPath(target, false);
+    if (filePath && !files.includes(filePath)) files.push(filePath);
+    if (files.length >= MAX_DELIVERED_FILES) break;
+  }
+  return files;
+}
+
+/** Explicit file/image links retain their changed-file policy; MEDIA additionally declares delivery of existing bytes. */
+export function deliveredFileDeclarations(content: string): RemoteFileDelivery[] {
+  const declarations = new Map<string, RemoteFileDelivery>();
+  for (const filePath of mediaDeliveries(content)) declarations.set(filePath, { filePath, kind: RemoteFileDeliveryKind.Media });
   const markdownLink = /(?<![!\\])(!?)\[[^\]\r\n]*\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))(?:\s+["'][^"'\r\n]*["'])?\s*\)/gu;
   for (const match of withoutCode(content).matchAll(markdownLink)) {
-    const target = match[2] || match[3];
-    try {
-      let filePath: string;
-      if (/^file:/iu.test(target)) {
-        const url = new URL(target);
-        if (url.protocol !== 'file:' || url.hostname && url.hostname !== 'localhost') continue;
-        filePath = fileURLToPath(url);
-      } else {
-        if (!path.isAbsolute(target) || target.startsWith('//') || /%2f|%5c/iu.test(target)) continue;
-        filePath = decodeURIComponent(target);
-      }
-      if (!path.isAbsolute(filePath) || /[\u0000-\u001f\u007f]/u.test(filePath)) continue;
-      if (match[1] && !IMAGE_DELIVERY_EXTENSIONS.has(path.extname(filePath).toLowerCase())) continue;
-      links.add(path.resolve(filePath));
-      if (links.size >= MAX_DELIVERED_FILES) break;
-    } catch { /* Invalid escapes and non-local file URLs cannot authorize a delivery. */ }
+    if (declarations.size >= MAX_DELIVERED_FILES) break;
+    const filePath = localDeliveryPath(match[2] || match[3], true);
+    if (!filePath || match[1] && !IMAGE_DELIVERY_EXTENSIONS.has(path.extname(filePath).toLowerCase())) continue;
+    if (!declarations.has(filePath)) declarations.set(filePath, { filePath, kind: RemoteFileDeliveryKind.Link });
   }
-  return [...links];
+  return [...declarations.values()];
+}
+
+export function deliveredFileLinks(content: string): string[] {
+  return deliveredFileDeclarations(content).map(value => value.filePath);
 }

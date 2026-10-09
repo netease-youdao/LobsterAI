@@ -101,18 +101,21 @@ function fixture() {
     resultError?: boolean;
     resultRunId?: string;
     toolName?: string;
+    withoutTools?: boolean;
     assistantText?: string;
     status?: 'succeeded' | 'failed';
   } = {}) => {
     const exitCode = options.exitCode === undefined ? 0 : options.exitCode;
-    message('tool-use', 'tool_use', 'Using tool: exec', {
-      toolName: options.toolName ?? 'exec', toolUseId: 'exec-1', toolInput: { command: 'python generate_report.py' },
-    });
-    message('tool-result', 'tool_result', 'Finished', {
-      toolUseId: 'exec-1', isFinal: options.resultFinal ?? true, isStreaming: false, isError: options.resultError ?? false,
-      remoteRunId: options.resultRunId ?? 'run1',
-      toolResultDetails: exitCode === null ? {} : { exitCode },
-    });
+    if (!options.withoutTools) {
+      message('tool-use', 'tool_use', 'Using tool: exec', {
+        toolName: options.toolName ?? 'exec', toolUseId: 'exec-1', toolInput: { command: 'python generate_report.py' },
+      });
+      message('tool-result', 'tool_result', 'Finished', {
+        toolUseId: 'exec-1', isFinal: options.resultFinal ?? true, isStreaming: false, isError: options.resultError ?? false,
+        remoteRunId: options.resultRunId ?? 'run1',
+        toolResultDetails: exitCode === null ? {} : { exitCode },
+      });
+    }
     message('final', 'assistant', options.assistantText ?? `Created [report](${options.linkedPath ?? source})`, { isFinal: true, isStreaming: false });
     // Filesystem timestamps retain sub-millisecond precision; run ISO timestamps do not.
     const finishedAt = Date.now() + 2;
@@ -120,7 +123,7 @@ function fixture() {
     try { store.updateRun('s', options.status ?? 'succeeded'); } finally { now.mockRestore(); }
     return finishedAt;
   };
-  return { db, store, sync, source, workspace, desktop, directory, cacheRoot, access, recordArtifact, accept, events, prepare, collect, finish,
+  return { db, store, sync, source, workspace, desktop, directory, cacheRoot, access, recordArtifact, accept, events, prepare, collect, finish, message,
     write: (value = 'New delivered content', filePath = source) => fs.writeFileSync(filePath, value),
     setPermitted: (value: boolean) => { permitted = value; },
     revokeAccess: () => { accessAllowed = false; },
@@ -393,5 +396,87 @@ describe('delivered files require live preparation and current successful-run ev
     await f.collect();
     expect(f.recordArtifact).toHaveBeenCalledOnce();
     expect(f.accept).not.toHaveBeenCalled();
+  });
+});
+
+describe('MEDIA explicitly delivers existing files without a producer tool', () => {
+  test.each([false, true])('seals two unchanged files only as explicit references (readOnlyTool=%s)', async readOnlyTool => {
+    const f = fixture(), desktopFile = path.join(f.desktop, 'existing answer.txt');
+    f.write('existing question'); f.write('existing answer', desktopFile);
+    await f.prepare();
+    f.finish({ toolName: 'read', withoutTools: !readOnlyTool, assistantText: `Files sent.\nMEDIA: ${f.source}\nMEDIA: ${desktopFile}\nMEDIA: ${f.source}\n[ref](${f.source})` });
+    await f.collect();
+    expect(f.recordArtifact).toHaveBeenCalledTimes(2);
+    expect(f.recordArtifact.mock.calls.map(([candidate]) => [candidate.filePath, candidate.relationKind]))
+      .toEqual([[f.source, LibraryRelationKind.Referenced], [desktopFile, LibraryRelationKind.Referenced]]);
+    expect(f.accept.mock.calls.map(call => fs.readFileSync(call[4].path, 'utf8'))).toEqual(['existing question', 'existing answer']);
+    await f.collect(); expect(f.accept).toHaveBeenCalledTimes(2);
+  });
+
+  test('does not use MEDIA as evidence for unchanged ordinary Markdown files', async () => {
+    const f = fixture(), reference = path.join(f.desktop, 'reference.md');
+    f.write('existing delivery'); f.write('ordinary reference', reference);
+    await f.prepare();
+    f.finish({ assistantText: `MEDIA: ${f.source}\n[reference](${reference})` });
+    await f.collect();
+    expect(f.accept).toHaveBeenCalledOnce(); expect(f.accept.mock.calls[0][3]).toBe(f.source);
+  });
+
+  test.each(['outside', 'symlink', 'access', 'epoch', 'finished', 'failed', 'policy'])('retains %s protections for an existing MEDIA file', async rejection => {
+    const f = fixture(), outside = path.join(f.directory, 'private.md'), symlink = path.join(f.workspace, 'alias.md');
+    f.write('existing'); f.write('outside', outside);
+    fs.symlinkSync(outside, symlink);
+    await f.prepare();
+    const target = rejection === 'outside' ? outside : rejection === 'symlink' ? symlink : f.source;
+    const boundary = f.finish({ assistantText: `MEDIA: ${target}`, status: rejection === 'failed' ? 'failed' : 'succeeded' });
+    if (rejection === 'access') f.revokeAccess();
+    if (rejection === 'epoch') { f.switchAccount(otherOwner); f.switchAccount(owner); }
+    if (rejection === 'finished') fs.utimesSync(f.source, new Date(boundary + 1000), new Date(boundary + 1000));
+    const rules = structuredClone(policy);
+    if (rejection === 'policy') rules.types[0].artifactAutoSync = false;
+    await f.collect(rules);
+    expect(f.recordArtifact).not.toHaveBeenCalled(); expect(f.accept).not.toHaveBeenCalled();
+  });
+
+  test.each(['<think>', '<thinking>', '<!--', '```', '> ', '    '])('does not publish an existing file from %s examples or thinking in the latest reply', async prefix => {
+    const f = fixture(); f.write('existing'); await f.prepare();
+    const content = prefix === '> ' || prefix === '    ' ? `${prefix}MEDIA: ${f.source}` : `${prefix}\nMEDIA: ${f.source}`;
+    f.finish({ assistantText: content });
+    await f.collect(); expect(f.accept).not.toHaveBeenCalled();
+  });
+
+  test('rejects an oversized latest reply without truncating its last line or replaying an older reply', async () => {
+    const f = fixture(); f.write('existing'); await f.prepare();
+    f.finish({ assistantText: `MEDIA: ${f.source}` });
+    const marker = `MEDIA: ${f.source}`;
+    const oversized = `${'x'.repeat(65536 - marker.length - 1)}\n${marker} extra text beyond the truncation boundary`;
+    expect(oversized.slice(0, 65536).endsWith(marker)).toBe(true);
+    f.message('latest', 'assistant', oversized, { isFinal: true, isStreaming: false });
+    await f.collect(); expect(f.recordArtifact).not.toHaveBeenCalled(); expect(f.accept).not.toHaveBeenCalled();
+  });
+
+  test('rechecks MEDIA content before local registration after asynchronous filesystem work', async () => {
+    const f = fixture(); f.write('existing'); await f.prepare(); f.finish({ assistantText: `MEDIA: ${f.source}` });
+    const lstat = fs.promises.lstat.bind(fs.promises);
+    vi.spyOn(fs.promises, 'lstat').mockImplementationOnce(async target => {
+      const stat = await lstat(target);
+      f.db.prepare("UPDATE cowork_messages SET content='Delivery cancelled' WHERE id='final'").run();
+      return stat;
+    });
+    await f.collect(); expect(f.recordArtifact).not.toHaveBeenCalled(); expect(f.accept).not.toHaveBeenCalled();
+  });
+
+  test.each(['edit', 'delete', 'run', 'thinking', 'streaming', 'oversized', 'malformed'])('rechecks %s changes to the original MEDIA reply after asynchronous registration', async change => {
+    const f = fixture(); f.write('existing'); await f.prepare(); f.finish({ assistantText: `MEDIA: ${f.source}` });
+    f.recordArtifact.mockImplementationOnce(async () => {
+      if (change === 'delete') f.db.prepare("DELETE FROM cowork_messages WHERE id='final'").run();
+      else if (change === 'edit' || change === 'oversized') f.db.prepare("UPDATE cowork_messages SET content=? WHERE id='final'")
+        .run(change === 'edit' ? 'Delivery cancelled' : 'x'.repeat(65537));
+      else f.db.prepare("UPDATE cowork_messages SET metadata=? WHERE id='final'").run(change === 'malformed' ? '{' : JSON.stringify({
+        remoteRunId: change === 'run' ? 'another-run' : 'run1', isThinking: change === 'thinking', isStreaming: change === 'streaming',
+      }));
+      return true;
+    });
+    await f.collect(); expect(f.recordArtifact).toHaveBeenCalledOnce(); expect(f.accept).not.toHaveBeenCalled();
   });
 });

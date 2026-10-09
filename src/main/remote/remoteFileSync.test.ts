@@ -51,22 +51,31 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
   let actor: RemoteOwner | null = owner, generation = '1', version = 0;
   const calls: Array<{ pathname: string; body: any; headers: HeadersInit | undefined; generation: string }> = [];
   const uploads = new Map<string, any>(), bytes = new Map<string, Buffer>(), references: any[] = [], chunks = new Map<string, Map<number, Buffer>>();
-  let latest: any = null, responseHook: ((pathname: string) => void) | undefined, loseVersionReceipt = false, manifestOverrides: Record<string, unknown> = {};
+  const latestByArtifact = new Map<string, any>(), artifactIds = new Map<string, string>();
+  let responseHook: ((pathname: string) => void) | undefined, loseVersionReceipt = false, manifestOverrides: Record<string, unknown> = {};
   const connection = () => ({ owner, environment: 'https://example.invalid', deviceId: 'pc', generation });
   const request = vi.fn(async (con, pathname, init) => {
     const body = init.body && init.method !== 'PUT' ? JSON.parse(String(init.body)) : null;
     calls.push({ pathname, body, headers: init.headers, generation: con.generation });
     responseHook?.(pathname);
     if (pathname.startsWith('/file-policy')) return ok(policy);
-    if (pathname === '/devices/pc/artifacts') return ok({ artifactId: 'remote', revision: '1', latestVersion: '0' });
-    const manifest = () => ({ artifactId: 'remote', sessionId: store.sync('s')!.session_id, name: fileName, revision: String(version + 1), availability: latest ? 'ready' : 'desktop_only', latest,
-      latestVersion: latest?.artifactVersion || '0', lastCaptureSequence: latest ? uploads.get(latest.assetId).captureSequence : '0',
-      pendingArtifactVersion: [...uploads.values()].find(item => item.publicationStatus === 'uploading')?.artifactVersion || null, ...manifestOverrides });
-    if (pathname.startsWith('/sessions/')) return ok(manifest());
-    if (pathname === '/artifacts/remote/versions') {
-      const existing = [...uploads.values()].find(item => item.publicationId === body.publicationId);
+    if (pathname === '/devices/pc/artifacts') {
+      const artifactId = artifactIds.get(body.localArtifactId) || (artifactIds.size ? `remote-${body.localArtifactId}` : 'remote');
+      artifactIds.set(body.localArtifactId, artifactId);
+      return ok({ artifactId, revision: '1', latestVersion: '0' });
+    }
+    const manifest = (artifactId = 'remote') => {
+      const latest = latestByArtifact.get(artifactId);
+      return { artifactId, sessionId: store.sync('s')!.session_id, name: fileName, revision: String(version + 1), availability: latest ? 'ready' : 'desktop_only', latest,
+        latestVersion: latest?.artifactVersion || '0', lastCaptureSequence: latest ? uploads.get(latest.assetId).captureSequence : '0',
+        pendingArtifactVersion: [...uploads.values()].find(item => item.artifactId === artifactId && item.publicationStatus === 'uploading')?.artifactVersion || null, ...manifestOverrides };
+    };
+    if (pathname.startsWith('/sessions/')) return ok(manifest(pathname.split('/').at(-1)));
+    if (/^\/artifacts\/[^/]+\/versions$/.test(pathname)) {
+      const artifactId = pathname.split('/')[2];
+      const existing = [...uploads.values()].find(item => item.artifactId === artifactId && item.publicationId === body.publicationId);
       if (existing) return ok(existing);
-      const item = { ...body, artifactId: 'remote', assetId: `asset${++version}`, artifactVersion: String(version), assetVersion: '1', writerGeneration: con.generation,
+      const item = { ...body, artifactId, assetId: `asset${++version}`, artifactVersion: String(version), assetVersion: '1', writerGeneration: con.generation,
         status: 'uploading', publicationStatus: 'uploading', published: false, partBytes: String(partBytes), partCount: Math.ceil(Number(body.sizeBytes) / partBytes), completedParts: [] };
       uploads.set(item.assetId, item);
       if (loseVersionReceipt) { loseVersionReceipt = false; throw new Error('create receipt lost'); }
@@ -94,10 +103,11 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
     if (pathname.endsWith('/resume')) { const item = uploads.get(pathname.split('/')[2]); item.writerGeneration = con.generation; return ok(item); }
     if (pathname.startsWith('/artifact-uploads/')) return ok(uploads.get(pathname.split('/')[2]));
     if (pathname.endsWith('/publish')) {
-      const item = [...uploads.values()].find(item => item.artifactVersion === pathname.split('/')[4]);
+      const artifactId = pathname.split('/')[2];
+      const item = [...uploads.values()].find(item => item.artifactId === artifactId && item.artifactVersion === pathname.split('/')[4]);
       item.publicationStatus = 'published'; item.published = true;
-      latest = { artifactVersion: item.artifactVersion, assetId: item.assetId, assetVersion: '1', mimeType: item.mimeType, sizeBytes: item.sizeBytes, sha256: item.sha256 };
-      return ok(manifest());
+      latestByArtifact.set(artifactId, { artifactVersion: item.artifactVersion, assetId: item.assetId, assetVersion: '1', mimeType: item.mimeType, sizeBytes: item.sizeBytes, sha256: item.sha256 });
+      return ok(manifest(artifactId));
     }
     if (pathname.endsWith('/references')) { references.push(body); return ok({}); }
     if (pathname.endsWith('/sync-state')) return ok({});
@@ -105,13 +115,15 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
   });
   const deps = { store, cacheRoot: cache, owner: () => actor, environment: () => connection().environment, enabled: () => true,
     access: () => ({ assertAllowed: () => { if (actor !== owner) throw new Error('hidden'); } }), request,
-    recordArtifact: deliveries ? async (candidate: { filePath: string; messageId?: string }, _owner: RemoteOwner, assert: () => void, validate: (file: LibraryIndexedFile) => void) => {
+    recordArtifact: deliveries ? async (candidate: { filePath: string; messageId?: string; relationKind?: string }, _owner: RemoteOwner, assert: () => void, validate: (file: LibraryIndexedFile) => void) => {
       assert();
       const stat = fs.statSync(candidate.filePath);
       const identity = `${stat.dev}:${stat.ino}:${Math.trunc(stat.birthtimeMs)}`;
       validate({ filePath: candidate.filePath, fileIdentity: identity, sizeBytes: stat.size, fileMtimeMs: Math.trunc(stat.mtimeMs) } as LibraryIndexedFile);
-      db.prepare("UPDATE library_local_artifacts SET file_identity=?,size_bytes=?,updated_at=? WHERE id='local'").run(identity, stat.size, Date.now());
-      db.prepare("UPDATE library_artifact_sessions SET last_message_id=?,relation_kind='modified' WHERE artifact_id='local'").run(candidate.messageId);
+      const indexed = db.prepare('SELECT id FROM library_local_artifacts WHERE file_path=?').get(candidate.filePath) as { id: string } | undefined;
+      if (!indexed) return false;
+      db.prepare('UPDATE library_local_artifacts SET file_identity=?,size_bytes=?,updated_at=? WHERE id=?').run(identity, stat.size, Date.now(), indexed.id);
+      db.prepare('UPDATE library_artifact_sessions SET last_message_id=?,relation_kind=? WHERE artifact_id=?').run(candidate.messageId, candidate.relationKind ?? 'modified', indexed.id);
       return true;
     } : undefined,
     // Simulates an engine that already sealed bytes before reporting its terminal event.
@@ -189,6 +201,45 @@ describe('remote files policy and immutable snapshots', () => {
     expect(f.references).toHaveLength(1);
     const message = f.store.snapshot('s').records.find(row => row.eventType === 'message.upsert' && row.payload.message.messageId === 'm1');
     expect(message?.payload.message.blocks.at(-1)).toMatchObject({ name: 'worksheet.pdf', mimeType: 'application/pdf', availability: 'ready' });
+  });
+
+  it('publishes only explicitly sent unchanged PDFs and projects both files for legacy and live readers', async () => {
+    const f = fixture(false, true, '口算100题_2026-10-09.pdf');
+    f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run();
+    const second = path.join(path.dirname(f.source), '口算练习题_100道.pdf');
+    fs.writeFileSync(second, '%PDF-existing-second');
+    const stat = fs.statSync(second);
+    f.db.prepare("INSERT INTO library_local_artifacts VALUES('local2',?,?,?,1,'pdf',?,'available')")
+      .run(second, path.basename(second), `${stat.dev}:${stat.ino}:${Math.trunc(stat.birthtimeMs)}`, stat.size);
+    f.db.prepare("INSERT INTO library_artifact_sessions VALUES('local2','s','m1','referenced')").run();
+    // Existing unrelated references before the target sort keys must not consume the exact-delivery lookup page.
+    for (let index = 0; index < 70; index++) {
+      const id = `aaa${index}`;
+      f.db.prepare("INSERT INTO library_local_artifacts VALUES(?,?,?,?,1,'pdf',1,'available')")
+        .run(id, path.join(path.dirname(f.source), `${id}.pdf`), `${id}.pdf`, 'unread');
+      f.db.prepare("INSERT INTO library_artifact_sessions VALUES(?,'s','m1','referenced')").run(id);
+    }
+    await f.tick(); await f.prepareDelivery();
+    f.store.transaction(() => {
+      f.db.prepare("UPDATE cowork_messages SET content=? WHERE id='m1'")
+        .run(`Both files exist — sending them now:\n\nMEDIA:${f.source}\nMEDIA:${second}\n\n两个口算PDF。`);
+    });
+    f.store.updateRun('s', 'succeeded');
+    await f.tick(); await f.tick();
+    expect(f.uploads.size).toBe(2);
+    expect([...f.bytes.values()].map(value => value.toString()).sort()).toEqual(['%PDF-existing-second', 'first'].sort());
+    expect(f.jobs()).toHaveLength(2); expect(f.jobs().every(job => job.queue.length === 0 && job.latest)).toBe(true);
+    const records = f.store.snapshot('s').records;
+    const message = records.find(row => row.eventType === 'message.upsert' && row.payload.message.messageId === 'm1');
+    const ready = (message?.payload.message.blocks || []).filter((block: any) => block.type === 'artifact' && block.availability === 'ready');
+    expect(ready.map((block: any) => block.name).sort()).toEqual([path.basename(f.source), path.basename(second)].sort());
+    expect(f.db.prepare("SELECT relation_kind FROM library_artifact_sessions WHERE artifact_id IN ('local','local2')").all())
+      .toEqual([{ relation_kind: 'referenced' }, { relation_kind: 'referenced' }]);
+    expect(f.references).toHaveLength(0); // A current delivery is not a fabricated historical terminal snapshot.
+    const revision = f.db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='s' AND object_id='m1'").get() as { revision: number };
+    const live = projectLiveMessage(f.db, { database: '', localId: 's', sessionId: f.store.sync('s')!.session_id,
+      deviceId: 'pc', owner, objectId: 'm1', revision: String(revision.revision), environment: 'https://example.invalid' });
+    expect(live?.payload.blocks.filter((block: any) => block.type === 'artifact' && block.availability === 'ready')).toHaveLength(2);
   });
 
   it('bounds a session artifact discovery and excludes oversized provenance metadata', async () => {
