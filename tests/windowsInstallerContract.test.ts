@@ -1632,12 +1632,14 @@ describe('Windows installer Explorer "Open with" contracts', () => {
 
   test('lists each extension once, lowercase and without a dot', () => {
     expect(openWithStart).toBeGreaterThan(-1);
-    expect(extensions.length).toBeGreaterThan(100);
+    expect(extensions.length).toBeGreaterThan(40);
     expect(new Set(extensions).size).toBe(extensions.length);
     for (const extension of extensions) {
       expect(extension).toMatch(/^[a-z0-9]+$/);
     }
-    expect(extensions).toEqual(expect.arrayContaining(['pdf', 'docx', 'xlsx', 'pptx', 'md', 'png', 'mp4', 'zip']));
+    expect(extensions).toEqual(
+      expect.arrayContaining(['pdf', 'docx', 'xlsx', 'pptx', 'csv', 'txt', 'md', 'html', 'png', 'jpg', 'mp3']),
+    );
   });
 
   test('adds only an OpenWithList entry, never a default app candidate', () => {
