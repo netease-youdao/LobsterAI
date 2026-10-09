@@ -38,6 +38,7 @@ export const ProviderName = {
   StepFun: 'stepfun',
   Volcengine: 'volcengine',
   OpenRouter: 'openrouter',
+  AtlasCloud: 'atlascloud',
   Ollama: 'ollama',
   LmStudio: 'lm-studio',
   Custom: 'custom',
@@ -572,6 +573,26 @@ const PROVIDER_DEFINITIONS = [
       { id: 'anthropic/claude-opus-4.7', name: 'Claude Opus 4.7', supportsImage: true, supportsThinking: true },
       { id: 'openai/gpt-5.5', name: 'GPT 5.5', supportsImage: true, supportsThinking: true },
       { id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', supportsImage: true, supportsThinking: true },
+    ],
+  },
+  {
+    id: ProviderName.AtlasCloud,
+    label: 'Atlas Cloud',
+    website: 'https://www.atlascloud.ai',
+    apiKeyUrl: 'https://console.atlascloud.ai/api-keys',
+    // No OpenClaw-native extension for this gateway; Lobster is the documented
+    // fallback id (see ProviderRegistry.resolveOpenClawProviderId above).
+    openClawProviderId: OpenClawProviderId.Lobster,
+    defaultBaseUrl: 'https://api.atlascloud.ai/v1',
+    defaultApiFormat: ApiFormat.OpenAI,
+    codingPlanSupported: false,
+    region: 'global',
+    enPriority: 0,
+    defaultModels: [
+      { id: 'deepseek-ai/deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_048_576, maxTokens: 393_216 },
+      { id: 'deepseek-ai/deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, supportsThinking: true, contextWindow: 1_048_576, maxTokens: 393_216 },
+      { id: 'zai-org/glm-5.3', name: 'GLM 5.3', supportsImage: false, supportsThinking: true, contextWindow: 1_048_576, maxTokens: 131_072 },
+      { id: 'moonshotai/kimi-k3', name: 'Kimi K3', supportsImage: true, supportsThinking: true, contextWindow: 1_048_576, maxTokens: 1_048_576 },
     ],
   },
 ] as const satisfies readonly ProviderDefInput[];

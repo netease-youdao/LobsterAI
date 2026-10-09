@@ -3,6 +3,7 @@ import React from 'react';
 
 import {
   AnthropicIcon,
+  AtlasCloudIcon,
   BananaIcon,
   CustomProviderIcon,
   DeepSeekIcon,
@@ -54,6 +55,7 @@ const PROVIDER_ICON_MAP: Record<string, React.ReactNode> = {
   [ProviderName.StepFun]:      <StepfunIcon />,
   [ProviderName.Volcengine]:   <VolcengineIcon />,
   [ProviderName.OpenRouter]:   <OpenRouterIcon />,
+  [ProviderName.AtlasCloud]:   <AtlasCloudIcon />,
   [ProviderName.Copilot]:      <GitHubCopilotIcon />,
   [ProviderName.Ollama]:       <OllamaIcon />,
   [ProviderName.LmStudio]:     <LmStudioIcon />,
