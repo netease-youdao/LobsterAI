@@ -1,0 +1,46 @@
+diff --git a/packages/gateway-client/src/client.ts b/packages/gateway-client/src/client.ts
+index 97f368590be..e2130fe62eb 100644
+--- a/packages/gateway-client/src/client.ts
++++ b/packages/gateway-client/src/client.ts
+@@ -1340,6 +1340,7 @@ export class GatewayClient {
+       signal: opts?.signal,
+       onSent: opts?.onSent,
+       onAccepted: opts?.onAccepted,
++      traceparent: opts?.traceparent,
+     });
+   }
+ }
+diff --git a/packages/gateway-client/src/pending-request.ts b/packages/gateway-client/src/pending-request.ts
+index 2ef20d73c5f..ab0eaae02fb 100644
+--- a/packages/gateway-client/src/pending-request.ts
++++ b/packages/gateway-client/src/pending-request.ts
+@@ -137,7 +137,15 @@ export class GatewayPendingRequests {
+       options?.signal?.addEventListener("abort", onAbort, { once: true });
+       this.pending.set(id, pending);
+       try {
+-        sender.send(JSON.stringify({ type: "req", id, method, params }));
++        sender.send(
++          JSON.stringify({
++            type: "req",
++            id,
++            method,
++            params,
++            ...(options?.traceparent ? { traceparent: options.traceparent } : {}),
++          }),
++        );
+         if (this.pending.get(id) !== pending) {
+           return;
+         }
+diff --git a/packages/gateway-client/src/protocol-request.ts b/packages/gateway-client/src/protocol-request.ts
+index 3bcf65920d0..c1d67f310b7 100644
+--- a/packages/gateway-client/src/protocol-request.ts
++++ b/packages/gateway-client/src/protocol-request.ts
+@@ -6,6 +6,8 @@ export type GatewayProtocolRequestOptions = {
+   onSent?: () => void;
+   onAccepted?: (payload: unknown) => void;
+   signal?: AbortSignal;
++  /** W3C traceparent sent on the request frame so the Gateway runs the request in that trace. */
++  traceparent?: string;
+ };
+ 
+ export class GatewayProtocolRequestError extends Error {

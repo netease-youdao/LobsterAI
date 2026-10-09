@@ -1,5 +1,5 @@
 import {
-  ArrowUturnLeftIcon, ArrowUturnRightIcon, Bars3BottomLeftIcon, Bars3BottomRightIcon, Bars3CenterLeftIcon, BoldIcon, DocumentDuplicateIcon, ItalicIcon,
+  ArrowUturnLeftIcon, ArrowUturnRightIcon, Bars3BottomLeftIcon, Bars3BottomRightIcon, Bars3CenterLeftIcon, BoldIcon, ItalicIcon,
   PlusIcon, StrikethroughIcon, TrashIcon, UnderlineIcon,
 } from '@heroicons/react/24/outline';
 import React, { useSyncExternalStore } from 'react';
@@ -34,6 +34,20 @@ function TextBoxIcon(): React.ReactElement {
   );
 }
 
+/**
+ * Duplicate slide: a slide with a title in front of another, landscape so it is not read as the
+ * clipboard's copy button.
+ */
+function DuplicateSlideIcon(): React.ReactElement {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.2} aria-hidden="true">
+      <path d="M4.5 6V4a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-2" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="1.5" y="6" width="10" height="6.5" rx="1" />
+      <path d="M3.5 8.5h4.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function SlidesToolbar({ session, disabled }: { session: SlidesEditorSession; disabled: boolean }): React.ReactElement {
   useSyncExternalStore(session.subscribe, session.getVersion);
   const format = session.formatState();
@@ -54,7 +68,7 @@ export function SlidesToolbar({ session, disabled }: { session: SlidesEditorSess
         <PlusIcon className="h-4 w-4" />
       </OfficeToolbarButton>
       <OfficeToolbarButton label="slidesDuplicateSlide" disabled={!hasSlide} onClick={() => session.duplicateSlide()}>
-        <DocumentDuplicateIcon className="h-4 w-4" />
+        <DuplicateSlideIcon />
       </OfficeToolbarButton>
       <OfficeToolbarButton label="slidesDeleteSlide" disabled={!hasSlide || session.slideCount <= 1} onClick={() => session.deleteSlide()}>
         <TrashIcon className="h-4 w-4" />

@@ -9,6 +9,7 @@ import {
   CoworkSystemMessageKind,
   isInternalCompactionSystemText,
 } from '../../../common/coworkSystemMessages';
+import type { CoworkTurnUsageAnchor } from '../../../shared/cowork/llmTurnUsage';
 import { hasToolResultMediaAssets, normalizeFilePathForDedup } from '../../services/artifactParser';
 import { i18nService } from '../../services/i18n';
 import type { Artifact } from '../../types/artifact';
@@ -47,6 +48,8 @@ export type ConversationTurn = {
   id: string;
   userMessage: CoworkMessage | null;
   assistantItems: AssistantTurnItem[];
+  /** Usage for a turn whose user message is outside the loaded page. */
+  inheritedTurnUsage?: CoworkTurnUsageAnchor;
   /**
    * Set on turns without their own user message: when the work they continue
    * started — the previous turn after a context compaction split, or a turn
@@ -58,6 +61,7 @@ export type ConversationTurn = {
 export type BuildConversationTurnsOptions = {
   /** For a partial message window: start of the turn its first message belongs to. */
   leadingTurnStartTimestamp?: number | null;
+  leadingTurnUsage?: CoworkTurnUsageAnchor | null;
 };
 
 export const getTurnMessageIds = (turn: ConversationTurn): Set<string> => {
@@ -893,6 +897,17 @@ export const buildConversationTurns = (
         },
       });
     }
+  }
+
+  if (options.leadingTurnUsage) {
+    let finalLeadingTurn: ConversationTurn | null = null;
+    for (const turn of turns) {
+      if (turn.userMessage) break;
+      if (turn.assistantItems.some(item => item.type === 'assistant')) {
+        finalLeadingTurn = turn;
+      }
+    }
+    if (finalLeadingTurn) finalLeadingTurn.inheritedTurnUsage = options.leadingTurnUsage;
   }
 
   return turns;
