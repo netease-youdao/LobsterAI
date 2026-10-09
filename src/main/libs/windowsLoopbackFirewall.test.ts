@@ -43,8 +43,9 @@ describe('loopback firewall rule', () => {
       'action=allow',
       `program=${programPath}`,
       'protocol=TCP',
-      'localip=127.0.0.1,::1',
-      'remoteip=127.0.0.1,::1',
+      // No ::1: netsh rejects it as a rule address and fails the whole add.
+      'localip=127.0.0.1',
+      'remoteip=127.0.0.1',
       'profile=any',
     ]);
   });
@@ -52,14 +53,14 @@ describe('loopback firewall rule', () => {
   test('gives administrators a command they can paste', () => {
     expect(formatLoopbackFirewallManualCommand(programPath)).toBe(
       'netsh advfirewall firewall add rule name="LobsterAI loopback" dir=in action=allow '
-      + `program="${programPath}" protocol=TCP localip=127.0.0.1,::1 remoteip=127.0.0.1,::1 profile=any`,
+      + `program="${programPath}" protocol=TCP localip=127.0.0.1 remoteip=127.0.0.1 profile=any`,
     );
   });
 
   test('matches the rule the installer writes', () => {
     const installer = fs.readFileSync(path.resolve(process.cwd(), 'scripts/nsis-installer.nsh'), 'utf8');
 
-    expect(installer).toContain(String.raw`firewall add rule \"name=${WINDOWS_LOOPBACK_FIREWALL_RULE_NAME}\" dir=in action=allow $$program protocol=TCP \"localip=127.0.0.1,::1\" \"remoteip=127.0.0.1,::1\" profile=any`);
+    expect(installer).toContain(String.raw`firewall add rule \"name=${WINDOWS_LOOPBACK_FIREWALL_RULE_NAME}\" dir=in action=allow $$program protocol=TCP localip=127.0.0.1 remoteip=127.0.0.1 profile=any`);
     expect(installer).toContain(String.raw`firewall delete rule \"name=${WINDOWS_LOOPBACK_FIREWALL_RULE_NAME}\" dir=in`);
   });
 });
@@ -73,8 +74,7 @@ describe('buildLoopbackFirewallElevatedScript', () => {
     expect(lines[1]).toBe(
       `& $netsh 'advfirewall' 'firewall' 'delete' 'rule' 'name=LobsterAI loopback' 'dir=in' 'program=${programPath}' | Out-Null`,
     );
-    // Unquoted, PowerShell would pass "localip=127.0.0.1" and "::1" as two arguments.
-    expect(lines[2]).toContain("'localip=127.0.0.1,::1' 'remoteip=127.0.0.1,::1'");
+    expect(lines[2]).toContain("'localip=127.0.0.1' 'remoteip=127.0.0.1'");
     expect(lines[3]).toBe('exit $LASTEXITCODE');
   });
 

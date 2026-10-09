@@ -3000,9 +3000,10 @@ FunctionEnd
 ; 127.0.0.1 included, to programs without an inbound allow rule. The engine
 ; gateway is LobsterAI.exe listening on 127.0.0.1, so the app could not reach
 ; it after a reboot (field case 2026-10). The rule allows TCP only between
-; loopback addresses, for this install's executable, so nothing becomes
-; reachable from the network. It is replaced by name and program: reinstalls
-; stay idempotent, and per-user installs of other accounts keep their rule.
+; 127.0.0.1 addresses (netsh rejects ::1 and would fail the whole add), for
+; this install's executable, so nothing becomes reachable from the network.
+; It is replaced by name and program: reinstalls stay idempotent, and
+; per-user installs of other accounts keep their rule.
 ; The app adds the same rule (src/main/libs/windowsLoopbackFirewall.ts) when
 ; its startup self-test finds loopback dropped. A failure here is logged and
 ; never fails the install.
@@ -3015,7 +3016,7 @@ FunctionEnd
     $$netsh = Join-Path $$env:SystemRoot \"System32\netsh.exe\";\
     $$program = \"program=\" + $$env:LOBSTERAI_FIREWALL_PROGRAM;\
     & $$netsh advfirewall firewall delete rule \"name=LobsterAI loopback\" dir=in $$program | Out-Null; $$delete = $$LASTEXITCODE;\
-    & $$netsh advfirewall firewall add rule \"name=LobsterAI loopback\" dir=in action=allow $$program protocol=TCP \"localip=127.0.0.1,::1\" \"remoteip=127.0.0.1,::1\" profile=any | Out-Null; $$add = $$LASTEXITCODE;\
+    & $$netsh advfirewall firewall add rule \"name=LobsterAI loopback\" dir=in action=allow $$program protocol=TCP localip=127.0.0.1 remoteip=127.0.0.1 profile=any | Out-Null; $$add = $$LASTEXITCODE;\
     Write-Output (\"delete_exit=\" + $$delete + \" add_exit=\" + $$add); exit $$add"'
   !insertmacro LobsterExecHiddenToStack
   Pop $0

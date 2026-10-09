@@ -14,7 +14,10 @@ import { detectLoopbackBlock, type LoopbackBlockCheck } from './loopbackSelfTest
  * installs keep their own rule.
  */
 export const WINDOWS_LOOPBACK_FIREWALL_RULE_NAME = 'LobsterAI loopback';
-const LOOPBACK_ADDRESSES = '127.0.0.1,::1';
+// IPv4 only: netsh rejects ::1 as a rule address ("The specified IP address
+// or address keyword is not valid"), which fails the whole add. The gateway
+// listens on, and is probed at, 127.0.0.1.
+const LOOPBACK_ADDRESS = '127.0.0.1';
 
 const POWERSHELL_PATH_ENV = 'LOBSTERAI_FIREWALL_POWERSHELL_PATH';
 const ELEVATED_COMMAND_ENV = 'LOBSTERAI_FIREWALL_ELEVATED_COMMAND';
@@ -30,8 +33,8 @@ export function buildLoopbackFirewallRuleArgs(programPath: string): string[] {
     'action=allow',
     `program=${programPath}`,
     'protocol=TCP',
-    `localip=${LOOPBACK_ADDRESSES}`,
-    `remoteip=${LOOPBACK_ADDRESSES}`,
+    `localip=${LOOPBACK_ADDRESS}`,
+    `remoteip=${LOOPBACK_ADDRESS}`,
     'profile=any',
   ];
 }
@@ -48,8 +51,8 @@ const quotePowerShellLiteral = (value: string): string =>
   `'${value.replace(/['‘’‚‛]/g, quote => quote + quote)}'`;
 
 /**
- * Runs elevated. Every netsh argument is a quoted literal because PowerShell
- * would otherwise split the comma lists into separate arguments.
+ * Runs elevated. Every netsh argument is a quoted literal so the rule name and
+ * program path each reach netsh as one argument.
  */
 export function buildLoopbackFirewallElevatedScript(programPath: string): string {
   const quoteArgs = (args: string[]) => args.map(quotePowerShellLiteral).join(' ');

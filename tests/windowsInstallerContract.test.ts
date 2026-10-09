@@ -819,14 +819,15 @@ describe('Windows installer hardening contracts', () => {
       String.raw`firewall delete rule \"name=LobsterAI loopback\" dir=in $$program`,
     );
     const addRule = apply.indexOf(
-      String.raw`firewall add rule \"name=LobsterAI loopback\" dir=in action=allow $$program protocol=TCP \"localip=127.0.0.1,::1\" \"remoteip=127.0.0.1,::1\" profile=any`,
+      String.raw`firewall add rule \"name=LobsterAI loopback\" dir=in action=allow $$program protocol=TCP localip=127.0.0.1 remoteip=127.0.0.1 profile=any`,
     );
     expect(replaceRule).toBeGreaterThan(-1);
     expect(addRule).toBeGreaterThan(replaceRule);
     expect(apply).toContain('phase=loopback-firewall-rule-complete attempt_id=');
 
     // Only a committed install gets the rule, after every old uninstaller ran.
-    const customInstallStart = installerInclude.indexOf('!macro customInstall\n');
+    // Anchored to the line end rather than '\n': Windows checkouts may be CRLF.
+    const customInstallStart = installerInclude.search(/^!macro customInstall\r?$/m);
     const customInstall = installerInclude.slice(
       customInstallStart,
       installerInclude.indexOf('!macroend', customInstallStart),
