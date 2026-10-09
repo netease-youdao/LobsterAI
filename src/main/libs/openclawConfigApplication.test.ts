@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { confirmOpenClawConfigApplied, isOpenClawConfigApplied } from './openclawConfigApplication';
+import {
+  confirmOpenClawConfigApplied,
+  describeOpenClawConfigApplicationGap,
+  isOpenClawConfigApplied,
+} from './openclawConfigApplication';
 
 const config = { agents: { defaults: { model: { primary: 'fixture/current' } } } };
 const raw = JSON.stringify(config);
@@ -86,6 +90,28 @@ describe('config application evidence', () => {
     });
     await vi.runAllTimersAsync();
     expect(await result).toBe(false);
+  });
+
+  test('names the failing application check without exposing config values', () => {
+    expect(describeOpenClawConfigApplicationGap(applied, raw)).toBeUndefined();
+    expect(describeOpenClawConfigApplicationGap({ ...applied, valid: false }, raw)).toBe('invalid');
+    expect(describeOpenClawConfigApplicationGap({ ...applied, appliedConfigHash: 'old' }, raw)).toBe('revision');
+    expect(describeOpenClawConfigApplicationGap({ ...applied, parsed: undefined }, raw)).toBe('content:unavailable');
+    expect(describeOpenClawConfigApplicationGap(applied, 'malformed')).toBe('content:unparseable');
+
+    const target = JSON.stringify({
+      ...config,
+      models: { providers: { fixture: { apiKey: 'synthetic-secret-value', baseUrl: 'http://127.0.0.1:1/v1' } } },
+      meta: { lastTouchedVersion: '2026.8.1' },
+    });
+    const gap = describeOpenClawConfigApplicationGap(applied, target);
+    expect(gap).toBe('content:models');
+    const nested = describeOpenClawConfigApplicationGap(
+      { ...applied, parsed: { ...config, models: { providers: { fixture: { apiKey: '__OPENCLAW_REDACTED__' } } } } },
+      target,
+    );
+    expect(nested).toBe('content:models.providers.fixture');
+    expect(`${gap}${nested}`).not.toContain('synthetic-secret-value');
   });
 
   test('bounds retries when application evidence remains unavailable', async () => {

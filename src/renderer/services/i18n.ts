@@ -1647,6 +1647,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
       '常见原因是安装过程被安全软件拦截或中途退出。可先尝试一键修复（会从安装包残留资源自动恢复运行时）；若修复无效，请将安装目录加入安全软件信任区后，重新下载安装包覆盖安装。聊天记录、模型配置与工作区文件不会丢失。',
     coworkOpenClawErrorShort: '网关启动失败',
     coworkOpenClawErrorDefer: '稍后处理',
+    coworkOpenClawConfigStalledTitle: 'AI 引擎设置未能生效',
+    coworkOpenClawConfigStalledHint:
+      '最新设置没能应用到 AI 引擎，重启网关后仍未恢复，已停止自动重试。一键修复会清理残留的配置锁并重新应用设置，聊天记录、模型配置和工作区文件会保留。',
     coworkOpenClawLoopbackBlockedTitle: '本机连接被 Windows 防火墙拦截',
     coworkOpenClawLoopbackBlockedShort: '本机连接被拦截',
     coworkOpenClawLoopbackBlockedHint:
@@ -2530,6 +2533,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorSessionContinueFailed: '发送消息失败：{error}',
     coworkModelSwitchFailed: '模型切换失败，请稍后重试。',
     coworkErrorEngineNotReady: 'AI 引擎正在启动中，请稍等几秒后重试。',
+    coworkErrorConfigApplyPending: 'AI 引擎正在应用最新设置，请稍后重新发送。',
+    coworkErrorConfigApplyStalled: 'AI 引擎设置未能生效，请先使用“一键修复”。',
     coworkErrorUnknown: '任务执行出错，请重试。如果问题持续出现，请检查模型配置。',
     coworkErrorTechnicalDetails: '技术详情',
     coworkErrorModelLabel: '模型',
@@ -6169,6 +6174,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'This usually happens when security software blocks the installer or it exits early. Try Quick Repair first — it restores the runtime from leftover installer resources. If that fails, add the install directory to your security software allowlist, then download the installer again and reinstall. Chats, model settings, and workspace files are preserved.',
     coworkOpenClawErrorShort: 'Gateway failed to start',
     coworkOpenClawErrorDefer: 'Later',
+    coworkOpenClawConfigStalledTitle: "AI engine settings didn't take effect",
+    coworkOpenClawConfigStalledHint:
+      "Your latest settings couldn't be applied to the AI engine, even after restarting the gateway, so automatic retries stopped. Quick Repair clears leftover configuration locks and applies the settings again. Chats, model settings, and workspace files are retained.",
     coworkOpenClawLoopbackBlockedTitle: 'Windows Firewall is blocking local connections',
     coworkOpenClawLoopbackBlockedShort: 'Local connections blocked',
     coworkOpenClawLoopbackBlockedHint:
@@ -7107,6 +7115,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorSessionContinueFailed: 'Failed to send message: {error}',
     coworkModelSwitchFailed: 'Failed to switch model. Please try again later.',
     coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
+    coworkErrorConfigApplyPending: 'The AI engine is applying your latest settings. Please send again shortly.',
+    coworkErrorConfigApplyStalled: "The AI engine settings didn't take effect. Please use Quick Repair first.",
     coworkErrorUnknown:
       'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
     coworkErrorTechnicalDetails: 'Technical details',

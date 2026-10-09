@@ -6,12 +6,14 @@ import {
   DEFERRED_SYNC_REASON_PREFIX,
   deliverOpenClawConfigToGateway,
   isConfigDeliveryFallbackReason,
+  isPersistentConfigDeliveryFailure,
   mergeDeferredGatewayRestartReason,
   OpenClawConfigDeliveryMode,
   type OpenClawConfigRpcClient,
   OpenClawConfigRpcMethod,
   stripPluginIndexManagedKeysFromRawConfig,
 } from './openclawConfigDelivery';
+import { ConfigDiagnosticErrorKind } from './openclawConfigObservation';
 
 const FILE_CONTENT = '{"models":{"providers":{"p":{"models":[{"id":"m-b"}]}}},"meta":{"lastTouchedVersion":"2026.8.1"}}\n';
 
@@ -515,6 +517,108 @@ describe('config application confirmation', () => {
     expect(scheduleDeferredRestart).toHaveBeenCalledTimes(current ? 0 : 1);
     expect(calls.filter(method => method === OpenClawConfigRpcMethod.Apply)).toHaveLength(1);
     expect(calls.filter(method => method === OpenClawConfigRpcMethod.Get)).toHaveLength(current ? 2 : 4);
+  });
+});
+
+describe('orphaned config lock recovery', () => {
+  // The gateway waits ~19.5s for openclaw.json's lock; the host gives up first.
+  const lockedClient = (unlockAfterRecovery: { unlocked: boolean }) => {
+    const calls: string[] = [];
+    let appliedRaw: string | undefined;
+    const client: OpenClawConfigRpcClient = {
+      request: async <T,>(method: string, params?: unknown): Promise<T> => {
+        calls.push(method);
+        if (method === OpenClawConfigRpcMethod.Get) {
+          return { hash: 'revision', valid: true, raw: appliedRaw ?? '{}', configRevisionHash: 'r', appliedConfigHash: 'r' } as T;
+        }
+        if (!unlockAfterRecovery.unlocked) throw new Error('gateway request timeout for config.apply');
+        appliedRaw = (params as { raw: string }).raw;
+        return { hash: 'written' } as T;
+      },
+    };
+    return { client, calls };
+  };
+
+  test('retries at once after reclaiming an orphaned lock instead of falling back', async () => {
+    vi.useFakeTimers();
+    const lock = { unlocked: false };
+    const { client, calls } = lockedClient(lock);
+    const recoverConfigLock = vi.fn(() => { lock.unlocked = true; return true; });
+    const scheduleDeferredRestart = vi.fn();
+
+    const pending = deliverOpenClawConfigToGateway(baseInput({
+      ensureRpcClient: async () => client, recoverConfigLock, scheduleDeferredRestart,
+    }));
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Applied);
+    expect(recoverConfigLock).toHaveBeenCalledTimes(1);
+    expect(scheduleDeferredRestart).not.toHaveBeenCalled();
+    expect(calls.filter(method => method === OpenClawConfigRpcMethod.Apply)).toHaveLength(2);
+  });
+
+  test('without an orphaned lock the timeout falls back once, as a persistent failure', async () => {
+    vi.useFakeTimers();
+    const { client } = lockedClient({ unlocked: false });
+    const recoverConfigLock = vi.fn(() => false);
+    const scheduleDeferredRestart = vi.fn();
+
+    const pending = deliverOpenClawConfigToGateway(baseInput({
+      ensureRpcClient: async () => client, recoverConfigLock, scheduleDeferredRestart,
+    }));
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result).toMatchObject({ mode: OpenClawConfigDeliveryMode.Fallback, errorKind: ConfigDiagnosticErrorKind.Timeout });
+    expect(isPersistentConfigDeliveryFailure(result)).toBe(true);
+    expect(recoverConfigLock).toHaveBeenCalledTimes(1);
+    expect(scheduleDeferredRestart).toHaveBeenCalledTimes(1);
+  });
+
+  test('a reclaimed lock is retried only once per delivery', async () => {
+    vi.useFakeTimers();
+    const { client, calls } = lockedClient({ unlocked: false });
+    const recoverConfigLock = vi.fn(() => true);
+
+    const pending = deliverOpenClawConfigToGateway(baseInput({
+      ensureRpcClient: async () => client, recoverConfigLock, scheduleDeferredRestart: undefined,
+    }));
+    await vi.runAllTimersAsync();
+
+    expect((await pending).mode).toBe(OpenClawConfigDeliveryMode.Fallback);
+    expect(recoverConfigLock).toHaveBeenCalledTimes(1);
+    expect(calls.filter(method => method === OpenClawConfigRpcMethod.Apply)).toHaveLength(2);
+  });
+
+  test('classifies the gateway lock error and other outcomes for the recovery owner', async () => {
+    vi.useFakeTimers();
+    const failing = (error: Error): OpenClawConfigRpcClient => ({
+      request: async <T,>(method: string): Promise<T> => {
+        if (method === OpenClawConfigRpcMethod.Get) return { hash: 'revision', valid: true, raw: '{}' } as T;
+        throw error;
+      },
+    });
+    const run = async (client: OpenClawConfigRpcClient | null) => {
+      const pending = deliverOpenClawConfigToGateway(baseInput({
+        ensureRpcClient: async () => client, scheduleDeferredRestart: undefined,
+      }));
+      await vi.runAllTimersAsync();
+      return pending;
+    };
+
+    const locked = await run(failing(new Error('UNAVAILABLE: file lock timeout for C:\\state\\openclaw.json')));
+    expect(locked.errorKind).toBe(ConfigDiagnosticErrorKind.LockTimeout);
+    expect(isPersistentConfigDeliveryFailure(locked)).toBe(true);
+
+    const disconnected = await run(failing(new Error('gateway connection closed')));
+    expect(disconnected.errorKind).toBe(ConfigDiagnosticErrorKind.Unavailable);
+    expect(isPersistentConfigDeliveryFailure(disconnected)).toBe(false);
+
+    const throttled = await run(failing(Object.assign(new Error('rate limited request timeout'), { retryAfterMs: 5_000 })));
+    expect(isPersistentConfigDeliveryFailure(throttled)).toBe(false);
+
+    expect(isPersistentConfigDeliveryFailure(await run(null))).toBe(false);
   });
 });
 

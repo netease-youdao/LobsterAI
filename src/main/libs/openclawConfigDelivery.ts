@@ -5,6 +5,7 @@ import {
 import {
   CONFIG_APPLICATION_CHECK_TIMEOUT_MS,
   confirmOpenClawConfigApplied,
+  describeOpenClawConfigApplicationGap,
   isOpenClawConfigApplied,
   type OpenClawConfigSnapshot,
 } from './openclawConfigApplication';
@@ -85,6 +86,11 @@ export type OpenClawConfigDeliveryInput = {
   /** Used only for read-only diagnostics when config.apply reports lock contention. */
   configPath?: string;
   /**
+   * Remove an orphaned openclaw.json lock left by a killed writer. Called at
+   * most once per delivery after a timeout; true means a retry may now succeed.
+   */
+  recoverConfigLock?: () => boolean;
+  /**
    * Resolve a connected gateway RPC client, waiting for a starting gateway to
    * come up. Must resolve to null (not throw) when unavailable.
    */
@@ -102,7 +108,22 @@ export type OpenClawConfigDeliveryResult = {
   elapsedMs: number;
   /** Native throttling is a deferred retry, never a reason to respawn. */
   retryAfterMs?: number;
+  /** Set when a config RPC failed, as opposed to an unconfirmed but accepted write. */
+  errorKind?: ConfigDiagnosticErrorKind;
 };
+
+/**
+ * A failed request that a fresh gateway does not cure by itself (a write that
+ * times out or cannot take the config lock). Native throttling, disconnects,
+ * revision races and accepted-but-unapplied writes still resolve on retry.
+ */
+export function isPersistentConfigDeliveryFailure(result: OpenClawConfigDeliveryResult): boolean {
+  return result.mode === OpenClawConfigDeliveryMode.Fallback
+    && result.retryAfterMs === undefined
+    && (result.errorKind === ConfigDiagnosticErrorKind.LockTimeout
+      || result.errorKind === ConfigDiagnosticErrorKind.Timeout
+      || result.errorKind === ConfigDiagnosticErrorKind.Other);
+}
 
 const CONFIG_GET_TIMEOUT_MS = 10_000;
 const CONFIG_APPLY_TIMEOUT_MS = 15_000;
@@ -119,6 +140,18 @@ const isConfigValidationRejection = (error: unknown): boolean => {
   // v2026.8.1 can wrap validation failures in an UNAVAILABLE RPC error.
   // Restarting cannot repair the rejected payload, regardless of the wrapper.
   return /invalid config|config validation failed|CONFIG_VALIDATION_FAILED|INVALID_REQUEST/i.test(message);
+};
+
+const isConfigLockTimeout = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  return /file[_ ]lock[_ ]timeout/i.test(message);
+};
+
+// The gateway waits ~19.5s for openclaw.json's lock, longer than CONFIG_APPLY_TIMEOUT_MS,
+// so a write blocked by the lock usually reaches the host as a plain request timeout.
+const mayBeBlockedByConfigLock = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  return isConfigLockTimeout(error) || /timeout|timed out/i.test(message);
 };
 
 /**
@@ -214,6 +247,7 @@ async function requestConfigApply(
     rawRevision: typeof snapshot?.hash === 'string' ? configDiagnosticDigest(snapshot.hash) : undefined,
     resolvedRevision: typeof snapshot?.configRevisionHash === 'string' ? configDiagnosticDigest(snapshot.configRevisionHash) : undefined,
     appliedRevision: typeof snapshot?.appliedConfigHash === 'string' ? configDiagnosticDigest(snapshot.appliedConfigHash) : undefined,
+    applicationGap: snapshot ? describeOpenClawConfigApplicationGap(snapshot, payload) : undefined,
   }));
   if (isOpenClawConfigApplied(snapshot, payload)) return ConfigRecoveryEvidence.Applied;
   if (!baseHash) throw new Error('config.get returned no revision for a conditional write');
@@ -236,6 +270,7 @@ async function requestConfigApply(
 function classifyDiagnosticError(error: unknown): ConfigDiagnosticErrorKind {
   if (isBaseHashConflict(error)) return ConfigDiagnosticErrorKind.HashConflict;
   if (isConfigValidationRejection(error)) return ConfigDiagnosticErrorKind.Validation;
+  if (isConfigLockTimeout(error)) return ConfigDiagnosticErrorKind.LockTimeout;
   const message = error instanceof Error ? error.message : String(error);
   if (/timeout|timed out/i.test(message)) return ConfigDiagnosticErrorKind.Timeout;
   if (/closed|disconnected|unavailable/i.test(message)) return ConfigDiagnosticErrorKind.Unavailable;
@@ -266,6 +301,7 @@ export async function deliverOpenClawConfigToGateway(
     detail: string,
     restartScheduled = false,
     retryAfterMs?: number,
+    errorKind?: ConfigDiagnosticErrorKind,
   ): OpenClawConfigDeliveryResult => {
     const result: OpenClawConfigDeliveryResult = {
       mode,
@@ -273,13 +309,15 @@ export async function deliverOpenClawConfigToGateway(
       restartScheduled,
       elapsedMs: now() - startedAtMs,
       ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+      ...(errorKind !== undefined ? { errorKind } : {}),
     };
     const log = mode === OpenClawConfigDeliveryMode.Rejected
       ? console.error
       : mode === OpenClawConfigDeliveryMode.Fallback ? console.warn : console.log;
     log(
       `[ConfigDelivery] mode=${result.mode} reason=${input.reason} detail=${result.detail}`
-      + ` restartScheduled=${result.restartScheduled} elapsedMs=${result.elapsedMs}`,
+      + ` restartScheduled=${result.restartScheduled} elapsedMs=${result.elapsedMs}`
+      + (errorKind !== undefined ? ` errorKind=${errorKind}` : ''),
     );
     diagnose(() => ({
       stage: ConfigDiagnosticStage.Complete, attempt: diagnosticAttempt, elapsedMs: result.elapsedMs,
@@ -294,18 +332,29 @@ export async function deliverOpenClawConfigToGateway(
     return result;
   };
 
-  const fallback = (detail: string, retryAfterMs?: number): OpenClawConfigDeliveryResult => {
+  const fallback = (
+    detail: string,
+    retryAfterMs?: number,
+    errorKind?: ConfigDiagnosticErrorKind,
+  ): OpenClawConfigDeliveryResult => {
     if (!input.scheduleDeferredRestart) {
-      return finish(OpenClawConfigDeliveryMode.Fallback, detail, false, retryAfterMs);
+      return finish(OpenClawConfigDeliveryMode.Fallback, detail, false, retryAfterMs, errorKind);
     }
     input.scheduleDeferredRestart(`${CONFIG_DELIVERY_FALLBACK_REASON_PREFIX}${input.reason}`);
-    return finish(OpenClawConfigDeliveryMode.Fallback, detail, true, retryAfterMs);
+    return finish(OpenClawConfigDeliveryMode.Fallback, detail, true, retryAfterMs, errorKind);
   };
 
   const diagnoseLockFailure = (error: unknown): void => {
-    const message = error instanceof Error ? error.message : String(error);
-    if (input.configPath && /file[_ ]lock[_ ]timeout/i.test(message)) {
+    if (input.configPath && mayBeBlockedByConfigLock(error)) {
       logOpenClawConfigLockDiagnostics(input.configPath, `config-delivery:${input.reason}`);
+    }
+  };
+
+  const recoverConfigLock = (): boolean => {
+    try {
+      return input.recoverConfigLock?.() === true;
+    } catch {
+      return false;
     }
   };
 
@@ -357,6 +406,8 @@ export async function deliverOpenClawConfigToGateway(
     return fallback('gateway client unavailable');
   }
 
+  let hashRetry = 0;
+  let lockRecoveryAttempted = false;
   for (let attempt = 0; ; attempt += 1) {
     diagnosticAttempt = attempt + 1;
     try {
@@ -374,42 +425,50 @@ export async function deliverOpenClawConfigToGateway(
             `config.apply rejected payload: ${describeError(error)}; restart skipped`,
           );
         }
-        if (!isConfigValidationRejection(error)) {
-          const applied = await confirmOpenClawConfigApplied({
-            readConfigFile: () => stripPluginIndexManagedKeysFromRawConfig(input.readConfigFile()),
-            readSnapshot: async () => {
-              const probeStartedAt = Date.now();
-              try {
-                const snapshot = await client.request<OpenClawConfigSnapshot>(
-                  OpenClawConfigRpcMethod.Get, {}, { timeoutMs: CONFIG_APPLICATION_CHECK_TIMEOUT_MS },
-                );
-                diagnose(() => ({
-                  stage: ConfigDiagnosticStage.Verify, attempt: diagnosticAttempt,
-                  outcome: ConfigDiagnosticOutcome.Succeeded, elapsedMs: Date.now() - probeStartedAt,
-                  timeoutMs: CONFIG_APPLICATION_CHECK_TIMEOUT_MS,
-                }));
-                return snapshot;
-              } catch (probeError) {
-                diagnose(() => ({
-                  stage: ConfigDiagnosticStage.Verify, attempt: diagnosticAttempt,
-                  outcome: ConfigDiagnosticOutcome.Failed, elapsedMs: Date.now() - probeStartedAt,
-                  timeoutMs: CONFIG_APPLICATION_CHECK_TIMEOUT_MS, errorKind: classifyDiagnosticError(probeError),
-                }));
-                throw probeError;
-              }
-            },
-          });
-          if (applied) return finish(OpenClawConfigDeliveryMode.Applied, 'current config application confirmed after timeout');
+        // An orphaned lock fails every write, across restarts, until it is removed.
+        if (!lockRecoveryAttempted && mayBeBlockedByConfigLock(error)) {
+          lockRecoveryAttempted = true;
+          if (recoverConfigLock()) continue;
         }
+        const applied = await confirmOpenClawConfigApplied({
+          readConfigFile: () => stripPluginIndexManagedKeysFromRawConfig(input.readConfigFile()),
+          readSnapshot: async () => {
+            const probeStartedAt = Date.now();
+            try {
+              const snapshot = await client.request<OpenClawConfigSnapshot>(
+                OpenClawConfigRpcMethod.Get, {}, { timeoutMs: CONFIG_APPLICATION_CHECK_TIMEOUT_MS },
+              );
+              diagnose(() => ({
+                stage: ConfigDiagnosticStage.Verify, attempt: diagnosticAttempt,
+                outcome: ConfigDiagnosticOutcome.Succeeded, elapsedMs: Date.now() - probeStartedAt,
+                timeoutMs: CONFIG_APPLICATION_CHECK_TIMEOUT_MS,
+              }));
+              return snapshot;
+            } catch (probeError) {
+              diagnose(() => ({
+                stage: ConfigDiagnosticStage.Verify, attempt: diagnosticAttempt,
+                outcome: ConfigDiagnosticOutcome.Failed, elapsedMs: Date.now() - probeStartedAt,
+                timeoutMs: CONFIG_APPLICATION_CHECK_TIMEOUT_MS, errorKind: classifyDiagnosticError(probeError),
+              }));
+              throw probeError;
+            }
+          },
+        });
+        if (applied) return finish(OpenClawConfigDeliveryMode.Applied, 'current config application confirmed after timeout');
         const retryAfterMs = error && typeof error === 'object' && 'retryAfterMs' in error
           && typeof error.retryAfterMs === 'number' && Number.isFinite(error.retryAfterMs)
           && error.retryAfterMs >= 0 ? error.retryAfterMs : undefined;
-        return fallback(`config.apply failed: ${describeError(error)}`, retryAfterMs);
+        return fallback(`config.apply failed: ${describeError(error)}`, retryAfterMs, classifyDiagnosticError(error));
       }
-      if (attempt >= CONFIG_HASH_RETRY_DELAYS_MS.length) {
-        return fallback(`config.apply hash retries exhausted: ${describeError(error)}`);
+      if (hashRetry >= CONFIG_HASH_RETRY_DELAYS_MS.length) {
+        return fallback(
+          `config.apply hash retries exhausted: ${describeError(error)}`,
+          undefined,
+          ConfigDiagnosticErrorKind.HashConflict,
+        );
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, CONFIG_HASH_RETRY_DELAYS_MS[attempt]));
+      await new Promise<void>((resolve) => setTimeout(resolve, CONFIG_HASH_RETRY_DELAYS_MS[hashRetry]));
+      hashRetry += 1;
     }
   }
 }

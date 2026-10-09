@@ -291,6 +291,11 @@ export interface OpenClawEngineStatus {
   gatewayPort?: number | null;
   gatewayHttpUrl?: string | null;
   canRetry: boolean;
+  /**
+   * Set on a task-admission reply while a config change is still unapplied.
+   * The gateway process keeps running, so this is not an engine lifecycle state.
+   */
+  configApplyPending?: boolean;
 }
 
 export interface OpenClawLoopbackRepairResult {

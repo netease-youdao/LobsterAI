@@ -85,6 +85,8 @@ export type ConfigDiagnosticOutcome = typeof ConfigDiagnosticOutcome[keyof typeo
 export const ConfigDiagnosticErrorKind = {
   HashConflict: 'hash-conflict',
   Validation: 'validation',
+  /** The gateway could not take openclaw.json's file lock (code=file_lock_timeout). */
+  LockTimeout: 'lock-timeout',
   Timeout: 'timeout',
   Unavailable: 'unavailable',
   Other: 'other',
@@ -102,6 +104,8 @@ export type ConfigDeliveryDiagnostic = {
   rawRevision?: string;
   resolvedRevision?: string;
   appliedRevision?: string;
+  /** Which application check failed before a write: config paths only, never values. */
+  applicationGap?: string;
   errorKind?: ConfigDiagnosticErrorKind;
   evidence?: ConfigRecoveryEvidence;
   actualAction?: ConfigRecoveryAction;
