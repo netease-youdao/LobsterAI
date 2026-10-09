@@ -11,6 +11,7 @@ import {
 import { CompanionSelectionAction } from '../../shared/desktopCompanion/selectionActions';
 
 const trusted = vi.hoisted(() => ({ value: true }));
+const menu = vi.hoisted(() => ({ build: vi.fn(), popup: vi.fn() }));
 
 vi.mock('electron', () => ({
   screen: {
@@ -21,7 +22,7 @@ vi.mock('electron', () => ({
   systemPreferences: { isTrustedAccessibilityClient: () => trusted.value },
   shell: { openExternal: vi.fn(() => Promise.resolve()) },
   clipboard: { writeText: vi.fn() },
-  Menu: { buildFromTemplate: () => ({ popup: vi.fn() }) },
+  Menu: { buildFromTemplate: menu.build },
 }));
 vi.mock('../i18n', () => ({ t: (key: string) => key }));
 
@@ -92,12 +93,54 @@ function sentSelection() {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.useFakeTimers();
+  menu.build.mockReturnValue({ popup: menu.popup });
   trusted.value = true;
   preferences = { ...DEFAULT_DESKTOP_COMPANION_PREFERENCES, enabled: true };
 });
 
 describe('selection toolbar', () => {
+  test('overflow actions keep the selection while the native menu handles mouse and keyboard input', () => {
+    const controller = create();
+    select();
+    vi.advanceTimersByTime(200);
+    controller.handleCommand({ type: DesktopCompanionSelectionCommandType.More });
+    const items = menu.build.mock.calls[0][0] as Array<{ label?: string; click?: () => void }>;
+    expect(items.slice(0, 3).map(item => item.label)).toEqual([
+      'desktopCompanionActionExplain', 'desktopCompanionActionSummarize', 'desktopCompanionActionPolish',
+    ]);
+    expect(items.some(item => item.label === 'desktopCompanionSelectionCopy')).toBe(false);
+    FakeHook.last!.emit('mouse-down', { x: 5, y: 5, button: 0 });
+    FakeHook.last!.emit('key-down', { uniKey: 'ArrowDown' });
+    controller.onForegroundChange();
+    expect(win.visible).toBe(true);
+    expect(sentSelection().text).toBe('ambient co-worker');
+
+    items[1].click?.();
+    expect(sentSelection()).toMatchObject({
+      mode: DesktopCompanionSelectionMode.Answer, action: CompanionSelectionAction.Summarize,
+    });
+    expect(win.focusable).toBe(true);
+    const { callback } = menu.popup.mock.calls[0][0] as { callback: () => void };
+    callback();
+    FakeHook.last!.emit('mouse-down', { x: 5, y: 5, button: 0 });
+    expect(win.visible).toBe(false);
+    controller.dispose();
+  });
+
+  test('an old overflow menu cannot run an action against a replacement selection', () => {
+    const controller = create();
+    select();
+    vi.advanceTimersByTime(200);
+    controller.handleCommand({ type: DesktopCompanionSelectionCommandType.More });
+    const items = menu.build.mock.calls[0][0] as Array<{ click?: () => void }>;
+    select('a different passage');
+    items[0].click?.();
+    expect(sentSelection()).toMatchObject({ text: 'a different passage', mode: DesktopCompanionSelectionMode.Toolbar });
+    controller.dispose();
+  });
+
   test('starts the hook without touching the clipboard and skips default-excluded apps natively', () => {
     const controller = create();
     expect(controller.capability).toBe(CompanionCapability.Ready);

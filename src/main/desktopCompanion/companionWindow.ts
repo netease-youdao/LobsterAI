@@ -44,6 +44,7 @@ export function createCompanionWindow(env: CompanionWindowEnvironment, options: 
       webSecurity: true,
       navigateOnDragDrop: false,
       spellcheck: false,
+      ...(options.surface === DesktopCompanionSurface.LanguageTools ? { autoplayPolicy: 'no-user-gesture-required' as const } : {}),
     },
   });
   win.setMenu(null);

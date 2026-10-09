@@ -1,3 +1,4 @@
+import { SpeakerWaveIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useRef, useState } from 'react';
 
 import {
@@ -10,6 +11,7 @@ import {
   DesktopCompanionStageKind,
   type DesktopCompanionState,
 } from '../../../shared/desktopCompanion/constants';
+import { isSpeechActive, LanguageTool } from '../../../shared/desktopCompanion/languageTools';
 import { getCompanionSkin } from '../../../shared/desktopCompanion/skins';
 import { i18nService } from '../../services/i18n';
 import { CoworkSessionStatusValue } from '../../types/cowork';
@@ -147,6 +149,9 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
         <CompanionCharacter skin={state.preferences.skin} mood={mood} size={CHARACTER_SIZE} gaze={effectiveGaze} />
         {mood === CompanionMood.Working && getCompanionSkin(state.preferences.skin).asset && <span className="orb-ring" aria-hidden="true" />}
       </button>
+      {isSpeechActive(state.speechStatus) && <button type="button" className="orb-speech"
+        aria-label={i18nService.t('desktopToolsPlayback')} title={i18nService.t('desktopToolsPlayback')}
+        onClick={() => { void api.openLanguageTool({ tool: LanguageTool.Tts }); }}><SpeakerWaveIcon /></button>}
     </div>
   );
 }
