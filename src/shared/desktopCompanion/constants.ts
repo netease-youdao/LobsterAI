@@ -1,6 +1,7 @@
 import type { CompanionAppCategory } from './appCategories';
 import type { CompanionFileKind } from './fileKinds';
 import type { CompanionHintTopic } from './hintPolicy';
+import type { LanguageToolsBridge, SpeechStatus } from './languageTools';
 import type { CompanionSelectionAction } from './selectionActions';
 
 export const DesktopCompanionIpc = {
@@ -34,6 +35,7 @@ export const DesktopCompanionSurface = {
   Panel: 'panel',
   Stage: 'stage',
   Selection: 'selection',
+  LanguageTools: 'language-tools',
 } as const;
 export type DesktopCompanionSurface = typeof DesktopCompanionSurface[keyof typeof DesktopCompanionSurface];
 
@@ -141,6 +143,7 @@ export interface DesktopCompanionForeground {
 }
 
 export interface DesktopCompanionState {
+  speechStatus?: SpeechStatus;
   revision: number;
   preferences: DesktopCompanionPreferences;
   panelVisible: boolean;
@@ -247,7 +250,7 @@ export interface CompanionGaze {
   y: number;
 }
 
-export interface DesktopCompanionBridge {
+export interface DesktopCompanionBridge extends LanguageToolsBridge {
   getState(): Promise<DesktopCompanionState>;
   setPreferences(patch: Partial<DesktopCompanionPreferences>): Promise<DesktopCompanionResult>;
   setDraft(draft: DesktopCompanionDraft): Promise<DesktopCompanionState>;
@@ -297,7 +300,7 @@ export const DesktopCompanionSize = {
   Panel: { width: 444, height: 584 },
   Hint: { width: 320, height: 168 },
   Drop: { width: 448, height: 214 },
-  Toolbar: { width: 460, height: 64 },
+  Toolbar: { width: 600, height: 64 },
   Answer: { width: 436, height: 460 },
   SurfacePad: 22,
   Margin: 12,

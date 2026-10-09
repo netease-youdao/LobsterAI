@@ -7,6 +7,7 @@ import { DesktopCompanionSurface } from '../shared/desktopCompanion/constants';
 import CompanionOrb from './components/desktopCompanion/CompanionOrb';
 import CompanionPanel from './components/desktopCompanion/CompanionPanel';
 import CompanionStage from './components/desktopCompanion/CompanionStage';
+import LanguageToolsSurface from './components/desktopCompanion/LanguageToolsSurface';
 import SelectionSurface from './components/desktopCompanion/SelectionSurface';
 import { useDesktopCompanionState } from './components/desktopCompanion/useDesktopCompanionState';
 import { i18nService } from './services/i18n';
@@ -28,7 +29,8 @@ function DesktopCompanion() {
       if (language === 'zh' || language === 'en') void i18nService.setLanguage(language, { persist: false });
       document.documentElement.lang = i18nService.getLanguage();
       document.documentElement.dataset.surface = surface ?? '';
-      document.title = i18nService.t(surface === DesktopCompanionSurface.Panel ? 'desktopCompanionOpenPanel' : 'desktopCompanionTitle');
+      document.title = i18nService.t(surface === DesktopCompanionSurface.LanguageTools ? 'desktopToolsTitle'
+        : surface === DesktopCompanionSurface.Panel ? 'desktopCompanionOpenPanel' : 'desktopCompanionTitle');
     };
     const unsubscribe = i18nService.subscribe(() => setLanguageRevision(value => value + 1));
     sync();
@@ -42,6 +44,7 @@ function DesktopCompanion() {
     case DesktopCompanionSurface.Mascot: return <CompanionOrb state={state} />;
     case DesktopCompanionSurface.Stage: return <CompanionStage state={state} />;
     case DesktopCompanionSurface.Selection: return <SelectionSurface state={state} />;
+    case DesktopCompanionSurface.LanguageTools: return <LanguageToolsSurface state={state} />;
     default: return <CompanionPanel state={state} />;
   }
 }

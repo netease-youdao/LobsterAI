@@ -10,6 +10,7 @@ import {
   ListBulletIcon,
   QuestionMarkCircleIcon,
   SparklesIcon,
+  SpeakerWaveIcon,
   StopIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
@@ -26,6 +27,7 @@ import {
   DesktopCompanionSelectionMode,
   type DesktopCompanionState,
 } from '../../../shared/desktopCompanion/constants';
+import { LanguageTool } from '../../../shared/desktopCompanion/languageTools';
 import {
   CompanionSelectionAction,
   companionTranslationTarget,
@@ -92,7 +94,7 @@ export default function SelectionSurface({ state }: { state: DesktopCompanionSta
     const previous = selectionRef.current;
     selectionRef.current = next;
     setSelection(next);
-    if (!next || next.id !== previous?.id) {
+    if (!next || next.id !== previous?.id || next.action !== previous?.action) {
       setStream(null);
       setTurns([]);
       setQuestion('');
@@ -138,14 +140,24 @@ export default function SelectionSurface({ state }: { state: DesktopCompanionSta
     });
   }, [api]);
 
+  // Native overflow-menu actions and toolbar actions enter the same answer flow.
+  const autoAnswerAction = answering && selection.action !== CompanionSelectionAction.Ask
+    && selection.action !== CompanionSelectionAction.Translate ? selection.action : null;
+  useEffect(() => {
+    if (autoAnswerAction) ask(autoAnswerAction, []);
+  }, [ask, autoAnswerAction, selection?.id]);
+
   const run = (action: CompanionSelectionAction) => {
+    if (action === CompanionSelectionAction.Translate) {
+      void api.openLanguageTool({ tool: LanguageTool.Translate, text: selectionRef.current?.text });
+      return;
+    }
     void api.selectionCommand({ type: DesktopCompanionSelectionCommandType.Run, action });
     if (action === CompanionSelectionAction.Ask) {
       void api.selectionCommand({ type: DesktopCompanionSelectionCommandType.FocusInput });
       setTimeout(() => inputRef.current?.focus(), 60);
       return;
     }
-    ask(action, []);
   };
 
   const submit = () => {
@@ -206,14 +218,20 @@ export default function SelectionSurface({ state }: { state: DesktopCompanionSta
       <div className="sel-surface">
         <div className="sel-toolbar" ref={rootRef} role="toolbar" aria-label={t('desktopCompanionSelection')}>
           <span className="sel-brand"><CompanionCharacter skin={state.preferences.skin} mood={CompanionMood.Idle} size={22} showBadge={false} /></span>
-          {selection.actions.map((action, index) => {
-            const Icon = ACTION_ICONS[action];
-            return (
-              <button type="button" key={action} className="sel-action" data-primary={index === 0} onClick={() => run(action)}>
-                <Icon />{actionLabel(action)}
-              </button>
-            );
-          })}
+          <button type="button" className="sel-action" data-primary="true" onClick={() => run(CompanionSelectionAction.Translate)}>
+            <LanguageIcon />{actionLabel(CompanionSelectionAction.Translate)}
+          </button>
+          <button type="button" className="sel-action" onClick={() => { void api.openLanguageTool({ tool: LanguageTool.Tts, text: selection.text }); }}>
+            <SpeakerWaveIcon />{t('desktopToolsReadAloud')}
+          </button>
+          <button type="button" className="sel-action" onClick={() => {
+            void api.copyText(selection.text).then(() => api.selectionCommand({ type: DesktopCompanionSelectionCommandType.Dismiss }));
+          }}>
+            <DocumentDuplicateIcon />{t('desktopCompanionSelectionCopy')}
+          </button>
+          <button type="button" className="sel-action" onClick={() => run(CompanionSelectionAction.Ask)}>
+            <ChatBubbleLeftEllipsisIcon />{actionLabel(CompanionSelectionAction.Ask)}
+          </button>
           <span className="sel-divider" />
           <button
             type="button"

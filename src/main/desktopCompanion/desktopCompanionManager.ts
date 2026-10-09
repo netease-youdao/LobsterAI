@@ -59,6 +59,7 @@ import {
   snapCompanionToEdge,
 } from '../../shared/desktopCompanion/geometry';
 import { companionHintCopyKeys, type CompanionHintTopic } from '../../shared/desktopCompanion/hintPolicy';
+import { isSpeechActive, SpeechCommand } from '../../shared/desktopCompanion/languageTools';
 import { COMPANION_SKINS, normalizeCompanionSkin } from '../../shared/desktopCompanion/skins';
 import { t } from '../i18n';
 import { CompanionHintsController } from './companionHints';
@@ -67,6 +68,8 @@ import { CompanionStageController } from './companionStage';
 import { type CompanionWindowEnvironment, createCompanionWindow } from './companionWindow';
 import { CompanionFileDragMonitor, FileDragEvent, type FileDragMonitor, type FileDragStart } from './fileDragMonitor';
 import { CompanionForegroundMonitor, type ForegroundAppMonitor } from './foregroundAppMonitor';
+import type { CompanionLanguageClient } from './languageToolClient';
+import { CompanionLanguageToolsController } from './languageToolsController';
 import { CompanionQuickAnswerService } from './quickAnswerService';
 
 const PEEK_DELAY_MS = 1_800;
@@ -78,6 +81,7 @@ interface CompanionStore {
 }
 
 export interface DesktopCompanionServices {
+  languageClient?: CompanionLanguageClient;
   foreground?: ForegroundAppMonitor;
   fileDrag?: FileDragMonitor;
   quickAnswer?: CompanionQuickAnswerService;
@@ -187,6 +191,7 @@ export class DesktopCompanionManager {
   private readonly stage: CompanionStageController;
   private readonly hints: CompanionHintsController;
   private readonly selection: CompanionSelectionController;
+  private readonly languageTools: CompanionLanguageToolsController;
 
   constructor(private readonly options: DesktopCompanionOptions) {
     const { store } = options;
@@ -233,6 +238,15 @@ export class DesktopCompanionManager {
       openSettings: () => this.options.openSettings?.(),
     }, this.quickAnswer, services.loadSelectionHook);
 
+    this.languageTools = new CompanionLanguageToolsController({
+      createWindow: () => this.createWindow(DesktopCompanionSurface.LanguageTools, true),
+      getSelectionAnchor: () => this.selection.selectionAnchor,
+      assertSender: id => this.assertSender(id),
+      publish: () => this.publish(),
+      hideSelection: () => this.selection.hide(),
+      abortFollowUp: id => this.quickAnswer.abortOwnedBy(id),
+    }, services.languageClient);
+
     this.foreground.on('change', this.onForegroundChange);
     this.fileDrag.on(FileDragEvent.Start, this.onGlobalDragStart);
     this.fileDrag.on(FileDragEvent.End, this.onGlobalDragEnd);
@@ -248,6 +262,7 @@ export class DesktopCompanionManager {
     const category = this.foregroundAppId ? categorizeCompanionApp(this.foregroundAppId) : null;
     return {
       revision: this.revision,
+      speechStatus: this.languageTools.speechStatus,
       preferences: { ...this.preferences, selectionExcludedApps: [...this.preferences.selectionExcludedApps] },
       panelVisible: this.panelVisible,
       sessionId: this.sessionId,
@@ -287,6 +302,7 @@ export class DesktopCompanionManager {
     const turningOn = next.enabled && !this.preferences.enabled;
     const exclusionsChanged = next.selectionExcludedApps.join('\n') !== this.preferences.selectionExcludedApps.join('\n');
     this.preferences = next;
+    if (!next.enabled) this.languageTools.reset();
     this.options.store.set(DesktopCompanionStoreKey.Preferences, next);
     if (turningOn && this.snooze) this.wake(false);
     if (!next.contextHints && this.stage.stage.kind === DesktopCompanionStageKind.Hint) this.stage.clear();
@@ -301,6 +317,8 @@ export class DesktopCompanionManager {
     if (this.panelVisible) this.hidePanel();
     else this.showPanel();
   }
+
+  resetLanguageTools(): void { this.languageTools.reset(); }
 
   hidePanel(): void {
     if (!this.panelVisible) return;
@@ -352,6 +370,7 @@ export class DesktopCompanionManager {
     this.selection.dispose();
     this.stage.dispose();
     this.quickAnswer.dispose();
+    this.languageTools.dispose();
     this.orb?.destroy();
     this.panel?.destroy();
     this.orb = null;
@@ -693,7 +712,7 @@ export class DesktopCompanionManager {
   }
 
   private companionWindows(): Array<BrowserWindow | null> {
-    return [this.orb, this.panel, this.stage.browserWindow, this.selection.browserWindow];
+    return [this.orb, this.panel, this.stage.browserWindow, this.selection.browserWindow, this.languageTools.browserWindow];
   }
 
   private publish(): void {
@@ -706,7 +725,7 @@ export class DesktopCompanionManager {
 
   private assertSender(senderId: number): void {
     const allowed = [this.options.getMainWindow()?.webContents.id, this.orb?.webContents.id, this.panel?.webContents.id,
-      this.stage.webContentsId, this.selection.webContentsId];
+      this.stage.webContentsId, this.selection.webContentsId, this.languageTools.webContentsId];
     if (!allowed.some(id => id !== undefined && id !== null && id === senderId)) throw new Error('Unknown desktop companion IPC sender');
   }
 
@@ -716,6 +735,9 @@ export class DesktopCompanionManager {
     });
     const template: MenuItemConstructorOptions[] = [
       { label: t('desktopCompanionOpenPanel'), click: () => this.showPanel() },
+      ...(isSpeechActive(this.languageTools.speechStatus) ? [
+        { label: t('desktopToolsStop'), click: () => this.languageTools.command(SpeechCommand.Stop) },
+      ] : []),
       { label: t('desktopCompanionOpenApp'), click: () => { this.hidePanel(); this.options.openMain(this.sessionId); } },
       { type: 'separator' },
       {
@@ -803,6 +825,7 @@ export class DesktopCompanionManager {
       if (!size || !Number.isFinite(size.width) || !Number.isFinite(size.height)) return;
       if (senderId === this.stage.webContentsId) this.stage.setContentSize(size);
       else if (senderId === this.selection.webContentsId) this.selection.setContentSize(size);
+      else if (senderId === this.languageTools.webContentsId) this.languageTools.setContentSize(size);
     });
   }
 }
