@@ -1642,6 +1642,19 @@ const translations: Record<LanguageType, Record<string, string>> = {
       '常见原因是安装过程被安全软件拦截或中途退出。可先尝试一键修复（会从安装包残留资源自动恢复运行时）；若修复无效，请将安装目录加入安全软件信任区后，重新下载安装包覆盖安装。聊天记录、模型配置与工作区文件不会丢失。',
     coworkOpenClawErrorShort: '网关启动失败',
     coworkOpenClawErrorDefer: '稍后处理',
+    coworkOpenClawLoopbackBlockedTitle: '本机连接被 Windows 防火墙拦截',
+    coworkOpenClawLoopbackBlockedShort: '本机连接被拦截',
+    coworkOpenClawLoopbackBlockedHint:
+      'AI 引擎通过本机地址 127.0.0.1 与 LobsterAI 通信，这台电脑的 Windows 防火墙拦截了这类连接。点击“允许本机连接”并在系统弹窗中选择“是”，会添加一条只放行本机内部连接的防火墙规则，不会向网络开放端口。',
+    coworkOpenClawAllowLoopback: '允许本机连接',
+    coworkOpenClawAllowLoopbackRunning: '正在添加防火墙规则…',
+    coworkOpenClawLoopbackRecheck: '重新检测',
+    coworkOpenClawAllowLoopbackCancelled:
+      '未获得管理员授权，防火墙规则没有添加。请再次点击“允许本机连接”并在系统弹窗中选择“是”；如果当前账户不是管理员，请联系电脑管理员。',
+    coworkOpenClawAllowLoopbackStillBlocked:
+      '防火墙规则已添加，但本机连接仍被拦截，可能是其他安全软件或单位的网络策略在拦截。请在安全软件中将 LobsterAI 加入信任，然后点击“重新检测”。',
+    coworkOpenClawAllowLoopbackFailed: '添加防火墙规则失败。',
+    coworkOpenClawAllowLoopbackManual: '可以请电脑管理员在“以管理员身份运行”的命令提示符中执行以下命令，再点击“重新检测”：',
     openClawMaintenanceTitle: '运行维护',
     openClawRepairGatewayStateTitle: '修复启动问题',
     openClawRepairGatewayStateDesc: '备份引擎数据，修复配置、数据库和内置插件，再重新启动网关。',
@@ -6122,6 +6135,19 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'This usually happens when security software blocks the installer or it exits early. Try Quick Repair first — it restores the runtime from leftover installer resources. If that fails, add the install directory to your security software allowlist, then download the installer again and reinstall. Chats, model settings, and workspace files are preserved.',
     coworkOpenClawErrorShort: 'Gateway failed to start',
     coworkOpenClawErrorDefer: 'Later',
+    coworkOpenClawLoopbackBlockedTitle: 'Windows Firewall is blocking local connections',
+    coworkOpenClawLoopbackBlockedShort: 'Local connections blocked',
+    coworkOpenClawLoopbackBlockedHint:
+      'The AI engine talks to LobsterAI over the local address 127.0.0.1, and Windows Firewall on this computer is blocking those connections. Click "Allow Local Connections" and choose "Yes" in the system prompt to add a firewall rule that only allows connections within this computer. No ports are opened to the network.',
+    coworkOpenClawAllowLoopback: 'Allow Local Connections',
+    coworkOpenClawAllowLoopbackRunning: 'Adding firewall rule…',
+    coworkOpenClawLoopbackRecheck: 'Check Again',
+    coworkOpenClawAllowLoopbackCancelled:
+      'Administrator approval was not given, so the firewall rule was not added. Click "Allow Local Connections" again and choose "Yes" in the system prompt. If this account is not an administrator, contact the computer\'s administrator.',
+    coworkOpenClawAllowLoopbackStillBlocked:
+      'The firewall rule was added, but local connections are still blocked, possibly by other security software or an organization policy. Add LobsterAI to that software\'s trusted list, then click "Check Again".',
+    coworkOpenClawAllowLoopbackFailed: 'Could not add the firewall rule.',
+    coworkOpenClawAllowLoopbackManual: 'Ask the computer\'s administrator to run this command in a Command Prompt opened with "Run as administrator", then click "Check Again":',
     openClawMaintenanceTitle: 'Run Maintenance',
     openClawRepairGatewayStateTitle: 'Repair Startup',
     openClawRepairGatewayStateDesc:

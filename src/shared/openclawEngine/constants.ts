@@ -4,6 +4,7 @@ export const OpenClawEngineIpc = {
   RetryInstall: 'openclaw:engine:retryInstall',
   RestartGateway: 'openclaw:engine:restartGateway',
   RepairGatewayState: 'openclaw:engine:repairGatewayState',
+  RepairLoopbackFirewall: 'openclaw:engine:repairLoopbackFirewall',
   OnProgress: 'openclaw:engine:onProgress',
 } as const;
 
@@ -76,10 +77,32 @@ export const OpenClawEngineErrorCode = {
    * listed sources must be handled first.
    */
   StartupMigrationRefused: 'startup_migration_refused',
+  /**
+   * Connections to a listening 127.0.0.1 port of this executable are dropped
+   * (Windows Defender Firewall's "Query user" default block). The gateway is
+   * the same executable, so it would be unreachable; startup stops until the
+   * loopback firewall rule is added or the user retries.
+   */
+  LoopbackBlocked: 'loopback_blocked',
 } as const;
 
 export type OpenClawEngineErrorCode =
   typeof OpenClawEngineErrorCode[keyof typeof OpenClawEngineErrorCode];
+
+/** Result of the elevated "allow local connections" firewall repair. */
+export const OpenClawLoopbackRepairOutcome = {
+  /** The rule is in place and the loopback self-test passes. */
+  Repaired: 'repaired',
+  /** The rule is in place, but something else still drops loopback. */
+  StillBlocked: 'still_blocked',
+  /** The UAC prompt was declined (or no administrator approved it). */
+  Cancelled: 'cancelled',
+  Failed: 'failed',
+  Unsupported: 'unsupported',
+} as const;
+
+export type OpenClawLoopbackRepairOutcome =
+  typeof OpenClawLoopbackRepairOutcome[keyof typeof OpenClawLoopbackRepairOutcome];
 
 export const OpenClawGatewayFailureKind = {
   HeapOutOfMemory: 'heap_out_of_memory',

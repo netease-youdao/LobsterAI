@@ -188,6 +188,7 @@ import {
   OpenClawEngineIpc,
   OpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
+  OpenClawLoopbackRepairOutcome,
 } from '../shared/openclawEngine/constants';
 import { OpenClawRepairPhase, OpenClawRepairStage } from '../shared/openclawEngine/repair';
 import { PlatformRegistry } from '../shared/platform';
@@ -563,6 +564,7 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
+import { type LoopbackFirewallRepairResult, repairWindowsLoopbackFirewall } from './libs/windowsLoopbackFirewall';
 import { getLogFilePath, getRecentMainLogEntries, initLogger } from './logger';
 import { type AskUserResponse, McpRuntime } from './mcp/mcpRuntime';
 import {
@@ -8881,6 +8883,32 @@ if (!gotTheLock) {
         error: error instanceof Error ? error.message : 'Failed to repair OpenClaw gateway state',
       };
     }
+  });
+
+  let repairLoopbackFirewallPromise: Promise<LoopbackFirewallRepairResult & { status: OpenClawEngineStatus }> | null = null;
+  ipcMain.handle(OpenClawEngineIpc.RepairLoopbackFirewall, () => {
+    repairLoopbackFirewallPromise ??= (async () => {
+      const manager = getOpenClawEngineManager();
+      try {
+        // On Windows the gateway runs as this same executable.
+        const repair = await repairWindowsLoopbackFirewall({ programPath: process.execPath });
+        if (repair.outcome !== OpenClawLoopbackRepairOutcome.Repaired) {
+          return { ...repair, status: manager.getStatus() };
+        }
+        const status = await manager.restartGateway('loopback-firewall-repair', { retryBlocked: true });
+        return { ...repair, status };
+      } catch (error) {
+        console.error('[OpenClaw] loopback firewall repair failed:', error);
+        return {
+          outcome: OpenClawLoopbackRepairOutcome.Failed,
+          detail: error instanceof Error ? error.message : String(error),
+          status: manager.getStatus(),
+        };
+      }
+    })().finally(() => {
+      repairLoopbackFirewallPromise = null;
+    });
+    return repairLoopbackFirewallPromise;
   });
 
   ipcMain.handle(DataMigrationIpc.Backup, async event => {

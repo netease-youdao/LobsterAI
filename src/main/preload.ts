@@ -364,6 +364,7 @@ contextBridge.exposeInMainWorld('electron', {
       retryInstall: () => ipcRenderer.invoke(OpenClawEngineIpc.RetryInstall),
       restartGateway: () => ipcRenderer.invoke(OpenClawEngineIpc.RestartGateway),
       repairGatewayState: () => ipcRenderer.invoke(OpenClawEngineIpc.RepairGatewayState),
+      repairLoopbackFirewall: () => ipcRenderer.invoke(OpenClawEngineIpc.RepairLoopbackFirewall),
       onProgress: (callback: (status: any) => void) => {
         const handler = (_event: any, status: any) => callback(status);
         ipcRenderer.on(OpenClawEngineIpc.OnProgress, handler);

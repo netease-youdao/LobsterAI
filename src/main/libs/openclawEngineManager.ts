@@ -27,6 +27,7 @@ import {
   pruneGatewayLogs,
 } from './gatewayLogRotation';
 import { recoverInstallerResourcesFromTar } from './installerResourceRecovery';
+import { detectLoopbackBlock, LoopbackSelfTestOutcome } from './loopbackSelfTest';
 import { mergeNoProxyValue } from './noProxyEnv';
 import { getCodexHomeDir } from './openaiCodexAuth';
 import { type OpenClawConfigAutoRestoreEvent, parseOpenClawConfigAutoRestore } from './openclawConfigAutoRestore';
@@ -359,9 +360,13 @@ export const probeOpenClawGatewayStartup = async (
       detail: `${GATEWAY_PROBE_PATH.Startup} → HTTP 404; ${GATEWAY_PROBE_PATH.LegacyReady} → HTTP ${legacyResponse.status}`,
     };
   } catch (error) {
+    // fetch reports every connect failure as "fetch failed"; the socket code
+    // tells a dropped connect (ETIMEDOUT) from a closed port (ECONNREFUSED).
+    const causeCode = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
+    const cause = typeof causeCode === 'string' ? ` (${causeCode})` : '';
     return {
       ready: false,
-      detail: `${GATEWAY_PROBE_PATH.Startup} → ${(error as Error).message || String(error)}`,
+      detail: `${GATEWAY_PROBE_PATH.Startup} → ${(error as Error).message || String(error)}${cause}`,
     };
   }
 };
@@ -1010,6 +1015,32 @@ export class OpenClawEngineManager extends EventEmitter {
         canRetry: true,
       });
       return this.getStatus();
+    }
+
+    // The gateway runs as this same executable. When Windows Firewall drops
+    // our own 127.0.0.1 connections, it would be unreachable until the boot
+    // timeout; stop here so the user can add the loopback rule instead.
+    if (process.platform === 'win32') {
+      const loopback = await detectLoopbackBlock();
+      if (this.shutdownRequested) return this.getStatus();
+      if (loopback.last.outcome === LoopbackSelfTestOutcome.Inconclusive) {
+        console.warn(`${gwDiagTs()} startGateway: loopback self-test inconclusive (${loopback.last.code}), starting anyway`);
+      }
+      if (loopback.blocked) {
+        const code = loopback.last.code ?? LoopbackSelfTestOutcome.Blocked;
+        console.error(`${gwDiagTs()} startGateway: loopback self-test dropped ${loopback.attempts} times (${code}, ${loopback.last.elapsedMs}ms); not spawning the gateway`);
+        this.gatewayRestartAttempt = 0;
+        this.clearScheduledGatewayRestart();
+        this.gatewayStartupBlock = {
+          phase: OpenClawEnginePhase.Error,
+          version: runtime.version,
+          errorCode: OpenClawEngineErrorCode.LoopbackBlocked,
+          message: t('openClawLoopbackBlocked', { code }),
+          canRetry: true,
+        };
+        this.setStatus(this.gatewayStartupBlock);
+        return this.getStatus();
+      }
     }
 
     const token = this.ensureGatewayToken();

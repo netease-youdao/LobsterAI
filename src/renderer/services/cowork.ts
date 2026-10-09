@@ -26,6 +26,7 @@ import {
   type CoworkSteerRequest,
   CoworkSteerStatus,
 } from '../../shared/cowork/steer';
+import { OpenClawLoopbackRepairOutcome } from '../../shared/openclawEngine/constants';
 import { store } from '../store';
 import {
   addMessage,
@@ -83,6 +84,7 @@ import type {
   CoworkUserMemoryEntry,
   OpenClawEngineStatus,
   OpenClawGatewayRepairResult,
+  OpenClawLoopbackRepairResult,
   OpenClawSessionPolicyConfig,
 } from '../types/cowork';
 import { CoworkSessionStatusValue } from '../types/cowork';
@@ -2400,6 +2402,19 @@ class CoworkService {
       return result.status;
     }
     return this.openClawStatus;
+  }
+
+  // Raises a UAC prompt; on success the main process restarts the gateway.
+  async repairOpenClawLoopbackFirewall(): Promise<OpenClawLoopbackRepairResult> {
+    const engineApi = window.electron?.openclaw?.engine;
+    if (!engineApi?.repairLoopbackFirewall) {
+      return { outcome: OpenClawLoopbackRepairOutcome.Unsupported };
+    }
+    const result = await engineApi.repairLoopbackFirewall();
+    if (result?.status) {
+      this.notifyOpenClawStatus(result.status);
+    }
+    return result ?? { outcome: OpenClawLoopbackRepairOutcome.Failed };
   }
 
   async repairOpenClawGatewayState(): Promise<OpenClawGatewayRepairResult> {
