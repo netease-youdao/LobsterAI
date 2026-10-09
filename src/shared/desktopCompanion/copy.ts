@@ -1,5 +1,8 @@
+import { languageToolsTranslations } from './languageToolsCopy';
+
 export const desktopCompanionTranslations = {
   zh: {
+    ...languageToolsTranslations.zh,
     desktopCompanionTitle: '桌面龙虾',
     desktopCompanionEnable: '在桌面显示龙虾',
     desktopCompanionEnableDescription: '一只常驻桌面的小龙虾「钳钳」。你选中文字、拖动文档、切换应用时，它就在手边。',
@@ -23,7 +26,7 @@ export const desktopCompanionTranslations = {
     desktopCompanionSkinDanpapa: '胆怕怕',
     desktopCompanionSkinQingqingpiao: '轻轻飘',
     desktopCompanionSelection: '划词工具条',
-    desktopCompanionSelectionDescription: '在任意应用中选中文字，即可一键翻译、解释、总结、润色。只有点了按钮才会发送选中的内容。',
+    desktopCompanionSelectionDescription: '在任意应用中选中文字，即可一键翻译、朗读、解释、总结、润色。只有点了按钮才会发送选中的内容。',
     desktopCompanionSelectionNeedsPermission: '需要在系统设置中为 LobsterAI 打开「辅助功能」权限，才能读取选中的文字。',
     desktopCompanionSelectionUnsupported: '当前系统暂不支持划词。',
     desktopCompanionGrantPermission: '去授权',
@@ -191,6 +194,7 @@ export const desktopCompanionTranslations = {
     desktopCompanionLoading: '正在读取任务…',
   },
   en: {
+    ...languageToolsTranslations.en,
     desktopCompanionTitle: 'Desktop companion',
     desktopCompanionEnable: 'Show the desktop companion',
     desktopCompanionEnableDescription: 'A little lobster named Clawdie lives on your desktop. It is at hand when you select text, drag a document, or switch apps.',
@@ -214,7 +218,7 @@ export const desktopCompanionTranslations = {
     desktopCompanionSkinDanpapa: 'Timid Puff',
     desktopCompanionSkinQingqingpiao: 'Drifty Jelly',
     desktopCompanionSelection: 'Selection toolbar',
-    desktopCompanionSelectionDescription: 'Translate, explain, summarize, or polish selected text in any app. Text is sent only after you click an action.',
+    desktopCompanionSelectionDescription: 'Translate, read aloud, explain, summarize, or polish selected text in any app. Text is sent only after you click an action.',
     desktopCompanionSelectionNeedsPermission: 'Turn on Accessibility for LobsterAI in System Settings so it can read selected text.',
     desktopCompanionSelectionUnsupported: 'The selection toolbar is not supported on this system.',
     desktopCompanionGrantPermission: 'Grant access',

@@ -10,8 +10,10 @@ import {
   buildCompanionQuickAnswerPrompt,
   COMPANION_SELECTION_MAX_CHARS,
   type CompanionQuickAnswerPrompt,
+  CompanionSelectionAction,
   isCompanionSelectionAction,
 } from '../../shared/desktopCompanion/selectionActions';
+import { ApiFormat, ProviderName } from '../../shared/providers/constants';
 import { getLanguage, t } from '../i18n';
 import { resolveCurrentApiConfig, resolveRawApiConfig } from '../libs/claudeSettings';
 import {
@@ -20,6 +22,7 @@ import {
   extractApiErrorSnippet,
   normalizeGeminiBaseUrl,
 } from '../libs/coworkModelApi';
+import { getCoworkOpenAICompatProxyToken } from '../libs/coworkOpenAICompatProxy';
 import { readAnthropicStreamEvent, readGeminiStreamEvent, splitSseEvents, type StreamChunk } from './sse';
 
 const MAX_OUTPUT_TOKENS = 2_048;
@@ -31,12 +34,13 @@ export interface QuickAnswerModelConfig {
   apiKey: string;
   baseURL: string;
   model: string;
+  proxyToken?: string;
 }
 
 /** Same model the session title generator uses: the user's current default model. */
 export function resolveQuickAnswerModel(): QuickAnswerModelConfig | null {
   const raw = resolveRawApiConfig();
-  if (raw.config && raw.providerMetadata?.providerName === 'gemini') {
+  if (raw.config && raw.providerMetadata?.providerName === ProviderName.Gemini) {
     return { protocol: CoworkModelProtocol.GeminiNative, apiKey: raw.config.apiKey, baseURL: raw.config.baseURL, model: raw.config.model };
   }
   const resolved = resolveCurrentApiConfig();
@@ -46,6 +50,9 @@ export function resolveQuickAnswerModel(): QuickAnswerModelConfig | null {
     apiKey: resolved.config.apiKey,
     baseURL: resolved.config.baseURL,
     model: resolved.config.model,
+    // resolveCurrentApiConfig routes OpenAI providers through our local proxy.
+    // Its Bearer token is separate from the upstream provider's API key.
+    ...(resolved.config.apiType === ApiFormat.OpenAI ? { proxyToken: getCoworkOpenAICompatProxyToken() ?? undefined } : {}),
   };
 }
 
@@ -74,7 +81,10 @@ export function buildQuickAnswerHttpRequest(config: QuickAnswerModelConfig, prom
     url: buildAnthropicMessagesUrl(config.baseURL),
     init: {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': config.apiKey, 'anthropic-version': '2023-06-01' },
+      headers: {
+        'Content-Type': 'application/json', 'x-api-key': config.apiKey, 'anthropic-version': '2023-06-01',
+        ...(config.proxyToken ? { Authorization: `Bearer ${config.proxyToken}` } : {}),
+      },
       body: JSON.stringify({
         model: config.model,
         max_tokens: MAX_OUTPUT_TOKENS,
@@ -109,7 +119,7 @@ export class CompanionQuickAnswerService {
   start(sender: WebContents, request: CompanionQuickAnswerRequest): { success: boolean; error?: string } {
     const requestId = typeof request?.requestId === 'string' ? request.requestId.slice(0, 100) : '';
     const text = typeof request?.text === 'string' ? request.text.trim() : '';
-    if (!requestId || !text || !isCompanionSelectionAction(request.action)) {
+    if (!requestId || !text || !isCompanionSelectionAction(request.action) || request.action === CompanionSelectionAction.Translate) {
       return { success: false, error: t('desktopCompanionRequestFailed') };
     }
     const model = this.deps.resolveModel();

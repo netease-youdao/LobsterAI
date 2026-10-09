@@ -229,6 +229,7 @@ import { WorkspaceReviewSourceStore } from './conversation/reviewSource';
 import { isScopedReview, ScopedReviewStore } from './conversation/scopedReview';
 import { type CoworkForkContextMessage, type CoworkMessage, CoworkStore } from './coworkStore';
 import { DesktopCompanionManager } from './desktopCompanion/desktopCompanionManager';
+import { CompanionLanguageClient } from './desktopCompanion/languageToolClient';
 import {
   buildEnterpriseAccountRequestHeaders,
   clearEnterpriseAccountContext,
@@ -5643,6 +5644,7 @@ if (!gotTheLock) {
   };
 
   const emitAuthSessionChanged = (event: AuthSessionChangedEvent): void => {
+    desktopCompanionManager?.resetLanguageTools();
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) {
         window.webContents.send(AuthIpcChannel.SessionChanged, event);
@@ -7450,6 +7452,7 @@ if (!gotTheLock) {
       const previousAccountScope = getCurrentMediaAccountScope();
       activeAuthExchangeIntent = null;
       authAccountGeneration += 1;
+      desktopCompanionManager?.resetLanguageTools();
       const exchangeAccountGeneration = authAccountGeneration;
       clearEnterpriseAccountContext(getStore());
       clearServerModelMetadata();
@@ -13513,6 +13516,8 @@ if (!gotTheLock) {
     getServerApiBaseUrl,
   });
 
+  const desktopLanguageClient = new CompanionLanguageClient({ fetchWithAuth, getServerApiBaseUrl, getSessionKey: getAuthSessionKey });
+
   registerSiteIpcHandlers({
     fetchWithAuth: (url, options) => {
       const { scopedFetch } = capturePublishingRequest();
@@ -15223,6 +15228,7 @@ if (!gotTheLock) {
     createWindow();
     profiler.measure('createWindow');
     desktopCompanionManager = new DesktopCompanionManager({
+      services: { languageClient: desktopLanguageClient },
       store: getStore(),
       preloadPath: PRELOAD_PATH,
       rendererDirectory: path.join(__dirname, '../dist'),

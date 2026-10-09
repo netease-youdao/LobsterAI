@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { type BrowserWindow, clipboard, Menu, screen, shell, systemPreferences } from 'electron';
+import { type BrowserWindow, Menu, screen, shell, systemPreferences } from 'electron';
 import type { EventEmitter } from 'events';
 
 import { DEFAULT_SELECTION_EXCLUDED_APPS, isCompanionSelectionBlocked } from '../../shared/desktopCompanion/appCategories';
@@ -22,6 +22,7 @@ import {
 } from '../../shared/desktopCompanion/geometry';
 import {
   COMPANION_SELECTION_MAX_CHARS,
+  CompanionSelectionAction,
   isCompanionSelectionAction,
   rankCompanionSelectionActions,
 } from '../../shared/desktopCompanion/selectionActions';
@@ -110,6 +111,7 @@ export class CompanionSelectionController {
   private anchor: CompanionSelectionAnchor | null = null;
   private size: CompanionSize = { ...DesktopCompanionSize.Toolbar };
   private pendingShow = false;
+  private menuOpen = false;
   private showTimer: ReturnType<typeof setTimeout> | undefined;
   private permissionTimer: ReturnType<typeof setInterval> | undefined;
   private pausedUntil = 0;
@@ -131,6 +133,10 @@ export class CompanionSelectionController {
 
   get browserWindow(): BrowserWindow | null {
     return this.window && !this.window.isDestroyed() ? this.window : null;
+  }
+
+  get selectionAnchor(): CompanionSelectionAnchor | null {
+    return this.selection && this.anchor ? { ...this.anchor } : null;
   }
 
   /** Re-evaluates whether the hook should run after preferences, snooze, or permission changes. */
@@ -170,6 +176,7 @@ export class CompanionSelectionController {
   }
 
   onForegroundChange(): void {
+    if (this.menuOpen) return;
     if (this.selection?.mode === DesktopCompanionSelectionMode.Toolbar) this.hide();
   }
 
@@ -270,13 +277,22 @@ export class CompanionSelectionController {
     const selection = this.selection;
     const win = this.window;
     if (!selection || !win || win.isDestroyed()) return;
+    this.menuOpen = true;
+    const actions = [CompanionSelectionAction.Explain, CompanionSelectionAction.Summarize, CompanionSelectionAction.Polish];
     Menu.buildFromTemplate([
-      { label: t('desktopCompanionSelectionCopy'), click: () => { clipboard.writeText(selection.text); this.hide(); } },
+      ...actions.map(action => ({
+        label: t(`desktopCompanionAction${action.charAt(0).toUpperCase()}${action.slice(1)}`),
+        click: () => {
+          if (this.selection?.id !== selection.id) return;
+          this.handleCommand({ type: DesktopCompanionSelectionCommandType.Run, action });
+          win.focus();
+        },
+      })),
       { type: 'separator' },
       { label: t('desktopCompanionSelectionExclude'), click: () => this.handleCommand({ type: DesktopCompanionSelectionCommandType.ExcludeApp }) },
       { label: t('desktopCompanionSelectionPause'), click: () => this.handleCommand({ type: DesktopCompanionSelectionCommandType.Pause }) },
       { label: t('desktopCompanionSelectionSettings'), click: () => { this.hide(); this.host.openSettings(); } },
-    ]).popup({ window: win });
+    ]).popup({ window: win, callback: () => { this.menuOpen = false; } });
   }
 
   private startHook(): boolean {
@@ -365,6 +381,7 @@ export class CompanionSelectionController {
   };
 
   private onMouseDown = (data: Point): void => {
+    if (this.menuOpen) return;
     if (!this.selection || !this.window || this.window.isDestroyed() || !this.window.isVisible()) return;
     if (!valid(data)) return;
     if (rectContains(this.window.getBounds(), toDip(data))) return;
@@ -372,10 +389,12 @@ export class CompanionSelectionController {
   };
 
   private onWheel = (): void => {
+    if (this.menuOpen) return;
     if (this.selection?.mode === DesktopCompanionSelectionMode.Toolbar) this.hide();
   };
 
   private onKeyDown = (data: { uniKey?: string }): void => {
+    if (this.menuOpen) return;
     if (this.selection?.mode !== DesktopCompanionSelectionMode.Toolbar) return;
     if (data?.uniKey && MODIFIER_KEYS.has(data.uniKey)) return;
     this.hide();

@@ -11,6 +11,8 @@ import {
   DesktopCompanionStoreKey,
 } from '../../shared/desktopCompanion/constants';
 import { CompanionHintRule } from '../../shared/desktopCompanion/hintPolicy';
+import { LanguageTool, LanguageToolsIpc, SpeechStatus } from '../../shared/desktopCompanion/languageTools';
+import { CompanionSelectionController } from './companionSelection';
 import { DesktopCompanionManager } from './desktopCompanionManager';
 import { FileDragEvent } from './fileDragMonitor';
 
@@ -138,6 +140,73 @@ afterEach(() => {
 });
 
 describe('desktop companion lifecycle', () => {
+  test('language cards open beside the selection, resize with content, and restore without a new request', () => {
+    create();
+    const anchor = vi.spyOn(CompanionSelectionController.prototype, 'selectionAnchor', 'get')
+      .mockReturnValue({ x: 400, top: 200, bottom: 220 });
+    try {
+      invoke(LanguageToolsIpc.Open, { tool: LanguageTool.Translate, text: 'Selected words' });
+      const window = mocks.windows[1];
+      expect(window.bounds.x).toBe(378);
+      expect(window.bounds.y).toBeGreaterThan(190);
+      expect(window.bounds.y).toBeLessThan(240);
+      const firstInput = invoke(LanguageToolsIpc.GetInput, undefined, window.webContents);
+      ipcMain.emit(DesktopCompanionIpc.ResizeSurface, { sender: window.webContents, senderFrame: window.webContents.mainFrame }, { width: 436, height: 260 });
+      expect(window.bounds).toMatchObject({ width: 436, height: 260 });
+      invoke(LanguageToolsIpc.Hide, undefined, window.webContents);
+      invoke(LanguageToolsIpc.Open, { tool: LanguageTool.Tts });
+      expect(invoke(LanguageToolsIpc.GetInput, undefined, window.webContents)).toEqual(firstInput);
+      expect(window.visible).toBe(true);
+    } finally { anchor.mockRestore(); }
+  });
+
+  test('pin keeps a card visible on blur; close stops it and prevents an empty page from reopening', () => {
+    create();
+    invoke(LanguageToolsIpc.Open, { tool: LanguageTool.Tts });
+    expect(mocks.windows).toHaveLength(1);
+    invoke(LanguageToolsIpc.Open, { tool: LanguageTool.Tts, text: 'Read this' });
+    const window = mocks.windows[1];
+    invoke(LanguageToolsIpc.Pin, true, window.webContents);
+    window.emit('blur');
+    expect(window.visible).toBe(true);
+    invoke(LanguageToolsIpc.SpeechStatus, SpeechStatus.Playing, window.webContents);
+    invoke(LanguageToolsIpc.Pin, false, window.webContents);
+    window.emit('blur');
+    expect(window.visible).toBe(false);
+    expect(manager.getState().speechStatus).toBe(SpeechStatus.Playing);
+    invoke(LanguageToolsIpc.Close, undefined, window.webContents);
+    expect(manager.getState().speechStatus).toBe(SpeechStatus.Idle);
+    expect(invoke(LanguageToolsIpc.GetInput, undefined, window.webContents)).toBeNull();
+    invoke(LanguageToolsIpc.Open, { tool: LanguageTool.Tts });
+    window.emit('ready-to-show');
+    expect(window.visible).toBe(false);
+  });
+
+  test('language tools retain their window and playback when hidden, but reset on account changes', () => {
+    create();
+    invoke(LanguageToolsIpc.Open, { tool: LanguageTool.Tts, text: 'Read this' });
+    const window = mocks.windows[1];
+    expect(window.visible).toBe(true);
+    invoke(LanguageToolsIpc.SpeechStatus, SpeechStatus.Playing, window.webContents);
+    invoke(LanguageToolsIpc.Hide, undefined, window.webContents);
+    expect(window.visible).toBe(false);
+    expect(manager.getState().speechStatus).toBe(SpeechStatus.Playing);
+    invoke(LanguageToolsIpc.Open, { tool: LanguageTool.Tts });
+    expect(mocks.windows).toHaveLength(2);
+    expect(window.visible).toBe(true);
+    manager.resetLanguageTools();
+    expect(manager.getState().speechStatus).toBe(SpeechStatus.Idle);
+    expect(window.webContents.send).toHaveBeenCalledWith(LanguageToolsIpc.Reset);
+  });
+
+  test('only the language window can start playback or publish its status', () => {
+    create();
+    expect(() => invoke(LanguageToolsIpc.Start, {})).toThrow('Invalid language tools IPC sender');
+    expect(() => invoke(LanguageToolsIpc.SpeechStatus, SpeechStatus.Playing)).toThrow('Invalid language tools IPC sender');
+    const unknown = new BrowserWindow();
+    expect(() => invoke(LanguageToolsIpc.Open, { tool: LanguageTool.Tts }, unknown.webContents)).toThrow('Unknown desktop companion IPC sender');
+  });
+
   test('a new profile creates no floating window and opening a temporary panel does not opt in', () => {
     create();
     expect(manager.getState().preferences.enabled).toBe(false);
