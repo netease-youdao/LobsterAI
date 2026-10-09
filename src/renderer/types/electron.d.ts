@@ -137,6 +137,7 @@ import type {
   OpenClawEngineErrorCode,
   OpenClawEnginePhase as SharedOpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
+  OpenClawLoopbackRepairOutcome,
 } from '../../shared/openclawEngine/constants';
 import type { OpenClawRepairStage } from '../../shared/openclawEngine/repair';
 import type {
@@ -406,6 +407,13 @@ interface OpenClawGatewayRepairResult {
   recoverable?: boolean;
   failedStage?: OpenClawRepairStage;
   failurePath?: string;
+}
+
+interface OpenClawLoopbackRepairResult {
+  outcome: OpenClawLoopbackRepairOutcome;
+  status?: OpenClawEngineStatus;
+  detail?: string;
+  manualCommand?: string;
 }
 
 interface OpenClawSessionPolicyConfig {
@@ -910,6 +918,7 @@ interface IElectronAPI {
         error?: string;
       }>;
       repairGatewayState: () => Promise<OpenClawGatewayRepairResult>;
+      repairLoopbackFirewall: () => Promise<OpenClawLoopbackRepairResult>;
       onProgress: (callback: (status: OpenClawEngineStatus) => void) => () => void;
     };
     sessionPolicy: {

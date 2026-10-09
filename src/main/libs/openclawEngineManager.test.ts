@@ -102,6 +102,21 @@ describe('probeOpenClawGatewayStartup', () => {
     });
   });
 
+  test('names the socket error behind fetch failed', async () => {
+    // A dropped loopback connect (firewall) and a closed port both surface as
+    // "fetch failed"; only the cause tells them apart.
+    const fetcher = vi.fn(async () => {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('connect ETIMEDOUT 127.0.0.1:18789'), { code: 'ETIMEDOUT' }),
+      });
+    });
+
+    await expect(probeOpenClawGatewayStartup(18789, 25, fetcher)).resolves.toEqual({
+      ready: false,
+      detail: '/startupz → fetch failed (ETIMEDOUT)',
+    });
+  });
+
   test('falls back to the legacy ready contract only when startupz is unavailable', async () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(new Response('{}', { status: 404 }))

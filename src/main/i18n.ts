@@ -30,6 +30,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawRepairCommandFailed: '修复命令 {command} 未完成。诊断记录：{path}',
     openClawDreamingStateRepairing: '正在备份并处理旧版记忆状态…',
     openClawRuntimeFilesMissing: 'AI 引擎运行文件缺失或无法读取，已停止启动。请退出应用，使用包含修复的最新安装包覆盖安装后重试。',
+    openClawLoopbackBlocked: '本机连接自检失败（{code}），已暂停启动 AI 引擎。',
     // DeepSeek Harness (experimental)
     dshWorkbenchTitle: 'DeepSeek Harness 工作台（实验）',
     dshPlanProviderName: '套餐',
@@ -428,6 +429,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawStartupCompatibilityRepairing: 'Backing up and repairing legacy gateway state…',
     openClawDreamingStateRepairing: 'Backing up and handling legacy memory state…',
     openClawRuntimeFilesMissing: 'AI engine runtime files are missing or unreadable. Startup has stopped. Quit the app and reinstall using the latest installer containing the fix, then try again.',
+    openClawLoopbackBlocked: 'Local connection self-test failed ({code}). AI engine startup is paused.',
     // DeepSeek Harness (experimental)
     dshWorkbenchTitle: 'DeepSeek Harness Workbench (Experimental)',
     dshPlanProviderName: 'Plan',

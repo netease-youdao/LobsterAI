@@ -1,9 +1,13 @@
 import { afterEach, expect, test, vi } from 'vitest';
 
-import { OpenClawGatewayRepairErrorCode } from '../../shared/openclawEngine/constants';
+import { OpenClawGatewayRepairErrorCode, OpenClawLoopbackRepairOutcome } from '../../shared/openclawEngine/constants';
 import { OpenClawRepairStage } from '../../shared/openclawEngine/repair';
 import { i18nService } from './i18n';
-import { resolveOpenClawRepairError, resolveOpenClawRepairHistoryWarning } from './openclawRepair';
+import {
+  resolveOpenClawLoopbackRepairMessage,
+  resolveOpenClawRepairError,
+  resolveOpenClawRepairHistoryWarning,
+} from './openclawRepair';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -34,4 +38,25 @@ test('lock recovery failures state that backup and later repairs have not run', 
   vi.spyOn(i18nService, 't').mockImplementation(key => key);
   expect(resolveOpenClawRepairError({ success: false, failedStage: OpenClawRepairStage.LockRecovery,
     error: 'Owner identity unavailable' })).toContain('openClawRepairLockRecoveryFailed');
+});
+
+test('explains each loopback repair outcome and hands failures the administrator command', () => {
+  vi.spyOn(i18nService, 't').mockImplementation(key => key);
+  expect(resolveOpenClawLoopbackRepairMessage({ outcome: OpenClawLoopbackRepairOutcome.Repaired })).toBeUndefined();
+  expect(resolveOpenClawLoopbackRepairMessage({ outcome: OpenClawLoopbackRepairOutcome.Cancelled }))
+    .toBe('coworkOpenClawAllowLoopbackCancelled');
+  expect(resolveOpenClawLoopbackRepairMessage({ outcome: OpenClawLoopbackRepairOutcome.StillBlocked, detail: 'ETIMEDOUT' }))
+    .toBe('coworkOpenClawAllowLoopbackStillBlocked');
+  expect(resolveOpenClawLoopbackRepairMessage({
+    outcome: OpenClawLoopbackRepairOutcome.Failed,
+    detail: 'exit 1',
+    manualCommand: 'netsh advfirewall firewall add rule name="LobsterAI loopback"',
+  })).toBe([
+    'coworkOpenClawAllowLoopbackFailed',
+    'exit 1',
+    'coworkOpenClawAllowLoopbackManual',
+    'netsh advfirewall firewall add rule name="LobsterAI loopback"',
+  ].join('\n'));
+  expect(resolveOpenClawLoopbackRepairMessage({ outcome: OpenClawLoopbackRepairOutcome.Unsupported }))
+    .toBe('coworkOpenClawAllowLoopbackFailed');
 });

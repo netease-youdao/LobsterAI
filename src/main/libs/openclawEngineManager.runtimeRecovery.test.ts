@@ -29,6 +29,7 @@ vi.mock('electron', () => ({
 }));
 
 import { INSTALLER_RESOURCES_TAR } from './installerResourceRecovery';
+import { detectLoopbackBlock, LoopbackSelfTestOutcome } from './loopbackSelfTest';
 import { OpenClawEngineManager } from './openclawEngineManager';
 import { spawnOpenClawGatewayProcess } from './openclawGatewayProcess';
 import { runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
@@ -36,6 +37,10 @@ import { OPENCLAW_STARTUP_PREP_MARKER_FILE } from './openclawStartupPrep';
 import { migrateLegacyStateBeforeStartup } from './openclawStartupStateMigration';
 import { OPENCLAW_WORKER_SHIM_TARGETS } from './openclawWorkerShims';
 
+vi.mock('./loopbackSelfTest', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./loopbackSelfTest')>();
+  return { ...actual, detectLoopbackBlock: vi.fn(actual.detectLoopbackBlock) };
+});
 vi.mock('./openclawGatewayProcess', async (importOriginal) => ({
   ...await importOriginal<typeof import('./openclawGatewayProcess')>(),
   spawnOpenClawGatewayProcess: vi.fn(),
@@ -197,6 +202,36 @@ describe('OpenClawEngineManager startup runtime recovery', () => {
     }
     expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
     expect(fs.readFileSync(manager.getConfigPath(), 'utf8')).toBe(originalConfig);
+    expect(fs.existsSync(path.join(manager.getStateDir(), 'gateway-token'))).toBe(false);
+  });
+
+  test('stops before spawning while Windows drops loopback to this executable, until an explicit retry', async () => {
+    fs.writeFileSync(path.join(resourcesDir, 'cfmind', 'openclaw.mjs'), 'export {};\n');
+    const manager = new OpenClawEngineManager();
+    vi.spyOn(manager, 'ensureReady').mockResolvedValue({ phase: OpenClawEnginePhase.Ready } as ReturnType<typeof manager.getStatus>);
+    const dropped = {
+      blocked: true,
+      attempts: 2,
+      last: { outcome: LoopbackSelfTestOutcome.Blocked, code: 'ETIMEDOUT', elapsedMs: 300 },
+    };
+    vi.mocked(detectLoopbackBlock).mockClear().mockResolvedValueOnce(dropped).mockResolvedValueOnce(dropped);
+
+    await expect(manager.startGateway('loopback-test')).resolves.toMatchObject({
+      phase: OpenClawEnginePhase.Error,
+      errorCode: OpenClawEngineErrorCode.LoopbackBlocked,
+      canRetry: true,
+    });
+    // Automatic starts keep the block instead of testing or spawning again.
+    await expect(manager.startGateway('auto-restart')).resolves.toMatchObject({
+      errorCode: OpenClawEngineErrorCode.LoopbackBlocked,
+    });
+    expect(detectLoopbackBlock).toHaveBeenCalledOnce();
+
+    await expect(manager.startGateway('manual-retry', { retryBlocked: true })).resolves.toMatchObject({
+      errorCode: OpenClawEngineErrorCode.LoopbackBlocked,
+    });
+    expect(detectLoopbackBlock).toHaveBeenCalledTimes(2);
+    expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(manager.getStateDir(), 'gateway-token'))).toBe(false);
   });
 

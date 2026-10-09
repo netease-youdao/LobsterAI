@@ -799,8 +799,52 @@ describe('Windows installer hardening contracts', () => {
     // process-stop kill loop + survivor dump, rollback Defender cleanup +
     // displaced-tree cleanup, Skills backup, Defender post-uninstaller add +
     // query-only, tar, extractor watchdog, Skills restore, Defender
-    // rebalance, old-install cleanup, uninstaller Defender cleanup.
-    expect(helperLaunches).toBe(13);
+    // rebalance, old-install cleanup, loopback firewall rule, uninstaller
+    // Defender cleanup, uninstaller loopback firewall rule removal.
+    expect(helperLaunches).toBe(15);
+  });
+
+  test('allows only loopback TCP for the committed executable and removes it on uninstall', () => {
+    // Field case 2026-10: Windows Firewall's "Query user" default dropped
+    // 127.0.0.1 connections to LobsterAI.exe, so the app never reached its
+    // gateway after a reboot.
+    const start = installerInclude.indexOf('!macro LobsterApplyLoopbackFirewallRule');
+    expect(start).toBeGreaterThan(-1);
+    const apply = installerInclude.slice(start, installerInclude.indexOf('!macroend', start));
+    expect(apply).toContain(
+      String.raw`SetEnvironmentVariable(t "LOBSTERAI_FIREWALL_PROGRAM", t "$INSTDIR\${APP_EXECUTABLE_FILENAME}")`,
+    );
+    expect(apply).toContain('SetEnvironmentVariable(t "LOBSTERAI_FIREWALL_PROGRAM", t "")');
+    const replaceRule = apply.indexOf(
+      String.raw`firewall delete rule \"name=LobsterAI loopback\" dir=in $$program`,
+    );
+    const addRule = apply.indexOf(
+      String.raw`firewall add rule \"name=LobsterAI loopback\" dir=in action=allow $$program protocol=TCP localip=127.0.0.1 remoteip=127.0.0.1 profile=any`,
+    );
+    expect(replaceRule).toBeGreaterThan(-1);
+    expect(addRule).toBeGreaterThan(replaceRule);
+    expect(apply).toContain('phase=loopback-firewall-rule-complete attempt_id=');
+
+    // Only a committed install gets the rule, after every old uninstaller ran.
+    // Anchored to the line end rather than '\n': Windows checkouts may be CRLF.
+    const customInstallStart = installerInclude.search(/^!macro customInstall\r?$/m);
+    const customInstall = installerInclude.slice(
+      customInstallStart,
+      installerInclude.indexOf('!macroend', customInstallStart),
+    );
+    expect(customInstall.indexOf('!insertmacro LobsterApplyLoopbackFirewallRule')).toBeGreaterThan(
+      customInstall.indexOf('InstallFinalizeComplete:'),
+    );
+
+    const uninstallStart = installerInclude.indexOf('!macro customUnInstall');
+    const uninstall = installerInclude.slice(
+      uninstallStart,
+      installerInclude.indexOf('!macroend', uninstallStart),
+    );
+    expect(uninstall).toContain(
+      String.raw`firewall delete rule \"name=LobsterAI loopback\" dir=in (\"program=\" + $$env:LOBSTERAI_FIREWALL_PROGRAM)`,
+    );
+    expect(uninstall).not.toContain('firewall add rule');
   });
 
   test('rebalances Defender exclusions in one helper launch', () => {

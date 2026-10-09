@@ -68,4 +68,22 @@ describe('EngineFailureOverlay', () => {
     expect(html).toContain('openclaw-weixin-a74391227cd8-im-bot-allowFrom.json');
     expect(html).toContain('coworkOpenClawQuickRepair');
   });
+
+  test('offers the loopback firewall rule instead of config repair when local connections are dropped', () => {
+    snapshot.status = {
+      phase: OpenClawEnginePhase.Error,
+      version: '2026.9.23',
+      errorCode: OpenClawEngineErrorCode.LoopbackBlocked,
+      message: 'Local connection self-test failed (ETIMEDOUT). AI engine startup is paused.',
+      canRetry: true,
+    };
+    const html = renderToStaticMarkup(React.createElement(EngineFailureOverlay));
+    expect(html).toContain('coworkOpenClawLoopbackBlockedTitle');
+    expect(html).toContain('coworkOpenClawLoopbackBlockedHint');
+    expect(html).toContain('ETIMEDOUT');
+    expect(html).toContain('coworkOpenClawAllowLoopback');
+    expect(html).toContain('coworkOpenClawLoopbackRecheck');
+    expect(html).not.toContain('coworkOpenClawQuickRepair');
+    expect(html).not.toContain('coworkOpenClawRestartGateway');
+  });
 });
