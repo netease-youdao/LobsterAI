@@ -1624,7 +1624,8 @@ describe('Windows installer Explorer "Open with" contracts', () => {
     installerInclude.indexOf('; Standard post-registry electron-builder hook', openWithStart),
   );
   const macroBody = (name: string): string => {
-    const start = installerInclude.indexOf(`!macro ${name}\n`);
+    // Windows checkouts may use CRLF.
+    const start = installerInclude.search(new RegExp(`!macro ${name}\\r?\\n`));
     return installerInclude.slice(start, installerInclude.indexOf('!macroend', start));
   };
   const extensions = [...openWith.matchAll(/!insertmacro \$\{OP\} "([^"]+)"/g)].map(match => match[1]);
@@ -1639,24 +1640,26 @@ describe('Windows installer Explorer "Open with" contracts', () => {
     expect(extensions).toEqual(expect.arrayContaining(['pdf', 'docx', 'xlsx', 'pptx', 'md', 'png', 'mp4', 'zip']));
   });
 
-  test('adds only an OpenWithProgids value, never the default app of a type', () => {
+  test('adds only an OpenWithList entry, never a default app candidate', () => {
     expect(macroBody('LobsterOpenWithAddExtension EXT')).toContain(
-      'WriteRegStr SHELL_CONTEXT "Software\\Classes\\.${EXT}\\OpenWithProgids" "${LOBSTER_OPEN_WITH_PROGID}" ""',
+      'WriteRegStr SHELL_CONTEXT "Software\\Classes\\.${EXT}\\OpenWithList\\${APP_EXECUTABLE_FILENAME}" "" ""',
     );
     // Writing the default value of .<ext> is what takes over an association.
     expect(openWith).not.toMatch(/WriteRegStr SHELL_CONTEXT "Software\\Classes\\\.\$\{EXT\}" ""/);
     expect(openWith).not.toContain('APP_ASSOCIATE');
-    // An empty type description keeps Explorer naming files "<EXT> File".
-    expect(openWith).not.toMatch(/WriteRegStr SHELL_CONTEXT "Software\\Classes\\\$\{LOBSTER_OPEN_WITH_PROGID\}" ""/);
+    // A ProgID under OpenWithProgids becomes the default of a type that has
+    // none, and re-prompts for a type whose default the user never picked.
+    expect(openWith).not.toMatch(/WriteReg\w+ [^\n]*OpenWithProgids/);
   });
 
   test('launches the installed exe with the quoted path', () => {
     const register = macroBody('LobsterRegisterOpenWith');
-    expect(register).toContain(
-      'WriteRegStr SHELL_CONTEXT "Software\\Classes\\${LOBSTER_OPEN_WITH_PROGID}\\shell\\open\\command" "" \'"$appExe" "%1"\'',
-    );
+    // The OpenWithList entries name the exe; Explorer resolves them here.
     expect(register).toContain(
       'WriteRegStr SHELL_CONTEXT "Software\\Classes\\Applications\\${APP_EXECUTABLE_FILENAME}\\shell\\open\\command" "" \'"$appExe" "%1"\'',
+    );
+    expect(register).toContain(
+      'WriteRegStr SHELL_CONTEXT "Software\\Classes\\Applications\\${APP_EXECUTABLE_FILENAME}" "FriendlyAppName" "${PRODUCT_NAME}"',
     );
     expect(register).toContain('!insertmacro LobsterOpenWithExtensions LobsterOpenWithAddExtension');
     expect(register).toContain('SHChangeNotify');
@@ -1664,13 +1667,13 @@ describe('Windows installer Explorer "Open with" contracts', () => {
 
   test('uninstall removes only what the installer added', () => {
     expect(macroBody('LobsterOpenWithRemoveExtension EXT')).toContain(
-      'DeleteRegValue SHELL_CONTEXT "Software\\Classes\\.${EXT}\\OpenWithProgids" "${LOBSTER_OPEN_WITH_PROGID}"',
+      'DeleteRegKey SHELL_CONTEXT "Software\\Classes\\.${EXT}\\OpenWithList\\${APP_EXECUTABLE_FILENAME}"',
     );
-    // Extension keys are shared with other apps; only whole keys LobsterAI owns go.
-    expect(openWith).not.toMatch(/DeleteRegKey[^\n]*\.\$\{EXT\}/);
+    // Extension keys and their OpenWithList are shared with other apps; only
+    // LobsterAI's own entry goes.
+    expect(openWith).not.toMatch(/DeleteRegKey[^\n]*\.\$\{EXT\}(\\OpenWithList)?"/);
     const unregister = macroBody('LobsterUnregisterOpenWith');
     expect(unregister).toContain('!insertmacro LobsterOpenWithExtensions LobsterOpenWithRemoveExtension');
-    expect(unregister).toContain('DeleteRegKey SHELL_CONTEXT "Software\\Classes\\${LOBSTER_OPEN_WITH_PROGID}"');
     expect(unregister).toContain('DeleteRegKey SHELL_CONTEXT "Software\\Classes\\Applications\\${APP_EXECUTABLE_FILENAME}"');
     expect(macroBody('customUnInstall')).toContain('!insertmacro LobsterUnregisterOpenWith');
   });
@@ -1680,8 +1683,8 @@ describe('Windows installer Explorer "Open with" contracts', () => {
     expect(finalize.indexOf('!insertmacro LobsterRegisterOpenWith')).toBeGreaterThan(
       finalize.indexOf('InstallFinalizeComplete:'),
     );
-    // The old version's uninstaller removes the entries during an update; the
-    // template must run it before customInstall writes them again.
+    // When an update does run the old version's uninstaller, it removes the
+    // entries; the template must run it before customInstall writes them again.
     expect(installSection.indexOf('customUninstallOldVersion SHELL_CONTEXT')).toBeLessThan(
       installSection.indexOf('!insertmacro customInstall'),
     );

@@ -2996,14 +2996,15 @@ FunctionEnd
 !macroend
 
 ; -- Explorer "Open with" --
-; Windows lists an app under "Open with" per extension only: its ProgID is a
-; value under Software\Classes\.<ext>\OpenWithProgids, and no supported key
-; covers every file. Only that value is added, so the default app of each type
-; stays as it is. The app receives the path as a command-line argument (see
-; src/main/libs/openWithPathQueue.ts). The ProgID has no type description, so
-; Explorer keeps naming the files "<EXT> File" even if a user makes LobsterAI
-; their default app.
-!define LOBSTER_OPEN_WITH_PROGID "LobsterAI.File"
+; Windows lists an app under "Open with" per extension only; no supported key
+; covers every file. Each listed extension gets a
+; Software\Classes\.<ext>\OpenWithList\<exe> key, which Explorer resolves
+; through Applications\<exe>. OpenWithProgids is avoided on purpose: Windows
+; treats a ProgID listed there as a default candidate, so it becomes the default
+; app of a type that has none, and Explorer asks "How do you want to open this
+; file?" again for a type whose default the user never picked. An OpenWithList
+; entry only adds the menu item. The app receives the path as a command-line
+; argument (see src/main/libs/openWithPathQueue.ts).
 
 ; The one list of extensions, expanded once to register and once to remove.
 !macro LobsterOpenWithExtensions OP
@@ -3154,22 +3155,21 @@ FunctionEnd
 !macroend
 
 !macro LobsterOpenWithAddExtension EXT
-  WriteRegStr SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithProgids" "${LOBSTER_OPEN_WITH_PROGID}" ""
+  WriteRegStr SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithList\${APP_EXECUTABLE_FILENAME}" "" ""
 !macroend
 
-; Removes only LobsterAI's value; the extension key and the other apps listed
+; Removes only LobsterAI's entry; the extension key and the other apps listed
 ; under it stay.
 !macro LobsterOpenWithRemoveExtension EXT
-  DeleteRegValue SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithProgids" "${LOBSTER_OPEN_WITH_PROGID}"
+  DeleteRegKey SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithList\${APP_EXECUTABLE_FILENAME}"
 !macroend
 
 ; Installer only ($appExe). SHELL_CONTEXT follows the install mode: HKCU for a
 ; per-user install, HKLM for all users.
 !macro LobsterRegisterOpenWith
   ClearErrors
-  WriteRegStr SHELL_CONTEXT "Software\Classes\${LOBSTER_OPEN_WITH_PROGID}\DefaultIcon" "" "$appExe,0"
-  WriteRegStr SHELL_CONTEXT "Software\Classes\${LOBSTER_OPEN_WITH_PROGID}\shell\open\command" "" '"$appExe" "%1"'
-  ; Also backs "Choose another app" for types outside the list.
+  ; The OpenWithList entries resolve to this key; it also backs "Choose another
+  ; app" for types outside the list.
   WriteRegStr SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}" "FriendlyAppName" "${PRODUCT_NAME}"
   WriteRegStr SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}\shell\open\command" "" '"$appExe" "%1"'
   !insertmacro LobsterOpenWithExtensions LobsterOpenWithAddExtension
@@ -3181,16 +3181,16 @@ FunctionEnd
   FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
   FileSeek $2 0 END
   !insertmacro GetTimestamp $8
-  FileWrite $2 "$8 phase=open-with-registration attempt_id=$lobsterInstallerAttemptId status=$0 progid=${LOBSTER_OPEN_WITH_PROGID}$\r$\n"
+  FileWrite $2 "$8 phase=open-with-registration attempt_id=$lobsterInstallerAttemptId status=$0 app=${APP_EXECUTABLE_FILENAME}$\r$\n"
   FileClose $2
 !macroend
 
-; Runs for real uninstalls and for the old version's uninstaller during an
-; update; the new version's customInstall registers again afterwards, so an
-; update never leaves entries pointing at a removed install location.
+; Runs for real uninstalls. An update usually skips the old version's
+; uninstaller (its install directory is renamed away instead), so
+; customInstall rewrites the entries in place: they name the exe, and
+; Applications\<exe> gets the current $appExe.
 !macro LobsterUnregisterOpenWith
   !insertmacro LobsterOpenWithExtensions LobsterOpenWithRemoveExtension
-  DeleteRegKey SHELL_CONTEXT "Software\Classes\${LOBSTER_OPEN_WITH_PROGID}"
   DeleteRegKey SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}"
   System::Call 'shell32::SHChangeNotify(i, i, i, i) v (0x08000000, 0, 0, 0)'
 !macroend
