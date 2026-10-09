@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CoworkSessionStatusValue } from '../../types/cowork';
 
 export type CompanionSession = NonNullable<Awaited<ReturnType<typeof window.electron.cowork.getSession>>['session']>;
-export type CompanionSessionSummary = NonNullable<Awaited<ReturnType<typeof window.electron.cowork.listSessions>>['sessions']>[number];
 
 export function useCompanionSession(sessionId: string | null, visible: boolean) {
   const [session, setSession] = useState<CompanionSession | null>(null);
@@ -98,28 +97,4 @@ export function useCompanionSession(sessionId: string | null, visible: boolean) 
   }, [sessionId]);
   useEffect(() => { if (visible) refresh(); }, [visible, refresh]);
   return { session: session?.id === sessionId ? session : null, pending: Object.values(pending).some(id => id === sessionId), failed, loading, refresh };
-}
-
-export function useCompanionRecentSessions(visible: boolean) {
-  const [sessions, setSessions] = useState<CompanionSessionSummary[]>([]);
-  useEffect(() => {
-    let active = true;
-    let sequence = 0;
-    const load = async () => {
-      const request = ++sequence;
-      try {
-        const result = await window.electron.cowork.listSessions({ limit: 5 });
-        if (active && request === sequence) setSessions(result.success ? result.sessions ?? [] : []);
-      } catch {
-        if (active && request === sequence) setSessions([]);
-      }
-    };
-    const stops = [
-      window.electron.cowork.onSessionsChanged(() => { void load(); }),
-      window.electron.cowork.onStreamSessionStatus(() => { void load(); }),
-    ];
-    void load();
-    return () => { active = false; stops.forEach(stop => stop()); };
-  }, [visible]);
-  return sessions;
 }

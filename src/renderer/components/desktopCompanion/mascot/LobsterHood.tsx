@@ -16,6 +16,12 @@ const SHELL_LINE = '#E9472A';
 const MOUTH = '#B5432C';
 const MOUTH_DARK = '#7A1E10';
 const EYES = { left: 48, right: 72, y: 76 };
+const HEAD_PATH = 'M60 30 C89 30 105 48 105 72 C105 97 86 111 60 111 C34 111 15 97 15 72 C15 48 31 30 60 30 Z';
+const FACE = { x: 30, y: 53, width: 60, height: 46, rx: 21 };
+/** How far the hood rolls over the edge of the face. */
+const RIM = 3;
+/** Below this size antennae, eye glints, and extras shrink to specks, so they are left out. */
+const DETAIL_MIN_SIZE = 36;
 
 /** A mitten-shaped claw pointing up, its base near the origin. */
 const CLAW_PATH = 'M-10 8 C-17 2 -17 -11 -10 -17 C-6 -21 0 -22 4 -19 C6.5 -16 6 -11 2 -7 C7 -11 13 -13.5 15 -8.5 C17.5 -3 14 3 9 6 C4 10 -4 10 -10 8 Z';
@@ -67,7 +73,8 @@ function Claw({ pose, side }: { pose: ClawPose; side: 'left' | 'right' }) {
   const placement = side === 'left' ? 'translate(30 40)' : 'translate(90 40) scale(-1 1)';
   return (
     <g transform={placement}>
-      <g className="hood-claw-pose" style={{ transform: `rotate(${pose.rotate}deg) translate(${pose.dx}px, ${pose.dy}px)` }}>
+      {/* Pivot set inline: the settings preview renders without the companion stylesheet. */}
+      <g className="hood-claw-pose" style={{ transformBox: 'fill-box', transformOrigin: '50% 92%', transform: `rotate(${pose.rotate}deg) translate(${pose.dx}px, ${pose.dy}px)` }}>
         <g className={`hood-claw hood-claw-${side}`}>
           <defs>
             <radialGradient id={`${id}-claw`} cx="40%" cy="30%" r="75%">
@@ -98,7 +105,7 @@ function Antennae({ mood }: { mood: CompanionMood }) {
   );
 }
 
-function Eyes({ mood, gaze, blink }: { mood: CompanionMood; gaze: CompanionGaze; blink: boolean }) {
+function Eyes({ mood, gaze, blink, detailed }: { mood: CompanionMood; gaze: CompanionGaze; blink: boolean; detailed: boolean }) {
   if (mood === CompanionMood.Done || mood === CompanionMood.Happy) {
     return (
       <g className="hood-eyes" stroke={INK} strokeWidth="3" fill="none" strokeLinecap="round">
@@ -125,7 +132,7 @@ function Eyes({ mood, gaze, blink }: { mood: CompanionMood; gaze: CompanionGaze;
           <g key={x} transform={`translate(${x} ${EYES.y}) scale(${scale}) translate(${-x} ${-EYES.y})`}>
             <ellipse cx={x} cy={EYES.y} rx="6.4" ry="9.4" fill={INK} />
             <circle cx={x + 2.4} cy={EYES.y - 4.4} r="2.4" fill="#fff" />
-            <circle cx={x - 1.4} cy={EYES.y + 3.5} r="1" fill="#fff" opacity=".7" />
+            {detailed && <circle cx={x - 1.4} cy={EYES.y + 3.5} r="1" fill="#fff" opacity=".7" />}
           </g>
         ))}
       </g>
@@ -193,35 +200,59 @@ function Extras({ mood }: { mood: CompanionMood }) {
 export default function LobsterHood({ mood, gaze = { x: 0, y: 0 }, blink = false, size, className }: LobsterHoodProps) {
   const id = useId().replace(/:/g, '');
   const [left, right] = clawPoses(mood);
-  const blush = mood === CompanionMood.Done || mood === CompanionMood.Happy ? { rx: 6, ry: 3.4, opacity: 0.9 } : { rx: 5, ry: 3, opacity: 0.75 };
+  const detailed = size >= DETAIL_MIN_SIZE;
+  const happy = mood === CompanionMood.Done || mood === CompanionMood.Happy;
+  const blush = happy ? { rx: 8, ry: 4.8 } : { rx: 7, ry: 4.2 };
+  const rim = { x: FACE.x - RIM, y: FACE.y - RIM, width: FACE.width + RIM * 2, height: FACE.height + RIM * 2, rx: FACE.rx + RIM };
   return (
     <svg className={`lobster-hood ${className ?? ''}`} data-mood={mood} viewBox="0 0 120 120" width={size} height={size} aria-hidden="true">
       <defs>
-        <radialGradient id={`${id}-shell`} cx="38%" cy="28%" r="80%">
-          <stop offset="0" stopColor="#FF9F7E" />
-          <stop offset=".45" stopColor="#FF5B3B" />
-          <stop offset="1" stopColor="#D9301A" />
+        {/* In user space so the hood rim continues the shell's shading. */}
+        <radialGradient id={`${id}-shell`} gradientUnits="userSpaceOnUse" cx="49" cy="51" r="70">
+          <stop offset="0" stopColor="#FF8E6C" />
+          <stop offset=".5" stopColor="#F8563A" />
+          <stop offset="1" stopColor="#D8361B" />
         </radialGradient>
-        <linearGradient id={`${id}-face`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#FFE9D8" />
-          <stop offset="1" stopColor="#FFCDAE" />
+        <radialGradient id={`${id}-sheen`}>
+          <stop offset="0" stopColor="#fff" stopOpacity=".55" />
+          <stop offset="1" stopColor="#fff" stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id={`${id}-rim-light`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#fff" stopOpacity=".6" />
+          <stop offset=".4" stopColor="#fff" stopOpacity="0" />
         </linearGradient>
-        <filter id={`${id}-soft`} x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="1.6" /></filter>
+        <linearGradient id={`${id}-face`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#FFEEE2" />
+          <stop offset="1" stopColor="#FFD3B8" />
+        </linearGradient>
+        <linearGradient id={`${id}-face-shade`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#D9603F" stopOpacity=".36" />
+          <stop offset=".26" stopColor="#D9603F" stopOpacity="0" />
+        </linearGradient>
+        <radialGradient id={`${id}-blush`}>
+          <stop offset="0" stopColor="#FF9A90" stopOpacity={happy ? 0.95 : 0.8} />
+          <stop offset="1" stopColor="#FF9A90" stopOpacity="0" />
+        </radialGradient>
+        <filter id={`${id}-soft`} x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="1.6" /></filter>
       </defs>
       <Claw pose={left} side="left" />
       <Claw pose={right} side="right" />
-      <Antennae mood={mood} />
+      {detailed && <Antennae mood={mood} />}
       <g className="hood-body">
-        <path d="M60 30 C89 30 105 48 105 72 C105 97 86 111 60 111 C34 111 15 97 15 72 C15 48 31 30 60 30 Z" fill={`url(#${id}-shell)`} />
-        <ellipse cx="42" cy="44" rx="14" ry="7" fill="#fff" opacity=".45" transform="rotate(-24 42 44)" filter={`url(#${id}-soft)`} />
-        <rect x="30" y="54.5" width="60" height="46" rx="21" fill="#C83418" opacity=".35" />
-        <rect x="30" y="53" width="60" height="46" rx="21" fill={`url(#${id}-face)`} />
-        <ellipse cx="38.5" cy="86" fill="#FFA39A" {...blush} />
-        <ellipse cx="81.5" cy="86" fill="#FFA39A" {...blush} />
-        <Eyes mood={mood} gaze={gaze} blink={blink} />
+        <path d={HEAD_PATH} fill={`url(#${id}-shell)`} />
+        <ellipse cx="45" cy="43" rx="19" ry="10" fill={`url(#${id}-sheen)`} transform="rotate(-20 45 43)" />
+        {/* The face sits inside the hood: the rim casts a shadow below and shades the top of the face. */}
+        <rect {...rim} y={rim.y + 2} fill="#A82A12" opacity=".32" filter={`url(#${id}-soft)`} />
+        <rect {...rim} fill={`url(#${id}-shell)`} />
+        <rect x={rim.x + 0.6} y={rim.y + 0.6} width={rim.width - 1.2} height={rim.height - 1.2} rx={rim.rx - 0.6} fill="none" stroke={`url(#${id}-rim-light)`} strokeWidth="1.2" />
+        <rect {...FACE} fill={`url(#${id}-face)`} />
+        <rect {...FACE} fill={`url(#${id}-face-shade)`} />
+        <ellipse cx="38.5" cy="86.5" fill={`url(#${id}-blush)`} {...blush} />
+        <ellipse cx="81.5" cy="86.5" fill={`url(#${id}-blush)`} {...blush} />
+        <Eyes mood={mood} gaze={gaze} blink={blink} detailed={detailed} />
         <Mouth mood={mood} />
       </g>
-      <Extras mood={mood} />
+      {detailed && <Extras mood={mood} />}
     </svg>
   );
 }

@@ -1,4 +1,4 @@
-import { DesktopCompanionDock, DesktopCompanionSize } from './constants';
+import { DesktopCompanionSize } from './constants';
 
 export interface CompanionPoint { x: number; y: number }
 export interface CompanionSize { width: number; height: number }
@@ -33,71 +33,36 @@ export function resolveCompanionBounds(position: unknown, workArea: CompanionRec
   }, workArea);
 }
 
-/** Docks the orb when it is released near the left or right edge. */
-export function snapCompanionToEdge(bounds: CompanionRect, workArea: CompanionRect): {
-  bounds: CompanionRect;
-  dock: DesktopCompanionDock;
-} {
-  const clamped = clampCompanionBounds(bounds, workArea);
-  const right = workArea.x + workArea.width;
-  if (clamped.x - workArea.x <= DesktopCompanionSize.SnapDistance) {
-    return { bounds: { ...clamped, x: workArea.x }, dock: DesktopCompanionDock.Left };
-  }
-  if (right - (clamped.x + clamped.width) <= DesktopCompanionSize.SnapDistance) {
-    return { bounds: { ...clamped, x: right - clamped.width }, dock: DesktopCompanionDock.Right };
-  }
-  return { bounds: clamped, dock: DesktopCompanionDock.None };
-}
-
-/** Tucks a docked orb into the screen edge so only a sliver peeks out. */
-export function resolvePeekBounds(bounds: CompanionRect, dock: DesktopCompanionDock, workArea: CompanionRect): CompanionRect {
-  const hidden = bounds.width - DesktopCompanionSize.PeekVisible;
-  if (dock === DesktopCompanionDock.Left) return { ...bounds, x: workArea.x - hidden };
-  if (dock === DesktopCompanionDock.Right) return { ...bounds, x: workArea.x + workArea.width - DesktopCompanionSize.PeekVisible };
-  return bounds;
-}
-
-/** The fully visible position of an orb, even if it is currently tucked away. */
-export function resolveRevealedBounds(bounds: CompanionRect, dock: DesktopCompanionDock, workArea: CompanionRect): CompanionRect {
-  if (dock === DesktopCompanionDock.Left) return { ...bounds, x: workArea.x };
-  if (dock === DesktopCompanionDock.Right) return { ...bounds, x: workArea.x + workArea.width - bounds.width };
-  return bounds;
-}
-
-/** Opens a panel above or below the orb, or beside it when neither fits. */
-export function resolveCompanionPanelBounds(anchor: CompanionRect, workArea: CompanionRect): CompanionRect {
-  const size = DesktopCompanionSize.Panel;
-  const gap = DesktopCompanionSize.Gap;
-  const above = anchor.y - size.height - gap;
-  const below = anchor.y + anchor.height + gap;
-  let x = anchor.x + anchor.width - size.width;
-  let y = above;
-  if (above < workArea.y) {
-    y = below;
-    if (below + size.height > workArea.y + workArea.height) {
-      const left = anchor.x - gap - size.width;
-      const right = anchor.x + anchor.width + gap;
-      if (left >= workArea.x) x = left;
-      else if (right + size.width <= workArea.x + workArea.width) x = right;
-      y = anchor.y + (anchor.height - size.height) / 2;
-    }
-  }
-  return clampCompanionBounds({ ...size, x, y }, workArea);
-}
-
 /** Stages open toward the middle of the screen. */
 export function companionStageOpensLeft(orb: CompanionRect, workArea: CompanionRect): boolean {
   return orb.x + orb.width / 2 >= workArea.x + workArea.width / 2;
 }
 
 /**
- * Places a bubble or drop stage next to the orb, on the side with more room,
- * bottom-aligned so it reads as coming out of the character.
+ * Places a bubble, the drop zone or the quick panel right beside the orb, on
+ * the side with more room, bottom-aligned so it reads as coming out of the
+ * character.
  */
 export function resolveCompanionStageBounds(orb: CompanionRect, size: CompanionSize, workArea: CompanionRect): CompanionRect {
   const x = companionStageOpensLeft(orb, workArea) ? orb.x - size.width + DesktopCompanionSize.SurfacePad : orb.x + orb.width - DesktopCompanionSize.SurfacePad;
   const y = orb.y + orb.height - size.height + DesktopCompanionSize.SurfacePad / 2;
   return clampCompanionBounds({ ...size, x, y }, workArea);
+}
+
+/**
+ * The composer window: its card sits beside the orb like the stage cards, and
+ * the window reaches upward by as much of `menuRoom` as the screen allows, so
+ * the composer's menus open above the card without moving it.
+ */
+export function resolveCompanionComposerBounds(
+  orb: CompanionRect,
+  card: CompanionSize,
+  menuRoom: number,
+  workArea: CompanionRect,
+): CompanionRect {
+  const cardBounds = resolveCompanionStageBounds(orb, card, workArea);
+  const room = Math.max(0, Math.min(menuRoom, cardBounds.y - workArea.y));
+  return { ...cardBounds, y: cardBounds.y - room, height: cardBounds.height + room };
 }
 
 /** Puts the selection toolbar/answer under the selection, or above it near the bottom edge. */

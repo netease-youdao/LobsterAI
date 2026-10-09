@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron';
+import { BrowserWindow, ipcMain, type WebContents } from 'electron';
 
 import {
   AgentId,
@@ -69,6 +69,14 @@ async function cleanupLegacyIdentityBlockForAgent(
   return result;
 }
 
+/** Lets other windows (e.g. the desktop companion's composer) reload agents after a change. */
+function notifyAgentsChanged(sender: WebContents): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed() || win.webContents.id === sender.id) continue;
+    win.webContents.send(AgentIpcChannel.Changed);
+  }
+}
+
 export function registerAgentHandlers(deps: AgentHandlerDeps): void {
   const {
     getAgentManager,
@@ -106,12 +114,13 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
 
   ipcMain.handle(
     AgentIpcChannel.Create,
-    async (_event, request: CreateAgentRequest) => {
+    async (event, request: CreateAgentRequest) => {
       try {
         const agent = getAgentManager().createAgent(request, resolveDefaultAgentModelRef());
         syncOpenClawConfig({ reason: 'agent-created' }).catch(err => {
           console.error('[OpenClaw] config sync after agent-created failed:', err);
         });
+        notifyAgentsChanged(event.sender);
         return { success: true, agent };
       } catch (error) {
         return {
@@ -124,7 +133,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
 
   ipcMain.handle(
     AgentIpcChannel.Update,
-    async (_event, id: string, updates: UpdateAgentRequest) => {
+    async (event, id: string, updates: UpdateAgentRequest) => {
       try {
         const previousAgent = getAgentManager().getAgent(id);
         const previousWorkingDirectory = previousAgent?.workingDirectory?.trim() || '';
@@ -148,6 +157,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
             console.error('[OpenClaw] config sync after agent update failed:', err);
           });
         }
+        notifyAgentsChanged(event.sender);
         return { success: true, agent };
       } catch (error) {
         return {
@@ -158,9 +168,10 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     },
   );
 
-  ipcMain.handle(AgentIpcChannel.Reorder, async (_event, agentIds: string[]) => {
+  ipcMain.handle(AgentIpcChannel.Reorder, async (event, agentIds: string[]) => {
     try {
       const agents = getAgentManager().reorderAgents(agentIds);
+      notifyAgentsChanged(event.sender);
       return { success: true, agents };
     } catch (error) {
       return {
@@ -181,7 +192,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     }
   });
 
-  ipcMain.handle(AgentIpcChannel.Delete, async (_event, id: string) => {
+  ipcMain.handle(AgentIpcChannel.Delete, async (event, id: string) => {
     try {
       const agentExists = id !== AgentId.Main && getAgentManager().getAgent(id) !== null;
       const deletedSessionIds = agentExists ? getCoworkStore().listSessionIdsByAgent(id) : [];
@@ -232,6 +243,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
       syncOpenClawConfig({ reason: 'agent-deleted' }).catch(err => {
         console.error('[OpenClaw] config sync after agent-deleted failed:', err);
       });
+      notifyAgentsChanged(event.sender);
       return { success: true, deleted: result, deletedSessionIds: result ? deletedSessionIds : [] };
     } catch (error) {
       return {
@@ -265,12 +277,13 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     }
   });
 
-  ipcMain.handle(AgentIpcChannel.AddPreset, async (_event, presetId: string) => {
+  ipcMain.handle(AgentIpcChannel.AddPreset, async (event, presetId: string) => {
     try {
       const agent = getAgentManager().addPresetAgent(presetId, resolveDefaultAgentModelRef());
       syncOpenClawConfig({ reason: 'agent-preset-added' }).catch(err => {
         console.error('[OpenClaw] config sync after agent-preset-added failed:', err);
       });
+      notifyAgentsChanged(event.sender);
       return { success: true, agent };
     } catch (error) {
       return {

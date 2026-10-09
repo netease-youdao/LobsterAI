@@ -41,7 +41,7 @@ import {
   LogReporterSource,
   LogReporterStoreKey,
 } from '../shared/analytics/constants';
-import { AppIpcChannel } from '../shared/app/constants';
+import { AppIpcChannel, type OpenSettingsRequest, OpenSettingsTab } from '../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode, AppSettingsIpc } from '../shared/appSettings/constants';
 import { type AppUpdateActiveWorkloads, AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
@@ -15242,7 +15242,8 @@ if (!gotTheLock) {
       },
       openSettings: () => {
         focusMainWindowForReason('desktop companion settings');
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:openSettings');
+        const request: OpenSettingsRequest = { tab: OpenSettingsTab.DesktopCompanion };
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(AppIpcChannel.OpenSettings, request);
       },
     });
     console.log('[Main] initApp: window created');

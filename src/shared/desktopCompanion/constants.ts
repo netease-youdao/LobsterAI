@@ -15,9 +15,7 @@ export const DesktopCompanionIpc = {
   ContextMenu: 'desktop-companion:context-menu',
   Drag: 'desktop-companion:drag',
   Changed: 'desktop-companion:changed',
-  OrbPointer: 'desktop-companion:orb-pointer',
   OrbFileDrag: 'desktop-companion:orb-file-drag',
-  OrbAttention: 'desktop-companion:orb-attention',
   Gaze: 'desktop-companion:gaze',
   StageCommand: 'desktop-companion:stage-command',
   ResizeSurface: 'desktop-companion:resize-surface',
@@ -28,6 +26,12 @@ export const DesktopCompanionIpc = {
   QuickAnswerEvent: 'desktop-companion:quick-answer-event',
   RequestPermission: 'desktop-companion:request-permission',
   CopyText: 'desktop-companion:copy-text',
+  /** The composer started a task; the orb follows it and the status strip comes out. */
+  TaskStarted: 'desktop-companion:task-started',
+  /** The followed task finished, failed or needs input; bring the status strip back. */
+  TaskUpdated: 'desktop-companion:task-updated',
+  /** The composer window lets clicks through its empty room above the card. */
+  PanelPassThrough: 'desktop-companion:panel-pass-through',
 } as const;
 
 export const DesktopCompanionSurface = {
@@ -42,14 +46,8 @@ export type DesktopCompanionSurface = typeof DesktopCompanionSurface[keyof typeo
 export const DesktopCompanionDragPhase = { Start: 'start', Move: 'move', End: 'end', Cancel: 'cancel' } as const;
 export type DesktopCompanionDragPhase = typeof DesktopCompanionDragPhase[keyof typeof DesktopCompanionDragPhase];
 
-export const DesktopCompanionPointerPhase = { Enter: 'enter', Leave: 'leave' } as const;
-export type DesktopCompanionPointerPhase = typeof DesktopCompanionPointerPhase[keyof typeof DesktopCompanionPointerPhase];
-
 export const DesktopCompanionFileDragPhase = { Enter: 'enter', Leave: 'leave', Drop: 'drop' } as const;
 export type DesktopCompanionFileDragPhase = typeof DesktopCompanionFileDragPhase[keyof typeof DesktopCompanionFileDragPhase];
-
-export const DesktopCompanionDock = { None: 'none', Left: 'left', Right: 'right' } as const;
-export type DesktopCompanionDock = typeof DesktopCompanionDock[keyof typeof DesktopCompanionDock];
 
 export const DesktopCompanionSnoozeMode = { Hidden: 'hidden', Quiet: 'quiet' } as const;
 export type DesktopCompanionSnoozeMode = typeof DesktopCompanionSnoozeMode[keyof typeof DesktopCompanionSnoozeMode];
@@ -64,7 +62,6 @@ export const DesktopCompanionStoreKey = {
   Position: 'desktop-companion.position.v1',
   Draft: 'desktop-companion.draft.v1',
   Session: 'desktop-companion.session.v1',
-  Dock: 'desktop-companion.dock.v1',
   Snooze: 'desktop-companion.snooze.v1',
   HintLedger: 'desktop-companion.hints.v1',
   Greeted: 'desktop-companion.greeted.v1',
@@ -106,7 +103,7 @@ export interface DesktopCompanionDraft {
   workingDirectory: string;
 }
 
-export const DesktopCompanionStageKind = { None: 'none', Hint: 'hint', Drop: 'drop' } as const;
+export const DesktopCompanionStageKind = { None: 'none', Hint: 'hint', Drop: 'drop', Task: 'task' } as const;
 export type DesktopCompanionStageKind = typeof DesktopCompanionStageKind[keyof typeof DesktopCompanionStageKind];
 
 export const DesktopCompanionStageSide = { Left: 'left', Right: 'right' } as const;
@@ -129,7 +126,8 @@ export type DesktopCompanionStage =
     source: DesktopCompanionDropSource;
     files: DesktopCompanionDropFile[];
     kinds: CompanionFileKind[];
-  };
+  }
+  | { kind: typeof DesktopCompanionStageKind.Task; id: string; sessionId: string };
 
 export interface DesktopCompanionCapabilities {
   selection: CompanionCapability;
@@ -151,8 +149,6 @@ export interface DesktopCompanionState {
   draft: DesktopCompanionDraft;
   shortcutUnavailable: boolean;
   snooze: DesktopCompanionSnooze | null;
-  dock: DesktopCompanionDock;
-  peeking: boolean;
   stage: DesktopCompanionStage;
   /** Which side of the character the stage opens on, so its tail can point back at it. */
   stageSide: DesktopCompanionStageSide;
@@ -176,6 +172,8 @@ export const DesktopCompanionStageCommandType = {
   DropAsk: 'drop-ask',
   DropStarted: 'drop-started',
   DropCancel: 'drop-cancel',
+  TaskOpen: 'task-open',
+  TaskDismiss: 'task-dismiss',
 } as const;
 
 export type DesktopCompanionStageCommand =
@@ -186,7 +184,9 @@ export type DesktopCompanionStageCommand =
   | { type: typeof DesktopCompanionStageCommandType.StageHover; hovering: boolean }
   | { type: typeof DesktopCompanionStageCommandType.DropAsk; attachments: DesktopCompanionAttachment[] }
   | { type: typeof DesktopCompanionStageCommandType.DropStarted; sessionId: string }
-  | { type: typeof DesktopCompanionStageCommandType.DropCancel };
+  | { type: typeof DesktopCompanionStageCommandType.DropCancel }
+  | { type: typeof DesktopCompanionStageCommandType.TaskOpen }
+  | { type: typeof DesktopCompanionStageCommandType.TaskDismiss };
 
 export const DesktopCompanionSelectionMode = { Toolbar: 'toolbar', Answer: 'answer' } as const;
 export type DesktopCompanionSelectionMode = typeof DesktopCompanionSelectionMode[keyof typeof DesktopCompanionSelectionMode];
@@ -260,10 +260,10 @@ export interface DesktopCompanionBridge extends LanguageToolsBridge {
   openMain(sessionId?: string | null): Promise<void>;
   showContextMenu(): Promise<void>;
   drag(phase: DesktopCompanionDragPhase): void;
-  orbPointer(phase: DesktopCompanionPointerPhase): void;
   orbFileDrag(phase: DesktopCompanionFileDragPhase, kinds: CompanionFileKind[]): void;
-  /** The character has news (done, needs input, failed) and should not stay tucked away. */
-  orbAttention(active: boolean): void;
+  taskStarted(sessionId: string): Promise<void>;
+  taskUpdated(): void;
+  setPanelPassThrough(passThrough: boolean): void;
   stageCommand(command: DesktopCompanionStageCommand): Promise<void>;
   resizeSurface(size: CompanionSurfaceSize): void;
   selectionCommand(command: DesktopCompanionSelectionCommand): Promise<void>;
@@ -295,9 +295,13 @@ export const EMPTY_DESKTOP_COMPANION_DRAFT: DesktopCompanionDraft = {
 
 export const DesktopCompanionSize = {
   Orb: { width: 84, height: 84 },
-  PeekVisible: 38,
   // Window sizes include the transparent SurfacePad margin that holds the card shadow.
-  Panel: { width: 444, height: 584 },
+  // The quick panel is the home composer: its card is Composer wide and the
+  // window adds room above it for the composer's menus, which open upward.
+  Composer: { width: 600, maxHeight: 420 },
+  ComposerMenuRoom: 360,
+  PanelCompactHeight: 210,
+  Task: { width: 420, height: 112 },
   Hint: { width: 320, height: 168 },
   Drop: { width: 448, height: 214 },
   Toolbar: { width: 600, height: 64 },
@@ -305,7 +309,6 @@ export const DesktopCompanionSize = {
   SurfacePad: 22,
   Margin: 12,
   Gap: 6,
-  SnapDistance: 96,
 } as const;
 
 export const DesktopCompanionTiming = {

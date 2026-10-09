@@ -162,9 +162,10 @@ contextBridge.exposeInMainWorld('electron', {
     openMain: id => ipcRenderer.invoke(DesktopCompanionIpc.OpenMain, id),
     showContextMenu: () => ipcRenderer.invoke(DesktopCompanionIpc.ContextMenu),
     drag: phase => ipcRenderer.send(DesktopCompanionIpc.Drag, phase),
-    orbPointer: phase => ipcRenderer.send(DesktopCompanionIpc.OrbPointer, phase),
     orbFileDrag: (phase, kinds) => ipcRenderer.send(DesktopCompanionIpc.OrbFileDrag, { phase, kinds }),
-    orbAttention: active => ipcRenderer.send(DesktopCompanionIpc.OrbAttention, active),
+    taskStarted: sessionId => ipcRenderer.invoke(DesktopCompanionIpc.TaskStarted, sessionId),
+    taskUpdated: () => ipcRenderer.send(DesktopCompanionIpc.TaskUpdated),
+    setPanelPassThrough: passThrough => ipcRenderer.send(DesktopCompanionIpc.PanelPassThrough, passThrough),
     stageCommand: command => ipcRenderer.invoke(DesktopCompanionIpc.StageCommand, command),
     resizeSurface: size => ipcRenderer.send(DesktopCompanionIpc.ResizeSurface, size),
     selectionCommand: command => ipcRenderer.invoke(DesktopCompanionIpc.SelectionCommand, command),
@@ -584,6 +585,11 @@ contextBridge.exposeInMainWorld('electron', {
     addPreset: async (presetId: string) => {
       const result = await ipcRenderer.invoke(AgentIpcChannel.AddPreset, presetId);
       return result?.success ? result.agent : null;
+    },
+    onChanged: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(AgentIpcChannel.Changed, handler);
+      return () => ipcRenderer.removeListener(AgentIpcChannel.Changed, handler);
     },
   },
   cowork: {

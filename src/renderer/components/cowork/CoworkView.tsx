@@ -1,6 +1,6 @@
 import { ArrowPathIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import type { CoworkBrowserAnnotationMessageBatch } from '@shared/cowork/browserAnnotations';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { buildGoalSettingMessageMetadata } from '../../../common/goalCommandDisplay';
@@ -10,10 +10,6 @@ import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedT
 import startupCreditEntryGiftUrl from '../../assets/startup-credit-entry-gift.svg';
 import { EnterpriseQuotaPrompt } from '../../features/enterpriseAccount/components/EnterpriseQuotaPrompt';
 import { refreshEnterpriseAccountContext } from '../../features/enterpriseAccount/context';
-import {
-  resolveBlockingEnterpriseQuotaReason,
-  usesLobsterAIServerQuota,
-} from '../../features/enterpriseAccount/modelQuotaGate';
 import {
   selectEnterpriseAccountContext,
   selectIsEnterpriseAccount,
@@ -25,7 +21,6 @@ import { i18nService } from '../../services/i18n';
 import { quickActionService } from '../../services/quickAction';
 import { RootState } from '../../store';
 import {
-  selectCoworkConfig,
   selectCurrentSession,
   selectIsStreaming,
   selectSessionNavigationTargetId,
@@ -45,7 +40,6 @@ import {
 } from '../../types/cowork';
 import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { applyOptimisticGoalCommand } from '../../utils/goalCommand';
-import { toOpenClawModelRef } from '../../utils/openclawModelRef';
 import CreditsResetCampaignFloat from '../CreditsResetCampaignFloat';
 import { DailyCheckInHeaderEntry } from '../DailyCheckInActivity';
 import ComposeIcon from '../icons/ComposeIcon';
@@ -60,12 +54,19 @@ import {
   openStartupCreditCampaign,
   useStartupCreditCampaignEntry,
 } from '../startupCreditCampaignBridge';
-import { resolveAgentStartModel, resolveModelThinkingLevel, useAgentSelectedModel } from './agentModelSelection';
 import { CoworkUiEvent } from './constants';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
 import CoworkSessionDetail from './CoworkSessionDetail';
+import {
+  buildCoworkStartPlan,
+  COWORK_START_BLOCK_MESSAGE_KEYS,
+  CoworkStartBlock,
+  isOpenClawReadyForSession,
+  resolveCoworkStartBlock,
+} from './coworkStartRequest';
 import { reportPromptTemplateAction } from './promptAnalytics';
-import { buildCoworkContinuationSystemPrompt, buildCoworkSystemPrompt } from './skillSystemPrompt';
+import { buildCoworkContinuationSystemPrompt } from './skillSystemPrompt';
+import { useHomeStartContext } from './useHomeStartContext';
 
 const TEMP_SESSION_ID_PREFIX = 'temp-';
 
@@ -145,9 +146,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const isEnterpriseAccount = useSelector(selectIsEnterpriseAccount);
   const enterpriseAccountId = enterpriseAccountContext?.enterpriseId;
   const hasEnterpriseAccount = enterpriseAccountContext !== null;
-  const homeQuotaReason = enterpriseAccountContext?.quotaStatus.available === false
-    ? enterpriseAccountContext.quotaStatus.reason
-    : null;
   const currentSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -158,7 +156,19 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     if (!isHomeView || !hasEnterpriseAccount) return;
     void refreshEnterpriseAccountContext();
   }, [enterpriseAccountId, hasEnterpriseAccount, isHomeView]);
-  const config = useSelector(selectCoworkConfig);
+  const {
+    config,
+    currentAgentId,
+    currentAgent,
+    workingDirectory: currentAgentWorkingDirectory,
+    selectedModel: currentAgentSelectedModel,
+    selectedModelRef: currentAgentSelectedModelRef,
+    startModel: homeStartModel,
+    usesServerQuota: homeModelUsesServerQuota,
+    quotaReason: homeQuotaReason,
+    blockingQuotaReason: blockingHomeQuotaReason,
+    thinkingLevel: currentAgentThinkingLevel,
+  } = useHomeStartContext();
 
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
   const skills = useSelector((state: RootState) => state.skill.skills);
@@ -167,31 +177,8 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const marketplaceKits = useSelector((state: RootState) => state.kit.marketplaceKits);
   const quickActions = useSelector((state: RootState) => state.quickAction.actions);
   const selectedActionId = useSelector((state: RootState) => state.quickAction.selectedActionId);
-  const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const startupCreditEntry = useStartupCreditCampaignEntry();
-  const agents = useSelector((state: RootState) => state.agent.agents);
-  const currentAgent = agents.find((agent) => agent.id === currentAgentId);
   const shouldPresentConversation = Boolean(currentSession || sessionNavigationTargetId);
-  const currentAgentWorkingDirectory = currentAgent?.workingDirectory?.trim() || config.workingDirectory || '';
-  const currentAgentSelectedModel = useAgentSelectedModel(currentAgentId, currentAgent?.model ?? '');
-  const currentAgentSelectedModelRef = currentAgentSelectedModel
-    ? toOpenClawModelRef(currentAgentSelectedModel)
-    : '';
-  const availableModels = useSelector((state: RootState) => state.model.availableModels);
-  const homeStartModel = useMemo(() => resolveAgentStartModel({
-    agentModel: currentAgent?.model ?? '',
-    availableModels,
-    selectedModel: currentAgentSelectedModel,
-  }), [availableModels, currentAgent?.model, currentAgentSelectedModel]);
-  const homeModelUsesServerQuota = usesLobsterAIServerQuota(currentAgentSelectedModel);
-  const blockingHomeQuotaReason = resolveBlockingEnterpriseQuotaReason(
-    homeQuotaReason,
-    currentAgentSelectedModel,
-  );
-  const currentAgentThinkingLevel = resolveModelThinkingLevel(
-    currentAgentSelectedModel,
-    currentAgent?.thinkingLevel,
-  );
   const homeDraftCollaborationMode = useSelector((state: RootState) => (
     state.cowork.draftCollaborationModes.__home__ || CoworkCollaborationMode.Default
   ));
@@ -266,11 +253,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       default:
         return i18nService.t('coworkOpenClawRunning');
     }
-  };
-
-  const isOpenClawReadyForSession = (status: OpenClawEngineStatus | null): boolean => {
-    if (!status) return false;
-    return status.phase === 'running' || status.phase === 'ready';
   };
 
   const handleRestartGateway = async () => {
@@ -359,23 +341,21 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       count: imageAttachments?.length ?? 0,
       details: imageAttachments?.map(a => ({ name: a.name, mimeType: a.mimeType, base64Length: a.base64Data?.length ?? 0 })) ?? [],
     });
-    if (blockingHomeQuotaReason) {
-      logCoworkViewModel(`blocked new session submission for enterprise quota reason ${blockingHomeQuotaReason}`);
-      window.dispatchEvent(new CustomEvent('app:showToast', {
-        detail: i18nService.t('enterpriseQuotaHomeSubmitBlocked'),
-      }));
-      return false;
-    }
-    if (openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
-      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('coworkErrorEngineNotReady') }));
-      return false;
-    }
-    if (homeStartModel.crossesBillingSide) {
-      logCoworkViewModel(
-        `blocked new session: agent model ${homeStartModel.unavailableModelRef} is unavailable and ${currentAgentSelectedModelRef || 'none'} bills the other side`,
-        'warn',
-      );
-      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentModelInvalidHint') }));
+    const startBlock = resolveCoworkStartBlock({
+      blockingQuotaReason: blockingHomeQuotaReason,
+      engineStatus: openClawStatus,
+      crossesBillingSide: homeStartModel.crossesBillingSide,
+    });
+    if (startBlock) {
+      if (startBlock === CoworkStartBlock.EnterpriseQuota) {
+        logCoworkViewModel(`blocked new session submission for enterprise quota reason ${blockingHomeQuotaReason}`);
+      } else if (startBlock === CoworkStartBlock.ModelBillingSide) {
+        logCoworkViewModel(
+          `blocked new session: agent model ${homeStartModel.unavailableModelRef} is unavailable and ${currentAgentSelectedModelRef || 'none'} bills the other side`,
+          'warn',
+        );
+      }
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t(COWORK_START_BLOCK_MESSAGE_KEYS[startBlock]) }));
       return false;
     }
     // Prevent duplicate submissions
@@ -424,18 +404,32 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       const sessionSkillIds = [...activeSkillIds];
       const sessionKitIds = [...activeKitIds];
 
-      const {
-        directSkillIds,
-        runtimeSkillIds,
-        kitReferences,
-        resolvedKitCapabilities,
-      } = buildCapabilitySelection(sessionSkillIds, sessionKitIds);
-      const isPlanMode = collaborationMode === CoworkCollaborationMode.Plan;
+      const capabilities = buildCapabilitySelection(sessionSkillIds, sessionKitIds);
+      const { kitReferences, resolvedKitCapabilities } = capabilities;
+      const startPlan = buildCoworkStartPlan({
+        prompt,
+        title: fallbackTitle,
+        skillPrompt,
+        configSystemPrompt: config.systemPrompt,
+        kitIds: sessionKitIds,
+        capabilities,
+        collaborationMode,
+        cwd: currentAgentWorkingDirectory,
+        agentId: currentAgentId,
+        modelRef: currentAgentSelectedModelRef,
+        thinkingLevel: currentAgentThinkingLevel,
+        imageAttachments,
+        mediaSelection,
+        mediaReferences,
+        selectedTextSnippets,
+        browserAnnotations,
+      });
+      const isPlanMode = startPlan.isPlanMode;
       const goalSettingMetadata = buildGoalSettingMessageMetadata(prompt);
-      const displayDirectSkillIds = directSkillIds;
-      const displayKitIds = sessionKitIds;
-      const effectiveRuntimeSkillIds = isPlanMode ? [] : runtimeSkillIds;
-      if (isPlanMode && (directSkillIds.length > 0 || runtimeSkillIds.length > 0 || sessionKitIds.length > 0)) {
+      const displayDirectSkillIds = startPlan.displaySkillIds;
+      const displayKitIds = startPlan.displayKitIds;
+      const effectiveRuntimeSkillIds = startPlan.runtimeSkillIds;
+      if (startPlan.suppressedCapabilities) {
         logCoworkViewModel('suppressed selected capabilities for a plan-mode start turn');
       }
       const imageAttachmentPreviews = buildCoworkImageAttachmentPreviews(imageAttachments);
@@ -503,37 +497,11 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       dispatch(setDraftSkillIds({ draftKey: '__home__', skillIds: [] }));
       dispatch(clearSelection());
 
-      // Combine skill prompt with system prompt.
-      // OpenClaw loads skills natively via skills.load.extraDirs, so skip the
-      // auto-routing prompt to avoid injecting Claude SDK tool-calling instructions
-      // that confuse non-Claude models (e.g. kimi-k2.5 falls back to text-based
-      // tool calls, producing empty tool names and err=true failures).
-      const combinedSystemPrompt = buildCoworkSystemPrompt(skillPrompt, config.systemPrompt);
-
       // Start the actual session immediately with fallback title
-      const sessionModelOverride = currentAgentSelectedModelRef;
       logCoworkViewModel(
-        `creating session with model ${sessionModelOverride || 'default'}; agent model is ${currentAgent?.model || 'empty'}; server quota model is ${homeModelUsesServerQuota}`,
+        `creating session with model ${currentAgentSelectedModelRef || 'default'}; agent model is ${currentAgent?.model || 'empty'}; server quota model is ${homeModelUsesServerQuota}`,
       );
-      const { session: startedSession, error: startError } = await coworkService.startSession({
-        prompt,
-        title: fallbackTitle,
-        cwd: currentAgentWorkingDirectory || undefined,
-        systemPrompt: combinedSystemPrompt,
-        activeSkillIds: displayDirectSkillIds.length > 0 ? displayDirectSkillIds : undefined,
-        runtimeSkillIds: isPlanMode ? [] : (effectiveRuntimeSkillIds.length > 0 ? effectiveRuntimeSkillIds : undefined),
-        kitIds: displayKitIds.length > 0 ? displayKitIds : undefined,
-        kitReferences: displayKitIds.length > 0 ? kitReferences : undefined,
-        resolvedKitCapabilities: displayKitIds.length > 0 ? resolvedKitCapabilities : undefined,
-        agentId: currentAgentId,
-        modelOverride: sessionModelOverride,
-        thinkingLevel: currentAgentThinkingLevel,
-        imageAttachments,
-        mediaSelection: mediaSelection && mediaSelection.mode !== 'none' ? mediaSelection : undefined,
-        mediaReferences,
-        selectedTextSnippets,
-        browserAnnotations,
-      });
+      const { session: startedSession, error: startError } = await coworkService.startSession(startPlan.options);
 
       if (!startedSession && startError) {
         // Show the error as a system message in the temp session

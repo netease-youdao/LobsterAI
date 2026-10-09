@@ -20,18 +20,3 @@ export function companionPhase(session: Pick<CompanionSession, 'status'> | null,
     default: return { value: CompanionPhase.Ready, key: 'desktopCompanionOrbIdle' };
   }
 }
-
-const MessageKind = { Assistant: 'assistant', User: 'user' } as const;
-
-export function companionReply(session: CompanionSession | null): string {
-  const messages = session?.messages ?? [];
-  // Do not present a previous turn's answer as the result of a new request.
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.type === MessageKind.User) break;
-    if (message.type === MessageKind.Assistant && !message.metadata?.isThinking && message.content.trim()) {
-      return message.content.slice(0, 2400);
-    }
-  }
-  return '';
-}

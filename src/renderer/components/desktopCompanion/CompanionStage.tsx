@@ -9,6 +9,7 @@ import {
   ListBulletIcon,
   MicrophoneIcon,
   PhotoIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import React, { type ComponentType, type SVGProps, useEffect, useRef, useState } from 'react';
 
@@ -27,9 +28,11 @@ import {
 } from '../../../shared/desktopCompanion/fileKinds';
 import { COMPANION_WELCOME_TOPIC, companionHintCopyKeys } from '../../../shared/desktopCompanion/hintPolicy';
 import { i18nService } from '../../services/i18n';
+import { CompanionPhase, companionPhase } from './companionPresentation';
 import { fileKindsFromDataTransfer, filesToAttachments, hasFiles, startCompanionTask } from './companionTasks';
 import CompanionCharacter from './mascot/CompanionCharacter';
 import { CompanionMood } from './mascot/companionMood';
+import { useCompanionSession } from './useCompanionSession';
 import { useMeasuredSurface } from './useMeasuredSurface';
 
 const t = (key: string) => i18nService.t(key);
@@ -49,6 +52,7 @@ const DROP_ICONS: Record<CompanionDropAction, ComponentType<SVGProps<SVGSVGEleme
 
 type HintStage = Extract<DesktopCompanionStage, { kind: typeof DesktopCompanionStageKind.Hint }>;
 type DropStage = Extract<DesktopCompanionStage, { kind: typeof DesktopCompanionStageKind.Drop }>;
+type TaskStage = Extract<DesktopCompanionStage, { kind: typeof DesktopCompanionStageKind.Task }>;
 
 function HintBubble({ stage }: { stage: HintStage }) {
   const api = window.electron.desktopCompanion;
@@ -81,6 +85,44 @@ function HintBubble({ stage }: { stage: HintStage }) {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/** How a task handed to the orb is doing; the result itself opens in the main window. */
+function TaskStrip({ stage }: { stage: TaskStage }) {
+  const api = window.electron.desktopCompanion;
+  const [hovering, setHovering] = useState(false);
+  const { session, pending } = useCompanionSession(stage.sessionId, true);
+  const phase = companionPhase(session, pending);
+  const running = phase.value === CompanionPhase.Running;
+  const over = phase.value === CompanionPhase.Completed || phase.value === CompanionPhase.Error || phase.value === CompanionPhase.Paused;
+  // Once the task is over the strip steps aside after a while; the orb keeps the news.
+  useEffect(() => {
+    if (!over || hovering) return;
+    const timer = setTimeout(() => {
+      void api.stageCommand({ type: DesktopCompanionStageCommandType.TaskDismiss });
+    }, DesktopCompanionTiming.HintAutoDismissMs);
+    return () => clearTimeout(timer);
+  }, [api, hovering, over]);
+  const hover = (value: boolean) => {
+    setHovering(value);
+    void api.stageCommand({ type: DesktopCompanionStageCommandType.StageHover, hovering: value });
+  };
+  return (
+    <div className="stage-task" role="status" onMouseEnter={() => hover(true)} onMouseLeave={() => hover(false)}>
+      <span className="task-status" data-phase={phase.value}>{t(phase.key)}</span>
+      <span className="task-title" title={session?.title}>{session?.title || t('desktopCompanionLoading')}</span>
+      {running && (
+        <button type="button" className="bubble-text" onClick={() => { void window.electron.cowork.stopSession(stage.sessionId); }}>
+          {t('desktopCompanionStop')}
+        </button>
+      )}
+      <button type="button" className="bubble-primary" onClick={() => { void api.stageCommand({ type: DesktopCompanionStageCommandType.TaskOpen }); }}>
+        {t(pending ? 'desktopCompanionTaskHandle' : 'desktopCompanionTaskView')}
+      </button>
+      <button type="button" className="task-close" title={t('desktopCompanionHide')} aria-label={t('desktopCompanionHide')}
+        onClick={() => { void api.stageCommand({ type: DesktopCompanionStageCommandType.TaskDismiss }); }}><XMarkIcon /></button>
     </div>
   );
 }
@@ -190,9 +232,9 @@ export default function CompanionStage({ state }: { state: DesktopCompanionState
   return (
     <div className="stage-surface" data-side={state.stageSide} data-kind={stage.kind}>
       <div className="stage-card" ref={cardRef} key={stage.id}>
-        {stage.kind === DesktopCompanionStageKind.Hint
-          ? <HintBubble stage={stage} />
-          : <DropZone stage={stage} skin={state.preferences.skin} />}
+        {stage.kind === DesktopCompanionStageKind.Hint && <HintBubble stage={stage} />}
+        {stage.kind === DesktopCompanionStageKind.Drop && <DropZone stage={stage} skin={state.preferences.skin} />}
+        {stage.kind === DesktopCompanionStageKind.Task && <TaskStrip stage={stage} />}
       </div>
     </div>
   );

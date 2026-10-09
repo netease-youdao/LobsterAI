@@ -22,11 +22,10 @@ const SHOW_FALLBACK_MS = 150;
 const MAX_ATTACHMENTS = 20;
 
 export interface StageHost {
-  /** The orb's fully revealed bounds, or null when it is not on screen. */
+  /** The orb's bounds, or null when it is not on screen. */
   getOrbBounds(): Rectangle | null;
   createWindow(surface: typeof DesktopCompanionSurface.Stage, focusable: boolean): BrowserWindow;
   publish(): void;
-  onStageChanged(): void;
 }
 
 export interface StageHandlers {
@@ -34,6 +33,7 @@ export interface StageHandlers {
   onHintAccept(topic: CompanionHintTopic): void;
   onDropAsk(attachments: DesktopCompanionAttachment[]): void;
   onDropStarted(sessionId: string): void;
+  onTaskOpen(sessionId: string): void;
 }
 
 export function normalizeStageAttachments(value: unknown): DesktopCompanionAttachment[] {
@@ -46,8 +46,9 @@ export function normalizeStageAttachments(value: unknown): DesktopCompanionAttac
 }
 
 /**
- * The "stage" is a small window that comes out of the orb: a hint bubble or the
- * drop zone for files. Only one of them is ever shown.
+ * The "stage" is a small window that comes out of the orb: a hint bubble, the
+ * drop zone for files, or the status strip of a task handed to the orb. Only
+ * one of them is ever shown.
  */
 export class CompanionStageController {
   private window: BrowserWindow | null = null;
@@ -79,6 +80,15 @@ export class CompanionStageController {
     this.size = { ...DesktopCompanionSize.Hint };
     this.present();
     return true;
+  }
+
+  /** Shows how a task is doing; a drop in progress keeps the stage. */
+  showTask(sessionId: string): void {
+    if (this.current.kind === DesktopCompanionStageKind.Drop) return;
+    if (this.current.kind === DesktopCompanionStageKind.Task && this.current.sessionId === sessionId) return;
+    this.current = { kind: DesktopCompanionStageKind.Task, id: randomUUID(), sessionId };
+    this.size = { ...DesktopCompanionSize.Task };
+    this.present();
   }
 
   showDrop(source: DesktopCompanionDropSource, files: DesktopCompanionDropFile[], hintedKinds: CompanionFileKind[] = []): void {
@@ -117,7 +127,6 @@ export class CompanionStageController {
     this.current = NONE;
     if (this.window && !this.window.isDestroyed()) this.window.hide();
     this.host.publish();
-    this.host.onStageChanged();
   }
 
   reposition(): void {
@@ -129,7 +138,8 @@ export class CompanionStageController {
 
   setContentSize(size: CompanionSize): void {
     if (this.current.kind === DesktopCompanionStageKind.None) return;
-    const max = this.current.kind === DesktopCompanionStageKind.Drop ? DesktopCompanionSize.Drop : DesktopCompanionSize.Hint;
+    const max = this.current.kind === DesktopCompanionStageKind.Drop ? DesktopCompanionSize.Drop
+      : this.current.kind === DesktopCompanionStageKind.Task ? DesktopCompanionSize.Task : DesktopCompanionSize.Hint;
     this.size = {
       width: Math.max(160, Math.min(Math.ceil(size.width), max.width)),
       height: Math.max(60, Math.min(Math.ceil(size.height), max.height)),
@@ -175,6 +185,14 @@ export class CompanionStageController {
       case DesktopCompanionStageCommandType.DropCancel:
         this.clear();
         return;
+      case DesktopCompanionStageCommandType.TaskOpen:
+        if (current.kind !== DesktopCompanionStageKind.Task) return;
+        this.clear();
+        this.handlers.onTaskOpen(current.sessionId);
+        return;
+      case DesktopCompanionStageCommandType.TaskDismiss:
+        if (current.kind === DesktopCompanionStageKind.Task) this.clear();
+        return;
       default:
     }
   }
@@ -198,7 +216,6 @@ export class CompanionStageController {
     this.ensureWindow();
     this.reposition();
     this.host.publish();
-    this.host.onStageChanged();
     this.pendingShow = true;
     clearTimeout(this.showTimer);
     this.showTimer = setTimeout(() => this.reveal(), SHOW_FALLBACK_MS);

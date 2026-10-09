@@ -6,12 +6,11 @@ import {
 } from '@heroicons/react/24/outline';
 import { MapPinIcon } from '@heroicons/react/24/solid';
 import { useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 
 import { type DesktopCompanionState } from '../../../shared/desktopCompanion/constants';
 import { LanguageTool, LanguageToolCode, SpeechStatus, TranslationTarget } from '../../../shared/desktopCompanion/languageTools';
 import { i18nService } from '../../services/i18n';
+import CompanionMarkdown from './CompanionMarkdown';
 import { useLanguageTools } from './useLanguageTools';
 import { useMeasuredSurface } from './useMeasuredSurface';
 import { useTranslationFollowUp } from './useTranslationFollowUp';
@@ -164,9 +163,9 @@ export default function LanguageToolsSurface({ state }: { state: DesktopCompanio
           {isTranslation && <div className="language-conversation">
             {followUp.turns.map((turn, index) => turn.role === 'user'
               ? <p className="sel-question" key={index}>{turn.content}</p>
-              : <div className="sel-markdown" key={index}><FollowUpAnswer text={turn.content} /></div>)}
+              : <div className="sel-markdown" key={index}><CompanionMarkdown text={turn.content} /></div>)}
             {followUp.streaming && <div className="sel-markdown" aria-live="polite">
-              <FollowUpAnswer text={followUp.streaming.text || t('desktopCompanionAnswerThinking')} /><span className="sel-caret" />
+              <CompanionMarkdown text={followUp.streaming.text || t('desktopCompanionAnswerThinking')} /><span className="sel-caret" />
             </div>}
             {followUp.error && <p className="sel-error" role="alert">{followUp.error}
               <button type="button" onClick={followUp.retry}><ArrowPathIcon />{t('desktopCompanionAnswerRetry')}</button>
@@ -196,12 +195,4 @@ export default function LanguageToolsSurface({ state }: { state: DesktopCompanio
       </div>
     </div>
   );
-}
-
-function FollowUpAnswer({ text }: { text: string }) {
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-    a: ({ href, children }) => <a href={href} onClick={event => {
-      event.preventDefault(); if (href) void window.electron.shell.openExternal(href);
-    }}>{children}</a>,
-  }}>{text}</ReactMarkdown>;
 }

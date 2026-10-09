@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   CompanionCapability,
   DesktopCompanionIpc,
+  DesktopCompanionSize,
   DesktopCompanionSnoozeMode,
   DesktopCompanionStageCommandType,
   DesktopCompanionStageKind,
@@ -28,6 +29,7 @@ vi.mock('electron', async () => {
     destroyed = false;
     visible = false;
     focusable = true;
+    ignoreMouse = false;
     bounds: any;
     webContents = Object.assign(new EventEmitter(), {
       id: this.id,
@@ -43,6 +45,7 @@ vi.mock('electron', async () => {
     getBounds() { return this.bounds; }
     setBounds(value: any) { this.bounds = value; }
     setFocusable(value: boolean) { this.focusable = value; }
+    setIgnoreMouseEvents(value: boolean) { this.ignoreMouse = value; }
     show() { this.visible = true; }
     showInactive() { this.visible = true; }
     hide() { this.visible = false; this.emit('hide'); }
@@ -422,6 +425,51 @@ describe('stage: hints and drops', () => {
     fileDrag.emit(FileDragEvent.Start, { paths: ['/tmp/a.pdf'] });
     invoke(DesktopCompanionIpc.StageCommand, { type: DesktopCompanionStageCommandType.DropStarted, sessionId: 'session-9' });
     expect(manager.getState().sessionId).toBe('session-9');
+    // The status strip takes the drop zone's place so the task can be followed.
+    expect(manager.getState().stage).toMatchObject({ kind: DesktopCompanionStageKind.Task, sessionId: 'session-9' });
+  });
+
+  test('a task sent from the composer hides it; the orb follows the task and its strip opens the result', () => {
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    create();
+    manager.togglePanel();
+    const panel = mocks.windows.at(-1);
+    // The composer keeps room above its card for menus, and its bottom stays put as the card grows.
+    expect(panel.bounds.height).toBe(DesktopCompanionSize.PanelCompactHeight + DesktopCompanionSize.ComposerMenuRoom);
+    const bottom = panel.bounds.y + panel.bounds.height;
+    ipcMain.emit(DesktopCompanionIpc.ResizeSurface, { sender: panel.webContents, senderFrame: panel.webContents.mainFrame }, { width: 644, height: 250 });
+    expect(panel.bounds.height).toBe(250 + DesktopCompanionSize.ComposerMenuRoom);
+    expect(panel.bounds.y + panel.bounds.height).toBe(bottom);
+    // Only the composer can hand over a task.
+    invoke(DesktopCompanionIpc.TaskStarted, 'session-7');
+    expect(manager.getState().sessionId).toBeNull();
+    invoke(DesktopCompanionIpc.TaskStarted, 'session-7', panel.webContents);
+    expect(manager.getState().panelVisible).toBe(false);
+    expect(manager.getState().sessionId).toBe('session-7');
+    expect(manager.getState().stage).toMatchObject({ kind: DesktopCompanionStageKind.Task, sessionId: 'session-7' });
+    invoke(DesktopCompanionIpc.StageCommand, { type: DesktopCompanionStageCommandType.TaskOpen });
+    expect(openMain).toHaveBeenCalledWith('session-7');
+    expect(manager.getState().sessionId).toBeNull();
+    expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
+  });
+
+  test('news about the task brings its strip back, and only the composer lets clicks through its window', () => {
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    create();
+    manager.togglePanel();
+    const panel = mocks.windows.at(-1);
+    invoke(DesktopCompanionIpc.TaskStarted, 'session-8', panel.webContents);
+    invoke(DesktopCompanionIpc.StageCommand, { type: DesktopCompanionStageCommandType.TaskDismiss });
+    expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
+    ipcMain.emit(DesktopCompanionIpc.TaskUpdated, { sender: orb().webContents, senderFrame: orb().webContents.mainFrame });
+    expect(manager.getState().stage).toMatchObject({ kind: DesktopCompanionStageKind.Task, sessionId: 'session-8' });
+    ipcMain.emit(DesktopCompanionIpc.PanelPassThrough, { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, true);
+    expect(panel.ignoreMouse).toBe(false);
+    ipcMain.emit(DesktopCompanionIpc.PanelPassThrough, { sender: panel.webContents, senderFrame: panel.webContents.mainFrame }, true);
+    expect(panel.ignoreMouse).toBe(true);
+    // Opening the composer again starts fully clickable, and its strip steps aside.
+    manager.togglePanel();
+    expect(panel.ignoreMouse).toBe(false);
     expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
   });
 

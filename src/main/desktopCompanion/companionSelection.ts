@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { type BrowserWindow, Menu, screen, shell, systemPreferences } from 'electron';
+import { BrowserWindow, Menu, screen, shell, systemPreferences } from 'electron';
 import type { EventEmitter } from 'events';
 
 import { DEFAULT_SELECTION_EXCLUDED_APPS, isCompanionSelectionBlocked } from '../../shared/desktopCompanion/appCategories';
@@ -28,6 +28,7 @@ import {
 } from '../../shared/desktopCompanion/selectionActions';
 import { t } from '../i18n';
 import type { CompanionQuickAnswerService } from './quickAnswerService';
+import { SelectionGestureTracker } from './selectionGesture';
 
 const INVALID_COORDINATE = -99999;
 const PAUSE_MS = 60 * 60_000;
@@ -35,8 +36,15 @@ const PERMISSION_POLL_MS = 2_000;
 const SHOW_FALLBACK_MS = 150;
 const MAC_ACCESSIBILITY_SETTINGS = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Fn', 'AltGraph', 'OS']);
+const LEFT_BUTTON = 0;
+// Reads after a selection gesture that selection-hook reported nothing for, each timed from
+// the previous read. Chromium and Electron apps turn their accessibility tree on 2 s after a
+// failed read, and every failed read, ours included, restarts that wait.
+const RECOVERY_READ_DELAYS_MS = [80, 2_500, 1_000];
 
 interface Point { x: number; y: number }
+
+interface MouseEventData extends Point { button?: number }
 
 /** The subset of selection-hook's TextSelectionData the companion uses. */
 export interface SelectionHookEvent {
@@ -54,6 +62,7 @@ export interface SelectionHookLike extends EventEmitter {
   stop(): boolean;
   cleanup(): void;
   setGlobalFilterMode(mode: number, list?: string[]): boolean;
+  getCurrentSelection(): SelectionHookEvent | null;
 }
 
 export interface SelectionHookModule {
@@ -113,7 +122,9 @@ export class CompanionSelectionController {
   private pendingShow = false;
   private menuOpen = false;
   private showTimer: ReturnType<typeof setTimeout> | undefined;
+  private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
   private permissionTimer: ReturnType<typeof setInterval> | undefined;
+  private readonly gesture = new SelectionGestureTracker();
   private pausedUntil = 0;
   private status: CompanionCapability = CompanionCapability.Off;
 
@@ -176,6 +187,7 @@ export class CompanionSelectionController {
   }
 
   onForegroundChange(): void {
+    this.cancelRecovery();
     if (this.menuOpen) return;
     if (this.selection?.mode === DesktopCompanionSelectionMode.Toolbar) this.hide();
   }
@@ -303,6 +315,7 @@ export class CompanionSelectionController {
         this.hook = new this.module();
         this.hook.on('text-selection', this.onSelection);
         this.hook.on('mouse-down', this.onMouseDown);
+        this.hook.on('mouse-up', this.onMouseUp);
         this.hook.on('mouse-wheel', this.onWheel);
         this.hook.on('key-down', this.onKeyDown);
         this.hook.on('error', (error: Error) => console.warn('[DesktopCompanion] Selection hook error:', error.message));
@@ -326,6 +339,7 @@ export class CompanionSelectionController {
   }
 
   private stopHook(): void {
+    this.cancelRecovery();
     if (!this.running) return;
     try { this.hook?.stop(); } catch (error) { console.warn('[DesktopCompanion] Selection hook stop failed:', error); }
     this.running = false;
@@ -351,6 +365,12 @@ export class CompanionSelectionController {
   }
 
   private onSelection = (data: SelectionHookEvent): void => {
+    // The hook read this gesture itself.
+    this.cancelRecovery();
+    this.showSelection(data);
+  };
+
+  private showSelection(data: SelectionHookEvent): void {
     if (this.status !== CompanionCapability.Ready || !data) return;
     const text = typeof data.text === 'string' ? data.text.trim() : '';
     if (!text || isCompanionSelectionBlocked(data.programName ?? '', this.host.preferences().selectionExcludedApps)) return;
@@ -378,27 +398,77 @@ export class CompanionSelectionController {
     this.pendingShow = true;
     clearTimeout(this.showTimer);
     this.showTimer = setTimeout(() => this.reveal(), SHOW_FALLBACK_MS);
-  };
+  }
 
-  private onMouseDown = (data: Point): void => {
+  private onMouseDown = (data: MouseEventData): void => {
+    this.cancelRecovery();
+    if (!valid(data)) return;
+    if (data.button === LEFT_BUTTON) this.gesture.down(data, Date.now());
     if (this.menuOpen) return;
     if (!this.selection || !this.window || this.window.isDestroyed() || !this.window.isVisible()) return;
-    if (!valid(data)) return;
     if (rectContains(this.window.getBounds(), toDip(data))) return;
     if (this.selection.mode === DesktopCompanionSelectionMode.Toolbar || !this.selection.pinned) this.hide();
   };
 
+  private onMouseUp = (data: MouseEventData): void => {
+    if (data?.button !== LEFT_BUTTON || !valid(data)) return;
+    if (this.gesture.up(data, Date.now()) && process.platform === 'darwin') this.recoverSelection({ x: data.x, y: data.y });
+  };
+
   private onWheel = (): void => {
+    this.cancelRecovery();
     if (this.menuOpen) return;
     if (this.selection?.mode === DesktopCompanionSelectionMode.Toolbar) this.hide();
   };
 
   private onKeyDown = (data: { uniKey?: string }): void => {
-    if (this.menuOpen) return;
-    if (this.selection?.mode !== DesktopCompanionSelectionMode.Toolbar) return;
     if (data?.uniKey && MODIFIER_KEYS.has(data.uniKey)) return;
-    this.hide();
+    this.cancelRecovery();
+    if (this.menuOpen) return;
+    if (this.selection?.mode === DesktopCompanionSelectionMode.Toolbar) this.hide();
   };
+
+  /**
+   * selection-hook reads a selection once, at mouse-up. A Chromium or Electron app only turns
+   * its accessibility tree on after such a read fails, so its first selection would be lost.
+   */
+  private recoverSelection(point: Point, attempt = 0): void {
+    clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = setTimeout(() => {
+      this.recoveryTimer = undefined;
+      // Skip while a toolbar or card is still up (the gesture hit it, or it is pinned) and while
+      // LobsterAI itself is in front.
+      if (this.status !== CompanionCapability.Ready || this.selection || BrowserWindow.getFocusedWindow()) return;
+      const data = this.readCurrentSelection();
+      if (attempt === 0) {
+        // Text readable right away was readable at mouse-up too: the hook chose not to report it.
+        if (!data) this.recoverSelection(point, 1);
+        return;
+      }
+      if (data) {
+        console.debug(`[DesktopCompanion] Recovered a selection the hook missed in ${data.programName}`);
+        // A direct read reports the mouse at (0, 0); anchor where the gesture ended instead.
+        this.showSelection({ ...data, mousePosEnd: point });
+      } else if (attempt + 1 < RECOVERY_READ_DELAYS_MS.length) {
+        this.recoverSelection(point, attempt + 1);
+      }
+    }, RECOVERY_READ_DELAYS_MS[attempt]);
+  }
+
+  private readCurrentSelection(): SelectionHookEvent | null {
+    try {
+      const data = this.hook?.getCurrentSelection();
+      return data && typeof data.text === 'string' && data.text.trim() ? data : null;
+    } catch (error) {
+      console.warn('[DesktopCompanion] Reading the current selection failed:', error);
+      return null;
+    }
+  }
+
+  private cancelRecovery(): void {
+    clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = undefined;
+  }
 
   private reveal(): void {
     clearTimeout(this.showTimer);

@@ -11,9 +11,11 @@ import {
 import { CompanionSelectionAction } from '../../shared/desktopCompanion/selectionActions';
 
 const trusted = vi.hoisted(() => ({ value: true }));
+const focused = vi.hoisted(() => ({ value: null as unknown }));
 const menu = vi.hoisted(() => ({ build: vi.fn(), popup: vi.fn() }));
 
 vi.mock('electron', () => ({
+  BrowserWindow: { getFocusedWindow: () => focused.value },
   screen: {
     getCursorScreenPoint: () => ({ x: 400, y: 300 }),
     getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
@@ -37,6 +39,7 @@ class FakeHook extends EventEmitter {
   stop() { return true; }
   cleanup() {}
   setGlobalFilterMode = vi.fn(() => true);
+  getCurrentSelection = vi.fn((): unknown => null);
 }
 
 class FakeWindow extends EventEmitter {
@@ -92,11 +95,30 @@ function sentSelection() {
   return calls[calls.length - 1]?.[1];
 }
 
+function onMac(run: () => void): void {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' });
+  try {
+    run();
+  } finally {
+    Object.defineProperty(process, 'platform', platform);
+  }
+}
+
+function drag() {
+  FakeHook.last!.emit('mouse-down', { x: 300, y: 200, button: 0 });
+  FakeHook.last!.emit('mouse-up', { x: 480, y: 218, button: 0 });
+}
+
+// What a direct read returns: no gesture, so the mouse position is (0, 0).
+const chromeSelection = { text: 'first selection', programName: 'com.google.Chrome', posLevel: 0, mousePosEnd: { x: 0, y: 0 } };
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
   menu.build.mockReturnValue({ popup: menu.popup });
   trusted.value = true;
+  focused.value = null;
   preferences = { ...DEFAULT_DESKTOP_COMPANION_PREFERENCES, enabled: true };
 });
 
@@ -244,4 +266,84 @@ describe('selection toolbar', () => {
     vi.advanceTimersByTime(60 * 60_000 + 2_000);
     expect(controller.capability).toBe(CompanionCapability.Ready);
   });
+});
+
+describe('a selection the hook missed on macOS', () => {
+  test('is read again once a Chromium app has had time to build its accessibility tree', () => onMac(() => {
+    create();
+    const hook = FakeHook.last!;
+    drag();
+    vi.advanceTimersByTime(100);
+    expect(hook.getCurrentSelection).toHaveBeenCalledTimes(1);
+    hook.getCurrentSelection.mockReturnValue(chromeSelection);
+    // Reading inside Chromium's 2 s wait would restart it.
+    vi.advanceTimersByTime(2_000);
+    expect(hook.getCurrentSelection).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(600);
+    expect(sentSelection()).toMatchObject({ text: 'first selection', appId: 'com.google.Chrome' });
+    vi.advanceTimersByTime(200);
+    expect(win.visible).toBe(true);
+    // Anchored where the drag ended, not at the (0, 0) a direct read reports.
+    expect(win.bounds.x).toBeGreaterThan(400);
+  }));
+
+  test('is given up after the last read', () => onMac(() => {
+    create();
+    drag();
+    vi.advanceTimersByTime(10_000);
+    expect(FakeHook.last!.getCurrentSelection).toHaveBeenCalledTimes(3);
+    expect(win.visible).toBe(false);
+  }));
+
+  test('is not invented from text that was readable right after the gesture', () => onMac(() => {
+    create();
+    const hook = FakeHook.last!;
+    hook.getCurrentSelection.mockReturnValue(chromeSelection);
+    drag();
+    vi.advanceTimersByTime(10_000);
+    expect(hook.getCurrentSelection).toHaveBeenCalledTimes(1);
+    expect(win.visible).toBe(false);
+  }));
+
+  test('is not read when the hook reported the gesture or the user moved on', () => onMac(() => {
+    const controller = create();
+    const hook = FakeHook.last!;
+    drag();
+    select();
+    vi.advanceTimersByTime(10_000);
+    expect(hook.getCurrentSelection).not.toHaveBeenCalled();
+    for (const interrupt of [
+      () => hook.emit('mouse-down', { x: 5, y: 5, button: 0 }),
+      () => hook.emit('key-down', { uniKey: 'c' }),
+      () => hook.emit('mouse-wheel', { x: 5, y: 5, button: 0, flag: 1 }),
+      () => controller.onForegroundChange(),
+    ]) {
+      hook.getCurrentSelection.mockClear();
+      drag();
+      vi.advanceTimersByTime(100);
+      interrupt();
+      vi.advanceTimersByTime(10_000);
+      expect(hook.getCurrentSelection).toHaveBeenCalledTimes(1);
+    }
+  }));
+
+  test('is only looked for after drags and double-clicks in other apps', () => onMac(() => {
+    create();
+    const hook = FakeHook.last!;
+    hook.emit('mouse-down', { x: 300, y: 200, button: 0 });
+    hook.emit('mouse-up', { x: 302, y: 200, button: 0 });
+    vi.advanceTimersByTime(1_000);
+    expect(hook.getCurrentSelection).not.toHaveBeenCalled();
+    focused.value = {};
+    drag();
+    vi.advanceTimersByTime(10_000);
+    expect(hook.getCurrentSelection).not.toHaveBeenCalled();
+    focused.value = null;
+    for (let click = 0; click < 2; click += 1) {
+      hook.emit('mouse-down', { x: 300, y: 200, button: 0 });
+      hook.emit('mouse-up', { x: 300, y: 200, button: 0 });
+    }
+    vi.advanceTimersByTime(100);
+    expect(hook.getCurrentSelection).toHaveBeenCalledTimes(1);
+  }));
 });

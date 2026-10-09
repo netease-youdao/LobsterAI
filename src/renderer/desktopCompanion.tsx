@@ -5,7 +5,6 @@ import ReactDOM from 'react-dom/client';
 
 import { DesktopCompanionSurface } from '../shared/desktopCompanion/constants';
 import CompanionOrb from './components/desktopCompanion/CompanionOrb';
-import CompanionPanel from './components/desktopCompanion/CompanionPanel';
 import CompanionStage from './components/desktopCompanion/CompanionStage';
 import LanguageToolsSurface from './components/desktopCompanion/LanguageToolsSurface';
 import SelectionSurface from './components/desktopCompanion/SelectionSurface';
@@ -38,14 +37,14 @@ function DesktopCompanion() {
     scheme.addEventListener('change', sync);
     return () => { unsubscribe(); window.removeEventListener('storage', sync); scheme.removeEventListener('change', sync); };
   }, []);
-  if (error) return surface === DesktopCompanionSurface.Panel ? <div className="companion-load-error">{i18nService.t('desktopCompanionRequestFailed')}</div> : null;
-  if (!state) return null;
+  if (error || !state) return null;
   switch (surface) {
     case DesktopCompanionSurface.Mascot: return <CompanionOrb state={state} />;
     case DesktopCompanionSurface.Stage: return <CompanionStage state={state} />;
     case DesktopCompanionSurface.Selection: return <SelectionSurface state={state} />;
     case DesktopCompanionSurface.LanguageTools: return <LanguageToolsSurface state={state} />;
-    default: return <CompanionPanel state={state} />;
+    // The quick panel loads companion-composer.html instead.
+    default: return null;
   }
 }
 

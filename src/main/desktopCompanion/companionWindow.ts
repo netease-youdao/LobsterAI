@@ -55,9 +55,11 @@ export function createCompanionWindow(env: CompanionWindowEnvironment, options: 
   }
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
+  // The quick panel runs the home page's composer, which needs the main renderer's styles and store.
+  const page = options.surface === DesktopCompanionSurface.Panel ? 'companion-composer.html' : 'desktop-companion.html';
   const loading = env.devServerUrl
-    ? win.loadURL(new URL(`desktop-companion.html?surface=${options.surface}`, env.devServerUrl).href)
-    : win.loadFile(path.join(env.rendererDirectory, 'desktop-companion.html'), { query: { surface: options.surface } });
+    ? win.loadURL(new URL(`${page}?surface=${options.surface}`, env.devServerUrl).href)
+    : win.loadFile(path.join(env.rendererDirectory, page), { query: { surface: options.surface } });
   void loading.catch(error => console.error(`[DesktopCompanion] ${options.surface} renderer failed to load`, error));
   return win;
 }

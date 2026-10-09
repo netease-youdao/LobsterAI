@@ -2,6 +2,7 @@ import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useMemo,useRef, useState } from 'react';
 import { useDispatch,useSelector } from 'react-redux';
 
+import { AppIpcChannel, type OpenSettingsRequest, OpenSettingsTab } from '../shared/app/constants';
 import {
   APP_UPDATE_HEARTBEAT_INTERVAL_MS,
   APP_UPDATE_POLL_INTERVAL_MS,
@@ -18,7 +19,7 @@ import {
 } from '../shared/library/constants';
 import type { LibrarySessionRef } from '../shared/library/types';
 import { OpenClawEnginePhase } from '../shared/openclawEngine/constants';
-import { ProviderAuthType, ProviderName, ProviderRegistry } from '../shared/providers';
+import { ProviderName, ProviderRegistry } from '../shared/providers';
 import { SIDEBAR_TASK_FILTER_ENABLED } from './components/agentSidebar/SidebarTaskFilterButton';
 import { CoworkView } from './components/cowork';
 import {
@@ -68,8 +69,8 @@ import WindowsAppTitleBar from './components/window/WindowsAppTitleBar';
 import { defaultConfig, getProviderDisplayName, ShortcutAction } from './config';
 import { selectIsEnterpriseAccount } from './features/enterpriseAccount/selectors';
 import { SkinProvider } from './providers/SkinProvider';
-import type { ApiConfig } from './services/api';
 import { apiService } from './services/api';
+import { applyAppConfigToStore } from './services/appConfigModels';
 import { authService } from './services/auth';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
@@ -85,7 +86,6 @@ import { getOnboardingErrorCode, reportOnboardingAction } from './services/onboa
 import { scheduledTaskService } from './services/scheduledTask';
 import { isTextEditingSafeShortcut, matchesShortcut } from './services/shortcuts';
 import { themeService } from './services/theme';
-import { applyTypographyPreferences } from './services/typography';
 import { RootState, store } from './store';
 import {
   selectCurrentSessionId,
@@ -103,7 +103,7 @@ import {
   setDraftSkillIds,
 } from './store/slices/coworkSlice';
 import { setActiveKitIds } from './store/slices/kitSlice';
-import { setAvailableModels, setDefaultSelectedModel } from './store/slices/modelSlice';
+import { setAvailableModels } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
 import { setActiveSkillIds } from './store/slices/skillSlice';
 import { CoworkCollaborationMode, type CoworkPermissionResult } from './types/cowork';
@@ -378,47 +378,7 @@ const App: React.FC = () => {
   );
 
   // 初始化应用
-  const applyConfigToApp = useCallback((log?: (label: string) => void) => {
-    const config = configService.getConfig();
-    applyTypographyPreferences(config);
-    const apiConfig: ApiConfig = {
-      apiKey: config.api.key,
-      baseUrl: config.api.baseUrl,
-    };
-    apiService.setConfig(apiConfig);
-
-    const providerModels: { id: string; name: string; provider?: string; providerKey?: string; openClawProviderId?: string; supportsImage?: boolean }[] = [];
-    if (config.providers) {
-      Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
-        if (providerConfig.enabled && providerConfig.models) {
-          const openClawProviderId = ProviderRegistry.getOpenClawProviderIdForConfig(providerName, providerConfig);
-          if (providerName === ProviderName.Minimax && providerConfig.authType === ProviderAuthType.OAuth) {
-            log?.('MiniMax OAuth provider resolved to OpenClaw minimax-portal');
-          }
-          providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
-            providerModels.push({
-              id: model.id,
-              name: model.name,
-              provider: getProviderDisplayName(providerName, providerConfig),
-              providerKey: providerName,
-              openClawProviderId,
-              supportsImage: model.supportsImage ?? false,
-            });
-          });
-        }
-      });
-    }
-    dispatch(setAvailableModels(providerModels));
-    if (providerModels.length > 0) {
-      const allModels = store.getState().model.availableModels;
-      const preferredModel = allModels.find(
-        model => model.id === config.model.defaultModel
-          && (!config.model.defaultModelProvider || model.providerKey === config.model.defaultModelProvider)
-      ) ?? allModels[0];
-      dispatch(setDefaultSelectedModel(preferredModel));
-    }
-    return providerModels;
-  }, [dispatch]);
+  const applyConfigToApp = useCallback((log?: (label: string) => void) => applyAppConfigToStore(log), []);
 
   const runInitPassRef = useRef<(mode: InitPassMode) => void>(() => {});
 
@@ -1842,10 +1802,11 @@ const App: React.FC = () => {
     return () => window.removeEventListener(BrowserPasskeyUiEvent.OpenBrowserSettings, openBrowserSettings);
   }, [handleShowSettings]);
 
-  // 监听托盘菜单打开设置的 IPC 事件
+  // 监听托盘菜单、桌面悬浮球打开设置的 IPC 事件
   useEffect(() => {
-    const unsubscribe = window.electron.ipcRenderer.on('app:openSettings', () => {
-      handleShowSettings();
+    const unsubscribe = window.electron.ipcRenderer.on(AppIpcChannel.OpenSettings, (request?: OpenSettingsRequest) => {
+      const tab = request?.tab;
+      handleShowSettings(tab && Object.values(OpenSettingsTab).includes(tab) ? { initialTab: tab } : undefined);
     });
     return unsubscribe;
   }, [handleShowSettings]);

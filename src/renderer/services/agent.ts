@@ -35,7 +35,14 @@ interface SwitchAgentOptions {
 }
 
 class AgentService {
+  private watchingExternalChanges = false;
+
   async loadAgents(): Promise<void> {
+    if (!this.watchingExternalChanges) {
+      // Agents edited in another window (e.g. the desktop companion's composer) reload here too.
+      this.watchingExternalChanges = true;
+      window.electron?.agents?.onChanged?.(() => { void this.loadAgents(); });
+    }
     store.dispatch(setLoading(true));
     try {
       const agents = await window.electron?.agents?.list();

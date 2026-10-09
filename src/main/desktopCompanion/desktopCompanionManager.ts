@@ -18,14 +18,12 @@ import {
   type CompanionSurfaceSize,
   DEFAULT_DESKTOP_COMPANION_PREFERENCES,
   type DesktopCompanionAttachment,
-  DesktopCompanionDock,
   type DesktopCompanionDraft,
   DesktopCompanionDragPhase,
   type DesktopCompanionDropFile,
   DesktopCompanionDropSource,
   DesktopCompanionFileDragPhase,
   DesktopCompanionIpc,
-  DesktopCompanionPointerPhase,
   type DesktopCompanionPreferences,
   type DesktopCompanionResult,
   type DesktopCompanionSelectionCommand,
@@ -53,10 +51,7 @@ import {
   type CompanionPoint,
   companionStageOpensLeft,
   resolveCompanionBounds,
-  resolveCompanionPanelBounds,
-  resolvePeekBounds,
-  resolveRevealedBounds,
-  snapCompanionToEdge,
+  resolveCompanionComposerBounds,
 } from '../../shared/desktopCompanion/geometry';
 import { companionHintCopyKeys, type CompanionHintTopic } from '../../shared/desktopCompanion/hintPolicy';
 import { isSpeechActive, SpeechCommand } from '../../shared/desktopCompanion/languageTools';
@@ -72,7 +67,6 @@ import type { CompanionLanguageClient } from './languageToolClient';
 import { CompanionLanguageToolsController } from './languageToolsController';
 import { CompanionQuickAnswerService } from './quickAnswerService';
 
-const PEEK_DELAY_MS = 1_800;
 const MAX_SNOOZE_TIMER_MS = 24 * 60 * 60_000;
 
 interface CompanionStore {
@@ -137,10 +131,6 @@ function normalizeSnooze(value: unknown, now: number): DesktopCompanionSnooze | 
   return { mode: snooze.mode, until: snooze.until };
 }
 
-function normalizeDock(value: unknown): DesktopCompanionDock {
-  return value === DesktopCompanionDock.Left || value === DesktopCompanionDock.Right ? value : DesktopCompanionDock.None;
-}
-
 function endOfToday(now: number): number {
   const date = new Date(now);
   date.setHours(24, 0, 0, 0);
@@ -163,14 +153,12 @@ export class DesktopCompanionManager {
   private orb: BrowserWindow | null = null;
   private panel: BrowserWindow | null = null;
   private panelVisible = false;
+  /** Height of the composer card plus its shadow margin, as the panel last reported it. */
+  private panelCardHeight: number = DesktopCompanionSize.PanelCompactHeight;
   private preferences: DesktopCompanionPreferences;
   private draft: DesktopCompanionDraft;
   private sessionId: string | null;
   private position: CompanionPoint | undefined;
-  private dock: DesktopCompanionDock;
-  private peeking = false;
-  private hovering = false;
-  private attention = false;
   private snooze: DesktopCompanionSnooze | null;
   private revision = 0;
   private shortcutUnavailable = false;
@@ -180,7 +168,6 @@ export class DesktopCompanionManager {
   private foregroundAppId: string | null = null;
   private dragOrigin: { cursor: CompanionPoint; position: CompanionPoint } | null = null;
   private draftSaveTimer: ReturnType<typeof setTimeout> | undefined;
-  private peekTimer: ReturnType<typeof setTimeout> | undefined;
   private snoozeTimer: ReturnType<typeof setTimeout> | undefined;
   private gazeTimer: ReturnType<typeof setInterval> | undefined;
   private lastGaze = '';
@@ -200,7 +187,6 @@ export class DesktopCompanionManager {
     const sessionId = store.get(DesktopCompanionStoreKey.Session);
     this.sessionId = typeof sessionId === 'string' ? sessionId : null;
     this.position = store.get<CompanionPoint>(DesktopCompanionStoreKey.Position);
-    this.dock = normalizeDock(store.get(DesktopCompanionStoreKey.Dock));
     this.snooze = normalizeSnooze(store.get(DesktopCompanionStoreKey.Snooze), Date.now());
     this.env = {
       preloadPath: options.preloadPath,
@@ -213,15 +199,15 @@ export class DesktopCompanionManager {
     this.fileDrag = services.fileDrag ?? new CompanionFileDragMonitor();
     this.quickAnswer = services.quickAnswer ?? new CompanionQuickAnswerService();
     this.stage = new CompanionStageController({
-      getOrbBounds: () => this.orbRevealedBounds(),
+      getOrbBounds: () => this.orbBounds(),
       createWindow: (surface, focusable) => this.createWindow(surface, focusable),
       publish: () => this.publish(),
-      onStageChanged: () => this.refreshPeek(),
     }, {
       onHintOutcome: (topic, outcome) => this.hints.recordOutcome(topic, outcome),
       onHintAccept: topic => this.acceptHint(topic),
       onDropAsk: attachments => this.openPanelWithAttachments(attachments),
-      onDropStarted: id => this.selectSession(id),
+      onDropStarted: id => this.followTask(id),
+      onTaskOpen: id => this.openTask(id),
     });
     this.hints = new CompanionHintsController({
       store,
@@ -269,8 +255,6 @@ export class DesktopCompanionManager {
       draft: { ...this.draft, attachments: [...this.draft.attachments] },
       shortcutUnavailable: this.shortcutUnavailable,
       snooze: this.snooze ? { ...this.snooze } : null,
-      dock: this.dock,
-      peeking: this.peeking,
       stage: this.stage.stage,
       stageSide: this.stageSide(),
       fileDragActive: this.fileDragActive,
@@ -326,7 +310,6 @@ export class DesktopCompanionManager {
     this.panel?.hide();
     this.flushDraft();
     this.publish();
-    this.schedulePeek();
   }
 
   snoozeFor(mode: DesktopCompanionSnoozeMode): void {
@@ -352,13 +335,13 @@ export class DesktopCompanionManager {
     this.disposing = true;
     this.flushDraft();
     if (this.registeredShortcut) globalShortcut.unregister(this.registeredShortcut);
-    for (const timer of [this.peekTimer, this.snoozeTimer]) clearTimeout(timer);
+    clearTimeout(this.snoozeTimer);
     this.stopGaze();
     screen.removeListener('display-removed', this.reposition);
     screen.removeListener('display-metrics-changed', this.reposition);
     for (const channel of [
-      DesktopCompanionIpc.Drag, DesktopCompanionIpc.OrbPointer, DesktopCompanionIpc.OrbFileDrag,
-      DesktopCompanionIpc.OrbAttention, DesktopCompanionIpc.ResizeSurface,
+      DesktopCompanionIpc.Drag, DesktopCompanionIpc.OrbFileDrag, DesktopCompanionIpc.ResizeSurface,
+      DesktopCompanionIpc.TaskUpdated, DesktopCompanionIpc.PanelPassThrough,
     ]) ipcMain.removeAllListeners(channel);
     for (const channel of Object.values(DesktopCompanionIpc)) ipcMain.removeHandler(channel);
     this.foreground.removeListener('change', this.onForegroundChange);
@@ -378,7 +361,7 @@ export class DesktopCompanionManager {
   }
 
   private stageSide(): DesktopCompanionStageSide {
-    const orb = this.orbRevealedBounds() ?? this.defaultOrbBounds();
+    const orb = this.orbBounds() ?? this.defaultOrbBounds();
     return companionStageOpensLeft(orb, screen.getDisplayMatching(orb).workArea)
       ? DesktopCompanionStageSide.Left
       : DesktopCompanionStageSide.Right;
@@ -426,7 +409,7 @@ export class DesktopCompanionManager {
   // ── Orb ───────────────────────────────────────────────────
 
   private createWindow(surface: DesktopCompanionSurface, focusable: boolean, bounds?: Rectangle): BrowserWindow {
-    const anchor = bounds ?? this.orbRevealedBounds() ?? this.defaultOrbBounds();
+    const anchor = bounds ?? this.orbBounds() ?? this.defaultOrbBounds();
     return createCompanionWindow(this.env, { surface, focusable, bounds: { ...anchor } });
   }
 
@@ -438,11 +421,10 @@ export class DesktopCompanionManager {
     return resolveCompanionBounds(point, display.workArea);
   }
 
-  /** Where the orb is when fully visible, even while it is tucked into an edge. */
-  private orbRevealedBounds(): Rectangle | null {
+  /** Where the orb sits, or null when it is not on screen. */
+  private orbBounds(): Rectangle | null {
     if (!this.orb || this.orb.isDestroyed()) return null;
-    const bounds = this.defaultOrbBounds();
-    return resolveRevealedBounds(bounds, this.dock, screen.getDisplayMatching(bounds).workArea);
+    return this.defaultOrbBounds();
   }
 
   private showOrb(): void {
@@ -456,55 +438,24 @@ export class DesktopCompanionManager {
         this.hints.scheduleWelcome();
       });
       this.orb = win;
-      this.peeking = false;
     } else if (!this.orb.webContents.isLoadingMainFrame() && !this.orb.isVisible()) {
       this.orb.showInactive();
     }
     this.startGaze();
-    this.schedulePeek();
   }
 
   private hideOrb(): void {
     this.stopGaze();
-    clearTimeout(this.peekTimer);
     if (this.orb && !this.orb.isDestroyed()) this.orb.destroy();
     this.orb = null;
-    this.peeking = false;
-  }
-
-  private canPeek(): boolean {
-    return this.dock !== DesktopCompanionDock.None && !this.hovering && !this.attention && !this.panelVisible
-      && !this.fileDragActive && !this.dragOrigin && this.stage.stage.kind === DesktopCompanionStageKind.None;
-  }
-
-  private schedulePeek(): void {
-    clearTimeout(this.peekTimer);
-    if (!this.canPeek()) return;
-    this.peekTimer = setTimeout(() => {
-      const revealed = this.orbRevealedBounds();
-      if (!revealed || !this.orb || this.orb.isDestroyed() || !this.canPeek()) return;
-      this.orb.setBounds(resolvePeekBounds(revealed, this.dock, screen.getDisplayMatching(revealed).workArea));
-      if (!this.peeking) { this.peeking = true; this.publish(); }
-    }, PEEK_DELAY_MS);
-  }
-
-  /** Slides a tucked orb back out whenever it has something to show. */
-  private refreshPeek(): void {
-    if (this.canPeek()) { this.schedulePeek(); return; }
-    clearTimeout(this.peekTimer);
-    const revealed = this.orbRevealedBounds();
-    if (!this.peeking || !revealed || !this.orb || this.orb.isDestroyed()) return;
-    this.orb.setBounds(revealed, process.platform === 'darwin');
-    this.peeking = false;
-    this.publish();
   }
 
   private startGaze(): void {
     if (this.gazeTimer) return;
     this.gazeTimer = setInterval(() => {
-      const revealed = this.orbRevealedBounds();
-      if (!revealed || !this.orb || this.orb.isDestroyed() || !this.orb.isVisible()) return;
-      const gaze = companionGaze(revealed, screen.getCursorScreenPoint());
+      const bounds = this.orbBounds();
+      if (!bounds || !this.orb || this.orb.isDestroyed() || !this.orb.isVisible()) return;
+      const gaze = companionGaze(bounds, screen.getCursorScreenPoint());
       const key = `${gaze.x},${gaze.y}`;
       if (key === this.lastGaze) return;
       this.lastGaze = key;
@@ -521,16 +472,14 @@ export class DesktopCompanionManager {
   private savePosition(point: CompanionPoint): void {
     this.position = { x: point.x, y: point.y };
     this.options.store.set(DesktopCompanionStoreKey.Position, this.position);
-    this.options.store.set(DesktopCompanionStoreKey.Dock, this.dock);
   }
 
   private move(phase: DesktopCompanionDragPhase): void {
     if (!this.orb || this.orb.isDestroyed()) return;
-    if (phase === DesktopCompanionDragPhase.Cancel) { this.dragOrigin = null; this.schedulePeek(); return; }
+    if (phase === DesktopCompanionDragPhase.Cancel) { this.dragOrigin = null; return; }
     const cursor = screen.getCursorScreenPoint();
     if (phase === DesktopCompanionDragPhase.Start) {
-      clearTimeout(this.peekTimer);
-      const start = this.orbRevealedBounds() ?? this.orb.getBounds();
+      const start = this.orbBounds() ?? this.orb.getBounds();
       this.dragOrigin = { cursor, position: { x: start.x, y: start.y } };
       return;
     }
@@ -541,17 +490,13 @@ export class DesktopCompanionManager {
       x: this.dragOrigin.position.x + cursor.x - this.dragOrigin.cursor.x,
       y: this.dragOrigin.position.y + cursor.y - this.dragOrigin.cursor.y,
     }, workArea);
+    // Stays where it is dropped, wholly on the display under the cursor: no edge snapping or tucking.
+    this.orb.setBounds(moved);
     if (phase === DesktopCompanionDragPhase.End) {
-      const snapped = snapCompanionToEdge(moved, workArea);
       this.dragOrigin = null;
-      this.dock = snapped.dock;
-      this.peeking = false;
-      this.orb.setBounds(snapped.bounds);
-      this.savePosition(snapped.bounds);
+      this.savePosition(moved);
       this.publish();
-      this.schedulePeek();
     } else {
-      this.orb.setBounds(moved);
       this.position = { x: moved.x, y: moved.y };
     }
     this.stage.reposition();
@@ -561,10 +506,8 @@ export class DesktopCompanionManager {
   private reposition = (): void => {
     if (this.orb && !this.orb.isDestroyed()) {
       const bounds = this.defaultOrbBounds();
-      const workArea = screen.getDisplayMatching(bounds).workArea;
-      const placed = resolveRevealedBounds(clampCompanionBounds(bounds, workArea), this.dock, workArea);
-      this.orb.setBounds(this.peeking ? resolvePeekBounds(placed, this.dock, workArea) : placed);
-      this.savePosition(placed);
+      this.orb.setBounds(bounds);
+      this.savePosition(bounds);
     }
     this.stage.reposition();
     this.positionPanel();
@@ -573,7 +516,8 @@ export class DesktopCompanionManager {
   // ── Panel ─────────────────────────────────────────────────
 
   private showPanel(): void {
-    if (this.stage.stage.kind === DesktopCompanionStageKind.Hint) this.stage.clear();
+    const stageKind = this.stage.stage.kind;
+    if (stageKind === DesktopCompanionStageKind.Hint || stageKind === DesktopCompanionStageKind.Task) this.stage.clear();
     if (!this.panel || this.panel.isDestroyed()) {
       const win = this.createWindow(DesktopCompanionSurface.Panel, true, this.panelBounds());
       win.on('close', event => {
@@ -591,7 +535,8 @@ export class DesktopCompanionManager {
       this.panel = win;
     }
     this.panelVisible = true;
-    this.refreshPeek();
+    // Clicks go through the empty room above the card only while the pointer is there.
+    this.panel.setIgnoreMouseEvents(false);
     this.positionPanel();
     if (!this.panel.webContents.isLoadingMainFrame()) {
       this.panel.show();
@@ -601,8 +546,31 @@ export class DesktopCompanionManager {
   }
 
   private panelBounds(): Rectangle {
-    const anchor = this.orbRevealedBounds() ?? this.defaultOrbBounds();
-    return resolveCompanionPanelBounds(anchor, screen.getDisplayMatching(anchor).workArea);
+    const anchor = this.orbBounds() ?? this.defaultOrbBounds();
+    const card = { width: DesktopCompanionSize.Composer.width + DesktopCompanionSize.SurfacePad * 2, height: this.panelCardHeight };
+    // Opens like the hint bubbles, beside the character, with room above for the composer's menus.
+    return resolveCompanionComposerBounds(anchor, card, DesktopCompanionSize.ComposerMenuRoom, screen.getDisplayMatching(anchor).workArea);
+  }
+
+  /** The panel reports its card size as the prompt grows. */
+  private setPanelContentSize(size: CompanionSurfaceSize): void {
+    const pad = DesktopCompanionSize.SurfacePad;
+    const height = Math.max(pad * 4, Math.min(Math.ceil(size.height), DesktopCompanionSize.Composer.maxHeight + pad * 2));
+    if (height === this.panelCardHeight) return;
+    this.panelCardHeight = height;
+    this.positionPanel();
+  }
+
+  /** The orb follows a task it just started, and its status strip comes out unless the composer is open. */
+  private followTask(sessionId: string): void {
+    this.selectSession(sessionId);
+    if (!this.panelVisible) this.stage.showTask(sessionId);
+  }
+
+  /** Results are read in the main window; the orb stops following the task once it is opened there. */
+  private openTask(sessionId: string): void {
+    this.selectSession(null);
+    this.options.openMain(sessionId);
   }
 
   private positionPanel(): void {
@@ -614,7 +582,6 @@ export class DesktopCompanionManager {
     const prompt = companionHintCopyKeys(topic, 0).prompt;
     if (prompt && !this.draft.prompt.trim()) {
       this.setDraft({ ...this.draft, prompt: t(prompt) });
-      this.selectSession(null);
     }
     this.showPanel();
   }
@@ -622,7 +589,6 @@ export class DesktopCompanionManager {
   private openPanelWithAttachments(attachments: DesktopCompanionAttachment[]): void {
     const files = [...new Map([...this.draft.attachments, ...attachments].map(file => [file.path, file])).values()].slice(0, 20);
     this.setDraft({ ...this.draft, attachments: files });
-    this.selectSession(null);
     this.showPanel();
   }
 
@@ -671,7 +637,6 @@ export class DesktopCompanionManager {
     if (files.length && !files.some(file => isCompanionDocumentKind(file.kind) || file.kind === FileKind.Folder)) return;
     this.fileDragActive = true;
     this.stage.showDrop(DesktopCompanionDropSource.Global, files);
-    this.refreshPeek();
     this.publish();
   };
 
@@ -680,7 +645,6 @@ export class DesktopCompanionManager {
     this.fileDragActive = false;
     this.stage.releaseDrop(DesktopCompanionDropSource.Global);
     this.publish();
-    this.schedulePeek();
   };
 
   private onOrbFileDrag(phase: DesktopCompanionFileDragPhase, kinds: CompanionFileKind[]): void {
@@ -688,7 +652,6 @@ export class DesktopCompanionManager {
     if (phase === DesktopCompanionFileDragPhase.Enter) {
       const known = Array.isArray(kinds) ? kinds.filter(kind => Object.values(FileKind).includes(kind)).slice(0, 8) : [];
       this.stage.showDrop(DesktopCompanionDropSource.Orb, [], known);
-      this.refreshPeek();
     } else if (phase === DesktopCompanionFileDragPhase.Leave) {
       this.stage.releaseDrop(DesktopCompanionDropSource.Orb);
     } else {
@@ -774,6 +737,12 @@ export class DesktopCompanionManager {
     handle(DesktopCompanionIpc.SetPreferences, value => this.setPreferences(value as Partial<DesktopCompanionPreferences>));
     handle(DesktopCompanionIpc.SetDraft, value => { this.setDraft(value); return this.getState(); });
     handle(DesktopCompanionIpc.SelectSession, value => { this.selectSession(value); return this.getState(); });
+    handle(DesktopCompanionIpc.TaskStarted, (value, sender) => {
+      if (!this.panel || this.panel.isDestroyed() || sender.id !== this.panel.webContents.id) return;
+      if (typeof value !== 'string' || !value) return;
+      this.hidePanel();
+      this.followTask(value.slice(0, 200));
+    });
     handle(DesktopCompanionIpc.TogglePanel, () => this.togglePanel());
     handle(DesktopCompanionIpc.HidePanel, () => this.hidePanel());
     handle(DesktopCompanionIpc.OpenMain, (value, sender) => {
@@ -803,15 +772,13 @@ export class DesktopCompanionManager {
       if (senderId !== this.orb?.webContents.id) return;
       if (Object.values(DesktopCompanionDragPhase).includes(value as DesktopCompanionDragPhase)) this.move(value as DesktopCompanionDragPhase);
     });
-    on(DesktopCompanionIpc.OrbPointer, (value, senderId) => {
+    on(DesktopCompanionIpc.TaskUpdated, (_value, senderId) => {
       if (senderId !== this.orb?.webContents.id) return;
-      this.hovering = value === DesktopCompanionPointerPhase.Enter;
-      this.refreshPeek();
+      if (this.sessionId && !this.panelVisible) this.stage.showTask(this.sessionId);
     });
-    on(DesktopCompanionIpc.OrbAttention, (value, senderId) => {
-      if (senderId !== this.orb?.webContents.id) return;
-      this.attention = value === true;
-      this.refreshPeek();
+    on(DesktopCompanionIpc.PanelPassThrough, (value, senderId) => {
+      if (!this.panel || this.panel.isDestroyed() || senderId !== this.panel.webContents.id) return;
+      this.panel.setIgnoreMouseEvents(value === true, { forward: true });
     });
     on(DesktopCompanionIpc.OrbFileDrag, (value, senderId) => {
       if (senderId !== this.orb?.webContents.id) return;
@@ -823,7 +790,8 @@ export class DesktopCompanionManager {
     on(DesktopCompanionIpc.ResizeSurface, (value, senderId) => {
       const size = value as CompanionSurfaceSize | null;
       if (!size || !Number.isFinite(size.width) || !Number.isFinite(size.height)) return;
-      if (senderId === this.stage.webContentsId) this.stage.setContentSize(size);
+      if (this.panel && !this.panel.isDestroyed() && senderId === this.panel.webContents.id) this.setPanelContentSize(size);
+      else if (senderId === this.stage.webContentsId) this.stage.setContentSize(size);
       else if (senderId === this.selection.webContentsId) this.selection.setContentSize(size);
       else if (senderId === this.languageTools.webContentsId) this.languageTools.setContentSize(size);
     });

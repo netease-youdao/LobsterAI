@@ -24,7 +24,6 @@ export interface CompanionMoodInput {
   dropHover: boolean;
   dropStage: boolean;
   hintShowing: boolean;
-  hovering: boolean;
 }
 
 /**
@@ -40,12 +39,12 @@ export function companionMood(input: CompanionMoodInput): CompanionMood {
   if (input.unseenResult) return CompanionMood.Done;
   if (input.status === CoworkSessionStatusValue.Running) return CompanionMood.Working;
   if (input.hintShowing) return CompanionMood.Idea;
-  if (input.hovering) return CompanionMood.Happy;
   return CompanionMood.Idle;
 }
 
-export function moodNeedsAttention(mood: CompanionMood): boolean {
-  return mood === CompanionMood.Done || mood === CompanionMood.Attention || mood === CompanionMood.Error;
+/** Nothing to report: the character may fade back until the pointer comes by. */
+export function moodCanRest(mood: CompanionMood): boolean {
+  return mood === CompanionMood.Idle || mood === CompanionMood.Snooze;
 }
 
 /** Tooltip/label key for the current mood. */

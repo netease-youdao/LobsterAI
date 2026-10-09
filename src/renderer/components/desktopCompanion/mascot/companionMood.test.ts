@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 
 import { CoworkSessionStatusValue } from '../../../types/cowork';
 import { parentDirectory } from '../companionTasks';
-import { CompanionMood, companionMood, type CompanionMoodInput, moodNeedsAttention } from './companionMood';
+import { CompanionMood, companionMood, type CompanionMoodInput, moodCanRest } from './companionMood';
 
 const calm: CompanionMoodInput = {
   status: null,
@@ -13,14 +13,12 @@ const calm: CompanionMoodInput = {
   dropHover: false,
   dropStage: false,
   hintShowing: false,
-  hovering: false,
 };
 
 describe('companion mood', () => {
-  test('rests when nothing is going on and brightens on hover', () => {
+  test('rests when nothing is going on and raises a hand for a hint', () => {
     expect(companionMood(calm)).toBe(CompanionMood.Idle);
-    expect(companionMood({ ...calm, hovering: true })).toBe(CompanionMood.Happy);
-    expect(companionMood({ ...calm, hintShowing: true, hovering: true })).toBe(CompanionMood.Idea);
+    expect(companionMood({ ...calm, hintShowing: true })).toBe(CompanionMood.Idea);
   });
 
   test('task news follows needs-input > failed > ready > running', () => {
@@ -38,9 +36,13 @@ describe('companion mood', () => {
     expect(companionMood({ ...waiting, dropHover: true, snoozed: true })).toBe(CompanionMood.Snooze);
   });
 
-  test('only news keeps the character out of its edge', () => {
-    expect([CompanionMood.Done, CompanionMood.Attention, CompanionMood.Error].every(moodNeedsAttention)).toBe(true);
-    expect(moodNeedsAttention(CompanionMood.Working)).toBe(false);
+  test('fades back only when there is nothing to report', () => {
+    expect(moodCanRest(CompanionMood.Idle)).toBe(true);
+    expect(moodCanRest(CompanionMood.Snooze)).toBe(true);
+    expect([
+      CompanionMood.Working, CompanionMood.Done, CompanionMood.Attention, CompanionMood.Error,
+      CompanionMood.Idea, CompanionMood.Curious, CompanionMood.Catch,
+    ].some(moodCanRest)).toBe(false);
   });
 });
 

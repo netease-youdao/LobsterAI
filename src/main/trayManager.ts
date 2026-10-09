@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu, nativeImage, Tray } from 'electron';
 import path from 'path';
 
+import { AppIpcChannel } from '../shared/app/constants';
 import { APP_NAME } from './appConstants';
 import { t } from './i18n';
 
@@ -108,7 +109,7 @@ function buildContextMenu(getWindow: () => BrowserWindow | null): Menu {
         if (win && !win.isDestroyed()) {
           if (!win.isVisible()) win.show();
           if (!win.isFocused()) win.focus();
-          win.webContents.send('app:openSettings');
+          win.webContents.send(AppIpcChannel.OpenSettings);
         }
       },
     },

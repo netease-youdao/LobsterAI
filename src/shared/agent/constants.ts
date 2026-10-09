@@ -15,6 +15,8 @@ export const AgentIpcChannel = {
   Presets: 'agents:presets',
   PresetTemplates: 'agents:presetTemplates',
   AddPreset: 'agents:addPreset',
+  /** Main to renderer: agents were changed by another window. */
+  Changed: 'agents:changed',
 } as const;
 
 export type AgentIpcChannel = typeof AgentIpcChannel[keyof typeof AgentIpcChannel];

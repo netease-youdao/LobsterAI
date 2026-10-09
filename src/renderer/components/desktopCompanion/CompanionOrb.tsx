@@ -3,10 +3,8 @@ import React, { useEffect, useRef, useState } from 'react';
 
 import {
   type CompanionGaze,
-  DesktopCompanionDock,
   DesktopCompanionDragPhase,
   DesktopCompanionFileDragPhase,
-  DesktopCompanionPointerPhase,
   DesktopCompanionStageCommandType,
   DesktopCompanionStageKind,
   type DesktopCompanionState,
@@ -17,11 +15,13 @@ import { i18nService } from '../../services/i18n';
 import { CoworkSessionStatusValue } from '../../types/cowork';
 import { fileKindsFromDataTransfer, filesToAttachments, hasFiles } from './companionTasks';
 import CompanionCharacter from './mascot/CompanionCharacter';
-import { CompanionMood, companionMood, companionMoodLabelKey, moodNeedsAttention } from './mascot/companionMood';
+import { CompanionMood, companionMood, companionMoodLabelKey, moodCanRest } from './mascot/companionMood';
 import { useCompanionSession } from './useCompanionSession';
 
 const CHARACTER_SIZE = 64;
 const DRAG_THRESHOLD = 5;
+/** How long the character stays fully present after the last interaction or news. */
+const REST_DELAY_MS = 4_000;
 
 export default function CompanionOrb({ state }: { state: DesktopCompanionState }) {
   const api = window.electron.desktopCompanion;
@@ -32,18 +32,19 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
   const [moving, setMoving] = useState(false);
   const [gaze, setGaze] = useState<CompanionGaze>({ x: 0, y: 0 });
   const [unseenResult, setUnseenResult] = useState(false);
+  const [rested, setRested] = useState(false);
   const { session, pending } = useCompanionSession(state.sessionId, state.panelVisible);
   const status = session?.status ?? null;
   const previousStatus = useRef(status);
 
-  // A finished task the user has not looked at yet keeps the "done" face.
+  // A finished task keeps the "done" face until its result is opened or another task is followed.
   useEffect(() => {
-    if (previousStatus.current === CoworkSessionStatusValue.Running && status === CoworkSessionStatusValue.Completed && !state.panelVisible) {
+    if (previousStatus.current === CoworkSessionStatusValue.Running && status === CoworkSessionStatusValue.Completed) {
       setUnseenResult(true);
     }
     previousStatus.current = status;
-  }, [status, state.panelVisible]);
-  useEffect(() => { if (state.panelVisible) setUnseenResult(false); }, [state.panelVisible]);
+  }, [status]);
+  useEffect(() => { setUnseenResult(false); }, [state.sessionId]);
   useEffect(() => api.onGaze(setGaze), [api]);
 
   const mood = companionMood({
@@ -55,15 +56,22 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
     dropHover,
     dropStage: state.stage.kind === DesktopCompanionStageKind.Drop,
     hintShowing: state.stage.kind === DesktopCompanionStageKind.Hint,
-    hovering,
   });
-  const attention = moodNeedsAttention(mood);
-  useEffect(() => { api.orbAttention(attention); }, [api, attention]);
+  const speaking = isSpeechActive(state.speechStatus);
 
-  // Tucked into an edge, the character leans out and looks into the screen.
-  const effectiveGaze = state.peeking
-    ? { x: state.dock === DesktopCompanionDock.Right ? -1 : 1, y: -0.25 }
-    : gaze;
+  // News about the followed task brings its status strip back next to the orb.
+  const taskNews = state.sessionId && (mood === CompanionMood.Done || mood === CompanionMood.Attention || mood === CompanionMood.Error)
+    ? `${state.sessionId}:${mood}`
+    : '';
+  useEffect(() => { if (taskNews) api.taskUpdated(); }, [api, taskNews]);
+
+  // Left alone with nothing to report, the character fades back instead of hiding off screen.
+  const canRest = moodCanRest(mood) && !hovering && !moving && !state.panelVisible && !speaking;
+  useEffect(() => {
+    if (!canRest) return;
+    const timer = setTimeout(() => setRested(true), REST_DELAY_MS);
+    return () => { clearTimeout(timer); setRested(false); };
+  }, [canRest]);
 
   const finishDrag = (event: React.PointerEvent<HTMLButtonElement>, canceled = false) => {
     const start = pointer.current;
@@ -83,8 +91,7 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
   return (
     <div
       className="orb-surface"
-      data-dock={state.dock}
-      data-peeking={state.peeking}
+      data-resting={canRest && rested}
       onDragEnter={event => {
         if (!hasFiles(event.dataTransfer)) return;
         event.preventDefault();
@@ -142,14 +149,14 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
         onPointerUp={event => finishDrag(event)}
         onPointerCancel={event => finishDrag(event, true)}
         onClick={event => { if (event.detail === 0) void api.togglePanel(); }}
-        onMouseEnter={() => { setHovering(true); api.orbPointer(DesktopCompanionPointerPhase.Enter); }}
-        onMouseLeave={() => { setHovering(false); api.orbPointer(DesktopCompanionPointerPhase.Leave); }}
+        onMouseEnter={() => setHovering(true)}
+        onMouseLeave={() => setHovering(false)}
         onContextMenu={event => { event.preventDefault(); void api.showContextMenu(); }}
       >
-        <CompanionCharacter skin={state.preferences.skin} mood={mood} size={CHARACTER_SIZE} gaze={effectiveGaze} />
+        <CompanionCharacter skin={state.preferences.skin} mood={mood} size={CHARACTER_SIZE} gaze={gaze} />
         {mood === CompanionMood.Working && getCompanionSkin(state.preferences.skin).asset && <span className="orb-ring" aria-hidden="true" />}
       </button>
-      {isSpeechActive(state.speechStatus) && <button type="button" className="orb-speech"
+      {speaking && <button type="button" className="orb-speech"
         aria-label={i18nService.t('desktopToolsPlayback')} title={i18nService.t('desktopToolsPlayback')}
         onClick={() => { void api.openLanguageTool({ tool: LanguageTool.Tts }); }}><SpeakerWaveIcon /></button>}
     </div>

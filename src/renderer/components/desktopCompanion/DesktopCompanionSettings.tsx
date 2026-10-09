@@ -15,6 +15,17 @@ import { useDesktopCompanionState } from './useDesktopCompanionState';
 
 type ToggleKey = 'enabled' | 'selectionToolbar' | 'dragAssist' | 'contextHints';
 
+// Same labeled card as the General tab's groups.
+function SettingsGroup({ title, footer, children }: { title: string; footer?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="space-y-2.5">
+      <h4 className="px-1 text-xs font-semibold uppercase tracking-wider text-secondary">{title}</h4>
+      <div className="divide-y divide-border rounded-xl border border-border bg-surface">{children}</div>
+      {footer}
+    </section>
+  );
+}
+
 export default function DesktopCompanionSettings() {
   const { state, error: loadError } = useDesktopCompanionState();
   const [saving, setSaving] = useState(false);
@@ -81,9 +92,11 @@ export default function DesktopCompanionSettings() {
   const excluded = preferences?.selectionExcludedApps ?? [];
 
   return (
-    <section className="space-y-2.5" aria-label={t('desktopCompanionTitle')}>
-      <h4 className="px-1 text-xs font-semibold uppercase tracking-wider text-secondary">{t('desktopCompanionTitle')}</h4>
-      <div className="divide-y divide-border rounded-xl border border-border bg-surface">
+    <div className="space-y-8">
+      <SettingsGroup
+        title={t('desktopCompanionGroupDisplay')}
+        footer={<p className="px-1 text-xs text-secondary">{t('desktopCompanionSettingsSaved')}</p>}
+      >
         {toggle('enabled', 'desktopCompanionEnable', 'desktopCompanionEnableDescription')}
         <div className="px-4 py-3.5">
           <div className="text-sm font-medium text-foreground">{t('desktopCompanionSkin')}</div>
@@ -113,6 +126,8 @@ export default function DesktopCompanionSettings() {
             })}
           </div>
         </div>
+      </SettingsGroup>
+      <SettingsGroup title={t('desktopCompanionGroupFeatures')}>
         {toggle('selectionToolbar', 'desktopCompanionSelection', 'desktopCompanionSelectionDescription', (
           <>
             {selectionNote}
@@ -144,6 +159,8 @@ export default function DesktopCompanionSettings() {
             : null
         ))}
         {toggle('contextHints', 'desktopCompanionHints', 'desktopCompanionHintsDescription')}
+      </SettingsGroup>
+      <SettingsGroup title={t('desktopCompanionGroupQuickPanel')}>
         <div className="space-y-2 px-4 py-3.5">
           <label htmlFor="desktop-companion-shortcut" className="text-sm font-medium text-foreground">{t('desktopCompanionShortcut')}</label>
           <div className="flex gap-2">
@@ -169,10 +186,9 @@ export default function DesktopCompanionSettings() {
         </div>
         <div className="px-4 py-3.5">
           <button type="button" className="rounded-lg bg-primary px-3 py-2 text-sm text-white" disabled={!state} onClick={() => { void api.togglePanel().catch(() => setError(t('desktopCompanionRequestFailed'))); }}>{t('desktopCompanionOpenPanel')}</button>
-          <p className="mt-2 text-xs text-secondary">{t('desktopCompanionSettingsSaved')}</p>
         </div>
-      </div>
+      </SettingsGroup>
       {(error || loadError) && <p role="alert" className="px-1 text-sm text-red-500">{error || t('desktopCompanionRequestFailed')}</p>}
-    </section>
+    </div>
   );
 }

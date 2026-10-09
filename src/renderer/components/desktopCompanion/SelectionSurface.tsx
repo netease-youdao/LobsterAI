@@ -16,8 +16,6 @@ import {
 } from '@heroicons/react/24/outline';
 import { MapPinIcon } from '@heroicons/react/24/solid';
 import { type ComponentType, type SVGProps, useCallback, useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 
 import {
   CompanionQuickAnswerEventType,
@@ -33,6 +31,7 @@ import {
   companionTranslationTarget,
 } from '../../../shared/desktopCompanion/selectionActions';
 import { i18nService } from '../../services/i18n';
+import CompanionMarkdown from './CompanionMarkdown';
 import CompanionCharacter from './mascot/CompanionCharacter';
 import { CompanionMood } from './mascot/companionMood';
 import { useMeasuredSurface } from './useMeasuredSurface';
@@ -50,20 +49,7 @@ const ACTION_ICONS: Record<CompanionSelectionAction, ComponentType<SVGProps<SVGS
 const actionLabel = (action: CompanionSelectionAction) => t(`desktopCompanionAction${action.charAt(0).toUpperCase()}${action.slice(1)}`);
 
 function Answer({ text }: { text: string }) {
-  return (
-    <div className="sel-markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ href, children }) => (
-            <a href={href} onClick={event => { event.preventDefault(); if (href) void window.electron.shell.openExternal(href); }}>{children}</a>
-          ),
-        }}
-      >
-        {text}
-      </ReactMarkdown>
-    </div>
-  );
+  return <div className="sel-markdown"><CompanionMarkdown text={text} /></div>;
 }
 
 interface Streaming {

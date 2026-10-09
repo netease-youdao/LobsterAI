@@ -1,17 +1,14 @@
 import { describe, expect, test } from 'vitest';
 
-import { DesktopCompanionDock, DesktopCompanionSize } from './constants';
+import { DesktopCompanionSize } from './constants';
 import {
   clampCompanionBounds,
   companionGaze,
   companionStageOpensLeft,
   resolveCompanionBounds,
-  resolveCompanionPanelBounds,
+  resolveCompanionComposerBounds,
   resolveCompanionSelectionBounds,
   resolveCompanionStageBounds,
-  resolvePeekBounds,
-  resolveRevealedBounds,
-  snapCompanionToEdge,
 } from './geometry';
 
 const orb = DesktopCompanionSize.Orb;
@@ -33,44 +30,31 @@ describe('orb placement', () => {
     expect(result.x + result.width).toBeGreaterThan(-60);
   });
 
-  test('docks to the nearest side edge only when released close to it', () => {
+  test('keeps a dropped orb whole on its own display, even at an edge shared with another one', () => {
     const area = { x: 0, y: 0, width: 1440, height: 900 };
-    expect(snapCompanionToEdge({ ...orb, x: 1440 - orb.width - 40, y: 300 }, area)).toEqual({
-      bounds: { ...orb, x: 1440 - orb.width, y: 300 },
-      dock: DesktopCompanionDock.Right,
-    });
-    expect(snapCompanionToEdge({ ...orb, x: 60, y: 300 }, area).dock).toBe(DesktopCompanionDock.Left);
-    expect(snapCompanionToEdge({ ...orb, x: 600, y: 300 }, area).dock).toBe(DesktopCompanionDock.None);
-  });
-
-  test('tucks a docked orb into the edge and brings it back out', () => {
-    const area = { x: 0, y: 0, width: 1440, height: 900 };
-    const docked = { ...orb, x: 1440 - orb.width, y: 300 };
-    const peek = resolvePeekBounds(docked, DesktopCompanionDock.Right, area);
-    expect(1440 - peek.x).toBe(DesktopCompanionSize.PeekVisible);
-    expect(resolveRevealedBounds(peek, DesktopCompanionDock.Right, area)).toEqual(docked);
-    const left = resolvePeekBounds({ ...docked, x: 0 }, DesktopCompanionDock.Left, area);
-    expect(left.x + left.width).toBe(DesktopCompanionSize.PeekVisible);
-    expect(resolvePeekBounds(docked, DesktopCompanionDock.None, area)).toEqual(docked);
+    expect(clampCompanionBounds({ ...orb, x: 1440 - orb.width / 2, y: 300 }, area)).toEqual({ ...orb, x: 1440 - orb.width, y: 300 });
+    expect(clampCompanionBounds({ ...orb, x: -20, y: -10 }, area)).toEqual({ ...orb, x: 0, y: 0 });
   });
 });
 
 describe('surfaces around the orb', () => {
   const area = { x: 0, y: 25, width: 1440, height: 875 };
 
-  test('keeps a panel below an orb near the top of a display', () => {
-    const anchor = { ...orb, x: 1000, y: 30 };
-    const panel = resolveCompanionPanelBounds(anchor, area);
-    expect(panel.y).toBeGreaterThan(anchor.y + anchor.height);
-  });
-
-  test('opens a panel beside an orb at mid-height without covering it', () => {
-    const tall = { x: 0, y: 25, width: 1440, height: 700 };
-    const anchor = { ...orb, x: 1364, y: 330 };
-    const panel = resolveCompanionPanelBounds(anchor, tall);
-    expect(panel.x + panel.width).toBeLessThanOrEqual(anchor.x);
-    expect(panel.y).toBeGreaterThanOrEqual(tall.y);
-    expect(panel.y + panel.height).toBeLessThanOrEqual(tall.y + tall.height);
+  test('opens the composer right beside the orb, with room for its menus above the card', () => {
+    const pad = DesktopCompanionSize.SurfacePad;
+    const card = { width: DesktopCompanionSize.Composer.width + pad * 2, height: 170 + pad * 2 };
+    const room = DesktopCompanionSize.ComposerMenuRoom;
+    const low = { ...orb, x: 1356, y: 790 };
+    const beside = resolveCompanionComposerBounds(low, card, room, area);
+    // The card (inside the transparent pad) ends at the orb's edge and its bottom meets the character's.
+    expect(beside.x + beside.width - pad).toBe(low.x);
+    expect(beside.y + beside.height - pad).toBe(low.y + low.height - pad / 2);
+    expect(beside.height).toBe(card.height + room);
+    // Near the top there is less room, but the card stays where it was.
+    const high = { ...orb, x: 1356, y: 120 };
+    const near = resolveCompanionComposerBounds(high, card, room, area);
+    expect(near.y).toBe(area.y);
+    expect(near.y + near.height).toBe(resolveCompanionStageBounds(high, card, area).y + card.height);
   });
 
   test('opens the stage toward the middle of the screen, bottom-aligned with the orb', () => {

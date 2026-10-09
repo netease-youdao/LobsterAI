@@ -850,6 +850,8 @@ interface IElectronAPI {
     presets: () => Promise<PresetAgent[]>;
     presetTemplates: () => Promise<PresetAgent[]>;
     addPreset: (presetId: string) => Promise<Agent>;
+    /** Another window changed agents; reload them. */
+    onChanged?: (callback: () => void) => () => void;
   };
   api: {
     fetch: (options: {
