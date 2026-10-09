@@ -5082,8 +5082,8 @@ if (!gotTheLock) {
   const collectWindowsOpenWithArgv = (argv: string[], cwd: string) => (
     process.platform === 'win32'
       ? collectOpenWithArgv(argv, {
-        launcherArgCount: process.defaultApp ? 2 : 1,
         cwd,
+        appPath: process.defaultApp ? app.getAppPath() : undefined,
         isExistingPath: fs.existsSync,
       })
       : []

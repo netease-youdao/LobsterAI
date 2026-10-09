@@ -98,13 +98,15 @@ describe('collectOpenWithArgv', () => {
     'C:\\Users\\me\\Documents\\季度报告.docx',
     'C:\\Users\\me\\Downloads\\photo 1.png',
     'C:\\work\\notes.md',
+    'C:\\repo',
   ]);
   const isExistingPath = (filePath: string) => existing.has(filePath);
+  const devElectron = 'C:\\repo\\node_modules\\electron\\dist\\electron.exe';
 
   test('takes the paths Explorer passes to the packaged exe', () => {
     const entries = collectOpenWithArgv(
       ['C:\\Program Files\\LobsterAI\\LobsterAI.exe', 'C:\\Users\\me\\Documents\\季度报告.docx'],
-      { launcherArgCount: 1, cwd: 'C:\\Windows\\System32', isExistingPath },
+      { cwd: 'C:\\Windows\\System32', isExistingPath },
     );
 
     expect(entries).toEqual([
@@ -112,27 +114,50 @@ describe('collectOpenWithArgv', () => {
     ]);
   });
 
-  test('skips flags, deep links, missing items and the dev app path', () => {
+  test('skips flags, deep links and missing items', () => {
     const entries = collectOpenWithArgv(
       [
-        'C:\\repo\\node_modules\\electron\\dist\\electron.exe',
-        'C:\\repo',
+        'C:\\Program Files\\LobsterAI\\LobsterAI.exe',
         '--allow-file-access-from-files',
         '--auto-launched',
         'lobsterai://auth/callback?code=abc',
         'C:\\Users\\me\\Downloads\\photo 1.png',
         'C:\\Users\\me\\gone.txt',
       ],
-      { launcherArgCount: 2, cwd: 'C:\\repo', isExistingPath },
+      { cwd: 'C:\\Windows\\System32', isExistingPath },
     );
 
     expect(entries.map(entry => entry.path)).toEqual(['C:\\Users\\me\\Downloads\\photo 1.png']);
   });
 
+  test('skips the dev app path of a cold start', () => {
+    const entries = collectOpenWithArgv(
+      [devElectron, '.', '--remote-debugging-port=9333', 'C:\\Users\\me\\Downloads\\photo 1.png'],
+      { cwd: 'C:\\repo', appPath: 'C:\\repo', isExistingPath },
+    );
+
+    expect(entries.map(entry => entry.path)).toEqual(['C:\\Users\\me\\Downloads\\photo 1.png']);
+  });
+
+  test('skips the dev app path after Chromium moves the switches ahead of it', () => {
+    // A dev login callback, as second-instance delivers it.
+    const deepLink = collectOpenWithArgv(
+      [devElectron, '--allow-file-access-from-files', '--no-sandbox', 'c:\\Repo', 'lobsterai://auth/callback?code=abc'],
+      { cwd: 'C:\\Users\\me', appPath: 'C:\\repo', isExistingPath },
+    );
+    const openWith = collectOpenWithArgv(
+      [devElectron, '--e2e-flag', '--allow-file-access-from-files', 'C:\\repo', 'C:\\Users\\me\\Downloads\\photo 1.png'],
+      { cwd: 'C:\\Users\\me', appPath: 'C:\\repo', isExistingPath },
+    );
+
+    expect(deepLink).toEqual([]);
+    expect(openWith.map(entry => entry.path)).toEqual(['C:\\Users\\me\\Downloads\\photo 1.png']);
+  });
+
   test('resolves relative arguments against the launching directory', () => {
     const entries = collectOpenWithArgv(
       ['C:\\Program Files\\LobsterAI\\LobsterAI.exe', 'notes.md'],
-      { launcherArgCount: 1, cwd: 'C:\\work', isExistingPath },
+      { cwd: 'C:\\work', isExistingPath },
     );
 
     expect(entries).toEqual([{ arg: 'notes.md', path: 'C:\\work\\notes.md' }]);

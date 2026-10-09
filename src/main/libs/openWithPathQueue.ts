@@ -15,10 +15,14 @@ interface OpenWithPathQueueOptions {
 }
 
 interface OpenWithArgvOptions {
-  /** Leading entries owned by the launcher: the executable, plus the app path under `electron .`. */
-  launcherArgCount: number;
   /** Directory that relative arguments resolve against. */
   cwd: string;
+  /**
+   * Under `electron .` the app directory is an argument too. It is matched by
+   * path, not position: Chromium moves the switches ahead of it in the command
+   * line a running instance receives through `second-instance`.
+   */
+  appPath?: string;
   isExistingPath: (filePath: string) => boolean;
 }
 
@@ -34,10 +38,13 @@ export interface OpenWithArgvEntry {
  * deep links are skipped; only arguments naming an existing item count.
  */
 export function collectOpenWithArgv(argv: string[], options: OpenWithArgvOptions): OpenWithArgvEntry[] {
+  const { appPath } = options;
   return argv
-    .slice(options.launcherArgCount)
+    .slice(1) // the executable
     .filter(arg => arg.length > 0 && !arg.startsWith('-') && !arg.includes('://'))
     .map(arg => ({ arg, path: path.win32.resolve(options.cwd, arg) }))
+    // path.win32.relative compares case-insensitively, as Windows paths are.
+    .filter(entry => !appPath || path.win32.relative(appPath, entry.path) !== '')
     .filter(entry => options.isExistingPath(entry.path));
 }
 
