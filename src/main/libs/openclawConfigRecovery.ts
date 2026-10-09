@@ -1,6 +1,12 @@
 import { type OpenClawConfigTarget, sameOpenClawConfigContent } from './openclawConfigTarget';
 
 const CONFIG_RECOVERY_RESTART_INTERVAL_MS = 10 * 60 * 1_000;
+/**
+ * Persistent delivery failures tolerated after a recovery respawn: the first
+ * may still race the fresh gateway's startup, the second shows a restart did
+ * not help (e.g. an unwritable config file or a lock no restart releases).
+ */
+const PERSISTENT_FAILURES_AFTER_RESPAWN = 2;
 
 /**
  * A deferred restart demand is satisfied once a gateway process spawned after
@@ -25,7 +31,11 @@ export function isDeferredRestartSatisfied(params: {
     && !params.restartImpact;
 }
 
-/** Pending application outlives an RPC, a disk no-op, and restart cooldowns. */
+/**
+ * Pending application outlives an RPC, a disk no-op, and restart cooldowns.
+ * Automatic recovery stops (stalls) once a recovery respawn did not help; the
+ * target stays pending, so a later successful delivery still converges it.
+ */
 export class OpenClawConfigRecovery {
   private target: OpenClawConfigTarget | null = null;
   private respawnRequired = false;
@@ -33,10 +43,15 @@ export class OpenClawConfigRecovery {
   private rejection: string | null = null;
   private lastRestartAt: number | null = null;
   private nextRetryAt = 0;
+  private respawnedForRecovery = false;
+  private failuresAfterRespawn = 0;
+  private stallMessage: string | null = null;
 
   get pending(): boolean { return this.target !== null; }
   get requiresRespawn(): boolean { return this.respawnRequired; }
-  get error(): string | null { return this.rejection; }
+  get error(): string | null { return this.rejection ?? this.stallMessage; }
+  /** Automatic retries and restarts are exhausted; only a successful delivery resumes. */
+  get stalled(): boolean { return this.rejection === null && this.stallMessage !== null; }
 
   stage(target: OpenClawConfigTarget, requiresRespawn: boolean, generation: number): void {
     if (!this.target || !sameOpenClawConfigContent(this.target.raw, target.raw)) {
@@ -58,10 +73,15 @@ export class OpenClawConfigRecovery {
   }
 
   applied(target: OpenClawConfigTarget, generation: number): boolean {
-    if (this.target !== target || this.needsRespawn(generation)) return false;
+    if (this.target !== target) return false;
+    // Delivery works again; an outstanding respawn demand still keeps the target.
+    this.stallMessage = null;
+    this.failuresAfterRespawn = 0;
+    if (this.needsRespawn(generation)) return false;
     this.target = null;
     this.respawnRequired = false;
     this.rejection = null;
+    this.respawnedForRecovery = false;
     return true;
   }
 
@@ -69,7 +89,23 @@ export class OpenClawConfigRecovery {
     return this.lastRestartAt === null || now - this.lastRestartAt >= CONFIG_RECOVERY_RESTART_INTERVAL_MS;
   }
 
-  restarted(now = Date.now()): void { this.lastRestartAt = now; }
+  restarted(now = Date.now()): void {
+    this.lastRestartAt = now;
+    this.respawnedForRecovery = true;
+    this.failuresAfterRespawn = 0;
+  }
+
+  /**
+   * Count a delivery failure that a fresh gateway did not cure. Returns true
+   * when the current target stalls: automatic recovery cannot apply it.
+   */
+  failedAfterRespawn(target: OpenClawConfigTarget, message: string): boolean {
+    if (this.target !== target || !this.respawnedForRecovery) return false;
+    this.failuresAfterRespawn += 1;
+    if (this.failuresAfterRespawn < PERSISTENT_FAILURES_AFTER_RESPAWN) return false;
+    this.stallMessage = message;
+    return true;
+  }
 
   retryAfter(delayMs: number): void { this.nextRetryAt = Date.now() + delayMs; }
   canRetry(now = Date.now()): boolean { return now >= this.nextRetryAt; }

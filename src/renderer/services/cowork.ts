@@ -98,6 +98,7 @@ import {
 import { i18nService } from './i18n';
 import { restoreNativeQuestionPermissions } from './nativeQuestionRecovery';
 import { reportOnboardingAction } from './onboardingAnalytics';
+import { isConfigApplyPendingStatus, resolveEngineNotReadyMessage } from './openclawEngineStatus';
 import { resolveOpenClawRepairHistoryWarning } from './openclawRepair';
 
 const STREAM_ERROR_DUPLICATE_WINDOW_MS = 10_000;
@@ -790,6 +791,9 @@ class CoworkService {
   }
 
   private notifyOpenClawStatus(status: OpenClawEngineStatus): void {
+    // Describes one refused request while the gateway keeps running; broadcasting
+    // it as "starting" would pin the global startup overlay until a later event.
+    if (isConfigApplyPendingStatus(status)) return;
     this.openClawStatus = status;
     this.openClawStatusListeners.forEach((listener) => {
       listener(status);
@@ -1097,7 +1101,7 @@ class CoworkService {
     // Show a user-visible error when session start fails
     if (result.error) {
       const errorContent = result.code === 'ENGINE_NOT_READY'
-        ? i18nService.t('coworkErrorEngineNotReady')
+        ? resolveEngineNotReadyMessage(result.engineStatus)
         : classifyError(result.error);
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: errorContent }));
     }
@@ -1163,7 +1167,7 @@ class CoworkService {
       // Show a user-visible error message in the session
       if (result.error) {
         const errorContent = result.code === 'ENGINE_NOT_READY'
-          ? i18nService.t('coworkErrorEngineNotReady')
+          ? resolveEngineNotReadyMessage(result.engineStatus)
           : classifyError(result.error);
         store.dispatch(addMessage({
           sessionId: options.sessionId,
@@ -1532,7 +1536,7 @@ class CoworkService {
         this.notifyOpenClawStatus(result.engineStatus);
       }
       const errorContent = result.code === 'ENGINE_NOT_READY'
-        ? i18nService.t('coworkErrorEngineNotReady')
+        ? resolveEngineNotReadyMessage(result.engineStatus)
         : classifyError(result.error || 'Failed to run goal command');
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: errorContent }));
       console.error('[CoworkGoal] goal command failed:', result.error);

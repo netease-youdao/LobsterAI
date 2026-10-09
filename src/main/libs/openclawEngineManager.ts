@@ -31,6 +31,7 @@ import { detectLoopbackBlock, LoopbackSelfTestOutcome } from './loopbackSelfTest
 import { mergeNoProxyValue } from './noProxyEnv';
 import { getCodexHomeDir } from './openaiCodexAuth';
 import { type OpenClawConfigAutoRestoreEvent, parseOpenClawConfigAutoRestore } from './openclawConfigAutoRestore';
+import { cleanupStaleOpenClawConfigLock, ConfigLockCleanupAction, isConfigLockRemoval } from './openclawConfigLock';
 import { migrateLegacyCronStorageWithDoctor } from './openclawCronLegacyMigration';
 import { getOpenClawDailyLogCandidates } from './openclawDailyLogs';
 import { readDreamingRecoverySummary } from './openclawDreamingRecovery';
@@ -129,6 +130,11 @@ export interface OpenClawEngineStatus {
   gatewayPort?: number | null;
   gatewayHttpUrl?: string | null;
   canRetry: boolean;
+  /**
+   * Set on a task-admission reply while a config change is still unapplied.
+   * The gateway process keeps running, so this is not an engine lifecycle state.
+   */
+  configApplyPending?: boolean;
 }
 
 export interface OpenClawGatewayConnectionInfo {
@@ -656,9 +662,9 @@ export class OpenClawEngineManager extends EventEmitter {
   }
 
   /**
-   * Reclaim stale gateway lock files. Safe only when we have no live gateway
-   * child (locks with a live owner are never touched, so the worst case of a
-   * misjudged call is a no-op).
+   * Reclaim stale gateway lock files and an orphaned config lock. Safe only
+   * when we have no live gateway child (locks with a live owner are never
+   * touched, so the worst case of a misjudged call is a no-op).
    */
   private cleanupStaleGatewayLocksSafely(context: string): void {
     if (isGatewayProcessAlive(this.gatewayProcess)) {
@@ -684,6 +690,34 @@ export class OpenClawEngineManager extends EventEmitter {
       }
     } catch (err) {
       console.warn(`${gwDiagTs()} gateway lock cleanup failed (non-fatal) context=${context}:`, err);
+    }
+    this.reclaimStaleConfigLock(context);
+  }
+
+  /**
+   * Remove an openclaw.json lock or reclaim guard orphaned by a killed config
+   * writer; OpenClaw never reclaims an empty one, so every later config write
+   * would time out. Safe while a gateway runs. Returns true when one was removed.
+   */
+  reclaimStaleConfigLock(context: string): boolean {
+    try {
+      let removed = false;
+      for (const result of cleanupStaleOpenClawConfigLock({ configPath: this.configPath })) {
+        const details = `${result.ownerPid != null ? ` ownerPid=${result.ownerPid}` : ''}`
+          + `${result.ageMs != null ? ` ageMs=${result.ageMs}` : ''} path=${result.path} context=${context}`;
+        if (isConfigLockRemoval(result)) {
+          removed = true;
+          console.log(`${gwDiagTs()} stale config lock reclaimed (${result.action})${details}`);
+        } else if (result.action === ConfigLockCleanupAction.RemoveFailed) {
+          console.warn(`${gwDiagTs()} config lock remove failed${details}`);
+        } else {
+          console.warn(`${gwDiagTs()} config lock kept (${result.action})${details}`);
+        }
+      }
+      return removed;
+    } catch (err) {
+      console.warn(`${gwDiagTs()} config lock cleanup failed (non-fatal) context=${context}:`, err);
+      return false;
     }
   }
 

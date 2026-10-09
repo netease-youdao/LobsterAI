@@ -185,6 +185,7 @@ import {
   WaitingNotificationKind,
 } from '../shared/notifications/constants';
 import {
+  OpenClawEngineErrorCode,
   OpenClawEngineIpc,
   OpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
@@ -466,8 +467,10 @@ import {
   DEFERRED_SYNC_REASON_PREFIX,
   deliverOpenClawConfigToGateway,
   isConfigDeliveryFallbackReason,
+  isPersistentConfigDeliveryFailure,
   mergeDeferredGatewayRestartReason,
   OpenClawConfigDeliveryMode,
+  type OpenClawConfigDeliveryResult,
 } from './libs/openclawConfigDelivery';
 import {
   classifyAppConfigChange,
@@ -488,7 +491,13 @@ import {
 } from './libs/openclawConfigObservation';
 import { isDeferredRestartSatisfied, OpenClawConfigRecovery } from './libs/openclawConfigRecovery';
 import { buildProviderSelection, OpenClawConfigSync } from './libs/openclawConfigSync';
-import { persistOpenClawConfigTarget, readOpenClawConfigRaw, rebaseOpenClawConfigTarget, sameOpenClawConfigContent } from './libs/openclawConfigTarget';
+import {
+  type OpenClawConfigTarget,
+  persistOpenClawConfigTarget,
+  readOpenClawConfigRaw,
+  rebaseOpenClawConfigTarget,
+  sameOpenClawConfigContent,
+} from './libs/openclawConfigTarget';
 import { getRecentOpenClawDailyLogEntries } from './libs/openclawDailyLogs';
 import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
 import {
@@ -2851,15 +2860,47 @@ const buildConfigApplyPendingStatus = (message: string): OpenClawEngineStatus =>
     version: current.version,
     message,
     canRetry: false,
+    configApplyPending: true,
   };
 };
 
-const buildConfigApplyErrorStatus = (message: string): OpenClawEngineStatus => ({
+const buildConfigApplyErrorStatus = (message: string, errorCode?: OpenClawEngineErrorCode): OpenClawEngineStatus => ({
   phase: OpenClawEnginePhase.Error,
   version: getOpenClawEngineManager().getStatus().version,
   message,
+  ...(errorCode ? { errorCode } : {}),
   canRetry: false,
 });
+
+/** A rejected or stalled target: an engine error whose Quick Repair can clear it. */
+const buildConfigRecoveryErrorStatus = (): OpenClawEngineStatus => buildConfigApplyErrorStatus(
+  openClawConfigRecovery.error ?? t('openClawConfigApplyPending'),
+  openClawConfigRecovery.stalled ? OpenClawEngineErrorCode.ConfigApplyStalled : undefined,
+);
+
+/**
+ * Stop automatic recovery once a restarted gateway still cannot apply the
+ * target: further restarts would only repeat the failure, and every forced
+ * stop risks leaving another orphaned lock. Returns true when stalled.
+ */
+const stallConfigRecoveryIfExhausted = (
+  target: OpenClawConfigTarget,
+  delivery: OpenClawConfigDeliveryResult,
+): boolean => {
+  if (!openClawConfigRecovery.stalled) {
+    if (!isPersistentConfigDeliveryFailure(delivery)
+      || !openClawConfigRecovery.failedAfterRespawn(target, t('openClawConfigApplyStalled', { detail: delivery.detail }))) {
+      return false;
+    }
+    console.warn(`${gwDiagTs()} config recovery stalled: a restarted gateway still cannot apply the target (${delivery.detail})`);
+  }
+  if (deferredRestartReason && isConfigDeliveryFallbackReason(deferredRestartReason)) {
+    clearDeferredRestart();
+    deferredRestartReason = null;
+    deferredRestartRequestedAt = null;
+  }
+  return true;
+};
 
 const waitForOpenClawConfigApply = async (context: string, waitForRecovery = true): Promise<OpenClawEngineStatus | null> => {
   let pendingApply = openClawConfigApplyState;
@@ -2873,6 +2914,7 @@ const waitForOpenClawConfigApply = async (context: string, waitForRecovery = tru
     try {
       await pendingApply.promise;
     } catch (error) {
+      if (waitForRecovery && openClawConfigRecovery.error) return buildConfigRecoveryErrorStatus();
       const message = error instanceof Error
         ? error.message
         : 'OpenClaw config sync failed.';
@@ -2883,7 +2925,7 @@ const waitForOpenClawConfigApply = async (context: string, waitForRecovery = tru
   }
 
   if (!waitForRecovery) return null;
-  if (openClawConfigRecovery.error) return buildConfigApplyErrorStatus(openClawConfigRecovery.error);
+  if (openClawConfigRecovery.error) return buildConfigRecoveryErrorStatus();
   const phase = getOpenClawEngineManager().getStatus().phase;
   if (deferredRestartReason || (openClawConfigRecovery.pending
     && (phase === OpenClawEnginePhase.Running || phase === OpenClawEnginePhase.Starting))) {
@@ -2937,7 +2979,14 @@ const scheduleDeferredGatewayRestart = (reason: string, requestedAt = Date.now()
   );
   deferredRestartOverdue = false;
   deferredRestartTimer = setInterval(() => {
-    if (isConfigDeliveryFallbackReason(deferredRestartReason ?? reason) && !openClawConfigRecovery.canRetry()) return;
+    const fallbackRecovery = isConfigDeliveryFallbackReason(deferredRestartReason ?? reason);
+    if (fallbackRecovery && openClawConfigRecovery.stalled) {
+      clearDeferredRestart();
+      deferredRestartReason = null;
+      deferredRestartRequestedAt = null;
+      return;
+    }
+    if (fallbackRecovery && !openClawConfigRecovery.canRetry()) return;
     if (!hasActiveConfigRestartWorkloads(deferredRestartReason ?? reason)) {
       void executeDeferredGatewayRestart(deferredRestartReason ?? reason);
     }
@@ -3156,6 +3205,7 @@ const _syncOpenClawConfigImpl = async (
       gatewayPhase: manager.getStatus().phase,
       readConfigFile: () => rebaseOpenClawConfigTarget(target, readOpenClawConfigRaw(manager.getConfigPath())),
       configPath: manager.getConfigPath(),
+      recoverConfigLock: () => manager.reclaimStaleConfigLock(`config-delivery:${options.reason}`),
       ensureRpcClient: async () => openClawRuntimeAdapter?.ensureGatewayRpcClient() ?? null,
       onDiagnostic: event => {
         if (event.payloadDigest) payloadDigest = event.payloadDigest;
@@ -3205,6 +3255,14 @@ const _syncOpenClawConfigImpl = async (
     }
     if (delivery.mode === OpenClawConfigDeliveryMode.Applied && !openClawConfigRecovery.pending) {
       return { success: true, changed: effectiveConfigChanged, status: manager.getStatus() };
+    }
+    if (stallConfigRecoveryIfExhausted(target, delivery)) {
+      return {
+        success: false,
+        changed: effectiveConfigChanged,
+        status: buildConfigRecoveryErrorStatus(),
+        error: openClawConfigRecovery.error ?? delivery.detail,
+      };
     }
     // An ordinary write does not immediately respawn on an ambiguous outcome.
     // Re-read and reapply at the idle recovery boundary before escalating.
@@ -3280,6 +3338,14 @@ const _syncOpenClawConfigImpl = async (
   const confirmed = await deliver();
   if (confirmed.mode !== OpenClawConfigDeliveryMode.Applied || openClawConfigRecovery.pending) {
     if (confirmed.mode !== OpenClawConfigDeliveryMode.Rejected) {
+      if (stallConfigRecoveryIfExhausted(target, confirmed)) {
+        return {
+          success: false,
+          changed: true,
+          status: buildConfigRecoveryErrorStatus(),
+          error: openClawConfigRecovery.error ?? confirmed.detail,
+        };
+      }
       openClawConfigRecovery.retryAfter(30_000);
       scheduleDeferredGatewayRestart(`${CONFIG_DELIVERY_FALLBACK_REASON_PREFIX}${options.reason}`);
     }
@@ -3363,7 +3429,7 @@ const syncOpenClawConfig = async (
       // announce convergence; rejected config must not leave a startup spinner.
       if (!isQuitting && !isDataMigrationRestoreInProgress) {
         if (openClawConfigRecovery.error) {
-          forwardOpenClawStatus(buildConfigApplyErrorStatus(openClawConfigRecovery.error));
+          forwardOpenClawStatus(buildConfigRecoveryErrorStatus());
         } else if (!openClawConfigRecovery.pending && !deferredRestartReason) {
           forwardOpenClawStatus(getOpenClawEngineManager().getStatus());
         }

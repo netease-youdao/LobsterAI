@@ -1,5 +1,8 @@
 import { type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { OpenClawEngineErrorCode, OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
@@ -400,5 +403,55 @@ describe('gateway terminal startup failures', () => {
     expect(manager.getStatus()).toMatchObject({ phase: OpenClawEnginePhase.Error, canRetry: true });
     expect(manager.getStatus().message).toContain('openclaw.json is invalid');
     expect(manager.getStatus().message).not.toContain(PLUGIN_FAILURE);
+  });
+});
+
+describe('orphaned config lock cleanup', () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-manager-config-lock-')));
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  const makeManager = () => Object.assign(Object.create(OpenClawEngineManager.prototype), {
+    configPath: path.join(stateDir, 'openclaw.json'),
+    stateDir,
+    gatewayProcess: null,
+    resolveRuntimeMetadata: () => ({ version: '2026.8.1' }),
+  }) as OpenClawEngineManager;
+
+  const writeOrphanedLock = (): string => {
+    const lockPath = path.join(stateDir, 'openclaw.json.lock');
+    fs.writeFileSync(lockPath, '');
+    const killedAt = new Date('2026-09-07T12:45:01.758Z');
+    fs.utimesSync(lockPath, killedAt, killedAt);
+    return lockPath;
+  };
+
+  test('reclaims an empty lock before spawning, so config writes cannot time out forever', () => {
+    const lockPath = writeOrphanedLock();
+    const manager = makeManager();
+
+    (manager as unknown as { cleanupStaleGatewayLocksSafely: (context: string) => void })
+      .cleanupStaleGatewayLocksSafely('pre-spawn');
+
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('stale config lock reclaimed (removed-unreadable)'));
+  });
+
+  test('lets config delivery reclaim the orphan while the gateway keeps running', () => {
+    const lockPath = writeOrphanedLock();
+    const manager = makeManager();
+
+    expect(manager.reclaimStaleConfigLock('config-delivery:agent-updated')).toBe(true);
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(manager.reclaimStaleConfigLock('config-delivery:agent-updated')).toBe(false);
   });
 });

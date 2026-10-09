@@ -16,6 +16,43 @@ const isRecord = (value: unknown): value is Record<string, unknown> => (
   value !== null && typeof value === 'object' && !Array.isArray(value)
 );
 
+const MAX_GAP_PATHS = 6;
+const MAX_GAP_DEPTH = 3;
+
+function collectDifferingPaths(left: unknown, right: unknown, prefix: string, depth: number, paths: string[]): void {
+  if (paths.length >= MAX_GAP_PATHS || isDeepStrictEqual(left, right)) return;
+  if (depth >= MAX_GAP_DEPTH || !isRecord(left) || !isRecord(right)) {
+    paths.push(prefix || '<root>');
+    return;
+  }
+  for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+    collectDifferingPaths(left[key], right[key], prefix ? `${prefix}.${key}` : key, depth + 1, paths);
+  }
+}
+
+/**
+ * Diagnostics only: why a snapshot does not prove the target applied. Names
+ * the failing check and up to six differing config paths, never their values.
+ */
+export function describeOpenClawConfigApplicationGap(
+  snapshot: OpenClawConfigSnapshot,
+  targetRaw: string,
+): string | undefined {
+  if (snapshot.valid !== true) return 'invalid';
+  if (typeof snapshot.configRevisionHash !== 'string' || !snapshot.configRevisionHash.trim()
+    || snapshot.configRevisionHash !== snapshot.appliedConfigHash) return 'revision';
+  try {
+    const target: unknown = JSON.parse(targetRaw);
+    const observed: unknown = typeof snapshot.raw === 'string' ? JSON.parse(snapshot.raw) : snapshot.parsed;
+    if (!isRecord(target) || !isRecord(observed)) return 'content:unavailable';
+    const paths: string[] = [];
+    collectDifferingPaths(withoutOpenClawWriteMetadata(target), withoutOpenClawWriteMetadata(observed), '', 0, paths);
+    return paths.length > 0 ? `content:${paths.join(',')}` : undefined;
+  } catch {
+    return 'content:unparseable';
+  }
+}
+
 /** Equal revision tokens alone can describe an old cached config.get response. */
 export function isOpenClawConfigApplied(
   snapshot: OpenClawConfigSnapshot,

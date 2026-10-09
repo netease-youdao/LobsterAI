@@ -146,6 +146,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawConfigApplyPending: 'OpenClaw 正在应用配置，请稍后重试。',
     openClawConfigApplyOverdue:
       'OpenClaw 正在等待活动任务结束后应用配置。请完成或停止活动任务，然后重试。',
+    openClawConfigApplyStalled: '最新配置在重启网关后仍无法应用到 OpenClaw（{detail}）。',
     coworkErrorModelResponseTimeout: '模型响应超时，请稍后重试。',
     coworkErrorNetworkError: '网络连接失败，请检查网络设置。',
     coworkErrorNetworkErrorViaSystemProxy:
@@ -556,6 +557,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawConfigApplyPending: 'OpenClaw is applying configuration. Please try again shortly.',
     openClawConfigApplyOverdue:
       'OpenClaw is waiting for active tasks to finish before applying configuration. Complete or stop the active tasks, then try again.',
+    openClawConfigApplyStalled: 'The latest configuration still could not be applied to OpenClaw after restarting the gateway ({detail}).',
     coworkErrorModelResponseTimeout: 'The model response timed out. Please try again.',
     coworkErrorNetworkError: 'Network connection failed. Please check your network settings.',
     coworkErrorNetworkErrorViaSystemProxy:

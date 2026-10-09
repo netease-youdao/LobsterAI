@@ -86,4 +86,20 @@ describe('EngineFailureOverlay', () => {
     expect(html).not.toContain('coworkOpenClawQuickRepair');
     expect(html).not.toContain('coworkOpenClawRestartGateway');
   });
+
+  test('explains a stalled config apply and leads with Quick Repair', () => {
+    snapshot.status = {
+      phase: OpenClawEnginePhase.Error,
+      version: '2026.8.1',
+      errorCode: OpenClawEngineErrorCode.ConfigApplyStalled,
+      message: 'config.apply failed: gateway request timeout for config.apply',
+      canRetry: false,
+    };
+    const html = renderToStaticMarkup(React.createElement(EngineFailureOverlay));
+    expect(html).toContain('coworkOpenClawConfigStalledTitle');
+    expect(html).toContain('coworkOpenClawConfigStalledHint');
+    expect(html).toContain('gateway request timeout for config.apply');
+    expect(html).toContain('coworkOpenClawQuickRepair');
+    expect(html).toContain('coworkOpenClawRestartGateway');
+  });
 });

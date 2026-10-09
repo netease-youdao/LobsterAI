@@ -135,12 +135,16 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
   // Config repair cannot help a firewall block; the primary action adds the
   // loopback rule instead, and restarting re-runs the self-test.
   const isLoopbackBlocked = status.errorCode === OpenClawEngineErrorCode.LoopbackBlocked;
+  // The gateway runs, but settings stopped reaching it; repair clears what a restart cannot.
+  const isConfigStalled = status.errorCode === OpenClawEngineErrorCode.ConfigApplyStalled;
   const titleKey = isRepairingGateway ? 'openClawRepairRunning' : isLoopbackBlocked ? 'coworkOpenClawLoopbackBlockedTitle'
     : isRuntimeDamaged ? 'coworkOpenClawRuntimeDamagedError'
-      : isRuntimeMissing ? 'coworkOpenClawRuntimeMissingError' : needsMediaMigration ? 'openClawAgentMediaMigrationTitle' : 'coworkOpenClawError';
+      : isRuntimeMissing ? 'coworkOpenClawRuntimeMissingError' : needsMediaMigration ? 'openClawAgentMediaMigrationTitle'
+        : isConfigStalled ? 'coworkOpenClawConfigStalledTitle' : 'coworkOpenClawError';
   const hintKey = isLoopbackBlocked ? 'coworkOpenClawLoopbackBlockedHint' : isRuntimeDamaged ? 'coworkOpenClawRuntimeDamagedRepairHint'
     : isRuntimeMissing ? 'coworkOpenClawRuntimeMissingRepairHint' : needsMediaMigration ? 'openClawAgentMediaMigrationHint'
-      : migrationRefused ? 'openClawStartupMigrationRefusedHint' : 'coworkOpenClawErrorRepairHint';
+      : migrationRefused ? 'openClawStartupMigrationRefusedHint'
+        : isConfigStalled ? 'coworkOpenClawConfigStalledHint' : 'coworkOpenClawErrorRepairHint';
   const primaryAction = isLoopbackBlocked
     ? {
       onClick: handleAllowLoopback,

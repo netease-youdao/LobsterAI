@@ -55,6 +55,82 @@ test('validation rejection survives a no-op, but a corrected target may converge
   expect(state.applied(fixed, 1)).toBe(true);
 });
 
+test('stalls only after a recovery respawn could not apply the target either', () => {
+  const state = new OpenClawConfigRecovery();
+  const stuck = target(4121);
+  state.stage(stuck, false, 1);
+  // Failures before any recovery respawn keep the ordinary retry/restart path.
+  expect(state.failedAfterRespawn(stuck, 'lock timeout')).toBe(false);
+  expect(state.failedAfterRespawn(stuck, 'lock timeout')).toBe(false);
+  expect(state.stalled).toBe(false);
+
+  state.restarted(1_000);
+  // The first failure may still race the fresh gateway's startup.
+  expect(state.failedAfterRespawn(stuck, 'lock timeout')).toBe(false);
+  expect(state.failedAfterRespawn(stuck, 'lock timeout')).toBe(true);
+  expect(state.stalled).toBe(true);
+  expect(state.error).toBe('lock timeout');
+  // The target is retained, so a later successful delivery still converges.
+  expect(state.pending).toBe(true);
+});
+
+test('a stall survives new targets until a delivery succeeds, then the respawn budget resets', () => {
+  const state = new OpenClawConfigRecovery();
+  const first = target(4121);
+  state.stage(first, false, 1);
+  state.restarted();
+  state.failedAfterRespawn(first, 'stuck');
+  state.failedAfterRespawn(first, 'stuck');
+  const second = target(5000);
+  state.stage(second, false, 2);
+  expect(state.stalled).toBe(true);
+  expect(state.error).toBe('stuck');
+
+  expect(state.applied(second, 2)).toBe(true);
+  expect(state.stalled).toBe(false);
+  expect(state.error).toBeNull();
+  const third = target(6000);
+  state.stage(third, false, 2);
+  expect(state.failedAfterRespawn(third, 'stuck')).toBe(false);
+  expect(state.failedAfterRespawn(third, 'stuck')).toBe(false);
+});
+
+test('a late failure of an older target cannot stall the current one', () => {
+  const state = new OpenClawConfigRecovery();
+  const older = target(3474);
+  const latest = target(4121);
+  state.stage(older, false, 1);
+  state.restarted();
+  state.stage(latest, false, 1);
+  expect(state.failedAfterRespawn(older, 'stuck')).toBe(false);
+  expect(state.failedAfterRespawn(older, 'stuck')).toBe(false);
+  expect(state.stalled).toBe(false);
+});
+
+test('a validation rejection takes precedence over a stall', () => {
+  const state = new OpenClawConfigRecovery();
+  const invalid = target(0);
+  state.stage(invalid, false, 1);
+  state.restarted();
+  state.failedAfterRespawn(invalid, 'stuck');
+  state.failedAfterRespawn(invalid, 'stuck');
+  state.reject(invalid, 'invalid config');
+  expect(state.error).toBe('invalid config');
+  expect(state.stalled).toBe(false);
+});
+
+test('a delivery that still owes an environment respawn clears the stall but keeps the target', () => {
+  const state = new OpenClawConfigRecovery();
+  const latest = target(4121);
+  state.stage(latest, true, 3);
+  state.restarted();
+  state.failedAfterRespawn(latest, 'stuck');
+  state.failedAfterRespawn(latest, 'stuck');
+  expect(state.applied(latest, 3)).toBe(false);
+  expect(state.stalled).toBe(false);
+  expect(state.pending).toBe(true);
+});
+
 test('a deferred restart is satisfied only by a later spawn of the unchanged target', () => {
   const settled = {
     restartRequestedAt: 1_000,
