@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthSessionManager, AuthSessionRequestError } from '../libs/authSessionManager';
-import { RemoteNetworkFailure, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message } from './remoteNetworkProtocol';
+import { RemoteNetworkBodyEncoding, RemoteNetworkFailure, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message } from './remoteNetworkProtocol';
 import { RemoteNetworkTransport, remoteResponseJson } from './remoteNetworkTransport';
 import { remoteSyncErrorMetadata } from './remoteSyncLog';
 import { classifyTaskSyncFailure } from './remoteTaskSyncPolicy';
@@ -370,4 +370,93 @@ it('keeps simultaneous logical request contexts separate and telemetry callbacks
   await Promise.all([a, b]);
   expect(first.transportStarted).toHaveBeenCalledTimes(1); expect(second.transportStarted).toHaveBeenCalledTimes(1);
   expect(currentRemoteTelemetryRequest()).toBeUndefined();
+});
+
+
+describe('binary upload request isolation', () => {
+  const artifact = base + '/artifact-uploads/upload-1/parts/1';
+  const asset = base + '/input-assets/asset-1/parts/1';
+  it.each(['buffer', 'view', 'data-view', 'array-buffer'])('freezes a queued %s body with its exact offset before caller mutation', async kind => {
+    const { transport, children } = fixture();
+    const blocker = request(transport, '/sync/batches'); await settle();
+    const original = Buffer.from([77, 88, 0, 128, 255, 13, 10, 99]);
+    const bytes = kind === 'array-buffer' ? original.subarray(2, 7).buffer.slice(original.byteOffset + 2, original.byteOffset + 7)
+      : kind === 'data-view' ? new DataView(original.buffer, original.byteOffset + 2, 5)
+      : kind === 'view' ? new Uint8Array(original.buffer, original.byteOffset + 2, 5) : original.subarray(2, 7);
+    const pending = transport.queuedFetch(artifact, { method: 'PUT', body: bytes });
+    original.fill(0);
+    if (bytes instanceof ArrayBuffer) new Uint8Array(bytes).fill(0);
+    expect(children[0].messages.filter(value => value.type === Message.Fetch)).toHaveLength(1);
+    success(children[0]); await blocker; await settle();
+    const message = children[0].messages.find(value => value.url === artifact);
+    expect(message.bodyEncoding).toBe(RemoteNetworkBodyEncoding.Base64);
+    expect(Buffer.from(message.body, 'base64')).toEqual(Buffer.from([0,128,255,13,10]));
+    success(children[0], message.id); await pending;
+  });
+  it('accepts an eight MiB input part while retaining separate foreground queue bytes', async () => {
+    const { transport, children } = fixture();
+    const blocker = request(transport, '/sync/batches');
+    const controls = [request(transport), request(transport, '/connection-tickets'), request(transport, '/commands/claim')];
+    await settle();
+    const part = transport.queuedFetch(asset, { method: 'PUT', body: new ArrayBuffer(Limit.InputPartBytes) });
+    // Base64 expansion exceeds 8 MiB. A second part must not overrun the new background bound.
+    await expect(transport.queuedFetch(asset, { method: 'PUT', body: new ArrayBuffer(Limit.InputPartBytes) })).rejects.toThrow('ADMISSION_BUSY');
+    const control = transport.queuedFetch(base + '/devices/register', { method: 'POST', body: '{}' });
+    const queued = (transport as any).queue;
+    expect(queued.filter((item: any) => item.lane === 'background')[0].bytes).toBeGreaterThan(Limit.InputPartBytes);
+    expect(queued.filter((item: any) => item.lane === 'control')).toHaveLength(1);
+    const child = children[0];
+    for (const message of [...child.messages].filter(value => value.type === Message.Fetch)) success(child, message.id);
+    await Promise.all([blocker, ...controls]); await settle();
+    for (const message of child.messages.filter(value => value.url === asset || value.url === base + '/devices/register')) success(child, message.id);
+    await Promise.all([part, control]);
+  });
+  it('keeps JSON at two MiB and rejects bodies outside the two bounded PUT routes', async () => {
+    const { transport, children } = fixture();
+    for (const [url, method, body] of [
+      [artifact, 'POST', new ArrayBuffer(1)], [base + '/artifact-uploads/upload-1/complete', 'PUT', new ArrayBuffer(1)],
+      [base + '/input-assets/asset-1/content', 'PUT', new ArrayBuffer(1)], [base + '/input-assets/asset-1/parts/0', 'PUT', new ArrayBuffer(1)],
+      [base.replace('/v1', '/v2') + '/input-assets/asset-1/parts/1', 'PUT', new ArrayBuffer(1)],
+      [asset, 'PUT', new Blob(['x'])], [asset, 'PUT', new Uint8Array(new SharedArrayBuffer(1))],
+    ] as const) await expect(transport.queuedFetch(url, { method, body })).rejects.toThrow('REQUEST_INVALID');
+    for (const [url, body] of [
+      [artifact, new ArrayBuffer(Limit.ArtifactPartBytes + 1)], [asset, new ArrayBuffer(Limit.InputPartBytes + 1)],
+      [asset, 'x'.repeat(Limit.BodyBytes + 1)],
+    ] as const) {
+      await expect(transport.queuedFetch(url, { method: 'PUT', body })).rejects.toThrow('REQUEST_BUDGET');
+      await expect(transport.fetch(url, { method: 'PUT', body })).rejects.toThrow('REQUEST_BUDGET');
+    }
+    expect(children).toHaveLength(0);
+  });
+  it('discards cancelled queued parts without dispatch and holds active parts until child acknowledgement', async () => {
+    const { transport, children } = fixture();
+    const blocker = request(transport, '/sync/batches'); await settle();
+    const queuedAbort = new AbortController();
+    const queued = transport.queuedFetch(artifact, { method: 'PUT', body: new ArrayBuffer(4), signal: queuedAbort.signal });
+    queuedAbort.abort(); await expect(queued).rejects.toThrow('CANCELLED');
+    success(children[0]); await blocker; await settle();
+    expect(children[0].messages.filter(value => value.url === artifact)).toHaveLength(0);
+    const activeAbort = new AbortController();
+    const active = transport.fetch(artifact, { method: 'PUT', body: new ArrayBuffer(4), signal: activeAbort.signal }); await settle();
+    activeAbort.abort(); await expect(active).rejects.toThrow('CANCELLED');
+    await expect(transport.fetch(artifact, { method: 'PUT', body: new ArrayBuffer(4) })).rejects.toThrow('ADMISSION_BUSY');
+    const message = children[0].messages.find(value => value.url === artifact);
+    children[0].reply({ type: Message.Result, id: message.id, error: RemoteNetworkFailure.Cancelled }); await settle();
+    const next = transport.fetch(artifact, { method: 'PUT', body: new ArrayBuffer(4) }); await settle();
+    success(children[0], children[0].messages.filter(value => value.url === artifact).at(-1).id); await next;
+  });
+});
+
+
+it('does not encode a large part after cancellation or direct admission failure', async () => {
+  const { transport, children } = fixture();
+  const active = request(transport, '/sync/batches'); await settle();
+  const encoding = vi.spyOn(Buffer.prototype, 'toString');
+  const url = base + '/input-assets/asset-1/parts/1', body = new ArrayBuffer(Limit.InputPartBytes);
+  await expect(transport.fetch(url, { method: 'PUT', body })).rejects.toThrow('ADMISSION_BUSY');
+  const abort = new AbortController(); abort.abort();
+  await expect(transport.fetch(url, { method: 'PUT', body, signal: abort.signal })).rejects.toThrow('CANCELLED');
+  await expect(transport.queuedFetch(url, { method: 'PUT', body, signal: abort.signal })).rejects.toThrow('CANCELLED');
+  expect(encoding.mock.calls.filter(([format]) => format === 'base64')).toHaveLength(0);
+  success(children[0]); await active;
 });

@@ -4,8 +4,19 @@ export const RemoteNetworkMessage = {
   SocketSend: 'socket_send', SocketClose: 'socket_close', SocketOpened: 'socket_opened', SocketClosed: 'socket_closed', Alive: 'alive',
 } as const;
 export const RemoteNetworkLimit = { Requests: 6, BodyBytes: 2 * 1024 * 1024, HeaderBytes: 16 * 1024,
+  ArtifactPartBytes: 4 * 1024 * 1024, InputPartBytes: 8 * 1024 * 1024,
+  QueueBytes: 8 * 1024 * 1024, BackgroundQueueBytes: 16 * 1024 * 1024, BackgroundQueueRequests: 16,
   BinaryBytes: 100 * 1024 * 1024, BinaryChunkBytes: 64 * 1024, BinaryTimeoutMs: 120000,
   JsonDepth: 32, JsonNodes: 20000, FrameBytes: 64 * 1024, FramesPending: 16, FramesPerSecond: 60, SocketBufferedBytes: 64 * 1024, WorkerMemoryMb: 128 } as const;
+export const RemoteNetworkBodyEncoding = { Base64: 'base64' } as const;
+export interface RemoteNetworkRequestBody { body?: string; bodyEncoding?: typeof RemoteNetworkBodyEncoding.Base64 }
+/** Existing bounded PUT part APIs are the only binary request-body routes. */
+export function remoteNetworkUploadBytes(url: string, method = 'GET'): number {
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'https:' || method.toUpperCase() !== 'PUT') return 0;
+  const match = /^\/api\/remote\/v1\/(artifact-uploads|input-assets)\/[A-Za-z0-9_-]{1,64}\/parts\/[1-9]\d{0,9}$/u.exec(parsed.pathname);
+  return match ? match[1] === 'artifact-uploads' ? RemoteNetworkLimit.ArtifactPartBytes : RemoteNetworkLimit.InputPartBytes : 0;
+}
 export interface RemoteSocket {
   readonly readyState: number;
   send(data: string): void;
@@ -35,7 +46,7 @@ export function remoteNetworkBinaryDownload(url: string, method = 'GET'): boolea
 /** Keep the supervisor and worker on the same physical admission policy. */
 export function remoteNetworkRequestLane(url: string, method = 'GET'): RemoteNetworkLane {
   const path = new URL(url).pathname;
-  if (remoteNetworkBinaryDownload(url, method)) return 'background';
+  if (remoteNetworkBinaryDownload(url, method) || remoteNetworkUploadBytes(url, method)) return 'background';
   // A download must never occupy the permit needed to renew its preparation lease or report its result.
   if (method.toUpperCase() === 'POST' && /^\/api\/remote\/v1\/input-preparations\/[^/]+\/(?:renew|result)$/u.test(path)) return 'control';
   if (method.toUpperCase() === 'GET' && /^\/api\/remote\/v[12]\/devices\/[^/]+\/input-preparations$/u.test(path)) return 'background';

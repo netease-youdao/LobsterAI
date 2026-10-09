@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { requestRemoteFilePart } from './remoteFileTransferLog';
+import { RemoteNetworkError } from './remoteNetworkError';
+import { RemoteNetworkFailure } from './remoteNetworkProtocol';
 
 const artifactPart = '/artifact-uploads/asset-id/parts/0';
 const spies = (): { debug: ReturnType<typeof vi.spyOn>; warn: ReturnType<typeof vi.spyOn> } => ({
@@ -59,6 +61,22 @@ describe('remote file part diagnostics', () => {
     const known = Object.assign(new TypeError('secret'), { code: 'ECONNRESET' });
     await expect(requestRemoteFilePart(artifactPart, { method: 'PUT' }, async () => { throw known; })).rejects.toBe(known);
     expect(logs.warn).toHaveBeenLastCalledWith('[RemoteFileSync] Part request failed', expect.objectContaining({ errorName: 'TypeError', errorCode: 'ECONNRESET' }));
+  });
+
+  it('retains the finite network rejection hidden inside an authenticated part failure', async () => {
+    const logs = spies();
+    const body = new Uint8Array(new ArrayBuffer(16), 4, 7);
+    const error = Object.assign(new Error('private request details'), { name: 'AuthSessionRequestError',
+      originalError: new RemoteNetworkError(RemoteNetworkFailure.RequestInvalid) });
+    await expect(requestRemoteFilePart(artifactPart, { method: 'PUT', body }, async () => { throw error; })).rejects.toBe(error);
+    expect(logs.warn).toHaveBeenLastCalledWith('[RemoteFileSync] Part request failed', expect.objectContaining({
+      status: null, requestBytes: 7, errorName: 'RemoteNetworkError', errorCode: RemoteNetworkFailure.RequestInvalid,
+    }));
+    const unknown = new Error('REMOTE_NETWORK_PRIVATE_TOKEN');
+    await expect(requestRemoteFilePart(artifactPart, { method: 'PUT' }, async () => { throw unknown; })).rejects.toBe(unknown);
+    expect(logs.warn).toHaveBeenLastCalledWith('[RemoteFileSync] Part request failed', expect.objectContaining({ errorCode: null }));
+    const printed = JSON.stringify(logs.warn.mock.calls);
+    expect(printed).not.toContain('private'); expect(printed).not.toContain('PRIVATE_TOKEN');
   });
 
   it('bounds nested or circular error inspection', async () => {

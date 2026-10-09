@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'crypto';
+import { buildSync } from 'esbuild';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -11,11 +12,13 @@ import { RemoteEnvironment } from '../../shared/remote/environment';
 import { type RemoteFilePolicy, RemoteFileReason, remoteFileRule } from '../../shared/remote/files';
 import { RemoteFileCapability } from '../../shared/remote/files';
 import type { LibraryIndexedFile } from '../library/libraryLocalStore';
+import { AuthSessionManager } from '../libs/authSessionManager';
 import { captureDesktopInput } from './desktopInputMetadata';
 import { RemoteBridge } from './remoteBridge';
 import { captureRemoteFileSnapshot, remoteFileCacheDirectory, verifyRemoteFileSnapshot } from './remoteFileSnapshots';
 import { RemoteFileSync } from './remoteFileSync';
 import { projectLiveMessage } from './remoteLiveProjection';
+import { RemoteNetworkTransport } from './remoteNetworkTransport';
 import { RemoteStore } from './remoteStore';
 
 const owner = { userId: 'A', scopeKey: 'personal' };
@@ -23,11 +26,13 @@ const disposable: Array<() => void> = [];
 afterEach(() => { for (const dispose of disposable.splice(0).reverse()) dispose(); vi.useRealTimers(); vi.restoreAllMocks(); });
 const policy: RemoteFilePolicy = { policyVersion: '1', features: { inputUpload: true, desktopInputSync: true, artifactPublish: true, artifactDownload: true },
   types: [{ category: 'text', extensions: ['md', 'txt', 'json', 'yaml', 'js', 'html'], maxFileBytes: '5242880', inputAllowed: true, artifactAutoSync: true },
-    { category: 'image', extensions: ['png'], maxFileBytes: '10485760', inputAllowed: true, artifactAutoSync: true }],
+    { category: 'image', extensions: ['png'], maxFileBytes: '10485760', inputAllowed: true, artifactAutoSync: true },
+    { category: 'document', extensions: ['pdf'], maxFileBytes: '31457280', inputAllowed: true, artifactAutoSync: true }],
   limits: { partBytes: '4194304', maxInputCount: 10, maxInputBytes: '104857600', maxImageBytes: '20971520', maxTaskArtifactCount: 20, maxTaskArtifactBytes: '209715200' } };
 function folder(): string { const result = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'remote-files-test-'))); disposable.push(() => fs.rmSync(result, { recursive: true, force: true })); return result; }
 const ok = (data: unknown): Response => new Response(JSON.stringify({ code: 0, data }));
-function fixture(sealedProducer = true, deliveries = false, fileName = 'report.md', partBytes = 4194304) {
+function fixture(sealedProducer = true, deliveries = false, fileName = 'report.md', partBytes = 4194304,
+  partTransport?: (pathname: string, init: RequestInit) => Promise<Response>) {
   const directory = folder(), source = path.join(directory, fileName), cache = path.join(directory, 'cache'); fs.writeFileSync(source, 'first');
   const db = new Database(':memory:'); disposable.push(() => db.close());
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT,model_override TEXT,thinking_level TEXT);
@@ -70,6 +75,13 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
     if (pathname.includes('/parts/')) {
       expect(init.method).toBe('PUT'); expect(init.body).toBeInstanceOf(ArrayBuffer);
       const headers = new Headers(init.headers), part = Buffer.from(init.body);
+      if (partTransport) {
+        const response = await partTransport(pathname, init);
+        expect(response.status).toBe(200);
+        const receipt = await response.json();
+        expect(receipt.data).toMatchObject({ bytes: part.length, sha256: createHash('sha256').update(part).digest('hex'), attempts: 2 });
+        expect(receipt.data.workerPid).not.toBe(process.pid);
+      }
       expect(headers.has('Content-Length')).toBe(false);
       expect(headers.get('Content-Type')).toBe('application/octet-stream');
       expect(headers.get('X-Content-SHA256')).toBe(createHash('sha256').update(part).digest('hex'));
@@ -134,6 +146,51 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
     jobs: () => store.entries<any>('fileOutput:').map(row => row.value) };
 }
 describe('remote files policy and immutable snapshots', () => {
+  it('publishes a binary PDF through authenticated network IPC after a 401 retry', async () => {
+    const directory = folder(), worker = path.join(directory, 'network.cjs'), bootstrap = path.join(directory, 'bootstrap.cjs');
+    buildSync({ entryPoints: [path.join(__dirname, 'remoteNetworkWorker.ts')], outfile: worker, bundle: true, platform: 'node', format: 'cjs' });
+    fs.writeFileSync(bootstrap, `
+      const { createHash } = require('crypto');
+      let attempts = 0;
+      global.fetch = async (url, init) => {
+        if (!String(url).includes('/artifact-uploads/') || init.method !== 'PUT' || !Buffer.isBuffer(init.body)) throw new Error('Invalid part transport');
+        const headers = new Headers(init.headers), sha256 = createHash('sha256').update(init.body).digest('hex');
+        if (headers.get('content-type') !== 'application/octet-stream' || headers.get('x-content-sha256') !== sha256) throw new Error('Invalid part bytes');
+        attempts++;
+        if (headers.get('authorization') === 'Bearer access-old') return new Response(JSON.stringify({code:401}), {status:401});
+        if (headers.get('authorization') !== 'Bearer access-new') throw new Error('Missing refreshed auth');
+        return new Response(JSON.stringify({code:0,data:{bytes:init.body.length,sha256,attempts,workerPid:process.pid}}));
+      };
+      require(${JSON.stringify(worker)});
+    `);
+    const transport = new RemoteNetworkTransport(undefined, bootstrap);
+    disposable.push(() => transport.dispose());
+    let tokens = { accessToken: 'access-old', refreshToken: 'refresh' };
+    const refresh = vi.fn(async () => ok({ accessToken: 'access-new', refreshToken: 'refresh-new' }));
+    const auth = new AuthSessionManager({ getTokens: () => tokens, getSessionKey: () => 'same-owner', saveTokens: value => { tokens = value; },
+      fetch: refresh, getRefreshUrl: () => 'https://example.invalid/api/auth/refresh', buildRefreshRequestBody: token => JSON.stringify({ refreshToken: token }) });
+    const f = fixture(true, false, 'worksheet.pdf', 4194304, (pathname, init) =>
+      auth.fetchWithAuth(`https://example.invalid/api/remote/v1${pathname}`, init, transport.queuedFetch));
+    const pdf = Buffer.alloc(133604);
+    for (let index = 0; index < pdf.length; index++) pdf[index] = index % 256;
+    pdf.write('%PDF-1.7\n%'); fs.writeFileSync(f.source, pdf);
+    f.db.prepare('UPDATE library_local_artifacts SET size_bytes=? WHERE id=?').run(pdf.length, 'local');
+    await f.tick(); // Register the live run before its terminal snapshot boundary.
+    f.store.updateRun('s', 'succeeded');
+    await f.tick();
+    expect(f.jobs()[0]?.reason).toBeUndefined();
+    expect(f.bytes.get('asset1')).toEqual(pdf);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(f.uploads.get('asset1')).toMatchObject({ status: 'ready', publicationStatus: 'published', published: true });
+    expect(f.jobs()[0]).toMatchObject({ latest: { sizeBytes: String(pdf.length), sha256: createHash('sha256').update(pdf).digest('hex') }, queue: [] });
+    const steps = f.calls.map(call => call.pathname);
+    expect(steps.indexOf('/artifact-uploads/asset1/complete')).toBeGreaterThan(steps.indexOf('/artifact-uploads/asset1/parts/1'));
+    expect(steps.indexOf('/artifacts/remote/versions/1/publish')).toBeGreaterThan(steps.indexOf('/artifact-uploads/asset1/complete'));
+    expect(f.references).toHaveLength(1);
+    const message = f.store.snapshot('s').records.find(row => row.eventType === 'message.upsert' && row.payload.message.messageId === 'm1');
+    expect(message?.payload.message.blocks.at(-1)).toMatchObject({ name: 'worksheet.pdf', mimeType: 'application/pdf', availability: 'ready' });
+  });
+
   it('bounds a session artifact discovery and excludes oversized provenance metadata', async () => {
     const oversized = fixture();
     oversized.db.prepare("UPDATE cowork_messages SET metadata=? WHERE id='m1'").run(JSON.stringify({ remoteRunId: 'run1', padding: 'x'.repeat(32768) }));

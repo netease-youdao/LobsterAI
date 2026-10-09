@@ -3,12 +3,30 @@ import { randomUUID } from 'crypto';
 
 import { RemoteTelemetryEvent as TelemetryEvent } from '../../shared/remote/telemetry';
 import { RemoteNetworkError } from './remoteNetworkError';
-import { remoteNetworkBinaryDownload, remoteNetworkCapacities as capacities, RemoteNetworkFailure as Failure, remoteNetworkFailureValue, type RemoteNetworkLane as Lane, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message, remoteNetworkRequestLane as requestLane, type RemoteSocket } from './remoteNetworkProtocol';
+import { remoteNetworkBinaryDownload, RemoteNetworkBodyEncoding, remoteNetworkCapacities as capacities, RemoteNetworkFailure as Failure, remoteNetworkFailureValue, type RemoteNetworkLane as Lane, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message, type RemoteNetworkRequestBody, remoteNetworkRequestLane as requestLane, remoteNetworkUploadBytes, type RemoteSocket } from './remoteNetworkProtocol';
 import { remoteDiagnosticLog } from './remoteSyncLog';
 import { captureRemoteTelemetry, type RemoteTelemetryRequestTracker } from './remoteTelemetry';
 import { currentRemoteTelemetryRequest, withRemoteTelemetryRequest } from './remoteTelemetryTransport';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 
+interface BodyAdmission { bytes: number; snapshot(): RemoteNetworkRequestBody }
+function admitBody(url: string, options: RequestInit): BodyAdmission {
+  const body = options.body;
+  if (body === undefined || body === null) return { bytes: 0, snapshot: () => ({}) };
+  if (typeof body === 'string') {
+    if (Buffer.byteLength(body) > Limit.BodyBytes) throw new RemoteNetworkError(Failure.RequestBudget);
+    return { bytes: Buffer.byteLength(JSON.stringify(body)), snapshot: () => ({ body }) };
+  }
+  const limit = remoteNetworkUploadBytes(url, options.method);
+  if (!limit || !(body instanceof ArrayBuffer || ArrayBuffer.isView(body))) throw new RemoteNetworkError(Failure.RequestInvalid);
+  // Shared memory could change during encoding; only a private immutable snapshot crosses IPC.
+  const buffer = body instanceof ArrayBuffer ? body : body.buffer;
+  if (!(buffer instanceof ArrayBuffer)) throw new RemoteNetworkError(Failure.RequestInvalid);
+  const offset = body instanceof ArrayBuffer ? 0 : body.byteOffset, length = body.byteLength;
+  if (length > limit) throw new RemoteNetworkError(Failure.RequestBudget);
+  return { bytes: 4 * Math.ceil(length / 3), snapshot: () => ({ bodyEncoding: RemoteNetworkBodyEncoding.Base64,
+    body: Buffer.from(buffer, offset, length).toString('base64') }) };
+}
 interface QueuedRequest { lane: Lane; bytes: number; start(): void; cancel(): void }
 interface Pending {
   lane: Lane; resolve(response: Response): void; reject(error: Error): void;
@@ -239,14 +257,20 @@ export class RemoteNetworkTransport {
     }
   }
   readonly fetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
+    if (options.signal?.aborted) throw new RemoteNetworkError(Failure.Cancelled);
+    const lane = requestLane(url, options.method);
+    if (this.pending.size >= Limit.Requests || [...this.pending.values()].filter(value => value.lane === lane).length >= capacities[lane])
+      throw new RemoteNetworkError(Failure.AdmissionBusy);
+    const body = admitBody(url, options), headers = Object.fromEntries(new Headers(options.headers));
+    if (Buffer.byteLength(JSON.stringify(headers)) > Limit.HeaderBytes) throw new RemoteNetworkError(Failure.RequestBudget);
+    return this.fetchPrepared(url, { ...options, body: undefined, headers }, body.snapshot());
+  };
+  private readonly fetchPrepared = async (url: string, options: RequestInit, body: RemoteNetworkRequestBody): Promise<Response> => {
     const telemetry = currentRemoteTelemetryRequest();
     const lane = requestLane(url, options.method), binary = remoteNetworkBinaryDownload(url, options.method);
     if (this.pending.size >= Limit.Requests || [...this.pending.values()].filter(value => value.lane === lane).length >= capacities[lane])
       throw new RemoteNetworkError(Failure.AdmissionBusy);
-    if (options.body !== undefined && options.body !== null && typeof options.body !== 'string') throw new RemoteNetworkError(Failure.RequestInvalid);
-    if (Buffer.byteLength(String(options.body || '')) > Limit.BodyBytes) throw new RemoteNetworkError(Failure.RequestBudget);
-    const headers = Object.fromEntries(new Headers(options.headers));
-    if (Buffer.byteLength(JSON.stringify(headers)) > Limit.HeaderBytes) throw new RemoteNetworkError(Failure.RequestBudget);
+    const headers = options.headers;
     const id = randomUUID();
     return new Promise<Response>((resolve, reject) => {
       const signal = options.signal;
@@ -267,28 +291,36 @@ export class RemoteNetworkTransport {
         if (!this.pending.has(id)) return;
         if (this.pending.get(id)!.cancelled) { this.pending.delete(id); signal?.removeEventListener('abort', aborted); this.drain(); return; }
         this.pending.get(id)!.dispatched = true;
-        this.send({ type: Message.Fetch, id, url, method: options.method || 'GET', headers, ...(typeof options.body === 'string' ? { body: options.body } : {}) });
+        this.send({ type: Message.Fetch, id, url, method: options.method || 'GET', headers, ...body });
       }).catch(error => { this.pending.delete(id); signal?.removeEventListener('abort', aborted); reject(error instanceof RemoteNetworkError ? error : new RemoteNetworkError(Failure.WorkerUnavailable)); this.drain(); });
     });
   };
   /** Admission waits for an actual permit release; it never spins on the worker's Busy response. */
   readonly queuedFetch = (url: string, options: RequestInit = {}): Promise<Response> => {
-    if (options.body !== undefined && options.body !== null && typeof options.body !== 'string') return Promise.reject(new RemoteNetworkError(Failure.RequestInvalid));
-    let headers: Record<string, string>;
-    try { headers = Object.fromEntries(new Headers(options.headers)); } catch { return Promise.reject(new RemoteNetworkError(Failure.RequestInvalid)); }
-    const bodyBytes = Buffer.byteLength(String(options.body || '')), headerBytes = Buffer.byteLength(JSON.stringify(headers)), urlBytes = Buffer.byteLength(url);
-    if (bodyBytes > Limit.BodyBytes || headerBytes > Limit.HeaderBytes || urlBytes > Limit.HeaderBytes) return Promise.reject(new RemoteNetworkError(Failure.RequestBudget));
-    options = { ...options, headers };
-    const bytes = bodyBytes + headerBytes + urlBytes, lane = requestLane(url, options.method), tracker = currentRemoteTelemetryRequest();
-    if (this.queue.length >= 64 || this.queue.reduce((sum, item) => sum + item.bytes, bytes) > 8 * 1024 * 1024)
+    if (options.signal?.aborted) return Promise.reject(new RemoteNetworkError(Failure.Cancelled));
+    let headers: Record<string, string>, body: BodyAdmission, lane: Lane;
+    try { headers = Object.fromEntries(new Headers(options.headers)); body = admitBody(url, options); lane = requestLane(url, options.method); }
+    catch (error) { return Promise.reject(error instanceof RemoteNetworkError ? error : new RemoteNetworkError(Failure.RequestInvalid)); }
+    const headerBytes = Buffer.byteLength(JSON.stringify(headers)), urlBytes = Buffer.byteLength(JSON.stringify(url));
+    if (headerBytes > Limit.HeaderBytes || urlBytes > Limit.HeaderBytes) return Promise.reject(new RemoteNetworkError(Failure.RequestBudget));
+    // Include JSON/base64 IPC expansion before allocating the immutable body snapshot.
+    const bytes = body.bytes + headerBytes + urlBytes + 256, background = lane === 'background';
+    const queued = this.queue.filter(item => (item.lane === 'background') === background);
+    if (this.queue.length >= 64 || background && queued.length >= Limit.BackgroundQueueRequests
+      || queued.reduce((sum, item) => sum + item.bytes, bytes) > (background ? Limit.BackgroundQueueBytes : Limit.QueueBytes))
       return Promise.reject(new RemoteNetworkError(Failure.AdmissionBusy));
+    let snapshot: RemoteNetworkRequestBody;
+    try { snapshot = body.snapshot(); } catch { return Promise.reject(new RemoteNetworkError(Failure.RequestInvalid)); }
+    // Drop caller-owned views after snapshotting, including when waiting behind another part.
+    options = { ...options, body: undefined, headers };
+    const tracker = currentRemoteTelemetryRequest();
     return new Promise((resolve, reject) => {
       const remove = (): void => { const index = this.queue.indexOf(item); if (index >= 0) this.queue.splice(index, 1); options.signal?.removeEventListener('abort', item.cancel); };
       const item: QueuedRequest = { lane, bytes,
         cancel: () => { remove(); reject(new RemoteNetworkError(Failure.Cancelled)); },
         start: () => {
           remove();
-          const send = (): Promise<Response> => this.fetch(url, options);
+          const send = (): Promise<Response> => this.fetchPrepared(url, options, snapshot);
           void (tracker ? withRemoteTelemetryRequest(tracker, send) : send()).then(resolve, reject);
         } };
       if (options.signal?.aborted) { item.cancel(); return; }

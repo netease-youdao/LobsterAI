@@ -1,4 +1,6 @@
-const errorNames = new Set(['Error', 'TypeError', 'RangeError', 'AbortError', 'TimeoutError', 'AuthSessionRequestError']);
+import { remoteNetworkFailureValue } from './remoteNetworkProtocol';
+
+const errorNames = new Set(['Error', 'TypeError', 'RangeError', 'AbortError', 'TimeoutError', 'AuthSessionRequestError', 'RemoteNetworkError']);
 const transportCodes = new Set([
   'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE',
   'ABORT_ERR', 'ERR_INVALID_ARG_TYPE', 'ERR_INVALID_ARGUMENT', 'ERR_HTTP_INVALID_HEADER_VALUE', 'ERR_INVALID_CHAR',
@@ -11,8 +13,8 @@ function errorMetadata(error: unknown): { errorName: string; errorCode: string |
   for (let depth = 0; depth < 4 && current !== null && typeof current === 'object'; depth++) {
     const value = current as Record<string, unknown>;
     if (typeof value.name === 'string' && errorNames.has(value.name)) errorName = value.name;
-    if (typeof value.code === 'string' && (transportCodes.has(value.code) || netCode.test(value.code))) errorCode = value.code;
-    else if (typeof value.message === 'string' && netCode.test(value.message)) errorCode = value.message;
+    if (typeof value.code === 'string' && (transportCodes.has(value.code) || netCode.test(value.code) || remoteNetworkFailureValue(value.code))) errorCode = value.code;
+    else if (typeof value.message === 'string' && (netCode.test(value.message) || remoteNetworkFailureValue(value.message))) errorCode = value.message;
     current = value.originalError ?? value.cause;
   }
   return { errorName, errorCode };
@@ -23,7 +25,7 @@ export async function requestRemoteFilePart(pathname: string, init: RequestInit,
   const route = /^\/(?:api\/remote\/v1\/)?(artifact-uploads|input-assets)\/([A-Za-z0-9_-]{1,64})\/parts\/(\d{1,10})$/u.exec(pathname);
   if (init.method !== 'PUT' || !route) return send();
   const metadata = { kind: route[1], assetId: route[2], partNo: Number(route[3]), method: 'PUT',
-    requestBytes: init.body instanceof ArrayBuffer ? init.body.byteLength : null };
+    requestBytes: init.body instanceof ArrayBuffer || ArrayBuffer.isView(init.body) ? init.body.byteLength : null };
   const startedAt = Date.now();
   console.debug('[RemoteFileSync] Part request started', metadata);
   try {

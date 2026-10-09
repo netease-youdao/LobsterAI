@@ -1,4 +1,4 @@
-import { remoteNetworkBinaryDownload,remoteNetworkCapacities, RemoteNetworkFailure as Failure, type RemoteNetworkLane, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message, remoteNetworkRequestLane } from './remoteNetworkProtocol';
+import { remoteNetworkBinaryDownload,RemoteNetworkBodyEncoding, remoteNetworkCapacities, RemoteNetworkFailure as Failure, type RemoteNetworkLane, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message, remoteNetworkRequestLane,remoteNetworkUploadBytes } from './remoteNetworkProtocol';
 
 interface Request {
   controller: AbortController; lane: RemoteNetworkLane;
@@ -75,17 +75,26 @@ async function fetchRequest(message: any): Promise<void> {
   const controller = new AbortController(), request: Request = { controller, lane };
   requests.set(id, request);
   const binary = remoteNetworkBinaryDownload(message.url, message.method);
-  const timer = setTimeout(() => controller.abort(), binary ? Limit.BinaryTimeoutMs : 30000);
+  const uploadBytes = remoteNetworkUploadBytes(message.url, message.method);
+  const timer = setTimeout(() => controller.abort(), binary || uploadBytes ? Limit.BinaryTimeoutMs : 30000);
   try {
     const url = new URL(message.url);
+    let requestBody: RequestInit['body'] = message.body;
+    if (message.bodyEncoding !== undefined) {
+      if (message.bodyEncoding !== RemoteNetworkBodyEncoding.Base64 || !uploadBytes || typeof message.body !== 'string') throw new Error(Failure.RequestInvalid);
+      if (message.body.length > 4 * Math.ceil(uploadBytes / 3)) throw new Error(Failure.RequestBudget);
+      const decoded = Buffer.from(message.body, 'base64');
+      if (decoded.length > uploadBytes) throw new Error(Failure.RequestBudget);
+      if (decoded.toString('base64') !== message.body) throw new Error(Failure.RequestInvalid);
+      requestBody = decoded;
+    } else if (message.body !== undefined && typeof message.body !== 'string') throw new Error(Failure.RequestInvalid);
+    else if (Buffer.byteLength(message.body || '') > Limit.BodyBytes) throw new Error(Failure.RequestBudget);
     if (url.protocol !== 'https:' || !/^\/api\/remote\/v[1-3]\//u.test(url.pathname)
       || typeof message.method !== 'string' || !['GET','POST','PUT','PATCH','DELETE'].includes(message.method)
-      || message.body !== undefined && typeof message.body !== 'string'
-      || Buffer.byteLength(message.body || '') > Limit.BodyBytes
       || Buffer.byteLength(JSON.stringify(message.headers)) > Limit.HeaderBytes) throw new Error(Failure.RequestInvalid);
     // This notification carries no URL/body/auth data and must not change the HTTP outcome.
     try { process.send?.({ type: Message.FetchStarted, id }, () => {}); } catch { /* Best-effort telemetry only. */ }
-    const response = await fetch(url, { method: message.method, headers: message.headers, body: message.body,
+    const response = await fetch(url, { method: message.method, headers: message.headers, body: requestBody,
       signal: controller.signal, redirect: 'error' });
     const headers = Object.fromEntries(response.headers);
     if (Buffer.byteLength(JSON.stringify(headers)) > Limit.HeaderBytes) throw new Error(Failure.ResponseBudget);
@@ -111,7 +120,7 @@ async function fetchRequest(message: any): Promise<void> {
     if (jsonValid && !boundedJson(json)) throw new Error(Failure.ResponseBudget);
     emit({ type: Message.Result, id, status: response.status, headers, body, json, jsonValid });
   } catch (error) {
-    const allowed = new Set<string>([Failure.RequestInvalid,Failure.ResponseBudget]);
+    const allowed = new Set<string>([Failure.RequestInvalid,Failure.RequestBudget,Failure.ResponseBudget]);
     emit({ type: Message.Result, id, error: controller.signal.aborted ? Failure.Cancelled
       : error instanceof Error && allowed.has(error.message) ? error.message : Failure.Failed });
   } finally { clearTimeout(timer); requests.delete(id); }

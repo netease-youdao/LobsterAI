@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { fork } from 'child_process';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import fs from 'fs';
 import { createRequire } from 'module';
 import os from 'os';
@@ -12,7 +12,7 @@ import { Worker } from 'worker_threads';
 import { remoteWorkerBuilds } from '../../../remote-workers.config';
 import { RemoteHistoryJob } from './remoteHistoryJob';
 import { RemoteLiveProjectionJob } from './remoteLiveProjectionJob';
-import { RemoteNetworkLimit as NetworkLimit } from './remoteNetworkProtocol';
+import { RemoteNetworkBodyEncoding, RemoteNetworkFailure, RemoteNetworkLimit as NetworkLimit,RemoteNetworkMessage } from './remoteNetworkProtocol';
 import { RemoteNetworkTransport } from './remoteNetworkTransport';
 import { RemoteStore } from './remoteStore';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
@@ -101,6 +101,83 @@ describe('independent packaged remote workers', () => {
         expect(await closed).toEqual({ code }); expect(frames.mock.calls.length).toBe(mode === 'burst' ? 16 : 0);
       }
     } finally { transport.dispose(); }
+  });
+  it('uploads binary file parts through the real packaged network child', async () => {
+    const fixture = path.join(root, 'upload-network-fixture.cjs');
+    fs.writeFileSync(fixture, `
+      const {createHash}=require('crypto');
+      const stats={started:0,cancelled:0};
+      let lastTimeout=0;const realTimeout=setTimeout;
+      global.setTimeout=(fn,ms,...args)=>{if(ms===30000||ms===120000)lastTimeout=ms;return realTimeout(fn,ms,...args);};
+      global.fetch = async (url, options) => {
+        if (new URL(url).pathname.endsWith('/capabilities')) return new Response(JSON.stringify({code:0,data:{workerPid:process.pid,...stats}}));
+        stats.started++;
+        const mode=new URL(url).searchParams.get('mode');
+        if(mode==='unauthorized') return new Response(JSON.stringify({code:40100}),{status:401,headers:{'content-type':'application/json'}});
+        if(mode==='hold') return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>{stats.cancelled++;reject(new Error('aborted'));},{once:true}));
+        const bytes = Buffer.from(options.body);
+        return new Response(JSON.stringify({code:0,data:{bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex'),timeoutMs:lastTimeout}}));
+      };
+      require(${JSON.stringify(path.join(output, RemoteWorkerFile.Network))});
+    `);
+    const transport = new RemoteNetworkTransport(fork, fixture);
+    const base = 'https://example.com/api/remote/v1';
+    try {
+      const metadata = await (await transport.fetch(base + '/capabilities')).json();
+      expect(metadata.data.workerPid).not.toBe(process.pid);
+      for (const [route, length, offset] of [
+        ['artifact-uploads', 133604, 0], ['artifact-uploads', 3 * 1024 * 1024 + 123, 17],
+        ['artifact-uploads', NetworkLimit.ArtifactPartBytes, 0], ['input-assets', NetworkLimit.InputPartBytes, 19],
+      ] as const) {
+        const original = new Uint8Array(length + offset + 23);
+        for (let i = 0; i < original.length; i++) original[i] = i % 251;
+        const bytes = original.subarray(offset, offset + length);
+        const expected = createHash('sha256').update(bytes).digest('hex');
+        const response = await transport.queuedFetch(base + '/' + route + '/upload-1/parts/1', {
+          method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' },
+          body: offset ? bytes : original.buffer.slice(0, length),
+        });
+        expect(await response.json()).toMatchObject({ code: 0, data: { bytes: length, sha256: expected, timeoutMs: NetworkLimit.BinaryTimeoutMs } });
+      }
+      const part = base + '/artifact-uploads/upload-1/parts/1';
+      const denied = await transport.queuedFetch(part + '?mode=unauthorized', { method: 'PUT', body: new ArrayBuffer(4) });
+      expect(denied.status).toBe(401); expect(await denied.clone().json()).toEqual({ code: 40100 });
+      const abort = new AbortController();
+      const waiting = transport.queuedFetch(part + '?mode=hold', { method: 'PUT', body: new ArrayBuffer(4), signal: abort.signal });
+      const cancelled = expect(waiting).rejects.toThrow('CANCELLED');
+      await vi.waitFor(async () => expect((await (await transport.fetch(base + '/capabilities')).json()).data.started).toBe(6));
+      abort.abort(); await cancelled;
+      await vi.waitFor(async () => expect((await (await transport.fetch(base + '/capabilities')).json()).data.cancelled).toBe(1));
+    } finally { transport.dispose(); }
+  });
+  it('rejects malformed or oversized binary request IPC again inside the packaged child', async () => {
+    const fixture = path.join(root, 'rejected-upload-fixture.cjs');
+    fs.writeFileSync(fixture, `
+      global.fetch=async()=>new Response(JSON.stringify({code:0}));
+      require(${JSON.stringify(path.join(output, RemoteWorkerFile.Network))});
+    `);
+    const child = fork(fixture, [], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore','ignore','ignore','ipc'], serialization: 'json' });
+    const base = 'https://example.com/api/remote/v1';
+    const send = (message: Record<string, unknown>): Promise<any> => new Promise((resolve, reject) => {
+      const id = randomUUID(), timer = setTimeout(() => reject(new Error('No request rejection')), 5000);
+      const listener = (result: any): void => {
+        if (result.id !== id) return;
+        expect(result.type).not.toBe(RemoteNetworkMessage.FetchStarted);
+        if (result.type === RemoteNetworkMessage.Result) { clearTimeout(timer); child.off('message', listener); resolve(result); }
+      };
+      child.on('message', listener);
+      child.send({ type: RemoteNetworkMessage.Fetch, id, url: base + '/artifact-uploads/upload-1/parts/1', method: 'PUT', headers: {},
+        bodyEncoding: RemoteNetworkBodyEncoding.Base64, body: 'AP8=', ...message });
+    });
+    try {
+      for (const message of [
+        { url: base + '/capabilities' }, { url: base + '/artifact-uploads/upload-1/complete' }, { method: 'POST' },
+        { bodyEncoding: 'unknown' }, { body: '%%%=' }, { body: 'AP8' }, { body: 'AP9=' },
+      ]) expect((await send(message)).error).toBe(RemoteNetworkFailure.RequestInvalid);
+      expect((await send({ body: Buffer.alloc(NetworkLimit.ArtifactPartBytes + 1).toString('base64') })).error).toBe(RemoteNetworkFailure.RequestBudget);
+      expect((await send({ url: base + '/input-assets/asset-1/parts/1', body: Buffer.alloc(NetworkLimit.InputPartBytes + 1).toString('base64') })).error).toBe(RemoteNetworkFailure.RequestBudget);
+      expect((await send({ bodyEncoding: undefined, body: 'x'.repeat(NetworkLimit.BodyBytes + 1) })).error).toBe(RemoteNetworkFailure.RequestBudget);
+    } finally { child.kill('SIGKILL'); }
   });
   it('preserves binary input asset bytes in the packaged network child', async () => {
     const fixture = path.join(root, 'binary-network-fixture.cjs');
