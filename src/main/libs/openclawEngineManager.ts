@@ -18,6 +18,7 @@ import { type OpenClawDreamingRecoverySummary } from '../../shared/openclawEngin
 import { OpenClawStartupCompatibilityMode } from '../../shared/openclawEngine/startupCompatibility';
 import { OpenClawStartupMigrationStatus } from '../../shared/openclawEngine/startupMigration';
 import { t } from '../i18n';
+import { AwakeClock } from './awakeClock';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath, getSkillsRoot } from './coworkUtil';
 import {
   formatGatewayLogDateKey,
@@ -2155,6 +2156,11 @@ export class OpenClawEngineManager extends EventEmitter {
       baseTimeoutMs: timeoutMs,
       maxWaitMs: Math.max(DEFAULT_GATEWAY_STARTUP_WAIT_POLICY.maxWaitMs, timeoutMs),
     };
+    // Both limits count awake time only: a gateway frozen by system sleep
+    // resumes its startup on wake, so the wait must resume with it.
+    const clock = new AwakeClock(startedAt);
+    let lastOutputSeenAt = startedAt;
+    let lastOutputAwakeMs = 0;
     let extensionLogged = false;
     let pollCount = 0;
     return new Promise((resolve) => {
@@ -2172,7 +2178,12 @@ export class OpenClawEngineManager extends EventEmitter {
         }
 
         pollCount += 1;
-        const elapsedMs = Date.now() - startedAt;
+        const suspendedBeforeMs = clock.suspendedMs;
+        const elapsedMs = clock.observe(Date.now());
+        if (clock.suspendedMs > suspendedBeforeMs) {
+          console.log(`[OpenClaw] waitForGatewayReady: no poll for ${clock.suspendedMs - suspendedBeforeMs}ms `
+            + '(system sleep or a frozen process); that time does not count toward the startup limits');
+        }
 
         // Log verbose probe details every 10 polls (~6s) to diagnose startup delays.
         const verboseProbe = pollCount % 10 === 0;
@@ -2188,8 +2199,14 @@ export class OpenClawEngineManager extends EventEmitter {
           return;
         }
 
-        const lastActivityAt = Math.max(startedAt, this.gatewayLastOutputAt.get(child) ?? startedAt);
-        const silentMs = Math.max(0, startedAt + elapsedMs - lastActivityAt);
+        // Output is timed in awake time at the poll that first sees it, so a
+        // sleep between the last output and now cannot count as silence.
+        const outputAt = this.gatewayLastOutputAt.get(child) ?? startedAt;
+        if (outputAt > lastOutputSeenAt) {
+          lastOutputSeenAt = outputAt;
+          lastOutputAwakeMs = elapsedMs;
+        }
+        const silentMs = Math.max(0, elapsedMs - lastOutputAwakeMs);
         const outcome = evaluateGatewayStartupWait(elapsedMs, silentMs, policy);
         if (isGatewayStartupWaitOver(outcome)) {
           const reason = outcome === GatewayStartupWaitOutcome.Stalled

@@ -135,6 +135,43 @@ test('continuous output cannot extend repair beyond the absolute limit', async (
   });
 });
 
+const EIGHT_HOURS_MS = 8 * 60 * 60_000;
+
+test('a system sleep during Doctor does not expire its deadline on wake', async () => {
+  const pending = createOpenClawRepairRunner(backupDir)('/electron', ['openclaw.mjs', 'doctor', '--fix'], options);
+  await vi.advanceTimersByTimeAsync(60_000);
+  child.stderr.write('Migrating sessions\n');
+  await vi.advanceTimersByTimeAsync(1_000);
+  // Wall time jumps while the machine sleeps; no timer runs in between.
+  vi.setSystemTime(Date.now() + EIGHT_HOURS_MS);
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(child.kill).not.toHaveBeenCalled();
+  close(null, 'Doctor completed', 'Migrating sessions\n');
+  await expect(pending).resolves.toMatchObject({ code: 0 });
+  const { report } = diagnostics();
+  expect(report.outcome).toBe(OpenClawRepairProcessOutcome.Exited);
+  expect(report.suspendedMs).toBeGreaterThanOrEqual(EIGHT_HOURS_MS);
+  expect(report.awakeMs).toBeLessThan(75_000);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test('awake time still bounds a Doctor that stays silent across a sleep', async () => {
+  const pending = createOpenClawRepairRunner(backupDir)('/electron', ['openclaw.mjs', 'doctor'], options);
+  const rejection = expect(pending).rejects.toThrow('timed out');
+  await vi.advanceTimersByTimeAsync(100_000);
+  vi.setSystemTime(Date.now() + EIGHT_HOURS_MS);
+  // About 245s awake so far: the 300s silence budget is not spent yet.
+  await vi.advanceTimersByTimeAsync(150_000);
+  expect(child.kill).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+  close(interrupted(), '', '');
+  await rejection;
+  expect(diagnostics().report).toMatchObject({
+    outcome: OpenClawRepairProcessOutcome.TimedOut, timeoutReason: OpenClawRepairTimeoutReason.Idle,
+  });
+});
+
 test.each(['ENOENT', 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'])('preserves %s without calling it a timeout or success', async code => {
   const pending = createOpenClawRepairRunner(backupDir)('/electron', ['repair.mjs'], options);
   const rejection = expect(pending).rejects.toThrow(code);
