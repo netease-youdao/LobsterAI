@@ -136,6 +136,67 @@ describe('probeOpenClawGatewayStartup', () => {
   });
 });
 
+describe('gateway startup wait across system sleep', () => {
+  const EIGHT_POINT_SEVEN_HOURS_MS = 31_200_000;
+  let ready: boolean;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-10T01:30:04+08:00'));
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    ready = false;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const startWaiting = () => {
+    const child = Object.assign(new EventEmitter(), { pid: 4242, exitCode: null, signalCode: null });
+    const manager = Object.assign(Object.create(OpenClawEngineManager.prototype), {
+      gatewayProcess: child,
+      shutdownRequested: false,
+      expectedGatewayExits: new WeakSet(),
+      gatewayReadyProcesses: new WeakSet(),
+      gatewayLastOutputAt: new WeakMap([[child, Date.now()]]),
+      status: { phase: OpenClawEnginePhase.Starting, version: '2026.8.1', canRetry: false, gatewayPort: 18789 },
+      isGatewayStartupReady: async () => ready,
+    });
+    return (manager as unknown as { waitForGatewayReady(port: number, timeoutMs: number): Promise<boolean> })
+      .waitForGatewayReady(18789, 300_000);
+  };
+
+  test('resumes a startup frozen by system sleep instead of timing it out on wake', async () => {
+    // 2026-10-10 E2E: the gateway was 67s into startup when the machine slept for 8.7 hours.
+    const waiting = startWaiting();
+    let settled = false;
+    void waiting.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(67_000);
+    vi.setSystemTime(Date.now() + EIGHT_POINT_SEVEN_HOURS_MS);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(settled).toBe(false);
+
+    ready = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(waiting).resolves.toBe(true);
+  });
+
+  test('still gives up on a silent gateway once the awake deadline passes', async () => {
+    const waiting = startWaiting();
+    let settled = false;
+    void waiting.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(100_000);
+    vi.setSystemTime(Date.now() + EIGHT_POINT_SEVEN_HOURS_MS);
+    // About 194s awake: the 300s base deadline is measured in awake time.
+    await vi.advanceTimersByTimeAsync(195_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(107_000);
+    await expect(waiting).resolves.toBe(false);
+  });
+});
+
 describe('isOpenClawConfigStartupFailure', () => {
   test('matches OpenClaw config validation failures', () => {
     expect(isOpenClawConfigStartupFailure([

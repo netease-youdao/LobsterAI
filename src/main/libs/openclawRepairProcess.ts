@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { t } from '../i18n';
+import { AwakeClock } from './awakeClock';
 import type { StartupMigrationRunner } from './openclawStartupStateMigration';
 
 // Explicit repair loads the full CLI and can migrate a large profile. A cold
@@ -14,6 +15,10 @@ export const OPENCLAW_REPAIR_WAIT_POLICY = {
   idleTimeoutMs: 300_000,
   maxWaitMs: 900_000,
 } as const;
+
+// Keeps the awake clock observed while a command runs, so system sleep is
+// recognised and left out instead of expiring the deadline on wake.
+const REPAIR_AWAKE_CHECK_INTERVAL_MS = 5_000;
 
 export const OpenClawRepairProcessOutcome = {
   Running: 'running',
@@ -39,7 +44,12 @@ export function createOpenClawRepairRunner(backupDir: string): StartupMigrationR
     const baseTimeoutMs = Math.min(OPENCLAW_REPAIR_WAIT_POLICY.maxWaitMs,
       Math.max(options.timeoutMs, OPENCLAW_REPAIR_WAIT_POLICY.minimumTimeoutMs));
     let lastOutputAt = startedAt;
+    // Deadlines count awake time: Doctor frozen by system sleep resumes on
+    // wake, and killing it mid-write would be worse than waiting.
+    const clock = new AwakeClock(startedAt);
+    let lastOutputAwakeMs = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let awakeCheck: ReturnType<typeof setInterval> | undefined;
     let child: ChildProcess | undefined;
     let closed = false;
     let timeoutReason: TimeoutReason | undefined;
@@ -53,12 +63,15 @@ export function createOpenClawRepairRunner(backupDir: string): StartupMigrationR
     const finish = (error: ExecFileException | null, stdout: string, stderr: string) => {
       closed = true;
       if (timer) clearTimeout(timer);
+      if (awakeCheck) clearInterval(awakeCheck);
       child?.stdout?.removeListener('data', onOutput);
       child?.stderr?.removeListener('data', onOutput);
       const failed = Boolean(timeoutReason || (error && (error.killed || typeof error.code !== 'number')));
+      const awakeMs = clock.observe(Date.now());
       const report = {
         ...initialReport, pid: child?.pid ?? null,
         durationMs: Date.now() - startedAt, silentMs: Date.now() - lastOutputAt,
+        awakeMs, suspendedMs: clock.suspendedMs,
         outcome: timeoutReason ? OpenClawRepairProcessOutcome.TimedOut
           : failed ? OpenClawRepairProcessOutcome.Failed : OpenClawRepairProcessOutcome.Exited,
         code: error ? error.code ?? null : 0, signal: error?.signal ?? child?.signalCode ?? null,
@@ -76,7 +89,7 @@ export function createOpenClawRepairRunner(backupDir: string): StartupMigrationR
       if (failed) {
         console.error('[OpenClawRepair] Repair command failed:', { ...report, reportPath }, error);
         const message = timeoutReason ? t('openClawRepairCommandTimeout', {
-          command: description, seconds: Math.round(report.durationMs / 1000), path: reportPath,
+          command: description, seconds: Math.round(report.awakeMs / 1000), path: reportPath,
         }) : error?.message || t('openClawRepairCommandFailed', { command: description, path: reportPath });
         reject(new Error(message, { cause: error }));
       } else {
@@ -89,7 +102,7 @@ export function createOpenClawRepairRunner(backupDir: string): StartupMigrationR
 
     const stopAtDeadline = () => {
       if (closed || timeoutReason || !child || child.exitCode !== null || child.signalCode !== null) return;
-      timeoutReason = Date.now() - startedAt >= OPENCLAW_REPAIR_WAIT_POLICY.maxWaitMs
+      timeoutReason = clock.awakeMs >= OPENCLAW_REPAIR_WAIT_POLICY.maxWaitMs
         ? OpenClawRepairTimeoutReason.Limit : OpenClawRepairTimeoutReason.Idle;
       // Killing is not completion. Keep the maintenance guard until finish
       // sees close, so another repair cannot race this process's SQLite writer.
@@ -100,15 +113,17 @@ export function createOpenClawRepairRunner(backupDir: string): StartupMigrationR
     const scheduleDeadline = () => {
       if (closed || timeoutReason) return;
       if (timer) clearTimeout(timer);
-      const deadline = Math.min(startedAt + OPENCLAW_REPAIR_WAIT_POLICY.maxWaitMs,
-        Math.max(startedAt + baseTimeoutMs, lastOutputAt + OPENCLAW_REPAIR_WAIT_POLICY.idleTimeoutMs));
-      const remainingMs = deadline - Date.now();
+      const deadlineAwakeMs = Math.min(OPENCLAW_REPAIR_WAIT_POLICY.maxWaitMs,
+        Math.max(baseTimeoutMs, lastOutputAwakeMs + OPENCLAW_REPAIR_WAIT_POLICY.idleTimeoutMs));
+      const remainingMs = deadlineAwakeMs - clock.observe(Date.now());
       // Continuous output must not repeatedly postpone a timer already due.
       if (remainingMs <= 0) stopAtDeadline();
-      else timer = setTimeout(stopAtDeadline, remainingMs);
+      // A sleep before the timer fires leaves awake time owed: reschedule then.
+      else timer = setTimeout(scheduleDeadline, remainingMs);
     };
     function onOutput() {
       lastOutputAt = Date.now();
+      lastOutputAwakeMs = clock.observe(lastOutputAt);
       scheduleDeadline();
     }
 
@@ -128,6 +143,7 @@ export function createOpenClawRepairRunner(backupDir: string): StartupMigrationR
     }
     child.stdout?.on('data', onOutput);
     child.stderr?.on('data', onOutput);
+    awakeCheck = setInterval(() => clock.observe(Date.now()), REPAIR_AWAKE_CHECK_INTERVAL_MS);
     scheduleDeadline();
   });
 }
