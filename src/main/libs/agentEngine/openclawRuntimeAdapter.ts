@@ -241,6 +241,7 @@ import type {
   CoworkStartOptions,
   PermissionResult,
 } from './types';
+import { removeWorkspaceDeliveredInstructions } from './workspaceDeliveredInstructions';
 
 const OPENCLAW_GATEWAY_TOOL_EVENTS_CAP = 'tool-events';
 const OPENCLAW_BTW_SESSION_KEY_MAX_CHARS = 4_096;
@@ -6019,7 +6020,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     const sections: string[] = [];
     if (shouldInjectSystemPrompt) {
-      sections.push(this.buildSystemPromptPrefix(normalizedSystemPrompt));
+      sections.push(this.buildSystemPromptPrefix(
+        this.buildInjectedSystemPrompt(normalizedSystemPrompt, agentId),
+      ));
     }
     sections.push(buildOpenClawLocalTimeContextPrompt());
     if (currentModel) {
@@ -6136,8 +6139,24 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       '[LobsterAI system instructions]',
       'Apply the instructions below as the highest-priority guidance for this session.',
       'If earlier LobsterAI system instructions exist, replace them with this version.',
-      systemPrompt,
+      systemPrompt || 'No session-specific instructions apply; follow the workspace instructions in AGENTS.md.',
     ].join('\n');
+  }
+
+  // AGENTS.md is already in the system prompt, so injecting its sections again
+  // only repeats them (issue #2440). Any failure keeps the full prompt.
+  private buildInjectedSystemPrompt(systemPrompt: string, agentId?: string): string {
+    try {
+      return removeWorkspaceDeliveredInstructions({
+        systemPrompt,
+        stateDir: this.engineManager.getStateDir(),
+        agentId,
+        defaultSystemPrompt: this.store.getConfig().systemPrompt,
+      });
+    } catch (error) {
+      console.warn('[OpenClawRuntime] kept the full system prompt because AGENTS.md could not be compared:', error);
+      return systemPrompt;
+    }
   }
 
   private buildBridgePrefix(messages: CoworkMessage[], currentPrompt: string): string {
