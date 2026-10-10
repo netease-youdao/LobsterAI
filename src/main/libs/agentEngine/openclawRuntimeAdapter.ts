@@ -132,7 +132,7 @@ import {
   stripTrailingSilentReplyToken,
 } from '../openclawHistory';
 import { buildOpenClawLocalTimeContextPrompt } from '../openclawLocalTimeContextPrompt';
-import { resolveOpenClawThinkingLevelForModel } from '../openclawModelThinkingLevels';
+import { resolveModelThinkingLevelForModel, resolveOpenClawThinkingLevelForModel } from '../openclawModelThinkingLevels';
 import { consumeRecentOpenClawTokenProxyQuotaError } from '../openclawTokenProxy';
 import { isSystemProxyEnabled } from '../systemProxy';
 import {
@@ -5227,6 +5227,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   async patchSession(sessionId: string, patch: OpenClawSessionPatch): Promise<CoworkSessionPatchResult> {
     const session = this.store.getSession(sessionId);
+    if (patch.model !== undefined && session?.modelPresetId && (this.activeTurns.has(sessionId) || this.yieldedSessions.has(sessionId))) {
+      throw new Error(t('modelPresetSessionBusy'));
+    }
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
     }
@@ -5277,6 +5280,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           timeoutMs: OpenClawRuntimeAdapter.SESSION_PATCH_TIMEOUT_MS,
         });
         this.markGatewayRpcSuccess();
+        if (normalizedPatch.model) this.assertSessionModelRoute(sessionId, targetSessionKey, normalizedPatch.model, response);
         return response;
       } catch (error) {
         this.recordGatewayRpcFailure('sessions.patch', error);
@@ -5305,6 +5309,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       }
       return {
         modelOverride: modelOverride ?? '',
+        resolvedModelRef: checkSessionModelRoute(normalizedPatch.model ?? '', response).resolvedModelRef,
         ...(patchedThinkingLevel !== undefined ? { thinkingLevel: patchedThinkingLevel } : {}),
       };
     }
@@ -5461,7 +5466,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       );
       return;
     }
-    if (confirmedState && this.isGatewayRpcDegraded()) {
+    if (confirmedState && this.isGatewayRpcDegraded() && !this.store.getSession(sessionId)?.modelPresetId) {
       console.warn(
         '[OpenClawRuntime] skipped redundant sessions.patch before chat.send because gateway session RPCs are degraded.',
         `Session ${sessionId}.`,
@@ -5484,7 +5489,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           );
           return;
         }
-        if (currentConfirmedState && this.isGatewayRpcDegraded()) {
+        if (currentConfirmedState && this.isGatewayRpcDegraded() && !this.store.getSession(sessionId)?.modelPresetId) {
           console.warn(
             '[OpenClawRuntime] skipped queued redundant sessions.patch before chat.send because gateway session RPCs are degraded.',
             `Session ${sessionId}.`,
@@ -5503,7 +5508,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           sessionKey,
           patch: {
             model,
-            ...(openClawThinkingLevel ? { thinkingLevel: openClawThinkingLevel } : {}),
+            ...(openClawThinkingLevel
+              ? { thinkingLevel: openClawThinkingLevel }
+              : this.store.getSession(sessionId)?.modelPresetId ? { thinkingLevel: null } : {}),
             ...(isManagedSessionKey(sessionKey)
               ? { reasoningLevel: OpenClawSessionReasoningLevel.Stream }
               : {}),
@@ -5517,7 +5524,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         this.rememberSessionModelPatch(sessionId, sessionKey, model, source);
       });
     } catch (error) {
-      if (error instanceof SessionModelRouteError) {
+      if (error instanceof SessionModelRouteError || this.store.getSession(sessionId)?.modelPresetId) {
         this.sessionModelPatchStateBySession.delete(sessionId);
         throw error;
       }
@@ -5543,6 +5550,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     patchResult: OpenClawSessionPatchGatewayResult | undefined,
   ): void {
     const route = checkSessionModelRoute(requestedModelRef, patchResult);
+    if (this.store.getSession(sessionId)?.modelPresetId && route.resolvedModelRef !== requestedModelRef.trim()) {
+      throw new Error(t('modelPresetModelMismatch'));
+    }
     if (route.verdict === SessionModelRouteVerdict.Ok || !route.resolvedModelRef) return;
     const details = [
       `Session ${sessionId}.`,
@@ -5759,13 +5769,19 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (!session.modelOverride && currentModel && currentModel !== rawCurrentModel && agent?.id) {
       this.store.updateAgent(agent.id, { model: currentModel });
     }
+    const thinkingLevel = session.modelPresetId
+      ? resolveModelThinkingLevelForModel(currentModel, session.thinkingLevel ?? '') ?? ''
+      : session.thinkingLevel || '';
+    if (session.modelPresetId && session.thinkingLevel !== thinkingLevel) {
+      this.store.updateSession(sessionId, { thinkingLevel }, { touchUpdatedAt: false });
+    }
     try {
       firstResponseTiming.modelPatchStartedAtMs = Date.now();
       await this.ensureSessionModelForTurn({
         sessionId,
         sessionKey,
         model: currentModel,
-        thinkingLevel: session.thinkingLevel || undefined,
+        thinkingLevel: thinkingLevel || undefined,
         source: session.modelOverride
           ? SessionModelPatchSource.SessionOverride
           : SessionModelPatchSource.AgentModel,

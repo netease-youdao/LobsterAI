@@ -18,6 +18,7 @@ import {
 import type { ModelRuntimeProfile } from '@shared/providers/modelRuntimeProfiles';
 
 import type { EnterpriseAccountContext } from '../../shared/enterpriseAccount/types';
+import { ModelPresetId, parseModelPresetPreference } from '../../shared/modelPresets/constants';
 import {
   applyEnterpriseAccountContext,
   refreshEnterpriseAccountContext,
@@ -43,11 +44,13 @@ import { clearMediaAccountState } from '../store/slices/coworkSlice';
 import type { Model } from '../store/slices/modelSlice';
 import {
   clearServerModels,
+  setSelectedModel,
   setServerModels,
 } from '../store/slices/modelSlice';
 import { i18nService } from './i18n';
 import { LogReporterAction, reportYdAnalyzer } from './logReporter';
 import { getCreditQuotaSnapshot } from './lowCreditPurchaseOffer';
+import { modelPresetToModel } from './modelPresets';
 import {
   clearPendingPublishingConversionAttribution,
   reportPendingPublishingSubscriptionObserved,
@@ -1104,14 +1107,29 @@ class AuthService {
     requestSnapshot: AuthAccountRequestSnapshot,
   ): Promise<ServerModelLoadOutcome> {
     try {
-      const modelsResult = await window.electron.auth.getModels();
+      const [modelsResult, presetResult, preferences] = await Promise.all([
+        window.electron.auth.getModels(),
+        window.electron.modelPresets?.available().catch(() => ({ success: false, data: [] })),
+        window.electron.modelPresets?.getPreferences().catch(() => ({ success: false, data: {} })),
+      ]);
       if (!isAuthAccountRequestCurrent(requestSnapshot, store.getState().auth)) {
         writeAuthRendererLog('debug', 'discarded stale server model response after auth state changed');
         return ServerModelLoadOutcome.Abandoned;
       }
       if (modelsResult.success && Array.isArray(modelsResult.models)) {
         const serverModels = mapAvailableServerModelsToModels(modelsResult.models);
-        store.dispatch(setServerModels(serverModels));
+        const presets = presetResult?.success ? presetResult.data ?? [] : [];
+        presets.sort((a, b) => (a.presetId === ModelPresetId.Balanced ? 0 : 1) - (b.presetId === ModelPresetId.Balanced ? 0 : 1));
+        const presetModels = presets.map(preset => modelPresetToModel(preset));
+        store.dispatch(setServerModels([...presetModels, ...serverModels]));
+        if (preferences?.success) {
+          for (const [agentId, rawPreference] of Object.entries(preferences.data ?? {})) {
+            const preference = parseModelPresetPreference(rawPreference);
+            if (!preference) continue;
+            const model = presetModels.find(item => item.presetId === preference.presetId && item.accessible !== false);
+            if (model) store.dispatch(setSelectedModel({ agentId, model: { ...model, presetThinkingLevel: preference.thinkingLevel } }));
+          }
+        }
         writeAuthRendererLog(
           'debug',
           `loaded ${serverModels.length} server model(s) into renderer state`,

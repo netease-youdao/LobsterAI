@@ -20,6 +20,7 @@ import type {
   KitReference,
   ResolvedKitCapabilities,
 } from '../../shared/kit/constants';
+import { type ModelPresetId } from '../../shared/modelPresets/constants';
 import type {
   OpenClawEngineErrorCode,
   OpenClawEnginePhase as SharedOpenClawEnginePhase,
@@ -81,6 +82,8 @@ export interface CoworkLiveEditDiff {
 }
 
 export interface CoworkMessageMetadata {
+  modelPresetId?: ModelPresetId;
+  resolvedModelId?: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;
   toolResult?: string;
@@ -175,6 +178,7 @@ export interface CoworkSession {
   cwd: string;
   systemPrompt: string;
   modelOverride: string;
+  modelPresetId?: ModelPresetId | null;
   thinkingLevel?: ModelThinkingLevel | '';
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];
@@ -410,6 +414,7 @@ export interface CoworkStartOptions {
   resolvedKitCapabilities?: ResolvedKitCapabilities;
   agentId?: string;
   modelOverride?: string;
+  modelPresetId?: ModelPresetId;
   thinkingLevel?: ModelThinkingLevel;
   imageAttachments?: CoworkImageAttachment[];
   mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };

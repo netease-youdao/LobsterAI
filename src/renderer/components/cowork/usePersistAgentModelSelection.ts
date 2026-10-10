@@ -38,7 +38,7 @@ export function usePersistAgentModelSelection({
   ): Promise<boolean> => {
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
-    const modelRef = toOpenClawModelRef(model);
+    const modelRef = model.presetId ? model.id : toOpenClawModelRef(model);
     setIsPersistingAgentModel(true);
     logAgentModelPersistence(
       'debug',
@@ -46,6 +46,13 @@ export function usePersistAgentModelSelection({
     );
 
     try {
+      if (model.presetId) {
+        const result = await window.electron.modelPresets.setPreference(agentId, model.presetId, thinkingLevel || undefined);
+        if (!result.success) throw new Error(result.error || i18nService.t('agentSaveFailed'));
+        if (requestId !== requestIdRef.current) return false;
+        dispatch(setSelectedModel({ agentId, model: { ...model, presetThinkingLevel: thinkingLevel || undefined } }));
+        return true;
+      }
       const updatedAgent = await agentService.updateAgent(agentId, {
         model: modelRef,
         thinkingLevel,
@@ -61,6 +68,8 @@ export function usePersistAgentModelSelection({
         return false;
       }
 
+      const cleared = await window.electron.modelPresets.setPreference(agentId, null);
+      if (!cleared.success) throw new Error(cleared.error || i18nService.t('agentSaveFailed'));
       dispatch(setSelectedModel({ agentId, model }));
       if (syncDefaultModel) {
         dispatch(setDefaultSelectedModel(model));

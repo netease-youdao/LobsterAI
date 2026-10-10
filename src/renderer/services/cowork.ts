@@ -27,6 +27,8 @@ import {
   type CoworkSteerRequest,
   CoworkSteerStatus,
 } from '../../shared/cowork/steer';
+import type { ModelPresetId } from '../../shared/modelPresets/constants';
+import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 import { store } from '../store';
 import {
   addMessage,
@@ -2187,6 +2189,15 @@ class CoworkService {
 
     const finalView = readWindow();
     return Boolean(finalView && finalView.offset <= 0 && finalView.loaded >= finalView.total);
+  }
+
+  async selectSessionModelPreset(sessionId: string, presetId: ModelPresetId, thinkingLevel?: ModelThinkingLevel): Promise<CoworkSession> {
+    const result = await window.electron.modelPresets.selectSession(sessionId, presetId, thinkingLevel);
+    if (!result.success || !result.data) throw new Error(result.error || i18nService.t('coworkModelSwitchFailed'));
+    if (store.getState().cowork.currentSessionId === sessionId) {
+      store.dispatch(setCurrentSession(result.data));
+    }
+    return result.data;
   }
 
   async patchSession(sessionId: string, patch: OpenClawSessionPatch): Promise<CoworkSession | null> {

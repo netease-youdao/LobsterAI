@@ -102,9 +102,11 @@ import {
 } from '../shared/localWebServices/constants';
 import { McpIpcChannel } from '../shared/mcp/constants';
 import type { McpToolDiscoveryRequest } from '../shared/mcp/toolDiscovery';
+import { type ModelPresetId, ModelPresetIpc } from '../shared/modelPresets/constants';
 import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
+import type { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import {
   type ShareDeploymentAnalyzeProjectInput,
   type ShareDeploymentCreateNodeInput,
@@ -551,6 +553,7 @@ contextBridge.exposeInMainWorld('electron', {
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       agentId?: string;
       modelOverride?: string;
+      modelPresetId?: ModelPresetId;
       thinkingLevel?: string;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string }; mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; dataUrl?: string; role?: string }>;
@@ -1381,6 +1384,12 @@ contextBridge.exposeInMainWorld('electron', {
   },
   networkStatus: {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
+  },
+  modelPresets: {
+    available: () => ipcRenderer.invoke(ModelPresetIpc.Available),
+    getPreferences: () => ipcRenderer.invoke(ModelPresetIpc.GetPreferences),
+    setPreference: (agentId: string, presetId: ModelPresetId | null, thinkingLevel?: ModelThinkingLevel) => ipcRenderer.invoke(ModelPresetIpc.SetPreference, agentId, presetId, thinkingLevel),
+    selectSession: (sessionId: string, presetId: ModelPresetId, thinkingLevel?: ModelThinkingLevel) => ipcRenderer.invoke(ModelPresetIpc.SelectSession, sessionId, presetId, thinkingLevel),
   },
   auth: {
     login: (loginUrl?: string) => ipcRenderer.invoke(AuthIpcChannel.Login, { loginUrl }),

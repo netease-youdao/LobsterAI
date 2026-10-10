@@ -178,6 +178,7 @@ import {
   LocalWebServicesIpc,
 } from '../shared/localWebServices/constants';
 import { canonicalizeMediaModelId, HAPPYHORSE_1_1_MODEL_ID, mediaModelDisplayName } from '../shared/mediaModelAliases';
+import { type ModelPresetId,parseModelPresetId } from '../shared/modelPresets/constants';
 import {
   normalizeNotificationSettings,
   type NotificationSettings,
@@ -444,6 +445,7 @@ import {
   MainWindowLoadErrorCode,
 } from './libs/mainWindowLoadRecovery';
 import { inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
+import { createModelPresetClient, registerModelPresetIpc } from './libs/modelPresets';
 import {
   migrateAgentModelRefs,
   parsePrimaryModelRef,
@@ -7962,6 +7964,31 @@ if (!gotTheLock) {
     }
   });
 
+  const modelPresetClient = createModelPresetClient({
+    fetchWithAuth,
+    serverBaseUrl: getServerApiBaseUrl,
+    headers: () => buildServerModelCapabilityHeaders(app.getVersion()),
+    isAccountCurrent: () => {
+      const generation = authAccountGeneration;
+      const scope = getCurrentMediaAccountScope();
+      return () => generation === authAccountGeneration
+        && isMediaAccountScopeSnapshotCurrent(scope, getCurrentMediaAccountScope());
+    },
+  });
+  const modelPresetSelection = registerModelPresetIpc({
+    ipcMain, client: modelPresetClient, getStore, getSessions: getCoworkStore,
+    getRuntime: getCoworkEngineRouter,
+    ownerAccountKey: () => getCurrentMediaAccountScope()?.ownerAccountKey ?? null,
+    ensureModelsReady: () => loadAvailableServerModels({ reason: 'chat-model-preset', awaitConfigSync: true }),
+    isAccountCurrent: () => {
+      const generation = authAccountGeneration;
+      const scope = getCurrentMediaAccountScope();
+      return () => generation === authAccountGeneration
+        && isMediaAccountScopeSnapshotCurrent(scope, getCurrentMediaAccountScope());
+    },
+    t,
+  });
+
   ipcMain.handle(AuthIpcChannel.GetModels, async () => {
     try {
       const tokens = getAuthTokens();
@@ -9466,6 +9493,7 @@ if (!gotTheLock) {
         imageAttachments?: CoworkImageAttachmentMain[];
         agentId?: string;
         modelOverride?: string;
+        modelPresetId?: ModelPresetId;
         thinkingLevel?: string;
         mediaSelection?: {
           mode: 'auto' | 'image' | 'video' | 'none';
@@ -9488,14 +9516,19 @@ if (!gotTheLock) {
           `Image attachments ${options.imageAttachments?.length ?? 0}.`,
           `Agent ${options.agentId || 'main'}.`,
         );
-        const modelRunGate = await ensureServerModelReadyForRun(
-          resolveCoworkRunModelRef({
-            modelOverride: options.modelOverride,
-            agentId: options.agentId,
-          }),
-        );
-        if (modelRunGate.allowed === false) {
-          return { success: false, error: modelRunGate.error };
+        if (options.modelPresetId !== undefined && !parseModelPresetId(options.modelPresetId)) {
+          return { success: false, error: t('modelPresetInvalidSession') };
+        }
+        if (!options.modelPresetId) {
+          const modelRunGate = await ensureServerModelReadyForRun(
+            resolveCoworkRunModelRef({
+              modelOverride: options.modelOverride,
+              agentId: options.agentId,
+            }),
+          );
+          if (modelRunGate.allowed === false) {
+            return { success: false, error: modelRunGate.error };
+          }
         }
         const engineStatus = await ensureOpenClawRunningForCowork();
         if (engineStatus.phase !== 'running') {
@@ -9561,16 +9594,29 @@ if (!gotTheLock) {
           );
         }
 
-        const session = coworkStoreInstance.createSession(
+        let session = coworkStoreInstance.createSession(
           title,
           taskWorkingDirectory,
           persistedSystemPrompt,
           config.executionMode || 'local',
           runtimeSkillIds || [],
           options.agentId || 'main',
-          options.modelOverride || '',
+          options.modelPresetId ? '' : options.modelOverride || '',
           { thinkingLevel: thinkingLevel || '' },
         );
+
+        if (options.modelPresetId !== undefined) {
+          const presetId = parseModelPresetId(options.modelPresetId);
+          if (!presetId) throw new Error(t('modelPresetInvalidSession'));
+          try {
+            session = await modelPresetSelection.choose(session.id, presetId, Boolean(options.imageAttachments?.length), true);
+            const modelRunGate = await ensureServerModelReadyForRun(session.modelOverride);
+            if (modelRunGate.allowed === false) throw new Error(modelRunGate.error);
+          } catch (error) {
+            coworkStoreInstance.updateSession(session.id, { status: 'error' });
+            throw error;
+          }
+        }
 
         if (options.modelOverride) {
           console.log(
@@ -11096,9 +11142,11 @@ if (!gotTheLock) {
       if (patch.model !== undefined || patch.thinkingLevel !== undefined) {
         const sessionUpdates: {
           modelOverride?: string;
+          modelPresetId?: ModelPresetId | null;
           thinkingLevel?: ReturnType<typeof parseModelThinkingLevel> | '';
         } = {};
         if (patch.model !== undefined) {
+          sessionUpdates.modelPresetId = null;
           sessionUpdates.modelOverride =
             patchResult && typeof patchResult.modelOverride === 'string'
               ? patchResult.modelOverride

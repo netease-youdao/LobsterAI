@@ -6,6 +6,16 @@ export type LanguageType = 'zh' | 'en';
 // 语言文本映射
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    modelPresetBalanced: '均衡',
+    modelPresetUltimate: '极致',
+    modelPresetThinkingDefault: '模型默认',
+    modelPresetPricingHint: '按候选模型权重选择，当前会话保持固定。实际积分按底层模型扣费。',
+    modelPresetLoginRequired: '请登录后选择模型模式。',
+    modelPresetInvalidSession: '无效的聊天模型模式或会话。',
+    modelPresetSessionBusy: '请等待当前回复结束后再切换模型。',
+    modelPresetModelMismatch: '实际模型与所选模型不一致，请重新选择。',
+    modelPresetAccountChanged: '账号已切换，请重新选择模型。',
+
     officeSaved: '已自动保存',
     officePending: '等待保存…',
     officeSaving: '正在保存…',
@@ -4428,6 +4438,16 @@ const translations: Record<LanguageType, Record<string, string>> = {
     workspaceDiffIncomplete: '部分文件超出读取限额，行数统计不完整。',
   },
   en: {
+    modelPresetBalanced: 'Balanced',
+    modelPresetUltimate: 'Ultimate',
+    modelPresetThinkingDefault: 'Model default',
+    modelPresetPricingHint: 'Weighted model selection stays fixed for this conversation. Credits are charged at the underlying model rate.',
+    modelPresetLoginRequired: 'Sign in to choose a model preset.',
+    modelPresetInvalidSession: 'Invalid chat model preset or session.',
+    modelPresetSessionBusy: 'Wait for the current reply to finish before switching models.',
+    modelPresetModelMismatch: 'The resolved model differs from your selection. Please select again.',
+    modelPresetAccountChanged: 'The account changed. Please select a model again.',
+
     officeSaved: 'All changes saved',
     officePending: 'Waiting to save…',
     officeSaving: 'Saving…',

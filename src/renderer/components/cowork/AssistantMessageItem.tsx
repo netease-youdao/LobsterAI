@@ -4,9 +4,11 @@ import {
   type CoworkGoal,
   formatCoworkGoalCompletionDuration,
 } from '../../../shared/cowork/goal';
+import { ModelPresetId, parseModelPresetId } from '../../../shared/modelPresets/constants';
 import { i18nService } from '../../services/i18n';
 import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
 import { formatMessageDateTime } from '../../utils/tokenFormat';
+import BalancedModelIcon from '../icons/BalancedModelIcon';
 import GoalIcon from '../icons/GoalIcon';
 import MessageForkIcon from '../icons/MessageForkIcon';
 import MarkdownContent from '../MarkdownContent';
@@ -84,6 +86,13 @@ const AssistantMessageItem: React.FC<{
     proposedPlan.planText,
   ].filter((part): part is string => Boolean(part)).join('\n\n');
   const modelLabel = getMessageModelLabel(turnMetadata);
+  const isBalancedPreset = parseModelPresetId(turnMetadata?.modelPresetId) === ModelPresetId.Balanced;
+  const modelLabelNode = modelLabel && (
+    <span className="inline-flex items-center gap-1">
+      {isBalancedPreset && <BalancedModelIcon className="h-3.5 w-3.5 shrink-0" />}
+      <span>{modelLabel}</span>
+    </span>
+  );
   const goalCompletionDuration = completedGoal
     ? formatCoworkGoalCompletionDuration(completedGoal)
     : null;
@@ -146,7 +155,7 @@ const AssistantMessageItem: React.FC<{
                   </span>
                 )}
                 <span>{formatMessageDateTime(message.timestamp)}</span>
-                {modelLabel && <span>{modelLabel}</span>}
+                {modelLabelNode}
                 {turnUsageSlot}
                 {onFork && (
                   <ForkButton
@@ -197,7 +206,7 @@ const AssistantMessageItem: React.FC<{
             </span>
           )}
           <span>{formatMessageDateTime(message.timestamp)}</span>
-          {modelLabel && <span>{modelLabel}</span>}
+          {modelLabelNode}
           {turnUsageSlot}
           {onFork && (
             <ForkButton

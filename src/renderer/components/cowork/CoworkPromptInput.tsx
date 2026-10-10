@@ -40,6 +40,7 @@ import {
   type CoworkPendingSteer,
   CoworkSteerStatus,
 } from '../../../shared/cowork/steer';
+import { isChatPresetSession } from '../../../shared/modelPresets/constants';
 import { agentService } from '../../services/agent';
 import { authService } from '../../services/auth';
 import { configService, ConfigServiceEvent } from '../../services/config';
@@ -645,7 +646,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   );
   const isPlanMode = draftCollaborationMode === CoworkCollaborationMode.Plan;
   const currentAgent = agents.find((agent) => agent.id === currentAgentId);
-  const currentAgentSelectedModel = useAgentSelectedModel(currentAgentId, currentAgent?.model ?? '');
+  const currentAgentSelectedModel = useAgentSelectedModel(
+    currentAgentId, currentAgent?.model ?? '', !sessionId || !currentSession || isChatPresetSession(currentSession),
+  );
   const {
     isPersistingAgentModel,
     persistAgentModelSelection,
@@ -658,6 +661,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     hasInvalidExplicitModel: agentModelIsInvalid,
   } = resolveAgentModelSelection({
     sessionModel: currentSession && currentSession.id === sessionId ? currentSession.modelOverride : '',
+    sessionPresetId: currentSession && currentSession.id === sessionId ? currentSession.modelPresetId : null,
     agentModel: currentAgent?.model ?? '',
     availableModels,
     fallbackModel: currentAgentSelectedModel,
@@ -706,7 +710,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     effectiveSelectedModel,
     sessionId && currentSession?.id === sessionId
       ? currentSession.thinkingLevel
-      : currentAgent?.thinkingLevel,
+      : effectiveSelectedModel?.presetId ? effectiveSelectedModel.presetThinkingLevel : currentAgent?.thinkingLevel,
   );
   const modelSupportsImage = !!effectiveSelectedModel?.supportsImage;
   const hasAccessibleUserModel = useMemo(
@@ -2899,6 +2903,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const largeModelSelector = showModelSelector ? (
     <div className="flex flex-col items-start gap-1">
       <ModelSelector
+        allowPresets={!sessionId || !currentSession || isChatPresetSession(currentSession)}
         compact={useHomeContextLayout}
         dropdownDirection="up"
         alignDropdownToTriggerEnd={useHomeContextLayout}
@@ -2912,18 +2917,31 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         onChange={async (nextModel, meta: ModelSelectorChangeMeta) => {
           if (isPatchingModel || isPersistingAgentModel) return;
           if (!nextModel) return;
-          const selectedModel = meta.group === ModelSelectorGroup.Server
+          const keepsBoundPreset = !!(sessionId && nextModel.presetId && currentSession && currentSession.id === sessionId
+            && currentSession.modelPresetId === nextModel.presetId && currentSession.modelOverride);
+          if (keepsBoundPreset) return;
+          const selectedModel = !keepsBoundPreset && meta.group === ModelSelectorGroup.Server
             ? availableModels.find(model => (
               model.isServerModel
               && model.id === nextModel.id
               && model.accessible !== false
             )) ?? nextModel
             : nextModel;
-          const modelRef = toOpenClawModelRef(selectedModel);
-          const nextThinkingLevel = resolveModelThinkingLevel(
-            selectedModel,
-            meta.thinkingLevel,
-          ) ?? '';
+          const nextThinkingLevel = selectedModel.presetId && !keepsBoundPreset
+            ? meta.thinkingLevel ?? ''
+            : resolveModelThinkingLevel(selectedModel, meta.thinkingLevel) ?? '';
+          if (sessionId && selectedModel.presetId && !keepsBoundPreset) {
+            setIsPatchingModel(true);
+            try {
+              await coworkService.selectSessionModelPreset(sessionId, selectedModel.presetId, nextThinkingLevel || undefined);
+              void coworkService.refreshContextUsage(sessionId, { notifyCompaction: false });
+            } catch (error) {
+              window.dispatchEvent(new CustomEvent('app:showToast', { detail: error instanceof Error ? error.message : i18nService.t('coworkModelSwitchFailed') }));
+            } finally { setIsPatchingModel(false); }
+            return;
+          }
+          const modelRef = keepsBoundPreset ? currentSession!.modelOverride
+            : selectedModel.presetId ? selectedModel.id : toOpenClawModelRef(selectedModel);
           if (sessionId) {
             const requestId = modelPatchRequestIdRef.current + 1;
             modelPatchRequestIdRef.current = requestId;
@@ -2947,7 +2965,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
             try {
               const patchedSession = await coworkService.patchSession(sessionId, {
-                model: modelRef,
+                ...(keepsBoundPreset ? {} : { model: modelRef }),
                 thinkingLevel: nextThinkingLevel || null,
               });
               if (requestId !== modelPatchRequestIdRef.current) return;

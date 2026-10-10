@@ -16,6 +16,15 @@ export type LanguageType = 'zh' | 'en';
 
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    modelPresetBalanced: '均衡',
+    modelPresetUltimate: '极致',
+    modelPresetPricingHint: '按候选模型权重选择，当前会话保持固定。实际积分按底层模型扣费。',
+    modelPresetLoginRequired: '请登录后选择模型模式。',
+    modelPresetInvalidSession: '无效的聊天模型模式或会话。',
+    modelPresetSessionBusy: '请等待当前回复结束后再切换模型。',
+    modelPresetModelMismatch: '实际模型与所选模型不一致，请重新选择。',
+    modelPresetAccountChanged: '账号已切换，请重新选择模型。',
+
     browserPasskeyChooseAccountTitle: '使用通行密钥',
     browserPasskeyChooseAccountMessage: '选择用于登录 {site} 的账号',
     browserPasskeyUnnamedAccount: '已保存的账号',
@@ -414,6 +423,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    modelPresetBalanced: 'Balanced',
+    modelPresetUltimate: 'Ultimate',
+    modelPresetPricingHint: 'Weighted model selection stays fixed for this conversation. Credits are charged at the underlying model rate.',
+    modelPresetLoginRequired: 'Sign in to choose a model preset.',
+    modelPresetInvalidSession: 'Invalid chat model preset or session.',
+    modelPresetSessionBusy: 'Wait for the current reply to finish before switching models.',
+    modelPresetModelMismatch: 'The resolved model differs from your selection. Please select again.',
+    modelPresetAccountChanged: 'The account changed. Please select a model again.',
+
     openClawRepairCommandTimeout: 'Repair command {command} timed out after {seconds} seconds. Repair has stopped. Diagnostics: {path}',
     openClawRepairCommandFailed: 'Repair command {command} did not complete. Diagnostics: {path}',
     browserPasskeyChooseAccountTitle: 'Use a passkey',

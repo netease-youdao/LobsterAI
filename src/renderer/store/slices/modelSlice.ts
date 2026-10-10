@@ -2,12 +2,15 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { ProviderName } from '@shared/providers/constants';
 import type { LobsterAIRequestCapability } from '@shared/providers/lobsterAIRequestOptions';
 import type { ModelRuntimeProfile } from '@shared/providers/modelRuntimeProfiles';
-import type { ModelThinkingConfig } from '@shared/providers/modelThinking';
+import type { ModelThinkingConfig, ModelThinkingLevel } from '@shared/providers/modelThinking';
 
+import type { ModelPresetId } from '../../../shared/modelPresets/constants';
 import { defaultConfig, getProviderDisplayName } from '../../config';
 import { resolveOpenClawModelRef } from '../../utils/openclawModelRef';
 
 export interface Model {
+  presetId?: ModelPresetId;
+  presetThinkingLevel?: ModelThinkingLevel;
   id: string;
   name: string;
   provider?: string; // 模型所属的提供商
@@ -67,10 +70,12 @@ function selectPreferredAccessibleModel(
   currentModel: Model,
 ): Model {
   const matchedModel = allAvailableModels.find(m => isSameModelIdentity(m, currentModel));
-  if (isModelAccessible(matchedModel)) {
+  if (!matchedModel?.presetId && isModelAccessible(matchedModel)) {
     return matchedModel;
   }
-  return allAvailableModels.find(isModelAccessible) ?? matchedModel ?? allAvailableModels[0] ?? currentModel;
+  return allAvailableModels.find(model => !model.presetId && isModelAccessible(model))
+    ?? (matchedModel && !matchedModel.presetId ? matchedModel : undefined)
+    ?? allAvailableModels.find(model => !model.presetId) ?? currentModel;
 }
 
 // 从 providers 配置中构建初始可用模型列表
@@ -118,6 +123,7 @@ export function selectAgentSelectedModel(
   agentModelRef: string,
 ): Model {
   const override = modelState.selectedModelByAgent[agentId];
+  if (override?.presetId && isModelAccessible(override)) return override;
   const trimmed = agentModelRef.trim();
   if (trimmed) {
     const resolved = resolveOpenClawModelRef(trimmed, modelState.availableModels);
@@ -130,7 +136,7 @@ export function selectAgentSelectedModel(
   if (isModelAccessible(modelState.defaultSelectedModel)) {
     return modelState.defaultSelectedModel;
   }
-  return modelState.availableModels.find(isModelAccessible) ?? modelState.defaultSelectedModel;
+  return modelState.availableModels.find(model => !model.presetId && isModelAccessible(model)) ?? modelState.defaultSelectedModel;
 }
 
 /**
@@ -171,7 +177,7 @@ const modelSlice = createSlice({
       state.selectedModelByAgent[action.payload.agentId] = action.payload.model;
     },
     setDefaultSelectedModel: (state, action: PayloadAction<Model>) => {
-      if (action.payload.accessible === false) return;
+      if (action.payload.presetId || action.payload.accessible === false) return;
       state.defaultSelectedModel = action.payload;
     },
     clearAgentSelectedModel: (state, action: PayloadAction<string>) => {

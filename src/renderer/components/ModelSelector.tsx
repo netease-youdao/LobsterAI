@@ -18,9 +18,11 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { ModelPresetId } from '../../shared/modelPresets/constants';
 import { getProviderIcon, ProviderIconId } from '../providers/uiRegistry';
 import { authService } from '../services/auth';
 import { i18nService } from '../services/i18n';
+import { modelPresetName } from '../services/modelPresets';
 import {
   readRememberedModelThinkingLevel,
   rememberModelThinkingLevel,
@@ -30,6 +32,7 @@ import type { Model } from '../store/slices/modelSlice';
 import { getModelIdentityKey, isSameModelIdentity, setSelectedModel } from '../store/slices/modelSlice';
 import Modal from './common/Modal';
 import { resolvePopoverPlacement } from './cowork/popoverPlacement';
+import BalancedModelIcon from './icons/BalancedModelIcon';
 import ModelThinkingMenu, {
   getModelThinkingLevelLabel,
 } from './modelSelector/ModelThinkingMenu';
@@ -37,6 +40,7 @@ import { useModelPurchaseOffer } from './modelSelector/useModelPurchaseOffer';
 import PurchaseOfferCountdown from './PurchaseOfferCountdown';
 
 interface ModelSelectorProps {
+  allowPresets?: boolean;
   dropdownDirection?: 'up' | 'down' | 'auto';
   /**
    * Controlled mode: the currently selected Model (or `null` for "default").
@@ -376,21 +380,24 @@ export function canConfigureModelThinking(
     | 'accessible'
     | 'agenticReady'
     | 'isServerModel'
+    | 'presetId'
     | 'requestCapabilities'
     | 'runtimeProfile'
     | 'thinkingConfig'
   > | null | undefined,
 ): boolean {
   return !!model?.thinkingConfig
+    && !model.presetId
     && supportsLobsterAIRequestOptionsV1(model.requestCapabilities)
     && model.accessible !== false
     && !isModelAgenticBlocked(model);
 }
 
 export function supportsConfigurableModelThinkingProtocol(
-  model: Pick<Model, 'requestCapabilities' | 'thinkingConfig'> | null | undefined,
+  model: Pick<Model, 'presetId' | 'requestCapabilities' | 'thinkingConfig'> | null | undefined,
 ): boolean {
   return !!model?.thinkingConfig
+    && !model.presetId
     && supportsLobsterAIRequestOptionsV1(model.requestCapabilities);
 }
 
@@ -440,6 +447,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   alignDropdownToTriggerEnd = false,
   triggerMaxWidthClassName,
   thinkingLevel,
+  allowPresets = false,
 }) => {
   const dispatch = useDispatch();
   const [isOpen, setIsOpen] = React.useState(false);
@@ -478,7 +486,9 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const selectedModel = controlled ? value ?? null : globalSelectedModel;
   const selectedModelKey = selectedModel ? getModelIdentityKey(selectedModel) : '';
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
-  const serverModels = availableModels.filter(m => m.isServerModel);
+  const serverModels = availableModels.filter(m => m.isServerModel && (allowPresets || !m.presetId))
+    .map(model => model.presetId && model.presetId === selectedModel?.presetId
+      ? { ...selectedModel, costMultiplier: model.costMultiplier } : model);
   const userModels = availableModels.filter(m => !m.isServerModel);
   const modelGroups = [
     ...(serverModels.length > 0
@@ -537,12 +547,20 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const providerKey = model.providerKey?.trim();
     if (providerKey && providerKey !== ProviderName.LobsteraiServer) return providerKey;
 
-    const searchableText = `${model.name} ${model.id}`;
+    const searchableText = `${model.presetId ? modelPresetName(model.presetId) : model.name} ${model.id}`;
     return MODEL_ICON_PROVIDER_HINTS.find(({ pattern }) => pattern.test(searchableText))?.providerName
       ?? providerKey
       ?? '';
   };
   const renderProviderIcon = (model: Model): React.ReactNode => {
+    if (model.presetId === ModelPresetId.Balanced) return (
+      <BalancedModelIcon className={MODEL_ICON_CLASS_NAME} />
+    );
+    if (model.presetId === ModelPresetId.Ultimate) return (
+      <svg viewBox="0 0 24 24" className={MODEL_ICON_CLASS_NAME} fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+        <path d="M6 3h12l4 7-10 12L2 10 6 3Zm-4 7h20M6 3l6 19L18 3" strokeLinejoin="round" />
+      </svg>
+    );
     const icon = getProviderIcon(resolveModelIconProviderKey(model));
     if (!React.isValidElement<{ className?: string }>(icon)) return icon;
 
@@ -744,9 +762,17 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     return resolvePickerThinkingLevel({
       config,
       requestedLevel,
-      selectedModelLevel: isSelected(model) ? thinkingLevel : undefined,
-      rememberedLevel: readRememberedModelThinkingLevel(getModelIdentityKey(model)),
+      selectedModelLevel: isSelected(model) ? thinkingLevel : model.presetThinkingLevel,
+      rememberedLevel: model.presetId ? undefined : readRememberedModelThinkingLevel(getModelIdentityKey(model)),
     });
+  };
+
+  const presetUsesDefaultThinking = (model: Model): boolean => !!model.presetId && !model.serverApiFormat
+    && !(isSelected(model) ? selectedModel?.presetThinkingLevel : model.presetThinkingLevel);
+  const thinkingLabelForModel = (model: Model): string | null => {
+    if (presetUsesDefaultThinking(model)) return i18nService.t('modelPresetThinkingDefault');
+    const level = resolveThinkingLevel(model) ?? model.thinkingConfig?.defaultLevel;
+    return level ? getModelThinkingLevelLabel(level) : null;
   };
 
   const handleModelSelect = (model: Model | null) => {
@@ -757,13 +783,17 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       setIsOpen(false);
       return;
     }
+    if (model?.presetId && model.accessible === false) {
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: model.restrictionHint || i18nService.t('agentModelInvalidHint') }));
+      return;
+    }
     if (model && model.accessible === false) {
       setRestrictedPrompt(isLoggedIn ? ModelAccessPromptKind.Subscribe : ModelAccessPromptKind.Login);
       setHoveredModel(null);
       setIsOpen(false);
       return;
     }
-    const resolvedThinkingLevel = model ? resolveThinkingLevel(model) : undefined;
+    const resolvedThinkingLevel = model && !presetUsesDefaultThinking(model) ? resolveThinkingLevel(model) : undefined;
     if (controlled) {
       onChange(model, {
         group: getModelGroup(model) ?? visibleGroup,
@@ -788,7 +818,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
     // Each model keeps its own level, so picking one here must not be lost when
     // the user switches to another model and back.
-    rememberModelThinkingLevel(getModelIdentityKey(model), resolvedThinkingLevel);
+    if (!model.presetId) rememberModelThinkingLevel(getModelIdentityKey(model), resolvedThinkingLevel);
     onChange(model, {
       group: getModelGroup(model) ?? visibleGroup,
       thinkingLevel: resolvedThinkingLevel,
@@ -892,7 +922,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center text-secondary">
               {renderProviderIcon(selectedModel)}
             </span>
-            <span className={`${triggerTextClassName} min-w-0 truncate`}>{selectedModel.name}</span>
+            <span className={`${triggerTextClassName} min-w-0 truncate`}>{selectedModel.presetId ? modelPresetName(selectedModel.presetId) : selectedModel.name}</span>
             <ChevronDownIcon className={`${triggerIconClassName} shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary`} />
           </button>
         </div>
@@ -1033,9 +1063,9 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const hasThinkingProtocol = supportsConfigurableModelThinkingProtocol(model);
 
     const thinkingLevelLabel = hasThinkingProtocol && model.thinkingConfig
-      ? getModelThinkingLevelLabel(resolveThinkingLevel(model) ?? model.thinkingConfig.defaultLevel)
+      ? thinkingLabelForModel(model)
       : null;
-    const showCostMultiplier = model.costMultiplier != null && model.costMultiplier > 0;
+    const showCostMultiplier = model.costMultiplier != null && (model.costMultiplier > 0 || !!model.presetId);
 
     // Layout: the name (with its tags) takes all remaining width; the thinking
     // level and multiplier sit in a right-aligned column next to a fixed status
@@ -1068,8 +1098,11 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             className={`min-w-0 truncate text-[13px] leading-5 ${selected ? 'font-medium' : 'font-normal'}`}
             title={hasModelHoverDetails(model) ? undefined : model.name}
           >
-            {model.name}
+            {model.presetId ? modelPresetName(model.presetId) : model.name}
           </span>
+          {model.presetId && restricted && model.restrictionHint && (
+            <span className="min-w-0 truncate text-[10px] text-secondary" title={model.restrictionHint}>{model.restrictionHint}</span>
+          )}
           {model.supportsImage && (
             <span className={MODEL_TAG_CLASS_NAME}>
               {i18nService.t('modelSupportsImageInputBadge')}
@@ -1086,7 +1119,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
           <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-4 text-secondary">
             {thinkingLevelLabel && <span className="font-medium">{thinkingLevelLabel}</span>}
             {showCostMultiplier && (
-              <span className="min-w-[34px] text-right tabular-nums">x{model.costMultiplier}</span>
+              <span className="min-w-[34px] text-right tabular-nums">{model.presetId ? `${model.costMultiplier?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}x` : `x${model.costMultiplier}`}</span>
             )}
           </span>
         )}
@@ -1103,10 +1136,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   };
 
   const renderModelRows = (models: Model[]) => {
-    const accessibleModels = models.filter(model => model.accessible !== false);
-    const restrictedModels = models.filter(model => model.accessible === false);
+    const presets = models.filter(model => model.presetId);
+    const accessibleModels = models.filter(model => !model.presetId && model.accessible !== false);
+    const restrictedModels = models.filter(model => !model.presetId && model.accessible === false);
     return (
       <>
+        {presets.map(renderModelItem)}
         {accessibleModels.map(renderModelItem)}
         {restrictedModels.length > 0 && (
           <div>{restrictedModels.map(renderModelItem)}</div>
@@ -1146,6 +1181,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     if (!hoveredModel) return null;
     const hasThinkingProtocol = supportsConfigurableModelThinkingProtocol(hoveredModel);
     const thinkingConfigurable = thinkingSelectionEnabled && canConfigureModelThinking(hoveredModel);
+    const showThinkingBadge = !!hoveredModel.presetId || hoveredModel.supportsThinking;
     const card = (
       <div
         ref={hoverCardRef}
@@ -1156,7 +1192,10 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         onBlur={handleModelHoverEnd}
         className="w-[220px] rounded-xl border border-border bg-surface p-3 shadow-popover pointer-events-auto"
       >
-        <div className="text-[13px] font-semibold text-foreground leading-5">{hoveredModel.name}</div>
+        <div className="text-[13px] font-semibold text-foreground leading-5">{hoveredModel.presetId ? modelPresetName(hoveredModel.presetId) : hoveredModel.name}</div>
+        {hoveredModel.presetId && hoveredModel.accessible === false && hoveredModel.restrictionHint && (
+          <div className="mt-1 text-[11px] text-secondary leading-4">{hoveredModel.restrictionHint}</div>
+        )}
         {hoveredModel.description && (
           <div className="mt-1 text-[11px] text-secondary leading-4">{hoveredModel.description}</div>
         )}
@@ -1170,7 +1209,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             ({i18nService.t('modelCostMultiplierLabel')} x{hoveredModel.costMultiplier})
           </div>
         )}
-        {(hoveredModel.supportsImage || hoveredModel.supportsThinking) && (
+        {(hoveredModel.supportsImage || showThinkingBadge) && (
           <div className="mt-1.5 flex items-center gap-3 text-[11px] text-emerald-600">
             {hoveredModel.supportsImage && (
               <span className="flex items-center gap-1">
@@ -1178,7 +1217,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
                 <span>{i18nService.t('modelSupportsImageInputBadge')}</span>
               </span>
             )}
-            {hoveredModel.supportsThinking && (
+            {showThinkingBadge && (
               <span className="flex items-center gap-1">
                 <span>✓</span>
                 <span>{i18nService.t('modelSupportsThinkingBadge')}</span>
@@ -1207,9 +1246,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
           >
             <span>{i18nService.t('modelThinkingStrength')}</span>
             <span className="flex items-center gap-1 font-medium">
-              {getModelThinkingLevelLabel(
-                resolveThinkingLevel(hoveredModel) ?? hoveredModel.thinkingConfig.defaultLevel,
-              )}
+              {thinkingLabelForModel(hoveredModel)}
               {thinkingConfigurable
                 ? <ChevronRightIcon className="h-3.5 w-3.5 text-secondary" />
                 : <LockClosedIcon className="h-3.5 w-3.5 text-secondary" />}
@@ -1225,7 +1262,8 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const config = hoveredModel?.thinkingConfig;
     if (!thinkingSelectionEnabled || !hoveredModel || !config || !isThinkingMenuOpen
       || !canConfigureModelThinking(hoveredModel)) return null;
-    const selectedLevel = resolveThinkingLevel(hoveredModel) ?? config.defaultLevel;
+    const selectedLevel = presetUsesDefaultThinking(hoveredModel)
+      ? undefined : resolveThinkingLevel(hoveredModel) ?? config.defaultLevel;
     return createPortal(
       <div
         ref={thinkingMenuRef}
@@ -1290,7 +1328,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
           {i18nService.t('modelSelectorCurrentModel')}
         </span>
         <span className="min-w-0 truncate text-[12px] font-medium leading-4 text-foreground">
-          {selectedModel.name}
+          {selectedModel.presetId ? modelPresetName(selectedModel.presetId) : selectedModel.name}
         </span>
         {inOtherGroup && <ChevronRightIcon className="ml-auto h-3 w-3 shrink-0 text-secondary" />}
       </button>

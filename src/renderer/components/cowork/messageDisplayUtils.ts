@@ -2,7 +2,6 @@
  * Utility functions and types for message display in conversation views.
  * Extracted from CoworkSessionDetail.tsx for reuse by ConversationTurnsView.
  */
-
 import {
   ContextCompactionMode,
   ContextCompactionStatus,
@@ -10,8 +9,10 @@ import {
   isInternalCompactionSystemText,
 } from '../../../common/coworkSystemMessages';
 import type { CoworkTurnUsageAnchor } from '../../../shared/cowork/llmTurnUsage';
+import { parseModelPresetId } from '../../../shared/modelPresets/constants';
 import { hasToolResultMediaAssets, normalizeFilePathForDedup } from '../../services/artifactParser';
 import { i18nService } from '../../services/i18n';
+import { modelPresetName } from '../../services/modelPresets';
 import type { Artifact } from '../../types/artifact';
 import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
 import { ActivityStepKind } from './constants';
@@ -916,6 +917,9 @@ export const buildConversationTurns = (
 // ── Metadata helpers ─────────────────────────────────────────────────────────
 
 export const getMessageModelLabel = (metadata?: CoworkMessageMetadata | null): string | null => {
+  const modelPresetId = parseModelPresetId(metadata?.modelPresetId);
+  const resolved = typeof metadata?.resolvedModelId === 'string' ? metadata.resolvedModelId.trim() : '';
+  if (modelPresetId && resolved) return `${modelPresetName(modelPresetId)}（${resolved}）`;
   const model = typeof metadata?.model === 'string' ? metadata.model.trim() : '';
   if (!model) return null;
   return model.includes('/') ? (model.split('/').pop() || model) : model;

@@ -175,7 +175,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const currentAgentWorkingDirectory = currentAgent?.workingDirectory?.trim() || config.workingDirectory || '';
   const currentAgentSelectedModel = useAgentSelectedModel(currentAgentId, currentAgent?.model ?? '');
   const currentAgentSelectedModelRef = currentAgentSelectedModel
-    ? toOpenClawModelRef(currentAgentSelectedModel)
+    ? (currentAgentSelectedModel.presetId ? '' : toOpenClawModelRef(currentAgentSelectedModel))
     : '';
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
   const homeStartModel = useMemo(() => resolveAgentStartModel({
@@ -190,7 +190,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   );
   const currentAgentThinkingLevel = resolveModelThinkingLevel(
     currentAgentSelectedModel,
-    currentAgent?.thinkingLevel,
+    currentAgentSelectedModel.presetId ? currentAgentSelectedModel.presetThinkingLevel : currentAgent?.thinkingLevel,
   );
   const homeDraftCollaborationMode = useSelector((state: RootState) => (
     state.cowork.draftCollaborationModes.__home__ || CoworkCollaborationMode.Default
@@ -527,7 +527,9 @@ const CoworkView: React.FC<CoworkViewProps> = ({
         resolvedKitCapabilities: displayKitIds.length > 0 ? resolvedKitCapabilities : undefined,
         agentId: currentAgentId,
         modelOverride: sessionModelOverride,
-        thinkingLevel: currentAgentThinkingLevel,
+        modelPresetId: currentAgentSelectedModel?.presetId,
+        thinkingLevel: currentAgentSelectedModel.presetId && !currentAgentSelectedModel.presetThinkingLevel
+          ? undefined : currentAgentThinkingLevel,
         imageAttachments,
         mediaSelection: mediaSelection && mediaSelection.mode !== 'none' ? mediaSelection : undefined,
         mediaReferences,

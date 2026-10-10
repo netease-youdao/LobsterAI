@@ -109,6 +109,7 @@ export class SqliteStore {
         cwd TEXT NOT NULL,
         system_prompt TEXT NOT NULL DEFAULT '',
         model_override TEXT NOT NULL DEFAULT '',
+        model_preset_id TEXT,
         thinking_level TEXT NOT NULL DEFAULT '',
         execution_mode TEXT,
         parent_session_id TEXT,
@@ -395,6 +396,11 @@ export class SqliteStore {
 
       if (!colNames.includes('active_skill_ids')) {
         this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN active_skill_ids TEXT;');
+        this.didRunMigration = true;
+      }
+
+      if (!colNames.includes('model_preset_id')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN model_preset_id TEXT;');
         this.didRunMigration = true;
       }
 
