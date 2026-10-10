@@ -699,8 +699,9 @@ Why: on 2026-10-10 users reported the composer card stuck on
 "第 3/10 步 · 本轮已结束" with MiniMax-M3.1-Flash-Preview. The model had written a
 progress report ("评测尚未收尾，我会继续…") without a tool call. v2026.8.1 only
 recovers empty or reasoning-only turns, so the run completed with seven steps
-pending and nothing resumed it. The desktop label maps to a `completed` session
-whose card still has unfinished steps (`progressCardDisplay.ts`).
+pending and nothing resumed it. The desktop card showed that label for a
+`completed` session whose card still had unfinished steps; LobsterAI has since
+removed that card, but a run that stops halfway still leaves the work undone.
 
 Scope: the check runs at most once per run and replays no completed tool call.
 It applies only when the run still owes a visible reply and the model stopped

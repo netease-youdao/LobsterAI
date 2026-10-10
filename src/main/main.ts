@@ -121,7 +121,6 @@ import {
 } from '../shared/cowork/imageAttachments';
 import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import { containsPlanModePrompt } from '../shared/cowork/planMode';
-import { ProgressCardEvent } from '../shared/cowork/progressCard';
 import type { CoworkSearchMessageCursor } from '../shared/cowork/search';
 import {
   type CoworkSelectedTextSnippet,
@@ -3836,15 +3835,6 @@ const bindCoworkRuntimeForwarder = (): void => {
         console.error('[CoworkBtw] failed to forward side-question result:', error);
       }
     });
-  });
-
-  runtime.on(ProgressCardEvent.Changed, (sessionId: string) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    try {
-      mainWindow.webContents.send(CoworkIpcChannel.ProgressCardChanged, { sessionId });
-    } catch (error) {
-      console.error('[CoworkRuntime] failed to forward progress card change:', error);
-    }
   });
 
   runtime.on('contextUsageUpdate', (sessionId: string, usage: unknown) => {
@@ -10906,45 +10896,6 @@ if (!gotTheLock) {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get session message rail index',
       };
-    }
-  });
-
-  // Progress cards are served only to the main window's own frame, and only
-  // for sessions this store knows.
-  const isProgressCardRequestAllowed = (
-    event: Electron.IpcMainInvokeEvent,
-    sessionId: unknown,
-  ): sessionId is string => Boolean(
-    mainWindow
-    && !mainWindow.isDestroyed()
-    && event.sender === mainWindow.webContents
-    && event.senderFrame === mainWindow.webContents.mainFrame
-    && typeof sessionId === 'string'
-    && getCoworkStore().getSession(sessionId),
-  );
-
-  ipcMain.handle(CoworkIpcChannel.GetProgressCard, async (event, sessionId: unknown) => {
-    if (!isProgressCardRequestAllowed(event, sessionId)) {
-      return { success: false, error: 'Progress card request rejected' };
-    }
-    try {
-      return { success: true, card: await getCoworkEngineRouter().getProgressCard(sessionId) };
-    } catch (error) {
-      // Expected while the gateway is still connecting; the window retries on the next change.
-      console.debug('[CoworkIPC] progress card read failed:', error);
-      return { success: false, error: 'Progress card unavailable' };
-    }
-  });
-
-  ipcMain.handle(CoworkIpcChannel.DismissProgressCard, async (event, sessionId: unknown, revision: unknown) => {
-    if (!isProgressCardRequestAllowed(event, sessionId) || typeof revision !== 'number') {
-      return { success: false, error: 'Progress card request rejected' };
-    }
-    try {
-      return { success: true, card: await getCoworkEngineRouter().dismissProgressCard(sessionId, revision) };
-    } catch (error) {
-      console.warn('[CoworkIPC] failed to dismiss progress card:', error);
-      return { success: false, error: 'Progress card unavailable' };
     }
   });
 
