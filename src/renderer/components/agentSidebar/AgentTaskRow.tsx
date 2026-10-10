@@ -263,19 +263,26 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
   const pinLabel = task.pinned ? i18nService.t('coworkUnpinSession') : i18nService.t('coworkPinSession');
   const isActivityRow = !!contextLabel;
   const scheduledTaskLabel = i18nService.t('myAgentSidebarScheduledTask');
+  // Rows nested under an agent are a level below it: denser, one font step smaller
+  // and muted until hovered or selected. Activity rows stand on their own.
+  const textSizeClassName = isActivityRow
+    ? 'text-[length:var(--lobster-text-sidebarCompact)]'
+    : 'text-[length:var(--lobster-text-sidebarTask)]';
 
   return (
     <div
       className={`group relative -ml-[6px] flex w-[calc(100%+12px)] items-center gap-2 rounded-[18px] ${
-        isActivityRow ? 'min-h-[48px] py-1.5' : 'h-9'
+        isActivityRow ? 'min-h-[48px] py-1.5' : 'h-[30px]'
       } ${
         isBatchMode ? 'pl-2' : isActivityRow ? 'pl-1.5' : 'pl-9'
-      } pr-2.5 text-[length:var(--lobster-text-sidebarCompact)] font-normal transition-colors ${
+      } pr-2.5 ${textSizeClassName} font-normal transition-colors ${
         isSelectionDisabled
           ? 'cursor-default text-foreground/30'
           : task.isSelected && !hasActiveSubagent
           ? 'cursor-pointer bg-black/[0.05] text-foreground dark:bg-white/[0.07]'
-          : 'cursor-pointer text-foreground hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
+          : `cursor-pointer hover:bg-black/[0.03] hover:text-foreground dark:hover:bg-white/[0.04] ${
+            isActivityRow ? 'text-foreground' : 'text-foreground/75'
+          }`
       }`}
       onClick={handleRowClick}
       onKeyDown={handleRowKeyDown}
@@ -339,7 +346,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
               handleRenameCancel();
             }
           }}
-          className="min-w-0 flex-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          className={`min-w-0 flex-1 rounded-md border border-border bg-background px-1.5 py-0.5 ${textSizeClassName} font-normal text-foreground focus:outline-none focus:ring-1 focus:ring-primary`}
         />
       ) : (
         <>
