@@ -25,7 +25,7 @@ import {
   normalizeCoworkBtwQuestion,
   resolveCoworkBtwSelectedTextSnippets,
 } from '../../../shared/cowork/btw';
-import { CoworkOnboardingMessageKind } from '../../../shared/cowork/constants';
+import { COWORK_TEMP_SESSION_ID_PREFIX, CoworkOnboardingMessageKind } from '../../../shared/cowork/constants';
 import { CoworkGoalStatus } from '../../../shared/cowork/goal';
 import type { CoworkImageAttachmentPreview } from '../../../shared/cowork/imageAttachments';
 import {
@@ -2170,6 +2170,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       : subagentWaitPhase === SubagentWaitPhase.Summary
         ? i18nService.t('coworkActivityWaitSubagentSummary')
         : null;
+  // The optimistic session exists only until its start request returns.
+  const isAwaitingRunStart = currentSession?.id.startsWith(COWORK_TEMP_SESSION_ID_PREFIX) ?? false;
   const [subagentsLoading, setSubagentsLoading] = useState(false);
   const [selectedSubagent, setSelectedSubagent] = useState<SubagentSessionSummary | null>(null);
   const [contentRowWidth, setContentRowWidth] = useState(0);
@@ -6076,6 +6078,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 activityStatusOverride={
                   activityStatusOverride
                 }
+                awaitingRunStart={isAwaitingRunStart}
                 showCopyButtons={!isStreaming || !isLastTurn}
                 hiddenSystemMessageId={enterpriseQuotaPromptMessageId}
                 completedGoal={

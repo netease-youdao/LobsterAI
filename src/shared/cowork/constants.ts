@@ -13,6 +13,13 @@ export const SESSION_AGNOSTIC_PERMISSION_SESSION_ID = '__askuser__';
  */
 export const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion';
 
+/**
+ * Id prefix of the optimistic session the renderer shows while a new task's
+ * start request is in flight. It is never stored: the started session
+ * replaces it, so a session carrying it has not reached the runtime yet.
+ */
+export const COWORK_TEMP_SESSION_ID_PREFIX = 'temp-';
+
 /** Default page size for session list pagination. */
 export const COWORK_SESSION_PAGE_SIZE = 50;
 
