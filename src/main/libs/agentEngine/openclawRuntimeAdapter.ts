@@ -2559,6 +2559,11 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * keeps routing correct without retaining every historical run id. */
   private readonly latestCronSessionKeyByCacheKey = new Map<string, string>();
   private readonly sessionIdByRunId = new Map<string, string>();
+  /**
+   * Steer chat.send run ids awaiting the bare final OpenClaw sends once the input is
+   * injected into, or queued behind, the steered execution. That final ends no execution.
+   */
+  private readonly pendingSteerAckSessionIdByRunId = new Map<string, string>();
   private readonly pendingAgentEventsByRunId = new Map<string, AgentEventPayload[]>();
   private readonly lastChatSeqByRunId = new Map<string, number>();
   private readonly lastAgentSeqByRunId = new Map<string, number>();
@@ -2600,6 +2605,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private static readonly STOP_COOLDOWN_MS = 10_000; // 10 seconds
   private static readonly RECENTLY_CLOSED_RUN_ID_TTL_MS = 120_000;
   private static readonly RECENTLY_CLOSED_RUN_ID_LIMIT = 1000;
+  private static readonly PENDING_STEER_ACK_LIMIT = 200;
   private static readonly TERMINAL_BTW_RUN_ID_TTL_MS = 120_000;
   private static readonly TERMINAL_BTW_RUN_ID_LIMIT = 1000;
   private static readonly LIFECYCLE_ERROR_FALLBACK_DELAY_MS = 20_000;
@@ -5089,6 +5095,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const client = this.requireGatewayClient();
       // Record before sending so a stop that lands while this request is in flight drops it too.
       (turn.steerRunIds ??= new Set()).add(clientSteerId);
+      // OpenClaw may broadcast the acknowledgement before this request resolves.
+      this.rememberPendingSteerAck(clientSteerId, sessionId);
       const result = await client.request<OpenClawChatSendSteerResult>(
         OpenClawGatewayMethod.ChatSend,
         {
@@ -5401,6 +5409,33 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }).catch((error) => {
       console.warn('[OpenClawRuntime] Failed to abort queued steer input:', error);
     });
+  }
+
+  private rememberPendingSteerAck(steerRunId: string, sessionId: string): void {
+    this.pendingSteerAckSessionIdByRunId.set(steerRunId, sessionId);
+    while (this.pendingSteerAckSessionIdByRunId.size > OpenClawRuntimeAdapter.PENDING_STEER_ACK_LIMIT) {
+      const oldestRunId = this.pendingSteerAckSessionIdByRunId.keys().next().value;
+      if (typeof oldestRunId !== 'string') break;
+      this.pendingSteerAckSessionIdByRunId.delete(oldestRunId);
+    }
+  }
+
+  /**
+   * True for the bare final that terminalizes a steer's own chat.send. It may arrive
+   * after the steered turn closed, and must neither bind to a turn nor finish one.
+   */
+  private consumeSteerAck(runId: string, payload: ChatEventPayload): boolean {
+    const sessionId = this.pendingSteerAckSessionIdByRunId.get(runId);
+    if (!sessionId) return false;
+    this.pendingSteerAckSessionIdByRunId.delete(runId);
+    // A steer already routed as its own execution ends with that execution's final.
+    if (isRecord(payload.message) || this.sessionIdByRunId.has(runId)) return false;
+    console.debug(
+      '[OpenClawRuntime] steer input acknowledged by OpenClaw; the steered run continues.',
+      `Session ${sessionId}.`,
+      `Client steer ${runId}.`,
+    );
+    return true;
   }
 
   private cancelTurnStartupIfStopped(sessionId: string, checkpoint: string): boolean {
@@ -9336,6 +9371,11 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     if (runId && this.isRecentlyClosedRunId(runId)) {
       console.debug('[OpenClawRuntime] dropped late chat event for a closed run.');
+      return;
+    }
+
+    // Must run before session resolution, which binds the run id to the active turn.
+    if (state === OpenClawChatState.Final && runId && this.consumeSteerAck(runId, chatPayload)) {
       return;
     }
 
