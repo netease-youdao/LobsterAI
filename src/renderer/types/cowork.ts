@@ -21,6 +21,7 @@ import type {
   ResolvedKitCapabilities,
 } from '../../shared/kit/constants';
 import type {
+  OpenClawConfigApplyPendingReason,
   OpenClawEngineErrorCode,
   OpenClawEnginePhase as SharedOpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
@@ -296,6 +297,8 @@ export interface OpenClawEngineStatus {
    * The gateway process keeps running, so this is not an engine lifecycle state.
    */
   configApplyPending?: boolean;
+  /** Why that admission reply refused the task. */
+  configApplyPendingReason?: OpenClawConfigApplyPendingReason;
   /**
    * Set while automatic recovery has given up on applying the latest config.
    * Tasks keep running on the config the gateway already applied; Quick Repair

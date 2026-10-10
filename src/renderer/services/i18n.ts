@@ -2535,6 +2535,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkModelSwitchFailed: '模型切换失败，请稍后重试。',
     coworkErrorEngineNotReady: 'AI 引擎正在启动中，请稍等几秒后重试。',
     coworkErrorConfigApplyPending: 'AI 引擎正在应用最新设置，请稍后重新发送。',
+    coworkErrorConfigApplyPendingForModel:
+      '所选模型的最新设置还没生效，会在正在运行的任务结束后应用。可以先停止正在运行的任务，或稍后重新发送。',
     coworkErrorUnknown: '任务执行出错，请重试。如果问题持续出现，请检查模型配置。',
     coworkErrorTechnicalDetails: '技术详情',
     coworkErrorModelLabel: '模型',
@@ -7117,6 +7119,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkModelSwitchFailed: 'Failed to switch model. Please try again later.',
     coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
     coworkErrorConfigApplyPending: 'The AI engine is applying your latest settings. Please send again shortly.',
+    coworkErrorConfigApplyPendingForModel:
+      "The latest settings for the selected model haven't taken effect yet; they apply once the running tasks finish. Stop the running tasks, or send again later.",
     coworkErrorUnknown:
       'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
     coworkErrorTechnicalDetails: 'Technical details',

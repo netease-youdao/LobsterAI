@@ -153,3 +153,30 @@ test('a deferred restart is satisfied only by a later spawn of the unchanged tar
     expect(isDeferredRestartSatisfied({ ...settled, [change]: true })).toBe(false);
   }
 });
+
+test('remembers the content each gateway generation confirmed applying', () => {
+  const state = new OpenClawConfigRecovery();
+  const first = target(3474);
+  state.stage(first, false, 1);
+  expect(state.pendingTarget).toBe(first);
+  expect(state.appliedRawFor(1)).toBeNull();
+  expect(state.applied(first, 1)).toBe(true);
+  expect(state.pendingTarget).toBeNull();
+  expect(state.appliedRawFor(1)).toBe(first.raw);
+  expect(state.appliedRawFor(2)).toBeNull();
+
+  const next = target(4121);
+  state.stage(next, false, 1);
+  expect(state.pendingTarget).toBe(next);
+  expect(state.appliedRawFor(1)).toBe(first.raw);
+});
+
+test('content delivered while a respawn is still due does not count as applied', () => {
+  const state = new OpenClawConfigRecovery();
+  const respawned = target(3474);
+  state.stage(respawned, true, 1);
+  expect(state.applied(respawned, 1)).toBe(false);
+  expect(state.appliedRawFor(1)).toBeNull();
+  expect(state.applied(respawned, 2)).toBe(true);
+  expect(state.appliedRawFor(2)).toBe(respawned.raw);
+});

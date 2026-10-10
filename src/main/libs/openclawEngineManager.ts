@@ -9,6 +9,7 @@ import path from 'path';
 import { stripVTControlCharacters } from 'util';
 
 import {
+  type OpenClawConfigApplyPendingReason,
   OpenClawEngineErrorCode,
   OpenClawEnginePhase,
   OpenClawGatewayFailureKind,
@@ -18,6 +19,7 @@ import { type OpenClawDreamingRecoverySummary } from '../../shared/openclawEngin
 import { OpenClawStartupCompatibilityMode } from '../../shared/openclawEngine/startupCompatibility';
 import { OpenClawStartupMigrationStatus } from '../../shared/openclawEngine/startupMigration';
 import { t } from '../i18n';
+import { AwakeClock } from './awakeClock';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath, getSkillsRoot } from './coworkUtil';
 import {
   formatGatewayLogDateKey,
@@ -135,6 +137,8 @@ export interface OpenClawEngineStatus {
    * The gateway process keeps running, so this is not an engine lifecycle state.
    */
   configApplyPending?: boolean;
+  /** Why that admission reply refused the task. */
+  configApplyPendingReason?: OpenClawConfigApplyPendingReason;
   /**
    * Set while automatic recovery has given up on applying the latest config.
    * Not a lifecycle state either: tasks keep running on the config the gateway
@@ -434,6 +438,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private stopGatewayPromise: Promise<void> | null = null;
   private restartGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
   private secretEnvVars: Record<string, string> = {};
+  private gatewayProcessSecretEnvVars: Record<string, string> | null = null;
   private gatewaySpawnedAt: number | null = null;
   private gatewayLogPrunedDateKey: string | null = null;
   private gatewaySelfRestartNotedAt: number | null = null;
@@ -605,6 +610,11 @@ export class OpenClawEngineManager extends EventEmitter {
   /** When the live gateway process was spawned; it loaded its config after this time. */
   getGatewayProcessStartedAt(): number | null {
     return isGatewayProcessAlive(this.gatewayProcess) ? this.gatewaySpawnedAt : null;
+  }
+
+  /** Secret env values the live gateway process was spawned with; it never sees later values. */
+  getGatewayProcessSecretEnvVars(): Record<string, string> | null {
+    return isGatewayProcessAlive(this.gatewayProcess) ? this.gatewayProcessSecretEnvVars : null;
   }
 
   /** New gateway processes wait (bounded) until the app has written its first complete config. */
@@ -1126,6 +1136,8 @@ export class OpenClawEngineManager extends EventEmitter {
     const electronNodeRuntimePath = getElectronNodeRuntimePath();
     const cliShimDir = this.ensureBundledCliShims();
     const skillsRoot = getSkillsRoot().replace(/\\/g, '/');
+    // Config syncs replace the desired secrets at any time; the child keeps what it was spawned with.
+    const spawnSecretEnvVars = { ...this.secretEnvVars };
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -1159,7 +1171,7 @@ export class OpenClawEngineManager extends EventEmitter {
       LOBSTERAI_OPENCLAW_ENTRY: openclawEntry.replace(/\\/g, '/'),
       // Inject secret values for ${VAR} placeholders in openclaw.json.
       // This keeps plaintext credentials out of the config file on disk.
-      ...this.secretEnvVars,
+      ...spawnSecretEnvVars,
     };
 
     // Ensure the gateway process uses the host's local timezone for logging.
@@ -1339,6 +1351,7 @@ export class OpenClawEngineManager extends EventEmitter {
     this.gatewayGeneration += 1;
     this.gatewayGenerationByProcess.set(child, this.gatewayGeneration);
     this.gatewaySpawnedAt = Date.now();
+    this.gatewayProcessSecretEnvVars = spawnSecretEnvVars;
     if (startupPrep.skip) this.startupPrepSkippedProcesses.add(child);
     this.attachGatewayProcessLogs(child);
     this.attachGatewayExitHandlers(child);
@@ -2178,6 +2191,11 @@ export class OpenClawEngineManager extends EventEmitter {
       baseTimeoutMs: timeoutMs,
       maxWaitMs: Math.max(DEFAULT_GATEWAY_STARTUP_WAIT_POLICY.maxWaitMs, timeoutMs),
     };
+    // Both limits count awake time only: a gateway frozen by system sleep
+    // resumes its startup on wake, so the wait must resume with it.
+    const clock = new AwakeClock(startedAt);
+    let lastOutputSeenAt = startedAt;
+    let lastOutputAwakeMs = 0;
     let extensionLogged = false;
     let pollCount = 0;
     return new Promise((resolve) => {
@@ -2195,7 +2213,12 @@ export class OpenClawEngineManager extends EventEmitter {
         }
 
         pollCount += 1;
-        const elapsedMs = Date.now() - startedAt;
+        const suspendedBeforeMs = clock.suspendedMs;
+        const elapsedMs = clock.observe(Date.now());
+        if (clock.suspendedMs > suspendedBeforeMs) {
+          console.log(`[OpenClaw] waitForGatewayReady: no poll for ${clock.suspendedMs - suspendedBeforeMs}ms `
+            + '(system sleep or a frozen process); that time does not count toward the startup limits');
+        }
 
         // Log verbose probe details every 10 polls (~6s) to diagnose startup delays.
         const verboseProbe = pollCount % 10 === 0;
@@ -2211,8 +2234,14 @@ export class OpenClawEngineManager extends EventEmitter {
           return;
         }
 
-        const lastActivityAt = Math.max(startedAt, this.gatewayLastOutputAt.get(child) ?? startedAt);
-        const silentMs = Math.max(0, startedAt + elapsedMs - lastActivityAt);
+        // Output is timed in awake time at the poll that first sees it, so a
+        // sleep between the last output and now cannot count as silence.
+        const outputAt = this.gatewayLastOutputAt.get(child) ?? startedAt;
+        if (outputAt > lastOutputSeenAt) {
+          lastOutputSeenAt = outputAt;
+          lastOutputAwakeMs = elapsedMs;
+        }
+        const silentMs = Math.max(0, elapsedMs - lastOutputAwakeMs);
         const outcome = evaluateGatewayStartupWait(elapsedMs, silentMs, policy);
         if (isGatewayStartupWaitOver(outcome)) {
           const reason = outcome === GatewayStartupWaitOutcome.Stalled

@@ -38,6 +38,7 @@ export function isDeferredRestartSatisfied(params: {
  */
 export class OpenClawConfigRecovery {
   private target: OpenClawConfigTarget | null = null;
+  private appliedTarget: { raw: string; generation: number } | null = null;
   private respawnRequired = false;
   private respawnAfterGeneration = 0;
   private rejection: string | null = null;
@@ -54,6 +55,16 @@ export class OpenClawConfigRecovery {
   get rejected(): boolean { return this.rejection !== null; }
   /** Automatic retries and restarts are exhausted; only a successful delivery resumes. */
   get stalled(): boolean { return this.rejection === null && this.stallMessage !== null; }
+  /** Latest staged target that the running gateway has not confirmed applying yet. */
+  get pendingTarget(): OpenClawConfigTarget | null { return this.target; }
+
+  /**
+   * Target content that this gateway generation confirmed applying, or null
+   * when it never confirmed one (a fresh process, or one awaiting a respawn).
+   */
+  appliedRawFor(generation: number): string | null {
+    return this.appliedTarget?.generation === generation ? this.appliedTarget.raw : null;
+  }
 
   stage(target: OpenClawConfigTarget, requiresRespawn: boolean, generation: number): void {
     if (!this.target || !sameOpenClawConfigContent(this.target.raw, target.raw)) {
@@ -80,6 +91,8 @@ export class OpenClawConfigRecovery {
     this.stallMessage = null;
     this.failuresAfterRespawn = 0;
     if (this.needsRespawn(generation)) return false;
+    // Plugins and env load only at spawn, so content counts as applied only without a respawn demand.
+    this.appliedTarget = { raw: target.raw, generation };
     this.target = null;
     this.respawnRequired = false;
     this.rejection = null;

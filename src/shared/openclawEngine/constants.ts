@@ -56,6 +56,20 @@ export type OpenClawGatewayRepairErrorCode =
  */
 export const OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS = ['installs'] as const;
 
+/** Bundled plugin that owns model compatibility and thinking profiles. */
+export const OPENCLAW_MODEL_COMPAT_PLUGIN_ID = 'lobsterai-model-compat';
+
+/** Why a task was refused while a config change is still unapplied. */
+export const OpenClawConfigApplyPendingReason = {
+  /** The change is still being applied, or its effect on the task is unknown. */
+  Applying: 'applying',
+  /** The task's model runs on settings the running gateway has not applied yet. */
+  ModelSettings: 'model_settings',
+} as const;
+
+export type OpenClawConfigApplyPendingReason =
+  typeof OpenClawConfigApplyPendingReason[keyof typeof OpenClawConfigApplyPendingReason];
+
 export const OpenClawEngineErrorCode = {
   /**
    * resources/cfmind has no runtime entry file. On packaged Windows builds
