@@ -777,6 +777,12 @@ type ActiveTurn = {
   contextMaintenanceToolCallIds: Set<string>;
   planModeSuppressedToolCallIds: Set<string>;
   stopRequested: boolean;
+  /**
+   * chat.send run ids of steer input handed to OpenClaw's native queue during this
+   * turn. A user stop aborts them; otherwise OpenClaw replays unconsumed steer input
+   * as a new turn once the aborted run releases the session.
+   */
+  steerRunIds?: Set<string>;
   /** Thinking message state — separate from main assistant message. */
   thinking: OpenClawThinkingTurnState;
   /** True while async user message prefetch is in progress for channel sessions. */
@@ -5081,6 +5087,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     try {
       const client = this.requireGatewayClient();
+      // Record before sending so a stop that lands while this request is in flight drops it too.
+      (turn.steerRunIds ??= new Set()).add(clientSteerId);
       const result = await client.request<OpenClawChatSendSteerResult>(
         OpenClawGatewayMethod.ChatSend,
         {
@@ -5092,6 +5100,21 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         },
         { timeoutMs: OpenClawRuntimeAdapter.SESSION_PATCH_TIMEOUT_MS },
       );
+      if (result?.runId && turn.stopRequested) {
+        // The stop's abort may have reached OpenClaw before it registered this steer.
+        console.log(
+          '[OpenClawRuntime] dropped steer input acknowledged after the user stopped the turn.',
+          `Session ${sessionId}.`,
+          `Client steer ${clientSteerId}.`,
+        );
+        this.abortSteerInput(client, turn.sessionKey, clientSteerId);
+        return {
+          success: false,
+          status: CoworkSteerStatus.Rejected,
+          clientSteerId,
+          reason: CoworkSteerRejectReason.NoActiveTurn,
+        };
+      }
       if (result?.runId) {
         console.debug(
           '[OpenClawRuntime] steer accepted by native chat queue.',
@@ -5334,8 +5357,16 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       this.finalizeStoppedStreamingMessages(sessionId, turn);
       const client = this.gatewayClient;
       if (client) {
+        // A stop drops queued steer input. Abort it before the run so OpenClaw
+        // cannot replay it as a new turn; consumed steer input makes this a no-op.
+        if (turn.steerRunIds?.size) {
+          console.log(
+            `[OpenClawRuntime] user requested stop, dropping ${turn.steerRunIds.size} steer input(s) queued for run ${turn.runId}.`,
+          );
+          turn.steerRunIds.forEach((steerRunId) => this.abortSteerInput(client, turn.sessionKey, steerRunId));
+        }
         console.log(`[OpenClawRuntime] user requested stop, aborting gateway run ${turn.runId}.`);
-        void client.request('chat.abort', {
+        void client.request(OpenClawGatewayMethod.ChatAbort, {
           sessionKey: turn.sessionKey,
           runId: turn.runId,
         }).catch((error) => {
@@ -5360,6 +5391,16 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.emitSessionStatus(sessionId, 'idle');
     this.emit('sessionStopped', sessionId);
     this.resolveTurn(sessionId);
+  }
+
+  /** Aborts one steer input by its chat.send run id, whether pending injection or queued as a follow-up. */
+  private abortSteerInput(client: GatewayClientLike, sessionKey: string, steerRunId: string): void {
+    void client.request(OpenClawGatewayMethod.ChatAbort, {
+      sessionKey,
+      runId: steerRunId,
+    }).catch((error) => {
+      console.warn('[OpenClawRuntime] Failed to abort queued steer input:', error);
+    });
   }
 
   private cancelTurnStartupIfStopped(sessionId: string, checkpoint: string): boolean {

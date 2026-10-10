@@ -42,6 +42,7 @@ import { ProviderName } from '../../../shared/providers/constants';
 import { setLanguage, t } from '../../i18n';
 import { getServerApiBaseUrl } from '../endpoints';
 import { OpenClawChannelSessionSync } from '../openclawChannelSessionSync';
+import { ConfigWorkloadState } from '../openclawConfigObservation';
 import {
   __openClawTokenProxyTestUtils,
   consumeRecentOpenClawTokenProxyQuotaError,
@@ -4674,6 +4675,101 @@ test('submitSteer reports an unsupported native chat queue without patch-specifi
     reason: CoworkSteerRejectReason.RuntimeUnsupported,
     error: 'The current OpenClaw runtime does not support native same-turn steering.',
   });
+});
+
+function createSteerGatewayClient(acknowledgeSteer: () => Promise<unknown>) {
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const request = vi.fn((method: string, params: unknown) => {
+    requests.push({ method, params });
+    return method === OpenClawGatewayMethod.ChatSend ? acknowledgeSteer() : Promise.resolve({ ok: true });
+  });
+  return {
+    client: { start: () => {}, stop: () => {}, request },
+    abortParams: () => requests
+      .filter((entry) => entry.method === OpenClawGatewayMethod.ChatAbort)
+      .map((entry) => entry.params),
+  };
+}
+
+test('stopSession drops accepted steer input before aborting the run', async () => {
+  const { session, store } = createReconcileStore([]);
+  session.status = 'running';
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const gateway = createSteerGatewayClient(async () => ({ runId: 'client-steer-1', status: 'started' }));
+  adapter.gatewayClient = gateway.client;
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-active'));
+
+  const steer = await adapter.submitSteer(session.id, 'also update the tests', 'client-steer-1');
+  adapter.stopSession(session.id);
+
+  expect(steer.status).toBe(CoworkSteerStatus.Accepted);
+  // OpenClaw replays unconsumed steer input as a new turn once the aborted run
+  // releases the session, so the stop aborts it first by its chat.send run id.
+  expect(gateway.abortParams()).toEqual([
+    { sessionKey, runId: 'client-steer-1' },
+    { sessionKey, runId: 'run-active' },
+  ]);
+  const workload = adapter.getConfigRestartWorkloadSnapshot();
+  expect(workload.activeTurns).toBe(0);
+  expect(workload.state).not.toBe(ConfigWorkloadState.Busy);
+});
+
+test('steer input acknowledged after a stop is aborted again and reported as undelivered', async () => {
+  const { session, store } = createReconcileStore([]);
+  session.status = 'running';
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  let acknowledge: (value: unknown) => void = () => {};
+  const gateway = createSteerGatewayClient(() => new Promise((resolve) => { acknowledge = resolve; }));
+  adapter.gatewayClient = gateway.client;
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-active'));
+
+  const steer = adapter.submitSteer(session.id, 'also update the tests', 'client-steer-1');
+  adapter.stopSession(session.id);
+  acknowledge({ runId: 'client-steer-1', status: 'started' });
+
+  await expect(steer).resolves.toEqual({
+    success: false,
+    status: CoworkSteerStatus.Rejected,
+    clientSteerId: 'client-steer-1',
+    reason: CoworkSteerRejectReason.NoActiveTurn,
+  });
+  expect(gateway.abortParams()).toEqual([
+    { sessionKey, runId: 'client-steer-1' },
+    { sessionKey, runId: 'run-active' },
+    { sessionKey, runId: 'client-steer-1' },
+  ]);
+});
+
+test('steer input replayed after a turn ends without a stop is tracked as a busy turn', () => {
+  vi.useFakeTimers();
+  try {
+    const { session, store } = createReconcileStore([]);
+    session.status = 'completed';
+    const adapter = new OpenClawRuntimeAdapter(store, {});
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    adapter.gatewayClient = createSteerGatewayClient(async () => ({})).client;
+
+    adapter.handleGatewayEvent({
+      event: 'chat',
+      seq: 1,
+      payload: {
+        runId: 'client-steer-1',
+        sessionKey,
+        state: OpenClawChatState.Delta,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Updating the tests now.' }] },
+      },
+    });
+
+    expect(adapter.activeTurns.get(session.id)?.runId).toBe('client-steer-1');
+    expect(adapter.getConfigRestartWorkloadSnapshot()).toMatchObject({
+      state: ConfigWorkloadState.Busy,
+      activeTurns: 1,
+    });
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test('incomplete plan mode output requests one hidden completion retry', async () => {
