@@ -112,6 +112,48 @@ test('an unchanged config still replaces a stale backup without rewriting the co
   expect(fs.readFileSync(`${file}.bak.1`, 'utf8')).toContain('stale');
 });
 
+// Builds before OpenClaw v2026.8.1 stamped both fields; that runtime rejects `lastTouchedAt`.
+const legacyMeta = { lastTouchedVersion: '2026.6.1', lastTouchedAt: '2026-10-10T08:14:13.654Z' };
+
+test('bootstrapping over an older build\'s config drops its retired meta stamp', () => {
+  const file = path.join(makeConfigDir(), 'openclaw.json');
+  const legacy = JSON.stringify({ gateway: { mode: 'local' }, meta: legacyMeta }, null, 2);
+  fs.writeFileSync(file, legacy);
+  const target = createOpenClawConfigTarget(legacy, JSON.stringify({
+    gateway: { mode: 'local' },
+    meta: { migrations: { modelPolicyAllowlist: true } },
+  }));
+
+  const written = persistOpenClawConfigTarget(file, target);
+
+  expect(JSON.parse(written).meta).toEqual({
+    lastTouchedVersion: '2026.6.1', migrations: { modelPolicyAllowlist: true },
+  });
+  expect(fs.readFileSync(file, 'utf8')).toBe(written);
+  expect(fs.readFileSync(`${file}.bak`, 'utf8')).toBe(written);
+});
+
+test('a retired meta stamp alone still counts as a change to write', () => {
+  const file = path.join(makeConfigDir(), 'openclaw.json');
+  const desired = { gateway: { mode: 'local' }, meta: { lastTouchedVersion: '2026.6.1' } };
+  const stamped = JSON.stringify({ ...desired, meta: legacyMeta }, null, 2);
+  fs.writeFileSync(file, stamped);
+  const target = createOpenClawConfigTarget(stamped, JSON.stringify(desired));
+  expect(sameOpenClawConfigContent(stamped, target.raw)).toBe(true);
+
+  const written = persistOpenClawConfigTarget(file, target);
+
+  expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(desired);
+  expect(fs.readFileSync(`${file}.bak`, 'utf8')).toBe(written);
+});
+
+test('a target rendered over an older build\'s meta does not carry its stamp to the gateway', () => {
+  const legacy = JSON.stringify({ gateway: { mode: 'local' }, meta: legacyMeta });
+  // The no-model config renders on top of the existing file, `meta` included.
+  const target = createOpenClawConfigTarget(legacy, legacy, ['models']);
+  expect(JSON.parse(rebaseOpenClawConfigTarget(target, legacy)).meta).toEqual({ lastTouchedVersion: '2026.6.1' });
+});
+
 test('backup rotation keeps OpenClaw\'s five-slot ring', () => {
   const file = path.join(makeConfigDir(), 'openclaw.json');
   fs.writeFileSync(file, '{}');

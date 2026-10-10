@@ -16,6 +16,7 @@ import { OpenClawProviderId, ProviderName } from '../../shared/providers';
 import { DEFAULT_DISCORD_OPENCLAW_CONFIG, DEFAULT_QQ_CONFIG, DiscordDmPolicy } from '../im/types';
 import { OpenClawAgentOwnership } from './openclawAgentModels';
 import { OPENCLAW_MEMORY_CORE_PLUGIN_ID } from './openclawConfigSync';
+import { persistOpenClawConfigTarget } from './openclawConfigTarget';
 import { OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
 
 vi.mock('electron', () => ({
@@ -991,6 +992,32 @@ describe('OpenClawConfigSync runtime config output', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.models.pricing).toBeUndefined();
     expect(config.meta.lastTouchedAt).toBeUndefined();
+  });
+
+  test.each([
+    { models: 'signed in', hasApiConfig: true },
+    { models: 'no model yet', hasApiConfig: false },
+  ])('drops the retired meta stamp of a pre-v2026.8.1 config at startup ($models)', async ({ hasApiConfig }) => {
+    // LobsterAI 2026.9.4 (OpenClaw v2026.6.1) stamped both fields on every config write.
+    const legacyMeta = { lastTouchedVersion: '2026.6.1', lastTouchedAt: '2026-10-10T08:14:13.654Z' };
+    fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: 'local' }, meta: legacyMeta }, null, 2));
+    if (!hasApiConfig) mockRuntimeState.rawApiConfig.config = null;
+    const sync = await createSync();
+
+    // Startup only prepares; the stopped-gateway bootstrap persists the target.
+    const startup = sync.prepare('startup');
+    expect(startup.ok).toBe(true);
+    persistOpenClawConfigTarget(configPath, startup.target!);
+    const upgraded = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(upgraded.meta).not.toHaveProperty('lastTouchedAt');
+    expect(upgraded.meta.lastTouchedVersion).toBe('2026.6.1');
+
+    // A config that a build without this fix already rewrote heals on the next start.
+    fs.writeFileSync(configPath, JSON.stringify({ ...upgraded, meta: { ...upgraded.meta, ...legacyMeta } }, null, 2));
+    const relaunch = sync.prepare('startup');
+    expect(relaunch).toMatchObject({ ok: true, changed: false });
+    persistOpenClawConfigTarget(configPath, relaunch.target!);
+    expect(JSON.parse(fs.readFileSync(configPath, 'utf8'))).toEqual(upgraded);
   });
 
   test.runIf(fs.existsSync(path.resolve('vendor/openclaw-runtime/current/openclaw.mjs'))).each([false, true])(

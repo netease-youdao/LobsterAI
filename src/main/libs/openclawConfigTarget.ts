@@ -2,7 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
-import { withoutOpenClawWriteMetadata } from './openclawManagedModelPolicy';
+import {
+  hasRetiredOpenClawWriteMetadata,
+  withoutOpenClawWriteMetadata,
+  withoutRetiredOpenClawWriteMetadata,
+} from './openclawManagedModelPolicy';
 import { safelyReplaceTextFileSync } from './safeFileReplace';
 
 /** The authored baseline and host intent, before any running-Gateway write. */
@@ -82,7 +86,8 @@ export function rebaseOpenClawConfigTarget(target: OpenClawConfigTarget, current
     if (Object.hasOwn(desired, section)) rebased[section] = desired[section];
     else delete rebased[section];
   }
-  return `${JSON.stringify(rebased, null, 2)}\n`;
+  // `meta` is shared, so a stamp left by an older build would ride along forever.
+  return `${JSON.stringify(withoutRetiredOpenClawWriteMetadata(rebased), null, 2)}\n`;
 }
 
 export function sameOpenClawConfigContent(left: string, right: string): boolean {
@@ -144,7 +149,9 @@ export function alignOpenClawConfigBackup(configPath: string, raw: string): bool
 export function persistOpenClawConfigTarget(configPath: string, target: OpenClawConfigTarget): string {
   const current = readOpenClawConfigRaw(configPath);
   const raw = rebaseOpenClawConfigTarget(target, current);
-  if (current && sameOpenClawConfigContent(current, raw)) {
+  // The content comparison ignores write metadata, retired stamps included.
+  if (current && sameOpenClawConfigContent(current, raw)
+    && !hasRetiredOpenClawWriteMetadata(parseConfig(current))) {
     alignOpenClawConfigBackup(configPath, current);
     return current;
   }
