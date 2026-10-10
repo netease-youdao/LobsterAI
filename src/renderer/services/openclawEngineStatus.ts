@@ -1,4 +1,4 @@
-import { OpenClawEngineErrorCode } from '../../shared/openclawEngine/constants';
+import { OpenClawConfigApplyPendingReason, OpenClawEngineErrorCode } from '../../shared/openclawEngine/constants';
 import type { OpenClawEngineStatus } from '../types/cowork';
 import { i18nService } from './i18n';
 
@@ -16,6 +16,10 @@ export function resolveEngineNotReadyMessage(status: OpenClawEngineStatus | null
   if (status?.errorCode === OpenClawEngineErrorCode.ConfigApplyStalled) {
     return i18nService.t('coworkErrorConfigApplyStalled');
   }
-  if (isConfigApplyPendingStatus(status)) return i18nService.t('coworkErrorConfigApplyPending');
+  if (isConfigApplyPendingStatus(status)) {
+    return status?.configApplyPendingReason === OpenClawConfigApplyPendingReason.ModelSettings
+      ? i18nService.t('coworkErrorConfigApplyPendingForModel')
+      : i18nService.t('coworkErrorConfigApplyPending');
+  }
   return i18nService.t('coworkErrorEngineNotReady');
 }
