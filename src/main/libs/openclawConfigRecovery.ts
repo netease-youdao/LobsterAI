@@ -33,8 +33,9 @@ export function isDeferredRestartSatisfied(params: {
 
 /**
  * Pending application outlives an RPC, a disk no-op, and restart cooldowns.
- * Automatic recovery stops (stalls) once a recovery respawn did not help; the
- * target stays pending, so a later successful delivery still converges it.
+ * Automatic recovery stops (stalls) once a fresh gateway still cannot confirm
+ * the target: one respawned for recovery, or one that spawned from the target.
+ * The target stays pending, so a later successful delivery still converges it.
  */
 export class OpenClawConfigRecovery {
   private target: OpenClawConfigTarget | null = null;
@@ -46,6 +47,7 @@ export class OpenClawConfigRecovery {
   private nextRetryAt = 0;
   private respawnedForRecovery = false;
   private failuresAfterRespawn = 0;
+  private spawnLoadedGeneration: number | null = null;
   private stallMessage: string | null = null;
 
   get pending(): boolean { return this.target !== null; }
@@ -108,6 +110,28 @@ export class OpenClawConfigRecovery {
     this.lastRestartAt = now;
     this.respawnedForRecovery = true;
     this.failuresAfterRespawn = 0;
+  }
+
+  /**
+   * Whether the running generation loaded the pending target from disk when it
+   * spawned and has confirmed no other content since. Another respawn would
+   * only reload the same file, so the first such check per generation arms the
+   * stall count, as a recovery respawn does.
+   */
+  loadedAtSpawn(target: OpenClawConfigTarget, spawnedRaw: string | null, generation: number): boolean {
+    if (this.target !== target
+      || spawnedRaw === null
+      || this.needsRespawn(generation)
+      || this.appliedTarget?.generation === generation
+      || !sameOpenClawConfigContent(spawnedRaw, target.raw)) {
+      return false;
+    }
+    if (this.spawnLoadedGeneration !== generation) {
+      this.spawnLoadedGeneration = generation;
+      this.respawnedForRecovery = true;
+      this.failuresAfterRespawn = 0;
+    }
+    return true;
   }
 
   /**
