@@ -4,9 +4,11 @@ import { ShareDeploymentCandidateSource } from '../../../shared/shareDeployment/
 import { type Artifact, ArtifactTypeValue } from '../../types/artifact';
 import type { RootState } from '..';
 import artifactReducer, {
+  activateArtifactPreviewTab,
   addArtifact,
   addLinkedFileArtifact,
   openArtifactPreviewTab,
+  selectActivePreviewTab,
   selectSessionArtifacts,
   setSessionArtifacts,
   updateLocalServiceProjectMetadata,
@@ -44,6 +46,26 @@ const makeLocalServiceArtifact = (
     ...(projectDirectory ? { projectDirectory } : {}),
   },
 });
+
+const makeFileArtifact = (
+  id: string,
+  filePath: string,
+  messageId: string,
+  createdAt: number,
+): Artifact => {
+  const fileName = filePath.slice(filePath.lastIndexOf('/') + 1);
+  return {
+    id,
+    messageId,
+    sessionId: 'session-1',
+    type: fileName.endsWith('.md') ? ArtifactTypeValue.Markdown : ArtifactTypeValue.Document,
+    title: fileName,
+    content: '',
+    fileName,
+    filePath,
+    createdAt,
+  };
+};
 
 const makeImageArtifact = (
   id: string,
@@ -333,6 +355,131 @@ test('openArtifactPreviewTab resolves duplicate file cards to the display artifa
       artifactId: 'video-second-reply',
     }),
   ]);
+});
+
+test('addArtifact keeps an open preview on the file when a later reply writes it again', () => {
+  const filePath = '/Users/admin/work/report.docx';
+  let state = artifactReducer(undefined, addArtifact({
+    sessionId: 'session-1',
+    artifact: makeFileArtifact('report-first-reply', filePath, 'message-first-reply', 1),
+  }));
+  state = artifactReducer(state, openArtifactPreviewTab({
+    sessionId: 'session-1',
+    artifactId: 'report-first-reply',
+  }));
+
+  state = artifactReducer(state, addArtifact({
+    sessionId: 'session-1',
+    artifact: makeFileArtifact('report-edit-reply', filePath, 'message-edit-reply', 2),
+  }));
+
+  expect(state.artifactsBySession['session-1']).toHaveLength(2);
+  expect(state.previewTabsBySession['session-1']).toEqual([
+    expect.objectContaining({
+      id: 'artifact:report-edit-reply',
+      artifactId: 'report-edit-reply',
+    }),
+  ]);
+  expect(state.activePreviewTabIdBySession['session-1']).toBe('artifact:report-edit-reply');
+  expect(state.selectedArtifactId).toBe('report-edit-reply');
+  expect(state.panelOpenBySession['session-1']).toBe(true);
+
+  // The panel joins tabs with the display list; the open tab must still find its artifact.
+  const rootState = { artifact: state } as unknown as RootState;
+  const displayIds = selectSessionArtifacts(rootState, 'session-1').map(artifact => artifact.id);
+  expect(displayIds).toContain(selectActivePreviewTab(rootState, 'session-1')?.artifactId);
+});
+
+test('addArtifact moves a background preview tab to the newer artifact of its file', () => {
+  const notesPath = '/Users/admin/work/notes.md';
+  const reportPath = '/Users/admin/work/report.docx';
+  let state = artifactReducer(undefined, addArtifact({
+    sessionId: 'session-1',
+    artifact: makeFileArtifact('notes-first-reply', notesPath, 'message-first-reply', 1),
+  }));
+  state = artifactReducer(state, addArtifact({
+    sessionId: 'session-1',
+    artifact: makeFileArtifact('report-first-reply', reportPath, 'message-first-reply', 1),
+  }));
+  state = artifactReducer(state, openArtifactPreviewTab({
+    sessionId: 'session-1',
+    artifactId: 'notes-first-reply',
+  }));
+  state = artifactReducer(state, openArtifactPreviewTab({
+    sessionId: 'session-1',
+    artifactId: 'report-first-reply',
+  }));
+  state = artifactReducer(state, activateArtifactPreviewTab({
+    sessionId: 'session-1',
+    tabId: 'artifact:report-first-reply',
+  }));
+
+  state = artifactReducer(state, addArtifact({
+    sessionId: 'session-1',
+    artifact: makeFileArtifact('notes-edit-reply', notesPath, 'message-edit-reply', 2),
+  }));
+
+  expect(state.previewTabsBySession['session-1'].map(tab => tab.artifactId)).toEqual([
+    'notes-edit-reply',
+    'report-first-reply',
+  ]);
+  expect(state.activePreviewTabIdBySession['session-1']).toBe('artifact:report-first-reply');
+  expect(state.selectedArtifactId).toBe('report-first-reply');
+});
+
+test('addArtifact leaves an open preview alone when the added card does not replace it', () => {
+  const filePath = '/Users/admin/work/report.docx';
+  let state = artifactReducer(undefined, addArtifact({
+    sessionId: 'session-1',
+    artifact: makeFileArtifact('report-latest-reply', filePath, 'message-latest-reply', 2),
+  }));
+  state = artifactReducer(state, openArtifactPreviewTab({
+    sessionId: 'session-1',
+    artifactId: 'report-latest-reply',
+  }));
+
+  state = artifactReducer(state, addArtifact({
+    sessionId: 'session-1',
+    artifact: makeFileArtifact('report-earlier-reply', filePath, 'message-earlier-reply', 1),
+  }));
+
+  expect(state.previewTabsBySession['session-1']).toEqual([
+    expect.objectContaining({
+      id: 'artifact:report-latest-reply',
+      artifactId: 'report-latest-reply',
+    }),
+  ]);
+  expect(state.selectedArtifactId).toBe('report-latest-reply');
+});
+
+test('addArtifact folds a tab into the existing tab of the artifact that replaces it', () => {
+  const filePath = '/Users/admin/work/report.docx';
+  let state = artifactReducer(undefined, addArtifact({
+    sessionId: 'session-1',
+    artifact: makeFileArtifact('report-edit-reply', filePath, 'message-edit-reply', 2),
+  }));
+  // A library link can open a tab before its artifact has loaded.
+  state = artifactReducer(state, openArtifactPreviewTab({
+    sessionId: 'session-1',
+    artifactId: 'report-first-reply',
+  }));
+  state = artifactReducer(state, openArtifactPreviewTab({
+    sessionId: 'session-1',
+    artifactId: 'report-edit-reply',
+  }));
+
+  state = artifactReducer(state, addArtifact({
+    sessionId: 'session-1',
+    artifact: makeFileArtifact('report-first-reply', filePath, 'message-first-reply', 1),
+  }));
+
+  expect(state.previewTabsBySession['session-1']).toEqual([
+    expect.objectContaining({
+      id: 'artifact:report-edit-reply',
+      artifactId: 'report-edit-reply',
+    }),
+  ]);
+  expect(state.activePreviewTabIdBySession['session-1']).toBe('artifact:report-edit-reply');
 });
 
 test('addLinkedFileArtifact keeps one entry per opened file and refreshes it on reopen', () => {

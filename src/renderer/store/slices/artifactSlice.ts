@@ -204,10 +204,16 @@ const replacePreviewTabArtifactId = (
 
   const oldTabId = getPreviewTabId(oldArtifactId);
   const nextTabId = getPreviewTabId(nextArtifactId);
-  for (const tab of state.previewTabsBySession[sessionId] ?? []) {
-    if (tab.artifactId === oldArtifactId) {
-      tab.id = nextTabId;
-      tab.artifactId = nextArtifactId;
+  const tabs = state.previewTabsBySession[sessionId] ?? [];
+  if (tabs.some(tab => tab.id === nextTabId)) {
+    // The next artifact already has a tab: keep that one instead of a duplicate.
+    state.previewTabsBySession[sessionId] = tabs.filter(tab => tab.artifactId !== oldArtifactId);
+  } else {
+    for (const tab of tabs) {
+      if (tab.artifactId === oldArtifactId) {
+        tab.id = nextTabId;
+        tab.artifactId = nextArtifactId;
+      }
     }
   }
   if (state.activePreviewTabIdBySession[sessionId] === oldTabId) {
@@ -215,6 +221,35 @@ const replacePreviewTabArtifactId = (
   }
   if (state.selectedArtifactId === oldArtifactId) {
     state.selectedArtifactId = nextArtifactId;
+  }
+};
+
+/**
+ * Keep every preview tab on the artifact the panel displays for its file.
+ * A later reply that writes or links an open file adds a newer artifact,
+ * which replaces the open one in the display list; a tab still naming the
+ * older artifact would drop out and close the preview.
+ */
+const syncPreviewTabsToDisplayArtifacts = (
+  state: ArtifactState,
+  sessionId: string,
+  defaultProjectDirectory?: string,
+) => {
+  const tabs = state.previewTabsBySession[sessionId];
+  if (!tabs?.length) return;
+
+  const artifacts = state.artifactsBySession[sessionId] ?? [];
+  const options = { defaultProjectDirectory };
+  const displayIds = new Set(dedupeArtifactsForDisplay(artifacts, options).map(artifact => artifact.id));
+  const moves = tabs
+    .filter(tab => !displayIds.has(tab.artifactId))
+    .map(tab => ({
+      from: tab.artifactId,
+      to: resolveArtifactIdForDisplay(artifacts, tab.artifactId, options),
+    }))
+    .filter(move => move.from !== move.to);
+  for (const move of moves) {
+    replacePreviewTabArtifactId(state, sessionId, move.from, move.to);
   }
 };
 
@@ -324,6 +359,7 @@ const artifactSlice = createSlice({
         }
         state.artifactsBySession[sessionId].push(artifact);
       }
+      syncPreviewTabsToDisplayArtifacts(state, sessionId, defaultProjectDirectory);
     },
 
     /**
