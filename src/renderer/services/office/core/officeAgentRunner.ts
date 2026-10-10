@@ -3,6 +3,7 @@ import type { OfficeAgentRequest, OfficeAgentToolResult, OfficePackageInfo, Offi
 import { store } from '../../../store';
 import { openArtifactPreviewTab, selectSessionArtifacts } from '../../../store/slices/artifactSlice';
 import { normalizeShellFilePath } from '../../shellAppsCache';
+import { type OfficeDocument, OfficeSaveState } from './officeDocument';
 import type { OfficeEditorSession } from './officeEditorSession';
 
 export const agentReply = (value: unknown): OfficeAgentToolResult => ({
@@ -13,6 +14,20 @@ export const agentFailure = (message: string): OfficeAgentToolResult => ({ ...ag
 /** A finite number argument, or undefined. */
 export const numberArg = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
 
+/**
+ * Whether an edit reached the file. While another program locks the file the edit waits in the
+ * editor; usually that program is a desktop app showing the file, which only the user can close.
+ */
+export function agentSaveOutcome<TInfo extends OfficePackageInfo>(document: OfficeDocument<TInfo>, lockingApps: string): { saved: boolean; saveProblem?: string } {
+  const state = document.getSnapshot();
+  const saved = !document.dirty && state.status !== OfficeSaveState.Error;
+  if (saved || !state.inUse) return { saved };
+  return {
+    saved,
+    saveProblem: `The edits are in the LobsterAI editor but not in the file yet: another program locks it, usually ${lockingApps} with the file open. Ask the user to close it there; LobsterAI then saves the edits automatically. Do not write this file with other tools meanwhile.`,
+  };
+}
+
 /** How one format answers its agent tools. */
 export interface OfficeAgentAdapter<TSession> {
   editor: OfficeEditorSpec;
@@ -21,6 +36,8 @@ export interface OfficeAgentAdapter<TSession> {
   noun: string;
   /** Desktop apps to suggest for files that open read only, e.g. `Excel/WPS`. */
   desktopApps: string;
+  /** Desktop apps that lock the file while they show it (Windows), e.g. `Excel or WPS`. */
+  lockingApps: string;
   /** Answers for files that cannot be opened, by error code. */
   openFailures: Partial<Record<string, string>>;
   acquire: (filePath: string) => Promise<OfficeResult<TSession>>;
@@ -71,7 +88,14 @@ export function createOfficeAgentHandler<TSession extends OfficeEditorSession<Of
     if (!opened.success) return agentFailure(adapter.openFailures[opened.code] ?? `The ${noun} could not be opened.`);
     const session = opened.value;
     revealInPanel(filePath);
-    if (request.tool === tools.read) return agentReply(await adapter.read(session, args));
+    if (request.tool === tools.read) {
+      const result = await adapter.read(session, args);
+      if (!session.document.getSnapshot().inUse) return agentReply(result);
+      return agentReply({
+        ...result,
+        fileInUse: `Another program locks this ${noun}, usually ${adapter.lockingApps} with the file open. Edits made here stay in the LobsterAI editor and are saved automatically once the file is free; tell the user to close it there.`,
+      });
+    }
 
     const state = session.document.getSnapshot();
     if (state.readOnlyReasons.length) {

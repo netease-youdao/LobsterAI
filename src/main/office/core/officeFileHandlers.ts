@@ -17,6 +17,18 @@ export interface OfficeFileHandlerOptions<TInfo extends OfficePackageInfo> {
   logTag: string;
 }
 
+/**
+ * Office and WPS mark a document they hold open with an owner file next to it (`~$name`, which Word
+ * shortens by up to two leading characters), LibreOffice with `.~lock.name#`. It goes away when the
+ * document is closed there, which is when a save refused meanwhile can succeed.
+ */
+export function isLockFileOf(name: string, base: string): boolean {
+  if (name === `.~lock.${base}#`) return true;
+  if (!name.startsWith('~$')) return false;
+  const rest = name.slice(2);
+  return rest.length >= base.length - 2 && base.endsWith(rest);
+}
+
 /** Whether an IPC call comes from the main window's top frame, the only caller the editors accept. */
 export type OfficeCallerCheck = (event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>) => boolean;
 
@@ -47,9 +59,11 @@ export function registerOfficeFileHandlers<TInfo extends OfficePackageInfo>(opti
     if (watches.has(sessionId)) return;
     try {
       let timer: ReturnType<typeof setTimeout> | undefined;
+      const base = path.basename(filePath).toLowerCase();
       // Watch the directory: Office and our own saves replace the file's inode.
       const watcher = watch(path.dirname(filePath), { persistent: false }, (_event, name) => {
-        if (name && name.toString().toLowerCase() !== path.basename(filePath).toLowerCase()) return;
+        const changed = name?.toString().toLowerCase();
+        if (changed && changed !== base && !isLockFileOf(changed, base)) return;
         clearTimeout(timer);
         timer = setTimeout(() => {
           if (!owner.isDestroyed()) owner.send(channels.Changed, sessionId);

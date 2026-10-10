@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { makeSheetFixture, SHEET_FIXTURE_PARTS } from '../../../../tests/fixtures/sheet';
 import { makeSlidesFixture } from '../../../../tests/fixtures/slides';
@@ -168,5 +168,119 @@ describe.each(Object.entries(KITS))('%s file store', (_name, kit) => {
     expect(await store.checkpoint(1, edit)).toEqual({ success: false, code: OfficeFileError.Forbidden });
     expect(await store.save(1, edit)).toEqual({ success: false, code: OfficeFileError.Forbidden });
     expect(await fs.readFile(filePath)).toEqual(Buffer.from(locked));
+  });
+});
+
+describe('Excel file store against Windows file locks', () => {
+  const kit = KITS.Excel;
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  const realOpen = fs.open;
+  const realRename = fs.rename;
+  let directory: string;
+  let filePath: string;
+  let store: OfficeFileStore<OfficePackageInfo>;
+  let opened: OfficeOpenResult<OfficePackageInfo>;
+  const drafts = () => path.join(directory, 'drafts');
+  const refusal = (code: string, syscall: string) => Object.assign(new Error(`${code}: refused, ${syscall}`), { code, syscall });
+  const save = async (label: string) => {
+    const bytes = await kit.variant(label);
+    return { bytes, result: await store.save(1, { sessionId: opened.sessionId, bytes, baseVersion: opened.version, revision: 1 }) };
+  };
+  /** Windows answers for a program holding the file: opening it for writing and replacing it are refused. */
+  const holdOpen = (openCode = 'EBUSY') => {
+    vi.spyOn(fs, 'open').mockImplementation(async (target, flags, mode) => {
+      if (target === filePath && flags === 'r+') throw refusal(openCode, 'open');
+      return realOpen(target, flags, mode);
+    });
+  };
+  const refuseReplacement = (times = Infinity) => {
+    let refused = 0;
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (to === filePath && refused++ < times) throw refusal('EPERM', 'rename');
+      return realRename(from, to);
+    });
+  };
+  beforeEach(async () => {
+    // The store compares canonical paths; the temporary directory may sit behind a link.
+    directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'lobster-office-lock-test-')));
+    filePath = path.join(directory, '年包积分按月发放.xlsx');
+    await fs.writeFile(filePath, await kit.variant('原始内容'));
+    store = new OfficeFileStore(kit.format, drafts());
+    opened = unwrap(await store.open(1, filePath));
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+  afterEach(async () => {
+    Object.defineProperty(process, 'platform', platform);
+    vi.restoreAllMocks();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  test('opening and reading tell the editor whether another program holds the file', async () => {
+    expect(opened.inUse).toBe(false);
+    holdOpen();
+    expect(unwrap(await store.read(1, opened.sessionId)).inUse).toBe(true);
+    expect(unwrap(await new OfficeFileStore(kit.format, drafts()).open(2, filePath)).inUse).toBe(true);
+    vi.mocked(fs.open).mockRestore();
+    expect(unwrap(await store.read(1, opened.sessionId)).inUse).toBe(false);
+    expect(hash(await fs.readFile(filePath))).toBe(opened.version);
+  });
+
+  test('a file Excel or WPS holds open is reported in use, keeps the recovery copy and saves once released', async () => {
+    holdOpen();
+    const { bytes, result } = await save('我的编辑');
+    expect(result).toEqual({ success: false, code: OfficeFileError.InUse });
+    expect(hash(await fs.readFile(filePath))).toBe(opened.version);
+    expect((await fs.readdir(directory)).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    expect(Buffer.from(unwrap(await new OfficeFileStore(kit.format, drafts()).open(2, filePath)).recovery!.bytes)).toEqual(Buffer.from(bytes));
+    vi.mocked(fs.open).mockRestore();
+    expect(unwrap(await store.save(1, { sessionId: opened.sessionId, bytes, baseVersion: opened.version, revision: 1 })).version).toBe(hash(bytes));
+    expect(await fs.readFile(filePath)).toEqual(Buffer.from(bytes));
+  });
+
+  test('a replacement refused for a moment, as while a scanner reads the file, is retried', async () => {
+    refuseReplacement(1);
+    const { bytes, result } = await save('稍后写入');
+    expect(unwrap(result).version).toBe(hash(bytes));
+    expect(await fs.readFile(filePath)).toEqual(Buffer.from(bytes));
+  });
+
+  test('a replacement Windows keeps refusing is reported in use and writes nothing', async () => {
+    refuseReplacement();
+    const { result } = await save('无法写入');
+    expect(result).toEqual({ success: false, code: OfficeFileError.InUse });
+    expect(hash(await fs.readFile(filePath))).toBe(opened.version);
+    expect((await fs.readdir(directory)).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  test('a file changed while a refused replacement waits is not overwritten', async () => {
+    let refused = false;
+    const external = await kit.variant('外部程序保存');
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (to === filePath && !refused) {
+        refused = true;
+        // Another program saves its own version before the retry.
+        await fs.writeFile(filePath, external);
+        throw refusal('EPERM', 'rename');
+      }
+      return realRename(from, to);
+    });
+    const { result } = await save('我的编辑');
+    expect(result).toEqual({ success: false, code: OfficeFileError.Conflict });
+    expect(await fs.readFile(filePath)).toEqual(Buffer.from(external));
+  });
+
+  test('a file Windows refuses to open for writing for another reason is not reported in use', async () => {
+    holdOpen('EPERM');
+    expect(unwrap(await store.read(1, opened.sessionId)).inUse).toBe(false);
+    const { bytes, result } = await save('照常保存');
+    expect(unwrap(result).version).toBe(hash(bytes));
+  });
+
+  test('on other platforms the same refusal is an I/O failure', async () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    refuseReplacement();
+    expect((await save('其他平台')).result).toEqual({ success: false, code: OfficeFileError.Io });
   });
 });

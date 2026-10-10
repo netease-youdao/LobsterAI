@@ -9,6 +9,8 @@ export const OfficeFileError = {
   Unsupported: 'unsupported',
   Conflict: 'conflict',
   Forbidden: 'forbidden',
+  /** Another program holds the file open and Windows refuses to write it, as with Excel or WPS. */
+  InUse: 'in-use',
   Io: 'io',
 } as const;
 export type OfficeFileError = typeof OfficeFileError[keyof typeof OfficeFileError];
@@ -25,6 +27,8 @@ export type OfficeFileSnapshot<TInfo extends OfficePackageInfo> = TInfo & {
   bytes: Uint8Array;
   /** SHA-256 of the bytes on disk. */
   version: string;
+  /** Another program, such as Excel or WPS, holds the file open, so saving waits (Windows). */
+  inUse?: boolean;
 };
 
 export interface OfficeCheckpoint {

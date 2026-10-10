@@ -24,6 +24,8 @@ export interface OfficeDocumentState<TReason extends string = string> {
   needsResolution: boolean;
   originalCopyPath?: string;
   readOnlyReasons: TReason[];
+  /** Another program, such as Excel or WPS, holds the file open; edits wait here until it closes it. */
+  inUse: boolean;
 }
 
 export interface OfficeEditorPort {
@@ -55,7 +57,7 @@ export interface OfficeDocumentFile {
  * each snapshot would pin every version of the file in memory.
  */
 function packageInfoOf<TInfo extends OfficePackageInfo>(snapshot: OfficeFileSnapshot<TInfo>): TInfo {
-  const { bytes: _bytes, filePath: _filePath, version: _version, ...rest } = snapshot as OfficeFileSnapshot<TInfo> & Partial<OfficeOpenResult<TInfo>>;
+  const { bytes: _bytes, filePath: _filePath, version: _version, inUse: _inUse, ...rest } = snapshot as OfficeFileSnapshot<TInfo> & Partial<OfficeOpenResult<TInfo>>;
   const { sessionId: _sessionId, recovery: _recovery, ...info } = rest;
   return info as unknown as TInfo;
 }
@@ -95,7 +97,7 @@ export class OfficeDocument<TInfo extends OfficePackageInfo> {
     this.packageInfo = packageInfoOf(file);
     this.state = {
       ready: false, status: OfficeSaveState.Loading, draftSafe: true, restored: false,
-      needsResolution: Boolean(file.recovery), readOnlyReasons: file.readOnly,
+      needsResolution: Boolean(file.recovery), readOnlyReasons: file.readOnly, inUse: Boolean(file.inUse),
     };
   }
 
@@ -194,16 +196,21 @@ export class OfficeDocument<TInfo extends OfficePackageInfo> {
         this.publish({ status: OfficeSaveState.Saving });
         const result = await this.api.save(checkpoint);
         if (!result.success) {
-          const conflicted = result.code === OfficeFileError.Conflict;
-          this.publish({ status: conflicted ? OfficeSaveState.Conflict : OfficeSaveState.Error, errorCode: result.code,
-            needsResolution: conflicted || this.state.needsResolution });
+          if (result.code === OfficeFileError.InUse) {
+            // Not a failure: the edits wait in the recovery copy until a refresh finds the file free.
+            this.publish({ status: OfficeSaveState.Pending, errorCode: undefined, inUse: true });
+          } else {
+            const conflicted = result.code === OfficeFileError.Conflict;
+            this.publish({ status: conflicted ? OfficeSaveState.Conflict : OfficeSaveState.Error, errorCode: result.code,
+              needsResolution: conflicted || this.state.needsResolution });
+          }
           // A newer edit still needs a recovery checkpoint even when this save conflicts.
           if (this.unsafe) this.schedule();
           return;
         }
         this.baseVersion = result.value.version;
         this.savedRevision = checkpoint.revision;
-        this.publish({ status: this.dirty ? OfficeSaveState.Pending : OfficeSaveState.Saved, errorCode: undefined,
+        this.publish({ status: this.dirty ? OfficeSaveState.Pending : OfficeSaveState.Saved, errorCode: undefined, inUse: false,
           restored: false, originalCopyPath: result.value.originalCopyPath ?? this.state.originalCopyPath });
       }
     } catch (error) {
@@ -236,10 +243,19 @@ export class OfficeDocument<TInfo extends OfficePackageInfo> {
       // back to the snapshot preceding that save.
       if (baseVersion !== this.baseVersion) return;
       if (!result.success) {
-        this.publish({ status: OfficeSaveState.Error, errorCode: result.code });
+        // A program that does not even share reading leaves the shown content as it is.
+        this.publish(result.code === OfficeFileError.InUse ? { inUse: true } : { status: OfficeSaveState.Error, errorCode: result.code });
         return;
       }
-      if (result.value.version === this.baseVersion) return;
+      const inUse = Boolean(result.value.inUse);
+      const released = this.state.inUse && !inUse;
+      if (inUse !== this.state.inUse) this.publish({ inUse });
+      if (result.value.version === this.baseVersion) {
+        // Unchanged after the program holding it closed it, as its lock file going away reports,
+        // or as found on returning to this window: the edits that waited can be written now.
+        if (released && this.dirty) void this.flush();
+        return;
+      }
       if (this.dirty) {
         this.publish({ status: OfficeSaveState.Conflict, needsResolution: true });
         void this.flush();
@@ -272,7 +288,7 @@ export class OfficeDocument<TInfo extends OfficePackageInfo> {
       await this.refreshing;
       const current = await this.api.read(this.file.sessionId);
       if (!current.success) {
-        this.publish({ status: OfficeSaveState.Conflict, errorCode: current.code });
+        this.publish({ status: OfficeSaveState.Conflict, errorCode: current.code, inUse: current.code === OfficeFileError.InUse || this.state.inUse });
         return;
       }
       if (!keepMine) {
@@ -289,8 +305,8 @@ export class OfficeDocument<TInfo extends OfficePackageInfo> {
         }
       }
       this.baseVersion = current.value.version;
-      this.publish({ status: keepMine ? OfficeSaveState.Pending : OfficeSaveState.Saved,
-        restored: false, needsResolution: false, errorCode: undefined, issue: undefined, readOnlyReasons: this.packageInfo.readOnly });
+      this.publish({ status: keepMine ? OfficeSaveState.Pending : OfficeSaveState.Saved, restored: false, needsResolution: false,
+        errorCode: undefined, issue: undefined, readOnlyReasons: this.packageInfo.readOnly, inUse: Boolean(current.value.inUse) });
     } catch (error) {
       console.error(`${this.options.logTag} Could not resolve document conflict:`, error);
       this.publish({ status: OfficeSaveState.Conflict, errorCode: OfficeFileError.Io });

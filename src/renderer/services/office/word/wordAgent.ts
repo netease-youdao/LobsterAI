@@ -3,16 +3,18 @@ import { createServerAutomationHost } from '@docx-editor.dev/core/automation';
 import { OfficeFileError } from '../../../../shared/office/core/officeFile';
 import { WORD_EDITOR } from '../../../../shared/office/editors';
 import { WordAgentTool } from '../../../../shared/office/word/wordAgent';
-import { agentFailure, agentReply, createOfficeAgentHandler, numberArg } from '../core/officeAgentRunner';
-import { OfficeSaveState } from '../core/officeDocument';
+import { agentFailure, agentReply, agentSaveOutcome, createOfficeAgentHandler, numberArg } from '../core/officeAgentRunner';
 import { applyWordEdits, readWordDocument, type WordAgentEdit, WordAgentError } from './wordAgentOperations';
 import { acquireWordEditor, type WordEditorSession } from './wordEditorSession';
+
+const LOCKING_APPS = 'Word or WPS';
 
 const OPEN_FAILURE: Record<string, string> = {
   [OfficeFileError.InvalidFile]: 'The file is not a valid .docx package.',
   [OfficeFileError.TooLarge]: 'The document exceeds the editor limits (25 MB file, 100 MB expanded).',
   [OfficeFileError.Unsupported]: 'The editor cannot open this document (encrypted, ZIP64 or damaged).',
   [OfficeFileError.Forbidden]: 'The Word editor refused this request.',
+  [OfficeFileError.InUse]: `The document is open in another program (such as ${LOCKING_APPS}) that locks it. Ask the user to close it there, then try again.`,
   [OfficeFileError.Io]: 'The file could not be read. Check that it exists and is accessible.',
 };
 
@@ -21,6 +23,7 @@ export const handleWordAgentRequest = createOfficeAgentHandler<WordEditorSession
   tools: { read: WordAgentTool.Read, edit: WordAgentTool.Edit },
   noun: 'document',
   desktopApps: 'Word/WPS',
+  lockingApps: LOCKING_APPS,
   openFailures: OPEN_FAILURE,
   acquire: acquireWordEditor,
   isRefusal: (error): error is WordAgentError => error instanceof WordAgentError,
@@ -58,6 +61,6 @@ export const handleWordAgentRequest = createOfficeAgentHandler<WordEditorSession
     session.recordAgentEdit(result.commits);
     if (result.paragraphs[0]) session.reveal(result.paragraphs[0].id);
     await session.document.flush();
-    return agentReply({ ...result, saved: !session.document.dirty && session.document.getSnapshot().status !== OfficeSaveState.Error });
+    return agentReply({ ...result, ...agentSaveOutcome(session.document, LOCKING_APPS) });
   },
 });

@@ -20,6 +20,8 @@ export interface OfficeEditorLabels<TReason extends string = string> {
   tooLarge: string;
   unsupported: string;
   accessFailed: string;
+  /** Another program, such as Excel or WPS, holds the file open; shown on opening and while edits wait. */
+  inUse: string;
   /** The read-only notice; `{reasons}` lists the reasons. */
   readOnly: string;
   readOnlyReasons: Record<TReason, string>;
@@ -41,6 +43,7 @@ export const officeList = (keys: string[]): string => keys.map(key => t(key)).jo
 export function officeErrorLabel(labels: OfficeEditorLabels, code?: OfficeFileError): string {
   if (code === OfficeFileError.TooLarge) return t(labels.tooLarge);
   if (code === OfficeFileError.Unsupported) return t(labels.unsupported);
+  if (code === OfficeFileError.InUse) return `${t(labels.inUse)} ${t('officeInUseRetry')}`;
   return t(labels.accessFailed);
 }
 
@@ -181,6 +184,12 @@ export function OfficeEditorShell<TInfo extends OfficePackageInfo>({
             {' '}{t(state.draftSafe ? 'officeDraftRetained' : 'officeDraftUnsafe')}
           </p>
           <button type="button" onClick={() => { void (document.dirty ? document.flush() : document.refresh()); }}>{t('retry')}</button>
+        </div>
+      )}
+      {state.inUse && !readOnly && (
+        <div className="lobster-office-notice" role="status">
+          {/* While a version choice is pending, closing the file there saves nothing by itself. */}
+          <p>{t(labels.inUse)}{state.needsResolution ? '' : ` ${t('officeInUseNotice')}`}</p>
         </div>
       )}
       {readOnly && (
