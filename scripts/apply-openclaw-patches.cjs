@@ -1368,6 +1368,35 @@ v20260801StrongPatchValidators['openclaw-tolerate-replaced-thinking-catalog-owne
   },
 ];
 
+v20260801StrongPatchValidators['zz-openclaw-plan-completion-check.patch'] = [
+  {
+    file: 'src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts',
+    snippets: [
+      'const PLAN_COMPLETION_CHECK_CUSTOM_TYPE = "openclaw.plan-completion-check";',
+      'deferTerminalDelivery: shouldRunBeforeAgentFinalize === true,',
+    ],
+    orderedSnippets: [
+      'completionCheck.checked = true;',
+      'customType: PLAN_COMPLETION_CHECK_CUSTOM_TYPE,',
+      '{ deliverAs: "followUp" },',
+      'return { continueCurrentTurn: true };',
+    ],
+  },
+  {
+    file: 'src/agents/embedded-agent-subscribe.handlers.lifecycle.ts',
+    snippets: ['const continueCurrentTurn = () => {', 'hasPendingContinuation:', 'stream: "checkpoint",'],
+    orderedSnippets: ['const continueCurrentTurn = () => {', 'emitAssistantCheckpoint(ctx);'],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/terminal-retry-state.ts',
+    snippets: ['completionCheck: { unfinishedPlan: false, checked: false },'],
+  },
+  {
+    file: 'src/agents/tools/progress-card-tool.ts',
+    snippets: ['options.onPlanSaved?.('],
+  },
+];
+
 const strongPatchValidators = openclawVersion === 'v2026.8.1'
   ? v20260801StrongPatchValidators
   : legacyStrongPatchValidators;

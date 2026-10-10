@@ -294,6 +294,38 @@ test('plan mode assistant snapshot jitter keeps one visible plan message', () =>
   expect(turn.committedAssistantText).toBe('');
 });
 
+test('a run checkpoint keeps a finished answer that the same run follows with more text', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: '列出文件，删除最大的那个之前先问我', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const runId = 'run-checkpoint';
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const turn = createActiveTurn(session.id, sessionKey, runId);
+  adapter.activeTurns.set(session.id, turn);
+  adapter.sessionIdByRunId.set(runId, session.id);
+  // Too short for the stream reset heuristic (40 dropped characters) to split on its own.
+  const answer = '文件：big.log（9 KB）、notes.md（1 KB）。可以删除 big.log 吗？';
+  const followUp = '删除 big.log 需要你的确认，确认后我再继续。';
+  const agentEvent = (stream: string, data: Record<string, unknown>) => ({
+    event: 'agent',
+    payload: { runId, sessionKey, stream, data },
+  });
+
+  adapter.handleGatewayEvent(agentEvent(AgentEventStream.Assistant, { text: answer, delta: answer }));
+  adapter.handleGatewayEvent(agentEvent(AgentEventStream.Checkpoint, { reason: 'continue_current_turn' }));
+  // The follow-up arrives in two chunks, as the scripted E2E model streamed it.
+  const firstChunk = followUp.slice(0, 13);
+  adapter.handleGatewayEvent(agentEvent(AgentEventStream.Assistant, { text: firstChunk, delta: firstChunk }));
+  adapter.handleGatewayEvent(agentEvent(AgentEventStream.Assistant, { text: followUp, delta: followUp.slice(13) }));
+  adapter.flushPendingStoreUpdate(session.id, turn.assistantMessageId);
+
+  const assistantMessages = session.messages.filter((message) => message.type === 'assistant');
+  expect(assistantMessages.map((message) => message.content)).toEqual([answer, followUp]);
+  expect(assistantMessages[0].metadata).toMatchObject({ isStreaming: false, isFinal: true });
+  expect(turn.committedAssistantText).toBe(answer);
+});
+
 test('pickPersistedAssistantSegment: stream authority keeps previous when same length or longer', () => {
   expect(pickPersistedAssistantSegment('aa', 'a', true)).toEqual({
     content: 'aa',
