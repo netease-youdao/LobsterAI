@@ -9,6 +9,7 @@ import {
   CoworkBtwStatus,
   type CoworkBtwThread,
 } from '../../../shared/cowork/btw';
+import { COWORK_TEMP_SESSION_ID_PREFIX } from '../../../shared/cowork/constants';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import type { CoworkTurnUsage, CoworkTurnUsageAnchor } from '../../../shared/cowork/llmTurnUsage';
 import {
@@ -569,7 +570,7 @@ const coworkSlice = createSlice({
       }
       if (action.payload) {
         state.currentSessionId = action.payload.id;
-        if (!action.payload.id.startsWith('temp-')) {
+        if (!action.payload.id.startsWith(COWORK_TEMP_SESSION_ID_PREFIX)) {
           const summary = toSessionSummary(action.payload);
           const sessionIndex = state.sessions.findIndex((session) => session.id === summary.id);
           if (sessionIndex !== -1) {

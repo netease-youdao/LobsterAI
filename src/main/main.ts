@@ -9837,11 +9837,14 @@ if (!gotTheLock) {
           browserAnnotations,
           imageAttachmentPreviews,
         });
+        // Date the prompt by when it was submitted, not by when the engine
+        // became ready: the renderer times the optimistic turn from the click,
+        // and the turn timer must not restart when this session replaces it.
         coworkStoreInstance.addMessage(session.id, {
           type: 'user',
           content: prompt,
           metadata: messageMetadata,
-        });
+        }, ipcStartedAtMs);
 
         coworkStoreInstance.updateSession(session.id, { status: 'running' });
 
