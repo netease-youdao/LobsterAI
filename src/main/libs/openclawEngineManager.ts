@@ -9,6 +9,7 @@ import path from 'path';
 import { stripVTControlCharacters } from 'util';
 
 import {
+  type OpenClawConfigApplyPendingReason,
   OpenClawEngineErrorCode,
   OpenClawEnginePhase,
   OpenClawGatewayFailureKind,
@@ -135,6 +136,8 @@ export interface OpenClawEngineStatus {
    * The gateway process keeps running, so this is not an engine lifecycle state.
    */
   configApplyPending?: boolean;
+  /** Why that admission reply refused the task. */
+  configApplyPendingReason?: OpenClawConfigApplyPendingReason;
 }
 
 export interface OpenClawGatewayConnectionInfo {
@@ -427,6 +430,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private stopGatewayPromise: Promise<void> | null = null;
   private restartGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
   private secretEnvVars: Record<string, string> = {};
+  private gatewayProcessSecretEnvVars: Record<string, string> | null = null;
   private gatewaySpawnedAt: number | null = null;
   private gatewayLogPrunedDateKey: string | null = null;
   private gatewaySelfRestartNotedAt: number | null = null;
@@ -582,6 +586,11 @@ export class OpenClawEngineManager extends EventEmitter {
   /** When the live gateway process was spawned; it loaded its config after this time. */
   getGatewayProcessStartedAt(): number | null {
     return isGatewayProcessAlive(this.gatewayProcess) ? this.gatewaySpawnedAt : null;
+  }
+
+  /** Secret env values the live gateway process was spawned with; it never sees later values. */
+  getGatewayProcessSecretEnvVars(): Record<string, string> | null {
+    return isGatewayProcessAlive(this.gatewayProcess) ? this.gatewayProcessSecretEnvVars : null;
   }
 
   /** New gateway processes wait (bounded) until the app has written its first complete config. */
@@ -1103,6 +1112,8 @@ export class OpenClawEngineManager extends EventEmitter {
     const electronNodeRuntimePath = getElectronNodeRuntimePath();
     const cliShimDir = this.ensureBundledCliShims();
     const skillsRoot = getSkillsRoot().replace(/\\/g, '/');
+    // Config syncs replace the desired secrets at any time; the child keeps what it was spawned with.
+    const spawnSecretEnvVars = { ...this.secretEnvVars };
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -1136,7 +1147,7 @@ export class OpenClawEngineManager extends EventEmitter {
       LOBSTERAI_OPENCLAW_ENTRY: openclawEntry.replace(/\\/g, '/'),
       // Inject secret values for ${VAR} placeholders in openclaw.json.
       // This keeps plaintext credentials out of the config file on disk.
-      ...this.secretEnvVars,
+      ...spawnSecretEnvVars,
     };
 
     // Ensure the gateway process uses the host's local timezone for logging.
@@ -1316,6 +1327,7 @@ export class OpenClawEngineManager extends EventEmitter {
     this.gatewayGeneration += 1;
     this.gatewayGenerationByProcess.set(child, this.gatewayGeneration);
     this.gatewaySpawnedAt = Date.now();
+    this.gatewayProcessSecretEnvVars = spawnSecretEnvVars;
     if (startupPrep.skip) this.startupPrepSkippedProcesses.add(child);
     this.attachGatewayProcessLogs(child);
     this.attachGatewayExitHandlers(child);

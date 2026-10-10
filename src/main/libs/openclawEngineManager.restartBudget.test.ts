@@ -67,6 +67,7 @@ vi.mock('./openclawGatewayProcess', async (importOriginal) => {
 });
 
 import { OpenClawEngineManager } from './openclawEngineManager';
+import { spawnOpenClawGatewayProcess } from './openclawGatewayProcess';
 
 interface BudgetInternals {
   gatewayProcess: ChildProcess | null;
@@ -85,6 +86,7 @@ function makeManager() {
     configPath: path.join(fixtures, 'state', 'openclaw.json'),
     logsDir: path.join(fixtures, 'logs'),
     secretEnvVars: {},
+    gatewayProcessSecretEnvVars: null,
     gatewayProcess: null,
     gatewayGeneration: 0,
     gatewaySpawnedAt: null,
@@ -235,5 +237,21 @@ describe('OpenClaw gateway restart budget across healthy starts', () => {
 
     expect(internals.gatewayRestartAttempt).toBe(1);
     expect(manager.getStatus().phase).toBe(OpenClawEnginePhase.Starting);
+  });
+});
+
+describe('OpenClaw gateway spawn secrets', () => {
+  test('the live process keeps the secrets it was spawned with until it exits', async () => {
+    const { manager, crashRunningGateway } = makeManager();
+    manager.setSecretEnvVars({ LOBSTER_APIKEY_QWEN: 'spawned-key' });
+    await manager.startGateway('initial-start');
+    manager.setSecretEnvVars({ LOBSTER_APIKEY_QWEN: 'rotated-key' });
+
+    expect(vi.mocked(spawnOpenClawGatewayProcess).mock.lastCall?.[0].env)
+      .toMatchObject({ LOBSTER_APIKEY_QWEN: 'spawned-key' });
+    expect(manager.getGatewayProcessSecretEnvVars()).toEqual({ LOBSTER_APIKEY_QWEN: 'spawned-key' });
+
+    crashRunningGateway();
+    expect(manager.getGatewayProcessSecretEnvVars()).toBeNull();
   });
 });
