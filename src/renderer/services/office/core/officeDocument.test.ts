@@ -25,9 +25,10 @@ const FORMATS = [
 describe.each(FORMATS)('$name document revisions and recovery', format => {
   type Info = OfficePackageInfo & Record<string, unknown>;
   type Recovery = OfficeOpenResult<Info>['recovery'];
-  async function harness(recovery?: Recovery, readOnly: string[] = []) {
+  async function harness(recovery?: Recovery, readOnly: string[] = [], inUse = false) {
     const file: OfficeOpenResult<Info> = {
       sessionId: 'handle', filePath: format.path, bytes: bytes('disk'), version: 'disk-v1', recovery, readOnly, ...format.extra,
+      ...(inUse ? { inUse } : {}),
     };
     const api = {
       open: vi.fn(async () => success(file)),
@@ -188,6 +189,60 @@ describe.each(FORMATS)('$name document revisions and recovery', format => {
     expect(api.save).toHaveBeenCalledOnce();
     expect(document.unsafe).toBe(false);
     expect(document.getSnapshot().status).toBe(OfficeSaveState.Conflict);
+  });
+
+  test('a file another program holds open is reported on opening, and no longer once it reads free', async () => {
+    const { document, api, file } = await harness(undefined, [], true);
+    expect(document.getSnapshot()).toMatchObject({ status: OfficeSaveState.Saved, inUse: true });
+    expect(document.packageInfo).toEqual({ readOnly: [], ...format.extra });
+    api.read.mockResolvedValueOnce(success({ ...file, inUse: true }));
+    await document.refresh();
+    expect(document.getSnapshot().inUse).toBe(true);
+    api.read.mockResolvedValueOnce(success({ ...file, inUse: false }));
+    await document.refresh();
+    expect(document.getSnapshot()).toMatchObject({ status: OfficeSaveState.Saved, inUse: false });
+    expect(api.save).not.toHaveBeenCalled();
+  });
+
+  test('a save refused while another program holds the file waits, then is written once a refresh finds it free', async () => {
+    const { document, api, port, file } = await harness();
+    api.save.mockResolvedValueOnce({ success: false, code: OfficeFileError.InUse });
+    document.changed();
+    await document.flush();
+    expect(document.getSnapshot()).toMatchObject({ status: OfficeSaveState.Pending, errorCode: undefined, inUse: true, draftSafe: true });
+    expect(document.dirty).toBe(true);
+    api.read.mockResolvedValueOnce(success({ ...file, inUse: true }));
+    await document.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.save).toHaveBeenCalledOnce();
+    await document.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.save).toHaveBeenCalledTimes(2);
+    expect(port.load).toHaveBeenCalledTimes(1);
+    expect(document.dirty).toBe(false);
+    expect(document.getSnapshot()).toMatchObject({ status: OfficeSaveState.Saved, inUse: false });
+  });
+
+  test('a read another program refuses outright keeps the content and reports the file held open', async () => {
+    const { document, api, port } = await harness();
+    api.read.mockResolvedValueOnce({ success: false, code: OfficeFileError.InUse });
+    await document.refresh();
+    expect(document.getSnapshot()).toMatchObject({ status: OfficeSaveState.Saved, inUse: true });
+    expect(document.getSnapshot().errorCode).toBeUndefined();
+    await document.refresh();
+    expect(document.getSnapshot().inUse).toBe(false);
+    expect(port.load).toHaveBeenCalledTimes(1);
+  });
+
+  test('a refresh does not repeat saves that failed for other reasons', async () => {
+    const { document, api } = await harness();
+    api.save.mockResolvedValueOnce({ success: false, code: OfficeFileError.Io });
+    document.changed();
+    await document.flush();
+    await document.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.save).toHaveBeenCalledOnce();
+    expect(document.getSnapshot()).toMatchObject({ status: OfficeSaveState.Error, errorCode: OfficeFileError.Io });
   });
 
   test('watcher notifications from our own save preserve the live model and undo history', async () => {

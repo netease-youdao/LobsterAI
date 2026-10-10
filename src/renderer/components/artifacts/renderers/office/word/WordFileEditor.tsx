@@ -22,6 +22,7 @@ const WORD_LABELS: OfficeEditorLabels<WordReadOnlyReason> = {
   tooLarge: 'wordTooLarge',
   unsupported: 'wordUnsupported',
   accessFailed: 'wordAccessFailed',
+  inUse: 'wordInUse',
   readOnly: 'wordReadOnly',
   readOnlyReasons: {
     [WordReadOnlyReason.Comments]: 'wordReadOnlyComments',

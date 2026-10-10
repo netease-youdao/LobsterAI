@@ -23,6 +23,7 @@ const SHEET_LABELS: OfficeEditorLabels<SheetReadOnlyReason> = {
   tooLarge: 'sheetTooLarge',
   unsupported: 'sheetUnsupported',
   accessFailed: 'sheetAccessFailed',
+  inUse: 'sheetInUse',
   readOnly: 'sheetReadOnly',
   readOnlyReasons: {
     [SheetReadOnlyReason.Protection]: 'sheetReadOnlyProtection',

@@ -19,6 +19,19 @@ const hash = (bytes: Uint8Array | string): string => createHash('sha256').update
 const isVersion = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const MAX_DRAFT_HEADER_BYTES = 16384;
 const DRAFT_FORMAT_VERSION = 1;
+/** Pauses before retrying a replacement Windows refused; scanners and indexers let go within moments. */
+const REPLACE_RETRY_DELAYS_MS = [100, 200, 400, 800];
+
+/**
+ * Windows refuses to open, write or replace a file another program holds open without sharing it:
+ * Excel, Word, PowerPoint and WPS do so with every document they show, scanners and indexers for a
+ * moment.
+ */
+function isHeldByAnotherProgram(error: unknown): boolean {
+  if (process.platform !== 'win32' || !(error instanceof Error)) return false;
+  const { code, syscall } = error as NodeJS.ErrnoException;
+  return code === 'EBUSY' || (syscall === 'rename' && (code === 'EPERM' || code === 'EACCES'));
+}
 
 export interface OfficeFormat<TInfo extends OfficePackageInfo> {
   /** Lower-case extension including the dot, e.g. `.xlsx`. */
@@ -58,9 +71,13 @@ export class OfficeFileStore<TInfo extends OfficePackageInfo> {
     try {
       return { success: true, value: await operation() };
     } catch (error) {
-      const code = error instanceof OfficePackageException ? error.code : OfficeFileError.Io;
-      if (code === OfficeFileError.Io) console.error(`${this.format.logTag} File operation failed:`, error);
-      return { success: false, code };
+      if (error instanceof OfficePackageException) return { success: false, code: error.code };
+      if (isHeldByAnotherProgram(error)) {
+        console.warn(`${this.format.logTag} File is held open by another program:`, error);
+        return { success: false, code: OfficeFileError.InUse };
+      }
+      console.error(`${this.format.logTag} File operation failed:`, error);
+      return { success: false, code: OfficeFileError.Io };
     }
   }
 
@@ -100,6 +117,12 @@ export class OfficeFileStore<TInfo extends OfficePackageInfo> {
   private async readSnapshot(filePath: string): Promise<OfficeFileSnapshot<TInfo>> {
     const bytes = await this.readBounded(filePath, this.format.maxFileBytes);
     return { ...this.format.inspect(bytes), filePath, bytes, version: hash(bytes) };
+  }
+
+  /** What the editor shows, and whether a save would wait for another program to close the file. */
+  private async readForEditor(filePath: string): Promise<OfficeFileSnapshot<TInfo>> {
+    const snapshot = await this.readSnapshot(filePath);
+    return { ...snapshot, inUse: await isHeldOpen(filePath) };
   }
 
   private session(owner: number, sessionId: string): FileSession {
@@ -162,7 +185,7 @@ export class OfficeFileStore<TInfo extends OfficePackageInfo> {
     return this.result(async (): Promise<OfficeOpenResult<TInfo>> => {
       const filePath = await this.resolvePath(requestedPath);
       return this.serial(filePath, async () => {
-        const file = await this.readSnapshot(filePath);
+        const file = await this.readForEditor(filePath);
         const recovery = await this.readDraft(filePath);
         const existing = [...this.sessions].find(([, session]) => session.owner === owner && session.filePath === filePath);
         const sessionId = existing?.[0] ?? randomUUID();
@@ -188,7 +211,7 @@ export class OfficeFileStore<TInfo extends OfficePackageInfo> {
         if (await this.resolvePath(session.requestedPath) !== session.filePath) {
           throw new OfficePackageException(OfficeFileError.Conflict, 'File link target changed');
         }
-        const snapshot = await this.readSnapshot(session.filePath);
+        const snapshot = await this.readForEditor(session.filePath);
         // The renderer shows exactly these bytes next, so writes follow their admission.
         session.editable = snapshot.readOnly.length === 0;
         return snapshot;
@@ -244,6 +267,11 @@ export class OfficeFileStore<TInfo extends OfficePackageInfo> {
           }
           const stat = await fs.stat(session.filePath);
           await fs.access(session.filePath, fsConstants.W_OK);
+          if (await isHeldOpen(session.filePath)) {
+            // Expected while Excel or WPS shows the file, and repeated with each edit until it closes it.
+            console.debug(`${this.format.logTag} Save waits for another program to close the file`);
+            throw new OfficePackageException(OfficeFileError.InUse, 'File is held open by another program');
+          }
           await replaceFile(session.filePath, request.bytes, stat.mode & 0o777, async () => {
             if (await this.resolvePath(session.requestedPath) !== session.filePath
               || hash(await this.readBounded(session.filePath, this.format.maxFileBytes)) !== request.baseVersion) {
@@ -281,6 +309,21 @@ export class OfficeFileStore<TInfo extends OfficePackageInfo> {
   }
 }
 
+/**
+ * On Windows, whether a program such as Excel or WPS holds the file open so that writing it is
+ * refused; access() checks only the read-only attribute there. Other refusals, such as a missing
+ * permission, show when saving.
+ */
+async function isHeldOpen(filePath: string): Promise<boolean> {
+  if (process.platform !== 'win32') return false;
+  try {
+    await (await fs.open(filePath, 'r+')).close();
+    return false;
+  } catch (error) {
+    return isHeldByAnotherProgram(error);
+  }
+}
+
 /** Sync a complete temporary file, then replace it on the same filesystem. */
 async function replaceFile(filePath: string, bytes: Uint8Array, mode: number, beforeReplace?: () => Promise<void>): Promise<void> {
   const temporary = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`);
@@ -293,8 +336,17 @@ async function replaceFile(filePath: string, bytes: Uint8Array, mode: number, be
     } finally {
       await handle.close();
     }
-    await beforeReplace?.();
-    await fs.rename(temporary, filePath);
+    for (let attempt = 0; ; attempt++) {
+      // Checked before every attempt: the file may change while a retry waits.
+      await beforeReplace?.();
+      try {
+        await fs.rename(temporary, filePath);
+        return;
+      } catch (error) {
+        if (attempt >= REPLACE_RETRY_DELAYS_MS.length || !isHeldByAnotherProgram(error)) throw error;
+        await new Promise(resolve => setTimeout(resolve, REPLACE_RETRY_DELAYS_MS[attempt]));
+      }
+    }
   } finally {
     await fs.unlink(temporary).catch((): void => undefined);
   }

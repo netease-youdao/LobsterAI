@@ -24,6 +24,7 @@ const SLIDES_LABELS: OfficeEditorLabels<SlidesReadOnlyReason> = {
   tooLarge: 'slidesTooLarge',
   unsupported: 'slidesUnsupported',
   accessFailed: 'slidesAccessFailed',
+  inUse: 'slidesInUse',
   readOnly: 'slidesReadOnly',
   readOnlyReasons: {
     [SlidesReadOnlyReason.Protection]: 'slidesReadOnlyProtection',

@@ -4,17 +4,19 @@ import type { FWorkbook } from '@univerjs/sheets/facade';
 import { OfficeFileError } from '../../../../shared/office/core/officeFile';
 import { SHEET_EDITOR } from '../../../../shared/office/editors';
 import { SheetAgentTool } from '../../../../shared/office/sheet/sheetAgent';
-import { agentFailure, agentReply, createOfficeAgentHandler } from '../core/officeAgentRunner';
-import { OfficeSaveState } from '../core/officeDocument';
+import { agentFailure, agentReply, agentSaveOutcome, createOfficeAgentHandler } from '../core/officeAgentRunner';
 import { applySheetEdits, formulaErrors, readSheet, SheetAgentError } from './sheetAgentOperations';
 import { acquireSheetEditor, type SheetEditorSession } from './sheetEditorSession';
 import { StructureRefusal } from './sheetStructureSupport';
+
+const LOCKING_APPS = 'Excel or WPS';
 
 const OPEN_FAILURE: Record<string, string> = {
   [OfficeFileError.InvalidFile]: 'The file is not a valid .xlsx workbook.',
   [OfficeFileError.TooLarge]: 'The workbook exceeds the editor limits (20 MB file, 500,000 stored cells).',
   [OfficeFileError.Unsupported]: 'The editor cannot open this workbook (encrypted, Strict Open XML, ZIP64 or damaged).',
   [OfficeFileError.Forbidden]: 'The Excel editor refused this request.',
+  [OfficeFileError.InUse]: `The workbook is open in another program (such as ${LOCKING_APPS}) that locks it. Ask the user to close it there, then try again.`,
   [OfficeFileError.Io]: 'The file could not be read. Check that it exists and is accessible.',
 };
 
@@ -47,6 +49,7 @@ export const handleSheetAgentRequest = createOfficeAgentHandler<SheetEditorSessi
   tools: { read: SheetAgentTool.Read, edit: SheetAgentTool.Edit },
   noun: 'workbook',
   desktopApps: 'Excel/WPS',
+  lockingApps: LOCKING_APPS,
   openFailures: OPEN_FAILURE,
   acquire: acquireSheetEditor,
   isRefusal: (error): error is SheetAgentError => error instanceof SheetAgentError,
@@ -95,7 +98,7 @@ export const handleSheetAgentRequest = createOfficeAgentHandler<SheetEditorSessi
       revision: session.document.currentRevision,
       applied: result.applied,
       changed: result.changed,
-      saved: !session.document.dirty && saved.status !== OfficeSaveState.Error,
+      ...agentSaveOutcome(session.document, LOCKING_APPS),
       ...(saved.issue ? { saveProblem: `The edits are in the editor but cannot be written to the file (${saved.issue}). Undo them or adjust the change.` } : {}),
       ...(Object.keys(errors).length ? { formulaErrors: errors } : {}),
     });

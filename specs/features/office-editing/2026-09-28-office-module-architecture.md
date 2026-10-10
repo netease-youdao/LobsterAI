@@ -50,9 +50,9 @@ src/renderer/assets/office-fonts/   内置 OFL 字体，Word、Excel、PPT 共�
 
 ## 各层的公共部分
 
-- 主进程：`OfficeFileStore`（按拥有者发放句柄、按规范路径串行写入、恢复草稿、首次覆盖前留原始副本、带版本校验的原子替换）、`readOfficeZip`（解压前检查限制、CRC、拒绝 ZIP64/加密/DTD/非 UTF-8、严格解码字符引用）、`OfficeAgentBridge`（只接受主窗口顶层 frame 的回复，每次调用都有超时）、`resolveOfficeMcpStdioLaunch`（生成 stdio MCP 服务与 `runtime.json`）。
-- 渲染服务：`OfficeDocument`（修订号、恢复草稿、自动保存、外部修改仲裁，只保留文件句柄和包信息，不保留字节）；`OfficeEditorSession` 基类（宿主元素在面板和屏幕外停放区之间移动，保存与释放句柄）；`createOfficeEditorRegistry`（每个文件一个会话、HMR 保持、退出保护、外部修改刷新、在 React 提交之后回收空闲会话）；`createOfficeAgentHandler`（同一文件的调用串行、在面板中显示文件、只读/待解决冲突/修订号检查、未知工具拒绝）。
-- 面板组件：`OfficeEditorLoader`（打开中状态、失败时提供预览/系统应用/重试）、`OfficeEditorShell`（保存状态、恢复与冲突选择、保存错误、只读说明、Cmd/Ctrl+S、页脚的编辑前副本）、`OfficeToolbar*`（按钮、分隔线、字体与字号菜单）、`OfficeSplitButton`、`OfficeColorButton`、统一的缩放范围 25%–400%，以及 `office*` 文案。
+- 主进程：`OfficeFileStore`（按拥有者发放句柄、按规范路径串行写入、恢复草稿、首次覆盖前留原始副本、带版本校验的原子替换；Windows 上文件被 Excel/WPS 等程序占用时，打开和读取结果带 `inUse`，保存报 `in-use`，替换被拒时短暂重试）、`readOfficeZip`（解压前检查限制、CRC、拒绝 ZIP64/加密/DTD/非 UTF-8、严格解码字符引用）、`OfficeAgentBridge`（只接受主窗口顶层 frame 的回复，每次调用都有超时）、`resolveOfficeMcpStdioLaunch`（生成 stdio MCP 服务与 `runtime.json`）。
+- 渲染服务：`OfficeDocument`（修订号、恢复草稿、自动保存、外部修改仲裁；文件被占用时保存转为等待，占用程序的锁文件消失或回到窗口时补存；只保留文件句柄和包信息，不保留字节）；`OfficeEditorSession` 基类（宿主元素在面板和屏幕外停放区之间移动，保存与释放句柄）；`createOfficeEditorRegistry`（每个文件一个会话、HMR 保持、退出保护、外部修改刷新、在 React 提交之后回收空闲会话）；`createOfficeAgentHandler`（同一文件的调用串行、在面板中显示文件、只读/待解决冲突/修订号检查、未知工具拒绝）。
+- 面板组件：`OfficeEditorLoader`（打开中状态、失败时提供预览/系统应用/重试）、`OfficeEditorShell`（保存状态、恢复与冲突选择、保存错误、被其他程序占用的提示、只读说明、Cmd/Ctrl+S、页脚的编辑前副本）、`OfficeToolbar*`（按钮、分隔线、字体与字号菜单）、`OfficeSplitButton`、`OfficeColorButton`、统一的缩放范围 25%–400%，以及 `office*` 文案。
 
 ## 不能改的名称
 
