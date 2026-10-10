@@ -185,7 +185,6 @@ import {
   WaitingNotificationKind,
 } from '../shared/notifications/constants';
 import {
-  OpenClawEngineErrorCode,
   OpenClawEngineIpc,
   OpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
@@ -2864,18 +2863,16 @@ const buildConfigApplyPendingStatus = (message: string): OpenClawEngineStatus =>
   };
 };
 
-const buildConfigApplyErrorStatus = (message: string, errorCode?: OpenClawEngineErrorCode): OpenClawEngineStatus => ({
+const buildConfigApplyErrorStatus = (message: string): OpenClawEngineStatus => ({
   phase: OpenClawEnginePhase.Error,
   version: getOpenClawEngineManager().getStatus().version,
   message,
-  ...(errorCode ? { errorCode } : {}),
   canRetry: false,
 });
 
-/** A rejected or stalled target: an engine error whose Quick Repair can clear it. */
-const buildConfigRecoveryErrorStatus = (): OpenClawEngineStatus => buildConfigApplyErrorStatus(
+/** A target the gateway rejected as invalid: an engine error until a corrected config replaces it. */
+const buildConfigRejectedStatus = (): OpenClawEngineStatus => buildConfigApplyErrorStatus(
   openClawConfigRecovery.error ?? t('openClawConfigApplyPending'),
-  openClawConfigRecovery.stalled ? OpenClawEngineErrorCode.ConfigApplyStalled : undefined,
 );
 
 /**
@@ -2893,6 +2890,7 @@ const stallConfigRecoveryIfExhausted = (
       return false;
     }
     console.warn(`${gwDiagTs()} config recovery stalled: a restarted gateway still cannot apply the target (${delivery.detail})`);
+    getOpenClawEngineManager().setConfigApplyStall(openClawConfigRecovery.error);
   }
   if (deferredRestartReason && isConfigDeliveryFallbackReason(deferredRestartReason)) {
     clearDeferredRestart();
@@ -2914,20 +2912,26 @@ const waitForOpenClawConfigApply = async (context: string, waitForRecovery = tru
     try {
       await pendingApply.promise;
     } catch (error) {
-      if (waitForRecovery && openClawConfigRecovery.error) return buildConfigRecoveryErrorStatus();
-      const message = error instanceof Error
-        ? error.message
-        : 'OpenClaw config sync failed.';
-      return buildConfigApplyPendingStatus(message);
+      if (waitForRecovery && openClawConfigRecovery.rejected) return buildConfigRejectedStatus();
+      // A stalled target cannot converge by waiting, so a failed attempt at it
+      // must not hold back tasks or the Quick Repair that clears it.
+      if (!openClawConfigRecovery.stalled) {
+        const message = error instanceof Error
+          ? error.message
+          : 'OpenClaw config sync failed.';
+        return buildConfigApplyPendingStatus(message);
+      }
     }
     // A newer queued target must not escape an older operation's barrier.
     pendingApply = openClawConfigApplyState === pendingApply ? null : openClawConfigApplyState;
   }
 
   if (!waitForRecovery) return null;
-  if (openClawConfigRecovery.error) return buildConfigRecoveryErrorStatus();
+  if (openClawConfigRecovery.rejected) return buildConfigRejectedStatus();
   const phase = getOpenClawEngineManager().getStatus().phase;
-  if (deferredRestartReason || (openClawConfigRecovery.pending
+  // Tasks run on the config the gateway already applied while a stall lasts.
+  const recoveryPending = openClawConfigRecovery.pending && !openClawConfigRecovery.stalled;
+  if (deferredRestartReason || (recoveryPending
     && (phase === OpenClawEnginePhase.Running || phase === OpenClawEnginePhase.Starting))) {
     return buildConfigApplyPendingStatus(
       deferredRestartOverdue
@@ -3260,7 +3264,7 @@ const _syncOpenClawConfigImpl = async (
       return {
         success: false,
         changed: effectiveConfigChanged,
-        status: buildConfigRecoveryErrorStatus(),
+        status: manager.getStatus(),
         error: openClawConfigRecovery.error ?? delivery.detail,
       };
     }
@@ -3342,7 +3346,7 @@ const _syncOpenClawConfigImpl = async (
         return {
           success: false,
           changed: true,
-          status: buildConfigRecoveryErrorStatus(),
+          status: manager.getStatus(),
           error: openClawConfigRecovery.error ?? confirmed.detail,
         };
       }
@@ -3421,6 +3425,13 @@ const syncOpenClawConfig = async (
       error: error instanceof Error ? error.message : 'OpenClaw config sync failed.',
     };
   } finally {
+    if (!isQuitting && !isDataMigrationRestoreInProgress) {
+      // Engine status carries the stall, so it must follow every settled sync:
+      // a successful delivery is what ends it.
+      getOpenClawEngineManager().setConfigApplyStall(
+        openClawConfigRecovery.stalled ? openClawConfigRecovery.error : null,
+      );
+    }
     if (generation === openClawConfigApplyGeneration) {
       openClawConfigApplyState = null;
       // Task admission can publish a temporary starting state to the renderer.
@@ -3428,9 +3439,9 @@ const syncOpenClawConfig = async (
       // phase transition to clear that UI state. Only the latest queue item may
       // announce convergence; rejected config must not leave a startup spinner.
       if (!isQuitting && !isDataMigrationRestoreInProgress) {
-        if (openClawConfigRecovery.error) {
-          forwardOpenClawStatus(buildConfigRecoveryErrorStatus());
-        } else if (!openClawConfigRecovery.pending && !deferredRestartReason) {
+        if (openClawConfigRecovery.rejected) {
+          forwardOpenClawStatus(buildConfigRejectedStatus());
+        } else if (openClawConfigRecovery.stalled || (!openClawConfigRecovery.pending && !deferredRestartReason)) {
           forwardOpenClawStatus(getOpenClawEngineManager().getStatus());
         }
       }

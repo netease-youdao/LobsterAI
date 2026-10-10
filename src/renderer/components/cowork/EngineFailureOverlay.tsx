@@ -26,6 +26,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
   const [isAllowingLoopback, setIsAllowingLoopback] = useState(false);
   const [gatewayRepairError, setGatewayRepairError] = useState<string | null>(null);
   const [isDeferred, setIsDeferred] = useState(false);
+  const [isStallExpanded, setIsStallExpanded] = useState(false);
 
   useEffect(() => {
     coworkService.getOpenClawEngineStatus()
@@ -47,6 +48,12 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
       setIsDeferred(false);
     }
   }, [status?.phase]);
+
+  // The gateway still runs and tasks proceed, so a stalled config is a notice, not a failure.
+  const isConfigStalled = Boolean(status?.configApplyStalled) && status?.phase !== OpenClawEnginePhase.Error;
+  useEffect(() => {
+    if (!isConfigStalled) setIsStallExpanded(false);
+  }, [isConfigStalled]);
 
   const isActionRunning = isRestartingGateway || isRepairingGateway || isAllowingLoopback;
 
@@ -121,7 +128,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
     }
   };
 
-  if (suspended || !status || (status.phase !== OpenClawEnginePhase.Error && !isRepairingGateway)) {
+  if (suspended || !status || (status.phase !== OpenClawEnginePhase.Error && !isRepairingGateway && !isConfigStalled)) {
     return null;
   }
 
@@ -135,8 +142,6 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
   // Config repair cannot help a firewall block; the primary action adds the
   // loopback rule instead, and restarting re-runs the self-test.
   const isLoopbackBlocked = status.errorCode === OpenClawEngineErrorCode.LoopbackBlocked;
-  // The gateway runs, but settings stopped reaching it; repair clears what a restart cannot.
-  const isConfigStalled = status.errorCode === OpenClawEngineErrorCode.ConfigApplyStalled;
   const titleKey = isRepairingGateway ? 'openClawRepairRunning' : isLoopbackBlocked ? 'coworkOpenClawLoopbackBlockedTitle'
     : isRuntimeDamaged ? 'coworkOpenClawRuntimeDamagedError'
       : isRuntimeMissing ? 'coworkOpenClawRuntimeMissingError' : needsMediaMigration ? 'openClawAgentMediaMigrationTitle'
@@ -159,18 +164,24 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
       labelKey: isRepairingGateway ? 'openClawRepairRunning' : 'coworkOpenClawQuickRepair',
     };
 
-  if (isDeferred) {
+  // A stall starts collapsed because it blocks nothing; a failed repair opens it to show why.
+  const isCollapsed = isConfigStalled ? !isStallExpanded && !gatewayRepairError : isDeferred;
+  const shortLabelKey = isConfigStalled ? 'coworkOpenClawConfigStalledShort'
+    : isLoopbackBlocked ? 'coworkOpenClawLoopbackBlockedShort' : 'coworkOpenClawErrorShort';
+  const detail = gatewayRepairError || (isConfigStalled ? status.configApplyStalled?.detail : status.message);
+
+  if (isCollapsed) {
     return (
       <div className="pointer-events-none fixed inset-x-0 top-4 z-[90] flex justify-center px-4">
         <div className="non-draggable pointer-events-auto flex max-w-[calc(100vw-2rem)] items-center gap-1.5 rounded-full border border-red-200 bg-surface py-1 pl-3 pr-1 shadow-lg animate-fade-in-down dark:border-red-900/60">
           <button
             type="button"
-            onClick={() => setIsDeferred(false)}
+            onClick={() => (isConfigStalled ? setIsStallExpanded(true) : setIsDeferred(false))}
             className="inline-flex min-w-0 items-center gap-1.5 text-xs font-medium text-foreground transition-colors hover:text-red-600 dark:hover:text-red-400"
           >
             <ExclamationTriangleIcon className="h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />
             <span className="truncate">
-              {i18nService.t(isLoopbackBlocked ? 'coworkOpenClawLoopbackBlockedShort' : 'coworkOpenClawErrorShort')}
+              {i18nService.t(shortLabelKey)}
             </span>
             <ChevronDownIcon className="h-3 w-3 shrink-0 text-secondary" />
           </button>
@@ -208,9 +219,9 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
           <p className="mt-2 text-[13px] leading-5 text-secondary">
             {i18nService.t(hintKey)}
           </p>
-          {!isRepairingGateway && (gatewayRepairError || status.message) && (
+          {!isRepairingGateway && detail && (
             <p className="mt-2 max-h-36 max-w-full overflow-y-auto whitespace-pre-wrap break-words text-left text-xs leading-5 text-red-600 dark:text-red-400 [overflow-wrap:anywhere]">
-              {gatewayRepairError || status.message}
+              {detail}
             </p>
           )}
         </div>
@@ -252,7 +263,14 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
           )}
           <button
             type="button"
-            onClick={() => setIsDeferred(true)}
+            onClick={() => {
+              if (isConfigStalled) {
+                setIsStallExpanded(false);
+                setGatewayRepairError(null);
+              } else {
+                setIsDeferred(true);
+              }
+            }}
             className="text-xs text-secondary underline-offset-2 transition-colors hover:text-foreground hover:underline"
           >
             {i18nService.t('coworkOpenClawErrorDefer')}

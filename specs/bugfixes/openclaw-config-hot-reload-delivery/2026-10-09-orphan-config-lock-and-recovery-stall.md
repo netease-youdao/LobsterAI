@@ -59,14 +59,22 @@ Windows 用户反馈：每次发起任务都会重启 gateway，随后卡在"AI 
 目标保留 pending。stall 在任一次下发成功（`applied`）后解除；手动重启或一键修复后 gateway 就绪时的
 `gateway-ready:config-confirm` 会再试一次，失败也不再自动循环。
 
-stall 以 `phase: error` + `errorCode: config_apply_stalled` 广播，`EngineFailureOverlay` 显示专门的
-标题和说明，主按钮为一键修复。任务准入在 stall 时直接返回该错误。
+stall 期间 gateway 仍在运行，任务照常进行，沿用引擎已经生效的配置，所以 stall 不是引擎生命周期状态
+（2026-10-10 修订）：
+
+- **状态**：`OpenClawEngineManager.setConfigApplyStall` 在 `getStatus()` 上附加
+  `configApplyStalled: { detail }`，phase 保持真实值。每次状态更新都带着它，重启之类的生命周期事件不会把
+  仍然有效的 stall 冲掉。每次同步结束后按 `OpenClawConfigRecovery.stalled` 刷新，下发成功即清除。
+- **准入**：`waitForOpenClawConfigApply` 不因 stall 拒绝或等待，cowork 任务、IM 连接和一键修复都放行；
+  只有配置被网关判为无效（`rejected`）时才返回错误。
+- **界面**：`EngineFailureOverlay` 默认显示不遮挡界面的顶部胶囊（"设置未能生效"＋一键修复），点开才是
+  说明弹窗；一键修复失败时自动展开以显示原因。真正的引擎错误（phase error）优先于 stall 显示。
 
 ### 3.3 准入回复不再驱动全局遮罩
 
 `buildConfigApplyPendingStatus` 增加 `configApplyPending: true`。渲染端 `notifyOpenClawStatus`
 忽略这类回复（它只描述一次被拒绝的请求，gateway 进程仍在运行），改为 toast 说明
-"正在应用最新设置"或"设置未能生效，请一键修复"。真实的重启仍由 manager 状态事件显示启动遮罩。
+"正在应用最新设置"。真实的重启仍由 manager 状态事件显示启动遮罩。
 
 ### 3.4 诊断
 

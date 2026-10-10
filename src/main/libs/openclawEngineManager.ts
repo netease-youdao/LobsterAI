@@ -135,6 +135,12 @@ export interface OpenClawEngineStatus {
    * The gateway process keeps running, so this is not an engine lifecycle state.
    */
   configApplyPending?: boolean;
+  /**
+   * Set while automatic recovery has given up on applying the latest config.
+   * Not a lifecycle state either: tasks keep running on the config the gateway
+   * already applied, and Quick Repair can clear what blocked the change.
+   */
+  configApplyStalled?: { detail: string };
 }
 
 export interface OpenClawGatewayConnectionInfo {
@@ -412,6 +418,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private readonly expectedGatewayExits = new WeakSet<object>();
   private readonly gatewayReadyProcesses = new WeakSet<GatewayProcess>();
   private dreamingRecoverySummary?: OpenClawDreamingRecoverySummary;
+  private configApplyStall: { detail: string } | null = null;
   private gatewayGeneration = 0;
   private lastGatewayFailure: OpenClawGatewayFailureSnapshot | null = null;
   private gatewayRestartTimer: NodeJS.Timeout | null = null;
@@ -504,7 +511,23 @@ export class OpenClawEngineManager extends EventEmitter {
   }
 
   getStatus(): OpenClawEngineStatus {
-    return this.withGatewayStatusFields({ ...this.status, dreamingRecovery: this.dreamingRecoverySummary });
+    return this.withGatewayStatusFields({
+      ...this.status,
+      dreamingRecovery: this.dreamingRecoverySummary,
+      configApplyStalled: this.configApplyStall ?? undefined,
+    });
+  }
+
+  /**
+   * Mark (detail) or clear (null) a config change that automatic recovery gave
+   * up on. Every status update carries it, so a lifecycle event such as a
+   * restart cannot hide a stall that is still in effect.
+   */
+  setConfigApplyStall(detail: string | null): void {
+    const next = detail === null ? null : { detail: detail.slice(0, 500) };
+    if ((next?.detail ?? null) === (this.configApplyStall?.detail ?? null)) return;
+    this.configApplyStall = next;
+    this.emit('status', this.getStatus());
   }
 
   setExternalError(message: string): OpenClawEngineStatus {

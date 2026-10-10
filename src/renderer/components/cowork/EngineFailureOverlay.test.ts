@@ -87,19 +87,44 @@ describe('EngineFailureOverlay', () => {
     expect(html).not.toContain('coworkOpenClawRestartGateway');
   });
 
-  test('explains a stalled config apply and leads with Quick Repair', () => {
+  test('shows a stalled config apply as a compact notice that leads with Quick Repair', () => {
+    snapshot.status = {
+      phase: OpenClawEnginePhase.Running,
+      version: '2026.8.1',
+      message: 'OpenClaw gateway is running on loopback:18789.',
+      canRetry: false,
+      configApplyStalled: { detail: 'config.apply failed: gateway request timeout for config.apply' },
+    };
+    const html = renderToStaticMarkup(React.createElement(EngineFailureOverlay));
+    // Tasks keep running during a stall, so nothing modal covers the app.
+    expect(html).not.toContain('role="dialog"');
+    expect(html).toContain('coworkOpenClawConfigStalledShort');
+    expect(html).not.toContain('coworkOpenClawErrorShort');
+    expect(html).toContain('coworkOpenClawQuickRepair');
+  });
+
+  test('stays hidden while the gateway runs without a stalled config', () => {
+    snapshot.status = {
+      phase: OpenClawEnginePhase.Running,
+      version: '2026.8.1',
+      message: 'OpenClaw gateway is running on loopback:18789.',
+      canRetry: false,
+    };
+    expect(renderToStaticMarkup(React.createElement(EngineFailureOverlay))).toBe('');
+  });
+
+  test('lets an engine failure take precedence over a stalled config', () => {
     snapshot.status = {
       phase: OpenClawEnginePhase.Error,
       version: '2026.8.1',
-      errorCode: OpenClawEngineErrorCode.ConfigApplyStalled,
-      message: 'config.apply failed: gateway request timeout for config.apply',
-      canRetry: false,
+      message: 'OpenClaw gateway failed to become healthy in time.',
+      canRetry: true,
+      configApplyStalled: { detail: 'config.apply failed: gateway request timeout for config.apply' },
     };
     const html = renderToStaticMarkup(React.createElement(EngineFailureOverlay));
-    expect(html).toContain('coworkOpenClawConfigStalledTitle');
-    expect(html).toContain('coworkOpenClawConfigStalledHint');
-    expect(html).toContain('gateway request timeout for config.apply');
-    expect(html).toContain('coworkOpenClawQuickRepair');
-    expect(html).toContain('coworkOpenClawRestartGateway');
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('coworkOpenClawError');
+    expect(html).not.toContain('coworkOpenClawConfigStalledTitle');
+    expect(html).toContain('failed to become healthy in time');
   });
 });

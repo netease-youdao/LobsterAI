@@ -296,6 +296,12 @@ export interface OpenClawEngineStatus {
    * The gateway process keeps running, so this is not an engine lifecycle state.
    */
   configApplyPending?: boolean;
+  /**
+   * Set while automatic recovery has given up on applying the latest config.
+   * Tasks keep running on the config the gateway already applied; Quick Repair
+   * can clear what blocked the change.
+   */
+  configApplyStalled?: { detail: string };
 }
 
 export interface OpenClawLoopbackRepairResult {
