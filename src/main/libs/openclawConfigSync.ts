@@ -332,7 +332,15 @@ const MANAGED_OWNER_ALLOW_FROM = [
   'gateway-client',
 ];
 
-const MANAGED_TOOL_DENY = ['web_search'] as const;
+const MANAGED_TOOL_DENY = [
+  'web_search',
+  // These drive paired OpenClaw nodes (the OpenClaw app, `openclaw node run`).
+  // LobsterAI never pairs one, so they always fail, and `computer` competes
+  // with the Computer Use kit's MCP tools for desktop requests.
+  'computer',
+  'nodes',
+  'mobile_ui',
+] as const;
 // OpenClaw 2026.8.1 owns detector selection and thresholds. Only the public
 // enable flag remains configurable; emitting the retired tuning keys makes
 // the complete config invalid and prevents gateway hot reloads.
