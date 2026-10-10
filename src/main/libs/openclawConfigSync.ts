@@ -84,7 +84,11 @@ import { OpenClawConfigImpact } from './openclawConfigImpact';
 import { createOpenClawConfigTarget, type OpenClawConfigTarget, readOpenClawConfigRaw } from './openclawConfigTarget';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { repairHeartbeatFile, stripProactiveHeartbeatSection } from './openclawHeartbeatRepair';
-import { withManagedOpenClawModelPolicy, withoutOpenClawWriteMetadata } from './openclawManagedModelPolicy';
+import {
+  withManagedOpenClawModelPolicy,
+  withoutOpenClawWriteMetadata,
+  withoutRetiredOpenClawWriteMetadata,
+} from './openclawManagedModelPolicy';
 import { getMainAgentWorkspacePath } from './openclawMemoryFile';
 import { resolveOpenClawCatalogModelMaxTokens } from './openclawModelCatalog';
 
@@ -2014,12 +2018,11 @@ export class OpenClawConfigSync {
     } catch {
       // Engine manager may not be fully initialised (e.g. in tests).
     }
-    const meta = { ...asConfigRecord(config.meta) };
-    delete meta.lastTouchedAt; // OpenClaw v2026.8.1 stores this in machine state.
+    const stamped = withoutRetiredOpenClawWriteMetadata(config);
     return {
-      ...config,
+      ...stamped,
       meta: {
-        ...meta,
+        ...asConfigRecord(stamped.meta),
         ...(version ? { lastTouchedVersion: version } : {}),
       },
     };
