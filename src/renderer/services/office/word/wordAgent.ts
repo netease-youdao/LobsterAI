@@ -58,7 +58,7 @@ export const handleWordAgentRequest = createOfficeAgentHandler<WordEditorSession
       if (host.revision() !== revision) throw new WordAgentError(`The user edited the document while the change was prepared. Call ${WordAgentTool.Read} again.`);
       return applyWordEdits(host, { edits });
     });
-    session.recordAgentEdit(result.commits);
+    session.recordEditSteps(result.commits);
     if (result.paragraphs[0]) session.reveal(result.paragraphs[0].id);
     await session.document.flush();
     return agentReply({ ...result, ...agentSaveOutcome(session.document, LOCKING_APPS) });

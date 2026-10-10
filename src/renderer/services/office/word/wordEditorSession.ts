@@ -6,12 +6,14 @@ import { commandForSlot, createBrowserAutomationHost, createDocxEditor, type Doc
 import { createT, deepMerge, en, type LocaleStrings, type TranslationKey, zhCN } from '@docx-editor.dev/i18n';
 
 import type { OfficeOpenResult } from '../../../../shared/office/core/officeFile';
-import type { WordPackageInfo } from '../../../../shared/office/word/wordFile';
+import { WORD_PACKAGE_LIMITS, type WordPackageInfo } from '../../../../shared/office/word/wordFile';
 import { i18nService } from '../../i18n';
 import { createOfficeEditorRegistry } from '../core/officeEditorRegistry';
 import { OfficeEditorSession, type OfficeSessionContext } from '../core/officeEditorSession';
 import { WordCompositionTracker } from './wordComposition';
 import { createWordFontResolver, prepareWordLayout, type WordFontReportEntry } from './wordFonts';
+import { prepareWordImage, WordImageError } from './wordImages';
+import { insertPictureAtCaret, insertTableAtCaret, type MissedPicture, missedPicture, selectMissedPicture } from './wordInsertion';
 
 const EDITOR_MODE = { Edit: 'edit', View: 'view' } as const;
 /** How `getEditingMode()` names the viewing mode set through `EDITOR_MODE.View`. */
@@ -34,8 +36,8 @@ const AUTOSAVE_DELAY_MS = 700;
 const wordBridge = () => window.electron.artifact.office.word;
 const HistorySlot = { Undo: 'history.undo', Redo: 'history.redo' } as const;
 
-/** One agent call recorded as several engine undo steps, undone and redone together. */
-interface AgentHistoryGroup {
+/** One edit made of several engine undo steps (an agent call, a table at the caret), undone and redone together. */
+interface EditStepGroup {
   steps: number;
   /** Document revision while this group is at the top of its stack. */
   revision: number;
@@ -49,9 +51,14 @@ export class WordEditorSession extends OfficeEditorSession<WordPackageInfo> {
   editor?: DocxEditorInstance;
   /** Which document fonts are installed, substituted or missing on this machine. */
   private fontReport: WordFontReportEntry[] = [];
-  private agentUndo: AgentHistoryGroup[] = [];
-  private agentRedo: AgentHistoryGroup[] = [];
+  private groupedUndo: EditStepGroup[] = [];
+  private groupedRedo: EditStepGroup[] = [];
   private readOnly = false;
+  /** Package size as last opened or saved, plus pictures inserted since. */
+  private packageBytes = 0;
+  private insertingImage = false;
+  /** A picture a click landed on without the engine selecting it; selected once the click is over. */
+  private missedPicture?: MissedPicture;
   private readonly composition: WordCompositionTracker;
   private lastInputAt = -Infinity;
   private stopLocale?: () => void;
@@ -64,6 +71,7 @@ export class WordEditorSession extends OfficeEditorSession<WordPackageInfo> {
     super(file, context, { hostClassName: 'docx-editor lobster-word-surface', autosaveDelayMs: AUTOSAVE_DELAY_MS, logTag: '[WordDocument]' });
     this.host.addEventListener('keydown', this.noteInput, true);
     this.host.addEventListener('beforeinput', this.noteInput, true);
+    this.host.addEventListener('pointerup', this.afterPointerUp, true);
     this.composition = new WordCompositionTracker(this.host, () => {
       const halfPoints = this.editor?.getSelectionFormatting()?.fontSizeHalfPoints ?? DEFAULT_FONT_HALF_POINTS;
       return (halfPoints / 2) * CSS_PX_PER_POINT * (this.editor?.getZoom() ?? 1);
@@ -88,6 +96,17 @@ export class WordEditorSession extends OfficeEditorSession<WordPackageInfo> {
     const shortfall = rect.bottom + room - view.bottom;
     if (shortfall > 0) scroller.scrollTop += shortfall;
   }
+
+  /** The engine reads the caret back from the browser's selection until a click is over. */
+  private afterPointerUp = (): void => {
+    if (this.missedPicture) setTimeout(this.selectMissedPicture, 0);
+  };
+
+  private selectMissedPicture = (): void => {
+    const picture = this.missedPicture;
+    this.missedPicture = undefined;
+    if (picture && this.editor) selectMissedPicture(this.editor, picture);
+  };
 
   getEditorSnapshot = (): EditorSnapshot | undefined => this.editor?.snapshot();
   getFontReport = (): WordFontReportEntry[] => this.fontReport;
@@ -124,11 +143,13 @@ export class WordEditorSession extends OfficeEditorSession<WordPackageInfo> {
         this.notify();
         this.keepCaretRoom();
         this.composition.caretMoved();
+        this.missedPicture = this.editor && missedPicture(this.editor);
       });
       this.stopError = this.editor.on('error', error => { console.warn('[WordEditor] Editor rejected an operation:', error); });
     }
     this.editor.setMode(EDITOR_MODE.View);
     this.editor.load(bytes);
+    this.packageBytes = bytes.byteLength;
     // Opening and font admission both run asynchronously, including for embedded fonts.
     const deadline = Date.now() + 30000;
     while (true) {
@@ -157,7 +178,44 @@ export class WordEditorSession extends OfficeEditorSession<WordPackageInfo> {
     // capture, wait for an IME composition to finish first.
     await this.composition.settled(COMPOSITION_SAVE_WAIT_MS);
     if (!this.editor) throw new Error('Word editor is not ready');
-    return new Uint8Array(await this.editor.save());
+    const bytes = new Uint8Array(await this.editor.save());
+    this.packageBytes = bytes.byteLength;
+    return bytes;
+  }
+
+  /** Word's table grid: a table of this size at the caret, undone in one step. */
+  insertTable(rows: number, cols: number): boolean {
+    if (!this.editor) return false;
+    const steps = insertTableAtCaret(this.editor, rows, cols);
+    if (steps) this.recordEditSteps(steps);
+    this.editor.focus();
+    return steps > 0;
+  }
+
+  /** Inserts a picture at the caret at its natural size; the engine scales it down to fit. */
+  async insertImage(bytes: Uint8Array): Promise<WordImageError | null> {
+    if (this.insertingImage) return null;
+    this.insertingImage = true;
+    try {
+      const prepared = await prepareWordImage(bytes);
+      if (!prepared.ok) return prepared.error;
+      const { image } = prepared;
+      // Saving refuses a package the editor could not open again.
+      if (this.packageBytes + image.bytes.byteLength > WORD_PACKAGE_LIMITS.maxFileBytes) return WordImageError.TooLarge;
+      const editor = this.editor;
+      if (!editor) return WordImageError.Rejected;
+      // Focusing reads the caret back from the browser's selection, so it goes before the caret moves.
+      editor.focus();
+      const result = await insertPictureAtCaret(editor, image);
+      if (!result.ok) {
+        console.warn('[WordEditor] Picture insertion refused:', result.reason);
+        return WordImageError.Rejected;
+      }
+      this.packageBytes += image.bytes.byteLength;
+      return null;
+    } finally {
+      this.insertingImage = false;
+    }
   }
 
   /** Run one agent call against the live document through the engine's automation protocol. */
@@ -175,10 +233,10 @@ export class WordEditorSession extends OfficeEditorSession<WordPackageInfo> {
     return this.editor?.getDocumentHandle().revision ?? -1;
   }
 
-  /** Remember that the last agent call took several engine steps, so one undo reverts it. */
-  recordAgentEdit(steps: number): void {
-    this.agentRedo = [];
-    if (steps > 1) this.agentUndo.push({ steps, revision: this.revision() });
+  /** Remember that the last edit took several engine steps, so one undo reverts it. */
+  recordEditSteps(steps: number): void {
+    this.groupedRedo = [];
+    if (steps > 1) this.groupedUndo.push({ steps, revision: this.revision() });
   }
 
   private replay(slot: typeof HistorySlot[keyof typeof HistorySlot], steps: number): void {
@@ -189,31 +247,31 @@ export class WordEditorSession extends OfficeEditorSession<WordPackageInfo> {
   }
 
   /**
-   * Undo, treating an agent call as one step while nothing else was edited after it.
+   * Undo, treating a multi-step edit as one step while nothing else was edited after it.
    * Returns false when the caller should run the engine's own single-step undo.
    */
   undo(): boolean {
-    const group = this.agentUndo[this.agentUndo.length - 1];
+    const group = this.groupedUndo[this.groupedUndo.length - 1];
     if (!group || group.revision !== this.revision()) {
-      this.agentUndo = [];
-      this.agentRedo = [];
+      this.groupedUndo = [];
+      this.groupedRedo = [];
       return false;
     }
-    this.agentUndo.pop();
+    this.groupedUndo.pop();
     this.replay(HistorySlot.Undo, group.steps);
-    this.agentRedo.push({ steps: group.steps, revision: this.revision() });
+    this.groupedRedo.push({ steps: group.steps, revision: this.revision() });
     return true;
   }
 
   redo(): boolean {
-    const group = this.agentRedo[this.agentRedo.length - 1];
+    const group = this.groupedRedo[this.groupedRedo.length - 1];
     if (!group || group.revision !== this.revision()) {
-      this.agentRedo = [];
+      this.groupedRedo = [];
       return false;
     }
-    this.agentRedo.pop();
+    this.groupedRedo.pop();
     this.replay(HistorySlot.Redo, group.steps);
-    this.agentUndo.push({ steps: group.steps, revision: this.revision() });
+    this.groupedUndo.push({ steps: group.steps, revision: this.revision() });
     return true;
   }
 

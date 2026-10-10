@@ -14,3 +14,23 @@
 }
 .lobster-word-surface .docx-page { background: white; box-shadow: 0 1px 5px rgba(0, 0, 0, .12); }
 .dark .lobster-word-mount { background: #26292d; }
+
+/* Insert table grid and the table tools menu; the popovers render on the page body. */
+.lobster-word-table-size { text-align: center; opacity: .8; }
+.lobster-word-table-grid { display: grid; outline: none; }
+.lobster-word-table-cell { width: 16px; height: 16px; box-sizing: border-box; border: 1px solid rgba(128, 128, 128, .45); border-radius: 2px; background: #fff; cursor: pointer; }
+.lobster-word-table-cell[aria-selected="true"] { border-color: #277bc3; background: rgba(30, 120, 220, .28); }
+.dark .lobster-word-table-cell:not([aria-selected="true"]) { background: #1f2124; }
+.lobster-office-toolbar .lobster-word-menu-button { width: auto; gap: 1px; padding: 0 3px; }
+.lobster-word-menu-button > span { font-size: 9px; opacity: .75; }
+.lobster-word-menu-divider { height: 1px; margin: 2px 0; background: rgba(128, 128, 128, .2); }
+.lobster-office-popover .lobster-office-menu-item:disabled { opacity: .4; cursor: default; }
+.lobster-office-popover .lobster-office-menu-item:disabled:hover { background: none; }
+
+/* The selected picture's frame and resize handles, over the pages and scrolled with them. */
+.lobster-word-image-overlay { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
+.lobster-word-image-frame { position: absolute; box-sizing: border-box; border: 1px solid #277bc3; }
+.lobster-word-image-handle {
+  position: absolute; width: 9px; height: 9px; box-sizing: border-box; border: 1px solid #277bc3; background: #fff;
+  transform: translate(-50%, -50%); pointer-events: auto; touch-action: none;
+}

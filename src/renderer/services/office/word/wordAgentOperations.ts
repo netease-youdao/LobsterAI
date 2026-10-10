@@ -6,6 +6,7 @@ import type {
 import {
   WordAlignment, WordDocumentEdge, WordEditType, WordInsertPosition,
 } from '../../../../shared/office/word/wordAgent';
+import { BODY_STYLE_NAME, HEADING_STYLE_NAME } from './wordStyles';
 
 /**
  * Translates the agent's paragraph-addressed edits into the engine's automation protocol.
@@ -81,8 +82,6 @@ const LINE_DELIMITER = '\uE0B7';
 const ALIGNMENT: Record<string, AutomationAlignment> = {
   [WordAlignment.Left]: 'Left', [WordAlignment.Center]: 'Centered', [WordAlignment.Right]: 'Right', [WordAlignment.Justify]: 'Justified',
 };
-const HEADING_STYLE = /^(heading|title|subtitle|标题|副标题)/i;
-const BODY_STYLE = 'Normal';
 
 type Value = {
   kind: string; handle?: AutomationHandle; handles?: AutomationHandle[]; text?: string; name?: string;
@@ -250,7 +249,7 @@ function planSteps(host: AutomationHost, index: ParagraphIndex, edits: WordAgent
         const texts = lines(requireString(edit.text, 'text', at));
         const anchorStyle = queryAll(host, [{ op: 'getStyle', span: { paragraph: target.handle } }], 'anchor style')[0].name ?? '';
         // Word gives the paragraph after a heading its body style; do the same unless told otherwise.
-        const style = edit.style ?? (HEADING_STYLE.test(anchorStyle) ? BODY_STYLE : undefined);
+        const style = edit.style ?? (HEADING_STYLE_NAME.test(anchorStyle) ? BODY_STYLE_NAME : undefined);
         const created = add({ edit: at, kind: StepKind.Insert, target: { handle: target.handle }, where: target.where, text: texts.join(LINE_DELIMITER) });
         writeLines(at, created, texts.length, style);
         break;
