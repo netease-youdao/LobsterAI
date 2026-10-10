@@ -618,7 +618,7 @@ import {
   loadOpenClawSessionPolicyConfig,
   saveOpenClawSessionPolicyConfig,
 } from './openclawSessionPolicy/store';
-import { registerVoiceInputPermissionHandler } from './permissions/voiceInputPermission';
+import { registerRendererPermissionHandler } from './permissions/rendererPermission';
 import { patchEnabledNspClawguard } from './plugins/nspClawguardCompatibility';
 import { isHiddenUserPluginId } from './plugins/pluginManager';
 import type { SkillChangeBatch } from './skills/skillChangeDiagnostics';
@@ -15401,7 +15401,7 @@ if (!gotTheLock) {
     // sees the loading UI within ~1-2 s instead of waiting for the full
     // skill bootstrap (~6-8 s previously).
     setContentSecurityPolicy();
-    registerVoiceInputPermissionHandler({
+    registerRendererPermissionHandler({
       session: session.defaultSession,
       getMainWindow: () => mainWindow,
       isDev,
