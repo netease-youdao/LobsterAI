@@ -98,12 +98,6 @@ export const OpenClawEngineErrorCode = {
    * loopback firewall rule is added or the user retries.
    */
   LoopbackBlocked: 'loopback_blocked',
-  /**
-   * A config change still could not be applied after a gateway restart (for
-   * example openclaw.json cannot be written), so automatic retries and
-   * restarts stopped. Quick Repair clears orphaned locks and reapplies it.
-   */
-  ConfigApplyStalled: 'config_apply_stalled',
 } as const;
 
 export type OpenClawEngineErrorCode =

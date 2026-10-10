@@ -69,6 +69,8 @@ test('stalls only after a recovery respawn could not apply the target either', (
   expect(state.failedAfterRespawn(stuck, 'lock timeout')).toBe(false);
   expect(state.failedAfterRespawn(stuck, 'lock timeout')).toBe(true);
   expect(state.stalled).toBe(true);
+  // A stall is not a rejection: the payload itself was never found invalid.
+  expect(state.rejected).toBe(false);
   expect(state.error).toBe('lock timeout');
   // The target is retained, so a later successful delivery still converges.
   expect(state.pending).toBe(true);
@@ -116,6 +118,7 @@ test('a validation rejection takes precedence over a stall', () => {
   state.failedAfterRespawn(invalid, 'stuck');
   state.reject(invalid, 'invalid config');
   expect(state.error).toBe('invalid config');
+  expect(state.rejected).toBe(true);
   expect(state.stalled).toBe(false);
 });
 

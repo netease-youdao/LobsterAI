@@ -299,6 +299,12 @@ export interface OpenClawEngineStatus {
   configApplyPending?: boolean;
   /** Why that admission reply refused the task. */
   configApplyPendingReason?: OpenClawConfigApplyPendingReason;
+  /**
+   * Set while automatic recovery has given up on applying the latest config.
+   * Tasks keep running on the config the gateway already applied; Quick Repair
+   * can clear what blocked the change.
+   */
+  configApplyStalled?: { detail: string };
 }
 
 export interface OpenClawLoopbackRepairResult {

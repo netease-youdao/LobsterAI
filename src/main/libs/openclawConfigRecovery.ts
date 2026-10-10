@@ -51,6 +51,8 @@ export class OpenClawConfigRecovery {
   get pending(): boolean { return this.target !== null; }
   get requiresRespawn(): boolean { return this.respawnRequired; }
   get error(): string | null { return this.rejection ?? this.stallMessage; }
+  /** The gateway refused the target as invalid config; no retry can apply it. */
+  get rejected(): boolean { return this.rejection !== null; }
   /** Automatic retries and restarts are exhausted; only a successful delivery resumes. */
   get stalled(): boolean { return this.rejection === null && this.stallMessage !== null; }
   /** Latest staged target that the running gateway has not confirmed applying yet. */

@@ -516,3 +516,43 @@ describe('orphaned config lock cleanup', () => {
     expect(manager.reclaimStaleConfigLock('config-delivery:agent-updated')).toBe(false);
   });
 });
+
+describe('config apply stall status', () => {
+  const STALL = 'The latest configuration still could not be applied (config.apply failed: gateway request timeout).';
+
+  const makeRunningManager = () => Object.assign(Object.create(OpenClawEngineManager.prototype), {
+    status: { phase: OpenClawEnginePhase.Running, version: '2026.8.1', canRetry: false, gatewayPort: 18789 },
+    resolveRuntimeMetadata: () => ({ version: '2026.8.1' }),
+  }) as OpenClawEngineManager;
+
+  test('marks a running gateway without turning the stall into an engine failure', () => {
+    const manager = makeRunningManager();
+    const emitted: OpenClawEngineStatus[] = [];
+    manager.on('status', (status: OpenClawEngineStatus) => emitted.push(status));
+
+    manager.setConfigApplyStall(STALL);
+    manager.setConfigApplyStall(STALL);
+
+    expect(emitted).toHaveLength(1);
+    expect(manager.getStatus()).toMatchObject({
+      phase: OpenClawEnginePhase.Running,
+      configApplyStalled: { detail: STALL },
+    });
+    expect(manager.getStatus().errorCode).toBeUndefined();
+  });
+
+  test('keeps the stall on lifecycle updates until it is cleared', () => {
+    const manager = makeRunningManager();
+    const emitted: OpenClawEngineStatus[] = [];
+    manager.on('status', (status: OpenClawEngineStatus) => emitted.push(status));
+    manager.setConfigApplyStall(STALL);
+
+    // A restart or failure in between must not hide a stall still in effect.
+    manager.setExternalError('OpenClaw gateway failed to become healthy in time.');
+    expect(emitted.at(-1)).toMatchObject({ phase: OpenClawEnginePhase.Error, configApplyStalled: { detail: STALL } });
+
+    manager.setConfigApplyStall(null);
+    expect(emitted.at(-1)?.configApplyStalled).toBeUndefined();
+    expect(manager.getStatus().configApplyStalled).toBeUndefined();
+  });
+});
