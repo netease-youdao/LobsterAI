@@ -682,3 +682,82 @@ runtime. Remove this patch when the pinned upstream reaches v2026.9.1. Later
 releases harden the same reload window: v2026.9.5 (#147001) keeps channel
 replies on the committed publication, and v2026.9.7 (#154462) keeps active
 turns on their admitted generation.
+
+## Unfinished progress-card plans (upstream backport)
+
+`zz-openclaw-plan-completion-check.patch` backports
+[OpenClaw #160297](https://github.com/openclaw/openclaw/pull/160297), merged as
+`3ba0a0b23761ef8209827f7f3dd0f82713c33bbe` on 2026-09-28. It also takes the
+`progress_card` description sentence from
+[#162903](https://github.com/openclaw/openclaw/pull/162903). A run can save an
+unfinished `progress_card` plan and then stop with an ordinary visible reply.
+The embedded runner now sends one hidden `openclaw.plan-completion-check`
+follow-up in the same run. The model then continues feasible work, reconciles
+the plan, or reports the concrete limitation.
+
+Why: on 2026-10-10 users reported the composer card stuck on
+"第 3/10 步 · 本轮已结束" with MiniMax-M3.1-Flash-Preview. The model had written a
+progress report ("评测尚未收尾，我会继续…") without a tool call. v2026.8.1 only
+recovers empty or reasoning-only turns, so the run completed with seven steps
+pending and nothing resumed it. The desktop label maps to a `completed` session
+whose card still has unfinished steps (`progressCardDisplay.ts`).
+
+Scope: the check runs at most once per run and replays no completed tool call.
+It applies only when the run still owes a visible reply and the model stopped
+with `stop`. The following keep their existing behavior:
+
+- old cards;
+- cancellation, timeouts, yields, refusals and length stops;
+- approval prompts, async tasks and accepted child sessions;
+- queued user messages and plugin `finalize` decisions.
+
+The check does not guarantee that the model finishes. A run can still end on
+"本轮已结束" when the model reports a genuine blocker.
+
+Adaptations for v2026.8.1:
+
+- The NO_REPLY clause from [#164896](https://github.com/openclaw/openclaw/pull/164896)
+  is left out. v2026.8.1 builds the final payload from the last assistant message
+  and has no kept-answer delivery, and LobsterAI's silent-final handling deletes
+  the turn's current assistant message. A blocked model restates its limitation
+  instead.
+- `deferTerminalDelivery` is ported. In v2026.8.1 any `onBeforeTerminalDelivery`
+  holds every assistant event until the run ends. With the patch, events are
+  held only when a `before_agent_finalize` hook exists, so LobsterAI keeps live
+  streaming.
+- Any accepted `sessions_spawn` child counts as pending work: v2026.8.1 has no
+  `expectsCompletionMessage` marker.
+- The upstream steering-admission object does not exist here. The check is
+  skipped when the subscription was unsubscribed during the finalize hook or the
+  attempt no longer owns the active run.
+- Refusals are read from the `provider_refusal` diagnostic.
+- LobsterAI addition: when the check continues the run, the runtime emits a
+  `checkpoint` agent event after the finished answer is flushed.
+  `OpenClawRuntimeAdapter` closes that assistant segment on it
+  (`AgentEventStream.Checkpoint`). Without the event, the adapter splits only on
+  a large stream reset, so a short answer followed by text was overwritten, and
+  the final history sync then kept only the last message. Other clients ignore
+  the unknown stream.
+
+Verify with:
+
+```sh
+node_modules/.bin/vitest run src/agents/embedded-agent-runner/run/attempt-plan-completion.test.ts src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts src/agents/tools/progress-card-tool.test.ts src/agents/harness/selection.test.ts
+```
+
+Then run LobsterAI's `planCompletionCheck` test and the adapter test
+"a run checkpoint keeps a finished answer that the same run follows with more
+text", and rebuild the runtime. In the desktop app, a run that saves an
+unfinished plan and stops should continue in the same turn. The hidden check
+must not appear in chat, and assistant text must still stream live. When a short
+answer is followed by more text, both messages must remain after a reload.
+
+Removal: #160297 ships in v2026.9.7, while #162903 and #164896 ship in
+v2026.10.1. Remove this patch when the pinned upstream reaches v2026.10.1. An
+upgrade to v2026.9.7–v2026.9.9 also replaces it, but loses the paused-checklist
+guidance. Blocked runs still restate their limitation until v2026.10.1.
+
+Upstream does not emit the `checkpoint` event, so after the upgrade the
+adapter's checkpoint handling is dormant. Recheck the short-answer case: a model
+can still follow a finished answer with more text. If the overwrite returns,
+carry the event emission as its own small patch.

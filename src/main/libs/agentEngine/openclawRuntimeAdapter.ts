@@ -7693,6 +7693,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       }
       // Process assistant text updates here (before handleAgentEvent) because
       // handleAgentEvent may enqueue events when sessionId mapping isn't ready.
+      // Checkpoints share that path so they stay ordered with the text around them.
+      this.processAgentCheckpoint(event.payload);
       this.processAgentAssistantText(event.payload);
       this.handleAgentEvent(event.payload, event.seq);
       return;
@@ -9627,6 +9629,25 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     for (const messageId of silentAssistantIds) {
       this.deleteAssistantMessage(sessionId, messageId);
     }
+  }
+
+  /**
+   * OpenClaw's plan completion check continues a run past a finished answer
+   * (zz-openclaw-plan-completion-check.patch). Close that answer's segment so the
+   * follow-up streams into a new assistant message instead of replacing it: a short
+   * answer followed by text does not trip the stream reset heuristic.
+   */
+  private processAgentCheckpoint(payload: unknown): void {
+    if (!isRecord(payload) || payload.stream !== AgentEventStream.Checkpoint) return;
+    const runId = typeof payload.runId === 'string' ? payload.runId.trim() : '';
+    const sessionKey = typeof payload.sessionKey === 'string' ? payload.sessionKey.trim() : '';
+    const sessionId = (runId ? this.sessionIdByRunId.get(runId) : undefined)
+      ?? (sessionKey ? this.resolveSessionIdBySessionKey(sessionKey) ?? undefined : undefined);
+    const turn = sessionId ? this.activeTurns.get(sessionId) : undefined;
+    if (!sessionId || !turn) return;
+    console.debug('[OpenClawRuntime] closed the assistant segment at a run checkpoint.', `Session ${sessionId}.`);
+    this.splitAssistantSegmentBeforeTool(sessionId, turn);
+    turn.agentAssistantTextLength = 0;
   }
 
   /**
