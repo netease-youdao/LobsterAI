@@ -2758,6 +2758,17 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.tools.deny).not.toContain('video_generate');
   });
 
+  test('hides OpenClaw tools that need a paired node', async () => {
+    const sync = await createSync();
+
+    const result = sync.sync('paired-node-tools');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    // LobsterAI pairs no OpenClaw node; desktop control goes through the Computer Use kit.
+    expect(config.tools.deny).toEqual(expect.arrayContaining(['web_search', 'computer', 'nodes', 'mobile_ui']));
+  });
+
   test('keeps media generation plugin configured without media entitlement', async () => {
     const sync = await createSync({
       canUseMediaGeneration: () => false,

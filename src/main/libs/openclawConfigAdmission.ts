@@ -32,7 +32,7 @@ export type OpenClawModelRuntimeChange =
 export type OpenClawModelRuntimeChangeInput = {
   /** `provider/model` that the task pins before its turn. */
   modelRef: string;
-  /** Target content the running gateway generation confirmed applying. */
+  /** Config the running gateway generation runs on: the target it confirmed applying, or the file it spawned with. */
   appliedRaw: string | null;
   /** Latest staged target the running gateway has not applied yet. */
   pendingRaw: string | null;

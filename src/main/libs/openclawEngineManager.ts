@@ -34,6 +34,7 @@ import { mergeNoProxyValue } from './noProxyEnv';
 import { getCodexHomeDir } from './openaiCodexAuth';
 import { type OpenClawConfigAutoRestoreEvent, parseOpenClawConfigAutoRestore } from './openclawConfigAutoRestore';
 import { cleanupStaleOpenClawConfigLock, ConfigLockCleanupAction, isConfigLockRemoval } from './openclawConfigLock';
+import { readOpenClawConfigRaw } from './openclawConfigTarget';
 import { migrateLegacyCronStorageWithDoctor } from './openclawCronLegacyMigration';
 import { getOpenClawDailyLogCandidates } from './openclawDailyLogs';
 import { readDreamingRecoverySummary } from './openclawDreamingRecovery';
@@ -439,6 +440,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private restartGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
   private secretEnvVars: Record<string, string> = {};
   private gatewayProcessSecretEnvVars: Record<string, string> | null = null;
+  private gatewayProcessConfigRaw: string | null = null;
   private gatewaySpawnedAt: number | null = null;
   private gatewayLogPrunedDateKey: string | null = null;
   private gatewaySelfRestartNotedAt: number | null = null;
@@ -615,6 +617,14 @@ export class OpenClawEngineManager extends EventEmitter {
   /** Secret env values the live gateway process was spawned with; it never sees later values. */
   getGatewayProcessSecretEnvVars(): Record<string, string> | null {
     return isGatewayProcessAlive(this.gatewayProcess) ? this.gatewayProcessSecretEnvVars : null;
+  }
+
+  /**
+   * Config file content when the live gateway process was spawned; the process
+   * loads it during startup, before any config RPC can reach it.
+   */
+  getGatewayProcessConfigRaw(): string | null {
+    return isGatewayProcessAlive(this.gatewayProcess) ? this.gatewayProcessConfigRaw : null;
   }
 
   /** New gateway processes wait (bounded) until the app has written its first complete config. */
@@ -1336,6 +1346,13 @@ export class OpenClawEngineManager extends EventEmitter {
     }
     console.log(`[OpenClaw] forking gateway: entry=${openclawEntry}, cwd=${runtime.root}, port=${port}, args=${JSON.stringify(forkArgs.map(arg => (arg === token ? '<redacted>' : arg)))}`);
     const checkpointBeforeSpawn = readStartupMigrationCheckpointStamp(this.stateDir);
+    // Read after the pre-spawn helpers, which may migrate the file: this is what the child loads.
+    let spawnConfigRaw: string | null = null;
+    try {
+      spawnConfigRaw = readOpenClawConfigRaw(this.configPath) || null;
+    } catch (error) {
+      console.warn('[OpenClaw] failed to read the config the gateway is spawned with:', error);
+    }
 
     const child = spawnOpenClawGatewayProcess({
       executablePath: electronNodeRuntimePath,
@@ -1352,6 +1369,7 @@ export class OpenClawEngineManager extends EventEmitter {
     this.gatewayGenerationByProcess.set(child, this.gatewayGeneration);
     this.gatewaySpawnedAt = Date.now();
     this.gatewayProcessSecretEnvVars = spawnSecretEnvVars;
+    this.gatewayProcessConfigRaw = spawnConfigRaw;
     if (startupPrep.skip) this.startupPrepSkippedProcesses.add(child);
     this.attachGatewayProcessLogs(child);
     this.attachGatewayExitHandlers(child);

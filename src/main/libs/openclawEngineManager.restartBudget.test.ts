@@ -1,4 +1,6 @@
 import { type ChildProcess } from 'child_process';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -87,6 +89,7 @@ function makeManager() {
     logsDir: path.join(fixtures, 'logs'),
     secretEnvVars: {},
     gatewayProcessSecretEnvVars: null,
+    gatewayProcessConfigRaw: null,
     gatewayProcess: null,
     gatewayGeneration: 0,
     gatewaySpawnedAt: null,
@@ -253,5 +256,36 @@ describe('OpenClaw gateway spawn secrets', () => {
 
     crashRunningGateway();
     expect(manager.getGatewayProcessSecretEnvVars()).toBeNull();
+  });
+});
+
+describe('OpenClaw gateway spawn config', () => {
+  test('the live process keeps the config file content it was spawned with until it exits', async () => {
+    const { manager, crashRunningGateway } = makeManager();
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-spawn-config-'));
+    const configPath = path.join(configDir, 'openclaw.json');
+    Object.assign(manager, { configPath });
+    try {
+      fs.writeFileSync(configPath, '{"mcp":{"servers":{}}}\n');
+      await manager.startGateway('initial-start');
+      // Later writes reach the running process only through config RPC.
+      fs.writeFileSync(configPath, '{"mcp":{"servers":{"computer-use":{}}}}\n');
+
+      expect(manager.getGatewayProcessConfigRaw()).toBe('{"mcp":{"servers":{}}}\n');
+
+      crashRunningGateway();
+      expect(manager.getGatewayProcessConfigRaw()).toBeNull();
+    } finally {
+      fs.rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+
+  test('a gateway spawned without a config file has no spawn config', async () => {
+    const { manager } = makeManager();
+    Object.assign(manager, { configPath: path.join(os.tmpdir(), 'openclaw-missing-config', 'openclaw.json') });
+
+    await manager.startGateway('initial-start');
+
+    expect(manager.getGatewayProcessConfigRaw()).toBeNull();
   });
 });

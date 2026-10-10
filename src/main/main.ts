@@ -2928,7 +2928,8 @@ const stallConfigRecoveryIfExhausted = (
 
 /**
  * How a pending change affects a task that pins `modelRef` before its turn,
- * judged against what the running gateway generation confirmed applying.
+ * judged against what the running gateway generation confirmed applying, or
+ * the config it spawned with until it confirms one.
  */
 const resolvePendingConfigImpact = (modelRef: string): OpenClawModelRuntimeChange => {
   const manager = getOpenClawEngineManager();
@@ -2936,8 +2937,11 @@ const resolvePendingConfigImpact = (modelRef: string): OpenClawModelRuntimeChang
   const appliedSecretEnv = manager.getGatewayProcessSecretEnvVars();
   return resolveOpenClawModelRuntimeChange({
     modelRef,
+    // After a cold start or restart the confirmation can lag behind a busy
+    // gateway; the file it loaded at spawn is what its tasks already run on.
     appliedRaw: appliedSecretEnv
       ? openClawConfigRecovery.appliedRawFor(manager.getGatewayProcessGeneration())
+        ?? manager.getGatewayProcessConfigRaw()
       : null,
     pendingRaw: openClawConfigRecovery.pendingTarget?.raw ?? null,
     appliedSecretEnv,
@@ -3339,6 +3343,13 @@ const _syncOpenClawConfigImpl = async (
     if (delivery.mode === OpenClawConfigDeliveryMode.Applied && !openClawConfigRecovery.pending) {
       return { success: true, changed: effectiveConfigChanged, status: manager.getStatus() };
     }
+    // A gateway that spawned from this target would only reload the same file
+    // after a respawn, e.g. while a plugin keeps it busy right after startup.
+    const loadedAtSpawn = openClawConfigRecovery.loadedAtSpawn(
+      target,
+      manager.getGatewayProcessConfigRaw(),
+      manager.getGatewayProcessGeneration(),
+    );
     if (stallConfigRecoveryIfExhausted(target, delivery)) {
       return {
         success: false,
@@ -3349,9 +3360,11 @@ const _syncOpenClawConfigImpl = async (
     }
     // An ordinary write does not immediately respawn on an ambiguous outcome.
     // Re-read and reapply at the idle recovery boundary before escalating.
-    if (!retryDeferredDelivery || delivery.retryAfterMs !== undefined || !openClawConfigRecovery.canRestart()) {
+    if (!retryDeferredDelivery || delivery.retryAfterMs !== undefined || !openClawConfigRecovery.canRestart()
+      || loadedAtSpawn) {
+      // A loaded target only awaits confirmation: give a busy gateway time before the attempt that may stall it.
       openClawConfigRecovery.retryAfter(Math.max(delivery.retryAfterMs ?? 0,
-        retryDeferredDelivery ? 30_000 : DEFERRED_RESTART_POLL_MS));
+        retryDeferredDelivery || loadedAtSpawn ? 30_000 : DEFERRED_RESTART_POLL_MS));
       scheduleDeferredGatewayRestart(fallbackRecovery ? options.reason
         : `${CONFIG_DELIVERY_FALLBACK_REASON_PREFIX}${options.reason}`);
       return { success: true, changed: effectiveConfigChanged, status: buildConfigApplyPendingStatus(t('openClawConfigApplyPending')) };
@@ -3421,6 +3434,13 @@ const _syncOpenClawConfigImpl = async (
   const confirmed = await deliver();
   if (confirmed.mode !== OpenClawConfigDeliveryMode.Applied || openClawConfigRecovery.pending) {
     if (confirmed.mode !== OpenClawConfigDeliveryMode.Rejected) {
+      // The new process spawned from the persisted target, so its failed
+      // confirmations count toward the stall rather than another respawn.
+      openClawConfigRecovery.loadedAtSpawn(
+        target,
+        manager.getGatewayProcessConfigRaw(),
+        manager.getGatewayProcessGeneration(),
+      );
       if (stallConfigRecoveryIfExhausted(target, confirmed)) {
         return {
           success: false,

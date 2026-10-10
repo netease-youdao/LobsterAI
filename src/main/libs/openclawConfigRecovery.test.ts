@@ -171,6 +171,64 @@ test('remembers the content each gateway generation confirmed applying', () => {
   expect(state.appliedRawFor(1)).toBe(first.raw);
 });
 
+test('a generation that spawned from the pending target counts failed confirmations toward the stall', () => {
+  const state = new OpenClawConfigRecovery();
+  const spawned = target(4121);
+  state.stage(spawned, false, 1);
+  // The file the process loaded may be formatted differently from the target.
+  const spawnedRaw = JSON.stringify(JSON.parse(spawned.raw), null, 2);
+
+  expect(state.loadedAtSpawn(spawned, spawnedRaw, 2)).toBe(true);
+  // The first failure may still race the gateway's startup.
+  expect(state.failedAfterRespawn(spawned, 'timeout')).toBe(false);
+  // Checking again on the same generation keeps the count.
+  expect(state.loadedAtSpawn(spawned, spawnedRaw, 2)).toBe(true);
+  expect(state.failedAfterRespawn(spawned, 'timeout')).toBe(true);
+  expect(state.stalled).toBe(true);
+  expect(state.pending).toBe(true);
+});
+
+test('each newly spawned generation gets its own failure budget', () => {
+  const state = new OpenClawConfigRecovery();
+  const spawned = target(4121);
+  state.stage(spawned, false, 1);
+  state.loadedAtSpawn(spawned, spawned.raw, 2);
+  state.failedAfterRespawn(spawned, 'timeout');
+
+  expect(state.loadedAtSpawn(spawned, spawned.raw, 3)).toBe(true);
+  expect(state.failedAfterRespawn(spawned, 'timeout')).toBe(false);
+  expect(state.failedAfterRespawn(spawned, 'timeout')).toBe(true);
+});
+
+test('a generation has not loaded the target unless it spawned from it and applied nothing since', () => {
+  const state = new OpenClawConfigRecovery();
+  const older = target(3474);
+  const latest = target(4121);
+  state.stage(older, false, 1);
+  state.stage(latest, false, 1);
+  expect(state.loadedAtSpawn(older, older.raw, 2)).toBe(false);
+  expect(state.loadedAtSpawn(latest, older.raw, 2)).toBe(false);
+  expect(state.loadedAtSpawn(latest, null, 2)).toBe(false);
+  // Failures keep the ordinary retry/restart path.
+  expect(state.failedAfterRespawn(latest, 'timeout')).toBe(false);
+  expect(state.failedAfterRespawn(latest, 'timeout')).toBe(false);
+  expect(state.stalled).toBe(false);
+
+  // Environment and plugin changes load only in a process spawned after the demand.
+  const respawn = target(5000);
+  state.stage(respawn, true, 2);
+  expect(state.loadedAtSpawn(respawn, respawn.raw, 2)).toBe(false);
+  expect(state.loadedAtSpawn(respawn, respawn.raw, 3)).toBe(true);
+
+  // After confirming other content, the process no longer runs what it spawned with.
+  const applied = target(6000);
+  state.stage(applied, false, 3);
+  expect(state.applied(applied, 3)).toBe(true);
+  const reverted = target(5000);
+  state.stage(reverted, false, 3);
+  expect(state.loadedAtSpawn(reverted, reverted.raw, 3)).toBe(false);
+});
+
 test('content delivered while a respawn is still due does not count as applied', () => {
   const state = new OpenClawConfigRecovery();
   const respawned = target(3474);
