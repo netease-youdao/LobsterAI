@@ -58,6 +58,7 @@ import {
   normalizeLocalServiceOrigin,
   normalizeProjectDirectoryForDedup,
   parseMediaTokensFromText,
+  resolveArtifactIdForDisplay,
 } from '../../services/artifactParser';
 import { configService, ConfigServiceEvent } from '../../services/config';
 import { coworkService } from '../../services/cowork';
@@ -2228,6 +2229,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       .map(tab => ({ tab, artifact: artifactsById.get(tab.artifactId) }))
       .filter((item): item is { tab: typeof artifactPreviewTabs[number]; artifact: Artifact } => Boolean(item.artifact));
   }, [artifactPreviewTabs, sessionArtifacts]);
+  // A later reply that rewrites the HTML file replaces its artifact in the
+  // display list; follow it so the browser tab keeps watching the file and
+  // offers HTML sharing instead of deploying the internal preview server.
+  const browserHtmlPreviewDisplayArtifactId = useMemo(() => (
+    browserHtmlPreviewArtifactId
+      ? resolveArtifactIdForDisplay(
+          rawSessionArtifacts,
+          browserHtmlPreviewArtifactId,
+          { defaultProjectDirectory: currentSession?.cwd },
+        )
+      : null
+  ), [browserHtmlPreviewArtifactId, currentSession?.cwd, rawSessionArtifacts]);
   const shouldPinArtifactAddTab = artifactTabsIsOverflowing || artifactTabsCanScrollLeft || artifactTabsCanScrollRight;
   const browserPreviewTabTitle = browserPreviewTitle.trim() || i18nService.t('artifactBrowserTab');
   const fetchSubagents = useCallback(async (targetSessionId: string, options: { showLoading?: boolean } = {}) => {
@@ -7035,7 +7048,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               browserUrl={browserPreviewUrl}
               browserLocalServiceContext={browserLocalServiceContext}
               localServiceDeploymentRequest={localServiceDeploymentRequest}
-              browserHtmlArtifactId={browserHtmlPreviewArtifactId}
+              browserHtmlArtifactId={browserHtmlPreviewDisplayArtifactId}
               onBrowserAddressChange={handleBrowserPreviewAddressChange}
               onBrowserUrlChange={handleBrowserPreviewUrlChange}
               onBrowserTitleChange={handleBrowserPreviewTitleChange}
