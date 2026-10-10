@@ -1,5 +1,5 @@
 import type { EditorCommand } from '@docx-editor.dev/core/contracts/editor';
-import { type ChromeSlotId, commandForSlot, commandForSlotValue } from '@docx-editor.dev/core/editor';
+import { type ChromeSlotId, commandForSlot, commandForSlotValue, toolbarCommandState } from '@docx-editor.dev/core/editor';
 import {
   ArrowUturnLeftIcon, ArrowUturnRightIcon, Bars3BottomLeftIcon, Bars3BottomRightIcon,
   Bars3CenterLeftIcon, Bars3Icon, BoldIcon, ItalicIcon, ListBulletIcon, NumberedListIcon,
@@ -13,6 +13,7 @@ import type { WordEditorSession } from '@/services/office/word/wordEditorSession
 import {
   OfficeFontSelect, OfficeFontSizeSelect, OfficeToolbar, OfficeToolbarButton, OfficeToolbarDivider,
 } from '../common/toolbar/OfficeToolbar';
+import { WordImageButton, WordTableButton, WordTableMenu } from './WordInsertControls';
 
 const t = (key: string) => i18nService.t(key);
 const Slot = { Style: 'styles.style', Font: 'font.family', Size: 'font.size', Undo: 'history.undo', Redo: 'history.redo' } as const;
@@ -55,7 +56,7 @@ export function WordToolbar({ session }: { session: WordEditorSession }): React.
     release();
     editor.focus();
   };
-  // An agent edit spans several engine steps; the session undoes it as one.
+  // An agent edit or a table at the caret spans several engine steps; the session undoes it as one.
   const activate = (slot: ChromeSlotId, command: EditorCommand | null) => {
     if ((slot === Slot.Undo && session.undo()) || (slot === Slot.Redo && session.redo())) {
       editor?.focus();
@@ -87,6 +88,10 @@ export function WordToolbar({ session }: { session: WordEditorSession }): React.
           </OfficeToolbarButton>
         );
       })}
+      <OfficeToolbarDivider />
+      <WordTableButton session={session} disabled={!toolbarCommandState(editor ?? null, 'table.insert').enabled} />
+      <WordImageButton session={session} disabled={!toolbarCommandState(editor ?? null, 'image.insert').enabled} />
+      <WordTableMenu session={session} run={run} />
       {rejected && <span role="status" className="text-xs text-amber-600">{t('wordCommandRejected')}</span>}
     </OfficeToolbar>
   );

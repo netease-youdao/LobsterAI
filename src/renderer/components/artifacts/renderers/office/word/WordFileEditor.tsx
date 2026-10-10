@@ -13,6 +13,8 @@ type OfficeEditorLabels,   OfficeEditorLoader, OfficeEditorShell, useOfficeDocum
 } from '../common/OfficeEditorShell';
 import { useRegisterOfficePreviewZoomControls } from '../common/OfficePreviewActionsContext';
 import { clampOfficeZoom, OfficeZoom } from '../common/OfficeZoomControls';
+import { WordImageOverlay } from './WordImageOverlay';
+import { wordImageTransferHandlers } from './WordInsertControls';
 import { WordToolbar } from './WordToolbar';
 
 const t = (key: string) => i18nService.t(key);
@@ -50,6 +52,7 @@ function ActiveWordEditor({ session, onAddToChat }: { session: WordEditorSession
   useOfficeEditorMount(session, host);
   // Selected text goes to the task chat beside the editor, as in the other previews.
   const chat = useEditorSelectionChat({ frame, content: host, selectedText: () => session.selectionSummary()?.text, onAdd: onAddToChat });
+  const imageTransfer = useMemo(() => wordImageTransferHandlers(session), [session]);
   const zoomControls = useMemo(() => {
     const zoomBy = (step: number) => session.editor?.setZoom(clampOfficeZoom((session.editor?.getZoom() ?? 1) + step));
     return {
@@ -61,7 +64,7 @@ function ActiveWordEditor({ session, onAddToChat }: { session: WordEditorSession
   }, [session, editorState?.zoom]);
   useRegisterOfficePreviewZoomControls(zoomControls);
 
-  // Undo/redo an agent edit as one step, like the toolbar buttons.
+  // Undo/redo a multi-step edit, such as an agent's, as one step, like the toolbar buttons.
   const undoAgentEdits = (event: React.KeyboardEvent) => {
     const key = event.key.toLowerCase();
     const redo = (key === 'z' && event.shiftKey) || (key === 'y' && event.ctrlKey && !event.metaKey);
@@ -80,8 +83,9 @@ function ActiveWordEditor({ session, onAddToChat }: { session: WordEditorSession
           {substitutedFonts.length ? t('wordFontsSubstituted').replace('{count}', String(substitutedFonts.length)) : t('wordFontsOriginal')}
         </span>
       )}>
-      <div className="lobster-word-frame" ref={frame} onPointerUp={chat.handlePointerUp}>
+      <div className="lobster-word-frame" ref={frame} onPointerUp={chat.handlePointerUp} {...imageTransfer}>
         <div className="lobster-word-mount docx-editor__scroll-container" ref={host} />
+        <WordImageOverlay session={session} mount={host} />
         {chat.button}
       </div>
     </OfficeEditorShell>
