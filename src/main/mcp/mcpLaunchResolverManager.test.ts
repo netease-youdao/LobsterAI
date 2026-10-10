@@ -10,6 +10,9 @@ vi.mock('electron', () => ({
   },
   session: { defaultSession: { resolveProxy: vi.fn() } },
 }));
+// userData is mocked to the repo root, so a real coworkLog (e.g. the macOS
+// Electron helper lookup warning) would append to <repo>/logs/cowork.log.
+vi.mock('../libs/coworkLogger', () => ({ coworkLog: vi.fn() }));
 
 import { McpLaunchResolutionStatus, McpLaunchResolverKind } from './mcpLaunchResolution';
 import {
