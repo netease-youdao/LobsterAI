@@ -1071,14 +1071,14 @@ contextBridge.exposeInMainWorld('electron', {
       save: (request: SaveMarkdownFileRequest) => ipcRenderer.invoke(MarkdownFileIpc.Save, request),
       setHasUnsafeEdits: (hasUnsafeEdits: boolean) => ipcRenderer.send(MarkdownFileIpc.SetUnsafeEdits, hasUnsafeEdits),
     },
-    watchFile: (filePath: string) => ipcRenderer.invoke('artifact:watchFile', filePath),
-    unwatchFile: (filePath: string) => ipcRenderer.invoke('artifact:unwatchFile', filePath),
+    watchFile: (filePath: string) => ipcRenderer.invoke(ArtifactPreviewIpc.WatchFile, filePath),
+    unwatchFile: (filePath: string) => ipcRenderer.invoke(ArtifactPreviewIpc.UnwatchFile, filePath),
     onFileChanged: (callback: (data: { filePath: string }) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, data: { filePath: string }) =>
         callback(data);
-      ipcRenderer.on('artifact:file:changed', handler);
+      ipcRenderer.on(ArtifactPreviewIpc.FileChanged, handler);
       return () => {
-        ipcRenderer.removeListener('artifact:file:changed', handler);
+        ipcRenderer.removeListener(ArtifactPreviewIpc.FileChanged, handler);
       };
     },
     createPreviewSession: (filePath: string) =>
