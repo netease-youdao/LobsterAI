@@ -315,9 +315,8 @@ describe('registerKitHandlers Computer Use integration', () => {
       },
     });
     expect(syncOpenClawConfig).toHaveBeenCalledWith({
-      expectedImpact: OpenClawConfigImpact.Restart,
+      expectedImpact: OpenClawConfigImpact.Sync,
       reason: 'computer-use-kit-installed',
-      restartGatewayIfRunning: true,
     });
     expect(skillManager.stopWatching).toHaveBeenCalledTimes(1);
     expect(skillManager.startWatching).toHaveBeenCalledTimes(1);
@@ -334,6 +333,11 @@ describe('registerKitHandlers Computer Use integration', () => {
   generatedMacComputerUseTest('uninstalls Computer Use skill, runtime, kit record, and syncs OpenClaw', async () => {
     const { storeData, syncOpenClawConfig } = await installComputerUseKit();
     sendSpy.mockClear();
+    let runtimePresentAtSync: boolean | undefined;
+    syncOpenClawConfig.mockImplementationOnce(async () => {
+      runtimePresentAtSync = fs.existsSync(getComputerUseRuntimeRoot(MAC_RUNTIME));
+      return { success: true, changed: true };
+    });
 
     const handler = registeredHandlers.get('kits:uninstall');
     expect(handler).toBeDefined();
@@ -346,10 +350,12 @@ describe('registerKitHandlers Computer Use integration', () => {
     expect(storeData.skills_state).toEqual({});
     expect(storeData[KitStoreKey.Installed]).toEqual({});
     expect(syncOpenClawConfig).toHaveBeenLastCalledWith({
-      expectedImpact: OpenClawConfigImpact.Restart,
+      expectedImpact: OpenClawConfigImpact.Sync,
       reason: 'computer-use-kit-uninstalled',
-      restartGatewayIfRunning: true,
     });
+    // OpenClaw drops the MCP server, and with it the running helper, before
+    // the runtime files go away.
+    expect(runtimePresentAtSync).toBe(true);
     expect(sendSpy).toHaveBeenCalledWith('skills:changed');
   });
 });

@@ -415,10 +415,12 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
       getStore().set(KITS_INSTALLED_KEY, installedMap);
 
       if (isComputerUseKit) {
+        // The kit only adds an MCP server and a skill: OpenClaw hot-applies
+        // `mcp` by disposing MCP runtimes, and `skills` needs no reload. A
+        // restart would make the user wait for gateway startup before using it.
         const syncResult = await syncOpenClawConfig({
           reason: 'computer-use-kit-installed',
-          restartGatewayIfRunning: true,
-          expectedImpact: OpenClawConfigImpact.Restart,
+          expectedImpact: OpenClawConfigImpact.Sync,
         });
         if (!syncResult.success) {
           throw new Error(syncResult.error || 'OpenClaw config sync failed after Computer Use install');
@@ -499,12 +501,14 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
 
       if (kitId === ComputerUseKitId.BuiltIn) {
         removeComputerUseSkillArtifacts(getStore());
-        await uninstallComputerUseRuntime();
+        // Without the kit record the MCP server is no longer resolved. Applying
+        // that first lets OpenClaw dispose the running helper before its
+        // runtime files are removed, without restarting the gateway.
         const syncResult = await syncOpenClawConfig({
           reason: 'computer-use-kit-uninstalled',
-          restartGatewayIfRunning: true,
-          expectedImpact: OpenClawConfigImpact.Restart,
+          expectedImpact: OpenClawConfigImpact.Sync,
         });
+        await uninstallComputerUseRuntime();
         if (!syncResult.success) {
           throw new Error(syncResult.error || 'OpenClaw config sync failed after Computer Use uninstall');
         }
