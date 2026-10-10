@@ -67,7 +67,6 @@ import {
   isPlanImplementationApproval,
   PLAN_MODE_EXECUTION_OVERRIDE_MARKER,
 } from '../../../shared/cowork/planMode';
-import { ProgressCardEvent } from '../../../shared/cowork/progressCard';
 import {
   buildSelectedTextPromptSection,
   type CoworkSelectedTextSnippet,
@@ -181,7 +180,6 @@ import {
   shouldReplaceLocalConversationWithCronHistory,
 } from './openclawCronRunHistorySync';
 import { OpenClawImWorkloadTracker } from './openclawImWorkloadTracker';
-import { OpenClawProgressCards } from './openclawProgressCard';
 import { OpenClawQuestionController } from './openclawQuestionController';
 import {
   buildOpenClawTranscriptOversizedError,
@@ -3454,23 +3452,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.emit('message', sessionId, userMessage);
   }
 
-  // Native progress cards live in the Gateway under the session key the run
-  // writes them with: the active turn's key, else the session's first key.
-  private readonly progressCards = new OpenClawProgressCards({
-    client: () => this.requireGatewayClient(),
-    sessionKey: (sessionId) => this.activeTurns.get(sessionId)?.sessionKey
-      ?? this.getSessionKeysForSession(sessionId)[0],
-    changed: (sessionId) => this.emit(ProgressCardEvent.Changed, sessionId),
-  });
-
-  getProgressCard(sessionId: string) {
-    return this.progressCards.get(sessionId);
-  }
-
-  dismissProgressCard(sessionId: string, revision: number) {
-    return this.progressCards.dismiss(sessionId, revision);
-  }
-
   async getContextUsage(sessionId: string): Promise<CoworkContextUsage | null> {
     const existing = this.contextUsageInFlightBySession.get(sessionId);
     if (existing) {
@@ -6384,7 +6365,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         // Setting gatewayClient earlier would let concurrent code send
         // request frames before the connect frame, causing 1008 rejection.
         this.gatewayClient = client;
-        this.progressCards.reconnected();
         this.gatewayClientVersion = connection.version;
         this.gatewayClientEntryPath = connection.clientEntryPath;
         this.gatewayReconnectSuppressed = false;
@@ -7610,11 +7590,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     // events (agent, tool updates) keep flowing — causing false-positive
     // disconnect from the TickWatchdog.
     this.lastTickTimestamp = Date.now();
-
-    if (event.event === ProgressCardEvent.GatewayChanged) {
-      this.progressCards.changed(event.payload);
-      return;
-    }
 
     if (event.event === OpenClawGatewayEvent.Shutdown) {
       // A close code describes the transport, not process ownership. Use the
