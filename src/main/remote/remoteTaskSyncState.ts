@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 
 import { type RemoteOwner, type RemoteSyncTaskIssue, RemoteSyncTaskIssueStatus } from '../../shared/remote/constants';
 import { RemoteInputReason } from '../../shared/remote/input';
+import { RemoteImportValidation } from '../../shared/remote/retention';
 import { projectionFault, projectionProbeEligible } from './remoteProjectionFaults';
 import type { SyncRow } from './remoteStore';
 import { emitCommittedTelemetry, SyncTelemetry } from './remoteSyncTelemetry';
@@ -33,7 +34,8 @@ const NEVER = Number.MAX_SAFE_INTEGER;
 const DAY = 86400000;
 const RECOVERY_PROBE_VERSION = 1;
 const INPUT_MODEL_RECOVERY_PROBE_VERSION = 3;
-const legacyProbeReasons = new Set([TaskSyncFailureReason.RetryHintInvalid, 'REMOTE_TASK_SYNC_FAILED', 'REMOTE_IMPORT_CONTEXT_CHANGED', 'REMOTE_PROJECTION_CONTEXT_CHANGED', RemoteInputReason.Version]);
+const EMPTY_IMPORT_RECOVERY_PROBE_VERSION = 4;
+const legacyProbeReasons = new Set([TaskSyncFailureReason.RetryHintInvalid, 'REMOTE_TASK_SYNC_FAILED', 'REMOTE_IMPORT_CONTEXT_CHANGED', 'REMOTE_PROJECTION_CONTEXT_CHANGED', RemoteInputReason.Version, RemoteImportValidation.Reason]);
 const identity = (context: TaskSyncContext): string[] => [context.owner.userId, context.owner.scopeKey, context.target, context.deviceId];
 
 /** Scheduling hints never replace source watermarks, immutable operations or admission evidence. */
@@ -129,21 +131,43 @@ export class RemoteTaskSyncState {
   }
   /** One compatibility probe for old, ambiguous isolation. This grants scheduling only:
    * the bridge must reconcile original operations and verify the exact remote stream. */
-  reconcileLegacyFailures(context: TaskSyncContext, canReconcile: (row: SyncRow) => boolean, limit = 50): {
+  reconcileLegacyFailures(context: TaskSyncContext, canReconcile: (row: SyncRow, reason: string) => boolean, limit = 50): {
     promotedIds: string[]; scanned: number; hasMore: boolean;
   } {
     const size = Math.max(1, Math.min(50, Number.isSafeInteger(limit) ? limit : 50));
-    return this.db.transaction(() => {
-      const rows = this.db.prepare(`SELECT * FROM remote_sync_task_state WHERE owner_user_id=? AND owner_scope_key=?
+    const rows = this.db.prepare(`SELECT * FROM remote_sync_task_state WHERE owner_user_id=? AND owner_scope_key=?
         AND target_key=? AND device_id=? AND (recovery_probe_version=0 OR recovery_probe_version=1 AND reason='REMOTE_RETRY_HINT_INVALID'
+          OR recovery_probe_version>=0 AND recovery_probe_version<? AND reason=?
           OR recovery_probe_version>=0 AND recovery_probe_version<? AND reason=?) AND phase<>'ready'
-        ORDER BY local_session_id LIMIT ?`).all(...identity(context), INPUT_MODEL_RECOVERY_PROBE_VERSION, RemoteInputReason.Version, size + 1) as TaskSyncRecord[];
+        ORDER BY local_session_id LIMIT ?`).all(...identity(context), INPUT_MODEL_RECOVERY_PROBE_VERSION, RemoteInputReason.Version,
+          EMPTY_IMPORT_RECOVERY_PROBE_VERSION, RemoteImportValidation.Reason, size + 1) as TaskSyncRecord[];
+    const findRow = this.db.prepare(`SELECT s.* FROM remote_sync s JOIN cowork_sessions c ON c.id=s.local_id
+      JOIN cowork_session_ownership o ON o.session_id=s.local_id
+      WHERE s.local_id=? AND s.device_id=? AND o.owner_user_id=? AND o.owner_scope_key=? AND o.ownership_status='confirmed'`);
+    // Admission may read the independent control ledger, which forbids access inside a
+    // core transaction. Preflight it first; the transaction rechecks the exact local evidence.
+    const admitted = new Map<string, string>();
+    for (const value of rows.slice(0, size)) {
+      if (value.phase !== TaskSyncPhase.Isolated || value.scope !== 'session' || !legacyProbeReasons.has(value.reason)) continue;
+      const row = findRow.get(value.local_session_id, context.deviceId, context.owner.userId, context.owner.scopeKey) as SyncRow | undefined;
+      if (!row) continue;
+      try { if (canReconcile(row, value.reason)) admitted.set(value.local_session_id, JSON.stringify(row)); }
+      catch (error) {
+        const code = (error as { code?: unknown } | null)?.code;
+        if (typeof code === 'string' && /^SQLITE_(?:CORRUPT|NOTADB|FULL|IOERR)(?:_|$)/u.test(code)) throw error;
+      }
+    }
+    return this.db.transaction(() => {
       const promotedIds: string[] = [];
       for (const value of rows.slice(0, size)) {
         const id = value.local_session_id;
+        if (JSON.stringify(this.get(context, id)) !== JSON.stringify(value)) continue;
+        const row = findRow.get(id, context.deviceId, context.owner.userId, context.owner.scopeKey) as SyncRow | undefined;
+        if (admitted.has(id) && (!row || admitted.get(id) !== JSON.stringify(row))) continue;
         // Mark every evaluated legacy row, including permanent/corrupt failures. A later
         // failure or restart cannot silently grant another automatic compatibility attempt.
-        const probeVersion = value.reason === RemoteInputReason.Version ? INPUT_MODEL_RECOVERY_PROBE_VERSION
+        const probeVersion = value.reason === RemoteImportValidation.Reason ? EMPTY_IMPORT_RECOVERY_PROBE_VERSION
+          : value.reason === RemoteInputReason.Version ? INPUT_MODEL_RECOVERY_PROBE_VERSION
           : value.reason === TaskSyncFailureReason.RetryHintInvalid ? 2 : RECOVERY_PROBE_VERSION;
         const marked = this.db.prepare(`UPDATE remote_sync_task_state SET recovery_probe_version=?
           WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?
@@ -152,25 +176,12 @@ export class RemoteTaskSyncState {
           || !legacyProbeReasons.has(value.reason) || this.ledger(value) === null
           || !Number.isSafeInteger(value.server_retry_at) || value.server_retry_at < 0 || value.server_retry_at === NEVER
           || value.fingerprint !== createHash('sha256').update(JSON.stringify([value.scope, value.reason])).digest('hex')) continue;
-        const row = this.db.prepare(`SELECT s.* FROM remote_sync s JOIN cowork_sessions c ON c.id=s.local_id
-          JOIN cowork_session_ownership o ON o.session_id=s.local_id
-          WHERE s.local_id=? AND s.device_id=? AND o.owner_user_id=? AND o.owner_scope_key=?
-            AND o.ownership_status='confirmed'`).get(id, context.deviceId, context.owner.userId, context.owner.scopeKey) as SyncRow | undefined;
-        if (!row) continue;
-        try {
-          if (!canReconcile(row)) continue;
-        } catch (error) {
-          const code = (error as { code?: unknown } | null)?.code;
-          if (typeof code === 'string' && /^SQLITE_(?:CORRUPT|NOTADB|FULL|IOERR)(?:_|$)/u.test(code)) throw error;
-          // Opaque task-local evidence must remain isolated, without preventing the
-          // next task's independent verification or granting repeated restart probes.
-          continue;
-        }
-        this.db.prepare(`UPDATE remote_sync_task_state SET phase='reconciling',next_retry_at=server_retry_at
+        if (!row || admitted.get(id) !== JSON.stringify(row)) continue;
+        const promoted = this.db.prepare(`UPDATE remote_sync_task_state SET phase='reconciling',next_retry_at=server_retry_at
           WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?
             AND phase='isolated' AND scope='session' AND reason=? AND fingerprint=? AND recovery_probe_version=?`)
           .run(...this.args(context, id), value.reason, value.fingerprint, probeVersion);
-        promotedIds.push(id);
+        if (promoted.changes === 1) promotedIds.push(id);
       }
       return { promotedIds, scanned: Math.min(size, rows.length), hasMore: rows.length > size };
     })();
@@ -220,7 +231,8 @@ export class RemoteTaskSyncState {
     this.db.prepare(`UPDATE remote_sync_task_state SET phase=?,next_retry_at=?,failure_count=?,reason=?,scope=?,fingerprint=?,server_retry_at=?,recovery_probe_version=?
       WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?`)
       .run(phase, retry, count, failure.reason.slice(0, 160), failure.scope, fingerprint, serverRetryAt,
-        failure.reason === RemoteInputReason.Version ? INPUT_MODEL_RECOVERY_PROBE_VERSION : RECOVERY_PROBE_VERSION, ...this.args(context, id));
+        Math.max(value.recovery_probe_version, failure.reason === RemoteImportValidation.Reason ? EMPTY_IMPORT_RECOVERY_PROBE_VERSION
+          : failure.reason === RemoteInputReason.Version ? INPUT_MODEL_RECOVERY_PROBE_VERSION : RECOVERY_PROBE_VERSION), ...this.args(context, id));
     this.report(context, id, SyncTelemetry.Stage.TaskState,
       phase === TaskSyncPhase.Isolated ? SyncTelemetry.Outcome.Blocked : SyncTelemetry.Outcome.Deferred,
       failure.reason);

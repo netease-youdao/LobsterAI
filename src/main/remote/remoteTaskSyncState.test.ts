@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteSyncTaskIssueStatus } from '../../shared/remote/constants';
 import { RemoteInputReason } from '../../shared/remote/input';
+import { RemoteImportValidation } from '../../shared/remote/retention';
 import { finishProjectionFault, grantProjectionProbe, initializeProjectionFaults, projectionFault, recordProjectionFault } from './remoteProjectionFaults';
 import { SyncTelemetry } from './remoteSyncTelemetry';
 import { RemoteTaskSyncState, type TaskSyncContext, TaskSyncFailureReason, TaskSyncPhase } from './remoteTaskSyncState';
@@ -230,6 +231,88 @@ describe('task fault isolation persistence', () => {
     f.state.resumeAfterVerification(context, 's'); f.state.fail(context, 's', failure);
     expect(f.create().reconcileLegacyFailures(context, () => true).scanned).toBe(0);
     expect(f.state.get(context, 's')).toMatchObject({ phase: TaskSyncPhase.Isolated, failure_count: 2 });
+  });
+  it('probes old invalid import requests only after the reason-specific check and never grants the probe again', () => {
+    const f = fixture();
+    for (const id of ['allowed', 'denied']) {
+      f.add(id);
+      f.state.fail(context, id, { phase: TaskSyncPhase.Isolated, scope: 'session', reason: RemoteImportValidation.Reason });
+      f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run(`import:${id}`, '{original immutable import');
+    }
+    f.db.exec('UPDATE remote_sync_task_state SET recovery_probe_version=1; UPDATE remote_sync SET source_seq=9,ack_seq=0');
+    const before = f.state.get(context, 'allowed')!;
+    const check = vi.fn((row, reason) => {
+      expect(f.db.inTransaction).toBe(false);
+      return row.local_id === 'allowed' && reason === RemoteImportValidation.Reason;
+    });
+    expect(f.state.reconcileLegacyFailures(context, check)).toEqual({ promotedIds: ['allowed'], scanned: 2, hasMore: false });
+    expect(check).toHaveBeenNthCalledWith(1, expect.objectContaining({ local_id: 'allowed', source_seq: 9 }), RemoteImportValidation.Reason);
+    expect(check).toHaveBeenNthCalledWith(2, expect.objectContaining({ local_id: 'denied' }), RemoteImportValidation.Reason);
+    expect(f.state.get(context, 'allowed')).toMatchObject({ phase: TaskSyncPhase.Reconciling, recovery_probe_version: 4,
+      failure_count: before.failure_count, repair_json: before.repair_json, fingerprint: before.fingerprint });
+    expect(f.state.get(context, 'denied')).toMatchObject({ phase: TaskSyncPhase.Isolated, recovery_probe_version: 4 });
+    expect(f.db.prepare('SELECT source_seq,ack_seq FROM remote_sync').all()).toEqual([
+      { source_seq: 9, ack_seq: 0 }, { source_seq: 9, ack_seq: 0 },
+    ]);
+    expect(f.db.prepare('SELECT value FROM remote_state ORDER BY key').all()).toEqual([
+      { value: '{original immutable import' }, { value: '{original immutable import' },
+    ]);
+    const reopenedCheck = vi.fn(() => true);
+    expect(f.create().reconcileLegacyFailures(context, reopenedCheck)).toEqual({ promotedIds: [], scanned: 0, hasMore: false });
+    expect(reopenedCheck).not.toHaveBeenCalled();
+  });
+  it.each(['reason', 'phase'] as const)('keeps the probe unconsumed when task %s changes during admission', field => {
+    const f = fixture(); f.add('s');
+    f.state.fail(context, 's', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: RemoteImportValidation.Reason });
+    f.db.exec('UPDATE remote_sync_task_state SET recovery_probe_version=1');
+    const before = f.state.get(context, 's')!;
+    const changed = field === 'reason' ? transport.reason : TaskSyncPhase.Closed;
+    const check = vi.fn(() => {
+      expect(f.db.inTransaction).toBe(false);
+      f.db.prepare(`UPDATE remote_sync_task_state SET ${field}=? WHERE local_session_id=?`).run(changed, 's');
+      return true;
+    });
+    expect(f.state.reconcileLegacyFailures(context, check)).toEqual({ promotedIds: [], scanned: 1, hasMore: false });
+    expect(check).toHaveBeenCalledOnce();
+    expect(f.state.get(context, 's')).toEqual({ ...before, [field]: changed });
+    expect(f.create().get(context, 's')?.recovery_probe_version).toBe(1);
+  });
+  it.each(['source', 'ownership'] as const)('keeps the probe unconsumed when %s evidence changes during admission', evidence => {
+    const f = fixture(); f.add('s');
+    f.state.fail(context, 's', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: RemoteImportValidation.Reason });
+    f.db.exec('UPDATE remote_sync_task_state SET recovery_probe_version=1');
+    const before = f.state.get(context, 's')!;
+    const check = vi.fn(() => {
+      expect(f.db.inTransaction).toBe(false);
+      if (evidence === 'source') f.db.prepare('UPDATE remote_sync SET source_seq=source_seq+1 WHERE local_id=?').run('s');
+      else f.db.prepare("UPDATE cowork_session_ownership SET ownership_status='quarantined' WHERE session_id=?").run('s');
+      return true;
+    });
+    expect(f.state.reconcileLegacyFailures(context, check)).toEqual({ promotedIds: [], scanned: 1, hasMore: false });
+    expect(check).toHaveBeenCalledOnce();
+    expect(f.state.get(context, 's')).toEqual(before);
+    expect(f.create().get(context, 's')?.recovery_probe_version).toBe(1);
+  });
+  it('does not automatically probe new invalid import request failures', () => {
+    const f = fixture(); f.add('s');
+    expect(f.state.fail(context, 's', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: RemoteImportValidation.Reason }))
+      .toMatchObject({ phase: TaskSyncPhase.Isolated, recovery_probe_version: 4 });
+    const check = vi.fn(() => true);
+    expect(f.create().reconcileLegacyFailures(context, check)).toEqual({ promotedIds: [], scanned: 0, hasMore: false });
+    expect(check).not.toHaveBeenCalled();
+  });
+  it('preserves a consumed invalid import probe through transport failures and repeated validation failures', () => {
+    const f = fixture(); f.add('s');
+    const failure = { phase: TaskSyncPhase.Isolated, scope: 'session', reason: RemoteImportValidation.Reason };
+    f.state.fail(context, 's', failure);
+    f.db.exec('UPDATE remote_sync_task_state SET recovery_probe_version=1');
+    expect(f.state.reconcileLegacyFailures(context, () => true).promotedIds).toEqual(['s']);
+    expect(f.state.fail(context, 's', transport)).toMatchObject({ phase: TaskSyncPhase.Backoff, recovery_probe_version: 4 });
+    const restarted = f.create();
+    expect(restarted.fail(context, 's', failure)).toMatchObject({ phase: TaskSyncPhase.Isolated, recovery_probe_version: 4, failure_count: 3 });
+    const check = vi.fn(() => true);
+    expect(f.create().reconcileLegacyFailures(context, check)).toEqual({ promotedIds: [], scanned: 0, hasMore: false });
+    expect(check).not.toHaveBeenCalled();
   });
   it('schedules clean legacy tasks that still need admission or failure migration without touching corrupt operation JSON', () => {
     const f = fixture();

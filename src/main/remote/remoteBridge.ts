@@ -14,7 +14,7 @@ import { RemoteFileCapability } from '../../shared/remote/files';
 import { RemoteInputCapability, RemoteInputReason, RemoteInputRecovery, type RemoteInputRecoveryPage, RemoteInputStatus, type RemotePreparationClaim } from '../../shared/remote/input';
 import { type QuestionDecisionOutcome, RemoteQuestion } from '../../shared/remote/questions';
 import { REMOTE_REPLY_PROJECTION_VERSION, REMOTE_REPLY_SYNC_DELAY_MS,RemoteReplyCapability } from '../../shared/remote/reply';
-import { RemoteRetention, type RetentionImport, type RetentionState } from '../../shared/remote/retention';
+import { RemoteImportValidation, RemoteRetention, type RetentionImport, type RetentionState } from '../../shared/remote/retention';
 import { parseRemoteSyncTarget, RemoteSyncTarget, remoteSyncTargetHeaders, type RemoteSyncTargetIdentity } from '../../shared/remote/syncTarget';
 import { RemoteTelemetryEvent } from '../../shared/remote/telemetry';
 import type { AgentOwnerStore } from '../agentOwnership';
@@ -1400,9 +1400,10 @@ export class RemoteBridge {
     this.taskSync.reconcileProjectionFailures(context, id => this.sessionAdmitted(id) && this.availability.legacyHistoryAllowed(id));
     // Older clients classified wrapped transport errors as permanent task failures.
     // A one-time probe reuses the original mapping/receipt checks; it grants no ACK or execution permission.
-    const recovered = this.taskSync.reconcileLegacyFailures(context, row => this.availability.legacyHistoryAllowed(row.local_id)
+    const recovered = this.taskSync.reconcileLegacyFailures(context, (row, reason) => this.availability.legacyHistoryAllowed(row.local_id)
       && !this.deps.store.isSyncClosed(row.local_id)
-      && (!row.sync_environment || this.targets.matchesEnvironment(context.target, row.sync_environment)));
+      && (!row.sync_environment || this.targets.matchesEnvironment(context.target, row.sync_environment))
+      && (reason !== RemoteImportValidation.Reason || this.emptyInitialImport(row, this.deps.store.get<SavedImport>(`import:${row.local_id}`))));
     if (recovered.promotedIds.length) remoteDiagnosticLog('remote.sync.task_deferred', {
       lane: 'history', result: 'deferred', reason: 'STATE_CHANGED', count: recovered.promotedIds.length,
     });
@@ -1484,6 +1485,26 @@ export class RemoteBridge {
       if (state.deleted) { this.taskSync.fail(context, id, { phase: 'closed', scope: 'session', reason: 'SESSION_DELETED' }); return; }
       if (stepwise) return;
     }
+    if (this.ownershipSyncBlocked(id)) {
+      this.taskSync.defer(context, id, 5000);
+      this.logSyncSkipped(row, 'ownership_sync_blocked', this.taskSync.get(context, id)?.next_retry_at ?? null);
+      return;
+    }
+    const initialImport = this.deps.store.get<SavedImport>(`import:${id}`);
+    if (initialImport && this.emptyInitialImport(row, initialImport)) {
+      // Replaying the original immutable request supplies explicit pre-allocation
+      // rejection evidence. A missing receipt or a transport error cannot authorize cleanup.
+      try {
+        await this.api('/sync/imports', 'POST', this.importBeginRequest(row, initialImport));
+        throw new RemoteSyncStateError('Empty initial import was not rejected');
+      } catch (error) {
+        if (!current()) return;
+        if (!this.emptyImportRejection(error)) throw error;
+        this.discardImport(row, initialImport, undefined, undefined, error);
+        this.taskSync.defer(context, id, 1000);
+      }
+      return;
+    }
     const projectionFailure = this.deps.store.db.prepare('SELECT reason,retry_at FROM remote_projection_failures WHERE session_id=?').get(id) as { reason: string; retry_at: number } | undefined;
     if (projectionFailure) {
       // The projection worker owns its retry deadline and clears this row after publication.
@@ -1492,9 +1513,9 @@ export class RemoteBridge {
       throw new RemoteTaskDataError(projectionFailure.reason);
     }
     const publishing = this.deps.store.projectionPublishing(id);
-    if (publishing || this.ownershipSyncBlocked(id)) {
+    if (publishing) {
       this.taskSync.defer(context, id, 5000);
-      this.logSyncSkipped(row, publishing ? 'projection_publishing' : 'ownership_sync_blocked', this.taskSync.get(context, id)?.next_retry_at ?? null);
+      this.logSyncSkipped(row, 'projection_publishing', this.taskSync.get(context, id)?.next_retry_at ?? null);
       return;
     }
     const state = this.taskSync.get(context, id);
@@ -1733,20 +1754,50 @@ export class RemoteBridge {
     this.verifiedImports.delete(saved.importId);
     if (saved.fileSet) void this.importSnapshots.release(saved.fileSet).catch((): void => undefined);
   }
-  private discardImport(row: SyncRow, saved: SavedImport, terminalReceipt?: any, telemetry = this.importTelemetry(row, saved)): void {
+  private emptyInitialImport(row: SyncRow, saved: SavedImport | null): boolean {
+    const context = this.taskContext(), manifest = saved?.manifest, counts = manifest?.recordCounts;
+    if (!context || !saved || saved.beginAttempted !== true || saved.beginConfirmed || saved.targetStreamEpoch || saved.stateVersion
+      || saved.confirmedPartCount || saved.uploadCursor || saved.baseSourceSeq !== '0' || saved.expectedSourceSeq !== '0' || saved.expectedServerSeq !== '0'
+      || saved.expectedStreamEpoch != null || saved.syncProtocolVersion !== undefined && ![1, RemoteRetention.Version].includes(saved.syncProtocolVersion)
+      || row.ack_seq !== 0 || row.server_seq !== '0' || row.stream_epoch || row.sync_protocol_version !== 1 || !row.needs_snapshot
+      || saved.sessionId !== row.session_id || row.device_id !== context.deviceId || saved.deviceId !== context.deviceId
+      || !saved.owner || !sameOwner(saved.owner, context.owner) || !sameOwner(this.deps.store.owner(row.local_id), context.owner)
+      || !saved.environment || !this.targets.matchesEnvironment(context.target, saved.environment)
+      || row.sync_environment && !this.targets.matchesEnvironment(context.target, row.sync_environment)
+      || !this.sessionAdmitted(row.local_id) || this.deps.store.isSyncClosed(row.local_id)
+      || !counts || typeof counts !== 'object' || Array.isArray(counts) || Object.keys(counts).length !== 0
+      || manifest.partCount !== 1 || !Array.isArray(saved.parts) || saved.parts.length !== 1) return false;
+    const part = saved.parts[0];
+    return part?.partNo === 0 && part.byteSize === 14 && part.payloadHash === payloadHash({ records: [] })
+      && manifest.manifestHash === payloadHash([{ partNo: 0, byteSize: 14, payloadHash: part.payloadHash }]);
+  }
+  private emptyImportRejection(error: unknown): error is RemoteApiError {
+    return error instanceof RemoteApiError && error.httpStatus === 400 && error.code === RemoteImportValidation.Code
+      && error.data?.reason === RemoteImportValidation.Reason && error.message === RemoteImportValidation.MissingSummary;
+  }
+  private importBeginRequest(row: SyncRow, saved: SavedImport): Record<string, unknown> {
+    return { importId: saved.importId, deviceId: this.registration!.deviceId,
+      owner: this.owner, localSessionId: row.local_id, sessionId: saved.sessionId, baseSourceSeq: saved.baseSourceSeq,
+      expectedSourceSeq: saved.expectedSourceSeq, expectedServerSeq: saved.expectedServerSeq, manifest: saved.manifest,
+      ...(saved.syncProtocolVersion === RemoteRetention.Version ? { syncProtocolVersion: RemoteRetention.Version, expectedStreamEpoch: saved.expectedStreamEpoch } : {}), ...this.transport() };
+  }
+  private discardImport(row: SyncRow, saved: SavedImport, terminalReceipt?: any, telemetry = this.importTelemetry(row, saved), rejectedBegin?: RemoteApiError): void {
     // A timeout/404 is not permission to replace an operation. Old v1 receipts may omit
     // the newer identity fields, but every field they do provide must still match.
+    const rejected = this.emptyImportRejection(rejectedBegin) && this.emptyInitialImport(this.deps.store.sync(row.local_id)!, saved);
     if (terminalReceipt) {
       this.assertImportIdentity(saved, terminalReceipt);
       if (!['aborted', 'expired'].includes(terminalReceipt.state)) throw new RemoteSyncStateError('Import replacement has no terminal receipt');
-    } else if (saved.beginAttempted !== false || saved.beginConfirmed) throw new RemoteSyncStateError('Import replacement has no never-sent evidence');
+    } else if (!rejected && (saved.beginAttempted !== false || saved.beginConfirmed)) throw new RemoteSyncStateError('Import replacement has no never-sent evidence');
     const context = this.taskContext();
     if (!context) throw new RemoteSyncStateError('Import replacement identity unavailable');
     this.deps.store.transaction(() => {
       const pending = this.deps.store.get<SavedImport>(`import:${row.local_id}`);
+      if (rejected && this.ownershipSyncBlocked(row.local_id)) throw new RemoteImportSnapshotError('REMOTE_IMPORT_CONTEXT_CHANGED');
       if (!pending || pending.importId !== saved.importId || pending.sessionId !== saved.sessionId
         || pending.manifest.manifestHash !== saved.manifest.manifestHash
-        || !terminalReceipt && (pending.beginAttempted !== false || pending.beginConfirmed)
+        || !terminalReceipt && !rejected && (pending.beginAttempted !== false || pending.beginConfirmed)
+        || rejected && (stableJson(pending) !== stableJson(saved) || !this.emptyInitialImport(this.deps.store.sync(row.local_id)!, pending))
         || pending.owner && !sameOwner(pending.owner, context.owner) || pending.deviceId && pending.deviceId !== context.deviceId
         || pending.environment && !this.targets.matchesEnvironment(context.target, pending.environment)) throw new RemoteSyncStateError('Import replacement evidence changed');
       // Reserve before releasing any original evidence. Repeated expiry/missing-part
@@ -1757,7 +1808,7 @@ export class RemoteBridge {
       this.deps.store.unfreezeMigration(row.local_id);
     });
     this.deps.store.afterCommit(() => telemetry.emit(RemoteTelemetryEvent.SyncStage, { operationId: saved.importId, stage: 'cleanup', outcome: 'completed',
-      businessStatus: terminalReceipt?.state ?? 'prepared', reason: SyncTelemetry.Reason.None, persistOutcome: 'committed' }));
+      businessStatus: terminalReceipt?.state ?? (rejected ? 'rejected' : 'prepared'), reason: SyncTelemetry.Reason.None, persistOutcome: 'committed' }));
     this.verifiedImports.delete(saved.importId);
     if (saved.fileSet) void this.importSnapshots.release(saved.fileSet).catch((): void => undefined);
   }
@@ -1938,10 +1989,7 @@ export class RemoteBridge {
     const wasChecked = !!begun;
     saved.beginAttempted = true; this.deps.store.put(key, saved);
     try {
-      if (!begun) begun = await this.api('/sync/imports', 'POST', { importId: saved.importId, deviceId: this.registration!.deviceId,
-        owner: this.owner, localSessionId: row.local_id, sessionId: saved.sessionId, baseSourceSeq: saved.baseSourceSeq,
-        expectedSourceSeq: saved.expectedSourceSeq, expectedServerSeq: saved.expectedServerSeq, manifest: saved.manifest,
-        ...(saved.syncProtocolVersion === RemoteRetention.Version ? { syncProtocolVersion: RemoteRetention.Version, expectedStreamEpoch: saved.expectedStreamEpoch } : {}), ...this.transport() });
+      if (!begun) begun = await this.api('/sync/imports', 'POST', this.importBeginRequest(row, saved));
     } catch (error) {
       assertCurrent();
       if (error instanceof RemoteApiError && error.code === 47025 && !saved.beginConfirmed

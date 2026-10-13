@@ -45,6 +45,9 @@ function build(work: Extract<ImportSnapshotWork, { operation: 'build' }>): Impor
       if (!owner || !sameOwner(expected.owner, { userId: owner.owner_user_id, scopeKey: owner.owner_scope_key }) || !row
         || row.session_id !== expected.sessionId || row.device_id !== expected.deviceId || row.sync_environment && row.sync_environment !== expected.environment
         || String(row.source_seq) !== expected.sourceSeq || revision !== expected.revision || (epoch ? JSON.parse(epoch.value) : 0) !== expected.snapshotEpoch
+        || source.prepare('SELECT 1 FROM remote_dirty WHERE session_id=?').get(expected.localSessionId)
+        || source.prepare(`SELECT 1 FROM remote_session_revisions r LEFT JOIN remote_projection_scan s ON s.session_id=r.session_id
+          WHERE r.session_id=? AND (s.revision IS NULL OR r.revision>s.revision)`).get(expected.localSessionId)
         || source.prepare('SELECT 1 FROM remote_projection_publications WHERE session_id=?').get(expected.localSessionId)) throw new Error('REMOTE_IMPORT_CONTEXT_CHANGED');
       if (source.prepare('SELECT 1 FROM remote_projection WHERE session_id=? AND length(CAST(record_json AS BLOB))>? LIMIT 1').get(expected.localSessionId, IMPORT_PART_BYTES - 14)) throw new Error('REMOTE_IMPORT_RECORD_LIMIT');
       const parts: ImportPartIndex[] = [], recordCounts: Record<string, number> = {};
@@ -70,6 +73,9 @@ function build(work: Extract<ImportSnapshotWork, { operation: 'build' }>): Impor
         bytes += (records.length ? 1 : 0) + size; records.push(encoded);
         recordCounts[record.eventType] = (recordCounts[record.eventType] || 0) + 1;
       }
+      // A task may be awaiting its first projection even when no publication is in flight.
+      // Do not seal an empty or partial import that the server cannot admit.
+      if (!deletion && recordCounts['session.upsert'] !== 1) throw new Error('REMOTE_IMPORT_CONTEXT_CHANGED');
       if (records.length || !parts.length) flush();
       const result = { fileSet: work.fileSet, identity: expected, parts,
         manifest: { partCount: parts.length, recordCounts, manifestHash: payloadHash(parts) } };

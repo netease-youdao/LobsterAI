@@ -2,6 +2,9 @@ import { createHash } from 'crypto';
 
 import { RemoteSyncConflict } from '../../shared/remote/constants';
 import { RemoteInputReason } from '../../shared/remote/input';
+import { RemoteQuestion } from '../../shared/remote/questions';
+import { RemoteReply } from '../../shared/remote/reply';
+import { RemoteImportValidation } from '../../shared/remote/retention';
 import { enqueueRemoteLog } from './remoteLogSink';
 import { remoteTransportErrorMetadata } from './remoteNetworkError';
 import { RemoteNetworkFailure } from './remoteNetworkProtocol';
@@ -14,12 +17,14 @@ const SyncOperation = {
   Commit: 'import.commit', Abort: 'import.abort',
 } as const;
 const eventTypes = new Set(['session.upsert', 'session.deleted', 'message.upsert', 'message.delta', 'message.deleted', 'tool.upsert', 'run.updated', 'approval.updated']);
+const manifestEventTypes = [...eventTypes].filter(type => type !== RemoteReply.DeltaEvent).concat(RemoteQuestion.Event);
 const lifecycleStates = new Set(['starting', 'running', 'waiting_approval', 'waiting_local', 'cancelling', 'reconciling', 'succeeded', 'failed', 'cancelled', 'interrupted', 'pending', 'approved', 'rejected', 'expired', 'streaming', 'complete', 'error', 'queued', 'waiting_user', 'unavailable', 'uploading', 'committed', 'aborted']);
 const validationMessages = new Set([
   ...Object.values(RemoteNetworkFailure),
   'Remote ACK outside durable local bounds', 'Remote batch ACK identity mismatch',
   'Remote import receipt identity mismatch', 'Import receipt identity mismatch', 'Import abortion is not confirmed',
   'REMOTE_IMPORT_BUDGET', 'REMOTE_IMPORT_RECORD_LIMIT', 'REMOTE_IMPORT_PART_UNAVAILABLE', 'REMOTE_IMPORT_CONTEXT_CHANGED',
+  RemoteImportValidation.MissingSummary,
   'Import changed the fixed remote session mapping', 'Remote response is too large',
   'Invalid remote response', 'Remote payload must contain finite JSON values',
   'Account changed during remote request', 'Account changed during remote response',
@@ -56,6 +61,11 @@ export function remoteSyncRequestMetadata(pathname: string, raw: unknown): Recor
       : route[2] === 'abort' ? SyncOperation.Abort : SyncOperation.Status : null;
   if (!operation) return remoteOperationMetadata(pathname, raw);
   const body = object(raw), manifest = object(body.manifest);
+  const manifestCounts = object(manifest.recordCounts), recordCounts: Record<string, number> = {};
+  for (const type of manifestEventTypes) {
+    const value = count(manifestCounts[type]);
+    if (Object.hasOwn(manifestCounts, type) && value !== null) recordCounts[type] = value;
+  }
   const records = Array.isArray(body.events) ? body.events : object(body.payload).records;
   const items = Array.isArray(records) ? records : [];
   const types: Record<string, number> = {};
@@ -70,7 +80,7 @@ export function remoteSyncRequestMetadata(pathname: string, raw: unknown): Recor
     connectionGeneration: sequence(body.connectionGeneration), baseSourceSeq: sequence(body.baseSourceSeq),
     expectedSourceSeq: sequence(body.expectedSourceSeq), expectedServerSeq: sequence(body.expectedServerSeq),
     expectedStateVersion: sequence(body.expectedStateVersion), partNo: route?.[2]?.startsWith('parts/') ? count(Number(route[2].slice(6))) : null,
-    partCount: count(manifest.partCount), recordCount: items.length, eventTypes: types,
+    partCount: count(manifest.partCount), recordCounts, recordCount: items.length, eventTypes: types,
     firstSourceSeq: sequence(object(items[0]).sourceSeq), lastSourceSeq: sequence(object(items.at(-1)).sourceSeq),
     ...(Array.isArray(body.events) ? { events: items.slice(0, 100).map(remoteSyncEventMetadata) } : {}) };
 }

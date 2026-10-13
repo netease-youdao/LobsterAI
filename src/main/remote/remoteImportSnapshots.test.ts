@@ -6,14 +6,17 @@ import { createRequire } from 'module';
 import os from 'os';
 import path from 'path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { Worker } from 'worker_threads';
 
 import { RemoteEnvironment } from '../../shared/remote/environment';
+import { RemoteImportValidation, RemoteRetention } from '../../shared/remote/retention';
 import { payloadHash, stableJson } from './canonical';
 import { RemoteBridge } from './remoteBridge';
 import { RemoteImportSnapshotError, RemoteImportSnapshots } from './remoteImportSnapshots';
+import type { ImportSnapshotIdentity, ImportSnapshotPackage } from './remoteImportSnapshotWorker';
 import { RemoteStore } from './remoteStore';
 import { RemoteSyncTargetStore } from './remoteSyncTargetStore';
-import { RemoteTaskSyncState } from './remoteTaskSyncState';
+import { RemoteTaskSyncState, TaskSyncPhase } from './remoteTaskSyncState';
 
 const workerDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-import-worker-'));
 const workerPath = path.join(workerDirectory, 'worker.cjs');
@@ -63,8 +66,58 @@ function saved(f: ReturnType<typeof fixture>, overrides: object = {}) {
     projectionVersion: 1, snapshotEpoch: 0, baseSourceSeq: String(row.source_seq), expectedSourceSeq: '0', expectedServerSeq: '0',
     parts: [{ partNo: 0, payloadHash: 'missing', byteSize: 20 }], manifest: { partCount: 1, manifestHash: 'manifest', recordCounts: { 'session.upsert': 1 } }, ...overrides };
 }
+function buildCapturedSnapshot(f: ReturnType<typeof fixture>, identity: ImportSnapshotIdentity): Promise<{ result?: ImportSnapshotPackage; error?: string }> {
+  const fileSet = randomUUID();
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(workerPath, { workerData: { operation: 'build', database: f.db.name,
+      directory: path.join(f.directory, fileSet), fileSet, identity } });
+    worker.once('message', resolve); worker.once('error', reject);
+  });
+}
 
 describe('immutable import snapshot worker', () => {
+  it('waits for this task projection and rejects a dirty marker added after identity capture in the actual worker', async () => {
+    const f = fixture(), identity = f.identity();
+    f.db.prepare('INSERT INTO remote_dirty VALUES (?)').run('task');
+    expect(f.identity).toThrow('REMOTE_IMPORT_CONTEXT_CHANGED');
+    expect(await buildCapturedSnapshot(f, identity)).toEqual({ error: 'REMOTE_IMPORT_CONTEXT_CHANGED' });
+    f.db.prepare('DELETE FROM remote_dirty WHERE session_id=?').run('task');
+    const result = await f.snapshots.create(randomUUID(), f.identity(), () => true);
+    expect(result.manifest.recordCounts['session.upsert']).toBe(1);
+  });
+  it('rejects publication started after identity capture without blocking another task dirty marker', async () => {
+    const f = fixture(), identity = f.identity();
+    f.db.prepare('INSERT INTO remote_projection_publications VALUES (?,?,?,?,?)').run('task', '/publication', 1, 1, 'hash');
+    expect(f.identity).toThrow('REMOTE_IMPORT_CONTEXT_CHANGED');
+    expect(await buildCapturedSnapshot(f, identity)).toEqual({ error: 'REMOTE_IMPORT_CONTEXT_CHANGED' });
+    f.db.prepare('DELETE FROM remote_projection_publications').run();
+    f.db.prepare('INSERT INTO remote_dirty VALUES (?)').run('other-task');
+    const result = await f.snapshots.create(randomUUID(), f.identity(), () => true);
+    expect(result.manifest.recordCounts['session.upsert']).toBe(1);
+  });
+  it('waits for revisions not yet scanned into dirty hints in both the main process and actual worker', async () => {
+    const f = fixture(), identity = f.identity();
+    f.db.prepare('UPDATE remote_session_revisions SET revision=revision+1 WHERE session_id=?').run('task');
+    expect(f.identity).toThrow('REMOTE_IMPORT_CONTEXT_CHANGED');
+    expect(await buildCapturedSnapshot(f, { ...identity, revision: identity.revision + 1 }))
+      .toEqual({ error: 'REMOTE_IMPORT_CONTEXT_CHANGED' });
+  });
+  for (const count of [0, 2]) it(`does not seal a first snapshot with ${count} session summaries`, async () => {
+    const f = fixture(0), fileSet = randomUUID();
+    if (count === 0) f.db.prepare('DELETE FROM remote_projection WHERE session_id=?').run('task');
+    else f.db.prepare(`INSERT INTO remote_projection SELECT session_id,'duplicate-session',hash,revision,record_json
+      FROM remote_projection WHERE session_id=? AND object_key='session'`).run('task');
+    await expect(f.snapshots.create(fileSet, f.identity(), () => true)).rejects.toThrow('REMOTE_IMPORT_CONTEXT_CHANGED');
+    expect(fs.existsSync(path.join(f.directory, 'remote-import-snapshots', fileSet))).toBe(false);
+  });
+  it('keeps explicit deletion snapshots valid without a session summary', async () => {
+    const f = fixture();
+    f.store.transaction(() => f.db.prepare('DELETE FROM cowork_sessions WHERE id=?').run('task'));
+    const result = await f.snapshots.create(randomUUID(), f.identity(), () => true);
+    expect(result.manifest.recordCounts).toEqual({ 'session.deleted': 1 });
+    const payload = JSON.parse(await f.snapshots.read(result.fileSet, result.parts[0], () => true));
+    expect(payload.records).toHaveLength(1); expect(payload.records[0].eventType).toBe('session.deleted');
+  });
   it('streams a large snapshot into bounded canonical parts without embedding bodies in the core manifest', async () => {
     const f = fixture(1800, 1800); let turns = 0;
     const timer = setInterval(() => { turns++; }, 1);
@@ -270,5 +323,165 @@ describe('immutable import snapshot worker', () => {
     await f.bridge.importSession(f.store.sync('task'), entry);
     expect(f.store.get('import:task')).toBeNull(); expect(f.store.sync('task')?.ack_seq).toBe(Number(entry.baseSourceSeq));
     expect(f.request).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('recovery of rejected empty initial snapshots', () => {
+  function rejectedInitial(protocolVersion = 1) {
+    const f = bridgeFixture(fixture(0)), row = f.store.sync('task')!;
+    const target = f.bridge.targets.activateLegacy({ owner, deviceId: 'desktop', legacyStates: [{ localSessionId: row.local_id,
+      deviceId: row.device_id, sessionId: row.session_id, syncProtocolVersion: row.sync_protocol_version, streamEpoch: row.stream_epoch,
+      lastSourceSeq: String(row.ack_seq), lastSeq: row.server_seq, sourcePurgeSeq: row.source_purge_seq, eventPurgeSeq: row.event_purge_seq }] });
+    f.bridge.targetId = target.targetId;
+    f.store.setProjectionIdentity(target.targetId, owner, 'desktop'); f.store.setFileEnvironment(target.targetId);
+    f.store.put(`settings:${owner.userId}:${owner.scopeKey}`, { enabled: true, name: 'Desktop', settingsVersion: '1', workspaces: [] });
+    vi.spyOn(f.bridge, 'schedule').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const parts = [{ partNo: 0, byteSize: 14, payloadHash: payloadHash({ records: [] }) }];
+    const entry = saved(f, { environment: target.targetId, beginAttempted: true, baseSourceSeq: '0', parts,
+      ...(protocolVersion === RemoteRetention.Version ? { syncProtocolVersion: RemoteRetention.Version, expectedStreamEpoch: null, migration: true } : {}),
+      manifest: { partCount: 1, recordCounts: {}, manifestHash: payloadHash(parts) } });
+    f.store.put('import:task', entry);
+    if (protocolVersion === RemoteRetention.Version) f.store.freezeMigration('task');
+    const directory = path.join(f.directory, 'remote-import-snapshots', entry.fileSet);
+    fs.mkdirSync(directory, { recursive: true }); fs.writeFileSync(path.join(directory, '0.json'), '{"records":[]}');
+    const context = f.bridge.taskContext();
+    f.bridge.taskSync.fail(context, 'task', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: RemoteImportValidation.Reason });
+    f.db.prepare('UPDATE remote_sync_task_state SET recovery_probe_version=1').run();
+    f.store.put('syncFailure:task', { code: RemoteImportValidation.Code, reason: RemoteImportValidation.Reason, blocked: true });
+    const before = f.db.prepare('SELECT * FROM remote_outbox ORDER BY source_seq').all();
+    const due = () => f.db.prepare('UPDATE remote_sync_task_state SET next_retry_at=0,last_served_at=0').run();
+    const rejection = () => new Response(JSON.stringify({ code: RemoteImportValidation.Code, message: RemoteImportValidation.MissingSummary,
+      data: { reason: RemoteImportValidation.Reason } }), { status: 400 });
+    f.request.mockImplementation(async () => rejection());
+    return { ...f, entry, context, directory, before, due, rejection };
+  }
+  for (const protocolVersion of [1, RemoteRetention.Version]) it(`reopens the persisted v${protocolVersion} failure, replays its original begin, then commits a real disk snapshot before advancing ACK`, async () => {
+    const f = rejectedInitial(protocolVersion), retention = protocolVersion === RemoteRetention.Version, epoch = randomUUID();
+    expect(f.store.sync('task')!.source_seq).toBeGreaterThan(0);
+    // Fresh Store/Bridge objects use only the persisted mapping, operation and recovery marker.
+    f.bridge.stop();
+    const store = new RemoteStore(f.db); store.setEnabledOwner(owner);
+    store.setProjectionIdentity(f.context.target, owner, 'desktop'); store.setFileEnvironment(f.context.target);
+    const resumed = bridgeFixture({ ...f, store, snapshots: new RemoteImportSnapshots(store, workerPath) });
+    const bridge = resumed.bridge; bridge.targetId = f.context.target;
+    bridge.retentionSupported = retention; bridge.fenceCheckedAt = Date.now();
+    vi.spyOn(bridge, 'schedule').mockImplementation(() => {});
+    resumed.request.mockImplementation(async () => f.rejection());
+    await bridge.syncSessions(true);
+    expect(resumed.request).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(resumed.request.mock.calls[0][2].body));
+    expect(body).toMatchObject({ importId: f.entry.importId, manifest: f.entry.manifest, baseSourceSeq: '0', expectedSourceSeq: '0', expectedServerSeq: '0' });
+    if (retention) expect(body).toMatchObject({ syncProtocolVersion: RemoteRetention.Version, expectedStreamEpoch: null });
+    else { expect(body).not.toHaveProperty('syncProtocolVersion'); expect(body).not.toHaveProperty('expectedStreamEpoch'); }
+    expect(store.get('import:task')).toBeNull();
+    expect(store.get('syncFailure:task')).not.toBeNull();
+    expect(store.sync('task')!.ack_seq).toBe(0);
+    expect(store.sync('task')!.migration_frozen).toBe(0);
+    expect(f.db.prepare('SELECT * FROM remote_outbox ORDER BY source_seq').all()).toEqual(f.before);
+    const uploaded: any[] = [];
+    resumed.request.mockImplementation(async (_actor, pathname, init) => {
+      if (pathname.startsWith('/api/remote/v1/sync/state?')) {
+        expect(retention).toBe(true);
+        return new Response(JSON.stringify({ code: RemoteRetention.StateMissingCode, data: { reason: 'SYNC_STATE_NOT_FOUND' } }), { status: 404 });
+      }
+      const pending = store.get<any>('import:task')!, requestBody = init.body ? JSON.parse(String(init.body)) : null;
+      expect(pending.importId).not.toBe(f.entry.importId);
+      if (pathname.endsWith('/sync/imports')) {
+        expect(requestBody.manifest.recordCounts['session.upsert']).toBe(1);
+        if (retention) {
+          expect(requestBody).toMatchObject({ syncProtocolVersion: RemoteRetention.Version, expectedStreamEpoch: null });
+          expect(store.sync('task')!.migration_frozen).toBe(1);
+        }
+        return ok({ importId: pending.importId, sessionId: pending.sessionId, state: 'uploading', stateVersion: '1',
+          ...(retention ? { syncProtocolVersion: RemoteRetention.Version, targetStreamEpoch: epoch, manifestHash: pending.manifest.manifestHash } : {}) });
+      }
+      if (retention) expect(requestBody).toMatchObject({ syncProtocolVersion: RemoteRetention.Version, streamEpoch: epoch });
+      if (pathname.includes('/parts/')) { uploaded.push(...requestBody.payload.records); return ok({}); }
+      return ok({ importId: pending.importId, sessionId: pending.sessionId, manifestHash: pending.manifest.manifestHash,
+        ...(retention ? { syncProtocolVersion: RemoteRetention.Version, targetStreamEpoch: epoch, streamEpoch: epoch,
+          sourcePurgeSeq: pending.baseSourceSeq, eventPurgeSeq: '0' } : {}),
+        state: 'committed', committedSourceSeq: pending.baseSourceSeq, committedSeq: '1' });
+    });
+    f.due(); await bridge.syncSessions();
+    expect(uploaded.some(record => record.eventType === 'session.upsert')).toBe(true);
+    expect(store.get('import:task')).toBeNull(); expect(store.get('syncFailure:task')).toBeNull();
+    expect(store.sync('task')!.ack_seq).toBe(store.sync('task')!.source_seq);
+    expect(store.sync('task')).toMatchObject({ sync_protocol_version: protocolVersion, stream_epoch: retention ? epoch : null, migration_frozen: 0 });
+  });
+  for (const response of [
+    { status: 400, code: RemoteImportValidation.Code, message: 'Another invalid field', reason: RemoteImportValidation.Reason },
+    { status: 400, code: RemoteImportValidation.Code, message: RemoteImportValidation.MissingSummary, reason: 'OTHER_REASON' },
+    { status: 404, code: 47002, message: RemoteImportValidation.MissingSummary, reason: RemoteImportValidation.Reason },
+    { status: 403, code: 47002, message: 'Access denied', reason: 'ACCESS_DENIED' },
+    { status: 503, code: 503, message: 'Unavailable', reason: 'UNAVAILABLE' },
+  ]) it(`retains immutable evidence for ${response.status}/${response.code}/${response.reason}/${response.message}`, async () => {
+    const f = rejectedInitial();
+    f.request.mockImplementation(async () => new Response(JSON.stringify({ code: response.code, message: response.message,
+      data: { reason: response.reason } }), { status: response.status }));
+    await f.bridge.syncSessions(true);
+    expect(f.store.get('import:task')).toEqual(f.entry);
+    expect(fs.existsSync(path.join(f.directory, '0.json'))).toBe(true);
+    expect(f.store.sync('task')!.ack_seq).toBe(0);
+    expect(f.db.prepare('SELECT * FROM remote_outbox ORDER BY source_seq').all()).toEqual(f.before);
+  });
+  it('retains the original import after a lost response and never executes a task during recovery', async () => {
+    const f = rejectedInitial(); f.request.mockRejectedValue(new Error('network unavailable'));
+    await f.bridge.syncSessions(true);
+    expect(f.store.get('import:task')).toEqual(f.entry); expect(f.bridge.deps.execute).not.toHaveBeenCalled();
+    expect(f.bridge.taskSync.get(f.context, 'task').phase).toBe(TaskSyncPhase.Backoff);
+  });
+  for (const state of ['uploading', 'committed']) it(`preserves an unexpected ${state} receipt instead of manufacturing rejection evidence`, async () => {
+    const f = rejectedInitial(); f.request.mockImplementation(async () => ok({ ...f.entry, state, committedSourceSeq: '0', committedSeq: '1' }));
+    await f.bridge.syncSessions(true);
+    expect(f.store.get('import:task')).toEqual(f.entry); expect(f.store.sync('task')!.ack_seq).toBe(0);
+    expect(fs.existsSync(path.join(f.directory, '0.json'))).toBe(true);
+  });
+  for (const mutation of ['manifest', 'baseline', 'owner', 'ack', 'stop', 'claim'] as const) it(`does not clean up when ${mutation} changes during the request`, async () => {
+    const f = rejectedInitial();
+    f.request.mockImplementation(async () => {
+      if (mutation === 'manifest') f.store.put('import:task', { ...f.entry, manifest: { ...f.entry.manifest, recordCounts: { 'session.upsert': 1 } } });
+      if (mutation === 'baseline') f.store.put('import:task', { ...f.entry, expectedSourceSeq: '1' });
+      if (mutation === 'owner') f.bridge.owner = { ...owner, userId: 'other' };
+      if (mutation === 'ack') f.db.prepare("UPDATE remote_sync SET ack_seq=1 WHERE local_id='task'").run();
+      if (mutation === 'stop') f.bridge.stop();
+      if (mutation === 'claim') vi.spyOn(f.bridge, 'ownershipSyncBlocked').mockReturnValue(true);
+      return f.rejection();
+    });
+    await f.bridge.syncSessions(true);
+    expect(f.store.get<any>('import:task')?.importId).toBe(f.entry.importId);
+    expect(fs.existsSync(path.join(f.directory, '0.json'))).toBe(true);
+  });
+  it('defers an ownership-blocked recovery without consuming its opportunity, then resumes when admitted', async () => {
+    const f = rejectedInitial(), blocked = vi.spyOn(f.bridge, 'ownershipSyncBlocked').mockReturnValue(true);
+    await f.bridge.syncSessions(true);
+    expect(f.request).not.toHaveBeenCalled(); expect(f.store.get('import:task')).toEqual(f.entry);
+    blocked.mockReturnValue(false); f.due(); await f.bridge.syncSessions(true);
+    expect(f.request).toHaveBeenCalledTimes(1); expect(f.store.get('import:task')).toBeNull();
+  });
+  for (const invalid of ['counts', 'part', 'hash', 'confirmed', 'epoch', 'owner', 'device', 'environment', 'admission'] as const) it(`does not promote an old failure with mismatched ${invalid} evidence`, async () => {
+    const f = rejectedInitial(), entry: any = structuredClone(f.entry);
+    if (invalid === 'counts') entry.manifest.recordCounts = [];
+    if (invalid === 'part') entry.parts[0].byteSize++;
+    if (invalid === 'hash') entry.manifest.manifestHash = 'wrong';
+    if (invalid === 'confirmed') Object.assign(entry, { beginConfirmed: true });
+    if (invalid === 'epoch') Object.assign(entry, { targetStreamEpoch: 'active' });
+    if (invalid === 'owner') entry.owner = { ...owner, userId: 'other' };
+    if (invalid === 'device') entry.deviceId = 'other';
+    if (invalid === 'environment') entry.environment = 'other';
+    if (invalid === 'admission') vi.spyOn(f.bridge, 'sessionAdmitted').mockReturnValue(false);
+    f.store.put('import:task', entry); await f.bridge.syncSessions(true);
+    expect(f.request).not.toHaveBeenCalled(); expect(f.store.get('import:task')).toEqual(entry);
+    expect(f.bridge.taskSync.get(f.context, 'task').phase).toBe(TaskSyncPhase.Isolated);
+  });
+  it('retains the rejected operation when its durable rebuild budget is spent', async () => {
+    const f = rejectedInitial();
+    expect(f.bridge.taskSync.reserveRepair(f.context, 'task', 'IMPORT_REBUILD')).toBe(true);
+    f.bridge.taskSync.fail(f.context, 'task', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: RemoteImportValidation.Reason });
+    f.db.prepare('UPDATE remote_sync_task_state SET recovery_probe_version=1').run();
+    await f.bridge.syncSessions(true);
+    expect(f.store.get('import:task')).toEqual(f.entry);
+    expect(fs.existsSync(path.join(f.directory, '0.json'))).toBe(true);
   });
 });

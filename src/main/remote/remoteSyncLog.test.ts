@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthRefreshFailureKind, AuthSessionStatus } from '../../shared/auth/constants';
+import { RemoteImportValidation } from '../../shared/remote/retention';
 import { AuthSessionRequestError } from '../libs/authSessionManager';
 import { RemoteNetworkError } from './remoteNetworkError';
 import { RemoteNetworkFailure } from './remoteNetworkProtocol';
@@ -56,13 +57,29 @@ describe('remote sync diagnostic metadata', () => {
       eventTypes: { 'message.upsert': 1 } });
     expect(Object.keys(metadata!).sort()).toEqual(['operation', 'batchId', 'importId', 'localSessionId', 'sessionId', 'deviceId',
       'mode', 'connectionGeneration', 'baseSourceSeq', 'expectedSourceSeq', 'expectedServerSeq', 'expectedStateVersion',
-      'partNo', 'partCount', 'recordCount', 'eventTypes', 'firstSourceSeq', 'lastSourceSeq', 'events'].sort());
+      'partNo', 'partCount', 'recordCounts', 'recordCount', 'eventTypes', 'firstSourceSeq', 'lastSourceSeq', 'events'].sort());
     expect(JSON.stringify(metadata)).not.toContain(privateText);
     expect(remoteSyncRequestMetadata('/sync/imports/import-1/parts/2', { payload: { records: [messageEvent()] }, token: privateText }))
       .toMatchObject({ operation: 'import.part', importId: 'import-1', partNo: 2, recordCount: 1 });
     expect(remoteSyncRequestMetadata('/sync/imports/import-1/commit', { expectedStateVersion: '3' }))
       .toMatchObject({ operation: 'import.commit', importId: 'import-1', expectedStateVersion: '3' });
     expect(remoteSyncRequestMetadata('/devices/private-host/settings', raw)).toBeNull();
+  });
+
+  it('reports only known manifest record counts without changing the inline record count', () => {
+    const metadata = remoteSyncRequestMetadata('/sync/imports', { manifest: { partCount: 2,
+      recordCounts: { 'session.upsert': 0, 'message.upsert': 8, 'run.updated': Number.MAX_SAFE_INTEGER,
+        'question.updated': 1, 'tool.upsert': -1, 'approval.updated': 1.5, 'message.deleted': Infinity,
+        'session.deleted': Number.MAX_SAFE_INTEGER + 1, 'message.delta': 3, [privateText]: 4 },
+      title: privateText, records: [messageEvent()], token: privateText } });
+    expect(metadata).toMatchObject({ operation: 'import.begin', partCount: 2, recordCount: 0, eventTypes: {},
+      recordCounts: { 'session.upsert': 0, 'message.upsert': 8, 'run.updated': Number.MAX_SAFE_INTEGER, 'question.updated': 1 } });
+    expect(JSON.stringify(metadata)).not.toContain(privateText);
+    const inherited = Object.create({ 'session.upsert': 1 });
+    inherited['message.upsert'] = '8'; inherited['run.updated'] = NaN;
+    for (const recordCounts of [inherited, null, [], privateText]) {
+      expect(remoteSyncRequestMetadata('/sync/imports', { manifest: { recordCounts } })?.recordCounts).toEqual({});
+    }
   });
 
   it('rejects malformed and excessive metadata and caps per-event detail', () => {
@@ -89,6 +106,11 @@ describe('remote sync diagnostic metadata', () => {
     expect(JSON.stringify(metadata)).not.toContain(privateText);
     expect(remoteSyncErrorMetadata(new Error('Remote ACK outside durable local bounds')).validation)
       .toBe('Remote ACK outside durable local bounds');
+    expect(remoteSyncErrorMetadata(Object.assign(new Error(RemoteImportValidation.MissingSummary), {
+      code: RemoteImportValidation.Code, httpStatus: 400, data: { reason: RemoteImportValidation.Reason },
+    }))).toMatchObject({ validation: RemoteImportValidation.MissingSummary,
+      code: RemoteImportValidation.Code, httpStatus: 400, reason: RemoteImportValidation.Reason });
+    expect(remoteSyncErrorMetadata(new Error(`${RemoteImportValidation.MissingSummary}: ${privateText}`)).validation).toBeNull();
     expect(remoteSyncErrorMetadata({ message: privateText, name: privateText, code: -1, httpStatus: Infinity,
       requestId: privateText, data: { requestId, reason: 'R'.repeat(81), reasonDetail: privateText, currentSourceSeq: privateText } }))
       .toMatchObject({ code: null, httpStatus: null, validation: null, requestId, reason: null, reasonDetail: null, currentSourceSeq: null, errorType: 'Error' });

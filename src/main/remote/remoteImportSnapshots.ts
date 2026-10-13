@@ -35,6 +35,9 @@ export class RemoteImportSnapshots {
   identity(localSessionId: string, owner: ImportSnapshotIdentity['owner'], deviceId: string, environment: string): ImportSnapshotIdentity {
     const row = this.store.sync(localSessionId);
     if (!row || !sameOwner(owner, this.store.owner(localSessionId)) || this.store.projectionPublishing(localSessionId)
+      || this.store.db.prepare('SELECT 1 FROM remote_dirty WHERE session_id=?').get(localSessionId)
+      || this.store.db.prepare(`SELECT 1 FROM remote_session_revisions r LEFT JOIN remote_projection_scan s ON s.session_id=r.session_id
+        WHERE r.session_id=? AND (s.revision IS NULL OR r.revision>s.revision)`).get(localSessionId)
       || row.device_id !== deviceId || row.sync_environment && row.sync_environment !== environment) throw new RemoteImportSnapshotError('REMOTE_IMPORT_CONTEXT_CHANGED');
     return { localSessionId, sessionId: row.session_id, owner: { ...owner }, deviceId, environment, sourceSeq: String(row.source_seq),
       snapshotEpoch: this.store.get<number>(`snapshotEpoch:${localSessionId}`) || 0,

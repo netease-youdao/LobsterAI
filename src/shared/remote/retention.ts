@@ -5,6 +5,10 @@ export const RemoteRetention = {
   Compacted: 'compacted', StateMissingCode: 47038, StateConflict: 'SYNC_STATE_CONFLICT', ResyncCode: 47015, ProtocolCode: 47009,
   SourceExpired: 'SOURCE_WINDOW_EXPIRED', EpochChanged: 'STREAM_EPOCH_CHANGED', Gap: 'GAP',
 } as const;
+export const RemoteImportValidation = {
+  Code: 47019, Reason: 'INVALID_REMOTE_REQUEST',
+  MissingSummary: 'One session summary or one explicit deletion tombstone required',
+} as const;
 export interface RetentionImport {
   syncProtocolVersion?: number; expectedStreamEpoch?: string | null; targetStreamEpoch?: string;
   migration?: boolean; owner?: { userId: string; scopeKey: string }; environment?: string; deviceId?: string;
