@@ -58,6 +58,11 @@ export class SkinRuntimeController {
     return this.mediaBridge.preflightLobsterImageGeneration(sessionId, selection);
   }
 
+  /** True when the session (or one of its parents) runs a skin workflow. */
+  hasActiveWorkflow(sessionId: string | null): boolean {
+    return this.workflowRegistry.resolve(sessionId) !== undefined;
+  }
+
   handleRuntimeComplete(sessionId: string): void {
     this.workflowRegistry.handleRuntimeComplete(sessionId);
   }
