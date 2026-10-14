@@ -92,6 +92,11 @@ const SOURCE_EXCLUDED_TOP_LEVEL_NAMES = new Set([
   'Local State',
   'Local Storage',
   'Network',
+  // Chromium storage for persistent `persist:` partitions (in-app/agent browser cookies,
+  // LevelDB, caches). The running main process keeps these files locked, so deleting them
+  // during restore fails with EBUSY; cookies are also encrypted per machine on Windows.
+  // Treat it like Local Storage/Network above: exclude from backups, preserve on restore.
+  'Partitions',
   'Preferences',
   'Service Worker',
   'Session Storage',
@@ -126,6 +131,7 @@ const RESTORE_PRESERVED_TOP_LEVEL_NAMES = new Set([
   'Local State',
   'Local Storage',
   'Network',
+  'Partitions',
   'Preferences',
   'Service Worker',
   'Session Storage',
