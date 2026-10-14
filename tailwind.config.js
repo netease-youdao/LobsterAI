@@ -25,7 +25,7 @@ export default {
       thin: '100',
       extralight: '200',
       light: '300',
-      normal: 'var(--lobster-ui-font-weight-normal, 445)',
+      normal: 'var(--lobster-ui-font-weight-normal, 400)',
       medium: 'var(--lobster-ui-font-weight-medium, 500)',
       semibold: '600',
       bold: '700',
@@ -39,6 +39,8 @@ export default {
         elevated: '0 4px 12px rgba(0,0,0,0.1), 0 1px 3px rgba(0,0,0,0.04)',
         modal: '0 8px 30px rgba(0,0,0,0.16), 0 2px 8px rgba(0,0,0,0.08)',
         popover: '0 4px 20px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.05)',
+        // Wide, faint halo for the prompt composer on the white canvas.
+        composer: '0 4px 16px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03)',
         'glow-accent': '0 0 20px var(--lobster-primary-muted)',
       },
       keyframes: {

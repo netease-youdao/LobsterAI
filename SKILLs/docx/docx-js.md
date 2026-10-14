@@ -89,6 +89,16 @@ const doc = new Document({
 });
 ```
 
+**Fonts for Chinese or mixed-language documents (LobsterAI):**
+- A plain `font: "Arial"` also names Arial as the East Asian font. Arial has no Chinese glyphs, so every Chinese character then falls back to whatever font the reader's app picks, and the same file looks different in Word, WPS and LobsterAI's editor.
+- Always set the East Asian font explicitly, in the default run and in every style that sets a font:
+  ```javascript
+  const bodyFont = { ascii: "Arial", hAnsi: "Arial", cs: "Arial", eastAsia: "Microsoft YaHei" };
+  const doc = new Document({ styles: { default: { document: { run: { font: bodyFont, size: 24 } } } /* ... */ } });
+  ```
+- Use `Microsoft YaHei` (微软雅黑) for modern business documents, `SimSun` (宋体) body with `SimHei` (黑体) headings for formal or government-style documents, and `KaiTi` (楷体) / `FangSong` (仿宋) only where the genre expects them.
+- Do not add a document grid (`docGrid` with a `type`) unless asked; it changes Word's line heights.
+
 **Professional Font Combinations:**
 - **Arial (Headers) + Arial (Body)** - Most universally supported, clean and professional
 - **Times New Roman (Headers) + Arial (Body)** - Classic serif headers with modern sans-serif body
@@ -99,7 +109,7 @@ const doc = new Document({
 - **HeadingLevel constants**: `HeadingLevel.HEADING_1` uses "Heading1" style, `HeadingLevel.HEADING_2` uses "Heading2" style, etc.
 - **Include outlineLevel**: Set `outlineLevel: 0` for H1, `outlineLevel: 1` for H2, etc. to ensure TOC works correctly
 - **Use custom styles** instead of inline formatting for consistency
-- **Set a default font** using `styles.default.document.run.font` - Arial is universally supported
+- **Set a default font** using `styles.default.document.run.font` - Arial is universally supported; for any Chinese text use the `{ ascii, hAnsi, cs, eastAsia }` form above
 - **Establish visual hierarchy** with different font sizes (titles > headers > body)
 - **Add proper spacing** with `before` and `after` paragraph spacing
 - **Use colors sparingly**: Default to black (000000) and shades of gray for titles and headings (heading 1, heading 2, etc.)

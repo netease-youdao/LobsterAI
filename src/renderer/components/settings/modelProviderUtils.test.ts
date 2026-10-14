@@ -6,6 +6,9 @@ import {
   getOpenClawProviderIdForConfig,
   hasEquivalentProviderModelId,
   hasProviderAuthConfigured,
+  MAX_OUTPUT_TOKENS_MAX,
+  MAX_OUTPUT_TOKENS_MIN,
+  parseMaxOutputTokensInput,
   type ProviderConfig,
   providerRequiresApiKey,
   shouldShowApiFormatSelector,
@@ -126,4 +129,23 @@ test('ordinary OpenAI-compatible connection tests retain their existing token fi
     messages: [{ role: 'user', content: 'Hi' }],
     max_tokens: 64,
   });
+});
+
+test('an empty max output tokens field means automatic inference', () => {
+  expect(parseMaxOutputTokensInput('')).toBeUndefined();
+  expect(parseMaxOutputTokensInput('   ')).toBeUndefined();
+});
+
+test('max output tokens accepts whole numbers with digit separators', () => {
+  expect(parseMaxOutputTokensInput('65536')).toBe(65_536);
+  expect(parseMaxOutputTokensInput(' 65,536 ')).toBe(65_536);
+  expect(parseMaxOutputTokensInput('131_072')).toBe(131_072);
+  expect(parseMaxOutputTokensInput(String(MAX_OUTPUT_TOKENS_MIN))).toBe(MAX_OUTPUT_TOKENS_MIN);
+  expect(parseMaxOutputTokensInput(String(MAX_OUTPUT_TOKENS_MAX))).toBe(MAX_OUTPUT_TOKENS_MAX);
+});
+
+test('max output tokens rejects ambiguous or out-of-range input', () => {
+  for (const input of ['64k', '1.5', '-1', 'auto', String(MAX_OUTPUT_TOKENS_MIN - 1), String(MAX_OUTPUT_TOKENS_MAX + 1)]) {
+    expect(parseMaxOutputTokensInput(input), input).toBeNull();
+  }
 });

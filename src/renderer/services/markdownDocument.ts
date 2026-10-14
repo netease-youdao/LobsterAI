@@ -3,7 +3,7 @@ import {
   MarkdownFileError,
   type MarkdownFileSnapshot,
 } from '../../shared/artifactPreview/markdownEditing';
-import { installMarkdownDocumentLifecycle } from './markdownDocumentLifecycle';
+import { installDocumentLifecycle } from './documentLifecycle';
 import { normalizeShellFilePath } from './shellAppsCache';
 
 export const MarkdownSaveState = {
@@ -292,7 +292,7 @@ const documents = new MarkdownDocumentRegistry(
 let disposeLifecycle: (() => void) | undefined;
 
 export function getMarkdownDocument(filePath: string): MarkdownDocument {
-  disposeLifecycle ??= installMarkdownDocumentLifecycle(window, documents);
+  disposeLifecycle ??= installDocumentLifecycle(window, documents);
   return documents.get(filePath);
 }
 

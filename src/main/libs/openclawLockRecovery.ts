@@ -110,8 +110,11 @@ export async function recoverOpenClawLockOwners(
     return { identity, decision };
   };
   try {
+    // Native lock resolution canonicalizes redirected/junction state roots.
+    // Validate against that same root; aliases below it remain forbidden.
+    const ownedStateDir = fs.realpathSync.native(options.stateDir);
     const snapshots = paths.map(lockPath => {
-      assertOwnedRepairPath(options.stateDir, lockPath);
+      assertOwnedRepairPath(ownedStateDir, lockPath);
       let raw: string | undefined;
       try {
         if (fs.statSync(lockPath).size > 64 * 1024) throw new Error(`Unexpectedly large gateway lock: ${lockPath}`);

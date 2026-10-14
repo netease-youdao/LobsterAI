@@ -643,11 +643,11 @@ export const LogReporterActionPrefix = {
 #### 2.4.27 `lobsterai_about_action`
 
 - 状态：已实现。
-- 触发时机：用户在「设置 -> 关于」执行主动动作后发送。包括检查更新、复制联系邮箱、打开用户社区、打开用户手册、打开服务条款、导出日志。
+- 触发时机：用户在「设置 -> 关于」执行主动动作后发送。包括检查更新、复制联系邮箱、打开用户社区、打开用户手册、打开服务条款、导出日志、打开开源仓库/开源协议，以及开源 Star 提示条上的 Star、Fork。
 - 事件含义：统计关于页支持/更新相关入口使用情况。
 - 业务参数：
   - `source`：string，触发来源。当前固定为 `settings_about`。
-  - `actionType`：string，动作类型。当前取值包括 `check_update`、`copy_contact_email`、`open_user_community`、`open_user_manual`、`open_service_terms`、`export_logs`。
+  - `actionType`：string，动作类型。当前取值包括 `check_update`、`copy_contact_email`、`open_user_community`、`open_user_manual`、`open_service_terms`、`export_logs`、`open_source_repo`、`open_source_license`、`star_prompt_star`、`star_prompt_fork`。
   - `result`：string，动作结果。当前取值为 `success`、`failed`、`canceled`、`update_found`、`up_to_date`、`downloading`、`ready`。
   - `missingEntryCount`：number，导出日志时缺失的日志项数量；仅导出成功且存在缺失项信息时发送。
 - 隐私边界：不上传联系邮箱、外链 URL、导出日志路径、日志内容、更新包 URL、错误详情或本地文件信息。
@@ -704,7 +704,7 @@ export const LogReporterActionPrefix = {
   - `actionType`：string，动作类型。当前取值包括：
     - 顶部入口：`new_task`、`open_search`、`open_scheduled_tasks`、`open_kits`、`open_skills`、`open_mcp`、`collapse_sidebar`、`expand_sidebar`。
     - Agent 行：`agent_header_click`、`agent_create_task`、`agent_menu_open`、`agent_edit`、`agent_pin_toggle`、`agent_delete_confirm_open`、`agent_delete_cancel`、`agent_delete_submit`、`agent_delete_success`、`agent_delete_failed`。
-    - 历史任务：`select_task`、`task_menu_open`、`task_pin_toggle`、`task_rename_start`、`task_rename_cancel`、`task_rename_submit`、`task_share_open`、`task_delete_confirm_open`、`task_delete_cancel`、`task_delete_submit`、`task_delete_success`、`task_delete_failed`。
+    - 历史任务：`select_task`、`task_menu_open`、`task_pin_toggle`、`task_rename_start`、`task_rename_double_click`、`task_rename_cancel`、`task_rename_submit`、`task_share_open`、`task_delete_confirm_open`、`task_delete_cancel`、`task_delete_submit`、`task_delete_success`、`task_delete_failed`。从任务菜单进入重命名发送 `task_rename_start`，双击任务标题进入重命名发送 `task_rename_double_click`，两者之后共用 `task_rename_cancel` / `task_rename_submit`。双击时只有第一下发送 `select_task`，第二下不再重复打开任务。
     - 列表加载：`task_list_expand_more`、`task_list_collapse`、`task_list_retry_load`。
     - 批量操作：`batch_mode_enter`、`batch_mode_exit`、`batch_item_toggle`、`batch_select_all_toggle`、`batch_delete_confirm_open`、`batch_delete_cancel`、`batch_delete_submit`、`batch_delete_success`、`batch_delete_failed`。
     - 子任务：`select_subagent_task`、`subagent_delete_confirm_open`、`subagent_delete_cancel`、`subagent_delete_submit`、`subagent_delete_success`、`subagent_delete_failed`。

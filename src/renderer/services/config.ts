@@ -422,7 +422,7 @@ const RECENT_PROVIDER_MODEL_MIGRATIONS: Record<string, {
         supportsVideo: true,
         supportsThinking: true,
         contextWindow: 1_048_576,
-        maxTokens: 8_192,
+        maxTokens: 1_048_576,
       },
     ],
     position: 'start',

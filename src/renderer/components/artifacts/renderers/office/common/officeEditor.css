@@ -1,0 +1,101 @@
+/* The frame every Office editor shares: status bar, notices, toolbar and footer. */
+.lobster-office-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--lobster-text-primary, #242424);
+}
+.lobster-office-statusbar, .lobster-office-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  flex-shrink: 0;
+}
+.lobster-office-statusbar, .lobster-office-toolbar {
+  border-bottom: 1px solid rgba(128, 128, 128, .18);
+}
+.lobster-office-toolbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 6px 10px;
+  flex-shrink: 0;
+}
+.lobster-office-toolbar button {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* The editors' own buttons. "Add to chat" floats over the document and keeps the chat's look,
+   so these rules skip it; :where() keeps their specificity as it was. */
+.lobster-office-editor button:where(:not([data-cowork-selected-text-action])), .lobster-office-notice button {
+  border-radius: 5px;
+  font-size: 12px;
+}
+.lobster-office-statusbar button, .lobster-office-notice button, .lobster-office-footer button {
+  padding: 4px 8px;
+  border: 1px solid rgba(128, 128, 128, .25);
+}
+.lobster-office-editor button:not(:disabled):where(:not([data-cowork-selected-text-action])):hover, .lobster-office-notice button:not(:disabled):hover {
+  background: rgba(128, 128, 128, .12);
+}
+.lobster-office-editor button:disabled { opacity: .35; }
+.lobster-office-toolbar button[aria-pressed="true"] { background: rgba(30, 120, 220, .17); color: #277bc3; }
+.lobster-office-toolbar select {
+  height: 28px;
+  max-width: 125px;
+  border: 1px solid rgba(128, 128, 128, .25);
+  border-radius: 5px;
+  background: transparent;
+  font-size: 12px;
+  padding: 0 4px;
+}
+.lobster-office-toolbar-divider { width: 1px; height: 18px; background: rgba(128, 128, 128, .2); margin: 0 4px; }
+.lobster-office-footer { font-size: 11px; opacity: .65; border-top: 1px solid rgba(128, 128, 128, .18); min-height: 34px; }
+.lobster-office-notice { padding: 10px 12px; font-size: 12px; background: rgba(245, 158, 11, .09); flex-shrink: 0; }
+.dark .lobster-office-editor { color: #e1e1e1; }
+.dark .lobster-office-toolbar select option { background: #26292d; color: #e1e1e1; }
+
+/* Split buttons: the button repeats the usual action, the arrow opens the menu or palette. */
+.lobster-office-split { display: inline-flex; align-items: center; }
+.lobster-office-toolbar .lobster-office-split > button:first-child { width: 24px; }
+.lobster-office-toolbar .lobster-office-split > .lobster-office-split-arrow { width: 13px; font-size: 9px; opacity: .75; }
+/* Rendered on the page body, above the editors' own popups, so it sets its own colors. */
+.lobster-office-popover {
+  position: fixed;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px 10px;
+  border: 1px solid rgba(128, 128, 128, .25);
+  border-radius: 8px;
+  background: var(--lobster-bg, #fff);
+  color: #1f2328;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+.dark .lobster-office-popover { background: #26292d; color: #e1e1e1; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+.lobster-office-popover .lobster-office-menu-item { padding: 5px 8px; border-radius: 5px; text-align: left; font-size: 12px; white-space: nowrap; }
+.lobster-office-popover .lobster-office-menu-item:hover { background: rgba(128, 128, 128, .14); }
+
+/* Font and fill colors: the color used last on the button, the palette under the arrow. */
+.lobster-office-font-color { border-bottom: 3px solid; line-height: 1.1; padding: 0 2px; font-size: 13px; font-weight: 600; }
+.lobster-office-fill { width: 16px; height: 16px; border: 1px solid rgba(128, 128, 128, .5); border-radius: 3px; }
+.lobster-office-palette-title { opacity: .7; margin-top: 2px; }
+.lobster-office-palette-grid { display: grid; grid-template-columns: repeat(10, 17px); gap: 3px 4px; }
+.lobster-office-swatch { width: 17px; height: 17px; padding: 0; border: 1px solid rgba(0, 0, 0, .18); border-radius: 2px; cursor: pointer; }
+.lobster-office-swatch:hover { outline: 2px solid #f29d38; outline-offset: 0; }
+.lobster-office-swatch-none { display: inline-block; background: linear-gradient(to top right, transparent 46%, #d83b01 48%, #d83b01 52%, transparent 54%), #fff; cursor: inherit; }
+.lobster-office-palette-none, .lobster-office-palette-more { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 5px; cursor: pointer; text-align: left; font-size: 12px; }
+.lobster-office-palette-none:hover, .lobster-office-palette-more:hover { background: rgba(128, 128, 128, .12); }
+.lobster-office-palette-more input[type="color"] { width: 17px; height: 17px; padding: 0; border: 1px solid rgba(0, 0, 0, .18); border-radius: 2px; background: none; cursor: pointer; }
+.dark .lobster-office-swatch { border-color: rgba(255, 255, 255, .2); }

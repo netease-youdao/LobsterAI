@@ -93,6 +93,35 @@ test('a reused PID is rechecked by native acquisition and never terminated', asy
   expect(inspect).toHaveBeenCalledTimes(3);
 });
 
+test('canonical lock paths remain owned when the state root is redirected', async () => {
+  const f = fixture();
+  const alias = path.join(path.dirname(f.options.stateDir), 'state-alias');
+  fs.symlinkSync(f.options.stateDir, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const acquireLock = vi.fn(async () => ({ release: async () => {} }));
+  const stop = vi.fn();
+  const result = await recoverOpenClawLockOwners({ ...f.options, stateDir: alias }, {
+    platform: 'win32', now: () => now, acquireLock, stop,
+    inspect: async () => ({ pid: f.payload.pid, status: WindowsProcessStatus.Gone }),
+  });
+  expect(result.success, result.error).toBe(true);
+  expect(acquireLock).toHaveBeenCalledOnce();
+  expect(stop).not.toHaveBeenCalled();
+});
+
+test('a redirected lock directory below the state root still blocks repair', async () => {
+  const f = fixture();
+  const temporaryDir = path.join(f.options.stateDir, 'tmp');
+  fs.renameSync(temporaryDir, path.join(f.options.stateDir, 'original-tmp'));
+  fs.symlinkSync(f.options.backupDir, temporaryDir, process.platform === 'win32' ? 'junction' : 'dir');
+  const acquireLock = vi.fn();
+  const stop = vi.fn();
+  const result = await recoverOpenClawLockOwners(f.options, { acquireLock, stop });
+  expect(result.success).toBe(false);
+  expect(result.error).toContain('aliased');
+  expect(acquireLock).not.toHaveBeenCalled();
+  expect(stop).not.toHaveBeenCalled();
+});
+
 test.each([LockOwnerDecision.Unknown, LockOwnerDecision.Active])('a %s owner prevents all mutation', async (decision) => {
   const f = fixture();
   const original = fs.readFileSync(f.lockPath, 'utf8');

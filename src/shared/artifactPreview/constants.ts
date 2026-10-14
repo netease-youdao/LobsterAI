@@ -8,6 +8,9 @@ export const ArtifactPreviewIpc = {
   ReadBrowserAnnotationAsset: 'artifact:browserAnnotation:asset:read',
   DeleteBrowserAnnotationAsset: 'artifact:browserAnnotation:asset:delete',
   DeleteBrowserAnnotationBatchAssets: 'artifact:browserAnnotation:asset:deleteBatch',
+  WatchFile: 'artifact:watchFile',
+  UnwatchFile: 'artifact:unwatchFile',
+  FileChanged: 'artifact:file:changed',
 } as const;
 
 export type ArtifactPreviewIpc = typeof ArtifactPreviewIpc[keyof typeof ArtifactPreviewIpc];

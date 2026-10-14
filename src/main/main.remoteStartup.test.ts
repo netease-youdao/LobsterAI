@@ -9,6 +9,7 @@ import ts from 'typescript';
 import { describe, expect, test } from 'vitest';
 
 import { LogReporterStoreKey } from '../shared/analytics/constants';
+import { OPENCLAW_LOOPBACK_STATE_FILE } from './libs/openclawLoopbackState';
 import { payloadHash, sameOwner } from './remote/canonical';
 import { RemoteAccountTransition } from './remote/remoteAccountTransition';
 
@@ -108,6 +109,7 @@ function startupFixture(failSynchronization = false, savedFence?: unknown) {
     './remote/remoteAccountTransition': moduleOf({ RemoteAccountTransition }),
     './remote/automationOwnership': moduleOf({ fenceCronJobs: () => { events.push('gateway:fence'); if (failFence) throw new Error('cron fence failed'); } }),
     './libs/openclawEngineManager': moduleOf({ OpenClawEngineManager: function () { return moduleOf({ getStateDir: () => fakePath, stopGateway: () => { events.push('gateway:stop'); return stopped.promise; } }); } }),
+    './libs/openclawLoopbackState': moduleOf({ OPENCLAW_LOOPBACK_STATE_FILE }),
     './remote/sessionCommandService': moduleOf({ SessionCommandService: function () { events.push('remote:construct'); return commands; } }),
     './remote/remoteBridge': moduleOf({ RemoteBridge: function () { events.push('remote:bridge'); return bridge; } }),
     './remote/remoteSettingsController': moduleOf({ RemoteSettingsController: function () {

@@ -59,10 +59,6 @@ export const isAgentAvatarSvg = (value: string): value is AgentAvatarSvg => {
   return AGENT_AVATAR_SVGS.has(value);
 };
 
-const LegacyAgentAvatarIconFormat = {
-  Designed: 'agent-avatar',
-} as const;
-
 export const encodeAgentAvatarIcon = (avatar: DesignedAgentAvatar): string => {
   return [
     AgentAvatarIconFormat.Svg,
@@ -77,10 +73,6 @@ export const parseAgentAvatarIcon = (value: string | null | undefined): Designed
   if (!normalized) return null;
 
   const parts = normalized.split(AgentAvatarIconSeparator.Value);
-  if (parts[0] === LegacyAgentAvatarIconFormat.Designed) {
-    return null;
-  }
-
   if (parts.length !== AGENT_AVATAR_PART_COUNT) return null;
 
   const [format, svg] = parts;
@@ -88,10 +80,6 @@ export const parseAgentAvatarIcon = (value: string | null | undefined): Designed
   if (!isAgentAvatarSvg(svg)) return null;
 
   return { svg };
-};
-
-export const isDesignedAgentAvatarIcon = (value: string | null | undefined): boolean => {
-  return parseAgentAvatarIcon(value) !== null;
 };
 
 export const normalizeAgentAvatarIcon = (value: string | null | undefined): string => {

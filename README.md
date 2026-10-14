@@ -229,7 +229,7 @@ Step 3 writes `dsh.runtimes[target]` into `package.json`; commit that hunk so ev
 <summary>Update to a newer dsh version</summary>
 
 1. Bump `dsh.version` in `package.json`.
-2. Copy the patch directory to the new version: `cp -R scripts/dsh-patches/<old> scripts/dsh-patches/<new>`. Patches are found by version, and a missing directory applies **no** patches without failing — the Windows console-hiding and directory-picker fixes would vanish silently. After copying, the build's sentinels re-verify each patch still lands, and fail if upstream moved the code.
+2. Copy the patch directory to the new version before that directory exists: `cp -R scripts/dsh-patches/<old> scripts/dsh-patches/<new>` (if `<new>` already exists, `cp` nests the copy one level down and the build finds no patches). Patches are found by version, and a missing directory applies **no** patches without failing — the Windows console-hiding fix would vanish silently. After copying, the build's sentinels re-verify each patch still lands, and fail if upstream moved the code: retarget the patch and add its sentinel to `PATCH_SENTINELS` in `scripts/build-dsh-runtime.cjs`, or drop it once upstream carries the fix (the directory-picker fix is upstream from 0.1.5, the console-hiding fix from 0.1.6-alpha.2).
 3. Empty `dsh.runtimes`. A descriptor left pointing at the previous archive still passes its digest check, so the old runtime would install under the new version's name.
 4. Rebuild, upload, and record all three targets as above.
 5. Re-run `npm run dsh:runtime:verify-urls` and `npm run dsh:e2e`.

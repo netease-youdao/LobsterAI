@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 
 import {
+  BrowserCredentialAvailabilityReason,
   BrowserCredentialSaveDecision,
   BrowserCredentialSaveMode,
   type BrowserCredentialSavePrompt,
@@ -195,8 +196,11 @@ export class ManualCredentialCaptureService {
   }
 
   private canCapture(): boolean {
-    return this.deps.getSaveMode() === BrowserCredentialSaveMode.Ask
-      && this.deps.credentialService.getAvailability().available;
+    if (this.deps.getSaveMode() !== BrowserCredentialSaveMode.Ask) return false;
+    const availability = this.deps.credentialService.getAvailability();
+    // A first save can request OS access after the user accepts the save prompt.
+    return availability.available
+      || availability.reason === BrowserCredentialAvailabilityReason.AccessNotRequested;
   }
 
   private promotePending(requestId: string): void {

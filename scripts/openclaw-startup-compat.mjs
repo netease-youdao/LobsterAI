@@ -11,6 +11,11 @@ import { recoverRetiredBindingColumns } from './openclaw-binding-schema-recovery
 import { resolveMemoryDreamingWorkspaces } from '#openclaw-dreaming-workspaces';
 import { recoverLegacyDreamingState } from './openclaw-dreaming-state-recovery.mjs';
 import { migrateSharedStateSchema } from './openclaw-state-schema-migration.mjs';
+import { loadInstalledPluginIndexInstallRecordsSync, writePersistedInstalledPluginIndexInstallRecordsWithLease } from '#openclaw-repair-plugin-records';
+import { withPluginLifecycleLease } from '#openclaw-plugin-lifecycle-lease';
+import { runPluginPayloadSmokeCheckForManifestRecords } from '#openclaw-repair-plugin-payload';
+import { NSP_CLAWGUARD } from '../src/main/plugins/nspClawguardCompatibility.ts';
+import { repairNspClawguardInstall } from '../src/main/plugins/nspClawguardInstallRepair.ts';
 import { DREAMING_RECOVERY_REPORT_VERSION, OpenClawDreamingRecoveryOutcome } from '../src/shared/openclawEngine/dreamingRecovery.ts';
 import {
   OPENCLAW_LEGACY_DISCOVERY_KEY,
@@ -137,6 +142,22 @@ try {
         report.changes.push(...await migrateConfig({
           stateDir, configPath, env, allowUnreadable: mode === OpenClawStartupCompatibilityMode.PrepareStartup,
         }));
+        if (mode === OpenClawStartupCompatibilityMode.PrepareStartup) {
+          report.changes.push(...await repairNspClawguardInstall(
+            { stateDir, configPath, backups: report.backups },
+            // Lease acquisition includes synchronous SQLite work on slow Windows disks.
+            run => withPluginLifecycleLease({ env, waitMs: 5_000 }, lease => run({
+              read: () => loadInstalledPluginIndexInstallRecordsSync({ env }),
+              write: (records, config) => writePersistedInstalledPluginIndexInstallRecordsWithLease(records, { env, config, lease }),
+              validate: async rootDir => {
+                const result = await runPluginPayloadSmokeCheckForManifestRecords({
+                  plugins: [{ id: NSP_CLAWGUARD.Id, rootDir }], env,
+                });
+                if (result.failures.length) throw new Error(result.failures.map(failure => failure.detail).join('\n'));
+              },
+            })),
+          ));
+        }
       }
       return { changes: [], warnings: [] };
     },

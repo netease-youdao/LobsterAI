@@ -3,7 +3,7 @@ import { EventEmitter, once } from 'events';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { runInNewContext } from 'vm';
 
 import { OpenClawGatewayProcessControl } from '../../shared/openclawEngine/constants';
@@ -48,6 +48,12 @@ afterEach(() => {
 });
 
 describe('stopOpenClawGatewayProcess', () => {
+  const forceWaitMs = process.platform === 'win32' ? 30_000 : 2_000;
+  beforeEach(() => {
+    // Fake children must not query a real process that happens to own PID 123.
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+  });
+
   const makeChild = () => Object.assign(new EventEmitter(), {
     pid: 123,
     exitCode: null as number | null,
@@ -95,7 +101,7 @@ describe('stopOpenClawGatewayProcess', () => {
     const pending = stopOpenClawGatewayProcess(child);
     const rejected = expect(pending).rejects.toThrow('did not exit after SIGKILL');
 
-    await vi.advanceTimersByTimeAsync(8_000);
+    await vi.advanceTimersByTimeAsync(6_000 + forceWaitMs);
     await rejected;
     expect(vi.getTimerCount()).toBe(0);
     expect(child.listenerCount('exit')).toBe(0);
@@ -113,7 +119,7 @@ describe('stopOpenClawGatewayProcess', () => {
     const pending = stopOpenClawGatewayProcess(child);
     const rejected = expect(pending).rejects.toThrow('EPERM');
 
-    await vi.advanceTimersByTimeAsync(8_000);
+    await vi.advanceTimersByTimeAsync(6_000 + forceWaitMs);
     await rejected;
     expect(child.kill).toHaveBeenCalledTimes(2);
   });
@@ -160,13 +166,118 @@ describe('stopOpenClawGatewayProcess', () => {
     expect(child.kill).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(6_000);
     expect(child.kill).toHaveBeenCalledExactlyOnceWith(OpenClawGatewaySignal.Kill);
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(forceWaitMs);
     await rejected;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test.skipIf(process.platform !== 'win32')('recognizes a stale child whose Windows process is already gone', async () => {
+    vi.useFakeTimers();
+    const child = Object.assign(makeChild(), { connected: true, send: vi.fn() });
+    vi.mocked(process.kill).mockImplementation(() => {
+      throw Object.assign(new Error('No such process'), { code: 'ESRCH' });
+    });
+    const stopped = vi.fn();
+    const pending = stopOpenClawGatewayProcess(child).then(stopped);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toHaveBeenCalledOnce();
+    await pending;
+    expect(process.kill).toHaveBeenCalledWith(child.pid, 0);
+    expect(child.send).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test.skipIf(process.platform !== 'win32')('accepts OS-confirmed termination while the exit event is delayed', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const child = makeChild();
+    const stopped = vi.fn();
+    const pending = stopOpenClawGatewayProcess(child).then(stopped);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(child.kill).toHaveBeenLastCalledWith(OpenClawGatewaySignal.Kill);
+    vi.mocked(process.kill).mockImplementation(() => {
+      throw Object.assign(new Error('No such process'), { code: 'ESRCH' });
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(stopped).toHaveBeenCalledOnce();
+    await pending;
+    expect(vi.getTimerCount()).toBe(0);
+    expect(child.listenerCount('exit')).toBe(0);
+    expect(child.listenerCount('error')).toBe(0);
+  });
+
+  test.skipIf(process.platform !== 'win32')('waits for slow Windows termination beyond the old two-second deadline', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const child = makeChild();
+    const settled = vi.fn();
+    const pending = stopOpenClawGatewayProcess(child).then(settled, settled);
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(settled).not.toHaveBeenCalled();
+    expect(child.kill).toHaveBeenCalledTimes(2);
+    child.emit('exit', null, OpenClawGatewaySignal.Kill);
+    await pending;
+    expect(settled).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test.skipIf(process.platform !== 'win32').each(['EPERM', 'EACCES'])('does not treat %s from the OS probe as an exit', async (code) => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const child = makeChild();
+    vi.mocked(process.kill).mockImplementation(() => {
+      throw Object.assign(new Error('Cannot inspect process'), { code });
+    });
+    const pending = stopOpenClawGatewayProcess(child);
+    const rejected = expect(pending).rejects.toThrow('did not exit after SIGKILL');
+    await vi.advanceTimersByTimeAsync(36_000);
+    await rejected;
+    expect(child.kill).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
   });
 });
 
 describe('Windows gateway shutdown bridge', () => {
+  test.skipIf(process.platform !== 'win32')('confirms a real native exit and releases SQLite when the exit notification is unavailable', async () => {
+    const entry = makeEntry(buildOpenClawGatewayShutdownBridge() + `
+      const { DatabaseSync } = require('node:sqlite');
+      const db = new DatabaseSync('lease.sqlite');
+      db.exec('CREATE TABLE sentinel(value TEXT); BEGIN EXCLUSIVE');
+      process.on('SIGINT', () => setTimeout(() => process.exit(0), 100));
+      process.send('ready');
+      setInterval(() => {}, 1000);
+    `);
+    const child = spawnOpenClawGatewayProcess({
+      executablePath: process.execPath, ...entry, args: [], execArgv: [], env: process.env,
+    });
+    const result = readResult(child);
+    try {
+      await Promise.race([
+        once(child, 'message'),
+        result.then(({ stderr }) => { throw new Error(`Gateway fixture exited before ready: ${stderr}`); }),
+      ]);
+      const { DatabaseSync } = await import('node:sqlite');
+      const database = new DatabaseSync(path.join(entry.cwd, 'lease.sqlite'));
+      try {
+        expect(() => database.exec('BEGIN EXCLUSIVE')).toThrow(/locked/);
+        // Retain actual IPC/termination and the OS PID, but withhold the cached
+        // exit status/events, as a delayed Electron notification would do.
+        const observed = Object.assign(new EventEmitter(), {
+          pid: child.pid, exitCode: null, signalCode: null, connected: true,
+          send: child.send.bind(child), kill: child.kill.bind(child),
+        }) as unknown as ChildProcess;
+        await stopOpenClawGatewayProcess(observed);
+        expect(() => process.kill(child.pid!, 0)).toThrow();
+        expect(() => database.exec('BEGIN EXCLUSIVE; ROLLBACK')).not.toThrow();
+        expect((await result).code).toBe(0);
+      } finally { database.close(); }
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill(OpenClawGatewaySignal.Kill);
+      await result;
+    }
+  });
+
   test('buffers parent disconnection until the gateway installs its shutdown handler', async () => {
     vi.useFakeTimers();
     const childProcess = Object.assign(new EventEmitter(), { send: vi.fn(), connected: true, exit: vi.fn() });

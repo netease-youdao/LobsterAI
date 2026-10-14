@@ -1,0 +1,29 @@
+{
+  "id": "lobster-decision",
+  "name": "LobsterDecision",
+  "description": "Experimental decision model tool (TypeSafe Jev) powered by LobsterAI.",
+  "contracts": {
+    "tools": [
+      "decision_evaluate"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "callbackUrl": {
+        "type": "string",
+        "description": "LobsterAI HTTP callback URL for decision requests"
+      },
+      "secret": {
+        "type": "string",
+        "description": "Shared secret for callback authentication"
+      },
+      "requestTimeoutMs": {
+        "type": "number",
+        "minimum": 1000,
+        "description": "Request timeout in milliseconds"
+      }
+    }
+  }
+}

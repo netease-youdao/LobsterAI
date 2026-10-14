@@ -18,6 +18,7 @@ const BrowserCredentialSettings: React.FC = () => {
   const [credentials, setCredentials] = useState<BrowserCredentialSummary[]>([]);
   const [available, setAvailable] = useState<boolean | null>(null);
   const [availabilityReason, setAvailabilityReason] = useState<string>();
+  const [requiresRestart, setRequiresRestart] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -27,6 +28,8 @@ const BrowserCredentialSettings: React.FC = () => {
   const [password, setPassword] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [requestingAccess, setRequestingAccess] = useState(false);
+  const accessRequestRef = useRef(false);
   const originInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -50,6 +53,7 @@ const BrowserCredentialSettings: React.FC = () => {
       } else {
         setAvailable(availabilityResponse.availability.available);
         setAvailabilityReason(availabilityResponse.availability.reason);
+        setRequiresRestart(availabilityResponse.availability.requiresRestart === true);
       }
       if (listResponse.success) {
         setCredentials(listResponse.credentials ?? []);
@@ -71,6 +75,30 @@ const BrowserCredentialSettings: React.FC = () => {
   useEffect(() => {
     if (showAddDialog) originInputRef.current?.focus();
   }, [showAddDialog]);
+
+  const requestAccess = async () => {
+    if (accessRequestRef.current) return;
+    accessRequestRef.current = true;
+    setRequestingAccess(true);
+    setError('');
+    try {
+      const response = await window.electron.openclaw.browser.credentials.requestAccess();
+      if (response.success && response.availability) {
+        setAvailable(response.availability.available);
+        setAvailabilityReason(response.availability.reason);
+        setRequiresRestart(response.availability.requiresRestart === true);
+      } else {
+        await load();
+        setError(i18nService.t('browserCredentialAccessFailed'));
+      }
+    } catch {
+      await load();
+      setError(i18nService.t('browserCredentialAccessFailed'));
+    } finally {
+      accessRequestRef.current = false;
+      setRequestingAccess(false);
+    }
+  };
 
   const closeAddDialog = (force = false) => {
     if (saving && !force) return;
@@ -96,12 +124,14 @@ const BrowserCredentialSettings: React.FC = () => {
         password,
       });
       if (!response.success) {
+        await load();
         setError(i18nService.t('browserCredentialSaveFailed'));
         return;
       }
       closeAddDialog(true);
       await load();
     } catch {
+      await load();
       setError(i18nService.t('browserCredentialSaveFailed'));
     } finally {
       setSaving(false);
@@ -129,9 +159,14 @@ const BrowserCredentialSettings: React.FC = () => {
     }
   };
 
-  const unavailableMessage = availabilityReason === BrowserCredentialAvailabilityReason.InsecureStorageBackend
-    ? i18nService.t('browserCredentialInsecureBackend')
-    : i18nService.t('browserCredentialEncryptionUnavailable');
+  const accessNotRequested = availabilityReason === BrowserCredentialAvailabilityReason.AccessNotRequested;
+  const unavailableMessage = requiresRestart
+    ? i18nService.t('browserCredentialAccessRestartRequired')
+    : accessNotRequested
+      ? i18nService.t('browserCredentialAccessNotRequested')
+      : availabilityReason === BrowserCredentialAvailabilityReason.InsecureStorageBackend
+        ? i18nService.t('browserCredentialInsecureBackend')
+        : i18nService.t('browserCredentialEncryptionUnavailable');
 
   return (
     <section className="space-y-3">
@@ -156,9 +191,33 @@ const BrowserCredentialSettings: React.FC = () => {
       </div>
 
       {available === false && !loading ? (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
-          {unavailableMessage}
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-border bg-surface-raised px-3 py-3">
+          <div className="min-w-0 text-sm text-secondary" role="status">
+            <p>{unavailableMessage}</p>
+            {window.electron?.platform === 'darwin' ? (
+              <p className="mt-1">{i18nService.t('browserCredentialMacAccessHint')}</p>
+            ) : null}
+          </div>
+          {typeof window.electron?.openclaw?.browser?.credentials?.requestAccess === 'function' ? (
+            <button
+              type="button"
+              onClick={() => void requestAccess()}
+              disabled={requestingAccess || requiresRestart}
+              className="inline-flex h-8 shrink-0 items-center rounded-lg bg-primary px-3 text-sm font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {i18nService.t(requestingAccess
+                ? 'browserCredentialRequestingAccess'
+                : requiresRestart
+                  ? 'browserCredentialRetryAfterRestart'
+                  : accessNotRequested ? 'browserCredentialEnableAccess' : 'browserCredentialRetryAccess')}
+            </button>
+          ) : null}
         </div>
+      ) : null}
+      {available === true && !loading ? (
+        <p className="text-sm text-secondary" role="status">
+          {i18nService.t('browserCredentialAccessEnabled')}
+        </p>
       ) : null}
       {error && !showAddDialog && !deleteTarget ? (
         <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-300">

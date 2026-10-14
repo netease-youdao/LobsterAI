@@ -75,6 +75,7 @@ import {
   writeLocalServiceProjectDirectory as writeNodeDeploymentProjectDirectory,
 } from '@/services/localServiceProjectDirectoryCache';
 import { getMarkdownDocumentContent } from '@/services/markdownDocument';
+import { refreshOpenOfficeEditor } from '@/services/office/officeFormats';
 import {
   armPublishingSubscriptionRecovery,
   PublishingSubscriptionRecoveryRefreshOutcome,
@@ -114,6 +115,7 @@ import ServiceDeploymentIcon from '../icons/ServiceDeploymentIcon';
 import {
   ArtifactPreviewActionSource,
   ArtifactPublishEntryPoint,
+  ArtifactRefreshTrigger,
   getArtifactBrowserUrlType,
   reportArtifactPreviewAction,
 } from './artifactAnalytics';
@@ -214,8 +216,8 @@ import {
 import {
   OfficePreviewActionsContext,
   type OfficePreviewZoomControlsConfig,
-} from './renderers/OfficePreviewActionsContext';
-import { OfficeZoomControls } from './renderers/OfficeZoomControls';
+} from './renderers/office/common/OfficePreviewActionsContext';
+import { OfficeZoomControls } from './renderers/office/common/OfficeZoomControls';
 import { usePublishingRecoveryExposureLifecycle } from './usePublishingRecoveryExposureLifecycle';
 
 const t = (key: string) => i18nService.t(key);
@@ -1687,10 +1689,11 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     };
   }, [closeFileListDrawer, showFileListDrawer]);
 
-  // Auto-refresh when the previewed file changes on disk
+  // Auto-refresh when the previewed file changes on disk. Markdown is left out: EditableMarkdownFile
+  // polls and version-checks its file itself, and a watch would re-read it after each autosave.
   useEffect(() => {
     const filePath = selectedArtifact?.filePath;
-    if (!filePath) return;
+    if (!filePath || selectedArtifact?.type === ArtifactTypeValue.Markdown) return;
 
     let cleanup: (() => void) | undefined;
     let watchedPath: string | null = null;
@@ -1700,7 +1703,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
 
     cleanup = window.electron?.artifact?.onFileChanged(({ filePath: changedPath }) => {
       if (changedPath === watchedPath) {
-        handleRefreshRef.current();
+        handleRefreshRef.current(ArtifactRefreshTrigger.FileChange);
       }
     });
 
@@ -1708,7 +1711,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       if (cleanup) cleanup();
       if (watchedPath) window.electron?.artifact?.unwatchFile(watchedPath);
     };
-  }, [selectedArtifact?.filePath]);
+  }, [selectedArtifact?.filePath, selectedArtifact?.type]);
 
   const openLocalServiceArtifact = useCallback(
     (artifact: Artifact): boolean => {
@@ -4656,17 +4659,18 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     }
   }, [reportSelectedArtifactAction, selectedArtifact]);
 
-  const handleRefresh = useCallback(async () => {
+  const handleRefresh = useCallback(async (trigger: ArtifactRefreshTrigger = ArtifactRefreshTrigger.Manual) => {
     if (!selectedArtifact?.filePath) return;
     if (selectedArtifact.type === 'video') {
       dispatch(addArtifact({
         sessionId: selectedArtifact.sessionId,
         artifact: { ...selectedArtifact, createdAt: Date.now() },
       }));
-      reportSelectedArtifactAction('refresh_preview', { result: 'success' });
+      reportSelectedArtifactAction('refresh_preview', { result: 'success', trigger });
       return;
     }
     try {
+      if (await refreshOpenOfficeEditor(selectedArtifact.filePath)) return;
       if (selectedArtifact.type === ArtifactTypeValue.Html) {
         dispatch(addArtifact({
           sessionId: selectedArtifact.sessionId,
@@ -4675,7 +4679,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
             contentVersion: Date.now(),
           },
         }));
-        reportSelectedArtifactAction('refresh_preview', { result: 'success' });
+        reportSelectedArtifactAction('refresh_preview', { result: 'success', trigger });
         return;
       }
 
@@ -4687,7 +4691,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
             'refresh artifact source',
             `file exceeds read limit; size=${result.size ?? 'unknown'}, readBytes=${result.readBytes ?? 'unknown'}`,
           );
-          reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
+          reportSelectedArtifactAction('refresh_preview', { result: 'failed', trigger });
           window.dispatchEvent(new CustomEvent('app:showToast', {
             detail: t('artifactSourceTooLarge'),
           }));
@@ -4698,10 +4702,10 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
             sessionId: selectedArtifact.sessionId,
             artifact: { ...selectedArtifact, content: result.content, contentVersion: Date.now() },
           }));
-          reportSelectedArtifactAction('refresh_preview', { result: 'success' });
+          reportSelectedArtifactAction('refresh_preview', { result: 'success', trigger });
         } else {
           logArtifactFileActionFailure('refresh artifact source', result?.error);
-          reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
+          reportSelectedArtifactAction('refresh_preview', { result: 'failed', trigger });
           window.dispatchEvent(new CustomEvent('app:showToast', {
             detail: result?.error || t('artifactSourceLoadFailed'),
           }));
@@ -4729,17 +4733,17 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
             artifact: { ...selectedArtifact, content },
           }),
         );
-        reportSelectedArtifactAction('refresh_preview', { result: 'success' });
+        reportSelectedArtifactAction('refresh_preview', { result: 'success', trigger });
       } else {
         logArtifactFileActionFailure('refresh artifact preview', result?.error);
-        reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
+        reportSelectedArtifactAction('refresh_preview', { result: 'failed', trigger });
         window.dispatchEvent(new CustomEvent('app:showToast', {
           detail: result?.error || t('artifactSourceLoadFailed'),
         }));
       }
     } catch (error) {
       logArtifactFileActionFailure('refresh artifact preview', error);
-      reportSelectedArtifactAction('refresh_preview', { result: 'failed' });
+      reportSelectedArtifactAction('refresh_preview', { result: 'failed', trigger });
       window.dispatchEvent(new CustomEvent('app:showToast', {
         detail: t('artifactSourceLoadFailed'),
       }));

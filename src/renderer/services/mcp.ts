@@ -1,3 +1,8 @@
+import {
+  McpToolDiscoveryErrorCode,
+  type McpToolDiscoveryRequest,
+  type McpToolDiscoveryResult,
+} from '../../shared/mcp/toolDiscovery';
 import { McpCategory, McpMarketplaceCategoryInfo, McpMarketplaceServer,McpRegistryEntry, McpServerConfig, McpServerFormData } from '../types/mcp';
 import { LogReporterAction, reportYdAnalyzer } from './logReporter';
 
@@ -117,6 +122,20 @@ class McpService {
       const message = error instanceof Error ? error.message : 'Failed to update MCP server';
       console.error('Failed to update MCP server:', error);
       return { success: false, error: message };
+    }
+  }
+
+  /** Connects to the server described by the form and lists its tools. */
+  async listTools(request: McpToolDiscoveryRequest): Promise<McpToolDiscoveryResult> {
+    try {
+      return await window.electron.mcp.listTools(request);
+    } catch (error) {
+      console.error('Failed to list MCP tools:', error);
+      return {
+        success: false,
+        code: McpToolDiscoveryErrorCode.Failed,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 

@@ -29,7 +29,7 @@ function source(workspace = workspaces[0], fileName: string = File.DailyIngestio
 const run = () => recoverLegacyDreamingState({ stateDir, configPath, configRaw, workspaces });
 
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-dreaming-files-'));
+  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-dreaming-files-')));
   stateDir = path.join(root, 'state');
   configPath = path.join(stateDir, 'openclaw.json');
   workspaces = [{ workspaceDir: path.join(root, '自定义 工作区'), agentIds: ['main'] }];
@@ -39,7 +39,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  if (!path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep)) throw new Error('Unexpected fixture path');
+  if (!path.resolve(root).startsWith(fs.realpathSync(os.tmpdir()) + path.sep)) throw new Error('Unexpected fixture path');
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 });
 

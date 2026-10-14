@@ -69,6 +69,7 @@ import type {
   CoworkSessionsChangedPayload,
 } from '../../shared/cowork/constants';
 import type { CoworkGoal } from '../../shared/cowork/goal';
+import type { CoworkTurnUsage, CoworkTurnUsageAnchor } from '../../shared/cowork/llmTurnUsage';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
 import type {
   CoworkSearchMessage,
@@ -79,6 +80,11 @@ import type {
   DataMigrationLastRestoreResponse,
   DataMigrationRestoreScheduleResult,
 } from '../../shared/dataMigration/constants';
+import type {
+  DecisionModelConfigUpdate,
+  DecisionModelConfigView,
+  DecisionModelTestResult,
+} from '../../shared/decisionModel/constants';
 import type { EnterpriseQuotaRequestType } from '../../shared/enterpriseAccount/constants';
 import type {
   EnterpriseAccountContext,
@@ -130,10 +136,13 @@ import type {
   ListLocalWebServicesOptions,
   LocalWebService,
 } from '../../shared/localWebServices/constants';
+import type { McpToolDiscoveryRequest, McpToolDiscoveryResult } from '../../shared/mcp/toolDiscovery';
+import type { OfficeBridges } from '../../shared/office/editors';
 import type {
   OpenClawEngineErrorCode,
   OpenClawEnginePhase as SharedOpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
+  OpenClawLoopbackRepairOutcome,
 } from '../../shared/openclawEngine/constants';
 import type { OpenClawRepairStage } from '../../shared/openclawEngine/repair';
 import type {
@@ -226,6 +235,9 @@ interface CoworkSession {
   messages: CoworkMessage[];
   messagesOffset: number;
   totalMessages: number;
+  /** Start of the turn the first loaded message belongs to, when it began before messagesOffset. */
+  leadingTurnStartTimestamp?: number | null;
+  leadingTurnUsage?: CoworkTurnUsageAnchor | null;
   parentSessionId?: string | null;
   forkedFromMessageId?: string | null;
   forkedAt?: number | null;
@@ -396,11 +408,19 @@ interface OpenClawGatewayRepairResult {
   status?: OpenClawEngineStatus;
   originalPath?: string;
   backupPath?: string;
+  quarantinedSessionStoreCount?: number;
   error?: string;
   errorCode?: OpenClawGatewayRepairErrorCode;
   recoverable?: boolean;
   failedStage?: OpenClawRepairStage;
   failurePath?: string;
+}
+
+interface OpenClawLoopbackRepairResult {
+  outcome: OpenClawLoopbackRepairOutcome;
+  status?: OpenClawEngineStatus;
+  detail?: string;
+  manualCommand?: string;
 }
 
 interface OpenClawSessionPolicyConfig {
@@ -763,6 +783,7 @@ interface IElectronAPI {
     retryLaunchResolution: (
       id: string,
     ) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
+    listTools: (request: McpToolDiscoveryRequest) => Promise<McpToolDiscoveryResult>;
     fetchMarketplace: () => Promise<{
       success: boolean;
       data?: McpMarketplaceData;
@@ -886,6 +907,11 @@ interface IElectronAPI {
     openWorkbench: () => Promise<{ url: string }>;
     stop: () => Promise<{ phase: string; port: number | null; version: string | null; errorCode: string | null }>;
   };
+  decisionModel: {
+    getConfig: () => Promise<DecisionModelConfigView>;
+    saveConfig: (update: DecisionModelConfigUpdate) => Promise<DecisionModelConfigView>;
+    testConnection: (draft: DecisionModelConfigUpdate) => Promise<DecisionModelTestResult>;
+  };
   openclaw: {
     engine: {
       getStatus: () => Promise<{ success: boolean; status?: OpenClawEngineStatus; error?: string }>;
@@ -901,6 +927,7 @@ interface IElectronAPI {
         error?: string;
       }>;
       repairGatewayState: () => Promise<OpenClawGatewayRepairResult>;
+      repairLoopbackFirewall: () => Promise<OpenClawLoopbackRepairResult>;
       onProgress: (callback: (status: OpenClawEngineStatus) => void) => () => void;
     };
     sessionPolicy: {
@@ -949,6 +976,7 @@ interface IElectronAPI {
       resolvePasskey: (request: BrowserPasskeyRequest) => Promise<AgentBrowserHostResponse>;
       credentials: {
         getAvailability: () => Promise<BrowserCredentialAvailabilityResponse>;
+        requestAccess: () => Promise<BrowserCredentialAvailabilityResponse>;
         list: () => Promise<BrowserCredentialListResponse>;
         save: (request: BrowserCredentialSaveRequest) => Promise<BrowserCredentialMutationResponse>;
         delete: (request: BrowserCredentialDeleteRequest) => Promise<BrowserCredentialMutationResponse>;
@@ -983,7 +1011,7 @@ interface IElectronAPI {
       kitIds?: string[];
       kitReferences?: KitReference[];
       resolvedKitCapabilities?: ResolvedKitCapabilities;
-      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       agentId?: string;
       modelOverride?: string;
@@ -1008,7 +1036,7 @@ interface IElectronAPI {
       kitIds?: string[];
       kitReferences?: KitReference[];
       resolvedKitCapabilities?: ResolvedKitCapabilities;
-      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       localInput?: import('../../shared/cowork/inputAttachments').CoworkLocalInput;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
@@ -1044,6 +1072,7 @@ interface IElectronAPI {
       code?: string;
       engineStatus?: OpenClawEngineStatus;
     }>;
+    refreshTurnUsage?: (options: { sessionId: string; messageId: string }) => Promise<CoworkTurnUsage | null>;
     stopSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSessions: (sessionIds: string[]) => Promise<{ success: boolean; error?: string }>;
@@ -1111,6 +1140,9 @@ interface IElectronAPI {
       messages?: CoworkMessage[];
       offset?: number;
       total?: number;
+      /** Start of the turn the page's first message belongs to (see CoworkSession). */
+      leadingTurnStartTimestamp?: number | null;
+      leadingTurnUsage?: CoworkTurnUsageAnchor | null;
       error?: string;
     }>;
     getSessionSearchMessages: (options: {
@@ -1291,6 +1323,9 @@ interface IElectronAPI {
     ) => () => void;
     onStreamGoal?: (
       callback: (data: { sessionId: string; goal: CoworkGoal | null }) => void,
+    ) => () => void;
+    onStreamTurnUsage?: (
+      callback: (data: { sessionId: string; messageId: string; turnUsage: CoworkTurnUsage }) => void,
     ) => () => void;
     onStreamBtwResult?: (
       callback: (data: { sessionId: string; result: CoworkBtwEntry }) => void,
@@ -1591,6 +1626,7 @@ interface IElectronAPI {
     createRealtimeSession: (options: AsrRealtimeSessionRequest) => Promise<AsrRealtimeSessionResult>;
   };
   artifact: {
+    office: OfficeBridges;
     markdown: MarkdownFileBridge;
     watchFile: (filePath: string) => Promise<void>;
     unwatchFile: (filePath: string) => Promise<void>;

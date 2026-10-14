@@ -44,6 +44,18 @@ export const APP_UPDATE_URL_UNTRUSTED_ERROR = 'update-url-untrusted';
 /** Stable marker returned when cached installer bytes fail hash validation. */
 export const APP_UPDATE_FILE_INVALID_ERROR = 'update-file-invalid';
 
+export const APP_UPDATE_GRAY_UNAVAILABLE_ERROR = 'update-gray-unavailable';
+
+export const AppUpdateChannel = { Gray: 'gray' } as const;
+
+/** Local eligibility context only; never contains an access token. */
+export interface AppUpdateGrayContext {
+  sessionKey: string;
+  serverBaseUrl: string;
+  rolloutId: string;
+  policyRevision: number;
+}
+
 export interface ChangeLogEntry {
   title: string;
   content: string[];
@@ -61,6 +73,7 @@ export interface AppUpdateInfo {
   date: string;
   changeLog: { zh: ChangeLogEntry; en: ChangeLogEntry };
   url: string;
+  gray?: AppUpdateGrayContext;
 }
 
 export interface AppUpdateRuntimeState {

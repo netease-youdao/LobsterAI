@@ -3,9 +3,7 @@ import './subscriptionTrialCampaign.css';
 import React, { useEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
-import { AuthSubscriptionStatus } from '../../shared/auth/constants';
 import type { SubscriptionTrialState } from '../../shared/subscriptionTrial/constants';
-import { selectIsEnterpriseAccount } from '../features/enterpriseAccount/selectors';
 import { getPortalSubscriptionTrialUrl, isTestModeEnabled } from '../services/endpoints';
 import { i18nService } from '../services/i18n';
 import type { RootState } from '../store';
@@ -20,14 +18,7 @@ import {
   type SubscriptionTrialPopupState,
 } from './subscriptionTrialPopupState';
 
-const FIRST_LOGIN_KEY = 'subscription_trial.waiting_for_first_login';
 const DIALOG_SELECTOR = '[data-app-modal], [role="dialog"], [aria-modal="true"]';
-const read = (key: string): string | null => {
-  try { return localStorage.getItem(key); } catch { return null; }
-};
-const write = (key: string, value: string): void => {
-  try { localStorage.setItem(key, value); } catch { /* The current session still preserves the onboarding gate. */ }
-};
 const otherDialogOpen = (): boolean => Array.from(document.querySelectorAll(DIALOG_SELECTOR)).some(node => (
   !node.querySelector('[data-subscription-trial]') && !node.hasAttribute('data-subscription-trial')
   && node.getClientRects().length > 0
@@ -51,16 +42,13 @@ const isAvailable = (state: SubscriptionTrialState | null): boolean => Boolean(
 );
 
 const SubscriptionTrialCampaign: React.FC<Props> = ({ enabled, privacyAgreed, taskCreatedSignal }) => {
-  const { isLoggedIn, isLoading, user, quota, accountGeneration } = useSelector((state: RootState) => state.auth);
-  const enterprise = useSelector(selectIsEnterpriseAccount);
-  const subscribed = isLoggedIn && quota?.subscriptionStatus === AuthSubscriptionStatus.Active;
+  const { isLoggedIn, isLoading, user, accountGeneration } = useSelector((state: RootState) => state.auth);
   const identity = user?.yid ?? user?.userId ?? user?.id;
-  const owner = `${accountGeneration}:${isLoggedIn ? identity : 'anonymous'}:${enterprise}`;
+  const owner = `${accountGeneration}:${isLoggedIn ? identity : 'anonymous'}`;
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
   const [pending, setPending] = useState<PendingPopup | null>(null);
   const [otherOpen, setOtherOpen] = useState(true);
-  const [requiresLogin, setRequiresLogin] = useState(() => read(FIRST_LOGIN_KEY) === '1');
   const [opening, setOpening] = useState(false);
   const [, languageChanged] = useState(0);
   const shownInSession = useRef(new Map<string, number>());
@@ -91,16 +79,6 @@ const SubscriptionTrialCampaign: React.FC<Props> = ({ enabled, privacyAgreed, ta
 
   useEffect(() => i18nService.subscribe(() => languageChanged(value => value + 1)), []);
   useEffect(() => {
-    if (isLoggedIn) {
-      write(FIRST_LOGIN_KEY, '0');
-      setRequiresLogin(false);
-    } else if (privacyAgreed === false) {
-      write(FIRST_LOGIN_KEY, '1');
-      setRequiresLogin(true);
-    }
-  }, [isLoggedIn, privacyAgreed]);
-
-  useEffect(() => {
     let previouslyOpen = true;
     const update = () => {
       const open = otherDialogOpen();
@@ -120,10 +98,9 @@ const SubscriptionTrialCampaign: React.FC<Props> = ({ enabled, privacyAgreed, ta
     const current = () => !disposed && ownerRef.current === owner;
     const load = async () => {
       if (fetching) return;
-      if (isLoading || privacyAgreed !== true || enterprise || subscribed
-        || requiresLogin || (isLoggedIn && identity == null)) {
+      if (isLoading || privacyAgreed !== true || (isLoggedIn && identity == null)) {
         diagnose(isLoading ? 'auth_loading' : privacyAgreed !== true ? 'onboarding'
-          : enterprise ? 'enterprise' : subscribed ? 'subscribed' : requiresLogin ? 'waiting_for_first_login' : 'missing_identity');
+          : 'missing_identity');
         setPopup(null);
         return;
       }
@@ -177,14 +154,14 @@ const SubscriptionTrialCampaign: React.FC<Props> = ({ enabled, privacyAgreed, ta
       window.removeEventListener('focus', run);
       if (runRef.current === run) runRef.current = () => undefined;
     };
-  }, [owner, identity, enterprise, subscribed, isLoggedIn, isLoading, privacyAgreed, requiresLogin]);
+  }, [owner, identity, isLoggedIn, isLoading, privacyAgreed]);
 
   // Overlay changes wake the existing request loop without resetting local frequency.
   useEffect(() => { if (enabled) runRef.current(); }, [enabled]);
   useEffect(() => { if (taskCreatedSignal > 0) runRef.current(); }, [taskCreatedSignal]);
   const pendingServerTime = pending ? popupTime(pending) : 0;
-  const visible = enabled && !isLoading && privacyAgreed === true && !requiresLogin && !otherOpen
-    && !!pending && pending.owner === owner && !enterprise && !subscribed
+  const visible = enabled && !isLoading && privacyAgreed === true && !otherOpen
+    && !!pending && pending.owner === owner
     && pendingServerTime < Math.min(pending.local.expiresAt, pending.local.nextShowAt);
   useEffect(() => {
     if (!visible || !pending) return;

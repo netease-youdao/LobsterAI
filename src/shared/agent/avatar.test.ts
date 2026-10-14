@@ -5,7 +5,6 @@ import {
   DefaultAgentAvatar,
   DefaultAgentAvatarIcon,
   encodeAgentAvatarIcon,
-  isDesignedAgentAvatarIcon,
   normalizeAgentAvatarIcon,
   parseAgentAvatarIcon,
 } from './avatar';
@@ -25,13 +24,13 @@ describe('agent avatar icon encoding', () => {
     expect(parseAgentAvatarIcon(DefaultAgentAvatarIcon)).toEqual(DefaultAgentAvatar);
   });
 
-  test('leaves legacy emoji icons untouched', () => {
+  test('does not parse legacy emoji icons', () => {
     expect(parseAgentAvatarIcon('🤖')).toBeNull();
-    expect(isDesignedAgentAvatarIcon('🤖')).toBe(false);
   });
 
   test('normalizes empty and legacy icons to the default svg avatar', () => {
     expect(normalizeAgentAvatarIcon('')).toBe(DefaultAgentAvatarIcon);
+    expect(normalizeAgentAvatarIcon('🤖')).toBe(DefaultAgentAvatarIcon);
     expect(normalizeAgentAvatarIcon('legacy-icon')).toBe(DefaultAgentAvatarIcon);
     expect(normalizeAgentAvatarIcon('agent-avatar:blue:code')).toBe(DefaultAgentAvatarIcon);
     expect(normalizeAgentAvatarIcon('agent-avatar:blue:missing')).toBe(DefaultAgentAvatarIcon);
@@ -46,6 +45,7 @@ describe('agent avatar icon encoding', () => {
   });
 
   test('rejects malformed avatar values', () => {
+    expect(parseAgentAvatarIcon('agent-avatar:code')).toBeNull();
     expect(parseAgentAvatarIcon('agent-avatar:blue:code')).toBeNull();
     expect(parseAgentAvatarIcon('agent-avatar:blue:missing')).toBeNull();
     expect(parseAgentAvatarIcon('agent-avatar:missing:code')).toBeNull();

@@ -8,6 +8,8 @@ export type AgentLifecyclePhase = typeof AgentLifecyclePhase[keyof typeof AgentL
 
 export const AgentEventStream = {
   Assistant: 'assistant',
+  /** A finished answer the same run continues past (zz-openclaw-plan-completion-check.patch). */
+  Checkpoint: 'checkpoint',
   Lifecycle: 'lifecycle',
   Tool: 'tool',
 } as const;
@@ -29,6 +31,7 @@ export const OpenClawGatewayMethod = {
 } as const;
 
 export const OpenClawGatewayEvent = {
+  Shutdown: 'shutdown',
   ChatSideResult: 'chat.side_result',
   SessionsChanged: 'sessions.changed',
   SubagentSettleFailed: 'lobsterai.subagent.settle_failed',

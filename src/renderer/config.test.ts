@@ -98,7 +98,7 @@ test('defaultConfig puts Kimi K3 first for Moonshot', () => {
     supportsVideo: true,
     supportsThinking: true,
     contextWindow: 1_048_576,
-    maxTokens: 8_192,
+    maxTokens: 1_048_576,
   });
 });
 

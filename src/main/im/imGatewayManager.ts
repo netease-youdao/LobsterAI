@@ -1,13 +1,12 @@
 /**
  * IM Gateway Manager
- * Unified manager for DingTalk, Feishu, NIM gateways
- * and Telegram, Discord, QQ, WeCom, Weixin, POPO, NeteaseBee via OpenClaw
+ * Unified manager for DingTalk, Feishu, NIM, Telegram, Discord, QQ, WeCom,
+ * Weixin, POPO and NeteaseBee, all of which run via OpenClaw
  */
 
 import Database from 'better-sqlite3';
 import { EventEmitter } from 'events';
 
-import { classifyErrorKey } from '../../common/coworkErrorClassify';
 import { WeixinPlugin, WeixinQrLoginTimeout } from '../../shared/im/weixin';
 import type { CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
@@ -28,7 +27,6 @@ import type {
 } from './imScheduledTaskHandler';
 import { createIMScheduledTaskRequestDetector } from './imScheduledTaskHandler';
 import { IMStore } from './imStore';
-import { NimGateway } from './nimGateway';
 import {
   IMConnectivityCheck,
   IMConnectivityTestResult,
@@ -141,7 +139,6 @@ export class IMGatewayManager extends EventEmitter {
       await this.syncOpenClawConfig?.('weixin-qr-plugin-activation', { restartGatewayIfRunning: true, requireSuccess: true });
     }
   });
-  private nimGateway: NimGateway;
   private imStore: IMStore;
   private chatHandler: IMChatHandler | null = null;
   private coworkHandler: IMCoworkHandler | null = null;
@@ -176,7 +173,6 @@ export class IMGatewayManager extends EventEmitter {
     super();
 
     this.imStore = new IMStore(db);
-    this.nimGateway = new NimGateway();
 
     // Store Cowork dependencies if provided
     if (options?.coworkRuntime && options?.coworkStore) {
@@ -245,104 +241,6 @@ export class IMGatewayManager extends EventEmitter {
   }): void {
     this.getLLMConfig = options.getLLMConfig;
     this.getSkillsPrompt = options.getSkillsPrompt ?? null;
-
-    // Set up message handlers for gateways
-    this.setupMessageHandlers();
-  }
-
-  /**
-   * Set up message handlers for both gateways
-   */
-  private setupMessageHandlers(): void {
-    const messageHandler = async (
-      message: IMMessage,
-      replyFn: (text: string) => Promise<void>
-    ): Promise<void> => {
-      // Persist notification target whenever we receive a message
-      this.persistNotificationTarget(message.platform);
-
-      try {
-        let response: string;
-
-        // Always use Cowork mode if handler is available
-        if (this.coworkHandler) {
-          if (this.ensureCoworkReady) {
-            await this.ensureCoworkReady();
-          }
-          console.log('[IMGatewayManager] Using Cowork mode for message processing');
-          response = await this.coworkHandler.processMessage(message);
-        } else {
-          // Fallback to regular chat handler
-          if (!this.chatHandler) {
-            this.updateChatHandler();
-          }
-
-          if (!this.chatHandler) {
-            throw new Error('Chat handler not available');
-          }
-
-          response = await this.chatHandler.processMessage(message);
-        }
-
-        await replyFn(response);
-      } catch (error: any) {
-        console.error(`[IMGatewayManager] Error processing message: ${error.message}`);
-        // Don't send "Replaced by a newer IM request" error to user, just log it
-        if (error.message === 'Replaced by a newer IM request') {
-          return;
-        }
-        // Send error message to user
-        try {
-          const errorKey = classifyErrorKey(error.message);
-          const friendlyMessage = errorKey ? t(errorKey) : error.message;
-          await replyFn(`${t('imErrorPrefix')}: ${friendlyMessage}`);
-        } catch (replyError) {
-          console.error(`[IMGatewayManager] Failed to send error reply: ${replyError}`);
-        }
-      }
-    };
-
-    this.nimGateway.setMessageCallback(messageHandler);
-  }
-
-  /**
-   * Persist the notification target for a platform after receiving a message.
-   */
-  private persistNotificationTarget(platform: Platform): void {
-    try {
-      let target: any = null;
-      if (platform === 'nim') {
-        target = this.nimGateway.getNotificationTarget();
-      }
-      // WeCom runs via OpenClaw; notification target not managed locally
-      // Weixin runs via OpenClaw; notification target not managed locally
-      // POPO runs via OpenClaw; notification target not managed locally
-      if (target != null) {
-        this.imStore.setNotificationTarget(platform, target);
-      }
-    } catch (err: any) {
-      console.warn(`[IMGatewayManager] Failed to persist notification target for ${platform}:`, err.message);
-    }
-  }
-
-  /**
-   * Restore notification target from SQLite after gateway starts.
-   */
-  private restoreNotificationTarget(platform: Platform): void {
-    try {
-      const target = this.imStore.getNotificationTarget(platform);
-      if (target == null) return;
-
-      if (platform === 'nim') {
-        this.nimGateway.setNotificationTarget(target);
-      }
-      // WeCom runs via OpenClaw; notification target not managed locally
-      // Weixin runs via OpenClaw; notification target not managed locally
-      // POPO runs via OpenClaw; notification target not managed locally
-      console.log(`[IMGatewayManager] Restored notification target for ${platform}`);
-    } catch (err: any) {
-      console.warn(`[IMGatewayManager] Failed to restore notification target for ${platform}:`, err.message);
-    }
   }
 
   /**
@@ -974,9 +872,6 @@ export class IMGatewayManager extends EventEmitter {
       await this.ensureOpenClawGatewayConnected?.();
       return;
     }
-
-    // Restore persisted notification target
-    this.restoreNotificationTarget(platform);
   }
 
   async stopGateway(platform: Platform): Promise<void> {

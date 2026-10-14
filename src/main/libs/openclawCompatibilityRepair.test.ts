@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, expect, test, vi } from 'vitest';
 
-import { OPENCLAW_REPAIR_ENTRY, OPENCLAW_REPAIR_RESULT_PREFIX, OpenClawRepairPhase, OpenClawRepairStage } from '../../shared/openclawEngine/repair';
+import { OPENCLAW_REPAIR_ENTRY, OPENCLAW_REPAIR_RESULT_PREFIX, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST, OpenClawRepairPhase, OpenClawRepairStage } from '../../shared/openclawEngine/repair';
 import { OPENCLAW_STARTUP_COMPATIBILITY_ENTRY, OPENCLAW_STARTUP_COMPATIBILITY_RESULT_PREFIX, OpenClawStartupCompatibilityMode } from '../../shared/openclawEngine/startupCompatibility';
 import { OpenClawStartupMigrationStatus } from '../../shared/openclawEngine/startupMigration';
 import { createOpenClawRepairBackupDirectory, OPENCLAW_DOCTOR_REPAIR_ARGS, runOpenClawCompatibilityRepair, runOpenClawDoctorRepair } from './openclawCompatibilityRepair';
@@ -18,11 +18,22 @@ function fixture() {
   fs.mkdirSync(runtimeRoot);
   fs.writeFileSync(path.join(runtimeRoot, OPENCLAW_REPAIR_ENTRY), '');
   fs.writeFileSync(path.join(runtimeRoot, OPENCLAW_STARTUP_COMPATIBILITY_ENTRY), '');
-  return {
+  const params = {
     runtimeRoot, stateDir: path.join(base, 'state'), configPath: path.join(base, 'state', 'openclaw.json'),
     electronNodeRuntimePath: '/bundled/electron', backupDir: createOpenClawRepairBackupDirectory(base),
     env: { NODE_OPTIONS: '--require untrusted', NODE_PATH: '/external', OPENCLAW_STATE_DIR: '/other-profile', PATH: '/bundled/shims' },
   };
+  completeSnapshot(params);
+  return params;
+}
+
+function completeSnapshot(params: { stateDir: string; backupDir: string }) {
+  fs.mkdirSync(params.stateDir, { recursive: true });
+  fs.cpSync(params.stateDir, path.join(params.backupDir, 'original'), { recursive: true });
+  fs.writeFileSync(path.join(params.backupDir, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST), JSON.stringify({ version: 1 }));
+  fs.writeFileSync(path.join(params.backupDir, `${OpenClawRepairPhase.Snapshot}-report.json`), JSON.stringify({
+    phase: OpenClawRepairPhase.Snapshot, success: true,
+  }));
 }
 afterEach(() => {
   for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
@@ -30,13 +41,15 @@ afterEach(() => {
 
 test('Doctor uses the controlled runtime, safe flags and externally managed service policy', async () => {
   const params = fixture();
+  const env = { ...params.env, OPENCLAW_GATEWAY_TOKEN: 'profile-gateway-token' };
   const runner = vi.fn<StartupMigrationRunner>().mockResolvedValueOnce(startupResult())
     .mockResolvedValueOnce({ code: 1, stdout: 'partial repair', stderr: 'remaining orphan vectors' });
-  expect(await runOpenClawDoctorRepair({ ...params, runner })).toEqual({ code: 1 });
+  expect(await runOpenClawDoctorRepair({ ...params, env, runner })).toEqual({ code: 1 });
   expect(runner).toHaveBeenCalledWith('/bundled/electron', [path.join(params.runtimeRoot, 'openclaw.mjs'), ...OPENCLAW_DOCTOR_REPAIR_ARGS], expect.objectContaining({
     env: {
       PATH: '/bundled/shims', OPENCLAW_HOME: path.dirname(params.stateDir), OPENCLAW_STATE_DIR: params.stateDir,
       OPENCLAW_CONFIG_PATH: params.configPath, ELECTRON_RUN_AS_NODE: '1', OPENCLAW_SERVICE_REPAIR_POLICY: 'external',
+      OPENCLAW_GATEWAY_TOKEN: 'profile-gateway-token',
     },
   }));
   expect(fs.readFileSync(path.join(params.backupDir, 'doctor.log'), 'utf8')).toContain('remaining orphan vectors');
@@ -75,10 +88,11 @@ test('snapshot failure preserves its phase and source path for the UI', async ()
 
 test('an interrupted Doctor retains its own stage', async () => {
   const params = fixture();
+  const interruption = Object.assign(new Error('Doctor process timed out'), { killed: true, signal: 'SIGTERM' });
   const runner = vi.fn<StartupMigrationRunner>().mockResolvedValueOnce(startupResult())
-    .mockRejectedValueOnce(new Error('Doctor process timed out'));
+    .mockRejectedValueOnce(interruption);
   await expect(runOpenClawDoctorRepair({ ...params, runner }))
-    .rejects.toMatchObject({ stage: OpenClawRepairStage.Doctor, message: 'Doctor process timed out' });
+    .rejects.toMatchObject({ stage: OpenClawRepairStage.Doctor, message: 'Doctor process timed out', cause: interruption });
 });
 
 test('backup directories do not collide on repeated repair requests', () => {
@@ -105,8 +119,8 @@ function recoveryResult(error?: string) {
 
 test.each([false, true])('discovery is migrated before Doctor can remove its source, with binding drift=%s', async (bindingDrift) => {
   const params = fixture();
-  fs.mkdirSync(params.stateDir);
   fs.writeFileSync(params.configPath, JSON.stringify({ plugins: { bundledDiscovery: 'compat' } }));
+  completeSnapshot(params);
   const runner = vi.fn<StartupMigrationRunner>();
   if (bindingDrift) runner.mockResolvedValueOnce(startupResult(bindingFailure(params.stateDir)))
     .mockResolvedValueOnce(startupResult());
@@ -129,9 +143,9 @@ test.each([false, true])('discovery is migrated before Doctor can remove its sou
 
 test('unverified discovery migration keeps its config source and does not run Doctor', async () => {
   const params = fixture();
-  fs.mkdirSync(params.stateDir);
   const original = JSON.stringify({ plugins: { bundledDiscovery: 'unsupported' } });
   fs.writeFileSync(params.configPath, original);
+  completeSnapshot(params);
   const runner = vi.fn<StartupMigrationRunner>().mockResolvedValue(startupResult('Unsupported discovery mode'));
 
   await expect(runOpenClawDoctorRepair({ ...params, runner })).rejects.toThrow('Unsupported discovery mode');
@@ -147,6 +161,42 @@ test('a schema migration failure stops Doctor even without legacy discovery conf
   await expect(runOpenClawDoctorRepair({ ...params, runner })).rejects.toThrow('Shared-state snapshot failed');
   expect(runner).toHaveBeenCalledTimes(1);
   expect(fs.existsSync(path.join(params.backupDir, 'doctor-result.json'))).toBe(false);
+});
+
+test('cleans retired keys after backup and before compatibility migration, preserving migration-owned fields', async () => {
+  const params = fixture();
+  fs.writeFileSync(path.join(params.runtimeRoot, 'openclaw.mjs'), '');
+  const plugins = { installs: { demo: { source: 'npm', spec: 'demo@1.0.0' } }, bundledDiscovery: 'compat' };
+  const original = { gateway: { reload: { mode: 'hot' } }, session: { maintenance: { rotateBytes: 1000 } }, plugins };
+  fs.writeFileSync(params.configPath, JSON.stringify(original));
+  completeSnapshot(params);
+  const runner = vi.fn<StartupMigrationRunner>().mockImplementation(async (_command, args) => {
+    const current = JSON.parse(fs.readFileSync(params.configPath, 'utf8'));
+    if (args.includes('validate')) return { code: 1, stderr: '', stdout: JSON.stringify({ valid: false, issues: [
+      { path: 'session.maintenance', message: 'Unrecognized key: "rotateBytes"' },
+      { path: 'plugins', message: 'Unrecognized keys: "installs", "bundledDiscovery"' },
+    ] }) };
+    expect(current.session.maintenance).not.toHaveProperty('rotateBytes');
+    expect(current.plugins).toEqual(plugins);
+    if (args.includes(OpenClawStartupCompatibilityMode.PrepareStartup)) return startupResult();
+    return { code: 0, stdout: '', stderr: '' };
+  });
+
+  await runOpenClawDoctorRepair({ ...params, runner });
+
+  expect(runner.mock.calls.map(([, args]) => args.slice(1))).toEqual([
+    ['config', 'validate', '--json'], ['config', 'validate', '--json'],
+    [OpenClawStartupCompatibilityMode.PrepareStartup], [...OPENCLAW_DOCTOR_REPAIR_ARGS],
+  ]);
+  expect(JSON.parse(fs.readFileSync(path.join(params.backupDir, 'original', 'openclaw.json'), 'utf8'))).toEqual(original);
+});
+
+test('an incomplete snapshot stops repair before config validation or Doctor', async () => {
+  const params = fixture();
+  fs.unlinkSync(path.join(params.backupDir, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST));
+  const runner = vi.fn<StartupMigrationRunner>();
+  await expect(runOpenClawDoctorRepair({ ...params, runner })).rejects.toMatchObject({ stage: OpenClawRepairStage.Preparation });
+  expect(runner).not.toHaveBeenCalled();
 });
 
 test('full recovery repairs recognized binding drift and re-verifies before reporting success', async () => {

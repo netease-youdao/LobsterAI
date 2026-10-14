@@ -42,8 +42,6 @@ const SubagentSpawnCard: React.FC<{
                 value={agentIcon}
                 className="h-8 w-8 bg-primary/10"
                 iconClassName="h-4 w-4"
-                legacyClassName="text-base"
-                useDefaultWhenEmpty={false}
               />
             ) : (
               <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">

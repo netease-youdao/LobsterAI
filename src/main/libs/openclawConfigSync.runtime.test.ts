@@ -15,6 +15,8 @@ import { OpenClawSkillReviewMode } from '../../shared/openclawEngine/constants';
 import { OpenClawProviderId, ProviderName } from '../../shared/providers';
 import { DEFAULT_DISCORD_OPENCLAW_CONFIG, DEFAULT_QQ_CONFIG, DiscordDmPolicy } from '../im/types';
 import { OpenClawAgentOwnership } from './openclawAgentModels';
+import { OPENCLAW_MEMORY_CORE_PLUGIN_ID } from './openclawConfigSync';
+import { persistOpenClawConfigTarget } from './openclawConfigTarget';
 import { OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
 
 vi.mock('electron', () => ({
@@ -217,6 +219,263 @@ describe('OpenClawConfigSync runtime config output', () => {
     } as never);
   };
 
+  test('prepares a changed proxy config without publishing it to the live watcher', async () => {
+    const sync = await createSync();
+    expect(sync.sync('bootstrap')).toMatchObject({ ok: true });
+    const original = fs.readFileSync(configPath, 'utf8');
+    mockRuntimeState.proxyPort = 4121;
+    mockRuntimeState.serverModels = [{ modelId: 'deepseek-flash', provider: 'deepseek', apiFormat: 'openai-completions' }];
+    const prepared = sync.prepare('proxy-rebound');
+    expect(prepared).toMatchObject({ ok: true, changed: true });
+    expect(prepared.target?.raw).toContain('4121');
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(original);
+  });
+
+  test('enables channel scheduling without promoting IM senders to global owners', async () => {
+    fs.writeFileSync(configPath, JSON.stringify({
+      commands: { ownerAllowFrom: ['gateway-client', '*'] },
+      cron: { enabled: true },
+    }));
+    const sync = await createSync();
+    expect(sync.sync('upgrade-channel-scheduling')).toMatchObject({ ok: true, changed: true });
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.commands.ownerAllowFrom).toEqual(['gateway-client']);
+    expect(config.cron).toMatchObject({ enabled: true, allowChannelScheduling: true });
+    expect(sync.sync('repeat-channel-scheduling')).toMatchObject({ ok: true, changed: false });
+  });
+
+  describe('managed model policy', () => {
+    beforeEach(() => {
+      mockRuntimeState.enabledProviders = [{
+        providerName: ProviderName.OpenAI,
+        baseURL: 'https://api.openai.com/v1',
+        apiKey: 'fixture-key',
+        apiType: 'openai',
+        codingPlanEnabled: false,
+        models: [
+          { id: 'gpt-test', name: 'GPT Test', customParams: { temperature: 0.4 } },
+          { id: 'gpt-second', name: 'GPT Second' },
+        ],
+      }];
+    });
+
+    // Match the policy and marker materialized by OpenClaw v2026.8.1 config writes.
+    const writeGatewayModelPolicy = (policy?: Record<string, unknown>) => {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      config.agents.defaults.modelPolicy = policy ?? { allow: Object.keys(config.agents.defaults.models) };
+      config.meta = { lastTouchedVersion: '2026.8.1', migrations: { modelPolicyAllowlist: true } };
+      fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+      return config;
+    };
+
+    test('stays unchanged after gateway policy normalization on repeated syncs', async () => {
+      const sync = await createSync();
+      expect(sync.sync('initial-model-policy')).toMatchObject({ ok: true, changed: true });
+      for (let iteration = 0; iteration < 2; iteration += 1) {
+        writeGatewayModelPolicy();
+        const before = fs.readFileSync(configPath, 'utf8');
+        const resync = iteration === 0 ? sync : await createSync();
+        expect(resync.sync('skills-changed')).toMatchObject({ ok: true, changed: false });
+        expect(fs.readFileSync(configPath, 'utf8')).toBe(before);
+      }
+    });
+
+    test('updates a migrated managed allowlist when models and the default model change', async () => {
+      const sync = await createSync();
+      sync.sync('initial-model-policy');
+      writeGatewayModelPolicy();
+      const provider = mockRuntimeState.enabledProviders[0];
+      provider.models.push({ id: 'gpt-next', name: 'GPT Next', customParams: { temperature: 0.5 } });
+
+      expect(sync.sync('model-added')).toMatchObject({ ok: true, changed: true });
+      const added = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      expect(added.agents.defaults.modelPolicy).toEqual({
+        allow: ['openai/gpt-test', 'openai/gpt-second', 'openai/gpt-next'],
+      });
+      expect(sync.sync('unchanged-models')).toMatchObject({ ok: true, changed: false });
+
+      provider.models = provider.models.filter(model => model.id !== 'gpt-test');
+      mockRuntimeState.rawApiConfig.config!.model = 'gpt-next';
+      expect(sync.sync('default-model-replaced')).toMatchObject({ ok: true, changed: true });
+      const removed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      expect(removed.agents.defaults.model.primary).toBe('openai/gpt-next');
+      expect(removed.agents.defaults.modelPolicy).toEqual({ allow: ['openai/gpt-second', 'openai/gpt-next'] });
+      expect(removed.meta.migrations.modelPolicyAllowlist).toBe(true);
+      expect(sync.sync('unchanged-models')).toMatchObject({ ok: true, changed: false });
+    });
+
+    test('does not rewrite model metadata reordered by a gateway config write', async () => {
+      const sync = await createSync();
+      sync.sync('initial-model-policy');
+      const config = writeGatewayModelPolicy();
+      config.agents.defaults.models = Object.fromEntries(
+        Object.entries(config.agents.defaults.models).reverse(),
+      );
+      fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+      const before = fs.readFileSync(configPath, 'utf8');
+
+      expect(sync.sync('skills-changed')).toMatchObject({ ok: true, changed: false });
+      expect(fs.readFileSync(configPath, 'utf8')).toBe(before);
+    });
+
+    test('keeps a spaced legacy model ID readable and converges after repairing an already generated policy', async () => {
+      const provider = mockRuntimeState.enabledProviders[0];
+      provider.models.push({ id: 'DeepSeek V4 Pro', name: 'DeepSeek V4 Pro' });
+      const sync = await createSync();
+      expect(sync.sync('legacy-model-upgrade')).toMatchObject({ ok: true, changed: true });
+      const legacy = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      expect(legacy.agents.defaults.models['openai/DeepSeek V4 Pro']).toEqual({});
+      expect(legacy.agents.defaults.modelPolicy).toBeUndefined();
+      expect(legacy.meta?.migrations?.modelPolicyAllowlist).toBeUndefined();
+      expect(sync.sync('skills-changed')).toMatchObject({ ok: true, changed: false });
+
+      // Reproduce the invalid full allowlist emitted by PR #2742.
+      writeGatewayModelPolicy();
+      const restarted = await createSync();
+      expect(restarted.sync('recover-invalid-policy')).toMatchObject({ ok: true, changed: true });
+      const repaired = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      expect(repaired.agents.defaults.models).toEqual(legacy.agents.defaults.models);
+      expect(repaired.agents.defaults.modelPolicy).toBeUndefined();
+      expect(repaired.meta?.migrations?.modelPolicyAllowlist).toBeUndefined();
+      expect(restarted.sync('skills-changed')).toMatchObject({ ok: true, changed: false });
+
+      provider.models.at(-1)!.id = 'deepseek-v4-pro';
+      expect(restarted.sync('model-id-corrected')).toMatchObject({ ok: true, changed: true });
+      const corrected = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      expect(corrected.agents.defaults.modelPolicy.allow).toContain('openai/deepseek-v4-pro');
+      expect(corrected.meta.migrations.modelPolicyAllowlist).toBe(true);
+      expect(restarted.sync('skills-changed')).toMatchObject({ ok: true, changed: false });
+    });
+
+    test('repairs an invalid generated policy even before provider credentials become available', async () => {
+      mockRuntimeState.enabledProviders[0].models.push({ id: 'DeepSeek V4 Pro', name: 'DeepSeek V4 Pro' });
+      const sync = await createSync();
+      sync.sync('initial-model-policy');
+      const corrupted = writeGatewayModelPolicy();
+      const apiConfig = mockRuntimeState.rawApiConfig.config;
+      mockRuntimeState.rawApiConfig.config = null;
+
+      expect(sync.sync('credentials-unavailable')).toMatchObject({ ok: true, changed: true });
+      const repaired = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      expect(repaired.models).toBeUndefined();
+      expect(repaired.agents.defaults.models).toEqual(corrupted.agents.defaults.models);
+      expect(repaired.agents.defaults.modelPolicy).toBeUndefined();
+      expect(repaired.meta?.migrations?.modelPolicyAllowlist).toBeUndefined();
+      expect(sync.sync('still-unavailable')).toMatchObject({ ok: true, changed: false });
+
+      mockRuntimeState.rawApiConfig.config = apiConfig;
+      expect(sync.sync('credentials-restored')).toMatchObject({ ok: true, changed: true });
+      expect(sync.sync('skills-changed')).toMatchObject({ ok: true, changed: false });
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).agents.defaults.modelPolicy).toBeUndefined();
+    });
+
+    test('still delivers changes to array values in model parameters', async () => {
+      const model = mockRuntimeState.enabledProviders[0].models[0];
+      model.customParams = { stop: ['first', 'second'] };
+      const sync = await createSync();
+      sync.sync('initial-model-policy');
+      model.customParams = { stop: ['second', 'first'] };
+
+      expect(sync.sync('array-order-changed')).toMatchObject({ ok: true, changed: true });
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      expect(config.agents.defaults.models['openai/gpt-test'].params.extra_body.stop).toEqual(['second', 'first']);
+      expect(sync.sync('unchanged-models')).toMatchObject({ ok: true, changed: false });
+    });
+
+    test.each([
+      { allow: ['openai/gpt-test'] },
+      { allow: [] },
+      { allow: ['openai/*'] },
+      {},
+    ])('preserves an authored policy %j when the managed model catalog changes', async (policy) => {
+      const sync = await createSync();
+      sync.sync('initial-model-policy');
+      writeGatewayModelPolicy(policy);
+      mockRuntimeState.enabledProviders[0].models.push({ id: 'gpt-next', name: 'GPT Next' });
+
+      expect(sync.sync('model-added')).toMatchObject({ ok: true, changed: true });
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      expect(config.agents.defaults.modelPolicy).toEqual(policy);
+      expect(sync.sync('unchanged-models')).toMatchObject({ ok: true, changed: false });
+    });
+
+    test('keeps a migrated metadata-only model map unrestricted', async () => {
+      const sync = await createSync();
+      sync.sync('initial-model-policy');
+      const config = writeGatewayModelPolicy();
+      delete config.agents.defaults.modelPolicy;
+      fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+      expect(sync.sync('skills-changed')).toMatchObject({ ok: true, changed: false });
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).agents.defaults.modelPolicy).toBeUndefined();
+    });
+
+    test('preserves policy and migration metadata during logout and model recovery', async () => {
+      const sync = await createSync();
+      sync.sync('initial-model-policy');
+      const configured = writeGatewayModelPolicy();
+      const apiConfig = mockRuntimeState.rawApiConfig.config;
+      mockRuntimeState.rawApiConfig.config = null;
+
+      expect(sync.sync('logout')).toMatchObject({ ok: true, changed: true });
+      const minimal = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      expect(minimal.models).toBeUndefined();
+      expect(minimal.agents.defaults.modelPolicy).toEqual(configured.agents.defaults.modelPolicy);
+      expect(minimal.meta.migrations).toEqual({ modelPolicyAllowlist: true });
+      expect(sync.sync('still-logged-out')).toMatchObject({ ok: true, changed: false });
+
+      mockRuntimeState.rawApiConfig.config = apiConfig;
+      expect(sync.sync('model-recovered')).toMatchObject({ ok: true, changed: true });
+      const recovered = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      expect(recovered.agents.defaults.modelPolicy).toEqual(configured.agents.defaults.modelPolicy);
+      expect(recovered.meta.migrations).toEqual({ modelPolicyAllowlist: true });
+      expect(sync.sync('unchanged-models')).toMatchObject({ ok: true, changed: false });
+    });
+
+    test('repairs a missing migration marker but ignores write-version metadata', async () => {
+      const sync = await createSync();
+      sync.sync('initial-model-policy');
+      const config = writeGatewayModelPolicy();
+      delete config.meta.migrations;
+      fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+      expect(sync.sync('missing-migration-marker')).toMatchObject({ ok: true, changed: true });
+      const repaired = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      expect(repaired.agents.defaults.modelPolicy).toEqual(config.agents.defaults.modelPolicy);
+      expect(repaired.meta.migrations).toEqual({ modelPolicyAllowlist: true });
+      repaired.meta.lastTouchedVersion = '2026.8.1';
+      fs.writeFileSync(configPath, `${JSON.stringify(repaired, null, 2)}\n`);
+      const before = fs.readFileSync(configPath, 'utf8');
+      expect(sync.sync('only-write-version-changed')).toMatchObject({ ok: true, changed: false });
+      expect(fs.readFileSync(configPath, 'utf8')).toBe(before);
+    });
+
+    test('does not restrict models when no legacy model defaults are generated', async () => {
+      mockRuntimeState.enabledProviders[0].models[0].customParams = undefined;
+      const sync = await createSync();
+      sync.sync('no-model-defaults');
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      expect(config.agents.defaults.models).toBeUndefined();
+      expect(config.agents.defaults.modelPolicy).toBeUndefined();
+      expect(config.meta.migrations).toEqual({ modelPolicyAllowlist: true });
+      expect(sync.sync('unchanged-models')).toMatchObject({ ok: true, changed: false });
+    });
+
+    test('removes an automatic allowlist when its legacy model map is no longer generated', async () => {
+      const sync = await createSync();
+      sync.sync('initial-model-policy');
+      writeGatewayModelPolicy();
+      mockRuntimeState.enabledProviders[0].models[0].customParams = undefined;
+
+      expect(sync.sync('custom-params-removed')).toMatchObject({ ok: true, changed: true });
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      expect(config.agents.defaults.models).toBeUndefined();
+      expect(config.agents.defaults.modelPolicy).toBeUndefined();
+      expect(config.meta.migrations).toEqual({ modelPolicyAllowlist: true });
+      expect(sync.sync('unchanged-models')).toMatchObject({ ok: true, changed: false });
+    });
+  });
+
   test('preserves IM, routing, and gateway auth while models are unavailable and after recovery', async () => {
     const sync = await createSync({
       getAgents: () => ['main', 'worker'].map(id => ({
@@ -265,12 +524,33 @@ describe('OpenClawConfigSync runtime config output', () => {
     const sync = await createSync();
     expect(sync.sync('first-start')).toMatchObject({ ok: true, changed: true });
     const { meta: _meta, ...config } = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(_meta?.migrations?.modelPolicyAllowlist).toBeUndefined();
     expect(config).toEqual({
       gateway: { mode: 'local' },
+      plugins: { allow: [OPENCLAW_MEMORY_CORE_PLUGIN_ID] },
       skills: { workshop: { autonomous: { mode: OpenClawSkillReviewMode.Off } } },
       agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
     });
     expect(sync.sync('repeat-start')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test('adds the first-start plugin allowlist to an existing minimal config', async () => {
+    fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: 'local' } }));
+    const apiConfig = mockRuntimeState.rawApiConfig.config;
+    mockRuntimeState.rawApiConfig.config = null;
+    const sync = await createSync();
+
+    expect(sync.sync('no-model')).toMatchObject({ ok: true, changed: true });
+    const minimal = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(minimal.plugins).toEqual({ allow: [OPENCLAW_MEMORY_CORE_PLUGIN_ID] });
+    expect(sync.sync('repeat-start')).toMatchObject({ ok: true, changed: false });
+
+    mockRuntimeState.rawApiConfig.config = apiConfig;
+    expect(sync.sync('model-configured')).toMatchObject({ ok: true, changed: true });
+    const configured = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(configured.plugins.allow).toContain(OPENCLAW_MEMORY_CORE_PLUGIN_ID);
+    expect(configured.plugins.allow).toContain(OpenClawQQPlugin.Id);
+    expect(configured.models.providers).not.toEqual({});
   });
 
   test('still removes plugin-index-managed installs when no model is available', async () => {
@@ -712,6 +992,32 @@ describe('OpenClawConfigSync runtime config output', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.models.pricing).toBeUndefined();
     expect(config.meta.lastTouchedAt).toBeUndefined();
+  });
+
+  test.each([
+    { models: 'signed in', hasApiConfig: true },
+    { models: 'no model yet', hasApiConfig: false },
+  ])('drops the retired meta stamp of a pre-v2026.8.1 config at startup ($models)', async ({ hasApiConfig }) => {
+    // LobsterAI 2026.9.4 (OpenClaw v2026.6.1) stamped both fields on every config write.
+    const legacyMeta = { lastTouchedVersion: '2026.6.1', lastTouchedAt: '2026-10-10T08:14:13.654Z' };
+    fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: 'local' }, meta: legacyMeta }, null, 2));
+    if (!hasApiConfig) mockRuntimeState.rawApiConfig.config = null;
+    const sync = await createSync();
+
+    // Startup only prepares; the stopped-gateway bootstrap persists the target.
+    const startup = sync.prepare('startup');
+    expect(startup.ok).toBe(true);
+    persistOpenClawConfigTarget(configPath, startup.target!);
+    const upgraded = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(upgraded.meta).not.toHaveProperty('lastTouchedAt');
+    expect(upgraded.meta.lastTouchedVersion).toBe('2026.6.1');
+
+    // A config that a build without this fix already rewrote heals on the next start.
+    fs.writeFileSync(configPath, JSON.stringify({ ...upgraded, meta: { ...upgraded.meta, ...legacyMeta } }, null, 2));
+    const relaunch = sync.prepare('startup');
+    expect(relaunch).toMatchObject({ ok: true, changed: false });
+    persistOpenClawConfigTarget(configPath, relaunch.target!);
+    expect(JSON.parse(fs.readFileSync(configPath, 'utf8'))).toEqual(upgraded);
   });
 
   test.runIf(fs.existsSync(path.resolve('vendor/openclaw-runtime/current/openclaw.mjs'))).each([false, true])(
@@ -1666,6 +1972,25 @@ describe('OpenClawConfigSync runtime config output', () => {
     }));
   });
 
+  test('keeps the plan provider without a placeholder model while the plan catalog is empty', async () => {
+    mockRuntimeState.proxyPort = 56646;
+    mockRuntimeState.serverModels = [];
+
+    const sync = await createSync();
+    expect(sync.sync('signed-out-custom-primary')).toMatchObject({ ok: true });
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    // Agents bound to plan models still route to the token proxy.
+    expect(config.models.providers['lobsterai-server']).toMatchObject({
+      baseUrl: 'http://127.0.0.1:56646/v1',
+      models: [],
+    });
+    // No plan model borrows the custom primary's ID (openai/gpt-test).
+    expect(Object.keys(config.agents.defaults.models ?? {}).filter(ref => ref.startsWith('lobsterai-server/')))
+      .toEqual([]);
+    expect(JSON.stringify(config.agents.defaults.modelPolicy ?? {})).not.toContain('lobsterai-server/');
+  });
+
   test('writes explicit cache params for Anthropic, Qwen, and custom providers', async () => {
     const { ProviderName } = await import('../../shared/providers');
 
@@ -2000,7 +2325,7 @@ describe('OpenClawConfigSync runtime config output', () => {
       reasoning: true,
       input: ['text', 'image', 'video'],
       contextWindow: 1_048_576,
-      maxTokens: 8192,
+      maxTokens: 1_048_576,
       thinkingLevelMap: {
         off: null,
         minimal: 'max',
@@ -2023,7 +2348,7 @@ describe('OpenClawConfigSync runtime config output', () => {
       reasoning: true,
       input: ['text', 'image', 'video'],
       contextWindow: 1_048_576,
-      maxTokens: 8192,
+      maxTokens: 1_048_576,
     });
     expect(config.agents.defaults.models['custom_0/kimi-k3']).toEqual({
       params: {
@@ -2433,6 +2758,17 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.tools.deny).not.toContain('video_generate');
   });
 
+  test('hides OpenClaw tools that need a paired node', async () => {
+    const sync = await createSync();
+
+    const result = sync.sync('paired-node-tools');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    // LobsterAI pairs no OpenClaw node; desktop control goes through the Computer Use kit.
+    expect(config.tools.deny).toEqual(expect.arrayContaining(['web_search', 'computer', 'nodes', 'mobile_ui']));
+  });
+
   test('keeps media generation plugin configured without media entitlement', async () => {
     const sync = await createSync({
       canUseMediaGeneration: () => false,
@@ -2453,6 +2789,39 @@ describe('OpenClawConfigSync runtime config output', () => {
     });
     expect(config.tools.deny).not.toContain('image_generate');
     expect(config.tools.deny).not.toContain('video_generate');
+  });
+
+  test('keeps the experimental decision model plugin disabled until it is active', async () => {
+    const sync = await createSync({
+      isDecisionModelActive: () => false,
+      getDecisionCallbackUrl: () => 'http://127.0.0.1:5175/decision/tool',
+    });
+
+    const result = sync.sync('decision-model-inactive');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries['lobster-decision']).toEqual({ enabled: false });
+  });
+
+  test('enables the decision model plugin with a bridge callback and no API key', async () => {
+    const sync = await createSync({
+      isDecisionModelActive: () => true,
+      getDecisionCallbackUrl: () => 'http://127.0.0.1:5175/decision/tool',
+    });
+
+    const result = sync.sync('decision-model-active');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries['lobster-decision']).toEqual({
+      enabled: true,
+      config: {
+        callbackUrl: 'http://127.0.0.1:5175/decision/tool',
+        secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
+        requestTimeoutMs: 45000,
+      },
+    });
   });
 
   test.each([
@@ -3597,6 +3966,56 @@ describe('OpenClawConfigSync runtime config output', () => {
     });
   });
 
+  test('registers the LobsterAI Office editor tools as native MCP servers', async () => {
+    const { OpenClawConfigSync } = await import('./openclawConfigSync');
+    const { OFFICE_EDITORS } = await import('../../shared/office/editors');
+    const launch = (server: string) => ({
+      command: '/Applications/LobsterAI.app/Contents/MacOS/LobsterAI',
+      args: [`/state/generated/${server}-mcp/${server}-mcp-server.mjs`],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    });
+    const serverNames = OFFICE_EDITORS.map(editor => editor.agent.serverName);
+    // An editor whose bridge is down is simply missing from the servers it reports.
+    let available = serverNames;
+    const sync = new OpenClawConfigSync({
+      engineManager: {
+        getConfigPath: () => configPath,
+        getGatewayToken: () => 'gateway-token',
+        getStateDir: () => stateDir,
+        getBaseDir: () => tmpDir,
+      } as never,
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: '',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        memoryEnabled: false,
+        memoryImplicitUpdateEnabled: false,
+        memoryLlmJudgeEnabled: false,
+        memoryGuardLevel: 'balanced',
+        memoryUserMemoriesMaxItems: 100,
+        skipMissedJobs: false,
+      }),
+      getOfficeMcpServers: () => Object.fromEntries(available.map(server => [server, launch(server)])),
+      isEnterprise: () => false,
+      getPopoInstances: () => [],
+      getNeteaseBeeChanConfig: () => null,
+      getWeixinConfig: () => null,
+      getIMSettings: () => null,
+      getSkillsList: () => [],
+      getAgents: () => [],
+    } as never);
+    expect(sync.sync('office-editor-tools').ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    for (const server of serverNames) expect(config.mcp.servers[server]).toEqual(launch(server));
+
+    available = serverNames.slice(1);
+    expect(sync.sync('office-editor-tools-partly-unavailable').ok).toBe(true);
+    const withoutBridge = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(withoutBridge.mcp.servers[serverNames[0]]).toBeUndefined();
+    for (const server of available) expect(withoutBridge.mcp.servers[server]).toEqual(launch(server));
+  });
+
   test('writes browser and web fetch access settings', async () => {
     const { setSystemProxyEnabled } = await import('./systemProxy');
     const {
@@ -3860,6 +4279,39 @@ describe('OpenClawConfigSync runtime config output', () => {
         'x-client-id': 'client-456',
       },
     });
+  });
+
+  test('passes toolFilter and supportsParallelToolCalls through to mcp.servers', async () => {
+    const sync = await createSync({
+      getResolvedMcpServers: () => [
+        {
+          name: 'docs-server',
+          transportType: 'http',
+          url: 'https://mcp.example.com/mcp',
+          toolFilter: { include: ['doc.get', 'sheet.*', '', '  '] },
+          supportsParallelToolCalls: true,
+        },
+        {
+          name: 'plain-tools',
+          transportType: 'stdio',
+          command: 'node',
+          args: ['server.js'],
+          // An empty filter means "not configured" and must not emit toolFilter.
+          toolFilter: { include: [], exclude: [] },
+        },
+      ],
+    });
+
+    const result = sync.sync('mcp-passthrough');
+
+    expect(result.ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.mcp.servers['docs-server'].toolFilter).toEqual({
+      include: ['doc.get', 'sheet.*'],
+    });
+    expect(config.mcp.servers['docs-server'].supportsParallelToolCalls).toBe(true);
+    expect(config.mcp.servers['plain-tools']).not.toHaveProperty('toolFilter');
+    expect(config.mcp.servers['plain-tools']).not.toHaveProperty('supportsParallelToolCalls');
   });
 });
 

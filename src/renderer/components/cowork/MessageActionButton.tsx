@@ -10,6 +10,7 @@ interface MessageActionButtonProps {
   onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   children: React.ReactNode;
   expanded?: boolean;
+  className?: string;
 }
 
 export const MessageActionButton: React.FC<MessageActionButtonProps> = ({
@@ -18,13 +19,14 @@ export const MessageActionButton: React.FC<MessageActionButtonProps> = ({
   onClick,
   children,
   expanded,
+  className = '',
 }) => (
   <button
     type="button"
     onClick={onClick}
     className={`rounded-md p-1.5 text-secondary transition-all duration-200 hover:bg-surface-raised hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
       visible ? 'opacity-100' : 'pointer-events-none opacity-0'
-    }`}
+    } ${className}`}
     tabIndex={visible ? 0 : -1}
     title={label}
     aria-label={label}
@@ -38,7 +40,8 @@ export const MessageCopyButton: React.FC<{
   content: string;
   onCopy?: (result: 'success' | 'failed') => void;
   visible?: boolean;
-}> = ({ content, onCopy, visible = true }) => {
+  className?: string;
+}> = ({ content, onCopy, visible = true, className }) => {
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<number | null>(null);
 
@@ -69,6 +72,7 @@ export const MessageCopyButton: React.FC<{
     <MessageActionButton
       label={i18nService.t('copyToClipboard')}
       visible={visible}
+      className={className}
       onClick={(event) => void handleCopy(event)}
     >
       {copied ? (

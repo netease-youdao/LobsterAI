@@ -371,8 +371,11 @@ describe.skipIf(!runtimeRoot)('packaged shared-state preparation', () => {
     expect(connect().prepare('PRAGMA user_version').get()?.user_version).toBe(15);
     expect(events(connect())).toEqual([{ sequence: 42, event_id: 'retained-event', run_id: 'retained-run' }]);
     migratedAgent.close();
-    await runOpenClawDoctorRepair(params);
-    await runOpenClawCompatibilityRepair({ ...params, phase: OpenClawRepairPhase.Recovery });
+    const retry = { ...params, backupDir: path.join(directory, 'manual-backup-retry') };
+    fs.mkdirSync(retry.backupDir);
+    await runOpenClawCompatibilityRepair({ ...retry, phase: OpenClawRepairPhase.Snapshot });
+    await runOpenClawDoctorRepair(retry);
+    await runOpenClawCompatibilityRepair({ ...retry, phase: OpenClawRepairPhase.Recovery });
     expect(connect(agentPath).prepare('SELECT COUNT(*) AS count FROM transcript_events').get()?.count).toBe(2);
     if (sharedVersion === 1) {
       // A successful Doctor exit alone does not prove the gateway can start,

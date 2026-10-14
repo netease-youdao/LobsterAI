@@ -152,8 +152,8 @@ describe('resolveDshWorkingDirectory', () => {
 });
 
 describe('spawn argument helpers', () => {
-  test('buildDshWebArgs produces the web invocation', () => {
-    expect(buildDshWebArgs('/rt/lib/bin.js', 31163)).toEqual(['/rt/lib/bin.js', 'web', '--port', '31163']);
+  test('buildDshWebArgs produces the web invocation without a browser handoff', () => {
+    expect(buildDshWebArgs('/rt/lib/bin.js', 31163)).toEqual(['/rt/lib/bin.js', 'web', '--port', '31163', '--no-open']);
   });
 
   test('exec argv carries the loader internals flag', () => {

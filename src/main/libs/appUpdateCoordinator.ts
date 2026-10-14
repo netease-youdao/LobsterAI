@@ -6,6 +6,7 @@ import path from 'path';
 import { LogReporterStoreKey } from '../../shared/analytics/constants';
 import {
   APP_UPDATE_FILE_INVALID_ERROR,
+  APP_UPDATE_GRAY_UNAVAILABLE_ERROR,
   APP_UPDATE_URL_UNTRUSTED_ERROR,
   type AppUpdateCheckResult,
   type AppUpdateInfo,
@@ -16,6 +17,7 @@ import {
   isManualDownloadUrl,
 } from '../../shared/appUpdate/constants';
 import type { SqliteStore } from '../sqliteStore';
+import { AppUpdateGrayClient, canReuseUpdatePackage } from './appUpdateGrayClient';
 import {
   cancelActiveDownload,
   downloadUpdate,
@@ -116,12 +118,18 @@ export class AppUpdateCoordinator {
   private activeFlowId = 0;
   private activeFlowSource: AppUpdateSource | null = null;
 
-  constructor(store: SqliteStore) {
+  constructor(store: SqliteStore, private readonly grayUpdates?: AppUpdateGrayClient) {
     this.store = store;
     this.restoreStoredReadyState();
   }
 
   getState(): AppUpdateRuntimeState {
+    if (this.state.info?.gray && !this.grayUpdates?.isCurrent(this.state.info)
+        && this.state.status !== AppUpdateStatus.Installing) {
+      if (this.state.status === AppUpdateStatus.Downloading) cancelActiveDownload();
+      this.beginFlow(this.state.source ?? AppUpdateSource.Auto, 'gray-session-changed');
+      this.resetToIdle();
+    }
     return { ...this.state };
   }
 
@@ -145,6 +153,7 @@ export class AppUpdateCoordinator {
   }
 
   async checkNow(options?: { manual?: boolean; userId?: string | null }): Promise<AppUpdateCheckResult> {
+    this.getState(); // Discard a previous account's gray flow before considering an active download.
     const targetSource = options?.manual === true ? AppUpdateSource.Manual : AppUpdateSource.Auto;
     console.log(
       `[AppUpdate] checkNow started, manual=${options?.manual === true}, status=${this.state.status}, source=${this.state.source ?? 'none'}, readyFilePath=${this.state.readyFilePath ?? 'none'}`,
@@ -204,6 +213,7 @@ export class AppUpdateCoordinator {
           previousState.readyFilePath != null &&
           previousState.readyFileHash != null &&
           previousState.info != null &&
+          !previousState.info.gray &&
           this.compareVersions(previousState.info.latestVersion, currentVersion) > 0
         ) {
           console.log(
@@ -226,7 +236,7 @@ export class AppUpdateCoordinator {
       const matchingReadyFile = await this.resolveMatchingReadyFile(
         previousState,
         targetSource,
-        info.latestVersion,
+        info,
       );
       if (!this.isFlowActive(flowId, targetSource)) {
         console.log(
@@ -236,6 +246,9 @@ export class AppUpdateCoordinator {
       }
 
       if (matchingReadyFile) {
+        if (info.gray && !this.grayUpdates?.isCurrent(info)) {
+          return { success: true, state: this.resetToIdle(), updateFound: false };
+        }
         console.log(
           `[AppUpdate] reusing ready file for version ${info.latestVersion}: ${matchingReadyFile.filePath}`,
         );
@@ -261,6 +274,11 @@ export class AppUpdateCoordinator {
       }
       this.clearStoredReadyFile(targetSource);
       await this.pruneCachedInstallerFiles(targetSource);
+
+      if (info.gray && (!this.isFlowActive(flowId, targetSource) || !this.grayUpdates?.isCurrent(info))) {
+        const state = this.isFlowActive(flowId, targetSource) ? this.resetToIdle() : this.getState();
+        return { success: true, state, updateFound: state.info !== null };
+      }
 
       if (!this.canPredownload(info.url)) {
         const state = this.setState({
@@ -289,7 +307,7 @@ export class AppUpdateCoordinator {
       }
 
       const state = await this.startDownload(info, flowId, targetSource);
-      return { success: true, state, updateFound };
+      return { success: true, state, updateFound: info.gray ? state.info !== null : updateFound };
     } catch (error) {
       if (!this.isFlowActive(flowId, targetSource)) {
         console.log(
@@ -304,6 +322,9 @@ export class AppUpdateCoordinator {
       // the update: installReadyUpdate rejects non-Ready states, so every
       // retry failed instantly until the next successful check (e.g. the
       // resume-time check that fails with ERR_NETWORK_IO_SUSPENDED).
+      if (previousState.info?.gray) {
+        return { success: false, state: this.resetToIdle(), updateFound: false, error: message };
+      }
       const keepReady =
         previousState.status === AppUpdateStatus.Ready
         && previousState.readyFilePath != null
@@ -332,6 +353,7 @@ export class AppUpdateCoordinator {
   }
 
   async retryDownload(): Promise<AppUpdateRuntimeState> {
+    this.getState();
     if (!this.state.info) {
       return this.getState();
     }
@@ -343,7 +365,13 @@ export class AppUpdateCoordinator {
     }
     const source = this.state.source ?? AppUpdateSource.Auto;
     const flowId = this.beginFlow(source, 'retry-download');
-    void this.startDownload(this.state.info, flowId, source);
+    const info = this.state.info;
+    if (info.gray) {
+      const allowed = await this.grayUpdates?.authorize(info, this.resolveCurrentVersion(), source);
+      if (!this.isFlowActive(flowId, source)) return this.getState();
+      if (!allowed) return this.resetToIdle();
+    }
+    void this.startDownload(info, flowId, source);
     return this.getState();
   }
 
@@ -352,6 +380,7 @@ export class AppUpdateCoordinator {
     state: AppUpdateRuntimeState;
     error?: string;
   }> {
+    this.getState();
     // Error with a verified ready file stays installable (defense in depth
     // for any path that lands there): the hash and the Windows URL-policy
     // receipt are re-validated below before the installer launches. Other
@@ -375,6 +404,18 @@ export class AppUpdateCoordinator {
 
     const filePath = this.state.readyFilePath;
     const readyInfo = this.state.info;
+    const checkedState = this.state;
+    if (readyInfo?.gray) {
+      const allowed = await this.grayUpdates?.authorize(
+        readyInfo, this.resolveCurrentVersion(), this.state.source ?? AppUpdateSource.Auto,
+      );
+      if (this.state !== checkedState) {
+        return { success: false, state: this.getState(), error: APP_UPDATE_GRAY_UNAVAILABLE_ERROR };
+      }
+      if (!allowed) {
+        return { success: false, state: this.resetToIdle(), error: APP_UPDATE_GRAY_UNAVAILABLE_ERROR };
+      }
+    }
     const readyFileHash = this.state.readyFileHash;
     const readyReceipt = this.getReadyWindowsInstallerReceipt({
       version: readyInfo?.latestVersion ?? '',
@@ -385,6 +426,9 @@ export class AppUpdateCoordinator {
     if (!this.isTrustedWindowsReadyInstallerInfo(readyInfo ?? undefined, readyReceipt)) {
       const source = this.state.source;
       await this.cleanupReadyFile(filePath);
+      if (readyInfo?.gray && this.state !== checkedState) {
+        return { success: false, state: this.getState(), error: APP_UPDATE_GRAY_UNAVAILABLE_ERROR };
+      }
       this.clearStoredReadyFile(source);
       this.readyWindowsInstallerTrust = null;
       const state = this.setState({
@@ -402,12 +446,16 @@ export class AppUpdateCoordinator {
         error: APP_UPDATE_URL_UNTRUSTED_ERROR,
       };
     }
-    if (
-      readyFileHash == null
-      || !(await this.isReadyFileValid(filePath, readyFileHash))
-    ) {
+    const validFile = readyFileHash != null && await this.isReadyFileValid(filePath, readyFileHash);
+    if (readyInfo?.gray && (this.state !== checkedState || !this.grayUpdates?.isCurrent(readyInfo))) {
+      return { success: false, state: this.getState(), error: APP_UPDATE_GRAY_UNAVAILABLE_ERROR };
+    }
+    if (!validFile) {
       const source = this.state.source;
       await this.cleanupReadyFile(filePath);
+      if (readyInfo?.gray && this.state !== checkedState) {
+        return { success: false, state: this.getState(), error: APP_UPDATE_GRAY_UNAVAILABLE_ERROR };
+      }
       this.clearStoredReadyFile(source);
       this.readyWindowsInstallerTrust = null;
       const message = APP_UPDATE_FILE_INVALID_ERROR;
@@ -502,6 +550,7 @@ export class AppUpdateCoordinator {
     flowId: number,
     source: AppUpdateSource,
   ): Promise<AppUpdateRuntimeState> {
+    if (info.gray && !this.grayUpdates?.isCurrent(info)) return this.resetToIdle();
     console.log(
       `[AppUpdate] startDownload requested, flowId=${flowId}, source=${source}, version=${info.latestVersion}, url=${formatUpdateUrlForLog(info.url)}`,
     );
@@ -521,6 +570,10 @@ export class AppUpdateCoordinator {
         info.url,
         source,
         progress => {
+          if (info.gray && !this.grayUpdates?.isCurrent(info)) {
+            this.getState();
+            return;
+          }
           if (!this.isFlowActive(flowId, source)) {
             console.log(
               `[AppUpdate] ignoring stale download progress, flowId=${flowId}, source=${source}, activeFlowId=${this.activeFlowId}, activeSource=${this.activeFlowSource ?? 'none'}`,
@@ -538,6 +591,10 @@ export class AppUpdateCoordinator {
         },
       );
       const filePath = download.filePath;
+      if (info.gray && !this.grayUpdates?.isCurrent(info)) {
+        await this.cleanupReadyFile(filePath);
+        return this.getState();
+      }
       if (!this.isFlowActive(flowId, source)) {
         console.log(
           `[AppUpdate] ignoring stale download completion, flowId=${flowId}, source=${source}, filePath=${filePath}`,
@@ -546,6 +603,14 @@ export class AppUpdateCoordinator {
       }
 
       const fileHash = await this.computeFileHash(filePath);
+      if (info.gray) {
+        const allowed = await this.grayUpdates?.authorize(info, this.resolveCurrentVersion(), source);
+        if (!this.isFlowActive(flowId, source)) return this.getState();
+        if (!allowed) {
+          await this.cleanupReadyFile(filePath);
+          return this.isFlowActive(flowId, source) ? this.resetToIdle() : this.getState();
+        }
+      }
       console.log(
         `[AppUpdate] download completed, flowId=${flowId}, source=${source}, version=${info.latestVersion}, filePath=${filePath}, fileHash=${fileHash}`,
       );
@@ -560,6 +625,9 @@ export class AppUpdateCoordinator {
       this.setStoredReadyFile(storedReadyFile);
       this.bindReadyWindowsInstallerTrust(storedReadyFile);
       await this.pruneCachedInstallerFiles(source, [filePath]);
+      if (info.gray && (!this.isFlowActive(flowId, source) || !this.grayUpdates?.isCurrent(info))) {
+        return this.getState();
+      }
       this.autoOpenReadyModal = true;
       return this.setState({
         status: AppUpdateStatus.Ready,
@@ -607,6 +675,17 @@ export class AppUpdateCoordinator {
   }
 
   private async fetchUpdateInfo(
+    currentVersion: string,
+    manual: boolean,
+    userId?: string | null,
+  ): Promise<AppUpdateInfo | null> {
+    const loadStable = () => this.fetchStableUpdateInfo(currentVersion, manual, userId);
+    return this.grayUpdates
+      ? this.grayUpdates.select(loadStable, currentVersion, manual ? AppUpdateSource.Manual : AppUpdateSource.Auto)
+      : loadStable();
+  }
+
+  private async fetchStableUpdateInfo(
     currentVersion: string,
     manual: boolean,
     userId?: string | null,
@@ -917,8 +996,9 @@ export class AppUpdateCoordinator {
   private async resolveMatchingReadyFile(
     previousState: AppUpdateRuntimeState,
     targetSource: AppUpdateSource,
-    latestVersion: string,
+    selected: AppUpdateInfo,
   ): Promise<StoredReadyFile | null> {
+    const latestVersion = selected.latestVersion;
     console.log(
       `[AppUpdate] resolveMatchingReadyFile started, targetSource=${targetSource}, previousStatus=${previousState.status}, previousSource=${previousState.source ?? 'none'}, previousVersion=${previousState.info?.latestVersion ?? 'none'}, latestVersion=${latestVersion}`,
     );
@@ -926,6 +1006,7 @@ export class AppUpdateCoordinator {
       previousState.source === targetSource &&
       previousState.status === AppUpdateStatus.Ready &&
       previousState.info?.latestVersion === latestVersion &&
+      canReuseUpdatePackage(previousState.info, selected) &&
       previousState.readyFilePath != null &&
       previousState.readyFileHash != null
         ? {
@@ -976,7 +1057,8 @@ export class AppUpdateCoordinator {
         : [AppUpdateSource.Auto, AppUpdateSource.Manual];
     for (const source of candidateSources) {
       const storedReadyFile = this.getStoredReadyFile(source);
-      if (!storedReadyFile || storedReadyFile.version !== latestVersion) {
+      if (!storedReadyFile || storedReadyFile.version !== latestVersion
+          || !canReuseUpdatePackage(storedReadyFile.info, selected)) {
         console.log(
           `[AppUpdate] stored ready file mismatch, source=${source}, storedVersion=${storedReadyFile?.version ?? 'none'}, latestVersion=${latestVersion}`,
         );
@@ -1067,6 +1149,14 @@ export class AppUpdateCoordinator {
     for (const source of sources) {
       const storedReadyFile = this.getStoredReadyFile(source);
       if (!storedReadyFile) {
+        continue;
+      }
+
+      // Keep legacy stable restore unchanged. Gray requires a new check after restart.
+      if (storedReadyFile.info?.gray
+          && this.compareVersions(storedReadyFile.version, this.resolveCurrentVersion()) > 0) {
+        this.clearStoredReadyFile(source);
+        void this.cleanupReadyFile(storedReadyFile.filePath);
         continue;
       }
 

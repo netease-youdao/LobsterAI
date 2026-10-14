@@ -13,6 +13,10 @@ interface OpenClawGatewaySpawnOptions {
 
 const GATEWAY_STOP_GRACE_MS = 6_000;
 const GATEWAY_STOP_FORCE_MS = 2_000;
+// Windows kernel teardown and exit notification can outlast the short POSIX
+// deadline. Keep waiting for confirmed exit before touching state or respawning.
+const WINDOWS_GATEWAY_STOP_FORCE_MS = 30_000;
+const WINDOWS_GATEWAY_EXIT_POLL_MS = 250;
 
 export const OpenClawGatewaySignal = {
   Interrupt: 'SIGINT',
@@ -58,21 +62,36 @@ export function buildOpenClawGatewayShutdownBridge(): string {
 })();\n`;
 }
 
-export function stopOpenClawGatewayProcess(child: ChildProcess): Promise<void> {
+function hasGatewayProcessExited(child: ChildProcess): boolean {
   // A signal exit has a null exitCode. A failed spawn has no PID and cannot
   // own gateway state; neither needs another termination request.
-  if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) {
-    return Promise.resolve();
+  if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return true;
+  if (process.platform === 'win32') {
+    try {
+      // Windows can finish terminating before Electron delivers the exit event.
+      // Signal 0 only probes liveness; a reused PID conservatively keeps waiting.
+      process.kill(child.pid, 0);
+    } catch (error) {
+      // Access denied and other query failures do not prove the process exited.
+      return (error as NodeJS.ErrnoException).code === 'ESRCH';
+    }
   }
+  return false;
+}
+
+export function stopOpenClawGatewayProcess(child: ChildProcess): Promise<void> {
+  if (hasGatewayProcessExited(child)) return Promise.resolve();
 
   return new Promise<void>((resolve, reject) => {
     let forceTimer: ReturnType<typeof setTimeout> | undefined;
     let exitTimer: ReturnType<typeof setTimeout> | undefined;
+    let exitPoll: ReturnType<typeof setInterval> | undefined;
     let lastError: Error | undefined;
 
     const cleanup = () => {
       clearTimeout(forceTimer);
       clearTimeout(exitTimer);
+      clearInterval(exitPoll);
       child.removeListener('exit', onExit);
       child.removeListener('error', onError);
     };
@@ -93,15 +112,22 @@ export function stopOpenClawGatewayProcess(child: ChildProcess): Promise<void> {
 
     child.once('exit', onExit);
     child.on('error', onError);
+    if (process.platform === 'win32') {
+      exitPoll = setInterval(() => {
+        if (hasGatewayProcessExited(child)) onExit();
+      }, WINDOWS_GATEWAY_EXIT_POLL_MS);
+    }
     forceTimer = setTimeout(() => {
+      if (hasGatewayProcessExited(child)) { onExit(); return; }
       console.warn(`[OpenClaw] gateway shutdown exceeded ${GATEWAY_STOP_GRACE_MS}ms; sending SIGKILL to pid=${child.pid}`);
       exitTimer = setTimeout(() => {
+        if (hasGatewayProcessExited(child)) { onExit(); return; }
         cleanup();
         reject(new Error(
           `OpenClaw gateway process ${child.pid} did not exit after SIGKILL.`
           + (lastError ? ` ${lastError.message}` : ''),
         ));
-      }, GATEWAY_STOP_FORCE_MS);
+      }, process.platform === 'win32' ? WINDOWS_GATEWAY_STOP_FORCE_MS : GATEWAY_STOP_FORCE_MS);
       sendSignal(OpenClawGatewaySignal.Kill);
     }, GATEWAY_STOP_GRACE_MS);
     if (child.connected && child.send) {

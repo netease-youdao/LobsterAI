@@ -1,0 +1,34 @@
+/* Chrome-style preview tab for the artifact header.
+   Sizing lives on the element (equal flex share, 44px floor, 190px cap). This file owns the
+   two behaviours that need real CSS:
+   1. While the tab is hovered (or its close button is keyboard-focused) the close button
+      overlays the tab's right end, so the label keeps the full width at rest and fades out
+      under the button instead of reflowing.
+   2. Once a tab is too narrow for a readable label (container query) it collapses to its
+      icon, and the close button takes the icon's place on hover, so every tab stays
+      closable without scrolling. */
+.artifact-preview-tab:is(:hover, :has(.artifact-preview-tab__close:focus-visible)) .artifact-preview-tab__activate {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 38px), transparent calc(100% - 22px));
+  mask-image: linear-gradient(to right, #000 calc(100% - 38px), transparent calc(100% - 22px));
+}
+
+@container (max-width: 63px) {
+  .artifact-preview-tab .artifact-preview-tab__label {
+    display: none;
+  }
+  .artifact-preview-tab .artifact-preview-tab__activate,
+  .artifact-preview-tab:is(:hover, :has(.artifact-preview-tab__close:focus-visible)) .artifact-preview-tab__activate {
+    justify-content: center;
+    padding-inline: 0;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .artifact-preview-tab .artifact-preview-tab__close {
+    inset: 0;
+    margin: auto;
+    transform: none;
+  }
+  .artifact-preview-tab:is(:hover, :has(.artifact-preview-tab__close:focus-visible)) .artifact-preview-tab__icon {
+    visibility: hidden;
+  }
+}

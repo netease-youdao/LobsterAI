@@ -50,7 +50,7 @@ describe('ProviderRegistry', () => {
       supportsVideo: true,
       supportsThinking: true,
       contextWindow: 1_048_576,
-      maxTokens: 8_192,
+      maxTokens: 1_048_576,
     });
   });
 
@@ -184,7 +184,7 @@ describe('ProviderRegistry', () => {
     expect(ProviderRegistry.resolveModelSupportsVideo(ProviderName.Moonshot, 'kimi-k3')).toBe(true);
     expect(ProviderRegistry.resolveModelSupportsVideo('custom_0', 'kimi-k3')).toBe(true);
     expect(ProviderRegistry.resolveModelSupportsVideo('custom_0', 'unknown-model')).toBe(false);
-    expect(ProviderRegistry.resolveModelMaxTokens(ProviderName.Moonshot, 'kimi-k3')).toBe(8_192);
+    expect(ProviderRegistry.resolveModelMaxTokens(ProviderName.Moonshot, 'kimi-k3')).toBe(1_048_576);
     expect(ProviderRegistry.resolveModelMaxTokens(ProviderName.Moonshot, 'kimi-k3', 4_096)).toBe(4_096);
   });
 

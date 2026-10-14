@@ -1,6 +1,6 @@
-import { OpenClawGatewayRepairErrorCode } from '../../shared/openclawEngine/constants';
+import { OpenClawGatewayRepairErrorCode, OpenClawLoopbackRepairOutcome } from '../../shared/openclawEngine/constants';
 import { OpenClawRepairStage } from '../../shared/openclawEngine/repair';
-import type { OpenClawGatewayRepairResult } from '../types/cowork';
+import type { OpenClawGatewayRepairResult, OpenClawLoopbackRepairResult } from '../types/cowork';
 import { i18nService } from './i18n';
 
 const stageMessages: Record<OpenClawRepairStage, string> = {
@@ -14,6 +14,11 @@ const stageMessages: Record<OpenClawRepairStage, string> = {
   [OpenClawRepairStage.Gateway]: 'openClawRepairGatewayFailed',
 };
 
+export function resolveOpenClawRepairHistoryWarning(result: OpenClawGatewayRepairResult): string | undefined {
+  const count = result.quarantinedSessionStoreCount ?? 0;
+  return count > 0 ? i18nService.t('openClawRepairHistoryQuarantined').replace('{count}', String(count)) : undefined;
+}
+
 export function resolveOpenClawRepairError(result: OpenClawGatewayRepairResult, includeBackupPath = true): string {
   if (result.errorCode === OpenClawGatewayRepairErrorCode.Busy) return i18nService.t('openClawRepairBusyError');
   if (result.errorCode === OpenClawGatewayRepairErrorCode.ConfigApplyPending) return i18nService.t('openClawRepairConfigApplyPendingError');
@@ -22,6 +27,20 @@ export function resolveOpenClawRepairError(result: OpenClawGatewayRepairResult, 
     stageKey ? i18nService.t(stageKey) : undefined,
     result.error?.trim() || (!stageKey ? i18nService.t('openClawRepairFailed') : undefined),
     result.failurePath ? i18nService.t('openClawRepairFailurePath').replace('{path}', () => result.failurePath!) : undefined,
+    resolveOpenClawRepairHistoryWarning(result),
     includeBackupPath && result.backupPath ? i18nService.t('openClawRepairFilesPath').replace('{path}', () => result.backupPath!) : undefined,
+  ].filter(Boolean).join('\n');
+}
+
+/** Undefined once the rule works: the gateway status reports what follows. */
+export function resolveOpenClawLoopbackRepairMessage(result: OpenClawLoopbackRepairResult): string | undefined {
+  if (result.outcome === OpenClawLoopbackRepairOutcome.Repaired) return undefined;
+  if (result.outcome === OpenClawLoopbackRepairOutcome.Cancelled) return i18nService.t('coworkOpenClawAllowLoopbackCancelled');
+  if (result.outcome === OpenClawLoopbackRepairOutcome.StillBlocked) return i18nService.t('coworkOpenClawAllowLoopbackStillBlocked');
+  return [
+    i18nService.t('coworkOpenClawAllowLoopbackFailed'),
+    result.detail?.trim() || undefined,
+    result.manualCommand ? i18nService.t('coworkOpenClawAllowLoopbackManual') : undefined,
+    result.manualCommand,
   ].filter(Boolean).join('\n');
 }

@@ -1,0 +1,75 @@
+diff --git a/src/agents/agent-tools.schema.test.ts b/src/agents/agent-tools.schema.test.ts
+index 6909db4c..46cdcb81 100644
+--- a/src/agents/agent-tools.schema.test.ts
++++ b/src/agents/agent-tools.schema.test.ts
+@@ -49,7 +49,8 @@ describe("direct exec tool schema", () => {
+     const describeField = (name: string) => fields[name]?.description ?? "";
+     const descriptions = Object.values(fields).map((field) => field.description ?? "");
+ 
+-    expect(descriptions.join("").length).toBeLessThan(550);
++    // LobsterAI: +120 chars for the user-facing `description` summary field.
++    expect(descriptions.join("").length).toBeLessThan(650);
+     expect(describeField("workdir")).toContain("empty string");
+     expect(describeField("workdir")).toContain("whitespace-only");
+     expect(describeField("yieldMs")).toContain("Milliseconds");
+diff --git a/src/agents/bash-tools.schemas.test.ts b/src/agents/bash-tools.schemas.test.ts
+index 2d5ebf10..e7e96cff 100644
+--- a/src/agents/bash-tools.schemas.test.ts
++++ b/src/agents/bash-tools.schemas.test.ts
+@@ -12,3 +12,17 @@ describe("exec environment guidance", () => {
+     });
+   });
+ });
++
++describe("exec command description", () => {
++  it.each([
++    ["full", execSchema],
++    ["completion", execCompletionSchema],
++    ["node", nodeExecSchema],
++  ] as const)("asks for an optional user-facing summary on the %s surface", (_name, schema) => {
++    expect(schema.properties.description).toMatchObject({
++      type: "string",
++      description: expect.stringMatching(/user's language.*instead of the command/i),
++    });
++    expect(schema.required ?? []).not.toContain("description");
++  });
++});
+diff --git a/src/agents/bash-tools.schemas.ts b/src/agents/bash-tools.schemas.ts
+index c63cf0ae..754d16a2 100644
+--- a/src/agents/bash-tools.schemas.ts
++++ b/src/agents/bash-tools.schemas.ts
+@@ -24,6 +24,13 @@ const PROCESS_TOOL_ACTIONS = [
+ /** Parameters accepted by the exec tool. */
+ export const execSchema = Type.Object({
+   command: Type.String({ description: "Shell command." }),
++  // LobsterAI: desktop step labels show this instead of the raw command.
++  description: Type.Optional(
++    Type.String({
++      description:
++        "Short non-technical summary of what this command does, in the user's language; shown to the user instead of the command.",
++    }),
++  ),
+   workdir: Type.Optional(
+     Type.String({
+       description: "Omit/empty string: default; whitespace-only invalid.",
+@@ -82,6 +89,7 @@ export const execCompletionSchema = Type.Omit(execSchema, ["yieldMs", "backgroun
+ /** Parameters exposed by node-only exec surfaces. */
+ export const nodeExecSchema = Type.Object({
+   command: execSchema.properties.command,
++  description: execSchema.properties.description,
+   workdir: execSchema.properties.workdir,
+   env: execSchema.properties.env,
+   timeoutSeconds: execSchema.properties.timeoutSeconds,
+diff --git a/src/gateway/tool-resolution.exclude.test.ts b/src/gateway/tool-resolution.exclude.test.ts
+index ce738d79..a02c53cc 100644
+--- a/src/gateway/tool-resolution.exclude.test.ts
++++ b/src/gateway/tool-resolution.exclude.test.ts
+@@ -427,7 +427,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
+     const schemaProperties = presentation?.parameters?.properties;
+     expect(
+       Object.keys(schemaProperties && typeof schemaProperties === "object" ? schemaProperties : {}),
+-    ).toEqual(["command", "workdir", "env", "timeoutSeconds", "host", "node"]);
++    ).toEqual(["command", "description", "workdir", "env", "timeoutSeconds", "host", "node"]);
+     const hostSchema = (
+       schemaProperties && typeof schemaProperties === "object"
+         ? (schemaProperties as Record<string, unknown>).host

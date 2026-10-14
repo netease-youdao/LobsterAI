@@ -4,8 +4,8 @@ import {
   buildGoogleGeminiReplayPolicy,
   buildOpenAICompatibleReplayPolicy,
 } from 'openclaw/plugin-sdk/provider-model-shared';
-import { createMoonshotKimiK3Wrapper } from 'openclaw/plugin-sdk/provider-stream-shared';
 
+import { createKimiK3StreamWrapper } from './kimiK3StreamWrapper';
 import {
   hasModelRuntimeProfile,
   LobsterAIModelRuntimeProfile,
@@ -100,7 +100,7 @@ const register = (api: OpenClawPluginApi): void => {
       const decision = assertSupportedTransport(ctx.provider, ctx.modelId, ctx.model?.api);
       const baseStreamFn = decision.kind === ModelProfileTransportDecision.Passthrough
         ? ctx.streamFn
-        : createMoonshotKimiK3Wrapper(ctx.streamFn);
+        : createKimiK3StreamWrapper(ctx.streamFn);
       const thinkingProfile = thinkingProfiles[`${ctx.provider}/${ctx.modelId}`];
       if (thinkingProfile?.requestOptionsVersion === LOBSTERAI_REQUEST_OPTIONS_VERSION) {
         return createLobsterAIRequestOptionsWrapper(

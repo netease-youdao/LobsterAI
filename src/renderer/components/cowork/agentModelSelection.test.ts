@@ -5,6 +5,7 @@ import { describe, expect, test } from 'vitest';
 import type { Model } from '../../store/slices/modelSlice';
 import {
   resolveAgentModelSelection,
+  resolveAgentStartModel,
   resolveEffectiveModel,
   resolveModelThinkingLevel,
 } from './agentModelSelection';
@@ -220,5 +221,61 @@ describe('resolveEffectiveModel', () => {
 
     expect(result?.id).toBe('glm-5.1');
     expect(result?.supportsImage).toBe(false);
+  });
+});
+
+describe('resolveAgentStartModel', () => {
+  const customQwen: Model = { id: 'qwen3.8-max', name: 'Qwen Max', providerKey: 'qwen' };
+  const customGlm: Model = { id: 'glm-5.1', name: 'GLM 5.1', providerKey: 'zhipu' };
+  const planFlash: Model = { id: 'qwen3.8-flash', name: 'Flash', providerKey: 'lobsterai-server', isServerModel: true };
+  const planMaxLocked: Model = {
+    id: 'qwen3.8-max', name: 'Qwen Max Plan', providerKey: 'lobsterai-server', isServerModel: true, accessible: false,
+  };
+
+  test('starts with the configured model when it is usable', () => {
+    expect(resolveAgentStartModel({
+      agentModel: 'qwen/qwen3.8-max',
+      availableModels: [customQwen, planFlash],
+      selectedModel: customQwen,
+    })).toEqual({ model: customQwen, unavailableModelRef: null, crossesBillingSide: false });
+  });
+
+  test('blocks a missing custom model from silently becoming a plan model', () => {
+    expect(resolveAgentStartModel({
+      agentModel: 'qwen/qwen3.8-max',
+      availableModels: [planMaxLocked, planFlash],
+      selectedModel: planFlash,
+    })).toEqual({ model: planFlash, unavailableModelRef: 'qwen/qwen3.8-max', crossesBillingSide: true });
+  });
+
+  test('blocks a locked plan model from silently becoming a custom model', () => {
+    expect(resolveAgentStartModel({
+      agentModel: 'lobsterai-server/qwen3.8-max',
+      availableModels: [planMaxLocked, customGlm],
+      selectedModel: customGlm,
+    }).crossesBillingSide).toBe(true);
+  });
+
+  test('keeps silent fallback within one billing side and while the plan catalog is not loaded', () => {
+    expect(resolveAgentStartModel({
+      agentModel: 'qwen/qwen3.8-max',
+      availableModels: [customGlm],
+      selectedModel: customGlm,
+    })).toEqual({ model: customGlm, unavailableModelRef: 'qwen/qwen3.8-max', crossesBillingSide: false });
+    expect(resolveAgentStartModel({
+      agentModel: 'lobsterai-server/qwen3.8-max',
+      availableModels: [planMaxLocked, planFlash],
+      selectedModel: planFlash,
+    }).crossesBillingSide).toBe(false);
+    expect(resolveAgentStartModel({
+      agentModel: 'lobsterai-server/qwen3.8-max',
+      availableModels: [customGlm],
+      selectedModel: customGlm,
+    }).crossesBillingSide).toBe(false);
+  });
+
+  test('uses the global selection when the agent has no model', () => {
+    expect(resolveAgentStartModel({ agentModel: '', availableModels: [planFlash], selectedModel: planFlash }))
+      .toEqual({ model: planFlash, unavailableModelRef: null, crossesBillingSide: false });
   });
 });

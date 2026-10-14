@@ -4,6 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const esbuild = require('esbuild');
 
+const {
+  assertOpenClawBundleUsesNativePrivateDirectory,
+  assertOpenClawSourceUsesNativePrivateDirectory,
+} = require('./openclaw-native-private-directory.cjs');
+
 const rootDir = path.resolve(__dirname, '..');
 const entryPath = path.join(__dirname, 'openclaw-startup-state-migration.mjs');
 const authStoreEntryPath = path.join(__dirname, 'openclaw-xai-auth-store.mjs');
@@ -29,6 +34,13 @@ async function bundleOpenClawStartupMigration(runtimeDir, openclawSrc, selectedE
   if (!lockOwner.includes('inspectOwner: opts.inspectOwner')) {
     throw new Error('Manual lock recovery requires zz-openclaw-lock-owner-recovery.patch; run openclaw:patch first.');
   }
+  const identityOwner = fs.readFileSync(path.join(openclawSrc, 'src/infra/state-migrations.device-identity.ts'), 'utf8');
+  if (!identityOwner.includes('its keys differ from the valid canonical identity; canonical SQLite identity remains authoritative')) {
+    throw new Error('Startup identity migration requires openclaw-device-identity-preservation.patch; run openclaw:patch first.');
+  }
+  // Every helper that stages SQLite must create private Windows directories
+  // natively; a PowerShell spawn here blocks startup on locked-down machines.
+  assertOpenClawSourceUsesNativePrivateDirectory(openclawSrc);
   const outputPath = path.join(runtimeDir, path.basename(selectedEntry));
   // Rebuild even when the gateway cache is current: this entry is maintained by
   // LobsterAI and must match the pinned upstream migration/schema implementation.
@@ -62,6 +74,7 @@ async function bundleOpenClawStartupMigration(runtimeDir, openclawSrc, selectedE
       '#openclaw-repair-agent-targets': path.join(openclawSrc, 'src/config/sessions/targets.ts'),
       '#openclaw-repair-vectors': path.join(openclawSrc, 'packages/memory-host-sdk/src/host/sqlite-vec.ts'),
       '#openclaw-repair-plugin-records': path.join(openclawSrc, 'src/plugins/installed-plugin-index-records.ts'),
+      '#openclaw-plugin-lifecycle-lease': path.join(openclawSrc, 'src/plugins/plugin-lifecycle-lease.ts'),
       '#openclaw-repair-plugin-payload': path.join(openclawSrc, 'src/cli/update-cli/plugin-payload-validation.ts'),
       '#openclaw-repair-plugin-consent': path.join(openclawSrc, 'src/plugins/capability-consent.ts'),
       '#openclaw-dreaming-workspaces': path.join(openclawSrc, 'src/memory-host-sdk/dreaming.ts'),
@@ -114,6 +127,7 @@ async function bundleOpenClawStartupMigration(runtimeDir, openclawSrc, selectedE
     logLevel: 'warning',
   });
   console.log(`[OpenClaw] Built ${path.basename(outputPath)} (${fs.statSync(outputPath).size} bytes).`);
+  assertOpenClawBundleUsesNativePrivateDirectory(outputPath);
   if (selectedEntry === entryPath) {
     await bundleOpenClawStartupMigration(runtimeDir, openclawSrc, authStoreEntryPath);
     await bundleOpenClawStartupMigration(runtimeDir, openclawSrc, compatibilityEntryPath);

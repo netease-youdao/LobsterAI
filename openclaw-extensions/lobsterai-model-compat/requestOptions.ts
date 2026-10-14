@@ -1,5 +1,6 @@
 import type { StreamFn } from 'openclaw/plugin-sdk/agent-core';
 
+import { loadDefaultStreamFn } from './defaultStreamFn';
 import {
   LOBSTERAI_REQUEST_OPTIONS_FIELD,
   LOBSTERAI_REQUEST_OPTIONS_VERSION,
@@ -12,11 +13,6 @@ import type {
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   !!value && typeof value === 'object' && !Array.isArray(value)
 );
-
-const loadDefaultStreamFn = async (): Promise<StreamFn> => {
-  const { streamSimple } = await import('openclaw/plugin-sdk/llm');
-  return streamSimple as StreamFn;
-};
 
 export const resolveLobsterAIRequestThinkingLevel = (
   profile: LobsterAIThinkingProfile,

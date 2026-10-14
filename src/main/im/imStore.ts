@@ -1756,22 +1756,6 @@ export class IMStore {
     );
   }
 
-  // ==================== Notification Target Persistence ====================
-
-  /**
-   * Get persisted notification target for a platform
-   */
-  getNotificationTarget(platform: Platform): any | null {
-    return this.getConfigValue<any>(`notification_target:${platform}`) ?? null;
-  }
-
-  /**
-   * Persist notification target for a platform
-   */
-  setNotificationTarget(platform: Platform, target: any): void {
-    this.setConfigValue(`notification_target:${platform}`, target);
-  }
-
   getConversationReplyRoute(
     platform: Platform,
     conversationId: string,

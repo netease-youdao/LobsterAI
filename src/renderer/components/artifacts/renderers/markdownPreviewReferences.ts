@@ -8,11 +8,11 @@ import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 
 const Syntax = {
-  Definition: 'LinkReference', Link: 'Link', LinkLabel: 'LinkLabel', LinkMark: 'LinkMark',
+  Definition: 'LinkReference', Link: 'Link', Image: 'Image', LinkLabel: 'LinkLabel', LinkMark: 'LinkMark',
   LinkTitle: 'LinkTitle', Quote: 'Blockquote', QuoteMark: 'QuoteMark', Paragraph: 'Paragraph',
   Math: 'PreviewMathBlock', MathContent: 'PreviewMathContent', MathFence: 'PreviewMathFence',
 } as const;
-const MarkdownNode = { Definition: 'definition', Link: 'link' } as const;
+const MarkdownNode = { Definition: 'definition', Link: 'link', Image: 'image' } as const;
 const LinkTargetKind = { Reference: 'reference', Explicit: 'explicit' } as const;
 
 const parser = unified().use(remarkParse).use(remarkGfm, { singleTilde: false }).use(remarkMath);
@@ -54,7 +54,8 @@ const mathBlocks: MarkdownConfig = {
 const incrementalParser = lezerParser.configure([GFM, mathBlocks]);
 type Content = ReturnType<typeof parser.parse>['children'][number];
 type Definition = Extract<Content, { type: 'definition' }>;
-type ExplicitLink = Extract<Content, { type: 'link' }>;
+type Phrasing = Extract<Content, { type: 'paragraph' }>['children'][number];
+type ExplicitLink = Extract<Phrasing, { type: 'link' | 'image' }>;
 type LinkTarget = { kind: typeof LinkTargetKind.Reference; identifier: string }
   | { kind: typeof LinkTargetKind.Explicit; url: string; title?: string | null };
 
@@ -130,7 +131,8 @@ function getLinkTarget(source: string, node: SyntaxNode): LinkTarget | undefined
     // Parse each distinct explicit link once for empty destinations and escapes.
     const paragraph = parser.parse(stripQuotePrefixes(source.slice(node.from, node.to), node)).children[0];
     const link = paragraph && 'children' in paragraph
-      ? paragraph.children.find(child => child.type === MarkdownNode.Link) as ExplicitLink | undefined : undefined;
+      ? paragraph.children.find(child => child.type === MarkdownNode.Link || child.type === MarkdownNode.Image) as ExplicitLink | undefined
+      : undefined;
     return link ? { kind: LinkTargetKind.Explicit, url: link.url, title: link.title } : undefined;
   }
   if (marks.length !== 2) return undefined;
@@ -169,7 +171,7 @@ function parseReferences(source: string, tree: Tree, previous?: ReferenceState):
           definitionEnd = getDefinitionEnd(source, ref.node, parsed[parsed.length - 1]);
         }
       }
-      if (ref.name === Syntax.Link && ref.from >= definitionEnd) linkNodes.push(ref.node);
+      if ((ref.name === Syntax.Link || ref.name === Syntax.Image) && ref.from >= definitionEnd) linkNodes.push(ref.node);
     },
   });
 

@@ -17,7 +17,7 @@ import {
 
 const directories: string[] = [];
 function fixture(phase: OpenClawRepairPhase = OpenClawRepairPhase.Snapshot): CompatibilityRepairOptions {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lobster-repair-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lobster-repair-')));
   directories.push(root);
   const stateDir = path.join(root, 'state');
   const backupDir = path.join(root, 'backup');
@@ -188,9 +188,15 @@ test('healthy installations and same-ID third-party packages are retained', asyn
   expect(deps.acceptBundledPlugin).not.toHaveBeenCalled();
 });
 
-function migratedPluginFixture() {
+function migratedPluginFixture(linkedAncestor = false) {
   const context = pluginFixture();
-  const base = path.dirname(context.options.stateDir);
+  let base = path.dirname(context.options.stateDir);
+  if (linkedAncestor) {
+    // Both profiles live under a folder relocated through a symlink or Windows junction.
+    fs.mkdirSync(path.join(base, 'relocated'));
+    fs.symlinkSync(path.join(base, 'relocated'), path.join(base, 'profiles'), 'junction');
+    base = path.join(base, 'profiles');
+  }
   context.options.stateDir = path.join(base, 'admin', 'LobsterAI', 'openclaw', 'state');
   fs.mkdirSync(context.options.stateDir, { recursive: true });
   context.options.configPath = path.join(context.options.stateDir, 'openclaw.json');
@@ -200,8 +206,8 @@ function migratedPluginFixture() {
   return context;
 }
 
-test('reconciles a missing previous-profile install and backs up its SQLite ledger including WAL', async () => {
-  const { options, deps, records, root, user } = migratedPluginFixture();
+test.each([false, true])('reconciles a missing previous-profile install and backs up its SQLite ledger including WAL (linked ancestor: %s)', async linkedAncestor => {
+  const { options, deps, records, root, user } = migratedPluginFixture(linkedAncestor);
   const dbPath = path.join(options.stateDir, 'state', 'openclaw.sqlite');
   fs.mkdirSync(path.dirname(dbPath));
   const db = new DatabaseSync(dbPath);
@@ -221,9 +227,10 @@ test('reconciles a missing previous-profile install and backs up its SQLite ledg
   } finally { db.close(); }
 });
 
-test.each(['existing', 'custom-path', 'conflicting-package', 'linked-parent', 'permission-denied'])(
-  'preserves an ambiguous previous-profile installation: %s', async scenario => {
-    const { options, deps, records } = migratedPluginFixture();
+test.each(['existing', 'custom-path', 'conflicting-package', 'linked-parent', 'permission-denied']
+  .flatMap(scenario => [false, true].map(linkedAncestor => ({ scenario, linkedAncestor }))))(
+  'preserves an ambiguous previous-profile installation: $scenario (linked ancestor: $linkedAncestor)', async ({ scenario, linkedAncestor }) => {
+    const { options, deps, records } = migratedPluginFixture(linkedAncestor);
     const installPath = records.deepseek.installPath!;
     if (scenario === 'existing') fs.mkdirSync(installPath, { recursive: true });
     if (scenario === 'custom-path') records.deepseek.installPath = path.join(path.dirname(options.backupDir), 'custom-plugin');

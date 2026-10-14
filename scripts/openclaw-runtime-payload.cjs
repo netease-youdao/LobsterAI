@@ -20,6 +20,12 @@ const FS_SAFE_TARGETS = new Map([
   [OpenClawPayloadTarget.MacX64, 'darwin-x64'],
 ]);
 const FS_SAFE_ROOTS = ['dist/native', 'node_modules/@openclaw/fs-safe/dist/native'];
+// Platform binary behind a real koffi loader (native Windows private-directory helper).
+const KOFFI_PLATFORM_PACKAGES = new Map([
+  [OpenClawPayloadTarget.WindowsX64, '@koromix/koffi-win32-x64'],
+  [OpenClawPayloadTarget.MacArm64, '@koromix/koffi-darwin-arm64'],
+  [OpenClawPayloadTarget.MacX64, '@koromix/koffi-darwin-x64'],
+]);
 const CLAUDE_SDK_PACKAGE = '@anthropic-ai/claude-agent-sdk';
 const CUA_DRIVER_PACKAGE = '@trycua/cua-driver';
 const KOFFI_STUB_COMMENT = 'this package is not needed for headless gateway operation.';
@@ -181,10 +187,17 @@ function createOpenClawRuntimePayload(runtimeRoot, targetId) {
     return isFile(target) && fs.readFileSync(target, 'utf8').split(/\r?\n/, 1)[0]
       === `// Stub (${file.endsWith('.mjs') ? 'ESM' : 'CJS'}): ${KOFFI_STUB_COMMENT}`;
   });
+  // A stubbed koffi needs no platform binary. A real loader (Windows runtimes,
+  // see prune-openclaw-runtime) keeps exactly its own platform package.
+  const koffiPlatformPackage = koffiIsStub ? null : KOFFI_PLATFORM_PACKAGES.get(targetId);
+  if (koffiPlatformPackage && !fs.existsSync(path.join(root, 'node_modules', koffiPlatformPackage))) {
+    throw new Error(`[openclaw-runtime-payload] Missing ${koffiPlatformPackage} behind the real koffi loader. Rebuild the runtime before packaging.`);
+  }
   const koromixRoot = path.join(root, 'node_modules/@koromix');
-  if (koffiIsStub && fs.existsSync(koromixRoot)) {
+  if (fs.existsSync(koromixRoot)) {
     for (const item of fs.readdirSync(koromixRoot, { withFileTypes: true })) {
-      if (item.isDirectory() && item.name.startsWith('koffi-')) excluded.add(`node_modules/@koromix/${item.name}`);
+      if (!item.isDirectory() || !item.name.startsWith('koffi-')) continue;
+      if (`@koromix/${item.name}` !== koffiPlatformPackage) excluded.add(`node_modules/@koromix/${item.name}`);
     }
   }
 

@@ -77,7 +77,8 @@ export function backupOpenClawConfig(configPath: string, backupDirectory?: strin
 /** Quick Repair must retain compatibility migration sources until verified. */
 export function preserveOpenClawConfigForStartupRecovery(configPath: string, errorCode?: OpenClawEngineErrorCode): boolean {
   if (errorCode === OpenClawEngineErrorCode.StartupCompatibilityFailed
-    || errorCode === OpenClawEngineErrorCode.MemoryDreamingMigrationFailed) return true;
+    || errorCode === OpenClawEngineErrorCode.MemoryDreamingMigrationFailed
+    || errorCode === OpenClawEngineErrorCode.StartupMigrationRefused) return true;
   try {
     return hasLegacyOpenClawDiscovery(JSON.parse(fs.readFileSync(configPath, 'utf8')));
   } catch {

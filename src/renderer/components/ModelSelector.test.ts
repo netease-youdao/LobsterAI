@@ -6,6 +6,7 @@ import {
   canConfigureModelThinking,
   CascadeSide,
   countVisibleModelSelectorRows,
+  hasModelHoverDetails,
   isModelAgenticBlocked,
   partitionModelSelectorModels,
   resolveCascadePlacement,
@@ -13,9 +14,16 @@ import {
   resolveHoverCardTop,
   resolveNestedCascadePlacement,
   resolvePickerThinkingLevel,
+  shouldRenderPlanModelLoginPrompt,
   shouldRenderSelectedModelUnavailableFallback,
   supportsConfigurableModelThinkingProtocol,
 } from './ModelSelector';
+
+test('prompts login instead of custom model setup when logged out with nothing to list', () => {
+  expect(shouldRenderPlanModelLoginPrompt(0, false)).toBe(true);
+  expect(shouldRenderPlanModelLoginPrompt(3, false)).toBe(false);
+  expect(shouldRenderPlanModelLoginPrompt(0, true)).toBe(false);
+});
 
 test('keeps a logged-in stale server model visible only while the model list is empty', () => {
   const selectedModel = {
@@ -60,6 +68,20 @@ test('counts a collapsed more-model section as one row until expanded', () => {
 
   expect(countVisibleModelSelectorRows(models, false)).toBe(2);
   expect(countVisibleModelSelectorRows(models, true)).toBe(4);
+});
+
+test('opens the hover card only for models that have details to show', () => {
+  // Rows without details fall back to a native tooltip for the full name.
+  expect(hasModelHoverDetails({})).toBe(false);
+  expect(hasModelHoverDetails({ costMultiplier: 0 })).toBe(false);
+  expect(hasModelHoverDetails({ costMultiplier: 0.05 })).toBe(true);
+  expect(hasModelHoverDetails({ supportsImage: true })).toBe(true);
+  expect(hasModelHoverDetails({ description: 'Fast model' })).toBe(true);
+  expect(hasModelHoverDetails({
+    isServerModel: true,
+    runtimeProfile: 'moonshot-kimi-k3',
+    agenticReady: false,
+  })).toBe(true);
 });
 
 test('keeps model hover card above the viewport bottom', () => {

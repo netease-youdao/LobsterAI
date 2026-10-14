@@ -114,47 +114,34 @@ interface AgentAvatarIconProps {
   value?: string | null;
   className?: string;
   iconClassName?: string;
-  legacyClassName?: string;
-  fallbackText?: string;
-  useDefaultWhenEmpty?: boolean;
+  /** Tint the SVG avatar with the parent's text color instead of the foreground color. */
+  inheritColor?: boolean;
 }
 
 const AgentAvatarIcon: React.FC<AgentAvatarIconProps> = ({
   value,
   className = 'h-10 w-10',
   iconClassName = 'h-5 w-5',
-  legacyClassName = 'text-2xl',
-  fallbackText = 'A',
-  useDefaultWhenEmpty = true,
+  inheritColor = false,
 }) => {
-  const normalized = value?.trim() ?? '';
-  const parsedAvatar = parseAgentAvatarIcon(normalized);
-  const avatar = parsedAvatar ?? (!normalized && useDefaultWhenEmpty ? DefaultAgentAvatar : null);
-
-  if (avatar) {
-    const iconUrl = getAgentAvatarSvgUrl(avatar.svg);
-    const maskStyle: React.CSSProperties = {
-      WebkitMaskImage: `url("${iconUrl}")`,
-      WebkitMaskPosition: 'center',
-      WebkitMaskRepeat: 'no-repeat',
-      WebkitMaskSize: 'contain',
-      backgroundColor: 'currentColor',
-      maskImage: `url("${iconUrl}")`,
-      maskPosition: 'center',
-      maskRepeat: 'no-repeat',
-      maskSize: 'contain',
-    };
-
-    return (
-      <span className={`inline-flex shrink-0 items-center justify-center rounded-full text-foreground ${className}`}>
-        <span aria-hidden="true" className={`inline-block ${iconClassName}`} style={maskStyle} />
-      </span>
-    );
-  }
+  // Stored icons are normalized to SVG avatars, so anything else falls back to the default.
+  const avatar = parseAgentAvatarIcon(value) ?? DefaultAgentAvatar;
+  const iconUrl = getAgentAvatarSvgUrl(avatar.svg);
+  const maskStyle: React.CSSProperties = {
+    WebkitMaskImage: `url("${iconUrl}")`,
+    WebkitMaskPosition: 'center',
+    WebkitMaskRepeat: 'no-repeat',
+    WebkitMaskSize: 'contain',
+    backgroundColor: 'currentColor',
+    maskImage: `url("${iconUrl}")`,
+    maskPosition: 'center',
+    maskRepeat: 'no-repeat',
+    maskSize: 'contain',
+  };
 
   return (
-    <span className={`inline-flex shrink-0 items-center justify-center leading-none ${className} ${legacyClassName}`}>
-      {normalized || fallbackText}
+    <span className={`inline-flex shrink-0 items-center justify-center rounded-full ${inheritColor ? '' : 'text-foreground'} ${className}`}>
+      <span aria-hidden="true" className={`inline-block ${iconClassName}`} style={maskStyle} />
     </span>
   );
 };

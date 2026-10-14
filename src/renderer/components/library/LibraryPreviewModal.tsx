@@ -53,7 +53,11 @@ import ShareUploadIcon from '../icons/ShareUploadIcon';
 import Tooltip, { TooltipAlign, TooltipPosition } from '../ui/Tooltip';
 import { LIBRARY_ACTION_MENU_WIDTH_PX } from './libraryActionMenuPresentation';
 import { LibraryAnalyticsSurface } from './libraryAnalytics';
-import { loadLibraryArtifact } from './libraryArtifactCandidate';
+import {
+  getLibraryPreviewContentKey,
+  getLibraryPreviewKey,
+  loadLibraryArtifact,
+} from './libraryArtifactCandidate';
 import {
   getLibraryPreviewActionIds,
   LibraryItemAction,
@@ -78,6 +82,12 @@ interface LibraryPreviewModalProps {
   onCopyLink: () => void;
   onOpenSession: (session: LibrarySessionRef) => void;
   onShowSites: () => void;
+}
+
+/** The artifact read for a preview key; null when its file could not be read. */
+interface LoadedLibraryPreview {
+  key: string;
+  artifact: Artifact | null;
 }
 
 const HeaderIcon: React.FC<{ item: LibraryItem }> = ({ item }) => {
@@ -188,32 +198,36 @@ const LibraryPreviewModalContent: React.FC<LibraryPreviewModalProps> = ({
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
-  const [artifact, setArtifact] = useState<Artifact | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [preview, setPreview] = useState<LoadedLibraryPreview>();
   const [activePopover, setActivePopover] = useState<HeaderPopover>();
   const [isSessionsExpanded, setIsSessionsExpanded] = useState(false);
   const localItem = item.itemKind === LibraryItemKind.LocalArtifact ? item : undefined;
+  const localItemRef = useRef(localItem);
+  localItemRef.current = localItem;
+  const previewKey = localItem ? getLibraryPreviewKey(localItem) : undefined;
+  const contentKey = localItem ? getLibraryPreviewContentKey(localItem) : undefined;
+  const shownPreview = previewKey && preview?.key === previewKey ? preview : undefined;
+  const artifact = shownPreview?.artifact ?? null;
+  const loading = Boolean(previewKey) && !shownPreview;
 
+  // Only another file opens the preview anew. A new version of the same file is read behind the
+  // preview shown, so the viewer stays mounted and keeps its place, as in the artifact panel.
   useEffect(() => {
+    const current = localItemRef.current;
+    if (!previewKey || !contentKey || !current) return undefined;
     let active = true;
     const accountGeneration = store.getState().auth.accountGeneration;
     const isCurrent = () => active
       && store.getState().auth.accountGeneration === accountGeneration;
-    setArtifact(null);
-    if (!localItem || localItem.availability !== LibraryAvailability.Available) {
-      setLoading(false);
-      return () => { active = false; };
-    }
-    setLoading(true);
-    void loadLibraryArtifact(localItem, isCurrent).then(loaded => {
-      if (isCurrent()) setArtifact(loaded);
+    void loadLibraryArtifact(current, isCurrent).then(loaded => {
+      if (!isCurrent()) return;
+      // A failed re-read keeps what is shown; authorization failures clear it below.
+      setPreview(shown => (!loaded && shown?.key === previewKey ? shown : { key: previewKey, artifact: loaded }));
     }).catch(() => {
-      if (isCurrent()) setArtifact(null);
-    }).finally(() => {
-      if (isCurrent()) setLoading(false);
+      if (isCurrent()) setPreview({ key: previewKey, artifact: null });
     });
     return () => { active = false; };
-  }, [localItem]);
+  }, [contentKey, previewKey]);
 
   useEffect(() => {
     if (!activePopover) return undefined;
@@ -257,7 +271,7 @@ const LibraryPreviewModalContent: React.FC<LibraryPreviewModalProps> = ({
       const authorizedArtifact = await loadLibraryArtifact(localItem, isCurrent);
       if (!isCurrent()) return;
       if (!authorizedArtifact) {
-        setArtifact(null);
+        setPreview(shown => shown && shown.key === previewKey ? { key: shown.key, artifact: null } : shown);
         return;
       }
       await artifactFileShare.openShare(authorizedArtifact, {
@@ -267,7 +281,7 @@ const LibraryPreviewModalContent: React.FC<LibraryPreviewModalProps> = ({
         pageViewId: analyticsPageViewId,
       });
     } catch {
-      if (isCurrent()) setArtifact(null);
+      if (isCurrent()) setPreview(shown => shown && shown.key === previewKey ? { key: shown.key, artifact: null } : shown);
     }
   };
 

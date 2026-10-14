@@ -5,12 +5,15 @@ import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import {
+  APP_UPDATE_GRAY_UNAVAILABLE_ERROR,
   APP_UPDATE_URL_UNTRUSTED_ERROR,
+  AppUpdateChannel,
   type AppUpdateInfo,
   AppUpdateSource,
   AppUpdateStatus,
 } from '../../shared/appUpdate/constants';
 import type { SqliteStore } from '../sqliteStore';
+import { AppUpdateGrayClient, AppUpdateGrayPlatform } from './appUpdateGrayClient';
 import { WINDOWS_INSTALLER_URL_POLICY_VERSION } from './appUpdateUrlPolicy';
 
 const mocks = vi.hoisted(() => ({
@@ -126,6 +129,218 @@ describe('AppUpdateCoordinator', () => {
   afterEach(() => {
     Object.defineProperty(process, 'platform', { value: originalPlatform });
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function grayFixture() {
+    Object.defineProperty(process, 'platform', { value: AppUpdateGrayPlatform.Windows });
+    let sessionKey: string | null = 'account-a:1';
+    let sequence = 0;
+    const grayFetch = vi.fn(async () => new Response(JSON.stringify({ code: 0, data: {
+      updateAvailable: true, channel: AppUpdateChannel.Gray, rolloutId: 'cohort', policyRevision: 1,
+      release: { version: READY_VERSION, date: '2026-09-18',
+        url: `https://updates.example.com/gray-${READY_VERSION}.exe`,
+        changeLog: { ch: { title: '', content: [] }, en: { title: '', content: [] } } },
+    } })));
+    const gray = new AppUpdateGrayClient({
+      getSession: () => sessionKey ? { sessionKey, accessToken: 'secret' } : null,
+      getServerBaseUrl: () => 'https://server.example', fetch: grayFetch,
+      platform: AppUpdateGrayPlatform.Windows, arch: 'x64',
+    });
+    mocks.fetch.mockResolvedValue({ ok: true, json: async () => ({ code: 0, data: { value: { version: '1.0.0' } } }) });
+    const downloaded = () => {
+      fs.mkdirSync(updatesDir, { recursive: true });
+      const filePath = path.join(updatesDir, `lobsterai-update-auto-${++sequence}.exe`);
+      fs.writeFileSync(filePath, 'installer-bytes');
+      return { filePath, windowsInstallerUrlPolicyReceipt: {
+        policyVersion: WINDOWS_INSTALLER_URL_POLICY_VERSION,
+        inputOrigin: 'https://updates.example.com', finalOrigin: 'https://updates.example.com',
+      } };
+    };
+    mocks.downloadUpdate.mockImplementation(async () => downloaded());
+    mocks.installUpdate.mockResolvedValue(undefined);
+    const store = createStoreStub();
+    store.set('installation_uuid', 'original-uuid');
+    return { gray, grayFetch, store, downloaded, logout: () => { sessionKey = null; },
+      switchAccount: () => { sessionKey = 'account-b:2'; } };
+  }
+
+  test.each([false, true])('gray override preserves the original request, manual=%s', async manual => {
+    const f = grayFixture();
+    const coordinator = new AppUpdateCoordinator(f.store, f.gray);
+    const result = await coordinator.checkNow({ manual, userId: 'original-yid' });
+    expect(result.success).toBe(true);
+    expect(result.state.info?.gray).toBeDefined();
+    expect(result.state.status).toBe(manual ? AppUpdateStatus.Available : AppUpdateStatus.Ready);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    const [rawUrl, options] = mocks.fetch.mock.calls[0];
+    const url = new URL(rawUrl);
+    expect(url.pathname).toBe(manual ? '/manual' : '/auto');
+    expect(Object.fromEntries(url.searchParams)).toEqual({ uuid: 'original-uuid', userId: 'original-yid',
+      version: '1.0.0', firstKeyfrom: 'none', latestKeyfrom: 'none' });
+    expect(options).toEqual({ method: 'GET', headers: { Accept: 'application/json' } });
+    expect(mocks.downloadUpdate).toHaveBeenCalledTimes(manual ? 0 : 1);
+  });
+
+  test('enterprise disableUpdate prevents both requests', async () => {
+    const f = grayFixture();
+    f.store.set('enterprise_config', { disableUpdate: true });
+    await new AppUpdateCoordinator(f.store, f.gray).checkNow();
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(f.grayFetch).not.toHaveBeenCalled();
+  });
+
+  test('an unavailable gray API does not break offline installation of a stable Ready package', async () => {
+    const f = grayFixture();
+    seedReadyFile(f.store, updatesDir, AppUpdateSource.Auto);
+    const coordinator = new AppUpdateCoordinator(f.store, f.gray);
+    mocks.fetch.mockRejectedValue(new Error('stable offline'));
+    f.grayFetch.mockRejectedValue(new Error('gray offline'));
+    expect((await coordinator.checkNow()).state.status).toBe(AppUpdateStatus.Ready);
+    expect((await coordinator.installReadyUpdate()).success).toBe(true);
+    expect(f.grayFetch).toHaveBeenCalledTimes(1);
+    expect(mocks.installUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  test('a fresh manual gray check can reuse the same account auto download', async () => {
+    const f = grayFixture();
+    const coordinator = new AppUpdateCoordinator(f.store, f.gray);
+    const auto = await coordinator.checkNow();
+    const manual = await coordinator.checkNow({ manual: true });
+    expect(manual.state.status).toBe(AppUpdateStatus.Ready);
+    expect(manual.state.readyFilePath).toBe(auto.state.readyFilePath);
+    expect(mocks.downloadUpdate).toHaveBeenCalledTimes(1);
+    expect((await coordinator.installReadyUpdate()).success).toBe(true);
+  });
+
+  test('an explicit no-match does not preserve a previous gray Ready offer', async () => {
+    const f = grayFixture();
+    const coordinator = new AppUpdateCoordinator(f.store, f.gray);
+    expect((await coordinator.checkNow()).state.status).toBe(AppUpdateStatus.Ready);
+    f.grayFetch.mockImplementation(async () => new Response(JSON.stringify({ code: 0, data: { updateAvailable: false } })));
+    const result = await coordinator.checkNow();
+    expect(result.state.status).toBe(AppUpdateStatus.Idle);
+    expect(result.updateFound).toBe(false);
+    expect((await coordinator.installReadyUpdate()).success).toBe(false);
+    expect(mocks.installUpdate).not.toHaveBeenCalled();
+  });
+
+  test('gray installation needs fresh authorization while original Overmind is not called again', async () => {
+    const f = grayFixture();
+    const coordinator = new AppUpdateCoordinator(f.store, f.gray);
+    await coordinator.checkNow();
+    f.grayFetch.mockRejectedValue(new Error('offline'));
+    const result = await coordinator.installReadyUpdate();
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(APP_UPDATE_GRAY_UNAVAILABLE_ERROR);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(mocks.installUpdate).not.toHaveBeenCalled();
+  });
+
+  test('gray retries recheck eligibility before downloading', async () => {
+    const f = grayFixture();
+    const coordinator = new AppUpdateCoordinator(f.store, f.gray);
+    await coordinator.checkNow({ manual: true });
+    f.grayFetch.mockResolvedValue(new Response('{}', { status: 404 }));
+    expect((await coordinator.retryDownload()).status).toBe(AppUpdateStatus.Idle);
+    expect(mocks.downloadUpdate).not.toHaveBeenCalled();
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('gray cache is not restored as offline Ready after restart', async () => {
+    const f = grayFixture();
+    const coordinator = new AppUpdateCoordinator(f.store, f.gray);
+    await coordinator.checkNow();
+    const restarted = new AppUpdateCoordinator(f.store, f.gray);
+    expect(restarted.getState().status).toBe(AppUpdateStatus.Idle);
+    expect((await restarted.installReadyUpdate()).success).toBe(false);
+    expect(f.store.get(readyFileStoreKey(AppUpdateSource.Auto))).toBeUndefined();
+  });
+
+  test.each(['logout', 'switchAccount'] as const)('gray Ready cannot survive %s', async action => {
+    const f = grayFixture();
+    const coordinator = new AppUpdateCoordinator(f.store, f.gray);
+    await coordinator.checkNow();
+    f[action]();
+    expect(coordinator.getState().info).toBeNull();
+    expect((await coordinator.installReadyUpdate()).success).toBe(false);
+    expect(mocks.installUpdate).not.toHaveBeenCalled();
+  });
+
+  test('a download completing after logout cannot recreate a gray offer', async () => {
+    const f = grayFixture();
+    let finish!: (value: ReturnType<typeof f.downloaded>) => void;
+    mocks.downloadUpdate.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const coordinator = new AppUpdateCoordinator(f.store, f.gray);
+    const check = coordinator.checkNow();
+    await vi.waitFor(() => expect(mocks.downloadUpdate).toHaveBeenCalled());
+    f.logout();
+    expect(coordinator.getState().status).toBe(AppUpdateStatus.Idle);
+    expect(mocks.cancelActiveDownload).toHaveBeenCalled();
+    finish(f.downloaded());
+    expect((await check).state.info).toBeNull();
+    expect(f.store.get(readyFileStoreKey(AppUpdateSource.Auto))).toBeUndefined();
+  });
+
+  test('a stable release with the same version cannot reuse gray bytes by version alone', async () => {
+    const f = grayFixture();
+    const coordinator = new AppUpdateCoordinator(f.store, f.gray);
+    await coordinator.checkNow();
+    mocks.fetch.mockResolvedValue({ ok: true, json: async () => ({ code: 0, data: { value: {
+      version: READY_VERSION, windowsX64: { url: 'https://updates.example.com/stable.exe' },
+    } } }) });
+    const stable = await coordinator.checkNow();
+    expect(stable.state.info?.gray).toBeUndefined();
+    expect(mocks.downloadUpdate).toHaveBeenCalledTimes(2);
+    expect(stable.state.info?.url).toBe('https://updates.example.com/stable.exe');
+  });
+
+  test('concurrent gray install clicks launch at most one installer', async () => {
+    const f = grayFixture();
+    const coordinator = new AppUpdateCoordinator(f.store, f.gray);
+    await coordinator.checkNow();
+    const results = await Promise.all([coordinator.installReadyUpdate(), coordinator.installReadyUpdate()]);
+    expect(results.filter(result => result.success)).toHaveLength(1);
+    expect(mocks.installUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([false, true])('a late gray hash result (%s) cannot overwrite a newer stable flow', async valid => {
+    const f = grayFixture();
+    const coordinator = new AppUpdateCoordinator(f.store, f.gray);
+    await coordinator.checkNow();
+    let finish!: (valid: boolean) => void;
+    const internal = coordinator as unknown as { isReadyFileValid: () => Promise<boolean> };
+    const verify = vi.spyOn(internal, 'isReadyFileValid')
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const install = coordinator.installReadyUpdate();
+    await vi.waitFor(() => expect(verify).toHaveBeenCalled());
+    mocks.fetch.mockResolvedValue({ ok: true, json: async () => ({ code: 0, data: { value: {
+      version: '3.0.0', windowsX64: { url: 'https://updates.example.com/stable-3.0.0.exe' },
+    } } }) });
+    const stable = await coordinator.checkNow();
+    expect(stable.state.status).toBe(AppUpdateStatus.Ready);
+    finish(valid);
+    expect((await install).success).toBe(false);
+    expect(coordinator.getState()).toEqual(stable.state);
+    expect(fs.existsSync(stable.state.readyFilePath!)).toBe(true);
+    expect(mocks.installUpdate).not.toHaveBeenCalled();
+  });
+
+  test('a gray package revoked during download never becomes Ready', async () => {
+    const f = grayFixture();
+    let finish!: (value: ReturnType<typeof f.downloaded>) => void;
+    mocks.downloadUpdate.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const coordinator = new AppUpdateCoordinator(f.store, f.gray);
+    const check = coordinator.checkNow();
+    await vi.waitFor(() => expect(mocks.downloadUpdate).toHaveBeenCalled());
+    f.grayFetch.mockResolvedValue(new Response('{}', { status: 404 }));
+    const downloaded = f.downloaded();
+    finish(downloaded);
+    const result = await check;
+    expect(result.updateFound).toBe(false);
+    expect(result.state.status).toBe(AppUpdateStatus.Idle);
+    expect(fs.existsSync(downloaded.filePath)).toBe(false);
+    expect((await coordinator.installReadyUpdate()).success).toBe(false);
+    expect(mocks.installUpdate).not.toHaveBeenCalled();
   });
 
   test('rejects an API-supplied insecure Windows installer URL with a stable error', async () => {

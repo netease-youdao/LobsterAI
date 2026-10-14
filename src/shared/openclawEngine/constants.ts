@@ -4,6 +4,7 @@ export const OpenClawEngineIpc = {
   RetryInstall: 'openclaw:engine:retryInstall',
   RestartGateway: 'openclaw:engine:restartGateway',
   RepairGatewayState: 'openclaw:engine:repairGatewayState',
+  RepairLoopbackFirewall: 'openclaw:engine:repairLoopbackFirewall',
   OnProgress: 'openclaw:engine:onProgress',
 } as const;
 
@@ -55,6 +56,20 @@ export type OpenClawGatewayRepairErrorCode =
  */
 export const OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS = ['installs'] as const;
 
+/** Bundled plugin that owns model compatibility and thinking profiles. */
+export const OPENCLAW_MODEL_COMPAT_PLUGIN_ID = 'lobsterai-model-compat';
+
+/** Why a task was refused while a config change is still unapplied. */
+export const OpenClawConfigApplyPendingReason = {
+  /** The change is still being applied, or its effect on the task is unknown. */
+  Applying: 'applying',
+  /** The task's model runs on settings the running gateway has not applied yet. */
+  ModelSettings: 'model_settings',
+} as const;
+
+export type OpenClawConfigApplyPendingReason =
+  typeof OpenClawConfigApplyPendingReason[keyof typeof OpenClawConfigApplyPendingReason];
+
 export const OpenClawEngineErrorCode = {
   /**
    * resources/cfmind has no runtime entry file. On packaged Windows builds
@@ -70,10 +85,38 @@ export const OpenClawEngineErrorCode = {
   MemoryDreamingMigrationFailed: 'memory_dreaming_migration_failed',
   AgentMediaMigrationRequired: 'agent_media_migration_required',
   PluginVerificationFailed: 'plugin_verification_failed',
+  /**
+   * The gateway refused readiness because OpenClaw startup migrations left
+   * legacy state unresolved. Restarting replays the same migration, so the
+   * listed sources must be handled first.
+   */
+  StartupMigrationRefused: 'startup_migration_refused',
+  /**
+   * Connections to a listening 127.0.0.1 port of this executable are dropped
+   * (Windows Defender Firewall's "Query user" default block). The gateway is
+   * the same executable, so it would be unreachable; startup stops until the
+   * loopback firewall rule is added or the user retries.
+   */
+  LoopbackBlocked: 'loopback_blocked',
 } as const;
 
 export type OpenClawEngineErrorCode =
   typeof OpenClawEngineErrorCode[keyof typeof OpenClawEngineErrorCode];
+
+/** Result of the elevated "allow local connections" firewall repair. */
+export const OpenClawLoopbackRepairOutcome = {
+  /** The rule is in place and the loopback self-test passes. */
+  Repaired: 'repaired',
+  /** The rule is in place, but something else still drops loopback. */
+  StillBlocked: 'still_blocked',
+  /** The UAC prompt was declined (or no administrator approved it). */
+  Cancelled: 'cancelled',
+  Failed: 'failed',
+  Unsupported: 'unsupported',
+} as const;
+
+export type OpenClawLoopbackRepairOutcome =
+  typeof OpenClawLoopbackRepairOutcome[keyof typeof OpenClawLoopbackRepairOutcome];
 
 export const OpenClawGatewayFailureKind = {
   HeapOutOfMemory: 'heap_out_of_memory',

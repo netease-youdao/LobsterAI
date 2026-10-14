@@ -202,7 +202,6 @@ const AgentCard: React.FC<{
       value={icon}
       className="h-11 w-11"
       iconClassName="h-[22px] w-[22px]"
-      legacyClassName="text-3xl"
     />
     <div className="min-w-0 w-full">
       <div className="text-sm font-semibold text-foreground truncate">
@@ -231,7 +230,6 @@ const UninstalledPresetCard: React.FC<{
       value={icon}
       className="h-11 w-11"
       iconClassName="h-[22px] w-[22px]"
-      legacyClassName="text-3xl"
     />
     <div className="min-w-0 w-full flex-1">
       <div className="text-sm font-semibold text-foreground truncate">

@@ -18,6 +18,7 @@ vi.mock('electron', () => ({
   app: {
     getAppPath: () => electronState.appPath,
     getPath: () => electronState.userDataPath,
+    getVersion: () => '2026.9.24',
     get isPackaged() {
       return electronState.isPackaged;
     },
@@ -28,11 +29,18 @@ vi.mock('electron', () => ({
 }));
 
 import { INSTALLER_RESOURCES_TAR } from './installerResourceRecovery';
+import { detectLoopbackBlock, LoopbackSelfTestOutcome } from './loopbackSelfTest';
 import { OpenClawEngineManager } from './openclawEngineManager';
 import { spawnOpenClawGatewayProcess } from './openclawGatewayProcess';
 import { runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
+import { OPENCLAW_STARTUP_PREP_MARKER_FILE } from './openclawStartupPrep';
+import { migrateLegacyStateBeforeStartup } from './openclawStartupStateMigration';
 import { OPENCLAW_WORKER_SHIM_TARGETS } from './openclawWorkerShims';
 
+vi.mock('./loopbackSelfTest', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./loopbackSelfTest')>();
+  return { ...actual, detectLoopbackBlock: vi.fn(actual.detectLoopbackBlock) };
+});
 vi.mock('./openclawGatewayProcess', async (importOriginal) => ({
   ...await importOriginal<typeof import('./openclawGatewayProcess')>(),
   spawnOpenClawGatewayProcess: vi.fn(),
@@ -41,6 +49,10 @@ vi.mock('./openclawStartupCompatibility', async (importOriginal) => ({
   ...await importOriginal<typeof import('./openclawStartupCompatibility')>(),
   runOpenClawStartupCompatibility: vi.fn(),
 }));
+vi.mock('./openclawStartupStateMigration', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./openclawStartupStateMigration')>();
+  return { ...actual, migrateLegacyStateBeforeStartup: vi.fn(actual.migrateLegacyStateBeforeStartup) };
+});
 import {
   migrateLegacyOpenClawPluginInstalls,
   OpenClawPluginInstallMigrationStatus,
@@ -157,6 +169,19 @@ describe('OpenClawEngineManager startup runtime recovery', () => {
     expect(fs.existsSync(tarPath)).toBe(true);
   });
 
+  test('repair can resolve a stable gateway token before the first successful startup', () => {
+    const manager = new OpenClawEngineManager();
+    expect(manager.getGatewayToken()).toBeNull();
+
+    const token = manager.ensureGatewayToken();
+
+    expect(token).toMatch(/^[a-f0-9]{48}$/);
+    expect(manager.getGatewayToken()).toBe(token);
+    expect(manager.ensureGatewayToken()).toBe(token);
+    expect(fs.readFileSync(path.join(manager.getStateDir(), 'gateway-token'), 'utf8')).toBe(token);
+    expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
+  });
+
   test('blocks a damaged bundled runtime before migrations or spawning and retains the cause on retry', async () => {
     const runtimeRoot = path.join(resourcesDir, 'cfmind');
     fs.writeFileSync(path.join(runtimeRoot, 'gateway-bundle.mjs'), 'export {};\n');
@@ -177,6 +202,36 @@ describe('OpenClawEngineManager startup runtime recovery', () => {
     }
     expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
     expect(fs.readFileSync(manager.getConfigPath(), 'utf8')).toBe(originalConfig);
+    expect(fs.existsSync(path.join(manager.getStateDir(), 'gateway-token'))).toBe(false);
+  });
+
+  test('stops before spawning while Windows drops loopback to this executable, until an explicit retry', async () => {
+    fs.writeFileSync(path.join(resourcesDir, 'cfmind', 'openclaw.mjs'), 'export {};\n');
+    const manager = new OpenClawEngineManager();
+    vi.spyOn(manager, 'ensureReady').mockResolvedValue({ phase: OpenClawEnginePhase.Ready } as ReturnType<typeof manager.getStatus>);
+    const dropped = {
+      blocked: true,
+      attempts: 2,
+      last: { outcome: LoopbackSelfTestOutcome.Blocked, code: 'ETIMEDOUT', elapsedMs: 300 },
+    };
+    vi.mocked(detectLoopbackBlock).mockClear().mockResolvedValueOnce(dropped).mockResolvedValueOnce(dropped);
+
+    await expect(manager.startGateway('loopback-test')).resolves.toMatchObject({
+      phase: OpenClawEnginePhase.Error,
+      errorCode: OpenClawEngineErrorCode.LoopbackBlocked,
+      canRetry: true,
+    });
+    // Automatic starts keep the block instead of testing or spawning again.
+    await expect(manager.startGateway('auto-restart')).resolves.toMatchObject({
+      errorCode: OpenClawEngineErrorCode.LoopbackBlocked,
+    });
+    expect(detectLoopbackBlock).toHaveBeenCalledOnce();
+
+    await expect(manager.startGateway('manual-retry', { retryBlocked: true })).resolves.toMatchObject({
+      errorCode: OpenClawEngineErrorCode.LoopbackBlocked,
+    });
+    expect(detectLoopbackBlock).toHaveBeenCalledTimes(2);
+    expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(manager.getStateDir(), 'gateway-token'))).toBe(false);
   });
 
@@ -207,4 +262,127 @@ describe('OpenClawEngineManager startup runtime recovery', () => {
     expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
     expect(fs.readFileSync(databasePath, 'utf8')).toBe('migration owns this database');
   });
+
+  const prepareSpawnlessStartup = () => {
+    setProcessProperty('platform', 'darwin');
+    fs.writeFileSync(path.join(resourcesDir, 'cfmind', 'openclaw.mjs'), 'export {};\n');
+    const manager = new OpenClawEngineManager();
+    vi.spyOn(manager, 'ensureReady').mockResolvedValue({ phase: OpenClawEnginePhase.Ready } as ReturnType<typeof manager.getStatus>);
+    const internals = manager as unknown as {
+      resolveGatewayPort: () => Promise<number>;
+      ensureBundledCliShims: () => string;
+    };
+    vi.spyOn(internals, 'resolveGatewayPort').mockResolvedValue(19763);
+    vi.spyOn(internals, 'ensureBundledCliShims').mockReturnValue('');
+    const databasePath = path.join(manager.getStateDir(), 'state', 'openclaw.sqlite');
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fs.writeFileSync(databasePath, 'migration owns this database');
+    fs.writeFileSync(manager.getConfigPath(), JSON.stringify({ gateway: { mode: 'local' } }));
+    const order: string[] = [];
+    vi.mocked(runOpenClawStartupCompatibility).mockImplementationOnce(async () => {
+      order.push('startup-compatibility');
+      return { status: OpenClawStartupMigrationStatus.Failed, error: 'stop after preparation' };
+    });
+    return { manager, internals, order };
+  };
+
+  test('ordinary startup preserves retired config and unreadable session indexes for Quick Repair', async () => {
+    const { manager, order } = prepareSpawnlessStartup();
+    const legacyStore = path.join(manager.getStateDir(), 'agents', 'main', 'sessions', 'sessions.json');
+    fs.mkdirSync(path.dirname(legacyStore), { recursive: true });
+    fs.writeFileSync(legacyStore, '\uFEFFnot json');
+    const config = JSON.stringify({ gateway: { mode: 'local' }, session: { maintenance: { rotateBytes: 1000 } } });
+    fs.writeFileSync(manager.getConfigPath(), config);
+
+    await manager.startGateway('legacy-data-test');
+
+    expect(order).toEqual(['startup-compatibility']);
+    expect(fs.readFileSync(manager.getConfigPath(), 'utf8')).toBe(config);
+    expect(fs.readFileSync(legacyStore, 'utf8')).toBe('\uFEFFnot json');
+    expect(fs.readdirSync(path.dirname(legacyStore))).toEqual(['sessions.json']);
+    expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
+  });
+
+  test('leaves missing managed plugin load paths for backed-up Quick Repair', async () => {
+    const { manager } = prepareSpawnlessStartup();
+    // Left by a previous install location; a failed config sync never rewrites it.
+    const missingRuntimeDir = path.join(tempDir, 'old-install', 'resources', 'cfmind', 'third-party-extensions');
+    const userDataDir = path.join(tempDir, 'user-data', 'third-party-extensions');
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(manager.getConfigPath(), JSON.stringify({
+      gateway: { mode: 'local', port: 18789 },
+      plugins: { load: { paths: [missingRuntimeDir, userDataDir] }, entries: { browser: { enabled: true } } },
+    }));
+    let configSeenByHelper: unknown;
+    vi.mocked(runOpenClawStartupCompatibility).mockReset().mockImplementationOnce(async () => {
+      configSeenByHelper = JSON.parse(fs.readFileSync(manager.getConfigPath(), 'utf8'));
+      return { status: OpenClawStartupMigrationStatus.Failed, error: 'stop after preparation' };
+    });
+
+    await manager.startGateway('missing-plugin-load-path-test');
+
+    expect(configSeenByHelper).toEqual({
+      gateway: { mode: 'local', port: 18789 },
+      plugins: { load: { paths: [missingRuntimeDir, userDataDir] }, entries: { browser: { enabled: true } } },
+    });
+    expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
+  });
+
+  // Module mocks keep call history across tests; each prep test starts and ends clean.
+  const withStartupPrepMocks = async (run: () => Promise<void>) => {
+    vi.mocked(runOpenClawStartupCompatibility).mockReset()
+      .mockResolvedValue({ status: OpenClawStartupMigrationStatus.Skipped });
+    vi.mocked(migrateLegacyStateBeforeStartup).mockClear();
+    vi.mocked(spawnOpenClawGatewayProcess).mockReset().mockImplementation(() => {
+      throw new Error('stop at spawn');
+    });
+    try {
+      await run();
+    } finally {
+      vi.mocked(runOpenClawStartupCompatibility).mockReset();
+      vi.mocked(migrateLegacyStateBeforeStartup).mockClear();
+      vi.mocked(spawnOpenClawGatewayProcess).mockReset();
+    }
+  };
+
+  test('records a clean preparation and skips both helpers on the next start', () => withStartupPrepMocks(async () => {
+    const { manager } = prepareSpawnlessStartup();
+    vi.mocked(runOpenClawStartupCompatibility).mockReset()
+      .mockResolvedValue({ status: OpenClawStartupMigrationStatus.Skipped });
+    const markerPath = path.join(path.dirname(manager.getStateDir()), OPENCLAW_STARTUP_PREP_MARKER_FILE);
+    const retiredIdentity = path.join(manager.getStateDir(), 'identity', 'device.json');
+    const clean = { status: OpenClawStartupMigrationStatus.Skipped, settled: true, probePaths: [retiredIdentity] };
+    vi.mocked(migrateLegacyStateBeforeStartup).mockResolvedValueOnce(clean);
+
+    await expect(manager.startGateway('first-start')).rejects.toThrow('stop at spawn');
+    expect(runOpenClawStartupCompatibility).toHaveBeenCalledOnce();
+    expect(migrateLegacyStateBeforeStartup).toHaveBeenCalledOnce();
+    expect(JSON.parse(fs.readFileSync(markerPath, 'utf8')).probes).toEqual({ [retiredIdentity]: 'missing' });
+
+    await expect(manager.startGateway('second-start')).rejects.toThrow('stop at spawn');
+    expect(runOpenClawStartupCompatibility).toHaveBeenCalledOnce();
+    expect(migrateLegacyStateBeforeStartup).toHaveBeenCalledOnce();
+    expect(spawnOpenClawGatewayProcess).toHaveBeenCalledTimes(2);
+
+    // A legacy input that appears later (for example after a downgrade) reruns both helpers.
+    fs.mkdirSync(path.dirname(retiredIdentity), { recursive: true });
+    fs.writeFileSync(retiredIdentity, '{}');
+    vi.mocked(migrateLegacyStateBeforeStartup).mockResolvedValueOnce(clean);
+    await expect(manager.startGateway('third-start')).rejects.toThrow('stop at spawn');
+    expect(runOpenClawStartupCompatibility).toHaveBeenCalledTimes(2);
+    expect(migrateLegacyStateBeforeStartup).toHaveBeenCalledTimes(2);
+  }));
+
+  test('never skips preparation for config that needs the compatibility helper', () => withStartupPrepMocks(async () => {
+    const { manager } = prepareSpawnlessStartup();
+    vi.mocked(runOpenClawStartupCompatibility).mockReset()
+      .mockResolvedValue({ status: OpenClawStartupMigrationStatus.Skipped });
+    const clean = { status: OpenClawStartupMigrationStatus.Skipped, settled: true, probePaths: [] };
+    vi.mocked(migrateLegacyStateBeforeStartup).mockResolvedValueOnce(clean).mockResolvedValueOnce(clean);
+    fs.writeFileSync(manager.getConfigPath(), JSON.stringify({ gateway: { mode: 'local', reload: { mode: 'hot' } } }));
+
+    await expect(manager.startGateway('first-start')).rejects.toThrow('stop at spawn');
+    await expect(manager.startGateway('second-start')).rejects.toThrow('stop at spawn');
+    expect(runOpenClawStartupCompatibility).toHaveBeenCalledTimes(2);
+  }));
 });

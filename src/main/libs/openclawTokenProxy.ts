@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { net } from 'electron';
 import http from 'http';
 
@@ -8,6 +9,13 @@ import {
   type AuthRefreshReason as AuthRefreshReasonValue,
   type AuthTokenRefreshResult,
 } from '../../shared/auth/constants';
+import {
+  formatLlmTraceparent,
+  isValidLlmTraceId,
+  LLM_TRACEPARENT_HEADER,
+  LOBSTER_SERVER_TRACE_ID_HEADER,
+  parseLlmTraceparent,
+} from '../../shared/cowork/llmTurnUsage';
 import { EnterpriseApiErrorCode } from '../../shared/enterpriseAccount/constants';
 import {
   LOBSTERAI_CLIENT_CAPABILITIES,
@@ -15,15 +23,27 @@ import {
   LOBSTERAI_CLIENT_VERSION_HEADER,
 } from '../../shared/providers/modelRuntimeProfiles';
 import type { EnterpriseAuthSessionSnapshot } from '../enterpriseAccount/membershipRevocation';
+import { createLlmSpanId, createLlmTraceId } from './llmTrace';
+import { listenOnLoopback } from './loopbackListen';
 
 const PROXY_BIND_HOST = '127.0.0.1';
+// Header names OpenAI-, Anthropic- and Google-style clients use for the provider key.
+const INBOUND_API_KEY_HEADERS = ['x-api-key', 'x-goog-api-key', 'api-key'] as const;
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1']);
+const UNAUTHORIZED_WARN_INTERVAL_MS = 60_000;
 const RECENT_QUOTA_ERROR_TTL_MS = 30_000;
 const MAX_PROXY_SSE_SCAN_BUFFER_CHARS = 1_048_576;
 const GEMINI_FALLBACK_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
+const MAX_TRACE_STATS_ENTRIES = 500;
+const PROXY_UPSTREAM_ERROR_MESSAGE = 'Token proxy upstream error';
+const PROXY_UPSTREAM_NETWORK_ERROR_TYPE = 'upstream_network_error';
+// Electron net.fetch rejects with Chromium's net error name, e.g. "net::ERR_HTTP2_PING_FAILED".
+const CHROMIUM_NET_ERROR_PATTERN = /\bnet::(ERR_[A-Z0-9_]+)\b/;
 
 let proxyServer: http.Server | null = null;
 let proxyPort: number | null = null;
 let recentQuotaError: OpenClawTokenProxyQuotaError | null = null;
+const traceStatsById = new Map<string, OpenClawTokenProxyTraceStats>();
 
 // Injected dependencies
 let tokenGetter: (() => { accessToken: string; refreshToken: string } | null) | null = null;
@@ -38,6 +58,8 @@ let enterpriseAuthSessionSnapshotGetter: (() => EnterpriseAuthSessionSnapshot | 
 let enterpriseMembershipRevokedHandler: (
   (event: OpenClawTokenProxyMembershipRevocationEvent) => void
 ) | null = null;
+let inboundAuthTokenGetter: (() => string | null) | null = null;
+let lastUnauthorizedWarnAt = 0;
 
 export type OpenClawTokenProxyMembershipRevocationEvent = {
   code: number;
@@ -55,6 +77,10 @@ export type OpenClawTokenProxyConfig = {
   onEnterpriseMembershipRevoked?: (
     event: OpenClawTokenProxyMembershipRevocationEvent
   ) => void;
+  /** Port from the previous launch; an ephemeral port is used when it is taken. */
+  preferredPort?: number | null;
+  /** Shared secret that OpenClaw and dsh send as the provider API key. */
+  getInboundAuthToken?: () => string | null;
 };
 
 type OpenClawTokenProxyQuotaError = {
@@ -62,6 +88,47 @@ type OpenClawTokenProxyQuotaError = {
   code?: string | number;
   capturedAt: number;
 };
+
+/** Model requests the proxy forwarded for one client trace (one Cowork turn). */
+export type OpenClawTokenProxyTraceStats = {
+  requests: number;
+  /** Responses that ended with a terminal success packet or a 2xx body. */
+  completed: number;
+  failed: number;
+  lastSeenAt: number;
+};
+
+/**
+ * One forwarded model request. traceId/spanId come from OpenClaw's traceparent
+ * (the turn's trace when the turn was started with one) and are forwarded to
+ * lobsterai-server, which echoes its own trace id back for log correlation.
+ */
+type ProxyRequestTrace = {
+  traceId: string;
+  spanId: string;
+  traceparent: string;
+  generated: boolean;
+  path: string;
+  startedAt: number;
+  serverTraceId: string | null;
+  status: number | null;
+  finished: boolean;
+};
+
+const ProxyRequestOutcome = {
+  Completed: 'completed',
+  UpstreamError: 'upstream_error',
+  HttpError: 'http_error',
+  UnexpectedEof: 'unexpected_eof',
+  TransportError: 'transport_error',
+  DownstreamClosed: 'downstream_closed',
+  AuthSessionChanged: 'auth_session_changed',
+  AuthRefreshUnavailable: 'auth_refresh_unavailable',
+  ProxyError: 'proxy_error',
+} as const;
+type ProxyRequestOutcomeValue = typeof ProxyRequestOutcome[keyof typeof ProxyRequestOutcome];
+
+let proxyStartPromise: Promise<{ port: number }> | null = null;
 
 export function startOpenClawTokenProxy(config: OpenClawTokenProxyConfig): Promise<{ port: number }> {
   tokenGetter = config.getAuthTokens;
@@ -72,37 +139,30 @@ export function startOpenClawTokenProxy(config: OpenClawTokenProxyConfig): Promi
   clientVersionGetter = config.getClientVersion;
   enterpriseAuthSessionSnapshotGetter = config.getEnterpriseAuthSessionSnapshot ?? null;
   enterpriseMembershipRevokedHandler = config.onEnterpriseMembershipRevoked ?? null;
+  inboundAuthTokenGetter = config.getInboundAuthToken ?? null;
 
-  return new Promise((resolve, reject) => {
-    if (proxyServer) {
-      if (proxyPort) {
-        resolve({ port: proxyPort });
-        return;
-      }
-      reject(new Error('Token proxy is starting'));
-      return;
-    }
-
+  if (proxyServer && proxyPort) return Promise.resolve({ port: proxyPort });
+  if (proxyStartPromise) return proxyStartPromise;
+  proxyStartPromise = (async () => {
     const server = http.createServer(handleRequest);
-
-    server.listen(0, PROXY_BIND_HOST, () => {
-      const addr = server.address();
-      if (addr && typeof addr === 'object') {
-        proxyPort = addr.port;
-        proxyServer = server;
-        console.log(`[OpenClawTokenProxy] started on ${PROXY_BIND_HOST}:${proxyPort}`);
-        resolve({ port: proxyPort });
-      } else {
-        server.close();
-        reject(new Error('Failed to bind token proxy'));
-      }
-    });
-
-    server.on('error', (err) => {
-      console.error('[OpenClawTokenProxy] server error:', err);
-      reject(err);
-    });
+    try {
+      const { port, reused } = await listenOnLoopback(server, PROXY_BIND_HOST, config.preferredPort);
+      server.on('error', (err) => {
+        console.error('[OpenClawTokenProxy] server error:', err);
+      });
+      proxyPort = port;
+      proxyServer = server;
+      console.log(`[OpenClawTokenProxy] started on ${PROXY_BIND_HOST}:${port}${reused ? ' (reused port)' : ''}`);
+      return { port };
+    } catch (error) {
+      console.error('[OpenClawTokenProxy] server error:', error);
+      server.close();
+      throw error;
+    }
+  })().finally(() => {
+    proxyStartPromise = null;
   });
+  return proxyStartPromise;
 }
 
 export function stopOpenClawTokenProxy(): void {
@@ -113,6 +173,7 @@ export function stopOpenClawTokenProxy(): void {
   proxyServer = null;
   proxyPort = null;
   recentQuotaError = null;
+  traceStatsById.clear();
   tokenGetter = null;
   tokenRefresher = null;
   serverBaseUrlGetter = null;
@@ -121,10 +182,89 @@ export function stopOpenClawTokenProxy(): void {
   clientVersionGetter = null;
   enterpriseAuthSessionSnapshotGetter = null;
   enterpriseMembershipRevokedHandler = null;
+  inboundAuthTokenGetter = null;
 }
 
 export function getOpenClawTokenProxyPort(): number | null {
   return proxyPort;
+}
+
+export function getOpenClawTokenProxyTraceStats(traceId: string): OpenClawTokenProxyTraceStats | null {
+  const stats = traceStatsById.get(traceId);
+  return stats ? { ...stats } : null;
+}
+
+function createProxyRequestTrace(
+  traceparentHeader: string | string[] | undefined,
+  path: string,
+  now = Date.now(),
+): ProxyRequestTrace {
+  const parsed = parseLlmTraceparent(Array.isArray(traceparentHeader) ? traceparentHeader[0] : traceparentHeader);
+  // Requests outside a traced run still get ids so client and server logs match.
+  const traceId = parsed?.traceId ?? createLlmTraceId();
+  const spanId = parsed?.spanId ?? createLlmSpanId();
+  return {
+    traceId,
+    spanId,
+    traceparent: formatLlmTraceparent(traceId, spanId),
+    generated: !parsed,
+    path,
+    startedAt: now,
+    serverTraceId: null,
+    status: null,
+    finished: false,
+  };
+}
+
+// Entries are re-inserted on every request, so map order is least recently used first.
+function pruneTraceStats(): void {
+  for (const traceId of traceStatsById.keys()) {
+    if (traceStatsById.size <= MAX_TRACE_STATS_ENTRIES) return;
+    traceStatsById.delete(traceId);
+  }
+}
+
+function recordProxyRequestStarted(trace: ProxyRequestTrace, bodyBytes: number): void {
+  if (!trace.generated && isValidLlmTraceId(trace.traceId)) {
+    const stats = traceStatsById.get(trace.traceId) ?? { requests: 0, completed: 0, failed: 0, lastSeenAt: 0 };
+    stats.requests += 1;
+    stats.lastSeenAt = trace.startedAt;
+    traceStatsById.delete(trace.traceId);
+    traceStatsById.set(trace.traceId, stats);
+    pruneTraceStats();
+  }
+  console.debug(
+    `[OpenClawTokenProxy] LLM request started trace=${trace.traceId} span=${trace.spanId}`
+    + `${trace.generated ? ' traceSource=generated' : ''} path=${trace.path} bytes=${bodyBytes}`,
+  );
+}
+
+function finishProxyRequest(
+  trace: ProxyRequestTrace | undefined,
+  outcome: ProxyRequestOutcomeValue,
+  detail = '',
+  now = Date.now(),
+): void {
+  if (!trace || trace.finished) return;
+  trace.finished = true;
+  const completed = outcome === ProxyRequestOutcome.Completed;
+  const stats = trace.generated ? undefined : traceStatsById.get(trace.traceId);
+  if (stats) {
+    if (completed) {
+      stats.completed += 1;
+    } else {
+      stats.failed += 1;
+    }
+    stats.lastSeenAt = now;
+  }
+  const message = `[OpenClawTokenProxy] LLM request finished trace=${trace.traceId} span=${trace.spanId}`
+    + ` serverTrace=${trace.serverTraceId ?? 'none'} status=${trace.status ?? 'none'} outcome=${outcome}`
+    + `${detail ? ` ${detail}` : ''} durationMs=${Math.max(0, now - trace.startedAt)}`;
+  if (completed) {
+    console.log(message);
+  } else {
+    console.warn(message);
+  }
 }
 
 export function consumeRecentOpenClawTokenProxyQuotaError(
@@ -190,7 +330,67 @@ function writeAuthSessionChanged(res: http.ServerResponse): void {
   }));
 }
 
+/** Rejects DNS-rebinding requests that reach the loopback socket under a foreign host name. */
+function isLoopbackHostHeader(host: string | undefined): boolean {
+  if (!host) return false;
+  const hostname = host.startsWith('[')
+    ? host.slice(1, host.indexOf(']'))
+    : host.split(':')[0];
+  return LOOPBACK_HOSTNAMES.has(hostname.toLowerCase());
+}
+
+function extractInboundProxyTokens(headers: http.IncomingHttpHeaders): string[] {
+  const tokens: string[] = [];
+  const bearer = /^Bearer\s+(\S+)\s*$/i.exec(headers.authorization ?? '');
+  if (bearer) tokens.push(bearer[1]);
+  for (const name of INBOUND_API_KEY_HEADERS) {
+    const value = headers[name];
+    if (typeof value === 'string' && value.trim()) tokens.push(value.trim());
+  }
+  return tokens;
+}
+
+/** Only callers holding the proxy token may spend the signed-in account. */
+function isInboundRequestAuthorized(headers: http.IncomingHttpHeaders, expectedToken: string | null): boolean {
+  if (!expectedToken) return true;
+  const expected = Buffer.from(expectedToken);
+  return extractInboundProxyTokens(headers).some(token => {
+    const candidate = Buffer.from(token);
+    return candidate.length === expected.length && crypto.timingSafeEqual(candidate, expected);
+  });
+}
+
+function rejectInboundRequest(req: http.IncomingMessage, res: http.ServerResponse, status: 401 | 403, code: string): void {
+  const now = Date.now();
+  if (now - lastUnauthorizedWarnAt >= UNAUTHORIZED_WARN_INTERVAL_MS) {
+    lastUnauthorizedWarnAt = now;
+    const presented = [
+      ...(req.headers.authorization ? ['authorization'] : []),
+      ...INBOUND_API_KEY_HEADERS.filter(name => req.headers[name]),
+    ];
+    const pathname = (req.url ?? '/').split('?')[0];
+    console.warn(`[OpenClawTokenProxy] rejected ${req.method ?? 'GET'} ${pathname}: ${code} (auth headers: ${presented.join(',') || 'none'})`);
+  }
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: {
+      message: status === 403 ? 'Requests must target the loopback proxy address.' : 'Unauthorized: invalid or missing proxy token.',
+      type: 'authentication_error',
+      code,
+    },
+  }));
+}
+
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!isLoopbackHostHeader(req.headers.host)) {
+    rejectInboundRequest(req, res, 403, 'proxy_host_not_loopback');
+    return;
+  }
+  if (!isInboundRequestAuthorized(req.headers, inboundAuthTokenGetter?.() ?? null)) {
+    rejectInboundRequest(req, res, 401, 'invalid_proxy_token');
+    return;
+  }
+  let requestTrace: ProxyRequestTrace | undefined;
   try {
     const tokens = tokenGetter?.();
     const serverBaseUrl = serverBaseUrlGetter?.();
@@ -210,6 +410,8 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     }
 
     const body = await collectRequestBody(req);
+    requestTrace = createProxyRequestTrace(req.headers[LLM_TRACEPARENT_HEADER], req.url?.split('?')[0] ?? '/');
+    recordProxyRequestStarted(requestTrace, body.length);
     const upstreamBody = shouldHydrateGeminiChatCompletionsBody(req.url)
       ? hydrateGeminiChatCompletionsBody(body)
       : body;
@@ -231,10 +433,12 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       upstreamBody,
       req.headers,
       clientVersion,
+      requestTrace.traceparent,
     );
     if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)) {
       cancelUpstreamResult(result);
       writeAuthSessionChanged(res);
+      finishProxyRequest(requestTrace, ProxyRequestOutcome.AuthSessionChanged);
       return;
     }
 
@@ -248,14 +452,16 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
           upstreamBody,
           req.headers,
           clientVersion,
+          requestTrace.traceparent,
         );
         if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)) {
           cancelUpstreamResult(result);
           writeAuthSessionChanged(res);
+          finishProxyRequest(requestTrace, ProxyRequestOutcome.AuthSessionChanged);
           return;
         }
         if (result.status !== 401) {
-          pipeResponse(result, res, inspectionContext);
+          pipeResponse(result, res, inspectionContext, requestTrace);
           return;
         }
       }
@@ -264,6 +470,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       const refreshResult = await tokenRefresher(AuthRefreshReason.OpenClawProxy);
       if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)) {
         writeAuthSessionChanged(res);
+        finishProxyRequest(requestTrace, ProxyRequestOutcome.AuthSessionChanged);
         return;
       }
       if (refreshResult.accessToken) {
@@ -274,29 +481,53 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
           upstreamBody,
           req.headers,
           clientVersion,
+          requestTrace.traceparent,
         );
         if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)) {
           cancelUpstreamResult(retryResult);
           writeAuthSessionChanged(res);
+          finishProxyRequest(requestTrace, ProxyRequestOutcome.AuthSessionChanged);
           return;
         }
-        pipeResponse(retryResult, res, inspectionContext);
+        pipeResponse(retryResult, res, inspectionContext, requestTrace);
         return;
       }
       if (isTemporaryAuthRefreshFailure(refreshResult)) {
         writeTemporaryAuthRefreshFailure(res);
+        finishProxyRequest(requestTrace, ProxyRequestOutcome.AuthRefreshUnavailable);
         return;
       }
     }
 
-    pipeResponse(result, res, inspectionContext);
+    pipeResponse(result, res, inspectionContext, requestTrace);
   } catch (err) {
     console.error('[OpenClawTokenProxy] request handling error:', err);
+    finishProxyRequest(requestTrace, ProxyRequestOutcome.ProxyError);
     if (!res.headersSent) {
       res.writeHead(502, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Token proxy upstream error' }));
+      res.end(buildUpstreamRequestFailureBody(err));
     }
   }
+}
+
+/**
+ * Body for a request that failed before upstream response headers arrived.
+ * Network failures keep their Chromium error name so the client can tell a
+ * broken connection apart from an error returned by the server.
+ */
+function buildUpstreamRequestFailureBody(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const netErrorName = CHROMIUM_NET_ERROR_PATTERN.exec(message)?.[1];
+  if (!netErrorName) {
+    return JSON.stringify({ error: PROXY_UPSTREAM_ERROR_MESSAGE });
+  }
+  return JSON.stringify({
+    error: {
+      message: `LobsterAI proxy upstream request failed: net::${netErrorName}`,
+      type: PROXY_UPSTREAM_NETWORK_ERROR_TYPE,
+      code: netErrorName,
+    },
+  });
 }
 
 type UpstreamResult = {
@@ -528,6 +759,7 @@ type ProxyResponseInspectionContext = {
 };
 
 type ProxySSEStreamScanState = {
+  requestTrace?: ProxyRequestTrace;
   sawTerminalPacket: boolean;
   terminalKind: ProxySSETerminalKindValue | null;
   eventCount: number;
@@ -542,8 +774,10 @@ type ProxySSEStreamScanState = {
 function createProxySSEStreamScanState(
   now = Date.now(),
   inspectionContext?: ProxyResponseInspectionContext,
+  requestTrace?: ProxyRequestTrace,
 ): ProxySSEStreamScanState {
   return {
+    requestTrace,
     sawTerminalPacket: false,
     terminalKind: null,
     eventCount: 0,
@@ -815,6 +1049,7 @@ async function forwardRequest(
   body: Buffer,
   incomingHeaders: http.IncomingHttpHeaders,
   clientVersion: string,
+  traceparent: string,
 ): Promise<UpstreamResult> {
   let accountContextHeaders: Record<string, string> = {};
   try {
@@ -827,6 +1062,7 @@ async function forwardRequest(
     incomingHeaders,
     clientVersion,
     accountContextHeaders,
+    traceparent,
   );
 
   const resp = await net.fetch(url, {
@@ -866,6 +1102,7 @@ function buildUpstreamRequestHeaders(
   incomingHeaders: http.IncomingHttpHeaders,
   clientVersion: string,
   accountContextHeaders: Record<string, string> = {},
+  traceparent?: string,
 ): Record<string, string> {
   const headers: Record<string, string> = {
     ...accountContextHeaders,
@@ -873,6 +1110,7 @@ function buildUpstreamRequestHeaders(
     'Content-Type': incomingHeaders['content-type'] || 'application/json',
     [LOBSTERAI_CLIENT_CAPABILITIES_HEADER]: LOBSTERAI_CLIENT_CAPABILITIES,
     [LOBSTERAI_CLIENT_VERSION_HEADER]: clientVersion,
+    ...(traceparent ? { [LLM_TRACEPARENT_HEADER]: traceparent } : {}),
   };
 
   // Forward accept header for SSE streaming
@@ -887,16 +1125,26 @@ function pipeResponse(
   result: UpstreamResult,
   res: http.ServerResponse,
   inspectionContext?: ProxyResponseInspectionContext,
+  requestTrace?: ProxyRequestTrace,
 ): void {
+  if (requestTrace) {
+    requestTrace.status = result.status;
+    requestTrace.serverTraceId = result.headers[LOBSTER_SERVER_TRACE_ID_HEADER] ?? null;
+  }
   res.writeHead(result.status, result.headers);
 
   if (result.isStream) {
-    pipeStreamingResponseWithQuotaScan(result.body, res, inspectionContext);
+    pipeStreamingResponseWithQuotaScan(result.body, res, inspectionContext, requestTrace);
   } else if (Buffer.isBuffer(result.body)) {
     scanProxyBodyForQuotaError(result.body, Date.now(), inspectionContext);
     res.end(result.body);
+    finishProxyRequest(
+      requestTrace,
+      result.status >= 200 && result.status < 300 ? ProxyRequestOutcome.Completed : ProxyRequestOutcome.HttpError,
+    );
   } else {
     pipeWebReadableResponseWithQuotaScan(result.body as unknown as ReadableStream<Uint8Array>, res);
+    finishProxyRequest(requestTrace, ProxyRequestOutcome.Completed, 'body=unscanned');
   }
 }
 
@@ -912,17 +1160,19 @@ function pipeStreamingResponseWithQuotaScan(
   body: NodeJS.ReadableStream | Buffer,
   res: http.ServerResponse,
   inspectionContext?: ProxyResponseInspectionContext,
+  requestTrace?: ProxyRequestTrace,
 ): void {
   if (Buffer.isBuffer(body)) {
     scanProxyBodyForQuotaError(body, Date.now(), inspectionContext);
     res.end(body);
+    finishProxyRequest(requestTrace, ProxyRequestOutcome.Completed);
     return;
   }
 
   // SSE responses must end with a terminal packet ([DONE], finish_reason, or an
   // error payload). Anything else is a truncated stream and must not be
   // presented to the client as a cleanly completed response.
-  const scanState = createProxySSEStreamScanState(Date.now(), inspectionContext);
+  const scanState = createProxySSEStreamScanState(Date.now(), inspectionContext, requestTrace);
 
   if (isNodeReadableStream(body)) {
     pipeNodeReadableResponseWithQuotaScan(body, res, scanState);
@@ -952,11 +1202,19 @@ function formatProxySSEOutcome(
   const downstreamClosedAfterMs = scanState.downstreamClosedAt === null
     ? 'none'
     : Math.max(0, scanState.downstreamClosedAt - scanState.startedAt);
+  const trace = scanState.requestTrace;
   return `[OpenClawTokenProxy] upstream SSE outcome=${outcome}`
+    + (trace ? ` trace=${trace.traceId} span=${trace.spanId} serverTrace=${trace.serverTraceId ?? 'none'}` : '')
     + ` terminal=${scanState.terminalKind ?? 'none'}`
     + ` events=${scanState.eventCount}`
     + ` durationMs=${durationMs}`
     + ` downstreamClosedAfterMs=${downstreamClosedAfterMs}`;
+}
+
+// A client that closes after the terminal packet still received the whole answer.
+function resolveDownstreamClosedOutcome(scanState: ProxySSEStreamScanState): ProxyRequestOutcomeValue {
+  if (scanState.terminalKind === ProxySSETerminalKind.Error) return ProxyRequestOutcome.UpstreamError;
+  return scanState.sawTerminalPacket ? ProxyRequestOutcome.Completed : ProxyRequestOutcome.DownstreamClosed;
 }
 
 function observeProxyResponseClose(
@@ -978,6 +1236,11 @@ function observeProxyResponseClose(
     if (scanState && cancellationRequested) {
       scanState.downstreamCancellationRequested = true;
       console.debug(formatProxySSEOutcome('downstream_closed_upstream_cancelled', scanState));
+      finishProxyRequest(
+        scanState.requestTrace,
+        resolveDownstreamClosedOutcome(scanState),
+        `events=${scanState.eventCount}`,
+      );
     }
   });
 }
@@ -1009,12 +1272,27 @@ function endProxyResponseAfterScan(
     } else {
       console.error(formatProxySSEOutcome('incomplete_end_after_downstream_close', scanState));
     }
+    finishProxyRequest(
+      scanState.requestTrace,
+      resolveDownstreamClosedOutcome(scanState),
+      `events=${scanState.eventCount}`,
+    );
     return;
   }
   if (scanState && !scanState.sawTerminalPacket) {
     console.error(formatProxySSEOutcome('unexpected_eof', scanState));
+    finishProxyRequest(scanState.requestTrace, ProxyRequestOutcome.UnexpectedEof, `events=${scanState.eventCount}`);
     abortProxyResponse(res);
     return;
+  }
+  if (scanState) {
+    finishProxyRequest(
+      scanState.requestTrace,
+      scanState.terminalKind === ProxySSETerminalKind.Error
+        ? ProxyRequestOutcome.UpstreamError
+        : ProxyRequestOutcome.Completed,
+      `terminal=${scanState.terminalKind ?? 'none'} events=${scanState.eventCount}`,
+    );
   }
   if (!res.destroyed && !res.writableEnded) {
     res.end();
@@ -1035,6 +1313,7 @@ function abortProxyResponseAfterReadError(
       ? 'transport_error'
       : 'transport_error_after_downstream_close';
     console.error(formatProxySSEOutcome(outcome, scanState), error);
+    finishProxyRequest(scanState.requestTrace, ProxyRequestOutcome.TransportError, `events=${scanState.eventCount}`);
   } else {
     console.error('[OpenClawTokenProxy] upstream stream read error', error);
   }
@@ -1148,6 +1427,15 @@ function pipeWebReadableResponseWithQuotaScan(
 }
 
 export const __openClawTokenProxyTestUtils = {
+  createProxyRequestTrace,
+  recordProxyRequestStarted,
+  finishProxyRequest,
+  ProxyRequestOutcome,
+  resetTraceStats: () => traceStatsById.clear(),
+  buildUpstreamRequestFailureBody,
+  extractInboundProxyTokens,
+  isInboundRequestAuthorized,
+  isLoopbackHostHeader,
   extractStructuredProxyError,
   extractQuotaErrorFromProxyErrorPayload,
   extractQuotaErrorFromProxySSEPacket,

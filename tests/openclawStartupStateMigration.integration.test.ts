@@ -187,17 +187,36 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw startup state migration', () => 
     expect(withDatabase(db => db.prepare('SELECT device_id FROM device_identities').get()?.device_id)).toBe(original.identity.deviceId);
   });
 
-  test('blocks a different canonical identity without a matching migration receipt', async () => {
+  test('preserves both valid identities without a receipt and permits repeated startup', async () => {
     const original = seedIdentity();
     expect((await migrate()).code).toBe(0);
     withDatabase(db => db.exec('DELETE FROM migration_sources'), false);
+    withDatabase(db => {
+      db.prepare('INSERT INTO device_auth_tokens VALUES (?, ?, ?, ?, ?)').run(
+        original.identity.deviceId, 'operator', 'preserve-canonical-token', '["operator.admin"]', original.identity.createdAtMs);
+      db.prepare(`INSERT INTO device_pairing_paired (device_id, public_key, role, tokens_json, created_at_ms, approved_at_ms)
+        VALUES (?, ?, ?, ?, ?, ?)`).run(
+        original.identity.deviceId, original.identity.publicKeyPem, 'operator', '{"operator":{"token":"preserve-pair-token"}}',
+        original.identity.createdAtMs, original.identity.createdAtMs);
+    }, false);
+    const canonicalBefore = withDatabase(db => db.prepare('SELECT * FROM device_identities').all());
+    const tokensBefore = withDatabase(db => db.prepare('SELECT * FROM device_auth_tokens').all());
+    const pairingBefore = withDatabase(db => db.prepare('SELECT * FROM device_pairing_paired').all());
     const conflicting = seedIdentity();
     const before = digest(conflicting.source);
-    const result = await migrate();
-    expect(result.code).toBe(1);
-    expect(result.report.remainingPaths).toContain(conflicting.source);
-    expect(digest(conflicting.source)).toBe(before);
-    expect(withDatabase(db => db.prepare('SELECT device_id FROM device_identities').get()?.device_id)).toBe(original.identity.deviceId);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await migrate();
+      expect(result.code).toBe(0);
+      expect(result.report.warnings).toEqual([]);
+      expect(result.report.remainingPaths).toEqual([]);
+      expect(result.report.notices.join(' ')).toContain('canonical SQLite identity remains authoritative');
+      expect(digest(conflicting.source)).toBe(before);
+      expect(fs.existsSync(conflicting.source + '.doctor-importing')).toBe(false);
+      expect(withDatabase(db => db.prepare('SELECT * FROM device_identities').all())).toEqual(canonicalBefore);
+      expect(withDatabase(db => db.prepare('SELECT * FROM device_auth_tokens').all())).toEqual(tokensBefore);
+      expect(withDatabase(db => db.prepare('SELECT * FROM device_pairing_paired').all())).toEqual(pairingBefore);
+      expect(withDatabase(db => db.prepare('SELECT COUNT(*) AS count FROM migration_sources').get()?.count)).toBe(0);
+    }
   });
 
   test('does not generate replacement keys for damaged SQLite-only identity', async () => {
@@ -253,7 +272,7 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw startup state migration', () => 
   });
 
   test.runIf(process.env.OPENCLAW_STARTUP_MIGRATION_GATEWAY === '1')(
-    'recovers legacy xAI auth and serves config, agents and exec approvals after migration/restart', async () => {
+    'serves migrated auth/config and restarts with conflicting identities and no startup checkpoint', async () => {
       const { identity, source } = seedIdentity();
       const token = 'startup-migration-isolated-test-token';
       fs.writeFileSync(configPath, JSON.stringify({
@@ -309,6 +328,14 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw startup state migration', () => 
       await cli(['memory', 'index', '--force']);
 
       for (let attempt = 0; attempt < 2; attempt++) {
+        let retiredDigest: string | undefined;
+        if (attempt === 1) {
+          withDatabase(db => db.exec(`DELETE FROM migration_sources WHERE migration_kind = 'legacy-device-identity-json';
+            DELETE FROM schema_meta WHERE meta_key IN ('state-migrations', 'startup-migrations')`), false);
+          expect(withDatabase(db => db.prepare("SELECT COUNT(*) AS count FROM schema_meta WHERE meta_key IN ('state-migrations', 'startup-migrations')").get()?.count)).toBe(0);
+          retiredDigest = digest(seedIdentity().source);
+        }
+        const canonicalBefore = withDatabase(db => db.prepare('SELECT * FROM device_identities').all());
         const server = net.createServer();
         await new Promise<void>((resolve, reject) => {
           server.once('error', reject);
@@ -359,7 +386,16 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw startup state migration', () => 
           if (gateway.exitCode === null) gateway.kill();
           await closed;
         }
-        expect((await migrate()).report.status).toBe(OpenClawStartupMigrationStatus.Skipped);
+        const result = await migrate();
+        expect(result.code).toBe(0);
+        if (retiredDigest) {
+          expect(result.report.notices.join(' ')).toContain('canonical SQLite identity remains authoritative');
+          expect(digest(source)).toBe(retiredDigest);
+          expect(withDatabase(db => db.prepare("SELECT COUNT(*) AS count FROM migration_sources WHERE migration_kind = 'legacy-device-identity-json'").get()?.count)).toBe(0);
+        } else {
+          expect(result.report.status).toBe(OpenClawStartupMigrationStatus.Skipped);
+        }
+        expect(withDatabase(db => db.prepare('SELECT * FROM device_identities').all())).toEqual(canonicalBefore);
         expect(withDatabase(db => db.prepare('SELECT device_id FROM device_identities').get()?.device_id)).toBe(identity.deviceId);
       }
     }, 240_000);

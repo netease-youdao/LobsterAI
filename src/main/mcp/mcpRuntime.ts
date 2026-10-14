@@ -4,17 +4,20 @@ import path from 'path';
 
 import { ASK_USER_QUESTION_TOOL_NAME, CoworkIpcChannel, SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../shared/cowork/constants';
 import { McpIpcChannel } from '../../shared/mcp/constants';
-import { isComputerUseKitInstalled } from '../computerUse/computerUseKit';
+import type { McpToolDiscoveryRequest } from '../../shared/mcp/toolDiscovery';
+import { isComputerUseKitInstalled, syncComputerUseSkillFromRuntime } from '../computerUse/computerUseKit';
 import { resolveComputerUseMcpServer } from '../computerUse/computerUseMcpServer';
 import { installComputerUseRuntime } from '../computerUse/computerUseRuntime';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
-import { getElectronNodeRuntimePath } from '../libs/coworkUtil';
+import { ensureElectronNodeShim, getElectronNodeRuntimePath } from '../libs/coworkUtil';
 import {
   type AskUserRequest,
   type AskUserResponse,
   AskUserResponseReason,
   type BrowserToolRequest,
   type BrowserToolResponse,
+  type DecisionToolHandler,
+  type EditorToolHandler,
   McpBridgeServer,
   type MediaGenerationRequest,
   type MediaGenerationResponse,
@@ -22,11 +25,13 @@ import {
 import { OpenClawConfigImpact } from '../libs/openclawConfigImpact';
 import type { ResolvedMcpServer } from '../libs/openclawConfigSync';
 import { resolveLocalDesktopCoworkSessionIdByOpenClawSessionKey } from '../libs/openclawLocalSessionResolver';
+import { appendPythonRuntimeToEnv } from '../libs/pythonRuntime';
 import { resolveStdioCommand } from '../libs/resolveStdioCommand';
 import type { SqliteStore } from '../sqliteStore';
 import { createMcpLaunchSourceFingerprint, McpLaunchResolutionStatus } from './mcpLaunchResolution';
 import { McpLaunchResolverManager } from './mcpLaunchResolverManager';
-import { McpStore } from './mcpStore';
+import { type McpServerRecord, McpStore } from './mcpStore';
+import type { McpToolDiscoveryLaunch } from './mcpToolDiscovery';
 
 export type { AskUserResponse, MediaGenerationRequest, MediaGenerationResponse };
 
@@ -44,6 +49,36 @@ function questionAnswers(request: AskUserRequest, response: AskUserResponse): Re
   }));
 }
 
+const getPackagedNpmBinDir = (): string => (app.isPackaged
+  ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
+  : '');
+
+/** Env the node/npx shims need; MCP children only inherit a short allowlist. */
+function buildMcpShimEnv(): Record<string, string> {
+  const shimEnv: Record<string, string> = {
+    LOBSTERAI_ELECTRON_PATH: getElectronNodeRuntimePath(),
+  };
+  const npmBinDir = getPackagedNpmBinDir();
+  if (npmBinDir) {
+    shimEnv.LOBSTERAI_NPM_BIN_DIR = npmBinDir;
+  }
+  return shimEnv;
+}
+
+/**
+ * PATH as the gateway passes it to its MCP children (see startGateway in
+ * openclawEngineManager): node/npx shims and the Windows Python runtime first.
+ */
+function buildGatewayChildPath(): string {
+  const env: Record<string, string | undefined> = {
+    PATH: process.env.PATH || process.env.Path || '',
+  };
+  appendPythonRuntimeToEnv(env);
+  const npmBinDir = getPackagedNpmBinDir() || path.join(app.getAppPath(), 'node_modules', 'npm', 'bin');
+  const nodeShimDir = ensureElectronNodeShim(getElectronNodeRuntimePath(), npmBinDir);
+  return [nodeShimDir, env.PATH].filter(Boolean).join(path.delimiter);
+}
+
 export interface McpRuntimeDeps {
   /** Shared with the IPC ownership check; only live question IDs are registered here. */
   permissionSessions: Map<string, string>;
@@ -59,13 +94,18 @@ export interface McpRuntimeDeps {
   onAskUserDismissed?: (requestId: string) => void;
   registerQuestion?: NonNullable<CoworkRuntime['registerQuestion']>;
   settleQuestion?: NonNullable<CoworkRuntime['settleQuestion']>;
+  /** Persisted bridge secret; openclaw.json must stay stable across launches. */
+  bridgeSecret?: string;
+  /** Callback-server port from the previous launch. */
+  getBridgePreferredPort?: () => number | undefined;
+  onBridgePortBound?: (port: number) => void;
 }
 
 export class McpRuntime {
   private mcpStore: McpStore | null = null;
   private launchResolverManager: McpLaunchResolverManager | null = null;
   private bridgeServer: McpBridgeServer | null = null;
-  private readonly bridgeSecret = crypto.randomUUID();
+  private readonly bridgeSecret: string;
   private readonly remoteQuestions = new Map<string, { request: AskUserRequest; terminal?: AskUserResponse }>();
   private resolvedServersCache: ResolvedMcpServer[] = [];
   private mediaGenerationHandler:
@@ -74,8 +114,12 @@ export class McpRuntime {
   private browserToolHandler:
     | ((request: BrowserToolRequest) => Promise<BrowserToolResponse>)
     | null = null;
+  private decisionToolHandler: DecisionToolHandler | null = null;
+  private readonly editorToolHandlers = new Map<string, { editorName: string; handler: EditorToolHandler }>();
 
-  constructor(private readonly deps: McpRuntimeDeps) {}
+  constructor(private readonly deps: McpRuntimeDeps) {
+    this.bridgeSecret = deps.bridgeSecret || crypto.randomUUID();
+  }
 
   getStore(): McpStore {
     if (!this.mcpStore) {
@@ -120,6 +164,20 @@ export class McpRuntime {
     this.bridgeServer?.onBrowserTool(handler);
   }
 
+  setDecisionToolHandler(handler: DecisionToolHandler): void {
+    this.decisionToolHandler = handler;
+  }
+
+  /** Serve a document editor's agent tools on the bridge at `/<route>/tool`. */
+  setEditorToolHandler(route: string, editorName: string, handler: EditorToolHandler): void {
+    this.editorToolHandlers.set(route, { editorName, handler });
+    this.bridgeServer?.onEditorTool(route, editorName, handler);
+  }
+
+  getEditorCallbackUrl(route: string): string | null {
+    return this.bridgeServer?.editorCallbackUrl(route) ?? null;
+  }
+
   getAskUserCallbackUrl(): string | null {
     return this.bridgeServer?.askUserCallbackUrl ?? null;
   }
@@ -130,6 +188,10 @@ export class McpRuntime {
 
   getBrowserCallbackUrl(): string | null {
     return this.bridgeServer?.browserCallbackUrl ?? null;
+  }
+
+  getDecisionCallbackUrl(): string | null {
+    return this.bridgeServer?.decisionCallbackUrl ?? null;
   }
 
   getBridgeSecret(): string {
@@ -156,7 +218,8 @@ export class McpRuntime {
       this.bridgeServer = new McpBridgeServer(this.bridgeSecret);
     }
     console.log('[AskUser] starting HTTP callback server...');
-    await this.bridgeServer.start();
+    const port = await this.bridgeServer.start(this.deps.getBridgePreferredPort?.());
+    this.deps.onBridgePortBound?.(port);
 
     this.bridgeServer.onAskUser(request => {
       const sessionId = request.sessionKey
@@ -232,8 +295,21 @@ export class McpRuntime {
       return await this.mediaGenerationHandler(request);
     });
 
+    this.bridgeServer.onDecisionTool(async (request, signal) => {
+      if (!this.decisionToolHandler) {
+        return {
+          content: [{ type: 'text', text: 'The decision model service is not ready yet.' }],
+          isError: true,
+        };
+      }
+      return await this.decisionToolHandler(request, signal);
+    });
+
     if (this.browserToolHandler) {
       this.bridgeServer.onBrowserTool(this.browserToolHandler);
+    }
+    for (const [route, { editorName, handler }] of this.editorToolHandlers) {
+      this.bridgeServer.onEditorTool(route, editorName, handler);
     }
   }
 
@@ -309,6 +385,63 @@ export class McpRuntime {
     });
   }
 
+  /**
+   * Launch settings for listing a server's tools from the settings form. Uses
+   * the same resolution as getResolvedServers() so the names match what
+   * OpenClaw loads: a ready managed npx install is reused while the launch
+   * fields are unchanged; otherwise the raw command runs (npx may download).
+   */
+  async resolveToolDiscoveryLaunch(request: McpToolDiscoveryRequest): Promise<McpToolDiscoveryLaunch> {
+    if (request.transportType !== 'stdio') {
+      return {
+        name: request.name,
+        transportType: request.transportType,
+        url: request.url,
+        headers: request.headers,
+      };
+    }
+
+    const saved = request.serverId ? this.getStore().getServer(request.serverId) : null;
+    const now = Date.now();
+    const server: McpServerRecord = {
+      ...(saved ?? { id: '', description: '', enabled: false, isBuiltIn: false, createdAt: now, updatedAt: now }),
+      name: request.name,
+      transportType: 'stdio',
+      command: request.command,
+      args: request.args ?? [],
+      env: request.env && Object.keys(request.env).length > 0 ? request.env : undefined,
+    };
+
+    const launchResolver = this.getLaunchResolverManager();
+    const readyResolution = saved && launchResolver.canOptimize(server)
+      ? launchResolver.getReadyResolution(server)
+      : undefined;
+    let launch: { command: string; args: string[]; env: Record<string, string> };
+    if (readyResolution?.command) {
+      launch = {
+        command: readyResolution.command,
+        args: readyResolution.args || [],
+        env: { ...buildMcpShimEnv(), ...(readyResolution.env || {}), ...(server.env || {}) },
+      };
+    } else {
+      const resolvedCommand = await resolveStdioCommand(server);
+      launch = {
+        command: resolvedCommand.command,
+        args: resolvedCommand.args,
+        env: { ...buildMcpShimEnv(), ...(resolvedCommand.env || {}) },
+      };
+    }
+
+    return {
+      name: server.name,
+      transportType: 'stdio',
+      command: launch.command,
+      args: launch.args,
+      // A PATH set on the server itself still wins, as it does under OpenClaw.
+      env: { PATH: buildGatewayChildPath(), ...launch.env },
+    };
+  }
+
   private async getResolvedServers(): Promise<ResolvedMcpServer[]> {
     const startedAt = Date.now();
     const enabledServers = this.getStore().getEnabledServers();
@@ -319,18 +452,13 @@ export class McpRuntime {
     let builtInCount = 0;
 
     const electronPath = getElectronNodeRuntimePath();
-    const npmBinDir = app.isPackaged
-      ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
-      : '';
-    const buildShimEnv = (): Record<string, string> => {
-      const shimEnv: Record<string, string> = {
-        LOBSTERAI_ELECTRON_PATH: electronPath,
-      };
-      if (npmBinDir) {
-        shimEnv.LOBSTERAI_NPM_BIN_DIR = npmBinDir;
-      }
-      return shimEnv;
-    };
+    // toolFilter / supportsParallelToolCalls ride along to openclaw.json regardless of transport.
+    const passthroughFields = (server: typeof enabledServers[number]) => ({
+      ...(server.toolFilter ? { toolFilter: server.toolFilter } : {}),
+      ...(typeof server.supportsParallelToolCalls === 'boolean'
+        ? { supportsParallelToolCalls: server.supportsParallelToolCalls }
+        : {}),
+    });
     const pushRawStdioServer = async (server: typeof enabledServers[number]): Promise<void> => {
       const r = await resolveStdioCommand(server);
       resolved.push({
@@ -338,7 +466,8 @@ export class McpRuntime {
         transportType: 'stdio',
         command: r.command,
         args: r.args,
-        env: { ...buildShimEnv(), ...(r.env || {}) },
+        env: { ...buildMcpShimEnv(), ...(r.env || {}) },
+        ...passthroughFields(server),
       });
     };
 
@@ -349,18 +478,13 @@ export class McpRuntime {
           const readyResolution = launchResolver.getReadyResolution(server);
           if (readyResolution) {
             optimizedCount++;
-            const shimEnv: Record<string, string> = {
-              LOBSTERAI_ELECTRON_PATH: electronPath,
-            };
-            if (npmBinDir) {
-              shimEnv.LOBSTERAI_NPM_BIN_DIR = npmBinDir;
-            }
             resolved.push({
               name: server.name,
               transportType: 'stdio',
               command: readyResolution.command,
               args: readyResolution.args || [],
-              env: { ...shimEnv, ...(readyResolution.env || {}), ...(server.env || {}) },
+              env: { ...buildMcpShimEnv(), ...(readyResolution.env || {}), ...(server.env || {}) },
+              ...passthroughFields(server),
             });
             continue;
           }
@@ -412,6 +536,7 @@ export class McpRuntime {
           transportType: server.transportType,
           url: server.url,
           headers: server.headers,
+          ...passthroughFields(server),
         });
       }
     }
@@ -423,13 +548,18 @@ export class McpRuntime {
       const installResult = await installComputerUseRuntime();
       if (!installResult.success) {
         console.warn(`[MCP] failed to install Computer Use runtime: ${installResult.error || 'unknown error'}`);
+      } else {
+        try {
+          syncComputerUseSkillFromRuntime(this.deps.getStore(), installResult.paths?.skillDir);
+        } catch (error) {
+          console.warn('[MCP] failed to refresh the Computer Use skill from its runtime:', error);
+        }
       }
     }
 
     const computerUseServer = shouldEnableComputerUse
       ? resolveComputerUseMcpServer({
         askUserCallbackUrl,
-        bridgeSecret: this.bridgeSecret,
         electronNodePath: electronPath,
       })
       : null;

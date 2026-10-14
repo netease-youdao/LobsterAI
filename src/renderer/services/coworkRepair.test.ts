@@ -4,6 +4,7 @@ import { OpenClawEnginePhase, OpenClawGatewayRepairErrorCode } from '../../share
 import { store } from '../store';
 import type { OpenClawGatewayRepairResult } from '../types/cowork';
 import { coworkService } from './cowork';
+import { i18nService } from './i18n';
 
 const isRepairing = () => store.getState().cowork.isRepairingOpenClaw;
 
@@ -63,6 +64,22 @@ test('releases the global loading state after repair failure and permits retry',
   expect(isRepairing()).toBe(false);
   await expect(coworkService.repairOpenClawGatewayState()).resolves.toEqual({ success: true });
   expect(repairGatewayState).toHaveBeenCalledTimes(2);
+});
+
+test.each([false, true])('reports isolated history and exposes its backup when repair success=%s', async success => {
+  const result = { success, backupPath: '/repair-backup', quarantinedSessionStoreCount: 1 };
+  mockRepair(vi.fn(async () => result));
+  const dispatch = vi.fn();
+  const reveal = vi.fn(async () => ({ success: true }));
+  Object.assign(window, { dispatchEvent: dispatch });
+  Object.assign(window.electron, { shell: { showItemInFolder: reveal } });
+
+  await expect(coworkService.repairOpenClawGatewayState()).resolves.toEqual(result);
+
+  const event = dispatch.mock.calls[0][0] as CustomEvent<{ message: string; actionLabel: string; onAction: () => void }>;
+  expect(event.detail.message).toBe(i18nService.t('openClawRepairHistoryQuarantined').replace('{count}', '1'));
+  event.detail.onAction();
+  expect(reveal).toHaveBeenCalledWith(result.backupPath);
 });
 
 test('releases the global loading state when repair IPC rejects', async () => {

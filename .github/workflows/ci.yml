@@ -41,6 +41,8 @@ jobs:
               - 'src/shared/**'
               - 'electron-tsconfig.json'
               - 'src/main/preload.ts'
+              - 'scripts/*openclaw*'
+              - 'scripts/patches/**'
             skills:
               - 'SKILLs/**'
             scripts:

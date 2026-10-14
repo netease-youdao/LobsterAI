@@ -29,23 +29,25 @@ const ArtifactRenderer: React.FC<ArtifactRendererProps> = ({ artifact, selectedT
   if (sourceView && !(artifact.type === ArtifactTypeValue.Markdown && artifact.filePath && window.electron?.artifact?.markdown)) {
     return <CodeRenderer artifact={artifact} />;
   }
+  // Zoomable renderers are keyed by artifact so switching to another artifact opens it
+  // at 100%, while a refresh of the same artifact keeps the current zoom.
   switch (artifact.type) {
     case 'html':
       return <HtmlRenderer artifact={artifact} />;
     case 'svg':
-      return <SvgRenderer artifact={artifact} />;
+      return <SvgRenderer key={artifact.id} artifact={artifact} />;
     case 'image':
-      return <ImageRenderer artifact={artifact} />;
+      return <ImageRenderer key={artifact.id} artifact={artifact} />;
     case 'video':
       return <VideoRenderer artifact={artifact} />;
     case 'mermaid':
-      return <MermaidRenderer artifact={artifact} />;
+      return <MermaidRenderer key={artifact.id} artifact={artifact} />;
     case ArtifactTypeValue.Markdown:
       return <MarkdownRenderer artifact={artifact} selectedTextContext={selectedTextContext} sourceView={sourceView} />;
     case 'text':
       return <TextRenderer artifact={artifact} selectedTextContext={selectedTextContext} />;
     case 'document':
-      return <DocumentRenderer artifact={artifact} />;
+      return <DocumentRenderer artifact={artifact} selectedTextContext={selectedTextContext} />;
     case 'code':
       return <CodeRenderer artifact={artifact} />;
     case 'local-service':

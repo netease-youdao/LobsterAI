@@ -178,7 +178,8 @@ test('sync writes native moonshot provider config and migrates matching managed 
   assert.equal(config.models.providers.moonshot.baseUrl, 'https://api.moonshot.cn/v1');
   assert.equal(config.models.providers.moonshot.api, 'openai-completions');
   assert.equal(config.agents.defaults.model.primary, 'moonshot/kimi-k2.5');
-  assert.deepEqual(config.commands.ownerAllowFrom, ['gateway-client', '*']);
+  assert.deepEqual(config.commands.ownerAllowFrom, ['gateway-client']);
+  assert.equal(config.cron.allowChannelScheduling, true);
   assert.deepEqual(config.tools.deny, ['web_search']);
   assert.equal(config.tools.web.search.enabled, false);
   assert.equal(config.browser.enabled, true);
@@ -217,7 +218,8 @@ test('sync maps moonshot coding plan sessions to kimi-coding model refs', (t) =>
   assert.equal(config.models.providers['kimi-coding'].baseUrl, 'https://api.kimi.com/coding');
   assert.equal(config.models.providers['kimi-coding'].api, 'anthropic-messages');
   assert.equal(config.agents.defaults.model.primary, 'kimi-coding/k2p5');
-  assert.deepEqual(config.commands.ownerAllowFrom, ['gateway-client', '*']);
+  assert.deepEqual(config.commands.ownerAllowFrom, ['gateway-client']);
+  assert.equal(config.cron.allowChannelScheduling, true);
 
   const sessionStore = JSON.parse(fs.readFileSync(path.join(sessionsDir, 'sessions.json'), 'utf8'));
   assert.equal(sessionStore['agent:main:lobsterai:current-session'].modelProvider, 'kimi-coding');
@@ -286,9 +288,9 @@ test('sync writes scheduled-task policy into managed AGENTS.md for native channe
   assert.match(agentsMd, /use `web_fetch`/);
   assert.match(agentsMd, /use the built-in `browser` tool/);
   assert.match(agentsMd, /Native channel sessions may deny `exec`/);
-  assert.match(agentsMd, /native `cron` tool/i);
+  assert.match(agentsMd, /native `automations` tool/i);
   assert.match(agentsMd, /action: "add".*cron\.add/i);
-  assert.match(agentsMd, /follow the native `cron` tool schema/i);
+  assert.match(agentsMd, /follow the native `automations` tool schema/i);
   assert.match(agentsMd, /plugins provide session context and outbound delivery; they do not own scheduling logic/i);
   assert.match(agentsMd, /ignore channel-specific reminder helpers or reminder skills/i);
   assert.match(agentsMd, /QQBOT_PAYLOAD/);

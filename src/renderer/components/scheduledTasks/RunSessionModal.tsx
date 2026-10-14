@@ -206,7 +206,11 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({
     [session?.messages],
   );
   const displayItems = useMemo(() => buildDisplayItems(cleanedMessages), [cleanedMessages]);
-  const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
+  const leadingTurnStartTimestamp = session?.leadingTurnStartTimestamp ?? null;
+  const turns = useMemo(
+    () => buildConversationTurns(displayItems, { leadingTurnStartTimestamp }),
+    [displayItems, leadingTurnStartTimestamp],
+  );
 
   // Detect deliverable file artifacts from the run transcript so the modal
   // shows the same end-of-turn file cards as the main session view.

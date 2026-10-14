@@ -17,6 +17,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { ensureOpenClawBundleAssets } = require('./openclaw-bundle-assets.cjs');
+const { assertOpenClawBundleUsesNativePrivateDirectory } = require('./openclaw-native-private-directory.cjs');
 const { ensureOpenClawWorkerShims } = require('./openclaw-worker-shims.cjs');
 
 const rootDir = path.resolve(__dirname, '..');
@@ -74,6 +75,8 @@ if (fs.existsSync(bundleOutPath)) {
   if (bundleStat.mtimeMs > entryStat.mtimeMs) {
     console.log(`[bundle-openclaw-gateway] Bundle is up-to-date, skipping.`);
     try {
+      // A cached bundle built from an unpatched dist would still spawn PowerShell.
+      assertOpenClawBundleUsesNativePrivateDirectory(bundleOutPath);
       ensureBundleSupportFiles();
     } catch (error) {
       console.error(`[bundle-openclaw-gateway] ${error.message || error}`);
@@ -156,6 +159,7 @@ esbuild
       `[bundle-openclaw-gateway] Done in ${elapsed}ms (${sizeKB} KB)` +
         (result.warnings.length ? `, ${result.warnings.length} warnings` : ''),
     );
+    assertOpenClawBundleUsesNativePrivateDirectory(bundleOutPath);
     ensureBundleSupportFiles();
   })
   .catch((err) => {

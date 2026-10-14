@@ -128,8 +128,10 @@ export function buildDshSpawnEnv(options: DshSpawnEnvOptions): Record<string, st
   return env;
 }
 
+// `--no-open`: since 0.1.5, `dsh web` hands its URL to the default browser
+// unless told not to, and the workbench window is the only UI we want.
 export function buildDshWebArgs(entryPath: string, port: number): string[] {
-  return [entryPath, 'web', '--port', String(port)];
+  return [entryPath, 'web', '--port', String(port), '--no-open'];
 }
 
 // The child's cwd becomes the workbench's default session directory and the

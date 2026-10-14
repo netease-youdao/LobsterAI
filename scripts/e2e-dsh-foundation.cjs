@@ -105,18 +105,28 @@ function startMockLlmServer(answerText) {
   });
 }
 
-// Boots through the same launcher used by DshEngineManager and resolves once
-// the web server answers; the caller owns the returned child.
+// Boots through the same launcher, arguments, and launch-token exchange that
+// DshEngineManager uses, and resolves once the web server serves the session;
+// the caller owns the returned child and uses the cookie for RPCs.
 function bootDsh(installedRoot, dshHome, extraEnv) {
   const electronPath = require('electron');
-  const { spawnDshProcess } = require(path.join(rootDir, 'dist-electron', 'main', 'libs', 'dshProcessLauncher.js'));
+  const libsDir = path.join(rootDir, 'dist-electron', 'main', 'libs');
+  const { spawnDshProcess } = require(path.join(libsDir, 'dshProcessLauncher.js'));
+  const { buildDshWebArgs } = require(path.join(libsDir, 'dshRuntime.js'));
+  const { exchangeDshLaunchToken, parseDshWebLaunchUrl, probeDshWebIndex, redactDshWebToken } = require(
+    path.join(libsDir, 'dshWebAuth.js')
+  );
   const entry = path.join(installedRoot, 'lib', 'bin.js');
   const port = 31400 + Math.floor(Math.random() * 400);
   const child = spawnDshProcess({
     executablePath: electronPath,
-    args: [entry, 'web', '--port', String(port)],
+    args: buildDshWebArgs(entry, port),
     cwd: installedRoot,
     env: { ...process.env, ...extraEnv, DSH_HOME: dshHome, DSH_TELEMETRY_DISABLED: '1' },
+  });
+  // fail() exits on the spot; never leave a live dsh behind.
+  process.once('exit', () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
   });
   let output = '';
   for (const stream of [child.stdout, child.stderr]) {
@@ -126,25 +136,34 @@ function bootDsh(installedRoot, dshHome, extraEnv) {
       if (output.length > 100_000) output = output.slice(-50_000);
     });
   }
+  let launchUrl = null;
+  let stdoutText = '';
+  child.stdout.on('data', (chunk) => {
+    if (launchUrl) return;
+    stdoutText += chunk;
+    // Complete lines only: a chunk can end inside the token.
+    const lines = stdoutText.split(/\r?\n/);
+    stdoutText = lines.pop();
+    for (const line of lines) launchUrl = launchUrl || parseDshWebLaunchUrl(line, port);
+  });
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
-    const poll = () => {
+    const poll = async () => {
       if (child.exitCode !== null) {
-        reject(new Error(`dsh exited before ready (code=${child.exitCode})\n${output}`));
+        reject(new Error(`dsh exited before ready (code=${child.exitCode})\n${redactDshWebToken(output)}`));
         return;
       }
       if (Date.now() - startedAt > 90_000) {
         child.kill('SIGKILL');
-        reject(new Error(`dsh not ready in 90s\n${output}`));
+        reject(new Error(`dsh not ready in 90s\n${redactDshWebToken(output)}`));
         return;
       }
-      http
-        .get({ host: '127.0.0.1', port, path: '/', timeout: 2_000 }, (response) => {
-          response.resume();
-          if (response.statusCode === 200) resolve({ child, port, url: `http://127.0.0.1:${port}` });
-          else setTimeout(poll, 400);
-        })
-        .on('error', () => setTimeout(poll, 400));
+      const cookie = launchUrl ? await exchangeDshLaunchToken(launchUrl) : null;
+      if (cookie && (await probeDshWebIndex(port, cookie)) === 200) {
+        resolve({ child, port, cookie, url: `http://127.0.0.1:${port}` });
+        return;
+      }
+      setTimeout(poll, 400);
     };
     setTimeout(poll, 400);
   });
@@ -154,16 +173,21 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Fires a unary RPC without waiting for it: the picker call stays open for as
 // long as the operator stares at the dialog, so the test needs the live request
-// object to abort it.
-function startRpc(port, method, timeoutMs) {
-  const body = JSON.stringify({ type: 'client-request', rpcId: `e2e-${method}`, method, payload: {} });
+// object to abort it. `method` is a Typert Remote endpoint (`<namespace>/<method>`)
+// and every /api request needs the booted session's cookie.
+function startRpc(booted, method, timeoutMs) {
+  const body = JSON.stringify({ type: 'client-request', rpcId: `e2e-${method}`, method, payload: { args: {} } });
   const request = http.request({
     host: '127.0.0.1',
-    port,
+    port: booted.port,
     path: `/api/${method}`,
     method: 'POST',
     timeout: timeoutMs,
-    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+      Cookie: booted.cookie,
+    },
   });
   const settled = new Promise((resolve) => {
     request.on('response', (response) => {
@@ -287,17 +311,17 @@ function assertExternalPluginMarker(markerPath, launcher) {
 // the modal `Show`, and any breakage there (a missing worker file, a runtime
 // that cannot load koffi, a child that is not run as Node) surfaces as an
 // instant "worker exited before reporting a result" instead of a dialog.
-async function assertNativeDirectoryPicker(port) {
+async function assertNativeDirectoryPicker(booted) {
   const baseline = countPickerDialogs();
   log('   a folder dialog will appear for a few seconds — the test closes it');
 
-  const pick = startRpc(port, 'host.pickDirectory', 60_000);
+  const pick = startRpc(booted, 'directoryPicker/pick', 60_000);
   let settled = null;
   void pick.settled.then((outcome) => (settled = outcome));
 
   await delay(4_000);
   if (settled) {
-    fail(`host.pickDirectory answered instead of opening a dialog: ${String(settled.raw).slice(0, 400)}`);
+    fail(`directoryPicker/pick answered instead of opening a dialog: ${String(settled.raw).slice(0, 400)}`);
   }
   const whileOpen = countPickerDialogs();
   if (whileOpen !== baseline + 1) {
@@ -496,7 +520,7 @@ async function main() {
       [path.join(rootDir, 'scripts', 'verify-dsh-picker-path-read.cjs'), installed.root],
       { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } }
     );
-    await assertNativeDirectoryPicker(booted.port);
+    await assertNativeDirectoryPicker(booted);
   } else {
     log(`>> directory picker step skipped: no spawned-dialog backend on ${process.platform}`);
   }

@@ -1,10 +1,25 @@
-import { describe, test } from 'vitest';
+import fs from 'fs';
+import path from 'path';
+import { describe, expect, test } from 'vitest';
 
 import { expectCurrentOpenClawPatchMissing, expectPatchContains } from './patchTestUtils';
 
 describe('Kimi K3 and model compatibility patch decisions', () => {
   test('drops the Moonshot K3 backport because v2026.8.1 ships native Kimi providers', () => {
     expectCurrentOpenClawPatchMissing('openclaw-kimi-k3-support.patch');
+  });
+
+  test('keeps the Kimi K3 request contract inside the compatibility extension', () => {
+    // Upstream folded the K3 contract into createMoonshotThinkingWrapper and only
+    // applies it to provider "moonshot". The retired backport was the sole source
+    // of the createMoonshotKimiK3Wrapper SDK export, so the extension that serves
+    // custom and package K3 models must carry the contract itself.
+    const extensionEntry = fs.readFileSync(
+      path.resolve('openclaw-extensions/lobsterai-model-compat/index.ts'),
+      'utf8',
+    );
+    expect(extensionEntry).not.toContain('createMoonshotKimiK3Wrapper');
+    expect(extensionEntry).toContain("from './kimiK3StreamWrapper'");
   });
 
   test('keeps the plugin API owner separate from concrete model transports', () => {

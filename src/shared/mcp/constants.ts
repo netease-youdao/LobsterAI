@@ -7,6 +7,7 @@ export const McpIpcChannel = {
   SetEnabled: 'mcp:setEnabled',
   SetEnabledByRegistryId: 'mcp:setEnabledByRegistryId',
   RetryLaunchResolution: 'mcp:retryLaunchResolution',
+  ListTools: 'mcp:listTools',
   FetchMarketplace: 'mcp:fetchMarketplace',
   ConnectQichacha: 'mcp:qichachaConnect',
   Changed: 'mcp:changed',

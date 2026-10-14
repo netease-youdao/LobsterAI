@@ -82,6 +82,7 @@ import {
   isLatestAsyncRequest,
 } from './services/latestAsyncRequest';
 import { LogReporterAction, reportYdAnalyzer } from './services/logReporter';
+import { installOfficeAgentBridges } from './services/office/officeFormats';
 import { getOnboardingErrorCode, reportOnboardingAction } from './services/onboardingAnalytics';
 import { remoteSettingsService } from './services/remoteSettings';
 import { scheduledTaskService } from './services/scheduledTask';
@@ -243,7 +244,7 @@ const App: React.FC = () => {
   const [isSidebarBatchMode, setIsSidebarBatchMode] = useState(false);
   const [isTaskFilterActive, setIsTaskFilterActive] = useState(false);
   const [hasUnreadCompletedTasks, setHasUnreadCompletedTasks] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(244);
+  const [sidebarWidth, setSidebarWidth] = useState(260);
   const initialOpenClawEngineStatusRef = useRef(coworkService.getOpenClawEngineStatusSnapshot());
   const [isEngineStartupOverlayVisible, setIsEngineStartupOverlayVisible] = useState(
     () => initialOpenClawEngineStatusRef.current?.phase === OpenClawEnginePhase.Starting,
@@ -317,6 +318,9 @@ const App: React.FC = () => {
     && hasResolvedEngineStartupOverlayState
     && !isEngineStartupOverlayVisible
     && !isUpdateInteractionBlocked;
+
+  // The agent's Office tools edit the file open in the artifact panel in place.
+  useEffect(() => installOfficeAgentBridges(), []);
 
   useEffect(() => {
     if (!shouldShowNewUserOnboarding) return;
@@ -2066,6 +2070,7 @@ const App: React.FC = () => {
       isOverlayActive={isOverlayActive}
       isSidebarCollapsed={isSidebarCollapsed}
       sidebarWidth={sidebarWidth}
+      sidebarColumnVisible={isInitialized && !initError && !isSidebarCollapsed}
       onToggleSidebar={canUseWindowsTopBarActions ? handleToggleSidebar : undefined}
       onSearch={canUseWindowsTopBarActions && !isSidebarCollapsed
         ? handleOpenTaskSearch
@@ -2166,7 +2171,7 @@ const App: React.FC = () => {
       <SubscriptionTrialCampaign
         privacyAgreed={privacyAgreed}
         taskCreatedSignal={trialTaskCreatedSignal}
-        enabled={privacyAgreed === true && !isEnterpriseAccount && !isOverlayActive && hasResolvedEngineStartupOverlayState && !isEngineStartupOverlayVisible}
+        enabled={privacyAgreed === true && !isOverlayActive && hasResolvedEngineStartupOverlayState && !isEngineStartupOverlayVisible}
       />
       <StartupCreditCampaign
         enabled={privacyAgreed === true && !isEnterpriseAccount}
@@ -2204,12 +2209,15 @@ const App: React.FC = () => {
           hideLogin={enterpriseConfig?.ui?.login === 'hide'}
           isEngineStartupOverlayVisible={isEngineStartupOverlayVisible}
         />
-        <div className={`flex-1 min-w-0 transition-[padding] duration-200 ease-out ${isSidebarCollapsed ? 'pl-1.5' : ''}`}>
+        <div className="flex-1 min-w-0">
+          {/* The main area meets the sidebar edge to edge (no inset card
+              border or corner), so the gray sidebar and white canvas read as
+              two flat planes. */}
           <div
             key={accountGeneration}
             data-skin-cowork-frame={mainView === 'cowork' ? 'true' : undefined}
             data-skin-management-frame={mainView !== 'cowork' ? 'true' : undefined}
-            className="relative h-full min-h-0 rounded-xl border border-border bg-background overflow-hidden"
+            className="relative h-full min-h-0 bg-background overflow-hidden"
           >
             {mainView !== 'cowork' && (
               <SkinBackdrop variant={SkinBackdropVariant.Management} />

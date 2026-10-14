@@ -25,6 +25,7 @@ export type BrowserCredentialSaveDecision =
 
 export const BrowserCredentialIpc = {
   GetAvailability: 'openclaw:browser:credentials:getAvailability',
+  RequestAccess: 'openclaw:browser:credentials:requestAccess',
   List: 'openclaw:browser:credentials:list',
   Save: 'openclaw:browser:credentials:save',
   Delete: 'openclaw:browser:credentials:delete',
@@ -33,6 +34,7 @@ export const BrowserCredentialIpc = {
 export type BrowserCredentialIpc = typeof BrowserCredentialIpc[keyof typeof BrowserCredentialIpc];
 
 export const BrowserCredentialAvailabilityReason = {
+  AccessNotRequested: 'access-not-requested',
   EncryptionUnavailable: 'encryption-unavailable',
   InsecureStorageBackend: 'insecure-storage-backend',
 } as const;
@@ -43,6 +45,7 @@ export type BrowserCredentialAvailabilityReason =
 export interface BrowserCredentialAvailability {
   available: boolean;
   reason?: BrowserCredentialAvailabilityReason;
+  requiresRestart?: boolean;
 }
 
 export interface BrowserCredentialSummary {

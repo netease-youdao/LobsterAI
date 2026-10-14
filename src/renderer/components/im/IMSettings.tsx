@@ -1479,15 +1479,9 @@ const IMSettings: React.FC = () => {
 
     const isEnabled = isPlatformEnabled(platform);
 
-    // For NIM, skip the frontend stop/start cycle entirely.
-    // The backend's testNimConnectivity already manages the SDK lifecycle
-    // (stop main → probe with temp instance → restart main) under a mutex,
-    // so doing stop/start here would cause a race condition and potential crash.
-    // When the gateway is OFF we skip stop/start entirely.
-    // The main process testGateway → runAuthProbe will spawn an isolated
-    // temporary NimGateway (for NIM) or use stateless HTTP calls for other
-    // platforms, so no historical messages are ingested and the main
-    // gateway state is never touched.
+    // Skip the frontend stop/start cycle: the main process testGateway only
+    // validates config or makes stateless auth probes, so no historical
+    // messages are ingested and the running OpenClaw channel is never touched.
 
     // Run connectivity test (always passes configOverride so the backend uses
     // the latest unsaved credential values from the form).

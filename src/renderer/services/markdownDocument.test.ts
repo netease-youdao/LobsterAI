@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { type MarkdownFileApi, MarkdownFileError, type MarkdownFileResult, type SaveMarkdownFileRequest } from '../../shared/artifactPreview/markdownEditing';
+import { installDocumentLifecycle } from './documentLifecycle';
 import { MarkdownDocument, MarkdownDocumentRegistry, MarkdownSaveState } from './markdownDocument';
-import { installMarkdownDocumentLifecycle } from './markdownDocumentLifecycle';
 
 function setup(filePath = '/tmp/document.md') {
   let disk = { filePath, content: '# Original\n', version: 'v1' };
@@ -153,7 +153,7 @@ describe('Markdown document registry', () => {
       path === '/tmp/first.md' ? first : second
     ).create(changed), notify);
     const target = new EventTarget();
-    const dispose = installMarkdownDocumentLifecycle(target as Window, registry);
+    const dispose = installDocumentLifecycle(target as Window, registry);
     try {
       const document = registry.get('/tmp/first.md');
       const unsubscribe = document.subscribe(() => {});

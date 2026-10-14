@@ -32,6 +32,7 @@ test('a binding recovery failure retains regenerated config without the old fiel
   fs.writeFileSync(configPath, '{}');
   expect(preserveOpenClawConfigForStartupRecovery(configPath, OpenClawEngineErrorCode.StartupCompatibilityFailed)).toBe(true);
   expect(preserveOpenClawConfigForStartupRecovery(configPath, OpenClawEngineErrorCode.MemoryDreamingMigrationFailed)).toBe(true);
+  expect(preserveOpenClawConfigForStartupRecovery(configPath, OpenClawEngineErrorCode.StartupMigrationRefused)).toBe(true);
   expect(preserveOpenClawConfigForStartupRecovery(configPath)).toBe(false);
   fs.writeFileSync(configPath, 'invalid JSON');
   expect(preserveOpenClawConfigForStartupRecovery(configPath)).toBe(false);

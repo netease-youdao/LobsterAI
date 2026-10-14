@@ -48,7 +48,7 @@ describe('server model metadata cache', () => {
       supportsToolCalling: true,
       agenticReady: true,
       contextWindow: 1_048_576,
-      maxTokens: 8_192,
+      maxTokens: 1_048_576,
     }])).toBe(true);
 
     expect(getAllServerModelMetadata()).toEqual([{
@@ -63,7 +63,7 @@ describe('server model metadata cache', () => {
       supportsToolCalling: true,
       agenticReady: true,
       contextWindow: 1_048_576,
-      maxTokens: 8_192,
+      maxTokens: 1_048_576,
       explicitContextCache: undefined,
     }]);
   });
@@ -92,7 +92,7 @@ describe('server model metadata cache', () => {
       supportsToolCalling: false,
       agenticReady: false,
       contextWindow: 1_048_576,
-      maxTokens: 8_192,
+      maxTokens: 1_048_576,
     });
     expect(evaluateServerModelRunGate('kimi-k3-YoudaoInner')).toEqual({
       allowed: false,

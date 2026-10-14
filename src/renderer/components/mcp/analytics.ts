@@ -84,6 +84,9 @@ export function getFormAnalyticsParams(
     headerKeyCount: data.headers ? Object.keys(data.headers).length : 0,
     argCount: data.args?.length ?? 0,
     hasUrl: Boolean(data.url),
+    toolFilterIncludeCount: data.toolFilter?.include?.length ?? 0,
+    toolFilterExcludeCount: data.toolFilter?.exclude?.length ?? 0,
+    supportsParallelToolCalls: data.supportsParallelToolCalls,
   };
 }
 

@@ -27,6 +27,12 @@ import OwnershipDetailButton from '../ownership/OwnershipDetailButton';
 import AgentAvatarPicker from './AgentAvatarPicker';
 import AgentConfirmDialog from './AgentConfirmDialog';
 import AgentDetailToolbar from './AgentDetailToolbar';
+import {
+  AGENT_DESCRIPTION_INPUT_CLASS,
+  AGENT_HEADER_FIELDS_CLASS,
+  AGENT_HEADER_IDENTITY_CLASS,
+  AGENT_NAME_INPUT_CLASS,
+} from './agentHeaderStyles';
 import AgentSkillSelector from './AgentSkillSelector';
 import { AgentConfirmDialogVariant, AgentDetailTab } from './constants';
 
@@ -782,9 +788,9 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         className="w-[calc(100vw-56px)] max-w-[854px] h-[82vh] max-h-[664px] rounded-xl shadow-[0_12px_40px_rgba(0,0,0,0.16)] bg-surface border border-surface flex flex-col overflow-hidden"
       >
         <div className="flex shrink-0 items-start justify-between gap-4 px-7 py-5">
-          <div className="flex min-w-0 flex-1 items-start gap-3">
+          <div className={AGENT_HEADER_IDENTITY_CLASS}>
             <AgentAvatarPicker value={icon} onChange={setIcon} />
-            <div className="min-w-0 flex-1 pt-0.5">
+            <div className={AGENT_HEADER_FIELDS_CLASS}>
               <input
                 type="text"
                 value={nameInputValue}
@@ -794,7 +800,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
                 }}
                 placeholder={i18nService.t('agentNamePlaceholder')}
                 aria-label={i18nService.t('agentName')}
-                className="w-full bg-transparent text-lg font-semibold leading-6 text-foreground placeholder:text-secondary/40 focus:outline-none"
+                className={AGENT_NAME_INPUT_CLASS}
               />
               <input
                 type="text"
@@ -802,7 +808,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder={i18nService.t('agentDescriptionPlaceholder')}
                 aria-label={i18nService.t('agentDescription')}
-                className="mt-0.5 w-full bg-transparent text-sm leading-5 text-secondary placeholder:text-secondary/50 focus:outline-none"
+                className={AGENT_DESCRIPTION_INPUT_CLASS}
               />
             </div>
           </div>

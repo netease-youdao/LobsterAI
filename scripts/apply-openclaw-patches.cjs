@@ -654,6 +654,15 @@ const v20260801StrongPatchValidators = {
       snippets: ['fast-forwards missed recurring jobs instead of replaying them'],
     },
   ],
+  'openclaw-exec-command-description.patch': [
+    {
+      file: 'src/agents/bash-tools.schemas.ts',
+      snippets: [
+        "in the user's language; shown to the user instead of the command.",
+        'description: execSchema.properties.description,',
+      ],
+    },
+  ],
   'openclaw-im-bound-agent-run-cwd.patch': [
     {
       file: 'src/agents/agent-scope-config.ts',
@@ -685,6 +694,15 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-live-edit-diff-partial-args.patch': [
+    {
+      file: 'src/agents/embedded-agent-live-edit-diff.ts',
+      snippets: [
+        ': typeof block?.partialArgs === "string"',
+        '? block.partialArgs',
+      ],
+    },
+  ],
   'openclaw-lobsterai-model-compat-api.patch': [
     {
       file: 'src/config/types.models.ts',
@@ -703,6 +721,36 @@ const v20260801StrongPatchValidators = {
       snippets: [
         'accepts the LobsterAI owner while models keep explicit transports',
         'rejects compatibility ownership at model level',
+      ],
+    },
+  ],
+  'openclaw-malformed-tool-call-continuation.patch': [
+    {
+      file: 'src/agents/embedded-agent-runner/run/malformed-tool-call-recovery.ts',
+      snippets: [
+        'export const MALFORMED_TOOL_CALL_RETRY_LIMIT = 2',
+        'export function isMalformedToolCallAssistantTurn',
+        'export function continueAfterMalformedToolCall',
+        'malformed tool call rejected before execution:',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/terminal-resolution.ts',
+      snippets: ['!settledTurnFinalizationAttempted && continueAfterMalformedToolCall(input)'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts',
+      snippets: ['isMalformedToolCallAssistantTurn('],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/terminal-retry-state.ts',
+      snippets: ['malformedToolCallAttempts: 0'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/terminal-resolution.malformed-tool-call.test.ts',
+      snippets: [
+        "continues a side-effecting turn after the provider's tool call is rejected",
+        'does not request isolated finalization for a rejected tool call',
       ],
     },
   ],
@@ -743,6 +791,37 @@ const v20260801StrongPatchValidators = {
     {
       file: 'src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts',
       snippets: ['bounds compaction recovery for an output budget rejection'],
+    },
+  ],
+  'openclaw-openai-completions-tool-call-repair.patch': [
+    {
+      file: 'packages/ai/src/providers/openai-completions-tool-calls.ts',
+      snippets: [
+        'const MALFORMED_TOOL_CALL_DIAGNOSTIC_TYPE = "malformed_tool_call_arguments"',
+        'repairStringLiterals: true',
+        'readMalformedToolCallArgumentsDiagnostics(error)',
+      ],
+      forbiddenSnippets: ['finalizeTerminalToolCallArguments(toolCalls, (call) => call.partialArgs);'],
+    },
+    {
+      file: 'packages/ai/src/transports/transport-stream-shared.ts',
+      snippets: [
+        'function repairTerminalToolCallArguments',
+        'class MalformedToolCallArgumentsError extends Error',
+        'export function readMalformedToolCallArgumentsDiagnostics',
+      ],
+    },
+    {
+      file: 'packages/ai/src/utils/json-parse.ts',
+      snippets: ['preserveValidControlEscapes'],
+    },
+    {
+      file: 'packages/ai/src/transports/openai-completions-stream.ts',
+      snippets: ['providerStopReason: finishReason,'],
+    },
+    {
+      file: 'packages/ai/src/providers/openai-completions.legacy-function-call.test.ts',
+      snippets: ['repairs a complete modern tool terminal with $reason'],
     },
   ],
   'openclaw-plugin-archive-windows-timeout.patch': [
@@ -1029,6 +1108,51 @@ const v20260801StrongPatchValidators = {
       snippets: ['expect(promptCall?.runtimeCwd).toBe(taskRepo)'],
     },
   ],
+  'openclaw-active-exec-sessions-runtime-context.patch': [
+    {
+      file: 'src/agents/runtime-facts-prompt.ts',
+      snippets: [
+        'export function buildActiveProcessSessionRuntimeFacts',
+        'export const ACTIVE_EXEC_SESSIONS_HEADER = "Active exec sessions:"',
+      ],
+    },
+    {
+      file: 'src/agents/system-prompt.ts',
+      snippets: [
+        'Before input: process log; log/poll shows waitingForInput/stdinWritable. Lost id: process list.',
+      ],
+      forbiddenSnippets: ['activeProcessSessions', 'buildActiveProcessSessionReferenceLines'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts',
+      snippets: ['senderIsOwner: attempt.senderIsOwner,'],
+      forbiddenSnippets: ['listActiveProcessSessionReferences', 'activeProcessSessions'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt-prompt-build.ts',
+      snippets: [
+        'buildActiveProcessSessionRuntimeFacts({',
+        '!input.capabilityToolNames.has("process")',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt-settle.ts',
+      snippets: [
+        'capabilityToolNames: toolSearchRunPlan.capabilityToolNames',
+        'sandboxSessionKey: input.setup.sandboxSessionKey',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt-prompt-context.test.ts',
+      snippets: [
+        'carries background process snapshots as hidden runtime context, not system prompt',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/system-prompt.test.ts',
+      snippets: ['keeps process guidance static and never renders background process snapshots'],
+    },
+  ],
   'openclaw-omit-default-model-from-system-prompt.patch': [
     {
       file: 'src/agents/system-prompt.ts',
@@ -1103,6 +1227,57 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-sqlite-readonly-result-file.patch': [
+    {
+      file: 'src/infra/sqlite-readonly-location.ts',
+      snippets: [
+        'const resultPath = await createSqliteReadOnlyResultFile();',
+        'const resultPath = createSqliteReadOnlyResultFileSync();',
+        'readSqliteReadOnlyWorkerResult(params.resultPath, params.stderr)',
+        'removeTempDirectory(path.dirname(resultPath));',
+        'stderr: result.stderr ?? "", resultPath',
+      ],
+    },
+    {
+      file: 'src/infra/sqlite-readonly-location.worker.ts',
+      snippets: [
+        'process.argv[5] !== SQLITE_READONLY_RESULT_FILE_ARG',
+        'writeSqliteReadOnlyResultFile(resultPath, { ok: true, location: prepared.location });',
+        'prepared.cleanup();',
+      ],
+    },
+    {
+      file: 'src/infra/sqlite-readonly-result-file.ts',
+      snippets: [
+        'createPrivateSqliteTempDirectory(',
+        'createPrivateSqliteTempDirectorySync(',
+        'identity.nlink !== 1n',
+        'MAX_RESULT_BYTES + 1',
+        'flag: "wx"',
+        'mode: 0o600',
+      ],
+    },
+  ],
+  'openclaw-windows-private-directory-native.patch': [
+    {
+      file: 'src/infra/windows-private-directory.ts',
+      snippets: [
+        'const koffi: typeof import("koffi").default = require("koffi");',
+        'export function createPrivateWindowsDirectory(directoryPath: string): void {',
+        'export function createProfileScopedWindowsDirectory(',
+        'export function isWindowsPathInsideUserProfile(',
+      ],
+    },
+    {
+      file: 'src/infra/sqlite-private-directory.ts',
+      snippets: ['import { createPrivateWindowsDirectory } from "./windows-private-directory.js";'],
+      forbiddenSnippets: [
+        'Add-Type -TypeDefinition',
+        'resolveSystemBin("powershell")',
+        'OpenClawPrivateDirectory',
+      ],
+    },
+  ],
   'openclaw-workspace-attestation-quarantine.patch': [
     {
       file: 'src/infra/state-migrations.workspace-setup.ts',
@@ -1123,6 +1298,104 @@ const v20260801StrongPatchValidators = {
     },
   ],
 };
+
+v20260801StrongPatchValidators['zzz-openclaw-plugin-degraded-startup.patch'] = [
+  {
+    file: 'src/commands/doctor-config-preflight-startup.ts',
+    snippets: [
+      'setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins)',
+      'params.startupMigrationWarnings.length > 0',
+      'throwStartupMigrationIdentityChanged()',
+    ],
+    forbiddenSnippets: ['pluginConvergence.blockingDiagnostic'],
+  },
+  {
+    file: 'src/commands/doctor-config-preflight-plugin-verification.ts',
+    snippets: ['failures: convergence.smokeFailures', 'failures: smoke.failures'],
+    forbiddenSnippets: ['blockingDiagnostic', '&& Boolean(failure.installPath)'],
+  },
+  {
+    file: 'src/plugins/discovery-availability.ts',
+    snippets: ['configDisposition: "preserve"', 'errorCode', 'createUnavailablePluginConfigPreserver'],
+  },
+  {
+    file: 'src/config/validation.ts',
+    snippets: ['availability.createUnavailablePluginConfigPreserver'],
+  },
+  {
+    file: 'src/plugins/doctor-compatibility-migration.ts',
+    snippets: ['cloneConfigWithResolutionFacts(params.config)', 'config: params.config, changes: [], warnings: [warning]'],
+  },
+  {
+    file: 'src/flows/plugin-health-availability.ts',
+    snippets: ['error instanceof HealthCheckRegistrationError', 'describePluginAvailabilityFailure'],
+  },
+];
+
+v20260801StrongPatchValidators['openclaw-skip-turn-replay-after-model-call.patch'] = [
+  {
+    file: 'src/auto-reply/reply/agent-runner-error-handler.ts',
+    snippets: ['  modelCallStarted: boolean;'],
+    orderedSnippets: [
+      '!params.overloadRetryState.modelCallStarted &&',
+      'params.overloadRetryState.retryCount < MAX_OVERLOAD_RETRIES',
+      '!params.overloadRetryState.modelCallStarted &&',
+      'params.consumeTransientHttpRetry()',
+    ],
+  },
+  {
+    file: 'src/auto-reply/reply/agent-runner-execution.ts',
+    snippets: ['overloadRetryState.modelCallStarted = true;', 'modelCallStarted: false,'],
+  },
+];
+
+v20260801StrongPatchValidators['openclaw-tolerate-replaced-thinking-catalog-owner.patch'] = [
+  {
+    file: 'src/agents/prepared-model-catalog.ts',
+    snippets: ['continue;'],
+    // The read-only owner path still throws the same error text, so check the
+    // scoped loader's own sequence instead of forbidding the throw.
+    orderedSnippets: [
+      'async function loadScopedReadOnlyModelCatalog(',
+      'if (!preparedModelRuntimeConfigsMatch(prepared.config, candidate.config)) {',
+      'continue;',
+      'if (isPreparedModelCatalogFull(prepared.modelCatalog)) {',
+    ],
+  },
+  {
+    file: 'src/agents/prepared-model-catalog.scoped-thinking.test.ts',
+    snippets: ['falls back to the scoped catalog while a published owner has the replaced config'],
+  },
+];
+
+v20260801StrongPatchValidators['zz-openclaw-plan-completion-check.patch'] = [
+  {
+    file: 'src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts',
+    snippets: [
+      'const PLAN_COMPLETION_CHECK_CUSTOM_TYPE = "openclaw.plan-completion-check";',
+      'deferTerminalDelivery: shouldRunBeforeAgentFinalize === true,',
+    ],
+    orderedSnippets: [
+      'completionCheck.checked = true;',
+      'customType: PLAN_COMPLETION_CHECK_CUSTOM_TYPE,',
+      '{ deliverAs: "followUp" },',
+      'return { continueCurrentTurn: true };',
+    ],
+  },
+  {
+    file: 'src/agents/embedded-agent-subscribe.handlers.lifecycle.ts',
+    snippets: ['const continueCurrentTurn = () => {', 'hasPendingContinuation:', 'stream: "checkpoint",'],
+    orderedSnippets: ['const continueCurrentTurn = () => {', 'emitAssistantCheckpoint(ctx);'],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/terminal-retry-state.ts',
+    snippets: ['completionCheck: { unfinishedPlan: false, checked: false },'],
+  },
+  {
+    file: 'src/agents/tools/progress-card-tool.ts',
+    snippets: ['options.onPlanSaved?.('],
+  },
+];
 
 const strongPatchValidators = openclawVersion === 'v2026.8.1'
   ? v20260801StrongPatchValidators

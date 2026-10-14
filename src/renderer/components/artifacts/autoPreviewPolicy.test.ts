@@ -150,6 +150,26 @@ describe('autoPreviewPolicy', () => {
     expect(selected?.id).toBe('video-first');
   });
 
+  test('within a category, prefers the file the turn replies link over an earlier one', () => {
+    const artifacts = [
+      makeArtifact('draft', ArtifactTypeValue.Document, {
+        messageId: 'tool-use-1',
+        filePath: '/Users/admin/project/draft.docx',
+      }),
+      makeArtifact('image', ArtifactTypeValue.Image, {
+        messageId: 'final-reply',
+        filePath: '/Users/admin/project/cover.png',
+      }),
+      makeArtifact('report', ArtifactTypeValue.Document, {
+        messageId: 'final-reply',
+        filePath: '/Users/admin/project/report.pdf',
+      }),
+    ];
+
+    expect(selectAutoPreviewArtifact(artifacts)?.id).toBe('draft');
+    expect(selectAutoPreviewArtifact(artifacts, { replyMessageIds: ['final-reply'] })?.id).toBe('report');
+  });
+
   test('maps svg to image and markdown to document', () => {
     expect(getAutoPreviewCategory(makeArtifact('svg', ArtifactTypeValue.Svg))).toBe(
       ArtifactAutoPreviewCategory.Image,

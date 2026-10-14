@@ -58,6 +58,26 @@ export const hasEquivalentProviderModelId = (
   ));
 };
 
+export const MAX_OUTPUT_TOKENS_MIN = 1024;
+export const MAX_OUTPUT_TOKENS_MAX = 2_000_000;
+
+/**
+ * Parses the optional per-model output cap from the model editor. Empty input
+ * returns undefined so the cap is inferred; anything that is not an integer in
+ * the supported range returns null.
+ */
+export const parseMaxOutputTokensInput = (input: string): number | null | undefined => {
+  const normalized = input.trim().replace(/[\s,_]/g, '');
+  if (!normalized) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(normalized)) {
+    return null;
+  }
+  const value = Number(normalized);
+  return value >= MAX_OUTPUT_TOKENS_MIN && value <= MAX_OUTPUT_TOKENS_MAX ? value : null;
+};
+
 export const resolveModelSupportsImageForProvider = (
   providerName: string,
   model: { id: string; supportsImage?: boolean },

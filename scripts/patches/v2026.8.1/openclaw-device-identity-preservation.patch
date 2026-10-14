@@ -1,0 +1,189 @@
+diff --git a/src/infra/state-migrations.device-identity.test.ts b/src/infra/state-migrations.device-identity.test.ts
+index e64118c8584..cb469f7bf6c 100644
+--- a/src/infra/state-migrations.device-identity.test.ts
++++ b/src/infra/state-migrations.device-identity.test.ts
+@@ -583,19 +583,53 @@ describe("legacy device identity Doctor migration", () => {
+     });
+   });
+
+-  it("blocks a different canonical identity and restores the source", async () => {
++  it.each([false, true])(
++    "preserves different valid identities without a receipt, startup=%s",
++    async (startup) => {
++      const { env, stateDir } = useStateDir();
++      const winner = anotherIdentity();
++      seedCanonical(env, winner);
++      const sourcePath = await writeLegacy({ stateDir });
++      const before = await fsp.readFile(sourcePath);
++      const canonicalBefore = identityRow(env);
++
++      for (let attempt = 0; attempt < 2; attempt += 1) {
++        const options = {
++          stateDir,
++          env,
++          doctorOnlyStateMigrations: !startup,
++          allowLegacyDeviceIdentityImport: startup,
++        };
++        const result = await migrateLegacyDeviceIdentity({
++          ...options,
++          detected: detectLegacyDeviceIdentity(options),
++        });
++        expect(result.changes).toEqual([]);
++        expect(result.warnings).toEqual([]);
++        expect(result.notices?.join("\n")).toContain(
++          "canonical SQLite identity remains authoritative",
++        );
++        expect(identityRow(env)).toEqual(canonicalBefore);
++        await expect(fsp.readFile(sourcePath)).resolves.toEqual(before);
++        expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
++        expect(receipt(env)).toBeUndefined();
++      }
++    },
++  );
++
++  it("keeps a conflicting interrupted Doctor claim blocking without a receipt", async () => {
+     const { env, stateDir } = useStateDir();
+-    const winner = anotherIdentity();
+-    seedCanonical(env, winner);
++    seedCanonical(env, anotherIdentity());
++    const canonicalBefore = identityRow(env);
+     const sourcePath = await writeLegacy({ stateDir });
+     const before = await fsp.readFile(sourcePath);
++    await fsp.rename(sourcePath, `${sourcePath}.doctor-importing`);
+
+     const result = await migrate(stateDir, env);
+
+     expect(result.warnings.join("\n")).toContain("canonical SQLite device identity differs");
+-    expect(identityRow(env)?.device_id).toBe(winner.deviceId);
++    expect(identityRow(env)).toEqual(canonicalBefore);
+     await expect(fsp.readFile(sourcePath)).resolves.toEqual(before);
+-    expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
+     expect(receipt(env)).toBeUndefined();
+   });
+
+@@ -628,32 +662,42 @@ describe("legacy device identity Doctor migration", () => {
+     expect(fs.existsSync(claimPath)).toBe(false);
+   });
+
+-  it("preserves an interrupted native claim for native startup", async () => {
+-    const { env, stateDir } = useStateDir();
+-    const sourcePath = await writeLegacy({ stateDir });
+-    const nativeClaimPath = `${sourcePath}.native-importing`;
+-    await fsp.rename(sourcePath, nativeClaimPath);
+-
+-    const result = await migrate(stateDir, env);
++  it.each([false, true])(
++    "preserves an interrupted native claim, canonical=%s",
++    async (canonical) => {
++      const { env, stateDir } = useStateDir();
++      if (canonical) seedCanonical(env, anotherIdentity());
++      const canonicalBefore = identityRow(env);
++      const sourcePath = await writeLegacy({ stateDir });
++      const nativeClaimPath = `${sourcePath}.native-importing`;
++      await fsp.rename(sourcePath, nativeClaimPath);
+
+-    expect(result.warnings.join("\n")).toContain("Native device identity import is pending");
+-    expect(fs.existsSync(sourcePath)).toBe(false);
+-    expect(fs.existsSync(nativeClaimPath)).toBe(true);
+-    expect(identityRow(env)).toBeUndefined();
+-    expect(receipt(env)).toBeUndefined();
+-  });
++      const result = await migrate(stateDir, env);
+
+-  it("refuses source and interrupted claim together", async () => {
+-    const { env, stateDir } = useStateDir();
+-    const sourcePath = await writeLegacy({ stateDir });
+-    await fsp.copyFile(sourcePath, `${sourcePath}.doctor-importing`);
++      expect(result.warnings.join("\n")).toContain("Native device identity import is pending");
++      expect(fs.existsSync(sourcePath)).toBe(false);
++      expect(fs.existsSync(nativeClaimPath)).toBe(true);
++      expect(identityRow(env)).toEqual(canonicalBefore);
++      expect(receipt(env)).toBeUndefined();
++    },
++  );
++
++  it.each([false, true])(
++    "refuses source and interrupted claim together, canonical=%s",
++    async (canonical) => {
++      const { env, stateDir } = useStateDir();
++      if (canonical) seedCanonical(env, anotherIdentity());
++      const canonicalBefore = identityRow(env);
++      const sourcePath = await writeLegacy({ stateDir });
++      await fsp.copyFile(sourcePath, `${sourcePath}.doctor-importing`);
+
+-    const result = await migrate(stateDir, env);
++      const result = await migrate(stateDir, env);
+
+-    expect(result.warnings.join("\n")).toContain("source and interrupted claim both exist");
+-    expect(identityRow(env)).toBeUndefined();
+-    expect(receipt(env)).toBeUndefined();
+-  });
++      expect(result.warnings.join("\n")).toContain("source and interrupted claim both exist");
++      expect(identityRow(env)).toEqual(canonicalBefore);
++      expect(receipt(env)).toBeUndefined();
++    },
++  );
+
+   it("rechecks the canonical row before deleting the claimed source", async () => {
+     const { env, stateDir } = useStateDir();
+@@ -786,7 +830,7 @@ describe("legacy device identity Doctor migration", () => {
+     await expect(fsp.readFile(sourcePath, "utf8")).resolves.toBe(replacement);
+   });
+
+-  it("rejects symlinked, hardlinked, oversized, non-UTF-8, and invalid sources", async () => {
++  it.each([false, true])("rejects unsafe or invalid sources, canonical=%s", async (canonical) => {
+     const cases: Array<{ env: NodeJS.ProcessEnv; sourcePath: string; stateDir: string }> = [];
+
+     const symlink = useStateDir();
+@@ -828,16 +872,21 @@ describe("legacy device identity Doctor migration", () => {
+
+     for (const testCase of cases) {
+       closeOpenClawStateDatabaseForTest();
++      if (canonical) seedCanonical(testCase.env, anotherIdentity());
++      const canonicalBefore = identityRow(testCase.env);
++      const sourceBefore = await fsp.readFile(testCase.sourcePath);
+       const result = await migrate(testCase.stateDir, testCase.env);
+       expect(result.warnings.join("\n")).toContain("Failed reading legacy device identity");
+       expect(fs.existsSync(testCase.sourcePath)).toBe(true);
+-      expect(identityRow(testCase.env)).toBeUndefined();
++      await expect(fsp.readFile(testCase.sourcePath)).resolves.toEqual(sourceBefore);
++      expect(identityRow(testCase.env)).toEqual(canonicalBefore);
+       expect(receipt(testCase.env)).toBeUndefined();
+     }
+   });
+
+-  it("requires exclusive state ownership", async () => {
++  it.each([false, true])("requires exclusive state ownership, canonical=%s", async (canonical) => {
+     const { env, stateDir } = useStateDir();
++    if (canonical) seedCanonical(env, anotherIdentity());
+     const sourcePath = await writeLegacy({ stateDir });
+     const gatewayLock = await acquireGatewayLock({
+       allowInTests: true,
+diff --git a/src/infra/state-migrations.device-identity.ts b/src/infra/state-migrations.device-identity.ts
+index 6eaf463068a..07cbb5271e7 100644
+--- a/src/infra/state-migrations.device-identity.ts
++++ b/src/infra/state-migrations.device-identity.ts
+@@ -442,6 +442,23 @@ async function migrateWithExclusiveStateOwnership(params: {
+     };
+   }
+
++  // Match the runtime reader: valid SQLite keys remain authoritative even when
++  // a downgrade or native client recreated a different retired JSON identity.
++  // Validate the source first and keep pending claims subject to import recovery.
++  // No receipt may be recorded for key material that we have not imported.
++  if (hasSource) {
++    const canonical = readCanonicalIdentity(openOpenClawStateDatabase({ env: params.env }).db);
++    if (canonical && classifyCanonicalRow(canonical, snapshot.identity) === "different") {
++      return {
++        changes: [],
++        warnings: [],
++        notices: [
++          `Preserved retired device identity ${activePath}: its keys differ from the valid canonical identity; canonical SQLite identity remains authoritative. Archive or delete the retired file to clear this notice.`,
++        ],
++      };
++    }
++  }
++
+   if (activePath === params.detected.sourcePath) {
+     try {
+       params.beforeClaim?.(params.detected.sourcePath);

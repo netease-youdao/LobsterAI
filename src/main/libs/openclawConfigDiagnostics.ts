@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 
+import { normalizeOpenClawConfigPath } from './openclawConfigLock';
+
 export const DiagnosticPathKind = {
   File: 'file',
   Directory: 'directory',
@@ -82,11 +84,7 @@ function readLockOwner(lockPath: string): Record<string, unknown> {
 
 export function inspectOpenClawConfigLock(configPath: string) {
   const resolvedPath = path.resolve(configPath);
-  let normalizedPath = resolvedPath;
-  try {
-    // Same parent realpath normalization used by @openclaw/fs-safe.
-    normalizedPath = path.join(fs.realpathSync.native(path.dirname(resolvedPath)), path.basename(resolvedPath));
-  } catch { /* Keep the lexical path when the config directory is unavailable. */ }
+  const normalizedPath = normalizeOpenClawConfigPath(configPath);
   const lockPath = `${normalizedPath}.lock`;
   const lock = inspectOpenClawPath(lockPath);
   return {

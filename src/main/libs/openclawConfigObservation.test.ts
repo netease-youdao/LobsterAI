@@ -8,6 +8,7 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 test.each([
+  [ConfigRecoveryEvidence.Applied, ConfigRecoveryAction.None, ConfigWorkloadState.Idle, ConfigRecoverySuggestion.None],
   [ConfigRecoveryEvidence.Accepted, ConfigRecoveryAction.None, ConfigWorkloadState.Idle, ConfigRecoverySuggestion.VerifyApplied],
   [ConfigRecoveryEvidence.Unconfirmed, ConfigRecoveryAction.RateLimited, ConfigWorkloadState.Idle, ConfigRecoverySuggestion.RetainPending],
   [ConfigRecoveryEvidence.Unconfirmed, ConfigRecoveryAction.CallerFallback, ConfigWorkloadState.Busy, ConfigRecoverySuggestion.WaitBusy],

@@ -88,8 +88,9 @@ function computeManagedSettings(): DshManagedSettings | null {
   return renderDshManagedSettings(providers, { preferredDefault, planProvider });
 }
 
-// Starts the engine on demand (settings sync included) and resolves the web
-// URL for the workbench window.
+// Starts the engine on demand (settings sync included) and resolves the
+// authenticated web URL for the workbench window. The URL carries the
+// runtime's launch token, so it stays in the main process.
 export async function ensureDshEngineReady(): Promise<string> {
   const manager = getDshEngineManager();
 
@@ -119,7 +120,7 @@ export async function ensureDshEngineReady(): Promise<string> {
       : null
   );
   const state = await manager.start();
-  const url = manager.getWebUrl();
+  const url = manager.getAuthenticatedWebUrl();
   if (!url) {
     throw new Error(`DeepSeek Harness engine failed to start (phase=${state.phase}, error=${state.errorCode ?? 'none'})`);
   }
@@ -133,9 +134,19 @@ function closeWorkbenchWindow(): void {
   workbenchWindow = null;
 }
 
+function webOrigin(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
 function openOrFocusWorkbench(url: string, title: string): void {
   if (workbenchWindow && !workbenchWindow.isDestroyed()) {
-    if (workbenchWindow.webContents.getURL() !== url) {
+    // Loading the launch URL redirects to `/`, so compare origins: the same
+    // runtime keeps its session, a restarted one (new port) needs the new URL.
+    if (webOrigin(workbenchWindow.webContents.getURL()) !== webOrigin(url)) {
       void workbenchWindow.loadURL(url);
     }
     if (workbenchWindow.isMinimized()) workbenchWindow.restore();
@@ -197,6 +208,6 @@ export function registerDshHandlers(deps: DshHandlerDeps): void {
     }
     const url = await ensureDshEngineReady();
     openOrFocusWorkbench(url, deps.getWorkbenchTitle());
-    return { url };
+    return { url: webOrigin(url) ?? '' };
   });
 }

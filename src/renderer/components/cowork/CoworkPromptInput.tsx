@@ -7,7 +7,7 @@ import {
   PauseCircleIcon,
   PlayCircleIcon,
 } from '@heroicons/react/24/outline';
-import { ArrowUpIcon, FolderIcon } from '@heroicons/react/24/solid';
+import { ArrowUpIcon } from '@heroicons/react/24/solid';
 import { AuthSubscriptionStatus } from '@shared/auth/constants';
 import {
   BrowserAnnotationScreenshotStatus,
@@ -100,7 +100,7 @@ import { setActiveSkillIds, setSkills, toggleActiveSkill } from '../../store/sli
 import { CoworkCollaborationMode, CoworkImageAttachment } from '../../types/cowork';
 import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { Skill } from '../../types/skill';
-import { getAgentDisplayName, shouldUseDefaultAgentIcon } from '../../utils/agentDisplay';
+import { getAgentDisplayName } from '../../utils/agentDisplay';
 import { applyOptimisticGoalCommand } from '../../utils/goalCommand';
 import { toOpenClawModelRef } from '../../utils/openclawModelRef';
 import { getCompactFolderName } from '../../utils/path';
@@ -112,7 +112,6 @@ import {
   ACTIVE_CONTEXT_BADGE_REMOVE_ICON_CLASS,
 } from '../common/activeContextBadgeStyles';
 import Modal from '../common/Modal';
-import DefaultAgentIcon from '../icons/DefaultAgentIcon';
 import EditIcon from '../icons/EditIcon';
 import GoalIcon from '../icons/GoalIcon';
 import PaperClipIcon from '../icons/PaperClipIcon';
@@ -121,6 +120,7 @@ import PromptAddIcon from '../icons/PromptAddIcon';
 import SkillIcon from '../icons/SkillIcon';
 import TaskPauseIcon from '../icons/TaskPauseIcon';
 import TrashIcon from '../icons/TrashIcon';
+import WorkingDirectoryIcon from '../icons/WorkingDirectoryIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 import { ActiveKitBadge, KitsButton } from '../kits';
 import ModelSelector, {
@@ -133,6 +133,7 @@ import ModelSelector, {
 import { ActiveSkillBadge, SkillsPopover } from '../skills';
 import {
   resolveAgentModelSelection,
+  resolveAgentStartModel,
   resolveEffectiveModel,
   resolveModelThinkingLevel,
   useAgentSelectedModel,
@@ -395,17 +396,12 @@ interface AgentSelectorOption {
 }
 
 const AgentContextAvatar: React.FC<{ agent: AgentSelectorOption; className?: string }> = ({ agent, className = 'h-4 w-4' }) => {
-  if (shouldUseDefaultAgentIcon(agent)) {
-    return <DefaultAgentIcon className={className} />;
-  }
-
   return (
     <AgentAvatarIcon
       value={agent.icon}
       className={className}
       iconClassName={className}
-      legacyClassName="text-[13px]"
-      fallbackText={getAgentDisplayName(agent).trim().slice(0, 1).toUpperCase() || 'A'}
+      inheritColor
     />
   );
 };
@@ -664,6 +660,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     fallbackModel: currentAgentSelectedModel,
     engine: coworkAgentEngine,
   });
+  const homeStartModel = useMemo(() => resolveAgentStartModel({
+    agentModel: currentAgent?.model ?? '',
+    availableModels,
+    selectedModel: currentAgentSelectedModel,
+  }), [availableModels, currentAgent?.model, currentAgentSelectedModel]);
+  // A new session must not silently start on the other billing side of the agent's model.
+  const homeModelCrossesBillingSide = !sessionId && homeStartModel.crossesBillingSide;
+  const selectedModelUnavailable = agentModelIsInvalid || homeModelCrossesBillingSide;
+  const unavailableModelRef = agentModelIsInvalid
+    ? currentSession?.modelOverride ?? ''
+    : (homeModelCrossesBillingSide ? homeStartModel.unavailableModelRef ?? '' : '');
 
   const isCompact = size === 'compact';
   const isLarge = size === 'large' || isCompact;
@@ -2173,14 +2180,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     ? 'relative rounded-2xl border border-border bg-surface shadow-subtle'
     : isLarge
     ? useHomeContextLayout
-      ? 'relative rounded-2xl'
-      : `relative rounded-2xl border border-border bg-surface ${showReadOnlyContext ? '' : 'shadow-card'}`
+      ? 'relative rounded-3xl'
+      : 'relative rounded-3xl border border-border bg-surface shadow-composer'
     : 'relative flex items-end gap-2 p-3 rounded-xl border border-border bg-surface';
 
   const textareaClass = isCompact
-    ? `w-full resize-none bg-transparent px-4 pb-1.5 text-sm leading-[var(--lobster-leading-sm)] text-foreground placeholder:dark:text-foregroundSecondary/60 placeholder:text-secondary/60 focus:outline-none min-h-[${minHeight}px] max-h-[${maxHeight}px] ${hasActiveContext ? 'pt-1.5' : 'pt-2'}`
+    ? `w-full resize-none bg-transparent px-4 pb-1.5 text-sm leading-[var(--lobster-leading-sm)] text-foreground placeholder:dark:text-foregroundSecondary/60 placeholder:text-secondary/80 focus:outline-none min-h-[${minHeight}px] max-h-[${maxHeight}px] ${hasActiveContext ? 'pt-1.5' : 'pt-2'}`
     : isLarge
-    ? `w-full resize-none bg-transparent px-4 pb-2 text-foreground placeholder:dark:text-foregroundSecondary/60 placeholder:text-secondary/60 focus:outline-none min-h-[${minHeight}px] max-h-[${maxHeight}px] ${
+    ? `w-full resize-none bg-transparent px-4 pb-2 text-foreground placeholder:dark:text-foregroundSecondary/60 placeholder:text-secondary/80 focus:outline-none min-h-[${minHeight}px] max-h-[${maxHeight}px] ${
       useHomeContextLayout
         ? `${hasActiveContext ? 'pt-2' : 'pt-3'} text-sm leading-[var(--lobster-leading-prompt)]`
         : `${hasActiveContext ? 'pt-2' : 'pt-2.5'} text-[length:var(--lobster-text-promptLarge)] leading-[var(--lobster-leading-promptLarge)]`
@@ -2834,7 +2841,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     && !submitDisabled
     && !isVoiceRecognizing
     && !isPatchingModel
-    && !agentModelIsInvalid
+    && !selectedModelUnavailable
     && (effectiveModelIsAvailable || resolveSubmitModelAccessPrompt() === ModelAccessPromptKind.Login)
     && (!!activeTextareaValue.trim() || (!steerInputActive && (hasAttachments || browserAnnotationBatches.length > 0)));
   const showNewUserWelcomeLockOverlay = showNewUserWelcomeLoginOverlay && !isLoggedIn;
@@ -2897,8 +2904,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         triggerMaxWidthClassName={largeModelTriggerMaxWidthClassName}
         disabled={isPatchingModel || isPersistingAgentModel || modelSelectionRefreshPending}
         thinkingLevel={effectiveThinkingLevel ?? null}
-        value={agentModelIsInvalid && currentSession?.modelOverride
-          ? { id: '__invalid__', name: currentSession.modelOverride.split('/').pop() || currentSession.modelOverride } as Model
+        value={selectedModelUnavailable && unavailableModelRef
+          ? { id: '__invalid__', name: unavailableModelRef.split('/').pop() || unavailableModelRef } as Model
           : effectiveSelectedModel}
         onChange={async (nextModel, meta: ModelSelectorChangeMeta) => {
           if (isPatchingModel || isPersistingAgentModel) return;
@@ -2995,7 +3002,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           }
         }}
       />
-      {agentModelIsInvalid && (
+      {selectedModelUnavailable && (
         <span className="max-w-60 text-[11px] leading-4 text-red-500">
           {i18nService.t('agentModelInvalidHint')}
         </span>
@@ -3619,7 +3626,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           title={workingDirectory || i18nService.t('noFolderSelected')}
           aria-label={i18nService.t('coworkOpenFolder')}
         >
-          <FolderIcon className="h-4 w-4 shrink-0" />
+          <WorkingDirectoryIcon className="h-4 w-4 shrink-0" />
           {!isReadOnlyContextCompact && (
             <span className="min-w-0 truncate">
               {truncatePath(workingDirectory, ContextLabelMaxLength.Folder)}
@@ -3796,7 +3803,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             <>
               <div
                 data-onboarding-target="home-prompt"
-                className="relative z-10 rounded-2xl border border-border bg-surface shadow-card transition-[border-color,box-shadow] duration-200 focus-within:border-primary/35 focus-within:shadow-elevated"
+                className="relative z-10 rounded-3xl border border-border bg-surface shadow-composer transition-[border-color,box-shadow] duration-200 focus-within:border-primary/35 focus-within:shadow-elevated"
               >
                 {largeAttachmentPreview}
                 {selectedTextSnippetPreview}
@@ -3838,7 +3845,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   </div>
                 </div>
               </div>
-              <div className="-mt-2 flex min-h-10 items-center gap-1 rounded-b-2xl bg-black/[0.035] px-4 pb-2 pt-3.5 dark:bg-white/[0.05]">
+              <div className="-mt-6 flex min-h-10 items-center gap-1 rounded-b-3xl bg-black/[0.035] px-4 pb-2 pt-[30px] dark:bg-white/[0.05]">
                 {showFolderSelector && (
                   <div className="relative min-w-0 shrink">
                     <button
@@ -3858,7 +3865,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                           }`
                       }`}
                     >
-                      <FolderIcon className="h-4 w-4 shrink-0" />
+                      <WorkingDirectoryIcon className="h-4 w-4 shrink-0" />
                       <span className="min-w-0 truncate">
                         {truncatePath(workingDirectory, ContextLabelMaxLength.Folder)}
                       </span>
@@ -3970,7 +3977,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                               : 'text-secondary hover:bg-surface-raised hover:text-foreground'
                           }`}
                         >
-                          <FolderIcon className="h-4 w-4 flex-shrink-0" />
+                          <WorkingDirectoryIcon className="h-4 w-4 flex-shrink-0" />
                           <span className="max-w-[150px] truncate text-xs">
                             {truncatePath(workingDirectory)}
                           </span>

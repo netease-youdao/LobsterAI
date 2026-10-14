@@ -92,6 +92,39 @@ describe('coworkService.loadSession', () => {
     expect(store.getState().cowork.currentSession?.messagesOffset).toBe(0);
   });
 
+  test('keeps the turn start of the preserved window instead of the default page', async () => {
+    const allMessages = makeMessages(39);
+    const defaultPageSession = {
+      ...makeSession(allMessages.slice(9), 9, 39),
+      leadingTurnStartTimestamp: 8,
+    };
+    store.dispatch(setCurrentSession({
+      ...makeSession(allMessages.slice(5), 5, 39),
+      leadingTurnStartTimestamp: 4,
+    }));
+
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: {
+          getSession: vi.fn(async () => ({ success: true, session: defaultPageSession })),
+          getSessionMessages: vi.fn(async () => ({
+            success: true,
+            messages: allMessages.slice(5),
+            offset: 5,
+            total: 39,
+            leadingTurnStartTimestamp: 4,
+          })),
+          remoteManaged: vi.fn(async () => ({ remoteManaged: false })),
+        },
+      },
+    });
+
+    await coworkService.loadSession('session-1', { preserveLoadedRange: true });
+
+    expect(store.getState().cowork.currentSession?.messagesOffset).toBe(5);
+    expect(store.getState().cowork.currentSession?.leadingTurnStartTimestamp).toBe(4);
+  });
+
   test('does not request another message page when no earlier history was loaded', async () => {
     const allMessages = makeMessages(39);
     const defaultPageSession = makeSession(allMessages.slice(9), 9, 39);
@@ -185,6 +218,45 @@ describe('coworkService.loadSession', () => {
 });
 
 describe('coworkService.loadMessageWindowAroundIndex', () => {
+  test('records where the turn of the jumped-to window began', async () => {
+    const allMessages = makeMessages(120);
+    store.dispatch(setCurrentSession(makeSession(allMessages.slice(70), 70, 120)));
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: {
+          getSessionMessages: vi.fn(async () => ({
+            success: true,
+            messages: allMessages.slice(0, 50),
+            offset: 0,
+            total: 120,
+            leadingTurnStartTimestamp: null,
+          })),
+        },
+      },
+    });
+
+    await expect(coworkService.loadMessageWindowAroundIndex('session-1', 20)).resolves.toBe(true);
+    expect(store.getState().cowork.currentSession?.leadingTurnStartTimestamp).toBeNull();
+
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: {
+          getSessionMessages: vi.fn(async () => ({
+            success: true,
+            messages: allMessages.slice(35, 85),
+            offset: 35,
+            total: 120,
+            leadingTurnStartTimestamp: 34,
+          })),
+        },
+      },
+    });
+
+    await expect(coworkService.loadMessageWindowAroundIndex('session-1', 60)).resolves.toBe(true);
+    expect(store.getState().cowork.currentSession?.messagesOffset).toBe(35);
+    expect(store.getState().cowork.currentSession?.leadingTurnStartTimestamp).toBe(34);
+  });
+
   test('only applies the newest concurrent window request for a session', async () => {
     const allMessages = makeMessages(120);
     store.dispatch(setCurrentSession(makeSession(allMessages.slice(35, 85), 35, 120)));
@@ -359,6 +431,32 @@ describe('coworkService.loadMessageWindowAroundIndex', () => {
 });
 
 describe('coworkService.loadMoreMessages', () => {
+  test('records where the turn of the prepended page began', async () => {
+    const allMessages = makeMessages(120);
+    store.dispatch(setCurrentSession({
+      ...makeSession(allMessages.slice(70), 70, 120),
+      leadingTurnStartTimestamp: 69,
+    }));
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: {
+          getSessionMessages: vi.fn(async () => ({
+            success: true,
+            messages: allMessages.slice(20, 70),
+            offset: 20,
+            total: 120,
+            leadingTurnStartTimestamp: 19,
+          })),
+        },
+      },
+    });
+
+    await expect(coworkService.loadMoreMessages('session-1')).resolves.toBe(true);
+
+    expect(store.getState().cowork.currentSession?.messagesOffset).toBe(20);
+    expect(store.getState().cowork.currentSession?.leadingTurnStartTimestamp).toBe(19);
+  });
+
   test('ignores an older page when search navigation replaces the window in flight', async () => {
     const allMessages = makeMessages(120);
     store.dispatch(setCurrentSession(makeSession(allMessages.slice(50, 100), 50, 120)));

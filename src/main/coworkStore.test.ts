@@ -801,6 +801,41 @@ test('getRecentConversationMessages reads beyond the session page and excludes n
   expect(store.getRecentConversationMessages(sid, Number.POSITIVE_INFINITY)).toEqual([]);
 });
 
+test('getTurnStartTimestampAt finds where the turn of a paged window began', () => {
+  const sid = 'sess-turn-start';
+  insertSession(sid);
+  insertMessage('user-1', sid, 'user', 'long task', null, 1, 1000);
+  for (let index = 2; index <= 40; index += 1) {
+    insertMessage(`tool-${index}`, sid, index % 2 === 0 ? 'tool_use' : 'tool_result', 'step', null, index, index * 1000);
+  }
+  insertMessage('user-2', sid, 'user', 'follow up', null, 41, 50_000);
+  insertMessage('assistant-2', sid, 'assistant', 'answer', null, 42, 51_000);
+
+  // The default page starts mid-way through the first turn.
+  const firstPage = store.getSession(sid, 30);
+  expect(firstPage?.messagesOffset).toBe(12);
+  expect(firstPage?.messages[0]?.type).not.toBe('user');
+  expect(store.getTurnStartTimestampAt(sid, 12)).toBe(1000);
+
+  expect(store.getTurnStartTimestampAt(sid, 40)).toBe(50_000);
+  expect(store.getTurnStartTimestampAt(sid, 41)).toBe(50_000);
+  expect(store.getTurnStartTimestampAt(sid, -1)).toBeNull();
+  expect(store.getTurnStartTimestampAt('missing-session', 3)).toBeNull();
+});
+
+test('getTurnStartTimestampAt uses the earliest time when a channel user message is stamped late', () => {
+  const sid = 'sess-turn-start-channel';
+  insertSession(sid);
+  insertMessage('assistant-0', sid, 'assistant', 'before any request', null, 1, 500);
+  insertMessage('user-1', sid, 'user', 'from IM', null, 2, 3000);
+  insertMessage('assistant-1', sid, 'assistant', 'streamed first', null, 3, 2000);
+  insertMessage('tool-1', sid, 'tool_use', 'exec', null, 4, 4000);
+
+  expect(store.getTurnStartTimestampAt(sid, 3)).toBe(2000);
+  // Without an earlier user message the turn starts at its first message.
+  expect(store.getTurnStartTimestampAt(sid, 0)).toBe(500);
+});
+
 test('getSession returns all messages when ALL have corrupt metadata', () => {
   const sid = 'sess-2';
   insertSession(sid);
