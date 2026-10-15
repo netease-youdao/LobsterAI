@@ -9606,7 +9606,23 @@ if (!gotTheLock) {
     }
   });
 
-  registerMcpHandlers({ getMcpRuntime, syncOpenClawConfig });
+  registerMcpHandlers({
+    getMcpRuntime,
+    syncOpenClawConfig,
+    // `openclaw mcp login|logout|status` must see the same config, state dir and secrets as the gateway.
+    getOAuthCliContext: () => {
+      const manager = getOpenClawEngineManager();
+      const runtimeRoot = manager.getRuntimeRoot();
+      if (!runtimeRoot) return null;
+      return {
+        electronNodeRuntimePath: getElectronNodeRuntimePath(),
+        runtimeRoot,
+        stateDir: manager.getStateDir(),
+        configPath: manager.getConfigPath(),
+        secretEnv: { ...manager.getSecretEnvVars(), ...getOpenClawConfigSync().collectSecretEnvVars() },
+      };
+    },
+  });
 
   registerDecisionModelHandlers({
     getStore: () => getStore(),

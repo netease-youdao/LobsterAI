@@ -10,6 +10,9 @@ export const McpIpcChannel = {
   ListTools: 'mcp:listTools',
   FetchMarketplace: 'mcp:fetchMarketplace',
   ConnectQichacha: 'mcp:qichachaConnect',
+  OAuthLogin: 'mcp:oauthLogin',
+  OAuthLogout: 'mcp:oauthLogout',
+  OAuthStatus: 'mcp:oauthStatus',
   Changed: 'mcp:changed',
 } as const;
 export type McpIpcChannel = typeof McpIpcChannel[keyof typeof McpIpcChannel];

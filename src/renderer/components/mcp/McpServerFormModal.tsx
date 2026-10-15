@@ -1,6 +1,7 @@
 import { ChevronRightIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useState } from 'react';
 
+import { McpAuthMode } from '../../../shared/mcp/auth';
 import type { McpToolDiscoveryRequest } from '../../../shared/mcp/toolDiscovery';
 import { McpUrlValidationError, normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
 import { i18nService } from '../../services/i18n';
@@ -19,6 +20,11 @@ const TRANSPORT_OPTIONS: { value: 'stdio' | 'sse' | 'http'; label: string; descK
   { value: 'stdio', label: 'stdio', descKey: 'mcpTransportStdio' },
   { value: 'sse', label: 'SSE', descKey: 'mcpTransportSse' },
   { value: 'http', label: 'HTTP', descKey: 'mcpTransportHttp' },
+];
+
+const AUTH_MODE_OPTIONS: { value: McpAuthMode; labelKey: string; descKey: string }[] = [
+  { value: McpAuthMode.None, labelKey: 'mcpAuthNone', descKey: 'mcpAuthNoneDesc' },
+  { value: McpAuthMode.OAuth, labelKey: 'mcpAuthOAuth', descKey: 'mcpAuthOAuthDesc' },
 ];
 
 export const McpFormInputMode = {
@@ -97,6 +103,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   const [envRows, setEnvRows] = useState<{ key: string; value: string; required?: boolean }[]>([]);
   const [url, setUrl] = useState('');
   const [headerRows, setHeaderRows] = useState<{ key: string; value: string }[]>([]);
+  const [authMode, setAuthMode] = useState<McpAuthMode>(McpAuthMode.None);
   const [includeToolsText, setIncludeToolsText] = useState('');
   const [excludeToolsText, setExcludeToolsText] = useState('');
   const [parallelToolCalls, setParallelToolCalls] = useState(false);
@@ -129,6 +136,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
           ? Object.entries(server.headers).map(([key, value]) => ({ key, value }))
           : []
       );
+      setAuthMode(server.auth === McpAuthMode.OAuth ? McpAuthMode.OAuth : McpAuthMode.None);
       setIncludeToolsText(formatMcpToolNameList(server.toolFilter?.include));
       setExcludeToolsText(formatMcpToolNameList(server.toolFilter?.exclude));
       setParallelToolCalls(server.supportsParallelToolCalls === true);
@@ -164,6 +172,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       setEnvRows(envEntries);
       setUrl('');
       setHeaderRows([]);
+      setAuthMode(McpAuthMode.None);
     } else {
       // Create mode
       setName('');
@@ -216,7 +225,8 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
         env: rowsToRecord(envRows),
       };
     }
-    if (!url.trim()) return null;
+    // OAuth servers answer 401 until the user signs in, which only works once the server is saved.
+    if (!url.trim() || authMode === McpAuthMode.OAuth) return null;
     return {
       serverId: server?.id,
       name: name.trim(),
@@ -224,11 +234,13 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       url: url.trim(),
       headers: rowsToRecord(headerRows),
     };
-  }, [argsText, command, envRows, headerRows, isMissingRequiredEnv, name, server?.id, transportType, url]);
+  }, [argsText, authMode, command, envRows, headerRows, isMissingRequiredEnv, name, server?.id, transportType, url]);
 
-  const toolDiscoveryBlockedReason = isMissingRequiredEnv && command.trim()
-    ? i18nService.t('mcpToolsNeedRequiredEnv')
-    : i18nService.t('mcpToolsNeedConnection');
+  const toolDiscoveryBlockedReason = transportType !== 'stdio' && authMode === McpAuthMode.OAuth
+    ? i18nService.t('mcpToolsNeedOAuthSignIn')
+    : isMissingRequiredEnv && command.trim()
+      ? i18nService.t('mcpToolsNeedRequiredEnv')
+      : i18nService.t('mcpToolsNeedConnection');
 
   const handleSave = () => {
     const trimmedName = name.trim();
@@ -300,6 +312,8 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
     } else {
       data.url = normalizedUrl;
       data.headers = headers;
+      // Always sent for remote servers so switching back to "none" clears a saved OAuth mode.
+      data.auth = authMode;
     }
 
     data.toolFilter = buildMcpToolFilterFromText(includeToolsText, excludeToolsText);
@@ -627,6 +641,30 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                   placeholder={i18nService.t('mcpUrlPlaceholder')}
                   className={inputClass}
                 />
+              </div>
+
+              {/* Authentication: static headers, or MCP OAuth handled by OpenClaw */}
+              <div className="space-y-1.5">
+                <label className={labelClass}>{i18nService.t('mcpAuthMode')}</label>
+                <div className="grid grid-cols-2 gap-1 rounded-lg bg-surface-raised p-1">
+                  {AUTH_MODE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setAuthMode(opt.value)}
+                      className={`rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+                        authMode === opt.value
+                          ? 'bg-surface text-foreground shadow-subtle'
+                          : 'text-secondary hover:text-foreground'
+                      }`}
+                    >
+                      {i18nService.t(opt.labelKey)}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-secondary">
+                  {i18nService.t((AUTH_MODE_OPTIONS.find(opt => opt.value === authMode) ?? AUTH_MODE_OPTIONS[0]).descKey)}
+                </p>
               </div>
 
               <div className="space-y-1.5">

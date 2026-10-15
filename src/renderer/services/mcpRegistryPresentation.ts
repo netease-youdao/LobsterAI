@@ -1,3 +1,4 @@
+import { McpAuthMode } from '../../shared/mcp/auth';
 import type { McpRegistryEntry, McpServerConfig } from '../types/mcp';
 import { McpRegistryEntryKind } from '../types/mcp';
 
@@ -13,6 +14,16 @@ export type McpInstalledItem =
 
 export function isRegistryBundleEntry(entry: McpRegistryEntry): boolean {
   return entry.kind === McpRegistryEntryKind.Bundle;
+}
+
+/** Remote entry that installs in one click and then signs in with MCP OAuth. */
+export function isOAuthRegistryEntry(entry: McpRegistryEntry): boolean {
+  return entry.transportType !== 'stdio' && entry.auth === McpAuthMode.OAuth;
+}
+
+/** Local entries the app connects itself, kept even though the server list does not carry them. */
+function isAppManagedRegistryEntry(entry: McpRegistryEntry): boolean {
+  return Boolean(entry.oauthProvider) || isOAuthRegistryEntry(entry);
 }
 
 /** UI language code, as returned by the renderer i18n service. */
@@ -61,7 +72,7 @@ export function mergeMarketplaceRegistry(
   remoteRegistry: McpRegistryEntry[],
   localRegistry: McpRegistryEntry[],
 ): McpRegistryEntry[] {
-  const managedLocalEntries = localRegistry.filter(entry => entry.oauthProvider);
+  const managedLocalEntries = localRegistry.filter(isAppManagedRegistryEntry);
   const managedLocalIds = new Set(managedLocalEntries.map(entry => entry.id));
   const merged = remoteRegistry.filter(entry => !managedLocalIds.has(entry.id));
 

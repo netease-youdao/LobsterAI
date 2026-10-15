@@ -1,3 +1,5 @@
+import type { McpAuthMode } from '../../shared/mcp/auth';
+
 // MCP Server type definitions
 export type McpTransportType = 'stdio' | 'sse' | 'http';
 
@@ -25,6 +27,7 @@ export interface McpServerConfig {
   env?: Record<string, string>;  // stdio
   url?: string;                  // sse / http
   headers?: Record<string, string>; // sse / http
+  auth?: McpAuthMode;            // sse / http: 'oauth' = sign in via MCP OAuth (OpenClaw stores the token)
   toolFilter?: McpToolFilter;    // expose only / hide selected tools
   supportsParallelToolCalls?: boolean; // allow parallel execution of this server's tools
   isBuiltIn: boolean;            // installed from built-in registry
@@ -64,6 +67,7 @@ export interface McpServerFormData {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  auth?: McpAuthMode;
   toolFilter?: McpToolFilter;
   supportsParallelToolCalls?: boolean;
   isBuiltIn?: boolean;
@@ -89,6 +93,8 @@ export interface McpRegistryEntry {
   optionalEnvKeys?: string[];    // optional env vars
   argPlaceholders?: string[];    // placeholder hints for args (e.g. path)
   oauthProvider?: 'qichacha';    // special app-managed OAuth/API key flow
+  auth?: McpAuthMode;            // remote entry that signs in with MCP OAuth; `command` holds its URL
+  skillId?: string;              // bundled skill that teaches the agent this server's tools; enabled on connect
   kind?: McpRegistryEntryKind;   // defaults to a single-server registry entry
   marketplacePosition?: number;  // 1-based preferred position; clamps to the available list
 }

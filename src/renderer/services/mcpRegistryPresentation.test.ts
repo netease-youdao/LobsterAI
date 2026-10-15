@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'vitest';
 
+import { McpAuthMode } from '../../shared/mcp/auth';
 import type { McpRegistryEntry, McpServerConfig } from '../types/mcp';
 import { McpRegistryEntryKind } from '../types/mcp';
 import {
   buildInstalledMcpItems,
   getRegistryEntryDisplayName,
   getRegistryEntryLocalizedDescription,
+  isOAuthRegistryEntry,
   mergeMarketplaceRegistry,
 } from './mcpRegistryPresentation';
 
@@ -43,6 +45,23 @@ describe('mergeMarketplaceRegistry', () => {
     oauthProvider: 'qichacha',
     kind: McpRegistryEntryKind.Bundle,
     marketplacePosition: 4,
+  });
+
+  test('keeps local MCP OAuth entries but not plain local entries', () => {
+    const oauthEntry = registryEntry('remote-oauth', {
+      transportType: 'http',
+      command: 'https://mcp.example.com/mcp',
+      auth: McpAuthMode.OAuth,
+      marketplacePosition: 2,
+    });
+    const stdioWithAuth = registryEntry('stdio-oauth', { auth: McpAuthMode.OAuth });
+    const remote = ['one', 'two', 'three'].map(id => registryEntry(id));
+
+    expect(
+      mergeMarketplaceRegistry(remote, [oauthEntry, stdioWithAuth, registryEntry('plain')]).map(entry => entry.id),
+    ).toEqual(['one', 'remote-oauth', 'two', 'three']);
+    expect(isOAuthRegistryEntry(oauthEntry)).toBe(true);
+    expect(isOAuthRegistryEntry(stdioWithAuth)).toBe(false);
   });
 
   test('inserts a managed local entry at its 1-based preferred position', () => {

@@ -4313,6 +4313,40 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.mcp.servers['plain-tools']).not.toHaveProperty('toolFilter');
     expect(config.mcp.servers['plain-tools']).not.toHaveProperty('supportsParallelToolCalls');
   });
+
+  test('writes auth: "oauth" for OAuth remote servers and drops their static Authorization header', async () => {
+    const sync = await createSync({
+      getResolvedMcpServers: () => [
+        {
+          name: 'oauth-remote',
+          transportType: 'http',
+          url: 'https://mcp.example.com/mcp',
+          headers: { Authorization: 'Bearer stale', 'X-Tenant': 'acme' },
+          auth: 'oauth',
+        },
+        {
+          name: 'header-remote',
+          transportType: 'sse',
+          url: 'https://sse.example.com/sse',
+          headers: { Authorization: 'Bearer kept' },
+        },
+      ],
+    });
+
+    const result = sync.sync('mcp-oauth');
+
+    expect(result.ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.mcp.servers['oauth-remote']).toMatchObject({
+      url: 'https://mcp.example.com/mcp',
+      transport: 'streamable-http',
+      auth: 'oauth',
+      headers: { 'x-tenant': 'acme' },
+    });
+    expect(config.mcp.servers['oauth-remote'].headers).not.toHaveProperty('authorization');
+    expect(config.mcp.servers['header-remote']).not.toHaveProperty('auth');
+    expect(config.mcp.servers['header-remote'].headers).toEqual({ authorization: 'Bearer kept' });
+  });
 });
 
 describe('resolveModelSourceForOpenClawProvider', () => {

@@ -1,3 +1,5 @@
+import { McpAuthMode } from '../../shared/mcp/auth';
+import lynxceOmniIconUrl from '../assets/mcp/lynxce-omni.svg';
 import { McpRegistryEntry, McpRegistryEntryKind } from '../types/mcp';
 
 /**
@@ -7,8 +9,9 @@ import { McpRegistryEntry, McpRegistryEntryKind } from '../types/mcp';
  * cached in localStorage between sessions) — it is deliberately NOT mirrored
  * here, so there is a single source of truth for names, descriptions and the
  * server list itself. This file only holds entries the server payload cannot
- * express: flows managed by the app, such as the Qichacha OAuth bundle, which
- * `mergeMarketplaceRegistry` re-inserts into whatever the server returns.
+ * express: flows managed by the app, such as the Qichacha OAuth bundle and
+ * remote servers that sign in with MCP OAuth, which `mergeMarketplaceRegistry`
+ * re-inserts into whatever the server returns.
  */
 export const mcpRegistry: McpRegistryEntry[] = [
   {
@@ -23,6 +26,21 @@ export const mcpRegistry: McpRegistryEntry[] = [
     oauthProvider: 'qichacha',
     kind: McpRegistryEntryKind.Bundle,
     marketplacePosition: 4,
+  },
+  {
+    id: 'lynxce-omni',
+    name: 'Lynxce Omni AI',
+    name_zh: '灵策全能AI',
+    icon: lynxceOmniIconUrl,
+    descriptionKey: 'mcpDesc_lynxceOmni',
+    category: 'design',
+    categoryKey: 'mcpCategoryDesign',
+    transportType: 'http',
+    command: 'https://web.lynxce.cn/api/mcp',
+    defaultArgs: [],
+    auth: McpAuthMode.OAuth,
+    skillId: 'lynxce-omni',
+    marketplacePosition: 5,
   },
 ];
 

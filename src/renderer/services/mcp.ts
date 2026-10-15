@@ -1,3 +1,4 @@
+import { type McpOAuthActionResult, McpOAuthErrorCode, type McpOAuthState } from '../../shared/mcp/auth';
 import {
   McpToolDiscoveryErrorCode,
   type McpToolDiscoveryRequest,
@@ -233,6 +234,44 @@ class McpService {
       const message = error instanceof Error ? error.message : 'Failed to connect Qichacha MCP';
       console.error('Failed to connect Qichacha MCP:', error);
       return { success: false, error: message };
+    }
+  }
+
+  /** Runs the MCP OAuth sign-in for an `auth: 'oauth'` server; the browser opens on the provider's page. */
+  async oauthLogin(id: string): Promise<McpOAuthActionResult> {
+    try {
+      return await window.electron.mcp.oauthLogin(id);
+    } catch (error) {
+      console.error('Failed to sign in to MCP server:', error);
+      return {
+        success: false,
+        code: McpOAuthErrorCode.Failed,
+        error: error instanceof Error ? error.message : 'Failed to sign in to MCP server',
+      };
+    }
+  }
+
+  async oauthLogout(id: string): Promise<McpOAuthActionResult> {
+    try {
+      return await window.electron.mcp.oauthLogout(id);
+    } catch (error) {
+      console.error('Failed to sign out of MCP server:', error);
+      return {
+        success: false,
+        code: McpOAuthErrorCode.Failed,
+        error: error instanceof Error ? error.message : 'Failed to sign out of MCP server',
+      };
+    }
+  }
+
+  /** OAuth state per server id, for servers configured with `auth: 'oauth'`. */
+  async oauthStatus(): Promise<Record<string, McpOAuthState>> {
+    try {
+      const result = await window.electron.mcp.oauthStatus();
+      return result.success ? result.states : {};
+    } catch (error) {
+      console.error('Failed to read MCP OAuth status:', error);
+      return {};
     }
   }
 

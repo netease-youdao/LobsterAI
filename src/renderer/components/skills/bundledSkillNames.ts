@@ -24,6 +24,7 @@ export const BUNDLED_SKILL_DISPLAY_NAMES: Record<string, LocalizedText> = {
   'frontend-design': { zh: '前端页面设计', en: 'Frontend Design' },
   'imap-smtp-email': { zh: '邮件收发', en: 'Email (IMAP/SMTP)' },
   'local-tools': { zh: '本地工具', en: 'Local Tools' },
+  'lynxce-omni': { zh: '灵策全能AI', en: 'Lynxce Omni AI' },
   'music-search': { zh: '音乐搜索', en: 'Music Search' },
   'pdf': { zh: 'PDF 处理', en: 'PDF Toolkit' },
   'playwright': { zh: 'Playwright 自动化', en: 'Playwright' },

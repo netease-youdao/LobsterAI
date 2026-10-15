@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none" role="img" aria-label="Lynxce Omni AI">
+  <defs>
+    <linearGradient id="bg" x1="8" y1="4" x2="90" y2="94" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset=".48" stop-color="#4353FF"/>
+      <stop offset="1" stop-color="#8B3DF5"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(26 18) rotate(50) scale(62)">
+      <stop offset="0" stop-color="#fff" stop-opacity=".38"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="play" x1="58" y1="54" x2="84" y2="82" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF7AB6"/>
+      <stop offset="1" stop-color="#FF9F43"/>
+    </linearGradient>
+  </defs>
+  <rect width="96" height="96" rx="24" fill="url(#bg)"/>
+  <rect width="96" height="96" rx="24" fill="url(#glow)"/>
+  <rect x="17" y="27" width="46" height="40" rx="9" fill="#fff" fill-opacity=".16" stroke="#fff" stroke-width="4"/>
+  <circle cx="30" cy="40" r="4.5" fill="#fff"/>
+  <path d="M21 62l12-13 8 8 7-6 11 11" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="69" cy="67" r="15" fill="url(#play)" stroke="#fff" stroke-width="3.5"/>
+  <path d="M65 60.5v13l11-6.5-11-6.5z" fill="#fff"/>
+  <path d="M71 13c1.2 6.5 3.5 8.8 10 10-6.5 1.2-8.8 3.5-10 10-1.2-6.5-3.5-8.8-10-10 6.5-1.2 8.8-3.5 10-10z" fill="#fff"/>
+  <path d="M55 12c.6 3 1.6 4 4.6 4.6-3 .6-4 1.6-4.6 4.6-.6-3-1.6-4-4.6-4.6 3-.6 4-1.6 4.6-4.6z" fill="#fff" fill-opacity=".85"/>
+</svg>

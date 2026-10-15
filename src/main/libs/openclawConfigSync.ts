@@ -1769,6 +1769,9 @@ export interface ResolvedMcpServer {
   // to false, which makes any tool batch containing one of this server's tools
   // run sequentially. Only set true for servers that handle concurrent requests.
   supportsParallelToolCalls?: boolean;
+  // Remote servers only -> openclaw mcp.servers.*.auth. With "oauth", OpenClaw
+  // runs MCP OAuth itself (tokens live in its state dir, `openclaw mcp login`).
+  auth?: 'oauth';
 }
 
 // Normalize header keys to lowercase before writing to openclaw.json.
@@ -1796,7 +1799,7 @@ function lowercaseHeaderKeys(headers: Record<string, string>): Record<string, st
  */
 const MCP_NAME_NON_ASCII_RE = /[^\x00-\x7F]/;
 
-function safeServerKey(name: string): string {
+export function safeServerKey(name: string): string {
   if (!MCP_NAME_NON_ASCII_RE.test(name)) return name;
   const hash = createHash('md5').update(name).digest('hex').slice(0, 8);
   return `mcp-${hash}`;
@@ -1839,6 +1842,16 @@ function buildOpenClawMcpServers(
           entry.headers = lowercaseHeaderKeys(server.headers);
         entry.transport = 'streamable-http';
         break;
+    }
+    if (server.transportType !== 'stdio' && server.auth === 'oauth') {
+      entry.auth = 'oauth';
+      // OpenClaw ignores a static Authorization header on OAuth servers (and warns),
+      // so keep it out of openclaw.json instead of shipping a value that is never used.
+      if (entry.headers && typeof entry.headers === 'object') {
+        const { authorization: _ignored, ...rest } = entry.headers as Record<string, string>;
+        if (Object.keys(rest).length > 0) entry.headers = rest;
+        else delete entry.headers;
+      }
     }
     // Optional passthrough knobs (see ResolvedMcpServer). Omitted when unset so
     // openclaw.json stays unchanged for servers that never configured them.

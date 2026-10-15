@@ -197,6 +197,9 @@ contextBridge.exposeInMainWorld('electron', {
     listTools: (request: McpToolDiscoveryRequest) => ipcRenderer.invoke(McpIpcChannel.ListTools, request),
     fetchMarketplace: () => ipcRenderer.invoke(McpIpcChannel.FetchMarketplace),
     connectQichacha: () => ipcRenderer.invoke(McpIpcChannel.ConnectQichacha),
+    oauthLogin: (id: string) => ipcRenderer.invoke(McpIpcChannel.OAuthLogin, id),
+    oauthLogout: (id: string) => ipcRenderer.invoke(McpIpcChannel.OAuthLogout, id),
+    oauthStatus: () => ipcRenderer.invoke(McpIpcChannel.OAuthStatus),
     onChanged: (callback: () => void) => {
       const handler = () => callback();
       ipcRenderer.on(McpIpcChannel.Changed, handler);
