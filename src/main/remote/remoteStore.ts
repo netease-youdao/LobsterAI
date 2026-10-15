@@ -15,6 +15,7 @@ import { initializeAvailabilityProjectionSources, initializeAvailabilitySource, 
 import type { InboxEntry } from './remoteBridge';
 import { replaceCoreTrigger } from './remoteCoreTriggers';
 import { RemoteDatabaseHealth } from './remoteDatabaseHealth';
+import { ensureRecentDesktopInputJobs } from './remoteDesktopInputJobs';
 import { samePersistedRemoteEnvironment } from './remoteEnvironmentMigration';
 import { RemoteHistoryStore } from './remoteHistoryStore';
 import { acknowledgeRemoteSessionDeletion } from './remoteLocalGc';
@@ -501,6 +502,7 @@ export class RemoteStore {
   markFilesDirty(sessionId: string): void {
     if (this.isSyncClosed(sessionId)) return;
     this.markProjectionDirty(sessionId);
+    ensureRecentDesktopInputJobs(this, sessionId);
   }
   /** Called only after negotiation and registration confirm the exact projection identity. */
   setProjectionIdentity(environment: string, owner: RemoteOwner, deviceId: string): void {
@@ -846,21 +848,31 @@ export class RemoteStore {
     if (this.depth > 0 && this.commitObservers.length < 256) this.commitObservers.push(observer);
   }
   transaction<T>(operation: () => T): T {
-    if (this.depth > 0) return operation();
+    if (this.depth > 0) {
+      if (!this.db.inTransaction) throw new Error('Core transaction is no longer active');
+      return operation();
+    }
     const beforeChange = this.changeVersion;
     this.urgentReplyChange = false;
     let result: T;
     try { result = this.db.transaction(() => {
+      const previousDepth = this.depth;
       this.depth++;
-      this.db.prepare('UPDATE remote_write_context SET trusted=1 WHERE id=1').run();
       try {
-        const value = operation();
-        if (!this.publishing && !this.options.deferredProjection && this.synchronizationReady) { this.refreshProjectionHints(); this.captureDirty(); }
-        if (this.advanceCheckpoint) this.put('databaseCheckpoint', this.advanceCheckpoint());
-        return value;
+        this.db.prepare('UPDATE remote_write_context SET trusted=1 WHERE id=1').run();
+        try {
+          const value = operation();
+          if (!this.db.inTransaction) throw new Error('Core transaction is no longer active');
+          if (!this.publishing && !this.options.deferredProjection && this.synchronizationReady) { this.refreshProjectionHints(); this.captureDirty(); }
+          if (this.advanceCheckpoint) this.put('databaseCheckpoint', this.advanceCheckpoint());
+          return value;
+        } finally {
+          // SQLite may already have rolled back after a storage/trigger failure.
+          if (this.db.inTransaction) this.db.prepare('UPDATE remote_write_context SET trusted=0 WHERE id=1').run();
+        }
       } finally {
-        this.db.prepare('UPDATE remote_write_context SET trusted=0 WHERE id=1').run();
-        this.depth--;
+        // Neither trusted-marker SQL nor a failed rollback may poison the next transaction.
+        this.depth = previousDepth;
       }
     })(); } catch (error) { this.commitObservers.length = 0; throw error; }
     const observers = this.commitObservers.splice(0);
@@ -896,6 +908,24 @@ export class RemoteStore {
   assertActor(sessionId: string, actor: RemoteOwner | null): void {
     const row = this.db.prepare('SELECT ownership_status FROM cowork_session_ownership WHERE session_id=?').get(sessionId) as any;
     if (row && (row.ownership_status !== 'confirmed' || !sameOwner(this.owner(sessionId), actor))) throw new Error('Session belongs to another account or requires local recovery');
+  }
+  /** Stop-only diagnostics from a dispatch witnessed in this process, never a recovery of ownership. */
+  quarantinedStopCandidates(actor: RemoteOwner | null): Array<{ sessionId: string; runId: string }> {
+    if (!actor) return [];
+    const result: Array<{ sessionId: string; runId: string }> = [];
+    for (const [sessionId, binding] of this.messageBindings) {
+      try { this.assertQuarantinedStop(sessionId, binding.runId, actor); result.push({ sessionId, runId: binding.runId }); }
+      catch { /* Corrupt or unverified tasks remain isolated; continue other candidates. */ }
+    }
+    return result;
+  }
+  assertQuarantinedStop(sessionId: string, runId: string, actor: RemoteOwner | null): void {
+    const binding = this.messageBindings.get(sessionId), row = this.ownershipRecord(sessionId);
+    if (!actor || !binding || binding.runId !== runId || !sameOwner(binding.owner, actor)
+      || row?.ownership_status !== 'quarantined' || row.owner_user_id !== actor.userId || row.owner_scope_key !== actor.scopeKey)
+      throw new Error('REMOTE_QUARANTINE_STOP_UNVERIFIED');
+    const run = this.run(sessionId);
+    if (!run || run.runId !== binding.runId || terminal.has(run.status)) throw new Error('REMOTE_QUARANTINE_STOP_UNVERIFIED');
   }
   assignNew(sessionId: string, owner: RemoteOwner | null, source: string): void {
     if (!owner) return;

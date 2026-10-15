@@ -77,6 +77,11 @@ describe('remote command task admission', () => {
     expect(f.requestApi).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled();
     f.bridge.stop();
   });
+  it('does not recover commands when the physical database health check returns false', async () => {
+    const f = fixture(); vi.spyOn(f.store, 'verifyExecutionDatabaseHealth').mockResolvedValue(false);
+    await expect(f.bridge.reconcile()).rejects.toThrow('REMOTE_EXECUTION_DATABASE_UNHEALTHY');
+    expect(f.requestApi).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled(); f.bridge.stop();
+  });
   it('preserves a claimed command without preparing an unadmitted existing task', async () => {
     const f = fixture();
     f.store.transaction(() => {
@@ -980,5 +985,149 @@ describe('independent reply format inside question projection v5', () => {
     const { bridge } = fixture(); bridge.projectionVersion = 5; bridge.replySupported = true;
     const current = bridge.syncContext(); expect(current()).toBe(true);
     bridge.replySupported = false; expect(current()).toBe(false); bridge.stop();
+  });
+});
+
+
+describe('bounded command recovery and claim fairness', () => {
+  function multiFixture() {
+    const f = fixture();
+    const commands = ['a', 'b', 'c'].map(id => {
+      const request = { ...f.envelope.request, commandId: `command-${id}` };
+      return { ...f.envelope, command: { ...f.envelope.command, commandId: request.commandId, sessionId: `remote-${id}`, runId: `run-${id}` },
+        request, requestHash: payloadHash(request) };
+    });
+    f.bridge.deps.prepare = (command: any) => {
+      const localId = `local-${command.sessionId}`;
+      if (!f.store.db.prepare('SELECT 1 FROM cowork_sessions WHERE id=?').get(localId)) {
+        f.store.db.prepare('INSERT INTO cowork_sessions VALUES (?,?,1,1,?)').run(localId, 'task', 'idle');
+        f.store.assignNew(localId, owner, 'remote_command');
+      }
+      return { localSessionId: localId, remoteSessionId: command.sessionId, runId: command.runId };
+    };
+    f.execute.mockImplementation(async (_entry, permitted) => { expect(permitted()).toBe(true); return { outcome: 'started' }; });
+    let ack: (id: string, status: string) => Promise<void> = async () => {};
+    f.requestApi.mockImplementation(async (_owner, pathname, init) => {
+      const body = init.body ? JSON.parse(String(init.body)) : null;
+      let data: any;
+      if (pathname.endsWith('/commands/claim')) data = { items: commands };
+      else if (pathname.includes('/commands?')) data = { items: commands, nextCursor: null };
+      else if (pathname.endsWith('/ack')) {
+        const envelope = commands.find(item => pathname.includes(`/${item.command.commandId}/`))!;
+        await ack(envelope.command.commandId, body.status);
+        data = { ...envelope.command, status: body.status, statusVersion: body.status === 'received' ? '3' : '4' };
+      } else throw new Error(`Unexpected ${pathname}`);
+      return new Response(JSON.stringify({ code: 0, message: 'success', data }));
+    });
+    return { ...f, commands, setAck: (next: typeof ack) => { ack = next; } };
+  }
+  it('allows B and C to execute while A is waiting for its received ACK', async () => {
+    const f = multiFixture(); let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    f.setAck(async (id, status) => { if (id === 'command-a' && status === 'received') await held; });
+    const work = f.bridge.claim();
+    try {
+      await vi.waitFor(() => expect(f.execute.mock.calls.map(([entry]) => entry.command.commandId)).toEqual(['command-b', 'command-c']));
+      expect(f.store.get<InboxEntry>('inbox:command-a')?.state).toBe('prepared');
+    } finally { release(); await work; f.bridge.stop(); }
+    expect(f.execute).toHaveBeenCalledTimes(3);
+  });
+  it('serializes two commands for one task and never overlaps its runner starts', async () => {
+    const f = multiFixture(); let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    f.commands[1].command.sessionId = f.commands[0].command.sessionId;
+    let bReceived = false;
+    f.setAck(async (id, status) => {
+      if (id === 'command-a' && status === 'received') await held;
+      if (id === 'command-b' && status === 'received') bReceived = true;
+    });
+    const work = f.bridge.claim();
+    try {
+      await vi.waitFor(() => expect(f.execute.mock.calls.some(([entry]) => entry.command.commandId === 'command-c')).toBe(true));
+      expect(bReceived).toBe(false);
+    } finally { release(); await work; f.bridge.stop(); }
+    expect(f.execute.mock.calls.map(([entry]) => entry.command.commandId)).toEqual(['command-c', 'command-a', 'command-b']);
+  });
+  it('does not isolate an authentication failure as one bad task or execute queued work', async () => {
+    const f = multiFixture();
+    f.setAck(async () => { throw new RemoteApiError(401, 'expired', null, 401); });
+    await expect(f.bridge.claim()).rejects.toMatchObject({ code: 401 });
+    expect(f.bridge.generation).toBeNull(); expect(f.execute).not.toHaveBeenCalled();
+    expect(f.bridge.commandTaskRetryAt.size).toBe(0); f.bridge.stop();
+  });
+  it('keeps a slow reconciliation single-flight without waiting before claiming', async () => {
+    const f = multiFixture(); let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const reconcile = vi.spyOn(f.bridge, 'reconcile').mockImplementation(() => held);
+    for (const method of ['schedule', 'ensureAccount', 'startDeletionSync', 'startInputRecovery', 'startOptionalPublications', 'startHistorySync', 'syncFiles'])
+      vi.spyOn(f.bridge, method).mockImplementation(() => undefined);
+    for (const method of ['ensureRegistration', 'ensureDefaultWorkspace', 'refreshCapabilities', 'writeSettings', 'connect'])
+      vi.spyOn(f.bridge, method).mockResolvedValue(undefined);
+    try {
+      await f.bridge.tick();
+      expect(f.execute).toHaveBeenCalledTimes(3);
+      f.bridge.commandPollAt = 0; await f.bridge.tick();
+      expect(reconcile).toHaveBeenCalledTimes(1);
+      expect(f.execute).toHaveBeenCalledTimes(3); // Duplicate claims still require reconciliation.
+    } finally { release(); await f.bridge.reconcileWork; f.bridge.stop(); }
+  });
+  it('ignores an old connection recovery failure after a new connection is established', async () => {
+    const f = multiFixture(); let reject!: (error: unknown) => void;
+    f.requestApi.mockImplementation(async () => await new Promise((_resolve, rejectRequest) => { reject = rejectRequest; }));
+    f.bridge.startCommandReconciliation();
+    await vi.waitFor(() => expect(reject).toBeTypeOf('function'));
+    const work = f.bridge.reconcileWork;
+    f.bridge.generation = '2'; f.bridge.unresolvedCursor = 'new-cursor';
+    reject(new RemoteApiError(401, 'old request expired', null, 401)); await work;
+    expect(f.bridge.generation).toBe('2'); expect(f.bridge.unresolvedCursor).toBe('new-cursor');
+    expect(f.bridge.reconcileRetryAt).toBe(0); expect(f.bridge.commandRetryAt).toBe(0); f.bridge.stop();
+  });
+  it('backs off one recovery task without skipping its durable unknown evidence', async () => {
+    const f = multiFixture(); const attempted: string[] = [];
+    const recover = async (envelope: any) => { attempted.push(envelope.command.commandId); if (envelope.command.commandId === 'command-a') throw new Error('bad task record'); };
+    await f.bridge.commandBatch(f.commands, recover, true);
+    await f.bridge.commandBatch(f.commands, recover, true);
+    expect(attempted.filter(id => id === 'command-a')).toHaveLength(1);
+    expect(attempted.filter(id => id === 'command-b')).toHaveLength(2);
+    expect(f.execute).not.toHaveBeenCalled(); f.bridge.stop();
+  });
+});
+
+describe('isolated command recovery compatibility', () => {
+  it('negotiates v4 and retains unreadable execution evidence while reconciling healthy rows', async () => {
+    const f = fixture();
+    await f.bridge.claim();
+    const saved = f.store.get<InboxEntry>('inbox:command-1')!;
+    f.store.put('inbox:unreadable', { ...saved, state: 'unknown', command: { ...saved.command, commandId: 'unreadable' } });
+    const before = f.store.get('inbox:unreadable');
+    f.bridge.capabilitySnapshot = { capabilities: [RemoteCapability.IsolatedCommandRecovery] };
+    const original = f.requestApi.getMockImplementation()!;
+    f.requestApi.mockImplementation(async (owner, pathname, init) => {
+      if (pathname.startsWith('/api/remote/v4/') && pathname.includes('/commands/unresolved?')) {
+        expect(init.headers['X-Remote-Connection-Generation']).toBe('1');
+        return new Response(JSON.stringify({ code: 0, data: { items: [f.envelope],
+          unresolvedItems: [{ commandId: 'unreadable', sessionId: 'remote', diagnostic: { kind: 'stored_data_unavailable' } }],
+          nextCursor: null, scanComplete: true } }));
+      }
+      return original(owner, pathname, init);
+    });
+    const callsBefore = f.requestApi.mock.calls.filter(([, pathname]) => pathname.endsWith('/reconcile')).length;
+    await f.bridge.reconcile();
+    expect(f.requestApi.mock.calls.filter(([, pathname]) => pathname.endsWith('/reconcile')).length).toBeGreaterThan(callsBefore);
+    expect(f.store.get('inbox:unreadable')).toEqual(before); f.bridge.stop();
+  });
+  it('restarts the signed cursor for a new connection and falls back to v1 for an old server', async () => {
+    const f = fixture(); f.bridge.capabilitySnapshot = { capabilities: [RemoteCapability.IsolatedCommandRecovery] };
+    const paths: string[] = [];
+    f.requestApi.mockImplementation(async (_owner, pathname) => {
+      paths.push(pathname);
+      return new Response(JSON.stringify({ code: 0, data: { items: [], unresolvedItems: [], nextCursor: 'signed-next', scanComplete: false } }));
+    });
+    await f.bridge.reconcile(); f.bridge.generation = '2'; await f.bridge.reconcile();
+    expect(paths).toHaveLength(2); expect(paths.every(path => !path.includes('cursor='))).toBe(true);
+    f.bridge.capabilitySnapshot = { capabilities: [] };
+    await f.bridge.reconcile();
+    expect(paths[2]).toContain('/api/remote/v1/devices/desktop/commands?state=unresolved');
+    expect(paths[2]).not.toContain('cursor='); f.bridge.stop();
   });
 });

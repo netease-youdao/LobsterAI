@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
+import Database from 'better-sqlite3';
 import ts from 'typescript';
 import { describe, expect, test } from 'vitest';
 
@@ -12,6 +13,7 @@ import { LogReporterStoreKey } from '../shared/analytics/constants';
 import { OPENCLAW_LOOPBACK_STATE_FILE } from './libs/openclawLoopbackState';
 import { payloadHash, sameOwner } from './remote/canonical';
 import { RemoteAccountTransition } from './remote/remoteAccountTransition';
+import { RemoteStore } from './remote/remoteStore';
 
 const mainPath = fileURLToPath(new URL('./main.ts', import.meta.url));
 const source = fs.readFileSync(mainPath, 'utf8');
@@ -29,7 +31,7 @@ function deferred<T>() {
 // Execute the real main-process entrypoint, but keep Electron, imported services,
 // filesystem operations and timers inside this inert fixture. In particular,
 // getStore/initStore are the real functions rather than mock implementations.
-function startupFixture(failSynchronization = false, savedFence?: unknown) {
+function startupFixture(failSynchronization = false, savedFence?: unknown, coreDatabase?: Database.Database) {
   const ready = deferred<void>();
   const created = deferred<unknown>();
   const events: string[] = [];
@@ -104,7 +106,12 @@ function startupFixture(failSynchronization = false, savedFence?: unknown) {
     '../shared/analytics/constants': moduleOf({ LogReporterStoreKey }),
     './appConstants': moduleOf({ APP_NAME: 'LobsterAI', DB_FILENAME: 'lobsterai.sqlite' }),
     './sqliteStore': moduleOf({ SqliteStore: { create: () => { events.push('store:creating'); return created.promise; } } }),
-    './coworkStore': moduleOf({ CoworkStore: function () { events.push('cowork:construct'); return cowork; } }),
+    './coworkStore': moduleOf({ CoworkStore: function () {
+      events.push('cowork:construct');
+      if (coreDatabase) new RemoteStore(coreDatabase, { deferredProjection: true, deferSynchronization: true, restoreRuns: false });
+      return cowork;
+    } }),
+    './startupRecoveryWindow': moduleOf({ showStartupRecoveryWindow: () => { events.push('startup:recovery'); } }),
     './remote/canonical': moduleOf({ payloadHash, sameOwner }),
     './remote/remoteAccountTransition': moduleOf({ RemoteAccountTransition }),
     './remote/automationOwnership': moduleOf({ fenceCronJobs: () => { events.push('gateway:fence'); if (failFence) throw new Error('cron fence failed'); } }),
@@ -177,7 +184,7 @@ describe('main remote-control startup lifecycle', () => {
     expect(fixture.events).toContain('remote:configure');
     expect(fixture.events).not.toContain('remote:bridge');
     expect(fixture.errors).toHaveLength(1);
-    expect(String(fixture.errors[0][0])).toContain('fixture:startup-complete');
+    expect(String(fixture.errors[0].at(-1))).toContain('fixture:startup-complete');
   });
 
   test('does not access the database or construct remote services before app and store readiness', async () => {
@@ -201,7 +208,7 @@ describe('main remote-control startup lifecycle', () => {
       'store:listen:auth_tokens', `store:listen:${LogReporterStoreKey.AuthUser}`, 'store:listen:enterprise_account_context',
     ]);
     expect(fixture.errors).toHaveLength(1);
-    expect(String(fixture.errors[0][0])).toContain('fixture:startup-complete');
+    expect(String(fixture.errors[0].at(-1))).toContain('fixture:startup-complete');
   });
 });
 
@@ -233,4 +240,20 @@ test.each([false, 0, ''])('does not treat malformed account fence %j as absent',
   expect(fixture.values.get('remote_account_execution_fence')).toMatchObject({ phase: 'pending' });
   expect(fixture.events).toContain('gateway:stop');
   expect(fixture.events).not.toContain('fence:ready');
+});
+
+
+test('real core migration failure displays recovery without initializing command execution', async () => {
+  const db = new Database(':memory:');
+  try {
+    db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY); CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT);
+      CREATE VIEW remote_sync AS SELECT 1 AS incompatible;`);
+    const fixture = startupFixture(false, undefined, db);
+    fixture.evaluate(); await fixture.appReady(); await fixture.storeReady();
+    expect(fixture.events).toContain('startup:recovery');
+    expect(fixture.events).not.toContain('remote:configure');
+    expect(fixture.events).not.toContain('remote:start');
+    expect(db.prepare("SELECT type FROM sqlite_master WHERE name='remote_sync'").get()).toEqual({ type: 'view' });
+    expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name='local_execution_dispatch'").get()).toBeUndefined();
+  } finally { db.close(); }
 });

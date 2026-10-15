@@ -167,6 +167,8 @@ export class RemoteBridge {
   private activityCursor: string | undefined;
   private activityOffset = 0;
   private unresolvedCursor: string | null = null;
+  private unresolvedContext = '';
+  private commandRecoveryFallbackUntil = 0;
   private readonly runEvidenceScans = new Map<string, { cursor?: string; changes: number }>();
   readonly connections: RemoteConnectionClient;
   private connectionReason: RemoteConnectionReasonValue = RemoteConnectionReason.Connecting;
@@ -204,6 +206,10 @@ export class RemoteBridge {
   private optionalPublishWork: Promise<void> | null = null;
   private commandPollAt = 0;
   private commandRetryAt = 0;
+  private reconcileWork: Promise<void> | null = null;
+  private reconcileRetryAt = 0;
+  private readonly commandTasks = new Map<string, Promise<void>>();
+  private readonly commandTaskRetryAt = new Map<string, number>();
   private inputPollAt = 0;
   private inputRetryAt = 0;
   private agentCatalogRetryAt = 0;
@@ -370,7 +376,8 @@ export class RemoteBridge {
     const legacyPending = pendingRows.filter(row => this.availability.legacyHistoryAllowed(row.local_id));
     const availabilityHealth = this.availability.health();
     const oldest = legacyPending.reduce<number | null>((value, row) => row.oldest && (value === null || row.oldest < value) ? row.oldest : value, null);
-    const pending = { count: legacyPending.length + (availabilityHealth?.pendingSessions || 0), oldest };
+    const oldestTimes = [oldest, availabilityHealth?.oldest].filter((value): value is number => typeof value === 'number');
+    const pending = { count: legacyPending.length + (availabilityHealth?.pendingSessions || 0), oldest: oldestTimes.length ? Math.min(...oldestTimes) : null };
     const recoveryRequired = this.deps.store.needsSecurityRecovery();
     const filesHealth = this.files?.health();
     const filesDegraded = filesHealth?.degraded === true;
@@ -382,11 +389,11 @@ export class RemoteBridge {
       : storagePending ? RemoteSyncHealthReason.StorageDependency : syncFailed ? RemoteSyncHealthReason.Projection : filesDegraded ? RemoteSyncHealthReason.Files : settings.enabled && !connected ? RemoteSyncHealthReason.Connection : undefined;
     // History scans also run when idle; only outstanding content should change the device's visible sync status.
     const syncHealth: RemoteSyncHealth = {
-      ...taskHealth, pendingFiles: filesHealth?.pending ?? 0, admissionDeferred: this.admissionDeferred,
+      ...taskHealth, lanes: availabilityHealth?.lanes, countsTruncated: taskHealth?.countsTruncated || availabilityHealth?.countsTruncated, pendingFiles: filesHealth?.pending ?? 0, admissionDeferred: this.admissionDeferred,
       status: recoveryRequired ? RemoteSyncHealthStatus.Paused : !this.owner || !settings.enabled || this.connectionRemoved || this.quotaBlocked ? RemoteSyncHealthStatus.Paused
         : syncFailed || filesDegraded ? RemoteSyncHealthStatus.Degraded : (pending?.count || 0) > 0 || (filesHealth?.pending || 0) > 0 ? RemoteSyncHealthStatus.Syncing : RemoteSyncHealthStatus.Idle,
       ...(reason ? { reason } : {}), pendingSessions: pending?.count ?? null, oldestPendingAt: pending?.oldest ? new Date(pending.oldest).toISOString() : null,
-      lastSuccessfulSyncAt: this.owner ? this.deps.store.get<string>(`lastSuccessfulSync:${this.owner.userId}:${this.owner.scopeKey}`) : null,
+      lastSuccessfulSyncAt: availabilityHealth?.sessions ? (availabilityHealth.lastSuccess ? new Date(availabilityHealth.lastSuccess).toISOString() : null) : this.owner ? this.deps.store.get<string>(`lastSuccessfulSync:${this.owner.userId}:${this.owner.scopeKey}`) : null,
       observedAt: new Date().toISOString(),
     };
     return { syncHealth, enabled: settings.enabled, connected, deviceConnectionManagementSupported: this.capabilitiesKnown || this.connectionManagementKnown ? this.connectionManagement || this.connectionManagementKnown : undefined, deviceConnectionManagementEnabled: this.connectionManagementEnabled, deviceConnectionManagementClusterReady: this.connectionManagementClusterReady, deviceId: this.registration?.deviceId,
@@ -504,7 +511,7 @@ export class RemoteBridge {
     const route = this.deps.getApiBaseUrl();
     if (route === this.accountRoute && ((current === null && this.owner === null) || sameOwner(current, this.owner))) return;
     const previous = this.owner;
-    this.accountGeneration++; this.runEvidenceScans.clear(); this.unresolvedCursor = null; this.receiptCursor = undefined; this.activityCursor = undefined; this.activityOffset = 0; this.importSnapshots.cancel(); this.verifiedImports.clear(); this.sessionChecks.clear(); this.taskMemoryBlocks.clear();
+    this.accountGeneration++; this.commandTaskRetryAt.clear(); this.reconcileRetryAt = 0; this.runEvidenceScans.clear(); this.unresolvedCursor = null; this.receiptCursor = undefined; this.activityCursor = undefined; this.activityOffset = 0; this.importSnapshots.cancel(); this.verifiedImports.clear(); this.sessionChecks.clear(); this.taskMemoryBlocks.clear();
     this.admissionDeferred = false;
     this.historyTransportFailures = []; this.historyCircuitProbe = false; this.historyCircuitDelay = 30000; this.historyRetryAt = 0;
     this.accountRoute = route; this.targetId = null; this.discoveredTarget = null;
@@ -674,13 +681,11 @@ export class RemoteBridge {
         pollCommands = true;
         // Set the next deadline before awaiting: a notification during I/O must remain pending.
         this.commandPollAt = Date.now() + (this.hasActiveWork() ? ACTIVE_POLL_MS : COMMAND_IDLE_POLL_MS);
-        const generation = this.generation;
-        try {
-          await this.reconcile();
-        } catch (error) {
-          if (accountGeneration === this.accountGeneration && generation === this.generation) this.commandRetryAt = Date.now() + IDLE_POLL_MS;
-          throw error;
-        }
+        // Shared execution evidence remains mandatory. Network recovery is independent
+        // of claiming unrelated tasks and never supplies permission to the claim path.
+        await this.deps.store.waitRunRecovery();
+        if (!await this.deps.store.verifyExecutionDatabaseHealth()) throw new Error('REMOTE_EXECUTION_DATABASE_UNHEALTHY');
+        this.startCommandReconciliation();
       }
       if (pollCommands && this.generation) {
         const generation = this.generation;
@@ -861,7 +866,8 @@ export class RemoteBridge {
       if (this.capabilitySnapshot?.capabilities?.includes('sync_diagnostics_v1')) headers['X-Remote-Sync-Diagnostics'] = '1';
       // Capability discovery always uses v1 so an older server can negotiate safely.
       if (pathname !== '/capabilities' && this.projectionVersion > 1) headers['X-Remote-Projection-Version'] = String(this.projectionVersion);
-      if (version === 2 && /\/devices\/[^/]+\/input-preparations(?:\?|$)/u.test(pathname) && this.generation)
+      if ((version === 2 && /\/devices\/[^/]+\/input-preparations(?:\?|$)/u.test(pathname)
+        || version === 4 && /\/devices\/[^/]+\/commands\/unresolved(?:\?|$)/u.test(pathname)) && this.generation)
         headers['X-Remote-Connection-Generation'] = this.generation;
       if (registrationRequired) {
         if (!this.registration) throw new Error('Device is not registered');
@@ -2138,6 +2144,7 @@ export class RemoteBridge {
       this.deps.store.put(this.inboxKey(entry), entry);
     }
     this.deps.store.put(`commandFailure:${entry.command.commandId}`, { code: (error as RemoteApiError).code });
+    this.deferCommandTask(entry.command);
   }
   private startInputRecovery(): void {
     if (!this.generation || !this.deps.input || !this.inputCapabilities.includes(RemoteInputCapability.Schema)) return;
@@ -2324,18 +2331,92 @@ export class RemoteBridge {
     if (boundSessionId && store.isRunIsolated(boundSessionId) || localSessionId && store.isRunIsolated(localSessionId)) return false;
     return (!boundSessionId || store.isTaskAdmitted(boundSessionId)) && (!localSessionId || store.isTaskAdmitted(localSessionId));
   }
+  private startCommandReconciliation(): void {
+    if (this.reconcileWork || Date.now() < this.reconcileRetryAt) return;
+    const epoch = this.accountGeneration, generation = this.generation, target = this.targetId, route = this.deps.getApiBaseUrl();
+    const current = (): boolean => !this.stopped && epoch === this.accountGeneration && generation === this.generation
+      && target === this.targetId && route === this.deps.getApiBaseUrl();
+    const work = this.reconcile().catch(error => {
+      if (!current()) return;
+      this.reconcileRetryAt = Date.now() + IDLE_POLL_MS;
+      if (this.sharedCommandFailure(error)) {
+        this.commandRetryAt = this.reconcileRetryAt;
+        this.recordConnectionFailure(error); this.disconnect();
+      }
+      remoteLogMessage('warn', '[RemoteSync] Command recovery deferred', remoteSyncErrorMetadata(error));
+    }).finally(() => {
+      if (this.reconcileWork === work) this.reconcileWork = null;
+      if (current() && this.unresolvedCursor) this.schedule(Math.max(0, this.reconcileRetryAt - Date.now()));
+    });
+    this.reconcileWork = work;
+  }
+  private sharedCommandFailure(error: unknown): boolean {
+    return isSharedSyncFailure(error) || error instanceof RemoteApiError
+      && [403, 47011, 47022, CONNECTION_REMOVED_CODE].includes(error.code);
+  }
+  private commandTaskKey(envelope: any): string {
+    const command = { ...envelope?.command, ...envelope };
+    return stableJson([this.accountGeneration, this.targetId, this.deps.getApiBaseUrl(),
+      command.sessionId || command.request?.payload?.sessionId || command.commandId || 'invalid']);
+  }
+  private deferCommandTask(command: RemoteCommand): void {
+    const key = this.commandTaskKey(command);
+    if (this.commandTaskRetryAt.size >= 512 && !this.commandTaskRetryAt.has(key))
+      this.commandTaskRetryAt.delete(this.commandTaskRetryAt.keys().next().value!);
+    this.commandTaskRetryAt.set(key, Date.now() + IDLE_POLL_MS);
+  }
+  /** Two distinct tasks progress per batch; claim and recovery serialize the same task. */
+  private async commandBatch(items: any[], apply: (envelope: any) => Promise<void>, recovery = false): Promise<void> {
+    const epoch = this.accountGeneration, generation = this.generation, route = this.deps.getApiBaseUrl();
+    const current = (): boolean => !this.stopped && epoch === this.accountGeneration && generation === this.generation
+      && route === this.deps.getApiBaseUrl() && !this.syncPaused();
+    const groups = new Map<string, any[]>();
+    for (const item of items) {
+      const key = this.commandTaskKey(item);
+      const group = groups.get(key) || []; group.push(item); groups.set(key, group);
+    }
+    const queued = [...groups.entries()]; let offset = 0; let failed = false; let failure: unknown;
+    const worker = async (): Promise<void> => {
+      while (!failed && current() && offset < queued.length) {
+        const [key, group] = queued[offset++];
+        const previous = this.commandTasks.get(key);
+        const work = (previous || Promise.resolve()).catch((): void => undefined).then(async () => {
+          for (const item of group) {
+            if (failed || !current()) return;
+            if (recovery && (this.commandTaskRetryAt.get(key) || 0) > Date.now()) continue;
+            try { await apply(item); }
+            catch (error) {
+              if (!current()) return;
+              if (this.sharedCommandFailure(error)) {
+                failed = true; failure = error;
+                this.recordConnectionFailure(error); this.disconnect(); return;
+              }
+              this.deferCommandTask({ ...item?.command, ...item });
+              remoteDiagnosticLog('desktop.command.unknown', { commandId: item?.commandId ?? item?.command?.commandId,
+                reason: 'EXECUTION_UNKNOWN', error }, 'warn');
+            }
+          }
+        });
+        this.commandTasks.set(key, work);
+        try { await work; }
+        finally { if (this.commandTasks.get(key) === work) this.commandTasks.delete(key); }
+      }
+    };
+    await Promise.all([worker(), worker()]);
+    if (failed) throw failure;
+  }
   private async claim(): Promise<boolean> {
     const generation = this.generation;
     if (!generation || this.syncPaused() || !this.deps.store.areControlsAdmitted()) return false;
     const result = await this.api(`/devices/${this.registration!.deviceId}/commands/claim`, 'POST', { connectionGeneration: generation, limit: 10 });
-    const items = Array.isArray(result) ? result : result.items || [];
-    for (const envelope of items) {
+    const items = (Array.isArray(result) ? result : result.items || []).slice(0, 10);
+    await this.commandBatch(items, async envelope => {
       try {
       const command: RemoteCommand = { ...envelope.command, ...envelope };
       delete (command as any).command;
       const existing = this.readInbox(command.commandId);
-      if (this.syncPaused() || generation !== this.generation) break;
-      if (existing) { this.commandTelemetry(existing).emit(RemoteBridgeTelemetry.CommandDuplicate, { phase: 'prepared', persistOutcome: 'committed' }); remoteDiagnosticLog('desktop.command.duplicate', { commandId: command.commandId, runId: command.runId }); continue; } // Reconciliation alone may authorize another attempt.
+      if (this.syncPaused() || generation !== this.generation) return;
+      if (existing) { this.commandTelemetry(existing).emit(RemoteBridgeTelemetry.CommandDuplicate, { phase: 'prepared', persistOutcome: 'committed' }); remoteDiagnosticLog('desktop.command.duplicate', { commandId: command.commandId, runId: command.runId }); return; } // Reconciliation alone may authorize another attempt.
       if (!this.commandAdmitted(command)) {
         // Preserve the original claim without inferring never-started from unverified history.
         const deferred: InboxEntry = { ...(this.targetId ? { targetId: this.targetId } : {}), command, owner: this.owner!,
@@ -2343,7 +2424,7 @@ export class RemoteBridge {
           remoteSessionId: command.sessionId || null, runId: command.runId || null, state: 'unknown', result: null };
         this.deps.store.put(this.inboxKey(deferred), deferred);
         this.commandTelemetry(deferred).emit(RemoteBridgeTelemetry.CommandUnknown, { phase: 'prepared', persistOutcome: 'committed', businessStatus: 'unknown' });
-        continue;
+        return;
       }
       let entry: InboxEntry;
       try {
@@ -2368,10 +2449,10 @@ export class RemoteBridge {
       remoteDiagnosticLog('desktop.command.prepared', { commandId: command.commandId, localSessionId: entry.localSessionId, runId: entry.runId, status: entry.state }, 'info');
       try { await this.applyEntry(entry, generation); } catch (error) { await this.reportCommandError(entry, error); }
       } catch (error) {
-        if (this.syncPaused() || generation !== this.generation) break;
-        remoteDiagnosticLog('desktop.command.unknown', { commandId: envelope?.commandId ?? envelope?.command?.commandId, reason: 'EXECUTION_UNKNOWN', error }, 'warn');
+        if (this.syncPaused() || generation !== this.generation) return;
+        throw error;
       }
-    }
+    });
     return items.length >= 10;
   }
   private commandTelemetry(entry: InboxEntry) {
@@ -2526,14 +2607,38 @@ export class RemoteBridge {
     return clear && !page.nextCursor;
   }
   private async reconcile(): Promise<void> {
-    const epoch = this.accountGeneration, targetId = this.targetId, route = this.deps.getApiBaseUrl();
-    const current = (): boolean => epoch === this.accountGeneration && targetId === this.targetId && route === this.deps.getApiBaseUrl();
+    const epoch = this.accountGeneration, targetId = this.targetId, route = this.deps.getApiBaseUrl(), generation = this.generation;
+    const current = (): boolean => !this.stopped && epoch === this.accountGeneration && targetId === this.targetId
+      && route === this.deps.getApiBaseUrl() && generation === this.generation;
     await this.deps.store.waitRunRecovery();
-    await this.deps.store.verifyExecutionDatabaseHealth();
     if (!current()) return;
+    if (!await this.deps.store.verifyExecutionDatabaseHealth()) throw new Error('REMOTE_EXECUTION_DATABASE_UNHEALTHY');
+    if (!current()) return;
+    const version = this.capabilitySnapshot?.capabilities?.includes(RemoteCapability.IsolatedCommandRecovery)
+      && Date.now() >= this.commandRecoveryFallbackUntil ? 4 : 1;
+    const context = stableJson([epoch, targetId, route, generation, this.registration!.deviceId, version]);
+    if (context !== this.unresolvedContext) { this.unresolvedContext = context; this.unresolvedCursor = null; }
     const cursor = this.unresolvedCursor;
-    const result = await this.api(`/devices/${this.registration!.deviceId}/commands?state=unresolved&limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
-      for (const envelope of result.items || []) {
+    const pathname = `/devices/${this.registration!.deviceId}/commands${version === 4 ? '/unresolved?limit=20' : '?state=unresolved&limit=20'}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+    let result: any;
+    try { result = await this.api(pathname, 'GET', undefined, true, version); }
+    catch (error) {
+      if (current() && context === this.unresolvedContext && error instanceof RemoteApiError) {
+        if ([47008, 47019].includes(error.code)) this.unresolvedCursor = null;
+        if (version === 4 && (error.httpStatus === 404 || [404, 47017].includes(error.code)))
+          this.commandRecoveryFallbackUntil = Date.now() + 5 * IDLE_POLL_MS;
+      }
+      throw error;
+    }
+    if (!current()) return;
+    if (version === 4 && (!result || !Array.isArray(result.items) || !Array.isArray(result.unresolvedItems)
+      || result.items.length + result.unresolvedItems.length > 20 || typeof result.scanComplete !== 'boolean'
+      || !(result.nextCursor === null || typeof result.nextCursor === 'string' && result.nextCursor.length > 0 && result.nextCursor.length <= 8192)
+      || result.scanComplete !== (result.nextCursor === null) || result.nextCursor !== null && result.nextCursor === cursor))
+      throw new Error('REMOTE_COMMAND_RECOVERY_PAGE_INVALID');
+    // Unreadable rows are diagnostics only: never replace inbox evidence, infer completion, or grant a permit.
+
+      await this.commandBatch((result.items || []).slice(0, 20), async envelope => {
         if (!current() || this.syncPaused()) return;
         try {
         const command: RemoteCommand = { ...envelope.command, ...envelope };
@@ -2547,10 +2652,10 @@ export class RemoteBridge {
             retained.result = envelope.result || envelope.error || retained.result;
             this.deps.store.put(this.inboxKey(retained), retained);
           }
-          continue;
+          return;
         }
         let entry = this.readInbox(command.commandId);
-        if (entry && !this.isEntryCurrent(entry)) continue;
+        if (entry && !this.isEntryCurrent(entry)) return;
         if (!entry && this.commandAdmitted(command) && !['approval_response', RemoteQuestion.Command].includes(command.type) && envelope.currentClaimId && this.deps.store.hasCompleteExecutionHistory()
           && payloadHash(command.request) === command.requestHash
           && this.noMatchingRunEvidence(command.runId)) {
@@ -2579,7 +2684,7 @@ export class RemoteBridge {
             ...this.transport(), expectedStatusVersion: command.statusVersion, sessionId: command.sessionId || null,
             runId: command.runId || null, observedExecution: 'unknown', result: null, error: null, requestExecutionPermit: false,
           });
-          continue;
+          return;
         }
         const telemetry = this.commandTelemetry(entry);
         try {
@@ -2601,6 +2706,7 @@ export class RemoteBridge {
           sessionId: entry.remoteSessionId, runId: entry.runId, observedExecution, result: entry.state === 'applied' ? entry.result : null,
           error: entry.state === 'rejected' ? entry.result : null,
           localEvidence: observedExecution === 'not_started' ? { databaseHealthy: this.deps.store.hasCompleteExecutionHistory(), historyComplete: this.deps.store.hasCompleteExecutionHistory(), inboxPersisted: true, executionNeverStarted: true } : null, requestExecutionPermit: observedExecution === 'not_started' && !!this.generation });
+        if (!current()) return;
         entry.command = { ...entry.command, ...reconciled.command };
         if (['applied', 'rejected', 'expired'].includes(entry.command.status)) {
           entry.state = entry.command.status === 'applied' ? 'applied' : 'rejected';
@@ -2618,9 +2724,10 @@ export class RemoteBridge {
         } catch (error) { await this.reportCommandError(entry, error); }
         } catch (error) {
           if (!current() || this.syncPaused()) return;
-          remoteDiagnosticLog('desktop.command.unknown', { commandId: envelope?.commandId ?? envelope?.command?.commandId, reason: 'EXECUTION_UNKNOWN', error }, 'warn');
+          throw error;
         }
-      }
+      }, true);
+    if (!current()) return;
     this.unresolvedCursor = result.nextCursor || null;
     if (this.unresolvedCursor) this.commandPollAt = 0;
 

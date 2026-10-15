@@ -1,9 +1,11 @@
+import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
 
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { type DeletionClaim, type DeletionCompletion, type DeletionReceipt, RemoteDeletion } from '../../shared/remote/deletions';
 import { payloadHash, sameOwner, stableJson } from './canonical';
+import { type AvailabilityDeletionAck, type AvailabilityDeletionBinding, validAvailabilityDeletionAck } from './remoteAvailabilityDeletion';
 import { remoteDiagnostics } from './remoteDiagnostics';
 import { matchesRemoteDeletionTargetScope, samePersistedRemoteEnvironment } from './remoteEnvironmentMigration';
 import { remoteFileCacheDirectory } from './remoteFileSnapshots';
@@ -21,7 +23,8 @@ const DESKTOP_INPUT_RUN_PREFIX = 'desktopInputRun:';
 const terminalRuns = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
 const terminalCommands = new Set(['applied', 'rejected', 'expired']);
 const terminalImports = new Set(['committed', 'aborted', 'expired']);
-interface Tombstone {
+export interface Tombstone {
+  deleteEventId?: string; availabilityBinding?: AvailabilityDeletionBinding; availabilityAck?: AvailabilityDeletionAck;
   owner: RemoteOwner; localSessionId: string; sessionId: string; deviceId: string; environment: string | null;
   streamEpoch: string | null; deletedAt: number; deleteRevision: number; sourceHighWatermark: number;
   completionReceipt?: DeletionCompletion; ackAt: number | null; ackSourceSeq: number | null; phase: typeof Phase[keyof typeof Phase]; jobCursor?: string; jobsBlocked?: boolean;
@@ -37,7 +40,10 @@ export function recordRemoteSessionDeletion(store: RemoteStore, sessionId: strin
   if (!store.db.inTransaction) throw new Error('Deletion evidence requires a core transaction');
   const owner = store.owner(sessionId), sync = store.sync(sessionId);
   if (!owner || !sync || store.get(`${Prefix.Deleted}${sessionId}`)) return;
-  const value: Tombstone = { owner, localSessionId: sessionId, sessionId: sync.session_id, deviceId: sync.device_id,
+  let availabilityBinding: AvailabilityDeletionBinding | undefined;
+  try { availabilityBinding = store.get<AvailabilityDeletionBinding>(`availabilityDeletionBinding:${sessionId}`) || undefined; }
+  catch (error) { if (!(error instanceof SyntaxError)) throw error; /* An optional mirror is not deletion authority. */ }
+  const value: Tombstone = { deleteEventId: randomUUID(), ...(availabilityBinding ? { availabilityBinding } : {}), owner, localSessionId: sessionId, sessionId: sync.session_id, deviceId: sync.device_id,
     environment: sync.sync_environment, streamEpoch: sync.stream_epoch, deletedAt: now,
     deleteRevision: store.projectionRevision(sessionId) + 1, sourceHighWatermark: sync.source_seq,
     ackAt: null, ackSourceSeq: null, phase: Phase.Eligible };
@@ -143,7 +149,7 @@ export class RemoteLocalGc {
       && (sync.sync_environment === tombstone.environment || sync.sync_environment !== null && tombstone.environment !== null
         && samePersistedRemoteEnvironment(store, { owner: tombstone.owner, deviceId: tombstone.deviceId }, sync.sync_environment, tombstone.environment))
       && sync.stream_epoch === tombstone.streamEpoch
-      && (tombstone.completionReceipt
+      && (tombstone.availabilityAck ? validAvailabilityDeletionAck(tombstone) && sync.source_seq === tombstone.sourceHighWatermark : tombstone.completionReceipt
         ? closed?.receiptId === tombstone.completionReceipt.localReceiptId && closed?.receiptDigest === tombstone.completionReceipt.receiptDigest
           && closed?.operationId === tombstone.completionReceipt.operationId && closed?.deletionVersion === tombstone.completionReceipt.deletionVersion
           && payloadHash(store.deletionGuard(tombstone.localSessionId)) === payloadHash(tombstone.completionReceipt.guard || null)
@@ -298,7 +304,7 @@ export class RemoteLocalGc {
             let page = this.deleteBodyPage('remote_projection', value.localSessionId, "AND object_key<>'deleted'"); removed += page;
             if (!page) { page = this.deleteBodyPage('remote_reply_contents', value.localSessionId); removed += page; }
             if (!page) { page = this.deleteBodyPage('remote_reply_chunks', value.localSessionId); removed += page; }
-            if (!page) { page = this.deleteBodyPage('remote_outbox', value.localSessionId, `AND source_seq<=${value.completionReceipt ? value.sourceHighWatermark : value.ackSourceSeq}`); removed += page; }
+            if (!page) { page = this.deleteBodyPage('remote_outbox', value.localSessionId, `AND source_seq<=${value.completionReceipt || value.availabilityAck ? value.sourceHighWatermark : value.ackSourceSeq}`); removed += page; }
             if (!page && this.trimJobs(value)) value.phase = Phase.Deleted;
             this.deps.store.put(key, value);
           })();

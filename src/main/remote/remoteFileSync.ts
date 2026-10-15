@@ -536,7 +536,8 @@ export class RemoteFileSync {
         if (job.reason) this.fileHealth.degraded = true;
         if (!this.retryAllowed(job)) continue;
         const session = this.deps.store.sync(job.localSessionId);
-        if (!session || session.device_id !== connection.deviceId || session.needs_snapshot || session.source_seq !== session.ack_seq) continue;
+        if (!session || session.device_id !== connection.deviceId || session.session_id !== job.sessionId) continue;
+        if (!this.deps.store.isIndependentControlReady(job.localSessionId) && (session.needs_snapshot || session.source_seq !== session.ack_seq)) continue;
         try {
           const reason = remoteFileRule(this.policy, job.fileName, job.sizeBytes || '0', false);
           if (reason) throw new Error(reason);

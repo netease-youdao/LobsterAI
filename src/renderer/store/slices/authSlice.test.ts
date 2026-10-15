@@ -1,4 +1,4 @@
-import { AuthSessionStatus } from '@shared/auth/constants';
+import { AuthSessionStatus, AuthSubscriptionStatus } from '@shared/auth/constants';
 import { describe, expect, test } from 'vitest';
 
 import authReducer, {
@@ -156,4 +156,19 @@ describe('auth account scope', () => {
     expect(invalidated.quota).toBeNull();
     expect(invalidated.profileSummary).toBeNull();
   });
+});
+
+
+test('unavailable login quota retains only the same account trusted balance display', () => {
+  const authenticated = authReducer(undefined, setLoggedIn({ user, quota, ownerAccountKey: 'personal:6' }));
+  const summary = { id: 6, nickname: 'Employee', avatarUrl: null, totalCreditsRemaining: 700,
+    creditItems: [{ type: 'subscription' as const, label: 'Plan', labelEn: 'Plan', creditsRemaining: 700, expiresAt: null }] };
+  const withSummary = authReducer(authenticated, setProfileSummary(summary));
+  const unknownQuota: UserQuota = { planName: 'Unavailable', subscriptionStatus: AuthSubscriptionStatus.Unavailable, quotaUnavailable: true,
+    creditsLimit: null, creditsUsed: null, creditsRemaining: null, mediaGenerationEntitled: false };
+  const sameAccount = authReducer(withSummary, setLoggedIn({ user, quota: unknownQuota, ownerAccountKey: 'personal:6' }));
+  expect(sameAccount.isLoggedIn).toBe(true); expect(sameAccount.profileSummary).toEqual(summary);
+  expect(sameAccount.quota).toEqual(unknownQuota);
+  const otherAccount = authReducer(sameAccount, setLoggedIn({ user: { ...user, userId: '7' }, quota: unknownQuota, ownerAccountKey: 'personal:7' }));
+  expect(otherAccount.profileSummary).toBeNull(); expect(otherAccount.quota?.creditsRemaining).toBeNull();
 });

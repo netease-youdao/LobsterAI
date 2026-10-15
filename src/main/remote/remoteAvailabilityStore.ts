@@ -27,11 +27,19 @@ class AvailabilityRecordError extends Error {
 }
 // Archived evidence has its own bounded allowance; every admitted request reserves a terminal receipt.
 const RECEIPT_RESERVE_BYTES = 64 * 1024;
+const RECORD_BYTES = 1024 * 1024;
+const SESSION_RECOVERY_BYTES = 8 * RECORD_BYTES;
+const SESSION_HASH_ENTRIES = 1024;
+// These hashes only suppress redundant publication, never establish ownership or execution permission.
+const boundedRecordHashes = (records: Record<string, string>): Record<string, string> => Object.fromEntries(
+  Object.entries(records).filter(([key, value]) => Buffer.byteLength(key) <= 256
+    && typeof value === 'string' && Buffer.byteLength(value) <= 128).slice(-SESSION_HASH_ENTRIES),
+);
 const LEDGER_REQUEST_BYTES = 256 * 1024 * 1024;
 const record = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
 const identifier = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(value);
 function decode(body: string): Record<string, any> {
-  if (Buffer.byteLength(body) > 1024 * 1024) throw new AvailabilityRecordError();
+  if (Buffer.byteLength(body) > RECORD_BYTES) throw new AvailabilityRecordError();
   let value: unknown;
   try { value = JSON.parse(body); } catch { throw new AvailabilityRecordError(); }
   if (!record(value)) throw new AvailabilityRecordError();
@@ -87,6 +95,8 @@ export class RemoteAvailabilityStore {
         CREATE TABLE IF NOT EXISTS availability_objects(scope TEXT NOT NULL,local_id TEXT NOT NULL,object_id TEXT NOT NULL,
           source_revision TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(scope,local_id,object_id));
         CREATE TABLE IF NOT EXISTS availability_receipts(operation_id TEXT PRIMARY KEY,result TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS availability_bootstrap_rechecks(operation_id TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS availability_progress(scope TEXT NOT NULL,local_id TEXT NOT NULL,lane TEXT NOT NULL,ack_at INTEGER NOT NULL,PRIMARY KEY(scope,local_id,lane));
         CREATE TABLE IF NOT EXISTS availability_checkpoint_uploaded(operation_id TEXT NOT NULL,part_no INTEGER NOT NULL,payload_hash TEXT NOT NULL,
           PRIMARY KEY(operation_id,part_no));
         CREATE TABLE IF NOT EXISTS availability_faults(scope TEXT NOT NULL,local_id TEXT NOT NULL,object_key TEXT NOT NULL,
@@ -126,22 +136,36 @@ export class RemoteAvailabilityStore {
     this.database?.close(); this.database = null; this.migrationReady = false;
   }
   session(scope: string, localId: string): AvailabilitySession | null {
-    const row = this.db.prepare('SELECT body FROM availability_sessions WHERE scope=? AND local_id=?').get(scope, localId) as { body: string } | undefined;
+    // Recover old oversized hash caches without materializing the original JSON in JavaScript.
+    // All authoritative fields and immutable requests/receipts remain untouched.
+    const row = this.db.prepare(`SELECT CASE WHEN octet_length(body)<=? THEN body
+      WHEN octet_length(body)<=? THEN CASE WHEN json_valid(body) THEN
+        CASE WHEN json_type(body,'$.records')='object' THEN json_set(body,'$.records',json('{}')) END END
+      END AS body,octet_length(body)>? AS compacted FROM availability_sessions WHERE scope=? AND local_id=?`)
+      .get(RECORD_BYTES, SESSION_RECOVERY_BYTES, RECORD_BYTES, scope, localId) as { body: string | null; compacted: number } | undefined;
     if (!row) return null;
+    if (row.body === null) throw new AvailabilityRecordError();
     const value = decode(row.body);
     if (value.scope !== scope || value.localId !== localId || !identifier(value.sessionId) || !identifier(value.writerGeneration)
       || !identifier(value.operationId) || !identifier(value.controlEpoch) || !['activating','bootstrap','active'].includes(value.phase)
       || !/^\d{1,19}$/u.test(value.controlRevision) || !/^\d{1,19}$/u.test(value.factSeq) || !record(value.records)
       || !Array.isArray(value.pendingCommandIds) || !Array.isArray(value.pendingRunIds)
       || !value.pendingCommandIds.every(identifier) || !value.pendingRunIds.every(identifier)) throw new AvailabilityRecordError();
+    if (row.compacted) this.saveSession(value as AvailabilitySession);
     return value as AvailabilitySession;
   }
   hasSession(scope: string, localId: string): boolean {
     return !!this.db.prepare('SELECT 1 FROM availability_sessions WHERE scope=? AND local_id=?').get(scope, localId);
   }
   saveSession(value: AvailabilitySession): void {
-    if (!this.hasSession(value.scope, value.localId)) assertRemoteSidecarHeadroom(this.db.name, Buffer.byteLength(stableJson(value)), RECEIPT_RESERVE_BYTES);
-    this.db.prepare('INSERT INTO availability_sessions VALUES(?,?,?) ON CONFLICT(scope,local_id) DO UPDATE SET body=excluded.body').run(value.scope, value.localId, stableJson(value));
+    const body = stableJson({ ...value, records: boundedRecordHashes(value.records) });
+    const bytes = Buffer.byteLength(body);
+    if (bytes > RECORD_BYTES) throw new Error('REMOTE_AVAILABILITY_SESSION_BUDGET');
+    const previous = this.db.prepare('SELECT octet_length(body) AS bytes FROM availability_sessions WHERE scope=? AND local_id=?')
+      .get(value.scope, value.localId) as { bytes: number } | undefined;
+    const growth = bytes - (previous?.bytes || 0);
+    if (growth > 0) assertRemoteSidecarHeadroom(this.db.name, growth, RECEIPT_RESERVE_BYTES);
+    this.db.prepare('INSERT INTO availability_sessions VALUES(?,?,?) ON CONFLICT(scope,local_id) DO UPDATE SET body=excluded.body').run(value.scope, value.localId, body);
   }
   private decodeRequest(row: { key: string; lane: string; scope: string; local_id: string; body: string; request_hash: string | null }): AvailabilityRequest {
     if (typeof row.body !== 'string') throw new AvailabilityRecordError();
@@ -261,6 +285,29 @@ export class RemoteAvailabilityStore {
       this.db.prepare('UPDATE availability_requests SET body=?,bytes=?,request_hash=? WHERE key=?').run(body, bytes, payloadHash(value), value.key);
     })();
   }
+  recordProgress(scope: string, localId: string, lane: string): void {
+    this.db.prepare('INSERT INTO availability_progress VALUES(?,?,?,?) ON CONFLICT(scope,local_id,lane) DO UPDATE SET ack_at=excluded.ack_at')
+      .run(scope, localId, lane, Date.now());
+  }
+  operationReceipt(operationId: string): Record<string, any> | null {
+    const row = this.db.prepare('SELECT result FROM availability_receipts WHERE operation_id=?').get(operationId) as { result: string } | undefined;
+    return row ? decode(row.result) : null;
+  }
+  /** A step receipt is bound to immutable request bytes, never merely an attempted flag. */
+  stepReceipt(request: AvailabilityRequest): Record<string, any> | null {
+    const row = this.db.prepare('SELECT result FROM availability_receipts WHERE operation_id=?').get(`step:${request.key}`) as { result: string } | undefined;
+    if (!row) return null;
+    const saved = decode(row.result);
+    if (saved.hash !== payloadHash({ scope: request.scope, localId: request.localId, pathname: request.pathname, body: request.body })
+      || !record(saved.receipt)) throw new AvailabilityRecordError();
+    return saved.receipt;
+  }
+  confirmStep(request: AvailabilityRequest, receipt: Record<string, any>): void {
+    const body = stableJson({ hash: payloadHash({ scope: request.scope, localId: request.localId, pathname: request.pathname, body: request.body }), receipt });
+    if (Buffer.byteLength(body) > RECEIPT_RESERVE_BYTES) throw new AvailabilityRecordError();
+    this.db.prepare('INSERT OR IGNORE INTO availability_receipts VALUES(?,?)').run(`step:${request.key}`, body);
+    this.stepReceipt(request);
+  }
   archiveBootstrap(scope: string, localId: string, operationId: string, result: unknown): void {
     this.db.transaction(() => {
       this.db.prepare('INSERT OR IGNORE INTO availability_receipts VALUES(?,?)').run(operationId, stableJson(result));
@@ -299,10 +346,11 @@ export class RemoteAvailabilityStore {
     observeSyncCommit(telemetry, () => this.db.transaction(() => {
       this.db.prepare(`INSERT INTO availability_objects VALUES(?,?,?,?,?) ON CONFLICT(scope,local_id,object_id)
         DO UPDATE SET source_revision=excluded.source_revision,result=excluded.result`).run(request.scope, request.localId,
-          `${request.body.objectKind}:${request.body.objectId}`, request.body.sourceObjectRevision, stableJson(result));
+          `${request.body.objectKind}:${request.body.objectId}`, request.body.sourceObjectRevision, stableJson({ ...result, representation: request.body.representation }));
       if (result.state === 'accepted' || result.state === 'superseded') this.db.prepare('DELETE FROM availability_faults WHERE scope=? AND local_id=? AND object_key=?')
         .run(request.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`);
       this.complete(request.key);
+      this.recordProgress(request.scope, request.localId, request.lane);
     })());
     emitCommittedTelemetry(this.db, telemetry, SyncTelemetry.Event.Acknowledged,
       { stage: SyncTelemetry.Stage.LocalAck, phase: SyncTelemetry.Stage.LocalAck, outcome: SyncTelemetry.Outcome.Completed,

@@ -16,6 +16,19 @@ export type LanguageType = 'zh' | 'en';
 
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    quarantineRecoveryTitle: '任务安全恢复',
+    quarantineRecoveryDescription: '归属无法确认的任务保持隔离，不会自动重新执行。可查看日志，并停止本次应用运行中已确认属于当前账号的隔离任务。',
+    quarantineRecoveryCount: '当前可安全提交停止请求的任务：{count}。此处不显示隔离会话的内容。',
+    quarantineRecoveryClose: '关闭',
+    quarantineRecoveryStop: '停止这些任务',
+    quarantineRecoverySubmitted: '已提交 {count} 个停止请求。',
+    quarantineRecoverySafety: '停止请求不代表引擎已确认结束。隔离状态与原始执行证据保持不变；未验证的任务请联系支持处理。',
+    startupRecoveryTitle: '启动未完成',
+    startupRecoveryDescription: '本地数据或运行状态未能完成安全初始化。请查看日志并重启应用；如果仍无法启动，请联系支持处理。',
+    startupRecoverySafety: '现有数据已保留，任务不会从此窗口重新执行。请勿删除数据库或重置账号归属来绕过此问题。',
+    startupRecoveryRestart: '重启应用',
+    startupRecoveryLogs: '显示日志文件',
+    startupRecoveryQuit: '退出应用',
     ownershipCurrentAccount: '当前账号',
     ownershipPersonalScope: '个人空间',
     ownershipEnterpriseScope: '企业空间',
@@ -228,6 +241,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Auth quota
     authPlanFree: '免费',
+    authQuotaUnavailable: '会员与额度暂不可用',
     authPlanStandard: '标准',
     enterpriseAccountContextMismatchTitle: '团队身份已失效',
     enterpriseAccountContextMismatchMessage:
@@ -439,6 +453,19 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    quarantineRecoveryTitle: 'Task safety recovery',
+    quarantineRecoveryDescription: 'Tasks with unverified ownership remain isolated and are not automatically rerun. View logs or stop isolated tasks witnessed for this account during this app process.',
+    quarantineRecoveryCount: 'Tasks eligible for a safe stop request: {count}. Isolated conversation contents are not shown.',
+    quarantineRecoveryClose: 'Close',
+    quarantineRecoveryStop: 'Stop these tasks',
+    quarantineRecoverySubmitted: '{count} stop requests submitted.',
+    quarantineRecoverySafety: 'A stop request does not confirm that the engine has stopped. Isolation and execution evidence are retained. Contact support for unverified tasks.',
+    startupRecoveryTitle: 'Startup could not finish',
+    startupRecoveryDescription: 'Local data or execution state could not be initialized safely. Check the logs and restart the app. Contact support if startup continues to fail.',
+    startupRecoverySafety: 'Existing data is retained. This window does not restart tasks. Do not delete the database or reset account ownership to bypass this issue.',
+    startupRecoveryRestart: 'Restart app',
+    startupRecoveryLogs: 'Show log file',
+    startupRecoveryQuit: 'Quit app',
     ownershipCurrentAccount: 'Current account',
     ownershipPersonalScope: 'Personal workspace',
     ownershipEnterpriseScope: 'Team workspace',
@@ -670,6 +697,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Auth quota
     authPlanFree: 'Free',
+    authQuotaUnavailable: 'Plan and balance temporarily unavailable',
     authPlanStandard: 'Standard',
     enterpriseAccountContextMismatchTitle: 'Team identity expired',
     enterpriseAccountContextMismatchMessage:

@@ -21,9 +21,10 @@ export interface UserProfile {
 export interface UserQuota extends SubscriptionManagement {
   planName: string;           // "免费", "标准", "进阶", "专业"
   subscriptionStatus: string; // "free" | "active" | "enterprise"
-  creditsLimit: number;       // total credits limit
-  creditsUsed: number;        // credits used
-  creditsRemaining: number;   // credits remaining
+  creditsLimit: number | null;       // null while the complete quota is unavailable
+  creditsUsed: number | null;
+  creditsRemaining: number | null;
+  quotaUnavailable?: boolean; // login is authenticated; entitlement data still needs verification
   hasPaidCredits?: boolean;   // true if user has subscription, boost, or invitation credits
   mediaGenerationEntitled?: boolean; // explicit server-computed media entitlement
   shareEntitled?: boolean;    // explicit server-computed sharing entitlement

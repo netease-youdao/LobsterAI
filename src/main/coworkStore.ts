@@ -2324,6 +2324,8 @@ export class CoworkStore {
         messageId: id, writeKind: 'insert', persistOutcome: 'committed', phase: 'local_commit',
       }));
 
+      if (message.type === 'user') this.remote.afterCommit(() => this.remote.markFilesDirty(sessionId));
+
       // updated_at drives session list ordering: only user messages may move it,
       // otherwise concurrent streaming runs keep reordering the list.
       if (message.type === 'user') {

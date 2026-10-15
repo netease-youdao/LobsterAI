@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { remoteTelemetryHasRequired, sanitizeRemoteTelemetryFields } from '../../shared/remote/telemetry';
 import { payloadHash } from './canonical';
 import { type AvailabilityContext,RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
+import { recordRemoteSessionDeletion } from './remoteLocalGc';
 import { RemoteStore } from './remoteStore';
 import { SyncTelemetry } from './remoteSyncTelemetry';
 
@@ -33,11 +34,21 @@ function fixture() {
     db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,2,1)').run('message', 'local', 'assistant', 'Hello', '{}');
   });
   store.bindRemote('local', store.sync('local')!.session_id, 'desktop');
+  const bootstraps = new Map<string, any>();
   const request = vi.fn(async (pathname: string, _method: string, body: any) => {
     if (pathname === '/sync/mode-activations') return { writerGeneration: body.writerGeneration, state: 'fenced', pendingCommandIds: [], pendingCommands: [] };
-    if (pathname === '/control/bootstrap') return { state: 'uploading' };
+    if (pathname === '/control/bootstrap' || pathname === '/control/bootstrap/paged') {
+      bootstraps.set(body.operationId, body);
+      return { state: 'uploading', operationId: body.operationId, sessionId: body.sessionId, writerGeneration: body.writerGeneration };
+    }
     if (/\/parts\/\d+$/u.test(pathname)) return { state: 'accepted' };
-    if (pathname.endsWith('/commit')) return { state: 'committed', controlReady: true };
+    if (pathname.endsWith('/commit')) {
+      const operationId = pathname.split('/')[3], begin = bootstraps.get(operationId);
+      return { state: 'committed', controlReady: true, operationId, sessionId: body.sessionId, writerGeneration: body.writerGeneration,
+        controlEpoch: body.controlEpoch, manifestHash: begin?.manifestHash, coreCheckpointId: begin?.coreCheckpointId,
+        throughFactSeq: begin?.throughFactSeq,
+        ...(begin?.sourceManifestHash ? { sourceManifestHash: begin.sourceManifestHash, frozenThroughSourceSeq: begin.frozenThroughSourceSeq, expectedResolvedSourceSeq: begin.expectedResolvedSourceSeq } : {}) };
+    }
     if (pathname === '/control/facts/batches') return { state: 'committed', lastFactSeq: body.lastFactSeq };
     if (pathname === '/sync/live-projections') return { publicationId: body.publicationId, state: 'accepted', projectionRevision: '900', committedSeq: '10' };
     throw Object.assign(new Error('unknown operation'), { httpStatus: 404 });
@@ -64,7 +75,7 @@ describe('September reliability protocols', () => {
     const f = fixture(), ordinary = f.request.getMockImplementation()!;
     let supersede = true;
     f.request.mockImplementation(async (...args) => {
-      if (args[0].endsWith('/commit') && supersede) { supersede = false; return { state: 'superseded', controlReady: false }; }
+      if (args[0].endsWith('/commit') && supersede) { supersede = false; return { state: 'superseded', controlReady: false, operationId: args[0].split('/')[3], sessionId: args[2].sessionId }; }
       return ordinary(...args);
     });
     await f.controls(); expect(f.publisher.controlReady('local')).toBe(false);
@@ -129,7 +140,6 @@ describe('September reliability protocols', () => {
     });
     const ordinary = f.request.getMockImplementation()!;
     f.request.mockImplementation(async (...args) => {
-      if (args[0] === '/control/bootstrap/paged') return { state: 'uploading' };
       if (/\/parts\/\d+$/u.test(args[0])) return { partNo: Number(args[0].split('/').at(-1)), payloadHash: args[2].payloadHash, recordCount: args[2].records.length };
       return ordinary(...args);
     });
@@ -444,7 +454,7 @@ it('reconciles an expired initial baseline and activates a new immutable checkpo
   await f.controls(); const old=f.publisher.ledger.session(f.context.scope,'local')!.operationId;
   expect(f.publisher.controlReady('local')).toBe(false);
   lose=false; (f.publisher as any).failures.clear();
-  f.request.mockImplementation(async (...args) => args[0]===`/control/operations/${old}` ? { state:'expired',operationId:old } : normal(...args));
+  f.request.mockImplementation(async (...args) => args[0]===`/control/operations/${old}` ? { state:'expired',operationId:old,sessionId:f.store.sync('local')!.session_id } : normal(...args));
   await f.controls(); expect(f.publisher.ledger.session(f.context.scope,'local')?.phase).toBe('activating');
   expect(f.publisher.ledger.db.prepare('SELECT 1 FROM availability_receipts WHERE operation_id=?').get(old)).toBeDefined();
   await f.controls(); expect(f.publisher.controlReady('local')).toBe(true);
@@ -572,4 +582,178 @@ it('rebuilds optional tool membership from recent core messages without resettin
   expect(f.db.prepare("SELECT tool_id FROM remote_live_tool_sources WHERE message_id='tool-message'").get()).toEqual({ tool_id: 'call' });
   expect(f.db.prepare("SELECT revision FROM remote_live_tools WHERE session_id='local' AND tool_id='call'").get()).toEqual(revision);
   expect(revision).toEqual({ revision: 2 });
+});
+
+
+describe('persistent control progress and desktop deletions', () => {
+  it('finishes a nonpaged bootstrap across 600ms round trips without restarting confirmed parts', async () => {
+    const f = fixture(), ordinary = f.request.getMockImplementation()!;
+    let now = Date.now(); vi.spyOn(Date, 'now').mockImplementation(() => now);
+    f.request.mockImplementation(async (...args) => { now += 600; return ordinary(...args); });
+    for (let turn = 0; turn < 5 && !f.publisher.controlReady('local'); turn++) await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    expect(f.request.mock.calls.filter(call => call[0] === '/control/bootstrap')).toHaveLength(1);
+    expect(f.request.mock.calls.filter(call => /\/parts\/0$/u.test(call[0]))).toHaveLength(1);
+    expect(f.request.mock.calls.some(call => call[0].endsWith('/commit'))).toBe(true);
+    expect((f.publisher as any).failures.size).toBe(0);
+  });
+  it('lets a healthy task activate while a different bootstrap request awaits I/O', async () => {
+    const f = fixture(), ordinary = f.request.getMockImplementation()!;
+    f.store.transaction(() => {
+      f.db.prepare("INSERT INTO cowork_sessions VALUES('second','Other',1,1,'idle',NULL,NULL)").run();
+      f.store.assignNew('second', f.owner, 'local_create');
+    });
+    f.store.bindRemote('second', f.store.sync('second')!.session_id, 'desktop');
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/mode-activations' && args[2].localSessionId === 'local') await blocked;
+      return ordinary(...args);
+    });
+    const work = f.controls();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(f.publisher.controlReady('second')).toBe(true);
+    release(); await work;
+  });
+  async function deletionFixture() {
+    const f = fixture(), ordinary = f.request.getMockImplementation()!;
+    f.context.environment = 'test';
+    f.db.prepare("UPDATE remote_sync SET sync_environment='test' WHERE local_id='local'").run();
+    const receipts = new Map<string, any>();
+    f.request.mockImplementation(async (...args) => {
+      const [pathname, , body] = args;
+      if (pathname.startsWith('/control/operations/') && receipts.has(pathname.split('/').at(-1)!)) return receipts.get(pathname.split('/').at(-1)!);
+      if (pathname.endsWith('/commit')) return { ...await ordinary(...args), operationId: pathname.split('/')[3],
+        sessionId: body.sessionId, writerGeneration: body.writerGeneration, controlEpoch: body.controlEpoch };
+      if (pathname === '/control/facts/batches' && body.facts[0].eventType === 'session.deleted') {
+        const { mode: _mode, connectionGeneration: _generation, ...business } = body;
+        const fact = body.facts[0];
+        const receipt = { operationId: body.batchId, batchId: body.batchId, sessionId: body.sessionId,
+          writerGeneration: body.writerGeneration, controlEpoch: body.controlEpoch, requestHash: payloadHash(business),
+          state: 'committed', firstFactSeq: body.firstFactSeq, lastFactSeq: body.lastFactSeq, committedSeq: '42',
+          deletionReceipts: [{ eventId: fact.eventId, factSeq: fact.factSeq, deletedAt: fact.payload.deletedAt, serverSeq: '42' }] };
+        receipts.set(body.batchId, receipt); return receipt;
+      }
+      return ordinary(...args);
+    });
+    await f.controls();
+    const remove = () => f.store.transaction(() => {
+      recordRemoteSessionDeletion(f.store, 'local');
+      f.db.prepare("DELETE FROM cowork_messages WHERE session_id='local'").run();
+      f.db.prepare("DELETE FROM cowork_sessions WHERE id='local'").run();
+    });
+    return { ...f, receipts, remove };
+  }
+  it('commits a local deletion with the optional sidecar unavailable, then confirms only the v3 ACK', async () => {
+    const f = await deletionFixture(), before = f.store.sync('local')!;
+    const unavailable = vi.spyOn(f.publisher.ledger, 'db', 'get').mockImplementation(() => { throw new Error('SQLITE_BUSY'); });
+    f.remove(); expect(f.db.prepare("SELECT 1 FROM cowork_sessions WHERE id='local'").get()).toBeUndefined();
+    unavailable.mockRestore(); await f.controls();
+    const tombstone = f.store.get<any>('localGcDeleted:local');
+    expect(tombstone.availabilityAck).toMatchObject({ protocol: 'control_facts_v1', eventId: tombstone.deleteEventId, serverSeq: '42' });
+    expect(tombstone.ackAt).not.toBeNull(); expect(tombstone.ackSourceSeq).toBeNull();
+    expect(f.store.sync('local')).toMatchObject({ source_seq: before.source_seq, ack_seq: before.ack_seq });
+    f.request.mockClear(); await f.controls(); await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+  });
+  it('reconciles the same deletion fact after a successful server commit loses its response', async () => {
+    const f = await deletionFixture(), ordinary = f.request.getMockImplementation()!;
+    let lost = false;
+    f.request.mockImplementation(async (...args) => {
+      const response = await ordinary(...args);
+      if (args[0] === '/control/facts/batches' && !lost) { lost = true; throw new TypeError('response lost'); }
+      return response;
+    });
+    f.remove(); await f.controls();
+    expect(f.store.get<any>('localGcDeleted:local').ackAt).toBeNull();
+    (f.publisher as any).failures.clear(); await f.controls();
+    expect(f.store.get<any>('localGcDeleted:local').availabilityAck).toBeDefined();
+    expect(f.receipts.size).toBe(1);
+    expect(f.request.mock.calls.filter(call => call[0] === '/control/facts/batches')).toHaveLength(1);
+  });
+  it('repairs an old tombstone only from its frozen writer manifest and original checkpoint', async () => {
+    const f = await deletionFixture(), state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    f.store.history.prepare({ scope: f.context.scope, localId: 'local', sessionId: state.sessionId,
+      writerGeneration: state.writerGeneration, owner: f.owner, deviceId: 'desktop' });
+    f.remove(); const old = f.store.get<any>('localGcDeleted:local'); delete old.deleteEventId; delete old.availabilityBinding;
+    f.store.put('localGcDeleted:local', old); await f.controls();
+    expect(f.store.get<any>('localGcDeleted:local').availabilityAck).toBeDefined();
+  });
+  it('keeps a deletion pending when an old server has no event proof or a proof has the wrong epoch', async () => {
+    const f = await deletionFixture(), ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      const result = await ordinary(...args);
+      return args[0] === '/control/facts/batches' ? { ...result, controlEpoch: 'different-epoch' } : result;
+    });
+    f.remove(); await f.controls();
+    expect(f.store.get<any>('localGcDeleted:local').ackAt).toBeNull();
+    expect(f.publisher.ledger.pending(f.context.scope, 'control', 'local')).toHaveLength(1);
+    expect(f.publisher.ledger.stepReceipt(f.publisher.ledger.pending(f.context.scope, 'control', 'local')[0])).toBeNull();
+  });
+  it('reports source changes before a request exists and keeps history health separate from control readiness', async () => {
+    const f = fixture(); f.context.historySupported = false;
+    await f.controls();
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ ready: true, pending: true, lanes: { live: 'pending' } });
+    await f.live();
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ ready: true, pending: false });
+    expect(f.publisher.health()?.lastSuccess).toEqual(expect.any(Number));
+    f.db.prepare("UPDATE cowork_messages SET content='Changed' WHERE id='message'").run();
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ ready: true, pending: true, lanes: { live: 'pending' } });
+    f.context.historySupported = true;
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ ready: true, lanes: { history: 'unknown' } });
+  });
+  it('does not turn a recreated local ID or a changed remote target into a deletion proof', async () => {
+    const f = await deletionFixture(); f.remove();
+    f.db.prepare("UPDATE remote_sync SET session_id='another-task' WHERE local_id='local'").run();
+    f.request.mockClear(); await f.controls();
+    expect(f.request).not.toHaveBeenCalled(); expect(f.store.get<any>('localGcDeleted:local').ackAt).toBeNull();
+  });
+});
+
+describe('bootstrap receipt authority', () => {
+  it.each(['operationId', 'sessionId', 'writerGeneration'])('does not persist a begin receipt with mismatched %s', async field => {
+    const f = fixture(), ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      const result = await ordinary(...args);
+      return args[0] === '/control/bootstrap' ? { ...result, [field]: 'wrong-context' } : result;
+    });
+    await f.controls();
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const begin = f.publisher.ledger.request(`${state.operationId}:begin`)!;
+    expect(f.publisher.ledger.stepReceipt(begin)).toBeNull();
+    expect(f.publisher.controlReady('local')).toBe(false);
+    expect(f.request.mock.calls.some(call => call[0].includes('/parts/'))).toBe(false);
+  });
+  it.each(['operationId', 'sessionId', 'writerGeneration', 'controlEpoch', 'manifestHash', 'coreCheckpointId', 'throughFactSeq'])(
+    'does not activate or archive a committed receipt with mismatched %s', async field => {
+      const f = fixture(), ordinary = f.request.getMockImplementation()!;
+      f.request.mockImplementation(async (...args) => {
+        const result = await ordinary(...args);
+        return args[0].endsWith('/commit') ? { ...result, [field]: 'wrong-proof' } : result;
+      });
+      await f.controls();
+      const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+      expect(state.phase).toBe('bootstrap');
+      expect(f.publisher.ledger.operationReceipt(state.operationId)).toBeNull();
+      expect(f.publisher.ledger.request(`${state.operationId}:commit`)).not.toBeNull();
+      expect(f.publisher.controlReady('local')).toBe(false);
+    });
+  it('keeps a late response unresolved after connection context changes and recovers the same request', async () => {
+    const f = fixture(), ordinary = f.request.getMockImplementation()!;
+    let change = true;
+    f.request.mockImplementation(async (...args) => {
+      const result = await ordinary(...args);
+      if (change && args[0] === '/control/bootstrap') { change = false; f.setContext({ ...f.context, generation: '2' }); }
+      return result;
+    });
+    await f.controls();
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const begin = f.publisher.ledger.request(`${state.operationId}:begin`)!;
+    expect(f.publisher.ledger.stepReceipt(begin)).toBeNull();
+    expect(state.phase).toBe('bootstrap');
+    await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    expect(f.request.mock.calls.filter(call => call[0] === '/control/bootstrap').map(call => call[2].operationId))
+      .toEqual([state.operationId, state.operationId]);
+  });
 });

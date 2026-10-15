@@ -117,6 +117,7 @@ export type AuthSessionChangedEvent = {
 };
 
 export const AuthSubscriptionStatus = {
+  Unavailable: 'unavailable',
   Active: 'active',
   Enterprise: 'enterprise',
   Free: 'free',

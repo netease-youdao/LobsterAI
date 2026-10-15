@@ -1,9 +1,12 @@
 import { randomUUID } from 'crypto';
 
-import type { RemoteOwner } from '../../shared/remote/constants';
+import { type RemoteOwner, type RemoteSyncLanes, RemoteSyncLaneStatus } from '../../shared/remote/constants';
 import { payloadHash, stableJson } from './canonical';
+import { acknowledgeAvailabilityDeletion, AvailabilityDeletion, availabilityDeletion, rememberAvailabilityDeletionBinding } from './remoteAvailabilityDeletion';
+import { availabilitySourceHealth, recordAvailabilityObjectHealth } from './remoteAvailabilityHealth';
 import { availabilityControlSnapshot,type ControlSnapshot } from './remoteAvailabilitySource';
 import { AvailabilityReadState, type AvailabilityRequest, type AvailabilitySession, RemoteAvailabilityStore } from './remoteAvailabilityStore';
+import { ensureDesktopInputJobs } from './remoteDesktopInputJobs';
 import { type HistoryContext, type HistoryOperation,HistoryPreparation } from './remoteHistoryStore';
 import { recentLiveCandidates } from './remoteLiveCandidates';
 import { RemoteLiveProjectionJob } from './remoteLiveProjectionJob';
@@ -25,6 +28,7 @@ interface Dependencies {
 }
 const recordKey = (record: { eventType: string; payload: Record<string, any> }): string => `${record.eventType}:${record.payload.run?.runId
   || record.payload.messageId || record.payload.approval?.approvalId || record.payload.question?.questionId || record.payload.session?.sessionId || ''}`;
+const CONTROL_TURN_YIELDED = 'REMOTE_CONTROL_TURN_YIELDED';
 const backoff = [1000, 3000, 10000, 30000, 60000];
 
 /** Independent control and current-content lanes. Legacy history errors never own either lane's retry clock. */
@@ -35,7 +39,7 @@ export class RemoteAvailabilityPublisher {
   private liveWork: Promise<void> | null = null;
   private historyWork: Promise<void> | null = null;
   private checkpointDeadline = 0;
-  private controlDeadline = 0;
+  private readonly controlDeadlines = new Map<string, number>();
   private readonly pendingCursors = new Map<string, string>();
   private checkpointRevision: { localId: string; revision: string } | null = null;
   private readonly historyRetry = new Map<string, number>();
@@ -69,23 +73,71 @@ export class RemoteAvailabilityPublisher {
   }
   controlReady(localId: string): boolean {
     const context = this.deps.context();
-    try { return !!context && this.ledger.session(context.scope, localId)?.phase === 'active'; }
+    try { return !!context && !this.deps.store.get(`${AvailabilityDeletion.Prefix}${localId}`) && this.ledger.session(context.scope, localId)?.phase === 'active'; }
     catch { return false; /* Unknown control evidence never permits execution or a legacy writer. */ }
   }
-  health(): { sessions: number; pendingSessions: number; degraded: boolean } | null {
+  health(): { sessions: number; pendingSessions: number; degraded: boolean; oldest: number | null; lastSuccess: number | null; lanes: RemoteSyncLanes; countsTruncated: boolean } | null {
     const context = this.deps.context();
-    return context ? this.ledger.health(context.scope) : null;
+    if (!context) return null;
+    const totals = this.ledger.health(context.scope), rows = this.ledger.db.prepare('SELECT local_id FROM availability_sessions WHERE scope=? ORDER BY local_id LIMIT 129')
+      .all(context.scope) as Array<{ local_id: string }>;
+    let pendingSessions = 0, degraded = totals.degraded, oldest: number | null = null;
+    const lanes: RemoteSyncLanes = {};
+    const rank = [RemoteSyncLaneStatus.Idle, RemoteSyncLaneStatus.Pending, RemoteSyncLaneStatus.InFlight, RemoteSyncLaneStatus.Backoff, RemoteSyncLaneStatus.Degraded, RemoteSyncLaneStatus.Unknown];
+    for (const row of rows.slice(0, 128)) {
+      const task = this.sessionHealth(row.local_id);
+      if (!task) continue;
+      if (task.pending) pendingSessions++;
+      degraded ||= task.degraded;
+      if (task.oldest !== null) oldest = oldest === null ? task.oldest : Math.min(oldest, task.oldest);
+      for (const [lane, status] of Object.entries(task.lanes)) {
+        const key = lane as keyof RemoteSyncLanes;
+        if (!lanes[key] || rank.indexOf(status!) > rank.indexOf(lanes[key]!)) lanes[key] = status;
+      }
+    }
+    const countsTruncated = rows.length > 128;
+    if (countsTruncated) { lanes.recovery = RemoteSyncLaneStatus.Unknown; degraded = true; }
+    const progress = this.ledger.db.prepare('SELECT MAX(ack_at) AS at FROM availability_progress WHERE scope=?').get(context.scope) as { at: number | null };
+    return { sessions: totals.sessions, pendingSessions: Math.max(pendingSessions, totals.pendingSessions), degraded,
+      oldest, lastSuccess: progress.at, lanes, countsTruncated };
   }
-  sessionHealth(localId: string): { ready: boolean; pending: boolean; degraded: boolean } | null {
+  sessionHealth(localId: string): { ready: boolean; pending: boolean; degraded: boolean; oldest: number | null; lanes: RemoteSyncLanes } | null {
     const context = this.deps.context();
-    if (!context || !this.ledger.hasSession(context.scope, localId)) return null;
+    if (!context) return null;
     try {
+      if (!this.ledger.hasSession(context.scope, localId)) return null;
       const state = this.ledger.session(context.scope, localId)!;
       const revision = this.deps.store.db.prepare('SELECT revision FROM remote_control_revisions WHERE session_id=?').get(localId) as { revision: number } | undefined;
-      const pending = !!this.ledger.db.prepare('SELECT 1 FROM availability_requests WHERE scope=? AND local_id=? AND resolution_receipt IS NULL LIMIT 1').get(context.scope, localId);
-      const degraded = !!this.ledger.db.prepare('SELECT 1 FROM availability_faults WHERE scope=? AND local_id=? LIMIT 1').get(context.scope, localId);
-      return { ready: state.phase === 'active', pending: pending || state.controlRevision !== String(revision?.revision || 1), degraded };
-    } catch { return { ready: false, pending: true, degraded: true }; }
+      const requests = this.ledger.db.prepare(`SELECT lane,MIN(CASE WHEN json_valid(body) THEN json_extract(body,'$.createdAt') END) AS oldest FROM availability_requests WHERE scope=? AND local_id=? AND resolution_receipt IS NULL GROUP BY lane`)
+        .all(context.scope, localId) as Array<{ lane: string; oldest: number | null }>;
+      const deletion = this.deps.store.get<{ ackAt: number | null; deletedAt: number }>(`${AvailabilityDeletion.Prefix}${localId}`);
+      const source = deletion ? { pending: 0, oldest: null, unavailable: false } : availabilitySourceHealth(this.deps.store, context.scope, localId);
+      const backoff = [...this.failures.keys()].some(key => key.startsWith(`${context.scope}:control:${localId}`)
+        || key.startsWith(`${context.scope}:live:${localId}`));
+      const faults = !!this.ledger.db.prepare('SELECT 1 FROM availability_faults WHERE scope=? AND local_id=? LIMIT 1').get(context.scope, localId);
+      const controlPending = !deletion && (state.phase !== 'active' || state.controlRevision !== String(revision?.revision || 1)) || requests.some(row => row.lane === 'control');
+      const lanes: RemoteSyncLanes = {
+        control: this.controlDeadlines.has(`${context.scope}:control:${localId}`) ? RemoteSyncLaneStatus.InFlight : controlPending ? RemoteSyncLaneStatus.Pending : RemoteSyncLaneStatus.Idle,
+        live: source.unavailable || faults ? RemoteSyncLaneStatus.Degraded : source.pending || requests.some(row => row.lane === 'live') ? RemoteSyncLaneStatus.Pending : RemoteSyncLaneStatus.Idle,
+        deletion: deletion && !deletion.ackAt ? RemoteSyncLaneStatus.Pending : RemoteSyncLaneStatus.Idle,
+        recovery: backoff ? RemoteSyncLaneStatus.Backoff : RemoteSyncLaneStatus.Idle,
+      };
+      if (context.historySupported && !deletion && state.phase === 'active') {
+        try {
+          const history = this.deps.store.history.status();
+          if (!history.available || history.reason) lanes.history = RemoteSyncLaneStatus.Unknown;
+          else {
+            const identity = { scope: context.scope, localId, sessionId: state.sessionId, writerGeneration: state.writerGeneration, owner: context.owner, deviceId: context.deviceId };
+            const historySession = this.deps.store.history.session(identity), metadata = this.deps.store.history.legacyMetadata(identity);
+            lanes.history = !historySession ? RemoteSyncLaneStatus.Unknown : this.deps.store.history.pending(identity).length
+              || BigInt(historySession.resolvedSourceSeq) < BigInt(metadata.sourceSeq) ? RemoteSyncLaneStatus.Pending : RemoteSyncLaneStatus.Idle;
+          }
+        } catch { lanes.history = RemoteSyncLaneStatus.Unknown; }
+      }
+      const times = [source.oldest, ...requests.map(row => row.oldest), deletion && !deletion.ackAt ? deletion.deletedAt : null].filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+      return { ready: state.phase === 'active' && !deletion, pending: Object.values(lanes).some(status => status !== RemoteSyncLaneStatus.Idle),
+        degraded: backoff || faults || source.unavailable || Object.values(lanes).includes(RemoteSyncLaneStatus.Unknown), oldest: times.length ? Math.min(...times) : null, lanes };
+    } catch { return { ready: false, pending: true, degraded: true, oldest: null, lanes: { recovery: RemoteSyncLaneStatus.Unknown } }; }
   }
   wake(): void {
     if (this.stopped || this.timer) return;
@@ -148,11 +200,15 @@ export class RemoteAvailabilityPublisher {
       operationKind: request.lane === 'live' ? SyncTelemetry.Kind.Live : request.pathname === '/sync/mode-activations'
         ? SyncTelemetry.Kind.Activation : request.pathname === '/control/facts/batches' ? SyncTelemetry.Kind.Facts : SyncTelemetry.Kind.Bootstrap });
     if (!this.current(context)) throw new Error('REMOTE_AVAILABILITY_CONTEXT_CHANGED');
-    if (request.lane === 'control') this.checkpointGuard();
+    const turn = this.controlDeadlines.get(`${context.scope}:control:${request.localId}`);
+    if (request.lane === 'control' && turn && Date.now() >= turn) throw new Error(CONTROL_TURN_YIELDED);
+    const guard = (): void => { if (request.lane === 'control' && !turn) this.checkpointGuard(); };
+    const timeout = request.lane === 'control' && !turn ? this.checkpointTimeout() : undefined;
+    guard();
     if (request.attempted && request.lookup) {
       try {
-        const result = await this.deps.request(request.lookup, 'GET', undefined, request.lookupVersion, request.lane === 'control' ? this.checkpointTimeout() : undefined);
-        if (request.lane === 'control') this.checkpointGuard();
+        const result = await this.deps.request(request.lookup, 'GET', undefined, request.lookupVersion, timeout);
+        guard();
         if (!this.current(context)) throw new Error('REMOTE_AVAILABILITY_CONTEXT_CHANGED');
         if (result) {
           telemetry.emit(SyncTelemetry.Event.Reconciled, { stage: SyncTelemetry.Stage.Reconcile, outcome: SyncTelemetry.Outcome.Pending,
@@ -178,8 +234,8 @@ export class RemoteAvailabilityPublisher {
     if (request.pathname.startsWith('/control/') && Buffer.byteLength(stableJson({ ...body, connectionGeneration: context.generation })) > 64 * 1024)
       throw new Error('REMOTE_CONTROL_REQUEST_BUDGET');
     const result = await this.deps.request(request.pathname, request.method,
-      { ...body, connectionGeneration: context.generation }, request.version, request.lane === 'control' ? this.checkpointTimeout() : undefined);
-    if (request.lane === 'control') this.checkpointGuard();
+      { ...body, connectionGeneration: context.generation }, request.version, timeout);
+    guard();
     if (!this.current(context)) throw new Error('REMOTE_AVAILABILITY_CONTEXT_CHANGED');
     return result;
   }
@@ -199,24 +255,30 @@ export class RemoteAvailabilityPublisher {
   }
   private async controls(context: AvailabilityContext): Promise<void> {
     if (!this.eligible(`${context.scope}:control`)) return;
-    const roundDeadline = Date.now() + 2000;
-    for (const row of this.candidates(context, 'control')) {
-      if (!this.current(context) || Date.now() >= roundDeadline) return;
-      const key = `${context.scope}:control:${row.local_id}`;
-      if (!this.eligible(key)) continue;
-      try {
-        this.controlDeadline = Math.min(roundDeadline, Date.now() + 1000);
-        await this.controlSession(context, row);
-        this.failures.delete(key);
-      } catch (error) { if (this.current(context)) this.fail(key, error); }
-      finally { this.controlDeadline = 0; }
-    }
+    const roundDeadline = Date.now() + 2000, rows = this.candidates(context, 'control');
+    let cursor = 0;
+    // Two tasks may await I/O independently; reserve the third transport slot for commands.
+    const worker = async (): Promise<void> => {
+      while (cursor < rows.length && this.current(context) && Date.now() < roundDeadline) {
+        const row = rows[cursor++], key = `${context.scope}:control:${row.local_id}`;
+        if (!this.eligible(key) || this.controlDeadlines.has(key)) continue;
+        this.controlDeadlines.set(key, Date.now() + 1000);
+        try { await this.controlSession(context, row); this.failures.delete(key); }
+        catch (error) {
+          if (error instanceof Error && error.message === CONTROL_TURN_YIELDED) this.failures.delete(key);
+          else if (this.current(context)) this.fail(key, error);
+        } finally { this.controlDeadlines.delete(key); }
+      }
+    };
+    await Promise.all([worker(), worker()]);
   }
+
   private async controlSession(context: AvailabilityContext, row: CoreRemoteBinding): Promise<void> {
     const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
       deviceId: context.deviceId, localSessionId: row.local_id, sessionId: row.session_id, lane: 'control' });
     let state = this.ledger.session(context.scope, row.local_id);
     if (!state) {
+      if (this.deps.store.get(`${AvailabilityDeletion.Prefix}${row.local_id}`)) throw new Error('REMOTE_DELETION_BINDING_UNRESOLVED');
       if (!context.supported) return;
       // Fence locally BEFORE the uncertain activation request. Never resume a legacy writer after this point.
       state = { scope: context.scope, localId: row.local_id, sessionId: row.session_id, writerGeneration: randomUUID(),
@@ -225,6 +287,8 @@ export class RemoteAvailabilityPublisher {
       this.ledger.saveSession(state);
     }
     if (state.phase === 'activating') {
+      if (this.deps.store.get(`${AvailabilityDeletion.Prefix}${row.local_id}`) && !this.ledger.request(`${state.operationId}:activation`))
+        throw new Error('REMOTE_DELETION_BINDING_UNRESOLVED');
       const request = this.save(context, state, `${state.operationId}:activation`, 'control', '/sync/mode-activations',
         { operationId: state.operationId }, 3, `/sync/mode-activations/${state.operationId}`);
       const result = await this.send(context, request);
@@ -245,9 +309,12 @@ export class RemoteAvailabilityPublisher {
         businessStatus: result.state, writerGeneration: state.writerGeneration, persistOutcome: 'success' });
       this.deps.store.bindRemote(row.local_id, row.session_id, context.deviceId);
     }
+    rememberAvailabilityDeletionBinding(this.deps.store, context, state);
     if (state.phase === 'bootstrap') {
       try { await this.bootstrap(context, state); }
       catch (error) {
+        if (!(error instanceof Error && error.message === CONTROL_TURN_YIELDED))
+          this.ledger.db.prepare('INSERT OR IGNORE INTO availability_bootstrap_rechecks VALUES(?)').run(state.operationId);
         const terminalReceipt = (error as { bootstrapReceipt?: { state?: string } }).bootstrapReceipt;
         if (terminalReceipt && ['aborted','expired','superseded'].includes(terminalReceipt.state || '')) {
           this.ledger.db.transaction(() => {
@@ -276,7 +343,22 @@ export class RemoteAvailabilityPublisher {
       }
       return;
     }
+    rememberAvailabilityDeletionBinding(this.deps.store, context, state);
     await this.facts(context, state);
+  }
+  private validateBootstrapReceipt(receipt: Record<string, any>, begin: AvailabilityRequest): void {
+    const terminal = ['aborted', 'expired', 'superseded'].includes(receipt?.state);
+    if (!receipt || receipt.operationId !== begin.body.operationId || receipt.sessionId !== begin.body.sessionId
+      || !terminal && receipt.writerGeneration !== begin.body.writerGeneration
+      || !['uploading', 'receiving', 'committed', 'aborted', 'expired', 'superseded'].includes(receipt.state))
+      throw new Error('REMOTE_BOOTSTRAP_RECEIPT_INVALID');
+    const committed = receipt.state === 'committed';
+    for (const key of ['writerGeneration', 'controlEpoch', 'manifestHash', 'coreCheckpointId', 'throughFactSeq',
+      'sourceManifestHash', 'frozenThroughSourceSeq', 'expectedResolvedSourceSeq']) {
+      if ((committed && begin.body[key] !== undefined || receipt[key] !== undefined) && receipt[key] !== begin.body[key])
+        throw new Error('REMOTE_BOOTSTRAP_RECEIPT_INVALID');
+    }
+    if (committed && receipt.controlReady !== true) throw new Error('REMOTE_BOOTSTRAP_RECEIPT_INVALID');
   }
   private async bootstrap(context: AvailabilityContext, state: AvailabilitySession, options?: { snapshot: ControlSnapshot; extra: Record<string, unknown> }): Promise<void> {
     const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
@@ -330,7 +412,11 @@ export class RemoteAvailabilityPublisher {
     };
     if (checkpoint.pagedManifest) for (const key of ['pendingRunIds', 'pendingApprovalIds', 'pendingQuestionIds', 'pendingCommandIds', 'pendingCommandIdsDigest']) delete (beginBody as Record<string, unknown>)[key];
     const begin = this.save(context, state, `${state.operationId}:begin`, 'control', checkpoint.pagedManifest ? '/control/bootstrap/paged' : '/control/bootstrap', beginBody, 1, `/control/operations/${state.operationId}`);
-    const began = await this.send(context, begin);
+    const recheck = this.ledger.db.prepare('SELECT 1 FROM availability_bootstrap_rechecks WHERE operation_id=?').get(state.operationId);
+    const began = (!recheck && this.ledger.stepReceipt(begin)) || await this.send(context, begin);
+    this.validateBootstrapReceipt(began, begin);
+    this.ledger.db.prepare('DELETE FROM availability_bootstrap_rechecks WHERE operation_id=?').run(state.operationId);
+    if (['uploading', 'receiving', 'committed'].includes(began.state)) this.ledger.confirmStep(begin, began);
     let receipt = began;
     if (began.state !== 'committed') {
       if (['aborted','expired','superseded'].includes(began.state)) throw Object.assign(new Error('REMOTE_BOOTSTRAP_TERMINAL'),{ httpStatus:409,bootstrapReceipt:began });
@@ -339,18 +425,25 @@ export class RemoteAvailabilityPublisher {
           { controlEpoch: state.controlEpoch, ...checkpoint.parts[partNo] }, 1, null, 1, 'PUT');
         if (checkpoint.pagedManifest && this.ledger.db.prepare('SELECT 1 FROM availability_checkpoint_uploaded WHERE operation_id=? AND part_no=? AND payload_hash=?')
           .get(state.operationId, partNo, part.body.payloadHash)) continue;
+        if (this.ledger.stepReceipt(part)) continue;
         const result = await this.send(context, part); // Preserve original request bytes until baseline commit.
+        if (!result || typeof result !== 'object'
+          || result.partNo !== undefined && result.partNo !== partNo
+          || result.payloadHash !== undefined && result.payloadHash !== part.body.payloadHash
+          || result.recordCount !== undefined && result.recordCount !== part.body.records.length) throw new Error('REMOTE_CONTROL_PART_RECEIPT_INVALID');
         if (checkpoint.pagedManifest) {
           if (result.partNo !== partNo || result.payloadHash !== part.body.payloadHash || result.recordCount !== part.body.records.length)
             throw new Error('REMOTE_CONTROL_PART_RECEIPT_INVALID');
           this.ledger.db.prepare('INSERT OR IGNORE INTO availability_checkpoint_uploaded VALUES(?,?,?)').run(state.operationId, partNo, part.body.payloadHash);
         }
+        this.ledger.confirmStep(part, result);
       }
       const commit = this.save(context, state, `${state.operationId}:commit`, 'control', `/control/bootstrap/${state.operationId}/commit`,
         { controlEpoch: state.controlEpoch, manifestHash: checkpoint.manifestHash }, 1, `/control/operations/${state.operationId}`);
       // A nonterminal operation query cannot substitute for the commit itself.
       commit.lookup = null;
       const result = await this.send(context, commit);
+      this.validateBootstrapReceipt(result, begin);
       if (['aborted','expired','superseded'].includes(result.state)) throw Object.assign(new Error('REMOTE_BOOTSTRAP_TERMINAL'), { httpStatus: 409, bootstrapReceipt: result });
       if (result.state !== 'committed' || result.controlReady !== true) throw new Error('REMOTE_BOOTSTRAP_RECEIPT_INVALID');
       receipt = result;
@@ -363,7 +456,9 @@ export class RemoteAvailabilityPublisher {
         this.ledger.saveSession(state);
       } else Object.assign(state,currentState);
       this.ledger.archiveBootstrap(context.scope, state.localId, state.operationId, receipt);
+      this.ledger.recordProgress(context.scope, state.localId, 'control');
     })());
+    rememberAvailabilityDeletionBinding(this.deps.store, context, state);
     telemetry.emit(SyncTelemetry.Event.Acknowledged, { stage: SyncTelemetry.Stage.Bootstrap, phase: SyncTelemetry.Stage.LocalAck,
       outcome: SyncTelemetry.Outcome.Completed, businessStatus: receipt.state, lastFactSeq: state.factSeq,
       partCount: checkpoint.partCount || checkpoint.parts.length, persistOutcome: 'success' });
@@ -378,6 +473,19 @@ export class RemoteAvailabilityPublisher {
       operationKind: SyncTelemetry.Kind.Facts, publicationKind: SyncTelemetry.Kind.Facts, writerGeneration: state.writerGeneration,
       controlEpoch: state.controlEpoch });
     let request = this.ledger.pending(context.scope, 'control', state.localId).find(value => value.pathname === '/control/facts/batches');
+    const deletion = !request || request.body.facts.some((fact: any) => fact.eventType === 'session.deleted')
+      ? availabilityDeletion(this.deps.store, context, state, this.ledger.operationReceipt(state.operationId)) : null;
+    if (!request && deletion?.availabilityAck) return;
+    if (!request && deletion) {
+      const batchId = randomUUID(), factSeq = String(BigInt(state.factSeq) + 1n);
+      request = this.save(context, state, batchId, 'control', '/control/facts/batches', {
+        batchId, controlEpoch: state.controlEpoch, firstFactSeq: factSeq, lastFactSeq: factSeq,
+        facts: [{ eventType: 'session.deleted', eventId: deletion.deleteEventId, factSeq,
+          occurredAt: new Date(deletion.deletedAt).toISOString(), payload: { deletedAt: new Date(deletion.deletedAt).toISOString() } }],
+      }, 1, `/control/operations/${batchId}`);
+      request.body.coreRevision = state.controlRevision; request.body.knownCheckpointId = state.operationId;
+      this.ledger.updateRequest(request);
+    }
     if (!request) {
       const coreRevision = (this.deps.store.db.prepare('SELECT revision FROM remote_control_revisions WHERE session_id=?').get(state.localId) as { revision: number } | undefined)?.revision || 1;
       if (String(coreRevision) === state.controlRevision) return;
@@ -413,7 +521,13 @@ export class RemoteAvailabilityPublisher {
       request.body.knownCheckpointId = state.operationId;
       this.ledger.updateRequest(request);
     }
-    const result = await this.send(context, request);
+    const deletes = request.body.facts.some((fact: any) => fact.eventType === 'session.deleted');
+    const result = (deletes && this.ledger.stepReceipt(request)) || await this.send(context, request);
+    if (deletes) {
+      // The core ACK retains the validated response; the sealed sidecar request survives either commit failing.
+      acknowledgeAvailabilityDeletion(this.deps.store, context, state, request, result);
+      this.ledger.confirmStep(request, result);
+    }
     if (!['committed', 'covered_by_checkpoint'].includes(result.state) || BigInt(result.lastFactSeq) < BigInt(request.body.lastFactSeq)) throw new Error('REMOTE_CONTROL_FACT_RECEIPT_INVALID');
     observeSyncCommit(telemetry, () => this.ledger.db.transaction(() => {
       const current = this.ledger.session(context.scope,state.localId)!;
@@ -426,6 +540,7 @@ export class RemoteAvailabilityPublisher {
         for (const fact of request!.body.facts) state.records[recordKey(fact)] = payloadHash({ eventType: fact.eventType, payload: fact.payload });
       }
       this.ledger.saveSession(state); this.ledger.complete(request!.key);
+      this.ledger.recordProgress(context.scope, state.localId, 'control');
     })());
     telemetry.emit(SyncTelemetry.Event.Acknowledged, { operationId: request.body.batchId,
       stage: SyncTelemetry.Stage.Facts, phase: SyncTelemetry.Stage.LocalAck, outcome: SyncTelemetry.Outcome.Completed,
@@ -441,6 +556,7 @@ export class RemoteAvailabilityPublisher {
   private async history(context: AvailabilityContext): Promise<void> {
     if (!this.eligible(`${context.scope}:history`)) return;
     for (const row of this.candidates(context, 'history')) {
+      if (this.deps.store.db.prepare('SELECT 1 FROM remote_state WHERE key=?').get(`${AvailabilityDeletion.Prefix}${row.local_id}`)) continue;
       if (!this.current(context)) return;
       const key = `${context.scope}:${row.local_id}`;
       let operation: HistoryOperation | undefined;
@@ -575,11 +691,10 @@ export class RemoteAvailabilityPublisher {
     });
   }
   private checkpointTimeout(): number | undefined {
-    const deadline = this.checkpointDeadline || this.controlDeadline;
+    const deadline = this.checkpointDeadline;
     return deadline ? Math.max(1,deadline-Date.now()) : undefined;
   }
   private checkpointGuard(): void {
-    if (this.controlDeadline && Date.now() >= this.controlDeadline) throw new Error('REMOTE_CONTROL_TURN_YIELDED');
     if (!this.checkpointDeadline) return;
     const revision = this.checkpointRevision;
     const current = revision && this.deps.store.db.prepare('SELECT revision FROM remote_control_revisions WHERE session_id=?').get(revision.localId) as { revision: number } | null;
@@ -643,11 +758,13 @@ export class RemoteAvailabilityPublisher {
     if (result.state !== 'committed' || result.recoveryId !== operation.id || result.resolvedSourceSeq !== begin.frozenThroughSourceSeq)
       throw new Error('REMOTE_HISTORY_RECEIPT_INVALID');
     history.completeOperation(operation.context,operation.id,result,{ historyGeneration: result.historyGeneration,resolvedSourceSeq: result.resolvedSourceSeq });
+    this.ledger.recordProgress(context.scope, operation.context.localId, 'history');
   }
   private async live(context: AvailabilityContext): Promise<void> {
     if (!this.eligible(`${context.scope}:live`)) return;
     let sent = 0, encoded = 0;
     for (const row of this.candidates(context, 'live')) {
+      if (this.deps.store.db.prepare('SELECT 1 FROM remote_state WHERE key=?').get(`${AvailabilityDeletion.Prefix}${row.local_id}`)) continue;
       if (!this.current(context) || sent >= 2 || encoded >= 4) return;
       const taskKey = `${context.scope}:live:${row.local_id}`;
       const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
@@ -690,13 +807,24 @@ export class RemoteAvailabilityPublisher {
         for (const candidate of candidates) {
           if (sent > rowStart || sent >= 2 || encoded >= 4 || !this.current(context)) break;
           const objectKey = `${candidate.kind}:${candidate.object_id}`, key = `${taskKey}:${objectKey}`;
-          const fingerprint = payloadHash({ kind: candidate.kind, objectId: candidate.object_id, revision: String(candidate.revision) });
+          let fingerprint = payloadHash({ kind: candidate.kind, objectId: candidate.object_id, revision: String(candidate.revision) });
           let encoding = false;
           try {
+            if (candidate.kind === 'message') {
+              const revision = ensureDesktopInputJobs(this.deps.store, row.local_id, candidate.object_id);
+              if (revision !== null) {
+                candidate.revision = revision;
+                fingerprint = payloadHash({ kind: candidate.kind, objectId: candidate.object_id, revision: String(revision) });
+              }
+            }
             if (!this.eligible(key) || !this.ledger.objectRetryAllowed(context.scope, row.local_id, objectKey, Date.now(), fingerprint)
               || (this.liveScan.get(key) || 0) > Date.now()) continue;
-            if (this.ledger.object(context.scope, row.local_id, objectKey)?.sourceRevision === String(candidate.revision)
-              || this.ledger.hasPendingObject(context.scope, row.local_id, candidate.kind, candidate.object_id)) continue;
+            const acknowledged = this.ledger.object(context.scope, row.local_id, objectKey);
+            if (acknowledged?.sourceRevision === String(candidate.revision)) {
+              recordAvailabilityObjectHealth(this.deps.store, context.scope, row.local_id, objectKey, String(candidate.revision), acknowledged.result.representation || 'unknown');
+              continue;
+            }
+            if (this.ledger.hasPendingObject(context.scope, row.local_id, candidate.kind, candidate.object_id)) continue;
             encoding = true; encoded++;
             const projection = await this.encoder.project(this.deps.store.db, { database: this.deps.store.db.name,
               localId: row.local_id, sessionId: row.session_id, deviceId: context.deviceId, owner: context.owner,
@@ -707,6 +835,7 @@ export class RemoteAvailabilityPublisher {
             this.liveScan.set(key, Date.now() + 1000);
             if (!projection) {
               this.ledger.skipObject(context.scope, row.local_id, objectKey, String(candidate.revision));
+              recordAvailabilityObjectHealth(this.deps.store, context.scope, row.local_id, objectKey, String(candidate.revision), 'local_only');
               telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Projection, outcome: SyncTelemetry.Outcome.Skipped,
                 objectId: candidate.object_id, objectRevision: String(candidate.revision), reason: SyncTelemetry.Reason.LocalOnly });
               continue;
@@ -791,6 +920,7 @@ export class RemoteAvailabilityPublisher {
       return;
     }
     this.ledger.completeObject(request, result);
+    if (result.state !== 'rejected') recordAvailabilityObjectHealth(this.deps.store, context.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`, request.body.sourceObjectRevision, request.body.representation);
     if (result.state === 'accepted' && ['complete', 'desktop_only'].includes(request.body.representation)) {
       const key = `${context.scope}:${request.localId}:${request.body.objectKind}:${request.body.objectId}`;
       const previous = this.contentRepresentations.get(key), representation = request.body.representation as string;

@@ -18,7 +18,7 @@ export const RemoteRunStatus = {
 export type RemoteRunStatusValue = typeof RemoteRunStatus[keyof typeof RemoteRunStatus];
 export interface RemoteOwner { userId: string; scopeKey: string }
 export interface RemoteWorkspace { workspaceId: string; name: string; available: boolean }
-export const RemoteCapability = { DualApproval: 'approval_dual_control_v1', CreateSession: 'session.create', SameAccountAccess: 'same_account_access', SessionAgent: 'session_agent_v1', AgentCatalog: 'agent_catalog_v1', AgentSelection: 'agent_selection_v1', AgentOwnershipClaim: 'agent_ownership_claim_v1' } as const;
+export const RemoteCapability = { IsolatedCommandRecovery: 'isolated_command_recovery_v1', DualApproval: 'approval_dual_control_v1', CreateSession: 'session.create', SameAccountAccess: 'same_account_access', SessionAgent: 'session_agent_v1', AgentCatalog: 'agent_catalog_v1', AgentSelection: 'agent_selection_v1', AgentOwnershipClaim: 'agent_ownership_claim_v1' } as const;
 export const RemoteConnectionStatus = { Online: 'online', Offline: 'offline' } as const;
 export const RemoteConnectionReason = {
   QuotaBlocked: 'quota_blocked', Removed: 'removed',
@@ -40,7 +40,10 @@ export interface RemoteSyncTaskIssue {
   nextRetryAt?: number | null;
   retryable: boolean;
 }
+export const RemoteSyncLaneStatus = { Idle: 'idle', Pending: 'pending', InFlight: 'in_flight', Backoff: 'backoff', Degraded: 'degraded', Unknown: 'unknown' } as const;
+export type RemoteSyncLanes = Partial<Record<'control' | 'live' | 'history' | 'deletion' | 'recovery', typeof RemoteSyncLaneStatus[keyof typeof RemoteSyncLaneStatus]>>;
 export interface RemoteSyncHealth {
+  lanes?: RemoteSyncLanes;
   admissionDeferred?: boolean;
   /** Counts are lower bounds when the bounded health scan is incomplete. */
   countsTruncated?: boolean;

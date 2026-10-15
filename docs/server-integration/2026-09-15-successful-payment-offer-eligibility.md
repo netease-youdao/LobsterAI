@@ -1,5 +1,7 @@
 # 低余额优惠：成功付款资格口径修正
 
+> 2026-10-14 资格补齐实现（服务端待部署）：下文 SQL 继续定义 Web 侧合格付款；统一结果将 OR 合格 Apple Production 实付历史，使用 hasPaidHistory(userId,false)，保留原 hasEverPaidPersonalOrder boolean。有效 Apple 会员按服务端返回的 eligibleProducts/defaultTab 展示，不在桌面推算。已有 pending 报价保留、redeemed 不恢复、旧首购失效不自动换返购券。见[修复 spec 第 7 节](../../../lobsterai-server/docs/specs/payment/feature-2026-10-14-ios-iap-remediation.md)。服务端修复已实现，尚未部署；2026-10-15 已撤回本轮 Portal 优惠流程扩展，加油包沿用原购买入口；桌面只改接入说明。
+
 日期：2026-09-15。本文补充 [首充与返购适配说明](2026-09-14-low-credit-purchase-guide.md)，覆盖此前“仅按付款时间判断、退款仍计入历史付费”的旧口径。接口字段与前端展示逻辑不新增；本次说明不代表代码已发布或数据库已变更。
 
 ## 变更摘要
@@ -79,3 +81,11 @@ AND payment_orders.tob_enterprise_id IS NULL
 不新增 UPDATE SQL、数据回填或迁移脚本。本功能首次上线仍只需既有 V88/V89 结构准备；本次资格纠正由服务端业务入口执行，不修改在线活动配置，也不要求改写已有订单。当前说明不声称已部署，服务端构建结果另行记录。
 
 实现验收应覆盖：`paid` 且有付款时间、`paid` 但无付款时间、仅 `refunding`／`refunded`／其他非 `paid`、企业订单、同时存在退款订单和另一笔有效 `paid` 订单；以及余额 100／大于 100、旧返购无预约纠正、已有 `pending` 价格及锁不变、`redeemed` 不恢复。前端本轮仅文档同步，不启动浏览器、dev server 或额外前端测试。
+
+## 2026-10-15 兼容与购买入口范围
+
+原 hasEverPaidPersonalOrder 仍为 boolean，其结果按服务端合格 Web OR Apple 实付判断；保留原 status/reason/eligibleProducts/defaultTab/商品折扣及显式 expiresAtEpochMs=null，不新增 reserved 等旧端状态。current 返回首购已失效时，已有有效 pending 订单仍可按快照支付，不能因此自动关单、改价、新建或重开优惠；redeemed 不因退款恢复。
+
+Apple 订阅由 iOS 的 Apple 支付流程触发；Portal 的 Web 订阅和加油包继续使用原有购买入口。本轮保留服务端 R5 资格修复，不新增 Portal 优惠购买流程，也不要求 Portal 配套发布。服务端已提供的优惠原单恢复接口作为可选能力保留。
+
+Electron 保留已有入口和字段消费方式，本轮不调整优惠跳转或加油包购买流程；不据此声称现有优惠目的页已经完成 token 承接验收。详细接口矩阵、发布与验收见[修复 spec 第 2、7、11–12 节](../../../lobsterai-server/docs/specs/payment/feature-2026-10-14-ios-iap-remediation.md)；服务端修复保留，Portal 和桌面本轮仅文档同步。

@@ -5,6 +5,7 @@ import { APP_NAME } from './appConstants';
 import { t } from './i18n';
 
 let tray: Tray | null = null;
+let recoveryAction: (() => void) | undefined;
 let contextMenu: Menu | null = null;
 let clickHandler: (() => void) | null = null;
 let rightClickHandler: (() => void) | null = null;
@@ -95,6 +96,7 @@ function buildContextMenu(getWindow: () => BrowserWindow | null): Menu {
         }
       },
     },
+    ...(recoveryAction ? [{ label: t('quarantineRecoveryTitle'), click: recoveryAction }] : []),
     { type: 'separator' },
     {
       label: labels.quit,
@@ -105,11 +107,12 @@ function buildContextMenu(getWindow: () => BrowserWindow | null): Menu {
   ]);
 }
 
-export function createTray(getWindow: () => BrowserWindow | null): Tray {
+export function createTray(getWindow: () => BrowserWindow | null, onRecovery?: () => void): Tray {
   if (tray) {
     return tray;
   }
 
+  recoveryAction = onRecovery;
   const iconPath = getTrayIconPath();
   let icon = nativeImage.createFromPath(iconPath);
 
@@ -174,6 +177,7 @@ export function destroyTray(): void {
     clickHandler = null;
     rightClickHandler = null;
     trayReminder = { count: 0 };
+    recoveryAction = undefined;
   }
 }
 

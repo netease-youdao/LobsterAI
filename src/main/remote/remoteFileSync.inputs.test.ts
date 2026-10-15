@@ -25,7 +25,7 @@ const disposables: Array<() => void> = [];
 afterEach(() => { for (const dispose of disposables.splice(0).reverse()) dispose(); vi.restoreAllMocks(); });
 const ok = (data: unknown): Response => new Response(JSON.stringify({ code: 0, data }));
 
-function fixture() {
+function fixture(independent = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-input-policy-'));
   disposables.push(() => fs.rmSync(root, { recursive: true, force: true }));
   const cacheRoot = path.join(root, 'cache');
@@ -35,6 +35,7 @@ function fixture() {
   const store = new RemoteStore(db); store.setEnabledOwner(owner); store.setInputProjectionSupported(true); store.setFileProjectionSupported(true);
   store.transaction(() => { db.exec("INSERT INTO cowork_sessions VALUES('s','Task',1,1,'running',NULL,NULL)"); store.assignNew('s', owner, 'local_create'); });
   store.beginRun('s', 'run');
+  if (independent) { store.setTaskProjectionEligibility(() => false); store.setIndependentControlReady(() => true); }
   let actor: RemoteOwner | null = owner, enabled = true, now = 1_000_000;
   vi.spyOn(Date, 'now').mockImplementation(() => now);
   const connection = { owner, environment: 'https://example.invalid', deviceId: 'pc', generation: '1' };
@@ -60,8 +61,13 @@ function fixture() {
     });
     store.put('desktopInputRun:run', input);
     store.transaction(() => db.prepare("INSERT INTO cowork_messages VALUES('m','s','user','',?,1,1)").run(JSON.stringify({ remoteRunId: 'run' })));
-    store.snapshot('s');
-    db.prepare("UPDATE remote_sync SET device_id='pc',ack_seq=source_seq,needs_snapshot=0 WHERE local_id='s'").run();
+    if (independent) {
+      db.prepare("UPDATE remote_sync SET device_id='pc',needs_snapshot=1,source_seq=900,ack_seq=1 WHERE local_id='s'").run();
+      store.markFilesDirty('s');
+    } else {
+      store.snapshot('s');
+      db.prepare("UPDATE remote_sync SET device_id='pc',ack_seq=source_seq,needs_snapshot=0 WHERE local_id='s'").run();
+    }
     return input!.attachments[0].snapshot!;
   };
   const tick = async (): Promise<void> => { sync.tick({ ...connection }); await sync.settled(); };
@@ -228,4 +234,34 @@ describe('desktop input capture and upload admission', () => {
     f.setOwner(owner); f.setEnabled(false); expect(f.sync.canCaptureInput()).toBe(false);
     f.setEnabled(true); f.sync.configure(false); expect(f.sync.canCaptureInput()).toBe(false);
   });
+});
+
+
+it('publishes a sealed desktop attachment through independent control while legacy history remains broken', async () => {
+  const f = fixture(true); const snapshot = await f.capture('md');
+  const original = f.job();
+  expect(original.uploadRequestId).toBeTruthy();
+  f.store.markFilesDirty('s'); expect(f.job().uploadRequestId).toBe(original.uploadRequestId);
+  f.store.db.prepare("INSERT OR REPLACE INTO remote_outbox VALUES('s',900,'{')").run();
+  await f.tick();
+  expect(f.uploads).toHaveLength(1);
+  expect(f.uploads[0]).toMatchObject({ sha256: snapshot.sha256 });
+  expect(f.job()).toMatchObject({ availability: 'ready', uploadedAsset: { assetId: 'asset' } });
+  expect(f.store.sync('s')).toMatchObject({ source_seq: 900, ack_seq: 1, needs_snapshot: 1 });
+});
+
+it('retains the legacy history guard and does not upload under an unconfirmed control baseline', async () => {
+  const f = fixture(true); await f.capture('md');
+  f.store.setIndependentControlReady(() => false);
+  await f.tick(); expect(f.uploads).toEqual([]);
+  f.store.setIndependentControlReady(() => true);
+  f.setOwner({ userId: 'other', scopeKey: owner.scopeKey });
+  await f.tick(); expect(f.uploads).toEqual([]);
+});
+
+it('does not recreate an existing damaged upload identity during independent projection', async () => {
+  const f = fixture(true); await f.capture('md');
+  f.store.db.prepare("UPDATE remote_state SET value='{' WHERE key='desktopAsset:m:0'").run();
+  expect(() => f.store.markFilesDirty('s')).not.toThrow();
+  expect(f.store.db.prepare("SELECT value FROM remote_state WHERE key='desktopAsset:m:0'").get()).toEqual({ value: '{' });
 });

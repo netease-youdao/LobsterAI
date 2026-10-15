@@ -650,6 +650,7 @@ import { RemoteLocalGc } from './remote/remoteLocalGc';
 import { RemoteModelCatalog } from './remote/remoteModelCatalog';
 import { remoteNetworkBinaryDownload } from './remote/remoteNetworkProtocol';
 import { remoteNetworkTransport } from './remote/remoteNetworkTransport';
+import { showQuarantineRecovery, stopOwnedSessionWithRecovery } from './remote/remoteQuarantineRecovery';
 import { RemoteSecurityCoordinator } from './remote/remoteSecurityCoordinator';
 import { RemoteSecurityJournal, RemoteSecurityJournalWorkerIo } from './remote/remoteSecurityJournal';
 import { PREVENT_SLEEP_STORE_KEY, RemoteSettingsController } from './remote/remoteSettingsController';
@@ -669,6 +670,7 @@ import {
 } from './skins';
 import { SqliteStore } from './sqliteStore';
 import { StartupProfiler } from './startupProfiler';
+import { showStartupRecoveryWindow } from './startupRecoveryWindow';
 import { SubagentMessageStore } from './subagentMessageStore';
 import { SubagentRunStore } from './subagentRunStore';
 import { createTray, destroyTray, updateTrayMenu, updateTrayReminder } from './trayManager';
@@ -4589,6 +4591,7 @@ const getNotificationIconPath = (): string | null => {
 
 // 保存对主窗口的引用
 let mainWindow: BrowserWindow | null = null;
+let showStartupRecovery: (() => void) | null = null;
 let dataMigrationRestoreWindow: BrowserWindow | null = null;
 let desktopNotificationManager: DesktopNotificationManager | null = null;
 let ensureMainWindowForReason: ((reason: string) => BrowserWindow | null) | null = null;
@@ -5281,6 +5284,7 @@ if (!gotTheLock) {
   let pendingShowOnFirstFrame = false;
 
   const focusMainWindow = (reason: string) => {
+    if (!isQuitting && showStartupRecovery) { showStartupRecovery(); return; }
     if (isQuitting || !mainWindow || mainWindow.isDestroyed()) return;
     try {
       if (!mainWindow.isVisible() && !hasRenderedFirstFrame) {
@@ -7984,6 +7988,7 @@ if (!gotTheLock) {
     const quota = normalizeAuthQuota(raw, {
       freePlanName: t('authPlanFree'),
       standardPlanName: t('authPlanStandard'),
+      unavailablePlanName: t('authQuotaUnavailable'),
       fallbackSubscriptionStatus: cachedSubscriptionStatus,
     });
     const quotaGateState = authQuotaGateStateFromQuota(quota);
@@ -11054,9 +11059,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(CoworkIpcChannel.StopSession, async (_event, sessionId: string) => {
     try {
-      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
-      const runtime = getCoworkEngineRouter();
-      runtime.stopSession(sessionId);
+      stopOwnedSessionWithRecovery(getCoworkStore().remote, getCoworkEngineRouter(), getCurrentRemoteOwner(), sessionId);
       return { success: true };
     } catch (error) {
       return {
@@ -14901,6 +14904,7 @@ if (!gotTheLock) {
   // 创建主窗口
   const createWindow = () => {
     if (isQuitting) return;
+    if (showStartupRecovery) { showStartupRecovery(); return; }
     // 如果窗口已经存在，就不再创建新窗口
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -15240,7 +15244,13 @@ if (!gotTheLock) {
       const initLang = getStore().get<{ language?: string }>('app_config')?.language;
       setLanguage(initLang === 'en' ? 'en' : 'zh');
       // 窗口就绪后创建系统托盘
-      createTray(() => isQuitting ? null : mainWindow);
+      createTray(() => isQuitting ? null : mainWindow, () => {
+        if (isQuitting) return;
+        void showQuarantineRecovery({ store: getCoworkStore().remote, runtime: getCoworkEngineRouter(),
+          getOwner: getCurrentRemoteOwner, getGeneration: () => `${ownershipAccountEpoch}:${authAccountGeneration}`,
+          showLogs: () => shell.showItemInFolder(getLogFilePath()),
+        }).catch(error => console.warn('[Recovery] Unable to open task recovery', error));
+      });
 
       // Start cron polling after the window is ready.
       (async () => {
@@ -16300,7 +16310,18 @@ if (!gotTheLock) {
   };
 
   // 启动应用
-  initApp().catch(console.error);
+  initApp().catch(error => {
+    console.error('[Main] Desktop startup failed:', error);
+    if (mainWindow && !mainWindow.isDestroyed()) return;
+    showStartupRecovery = () => showStartupRecoveryWindow({
+      restart: () => { app.relaunch(); quitAppWithoutConfirmation('startup-recovery-restart'); },
+      quit: () => quitAppWithoutConfirmation('startup-recovery-quit'),
+      showLogs: () => shell.showItemInFolder(getLogFilePath()),
+    });
+    if (app.isReady()) showStartupRecovery();
+    else dialog.showErrorBox(t('startupRecoveryTitle'), t('startupRecoveryDescription'));
+    app.on('activate', () => { if (!isQuitting) showStartupRecovery?.(); });
+  });
 
   // 当所有窗口关闭时退出应用
   app.on('window-all-closed', () => {
