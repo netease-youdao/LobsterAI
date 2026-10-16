@@ -3210,15 +3210,15 @@ describe('OpenClawConfigSync runtime config output', () => {
     const qwenSelection = buildProviderSelection({
       apiKey: 'sk-test',
       baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-      modelId: 'qwen3.6-plus',
+      modelId: 'qwen3.8-max',
       apiType: 'openai',
       providerName: ProviderName.Qwen,
       codingPlanEnabled: true,
       supportsImage: false,
-      modelName: 'qwen3.6-plus',
+      modelName: 'qwen3.8-max',
     });
     expect(qwenSelection.providerId).toBe(OpenClawProviderId.Qwen);
-    expect(qwenSelection.primaryModel).toBe(`${OpenClawProviderId.Qwen}/qwen3.6-plus`);
+    expect(qwenSelection.primaryModel).toBe(`${OpenClawProviderId.Qwen}/qwen3.8-max`);
     expect(qwenSelection.providerId).not.toBe('qwen-portal');
     expect(qwenSelection.providerId).not.toBe('qwen-oauth');
     expect(qwenSelection.providerConfig.models[0].input).toEqual(['text', 'image']);
@@ -3226,14 +3226,14 @@ describe('OpenClawConfigSync runtime config output', () => {
     const customSelection = buildProviderSelection({
       apiKey: 'sk-test',
       baseURL: 'https://example.com/v1',
-      modelId: 'qwen3.6-plus',
+      modelId: 'qwen3.8-max',
       apiType: 'openai',
       providerName: 'custom_0',
       supportsImage: false,
-      modelName: 'qwen3.6-plus',
+      modelName: 'qwen3.8-max',
     });
     expect(customSelection.providerId).toBe('custom_0');
-    expect(customSelection.primaryModel).toBe('custom_0/qwen3.6-plus');
+    expect(customSelection.primaryModel).toBe('custom_0/qwen3.8-max');
     expect(customSelection.providerConfig.models[0].input).toEqual(['text', 'image']);
   });
 

@@ -311,8 +311,12 @@ const migrateCustomProviders = (config: AppConfig): AppConfig => {
 // Model IDs that have been removed from specific providers.
 // These will be filtered out from saved configs during migration.
 const REMOVED_PROVIDER_MODELS: Record<string, string[]> = {
-  deepseek: ['deepseek-chat'],
-  qwen: ['qwen3-coder-plus'],
+  deepseek: ['deepseek-chat', 'deepseek-v4-flash', 'deepseek-reasoner'],
+  moonshot: ['kimi-k2.5'],
+  qwen: ['qwen3-coder-plus', 'qwen3.6-plus', 'qwen3.5-plus'],
+  zhipu: ['glm-5', 'glm-4.7'],
+  minimax: ['MiniMax-M2.5'],
+  xiaomi: ['mimo-v2.5-pro', 'mimo-v2.5'],
   youdaozhiyun: ['deepseek-chat', 'deepseek-inhouse-chat'],
   qianfan: ['deepseek-v3.2', 'deepseek-r1', 'ernie-4.5-8k', 'ernie-4.5-turbo-8k'],
   openai: ['gpt-5.2-2025-12-11', 'gpt-5.2', 'gpt-5.3-codex', 'gpt-5.2-codex'],
@@ -334,7 +338,7 @@ const ADDED_PROVIDER_MODELS_MIGRATION_VERSION = 1;
 const ADDED_PROVIDER_MODELS: Record<string, { models: ProviderModel[]; position: 'start' | 'end' }> = {
   deepseek: {
     models: [
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, supportsThinking: true },
+      { id: 'deepseek-flash', name: 'DeepSeek V4 Flash', supportsImage: false, supportsThinking: true },
       { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false, supportsThinking: true },
     ],
     position: 'start',
@@ -370,8 +374,8 @@ const ADDED_PROVIDER_MODELS: Record<string, { models: ProviderModel[]; position:
   },
   [ProviderName.Xiaomi]: {
     models: [
-      { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
-      { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.6-flash', name: 'MiMo V2.6 Flash', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
     ],
     position: 'start',
   },
@@ -412,9 +416,53 @@ const RECENT_PROVIDER_MODEL_MIGRATIONS: Record<string, {
   models: ProviderModel[];
   position: 'start' | 'end';
 }> = {
-  [ProviderName.Moonshot]: {
+  [ProviderName.DeepSeek]: {
     version: 2,
     models: [
+      { id: 'deepseek-flash', name: 'DeepSeek V4 Flash', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+    ],
+    position: 'start',
+  },
+  [ProviderName.Qwen]: {
+    version: 2,
+    models: [
+      { id: 'qwen3.8-max', name: 'Qwen3.8 Max', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'qwen3.7-plus', name: 'Qwen3.7 Plus', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'qwen3.8-flash', name: 'Qwen3.8 Flash', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+    ],
+    position: 'start',
+  },
+  [ProviderName.Zhipu]: {
+    version: 2,
+    models: [
+      { id: 'glm-5.3', name: 'GLM 5.3', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'glm-5.3-flashx', name: 'GLM 5.3 FlashX', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'glm-5.2', name: 'GLM 5.2', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+    ],
+    position: 'start',
+  },
+  [ProviderName.Minimax]: {
+    version: 2,
+    models: [
+      { id: 'MiniMax-M2.7-highspeed', name: 'MiniMax M2.7 Highspeed', supportsImage: false, supportsThinking: true, contextWindow: 204_800 },
+    ],
+    position: 'start',
+  },
+  [ProviderName.Xiaomi]: {
+    version: 2,
+    models: [
+      { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.6-flash', name: 'MiMo V2.6 Flash', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+    ],
+    position: 'start',
+  },
+  [ProviderName.Moonshot]: {
+    version: 3,
+    models: [
+      { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 262_144 },
+      { id: 'kimi-k2.7-code-highspeed', name: 'Kimi K2.7 Code Highspeed', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 262_144 },
       {
         id: 'kimi-k3',
         name: 'Kimi K3',
@@ -480,8 +528,8 @@ const PROVIDER_MODEL_CONTEXT_WINDOW_OVERRIDES: Record<string, Record<string, num
     'MiniMax-M3': 1_000_000,
   },
   [ProviderName.Xiaomi]: {
-    'mimo-v2.5-pro': 1_000_000,
-    'mimo-v2.5': 1_000_000,
+    'mimo-v2.6-pro': 1_000_000,
+    'mimo-v2.6-flash': 1_000_000,
   },
 };
 

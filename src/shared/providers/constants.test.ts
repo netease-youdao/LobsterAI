@@ -54,11 +54,11 @@ describe('ProviderRegistry', () => {
     });
   });
 
-  test('xiaomi default models are limited to MiMo V2.5 models with 1M context', () => {
+  test('xiaomi default models are limited to MiMo V2.6 models with 1M context', () => {
     const xiaomi = ProviderRegistry.get(ProviderName.Xiaomi);
     expect(xiaomi?.defaultModels).toEqual([
-      { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
-      { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.6-flash', name: 'MiMo V2.6 Flash', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
     ]);
   });
 
@@ -74,7 +74,7 @@ describe('ProviderRegistry', () => {
   test('deepseek v4 default models use 1M context', () => {
     const deepseek = ProviderRegistry.get(ProviderName.DeepSeek);
     expect(deepseek?.defaultModels.slice(0, 2)).toEqual([
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'deepseek-flash', name: 'DeepSeek V4 Flash', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
       { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
     ]);
   });
@@ -104,12 +104,12 @@ describe('ProviderRegistry', () => {
   });
 
   test('resolveModelSupportsImage repairs known provider model metadata', () => {
-    expect(ProviderRegistry.resolveModelSupportsImage(ProviderName.Qwen, 'qwen3.6-plus', false)).toBe(true);
+    expect(ProviderRegistry.resolveModelSupportsImage(ProviderName.Qwen, 'qwen3.8-max', false)).toBe(true);
     expect(ProviderRegistry.resolveModelSupportsImage(ProviderName.Zhipu, 'glm-5.1', true)).toBe(false);
   });
 
   test('resolveModelSupportsImage upgrades custom providers for globally known vision models', () => {
-    expect(ProviderRegistry.resolveModelSupportsImage('custom_0', 'qwen3.6-plus', false)).toBe(true);
+    expect(ProviderRegistry.resolveModelSupportsImage('custom_0', 'qwen3.8-max', false)).toBe(true);
     expect(ProviderRegistry.resolveModelSupportsImage('custom_0', 'unknown-model', false)).toBe(false);
     expect(ProviderRegistry.resolveModelSupportsImage('custom_0', 'unknown-model', true)).toBe(true);
   });
@@ -128,16 +128,22 @@ describe('ProviderRegistry', () => {
   test('resolveModelSupportsThinking preserves known reasoning model metadata', () => {
     const knownReasoningModels: Array<[string, string]> = [
       [ProviderName.DeepSeek, 'deepseek-v4-pro'],
-      [ProviderName.DeepSeek, 'deepseek-v4-flash'],
-      [ProviderName.DeepSeek, 'deepseek-reasoner'],
+      [ProviderName.DeepSeek, 'deepseek-flash'],
       [ProviderName.Moonshot, 'kimi-k2.6'],
-      [ProviderName.Moonshot, 'kimi-k2.5'],
+      [ProviderName.Moonshot, 'kimi-k2.7-code'],
+      [ProviderName.Moonshot, 'kimi-k2.7-code-highspeed'],
       [ProviderName.Moonshot, 'kimi-k3'],
       [ProviderName.Moonshot, 'kimi-for-coding'],
+      [ProviderName.Qwen, 'qwen3.8-max'],
+      [ProviderName.Qwen, 'qwen3.8-flash'],
+      [ProviderName.Zhipu, 'glm-5.3'],
+      [ProviderName.Zhipu, 'glm-5.3-flash'],
+      [ProviderName.Zhipu, 'glm-5.3-flashx'],
+      [ProviderName.Zhipu, 'glm-5.2'],
       [ProviderName.Zhipu, 'glm-5.1'],
-      [ProviderName.Zhipu, 'glm-5'],
-      [ProviderName.Zhipu, 'glm-4.7'],
       [ProviderName.Minimax, 'MiniMax-M3'],
+      [ProviderName.Minimax, 'MiniMax-M2.7'],
+      [ProviderName.Minimax, 'MiniMax-M2.7-highspeed'],
       [ProviderName.Volcengine, 'doubao-seed-2-0-pro-260215'],
       [ProviderName.Volcengine, 'ark-code-latest'],
       [ProviderName.Volcengine, 'doubao-seed-2-0-lite-260215'],
@@ -145,8 +151,8 @@ describe('ProviderRegistry', () => {
       [ProviderName.Youdaozhiyun, 'deepseek-reasoner'],
       [ProviderName.Qianfan, 'glm-5.1'],
       [ProviderName.Qianfan, 'deepseek-v4-flash'],
-      [ProviderName.Xiaomi, 'mimo-v2.5-pro'],
-      [ProviderName.Xiaomi, 'mimo-v2.5'],
+      [ProviderName.Xiaomi, 'mimo-v2.6-pro'],
+      [ProviderName.Xiaomi, 'mimo-v2.6-flash'],
       [ProviderName.OpenAI, 'gpt-5.4'],
       [ProviderName.OpenAI, 'gpt-5.5'],
       [ProviderName.OpenAI, 'gpt-5.6-sol'],
@@ -163,7 +169,7 @@ describe('ProviderRegistry', () => {
 
     expect(ProviderRegistry.resolveModelSupportsThinking(ProviderName.Qwen, 'qwen3.6-plus', false)).toBe(false);
     expect(ProviderRegistry.resolveModelSupportsThinking(ProviderName.Qwen, 'qwen3.5-plus', false)).toBe(false);
-    expect(ProviderRegistry.resolveModelSupportsThinking(ProviderName.Minimax, 'MiniMax-M2.7', false)).toBe(false);
+    expect(ProviderRegistry.resolveModelSupportsThinking(ProviderName.Minimax, 'MiniMax-M2.7', false)).toBe(true);
     expect(ProviderRegistry.resolveModelSupportsThinking(ProviderName.Minimax, 'MiniMax-M2.5', false)).toBe(false);
     expect(ProviderRegistry.resolveModelSupportsThinking('custom_0', 'glm-5.1', false)).toBe(false);
     expect(ProviderRegistry.resolveModelSupportsThinking('lobsterai-server', 'glm-5.1-YoudaoInner', false)).toBe(false);

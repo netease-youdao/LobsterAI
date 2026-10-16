@@ -180,9 +180,9 @@ export const defaultConfig: AppConfig = {
   },
   model: {
     availableModels: [
-      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
+      { id: 'deepseek-flash', name: 'DeepSeek V4 Flash', supportsImage: true },
     ],
-    defaultModel: 'deepseek-reasoner',
+    defaultModel: 'deepseek-flash',
     defaultModelProvider: 'deepseek',
   },
   providers: buildDefaultProviders(),

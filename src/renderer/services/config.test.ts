@@ -27,7 +27,7 @@ const makeLegacyConfigWithDeepSeekV4WithoutContextWindow = (): AppConfig => ({
       enabled: true,
       apiKey: 'sk-deepseek',
       models: [
-        { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false },
+        { id: 'deepseek-flash', name: 'DeepSeek V4 Flash', supportsImage: false },
         { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false },
       ],
     },
@@ -67,7 +67,7 @@ const makeConfigWithCustomContextWindows = (): AppConfig => ({
       enabled: true,
       apiKey: 'sk-deepseek',
       models: [
-        { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, contextWindow: 256_000 },
+        { id: 'deepseek-flash', name: 'DeepSeek V4 Flash', supportsImage: false, contextWindow: 256_000 },
         { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false, contextWindow: 384_000 },
       ],
     },
@@ -432,19 +432,19 @@ describe('configService provider migrations', () => {
     await configService.updateConfig({
       model: {
         ...legacyConfig.model,
-        defaultModel: 'deepseek-v4-flash',
+        defaultModel: 'deepseek-flash',
         defaultModelProvider: ProviderName.DeepSeek,
       },
     });
 
     const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
     expect(savedConfig.providers?.[ProviderName.DeepSeek].models).toEqual([
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'deepseek-flash', name: 'DeepSeek V4 Flash', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
       { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
     ]);
   });
 
-  test('preserves old MiMo models while injecting V2.5 models and 1M contexts', async () => {
+  test('preserves old MiMo models while injecting V2.6 models and 1M contexts', async () => {
     const legacyConfig = {
       ...makeLegacyConfigWithOldMimoModels(),
       model: {
@@ -459,8 +459,8 @@ describe('configService provider migrations', () => {
 
     const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
     expect(savedConfig.providers?.[ProviderName.Xiaomi].models).toEqual([
-      { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
-      { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.6-flash', name: 'MiMo V2.6 Flash', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
       { id: 'mimo-v2-pro', name: 'MiMo V2 Pro', supportsImage: false, contextWindow: 128_000 },
       { id: 'mimo-v2-flash', name: 'MiMo V2 Flash', supportsImage: false, contextWindow: 64_000 },
     ]);
@@ -478,10 +478,12 @@ describe('configService provider migrations', () => {
     const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
     expect(savedConfig.providers?.[ProviderName.Minimax].models?.find(model => model.id === 'MiniMax-M3')?.contextWindow).toBe(512_000);
     expect(savedConfig.providers?.[ProviderName.Minimax].models?.find(model => model.id === 'MiniMax-M3')?.supportsThinking).toBe(true);
-    expect(savedConfig.providers?.[ProviderName.DeepSeek].models?.find(model => model.id === 'deepseek-v4-flash')?.contextWindow).toBe(256_000);
+    expect(savedConfig.providers?.[ProviderName.DeepSeek].models?.find(model => model.id === 'deepseek-flash')?.contextWindow).toBe(256_000);
     expect(savedConfig.providers?.[ProviderName.DeepSeek].models?.find(model => model.id === 'deepseek-v4-pro')?.contextWindow).toBe(384_000);
-    expect(savedConfig.providers?.[ProviderName.Xiaomi].models?.find(model => model.id === 'mimo-v2.5-pro')?.contextWindow).toBe(640_000);
-    expect(savedConfig.providers?.[ProviderName.Xiaomi].models?.find(model => model.id === 'mimo-v2.5')?.contextWindow).toBe(768_000);
+    expect(savedConfig.providers?.[ProviderName.Xiaomi].models?.find(model => model.id === 'mimo-v2.6-pro')?.contextWindow).toBe(1_000_000);
+    expect(savedConfig.providers?.[ProviderName.Xiaomi].models?.find(model => model.id === 'mimo-v2.6-flash')?.contextWindow).toBe(1_000_000);
+    expect(savedConfig.providers?.[ProviderName.Xiaomi].models?.find(model => model.id === 'mimo-v2.5-pro')).toBeUndefined();
+    expect(savedConfig.providers?.[ProviderName.Xiaomi].models?.find(model => model.id === 'mimo-v2.5')).toBeUndefined();
     expect(savedConfig.providers?.[ProviderName.Volcengine].models?.find(model => model.id === 'ark-code-latest')?.supportsThinking).toBe(true);
   });
 
@@ -526,7 +528,7 @@ describe('configService provider migrations', () => {
     });
   });
 
-  test('applies the Moonshot v2 Kimi K3 migration once', async () => {
+  test('applies the Moonshot v3 Kimi migration once', async () => {
     const storedConfig: AppConfig = {
       ...defaultConfig,
       providerModelMigrationVersions: {
@@ -558,7 +560,15 @@ describe('configService provider migrations', () => {
       contextWindow: 1_048_576,
       maxTokens: 1_048_576,
     });
-    expect(savedConfig.providerModelMigrationVersions?.[ProviderName.Moonshot]).toBe(2);
+    expect(
+      savedConfig.providers?.[ProviderName.Moonshot].models?.map(model => model.id),
+    ).toEqual([
+      'kimi-k3',
+      'kimi-k2.7-code',
+      'kimi-k2.7-code-highspeed',
+      'kimi-k2.6',
+    ]);
+    expect(savedConfig.providerModelMigrationVersions?.[ProviderName.Moonshot]).toBe(3);
   });
 
   test('keeps an equivalent user Kimi K3 model without adding a duplicate', async () => {
@@ -605,7 +615,7 @@ describe('configService provider migrations', () => {
         customParams: { service_tier: 'priority' },
       },
     ]);
-    expect(savedConfig.providerModelMigrationVersions?.[ProviderName.Moonshot]).toBe(2);
+    expect(savedConfig.providerModelMigrationVersions?.[ProviderName.Moonshot]).toBe(3);
   });
 
   test('repairs stale official Kimi K3 capability values after migration', async () => {
@@ -639,7 +649,7 @@ describe('configService provider migrations', () => {
     await configService.init();
 
     const model = (storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig)
-      .providers?.[ProviderName.Moonshot].models?.[0];
+      .providers?.[ProviderName.Moonshot].models?.find(candidate => candidate.id === 'kimi-k3');
     expect(model).toMatchObject({
       id: 'kimi-k3',
       supportsImage: true,

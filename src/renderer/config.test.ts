@@ -85,7 +85,7 @@ test('defaultConfig enables usage analytics by default', () => {
 
 test('defaultConfig gives DeepSeek V4 models 1M context', () => {
   expect(defaultConfig.providers?.[ProviderName.DeepSeek]?.models?.slice(0, 2)).toEqual([
-    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+    { id: 'deepseek-flash', name: 'DeepSeek V4 Flash', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
     { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
   ]);
 });
@@ -102,10 +102,10 @@ test('defaultConfig puts Kimi K3 first for Moonshot', () => {
   });
 });
 
-test('defaultConfig limits Xiaomi models to V2.5 with 1M context', () => {
+test('defaultConfig limits Xiaomi models to V2.6 with 1M context', () => {
   expect(defaultConfig.providers?.[ProviderName.Xiaomi]?.models).toEqual([
-    { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
-    { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+    { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+    { id: 'mimo-v2.6-flash', name: 'MiMo V2.6 Flash', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
   ]);
 });
 

@@ -218,9 +218,8 @@ const PROVIDER_DEFINITIONS = [
     region: 'china',
     enPriority: 0,
     defaultModels: [
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, supportsThinking: true, contextWindow: DEEPSEEK_V4_CONTEXT_WINDOW },
+      { id: 'deepseek-flash', name: 'DeepSeek V4 Flash', supportsImage: true, supportsThinking: true, contextWindow: DEEPSEEK_V4_CONTEXT_WINDOW },
       { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false, supportsThinking: true, contextWindow: DEEPSEEK_V4_CONTEXT_WINDOW },
-      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false, supportsThinking: true },
     ],
   },
   {
@@ -248,10 +247,11 @@ const PROVIDER_DEFINITIONS = [
     enPriority: 0,
     defaultModels: [
       { id: 'kimi-k3', name: 'Kimi K3', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 1_048_576, maxTokens: 1_048_576 },
-      { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsImage: true, supportsThinking: true, contextWindow: 262_144 },
-      { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true, supportsThinking: true, contextWindow: 262_144 },
+      { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 262_144 },
+      { id: 'kimi-k2.7-code-highspeed', name: 'Kimi K2.7 Code Highspeed', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 262_144 },
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 262_144 },
     ],
-    codingPlanModels: [{ id: 'kimi-for-coding', name: 'Kimi K2.5', supportsImage: true, supportsThinking: true, contextWindow: 256_000 }],
+    codingPlanModels: [{ id: 'kimi-for-coding', name: 'Kimi for Coding', supportsImage: true, supportsThinking: true, contextWindow: 256_000 }],
   },
   {
     id: ProviderName.Qwen,
@@ -274,8 +274,9 @@ const PROVIDER_DEFINITIONS = [
     region: 'china',
     enPriority: 0,
     defaultModels: [
-      { id: 'qwen3.6-plus', name: 'Qwen3.6 Plus', supportsImage: true, contextWindow: 1_000_000 },
-      { id: 'qwen3.5-plus', name: 'Qwen3.5 Plus', supportsImage: true, contextWindow: 1_000_000 },
+      { id: 'qwen3.8-max', name: 'Qwen3.8 Max', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'qwen3.7-plus', name: 'Qwen3.7 Plus', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'qwen3.8-flash', name: 'Qwen3.8 Flash', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
     ],
   },
   {
@@ -299,9 +300,11 @@ const PROVIDER_DEFINITIONS = [
     region: 'china',
     enPriority: 0,
     defaultModels: [
-      { id: 'glm-5.1', name: 'GLM 5.1', supportsImage: false, supportsThinking: true, contextWindow: 202_800 },
-      { id: 'glm-5', name: 'GLM 5', supportsImage: false, supportsThinking: true, contextWindow: 202_800 },
-      { id: 'glm-4.7', name: 'GLM 4.7', supportsImage: false, supportsThinking: true, contextWindow: 204_800 },
+      { id: 'glm-5.3', name: 'GLM 5.3', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'glm-5.3-flashx', name: 'GLM 5.3 FlashX', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'glm-5.2', name: 'GLM 5.2', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'glm-5.1', name: 'GLM 5.1', supportsImage: false, supportsThinking: true, contextWindow: 200_000 },
     ],
   },
   {
@@ -321,8 +324,8 @@ const PROVIDER_DEFINITIONS = [
     enPriority: 0,
     defaultModels: [
       { id: 'MiniMax-M3', name: 'MiniMax M3', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
-      { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false, contextWindow: 204_800 },
-      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', supportsImage: false, contextWindow: 204_800 },
+      { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false, supportsThinking: true, contextWindow: 204_800 },
+      { id: 'MiniMax-M2.7-highspeed', name: 'MiniMax M2.7 Highspeed', supportsImage: false, supportsThinking: true, contextWindow: 204_800 },
     ],
   },
   {
@@ -427,8 +430,8 @@ const PROVIDER_DEFINITIONS = [
     region: 'china',
     enPriority: 0,
     defaultModels: [
-      { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
-      { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.6-flash', name: 'MiMo V2.6 Flash', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
     ],
   },
   {
