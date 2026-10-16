@@ -1,3 +1,5 @@
+import type { McpAuthMode } from '../../shared/mcp/auth';
+
 // MCP Server type definitions
 export type McpTransportType = 'stdio' | 'sse' | 'http';
 
@@ -25,6 +27,7 @@ export interface McpServerConfig {
   env?: Record<string, string>;  // stdio
   url?: string;                  // sse / http
   headers?: Record<string, string>; // sse / http
+  auth?: McpAuthMode;            // sse / http: 'oauth' = sign in via MCP OAuth (OpenClaw stores the token)
   toolFilter?: McpToolFilter;    // expose only / hide selected tools
   supportsParallelToolCalls?: boolean; // allow parallel execution of this server's tools
   isBuiltIn: boolean;            // installed from built-in registry
@@ -64,6 +67,7 @@ export interface McpServerFormData {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  auth?: McpAuthMode;
   toolFilter?: McpToolFilter;
   supportsParallelToolCalls?: boolean;
   isBuiltIn?: boolean;

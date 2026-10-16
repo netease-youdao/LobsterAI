@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import crypto from 'crypto';
 
+import { type McpAuthMode, normalizeMcpAuthMode } from '../../shared/mcp/auth';
 import type { McpLaunchResolution } from './mcpLaunchResolution';
 
 // Per-server MCP tool selection, passed through to OpenClaw's mcp.servers.*.toolFilter.
@@ -37,6 +38,8 @@ export interface McpServerRecord {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  /** Remote servers only. `oauth` = MCP OAuth handled by OpenClaw (`openclaw mcp login`). */
+  auth?: McpAuthMode;
   toolFilter?: McpToolFilter;
   supportsParallelToolCalls?: boolean;
   isBuiltIn: boolean;
@@ -56,6 +59,7 @@ export interface McpServerFormData {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  auth?: McpAuthMode;
   toolFilter?: McpToolFilter;
   supportsParallelToolCalls?: boolean;
   isBuiltIn?: boolean;
@@ -80,6 +84,7 @@ interface McpConfigJson {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  auth?: McpAuthMode;
   toolFilter?: McpToolFilter;
   supportsParallelToolCalls?: boolean;
   isBuiltIn?: boolean;
@@ -226,6 +231,7 @@ export class McpStore {
       env: config.env,
       url: config.url,
       headers: config.headers,
+      auth: normalizeMcpAuthMode(config.auth),
       toolFilter: normalizeMcpToolFilter(config.toolFilter),
       supportsParallelToolCalls:
         typeof config.supportsParallelToolCalls === 'boolean' ? config.supportsParallelToolCalls : undefined,
@@ -245,6 +251,8 @@ export class McpStore {
     if (data.env !== undefined && Object.keys(data.env).length > 0) config.env = data.env;
     if (data.url !== undefined) config.url = data.url;
     if (data.headers !== undefined && Object.keys(data.headers).length > 0) config.headers = data.headers;
+    const auth = normalizeMcpAuthMode(data.auth);
+    if (auth) config.auth = auth;
     const toolFilter = normalizeMcpToolFilter(data.toolFilter);
     if (toolFilter) config.toolFilter = toolFilter;
     if (typeof data.supportsParallelToolCalls === 'boolean') {
@@ -262,6 +270,7 @@ export class McpStore {
         ...data,
         url: undefined,
         headers: undefined,
+        auth: undefined,
       };
     }
 
@@ -322,6 +331,7 @@ export class McpStore {
       env: data.env !== undefined ? data.env : existing.env,
       url: data.url !== undefined ? data.url : existing.url,
       headers: data.headers !== undefined ? data.headers : existing.headers,
+      auth: data.auth !== undefined ? data.auth : existing.auth,
       toolFilter: data.toolFilter !== undefined ? data.toolFilter : existing.toolFilter,
       supportsParallelToolCalls:
         data.supportsParallelToolCalls !== undefined

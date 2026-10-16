@@ -1,8 +1,9 @@
 import { XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
-import { CheckIcon } from '@heroicons/react/24/outline';
+import { ArrowRightStartOnRectangleIcon, CheckIcon } from '@heroicons/react/24/outline';
 import React, { useCallback,useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { McpAuthMode, McpOAuthErrorCode, McpOAuthState } from '../../../shared/mcp/auth';
 import { mcpCategories,mcpRegistry } from '../../data/mcpRegistry';
 import { i18nService } from '../../services/i18n';
 import { mcpService } from '../../services/mcp';
@@ -55,6 +56,17 @@ const LAUNCH_STATUS_COLORS: Record<string, string> = {
 const isQichachaRegistryEntry = (entry: McpRegistryEntry): boolean =>
   entry.oauthProvider === 'qichacha';
 
+const isOAuthRemoteServer = (server: McpServerConfig): boolean =>
+  server.transportType !== 'stdio' && server.auth === McpAuthMode.OAuth;
+
+const OAUTH_ERROR_MESSAGE_KEYS: Partial<Record<McpOAuthErrorCode, string>> = {
+  [McpOAuthErrorCode.AlreadyInProgress]: 'mcpOAuthSignInInProgress',
+  [McpOAuthErrorCode.CallbackUnavailable]: 'mcpOAuthCallbackUnavailable',
+  [McpOAuthErrorCode.Timeout]: 'mcpOAuthSignInTimeout',
+  [McpOAuthErrorCode.RuntimeUnavailable]: 'mcpOAuthRuntimeUnavailable',
+  [McpOAuthErrorCode.ServerNotLoaded]: 'mcpOAuthServerNotLoaded',
+};
+
 type RegistryGroupItem = Extract<McpInstalledItem, { kind: 'registryGroup' }>;
 
 type DeleteTarget =
@@ -106,6 +118,8 @@ const McpManager: React.FC = () => {
   const [editingServer, setEditingServer] = useState<McpServerConfig | null>(null);
   const [installingRegistry, setInstallingRegistry] = useState<McpRegistryEntry | null>(null);
   const [connectingRegistryId, setConnectingRegistryId] = useState<string | null>(null);
+  const [oauthStates, setOAuthStates] = useState<Record<string, McpOAuthState>>({});
+  const [signingInServerId, setSigningInServerId] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState('all');
   const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
   // First frame renders the cached copy of the last fetch, so entries and
@@ -153,6 +167,33 @@ const McpManager: React.FC = () => {
     fetchMarketplace();
     return () => { isActive = false; };
   }, []);
+
+  // Re-read OAuth state whenever the set of OAuth servers (or their identity) changes.
+  // `mcp status` spawns the OpenClaw CLI, so skip it when no server uses OAuth.
+  const oauthServerSignature = useMemo(
+    () => servers
+      .filter(isOAuthRemoteServer)
+      .map(server => `${server.id}:${server.name}:${server.url ?? ''}:${server.enabled}`)
+      .join('|'),
+    [servers],
+  );
+
+  const refreshOAuthStates = useCallback(async () => {
+    const states = await mcpService.oauthStatus();
+    setOAuthStates(states);
+  }, []);
+
+  useEffect(() => {
+    if (!oauthServerSignature) {
+      setOAuthStates({});
+      return;
+    }
+    let isActive = true;
+    mcpService.oauthStatus().then(states => {
+      if (isActive) setOAuthStates(states);
+    });
+    return () => { isActive = false; };
+  }, [oauthServerSignature]);
 
   const installedRegistryIds = useMemo(() => {
     const ids = new Set<string>();
@@ -582,6 +623,14 @@ const McpManager: React.FC = () => {
       icon: <EditIcon className="h-3.5 w-3.5" />,
       onSelect: () => handleOpenEditForm(server),
     },
+    ...(isOAuthRemoteServer(server) && oauthStates[server.id] === McpOAuthState.Authorized
+      ? [{
+        key: 'oauth-sign-out',
+        label: i18nService.t('mcpOAuthSignOut'),
+        icon: <ArrowRightStartOnRectangleIcon className="h-3.5 w-3.5" />,
+        onSelect: () => { void handleOAuthSignOut(server); },
+      }]
+      : []),
     {
       key: 'delete',
       label: i18nService.t('delete'),
@@ -590,6 +639,37 @@ const McpManager: React.FC = () => {
       onSelect: () => handleRequestDelete(server),
     },
   ];
+
+  /**
+   * OpenClaw runs the OAuth flow (browser + loopback callback) and stores the
+   * token; the gateway picks it up on the next request without a restart.
+   */
+  const handleOAuthSignIn = async (server: McpServerConfig) => {
+    if (signingInServerId) return;
+    setActionError('');
+    setSigningInServerId(server.id);
+    try {
+      const result = await mcpService.oauthLogin(server.id);
+      if (!result.success) {
+        const messageKey = OAUTH_ERROR_MESSAGE_KEYS[result.code];
+        setActionError(messageKey
+          ? i18nService.t(messageKey)
+          : `${i18nService.t('mcpOAuthSignInFailed')}${result.error ? `: ${result.error}` : ''}`);
+      }
+    } finally {
+      setSigningInServerId(null);
+      await refreshOAuthStates();
+    }
+  };
+
+  const handleOAuthSignOut = async (server: McpServerConfig) => {
+    setActionError('');
+    const result = await mcpService.oauthLogout(server.id);
+    if (!result.success) {
+      setActionError(`${i18nService.t('mcpOAuthSignOutFailed')}${result.error ? `: ${result.error}` : ''}`);
+    }
+    await refreshOAuthStates();
+  };
 
   const handleInstallFromRegistry = (entry: McpRegistryEntry) => {
     reportMcpAction('marketplace_install_open', {
@@ -812,6 +892,37 @@ const McpManager: React.FC = () => {
 
   const closeDetail = () => setDetailTarget(null);
 
+  /** Sign-in state and the sign-in pill for remote servers using MCP OAuth. */
+  const renderOAuthMeta = (server: McpServerConfig) => {
+    if (!isOAuthRemoteServer(server)) return null;
+    const state = oauthStates[server.id];
+    const isSigningIn = signingInServerId === server.id;
+    const isAuthorized = state === McpOAuthState.Authorized;
+    return (
+      <>
+        {state && (
+          <span
+            className={`shrink-0 rounded px-1.5 py-0.5 font-medium ${isAuthorized
+              ? 'bg-green-500/10 text-green-600 dark:text-green-400'
+              : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'}`}
+          >
+            {i18nService.t(isAuthorized ? 'mcpOAuthSignedIn' : 'mcpOAuthSignInRequired')}
+          </span>
+        )}
+        {server.enabled && (isSigningIn || (state && !isAuthorized)) && (
+          <button
+            type="button"
+            disabled={isSigningIn || signingInServerId !== null}
+            onClick={(event) => { event.stopPropagation(); void handleOAuthSignIn(server); }}
+            className="shrink-0 rounded bg-surface-raised px-1.5 py-0.5 font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {i18nService.t(isSigningIn ? 'mcpOAuthSigningIn' : 'mcpOAuthSignIn')}
+          </button>
+        )}
+      </>
+    );
+  };
+
   /**
    * One installed/custom server card. Both tabs show the same object, so they
    * share a renderer instead of drifting apart.
@@ -869,6 +980,7 @@ const McpManager: React.FC = () => {
                 {i18nService.t('mcpLaunchRetry')}
               </button>
             )}
+            {renderOAuthMeta(server)}
             {server.transportType === 'stdio' && server.command && (
               <>
                 <span className="shrink-0 text-secondary/50">·</span>

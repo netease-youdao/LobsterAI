@@ -91,6 +91,25 @@ describe('McpStore', () => {
     expect(cleared?.toolFilter).toBeUndefined();
   });
 
+  test('roundtrips the OAuth auth mode and clears it on demand or when switching to stdio', () => {
+    const server = store.createServer({
+      name: 'oauth-server',
+      description: '',
+      transportType: 'http',
+      url: 'https://mcp.example.com/mcp',
+      auth: 'oauth',
+    });
+    expect(server.auth).toBe('oauth');
+
+    // Unrelated updates keep the mode; an explicit `none` turns it off.
+    expect(store.updateServer(server.id, { description: 'renamed' })?.auth).toBe('oauth');
+    expect(store.updateServer(server.id, { auth: 'none' })?.auth).toBeUndefined();
+
+    store.updateServer(server.id, { auth: 'oauth' });
+    const stdio = store.updateServer(server.id, { transportType: 'stdio', command: 'npx', args: ['-y', 'x'] });
+    expect(stdio?.auth).toBeUndefined();
+  });
+
   test('drops stale remote fields when switching to stdio', () => {
     const server = store.createServer({
       name: 'switchable',
