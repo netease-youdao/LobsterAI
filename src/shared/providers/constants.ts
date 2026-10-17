@@ -97,6 +97,16 @@ export const ApiFormat = {
 } as const;
 export type ApiFormat = typeof ApiFormat[keyof typeof ApiFormat];
 
+// ─── OpenAI API Mode (endpoint family under ApiFormat.OpenAI) ───────────
+// Kept separate from ApiFormat so older builds that only know
+// 'anthropic' | 'openai' fall back to Chat Completions instead of
+// misreading an unknown format.
+export const OpenAIApiMode = {
+  ChatCompletions: 'chat-completions',
+  Responses: 'responses',
+} as const;
+export type OpenAIApiMode = typeof OpenAIApiMode[keyof typeof OpenAIApiMode];
+
 // ─── Auth Type ──────────────────────────────────────────────────────────
 export const AuthType = {
   ApiKey: 'api-key',

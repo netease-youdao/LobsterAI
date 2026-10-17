@@ -11,7 +11,13 @@ import { CoworkModelProtocol } from '../libs/coworkModelApi';
 import { getCoworkOpenAICompatProxyToken } from '../libs/coworkOpenAICompatProxy';
 import { buildQuickAnswerHttpRequest, CompanionQuickAnswerService, resolveQuickAnswerModel } from './quickAnswerService';
 
-vi.mock('../libs/claudeSettings', () => ({ resolveCurrentApiConfig: vi.fn(), resolveRawApiConfig: vi.fn() }));
+vi.mock('../libs/claudeSettings', () => ({
+  resolveCurrentApiConfig: vi.fn(),
+  resolveRawApiConfig: vi.fn(),
+  usesGeminiNativeApi: (resolution: { providerMetadata?: { providerName?: string; geminiNative?: boolean } }) => (
+    resolution.providerMetadata?.providerName === 'gemini' || resolution.providerMetadata?.geminiNative === true
+  ),
+}));
 vi.mock('../libs/coworkOpenAICompatProxy', () => ({ getCoworkOpenAICompatProxyToken: vi.fn() }));
 vi.mock('../i18n', () => ({ t: (key: string) => key, getLanguage: () => 'zh' }));
 

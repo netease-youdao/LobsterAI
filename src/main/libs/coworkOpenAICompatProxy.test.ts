@@ -2,7 +2,7 @@ import type http from 'http';
 import { describe, expect, test, vi } from 'vitest';
 
 import { AuthRefreshOutcome } from '../../shared/auth/constants';
-import { ProviderName } from '../../shared/providers';
+import { OpenAIApiMode, ProviderName } from '../../shared/providers';
 
 vi.mock('electron', () => ({
   session: { defaultSession: { webRequest: { onBeforeSendHeaders: vi.fn() } } },
@@ -135,6 +135,14 @@ function runResponsesSequence(sequence: Array<{ event: string; payload: unknown 
 }
 
 // ==================== Upstream error extraction tests ====================
+
+test('upstream API type follows the provider Responses mode', () => {
+  const { resolveUpstreamAPIType } = __openAICompatProxyTestUtils;
+  expect(resolveUpstreamAPIType(ProviderName.OpenAI)).toBe('responses');
+  expect(resolveUpstreamAPIType('custom_0')).toBe('chat_completions');
+  expect(resolveUpstreamAPIType('custom_0', OpenAIApiMode.ChatCompletions)).toBe('chat_completions');
+  expect(resolveUpstreamAPIType('custom_0', OpenAIApiMode.Responses)).toBe('responses');
+});
 
 test('extractErrorMessage keeps nested upstream error message', () => {
   expect(testUtils.extractErrorMessage(

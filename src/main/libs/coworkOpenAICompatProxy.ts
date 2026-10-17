@@ -6,7 +6,7 @@ import {
   AuthRefreshOutcome,
   type AuthTokenRefreshResult,
 } from '../../shared/auth/constants';
-import { ProviderName } from '../../shared/providers';
+import { OpenAIApiMode, ProviderName } from '../../shared/providers';
 import {
   anthropicToOpenAI,
   buildOpenAIChatCompletionsURL,
@@ -22,6 +22,7 @@ export type OpenAICompatUpstreamConfig = {
   apiKey?: string;
   model: string;
   provider?: string;
+  openaiApiMode?: OpenAIApiMode;
 };
 
 export type OpenAICompatProxyTarget = 'local' | 'sandbox';
@@ -533,7 +534,10 @@ function estimateAnthropicCountTokensRequestInputTokens(requestBody: unknown): n
   return Math.max(1, estimated);
 }
 
-function resolveUpstreamAPIType(provider?: string): UpstreamAPIType {
+function resolveUpstreamAPIType(provider?: string, openaiApiMode?: OpenAIApiMode): UpstreamAPIType {
+  if (openaiApiMode === OpenAIApiMode.Responses) {
+    return 'responses';
+  }
   return provider?.toLowerCase() === 'openai' ? 'responses' : 'chat_completions';
 }
 
@@ -2639,7 +2643,7 @@ async function handleRequest(
     return;
   }
 
-  const upstreamAPIType = resolveUpstreamAPIType(upstreamConfig.provider);
+  const upstreamAPIType = resolveUpstreamAPIType(upstreamConfig.provider, upstreamConfig.openaiApiMode);
   const openAIRequest = anthropicToOpenAI(parsedRequestBody);
 
   // Inject session_id and user_message for lobsterai-server logging only.
@@ -2941,6 +2945,7 @@ export const __openAICompatProxyTestUtils = {
   filterOpenAIToolsForProvider,
   isTemporaryLobsterAIAuthRefreshFailure,
   isGeminiProvider,
+  resolveUpstreamAPIType,
   shouldRefreshProxyToken,
 };
 

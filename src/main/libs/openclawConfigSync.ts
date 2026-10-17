@@ -37,13 +37,17 @@ import {
   AuthType,
   findKimiK3ReservedCustomParamKeys,
   getModelRuntimeProfileDefinition,
+  isOpenAIApiModeAvailable,
   ModelRuntimeProfile,
   ModelRuntimeProfileSource,
+  normalizeGeminiApiBaseUrl,
+  OpenAIApiMode,
   OpenClawApi as OpenClawApiConst,
   OpenClawProviderId,
   ProviderName,
   ProviderRegistry,
   resolveModelRuntimeProfile,
+  supportsGeminiApiFormatSelection,
 } from '../../shared/providers';
 import {
   LOBSTERAI_REQUEST_OPTIONS_VERSION,
@@ -814,6 +818,13 @@ const stripChatCompletionsSuffix = (rawBaseUrl: string): string => {
   return normalized;
 };
 
+// OpenClaw appends `/responses` itself; drop it when the user pasted the full endpoint.
+const stripResponsesSuffix = (baseUrl: string): string => (
+  baseUrl.endsWith('/responses')
+    ? baseUrl.slice(0, -'/responses'.length).replace(/\/+$/, '')
+    : baseUrl
+);
+
 const isLoopbackProviderBaseUrl = (rawBaseUrl: string): boolean => {
   try {
     const host = new URL(rawBaseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '');
@@ -1167,6 +1178,9 @@ export const buildProviderSelection = (options: {
   baseURL: string;
   modelId: string;
   apiType: 'anthropic' | 'openai' | undefined;
+  openaiApiMode?: OpenAIApiMode;
+  /** Custom provider speaking native Gemini generateContent. */
+  geminiNative?: boolean;
   providerName?: string;
   authType?: 'apikey' | 'oauth';
   codingPlanEnabled?: boolean;
@@ -1184,10 +1198,30 @@ export const buildProviderSelection = (options: {
 
   let baseUrl =
     descriptor.resolveRuntimeBaseUrl?.() ?? descriptor.normalizeBaseUrl(options.baseURL);
-  const api = descriptor.resolveApi({
+  const descriptorApi = descriptor.resolveApi({
     apiType: options.apiType,
     baseURL: options.baseURL,
   });
+  // Custom providers may opt into OpenClaw's generic Google GenAI or
+  // openai-responses transports; the shared helpers keep built-in providers,
+  // whose OpenClaw plugins assume their own transport, out.
+  const usesGeminiTransport = options.geminiNative === true
+    && supportsGeminiApiFormatSelection(providerName);
+  const usesResponsesTransport = !usesGeminiTransport
+    && descriptorApi === OpenClawApiConst.OpenAICompletions
+    && options.openaiApiMode === OpenAIApiMode.Responses
+    && isOpenAIApiModeAvailable(providerName, options);
+  const api = usesGeminiTransport
+    ? (OpenClawApiConst.GoogleGenerativeAI as OpenClawTransportApi)
+    : usesResponsesTransport
+      ? (OpenClawApiConst.OpenAIResponses as OpenClawTransportApi)
+      : descriptorApi;
+  if (usesGeminiTransport) {
+    // The Google GenAI SDK appends `/models/...` to a versioned base URL.
+    baseUrl = normalizeGeminiApiBaseUrl(options.baseURL);
+  } else if (usesResponsesTransport) {
+    baseUrl = stripResponsesSuffix(baseUrl);
+  }
 
   // When DashScope Anthropic URL is forced to OpenAI format, rewrite the
   // base URL to the corresponding OpenAI-compatible endpoint.
@@ -2201,6 +2235,8 @@ export class OpenClawConfigSync {
         baseURL,
         modelId,
         apiType,
+        openaiApiMode: apiResolution.providerMetadata?.openaiApiMode,
+        geminiNative: apiResolution.providerMetadata?.geminiNative,
         providerName: apiResolution.providerMetadata?.providerName,
         authType: apiResolution.providerMetadata?.authType,
         codingPlanEnabled: apiResolution.providerMetadata?.codingPlanEnabled,
@@ -2234,6 +2270,8 @@ export class OpenClawConfigSync {
             baseURL: p.baseURL,
             modelId: m.id,
             apiType: p.apiType,
+            openaiApiMode: p.openaiApiMode,
+            geminiNative: p.geminiNative,
             providerName: p.providerName,
             authType: p.authType,
             codingPlanEnabled: p.codingPlanEnabled,

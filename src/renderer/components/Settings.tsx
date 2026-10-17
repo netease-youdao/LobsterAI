@@ -28,6 +28,7 @@ import {
   ProviderRegistry,
   resolveCodingPlanBaseUrl,
   resolveModelRuntimeProfile,
+  supportsGeminiApiFormatSelection,
 } from '../../shared/providers';
 import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, isCustomProvider, normalizeFontPreference, resolveArtifactAutoPreviewEnabled, ShortcutAction, type ShortcutConfig } from '../config';
 import { OPEN_SOURCE_ENTERPRISE_UI_KEY } from '../constants/openSource';
@@ -81,6 +82,7 @@ import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle 
 import { AboutOpenSourceAction, AboutOpenSourceRows, AboutOpenSourceStarPrompt } from './settings/AboutOpenSource';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
 import {
+  buildGeminiConnectionTestRequest,
   buildOpenAICompatibleChatCompletionsUrl,
   buildOpenAIConnectionTestRequestBody,
   buildOpenAIResponsesUrl,
@@ -4254,8 +4256,21 @@ const Settings: React.FC<SettingsProps> = ({
       // - openai provider: /v1/responses
       // - other openai-compatible providers: /v1/chat/completions
       const useAnthropicFormat = effectiveApiFormat === 'anthropic';
+      const useCustomGeminiFormat = effectiveApiFormat === 'gemini'
+        && supportsGeminiApiFormatSelection(testingProvider);
 
-      if (useAnthropicFormat) {
+      if (useCustomGeminiFormat) {
+        const geminiRequest = buildGeminiConnectionTestRequest(normalizedBaseUrl, firstModel.id);
+        response = await window.electron.api.fetch({
+          url: geminiRequest.url,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': effectiveApiKey,
+          },
+          body: JSON.stringify(geminiRequest.body),
+        });
+      } else if (useAnthropicFormat) {
         const anthropicUrl = normalizedBaseUrl.endsWith('/v1')
           ? `${normalizedBaseUrl}/messages`
           : `${normalizedBaseUrl}/v1/messages`;
@@ -4274,7 +4289,10 @@ const Settings: React.FC<SettingsProps> = ({
           }),
         });
       } else {
-        const useResponsesApi = shouldUseOpenAIResponsesForProvider(testingProvider);
+        const useResponsesApi = shouldUseOpenAIResponsesForProvider(testingProvider, {
+          ...providerConfig,
+          apiFormat: effectiveApiFormat,
+        });
         const openaiUrl = useResponsesApi
           ? buildOpenAIResponsesUrl(normalizedBaseUrl)
           : buildOpenAICompatibleChatCompletionsUrl(normalizedBaseUrl, testingProvider);

@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, realpathSync, statSync, 
 import { delimiter, dirname, join } from 'path';
 
 import { COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
-import { buildEnvForConfig, getCurrentApiConfig, resolveCurrentApiConfig, resolveRawApiConfig } from './claudeSettings';
+import { buildEnvForConfig, getCurrentApiConfig, resolveCurrentApiConfig, resolveRawApiConfig, usesGeminiNativeApi } from './claudeSettings';
 import { coworkLog } from './coworkLogger';
 import {
   buildAnthropicMessagesUrl,
@@ -1425,7 +1425,7 @@ type SessionTitleApiConfig =
 
 function resolveSessionTitleApiConfig(): { config: SessionTitleApiConfig | null; error?: string } {
   const rawResolution = resolveRawApiConfig();
-  if (rawResolution.config && rawResolution.providerMetadata?.providerName === 'gemini') {
+  if (rawResolution.config && usesGeminiNativeApi(rawResolution)) {
     return {
       config: {
         protocol: CoworkModelProtocol.GeminiNative,

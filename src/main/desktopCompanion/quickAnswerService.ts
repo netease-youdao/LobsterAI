@@ -16,9 +16,9 @@ import {
   CompanionSelectionAction,
   isCompanionSelectionAction,
 } from '../../shared/desktopCompanion/selectionActions';
-import { ApiFormat, ProviderName } from '../../shared/providers/constants';
+import { ApiFormat } from '../../shared/providers/constants';
 import { getLanguage, t } from '../i18n';
-import { resolveCurrentApiConfig, resolveRawApiConfig } from '../libs/claudeSettings';
+import { resolveCurrentApiConfig, resolveRawApiConfig, usesGeminiNativeApi } from '../libs/claudeSettings';
 import {
   buildAnthropicMessagesUrl,
   CoworkModelProtocol,
@@ -44,7 +44,7 @@ export interface QuickAnswerModelConfig {
 /** Same model the session title generator uses: the user's current default model. */
 export function resolveQuickAnswerModel(): QuickAnswerModelConfig | null {
   const raw = resolveRawApiConfig();
-  if (raw.config && raw.providerMetadata?.providerName === ProviderName.Gemini) {
+  if (raw.config && usesGeminiNativeApi(raw)) {
     return { protocol: CoworkModelProtocol.GeminiNative, apiKey: raw.config.apiKey, baseURL: raw.config.baseURL, model: raw.config.model };
   }
   const resolved = resolveCurrentApiConfig();

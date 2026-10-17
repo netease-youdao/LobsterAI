@@ -1,4 +1,4 @@
-import { ApiFormat, ProviderAuthType } from '../../shared/providers';
+import { ApiFormat, OpenAIApiMode, ProviderAuthType, resolveProviderOpenAIApiMode } from '../../shared/providers';
 import {
   getEffectiveApiFormat,
   type Model,
@@ -26,7 +26,7 @@ import {
 } from './providerTransferTypes';
 
 type TransferProvider = Partial<Pick<ProviderConfig,
-  'enabled' | 'apiKey' | 'baseUrl' | 'apiFormat' | 'codingPlanEnabled' | 'models' | 'displayName'>>;
+  'enabled' | 'apiKey' | 'baseUrl' | 'apiFormat' | 'openaiApiMode' | 'codingPlanEnabled' | 'models' | 'displayName'>>;
 type TransferProviders = Record<string, TransferProvider>;
 
 export type ParsedProvidersImport =
@@ -37,7 +37,7 @@ export type ParsedProvidersImport =
 const MODEL_FLAGS = ['supportsImage', 'supportsVideo', 'supportsThinking'] as const;
 const MODEL_NUMBERS = ['contextWindow', 'maxTokens'] as const;
 const MODEL_FIELDS = ['id', 'name', ...MODEL_FLAGS, ...MODEL_NUMBERS, 'customParams'];
-const PROVIDER_FIELDS = ['enabled', 'apiKey', 'baseUrl', 'apiFormat', 'codingPlanEnabled', 'models', 'displayName'];
+const PROVIDER_FIELDS = ['enabled', 'apiKey', 'baseUrl', 'apiFormat', 'openaiApiMode', 'codingPlanEnabled', 'models', 'displayName'];
 const knownProviders = new Set<string>(providerKeys);
 
 const validateModels = (value: unknown, includeSecrets: boolean, strict: boolean): Model[] => {
@@ -105,6 +105,10 @@ const validateProvider = (entry: Record<string, unknown>, includeSecrets: boolea
     requireTransfer(Object.values(ApiFormat).includes(format as ApiFormat));
     result.apiFormat = format as ApiFormat;
   }
+  if (entry.openaiApiMode !== undefined) {
+    requireTransfer(Object.values(OpenAIApiMode).includes(entry.openaiApiMode as OpenAIApiMode));
+    result.openaiApiMode = entry.openaiApiMode as OpenAIApiMode;
+  }
   if (entry.apiKey !== undefined) {
     requireTransfer(includeSecrets && typeof entry.apiKey === 'string');
     result.apiKey = entry.apiKey;
@@ -141,10 +145,14 @@ export const buildProvidersExport = async (
   const entries = Object.entries(providers).filter(([key]) => knownProviders.has(key)).map(([key, provider]) => {
     const apiFormat = getEffectiveApiFormat(key, provider.apiFormat);
     const baseUrl = resolveBaseUrl(key as ProviderType, provider.baseUrl, apiFormat);
+    // Written only when non-default so exports stay importable by builds
+    // whose strict schema predates this field.
+    const openaiApiMode = resolveProviderOpenAIApiMode(key, { ...provider, apiFormat });
     return [key, {
       enabled: provider.enabled,
       baseUrl: includeSecrets ? baseUrl : configurationUrl(baseUrl),
       apiFormat,
+      ...(openaiApiMode === OpenAIApiMode.Responses ? { openaiApiMode } : {}),
       codingPlanEnabled: provider.codingPlanEnabled,
       displayName: provider.displayName,
       ...(includeSecrets ? { apiKey: provider.apiKey } : {}),
@@ -239,6 +247,8 @@ export const importProviders = async (
       apiKey: entry.apiKey ?? current?.apiKey ?? '',
       baseUrl: entry.baseUrl ?? current?.baseUrl ?? '',
       apiFormat: getEffectiveApiFormat(key, entry.apiFormat ?? current?.apiFormat),
+      // Exports omit the default mode, so absence means Chat Completions.
+      openaiApiMode: entry.openaiApiMode,
       ...(entry.models ? { models: entry.models.map(model => ({
         ...model, supportsImage: resolveModelSupportsImageForProvider(key, model),
       })) } : {}),

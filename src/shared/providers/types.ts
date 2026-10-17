@@ -1,10 +1,12 @@
-import type { ApiFormat, ProviderAuthType } from './constants';
+import type { ApiFormat, OpenAIApiMode, ProviderAuthType } from './constants';
 
 export interface ProviderConfig {
   enabled: boolean;
   apiKey: string;
   baseUrl: string;
   apiFormat?: ApiFormat;
+  /** Endpoint family used when apiFormat is 'openai'. Defaults to Chat Completions. */
+  openaiApiMode?: OpenAIApiMode;
   models?: Array<{
     id: string;
     name: string;

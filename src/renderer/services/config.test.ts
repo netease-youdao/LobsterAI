@@ -392,6 +392,24 @@ describe('configService shortcut migrations', () => {
 });
 
 describe('configService provider migrations', () => {
+  test('keeps the Gemini API format only on custom providers', async () => {
+    const storedConfig = {
+      ...defaultConfig,
+      providers: {
+        ...defaultConfig.providers,
+        custom_0: { enabled: true, apiKey: '', baseUrl: 'https://relay.example.com', apiFormat: 'gemini', models: [] },
+        [ProviderName.DeepSeek]: { ...defaultConfig.providers?.[ProviderName.DeepSeek], apiFormat: 'gemini' },
+      },
+    } as unknown as AppConfig;
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(storedConfig);
+
+    await configService.init();
+
+    const savedConfig = (storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig | undefined) ?? configService.getConfig();
+    expect(savedConfig.providers?.custom_0?.apiFormat).toBe('gemini');
+    expect(savedConfig.providers?.[ProviderName.DeepSeek]?.apiFormat).toBe('anthropic');
+  });
+
   test('persists injected provider models during init', async () => {
     const { configService, storeData, setItem } = await loadConfigServiceWithStoredConfig(
       makeLegacyConfigWithoutMiniMaxAddedModels()
