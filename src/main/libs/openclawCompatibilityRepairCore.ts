@@ -11,6 +11,7 @@ import {
 } from '../../shared/openclawEngine/repair';
 import { isMissingUnaliasedPluginPath, isPreviousManagedPluginPath } from './openclawPluginRepairPaths';
 import { assertOwnedRepairPath } from './openclawRepairPaths';
+import { isRegenerableSnapshotPath } from './openclawRepairSnapshotPaths';
 
 export { assertOwnedRepairPath } from './openclawRepairPaths';
 
@@ -135,8 +136,8 @@ async function snapshotState(options: CompatibilityRepairOptions, report: OpenCl
   if (fs.existsSync(snapshotRoot)) throw new Error('Repair snapshot already exists; start a new repair run.');
   const pluginSkillsRoot = path.join(options.stateDir, OPENCLAW_PLUGIN_SKILLS_DIRECTORY);
   const manifest: OpenClawRepairSnapshotManifest = {
-    version: 1, generatedPluginSkillLinks: [],
-    restoreInstructions: 'Generated plugin skill links are recorded without copying their targets. After restoring, run the bundled openclaw skills list or start an agent session to rebuild them from current plugin metadata.',
+    version: 1, generatedPluginSkillLinks: [], skippedRegenerablePaths: [],
+    restoreInstructions: 'Generated plugin skill links are recorded without copying their targets. After restoring, run the bundled openclaw skills list or start an agent session to rebuild them from current plugin metadata. Paths in skippedRegenerablePaths are caches (V8 compile cache, Chromium HTTP/GPU/Service Worker caches) that were not copied; OpenClaw and its browser rebuild them on demand.',
   };
   async function visit(directory: string): Promise<void> {
     const destination = path.join(snapshotRoot, path.relative(options.stateDir, directory));
@@ -144,9 +145,13 @@ async function snapshotState(options: CompatibilityRepairOptions, report: OpenCl
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const source = path.join(directory, entry.name);
       const target = path.join(destination, entry.name);
+      const relative = path.relative(options.stateDir, source);
+      if (isRegenerableSnapshotPath(relative)) {
+        manifest.skippedRegenerablePaths.push(relative);
+        continue;
+      }
       try {
         if (entry.isSymbolicLink()) {
-          const relative = path.relative(options.stateDir, source);
           if (entry.name.endsWith('.sqlite') || /^(?:state|agents|memory)(?:[/\\]|$)/.test(relative)) {
             throw new Error(`Repair cannot back up database state through a symbolic link: ${source}`);
           }
@@ -190,6 +195,9 @@ async function snapshotState(options: CompatibilityRepairOptions, report: OpenCl
   report.backups.push(manifestPath);
   if (manifest.generatedPluginSkillLinks.length) {
     report.changes.push(`Recorded ${manifest.generatedPluginSkillLinks.length} generated plugin skill links for reconstruction from current plugin metadata.`);
+  }
+  if (manifest.skippedRegenerablePaths.length) {
+    report.changes.push(`Skipped ${manifest.skippedRegenerablePaths.length} regenerable cache directories (compile and browser caches); see ${OPENCLAW_REPAIR_SNAPSHOT_MANIFEST}.`);
   }
   report.changes.push('Created a consistent snapshot of OpenClaw state before Doctor repair.');
 }

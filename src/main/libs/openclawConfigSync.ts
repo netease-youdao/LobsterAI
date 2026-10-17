@@ -212,6 +212,10 @@ const OPENCLAW_DEFAULT_MODEL_MAX_TOKENS = 8192;
 // generic 8192 default could end a turn before any visible answer.
 const LOBSTERAI_SERVER_DEFAULT_MODEL_MAX_TOKENS = 32_768;
 const CHROME_PROXY_SERVER_ARG_PREFIX = '--proxy-server=';
+// Caps the managed agent browser's HTTP disk cache, which Chromium otherwise
+// sizes from free disk space. Code Cache and CacheStorage are not covered;
+// openclawBrowserCachePrune reclaims those while the browser is stopped.
+export const CHROME_DISK_CACHE_SIZE_ARG = `--disk-cache-size=${256 * 1024 * 1024}`;
 
 const EXPLICIT_CONTEXT_CACHE_LOG_PREFIX = '********************';
 const CUSTOM_PROVIDER_NAME_PATTERN = /^custom_[0-9]+$/;
@@ -2093,7 +2097,7 @@ export class OpenClawConfigSync {
       ...commonConfig,
       defaultProfile: BrowserRuntimeProfile.Managed,
       headless: false,
-      ...(extraArgs.length > 0 ? { extraArgs } : {}),
+      extraArgs: [...extraArgs, CHROME_DISK_CACHE_SIZE_ARG],
     };
   }
 

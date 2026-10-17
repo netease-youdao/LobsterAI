@@ -1,6 +1,6 @@
 import { type ChildProcess } from 'child_process';
 import crypto from 'crypto';
-import { app } from 'electron';
+import { app, powerMonitor } from 'electron';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import net from 'net';
@@ -55,6 +55,7 @@ import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
 import { describeStartupMigrationCheckpoint, readStartupMigrationCheckpointStamp } from './openclawStartupCheckpoint';
 import { extractOpenClawBindingSchemaFailure, extractOpenClawCliFailure, hasLegacyOpenClawDiscovery, isOpenClawBindingSchemaFailure, runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
+import { scheduleOpenClawStartupDiskCleanup } from './openclawStartupDiskCleanup';
 import { configRequiresStartupCompatibility, OPENCLAW_STARTUP_PREP_MARKER_FILE, OpenClawStartupPrepMarker, resolveStartupPrepIdentity } from './openclawStartupPrep';
 import { migrateLegacyStateBeforeStartup, stopStartupStateMigrations } from './openclawStartupStateMigration';
 import { ensureOpenClawWorkerShims, getMissingOpenClawWorkerTargets } from './openclawWorkerShims';
@@ -1412,6 +1413,11 @@ export class OpenClawEngineManager extends EventEmitter {
       message: `OpenClaw gateway is running on loopback:${port}.`,
       canRetry: false,
     });
+    // Deferred so reclaiming old caches and backups never slows gateway startup.
+    scheduleOpenClawStartupDiskCleanup(
+      { baseDir: this.baseDir, stateDir: this.stateDir, compileCacheDir },
+      { isOnBatteryPower: () => powerMonitor.isOnBatteryPower() },
+    );
 
     return this.getStatus();
   }

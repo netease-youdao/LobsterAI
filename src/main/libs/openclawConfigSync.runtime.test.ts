@@ -15,7 +15,7 @@ import { OpenClawSkillReviewMode } from '../../shared/openclawEngine/constants';
 import { OpenClawProviderId, ProviderName } from '../../shared/providers';
 import { DEFAULT_DISCORD_OPENCLAW_CONFIG, DEFAULT_QQ_CONFIG, DiscordDmPolicy } from '../im/types';
 import { OpenClawAgentOwnership } from './openclawAgentModels';
-import { OPENCLAW_MEMORY_CORE_PLUGIN_ID } from './openclawConfigSync';
+import { CHROME_DISK_CACHE_SIZE_ARG, OPENCLAW_MEMORY_CORE_PLUGIN_ID } from './openclawConfigSync';
 import { persistOpenClawConfigTarget } from './openclawConfigTarget';
 import { OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
 
@@ -1499,7 +1499,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.browser.extraArgs).toEqual(['--proxy-server=http://127.0.0.1:7890']);
+    expect(config.browser.extraArgs).toEqual(['--proxy-server=http://127.0.0.1:7890', CHROME_DISK_CACHE_SIZE_ARG]);
   });
 
   test('does not write managed browser proxy args in strict browser network mode', async () => {
@@ -1518,7 +1518,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.browser.extraArgs).toBeUndefined();
+    expect(config.browser.extraArgs).toEqual([CHROME_DISK_CACHE_SIZE_ARG]);
     expect(config.browser.ssrfPolicy.dangerouslyAllowPrivateNetwork).toBe(false);
   });
 
@@ -1537,7 +1537,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.browser.extraArgs).toBeUndefined();
+    expect(config.browser.extraArgs).toEqual([CHROME_DISK_CACHE_SIZE_ARG]);
   });
 
   test('does not create an agent model allowlist for OpenAI OAuth when system proxy is enabled', async () => {
@@ -4144,7 +4144,8 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.browser.attachOnly).toBeUndefined();
     expect(config.browser.remoteCdpTimeoutMs).toBeUndefined();
     expect(config.browser.remoteCdpHandshakeTimeoutMs).toBeUndefined();
-    expect(config.browser.extraArgs).toBeUndefined();
+    // User-provided extraArgs are not passed through; only the managed cache cap is.
+    expect(config.browser.extraArgs).toEqual([CHROME_DISK_CACHE_SIZE_ARG]);
     expect(config.browser.snapshotDefaults).toBeUndefined();
     expect(config.tools.web.fetch).toMatchObject({
       enabled: true,

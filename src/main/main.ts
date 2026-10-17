@@ -484,7 +484,7 @@ import {
   DEFAULT_MANAGED_AGENT_ID,
   OpenClawChannelSessionSync,
 } from './libs/openclawChannelSessionSync';
-import { createOpenClawRepairBackupDirectory, OpenClawRepairFailure, runOpenClawCompatibilityRepair, runOpenClawDoctorRepair } from './libs/openclawCompatibilityRepair';
+import { createOpenClawRepairBackupDirectory, OpenClawRepairFailure, pruneOpenClawRepairBackups, runOpenClawCompatibilityRepair, runOpenClawDoctorRepair } from './libs/openclawCompatibilityRepair';
 import { OpenClawModelRuntimeChange, resolveOpenClawModelRuntimeChange } from './libs/openclawConfigAdmission';
 import { createOpenClawConfigAutoRestoreHandler } from './libs/openclawConfigAutoRestore';
 import {
@@ -524,6 +524,7 @@ import {
   sameOpenClawConfigContent,
 } from './libs/openclawConfigTarget';
 import { getRecentOpenClawDailyLogEntries } from './libs/openclawDailyLogs';
+import { createDiskCleanupThrottle, isDiskCleanupStopped } from './libs/openclawDiskCleanupThrottle';
 import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
 import {
   backupOpenClawConfig,
@@ -3786,6 +3787,18 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
       openClawManualRepairActive = false;
       releaseConfigMaintenance?.();
       openClawManualRepairBarrier = null;
+      if (backupPath) {
+        // Each run snapshots the whole state directory; keep only recent runs.
+        // Paced like the startup cleanup; a stopped pass resumes there.
+        void pruneOpenClawRepairBackups(manager.getBaseDir(), {
+          currentBackupDir: backupPath, throttle: createDiskCleanupThrottle(),
+        }).then(({ removedRuns }) => {
+          if (removedRuns.length) console.log(`[OpenClawRepair] removed ${removedRuns.length} old repair backup(s).`);
+        }).catch((error: unknown) => {
+          if (isDiskCleanupStopped(error)) return;
+          console.warn('[OpenClawRepair] could not prune old repair backups:', error);
+        });
+      }
     }
   })().finally(() => {
     if (openClawGatewayRepairPromise === promise) {
